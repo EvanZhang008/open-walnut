@@ -187,6 +187,114 @@ final class RichHTMLTimelineTests: XCTestCase {
                           "completion must be visible to the diff, or the placeholder never swaps for the island")
     }
 
+    // MARK: - Island preview while streaming
+
+    /// 2026-10-29, the user: an interactive block sat as an empty "Building
+    /// interactive block…" label for the whole stream. Its markup now draws as it
+    /// arrives, with its code taken out.
+    func testIslandPreviewBodyDropsEveryScriptAndHandler() {
+        let partial = """
+        <style>.q{color:#9a5b00}</style>
+        <h2 class="q">Quiz LIVE</h2>
+        <img src="x.png" onerror="parent.postMessage('ran','*')" alt="">
+        <button id="b" ONCLICK='go()' type="button">Pick</button>
+        <script>var done = 1;</script>
+        <p>between</p>
+        <SCRIPT type="text/javascript">var half = "not yet
+        """
+        let body = RichHTMLDocument.islandPreviewBody(partial)
+        XCTAssertTrue(body.contains("<h2 class=\"q\">Quiz LIVE</h2>"))
+        XCTAssertTrue(body.contains("<style>.q{color:#9a5b00}</style>"))
+        XCTAssertTrue(body.contains("<p>between</p>"))
+        XCTAssertTrue(body.contains("<button id=\"b\" type=\"button\">Pick</button>"), body)
+        XCTAssertFalse(body.lowercased().contains("<script"), body)
+        XCTAssertFalse(body.contains("var done"), body)
+        XCTAssertFalse(body.contains("not yet"), body)
+        XCTAssertFalse(body.lowercased().contains("onerror"), body)
+        XCTAssertFalse(body.lowercased().contains("onclick"), body)
+        // A word that only starts like a tag is left alone.
+        XCTAssertEqual(RichHTMLDocument.islandPreviewBody("<scripture>Psalm</scripture>"),
+                       "<scripture>Psalm</scripture>")
+        XCTAssertEqual(RichHTMLDocument.islandPreviewBody("<script-card>Hi</script-card>"),
+                       "<script-card>Hi</script-card>")
+        // A closer with junk in it still ends the script; a slash-separated handler goes too.
+        XCTAssertEqual(RichHTMLDocument.islandPreviewBody("<script>a()</script foo><p>after</p>"), "<p>after</p>")
+        XCTAssertFalse(RichHTMLDocument.islandPreviewBody("<svg/onload=go()><p>x</p>").lowercased().contains("onload"))
+        // The tag still arriving at the very end is a script too.
+        XCTAssertEqual(RichHTMLDocument.islandPreviewBody("<p>a</p><script"), "<p>a</p>")
+        // Any tag, or a lone `<`, still arriving at the end is left out until it closes.
+        XCTAssertEqual(RichHTMLDocument.islandPreviewBody("<p>a</p>\n<"), "<p>a</p>\n")
+        XCTAssertEqual(RichHTMLDocument.islandPreviewBody("<p>a</p><div class=\"x"), "<p>a</p>")
+    }
+
+    func testIslandPreviewDocumentAllowsNoScriptAndNoRuntime() {
+        let page = RichHTMLDocument.page(body: "<p>**as written**</p><script>x()</script>",
+                                         palette: .light, kind: .islandPreview)
+        let island = RichHTMLDocument.page(body: "<p>x</p>", palette: .light, kind: .island)
+        XCTAssertFalse(page.contains("script-src"), "the preview must fall back to default-src 'none' for scripts")
+        XCTAssertTrue(island.contains("script-src 'unsafe-inline'"))
+        XCTAssertFalse(page.contains("<script"), "no runtime and no model script in a preview")
+        XCTAssertTrue(page.contains("**as written**"), "an island body gets no markdown pass, preview included")
+    }
+
+    /// A streaming island with markup to draw is sized as a measured document, not
+    /// the label; the finished island opens at the height the preview measured, so
+    /// the block does not jump when the fence closes.
+    func testStreamingIslandIsAPreviewAndHandsItsHeightToTheIsland() {
+        let head = """
+        ```html-app
+        <h2>Capitals quiz</h2>
+        <p>Question 1 of 5: the capital of Australia?</p>
+        <button>Sydney</button> <button>Canberra</button>
+        <script>
+        var s = JSON.parse(localStorage.getItem('q') || '{}');
+        """
+        let openRows = rows(head, id: "m-live", cache: .skip).filter { $0.content.reuseKind == "richIsland" }
+        guard let openRow = openRows.first, case .richIsland(let openHTML, let openKey, false) = openRow.content else {
+            return XCTFail("expected one building island row")
+        }
+        XCTAssertTrue(RichHTMLDocument.islandPreviewDraws(openHTML))
+        XCTAssertNotEqual(openRow.height,
+                          TimelineMetrics.richIslandBuildingHeight + TimelineMetrics.richVMargin * 2,
+                          "an island with markup to draw is a preview, not the label")
+
+        // The preview measures itself under the row it serves.
+        RichHTMLHeightCache.shared.recordMeasurement(key: openKey, width: contentWidth,
+                                                     rowID: openRow.id, height: 233)
+        let measured = rows(head, id: "m-live", cache: .skip).first { $0.content.reuseKind == "richIsland" }
+        XCTAssertEqual(measured?.height, 233 + TimelineMetrics.richVMargin * 2,
+                       "a measured preview keeps its own height across ticks")
+
+        let closed = rows(head + "\ndraw();\n</script>\n```", id: "m-live", cache: .skip)
+            .first { $0.content.reuseKind == "richIsland" }
+        guard let closedRow = closed, case .richIsland(_, _, true) = closedRow.content else {
+            return XCTFail("expected the island to complete")
+        }
+        XCTAssertEqual(closedRow.id, openRow.id, "the island keeps the preview's row")
+        XCTAssertEqual(closedRow.height, 233 + TimelineMetrics.richVMargin * 2,
+                       "the finished island takes the room the preview measured")
+    }
+
+    func testIslandPreviewDrawsOnlyWhatAReaderWouldSee() {
+        XCTAssertFalse(RichHTMLDocument.islandPreviewDraws(""))
+        XCTAssertFalse(RichHTMLDocument.islandPreviewDraws("<div id=\"out\"></div>\n<script>x = 1"))
+        XCTAssertFalse(RichHTMLDocument.islandPreviewDraws(
+            "<!doctype html><html><head><title>Quiz</title><style>p{color:red}</style></head><body><!-- soon -->"))
+        XCTAssertFalse(RichHTMLDocument.islandPreviewDraws("<style>.a{}</style><div class=\"a\"><p class=\"q\""))
+        XCTAssertTrue(RichHTMLDocument.islandPreviewDraws("<div><h2>Quiz</h2>"))
+        XCTAssertTrue(RichHTMLDocument.islandPreviewDraws("<div><button id=\"go\"></button>"))
+        XCTAssertTrue(RichHTMLDocument.islandPreviewDraws("<img src=\"data:image/png;base64,AA\" alt=\"\">"))
+        XCTAssertTrue(RichHTMLDocument.islandPreviewDraws("<p>Caf\u{00E9} \u{6D4B}\u{9A8C}</p>"))
+    }
+
+    func testStreamingIslandWithNothingToDrawKeepsTheLabel() {
+        let head = "```html-app\n<!doctype html><html><head><style>body{margin:0}</style></head><body>\n<script>var a = 1;"
+        guard let row = rows(head, cache: .skip).first(where: { $0.content.reuseKind == "richIsland" }) else {
+            return XCTFail("expected an island row")
+        }
+        XCTAssertEqual(row.height, TimelineMetrics.richIslandBuildingHeight + TimelineMetrics.richVMargin * 2)
+    }
+
     // MARK: - Height cache
 
     func testRecordedHeightIsUsedByTheNextBuild() {

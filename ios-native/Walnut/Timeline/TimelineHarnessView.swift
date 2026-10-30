@@ -128,6 +128,9 @@ struct TimelineHarnessView: View {
                 // An island that keeps its state and reports a result.
                 Button("Quiz") { store.replaceWithIslandQuiz() }
                     .accessibilityIdentifier("harness.islandQuiz")
+                // An island streaming in: its layout draws first, its script runs at the end.
+                Button("Island stream") { store.startIslandStream() }
+                    .accessibilityIdentifier("harness.islandStream")
                 Text("Sent \(store.islandSends.count)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -176,7 +179,10 @@ final class TimelineHarnessStore {
         // `--timeline-harness-turns` opens on the turn-shape fixture instead, and
         // `--timeline-harness-turns-live` on a live turn a received message started.
         let arguments = ProcessInfo.processInfo.arguments
-        if arguments.contains(where: { $0.contains("timeline-harness-island") }) {
+        if arguments.contains(where: { $0.contains("timeline-harness-island-stream") }) {
+            // `--timeline-harness-island-stream` opens empty; the test starts the stream.
+            messages = []
+        } else if arguments.contains(where: { $0.contains("timeline-harness-island") }) {
             // `--timeline-harness-island` opens on the quiz island, with whatever it
             // saved last time; `--timeline-harness-island-fresh` forgets that first.
             if arguments.contains(where: { $0.contains("timeline-harness-island-fresh") }) {
@@ -412,6 +418,31 @@ final class TimelineHarnessStore {
             }
             guard let self, self.streamOn else { return }
             self.activity = nil
+        }
+    }
+
+    /// Stream `TimelineRichFixtures.islandStreamChunks` (one every 600 ms, a longer
+    /// pause in the middle of the script), keep the finished reply live for 4 s, then
+    /// end the turn so the saved message replaces the live one.
+    func startIslandStream() {
+        guard !streamOn else { return }
+        IslandStateStore.shared.removeAll(scope: "harness")
+        messages = [ChatMessage(id: "h-island-ask", role: "user", text: "Plan my week.",
+                                createdAt: "2026-08-08T07:00:00Z", kind: nil)]
+        streamOn = true
+        streaming = true
+        liveText = ""
+        activity = "Writing"
+        let chunks = TimelineRichFixtures.islandStreamChunks()
+        streamTask = Task { @MainActor [weak self] in
+            for (index, chunk) in chunks.enumerated() {
+                try? await Task.sleep(for: .milliseconds(index == 10 ? 3000 : 600))
+                guard let self, self.streamOn else { return }
+                self.liveText += chunk
+            }
+            try? await Task.sleep(for: .seconds(4))
+            guard let self, self.streamOn else { return }
+            self.stopStream()
         }
     }
 

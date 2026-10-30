@@ -145,7 +145,7 @@ Anything that has to compute (canvas, a value the reader types, physics, three.j
 ```
 ````
 
-Island limits, by design: no access to Walnut data (no cookies, no `/api`, no parent DOM), no network at all, and its scripts start only once the fence closes. While the block streams, the web console shows its HTML and CSS as they arrive, with no script running, so write the visible layout as markup first and the `<script>` last: a page that draws itself only from script shows nothing until it is complete. Keep islands small and put the explanation in the prose above, not inside.
+Island limits, by design: no access to Walnut data (no cookies, no `/api`, no parent DOM), no network at all, and its scripts start only once the fence closes. While the block streams, Walnut (the web console and the phone) shows its HTML and CSS as they arrive, with no script running, so write the visible layout as markup first and the `<script>` last: a page that draws itself only from script shows nothing until it is complete. Keep islands small and put the explanation in the prose above, not inside.
 
 ### Keep the island's state: use `localStorage`
 

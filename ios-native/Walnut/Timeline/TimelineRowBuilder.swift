@@ -491,13 +491,21 @@ final class TimelineRowBuilder {
 
     private func islandRow(id: String, html: String, key: String,
                            complete: Bool, width: CGFloat) -> TimelineRow {
-        // An incomplete island renders as a LABEL, never a web view: mounting
-        // it would run half a script (the web console refuses for the same
-        // reason). Its placeholder height is a constant, so the row does not
-        // resize on every tick while the model finishes writing the block.
-        let height = complete
-            ? islandRowHeight(id: id, html: html, key: key, width: width)
-            : TimelineMetrics.richIslandBuildingHeight + TimelineMetrics.richVMargin * 2
+        // An incomplete island is drawn as a script-free preview of the markup so
+        // far (the cell's `.islandPreview`), sized like a streaming card from its
+        // own measurement, and the finished island takes that same height. Only
+        // while nothing in it would draw is it the constant-height label. The
+        // estimate reads the PREVIEW body, so script text still to run is not
+        // counted as prose to lay out.
+        let height: CGFloat
+        if complete {
+            height = islandRowHeight(id: id, html: html, key: key, width: width)
+        } else {
+            // No result strip: a preview runs no code, so it has none to offer.
+            height = RichHTMLDocument.islandPreviewDraws(html)
+                ? richRowHeight(id: id, html: RichHTMLDocument.islandPreviewBody(html), key: key, width: width)
+                : TimelineMetrics.richIslandBuildingHeight + TimelineMetrics.richVMargin * 2
+        }
         return TimelineRow(
             // Completion must be visible to the diff even if the html between
             // the last building tick and the closing fence is byte-identical.
@@ -567,13 +575,18 @@ final class TimelineRowBuilder {
                     id: row.id, revision: row.revision, content: row.content,
                     height: richRowHeight(id: row.id, html: html, key: key, width: width))
             case .richIsland(let html, let key, let complete):
-                // A building island is a fixed-height placeholder, never a
-                // measured document: re-banking it would hand the placeholder
-                // the height of the card it is going to become.
-                guard complete, Self.moved(row.id, key, changed) else { continue }
+                // A building island with nothing to draw yet is a fixed-height
+                // label, never a measured document: re-banking it would hand the
+                // label the height of the card it is going to become. One that
+                // draws is a preview, measured like any card.
+                guard Self.moved(row.id, key, changed),
+                      complete || RichHTMLDocument.islandPreviewDraws(html) else { continue }
                 out[index] = TimelineRow(
                     id: row.id, revision: row.revision, content: row.content,
-                    height: islandRowHeight(id: row.id, html: html, key: key, width: width))
+                    height: complete
+                        ? islandRowHeight(id: row.id, html: html, key: key, width: width)
+                        : richRowHeight(id: row.id, html: RichHTMLDocument.islandPreviewBody(html),
+                                        key: key, width: width))
             default:
                 continue
             }

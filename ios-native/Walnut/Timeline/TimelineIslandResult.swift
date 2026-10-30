@@ -60,10 +60,61 @@ enum IslandResultStrip {
     }
 
     static func boxHeight(_ result: IslandStateStore.Result, width: CGFloat) -> CGFloat {
-        padding * 2 + headerHeight + lineGap + previewHeight(result.text, width: width)
+        padding * 2 + header(result, width: width).height + lineGap + previewHeight(result.text, width: width)
     }
 
-    static var headerHeight: CGFloat { max(headerMinHeight, ceil(titleFont.lineHeight)) }
+    /// Where the title and the button go, inside the strip's padding (origin at the
+    /// inner top-left). Side by side when both fit on one line; otherwise the title
+    /// wraps on its own and the button sits under it, so at the largest text sizes
+    /// neither is cut (2026-10-30 UI gate: "Result…" and a clipped two-line button).
+    /// ONE function for the builder's height and the view's layout.
+    struct Header {
+        let title: CGRect
+        let button: CGRect
+        let height: CGFloat
+        let stacked: Bool
+    }
+
+    static let buttonInsets = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
+    static var buttonFont: UIFont { TimelineTextStyler.footnoteFont }
+
+    static func titleText(sent: Bool) -> String { (sent ? "\u{2713} " : "") + title(sent: sent) }
+
+    static func header(_ result: IslandStateStore.Result, width: CGFloat) -> Header {
+        let inner = max(40, width - padding * 2)
+        let pad = buttonInsets.leading + buttonInsets.trailing
+        let vpad = buttonInsets.top + buttonInsets.bottom
+        let title = titleText(sent: result.sent)
+        let button = buttonTitle(sent: result.sent)
+        let titleLine = size(title, font: titleFont, width: .greatestFiniteMagnitude)
+        let buttonLine = size(button, font: buttonFont, width: .greatestFiniteMagnitude)
+        let buttonWidth = ceil(buttonLine.width) + pad
+        if ceil(titleLine.width) + 8 + buttonWidth <= inner {
+            let buttonHeight = max(32, ceil(buttonLine.height) + vpad)
+            let height = max(headerMinHeight, ceil(titleLine.height), buttonHeight)
+            return Header(
+                title: CGRect(x: 0, y: 0, width: inner - buttonWidth - 8, height: height),
+                button: CGRect(x: inner - buttonWidth, y: (height - buttonHeight) / 2,
+                               width: buttonWidth, height: buttonHeight),
+                height: height, stacked: false)
+        }
+        let titleHeight = ceil(size(title, font: titleFont, width: inner).height)
+        let buttonText = size(button, font: buttonFont, width: max(20, inner - pad))
+        let stackedWidth = min(inner, ceil(buttonText.width) + pad)
+        let buttonHeight = max(headerMinHeight, ceil(buttonText.height) + vpad)
+        return Header(
+            title: CGRect(x: 0, y: 0, width: inner, height: titleHeight),
+            button: CGRect(x: 0, y: titleHeight + lineGap, width: stackedWidth, height: buttonHeight),
+            height: titleHeight + lineGap + buttonHeight, stacked: true)
+    }
+
+    private static func size(_ text: String, font: UIFont, width: CGFloat) -> CGSize {
+        (text as NSString).boundingRect(
+            with: CGSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font], context: nil
+        ).size
+    }
 
     /// The text the preview shows: the start of the result, blank text said as such.
     static func previewText(_ text: String) -> String {
@@ -120,7 +171,8 @@ final class IslandResultStripView: UIView {
         previewLabel.textColor = .secondaryLabel
         var config = UIButton.Configuration.tinted()
         config.cornerStyle = .capsule
-        config.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
+        config.contentInsets = IslandResultStrip.buttonInsets
+        config.titleLineBreakMode = .byWordWrapping
         button.configuration = config
         button.tintColor = Theme.tintColor
         button.accessibilityIdentifier = "chat.islandResult.review"
@@ -137,12 +189,12 @@ final class IslandResultStripView: UIView {
         self.result = result
         titleLabel.font = IslandResultStrip.titleFont
         titleLabel.textColor = result.sent ? .secondaryLabel : .label
-        titleLabel.text = (result.sent ? "\u{2713} " : "") + IslandResultStrip.title(sent: result.sent)
+        titleLabel.text = IslandResultStrip.titleText(sent: result.sent)
         previewLabel.font = IslandResultStrip.previewFont
         previewLabel.text = IslandResultStrip.previewText(result.text)
         var config = button.configuration
         var title = AttributedString(IslandResultStrip.buttonTitle(sent: result.sent))
-        title.font = TimelineTextStyler.footnoteFont
+        title.font = IslandResultStrip.buttonFont
         config?.attributedTitle = title
         button.configuration = config
         button.accessibilityLabel = IslandResultStrip.buttonTitle(sent: result.sent)
@@ -153,19 +205,15 @@ final class IslandResultStripView: UIView {
         super.layoutSubviews()
         let pad = IslandResultStrip.padding
         let inner = bounds.width - pad * 2
-        let header = IslandResultStrip.headerHeight
-        let fit = button.sizeThatFits(CGSize(width: inner * 0.6, height: header))
-        let buttonWidth = min(max(fit.width, 44), inner * 0.6)
-        let buttonHeight = min(max(fit.height, 32), header)
-        button.frame = CGRect(x: bounds.width - pad - buttonWidth,
-                              y: pad + (header - buttonHeight) / 2,
-                              width: buttonWidth, height: buttonHeight)
-        titleLabel.frame = CGRect(x: pad, y: pad,
-                                  width: max(0, inner - buttonWidth - 8), height: header)
-        let previewY = pad + header + IslandResultStrip.lineGap
+        guard let result else { return }
+        let header = IslandResultStrip.header(result, width: bounds.width)
+        titleLabel.numberOfLines = header.stacked ? 0 : 1
+        titleLabel.frame = header.title.offsetBy(dx: pad, dy: pad)
+        button.frame = header.button.offsetBy(dx: pad, dy: pad)
+        let previewY = pad + header.height + IslandResultStrip.lineGap
         previewLabel.frame = CGRect(
             x: pad, y: previewY, width: inner,
-            height: IslandResultStrip.previewHeight(result?.text ?? "", width: bounds.width))
+            height: IslandResultStrip.previewHeight(result.text, width: bounds.width))
     }
 }
 
@@ -187,79 +235,90 @@ struct IslandResultSheet: View {
     private var command: Bool { IslandRuntime.isCommandLike(result.text) }
     private var empty: Bool { result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// Copy and Dismiss side by side, or one above the other at the accessibility
+    /// sizes, where side by side cut them to "Dis…" (2026-10-30 UI gate).
+    private var actionLayout: AnyLayout {
+        typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: 12)) : AnyLayout(HStackLayout(spacing: 12))
+    }
+
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 12) {
-                ScrollView {
+            // The WHOLE sheet scrolls, not only the text: at the largest text sizes
+            // a scroller for the text alone was squeezed to one line and the notes
+            // under it were cut (2026-10-30 UI gate).
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
                     Text(result.text)
                         .font(.system(.footnote, design: .monospaced))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(12)
+                        .background(Color(uiColor: .secondarySystemBackground),
+                                    in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .accessibilityIdentifier("islandResult.text")
-                }
-                .background(Color(uiColor: .secondarySystemBackground),
-                            in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                if result.sent {
-                    Label("Sent to the AI", systemImage: "checkmark.circle")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("Nothing is sent until you press Send.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                if tooLong {
-                    Text("Too long to send (\(result.text.utf16.count.formatted()) of \(IslandRuntime.resultMax.formatted()) characters).")
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                        .accessibilityIdentifier("islandResult.tooLong")
-                }
-                if command {
-                    Text("Starts with \u{201C}/\u{201D}, so it would run as a command. Not sendable.")
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                        .accessibilityIdentifier("islandResult.command")
-                }
-                if state == .failed {
-                    Text("Not sent. Try again.")
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                        .accessibilityIdentifier("islandResult.failed")
-                }
-                if !result.sent {
-                    Button {
-                        Task { await sendNow() }
-                    } label: {
-                        Text(state == .sending ? "Sending\u{2026}" : "Send to AI")
-                            .frame(maxWidth: .infinity)
+                    if result.sent {
+                        Label("Sent to the AI", systemImage: "checkmark.circle")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Nothing is sent until you press Send.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(tooLong || empty || command || state == .sending)
-                    .accessibilityIdentifier("islandResult.send")
-                }
-                HStack(spacing: 12) {
-                    Button {
-                        UIPasteboard.general.string = result.text
-                        copied = true
-                    } label: {
-                        Text(copied ? "Copied" : "Copy").frame(maxWidth: .infinity)
+                    if tooLong {
+                        Text("Too long to send (\(result.text.utf16.count.formatted()) of \(IslandRuntime.resultMax.formatted()) characters).")
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                            .accessibilityIdentifier("islandResult.tooLong")
                     }
-                    .buttonStyle(.bordered)
-                    .accessibilityIdentifier("islandResult.copy")
-                    Button(role: .destructive) {
-                        IslandStateStore.shared.dismissResult(key: storeKey)
-                        close()
-                    } label: {
-                        Text("Dismiss result").frame(maxWidth: .infinity)
+                    if command {
+                        Text("Starts with \u{201C}/\u{201D}, so it would run as a command. Not sendable.")
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                            .accessibilityIdentifier("islandResult.command")
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(state == .sending)
-                    .accessibilityIdentifier("islandResult.dismiss")
+                    if state == .failed {
+                        Text("Not sent. Try again.")
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                            .accessibilityIdentifier("islandResult.failed")
+                    }
+                    if !result.sent {
+                        Button {
+                            Task { await sendNow() }
+                        } label: {
+                            Text(state == .sending ? "Sending\u{2026}" : "Send to AI")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .disabled(tooLong || empty || command || state == .sending)
+                        .accessibilityIdentifier("islandResult.send")
+                    }
+                    actionLayout {
+                        Button {
+                            UIPasteboard.general.string = result.text
+                            copied = true
+                        } label: {
+                            Text(copied ? "Copied" : "Copy").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("islandResult.copy")
+                        Button(role: .destructive) {
+                            IslandStateStore.shared.dismissResult(key: storeKey)
+                            close()
+                        } label: {
+                            Text("Dismiss result").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(state == .sending)
+                        .accessibilityIdentifier("islandResult.dismiss")
+                    }
                 }
+                .padding(16)
             }
-            .padding(16)
             .navigationTitle(result.sent ? "Sent to the AI" : "Result for the AI")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

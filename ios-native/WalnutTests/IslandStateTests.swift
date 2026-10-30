@@ -261,6 +261,26 @@ final class IslandStateTests: XCTestCase {
                                             + max(0, IslandResultStrip.previewFont.leading)) + 1)
     }
 
+    /// The header keeps the title and the button side by side while both fit, and
+    /// stacks them (title wrapping, button under it) when they do not, which is what
+    /// the largest text sizes need; the strip's height follows the same layout.
+    func testTheStripHeaderStacksWhenTitleAndButtonDoNotFit() {
+        let result = IslandStateStore.Result(text: "Quiz result: 2/3 right.", sent: false)
+        let wide = IslandResultStrip.header(result, width: TimelineMetrics.richContentWidth(393))
+        XCTAssertFalse(wide.stacked)
+        XCTAssertEqual(wide.title.minY, wide.button.minY - (wide.height - wide.button.height) / 2, accuracy: 0.5)
+        XCTAssertLessThanOrEqual(wide.title.maxX + 8, wide.button.minX + 0.5)
+
+        let narrow = IslandResultStrip.header(result, width: 120)
+        XCTAssertTrue(narrow.stacked)
+        XCTAssertGreaterThanOrEqual(narrow.button.minY, narrow.title.maxY)
+        XCTAssertEqual(narrow.height, narrow.button.maxY, accuracy: 0.5)
+        XCTAssertLessThanOrEqual(narrow.button.maxX, 120 - IslandResultStrip.padding * 2 + 0.5)
+        XCTAssertGreaterThanOrEqual(narrow.button.height, IslandResultStrip.headerMinHeight)
+        XCTAssertGreaterThan(IslandResultStrip.boxHeight(result, width: 120),
+                             IslandResultStrip.boxHeight(result, width: TimelineMetrics.richContentWidth(393)))
+    }
+
     /// The cell shows the strip from the store and lays it out inside the row height
     /// the builder reserved, under the document's box.
     func testTheCellShowsTheStripInsideTheRowItWasSizedFor() throws {

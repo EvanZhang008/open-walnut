@@ -38,6 +38,7 @@ final class TimelineHarnessIdentifierTests: XCTestCase {
         "harness.withheld",
         "harness.turnFolds",
         "harness.islandQuiz",
+        "harness.islandStream",
         "harness.islandSent",
         "harness.letterTable",
         "harness.letterSheet",

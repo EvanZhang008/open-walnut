@@ -197,6 +197,31 @@ enum TimelineRichFixtures {
     ```
     """
 
+    /// An island streamed the way a model writes one: its styled layout first, the
+    /// script last and in pieces. While it arrives the timeline draws the layout
+    /// with no script running ("Script has not run" stays), and once the fence
+    /// closes the script runs once ("Script ran") and the block keeps its height.
+    static func islandStreamChunks() -> [String] {
+        [
+            "Here is a planner you can tick through.\n\n```html-app\n",
+            "<style>.wk{font-family:-apple-system,sans-serif;color:var(--fg);",
+            "padding:12px;border-radius:12px;background:var(--bg-secondary)}",
+            ".wk h3{margin:0 0 8px;color:var(--accent)}</style>\n",
+            "<div class=\"wk\">\n<h3>Week planner LIVE</h3>\n",
+            "<p>Monday: review</p>\n<p>Tuesday: build</p>\n",
+            "<p>Wednesday: ship</p>\n<p id=\"state\">Script has not run</p>\n",
+            "<button id=\"done\" style=\"padding:8px 14px\">Mark Tuesday done</button>\n</div>\n",
+            "<script>\nvar n = Number(localStorage.getItem('ticks') || '0');\n",
+            "document.getElementById('state').textContent = 'Script ran, ticks ' + n;\n",
+            "document.getElementById('done').onclick = function () { n++;",
+            " localStorage.setItem('ticks', String(n));",
+            " document.getElementById('state').textContent = 'Script ran, ticks ' + n;",
+            " walnut.report('Tuesday marked done ' + n + ' times'); };\n",
+            "</script>\n```\n",
+            "\nTap the button when Tuesday is done.",
+        ]
+    }
+
     /// Every fixture as a message list, oldest first.
     static func messages(startingAt index: Int) -> [(id: String, text: String)] {
         let bodies = [callout, styledCard, contrastPanels, unpairedBackgrounds,

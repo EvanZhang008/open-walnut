@@ -102,7 +102,13 @@ struct RichHTMLPalette: Equatable {
 /// Body margin is zero: the timeline cell owns the outer padding, so the document
 /// must not add its own or a card would sit inset from its own bubble.
 enum RichHTMLDocument {
-    enum Kind { case content, island }
+    /// `.islandPreview` is an `html-app` island that is still arriving: its markup
+    /// drawn as it streams, with none of its code. It is served by the island's own
+    /// web view (so the finished island takes over the same view, under a still
+    /// frame of the preview), and the content CSP is what keeps it script-free there:
+    /// no `script-src`, so `default-src 'none'` refuses every inline script and
+    /// handler, on top of `islandPreviewBody` removing them from the markup.
+    enum Kind { case content, island, islandPreview }
 
     /// A complete standalone document wrapping a body fragment.
     ///
@@ -138,7 +144,12 @@ enum RichHTMLDocument {
     /// the runtime, with an empty store, so its code never meets a throwing storage.
     static func page(body: String, palette: RichHTMLPalette, kind: Kind,
                      island: IslandRuntime.Seed? = nil) -> String {
-        let markdown = kind == .island ? body : RichHTMLSegments.inlineMarkdown(body)
+        let markdown: String
+        switch kind {
+        case .content: markdown = RichHTMLSegments.inlineMarkdown(body)
+        case .island: markdown = body
+        case .islandPreview: markdown = islandPreviewBody(body)
+        }
         let content = RichHTMLContrast.pairTextColours(in: markdown, palette: palette)
         let runtime = kind == .island
             ? IslandRuntime.script(island ?? IslandRuntime.Seed(token: "-", items: [:])) + "\n"
@@ -169,10 +180,101 @@ enum RichHTMLDocument {
 
     private static func csp(_ kind: Kind) -> String {
         switch kind {
-        case .content: return contentCSP
+        case .content, .islandPreview: return contentCSP
         case .island: return contentCSP + "; script-src 'unsafe-inline'"
         }
     }
+
+    /// An island's partial markup with its code taken out: every `<script>` (a
+    /// finished one, and the one still arriving at the end) and every `on…`
+    /// handler attribute. The CSP already refuses both; this is the second lock,
+    /// so a half-written script is never even handed to the engine.
+    ///
+    /// The builder (off the main thread) and the cell (on it) both ask about the
+    /// same text on every streaming tick, so the last answer is kept.
+    static func islandPreviewBody(_ html: String) -> String {
+        previewMemo.read(html).body
+    }
+
+    /// Does a still-arriving island show anything yet: text, or an element that is
+    /// visible with no text (an image, a control, a rule)? Until it does, the cell
+    /// shows its label and the row builder sizes the row as one, so a page whose head
+    /// and empty containers arrive first does not open as a blank box. Same rule as
+    /// the web console's preview (`filled` in web/src/components/chat/island-preview.ts).
+    static func islandPreviewDraws(_ html: String) -> Bool {
+        previewMemo.read(html).draws
+    }
+
+    private static func stripCode(_ html: String) -> String {
+        var out = html
+        for (pattern, template) in previewStrips {
+            // Again while anything matched: one pass takes one handler per tag.
+            var passes = 0
+            while passes < 16,
+                  pattern.firstMatch(in: out, range: NSRange(out.startIndex..., in: out)) != nil {
+                out = pattern.stringByReplacingMatches(in: out, range: NSRange(out.startIndex..., in: out),
+                                                       withTemplate: template)
+                passes += 1
+            }
+        }
+        return out
+    }
+
+    private static func showsSomething(_ body: String) -> Bool {
+        var text = body
+        for pattern in invisibleMarkup {
+            text = pattern.stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text),
+                                                    withTemplate: " ")
+        }
+        if text.contains(where: { !$0.isWhitespace }) { return true }
+        return visibleEmptyElement.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)) != nil
+    }
+
+    /// The last island text asked about, and its two answers.
+    private final class PreviewMemo: @unchecked Sendable {
+        private let lock = NSLock()
+        private var last: (html: String, body: String, draws: Bool)?
+
+        func read(_ html: String) -> (body: String, draws: Bool) {
+            lock.lock()
+            if let last, last.html == html { lock.unlock(); return (last.body, last.draws) }
+            lock.unlock()
+            let body = RichHTMLDocument.stripCode(html)
+            let draws = RichHTMLDocument.showsSomething(body)
+            lock.lock()
+            last = (html, body, draws)
+            lock.unlock()
+            return (body, draws)
+        }
+    }
+
+    private static let previewMemo = PreviewMemo()
+
+    /// Style and title bodies, comments, then every tag: what is left is the text a
+    /// reader would see.
+    private static let invisibleMarkup: [NSRegularExpression] = [
+        try! NSRegularExpression(pattern: "<(style|title)\\b[\\s\\S]*?(</\\1\\s*>|$)", options: [.caseInsensitive]),
+        try! NSRegularExpression(pattern: "<!--[\\s\\S]*?(-->|$)", options: []),
+        try! NSRegularExpression(pattern: "<[^>]*(>|$)", options: []),
+    ]
+
+    private static let visibleEmptyElement = try! NSRegularExpression(
+        pattern: "<(img|svg|canvas|input|button|select|textarea|video|hr|progress|meter)\\b[^>]*>",
+        options: [.caseInsensitive])
+
+    /// A `<script` is the tag only when a space, `>` or `/` follows (or nothing yet):
+    /// `<scripture>` and `<script-card>` are other elements.
+    private static let previewStrips: [(NSRegularExpression, String)] = [
+        (try! NSRegularExpression(pattern: "<script(?=[\\s>/])[\\s\\S]*?</script\\b[^>]*>",
+                                  options: [.caseInsensitive]), ""),
+        (try! NSRegularExpression(pattern: "<script(?=[\\s>/]|$)[\\s\\S]*$", options: [.caseInsensitive]), ""),
+        (try! NSRegularExpression(
+            pattern: "(<[a-zA-Z][^>]*?)[\\s/]+on[a-zA-Z]+\\s*=\\s*(?:\"[^\"]*\"|'[^']*'|[^\\s>]+)",
+            options: [.caseInsensitive]), "$1"),
+        // A tag (or a lone `<`) still arriving at the very end: the page wrapper
+        // writes `</body>` right after it, which would turn it into visible text.
+        (try! NSRegularExpression(pattern: "<[^>]*$", options: []), ""),
+    ]
 
     /// The document's palette, declared once at the root. Everything scheme-dependent
     /// comes from `palette.colourTokens` rather than being spelled out here, because

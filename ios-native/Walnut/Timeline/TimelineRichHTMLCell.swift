@@ -84,8 +84,18 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
 
     private var webView: WKWebView?
     private var buildingLabel: UILabel?
+    /// The label is still up over a preview whose first document has not painted.
+    private var labelUntilPaint = false
+    /// The label's hand-over to the painted preview is already on its way.
+    private var labelHandoverScheduled = false
     /// nil until the first configure creates a web view.
     private var loadedKind: RichHTMLDocument.Kind?
+    /// Whether the current document's height is banked under its own key (it
+    /// opened at that banked height, or has reported since).
+    private var keyBanked = false
+    /// The row whose island PREVIEW this cell loaded last, if the last load was one.
+    /// Kept across reuse: it is only ever compared with the row being served.
+    private var previewRowID: String?
     /// The markup of the document currently up, kept so a light/dark flip can
     /// rebuild it with the other palette. The document text itself is not enough:
     /// the palette is baked THROUGH it, from the CSS variables to `color-scheme`.
@@ -220,11 +230,22 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
 
     func configureIsland(html: String, key: String, complete: Bool, rowID: String,
                          contentWidth: CGFloat, delegate: TimelineCellActionDelegate?) {
-        // An island never streams: it is a placeholder until it is complete,
-        // then it loads once. Nothing to coalesce.
-        apply(html: html, key: key, kind: .island, streaming: false, complete: complete,
-              rowID: rowID, contentWidth: contentWidth, delegate: delegate)
+        // While it arrives, an island is drawn as a script-free PREVIEW of the
+        // markup so far (`.islandPreview`), throttled like a streaming card; the
+        // label stays only while nothing it holds would draw. Once complete it
+        // loads ONCE as the real island, in the same web view, under a still frame
+        // of the preview and at the preview's banked height (same document key), so
+        // the swap neither blanks nor resizes the block.
+        if complete {
+            apply(html: html, key: key, kind: .island, streaming: false, complete: true,
+                  rowID: rowID, contentWidth: contentWidth, delegate: delegate)
+        } else {
+            apply(html: html, key: key, kind: .islandPreview, streaming: true,
+                  complete: RichHTMLDocument.islandPreviewDraws(html),
+                  rowID: rowID, contentWidth: contentWidth, delegate: delegate)
+        }
     }
+
 
     private func apply(html: String, key: String, kind: RichHTMLDocument.Kind,
                        streaming: Bool, complete: Bool, rowID: String,
@@ -235,8 +256,13 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
         self.contentWidth = contentWidth
         self.streaming = streaming
         accessibilityIdentifier = Self.isIsland(kind) ? "chat.richIsland" : "chat.richHTML"
-        islandStoreKey = Self.isIsland(kind)
-            ? IslandStateStore.storeKey(rowID: rowID, islandKey: key) : ""
+        // Only the running island has a store: a preview runs no code, so it neither
+        // reads saved state nor offers a result (a building island never shows one).
+        if case .island = kind {
+            islandStoreKey = IslandStateStore.storeKey(rowID: rowID, islandKey: key)
+        } else {
+            islandStoreKey = ""
+        }
 
         // Is this cell holding some OTHER row's pixels? Read once, before
         // `showWebView` un-hides anything, because BOTH of the exits below can be
@@ -253,10 +279,28 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
             refreshResultStrip()
             return
         }
+        let fromLabel = placeholderShown
         showWebView(kind: kind)
+        // A preview takes no touches: nothing done in it would carry over to the
+        // island that replaces it, and a tap on it should scroll the transcript.
+        // (No badge over it: one covered the heading at the largest text sizes, and
+        // the timeline's own "Writing…" line already says the reply is arriving.)
+        let preview: Bool
+        if case .islandPreview = kind { preview = true } else { preview = false }
+        webView?.isUserInteractionEnabled = !preview
+        // The label stays until the preview's first document has painted: a fresh
+        // web view takes a moment to draw, and showing it at once left an empty box
+        // between the two (2026-10-30 UI gate: ~0.7 s). Later ticks keep it that way
+        // until `didFinish` hands over; the finished island ends it at once.
+        if preview, fromLabel { labelUntilPaint = true; labelHandoverScheduled = false }
+        if !preview { labelUntilPaint = false }
+        if labelUntilPaint {
+            webView?.isHidden = true
+            buildingLabel?.isHidden = false
+        }
         refreshResultStrip()
         let style = traitCollection.userInterfaceStyle
-        let identity = Self.identity(key: key, width: contentWidth, style: style)
+        let identity = Self.identity(kind: kind, key: key, width: contentWidth, style: style)
         // IDEMPOTENT, and load-bearing: configure runs on every cell attach AND
         // on every streaming reload tick. Re-loading an unchanged document
         // restarts it — scroll position, text selection and any open
@@ -278,6 +322,9 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
                 // document is on screen" and "that document is on its way" — while
                 // it loads, what the reader can see is still the previous one.
                 displayedRowID = rowID
+                // A preview this row shows again after a reuse is still the one the
+                // finished island takes its height from.
+                if case .islandPreview = kind { previewRowID = rowID }
             } else if recycled {
                 // The matching document is only PENDING (a throttled load, or one
                 // still in flight), so what is on screen belongs to the other row and
@@ -297,6 +344,9 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
             removeCover()
         }
         loadedBody = html
+        // The kind of the BODY, so a trait flip or a crash recovery re-renders a
+        // preview as a preview and an island as an island.
+        loadedKind = kind
         let document = makeDocument(body: html, kind: kind, style: style)
         scheduleLoad(document, identity: identity)
     }
@@ -307,6 +357,8 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
         // fire would paint another row's card here.
         cancelPendingLoad()
         placeholderShown = false
+        labelUntilPaint = false
+        labelHandoverScheduled = false
         // The still frame exists to bridge ONE row's own reload, and reuse means
         // that row is gone. Only `didFinish` used to remove it, so a cell recycled
         // mid-reload onto a row that never finishes (an incomplete island, a failed
@@ -338,7 +390,11 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
         super.layoutSubviews()
         let box = documentBox()
         layoutResultStrip()
-        buildingLabel?.frame = box
+        // Pinned to the top of the box at its own height, so it stays put while a
+        // preview's row grows under it.
+        var labelBox = box
+        labelBox.size.height = min(box.height, TimelineMetrics.richIslandBuildingHeight)
+        buildingLabel?.frame = labelBox
         // The document gets its OWN height, never the row's.
         //
         // A WKWebView's `scrollView.contentSize` can never be SHORTER than the
@@ -383,6 +439,10 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
         let now = CACurrentMediaTime()
         let earliest = lastLoadAt + Self.streamingLoadInterval
         guard streaming, now < earliest else {
+            // An immediate load supersedes a throttled one still waiting: the
+            // finished island arriving inside the preview's interval must not be
+            // painted over by that older preview when its timer fires.
+            cancelPendingLoad()
             performLoad(document, identity: identity)
             return
         }
@@ -446,8 +506,16 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
         // (a new key, `streaming` false) goes back through the probe, so a card
         // that briefly withheld an unfinished tag can still shrink to its
         // finished size.
-        reportedHeight = RichHTMLHeightCache.shared.height(key: documentKey, width: contentWidth)
-            ?? (streaming ? (RichHTMLHeightCache.shared.lastHeight(rowID: rowID) ?? 0) : 0)
+        //
+        // The finished island replacing this row's own preview is the third: it
+        // opens at the height the preview last drew, so the block does not drop to
+        // the probe under its still frame and grow back.
+        let fromPreview = previewRowID == rowID
+        let banked = RichHTMLHeightCache.shared.height(key: documentKey, width: contentWidth)
+        keyBanked = banked != nil
+        reportedHeight = banked
+            ?? ((streaming || fromPreview) ? (RichHTMLHeightCache.shared.lastHeight(rowID: rowID) ?? 0) : 0)
+        if case .islandPreview? = loadedKind { previewRowID = rowID } else { previewRowID = nil }
         heightRevisions = 0
         documentReady = false
         stampCurrentRow()
@@ -521,7 +589,7 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
         // Straight to the load: a scheme flip is a one-off, so the streaming
         // throttle has nothing to protect here.
         performLoad(document,
-                    identity: Self.identity(key: documentKey, width: contentWidth, style: style))
+                    identity: Self.identity(kind: kind, key: documentKey, width: contentWidth, style: style))
     }
 
     // MARK: - Subviews
@@ -836,7 +904,14 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
             }
             return
         }
-        guard abs(height - reportedHeight) > 1 else { return }
+        // A document that opened at its ROW's last height and measures the same
+        // still reports once: that height is not yet banked under its own key, and
+        // the saved reply that replaces a live one (another row, the same key) has
+        // nothing else to open at. Skipped, it fell back to the estimate, a fixed
+        // ~276pt at every text size (2026-10-30 UI gate: 33pt of gap, a clipped card
+        // at large text).
+        guard abs(height - reportedHeight) > 1 || !keyBanked else { return }
+        keyBanked = true
         reportedHeight = height
         heightRevisions += 1
         // One line per document per load once the gate above is honoured, and the
@@ -920,7 +995,7 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
     /// this file never depends on it declaring `Equatable`.
     private static func isIsland(_ kind: RichHTMLDocument.Kind) -> Bool {
         switch kind {
-        case .island: return true
+        case .island, .islandPreview: return true
         case .content: return false
         }
     }
@@ -929,11 +1004,18 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
         style == .dark ? .dark : .light
     }
 
-    private static func identity(key: String, width: CGFloat,
+    /// What a loaded document IS, for the "already up" check. A preview and the
+    /// finished island share their document KEY (that is how the island inherits
+    /// the preview's height), so the kind is part of it: every load path (a
+    /// configure, a scheme flip, a crash recovery) must name it, or a preview
+    /// reloaded by one of them would pass for the island, which would then never run.
+    private static func identity(kind: RichHTMLDocument.Kind, key: String, width: CGFloat,
                                  style: UIUserInterfaceStyle) -> String {
         // Width at whole-point resolution, matching the height cache's own
         // quantisation: sub-pixel jitter must not count as a content change.
-        "\(key)|\(Int(width.rounded()))|\(style.rawValue)"
+        let base = "\(key)|\(Int(width.rounded()))|\(style.rawValue)"
+        if case .islandPreview = kind { return "preview|" + base }
+        return base
     }
 }
 
@@ -957,7 +1039,26 @@ extension TimelineRichHTMLCell: WKNavigationDelegate {
         // row it landed on is an island that has not arrived. The stamp and the
         // current row are equal for every load this cell issued, so this only ever
         // withholds a document whose row has moved on; that row's own load unhides it.
-        if !placeholderShown, stamp.rowID == rowID { webView.isHidden = false }
+        if !placeholderShown, stamp.rowID == rowID {
+            if labelUntilPaint {
+                // `didFinish` can come a few frames before WebKit has painted, so the
+                // label gives way a moment later, in one step with the web view
+                // (2026-10-30 UI gate: 0.23 s of empty box).
+                if !labelHandoverScheduled {
+                    labelHandoverScheduled = true
+                    let servedRow = rowID
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                        guard let self, self.labelUntilPaint, self.rowID == servedRow,
+                              !self.placeholderShown else { return }
+                        self.labelUntilPaint = false
+                        self.buildingLabel?.isHidden = true
+                        self.webView?.isHidden = false
+                    }
+                }
+            } else {
+                webView.isHidden = false
+            }
+        }
         removeCover()
         // Ask the document, not the scroll view: the scroll view cannot report a
         // height below the frame, which is how a card used to get stuck too tall.
@@ -1079,7 +1180,7 @@ extension TimelineRichHTMLCell: WKNavigationDelegate {
         displayedIdentity = nil
         let style = traitCollection.userInterfaceStyle
         performLoad(makeDocument(body: body, kind: kind, style: style),
-                    identity: Self.identity(key: documentKey, width: contentWidth, style: style))
+                    identity: Self.identity(kind: kind, key: documentKey, width: contentWidth, style: style))
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -1145,7 +1246,7 @@ extension TimelineRichHTMLCell {
     private func makeDocument(body: String, kind: RichHTMLDocument.Kind,
                               style: UIUserInterfaceStyle) -> String {
         var seed: IslandRuntime.Seed?
-        if Self.isIsland(kind), !islandStoreKey.isEmpty {
+        if case .island = kind, !islandStoreKey.isEmpty {
             let token = UUID().uuidString
             islandTokens.append((token: token, key: islandStoreKey))
             if islandTokens.count > 8 { islandTokens.removeFirst(islandTokens.count - 8) }
