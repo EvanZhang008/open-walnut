@@ -442,8 +442,29 @@ export function isGitAvailable(): boolean {
   }
 }
 
+/**
+ * Is the data home a repository of its own? Not "inside some work tree": a data
+ * home that sits inside another repository (a home directory kept in git, a
+ * project checkout, OPEN_WALNUT_HOME pointed into one) made every auto-commit and
+ * push act on THAT repository's whole tree (2026-10-30: a fresh install with its
+ * data home inside a checkout staged the checkout's own files). Such a data home
+ * gets a repository of its own from initSync, nested in the outer one.
+ *
+ * Read off `rev-parse --show-prefix` run in the data home: empty at a work tree's
+ * top, the relative path inside an outer one, and a failure outside any. No path
+ * comparison, so case, symlinks and a `.git` file (a worktree) cannot misjudge it.
+ */
+export function isOwnRepoPrefix(prefix: string | null): boolean {
+  return prefix !== null && prefix.trim() === '';
+}
+
 function isRepo(): boolean {
-  return gitSafe('rev-parse --is-inside-work-tree') === 'true';
+  return isOwnRepoPrefix(gitSafe('rev-parse --show-prefix'));
+}
+
+/** isRepo for another directory (compaction takes its repo as an argument). */
+export function isOwnRepoAt(dir: string): boolean {
+  return isOwnRepoPrefix(gitSafe('rev-parse --show-prefix', { cwd: dir }));
 }
 
 function hasRemote(): boolean {
@@ -560,7 +581,7 @@ export async function isGitAvailableAsync(): Promise<boolean> {
 export async function isRepoAsync(): Promise<boolean> {
   return cachedProbe(
     repoProbe,
-    async () => (await gitSafeAsync('rev-parse --is-inside-work-tree')) === 'true',
+    async () => isOwnRepoPrefix(await gitSafeAsync('rev-parse --show-prefix')),
     () => SYNC_PROBE_TTL_MS,
   );
 }
@@ -1478,6 +1499,10 @@ function ensureGitIdentity(): void {
 
 export function initSync(remoteUrl?: string): void {
   if (!isRepo()) {
+    // Inside another repository: the data home gets its own, nested in it. Say so
+    // once, since a remote set up before this fix lives on the outer one.
+    const outer = gitSafe('rev-parse --show-toplevel');
+    if (outer) log.git.warn('git-sync: the data home sits inside another git repository; giving it a repository of its own', { dataHome: WALNUT_HOME, outer });
     try {
       git('init');
       git('checkout -b main');

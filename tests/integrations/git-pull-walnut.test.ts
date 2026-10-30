@@ -27,7 +27,7 @@ const h = vi.hoisted(() => ({
    */
   probeAnswers: [
     ['--version', 'git version 2.99.0\n'],
-    ['rev-parse --is-inside-work-tree', 'true\n'],
+    ['rev-parse --show-prefix', '\n'],
     ['config --get-regexp', ''],
   ] as Array<[string, string]>,
 }));
@@ -82,7 +82,7 @@ vi.mock('node:child_process', async (importOriginal) => {
     // and nothing in a test may shell out to the real git.
     execSync: vi.fn((cmd: string) => {
       if (cmd.includes('--version')) return 'git version 2.99.0\n';
-      if (cmd.includes('rev-parse --is-inside-work-tree')) return 'true\n';
+      if (cmd.includes('rev-parse --show-prefix')) return '\n';
       if (cmd.includes('config --get-regexp')) throw new Error('no matching config'); // no embedded creds
       if (cmd.trim().endsWith(' remote')) return 'origin\n';
       return '';

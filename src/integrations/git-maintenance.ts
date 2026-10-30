@@ -446,6 +446,9 @@ export async function maintainRepo(
     packBytesBefore: 0,
     packBytesAfter: 0,
   };
+  // Neither a work tree with its own `.git` nor a bare repo: git run here would
+  // act on whatever repository the directory sits inside (git-sync isOwnRepoPrefix).
+  if (gitDir === repoDir && !fs.existsSync(path.join(repoDir, 'HEAD'))) return result;
 
   const due = opts.force ? 'forced' : maintenanceDue(gitDir, Date.now(), { afterRewrite: opts.afterRewrite });
   if (!due) return result;

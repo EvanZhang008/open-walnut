@@ -55,8 +55,9 @@ vi.mock('node:child_process', async (importOriginal) => {
     if (cmd.includes('--version')) {
       return h.gitAvailable ? { code: 0, stdout: 'git version 2.99.0\n' } : { code: 127, stdout: '' };
     }
-    if (cmd.includes('rev-parse --is-inside-work-tree')) {
-      return h.isRepo ? { code: 0, stdout: 'true\n' } : { code: 128, stdout: '' };
+    if (cmd.includes('rev-parse --show-prefix')) {
+      // Empty prefix: the data home is its own repo's top (git-sync isOwnRepoPrefix).
+      return h.isRepo ? { code: 0, stdout: '\n' } : { code: 128, stdout: '' };
     }
     if (cmd.includes('remote get-url')) {
       return h.failRemoteRead ? { code: 128, stdout: '' } : { code: 0, stdout: h.remoteUrl };
@@ -154,7 +155,7 @@ const count = (needle: string | RegExp): number =>
   h.spawned.filter((c) => (typeof needle === 'string' ? c.includes(needle) : needle.test(c))).length;
 
 const REMOTE_PROBE = /\bgit remote$/;
-const REPO_PROBE = 'rev-parse --is-inside-work-tree';
+const REPO_PROBE = 'rev-parse --show-prefix';
 const VERSION_PROBE = '--version';
 
 beforeEach(() => {

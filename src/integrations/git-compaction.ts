@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { WALNUT_HOME } from '../constants.js';
 import {
-  git, gitSafe, gitAsync, setCompactionInProgress, compactionInProgress, clearStaleLock, waitForSyncSettled,
+  git, gitSafe, gitAsync, isOwnRepoAt, setCompactionInProgress, compactionInProgress, clearStaleLock, waitForSyncSettled,
 } from './git-sync.js';
 import { pushViaBundle } from './git-bundle-client.js';
 import { log } from '../logging/index.js';
@@ -184,6 +184,12 @@ export function collectCommitsPaged(repoDir: string): Commit[] {
  */
 export async function compactGitHistory(repoDir = WALNUT_HOME): Promise<CompactionResult> {
   const opts = { cwd: repoDir };
+
+  // Never rewrite a repository the data home only sits inside (git-sync isOwnRepoPrefix).
+  if (!isOwnRepoAt(repoDir)) {
+    log.git.warn('compaction: skipped, the directory is not the top of a repository of its own', { repoDir });
+    return { skipped: true, before: 0, after: 0 };
+  }
 
   // 0. Ensure we're on main and working tree is clean
   const branch = gitSafe('rev-parse --abbrev-ref HEAD', opts);
