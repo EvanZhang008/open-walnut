@@ -21,6 +21,9 @@ export interface WatchingTrigger {
   state: string;
   fires: number;
   lastCheck?: { atMs?: number; outcome?: string; reason?: string; items?: number; error?: string };
+  /** It watches the task's ask of the user or one of its letters (trigger_create `watches`,
+   *  sessions/recheck-watch.ts): a wait on the user, so it never holds a park (outside-wait.ts). */
+  watchesUser?: boolean;
 }
 
 const MAX_LISTED = 5;

@@ -1059,9 +1059,20 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
     `phase: "WAITING"` or onto a task already waiting (`400` otherwise): at that
     time the server wakes the task's session with a note, or hands the task back
     as `NEED_ACTION` + `unread` when it has no session. A move into `WAITING`
-    that names no `wait_until` gets one 1 day out (`DEFAULT_WAIT_DAYS`), so a
-    wait is never open-ended unless asked for. Any move out of `WAITING` clears
-    `wait_until`.
+    that names no `wait_until` gets one 4 hours out (`DEFAULT_WAIT_HOURS`; 1 day
+    before 2026-10-30), so a wait is never open-ended unless asked for. Any move
+    out of `WAITING` clears `wait_until`.
+  - A session parks a task only on a wait outside Walnut and the user (additive,
+    2026-10-30): a `phase: "WAITING"` sent with `x-walnut-caller-sid` of a
+    session, onto a task not already waiting, needs a trigger of the task's own
+    (not one with `watches`), an unanswered request from its session, a subtask
+    at work (`IN_PROGRESS` or `WAITING`), the caller being the task's lead, or
+    `waiting_on` (a string of 10+ characters naming the outside thing, not
+    stored). Otherwise `409 wait_on_user` and nothing is applied; a `waiting_on`
+    that names the user (`you: ...`, `the user to ...`, `your call`) is refused
+    the same way. `POST /tasks/batch/phase` lists such ids under `failed`, and
+    the replay of a session's queued park meets the same check. People (no
+    caller header) are not checked.
   - A move into `WAITING` sends no letter, whoever makes it. The wait
     receipts of 2026-10-04 (one inbox letter per park a session made, opened by
     its `wait_report`, echoed back as `wait_receipt`) were removed on

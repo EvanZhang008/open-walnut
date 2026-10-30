@@ -114,16 +114,16 @@ describe('trigger_create wait inputs', () => {
     expect(op.description).toContain('do not ask the user to watch it')
   })
 
-  it('tells the model to set a short clock itself, and that the default is 1 day', () => {
+  it('tells the model to set a short clock itself, and that the default is 4 hours', () => {
     const op = getOp('trigger_create')!
     expect(op.description).toContain('Set wait_until yourself to when you expect the event, kept short')
     expect(op.description).toContain('the clock running out is how you find out')
     expect(op.description).not.toMatch(/3 days/)
-    expect(op.input.wait_until.description).toMatch(/Default 1 day/)
+    expect(op.input.wait_until.description).toMatch(/Default 4 hours/)
     const update = getOp('task_update')!
     expect(update.description).toContain('Set it to when you expect the event, kept short')
-    expect(update.description).toContain('gets 1 day from now')
-    expect(update.input.wait_until.description).toMatch(/1 day from now/)
+    expect(update.description).toContain('gets 4 hours from now')
+    expect(update.input.wait_until.description).toMatch(/4 hours from now/)
   })
 })
 

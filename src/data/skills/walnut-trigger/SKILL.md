@@ -208,7 +208,7 @@ or a file only that host has), and never paste one inline as `curl -H
 3. **Tell the user in ONE line** what will be watched and how often, before arming it.
 4. **Arm it**: `walnut tools call trigger_create '{"run":"bash ~/.open-walnut/triggers/<slug>/check.sh","every":"5m","prompt":"...","description":"...","wait_until":"4h"}'`.
    `description` is required (see below). `wait_until` is when you expect the
-   event, kept short (see below); left out it is 1 day.
+   event, kept short (see below); left out it is 4 hours.
    `session` defaults to `"this"`, so the fire lands in this conversation (resumed
    if it has gone quiet by then). `cwd` and `host` default to this session's.
    This also **parks this task as Waiting** (see "Waiting is the default"
@@ -276,6 +276,16 @@ session's own task **parks the task as Waiting** in the same call:
   that the user is needed after all, take it back yourself:
   `task_update '{"id":"<this task's id>","phase":"NEED_ACTION"}'`.
 
+**Only for a wait outside Walnut and the user.** Park on a pipeline or CI run,
+a build, a deploy, a CR or PR review, a Slack or mail reply, another task. When
+the next move is the user's (they paste a file, review, decide, sign in), the
+task is Needs you: set `task_update` NEED_ACTION and say what you need, never
+Waiting, even with no rush. Walnut enforces it: a park with nothing outside
+armed (no trigger of the task, no unanswered request, no subtask at work, no
+`waiting_on` naming the outside thing) is refused with `409 wait_on_user`, and
+a turn-end report that waits on nothing outside puts the task back on the
+user's list. A trigger with `watches` (the user's ask or a letter) never parks.
+
 **Use it on your own.** When the rest of the work waits on something outside
 this session (a review, a merge, a deploy, a build, a CI run, a reply from a
 person), do not ask the user to watch it or to "make a trigger": write the
@@ -301,8 +311,8 @@ cannot tell, so never let a park run for days on trust:
   little slack: a CI run or a deploy, minutes to an hour (`"45m"`); a review or a
   reply, later today or tomorrow morning (`"4h"`, `"1d"`); a release on a known
   date, that date. Pass an ISO datetime or a duration from now.
-- **Keep it short.** When you cannot tell, a few hours to a day. Left out, it is
-  1 day. Go longer only when the user named the time ("by Friday either way",
+- **Keep it short.** When you cannot tell, a few hours. Left out, it is
+  4 hours. Go longer only when the user named the time ("by Friday either way",
   "give it a week"). Pass `"wait_until":""` only when the user asked for no time
   limit.
 - If you named none in `trigger_create`, set one right after it:

@@ -10,7 +10,7 @@
  * side closed the item), and a deliberate source (api, user, agent) or the
  * session machine (`leaveHeld`) moves it freely. `wait_until` lives and dies with
  * the phase: set only while WAITING, cleared by every move out of it, and a move
- * INTO it with no time named gets the default clock (DEFAULT_WAIT_DAYS out), so
+ * INTO it with no time named gets the default clock (DEFAULT_WAIT_MS out), so
  * a wait is never open-ended unless "" asked for that.
  *
  * Would these fail on reverted code? YES: without the guard a sync pull with
@@ -23,7 +23,7 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-held-phase'));
 
 import { addTask, updateTask, updateTaskRaw, getTask, _resetForTesting } from '../../src/core/task-manager.js';
-import { DEFAULT_WAIT_DAYS } from '../../src/core/types.js';
+import { DEFAULT_WAIT_MS } from '../../src/core/types.js';
 import { closeDb } from '../../src/core/task-db.js';
 import { WALNUT_HOME } from '../../src/constants.js';
 
@@ -51,23 +51,23 @@ async function waitingTask(withUntil = true): Promise<string> {
   return task.id;
 }
 
-/** True when `iso` is DEFAULT_WAIT_DAYS after `before` (a moment taken just
+/** True when `iso` is DEFAULT_WAIT_MS after `before` (a moment taken just
  *  before the write), give or take the test's own runtime. */
 function isDefaultClock(iso: string | undefined, before: number): boolean {
   if (!iso) return false;
   const ahead = Date.parse(iso) - before;
-  return ahead >= DEFAULT_WAIT_DAYS * DAY_MS && ahead < DEFAULT_WAIT_DAYS * DAY_MS + 60_000;
+  return ahead >= DEFAULT_WAIT_MS && ahead < DEFAULT_WAIT_MS + 60_000;
 }
 
 describe('the default clock: a task entering WAITING with no wait_until named', () => {
-  it('gets DEFAULT_WAIT_DAYS from now on the updateTask path', async () => {
+  it('gets DEFAULT_WAIT_MS from now on the updateTask path', async () => {
     const { task } = await addTask({ title: 'Snoozed on a trigger' });
     const before = Date.now();
     await updateTask(task.id, { phase: 'WAITING' }, { source: 'agent' });
     const t = await getTask(task.id);
     expect(t.phase).toBe('WAITING');
     expect(isDefaultClock(t.wait_until, before), t.wait_until).toBe(true);
-    expect(Date.parse(t.wait_until!)).toBeGreaterThanOrEqual(before + DEFAULT_WAIT_DAYS * DAY_MS);
+    expect(Date.parse(t.wait_until!)).toBeGreaterThanOrEqual(before + DEFAULT_WAIT_MS);
   });
 
   it('a named time wins, shorter or longer; "" means no clock on purpose', async () => {

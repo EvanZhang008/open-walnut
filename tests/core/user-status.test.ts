@@ -146,6 +146,15 @@ describe('a turn\'s report moves its phase (sessions/report-phase.ts)', () => {
     expect(phaseForReport({ state: 'done' }, worker, true)).toBe('WAITING')
     expect(phaseForReport({ state: 'done' }, solo, true)).toBeNull()
   })
+  it('a wait it names no outside thing for is the user\'s unless the task has one armed', () => {
+    for (const kind of ['other', 'time', undefined] as const) {
+      expect(phaseForReport({ state: 'waiting', waiting_kind: kind }, worker, true, false), String(kind)).toBe('NEED_ACTION')
+      expect(phaseForReport({ state: 'waiting', waiting_kind: kind }, worker, true, true), String(kind)).toBe('WAITING')
+    }
+    expect(phaseForReport({ state: 'waiting', waiting_kind: 'outside', waiting_on: 'the CI run' }, solo, true, false)).toBe('WAITING')
+    expect(phaseForReport({ state: 'waiting', waiting_kind: 'lead' }, solo, true, false)).toBe('NEED_ACTION')
+    expect(phaseForReport({ state: 'waiting', waiting_kind: 'task', waiting_on: 'user: a review' }, worker, true, true)).toBe('NEED_ACTION')
+  })
   it('Main moves only when it is stopped on the user', () => {
     const main = { org_role: 'main' as const }
     expect(phaseForReport({ state: 'needs' }, main, true)).toBe('NEED_ACTION')

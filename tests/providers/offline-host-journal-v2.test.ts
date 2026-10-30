@@ -856,10 +856,12 @@ describe('journal v2: a replica retry, coalesced growth, retired inputs (review 
     expect(host.handleFollower(JHOME, { op: 'task_update', args: { ...park, id: TASK_B }, actor: DEVICE })).toMatchObject({ ok: true })
     drains.kinds = null
     expect(await gatewayCall(host, SID_A, 'task_update', { ...park, id: TASK_B })).toMatchObject({ ok: true, result: { queued: true } })
-    // The host's list is the op's own retiredInput.
+    // A park's waiting_on (the park gate's words, no task field) is dropped too, never a refusal.
+    expect(await gatewayCall(host, SID_A, 'task_update', { id: TASK_A, phase: 'WAITING', waiting_on: 'the CI run on main' })).toMatchObject({ ok: true, result: { queued: true } })
+    // The host's list is the op's own retiredInput, plus waiting_on.
     const src = fs.readFileSync(path.join(__dirname, '../../src/ops/tasks.ts'), 'utf8')
     const declared = /name: 'task_update',[\s\S]*?retiredInput: \[([^\]]*)\]/.exec(src)?.[1]
-    expect(declared && declared.split(',').map((x) => x.trim().replace(/'/g, '')).filter(Boolean)).toEqual(host.RETIRED_TASK_INPUTS)
+    expect(declared && [...declared.split(',').map((x) => x.trim().replace(/'/g, '')).filter(Boolean), 'waiting_on']).toEqual(host.RETIRED_TASK_INPUTS)
   })
 })
 

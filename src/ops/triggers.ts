@@ -86,8 +86,10 @@ defineOp({
     + '`description` is required: the card otherwise shows only a name and a script path, which does not '
     + 'tell the user what fires it. '
     + 'It PARKS your own task by default: the task goes to Waiting (off the user\'s list, no letter is sent), '
+    + 'because a trigger watches something outside Walnut and the user; one that watches the user\'s ask '
+    + '(`watches`) never parks, since a wait on the user is Needs you. '
     + 'and the fire (or its clock, wait_until) brings it back. Set wait_until yourself to when you expect the '
-    + 'event, kept short (hours, a day at most unless the user named a later time; 1 day when left out): a new '
+    + 'event, kept short (hours, a day at most unless the user named a later time; 4 hours when left out): a new '
     + 'trigger may be wrong or miss the event, and the clock running out is how you find out. On each fire and '
     + 'each clock wake, look at the thing itself and at whether the trigger is still right and enough, fix it, '
     + 'and only then park again with a fresh wait_until. '
@@ -123,10 +125,11 @@ defineOp({
     wait: z.boolean().optional().describe('Park the task the fire lands in (Waiting) until it fires. Default true for your own task, '
       + 'false for another task. Pass false while you or the user still have work on this task'),
     watches: z.string().optional().describe('What this trigger watches for you, so Walnut\'s 4-hour re-check of it stays quiet while '
-      + 'the trigger is armed: "ask" = your status\'s ask of the user, or a letter id (lt-...) you sent them'),
+      + 'the trigger is armed: "ask" = your status\'s ask of the user, or a letter id (lt-...) you sent them. '
+      + 'Such a trigger never parks the task: it waits on the user, so it stays Needs you'),
     wait_until: z.string().optional().describe('When the parked task comes back by itself if nothing fired: an ISO datetime or a duration '
       + 'from now ("2h", "1d"). Set it to when you expect the event, kept short: it is the check that the trigger works. '
-      + 'Default 1 day; "" = no clock (only when the user asked for no time limit)'),
+      + 'Default 4 hours; "" = no clock (only when the user asked for no time limit)'),
   },
   // The old park receipt's text (removed 2026-10-05), still sent by older sessions.
   retiredInput: ['wait_report'],
@@ -152,6 +155,7 @@ defineOp({
     const parked = w?.parked
       ? ` The task is now Waiting, off the user's list, until it fires${w.wait_until ? ` or ${w.wait_until}` : ''}.${unnamed}`
       : w?.reason === 'main_stays_active' ? ' The task it delivers into is the main agent\'s, which never parks: it stays active and on the user\'s list, and the fire wakes it like any message.'
+      : w?.reason === 'watches_user' ? ' The task was not parked: this trigger watches the user\'s ask, and a wait on the user stays Needs you.'
       : w?.reason === 'wait_false' ? ' The task was left as it is (wait:false); park it with task_update phase=WAITING once only the wait is left.'
       : w?.reason === 'other_task' ? ' The task it delivers into was left as it is (not your task; pass wait:true to park it).'
       : w?.reason === 'complete' ? ' The task it delivers into is complete, so it was not parked and the fire cannot land there.'

@@ -674,13 +674,16 @@ defineOp({
   title: 'Update a Walnut task',
   description:
     'Patch any supported task fields. Use phase=NEED_ACTION when work is done and ready to look at, ' +
-    'and phase=COMPLETE when it is finished. phase=WAITING parks the task on something that has not ' +
-    'happened yet (a trigger you armed, a reply, a time): it keeps its board section but leaves the user\'s task list, the end ' +
+    'or when the next move is the user\'s (their input, review or decision), and phase=COMPLETE when it is finished. ' +
+    'phase=WAITING parks the task ONLY on a wait outside Walnut and the user (a pipeline or CI run, a deploy, ' +
+    'a CR or PR review, a Slack or mail reply, another task): a session\'s park needs a trigger of its own, an ' +
+    'unanswered request or a subtask at work, or `waiting_on` naming the outside thing, else 409 wait_on_user. ' +
+    'It keeps its board section but leaves the user\'s task list, the end ' +
     'of this turn does not hand it back, and the next message into it (a trigger fire, the user, a peer) moves ' +
     'it to IN_PROGRESS. Set it as the LAST call of the turn, once only the wait is left. wait_until (ISO datetime, or a duration like "6h") wakes it at ' +
     'that time when nothing else did. Set it to when you expect the event, kept short: a trigger can miss it, and the ' +
     'clock is how you find out; when it wakes you, check the thing and the trigger before parking again. Left out, a ' +
-    'task entering WAITING gets 1 day from now, and "" means no clock at all. A park sends no letter: say what you wait on in your last message. ' +
+    'task entering WAITING gets 4 hours from now, and "" means no clock at all. A park sends no letter: say what you wait on in your last message. ' +
     'The main agent\'s task never parks: it stays active, and WAITING on it is not applied. ' +
     '`tags` is a full replacement ([] clears). Pass "" or null to clear due_date/start_date.',
   input: {
@@ -694,7 +697,9 @@ defineOp({
         + 'WAITING = parked until something happens (any new message brings it back)'),
     wait_until: z.string().optional()
       .describe('With phase=WAITING: ISO-8601 datetime, or a duration from now ("2h", "1d"), at which the task is woken if nothing else did. '
-        + 'Set it to when you expect the event, kept short. Left out when entering WAITING = 1 day from now; "" = no clock (the wait has no end of its own)'),
+        + 'Set it to when you expect the event, kept short. Left out when entering WAITING = 4 hours from now; "" = no clock (the wait has no end of its own)'),
+    waiting_on: z.string().max(300).optional()
+      .describe('With phase=WAITING from a session: the outside thing you wait on ("the CI run on main", "the PR review"), when no trigger, request or subtask of the task shows it. Never the user: their move is NEED_ACTION'),
     priority: PRIORITY.optional(),
     // null clears too: JSON callers reach for it first, and a refused clear read as a broken op.
     due_date: z.string().nullable().optional().describe('ISO-8601 date/datetime, or "" / null to clear'),
@@ -713,6 +718,8 @@ defineOp({
   // then still sends it, and a host replays the writes it queued offline: a park
   // refused for it was lost (2026-10-05, the handover's "record failed" card).
   retiredInput: ['wait_report'],
+  // Its text said what the park waits on: the park gate reads it as waiting_on (sessions/outside-wait.ts).
+  renamedInput: [{ from: 'wait_report', to: 'waiting_on', max: 300 }],
   handler: async (args, call) => {
     const { id, ...fields } = args
     const body: Record<string, unknown> = {}
@@ -981,6 +988,7 @@ defineOp({
       id: z.string().min(1).describe('Task id or a unique id prefix'),
       phase: TASK_PHASE.optional(),
       wait_until: z.string().optional(),
+      waiting_on: z.string().max(300).optional(),
       priority: PRIORITY.optional(),
       due_date: z.string().nullable().optional(),
       start_date: z.string().nullable().optional(),
@@ -995,6 +1003,7 @@ defineOp({
       .describe(`1 to ${MAX_BULK_WRITE} patches, each { id, ...fields } with at least one field besides id`),
   },
   retiredInput: ['updates[].wait_report'],
+  renamedInput: [{ from: 'updates[].wait_report', to: 'updates[].waiting_on', max: 300 }],
   routes: [{ method: 'PATCH', path: '/tasks/:id' }],
   handler: async (args, call) => {
     const updates = args.updates as Array<Record<string, unknown>>

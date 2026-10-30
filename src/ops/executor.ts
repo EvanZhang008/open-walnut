@@ -262,6 +262,21 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 function dropRetiredInput(op: WalnutOp, raw: Record<string, unknown>): Record<string, unknown> {
   let out = raw
   const own = (o: Record<string, unknown>, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k)
+  const carry = (o: Record<string, unknown>, from: string, to: string, max: number): Record<string, unknown> => {
+    const text = o[from]
+    if (typeof text !== 'string' || !text.trim() || own(o, to)) return o
+    return { ...o, [to]: Array.from(text.trim()).slice(0, max).join('') }
+  }
+  for (const r of op.renamedInput ?? []) {
+    const cut = r.from.indexOf('[].')
+    if (cut < 0) { out = carry(out, r.from, r.to, r.max); continue }
+    const list = r.from.slice(0, cut)
+    const items = out[list]
+    if (!Array.isArray(items)) continue
+    const field = r.from.slice(cut + 3)
+    const toField = r.to.slice(r.to.indexOf('[].') + 3)
+    out = { ...out, [list]: items.map((i) => isPlainObject(i) ? carry(i, field, toField, r.max) : i) }
+  }
   for (const path of op.retiredInput ?? []) {
     const cut = path.indexOf('[].')
     if (cut < 0) {

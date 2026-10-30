@@ -23,11 +23,18 @@ export type TaskPhase =
  * web through the `@open-walnut/core` alias so the optimistic row shows the
  * same clock the server stores.
  * One day, not three (2026-10-05, the user): nobody knows yet whether a new
- * trigger works, and the clock is what finds out when it does not.
+ * trigger works, and the clock is what finds out when it does not. Four hours,
+ * not a day (2026-10-30, the user: "please don't ... put a smaller time"): a
+ * pipeline, a deploy or a review mostly lands within hours, a park that was
+ * wrong is back on the user's list the same half day, and it matches the 4-hour
+ * re-check of an ask (sessions/needs-recheck.ts).
  */
-export const DEFAULT_WAIT_DAYS = 1;
+export const DEFAULT_WAIT_HOURS: number = 4;
+export const DEFAULT_WAIT_MS = DEFAULT_WAIT_HOURS * 3_600_000;
+/** The default clock in words, for labels ("4 hours"). */
+export const DEFAULT_WAIT_LABEL = `${DEFAULT_WAIT_HOURS} hour${DEFAULT_WAIT_HOURS === 1 ? '' : 's'}`;
 export function defaultWaitUntil(nowMs: number = Date.now()): string {
-  return new Date(nowMs + DEFAULT_WAIT_DAYS * 86_400_000).toISOString();
+  return new Date(nowMs + DEFAULT_WAIT_MS).toISOString();
 }
 export type TaskPriority = 'immediate' | 'important' | 'backlog' | 'none';
 /** A task's place in the org above the work (Task.org_role). */
@@ -903,7 +910,7 @@ export interface Task {
   /** WAITING only: when the wait ends by itself (ISO datetime). At that time the
    *  task's session is woken like a trigger fire (src/core/task-wait-until.ts);
    *  with no session the task comes back as NEED_ACTION. A task entering WAITING
-   *  without one gets `defaultWaitUntil()` (1 day out); an explicit empty value
+   *  without one gets `defaultWaitUntil()` (4 hours out); an explicit empty value
    *  waits until something else happens. Cleared by every move out of WAITING.
    *  Local-only, payload blob; never pushed to sync backends. */
   wait_until?: string;

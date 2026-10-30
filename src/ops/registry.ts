@@ -66,6 +66,12 @@ export interface WalnutOp {
    * a field of every object in the list `list`.
    */
   retiredInput?: readonly string[]
+  /**
+   * Retired fields whose text an older caller's write still needs, kept under the field that took
+   * their place when the caller did not send that one (cut to `max` characters): `{ from, to, max }`,
+   * with `list[].field` paths as in retiredInput. Applied before retiredInput drops `from`.
+   */
+  renamedInput?: readonly { from: string; to: string; max: number }[]
   /** Default executor: one HTTP call against /api/v1. */
   bind?: HttpBinding
   /**

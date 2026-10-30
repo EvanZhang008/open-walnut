@@ -480,13 +480,13 @@ function composePrompt(task: InstructionTask | undefined, state: { taskLine: str
     + 'Words: a "subagent" is Claude Code\'s Agent tool inside this session, '
     + 'never a Walnut task; a "subtask", "worker" or "task" is a Walnut task.\n\n'
     // Waiting is the session's job (see 6 above). Not Main's: it never parks (2e).
-    + (mainAgent ? '' : 'When the rest of the work waits on something outside this session (a review, '
-    + 'a merge, a deploy, a build, a reply), never ask the user to watch it: arm a '
-    + 'trigger yourself (walnut-trigger skill). It parks this task as Waiting, off the '
-    + 'user\'s list; the fire brings it back to you. Give it a wait_until for when you '
-    + 'expect the event, kept short: when the clock runs out first, the trigger may have '
-    + 'missed it, so check the thing and the trigger before parking again. '
-    + 'While work remains here, arm it with wait:false.\n\n')
+    + (mainAgent ? '' : 'When the rest of the work waits on something outside Walnut and the user (a build, '
+    + 'a review, a reply), never ask the user to watch it: arm a trigger yourself '
+    + '(walnut-trigger skill). It parks this task as Waiting, off the user\'s list; the fire '
+    + 'brings it back. Give it a short wait_until for when you expect it; when the clock '
+    + 'runs out first, check the thing and the trigger before parking again. While work remains, '
+    + 'arm it with wait:false. When the next move is the user\'s (input, a review, a decision), '
+    + 'it is Needs you (NEED_ACTION), never Waiting.\n\n')
     // The inbox (see 6b above).
     + 'The user\'s inbox is only for what needs them: send a letter (human_inbox_send) '
     + 'when you are blocked on their decision, something needs their review, or they asked '

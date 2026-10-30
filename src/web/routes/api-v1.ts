@@ -3073,7 +3073,7 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
     }
     // wait_until is the clock on a WAITING task: it rides with phase=WAITING, or
     // onto a task already in that phase (checked against the row below). Left
-    // out on the move into WAITING, the store sets DEFAULT_WAIT_DAYS out; "" / null
+    // out on the move into WAITING, the store sets DEFAULT_WAIT_HOURS out; "" / null
     // asks for no clock at all. A duration from now ("6h", "3d") is accepted as
     // well, the same spelling trigger_create takes.
     let waitUntil = waitUntilRaw
@@ -3360,6 +3360,17 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         const caller = actorSid ? await resolveCaller(actorSid).catch(() => null) : null
         const by = caller?.kind === 'session' && caller.record.taskId ? `task:${caller.record.taskId}` : 'human'
         await noteResultReport(before.id, { via: 'complete', by }, null, { emit: false })
+      }
+    }
+    // A session parks a task only on a wait outside Walnut and the user (core/sessions/outside-wait.ts).
+    if (phase === 'WAITING') {
+      const rawSid = req.headers['x-walnut-caller-sid']
+      const actor = (Array.isArray(rawSid) ? rawSid[0] : rawSid)?.trim() || undefined
+      if (actor) {
+        const { admitSessionPark } = await import('../../core/sessions/outside-wait.js')
+        const admit = await admitSessionPark(id, actor, (req.body as { waiting_on?: unknown } | undefined)?.waiting_on,
+          parentChanged ? parentLink?.leader?.id : undefined)
+        if (!admit.ok) { sendError(res, 409, admit.code, admit.message); return }
       }
     }
     try {

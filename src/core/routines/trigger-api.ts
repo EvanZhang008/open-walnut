@@ -205,7 +205,7 @@ export interface TriggerWaitResult {
   parked: boolean;
   task_id: string;
   /** Why it was not parked: the caller passed wait:false, the trigger is for another task, or the task is complete. */
-  reason?: 'wait_false' | 'other_task' | 'complete' | 'not_written' | 'main_stays_active';
+  reason?: 'wait_false' | 'other_task' | 'complete' | 'not_written' | 'main_stays_active' | 'watches_user';
   /** The clock the store now holds (null = no clock), when parked. */
   wait_until?: string | null;
   /** The task was already WAITING (its clock is kept unless wait_until was passed). */
@@ -383,10 +383,14 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
   // the thing the trigger watches, so the task leaves the user's list until it
   // fires (2026-10-04). wait:false keeps it there while work remains; a trigger
   // aimed at another task leaves that task alone unless wait:true says so.
-  const park = b.wait === true || (b.wait === undefined && resolved.own);
+  // A trigger on the user's ask or letter (`watches`) is a wait on the user: the task stays
+  // Needs you, whatever `wait` says (sessions/outside-wait.ts, 2026-10-30).
+  const park = !watches && (b.wait === true || (b.wait === undefined && resolved.own));
   const wait: TriggerWaitResult = park
     ? await parkForTrigger(resolved.target, { waitUntil, callerSid })
-    : await isMainTarget(resolved.target)
+    : watches
+      ? { parked: false, task_id: resolved.target, reason: 'watches_user' }
+      : await isMainTarget(resolved.target)
       ? { parked: false, task_id: resolved.target, reason: 'main_stays_active' }
       : { parked: false, task_id: resolved.target, reason: b.wait === false ? 'wait_false' : 'other_task' };
 

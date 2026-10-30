@@ -405,7 +405,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
    * reason to refuse, as the server's executor drops them (an older session still sends
    * wait_report with a park; 2026-10-05 such a replay was refused and lost).
    */
-  const RETIRED_TASK_INPUTS = ['wait_report']
+  // waiting_on is no task field: the server's park gate reads it online (sessions/outside-wait.ts)
+  // and a queued park is checked again at replay, so it is dropped here, never a refusal.
+  const RETIRED_TASK_INPUTS = ['wait_report', 'waiting_on']
   /** The fields a task write may queue (task-outbox whitelist plus phase, parent, pinned, focus tier). */
   const QUEUEABLE = [
     'title', 'status', 'phase', 'priority', 'project', 'group_id', 'due_date', 'start_date', 'end_date', 'pinned', 'tags',

@@ -123,7 +123,8 @@ let taskId = ''
 const updateOp = () => getOp('task_update')!
 
 async function park(opts: { wait_until?: string } = {}): Promise<any> {
-  const out = await updateOp().handler!({ id: taskId, phase: 'WAITING', ...opts }, opCall(sid)) as any
+  // A session's park names its outside wait (sessions/outside-wait.ts).
+  const out = await updateOp().handler!({ id: taskId, phase: 'WAITING', waiting_on: 'the vendor\'s reply by mail', ...opts }, opCall(sid)) as any
   const t = await task(taskId)
   expect(t.phase).toBe('WAITING')
   expect(t.status).toBe('todo')
@@ -175,7 +176,7 @@ afterAll(async () => {
 })
 
 describe('task_update phase=WAITING from the session', () => {
-  it('parks the task: Waiting, todo bucket, no red dot, the default 1-day clock, and tells the session to end its turn', async () => {
+  it('parks the task: Waiting, todo bucket, no red dot, the default 4-hour clock, and tells the session to end its turn', async () => {
     const before = Date.now()
     const out = await park()
     expect(JSON.stringify(out)).toContain('End your turn now')
@@ -184,8 +185,8 @@ describe('task_update phase=WAITING from the session', () => {
     expect(row).toMatchObject({ phase: 'WAITING', status: 'todo' })
     // No wait_until named: the default clock, so a snooze is never silent forever.
     const ahead = Date.parse(row.wait_until) - before
-    expect(ahead).toBeGreaterThanOrEqual(86_400_000)
-    expect(ahead).toBeLessThan(86_400_000 + 60_000)
+    expect(ahead).toBeGreaterThanOrEqual(4 * 3_600_000)
+    expect(ahead).toBeLessThan(4 * 3_600_000 + 60_000)
     // The outcome names the stored clock, not the request (which named none).
     expect(JSON.stringify(out)).toContain(`or the clock at ${row.wait_until}`)
     expect(trackedWaitUntil().has(taskId)).toBe(true)

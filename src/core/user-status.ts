@@ -26,10 +26,34 @@ import { infraStopCause } from './session-error-kind.js';
 
 export type UserState = 'needs' | 'working' | 'waiting' | 'done';
 
-/** On what a waiting task waits. */
-export type WaitKind = 'task' | 'time' | 'machine' | 'you' | 'lead' | 'not-started' | 'stuck' | 'other';
+/** On what a waiting task waits. `outside`: a pipeline, a build, a deploy, a review, a reply from outside Walnut. */
+export type WaitKind = 'task' | 'time' | 'machine' | 'outside' | 'you' | 'lead' | 'not-started' | 'stuck' | 'other';
 
 export const USER_STATES: readonly UserState[] = ['needs', 'working', 'waiting', 'done'];
+
+/** The report kinds that name a wait outside the user by themselves (sessions/outside-wait.ts). */
+export const OUTSIDE_WAIT_KINDS: ReadonlySet<WaitKind> = new Set<WaitKind>(['task', 'lead', 'machine', 'outside']);
+
+/** The words a wait on the user starts with: "you: ...", "the user to paste ...", "your call". */
+const ON_USER_RE = /^\s*(?:(?:waiting\s+)?(?:on|for)\s+)?(?:you|your|user|the user)(?:'s)?(?![\w-])/i;
+/** The kind prefix alone ("you: ...", "user: ..."): what overrides a kind that names an outside wait. */
+const ON_USER_PREFIX_RE = /^\s*(?:you|user|the user)\s*[:\uff1a]/i;
+
+/**
+ * Whether wait words say the wait is on the user. Pure. `strict`: only the "you:" / "user:"
+ * prefix counts, for words under a kind that names an outside wait ("outside: your PR's CI run").
+ */
+export function waitWordsNameUser(words: string | null | undefined, strict = false): boolean {
+  return (strict ? ON_USER_PREFIX_RE : ON_USER_RE).test(words ?? '');
+}
+
+/** A waiting report whose wait is the user's to end: on them, or on nothing it names outside. */
+function waitIsUsers(report: StatusReport | null | undefined): boolean {
+  if (report?.state !== 'waiting') return false;
+  const kind = report.waiting_kind;
+  if (kind && OUTSIDE_WAIT_KINDS.has(kind)) return waitWordsNameUser(report.waiting_on, true);
+  return true;
+}
 
 export const USER_STATE_LABELS: Record<UserState, string> = {
   needs: 'Needs you', working: 'Working', waiting: 'Waiting', done: 'Done',
@@ -310,7 +334,7 @@ export function deriveUserStatus(input: UserStatusInput, nowMs: number = Date.no
 /** The ask a report makes of the user, in the words derive() shows. */
 function reportAsk(report: StatusReport | null | undefined): string | undefined {
   if (report?.state === 'needs' && !none(report.ask)) return clean(report.ask);
-  if (report?.state === 'waiting' && report.waiting_kind === 'you' && !none(report.waiting_on)) return clean(report.waiting_on);
+  if (waitIsUsers(report) && !none(report!.waiting_on)) return clean(report!.waiting_on);
   return undefined;
 }
 
@@ -394,8 +418,9 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
       return strip({ state: 'waiting', kind: input.hasLeader ? 'lead' : 'you', waitingOn: 'Its team was stopped: Resume the team, or a message to it, starts it again', ...w });
     }
     if (report?.state === 'needs' && !none(report.ask)) return strip({ state: 'needs', source: 'session', ask: clean(report.ask), ...w });
-    if (report?.state === 'waiting' && report.waiting_kind === 'you' && !none(report.waiting_on)) {
-      return strip({ state: 'needs', source: 'session', ask: clean(report.waiting_on), ...w });
+    // A wait that is the user's (2026-10-30: "other: the meeting notes") is their ask, in its words.
+    if (waitIsUsers(report) && !none(report!.waiting_on)) {
+      return strip({ state: 'needs', source: 'session', ask: clean(report!.waiting_on), ...w });
     }
     // Handed back only because its turn ended (2026-10-27, the lead on the user's demo: a turn that
     // answered the user's question and only confirmed the plan read Needs you everywhere). Its own

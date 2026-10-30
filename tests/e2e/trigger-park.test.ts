@@ -31,6 +31,7 @@ import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { setTriggerDaemonLookupForTest, type TriggerDaemon } from '../../src/core/routines/trigger-daemon.js'
 import { handleTriggerFired } from '../../src/core/routines/trigger-events.js'
 import { getOp } from '../../src/ops/index.js'
+import { DEFAULT_WAIT_MS } from '../../src/core/types.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 const DAY = 86_400_000
@@ -127,7 +128,7 @@ afterAll(async () => {
 })
 
 describe('trigger_create parks the caller\'s own task by default', () => {
-  it('Waiting with the 1-day clock, and no letter', async () => {
+  it('Waiting with the 4-hour clock, and no letter', async () => {
     const { sid, taskId } = await startSession('fix the menu page and get PR 123 merged')
     const before = Date.now()
     const r = await createTrigger(sid)
@@ -140,8 +141,8 @@ describe('trigger_create parks the caller\'s own task by default', () => {
     expect(t.status).toBe('todo')
     expect(t.unread).toBeFalsy()
     const ahead = Date.parse(t.wait_until) - before
-    expect(ahead).toBeGreaterThanOrEqual(DAY)
-    expect(ahead).toBeLessThan(DAY + 60_000)
+    expect(ahead).toBeGreaterThanOrEqual(DEFAULT_WAIT_MS)
+    expect(ahead).toBeLessThan(DEFAULT_WAIT_MS + 60_000)
     expect(r.json.wait.wait_until).toBe(t.wait_until)
     expect(r.json.wait).not.toHaveProperty('letter_id')
     expect(await lettersFor(taskId)).toHaveLength(0)
@@ -337,6 +338,63 @@ describe('the turn that parks it', () => {
   })
 })
 
+// 2026-10-30, the user: "try to avoid until u are actually wait something like pipeline flowing,
+// slack, or cr approval". A session parks only on a wait outside Walnut and the user
+// (src/core/sessions/outside-wait.ts); waiting on the user is Needs you.
+describe('a session parks only on a wait outside Walnut and the user', () => {
+  it('a park with nothing outside armed is refused, and the task stays on the user', async () => {
+    const { sid, taskId } = await startSession('write the summary from the meeting notes')
+    const h = { 'x-walnut-caller-sid': sid }
+    const r = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING' }, h)
+    expect(r.status, JSON.stringify(r.json)).toBe(409)
+    expect(r.json.error.code ?? r.json.code).toBe('wait_on_user')
+    expect(JSON.stringify(r.json)).toContain('phase=NEED_ACTION')
+    expect((await task(taskId)).phase).toBe('NEED_ACTION')
+    // Words that name the user are the user's, however long.
+    const you = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING', waiting_on: 'you: paste the meeting notes' }, h)
+    expect(you.status, JSON.stringify(you.json)).toBe(409)
+    expect((await task(taskId)).phase).toBe('NEED_ACTION')
+    // The op says the same, through the same route.
+    const op = await getOp('task_update')!.handler({ id: taskId, phase: 'WAITING' } as never, (async (method: string, p: string, body?: unknown) => {
+      const res = await req(method, `/api/v1${p}`, body, h)
+      if (res.status >= 400) throw new Error(`${res.status} ${JSON.stringify(res.json)}`)
+      return res.json
+    }) as never).catch((err: Error) => err)
+    expect(String(op)).toContain('wait_on_user')
+  })
+
+  it('a park that names the outside thing goes through; a person is never checked', async () => {
+    const { sid, taskId } = await startSession('deploy once CI is green')
+    const named = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING', waiting_on: 'the CI run on main', wait_until: '45m' }, { 'x-walnut-caller-sid': sid })
+    expect(named.status, JSON.stringify(named.json)).toBe(200)
+    expect((await task(taskId)).phase).toBe('WAITING')
+    // waiting_on is not stored on the task.
+    expect((await task(taskId)).waiting_on).toBeUndefined()
+    const other = await startSession('a task the user parks by hand')
+    const human = await req('PATCH', `/api/v1/tasks/${other.taskId}`, { phase: 'WAITING' })
+    expect(human.status, JSON.stringify(human.json)).toBe(200)
+    expect((await task(other.taskId)).phase).toBe('WAITING')
+  })
+
+  it('a trigger on the user\'s ask never parks the task, and does not count as an outside wait', async () => {
+    const { sid, taskId } = await startSession('ask the user to sign in, then go on')
+    const r = await createTrigger(sid, { watches: 'ask' })
+    expect(r.status, JSON.stringify(r.json)).toBe(201)
+    expect(r.json.wait).toMatchObject({ parked: false, reason: 'watches_user' })
+    expect((await task(taskId)).phase).toBe('NEED_ACTION')
+    // Not with wait:true either.
+    const forced = await createTrigger(sid, { watches: 'ask', wait: true })
+    expect(forced.json.wait).toMatchObject({ parked: false, reason: 'watches_user' })
+    const park = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING' }, { 'x-walnut-caller-sid': sid })
+    expect(park.status, JSON.stringify(park.json)).toBe(409)
+    // A trigger on an outside thing is enough.
+    const ci = await createTrigger(sid, { wait: false })
+    expect(ci.json.wait).toMatchObject({ parked: false, reason: 'wait_false' })
+    const ok = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING' }, { 'x-walnut-caller-sid': sid })
+    expect(ok.status, JSON.stringify(ok.json)).toBe(200)
+  })
+})
+
 describe('the fire brings it back', () => {
   it('a fire into the parked task: In Progress, then Need Action', async () => {
     const { sid, taskId } = await startSession('merge PR 123 once approved')
@@ -413,7 +471,7 @@ describe('the clock running out is a check on the trigger', () => {
 
   it('a park with no trigger keeps the plain note', async () => {
     const { sid, taskId } = await startSession('remind me after lunch')
-    await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING', wait_until: '1h' }, { 'x-walnut-caller-sid': sid })
+    await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING', wait_until: '1h', waiting_on: 'the time the user named, after lunch' }, { 'x-walnut-caller-sid': sid })
     daemon.clearCommandHistory()
     const { sweepWaitUntil } = await import('../../src/core/task-wait-until.js')
     expect(await sweepWaitUntil(Date.now() + 2 * 3_600_000)).toContain(taskId)
@@ -423,18 +481,21 @@ describe('the clock running out is a check on the trigger', () => {
   })
 })
 
+/** A session's park names its outside wait (sessions/outside-wait.ts). */
+const VENDOR = 'the vendor\'s reply by mail'
+
 describe('task PATCH into WAITING sends no letter', () => {
   it('a session\'s park sends none, again or with a stray wait_report', async () => {
     const { sid, taskId } = await startSession('park by hand')
     const h = { 'x-walnut-caller-sid': sid }
-    const first = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING' }, h)
+    const first = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING', waiting_on: VENDOR }, h)
     expect(first.status, JSON.stringify(first.json)).toBe(200)
     expect(first.json).not.toHaveProperty('wait_receipt')
     expect((await task(taskId)).phase).toBe('WAITING')
 
-    const again = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING' }, h)
+    const again = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING', waiting_on: VENDOR }, h)
     expect(again.status).toBe(200)
-    const stray = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING', wait_report: 'Waiting for the vendor.' }, h)
+    const stray = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING', waiting_on: VENDOR, wait_report: 'Waiting for the vendor.' }, h)
     expect(stray.status, JSON.stringify(stray.json)).toBe(200)
     expect(stray.json).not.toHaveProperty('wait_receipt')
     expect(await lettersFor(taskId)).toHaveLength(0)
@@ -459,13 +520,13 @@ describe('task PATCH into WAITING sends no letter', () => {
   it('wait_until takes a duration, and a past one is refused', async () => {
     const { sid, taskId } = await startSession('patch rules')
     const h = { 'x-walnut-caller-sid': sid }
-    const past = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING', wait_until: '0h' }, h)
+    const past = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING', wait_until: '0h', waiting_on: VENDOR }, h)
     expect(past.status).toBe(400)
     expect((await task(taskId)).phase).toBe('NEED_ACTION')
     expect(await lettersFor(taskId)).toHaveLength(0)
 
     const before = Date.now()
-    const ok = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING', wait_until: '2d' }, h)
+    const ok = await req('PATCH', `/api/v1/tasks/${taskId}`, { phase: 'WAITING', wait_until: '2d', waiting_on: VENDOR }, h)
     expect(ok.status, JSON.stringify(ok.json)).toBe(200)
     const ahead = Date.parse((await task(taskId)).wait_until) - before
     expect(ahead).toBeGreaterThanOrEqual(2 * DAY)

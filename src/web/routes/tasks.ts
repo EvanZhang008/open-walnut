@@ -1044,7 +1044,12 @@ tasksRouter.post('/batch/phase', async (req: Request, res: Response, next: NextF
       return
     }
 
-    const { changed, failed, syncFailed } = await setPhaseBulk(taskIds, phase as Task['phase'])
+    // A session parks only on a wait outside Walnut and the user (core/sessions/outside-wait.ts).
+    const { splitSessionParks, callerSidOf } = await import('../../core/sessions/outside-wait.js')
+    const gate = await splitSessionParks(taskIds, phase, callerSidOf(req.headers))
+    const bulk = gate.ids.length ? await setPhaseBulk(gate.ids, phase as Task['phase']) : { changed: [], failed: [], syncFailed: [] }
+    const { changed, syncFailed } = bulk
+    const failed = [...bulk.failed, ...gate.refused]
     log.web.info('tasks batch phase via REST', { count: taskIds.length, changed: changed.length, failed: failed.length, syncFailed: syncFailed.length, phase })
 
     // Per-task events so every surface (web-ui lists) reconciles the
@@ -1424,6 +1429,12 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
     if (req.body.phase !== undefined && !VALID_PHASES.has(req.body.phase)) {
       res.status(400).json({ error: `phase must be one of: ${VALID_PHASES_ARRAY.join(', ')}` })
       return
+    }
+    if (req.body.phase === 'WAITING') {
+      // A session parks only on a wait outside Walnut and the user (core/sessions/outside-wait.ts).
+      const { admitSessionPark, callerSidOf } = await import('../../core/sessions/outside-wait.js')
+      const admit = await admitSessionPark(id, callerSidOf(req.headers), req.body.waiting_on)
+      if (!admit.ok) { res.status(409).json({ error: admit.message, code: admit.code }); return }
     }
     if (req.body.unread !== undefined && typeof req.body.unread !== 'boolean') {
       res.status(400).json({ error: 'unread must be a boolean' })

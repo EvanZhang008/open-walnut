@@ -349,8 +349,11 @@ describe('buildSessionContext (identity note)', () => {
     for (const id of ['', await seedTask('marina')]) {
       const { systemPrompt } = await buildSessionContext(id)
       expect(systemPrompt).toMatch(/never ask the user to watch it: arm a trigger yourself \(walnut-trigger skill\)/i)
-      expect(systemPrompt).toMatch(/parks this task as Waiting, off the user's list; the fire brings it back to you/i)
-      expect(systemPrompt).toMatch(/while work remains here, arm it with wait:false/i)
+      expect(systemPrompt).toMatch(/parks this task as Waiting, off the user's list; the fire brings it back/i)
+      expect(systemPrompt).toMatch(/while work remains, arm it with wait:false/i)
+      // 2026-10-30, the user: park only on an outside wait; the user's move is Needs you.
+      expect(systemPrompt).toMatch(/waits on something outside Walnut and the user/i)
+      expect(systemPrompt).toMatch(/when the next move is the user's \(input, a review, a decision\), it is Needs you \(NEED_ACTION\), never Waiting/i)
       expect(systemPrompt).not.toMatch(/receipt/i)
     }
   })
@@ -360,8 +363,8 @@ describe('buildSessionContext (identity note)', () => {
     // wait must not run for days, and each time it runs out the session re-checks.
     for (const id of ['', await seedTask('marina')]) {
       const { systemPrompt } = await buildSessionContext(id)
-      expect(systemPrompt).toMatch(/give it a wait_until for when you expect the event, kept short/i)
-      expect(systemPrompt).toMatch(/when the clock runs out first, the trigger may have missed it, so check the thing and the trigger before parking again/i)
+      expect(systemPrompt).toMatch(/give it a short wait_until for when you expect it/i)
+      expect(systemPrompt).toMatch(/when the clock runs out first, check the thing and the trigger before parking again/i)
     }
   })
 

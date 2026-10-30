@@ -664,7 +664,12 @@ taskV1Router.post('/tasks/batch/phase', async (req: Request, res: Response, next
       return
     }
     const { setPhaseBulk } = await import('../../core/task-manager.js')
-    const { changed, failed, syncFailed } = await setPhaseBulk(taskIds, phase as TaskPhase)
+    // A session parks only on a wait outside Walnut and the user (core/sessions/outside-wait.ts).
+    const { splitSessionParks, callerSidOf } = await import('../../core/sessions/outside-wait.js')
+    const gate = await splitSessionParks(taskIds, phase, callerSidOf(req.headers))
+    const bulk = gate.ids.length ? await setPhaseBulk(gate.ids, phase as TaskPhase) : { changed: [], failed: [], syncFailed: [] }
+    const { changed, syncFailed } = bulk
+    const failed = [...bulk.failed, ...gate.refused]
     log.web.info('tasks batch phase via api-v1', { count: taskIds.length, changed: changed.length, failed: failed.length, phase })
     // Per-task events so every surface (and the cloud outbox) reconciles the
     // same way it does for a single-task change.

@@ -127,7 +127,7 @@ afterAll(async () => {
 
 describe('a task woken by its wait_until clock', () => {
   it('shows the wake note and the answer, and none of the injected context', async () => {
-    await getOp('task_update')!.handler!({ id: taskId, phase: 'WAITING', wait_until: new Date(Date.now() + 3_600_000).toISOString() }, opCall(sid))
+    await getOp('task_update')!.handler!({ id: taskId, phase: 'WAITING', waiting_on: 'the CI run on main', wait_until: new Date(Date.now() + 3_600_000).toISOString() }, opCall(sid))
     expect((await task(taskId)).phase).toBe('WAITING')
 
     const linesBefore = (await fs.readFile(transcriptFile(), 'utf8')).trim().split('\n').length

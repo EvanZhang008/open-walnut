@@ -252,9 +252,11 @@ export function markInterruptedByMessage(taskId: string, source: string): void {
 
 /** What a trigger list says about the wait: may it come back? */
 export function triggersHoldWait(
-  triggers: ReadonlyArray<Pick<WatchingTrigger, 'state'> & Partial<Pick<WatchingTrigger, 'id' | 'fires'>>>,
+  all: ReadonlyArray<Pick<WatchingTrigger, 'state'> & Partial<Pick<WatchingTrigger, 'id' | 'fires' | 'watchesUser'>>>,
   firesAtExit?: Readonly<Record<string, number>>,
 ): boolean {
+  // A trigger on the user's ask is a wait on the user: it never holds a park (sessions/outside-wait.ts).
+  const triggers = all.filter((t) => !t.watchesUser);
   if (!triggers.some((t) => t.state === 'armed') || triggers.some((t) => t.state === 'stopped')) return false;
   if (!firesAtExit) return true;
   return !triggers.some((t) => t.id !== undefined && t.fires !== undefined
@@ -395,7 +397,7 @@ export function takeFireTurn(taskId: string, nowMs: number = Date.now()): { wait
  * A trigger that fired once is a one-time watch: the fire is what the task waited for, and the
  * task is handed back as before.
  */
-export function triggersStanding(triggers: ReadonlyArray<Pick<WatchingTrigger, 'state'> & Partial<Pick<WatchingTrigger, 'fires'>>>): boolean {
-  return triggersHoldWait(triggers) && triggers.some((t) => t.state === 'armed' && (t.fires ?? 0) >= 2);
+export function triggersStanding(triggers: ReadonlyArray<Pick<WatchingTrigger, 'state'> & Partial<Pick<WatchingTrigger, 'fires' | 'watchesUser'>>>): boolean {
+  return triggersHoldWait(triggers) && triggers.some((t) => t.state === 'armed' && !t.watchesUser && (t.fires ?? 0) >= 2);
 }
 

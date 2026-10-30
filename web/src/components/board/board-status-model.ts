@@ -41,7 +41,7 @@ export function userStatusOf(task: Task): UserStatus {
 }
 
 const WAIT_ORDER: Record<WaitKind, number> = {
-  stuck: 0, you: 1, task: 2, lead: 3, machine: 4, time: 5, other: 6, 'not-started': 9,
+  stuck: 0, you: 1, task: 2, lead: 3, outside: 4, machine: 4, time: 5, other: 6, 'not-started': 9,
 };
 
 const ms = (iso: string | null | undefined): number => {

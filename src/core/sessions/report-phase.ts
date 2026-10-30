@@ -7,7 +7,9 @@
  *
  *   needs-you    NEED_ACTION  stopped on something only the user can give
  *   waiting you  NEED_ACTION  the user's move, even with no rush (WAITING would hide it from their list)
- *   waiting      WAITING      the next move is another task's, a time's, a watch's, its lead's
+ *   waiting      WAITING      only for a wait outside Walnut and the user (outside-wait.ts): one it
+ *                             names (outside, task, lead, machine), or one the task has armed (a
+ *                             trigger of its own, a request out, an open subtask); else NEED_ACTION
  *   working      IN_PROGRESS  it carries on by itself, and its process is still there
  *   done         WAITING      with a leader, which checks and closes it; without one it stays handed back
  *
@@ -23,25 +25,40 @@
 import { log } from '../../logging/index.js';
 import type { Task, TaskPhase } from '../types.js';
 import type { StatusReport } from '../user-status.js';
+import { OUTSIDE_WAIT_KINDS, outsideWaitEvidence, reportNamesOutsideWait, waitWordsNameUser } from './outside-wait.js';
 
 /** Clock slack between the turn's end (this process) and the phase write (the same process, later). */
 const SLACK_MS = 5_000;
 /** How long after its turn's end a stored report may have been written (applyStoredReports). */
 const STORED_REPORT_WINDOW_MS = 10 * 60_000;
 
+/**
+ * The phase a report implies. `armed`: whether the task has an outside wait armed
+ * (outsideWaitEvidence), read only by a waiting report that names none of its own. Left out it
+ * counts as none; 'unknown' returns WAITING provisionally, for a caller that looks it up before
+ * writing (applyReportPhase).
+ */
 export function phaseForReport(
-  report: Pick<StatusReport, 'state' | 'waiting_kind'>, task: Pick<Task, 'parent_task_id' | 'org_role'>, alive: boolean,
+  report: Pick<StatusReport, 'state' | 'waiting_kind' | 'waiting_on'>, task: Pick<Task, 'parent_task_id' | 'org_role'>, alive: boolean,
+  armed: boolean | 'unknown' = false,
 ): TaskPhase | null {
-  const onUser = report.state === 'needs' || (report.state === 'waiting' && report.waiting_kind === 'you');
+  const onUser = report.state === 'needs' || (report.state === 'waiting' && (report.waiting_kind === 'you'
+    || waitWordsNameUser(report.waiting_on, !!report.waiting_kind && OUTSIDE_WAIT_KINDS.has(report.waiting_kind))));
   // Main's turn ends on the user's next message as a rule: only a real stop on them moves it.
   if (task.org_role === 'main') return report.state === 'needs' ? 'NEED_ACTION' : null;
   if (onUser) return 'NEED_ACTION';
   switch (report.state) {
     case 'working': return alive ? 'IN_PROGRESS' : null;
-    case 'waiting': return 'WAITING';
+    // A wait it cannot show is outside is the user's (2026-10-30: "the meeting notes" read as "other").
+    case 'waiting': return reportNamesOutsideWait(report, task) || armed !== false ? 'WAITING' : 'NEED_ACTION';
     case 'done': return task.parent_task_id ? 'WAITING' : null;
     default: return null;
   }
+}
+
+/** Whether a report's WAITING rests on facts the task must have (the caller looks them up). */
+export function reportNeedsEvidence(report: Pick<StatusReport, 'state' | 'waiting_kind' | 'waiting_on'>, task: Pick<Task, 'parent_task_id'>): boolean {
+  return report.state === 'waiting' && !reportNamesOutsideWait(report, task);
 }
 
 /** Whether a phase write to `next` may follow the report of the turn that ended at `turnEndedAt`. */
@@ -67,7 +84,12 @@ export async function applyReportPhase(
   const { getTask, updateTaskRaw } = await import('../task-manager.js');
   const task = await getTask(taskId).catch(() => null);
   if (!task) return null;
-  const next = phaseForReport(report, task, alive);
+  let next = phaseForReport(report, task, alive, 'unknown');
+  if (next === 'WAITING' && reportNeedsEvidence(report, task)) {
+    const evidence = await outsideWaitEvidence(task, { sessionIds: [sessionId] });
+    next = phaseForReport(report, task, alive, !!evidence);
+    if (!evidence) log.session.info('status report waits on nothing outside: handed back to the user', { taskId, sessionId, waitingKind: report.waiting_kind });
+  }
   if (!next || next === task.phase || !reportMayMovePhase(task, turnEndedAt, next, report.state)) return null;
   const { readMarkerForPhase } = await import('../phase.js');
   const res = await updateTaskRaw(taskId, { phase: next, ...readMarkerForPhase(next) }, {
@@ -99,7 +121,7 @@ export async function applyStoredReports(): Promise<number> {
     // debounce plus the ask), so a phase set earlier than that is an older turn's, and one set
     // later is someone else's.
     if (!Number.isFinite(at) || !Number.isFinite(phaseAt) || phaseAt < at - STORED_REPORT_WINDOW_MS) continue;
-    const next = phaseForReport(report, task, false);
+    const next = phaseForReport(report, task, false, 'unknown');
     if (!next || next === task.phase || !reportMayMovePhase(task, at, next, report.state)) continue;
     if (await applyReportPhase(task.id, task.session_id ?? '', report, at).catch(() => null)) moved++;
   }

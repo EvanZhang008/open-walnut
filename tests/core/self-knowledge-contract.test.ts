@@ -36,6 +36,7 @@ describe('Walnut self-knowledge contract', () => {
     // "set it last" live in the task_update schema and the trigger skill: the
     // bootstrap prompt has a 2,200-char budget.)
     expect(prompt).toContain('`WAITING` parks it until something happens; any new message brings it back');
+    expect(prompt).toContain('Never for the user\'s move: that is `NEED_ACTION`.');
     expect(prompt).not.toContain('`WAIT`');
     expect(prompt).toContain('`COMPLETE` when it is finished');
     expect(prompt).toContain('You may set any phase; none is reserved');

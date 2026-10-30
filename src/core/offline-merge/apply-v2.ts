@@ -96,7 +96,8 @@ export async function sessionWriteFields<T>(record: V2Record, fields: Record<str
   const { getOp } = await import('../../ops/index.js');
   const op = getOp(name);
   const allowed = name === 'task_complete' ? new Set(['phase']) : new Set(Object.keys(op?.input ?? {}).filter((k) => k !== 'id'));
-  const retired = new Set(op?.retiredInput ?? []);
+  // waiting_on is the park gate's words, no task field (sessions/outside-wait.ts).
+  const retired = new Set([...(op?.retiredInput ?? []), 'waiting_on']);
   const out: Record<string, T> = {};
   const bad: string[] = [];
   for (const [k, v] of Object.entries(fields)) {
@@ -114,6 +115,12 @@ async function applyTaskFields(ctx: V2Context, record: V2Record): Promise<void> 
   // All or nothing (section 7): the daemon refuses such a write, so this is a record from elsewhere.
   if (bad.length) throw new RefusedWrite(`${bad.join(', ')} can only be changed while the Mac answers; nothing of this write was applied`);
   const fields = await sessionWriteFields(record, raw);
+  // A session's queued park meets the online gate at replay: only a wait outside Walnut and the user.
+  if (record.actor?.kind === 'session' && (fields.phase as FieldWrite | undefined)?.value === 'WAITING') {
+    const { admitSessionPark } = await import('../sessions/outside-wait.js');
+    const admit = await admitSessionPark(taskId, record.actor.sid, undefined);
+    if (!admit.ok) throw new RefusedWrite(`${admit.message} Nothing of this write was applied.`);
+  }
   const outcome = await applyFields(ctx, record, taskId, fields, opKeyOf(ctx, record));
   if (outcome === 'gone') {
     // Delete wins: listed when the write carried a value.

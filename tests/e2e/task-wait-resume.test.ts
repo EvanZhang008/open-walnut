@@ -137,7 +137,8 @@ async function startWorker(message = 'watch the test run', mode?: string): Promi
 }
 
 async function park(w: Worker, waitUntil?: string, callerSid = w.sid): Promise<any> {
-  await getOp('task_update')!.handler!({ id: w.taskId, phase: 'WAITING', ...(waitUntil !== undefined ? { wait_until: waitUntil } : {}) }, opCall(callerSid))
+  // A session's park names its outside wait (sessions/outside-wait.ts).
+  await getOp('task_update')!.handler!({ id: w.taskId, phase: 'WAITING', waiting_on: 'the test run on CI', ...(waitUntil !== undefined ? { wait_until: waitUntil } : {}) }, opCall(callerSid))
   const t = await task(w.taskId)
   expect(t.phase).toBe('WAITING')
   return t

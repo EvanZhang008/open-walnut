@@ -32,6 +32,17 @@ describe('readStatusReport', () => {
       .toMatchObject({ waiting_kind: 'machine', waiting_on: '20 GB of free disk' })
     expect(readStatusReport('FOR_USER_STATE: waiting\nFOR_USER_WAITING_ON: the weather', AT))
       .toMatchObject({ waiting_kind: 'other', waiting_on: 'the weather' })
+    expect(readStatusReport('FOR_USER_STATE: waiting\nFOR_USER_WAITING_ON: outside: the CI run on main', AT))
+      .toMatchObject({ waiting_kind: 'outside', waiting_on: 'the CI run on main' })
+    // "user:" is the user, the same as "you:".
+    expect(readStatusReport('FOR_USER_STATE: waiting\nFOR_USER_WAITING_ON: user: the meeting notes', AT))
+      .toMatchObject({ waiting_kind: 'you', waiting_on: 'the meeting notes' })
+  })
+
+  it('the ask says a wait on the user is needs-you, and waiting is only for an outside wait', () => {
+    expect(FOR_USER_PROMPT).toContain('a wait on the user is ALWAYS needs-you')
+    expect(FOR_USER_PROMPT).toMatch(/waiting ONLY when the next move belongs to something outside Walnut and the user/)
+    expect(FOR_USER_PROMPT).toContain('<outside | task | lead | machine>')
   })
 
   it('an ask outside needs-you is dropped; none and n/a are no line', () => {

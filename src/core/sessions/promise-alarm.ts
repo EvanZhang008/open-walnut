@@ -15,7 +15,7 @@
  */
 import { log } from '../../logging/index.js';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
-import { DEFAULT_WAIT_DAYS, type Task } from '../types.js';
+import type { Task } from '../types.js';
 import type { StatusReport } from '../user-status.js';
 
 export interface PromiseAlarm {
@@ -27,7 +27,8 @@ export interface PromiseAlarm {
   set_at: string;
 }
 
-export const PROMISE_ALARM_MS = DEFAULT_WAIT_DAYS * 24 * 60 * 60_000;
+/** A day: a lead's follow-up runs on its own timescale, not a park's clock (DEFAULT_WAIT_MS). */
+export const PROMISE_ALARM_MS = 24 * 60 * 60_000;
 const WORDS_MAX = 300;
 const SUBSCRIBER = 'promise-alarm';
 const RECHECK_MS = 3_600_000;

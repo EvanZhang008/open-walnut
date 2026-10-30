@@ -92,6 +92,13 @@ export async function sweepWaitUntil(nowMs = Date.now()): Promise<string[]> {
   return woke;
 }
 
+/** The triggers of a task that watch its ask of the user or a letter (recheck-watch.ts). */
+async function userWatchTriggers(taskId: string): Promise<Set<string>> {
+  const { getTask } = await import('./task-manager.js');
+  const task = await getTask(taskId).catch(() => null);
+  return new Set((task?.recheck_watch ?? []).map((w) => w.trigger));
+}
+
 /** The triggers that deliver into this task, as the wake note names them (also what
  *  task-wait-resume.ts reads). Never throws: [] when they cannot be listed. */
 export async function triggersWatching(taskId: string): Promise<WatchingTrigger[]> {
@@ -99,17 +106,18 @@ export async function triggersWatching(taskId: string): Promise<WatchingTrigger[
     const { listRoutines } = await import('./routines/routines-core.js');
     const { triggerRunState } = await import('./cron/trigger-run-state.js');
     const { jobs } = await listRoutines(true);
-    return (jobs as CronJob[])
-      .filter((job) => job.check && job.executor?.type === 'session'
-        && (job.executor.config as { target?: unknown } | undefined)?.target === taskId)
-      .map((job) => ({
-        id: job.id,
-        name: job.name,
-        everyMs: job.schedule.kind === 'every' ? job.schedule.everyMs : undefined,
-        state: triggerRunState(job),
-        fires: job.state?.fireCount ?? 0,
-        lastCheck: job.state?.lastCheck,
-      }));
+    const mine = (jobs as CronJob[]).filter((job) => job.check && job.executor?.type === 'session'
+      && (job.executor.config as { target?: unknown } | undefined)?.target === taskId);
+    const onUser = mine.length ? await userWatchTriggers(taskId) : new Set<string>();
+    return mine.map((job) => ({
+      id: job.id,
+      name: job.name,
+      everyMs: job.schedule.kind === 'every' ? job.schedule.everyMs : undefined,
+      state: triggerRunState(job),
+      fires: job.state?.fireCount ?? 0,
+      lastCheck: job.state?.lastCheck,
+      ...(onUser.has(job.id) ? { watchesUser: true } : {}),
+    }));
   } catch (err) {
     log.task.warn('wait_until: could not list the task\'s triggers for the wake note', { taskId, error: errText(err) });
     return [];
