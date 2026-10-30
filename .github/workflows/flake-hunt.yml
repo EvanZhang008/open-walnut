@@ -30,6 +30,12 @@ on:
 permissions:
   contents: read
 
+env:
+  # onnxruntime-node's install script fetches its CUDA provider (about 240 MB from
+  # api.nuget.org) on every Linux x64 `bun install`; Walnut embeds on the CPU, as in
+  # ci.yml. 2026-10-28: a nuget timeout failed a flake hunt leg before any test ran.
+  ONNXRUNTIME_NODE_INSTALL: skip
+
 jobs:
   hunt:
     name: Hunt (${{ matrix.leg }})

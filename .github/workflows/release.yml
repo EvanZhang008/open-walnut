@@ -116,6 +116,10 @@ env:
   # pushes (the release tag and commit): the pre-push hook then
   # type-checked for 50s before a tag moved. Those hooks are for people.
   HUSKY: '0'
+  # onnxruntime-node's install script fetches its CUDA provider (about 240 MB from
+  # api.nuget.org) on every Linux x64 `bun install`; Walnut embeds on the CPU, as in
+  # ci.yml. 2026-10-28: a nuget timeout failed a flake hunt leg before any test ran.
+  ONNXRUNTIME_NODE_INSTALL: skip
 
 jobs:
   # Stable by hand: a vX.Y.Z tag. Build it, run its files everywhere, publish them.
