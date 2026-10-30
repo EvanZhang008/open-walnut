@@ -65,3 +65,10 @@
 .inbox-project-more-btn:hover { background: var(--bg-hover); color: var(--fg); }
 /* The open-session chevron sits at the right edge: the time yields room for it. */
 .status-section-card.todo-pinned-card-session-open .todo-recent-ago { margin-right: 8px; }
+/* A single tier among status sections keeps its natural height (TodoPanel): the panel's
+   scroller scrolls the tier and the sections as one, so neither squeezes the other. */
+/* Two classes each: globals.css (bundled after this file) sets these at one or two. */
+.todo-pinned-wrapper.todo-pinned-wrapper-sectioned { flex: none; overflow: visible; }
+.todo-pinned-wrapper-sectioned .todo-pinned-section-solo,
+.todo-pinned-wrapper-sectioned .todo-pinned-section-solo .todo-pinned-subgroup { flex: none; }
+.todo-pinned-wrapper-sectioned .todo-pinned-section-solo .todo-pinned-list-scroll { flex: none; overflow: visible; max-height: none !important; }

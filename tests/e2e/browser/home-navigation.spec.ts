@@ -1683,9 +1683,14 @@ test('headings stay stacked at the top while the list scrolls, and hand over to 
   // The view switch is a transition: wait for the single tier to own the panel before
   // scrolling, or the scroll lands on the stacked view's first tier list.
   await expect(navigation(page).locator('.todo-pinned-wrapper-solo')).toBeVisible();
-  await scrollWithin(card('sm10'), '.todo-pinned-list-scroll', 250);
-  expect(await within(navigation(page).locator('.tier-project-label[data-project="Meadowlark"]'), '.todo-pinned-list-scroll')).toBe(0);
-  expect(await topOfList('.todo-pinned-list-scroll')).toBe('Meadowlark');
+  // With the status sections on (the fixture has waiting and completed tasks), a single
+  // tier keeps its natural height and the panel scrolls it with the sections, as All does
+  // (status-sections.css): the panel's scroller is the list that scrolls there.
+  const soloList = await navigation(page).locator('.todo-pinned-wrapper-sectioned').count()
+    ? '.home-navigation-scroll' : '.todo-pinned-list-scroll';
+  await scrollWithin(card('sm10'), soloList, 250);
+  expect(await within(navigation(page).locator('.tier-project-label[data-project="Meadowlark"]'), soloList)).toBe(0);
+  expect(await topOfList(soloList)).toBe('Meadowlark');
   await chooseViewOption(page, 'tasks');
   await scrollWithin(card('lJ9'), '.todo-panel-list', 200);
   expect(await within(header('Juniper'), '.todo-panel-list')).toBe(0);

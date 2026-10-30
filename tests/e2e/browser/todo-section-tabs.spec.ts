@@ -24,6 +24,9 @@ import { isolateUiPrefs, openListProject, selectProject, selectSection, showMore
 import { closeViewMenu, openViewMenu } from './home-navigation-helpers'
 import { openViewsPage, viewRow } from './filter-bar-helpers'
 
+// A pinned section's own header; the status sections' headings share the class for its look.
+const PINNED_HEADER = '.todo-pinned-header:not(.status-section-heading)'
+
 test.beforeEach(async ({ page }) => {
   await isolateUiPrefs(page)
   await page.addInitScript(() => {
@@ -103,7 +106,7 @@ test.describe('todo panel section tabs', () => {
     // Wait's drop zone belongs to a different tab: it must be gone from the DOM.
     await expect(page.locator('[data-drop-zone="wait-drop-zone"]')).toHaveCount(0)
     // The stacked view's section headers are gone too (the tab strip names the section).
-    await expect(page.locator('.todo-pinned-header')).toHaveCount(0)
+    await expect(page.locator(PINNED_HEADER)).toHaveCount(0)
     await expect(page.locator('.todo-tasks-header')).toHaveCount(0)
 
     const panelBox = await page.locator('.todo-panel').boundingBox()
@@ -112,7 +115,15 @@ test.describe('todo panel section tabs', () => {
     expect(soloBox).not.toBeNull()
     // The solo section should command most of the panel: the whole point of the
     // change. Anything under half means it's still being squeezed by siblings.
-    expect(soloBox!.height).toBeGreaterThan(panelBox!.height * 0.5)
+    // With the status sections on (the fixture has waiting and completed tasks), the
+    // tier keeps its natural height and the panel scrolls it with the sections: it is
+    // never clipped, which is what "not squeezed" means there.
+    const sectioned = page.locator('.todo-pinned-wrapper-sectioned')
+    if (await sectioned.count()) {
+      expect(await sectioned.evaluate((n) => n.scrollHeight - n.clientHeight)).toBeLessThanOrEqual(1)
+    } else {
+      expect(soloBox!.height).toBeGreaterThan(panelBox!.height * 0.5)
+    }
 
     // 2b. Wait tab: now Wait is mounted and Focus is not.
     await tab(page, 'Parked').click()
@@ -122,7 +133,7 @@ test.describe('todo panel section tabs', () => {
     // 4. All tab: the stacked view is back: Pinned + Tasks headers both render.
     await tab(page, 'All').click()
     await expect(page.locator('.todo-tasks-header')).toHaveCount(1)
-    await expect(page.locator('.todo-pinned-header').first()).toBeVisible()
+    await expect(page.locator(PINNED_HEADER).first()).toBeVisible()
     await expect(page.locator('[data-drop-zone="focus-drop-zone"]')).toHaveCount(1)
     await expect(page.locator('[data-drop-zone="wait-drop-zone"]')).toHaveCount(1)
     await expect(page.locator('.todo-pinned-wrapper-solo')).toHaveCount(0)
@@ -234,7 +245,7 @@ test.describe('todo panel section tabs', () => {
     await expect(page.locator('[data-drop-zone="focus-drop-zone"]')).toHaveCount(1)
     await expect(page.locator('[data-drop-zone="wait-drop-zone"]')).toHaveCount(1)
     await expect(page.locator('.todo-pinned-subgroup-heading .navigation-heading[data-navigation-id="focus"]')).toBeVisible()
-    await expect(page.locator('.todo-pinned-header')).toHaveCount(1)
+    await expect(page.locator(PINNED_HEADER)).toHaveCount(1)
     await expect(page.locator('.todo-tasks-header')).toHaveCount(0)
     const firstCard = page.locator('.todo-pinned-section [data-task-id]').first()
     const cardBox = (await firstCard.boundingBox())!

@@ -7825,15 +7825,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         <DndContext sensors={pinnedSensors} collisionDetection={pinnedCollision} onDragStart={handlePinnedDragStart} onDragOver={handlePinnedDragOver} onDragEnd={handlePinnedDragEnd} onDragCancel={handlePinnedDragCancel}>
           <div
             ref={pinnedWrapperRef}
-            className={`todo-pinned-wrapper${isStacked ? '' : ' todo-pinned-wrapper-solo'}${activeDragPinnedId ? ' todo-pinned-wrapper-dragging' : ''}`}
+            className={`todo-pinned-wrapper${isStacked ? '' : ' todo-pinned-wrapper-solo'}${!isStacked && sectionsActive ? ' todo-pinned-wrapper-sectioned' : ''}${activeDragPinnedId ? ' todo-pinned-wrapper-dragging' : ''}`}
             // Single-section view: this region IS the panel — take all the height.
             // Stacked view: NO forced share. The All view is one scroller now
             // (home-navigation-scroll), so every region is its natural height and
             // the sections scroll past each other; handing out flex ratios here is
             // what used to give each tier its own little scrollbox.
-            // With the status sections folded under it, it keeps its natural height so they
-            // sit right below the list instead of at the panel's bottom edge.
-            style={!isStacked && sectionsBottom.length === 0 ? { flex: '1 1 auto' } : undefined}
+            // With status sections around it, it keeps its natural height and the panel
+            // scrolls as one, as All does: a squeezed tier clipped its rows (2026-10-30,
+            // opening Waiting / snoozed under a full Focus tier left Working empty).
+            style={!isStacked && !sectionsActive ? { flex: '1 1 auto' } : undefined}
           >
           {/* PINNED section — Focus + Satellite + Parked sub-groups. In a single-tier
               view the "Pinned" wrapper header is dropped (the tab already names the
