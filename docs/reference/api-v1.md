@@ -1549,9 +1549,10 @@ prefix → `400 bad_request`, unknown → `404 not_found`.
 
 ### Task transfer and host profiles (additive, 2026-10): `/tasks/:id/transfer`, `/transfers/:id`, `/hosts/:host/profile`
 
-A task keeps ONE session for its whole life (a second session for a task is
-`409 task_has_session`). Moving the work to another engine or host therefore
-makes a NEW task beside the source, which completes unless `keep_source`.
+A task holds ONE ACTIVE session at a time (a second active session for a task is
+`409 task_has_session`). Changing only the engine happens inside the task (the
+engine switch below). A transfer makes a NEW task beside the source, which
+completes unless `keep_source`; it is for work the user wants as a new task.
 
 - `GET /api/v1/tasks/:id/transfer-options` → `200 { taskId, source: { sessionId,
   engine, host, cwd } | null, engines: [{ id, displayName }], hosts: [{ alias,
@@ -1576,6 +1577,57 @@ makes a NEW task beside the source, which completes unless `keep_source`.
   sessions that ran there).
 - `PATCH /api/v1/hosts/:host/profile { kind?: kind | null, user_note?, refresh?:
   true }` → `200 { profile }`; `kind: null` returns to the automatic kind.
+
+### Engine switch inside a task (additive, 2026-10): `/tasks/:id/sessions`, `/tasks/:id/switch-engine`
+
+A task can change its coding engine (Claude Code to Codex and back, any pair)
+without becoming a new task. A switch ends the active session and starts a NEW
+session on the other engine in the same task, directory and task directory.
+Switching back to an engine the task used before resumes its earlier session
+there, sent only the turns it missed (`resumed: true`, its prompt cache stays
+usable), while that session's history is still a prefix of the task's
+conversation: same host, directory and model, its context unchanged since the
+task left it, every later session carried the whole context, and none was
+compacted since; otherwise it also starts a new session. A new session's first
+message carries everything the old session held in its
+context (its latest compaction summary and every turn after it, in full), plus
+the path of a transcript file of the whole task. When that does not fit the new
+engine's window, the oldest turns after the summary are left out and the count
+is recorded (`trimmed_turns`); a switch never fails for size. The earlier
+session stays linked to the task as history, archived with `archive_reason`
+`engine_switched:<engine>` and `supersededBy`; it is not in `GET /sessions`,
+and a message, reply or trigger addressed to it reaches the task's active
+session instead.
+
+- `GET /api/v1/tasks/:id/sessions` → `200 { taskId, activeSessionId,
+  sessions: [{ session_id, engine, model, host, cwd, started_at, last_active_at,
+  message_count, process_status, active, superseded_by?, switched_from?: {
+  session_id, engine, model, at, carried_turns, trimmed_turns, compacted,
+  transcript_path }, resumed?: { session_id, engine, at, carried_turns } }],
+  legacySessionIds, engineSwitch? }`, oldest first.
+- `POST /api/v1/tasks/:id/switch-engine { engine, text, model?, effort?,
+  permission_mode?, confirm_move?, wait_ms? }`: `text` is the message the new
+  session starts with. While the task's session is in a turn the switch waits
+  for that turn to end: `202 { state: "pending", switchId, fromSessionId,
+  engine, host }`, and it then runs by itself. Otherwise it waits up to
+  `wait_ms` (default 25000): `200 { state: "done", taskId, switchId,
+  fromSessionId, sessionId, engine, host, carriedTurns, trimmedTurns,
+  transcriptPath?, resumed? }` or `202 { state: "switching" }`. Refusals: `400 bad_engine`,
+  `400 message_required`, `400 same_engine` (change the model instead), `409
+  moves_to_this_mac` (every engine other than Claude Code runs on the Mac only;
+  a task on another host needs `confirm_move: true`, and its workspace is then
+  copied to the Mac as a transfer does), `502 start_failed` (the old session is
+  the task's session again), `409 switch_in_progress` (one is running) and `409
+  switch_pending` (one already waits for this turn; cancel it first). A task with no conversation yet just starts on the
+  engine. The write answers `501 not_supported_cloud` on the companion.
+- `DELETE /api/v1/tasks/:id/switch-engine` (`?deliver=1` or `{ deliver: true }`)
+  cancels a pending switch → `200 { cancelled, delivered? }`; `deliver` sends
+  its message to the current session instead.
+- `Task.engine_switch` (additive) on the task row: `{ id, state: "pending" |
+  "switching" | "done" | "failed", at, from_session_id, from_engine?, to: {
+  engine, model?, effort?, permission_mode?, host? }, display_text?, session_id?, resumed?,
+  carried_turns?, trimmed_turns?, transcript_path?, error?, by? }`, the latest
+  switch. Older clients ignore it.
 
 ### Sessions (read-only)
 

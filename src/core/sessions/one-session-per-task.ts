@@ -1,7 +1,11 @@
 /**
- * A task has exactly one session for its whole life, and a session belongs to at
- * most one task. Work that needs a new conversation (another engine, another
- * host, a clean context, a copy) becomes a new task.
+ * A task has ONE ACTIVE session at a time, and a session belongs to at most one
+ * task. Over its life a task may hold several: switching engines inside the task
+ * (engine-switch.ts, 2026-10-29) ends the active session and starts a new one,
+ * and the earlier session stays linked as history, archived with an
+ * `engine_switched:` reason (engine-switch-marker.ts). Such a row is not "the
+ * task's session" for any guard here. Work the user wants as a new task (another
+ * host, a copy) still becomes one (task_transfer).
  *
  * The rule lives on the session store, the source of truth: every write that
  * would give a task a second row is refused in code, and SQLite triggers
@@ -23,6 +27,7 @@
  */
 import type { Database as DatabaseType } from '../../lib/sqlite.js';
 import type { SessionRecord } from '../types.js';
+import { ENGINE_SWITCHED_PREFIX } from './engine-switch-marker.js';
 
 export const ONE_SESSION_PER_TASK_TRIGGERS = ['sessions_one_per_task_insert', 'sessions_one_per_task_update'] as const;
 /** The unique index an earlier build of this change created; dropped on sight. */
@@ -35,10 +40,11 @@ export const ONE_SESSION_PER_TASK_ABORT = 'one session per task';
  *  second conversation. */
 export const ACP_REDIRECT_PREFIX = 'acp_identity_replaced:';
 
-/** The rows that count as a task's session. Kept as SQL so the guard and the
- *  index can never disagree. */
+/** The rows that count as a task's (active) session. Kept as SQL so the guard and
+ *  the triggers can never disagree. An engine switch's earlier session is history. */
 function taskRowSql(t: string): string {
-  return `${t}task_id IS NOT NULL AND ${t}task_id <> '' AND COALESCE(substr(${t}archive_reason, 1, ${ACP_REDIRECT_PREFIX.length}), '') <> '${ACP_REDIRECT_PREFIX}'`;
+  const not = (prefix: string) => `COALESCE(substr(${t}archive_reason, 1, ${prefix.length}), '') <> '${prefix}'`;
+  return `${t}task_id IS NOT NULL AND ${t}task_id <> '' AND ${not(ACP_REDIRECT_PREFIX)} AND ${not(ENGINE_SWITCHED_PREFIX)}`;
 }
 export const TASK_SESSION_ROW_SQL = taskRowSql('');
 
@@ -51,8 +57,8 @@ export class TaskSessionTakenError extends Error {
     readonly attemptedSessionId: string,
   ) {
     super(
-      `Task ${taskId} already has its session ${existingSessionId}; a task has exactly one session. `
-      + 'Continue it with task_send, or start the new conversation as a new task (task_transfer or task_create).',
+      `Task ${taskId} already has its active session ${existingSessionId}; a task has one active session at a time. `
+      + 'Continue it with task_send, switch its engine with task_switch_engine, or start new work as a new task (task_create).',
     );
     this.name = 'TaskSessionTakenError';
   }

@@ -6,6 +6,7 @@
  */
 import type { SessionRecord } from '../types.js';
 import { ACP_REDIRECT_PREFIX, sessionHasNoConversation, TaskSessionTakenError } from './one-session-per-task.js';
+import { isSupersededSession } from './engine-switch-marker.js';
 import { log } from '../../logging/index.js';
 
 /** A start Walnut is still spawning: its row has no turn yet, but it is not dead. */
@@ -18,8 +19,9 @@ function stillSpawning(r: SessionRecord, now: number): boolean {
 }
 
 /**
- * The task's one conversation (a start still spawning counts), or undefined
- * when the task is free for a new session.
+ * The task's active conversation (a start still spawning counts), or undefined
+ * when the task is free for a new session. Sessions an engine switch replaced
+ * are its history, never its conversation.
  *
  * Rows that never held a conversation are skipped. With `retire` (start paths
  * only, about to make the task's new session) they are also detached: unlinked
@@ -30,7 +32,7 @@ export async function taskConversation(taskId: string, opts: { retire?: boolean 
   const { getSessionsForTask } = await import('../session-tracker.js');
   const now = Date.now();
   const rows = (await getSessionsForTask(taskId))
-    .filter((r) => !r.archive_reason?.startsWith(ACP_REDIRECT_PREFIX));
+    .filter((r) => !r.archive_reason?.startsWith(ACP_REDIRECT_PREFIX) && !isSupersededSession(r));
   const empty = rows.filter((r) => sessionHasNoConversation(r) && !stillSpawning(r, now));
   if (opts.retire) {
     for (const r of empty) await detachTaskSession(taskId, r.claudeSessionId, 'no conversation, replaced by a new start');

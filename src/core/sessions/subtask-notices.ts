@@ -44,6 +44,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { isSupersededSession } from './engine-switch-marker.js';
 import { log } from '../../logging/index.js';
 import type { SessionRecord, Task } from '../types.js';
 import type { NoticeLastMessage } from '../session-requests.js';
@@ -449,7 +450,9 @@ export async function withoutUndoneStops(
   const out: SubtaskNotice[] = [];
   for (const n of notices) {
     const sid = n.kind === 'stopped' ? n.child.sessionId : undefined;
-    const rec = sid ? await sessionOf(sid).catch(() => null) : null;
+    const first = sid ? await sessionOf(sid).catch(() => null) : null;
+    // An engine switch replaced that session: its task's new session is the child now.
+    const rec = isSupersededSession(first) && first?.supersededBy ? await sessionOf(first.supersededBy).catch(() => null) : first;
     const since = Date.parse(rec?.statusUpdatedAt ?? '');
     if (rec?.process_status === 'running' && n.queuedAt !== undefined && Number.isFinite(since) && since > n.queuedAt) {
       log.session.info('subtask notice not sent: a new turn of the child already started', {

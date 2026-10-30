@@ -15,6 +15,7 @@
 import { getDb } from '../session-db.js';
 import { log } from '../../logging/index.js';
 import { ensureOneSessionPerTaskGuard, TASK_SESSION_ROW_SQL } from './one-session-per-task.js';
+import { ENGINE_SWITCHED_PREFIX } from './engine-switch-marker.js';
 
 interface Row { claude_session_id: string; task_id: string; last_active_at: string | null; archived: number | null; message_count: number | null }
 
@@ -34,9 +35,35 @@ function pickKeeper(rows: Row[], taskSessionId: string | undefined): Row {
   })[0];
 }
 
+/**
+ * A Walnut from before engine switches (0.6.19 to 0.6.21) splits a task's earlier
+ * sessions off at its start, as it did any second session. After rolling forward
+ * again they are the task's history once more: linked back, still archived.
+ */
+async function relinkSwitchedSessions(db: NonNullable<ReturnType<typeof getDb>>): Promise<number> {
+  const rows = db.prepare(
+    `SELECT claude_session_id AS sid, json_extract(payload, '$.legacyTaskId') AS task FROM sessions
+       WHERE (task_id IS NULL OR task_id = '') AND substr(archive_reason, 1, ${ENGINE_SWITCHED_PREFIX.length}) = '${ENGINE_SWITCHED_PREFIX}'
+       AND json_valid(payload) AND json_extract(payload, '$.legacyTaskId') IS NOT NULL`,
+  ).all() as Array<{ sid: string; task: string }>;
+  if (rows.length === 0) return 0;
+  const { updateSessionRecord } = await import('../session-tracker.js');
+  const { updateTaskRaw } = await import('../task-manager.js');
+  for (const { sid, task } of rows) {
+    await updateSessionRecord(sid, { taskId: task, legacyTaskId: undefined });
+    await updateTaskRaw(task, (cur) => ({ legacy_session_ids: (cur.legacy_session_ids ?? []).filter((id) => id !== sid) }),
+      { source: 'one-session-per-task', emitEvent: false, push: false }).catch(() => {});
+  }
+  log.session.info('engine switch: earlier sessions an older Walnut split off are linked back', { count: rows.length });
+  return rows.length;
+}
+
 export async function splitMultiSessionTasks(): Promise<SplitResult> {
   const db = getDb();
   if (!db) return { tasks: 0, detached: 0, guardReady: false };
+  await relinkSwitchedSessions(db).catch((err) => log.session.warn('engine switch: relinking earlier sessions failed', {
+    error: err instanceof Error ? err.message : String(err),
+  }));
   const rows = db.prepare(
     `SELECT claude_session_id, task_id, last_active_at, archived, message_count FROM sessions WHERE ${TASK_SESSION_ROW_SQL}
        AND task_id IN (SELECT task_id FROM sessions WHERE ${TASK_SESSION_ROW_SQL} GROUP BY task_id HAVING COUNT(*) > 1)`,

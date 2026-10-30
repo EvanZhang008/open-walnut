@@ -12,6 +12,7 @@
 
 import { SessionControlError } from '../sessions/session-controls.js';
 import { log } from '../../logging/index.js';
+import { isSupersededSession } from '../sessions/engine-switch-marker.js';
 import { isMainAgentTask } from '../org/main-stays-active.js';
 import { MIN_EVERY_MS, clampTimeoutSeconds } from '../../providers/trigger-check-core.js';
 import type { TriggersTestResult } from '../../providers/trigger-check-core.js';
@@ -187,6 +188,9 @@ async function resolveTarget(session: string, callerSid?: string): Promise<{
   const rec = await getSessionByClaudeId(callerSid).catch(() => null);
   if (!rec || !rec.taskId) {
     throw new SessionControlError('no calling session; pass session: <taskId>', 400);
+  }
+  if (isSupersededSession(rec)) {
+    throw new SessionControlError('this session was replaced by an engine switch; its task continues in its new session', 409);
   }
   return {
     target: rec.taskId,

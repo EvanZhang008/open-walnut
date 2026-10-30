@@ -10,6 +10,7 @@
  */
 
 import { log } from '../logging/index.js'
+import { isSupersededSession } from './sessions/engine-switch-marker.js'
 import { isSessionProcessAlive } from '../utils/session-liveness.js'
 import type { SessionRecord } from './types.js'
 
@@ -65,7 +66,9 @@ export async function reconcileSessions(): Promise<ReconcileResult> {
   const zombieCandidates = sessions.filter(
     (s) => (!isTerminalSession(s) || (s.process_status === 'error' && s.pid != null))
       && s.type === 'interactive'
-      && s.process_status !== 'stopped',
+      && s.process_status !== 'stopped'
+      // An engine switch replaced it: never re-attached as the task's session.
+      && !isSupersededSession(s),
   )
 
   if (zombieCandidates.length === 0) {

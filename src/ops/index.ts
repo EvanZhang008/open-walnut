@@ -21,6 +21,7 @@ import './places.js'
 import './time.js'
 import './mcp.js'
 import './transfer.js'
+import './engine-switch.js'
 import './task-lifecycle.js'
 import './hints.js'
 

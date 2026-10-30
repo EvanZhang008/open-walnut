@@ -704,6 +704,9 @@ export interface Task {
   transfer_state?: 'pending' | 'done';
   /** That transfer's id and where its private transcript stage is (kept, never auto-removed). */
   transfer?: { id: string; stage?: { host: string; path: string }; error?: string };
+  /** The latest engine switch inside this task (sessions/engine-switch.ts): pending until the
+   *  running turn ends, then switching, then done (or failed, with the old session restored). */
+  engine_switch?: EngineSwitchState;
   /** The last launch Walnut itself asked for. NOT a substitute for the session's process state. */
   last_start?: {
     id: string;
@@ -2690,6 +2693,40 @@ export interface SessionTurnSpeed {
   endedAt?: number;
 }
 
+/** Task.engine_switch: one switch of the task's engine, as the user (or an agent) asked for it. */
+export interface EngineSwitchState {
+  id: string;
+  state: 'pending' | 'switching' | 'done' | 'failed';
+  /** When it was asked for. */
+  at: string;
+  from_session_id: string;
+  from_engine?: SessionEngine;
+  to: { engine: SessionEngine; model?: string; effort?: SessionEffort; permission_mode?: SessionMode; host?: string };
+  /** The message the new session starts with (the text the CLI receives), kept only while pending. */
+  message?: string;
+  /** The words the user typed, for the composer's pending row. */
+  display_text?: string;
+  /** A remote task moving to an engine only this Mac runs: the user confirmed the move. */
+  confirm_move?: boolean;
+  /** The session that took over (done). */
+  session_id?: string;
+  /** The session that took over is the task's earlier session on that engine, resumed
+   *  with only the turns it missed (its history was still a prefix of the task's). */
+  resumed?: boolean;
+  carried_turns?: number;
+  trimmed_turns?: number;
+  transcript_path?: string;
+  error?: string;
+  /** Who asked: 'human' or 'task:<id>'. */
+  by?: string;
+  /** Queue rows taken off the old session while switching (a restart mid-switch puts them back). */
+  held_rows?: unknown[];
+  /** While switching back by resuming an earlier session: that session and its first
+   *  message, so a restart before the message was queued still sends it. */
+  resume_session_id?: string;
+  resume_message?: string;
+}
+
 export interface SessionRecord {
   claudeSessionId: string;
   taskId: string;
@@ -2744,6 +2781,20 @@ export interface SessionRecord {
   fromPlanSessionId?: string;
   /** Source session ID when this session was forked from another session. */
   forkedFromSessionId?: string;
+  /** Set on a session an engine switch started (sessions/engine-switch.ts): the session it took over from. */
+  engineSwitch?: {
+    fromSessionId: string; fromEngine?: SessionEngine; fromModel?: string; at: string;
+    carriedTurns: number; trimmedTurns: number; compacted?: boolean; transcriptPath?: string;
+  };
+  /** Set on the session an engine switch replaced: the session that took over. */
+  supersededBy?: string;
+  /** Set when an engine switch replaced this session: a fingerprint of the context it held
+   *  then. A later switch back resumes it only while that context is unchanged
+   *  (sessions/engine-switch-resume.ts). */
+  leftContext?: { fingerprint: string; messages: number; at: string };
+  /** Set when a switch back to this session's engine resumed it (the latest such resume):
+   *  the session it took over from, and how many turns it was given that it had missed. */
+  resumedBySwitch?: { fromSessionId: string; fromEngine?: SessionEngine; at: string; carriedTurns: number };
   /**
    * Set only on a session born from a REWIND: the parent message uuid its spawn
    * resumed at (`--resume-session-at`). Two consumers depend on it:

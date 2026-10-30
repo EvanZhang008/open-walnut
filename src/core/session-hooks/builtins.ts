@@ -6,6 +6,7 @@
  */
 
 import fs from 'node:fs';
+import { isSupersededSession } from '../sessions/engine-switch-marker.js';
 import path from 'node:path';
 import { bus, EventNames } from '../event-bus.js';
 import { log } from '../../logging/index.js';
@@ -2297,7 +2298,7 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     if (!sessionId && task) {
       const { getSessionsForTask } = await import('../session-tracker.js');
       const { bestFirst } = await import('../sessions/reply-routing.js');
-      sessionId = (await getSessionsForTask(task.id).catch(() => [])).sort(bestFirst)[0]?.claudeSessionId;
+      sessionId = (await getSessionsForTask(task.id).catch(() => [])).filter((r) => !isSupersededSession(r)).sort(bestFirst)[0]?.claudeSessionId;
       record = sessionId ? await getSessionByClaudeId(sessionId).catch(() => undefined) : undefined;
     }
     if (isPhaseEdge && phase === 'COMPLETE' && record?.process_status === 'running') {

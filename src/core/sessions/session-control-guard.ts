@@ -14,6 +14,7 @@
  * The answer also names who asked (the caller's session and task), so the
  * route records a session's stop or restart of another session.
  */
+import { isSupersededSession } from './engine-switch-marker.js';
 
 export type SessionControlRefusal = { code: 'own_session'; message: string };
 export type SessionControlActor = { callerSid: string; callerTaskId: string | null; targetTaskId: string | null };
@@ -37,5 +38,7 @@ export async function sessionControlCheck(
   const actor: SessionControlActor = { callerSid: caller, callerTaskId: callerRec?.taskId ?? null, targetTaskId: targetRec?.taskId ?? null };
   if (caller === targetSid) return { refusal: own, actor };
   if (callerRec && targetRec && callerRec.claudeSessionId === targetRec.claudeSessionId) return { refusal: own, actor };
+  // A session an engine switch replaced is still its task: it never stops or restarts the task's new session.
+  if (isSupersededSession(callerRec) && callerRec?.taskId && callerRec.taskId === targetRec?.taskId) return { refusal: own, actor };
   return { refusal: null, actor };
 }

@@ -100,6 +100,14 @@ describe('mergeFetchedTasks', () => {
     expect(listRowEqual(b, { ...b, brief } as Task)).toBe(false);
   });
 
+  it('detects an engine switch moving on (pending, done), whose writes leave updated_at alone', () => {
+    const sw = { id: 'es-1', state: 'pending', at: '2026-10-29T10:00:00Z', from_session_id: 's1', to: { engine: 'codex' }, message: 'go' };
+    const a = task({ id: 'a', engine_switch: sw } as never);
+    expect(listRowEqual(a, { ...a, engine_switch: { ...sw } } as Task)).toBe(true);
+    expect(listRowEqual(a, { ...a, engine_switch: { ...sw, state: 'done', session_id: 's2', message: undefined } } as Task)).toBe(false);
+    expect(listRowEqual(task({ id: 'b' }), { ...task({ id: 'b' }), engine_switch: sw } as Task)).toBe(false);
+  });
+
   it('detects a Partial result, its settle, and a team stop or resume, whose writes leave updated_at alone', () => {
     const a = task({ id: 'a' });
     const partial = { via: 'complete', at: '2026-10-28T10:00:00Z', not_done: ['iOS'] } as Task['result_report'];

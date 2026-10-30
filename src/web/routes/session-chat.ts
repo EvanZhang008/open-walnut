@@ -9,7 +9,7 @@
 import { registerMethod } from '../ws/handler.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import { VALID_SESSION_EFFORT_IDS, resolveModelSwitchValue } from '../../core/types.js'
-import type { SessionEffort, SessionMode } from '../../core/types.js'
+import type { SessionEffort, SessionEngine, SessionMode } from '../../core/types.js'
 import { normalizeEngine } from '../../core/agents/engine-registry.js'
 import { getSessionByClaudeId, updateSessionRecord } from '../../core/session-tracker.js'
 import { getSessionPendingPermissions } from '../../core/sessions/session-lifecycle.js'
@@ -281,6 +281,23 @@ export function registerSessionChatRpc(): void {
     if (!(data.message as string).startsWith('/')) {
       const refCards = await buildReferenceCards(data.message as string)
       if (refCards) augmentedMessage = appendReferenceCards(augmentedMessage, refCards)
+    }
+
+    // Engine switch (core/sessions/engine-switch.ts): the composer picked another
+    // engine, so this message starts the task's new session instead of reaching
+    // this one. The switch answers once it is checked; the panel follows the task.
+    const switchTo = data.switchEngine as { engine?: unknown; model?: unknown; effort?: unknown; permissionMode?: unknown; confirmMove?: unknown } | undefined
+    if (switchTo && typeof switchTo.engine === 'string' && record?.taskId) {
+      const { requestEngineSwitch } = await import('../../core/sessions/engine-switch.js')
+      const out = await requestEngineSwitch({
+        taskId: record.taskId, engine: switchTo.engine as SessionEngine, message: augmentedMessage, displayText: data.message as string,
+        ...(typeof switchTo.model === 'string' && switchTo.model ? { model: switchTo.model } : {}),
+        ...(typeof switchTo.effort === 'string' ? { effort: switchTo.effort as SessionEffort } : {}),
+        ...(typeof switchTo.permissionMode === 'string' ? { permissionMode: switchTo.permissionMode as SessionMode } : {}),
+        confirmMove: switchTo.confirmMove === true, source: 'ui', detach: true,
+      })
+      log.web.info('session:send RPC engine switch', { sessionId: data.sessionId, taskId: record.taskId, engine: switchTo.engine, state: out.state })
+      return { messageId: out.switchId, engineSwitch: out }
     }
 
     const outputMode = await prepareHintedSend(data.sessionId, record, augmentedMessage, {

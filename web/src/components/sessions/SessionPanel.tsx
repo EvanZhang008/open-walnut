@@ -118,6 +118,8 @@ import { useSessionControls } from '@/hooks/useSessionControls';
 import { useEngineCatalog } from '@/hooks/useEngineCatalog';
 import { useEngineSettingsEntry } from './useEngineSettingsEntry';
 import { engineCaps } from '@/utils/engine-capabilities';
+import { EngineSwitchLine, useEngineSwitchPick } from './EngineSwitch';
+import type { SessionEffort } from '@open-walnut/core';
 import { taskNeedsAction } from '@/utils/session-status';
 import { nextSessionControlValue, SessionControlPills } from './SessionControlPills';
 import { useNotifications } from '@/contexts/notifications';
@@ -565,6 +567,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   );
   // Main reads as the CEO and a project's lead as its VP (display only).
   const taskTitle = sessionTask ? orgDisplayTitle(sessionTask) : null;
+  // Another engine picked in the model picker: the next message switches the task to it.
+  const engineSwitch = useEngineSwitchPick({ sessionId, session, task: sessionTask, catalog: engineCatalog, onSessionReplaced });
 
   // Pin state — read from the shared Focus Bar store (single source of truth,
   // same data every other surface renders). Mutations go through the shared
@@ -1657,8 +1661,15 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // agent receives (plus a server-appended reference card); the composer never
   // routes a message to another session — that is the agent's call.
   const handleSend = useCallback(async (message: string, images?: ImageAttachment[]) => {
+    // An engine is picked for this message: it starts the task's new session on it.
+    const switchOpts = engineSwitch.sendOptions;
+    if (switchOpts) {
+      const ok = await send(sessionId, message, images, switchOpts);
+      if (ok) { engineSwitch.markSent(); engineSwitch.clear(); }
+      return ok;
+    }
     return sendAnchored(message, images, false);
-  }, [sendAnchored]);
+  }, [sendAnchored, send, sessionId, engineSwitch.sendOptions, engineSwitch.clear, engineSwitch.markSent]);
 
   // Main's quick actions ride its own composer's "+" (the user, 2026-10-26: not a bar of their own).
   // Waiting = the badge's rule (deriveDisplayStatus: a live process holds the prompt); a stopped
@@ -1794,6 +1805,16 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
    */
   const composerControls = (opts: { openNonce?: number } = {}): ComposerControl[] => {
     if (!session) return [];
+    // An engine picked for the next message: the pill shows and edits that pick.
+    const switchPick = engineSwitch.pick;
+    const switchPending = switchPick ? {
+      model: switchPick.model,
+      effort: switchPick.effort as SessionEffort | undefined,
+      onPick: (model: string | undefined) => engineSwitch.setPick((p) => (p ? { ...p, model } : p)),
+      onPickEffort: (effort: SessionEffort) => engineSwitch.setPick((p) => (p ? { ...p, effort } : p)),
+      host: engineSwitch.movesToThisMac ? undefined : session.host,
+      cwd: session.cwd,
+    } : undefined;
     // Labels come from the ONE mode registry (core/types.ts) so a mode added
     // there shows a real label instead of its raw id ('dontAsk'). planCompleted
     // is a separate flag meaning "plan was produced" and must not lock the toggle.
@@ -1834,15 +1855,19 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
         anchored: true,
         node: (
           <ComposerModelPill
-            sessionId={sessionId}
+            sessionId={switchPick ? undefined : sessionId}
             session={session}
-            engineUi={engineUi}
+            engineUi={switchPick ? engineCaps(switchPick.engine, engineCatalog) : engineUi}
             onOptimistic={applyModelPillPatch}
-            fallbackAssistant={lastAssistant}
+            fallbackAssistant={switchPick ? undefined : lastAssistant}
             openNonce={opts.openNonce}
             openServedRef={opts.openNonce !== undefined ? modelPickerServed : undefined}
-            controls={engineUi.isAcp ? sessionControls : undefined}
-            onControl={engineUi.isAcp ? setSessionControl : undefined}
+            controls={!switchPick && engineUi.isAcp ? sessionControls : undefined}
+            onControl={!switchPick && engineUi.isAcp ? setSessionControl : undefined}
+            pending={switchPending}
+            title={switchPick ? 'Applies to the new session your next message starts.' : undefined}
+            onProviderSwitch={engineSwitch.enabled ? engineSwitch.onProviderSwitch : undefined}
+            providerLockReason={engineSwitch.enabled ? engineSwitch.providerLockReason : undefined}
           />
         ),
       },
@@ -2795,6 +2820,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             sessionCwd={session?.cwd}
             sessionHost={session?.host}
             chatLane={!!session?.lane?.startsWith('chat:')}
+            earlierSessionsTaskId={(session?.engineSwitch || session?.resumedBySwitch) && session.taskId ? session.taskId : undefined}
+            onOpenEarlierSession={onSessionClick}
             optimisticMessages={optimisticMsgs}
             onMessagesDelivered={handleMessagesDelivered}
             onBatchCompleted={handleBatchCompleted}
@@ -2842,13 +2869,24 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               the "+" menu's "Latest update" (useLatestUpdateEntry), 2026-10-26. */}
           {/* A Waiting task leaves Waiting on a message: say so where one is written. */}
           <WaitingComposerLine task={sessionTask} />
+          <EngineSwitchLine
+            pick={engineSwitch.pick}
+            server={engineSwitch.server}
+            movesToThisMac={engineSwitch.movesToThisMac}
+            host={session?.host}
+            catalog={engineCatalog}
+            taskId={session?.taskId}
+            onConfirmMove={() => engineSwitch.setPick((p) => (p ? { ...p, confirmMove: true } : p))}
+            onUndo={engineSwitch.clear}
+          />
           <SessionBudgetStatus data={budgetUsage.data} onOpen={openUsageDialog} />
           {/* A host replica's console with the Mac away: a session the Mac runs gets
               the line, and its composer stays mounted with the send controls hidden,
               so a presence flip never takes what is being typed. */}
           {macSessionAway && <MacAwayComposer />}
           <ChatInput
-            sendBlocked={macSessionAway}
+            // A switch to an engine that moves the work waits for the move's confirm.
+            sendBlocked={macSessionAway || (!!engineSwitch.pick && !engineSwitch.armed)}
             focusNonce={composerFocusNonce}
             // Dictating into this box takes focus and so collapses the page's
             // selection: let the quote pill hold the passage first (holdDictationSelection).

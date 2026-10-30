@@ -88,6 +88,11 @@ export interface ComposerModelPillProps {
   controls?: SessionControl[];
   /** Set one of `controls` (the panel's useSessionControls setter). */
   onControl?: (id: string, value: string) => Promise<void>;
+  /** Unlocks the picker's engine rail: a task session switches engines inside the
+   *  task on its next message (core/sessions/engine-switch.ts). Omitted = locked. */
+  onProviderSwitch?: (provider: string) => void;
+  /** Per-engine lock reason for the rail (null = pickable). */
+  providerLockReason?: (provider: string) => string | null;
 }
 
 /**
@@ -117,7 +122,7 @@ export function useOpenRequest(
 
 export function ComposerModelPill({
   sessionId, session, engineUi, onOptimistic, fallbackAssistant, pending, title, openNonce, openServedRef,
-  controls, onControl,
+  controls, onControl, onProviderSwitch, providerLockReason,
 }: ComposerModelPillProps) {
   const { notify } = useNotifications();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -418,10 +423,12 @@ export function ComposerModelPill({
           onSwitch={handleModelSwitch}
           onEffortSwitch={handleEffortSwitch}
           onClose={() => setPickerOpen(false)}
-          // Live session: engine is a spawn-time fact. The rail shows every
-          // registered provider but the others render greyed + locked (no
-          // onProviderSwitch) — start a new session to change engines.
+          // A task session's rail is unlocked (onProviderSwitch): another engine
+          // takes over on the next message, in a new session of the same task.
+          // Without it (a side thread) the others stay locked.
           engine={engineUi.id}
+          onProviderSwitch={onProviderSwitch}
+          providerLockReason={providerLockReason}
           acpCurrentModelId={pending ? pending.model : session?.acpModel}
           onAcpSwitch={engineUi.isAcp ? handleAcpModelSwitch : undefined}
           // PENDING: "Auto" is a real choice (no --model at spawn) — the picker's

@@ -1,0 +1,67 @@
+/* The composer's engine switch line (components/sessions/EngineSwitch.tsx). */
+.engine-switch-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 4px 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.engine-switch-line-error { border-color: var(--error); }
+.engine-switch-text { flex: 1 1 220px; min-width: 0; }
+.engine-switch-held {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  color: var(--fg-muted);
+}
+.engine-switch-btn {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.engine-switch-btn:disabled { opacity: 0.5; cursor: default; }
+.engine-switch-btn-primary { background: var(--accent, var(--fg)); color: var(--bg, #fff); border-color: transparent; }
+.engine-switch-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--border);
+  border-top-color: var(--fg);
+  border-radius: 50%;
+  animation: engine-switch-spin 0.8s linear infinite;
+}
+@keyframes engine-switch-spin { to { transform: rotate(360deg); } }
+
+/* Earlier sessions above the current one (components/sessions/TaskEarlierSessions.tsx). */
+.task-earlier-sessions { margin: 8px 0 4px; }
+.task-earlier-session { margin: 4px 0; }
+.task-earlier-head { display: flex; align-items: center; gap: 8px; }
+.task-earlier-toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 12px;
+  padding: 4px 0;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-earlier-toggle:hover { color: var(--fg); }
+.task-earlier-body { border-left: 2px solid var(--border); padding-left: 8px; }

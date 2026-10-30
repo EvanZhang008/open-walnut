@@ -145,8 +145,8 @@ describe('task start confirmation and reply contract', () => {
     expect(mocks.createSessionRecord).not.toHaveBeenCalled();
     expect(mocks.startSession).not.toHaveBeenCalled();
     expect(mocks.deleteSessionRecords).not.toHaveBeenCalled();
-    // Another engine is another conversation, so it is another task.
-    await expect(startSessionForTask({ ...params, engine: 'codex' })).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('task_transfer') });
+    // Another engine changes inside the task: the refusal names task_switch_engine.
+    await expect(startSessionForTask({ ...params, engine: 'codex' })).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('task_switch_engine') });
   });
 
   it('returns starting on a bounded wait without releasing the in-flight guard', async () => {

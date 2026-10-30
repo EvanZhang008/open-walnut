@@ -11094,6 +11094,15 @@ export class SessionRunner {
       })
     }
     sessionId = session.sessionId ?? sessionId
+    // An engine switch replaced this session: what is queued belongs to the task's new session.
+    {
+      const { getSessionByClaudeId } = await import('../core/session-tracker.js')
+      const { isSupersededSession } = await import('../core/sessions/engine-switch-marker.js')
+      if (isSupersededSession(await getSessionByClaudeId(sessionId).catch(() => null))) return
+      // A switch replacing it is under way: its waiting rows move with the task.
+      const { switchingFrom } = await import('../core/sessions/engine-switch.js')
+      if (switchingFrom(sessionId)) return
+    }
     if (session.activity === 'processing') {
       const steered = await this.steerAcpQueued(session, sessionId)
       if (!steered) {

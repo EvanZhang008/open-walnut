@@ -897,6 +897,10 @@ export interface ParseSessionMessagesOptions {
    *  row of the same parse would multiply the peak by the number of long results
    *  in the transcript. Every other row keeps the default. */
   toolResultMax?: { toolUseId: string; max: number };
+  /** Retain up to this many characters of EVERY tool result (an engine switch
+   *  carries the whole active context, sessions/engine-switch-context.ts). A
+   *  one-off read: list reads never pass it. */
+  toolResultMaxAll?: number;
 }
 
 /** `result` (cut to `max`) plus `resultChars` when there WAS more — see
@@ -1547,7 +1551,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
   const resultMaxFor = (toolUseId: string | undefined): number =>
     toolUseId && rowResultMax && rowResultMax.toolUseId === toolUseId
       ? rowResultMax.max
-      : HISTORY_TOOL_RESULT_MAX;
+      : opts?.toolResultMaxAll ?? HISTORY_TOOL_RESULT_MAX;
   // Track the last plan content written to ~/.claude/plans/ across messages
   let lastPlanContent: string | null = null;
   // A side-thread cache warm-up is plumbing: its tagged user line is dropped

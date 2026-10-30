@@ -100,7 +100,7 @@ export async function startTask(id: string, body: Record<string, unknown>, call:
   return withOutcome(
     { ...started, execution: { state } },
     (started.continued === true
-      ? `Task ${started.taskId} already had its conversation; the message continued it (a task keeps one session).`
+      ? `Task ${started.taskId} already had its conversation; the message continued it (a task has one active session; task_switch_engine changes its engine).`
       : started.preparing === true ? `Task ${started.taskId}'s isolated workspace is being made; its session starts in it once the workspace is ready.`
       : state === 'running' ? `Task ${started.taskId} started.`
       : `Start accepted for task ${started.taskId}; execution is not yet confirmed.`) + launchSettingsNote(body, started),

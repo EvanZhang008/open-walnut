@@ -161,6 +161,15 @@ export interface SessionRecord {
   archived?: boolean;
   /** Why this session was archived (e.g. "plan_executed", user-provided reason). */
   archive_reason?: string;
+  /** Started by an engine switch inside its task: the session it took over from. */
+  engineSwitch?: {
+    fromSessionId: string; fromEngine?: string; fromModel?: string; at: string;
+    carriedTurns: number; trimmedTurns: number; compacted?: boolean; transcriptPath?: string;
+  };
+  /** Replaced by an engine switch: the task's session that took over. */
+  supersededBy?: string;
+  /** A switch back to this session's engine resumed it (the latest such resume). */
+  resumedBySwitch?: { fromSessionId: string; fromEngine?: string; at: string; carriedTurns: number };
   /** Error message when process_status is 'error' — for clear error display. */
   errorMessage?: string;
   /** Pending permission prompt (control_request) the CLI is PAUSED on. The CLI's

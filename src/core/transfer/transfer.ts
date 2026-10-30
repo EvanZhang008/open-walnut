@@ -60,12 +60,12 @@ export interface TransferResult {
   transcriptPath?: string;
 }
 
-function hostLabel(host: string): string {
+export function hostLabel(host: string): string {
   return host === LOCAL_HOST ? 'this Mac' : hostDisplayName(host);
 }
 
 /** The target's profile, probed first when the last probe is old or missing. Never fails the transfer. */
-async function freshProfile(host: string): Promise<HostProfile | null> {
+export async function freshProfile(host: string): Promise<HostProfile | null> {
   const profile = await readHostProfile(host).catch(() => null);
   if (profile && !probeIsStale(profile)) return profile;
   try {
@@ -77,14 +77,14 @@ async function freshProfile(host: string): Promise<HostProfile | null> {
   }
 }
 
-function expandHome(p: string, host: string, profile: HostProfile | null): string {
+export function expandHome(p: string, host: string, profile: HostProfile | null): string {
   if (!p.startsWith('~')) return p;
   const home = host === LOCAL_HOST ? os.homedir() : profile?.probed?.home;
   if (!home) throw new TransferError(`Walnut does not know the home directory on ${host} yet; pass an absolute cwd`, 409, 'unknown_home');
   return p.replace(/^~/, home);
 }
 
-async function writeTargetFile(host: string, filePath: string, content: string): Promise<void> {
+export async function writeTargetFile(host: string, filePath: string, content: string): Promise<void> {
   const bytes = Buffer.from(content, 'utf8');
   if (bytes.length <= 4 * 1024 * 1024) {
     const { DaemonFileReader } = await import('../daemon-file-reader.js');

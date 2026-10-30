@@ -118,12 +118,14 @@ defineOp({
   name: 'task_history',
   title: 'Read a task conversation',
   description: 'Read the current conversation for a task, using the same task id as task_get and task_send. '
-    + 'A placeholder returns not_started and no messages. No separate session lookup is needed.',
+    + 'A placeholder returns not_started and no messages. No separate session lookup is needed. '
+    + 'A task that switched engines holds earlier sessions too (listed in `sessions`); all:true reads every one of them in order.',
   input: {
     id: z.string().min(1).describe('Task id or unique prefix'),
     fresh: z.boolean().optional().describe('Force a live transcript read on the primary box'),
+    all: z.boolean().optional().describe('Every session of the task, oldest first, not only the active one'),
   },
-  handler: async ({ id, fresh }, call) => {
+  handler: async ({ id, fresh, all }, call) => {
     const body = await call('GET', `/tasks/${encodeURIComponent(String(id))}`) as { task?: Record<string, unknown> };
     if (!body?.task?.id) throw new Error('Task response has no id; cannot resolve its conversation.');
     const task = body.task;
@@ -134,9 +136,26 @@ defineOp({
       if (!Array.isArray(ids) || ids.length) throw new Error('Task conversation state is unavailable; retry task_history.');
       return { taskId: task.id, execution: { state: 'not_started' }, messages: [] };
     }
-    const history = await call('GET', `/sessions/${encodeURIComponent(String(sid))}/transcript${fresh ? '?fresh=1' : ''}`) as Record<string, unknown> | undefined;
-    if (!history || !Array.isArray(history.messages)) throw new Error('Transcript response is incomplete; retry task_history.');
-    return { ...history, taskId: task.id };
+    const read = async (sessionId: string) => {
+      const h = await call('GET', `/sessions/${encodeURIComponent(sessionId)}/transcript${fresh ? '?fresh=1' : ''}`) as Record<string, unknown> | undefined;
+      if (!h || !Array.isArray(h.messages)) throw new Error('Transcript response is incomplete; retry task_history.');
+      return h;
+    };
+    // Earlier sessions an engine switch replaced (an older server has no such route: none).
+    const list = await call('GET', `/tasks/${encodeURIComponent(String(task.id))}/sessions`).catch(() => null) as
+      { sessions?: Array<{ session_id: string; engine: string; model?: string | null; active?: boolean; started_at?: string | null }> } | null;
+    const sessions = (list?.sessions ?? []).map((r) => ({ session_id: r.session_id, engine: r.engine, model: r.model ?? null, active: r.active === true, started_at: r.started_at ?? null }));
+    if (all && sessions.length > 1) {
+      const messages: unknown[] = [];
+      for (const r of sessions) {
+        const h = await read(r.session_id).catch(() => ({ messages: [] as unknown[] }));
+        messages.push({ role: 'system', kind: 'notification', text: `Session on ${r.engine}${r.model ? ` (${r.model})` : ''}${r.active ? ', the active one' : ''}: ${r.session_id}` });
+        messages.push(...(h.messages as unknown[]));
+      }
+      return { taskId: task.id, sessions, messages };
+    }
+    const history = await read(String(sid));
+    return { ...history, taskId: task.id, ...(sessions.length > 1 ? { sessions } : {}) };
   },
   tags: { readonly: true, remote: 'allow' },
 });

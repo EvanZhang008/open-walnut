@@ -35,6 +35,7 @@
  */
 
 import { log } from '../../logging/index.js';
+import { isSupersededSession } from './engine-switch-marker.js';
 import type { SessionRecord } from '../types.js';
 
 /** Statuses that can act on a message NOW (vs. stopped/error, which need a resume). */
@@ -142,7 +143,8 @@ export async function resolveReplyDestination(
       // Only a session that can act NOW is worth re-routing to: a second stopped
       // row of the same task is no better an address than the original, and
       // reviving the WRONG dead process is worse than reviving the asker itself.
-      if (pick && isLive(pick)) return { session: pick, reason: 'task-current-session' };
+      // The asker's session an engine switch replaced: its task's active session is THE address, live or not.
+      if (pick && (isLive(pick) || isSupersededSession(origin))) return { session: pick, reason: 'task-current-session' };
     } catch (err) {
       log.session.warn('reply routing: task session lookup failed', {
         fromSessionId, taskId, error: err instanceof Error ? err.message : String(err),

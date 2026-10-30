@@ -27,6 +27,11 @@ export interface SessionSendOptions {
    * of the text. The bubble shows only the text; the hint is the server's to write.
    */
   hints?: Record<string, { arg?: string }>;
+  /**
+   * The composer picked another engine: this message starts the task's NEW
+   * session on it (core/sessions/engine-switch.ts) instead of reaching this one.
+   */
+  switchEngine?: { engine: string; model?: string; effort?: string; confirmMove?: boolean };
 }
 
 interface UseSessionSendReturn {
@@ -319,8 +324,15 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         ...(await buildImageRefsPayload(images)),
         ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
         ...(opts?.hints ? { hints: opts.hints } : {}),
+        ...(opts?.switchEngine ? { switchEngine: opts.switchEngine } : {}),
       };
-      const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string; enqueuedAt?: string }>('session:send', rpcPayload);
+      const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string; enqueuedAt?: string; engineSwitch?: { state?: string } }>('session:send', rpcPayload);
+      if (res?.engineSwitch) {
+        // The message starts the task's new session: its bubble shows there, not in this one.
+        log.info('send', 'engine switch accepted', { sessionId, state: res.engineSwitch.state });
+        setOptimisticMsgs((prev) => prev.filter((m) => m.queueId !== tempId));
+        return true;
+      }
       if (res?.messageId) {
         // Adopt dedupText when the server augmented the text (image refs) — the
         // bubble keeps rendering the user's original, but dedups against what was

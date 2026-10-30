@@ -38,6 +38,8 @@ export interface SessionStartParams {
   callerSid?: string;
   startAttemptId?: string;
   source: string;
+  /** Answer only once the session really started or failed (an engine switch must know the new id). */
+  awaitStart?: boolean;
 }
 
 export interface SessionStartResult {
@@ -154,6 +156,12 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
     throw err;
   }
   await refuseStartOfRetiredLead(task, params.callerSid);
+  if (params.source !== 'engine-switch') {
+    const { isSwitching } = await import('./engine-switch.js');
+    if (isSwitching(task.id)) {
+      throw new QuickStartError(`Task ${task.id} is switching engines right now. Continue it with task_send {"to":"${task.id}","text":"..."} in a moment.`, 409);
+    }
+  }
   let recovery: { previousStartId: string } | undefined;
   if (params.startAttemptId) {
     if (task.phase === 'COMPLETE') throw new QuickStartError('This task changed. Review the action again.', 409);
@@ -359,6 +367,7 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
       }
     })();
     releaseOnReturn = false;
+    if (params.awaitStart) return await work;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
@@ -381,8 +390,9 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
 const LOCAL_ALIASES = new Set(['', 'local', '__local__']);
 const sameHost = (a?: string, b?: string) => (LOCAL_ALIASES.has(a ?? '') && LOCAL_ALIASES.has(b ?? '')) || a === b;
 
-/** A start that names another engine, host or directory than the task's
- *  conversation is a new conversation, so it is a new task (task_transfer). */
+/** A start that names another engine, host or directory than the task's active
+ *  conversation is refused: the engine changes inside the task (task_switch_engine);
+ *  another host or directory is a new task (task_transfer). */
 export function refuseDifferentPlace(
   task: Task,
   conversation: Awaited<ReturnType<typeof getSessionsForTask>>[number],
@@ -395,9 +405,12 @@ export function refuseDifferentPlace(
     differs.push(`engine ${resolveEngine(conversation.engine)}`);
   }
   if (differs.length === 0) return;
+  const engineOnly = differs.length === 1 && differs[0].startsWith('engine ');
   throw new QuickStartError(
-    `Task ${task.id} already has its one session (${differs.join(', ')}). A task keeps one conversation: `
-    + `continue it with task_send, or move the work with task_transfer {"id":"${task.id}"} to a new task on the other engine or host.`, 409);
+    `Task ${task.id} already has its active session (${differs.join(', ')}). `
+    + (engineOnly
+      ? `Continue it with task_send, or change its engine inside the task with task_switch_engine {"id":"${task.id}","engine":"${resolveEngine(params.engine)}","text":"..."}.`
+      : `Continue it with task_send; work on another host or in another directory is a new task: task_transfer {"id":"${task.id}"}.`), 409);
 }
 
 async function cancelUnconfirmedStart(task: Task, record?: Awaited<ReturnType<typeof getSessionsForTask>>[number], keepRecord = false): Promise<void> {

@@ -203,6 +203,10 @@ export async function sendMessageToSession(
   },
 ): Promise<QueuedMessage> {
   const { bus, EventNames } = await import('./event-bus.js');
+  // A session an engine switch replaced never takes a message: it goes to the
+  // task's active session (sessions/engine-switch.ts).
+  const { activeSessionFor } = await import('./sessions/engine-switch.js');
+  sessionId = await activeSessionFor(sessionId);
   // A task that moved since its session was told rides a place note on this
   // message, in the same row, so it never costs a turn (sessions/place-notice.ts).
   const { pendingPlaceNotice } = await import('./sessions/place-notice.js');

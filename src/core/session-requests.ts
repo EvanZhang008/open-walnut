@@ -494,6 +494,29 @@ export async function withdrawRequest(id: string): Promise<SessionRequest | null
   return settle(id, 'withdrawn');
 }
 
+/**
+ * An engine switch handed a task's conversation to a new session
+ * (sessions/engine-switch.ts): the open requests on either side follow it, so an
+ * answer owed by the task comes from the new session and an answer the task waits
+ * for lands there. Returns how many rows moved.
+ */
+export async function retargetRequestsToSession(fromSessionId: string, toSessionId: string): Promise<number> {
+  if (!fromSessionId || !toSessionId || fromSessionId === toSessionId) return 0;
+  let moved = 0;
+  await updateRequests((store) => {
+    const requests = (store.requests ?? []).map((r) => {
+      if (r.status !== 'pending' && r.status !== 'expired') return r;
+      const to = r.toSessionId === fromSessionId;
+      const from = r.fromSessionId === fromSessionId;
+      if (!to && !from) return r;
+      moved++;
+      return { ...r, ...(to ? { toSessionId } : {}), ...(from ? { fromSessionId: toSessionId } : {}) };
+    });
+    return moved > 0 ? { ...store, requests } : undefined;
+  });
+  return moved;
+}
+
 /** Record the queue row the asked message went out as (POST /messages, after delivery queued it). */
 export async function noteRequestMessage(id: string, messageId: string): Promise<void> {
   await updateRequests((store) => {

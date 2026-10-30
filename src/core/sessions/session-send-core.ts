@@ -38,6 +38,7 @@ import {
   type SessionRequest,
 } from '../session-requests.js';
 import { queueSentBy } from './send-sent-by.js';
+import { isSupersededSession } from './engine-switch-marker.js';
 
 const kit = createEnvelopeKit();
 
@@ -172,6 +173,14 @@ const PRINTED_HANDLE = /\[([0-9a-z][0-9a-z-]{3,})\]\s*$/i;
  * A `to` that matches BOTH a task and a session at the same stage is ambiguous.
  */
 export async function resolveSendTarget(to: string): Promise<ResolvedTarget> {
+  const found = await resolveSendTargetAddress(to);
+  // An old handle of a session an engine switch replaced (printed in a transcript, a
+  // notice, a request) reaches the task's active session instead (engine-switch.ts).
+  if (isSupersededSession(found.session) && found.session.taskId) return resolveSendTargetAddress(found.session.taskId);
+  return found;
+}
+
+async function resolveSendTargetAddress(to: string): Promise<ResolvedTarget> {
   const candidates = await sendCandidates();
 
   const printed = to.match(PRINTED_HANDLE)?.[1]?.toLowerCase();
@@ -217,7 +226,12 @@ export async function resolveSendTarget(to: string): Promise<ResolvedTarget> {
 
   if (taskHit) {
     const { getSessionsForTask } = await import('../session-tracker.js');
-    const sessions = liveSessionsForTask(await getSessionsForTask(taskHit.id));
+    let sessions = liveSessionsForTask(await getSessionsForTask(taskHit.id));
+    if (sessions.length === 0) {
+      // Mid engine switch the task has no active session for a few seconds: wait for the new one.
+      const { awaitSwitch } = await import('./engine-switch.js');
+      if (await awaitSwitch(taskHit.id)) sessions = liveSessionsForTask(await getSessionsForTask(taskHit.id));
+    }
     if (sessions.length === 0) {
       throw new SendError('task_has_no_session',
         `Task "${taskHit.title}" (${taskHit.id}) is not started. Use task_start with that id.`,
@@ -256,6 +270,12 @@ export async function resolveCaller(callerSid: string | undefined): Promise<Call
   try {
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     const record = await getSessionByClaudeId(sid);
+    // A session an engine switch replaced keeps no authority as its task: a process
+    // still finishing a command must not complete, answer for or stop the task.
+    if (record && isSupersededSession(record)) {
+      log.session.info('caller is a session an engine switch replaced; treated as an outside caller', { callerSid: sid, taskId: record.taskId, supersededBy: record.supersededBy });
+      return { kind: 'external' };
+    }
     return record ? { kind: 'session', record } : { kind: 'external' };
   } catch {
     return { kind: 'external' };

@@ -144,6 +144,7 @@ import { triggerTemplatesV1Router } from './routes/trigger-templates-v1.js'
 import { projectsV1Router } from './routes/projects-v1.js'
 import { taskExtrasV1Router } from './routes/task-extras-v1.js'
 import { transferV1Router } from './routes/transfer-v1.js'
+import { engineSwitchV1Router } from './routes/engine-switch-v1.js'
 import { sessionExtrasV1Router } from './routes/session-extras-v1.js'
 import { filesV1Router } from './routes/files-v1.js'
 import { consoleV1Router } from './routes/console-v1.js'
@@ -2378,6 +2379,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // groups + tier CRUD 501 on a REPLICA (outbox whitelist lacks them).
   app.use('/api/v1', taskExtrasV1Router)
   app.use('/api/v1', transferV1Router)
+  app.use('/api/v1', engineSwitchV1Router)
   // Session extras (additive, Wave 2): controls/settings/side-questions/
   // workflow/plan/subagent-history/execute-compact/queue + list-dirs — all
   // B-class relay on a REPLICA.
@@ -3054,6 +3056,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const { splitMultiSessionTasks } = await import('../core/sessions/split-multi-session-tasks.js')
     const split = await splitMultiSessionTasks()
     startupPhase(`one-session-per-task done (${split.tasks} split, guard ${split.guardReady ? 'ready' : 'pending'})`)
+    // An engine switch a restart interrupted, or one waiting for a turn's end, goes on
+    // once the hosts had a moment to come back (core/sessions/engine-switch-watch.ts).
+    // Never on an ephemeral server: its copied switches are the real Walnut's work.
+    if (!isEphemeral) setTimeout(() => {
+      void import('../core/sessions/engine-switch-watch.js').then((m) => m.resumeEngineSwitches()).catch((err) => {
+        log.session.warn('engine switch resume failed', { error: err instanceof Error ? err.message : String(err) })
+      })
+    }, 15_000).unref?.()
   } catch (err) {
     log.session.error('one-session-per-task migration failed', {
       error: err instanceof Error ? err.message : String(err),

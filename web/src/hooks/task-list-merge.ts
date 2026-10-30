@@ -37,6 +37,11 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
   if ((a as { replica_sync?: unknown }).replica_sync !== (b as { replica_sync?: unknown }).replica_sync) return false;
   // The one status the user sees (src/core/user-status.ts): small, compared whole.
   if (JSON.stringify(a.user_status ?? null) !== JSON.stringify(b.user_status ?? null)) return false;
+  // An engine switch inside the task (sessions/engine-switch.ts), written raw: the composer's
+  // line follows it (pending, switching, done, failed), and updated_at stays as it was.
+  const sw = (t: Task) => (t.engine_switch
+    ? `${t.engine_switch.id}|${t.engine_switch.state}|${t.engine_switch.session_id ?? ''}|${t.engine_switch.error ?? ''}|${t.engine_switch.message ? 1 : 0}` : '');
+  if (sw(a) !== sw(b)) return false;
   // Main's or a lead's Brief (Org page): its rewrite leaves updated_at alone.
   if (a.brief?.at !== b.brief?.at || a.brief?.text !== b.brief?.text) return false;
   // The org's own fields (the Org page and its chart): a VP's name and instructions, a VP made

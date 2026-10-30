@@ -14,6 +14,7 @@ import { BackgroundTasksChip, BackgroundTasksPanelHost, type KnownAgent } from '
 import { setLiveLanes, setToolSource } from '@/stores/background-panel-store';
 import { EMPTY_TOOL_SOURCE } from '@/stream/command-view';
 import { ChatEarlierBlock, useChatEarlier } from './ChatEarlierBlock';
+import { TaskEarlierSessions } from './TaskEarlierSessions';
 import { DeliveryMetaLine } from './DeliveryMetaLine';
 import { latestTurnStartTop, READER_SCROLL_EVENT } from './phone-session-layer';
 import { isPhoneLayout } from '@/hooks/usePhoneLayout';
@@ -283,6 +284,10 @@ interface SessionChatHistoryProps {
   /** The session runs a chat (a lane session): what the chat said before it is
    *  shown above its first message (ChatEarlierBlock). */
   chatLane?: boolean;
+  /** The session an engine switch started: its task's earlier sessions show above it (TaskEarlierSessions). */
+  earlierSessionsTaskId?: string;
+  /** Open one of those earlier sessions in its own panel. */
+  onOpenEarlierSession?: (sessionId: string) => void;
 }
 
 // Grouping semantics (task groups / consumed subagent lanes / hidden-parent
@@ -499,7 +504,7 @@ function ownRowsOf(queuedSig: string, tree: ThreadTree): { sentKeys: Set<string>
   return { sentKeys, queuedKeys, unsentKeys };
 }
 
-export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane }: SessionChatHistoryProps) {
+export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession }: SessionChatHistoryProps) {
   // Dev-only render counter per session: lets a browser test prove a hot
   // interaction (the pointer over a question mark) never re-renders this tree.
   if (import.meta.env.DEV && typeof window !== 'undefined') {
@@ -4681,6 +4686,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         )}
         {!onQuestionPage && hiddenOnPage === 0 && chatEarlier.length > 0 && (
           <ChatEarlierBlock rows={chatEarlier} sessionCwd={sessionCwd} />
+        )}
+        {!onQuestionPage && hiddenOnPage === 0 && earlierSessionsTaskId && (
+          <TaskEarlierSessions taskId={earlierSessionsTaskId} sessionId={sessionId} sessionCwd={sessionCwd} onOpenSession={onOpenEarlierSession} />
         )}
         {/* Persisted history messages — truncated to tail for performance.
             Full messages[] stays in memory; only the visible slice is rendered as DOM. */}
