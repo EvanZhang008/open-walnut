@@ -176,6 +176,30 @@ export function computeHiddenBlocks(input: RenderFilterInput): Set<number> {
   return computeRenderFilter(input).hidden;
 }
 
+/** Does what is shown already hold the message that started the stream's turn?
+ *  True when the last user or assistant row is a user row, or a bubble (a send,
+ *  the launch prompt) stands for it. False for no rows at all. */
+export function turnQuestionShown(messages: readonly SessionHistoryMessage[], bubbles: number): boolean {
+  if (bubbles > 0) return true;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const role = messages[i].role;
+    if (role !== 'system') return role === 'user';
+  }
+  return false;
+}
+
+/** The blocks to keep off screen: the absorbed ones, and every block while
+ *  `holding` (this session's history has had no server answer yet and the rows
+ *  shown lack the stream turn's question, see turnQuestionShown). Rendering
+ *  only: the reset gate keeps reading the absorbed set, so a held block is never
+ *  dropped. */
+export function withFirstCheckHold(blockCount: number, hidden: Set<number>, holding: boolean): Set<number> {
+  if (!holding || hidden.size >= blockCount) return hidden;
+  const all = new Set<number>();
+  for (let i = 0; i < blockCount; i++) all.add(i);
+  return all;
+}
+
 /** True when every block is absorbed — the safe moment for the OPTIONAL
  *  physical reset (pure memory reclamation): nothing from blocks[] is visible,
  *  so dropping the array has zero rendered difference. Never reset while

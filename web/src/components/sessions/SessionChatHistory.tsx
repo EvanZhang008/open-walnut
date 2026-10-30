@@ -33,7 +33,7 @@ import { computeRenderWindow, type RenderWindowAnchor } from './render-window';
 import { historyTurnWindowLimit, INITIAL_HISTORY_TURNS, EARLIER_HISTORY_TURNS, isHistorySentRow, isHistoryUserTurn } from '@open-walnut/history-turn-window';
 import { parseHistoryUnavailable, visibleHistoryUnavailable } from './history-unavailable';
 import { shouldRefetchForTurnPrompt, turnPromptMissing, PROMPT_REFETCH_RETRY_DELAYS_MS } from './turn-prompt-refetch';
-import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence } from '@/stream/render-filter';
+import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence, withFirstCheckHold, turnQuestionShown } from '@/stream/render-filter';
 import { getFinishedAgentIds, subscribeFinishedAgentIds } from '@/cache/finished-agents-store';
 import { groupStreamingBlocks, collectLanes, isLaneChild, isRunMemberBlock, trailingThinkingStart, type GroupedStreamItem } from '@/stream/group-blocks';
 import { TeamCard } from './TeamCard';
@@ -480,6 +480,10 @@ const TRIPWIRE_SETTLE_MS = (typeof window !== 'undefined'
 const THREAD_BAR_HIT_PX = 11;
 /** How long an Ask from Tree Mode holds its passage still while Conversation Mode settles. */
 const ASK_HOLD_MS = 700;
+/** The longest the stream stays off screen while this session's history waits
+ *  for its first server answer (see `shownHiddenBlocks`): a local answer takes
+ *  0.1 to 1 s, a remote one 1 to 3 s; past this it shows anyway. */
+const FIRST_CHECK_HOLD_MS = 3_000;
 
 /** Stable empty mark list for a page (or view) without question marks. */
 const NO_MARKS: MarkSpec[] = [];
@@ -618,7 +622,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }, [openLightbox]);
 
-  const { messages: loadedMessages, loading, phase2Pending, error, stale, loadingFrom, forkBoundaryIndex: loadedForkBoundary, olderHidden, olderWindowed, olderUnavailable, olderUnavailableWhy, olderPageSeq, loadFullHistory, gaps, gapStatus, fillHistoryGap } = useSessionHistory(sessionId, historyVersion);
+  const { messages: loadedMessages, loading, phase2Pending, firstCheckPending, error, stale, loadingFrom, forkBoundaryIndex: loadedForkBoundary, olderHidden, olderWindowed, olderUnavailable, olderUnavailableWhy, olderPageSeq, loadFullHistory, gaps, gapStatus, fillHistoryGap } = useSessionHistory(sessionId, historyVersion);
   // Questions answered inside the running turn's reply are cut out of it and
   // filed under their own rows (tagged-reply-split.ts). Only display and the
   // thread tree read the split rows: the turn watermark, stream absorption,
@@ -802,6 +806,36 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // the swap until the selection clears is safe by design: the failure mode of
   // a stale filter is a brief DOUBLE-render next to the twin, never a vanish.
   const hiddenBlocks = useSelectionFrozenWith(containerRef, liveHiddenBlocks);
+  // Until this session's history has had a server answer, the rows shown (a
+  // cached copy, or none) may stop short of the newest turn while the stream
+  // snapshot already holds that turn's reply: drawn now, the reply sits under the
+  // turn before with its question missing until the rows land (every reload
+  // within a second or two of a reply, longer on a remote host). So while the
+  // rows shown lack the stream turn's question (turnQuestionShown), the stream is
+  // not drawn before that answer, for at most FIRST_CHECK_HOLD_MS per session.
+  // Rows that end with the question (a cache written mid-turn) hold nothing, so
+  // a live turn's output shows as it comes. Once a stream block has been shown
+  // the hold is over for the session: what was on screen never leaves it.
+  // Every render site reads `shownHiddenBlocks`; the reset gate, the tripwire and
+  // the forensics keep `hiddenBlocks` (what history absorbed), so a held block is
+  // never dropped (tests/web/stream/first-check-hold.test.ts).
+  const [firstCheckHoldOverFor, setFirstCheckHoldOverFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (!firstCheckPending) return undefined;
+    const timer = setTimeout(() => setFirstCheckHoldOverFor(sessionId), FIRST_CHECK_HOLD_MS);
+    return () => clearTimeout(timer);
+  }, [firstCheckPending, sessionId]);
+  const holdForFirstCheck = firstCheckPending && firstCheckHoldOverFor !== sessionId
+    && !turnQuestionShown(loadedMessages, optimisticMessages?.length ?? 0);
+  useLayoutEffect(() => {
+    if (!holdForFirstCheck && firstCheckPending && blocks.length > 0 && firstCheckHoldOverFor !== sessionId) {
+      setFirstCheckHoldOverFor(sessionId);
+    }
+  }, [holdForFirstCheck, firstCheckPending, blocks.length, firstCheckHoldOverFor, sessionId]);
+  const shownHiddenBlocks = useMemo(
+    () => withFirstCheckHold(blocks.length, hiddenBlocks, holdForFirstCheck),
+    [blocks.length, hiddenBlocks, holdForFirstCheck],
+  );
 
   // Divergence tripwire: a FINISHED block with no history twin is kept visible
   // (safe), but persistent misses mean archive & stream disagree — surface it.
@@ -2623,11 +2657,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   }
 
   // ── Build interleaved timeline over VISIBLE blocks ──
-  // hiddenBlocks (absorbed by history) don't render; visibility is decided
-  // here, at render time, not by deleting state.
+  // shownHiddenBlocks (absorbed by history, or held for the first check) don't
+  // render; visibility is decided here, at render time, not by deleting state.
   const isResuming = !isStreaming && foregroundActive !== false && phase === 'IN_PROGRESS'
     && deduped.length > 0;
-  const timeline = buildTimeline(blocks, timelineOptimistic, blockIndexMap.current, isStreaming, isResuming, hiddenBlocks);
+  const timeline = buildTimeline(blocks, timelineOptimistic, blockIndexMap.current, isStreaming, isResuming, shownHiddenBlocks);
 
   // Prepare both render partitions together so a persisted tool run can absorb
   // the unpersisted run at the streaming boundary instead of producing two rows.
@@ -2796,7 +2830,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   }, [rowThreadKey]);
 
   // Pre-group once for both boundary detection and streaming rendering.
-  const groupedBlocks = groupStreamingBlocks(blocks, hiddenBlocks);
+  const groupedBlocks = groupStreamingBlocks(blocks, shownHiddenBlocks);
   const groupedByIndex = new Map<number, GroupedStreamItem>();
   for (const g of groupedBlocks) {
     if (g.kind === 'task-group') groupedByIndex.set(g.index, g);
@@ -3353,7 +3387,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   if (hasQuestions) {
     for (let i = 0; i < blocks.length; i++) {
       const b = blocks[i];
-      if (b.type !== 'text' || b.parentToolUseId || hiddenBlocks.has(i) || !hasWords(b.content)) continue;
+      if (b.type !== 'text' || b.parentToolUseId || shownHiddenBlocks.has(i) || !hasWords(b.content)) continue;
       const key = pageKeyOfBlock(i);
       if (!liveSpokeKeys.includes(key)) liveSpokeKeys.push(key);
       if (isStreaming && i >= liveTurnStart && !turnSpokeKeys.includes(key)) turnSpokeKeys.push(key);
@@ -4636,7 +4670,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         {/* Loading / empty / error states rendered INSIDE the scroll container */}
         {/* Not over a launch prompt: a fresh session has nothing to load, and the
             spinner would push the first message down, then let it jump back up. */}
-        {loading && messages.length === 0 && blocks.length === 0 && launchHead.length === 0 && <LoadingSpinner />}
+        {loading && messages.length === 0 && timeline.length === 0 && launchHead.length === 0 && <LoadingSpinner />}
         {/* Gate on the RAW flag: when an unavailable answer is suppressed because
             the session has content, it must not fall through to this generic
             banner and print the internal "HISTORY_UNAVAILABLE:" string. */}
@@ -4917,7 +4951,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                   <SessionWorkingIndicator key="ind-working" sessionId={sessionId}>
                     <WorkingIndicator
                       label={assistantLabel}
-                      tokens={Math.round(countStreamChars(blocks, hiddenBlocks) / 4)}
+                      tokens={Math.round(countStreamChars(blocks, shownHiddenBlocks) / 4)}
                     />
                   </SessionWorkingIndicator>
                 );

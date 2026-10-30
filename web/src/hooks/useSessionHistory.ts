@@ -45,6 +45,12 @@ interface UseSessionHistoryReturn {
   loading: boolean;
   /** Phase 2 (SSH/full fetch) still in progress — true between Phase 1 completion and Phase 2 completion */
   phase2Pending: boolean;
+  /** This session's history has not had a server answer yet: what is shown
+   *  (nothing, Phase 1's streams parse, or a cached copy) may stop short of the
+   *  newest turn. False from the first answer on, whatever it was (fresh rows,
+   *  a degraded payload, an error), and at once for an offscreen column, which
+   *  skips the server read until it is visible. */
+  firstCheckPending: boolean;
   error: string | null;
   /** Non-null when the rendered history is the server's LAST-GOOD parse (live
    *  read failed — SSH down / daemon timeout). Value = underlying reason.
@@ -137,6 +143,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   const [messages, setMessages] = useState<SessionHistoryMessage[]>([]);
   const [loading, setLoading] = useState(false);
   const [phase2Pending, setPhase2Pending] = useState(false);
+  const [firstCheckPending, setFirstCheckPending] = useState(sessionId !== null);
   const [error, setError] = useState<string | null>(null);
   // Server served its last-good parse because the live read failed (SSH down /
   // daemon timeout). Content renders; caller shows a degraded banner. Distinct
@@ -232,6 +239,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       setMessages([]);
       setLoading(false);
       setPhase2Pending(false);
+      setFirstCheckPending(false);
       setError(null);
       setStale(null);
       setLoadingFrom(null);
@@ -259,6 +267,9 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     // Paging state belongs to one session; a version bump (turn boundary) keeps it.
     if (pagedSessionRef.current !== sessionId) {
       pagedSessionRef.current = sessionId;
+      // Once per session, never again when an offscreen column comes back into
+      // view: what it already showed must not leave the screen while it re-checks.
+      setFirstCheckPending(true);
       setOlderUnavailable(false);
       setOlderUnavailableWhy(null);
       setOlderPageSeq(0);
@@ -409,7 +420,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           } else setError(e.message);
         })
         .finally(() => {
-          if (!cancelled) { setLoading(false); setPhase2Pending(false); }
+          if (!cancelled) { setLoading(false); setPhase2Pending(false); setFirstCheckPending(false); }
         });
       return () => { cancelled = true; controller.abort(); };
     }
@@ -431,7 +442,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
       setInitialUserText(cached.initialUserText);
       setLoading(false);
       // Offscreen column: show cache, skip the background SSH re-verify until visible.
-      if (!enabled) { setPhase2Pending(false); return; }
+      if (!enabled) { setPhase2Pending(false); setFirstCheckPending(false); return; }
       setPhase2Pending(true);
 
       const endP2 = perf.start(`session:full:${sid}`);
@@ -478,7 +489,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           if (!cancelled) { endP2('error'); setError(e.message); }
         })
         .finally(() => {
-          if (!cancelled) setPhase2Pending(false);
+          if (!cancelled) { setPhase2Pending(false); setFirstCheckPending(false); }
         });
     };
 
@@ -529,7 +540,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
           if (cancelled) return;
           // Offscreen column: Phase 1 (local streams) already gave instant
           // content; skip the expensive Phase 2 SSH fetch until visible.
-          if (!enabled) { setPhase2Pending(false); return; }
+          if (!enabled) { setPhase2Pending(false); setFirstCheckPending(false); return; }
           // Phase 2: Full fetch (source of truth, may SSH for remote sessions).
           // Lazy: only the last HISTORY_TAIL_LIMIT messages — a whale session used
           // to pin one of the browser's 6 connections for 35-150s here.
@@ -585,7 +596,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
               if (!cancelled) { endP2('error'); setError(e.message); }
             })
             .finally(() => {
-              if (!cancelled) { setLoading(false); setPhase2Pending(false); }
+              if (!cancelled) { setLoading(false); setPhase2Pending(false); setFirstCheckPending(false); }
             });
         });
     };
@@ -697,7 +708,7 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
     setPhase2Pending(true);
     const settle = () => {
       loadingFullRef.current = false;
-      if (sessionIdRef.current === sessionId) setPhase2Pending(false);
+      if (sessionIdRef.current === sessionId) { setPhase2Pending(false); setFirstCheckPending(false); }
     };
     // A transcript past the full read's byte ceiling has no "whole history" to
     // fetch: the server only ever serves its tail. Its older part comes a page at
@@ -851,5 +862,5 @@ export function useSessionHistory(sessionId: string | null, version = 0, enabled
   // Only the gaps still inside the rows, with their sides read from them.
   const shownGaps = useMemo(() => liveGaps(messages, gaps), [messages, gaps]);
 
-  return { messages, loading, phase2Pending, error, stale, forkBoundaryIndex, olderHidden, olderWindowed, olderUnavailable, olderUnavailableWhy, olderPageSeq, loadFullHistory, initialUserText, gaps: shownGaps, gapStatus, fillHistoryGap, loadingFrom };
+  return { messages, loading, phase2Pending, firstCheckPending, error, stale, forkBoundaryIndex, olderHidden, olderWindowed, olderUnavailable, olderUnavailableWhy, olderPageSeq, loadFullHistory, initialUserText, gaps: shownGaps, gapStatus, fillHistoryGap, loadingFrom };
 }
