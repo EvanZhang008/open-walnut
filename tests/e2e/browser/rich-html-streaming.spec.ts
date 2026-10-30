@@ -320,7 +320,7 @@ test.describe('Rich HTML streaming', () => {
     }
   });
 
-  test('3. an html-app fence is a placeholder while incomplete, then a sandboxed island', async ({ page }) => {
+  test('3. an html-app fence is a script-free preview while incomplete, then a sandboxed island', async ({ page }) => {
     await mockFrozenHistory(page);
     await mockSessionDetail(page);
     await openSession(page);
@@ -333,8 +333,10 @@ test.describe('Rich HTML streaming', () => {
     // Prose, blank line, then the fence — so the fence is a chunk of its own.
     await streamDeltas(page, `Here is a widget:\n\n\`\`\`html-app\n${fenceBody}`);
 
-    // Unclosed: inert placeholder, and NOTHING mounted.
-    await expect(page.locator('.session-history .rich-app-building')).toBeVisible();
+    // Unclosed: its markup is drawn in the preview, its script has not run, and
+    // no island is mounted (rich-island-live.spec.ts covers the preview in depth).
+    const preview = page.frameLocator('.session-history [data-testid="rich-app-live"] iframe');
+    await expect(preview.locator('#app')).toHaveText('counting…');
     expect(await page.locator('.session-history iframe.rich-island').count()).toBe(0);
 
     // Closing fence + a following prose line.
@@ -342,6 +344,7 @@ test.describe('Rich HTML streaming', () => {
 
     const island = page.locator('.session-history iframe.rich-island');
     await expect(island).toHaveCount(1);
+    await expect(page.locator('.session-history [data-testid="rich-app-live"]')).toHaveCount(0, { timeout: 5000 });
     await expect(page.locator('.session-history .rich-app-building')).toHaveCount(0);
 
     // allow-scripts and NOTHING else: with allow-same-origin the frame could

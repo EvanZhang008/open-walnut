@@ -33285,6 +33285,52 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   font-size: 12px;
 }
 
+/* An html-app block shown while it arrives (IslandPreview): its layout, no
+   script. It takes no clicks, since nothing done in it would carry over to the
+   running block that replaces it. */
+.rich-app-stream {
+  position: relative;
+}
+.rich-app-live {
+  position: relative;
+  pointer-events: none;
+}
+.rich-app-live-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1;
+}
+.rich-app-live-frame {
+  width: 100%;
+  border: 0;
+  display: block;
+}
+.rich-app-live-empty {
+  position: absolute;
+  inset: 0;
+}
+.rich-app-live-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--fg-secondary);
+  font-size: 11px;
+  line-height: 16px;
+}
+/* The running block while its preview still lies on top: laid out and running,
+   not shown. Opacity rather than visibility, so the engine does not treat the
+   frame as hidden and hold back its first draw. */
+.rich-island-pending {
+  opacity: 0;
+  pointer-events: none;
+}
+
 /* The sandboxed island itself — height is set inline from the frame's own
    measurement (see HtmlAppIsland), never from CSS. */
 .rich-island {

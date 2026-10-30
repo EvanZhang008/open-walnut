@@ -39,7 +39,7 @@
  *    sandboxed iframe island (`allow-scripts` and nothing else, so it has no
  *    same-origin access, no cookies, no DOM of ours), never to innerHTML.
  */
-import { memo, useContext, useEffect, useId, useMemo, useRef, useState, type RefObject } from 'react';
+import { memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type RefObject } from 'react';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useStableHtml } from '@/hooks/useStableHtml';
@@ -51,6 +51,8 @@ import { islandRuntimeScript, readResultMessage, readStateMessage, type IslandIt
 import { flushIslands, islandStoreKey, offerIslandResult, readIsland, saveIslandItems, type IslandResult } from './island-store';
 import { IslandHostContext } from './island-host';
 import { IslandResultCard } from './IslandResultCard';
+import { IslandPreview } from './IslandPreview';
+import { FRAGMENT_BASE_CSS, isIslandDocument } from './island-preview';
 
 /** An island can never be shorter than this or taller than this (px). */
 const ISLAND_MIN_H = 40;
@@ -180,12 +182,69 @@ const RichChunkView = memo(function RichChunkView({ text, kind, scopeId, cwd }: 
   );
 });
 
-/** A script-bearing chunk: sandboxed island once complete, placeholder while not. */
+/** How long a finished block's preview waits for the real island to draw (ms). */
+const ISLAND_HANDOVER_MAX_MS = 2500;
+/** After the real island's first height, the time its page gets to draw (ms). */
+const ISLAND_HANDOVER_SETTLE_MS = 120;
+
+/**
+ * A script-bearing chunk: a live, script-free preview while it arrives, the
+ * sandboxed island once complete.
+ *
+ * A block that was complete when it mounted (a saved reply, a reload) is the
+ * island alone. One seen arriving keeps its preview on top while the island
+ * loads underneath, invisible, in the room the preview took, and gives way once
+ * the island has measured itself and drawn, so the block never collapses to
+ * nothing between the two.
+ */
 function AppChunk({ chunk, messageScope }: { chunk: RichChunk; messageScope?: string }) {
-  if (!isAppComplete(chunk)) {
-    return <div className="rich-app-building">{'⚙︎'} building interactive block…</div>;
-  }
-  return <HtmlAppIsland html={extractAppHtml(chunk)} messageScope={messageScope} />;
+  const complete = isAppComplete(chunk);
+  const [streamed] = useState(() => !complete);
+  const [handedOver, setHandedOver] = useState(false);
+  const [drawn, setDrawn] = useState(false);
+  const [previewH, setPreviewH] = useState(ISLAND_MIN_H);
+  const html = extractAppHtml(chunk);
+  const settle = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onDrawn = useCallback(() => {
+    if (settle.current) return;
+    setDrawn(true);
+    settle.current = setTimeout(() => setHandedOver(true), ISLAND_HANDOVER_SETTLE_MS);
+  }, []);
+  // A raw-HTML block (no fence) can read complete and then open a new element:
+  // it is arriving again, so the next completion hands over afresh.
+  useEffect(() => {
+    if (complete) return;
+    if (settle.current) { clearTimeout(settle.current); settle.current = null; }
+    setHandedOver(false);
+    setDrawn(false);
+  }, [complete]);
+  useEffect(() => {
+    if (!complete || !streamed || handedOver) return;
+    const t = setTimeout(() => setHandedOver(true), ISLAND_HANDOVER_MAX_MS);
+    return () => clearTimeout(t);
+  }, [complete, streamed, handedOver]);
+  useEffect(() => () => { if (settle.current) clearTimeout(settle.current); }, []);
+
+  if (!streamed) return <HtmlAppIsland html={html} messageScope={messageScope} />;
+  const live = !complete || !handedOver;
+  // The room the preview took stays until the island has measured itself, also
+  // when the wait ran out first (a hidden window does not load a lazy frame).
+  return (
+    <div className="rich-app-stream" style={complete && !drawn ? { minHeight: `${previewH}px` } : undefined}>
+      {complete && (
+        <HtmlAppIsland html={html} messageScope={messageScope} pending={!handedOver} onDrawn={onDrawn} />
+      )}
+      {live && (
+        <IslandPreview
+          html={html}
+          minHeight={ISLAND_MIN_H}
+          maxHeight={ISLAND_MAX_H}
+          onHeight={setPreviewH}
+          overlay={complete}
+        />
+      )}
+    </div>
+  );
 }
 
 /**
@@ -198,8 +257,11 @@ function AppChunk({ chunk, messageScope }: { chunk: RichChunk; messageScope?: st
  * is no origin to name, and the payload is a number the parent already knows.
  */
 function heightReporter(key: string): string {
-  return `<script>(function(){var k=${JSON.stringify(key)};function r(){try{parent.postMessage(`
-    + `{t:'wn-island-h',k:k,h:document.documentElement.scrollHeight},'*')}catch(e){}}`
+  // The content's own height: `scrollHeight` never reads below the frame's
+  // current height, so a frame opened at a remembered height could never shrink.
+  return `<script>(function(){var k=${JSON.stringify(key)};function r(){try{var e=document.documentElement,`
+    + `b=document.body;parent.postMessage({t:'wn-island-h',k:k,`
+    + `h:Math.max(e.getBoundingClientRect().height,b?b.scrollHeight:0)},'*')}catch(x){}}`
     + `r();addEventListener('load',r);`
     + `if(window.ResizeObserver)new ResizeObserver(r).observe(document.documentElement)})()</script>`;
 }
@@ -225,8 +287,7 @@ function wrapIslandHtml(html: string, key: string, seed: IslandItems): string {
   const reporter = heightReporter(key);
   const runtime = islandRuntimeScript(key, seed);
   const csp = hasCspMeta(html) ? '' : ISLAND_CSP;
-  const head = html.trimStart().slice(0, 32).toLowerCase();
-  if (head.startsWith('<!doctype') || head.startsWith('<html')) {
+  if (isIslandDocument(html)) {
     // A `<meta>` must land in the head to apply, so aim for an explicit `<head>`
     // first; failing that, right after `<html …>`, where the parser puts it in the
     // implied head anyway.
@@ -241,10 +302,25 @@ function wrapIslandHtml(html: string, key: string, seed: IslandItems): string {
       ? withHead.replace(/<\/body\s*>/i, `${reporter}</body>`)
       : withHead + reporter;
   }
-  return `<!doctype html><html><head>${csp}${runtime}<style>`
-    + 'html,body{margin:0;background:transparent}'
-    + 'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;font-size:14px}'
-    + `</style></head><body>${html}${reporter}</body></html>`;
+  return `<!doctype html><html><head>${csp}${runtime}<style>${FRAGMENT_BASE_CSS}</style></head>`
+    + `<body>${html}${reporter}</body></html>`;
+}
+
+/**
+ * The last height each island measured, by its store key, so the same island
+ * mounted again (the streamed reply giving way to the saved one, a reload of the
+ * column) opens at its own height instead of growing from ISLAND_MIN_H.
+ */
+const islandHeights = new Map<string, number>();
+const ISLAND_HEIGHTS_MAX = 200;
+
+function rememberIslandHeight(storeKey: string, h: number): void {
+  islandHeights.delete(storeKey);
+  islandHeights.set(storeKey, h);
+  if (islandHeights.size > ISLAND_HEIGHTS_MAX) {
+    const oldest = islandHeights.keys().next().value;
+    if (oldest !== undefined) islandHeights.delete(oldest);
+  }
 }
 
 /** How long an unmounted island still takes its frame's last messages (ms). */
@@ -271,10 +347,14 @@ function newFrameKey(): string {
  * Every message is taken only from THIS frame (`event.source`), so one island can
  * neither resize nor write the state of another.
  */
-const HtmlAppIsland = memo(function HtmlAppIsland({ html, messageScope }: {
+const HtmlAppIsland = memo(function HtmlAppIsland({ html, messageScope, pending, onDrawn }: {
   html: string;
   /** The message's own id (the caller's `scope`): the same quiz in a new reply is a new island. */
   messageScope?: string;
+  /** Still under its live preview: laid out and running, not yet shown. */
+  pending?: boolean;
+  /** Called once the frame has measured itself. */
+  onDrawn?: () => void;
 }) {
   const host = useContext(IslandHostContext);
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -283,7 +363,7 @@ const HtmlAppIsland = memo(function HtmlAppIsland({ html, messageScope }: {
     () => islandStoreKey(html, host.sessionId, messageScope),
     [html, host.sessionId, messageScope],
   );
-  const [height, setHeight] = useState(ISLAND_MIN_H);
+  const [height, setHeight] = useState(() => islandHeights.get(storeKey) ?? ISLAND_MIN_H);
   // Read once per document: the state the page writes later reaches the store, and
   // must not rebuild the document it came from.
   const srcDoc = useMemo(
@@ -292,6 +372,9 @@ const HtmlAppIsland = memo(function HtmlAppIsland({ html, messageScope }: {
   );
   const [result, setResult] = useState<IslandResult | undefined>(() => readIsland(storeKey).result);
   useEffect(() => { setResult(readIsland(storeKey).result); }, [storeKey]);
+
+  const onDrawnRef = useRef(onDrawn);
+  onDrawnRef.current = onDrawn;
 
   useEffect(() => {
     // The frame's window, held past unmount: a frame taken down right after a click
@@ -304,7 +387,10 @@ const HtmlAppIsland = memo(function HtmlAppIsland({ html, messageScope }: {
       if (!frame || e.source !== frame) return;
       const d = e.data as { t?: string; k?: string; h?: number } | null;
       if (d && d.t === 'wn-island-h' && d.k === frameKey && typeof d.h === 'number') {
-        setHeight(Math.min(ISLAND_MAX_H, Math.max(ISLAND_MIN_H, Math.ceil(d.h))));
+        const h = Math.min(ISLAND_MAX_H, Math.max(ISLAND_MIN_H, Math.ceil(d.h)));
+        rememberIslandHeight(storeKey, h);
+        if (mounted) setHeight(h);
+        onDrawnRef.current?.();
         return;
       }
       const items = readStateMessage(e.data, frameKey);
@@ -327,7 +413,7 @@ const HtmlAppIsland = memo(function HtmlAppIsland({ html, messageScope }: {
   }, [frameKey, storeKey]);
 
   return (
-    <div className="rich-island-wrap">
+    <div className={`rich-island-wrap${pending ? ' rich-island-pending' : ''}`}>
       <iframe
         ref={frameRef}
         className="rich-island"
