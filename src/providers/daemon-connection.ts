@@ -78,7 +78,7 @@ import { freshLinkWaitMs, hostSliceWaitMs } from './host-slice-pace.js'
 import { AwakeDownClock } from './awake-down-clock.js'
 import { FOLD_CHECKPOINT_FORMAT } from './fold-checkpoint-core.js'
 import { annotateCredentialFailure, SSH_EVIDENCE_PREFIX } from './ssh-credential-evidence.js'
-import { cancelRecordedForwards, controlSocketPath, exitControlMaster, planControlMaster, recordForward, startControlMaster } from './ssh-control-master.js'
+import { cancelRecordedForwards, controlSocketPath, exitControlMaster, masterLastWords, planControlMaster, recordForward, startControlMaster } from './ssh-control-master.js'
 import {
   clearReconnectCause, decideReconnectStep, getReconnectCause, isCredentialWaitKind, lastHostSignalAt, recordReconnectCause,
 } from './daemon-reconnect-cause.js'
@@ -2653,10 +2653,11 @@ export class DaemonConnection {
     try {
       // Bounded (remote-sh.ts runSshBounded): execFile's own timeout killed ssh but
       // then waited for the ProxyCommand child holding its stderr, 15 minutes once.
-      await startControlMaster(socketPath, sshArgs, this.sshHostString)
-      // ssh returns once -f backgrounds. ControlMaster is now running.
+      const { previousLastWords } = await startControlMaster(socketPath, sshArgs, this.sshHostString)
+      // ssh returns once -f backgrounds. ControlMaster is now running. What the one
+      // before it said last is why it ended (a relay's "Broken pipe", a keepalive timeout).
       log.session.info('DaemonConnection: SSH ControlMaster started', {
-        host: this.hostKey, socketPath,
+        host: this.hostKey, socketPath, ...(previousLastWords ? { previousMasterSaid: previousLastWords.slice(-300) } : {}),
       })
     } catch (err) {
       log.session.warn('DaemonConnection: ControlMaster failed, falling back to individual connections', {
@@ -4500,9 +4501,13 @@ export class DaemonConnection {
 
     // Monitor tunnel death for auto-reconnect
     this.tunnel.on('exit', (code) => {
+      // Through a master, the tunnel usually dies with it and says nothing: the
+      // master's own log (-E, ssh-control-master.ts) holds why.
+      const masterSaid = !tunnelStderr.trim() && this._controlPath ? masterLastWords(this._controlPath) : ''
       log.session.warn('DaemonConnection: SSH tunnel died', {
         host: this.hostKey, code, localPort, remotePort,
         ...(tunnelStderr.trim() ? { stderr: tunnelStderr.trim().slice(-300) } : {}),
+        ...(masterSaid ? { masterSaid: masterSaid.slice(-300) } : {}),
       })
       this.tunnel = null
       this.handleConnectionLost()

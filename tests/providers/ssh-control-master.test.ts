@@ -11,7 +11,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  cancelRecordedForwards, controlSocketPath, forwardsFile, MASTER_PATIENT_VERIFY_TIMEOUT_MS, MAX_SOCKET_PATH, planControlMaster,
+  cancelRecordedForwards, controlSocketPath, forwardsFile, MASTER_PATIENT_VERIFY_TIMEOUT_MS, MAX_SOCKET_PATH, masterLastWords, masterLogFile, planControlMaster,
   probeControlMaster, recordForward, removeStaleMaster, startControlMaster, type SshRunner,
 } from '../../src/providers/ssh-control-master.js'
 import type { SshRun } from '../../src/providers/remote-sh.js'
@@ -195,6 +195,38 @@ describe('starting, ending and forwards', () => {
     const { run, seen } = runner([{ ...fail, stderr: 'tester@devbox: Permission denied (publickey).' }])
     await expect(startControlMaster(sock, ['-o', 'BatchMode=yes'], 'tester@devbox', { run })).rejects.toThrow(/Permission denied \(publickey\)/)
     expect(seen[0]).toEqual(expect.arrayContaining(['-o', `ControlPath=${sock}`, '-o', 'ControlMaster=yes', '-o', 'ControlPersist=300', '-fN', 'tester@devbox']))
+  })
+
+  // 2026-10-30: one host's master was started again 33 times in a day and every
+  // tunnel death through it logged no words; once -f backgrounds it nobody reads
+  // its stderr, so it writes to a file of its own.
+  it('a master writes what ssh says to its own file, and the next start reads why the last one ended', async () => {
+    const sock = path.join(tmp(), 's')
+    fs.writeFileSync(masterLogFile(sock), 'client_loop: send disconnect: Broken pipe\n')
+    const { run, seen } = runner([ok])
+    expect(await startControlMaster(sock, [], 'h', { run })).toEqual({ previousLastWords: 'client_loop: send disconnect: Broken pipe' })
+    expect(seen[0]).toEqual(expect.arrayContaining(['-E', masterLogFile(sock)]))
+    // Cleared for the new master: its words are its own.
+    expect(fs.readFileSync(masterLogFile(sock), 'utf8')).toBe('')
+    expect(await startControlMaster(sock, [], 'h', runner([ok]))).toEqual({ previousLastWords: '' })
+  })
+
+  it('a start that fails with -E still throws ssh\'s words, read from the file', async () => {
+    const sock = path.join(tmp(), 's')
+    const run: SshRunner = async (argv) => {
+      fs.writeFileSync(argv[argv.indexOf('-E') + 1], 'tester@devbox: Permission denied (publickey).\n')
+      return { ...fail, stderr: '' }
+    }
+    await expect(startControlMaster(sock, [], 'tester@devbox', { run })).rejects.toThrow(/Permission denied \(publickey\)/)
+  })
+
+  it('last words are the last lines, bounded, without a cut first line', () => {
+    const sock = path.join(tmp(), 's')
+    expect(masterLastWords(sock)).toBe('')
+    fs.writeFileSync(masterLogFile(sock), `${'x'.repeat(5000)}\nline a\nline b\n`)
+    expect(masterLastWords(sock)).toBe('line a\nline b')
+    fs.writeFileSync(masterLogFile(sock), Array.from({ length: 20 }, (_, i) => `l${i}`).join('\n'))
+    expect(masterLastWords(sock).split('\n')).toEqual(['l14', 'l15', 'l16', 'l17', 'l18', 'l19'])
   })
 
   it('a fresh master drops a forward list left by an older one', async () => {

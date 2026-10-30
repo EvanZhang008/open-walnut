@@ -71,6 +71,36 @@ export function forwardsFile(socketPath: string): string {
   return `${socketPath}.forwards`
 }
 
+/**
+ * Where the master at `socketPath` writes what ssh says (`-E`). Once `-f` puts it in
+ * the background nobody reads its stderr, so a master that died said why to no one:
+ * on 2026-10-30 one host's master was started again 33 times and every tunnel death
+ * through it logged no words. Cleared at each start; a few lines per master.
+ */
+export function masterLogFile(socketPath: string): string {
+  return `${socketPath}.log`
+}
+
+/** The last lines the master at `socketPath` wrote, or '' (bounded read). */
+export function masterLastWords(socketPath: string, maxBytes = 2_000): string {
+  let fd: number | null = null
+  try {
+    fd = fs.openSync(masterLogFile(socketPath), 'r')
+    const size = fs.fstatSync(fd).size
+    const len = Math.min(size, maxBytes)
+    const buf = Buffer.alloc(len)
+    fs.readSync(fd, buf, 0, len, size - len)
+    const lines = buf.toString('utf8').split('\n').map((l) => l.trim()).filter(Boolean)
+    // A cut first line is a fragment: drop it when the read did not start at 0.
+    if (size > len && lines.length > 1) lines.shift()
+    return lines.slice(-6).join('\n')
+  } catch {
+    return ''
+  } finally {
+    if (fd !== null) try { fs.closeSync(fd) } catch { /* closed */ }
+  }
+}
+
 export type MasterState =
   | 'live'       // ours, and a command through it came back: multiplex through it
   | 'absent'     // nothing there: start one
@@ -185,15 +215,22 @@ export async function removeStaleMaster(socketPath: string, sshArgs: string[], h
   try { fs.unlinkSync(socketPath) } catch { /* already gone */ }
 }
 
-/** Start a master at `socketPath`. Throws with ssh's own words when it cannot. */
+/**
+ * Start a master at `socketPath`. Throws with ssh's own words when it cannot.
+ * Returns what the master before it last said (why it ended), if it said anything.
+ */
 export async function startControlMaster(
   socketPath: string,
   sshArgs: string[],
   host: string,
   opts: { run?: SshRunner } = {},
-): Promise<void> {
+): Promise<{ previousLastWords: string }> {
+  const logFile = masterLogFile(socketPath)
+  const previousLastWords = masterLastWords(socketPath)
+  try { fs.writeFileSync(logFile, '', { mode: 0o600 }) } catch { /* ssh creates it */ }
   const args = [
     ...sshArgs,
+    '-E', logFile,
     '-o', `ControlPath=${socketPath}`,
     '-o', 'ControlMaster=yes',
     '-o', `ControlPersist=${MASTER_PERSIST_SECS}`,
@@ -205,10 +242,13 @@ export async function startControlMaster(
   const res = await run(args, { timeoutMs: MASTER_START_TIMEOUT_MS })
   if (res.spawnError) throw res.spawnError
   if (res.timedOut || res.code !== 0) {
-    throw new Error(`Command failed: ssh ${args.join(' ')}\n${res.timedOut ? `timed out after ${MASTER_START_TIMEOUT_MS}ms` : res.stderr.trim() || `exit code ${res.code}`}`)
+    // With -E ssh writes its errors to the file, not stderr: read both.
+    const said = [res.stderr.trim(), masterLastWords(socketPath)].filter(Boolean).join('\n')
+    throw new Error(`Command failed: ssh ${args.join(' ')}\n${res.timedOut ? `timed out after ${MASTER_START_TIMEOUT_MS}ms` : said || `exit code ${res.code}`}`)
   }
   // A fresh master holds no forwards: a list left by an older one means nothing now.
   try { fs.unlinkSync(forwardsFile(socketPath)) } catch { /* none */ }
+  return { previousLastWords }
 }
 
 /** End the master at `socketPath` (a deliberate teardown, never a server restart). */
