@@ -135,11 +135,85 @@ describe('snapshot_lkg', () => {
     fs.mkdirSync(path.join(root, 'node_modules'))
     fs.symlinkSync(path.join(root, 'node_modules'), path.join(stage, 'plugin-source', 'node_modules'))
     fs.writeFileSync(path.join(stage, '.walnut-plugin-source'), `${path.join(stage, 'plugin-source')}\n`)
+    fs.mkdirSync(path.join(stage, 'plugin-source', '.plugin-cache'))
+    fs.writeFileSync(path.join(stage, 'plugin-source', '.plugin-cache', 'old-bundle.mjs'), '')
     const r = bash(script)
     expect(r.status, r.stderr).toBe(0)
     expect(fs.readFileSync(path.join(lkg, 'plugin-source', 'src', 'integrations', 'x.ts'), 'utf-8')).toBe('committed')
+    // Bundles are rebuilt per process; the stage's old ones are not carried.
+    expect(fs.existsSync(path.join(lkg, 'plugin-source', '.plugin-cache'))).toBe(false)
     expect(fs.lstatSync(path.join(lkg, 'plugin-source', 'node_modules')).isSymbolicLink()).toBe(true)
     expect(fs.readFileSync(path.join(lkg, '.walnut-plugin-source'), 'utf-8').trim()).toBe(path.join(lkg, 'plugin-source'))
+  })
+})
+
+describe('stage_plugin_source', () => {
+  const dirsLine = () => /^PLUGIN_SOURCE_DIRS=.*$/m.exec(script)![0]
+  // ca9bfc2bc review: the staged copy had src/ alone, so a bundle written in its
+  // .plugin-cache found no package.json above it, and a `#ws` import (package.json
+  // `imports`) failed at load time ("Cannot find package '#ws'").
+  it("stages the commit's src/ and package.json, so a bundle in its .plugin-cache resolves the package's own # imports", () => {
+    const root = tmp()
+    const repo = path.join(root, 'clone')
+    const serve = path.join(root, 'serve')
+    const stage = path.join(root, 'open-walnut-stage.1.1')
+    fs.mkdirSync(path.join(repo, 'src', 'integrations'), { recursive: true })
+    fs.mkdirSync(path.join(repo, 'packages', 'plugin-api', 'src'), { recursive: true })
+    fs.writeFileSync(path.join(repo, 'packages', 'plugin-api', 'src', 'binding.ts'), "export const binding = 'packages'\n")
+    fs.writeFileSync(path.join(repo, 'src', 'probe.ts'), "export { binding } from '../packages/plugin-api/src/binding.ts'\nexport const probe = 'committed'\n")
+    const imports = { '#probe': { bun: './src/probe.ts', default: './src/probe.ts' } }
+    fs.writeFileSync(path.join(repo, 'package.json'), JSON.stringify({ name: 'x', type: 'module', imports }))
+    fs.mkdirSync(path.join(serve, 'node_modules'), { recursive: true })
+    fs.mkdirSync(stage)
+    const r = bash([fn('clone_copy'), dirsLine(), fn('stage_plugin_source'), `REPO_ROOT='${repo}'`, `SERVE_ROOT='${serve}'`,
+      `stage_plugin_source '${stage}'`].join('\n'))
+    expect(r.status, r.stderr).toBe(0)
+    const copy = path.join(stage, 'plugin-source')
+    expect(fs.readFileSync(path.join(stage, '.walnut-plugin-source'), 'utf-8').trim()).toBe(copy)
+    expect(fs.realpathSync(path.join(copy, 'node_modules'))).toBe(fs.realpathSync(path.join(serve, 'node_modules')))
+    fs.mkdirSync(path.join(copy, '.plugin-cache'))
+    const bundle = path.join(copy, '.plugin-cache', 'p.mjs')
+    fs.writeFileSync(bundle, "import { probe, binding } from '#probe'\nconsole.log(probe, binding)\n")
+    const run = spawnSync(process.execPath, [bundle], { encoding: 'utf-8' })
+    expect(run.stderr).toBe('')
+    expect(run.stdout.trim()).toBe('committed packages')
+  })
+
+  // ca9bfc2bc's first deploy: src/lib/sqlite.ts imports ../../packages/plugin-api, which
+  // the copy lacked, so an installed plugin failed its pre-kill check. Every top-level dir
+  // a src/ file reaches by a relative import must be staged (node_modules is linked).
+  it('stages every top-level directory src/ imports from', () => {
+    const repoRoot = path.join(import.meta.dirname, '..', '..')
+    const reached = new Set<string>()
+    const walk = (d: string) => {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name)
+        if (e.isDirectory()) walk(p)
+        else if (/\.(ts|tsx|mts|js|mjs|cjs)$/.test(e.name)) {
+          for (const m of fs.readFileSync(p, 'utf-8').matchAll(/(?:from|import|require)\s*\(?\s*["'](\.\.?\/[^"']+)["']/g)) {
+            const top = path.relative(repoRoot, path.resolve(path.dirname(p), m[1])).split(path.sep)[0]
+            if (top !== 'src' && top !== 'node_modules') reached.add(top)
+          }
+        }
+      }
+    }
+    walk(path.join(repoRoot, 'src'))
+    expect(reached.size).toBeGreaterThan(0)
+    const staged = /^PLUGIN_SOURCE_DIRS="([^"]*)"$/m.exec(script)![1].split(/\s+/)
+    expect(staged).toContain('src')
+    for (const top of reached) expect(staged, `src/ imports from ${top}/`).toContain(top)
+  })
+
+  it('stages nothing when the deploy builds the serve root itself', () => {
+    const root = tmp()
+    fs.mkdirSync(path.join(root, 'src', 'integrations'), { recursive: true })
+    fs.mkdirSync(path.join(root, 'node_modules'))
+    const stage = path.join(root, 'stage')
+    fs.mkdirSync(stage)
+    const r = bash([fn('clone_copy'), dirsLine(), fn('stage_plugin_source'), `REPO_ROOT='${root}'`, `SERVE_ROOT='${root}'`,
+      `stage_plugin_source '${stage}'`].join('\n'))
+    expect(r.status, r.stderr).toBe(0)
+    expect(fs.readdirSync(stage)).toEqual([])
   })
 })
 

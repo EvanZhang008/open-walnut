@@ -761,15 +761,25 @@ stage_source_root() {
 # written files included (2026-10-30: a plugin check refused a deploy because the
 # checkout's engine-switch.ts imported a module not written yet; a restart in that
 # minute would have loaded no external plugin). A committed deploy (REPO_ROOT is
-# its clean clone, removed afterwards) stages its own src/ for them, with the serve
-# root's node_modules, and names it in .walnut-plugin-source. Best effort: without
+# its clean clone, removed afterwards) stages its own src/ for them (and the
+# packages/ src/ imports from), with its package.json (a bundle's `#ws` import and the version resolve through it) and the
+# serve root's node_modules, and names it in .walnut-plugin-source. Best effort: without
 # it plugins read the serve root as before.
+PLUGIN_SOURCE_DIRS="src packages"
 stage_plugin_source() {
   local dir="$1"
   [[ "$REPO_ROOT" != "$SERVE_ROOT" && -d "$REPO_ROOT/src/integrations" && -d "$SERVE_ROOT/node_modules" ]] || return 0
   rm -rf "$dir/plugin-source" "$dir/.walnut-plugin-source" 2>/dev/null || true
-  if mkdir -p "$dir/plugin-source" \
-    && clone_copy "$REPO_ROOT/src" "$dir/plugin-source/src" \
+  local part ok=1
+  mkdir -p "$dir/plugin-source" || ok=0
+  # Every top-level dir src/ imports from (the guard in dev-prod-lkg-stages.test.ts
+  # reads src/ and fails when a new one is not listed here).
+  for part in $PLUGIN_SOURCE_DIRS; do
+    [[ "$ok" == 1 ]] || break
+    clone_copy "$REPO_ROOT/$part" "$dir/plugin-source/$part" || ok=0
+  done
+  if [[ "$ok" == 1 ]] \
+    && cp "$REPO_ROOT/package.json" "$dir/plugin-source/package.json" \
     && ln -s "$SERVE_ROOT/node_modules" "$dir/plugin-source/node_modules" \
     && printf '%s\n' "$dir/plugin-source" > "$dir/.walnut-plugin-source"; then
     return 0
@@ -783,6 +793,7 @@ stage_plugin_source() {
 carry_plugin_source() {
   [[ -d "$1/plugin-source/src" ]] || return 0
   if clone_copy "$1/plugin-source" "$2/plugin-source" \
+    && rm -rf "$2/plugin-source/.plugin-cache" \
     && printf '%s\n' "${3:-$2}/plugin-source" > "$2/.walnut-plugin-source"; then
     return 0
   fi
