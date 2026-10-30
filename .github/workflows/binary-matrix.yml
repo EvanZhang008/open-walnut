@@ -170,7 +170,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: macos-14, file: walnut-darwin-arm64 }
+          # The oldest macOS a hosted runner still has (macos-14 was retired 2026-11-02).
+          - { runner: macos-15, file: walnut-darwin-arm64 }
           - { runner: macos-26, file: walnut-darwin-arm64 }
           - { runner: macos-26-intel, file: walnut-darwin-x64 }
     steps:

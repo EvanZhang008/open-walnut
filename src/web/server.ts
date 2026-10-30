@@ -6379,11 +6379,11 @@ function startPluginSyncPolling(): void {
 export async function stopServer(): Promise<void> {
   // At the entry, before any await: no boot owns the lane any more, and it stops now.
   localDaemonLaneOwner++
+  localDaemonLane?.stop()
+  localDaemonLane = null
   // A boot stopped before it listened leaves its port held.
   void serverPortHold?.release()
   serverPortHold = null
-  localDaemonLane?.stop()
-  localDaemonLane = null
   // Tell the companion this is a restart, not the Mac going away, so a deploy
   // never hands it the lead. Bounded: never holds the shutdown up.
   leaderLoopHandle?.stop()

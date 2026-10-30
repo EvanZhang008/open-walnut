@@ -111,8 +111,8 @@ describe('runner images', () => {
         const key = /^\$\{\{ matrix\.(os|runner) \}\}$/.exec(job['runs-on'])?.[1]
         const labels = key ? (matrix![key] ?? matrix!.include!.map((x) => x[key]!)) : [job['runs-on']]
         expect(labels.length, `${file} ${name}`).toBeGreaterThan(0)
-        // macos-14: the binary matrix runs the file on the oldest macOS a runner still has.
-        for (const label of labels) expect(label, `${file} ${name}`).toMatch(/^(ubuntu-24\.04(-arm)?|macos-(14|26)(-intel)?)$/)
+        // macos-15: the binary matrix runs the file on the oldest macOS a runner still has.
+        for (const label of labels) expect(label, `${file} ${name}`).toMatch(/^(ubuntu-24\.04(-arm)?|macos-(15|26)(-intel)?)$/)
       }
     }
   })
