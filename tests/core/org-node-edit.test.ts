@@ -190,7 +190,8 @@ describe('the user\'s own instructions for the CEO or a VP', () => {
     expect(notice).toContain(`[${version}] Ask me before you buy seeds.`);
 
     // The session respawned on that set (one session per task), then an edit that keeps one line:
-    // it hears the whole new set, so the line it kept is not read as dropped.
+    // it hears only the new line and the removed one (2026-10-30: re-sending the whole set on every
+    // edit cost every session its whole block), and is told the kept line stays in force.
     const told = sid;
     await updateSessionRecord(told, { appliedAppendSystemPrompt: (await buildSessionContext(lead.id)).systemPrompt, taskRoutingNoted: undefined });
     expect(await instructionNoticeForSession(told)).toBeNull();
@@ -201,9 +202,12 @@ describe('the user\'s own instructions for the CEO or a VP', () => {
     const next = /instructions for your role \((v[0-9a-f]{8}),/.exec(defaultInstructions(edited))?.[1];
     expect(next).not.toBe(version);
     const retold = (await instructionNoticeForSession(told))?.text ?? '';
-    expect(retold).toContain(`[${next}] Water before nine.`);
     expect(retold).toContain(`[${next}] Ship on Fridays only.`);
-    expect(retold).toContain('They replace every earlier version');
+    expect(retold).not.toContain('Water before nine.');
+    expect(retold).toContain(`Only what changed since the version you were given last (${version})`);
+    expect(retold).toContain('stays in force unless it is listed as removed');
+    expect(retold).toMatch(/Removed, no longer in force:\n- Ask me before you buy seeds\./);
+    expect(retold).not.toContain('They replace every earlier version');
 
     // The same words again write nothing; a cleared set says so, and null clears too: a stored
     // prompt may still hold the old words, and only a newer version tells it to drop them.

@@ -291,9 +291,10 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     const reap = vi.fn()
     const fifo = vi.fn(async (_sid: string, _session: unknown, _buf: Buffer) => outcome)
     const { lineWrittenPart } = await import('../../src/providers/line-fate-core.js')
-    const run = new Function('sessions', 'process', 'normalizeMarkers', 'reapSession', 'chainFifoWrite', 'Buffer', 'lineWrittenPart', 'logMsg',
+    const { createNoticeOnce } = await import('../../src/providers/daemon-core.js')
+    const run = new Function('sessions', 'process', 'normalizeMarkers', 'reapSession', 'chainFifoWrite', 'Buffer', 'lineWrittenPart', 'logMsg', 'noticeOnce',
       source.slice(start, end) + '\nreturn handleSendCommand')(
-      new Map([['sid', session]]), { kill: vi.fn() }, () => ({ list: [] }), reap, fifo, Buffer, lineWrittenPart, vi.fn(),
+      new Map([['sid', session]]), { kill: vi.fn() }, () => ({ list: [] }), reap, fifo, Buffer, lineWrittenPart, vi.fn(), createNoticeOnce(),
     )
     const result = await run('sid', 'message', 'user-uuid')
     expect(result.ok).toBe(outcome === 'ok')
@@ -305,6 +306,28 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     expect(session.ttftSendTs !== null).toBe(outcome === 'ok')
     expect(JSON.parse(fifo.mock.calls[0][2].toString())).toMatchObject({ uuid: 'user-uuid', message: { content: 'message' } })
     expect(templateSrc).toContain('const sent = await handleSendCommand(sid, message, initialUuid, undefined, { bootWait: cmd.bootWait === true })')
+  })
+
+  it('the source twin leaves a notice out of a host delivery the server path just wrote, as the core does', async () => {
+    const source = (await import('../../src/providers/daemon-source.js')).getDaemonSource()
+    const start = source.indexOf('async function handleSendCommand(')
+    const end = source.indexOf('\n}', start) + 2
+    const session = { pid: 4242, state: 'running', exitCode: null, ttftSendTs: null as number | null }
+    const fifo = vi.fn(async (_sid: string, _session: unknown, _buf: Buffer) => 'ok')
+    const { lineWrittenPart } = await import('../../src/providers/line-fate-core.js')
+    const { createNoticeOnce } = await import('../../src/providers/daemon-core.js')
+    const run = new Function('sessions', 'process', 'normalizeMarkers', 'reapSession', 'chainFifoWrite', 'Buffer', 'lineWrittenPart', 'logMsg', 'noticeOnce',
+      source.slice(start, end) + '\nreturn handleSendCommand')(
+      new Map([['sid', session]]), { kill: vi.fn() }, () => ({ list: [] }), vi.fn(), fifo, Buffer, lineWrittenPart, vi.fn(), createNoticeOnce(),
+    )
+    const notice = '<walnut-message kind="notification" from="Walnut" outcome="task-routing-policy" note="x">\nRule.\n</walnut-message>'
+    expect(await run('sid', `${notice}\n\nServer`)).toEqual({ ok: true })
+    expect(await run('sid', `${notice}\n\nServer again`)).toEqual({ ok: true })
+    expect(await run('sid', `${notice}\n\nHost`, undefined, undefined, { fromHost: true })).toEqual({ ok: true, noticeLeftOut: true })
+    expect(fifo.mock.calls.map((c) => JSON.parse(c[2].toString()).message.content)).toEqual([`${notice}\n\nServer`, `${notice}\n\nServer again`, 'Host'])
+    // The host's own deliveries say they are the host's.
+    expect(templateSrc).toContain("[{ message: text, messageId: messageId }], { fromHost: true })")
+    expect(readFile(path.join(ROOT, 'src/providers/daemon-standalone.ts'))).toContain('[{ message: text, messageId }], { fromHost: true })')
   })
 
   it('both send paths put ordered markers behind the FIFO newline barrier', () => {

@@ -11,10 +11,12 @@
  * The block rides the default instructions (session-context.ts), so a running
  * session hears a change through the instruction notice like any rule. Every line
  * carries a version of the words and of when they were saved, as the org
- * instructions do (orgInstructionsLine): any save makes the whole block new, so the
- * session reads the whole current set, a rule the user removed never reads as still
- * in force, and going back to an earlier text is a new version too. A file emptied
- * of its rules says so in one versioned line.
+ * instructions do (orgInstructionsLine), which marks the lines as one versioned
+ * block: the notice compares a new version with the one the session holds by its
+ * words (instruction-diff.ts) and tells only the new or reworded lines and the
+ * removed ones, so a rule the user removed never reads as still in force and a
+ * one-line save costs one line (2026-10-30: it had re-sent the whole 4.9 KB block to
+ * about 25 sessions). A file emptied of its rules says so in one line.
  *
  * The prompt builders are sync (defaultInstructions, the host slice), so the text
  * is read here and kept: every async path calls refreshUserProfile first (a stat,

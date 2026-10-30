@@ -3638,8 +3638,9 @@ const offlineHost = createOfflineHostCore({
   // The same gate and turn-retry reset a server send goes through (cmdSend).
   deliver: (sid, text, messageId) => sessionStartGate.run(sid, async () => {
     cancelTurnRetry(sid, 'superseded-by-send')
-    const r = await core.handleSendCommand(sid, text, undefined, [{ message: text, messageId }])
-    return 'ok' in r && r.ok ? { ok: true as const } : { ok: false as const, reason: 'reason' in r ? String(r.reason) : String((r as { error?: string }).error) }
+    const r = await core.handleSendCommand(sid, text, undefined, [{ message: text, messageId }], { fromHost: true })
+    if ('ok' in r && r.ok) return r.noticeLeftOut ? { ok: true as const, noticeLeftOut: true as const } : { ok: true as const }
+    return { ok: false as const, reason: 'reason' in r ? String(r.reason) : String((r as { error?: string }).error) }
   }),
   // A stopped session started again for a trigger fire (trigger-host-resume-v1).
   resume: (home, sid, text, messageId, taskId) => resumeForTrigger(home, sid, text, messageId, taskId),

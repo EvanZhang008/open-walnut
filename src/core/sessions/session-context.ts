@@ -379,11 +379,12 @@ export type InstructionTask = {
  * action can be done by agent also") never replace it: they follow the default, rank below
  * Walnut's rules, the charter and the user, and the line names who wrote them. So no agent, Main
  * included, can write its way out of the default.
- * The instruction notice tells a running session only the prompt lines it lacks, so every line
- * carries a version (a hash of the words, when they were set, and the default): any change makes
- * every line new, and the session reads the whole new set, never a removed line as still in force,
- * nor a kept one as dropped. A change to the default reaches a running session the same way. The
- * tag also keeps a user's "# heading" from reading as a prompt heading.
+ * Every line carries a version (a hash of the words, when they were set, and the default), which
+ * makes them one versioned block: the instruction notice tells a running session only the lines
+ * that are new or reworded since the version it holds, and the removed ones (instruction-diff.ts),
+ * so it never reads a removed line as still in force, nor a kept one as dropped. A change to the
+ * default reaches a running session the same way. The tag also keeps a user's "# heading" from
+ * reading as a prompt heading.
  */
 function orgInstructionsLine(task: InstructionTask): string {
   if (task.org_role !== 'main' && task.org_role !== 'lead') return ''

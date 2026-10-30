@@ -16,6 +16,7 @@ import { sendMessageToSession, getQueue, enqueueMessage, resetCache, editMessage
   markProcessing, markNextProcessing, revertToPending, removeProcessed, removeTaken } from '../../src/core/session-message-queue.js';
 import { collectOpenItems } from '../../src/core/sessions/open-items.js';
 import { notePlaceCompaction } from '../../src/core/sessions/place-notice.js';
+import { editOrgNode } from '../../src/core/org/org-node-edit.js';
 
 beforeEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
@@ -89,23 +90,92 @@ describe('changed default instructions for a session spawned before them', () =>
     expect(copies((await deliver(sid, 'On another prompt', markNextProcessing))[0].message)).toBe(1);
     expect(copies((await deliver(sid, 'Then quiet', markNextProcessing))[0].message)).toBe(0);
   });
-  it('a frozen line that never reaches the CLI is not told; the claim lapses to a later line', async () => {
+  it('a frozen line that never reaches the CLI is not told; the next live line carries the notice', async () => {
     const { sid } = await seed('main');
     await sendMessageToSession(sid, 'Stopped before it was read');
     const frozen = await markProcessing(sid);
     expect(copies(frozen[0].message)).toBe(1);
     // A second freeze while that line is in flight does not carry it again.
     const racing = (await instructionNoticeForSession(sid))!;
-    expect(racing.apply('Mid-turn input')).toBe('Mid-turn input');
+    expect(racing.apply('Mid-turn input', await getQueue(sid))).toBe('Mid-turn input');
     // The user stops the session: the line is parked, never delivered.
     expect(await parkMessages(frozen, 'user-stop')).toBe(1);
     expect((await getSessionByClaudeId(sid))?.taskRoutingNoted).toBeUndefined();
-    const later = Date.now() + 61_000;
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(later);
+    expect(copies((await deliver(sid, 'Next input'))[0].message)).toBe(1);
+    expect((await getSessionByClaudeId(sid))?.taskRoutingNoted?.version).toBeTruthy();
+  });
+  it('a line waiting minutes for a dead CLI keeps the next batch from a second copy (2026-10-30)', async () => {
+    // Main's 07:36Z double: its first line carried the notice, waited nine minutes for a resume, and the
+    // batch frozen meanwhile got the notice again because "already attached" was a 60 s claim.
+    const { sid } = await seed('main');
+    await sendMessageToSession(sid, 'First, waits for a resume');
+    const [first] = await markProcessing(sid);
+    expect(copies(first.message)).toBe(1);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 9 * 60_000);
     try {
-      expect(copies((await deliver(sid, 'Next input'))[0].message)).toBe(1);
-      expect((await getSessionByClaudeId(sid))?.taskRoutingNoted?.version).toBeTruthy();
+      for (const t of ['Two', 'Three', 'Four', 'Five']) await sendMessageToSession(sid, t);
+      const batch = await markProcessing(sid);
+      expect(batch).toHaveLength(4);
+      expect(batch.map((r) => r.message).join('\n')).not.toContain(RELAY);
+      // The resume delivers the first line, then the batch goes to the new CLI.
+      await removeProcessed(sid, [first.id]);
+      await removeProcessed(sid, batch.map((r) => r.id));
+      expect(copies((await deliver(sid, 'Later'))[0].message)).toBe(0);
     } finally { clock.mockRestore(); }
+  });
+  it('a line frozen while a delivered notice is still being recorded gets none', async () => {
+    const { sid } = await seed('lead');
+    await sendMessageToSession(sid, 'Carries it');
+    const [row] = await markProcessing(sid);
+    expect(copies(row.message)).toBe(1);
+    await sendMessageToSession(sid, 'Frozen in between');
+    // Delivery and the next freeze race: the told record is written after the next freeze looks.
+    const [, next] = await Promise.all([removeProcessed(sid, [row.id]), markProcessing(sid)]);
+    expect(copies(next[0].message)).toBe(0);
+  });
+  it('a line still waiting through a compaction is not told again after the hook restated it', async () => {
+    const { sid } = await seed('main');
+    await sendMessageToSession(sid, 'Waits through a compaction');
+    const [row] = await markProcessing(sid);
+    expect(copies(row.message)).toBe(1);
+    // The session compacts before the line is taken: the hook restates, the server reads the boundary.
+    expect(copies((await collectOpenItems(sid, Date.now(), { afterCompaction: true })).text)).toBe(1);
+    await notePlaceCompaction(sid, 'c2');
+    // The line written back as told must land on the new boundary, not the one it was attached on.
+    await removeProcessed(sid, [row.id]);
+    expect((await getSessionByClaudeId(sid))?.taskRoutingNoted?.compactUuid).toBe('c2');
+    expect(copies((await deliver(sid, 'After'))[0].message)).toBe(0);
+  });
+  it('a delivery on another prompt records nothing', async () => {
+    const { sid, task } = await seed('main');
+    await sendMessageToSession(sid, 'Attached on the old prompt');
+    const [row] = await markProcessing(sid);
+    expect(copies(row.message)).toBe(1);
+    // A fresh spawn on the current prompt before the old line was recorded.
+    await updateSessionRecord(sid, { appliedAppendSystemPrompt: (await buildSessionContext(task.id)).systemPrompt });
+    await removeProcessed(sid, [row.id]);
+    expect((await getSessionByClaudeId(sid))?.taskRoutingNoted).toBeUndefined();
+  });
+  it('sessions given the same notice are each recorded as it was attached, after the instructions changed again', async () => {
+    // One USER.md save gives every session the same text; a notice kept by its text alone was
+    // kept for the last session only, and the rest were checked against the instructions again.
+    const a = await seed('lead');
+    const b = await seed('lead');
+    await sendMessageToSession(a.sid, 'A');
+    await sendMessageToSession(b.sid, 'B');
+    const [ra] = await markProcessing(a.sid);
+    const [rb] = await markProcessing(b.sid);
+    expect(stripInstructionNotice(ra.message)).toBe('A');
+    expect(ra.message.slice(0, ra.message.indexOf('</walnut-message>'))).toBe(rb.message.slice(0, rb.message.indexOf('</walnut-message>')));
+    // Both leads' instructions change while the lines wait (a dead CLI, a resume).
+    for (const t of [a.task, b.task]) await editOrgNode(t.id, { instructions: 'Ship on Fridays only.' });
+    await removeProcessed(a.sid, [ra.id]);
+    await removeProcessed(b.sid, [rb.id]);
+    for (const { sid } of [a, b]) {
+      const next = (await deliver(sid, 'Next'))[0].message;
+      expect(copies(next)).toBe(0);
+      expect(next).toContain('Ship on Fridays only.');
+    }
   });
   it('a line the CLI reports taking counts as told; a cancelled one does not', async () => {
     // The live path: rows leave through removeTaken when Claude Code names the line.

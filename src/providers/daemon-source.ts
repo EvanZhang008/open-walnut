@@ -61,7 +61,7 @@ import { createHostServerSupervisor } from './host-server-core.js'
 import { createStreamRelay } from './stream-relay-core.js'
 import { createHostResume } from './host-resume-core.js'
 import { createCliOwner } from './cli-owner-core.js'
-import { argvNamesSession, boundedExecFile } from './daemon-core.js'
+import { argvNamesSession, boundedExecFile, createNoticeOnce } from './daemon-core.js'
 import { createStreamCompact } from './stream-compact-core.js'
 import { createStreamFold } from './stream-fold-core.js'
 import { createHostStart } from './host-start-core.js'
@@ -309,6 +309,7 @@ export function getDaemonSource(): string {
     ['__CREATE_REPLICA_LOGS__', createReplicaLogs.toString()],
     ['__BOUNDED_EXEC_FILE__', boundedExecFile.toString()],
     ['__ARGV_NAMES_SESSION__', argvNamesSession.toString()],
+    ['__CREATE_NOTICE_ONCE__', createNoticeOnce.toString()],
   ]
   // The tracker is constructed before the cron sidecar loads, so its prompt
   // limit is stamped as a literal (like the version), not read from the sidecar.
@@ -4667,9 +4668,9 @@ var offlineHost = (__CREATE_OFFLINE_HOST__)({
   deliver: function (sid, text, messageId) {
     return sessionStartGate.run(sid, async function () {
       cancelTurnRetry(sid, 'superseded-by-send');
-      var r = await handleSendCommand(sid, text, undefined, [{ message: text, messageId: messageId }]);
+      var r = await handleSendCommand(sid, text, undefined, [{ message: text, messageId: messageId }], { fromHost: true });
       if (!r || r.ok !== true) return { ok: false, reason: String((r && (r.reason || r.error)) || 'send failed') };
-      return { ok: true };
+      return r.noticeLeftOut ? { ok: true, noticeLeftOut: true } : { ok: true };
     });
   },
   // A stopped session started again for a trigger fire (trigger-host-resume-v1).
@@ -9231,8 +9232,10 @@ async function sendSessionMessage(ws, id, cmd) {
   return sendOk(ws, id, result);
 }
 
-async function handleSendCommand(sid, message, uuid, inputMarkers, opts) {
-  if (!sid || !message) return { error: 'send: missing sid or message' };
+// One instruction notice into one CLI process once (daemon-core.ts createNoticeOnce, injected as text).
+const noticeOnce = (__CREATE_NOTICE_ONCE__)();
+async function handleSendCommand(sid, rawMessage, uuid, inputMarkers, opts) {
+  if (!sid || !rawMessage) return { error: 'send: missing sid or message' };
   const markers = normalizeMarkers(inputMarkers);
   if (markers.error) return { error: markers.error };
   const dedupe = !!(opts && opts.dedupe === true) && markers.list.length > 0;
@@ -9246,6 +9249,11 @@ async function handleSendCommand(sid, message, uuid, inputMarkers, opts) {
       return { ok: false, reason: 'session_dead', exitCode: session.exitCode };
     }
   }
+  const fromHost = !!(opts && opts.fromHost === true);
+  const once = noticeOnce.once(sid, session.pid, rawMessage, markers.list, { resend: !!(opts && opts.dedupe === true), fromHost: fromHost }, Date.now());
+  const message = once.message;
+  markers.list = once.markers;
+  if (once.stripped) logMsg('info', 'send: left out an instruction notice this process was just given', { sid: sid, pid: session.pid || null, messageIds: markers.list.map(function (m) { return m.messageId; }) });
   const envelope = { type: 'user', message: { role: 'user', content: message } };
   if (typeof uuid === 'string' && uuid) envelope.uuid = uuid;
   // How far the write got, for a failure's answer (twin of daemon-core.ts).
@@ -9282,6 +9290,9 @@ async function handleSendCommand(sid, message, uuid, inputMarkers, opts) {
       return out;
     }
     if (result === 'ok') {
+      if (once.given) noticeOnce.given(sid, session.pid, once.given, fromHost, Date.now());
+      // Only the host's own delivery is told: it then leaves the notice unrecorded.
+      const leftOut = once.stripped && fromHost;
       if (rewrite) logMsg('warn', 'send: wrote a line again that the CLI read past without taking', { sid: sid, pid: session.pid, messageIds: ids });
       if (deadlineAt !== undefined && typeof session.spawnTs === 'number') {
         logMsg('info', 'send: a booting CLI took the line', { sid: sid, pid: session.pid, bytes: buf.length, spawnToWrittenMs: Date.now() - session.spawnTs });
@@ -9292,9 +9303,10 @@ async function handleSendCommand(sid, message, uuid, inputMarkers, opts) {
       // exit on what it left without running the line (daemon-core.ts, lineWriteCut).
       if (torn.cut) {
         logMsg('warn', 'send: an earlier write of this line into this process died inside it; the CLI may exit on what it left', { sid: sid, pid: session.pid, messageIds: ids });
+        if (leftOut) return { ok: true, cut: true, noticeLeftOut: true };
         return { ok: true, cut: true };
       }
-      return { ok: true };
+      return leftOut ? { ok: true, noticeLeftOut: true } : { ok: true };
     }
     if (result === 'dead') return { ok: false, reason: 'session_dead', exitCode: session.exitCode };
     if (result === 'ENXIO') {

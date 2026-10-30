@@ -19,14 +19,14 @@ function fixture(dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-routing-hos
   dirs.push(dir);
   const writes: { sid: string; text: string; messageId: string; resumed?: boolean }[] = [];
   const live = new Set([mainSid, workerSid]);
-  const state = { fail: false };
+  const state = { fail: false, leftOut: false };
   const host = createOfflineHost({ fs, path, dir, now: () => Date.now(),
     randomHex: (n) => randomBytes(n).toString('hex'), keyOf: (value) => createHash('sha1').update(value).digest('hex'),
     kit: createEnvelopeKit(), openItems: createOpenItemsText(), log: () => {},
     isLive: (sid) => live.has(sid), turnActive: () => false, pendingPrompt: () => null, streamOffset: () => undefined,
     deliver: async (sid, text, messageId) => {
       if (state.fail) return { ok: false, reason: 'offline' };
-      writes.push({ sid, text, messageId }); return { ok: true };
+      writes.push({ sid, text, messageId }); return state.leftOut ? { ok: true, noticeLeftOut: true } : { ok: true };
     },
     resume: async (_home, sid, text, messageId) => { writes.push({ sid, text, messageId, resumed: true }); return { ok: true }; },
   });
@@ -58,6 +58,19 @@ describe('host-local routing policy from the receiving host slice', () => {
     const told = f.host.drain(home).records.filter((r) => r.kind === 'delivery' && (r as { routingTold?: string }).routingTold);
     expect(told).toHaveLength(1);
     expect(told[0]).toMatchObject({ toSessionId: mainSid, routingTold: 'due-one' });
+  });
+
+  it('a notice the daemon left out (the server just gave it) is not journaled as told by this host', async () => {
+    // daemon-core.ts createNoticeOnce: the server's path told it; recording it here too would
+    // mark it told even if the server's line never ran.
+    const f = fixture();
+    f.state.leftOut = true;
+    await f.host.deliverHuman(home, mainSid, 'first', 'qm-left-1');
+    expect(f.host.drain(home).records.filter((r) => (r as { routingTold?: string }).routingTold)).toEqual([]);
+    // Not told by this host, so its next delivery offers it again (the daemon decides once more).
+    f.state.leftOut = false;
+    await f.host.deliverHuman(home, mainSid, 'second', 'qm-left-2');
+    expect(f.writes.map((w) => w.text.startsWith(policy))).toEqual([true, true]);
   });
 
   it('a new due key (after a compaction or a new prompt) carries it once more', async () => {

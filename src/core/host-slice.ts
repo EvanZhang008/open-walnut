@@ -20,6 +20,7 @@ import type { SessionRecord, Task } from './types.js';
 import { isInfraSessionError } from './session-error-kind.js';
 import { engineCaps } from './agents/engine-registry.js';
 import { instructionNoticeForHost } from './sessions/instruction-notice.js';
+import { noticeDelivering, noticeInFlight } from './sessions/instruction-notice-flight.js';
 import { hostReplyTail } from './hints/hint-send.js';
 
 /** Newest sessions kept per host; the daemon intersects with what it runs. */
@@ -162,6 +163,9 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
   ]);
 
   const allSessions = await listSessions();
+  // A notice the server already has on its way into a session: the host must not add a second.
+  const { getStore } = await import('./session-queue-store.js');
+  const queues = (await getStore()).queues;
   const records = allSessions
     .filter((s) => inHostCopy(s, now) && normalizeHostKey(s.host) === key)
     .sort((a, b) => (b.lastActiveAt || '').localeCompare(a.lastActiveAt || ''))
@@ -256,7 +260,9 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
       ...(() => {
         const task = s.taskId ? own.get(s.taskId) : undefined;
         // Only while due: the host adds it once and journals it as told.
-        const routing = task ? instructionNoticeForHost(s, task) : null;
+        const sid = s.claudeSessionId;
+        const busy = noticeDelivering(sid) || noticeInFlight(queues[sid] ?? []);
+        const routing = task && !busy ? instructionNoticeForHost(s, task) : null;
         return routing ? { taskRoutingPolicy: routing.policy, taskRoutingDue: routing.due } : {};
       })(),
       ...(() => {

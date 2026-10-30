@@ -2858,7 +2858,11 @@ export interface SessionRecord {
    * the task routing rules, the first change it carried; a record from then has no
    * `lines` and is told again once.
    */
-  taskRoutingNoted?: { version: string; promptHash: string; compactUuid?: string; byHookAt?: string; lines?: string[] };
+  taskRoutingNoted?: {
+    version: string; promptHash: string; compactUuid?: string; byHookAt?: string; lines?: string[];
+    /** The version of each versioned block (the user's profile, core instructions) the session holds, by block id (instruction-diff.ts). */
+    blocks?: Record<string, { version: string; words: string[]; form?: string }>;
+  };
   /**
    * The uuid of the last compaction boundary Walnut saw in this session's
    * stream. A place note given before it may be gone from the context, so it

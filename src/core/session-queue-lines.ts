@@ -9,6 +9,7 @@
 import { log } from '../logging/index.js';
 import { fateOf, isPhoneMessageId, noteDelivered, setFate } from './relay-fates.js';
 import { getStore, mutateStore, type QueuedMessage, type QueueStore } from './session-queue-store.js';
+import { leadsWithNotice, markNoticeDelivering } from './sessions/instruction-notice-flight.js';
 
 /**
  * Remove rows the CLI itself reported taking (or a Stop cancelling), whatever
@@ -32,6 +33,8 @@ export async function removeTaken(sessionId: string, ids: string[], opts?: { ran
       else if (fateOf(s, m.id) || isPhoneMessageId(m.id)) setFate(s, m.id, 'removed');
     }
     if (ran) noteDelivered(s, gone);
+    // Inside the lock: no other line gets a notice until this one is recorded as told.
+    if (ran && gone.some((m) => leadsWithNotice(m.message))) markNoticeDelivering(sessionId);
     if (s.queues[sessionId].length === 0) delete s.queues[sessionId];
     if (gone.length === 0) return false;
     return ran ? gone.map((m) => m.message) : [];
@@ -39,7 +42,7 @@ export async function removeTaken(sessionId: string, ids: string[], opts?: { ran
   if (found === false) return;
   log.session.debug('taken messages removed from queue', { sessionId, count: ids.length });
   // The CLI took a line led by the instruction notice: the session has now been told its lines.
-  if (found.some((m) => m.includes('outcome="task-routing-policy"'))) {
+  if (found.some(leadsWithNotice)) {
     const { noteInstructionNoticeDelivered } = await import('./sessions/instruction-notice.js');
     await noteInstructionNoticeDelivered(sessionId, found);
   }

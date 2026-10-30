@@ -298,7 +298,8 @@ export type SendResult =
   // cut: an earlier write of this line into this process died inside it (lineWriteCut):
   // the line is written, but the CLI may exit on what that write left without running it.
   // writtenAt / quiet: a waiting line's write time, and that the CLI printed nothing since (line-fate-core.ts).
-  | { ok: true; duplicate?: true; fate?: LineFateKind; state?: string; writtenAt?: number; quiet?: true; cut?: true }
+  // noticeLeftOut: a host delivery's line went without its instruction notice (createNoticeOnce).
+  | { ok: true; duplicate?: true; fate?: LineFateKind; state?: string; writtenAt?: number; quiet?: true; cut?: true; noticeLeftOut?: true }
   | { ok: false; reason: 'not_found' }
   | { ok: false; reason: 'budget_paused' | 'budget_checking' }
   // written (on a user line's failed write): how much of it went into the pipe
@@ -355,7 +356,7 @@ export interface DaemonCore<S extends CoreSessionData = CoreSessionData> {
     message: string | undefined,
     uuid?: string,
     markers?: UserMarkerInput[],
-    opts?: { dedupe?: boolean; lostPid?: number | null },
+    opts?: { dedupe?: boolean; lostPid?: number | null; bootWait?: boolean; fromHost?: boolean },
   ) => Promise<SendResult>
   /**
    * Same as handleSendCommand but writes `raw` to the FIFO verbatim without
@@ -382,6 +383,69 @@ export interface DaemonCore<S extends CoreSessionData = CoreSessionData> {
   ) => { ok: true; size: number } | { ok: false; reason: 'not_found' } | { error: string }
 }
 
+/**
+ * The Walnut instruction notice (core/sessions/instruction-notice.ts) reaches a session by two
+ * paths: the server's queue and this host's own same-host delivery (offline-host-core.ts
+ * withTaskRouting). Each learns of the other's delivery only later (the host slice is pushed
+ * after a debounce, the host's journal is drained after a moment), so both could lead a line with
+ * the same notice (2026-10-30: Main got one twice, 4 s apart). Both write here, so a line of one
+ * path goes without a notice the OTHER path wrote into the same CLI process in the last 2 minutes.
+ * Only across paths: each path records what it told by itself (the server when the CLI takes the
+ * line, the host when it journals its delivery), so a notice its own path has to say again (a
+ * line the CLI never ran, a compaction since) is said again. A resend (`dedupe`) keeps it, and a
+ * host line that went without one tells the host so (`noticeLeftOut`), so it does not record it.
+ * The opening is instruction-notice-flight.ts NOTICE_OPENING (tests/providers/daemon-notice-once.test.ts).
+ * Self-contained: the source twin inlines it by toString() (daemon-source.ts).
+ */
+export function createNoticeOnce() {
+  const OPENING = '<walnut-message kind="notification" from="Walnut" outcome="task-routing-policy"'
+  const CLOSE = '</walnut-message>'
+  const WINDOW_MS = 2 * 60_000
+  const KEEP = 4
+  type Marker = { message: string; messageId: string }
+  type Given = Map<string, number>
+  const book = new Map<string, { pid: number | null | undefined; server: Given; host: Given }>()
+  const split = (text: string): { notice: string; rest: string } | null => {
+    const t = text.trimStart()
+    if (!t.startsWith(OPENING)) return null
+    const end = t.indexOf(CLOSE)
+    if (end < 0) return null
+    const notice = t.slice(0, end + CLOSE.length)
+    return { notice, rest: t.slice(notice.length).trimStart() }
+  }
+  return {
+    /**
+     * `message` and its markers as process `pid` should get them from this path (`fromHost`):
+     * without a leading notice the other path gave it lately. `given` is what to record once the
+     * write succeeded.
+     */
+    once(sid: string, pid: number | null | undefined, message: string, markers: Marker[], opts: { resend?: boolean; fromHost?: boolean }, now: number): { message: string; markers: Marker[]; stripped: boolean; given?: string } {
+      const lead = split(message)
+      if (!lead) return { message, markers, stripped: false }
+      const entry = book.get(sid)
+      const other = entry && pid != null && entry.pid === pid ? (opts.fromHost ? entry.server : entry.host) : undefined
+      const at = other?.get(lead.notice)
+      if (opts.resend || at === undefined || now - at >= WINDOW_MS || !lead.rest) return { message, markers, stripped: false, given: lead.notice }
+      const strip = (m: string) => {
+        const l = split(m)
+        return l && l.notice === lead.notice && l.rest ? l.rest : m
+      }
+      return { message: lead.rest, markers: markers.map((m) => ({ message: strip(m.message), messageId: m.messageId })), stripped: true }
+    },
+    /** Remember that this path (`fromHost`) gave `pid` the notice now. */
+    given(sid: string, pid: number | null | undefined, notice: string, fromHost: boolean, now: number): void {
+      if (pid == null) return
+      let entry = book.get(sid)
+      if (!entry || entry.pid !== pid) { entry = { pid, server: new Map(), host: new Map() }; book.set(sid, entry) }
+      const side = fromHost ? entry.host : entry.server
+      side.delete(notice)
+      side.set(notice, now)
+      while (side.size > KEEP) side.delete(side.keys().next().value as string)
+      if (book.size > 2_000) book.delete(book.keys().next().value as string)
+    },
+  }
+}
+
 export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
   deps: DaemonCoreDeps<S>,
 ): DaemonCore<S> {
@@ -401,6 +465,8 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     pushSnapshotFn,
     drainFoldFn,
   } = deps
+  // Instruction notices each session's CLI process was given (createNoticeOnce).
+  const noticeOnce = createNoticeOnce()
   const setIntervalFn = deps.setIntervalFn ?? setInterval
   const clearIntervalFn = deps.clearIntervalFn ?? clearInterval
   const setTimeoutFn = deps.setTimeoutFn ?? setTimeout
@@ -923,16 +989,15 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
    */
   async function handleSendCommand(
     sid: string | undefined,
-    message: string | undefined,
+    rawMessage: string | undefined,
     uuid?: string,
     markers?: UserMarkerInput[],
-    opts?: { dedupe?: boolean; lostPid?: number | null; bootWait?: boolean },
+    opts?: { dedupe?: boolean; lostPid?: number | null; bootWait?: boolean; fromHost?: boolean },
   ): Promise<SendResult> {
-    if (!sid || !message) return { error: 'send: missing sid or message' }
+    if (!sid || !rawMessage) return { error: 'send: missing sid or message' }
     const normalized = normalizeMarkers(markers)
     if ('error' in normalized) return { error: normalized.error }
-    const pending = normalized.markers
-    const dedupe = opts?.dedupe === true && pending.length > 0
+    const dedupe = opts?.dedupe === true && normalized.markers.length > 0
     const lostPid = dedupe && typeof opts?.lostPid === 'number' ? opts.lostPid : null
 
     const session = sessions.get(sid)
@@ -952,6 +1017,12 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
         return { ok: false, reason: 'session_dead', exitCode: session.exitCode }
       }
     }
+
+    // The instruction notice once per process (createNoticeOnce).
+    const once = noticeOnce.once(sid, session.pid, rawMessage, normalized.markers, { resend: opts?.dedupe === true, fromHost: opts?.fromHost === true }, clock())
+    const message = once.message
+    const pending = once.markers
+    if (once.stripped) logger('info', 'send: left out an instruction notice this process was just given', { sid, pid: session.pid ?? null, messageIds: pending.map((m) => m.messageId) })
 
     // How far the write got, for a failure's answer (lineWrittenPart).
     const progress = { sent: 0, length: 0, lead: 0 }
@@ -998,6 +1069,9 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
         }
       }
       if (result === 'ok') {
+        if (once.given) noticeOnce.given(sid, session.pid, once.given, opts?.fromHost === true, clock())
+        // Only the host's own delivery is told: it then leaves the notice unrecorded.
+        const leftOut = once.stripped && opts?.fromHost === true
         if (rewrite) {
           logger('warn', 'send: wrote a line again that the CLI read past without taking', {
             sid, pid: session.pid, messageIds: ids,
@@ -1014,9 +1088,10 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
           logger('warn', 'send: an earlier write of this line into this process died inside it; the CLI may exit on what it left', {
             sid, pid: session.pid, messageIds: ids,
           })
+          if (leftOut) return { ok: true, cut: true, noticeLeftOut: true }
           return { ok: true, cut: true }
         }
-        return { ok: true }
+        return leftOut ? { ok: true, noticeLeftOut: true } : { ok: true }
       }
       if (result === 'dead') {
         // Session was reaped while this write waited in the chain/retry loop —

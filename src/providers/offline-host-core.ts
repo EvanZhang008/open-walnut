@@ -232,7 +232,8 @@ export { QUEUEABLE_TASK_FIELDS }
 
 type GatewayResult = { ok: true; result: Record<string, unknown> } | { ok: false; error: { code: string; message: string; retryAfterMs?: number; detail?: unknown } }
 
-export type DeliverResult = { ok: true } | { ok: false; reason: string }
+// noticeLeftOut: the line went without its instruction notice, which the server's path just gave (daemon-core.ts createNoticeOnce).
+export type DeliverResult = { ok: true; noticeLeftOut?: true } | { ok: false; reason: string }
 
 /** A trigger this host runs (the daemon's wire def, trigger-check-core.ts TriggerDef). */
 export interface OfflineTrigger {
@@ -935,7 +936,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   async function deliverWithTaskRouting(home: string, sid: string, text: string, messageId: string): Promise<DeliverResult> {
     const routed = withTaskRouting(home, sid, withReplyTail(home, sid, text))
     const delivered = await deps.deliver(sid, routed.text, messageId)
-    if (delivered.ok && routed.due) markRouted(sid, messageId, routed.due)
+    // A notice the daemon left out (the server's path gave it) is the server's to record.
+    if (delivered.ok && routed.due && !delivered.noticeLeftOut) markRouted(sid, messageId, routed.due)
     return delivered
   }
 

@@ -244,6 +244,19 @@ describe.each(TWINS)('send-dedupe-v1: $name', (twin) => {
     expect(received(dirs)).toHaveLength(1)
   }, 60_000)
 
+  it('a server line keeps its instruction notice: only the other path\'s copy is ever left out', async () => {
+    // createNoticeOnce leaves a notice out of one path's line only when the OTHER path (this host's
+    // own delivery) just wrote it. The server's second line keeps it: its first may never have run.
+    const dirs = makeDirs()
+    await boot(twin, dirs)
+    await start(dirs, 'dd-notice', false)
+    const notice = '<walnut-message kind="notification" from="Walnut" outcome="task-routing-policy" note="x">\nRule one.\n</walnut-message>'
+    expect(body(await send('dd-notice', `${notice}\n\nFirst`, 'aaaaaaaa-0000-4000-8000-0000000000a1', ['qm-a1']))).toEqual({ ok: true })
+    expect(body(await send('dd-notice', `${notice}\n\nSecond`, 'aaaaaaaa-0000-4000-8000-0000000000a2', ['qm-a2']))).toEqual({ ok: true })
+    expect(await waitFor(() => received(dirs).length === 2)).toBe(true)
+    expect(received(dirs).map((r) => r.content)).toEqual([`${notice}\n\nFirst`, `${notice}\n\nSecond`])
+  }, 60_000)
+
   it('a marker with no write record (cut short) or with no pid (older daemon) is no proof: written (M7)', async () => {
     const dirs = makeDirs()
     await boot(twin, dirs)

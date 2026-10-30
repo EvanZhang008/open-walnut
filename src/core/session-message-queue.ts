@@ -42,6 +42,7 @@ import {
 import { noteSettledLine, settledLineUuid } from './session-queue-lines.js';
 import { staleTriggerText } from './routines/trigger-stale.js';
 import type { PendingInstructionNotice } from './sessions/instruction-notice.js';
+import { leadsWithNotice, markNoticeDelivering } from './sessions/instruction-notice-flight.js';
 import { PERSON_SEND_SOURCES, queueSentBy } from './sessions/send-sent-by.js';
 import { replaceHintedText } from './hints/hint-format.js';
 
@@ -355,7 +356,7 @@ export async function markProcessing(
     const batch = head.lineUuid ? run : splitBatchAtUuid(run);
     if (routing && isFreshRow(head)) {
       const freshText = staleTriggerText(head.message, head.enqueuedAt, Date.now()) ?? head.message;
-      head.message = routing.apply(freshText);
+      head.message = routing.apply(freshText, queue);
     }
     const lineUuid = head.lineUuid ?? lineUuidFor(batch);
     const now = Date.now();
@@ -405,7 +406,7 @@ export async function markNextProcessing(sessionId: string): Promise<QueuedMessa
 
     next.status = 'processing';
     next.message = staleTriggerText(next.message, next.enqueuedAt, Date.now()) ?? next.message;
-    if (routing && isFreshRow(next)) next.message = routing.apply(next.message);
+    if (routing && isFreshRow(next)) next.message = routing.apply(next.message, queue);
     return { next, queueDepth: queue.length };
   });
   if (!picked) return [];
@@ -439,6 +440,8 @@ export async function removeProcessed(sessionId: string, ids?: string[]): Promis
     const gone = (m: QueuedMessage) => m.status === 'processing' && (idSet === null || idSet.has(m.id));
     // A phone message among them ran here: recorded in the same write (relay-fates.ts).
     const removed = queue.filter(gone);
+    // Inside the lock: no other line gets a notice until this one is recorded as told.
+    if (removed.some((m) => leadsWithNotice(m.message))) markNoticeDelivering(sessionId);
     noteDelivered(s, removed);
     for (const m of removed) noteSettledLine(s, m);
     s.queues[sessionId] = queue.filter((m) => !gone(m));
@@ -451,7 +454,7 @@ export async function removeProcessed(sessionId: string, ids?: string[]): Promis
   if (!found) return;
   log.session.debug('message queue drained', { sessionId, scoped: !!ids });
   // A delivered line led by the instruction notice: the session has now been told its lines.
-  if (found.some((m) => m.includes('outcome="task-routing-policy"'))) {
+  if (found.some(leadsWithNotice)) {
     const { noteInstructionNoticeDelivered } = await import('./sessions/instruction-notice.js');
     await noteInstructionNoticeDelivered(sessionId, found);
   }

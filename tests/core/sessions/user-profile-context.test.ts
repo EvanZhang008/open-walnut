@@ -144,7 +144,7 @@ describe('every task session', () => {
     expect((await buildSessionContext(task.id)).systemPrompt).toContain('none are recorded now')
   })
 
-  it('hears an edit while it runs: the whole new version, never a removed rule', async () => {
+  it('hears an edit while it runs: only the changed lines, and what was removed', async () => {
     await writeUser(doc(IDENTITY))
     const { task } = await addTask({ title: 'Worker', project: 'marina' })
     const sid = randomUUID()
@@ -157,17 +157,33 @@ describe('every task session', () => {
     const added = (await instructionNoticeForSession(sid))!.text
     expect(added).toContain('Walnut changed your default instructions')
     expect(added).toMatch(/\[v[0-9a-f]{8}\] - Private repo keys are not a leak\./)
-    // The whole set, so the session never pieces versions together.
-    expect(added).toMatch(/\[v[0-9a-f]{8}\] Avery, a software engineer\./)
+    expect(added).toMatch(/Only what changed since the version you were given last \(v[0-9a-f]{8}\) is below/)
+    // 2026-10-30: a one-line save re-sent the whole 4.9 KB profile. A kept line is not told again.
+    expect(added).not.toContain('Avery')
+    expect(added).not.toContain('They replace every earlier version')
+    // The session takes that line: told.
+    expect(await deliver(sid, 'Next step')).toContain('Private repo keys are not a leak.')
 
     await writeUser(doc(RULES))
     const removed = (await instructionNoticeForSession(sid))!.text
-    expect(removed).toContain('They replace every earlier version')
-    expect(removed).toContain('Private repo keys are not a leak.')
-    expect(removed).not.toContain('Avery')
+    expect(removed).toMatch(/Removed, no longer in force:\n- ## Identity\n- Avery, a software engineer\./)
+    expect(removed).not.toContain('Reply in short sentences')
     // Under its own heading, not under the charter's last one.
     expect(removed).toContain('## Your user')
     expect(removed).not.toContain('## How we work')
+  })
+
+  it('a session that never had the profile gets it whole', async () => {
+    const { task } = await addTask({ title: 'Worker', project: 'marina' })
+    const sid = randomUUID()
+    await createSessionRecord(sid, task.id, task.project, WALNUT_HOME)
+    await updateSessionRecord(sid, { appliedAppendSystemPrompt: (await buildSessionContext(task.id)).systemPrompt })
+    await writeUser(doc(IDENTITY, RULES))
+    const whole = (await instructionNoticeForSession(sid))!.text
+    expect(whole).toContain('They replace every earlier version')
+    for (const line of ['Avery, a software engineer.', '- Private repo keys are not a leak.', '- Reply in short sentences.']) {
+      expect(whole).toMatch(new RegExp(`\\[v[0-9a-f]{8}\\] ${line.replace(/[.]/g, '\\.')}`))
+    }
   })
 
   it('hears an undo and an emptied file too, each told once', async () => {
@@ -184,14 +200,17 @@ describe('every task session', () => {
     await writeUser(doc(IDENTITY, RULES))
     expect(await tell()).toContain('Private repo keys are not a leak.')
     expect(await tell()).toBeNull()
-    // Back to the spawn-time words: a new save, so a new version the session must hear.
+    // Back to the spawn-time words: the added rules are named as removed, the kept one is not repeated.
     await new Promise((r) => setTimeout(r, 15))
     await writeUser(doc(IDENTITY))
-    const undo = await tell()
-    expect(undo).toContain('Avery, a software engineer.')
-    expect(undo).not.toContain('Private repo keys')
+    const undo = (await tell())!
+    expect(undo).toMatch(/Removed, no longer in force:\n- ## Standing rules\n- Private repo keys are not a leak\./)
+    expect(undo).not.toContain('Avery')
+    expect(await tell()).toBeNull()
     await writeUser(PREAMBLE)
-    expect(await tell()).toContain('none are recorded now, so no earlier version of them applies')
+    const emptied = (await tell())!
+    expect(emptied).toContain('none are recorded now, so no earlier version of them applies')
+    expect(emptied).toMatch(/none of its lines apply any more:\n- ## Identity\n- Avery, a software engineer\./)
     expect(await tell()).toBeNull()
   })
 

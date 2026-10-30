@@ -64,6 +64,20 @@ describe('server supplies changed instructions to old host-local sessions', () =
     expect(line.message).toContain(RELAY);
     await removeProcessed(sid, [line.id]);
   });
+  it('a notice the server has on its way keeps the host from adding a second', async () => {
+    const { task } = await addTask({ title: 'Busy worker', project: 'Mobile' });
+    const sid = randomUUID();
+    await createSessionRecord(sid, task.id, task.project, WALNUT_HOME);
+    await updateSessionRecord(sid, { appliedAppendSystemPrompt: await withoutRelay(task.id) });
+    const row = async () => (await buildHostSlice('__local__')).sessions.find((r) => r.sid === sid);
+    expect((await row())?.taskRoutingPolicy).toContain(RELAY);
+    await sendMessageToSession(sid, 'Server line');
+    const [line] = await markProcessing(sid);
+    expect(line.message).toContain(RELAY);
+    expect(await row()).not.toHaveProperty('taskRoutingPolicy');
+    await removeProcessed(sid, [line.id]);
+    expect(await row()).not.toHaveProperty('taskRoutingPolicy');
+  });
   it('current prompts add no notice bytes', async () => {
     for (const role of [undefined, 'main', 'lead'] as const) {
       const { task } = await addTask({ title: role ?? 'Worker', project: role === 'main' ? 'Ask Walnut' : 'Mobile',
