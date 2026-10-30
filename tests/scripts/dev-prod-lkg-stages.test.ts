@@ -94,7 +94,7 @@ describe('snapshot_lkg', () => {
     fs.mkdirSync(path.join(stage, 'dist-bin'), { recursive: true })
     fs.writeFileSync(path.join(stage, 'dist-bin', 'walnut-x'), 'new build')
     fs.mkdirSync(path.join(stage, 'runtime', 'id-new'), { recursive: true })
-    return [fn('clone_copy'), fn('dir_has_live_process'), fn('snapshot_lkg'),
+    return [fn('clone_copy'), fn('carry_plugin_source'), fn('dir_has_live_process'), fn('snapshot_lkg'),
       `STAGE_DIR='${stage}'`, `LKG_DIR='${lkg}'`, `SERVE_ROOT='${root}'`, `REPO_ROOT='${root}'`,
       'snapshot_lkg'].join('\n')
   }
@@ -122,11 +122,30 @@ describe('snapshot_lkg', () => {
     expect(fs.existsSync(path.join(lkg, 'runtime', 'id-old'))).toBe(false)
     expect(fs.readFileSync(path.join(lkg, '.walnut-source-root'), 'utf-8').trim()).toBe(root)
   })
+
+  // stage_plugin_source: the committed src/ plugins import from rides into the LKG, its
+  // marker renamed to the LKG's own copy (a rollback server never reads the checkout's).
+  it("carries the stage's committed plugin source, marker pointing at the LKG's copy", () => {
+    const root = tmp()
+    const lkg = path.join(root, 'open-walnut-lkg')
+    const script = harness(root, lkg)
+    const stage = path.join(root, 'open-walnut-stage.9.9')
+    fs.mkdirSync(path.join(stage, 'plugin-source', 'src', 'integrations'), { recursive: true })
+    fs.writeFileSync(path.join(stage, 'plugin-source', 'src', 'integrations', 'x.ts'), 'committed')
+    fs.mkdirSync(path.join(root, 'node_modules'))
+    fs.symlinkSync(path.join(root, 'node_modules'), path.join(stage, 'plugin-source', 'node_modules'))
+    fs.writeFileSync(path.join(stage, '.walnut-plugin-source'), `${path.join(stage, 'plugin-source')}\n`)
+    const r = bash(script)
+    expect(r.status, r.stderr).toBe(0)
+    expect(fs.readFileSync(path.join(lkg, 'plugin-source', 'src', 'integrations', 'x.ts'), 'utf-8')).toBe('committed')
+    expect(fs.lstatSync(path.join(lkg, 'plugin-source', 'node_modules')).isSymbolicLink()).toBe(true)
+    expect(fs.readFileSync(path.join(lkg, '.walnut-plugin-source'), 'utf-8').trim()).toBe(path.join(lkg, 'plugin-source'))
+  })
 })
 
 describe('rollback_to_lkg', () => {
   function harness(root: string, lkg: string): string {
-    return [fn('clone_copy'), fn('stage_lkg_for_rollback'), fn('lkg_file'), fn('rollback_to_lkg'),
+    return [fn('clone_copy'), fn('carry_plugin_source'), fn('stage_lkg_for_rollback'), fn('lkg_file'), fn('rollback_to_lkg'),
       'launch_server() { printf "LAUNCH %s\\n" "$*"; }',
       'wait_for_config_ready() { return 0; }',
       `STAGE_ROOT='${root}'`, `LKG_DIR='${lkg}'`, `SERVE_ROOT='${root}/serve'`, 'MACHINE_TARGET=darwin-arm64',

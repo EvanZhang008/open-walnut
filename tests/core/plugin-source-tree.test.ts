@@ -71,6 +71,27 @@ describe('resolvePluginSourceTree', () => {
     expect(resolvePluginSourceTree(bare, repo).nodeModulesRoot).toBe(repo);
   });
 
+  // 2026-10-30: plugins bundled against the checkout read a peer's half-written file and
+  // failed; a committed deploy stages its own src/ and names it in .walnut-plugin-source.
+  it("committed deploy: the stage's own copy of the source wins over the checkout, from the runtime tree under it", async () => {
+    const repo = await mkCheckout('repo');
+    const stage = await mkStage('open-walnut-stage.456', repo);
+    const committed = path.join(stage, 'plugin-source');
+    await fsp.mkdir(path.join(committed, 'src', 'integrations'), { recursive: true });
+    await fsp.mkdir(path.join(committed, 'node_modules'), { recursive: true });
+    await fsp.writeFile(path.join(stage, '.walnut-plugin-source'), `${committed}\n`);
+    const runtime = path.join(stage, 'runtime', '0.6.19-abc');
+    await fsp.mkdir(path.join(runtime, 'dist', 'integrations'), { recursive: true });
+    await fsp.writeFile(path.join(runtime, '.walnut-source-root'), `${repo}\n`);
+    expect(resolvePluginSourceTree(runtime, repo)).toEqual({
+      srcIntegrationsDir: path.join(committed, 'src', 'integrations'),
+      nodeModulesRoot: committed,
+    });
+    // A marker naming a copy that is gone falls back to the checkout, as before.
+    await fsp.rm(committed, { recursive: true, force: true });
+    expect(resolvePluginSourceTree(runtime, repo).srcIntegrationsDir).toBe(path.join(repo, 'src', 'integrations'));
+  });
+
   it('a marker naming a directory without src/ is skipped, not trusted', async () => {
     const repo = await mkCheckout('repo');
     const stage = await mkStage('stage', path.join(tmp, 'moved-away'));

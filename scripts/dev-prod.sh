@@ -752,7 +752,42 @@ clone_copy() {
 # marker hands it the repo the stage was built from (the file's walk starts in
 # <stage>/runtime/<build>/dist and reaches the stage dir the same way).
 stage_source_root() {
-  printf '%s\n' "$SERVE_ROOT" > "$STAGE_DIR/.walnut-source-root"
+  printf '%s\n' "$SERVE_ROOT" > "$STAGE_DIR/.walnut-source-root" || return 1
+  stage_plugin_source "$STAGE_DIR"
+}
+
+# External plugins import Walnut's own modules from source (plugin-source-tree.ts).
+# From the serve root they read whatever is on disk there, other agents' half-
+# written files included (2026-10-30: a plugin check refused a deploy because the
+# checkout's engine-switch.ts imported a module not written yet; a restart in that
+# minute would have loaded no external plugin). A committed deploy (REPO_ROOT is
+# its clean clone, removed afterwards) stages its own src/ for them, with the serve
+# root's node_modules, and names it in .walnut-plugin-source. Best effort: without
+# it plugins read the serve root as before.
+stage_plugin_source() {
+  local dir="$1"
+  [[ "$REPO_ROOT" != "$SERVE_ROOT" && -d "$REPO_ROOT/src/integrations" && -d "$SERVE_ROOT/node_modules" ]] || return 0
+  rm -rf "$dir/plugin-source" "$dir/.walnut-plugin-source" 2>/dev/null || true
+  if mkdir -p "$dir/plugin-source" \
+    && clone_copy "$REPO_ROOT/src" "$dir/plugin-source/src" \
+    && ln -s "$SERVE_ROOT/node_modules" "$dir/plugin-source/node_modules" \
+    && printf '%s\n' "$dir/plugin-source" > "$dir/.walnut-plugin-source"; then
+    return 0
+  fi
+  rm -rf "$dir/plugin-source" "$dir/.walnut-plugin-source" 2>/dev/null || true
+  echo "Warning: could not stage the commit's source for plugins; they read $SERVE_ROOT/src." >&2
+  return 0
+}
+
+# The staged plugin source of $1 (a stage or the LKG) carried into $2, renamed to it.
+carry_plugin_source() {
+  [[ -d "$1/plugin-source/src" ]] || return 0
+  if clone_copy "$1/plugin-source" "$2/plugin-source" \
+    && printf '%s\n' "${3:-$2}/plugin-source" > "$2/.walnut-plugin-source"; then
+    return 0
+  fi
+  rm -rf "$2/plugin-source" "$2/.walnut-plugin-source" 2>/dev/null || true
+  return 0
 }
 
 # The compiled files this deploy built (only those newer than the build's
@@ -1017,6 +1052,10 @@ if [[ "${WALNUT_DEVPROD_SKIP_PLUGIN_CHECK:-0}" != "1" && -d "$PLUGINS_DIR" ]]; t
   # (src/core/plugins/plugin-source-tree.ts); the stage's marker names it, so this
   # dir carries the same one (the file's walk up from its runtime tree finds it).
   printf '%s\n' "$SERVE_ROOT" > "$PLUGIN_CHECK_TMP/.walnut-source-root"
+  # ...and the commit's own source the stage carries for them (stage_plugin_source).
+  if [[ -n "${STAGE_DIR:-}" && -f "$STAGE_DIR/.walnut-plugin-source" ]]; then
+    cp "$STAGE_DIR/.walnut-plugin-source" "$PLUGIN_CHECK_TMP/.walnut-plugin-source"
+  fi
   plugin_prod_args=()
   if curl --connect-timeout 2 --max-time 10 -sf "http://localhost:$PORT/api/plugin-runtime" \
     -o "$PLUGIN_CHECK_TMP/prod-plugins.json" 2>/dev/null; then
@@ -1643,6 +1682,7 @@ snapshot_lkg() {
   fi
   # A rollback server keeps "Fix Walnut" pointed at this checkout (stage_source_root).
   printf '%s\n' "$SERVE_ROOT" > "$LKG_DIR.tmp/.walnut-source-root" || return 1
+  carry_plugin_source "$STAGE_DIR" "$LKG_DIR.tmp" "$LKG_DIR"
   rm -rf "$LKG_DIR" 2>/dev/null || true
   mv "$LKG_DIR.tmp" "$LKG_DIR" || return 1
 }
@@ -1694,6 +1734,7 @@ stage_lkg_for_rollback() {
   fi
   # Keeps "Fix Walnut" pointed at this checkout, as from the snapshot itself.
   printf '%s\n' "$SERVE_ROOT" > "$dir/.walnut-source-root" || { rm -rf "$dir"; return 1; }
+  carry_plugin_source "$src" "$dir"
   printf '%s' "$dir"
 }
 

@@ -25,6 +25,8 @@ export function resolvePluginSourceTree(
   installDir: string | null = WALNUT_INSTALL_DIR,
 ): PluginSourceTree {
   const candidates: string[] = [];
+  const committed = committedPluginSource(packageRoot);
+  if (committed) candidates.push(committed);
   try {
     const marker = fs.readFileSync(path.join(packageRoot, '.walnut-source-root'), 'utf8').trim();
     if (marker) candidates.push(marker);
@@ -45,6 +47,33 @@ export function resolvePluginSourceTree(
     } catch { /* candidate has no source tree, try the next */ }
   }
   return { srcIntegrationsDir: null, nodeModulesRoot: packageRoot };
+}
+
+/** `.walnut-plugin-source`: the file naming a committed copy of the source. */
+export const PLUGIN_SOURCE_MARKER = '.walnut-plugin-source';
+
+/**
+ * The committed source a deploy staged for plugins, named by a `.walnut-plugin-source`
+ * marker in the package root or up to three directories above it (a compiled file's
+ * runtime tree is `<stage>/runtime/<build>`). The checkout the source-root marker names
+ * holds whatever is on disk there, other agents' half-written files included: on
+ * 2026-10-30 a plugin check refused a deploy because the checkout's engine-switch.ts
+ * imported a module not written yet, and a server restarted in that minute would have
+ * loaded no external plugin. scripts/dev-prod.sh stages the deployed commit's own src/
+ * (with the checkout's node_modules) and names it here.
+ */
+function committedPluginSource(packageRoot: string): string | null {
+  let dir = packageRoot;
+  for (let i = 0; i < 4; i++) {
+    try {
+      const named = fs.readFileSync(path.join(dir, PLUGIN_SOURCE_MARKER), 'utf8').trim();
+      if (named && path.isAbsolute(named)) return named;
+    } catch { /* no marker at this level */ }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
 }
 
 function hasNodeModules(root: string): boolean {
