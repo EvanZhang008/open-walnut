@@ -61,17 +61,6 @@ async function claudeCodeNotNeeded(): Promise<boolean> {
   }
 }
 
-/** True only when the config says nothing runs on Claude Code (core/agents/claude-code-needed.ts); a read that fails says it may. */
-async function claudeCodeNotNeeded(): Promise<boolean> {
-  try {
-    const { getConfig } = await import('../core/config-manager.js')
-    const { claudeCodeNeeded } = await import('../core/agents/claude-code-needed.js')
-    return !claudeCodeNeeded(await getConfig(), false)
-  } catch {
-    return false
-  }
-}
-
 // Env-aware default so the singleton (exported below) isolates a demo server's
 // daemon when WALNUT_DAEMON_DIR is set. Tests pass `daemonDir` explicitly and are
 // unaffected. Production sets nothing → /tmp/open-walnut, or ~/.cache/open-walnut
