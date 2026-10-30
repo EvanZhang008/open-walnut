@@ -1008,6 +1008,8 @@ final class SessionConversationStore {
             row.sentBy = m.sentBy
             row.added = m.added
             row.textWithoutContext = m.textWithoutContext
+            row.injectedAfter = m.injectedAfter
+            row.injectedBefore = m.injectedBefore
             return row
         }
     }
@@ -1030,6 +1032,11 @@ final class SessionConversationStore {
     /// several of the server's rows.
     static func keepingWholeText(_ messages: [SessionTranscript.Message],
                                  held: [ChatMessage]) -> [ChatMessage] {
+        keepingWholeInjected(keepingWholeRowText(messages, held: held), held: held)
+    }
+
+    private static func keepingWholeRowText(_ messages: [SessionTranscript.Message],
+                                            held: [ChatMessage]) -> [ChatMessage] {
         func clipped(_ m: SessionTranscript.Message) -> Bool {
             m.kind == nil && m.text.unicodeScalars.last == "\u{2026}"
         }
@@ -1054,6 +1061,42 @@ final class SessionConversationStore {
         }
     }
 
+    /// The same rule for the lines the CLI put in after (or before) a row: each is
+    /// clipped on its own, at the read's budget, so a slim poll cut a skill's text a
+    /// rich read had delivered whole, whatever the row it rides. A clipped line keeps
+    /// the whole text held for it at the same place (the row's role, time and kind,
+    /// the line's kind and label, the clipped text minus its "…" starting the held one).
+    static func keepingWholeInjected(_ rows: [ChatMessage], held: [ChatMessage]) -> [ChatMessage] {
+        func clipped(_ item: CliInjectedItem) -> Bool { item.text.unicodeScalars.last == "\u{2026}" }
+        guard rows.contains(where: { ($0.injectedAfter ?? []).contains(where: clipped)
+            || ($0.injectedBefore ?? []).contains(where: clipped) }) else { return rows }
+        func place(_ m: ChatMessage) -> String { "\(m.role)|\(m.createdAt)|\(m.kind?.rawValue ?? "")" }
+        var whole: [String: [CliInjectedItem]] = [:]
+        for m in held where !isProvisional(m) {
+            let items = (m.injectedBefore ?? []) + (m.injectedAfter ?? [])
+            if !items.isEmpty { whole[place(m), default: []] += items }
+        }
+        guard !whole.isEmpty else { return rows }
+        func keep(_ items: [CliInjectedItem]?, candidates: [CliInjectedItem]) -> [CliInjectedItem]? {
+            items?.map { item in
+                guard clipped(item) else { return item }
+                let head = item.text.unicodeScalars.dropLast()
+                guard let longer = candidates.first(where: {
+                    $0.kind == item.kind && $0.label == item.label
+                        && $0.text.utf8.count > item.text.utf8.count && $0.text.unicodeScalars.starts(with: head)
+                }) else { return item }
+                return longer
+            }
+        }
+        return rows.map { m in
+            guard let candidates = whole[place(m)] else { return m }
+            var kept = m
+            kept.injectedAfter = keep(m.injectedAfter, candidates: candidates)
+            kept.injectedBefore = keep(m.injectedBefore, candidates: candidates)
+            return kept
+        }
+    }
+
     /// One transcript row as a timeline message. Ids are assigned after a merge
     /// (`assignStableIDs`), because they must be unique across it.
     private static func row(from m: SessionTranscript.Message, text: String? = nil) -> ChatMessage {
@@ -1073,6 +1116,8 @@ final class SessionConversationStore {
         row.sentBy = m.sentBy
         row.added = m.added
         row.textWithoutContext = m.textWithoutContext
+        row.injectedAfter = m.injectedAfter
+        row.injectedBefore = m.injectedBefore
         return row
     }
 

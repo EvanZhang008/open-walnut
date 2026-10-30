@@ -10,6 +10,7 @@
  * SessionFileReader (session-file-reader.ts).
  */
 
+import { hookContextText } from '../lib/walnut-added.js';
 import { log } from '../logging/index.js';
 import {
   encodeProjectPath,
@@ -797,17 +798,8 @@ function queuedCommandText(prompt: unknown): string | undefined {
   return tb?.text;
 }
 
-/** Opens the text of a hook's added context row; the web labels the row by it. */
-export const HOOK_CONTEXT_PREFIX = 'Hook context';
-
-/** A `hook_additional_context` attachment as one row's text, or null when it added nothing. */
-export function hookContextText(content: unknown, hookEvent: unknown): string | null {
-  const parts = (Array.isArray(content) ? content : [content])
-    .filter((c): c is string => typeof c === 'string' && c.trim() !== '');
-  if (!parts.length) return null;
-  const event = typeof hookEvent === 'string' && /^[A-Za-z]+$/.test(hookEvent) ? hookEvent : 'a';
-  return `${HOOK_CONTEXT_PREFIX} (${event} hook):\n\n${parts.join('\n\n')}`;
-}
+// A hook's added context reads as one injected row; the phone transcript names it the same way.
+export { HOOK_CONTEXT_PREFIX, hookContextText } from '../lib/walnut-added.js';
 
 /** CLI-flagged injected user line (not typed by the human). Canonical JSONL:
  *  isMeta / isCompactSummary / isVisibleInTranscriptOnly; stream-json stdout

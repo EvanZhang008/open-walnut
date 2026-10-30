@@ -158,6 +158,10 @@ actor TimelineLayoutActor {
                 inline.append(message)
             }
         }
+        // The lines the CLI put in itself ride the rows beside them on the wire;
+        // here each becomes its own row, where it was (TimelineInjectedLines), so
+        // turn shaping folds it with the steps around it.
+        inline = TimelineInjectedLines.expand(inline)
         // Consecutive tool and thinking rows fold into ONE "Ran 3 commands ›" row
         // (TimelineToolRunFold, the web console's rule). The member rows are still
         // built through the memo, so an unchanged message costs a dictionary hit

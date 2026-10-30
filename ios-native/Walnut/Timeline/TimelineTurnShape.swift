@@ -169,11 +169,13 @@ enum TimelineTurnShape {
         for (k, b) in bounds.enumerated() {
             segs.append((b, k + 1 < bounds.count ? bounds[k + 1] : messages.count))
         }
-        /// The turn's last word: an info card after it does not count, an error does.
+        /// The turn's last word: an info card after it does not count, an error does,
+        /// and neither does a line the CLI put in after it (a Stop hook's context).
         func lastRow(_ from: Int, _ to: Int) -> Int {
             var i = to - 1
             while i > from {
                 let m = messages[i]
+                if m.kind == .injected { i -= 1; continue }
                 if m.kind == .notification, !NotificationStyling(message: m).isError { i -= 1; continue }
                 return i
             }

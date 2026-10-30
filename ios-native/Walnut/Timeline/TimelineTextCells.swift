@@ -82,9 +82,10 @@ final class TimelineUserBubbleCell: UICollectionViewCell {
     /// True from the menu's appearance until its closing animation ends.
     private var menuOnScreen = false
     /// A chosen item that changes the rows (show/hide, retry, delete), sent only
-    /// once the menu has closed: reloading the list under the closing animation
-    /// reuses this cell for another message, and the shrinking preview then reads
-    /// that message's words over this bubble.
+    /// once the menu has closed. The list reloads on such a change and reuses this
+    /// cell for another message, while UIKit still animates and hides the bubble
+    /// it lifted: that message's words showed in the closing preview, its own row
+    /// went blank, and a stand-in picture of this bubble only moved the glitch.
     private var heldAction: (() -> Void)?
 
     override init(frame: CGRect) {
@@ -152,7 +153,7 @@ extension TimelineUserBubbleCell: UIContextMenuInteractionDelegate {
         let rawText = self.rawText
         let added = self.added
         weak var delegate = self.delegate
-        let afterClose: (TimelineRowAction) -> Void = { [weak self] action in
+        let send: (TimelineRowAction) -> Void = { [weak self] action in
             self?.sendAfterMenuCloses { delegate?.timelineCell(didRequest: action) }
         }
         return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in
@@ -160,7 +161,7 @@ extension TimelineUserBubbleCell: UIContextMenuInteractionDelegate {
             if failed, let messageID {
                 actions.append(UIAction(title: "Retry",
                                         image: UIImage(systemName: "arrow.clockwise")) { _ in
-                    afterClose(.retry(messageID: messageID))
+                    send(.retry(messageID: messageID))
                 })
             }
             actions.append(UIAction(title: "Copy",
@@ -171,14 +172,14 @@ extension TimelineUserBubbleCell: UIContextMenuInteractionDelegate {
                 // What Walnut put around the person's words, for this message only.
                 actions.append(UIAction(title: added.title,
                                         image: UIImage(systemName: added.shown ? "eye.slash" : "eye")) { _ in
-                    afterClose(.toggleExpanded(rowID: added.toggleRowID))
+                    send(.toggleExpanded(rowID: added.toggleRowID))
                 })
             }
             if failed, let messageID {
                 actions.append(UIAction(title: "Delete",
                                         image: UIImage(systemName: "trash"),
                                         attributes: .destructive) { _ in
-                    afterClose(.discard(messageID: messageID))
+                    send(.discard(messageID: messageID))
                 })
             }
             return UIMenu(children: actions)
@@ -189,6 +190,14 @@ extension TimelineUserBubbleCell: UIContextMenuInteractionDelegate {
                                 willDisplayMenuFor configuration: UIContextMenuConfiguration,
                                 animator: UIContextMenuInteractionAnimating?) {
         menuOnScreen = true
+    }
+
+    /// Close with a plain fade where the menu is: it ends sooner than the lifted
+    /// bubble shrinking back to its place, and the held change waits for its end.
+    func contextMenuInteraction(_ interaction: UIContextMenuInteraction,
+                                previewForDismissingMenuWithConfiguration configuration: UIContextMenuConfiguration)
+        -> UITargetedPreview? {
+        nil
     }
 
     func contextMenuInteraction(_ interaction: UIContextMenuInteraction,

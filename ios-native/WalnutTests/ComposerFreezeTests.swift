@@ -366,6 +366,8 @@ final class ComposerFreezeTests: XCTestCase {
             _ = Text(verbatim: m.text)
         case .notification:
             _ = MarkdownParser.parse(m.text)
+        case .injected:
+            _ = Text(verbatim: m.detail ?? "")
         case nil:
             if m.role == "user" {
                 _ = MessageRow.imageSendParts(m.text)

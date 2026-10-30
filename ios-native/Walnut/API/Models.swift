@@ -103,6 +103,12 @@ struct ChatMessage: Codable, Identifiable, Equatable {
         case tool
         case thinking
         case notification
+        /// A line the CLI put into the conversation itself (a loaded skill's text, a
+        /// hook's added context, a continuation summary): one closed row that opens
+        /// to its text. Never on the wire: the timeline makes these rows from a
+        /// carrier's `injectedAfter` / `injectedBefore` (`TimelineInjectedLines`),
+        /// with `detail` the label, `source` the item's kind and `text` its words.
+        case injected
     }
 
     let id: String
@@ -187,6 +193,13 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     /// kept (additive 2026-10-29). `text` stays whole for older apps. nil when no
     /// block came off and on an older server.
     var textWithoutContext: String? = nil
+    /// Session transcript rows, any kind: the lines the CLI put in right after this
+    /// row, in order (additive 2026-10-30, server `transcript-injected.ts`). They are
+    /// never rows of their own on the wire, so an older app never draws a skill's
+    /// text as the person's bubble; the timeline draws each as one closed row.
+    var injectedAfter: [CliInjectedItem]? = nil
+    /// The first row of a read only: such lines from before every row of it.
+    var injectedBefore: [CliInjectedItem]? = nil
 
     /// The bubble's long-press item that shows or hides what Walnut added to this
     /// message (set by `TimelineTurnFold` on the copy it draws; never on the wire).
@@ -224,7 +237,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case id, role, text, createdAt, kind, source, detail, resultPreview, agent
         case thinkingText, inputPreview, detailRef, inFlight, answeredBy, isError
-        case messageId, sentBy, added, textWithoutContext
+        case messageId, sentBy, added, textWithoutContext, injectedAfter, injectedBefore
     }
 
     init(id: String, role: String, text: String, createdAt: String, kind: Kind?, source: String? = nil,
@@ -282,6 +295,33 @@ struct WalnutAddedItem: Codable, Equatable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey { case kind, name, label, text }
+}
+
+/// One line the CLI put into a session's conversation itself (`injectedAfter` /
+/// `injectedBefore` on a transcript row, server `CliAddedItem`): `kind` "skill" (a
+/// loaded skill's text), "hook" (a hook's added context) or "context" (anything
+/// else, e.g. a continuation summary); `label` names it ("Loaded skill
+/// release-notes"); `text` is its words. Decodes leniently, like `WalnutAddedItem`.
+struct CliInjectedItem: Codable, Equatable, Hashable {
+    let kind: String
+    let label: String
+    let text: String
+
+    init(kind: String, label: String, text: String) {
+        self.kind = kind
+        self.label = label
+        self.text = text
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = (try? c.decodeIfPresent(String.self, forKey: .kind)) ?? "context"
+        text = (try? c.decodeIfPresent(String.self, forKey: .text)) ?? ""
+        let label = (try? c.decodeIfPresent(String.self, forKey: .label)) ?? ""
+        self.label = label.isEmpty ? "Injected context" : label
+    }
+
+    private enum CodingKeys: String, CodingKey { case kind, label, text }
 }
 
 /// The bubble's "Show what Walnut added (N)" / "Hide what Walnut added" item:
@@ -840,11 +880,18 @@ struct SessionTranscript: Codable {
         /// User rows only: `text` without the context blocks (additive 2026-10-29).
         /// See `ChatMessage.textWithoutContext`.
         var textWithoutContext: String? = nil
+        /// Any row: lines the CLI put in right after it (additive 2026-10-30). See
+        /// `ChatMessage.injectedAfter`.
+        var injectedAfter: [CliInjectedItem]? = nil
+        /// The first row only: such lines from before every row of the read
+        /// (additive 2026-10-30). See `ChatMessage.injectedBefore`.
+        var injectedBefore: [CliInjectedItem]? = nil
 
         init(role: String, text: String, timestamp: String, kind: String?,
              detail: String? = nil, resultPreview: String? = nil, agent: String? = nil,
              thinkingText: String? = nil, inputPreview: String? = nil, isError: Bool? = nil,
-             sentBy: String? = nil, added: [WalnutAddedItem]? = nil, textWithoutContext: String? = nil) {
+             sentBy: String? = nil, added: [WalnutAddedItem]? = nil, textWithoutContext: String? = nil,
+             injectedAfter: [CliInjectedItem]? = nil, injectedBefore: [CliInjectedItem]? = nil) {
             self.role = role
             self.text = text
             self.timestamp = timestamp
@@ -858,6 +905,8 @@ struct SessionTranscript: Codable {
             self.sentBy = sentBy
             self.added = added
             self.textWithoutContext = textWithoutContext
+            self.injectedAfter = injectedAfter
+            self.injectedBefore = injectedBefore
         }
     }
 

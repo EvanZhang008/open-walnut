@@ -27,6 +27,7 @@ import { detectOutboundSend } from './session-outbound';
 import { SessionEnvelopeSegments } from './SessionProvenanceCard';
 import { SessionOutboundCard } from './SessionOutboundCard';
 import { splitLeadingBanners } from '@open-walnut/history-injected-banner';
+import { injectedContextLabel } from '@open-walnut/walnut-added';
 import { splitLeadingRiders } from '@open-walnut/history-walnut-riders';
 import '@/styles/session-riders.css';
 import { ProcessFoldRow } from './TurnFolds';
@@ -317,21 +318,6 @@ export function PlanCard({ content }: { content: string }) {
 /** HTML-escape a string for safe insertion into innerHTML */
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-/** Label for a CLI-injected user line — the collapsed-row header text. */
-function injectedContextLabel(text: string): string {
-  const skillDir = text.match(/^Base directory for this skill:\s*(\S+)/)?.[1];
-  if (skillDir) {
-    const name = skillDir.replace(/\/+$/, '').split('/').pop() ?? skillDir;
-    return `Loaded skill ${name}`;
-  }
-  if (text.startsWith('This session is being continued')) return 'Continuation summary';
-  if (text.startsWith('[Image:')) return 'Image metadata';
-  // A hook's added context (session-history.ts hookContextText).
-  const hook = text.match(/^Hook context \((\w+) hook\):/);
-  if (hook) return hook[1] === 'a' ? 'Added by a hook' : `Added by the ${hook[1]} hook`;
-  return 'Injected context';
 }
 
 /** CLI-injected user line (skill dump, compaction summary, …) — a muted

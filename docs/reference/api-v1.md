@@ -1752,7 +1752,19 @@ session instead.
   the clipped `text`; the iOS app uses it to fold and hide turns and to keep a
   received message out of the user's bubble. Absent on an older server, where a
   client draws user rows as it always did. Only this route carries it (`/conversations/:id/messages`
-  rows do not). Rows of one message come as thinking,
+  rows do not). `added` (additive, 2026-10-29) rides a user row Walnut added to besides
+  its notes in front: `[ { kind: "hint" | "context", name, label, text } ]`, the message
+  hints taken off the text and the context blocks Walnut put first, with
+  `textWithoutContext` (the text without those blocks, its notes in front kept) when
+  blocks came off. A client hides them unless `GET /api/v1/config` says
+  `config.ui.show_walnut_additions: true` or the person asks for that one message.
+  `injectedAfter` (additive, 2026-10-30) rides any row the CLI put lines in after
+  (a loaded skill's text, a hook's added context, a continuation summary):
+  `[ { kind: "skill" | "hook" | "context", label, text } ]`, drawn as one closed row each
+  that opens to the text; `injectedBefore` carries such lines from before every row of
+  the read, on the first row only. They are never rows of their own, so an older client
+  that ignores the fields never draws them as the person's bubble. A Walnut message the
+  CLI delivered as an injected line is a user row with `sentBy: "agent"`. Rows of one message come as thinking,
   then the text, then the tool calls (see the `/conversations/:id/messages`
   notes on row order). The primary
   box exports tails for every session it can reach — local from disk, remote

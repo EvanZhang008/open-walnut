@@ -86,7 +86,8 @@ import { engineCaps, normalizeEngine } from './agents/engine-registry.js'
 // the cut is made where it cannot leave half a tag behind.
 import { clipTranscriptText } from './sessions/transcript-clip.js'
 import { transcriptSentBy, type TranscriptSentBy } from './sessions/transcript-sent-by.js'
-import { walnutAddedOf, type WalnutAddedItem } from '../lib/walnut-added.js'
+import { walnutAddedOf, type CliAddedItem, type WalnutAddedItem } from '../lib/walnut-added.js'
+import { InjectedLines } from './sessions/transcript-injected.js'
 import { cutEnd } from './text-cut.js'
 
 /** LEGACY git-synced paths — dual-written while `sync.legacy_projection_files`
@@ -516,6 +517,11 @@ export interface ProjectedTranscriptMessage {
   /** With `added` context blocks: `text` without them (its notes in front kept), the
    *  person's words to draw. `text` stays whole for an older client. */
   textWithoutContext?: string
+  /** Any row (additive, 2026-10-30): the lines the CLI put in right after it, a
+   *  loaded skill's text or a hook's added context (transcript-injected.ts). */
+  injectedAfter?: CliAddedItem[]
+  /** The first row only: such lines from before every row of this read. */
+  injectedBefore?: CliAddedItem[]
 }
 
 /** A user row's `added` / `textWithoutContext`, clipped like `text` unless the read is `full`. */
@@ -748,12 +754,14 @@ export async function buildSessionTranscript(
   // Computed once, ABOVE the loop, so the two field gates below cannot drift.
   const wantRich = opts?.rich === true || opts?.full === true
   const messages: ProjectedTranscriptMessage[] = []
+  const injected = new InjectedLines(opts?.full ? null : (opts?.live || wantRich ? 'live' : 'tail'))
   for (const m of tail) {
     if (m.role === 'system') continue
-    // CLI-injected user lines (skill content dumps, compaction summaries) are
-    // not something the human typed — Claude Code hides them entirely; the
-    // slim phone tail drops them too (a 4K skill dump would eat the preview).
-    if (m.role === 'user' && m.injected) continue
+    // CLI-injected user lines (a skill's text, a hook's added context, a
+    // compaction summary) are not something the human typed: they ride the row
+    // before them as one closed row (transcript-injected.ts), clipped like text.
+    // One that is only a Walnut message is drawn as that message.
+    if (m.role === 'user' && m.injected && injected.take(m.text || '', messages) !== 'message') continue
     // Thinking FIRST, then text, then tools: `kind?: 'thinking'` has been part of
     // this shape (and of the api-v1 doc) all along with nobody producing it, so
     // the phone had no reasoning to show at all and rendered a bare blinking
@@ -791,7 +799,8 @@ export async function buildSessionTranscript(
         text: opts?.full ? text : clipTranscriptText(text, opts?.live || wantRich ? 'live' : 'tail'),
         timestamp: m.timestamp,
         // From the whole text, before the clip: an envelope cut short reads as prose.
-        ...(m.role === 'user' ? { sentBy: transcriptSentBy(m) } : {}),
+        // An injected line that got here is a Walnut message the CLI delivered: read as one.
+        ...(m.role === 'user' ? { sentBy: transcriptSentBy(m.injected ? { ...m, injected: false } : m) } : {}),
         ...(m.role === 'user' ? projectWalnutAdded(text, m.hints, opts?.full ? null : (opts?.live || wantRich ? 'live' : 'tail')) : {}),
       })
     }
@@ -863,6 +872,7 @@ export async function buildSessionTranscript(
       })
     }
   }
+  injected.finish(messages)
   return {
     version: 1,
     sessionId,

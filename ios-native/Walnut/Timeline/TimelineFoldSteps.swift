@@ -20,6 +20,10 @@ enum TimelineFoldSteps {
         /// A letter to the person's inbox.
         case inbox
         case thought
+        /// A line the CLI put in (`TimelineInjectedLines`): a loaded skill's text or
+        /// other context. Counted by nothing, as on the web: the line says what the
+        /// steps did, and the opened fold shows the line by its label.
+        case context(skill: Bool)
         case ack
         case update
     }
@@ -35,6 +39,8 @@ enum TimelineFoldSteps {
             return [.calls(1)]
         case .thinking:
             return [.thought]
+        case .injected:
+            return [.context(skill: m.source == "skill")]
         case nil where !m.isUser:
             let reading = TimelineTurnMarker.read(m.text)
             if !reading.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return [.update] }
@@ -52,7 +58,8 @@ enum TimelineFoldSteps {
     }
 
     /// The fold's line. A stretch with none of the three counts reads by what it
-    /// was: an update, an acknowledgement, or "Thinking", the old empty-fold line.
+    /// was: an update, an acknowledgement, or "Thinking", the old empty-fold line
+    /// (also a stretch of CLI lines alone, the web's `foldStepsPhrase` word for word).
     static func phrase(_ steps: [Step]) -> String {
         var received = 0, sent = 0, tools = 0, updates = 0, acks = 0
         for step in steps {
@@ -62,7 +69,7 @@ enum TimelineFoldSteps {
             case .calls(let n): tools += n
             case .update: updates += 1
             case .ack: acks += 1
-            case .thought: break
+            case .thought, .context: break
             }
         }
         var pieces: [String] = []

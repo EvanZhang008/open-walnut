@@ -8,8 +8,10 @@
 
 import { toolDetail, toolResultPreview, toolResultText } from '../tool-summary.js'
 import { clipTranscriptText } from './transcript-clip.js'
-import { toDisplayedUserText } from './reference-cards.js'
+import { projectUserText } from './reference-cards.js'
 import { transcriptSentBy, type TranscriptSentBy } from './transcript-sent-by.js'
+import { InjectedLines, type InjectedCarrier } from './transcript-injected.js'
+import { hookContextText, walnutAddedOf, type WalnutAddedItem } from '../../lib/walnut-added.js'
 
 export const TRANSCRIPT_TAIL_ROWS = 200
 // Tail-only read: ~200 rendered rows fit comfortably in the last 512KB even
@@ -17,7 +19,10 @@ export const TRANSCRIPT_TAIL_ROWS = 200
 // exactly the proxy-killing payload class (inc-…925).
 export const TRANSCRIPT_TAIL_BYTES = 512 * 1024
 
-type TranscriptRow = { role: string; text: string; timestamp: string; kind?: 'tool' | 'thinking'; detail?: string; resultPreview?: string; agent?: string; isError?: true; sentBy?: TranscriptSentBy }
+type TranscriptRow = InjectedCarrier & {
+  role: string; text: string; timestamp: string; kind?: 'tool' | 'thinking'; detail?: string; resultPreview?: string
+  agent?: string; isError?: true; sentBy?: TranscriptSentBy; added?: WalnutAddedItem[]; textWithoutContext?: string
+}
 
 export function transcriptFromJsonl(sessionId: string, main: string): Record<string, unknown> {
   const lines: Array<Record<string, unknown>> = []
@@ -52,16 +57,40 @@ export function transcriptFromJsonl(sessionId: string, main: string): Record<str
   })
 
   const messages: TranscriptRow[] = []
+  // The lines the CLI put in itself ride the row before them (transcript-injected.ts).
+  const injected = new InjectedLines('live')
   for (const [i, parsed] of lines.entries()) {
     if (parsed.parent_tool_use_id) continue // subagent lane
     if (typeof parsed.walnutMessageId === 'string' && parsed.subtype === 'walnut-injected'
         && lastMarker.get(parsed.walnutMessageId) !== i) continue
-    // CLI-injected user lines (skill dumps, compaction summaries): the same skip
-    // as buildSessionTranscript's `m.injected` filter on the primary box.
-    // walnut-injected markers are exempt: they ARE the user's words.
+    // A hook's added context, written as an attachment line (the primary's
+    // history parser reads it the same way, session-history.ts).
+    const attachment = parsed.attachment as { type?: string; content?: unknown; hookEvent?: unknown } | undefined
+    if (parsed.type === 'attachment' && attachment?.type === 'hook_additional_context') {
+      const text = hookContextText(attachment.content, attachment.hookEvent)
+      if (text) injected.take(text, messages)
+      continue
+    }
+    // CLI-injected user lines (a skill's text, a compaction summary): as on the
+    // primary box, they ride the row before them, and one that is only a Walnut
+    // message is drawn as that message. walnut-injected markers are exempt: they
+    // ARE the user's words.
     if (parsed.subtype !== 'walnut-injected'
         && (parsed.isMeta === true || parsed.isSynthetic === true
-          || parsed.isCompactSummary === true || parsed.isVisibleInTranscriptOnly === true)) continue
+          || parsed.isCompactSummary === true || parsed.isVisibleInTranscriptOnly === true)) {
+      if (parsed.type !== 'user') continue
+      const ts = typeof parsed.timestamp === 'string' ? parsed.timestamp : new Date().toISOString()
+      const body = (parsed.message as { content?: unknown } | undefined)?.content
+      const texts = typeof body === 'string' ? [body]
+        : Array.isArray(body) ? body.flatMap((b) => {
+          const block = b as { type?: string; text?: string }
+          return block.type === 'text' && typeof block.text === 'string' ? [block.text] : []
+        }) : []
+      for (const text of texts) {
+        if (injected.take(text, messages) === 'message') messages.push(userRow(text.trim(), ts))
+      }
+      continue
+    }
     const timestamp = typeof parsed.timestamp === 'string' ? parsed.timestamp : new Date().toISOString()
     const type = parsed.type as string
     const content = (parsed.message as { content?: unknown } | undefined)?.content
@@ -114,6 +143,7 @@ export function transcriptFromJsonl(sessionId: string, main: string): Record<str
     }
   }
 
+  injected.finish(messages)
   const truncated = messages.length > TRANSCRIPT_TAIL_ROWS
   return {
     version: 1,
@@ -142,8 +172,14 @@ function clip(text: string): string {
  *  the human's words, and name the sender from the whole text (an envelope cut
  *  short reads as prose), by the primary's rule (transcript-sent-by.ts). */
 function userRow(text: string, timestamp: string): TranscriptRow {
-  const shown = toDisplayedUserText(text, timestamp)
-  return { role: 'user', text: clipTranscriptText(shown, 'live'), timestamp, sentBy: transcriptSentBy({ role: 'user', text: shown }) }
+  const { text: shown, hints } = projectUserText(text, timestamp)
+  // What Walnut added besides its notes in front, as the primary's projection says it.
+  const { items, textWithoutContext } = walnutAddedOf(shown, hints)
+  return {
+    role: 'user', text: clipTranscriptText(shown, 'live'), timestamp, sentBy: transcriptSentBy({ role: 'user', text: shown }),
+    ...(items.length ? { added: items.map((i) => ({ ...i, text: clipTranscriptText(i.text, 'live') })) } : {}),
+    ...(textWithoutContext !== undefined ? { textWithoutContext: clipTranscriptText(textWithoutContext.trim(), 'live') } : {}),
+  }
 }
 
 /** The CLI's abort echo ("[Request interrupted by user( for tool use)]"):

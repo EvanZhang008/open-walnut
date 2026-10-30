@@ -20,7 +20,10 @@ import Foundation
 ///    description above the bubble and the rest as one "Walnut added: …" row under
 ///    it, which opens to each item's words (`Additions`);
 ///  · received messages with no step or send beside them are each their one-line
-///    description, with nothing to open.
+///    description, with nothing to open;
+///  · a line the CLI put in itself (a loaded skill's text, a hook's added context,
+///    `TimelineInjectedLines`) is a quiet step: it folds with the steps beside it,
+///    and alone it is its own closed row ("Loaded skill release-notes ›").
 /// Every fold starts closed and opens to its members, which keep their own rows;
 /// a received member is its one-line description there too.
 enum TimelineTurnFold {
@@ -252,7 +255,8 @@ private final class Planner {
             guard !mine.isEmpty else { continue }
             if turn.kind == .hidden { quiet += mine.map(\.part); continue }
             let answer = turn.kind == .answered ? mine.firstIndex(where: { $0.start == turn.answer }) : nil
-            guard var ans = answer else { mine.forEach { place($0.part) }; continue }
+            guard let answerAt = answer else { mine.forEach { place($0.part) }; continue }
+            var ans = answerAt
             // The person's own message always shows.
             let lead = turn.byPerson && mine[0].start == turn.start ? 1 : 0
             if lead == 1 { flushQuiet(); out += defaultParts([mine[0].part]) }
@@ -263,7 +267,10 @@ private final class Planner {
                prev.createdAt == messages[turn.answer].createdAt { ans -= 1 }
             quiet += mine[lead..<ans].map(\.part)
             flushQuiet()
-            out += defaultParts(mine[ans...].map(\.part))
+            out += defaultParts(mine[ans...answerAt].map(\.part))
+            // After the answer: info cards show as they always did, and a line the CLI
+            // put in (a Stop hook's context) joins the quiet steps that follow.
+            mine[(answerAt + 1)...].forEach { place($0.part) }
         }
         if p < end { parts[p..<end].forEach { place($0.part) } }
         // Quiet steps right before the live turn (a hidden turn's narration, which
@@ -280,13 +287,14 @@ private final class Planner {
     }
 
     /// A quiet row: a finished step, a message received or sent, reasoning alone,
-    /// the no-action line. A failed call or a question is never folded away unread.
+    /// the no-action line, a line the CLI put in. A failed call or a question is
+    /// never folded away unread.
     private static func isQuiet(_ part: TimelineToolRunFold.Part) -> Bool {
         switch part {
         case .run(_, let members): return members.allSatisfy(isFinishedStep)
         case .message(let m):
             return TimelineTurnShape.isInbound(m) || (TimelineTurnFold.isOutbound(m) && isFinishedStep(m))
-                || m.kind == .thinking || TimelineTurnFold.isAckOnly(m)
+                || m.kind == .thinking || m.kind == .injected || TimelineTurnFold.isAckOnly(m)
         }
     }
 
@@ -407,6 +415,8 @@ extension ChatMessage {
         copy.retryNotice = retryNotice
         copy.added = added
         copy.textWithoutContext = textWithoutContext
+        copy.injectedAfter = injectedAfter
+        copy.injectedBefore = injectedBefore
         copy.walnutAddedToggle = walnutAddedToggle
         return copy
     }

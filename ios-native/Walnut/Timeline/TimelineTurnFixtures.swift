@@ -4,8 +4,9 @@ import Foundation
 /// A session transcript in every turn shape (`TimelineTurnShape`), for the DEBUG
 /// timeline harness: the device pass that looks at the quiet steps between answers
 /// as one row that says what they were, Walnut's notes folded above a person's
-/// words (hidden until revealed, like what else Walnut added), and no tag printing. Rows carry `sentBy` the way a current server sends
-/// it. Neutral, invented content.
+/// words (hidden until revealed, like what else Walnut added), the lines the CLI
+/// put in itself as closed rows, and no tag printing. Rows carry `sentBy` the way a
+/// current server sends it. Neutral, invented content.
 enum TimelineTurnFixtures {
     static func messages() -> [ChatMessage] {
         var rows: [ChatMessage] = []
@@ -25,6 +26,12 @@ enum TimelineTurnFixtures {
         }
         // A person's question, answered after two calls (one run, left as it is).
         add("user", "Can you check why the nightly build failed?", sentBy: "person")
+        // A SessionStart hook's context, put in before any row: its own closed row
+        // above the first message, which opens to its text.
+        rows[0].injectedBefore = [CliInjectedItem(
+            kind: "hook", label: "Added by the SessionStart hook",
+            text: "The docs site builds with bun run docs:build. "
+                + "Screenshots live in docs/screens and are refreshed in light and dark.")]
         add("assistant", "Read", kind: .tool, detail: "logs/nightly.log", result: "timeout in net test")
         add("assistant", "Bash", kind: .tool, detail: "Re-run the network tests",
             result: "12 passed", input: "command: bun test tests/network\ndescription: Re-run the network tests")
@@ -61,6 +68,14 @@ enum TimelineTurnFixtures {
                              "This task moved to the folder Release.") + "\n\nPlease draft the release notes.",
             sentBy: "person")
         add("assistant", "Listing the merged changes first", kind: .thinking)
+        // A Skill call, the skill's text right after it: both fold into the work
+        // before the answer, the text a closed row of its own inside the fold.
+        add("assistant", "Skill", kind: .tool, detail: "release-notes", result: "Launching skill: release-notes")
+        rows[rows.count - 1].injectedAfter = [CliInjectedItem(
+            kind: "skill", label: "Loaded skill release-notes",
+            text: "Base directory for this skill: /home/dev/.claude/skills/release-notes\n\n"
+                + "# Release notes\n\nGroup the merged changes by area, lead with what a user notices, "
+                + "and keep each line to one sentence.")]
         add("assistant", "The draft is ready in docs/release-notes.md.\n\n\(TimelineTurnMarker.tag)")
         // A status change of a followed task in front of a person's words (2026-10-29):
         // one row above the bubble, never the words inside the note's card.

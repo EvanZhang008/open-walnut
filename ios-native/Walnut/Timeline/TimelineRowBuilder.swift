@@ -184,6 +184,8 @@ final class TimelineRowBuilder {
         case .notification:
             return [notificationRow(message, namespace: namespace, width: width,
                                     expandedRowIDs: expandedRowIDs)]
+        case .injected:
+            return injectedRows(message, namespace: namespace, expandedRowIDs: expandedRowIDs, width: width)
         case nil:
             if message.isUser {
                 return userRows(message, namespace: namespace, width: width, queued: queued, scope: scope)
@@ -1036,11 +1038,38 @@ final class TimelineRowBuilder {
     /// height); each item is a TextKit text row, measured by the measurer the text
     /// cell lays it out with, so neither can draw past the height reserved for it.
     func addedRows(id: String, items: [WalnutAddedItem], expanded: Bool, width: CGFloat) -> [TimelineRow] {
-        var rows = [foldRow(id: id, phrase: TimelineTurnFold.addedPhrase(items), failCount: 0,
-                            expanded: expanded, width: width)]
+        labelledFoldRows(id: id, phrase: TimelineTurnFold.addedPhrase(items),
+                         items: items.map { ($0.label, $0.text) }, expanded: expanded, width: width)
+    }
+
+    /// A line the CLI put into the conversation (`ChatMessage.Kind.injected`): the
+    /// same closed row as "Walnut added", reading its label ("Loaded skill
+    /// release-notes", "Added by the SessionStart hook"), which opens to the label
+    /// and the line's whole text. Its open state is the row id's, in `expandedRowIDs`.
+    private func injectedRows(_ message: ChatMessage, namespace: String,
+                              expandedRowIDs: Set<String>, width: CGFloat) -> [TimelineRow] {
+        let id = "\(namespace)#0"
+        let label = Self.injectedLabel(message)
+        return labelledFoldRows(id: id, phrase: label, items: [(label, message.text)],
+                                expanded: expandedRowIDs.contains(id), width: width)
+    }
+
+    /// What an injected row reads; the server always names it, its own "Injected context" if not.
+    static func injectedLabel(_ message: ChatMessage) -> String {
+        let label = (message.detail ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return label.isEmpty ? "Injected context" : label
+    }
+
+    /// The turn fold's capsule reading `phrase` (same look, same wrapping height,
+    /// read by VoiceOver as the phrase and its open state, opened by a tap), and,
+    /// open, one text row per item under it with the item's label and its whole
+    /// text, measured by the measurer the text cell lays it out with.
+    private func labelledFoldRows(id: String, phrase: String, items: [(label: String, text: String)],
+                                  expanded: Bool, width: CGFloat) -> [TimelineRow] {
+        var rows = [foldRow(id: id, phrase: phrase, failCount: 0, expanded: expanded, width: width)]
         guard expanded else { return rows }
         for (n, item) in items.enumerated() {
-            let text = Self.addedItemText(item)
+            let text = Self.addedItemText(label: item.label, text: item.text)
             var hasher = Hasher()
             hasher.combine(text.string)
             rows.append(textRow(id: "\(id)#\(n)", revision: hasher.finalize(), attributed: text, width: width))
@@ -1051,14 +1080,18 @@ final class TimelineRowBuilder {
     /// One added item as the opened row draws it: its label on a line of its own,
     /// then its words, in the footnote styles the rest of the row uses.
     static func addedItemText(_ item: WalnutAddedItem) -> NSAttributedString {
+        addedItemText(label: item.label, text: item.text)
+    }
+
+    static func addedItemText(label: String, text: String) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
         paragraph.paragraphSpacing = 2
-        let out = NSMutableAttributedString(string: item.label, attributes: [
+        let out = NSMutableAttributedString(string: label, attributes: [
             .font: UIFont.systemFont(ofSize: TimelineTextStyler.footnoteFont.pointSize, weight: .semibold),
             .foregroundColor: UIColor.label,
             .paragraphStyle: paragraph,
         ])
-        let words = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if !words.isEmpty {
             out.append(NSAttributedString(string: "\n" + words, attributes: [
                 .font: TimelineTextStyler.footnoteFont,

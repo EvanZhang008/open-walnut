@@ -87,6 +87,9 @@ struct MessageRow: View {
             chip(icon: "sparkles", text: message.text)
         case .notification:
             NotificationCard(message: message)
+        case .injected:
+            // Only the session timeline makes these rows; drawn by its label here.
+            chip(icon: "doc.text", text: message.detail ?? "Injected context")
         case nil:
             if message.isUser {
                 userBubble
