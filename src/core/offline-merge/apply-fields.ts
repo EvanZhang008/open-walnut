@@ -144,6 +144,17 @@ async function settleProject(
     return { fields: rest, entries: [{ ...entryBase(record), kind: 'refused', taskId: task.id, field: 'project', mac: task.project ?? '', replica: project, reason }] };
   };
   if (ensured.blocked) return drop(`the project ${project} was deleted on the Mac; the task stays in ${task.project || 'Inbox'}`);
+  // A session moving a worker out of its lead's project, as online (caller-placement.ts);
+  // a queued write never carries the user's words, so only the lead's own projects pass.
+  if (record.actor?.kind === 'session') {
+    const { workerMoveRefusal, resolveCallerPlacement } = await import('../sessions/caller-placement.js');
+    const parent = fields.parent_task_id && typeof fields.parent_task_id.value === 'string' ? fields.parent_task_id.value : undefined;
+    const caller = await resolveCallerPlacement(record.actor.sid).catch(() => ({ kind: 'unknown' as const }));
+    const why = await workerMoveRefusal({
+      task, project: ensured.name, caller, ...(parent !== undefined ? { parentTaskId: parent } : {}),
+    });
+    if (why) return drop(`${why} This move was made while the Walnut server was away; the task stays in ${task.project || 'Inbox'}.`);
+  }
   if (ensured.source !== task.source && task.source !== 'local') {
     return drop(`moving this task into ${ensured.name} changes where it syncs, which needs the Mac to answer; the task stays in ${task.project || 'Inbox'}`);
   }

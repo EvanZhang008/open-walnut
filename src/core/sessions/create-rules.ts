@@ -4,8 +4,9 @@
  * the offline drain's away create (src/core/offline-merge/apply-v2.ts), so a create
  * replayed from a host's journal lands the way the same call online does.
  *
- *   - a worker that names a project other than its own task's says why (`project_reason`,
- *     caller-placement.ts projectElsewhereRefusal): ProjectElsewhereError (409);
+ *   - a worker that names a project other than its own task's quotes the user's words
+ *     naming it (`user_words`, caller-placement.ts projectElsewhereRefusal):
+ *     ProjectElsewhereError (409);
  *   - a session's subtask chain has a depth cap (subtask-limits.ts): SubtaskLimitError;
  *   - an ask's create that names no project goes to `defaults.project`, never the ask's
  *     own `Ask ...` project (with a parent set addTask would inherit it);
@@ -24,7 +25,8 @@ export interface CreateRuleInput {
   title: string;
   /** The project the create names (the body's, before any rule fills it in). */
   project?: string;
-  project_reason?: unknown;
+  /** The user's own words asking for `project`, when it is not the caller's. */
+  user_words?: unknown;
   description?: string;
   pinned?: unknown;
   focus_tier?: unknown;
@@ -41,7 +43,7 @@ export interface CreateRuleOutput {
   tierInherited: boolean;
 }
 
-/** A worker named a project other than its own task's without a reason: nothing is created. */
+/** A worker named a project other than its own task's without the user's words for it: nothing is created. */
 export class ProjectElsewhereError extends Error {
   readonly statusCode = 409;
   readonly code = 'project_elsewhere';
@@ -53,7 +55,7 @@ export class ProjectElsewhereError extends Error {
 
 /**
  * Apply the create rules for `caller`. Mutates `decision.project` for the ask rule.
- * Throws ProjectElsewhereError for a worker's unexplained other project, and
+ * Throws ProjectElsewhereError for a worker's other project the user did not name, and
  * SubtaskLimitError when the parent sits too deep.
  */
 export async function applyCreateRules(
@@ -61,11 +63,19 @@ export async function applyCreateRules(
 ): Promise<CreateRuleOutput> {
   const { projectElsewhereRefusal } = await import('./caller-placement.js');
   const elsewhere = projectElsewhereRefusal(
-    { ...(typeof input.project === 'string' ? { project: input.project } : {}), project_reason: input.project_reason }, caller);
+    { ...(typeof input.project === 'string' ? { project: input.project } : {}), user_words: input.user_words }, caller);
   if (elsewhere) {
     throw new ProjectElsewhereError(elsewhere, 'task' in caller
       ? { callerProject: caller.task.project, ...(typeof input.project === 'string' ? { requestedProject: input.project } : {}) }
       : undefined);
+  }
+  if (caller.kind === 'worker' && typeof input.project === 'string' && typeof input.user_words === 'string'
+    && !(await import('./caller-placement.js')).sameProject(input.project, caller.task.project)) {
+    const { log } = await import('../../logging/index.js');
+    log.session.info('subtask filed in another project as the user asked', {
+      parentId: caller.task.id, callerProject: caller.task.project, project: input.project,
+      callerSid: caller.session.id, userWords: input.user_words.slice(0, 300),
+    });
   }
   // Only a session is limited: a human's (or a device's) create never is.
   if (decision.parentTaskId && 'session' in caller) {
@@ -108,6 +118,9 @@ export async function placeBesideCaller(
   decision: PlacementDecision, caller: CallerPlacement, created: { id: string; title: string }, eventSource: string,
 ): Promise<Awaited<ReturnType<typeof import('./caller-placement.js').joinOrCreateSiblingFolder>> | null> {
   if (!decision.placeBesideCaller || caller.kind !== 'worker') return null;
+  // The companion holds no folders: the Mac files it beside its parent when it takes the create.
+  const { CLOUD_MODE } = await import('../../constants.js');
+  if (CLOUD_MODE) return null;
   const { joinOrCreateSiblingFolder } = await import('./caller-placement.js');
   return joinOrCreateSiblingFolder(caller.task, created.id, {
     eventSource, refineTitles: [caller.task.title, created.title], nest: true,

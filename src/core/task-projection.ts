@@ -115,6 +115,12 @@ export interface ProjectedTask {
   /** The CEO ("main") or a VP ("lead"): the phone's session menu offers its memory and
    *  instructions (additive, 2026-10; omitted on other tasks). */
   org_role?: string
+  /** A lead's projects (Task.org_leads; additive, 2026-10-29, lead rows only): the cloud
+   *  companion lets a lead file work in each of them while the Mac is away. */
+  org_leads?: string[]
+  /** A Personal AI conversation (Task.walnut_agent; additive, 2026-10-29): the companion
+   *  never places its work beside it, as the Mac does not. Omitted otherwise. */
+  walnut_agent?: true
 }
 
 /**
@@ -202,6 +208,8 @@ export function projectTask(t: Task): ProjectedTask {
     ...(t.user_status && t.status !== 'done' && t.phase !== 'COMPLETE' ? { user_status: t.user_status } : {}),
     ...(t.plugin_only ? { plugin_only: t.plugin_only } : {}),
     ...(t.org_role ? { org_role: t.org_role } : {}),
+    ...(t.org_role === 'lead' && t.org_leads?.length ? { org_leads: [...t.org_leads] } : {}),
+    ...(t.walnut_agent ? { walnut_agent: true as const } : {}),
     ...(isPartial(t.result_report) ? { result_report: {
       at: t.result_report!.at, not_done: t.result_report!.not_done!,
       ...(t.result_report!.result ? { result: t.result_report!.result } : {}),

@@ -527,8 +527,9 @@ defineOp({
     'inside a task, the new task lands BESIDE yours by default: same project, your folder (Walnut makes ' +
     'one holding both when yours has none, and a subfolder of yours holding both when yours also holds ' +
     'other work), same host and directory. Omit project for that. Name another project ("" = Inbox) only ' +
-    'when the work belongs there, with project_reason saying why: without one the create is refused ' +
-    '(409 project_elsewhere) and nothing is made. A folder never follows work into another project. Wherever it lands, the new task is your SUBTASK (Sub on the board), from a Personal AI conversation too. Called from anywhere else, an ' +
+    'when the USER asked for that project, with user_words quoting what they said, naming it: without them the ' +
+    'create is refused (409 project_elsewhere) and nothing is made. A project you picked yourself (from a ' +
+    'repository, a directory or a reason you wrote) never counts; a lead files in the projects it leads. A folder never follows work into another project. Wherever it lands, the new task is your SUBTASK (Sub on the board), from a Personal AI conversation too. Called from anywhere else, an ' +
     'omitted project means the configured default project (normally the Inbox). A new project name ' +
     'creates its registry row. The result\'s ' +
     '`placement` says where it landed. From inside a task the new task is born in your board tier ' +
@@ -537,7 +538,8 @@ defineOp({
   input: {
     title: z.string().min(1).describe('Task title: a few words naming the specific subject, like a commit subject (under 60 characters; the server cuts a longer one from a session). The brief goes in message or description'),
     project: z.string().optional().describe('Project name; "" for the Inbox. Omit to use your own task\'s project (from inside a task) or the Inbox (elsewhere)'),
-    project_reason: z.string().optional().describe('From inside a task: why the work belongs in `project` when that is not your own task\'s project (10 characters or more). Not needed when project is omitted'),
+    user_words: z.string().optional().describe('From inside a task, with a `project` that is not your own task\'s: exactly what the user said asking for that project (quoted, in their language; it must name the project). Not needed when project is omitted'),
+    project_reason: z.string().optional().describe('Retired: an explanation no longer files work in another project; pass user_words'),
     confirm_new: z.boolean().optional().describe('After a 409 related_open_tasks only: true creates the task anyway, as a separate deliverable. Needs new_reason'),
     new_reason: z.string().optional().describe('With confirm_new: why this is new work and not one of the listed open tasks (10 characters or more). Kept in the task description'),
     group_id: z.string().optional().describe('Folder id (g_...) inside the target project; "" for no folder. Omit to join your own task\'s folder (a new one when it has none) when the task lands in your project'),
@@ -697,7 +699,8 @@ defineOp({
     // null clears too: JSON callers reach for it first, and a refused clear read as a broken op.
     due_date: z.string().nullable().optional().describe('ISO-8601 date/datetime, or "" / null to clear'),
     start_date: z.string().nullable().optional().describe('ISO-8601 date/datetime, or "" / null to clear'),
-    project: z.string().optional().describe('Project name; "" = Inbox'),
+    project: z.string().optional().describe('Project name; "" = Inbox. A worker (a task with a leader) stays in its leader\'s project: moving it to another needs user_words'),
+    user_words: z.string().optional().describe('With project, moving a worker out of its leader\'s project: exactly what the user said asking for that project (quoted, in their language; it must name the project). Without them the move is refused (409 project_elsewhere)'),
     title: z.string().optional().describe('New title: a few words (under 60 characters from a session, the server cuts a longer one; <= 500)'),
     description: z.string().optional().describe('Replaces the description (write-only)'),
     tags: z.array(z.string()).optional().describe('FULL replacement of the task tags, each key:value (e.g. team:marina, sev:2; a plain word is stored as label:<word>)'),
@@ -987,6 +990,7 @@ defineOp({
       tags: z.array(z.string()).optional(),
       parent_task_id: z.string().optional(),
       watched_at: z.string().nullable().optional().describe(WATCHED_AT_DESCRIPTION),
+      user_words: z.string().optional().describe('With project, moving your worker out of your project: what the user said, naming that project'),
     }).strict()).min(1).max(MAX_BULK_WRITE)
       .describe(`1 to ${MAX_BULK_WRITE} patches, each { id, ...fields } with at least one field besides id`),
   },

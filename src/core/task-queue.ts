@@ -79,7 +79,7 @@ function mintOpId(): string {
  *  scope an update (see TaskOp in task-outbox.ts); the two reorder kinds carry
  *  whole-list ordering (no per-row LWW clock). */
 export type TaskOpInput =
-  | { type: 'create'; task: Task }
+  | { type: 'create'; task: Task; callerSid?: string }
   | { type: 'update'; task: Task; touched?: string[]; append?: { note?: string }; fields?: TaskFieldWrites }
   | { type: 'delete'; id: string }
   | { type: 'reorder'; project: string; taskIds: string[] }
@@ -96,7 +96,7 @@ export function buildTaskOp(op: TaskOpInput): TaskOp {
     case 'reorder-pins':
       return { opId, type: 'reorder-pins', at, taskIds: op.taskIds };
     case 'create':
-      return { opId, type: 'create', at, task: op.task };
+      return { opId, type: 'create', at, task: op.task, ...(op.callerSid ? { callerSid: op.callerSid } : {}) };
     case 'update':
       return {
         opId, type: 'update', at, task: op.task,
@@ -431,7 +431,13 @@ export function createRecordOf(task: Task): { fields: Record<string, unknown>; p
 async function journalCreate(op: Extract<TaskOp, { type: 'create' }>): Promise<boolean> {
   try {
     const { journalTaskCreate } = await import('./companion-journal.js');
-    return journalTaskCreate({ opId: op.opId, taskId: op.task.id, ...createRecordOf(op.task) })?.ok === true;
+    // A worker's subtask in its own project carries the session, so the Mac's drain files it
+    // beside its leader (apply-v2.ts). One the user named another project for carries none: an
+    // older Mac would refuse it under its old rule, and the companion already applied the new one.
+    return journalTaskCreate({
+      opId: op.opId, taskId: op.task.id, ...createRecordOf(op.task),
+      ...(op.callerSid ? { actor: { kind: 'session' as const, sid: op.callerSid } } : {}),
+    })?.ok === true;
   } catch (err) {
     log.task.warn('task-queue: the journal did not take a new task, queueing it', { opId: op.opId, err: String(err) });
     return false;

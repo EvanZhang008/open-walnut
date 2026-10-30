@@ -135,6 +135,39 @@ describe('applyTaskOp (primary apply core)', () => {
     expect(created.project).toBe('Walnut');
   });
 
+  // 2026-10-29: a worker's create on the companion (which holds no folders) names its
+  // session, and the primary files it beside its leader's folder as its own create does.
+  it('a create naming a worker session joins its leader\'s folder; one without stays loose', async () => {
+    current = await load(false);
+    const { outbox, tm } = current;
+    const { createSessionRecord } = await import('../../src/core/session-tracker.js');
+    const { task: lead } = await tm.addTask({ title: 'Platform lead', project: 'Walnut', pinned: true });
+    const folder = await tm.createFolder('Rearchitecture', 'Walnut');
+    await tm.addToGroup(folder.group_id, [lead.id]);
+    const sid = '33333333-4444-5555-6666-777777777701';
+    await createSessionRecord(sid, lead.id, 'Walnut', '/repo/walnut', { title: lead.title });
+
+    const res = await outbox.applyTaskOp({
+      opId: 'w1', type: 'create', at: new Date().toISOString(), callerSid: sid,
+      task: snapshot({ id: 'op-worker-1', project: 'Walnut', parent_task_id: lead.id }) as never,
+    });
+    expect(res).toEqual({ applied: true, reason: 'created' });
+    expect((await tm.getTask('op-worker-1')).group_id).toBe(folder.group_id);
+
+    // No session named (a phone's create), or a parent that is not the session's task: no folder.
+    await outbox.applyTaskOp({
+      opId: 'w2', type: 'create', at: new Date().toISOString(),
+      task: snapshot({ id: 'op-worker-2', project: 'Walnut', parent_task_id: lead.id }) as never,
+    });
+    expect((await tm.getTask('op-worker-2')).group_id).toBeUndefined();
+    // Filed in another project as the user asked: the folder does not follow.
+    await outbox.applyTaskOp({
+      opId: 'w3', type: 'create', at: new Date().toISOString(), callerSid: sid,
+      task: snapshot({ id: 'op-worker-3', project: 'Elsewhere', parent_task_id: lead.id }) as never,
+    });
+    expect((await tm.getTask('op-worker-3')).group_id).toBeUndefined();
+  });
+
   it('a REPLAYED opId short-circuits without touching the store', async () => {
     current = await load(false);
     const { outbox, tm } = current;

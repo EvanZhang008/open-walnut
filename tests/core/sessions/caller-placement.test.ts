@@ -116,9 +116,10 @@ describe('decidePlacement (the rule table)', () => {
   })
 })
 
-// 2026-10-14: a leader guessed a project from its repo's name and filed its
-// subtask outside the team. A worker naming another project must say why.
-describe('projectElsewhereRefusal (another project needs a reason)', () => {
+// 2026-10-14 and 2026-10-15: a leader guessed a project from its repo's name and
+// filed its subtask outside the team. A worker names another project only with the
+// user's own words for it; a reason the agent wrote is no longer enough (2026-10-29).
+describe('projectElsewhereRefusal (another project needs the user\'s words)', () => {
   const inFolder: CallerPlacement = {
     kind: 'worker',
     task: { id: 't-caller', title: 'Refactor the fixture', project: 'marina', group_id: 'g_x', group_label: 'Rail Top' },
@@ -129,25 +130,49 @@ describe('projectElsewhereRefusal (another project needs a reason)', () => {
     expect(projectElsewhereRefusal({ project: 'marina' }, inFolder)).toBeNull()
     expect(projectElsewhereRefusal({ project: ' MARINA ' }, inFolder)).toBeNull()
   })
-  it('refuses another project, the Inbox included, with no reason or a short one', () => {
+  it('refuses another project, the Inbox included, with no words, words that do not name it, or an agent\'s reason', () => {
     for (const req of [
-      { project: 'acme' }, { project: '' }, { project: 'acme', project_reason: 'short   ' },
-      { project: 'acme', project_reason: 42 }, { project: 'acme', project_reason: '   \n\t  ' },
+      { project: 'acme' }, { project: '' }, { project: 'acme', user_words: 'ok' },
+      { project: 'acme', user_words: 42 }, { project: 'acme', user_words: '   \n\t  ' },
+      { project: 'acme', user_words: 'please write the release notes' },
+      { project: 'acme', project_reason: 'the release notes live in the acme repository' },
     ]) {
       const msg = projectElsewhereRefusal(req, inFolder)
       expect(msg).toContain('"Refactor the fixture" (t-caller) is in project "marina", folder "Rail Top"')
       expect(msg).toContain('Omit project')
-      expect(msg).toContain('project_reason')
+      expect(msg).toContain('user_words')
     }
-    expect(projectElsewhereRefusal({ project: '' }, inFolder)).toContain('File it in the Inbox only')
-    expect(projectElsewhereRefusal({ project: 'acme' }, inFolder)).toContain('File it in project "acme" only')
+    expect(projectElsewhereRefusal({ project: '' }, inFolder)).toContain('File it in the Inbox only when the user asked')
+    expect(projectElsewhereRefusal({ project: 'acme' }, inFolder)).toContain('File it in project "acme" only when the user asked')
+    expect(projectElsewhereRefusal({ project: 'acme', user_words: 'write the release notes' }, inFolder))
+      .toContain('("write the release notes") do not name project "acme"')
   })
   it('a caller in the Inbox with no folder is named so', () => {
     expect(projectElsewhereRefusal({ project: 'acme' }, worker(undefined, ''))).toContain('is in the Inbox. Omit')
   })
-  it('a reason of 10 characters or more lets it through', () => {
-    expect(projectElsewhereRefusal({ project: 'acme', project_reason: 'acme owns it' }, inFolder)).toBeNull()
-    expect(projectElsewhereRefusal({ project: '', project_reason: 'the user said Inbox' }, inFolder)).toBeNull()
+  it('the user\'s words naming the project let it through: the whole name, every word of it, any case or script', () => {
+    expect(projectElsewhereRefusal({ project: 'acme', user_words: 'put this one in ACME please' }, inFolder)).toBeNull()
+    expect(projectElsewhereRefusal({ project: 'Lantern Ops', user_words: 'file it under lantern-ops' }, inFolder)).toBeNull()
+    expect(projectElsewhereRefusal({ project: 'RailTopContext', user_words: 'the context of rail top, put it there' }, inFolder)).toBeNull()
+    expect(projectElsewhereRefusal({ project: '', user_words: 'just leave it in my inbox' }, inFolder)).toBeNull()
+    expect(projectElsewhereRefusal({ project: '', user_words: '\u653e\u5230\u6536\u4ef6\u7bb1' }, inFolder)).toBeNull()
+    expect(projectElsewhereRefusal({ project: '\u5bb6\u5ead', user_words: '\u653e\u5230\u5bb6\u5ead\u90a3\u91cc' }, inFolder)).toBeNull()
+  })
+  it('a short name must stand as its own word, and part of a long name is not the name', () => {
+    expect(projectElsewhereRefusal({ project: 'AI', user_words: 'as I said before, do it' }, inFolder)).not.toBeNull()
+    expect(projectElsewhereRefusal({ project: 'AI', user_words: 'move it to the AI project' }, inFolder)).toBeNull()
+    expect(projectElsewhereRefusal({ project: 'RailTopContext', user_words: 'it is about context' }, inFolder)).not.toBeNull()
+    // Part of a word is not the word: "gen" in "agent", "ai" in "details", "personal" in "personally".
+    expect(projectElsewhereRefusal({ project: 'AcmeGenAIDocs', user_words: 'ask the agent to add acme docs details' }, inFolder)).not.toBeNull()
+    expect(projectElsewhereRefusal({ project: 'Personal', user_words: 'I would personally do it' }, inFolder)).not.toBeNull()
+    expect(projectElsewhereRefusal({ project: 'Lantern AI', user_words: 'the lantern said no' }, inFolder)).not.toBeNull()
+    expect(projectElsewhereRefusal({ project: 'AcmeGenAIDocs', user_words: 'do it in AcmeGenAIDocs please' }, inFolder)).toBeNull()
+    expect(projectElsewhereRefusal({ project: 'Tide Pool', user_words: 'put it in tidepool' }, inFolder)).toBeNull()
+  })
+  it('a lead files in every project it leads without words', () => {
+    const lead: CallerPlacement = { ...inFolder, task: { ...inFolder.task, orgLead: true, orgLeads: ['marina', 'acme'] } } as CallerPlacement
+    expect(projectElsewhereRefusal({ project: 'Acme' }, lead)).toBeNull()
+    expect(projectElsewhereRefusal({ project: 'elsewhere' }, lead)).not.toBeNull()
   })
   it('never asks a caller that is not a worker', () => {
     const others: CallerPlacement[] = [

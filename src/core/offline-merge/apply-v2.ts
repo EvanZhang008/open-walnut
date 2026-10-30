@@ -211,8 +211,8 @@ async function createTask(
   const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
   let rules: Awaited<ReturnType<typeof applyCreateRules>>;
   try {
-    // A create queued away never carries project_reason (the host does not queue it), so a
-    // worker's create naming another project is refused here as online without a reason.
+    // A create queued away never carries user_words (the host does not queue them), so a
+    // worker's create naming another project is refused here as online without them.
     rules = await applyCreateRules({
       title: String(fields.title ?? 'Untitled'), description: str(fields.description), pinned: fields.pinned, focus_tier: placement.tier,
       ...(typeof placement.project === 'string' ? { project: placement.project } : {}),
@@ -220,7 +220,7 @@ async function createTask(
   } catch (err) {
     if (parentEntry) ctx.conflicts.retract([parentEntry]);
     if (err instanceof ProjectElsewhereError) {
-      throw new RefusedWrite(`${err.message} A task created while the Walnut server was away cannot carry project_reason, so it was not created; create it again now.`);
+      throw new RefusedWrite(`${err.message} It was asked while the Walnut server was away and was not created; create it again now.`);
     }
     const { SubtaskLimitError } = await import('../sessions/subtask-limits.js');
     if (err instanceof SubtaskLimitError) throw new RefusedWrite(err.message);

@@ -347,20 +347,32 @@ describe('an away create follows the online create rules (create-rules.ts)', () 
     expect(told.some((x) => x.sid === SID)).toBe(true)
   })
 
-  it('a worker\'s create naming another project (it cannot carry a reason away) is refused, listed and told; a device create there is made', async () => {
+  it('a worker\'s create naming another project (it cannot carry the user\'s words away) is refused, listed and told; a device create there is made', async () => {
     const lead = await newTask('Lead elsewhere')
     callers.set(SID, worker({ id: lead, title: 'Lead elsewhere', project: 'Acme' }))
     await drain([sessionCreate('mintrules0000000000f1', { title: 'Filed in the wrong place' }, { project: 'Other' })])
     expect(await getTask('mintrules0000000000f1').catch(() => null)).toBeNull()
-    expect(allEntries().filter((e) => e.taskId === 'mintrules0000000000f1').map((e) => String(e.reason ?? ''))).toEqual([expect.stringMatching(/project_reason/)])
+    expect(allEntries().filter((e) => e.taskId === 'mintrules0000000000f1').map((e) => String(e.reason ?? ''))).toEqual([expect.stringMatching(/user_words/)])
     await new Promise((r) => setTimeout(r, 30))
-    expect(told.filter((x) => x.sid === SID).map((x) => x.text).join('\n')).toMatch(/project_reason/)
+    expect(told.filter((x) => x.sid === SID).map((x) => x.text).join('\n')).toMatch(/user_words/)
     // The same project named by the worker's own: made, beside the caller.
     await drain([sessionCreate('mintrules0000000000f2', { title: 'Filed at home' }, { project: 'acme' })])
     expect((await getTask('mintrules0000000000f2')).parent_task_id).toBe(lead)
     // A device (not a session) names any project, as online.
     await drain([createRec('mintrules0000000000f3', { title: 'Phone create elsewhere' }, { project: 'Other' })])
     expect((await getTask('mintrules0000000000f3')).project).toBe('Other')
+  })
+
+  // 2026-10-29: a worker stays in its lead's project; a queued move cannot carry the user's words.
+  it('a session\'s queued move of a worker out of its lead\'s project is refused and listed; a device\'s moves it', async () => {
+    const lead = await newTask('Move lead')
+    const w = await newTask('Its worker', { parent_task_id: lead })
+    callers.set(SID, worker({ id: lead, title: 'Move lead', project: 'Acme' }))
+    await drain([fieldsRec(w, { project: { base: 'Acme', value: 'Other' } })])
+    expect((await getTask(w)).project).toBe('Acme')
+    expect(allEntries().some((e) => e.taskId === w && /is a worker of "Move lead"/.test(String(e.reason ?? '')))).toBe(true)
+    await drain([fieldsRec(w, { project: { base: 'Acme', value: 'Other' } }, { actor: NOT_SESSION })])
+    expect((await getTask(w)).project).toBe('Other')
   })
 
   it('a worker\'s task is born in the caller\'s tier and filed beside the caller in a folder', async () => {

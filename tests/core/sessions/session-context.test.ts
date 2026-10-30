@@ -190,7 +190,7 @@ describe('buildSessionContext (identity note)', () => {
     const { systemPrompt } = await buildSessionContext('')
     expect(systemPrompt).toMatch(/it lands beside yours: same project, folder and board tier/i)
     expect(systemPrompt).toMatch(/same host and directory/i)
-    expect(systemPrompt).toMatch(/Omit project; naming another needs project_reason/)
+    expect(systemPrompt).toMatch(/Omit project; name another only when the user asked for it, quoting their words in user_words/)
   })
 
   it('says a task you create is a teammate owning an area, one per ask, and its follow-ups go to it', async () => {

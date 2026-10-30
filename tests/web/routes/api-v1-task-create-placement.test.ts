@@ -192,22 +192,24 @@ describe('a worker caller', () => {
     expect(json.placement.group_id).toBe(folder.group_id)
   })
 
-  // 2026-10-14: a leader guessed a project from its repo's name and filed its
-  // subtask outside the team's project. Another project needs a stated reason.
-  it('naming another project without a reason is refused and makes nothing', async () => {
+  // 2026-10-14 and 2026-10-15: a leader guessed a project from its repo's name and
+  // filed its subtask outside the team's project. Another project needs the user's
+  // own words naming it; a reason the agent wrote no longer files it there (2026-10-29).
+  it('naming another project without the user\'s words is refused and makes nothing, whatever reason the agent gives', async () => {
     const folder = await createFolder('Team', 'marina')
     const { sid } = await seedCaller('marina', { folder: folder.group_id })
     const before = (await fetch(api('/api/v1/tasks')).then((r) => r.json())) as { tasks?: unknown[] }
     for (const body of [
       { title: 'Guessed project', project: 'marina-repo' },
-      { title: 'Short reason', project: 'acme', project_reason: '  because ' },
+      { title: 'Agent reason', project: 'acme', project_reason: 'the release notes live in the acme repository' },
+      { title: 'Words not naming it', project: 'acme', user_words: 'write the release notes today' },
       { title: 'To the Inbox', project: '' },
     ]) {
       const r = await post(body, sid)
       expect(r.status).toBe(409)
       expect(r.json.error.code).toBe('project_elsewhere')
       expect(r.json.error.message).toContain('project "marina", folder "Team"')
-      expect(r.json.error.message).toContain('project_reason')
+      expect(r.json.error.message).toContain('user_words')
     }
     const after = (await fetch(api('/api/v1/tasks')).then((r) => r.json())) as { tasks?: unknown[] }
     expect(after.tasks?.length).toBe(before.tasks?.length)
@@ -218,7 +220,7 @@ describe('a worker caller', () => {
   it('naming another project: that project, the folder does not follow, the parent link does', async () => {
     const folder = await createFolder('Stays', 'marina')
     const { task: caller, sid } = await seedCaller('marina', { folder: folder.group_id })
-    const { json } = await post({ title: 'Release notes', project: 'acme', project_reason: 'release notes are kept in acme' }, sid)
+    const { json } = await post({ title: 'Release notes', project: 'acme', user_words: 'file the release notes under acme' }, sid)
     expect(json.task.project).toBe('acme')
     expect(json.placement).toEqual({ project: 'acme', folder_created: false, parent_task_id: caller.id, tier: 'satellite' })
     const born = await getTask(json.task.id)
@@ -230,7 +232,7 @@ describe('a worker caller', () => {
 
   it('naming the Inbox on purpose: Inbox, no folder', async () => {
     const { sid } = await seedCaller('marina')
-    const { json } = await post({ title: 'Personal errand', project: '', project_reason: 'the user asked for the Inbox' }, sid)
+    const { json } = await post({ title: 'Personal errand', project: '', user_words: 'put it in my inbox' }, sid)
     expect(['', 'Inbox']).toContain(json.task.project)
     expect(json.placement.group_id).toBeUndefined()
   })
@@ -409,7 +411,7 @@ describe('the board tier: a worker\'s new task is born where the caller sits', (
     expect(stored.pinned).toBe(true)
     expect(stored.focus_tier).toBe('focus')
     // A tier is board-wide: it follows the work into another project.
-    const there = await post({ title: 'Focus work elsewhere', project: 'lighthouse', project_reason: 'the lighthouse team owns it' }, sid)
+    const there = await post({ title: 'Focus work elsewhere', project: 'lighthouse', user_words: 'give this to the lighthouse project' }, sid)
     expect((await getTask(there.json.task.id)).focus_tier).toBe('focus')
   })
 
@@ -486,7 +488,7 @@ describe('the team a session already leads (placement.open_subtasks)', () => {
     const { sid } = await seedCaller('bakery')
     const first = await post({ title: 'Bake the tasting box' }, sid)
     expect(first.json.placement.open_subtasks).toBeUndefined()
-    const second = await post({ title: 'Print the flyers', project: 'flyers', project_reason: 'flyers are their own project' }, sid)
+    const second = await post({ title: 'Print the flyers', project: 'flyers', user_words: 'make the flyers their own project, flyers' }, sid)
     expect(second.json.placement.open_subtasks).toEqual([{ id: first.json.task.id, title: 'Bake the tasting box', phase: 'TODO' }])
     expect(second.json.placement.more_open_subtasks).toBeUndefined()
     const third = await post({ title: 'Book the market stall' }, sid)
@@ -551,5 +553,97 @@ describe('GET /api/v1/me', () => {
     // An unknown token on the trusted loopback is not refused, and names no device.
     expect(await ask({ authorization: 'Bearer not-a-token' })).toEqual({ kind: 'human' })
     expect(await ask({})).toEqual({ kind: 'human' })
+  })
+})
+
+// 2026-10-29: a lead's worker sat alone in another project. A worker stays in its
+// lead's project unless the user named another: the create and every later move.
+describe('a session moving a worker out of its lead\'s project', () => {
+  async function patch(path: string, id: string, body: unknown, sid?: string): Promise<{ status: number; json: Record<string, any> }> {
+    const res = await fetch(api(`${path}/${id}`), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...(sid ? { 'x-walnut-caller-sid': sid } : {}) },
+      body: JSON.stringify(body),
+    })
+    return { status: res.status, json: await res.json() as Record<string, any> }
+  }
+
+  it('is refused without the user\'s words naming the project, from the lead or the worker itself, on both PATCH routes', async () => {
+    const { task: lead, sid } = await seedCaller('lantern')
+    const made = await post({ title: 'Component tests first' }, sid)
+    expect(made.status).toBe(201)
+    const worker = made.json.task.id as string
+    expect((await getTask(worker)).parent_task_id).toBe(lead.id)
+    const workerSid = '11111111-2222-3333-4444-999999999901'
+    await createSessionRecord(workerSid, worker, 'lantern', '/repo/lantern', { title: 'Component tests first' })
+    for (const [path, who] of [['/api/v1/tasks', sid], ['/api/v1/tasks', workerSid], ['/api/tasks', sid]] as const) {
+      for (const body of [
+        { project: 'tide-pool' },
+        { project: 'tide-pool', project_reason: 'the tests live in the tide pool repository' },
+        { project: 'tide-pool', user_words: 'write the component tests' },
+      ]) {
+        const r = await patch(path, worker, body, who)
+        expect(r.status).toBe(409)
+        expect(r.json.error.code).toBe('project_elsewhere')
+        expect(r.json.error.message).toContain(`is a worker of "${lead.title}" (${lead.id})`)
+        expect(r.json.error.message).toContain('user_words')
+      }
+    }
+    expect((await getTask(worker)).project).toBe('lantern')
+  })
+
+  it('goes through with the user\'s words, back into the lead\'s project with none, and always for a human', async () => {
+    const { task: lead, sid } = await seedCaller('lantern')
+    const worker = (await post({ title: 'Docs pass' }, sid)).json.task.id as string
+    const moved = await patch('/api/v1/tasks', worker, { project: 'tide-pool', user_words: 'move the docs pass into tide pool' }, sid)
+    expect(moved.status).toBe(200)
+    expect((await getTask(worker)).project).toBe('tide-pool')
+    expect((await getTask(worker)).parent_task_id).toBe(lead.id)
+    const back = await patch('/api/v1/tasks', worker, { project: 'Lantern' }, sid)
+    expect(back.status).toBe(200)
+    expect((await getTask(worker)).project.toLowerCase()).toBe('lantern')
+    // The human (no caller header) moves any task anywhere, as before.
+    expect((await patch('/api/v1/tasks', worker, { project: 'elsewhere' })).status).toBe(200)
+    expect((await patch('/api/tasks', worker, { project: 'elsewhere-too' })).status).toBe(200)
+    // A task with no leader is not a worker: an agent tidying it moves it freely.
+    const loose = (await post({ title: 'Loose task', project: 'lantern' })).json.task.id as string
+    expect((await patch('/api/v1/tasks', loose, { project: 'tide-pool' }, sid)).status).toBe(200)
+    // Another session tidying someone else's team (Main's reorg) is not asked either.
+    const { sid: tidier } = await seedCaller('org')
+    expect((await patch('/api/v1/tasks', worker, { project: 'reorg-target' }, tidier)).status).toBe(200)
+  })
+
+  it('a folder move into another project is a project move too', async () => {
+    const { sid } = await seedCaller('lantern')
+    const worker = (await post({ title: 'Folder hop' }, sid)).json.task.id as string
+    const folder = await createFolder('Elsewhere', 'tide-pool')
+    const add = (body: Record<string, unknown>) => fetch(api(`/api/tasks/groups/${folder.group_id}/add`), {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-walnut-caller-sid': sid },
+      body: JSON.stringify({ task_ids: [worker], move: true, ...body }),
+    })
+    expect((await add({})).status).toBe(409)
+    expect((await getTask(worker)).project).toBe('lantern')
+    expect((await add({ user_words: 'move the folder hop into tide-pool' })).status).toBe(200)
+    expect((await getTask(worker)).project).toBe('tide-pool')
+  })
+
+  it('adopting and moving in one write is judged against the new leader', async () => {
+    const { task: lead, sid } = await seedCaller('lantern')
+    const other = (await post({ title: 'Unrelated', project: 'lantern' })).json.task.id as string
+    const r = await patch('/api/v1/tasks', other, { parent_task_id: lead.id, project: 'tide-pool' }, sid)
+    expect(r.status).toBe(409)
+    expect(r.json.error.code).toBe('project_elsewhere')
+    expect((await getTask(other)).parent_task_id).toBeUndefined()
+  })
+
+  it('the legacy create route refuses a worker\'s other project the same way', async () => {
+    const { sid } = await seedCaller('lantern')
+    const res = await fetch(api('/api/tasks'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-walnut-caller-sid': sid },
+      body: JSON.stringify({ title: 'Through the old route', project: 'tide-pool', project_reason: 'the repository is tide pool' }),
+    })
+    expect(res.status).toBe(409)
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('project_elsewhere')
   })
 })

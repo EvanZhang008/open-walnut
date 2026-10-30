@@ -126,7 +126,7 @@ describe('subtask depth', () => {
     expect(json.error.message).toContain('Do this part here with your own tools')
     expect((await listTasks({})).length).toBe(before)
     // Naming another project does not escape it: the new task is still its subtask.
-    const elsewhere = await createAs(sid, { title: 'Elsewhere', project: 'other-place', project_reason: 'the work belongs to other-place' })
+    const elsewhere = await createAs(sid, { title: 'Elsewhere', project: 'other-place', user_words: 'file it under other-place' })
     expect(elsewhere.status).toBe(409)
     expect(elsewhere.json.error.code).toBe('subtask_too_deep')
   })

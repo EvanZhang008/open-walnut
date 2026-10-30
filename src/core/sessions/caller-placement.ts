@@ -50,8 +50,10 @@
  * `Ask …` projects, and filing the user's work there would bury it: an ask keeps
  * the old defaults for project, folder, tier and cwd and only gets the parent
  * link (an ask often sits in Wait, which would park the work it files).
- * Humans, external processes and a cloud replica (no session registry) keep the
- * old behaviour entirely.
+ * Humans and external processes keep the old behaviour entirely. The cloud
+ * companion reads its caller from the projections the Mac pushes
+ * (resolveCallerOnReplica) and files no folder (it holds none): the Mac places
+ * the task beside its parent's folder when it takes the create.
  */
 
 import path from 'node:path';
@@ -110,7 +112,7 @@ export function normalizeHost(host: string | undefined | null): string {
 export async function resolveCallerPlacement(callerSid: string | undefined): Promise<CallerPlacement> {
   const sid = (callerSid ?? '').trim();
   if (!sid) return { kind: 'human' };
-  if (CLOUD_MODE) return { kind: 'unknown' };
+  if (CLOUD_MODE) return resolveCallerOnReplica(sid);
   const { resolveCaller } = await import('./session-send-core.js');
   const caller = await resolveCaller(sid).catch(() => ({ kind: 'external' as const }));
   if (caller.kind !== 'session') return { kind: caller.kind === 'human' ? 'human' : 'external' };
@@ -138,6 +140,42 @@ export async function resolveCallerPlacement(callerSid: string | undefined): Pro
     ...(task.org_role === 'lead' && task.org_leads?.length ? { orgLeads: [...task.org_leads] } : {}),
   };
   return { kind: isAskTask(task) ? 'ask' : 'worker', task: callerTask, session };
+}
+
+/**
+ * The same caller on the cloud companion, which keeps no session registry: the session
+ * projection the Mac pushes names each session's task and where it stood, and the task
+ * projection that task's live project, board tier and org role. 2026-10-15: while the Mac
+ * was away a lead's create reached the companion, which read every session as unknown, so
+ * its worker was born in the project the lead had guessed, with no parent link. A session
+ * neither projection knows stays unknown (the old behaviour).
+ */
+async function resolveCallerOnReplica(sid: string): Promise<CallerPlacement> {
+  const [{ readSessionProjection }, { readTaskProjection }] = await Promise.all([
+    import('../session-projection.js'), import('../task-projection.js'),
+  ]);
+  const row = (await readSessionProjection().catch(() => null))?.sessions?.find((s) => s.id === sid);
+  if (!row) return { kind: 'unknown' };
+  const session: CallerSession = { id: sid, host: normalizeHost(row.host), ...(row.cwd ? { cwd: row.cwd } : {}) };
+  if (!row.task_id) return { kind: 'untracked', session };
+  const task = (await readTaskProjection().catch(() => null))?.tasks.find((t) => t.id === row.task_id);
+  const project = task ? task.project ?? '' : row.project ?? '';
+  // The folder rides the session row only; it is the task's while the task is still where the row saw it.
+  const folder = row.group_id && sameProject(project, row.project) ? row.group_id : undefined;
+  const pinned = task ? Boolean(task.pinned) : row.pinned;
+  const tier = task ? task.focus_tier : row.focus_tier;
+  const callerTask: CallerTask = {
+    id: row.task_id,
+    title: task?.title ?? row.task_title ?? '',
+    project,
+    ...(folder ? { group_id: folder } : {}),
+    ...(folder && row.group_label ? { group_label: row.group_label } : {}),
+    ...(typeof pinned === 'boolean' ? { pinned } : {}),
+    ...(pinned && tier ? { focus_tier: tier } : {}),
+    ...(task?.org_role === 'lead' ? { orgLead: true } : {}),
+    ...(task?.org_role === 'lead' && task.org_leads?.length ? { orgLeads: [...task.org_leads] } : {}),
+  };
+  return { kind: isAskTask({ project, walnut_agent: task?.walnut_agent === true }) ? 'ask' : 'worker', task: callerTask, session };
 }
 
 /**
@@ -209,33 +247,145 @@ export function decidePlacement(req: PlacementRequest, caller: CallerPlacement):
   return { project, placeBesideCaller: true, inheritedFrom: caller.task.id, ...parent };
 }
 
-/** A project reason long enough to say something. */
-export const PROJECT_REASON_MIN = 10;
+/** Quoted words shorter than this are a token, not the user's request. */
+export const PROJECT_WORDS_MIN = 4;
+
+/** Lower case, letters and digits only (any script): "Lantern-Ops" and "lantern ops" read alike. */
+function squash(text: string): string {
+  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+/** The words of a text: "AcmeGenAIDocs" is acme, gen, ai, docs; "Lantern-Ops" two. */
+function wordsOf(text: string): string[] {
+  return text
+    .replace(/([a-z\d])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .split(/[^\p{L}\p{N}]+/u)
+    .map((t) => t.toLowerCase())
+    .filter(Boolean);
+}
+
+/** "inbox" as a word, and the Chinese word for it. */
+const INBOX_WORDS = /(^|[^a-z])inbox($|[^a-z])|\u6536\u4ef6\u7bb1/i;
 
 /**
- * A worker that names a project other than its own task's must say why
- * (`project_reason`), or the create is refused with where it would have landed.
- * 2026-10-14: a leader filed its subtask under a project
- * it guessed from its repository's name; omitting `project` would have put it
- * beside the leader. Same shape as a send to a completed task: not a hard no,
- * a stated reason. Null = go ahead. Asks, humans and other callers never asked.
+ * Do the user's words name this project? The whole name, starting and ending on word
+ * edges ("Lantern Ops" in "put it under lantern-ops", "tidepool" for "Context
+ * Hub"), or every word of it as a word ("the context of rail top" for "RailTopContext").
+ * Part of a word never counts: "Personal" is not in "personally", "AI" not in "said". A
+ * name in a script written without spaces (Chinese) is found anywhere in the words. ''
+ * (the Inbox) is named by "inbox".
+ */
+export function projectNamedIn(words: string, project: string): boolean {
+  const name = project.trim();
+  if (!name) return INBOX_WORDS.test(words);
+  const whole = squash(name);
+  if (!whole) return false;
+  if (!/^[a-z0-9]+$/.test(whole)) return squash(words).includes(whole);
+  const said = wordsOf(words);
+  // The whole name over a run of whole words.
+  for (let i = 0; i < said.length; i++) {
+    let run = '';
+    for (let j = i; j < said.length && run.length < whole.length; j++) {
+      run += said[j];
+      if (run === whole) return true;
+    }
+  }
+  const parts = wordsOf(name);
+  return parts.length > 1 && parts.every((p) => said.includes(p));
+}
+
+/**
+ * A worker files work only in its own project, unless the USER asked for another one.
+ * 2026-10-14 and again 2026-10-15: a leader named a project it guessed from its
+ * repository's name, and its worker landed outside the team. An agent-written
+ * `project_reason` used to be enough; it is not any more (2026-10-29, the user: "it should
+ * create the worker under itself, unless it was explicitly mentioned"). The create must
+ * quote the user's own words naming that project (`user_words`, as answering a letter for
+ * the user does), or it is refused with where it would have landed. A lead files in every
+ * project it leads (the org chart put them under it). Null = go ahead. Asks, humans and
+ * other callers are never asked.
  */
 export function projectElsewhereRefusal(
-  req: { project?: string; project_reason?: unknown },
+  req: { project?: string; user_words?: unknown },
   caller: CallerPlacement,
 ): string | null {
   if (caller.kind !== 'worker' || req.project === undefined) return null;
   if (sameProject(req.project, caller.task.project)) return null;
-  // A lead files work in every project it leads (the org chart put them under it).
   if (caller.task.orgLeads?.some((p) => sameProject(req.project!, p))) return null;
-  const reason = typeof req.project_reason === 'string' ? req.project_reason.replace(/\s+/g, ' ').trim() : '';
-  if (reason.length >= PROJECT_REASON_MIN) return null;
+  const words = typeof req.user_words === 'string' ? req.user_words.replace(/\s+/g, ' ').trim() : '';
+  if (words.length >= PROJECT_WORDS_MIN && projectNamedIn(words, req.project)) return null;
   const name = (p: string) => (p.trim() ? `project "${p.trim()}"` : 'the Inbox');
   const folder = caller.task.group_label ? `, folder "${caller.task.group_label}"` : '';
+  const quoted = words ? ` The words you passed ("${words.length > 120 ? `${words.slice(0, 120)}\u2026` : words}") do not name ${name(req.project)}.` : '';
   return `Your task "${caller.task.title}" (${caller.task.id}) is in ${name(caller.task.project)}${folder}. `
     + 'Omit project and the new task lands beside yours, as your subtask. '
-    + `File it in ${name(req.project)} only when the work belongs there: pass project_reason `
-    + `(at least ${PROJECT_REASON_MIN} characters) saying why.`;
+    + `File it in ${name(req.project)} only when the user asked for that: pass user_words with exactly what they `
+    + 'said (quoted, in their language), naming that project. A project you picked yourself (from a repository, '
+    + `a directory or a reason you wrote) is not the user's, and project_reason alone no longer files it there.${quoted}`;
+}
+
+/**
+ * Where a task stands, for the worker rules. The companion's own rows carry no parent link
+ * or org projects (its import keeps the board fields), so there the task projection the Mac
+ * pushed answers.
+ */
+async function taskPlace(id: string): Promise<{
+  id: string; title: string; project?: string; parent_task_id?: string; org_role?: string; org_leads?: string[]; walnut_agent?: boolean;
+} | undefined> {
+  if (CLOUD_MODE) {
+    const { readTaskProjection } = await import('../task-projection.js');
+    return (await readTaskProjection().catch(() => null))?.tasks.find((t) => t.id === id);
+  }
+  const { getTask } = await import('../task-manager.js');
+  return getTask(id).catch(() => undefined);
+}
+
+/**
+ * A lead moving its own worker (a task with a parent) into a project other than the lead's,
+ * or the worker moving itself there, which is how a stray is made after the create. The same
+ * rule as a create: only with the user's words naming that project (or into a project the
+ * lead leads). Only that session is asked: humans, plugins, other sessions and unknown
+ * callers never are. Null = go ahead.
+ */
+export async function workerMoveRefusal(input: {
+  task: { id: string; title: string; project?: string; parent_task_id?: string };
+  /** The project the write sets. */
+  project: string;
+  /** The parent after the write: '' = released, undefined = the task's own. */
+  parentTaskId?: string;
+  userWords?: unknown;
+  /** Who writes (resolveCallerPlacement of the request's caller header). */
+  caller: CallerPlacement;
+}): Promise<string | null> {
+  const { caller } = input;
+  if (caller.kind !== 'worker') return null;
+  if (sameProject(input.project, input.task.project)) return null;
+  const parentId = input.parentTaskId !== undefined
+    ? input.parentTaskId
+    : input.task.parent_task_id || (CLOUD_MODE ? (await taskPlace(input.task.id))?.parent_task_id : undefined);
+  if (!parentId) return null;
+  // Only the lead's own worker, moved by the lead or by the worker itself. Tidying other
+  // teams' work stays an agent's call (Main's reorg moves tasks between projects).
+  if (caller.task.id !== parentId && caller.task.id !== input.task.id) return null;
+  const parent = await taskPlace(parentId);
+  // An ask (the Personal AI, Main) files work wherever it belongs: its own project is no team's.
+  if (!parent || isAskTask(parent)) return null;
+  if (sameProject(input.project, parent.project)) return null;
+  if (parent.org_role === 'lead' && parent.org_leads?.some((p) => sameProject(input.project, p))) return null;
+  const words = typeof input.userWords === 'string' ? input.userWords.replace(/\s+/g, ' ').trim() : '';
+  if (words.length >= PROJECT_WORDS_MIN && projectNamedIn(words, input.project)) {
+    log.session.info('worker moved to another project as the user asked', {
+      taskId: input.task.id, parentId, project: input.project, callerSid: caller.session.id, userWords: words.slice(0, 300),
+    });
+    return null;
+  }
+  const name = (p: string) => (p.trim() ? `project "${p.trim()}"` : 'the Inbox');
+  return `"${input.task.title}" (${input.task.id}) is a worker of "${parent.title}" (${parent.id}), and a worker stays `
+    + `in its lead's project, ${name(parent.project ?? '')}. Move it to ${name(input.project)} only when the user asked `
+    + 'for that: pass user_words with exactly what they said (quoted, in their language), naming that project. '
+    + 'A project you picked yourself is not the user\'s.'
+    + (words ? ` The words you passed ("${words.length > 120 ? `${words.slice(0, 120)}\u2026` : words}") do not name ${name(input.project)}.` : '');
 }
 
 /**

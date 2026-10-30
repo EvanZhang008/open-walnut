@@ -66,7 +66,13 @@ import type { Task } from './types.js';
 export const OUTBOX_DIR = path.join(TASKS_DIR, 'outbox');
 
 export type TaskOp =
-  | { opId: string; type: 'create'; at: string; task: Task }
+  | {
+      opId: string; type: 'create'; at: string; task: Task;
+      /** The session whose create this was (additive, 2026-10-29): a worker's subtask the companion
+       *  made in the worker's own project, which the Mac files beside its parent's folder (the
+       *  companion holds no folders). */
+      callerSid?: string;
+    }
   | {
       opId: string; type: 'update'; at: string; task: Task;
       /** Fields the ORIGINATING mutation actually set (additive; new senders
@@ -291,6 +297,24 @@ export interface ApplyTaskOpResult {
  * stale snapshot, missing row, delete blocked by a live session) comes back as
  * `{ applied: false, reason }` and means "consume the op, do not retry".
  */
+/**
+ * A worker's subtask the companion made (it holds no folders) goes into its parent's folder
+ * here, the way the Mac's own create files it (create-rules.ts placeBesideCaller): only when
+ * the session's task is its parent and it landed in that task's project. Best-effort.
+ */
+async function placeBesideParentOnArrival(created: Task, callerSid: string): Promise<boolean> {
+  try {
+    const { resolveCallerPlacement, decidePlacement } = await import('./sessions/caller-placement.js');
+    const caller = await resolveCallerPlacement(callerSid);
+    if (caller.kind !== 'worker' || created.parent_task_id !== caller.task.id || created.group_id) return false;
+    const { placeBesideCaller } = await import('./sessions/create-rules.js');
+    return !!(await placeBesideCaller(decidePlacement({ project: created.project ?? '' }, caller), caller, created, 'cloud-outbox'));
+  } catch (err) {
+    log.task.warn('task-op: a companion subtask was not filed beside its parent', { id: created.id, err: String(err) });
+    return false;
+  }
+}
+
 export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
   if (recentOpIds.has(op.opId)) return { applied: false, reason: 'replay' };
 
@@ -395,9 +419,13 @@ export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
       { ...rest, id, project: snapshotProject, source: primarySource, created_by_op: op.opId, applied_ops: [`companion|${op.opId}|1`] },
     ]);
     rememberOpId(op.opId);
+    // Read back once filed, so the event carries the folder (placing may emit nothing itself).
+    const placed = created && op.type === 'create' && op.callerSid && await placeBesideParentOnArrival(created, op.callerSid)
+      ? await tm.getTask(created.id).catch(() => created)
+      : created;
     if (created) {
       const { bus, EventNames } = await import('./event-bus.js');
-      bus.emit(EventNames.TASK_CREATED, { task: created }, ['web-ui'], { source: 'cloud-outbox' });
+      bus.emit(EventNames.TASK_CREATED, { task: placed }, ['web-ui'], { source: 'cloud-outbox' });
       if (created.source !== 'local') {
         // Same order as addTask: the plugin's defaults (a tracker's current sprint)
         // go on the row first so the create that follows carries them.

@@ -46,7 +46,7 @@ import { rankSteps, blockingOnly, withoutNamedPartners, type RankableTask } from
 
 /** How long the lookup may take before the create goes ahead without it. */
 export const RELATED_CHECK_DEADLINE_MS = 300;
-/** A reason long enough to say something (the same bar as project_reason). */
+/** A reason long enough to say something. */
 export const NEW_REASON_MIN = 10;
 export const RELATED_OPEN_TASKS_CODE = 'related_open_tasks';
 /** The most recently updated open tasks ranked; older open rows past this are not read. */

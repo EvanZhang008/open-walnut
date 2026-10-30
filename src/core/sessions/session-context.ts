@@ -420,9 +420,9 @@ function composePrompt(task: InstructionTask | undefined, state: { taskLine: str
       + 'Follow-ups you discover stay with the same deliverable, never new tasks. '
       + (task?.org_vp_only
         ? 'New work becomes a team of the project it belongs to among the ones you lead, at its top level (no folder): '
-          + 'name that project, with project_reason. Your home project is only for work that belongs to none of them.\n\n'
+          + 'name that project. Your home project is only for work that belongs to none of them.\n\n'
         : 'New work becomes one of your project\'s teams, at its top level (no folder). '
-          + 'Omit project; naming another needs project_reason.\n\n')
+          + 'Omit project; name another only when the user asked for it, quoting their words in user_words.\n\n')
     : ask
     // No "lands beside yours" line: an ask's work keeps the old defaults for
     // project, folder, tier and cwd (caller-placement.ts), so it would be false.
@@ -440,7 +440,7 @@ function composePrompt(task: InstructionTask | undefined, state: { taskLine: str
       + 'continues its task (task_send); when the user asks for a task for an independent goal, make a new one '
       + 'with a fresh session, even in an area a teammate already owns. It '
       + 'lands beside yours: same project, folder and board tier, same host and '
-      + 'directory. Omit project; naming another needs project_reason.\n\n'
+      + 'directory. Omit project; name another only when the user asked for it, quoting their words in user_words.\n\n'
   return `${WALNUT_PROMPT_MARK}, the user's personal AI. `
     + 'Walnut is the layer above you: it keeps the user\'s board of tasks and '
     + 'projects, runs the work on those tasks, and holds their memory, notes, '

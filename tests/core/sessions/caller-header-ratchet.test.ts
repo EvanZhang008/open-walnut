@@ -1,6 +1,6 @@
 /**
  * The web console and the phone never send `x-walnut-caller-sid`. Every session rule
- * on a create (placement, project_reason, the title brake, the related-open-tasks
+ * on a create (placement, user_words, the title brake, the related-open-tasks
  * check in src/core/sessions/related-open-tasks.ts) keys on that header, so a human
  * surface that started sending it would put the user's own creates through them.
  * A source ratchet over the two client trees.

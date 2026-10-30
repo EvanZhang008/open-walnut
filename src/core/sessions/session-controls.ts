@@ -1128,7 +1128,11 @@ function parseTaskOpParams(p: Record<string, unknown>): import('../task-outbox.j
   if (typeof task.updated_at !== 'string' || Number.isNaN(Date.parse(task.updated_at))) {
     throw new SessionControlError('op.task.updated_at must be an ISO-8601 timestamp', 400);
   }
-  if (raw.type === 'create') return { opId, type: 'create', at, task: task as Task };
+  if (raw.type === 'create') {
+    // A worker's create on the companion names its session (additive): the Mac files it beside its leader.
+    const callerSid = typeof raw.callerSid === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(raw.callerSid) ? raw.callerSid : undefined;
+    return { opId, type: 'create', at, task: task as Task, ...(callerSid ? { callerSid } : {}) };
+  }
   // Update extras (additive): `touched` scopes the patch to fields the sender
   // actually set; `append.note` concatenates instead of replacing. Malformed
   // shapes degrade to the legacy full-snapshot semantics rather than erroring.

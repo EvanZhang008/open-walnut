@@ -866,7 +866,8 @@ tasksRouter.post('/', async (req: Request, res: Response, next: NextFunction) =>
   try {
     const { title, priority, status, pinned, focus_tier: focusTier } = req.body
     // Everything else goes to addTask by name; the correlation id and the confirm fields never do.
-    const { client_request_id: clientRequestId, confirm_new: confirmNew, new_reason: newReason, ...body } = req.body
+    const { client_request_id: clientRequestId, confirm_new: confirmNew, new_reason: newReason,
+      user_words: userWords, project_reason: _projectReason, ...body } = req.body
 
     if (typeof title !== 'string' || title.trim() === '') {
       res.status(400).json({ error: 'title must be a non-empty string' })
@@ -913,12 +914,16 @@ tasksRouter.post('/', async (req: Request, res: Response, next: NextFunction) =>
     }
     // This is the web console's create, which sends no caller. A session that reaches
     // it anyway (the `api` op, a raw request) meets the same related-open-tasks check
-    // as POST /api/v1/tasks (related-open-tasks.ts); nothing else of the session rules.
+    // as POST /api/v1/tasks (related-open-tasks.ts), and a worker files in another
+    // project only with the user's words naming it (caller-placement.ts).
     const rawSid = req.headers['x-walnut-caller-sid']
     const sid = Array.isArray(rawSid) ? rawSid[0] : rawSid
     if (sid?.trim()) {
-      const { resolveCallerPlacement, decidePlacement } = await import('../../core/sessions/caller-placement.js')
+      const { resolveCallerPlacement, decidePlacement, projectElsewhereRefusal } = await import('../../core/sessions/caller-placement.js')
       const caller = await resolveCallerPlacement(sid).catch(() => ({ kind: 'unknown' as const }))
+      const elsewhere = projectElsewhereRefusal(
+        { ...(typeof req.body.project === 'string' ? { project: req.body.project } : {}), user_words: userWords }, caller)
+      if (elsewhere) { res.status(409).json({ error: { code: 'project_elsewhere', message: elsewhere } }); return }
       const { relatedOpenTasksGate } = await import('../../core/sessions/related-open-tasks.js')
       const gate = await relatedOpenTasksGate({
         caller,
@@ -1192,6 +1197,24 @@ tasksRouter.post('/groups/:groupId/add', async (req: Request, res: Response, nex
       res.status(400).json({ error: 'move must be a boolean' })
       return
     }
+    // A move into the folder's project is a project move: a lead's worker leaves its lead's
+    // project only with the user's words (caller-placement.ts workerMoveRefusal).
+    const rawSid = req.headers['x-walnut-caller-sid']
+    const callerSid = (Array.isArray(rawSid) ? rawSid[0] : rawSid)?.trim()
+    if (move === true && callerSid) {
+      const home = (await listGroups()).find((g) => g.group_id === groupId)?.project
+      if (home !== undefined) {
+        const { workerMoveRefusal, resolveCallerPlacement } = await import('../../core/sessions/caller-placement.js')
+        const caller = await resolveCallerPlacement(callerSid).catch(() => ({ kind: 'unknown' as const }))
+        for (const id of task_ids) {
+          const moved = await getTask(id).catch(() => undefined)
+          const refusal = moved && await workerMoveRefusal({
+            task: moved, project: home, caller, userWords: (req.body as { user_words?: unknown }).user_words,
+          })
+          if (refusal) { res.status(409).json({ error: { code: 'project_elsewhere', message: refusal } }); return }
+        }
+      }
+    }
     const result = await addToGroup(groupId, task_ids, { move: move === true, source: 'api' })
     bus.emit(EventNames.TASK_GROUPS_CHANGED, { group_id: result.group_id, label: result.label }, ['web-ui'], { source: 'api' })
     res.json(result)
@@ -1455,8 +1478,24 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
     // here before anything is written: they used to be dropped with a 200.
     const pinParse = parsePinPatch(req.body)
     if (!pinParse.ok) { res.status(pinParse.status).json({ error: pinParse.error }); return }
-    const { pinned: _pinned, focus_tier: _focusTier, ...fields } = (req.body ?? {}) as Record<string, unknown>
+    const { pinned: _pinned, focus_tier: _focusTier, user_words: userWords, ...fields } = (req.body ?? {}) as Record<string, unknown>
     const pinPatch = pinParse.patch
+    // A session moving a worker out of its lead's project needs the user's words naming
+    // the new one (caller-placement.ts workerMoveRefusal); the web console sends no caller.
+    const rawSid = req.headers['x-walnut-caller-sid']
+    const callerSid = (Array.isArray(rawSid) ? rawSid[0] : rawSid)?.trim()
+    if (callerSid && typeof fields.project === 'string') {
+      const moved = await getTask(id).catch(() => undefined)
+      if (moved) {
+        const { workerMoveRefusal, resolveCallerPlacement } = await import('../../core/sessions/caller-placement.js')
+        const caller = await resolveCallerPlacement(callerSid).catch(() => ({ kind: 'unknown' as const }))
+        const refusal = await workerMoveRefusal({
+          task: moved, project: fields.project, caller, userWords,
+          ...(typeof fields.parent_task_id === 'string' ? { parentTaskId: fields.parent_task_id } : {}),
+        })
+        if (refusal) { res.status(409).json({ error: { code: 'project_elsewhere', message: refusal } }); return }
+      }
+    }
     let pinTarget: Task | undefined
     if (pinPatch) {
       pinTarget = await getTask(id)

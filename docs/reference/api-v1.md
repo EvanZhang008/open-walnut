@@ -84,7 +84,7 @@ All v1 errors use one shape (plus optional endpoint-specific extras):
 | `own_lead` | 409 | Retired 2026-10-27, no longer sent: a session may stop or restart its lead's session, as a person may |
 | `main_session` | 409 | Retired 2026-10-27, no longer sent: a session may stop or restart Main's session, as a person may |
 | `session_exists` | 409 | `POST /tasks/:id/start` refused: the task already has a live session (`existing_session_id`); message it with `POST /messages` |
-| `project_elsewhere` | 409 | `POST /tasks` from a session: `project` names a project other than the caller task's own and `project_reason` is missing or under 10 characters. Nothing is created; the body also carries `callerProject` and `requestedProject` |
+| `project_elsewhere` | 409 | `POST /tasks` from a session: `project` names a project other than the caller task's own (and not one the caller leads) and `user_words` does not quote the user naming it. Nothing is created; the body also carries `callerProject` and `requestedProject` |
 | `related_open_tasks` | 409 | `POST /tasks` (and the legacy `POST /api/tasks` with a caller header) from a session: open tasks look like the same work and the body has no `confirm_new: true`. Nothing is created. Extras: `candidates` (at most 5, best first: `id`, `title`, `project`, `folder?`, `phase`, `user_status?`, `session_running`, `updated_at?`, `reason`, `your_subtask?`) and `hint` (the two ways out). `confirm_new: true` without a `new_reason` of 10+ characters is `400 bad_request` |
 | `subtask_too_deep` | 409 | `POST /tasks` from a session: the new task would be its subtask more than 3 levels below a top-level task. Nothing is created |
 | `too_many_running_subtasks` | 409 | `POST /tasks/:id/start` from a worker session that already has 8 subtasks running (IN_PROGRESS or starting). Nothing is started |
@@ -955,9 +955,12 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   Implementation: `src/core/sessions/caller-placement.ts`.
   Project guard (additive, 2026-10-14): a worker caller that names a `project`
   other than its own task's (case-insensitive; `""` = Inbox counts as another)
-  must pass `project_reason` (a string of 10+ characters saying why the work
-  belongs there), else `409 project_elsewhere` and nothing is created. Humans,
-  asks and callers with no session are never asked.
+  must pass `user_words`: the user's own words asking for that project, which
+  name it (the whole name, or every word of it; `"inbox"` for the Inbox), else
+  `409 project_elsewhere` and nothing is created. Since 2026-10-29 a
+  `project_reason` the agent wrote is no longer enough and is ignored. A lead
+  files in every project it leads. Humans, asks and callers with no session are
+  never asked.
   Related open tasks (additive, 2026-10-26): before a session caller (a worker,
   an ask, a session with no task) creates, the server ranks the open tasks against
   the new title and description and answers `409 related_open_tasks` with the
@@ -1094,6 +1097,13 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   top-level task; a human is never limited. When the parent changed, the response
   adds `placement: { parent_task_id, parent_title?, previous_parent_task_id? }`,
   and the adopted task's live session is told through a Walnut notification.
+- Worker moves (additive, 2026-10-29): when a session moves its own worker (a
+  task whose parent is the caller's task), or a worker moves itself, to a
+  `project` other than its parent's (and not one the parent leads), the body
+  must carry `user_words`: the user's own words naming that project. Otherwise
+  `409 project_elsewhere` and nothing is written. The same rule holds on
+  `PATCH /api/tasks/:id` and a folder add with `move: true`. Humans, other
+  sessions and workers of a Personal AI conversation are never asked.
 
 ### A task's own MEMORY.md (additive, 2026-10-27): `/tasks/:id/agent-memory`
 

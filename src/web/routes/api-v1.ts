@@ -2679,11 +2679,11 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
   try {
     const { title, project, priority, due_date: dueDate, start_date: startDate,
       end_date: endDate, description, pinned, focus_tier: focusTier, group_id: groupId,
-      launch_cwd: launchCwd, launch_host: launchHost, project_reason: projectReason, idempotency_key: idempotencyKey, tags,
+      launch_cwd: launchCwd, launch_host: launchHost, user_words: userWords, idempotency_key: idempotencyKey, tags,
       confirm_new: confirmNew, new_reason: newReason } = (req.body ?? {}) as {
       title?: unknown
       project?: unknown
-      project_reason?: unknown
+      user_words?: unknown
       confirm_new?: unknown
       new_reason?: unknown
       priority?: unknown
@@ -2819,7 +2819,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
     const { pluginOnlyForCaller } = await import('../../core/plugins/plugin-task-visibility.js')
     const pluginOnly = pluginOnlyForCaller(Array.isArray(rawSid) ? rawSid[0] : rawSid)
     // The create rules by caller, shared with the offline drain (create-rules.ts): a
-    // worker naming a project other than its own says why, a session's depth cap, an ask's project, the board tier (a worker's own, else pinned
+    // worker naming a project other than its own quotes the user's words for it, a session's depth cap, an ask's project, the board tier (a worker's own, else pinned
     // by default), and a session's long title cut to its head (the long form becomes the
     // description when there was none) and refined in the background.
     const { applyCreateRules, placeBesideCaller, ProjectElsewhereError } = await import('../../core/sessions/create-rules.js')
@@ -2827,7 +2827,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
     try {
       rules = await applyCreateRules({
         title, description: description as string | undefined, pinned, focus_tier: focusTier,
-        ...(typeof project === 'string' ? { project } : {}), project_reason: projectReason,
+        ...(typeof project === 'string' ? { project } : {}), user_words: userWords,
       }, caller, decision)
     } catch (err) {
       if (err instanceof ProjectElsewhereError) {
@@ -2950,7 +2950,13 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
         ...(task.parent_task_id ? { parentTaskId: task.parent_task_id } : {}),
         ...(titleShortenedFrom ? { titleCutFrom: titleShortenedFrom.length } : {}),
       })
-      bus.emit(EventNames.TASK_CREATED, { task }, ['web-ui'], { source: 'api-v1' })
+      // On the companion (no folders) a worker's subtask in its own project names the session,
+      // so the Mac files it beside the parent's folder when it takes the create.
+      const fromWorker = CLOUD_MODE && decision.placeBesideCaller && caller.kind === 'worker'
+        && task.parent_task_id === caller.task.id
+        ? { callerSid: caller.session.id }
+        : {}
+      bus.emit(EventNames.TASK_CREATED, { task, ...fromWorker }, ['web-ui'], { source: 'api-v1' })
       if (titleShortenedFrom) {
         void refineShortTitle(task.id, finalTitle, titleShortenedFrom,
           description !== undefined ? description as string : undefined)
@@ -3289,6 +3295,27 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
       if (refusal) {
         sendError(res, refusal.status, refusal.status === 409 ? 'conflict' : 'bad_request', refusal.error)
         return
+      }
+    }
+    // A session moving a worker out of its lead's project needs the user's words naming
+    // the new one, as a create does (caller-placement.ts workerMoveRefusal).
+    if (typeof project === 'string') {
+      const rawSid = req.headers['x-walnut-caller-sid']
+      const callerSid = (Array.isArray(rawSid) ? rawSid[0] : rawSid)?.trim()
+      if (callerSid) {
+        const moved = parentLink?.current ?? await tm.getTask(id).catch(() => undefined)
+        if (moved) {
+          const { workerMoveRefusal, resolveCallerPlacement } = await import('../../core/sessions/caller-placement.js')
+          const caller = await resolveCallerPlacement(callerSid).catch(() => ({ kind: 'unknown' as const }))
+          const refusal = await workerMoveRefusal({
+            task: moved, project, caller, userWords: (req.body as { user_words?: unknown } | undefined)?.user_words,
+            ...(parentLink ? { parentTaskId: parentLink.leader?.id ?? '' } : {}),
+          })
+          if (refusal) {
+            sendError(res, 409, 'project_elsewhere', refusal)
+            return
+          }
+        }
       }
     }
     // Re-sending the link a task already has (or releasing one that has none)

@@ -3356,6 +3356,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           // patch so replica-blind blobs are never wiped); appendNote = an
           // append-style note entry the primary must CONCATENATE, not replace.
           fields?: string[]; appendNote?: string
+          // task:created of a worker's subtask on this companion (api-v1.ts): the worker's session.
+          callerSid?: string
           // task:reordered payload (whole-list order, no per-row snapshot).
           project?: string; taskIds?: string[]; pins?: boolean
         }
@@ -3364,7 +3366,14 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           const id = companionDeleteId(event)
           if (id) void dispatchTaskOp({ type: 'delete', id })
         } else if (event.name === EventNames.TASK_CREATED) {
-          if (data.task) { noteKnownTaskRows([data.task]); void dispatchTaskOp({ type: 'create', task: data.task }) }
+          if (data.task) {
+            noteKnownTaskRows([data.task])
+            // A worker's subtask (api-v1.ts) names its session, for the Mac to file it beside its leader.
+            void dispatchTaskOp({
+              type: 'create', task: data.task,
+              ...(typeof data.callerSid === 'string' && data.callerSid ? { callerSid: data.callerSid } : {}),
+            })
+          }
         } else if (event.name === EventNames.TASK_REORDERED) {
           if (!Array.isArray(data.taskIds) || data.taskIds.length === 0) return
           if (data.pins) void dispatchTaskOp({ type: 'reorder-pins', taskIds: data.taskIds })
