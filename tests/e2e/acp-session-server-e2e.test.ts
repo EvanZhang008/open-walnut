@@ -860,10 +860,10 @@ rl.on('line', line => {
 
   it('worker kill → next message lazy-resumes via session/load', async () => {
     // Kill the worker out from under the daemon (idle-reap / crash stand-in).
-    const pids = JSON.parse(fs.readFileSync(path.join(daemonDir, 'acp-workers.json'), 'utf-8')) as Record<string, number>
+    const pids = JSON.parse(fs.readFileSync(path.join(daemonDir, 'acp-workers.json'), 'utf-8')) as Record<string, number | { pid: number }>
     const runtimeId = findRuntimeId()
     expect(pids[runtimeId]).toBeTruthy()
-    process.kill(pids[runtimeId], 'SIGKILL')
+    process.kill(workerPid(pids[runtimeId]), 'SIGKILL')
     await new Promise((r) => setTimeout(r, 500)) // daemon reaps the exit
 
     await sendMessageToSession(sessionId, 'after worker death', { source: 'ui', taskId })
@@ -887,9 +887,9 @@ rl.on('line', line => {
 
     const pids = JSON.parse(
       fs.readFileSync(path.join(daemonDir, 'acp-workers.json'), 'utf-8'),
-    ) as Record<string, number>
+    ) as Record<string, number | { pid: number }>
     expect(pids[runtimeId]).toBeTruthy()
-    process.kill(pids[runtimeId], 'SIGKILL')
+    process.kill(workerPid(pids[runtimeId]), 'SIGKILL')
     await new Promise((resolve) => setTimeout(resolve, 500))
 
     await sendMessageToSession(previousSessionId, 'after load fallback', {
@@ -1293,3 +1293,6 @@ describe.runIf(HAVE_BIN)('custom engine with no adapter_cmd configured', () => {
     }
   }, 40_000)
 })
+// acp-workers.json holds a bare pid (older daemons) or { pid, ... }.
+const workerPid = (e: number | { pid: number }): number => (typeof e === 'number' ? e : e.pid)
+
