@@ -18,9 +18,11 @@
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { fixtureHome } from './fixture-home'
 
 const port = Number(process.env.PW_TIME_APP_PORT ?? 3459)
-const tmpBase = path.join(os.tmpdir(), `walnut-time-app-${port}-${Date.now()}`)
+// Its own home for real: Bun reads HOME only at startup (fixture-home.ts).
+const tmpBase = await fixtureHome(path.join(os.tmpdir(), `walnut-time-app-${port}-${Date.now()}`))
 
 // Set the data home BEFORE importing any server module: constants.ts resolves it at
 // import time. `--_ephemeral-child` on argv is what stops the leaked-tmpdir guard

@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { DraftSessionPanel } from '@/components/sessions/DraftSessionPanel';
 import { draftComposerKey, type DraftColumn } from '@/components/sessions/draft-column';
+import { discardDraft } from '@/utils/drafts';
 import { TasksProvider } from '@/contexts/TasksContext';
 import { NotificationProvider, useNotifications } from '@/contexts/notifications';
 import { FocusBarProvider } from '@/contexts/FocusBarContext';
@@ -58,7 +59,7 @@ function PopoutSessionPanel() {
     const text = document.querySelector<HTMLTextAreaElement>('.popout-session-fork textarea')?.value ?? localStorage.getItem(draftComposerKey(fork.id));
     const hasImages = document.querySelector('.popout-session-fork .chat-image-preview') != null;
     if ((text?.trim() || hasImages) && !await confirm({ title: 'Close fork draft?', message: 'The unsent fork message will be discarded.', confirmLabel: 'Discard and Close', cancelLabel: 'Keep Open' })) return;
-    localStorage.removeItem(draftComposerKey(fork.id));
+    discardDraft(draftComposerKey(fork.id));
     setFork(null);
   }, [fork, forking, confirm]);
 

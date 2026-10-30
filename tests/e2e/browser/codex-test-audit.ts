@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { expect, type Page } from '@playwright/test'
+import { expect, type Page, type Request } from '@playwright/test'
 
 interface LogSnapshot {
   sizes: Map<string, number>
@@ -36,11 +36,20 @@ async function snapshotLogs(walnutHome: string): Promise<LogSnapshot> {
   return { sizes }
 }
 
+/**
+ * The browser errors the server log kept for THIS page since the snapshot. The
+ * log is shared by every page of the run, so with parallel workers another spec's
+ * error landed in this one's window (2026-10-30: a mocked quick-parse 500 from a
+ * draft spec failed an engine spec). Lines carry their tab's id
+ * (web/src/utils/browser-logger.ts); a page whose id is unknown reads them all.
+ */
 async function persistedBrowserErrors(
   walnutHome: string,
   snapshot: LogSnapshot,
+  tab: string | null,
 ): Promise<string[]> {
   const errors: string[] = []
+  let ownLines = 0
   for (const file of await logFiles(walnutHome)) {
     const content = await fs.readFile(file)
     const start = snapshot.sizes.get(file) ?? 0
@@ -52,8 +61,11 @@ async function persistedBrowserErrors(
           level?: string
           browserLevel?: string
           message?: string
+          tab?: string
         }
+        if (entry.subsystem === 'browser' && tab && entry.tab === tab) ownLines++
         if (entry.subsystem === 'browser'
+          && (!tab || entry.tab === tab)
           && (entry.level === 'error' || entry.browserLevel === 'error')) {
           errors.push(entry.message ?? line)
         }
@@ -62,7 +74,16 @@ async function persistedBrowserErrors(
       }
     }
   }
+  // The filter must never hide everything: a server that dropped the tab field
+  // would leave this check reading nothing at all.
+  if (tab && ownLines === 0) throw new Error(`no server log line carries this page's tab id ${tab}: the persisted-error check would read nothing`)
   return errors
+}
+
+/** The tab id this page's log lines carry (null when the page cannot say). */
+async function pageLogTab(page: Page): Promise<string | null> {
+  // Same key as LOG_TAB_KEY in web/src/utils/browser-logger.ts.
+  return page.evaluate(() => sessionStorage.getItem('walnut-log-tab')).catch(() => null)
 }
 
 function isExpectedNavigationAbort(message: string): boolean {
@@ -155,7 +176,28 @@ export async function installBrowserAudit(page: Page, walnutHome: string): Promi
     consoleErrors.push(message.text())
   })
   page.on('pageerror', (error) => pageErrors.push(error.message))
+  // A request still in flight when the page navigates (a reload, a goto) is cut by
+  // that navigation, which is the test's own step, never a failure of the app.
+  // The old document keeps sending until the new one commits, so a request it starts
+  // in that gap is cut the same way.
+  const inFlight = new Set<Request>()
+  const cutByNavigation = new WeakSet<Request>()
+  let navigating = false
+  page.on('request', (request) => {
+    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+      for (const r of inFlight) cutByNavigation.add(r)
+      navigating = true
+    } else if (navigating) {
+      cutByNavigation.add(request)
+    }
+    inFlight.add(request)
+  })
+  page.on('framenavigated', (frame) => { if (frame === page.mainFrame()) navigating = false })
+  page.on('requestfinished', (request) => { inFlight.delete(request) })
   page.on('requestfailed', (request) => {
+    inFlight.delete(request)
+    const errorText = request.failure()?.errorText
+    if (cutByNavigation.has(request) && (errorText === 'net::ERR_ABORTED' || errorText === 'cancelled')) return
     failedRequests.push({
       method: request.method(),
       url: request.url(),
@@ -194,13 +236,20 @@ export async function installBrowserAudit(page: Page, walnutHome: string): Promi
               || pathname.endsWith('/history')
               || pathname === '/api/notifications'
               || pathname === '/api/quiet'
-              || pathname === '/api/plugin-status-items'))
+              || pathname === '/api/plugin-status-items'
+              // Who-am-I, read at every page load: a reload cuts the previous one.
+              || pathname === '/api/v1/me'))
           || (failure.method === 'POST' && pathname === '/api/browser-logs')
+          // A draft save cut by a reload: pagehide flushes it again with keepalive (utils/drafts.ts).
+          || (failure.method === 'PUT' && pathname === '/api/drafts')
       }
       const unexpectedFailures = failedRequests.filter((failure) =>
         !standardAbort(failure) && !allowances.requestFailure?.(failure))
       const unexpectedHttp = httpErrors.filter((response) => !allowances.http?.(response))
 
+      // One line of this page's own, so the tab filter below always has one to find
+      // (a short spec may forward nothing else).
+      await page.evaluate(() => console.info('[audit] browser log probe')).catch(() => {})
       // Browser logger flushes every two seconds over the real WebSocket route.
       await page.waitForTimeout(2_200)
       expect(
@@ -212,7 +261,7 @@ export async function installBrowserAudit(page: Page, walnutHome: string): Promi
       expect(unexpectedFailures, 'failed browser requests').toEqual([])
       expect(unexpectedHttp, 'HTTP error responses').toEqual([])
       expect(
-        (await persistedBrowserErrors(walnutHome, baseline))
+        (await persistedBrowserErrors(walnutHome, baseline, await pageLogTab(page)))
           .filter((message) =>
             !isExpectedNavigationAbort(message)
             // The api-client's list-dirs 400 console.error is forwarded to the

@@ -23,13 +23,15 @@ import { kanbanSeedTasks } from './board-kanban-fixture'
 import { chatEarlierSessionRecords, writeChatEarlierFiles } from './chat-earlier-fixture'
 // Transcript past the full read's byte ceiling (whale-history.spec.ts).
 import { WHALE_ANCHOR_SESSION, WHALE_CEILING_BYTES, WHALE_GAP_SESSION, WHALE_SESSION, whaleJsonl, whaleRecord, whaleTask } from './whale-history-fixture'
+import { fixtureHome, fixtureRealHome } from './fixture-home'
 
 // Set WALNUT_HOME to temp dir BEFORE importing server modules.
 // Ephemeral identity is argv-based (see IS_EPHEMERAL in src/constants.ts) — the
 // env-var flag was removed after it leaked through the daemon into prod servers.
 // Pushing the flag onto argv keeps the leaked-tmpdir safety check from overriding
 // OPEN_WALNUT_HOME back to ~/.open-walnut, without anything for children to inherit.
-const tmpBase = path.join(os.tmpdir(), `walnut-pw-${Date.now()}`)
+// Its own home for real: Bun reads HOME only at startup (fixture-home.ts).
+const tmpBase = await fixtureHome(path.join(os.tmpdir(), `walnut-pw-${Date.now()}`))
 process.env.OPEN_WALNUT_HOME = tmpBase
 process.env.WALNUT_DAEMON_DIR = path.join(tmpBase, 'daemon')
 // Mock CLIs leave no transcript in ~/.claude; keep their spawn-journal lines here.
@@ -118,6 +120,31 @@ const agoIso = (msAgo: number): string => new Date(SEED_NOW - msAgo).toISOString
 const { sweepStaleTmpDirs, writeOwnerPid } = await import('../../setup/stale-tmp.js')
 sweepStaleTmpDirs([{ prefix: 'walnut-pw-', name: /^walnut-pw-\d+$/, pidFrom: 'owner-file' }])
 await fs.rm(tmpBase, { recursive: true, force: true })
+// The daemon's sidecars and the ACP worker, built from this tree's source in about 2 s
+// (build-daemon.sh's sidecars-only mode) before any server module reads where they are,
+// and after the wipe of tmpBase just above.
+// A clean clone has no dist/: the fallback daemon then lacked every capability a
+// sidecar brings (budget-v2 among them) and the ACP worker exited at start, and 16
+// specs failed on HEAD (2026-10-30). The shared checkout's dist/ is what the last deploy published.
+const DAEMON_ARTIFACTS = path.join(tmpBase, 'daemon-binaries')
+{
+  const { spawnSync } = await import('node:child_process')
+  const repo = path.resolve(import.meta.dirname, '..', '..', '..')
+  // This bun builds them (the fixture HOME hides ~/.bun from find-bun.sh), with
+  // the developer's HOME for the toolchain, and a bound so a stuck build fails
+  // the fixture instead of eating its whole start budget unseen.
+  const built = spawnSync('bash', ['scripts/build-daemon.sh'], {
+    cwd: repo, encoding: 'utf-8', timeout: 90_000,
+    env: {
+      ...process.env, HOME: fixtureRealHome(), WALNUT_BUN: process.execPath,
+      WALNUT_DAEMON_SIDECARS_ONLY: '1', WALNUT_DAEMON_OUTDIR: DAEMON_ARTIFACTS,
+    },
+  })
+  if (built.status !== 0 || !fsSync.existsSync(path.join(DAEMON_ARTIFACTS, 'acp-worker.js'))) {
+    throw new Error(`test-server: building the daemon sidecars failed:\n${built.stdout}${built.stderr}`)
+  }
+}
+process.env.WALNUT_DAEMON_BINARIES_DIR = DAEMON_ARTIFACTS
 const tasksDir = path.join(tmpBase, 'tasks')
 await fs.mkdir(tasksDir, { recursive: true })
 writeOwnerPid(tmpBase)
@@ -4663,7 +4690,8 @@ if (mockDaemon) {
   // Codex (ACP) sessions: real acp-worker bundle + the scripted mock ACP agent.
   // MockDaemon embeds the real createAcpDaemon module, so quick-start with
   // engine='codex' exercises the full worker/journal path in Playwright specs.
-  const WORKER_BUNDLE = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../../dist/daemon-binaries/acp-worker.js')
+  // From the sidecar build at the top of this file (this tree's source, never dist/).
+  const WORKER_BUNDLE = path.join(DAEMON_ARTIFACTS, 'acp-worker.js')
   const MOCK_ACP_AGENT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../providers/mock-acp-agent.mjs')
   sessionRunner.setTestAcpArtifacts({
     workerCmd: [process.execPath, WORKER_BUNDLE],

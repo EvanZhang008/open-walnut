@@ -27,6 +27,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { test, expect, type Locator, type Page } from '@playwright/test'
+import { expandSystemAttention } from './host-problems-helpers'
 import { draftCwdPill, loadHome, openDraft } from './draft-helpers'
 
 const SHOTS = process.env.CLOUD_HOST_SHOTS ?? path.join(os.tmpdir(), 'walnut-cloud-host-shots')
@@ -113,7 +114,11 @@ test('a second Mac hears another Mac is connected, and takes the companion over 
   }).toPass({ timeout: 15_000 })
 
   const row = card(page)
-  await expect(page.locator(`[data-testid="attention-banner"] li.hpb-row[data-host="${CLOUD}"][data-kind="cloud_other_mac"]`).first()).toBeVisible({ timeout: 60_000 })
+  // The system attention section starts collapsed: the row is there, hidden,
+  // until the section is opened.
+  await expect(page.locator(`[data-testid="attention-banner"] li.hpb-row[data-host="${CLOUD}"][data-kind="cloud_other_mac"]`).first()).toBeAttached({ timeout: 60_000 })
+  await expandSystemAttention(page)
+  await expect(page.locator(`[data-testid="attention-banner"] li.hpb-row[data-host="${CLOUD}"][data-kind="cloud_other_mac"]`).first()).toBeVisible()
   await expect(row).toContainText('Another Mac is connected to this cloud companion')
   await expect(row).toContainText('hand it to this Mac on the companion')
   await expect(row).toContainText('walnut device owner <name>')

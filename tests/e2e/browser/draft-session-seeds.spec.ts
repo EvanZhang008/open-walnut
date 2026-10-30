@@ -88,7 +88,9 @@ test('project header "+" opens a draft in one click with the project AND its def
   // the task list), and the task is what makes the header — and its "+" — reachable.
   const stamp = Date.now()
   const taskRes = await page.request.post('/api/tasks', {
-    data: { title: `plus-seed anchor ${stamp}`, source: 'local', project: PLUS_PROJECT },
+    // Not pinned: a new task defaults to the pinned board (ddda11ac4), where the All
+    // view lists it under Pinned with no project header to click.
+    data: { title: `plus-seed anchor ${stamp}`, source: 'local', project: PLUS_PROJECT, pinned: false },
   })
   expect(taskRes.ok(), await taskRes.text()).toBe(true)
 
@@ -103,12 +105,12 @@ test('project header "+" opens a draft in one click with the project AND its def
   await header.hover()
 
   const plus = plusControl(header)
-  // R9 put the choice back on this surface (task / task with session / separator),
-  // so the "+" IS a menu trigger here — `aria-expanded` is the machine-readable
-  // form of that, and its title names the scope rather than one verb.
-  await expect(plus, 'a multi-verb "+" advertises the scope it adds to')
-    .toHaveAttribute('title', `Add to ${PLUS_PROJECT}`)
-  expect(await plus.getAttribute('aria-expanded'), 'a menu trigger carries an expanded state').toBe('false')
+  // The quiet navigation (1da1104d7) folded the header's "+" into its "···" menu,
+  // the same one a right-click opens: the session branch is one of its items, and
+  // the trigger names the project it belongs to.
+  await expect(plus, 'the header menu names the project it adds to')
+    .toHaveAttribute('aria-label', `${PLUS_PROJECT} menu`)
+  await expect(plus, 'a menu trigger says it opens a menu').toHaveAttribute('aria-haspopup', 'menu')
 
   await openSessionFromPlus(page, header)
 

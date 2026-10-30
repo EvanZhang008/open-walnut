@@ -64,12 +64,23 @@ usageRouter.post('/collect', (req: Request, res: Response) => {
 })
 usageRouter.get('/collection', (_req: Request, res: Response) => res.json(collectionState()))
 
+// NOT_FOUND is the owning daemon not knowing the session: a new one, a stored one
+// no daemon runs, and also one a host has not adopted yet after a restart, so the
+// web store keeps a budget it already showed when null comes back.
+const NO_BUDGET_CODES = new Set(['budget_unsupported', 'session_not_found', 'NOT_FOUND'])
 usageRouter.get('/sessions/:sid', async (req: Request, res: Response) => {
   try {
     const { getSessionBudget } = await import('../../core/usage/session-budget.js')
     res.json(await getSessionBudget(String(req.params.sid)))
   } catch (error) {
     const failure = error as Error & { code?: string; status?: number }
+    // No budget here is an answer, not an error: an engine without per-request usage, or
+    // a session whose record is not written yet (its panel mounts first) or that its
+    // host does not know. 2026-10-30: every Gemini, Goose, Pi and DeepSeek panel, and
+    // every new session, logged one. A JSON null, not a 204, which Chromium reports as
+    // a failed (aborted) request. Only for a client that asks (`absent=null`): an
+    // older bundle, in a window open across the deploy, reads `null.sessionId`.
+    if (req.query.absent === 'null' && NO_BUDGET_CODES.has(failure.code ?? '')) { res.json(null); return }
     res.status(failure.status ?? 503).json({ error: failure.message, code: failure.code ?? 'budget_unavailable' })
   }
 })

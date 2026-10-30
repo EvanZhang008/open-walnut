@@ -221,8 +221,12 @@ describe('session budget through the real server and owning daemon', () => {
     expect(initial.status).toBe(200);
     expect(initial.body).toMatchObject({ engine: 'claude', checkEverySec: 2 });
     expect(initial.body.budget).toMatchObject({ state: 'unlimited', spentUsd: null, revision: 0 });
-    const absent = await fetchWithin(`${base}/api/usage/sessions/absent-budget-session`);
-    expect(absent.status).toBe(404);
+    // A session with no record (yet) has no budget: an answer, not an error, for a
+    // client that asks; an older one keeps its 404.
+    const absent = await fetchWithin(`${base}/api/usage/sessions/absent-budget-session?absent=null`);
+    expect(absent.status).toBe(200);
+    expect(await absent.json()).toBeNull();
+    expect((await fetchWithin(`${base}/api/usage/sessions/absent-budget-session`)).status).toBe(404);
     const wrong = await rpc('usage.budget.configure', { sid, home: path.join(root, 'not-owner'), limitUsd: 0.01, revision: 0 });
     expect(wrong).toMatchObject({ ok: false, code: 'NOT_OWNED' });
     const bad = await request('PATCH', '/budget', { limitUsd: 2_000_000, revision: 0 });

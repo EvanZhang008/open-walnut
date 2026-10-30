@@ -27,6 +27,9 @@ vi.mock('@/commands/index', () => ({ searchCommands: () => [], getCommand: () =>
 vi.mock('@/hooks/useChat', () => ({ MAX_QUEUE_SIZE: 10 }))
 
 import { ChatInput } from '../../web/src/components/chat/ChatInput'
+import { discardDraft } from '../../web/src/utils/drafts'
+import { readdirSync, statSync } from 'node:fs'
+import path from 'node:path'
 
 class MemoryStorage {
   private m = new Map<string, string>()
@@ -194,5 +197,60 @@ describe('sendBlocked: the editor stays, the send controls go', () => {
     expect(src).not.toMatch(/macSessionAway\s*\?\s*<MacAwayComposer/)
     // sendBlocked starts with the Mac being away (another reason may follow it, after `||`).
     expect(src).toMatch(/\{macSessionAway && <MacAwayComposer \/>\}\s*<ChatInput\s+(?:\/\/[^\n]*\n\s*)*sendBlocked=\{macSessionAway(?:\}| \|\|)/)
+  })
+})
+
+// 2026-10-30: closing a draft column removed its key, then the composer's unmount
+// flush wrote the debounced words straight back, so the closed draft came back on
+// the next load and on every other device.
+describe('a draft its owner discarded stays gone', () => {
+  it('the unmount flush does not write back words typed before the discard', async () => {
+    const h = harness()
+    const key = 'draft:new-session:draft:closed-1'
+    await h.render({ draftKey: key })
+    await h.type('words the user threw away')
+    // The owner discards first (the close click), React unmounts the column after.
+    discardDraft(key)
+    await h.unmount()
+    expect(storage.getItem(key)).toBeNull()
+  })
+
+  it('words typed after a discard save as usual', async () => {
+    const h = harness()
+    const key = 'draft:new-session:draft:closed-2'
+    await h.render({ draftKey: key })
+    await h.type('old words')
+    discardDraft(key)
+    await h.type('new words after the discard')
+    await h.unmount()
+    expect(storage.getItem(key)).toBe('new words after the discard')
+  })
+
+  it('every web/src owner removes a draft key through discardDraft', () => {
+    const root = path.resolve(import.meta.dirname, '../../web/src')
+    const files: string[] = []
+    const walk = (d: string) => { for (const n of readdirSync(d)) { const p = path.join(d, n); if (statSync(p).isDirectory()) walk(p); else if (/\.tsx?$/.test(n)) files.push(p) } }
+    walk(root)
+    const rel = (f: string) => path.relative(root, f).split(path.sep).join('/')
+    // The draft store itself, the composer that owns its own pending save, and the
+    // load-time sweep of draft columns (it runs before any box mounts).
+    const own = new Set(['utils/drafts.ts', 'components/chat/ChatInput.tsx', 'components/sessions/draft-column-persist.ts'])
+    const offenders = files
+      .filter((f) => !own.has(rel(f)))
+      .filter((f) => /(localStorage|store)\.removeItem\(\s*(draftComposerKey|draftColumnKey|draftKey|askAnswerDraftKey)\(/.test(readFileSync(f, 'utf-8')))
+      .map(rel)
+    expect(offenders, 'remove a draft key with discardDraft (utils/drafts.ts), so a mounted box cannot write it back').toEqual([])
+  })
+
+  it('every box with a debounced save drops it when its draft was discarded', () => {
+    const root = path.resolve(import.meta.dirname, '../../web/src')
+    const files: string[] = []
+    const walk = (d: string) => { for (const n of readdirSync(d)) { const p = path.join(d, n); if (statSync(p).isDirectory()) walk(p); else if (/\.tsx?$/.test(n)) files.push(p) } }
+    walk(root)
+    const debounced = files.filter((f) => /setTimeout\(\s*flush\w*\s*,/.test(readFileSync(f, 'utf-8')))
+    expect(debounced.length, 'the ChatInput and useDraft debounces are found').toBeGreaterThanOrEqual(2)
+    for (const f of debounced) {
+      expect(readFileSync(f, 'utf-8'), `${path.relative(root, f)} flushes a debounced draft save; check discardedSince first`).toMatch(/discardedSince\(/)
+    }
   })
 })

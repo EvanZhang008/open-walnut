@@ -32,6 +32,8 @@ interface BrowserLogEntry {
   subsystem?: string
   /** 'mac-app' when the page runs inside the desktop shell. */
   client?: string
+  /** The tab's own id (web/src/utils/browser-logger.ts), kept across its reloads. */
+  tab?: string
 }
 
 /**
@@ -100,6 +102,7 @@ function writeEntries(entries: BrowserLogEntry[]): void {
     if (entry.url) meta.url = entry.url
     if (entry.count && entry.count > 1) meta.count = entry.count
     if (entry.client === 'mac-app') meta.client = entry.client
+    if (typeof entry.tab === 'string' && /^[a-z0-9]{1,16}$/.test(entry.tab)) meta.tab = entry.tab
 
     writeLogEntry({
       time: entry.time,

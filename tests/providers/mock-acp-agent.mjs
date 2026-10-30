@@ -37,6 +37,7 @@
 import readline from 'node:readline';
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
+import { userWords } from './mock-user-words.mjs';
 
 // MOCK_ACP_WITNESS=<file>: one line per start ({pid, ppid}), so a test can see this
 // process and its parent (the ACP worker) are really gone after a stop.
@@ -190,13 +191,14 @@ async function handlePrompt(id, params) {
   ignoreCancel = false;
   turnRunning = true;
   const sessionId = params.sessionId;
-  const text = (params.prompt || [])
+  const raw = (params.prompt || [])
     .filter((b) => b.type === 'text')
     .map((b) => b.text)
     .join(' ');
+  const text = userWords(raw);
 
   if (process.env.MOCK_ACP_PROMPT_LOG) {
-    fs.appendFileSync(process.env.MOCK_ACP_PROMPT_LOG, JSON.stringify({ sessionId, text }) + '\n');
+    fs.appendFileSync(process.env.MOCK_ACP_PROMPT_LOG, JSON.stringify({ sessionId, text: raw }) + '\n');
   }
 
   if (text.includes('error')) {
@@ -444,10 +446,10 @@ rl.on('line', async (line) => {
         replyError(msg.id, 'mock agent: unsupported method _session/steering');
         break;
       }
-      const text = (msg.params?.prompt || [])
+      const text = userWords((msg.params?.prompt || [])
         .filter((b) => b.type === 'text')
         .map((b) => b.text)
-        .join(' ');
+        .join(' '));
       if (turnRunning && !cancelled) {
         steeredTexts.push(text);
         reply(msg.id, { outcome: 'injected' });

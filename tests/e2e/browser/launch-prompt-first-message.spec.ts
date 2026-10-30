@@ -150,7 +150,7 @@ test('Start Task: the first message shows from the click, survives a reload mid-
   const text = `slow:20000 ${stamp} who owns the build?`
   await loadHome(page)
   const release = await holdTranscript(page, stamp, text)
-  const draft = await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
+  const draft = await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`, { engine: 'Claude' })
   await draftComposer(page).fill(text)
 
   // A slow launch request (a loaded Mac took 3.7s) keeps the PENDING column up:
@@ -228,7 +228,7 @@ test('a transcript that never yields the row: the message still heads the conver
   // and no user row, the degraded read this guards.
   const stamp = `no-row-probe-${Date.now()}`
   await loadHome(page)
-  const draft = await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
+  const draft = await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`, { engine: 'Claude' })
   await draftComposer(page).fill(`${stamp} quick question`)
   const panel = await launch(page, () => draftSend(draft).click())
   await expect(panel).toBeVisible({ timeout: 30_000 })

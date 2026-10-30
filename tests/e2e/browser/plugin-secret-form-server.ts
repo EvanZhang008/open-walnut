@@ -23,9 +23,11 @@ import fs from 'node:fs/promises'
 import fsSync from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fixtureHome } from './fixture-home'
 
 const port = Number(process.env.PW_PLUGIN_SECRET_FORM_PORT ?? 3464)
-const tmpBase = path.join(os.tmpdir(), `walnut-plugin-secret-form-${port}-${Date.now()}`)
+// Its own home for real: Bun reads HOME only at startup (fixture-home.ts).
+const tmpBase = await fixtureHome(path.join(os.tmpdir(), `walnut-plugin-secret-form-${port}-${Date.now()}`))
 
 process.env.OPEN_WALNUT_HOME = tmpBase
 process.env.WALNUT_DAEMON_DIR = path.join(tmpBase, 'daemon')

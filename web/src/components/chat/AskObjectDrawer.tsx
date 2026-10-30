@@ -28,6 +28,7 @@ import { useNotifications } from '@/contexts/notifications/NotificationProvider'
 import { getEngineCatalog } from '@/hooks/useEngineCatalog';
 import { useEvent } from '@/hooks/useWebSocket';
 import { log } from '@/utils/log';
+import { discardDraft } from '@/utils/drafts';
 import { locateTaskOnHome } from '@/utils/open-session';
 import { visibleInterval } from '@/utils/page-visibility';
 import { askLaunchBody, askTaskForLater } from './ask-object-draft';
@@ -343,7 +344,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
     setSaveError('');
     try {
       const task = await createTask(input);
-      try { localStorage.removeItem(draftComposerKey(draftId)); } catch { /* storage disabled */ }
+      discardDraft(draftComposerKey(draftId));
       log.info('ask-object', 'task for later created', { objectKey: scope.key, taskId: task.id });
       notify({
         kind: 'sort',

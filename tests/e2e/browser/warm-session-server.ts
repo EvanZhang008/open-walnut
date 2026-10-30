@@ -1,12 +1,13 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fixtureHome } from './fixture-home'
 
 const port = Number(process.env.PW_TEST_PORT ?? 3457)
 if (port === 3456) throw new Error('Production port is forbidden')
 const manifest = process.env.WARM_FIXTURE_MANIFEST
 if (!manifest) throw new Error('WARM_FIXTURE_MANIFEST is required')
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-warm-ui-'))
+const root = await fixtureHome(() => fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-warm-ui-')))
 process.argv.push('--_ephemeral-child')
 Object.assign(process.env, {
   OPEN_WALNUT_HOME: root,

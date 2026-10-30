@@ -23,6 +23,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test, expect, type Locator, type Page } from '@playwright/test'
+import { expandSystemAttention } from './host-problems-helpers'
 import { draftComposer, draftCwdPill, draftPanel, draftSend, loadHome, openDraft, REAL_PANEL } from './draft-helpers'
 
 const SHOTS = process.env.CLOUD_HOST_SHOTS ?? path.join(os.tmpdir(), 'walnut-cloud-host-shots')
@@ -152,8 +153,11 @@ test('hosting turned off on the box: the Cloud card says so with ONE details tog
   fs.writeFileSync(boxConfig, original.replace('enabled: true', 'enabled: false'))
   try {
     // A "Reconnecting to Cloud" row may stand there first; wait for the verdict.
-    await expect(page.locator(`[data-testid="attention-banner"] li.hpb-row[data-host="${CLOUD}"][data-kind="cloud_exec_off"]`).first())
-      .toBeVisible({ timeout: 150_000 })
+    // The system attention section starts collapsed: the row is there, hidden,
+    // until the section is opened.
+    await expect(page.locator(`[data-testid="attention-banner"] li.hpb-row[data-host="${CLOUD}"][data-kind="cloud_exec_off"]`).first()).toBeAttached({ timeout: 150_000 })
+    await expandSystemAttention(page)
+    await expect(page.locator(`[data-testid="attention-banner"] li.hpb-row[data-host="${CLOUD}"][data-kind="cloud_exec_off"]`).first()).toBeVisible()
     await expect(card).toContainText('Cloud companion has session hosting turned off')
     await expect(card).toContainText('cloud.exec.enabled: true')
 

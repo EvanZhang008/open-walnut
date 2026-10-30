@@ -12,10 +12,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createAcpDaemon, type AcpProcessInfo } from '../../src/providers/acp-daemon.js'
+import { acpWorkerBundle } from '../helpers/acp-worker-bundle.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const MOCK_AGENT = path.join(__dirname, 'mock-acp-agent.mjs')
-const WORKER_BUNDLE = path.join(__dirname, '../../dist/daemon-binaries/acp-worker.js')
+const WORKER_BUNDLE = acpWorkerBundle()
 
 interface FakeWs { open: boolean; frames: Array<Record<string, unknown>> }
 let tmpDir = ''

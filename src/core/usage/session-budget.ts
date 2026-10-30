@@ -17,9 +17,10 @@ import { currentPriceSnapshot, ensurePriceBook } from './price-book.js';
 import type { PriceSnapshot } from './price-data.js';
 import type { BudgetPrices, BudgetState } from '../../providers/usage-budget-runtime.js';
 import type { SessionRecord } from '../types.js';
+import { BUDGET_ENGINES } from './budget-engines.js';
 
 /** Engines whose per-request usage the host can price (session-cost-core.ts). */
-export const BUDGET_ENGINES = ['claude', 'codex', 'opencode'] as const;
+export { BUDGET_ENGINES };
 /** How often the host prices a budgeted session between responses, in seconds (mirrors CHECK_EVERY). */
 export const BUDGET_CHECK_EVERY_SEC: Record<string, number> = { claude: 2, codex: 5, opencode: 30 };
 

@@ -114,7 +114,7 @@ function stopButton(panel: Locator): Locator {
 /** Start a long turn from the draft column and wait until its partial answer is on screen. */
 async function startLongTurnFromDraft(page: Page): Promise<{ sessionId: string; taskId: string; panel: Locator }> {
   await openHome(page)
-  await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
+  await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`, { engine: 'Claude' })
   const taskId = await sendQuickStart(page, LONG_TURN)
   const sessionId = await sessionIdForTask(page, taskId)
   const panel = page.locator(`${REAL_PANEL}[data-session-id="${sessionId}"]`)
@@ -147,7 +147,7 @@ test('Tree Mode sends UUID messages into the FIFO before the running turn ends',
   // mode pill), then take the pill to Tree Mode, onto the question page.
   await page.addInitScript(([key]) => localStorage.setItem(key, 'stack'), [VIEW_MODE_DEFAULT_KEY])
   await openHome(page)
-  await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
+  await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`, { engine: 'Claude' })
   const passage = 'the release target decides the runtime'
   const taskId = await sendQuickStart(page, `snapshot-clean-turn:In short, ${passage}.`)
   const sessionId = await sessionIdForTask(page, taskId)
@@ -304,7 +304,7 @@ test('three Stop rounds in a row on one process', async ({ page }) => {
 test('Stop preserves a dense partial answer and a Unicode follow-up', async ({ page }) => {
   test.setTimeout(90000)
   await openHome(page)
-  await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`)
+  await openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`, { engine: 'Claude' })
   const taskId = await sendQuickStart(page, 'snapshot-long-turn:60000:dense')
   const sessionId = await sessionIdForTask(page, taskId)
   const panel = page.locator(`${REAL_PANEL}[data-session-id="${sessionId}"]`)

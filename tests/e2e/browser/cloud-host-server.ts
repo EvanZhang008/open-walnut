@@ -20,17 +20,20 @@
  * Reads PW_TEST_PORT (default 3466); prints `CLOUD_HOST_READY <json>`.
  */
 import fs from 'node:fs/promises'
-import { rmSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
 import { seedPrimaryPairing, startCloudBoxReplica } from '../../helpers/cloud-box-replica.js'
 import { startSilentLinkProxy, type LinkMode } from '../../helpers/silent-link-proxy.js'
 import { isolateFromRealSsh } from '../../helpers/isolate-ssh.js'
+import { fixtureHome } from './fixture-home'
 
 const port = Number(process.env.PW_TEST_PORT ?? 3466)
 if (port === 3456) throw new Error('Production port is forbidden')
-const base = await fs.mkdtemp(path.join(os.tmpdir(), 'walnut-cloudhost-pw-'))
+// The Mac's HOME is <base>/mac/isolated-home (isolateFromRealSsh below), set for
+// the whole process before anything reads it.
+const base = path.resolve(await fixtureHome(() => path.join(mkdtempSync(path.join(os.tmpdir(), 'walnut-cloudhost-pw-')), 'mac', 'isolated-home')), '../..')
 const macHome = path.join(base, 'mac', 'data')
 await fs.mkdir(path.join(macHome, 'tasks'), { recursive: true })
 

@@ -18,7 +18,7 @@
 
 import { test, expect } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { discoverFixtureRoot, draftComposer, draftCwdPill, openDraftOnCwd, loadHome, seedColumns, draftSend } from './draft-helpers'
+import { discoverFixtureRoot, draftComposer, openDraftOnCwd, loadHome, seedColumns, draftSend } from './draft-helpers'
 
 const SCREENSHOT_DIR = process.env.SLASH_SHOT_DIR ?? '/tmp/slash-palette-cli'
 
@@ -64,12 +64,9 @@ test('a live session palette lists the CLI-advertised commands, hides terminal-o
   await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
 
   const cwd = `${fixtureRoot}/projects/walnut`
-  const panel = await openDraftOnCwd(page, cwd)
-  await draftCwdPill(panel).click()
-  const folder = page.locator('.session-path-selector')
-  await folder.getByRole('button', { name: 'Claude', exact: true }).click()
-  await folder.locator('.sps-search-input').press('Shift+Enter')
-  await expect(folder).toBeHidden()
+  // The folder picker picks folder and host only (3a804b3f8); the engine is the
+  // model pill's, which openDraftOnCwd sets.
+  const panel = await openDraftOnCwd(page, cwd, { engine: 'Claude' })
   await draftComposer(page).fill(`slash palette probe ${Date.now()}`)
 
   const launch = page.waitForRequest((req) =>

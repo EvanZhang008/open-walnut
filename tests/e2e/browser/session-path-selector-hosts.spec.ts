@@ -411,8 +411,8 @@ test('a host added after the picker first opened gets a tab on the next open, wi
   await expect(devboxTab).toBeVisible()
   expect(served).toBeGreaterThan(servedBefore)
   expect(await page.evaluate(() => (window as unknown as { __samePage?: boolean }).__samePage)).toBe(true)
-  // The new host is pre-warmed on this open, and the All tab lists it.
-  await expect.poll(() => devboxPrefixes.length).toBeGreaterThan(0)
+  // The All tab lists the new host. (No pre-warm here: a server whose remotes are
+  // all off, as this ephemeral one's are, dials nothing ahead: prewarmTargets, 4d47df063.)
   await page.locator('.sps-host-tab').filter({ hasText: /^All$/ }).click()
   await input(page).fill('/srv/')
   await expect(list(page).locator('.sps-path-item.sps-live', { hasText: 'from-devbox' })).toBeVisible()

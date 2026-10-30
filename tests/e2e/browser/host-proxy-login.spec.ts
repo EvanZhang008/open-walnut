@@ -15,6 +15,7 @@
  */
 import fs from 'node:fs'
 import { test, expect } from '@playwright/test'
+import { expandSystemAttention } from './host-problems-helpers'
 import {
   HEALTHY, fixtureCounters, fixtureFile, hostFixture, isolatePrefs, loadApp, loadFixture, resetServerHostFixture, tasksBanner, wireHost,
 } from './host-problems-fixture-helpers'
@@ -52,7 +53,10 @@ test.describe('a proxy whose own login expired', () => {
     await page.setViewportSize({ width: 1280, height: 800 })
     await loadApp(page)
     const merged = tasksBanner(page).locator('li.hpb-row[data-host="proxbox proxbox2"]')
-    await expect(merged).toBeVisible({ timeout: 20_000 })
+    // The system attention section starts collapsed: open it to read the row.
+    await expect(merged).toBeAttached({ timeout: 20_000 })
+    await expandSystemAttention(page)
+    await expect(merged).toBeVisible()
     await expect(merged.locator('.hft-headline')).toHaveText('Could not connect to Proxy box and Proxy box 2: SSH proxy login expired')
     await expect(merged.locator('.hft-hint')).toContainText("organization's login command")
     await expect(merged.locator('.hft-hint')).not.toContainText('Check the proxy settings')
@@ -65,7 +69,10 @@ test.describe('a proxy whose own login expired', () => {
     await page.setViewportSize({ width: 1280, height: 800 })
     await loadApp(page)
     const merged = tasksBanner(page).locator('li.hpb-row[data-host="proxbox proxbox2"]')
-    await expect(merged).toBeVisible({ timeout: 20_000 })
+    // The system attention section starts collapsed: open it to read the row.
+    await expect(merged).toBeAttached({ timeout: 20_000 })
+    await expandSystemAttention(page)
+    await expect(merged).toBeVisible()
     const before = await fixtureCounters(request)
 
     // Still expired: one dial each, the same kind, the countdown starts over.

@@ -24,17 +24,18 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
+import { fixtureHome, fixtureRealHome } from './fixture-home'
 
 const port = Number(process.env.PW_TEST_PORT ?? 3514)
 if (port === 3456) throw new Error('Production port is forbidden')
 const manifest = process.env.SESSION_COMMIT_MANIFEST
 if (!manifest) throw new Error('SESSION_COMMIT_MANIFEST is required')
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..')
-// Read before HOME moves into the fixture: bun lives under the developer's home.
-const realHome = os.homedir()
 // A manifest left by a run that died must never point this run's spec at old data.
 fs.rmSync(manifest, { force: true })
-const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-session-commit-ui-')))
+const root = await fixtureHome(() => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-session-commit-ui-'))))
+// Bun lives under the developer's home, which this process no longer has.
+const realHome = fixtureRealHome()
 // The temp dir goes on 'exit', synchronously, so any path out of the process
 // (the shutdown below, a boot failure) removes it.
 process.on('exit', () => {

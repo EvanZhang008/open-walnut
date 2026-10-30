@@ -17,7 +17,7 @@
  * is no draft.
  */
 import { useCallback, useEffect, useRef, useState, type SetStateAction } from 'react';
-import { readDraft, subscribeDraft, writeDraft } from '@/utils/drafts';
+import { discardedSince, draftSaveMark, readDraft, subscribeDraft, writeDraft } from '@/utils/drafts';
 import { DRAFT_FLUSH_EVENT, noteDraftWrite, type DraftFlushDetail } from '@/utils/unsaved-work';
 
 const DEBOUNCE_MS = 300;
@@ -55,14 +55,15 @@ export function useDraft(key: string | null | undefined, opts: { baseline?: stri
   const textRef = useRef(text);
   textRef.current = text;
   const keyRef = useRef(k);
-  const pending = useRef<{ key: string; text: string } | null>(null);
+  const pending = useRef<{ key: string; text: string; mark: number } | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const flush = useCallback(() => {
     clearTimeout(timer.current);
     const p = pending.current;
     pending.current = null;
-    if (!p) return;
+    // The owner discarded the draft after these words were typed (utils/drafts.ts).
+    if (!p || discardedSince(p.key, p.mark)) return;
     writeDraft(p.key, p.text === baselineRef.current ? '' : p.text);
     noteDraftWrite();
   }, []);
@@ -95,7 +96,7 @@ export function useDraft(key: string | null | undefined, opts: { baseline?: stri
     setTextState(value);
     const kk = keyRef.current;
     if (!kk) return;
-    pending.current = { key: kk, text: value };
+    pending.current = { key: kk, text: value, mark: draftSaveMark() };
     clearTimeout(timer.current);
     timer.current = setTimeout(flush, DEBOUNCE_MS);
   }, [flush]);

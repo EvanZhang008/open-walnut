@@ -464,6 +464,10 @@ export const QUICK_START_MESSAGE_SPILL_LIMIT = 25_000;
 export const QUICK_START_MESSAGE_HARD_LIMIT = 2_000_000;
 
 export const DAEMON_BINARIES_DIR = (() => {
+  // A test fixture names the sidecars it built from the source under test: a clean
+  // clone has no dist/, and the shared checkout's is whatever the last deploy published.
+  const named = process.env.WALNUT_DAEMON_BINARIES_DIR;
+  if (named && path.isAbsolute(named)) return named;
   let dir = path.dirname(fileURLToPath(import.meta.url));
   for (let i = 0; i < 5; i++) {
     const candidate = path.join(dir, 'dist', 'daemon-binaries');

@@ -19,6 +19,25 @@ function harness() {
 }
 
 describe('session usage shared store', () => {
+  // 2026-10-30: a session with no budget (an engine without per-request usage, or no
+  // record yet) answered 400/404 and every such panel logged an error; now it reads null.
+  it('a session with no budget is no error, and a later read with one replaces it', async () => {
+    const { store, fetch } = harness();
+    fetch.mockResolvedValueOnce(null);
+    expect(await store.refresh('session-a')).toBeNull();
+    expect(store.getSnapshot('session-a')).toMatchObject({ data: null, error: null, noBudget: true, loading: false });
+    expect(await store.refresh('session-a')).toEqual(value());
+    expect(store.getSnapshot('session-a')).toMatchObject({ data: value(), noBudget: false });
+  });
+  it('a null after a budget was shown keeps it (a host not adopted yet after a restart)', async () => {
+    const { store, fetch } = harness();
+    fetch.mockResolvedValueOnce(value());
+    await store.refresh('session-a');
+    fetch.mockResolvedValueOnce(null);
+    expect(await store.refresh('session-a')).toEqual(value());
+    expect(store.getSnapshot('session-a')).toMatchObject({ data: value(), error: null });
+    expect(store.getSnapshot('session-a').noBudget).toBeFalsy();
+  });
   it('deduplicates overlapping polls and shares the result with every surface', async () => {
     const { store, fetch } = harness();
     const read = deferred<SessionUsage>(); fetch.mockReturnValue(read.promise);

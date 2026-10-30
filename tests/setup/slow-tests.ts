@@ -51,7 +51,7 @@ export const SLOW_TEST_FILES = [
   'tests/core/calendar-bridge-native.test.ts', // compiles the calendar protocol twice with swiftc
   'tests/core/reader-bridge-native.test.ts', // ~18s: compiles walnut-reader.swift twice with swiftc
   'tests/providers/acp-daemon.test.ts', // 7s
-  // Starts a real worker from dist/daemon-binaries/acp-worker.js, which only this tier's job builds.
+  // Starts real worker processes (built from source by tests/helpers/acp-worker-bundle.ts).
   'tests/providers/acp-straggler-sweep.test.ts',
   'tests/providers/session-background-workflow.test.ts', // 0.3s (was 5s — afterEach sleep was 90% of it)
   'tests/providers/daemon-transport-unit.test.ts', // 3s

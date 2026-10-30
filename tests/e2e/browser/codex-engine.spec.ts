@@ -291,13 +291,14 @@ test('Codex model picker switches models on Homepage', async ({ page }) => {
   const homePill = panel.getByRole('button', { name: /GPT Best/ })
   await expect(homePill).toBeVisible({ timeout: 15_000 })
   await homePill.click()
-  // The shared two-pane picker: provider rail (Claude greyed+locked — a live
-  // codex session can't switch engines in place) | the ACP model rows.
+  // The shared two-pane picker: provider rail | the ACP model rows. Claude is
+  // not locked: a task's session switches engine on its next message
+  // (0d2dd3cb0, EngineSwitch.tsx), so picking another engine is offered.
   // page-scoped: the picker PORTALS to <body> when anchored (popout, 020a265b).
   const homeMenu = page.locator('.model-picker')
   await expect(homeMenu).toBeVisible()
   await expect(homeMenu.locator('.provider-rail-item[data-provider="codex"]')).toHaveClass(/provider-rail-item-active/)
-  await expect(homeMenu.locator('.provider-rail-item[data-provider="claude"]')).toHaveClass(/provider-rail-item-locked/)
+  await expect(homeMenu.locator('.provider-rail-item[data-provider="claude"]')).not.toHaveClass(/provider-rail-item-locked/)
   const homeSwitchResponse = page.waitForResponse((candidate) =>
     candidate.request().method() === 'POST'
       && new URL(candidate.url()).pathname === `/api/sessions/${sessionId}/model`)

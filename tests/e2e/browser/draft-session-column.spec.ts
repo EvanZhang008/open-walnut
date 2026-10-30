@@ -49,6 +49,7 @@
  * stamped title instead of a list length.
  */
 
+import fs from 'node:fs/promises'
 import { test, expect } from '@playwright/test'
 import {
   basenameOf, discoverFixtureRoot, draftComposer, draftCwdPill, draftLaunchBar, draftPanel,
@@ -61,6 +62,18 @@ import { presetPanelView } from './todo-panel-helpers'
 
 /** Artifacts of the v4-layout run (the re-arranged column). Per-run overridable
  *  so a later revision's artifacts don't overwrite this one's. */
+/**
+ * A folder no other spec launched in, for a task started with ▶. Launch memory is
+ * per folder (the server's frequent-dirs `lastLaunch`) and the Codex specs launch
+ * in projects/walnut, so a task there started on Codex whenever those ran first,
+ * and carried no client session id.
+ */
+async function freshFolder(name: string): Promise<string> {
+  const dir = `${fixtureRoot}/projects/${name}-${Date.now()}`
+  await fs.mkdir(dir, { recursive: true })
+  return dir
+}
+
 const SCREENSHOT_DIR = process.env.DRAFT_SHOT_DIR ?? '/tmp/draft-v4e'
 
 /** Seeded, stopped sessions from test-server.ts — distinct ids, one column each. */
@@ -227,7 +240,7 @@ test('Start launches with the picked cwd and NO taskId, becomes a real panel, an
   await expect(homeColumns(page)).toHaveCount(2, { timeout: 25_000 })
 
   const cwd = `${fixtureRoot}/projects/walnut`
-  const panel = await openDraftOnCwd(page, cwd)
+  const panel = await openDraftOnCwd(page, cwd, { engine: 'Claude' })
   // Three columns while the draft is open — the license is active.
   await expect(homeColumns(page)).toHaveCount(3, { timeout: 10_000 })
 
@@ -395,7 +408,7 @@ test('task row ▶ Start reuses the task (taskId in the payload) and creates no 
   const stamp = Date.now()
   const title = `start me from a row ${stamp}`
   const description = 'the body that must ride along as context'
-  const cwd = `${fixtureRoot}/projects/walnut`
+  const cwd = await freshFolder('column-task')
   const createRes = await page.request.post('/api/tasks', {
     data: { title, source: 'local', project: 'Walnut', cwd, description },
   })
@@ -456,7 +469,7 @@ test('title-only task ▶ Start opens a bound draft (no launch), and its Start r
   // gets a composer pre-pointed at the task instead.
   const stamp = Date.now()
   const title = `write the brief yourself ${stamp}`
-  const cwd = `${fixtureRoot}/projects/walnut`
+  const cwd = await freshFolder('column-task')
   const createRes = await page.request.post('/api/tasks', {
     data: { title, source: 'local', project: 'Walnut', cwd },
   })

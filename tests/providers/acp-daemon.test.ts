@@ -12,18 +12,15 @@ import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { createAcpDaemon } from '../../src/providers/acp-daemon.js'
+import { acpWorkerBundle } from '../helpers/acp-worker-bundle.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const MOCK_AGENT = path.join(__dirname, 'mock-acp-agent.mjs')
 const HUNG_WORKER = path.join(__dirname, 'mock-hung-acp-worker.mjs')
 const REPO_ROOT = path.resolve(__dirname, '../..')
-const WORKER_BUNDLE = path.join(REPO_ROOT, 'dist/daemon-binaries/acp-worker.js')
-
-// The bundled worker artifact is required (built by scripts/build-daemon.sh).
-// Fail loudly rather than silently skipping — the bundle IS the deploy unit.
-if (!fs.existsSync(WORKER_BUNDLE)) {
-  throw new Error(`acp-worker bundle missing: ${WORKER_BUNDLE} — run: bash scripts/build-daemon.sh`)
-}
+// The bundle IS the deploy unit: built here from this tree's source with the same
+// flags as scripts/build-daemon.sh, so it is never missing or stale.
+const WORKER_BUNDLE = acpWorkerBundle()
 
 /** Fake ws endpoint capturing pushed frames. */
 interface FakeWs { open: boolean; frames: Array<Record<string, unknown>> }

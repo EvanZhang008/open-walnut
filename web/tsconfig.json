@@ -22,6 +22,7 @@
       "@open-walnut/service-url": ["../src/core/service-url"],
       "@open-walnut/compaction-notice": ["../src/core/stream/compaction-notice"],
       "@open-walnut/hint-format": ["../src/core/hints/hint-format"],
+      "@open-walnut/budget-engines": ["../src/core/usage/budget-engines"],
       "@open-walnut/search-transcript": ["../src/core/task-search-transcript"],
       "@open-walnut/host-problem": ["../src/core/hosts/host-problem"],
       "@open-walnut/ask-list": ["../src/core/sessions/ask-list"],

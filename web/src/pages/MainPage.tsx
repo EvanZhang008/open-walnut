@@ -59,6 +59,7 @@ import { AskWalnutSlot, MAIN_PICK, showAskInSlot } from '@/components/chat/AskWa
 import { agentOfTask, slotAgents } from '@/components/chat/ask-walnut-slot-model';
 import { getAgentsSnapshot } from '@/stores/agents-store';
 import { log } from '@/utils/log';
+import { discardDraft } from '@/utils/drafts';
 import { escapeWasConsumedByOthers } from '@/utils/escape-beep-guard';
 import { visibleInterval } from '@/utils/page-visibility';
 import { useContextInspector } from '@/hooks/useContextInspector';
@@ -1274,7 +1275,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const forgetDraft = useCallback((draftId: string) => {
     setDraftColumns(prev => prev.filter(d => d.id !== draftId));
     setFocusDraftId(prev => (prev === draftId ? null : prev));
-    try { localStorage.removeItem(draftComposerKey(draftId)); } catch { /* storage disabled */ }
+    discardDraft(draftComposerKey(draftId));
     // Give the main chat its spot back if THIS draft borrowed it. Both exits
     // funnel here (✕ close and Start), so the borrow can never outlive the
     // draft; a borrow the user already cancelled (ref cleared on explicit

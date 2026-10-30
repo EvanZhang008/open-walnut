@@ -27,6 +27,7 @@
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { fixtureHome } from './fixture-home'
 
 const role = process.env.PW_RESTART_ROLE
 const home = process.env.PW_RESTART_HOME
@@ -34,6 +35,8 @@ const apiPort = Number(process.env.PW_RESTART_API_PORT)
 if ((role !== 'api' && role !== 'vite') || !home || !Number.isInteger(apiPort) || apiPort <= 0) {
   throw new Error('plugin-restart-server needs PW_RESTART_ROLE, PW_RESTART_HOME and PW_RESTART_API_PORT')
 }
+// Its own home for real: Bun reads HOME only at startup (fixture-home.ts).
+await fixtureHome(home)
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..')
 
 /** Three waits in a row: one plugin may not take longer than 20 s to activate. */

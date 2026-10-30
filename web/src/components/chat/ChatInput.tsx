@@ -20,7 +20,7 @@ import { MicButton } from '../common/MicButton';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { pasteRichTextAsMarkdown, isOfficeClipboardHtml } from '@/utils/html-to-markdown';
 import { DRAFT_FLUSH_EVENT, noteDraftWrite, type DraftFlushDetail } from '@/utils/unsaved-work';
-import { subscribeDraft } from '@/utils/drafts';
+import { discardedSince, draftSaveMark, subscribeDraft } from '@/utils/drafts';
 import { PlusMenuActionRows } from './PlusMenuActionRows';
 import { plusButtonLabel, selectPlusMenuAction, type PlusMenuAction } from './plus-menu-actions';
 import { keepCommandFirst } from './leading-command';
@@ -299,12 +299,13 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // The save the debounce still owes, under the key it was typed for: written at
   // once when the composer unmounts or moves to another key, so the last
   // keystrokes before either are never dropped.
-  const pendingDraftRef = useRef<{ key: string; text: string } | null>(null);
+  const pendingDraftRef = useRef<{ key: string; text: string; mark: number } | null>(null);
   const flushDraft = useCallback(() => {
     clearTimeout(draftTimerRef.current);
     const pending = pendingDraftRef.current;
     pendingDraftRef.current = null;
-    if (!pending) return;
+    // The owner discarded the draft after these words were typed (utils/drafts.ts).
+    if (!pending || discardedSince(pending.key, pending.mark)) return;
     try {
       if (pending.text) localStorage.setItem(pending.key, pending.text);
       else localStorage.removeItem(pending.key);
@@ -698,7 +699,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     clearTimeout(draftTimerRef.current);
     // The key it is typed under now: a key change before the timer fires flushes it there.
     const key = draftKeyRef.current;
-    pendingDraftRef.current = key ? { key, text } : null;
+    pendingDraftRef.current = key ? { key, text, mark: draftSaveMark() } : null;
     if (!key) return;
     draftTimerRef.current = setTimeout(flushDraft, 300);
   }, [flushDraft]);

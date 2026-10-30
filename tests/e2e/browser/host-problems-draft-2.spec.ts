@@ -30,7 +30,7 @@ import {
   HEALTHY, fixtureCounters, fixtureFile, gateBar, hostFixture, hostTab, isolatePrefs, loadApp, loadFixture, openPicker,
   pickFolder, picker, resetServerHostFixture, start, startOnHost, tasksBanner, wireHost,
 } from './host-problems-fixture-helpers'
-import { hideTaskPanel } from './host-problems-helpers'
+import { expandSystemAttention, hideTaskPanel } from './host-problems-helpers'
 
 const SHOTS = '/tmp/walnut-host-problems-slice/fix2'
 const REMOTE_OFF = 'Remote hosts are off on this test server.'
@@ -252,6 +252,8 @@ test.describe('the Ask Walnut slot hidden', () => {
   test('the draft column carries the compact banner with the task panel\'s rows; no second banner exists (C66)', async ({ page, browser }) => {
     test.setTimeout(90_000) // two app loads (task panel shown, then hidden) in one test
     await loadApp(page)
+    // The task panel's system attention is a collapsed footer by default (0eacec605).
+    await expandSystemAttention(page)
     const tasksRows = tasksBanner(page).locator('li.hpb-row[data-host]')
     await expect(tasksRows.first()).toBeVisible({ timeout: 20_000 })
     const rowsOf = (els: Element[]) => els.map((e) => `${e.getAttribute('data-host')}|${e.getAttribute('data-type')}|${e.getAttribute('data-kind')}`)

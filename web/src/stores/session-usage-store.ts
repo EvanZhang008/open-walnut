@@ -7,9 +7,11 @@ export interface SessionUsageSnapshot {
   error: string | null;
   /** The HTTP status of the last failed read (400: this engine has no budget). */
   errorStatus?: number;
+  /** The server said this session has no budget (null); the next turn's end asks again. */
+  noBudget?: boolean;
 }
 interface UsageClient {
-  fetch: (sessionId: string, signal: AbortSignal) => Promise<SessionUsage>;
+  fetch: (sessionId: string, signal: AbortSignal) => Promise<SessionUsage | null>;
   patch: (sessionId: string, limitUsd: number | null, revision: number) => Promise<SessionUsage>;
 }
 interface Entry {
@@ -59,8 +61,18 @@ export class SessionUsageStore {
     this.publish(entry, { loading: true });
     const pending = this.client.fetch(sessionId, controller.signal).then((data) => {
       if (generation !== entry.generation) return null;
+      if (data === null) {
+        // A budget it already showed stays: a host that has not adopted the session
+        // after a restart says it does not know it (src/web/routes/usage.ts).
+        if (entry.snapshot.data) {
+          this.publish(entry, { error: null, errorStatus: undefined });
+          return entry.snapshot.data;
+        }
+        this.publish(entry, { data: null, error: null, errorStatus: undefined, noBudget: true });
+        return null;
+      }
       const accepted = this.accept(sessionId, entry, data);
-      this.publish(entry, { data: accepted, error: null, errorStatus: undefined });
+      this.publish(entry, { data: accepted, error: null, errorStatus: undefined, noBudget: false });
       return accepted;
     }).catch((error: unknown) => {
       if (generation === entry.generation) this.publish(entry, { error: messageOf(error), errorStatus: (error as { status?: number })?.status });

@@ -34,6 +34,7 @@ import { parseHinted } from '../../src/core/hints/hint-format.js'
 import { TEAM_CHARTER } from '../../src/core/team-charter.js'
 import { ensureMainTask } from '../../src/core/org/org-store.js'
 import type { OrgRole } from '../../src/core/types.js'
+import { acpWorkerBundle } from '../helpers/acp-worker-bundle.js'
 
 const REPO = path.resolve(import.meta.dirname, '../..')
 const MOCK_CLI = path.join(REPO, 'tests/providers/mock-claude.mjs')
@@ -97,11 +98,9 @@ beforeAll(async () => {
   daemon = await createMockDaemon()
   sessionRunner.setCliCommand(MOCK_CLI)
   sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${daemon.port}`)
-  // A worker bundle lets the ACP start establish; the capture below only needs
-  // the start command, so a checkout without a built bundle still runs it.
-  const worker = [path.join(REPO, 'dist/daemon-binaries/acp-worker.js'), process.env.CHARTER_ACP_WORKER ?? '']
-    .find((p) => p && fs.existsSync(p))
-  if (worker) sessionRunner.setTestAcpArtifacts({ workerCmd: [process.execPath, worker], adapterCmd: [process.execPath, MOCK_AGENT] })
+  // A worker bundle lets the ACP start establish (built from this tree's source).
+  const worker = process.env.CHARTER_ACP_WORKER || acpWorkerBundle()
+  sessionRunner.setTestAcpArtifacts({ workerCmd: [process.execPath, worker], adapterCmd: [process.execPath, MOCK_AGENT] })
   server = await startServer({ port: 0, dev: true })
   const addr = server.address()
   port = typeof addr === 'object' && addr ? addr.port : 0

@@ -65,6 +65,33 @@ export function clearDraft(key: string | null | undefined): void {
   if (key) writeDraft(key, '');
 }
 
+/**
+ * The draft's owner threw it away (a draft column closed, its words became a
+ * task, a fork draft closed): its words go now, and a save a mounted box still
+ * owes from before is dropped. Without this the box's unmount flush (ChatInput
+ * writes its debounced save when it goes) put the words back right after the
+ * owner removed them, so a closed draft column came back on the next load and
+ * on every other device (2026-10-30). A box typed in again after the discard
+ * saves as usual.
+ */
+export function discardDraft(key: string): void {
+  discardedAt.set(key, ++saveSeq);
+  writeDraft(key, '');
+}
+
+/** A mark for a save a box owes, taken when the words were typed. */
+export function draftSaveMark(): number {
+  return ++saveSeq;
+}
+
+/** Was the key discarded after a save marked `mark` was owed? */
+export function discardedSince(key: string, mark: number): boolean {
+  return (discardedAt.get(key) ?? 0) > mark;
+}
+
+let saveSeq = 0;
+const discardedAt = new Map<string, number>();
+
 /** A draft as a JSON value (a form's several fields under one key). */
 export function readDraftJson<T>(key: string): T | undefined {
   const raw = readDraft(key);

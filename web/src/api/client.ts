@@ -160,6 +160,23 @@ export function getLowFetchQueueStats(): { inFlight: number; queued: number } {
  *  can deadlock the pool if several requests hit the cache race at once). */
 const RETRY_WITH_CACHE_BYPASS = Symbol('retry-with-cache-bypass');
 
+/**
+ * The page is going away (a reload, a navigation, the window closing): the
+ * browser cancels every request still in flight, which reaches us as a
+ * "Failed to fetch" from fetch() or from the body read. That is the page's own
+ * exit, not a server or network failure, so it is not logged as an error
+ * (2026-10-30: every reload in a browser test logged "JSON parse failed" for the
+ * requests it cut). A back-forward cache restore brings the page back.
+ */
+let pageLeaving = false;
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('pagehide', () => { pageLeaving = true; });
+  window.addEventListener('pageshow', () => { pageLeaving = false; });
+}
+function cutByPageExit(err: unknown): boolean {
+  return pageLeaving && err instanceof TypeError;
+}
+
 interface RequestExtra {
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -253,7 +270,7 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
     // surface. AbortError without a timeout = intentional caller abort.
     const isTimeout = err instanceof DOMException && err.name === 'TimeoutError';
     const isAbort = err instanceof DOMException && err.name === 'AbortError';
-    if (isAbort && !isTimeout) {
+    if ((isAbort && !isTimeout) || cutByPageExit(err)) {
       throw err;
     }
     console.error(`[api] ${method} ${path} FAILED after ${elapsed}ms${isTimeout ? ` (timeout ${timeoutMs}ms)` : ''}`, err);
@@ -304,6 +321,7 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
     ) {
       throw jsonErr;
     }
+    if (cutByPageExit(jsonErr)) throw jsonErr;
     // Empty/truncated body on a GET is (in practice) the browser-cache 304
     // race: two concurrent GETs to the same URL, the second revalidates and
     // fetch() surfaces "200" with no usable entity (inc-1784686852150,

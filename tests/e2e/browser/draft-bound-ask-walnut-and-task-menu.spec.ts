@@ -233,7 +233,7 @@ test('a plain draft has no header ⋮; More ends the pills row, sets tier + unre
   await loadHome(page)
 
   const cwd = `${fixtureRoot}/projects/walnut`
-  const panel = await openDraftOnCwd(page, cwd)
+  const panel = await openDraftOnCwd(page, cwd, { engine: 'Claude' })
 
   // C1: nothing in the header opens task settings any more.
   const header = panel.locator('.session-panel-header')

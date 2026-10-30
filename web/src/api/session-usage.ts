@@ -31,8 +31,17 @@ export interface SessionUsage {
   checkEverySec: number;
 }
 
-export function fetchSessionUsage(sessionId: string, signal?: AbortSignal): Promise<SessionUsage> {
-  return apiGet(`/api/usage/sessions/${encodeURIComponent(sessionId)}`, undefined, { signal, timeoutMs: 10_000 });
+/**
+ * How a server that does not answer `absent=null` says "this session has no budget":
+ * an engine without per-request usage (400) or a session it does not know (404).
+ * Expected, so they stay out of the console.
+ */
+export const NO_BUDGET_STATUSES: readonly number[] = [400, 404];
+
+/** null: the session has no budget, an engine without per-request usage or a session not recorded yet. */
+export async function fetchSessionUsage(sessionId: string, signal?: AbortSignal): Promise<SessionUsage | null> {
+  const data = await apiGet<SessionUsage | null | undefined>(`/api/usage/sessions/${encodeURIComponent(sessionId)}`, { absent: 'null' }, { signal, timeoutMs: 10_000, quietStatuses: [...NO_BUDGET_STATUSES] });
+  return data ?? null;
 }
 
 export function patchSessionBudget(sessionId: string, limitUsd: number | null, revision: number): Promise<SessionUsage> {

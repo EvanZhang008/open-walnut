@@ -33,12 +33,28 @@ interface BrowserLogEntry {
   url?: string    // location.pathname
   count?: number  // dedup count (only present when > 1)
   client?: string // 'mac-app' when the page runs inside the desktop shell (absent in a browser)
+  tab?: string    // this tab's id, kept across its reloads: tells two windows' lines apart
 }
 
 // Decided once: the Mac app's bridges exist from the first script, a browser
 // never grows them. Lets `[perf]` lines be split by client in the server log.
 const CLIENT_TAG: string | undefined = (() => {
   try { return detectInputClient() === 'mac-app' ? 'mac-app' : undefined } catch { return undefined }
+})()
+
+/** A short id per tab, in sessionStorage so a reload keeps it. Two windows (or
+ *  two parallel browser tests) write into one server log; this tells their
+ *  lines apart. */
+export const LOG_TAB_KEY = 'walnut-log-tab'
+const TAB_ID: string | undefined = (() => {
+  try {
+    let id = sessionStorage.getItem(LOG_TAB_KEY)
+    if (!id || !/^[a-z0-9]{1,16}$/.test(id)) {
+      id = Math.random().toString(36).slice(2, 10) || 'tab'
+      sessionStorage.setItem(LOG_TAB_KEY, id)
+    }
+    return id
+  } catch { return undefined }
 })()
 
 // ── Config ──
@@ -133,6 +149,7 @@ function addEntry(level: BrowserLogEntry['level'], args: unknown[]): void {
     }
     if (extraArgs) entry.args = extraArgs
     if (CLIENT_TAG) entry.client = CLIENT_TAG
+    if (TAB_ID) entry.tab = TAB_ID
     try { entry.url = location.pathname } catch { /* SSR safety */ }
 
     // Ring buffer: drop oldest when full

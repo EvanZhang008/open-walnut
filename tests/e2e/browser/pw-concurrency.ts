@@ -272,6 +272,27 @@ function ppidOf(pid: number): number {
   }
 }
 
+function commandOf(pid: number): string {
+  try {
+    return execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * The process to stop for an orphaned listener, or null when it is not one. A
+ * fixture server runs as a child of itself (fixture-home.ts restarts the same
+ * command with its own HOME), so the orphan is that parent when the parent is
+ * the same command and launchd adopted it; SIGTERM to it reaches the child.
+ */
+export function orphanRoot(pid: number, ppid = ppidOf, command = commandOf): number | null {
+  const parent = ppid(pid)
+  if (parent === 1) return pid
+  if (parent > 1 && ppid(parent) === 1 && command(parent) !== '' && command(parent) === command(pid)) return parent
+  return null
+}
+
 /**
  * Reap a fixture server orphaned by a SIGKILLed run.
  *
@@ -285,8 +306,7 @@ function ppidOf(pid: number): number {
  * support: that one still has its shell as parent.
  */
 export function reapOrphanFixtureServer(port: number): void {
-  for (const pid of listeners(port)) {
-    if (ppidOf(pid) !== 1) continue
+  for (const pid of listeners(port).map(orphanRoot).filter((p): p is number => p !== null)) {
     console.log(`[pw-concurrency] reaping orphaned fixture server on :${port} (pid ${pid}) left by a killed run`)
     try {
       // SIGTERM only: test-server.ts's handler reaps its isolated daemon and

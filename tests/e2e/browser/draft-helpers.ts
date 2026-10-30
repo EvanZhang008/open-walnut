@@ -427,7 +427,7 @@ export async function openDraft(page: Page): Promise<Locator> {
 export async function openDraftOnCwd(
   page: Page,
   cwd: string,
-  opts: { engine?: 'Codex' } = {},
+  opts: { engine?: 'Codex' | 'Claude' } = {},
 ): Promise<Locator> {
   const panel = await openDraft(page)
   await pickDraftFolder(page, panel, cwd, opts)
@@ -444,12 +444,17 @@ export async function openDraftOnCwd(
  * lands on the folder's host (Local here), where an engine that is local-only is
  * never locked, and a pill pick sets `metaTouched`, so it also wins over the
  * folder's launch memory that the folder pick just applied.
+ *
+ * A spec that asserts a native (Claude Code) launch passes `engine: 'Claude'`: the
+ * fixture's shared folders carry the launch memory of whatever ran there before in
+ * the same server (a Codex spec's quick-start), so the default is order-dependent
+ * (2026-10-30: two native specs launched Codex after codex-engine.spec.ts).
  */
 export async function pickDraftFolder(
   page: Page,
   panel: Locator,
   cwd: string,
-  opts: { engine?: 'Codex' } = {},
+  opts: { engine?: 'Codex' | 'Claude' } = {},
 ): Promise<void> {
   // The folder/host pill: "Folder/Host: <basename> · <host>" once a path is set,
   // "Choose folder and host…" before. Always the FIRST pill of the row.
@@ -488,7 +493,7 @@ export async function pickDraftFolder(
   await expect(picker).toBeHidden()
   await expect(draftCwdPill(panel)).toContainText(basenameOf(cwd))
 
-  if (opts.engine === 'Codex') await pickDraftEngine(page, panel, 'codex')
+  if (opts.engine) await pickDraftEngine(page, panel, opts.engine === 'Codex' ? 'codex' : 'claude')
 }
 
 /** Folder basename — the cwd pill's label, and (in v4) the WHOLE label of a

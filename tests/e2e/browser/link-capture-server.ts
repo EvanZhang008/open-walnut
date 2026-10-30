@@ -16,9 +16,11 @@
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { fixtureHome } from './fixture-home'
 
 const port = Number(process.env.PW_LINK_CAPTURE_PORT ?? 3461)
-const tmpBase = path.join(os.tmpdir(), `walnut-link-capture-${port}-${Date.now()}`)
+// Its own home for real: Bun reads HOME only at startup (fixture-home.ts).
+const tmpBase = await fixtureHome(path.join(os.tmpdir(), `walnut-link-capture-${port}-${Date.now()}`))
 
 process.env.OPEN_WALNUT_HOME = tmpBase
 process.env.WALNUT_DAEMON_DIR = path.join(tmpBase, 'daemon')
