@@ -1116,6 +1116,9 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
     if (titleRef.current) titleRef.current.textContent = task.title;
   }, [task.title]);
 
+  // Deps hold `task` itself, not `task.id`: the click hands the task on, and a
+  // copy from before its session started opens nothing
+  // (tests/web/stale-object-closure-ratchet.test.ts).
   const handleTitleClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
@@ -1137,7 +1140,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
     if (!onUpdateTitle) return;
     clickPosRef.current = { x: e.clientX, y: e.clientY };
     setIsEditing(true);
-  }, [isFocused, onClick, onUpdateTitle, selectMode, onSelectToggle, task.id]);
+  }, [isFocused, onClick, onUpdateTitle, selectMode, onSelectToggle, task]);
 
   // Click-outside handler: exits editing when clicking outside the title span.
   // Also serves as a fallback when blur doesn't fire (e.g. click on non-focusable element).
