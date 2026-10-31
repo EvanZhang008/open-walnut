@@ -210,7 +210,9 @@ describe('compaction hook and host tail', () => {
     run(rec, config, 1);
     expect(hostReplyTail(rec, config)).toBeNull();
     rec.hintState = { ...rec.hintState!, drift: { 'reply-language': '2026-12-01T00:00:00Z' } };
-    expect(hostReplyTail(rec, config)).toContain('Walnut (reply-language): Chinese.');
+    // A reply that drifted is named first (reply-language-correction.test.ts).
+    expect(hostReplyTail(rec, config)).toContain('Walnut (reply-language): Correction: your last reply the user read');
+    expect(hostReplyTail(rec, config)).toContain('in English. Chinese.');
     expect(hostReplyTail(rec, cfg({ reply_language: 'Chinese.', hints: { tone: { text: 'Hi.', triggers: ['every_turn'] } } }))).toContain('Walnut (tone): Hi.');
   });
 });

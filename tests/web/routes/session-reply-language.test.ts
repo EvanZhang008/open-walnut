@@ -56,7 +56,7 @@ import {
   replyLanguageText,
 } from '../../../src/core/sessions/output-mode.js'
 import { composeHinted, parseHinted, renderHintBlock } from '../../../src/core/hints/hint-format.js'
-import { REPLY_LANGUAGE_SCOPE } from '../../../src/core/hints/hint-registry.js'
+import { REPLY_LANGUAGE_SCOPE, replyLanguageCorrection } from '../../../src/core/hints/hint-registry.js'
 import { parseSessionMessages } from '../../../src/core/session-history.js'
 import { notePlaceCompaction } from '../../../src/core/sessions/place-notice.js'
 import { getSessionByClaudeId } from '../../../src/core/session-tracker.js'
@@ -182,11 +182,13 @@ describe('session:send', () => {
     await drain(sid)
     // What the drift hook records (hints/hint-drift.ts) when a reply broke the rule.
     const rec = await getSessionByClaudeId(sid)
+    const driftAt = new Date(Date.now() + 1000).toISOString()
     await updateSessionRecord(sid, {
-      hintState: { ...rec!.hintState!, drift: { 'reply-language': new Date(Date.now() + 1000).toISOString() } },
+      hintState: { ...rec!.hintState!, drift: { 'reply-language': driftAt } },
     })
     await callSend({ sessionId: sid, message: 'two' })
-    expect(await drain(sid)).toBe(after('two', LANG))
+    // The next message names the drifted turn before the rule (reply-language-correction.test.ts).
+    expect(await drain(sid)).toBe(after('two', renderHintBlock('reply-language', `${replyLanguageCorrection(driftAt)} ${RULE} ${REPLY_LANGUAGE_SCOPE}`)))
     expect((await getSessionByClaudeId(sid))?.hintState?.drift).toBeUndefined()
     await callSend({ sessionId: sid, message: 'three' })
     expect(await drain(sid)).toBe('three')

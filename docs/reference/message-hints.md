@@ -103,6 +103,14 @@ whoever started the turn and his reply language is a setting, not a guess from t
 message (2026-10-29, 2026-10-30; dropped once the triggers are set by hand). A lead's reply to
 such a turn is judged for drift like Main's. Walnut adds one clause after the user's sentence: it covers every
 line the user reads, the short progress lines between tool calls included.
+Drift is judged on every message of the turn the user saw (`replies` on the turn-end hook,
+the progress lines between tool calls too, not only the final reply), and the next message after
+a drifted turn leads the hint with a correction naming that turn (`replyLanguageCorrection`):
+the same reminder on every message did not hold a lead whose context was mostly English agent
+traffic (2026-10-31, 12 of 45 replies). The server's next message tells it once; a host's own
+deliveries carry it until then or until a later turn is in the language again, which clears the
+mark. A turn the chat hides (something else started it and it ended on the no-action line) is
+not judged.
 `user-away` (Main and the leads only) at session start, on a change and after a
 compaction: the user has not been in this chat for 30 minutes and it is not open
 anywhere (`src/core/org/user-away.ts`: the last message a person typed into it,

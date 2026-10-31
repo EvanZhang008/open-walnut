@@ -32,6 +32,33 @@ export interface SessionState {
   turnIndex: number;
   lastMode?: SessionMode;
   lastActivityAt: number;
+  /** The main lane's visible messages of the turn so far, by message id (onTurnComplete `replies`). */
+  replies?: Map<string, string>;
+}
+
+/** How much of a turn's visible text is kept for its turn-end hooks. */
+const REPLIES_MAX = 12;
+const REPLY_MAX_CHARS = 4000;
+
+/** Keep one main-lane text delta of the turn (subagent lanes and replays are not the user's reading). */
+function noteReply(state: SessionState, data: Record<string, unknown>): void {
+  if (data.parentToolUseId || data.replayed === true || typeof data.delta !== 'string' || !data.delta) return;
+  const replies = state.replies ?? (state.replies = new Map());
+  const key = typeof data.msgId === 'string' && data.msgId ? data.msgId : '_';
+  const cur = replies.get(key);
+  if (cur === undefined) {
+    if (replies.size >= REPLIES_MAX) replies.delete(replies.keys().next().value as string);
+    replies.set(key, data.delta.slice(0, REPLY_MAX_CHARS));
+  } else if (cur.length < REPLY_MAX_CHARS) {
+    replies.set(key, (cur + data.delta).slice(0, REPLY_MAX_CHARS));
+  }
+}
+
+/** The turn's visible messages, handed to its turn-end hooks once, then forgotten. */
+function takeReplies(state: SessionState): string[] {
+  const out = [...(state.replies?.values() ?? [])].filter((t) => t.trim());
+  state.replies = undefined;
+  return out;
 }
 
 export function getOrCreateSessionState(states: Map<string, SessionState>, sessionId: string): SessionState {
@@ -103,6 +130,7 @@ export function deriveSessionHookPoints(
     case EventNames.SESSION_TOOL_USE: {
       const state = getOrCreateSessionState(states, sessionId);
       state.lastActivityAt = Date.now();
+      if (event.name === EventNames.SESSION_TEXT_DELTA) noteReply(state, data);
 
       // Derived: onTurnStart fires on first response after send
       if (state.awaitingFirstResponse) {
@@ -154,6 +182,8 @@ export function deriveSessionHookPoints(
 
     case EventNames.SESSION_STATUS_CHANGED: {
       const state = getOrCreateSessionState(states, sessionId);
+      // A process that died mid-turn sends no result: its lines are not the next turn's.
+      if (data.process_status === 'stopped' || data.process_status === 'error') state.replies = undefined;
       const newMode = data.mode as SessionMode | undefined;
       const oldMode = state.lastMode;
 
@@ -184,6 +214,7 @@ export function deriveSessionHookPoints(
         hookPoint: 'onTurnComplete',
         extraPayload: {
           result: '',
+          replies: takeReplies(state),
           turnIndex: state.turnIndex,
           isPlanSession: state.lastMode === 'plan',
         } satisfies Partial<OnTurnCompletePayload>,
@@ -207,6 +238,7 @@ export function deriveSessionHookPoints(
       // The user stopped the turn: nothing finished and nothing failed, so neither
       // onTurnComplete (triage/summary) nor onTurnError has anything to react to.
       if (data.interrupted) {
+        takeReplies(getOrCreateSessionState(states, sessionId));
         log.session.info('SESSION_RESULT skipped — turn interrupted by user', { sessionId });
         break;
       }
@@ -214,6 +246,7 @@ export function deriveSessionHookPoints(
       const isError = data.isError as boolean | undefined;
       const state = getOrCreateSessionState(states, sessionId);
 
+      const replies = takeReplies(state);
       if (isError) {
         results.push({
           hookPoint: 'onTurnError',
@@ -227,6 +260,7 @@ export function deriveSessionHookPoints(
           hookPoint: 'onTurnComplete',
           extraPayload: {
             result: data.result as string ?? '',
+            replies,
             totalCost: data.totalCost as number | undefined,
             duration: data.duration as number | undefined,
             turnIndex: state.turnIndex,

@@ -29,7 +29,7 @@ import {
   replyLanguageText, resolveEffectiveOutputMode,
 } from '../sessions/output-mode.js';
 import { VOICE_REPLY_TEXT } from '../sessions/voice-reply.js';
-import { detectLanguageDrift } from './hint-drift-detect.js';
+import { languageDrift } from './hint-drift-detect.js';
 
 export const HINT_TRIGGERS: readonly MessageHintTrigger[] = [
   'every_turn', 'every_n_turns', 'session_start', 'after_compaction', 'on_change', 'on_drift', 'on_request',
@@ -42,7 +42,7 @@ export const HINT_EVERY_MAX = 1000;
 /** What a hint's content functions read. */
 export interface HintContentInput {
   config: Pick<Config, 'session'> | null;
-  record: { output_mode?: SessionOutputMode } | null;
+  record: { output_mode?: SessionOutputMode; hintState?: { drift?: Record<string, string> } } | null;
   /** The send asked for this hint (`on_request`), with its argument. */
   request?: { arg?: string };
   /** The identity this session was last told, if any. */
@@ -64,8 +64,8 @@ interface HintSpec {
   identity(input: HintContentInput): string | null;
   /** Its text for this send, given why it is due; null = say nothing this time. */
   render(input: HintContentInput, reasons: ReadonlySet<MessageHintTrigger>): HintRender | null;
-  /** Did this reply break the hint's rule? (`on_drift`) */
-  drifted?(config: Pick<Config, 'session'> | null, reply: string): boolean;
+  /** Did this reply break the hint's rule? (`on_drift`; null = it cannot tell) */
+  drifted?(config: Pick<Config, 'session'> | null, reply: string): boolean | null;
   /**
    * Roles that get it on every message, while its triggers are the default: the user reads
    * their chat whoever started the turn, and a setting is not guessed from the message
@@ -123,13 +123,17 @@ const BUILT_IN: readonly HintSpec[] = [
     identity: (i) => replyLanguageText(i.config),
     // 2026-10-29: after the user wrote Chinese, a worker's progress lines between its tool calls
     // stayed English; the rule covers every line the user reads, not only the final reply.
-    render: (i) => {
+    // A reply that broke it is named first (hint-drift.ts): the same reminder on every message
+    // did not hold a lead whose context was mostly English agent traffic (2026-10-31).
+    render: (i, reasons) => {
       const text = replyLanguageText(i.config);
-      return text ? { text: `${text} ${REPLY_LANGUAGE_SCOPE}` } : null;
+      if (!text) return null;
+      const driftAt = reasons.has('on_drift') ? i.record?.hintState?.drift?.['reply-language'] : undefined;
+      return { text: `${driftAt ? `${replyLanguageCorrection(driftAt)} ` : ''}${text} ${REPLY_LANGUAGE_SCOPE}` };
     },
     drifted: (config, reply) => {
       const rule = replyLanguageText(config);
-      return !!rule && detectLanguageDrift(rule, reply);
+      return rule ? languageDrift(rule, reply) : null;
     },
   },
   {
@@ -170,6 +174,14 @@ export function userAwayText(lastSeenAt: number | null): string {
 
 export const USER_BACK_TEXT = 'the user is back in this chat: updates go here again, not to his inbox.';
 
+/** The line that leads the reply-language hint after a reply the user read broke it. */
+export function replyLanguageCorrection(driftAt: string): string {
+  const t = Date.parse(driftAt);
+  const when = Number.isFinite(t) ? ` (the turn that ended ${new Date(t).toISOString().slice(11, 16)} UTC)` : '';
+  return `Correction: your last reply the user read${when} was not in his language. Write every line he reads in it from now on, `
+    + 'also when the message you answer, a tool result or your own notes are in English.';
+}
+
 /** Walnut's own clause after the user's reply-language sentence. */
 export const REPLY_LANGUAGE_SCOPE = 'This covers every line the user reads, the short progress lines between your tool calls included.';
 
@@ -199,7 +211,7 @@ export interface EffectiveHint {
   override?: MessageHintSettings;
   identity(input: HintContentInput): string | null;
   render(input: HintContentInput, reasons: ReadonlySet<MessageHintTrigger>): HintRender | null;
-  drifted?(config: Pick<Config, 'session'> | null, reply: string): boolean;
+  drifted?(config: Pick<Config, 'session'> | null, reply: string): boolean | null;
   /** Roles that get it on every message, the user's own included (empty once its triggers are overridden). */
   everyTurnRoles: MessageHintRole[];
 }

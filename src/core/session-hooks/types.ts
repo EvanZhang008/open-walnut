@@ -157,6 +157,11 @@ export interface OnModeChangePayload extends SessionHookContext {
 /** onTurnComplete payload */
 export interface OnTurnCompletePayload extends SessionHookContext {
   result: string;
+  /**
+   * Every message of the turn the user saw in the chat (the main lane's text, by message id,
+   * capped), the progress lines between tool calls included; `result` is only the last one.
+   */
+  replies?: string[];
   totalCost?: number;
   duration?: number;
   turnIndex: number;

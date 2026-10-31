@@ -60,12 +60,17 @@ export function scriptCounts(text: string): Record<Script, number> {
  * (CJK x4) before the share is taken.
  */
 export function detectLanguageDrift(rule: string, reply: string): boolean {
+  return languageDrift(rule, reply) === true;
+}
+
+/** The same verdict, with null when the reply cannot tell (no language named, too short). */
+export function languageDrift(rule: string, reply: string): boolean | null {
   const want = expectedScript(rule);
-  if (!want || !reply) return false;
+  if (!want || !reply) return null;
   const c = scriptCounts(prose(reply));
   const weight: Record<Script, number> = { han: 4, kana: 4, hangul: 4, latin: 1, cyrillic: 1 };
   const letters = c.han + c.kana + c.hangul + c.latin + c.cyrillic;
-  if (letters < MIN_LETTERS) return false;
+  if (letters < MIN_LETTERS) return null;
   const total = (Object.keys(c) as Script[]).reduce((n, s) => n + c[s] * weight[s], 0);
   // Japanese text mixes kanji with kana: either counts for it.
   const mine = want === 'kana' ? c.kana * 4 + c.han * 4 : c[want] * weight[want];

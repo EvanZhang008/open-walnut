@@ -35,7 +35,7 @@ import { createOpenItemsText } from '../../src/core/sessions/open-items-text.js'
 import { RICH_OUTPUT_MODE_OFF_INSTRUCTION, RICH_OUTPUT_MODE_ON_INSTRUCTION, RICH_OUTPUT_MODE_REMINDER } from '../../src/core/sessions/output-mode.js'
 import { hostReplyTail } from '../../src/core/hints/hint-send.js'
 import { escapeHintTags, renderHintBlock } from '../../src/core/hints/hint-format.js'
-import { REPLY_LANGUAGE_SCOPE } from '../../src/core/hints/hint-registry.js'
+import { REPLY_LANGUAGE_SCOPE, replyLanguageCorrection } from '../../src/core/hints/hint-registry.js'
 import { addTask } from '../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { updateConfig } from '../../src/core/config-manager.js'
@@ -175,7 +175,9 @@ describe('hostReplyTail (what the server ships)', () => {
     expect(hostReplyTail({ claudeSessionId: sid, hintState: allTold }, rich)).toBeNull()
     // A reply that drifted after the language was told owes it again.
     const drifted = { ...allTold, drift: { 'reply-language': '2026-10-27T11:00:00.000Z' } }
-    expect(hostReplyTail({ claudeSessionId: sid, hintState: drifted }, rich)).toBe(LANG_BLOCK)
+    // ...led by the correction that names the drifted turn.
+    expect(hostReplyTail({ claudeSessionId: sid, hintState: drifted }, rich))
+      .toBe(renderHintBlock('reply-language', `${replyLanguageCorrection('2026-10-27T11:00:00.000Z')} ${LANG} ${REPLY_LANGUAGE_SCOPE}`))
   })
 })
 
