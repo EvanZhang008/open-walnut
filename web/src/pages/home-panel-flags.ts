@@ -93,3 +93,26 @@ export function shouldAutoOpenFirstDraft(input: FirstDraftInput): boolean {
     && !input.chatVisible
     && !input.narrowLayout;
 }
+
+/** What Home holds besides the task panel, as MainPage renders it. */
+export interface HomeBesideTasks {
+  /** The Ask Walnut slot. */
+  chat: boolean;
+  /** Session, draft and placeholder columns. */
+  columns: number;
+  triage: boolean;
+  calendar: boolean;
+  scratchpad: boolean;
+  routines: boolean;
+}
+
+/**
+ * HOME NEVER DRAWS NOTHING. The task panel shows while its flag says so, on a phone
+ * (where it is the home screen), and whenever nothing else is open beside it
+ * (2026-10-31: a synced "task panel hidden" with the chat and every column closed
+ * left a fresh browser, and any window that adopted the prefs, an empty page).
+ */
+export function homeTaskPanelShown(todoVisible: boolean, phone: boolean, beside: HomeBesideTasks): boolean {
+  if (todoVisible || phone) return true;
+  return !(beside.chat || beside.columns > 0 || beside.triage || beside.calendar || beside.scratchpad || beside.routines);
+}

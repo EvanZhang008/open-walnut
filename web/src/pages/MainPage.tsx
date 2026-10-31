@@ -94,7 +94,7 @@ import { restoreDraftColumns, saveDraftColumns } from '@/components/sessions/dra
 import { reconcileActiveSession } from '@/stores/active-session';
 import { loadColWeights, saveColWeights, resizeAtBoundary } from './columnSizing';
 import {
-  HOME_CHAT_VISIBLE_DEFAULT, LS_HOME_CHAT_VISIBLE_KEY, firstDraftDecisionReady, readHomeChatVisible, shouldAutoOpenFirstDraft,
+  HOME_CHAT_VISIBLE_DEFAULT, LS_HOME_CHAT_VISIBLE_KEY, firstDraftDecisionReady, homeTaskPanelShown, readHomeChatVisible, shouldAutoOpenFirstDraft,
 } from './home-panel-flags';
 import { deriveRepairTarget, type WalnutRepairTarget } from './repair-target';
 import { useAutoAnimate } from '@formkit/auto-animate/react';
@@ -483,7 +483,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // over it full screen), so it shows whatever the synced desktop flag says: a
   // panel hidden on the desktop used to leave the phone an empty page.
   const phoneLayout = usePhoneLayout();
-  const todoShown = todoVisible || phoneLayout;
 
   // Routines panel visibility — hidden by default, toggle via Sidebar
   const [routinesVisible, setRoutinesVisible] = useState<boolean>(
@@ -521,6 +520,22 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const [sessionColumns, setSessionColumns] = useState<SessionSlot[]>(
     () => restoredDrafts.reduce((cols, d) => forceAddSessionColumn(cols, d.id), loadSessionColumns()),
   );
+
+  // Triage panel state — shares the first column slot with sessions
+  const [triagePanelOpen, setTriagePanelOpen] = useState(false);
+  // Home never draws nothing (home-panel-flags.ts): with nothing else open, the task panel shows.
+  const todoShown = homeTaskPanelShown(todoVisible, phoneLayout, {
+    chat: chatVisible, columns: sessionColumns.length, triage: triagePanelOpen,
+    calendar: calendarVisible, scratchpad: scratchpadVisible, routines: routinesVisible,
+  });
+  // An empty Home the user did not ask for (prefs adopted at load, the last other panel closed)
+  // says shown again, so the first column opened from the panel never takes it away. A hide the
+  // user asked for here is kept: the panel stays only until something else opens beside it.
+  const todoHideAskedRef = useRef(false);
+  useEffect(() => {
+    if (todoVisible || !todoShown) { todoHideAskedRef.current = false; return; }
+    if (!phoneLayout && !todoHideAskedRef.current) setTodoVisible(true);
+  }, [todoShown, todoVisible, phoneLayout]);
 
   // ── Draft session columns ("+" → an empty column, zero network) ──
   // The DraftColumn rows are the ONLY home of a draft's cwd/host/project/meta;
@@ -617,8 +632,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     visible,
   });
 
-  // Triage panel state — shares the first column slot with sessions
-  const [triagePanelOpen, setTriagePanelOpen] = useState(false);
   const triageOpenRef = useRef(triagePanelOpen);
   triageOpenRef.current = triagePanelOpen;
   // Task ID for filtered triage panel (null = show all)
@@ -1032,7 +1045,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     };
     const handleToggleTodo = () => {
       if (document.activeElement?.closest('#home-task-navigation')) document.querySelector<HTMLButtonElement>('.app-task-panel-toggle')?.focus();
-      setTodoVisible(prev => !prev);
+      setTodoVisible(prev => { if (prev) todoHideAskedRef.current = true; return !prev; });
     };
     const handleToggleRoutines = () => setRoutinesVisible(prev => !prev);
     const handleToggleCalendar = () => setCalendarVisible(prev => !prev);

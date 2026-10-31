@@ -229,10 +229,14 @@ test('the Todo and Agenda toggles survive a relaunch too', async ({ browser, pag
   await expect(todoColumn(page)).not.toHaveClass(/collapsed/)
   await expect(agendaPanel(page)).toHaveCount(0)
 
+  // Hidden while nothing else is on Home, it stays (Home never draws nothing,
+  // home-panel-flags.ts); the hide is kept, so the agenda takes its place.
   await sidebarTodo(page).click()
-  await expect(todoColumn(page)).toHaveClass(/collapsed/)
+  await expect.poll(() => stored(page, TODO_KEY)).toBe('false')
+  await expect(todoColumn(page)).not.toHaveClass(/collapsed/)
   await sidebarAgenda(page).click()
   await expect(agendaPanel(page)).toBeVisible({ timeout: 15_000 })
+  await expect(todoColumn(page)).toHaveClass(/collapsed/)
   await expect.poll(() => stored(page, TODO_KEY)).toBe('false')
   await expect.poll(() => stored(page, CALENDAR_KEY)).toBe('true')
 

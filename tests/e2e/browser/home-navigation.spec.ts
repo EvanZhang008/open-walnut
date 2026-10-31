@@ -237,6 +237,11 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
 
   // The task-panel toggle sits under Home in the rail, stays put, and brings you home.
   const toggle = page.locator('.sidebar-home-group .app-task-panel-toggle');
+  // A hide is honoured while something else is on Home (Home never draws nothing,
+  // home-panel-flags.ts), so the scratchpad keeps it company until the round trip ends.
+  const scratchpad = page.getByTestId('sidebar-toggle-scratchpad');
+  await scratchpad.click();
+  await expect(page.getByTestId('home-companion-scratchpad')).toBeVisible();
   const before = await toggle.boundingBox();
   await toggle.click();
   await expect(navigation(page)).toHaveAttribute('inert', '');
@@ -278,6 +283,8 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   await toggle.click();
   await expect(page).toHaveURL(/\/$/);
   await expect(navigation(page)).not.toHaveAttribute('inert', '');
+  await scratchpad.click();
+  await expect(page.getByTestId('home-companion-scratchpad')).toBeHidden();
 
   // The day agenda opens from the rail's Home group and fits every width.
   for (const width of [1280, 820]) {
@@ -306,15 +313,17 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   // With the task panel hidden, the agenda takes its place beside the rail.
   for (const width of [1280, 820]) {
     await page.setViewportSize({ width, height: 840 });
+    // Hidden while nothing else is on Home, it stays until the agenda opens beside it.
     await toggle.click();
-    await expect(navigation(page)).toHaveAttribute('inert', '');
     await page.getByTestId('sidebar-toggle-calendar').click();
     await expect(page.locator('[data-testid="cal-side-panel"]')).toBeVisible();
+    await expect(navigation(page)).toHaveAttribute('inert', '');
     const mainX = (await page.locator('.main-page').boundingBox())!.x;
     await expect.poll(async () => Math.round((await page.locator('.home-companion').boundingBox())!.x - mainX), `no task panel at ${width}px`).toBe(0);
+    // Closing the last panel beside it brings the task panel back by itself, flag and all.
     await page.locator('.home-companion').locator('[title="Close calendar panel"]').click();
-    await toggle.click();
     await expect(navigation(page)).not.toHaveAttribute('inert', '');
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   }
   await page.setViewportSize({ width: 390, height: 840 });
   expect(await overflow(page)).toBe(false);
