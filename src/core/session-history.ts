@@ -42,7 +42,7 @@ import { REMOTE_IMAGES_DIR } from '../constants.js';
 import { backfillMirrorSidecar, resolveSessionMirrorPath, looksAlreadyMirrored, startMirrorDownload } from './remote-image-mirror.js';
 import { isCacheWarmupText } from './sessions/side-thread-warmup.js';
 import { noteMessageBlockTypes, noteTranscriptLineType } from './transcript-line-types.js';
-import { _resetTailWindowsForTesting } from './history-tail-window.js';
+import { _resetTailWindowsForTesting, dropTailWindows, setTailWindowShedding } from './history-tail-window.js';
 import {
   SIDE_THREAD_DIGEST_TAG, stripSideThreadDigestRequest,
 } from './sessions/side-thread-digest.js';
@@ -214,6 +214,8 @@ async function getInPlaceRewinds(sessionId: string): Promise<InPlaceRewindCut[] 
 export async function invalidateSessionHistoryCaches(sessionId: string, host?: string): Promise<void> {
   cacheDelete(cacheKey(sessionId));
   if (host) cacheDelete(cacheKey(sessionId, host));
+  dropTailWindows(`${cacheKey(sessionId)}|`);
+  if (host) dropTailWindows(`${cacheKey(sessionId, host)}|`);
   // The over-ceiling dead-set memo is keyed on the FILE's identity, which a new
   // cut does not change — so it has to be dropped explicitly here, or a rewind
   // of a rewind would keep serving the previous rewind's dead set.
@@ -247,13 +249,14 @@ let historyCacheChars = 0;
  * mtime-stat fast path work for these sessions on subsequent reads.
  */
 const remoteResolvedPaths = new Map<string, string>();
-const MAX_RESOLVED_PATHS = 200;
+const MAX_RESOLVED_PATHS = 2000;
 function resolvedPathKey(sessionId: string, host: string): string { return `${sessionId}@${host}`; }
 function getResolvedRemotePath(sessionId: string, host: string): string | undefined {
   return remoteResolvedPaths.get(resolvedPathKey(sessionId, host));
 }
 function setResolvedRemotePath(sessionId: string, host: string, fullPath: string): void {
   const key = resolvedPathKey(sessionId, host);
+  locateMisses.delete(key);
   remoteResolvedPaths.delete(key);
   remoteResolvedPaths.set(key, fullPath);
   if (remoteResolvedPaths.size > MAX_RESOLVED_PATHS) {
@@ -517,6 +520,7 @@ async function resolveOverCeilingDeadSet(
 let historyCacheBudgetChars = MAX_HISTORY_CACHE_CHARS;
 
 export function setHistoryCacheShedding(shedding: boolean): { dropped: number; chars: number } {
+  setTailWindowShedding(shedding);
   historyCacheBudgetChars = shedding ? Math.floor(MAX_HISTORY_CACHE_CHARS / 4) : MAX_HISTORY_CACHE_CHARS;
   let dropped = 0;
   if (shedding) {
@@ -2453,6 +2457,8 @@ export async function readSessionHistoryTail(
   host?: string,
   outputFile?: string,
   maxTailBytes = 4 * 1024 * 1024,
+  /** The caller reads the same session again soon (the transcript sweep): keep its window. */
+  opts?: { poll?: boolean },
 ): Promise<SessionHistoryMessage[] | null> {
   const daemonHost = host ?? '__local__';
   {
@@ -2470,6 +2476,7 @@ export async function readSessionHistoryTail(
         // the rewound-away branch as live. Fall through to the full
         // (cut-filtering) read instead.
         if (!(await getInPlaceRewinds(sessionId))) {
+          if (!opts?.poll) return await readSessionHistoryTailWindow(sessionId, cwd, host, maxTailBytes);
           // Kept between reads and grown by the appended bytes: an unchanged
           // transcript moves nothing, a grown one about what was added.
           const { readTailWindow } = await import('./history-tail-window.js');
@@ -3039,21 +3046,42 @@ async function locateTranscript(
   cwd: string | undefined,
   daemonHost: string,
 ): Promise<{ path: string; size: number; mtimeMs: number; epoch?: string } | null> {
+  const memo = getResolvedRemotePath(sessionId, daemonHost);
   const direct = [
-    getResolvedRemotePath(sessionId, daemonHost),
+    memo,
     cwd && isSafeForProjectEncoding(cwd) ? remoteJsonlPath(sessionId, cwd, daemonHost) : undefined,
   ].filter((p): p is string => !!p);
   for (const p of new Set(direct)) {
     const st = await reader.stat(p);
-    if (st) return { ...st, path: p };
+    // Remembered (and kept recent) where it was found, so the next stat goes there first.
+    if (st) { setResolvedRemotePath(sessionId, daemonHost, p); return { ...st, path: p }; }
   }
-  const found = await reader.findSessionPath(sessionId);
-  if (!found) return null;
+  // No file yet (a session that has not written one, an old one swept away): a find
+  // walks every project dir, so a miss is remembered for a while instead of walked
+  // again by each caller of the same read.
+  const missKey = resolvedPathKey(sessionId, daemonHost);
+  const missAt = locateMisses.get(missKey);
+  if (missAt !== undefined && Date.now() - missAt < LOCATE_MISS_MS) return null;
+  let found: string | null;
+  try {
+    found = await reader.findSessionPath(sessionId);
+  } catch {
+    return null; // not located; the caller's own read decides what failed
+  }
+  if (!found) {
+    locateMisses.set(missKey, Date.now());
+    if (locateMisses.size > MAX_RESOLVED_PATHS) locateMisses.delete(locateMisses.keys().next().value!);
+    return null;
+  }
   const st = await reader.stat(found);
   if (!st) return null;
   setResolvedRemotePath(sessionId, daemonHost, found);
   return { ...st, path: found };
 }
+
+/** A transcript not found is not looked for again for this long (locateTranscript). */
+const LOCATE_MISS_MS = 60_000;
+const locateMisses = new Map<string, number>();
 
 /** Bytes [start, end) of a file, in frame-sized pieces. Null when the file is gone. */
 async function readTranscriptBytes(

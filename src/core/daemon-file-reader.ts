@@ -474,6 +474,16 @@ export class DaemonFileReader implements SessionFileReader {
    * `start` > 0 is the incremental turn-delta path (read only appended bytes).
    */
   async readFileRange(remotePath: string, start: number): Promise<{ content: string; fileSize: number } | null> {
+    const res = await this.readFileRangeBuffer(remotePath, start)
+    return res === null ? null : { content: res.buf.toString('utf-8'), fileSize: res.fileSize }
+  }
+
+  /**
+   * readFileRange's bytes, undecoded: a caller that keeps byte offsets (the tail
+   * window, history-tail-window.ts) must never count a decoded string, which turns
+   * a character cut at either end into a replacement of another length.
+   */
+  async readFileRangeBuffer(remotePath: string, start: number): Promise<{ buf: Buffer; fileSize: number } | null> {
     await this.resolve()
     const conn = await getDaemonConnection(this.host, this.sshTarget!)
     const chunks: Buffer[] = []
@@ -513,11 +523,11 @@ export class DaemonFileReader implements SessionFileReader {
       }
       if (res.eof || bytesRead === 0) break
     }
-    // Concat then decode in one step and drop the chunk refs first, so the peak is
-    // the joined buffer + the string rather than chunks + buffer + string.
+    // Drop the chunk refs first, so the peak is the joined buffer + the string
+    // (decoded by readFileRange) rather than chunks + buffer + string.
     const joined = Buffer.concat(chunks)
     chunks.length = 0
-    return { content: joined.toString('utf-8'), fileSize }
+    return { buf: joined, fileSize }
   }
 
   /**

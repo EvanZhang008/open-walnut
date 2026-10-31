@@ -726,7 +726,7 @@ export async function buildSessionTranscript(
     // Tail-bounded: this export keeps only the last TRANSCRIPT_TAIL messages, so
     // whales must not be fully transferred per sweep (pre-fix: the 60s sweep
     // full-read every alive session — dominant share of 167 GB/day of reads).
-    history = await readSessionHistoryTail(sessionId, record?.cwd, record?.host, record?.outputFile) ?? []
+    history = await readSessionHistoryTail(sessionId, record?.cwd, record?.host, record?.outputFile, undefined, { poll: true }) ?? []
   }
   const paging = opts?.before !== undefined || opts?.visible !== undefined || opts?.since !== undefined
   let bounds = paging ? transcriptSliceBounds(history, opts!) : null

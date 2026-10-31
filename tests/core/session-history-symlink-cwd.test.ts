@@ -37,6 +37,7 @@ const REAL_CWD = '/tmp/real-home/u/proj';
 const SID = '3f0c9d2e-1111-4a2b-9c3d-5e6f7a8b9c0d';
 
 let bytes = 0;
+let finds = 0;
 const restore: Array<() => void> = [];
 
 function count<K extends string>(name: K, size: (r: unknown) => number): void {
@@ -56,9 +57,11 @@ beforeEach(async () => {
   _resetHistoryCacheForTesting();
   bytes = 0;
   count('readFile', (r) => (typeof r === 'string' ? Buffer.byteLength(r) : 0));
-  count('readFileRange', (r) => (r && typeof (r as { content?: string }).content === 'string' ? Buffer.byteLength((r as { content: string }).content) : 0));
   count('readRangeBytes', (r) => (r ? (r as { buf: Buffer }).buf.length : 0));
-  count('findSession', (r) => (r ? Buffer.byteLength((r as { content: string }).content) : 0));
+  // findSession is findSessionPath + readFile in the reader: both counted there.
+  count('findSessionPath', () => { finds++; return 0; });
+  count('readFileRangeBuffer', (r) => (r ? (r as { buf: Buffer }).buf.length : 0));
+  finds = 0;
 });
 
 afterEach(async () => {
@@ -102,6 +105,16 @@ describe('a transcript stored under the real spelling of the recorded cwd', () =
     const full = await readSessionHistory(SID, RECORDED_CWD, undefined, undefined, { skipSubagents: true });
     expect(full.length).toBe(first!.length);
     expect(bytes).toBe(0);
+    // Found once, then remembered: no walk of the project dirs per poll.
+    expect(finds).toBeLessThanOrEqual(1);
+  });
+
+  it('a transcript not written yet is looked for at most once per poll', async () => {
+    for (let i = 0; i < 4; i++) {
+      finds = 0;
+      expect(await readSessionHistoryTail(SID, RECORDED_CWD, undefined)).toEqual([]);
+      expect(finds).toBeLessThanOrEqual(i === 0 ? 2 : 1);
+    }
   });
 
   it('a grown transcript moves about what was appended, not the whole file', async () => {
@@ -126,13 +139,13 @@ describe('a big transcript (over the tail window) under the real spelling of the
   it('polling it moves nothing while unchanged and about the appended bytes once grown', async () => {
     const size = await writeTranscript(200);
     expect(size).toBeGreaterThan(TAIL * 4);
-    const first = await readSessionHistoryTail(SID, RECORDED_CWD, undefined, undefined, TAIL);
+    const first = await readSessionHistoryTail(SID, RECORDED_CWD, undefined, undefined, TAIL, { poll: true });
     expect(first?.length).toBeGreaterThan(0);
     expect(bytes).toBeLessThanOrEqual(TAIL * 2);
 
     bytes = 0;
     for (let i = 0; i < 3; i++) {
-      expect((await readSessionHistoryTail(SID, RECORDED_CWD, undefined, undefined, TAIL))?.length).toBe(first!.length);
+      expect((await readSessionHistoryTail(SID, RECORDED_CWD, undefined, undefined, TAIL, { poll: true }))?.length).toBe(first!.length);
     }
     expect(bytes).toBe(0);
 
@@ -141,7 +154,7 @@ describe('a big transcript (over the tail window) under the real spelling of the
     const later = new Date(Date.now() + 5_000);
     await fsp.utimes(realPath(), later, later);
     bytes = 0;
-    const grown = await readSessionHistoryTail(SID, RECORDED_CWD, undefined, undefined, TAIL);
+    const grown = await readSessionHistoryTail(SID, RECORDED_CWD, undefined, undefined, TAIL, { poll: true });
     expect(JSON.stringify(grown?.at(-1))).toContain('the newest answer');
     // The held last line again (the proof of an append) and the new turn: far under the window.
     expect(bytes).toBeLessThan(Buffer.byteLength(added) * 3);

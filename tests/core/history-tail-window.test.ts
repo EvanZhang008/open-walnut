@@ -5,7 +5,7 @@
  * window) reads a fresh window. The answer always equals a fresh window read's.
  */
 import { describe, it, expect, beforeEach } from 'vitest'
-import { readTailWindow, MAX_TAIL_WINDOWS, _resetTailWindowsForTesting, type TailReader } from '../../src/core/history-tail-window.js'
+import { readTailWindow, MAX_TAIL_WINDOWS, MAX_TAIL_WINDOW_BYTES, setTailWindowShedding, _resetTailWindowsForTesting, type TailReader } from '../../src/core/history-tail-window.js'
 
 /** A file in memory, read the way DaemonFileReader.readFileRange reads (to EOF). */
 class FakeFile implements TailReader {
@@ -16,11 +16,16 @@ class FakeFile implements TailReader {
   set(text: string): void { this.data = Buffer.from(text, 'utf-8'); this.mtimeMs++ }
   append(text: string): void { this.data = Buffer.concat([this.data, Buffer.from(text, 'utf-8')]); this.mtimeMs++ }
   st() { return { mtimeMs: this.mtimeMs, size: this.data.length } }
-  async readFileRange(_path: string, start: number) {
-    const slice = this.data.subarray(start)
+  /** Bytes that land after the read (an append between the caller's stat and its read). */
+  landing: Buffer | null = null
+  fail = false
+  async readFileRangeBuffer(_path: string, start: number) {
+    if (this.fail) throw new Error('fs.readRange transport failure: test')
+    if (this.landing) { this.data = Buffer.concat([this.data, this.landing]); this.landing = null; this.mtimeMs++ }
+    const slice = Buffer.from(this.data.subarray(start))
     this.bytes += slice.length
     this.reads++
-    return { content: slice.toString('utf-8'), fileSize: this.data.length }
+    return { buf: slice, fileSize: this.data.length }
   }
 }
 
@@ -124,6 +129,49 @@ describe('tail window kept between reads', () => {
     expect(got).toEqual(await freshOf(f, WINDOW + 1))
   })
 
+  it('an append that lands between the stat and the read costs one line on the next poll, not a window', async () => {
+    const f = new FakeFile()
+    f.set(lines(0, 200))
+    await readTailWindow('s', f, '/t.jsonl', f.st(), WINDOW, parse)
+    f.append(line(200))
+    const stale = f.st()
+    f.landing = Buffer.from(line(201))
+    await readTailWindow('s', f, '/t.jsonl', stale, WINDOW, parse)
+    f.bytes = 0
+    const got = await readTailWindow('s', f, '/t.jsonl', f.st(), WINDOW, parse)
+    expect(f.bytes).toBe(Buffer.byteLength(line(201)))
+    expect(got).toEqual(await freshOf(f, WINDOW))
+    f.bytes = 0
+    await readTailWindow('s', f, '/t.jsonl', f.st(), WINDOW, parse)
+    expect(f.bytes).toBe(0)
+  })
+
+  it('a character cut at the end of the file keeps exact offsets', async () => {
+    const f = new FakeFile()
+    f.set(lines(0, 100))
+    const cjkLine = Buffer.from(`{"n":100,"t":"\u4e2d\u6587"}\n`, 'utf-8')
+    // The CLI has written the line up to the middle of its first 3-byte character.
+    const cut = cjkLine.indexOf(0xe4) + 1
+    f.data = Buffer.concat([f.data, cjkLine.subarray(0, cut)]); f.mtimeMs++
+    await readTailWindow('s', f, '/t.jsonl', f.st(), WINDOW, parse)
+    f.data = Buffer.concat([f.data, cjkLine.subarray(cut)]); f.mtimeMs++
+    f.bytes = 0
+    const got = await readTailWindow('s', f, '/t.jsonl', f.st(), WINDOW, parse)
+    expect(f.bytes).toBe(Buffer.byteLength(line(99)) + cjkLine.length)
+    expect(got?.at(-1)).toBe(`{"n":100,"t":"\u4e2d\u6587"}`)
+  })
+
+  it('a read that fails throws and leaves the next read working', async () => {
+    const f = new FakeFile()
+    f.set(lines(0, 100))
+    await readTailWindow('s', f, '/t.jsonl', f.st(), WINDOW, parse)
+    f.append(line(100))
+    f.fail = true
+    await expect(readTailWindow('s', f, '/t.jsonl', f.st(), WINDOW, parse)).rejects.toThrow(/transport failure/)
+    f.fail = false
+    expect(await readTailWindow('s', f, '/t.jsonl', f.st(), WINDOW, parse)).toEqual(await freshOf(f, WINDOW))
+  })
+
   it('a different path for the same key is a fresh read', async () => {
     const f = new FakeFile()
     f.set(lines(0, 100))
@@ -131,6 +179,25 @@ describe('tail window kept between reads', () => {
     f.bytes = 0
     await readTailWindow('s', f, '/b.jsonl', f.st(), WINDOW, parse)
     expect(f.bytes).toBeGreaterThan(0)
+  })
+
+  it('keeps its bytes under the budget, and a quarter of it under memory pressure', async () => {
+    const f = new FakeFile()
+    const big = 4 * 1024 * 1024
+    f.set(lines(0, Math.ceil(big / Buffer.byteLength(line(0))) + 10))
+    const fits = Math.floor(MAX_TAIL_WINDOW_BYTES / (big * 2))
+    for (let i = 0; i < fits + 2; i++) await readTailWindow(`b${i}`, f, '/t.jsonl', f.st(), big, parse)
+    f.bytes = 0
+    await readTailWindow('b0', f, '/t.jsonl', f.st(), big, parse)
+    expect(f.bytes).toBeGreaterThan(0)
+    setTailWindowShedding(true)
+    f.bytes = 0
+    await readTailWindow('b0', f, '/t.jsonl', f.st(), big, parse) // the newest, kept
+    expect(f.bytes).toBe(0)
+    // An older window the shedding dropped is read fresh again.
+    await readTailWindow('b3', f, '/t.jsonl', f.st(), big, parse)
+    expect(f.bytes).toBeGreaterThan(0)
+    setTailWindowShedding(false)
   })
 
   it(`keeps at most ${MAX_TAIL_WINDOWS} windows, least recently used out first`, async () => {

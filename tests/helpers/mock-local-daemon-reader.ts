@@ -162,6 +162,12 @@ class MockLocalDaemonFileReader {
   /** Byte-range read [start, EOF) — mirrors the real reader's readFileRange contract
    *  (used by session-reconcile.ts to tail daemon stream files). */
   async readFileRange(remotePath: string, start: number): Promise<{ content: string; fileSize: number } | null> {
+    const res = await this.readFileRangeBuffer(remotePath, start);
+    return res === null ? null : { content: res.buf.toString('utf-8'), fileSize: res.fileSize };
+  }
+
+  /** readFileRange's bytes, undecoded (mirrors the real reader). */
+  async readFileRangeBuffer(remotePath: string, start: number): Promise<{ buf: Buffer; fileSize: number } | null> {
     const abs = await this.resolve(remotePath);
     if (!abs) return null;
     try {
@@ -171,7 +177,7 @@ class MockLocalDaemonFileReader {
       // of a huge file passes a large `start` and legitimately stays under it.
       const limit = maxReadBytes();
       if (slice.length > limit) throw ceilingError(abs, buf.length, limit);
-      return { content: slice.toString('utf-8'), fileSize: buf.length };
+      return { buf: Buffer.from(slice), fileSize: buf.length };
     } catch (err) {
       if (err instanceof Error && err.message.includes('byte ceiling')) throw err;
       return null;
