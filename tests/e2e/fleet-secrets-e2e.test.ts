@@ -30,6 +30,8 @@ import { createSessionRecord } from '../../src/core/session-tracker.js'
 import { updateConfig } from '../../src/core/config-manager.js'
 import { resetFleetSecretsForTest, secretsPromptLine, setFleetSecretsActiveForTest } from '../../src/core/secrets/fleet-secrets.js'
 import { resetLinkTargetsForTest } from '../../src/core/hosts/link.js'
+import { log } from '../../src/logging/index.js'
+import { flushLogBufferNow } from '../../src/logging/logger.js'
 
 let server: HttpServer
 let port: number
@@ -208,9 +210,15 @@ describe('fleet secrets', () => {
     }
   })
 
-  it('no value ever reached a log', () => {
+  it('no value ever reached a log', async () => {
+    // The logger buffers for 2 s: write a marker line and flush, so the files read below are the
+    // ones this run's server writes and hold everything it logged (2026-10-31: on CI the dir was
+    // still empty when read, and the check proved nothing).
+    const marker = `fleet-secrets-e2e-${randomBytes(6).toString('hex')}`
+    log.session.info('fleet secrets e2e: log marker', { marker })
+    await flushLogBufferNow(5_000)
     const logs = fs.readdirSync(LOG_DIR).map((f) => path.join(LOG_DIR, f)).filter((f) => fs.statSync(f).isFile())
-    expect(logs.length).toBeGreaterThan(0)
+    expect(logs.some((f) => fs.readFileSync(f, 'utf8').includes(marker)), `no log file in ${LOG_DIR} holds this run's lines`).toBe(true)
     for (const f of logs) {
       const text = fs.readFileSync(f, 'utf8')
       expect(text).not.toContain(VALUE)

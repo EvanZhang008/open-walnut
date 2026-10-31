@@ -642,9 +642,16 @@ export class DaemonConnection {
    * main WS. Membership is by frame size, not command family: replica.put
    * is the one whose REQUEST is big (a batch of note bodies, host-replica.ts),
    * and so are fs.writePart (a relayed file chunk, transfer-core.ts) and
-   * attachments.put (a 2 MB chunk of a note's picture, attachment-replica.ts).
+   * attachments.put (a 2 MB chunk of a note's picture, attachment-replica.ts). mcp.call and
+   * mcp.result answer with a tool's images, up to 3 MB of base64 (host-mcp-core.ts).
    */
-  private static readonly BULK_COMMANDS = new Set(['fs.read', 'fs.readRange', 'fs.readImage', 'git.diff', 'changes.compute', 'changes.file', 'transcript.rewindProbe', 'replica.put', 'fs.writePart', 'attachments.put', 'upload.part'])
+  private static readonly BULK_COMMANDS = new Set(['fs.read', 'fs.readRange', 'fs.readImage', 'git.diff', 'changes.compute', 'changes.file', 'transcript.rewindProbe', 'replica.put', 'fs.writePart', 'attachments.put', 'upload.part', 'mcp.call', 'mcp.result'])
+  /**
+   * Bulk commands that wait for their answer on purpose (an MCP call held up to its caller's
+   * budget): nothing arriving before their deadline says nothing about the bulk socket, so
+   * their timeout never terminates it (that would fail every other bulk command on it).
+   */
+  private static readonly BULK_WAITS = new Set(['mcp.call', 'mcp.result'])
   /** Delay before re-dialing the bulk channel after it drops (main stays up). */
   private static BULK_REDIAL_DELAY_MS = 10_000
   /** Within this window, refuse a second upgrade toward the same expected version. */
@@ -1930,7 +1937,7 @@ export class DaemonConnection {
         // main WS immediately; the close handler schedules a redial.
         // Main-socket timeouts keep today's behavior (ping staleness owns main
         // liveness).
-        if (bulkSocket && this.bulkWs === bulkSocket) {
+        if (bulkSocket && this.bulkWs === bulkSocket && !DaemonConnection.BULK_WAITS.has(cmd)) {
           log.session.warn('DaemonConnection: bulk command timeout — terminating bulk channel', {
             host: this.hostKey, cmd, traceId,
           })

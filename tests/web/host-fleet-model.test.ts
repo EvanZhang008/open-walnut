@@ -142,6 +142,10 @@ describe('the Can do row', () => {
     expect(row.title).toContain('MCP: playwright, docs-mcp (ToolsPlugin)')
     expect(row.title).toContain('Tools: git, node')
   })
+  it('names a server offered to other hosts as such', () => {
+    const row = value(host({ capabilities: caps({ mcp: [{ name: 'wiki-search', offered: true, capability: 'wiki' }] }) }), 'can')!
+    expect(row.title).toContain('MCP: wiki-search (offered to other hosts)')
+  })
   it('a daemon that has not reported yet reads so, never as "none"', () => {
     const row = value(host({ capabilities: caps({ tags: ['linux'], ios: null, browsers: [], mcp: [], declared: [], unknown: ['browser', 'mcp', 'system'] }) }), 'can')!
     expect(row.value).toBe('browser: not reported yet · MCP servers: not reported yet')

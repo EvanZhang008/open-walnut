@@ -68,9 +68,11 @@ export interface HostFacts {
   /**
    * The Claude Code MCP servers configured for this account, by NAME only: never a
    * command line, environment or header, which carry credentials. `plugin` names the
-   * Claude Code plugin that brings it; user-scope servers have none.
+   * Claude Code plugin that brings it; user-scope servers have none. `offered` marks one
+   * the user offers only to other hosts (~/.open-walnut/local/host-mcp.json, host-mcp-core.ts),
+   * with the one word it may name for what it does.
    */
-  mcp?: Array<{ name: string; plugin?: string }> | null
+  mcp?: Array<{ name: string; plugin?: string; offered?: boolean; capability?: string }> | null
   uptimeSec: number
   probedAt: string
 }
@@ -344,16 +346,29 @@ export function createHostFacts(deps: HostFactsDeps) {
     var dir = deps.env.CLAUDE_CONFIG_DIR || deps.home + '/.claude'
     var mainFile = deps.env.CLAUDE_CONFIG_DIR ? dir + '/.claude.json' : deps.home + '/.claude.json'
     var LIMIT = 32 * 1024 * 1024
-    var got = await Promise.all([readJson(mainFile, LIMIT), readJson(dir + '/settings.json', LIMIT), readJson(dir + '/plugins/installed_plugins.json', LIMIT)])
-    if (!got[0] && !got[1]) return null
+    var got = await Promise.all([readJson(mainFile, LIMIT), readJson(dir + '/settings.json', LIMIT), readJson(dir + '/plugins/installed_plugins.json', LIMIT),
+      readJson(deps.home + '/.open-walnut/local/host-mcp.json', 1024 * 1024)])
+    if (!got[0] && !got[1] && !got[3]) return null
     var out: NonNullable<HostFacts['mcp']> = []
     var seen: Record<string, boolean> = {}
-    var add = function (name: string, plugin?: string) {
-      var key = (plugin || '') + '\u0000' + name
-      if (seen[key] || out.length >= 64) return
+    var add = function (name: string, plugin?: string, offer?: boolean) {
+      // An offered server keeps its own key: a server of the same name this host's sessions load stays listed (and tagged).
+      var key = (offer ? 'offered' : '') + '\u0001' + (plugin || '') + '\u0000' + name
+      if (seen[key] || out.length >= 64) return null
       seen[key] = true
-      out.push(plugin ? { name: name.slice(0, 80), plugin: plugin.slice(0, 80) } : { name: name.slice(0, 80) })
+      var m: NonNullable<HostFacts['mcp']>[number] = plugin ? { name: name.slice(0, 80), plugin: plugin.slice(0, 80) } : { name: name.slice(0, 80) }
+      out.push(m)
+      return m
     }
+    // The servers offered to other hosts come first, as host-mcp-core.ts lists them.
+    var offered = (got[3] && got[3].mcpServers) as Record<string, { capability?: unknown }> | undefined
+    keysOf(offered).forEach(function (n) {
+      var m = add(n, undefined, true)
+      if (!m) return
+      m.offered = true
+      var cap = offered![n] && offered![n].capability
+      if (typeof cap === 'string' && /^[a-z0-9-]{1,32}$/.test(cap)) m.capability = cap
+    })
     keysOf(got[0] && got[0].mcpServers).forEach(function (n) { add(n) })
     var enabled = (got[1] && got[1].enabledPlugins) as Record<string, unknown> | undefined
     var installed = ((got[2] && got[2].plugins) || {}) as Record<string, Array<{ installPath?: unknown }>>

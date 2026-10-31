@@ -204,6 +204,24 @@ describe('host.facts capabilities (host-caps-v1)', () => {
     })
   }
 
+  it('servers offered to other hosts (local/host-mcp.json) come first, marked, with their one word; values stay home', async () => {
+    const h = home('offered')
+    fs.mkdirSync(path.join(h, '.open-walnut', 'local'), { recursive: true })
+    fs.writeFileSync(path.join(h, '.open-walnut', 'local', 'host-mcp.json'), JSON.stringify({ mcpServers: {
+      'wiki-search': { command: 'w', capability: 'wiki', env: { TOKEN: SECRET } },
+      'mail-mcp': { command: 'm2', capability: 'Not A Word' },
+    } }))
+    const r = await make({ home: h }).facts({ network: false })
+    // mail-mcp is offered AND loaded by this host's own sessions: both stay listed.
+    expect(r.mcp?.slice(0, 4)).toEqual([{ name: 'wiki-search', offered: true, capability: 'wiki' }, { name: 'mail-mcp', offered: true }, { name: 'mail-mcp' }, { name: 'notes-mcp' }])
+    expect(JSON.stringify(r)).not.toContain(SECRET)
+    // Only an offer file, no Claude config: still a list.
+    const only = path.join(tmp, 'offer-only')
+    fs.mkdirSync(path.join(only, '.open-walnut', 'local'), { recursive: true })
+    fs.writeFileSync(path.join(only, '.open-walnut', 'local', 'host-mcp.json'), JSON.stringify({ mcpServers: { solo: { command: 's' } } }))
+    expect((await make({ home: only }).facts({ network: false })).mcp).toEqual([{ name: 'solo', offered: true }])
+  })
+
   it('the command line tools alone are no iOS; Linux has none and never runs the Mac probes', async () => {
     const seen: string[] = []
     const clt = ((file: string, args: string[], o: unknown, cb: (e: Error | null, out: string, err: string) => void) => {

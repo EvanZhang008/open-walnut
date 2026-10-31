@@ -44,7 +44,7 @@ export interface FleetCapabilities {
   os: 'macos' | 'linux' | 'windows' | null;
   ios: { xcode: string; runtimes: string[] } | null;
   browsers: Array<{ name: string; relay: boolean }>;
-  mcp: Array<{ name: string; plugin?: string }>;
+  mcp: Array<{ name: string; plugin?: string; offered?: boolean; capability?: string }>;
   clis: string[];
   declared: string[];
   unknown: string[];

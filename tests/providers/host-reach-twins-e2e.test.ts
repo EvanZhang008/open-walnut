@@ -110,11 +110,25 @@ describe.each(TWINS)('$name', (twin) => {
       fake: { command: process.execPath, args: [FAKE], env: { FAKE_TOKEN: 'stays-on-this-host' } },
       old: { type: 'sse', url: 'http://127.0.0.1:1/sse' },
     } }))
+    // A server the user offers only to other hosts.
+    fs.mkdirSync(path.join(h, '.open-walnut', 'local'), { recursive: true })
+    fs.writeFileSync(path.join(h, '.open-walnut', 'local', 'host-mcp.json'), JSON.stringify({ mcpServers: {
+      shared: { command: process.execPath, args: [FAKE], capability: 'wiki', description: 'For other hosts' },
+    } }))
     await boot(twin, dir)
     const hello = await rpc({ cmd: 'hello' })
     expect(hello.capabilities as string[]).toEqual(expect.arrayContaining(['host-mcp-v1', 'host-http-v1']))
 
-    expect(await rpc({ cmd: 'mcp.list' })).toMatchObject({ ok: true, servers: [{ name: 'fake', scope: 'user', type: 'stdio' }, { name: 'old', type: 'sse' }] })
+    expect(await rpc({ cmd: 'mcp.list' })).toMatchObject({ ok: true, servers: [
+      { name: 'shared', scope: 'walnut', type: 'stdio', capability: 'wiki', description: 'For other hosts' },
+      { name: 'fake', scope: 'user', type: 'stdio' }, { name: 'old', type: 'sse' },
+    ] })
+    // The capability card names it too, marked, with its word.
+    expect(((await rpc({ cmd: 'host.facts', network: false })).mcp as unknown[])[0]).toEqual({ name: 'shared', offered: true, capability: 'wiki' })
+    // An image comes back whole.
+    expect(await rpc({ cmd: 'mcp.call', taskId: 'task-img', server: 'shared', tool: 'image', wait: 30_000 })).toMatchObject({
+      ok: true, images: [{ mimeType: 'image/png', bytes: 300, data: Buffer.alloc(300, 1).toString('base64') }],
+    })
     const taskId = 'task-mcp-1'
     const tools = await rpc({ cmd: 'mcp.tools', callId: 'mc-twin-tools', taskId, server: 'fake', wait: 30_000 })
     expect(tools).toMatchObject({ ok: true, callId: 'mc-twin-tools', running: false })

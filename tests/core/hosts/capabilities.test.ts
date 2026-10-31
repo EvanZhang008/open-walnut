@@ -93,6 +93,16 @@ describe('host capabilities', () => {
     expect(capabilityWords(c)).not.toMatch(/Ignore/)
   })
 
+  it('a server offered to other hosts keeps its mark and word, but makes no tag (a session there never loads it)', () => {
+    const c = caps({ probed: facts({ mcp: [{ name: 'wiki-search', offered: true, capability: 'wiki' }, { name: 'x', offered: true, capability: 'Two Words' }, { name: 'docs-mcp' }] }) })
+    expect(c.mcp).toEqual([{ name: 'wiki-search', offered: true, capability: 'wiki' }, { name: 'x', offered: true }, { name: 'docs-mcp' }])
+    expect(c.tags).toContain('mcp:docs-mcp')
+    expect(c.tags.filter((t) => t === 'wiki' || t.startsWith('mcp:wiki') || t === 'mcp:x')).toEqual([])
+    // A word that is a system tag claims nothing either.
+    expect(caps({ probed: facts({ mcp: [{ name: 'pw', offered: true, capability: 'ios' }] }) }).tags).not.toContain('ios')
+    expect(capabilityWords(c)).toContain('1 MCP server, 2 MCP servers offered to other hosts')
+  })
+
   it('tags are lower case, no spaces, at most 64 characters', () => {
     expect(normalizeTag(' iOS ')).toBe('ios')
     expect(normalizeTag('mcp:docs-mcp')).toBe('mcp:docs-mcp')

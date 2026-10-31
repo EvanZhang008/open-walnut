@@ -7,7 +7,11 @@
  * Which servers there are comes from the files Claude Code itself reads: the
  * user's `mcpServers` in ~/.claude.json (and the project's, for a `cwd`), a
  * `.mcp.json` in that `cwd`, and the enabled plugins' `.mcp.json` /
- * plugin.json (named `plugin:<plugin>:<server>`, as Claude Code names them).
+ * plugin.json (named `plugin:<plugin>:<server>`, as Claude Code names them),
+ * and first of all the servers the user offers ONLY to other hosts, in
+ * `~/.open-walnut/local/host-mcp.json` (same shape, plus an optional one-word
+ * `capability` and a `description`; `local/` is never synced, so its env and
+ * headers stay on this machine): this host's own sessions never load those.
  * `${VAR}`, `${VAR:-default}` and `${CLAUDE_PLUGIN_ROOT}` expand as there.
  * A stdio server runs under the user's login shell (its PATH), in its own
  * process group; an http server is called from here with its configured
@@ -39,6 +43,8 @@ const KEEP_RESULT_MS = 10 * 60_000
 const MAX_CALLS = 500
 const TEXT_MAX = 512 * 1024
 const STRUCTURED_MAX = 256 * 1024
+/** Images come back up to this much base64 in all (one link frame stays well under 5 MB); past it only their size. */
+const IMAGES_MAX = 3 * 1024 * 1024
 const STDERR_KEEP = 8 * 1024
 const LINE_MAX = 16 * 1024 * 1024
 const KILL_GRACE_MS = 3_000
@@ -58,8 +64,11 @@ export interface HostMcpDeps {
 export interface ServerDef {
   name: string
   plugin?: string
-  scope: 'user' | 'project' | 'plugin'
+  scope: 'walnut' | 'user' | 'project' | 'plugin'
   type: 'stdio' | 'http' | 'sse'
+  /** What it offers in a word, from host-mcp.json. */
+  capability?: string
+  description?: string
   command?: string
   args?: string[]
   env?: Record<string, string>
@@ -75,7 +84,8 @@ export interface CallResult {
   isError: boolean
   text: string
   truncated: boolean
-  images: Array<{ mimeType: string; bytes: number }>
+  /** `data` (base64) while they fit IMAGES_MAX together, else only the size. */
+  images: Array<{ mimeType: string; bytes: number; data?: string }>
   structured?: unknown
 }
 
@@ -116,6 +126,9 @@ export function toServerDef(name: string, raw: unknown, scope: ServerDef['scope'
     ...(typeof r.url === 'string' ? { url: r.url } : {}),
     ...(strMap(r.headers) ? { headers: strMap(r.headers) } : {}),
     ...(root ? { root } : {}),
+    // Only the user's own offer file names what a server does; a project's or a plugin's never does.
+    ...(scope === 'walnut' && typeof r.capability === 'string' && /^[a-z0-9-]{1,32}$/.test(r.capability) ? { capability: r.capability } : {}),
+    ...(scope === 'walnut' && typeof r.description === 'string' ? { description: r.description.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 300) } : {}),
   }
 }
 
@@ -180,6 +193,9 @@ export function createHostMcp(deps: HostMcpDeps) {
     const seen = new Set<string>()
     const add = (d: ServerDef | null) => { if (d && !seen.has(d.name) && out.length < 128) { seen.add(d.name); out.push(d) } }
     const entries = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? Object.entries(v as Record<string, unknown>) : [])
+    // What the user offers other hosts on purpose comes first and wins a name.
+    const offered = await readJson(path.join(deps.home, '.open-walnut', 'local', 'host-mcp.json'), 1024 * 1024)
+    for (const [n, v] of entries(offered?.mcpServers)) add(toServerDef(n, v, 'walnut'))
     if (where) {
       // The project's own servers win over the user's, as in Claude Code, which keys a project
       // by the folder it was opened in (a symlink, or /tmp on macOS, is not its real path).
@@ -210,11 +226,14 @@ export function createHostMcp(deps: HostMcpDeps) {
     return out
   }
 
-  async function list(req: { cwd?: unknown }): Promise<{ ok: true; servers: Array<Pick<ServerDef, 'name' | 'plugin' | 'scope' | 'type'>> } | McpError> {
+  async function list(req: { cwd?: unknown }): Promise<{ ok: true; servers: Array<Pick<ServerDef, 'name' | 'plugin' | 'scope' | 'type' | 'capability' | 'description'>> } | McpError> {
     const cwd = await resolveCwd(req.cwd)
     if (isErr(cwd)) return cwd
     const all = await servers(cwd)
-    return { ok: true, servers: all.map((d) => ({ name: d.name, ...(d.plugin ? { plugin: d.plugin } : {}), scope: d.scope, type: d.type })) }
+    return { ok: true, servers: all.map((d) => ({
+      name: d.name, ...(d.plugin ? { plugin: d.plugin } : {}), scope: d.scope, type: d.type,
+      ...(d.capability ? { capability: d.capability } : {}), ...(d.description ? { description: d.description } : {}),
+    })) }
   }
 
   function serverEnv(def: ServerDef): NodeJS.ProcessEnv {
@@ -418,9 +437,15 @@ export function createHostMcp(deps: HostMcpDeps) {
     const r = (result ?? {}) as { content?: unknown; isError?: unknown; structuredContent?: unknown }
     const parts: string[] = []
     const images: CallResult['images'] = []
+    let imageChars = 0
     for (const item of Array.isArray(r.content) ? r.content as Array<Record<string, unknown>> : []) {
       if (item.type === 'text' && typeof item.text === 'string') parts.push(item.text)
-      else if (item.type === 'image' || item.type === 'audio') images.push({ mimeType: String(item.mimeType ?? item.type), bytes: Math.floor((typeof item.data === 'string' ? item.data.length : 0) * 3 / 4) })
+      else if (item.type === 'image' || item.type === 'audio') {
+        const data = typeof item.data === 'string' ? item.data : ''
+        const keep = item.type === 'image' && data && imageChars + data.length <= IMAGES_MAX
+        if (keep) imageChars += data.length
+        images.push({ mimeType: String(item.mimeType ?? item.type), bytes: Math.floor(data.length * 3 / 4), ...(keep ? { data } : {}) })
+      }
       else if (item.type === 'resource' && item.resource && typeof (item.resource as { text?: unknown }).text === 'string') parts.push((item.resource as { text: string }).text)
       else if (item.type === 'resource_link') parts.push(`[resource ${String(item.uri ?? '')}]`)
     }

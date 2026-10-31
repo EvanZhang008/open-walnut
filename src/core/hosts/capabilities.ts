@@ -26,8 +26,8 @@ export interface HostCapabilities {
   ios: { xcode: string; runtimes: string[] } | null
   /** Browsers the Walnut browser extension drives (the user's own, signed in); empty when none. */
   browsers: Array<{ name: string; relay: boolean }>
-  /** Claude Code MCP servers of the account on that host, by name. */
-  mcp: Array<{ name: string; plugin?: string }>
+  /** Claude Code MCP servers of the account on that host, by name; `offered` ones are in host-mcp.json, for other hosts only. */
+  mcp: Array<{ name: string; plugin?: string; offered?: boolean; capability?: string }>
   /** Command line tools found on its PATH (the probe's list). */
   clis: string[]
   /** Tags the user declared in config for this host. */
@@ -69,6 +69,8 @@ const BROWSER_NAMES = new Set(['chrome', 'brave', 'edge', 'chromium'])
 const XCODE_RE = /^Xcode \d+(\.\d+)*( beta( \d+)?)?$/
 const RUNTIME_RE = /^iOS \d+(\.\d+)*$/
 const MCP_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,79}$/
+/** The one word a server offered to other hosts names for what it does (local/host-mcp.json). */
+const CAPABILITY_RE = /^[a-z0-9-]{1,32}$/
 
 function cleanIos(v: HostFacts['ios'] | undefined): HostCapabilities['ios'] {
   if (!v || typeof v.xcode !== 'string' || !XCODE_RE.test(v.xcode)) return null
@@ -98,7 +100,12 @@ export function hostCapabilities(i: CapabilityInputs): HostCapabilities {
   if (!f || !Array.isArray(f.browsers)) unknown.push('browser')
   const mcp = Array.isArray(f?.mcp)
     ? f!.mcp!.filter((m) => m && typeof m.name === 'string' && MCP_NAME_RE.test(m.name)).slice(0, 64)
-      .map((m) => (typeof m.plugin === 'string' && MCP_NAME_RE.test(m.plugin) ? { name: m.name, plugin: m.plugin } : { name: m.name }))
+      .map((m) => ({
+        name: m.name,
+        ...(typeof m.plugin === 'string' && MCP_NAME_RE.test(m.plugin) ? { plugin: m.plugin } : {}),
+        ...(m.offered === true ? { offered: true } : {}),
+        ...(typeof m.capability === 'string' && CAPABILITY_RE.test(m.capability) ? { capability: m.capability } : {}),
+      }))
     : []
   if (!f || !('mcp' in f)) unknown.push('mcp')
   const clis = Object.entries(f?.tools ?? {}).filter(([, v]) => typeof v === 'string' && v).map(([k]) => k).sort()
@@ -118,6 +125,9 @@ export function hostCapabilities(i: CapabilityInputs): HostCapabilities {
   if (browsers.some((b) => b.relay)) tags.add('browser')
   if (clis.includes('docker')) tags.add('docker')
   for (const m of mcp) {
+    // A server offered to other hosts is no tag: the tags place a task's own session, and a
+    // session there never loads it (host_mcp_* refuses its own host).
+    if (m.offered) continue
     const t = normalizeTag(`mcp:${m.name}`)
     if (t) tags.add(t)
   }
@@ -139,7 +149,10 @@ export function capabilityWords(c: HostCapabilities, opts: { os?: boolean } = {}
   }
   if (c.tags.includes('browser')) words.push(`the user's browser (${c.browsers.filter((b) => b.relay).map((b) => b.name).join(', ')})`)
   if (c.tags.includes('docker')) words.push('docker')
-  if (c.mcp.length) words.push(`${c.mcp.length} MCP server${c.mcp.length === 1 ? '' : 's'}`)
+  const own = c.mcp.filter((m) => !m.offered).length
+  const offered = c.mcp.length - own
+  if (own) words.push(`${own} MCP server${own === 1 ? '' : 's'}`)
+  if (offered) words.push(`${offered} MCP server${offered === 1 ? '' : 's'} offered to other hosts`)
   for (const t of c.declared) if (!words.includes(t)) words.push(t)
   return words.join(', ')
 }

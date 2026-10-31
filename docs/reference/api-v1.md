@@ -1738,7 +1738,7 @@ phase, build, phone, message } | null, daemon: { version, startedAt, startup,
 runtime, vitals } | null, placement: { score, busy, reasons, weight, longRunning: { ok,
 reasons } }, capabilities: { tags, alwaysOn, placement: "cloud" | "local" | null, os:
 "macos" | "linux" | "windows" | null, ios: { xcode, runtimes } | null, browsers: [{ name,
-relay }], mcp: [{ name, plugin? }], clis, declared, unknown } }`.
+relay }], mcp: [{ name, plugin?, offered?, capability? }], clis, declared, unknown } }`.
 `capabilities` (additive, 2026-10-31) is what a task can use the host for, built from its
 `host.facts` probe (capability `host-caps-v1` adds `ios`, `browsers` and `mcp`: MCP server
 names only, never a command, environment or header), its 7-day ledger (`alwaysOn`: up 95%
@@ -1860,17 +1860,25 @@ A task's session calls an MCP server configured on ANOTHER host (ops `host_mcp_l
 `host_exec` above: one grant covers a task's commands, MCP calls and web requests on that
 host, and its letter says so. The server's config and env values never leave the host.
 
-- `GET /api/v1/hosts/:host/mcp?cwd=` → `{ host, servers: [{ name, plugin?, scope: "user" |
-  "project" | "plugin", type: "stdio" | "http" | "sse" }] }`: the servers Claude Code there
-  would load (plugin servers named `plugin:<plugin>:<server>`; with `cwd`, that project's
-  too). Names only, no grant needed.
+- `GET /api/v1/hosts/:host/mcp?cwd=` → `{ host, servers: [{ name, plugin?, scope: "walnut" |
+  "user" | "project" | "plugin", type: "stdio" | "http" | "sse", capability?, description? }] }`:
+  the servers Claude Code there would load (plugin servers named `plugin:<plugin>:<server>`;
+  with `cwd`, that project's too), and first the ones the user offers only to other hosts in
+  that host's `~/.open-walnut/local/host-mcp.json` (scope `walnut`; same `mcpServers` shape
+  plus an optional one-word `capability` and a `description`; `local/` is never synced, and
+  that host's own sessions never load them, so they make no host tag). Names only, no grant
+  needed (with `cwd`, the grant).
 - `GET /api/v1/hosts/:host/mcp/:server/tools?cwd=` → `{ host, callId, running, server, tools:
   [{ name, description?, inputSchema? }] }`. The server starts on that host when it is not
   running (one per task, server and folder; stopped after 10 idle minutes; at most 8 live
   per host). An `sse` server answers `400 unsupported_transport`.
 - `POST /api/v1/hosts/:host/mcp/:server/call { tool, arguments?, cwd?, timeout_ms? }` →
   `{ host, callId, running: false, server, tool, isError, text, truncated, images: [{ mimeType,
-  bytes }], structured?, redactedLines? }`. A call ends by `timeout_ms` (default 60000, at most
+  bytes, path?, pending? }], structured?, redactedLines? }`: while the images fit 3 MB of
+  base64 together, each is written into the calling task's directory on the caller's own host
+  (`<task dir>/host-mcp/<callId>-N.<ext>`, through that host's daemon when it is not this Mac)
+  and named by `path`; `pending` while that write still runs past a relayed caller's budget.
+  An image with no `path` came back as its size only. A call ends by `timeout_ms` (default 60000, at most
   600000). For a session on another host the answer is held about 12 s (its gateway gives up
   at 20 s): a call still going answers `{ running: true, callId }`. Text is at most 512 KB;
   credential-looking lines are hidden, and `structured` is dropped when it carries one.

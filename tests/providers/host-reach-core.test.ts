@@ -86,6 +86,33 @@ describe('which servers a host has', () => {
   })
 })
 
+describe('servers offered to other hosts', () => {
+  it('reads ~/.open-walnut/local/host-mcp.json first (it wins a name), with its word and description, and calls one', async () => {
+    const proj = path.join(root, 'proj-offered')
+    fs.mkdirSync(proj, { recursive: true })
+    const h = home('offered', { fake: { command: '/no/such/program' }, mine: fakeServer() }, {
+      project: { dir: proj, servers: { pj: { command: 'p', capability: 'wiki', description: 'a project says what it does' } } },
+    })
+    fs.mkdirSync(path.join(h, '.open-walnut', 'local'), { recursive: true })
+    fs.writeFileSync(path.join(h, '.open-walnut', 'local', 'host-mcp.json'), JSON.stringify({ mcpServers: {
+      fake: { ...fakeServer({ PLAIN: 'offered' }), capability: 'wiki', description: 'Search the\n team wiki' },
+      odd: { command: 'x', capability: 'Not One Word' },
+    } }))
+    const c = core(h)
+    expect(await c.list({})).toEqual({ ok: true, servers: [
+      { name: 'fake', scope: 'walnut', type: 'stdio', capability: 'wiki', description: 'Search the  team wiki' },
+      { name: 'odd', scope: 'walnut', type: 'stdio' },
+      { name: 'mine', scope: 'user', type: 'stdio' },
+    ] })
+    // The offered definition is the one that runs, not the user's broken one of the same name.
+    expect(await c.call({ taskId: 't1', server: 'fake', tool: 'env', arguments: { name: 'PLAIN' }, wait: 30_000 })).toMatchObject({ ok: true, text: 'offered' })
+    // Only the offer file names what a server does: a project's word and description are not read.
+    const withProject = await c.list({ cwd: proj }) as { servers: Array<Record<string, unknown>> }
+    expect(withProject.servers.find((x) => x.name === 'pj')).toEqual({ name: 'pj', scope: 'project', type: 'stdio' })
+    c.closeAll()
+  }, 60_000)
+})
+
 describe('a stdio server', () => {
   it('starts under the login shell with its env, lists tools over pages, and answers calls', async () => {
     const h = home('stdio', { fake: fakeServer({ FAKE_TOKEN: '${SECRET_SRC:-fallback}', PLAIN: 'yes' }) })
@@ -106,7 +133,12 @@ describe('a stdio server', () => {
     expect(c.liveCount()).toBe(2)
 
     expect((await c.call({ taskId: 't1', server: 'fake', tool: 'env', arguments: { name: 'FAKE_TOKEN' }, wait: 30_000 })).text).toBe('from-host-env')
-    expect(await c.call({ taskId: 't1', server: 'fake', tool: 'image', wait: 30_000 })).toMatchObject({ text: 'one image', images: [{ mimeType: 'image/png', bytes: 300 }] })
+    const img = await c.call({ taskId: 't1', server: 'fake', tool: 'image', wait: 30_000 })
+    expect(img).toMatchObject({ text: 'one image', images: [{ mimeType: 'image/png', bytes: 300, data: Buffer.alloc(300, 1).toString('base64') }] })
+    // Images come back whole while they fit 3 MB of base64 together; past it, only their size.
+    const many = await c.call({ taskId: 't1', server: 'fake', tool: 'image', arguments: { count: 3, bytes: 900 * 1024 }, wait: 30_000 }) as { images: Array<{ bytes: number; data?: string }> }
+    expect(many.images.map((i) => [i.bytes, typeof i.data])).toEqual([[900 * 1024, 'string'], [900 * 1024, 'string'], [900 * 1024, 'undefined']])
+    expect(Buffer.from(many.images[1].data!, 'base64').equals(Buffer.alloc(900 * 1024, 2))).toBe(true)
     expect(await c.call({ taskId: 't1', server: 'fake', tool: 'fails', wait: 30_000 })).toMatchObject({ ok: true, isError: true, text: 'it went wrong' })
     // 350 KB of multi-byte characters crosses many pipe chunks: none is cut in two.
     const cjk = await c.call({ taskId: 't1', server: 'fake', tool: 'cjk', wait: 30_000 })

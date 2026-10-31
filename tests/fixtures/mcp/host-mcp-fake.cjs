@@ -12,7 +12,7 @@ const TOOLS = [
   { name: 'slow', description: 'Answer after ms', inputSchema: { type: 'object', properties: { ms: { type: 'number' } } } },
   { name: 'env', description: 'Read an env var', inputSchema: { type: 'object', properties: { name: { type: 'string' } } } },
   { name: 'crash', description: 'Exit at once' },
-  { name: 'image', description: 'A tiny image' },
+  { name: 'image', description: 'Images: count of them, bytes each (one of 300 by default)' },
   { name: 'secret', description: 'A line that looks like a token' },
   { name: 'fails', description: 'A tool error' },
   { name: 'cjk', description: 'A long answer of multi-byte characters' },
@@ -44,7 +44,10 @@ rl.on('line', (line) => {
       case 'slow': return setTimeout(() => text(`slept ${a.ms}`), a.ms)
       case 'env': return text(String(process.env[a.name] ?? '(unset)'))
       case 'crash': process.stderr.write('fake server: crashing on purpose\n'); return process.exit(7)
-      case 'image': return send({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'image', mimeType: 'image/png', data: Buffer.alloc(300).toString('base64') }, { type: 'text', text: 'one image' }] } })
+      case 'image': {
+        const imgs = Array.from({ length: a.count || 1 }, (_, i) => ({ type: 'image', mimeType: 'image/png', data: Buffer.alloc(a.bytes || 300, i + 1).toString('base64') }))
+        return send({ jsonrpc: '2.0', id: m.id, result: { content: [...imgs, { type: 'text', text: a.count ? `${a.count} images` : 'one image' }] } })
+      }
       case 'secret': return send({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: 'before\ntoken=' + FAKE_TOKEN + '\nafter' }], structuredContent: { ok: true } } })
       case 'cjk': return text('\u4e2d\u6587\ud83d\ude00'.repeat(a.count || 50000))
       case 'crashleak': process.stderr.write('boot failed with token=' + FAKE_TOKEN + '\n'); return process.exit(9)

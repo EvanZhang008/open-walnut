@@ -2,7 +2,7 @@
  * The durable state a production daemon keeps outside /tmp lives in two places:
  * an unmanaged daemon's under ~/.open-walnut/tmp, a service daemon's in the
  * install root (daemon-standalone.ts: RESUME_RECORD_DIR, REPLICA_DIR,
- * HOST_SERVER_DIR, PLUGIN_JOBS_DIR). When one becomes the other, the state moves
+ * HOST_SERVER_DIR, PLUGIN_JOBS_DIR, HOST_EXEC_DIR). When one becomes the other, the state moves
  * with it, so the next daemon adopts the plugin jobs and the host server still
  * running instead of starting second copies. Trigger state is not here: the
  * daemon reads its older place itself (LEGACY_TRIGGER_STATE_DIRS).
@@ -14,7 +14,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-export const DAEMON_DURABLE_STATE_DIRS = ['resume-records', 'host-replica', 'host-server', 'plugin-jobs'] as const
+export const DAEMON_DURABLE_STATE_DIRS = ['resume-records', 'host-replica', 'host-server', 'plugin-jobs', 'host-exec'] as const
 
 export function unmanagedStateRoot(home: string): string {
   return path.join(home, '.open-walnut', 'tmp')

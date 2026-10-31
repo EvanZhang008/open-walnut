@@ -91,7 +91,7 @@ export function canDoRow(h: FleetHost): FleetRow | null {
   const value = [...parts, ...unknown].join(' · ') || 'Nothing beyond its system';
   const title = [
     c.tags.length ? `A task asks for a host by tag (host "@ios"). This one's tags: ${c.tags.join(', ')}` : '',
-    c.mcp.length ? `MCP: ${c.mcp.map((m) => (m.plugin ? `${m.name} (${m.plugin})` : m.name)).join(', ')}` : '',
+    c.mcp.length ? `MCP: ${c.mcp.map((m) => (m.plugin ? `${m.name} (${m.plugin})` : m.offered ? `${m.name} (offered to other hosts)` : m.name)).join(', ')}` : '',
     c.clis.length ? `Tools: ${c.clis.join(', ')}` : '',
   ].filter(Boolean).join('\n');
   return { key: 'can', label: 'Can do', value, tone: parts.length ? undefined : 'muted', ...(title ? { title } : {}) };

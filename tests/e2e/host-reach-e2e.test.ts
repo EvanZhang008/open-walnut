@@ -34,6 +34,7 @@ import { createSessionRecord } from '../../src/core/session-tracker.js'
 import { updateConfig } from '../../src/core/config-manager.js'
 import { resetHostMcpForTest } from '../../src/core/hosts/host-mcp.js'
 import { resetHostHttpForTest } from '../../src/core/hosts/host-http.js'
+import { __setTransferConnectionResolverForTesting } from '../../src/core/transfer/daemon-transfer-client.js'
 
 let server: HttpServer
 let service: HttpServer
@@ -125,6 +126,7 @@ afterAll(async () => {
   await stopServer()
   service?.close()
   vi.restoreAllMocks()
+  __setTransferConnectionResolverForTesting(null)
   resetHostMcpForTest()
   resetHostHttpForTest()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
@@ -170,6 +172,35 @@ describe('host_mcp and host_http', () => {
     expect(sent.find((m) => m.cmd === 'mcp.call')!.params).toMatchObject({ taskId, server: 'fake', tool: 'env' })
     expect(JSON.stringify(sent.map((m) => m.params))).not.toContain('only-on-macbox')
 
+    // An image the tool returns becomes a file in the calling session's task directory on ITS
+    // host (devbox), written there through devbox's daemon; no base64 reaches the agent.
+    const devboxTasks = path.join(hostRoot, 'devbox-tasks')
+    const writes: Array<Record<string, unknown>> = []
+    const realConnected = daemonConnections.getConnectedDaemonConnection
+    const connectedSpy = vi.spyOn(daemonConnections, 'getConnectedDaemonConnection').mockImplementation((key: string) =>
+      key === 'devbox' ? { taskDirRoot: devboxTasks } as unknown as daemonConnections.DaemonConnection : realConnected(key))
+    __setTransferConnectionResolverForTesting(async (h) => h !== 'devbox' ? [] : [{
+      hasCapability: (c: string) => c === 'fs-write-part-v1',
+      send: async (cmd: string, p: Record<string, unknown>) => {
+        writes.push({ cmd, path: p.path, final: p.final })
+        await fs.mkdir(path.dirname(String(p.path)), { recursive: true })
+        await fs.writeFile(String(p.path), Buffer.from(String(p.data), 'base64'))
+        return { ok: true, staged: p.size, done: true }
+      },
+    }])
+    const pic = await executeOp('host_mcp_call', { host: 'macbox', server: 'fake', tool: 'image' },
+      { apiBase: `http://127.0.0.1:${port}`, origin: LOCAL_ORIGIN, callerSid: SID }) as { ok: boolean; result: Record<string, unknown> }
+    const images = pic.result.images as Array<{ mimeType: string; bytes: number; path?: string; data?: string }>
+    expect(images).toEqual([{ mimeType: 'image/png', bytes: 300, path: expect.stringMatching(new RegExp(`^${devboxTasks}/${taskId}/host-mcp/mc-[\\w-]+-1\\.png$`)) }])
+    expect(writes).toEqual([{ cmd: 'fs.writePart', path: images[0].path, final: true }])
+    expect(await fs.readFile(images[0].path!)).toEqual(Buffer.alloc(300, 1))
+    expect(String(pic.result.outcome)).toContain(`Image(s) saved: ${images[0].path}`)
+    // A kept answer read again writes it again, into the same file.
+    const again = await api('GET', `/api/v1/hosts/macbox/mcp-calls/${String(pic.result.callId)}`, undefined, SID)
+    expect(again.body.images).toEqual(images)
+    connectedSpy.mockRestore()
+    __setTransferConnectionResolverForTesting(null)
+
     const secret = await call('fake', { tool: 'secret' })
     expect(secret.status).toBe(200)
     expect(secret.body.text).toMatch(/^before\n\[Walnut hid this line: it looks like a credential \([^)]+\)\]\nafter$/)
@@ -195,7 +226,7 @@ describe('host_mcp and host_http', () => {
     expect(leak.body).toMatchObject({ redactedLines: 1 })
     expect(await api('POST', '/api/v1/hosts/macbox/http', { url: 'file:///etc/passwd' }, SID)).toMatchObject({ status: 400, body: { code: 'bad_request' } })
 
-    await until(async () => ((await api('GET', '/api/v1/host-exec/grants')).body.grants[0].runs ?? 0) >= 6, 'the use count')
+    await until(async () => ((await api('GET', '/api/v1/host-exec/grants')).body.grants[0].runs ?? 0) >= 7, 'the use count')
     const [g] = (await api('GET', '/api/v1/host-exec/grants')).body.grants
     expect(g.lastCommand).toMatch(/^(GET|POST) http:\/\/127\.0\.0\.1:/)
   }, 60_000)

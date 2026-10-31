@@ -14,11 +14,13 @@
  *   - a call waits for its answer, from a session on another host at most about
  *     14 s (its gateway gives up at 20 s): a call still going comes back running
  *     with its call_id, and host_mcp_result reads it (never call it again);
- *   - text that looks like a credential is hidden before it leaves this server.
+ *   - text that looks like a credential is hidden before it leaves this server;
+ *   - images become files in the calling task's directory (host-mcp-images.ts).
  */
 import { randomUUID } from 'node:crypto'
 import { log } from '../../logging/index.js'
 import { HostExecError, budgetLeft, callerOf, dial, grantFor, redact, targetHost, type Caller } from './host-exec.js'
+import { saveCallImages } from './host-mcp-images.js'
 
 export const MAX_CALLS_PER_TASK = 4
 const SAME_HOST = 'call the MCP server with your own tools'
@@ -65,8 +67,8 @@ async function daemonError(reply: Record<string, unknown>, fallback: string): Pr
   return new HostExecError(msg, status, code)
 }
 
-/** A kept call as the agent reads it: still running, or its answer with credential-looking text hidden. */
-async function answerOf(host: string, reply: Record<string, unknown>): Promise<Record<string, unknown>> {
+/** A kept call as the agent reads it: still running, or its answer with credential-looking text hidden and its images saved. */
+async function answerOf(caller: Caller, host: string, reply: Record<string, unknown>, t0: number): Promise<Record<string, unknown>> {
   if (reply.running === true) return { host, callId: reply.callId, running: true, ms: reply.ms }
   if (typeof reply.callId === 'string') inFlight.delete(reply.callId)
   if (reply.ok !== true) throw await daemonError(reply, 'the host could not call the server')
@@ -77,7 +79,8 @@ async function answerOf(host: string, reply: Record<string, unknown>): Promise<R
   } else {
     const text = await redact(typeof reply.text === 'string' ? reply.text : '')
     redacted += text.redacted
-    Object.assign(out, { tool: reply.tool, isError: reply.isError === true, text: text.text, truncated: reply.truncated === true, images: reply.images ?? [] })
+    Object.assign(out, { tool: reply.tool, isError: reply.isError === true, text: text.text, truncated: reply.truncated === true,
+      images: await saveCallImages(caller, String(reply.callId ?? ''), reply.images, t0) })
     if (reply.structured !== undefined) {
       // Structured data that carries a credential-looking line is dropped whole: its shape cannot hide one line.
       const s = await redact(JSON.stringify(reply.structured, null, 1))
@@ -126,7 +129,7 @@ async function start(caller: Caller, host: string, cmd: 'mcp.tools' | 'mcp.call'
   }
   if (reply.ok === false) inFlight.delete(callId)
   else void import('./exec-grants.js').then((g) => g.noteRun(grantId, preview))
-  const out = await answerOf(host, reply)
+  const out = await answerOf(caller, host, reply, t0)
   log.session.info('host mcp', {
     taskId: caller.taskId, fromHost: caller.host, host, cmd, callId, server: params.server, tool: params.tool ?? null,
     running: out.running, isError: out.isError ?? null, ms: Date.now() - t0, redacted: out.redactedLines ?? 0,
@@ -169,7 +172,7 @@ export async function hostMcpResult(params: { host: string; call_id: string; wai
   const conn = await dial(host, budgetLeft(caller, t0) - 3_000, CAP, WHAT)
   const wait = holdFor(caller, typeof params.wait_ms === 'number' && params.wait_ms > 0 ? Math.min(params.wait_ms, 60_000) : 0, t0)
   const reply = await ask(conn, host, 'mcp.result', { callId: params.call_id, taskId: caller.taskId, wait }, wait + Math.min(REPLY_MARGIN_MS, Math.max(1_000, budgetLeft(caller, t0) - wait)))
-  return answerOf(host, reply)
+  return answerOf(caller, host, reply, t0)
 }
 
 /** Tests: forget the in-flight calls. */

@@ -8,6 +8,10 @@ const GRANT_NOTE = 'The first call for this task on a host asks the user by lett
 /** An MCP answer in a line: still running, the tools, or the call's result. */
 function mcpOutcome(body: unknown) {
   const b = (body ?? {}) as Record<string, unknown>
+  const images = Array.isArray(b.images) ? b.images as Array<{ path?: string; pending?: boolean }> : []
+  const saved = images.filter((i) => i.path && !i.pending).map((i) => i.path)
+  const pending = images.filter((i) => i.path && i.pending).map((i) => i.path)
+  const unsaved = images.filter((i) => !i.path).length
   if (b.running) {
     return withOutcome(b, `Still running on ${String(b.host)} as call ${String(b.callId)}.`, 'host_mcp_result with this call_id and wait_ms returns the answer; never call it again.')
   }
@@ -18,6 +22,9 @@ function mcpOutcome(body: unknown) {
     b.isError ? 'The tool reported an error.' : '',
     b.truncated ? 'Only the first 512 KB of its text is here.' : '',
     b.redactedLines ? `${String(b.redactedLines)} line(s) that looked like a credential were hidden.` : '',
+    saved.length ? `Image(s) saved: ${saved.join(', ')} (open with your Read tool).` : '',
+    pending.length ? `Image(s) still being written, there in a few seconds: ${pending.join(', ')} (if one never appears, read this call again with host_mcp_result).` : '',
+    unsaved ? `${unsaved} image(s) came back as their size only (too big together, or your task directory could not be written).` : '',
   ].filter(Boolean).join(' ')
   return withOutcome(b, `${String(b.server)} ${String(b.tool)} on ${String(b.host)} answered after ${String(b.ms)} ms.${notes ? ` ${notes}` : ''}`, 'Read text (and structured).')
 }
@@ -28,7 +35,9 @@ defineOp({
   description:
     'The MCP servers configured on ANOTHER host Walnut knows (host_list names the hosts): the ones Claude Code there would load, the user\'s, '
     + 'the enabled plugins\' (named plugin:<plugin>:<server>) and, with `cwd`, that project\'s. Use one when only that host has it: its sign-in, '
-    + 'its network, its files. Names only, no grant needed. Never your own host (use your own MCP tools).',
+    + 'its network, its files. First come the servers the user offers other hosts on purpose (scope "walnut", maybe with a one-word capability '
+    + 'and a description). Names only, no grant needed (with `cwd` it needs the grant). Never your own host '
+    + '(use your own MCP tools).',
   input: {
     host: z.string().min(1).describe('Host alias ("__local__" = the Mac) or a selector like "@ios"'),
     cwd: z.string().optional().describe('A project folder on that host, to include its own servers'),
@@ -63,8 +72,8 @@ defineOp({
     'Call one tool of an MCP server on ANOTHER host and get its answer: the server runs there, with that host\'s sign-in and config, which '
     + 'never leave it. ' + GRANT_NOTE + ' A call ends by timeout_ms (default 60 s, at most 10 min). It waits for the answer, from a session '
     + 'on another host at most about 14 seconds: a call still going comes back running:true with its call_id, and host_mcp_result with wait_ms '
-    + 'reads it (never call it again). Up to 4 calls at once per task. Text comes back (512 KB at most), images as their size; lines that look '
-    + 'like a credential are hidden.',
+    + 'reads it (never call it again). Up to 4 calls at once per task. Text comes back (512 KB at most); images are saved in your '
+    + 'task directory and their paths given; lines that look like a credential are hidden.',
   input: {
     host: z.string().min(1).describe('The host the server is on'),
     server: z.string().min(1).describe('The server name host_mcp_list gave'),
