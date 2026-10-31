@@ -912,6 +912,40 @@ function runWnMinimal(argv, stdinText) {
     if (!value) return { kind: 'none' };
     return { kind: 'inline', json: raw };
   };
+  // Twin of strippedShellText in tool-args-source.ts: a "$14.99" the shell turned into ".99"
+  // (JSON in double quotes) is refused before anything is sent.
+  var WN_STRIPPED_AMOUNT = /(^|[\\s"':])((?:\\.\\d{2}|,\\d{3})(?=$|[\\s.,:!?"')]))|(^|[\\s"'=:])((?:-?\\/?(?:usr\\/)?(?:local\\/)?(?:bin\\/)?)(?:zsh|bash|sh)(?:\\.\\d{2}|,\\d{3}))(?![\\d\\p{L}_])/u;
+  var WN_PROSE_FIELDS = ['text', 'title', 'result', 'evidence', 'not_done', 'message', 'description', 'body', 'summary', 'reason', 'question', 'subject'];
+  var wnStrippedText = function (v, field, depth) {
+    if (depth === 0) {
+      if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+      for (var f = 0; f < WN_PROSE_FIELDS.length; f++) {
+        var top = wnStrippedText(v[WN_PROSE_FIELDS[f]], WN_PROSE_FIELDS[f], 1);
+        if (top) return top;
+      }
+      return null;
+    }
+    if (typeof v === 'string') {
+      var m = WN_STRIPPED_AMOUNT.exec(v);
+      if (!m) return null;
+      var found = m[2] || m[4] || '';
+      var at = m.index + (m[1] || m[3] || '').length;
+      return { field: field || 'arguments', found: found, near: v.slice(Math.max(0, at - 24), at + found.length + 8).replace(/\\s+/g, ' ') };
+    }
+    if (depth > 4 || v === null || typeof v !== 'object') return null;
+    var keys = Object.keys(v);
+    for (var i = 0; i < keys.length; i++) {
+      var hit = wnStrippedText(v[keys[i]], field ? field + '.' + keys[i] : keys[i], depth + 1);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  var wnStrippedMessage = function (hit) {
+    return '"' + hit.field + '" looks cut by the shell: "' + hit.found + '" stands where a "$" amount would be (…' + hit.near + '…). '
+      + 'In double quotes the shell expands $14 or $5,000 to nothing. Nothing was sent. Send it again with the JSON in '
+      + "single quotes, or from a file (@/path/args.json) or stdin (-) written with a quoted heredoc (<<'EOF'). "
+      + 'If the text is right as it is, set WALNUT_TEXT_CHECK=0 for that call.';
+  };
   var wnParseToolArgs = function (text) {
     if (!String(text).trim()) return { ok: true, args: {} };
     var parsedValue;
@@ -1040,6 +1074,8 @@ function runWnMinimal(argv, stdinText) {
         } else {
           var parsedCall = wnParseToolArgs(rawText);
           if (!parsedCall.ok) { errOut('walnut: ' + parsedCall.message); return exitWn(2); }
+          var wnCut = process.env.WALNUT_TEXT_CHECK === '0' || src.kind !== 'inline' ? null : wnStrippedText(parsedCall.args, '', 0);
+          if (wnCut) { errOut('walnut: ' + wnStrippedMessage(wnCut)); return exitWn(2); }
           args = { name: rest[0], args: parsedCall.args };
         }
       }

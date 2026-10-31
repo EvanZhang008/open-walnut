@@ -85,3 +85,56 @@ export function parseToolArgs(text: string): ParsedToolArgs {
   }
   return { ok: true, args: value as Record<string, unknown> }
 }
+
+/**
+ * A text the shell already changed: the JSON went inside double quotes, so zsh or bash
+ * expanded `$14` and `$52` as positional parameters (empty) and `$0` as the shell's
+ * name, and "Tea $14.99" arrived as "Tea .99" with no error anywhere (2026-10-30: a
+ * lead's prices reached Main as ".99" and ".52"). Only the JSON typed on the command
+ * line (inline, or a flag's value) can be cut this way, and only its prose is read: the
+ * fields in PROSE_FIELDS, at any depth below them, never html, a script or a note's body
+ * (CSS and code are full of ".85"). Only the shapes a lost `$N` leaves are flagged: a
+ * decimal or a thousands group after a space or the start (never one a ";" ends, as a CSS
+ * value does), or the shell's own name in front of one. Null when the text looks whole. sh and bash leave "4.99" instead, which
+ * no reading of the text can tell from a price: the session's Bash hook refuses that
+ * command before it runs (shell-dollar-guard-hook.ts).
+ */
+export const STRIPPED_AMOUNT = /(^|[\s"':])((?:\.\d{2}|,\d{3})(?=$|[\s.,:!?"')]))|(^|[\s"'=:])((?:-?\/?(?:usr\/)?(?:local\/)?(?:bin\/)?)(?:zsh|bash|sh)(?:\.\d{2}|,\d{3}))(?![\d\p{L}_])/u
+
+/** The message fields whose words a person reads: the ones a lost "$" amount corrupts unseen. */
+export const PROSE_FIELDS = ['text', 'title', 'result', 'evidence', 'not_done', 'message', 'description', 'body', 'summary', 'reason', 'question', 'subject']
+
+export interface StrippedText { field: string; found: string; near: string }
+
+export function strippedShellText(args: unknown, field = '', depth = 0): StrippedText | null {
+  if (depth === 0) {
+    if (args === null || typeof args !== 'object' || Array.isArray(args)) return null
+    for (const k of PROSE_FIELDS) {
+      const hit = strippedShellText((args as Record<string, unknown>)[k], k, 1)
+      if (hit) return hit
+    }
+    return null
+  }
+  if (typeof args === 'string') {
+    const m = STRIPPED_AMOUNT.exec(args)
+    if (!m) return null
+    const found = m[2] ?? m[4] ?? ''
+    const at = m.index + (m[1] ?? m[3] ?? '').length
+    const near = args.slice(Math.max(0, at - 24), at + found.length + 8).replace(/\s+/g, ' ')
+    return { field: field || 'arguments', found, near }
+  }
+  if (depth > 4 || args === null || typeof args !== 'object') return null
+  for (const [k, v] of Object.entries(args as Record<string, unknown>)) {
+    const hit = strippedShellText(v, field ? `${field}.${k}` : k, depth + 1)
+    if (hit) return hit
+  }
+  return null
+}
+
+/** What the CLI prints when it refuses such a text (the hub CLI, wn-cli.ts and the JS twin say the same). */
+export function strippedShellTextMessage(hit: StrippedText): string {
+  return `"${hit.field}" looks cut by the shell: "${hit.found}" stands where a "$" amount would be (…${hit.near}…). `
+    + 'In double quotes the shell expands $14 or $5,000 to nothing. Nothing was sent. Send it again with the JSON in '
+    + "single quotes, or from a file (@/path/args.json) or stdin (-) written with a quoted heredoc (<<'EOF'). "
+    + 'If the text is right as it is, set WALNUT_TEXT_CHECK=0 for that call.'
+}

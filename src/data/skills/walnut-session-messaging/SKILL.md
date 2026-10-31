@@ -54,6 +54,16 @@ walnut tools call task_send '{"to":"t_9f3a1c22","title":"Auth fixture refactor m
 walnut tools call task_send '{"to":"9f3a","title":"Root cause: shared tmpdir","text":"root cause was a shared tmpdir; see tests/setup/tmp.ts"}'
 ```
 
+**Quote the JSON with single quotes, never double.** In double quotes the shell expands every `$` first: "$14.99" arrives as ".99", "$5,000" as ",000", and nothing reports it (2026-10-30: a lead's prices reached Main that way). When the text holds a single quote of its own, or is long, send the JSON on stdin from a quoted heredoc, which the shell leaves alone:
+
+```bash
+walnut tools call task_send - <<'EOF'
+{"to":"t_9f3a1c22","title":"Tea order placed","text":"Ordered the white peach oolong at $14.99; it's due Friday."}
+EOF
+```
+
+(`@/path/args.json` reads a file the same way.) Walnut refuses a `walnut` command with a `$` and a digit the shell would expand, and the CLI refuses a text that already looks cut; nothing is sent, so resend it quoted.
+
 **Every message gets a `title`: the one-line TL;DR (about 10 words) of what you are saying.** The user reads conversations as a list of folded messages showing only who sent each one and its title, and opens one only when the title says it matters. A title is the conclusion, not the topic: "Migration is safe to rerun" beats "Migration question". `text` holds the detail behind it.
 
 Who gets it: the task id, or a unique id prefix of 4+ chars. (Legacy handles still resolve: a session id, the `Title [8hex]` form envelopes print, a unique title substring, but write new calls with the task id.)

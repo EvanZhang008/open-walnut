@@ -29,6 +29,7 @@ import { GIT_TMP_GUARD_COMMAND } from '../../src/providers/git-tmp-guard-hook.js
 import { TMP_WRITE_NOTE_COMMAND } from '../../src/providers/tmp-write-note-hook.js'
 import { CLONE_IDENTITY_COMMAND } from '../../src/providers/clone-identity-hook.js'
 import { STOP_UNANSWERED_HOOK_COMMAND } from '../../src/providers/stop-unanswered-hook.js'
+import { SHELL_DOLLAR_GUARD_COMMAND } from '../../src/providers/shell-dollar-guard-hook.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, 'mock-claude.mjs')
 const tmpBase = WALNUT_HOME
@@ -79,9 +80,11 @@ const COMPACT_HOOK = {
 const GUARD = { matcher: 'Bash', hooks: [{ type: 'command', command: GIT_TMP_GUARD_COMMAND, timeout: 10 }] }
 const WRITE_NOTE = { matcher: 'Write', hooks: [{ type: 'command', command: TMP_WRITE_NOTE_COMMAND, timeout: 10 }] }
 const CLONE_IDENTITY = { matcher: 'Bash', hooks: [{ type: 'command', command: CLONE_IDENTITY_COMMAND, timeout: 10 }] }
+// Then the guard refusing a walnut call the shell would cut a "$14.99" from (shell-dollar-guard-hook.ts).
+const DOLLAR_GUARD = { matcher: 'Bash', hooks: [{ type: 'command', command: SHELL_DOLLAR_GUARD_COMMAND, timeout: 10 }] }
 // And the Stop hook that names a request the session has not answered (stop-unanswered-hook.ts).
 const STOP = { Stop: [{ hooks: [{ type: 'command', command: STOP_UNANSWERED_HOOK_COMMAND, timeout: 5 }] }] }
-const TOOL_HOOKS = { PreToolUse: [GUARD, CLONE_IDENTITY], PostToolUse: [WRITE_NOTE, CLONE_IDENTITY], ...STOP }
+const TOOL_HOOKS = { PreToolUse: [GUARD, CLONE_IDENTITY, DOLLAR_GUARD], PostToolUse: [WRITE_NOTE, CLONE_IDENTITY], ...STOP }
 
 const SESSION_HOOKS = { ...COMPACT_HOOK, ...TOOL_HOOKS }
 
@@ -138,6 +141,7 @@ describe('local session spawn → launching server URL', () => {
     process.env.WALNUT_TMP_GIT_GUARD = '0'
     process.env.WALNUT_TMP_WRITE_NOTE = '0'
     process.env.WALNUT_CLONE_IDENTITY = '0'
+    process.env.WALNUT_SHELL_DOLLAR_GUARD = '0'
     process.env.WALNUT_STOP_UNANSWERED = '0'
     try {
       const args = await spawnArgs('t-hooks-off')
@@ -147,6 +151,7 @@ describe('local session spawn → launching server URL', () => {
       delete process.env.WALNUT_TMP_GIT_GUARD
       delete process.env.WALNUT_TMP_WRITE_NOTE
       delete process.env.WALNUT_CLONE_IDENTITY
+      delete process.env.WALNUT_SHELL_DOLLAR_GUARD
       delete process.env.WALNUT_STOP_UNANSWERED
     }
   })

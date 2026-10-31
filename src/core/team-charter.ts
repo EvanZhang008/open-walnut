@@ -46,4 +46,5 @@ export const MESSAGE_TEXT_HINT = 'Send it only if the receiver must act on it, a
   + 'for the user\'s own decisions (outward steps, deletes, spending, credentials and permissions stay theirs), '
   + 'information you cannot see, or a hard-to-reverse choice no rule covers; decide the rest yourself '
   + '(walnut-session-messaging skill). Passing on the user\'s request: their exact words and screenshots first, your '
-  + 'summary after.'
+  + 'summary after. Pass the JSON in single quotes, or on stdin from a quoted heredoc (<<\'EOF\'): in double quotes '
+  + 'the shell turns "$14.99" into ".99".'

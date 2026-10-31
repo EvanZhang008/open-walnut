@@ -176,6 +176,8 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
       if (code !== null) { process.exitCode = code; return }
     }
 
+    // Typed on the command line (flags or inline JSON), where the shell may have cut a "$" amount.
+    let typedArgs = true
     if (rest[0]?.startsWith('--')) {
       // Human-friendly flag form: --status todo --q "login bug". Types are
       // coerced from the op's own zod shape, so numbers and booleans arrive
@@ -204,6 +206,7 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
         return
       }
       let rawJson = ''
+      typedArgs = source.kind === 'inline'
       if (source.kind === 'inline') rawJson = source.json
       else if (source.kind === 'stdin') {
         rawJson = await new Promise<string>((resolve) => {
@@ -229,6 +232,16 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
         return
       }
       parsed = args.args
+    }
+    // A "$14.99" the shell already turned into ".99" on the command line (flags or inline JSON): refused, nothing sent.
+    if (typedArgs) {
+      const { strippedShellText, strippedShellTextMessage } = await import('../providers/tool-args-source.js')
+      const cut = process.env.WALNUT_TEXT_CHECK === '0' ? null : strippedShellText(parsed)
+      if (cut) {
+        console.error(strippedShellTextMessage(cut))
+        process.exitCode = 2
+        return
+      }
     }
     // A message from a session goes through its host daemon first, on the Mac as
     // on any host: a message between two sessions on one host is that host's to

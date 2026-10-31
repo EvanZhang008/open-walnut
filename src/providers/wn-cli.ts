@@ -27,7 +27,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { GatewayError, GatewayErrorCode, GatewayOp, GatewayRequest, GatewayResponse } from './gateway-core.js'
 import { EXTERNAL_CALLER_SID, wellKnownGatewaySocketPaths } from './gateway-core.js'
-import { GATEWAY_INLINE_ARGS_MAX_BYTES, classifyArgsSource, parseToolArgs } from './tool-args-source.js'
+import { GATEWAY_INLINE_ARGS_MAX_BYTES, classifyArgsSource, parseToolArgs, strippedShellText, strippedShellTextMessage } from './tool-args-source.js'
 import {
   classifyTemplateGateway, templateCheckGap, templateCheckInput, templateCheckReplyMs, templateCheckRequestInput,
 } from './trigger-check-core.js'
@@ -672,6 +672,12 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
         return 2
       }
       callArgs = args.args
+      // A "$14.99" the shell already turned into ".99" on the command line: refused, nothing sent.
+      const cut = process.env.WALNUT_TEXT_CHECK === '0' || source.kind !== 'inline' ? null : strippedShellText(callArgs)
+      if (cut) {
+        process.stderr.write(`walnut: ${strippedShellTextMessage(cut)}\n`)
+        return 2
+      }
     }
   }
 
