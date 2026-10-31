@@ -80,6 +80,8 @@ describe('user status sync', () => {
     await updateTaskRaw(ended.id, { status_report: { state: 'done', now: 'Shipped it.', at: new Date(Date.now() + 1000).toISOString() } }, { emitEvent: true })
     // An unanswered action_required letter from the task.
     await createSessionRecord('sess-asks-1', asks.id, 'Acme')
+    // Its turn ended (a record starts as running, and Working is a turn running now).
+    await updateSessionRecord('sess-asks-1', { process_status: 'idle' })
     await updateTask(asks.id, { phase: 'NEED_ACTION' })
     const letter = await sendLetter({
       subject: 'Pick a design', type: 'action_required', markdown: 'A or B?',
@@ -140,5 +142,31 @@ describe('user status sync', () => {
     expect(org.rows.find((r) => (r.project ?? '').toLowerCase() === 'acme')?.needs_you).toBe(0)
     expect((await getTask(asks.id)).user_status).toMatchObject({ state: 'waiting', kind: 'lead' })
     bus.unsubscribe('test-status-writes')
+  }, 90_000)
+
+  it("a subtask's question rolls up through its leaders, origin named; a snoozed or finished one drops out", async () => {
+    const top = (await addTask({ title: 'Ship the release', project: 'Rollup' })).task
+    const mid = (await addTask({ title: 'Prepare the notes', project: 'Rollup' })).task
+    const leaf = (await addTask({ title: 'Pick the screenshots', project: 'Rollup' })).task
+    await updateTaskRaw(mid.id, { parent_task_id: top.id }, { source: 'test' })
+    await updateTaskRaw(leaf.id, { parent_task_id: mid.id }, { source: 'test' })
+    await updateTaskRaw(leaf.id, { phase: 'NEED_ACTION', status_report: { state: 'needs', ask: 'Which three screenshots?', at: new Date(Date.now() + 1000).toISOString() } }, { emitEvent: true, source: 'status-report' })
+    await statusOf(leaf.id, (t) => t.user_status?.ask === 'Which three screenshots?')
+    const m = await statusOf(mid.id, (t) => (t.user_status?.asks?.length ?? 0) === 1)
+    expect(m.user_status!.asks![0]).toMatchObject({ id: leaf.id, title: 'Pick the screenshots', ask: 'Which three screenshots?' })
+    const t = await statusOf(top.id, (x) => (x.user_status?.asks?.length ?? 0) === 1)
+    // Two levels up it still names the task that asks, and the subtask it came through.
+    expect(t.user_status!.asks![0]).toMatchObject({ id: leaf.id, via: mid.id })
+    // The leaders' own state is their own: the question is not counted twice.
+    expect(t.user_status!.state).not.toBe('needs')
+    // Snoozed: its question leaves every leader's list.
+    await updateTask(leaf.id, { start_date: new Date(Date.now() + 3 * 86_400_000).toISOString() } as never)
+    await statusOf(top.id, (x) => !x.user_status?.asks?.length, 20_000)
+    await updateTask(leaf.id, { start_date: '' } as never)
+    await statusOf(top.id, (x) => (x.user_status?.asks?.length ?? 0) === 1, 20_000)
+    // Finished: gone too.
+    await updateTaskRaw(leaf.id, { phase: 'COMPLETE' }, { emitEvent: true, source: 'test' })
+    await statusOf(top.id, (x) => !x.user_status?.asks?.length, 20_000)
+    expect((await getTask(mid.id)).user_status?.asks).toBeUndefined()
   }, 90_000)
 })

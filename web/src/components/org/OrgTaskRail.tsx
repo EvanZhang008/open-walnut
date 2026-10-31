@@ -121,6 +121,18 @@ function AskRow({ a, task, vp, onOpen, onQuote, canQuote, answers, snoozeError, 
   }, [failure, failedFor, askKey, answers, a.taskId]);
   return (
     <div className="org-alert org-ask" data-testid="org-alert" data-task-id={a.taskId} data-kind={a.kind} {...(a.source ? { 'data-source': a.source } : {})}>
+      {a.via && (
+        // The top-level task itself, opened as a task: the subtask's letter or Board choice is not its.
+        <div className="org-ask-via-line">
+          <a
+            className="org-ask-via"
+            data-testid="org-ask-via"
+            href={`/tasks/${encodeURIComponent(a.via.id)}`}
+            title={`Part of ${a.via.title}`}
+            onClick={(e) => { e.preventDefault(); onOpen({ ...a, taskId: a.via!.id, title: a.via!.title, source: undefined }); }}
+          >{a.via.title} ›</a>
+        </div>
+      )}
       <div className="org-ask-summary" data-testid="org-ask-summary" title={summary}>{summary}</div>
       <div className="org-ask-meta">
         <a

@@ -21,7 +21,7 @@
 import { bus, EventNames } from './event-bus.js';
 import { log } from '../logging/index.js';
 import { bootPolicy } from './boot-policy.js';
-import { deriveUserStatus, HANDED_BACK_ASK, type UserStatus, type UserStatusInput } from './user-status.js';
+import { deriveUserStatus, HANDED_BACK_ASK, rollUpAsks, type UserStatus, type UserStatusInput } from './user-status.js';
 import { isReportPending, onReportPendingChange } from './sessions/report-pending.js';
 import type { Task } from './types.js';
 import { snoozedUntil } from './snooze.js';
@@ -456,9 +456,15 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
   const facts = await readStatusFacts(targets, everything.map((t) => t.id));
   completeStatusFacts(facts, everything);
   let changed = 0;
+  const childrenOf = new Map<string, Task[]>();
+  for (const t of everything) if (t.parent_task_id) (childrenOf.get(t.parent_task_id) ?? childrenOf.set(t.parent_task_id, []).get(t.parent_task_id)!).push(t);
   for (const task of targets) {
     const input = statusInputOf(task, facts, nowMs);
-    const next = deriveUserStatus(input, nowMs);
+    const derived = deriveUserStatus(input, nowMs);
+    // The questions its subtasks ask, carried up (rollUpAsks); Main and a VP show them on their
+    // top-level tasks, never as their own (Needs you is only ever an individual task).
+    const asks = task.org_role ? [] : rollUpAsks(childrenOf.get(task.id) ?? [], task.id);
+    const next = asks.length ? { ...derived, asks } : derived;
     if (sameStatus(task.user_status, next)) continue;
     const settlesAt = handBackSettlesAt(task, next, nowMs, !!input.hasSession);
     if (settlesAt !== null) {
@@ -476,6 +482,8 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
     });
     if (res.changed) {
       changed += 1;
+      // Its leader carries its questions (rollUpAsks): re-derived in the next pass, one level each.
+      if (task.parent_task_id) mark(task.parent_task_id);
       // Into Needs you: the line `walnut-logs.sh flips` pairs with the phase moves.
       if (next.state === 'needs' && task.user_status?.state !== 'needs') {
         log.task.info('user-status: now needs you', { taskId: task.id, source: next.source });
@@ -536,6 +544,9 @@ function onEvent(event: { name: string; data: unknown; source?: string }): void 
     case EventNames.TASK_UPDATED:
     case EventNames.TASK_COMPLETED:
       mark(d.task?.id);
+      // A finished or moved subtask's question leaves its leader's list (rollUpAsks); the event
+      // names only the new parent, so a former one drops it at the minute sweep.
+      mark(d.task?.parent_task_id);
       return;
     case EventNames.SESSION_STATUS_CHANGED:
     case EventNames.SESSION_PERMISSION_REQUEST:

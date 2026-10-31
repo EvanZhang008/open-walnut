@@ -1,0 +1,208 @@
+/**
+ * The task's status words are asked right at its turn end (src/core/sessions/status-question.ts),
+ * with only the CLI faked: one short side question with only the FOR_USER_* lines, its answer stored
+ * as the task's status and moving its phase; a new turn within the settle window cancels it; the
+ * debounced summary then asks no status and stores none of its own. An ACP session is not asked.
+ * Races: a turn running when the window ends is not asked mid-turn; a turn end while an ask is in
+ * flight is asked again once it settles; an answer that does not read hands the turn back to the
+ * summary.
+ */
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest'
+import fs from 'node:fs/promises'
+import { createMockConstants } from '../../helpers/mock-constants.js'
+
+vi.mock('../../../src/constants.js', () => createMockConstants('walnut-status-question'))
+
+import { WALNUT_HOME } from '../../../src/constants.js'
+import { sessionRunner } from '../../../src/providers/claude-code-session.js'
+import { addTask, getTask, updateTaskRaw } from '../../../src/core/task-manager.js'
+import { FOR_USER_PROMPT, buildSelfReportPrompt, runTriage, __resetTriageRateLimiter } from '../../../src/core/session-hooks/builtins.js'
+import { armStatusQuestion, askStatus, buildStatusPrompt, cancelStatusQuestion, statusQuestionOwns, STATUS_SETTLE_MS, __resetStatusQuestion } from '../../../src/core/sessions/status-question.js'
+import { isReportPending } from '../../../src/core/sessions/report-pending.js'
+import type { OnTurnCompletePayload } from '../../../src/core/session-hooks/types.js'
+import type { Task } from '../../../src/core/types.js'
+
+const SID = 'status-q-session'
+const ANSWER = 'FOR_USER_STATE: waiting\nFOR_USER_WAITING_ON: outside: the CI run on main\nFOR_USER_NOW: The tests run in CI.\nFOR_USER_NEXT: I merge once they pass.'
+
+function fakeSession(answer: string) {
+  const fake = { sessionId: SID, askSideQuestion: vi.fn(async () => answer), detach: () => {}, kill: () => {}, get active() { return false } }
+  ;(sessionRunner as unknown as { sessions: Map<string, unknown> }).sessions.set(SID, fake)
+  return fake
+}
+
+let task: Task
+
+beforeAll(async () => {
+  await fs.rm(WALNUT_HOME, { recursive: true, force: true })
+  await fs.mkdir(WALNUT_HOME, { recursive: true })
+  task = (await addTask({ title: 'Fix the parser', project: 'Garden' })).task
+  await updateTaskRaw(task.id, { phase: 'IN_PROGRESS' }, { source: 'test' })
+})
+
+afterAll(async () => {
+  ;(sessionRunner as unknown as { sessions: Map<string, unknown> }).sessions.delete(SID)
+  await fs.rm(WALNUT_HOME, { recursive: true, force: true })
+})
+
+beforeEach(() => { __resetStatusQuestion(); __resetTriageRateLimiter() })
+
+describe('the status question', () => {
+  it('asks only the status lines, telling the session not to work', () => {
+    const prompt = buildStatusPrompt(FOR_USER_PROMPT, 'Fix the parser', 'Chinese')
+    expect(prompt).toContain('Do not use any tool and do not continue the work.')
+    expect(prompt).toContain('Answer with only these lines on how this task stands FOR THE USER')
+    expect(prompt).toContain('FOR_USER_STATE:')
+    expect(prompt).toContain('write them in Chinese')
+    expect(prompt).not.toContain('EXEC_SUMMARY')
+  })
+
+  it('stores the answer as the task\'s status and moves its phase', async () => {
+    const fake = fakeSession(ANSWER)
+    expect(await askStatus(task.id, SID, Date.now())).toBe(true)
+    expect(fake.askSideQuestion).toHaveBeenCalledTimes(1)
+    const t = await getTask(task.id)
+    expect(t.status_report).toMatchObject({ state: 'waiting', waiting_kind: 'outside', waiting_on: 'the CI run on main' })
+    expect(t.phase).toBe('WAITING')
+  })
+
+  it('waits for the turn to stay quiet; a new turn cancels it; the report reads pending meanwhile', async () => {
+    const fake = fakeSession(ANSWER)
+    expect(await armStatusQuestion(task.id, SID)).toBe(true)
+    expect(statusQuestionOwns(SID)).toBe(true)
+    expect(isReportPending(SID)).toBe(true)
+    cancelStatusQuestion(SID)
+    expect(isReportPending(SID)).toBe(false)
+    await new Promise((r) => setTimeout(r, STATUS_SETTLE_MS + 300))
+    expect(fake.askSideQuestion).not.toHaveBeenCalled()
+    await armStatusQuestion(task.id, SID)
+    await new Promise((r) => setTimeout(r, STATUS_SETTLE_MS + 500))
+    expect(fake.askSideQuestion).toHaveBeenCalledTimes(1)
+    expect(isReportPending(SID)).toBe(false)
+  }, 20_000)
+
+  it('a turn running when the window ends is not asked mid-turn; its own end asks', async () => {
+    const fake = fakeSession(ANSWER)
+    const active = (sessionRunner as unknown as { activeProcessing: Set<string> }).activeProcessing
+    await armStatusQuestion(task.id, SID)
+    active.add(SID)
+    try {
+      await new Promise((r) => setTimeout(r, STATUS_SETTLE_MS + 300))
+      expect(fake.askSideQuestion).not.toHaveBeenCalled()
+      expect(isReportPending(SID)).toBe(false)
+    } finally { active.delete(SID) }
+    await armStatusQuestion(task.id, SID)
+    await new Promise((r) => setTimeout(r, STATUS_SETTLE_MS + 500))
+    expect(fake.askSideQuestion).toHaveBeenCalledTimes(1)
+  }, 20_000)
+
+  it('a turn end while an ask is in flight is asked again once it settles', async () => {
+    const fake = fakeSession(ANSWER)
+    let release!: () => void
+    fake.askSideQuestion.mockImplementationOnce(() => new Promise<string>((r) => { release = () => r(ANSWER) }))
+    const first = askStatus(task.id, SID, Date.now() - 60_000, 'reconcile')
+    await new Promise((r) => setTimeout(r, 50))
+    expect(await askStatus(task.id, SID, Date.now())).toBe(false)
+    release()
+    await first
+    await new Promise((r) => setTimeout(r, 300))
+    expect(fake.askSideQuestion).toHaveBeenCalledTimes(2)
+    expect(isReportPending(SID)).toBe(false)
+  })
+
+  it('an answer it cannot read hands that turn\'s status back to the summary', async () => {
+    const fake = fakeSession('I am not sure what you mean.')
+    await armStatusQuestion(task.id, SID)
+    expect(statusQuestionOwns(SID)).toBe(true)
+    await new Promise((r) => setTimeout(r, STATUS_SETTLE_MS + 500))
+    expect(fake.askSideQuestion).toHaveBeenCalledTimes(1)
+    expect(statusQuestionOwns(SID)).toBe(false)
+    expect(isReportPending(SID)).toBe(false)
+    // The next turn is its again.
+    fakeSession(ANSWER)
+    await armStatusQuestion(task.id, SID)
+    expect(statusQuestionOwns(SID)).toBe(true)
+    cancelStatusQuestion(SID)
+  }, 20_000)
+
+  it('a session Walnut cannot ask natively (an ACP engine) is left to the summary', async () => {
+    expect(await armStatusQuestion(task.id, 'no-such-native-session')).toBe(false)
+    expect(statusQuestionOwns('no-such-native-session')).toBe(false)
+    // A session the runner lost after an earlier native turn is the summary's again.
+    fakeSession(ANSWER)
+    await armStatusQuestion(task.id, SID)
+    cancelStatusQuestion(SID)
+    const sessions = (sessionRunner as unknown as { sessions: Map<string, unknown> }).sessions
+    const held = sessions.get(SID)
+    sessions.delete(SID)
+    try {
+      expect(await armStatusQuestion(task.id, SID)).toBe(false)
+      expect(statusQuestionOwns(SID)).toBe(false)
+    } finally { sessions.set(SID, held) }
+  })
+
+  it('the summary then asks no status and stores none of its own', async () => {
+    expect(buildSelfReportPrompt('', 'Fix the parser', { status: false })).not.toContain('FOR_USER_STATE')
+    expect(buildSelfReportPrompt('', 'Fix the parser')).toContain('FOR_USER_STATE')
+    await armStatusQuestion(task.id, SID)
+    cancelStatusQuestion(SID)
+    const before = (await getTask(task.id)).status_report
+    const fake = fakeSession(`EXEC_SUMMARY: The parser work.\nRECAP: Fixed it.\nPHASE_SIGNAL: conversational(user-asked-question)\n${ANSWER.replace('waiting', 'needs-you')}\nFOR_USER_ASK: Approve?`)
+    const payload = { sessionId: SID, taskId: task.id, task: await getTask(task.id), session: { provider: 'claude-code', cwd: '/tmp/x' }, result: 'done', totalCost: 0, duration: 1, turnIndex: 1 } as unknown as OnTurnCompletePayload
+    await runTriage(payload)
+    expect(fake.askSideQuestion.mock.calls[0]![0] as string).not.toContain('FOR_USER_STATE')
+    expect((await getTask(task.id)).status_report).toEqual(before)
+  })
+})
+
+describe('the reconcile loop', () => {
+  it('asks again only a live idle native session whose status misses its last turn', async () => {
+    const { statusMissed } = await import('../../../src/core/sessions/status-reconcile.js')
+    const now = Date.parse('2026-10-31T18:00:00Z')
+    const iso = (min: number) => new Date(now - min * 60_000).toISOString()
+    const idle = { process_status: 'idle', last_status_change: iso(10), provider: 'cli' } as const
+    const t = (reportMin: number | null) => ({ phase: 'WAITING', status: 'in_progress', ...(reportMin === null ? {} : { status_report: { at: iso(reportMin), turn_ended_at: iso(reportMin), state: 'waiting' } }) }) as never
+    expect(statusMissed(t(30), idle, now)).toBe(Date.parse(iso(10)))
+    expect(statusMissed(t(null), idle, now)).toBe(Date.parse(iso(10)))
+    // Its answer covers the last turn.
+    expect(statusMissed(t(10), idle, now)).toBeNull()
+    // A turn that just ended is the turn-end question's.
+    expect(statusMissed(t(30), { ...idle, last_status_change: iso(1) }, now)).toBeNull()
+    // A stopped or running session, an embedded subagent, a finished task: never asked.
+    expect(statusMissed(t(30), { ...idle, process_status: 'stopped' }, now)).toBeNull()
+    expect(statusMissed(t(30), { ...idle, process_status: 'running' }, now)).toBeNull()
+    expect(statusMissed(t(30), { ...idle, provider: 'embedded' }, now)).toBeNull()
+    // A Personal AI chat lane has no status of its own; an ACP engine answers with a turn.
+    expect(statusMissed(t(30), { ...idle, lane: 'chat:main' } as never, now)).toBeNull()
+    expect(statusMissed(t(30), { ...idle, engine: 'codex' } as never, now)).toBeNull()
+    expect(statusMissed({ ...(t(30) as object), phase: 'COMPLETE' } as never, idle, now)).toBeNull()
+  })
+
+  it('a pass asks a missed status, at most twice for one turn end, one pass at a time', async () => {
+    const { runStatusReconcile, stopStatusReconcile } = await import('../../../src/core/sessions/status-reconcile.js')
+    const { createSessionRecord, updateSessionRecord } = await import('../../../src/core/session-tracker.js')
+    const own = (await addTask({ title: 'Tune the cache', project: 'Garden' })).task
+    await updateTaskRaw(own.id, { phase: 'IN_PROGRESS' }, { source: 'test' })
+    const sid = 'status-q-reconcile'
+    const fake = { sessionId: sid, askSideQuestion: vi.fn(async () => 'nothing to read'), detach: () => {}, kill: () => {}, get active() { return false } }
+    const sessions = (sessionRunner as unknown as { sessions: Map<string, unknown> }).sessions
+    sessions.set(sid, fake)
+    try {
+      await createSessionRecord(sid, own.id, 'Garden')
+      const now = Date.now()
+      await updateSessionRecord(sid, { process_status: 'idle', last_status_change: new Date(now - 10 * 60_000).toISOString() })
+      stopStatusReconcile()
+      const [a, b] = await Promise.all([runStatusReconcile(now), runStatusReconcile(now)])
+      expect([...a, ...b]).toEqual([own.id])
+      // Within the retry gap: not again.
+      expect(await runStatusReconcile(now + 10 * 60_000)).toEqual([])
+      expect(await runStatusReconcile(now + 31 * 60_000)).toEqual([own.id])
+      // An answer that never reads is not asked all day for the same turn end.
+      expect(await runStatusReconcile(now + 62 * 60_000)).toEqual([])
+      expect(fake.askSideQuestion).toHaveBeenCalledTimes(2)
+    } finally {
+      sessions.delete(sid)
+      stopStatusReconcile()
+    }
+  })
+})

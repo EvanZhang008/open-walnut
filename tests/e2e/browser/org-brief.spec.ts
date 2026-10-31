@@ -255,6 +255,31 @@ test('a rewrite reaches an open Brief at once, with no reload', async ({ page, r
   await expect(body).toContainText('waits on your pick of the format.', { timeout: 30_000 })
 })
 
+test('a subtask\'s ask sits under its top-level task in the Task view, once', async ({ page, request }) => {
+  const sub = await createTask(request, `Sub ${STAMP}`, LED)
+  const linked = await request.patch(`/api/tasks/${sub}`, { data: { parent_task_id: ids.parser } })
+  expect(linked.ok(), await linked.text()).toBe(true)
+  // A worker asks the user something concrete (a bare hand-back of a worker waits on its lead).
+  const ask = await request.put(`/api/v1/tasks/${sub}/report`, { data: { state: 'needs', ask: 'Which three screenshots?' } })
+  expect(ask.ok(), await ask.text()).toBe(true)
+  await isolateUiPrefs(page)
+  await loadHome(page)
+  await openNode(page, LED)
+  const detail = page.getByTestId('org-detail')
+  const card = detail.locator(`[data-testid="org-alert"][data-task-id="${sub}"]`)
+  await expect(card).toHaveCount(1, { timeout: 30_000 })
+  await expect(card.getByTestId('org-ask-via')).toHaveText(`Parser ${STAMP} ›`)
+  // Right after its top-level task's own card.
+  const order = await detail.getByTestId('org-alert').evaluateAll((els) => els.map((e) => e.getAttribute('data-task-id')))
+  expect(order.indexOf(sub)).toBe(order.indexOf(ids.parser) + 1)
+  await detail.screenshot({ path: `test-results/org-ask-via-${test.info().project.name}.png` })
+  // The breadcrumb opens the top-level task itself, beside the page.
+  await card.getByTestId('org-ask-via').click()
+  await expect(page.getByTestId('org-side')).toHaveAttribute('data-target', new RegExp(`:${ids.parser}$`), { timeout: 30_000 })
+  await expect(page).toHaveURL(/\/org\?/)
+  await removeTask(request, sub)
+})
+
 test('a node whose contact keeps no Brief has no switch', async ({ page }) => {
   await isolateUiPrefs(page)
   await loadHome(page)

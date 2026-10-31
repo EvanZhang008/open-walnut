@@ -1,9 +1,10 @@
 /**
  * Status changes told to everyone they concern (src/core/sessions/status-push.ts): one line of
  * Walnut's own fact per change (who, from what to what, when), only once the change settled; a
- * session holding a request to the task always hears (queued when it is not running), its leader,
- * its project's VP and Main only while their turn runs; a change that settles where it began, the
- * first status seen, and the task's own sessions hear nothing.
+ * session holding a request to the task always hears (riding its next message), and so does the one
+ * node right above the task, running or idle (a worker's leader, a top-level task's VP, a VP's Main);
+ * never two levels up. A change that settles where it began, the first status seen, and the task's
+ * own sessions hear nothing.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SessionRecord, Task } from '../../src/core/types.js';
@@ -75,7 +76,7 @@ describe('the line', () => {
 });
 
 describe('who hears it', () => {
-  it('a settled change goes to the asker (riding its next message, no queue row) and to the running leader and Main; an idle VP waits for its team note', async () => {
+  it('a settled change goes to the asker (riding its next message, no queue row) and to its leader only, never two levels up', async () => {
     requests = [{ fromSessionId: 's-asker', toTaskId: 'w' }, { fromSessionId: 's-w', toTaskId: 'w' }];
     const now = Date.now();
     emit(task('w', { parent_task_id: 'lead', phase: 'IN_PROGRESS', user_status: { state: 'working' } }));
@@ -83,8 +84,8 @@ describe('who hears it', () => {
     // Not settled yet: nothing goes.
     expect(await flushStatusPush(now + 1000)).toBe(0);
     const sent = await flushStatusPush(Date.now() + SETTLE_MS + 1);
-    expect(sent).toBe(3);
-    expect(followers()).toEqual(['s-lead', 's-main']);
+    expect(sent).toBe(2);
+    expect(followers()).toEqual(['s-lead']);
     // Never into a session by itself, never a queue row (a pending row is re-sent on a restart or
     // reconnect): a line written into a running turn often landed as a turn of its own.
     expect(delivered).toEqual([]);
@@ -107,16 +108,27 @@ describe('who hears it', () => {
     expect(ride()).toContain('Snoozed');
   });
 
-  it('a running VP hears it too; a change that settles where it began is no news', async () => {
-    sessions.find((s) => s.claudeSessionId === 's-vp')!.process_status = 'running';
-    const now = Date.now();
+  it('one level at a time: a top-level task to its VP, idle or not; a VP to Main; Main to no one', async () => {
+    tasks.set('top', task('top', { phase: 'IN_PROGRESS', user_status: { state: 'working' } }))
+    sessions.push(sess('s-top', 'top'))
+    emit(tasks.get('top')!)
+    emit(task('top', { phase: 'WAITING', user_status: { state: 'waiting', kind: 'outside', waitingOn: 'The CI run' } }))
+    expect(await flushStatusPush(Date.now() + SETTLE_MS + 1)).toBe(1)
+    expect(followers()).toEqual(['s-vp'])
+    expect(ride('s-vp')).toContain('Working → Waiting')
+    pendingStatusNote('s-vp')!.markTold()
+    emit(task('vp', { org_role: 'lead', phase: 'WAITING', user_status: { state: 'waiting', kind: 'task', waitingOn: 'Its teams' } }))
+    expect(await flushStatusPush(Date.now() + 2 * SETTLE_MS + 2)).toBe(1)
+    expect(followers()).toEqual(['s-main'])
+    pendingStatusNote('s-main')!.markTold()
+    emit(task('main', { org_role: 'main', phase: 'WAITING', project: 'Org', user_status: { state: 'waiting', kind: 'you', waitingOn: 'Your next message' } }))
+    expect(await flushStatusPush(Date.now() + 3 * SETTLE_MS + 3)).toBe(0)
+  });
+
+  it('a change that settles where it began is no news', async () => {
     emit(task('w', { parent_task_id: 'lead', phase: 'IN_PROGRESS', user_status: { state: 'working' } }));
     emit(task('w', { parent_task_id: 'lead', user_status: needs('Sign in on the Mac') }));
     expect(await flushStatusPush(Date.now() + SETTLE_MS + 1)).toBe(0);
-    emit(task('w', { parent_task_id: 'lead', phase: 'WAITING', user_status: { state: 'waiting', kind: 'task', waitingOn: 'The review' } }));
-    expect(await flushStatusPush(Date.now() + SETTLE_MS + 1)).toBe(3);
-    expect(followers()).toEqual(['s-lead', 's-main', 's-vp']);
-    expect(ride()).toContain('Waiting (on another task)');
   });
 
   it("a re-check turn's Working is held until the turn ends, and a re-check that ends asking again is no news", async () => {
@@ -130,7 +142,7 @@ describe('who hears it', () => {
     // The re-check found it done: that is news.
     emit(task('w', { parent_task_id: 'lead', phase: 'IN_PROGRESS', user_status: { state: 'working' }, needs_recheck: recheck }));
     emit(task('w', { parent_task_id: 'lead', phase: 'WAITING', user_status: { state: 'waiting', kind: 'task', waitingOn: 'The review' }, needs_recheck: recheck }));
-    expect(await flushStatusPush(Date.now() + SETTLE_MS + 1)).toBe(2);
+    expect(await flushStatusPush(Date.now() + SETTLE_MS + 1)).toBe(1);
     expect(ride()).toContain('Needs you → Waiting (on another task)');
   });
 
@@ -148,7 +160,7 @@ describe('who hears it', () => {
     emit(task('r', { parent_task_id: 'lead', phase: 'WAITING', user_status: { state: 'waiting', kind: 'task', waitingOn: 'The review of the second draft' } }));
     expect(await flushStatusPush(Date.now() + SETTLE_MS + 1)).toBe(0);
     emit(task('r', { parent_task_id: 'lead', phase: 'WAITING', user_status: { state: 'waiting', kind: 'time', waitingOn: 'Tomorrow 9 AM' } }));
-    expect(await flushStatusPush(Date.now() + 2 * SETTLE_MS + 2)).toBe(2);
+    expect(await flushStatusPush(Date.now() + 2 * SETTLE_MS + 2)).toBe(1);
   });
 
   it('a turn that only started is no news; its end is', async () => {
@@ -157,7 +169,7 @@ describe('who hears it', () => {
     emit(task('q', { parent_task_id: 'lead', phase: 'IN_PROGRESS', user_status: { state: 'working' } }));
     expect(await flushStatusPush(Date.now() + SETTLE_MS + 1)).toBe(0);
     emit(task('q', { parent_task_id: 'lead', phase: 'COMPLETE', status: 'done' }));
-    expect(await flushStatusPush(Date.now() + 2 * SETTLE_MS + 2)).toBe(2);
+    expect(await flushStatusPush(Date.now() + 2 * SETTLE_MS + 2)).toBe(1);
     expect(ride()).toContain('Working → Completed');
   });
 
@@ -185,7 +197,7 @@ describe('who hears it', () => {
     expect(_pendingStatusPush()).toHaveLength(0);
     tasks.set('new', fresh);
     emit({ ...fresh, phase: 'COMPLETE', status: 'done' } as Task);
-    expect(await flushStatusPush(Date.now() + SETTLE_MS + 1)).toBe(2);
+    expect(await flushStatusPush(Date.now() + SETTLE_MS + 1)).toBe(1);
     expect(ride()).toContain('Needs you → Completed');
   });
 });

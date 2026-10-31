@@ -30,6 +30,13 @@ import { toDisplayedUserText } from '../sessions/reference-cards.js';
 import { isAwaitingTurnEnd } from '../sessions/self-complete-stop.js';
 import { agentMemoryPrompt, applyAgentMemoryAnswer, keepsAgentMemory, readAgentMemoryField, splitAgentMemory } from '../sessions/agent-memory.js';
 import { setReportPending, __resetReportPending } from '../sessions/report-pending.js';
+import { armStatusQuestion, cancelStatusQuestion, statusQuestionOwns, applyStatusAnswer } from '../sessions/status-question.js';
+
+/** The summary's own hold on the report: a session whose status the turn-end side question asks
+ *  (sessions/status-question.ts) has its report pending kept by that ask instead. */
+function setSummaryReportPending(sessionId: string, on: boolean): void {
+  if (!statusQuestionOwns(sessionId)) setReportPending(sessionId, on);
+}
 
 // ── Triage dedup state ──
 // Prevents burst triage dispatches when daemon replays old JSONL events after
@@ -89,7 +96,7 @@ function cancelPendingTriage(sessionId: string): void {
   if (t) {
     clearTimeout(t);
     triageDebounceTimers.delete(sessionId);
-    if (!triageRuns.has(sessionId)) setReportPending(sessionId, false);
+    if (!triageRuns.has(sessionId)) setSummaryReportPending(sessionId, false);
   }
 }
 
@@ -139,10 +146,10 @@ function startTriage(p: OnTurnCompletePayload, final?: { gen: number | undefined
   const begin = () => runTriage(p, { final: !!final });
   const run = (running ? running.run.catch(() => {}).then(begin) : begin()).finally(() => {
     if (triageRuns.get(p.sessionId)?.run === run) triageRuns.delete(p.sessionId);
-    setReportPending(p.sessionId, triageDebounceTimers.has(p.sessionId) || triageRuns.has(p.sessionId));
+    setSummaryReportPending(p.sessionId, triageDebounceTimers.has(p.sessionId) || triageRuns.has(p.sessionId));
   });
   triageRuns.set(p.sessionId, { run, final });
-  setReportPending(p.sessionId, true);
+  setSummaryReportPending(p.sessionId, true);
   return run;
 }
 
@@ -304,8 +311,14 @@ This is the MAIN AGENT's task: its NOTE is the user's tracking note for everythi
 export function buildSelfReportPrompt(
   existingNote?: string,
   currentTitle?: string,
-  opts?: { uiLanguage?: string; mainAgent?: boolean; complete?: boolean; memory?: { title: string; current?: NonNullable<Task['agent_memory']> } },
+  opts?: {
+    uiLanguage?: string; mainAgent?: boolean; complete?: boolean; memory?: { title: string; current?: NonNullable<Task['agent_memory']> };
+    /** Ask the FOR_USER_* status lines too (default). False when the turn-end status question
+     *  asked them already (sessions/status-question.ts). */
+    status?: boolean;
+  },
 ): string {
+  const withStatus = opts?.status !== false;
   const existing = existingNote?.trim() ?? '';
   const reorg = existing.length > NOTE_REORG_CAP;
   const title = currentTitle?.trim() ?? '';
@@ -315,7 +328,7 @@ export function buildSelfReportPrompt(
   // hand-off document for a fresh AI, and plugin content rules validate it.
   const uiLang = nonEnglishUiLanguage(opts?.uiLanguage);
   const tipLanguage = uiLang
-    ? `\nOVERVIEW, RECAP, FOR_USER_ASK, FOR_USER_ASK_OPTIONS, FOR_USER_ASK_MORE, FOR_USER_WAITING_ON, FOR_USER_NOW and FOR_USER_NEXT are shown to the user in the UI: write them in ${uiLanguageName(uiLang)} (the user's display language), keeping identifiers, file names, and technical terms in their original form. Every other field stays English.`
+    ? `\n${withStatus ? 'OVERVIEW, RECAP, FOR_USER_ASK, FOR_USER_ASK_OPTIONS, FOR_USER_ASK_MORE, FOR_USER_WAITING_ON, FOR_USER_NOW and FOR_USER_NEXT are' : 'OVERVIEW and RECAP are'} shown to the user in the UI: write them in ${uiLanguageName(uiLang)} (the user's display language), keeping identifiers, file names, and technical terms in their original form. Every other field stays English.`
     : '';
 
   let noteBlock: string;
@@ -352,7 +365,7 @@ NEXT_STEPS: What you'd do next, or what you need from the human.
 BLOCKERS: Anything blocking, or "none".
 USER_INTENT: <question-pending | workflow-command | autonomous> — gist of user's last message.
 VERIFIED: <ran-and-saw-pass | assumed | not-applicable>.
-${FOR_USER_PROMPT}${opts?.memory ? agentMemoryPrompt(opts.memory.current, opts.memory.title) : ''}`;
+${withStatus ? FOR_USER_PROMPT : ''}${opts?.memory ? agentMemoryPrompt(opts.memory.current, opts.memory.title) : ''}`;
 }
 
 /** The exact labels emitted by buildSelfReportPrompt. Used to anchor extractField's
@@ -874,6 +887,8 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
     // When the team's statuses were read for the ask: the Brief is dated then.
     let memory: { title: string; current?: NonNullable<Task['agent_memory']> } | undefined;
     const askedAt = Date.now();
+    // Its status was asked at the turn end on its own (sessions/status-question.ts): not again here.
+    const statusOwned = statusQuestionOwns(p.sessionId);
     try {
       try {
         const { getTask } = await import('../task-manager.js');
@@ -908,7 +923,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
       uiLanguage = await configuredUiLanguage();
       selfReport = (await sessionRunner.requestTurnCompleteSelfReport(
         p.sessionId,
-        buildSelfReportPrompt(existingNote, promptedTitle, { uiLanguage, mainAgent, complete: taskPhase === 'COMPLETE', ...(memory ? { memory } : {}) }), SELF_REPORT_TIMEOUT_MS,
+        buildSelfReportPrompt(existingNote, promptedTitle, { uiLanguage, mainAgent, complete: taskPhase === 'COMPLETE', status: !statusOwned, ...(memory ? { memory } : {}) }), SELF_REPORT_TIMEOUT_MS,
       )).trim();
     } catch (err) {
       log.session.warn('turn-complete-summary: provider self-report failed — skipped (next turn will merge)', {
@@ -1075,7 +1090,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
 
     // (a1b) The task's status for the user (FOR_USER_*): what the Board, the Org page and the
     // phone show, derived together with live facts in src/core/user-status.ts.
-    const statusReport = readStatusReport(selfReport);
+    const statusReport = statusOwned ? null : readStatusReport(selfReport);
     // (a1d) Its own MEMORY.md: the entry or rewrite it gave, under the row lock, within the limit
     // (sessions/agent-memory.ts). A rewrite of a file that changed since the ask is skipped.
     const memoryAsk = memory ? readAgentMemoryField(memoryField) : null;
@@ -1114,24 +1129,8 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
     }
     if (statusReport) {
       try {
-        const { getTask, updateTaskRaw } = await import('../task-manager.js');
-        // A finished task reads Done whatever its session said, and a write to a COMPLETE
-        // row would announce it as completed again (updateTaskRaw names the event by phase).
-        const current = await getTask(taskId).catch(() => null);
-        if (current && current.phase !== 'COMPLETE' && current.status !== 'done') {
-          // When the turn it reports on ended: the report itself may be read minutes later.
-          const turnEnded = turnEndedAt.get(p.sessionId) ?? askedAt;
-          await updateTaskRaw(taskId, { status_report: { ...statusReport, turn_ended_at: new Date(turnEnded).toISOString() } }, {
-            emitEvent: true, source: 'status-report', shouldUpdate: (cur) => cur.phase !== 'COMPLETE' && cur.status !== 'done',
-          });
-          // The report is the task's own word on where it stands: it moves the phase, which is
-          // what every surface counts (sessions/report-phase.ts).
-          const { applyReportPhase } = await import('../sessions/report-phase.js');
-          await applyReportPhase(taskId, p.sessionId, statusReport, turnEnded);
-          // A lead's or Main's promise with nothing to bring it back gets a follow-up (promise-alarm.ts).
-          const { notePromise } = await import('../sessions/promise-alarm.js');
-          await notePromise(taskId, statusReport);
-        }
+        // When the turn it reports on ended: the report itself may be read minutes later.
+        await applyStatusAnswer(taskId, p.sessionId, statusReport, turnEndedAt.get(p.sessionId) ?? askedAt);
       } catch (err) {
         log.session.debug('turn-complete-summary: status report persist skipped', {
           sessionId: p.sessionId, taskId, error: err instanceof Error ? err.message : String(err),
@@ -1264,6 +1263,8 @@ export const turnCompleteTriageHook: SessionHookDefinition = {
     if (p.session?.provider === 'embedded') return;
     if (turnEndedAt.size > 500) turnEndedAt.clear();
     turnEndedAt.set(p.sessionId, Date.now());
+    // Its status words now, not after the quiet window (sessions/status-question.ts).
+    if (p.task.phase !== 'COMPLETE') await armStatusQuestion(p.taskId, p.sessionId).catch(() => false);
 
     // This turn is the session's last: its task completed, and it stops now
     // (sessions/self-complete-stop.ts), so the summary cannot wait.
@@ -1296,7 +1297,7 @@ export const turnCompleteTriageHook: SessionHookDefinition = {
     timer.unref?.(); // don't keep the process alive for a pending triage
     triageDebounceTimers.set(p.sessionId, timer);
     // Until the report comes, the task's status waits on it (sessions/report-pending.ts).
-    setReportPending(p.sessionId, true);
+    setSummaryReportPending(p.sessionId, true);
 
     log.session.debug('turn-complete-triage: armed debounce', {
       sessionId: p.sessionId, taskId: p.taskId, debounceMs,
@@ -1335,6 +1336,7 @@ export const messageSendTriageHook: SessionHookDefinition = {
     // 'agent'/'subagent-runner' sources), so this is always a real user message.
     // This is now the hook's ENTIRE job — no subagent is dispatched.
     cancelPendingTriage(p.sessionId);
+    cancelStatusQuestion(p.sessionId);
   },
 };
 

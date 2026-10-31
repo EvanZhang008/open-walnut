@@ -119,6 +119,26 @@ describe('org channels', () => {
     ])
   })
 
+  it('reads by top-level task: a subtask\'s ask names the top-level task it rolls up to, right after that task\'s own', () => {
+    const needs = (ask: string) => ({ state: 'needs' as const, source: 'session' as const, ask })
+    const list = [
+      ...tasks,
+      t('r1', 'Walnut', 'NEED_ACTION', { title: 'Ship the release', updated_at: at(40), user_status: needs('Pick the date') }),
+      t('r2', 'Walnut', 'IN_PROGRESS', { title: 'Write the notes', parent_task_id: 'r1', user_status: { state: 'waiting', kind: 'task', waitingOn: 'r3' } }),
+      t('r3', 'Walnut', 'NEED_ACTION', { title: 'Pick screenshots', parent_task_id: 'r2', user_status: needs('Which three?') }),
+      t('o1', 'Walnut', 'NEED_ACTION', { title: 'Other work', updated_at: at(45), user_status: needs('Approve?') }),
+    ]
+    const walnut = buildChannels(buildOrgTree(list), list, noAlerts).rows.find((r) => r.name === 'Walnut')!
+    const view = walnut.alerts.map((a) => [a.taskId, a.via?.id ?? null])
+    // Each question once; r3's sits under r1, its top-level task (two levels up), after r1's own.
+    expect(view.filter(([id]) => ['r1', 'r3', 'o1'].includes(id!))).toHaveLength(3)
+    const i1 = view.findIndex(([id]) => id === 'r1')
+    expect(view[i1 + 1]).toEqual(['r3', 'r1'])
+    expect(walnut.alerts.find((a) => a.taskId === 'r3')!.via).toEqual({ id: 'r1', title: 'Ship the release' })
+    // A top-level task's own ask has no via; a lead (an org node) is never a top-level task above.
+    expect(walnut.alerts.find((a) => a.taskId === 'o1')!.via).toBeUndefined()
+  })
+
   it('says the team\'s newest news in its own words with its time, not only a title', () => {
     // 2026-10-26: a task passed a check and asked the user to sign; its row read "Waiting: <title>".
     const news = t('i9', 'Insurance', 'NEED_ACTION', {

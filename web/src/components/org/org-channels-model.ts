@@ -38,6 +38,20 @@ export interface OrgAlertView {
   checked?: { text: string; unverified: boolean };
   /** `needs`: the shape its task gave the ask (user_status.askForm): a summary, More, how to answer. */
   form?: AskForm;
+  /** A subtask's ask: the top-level task it rolls up to (topLevelOf), shown first on the card,
+   *  so a VP's or Main's Task view reads by top-level task. Answering it answers the subtask. */
+  via?: { id: string; title: string };
+}
+
+/** The top-level task above a subtask (its root below Main or a VP), or undefined for a top-level one. */
+export function topLevelOf(task: Task, byId: ReadonlyMap<string, Task>): Task | undefined {
+  let cur = task;
+  for (let hops = 0; hops < 12; hops++) {
+    const parent = cur.parent_task_id ? byId.get(cur.parent_task_id) : undefined;
+    if (!parent || parent.org_role || parent.phase === 'COMPLETE') break;
+    cur = parent;
+  }
+  return cur.id === task.id ? undefined : cur;
 }
 
 /** What waits on the user in one task's session right now, or null. */
@@ -103,6 +117,17 @@ export function flattenNodes(nodes: readonly OrgTaskNode[]): OrgTaskNode[] {
 }
 
 function collectAlerts(ids: readonly string[], byId: ReadonlyMap<string, Task>, probe: AlertProbe): OrgAlertView[] {
+  const out = collectFlatAlerts(ids, byId, probe);
+  // By top-level task: its own ask first, then the ones its subtasks roll up to it, in list order.
+  const order = new Map<string, number>();
+  out.forEach((a, i) => { const k = a.via?.id ?? a.taskId; if (!order.has(k)) order.set(k, i); });
+  return out
+    .map((a, i) => ({ a, i }))
+    .sort((x, y) => (order.get(x.a.via?.id ?? x.a.taskId)! - order.get(y.a.via?.id ?? y.a.taskId)!) || (x.a.via ? 1 : 0) - (y.a.via ? 1 : 0) || x.i - y.i)
+    .map(({ a }) => a);
+}
+
+function collectFlatAlerts(ids: readonly string[], byId: ReadonlyMap<string, Task>, probe: AlertProbe): OrgAlertView[] {
   const out: OrgAlertView[] = [];
   for (const id of ids) {
     const task = byId.get(id);
@@ -114,13 +139,15 @@ function collectAlerts(ids: readonly string[], byId: ReadonlyMap<string, Task>, 
     const hit = probe(task);
     // A failed session its status reads as Waiting (its host gone a moment, a clock or a trigger
     // still armed to bring it back) does not need the user, here as on the Board.
+    const top = topLevelOf(task, byId);
+    const via = top ? { via: { id: top.id, title: orgDisplayTitle(top) } } : {};
     if (hit && !(hit.kind === 'error' && status && status.state !== 'needs')) {
-      out.push({ taskId: id, title: orgDisplayTitle(task), kind: hit.kind, ...(hit.tool ? { tool: hit.tool } : {}) });
+      out.push({ taskId: id, title: orgDisplayTitle(task), kind: hit.kind, ...(hit.tool ? { tool: hit.tool } : {}), ...via });
     } else if (userStateOf(task) === 'needs') {
       const ask = status?.ask?.trim();
       const checked = checkedLine(status);
       const form = readAskForm(status);
-      out.push({ taskId: id, title: orgDisplayTitle(task), kind: 'needs', ...(ask ? { ask } : {}), ...(status?.source ? { source: status.source } : {}), ...(checked ? { checked } : {}), ...(form ? { form } : {}) });
+      out.push({ taskId: id, title: orgDisplayTitle(task), kind: 'needs', ...(ask ? { ask } : {}), ...(status?.source ? { source: status.source } : {}), ...(checked ? { checked } : {}), ...(form ? { form } : {}), ...via });
     }
   }
   return out;

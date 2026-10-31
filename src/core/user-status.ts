@@ -275,6 +275,55 @@ export interface UserStatus {
   line?: StatusLine;
   /** needs from its own report: the ask in a one-click shape (AskForm). */
   askForm?: AskForm;
+  /** The questions its subtasks ask the user, rolled up through each leader (rollUpAsks): origin
+   *  named, its options kept, never a snoozed or a finished subtask's. Its own ask is `ask`. Read
+   *  by agents (task_get, task_list rows), so a VP or Main sees every ask below a direct report
+   *  without walking its tree; the Org page groups by topLevelOf from the same statuses. */
+  asks?: RolledAsk[];
+}
+
+/** One question a subtask asks the user, as its leader carries it up (2026-10-31, the user: asks
+ *  roll up level by level; answering it at the leader answers the task that asked). */
+export interface RolledAsk {
+  /** The task that asks (answering it answers this task). */
+  id: string;
+  title: string;
+  ask: string;
+  form?: AskForm;
+  /** When the asking task last checked it. Its age (unverified) is read at the asking task: kept
+   *  off the rolled copy, so a clock passing rewrites no leader's status. */
+  checkedAt?: string;
+  /** The direct subtask it came up through, when that is not the asking task itself. */
+  via?: string;
+}
+
+/** At most this many questions ride one task's status. */
+export const ROLLED_ASKS_MAX = 12;
+
+/**
+ * The questions under a task: each direct subtask's own ask (when it asks the user and is not
+ * snoozed), then the ones it carries itself, never one twice and never a finished one. Pure.
+ */
+export function rollUpAsks(
+  children: ReadonlyArray<{ id: string; title: string; phase?: string; status?: string; user_status?: UserStatus }>,
+  selfId?: string,
+): RolledAsk[] {
+  const out: RolledAsk[] = [];
+  // Its own ask is its own `ask`, never one it carries (a parent loop would bring it back up).
+  const seen = new Set<string>(selfId ? [selfId] : []);
+  const push = (a: RolledAsk) => { if (!seen.has(a.id) && out.length < ROLLED_ASKS_MAX) { seen.add(a.id); out.push(a); } };
+  for (const c of children) {
+    const s = c.user_status;
+    if (c.phase === 'COMPLETE' || c.status === 'done' || !s || s.snoozed) continue;
+    if (s.state === 'needs' && s.ask) {
+      push({
+        id: c.id, title: c.title, ask: s.ask, ...(s.askForm ? { form: s.askForm } : {}),
+        ...(s.checkedAt ? { checkedAt: s.checkedAt } : {}),
+      });
+    }
+    for (const a of s.asks ?? []) push({ ...a, via: c.id });
+  }
+  return out;
 }
 
 /** "2 hours ago", "3 days ago". */

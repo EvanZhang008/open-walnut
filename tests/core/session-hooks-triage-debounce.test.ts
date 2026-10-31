@@ -28,6 +28,7 @@ import { updateConfig } from '../../src/core/config-manager.js';
 import { turnCompleteTriageHook, messageSendTriageHook } from '../../src/core/session-hooks/builtins.js';
 import type { OnTurnCompletePayload, OnMessageSendPayload } from '../../src/core/session-hooks/types.js';
 import { isReportPending } from '../../src/core/sessions/report-pending.js';
+import { STATUS_SETTLE_MS } from '../../src/core/sessions/status-question.js';
 import type { Task } from '../../src/core/types.js';
 
 // Short real-time window, large enough that the fire path's fs I/O (~tens of ms) is
@@ -153,13 +154,18 @@ describe('turn-complete triage: trailing debounce', () => {
     expect(cap.firedFor(sid)).toBe(1);
   });
 
-  it('marks the report pending from the turn end until its run settles (the task status waits on it)', async () => {
+  it('marks the report pending from the turn end until its status answer settles (the task status waits on it)', async () => {
     const sid = 'dbnc-pending';
     registerFakeSession(sid);
     await turnCompleteTriageHook.handler!(turnPayload(sid));
     expect(isReportPending(sid)).toBe(true);
+    // The summary ran, but a native session's status is the status question's (status-question.ts):
+    // the summary leaves the mark alone, and the question goes once the turn stays quiet.
     await sleep(DEBOUNCE_MS * 3);
-    expect(fakeSessions.get(sid)!.askSideQuestion).toHaveBeenCalled();
+    expect(fakeSessions.get(sid)!.askSideQuestion).toHaveBeenCalledTimes(1);
+    expect(isReportPending(sid)).toBe(true);
+    await sleep(STATUS_SETTLE_MS - DEBOUNCE_MS * 3 + 1500);
+    expect(fakeSessions.get(sid)!.askSideQuestion).toHaveBeenCalledTimes(2);
     expect(isReportPending(sid)).toBe(false);
   });
 

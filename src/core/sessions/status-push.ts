@@ -9,10 +9,10 @@
  * at every turn end. Never a model-written report. Who hears it:
  *
  *   - a session holding an unanswered request to the task: always;
- *   - its leader, its project's VP and Main: when their session is running a turn. An idle one
- *     gets nothing: its next message carries the same news already (the lead's team note,
- *     org/team-note.ts; Main's org update; a leader's subtask notices), and the Brief and the
- *     "needs you" list read the live status.
+ *   - the one node right above it (statusFollowerOf: a worker's leader, a top-level task's VP, a
+ *     VP's Main), running or idle: an idle one reads it with its next message (2026-10-31, the
+ *     user: updates go through the leaders one level at a time, and an idle node keeps them for
+ *     its next turn). Never two levels: each node passes on what is news in its own words.
  *   The line never goes into a session by itself: it rides the session's next message, in memory
  *   like the place note, never a queue row of its own (a pending row is re-dispatched on a restart
  *   or a host reconnect, which would wake it). A line written into a running turn landed, often
@@ -139,6 +139,55 @@ async function liveSession(taskId: string): Promise<SessionRecord | null> {
   return rows.find((s) => s.process_status === 'running') ?? rows.sort(bestFirst)[0] ?? null;
 }
 
+/**
+ * Who hears a task's status move: the one node right above it (2026-10-31, the user: updates go
+ * through the leaders, one level at a time). A worker's leader; a top-level task's VP (its
+ * project's lead), or Main when no VP leads its project; a VP's Main; Main, nobody. Each node
+ * passes on what it judges news in its own words, so no node hears the same change twice.
+ * In order of who should hear it: the push takes the first that is open and has a session, so a
+ * worker whose leader completed (a parent may close with open subtasks) or has no session is
+ * heard by the next one up, never by no one.
+ */
+export function statusFollowersOf(
+  task: Pick<Task, 'id' | 'org_role' | 'parent_task_id'>,
+  byId: ReadonlyMap<string, Task>,
+  vpOf: (task: Task) => Task | undefined,
+  main: Task | undefined,
+): Task[] {
+  if (task.org_role === 'main') return [];
+  const out: Task[] = [];
+  const seen = new Set<string>([task.id]);
+  const push = (t: Task | undefined): void => { if (t && !seen.has(t.id)) { seen.add(t.id); out.push(t); } };
+  if (task.org_role !== 'lead') {
+    let top: Task = task as Task;
+    for (let id = task.parent_task_id; id && !seen.has(id);) {
+      const parent = byId.get(id);
+      if (!parent) break;
+      push(parent);
+      // An org node above (a VP, Main): the chain goes on from it, as its own move would.
+      if (parent.org_role) {
+        if (parent.org_role !== 'main') push(main);
+        return out;
+      }
+      top = parent;
+      id = parent.parent_task_id;
+    }
+    push(vpOf(top));
+  }
+  push(main);
+  return out;
+}
+
+/** The first of them. Exported for tests. */
+export function statusFollowerOf(
+  task: Pick<Task, 'id' | 'org_role' | 'parent_task_id'>,
+  byId: ReadonlyMap<string, Task>,
+  vpOf: (task: Task) => Task | undefined,
+  main: Task | undefined,
+): Task | undefined {
+  return statusFollowersOf(task, byId, vpOf, main)[0];
+}
+
 /** Send what settled. Exported for tests. */
 export async function flushStatusPush(now = Date.now()): Promise<number> {
   // Ride-along lines nobody's message picked up in days are dropped here too.
@@ -186,15 +235,18 @@ export async function flushStatusPush(now = Date.now()): Promise<number> {
       for (const r of await pendingRequestsForTarget({ taskId: task.id }).catch(() => [])) {
         if (!own.has(r.fromSessionId)) add(r.fromSessionId, null, task.id, line, true);
       }
-      // Snoozed (snooze.ts): its VP and Main, who bring news to the user, hear nothing of it until the
-      // snooze runs out, when the move out of it is the news. Its leader still hears (the team's own
-      // work goes on), and so does a session waiting on its reply.
-      const parent = task.parent_task_id ? byId.get(task.parent_task_id) : undefined;
-      const followers = c.to.snoozed ? [parent] : [parent, vpOf(task), main];
-      for (const f of followers) {
-        if (!openTask(f) || f.id === task.id) continue;
+      // One level up only (statusFollowersOf: the nearest open node with a session), riding its
+      // next message whether it runs now or not. Snoozed (snooze.ts): a VP or Main, who bring news
+      // to the user, hears nothing of it until the snooze runs out, when the move out of it is the
+      // news. A leader still hears (the team's own work goes on), and so does a session waiting on
+      // its reply.
+      for (const f of statusFollowersOf(task, byId, vpOf, main)) {
+        if (!openTask(f)) continue;
+        if (c.to.snoozed && f.org_role) break;
         const rec = await liveSession(f.id);
-        if (rec?.process_status === 'running' && !own.has(rec.claudeSessionId)) add(rec.claudeSessionId, rec, task.id, line, false);
+        if (!rec) continue;
+        if (!own.has(rec.claudeSessionId)) add(rec.claudeSessionId, rec, task.id, line, false);
+        break;
       }
     }
     const { getSessionByClaudeId } = await import('../session-tracker.js');

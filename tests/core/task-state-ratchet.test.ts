@@ -65,7 +65,7 @@ describe('every reminder path asks the snooze', () => {
   })
 
   it('the paths that do not hold the state still ask: the status push, the letter gate, the org digest, the Brief', () => {
-    expect(fs.readFileSync(path.join(ROOT, 'src/core/sessions/status-push.ts'), 'utf8')).toMatch(/c\.to\.snoozed \? \[parent\]/)
+    expect(fs.readFileSync(path.join(ROOT, 'src/core/sessions/status-push.ts'), 'utf8')).toMatch(/if \(c\.to\.snoozed && f\.org_role\) break;/)
     expect(fs.readFileSync(path.join(ROOT, 'src/core/human-inbox/letter-ops.ts'), 'utf8')).toMatch(/admitSnoozedLetter\(/)
     // Main's org digest raises a failed session from its record, not from the status: it skips a snoozed one.
     expect(fs.readFileSync(path.join(ROOT, 'src/core/org/org-store.ts'), 'utf8')).toMatch(/task\.user_status\?\.snoozed/)
@@ -230,7 +230,7 @@ describe('the stored state has one writer, and it applies the snooze', () => {
     const hits = walk(path.join(ROOT, 'src')).filter((f) => !STATE_WRITERS_OK[rel(f)] && WRITES_STATE.test(code(fs.readFileSync(f, 'utf8')))).map(rel)
     expect(hits, `A file writes user_status itself; store deriveUserStatus through user-status-sync.ts instead: ${hits.join(', ')}`).toEqual([])
     const sync = fs.readFileSync(path.join(ROOT, 'src/core/user-status-sync.ts'), 'utf8')
-    expect(sync).toMatch(/const next = deriveUserStatus\(input, nowMs\)/)
+    expect(sync).toMatch(/const derived = deriveUserStatus\(input, nowMs\)/)
     expect(sync).toMatch(/snoozedUntil: snoozedUntil\(task, facts\.tasksById, nowMs\)/)
   })
 

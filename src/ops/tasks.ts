@@ -135,17 +135,20 @@ const TASK_LIST_WHEN_SET = [
   'parent_task_id', 'group_id', 'sprint', 'tags', 'is_blocked', 'watched_at',
 ] as const
 
-/** Project ONE REST row onto the lean agent-facing shape. */
-function leanTaskRow(row: unknown): unknown {
+/** Project ONE REST row onto the lean agent-facing shape. Exported for tests. */
+export function leanTaskRow(row: unknown): unknown {
   if (row === null || typeof row !== 'object' || Array.isArray(row)) return row
   const src = row as Record<string, unknown>
   const out: Record<string, unknown> = {}
   for (const key of TASK_LIST_ALWAYS) out[key] = key === 'project' ? (src.project ?? '') : src[key]
   // What the user reads (src/core/user-status.ts), the one answer to "does it need them": a
   // snoozed NEED_ACTION task reads waiting, so a list of asks never names it.
-  const us = src.user_status as { state?: string; snoozed?: { until?: string } } | undefined
+  const us = src.user_status as { state?: string; snoozed?: { until?: string }; asks?: Array<{ id: string; title: string; ask: string }> } | undefined
   out.user_state = us?.state ?? fallbackUserState(typeof src.phase === 'string' ? src.phase : undefined, typeof src.status === 'string' ? src.status : undefined)
   if (us?.snoozed?.until) out.snoozed_until = us.snoozed.until
+  // The asks of the subtasks below it (user_status.asks, rolled up through each leader): a VP or
+  // Main reads its teams' questions from its direct reports' rows.
+  if (us?.asks?.length) out.asks_below = us.asks.map((a) => ({ id: a.id, title: a.title, ask: a.ask }))
   // pinned is a flag, not a value: always answer it, as a real boolean.
   out.execution = taskView(src).execution
   out.pinned = Boolean(src.pinned)
@@ -210,6 +213,8 @@ defineOp({
     'done, the one status every surface shows): say a task needs the user only when user_state is needs. ' +
     'A snoozed task (snoozed_until: its start date is still to come) is never needs before that date: do ' +
     'not raise it to the user unless you state why it cannot wait. ' +
+    '`asks_below` lists the questions its subtasks ask the user ({id, title, ask}, rolled up through each ' +
+    'leader): the asking task is `id`, answering it there answers it. ' +
     'Working set (the pinned board): pass working_set=true to get the WHOLE board (no default limit, ' +
     'however many pins there are) in board order, each row carrying focus_tier + pin_order — an absent ' +
     'focus_tier on a pinned row means the Satellite (default) tier. focus_tier filters match pinned rows ' +

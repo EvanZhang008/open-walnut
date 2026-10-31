@@ -1982,6 +1982,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     if (role() === 'leader') void import('../core/org/morning-report.js').then((m) => m.startReportClock()).catch(() => {})
     // A look at Main or a lead whose Brief is stale asks it for one refresh turn (src/core/sessions/brief-refresh.ts).
     if (role() === 'leader') void import('../core/sessions/brief-refresh.js').then((m) => m.startBriefRefreshLooks()).catch(() => {})
+    // A status answer a turn end missed is asked again while its session is alive (src/core/sessions/status-reconcile.ts).
+    if (role() === 'leader') void import('../core/sessions/status-reconcile.js').then((m) => m.startStatusReconcile()).catch(() => {})
     // A completed task's own "please check this" letters leave the inbox (src/core/human-inbox/complete-archive.ts).
     const { startCompleteArchive } = await import('../core/human-inbox/complete-archive.js')
     startCompleteArchive()
@@ -6583,6 +6585,7 @@ export async function stopServer(): Promise<void> {
   void import('../core/sessions/status-push.js').then((m) => m.stopStatusPush()).catch(() => { /* never started */ })
   void import('../core/sessions/needs-recheck.js').then((m) => m.stopNeedsRecheck()).catch(() => { /* never started */ })
   void import('../core/sessions/brief-refresh.js').then((m) => m.stopBriefRefreshLooks()).catch(() => { /* never started */ })
+  void import('../core/sessions/status-reconcile.js').then((m) => m.stopStatusReconcile()).catch(() => { /* never started */ })
   void import('../core/status-consistency.js').then((m) => m.stopStatusCheck()).catch(() => { /* never started */ })
   void import('../core/human-inbox/complete-archive.js').then((m) => m.stopCompleteArchive()).catch(() => { /* never started */ })
   void import('../core/org/lead-waits.js').then((m) => m.stopLeadWaits()).catch(() => { /* never started */ })
