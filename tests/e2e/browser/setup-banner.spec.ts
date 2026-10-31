@@ -36,7 +36,8 @@ async function openHome(page: Page, baseURL: string, waitForHealth = true) {
   const healthLoaded = waitForHealth ? page.waitForResponse('**/api/system/health') : undefined
   await page.setContent(`<a href="${baseURL}/">Open Walnut</a>`)
   await page.getByRole('link', { name: 'Open Walnut' }).click()
-  await expect(page.locator('[data-testid="ask-walnut-slot"]')).toBeVisible()
+  // A cold first load of the chat slot takes longer than the 5 s default.
+  await expect(page.locator('[data-testid="ask-walnut-slot"]')).toBeVisible({ timeout: 20_000 })
   if (healthLoaded) {
     await (await healthLoaded).finished()
     await settleHealth(page)
@@ -102,6 +103,9 @@ test('pending health stays quiet and incomplete setup keeps its Settings link', 
     release()
   }
   const banner = page.getByTestId('setup-banner-install')
+  // On Home the card sits in the task panel's folded System attention section.
+  const toggle = page.getByTestId('system-attention').locator('.system-attention-toggle')
+  if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click()
   await expect(banner).toBeVisible()
   await screenshot(page, testInfo, 'incomplete-setup')
   await banner.getByRole('button', { name: 'Settings' }).click()

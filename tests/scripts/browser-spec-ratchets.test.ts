@@ -99,3 +99,17 @@ describe('specs with their own config', () => {
     for (const line of ignores) expect(line, 'a testIgnore without sideSpecs').toContain('sideSpecs')
   })
 })
+
+describe('dictation setup rows', () => {
+  // The rows plan from the server's own scan (Homebrew, ffmpeg, whisper-server, uv):
+  // a spec that reads them against the real scan judges the machine it runs on, and
+  // on CI's Linux every row read "Install Homebrew first" (2026-10-31). Such a spec
+  // routes /api/stt/detect, or is a manual real-install run that skips by default.
+  it('every spec that reads a setup row fixes the scan it reads', () => {
+    const offenders = sources
+      .filter(({ text }) => /stt-setup-row|stt-setup-button/.test(text))
+      .filter(({ text }) => !text.includes('api/stt/detect') && !/test\.skip\(!process\.env\./.test(text))
+      .map(({ file }) => file)
+    expect(offenders).toEqual([])
+  })
+})

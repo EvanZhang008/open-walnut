@@ -62,6 +62,29 @@ async function recordWrites(page: Page): Promise<Array<{ method: string; path: s
   return writes
 }
 
+/**
+ * The REAL scan, read as an Apple silicon Mac with Homebrew, ffmpeg, whisper-server
+ * and uv: the machine these setup rows are written for. Without it the rows judge
+ * the machine the test runs on (CI's Linux has no Homebrew, so every row read
+ * "Install Homebrew first"). The Python environment and the models stay as scanned.
+ */
+async function onAHomebrewMac(page: Page) {
+  await page.route('**/api/stt/detect', async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    const res = await route.fetch()
+    const scan = await res.json()
+    const found = (name: string) => ({ ...(scan[name] ?? {}), name: scan[name]?.name ?? name, found: true })
+    await route.fulfill({
+      response: res,
+      json: {
+        ...scan,
+        platform: { os: 'darwin', arch: 'arm64' },
+        homebrew: found('homebrew'), ffmpeg: found('ffmpeg'), whisperServer: found('whisperServer'), uv: found('uv'),
+      },
+    })
+  })
+}
+
 /** The REAL config with `stt` fields laid over it: an install already using some engine. */
 async function withStt(page: Page, stt: Record<string, unknown>) {
   await page.route((url) => url.pathname === '/api/config', async (route) => {
@@ -140,6 +163,7 @@ test('unconfigured Mac: Qwen3-ASR preselected, three engines, its install row, n
 
 test('Whisper picked on this Mac: its Set up row downloads Large v3 Turbo only', async ({ page }) => {
   await recordWrites(page)
+  await onAHomebrewMac(page)
   await withStt(page, { engine: 'whisper-server' })
   await openSettings(page)
   await openVoice(page)
@@ -166,6 +190,7 @@ test('a legacy engine that is active stays listed, labelled legacy, with its row
 
 test('own MLX env: Set up runs its steps, keeps them across a pane switch, then writes the config', async ({ page }) => {
   const writes = await recordWrites(page)
+  await onAHomebrewMac(page)
   await withStt(page, { engine: 'mlx' })
   const calls: string[] = []
   let release: () => void = () => {}
@@ -215,6 +240,7 @@ test('own MLX env: Set up runs its steps, keeps them across a pane switch, then 
 
 test('a failed step says why and offers Retry', async ({ page }) => {
   await recordWrites(page)
+  await onAHomebrewMac(page)
   await withStt(page, { engine: 'mlx' })
   await page.route('**/api/stt/setup', (route) => route.fulfill({
     status: 200, contentType: 'text/event-stream',

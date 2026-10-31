@@ -232,7 +232,8 @@ test('the budget sits under the cost: set from the picker, then shown as spent o
   const budget = { limitUsd: null as number | null, spentUsd: null as number | null, state: 'unlimited', reason: null as string | null, revision: 0,
     updatedAt: null, responses: 0, unpricedResponses: 0, unpricedModel: null, pausedAt: null, pauseId: null as string | null, stopError: null, engine: 'codex' }
   let patches = 0
-  await page.route(`**/api/usage/sessions/${SESSION_ID}`, (route) => route.fulfill({ json: {
+  // By path: the read carries a query (?absent=null), which a plain glob does not match.
+  await page.route((url) => url.pathname === `/api/usage/sessions/${SESSION_ID}`, (route) => route.fulfill({ json: {
     sessionId: SESSION_ID, title: 'Model switch test task', engine: 'codex', checkEverySec: 5, budget, checkedAt: null } }))
   await page.route(`**/api/usage/sessions/${SESSION_ID}/budget`, async (route) => {
     patches++

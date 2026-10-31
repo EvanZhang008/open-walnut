@@ -8,10 +8,14 @@
  * Prerequisites (this really installs and downloads, 1.6 GB):
  *   whisper-cpp must NOT be installed (brew uninstall whisper-cpp)
  *   cd web && bun x vite build
- *   npx playwright test stt-install
+ *   WALNUT_STT_REAL_INSTALL=1 bun x playwright test stt-install --project chromium
+ * Without that variable it skips: a suite run (CI's Linux runners included) must
+ * never install packages or download a model.
  * The simplified flow without installs is covered by stt-setup-simplified.spec.ts.
  */
 import { test, expect } from '@playwright/test'
+
+test.skip(!process.env.WALNUT_STT_REAL_INSTALL, 'manual run only: really installs whisper-cpp and downloads 1.6 GB (WALNUT_STT_REAL_INSTALL=1)')
 
 test('Whisper Set up installs whisper-cpp and the model, then shows the model rows', async ({ page }) => {
   test.setTimeout(45 * 60_000)
