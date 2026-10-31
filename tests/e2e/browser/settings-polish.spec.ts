@@ -6,6 +6,7 @@
  */
 import { test, expect, type Page, type Request } from '@playwright/test'
 import { backToApps, openPluginDetail } from './apps-store-helpers'
+import { withCssColor } from './css-color'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit' })
 test.setTimeout(120_000)
@@ -295,9 +296,9 @@ test('C50: disclosure help keeps 4.5:1 on its hover band in dark mode', async ({
   await expect(row).toBeVisible({ timeout: 20_000 })
   await row.hover()
   await page.waitForTimeout(200)
-  const ratio = await row.evaluate((el) => {
+  const ratio = await row.evaluate(withCssColor((toRgba) => (el: HTMLElement) => {
     const help = el.querySelector<HTMLElement>('.settings-row-help, .settings-disclosure-summary')!
-    const rgba = (c: string) => { const n = (c.match(/[\d.]+/g) ?? []).map(Number); return [n[0], n[1], n[2], n[3] ?? 1] }
+    const rgba = (c: string): number[] => toRgba(c)
     // The band may be translucent: composite every background up the chain.
     const layers: number[][] = []
     for (let n: HTMLElement | null = el; n; n = n.parentElement) {
@@ -314,7 +315,7 @@ test('C50: disclosure help keeps 4.5:1 on its hover band in dark mode', async ({
     }
     const fg = lum(rgb(getComputedStyle(help).color)); const bg = lum(bgc)
     return (Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05)
-  })
+  }))
   expect(ratio).toBeGreaterThanOrEqual(4.5)
 })
 

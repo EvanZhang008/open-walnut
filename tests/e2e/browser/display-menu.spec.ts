@@ -15,6 +15,7 @@ import {
   displayButton, displayMenu, filterRow, filterSearch, openDisplayMenu, closeDisplayMenu,
   openViewsPage, setStatus, viewRow, viewsPage,
 } from './filter-bar-helpers'
+import { withCssColor } from './css-color'
 
 const SHOTS = '/tmp/filterbar/shots'
 const TIER_WORDS = /\b(tier|focus|satellite|backlog|parked)\b/i
@@ -508,8 +509,8 @@ test('a view put on the bar moves above the hairline on the View page, in bar or
 })
 
 /** WCAG contrast of an element's text over its background, composited up to the first opaque ancestor. */
-const contrastOf = (locator: Locator): Promise<number> => locator.evaluate((el) => {
-  const rgba = (c: string) => { const v = (c.match(/[\d.]+/g) ?? []).map(Number); return [v[0], v[1], v[2], v.length > 3 ? v[3] : 1] }
+const contrastOf = (locator: Locator): Promise<number> => locator.evaluate(withCssColor((toRgba) => (el: Element) => {
+  const rgba = (c: string): number[] => toRgba(c)
   const lum = (c: number[]) => [0, 1, 2].map((i) => { const s = c[i] / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4 })
     .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0)
   const chain: number[][] = []
@@ -521,7 +522,7 @@ const contrastOf = (locator: Locator): Promise<number> => locator.evaluate((el) 
   const bg = chain.reduce((acc, c) => [0, 1, 2].map((i) => c[i] * c[3] + acc[i] * (1 - c[3])), [255, 255, 255])
   const [hi, lo] = [lum(rgba(getComputedStyle(el).color)), lum(bg)].sort((x, y) => y - x)
   return (hi + 0.05) / (lo + 0.05)
-})
+}))
 
 test('keyboard reaches every Display control, with a visible ring and readable checks in both themes', async ({ page, baseURL }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' })

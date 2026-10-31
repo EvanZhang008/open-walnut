@@ -12,6 +12,7 @@
  */
 import fs from 'node:fs/promises'
 import { devices, expect, test, type Locator, type Page, type Route } from '@playwright/test'
+import { withCssColor } from './css-color'
 
 const SHOTS = '/tmp/mobile-web'
 const PHONE = devices['iPhone 15']
@@ -87,8 +88,8 @@ async function openSignIn(page: Page, path = '/') {
 
 /** WCAG contrast of an element's text on the page background. */
 async function contrastOf(page: Page, selector: string): Promise<number> {
-  return page.evaluate((sel) => {
-    const parse = (c: string) => (c.match(/[\d.]+/g) ?? ['0', '0', '0']).slice(0, 3).map(Number)
+  return page.evaluate(withCssColor((toRgba) => (sel: string) => {
+    const parse = (c: string) => toRgba(c).slice(0, 3)
     const lum = ([r, g, b]: number[]) => {
       const f = (v: number) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4 }
       return 0.2126 * f(r!) + 0.7152 * f(g!) + 0.0722 * f(b!)
@@ -99,7 +100,7 @@ async function contrastOf(page: Page, selector: string): Promise<number> {
     const a = lum(parse(getComputedStyle(el).color))
     const b = lum(parse(getComputedStyle(root).backgroundColor))
     return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
-  }, selector)
+  }), selector)
 }
 
 async function expectNoFocusZoom(page: Page) {

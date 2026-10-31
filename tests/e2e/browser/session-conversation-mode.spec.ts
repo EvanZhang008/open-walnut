@@ -23,6 +23,7 @@ import {
   unfoldQuestions,
 } from './threads-helpers'
 import { buildTaggedSession, TAGGED_PASSAGE, TAGGED_READY, TAGGED_SESSION, TAGGED_TASK, TAGGED_TEXT, TAGGED_TITLES } from './threads-fixture'
+import { cssColorToRgba, withCssColor } from './css-color'
 
 const IDS = buildTaggedSession(Date.now()).ids
 const T = TAGGED_TEXT
@@ -111,7 +112,7 @@ test.describe('Conversation Mode, the mode pill and the question tag', () => {
       return { width: cs.borderLeftWidth, colour: cs.borderLeftColor }
     })
     expect(rule.width).toBe('2px')
-    const [r, g, b] = rule.colour.match(/\d+/g)!.map(Number)
+    const [r, g, b] = cssColorToRgba(rule.colour)
     expect(Math.max(r, g, b) - Math.min(r, g, b), `rule colour ${rule.colour} is grey`).toBeLessThanOrEqual(12)
     await shot(page, 'conversation-mode')
   })
@@ -131,12 +132,12 @@ test.describe('Conversation Mode, the mode pill and the question tag', () => {
     await expect(rows.nth(0).locator('.thread-map-label')).toHaveText(TAGGED_TITLES.Q1)
     await expect(rows.nth(0).locator('.thread-status-word')).toHaveText(/Answered|New/)
     // No hue anywhere in the map: every number badge is grey on grey.
-    const hues = await rows.evaluateAll((els) => els.map((el) => {
+    const hues = await rows.evaluateAll(withCssColor((toRgba) => (els: Element[]) => els.map((el) => {
       const n = el.querySelector('.thread-map-num') as HTMLElement
       const cs = getComputedStyle(n)
-      const chroma = (c: string) => { const v = c.match(/\d+/g)!.map(Number); return Math.max(v[0], v[1], v[2]) - Math.min(v[0], v[1], v[2]) }
+      const chroma = (c: string) => { const v = toRgba(c); return Math.max(v[0], v[1], v[2]) - Math.min(v[0], v[1], v[2]) }
       return Math.max(chroma(cs.backgroundColor), chroma(cs.color))
-    }))
+    })))
     for (const h of hues) expect(h).toBeLessThanOrEqual(12)
     await expect(map.locator('.thread-map-count')).toHaveText('2 open')
 
@@ -304,7 +305,7 @@ test.describe('Conversation Mode, the mode pill and the question tag', () => {
     expect(tick.w).toBeGreaterThanOrEqual(7)
     expect(tick.h).toBeLessThanOrEqual(3)
     expect(tick.style).toBe('solid')
-    const [r, g, b] = tick.colour.match(/\d+/g)!.map(Number)
+    const [r, g, b] = cssColorToRgba(tick.colour)
     expect(Math.max(r, g, b) - Math.min(r, g, b), `tick colour ${tick.colour} is grey`).toBeLessThanOrEqual(12)
     // The labels stay readable at this width: number and title, status as a glyph or word.
     await unfoldQuestions(panel)

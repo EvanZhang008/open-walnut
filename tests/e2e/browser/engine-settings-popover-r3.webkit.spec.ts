@@ -14,6 +14,7 @@ import {
   LOCAL_SCOPE_NOTE, captureView, claimUserFile, filterBox, fixtureRoot, makeGitProject, openPanels, openPopover, otherGroupsOf,
   groupOpen, settleToggle, popoverGroup, popoverGroups, popoverRow, popoverRowWrap, rect, restoreSeed, rowControl, rowsArea, scopeOption, shot, startSessionAt, stubGet, waitForRows,
 } from './engine-settings-popover-helpers'
+import { withCssColor } from './css-color'
 
 test.use({ browserName: 'webkit' })
 test.describe.configure({ mode: 'serial' })
@@ -193,15 +194,13 @@ test('webkit: one Tab stop for the switch, About last with Close; the dark surfa
   await page.evaluate(() => { localStorage.setItem('open-walnut-theme', 'dark'); document.documentElement.setAttribute('data-theme', 'dark') })
   dialog = await openPopover(page, panel)
   await waitForRows(dialog)
-  const colours = await dialog.evaluate((el) => {
+  const colours = await dialog.evaluate(withCssColor((toRgba) => (el: Element) => {
     // The surface is frosted glass (overlay-glass.css): a translucent colour,
     // which WebKit reports as `color(srgb r g b / a)` (0..1). Judge what shows:
     // that colour laid over the page under it, 0..255.
     const rgba = (c: string) => {
-      const m = c.match(/-?\d*\.?\d+/g)!.map(Number)
-      const unit = c.startsWith('color(')
-      const [r, g, b] = unit ? m.slice(0, 3).map((v) => v * 255) : m.slice(0, 3)
-      return { r, g, b, a: m.length > 3 ? m[3] : 1 }
+      const [r, g, b, a] = toRgba(c)
+      return { r, g, b, a }
     }
     const pageBg = rgba(getComputedStyle(document.body).backgroundColor)
     const popBg = rgba(getComputedStyle(el).backgroundColor)
@@ -209,7 +208,7 @@ test('webkit: one Tab stop for the switch, About last with Close; the dark surfa
     const lum = (r: number, g: number, b: number) => (r + g + b) / 3
     const pop = getComputedStyle(el)
     return { popover: pop.backgroundColor, page: getComputedStyle(document.body).backgroundColor, shadow: pop.boxShadow, lighter: lum(over('r'), over('g'), over('b')) - lum(pageBg.r, pageBg.g, pageBg.b) }
-  })
+  }))
   test.info().annotations.push({ type: 'dark-surface', description: JSON.stringify(colours) })
   expect(colours.lighter).toBeGreaterThanOrEqual(20)
   expect(colours.shadow).not.toBe('none')

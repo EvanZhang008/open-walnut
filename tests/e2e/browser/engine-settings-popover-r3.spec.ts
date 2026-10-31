@@ -18,6 +18,7 @@ import {
   openPopover, otherGroupsOf, popoverGroup, popoverGroups, popoverRow, rect, restoreSeed, rowControl, rowsArea, scopeOption, shot, startSessionAt, stubGet,
   waitForRows,
 } from './engine-settings-popover-helpers'
+import { withCssColor } from './css-color'
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(90_000)
@@ -262,15 +263,15 @@ test.describe('engine settings popover: round three, copy and chrome', () => {
     await page.evaluate(() => { localStorage.setItem('open-walnut-theme', 'dark'); document.documentElement.setAttribute('data-theme', 'dark') })
     dialog = await openPopover(page, panel)
     await waitForRows(dialog)
-    const colours = await dialog.evaluate((el) => {
+    const colours = await dialog.evaluate(withCssColor((toRgba) => (el: Element) => {
       const lum = (rgb: string) => {
-        const m = rgb.match(/\d+(\.\d+)?/g)!.map(Number)
+        const m = toRgba(rgb)
         return (m[0] + m[1] + m[2]) / 3
       }
       const pop = getComputedStyle(el)
       const page = getComputedStyle(document.body)
       return { popover: pop.backgroundColor, page: page.backgroundColor, shadow: pop.boxShadow, lighter: lum(pop.backgroundColor) - lum(page.backgroundColor) }
-    })
+    }))
     test.info().annotations.push({ type: 'dark-surface', description: JSON.stringify(colours) })
     expect(colours.lighter).toBeGreaterThanOrEqual(20)
     expect(colours.shadow).not.toBe('none')

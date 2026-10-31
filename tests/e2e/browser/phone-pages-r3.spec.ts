@@ -8,6 +8,7 @@ import fs from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { PHONE, findSmallTargets, findSmallText, menuButton, openDrawer } from './phone-helpers'
+import { cssColorToRgba } from './css-color'
 
 const SHOTS = '/tmp/mobile-web/phone-pages-r3'
 
@@ -183,14 +184,12 @@ test('N2-19: a routine card with an error keeps every line at 12 px and every co
 })
 
 /**
- * Relative luminance of a computed color: `rgb(...)` / `rgba(...)` (0 to 255),
- * or `color(srgb r g b)` (0 to 1), which is what a color-mix() computes to.
+ * Relative luminance of a computed color: `rgb(...)` / `rgba(...)`, or the
+ * `color(srgb r g b)` a color-mix() computes to (css-color.ts reads both).
  */
 function luminance(css: string): number {
-  const nums = (css.match(/-?[\d.]+(?:e-?\d+)?/g) ?? ['0', '0', '0']).map(Number)
-  const unit = css.startsWith('color(') ? 1 : 255
-  const [r, g, b] = nums.slice(0, 3).map((v) => {
-    const c = v / unit
+  const [r, g, b] = cssColorToRgba(css).slice(0, 3).map((v) => {
+    const c = v / 255
     return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
   })
   return 0.2126 * r + 0.7152 * g + 0.0722 * b

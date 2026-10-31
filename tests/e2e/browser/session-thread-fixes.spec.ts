@@ -13,6 +13,7 @@ import {
   centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, resetThreadsFixture, modePill, openQuestionList,
 } from './threads-helpers'
 import { densePassage } from './threads-fixture'
+import { withCssColor } from './css-color'
 
 const TASK = 'pw-task-threads-dense'
 
@@ -236,11 +237,11 @@ test.describe('Slice 1 layout fixes', () => {
       await expect(verdicts.first()).toBeVisible()
       const cut = await verdicts.evaluateAll((els) => els.filter((el) => el.scrollWidth > el.clientWidth + 0.5).map((el) => el.textContent))
       expect(cut, 'Looks answered labels cut').toEqual([])
-      const ratio = await drawer.evaluate((root) => {
+      const ratio = await drawer.evaluate(withCssColor((toRgba) => (root: Element) => {
         const tri = root.querySelector('.thread-tree-disclosure') as HTMLElement | null
         const body = root.querySelector('.thread-drawer-body') as HTMLElement | null
         if (!tri || !body) return 0
-        const rgb = (c: string) => (c.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number)
+        const rgb = (c: string) => toRgba(c).slice(0, 3)
         const lum = (c: string) => {
           const [r, g, b] = rgb(c).map((v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4 })
           return 0.2126 * r + 0.7152 * g + 0.0722 * b
@@ -248,7 +249,7 @@ test.describe('Slice 1 layout fixes', () => {
         const a = lum(getComputedStyle(tri).color)
         const b = lum(getComputedStyle(body).backgroundColor)
         return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
-      })
+      }))
       expect(ratio, 'disclosure triangle contrast').toBeGreaterThanOrEqual(3)
     })
   }

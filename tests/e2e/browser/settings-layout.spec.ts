@@ -6,6 +6,7 @@
  */
 import { test, expect, type Page, type Request } from '@playwright/test'
 import { routeCosts } from './usage-costs-fixture'
+import { cssColorToRgba, withCssColor } from './css-color'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit' })
 test.setTimeout(120_000)
@@ -346,8 +347,8 @@ for (const theme of ['light', 'dark'] as const) {
     await openSettings(page)
     await page.evaluate((t) => { document.documentElement.dataset.theme = t }, theme)
     await clickNav(page, 'sessions')
-    const m = await page.evaluate(() => {
-      const rgb = (c: string) => (c.match(/[\d.]+/g) ?? []).map(Number)
+    const m = await page.evaluate(withCssColor((toRgba) => () => {
+      const rgb = (c: string): number[] => toRgba(c)
       const lum = ([r, g, b]: number[]) => {
         const f = (v: number) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4 }
         return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
@@ -360,10 +361,10 @@ for (const theme of ['light', 'dark'] as const) {
         nav: ratio(getComputedStyle(label).color, getComputedStyle(active).backgroundColor),
         boxBorder: box ? getComputedStyle(box).borderTopColor : null,
       }
-    })
+    }))
     expect(m.nav).toBeGreaterThanOrEqual(4.5)
     if (theme === 'dark' && m.boxBorder) {
-      const alpha = Number((m.boxBorder.match(/[\d.]+/g) ?? [])[3] ?? 1)
+      const alpha = cssColorToRgba(m.boxBorder)[3]
       expect(alpha).toBeGreaterThanOrEqual(0.3)
     }
   })
@@ -382,7 +383,7 @@ test('F20 F21 F22: filter Enter lands on the row, flashes it, and the heading ha
   const row = page.locator('.settings-row:has(#settings-show-priority)')
   await expect(row).toHaveClass(/settings-anchor-flash/, { timeout: 10_000 })
   await expect(row).toBeInViewport()
-  const peak = await row.evaluate((el) => Number((getComputedStyle(el).backgroundColor.match(/[\d.]+/g) ?? [])[3] ?? 0))
+  const peak = cssColorToRgba(await row.evaluate((el) => getComputedStyle(el).backgroundColor))[3]
   expect(peak).toBeGreaterThan(0.12)
   const ring = await page.evaluate(() => {
     const h = document.activeElement as HTMLElement | null

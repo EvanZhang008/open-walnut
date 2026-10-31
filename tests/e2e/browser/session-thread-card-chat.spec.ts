@@ -12,6 +12,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { openThreadsSession, resetThreadsFixture } from './threads-helpers'
+import { cssColorToRgba } from './css-color'
 import { REVIEW_READY, REVIEW_ROUND_CODE, REVIEW_ROUNDS, REVIEW_SESSION, REVIEW_TASK, REVIEW_TITLES } from './threads-review-fixture'
 
 async function shot(page: Page, name: string, el: Locator): Promise<void> {
@@ -20,8 +21,8 @@ async function shot(page: Page, name: string, el: Locator): Promise<void> {
   await el.screenshot({ path: `${dir}/${name}.png` })
 }
 
-const rgb = (s: string) => (s.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number)
-/** WCAG relative luminance contrast of two rgb() strings. */
+const rgb = (s: string) => cssColorToRgba(s).slice(0, 3)
+/** WCAG relative luminance contrast of two computed colours. */
 function contrast(a: string, b: string): number {
   const lum = (c: string) => {
     const [r, g, bl] = rgb(c).map((v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4 })

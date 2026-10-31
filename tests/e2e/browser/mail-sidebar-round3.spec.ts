@@ -15,6 +15,7 @@ import {
   tailToggle,
   twist,
 } from './mail-review-helpers'
+import { cssColorToRgba } from './css-color'
 
 /**
  * The third review round, one test per finding, at the dense fixture's density.
@@ -366,9 +367,9 @@ test('N7: the narrow drill page gives the head and the rows one measure', async 
   await page.setViewportSize(NARROW_COLUMN)
 })
 
-/** WCAG relative luminance contrast of two `rgb(...)` strings. */
+/** WCAG relative luminance contrast of two computed colours. */
 function contrast(fg: string, bg: string): number {
-  const parse = (value: string) => (value.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number)
+  const parse = (value: string) => cssColorToRgba(value).slice(0, 3)
   const channel = (raw: number) => {
     const one = raw / 255
     return one <= 0.03928 ? one / 12.92 : ((one + 0.055) / 1.055) ** 2.4

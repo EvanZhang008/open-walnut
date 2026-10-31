@@ -23,13 +23,10 @@
  */
 
 import { test, expect } from '@playwright/test'
+import { cssColorToRgba } from './css-color'
 
-/** Parse a computed color into [r,g,b,a]; alpha defaults to 1 when opaque. */
-function parseColor(css: string): [number, number, number, number] {
-  const nums = css.match(/[\d.]+/g)?.map(Number) ?? []
-  const [r = 0, g = 0, b = 0, a = 1] = nums
-  return [r, g, b, a]
-}
+/** Parse a computed color into [r,g,b,a]; alpha is 1 when opaque. */
+const parseColor = cssColorToRgba
 
 /** Readability floor from globals.css: never clearer than 0.84, blur >= 36px. */
 const MIN_ALPHA = 0.84

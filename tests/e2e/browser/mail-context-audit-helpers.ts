@@ -12,6 +12,7 @@
  */
 import fs from 'node:fs/promises'
 import { expect, type Locator, type Page } from '@playwright/test'
+import { withCssColor } from './css-color'
 
 export const MENU = '.wn-context-menu'
 export const ITEM = '.wn-context-menu-item'
@@ -117,15 +118,14 @@ export function expectInsideViewport(geometry: MenuGeometry): void {
 
 /** WCAG contrast of an element's text against its own background, walking up for a real backdrop. */
 export async function contrastOf(page: Page, selector: string): Promise<number> {
-  return page.evaluate((one) => {
+  return page.evaluate(withCssColor((toRgba) => (one: string) => {
     const node = document.querySelector(one) as HTMLElement
-    const channels = (value: string): number[] => (value.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number)
+    const channels = (value: string): number[] => toRgba(value).slice(0, 3)
     const opaque = (node2: HTMLElement | null): string => {
       let at: HTMLElement | null = node2
       while (at) {
         const background = getComputedStyle(at).backgroundColor
-        const parts = (background.match(/[\d.]+/g) ?? []).map(Number)
-        if (parts.length < 4 || parts[3]! > 0.5) return background
+        if (toRgba(background)[3] > 0.5) return background
         at = at.parentElement
       }
       return 'rgb(255, 255, 255)'
@@ -142,7 +142,7 @@ export async function contrastOf(page: Page, selector: string): Promise<number> 
     const light = Math.max(text, back)
     const dark = Math.min(text, back)
     return Math.round(((light + 0.05) / (dark + 0.05)) * 100) / 100
-  }, selector)
+  }), selector)
 }
 
 export interface RequestLog {

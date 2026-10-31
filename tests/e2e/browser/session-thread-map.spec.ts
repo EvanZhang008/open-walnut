@@ -24,6 +24,7 @@ import {
   AI_PASSAGE, buildMapSession, MAP_PASSAGES, MAP_PIN_QUOTE_TEXT, MAP_SESSION, MAP_TITLES, PINS_ONLY_READY, PINS_ONLY_SESSION,
   PINS_ONLY_TASK,
 } from './threads-fixture'
+import { cssColorToRgba } from './css-color'
 
 const MAP_TASK = 'pw-task-threads-map'
 /** Row ids are derived from a fixed prefix, so any clock gives the same ones. */
@@ -173,10 +174,10 @@ async function expectSettledOverlay(overlay: Locator): Promise<void> {
   expect(await overlay.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toMatch(/rgba\(.*,\s*0\)$|transparent/)
 }
 
-/** Relative luminance of a computed `rgb(...)` colour, 0 (black) to 1 (white). */
+/** Relative luminance of a computed colour, 0 (black) to 1 (white). */
 function luminance(rgb: string): number {
-  const [r, g, b] = (rgb.match(/[\d.]+/g) ?? ['0', '0', '0']).slice(0, 3).map((v) => {
-    const c = Number(v) / 255
+  const [r, g, b] = cssColorToRgba(rgb).slice(0, 3).map((v) => {
+    const c = v / 255
     return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
   })
   return 0.2126 * r + 0.7152 * g + 0.0722 * b

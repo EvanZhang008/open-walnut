@@ -14,6 +14,7 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 import { folderRow, openMail } from './mail-review-helpers'
+import { withCssColor } from './css-color'
 
 /** The two accounts `PW_MAIL_CTX=1` adopts: the second can neither mark read nor send. */
 export const WRITER = 'fixture:ctx-writer@example.invalid'
@@ -176,20 +177,17 @@ export function markShape(page: Page, accountId: string, messageId: string): Pro
 export function contrastOf(page: Page, selector: string): Promise<{
   ratio: number, colour: string, background: string, size: string,
 }> {
-  return page.evaluate((target) => {
+  return page.evaluate(withCssColor((toRgba) => (target: string) => {
     const node = document.querySelector(target) as HTMLElement | null
     if (!node) return { ratio: -1, colour: '', background: '', size: '' }
     const style = getComputedStyle(node)
-    const paint = (value: string): number[] => {
-      const found = value.match(/[\d.]+/g) ?? []
-      return found.slice(0, 3).map(Number)
-    }
+    const paint = (value: string): number[] => toRgba(value).slice(0, 3)
     // The nearest ancestor with a real background is what the text sits on.
     let behind: HTMLElement | null = node
     let backdrop = 'rgba(0, 0, 0, 0)'
     while (behind) {
       const own = getComputedStyle(behind).backgroundColor
-      if (own && !/rgba\(0, 0, 0, 0\)|transparent/.test(own)) { backdrop = own; break }
+      if (own && toRgba(own)[3] > 0) { backdrop = own; break }
       behind = behind.parentElement
     }
     const lum = (rgb: number[]): number => {
@@ -208,5 +206,5 @@ export function contrastOf(page: Page, selector: string): Promise<{
       background: backdrop,
       size: style.fontSize,
     }
-  }, selector)
+  }), selector)
 }

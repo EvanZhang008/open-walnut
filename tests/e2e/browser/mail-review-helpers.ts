@@ -13,6 +13,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
 import net from 'node:net'
 import { expect, type Locator, type Page } from '@playwright/test'
+import { withCssColor } from './css-color'
 
 export const PANE = '.mail-accounts-pane'
 export const HARBOUR = 'dense:harbour'
@@ -228,12 +229,12 @@ export async function tailShape(page: Page, accountId: string): Promise<{
   folderHeight: number
   contrast: number
 }> {
-  return page.evaluate((account) => {
+  return page.evaluate(withCssColor((toRgba) => (account: string) => {
     const row = document.querySelector(`.mail-tail-toggle[data-account-id="${account}"]`) as HTMLElement
     const label = row.querySelector('.mail-tail-label') as HTMLElement
     const clause = row.querySelector('.mail-tail-unread') as HTMLElement | null
     const folder = document.querySelector('.mail-account .mail-mailbox') as HTMLElement
-    const rgb = (value: string): number[] => (value.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number)
+    const rgb = (value: string): number[] => toRgba(value).slice(0, 3)
     const luminance = (value: string): number => {
       const channels = rgb(value).map((one) => {
         const ratio = one / 255
@@ -259,7 +260,7 @@ export async function tailShape(page: Page, accountId: string): Promise<{
       folderHeight: Math.round(folder.getBoundingClientRect().height),
       contrast: Math.round(((light + 0.05) / (dark + 0.05)) * 100) / 100,
     }
-  }, accountId)
+  }), accountId)
 }
 
 /** The expanded tail's filter box and its no-match line, against the folder text column they sit in. */

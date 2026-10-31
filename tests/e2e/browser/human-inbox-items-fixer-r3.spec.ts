@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { EVIDENCE, createCandidate, home, itemRow, mailItem, openLetter, receipt, sendItems } from './inbox-items-helpers';
 import fs from 'node:fs/promises';
+import { cssColorToRgba } from './css-color';
 
 test('task navigation and keyboard preview preserve exact selection, scroll and unconfirmed goal', async ({ page, request }, info) => {
   const prefix = `Review navigation ${info.project.name}-${Date.now()}`;
@@ -63,7 +64,7 @@ test('selected Inbox rail stays readable in explicit light and dark themes', asy
       return { foreground: css.color, background: css.backgroundColor, token: css.getPropertyValue('--bg-secondary') };
     });
     const luminance = (text: string) => {
-      const channels = text.match(/[\d.]+/g)!.slice(0, 3).map(Number).map(v => { const c = v / 255; return c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4; });
+      const channels = cssColorToRgba(text).slice(0, 3).map(v => { const c = v / 255; return c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4; });
       return channels[0] * .2126 + channels[1] * .7152 + channels[2] * .0722;
     };
     const a = luminance(colors.foreground); const b = luminance(colors.background);

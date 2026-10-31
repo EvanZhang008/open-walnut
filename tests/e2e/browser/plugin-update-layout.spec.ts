@@ -14,6 +14,7 @@ import {
   commitAll, ensureSourceInstalled, expandSidebar, expectChipKinds, git, openVersion, startPluginFixture, type PluginFixture,
 } from './plugin-update-fixture'
 import { backToApps, openPluginDetail } from './apps-store-helpers'
+import { cssColorToRgba } from './css-color'
 
 const SHOT_DIR = '/tmp/plugin-update-ux/after'
 let fixture: PluginFixture
@@ -263,18 +264,9 @@ test('(N2-1)(N2-2)(N2-6)(N2-10) an Update flips in one frame, costs one reload, 
 
 /**
  * Alpha of a computed colour. A color-mix() result serialises as `color(srgb r g b / a)` in
- * Chromium and `oklab(l a b / a)` or `rgba()` elsewhere, so only the trailing alpha is read.
+ * Chromium and `oklab(l a b / a)` or `rgba()` elsewhere; css-color.ts reads every one.
  */
-const alphaOf = (value: string): number => {
-  if (value === 'transparent') return 0
-  const m = /^(rgba?|color|oklab|oklch|hsla?)\((.*)\)$/.exec(value.trim())
-  if (!m) return NaN
-  const inner = m[2]
-  const slash = inner.indexOf('/')
-  if (slash >= 0) return Number(inner.slice(slash + 1).trim().replace('%', '')) / (inner.includes('%', slash) ? 100 : 1)
-  const parts = inner.split(/[\s,]+/).filter(Boolean)
-  return m[1] === 'rgba' || m[1] === 'hsla' || parts.length === 4 ? Number(parts[3]) : 1
-}
+const alphaOf = (value: string): number => cssColorToRgba(value)[3]
 
 const styleOf = (target: Locator) => target.evaluate((el) => {
   const cs = getComputedStyle(el)

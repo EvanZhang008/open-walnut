@@ -10,6 +10,7 @@ import { type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { openChatOnLoad } from './draft-helpers'
 import { backToApps, openPluginDetail } from './apps-store-helpers'
+import { withCssColor } from './css-color'
 
 const SCREENSHOT_DIR = '/tmp/walnut-plugin-demo'
 /** Where the update-status design shots land (light, dark, narrow); read by the reviewers. */
@@ -334,12 +335,10 @@ const BANNED_GLYPHS = /[\u26A0\u2713\u270E\u21C5\u2205\u25CB\u25CC\u24D8]/
 
 /** WCAG contrast of an element's text colour against the card it sits on. */
 async function contrastAgainstCard(target: Locator): Promise<number> {
-  return target.evaluate((el) => {
+  return target.evaluate(withCssColor((toRgba) => (el: Element) => {
     const parse = (c: string) => {
-      const m = /rgba?\(([^)]+)\)/.exec(c)
-      if (!m) return null
-      const [r, g, b, a = '1'] = m[1].split(',').map((v) => v.trim())
-      return { r: Number(r), g: Number(g), b: Number(b), a: Number(a) }
+      const [r, g, b, a] = toRgba(c)
+      return { r, g, b, a }
     }
     const lum = (c: { r: number; g: number; b: number }) => {
       const f = (v: number) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4 }
@@ -356,7 +355,7 @@ async function contrastAgainstCard(target: Locator): Promise<number> {
     if (!fg || !bg) return 0
     const [l1, l2] = [lum(fg), lum(bg)].sort((a, b) => b - a)
     return (l1 + 0.05) / (l2 + 0.05)
-  })
+  }))
 }
 
 test.beforeAll(async () => {

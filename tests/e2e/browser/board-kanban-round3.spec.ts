@@ -15,6 +15,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { call, kanbanApi, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
+import { cssColorToRgba } from './css-color'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -272,7 +273,7 @@ test('N6 N11 N12: the suggestion names its lane whole; a leader move shows in th
   await call(api, 'PUT', `/api/v1/tasks/${team.leader}/board/cards/${m}`, { lane: '' })
 })
 
-const rgb = (s: string): number[] => (s.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number)
+const rgb = (s: string): number[] => cssColorToRgba(s).slice(0, 3)
 const channelGap = (a: string, b: string) => Math.max(...rgb(a).map((v, i) => Math.abs(v - (rgb(b)[i] ?? 0))))
 
 for (const theme of ['light', 'dark'] as const) {

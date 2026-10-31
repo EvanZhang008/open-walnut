@@ -11,6 +11,7 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
+import { withCssColor } from './css-color';
 
 const SESSION_ID = 'pw-rich-readable';
 const TASK_ID = 'pw-task-rich-readable';
@@ -69,17 +70,17 @@ async function openSession(page: Page) {
 
 /** WCAG contrast ratio between an element's computed text colour and the background it paints. */
 async function contrastOf(page: Page, selector: string) {
-  return page.evaluate((sel) => {
+  return page.evaluate(withCssColor((toRgba) => (sel: string) => {
     const el = document.querySelector(sel)!;
     const cs = getComputedStyle(el);
-    const rgb = (v: string) => (v.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+    const rgb = (v: string) => toRgba(v).slice(0, 3);
     const lum = (c: number[]) => {
       const [r, g, b] = c.map((x) => { const s = x / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; });
       return 0.2126 * r + 0.7152 * g + 0.0722 * b;
     };
     const a = lum(rgb(cs.color)); const b = lum(rgb(cs.backgroundColor));
     return { ratio: (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05), color: cs.color, bg: cs.backgroundColor };
-  }, selector);
+  }), selector);
 }
 
 test('a light box with no text colour gets dark text; author colours and fences keep theirs', async ({ page }) => {

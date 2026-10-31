@@ -77,8 +77,7 @@
 
 /* Muted words that still read at 4.5:1 on the surface they sit on (--fg-muted alone is 3.6:1 on
    white, and no theme token sits between it and --fg-secondary): property summaries, group titles,
-   counts, the property name on a chip. Icons keep --fg-muted. Plain hex, not color-mix: a mixed
-   colour computes to `color(srgb ...)`, which the contrast checks cannot read. */
+   counts, the property name on a chip. Icons keep --fg-muted. */
 .tp-pop,
 .fb-row,
 .fb-toolbar-scope { --tp-muted: #6E6E73; }

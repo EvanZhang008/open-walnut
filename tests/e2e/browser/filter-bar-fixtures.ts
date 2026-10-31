@@ -7,6 +7,7 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { filterButton, filterMenu, filterRow } from './filter-bar-helpers'
+import { withCssColor } from './css-color'
 
 export const SHOTS = '/tmp/filterbar/shots'
 
@@ -103,9 +104,9 @@ export async function clipAround(page: Page): Promise<{ x: number; y: number; wi
 
 /** WCAG contrast of an element's text against the opaque stack of backgrounds behind it. */
 export function contrastOf(page: Page, selector: string): Promise<number> {
-  return page.evaluate((sel) => {
+  return page.evaluate(withCssColor((toRgba) => (sel: string) => {
     const el = document.querySelector(sel) as HTMLElement
-    const parse = (c: string) => (c.match(/[\d.]+/g) ?? ['0', '0', '0', '0']).map(Number)
+    const parse = toRgba
     const layers: number[][] = []
     for (let n: HTMLElement | null = el; n; n = n.parentElement) {
       const [r, g, b, a = 1] = parse(getComputedStyle(n).backgroundColor)
@@ -122,7 +123,7 @@ export function contrastOf(page: Page, selector: string): Promise<number> {
     }
     const [l1, l2] = [lum(fgc), lum(bg)].sort((x, y) => y - x)
     return (l1 + 0.05) / (l2 + 0.05)
-  }, selector)
+  }), selector)
 }
 
 /** Wait until an overlay is placed (not parked at left -9999) and its open animation ended. */

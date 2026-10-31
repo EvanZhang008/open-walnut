@@ -15,6 +15,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { call, kanbanApi, presetHumanPlacement, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
+import { withCssColor } from './css-color'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -328,8 +329,8 @@ test('N15 N16: a suggestion is one line with both buttons and is not repeated in
 
 /** Text contrast against the composited backgrounds under it (rgba tints included). */
 async function contrastOf(el: Locator): Promise<number> {
-  return el.evaluate((node) => {
-    const parse = (c: string) => { const m = c.match(/[\d.]+/g)?.map(Number) ?? [0, 0, 0, 0]; return { r: m[0], g: m[1], b: m[2], a: m.length > 3 ? m[3] : 1 } }
+  return el.evaluate(withCssColor((toRgba) => (node: Element) => {
+    const parse = (c: string) => { const [r, g, b, a] = toRgba(c); return { r, g, b, a } }
     const layers: Array<{ r: number; g: number; b: number; a: number }> = []
     for (let n: Element | null = node; n; n = n.parentElement) {
       const bg = parse(getComputedStyle(n).backgroundColor)
@@ -346,7 +347,7 @@ async function contrastOf(el: Locator): Promise<number> {
     }
     const a = lum(fg), b = lum(base)
     return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
-  })
+  }))
 }
 
 for (const scheme of ['light', 'dark'] as const) {

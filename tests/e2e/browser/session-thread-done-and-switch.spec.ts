@@ -20,6 +20,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { centreInHistory, openThreadsSession, passageRects, resetThreadsFixture, selectPassage } from './threads-helpers'
 import { TAGGED_PASSAGE, TAGGED_READY, TAGGED_SESSION, TAGGED_TASK, TAGGED_TEXT, TAGGED_TITLES } from './threads-fixture'
+import { cssColorToRgba } from './css-color'
 
 const T = TAGGED_TEXT
 
@@ -157,11 +158,9 @@ test.describe('Conversation Mode: a turn that moves on, and Archive', () => {
     const openPaint = paints['::highlight(thread-mark-neutral)']
     const archivedPaint = paints['::highlight(thread-mark-done-neutral)']
     expect(openPaint && archivedPaint, JSON.stringify(paints)).toBeTruthy()
-    // Hue and saturation of an hsl() or rgb() color.
+    // Hue and saturation of an hsl() or rgb() color (css-color.ts turns hsl() into the same rgb).
     const hs = (c: string): { h: number; s: number } => {
-      const v = (c.match(/[\d.]+/g) ?? []).map(Number)
-      if (/hsl/.test(c)) return { h: v[0], s: v[1] }
-      const [r, g, b] = v.slice(0, 3).map((x) => x / 255)
+      const [r, g, b] = cssColorToRgba(c).slice(0, 3).map((x) => x / 255)
       const max = Math.max(r, g, b); const min = Math.min(r, g, b); const d = max - min; const l = (max + min) / 2
       if (d === 0) return { h: 0, s: 0 }
       const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4

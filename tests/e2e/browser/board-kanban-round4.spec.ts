@@ -16,6 +16,7 @@ import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { call, kanbanApi, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
 import { startSampler, stopSampler } from './board-kanban-sampler'
+import { cssColorToRgba, withCssColor } from './css-color'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -276,14 +277,14 @@ test('R3-19 R3-20 R3-21 R3-10 R3-12 R3-13: overflow cue, even lane widths, contr
   const widths = await pane.locator('[data-testid="kanban-lane"] [data-testid="kanban-card"]').evaluateAll((els) => [...new Set(els.map((e) => Math.round(e.getBoundingClientRect().width)))])
   expect(widths.length, widths.join(',')).toBe(1)
   // R3-21: the Workers label reads at 4.5:1 or better on its background.
-  const ratio = await pane.locator('.kanban-workers-label').evaluate((el) => {
-    const rgb = (c: string) => (c.match(/[\d.]+/g) ?? ['0', '0', '0']).slice(0, 3).map(Number)
+  const ratio = await pane.locator('.kanban-workers-label').evaluate(withCssColor((toRgba) => (el: Element) => {
+    const rgb = (c: string) => toRgba(c).slice(0, 3)
     const lum = (c: number[]) => { const f = (v: number) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4 }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]) }
     let bg = 'rgb(255, 255, 255)'
-    for (let n: Element | null = el; n; n = n.parentElement) { const b = getComputedStyle(n).backgroundColor; if (b && !/rgba\(.*, 0\)$/.test(b) && b !== 'transparent') { bg = b; break } }
+    for (let n: Element | null = el; n; n = n.parentElement) { const b = getComputedStyle(n).backgroundColor; if (b && toRgba(b)[3] > 0) { bg = b; break } }
     const a = lum(rgb(getComputedStyle(el).color)), b = lum(rgb(bg))
     return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
-  })
+  }))
   expect(ratio).toBeGreaterThanOrEqual(4.5)
   // R3-10: every red status line has one weight, whatever element draws it.
   const weights = await pane.locator('.kanban-card-status.kanban-tone-red').evaluateAll((els) => [...new Set(els.map((e) => getComputedStyle(e).fontWeight))])
@@ -292,7 +293,7 @@ test('R3-19 R3-20 R3-21 R3-10 R3-12 R3-13: overflow cue, even lane widths, contr
   const chip = card(pane, plainIdle()[0]).locator('[data-testid="kanban-card-ticket"] a.tag-chip')
   const style = (l: Locator) => l.evaluate((el) => { const s = getComputedStyle(el); return `${s.color}|${s.backgroundColor}|${s.textDecorationLine}` })
   const rest = await style(chip)
-  const [r, g, b] = (rest.split('|')[0].match(/\d+/g) ?? []).map(Number)
+  const [r, g, b] = cssColorToRgba(rest.split('|')[0])
   expect(r > g + 30 && b > g + 30, rest).toBe(false)
   expect(await chip.evaluate((el) => getComputedStyle(el, '::after').content)).toContain('\u2197')
   await chip.hover()

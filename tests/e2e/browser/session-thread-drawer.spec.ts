@@ -11,6 +11,7 @@ import {
   DENSE_SESSION, REWRITTEN_SESSION, openThreadsSession, readRecord, resetThreadsFixture, noBannedGlyphs, modePill, openQuestionList,
 } from './threads-helpers'
 import { DENSE_EXPECTED_COUNTS } from './threads-fixture'
+import { withCssColor } from './css-color'
 
 const TASK = 'pw-task-threads-dense'
 
@@ -282,8 +283,8 @@ test.describe('tree drawer', () => {
       await page.evaluate((t) => { document.documentElement.dataset.theme = t }, theme)
       const drawer = await openDrawer(panel)
       await (await chip(drawer, 'All')).click()
-      const ratios = await drawer.evaluate((root) => {
-        const parse = (c: string) => (c.match(/[\d.]+/g) ?? []).map(Number)
+      const ratios = await drawer.evaluate(withCssColor((toRgba) => (root: Element) => {
+        const parse = (c: string): number[] => toRgba(c)
         const lum = ([r, g, b]: number[]) => {
           const f = (v: number) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4 }
           return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
@@ -296,7 +297,7 @@ test.describe('tree drawer', () => {
           const [a, b] = [lum(fg), lum(bg)].sort((x, y) => y - x)
           return (a + 0.05) / (b + 0.05)
         }) }
-      })
+      }))
       expect(ratios.alpha).toBeGreaterThanOrEqual(0.94)
       expect(ratios.ratios.length).toBeGreaterThanOrEqual(5)
       for (const r of ratios.ratios) expect(r).toBeGreaterThanOrEqual(4.5)

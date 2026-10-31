@@ -13,6 +13,7 @@ import {
   centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, sessionPanel, modePill, openQuestionList, switchView,
 } from './threads-helpers'
 import { RELOAD_PASSAGE, RELOAD_SESSION, densePassage } from './threads-fixture'
+import { cssColorToRgba, withCssColor } from './css-color'
 
 const TASK = 'pw-task-threads-dense'
 
@@ -254,11 +255,11 @@ test.describe('Slice 1 fixes, round 3', () => {
         await expect(row.getByRole('button', { name: 'Not yet' })).toBeVisible()
       }
       // N26: disclosure triangles as painted (opacity included) keep 3:1.
-      const ratio = await drawer.evaluate((root) => {
+      const ratio = await drawer.evaluate(withCssColor((toRgba) => (root: Element) => {
         const tri = (root.querySelector('.thread-tree-disclosure[data-disabled="true"]:has(svg)')
           ?? root.querySelector('.thread-tree-disclosure:has(svg)')) as HTMLElement
         const body = root.querySelector('.thread-drawer-body') as HTMLElement
-        const rgb = (c: string) => (c.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number)
+        const rgb = (c: string) => toRgba(c).slice(0, 3)
         let alpha = 1
         for (let el: HTMLElement | null = tri; el && el !== body; el = el.parentElement) alpha *= Number(getComputedStyle(el).opacity)
         const fg = rgb(getComputedStyle(tri).color)
@@ -271,7 +272,7 @@ test.describe('Slice 1 fixes, round 3', () => {
         const a = lum(mixed)
         const b = lum(bg)
         return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
-      })
+      }))
       expect(ratio, 'painted disclosure contrast').toBeGreaterThanOrEqual(3)
     })
   }
@@ -363,10 +364,9 @@ test.describe('Slice 1 fixes, round 3', () => {
       }
       return out
     })
+    // HSL saturation of an hsl() or rgb() value (css-color.ts turns hsl() into the same rgb).
     const sat = (c: string) => {
-      const hsl = /hsl\(\s*[\d.]+\s+([\d.]+)%/.exec(c)
-      if (hsl) return Number(hsl[1])
-      const [r, g, b] = (c.match(/[\d.]+/g) ?? []).slice(0, 3).map((v) => Number(v) / 255)
+      const [r, g, b] = cssColorToRgba(c).slice(0, 3).map((v) => v / 255)
       const max = Math.max(r, g, b); const min = Math.min(r, g, b); const l = (max + min) / 2
       return max === min ? 0 : 100 * (l > 0.5 ? (max - min) / (2 - max - min) : (max - min) / (max + min))
     }

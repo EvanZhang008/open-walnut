@@ -27,6 +27,7 @@ import {
   sweepPoints,
   writeEvidence,
 } from './mail-context-audit-helpers'
+import { cssColorToRgba } from './css-color'
 
 /**
  * The half of the mail right-click slice that is neither an item list nor a request: where the menu
@@ -264,7 +265,7 @@ test.describe('dense: geometry, density, the sweep', () => {
       expect(hovered, `${theme} hovered label contrast`).toBeGreaterThanOrEqual(3)
       expect(backgrounds.item, 'the hovered row must not look like the menu behind it').not.toBe(backgrounds.menu)
       // And it must be a real tint rather than a trace of one: the shared token is 8% in light, 12% in dark.
-      const alpha = Number((backgrounds.item.match(/[\d.]+\)$/) ?? ['1)'])[0]!.replace(')', ''))
+      const alpha = cssColorToRgba(backgrounds.item)[3]
       expect(alpha, `hover background ${backgrounds.item}`).toBeGreaterThanOrEqual(0.05)
       await shoot(page.locator(MENU), `c42-${theme.toLowerCase()}-menu`)
       await shoot(page, `c42-${theme.toLowerCase()}-console`)

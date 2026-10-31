@@ -15,6 +15,7 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { REAL_PANEL, loadHome, seedColumns } from './draft-helpers';
 import { revealWalnutAdded } from './walnut-added-helpers';
+import { cssColorToRgba } from './css-color';
 
 export const SCREENSHOT_DIR = process.env.SEARCH_ASK_SHOT_DIR ?? '/tmp/search-ask-transcript';
 export const SESSION_ID = 'pw-search-ask-session';
@@ -88,9 +89,9 @@ export async function expectTitleLabelled(panel: Locator): Promise<void> {
     .toBeLessThanOrEqual(fit.clientWidth + 1);
 }
 
-/** WCAG relative luminance of a computed `rgb(...)` / `rgba(...)` colour. */
+/** WCAG relative luminance of a computed colour. */
 function luminance(color: string): number {
-  const [r, g, b] = (color.match(/[\d.]+/g) ?? ['0', '0', '0']).slice(0, 3).map(Number);
+  const [r, g, b] = cssColorToRgba(color);
   const channel = (v: number) => {
     const s = v / 255;
     return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
