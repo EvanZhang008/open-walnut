@@ -73,9 +73,11 @@ export function problemsOf(h: FleetHost, now: number): Problem[] {
   }
   const reboot = rebootProblem(h);
   if (reboot) out.push(reboot);
-  const disk = h.system?.diskFreeBytes;
-  if (typeof disk === 'number' && disk > 0 && disk < DISK_LOW_BYTES) {
-    out.push({ key: 'disk', text: `Disk almost full: ${gb(disk)} free`, detail: `Only ${gb(disk)} of disk is free; a build or a clone may not fit`, tone: 'bad' });
+  // The daemon's reading says 0 for a full disk; the profile's 0 only means not known.
+  const disk = freeDiskBytes(h);
+  const measured = !!h.now?.disk && h.now.disk.totalBytes > 0;
+  if (typeof disk === 'number' && (disk > 0 || measured) && disk < DISK_LOW_BYTES) {
+    out.push({ key: 'disk', text: `Disk almost full: ${size(disk)} free`, detail: `Only ${size(disk)} of disk is free; a build or a clone may not fit`, tone: 'bad' });
   }
   if (h.now?.stale) {
     out.push({ key: 'stale', text: `Last reading ${span(now - h.now.at)} ago`, detail: `The host did not answer in time; this is its reading from ${span(now - h.now.at)} ago`, tone: 'muted' });
@@ -144,28 +146,101 @@ export function timeline(h: FleetHost, now: number): Segment[] {
   return out;
 }
 
-export interface Gauge { key: 'cpu' | 'mem'; label: string; share: number | null; tone: Tone; title: string }
+export interface Gauge { key: 'cpu' | 'mem' | 'gpu' | 'disk'; label: string; share: number | null; tone: Tone; title: string; sub?: string; subLow?: boolean }
 
 function load(share: number | null): Tone {
   if (share === null) return 'muted';
   return share >= 0.9 ? 'bad' : share >= 0.75 ? 'warn' : 'good';
 }
 
+/** Free disk: the daemon's own reading of HOME's disk, else the host's profile (an older daemon). */
+export function freeDiskBytes(h: FleetHost): number | null {
+  const d = h.now?.disk;
+  if (d && d.totalBytes > 0) return d.freeBytes;
+  const b = h.system?.diskFreeBytes;
+  return typeof b === 'number' && b > 0 ? b : null;
+}
+
+
+function size(bytes: number): string {
+  const tb = bytes / (1024 * GB);
+  return tb >= 1 ? `${Math.round(tb * 10) / 10} TB` : gb(bytes) ?? '0 GB';
+}
+
+export function diskFree(h: FleetHost): { text: string; low: boolean } | null {
+  const b = freeDiskBytes(h);
+  return b === null ? null : { text: size(b), low: b < DISK_LOW_BYTES };
+}
+
+/** CPU, memory, GPU (a host that has one) and disk, each as a share in use. */
 export function gauges(h: FleetHost): Gauge[] {
   const n = h.now;
   const cpu = n?.cpuUtil ?? null;
   const mem = n && n.memAvailBytes !== null && n.memTotalBytes > 0 ? 1 - n.memAvailBytes / n.memTotalBytes : null;
-  return [
+  const out: Gauge[] = [
     { key: 'cpu', label: 'CPU', share: cpu, tone: load(cpu), title: cpu === null ? 'No CPU reading' : `CPU ${pct(cpu)} busy${n?.load ? `, load ${n.load[0]}` : ''}${n ? ` on ${n.cpus} CPUs` : ''}` },
     { key: 'mem', label: 'Memory', share: mem, tone: load(mem), title: mem === null || !n ? 'No memory reading' : `${gb(n.memTotalBytes - (n.memAvailBytes ?? 0))} of ${gb(n.memTotalBytes)} in use` },
   ];
+  if (typeof n?.gpuUtil === 'number') out.push({ key: 'gpu', label: 'GPU', share: n.gpuUtil, tone: load(n.gpuUtil), title: `GPU ${pct(n.gpuUtil)} busy` });
+  const d = n?.disk && n.disk.totalBytes > 0 ? n.disk : null;
+  const free = diskFree(h);
+  const used = d ? 1 - d.freeBytes / d.totalBytes : null;
+  out.push({
+    key: 'disk', label: 'Disk', share: used,
+    // Red goes by what is left, not the share: 10% of a 4 TB disk is plenty.
+    tone: used === null ? 'muted' : free?.low ? 'bad' : used >= 0.9 ? 'warn' : 'good',
+    title: d ? `${size(d.totalBytes - d.freeBytes)} of ${size(d.totalBytes)} in use, ${size(d.freeBytes)} free` : free ? `${free.text} free (its daemon does not report the disk size yet)` : 'No disk reading',
+    ...(free ? { sub: `${free.text} free`, subLow: free.low } : {}),
+  });
+  return out;
 }
 
-export function diskFree(h: FleetHost): { text: string; low: boolean } | null {
-  const b = h.system?.diskFreeBytes;
-  if (typeof b !== 'number' || !(b > 0)) return null;
-  const tb = b / (1024 * GB);
-  return { text: tb >= 1 ? `${Math.round(tb * 10) / 10} TB` : gb(b)!, low: b < DISK_LOW_BYTES };
+export interface Spark { key: 'cpu' | 'mem' | 'gpu' | 'sessions'; label: string; values: Array<number | null>; max: number; value: string; title: string }
+
+/** The small charts of the last 12 hours: CPU, memory, GPU (a host that has one), sessions open. */
+export function sparks(h: FleetHost): Spark[] {
+  const r = h.history?.recent;
+  if (!r || !r.cpu.length) return [];
+  // The rings say now; a chart's number says the most of its 12 hours, so the two never read as one value.
+  const peak = (list: Array<number | null>) => list.reduce<number>((m, v) => (v !== null && v > m ? v : m), 0);
+  const share = (key: Spark['key'], label: string, list: Array<number | null>): Spark => ({
+    key, label, values: list, max: 1, value: list.some((v) => v !== null) ? `max ${pct(peak(list))}` : '?',
+    title: `${label} over the last 12 hours, in ${r.stepMinutes} minute steps: peak ${pct(peak(list)) ?? '?'}`,
+  });
+  const out = [share('cpu', 'CPU', r.cpu), share('mem', 'Memory', r.mem)];
+  if (r.gpu) out.push(share('gpu', 'GPU', r.gpu));
+  // Sessions read null where the host was down, so the line breaks there as the others do.
+  const sessions = r.sessions.map((v, i) => (r.up[i] > 0 ? v : null));
+  const most = peak(sessions);
+  out.push({ key: 'sessions', label: 'Sessions', values: sessions, max: Math.max(1, most), value: `max ${most}`, title: `Most sessions open at once in each ${r.stepMinutes} minutes of the last 12 hours: up to ${most}` });
+  return out;
+}
+
+/**
+ * An SVG path for a spark (viewBox 0 0 100 h): the line, broken where a value is missing,
+ * and the area under it. A lone point between gaps is a short flat stroke, so it shows.
+ */
+export function sparkPaths(values: Array<number | null>, max: number, height = 20): { line: string; area: string } {
+  const n = values.length;
+  if (!n) return { line: '', area: '' };
+  const step = 100 / n;
+  const y = (v: number) => Math.round((height - 1 - (Math.min(max, Math.max(0, v)) / max) * (height - 2)) * 100) / 100;
+  const x = (i: number) => Math.round((i * step + step / 2) * 100) / 100;
+  const runs: Array<Array<[number, number]>> = [];
+  let cur: Array<[number, number]> = [];
+  values.forEach((v, i) => {
+    if (v === null) { if (cur.length) runs.push(cur); cur = []; return; }
+    cur.push([x(i), y(v)]);
+  });
+  if (cur.length) runs.push(cur);
+  let line = '';
+  let area = '';
+  for (const run of runs) {
+    const pts = run.length === 1 ? [[run[0][0] - step / 2, run[0][1]], [run[0][0] + step / 2, run[0][1]]] as Array<[number, number]> : run;
+    line += `M${pts.map((p) => `${p[0]} ${p[1]}`).join(' L')} `;
+    area += `M${pts[0][0]} ${height} L${pts.map((p) => `${p[0]} ${p[1]}`).join(' L')} L${pts[pts.length - 1][0]} ${height} Z `;
+  }
+  return { line: line.trim(), area: area.trim() };
 }
 
 /** What the host is, in one line: system, CPUs, memory. */

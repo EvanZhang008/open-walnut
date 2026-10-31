@@ -139,6 +139,17 @@ describe.each(TWINS)('host.vitals on the $name', (twin) => {
     expect(history.coverageFrom).toBe(first.m * 60_000)
     expect(history.bucketMinutes).toBe(60)
     expect((history.buckets as unknown[]).length).toBe(24)
+    // The disk holding HOME, and the last 12 hours in 15 minute steps for the Overview's charts.
+    const disk = stats.disk as { totalBytes: number; freeBytes: number }
+    expect(disk.totalBytes).toBeGreaterThan(0)
+    expect(disk.freeBytes).toBeLessThanOrEqual(disk.totalBytes)
+    expect('gpuUtil' in stats).toBe(true)
+    const recent = history.recent as { stepMinutes: number; cpu: unknown[]; sessions: unknown[] }
+    expect(recent.stepMinutes).toBe(15)
+    expect(recent.cpu).toHaveLength(48)
+    expect(recent.sessions).toHaveLength(48)
+    expect(typeof first.k).toBe('number')
+    expect(typeof first.g).toBe('number')
     expect((res.ledger as Record<string, unknown>).writeErrors).toBe(0)
   }, 60_000)
 })

@@ -8,6 +8,8 @@ import { apiGet, apiPost } from './client';
 export interface FleetWindow { days: number; minutes: number; up: number; linked: number; online: number | null; linkedShare: number | null; drops: number; downs: number; daemonStarts?: number; boots?: number }
 export interface FleetBucket { start: number; minutes: number; up: number; linked: number; cpu: number | null; mem: number | null; sessionsMax: number }
 export interface FleetOutage { from: number; to: number; minutes: number; kind: 'down' | 'unlinked' }
+/** The last 12 hours in 15 minute steps, oldest first; shares 0..1, mem in use, gpu null without one. */
+export interface FleetRecent { from: number; stepMinutes: number; up: number[]; cpu: Array<number | null>; mem: Array<number | null>; gpu: Array<number | null> | null; disk: Array<number | null>; sessions: number[] }
 
 export interface FleetHost {
   host: string;
@@ -17,8 +19,8 @@ export interface FleetHost {
   checkedAt: number;
   connection: { kind: 'local' | 'ssh-tunnel' | 'bridge'; connected: boolean; phase: string; phaseLabel: string; since: number | null; rttMs: number | null; error: string | null };
   system: { os: string | null; platform?: string | null; arch: string | null; cpus: number | null; memBytes: number | null; diskFreeBytes: number | null; kind: string; probedAt: string | null } | null;
-  now: { cpus: number; cpuUtil: number | null; load: [number, number, number] | null; memTotalBytes: number; memAvailBytes: number | null; uptimeSec: number; bootedAt: number; linked: boolean; at: number; stale: boolean } | null;
-  history: { coverageFrom: number | null; bucketMinutes: number; buckets: FleetBucket[]; windows: FleetWindow[]; outages: FleetOutage[]; boots: number[]; daemonStarts: number } | null;
+  now: { cpus: number; cpuUtil: number | null; load: [number, number, number] | null; memTotalBytes: number; memAvailBytes: number | null; uptimeSec: number; bootedAt: number; linked: boolean; gpuUtil?: number | null; disk?: { totalBytes: number; freeBytes: number } | null; at: number; stale: boolean } | null;
+  history: { coverageFrom: number | null; bucketMinutes: number; buckets: FleetBucket[]; windows: FleetWindow[]; outages: FleetOutage[]; boots: number[]; daemonStarts: number; recent?: FleetRecent } | null;
   sessions: { running: number | null };
   spend: { last30dUsd: number; from: string; basis: 'list-price' } | null;
   /** `phaseLabel` is the phase in words; show it, never `phase`. */

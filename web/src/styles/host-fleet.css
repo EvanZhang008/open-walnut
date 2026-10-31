@@ -109,7 +109,7 @@
 .hf-roles .hf-chip { border-color: transparent; background: var(--accent-subtle); color: var(--accent-text); font-weight: 600; }
 .hf-caps { display: flex; flex-wrap: wrap; gap: 4px; }
 
-.hf-vitals { display: flex; align-items: center; gap: 14px; }
+.hf-vitals { display: grid; grid-template-columns: repeat(auto-fit, minmax(52px, 1fr)); gap: 8px; justify-items: center; }
 .hf-gauge { position: relative; width: 52px; display: flex; flex-direction: column; align-items: center; --hf-c: var(--success); }
 .hf-gauge[data-tone="warn"] { --hf-c: var(--warning); }
 .hf-gauge[data-tone="bad"] { --hf-c: var(--error); }
@@ -130,10 +130,22 @@
   font-variant-numeric: tabular-nums;
 }
 .hf-gauge-label, .hf-big-label { font-size: 11.5px; color: var(--settings-help-fg); white-space: nowrap; }
-.hf-disk { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; }
-.hf-disk[data-low="true"] .hf-big { color: var(--settings-error-text); }
+.hf-gauge-sub { font-size: 10.5px; color: var(--settings-help-fg); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.hf-gauge-sub[data-low="true"] { color: var(--settings-error-text); font-weight: 600; }
 .hf-big { font-size: 20px; line-height: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
+/* The last 12 hours: one lane each, label | chart | value, on one time axis. */
+.hf-history { display: flex; flex-direction: column; gap: 4px; }
+.hf-lane { display: grid; grid-template-columns: 56px minmax(0, 1fr) 52px; align-items: center; gap: 8px; min-height: 20px; }
+.hf-lane-label { font-size: 11.5px; color: var(--settings-help-fg); white-space: nowrap; }
+.hf-lane-value { font-size: 11.5px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--fg-secondary); }
+.hf-lane-axis { min-height: 0; }
+.hf-spark { display: block; width: 100%; height: 20px; overflow: visible; --hf-c: var(--accent); }
+.hf-lane[data-spark="mem"] .hf-spark { --hf-c: var(--session-ref); }
+.hf-lane[data-spark="gpu"] .hf-spark { --hf-c: var(--fg-secondary); }
+.hf-lane[data-spark="sessions"] .hf-spark { --hf-c: var(--success); }
+.hf-spark-line { fill: none; stroke: var(--hf-c); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+.hf-spark-area { fill: var(--hf-c); opacity: 0.14; stroke: none; }
 .hf-timeline {
   position: relative;
   height: 10px;
@@ -150,7 +162,7 @@
 .hf-timeline-axis {
   display: flex;
   justify-content: space-between;
-  margin-top: 3px;
+  margin-top: 0;
   font-size: 10.5px;
   color: var(--settings-help-fg);
 }

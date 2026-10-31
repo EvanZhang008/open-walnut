@@ -1,7 +1,8 @@
 /**
  * One host on the fleet dashboard (HostFleetGroup.tsx). A live host is a card:
- * name and roles, what it is, CPU and memory as rings, disk free, the last 12
- * hours as a timeline, sessions and spend, what it can do, at most one problem
+ * name and roles, what it is, CPU, memory, GPU (a host with one) and disk as
+ * rings, the last 12 hours as an online timeline with a small chart each of
+ * CPU, memory, GPU and sessions under it, sessions and spend, what it can do, at most one problem
  * line (the whole sentence in its tooltip) with a button when Walnut can fix it,
  * and the full key/value table behind Details. A host Walnut is not connected to
  * is one compact row with Connect. Words come from host-fleet-dashboard-model.ts
@@ -10,8 +11,8 @@
 import { useState } from 'react';
 import type { FleetHost } from '@/api/hosts-fleet';
 import {
-  capabilityChips, diskFree, gauges, offlineLine, problemsOf, problemTitle, roleChips, systemLine, timeline,
-  type Chip, type Gauge,
+  capabilityChips, gauges, offlineLine, problemsOf, problemTitle, roleChips, sparkPaths, sparks, systemLine, timeline,
+  type Chip, type Gauge, type Spark,
 } from './host-fleet-dashboard-model';
 import { dayTitle, dayTone, fleetRows, statusKind, usd } from './host-fleet-model';
 import { SettingsButton } from '../inputs/SettingsButton';
@@ -38,6 +39,23 @@ function Ring({ g }: { g: Gauge }) {
       </svg>
       <span className="hf-gauge-value">{g.share === null ? '?' : `${Math.round(share * 100)}%`}</span>
       <span className="hf-gauge-label">{g.label}</span>
+      {g.sub && <span className="hf-gauge-sub" data-low={g.subLow ? 'true' : 'false'} data-testid="host-fleet-disk-free">{g.sub}</span>}
+    </div>
+  );
+}
+
+const SPARK_H = 20;
+
+function SparkRow({ s }: { s: Spark }) {
+  const { line, area } = sparkPaths(s.values, s.max, SPARK_H);
+  return (
+    <div className="hf-lane" data-testid="host-fleet-spark" data-spark={s.key} title={s.title}>
+      <span className="hf-lane-label">{s.label}</span>
+      <svg className="hf-spark" viewBox={`0 0 100 ${SPARK_H}`} preserveAspectRatio="none" aria-hidden="true">
+        <path className="hf-spark-area" d={area} />
+        <path className="hf-spark-line" d={line} vectorEffect="non-scaling-stroke" />
+      </svg>
+      <span className="hf-lane-value">{s.value}</span>
     </div>
   );
 }
@@ -90,8 +108,8 @@ export function HostFleetCard({ host, now, action, onBootStart }: {
   const [open, setOpen] = useState(false);
   const problems = problemsOf(host, now);
   const first = problems[0];
-  const disk = diskFree(host);
   const segments = timeline(host, now);
+  const charts = sparks(host);
   const roles = roleChips(host);
   return (
     <article className="hf-card" data-testid="host-fleet-card" data-host={host.host} id={`hf-card-${host.host}`} tabIndex={-1}>
@@ -103,18 +121,23 @@ export function HostFleetCard({ host, now, action, onBootStart }: {
       <p className="hf-card-sys" data-testid="host-fleet-system">{systemLine(host)}</p>
       <div className="hf-vitals">
         {gauges(host).map((g) => <Ring key={g.key} g={g} />)}
-        <div className="hf-disk" data-testid="host-fleet-disk" data-low={disk?.low ? 'true' : 'false'}>
-          <span className="hf-big">{disk?.text ?? '?'}</span>
-          <span className="hf-big-label">Disk free</span>
-        </div>
       </div>
-      <div className="hf-timeline-wrap">
-        <div className="hf-timeline" role="img" aria-label="The last 12 hours" data-testid="host-fleet-timeline">
-          {segments.map((s) => (
-            <i key={`${s.from}-${s.tone}`} data-tone={s.tone} title={s.title} style={{ left: `${s.from * 100}%`, width: `${(s.to - s.from) * 100}%` }} />
-          ))}
+      <div className="hf-history" data-testid="host-fleet-history">
+        <div className="hf-lane">
+          <span className="hf-lane-label">Online</span>
+          <div className="hf-timeline" role="img" aria-label="Online over the last 12 hours" data-testid="host-fleet-timeline">
+            {segments.map((s) => (
+              <i key={`${s.from}-${s.tone}`} data-tone={s.tone} title={s.title} style={{ left: `${s.from * 100}%`, width: `${(s.to - s.from) * 100}%` }} />
+            ))}
+          </div>
+          <span className="hf-lane-value" />
         </div>
-        <div className="hf-timeline-axis" aria-hidden="true"><span>12 h ago</span><span>6 h</span><span>{host.now?.stale ? 'Last reading' : 'Now'}</span></div>
+        {charts.map((c) => <SparkRow key={c.key} s={c} />)}
+        <div className="hf-lane hf-lane-axis" aria-hidden="true">
+          <span />
+          <div className="hf-timeline-axis"><span>12 h ago</span><span>6 h</span><span>{host.now?.stale ? 'Last reading' : 'Now'}</span></div>
+          <span />
+        </div>
       </div>
       <div className="hf-numbers">
         <div data-testid="host-fleet-sessions">

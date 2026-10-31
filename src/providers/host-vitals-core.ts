@@ -4,8 +4,11 @@
  *
  * Now: CPU use (two readings of os.cpus() apart in time), load, total and
  * available memory (Linux MemAvailable, macOS vm_stat free + inactive +
- * speculative pages, else os.freemem), uptime and boot time, the daemon's own
- * start, whether a Walnut server holds a link to it, and its running sessions.
+ * speculative pages, else os.freemem), GPU use where the host has one (macOS
+ * ioreg's accelerator statistics, Linux nvidia-smi; a host with none is asked
+ * again only hourly), the disk holding HOME (statfs, else df), uptime and boot
+ * time, the daemon's own start, whether a Walnut server holds a link to it, and
+ * its running sessions.
  *
  * Lately: a ledger the daemon writes itself, one line a minute, kept 31 days in
  * one file per UTC day (about 60 KB a day). The host records that it was up, so
@@ -16,7 +19,8 @@
  * leave the host.
  *
  * Line: {"m":<epoch minute>,"b":<boot minute>,"d":<daemon start minute>,
- *        "c":<0|1 linked>,"s":<running sessions>,"u":<cpu %|-1>,"a":<memory available %|-1>}
+ *        "c":<0|1 linked>,"s":<running sessions>,"u":<cpu %|-1>,"a":<memory available %|-1>,
+ *        "g":<gpu %|-1>,"k":<disk used %|-1>}   (g and k since 2026-11; older lines read -1)
  * Two daemons on one host (one draining during an upgrade) may both write a
  * minute; the fold counts a minute once.
  *
@@ -47,6 +51,8 @@ export interface HostVitalsDeps {
   retentionDays?: number
   /** Tick period (ms); a line is still written at most once a minute. */
   tickMs?: number
+  /** Whose disk to report: a path on it (the twins pass HOME). Default '/'. */
+  diskPath?: string
 }
 
 export interface HostStats {
@@ -62,6 +68,27 @@ export interface HostStats {
   daemonStartedAt: number
   linked: boolean
   running: number
+  /** 0..1 averaged over the host's GPUs; null with no GPU or no reading (absent from an older daemon). */
+  gpuUtil?: number | null
+  /** The disk holding HOME (absent from an older daemon). */
+  disk?: { totalBytes: number; freeBytes: number } | null
+}
+
+/**
+ * The last 12 hours in 15 minute steps, oldest first, for the Overview's small
+ * charts: each list holds one value a step (null where the host was down or the
+ * reading was missing). Shares are 0..1; mem is memory IN USE; gpu is null for a
+ * host that never reported one.
+ */
+export interface VitalsRecent {
+  from: number
+  stepMinutes: number
+  up: number[]
+  cpu: Array<number | null>
+  mem: Array<number | null>
+  gpu: Array<number | null> | null
+  disk: Array<number | null>
+  sessions: number[]
 }
 
 export interface VitalsBucket {
@@ -110,6 +137,8 @@ export interface HostVitals {
     /** Boot times seen in the requested days (ms), oldest first. */
     boots: number[]
     daemonStarts: number
+    /** Absent from an older daemon. */
+    recent?: VitalsRecent
   }
   ledger: { lastWriteAt: number | null; writeErrors: number; lastError: string | null }
 }
@@ -135,6 +164,9 @@ export function createHostVitals(deps: HostVitalsDeps) {
   var ticking = false
   // Past days never change once over (a late duplicate line only repeats a minute): parsed once.
   var dayCache: Record<string, { size: number; rows: number[] }> = {}
+  var gpuLast: { at: number; value: number | null } | null = null
+  var gpuNoneUntil = 0
+  var diskLast: { at: number; value: { totalBytes: number; freeBytes: number } | null } | null = null
 
   function cpuTimes(): { idle: number; total: number } | null {
     var list: Array<{ times: Record<string, number> }>
@@ -177,19 +209,33 @@ export function createHostVitals(deps: HostVitalsDeps) {
     return utilBetween(cur, next)
   }
 
-  function execText(file: string, args: string[], ms: number): Promise<string | null> {
+  /** The output, or null; `slow` says it ran out of time (so a missing reading is not a missing tool). */
+  function execRun(file: string, args: string[], ms: number, maxBuffer?: number): Promise<{ out: string | null; slow: boolean }> {
     return new Promise(function (resolve) {
       var done = false
-      var timer2 = setTimeout(function () { if (!done) { done = true; resolve(null) } }, ms + 100)
+      var timer2 = setTimeout(function () { if (!done) { done = true; resolve({ out: null, slow: true }) } }, ms + 100)
       try {
-        deps.execFile(file, args, { timeout: ms, killSignal: 'SIGKILL', maxBuffer: 64 * 1024, encoding: 'utf8', windowsHide: true },
+        deps.execFile(file, args, { timeout: ms, killSignal: 'SIGKILL', maxBuffer: maxBuffer || 64 * 1024, encoding: 'utf8', windowsHide: true },
           function (err, stdout) {
             if (done) return
             done = true
             clearTimeout(timer2)
-            resolve(err ? null : String(stdout || ''))
+            var killed = !!err && ((err as { killed?: boolean }).killed === true || (err as { signal?: string }).signal === 'SIGKILL')
+            resolve({ out: err ? null : String(stdout || ''), slow: killed })
           })
-      } catch (_e) { if (!done) { done = true; clearTimeout(timer2); resolve(null) } }
+      } catch (_e) { if (!done) { done = true; clearTimeout(timer2); resolve({ out: null, slow: false }) } }
+    })
+  }
+
+  function execText(file: string, args: string[], ms: number): Promise<string | null> {
+    return execRun(file, args, ms).then(function (r) { return r.out })
+  }
+
+  /** p, or null after ms: a hung call (a stuck network disk) never holds a tick. */
+  function within<T>(p: Promise<T>, ms: number): Promise<T | null> {
+    return new Promise(function (resolve) {
+      var t2 = setTimeout(function () { resolve(null) }, ms)
+      p.then(function (v) { clearTimeout(t2); resolve(v) }, function () { clearTimeout(t2); resolve(null) })
     })
   }
 
@@ -225,9 +271,94 @@ export function createHostVitals(deps: HostVitalsDeps) {
     return typeof v === 'number' && isFinite(v) && v >= 0 ? v : null
   }
 
+  /** macOS ioreg: the highest "Device Utilization %" of its accelerators, as 0..1. */
+  function parseIoreg(text: string): number | null {
+    var re = /"Device Utilization %"\s*=\s*(\d+)/g
+    var best = -1
+    var m: RegExpExecArray | null
+    while ((m = re.exec(String(text || '')))) best = Math.max(best, Number(m[1]))
+    return best < 0 ? null : Math.min(1, best / 100)
+  }
+
+  /** nvidia-smi utilization.gpu, one line a GPU: their average, as 0..1. */
+  function parseNvidiaSmi(text: string): number | null {
+    var lines = String(text || '').split('\n').filter(function (l) { return /^\s*\d+(\.\d+)?\s*$/.test(l) })
+    if (!lines.length) return null
+    var sum = 0
+    for (var i = 0; i < lines.length; i++) sum += Math.min(100, Number(lines[i]))
+    return Math.round(sum / lines.length) / 100
+  }
+
+  var gpuRun: Promise<number | null> | null = null
+
+  /**
+   * GPU use, read at most every 20 s and one read at a time. A host whose tool is missing or
+   * shows no GPU is asked again an hour later; a read that ran out of time keeps the last value
+   * (with none yet, it is asked again 10 minutes later).
+   */
+  function gpuRead(): Promise<number | null> {
+    var t = now()
+    if (gpuLast && t - gpuLast.at < 20000) return Promise.resolve(gpuLast.value)
+    if (t < gpuNoneUntil) return Promise.resolve(null)
+    if (gpuRun) return gpuRun
+    gpuRun = (async function () {
+      var r: { out: string | null; slow: boolean } = { out: null, slow: false }
+      var v: number | null = null
+      if (deps.platform === 'darwin') {
+        // Every accelerator property is printed: room for a Mac with two GPUs.
+        r = await execRun('ioreg', ['-r', '-d', '1', '-w', '0', '-c', 'IOAccelerator'], 3000, 1024 * 1024)
+        v = r.out === null ? null : parseIoreg(r.out)
+      } else if (deps.platform === 'linux') {
+        // A cold driver takes seconds to answer on a host without persistence mode.
+        r = await execRun('nvidia-smi', ['--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'], 8000)
+        v = r.out === null ? null : parseNvidiaSmi(r.out)
+      }
+      var prev = gpuLast ? gpuLast.value : null
+      // Out of time: keep a GPU we have read; one never read yet waits 10 minutes, not every tick.
+      if (v === null && r.slow) { v = prev; if (prev === null) gpuNoneUntil = now() + 10 * MIN }
+      else if (v === null) gpuNoneUntil = now() + 60 * MIN
+      gpuLast = { at: now(), value: v }
+      return v
+    })().finally(function () { gpuRun = null })
+    return gpuRun
+  }
+
+  /** The tick waits for a fresh reading; an asker gets the last one at once (a fresh one follows). */
+  function gpuUtil(base: 'tick' | 'ask'): Promise<number | null> {
+    if (base === 'ask' && gpuLast && now() - gpuLast.at < 5 * MIN) {
+      void gpuRead()
+      return Promise.resolve(gpuLast.value)
+    }
+    return gpuRead()
+  }
+
+  /** The disk holding diskPath: statfs where the runtime has it, else df. Read at most once a minute. */
+  async function disk(): Promise<{ totalBytes: number; freeBytes: number } | null> {
+    var t = now()
+    if (diskLast && t - diskLast.at < MIN) return diskLast.value
+    var where = deps.diskPath || '/'
+    var v: { totalBytes: number; freeBytes: number } | null = null
+    var statfs = (deps.fs.promises as unknown as { statfs?: (p: string) => Promise<{ bsize: number; blocks: number; bavail: number }> }).statfs
+    if (typeof statfs === 'function') {
+      var st = await within(statfs(where), 3000)
+      if (st && st.blocks > 0 && st.bsize > 0 && st.bavail >= 0) v = { totalBytes: st.blocks * st.bsize, freeBytes: st.bavail * st.bsize }
+    }
+    if (v === null && deps.platform !== 'win32' && deps.platform !== 'test') {
+      var df = await execText('df', ['-kP', where], 3000)
+      var row = df === null ? null : String(df).trim().split('\n').pop() || ''
+      var f = row ? row.split(/\s+/) : []
+      // Counted from the end: a filesystem name with a space shifts the columns from the front.
+      var total = Number(f[f.length - 5]), avail = Number(f[f.length - 3])
+      if (f.length >= 6 && total > 0 && avail >= 0 && isFinite(avail)) v = { totalBytes: total * 1024, freeBytes: Math.min(avail, total) * 1024 }
+    }
+    diskLast = { at: t, value: v }
+    return v
+  }
+
   async function measure(base: 'tick' | 'ask'): Promise<HostStats> {
-    var util = await cpuUtil(base)
-    var mem = await memAvail()
+    // At once, not one after another: an asker's reply has a few seconds.
+    var read = await Promise.all([cpuUtil(base), memAvail(), gpuUtil(base), disk()])
+    var util = read[0], mem = read[1], gpu = read[2], dsk = read[3]
     var t = now()
     var cpus = 0
     try { cpus = deps.os.cpus().length } catch (_e) { cpus = 0 }
@@ -248,7 +379,7 @@ export function createHostVitals(deps: HostVitalsDeps) {
       sampledAt: t, cpus: cpus, cpuUtil: util, load: load,
       memTotalBytes: total, memAvailBytes: mem === null ? null : Math.min(mem, total || mem),
       uptimeSec: uptime, bootedAt: t - uptime * 1000, daemonStartedAt: deps.startedAt,
-      linked: linked, running: running,
+      linked: linked, running: running, gpuUtil: gpu, disk: dsk,
     }
     return lastStats
   }
@@ -308,6 +439,8 @@ export function createHostVitals(deps: HostVitalsDeps) {
         s: s.running,
         u: s.cpuUtil === null ? -1 : Math.round(s.cpuUtil * 100),
         a: s.memAvailBytes === null || !s.memTotalBytes ? -1 : Math.round((s.memAvailBytes / s.memTotalBytes) * 100),
+        g: s.gpuUtil === null || s.gpuUtil === undefined ? -1 : Math.round(s.gpuUtil * 100),
+        k: !s.disk ? -1 : Math.round((1 - s.disk.freeBytes / s.disk.totalBytes) * 100),
       }) + '\n'
       try {
         await ensureDir()
@@ -342,7 +475,7 @@ export function createHostVitals(deps: HostVitalsDeps) {
     return typeof v === 'number' && isFinite(v) ? v : null
   }
 
-  var ROW = 7 // m, boot, daemon start, linked, sessions, cpu%, mem%
+  var ROW = 9 // m, boot, daemon start, linked, sessions, cpu%, mem%, gpu%, disk%
 
   /** One flat array of rows (ROW numbers each); a bad line is skipped. */
   function parseDay(text: string): number[] {
@@ -355,8 +488,8 @@ export function createHostVitals(deps: HostVitalsDeps) {
       try { o = JSON.parse(raw) } catch (_e) { continue }
       var m = num(o && o.m)
       if (m === null || m <= 0) continue
-      var u = num(o.u), a = num(o.a)
-      out.push(m, num(o.b) || 0, num(o.d) || 0, o.c === 1 ? 1 : 0, Math.max(0, num(o.s) || 0), u === null ? -1 : u, a === null ? -1 : a)
+      var u = num(o.u), a = num(o.a), g = num(o.g), k = num(o.k)
+      out.push(m, num(o.b) || 0, num(o.d) || 0, o.c === 1 ? 1 : 0, Math.max(0, num(o.s) || 0), u === null ? -1 : u, a === null ? -1 : a, g === null ? -1 : g, k === null ? -1 : k)
     }
     return out
   }
@@ -407,8 +540,9 @@ export function createHostVitals(deps: HostVitalsDeps) {
     // One slot per minute of the widest range: 0 none, 1 up, 2 up and linked. Typed
     // arrays keep a 31-day fold to a few milliseconds on the daemon's one thread.
     var state = new Uint8Array(N), sess = new Uint16Array(N), cpu = new Int8Array(N), mem = new Int8Array(N)
+    var gpu = new Int8Array(N), dsk = new Int8Array(N)
     var boot = new Float64Array(N), dstart = new Float64Array(N)
-    cpu.fill(-1); mem.fill(-1)
+    cpu.fill(-1); mem.fill(-1); gpu.fill(-1); dsk.fill(-1)
     var firstSeen = -1
     for (var d = Math.floor(startMin / DAY_MIN); d <= Math.floor(endMin / DAY_MIN); d++) {
       var rows = await readDay(dayName(d * DAY_MIN) + '.jsonl', today)
@@ -417,7 +551,11 @@ export function createHostVitals(deps: HostVitalsDeps) {
         if (i < 0 || i >= N) continue
         if (firstSeen < 0 || i < firstSeen) firstSeen = i
         // A minute two daemons both wrote is one minute, linked if either was.
-        if (state[i] === 0) { boot[i] = rows[r + 1]; dstart[i] = rows[r + 2]; cpu[i] = Math.max(-1, Math.min(100, rows[r + 5])); mem[i] = Math.max(-1, Math.min(100, rows[r + 6])) }
+        if (state[i] === 0) {
+          boot[i] = rows[r + 1]; dstart[i] = rows[r + 2]
+          cpu[i] = Math.max(-1, Math.min(100, rows[r + 5])); mem[i] = Math.max(-1, Math.min(100, rows[r + 6]))
+          gpu[i] = Math.max(-1, Math.min(100, rows[r + 7])); dsk[i] = Math.max(-1, Math.min(100, rows[r + 8]))
+        }
         if (rows[r + 3] === 1 || state[i] === 0) state[i] = rows[r + 3] === 1 ? 2 : Math.max(state[i], 1)
         if (rows[r + 4] > sess[i]) sess[i] = Math.min(65535, rows[r + 4])
       }
@@ -484,6 +622,28 @@ export function createHostVitals(deps: HostVitalsDeps) {
       buckets.push(b)
     }
 
+    // The last 12 hours in 15 minute steps, for the small charts.
+    var STEP = 15, SPAN = 720
+    var recent: VitalsRecent = { from: (startMin + N - SPAN) * MIN, stepMinutes: STEP, up: [], cpu: [], mem: [], gpu: [], disk: [], sessions: [] }
+    var anyGpu = false
+    var avg = function (sum: number, n: number): number | null { return n ? Math.round(sum / n) / 100 : null }
+    for (var rs = N - SPAN; rs < N; rs += STEP) {
+      var upN = 0, sMax = 0, cs = 0, cn = 0, ms = 0, mn = 0, gs = 0, gn = 0, ks = 0, kn = 0
+      for (var rm = Math.max(rs, 0); rm < rs + STEP && rm < N; rm++) {
+        if (!state[rm]) continue
+        upN++
+        if (sess[rm] > sMax) sMax = sess[rm]
+        if (cpu[rm] >= 0) { cs += cpu[rm]; cn++ }
+        if (mem[rm] >= 0) { ms += 100 - mem[rm]; mn++ }
+        if (gpu[rm] >= 0) { gs += gpu[rm]; gn++ }
+        if (dsk[rm] >= 0) { ks += dsk[rm]; kn++ }
+      }
+      if (gn) anyGpu = true
+      recent.up.push(upN); recent.sessions.push(sMax)
+      recent.cpu.push(avg(cs, cn)); recent.mem.push(avg(ms, mn)); recent.gpu!.push(avg(gs, gn)); recent.disk.push(avg(ks, kn))
+    }
+    if (!anyGpu) recent.gpu = null
+
     var outFrom = Math.max(reqFrom, covFrom)
     var outages: VitalsOutage[] = []
     runs(outFrom, N, down).forEach(function (x) {
@@ -504,10 +664,11 @@ export function createHostVitals(deps: HostVitalsDeps) {
         outages: outages.slice(0, 20),
         boots: bootList.filter(function (m) { return m >= endMin - days * DAY_MIN && m < endMin }).map(function (m) { return m * MIN }),
         daemonStarts: countFrom(startList, endMin - days * DAY_MIN),
+        recent: recent,
       },
       ledger: { lastWriteAt: lastWriteAt, writeErrors: writeErrors, lastError: lastError },
     }
   }
 
-  return { start: start, stop: stop, tick: tick, stats: stats, vitals: vitals, parseMeminfo: parseMeminfo, parseVmStat: parseVmStat }
+  return { start: start, stop: stop, tick: tick, stats: stats, vitals: vitals, parseMeminfo: parseMeminfo, parseVmStat: parseVmStat, parseIoreg: parseIoreg, parseNvidiaSmi: parseNvidiaSmi }
 }

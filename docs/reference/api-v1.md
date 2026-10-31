@@ -1726,11 +1726,13 @@ daemon predates the capability has `now` and `history` null.
 "ssh-tunnel" | "bridge", connected, phase, phaseLabel, since, rttMs, error },
 system: { os, arch, cpus, memBytes, diskFreeBytes, kind, probedAt } | null, now: {
 cpus, cpuUtil (0..1 | null), load: [1m, 5m, 15m] | null, memTotalBytes,
-memAvailBytes, uptimeSec, bootedAt, linked, at, stale } | null, history: {
+memAvailBytes, uptimeSec, bootedAt, linked, gpuUtil (0..1 | null), disk: {
+totalBytes, freeBytes } | null, at, stale } | null, history: {
 coverageFrom, bucketMinutes, buckets: [{ start, minutes, up, linked, cpu, mem,
 sessionsMax }], windows: [{ days: 1 | 7 | 30, minutes, up, linked, online,
 linkedShare, drops, downs, daemonStarts, boots }], outages: [{ from, to, minutes, kind: "down" |
-"unlinked" }], boots, daemonStarts } | null, sessions: { running }, spend: {
+"unlinked" }], boots, daemonStarts, recent?: { from, stepMinutes: 15, up, cpu, mem,
+gpu | null, disk, sessions } } | null, sessions: { running }, spend: {
 last30dUsd, from, basis: "list-price" } | null, server: { enabled, program,
 phase, build, phone, message } | null, daemon: { version, startedAt, startup,
 runtime, vitals } | null, placement: { score, busy, reasons, weight, longRunning: { ok,
@@ -1749,7 +1751,13 @@ History comes from a ledger each daemon writes itself, one line a minute, kept 3
 days under the host's HOME, so a Mac that slept never counts as the host being
 down: `up` minutes had the host and its daemon running, `linked` minutes also had
 a Walnut server linked. Shares count only minutes since the ledger began
-(`coverageFrom`). `placement.score`, `busy`, `reasons` and `weight` are session
+(`coverageFrom`). `history.recent` (additive, 2026-11) is the last 12 hours in 15
+minute steps, oldest first, one value a step in each list: CPU and memory in use,
+GPU (the list is null for a host that never reported one) and disk in use as 0..1,
+null where the host was down; `up` minutes and the most `sessions` open at once.
+`now.gpuUtil` is the GPU in use (macOS accelerator statistics, Linux nvidia-smi; null
+with none) and `now.disk` the disk holding the host's HOME. A daemon older than these
+sends none of them. `placement.score`, `busy`, `reasons` and `weight` are session
 placement's own judgment of the host, the same as `GET /api/v1/hosts/load` (all null
 when its load is not known); `placement.longRunning` says whether a job that must keep
 running fits there. `sessions.running`

@@ -10319,7 +10319,7 @@ const HOST_VITALS_DIR = process.env.WALNUT_HOST_VITALS_DIR
   || (IS_PROD_DAEMON_DIR ? path.join(HOME_DIR, '.open-walnut', 'tmp', 'host-vitals') : path.join(DAEMON_DIR, 'host-vitals'))
 const hostVitals = createHostVitals({
   fs, os, execFile: execFile as unknown as HostVitalsDeps['execFile'], platform: process.platform,
-  dir: HOST_VITALS_DIR, startedAt: DAEMON_START_TS,
+  dir: HOST_VITALS_DIR, startedAt: DAEMON_START_TS, diskPath: HOME_DIR,
   // A Walnut server's own link: any socket but a follower's, a lane's or the bridge.
   linked: () => { for (const c of wsClients) if (isServerClient(c)) return true; return false },
   running: () => { let n = 0; for (const s of sessions.values()) if (s.state === 'running') n++; return n },

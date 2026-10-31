@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  capabilityChips, clip, diskFree, fleetSummary, gauges, isLive, linkLabel, problemsOf, roleChips, timeline, topologyLayout, TIMELINE_MS, TOPO,
+  capabilityChips, clip, diskFree, fleetSummary, gauges, isLive, linkLabel, problemsOf, roleChips, sparkPaths, sparks, timeline, topologyLayout, TIMELINE_MS, TOPO,
 } from '../../web/src/components/settings/sections/host-fleet-dashboard-model'
 import type { FleetHost } from '../../web/src/api/hosts-fleet'
 
@@ -162,11 +162,29 @@ describe('12 hour timeline', () => {
 })
 
 describe('gauges, disk and chips', () => {
-  it('CPU and memory shares with their tones', () => {
-    const [cpu, mem] = gauges(host())
-    expect(cpu).toMatchObject({ share: 0.25, tone: 'good' })
-    expect(mem).toMatchObject({ share: 0.75, tone: 'warn' })
-    expect(gauges(host({ now: null })).map((g) => g.share)).toEqual([null, null])
+  it('CPU, memory and disk shares with their tones; GPU only on a host that has one', () => {
+    const [cpu, mem, disk] = gauges(host())
+    expect(cpu).toMatchObject({ key: 'cpu', share: 0.25, tone: 'good' })
+    expect(mem).toMatchObject({ key: 'mem', share: 0.75, tone: 'warn' })
+    // An older daemon reports no disk size: the ring has no share, its label says what is free.
+    expect(disk).toMatchObject({ key: 'disk', share: null, sub: '400 GB free', subLow: false })
+    expect(gauges(host()).map((g) => g.key)).toEqual(['cpu', 'mem', 'disk'])
+    expect(gauges(host({ now: null })).map((g) => g.share)).toEqual([null, null, null])
+    const gpu = host({ now: { ...host().now!, gpuUtil: 0.62, disk: { totalBytes: 1000 * GB, freeBytes: 250 * GB } } })
+    expect(gauges(gpu).map((g) => [g.key, g.share])).toEqual([['cpu', 0.25], ['mem', 0.75], ['gpu', 0.62], ['disk', 0.75]])
+  })
+  it('the disk ring is the share in use, red by what is left', () => {
+    const low = host({ now: { ...host().now!, disk: { totalBytes: 100 * GB, freeBytes: 12 * GB } } })
+    expect(gauges(low).find((g) => g.key === 'disk')).toMatchObject({ share: 0.88, tone: 'bad', sub: '12 GB free', subLow: true })
+    const big = host({ now: { ...host().now!, disk: { totalBytes: 4096 * GB, freeBytes: 300 * GB } } })
+    expect(gauges(big).find((g) => g.key === 'disk')).toMatchObject({ tone: 'warn', sub: '300 GB free', subLow: false })
+    expect(diskFree(low)).toEqual({ text: '12 GB', low: true }) // the daemon's reading wins over the profile
+    // A full disk the daemon read is the loudest case, never a quiet one.
+    const full = host({ now: { ...host().now!, disk: { totalBytes: 100 * GB, freeBytes: 0 } } })
+    expect(problemsOf(full, NOW)[0]).toMatchObject({ key: 'disk', text: 'Disk almost full: 0 GB free', tone: 'bad' })
+    expect(fleetSummary([full], NOW).problems).toBe(1)
+    // A profile that says 0 only means it was not probed.
+    expect(problemsOf(host({ system: { ...host().system!, diskFreeBytes: 0 } }), NOW)).toEqual([])
   })
   it('disk free in GB or TB, red under 20 GB', () => {
     expect(diskFree(host())).toEqual({ text: '400 GB', low: false })
@@ -187,6 +205,35 @@ describe('gauges, disk and chips', () => {
       mcp: [{ name: 'a' }, { name: 'b', plugin: 'P' }], clis: [], declared: ['gpu', 'cloud'], unknown: ['mcp', 'system'],
     }
     expect(capabilityChips(h).map((c) => c.text)).toEqual(['iOS simulator', 'Browser', 'Docker', 'MCP × 2', 'gpu', 'MCP?'])
+  })
+})
+
+describe('small charts of the last 12 hours', () => {
+  const recent = (over: Record<string, unknown> = {}) => ({
+    from: NOW - 12 * H, stepMinutes: 15, up: Array(48).fill(15), cpu: Array(48).fill(0.2), mem: Array(48).fill(0.5), gpu: null, disk: Array(48).fill(0.4), sessions: Array(48).fill(3), ...over,
+  })
+  it('CPU, memory and sessions; GPU only when the host reported one', () => {
+    const h = host({ history: { ...host().history!, recent: recent() as never } })
+    expect(sparks(h).map((s) => [s.key, s.value])).toEqual([['cpu', 'max 20%'], ['mem', 'max 50%'], ['sessions', 'max 3']])
+    const g = host({ history: { ...host().history!, recent: recent({ gpu: [...Array(47).fill(null), 0.4] }) as never } })
+    expect(sparks(g).map((s) => s.key)).toEqual(['cpu', 'mem', 'gpu', 'sessions'])
+    expect(sparks(host())).toEqual([]) // an older daemon sends no recent series
+  })
+  it('a chart\'s number is the most of its 12 hours, and sessions break where the host was down', () => {
+    const cpu = [...Array(46).fill(0.2), 0.7, null]
+    const up = [...Array(46).fill(15), 15, 0]
+    const h = host({ history: { ...host().history!, recent: recent({ cpu, up, sessions: [...Array(46).fill(1), 9, 0] }) as never } })
+    const [c, , s] = sparks(h)
+    expect(c.value).toBe('max 70%')
+    expect(s.values[47]).toBeNull()
+    expect(s).toMatchObject({ max: 9, value: 'max 9' })
+  })
+  it('a path breaks at each gap, and a lone point still draws', () => {
+    const { line, area } = sparkPaths([0, 1, null, 0.5, null, null], 1, 20)
+    expect(line.split('M').filter(Boolean)).toHaveLength(2)
+    expect(area.split('Z').filter((x) => x.trim())).toHaveLength(2)
+    expect(line).toContain('M8.33 19 L25 1') // the first run: 0 at the bottom, 1 at the top
+    expect(sparkPaths([null, null], 1)).toEqual({ line: '', area: '' })
   })
 })
 

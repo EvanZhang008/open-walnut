@@ -4,7 +4,7 @@
  * CPU counters and the ledger directory are the test's own, so every number is
  * exact.
  */
-import { afterAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -12,6 +12,7 @@ import { createHostVitals, type HostVitalsDeps } from '../../src/providers/host-
 
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-host-vitals-')))
 afterAll(() => { if (tmp.includes('walnut-host-vitals-')) fs.rmSync(tmp, { recursive: true, force: true }) })
+afterEach(() => { vi.useRealTimers() })
 
 const MIN = 60_000
 const DAY = 1440
@@ -88,6 +89,117 @@ describe('readings', () => {
     })
     const s = await v.stats()
     expect(s).toMatchObject({ cpuUtil: null, memAvailBytes: null, load: null, linked: false, cpus: 0 })
+  })
+})
+
+describe('GPU and disk', () => {
+  it('parses macOS ioreg accelerator statistics and nvidia-smi', () => {
+    const { v } = rig()
+    const ioreg = '+-o AGXAcceleratorG14X  <class AGXAcceleratorG14X>\n  "PerformanceStatistics" = {"In use system memory"=123,"Device Utilization %"=37,"Renderer Utilization %"=30}\n'
+    expect(v.parseIoreg(ioreg)).toBe(0.37)
+    expect(v.parseIoreg(ioreg + '"Device Utilization %"=81')).toBe(0.81) // the busiest of two
+    expect(v.parseIoreg('no accelerator here')).toBeNull()
+    expect(v.parseNvidiaSmi('40\n60\n')).toBe(0.5)
+    expect(v.parseNvidiaSmi('NVIDIA-SMI has failed because it could not communicate with the NVIDIA driver.')).toBeNull()
+  })
+
+  type Exec = (file: string, args: string[], o: unknown, cb: (e: Error | null, out: string) => void) => void
+  const vmStat = 'Mach Virtual Memory Statistics: (page size of 4096 bytes)\nPages free: 10.\n'
+
+  it('reads the GPU on a Mac at most every 20 s, and the disk of HOME', async () => {
+    const calls: string[] = []
+    const { v, clock } = rig({
+      platform: 'darwin', diskPath: tmp,
+      execFile: ((file, _a, _o, cb) => { calls.push(file); cb(null, file === 'vm_stat' ? vmStat : '"Device Utilization %"=12') }) as Exec as never,
+    })
+    const s = await v.stats()
+    expect(s.gpuUtil).toBe(0.12)
+    expect(s.disk!.totalBytes).toBeGreaterThan(0)
+    expect(s.disk!.freeBytes).toBeLessThanOrEqual(s.disk!.totalBytes)
+    clock.t += 10_000
+    await v.tick()
+    expect(calls.filter((c) => c === 'ioreg')).toHaveLength(1) // within 20 s: the same reading
+    clock.t += MIN
+    await v.tick()
+    expect(calls.filter((c) => c === 'ioreg')).toHaveLength(2)
+  })
+
+  it('a host that shows no GPU is asked again only an hour later', async () => {
+    const calls: string[] = []
+    const { v, clock } = rig({ platform: 'darwin', execFile: ((file, _a, _o, cb) => { calls.push(file); cb(null, file === 'vm_stat' ? vmStat : 'no accelerator') }) as Exec as never })
+    expect((await v.stats()).gpuUtil).toBeNull()
+    clock.t += 30 * MIN
+    await v.tick()
+    expect(calls.filter((c) => c === 'ioreg')).toHaveLength(1)
+    clock.t += 31 * MIN
+    await v.tick()
+    expect(calls.filter((c) => c === 'ioreg')).toHaveLength(2)
+  })
+
+  it('a GPU read that runs out of time keeps the last value and no hour of silence', async () => {
+    let mode: 'ok' | 'slow' = 'ok'
+    const calls: string[] = []
+    const { v, clock } = rig({
+      platform: 'linux',
+      execFile: ((file, _a, _o, cb) => {
+        calls.push(file)
+        if (file !== 'nvidia-smi') return cb(new Error('no'), '')
+        if (mode === 'slow') return cb(Object.assign(new Error('timed out'), { killed: true, signal: 'SIGKILL' }), '')
+        cb(null, '40\n60\n')
+      }) as Exec as never,
+    })
+    await v.tick()
+    expect((await v.stats()).gpuUtil).toBe(0.5)
+    mode = 'slow'
+    clock.t += MIN
+    await v.tick()
+    expect((await v.stats()).gpuUtil).toBe(0.5)
+    mode = 'ok'
+    clock.t += MIN
+    await v.tick()
+    expect(calls.filter((c) => c === 'nvidia-smi')).toHaveLength(3) // asked again the next minute, not an hour later
+  })
+
+  it('a GPU tool that never answers waits 10 minutes between tries', async () => {
+    const calls: string[] = []
+    const { v, clock } = rig({ platform: 'linux', execFile: ((file: string) => { calls.push(file) }) as never })
+    vi.useFakeTimers({ toFake: ['setTimeout'] })
+    const first = v.tick()
+    await vi.advanceTimersByTimeAsync(9000)
+    await first
+    for (let i = 0; i < 9; i++) { clock.t += MIN; const t = v.tick(); await vi.advanceTimersByTimeAsync(9000); await t }
+    expect(calls.filter((c) => c === 'nvidia-smi')).toHaveLength(1)
+    clock.t += 2 * MIN
+    const later = v.tick()
+    await vi.advanceTimersByTimeAsync(9000)
+    await later
+    expect(calls.filter((c) => c === 'nvidia-smi')).toHaveLength(2)
+  })
+
+  it('an asker gets the last GPU reading at once while a fresh one is read', async () => {
+    let release: (() => void) | null = null
+    const { v, clock } = rig({
+      platform: 'linux',
+      execFile: ((file, _a, _o, cb) => {
+        if (file !== 'nvidia-smi') return cb(new Error('no'), '')
+        if (release === null) return cb(null, '30\n')
+        const r = release; release = () => {}; void r
+        setTimeout(() => cb(null, '90\n'), 50)
+      }) as Exec as never,
+    })
+    await v.tick()
+    release = () => {}
+    clock.t += 30_000
+    const s = await v.stats()
+    expect(s.gpuUtil).toBe(0.3) // the last one, at once
+    await new Promise((r) => setTimeout(r, 120))
+    clock.t += 10_000
+    expect((await v.stats()).gpuUtil).toBe(0.9)
+  })
+
+  it('a Linux host with no nvidia-smi has no GPU reading', async () => {
+    const { v } = rig({ platform: 'linux', execFile: ((_f: string, _a: string[], _o: unknown, cb: (e: Error | null, out: string) => void) => cb(new Error('ENOENT'), '')) as never })
+    expect((await v.stats()).gpuUtil).toBeNull()
   })
 })
 
@@ -231,6 +343,52 @@ describe('the fold', () => {
     } finally {
       fs.promises.readFile = read
     }
+  })
+})
+
+describe('the last 12 hours', () => {
+  it('folds 15 minute steps of CPU, memory in use, GPU, disk and sessions, broken where the host was down', async () => {
+    const { v, dir } = rig()
+    const lines: Array<[number, 0 | 1, Partial<Record<string, number>>?]> = []
+    for (let m = 0; m < 720; m++) {
+      if (m >= 300 && m < 330) continue // down for two steps
+      lines.push([m, 1, { u: m < 360 ? 20 : 60, a: 75, g: m < 360 ? -1 : 40, k: 55, s: m >= 700 ? 7 : 2 }])
+    }
+    seed(dir, lines)
+    const r = (await v.vitals({ days: 30 })).history.recent!
+    expect(r.stepMinutes).toBe(15)
+    expect(r.from).toBe(T0)
+    expect(r.cpu).toHaveLength(48)
+    expect(r.cpu[0]).toBe(0.2)
+    expect(r.cpu[47]).toBe(0.6)
+    expect(r.mem[0]).toBe(0.25) // 75% available is 25% in use
+    expect(r.cpu[20]).toBeNull() // minutes 300 to 329: down
+    expect(r.cpu[21]).toBeNull()
+    expect(r.up[20]).toBe(0)
+    expect(r.up[0]).toBe(15)
+    expect(r.gpu![0]).toBeNull() // no GPU reading before minute 360
+    expect(r.gpu![24]).toBe(0.4)
+    expect(r.disk[5]).toBe(0.55)
+    expect(r.sessions[47]).toBe(7)
+    expect(r.sessions[0]).toBe(2)
+  })
+
+  it('a host that never reported a GPU has none, and older ledger lines read as no GPU and no disk', async () => {
+    const { v, dir } = rig()
+    seed(dir, Array.from({ length: 30 }, (_, i) => [690 + i, 1] as [number, 1]))
+    const r = (await v.vitals()).history.recent!
+    expect(r.gpu).toBeNull()
+    expect(r.disk[47]).toBeNull()
+    expect(r.cpu[47]).toBe(0.1)
+  })
+
+  it('a tick writes the GPU and disk of its reading', async () => {
+    const { v, dir } = rig({ diskPath: tmp })
+    await v.tick()
+    const line = JSON.parse(fs.readFileSync(path.join(dir, '2026-10-20.jsonl'), 'utf8').trim())
+    expect(line.g).toBe(-1) // no GPU on this test platform
+    expect(line.k).toBeGreaterThanOrEqual(0)
+    expect(line.k).toBeLessThanOrEqual(100)
   })
 })
 

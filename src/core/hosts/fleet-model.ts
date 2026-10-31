@@ -5,7 +5,7 @@
  * every rule is pinned by a unit test (tests/core/hosts/fleet-model.test.ts);
  * fleet.ts gathers the inputs.
  */
-import type { HostStats, HostVitals, VitalsBucket, VitalsOutage, VitalsWindow } from '../../providers/host-vitals-core.js'
+import type { HostStats, HostVitals, VitalsBucket, VitalsOutage, VitalsRecent, VitalsWindow } from '../../providers/host-vitals-core.js'
 import type { HostProfile } from './host-profile.js'
 import type { HostLoadView } from './placement.js'
 import type { HostServerPhase } from '../host-server/manager.js'
@@ -41,7 +41,13 @@ export interface FleetHost {
     probedAt: string | null
   } | null
   /** How it is doing now (host.vitals), with when it was read; stale once the host stops answering. */
-  now: (Pick<HostStats, 'cpus' | 'cpuUtil' | 'load' | 'memTotalBytes' | 'memAvailBytes' | 'uptimeSec' | 'bootedAt' | 'linked'> & { at: number; stale: boolean }) | null
+  now: (Pick<HostStats, 'cpus' | 'cpuUtil' | 'load' | 'memTotalBytes' | 'memAvailBytes' | 'uptimeSec' | 'bootedAt' | 'linked'> & {
+    /** 0..1, null with no GPU or an older daemon. */
+    gpuUtil: number | null
+    /** The disk holding HOME; null from an older daemon. */
+    disk: { totalBytes: number; freeBytes: number } | null
+    at: number; stale: boolean
+  }) | null
   /** The host's own minute ledger, folded (host.vitals). */
   history: {
     coverageFrom: number | null
@@ -51,6 +57,8 @@ export interface FleetHost {
     outages: VitalsOutage[]
     boots: number[]
     daemonStarts: number
+    /** The last 12 hours in 15 minute steps (absent from an older daemon). */
+    recent?: VitalsRecent
   } | null
   /** Claude Code sessions whose process is alive on the host (idle ones included; ACP workers not counted). */
   sessions: { running: number | null }
@@ -210,6 +218,7 @@ export function buildFleetHost(i: FleetInputs): FleetHost {
     cpus: v.stats.cpus, cpuUtil: v.stats.cpuUtil, load: v.stats.load,
     memTotalBytes: v.stats.memTotalBytes, memAvailBytes: v.stats.memAvailBytes,
     uptimeSec: v.stats.uptimeSec, bootedAt: v.stats.bootedAt, linked: v.stats.linked,
+    gpuUtil: v.stats.gpuUtil ?? null, disk: v.stats.disk ?? null,
     at: i.vitals!.at, stale: i.vitals!.stale,
   } : null
   const history: FleetHost['history'] = v ? { ...v.history } : null

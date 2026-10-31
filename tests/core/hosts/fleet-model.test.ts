@@ -104,6 +104,17 @@ describe('the long-running verdict', () => {
 })
 
 describe('the card', () => {
+  it('carries the GPU, the disk and the last 12 hours from the daemon, and null from an older one', () => {
+    const v = vitals({ gpuUtil: 0.4, disk: { totalBytes: 1000 * GB, freeBytes: 300 * GB } })
+    const recent = { from: NOW - 12 * 3_600_000, stepMinutes: 15, up: [15], cpu: [0.2], mem: [0.5], gpu: [0.4], disk: [0.7], sessions: [3] }
+    v.history.recent = recent
+    const h = buildFleetHost(inputs({ vitals: { value: v, at: NOW, stale: false } }))
+    expect(h.now).toMatchObject({ gpuUtil: 0.4, disk: { totalBytes: 1000 * GB, freeBytes: 300 * GB } })
+    expect(h.history?.recent).toEqual(recent)
+    const old = buildFleetHost(inputs())
+    expect(old.now).toMatchObject({ gpuUtil: null, disk: null })
+    expect(old.history?.recent).toBeUndefined()
+  })
   it('carries the system, now, history, spend and one line', () => {
     const h: FleetHost = withPlacement(buildFleetHost(inputs()))
     expect(h.system).toMatchObject({ os: 'Debian 12', cpus: 32, memBytes: 128 * GB, kind: 'private-cloud-vm' })
