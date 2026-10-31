@@ -125,7 +125,7 @@ test('the sidebar opens Main and the leads; a lead waiting on the user comes fir
   // A node opens on its chat, first of the tabs; its Board is one click away.
   await expect(detail.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
   // The Board tab joins once the lead's board is known.
-  await expect.poll(() => detail.getByRole('tab').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid'))), { timeout: 30_000 })
+  await expect.poll(() => detail.locator('.org-tabs').getByRole('tab').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid'))), { timeout: 30_000 })
     .toEqual(['org-tab-chat', 'org-tab-team', 'org-tab-board'])
   await detail.getByTestId('org-tab-board').click()
   await detail.getByTestId('board-view-custom').click()

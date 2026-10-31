@@ -27,7 +27,6 @@ import { timeAgo } from '@/utils/time';
 import { OrgComposerBar } from './OrgComposerBar';
 import { OrgAlertAnswer, type AnswerFailure, type AnswerSettle } from './OrgAlertAnswer';
 import { OrgAlertSnooze } from './OrgAlertSnooze';
-import { formatStartDateDisplay } from '@/components/common/DatePicker';
 import { holdOrder } from './hold-order';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 import { recentMainStart } from './ask-main';
@@ -162,8 +161,8 @@ function TaskTabList({ tasks, tab, onOpen, compact, now }: {
 
 /** One row per ask (2026-10-26, the user: "it need to show the task link clickable, just 2 button,
  *  quote just quote ... and answer"; 2026-10-31: "3 button, quote, answer, and snooze"): the task's
- *  name is a link to it, Quote, Answer and Snooze. A snoozed row reads "Snoozed until <time>" until
- *  its task's status leaves Needs you. */
+ *  name is a link to it, Quote, Answer and Snooze. A snoozed row's Snooze reads "Snoozed until <time>"
+ *  (the task's start date), and a click changes or clears it. */
 function AlertList({ alerts, tasks, onOpen, onQuote, canQuote, answers, compact }: {
   alerts: readonly OrgAlertView[];
   tasks: readonly Task[];
@@ -185,6 +184,12 @@ function AlertList({ alerts, tasks, onOpen, onQuote, canQuote, answers, compact 
   const [snoozed, setSnoozed] = useState<ReadonlyMap<string, { until: string | null; error?: string }>>(new Map());
   const onSnoozed = (taskId: string, until: string | null, error?: string) =>
     setSnoozed((m) => new Map(m).set(taskId, { until, ...(error ? { error } : {}) }));
+  // The task's own start date, so a snooze reads the same after a remount or from another surface;
+  // a pick made here shows at once, before the task's update arrives.
+  const until = (taskId: string): string | undefined => {
+    const local = snoozed.get(taskId);
+    return (local && byId.get(taskId)?.start_date !== local.until ? local.until : byId.get(taskId)?.start_date) ?? undefined;
+  };
   return (
     <div
       className={`org-alerts${compact ? ' is-compact' : ''}`}
@@ -210,9 +215,6 @@ function AlertList({ alerts, tasks, onOpen, onQuote, canQuote, answers, compact 
               <span className={`org-alert-checked${a.checked.unverified ? ' is-unverified' : ''}`} data-testid="org-alert-checked" data-unverified={a.checked.unverified ? '1' : '0'}>{a.checked.text}</span>
             )}
           </span>
-          {snoozeAhead(snoozed.get(a.taskId)?.until, Date.now()) ? (
-            <span className="org-alert-snoozed" data-testid="org-alert-snoozed">Snoozed until {formatStartDateDisplay(snoozed.get(a.taskId)!.until)}</span>
-          ) : (
           <span className="org-alert-actions">
             {snoozed.get(a.taskId)?.error && (
               <span className="org-alert-snooze-error" data-testid="org-alert-snooze-error" title={snoozed.get(a.taskId)!.error}>Snooze failed</span>
@@ -232,9 +234,8 @@ function AlertList({ alerts, tasks, onOpen, onQuote, canQuote, answers, compact 
               onFailureSeen={answers.seen}
               {...(answers.failed.get(a.taskId) ? { failure: answers.failed.get(a.taskId)! } : {})}
             />
-            <OrgAlertSnooze alert={a} current={byId.get(a.taskId)?.start_date} onSnoozed={onSnoozed} />
+            <OrgAlertSnooze alert={a} current={until(a.taskId)} now={Date.now()} onSnoozed={onSnoozed} />
           </span>
-          )}
         </div>
       ))}
     </div>

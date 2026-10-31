@@ -219,10 +219,23 @@ test('Snooze opens the date picker; a pick snoozes the task and the row says unt
   const date = (await day.getAttribute('title'))!
   await day.click()
   await expect(menu).toHaveCount(0)
+  // The Snooze button itself says until when; Quote and Answer stay, the ask is still the user's.
   await expect(row.getByTestId('org-alert-snoozed')).toHaveText(/^Snoozed until /)
-  await expect(row.locator('button')).toHaveCount(0)
+  await expect(row.locator('button')).toHaveText(['Quote', /^Answer/, /^Snoozed until /])
   await expect.poll(async () => (await (await request.get(`/api/tasks/${id}`)).json()).task?.start_date).toBe(date)
   await page.getByTestId('org-alerts').screenshot({ path: `test-results/org-alert-snoozed-${test.info().project.name}.png` })
+  // Read from the task, not kept by the row: to Working and back, and the row still says so.
+  const tabs = page.getByTestId('org-detail').getByTestId('org-task-tab')
+  await tabs.filter({ hasText: /^Working/ }).click()
+  await expect(page.getByTestId('org-alerts')).toHaveCount(0)
+  await tabs.filter({ hasText: /^Needs you/ }).click()
+  await expect(alertRow(page, id).getByTestId('org-alert-snoozed')).toHaveText(/^Snoozed until /)
+  // None wakes it: the date is gone and the button reads Snooze again.
+  await alertRow(page, id).getByTestId('org-alert-snooze').click()
+  await menu.locator('.dp-pill-none').click()
+  await expect(alertRow(page, id).getByTestId('org-alert-snooze')).toHaveText(/^Snooze/)
+  await expect(alertRow(page, id).getByTestId('org-alert-snoozed')).toHaveCount(0)
+  await expect.poll(async () => (await (await request.get(`/api/tasks/${id}`)).json()).task?.start_date ?? null).toBeNull()
 })
 
 test('a decision letter: its two actions side by side, one click answers it, the row goes at once', async ({ page, request }) => {

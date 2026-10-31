@@ -53,7 +53,7 @@ export function briefSectionLines(owner: Task, tasks: readonly Task[], now = Dat
             : `checked ${agoWords(now - checked)} by its session`;
       words = `${s?.ask ? `"${flat(s.ask).slice(0, 200)}"` : 'needs the user'} (${when})`;
     } else if (section === 'waiting') {
-      // Snoozed (src/core/snooze.ts, on the status itself): its date, and the ask it holds back.
+      // A status that carries its snooze (none does yet): its date, and the ask it holds back.
       const snoozed = (s as { snoozed?: { until?: string; ask?: string } } | undefined)?.snoozed;
       const on = s?.waitingOn ?? s?.now;
       if (snoozed?.until) words = `snoozed until ${snoozed.until}${snoozed.ask ? ` (then asks: "${flat(snoozed.ask).slice(0, 160)}")` : ''}`;

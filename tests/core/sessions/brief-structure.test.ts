@@ -115,6 +115,20 @@ describe('structureBrief', () => {
       .toBe(`### Needs you\n- ${ref('setup')}: ten minutes.\n\n### Working\n- None\n\n### Waiting / snoozed\n- None`)
   })
 
+  it('makes a sub-item with its own task an item of its section, and never reads an indented line as a heading', () => {
+    // Its own task waits while its item works: an item of Waiting, never indented (a code block
+    // there) or nested under another item.
+    const text = `### Working\n- ${ref('panel')}: building.\n  Working:\n    - ${ref('review')}: its review`
+    expect(structureBrief(text, 'lead', tasks).text).toBe(
+      `### Needs you\n- None\n\n### Working\n- ${ref('panel')}: building.\n  Working:\n\n### Waiting / snoozed\n- ${ref('review')}: its review`)
+    // One going to its item's own section stays nested under it.
+    expect(structureBrief(`- ${ref('panel')}: building.\n  - ${ref('panel', 'again')}: the tests`, 'lead', tasks).text)
+      .toContain(`### Working\n- ${ref('panel')}: building.\n  - ${ref('panel', 'again')}: the tests\n`)
+    // A numbered sub-item keeps its number; a bare one becomes a bullet.
+    expect(structureBrief(`- ${ref('panel')}: building.\n   2. ${ref('setup')}: ten minutes.\n   ${ref('review')} in review`, 'lead', tasks).text).toBe(
+      `### Needs you\n2. ${ref('setup')}: ten minutes.\n\n### Working\n- ${ref('panel')}: building.\n\n### Waiting / snoozed\n- ${ref('review')} in review`)
+  })
+
   it('carries a wrapped line with its item', () => {
     const text = `- ${ref('setup')}: run the sign-in,\n  then say start.\n- ${ref('panel')}: building.`
     expect(structureBrief(text, 'lead', tasks).text)

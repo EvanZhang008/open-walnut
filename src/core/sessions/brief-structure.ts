@@ -96,7 +96,9 @@ export function structureBrief(
   let last: string[] | null = null;
   for (const raw of text.split('\n')) {
     let line = raw.trimEnd();
-    const heading = headingSection(line);
+    const indented = /^\s+\S/.test(line);
+    // An indented line under an item is the item's, even when it reads like a label ("  Working:").
+    const heading: BriefSectionKey | null = last && indented ? null : headingSection(line);
     if (heading) { current = heading; seen.add(heading); last = null; continue; }
     // "**Needs you:** pick a supplier.": the label opens its section, the rest is its first line.
     const inline = line.match(INLINE_LABEL_RE);
@@ -108,14 +110,18 @@ export function structureBrief(
     }
     // An indented line under an item (a wrapped line or a sub-item with no task of its own) goes
     // with that item wherever it goes.
-    if (last && /^\s+\S/.test(line) && !REF_RE.test(line)) { last.push(line); continue; }
+    if (last && indented && !REF_RE.test(line)) { last.push(line); continue; }
     // A task's line written bare is a list item, so lines never run together into one paragraph.
     if (/^<task-ref\b/.test(line)) line = `- ${line}`;
     const ref = line.match(REF_RE)?.[1];
     const task = ref && ref !== ownerId ? byId.get(ref) : undefined;
     const target = task ? briefSectionOf(task) : null;
     if (target && target !== current) moved++;
-    last = target ? body[target] : current ? body[current] : ref && ref === ownerId ? body.working : lead;
+    const dest: string[] = target ? body[target] : current ? body[current] : ref && ref === ownerId ? body.working : lead;
+    // A sub-item that leaves its item becomes an item of its own: kept indented, it would nest under
+    // a stranger, or open its new section as a code block.
+    if (indented && dest !== last) line = line.trimStart().replace(/^(?![-*+]\s|\d+[.)]\s)/, '- ');
+    last = dest;
     last.push(line);
     if (!line.trim()) last = null;
   }

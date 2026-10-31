@@ -321,8 +321,8 @@
 .org-alert-link:hover { color: var(--accent); text-decoration: underline; }
 .org-alert-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 3px; }
 .org-alert-actions { flex: none; display: flex; align-items: center; gap: 6px; }
-/* A row snoozed here, until its task's status leaves Needs you (OrgAlertSnooze). */
-.org-alert-snoozed { flex: none; font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
+/* Snooze's label while the task's start date is ahead (OrgAlertSnooze). */
+.org-alert-snoozed { color: var(--fg-muted); white-space: nowrap; }
 .org-alert-snooze-error { font-size: 11px; color: var(--error, #d70015); cursor: help; }
 .org-snooze-menu { width: min(300px, calc(100vw - 16px)); }
 

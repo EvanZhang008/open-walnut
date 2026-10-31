@@ -138,6 +138,7 @@ test('a lead opens on Task with its Needs you cards; its Brief is the letter alo
   await expect(body.locator(`a.task-link[data-task-id="${ids.parser}"]`)).toHaveAttribute('data-user-state', 'needs')
   await expect(body.locator(`a.task-link[data-task-id="${ids.review}"]`)).toHaveAttribute('data-user-state', 'waiting')
   await expect(detail.getByTestId('org-brief-foot')).toHaveText(/^Written /)
+  await detail.screenshot({ path: `test-results/org-brief-letter-${test.info().project.name}.png` })
   // The Brief view is the letter alone: no Needs you cards, no Latest.
   await expect(detail.getByTestId('org-alerts')).toHaveCount(0)
   await expect(detail.getByTestId('org-top-brief-new')).toHaveCount(0)
@@ -158,6 +159,7 @@ test('a lead opens on Task with its Needs you cards; its Brief is the letter alo
   await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-tab', 'waiting')
   await expect(detail.locator(`[data-testid="org-task-row"][data-task-id="${ids.review}"]`)).toBeVisible()
   await expect(detail.getByTestId('org-alerts')).toHaveCount(0)
+  await detail.screenshot({ path: `test-results/org-task-waiting-${test.info().project.name}.png` })
 })
 
 test('a task the Brief names moves: its pill recolors and its line changes section, and nothing is added under the letter', async ({ page, request }) => {
