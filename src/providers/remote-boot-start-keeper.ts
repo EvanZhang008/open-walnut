@@ -12,7 +12,7 @@ import {
   bootSetupBlocker, bootSetupDue, bootSetupMarkerCommand, buildBootStartProbeScript, classifyBootStart, parseBootStartProbe,
   type BootStart,
 } from './remote-boot-start.js'
-import { installRemoteDaemonService, type RemoteDaemonUpdateIo } from './daemon-service-update.js'
+import { installRemoteDaemonService, type RemoteDaemonUpdateIo, type ServiceDaemonSource } from './daemon-service-update.js'
 
 /**
  * What a check now could do (the Overview's button): 'install' (a setup is due and
@@ -37,9 +37,10 @@ export interface BootStartKeeperIo extends RemoteDaemonUpdateIo {
   /** Why this host must never be set up from here (null: it may). */
   off(): Promise<string | null>
   expectedVersion(): string | null
-  localBinary(): Promise<string | null>
-  /** The daemon binary of this build already on the host, when there is one. */
-  remoteBinary(): Promise<string | null>
+  /** Whether this build carries a daemon it can install on a host (a daemon binary, or a compiled Mac's walnut file). */
+  hasDaemonFile(): Promise<boolean>
+  /** What the install runs (daemon-service-update.ts); may put the walnut file in the host's daemon slot first. */
+  daemonSource(): Promise<ServiceDaemonSource>
   hasCapability(cap: string): boolean
   /** The old daemon handed over and exited: drop the link so the reconnect finds the service. */
   reconnect(): void
@@ -125,8 +126,10 @@ export class BootStartKeeper {
     // A Linux account without a user manager or cron: an administrator can fix it, then a check finishes it.
     if (blocker) { this.setSetup(false, blocker, facts.platform === 'linux' ? 'recheck' : null); return }
     const expected = this.io.expectedVersion()
-    const binary = await this.io.localBinary()
-    if (!expected || !binary) { this.setSetup(false, 'this Walnut has no daemon binary for the host'); return }
+    if (!expected || !(await this.io.hasDaemonFile())) {
+      this.setSetup(false, 'this Walnut build cannot install its daemon there as a service, so the daemon keeps running the usual way, started over SSH')
+      return
+    }
     if (!this.io.hasCapability('service-handover-v1')) {
       this.setSetup(false, 'its daemon cannot hand its sessions to a service yet; Walnut sets it up once the daemon is updated')
       return
@@ -143,16 +146,16 @@ export class BootStartKeeper {
       this.arm(HOLD_RETRY_MS)
       return
     }
-    await this.install(binary, expected)
+    await this.install(expected)
   }
 
-  private async install(binary: string, expected: string): Promise<void> {
+  private async install(expected: string): Promise<void> {
     const startedAt = this.now()
     this.setSetup(true, null)
     log.session.info('DaemonConnection: setting up the daemon to start after a reboot', { host: this.io.hostKey, expected })
     let result
     try {
-      result = await installRemoteDaemonService(binary, expected, this.io, { existing: (await this.io.remoteBinary()) ?? undefined })
+      result = await installRemoteDaemonService(await this.io.daemonSource(), expected, this.io)
     } catch (err) {
       result = { ok: false, message: err instanceof Error ? err.message : String(err), uploaded: true }
     }

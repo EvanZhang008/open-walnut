@@ -14,6 +14,25 @@ export interface RemoteDaemonUpdateIo {
 
 const VERSION = /^walnut-daemon-[a-zA-Z0-9]+$/
 const STAGING = /^\/tmp\/open-walnut-update\.[a-zA-Z0-9]+$/
+const REMOTE_PATH = /^\/[A-Za-z0-9._/-]+$/
+
+/**
+ * How a host executable names the daemon build it carries. The daemon binary
+ * ignores the `__daemon` word; the compiled walnut file routes it to the
+ * daemon (its plain `--version` is the CLI's), so one command reads both.
+ */
+export const DAEMON_VERSION_ARGS = '__daemon --version'
+
+/**
+ * What a service install or update runs on the host: an executable already
+ * there (the daemon slot) when it is this build, else this build's daemon
+ * binary, uploaded. A compiled Mac has no separate daemon binary: its source is
+ * the host's walnut file, which the daemon deploy put in the slot.
+ */
+export interface ServiceDaemonSource {
+  binary: string | null
+  existing?: string
+}
 
 /**
  * Put this build's daemon binary on the host in a private temp dir, checked
@@ -49,10 +68,10 @@ async function stageRemoteDaemonBinary(binary: string, expectedVersion: string, 
       const executable = `${directory}/daemon`
       const checksum = hash.digest('hex')
       const version = await io.run(
-        `cat ${files.join(' ')} > ${payload} && printf '%s  %s\\n' '${checksum}' '${payload}' | sha256sum -c - >/dev/null && gzip -dc ${payload} > ${executable} && rm -f ${payload} ${directory}/chunk_* && chmod 700 ${executable} && ${executable} --version`,
+        `cat ${files.join(' ')} > ${payload} && printf '%s  %s\\n' '${checksum}' '${payload}' | sha256sum -c - >/dev/null && gzip -dc ${payload} > ${executable} && rm -f ${payload} ${directory}/chunk_* && chmod 700 ${executable} && ${executable} ${DAEMON_VERSION_ARGS}`,
         30_000,
       )
-      if (version.trim() !== expectedVersion) throw new Error('Uploaded daemon version differs; the installed service was not changed')
+      if (version.trim().split('\n').pop()?.trim() !== expectedVersion) throw new Error('Uploaded daemon version differs; the installed service was not changed')
       return { executable, directory }
     } catch (error) {
       await removeStaging(io, directory)
@@ -67,16 +86,28 @@ async function removeStaging(io: RemoteDaemonUpdateIo, directory: string): Promi
   if (STAGING.test(directory)) await io.run(`rm -rf ${directory}`, 15_000).catch(() => {})
 }
 
-export async function updateRemoteDaemonService(binary: string, expectedVersion: string, io: RemoteDaemonUpdateIo, scope: DaemonServiceScope = 'user'): Promise<void> {
+/** The executable to hand the service command: the one on the host when it is this build, else an upload. */
+async function serviceExecutable(
+  source: ServiceDaemonSource, expectedVersion: string, io: RemoteDaemonUpdateIo,
+): Promise<{ executable: string; directory: string | null }> {
+  if (source.existing && REMOTE_PATH.test(source.existing)) {
+    const said = await io.run(`${source.existing} ${DAEMON_VERSION_ARGS} 2>/dev/null || true`, 30_000).catch(() => '')
+    if (said.trim().split('\n').pop()?.trim() === expectedVersion) return { executable: source.existing, directory: null }
+  }
+  if (!source.binary) throw new Error(`the daemon file on the host is not this build (${expectedVersion}), and this Walnut has no other copy to send`)
+  return stageRemoteDaemonBinary(source.binary, expectedVersion, io)
+}
+
+export async function updateRemoteDaemonService(source: ServiceDaemonSource, expectedVersion: string, io: RemoteDaemonUpdateIo, scope: DaemonServiceScope = 'user'): Promise<void> {
   if (!VERSION.test(expectedVersion)) throw new Error('Invalid daemon build version')
   if (scope !== 'user' && scope !== 'cron') throw new Error(`Walnut does not update a ${scope} service from the server`)
-  const { executable, directory } = await stageRemoteDaemonBinary(binary, expectedVersion, io)
+  const { executable, directory } = await serviceExecutable(source, expectedVersion, io)
   try {
     const output = await io.run(`${executable} walnut daemon update --yes --scope ${scope} --executable ${executable}`, 600_000)
     const result = JSON.parse(output) as { ok?: boolean; failure?: { message?: string; rollback?: string } }
     if (result.ok !== true) throw new Error(`Managed daemon update failed: ${result.failure?.message ?? output}; ${result.failure?.rollback ?? ''}`)
   } finally {
-    await removeStaging(io, directory)
+    if (directory) await removeStaging(io, directory)
   }
 }
 
@@ -95,23 +126,18 @@ export interface RemoteInstallResult {
 
 /**
  * Install the daemon as a service on the host (`walnut daemon install --yes`,
- * no scope: the host picks a boot start it can have without root). The binary
- * already there is used when it is this build (a binary host); otherwise this
- * build's is uploaded. Never throws for a refusal the host answered: the result
- * says it, so the caller can record and show it.
+ * no scope: the host picks a boot start it can have without root). The
+ * executable already there is used when it is this build (a binary host, or
+ * the walnut file a compiled Mac put in the daemon slot); otherwise this build's
+ * daemon binary is uploaded. Never throws for a refusal the host answered: the
+ * result says it, so the caller can record and show it.
  */
 export async function installRemoteDaemonService(
-  binary: string, expectedVersion: string, io: RemoteDaemonUpdateIo, opts: { existing?: string } = {},
+  source: ServiceDaemonSource, expectedVersion: string, io: RemoteDaemonUpdateIo,
 ): Promise<RemoteInstallResult> {
   if (!VERSION.test(expectedVersion)) throw new Error('Invalid daemon build version')
-  let executable: string | null = null
-  let directory: string | null = null
-  if (opts.existing && /^\/[A-Za-z0-9._/-]+$/.test(opts.existing)) {
-    const said = await io.run(`${opts.existing} --version 2>/dev/null || true`, 30_000).catch(() => '')
-    if (said.trim() === expectedVersion) executable = opts.existing
-  }
-  const uploaded = executable === null
-  if (!executable) ({ executable, directory } = await stageRemoteDaemonBinary(binary, expectedVersion, io))
+  const { executable, directory } = await serviceExecutable(source, expectedVersion, io)
+  const uploaded = directory !== null
   // `|| true`: a refusal exits 1 with its JSON on stdout, which is the answer to keep.
   const cli = async (args: string, timeoutMs: number): Promise<ServiceReply | null> => {
     const output = (await io.run(`${executable} walnut daemon ${args} 2>/dev/null || true`, timeoutMs)).trim()

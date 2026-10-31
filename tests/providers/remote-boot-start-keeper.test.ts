@@ -30,6 +30,10 @@ interface LabOptions {
   capable?: boolean
   remoteVersion?: string
   expected?: string | null
+  /** This build carries a daemon it can install (default true). */
+  daemonFile?: boolean
+  /** A compiled Mac: no daemon binary, the walnut file in the slot is the only source. */
+  compiled?: boolean
 }
 
 function lab(options: LabOptions = {}) {
@@ -41,7 +45,7 @@ function lab(options: LabOptions = {}) {
   const run = vi.fn(async (command: string) => {
     calls.push(command)
     if (command.includes('walnut-boot-probe-done')) return probeOutput(installed && options.after ? options.after : options.facts ?? PLAIN)
-    if (command === `${REMOTE_BIN} --version 2>/dev/null || true`) return `${options.remoteVersion ?? VERSION}\n`
+    if (command === `${REMOTE_BIN} __daemon --version 2>/dev/null || true`) return `${options.remoteVersion ?? VERSION}\n`
     if (command.startsWith(`${REMOTE_BIN} walnut daemon install --yes --executable ${REMOTE_BIN}`)) {
       const reply = installs.length > 1 ? installs.shift()! : installs[0]
       if (reply.includes('"ok":true')) installed = true
@@ -63,8 +67,8 @@ function lab(options: LabOptions = {}) {
     hold,
     off,
     expectedVersion: () => (options.expected === undefined ? VERSION : options.expected),
-    localBinary: async () => '/nonexistent/local/walnut-daemon',
-    remoteBinary: async () => REMOTE_BIN,
+    hasDaemonFile: async () => options.daemonFile ?? true,
+    daemonSource: async () => ({ binary: options.compiled ? null : '/nonexistent/local/walnut-daemon', existing: REMOTE_BIN }),
     hasCapability: (cap) => (options.capable ?? true) && cap === 'service-handover-v1',
     reconnect,
   }
@@ -134,11 +138,23 @@ describe('boot start keeper', () => {
     expect(l.installCalls()).toEqual([])
   })
 
-  it('says so when this Walnut has no daemon build for the host', async () => {
-    const l = start({ expected: null })
+  it('says so, without calling the running daemon missing, when this build cannot install one', async () => {
+    for (const options of [{ expected: null }, { daemonFile: false }]) {
+      const l = start(options)
+      await l.keeper.check()
+      expect(l.keeper.state?.setup?.error).toBe('this Walnut build cannot install its daemon there as a service, so the daemon keeps running the usual way, started over SSH')
+      expect(l.keeper.state?.setup?.error).not.toMatch(/no daemon/i)
+      expect(l.installCalls()).toEqual([])
+      l.keeper.stop()
+    }
+  })
+
+  it('sets up a compiled Mac\'s host from the walnut file in its daemon slot', async () => {
+    const l = start({ compiled: true, after: CRON_BOOT })
     await l.keeper.check()
-    expect(l.keeper.state?.setup?.error).toBe('this Walnut has no daemon binary for the host')
-    expect(l.installCalls()).toEqual([])
+    expect(l.installCalls()).toEqual([`${REMOTE_BIN} walnut daemon install --yes --executable ${REMOTE_BIN} 2>/dev/null || true`])
+    expect(l.chunk).not.toHaveBeenCalled()
+    expect(l.keeper.state).toMatchObject({ mode: 'boot', backend: 'cron', setup: { running: false, error: null } })
   })
 
   it('does not retry a setup that failed recently', async () => {

@@ -70,7 +70,7 @@ function lab(fault?: UploadFault | 'service' | 'transport', scope: 'user' | 'cro
 describe('managed daemon upload and update', () => {
   it('reassembles only confirmed chunks, verifies bytes and version, requests a user service update, then removes the staging dir', async () => {
     const l = lab()
-    await updateRemoteDaemonService(binary, version, l)
+    await updateRemoteDaemonService({ binary }, version, l)
     expect(l.chunk.mock.calls.length).toBeGreaterThan(3)
     expect(new Set(l.slots).size).toBe(l.slots.length)
     expect(l.calls).toHaveLength(4)
@@ -82,21 +82,21 @@ describe('managed daemon upload and update', () => {
 
   it('requests a cron service update for the cron scope', async () => {
     const l = lab(undefined, 'cron')
-    await updateRemoteDaemonService(binary, version, l, 'cron')
+    await updateRemoteDaemonService({ binary }, version, l, 'cron')
     expect(l.calls[2]).toBe(`${staged} walnut daemon update --yes --scope cron --executable ${staged}`)
     expect(l.calls.at(-1)).toBe(RM)
   })
 
   it('refuses a system service update before any remote operation', async () => {
     const l = lab()
-    await expect(updateRemoteDaemonService(binary, version, l, 'system')).rejects.toThrow('does not update a system service')
+    await expect(updateRemoteDaemonService({ binary }, version, l, 'system')).rejects.toThrow('does not update a system service')
     expect(l.run).not.toHaveBeenCalled()
     expect(l.chunk).not.toHaveBeenCalled()
   })
 
   it.each(['chunk', 'version', 'checksum', 'path'] as const)('does not touch the service after a %s failure', async (fault) => {
     const l = lab(fault)
-    await expect(updateRemoteDaemonService(binary, version, l)).rejects.toThrow()
+    await expect(updateRemoteDaemonService({ binary }, version, l)).rejects.toThrow()
     expect(l.calls.some((command) => command.includes('daemon update'))).toBe(false)
     if (fault === 'chunk') expect(l.chunk).toHaveBeenCalledTimes(3)
     if (fault === 'path') {
@@ -109,7 +109,7 @@ describe('managed daemon upload and update', () => {
 
   it.each(['service', 'transport'] as const)('does not retry or start an unmanaged replacement after a %s failure, and removes the staging dir', async (fault) => {
     const l = lab(fault)
-    await expect(updateRemoteDaemonService(binary, version, l)).rejects.toThrow()
+    await expect(updateRemoteDaemonService({ binary }, version, l)).rejects.toThrow()
     expect(l.calls.filter((command) => command.includes('daemon update'))).toHaveLength(1)
     expect(l.calls.join('\n')).not.toContain('--start')
     expect(l.calls.at(-1)).toBe(RM)
@@ -117,7 +117,7 @@ describe('managed daemon upload and update', () => {
 
   it('rejects an invalid build version before any remote operation', async () => {
     const l = lab()
-    await expect(updateRemoteDaemonService(binary, 'build; invalid', l)).rejects.toThrow('Invalid daemon build version')
+    await expect(updateRemoteDaemonService({ binary }, 'build; invalid', l)).rejects.toThrow('Invalid daemon build version')
     expect(l.run).not.toHaveBeenCalled()
   })
 })
@@ -137,7 +137,7 @@ function installLab(options: InstallLab = {}) {
     calls.push(command)
     const answered = await upload.answer(command)
     if (answered !== null) return answered
-    if (command === `${existing} --version 2>/dev/null || true`) return `${options.existingVersion ?? version}\n`
+    if (command === `${existing} __daemon --version 2>/dev/null || true`) return `${options.existingVersion ?? version}\n`
     const cli = /^(\S+) walnut daemon (.+) 2>\/dev\/null \|\| true$/.exec(command)
     if (!cli) throw new Error(`unexpected command: ${command}`)
     const args = cli[2]
@@ -156,7 +156,7 @@ const refusal = (code: string, message: string, rollback?: string) =>
 describe('managed daemon install from the server', () => {
   it('uploads the binary, reads the answer past leading noise, and removes the staging dir', async () => {
     const l = installLab({ install: ['Last login: today\nwelcome\n{"ok":true,"status":{"scope":"cron","startup":"boot"}}\n'] })
-    const result = await installRemoteDaemonService(binary, version, l)
+    const result = await installRemoteDaemonService({ binary }, version, l)
     expect(result).toEqual({ ok: true, scope: 'cron', startup: 'boot', uploaded: true })
     expect(l.installCalls()).toEqual([`${staged} walnut daemon install --yes --executable ${staged} 2>/dev/null || true`])
     expect(l.calls.at(-1)).toBe(RM)
@@ -165,7 +165,7 @@ describe('managed daemon install from the server', () => {
 
   it('returns a refusal with its message and rollback instead of throwing', async () => {
     const l = installLab({ install: [refusal('cronUnavailable', 'cron cannot start the daemon at boot here', 'nothing was changed')] })
-    const result = await installRemoteDaemonService(binary, version, l)
+    const result = await installRemoteDaemonService({ binary }, version, l)
     expect(result).toEqual({
       ok: false, code: 'cronUnavailable', message: 'cron cannot start the daemon at boot here; nothing was changed', uploaded: true,
     })
@@ -175,14 +175,14 @@ describe('managed daemon install from the server', () => {
 
   it('retries a pending handover once', async () => {
     const l = installLab({ install: [refusal('handoverPending', 'the reply was lost'), '{"ok":true,"status":{"scope":"user","startup":"boot"}}'] })
-    const result = await installRemoteDaemonService(binary, version, l, { existing })
+    const result = await installRemoteDaemonService({ binary, existing }, version, l)
     expect(result).toMatchObject({ ok: true, scope: 'user' })
     expect(l.installCalls()).toHaveLength(2)
   })
 
   it('retries only once when the handover stays pending', async () => {
     const l = installLab({ install: [refusal('handoverPending', 'still pending')] })
-    const result = await installRemoteDaemonService(binary, version, l, { existing })
+    const result = await installRemoteDaemonService({ binary, existing }, version, l)
     expect(result).toMatchObject({ ok: false, code: 'handoverPending' })
     expect(l.installCalls()).toHaveLength(2)
   })
@@ -192,7 +192,7 @@ describe('managed daemon install from the server', () => {
       install: [refusal('notReady', 'the daemon never answered as ready')],
       status: `{"installed":true,"scope":"${scope}"}`,
     })
-    const result = await installRemoteDaemonService(binary, version, l, { existing })
+    const result = await installRemoteDaemonService({ binary, existing }, version, l)
     expect(l.calls).toContain(`${existing} walnut daemon uninstall --yes --scope ${scope} 2>/dev/null || true`)
     expect(result.ok).toBe(false)
     expect(result.message).toBe('the daemon never answered as ready; the half-made service was removed, so Walnut runs the daemon the usual way')
@@ -204,30 +204,30 @@ describe('managed daemon install from the server', () => {
       status: '{"installed":true,"scope":"cron"}',
       uninstall: refusal('verifyFailed', 'the daemon did not exit'),
     })
-    const result = await installRemoteDaemonService(binary, version, l, { existing })
+    const result = await installRemoteDaemonService({ binary, existing }, version, l)
     expect(result.message).toBe('not ready; the half-made service could not be removed')
   })
 
   it('reads an unparseable answer as a failure', async () => {
     const l = installLab({ install: ['Segmentation fault'] })
-    const result = await installRemoteDaemonService(binary, version, l, { existing })
+    const result = await installRemoteDaemonService({ binary, existing }, version, l)
     expect(result).toEqual({ ok: false, message: 'the install gave no answer Walnut could read', uploaded: false })
   })
 
   it('uses the binary already on the host when it is this build', async () => {
     const l = installLab()
-    const result = await installRemoteDaemonService(binary, version, l, { existing })
+    const result = await installRemoteDaemonService({ binary, existing }, version, l)
     expect(result).toMatchObject({ ok: true, uploaded: false })
     expect(l.chunk).not.toHaveBeenCalled()
     expect(l.calls).toEqual([
-      `${existing} --version 2>/dev/null || true`,
+      `${existing} __daemon --version 2>/dev/null || true`,
       `${existing} walnut daemon install --yes --executable ${existing} 2>/dev/null || true`,
     ])
   })
 
   it('uploads when the binary on the host is another build', async () => {
     const l = installLab({ existingVersion: 'walnut-daemon-older' })
-    const result = await installRemoteDaemonService(binary, version, l, { existing })
+    const result = await installRemoteDaemonService({ binary, existing }, version, l)
     expect(result).toMatchObject({ ok: true, uploaded: true })
     expect(l.installCalls()).toEqual([`${staged} walnut daemon install --yes --executable ${staged} 2>/dev/null || true`])
     expect(l.calls.at(-1)).toBe(RM)
@@ -235,14 +235,45 @@ describe('managed daemon install from the server', () => {
 
   it('never runs an existing path it cannot quote safely', async () => {
     const l = installLab()
-    await installRemoteDaemonService(binary, version, l, { existing: '/tmp/x; rm -rf ~' })
+    await installRemoteDaemonService({ binary, existing: '/tmp/x; rm -rf ~' }, version, l)
     expect(l.calls.some((command) => command.includes('; rm -rf ~'))).toBe(false)
     expect(l.chunk).toHaveBeenCalled()
   })
 
   it('rejects an invalid build version before any remote operation', async () => {
     const l = installLab()
-    await expect(installRemoteDaemonService(binary, 'walnut-daemon-1; id', l, { existing })).rejects.toThrow('Invalid daemon build version')
+    await expect(installRemoteDaemonService({ binary, existing }, 'walnut-daemon-1; id', l)).rejects.toThrow('Invalid daemon build version')
     expect(l.run).not.toHaveBeenCalled()
+  })
+})
+
+describe('a compiled Mac\'s source: the walnut file in the daemon slot, no daemon binary', () => {
+  it('installs from the slot when it names this build, and uploads nothing', async () => {
+    const l = installLab()
+    const result = await installRemoteDaemonService({ binary: null, existing }, version, l)
+    expect(result).toMatchObject({ ok: true, uploaded: false })
+    expect(l.chunk).not.toHaveBeenCalled()
+  })
+
+  it('reads the build from the last line, past what the file prints first', async () => {
+    const l = installLab({ existingVersion: `unpacking the runtime\n${version}` })
+    expect(await installRemoteDaemonService({ binary: null, existing }, version, l)).toMatchObject({ ok: true, uploaded: false })
+  })
+
+  it('refuses, without touching the host service, when the slot holds another build and there is nothing to send', async () => {
+    const l = installLab({ existingVersion: 'walnut-daemon-older' })
+    await expect(installRemoteDaemonService({ binary: null, existing }, version, l)).rejects.toThrow('not this build')
+    expect(l.installCalls()).toEqual([])
+  })
+
+  it('updates a service from the slot too', async () => {
+    const l = installLab()
+    const update = vi.fn(async (command: string) => {
+      if (command.startsWith(`${existing} walnut daemon update`)) return '{"ok":true}'
+      return l.run(command)
+    })
+    await updateRemoteDaemonService({ binary: null, existing }, version, { run: update, chunk: l.chunk }, 'cron')
+    expect(update).toHaveBeenCalledWith(`${existing} walnut daemon update --yes --scope cron --executable ${existing}`, 600_000)
+    expect(l.chunk).not.toHaveBeenCalled()
   })
 })

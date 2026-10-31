@@ -40,7 +40,7 @@ import { gateSessionCommand, settleSessionCommand } from './ephemeral-session-ga
 import { buildRemotePreamble } from './session-io.js'
 import { buildDaemonStartCmd, buildDaemonStopCmd } from './daemon-start-cmd.js'
 import { diagnoseDaemonStartLog } from './daemon-start-diagnose.js'
-import { updateRemoteDaemonService } from './daemon-service-update.js'
+import { updateRemoteDaemonService, type ServiceDaemonSource } from './daemon-service-update.js'
 import { ensureDaemonGz } from './daemon-gz-cache.js'
 import { parseSlotAnswer, parseSlotDetail, parseSeedAnswer, seedFromSlotScript, slotCheckScript, slotInstallScript, slotNeedKb } from './daemon-file-slot.js'
 import { singleFile } from '../lib/single-file.js'
@@ -883,8 +883,8 @@ export class DaemonConnection {
         return writes > 0 ? `${writes} daemon command(s) that change a session or a file are in flight` : null
       },
       expectedVersion: () => this.getExpectedDaemonVersion(),
-      localBinary: () => this.getLocalBinaryPath(),
-      remoteBinary: async () => this._runtime === 'binary' ? this.getRemoteDaemonPath() : null,
+      hasDaemonFile: () => this.hasDaemonBinary(),
+      daemonSource: () => this.serviceDaemonSource(),
       hasCapability: (cap) => this.hasCapability(cap),
       reconnect: () => { if (this._connected && !this._destroyed) this.handleConnectionLost() },
     })
@@ -3482,11 +3482,10 @@ export class DaemonConnection {
     if (!scope) return false
     if (this._lastUpgradeAttempt?.expected === expected
       && Date.now() - this._lastUpgradeAttempt.at < DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS) return false
-    const binary = await this.getLocalBinaryPath()
-    if (!binary) return false
+    if (!(await this.hasDaemonBinary())) return false
     this._lastUpgradeAttempt = { expected, at: Date.now() }
     try {
-      await updateRemoteDaemonService(binary, expected, {
+      await updateRemoteDaemonService(await this.serviceDaemonSource(), expected, {
         run: (command, timeout) => this.sshExec(command, timeout),
         chunk: (data, directory, index) => this.pipeChunk(data, directory, index),
       }, scope)
@@ -4022,6 +4021,20 @@ export class DaemonConnection {
       })
     }
     return null
+  }
+
+  /**
+   * What a service install or update on the host runs: this build's daemon
+   * binary (and the slot's copy when the host already runs it), or on a
+   * compiled Mac the host's walnut file, put in the daemon slot here when the
+   * slot does not hold it yet (deployWalnutFile: nothing is sent when it does).
+   */
+  private async serviceDaemonSource(): Promise<ServiceDaemonSource> {
+    const binary = await this.getLocalBinaryPath()
+    if (binary) return { binary, ...(this._runtime === 'binary' ? { existing: await this.getRemoteDaemonPath() } : {}) }
+    if (!singleFile()) throw new Error('this Walnut build has no daemon file for the host')
+    await this.deployWalnutFile()
+    return { binary: null, existing: await this.getRemoteDaemonPath() }
   }
 
   /** A daemon binary this Mac can put on the host: a prebuilt one, or (a compiled Mac) the host's walnut file. */
