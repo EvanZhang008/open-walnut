@@ -10,11 +10,13 @@ import { test, expect } from './shortcut-test-fixture'
 import type { Page } from '@playwright/test'
 import { isolateUiPrefs, selectSection } from './todo-panel-helpers'
 import { closeDisplayMenu, displayMenu, openDisplayMenu } from './filter-bar-helpers'
-import { presetPanelDesign, setStatusSectionOpen, showSectionCard, statusSectionRows } from './status-section-helpers'
+import { endRunningTurn, presetPanelDesign, setStatusSectionOpen, showSectionCard, startRunningTurn, statusSectionRows } from './status-section-helpers'
 
 // The fixture server is shared: every task made here goes again (other specs measure the panel).
 const made: string[] = []
+const turns: string[] = []
 test.afterEach(async ({ request }) => {
+  for (const sid of turns.splice(0)) await endRunningTurn(request, sid)
   for (const id of made.splice(0)) {
     await request.delete(`/api/focus/tasks/${id}`).catch(() => {})
     await request.delete(`/api/tasks/${id}`).catch(() => {})
@@ -47,6 +49,8 @@ test.describe('Flat layout', () => {
     await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 30_000 })
     const needs = await seed(page, project, `flat needs ${stamp}`, { phase: 'NEED_ACTION' })
     const working = await seed(page, project, `flat working ${stamp}`, { phase: 'IN_PROGRESS' })
+    // Working is a turn that runs now; a task only marked In progress waits.
+    turns.push(await startRunningTurn(page.request, working))
     // Pinned in Focus, so By project draws a Focus heading.
     expect((await page.request.post(`/api/focus/tasks/${working}`)).ok()).toBe(true)
     expect((await page.request.put(`/api/focus/tasks/${working}/tier`, { data: { tier: 'focus' } })).ok()).toBe(true)

@@ -6,6 +6,7 @@
  */
 import { expect, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { endRunningTurn, startRunningTurn } from './status-section-helpers'
 
 import { openHome } from './home-navigation-helpers'
 import { addFilter, filterChip, filterValue, openFilterPage } from './filter-bar-helpers'
@@ -29,7 +30,10 @@ export async function boot(page: Page, baseURL: string, extra?: Record<string, s
   await openHome(page, baseURL, 90_000)
 }
 
-export interface Seed { title: string; phase?: string; pin?: string; start?: string }
+/** `running`: a turn runs on it now, so it reads Working (a task only marked In progress waits). */
+export interface Seed { title: string; phase?: string; pin?: string; start?: string; running?: boolean }
+
+const runningSessions = new Map<string, string>()
 
 /** Create tasks in `project`; phase / pin tier / start date are applied after creation. */
 export async function seed(page: Page, project: string, specs: Seed[]): Promise<string[]> {
@@ -50,13 +54,18 @@ export async function seed(page: Page, project: string, specs: Seed[]): Promise<
       }
     }
     if (s.phase) expect((await page.request.patch(`/api/tasks/${id}`, { data: { phase: s.phase } })).ok()).toBe(true)
+    if (s.running) runningSessions.set(id, await startRunningTurn(page.request, id))
     ids.push(id)
   }
   return ids
 }
 
 export const cleanup = async (page: Page, ids: readonly string[]) => {
-  for (const id of ids) await page.request.delete(`/api/tasks/${id}?force=true`).catch(() => {})
+  for (const id of ids) {
+    const sid = runningSessions.get(id)
+    if (sid) { await endRunningTurn(page.request, sid); runningSessions.delete(id) }
+    await page.request.delete(`/api/tasks/${id}?force=true`).catch(() => {})
+  }
 }
 
 export const row = (page: Page, id: string) => page.locator(`.todo-panel-item[data-task-id="${id}"]`)

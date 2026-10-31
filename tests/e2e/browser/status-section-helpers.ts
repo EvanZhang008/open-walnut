@@ -8,7 +8,7 @@
  * itself, and each project folding its own waiting and completed rows. These replaced the old footer ("N Waiting hidden", "N Complete hidden",
  * "N not available yet: show").
  */
-import { expect, type BrowserContext, type Locator, type Page } from '@playwright/test'
+import { expect, type APIRequestContext, type BrowserContext, type Locator, type Page } from '@playwright/test'
 
 export type StatusSectionKey = 'watching' | 'needs' | 'working' | 'waiting' | 'done'
 /** 'status' is Flat (the product default), 'project' By project (what every page's storage starts with). */
@@ -111,4 +111,31 @@ export async function openTierInlineAdd(page: Page, heading: Locator): Promise<L
     await expect(input).toBeVisible({ timeout: 3_000 })
   }).toPass({ timeout: 20_000 })
   return input
+}
+
+/**
+ * A turn running now on `taskId` (the fixture's mock CLI holds a `slow:` turn), so the task
+ * reads Working by its user status: Working is a turn that runs now (src/core/user-status.ts),
+ * and a task only marked In progress waits. Returns the session id for endRunningTurn.
+ */
+export async function startRunningTurn(request: APIRequestContext, taskId: string, ms = 300_000): Promise<string> {
+  const dirs = (await (await request.get('/api/sessions/working-dirs')).json()) as { dirs: Array<{ cwd: string }> }
+  const cwd = dirs.dirs.find((d) => /\/ps-fixture\/projects\/walnut$/.test(d.cwd))?.cwd
+  expect(cwd, 'ps-fixture/projects/walnut seed').toBeTruthy()
+  const res = await request.post('/api/sessions/quick-start', { data: { cwd, message: `slow:${ms} running probe`, taskId } })
+  expect(res.ok(), await res.text()).toBe(true)
+  const { sessionId } = (await res.json()) as { sessionId: string }
+  await expect.poll(async () => {
+    const b = (await (await request.get(`/api/sessions/${sessionId}`)).json()) as { session?: { process_status?: string } }
+    return b.session?.process_status
+  }, { timeout: 90_000 }).toBe('running')
+  await expect.poll(async () => {
+    const b = (await (await request.get(`/api/tasks/${taskId}`)).json()) as { task?: { user_status?: { state?: string } }; user_status?: { state?: string } }
+    return (b.task ?? b).user_status?.state
+  }, { timeout: 60_000 }).toBe('working')
+  return sessionId
+}
+
+export async function endRunningTurn(request: APIRequestContext, sessionId: string): Promise<void> {
+  await request.post(`/api/sessions/${sessionId}/terminate`).catch(() => {})
 }

@@ -15,13 +15,18 @@
 import { test, expect, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { filterChip, setStatus } from './filter-bar-helpers'
-import { presetPanelDesign, setStatusSectionOpen, showSectionCard, statusSection, statusSectionCountOf, statusSectionToggle } from './status-section-helpers'
+import { endRunningTurn, presetPanelDesign, setStatusSectionOpen, startRunningTurn, showSectionCard, statusSection, statusSectionCountOf, statusSectionToggle } from './status-section-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const SCREENSHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/completed-archive-lazy-load'
 
 // Four trips through the Filter menu; the default 30s is too tight on a loaded machine.
 test.setTimeout(120_000)
+
+const turns: string[] = []
+test.afterEach(async ({ request }) => {
+  for (const sid of turns.splice(0)) await endRunningTurn(request, sid)
+})
 
 async function createTaskViaApi(title: string): Promise<{ id: string; title: string }> {
   const uniqueTitle = `${title} ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -83,8 +88,10 @@ test('a board load leaves old completions on the server; Status Complete loads t
   const done = await createTaskViaApi('Archive done')
   await unpinViaApi(open.id)
   await unpinViaApi(done.id)
-  // Open work under Working (a to-do nobody started folds under Waiting).
+  // Open work under Working: a turn runs on it now (a to-do nobody started, or a task only
+  // marked In progress, folds under Waiting).
   await phaseViaApi(open.id, 'IN_PROGRESS')
+  turns.push(await startRunningTurn(page.request, open.id))
   await completeViaApi(done.id)
 
   // A 0-day window: anything completed before the request is archive.
