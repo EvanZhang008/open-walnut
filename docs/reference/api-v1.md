@@ -1754,6 +1754,71 @@ session instead.
   carried_turns?, trimmed_turns?, transcript_path?, error?, by? }`, the latest
   switch. Older clients ignore it.
 
+### Commands on another host (additive, 2026-10): `/hosts/:host/exec`, `/host-exec/grants`
+
+A task's session runs one command on ANOTHER host (ops `host_exec`, `host_exec_read`,
+`host_exec_stop`), through the Mac's link to it; the host's daemon runs it (capability
+`host-exec-v1`). The caller is the session in `x-walnut-caller-sid`.
+
+- `POST /api/v1/hosts/:host/exec { command | argv, cwd?, timeout_ms?, background? }` →
+  `200 { host, jobId, running, exitCode, signal, timedOut, ms, cwd, output, truncated,
+  outputBytes, logFile, redactedLines? }`. `command` runs in the user's login shell; `argv`
+  runs a program with no shell parsing. A run ends by `timeout_ms` (default 120000, at
+  most 600000; 7200000 with `background`), its process group stopped. The host always runs
+  it as a job; a foreground call waits for it to end, but for a session on another host at
+  most about 15 s (its gateway gives up at 20 s): a run still going answers `running: true`
+  with its `jobId`, and a retry would run it twice. `output` is the last 256 KB in whole
+  lines; `logFile` (in the task's directory on that host) holds all of it. A line that looks
+  like a credential is replaced and counted in `redactedLines`, and a private key's whole
+  block with it. `:host` may
+  be a selector (`@ios`). Refusals: `403 session_only` (no task session), `400 same_host`
+  (the caller's own host: use its own shell), `404 unknown_host`, `400 bad_request`,
+  `403 exec_grant_required { letterId }` (no grant yet: ONE letter asks the user, the session
+  is told when they allow it), `403 exec_grant_denied`, `429 busy` (2 runs per task, 4 per
+  host), `409 daemon_upgrade`, `503 host_offline`, `400 cwd_missing`.
+- `GET /api/v1/hosts/:host/exec/:jobId?offset=&wait_ms=` → the job's output from `offset`
+  (else its tail) with `nextOffset`, in whole lines; `wait_ms` (at most 60000, about 15000
+  for a session on another host) waits for it to end. Only the task that started a job
+  reads or stops it (`404 unknown_job` otherwise).
+- `POST /api/v1/hosts/:host/exec/:jobId/stop` → stops the job's process group.
+- `GET /api/v1/host-exec/grants` (`?all=1` adds revoked) → `{ grants: [{ id, taskId,
+  taskTitle, host, grantedAt, via: "letter" | "settings", revokedAt?, runs, lastRunAt?,
+  lastCommand? }] }`. `POST /api/v1/host-exec/grants { task_id, host }` and
+  `DELETE /api/v1/host-exec/grants/:id` are the person at this computer's only
+  (`403 human_only` for a request carrying a session id or from a paired device). A grant
+  covers one task on one host, any folder, until revoked; an Allow any task records on the
+  letter in the user's place makes no grant.
+
+### Secrets copied to hosts (additive, 2026-10): `/secrets`
+
+The user keeps a secret on the Mac (the master, `$XDG_STATE_HOME/open-walnut/secrets-master`,
+outside the data home, so git sync never carries it) and picks the hosts it is copied to, so a
+task there keeps working while the Mac is away. Each host's daemon keeps its copy (capability
+`secrets-v1`) in `$XDG_STATE_HOME/open-walnut/secrets/<name>`, mode 0600 in a 0700 directory,
+written to a temp file and renamed. A session there reads it from `$WALNUT_SECRETS_DIR/<name>`
+inside the command that needs it, or gets it as an environment variable when the user says so.
+No response, op result or log line ever carries a value.
+
+- `GET /api/v1/secrets?host=` → `{ active, secrets: [{ name, description?, hosts, env?, sessions?,
+  version, createdAt, updatedAt, deletedAt?, copies: { <host>: { version | null, at, error? } } }] }`.
+  `active` is false on a test or throwaway server, which keeps no secrets.
+- `PUT /api/v1/secrets/:name { value?, hosts?, env?, sessions?, description?, create? }` →
+  `{ secret }`. A new value (a rotate) or a new `env`/`sessions` is a new version, sent to every
+  host it is shared with; a host left out of `hosts` has its copy removed. The answer comes once
+  the hosts have their copies or after 8 s; a host that is away (or slow) gets it in the
+  background or when it next connects, and `copies` says where each stands. `create: true`
+  refuses a name already taken. A session already running keeps the environment it started
+  with. Refusals: `400 bad_name | bad_env | value_required`, `404 unknown_host`,
+  `409 exists | isolated_server`, `500 fleet_unreadable` (the list of secrets could not be read;
+  nothing changed).
+- `DELETE /api/v1/secrets/:name` → `{ name, pending }`: removed from every host it was sent to;
+  `pending` lists hosts that were away, and the row stays (no hosts, `deletedAt`) until they
+  connect.
+- `POST /api/v1/secrets/:name/send` → `{ secret }`: send it to its hosts again now.
+
+PUT and DELETE are the person at this computer's only (`403 human_only` for a request carrying
+a session id or from a paired device). A host's own secret the Mac never sent is left alone.
+
 ### Move a task to another host, and each host's load (additive, 2026-10): `/tasks/:id/move`, `/hosts/load`
 
 A move is an engine switch with another host: the task keeps its id, its

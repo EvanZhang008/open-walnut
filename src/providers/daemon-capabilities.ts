@@ -467,6 +467,21 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // twin (task-dir-core.cjs). Optional: without it a session gets no task
   // directory and the /tmp git guard stays inert.
   'task-dir-v1',
+  // 'host-exec-v1' — a command for a task on another host (host-exec-core.ts):
+  // `exec.run {jobId, taskId, command | argv, cwd, timeoutMs, background}` runs it
+  // under the user's login shell (its process group killed at the deadline: 10 min,
+  // 2 h in the background) and answers its exit code and the tail of its output;
+  // `exec.read {jobId, offset, wait}` / `exec.kill` / `exec.list` for the rest. The
+  // server checks the user's grant first (src/core/hosts/host-exec.ts); not bridge-
+  // or follower-reachable. Sidecar-gated in the source twin (host-exec-core.cjs).
+  'host-exec-v1',
+  // 'secrets-v1' — the secrets the user shared with this host (secrets-core.ts),
+  // one 0600 file each under $XDG_STATE_HOME/open-walnut/secrets: `secrets.list`
+  // (names and versions, never a value), `secrets.put {name, version, value, env,
+  // sessions}`, `secrets.remove {name}`, `secrets.sync {keep}`. A session starts
+  // with WALNUT_SECRETS_DIR and, for each secret the user let sessions have, its
+  // env var. Not bridge- or follower-reachable. Sidecar-gated in the source twin.
+  'secrets-v1',
   // 'vscode-v1' — host-local embedded VS Code (vscode.ensure / vscode.status):
   // the daemon installs/starts code-server bound to 127.0.0.1 and returns
   // {port, token}; the server tunnels the port and the web UI iframes it.

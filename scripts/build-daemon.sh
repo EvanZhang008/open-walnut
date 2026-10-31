@@ -90,6 +90,8 @@ SOURCES=(
   src/providers/path-resolve-core.ts
   src/providers/task-dir-core.ts
   src/lib/task-dir.ts
+  src/providers/host-exec-core.ts
+  src/providers/secrets-core.ts
   src/providers/search-grep-core.ts
   src/providers/vscode-server-core.ts
   src/providers/transcript-rewind-core.ts
@@ -290,6 +292,16 @@ cp node_modules/@agentclientprotocol/codex-acp/LICENSE "$OUTDIR/codex-acp.LICENS
 "$BUN" build --minify --target=node --format=cjs \
   --outfile "$OUTDIR/task-dir-core.cjs" \
   src/providers/task-dir-core.ts
+
+# Commands for tasks on other hosts sidecar: 'host-exec-v1' is advertised only when it loads.
+"$BUN" build --minify --target=node --format=cjs \
+  --outfile "$OUTDIR/host-exec-core.cjs" \
+  src/providers/host-exec-core.ts
+
+# Fleet secrets sidecar: 'secrets-v1' is advertised only when it loads.
+"$BUN" build --minify --target=node --format=cjs \
+  --outfile "$OUTDIR/secrets-core.cjs" \
+  src/providers/secrets-core.ts
 
 # Embedded VS Code sidecar — same rationale: install/spawn/health pipeline
 # can't live in the source template; 'vscode-v1' is advertised only when the

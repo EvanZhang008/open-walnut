@@ -41,6 +41,8 @@ import { linkFailureKind } from '../../providers/link-failure.js'
 import { hostDisplayNameFor, inHostTerms } from '../../core/hosts/host-display-name.js'
 import { markHandledFailure } from '../middleware/handled-failure.js'
 import { hostTermsAtExit } from '../middleware/host-terms-at-exit.js'
+import { secretsRoot } from '../../providers/secrets-core.js'
+import { masterRoot } from '../../core/secrets/fleet-secrets.js'
 
 /** Why a remote read failed, as the viewer says it: in the host's own name, never its alias. */
 async function remoteReadSentence(host: string, err: unknown): Promise<string> {
@@ -90,8 +92,12 @@ export function isSecretPath(absPath: string): boolean {
     path.join(home, '.aws'),
     path.join(home, '.ssh'),
     path.join(home, '.config', 'walnut-secrets'),
+    // Fleet secrets: this machine's copies and the Mac's master (core/secrets/fleet-secrets.ts).
+    secretsRoot(process.env, home),
+    masterRoot(process.env, home),
   ]
   return denied.some((d) => resolved === d || resolved.startsWith(d + path.sep))
+    || /(^|\/)open-walnut\/secrets(-master)?(\/|$)/.test(resolved)
     || /(^|\/)config\.ya?ml$/.test(resolved)
 }
 

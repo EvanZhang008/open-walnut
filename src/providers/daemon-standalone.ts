@@ -175,6 +175,8 @@ import { START_TASK_TOKEN, clockDueMs, clockFireOwed, clockStateOnArm, dropStale
 import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
 import { ensureTaskDir, isTaskDirId, listTaskDirs, removeTaskDirs, taskDirPath, taskDirRoot } from './task-dir-core.js'
+import { createHostExec } from './host-exec-core.js'
+import { createSecretStore, secretsRoot } from './secrets-core.js'
 import { scanHostUsage, scanCostState, scanSessionCost, createUsagePages } from './usage-host-core.js'
 import { createUsageBudgetRuntime, type BudgetPrices, type BudgetVerdict } from './usage-budget-runtime.js'
 import { createBudgetControl } from './usage-budget-control.js'
@@ -2392,6 +2394,21 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'taskdir.ensure': return cmdTaskDirEnsure(ws, id as number, cmd)
     case 'taskdir.list': return cmdTaskDirList(ws, id as number)
     case 'taskdir.remove': return cmdTaskDirRemove(ws, id as number, cmd)
+    // A command for a task on another host (host-exec-v1, host-exec-core.ts). NOT in
+    // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: it runs anything the user
+    // can, so only the trusted walnut socket asks, after the server checked the
+    // user's grant. Keep in sync with daemon-source.ts.
+    case 'exec.run': return replyTransfer(ws, id as number, 'exec.run', () => hostExec.run(cmd), false)
+    case 'exec.read': return replyTransfer(ws, id as number, 'exec.read', () => hostExec.read(cmd), false)
+    case 'exec.kill': return replyTransfer(ws, id as number, 'exec.kill', () => hostExec.kill(cmd), false)
+    case 'exec.list': return replyTransfer(ws, id as number, 'exec.list', () => hostExec.list(), false)
+    // The secrets the user shared with this host (secrets-v1, secrets-core.ts). NOT in
+    // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: only the Mac's trusted socket
+    // writes or lists them, and no reply ever carries a value. Keep in sync with daemon-source.ts.
+    case 'secrets.list': return replyTransfer(ws, id as number, 'secrets.list', async () => secretStore.list(), false)
+    case 'secrets.put': return replyTransfer(ws, id as number, 'secrets.put', async () => secretStore.put(cmd), false)
+    case 'secrets.remove': return replyTransfer(ws, id as number, 'secrets.remove', async () => secretStore.remove(cmd), false)
+    case 'secrets.sync': return replyTransfer(ws, id as number, 'secrets.sync', async () => secretStore.sync(cmd), false)
     case 'fs.grep': return cmdFsGrep(ws, id as number, cmd)
     // NOT in BRIDGE_ALLOWED_COMMANDS: starts a process — only the trusted
     // SSH-tunneled walnut socket may ask, never the public cloud bridge.
@@ -5301,12 +5318,14 @@ async function cmdAcpStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
   // through the RC-sourcing shell wrapper.
   const taskDir = ensureTaskDir(TASK_DIR_ROOT, (cmd as { taskId?: unknown }).taskId, (cmd as { home?: unknown }).home)
   params.env = {
+    ...secretsSessionEnv(),
     ...params.env,
     WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
     PATH: (process.env.PATH || '') + path.delimiter + GATEWAY_SHIM_DIR,
     // The task's durable working directory, as for the native spawn (task-dir-core.ts);
     // '' unsets one this daemon inherited (mergeAcpSpawnEnv drops empty values).
     WALNUT_TASK_DIR: taskDir ?? '',
+    WALNUT_SECRETS_DIR: SECRETS_ROOT,
   }
   return sessionStartGate.run(params.sid, async () => {
     if (!params.providerSessionId && fs.existsSync(cancelledStartPath(params.sid))) throw new Error('Initial start was cancelled; retry task_start on the same task')
@@ -5760,6 +5779,9 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
     // Keep in sync with daemon-source.ts.
     env: {
       ...process.env,
+      // The secrets the user let this host's sessions have (secrets-core.ts), before
+      // every Walnut variable so none of those can be replaced. Keep in sync with daemon-source.ts.
+      ...secretsSessionEnv(),
       MCP_CONNECTION_NONBLOCKING: '1',
       CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
       CLAUDE_CODE_MAX_RETRIES: cliMaxRetries,
@@ -5775,6 +5797,8 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
       // Unset when the task has none, so a value this daemon inherited (it was
       // started from inside a session) never names another task's directory.
       WALNUT_TASK_DIR: taskDir ?? undefined,
+      // Where the secrets the user shared with this host are, one file each.
+      WALNUT_SECRETS_DIR: SECRETS_ROOT,
       // Never let OUR watchdog pid leak into the CLI's env. A CLI session that
       // runs `npm run dev:prod` would otherwise hand this stale pid to the
       // PRODUCTION daemon, whose watchdog would trip on the long-dead pid and
@@ -8983,7 +9007,9 @@ function fsReadBoundedVersion(resolved: string, st: fs.Stats): string {
 }
 // Secret files/dirs never served over the bridge. Checked against the
 // REALPATH-resolved target so a symlink can't launder a denied path.
-const FS_READ_BOUNDED_DENIED_DIRS = ['.ssh', '.aws', '.gnupg', path.join('.config', 'walnut-secrets')]
+const FS_READ_BOUNDED_DENIED_DIRS = ['.ssh', '.aws', '.gnupg', path.join('.config', 'walnut-secrets'),
+  // Fleet secrets: this host's copies, and the Mac's master (secrets-core.ts, core/secrets/fleet-secrets.ts).
+  path.join('open-walnut', 'secrets'), path.join('open-walnut', 'secrets-master')]
 const FS_READ_BOUNDED_DENIED_BASENAMES = new Set([
   '.netrc', '.npmrc', '.git-credentials', 'credentials', 'auth.json', 'bridge-tokens.json',
 ])
@@ -9378,7 +9404,7 @@ function fsMutateDenied(p: string): boolean {
   // manager needs to rename or delete these, and losing them locks the user (and
   // Walnut's own ControlMaster access) out of the host.
   for (const seg of segments) {
-    if (seg === '.ssh' || seg === '.aws' || seg === '.gnupg' || seg === '.kube' || seg === 'secrets') return true
+    if (seg === '.ssh' || seg === '.aws' || seg === '.gnupg' || seg === '.kube' || seg === 'secrets' || seg === 'secrets-master') return true
   }
   if (base === 'auth.json' || base === 'bridge-tokens.json') return true
   // Walnut's own irreplaceable state on this host. The stream JSONLs ARE the
@@ -10326,6 +10352,40 @@ function replyTransfer(ws: ServerWebSocket<WsData>, id: number, name: string, wo
   } catch (err) {
     sendError(ws, id, name + ' failed: ' + (err as Error).message, { code: 'shutting_down' })
   }
+}
+
+// ── Commands for tasks on other hosts (capability 'host-exec-v1') ──
+// PARITY: keep in sync with daemon-source.ts. The logic is host-exec-core.ts; this
+// twin hands it spawn, the group signal, and an env without Walnut's own variables.
+const HOST_EXEC_DIR = SERVICE_MODE && DAEMON_STATE_DIR
+  ? path.join(DAEMON_STATE_DIR, 'host-exec')
+  : IS_PROD_DAEMON_DIR ? path.join(HOME_DIR, '.open-walnut', 'tmp', 'host-exec') : path.join(DAEMON_DIR, 'host-exec')
+function hostExecEnv(): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const [k, v] of Object.entries(process.env)) {
+    if (typeof v !== 'string' || k.startsWith('WALNUT_') || k.startsWith('OPEN_WALNUT_') || k === 'BUN_BE_BUN') continue
+    env[k] = v
+  }
+  env.HOME = process.env.HOME || HOME_DIR
+  return env
+}
+const hostExec = createHostExec({
+  spawn: (command, args, opts) => spawn(command, args, opts),
+  killGroup: (pid, signal) => { if (pid > 1) process.kill(-pid, signal) },
+  shell: process.env.SHELL || '/bin/sh',
+  home: HOME_DIR,
+  taskDirRoot: TASK_DIR_ROOT,
+  stateDir: HOST_EXEC_DIR,
+  env: hostExecEnv(),
+})
+
+// ── The secrets the user shared with this host (capability 'secrets-v1') ──
+// PARITY: keep in sync with daemon-source.ts. The logic is secrets-core.ts.
+const SECRETS_ROOT = secretsRoot(process.env, HOME_DIR)
+const secretStore = createSecretStore(SECRETS_ROOT)
+/** A session's share of them; a store that cannot be read gives none, never a failed spawn. */
+function secretsSessionEnv(): Record<string, string> {
+  try { return secretStore.sessionEnv() } catch { return {} }
 }
 
 // ── Task workspaces (host-local, capability 'workspace-v1') ──

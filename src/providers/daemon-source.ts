@@ -219,7 +219,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'budget-v2'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'host-exec-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'budget-v2'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -3758,6 +3758,20 @@ function dispatchCommand(ws, id, cmd) {
     case 'taskdir.ensure': return cmdTaskDirEnsure(ws, id, cmd);
     case 'taskdir.list': return cmdTaskDirList(ws, id);
     case 'taskdir.remove': return cmdTaskDirRemove(ws, id, cmd);
+    // A command for a task on another host (host-exec-v1); not bridge- or
+    // follower-reachable: only the trusted walnut socket asks. Mirrors daemon-standalone.ts.
+    case 'exec.run': case 'exec.read': case 'exec.kill': case 'exec.list': {
+      if (!hostExec) return sendError(ws, id, cmd.cmd + ' unsupported: host-exec-core sidecar not loaded');
+      const op = cmd.cmd.slice(5);
+      return replyTransfer(ws, id, cmd.cmd, function () { return hostExec[op](cmd); }, false);
+    }
+    // The secrets the user shared with this host (secrets-v1); not bridge- or
+    // follower-reachable, and no reply carries a value. Mirrors daemon-standalone.ts.
+    case 'secrets.list': case 'secrets.put': case 'secrets.remove': case 'secrets.sync': {
+      if (!secretStore) return sendError(ws, id, cmd.cmd + ' unsupported: secrets-core sidecar not loaded');
+      const sop = cmd.cmd.slice(8);
+      return replyTransfer(ws, id, cmd.cmd, function () { return Promise.resolve().then(function () { return secretStore[sop](cmd); }); }, false);
+    }
     case 'fs.grep': return cmdFsGrep(ws, id, cmd);
     // NOT in BRIDGE_ALLOWED_COMMANDS: starts a process — only the trusted
     // SSH-tunneled walnut socket may ask, never the public cloud bridge.
@@ -6267,10 +6281,10 @@ async function cmdAcpStart(ws, id, cmd) {
   // Agent gateway: the same wiring a native claude spawn gets (the socket, and
   // the walnut shim on PATH), because ACP workers never go through cmdStart.
   const acpTaskDir = ensureTaskDirFor(cmd.taskId, cmd.home);
-  params.env = Object.assign({}, params.env, {
+  params.env = Object.assign({}, secretsSessionEnv(), params.env, {
     WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
     PATH: (process.env.PATH || '') + path.delimiter + GATEWAY_SHIM_DIR,
-  }, { WALNUT_TASK_DIR: acpTaskDir || '' });
+  }, { WALNUT_TASK_DIR: acpTaskDir || '', WALNUT_SECRETS_DIR: SECRETS_ROOT || '' });
   return sessionStartGate.run(params.sid, async function () {
     if (!params.providerSessionId && fs.existsSync(cancelledStartPath(params.sid))) throw new Error('Initial start was cancelled; retry task_start on the same task');
     const resp = await acp.acpStart(ws, params);
@@ -6687,6 +6701,9 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
     // opts a host out. Keep in sync with daemon-standalone.ts.
     env: {
       ...process.env,
+      // The secrets the user let this host's sessions have, before every Walnut
+      // variable. Keep in sync with daemon-standalone.ts.
+      ...secretsSessionEnv(),
       MCP_CONNECTION_NONBLOCKING: '1',
       CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1',
       CLAUDE_CODE_MAX_RETRIES: cliMaxRetries,
@@ -6704,6 +6721,7 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
       // Unset when the task has none, so an inherited value never names another
       // task's directory. Keep in sync with daemon-standalone.ts.
       WALNUT_TASK_DIR: taskDir || undefined,
+      WALNUT_SECRETS_DIR: SECRETS_ROOT || undefined,
       PATH: (launch.nodeDir ? launch.nodeDir + ':' : '') + (process.env.PATH || '') + ':' + GATEWAY_SHIM_DIR,
       // Never let OUR watchdog pid leak into the CLI's env — a CLI session that
       // runs a dev:prod deploy would hand this stale pid to the PRODUCTION
@@ -10672,7 +10690,9 @@ function fsReadBoundedVersion(resolved, st) {
 }
 // Secret files/dirs never served over the bridge. Checked against the
 // REALPATH-resolved target so a symlink can't launder a denied path.
-var FS_READ_BOUNDED_DENIED_DIRS = ['.ssh', '.aws', '.gnupg', path.join('.config', 'walnut-secrets')];
+var FS_READ_BOUNDED_DENIED_DIRS = ['.ssh', '.aws', '.gnupg', path.join('.config', 'walnut-secrets'),
+  // Fleet secrets: this host's copies, and the Mac's master (secrets-core.ts, core/secrets/fleet-secrets.ts).
+  path.join('open-walnut', 'secrets'), path.join('open-walnut', 'secrets-master')];
 var FS_READ_BOUNDED_DENIED_BASENAMES = new Set([
   '.netrc', '.npmrc', '.git-credentials', 'credentials', 'auth.json', 'bridge-tokens.json',
 ]);
@@ -11065,7 +11085,7 @@ function fsMutateDenied(p) {
   // manager needs to rename or delete these, and losing them locks the user
   // (and Walnut's own ControlMaster access) out of the host.
   for (const seg of segments) {
-    if (seg === '.ssh' || seg === '.aws' || seg === '.gnupg' || seg === '.kube' || seg === 'secrets') return true;
+    if (seg === '.ssh' || seg === '.aws' || seg === '.gnupg' || seg === '.kube' || seg === 'secrets' || seg === 'secrets-master') return true;
   }
   if (base === 'auth.json' || base === 'bridge-tokens.json') return true;
   // Walnut's own irreplaceable state on this host. The stream JSONLs ARE the
@@ -11998,6 +12018,44 @@ try { pathResolveCore = require(path.join(__dirname, 'path-resolve-core.cjs')); 
 let taskDirCore = null;
 try { taskDirCore = require(path.join(__dirname, 'task-dir-core.cjs')); } catch (err) { taskDirCore = null; }
 const TASK_DIR_ROOT = taskDirCore ? taskDirCore.taskDirRoot(process.env, HOME_DIR) : null;
+// Fleet secrets sidecar (secrets-core.cjs): the secrets the user shared with this
+// host. 'secrets-v1' is advertised only when it loads. Mirrors daemon-standalone.ts.
+let secretStore = null;
+let SECRETS_ROOT = null;
+try {
+  const secretsCore = require(path.join(__dirname, 'secrets-core.cjs'));
+  SECRETS_ROOT = secretsCore.secretsRoot(process.env, HOME_DIR);
+  secretStore = secretsCore.createSecretStore(SECRETS_ROOT);
+} catch (err) { secretStore = null; SECRETS_ROOT = null; }
+function secretsSessionEnv() {
+  if (!secretStore) return {};
+  try { return secretStore.sessionEnv(); } catch (err) { return {}; }
+}
+// Commands for tasks on other hosts sidecar (host-exec-core.cjs): 'host-exec-v1' is
+// advertised only when it loads. Mirrors daemon-standalone.ts.
+let hostExec = null;
+try {
+  const hostExecCore = require(path.join(__dirname, 'host-exec-core.cjs'));
+  const HOST_EXEC_DIR = SERVICE_MODE && DAEMON_STATE_DIR
+    ? path.join(DAEMON_STATE_DIR, 'host-exec')
+    : IS_PROD_DAEMON_DIR ? path.join(HOME_DIR, '.open-walnut', 'tmp', 'host-exec') : path.join(DAEMON_DIR, 'host-exec');
+  const hostExecEnv = {};
+  for (const k of Object.keys(process.env)) {
+    const v = process.env[k];
+    if (typeof v !== 'string' || k.startsWith('WALNUT_') || k.startsWith('OPEN_WALNUT_') || k === 'BUN_BE_BUN') continue;
+    hostExecEnv[k] = v;
+  }
+  hostExecEnv.HOME = process.env.HOME || HOME_DIR;
+  hostExec = hostExecCore.createHostExec({
+    spawn: function (command, args, opts) { return spawn(command, args, opts); },
+    killGroup: function (pid, signal) { if (pid > 1) process.kill(-pid, signal); },
+    shell: process.env.SHELL || '/bin/sh',
+    home: HOME_DIR,
+    taskDirRoot: TASK_DIR_ROOT,
+    stateDir: HOST_EXEC_DIR,
+    env: hostExecEnv,
+  });
+} catch (err) { hostExec = null; }
 function ensureTaskDirFor(taskId, home) {
   if (!taskDirCore || !TASK_DIR_ROOT) return null;
   try { return taskDirCore.ensureTaskDir(TASK_DIR_ROOT, taskId, home); } catch (err) { return null; }
@@ -12105,6 +12163,8 @@ function daemonCapabilities() {
   if (externalScanCore && externalScanCore.isHumanStartedClaude) caps.push('external-human-v1');
   if (pathResolveCore) caps.push('path-resolve-v1');
   if (taskDirCore) caps.push('task-dir-v1');
+  if (hostExec) caps.push('host-exec-v1');
+  if (secretStore) caps.push('secrets-v1');
   if (vscodeServerCore) caps.push('vscode-v1');
   if (transcriptRewindCore) caps.push('rewind-probe-v1');
   if (triggerCheckCore) caps.push('triggers-v1');

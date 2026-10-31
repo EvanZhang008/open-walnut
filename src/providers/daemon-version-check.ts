@@ -116,6 +116,12 @@ const DAEMON_SOURCE_FILES = [
   // AND shipped as the task-dir-core.cjs sidecar, with the path rules it imports.
   'src/providers/task-dir-core.ts',
   'src/lib/task-dir.ts',
+  // Commands for tasks on other hosts (exec.*) — bundled into the binary AND
+  // shipped as the host-exec-core.cjs sidecar.
+  'src/providers/host-exec-core.ts',
+  // Fleet secrets (secrets.*) — bundled into the binary AND shipped as the
+  // secrets-core.cjs sidecar.
+  'src/providers/secrets-core.ts',
   // Host-local symbol search (fs.grep) — bundled into the binary twin.
   'src/providers/search-grep-core.ts',
   // Embedded VS Code (vscode.ensure) — bundled into the binary AND shipped

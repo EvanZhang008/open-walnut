@@ -148,6 +148,8 @@ import { projectsV1Router } from './routes/projects-v1.js'
 import { taskExtrasV1Router } from './routes/task-extras-v1.js'
 import { transferV1Router } from './routes/transfer-v1.js'
 import { hostsFleetV1Router } from './routes/hosts-fleet-v1.js'
+import { hostExecV1Router } from './routes/host-exec-v1.js'
+import { secretsV1Router } from './routes/secrets-v1.js'
 import { engineSwitchV1Router } from './routes/engine-switch-v1.js'
 import { taskMoveV1Router } from './routes/task-move-v1.js'
 import { sessionExtrasV1Router } from './routes/session-extras-v1.js'
@@ -1954,6 +1956,18 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     startStatusCheck({ ephemeral: IS_EPHEMERAL })
   }
 
+  // ── Answers to the letters that ask for a task's commands on another host (src/core/hosts/exec-grants.ts).
+  // ── Fleet secrets: each host that connects gets its copies brought in line (src/core/secrets/fleet-secrets.ts).
+  if (bootPolicy('fleet-secrets')) {
+    void import('../core/secrets/fleet-secrets.js').then((m) => m.startFleetSecrets())
+      .catch((err) => log.web.warn('fleet secrets: not started', { error: String(err) }))
+  }
+
+  if (bootPolicy('host-exec-grants')) {
+    void import('../core/hosts/exec-grants.js').then((m) => m.startExecGrantAnswers())
+      .catch((err) => log.web.warn('host exec grants: answers not wired', { error: String(err) }))
+  }
+
   // ── The one status the user sees per task (src/core/user-status-sync.ts).
   if (bootPolicy('user-status')) {
     const { startUserStatusSync } = await import('../core/user-status-sync.js')
@@ -2438,6 +2452,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // (tests/web/v1-route-shadow-ratchet.test.ts).
   app.use('/api/v1', taskMoveV1Router)
   app.use('/api/v1', hostsFleetV1Router)
+  app.use('/api/v1', hostExecV1Router)
+  app.use('/api/v1', secretsV1Router)
   // Session extras (additive, Wave 2): controls/settings/side-questions/
   // workflow/plan/subagent-history/execute-compact/queue + list-dirs — all
   // B-class relay on a REPLICA.

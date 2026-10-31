@@ -82,6 +82,18 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   { method: 'GET', pattern: '/api/v1/hosts', away: 'needs-leader', why: 'fleet_needs_mac' },
   { method: 'GET', pattern: '/api/v1/hosts/pick', away: 'needs-leader', why: 'fleet_needs_mac' },
   { method: 'GET', pattern: '/api/v1/hosts/:host', away: 'needs-leader', why: 'fleet_needs_mac' },
+  // A command on another host runs through the Mac's links, under grants the Mac keeps.
+  { method: 'POST', pattern: '/api/v1/hosts/:host/exec', away: 'needs-leader', why: 'host_exec_needs_mac' },
+  { method: 'GET', pattern: '/api/v1/hosts/:host/exec/:jobId', away: 'needs-leader', why: 'host_exec_needs_mac' },
+  { method: 'POST', pattern: '/api/v1/hosts/:host/exec/:jobId/stop', away: 'needs-leader', why: 'host_exec_needs_mac' },
+  { method: 'GET', pattern: '/api/v1/host-exec/grants', away: 'needs-leader', why: 'host_exec_needs_mac' },
+  { method: 'POST', pattern: '/api/v1/host-exec/grants', away: 'needs-leader', why: 'host_exec_needs_mac' },
+  { method: 'DELETE', pattern: '/api/v1/host-exec/grants/:id', away: 'needs-leader', why: 'host_exec_needs_mac' },
+  // The Mac holds every secret; a replica never sees a value.
+  { method: 'GET', pattern: '/api/v1/secrets', away: 'needs-leader', why: 'secrets_need_mac' },
+  { method: 'PUT', pattern: '/api/v1/secrets/:name', away: 'needs-leader', why: 'secrets_need_mac' },
+  { method: 'DELETE', pattern: '/api/v1/secrets/:name', away: 'needs-leader', why: 'secrets_need_mac' },
+  { method: 'POST', pattern: '/api/v1/secrets/:name/send', away: 'needs-leader', why: 'secrets_need_mac' },
   { method: 'GET', pattern: '/api/v1/sessions/:id', away: 'read' },
   { method: 'GET', pattern: '/api/v1/sessions/:id/history', cls: 'local', local: 'session', away: 'read' },
   { method: 'GET', pattern: '/api/v1/sessions/:id/transcript', cls: 'local', local: 'session', away: 'read' },

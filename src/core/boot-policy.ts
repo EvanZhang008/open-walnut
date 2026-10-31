@@ -115,6 +115,8 @@ export const BOOT_POLICY = [
   { job: 'board-reminders', leader: true, replica: false, why: 'the reminders clock runs on the Mac' },
   { job: 'wait-until', leader: true, replica: false, why: 'the wait_until clock runs on the Mac' },
   { job: 'user-status', leader: true, replica: false, why: 'task statuses are written on the Mac' },
+  { job: 'host-exec-grants', leader: true, replica: false, why: 'grants for commands on other hosts are kept on the Mac' },
+  { job: 'fleet-secrets', leader: true, replica: false, why: 'the Mac holds the secrets and sends each host its copies' },
   { job: 'title-reconciler', leader: true, replica: false, why: 'titles are written on the Mac' },
   { job: 'link-tags', leader: true, replica: false, why: 'link tags are written on the Mac' },
   { job: 'notes-indexer', leader: true, replica: false, why: 'notes live in the copy (WP6; the companion searches its copy since 4d)' },

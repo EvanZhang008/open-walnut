@@ -70,7 +70,9 @@ export function fleetPromptLine(hosts: HostCaps[], sessionHost: string | undefin
   })
   return 'Hosts: Walnut can run work on these machines. To use one, name it as host in task_create or task_start, '
     + 'or ask by what it has (host "@ios", "@browser" for the user\'s own signed-in browser, "@mcp:<server>", '
-    + '"@always-on"); host_list says which are connected now and lists each one\'s capabilities.\n'
+    + '"@always-on"); host_list says which are connected now and lists each one\'s capabilities. '
+    + 'For one command there (an xcodebuild, a CLI signed in on that machine), host_exec runs it and returns its output; '
+    + 'the user allows that once per task and host.\n'
     + rows.join('\n') + '\n\n'
 }
 
@@ -80,7 +82,8 @@ export async function buildFleetPromptLine(sessionHost: string | undefined): Pro
     // answers /hosts/pick with needs-leader, so its sessions get no host line.
     const { isFollower } = await import('../server-role.js')
     if (isFollower()) return ''
-    return fleetPromptLine(await promptHosts(), sessionHost)
+    const secrets = await import('../secrets/fleet-secrets.js').then((m) => m.secretsPromptLine(sessionHost), () => '')
+    return fleetPromptLine(await promptHosts(), sessionHost) + secrets
   } catch (err) {
     log.web.debug('fleet prompt: no host line', { error: String(err) })
     return ''

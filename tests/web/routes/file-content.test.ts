@@ -46,6 +46,12 @@ describe('file-content secret paths', () => {
   it('denies every file under the Plugin secret store', () => {
     expect(isSecretPath(path.join(WALNUT_HOME, 'secrets', 'plugins', 'sample.json'))).toBe(true);
   });
+  it('denies the fleet secrets: this machine\'s copies and the Mac\'s master', () => {
+    expect(isSecretPath(path.join(os.homedir(), '.local', 'state', 'open-walnut', 'secrets', 'github-read'))).toBe(true);
+    expect(isSecretPath(path.join(os.homedir(), '.local', 'state', 'open-walnut', 'secrets-master', 'github-read'))).toBe(true);
+    expect(isSecretPath('/srv/state/open-walnut/secrets-master/.fleet.json')).toBe(true);
+    expect(isSecretPath(path.join(os.homedir(), 'notes', 'secrets.md'))).toBe(false);
+  });
 });
 
 describe('GET /api/file-content raw media (local)', () => {

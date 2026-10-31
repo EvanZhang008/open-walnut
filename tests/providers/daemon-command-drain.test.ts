@@ -630,6 +630,8 @@ describe('standalone ACP command lifetime', () => {
       isJournalSid: () => false, usageBudget: { bindRuntime: async () => {} },
       // acpStart names the task's durable directory first (task-dir-core.ts); this frame names no task.
       TASK_DIR_ROOT: '/fixture/tasks', ensureTaskDir: () => null,
+      // acpStart hands the session the secrets the user shared with this host (secrets-core.ts).
+      secretsSessionEnv: () => ({}), SECRETS_ROOT: '/fixture/secrets',
     })
     const result = handle({}, 1, { sid: 'fixture', cwd: '/fixture' }, 'getState')
     expect(typeof result?.then).toBe('function')

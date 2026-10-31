@@ -4403,7 +4403,7 @@ export class DaemonConnection {
       // The ACP files (acp-host-artifacts.ts ACP_HOST_FILES) let this host run Codex,
       // OpenCode, Goose and Pi itself; the daemon says 'acp-host-v1' once they are there.
       const sidecars: Array<[string, string]> = [
-        ...['changes-core.cjs', 'usage-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs', 'task-dir-core.cjs', 'vscode-server-core.cjs', 'transcript-rewind-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs', 'trigger-check-core.cjs', 'acp-daemon-core.cjs']
+        ...['changes-core.cjs', 'usage-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs', 'task-dir-core.cjs', 'host-exec-core.cjs', 'secrets-core.cjs', 'vscode-server-core.cjs', 'transcript-rewind-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs', 'trigger-check-core.cjs', 'acp-daemon-core.cjs']
           .map((f): [string, string] => [f, f]),
         ...Object.entries(ACP_HOST_FILES),
       ]

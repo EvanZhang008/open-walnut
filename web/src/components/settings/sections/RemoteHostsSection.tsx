@@ -15,6 +15,8 @@ import { flashHostsOf, hostRowId, useHostSettingsFocus } from '@/utils/host-sett
 import { landOnRow } from '@/utils/scroll-land';
 import { AddLimitRow } from './RemoteHostLimits';
 import { HostServersGroup } from './HostServersGroup';
+import { HostExecGrantsGroup } from './HostExecGrantsGroup';
+import { SecretsGroup } from './SecretsGroup';
 import { HostFleetGroup } from './HostFleetGroup';
 import { HostProfileDisclosure } from './HostProfileDisclosure';
 import { ReplicaRemovalGroup } from './ReplicaRemovalGroup';
@@ -135,6 +137,7 @@ export function RemoteHostsSection({ config, onSave }: Props) {
   const [sessionLimits, setSessionLimits] = useState<Record<string, string | number>>(config.session_limits ?? {});
   // Diagnostics cover SAVED, enabled hosts (the server's listStatusHosts), never a draft row.
   const hostCopy = useCopyDiagnostics('hosts');
+  const hostLabels = Object.fromEntries(Object.entries(config.hosts ?? {}).map(([key, h]) => [key, h?.label?.trim() || key]));
 
   // Cold-read the connect status once; every change after this is a WS push.
   useEffect(() => { void hydrateHostStatus(); }, []);
@@ -403,6 +406,8 @@ export function RemoteHostsSection({ config, onSave }: Props) {
       </SettingsGroup>
 
       <HostServersGroup hosts={config.hosts} />
+      <HostExecGrantsGroup hostLabels={hostLabels} />
+      <SecretsGroup hostLabels={hostLabels} />
       <ReplicaRemovalGroup
         only="host"
         labels={Object.fromEntries(Object.entries(config.hosts ?? {}).map(([key, h]) => [`host:${key}`, h?.label?.trim() || key]))}
