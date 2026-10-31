@@ -447,11 +447,20 @@ show inline after the open ones, other completed hits that show the query fold i
   (`ThreadReviewSidebar`, `useThreadReviewPane`, `hooks/useReviewSidebar.ts`, rules in
   `utils/review-sidebar.ts`): with the panel `open-walnut-fullscreen`, Conversation Mode and a
   history box at least `REVIEW_MIN_BOX` (880px) wide, one card per asked passage sits in a
-  right gutter (`data-review-sidebar` on `.session-history`), level with its passage in content
+  right gutter (`data-review-sidebar="open"|"collapsed"` on `.session-history`; no attribute and no
+  room at all while no card is on screen, held 1.2 s so a re-derive to nothing never reflows the
+  text), level with its passage in content
   coordinates (measured from the marks' ranges at each re-derive and resize, never per frame) and
   pushed down so none overlap (`stackReviewCards`; the picked card sits at its passage). A review
-  card is ONE row (number, title, rounds, state; the answer's start is its tooltip) until opened
-  (2026-10-29, the user: the cards were too big before a click and cut to a few lines after). Its
+  card is its head row (number, title, rounds, state) over the question's WHOLE conversation, the
+  open card's own `ThreadCardConversation` (built by `conversationFor` in `SessionChatHistory`, so
+  the chat-order rules hold there too), capped at `min(420px, 55vh)` with its own scroll; no card
+  runs past the conversation's last row (the tail cards shrink, at least `REVIEW_BODY_MIN`, so
+  "scroll to bottom" never stops in blank space) (2026-10-31, the user: "show everything normally
+  ... a maximum height, but people can scroll"; the one-row card of 2026-10-29 showed nothing). A
+  vertical bar on the column's edge (`ThreadReviewBar`, sticky below the glass header) folds the
+  column to a strip with the count and back, one preference for every panel and window
+  (`useReviewSidebarCollapsed`, `walnut:review-sidebar.v1`). Its head's
   click, Enter, its passage's click or the mark menu's Open opens the question's full card OVER it
   (`placeCardOver`, `CARD_ENLARGED_WIDTH`), every round in full and scrollable, the timeline staying
   put; there ⤢ is full screen in place (`fillRef`: the card is fixed over the history box's

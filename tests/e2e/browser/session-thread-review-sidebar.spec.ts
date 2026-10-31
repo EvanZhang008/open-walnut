@@ -102,7 +102,7 @@ test.describe('the fullscreen review sidebar', () => {
     await expect(panel.locator('.session-history[data-review-sidebar]')).toHaveCount(0)
 
     await goFullscreen(panel)
-    await expect(panel.locator('.session-history[data-review-sidebar="on"]')).toHaveCount(1)
+    await expect(panel.locator('.session-history[data-review-sidebar="open"]')).toHaveCount(1)
     await expect(sidebarCards(panel)).toHaveCount(REVIEW_COUNT, { timeout: 15_000 })
     await centreInHistory(page, panel, reviewPassage(3).slice(0, 30), { at: 0.2 })
     await page.waitForTimeout(300)
@@ -111,21 +111,32 @@ test.describe('the fullscreen review sidebar', () => {
     // In passage order, by title.
     const byTop = [...cards].sort((a, b) => a.top - b.top).map((c) => c.title)
     expect(byTop).toEqual(REVIEW_TITLES)
-    // Closed, a card is one row: no question or answer text in it, the
-    // answer's start only as its tooltip (never the reply's `[Qn]` tag).
-    const rows = await sidebarCards(panel).evaluateAll((els) => els.map((el) => ({
-      height: el.getBoundingClientRect().height,
-      title: el.querySelector('.thread-review-title') as HTMLElement,
-      tip: el.querySelector('button.thread-review-head')?.getAttribute('title') ?? '',
-      text: el.textContent ?? '',
-    })).map((r) => ({ height: r.height, oneLine: r.title.scrollHeight <= r.title.clientHeight + 1, tip: r.tip, text: r.text })))
+    // A card shows its whole conversation (2026-10-31, the user: "show everything
+    // normally ... a maximum height, but people can scroll"): the question as the
+    // chat's bubble and the answer, under a one-line head, never the reply's `[Qn]`
+    // tag; a long one scrolls inside its card. No composer in it.
+    const rows = await sidebarCards(panel).evaluateAll((els) => els.map((el) => {
+      const body = el.querySelector('.thread-review-body') as HTMLElement | null
+      const title = el.querySelector('.thread-review-title') as HTMLElement
+      return {
+        text: el.textContent ?? '',
+        questions: el.querySelectorAll('.thread-card-q .session-msg-user').length,
+        answers: el.querySelectorAll('.session-msg-assistant').length,
+        bodyH: body?.getBoundingClientRect().height ?? 0,
+        scrolls: !!body && body.scrollHeight > body.clientHeight + 1 && getComputedStyle(body).overflowY === 'auto',
+        oneLine: title.scrollHeight <= title.clientHeight + 1,
+        bodyText: body?.textContent ?? '',
+      }
+    }))
+    const cap = Math.min(420, 900 * 0.55)
     for (const r of rows) {
-      expect(r.height, `a closed card is one row: ${r.text}`).toBeLessThan(32)
+      expect(r.questions, `the question shows: ${r.text.slice(0, 80)}`).toBeGreaterThanOrEqual(1)
       expect(r.oneLine).toBe(true)
+      expect(r.bodyH, 'capped').toBeLessThanOrEqual(cap + 1)
+      expect(r.bodyText).not.toMatch(/\[Q\s?\d+\]/)
     }
-    expect(rows.filter((r) => /\[Q\s?\d+\]/.test(r.tip))).toEqual([])
-    expect(rows.filter((r) => r.tip.trim().length > 0 && !/No answer text/.test(r.tip)).length).toBeGreaterThan(REVIEW_COUNT / 2)
-    await expect(sidebarCards(panel).locator('.session-msg-user, textarea')).toHaveCount(0)
+    expect(rows.filter((r) => r.answers > 0).length, 'answers show').toBeGreaterThan(REVIEW_COUNT / 2)
+    await expect(sidebarCards(panel).locator('textarea')).toHaveCount(0)
     // Level with its passage or below it (pushed down), never overlapping.
     const ordered = REVIEW_TITLES.map((t) => cards.find((c) => c.title === t)!)
     for (let i = 0; i < ordered.length; i++) {
@@ -165,6 +176,91 @@ test.describe('the fullscreen review sidebar', () => {
     await expect(panel).not.toHaveClass(/open-walnut-fullscreen/)
     await expect(sidebarCards(panel)).toHaveCount(0)
     await expect(panel.locator('.session-history[data-review-sidebar]')).toHaveCount(0)
+  })
+
+  test('a card shows its whole thread with its own scroll; the vertical bar folds the column and brings it back, across a reload', async ({ page }) => {
+    const panel = await openFullscreen(page)
+    await page.evaluate(() => localStorage.removeItem('walnut:review-sidebar.v1'))
+    await goFullscreen(panel)
+    await expect(sidebarCards(panel)).toHaveCount(REVIEW_COUNT, { timeout: 15_000 })
+    const history = panel.locator('.session-history')
+
+    // The question of three rounds, in its review card: every round and the code
+    // in full, past the cap it scrolls inside, and its ends never move the timeline.
+    const first = sidebarCards(panel).filter({ hasText: REVIEW_TITLES[0] })
+    await history.evaluate((el) => { el.scrollTop = 0 })
+    await wheelIntoView(page, history, first.locator('button.thread-review-head'))
+    const body = first.locator('.thread-review-body')
+    await expect(body.locator('.thread-card-q')).toHaveCount(REVIEW_ROUNDS.length)
+    for (const q of REVIEW_ROUNDS) await expect(body).toContainText(q)
+    await expect(body.locator('pre')).toContainText(REVIEW_ROUND_CODE)
+    expect(await body.evaluate((el) => el.scrollHeight > el.clientHeight + 20), 'three rounds overflow the cap').toBe(true)
+    // The wheel goes over the part of the card the history box shows.
+    const bb = (await body.boundingBox())!
+    const hb = (await history.boundingBox())!
+    const y0 = Math.max(bb.y, hb.y), y1 = Math.min(bb.y + bb.height, hb.y + hb.height)
+    expect(y1 - y0, 'part of the card is on screen').toBeGreaterThan(40)
+    const atWheel = await history.evaluate((el) => el.scrollTop)
+    await page.mouse.move(bb.x + bb.width / 2, (y0 + y1) / 2)
+    for (let i = 0; i < 6; i++) { await page.mouse.wheel(0, 400); await page.waitForTimeout(80) }
+    await page.waitForTimeout(250)
+    expect(await body.evaluate((el) => el.scrollTop), 'the card scrolled').toBeGreaterThan(20)
+    expect(Math.abs((await history.evaluate((el) => el.scrollTop)) - atWheel), 'the timeline did not move').toBeLessThan(2)
+    await shot(page, '1b-full-thread-in-card')
+
+    // The cards end where the conversation ends: scrolled to the bottom, the
+    // last row is at the bottom, not blank space under it (tall cards beside the
+    // last passages shrink and scroll inside instead).
+    const tail = await history.evaluate((el) => {
+      el.scrollTop = el.scrollHeight
+      const rows = Array.from(el.children).filter((c) => (c as HTMLElement).offsetHeight > 0 && ['static', 'relative'].includes(getComputedStyle(c).position))
+      const last = rows[rows.length - 1]!.getBoundingClientRect().bottom
+      const box = el.getBoundingClientRect().bottom - (parseFloat(getComputedStyle(el).paddingBottom) || 0)
+      const cards = Array.from(el.querySelectorAll('.thread-review-card')).map((c) => c.getBoundingClientRect().bottom)
+      return { gap: box - last, cardsEnd: Math.max(...cards) - last }
+    })
+    expect(Math.abs(tail.gap), 'no blank space under the last row').toBeLessThan(4)
+    expect(tail.cardsEnd, 'no card runs past the conversation').toBeLessThan(2)
+
+    // The bar: between the text and the cards, below the glass header.
+    const bar = panel.getByTestId('thread-review-bar')
+    await expect(bar).toHaveAttribute('aria-label', 'Hide questions')
+    const header = (await panel.locator('.session-panel-header').boundingBox())!
+    const barBox = (await bar.boundingBox())!
+    expect(barBox.y, 'the bar starts below the header').toBeGreaterThanOrEqual(header.y + header.height - 1)
+    const textRightOpen = await panel.evaluate((root) => root.querySelector('.session-history [data-message-id][data-msg-role="assistant"] .session-msg-content')!.getBoundingClientRect().right)
+    expect(barBox.x).toBeGreaterThanOrEqual(textRightOpen - 1)
+    expect(barBox.x + barBox.width).toBeLessThanOrEqual((await sidebarCards(panel).first().boundingBox())!.x + 1)
+    // Stays put while the text scrolls.
+    await history.evaluate((el) => { el.scrollTop += 300 })
+    await page.waitForTimeout(150)
+    expect(Math.abs((await bar.boundingBox())!.y - barBox.y), 'sticky').toBeLessThan(2)
+
+    // Fold: the cards go, the text takes the room back, a narrow strip with the count stays.
+    await bar.click()
+    await expect(panel.locator('.session-history[data-review-sidebar="collapsed"]')).toHaveCount(1)
+    await expect(sidebarCards(panel)).toHaveCount(0)
+    await expect(bar).toHaveAttribute('aria-label', `Show questions (${REVIEW_COUNT})`)
+    const textRightFolded = await panel.evaluate((root) => root.querySelector('.session-history [data-message-id][data-msg-role="assistant"] .session-msg-content')!.getBoundingClientRect().right)
+    expect(textRightFolded - textRightOpen, 'the text widened by the column').toBeGreaterThan(250)
+    const strip = (await bar.boundingBox())!
+    const historyBox = (await history.boundingBox())!
+    expect(strip.x + strip.width, 'the strip sits at the right edge').toBeGreaterThan(historyBox.x + historyBox.width - 80)
+    expect(strip.y).toBeGreaterThanOrEqual(header.y + header.height - 1)
+    await shot(page, '1c-folded')
+
+    // The choice is kept: a reload comes back folded.
+    await page.reload()
+    await page.waitForLoadState('networkidle')
+    const again = await openThreadsSession(page, REVIEW_SESSION, REVIEW_TASK, REVIEW_READY, { view: 'linear' })
+    await goFullscreen(again)
+    await expect(again.locator('.session-history[data-review-sidebar="collapsed"]')).toHaveCount(1, { timeout: 15_000 })
+    await expect(sidebarCards(again)).toHaveCount(0)
+    // Reopen from the strip: the cards are back beside their passages.
+    await again.getByTestId('thread-review-bar').click()
+    await expect(again.locator('.session-history[data-review-sidebar="open"]')).toHaveCount(1)
+    await expect(sidebarCards(again)).toHaveCount(REVIEW_COUNT, { timeout: 15_000 })
+    expect(await page.evaluate(() => localStorage.getItem('walnut:review-sidebar.v1'))).toBe('open')
   })
 
   test('a click on a card, its passage or Enter opens the full question over the card; Quote in chat', async ({ page }) => {

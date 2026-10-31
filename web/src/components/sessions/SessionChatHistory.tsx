@@ -3790,10 +3790,32 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const reviewSentSig = reviewSent.map(([k, t]) => `${k}\u0001${t.length}\u0001${t.slice(0, 40)}`).join('\u0002');
   // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the signature
   const reviewSentText = useMemo(() => new Map(reviewSent), [reviewSentSig]);
+  // Each review card draws its question's whole conversation with the open
+  // card's own builder (conversationFor, below the card's state); the cards
+  // render after this component, so a stable callback reads it from a ref.
+  const reviewBodyRef = useRef<(key: string) => ReactNode>(() => null);
+  const renderReviewBody = useCallback((key: string) => reviewBodyRef.current(key), []);
+  // What the cards' conversations read that no other sidebar prop carries: the
+  // live text of every round (a follow-up queued behind a streaming answer
+  // included), each sent bubble's status, and whether the stream runs.
+  let reviewBodySig = '';
+  if (convMode && reviewShownRef.current) {
+    const parts: string[] = [isStreaming ? 's' : '-'];
+    for (const item of timeline) {
+      if (item.kind === 'block' && item.block.type === 'text') {
+        const k = pageKeyOfBlock(item.index);
+        if (k !== ROOT_THREAD_KEY) parts.push(`${k}\u0001${item.index}\u0001${item.block.content.length}`);
+      } else if (item.kind === 'user' && item.msg.role === 'user') {
+        parts.push(`${item.msg.queueId}\u0001${item.msg.status}`);
+      }
+    }
+    reviewBodySig = parts.join('\u0002');
+  }
   const review = useThreadReviewPane({
     sessionId, containerRef, conversationMode: convMode, hasQuestions, tree: threadTree, metaIndex: threadsApi.metaIndex,
     numbers: questionNumber, messages, liveText: reviewLiveText, markStates, openCard,
     quoteInChat: quoteInChatApi, markViewed: threadsApi.markViewed, enlargedKey, sentText: reviewSentText,
+    renderBody: renderReviewBody, bodySig: reviewBodySig,
   });
   reviewShownRef.current = review.on;
   const markTips = useThreadMarks({
@@ -4406,7 +4428,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     document.addEventListener('pointerdown', onDown, true);
     return () => document.removeEventListener('pointerdown', onDown, true);
   }, [cardKey, closeCard, sessionId]);
-  const cardTurns = useMemo(() => cardTurnsOf(messages, cardNode), [messages, cardNode]);
+  // A question's turns, once per history change and question (the open card and
+  // every review card read them; a streamed token changes no history row).
+  const turnsCache = useMemo(() => new Map<string, ReturnType<typeof cardTurnsOf<SessionHistoryMessage>>>(), [messages, threadTree]);
+  const turnsFor = (key: string) => {
+    let turns = turnsCache.get(key);
+    if (!turns) { turns = cardTurnsOf(messages, threadTree.byKey.get(key)); turnsCache.set(key, turns); }
+    return turns;
+  };
   // The card's box keeps its words under the question's composer draft key: an
   // Ask left with words, or a reply typed and not sent, is there when it opens again.
   const cardDraftKey = cardKey ? composerDraftKey(sessionId, cardKey, threadTree) : null;
@@ -4422,52 +4451,63 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // persisted yet sits where the timeline put it, answered by the newest live
   // text after it; live text before the first such question answers the last
   // persisted turn, whose words from the same turn (a step before a tool call)
-  // give way to it.
-  const cardOptimistic = cardKey
-    ? deduped.filter((m) => m.role === 'user' && m.status !== 'failed' && optimisticThreadKey(m) === cardKey) : [];
-  const cardSeq: Array<{ user: OptimisticMessage } | { block: Extract<TimelineItem, { kind: 'block' }> }> = [];
-  if (cardKey) {
-    const placed = new Set<string>();
+  // give way to it. One walk of the timeline serves every question shown (the
+  // open card and each review card).
+  type CardSeqItem = { user: OptimisticMessage } | { block: Extract<TimelineItem, { kind: 'block' }> };
+  const seqByKey = new Map<string, CardSeqItem[]>();
+  const placed = new Set<string>();
+  if (cardKey || review.on) {
+    const push = (key: string, it: CardSeqItem) => {
+      const list = seqByKey.get(key);
+      if (list) list.push(it); else seqByKey.set(key, [it]);
+    };
     for (const item of timeline) {
       if (item.kind === 'user') {
-        if (item.msg.status !== 'failed' && item.msg.role === 'user' && optimisticThreadKey(item.msg) === cardKey) {
-          cardSeq.push({ user: item.msg });
+        if (item.msg.status !== 'failed' && item.msg.role === 'user') {
+          push(optimisticThreadKey(item.msg), { user: item.msg });
           placed.add(item.msg.queueId);
         }
-      } else if (item.kind === 'block' && item.block.type === 'text' && pageKeyOfBlock(item.index) === cardKey) {
-        cardSeq.push({ block: item });
+      } else if (item.kind === 'block' && item.block.type === 'text') {
+        push(pageKeyOfBlock(item.index), { block: item });
       }
     }
-    // A bubble the timeline does not draw (a session's launch line) leads its rounds.
-    const unplaced = cardOptimistic.filter((m) => !placed.has(m.queueId));
-    if (unplaced.length > 0) cardSeq.unshift(...unplaced.map((m) => ({ user: m })));
   }
-  const cardOrder = cardLiveRounds(cardSeq);
-  const cardLive = cardOrder.lead;
-  const cardLastReply = cardTurns[cardTurns.length - 1]?.replies[0];
-  // The watermark counts the transcript's own rows; a split part stands for the row it came from.
-  const cardReplySuperseded = !!cardLive && !!cardLastReply
-    && loadedMessages.findIndex((m) => m === cardLastReply || (!!m.msgId && m.msgId === cardLastReply.msgId?.split('~')[0])) >= turnWatermark.current;
-  // The newest turn may still be answering (unless a newer send of this question
-  // follows it); any other turn without words got none.
-  const cardLiveState = cardKey ? threadDerived.live.get(cardKey) : undefined;
-  const cardLastLive = cardOrder.rounds.length === 0
-    && (!!cardLive || cardLiveState === 'answering' || cardLiveState === 'queued');
-  const cardBody = cardKey ? (
-    <ThreadCardConversation
-      turns={cardTurns}
-      {...(cardLastReply && cardReplySuperseded ? { supersededReply: cardLastReply } : {})}
-      lastLive={cardLastLive}
-      rounds={cardOrder.rounds.map((r) => ({
-        bubble: r.bubble, ...(r.live ? { live: { index: r.live.index, block: r.live.block } } : {}),
-      }))}
-      {...(cardLive ? { live: { index: cardLive.index, block: cardLive.block } } : {})}
-      streaming={isStreaming}
-      empty={cardTurns.length === 0 && !deduped.some((m) => m.role === 'user' && optimisticThreadKey(m) === cardKey)}
-      sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost}
-      onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen}
-    />
-  ) : null;
+  /** A question's conversation, as the open card and its review card draw it. */
+  const conversationFor = (key: string): ReactNode => {
+    const turns = turnsFor(key);
+    const optimistic = deduped.filter((m) => m.role === 'user' && m.status !== 'failed' && optimisticThreadKey(m) === key);
+    const seq = [...(seqByKey.get(key) ?? [])];
+    // A bubble the timeline does not draw (a session's launch line) leads its rounds.
+    const unplaced = optimistic.filter((m) => !placed.has(m.queueId));
+    if (unplaced.length > 0) seq.unshift(...unplaced.map((m) => ({ user: m })));
+    const order = cardLiveRounds(seq);
+    const live = order.lead;
+    const lastReply = turns[turns.length - 1]?.replies[0];
+    // The watermark counts the transcript's own rows; a split part stands for the row it came from.
+    const superseded = !!live && !!lastReply
+      && loadedMessages.findIndex((m) => m === lastReply || (!!m.msgId && m.msgId === lastReply.msgId?.split('~')[0])) >= turnWatermark.current;
+    // The newest turn may still be answering (unless a newer send of this question
+    // follows it); any other turn without words got none.
+    const liveState = threadDerived.live.get(key);
+    const lastLive = order.rounds.length === 0 && (!!live || liveState === 'answering' || liveState === 'queued');
+    return (
+      <ThreadCardConversation
+        turns={turns}
+        {...(lastReply && superseded ? { supersededReply: lastReply } : {})}
+        lastLive={lastLive}
+        rounds={order.rounds.map((r) => ({
+          bubble: r.bubble, ...(r.live ? { live: { index: r.live.index, block: r.live.block } } : {}),
+        }))}
+        {...(live ? { live: { index: live.index, block: live.block } } : {})}
+        streaming={isStreaming}
+        empty={turns.length === 0 && !deduped.some((m) => m.role === 'user' && optimisticThreadKey(m) === key)}
+        sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost}
+        onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen}
+      />
+    );
+  };
+  reviewBodyRef.current = conversationFor;
+  const cardBody = cardKey ? conversationFor(cardKey) : null;
   /** The card's "Quote in chat": the chat's composer writes to this question
    *  from now on (its chip says so); the card closes. An Ask not sent yet
    *  takes its words along (they are the question being asked); a question's
@@ -4757,7 +4797,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         onClick={handleContainerClick}
         data-view-mode={stackMode ? 'stack' : 'linear'}
         {...(threadMap.shape ? { 'data-thread-map': threadMap.shape } : {})}
-        {...(review.on ? { 'data-review-sidebar': 'on' } : {})}
+        {...(review.gutter ? { 'data-review-sidebar': review.gutter } : {})}
         style={activeTeamTab ? { display: 'none' }
           : threadMap.shape === 'panel' ? { ['--thread-map-w' as string]: `${threadMap.panelWidth}px` } : undefined}
       >

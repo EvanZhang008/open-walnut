@@ -4,7 +4,7 @@
  * a card shows.
  */
 import { describe, expect, it } from 'vitest';
-import { plainExcerpt, REVIEW_MIN_BOX, reviewSidebarOn, stackReviewCards } from '@/utils/review-sidebar';
+import { plainExcerpt, REVIEW_MIN_BOX, reviewGutterOf, reviewSidebarOn, stackReviewCards } from '@/utils/review-sidebar';
 
 const tops = (m: Map<string, number>) => Object.fromEntries(m);
 
@@ -18,6 +18,18 @@ describe('reviewSidebarOn', () => {
     expect(reviewSidebarOn({ ...base, conversationMode: false })).toBe(false);
     expect(reviewSidebarOn({ ...base, hasQuestions: false })).toBe(false);
     expect(reviewSidebarOn({ ...base, boxWidth: REVIEW_MIN_BOX - 1 })).toBe(false);
+  });
+});
+
+describe('reviewGutterOf', () => {
+  it('holds no room with no card on screen, folded or not (no blank column)', () => {
+    expect(reviewGutterOf({ available: true, collapsed: false, cards: 0 })).toBeNull();
+    expect(reviewGutterOf({ available: true, collapsed: true, cards: 0 })).toBeNull();
+    expect(reviewGutterOf({ available: false, collapsed: false, cards: 5 })).toBeNull();
+  });
+  it('the card column, or the folded bar alone', () => {
+    expect(reviewGutterOf({ available: true, collapsed: false, cards: 2 })).toBe('open');
+    expect(reviewGutterOf({ available: true, collapsed: true, cards: 2 })).toBe('collapsed');
   });
 });
 

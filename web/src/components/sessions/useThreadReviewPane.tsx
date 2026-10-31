@@ -16,7 +16,8 @@ import type { ThreadMarkState } from '@/utils/thread-mark-state';
 import type { ThreadMetaIndex } from '@/utils/thread-meta';
 import type { ThreadTree } from '@/utils/thread-tree';
 import { log } from '@/utils/log';
-import { buildReviewEntries, reviewTurnIndex, ThreadReviewSidebar, withLiveAnswers, withSentQuestions } from './ThreadReviewSidebar';
+import type { ReviewGutter } from '@/utils/review-sidebar';
+import { buildReviewEntries, reviewTurnIndex, ThreadReviewBar, ThreadReviewSidebar, withLiveAnswers, withSentQuestions } from './ThreadReviewSidebar';
 
 export interface ThreadReviewPaneArgs {
   sessionId: string;
@@ -38,11 +39,17 @@ export interface ThreadReviewPaneArgs {
   enlargedKey: string | null;
   /** Question key to its newest question sent and not in history yet. */
   sentText: ReadonlyMap<string, string>;
+  /** A question's whole conversation, as its open card draws it. */
+  renderBody: (key: string) => ReactNode;
+  /** Changes whenever any card's conversation would draw differently. */
+  bodySig: string;
 }
 
 export interface ThreadReviewPane {
-  /** The sidebar shows (the history box gets its gutter). */
+  /** The card column shows. */
   on: boolean;
+  /** What the history box reserves on its right (`data-review-sidebar`). */
+  gutter: ReviewGutter;
   /** A mark click: true when the pane took it (selected its card). */
   takeMarkClick: (key: string) => boolean;
   onMarkMenu: (key: string, at: { x: number; y: number }) => void;
@@ -136,14 +143,26 @@ export function useThreadReviewPane(a: ThreadReviewPaneArgs): ThreadReviewPane {
     ];
   }, [menuAt, openCard, quoteInChat, review.on, review.anchors, open]);
 
-  const sidebar = review.on ? (
-    <ThreadReviewSidebar
-      layerRef={review.layerRef} entries={shown} anchors={review.anchors} selected={selected}
-      onOpen={openFromCard} enlarged={a.enlargedKey} cardsRef={cardsRef}
-    />
+  const { collapsed, setCollapsed } = review;
+  const toggle = useCallback(() => {
+    log.info('threads', 'review sidebar toggled', { sessionId, collapsed: !collapsed });
+    setCollapsed(!collapsed);
+  }, [collapsed, setCollapsed, sessionId]);
+  // The layer is there whenever the sidebar can show, so the passages are
+  // measured while it is folded too (the bar's count, and no jump on reopen).
+  const sidebar = review.available ? (
+    <>
+      {review.gutter && (
+        <ThreadReviewBar collapsed={collapsed} count={review.anchors.size} onToggle={toggle} />
+      )}
+      <ThreadReviewSidebar
+        layerRef={review.layerRef} open={review.on} entries={shown} anchors={review.anchors} selected={selected}
+        onOpen={openFromCard} enlarged={a.enlargedKey} cardsRef={cardsRef} renderBody={a.renderBody} bodySig={a.bodySig}
+      />
+    </>
   ) : null;
   const menu = menuAt ? (
     <ContextMenu point={menuAt.point} items={menuItems} onClose={() => setMenuAt(null)} ariaLabel="Question actions" testId="thread-mark-menu" />
   ) : null;
-  return { on: review.on, takeMarkClick, onMarkMenu, onMarks: review.onMarks, sidebar, menu, cardElement };
+  return { on: review.on, gutter: review.gutter, takeMarkClick, onMarkMenu, onMarks: review.onMarks, sidebar, menu, cardElement };
 }

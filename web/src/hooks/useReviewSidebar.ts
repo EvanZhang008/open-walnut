@@ -10,7 +10,8 @@
  */
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import type { ThreadMark } from '@/utils/thread-mark-hit';
-import { anchorsSig, REVIEW_MIN_BOX, reviewSidebarOn } from '@/utils/review-sidebar';
+import { anchorsSig, REVIEW_MIN_BOX, reviewGutterOf, reviewSidebarOn, type ReviewGutter } from '@/utils/review-sidebar';
+import { useReviewSidebarCollapsed } from './useReviewSidebarCollapsed';
 
 export interface ReviewSidebarArgs {
   containerRef: RefObject<HTMLElement | null>;
@@ -19,7 +20,15 @@ export interface ReviewSidebarArgs {
 }
 
 export interface ReviewSidebar {
+  /** It can show here (fullscreen, Conversation Mode, wide, questions): the
+   *  passages are measured whether the column is open or folded. */
+  available: boolean;
+  /** What the history box reserves (null: nothing, no card to show). */
+  gutter: ReviewGutter;
+  /** The card column shows. */
   on: boolean;
+  collapsed: boolean;
+  setCollapsed: (collapsed: boolean) => void;
   layerRef: RefObject<HTMLDivElement | null>;
   /** Question key to its passage's top in the layer's coordinates. */
   anchors: ReadonlyMap<string, number>;
@@ -28,6 +37,7 @@ export interface ReviewSidebar {
 }
 
 const NO_ANCHORS: ReadonlyMap<string, number> = new Map();
+const REVIEW_EMPTY_HOLD_MS = 1200;
 
 /** The session panel around `el` is fullscreen (useFullscreen's class). */
 function inFullscreen(el: HTMLElement | null): boolean {
@@ -41,7 +51,8 @@ export function useReviewSidebar(a: ReviewSidebarArgs): ReviewSidebar {
   // width in state re-rendered the whole timeline on every frame of a column
   // drag (React bails out on an unchanged boolean).
   const [wide, setWide] = useState(false);
-  const on = reviewSidebarOn({ fullscreen, boxWidth: wide ? REVIEW_MIN_BOX : 0, conversationMode, hasQuestions });
+  const available = reviewSidebarOn({ fullscreen, boxWidth: wide ? REVIEW_MIN_BOX : 0, conversationMode, hasQuestions });
+  const [collapsed, setCollapsed] = useReviewSidebarCollapsed();
 
   // Fullscreen is a class on the panel root: follow it.
   useEffect(() => {
@@ -54,11 +65,18 @@ export function useReviewSidebar(a: ReviewSidebarArgs): ReviewSidebar {
     if (panel) mo.observe(panel, { attributes: true, attributeFilter: ['class'] });
     return () => mo.disconnect();
   }, [containerRef, conversationMode, hasQuestions]);
-  // The box's width, while fullscreen only.
+  // The box's width, while fullscreen only. Its visible height (inside the
+  // header and composer padding) goes straight to a CSS variable for the bar,
+  // never into state: a column drag must not re-render the timeline per frame.
   useEffect(() => {
     const el = containerRef.current;
     if (!el || !fullscreen) { setWide(false); return; }
-    const read = () => setWide(el.clientWidth >= REVIEW_MIN_BOX);
+    const read = () => {
+      setWide(el.clientWidth >= REVIEW_MIN_BOX);
+      const cs = getComputedStyle(el);
+      const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+      el.style.setProperty('--review-visible-h', `${Math.max(120, Math.round(el.clientHeight - pad - 8))}px`);
+    };
     read();
     const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(read);
     ro?.observe(el);
@@ -69,8 +87,8 @@ export function useReviewSidebar(a: ReviewSidebarArgs): ReviewSidebar {
   const marksRef = useRef<readonly ThreadMark[]>([]);
   const [anchors, setAnchors] = useState<ReadonlyMap<string, number>>(NO_ANCHORS);
   const sigRef = useRef('');
-  const onRef = useRef(on);
-  onRef.current = on;
+  const onRef = useRef(available);
+  onRef.current = available;
 
   const measure = useCallback(() => {
     const layer = layerRef.current;
@@ -97,7 +115,7 @@ export function useReviewSidebar(a: ReviewSidebarArgs): ReviewSidebar {
   // Text rewraps on a resize and images load without a DOM change of the rows.
   useEffect(() => {
     const el = containerRef.current;
-    if (!on || !el) { sigRef.current = ''; setAnchors(NO_ANCHORS); return; }
+    if (!available || !el) { sigRef.current = ''; setAnchors(NO_ANCHORS); return; }
     measure();
     let raf = 0;
     const later = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; measure(); }); };
@@ -111,7 +129,18 @@ export function useReviewSidebar(a: ReviewSidebarArgs): ReviewSidebar {
       el.removeEventListener('toggle', later, true);
       if (raf) cancelAnimationFrame(raf);
     };
-  }, [on, containerRef, measure]);
+  }, [available, containerRef, measure]);
 
-  return { on, layerRef, anchors, onMarks };
+  // The column comes at once and goes only after no card has been on screen
+  // for REVIEW_EMPTY_HOLD_MS: a frame in which the marks re-derive to nothing
+  // (content replaced, a page of turns loading) must not reflow the text twice.
+  const [held, setHeld] = useState(false);
+  useEffect(() => {
+    if (!available) { setHeld(false); return; }
+    if (anchors.size > 0) { setHeld(true); return; }
+    const t = setTimeout(() => setHeld(false), REVIEW_EMPTY_HOLD_MS);
+    return () => clearTimeout(t);
+  }, [available, anchors.size]);
+  const gutter = reviewGutterOf({ available, collapsed, cards: anchors.size > 0 || held ? Math.max(1, anchors.size) : 0 });
+  return { available, gutter, on: gutter === 'open', collapsed, setCollapsed, layerRef, anchors, onMarks };
 }

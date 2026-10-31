@@ -4,7 +4,7 @@
  * each question is the chat's blue user bubble, each answer a normal assistant
  * message with the same markdown, code blocks and streaming. Rounds follow in
  * order. The comment card (beside the passage, and in the Files tab) uses it;
- * the fullscreen review cards show a short excerpt instead (ThreadReviewSidebar).
+ * so does every fullscreen review card, under its head (ThreadReviewSidebar).
  *
  * Rows never carry `data-message-id`: the marks find their passage by that
  * attribute (`bodyForMsgId`), and a copy here would be found first. Each

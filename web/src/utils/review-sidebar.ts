@@ -12,9 +12,28 @@ export const REVIEW_MIN_BOX = 880;
 export const REVIEW_CARD_W = 300;
 /** Between two cards. */
 export const REVIEW_GAP = 8;
+/** The least room a card's conversation keeps when the cards are crowded
+ *  (a couple of lines, scrolling inside); below it a card shows its head alone. */
+export const REVIEW_BODY_MIN = 48;
+/** A card's conversation at most (with 55vh, the `.thread-review-body` cap in thread-review.css). */
+export const REVIEW_BODY_MAX = 420;
 
+/** Whether the sidebar can show at all (it is then measured, cards or not). */
 export function reviewSidebarOn(a: { fullscreen: boolean; boxWidth: number; conversationMode: boolean; hasQuestions: boolean }): boolean {
   return a.fullscreen && a.conversationMode && a.hasQuestions && a.boxWidth >= REVIEW_MIN_BOX;
+}
+
+/**
+ * What the history box reserves on its right: the card column (`open`), the
+ * folded bar alone (`collapsed`), or nothing. An empty sidebar holds no room:
+ * with no card on screen (every asked passage in turns not loaded) there is
+ * nothing to show or hide (2026-10-31: a tall blank column beside the text).
+ */
+export type ReviewGutter = 'open' | 'collapsed' | null;
+
+export function reviewGutterOf(a: { available: boolean; collapsed: boolean; cards: number }): ReviewGutter {
+  if (!a.available || a.cards === 0) return null;
+  return a.collapsed ? 'collapsed' : 'open';
 }
 
 export interface ReviewStackItem {

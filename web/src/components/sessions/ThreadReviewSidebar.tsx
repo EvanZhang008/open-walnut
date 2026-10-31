@@ -1,26 +1,30 @@
 /**
  * The fullscreen review sidebar: one card per asked passage of the visible
  * conversation, beside its line like a comment in a document's review pane
- * (utils/review-sidebar.ts has the rules). A card is one compact row until it
- * is opened: its number, title and where its answer stands (colored by the
- * passage's mark state), with the answer's start as its tooltip. A click (or
- * Enter, or a click on its passage) opens the question's full card over it:
- * every round in full, scrollable, with its own box and a full-screen button
- * (2026-10-29, the user: "没点之前，不需要扩展这么大", and the whole thread
- * readable once opened, like a comment in a code review).
+ * (utils/review-sidebar.ts has the rules). A card is its head row (number,
+ * title, where its answer stands, colored by the passage's mark state) over the
+ * question's whole conversation, drawn as the open card draws it
+ * (ThreadCardConversation), capped in height with its own scroll (thread-review.css)
+ * (2026-10-31, the user: it "must show everything normally ... maybe a maximum
+ * height, but people can scroll"; the one-row card of 2026-10-29 showed nothing).
+ * The head (or Enter, or a click on its passage) opens the question's full card
+ * over it, with its composer and a full-screen button.
+ *
+ * A thin vertical bar on the column's edge folds the column away and brings it
+ * back (ThreadReviewBar; the choice is one preference, useReviewSidebarCollapsed).
  *
  * Cards sit in a zero-height layer at the top of the scroll content, so they
  * scroll with the text. Their tops are written straight to the DOM after each
  * render and on a card's resize: one read of the heights, one write each.
  */
-import { memo, useCallback, useLayoutEffect, useRef, type RefObject } from 'react';
+import { memo, useCallback, useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { typedUserText } from '@open-walnut/history-injected-banner';
 import type { SessionHistoryMessage } from '@/types/session';
 import type { ThreadMarkState } from '@/utils/thread-mark-state';
 import { hasWords, questionBodyOf } from '@/utils/thread-card';
 import { displayTitleOf, type ThreadMetaIndex } from '@/utils/thread-meta';
 import type { ThreadTree } from '@/utils/thread-tree';
-import { plainExcerpt, REVIEW_GAP, stackReviewCards } from '@/utils/review-sidebar';
+import { plainExcerpt, REVIEW_BODY_MAX, REVIEW_BODY_MIN, REVIEW_GAP, stackReviewCards } from '@/utils/review-sidebar';
 import { stripQuestionTag } from '@/utils/question-tag';
 import '@/styles/thread-review.css';
 
@@ -131,7 +135,13 @@ export function withSentQuestions(entries: ReviewEntry[], sent: ReadonlyMap<stri
 
 export interface ThreadReviewSidebarProps {
   layerRef: RefObject<HTMLDivElement | null>;
+  /** The column is open (folded: the layer stays, measured, with no card). */
+  open: boolean;
   entries: readonly ReviewEntry[];
+  /** A question's conversation, the open card's own (ThreadCardConversation). */
+  renderBody: (key: string) => ReactNode;
+  /** Re-renders the cards when a conversation changes (the body callback is stable). */
+  bodySig: string;
   anchors: ReadonlyMap<string, number>;
   selected: string | null;
   /** The card itself: open the question's full card over it. */
@@ -156,27 +166,90 @@ export const ThreadReviewSidebar = memo(function ThreadReviewSidebar(p: ThreadRe
   // eslint-disable-next-line react-hooks/exhaustive-deps -- the map is the pane's, stable
   const place = useCallback(() => {
     const cur = pRef.current;
-    const items = [];
-    for (const e of cur.entries) {
-      const el = cards.current.get(e.key);
-      const anchor = cur.anchors.get(e.key);
-      if (el && anchor !== undefined) items.push({ key: e.key, anchor, height: el.offsetHeight });
+    const layer = cur.layerRef.current;
+    if (!layer) return;
+    // The cards end where the conversation ends (2026-10-31 review: a tall card
+    // beside the last answer stretched the scroller, so "scroll to bottom"
+    // stopped in blank space). The end is the last row in the flow, read from
+    // the end (the layers, the sticky bar and the arrow take no room).
+    const origin = layer.getBoundingClientRect().top;
+    let limit = Number.POSITIVE_INFINITY;
+    for (let el = layer.parentElement?.lastElementChild as HTMLElement | null; el; el = el.previousElementSibling as HTMLElement | null) {
+      if (el.offsetHeight === 0) continue;
+      const pos = getComputedStyle(el).position;
+      if (pos !== 'static' && pos !== 'relative') continue;
+      limit = el.getBoundingClientRect().bottom - origin;
+      break;
     }
-    const tops = stackReviewCards(items, REVIEW_GAP, cur.selected);
+    const shown = cur.entries.filter((e) => cards.current.has(e.key) && cur.anchors.has(e.key));
+    // Natural sizes (each conversation up to the CSS cap), read without taking
+    // the cap off: that would scroll a card being read back to its top.
+    const parts = shown.map((e) => {
+      const el = cards.current.get(e.key)!;
+      const body = el.querySelector<HTMLElement>('.thread-review-body');
+      if (!body) return { key: e.key, anchor: cur.anchors.get(e.key)!, head: el.offsetHeight, bodyH: 0, body, extra: 0 };
+      if (body.style.display === 'none') body.style.display = '';
+      const cs = getComputedStyle(body);
+      // Padding and border around the content: max-height caps the content box.
+      const extra = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0)
+        + (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+      const cssCap = Math.min(REVIEW_BODY_MAX, window.innerHeight * 0.55);
+      const bodyH = Math.min(body.scrollHeight - (parseFloat(cs.paddingTop) || 0) - (parseFloat(cs.paddingBottom) || 0), cssCap) + extra;
+      return { key: e.key, anchor: cur.anchors.get(e.key)!, head: el.offsetHeight - body.offsetHeight, bodyH, body, extra };
+    });
+    const stackWith = (cap: number) => stackReviewCards(
+      parts.map((x) => ({ key: x.key, anchor: x.anchor, height: x.head + (cap >= REVIEW_BODY_MIN ? Math.min(x.bodyH, cap) : 0) })),
+      REVIEW_GAP, cur.selected,
+    );
+    const bottomOf = (tops: Map<string, number>, cap: number) => {
+      let bottom = 0;
+      for (const x of parts) bottom = Math.max(bottom, (tops.get(x.key) ?? 0) + x.head + (cap >= REVIEW_BODY_MIN ? Math.min(x.bodyH, cap) : 0));
+      return bottom;
+    };
+    // Crowded (more conversation than room beside it): every card gets the same
+    // cap, the largest that keeps the stack inside the conversation; below
+    // REVIEW_BODY_MIN a card is its head alone (it opens on a click).
+    const most = Math.max(0, ...parts.map((x) => x.bodyH));
+    let cap = most;
+    let tops = stackWith(cap);
+    if (bottomOf(tops, cap) > limit) {
+      let lo = 0;
+      let hi = most;
+      while (hi - lo > 4) {
+        const mid = Math.floor((lo + hi) / 2);
+        if (bottomOf(stackWith(mid), mid) <= limit) lo = mid; else hi = mid;
+      }
+      cap = lo;
+      tops = stackWith(cap);
+    }
+    for (const x of parts) {
+      if (!x.body) continue;
+      const hide = cap < REVIEW_BODY_MIN;
+      const max = !hide && x.bodyH > cap ? `${Math.max(0, cap - x.extra)}px` : '';
+      if (x.body.style.maxHeight !== max) x.body.style.maxHeight = max;
+      const display = hide ? 'none' : '';
+      if (x.body.style.display !== display) x.body.style.display = display;
+    }
     for (const [key, top] of tops) {
       const el = cards.current.get(key);
       if (el && el.style.top !== `${top}px`) el.style.top = `${top}px`;
     }
   }, []);
   useLayoutEffect(place);
-  // A card's size changes (fonts loading, a title named): place again, once a frame.
+  // A card's size changes (fonts loading, an answer growing): place again, once
+  // a frame. Observed again only when the set of cards changes.
+  const cardSet = p.open ? p.entries.filter((e) => p.anchors.has(e.key)).map((e) => e.key).join('\u0001') : '';
   useLayoutEffect(() => {
     if (typeof ResizeObserver === 'undefined') return;
     let raf = 0;
     const ro = new ResizeObserver(() => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; place(); }); });
     for (const el of cards.current.values()) ro.observe(el);
-    return () => { ro.disconnect(); if (raf) cancelAnimationFrame(raf); };
-  }, [p.entries, place]);
+    // A row added or removed moves where the cards must end.
+    const box = p.layerRef.current?.parentElement;
+    const mo = new MutationObserver(() => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; place(); }); });
+    if (box) mo.observe(box, { childList: true });
+    return () => { ro.disconnect(); mo.disconnect(); if (raf) cancelAnimationFrame(raf); };
+  }, [cardSet, place, p.layerRef]);
 
   const refFor = useCallback((key: string) => (el: HTMLDivElement | null) => {
     if (el) cards.current.set(key, el); else cards.current.delete(key);
@@ -184,7 +257,7 @@ export const ThreadReviewSidebar = memo(function ThreadReviewSidebar(p: ThreadRe
 
   return (
     <div ref={p.layerRef} className="thread-review-layer" data-testid="thread-review">
-      {p.entries.filter((e) => p.anchors.has(e.key)).map((e) => (
+      {p.open && p.entries.filter((e) => p.anchors.has(e.key)).map((e) => (
         <div
           key={e.key}
           ref={refFor(e.key)}
@@ -211,8 +284,51 @@ export const ThreadReviewSidebar = memo(function ThreadReviewSidebar(p: ThreadRe
             {e.rounds > 1 && <span className="thread-review-rounds" aria-hidden="true">{e.rounds}</span>}
             <span className="thread-review-state">{STATE_WORDS[e.state]}</span>
           </button>
+          <div
+            className="thread-card-body thread-review-body"
+            data-testid="thread-review-body"
+            role="region"
+            aria-label={`Question ${e.number ?? ''}: ${e.title}, conversation`.replace(/\s+/g, ' ')}
+            tabIndex={0}
+          >
+            {p.renderBody(e.key)}
+          </div>
         </div>
       ))}
+    </div>
+  );
+});
+
+export interface ThreadReviewBarProps {
+  collapsed: boolean;
+  /** Cards on screen, shown on the folded bar. */
+  count: number;
+  onToggle: () => void;
+}
+
+/**
+ * The vertical bar on the sidebar's edge: sticky in the scroller (top 0 of its
+ * content box, so below the glass header), as tall as what is visible
+ * (`--review-visible-h`, written by useReviewSidebar's resize observer). Open, a
+ * thin line between the text and the cards; folded, a narrow strip at the right
+ * holding the question count. Either way the whole bar is the one button.
+ */
+export const ThreadReviewBar = memo(function ThreadReviewBar(p: ThreadReviewBarProps) {
+  const label = p.collapsed ? `Show questions (${p.count})` : 'Hide questions';
+  return (
+    <div className="thread-review-bar-slot" data-collapsed={p.collapsed ? 'true' : undefined}>
+      <button
+        type="button"
+        className="thread-review-bar"
+        data-testid="thread-review-bar"
+        aria-label={label}
+        aria-expanded={!p.collapsed}
+        title={label}
+        onClick={p.onToggle}
+      >
+        <span className="thread-review-bar-chevron" aria-hidden="true">{p.collapsed ? '‹' : '›'}</span>
+        {p.collapsed && <span className="thread-review-bar-count" aria-hidden="true">{p.count}</span>}
+      </button>
     </div>
   );
 });
