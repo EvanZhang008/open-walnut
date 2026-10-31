@@ -510,6 +510,45 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // A task synced from another service has a UUID id; a reply cites it by
+        // its first segment (bare-task-id-pills.spec.ts).
+        id: '9c1d4e2a-7b3f-5a6c-8d9e-0f1a2b3c4d5e',
+        title: 'Chat order fixture',
+        status: 'in_progress',
+        phase: 'NEED_ACTION',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: [],
+        active_session_ids: [],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        // Completed long ago, outside the client's 7-day list. The spec also keeps
+        // it out of the full list, so its pill comes from the batched lookup.
+        id: 'mpwold01-aa11',
+        title: 'Archived migration plan',
+        status: 'done',
+        phase: 'COMPLETE',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: [],
+        active_session_ids: [],
+        created_at: new Date(Date.now() - 60 * 86_400_000).toISOString(),
+        updated_at: new Date(Date.now() - 40 * 86_400_000).toISOString(),
+        completed_at: new Date(Date.now() - 40 * 86_400_000).toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         // A COMPLETED task cited by id links too.
         id: 'mpwidrf2-9b10',
         title: 'Rotate the staging API keys',
@@ -2211,6 +2250,13 @@ await fs.mkdir(idrefFixtureRoot, { recursive: true })
     'Run `walnut task show mpwidref-7c2e` for the details.',
     '',
     'Not tasks: trace 550e8400-e29b-41d4-a716-446655440000 and mzzzzzzz-0000.',
+    '',
+    // 2026-10-31 shapes: an id's first segment, a UUID task's first segment
+    // (U+FF08/U+FF09 full-width parentheses), a task outside the client list,
+    // and task-refs whose id is empty or names no task.
+    'Ask here is being changed by mpwidref; the Chat order task \uFF089c1d4e2a\uFF09 owns the fix.',
+    '',
+    'Older work: mpwold01-aa11. Follow-ups: <task-ref id="" label="Unnamed follow-up"/> and <task-ref id="mpwgone1-0000" label="Deleted task alias"/>.',
   ].join('\n')
   const line = (sid: string, ts: number, role: 'user' | 'assistant', text: string) => JSON.stringify({
     type: role,

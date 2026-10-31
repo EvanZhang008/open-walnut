@@ -6,9 +6,12 @@ import { trimTrailingPunctuation, trimUrlCjkTail } from './url-display';
 // entity-label-store is dependency-free by contract.
 import {
   getEntityLabelsVersion,
+  isTaskTokenMissing,
   lookupSessionTitle,
-  lookupTaskLabel,
+  noteUndecidedTaskRef,
+  resolveTaskToken,
 } from '../stores/entity-label-store';
+import { isTaskLookupToken } from './task-id-shape';
 // Relative for the same reason. Shared with the server's path resolver and its
 // HTTP edges so that "what position does `file.go#L58` name" and "is this a
 // traversal" each have exactly one definition; the module is dependency-free by
@@ -428,10 +431,9 @@ marked.use({
       },
       renderer(token) {
         const { taskId, title } = token as unknown as { taskId: string; title: string };
-        // Same precedence as <task-ref/>: current title from the store first,
-        // the bracket's embedded title only as fallback.
-        const escaped = escapeHtmlText(lookupTaskLabel(taskId)?.title ?? title);
-        return `<a href="/tasks/${taskId}" class="task-link" data-task-id="${taskId}" title="${escapeHtmlText(taskRefHover(taskId))}">${escaped}</a>`;
+        // Same rule as <task-ref/>: current title from the store first, the
+        // bracket's embedded title only as fallback, plain text for no task.
+        return taskRefAnchor(taskId, title);
       },
     },
     {
@@ -527,7 +529,7 @@ function decodeRefAttr(s: string): string {
  * corrupted); only the label went through taskRefTag's `"` → `&quot;` escaping.
  */
 function resolveTaskRefDisplay(id: string, label?: string): string {
-  const resolved = lookupTaskLabel(id);
+  const resolved = resolveTaskToken(id.trim())?.label;
   if (resolved) return resolved.title;
   return label ? decodeRefAttr(label) : id;
 }
@@ -550,7 +552,7 @@ function resolveProjectRefDisplay(id: string, label?: string): string {
 /** Hover text for a task pill: `Project / Title` when resolved, the id when
  *  not (so a stale/fallback pill tells you which id failed to resolve). */
 function taskRefHover(id: string): string {
-  const resolved = lookupTaskLabel(id);
+  const resolved = resolveTaskToken(id)?.label;
   if (!resolved) return id;
   return resolved.project ? `${resolved.project} / ${resolved.title}` : resolved.title;
 }
@@ -559,10 +561,44 @@ function taskRefHover(id: string): string {
  *  anchor a `<task-ref/>` becomes, so one click handler and one style serve both.
  *  An in-place link inside code keeps the id text and code styling. */
 const bareTaskIdPills: BareTaskIdRenderer = {
-  title: (id) => lookupTaskLabel(id)?.title,
+  resolve: (token) => {
+    const hit = resolveTaskToken(token);
+    return hit ? { id: hit.id, title: hit.label.title } : undefined;
+  },
   anchor: (id, label, inCode) =>
     `<a href="/tasks/${id}" class="${inCode ? 'task-link task-link-code' : 'task-link'}" data-task-id="${id}" title="${escapeHtmlText(taskRefHover(id))}">${escapeHtmlText(label)}</a>`,
 };
+
+/**
+ * Task ids written in already-rendered HTML become pills (bare-task-ids.ts).
+ * For a renderer that does not go through renderMarkdownWithRefs (a user bubble
+ * kept verbatim, a one-line summary): every chat surface names tasks the same
+ * way (tests/web/task-mention-surfaces.test.ts).
+ */
+export function linkTaskMentions(html: string, mode: BareTaskIdMode = 'pills'): string {
+  return linkBareTaskIds(html, bareTaskIdPills, mode);
+}
+
+/**
+ * The anchor a written task reference becomes (`<task-ref/>`, `[id|title]`):
+ * the task's current title when the id names one; plain text (the written
+ * label, else nothing) when the id is empty or the lookup found no task, so a
+ * pill never leads nowhere. Undecided (the list has not loaded, the lookup is
+ * on its way): the label as a pill, which the lookup's answer re-renders.
+ */
+function taskRefAnchor(rawId: string, label: string | undefined): string {
+  const id = rawId.trim();
+  const shown = label ? decodeRefAttr(label) : '';
+  if (!id) return escapeHtmlText(shown);
+  const hit = resolveTaskToken(id);
+  // Not a task in the list, and no lookup will ever name one (not an id shape the server is
+  // asked about), or the lookup found nothing.
+  if (!hit && (!isTaskLookupToken(id) || isTaskTokenMissing(id))) return escapeHtmlText(shown || id);
+  if (!hit) noteUndecidedTaskRef(id);
+  const target = hit?.id ?? id;
+  const text = hit?.label.title ?? (shown || id);
+  return `<a href="/tasks/${target}" class="task-link" data-task-id="${target}" title="${escapeHtmlText(taskRefHover(target))}">${escapeHtmlText(text)}</a>`;
+}
 
 /**
  * Strip entity refs down to plain-text labels (no links) — for plain-text
@@ -575,7 +611,7 @@ export function stripEntityRefsToText(text: string): string {
     .replace(SESSION_REF_RE, (_m, id: string, label?: string) => resolveSessionRefDisplay(id, label))
     .replace(PROJECT_REF_RE, (_m, id: string, label?: string) => resolveProjectRefDisplay(id, label))
     .replace(SOURCE_REF_RE, (_m, id: string, label?: string) => resolveSourceRefDisplay(id, label))
-    .replace(LEGACY_REF_RE, (_m, id: string, label: string) => lookupTaskLabel(id)?.title ?? label);
+    .replace(LEGACY_REF_RE, (_m, id: string, label: string) => resolveTaskToken(id)?.label.title ?? label);
 }
 
 /**
@@ -601,13 +637,9 @@ export function extractFirstRefIds(text: string): { sessionId?: string; taskId?:
  */
 export function entityRefsToHtml(text: string): string {
   let result = text;
-  result = result.replace(TASK_REF_RE, (_match, id: string, label?: string) => {
-    // Current-title-first (resolveTaskRefDisplay), decode-then-escape for the
-    // label fallback — otherwise `&quot;` double-escapes to a literal `&quot;`.
-    const escaped = escapeHtmlText(resolveTaskRefDisplay(id, label));
-    const hover = escapeHtmlText(taskRefHover(id));
-    return `<a href="/tasks/${id}" class="task-link" data-task-id="${id}" title="${hover}">${escaped}</a>`;
-  });
+  // Current title first, decode-then-escape for the label fallback (otherwise
+  // `&quot;` double-escapes to a literal `&quot;`); see taskRefAnchor.
+  result = result.replace(TASK_REF_RE, (_match, id: string, label?: string) => taskRefAnchor(id, label));
   result = result.replace(SESSION_REF_RE, (_match, id: string, label?: string) => {
     const escaped = escapeHtmlText(resolveSessionRefDisplay(id, label));
     return `<a href="/sessions?id=${id}" class="session-link" data-session-id="${id}" title="${escapeHtmlText(id)}">${escaped}</a>`;
@@ -629,6 +661,39 @@ export function entityRefsToHtml(text: string): string {
     return `<span class="source-link" data-source="${escapeHtmlText(source)}" title="${escapeHtmlText(`${source}: ${resolveSourceRefDisplay(id, label)}`)}">${escaped}</span>`;
   });
   return result;
+}
+
+/**
+ * Render user message text preserving ALL newlines exactly as typed.
+ * Unlike renderMarkdown, this does NOT use the markdown parser — user messages
+ * are plain text where every \n must appear as a line break. Multiple consecutive
+ * blank lines are preserved (not collapsed into paragraph breaks).
+ *
+ * Entity refs (<task-ref>, <session-ref>, <project-ref>, <source-ref>) still become pills.
+ */
+export function renderUserMessage(text: string): string {
+  // 1-2. Escape the typed text, and turn each entity ref tag into its pill (or,
+  //      for a ref that names nothing, its already-escaped words) on its own, so
+  //      neither is escaped twice.
+  const escaped = text.split(/(<(?:task|session|project|source)-ref\s(?:[^>"]|"[^"]*")*>)/g).map((part, i) => (
+    i % 2 === 1
+      ? entityRefsToHtml(part)
+      : part
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+  )).join('');
+
+  // 3. Convert every newline to <br> — this is the key: ALL newlines preserved.
+  //    Task ids the user typed become pills like everywhere else.
+  const withBreaks = linkTaskMentions(escaped.replace(/\n/g, '<br>'));
+
+  // 4. Sanitize
+  return DOMPurify.sanitize(withBreaks, {
+    ADD_ATTR: ['data-task-id', 'data-session-id'],
+    ADD_TAGS: ['br'],
+  });
 }
 
 /**

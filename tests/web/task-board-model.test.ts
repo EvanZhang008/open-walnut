@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Task } from '@open-walnut/core';
 import {
-  BOARD_FRAME_CSP, advanceSeen, boardWriterLabel, buildFrameRefs, frameRefsEqual, mergeBoardMessage,
+  BOARD_FRAME_CSP, advanceSeen, boardMentionTokens, boardWriterLabel, buildFrameRefs, frameRefsEqual, mentionFrameRefs, mergeBoardMessage,
   newBoardNonce, parseSeen, safeExternalHref, threadAuthorIds, wrapBoardHtml, type BoardMessage,
 } from '../../web/src/components/board/board-model';
 import { adoptCandidates, adoptExclusions } from '../../web/src/components/tasks/adopt-candidates';
@@ -60,6 +60,32 @@ describe('wrapBoardHtml', () => {
     expect(BOARD_FRAME_CSP).toContain("default-src 'none'");
     expect(BOARD_FRAME_CSP).toContain('img-src data: blob:;');
     expect(BOARD_FRAME_CSP).not.toMatch(/https?:/);
+  });
+});
+
+describe('task mentions in the Board text and messages', () => {
+  const msg = (text: string): BoardMessage => ({ id: 'm1', author: 'task:lead', text, ts: '2026-10-31T00:00:00Z' } as BoardMessage);
+
+  it('collects tokens from text and messages, never from tag attributes', () => {
+    const tokens = boardMentionTokens(
+      '<p class="mvclass12">Worker mvu0ubnq-a02d is on it</p><walnut-task id="mvchip99-0001"></walnut-task>',
+      { t1: [msg('see mvkghc5v and <task-ref id="mvref123-00aa"/>')] },
+      { c1: { option: '', at: '', text: 'pick mvchoic3' } },
+    );
+    expect(tokens.sort()).toEqual(['mvchoic3', 'mvkghc5v', 'mvref123-00aa', 'mvu0ubnq-a02d'].sort());
+  });
+
+  it('keys each resolved token as written, the store row first, never replacing a payload ref', () => {
+    const store = new Map([['mvkghc5v-278c', { id: 'mvkghc5v-278c', title: 'Live', phase: 'IN_PROGRESS', status: 'in_progress' }]]);
+    const resolve = (t: string) => (t === 'mvkghc5v' ? { id: 'mvkghc5v-278c', label: { title: 'Label' } }
+      : t === 'mvfetch1-0001' ? { id: 'mvfetch1-0001', label: { title: 'Fetched' } } : undefined);
+    const base = { 'mvfetch1-0001': { id: 'mvfetch1-0001', title: 'Payload', phase: 'TODO', status: 'todo' } };
+    const refs = mentionFrameRefs(base, ['mvkghc5v', 'mvfetch1-0001', 'mvghost1'], resolve, store);
+    expect(refs.mvkghc5v).toEqual({ id: 'mvkghc5v-278c', title: 'Live', phase: 'IN_PROGRESS', status: 'in_progress' });
+    expect(refs['mvfetch1-0001'].title).toBe('Payload');
+    expect(refs.mvghost1).toBeUndefined();
+    // Nothing resolved: the same object, so the frame is not re-posted.
+    expect(mentionFrameRefs(base, ['mvghost1'], resolve, store)).toBe(base);
   });
 });
 

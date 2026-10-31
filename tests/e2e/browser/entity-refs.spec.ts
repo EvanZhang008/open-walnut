@@ -43,18 +43,17 @@ test.describe('entity references in chat', () => {
     await expect(sessionPill).toHaveAttribute('data-session-id', 'pw-plan-session-completed')
   })
 
-  test('unlabeled task-ref resolves to the title; unresolvable id falls back to the alias', async ({ page }) => {
+  test('unlabeled task-ref resolves to the title; an id that names no task is its alias as plain text', async ({ page }) => {
     await page.goto('/')
 
     // Unlabeled ref to an EXISTING task → resolved title (was: raw id).
     const resolvedPill = page.locator('a.task-link[data-task-id="pw-task-in-progress"]').first()
     await expect(resolvedPill).toHaveText('In progress phase task', { timeout: 15_000 })
 
-    // Ref to a task that does not exist → the alias label is the fallback.
-    const ghostPill = page.locator('a.task-link[data-task-id="pw-task-ghost-404"]')
-    await expect(ghostPill).toHaveText('Ghost Task Alias')
-    // Unresolved hover carries the id for diagnosability.
-    await expect(ghostPill).toHaveAttribute('title', 'pw-task-ghost-404')
+    // Ref to a task that does not exist → once the lookup says so, the alias as
+    // plain text: a pill that opens nothing is never shown (2026-10-31).
+    await expect(page.locator('a.task-link[data-task-id="pw-task-ghost-404"]')).toHaveCount(0, { timeout: 15_000 })
+    await expect(page.getByText('And a deleted task: Ghost Task Alias.').first()).toBeVisible()
   })
 
   test('renaming a task updates its pill text live (no reload)', async ({ page }) => {

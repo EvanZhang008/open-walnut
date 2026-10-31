@@ -8,7 +8,7 @@ import { useLightbox } from '@/hooks/useLightbox';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { Lightbox } from '@/components/common/Lightbox';
 import { FileViewer } from '@/components/common/FileViewer';
-import { entityRefsToHtml, renderToolResultWithRefs, extractMarkdownFields, renderMarkdownWithRefs } from '@/utils/markdown';
+import { entityRefsToHtml, renderToolResultWithRefs, extractMarkdownFields, renderMarkdownWithRefs, linkTaskMentions, renderUserMessage } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { lookupTaskLabel } from '@/stores/entity-label-store';
@@ -75,7 +75,7 @@ function formatTimestamp(ts: string | undefined): string {
 export function renderMarkdown(text: string): string {
   const preprocessed = entityRefsToHtml(text);
   const raw = marked.parse(preprocessed);
-  return typeof raw === 'string' ? DOMPurify.sanitize(raw, { ADD_ATTR: ['data-task-id', 'data-session-id', 'data-lightbox-src', 'loading'] }) : '';
+  return typeof raw === 'string' ? DOMPurify.sanitize(linkTaskMentions(raw), { ADD_ATTR: ['data-task-id', 'data-session-id', 'data-lightbox-src', 'loading'] }) : '';
 }
 
 /** Inline-only markdown: renders bold, links, task pills — no <p> wrapper.
@@ -83,42 +83,11 @@ export function renderMarkdown(text: string): string {
 export function renderInlineMarkdown(text: string): string {
   const preprocessed = entityRefsToHtml(text);
   const raw = marked.parseInline(preprocessed);
-  return typeof raw === 'string' ? DOMPurify.sanitize(raw, { ADD_ATTR: ['data-task-id', 'data-session-id', 'data-lightbox-src', 'loading'] }) : '';
+  return typeof raw === 'string' ? DOMPurify.sanitize(linkTaskMentions(raw), { ADD_ATTR: ['data-task-id', 'data-session-id', 'data-lightbox-src', 'loading'] }) : '';
 }
 
-/**
- * Render user message text preserving ALL newlines exactly as typed.
- * Unlike renderMarkdown, this does NOT use the markdown parser — user messages
- * are plain text where every \n must appear as a line break. Multiple consecutive
- * blank lines are preserved (not collapsed into paragraph breaks).
- *
- * Entity refs (<task-ref>, <session-ref>) are still converted to clickable pills.
- */
-export function renderUserMessage(text: string): string {
-  // 1. Process entity refs BEFORE escaping (they contain < > which we need to keep)
-  const withRefs = entityRefsToHtml(text);
-
-  // 2. Split around already-converted <a> tags so we only escape plain text parts
-  //    Entity refs produce <a href="..." class="..." data-...>label</a>
-  const parts = withRefs.split(/(<a\s[^>]*>.*?<\/a>)/g);
-  const escaped = parts.map(part => {
-    if (part.startsWith('<a ')) return part; // keep entity ref anchors as-is
-    return part
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-  }).join('');
-
-  // 3. Convert every newline to <br> — this is the key: ALL newlines preserved
-  const withBreaks = escaped.replace(/\n/g, '<br>');
-
-  // 4. Sanitize
-  return DOMPurify.sanitize(withBreaks, {
-    ADD_ATTR: ['data-task-id', 'data-session-id'],
-    ADD_TAGS: ['br'],
-  });
-}
+// renderUserMessage lives in '@/utils/markdown' (the markdown test tier runs it); re-exported here.
+export { renderUserMessage };
 
 function CompactionDetails({ details }: { details: string }) {
   const [open, setOpen] = useState(false);

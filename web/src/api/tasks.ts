@@ -330,6 +330,8 @@ export interface BulkTaskRow {
   title?: string;
   phase?: string;
   project?: string;
+  org_role?: string;
+  user_status?: Task['user_status'];
 }
 
 /**

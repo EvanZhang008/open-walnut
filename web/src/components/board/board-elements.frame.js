@@ -446,6 +446,50 @@
     }
   }
 
+  // ── A task id written in the board's own text (bare, or an id's first segment) becomes a chip ──
+  // Only tokens the host resolved to one task (state.refs, keyed as written); every pass skips what
+  // is already a chip, a link, code, a control or Walnut's own UI, so it is idempotent. The chip
+  // keeps the written token in data-wn-text, which the sections' "updated" hash reads in its place.
+  var MENTION_SKIP = 'walnut-task, walnut-thread, walnut-mark, walnut-strip, walnut-unread, walnut-project, '
+    + 'walnut-check, walnut-choice, a, code, pre, kbd, samp, script, style, textarea, button, select, option, '
+    + 'input, label, svg, math, template, noscript, [data-wn-ui], [contenteditable]';
+  function linkBodyMentions() {
+    if (!document.body || !kit.TASK_TOKEN_SRC || !kit.taskRef) return;
+    var re = new RegExp(kit.TASK_TOKEN_SRC, 'g');
+    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+    var hits = [];
+    for (var n = walker.nextNode(); n; n = walker.nextNode()) {
+      var v = n.nodeValue;
+      if (!v || v.length < 7) continue;
+      var parent = n.parentElement;
+      if (!parent || parent.closest(MENTION_SKIP)) continue;
+      re.lastIndex = 0;
+      var m;
+      while ((m = re.exec(v)) !== null) { if (kit.taskRef(m[2])) { hits.push(n); break; } }
+    }
+    hits.forEach(function (node) {
+      var text = node.nodeValue;
+      var frag = document.createDocumentFragment();
+      var last = 0;
+      var mm;
+      re.lastIndex = 0;
+      while ((mm = re.exec(text)) !== null) {
+        var token = mm[2];
+        if (!kit.taskRef(token)) continue;
+        var at = mm.index + mm[1].length;
+        if (at > last) frag.appendChild(document.createTextNode(text.slice(last, at)));
+        var chip = document.createElement('walnut-task');
+        chip.setAttribute('id', token);
+        chip.setAttribute('data-wn-text', token);
+        frag.appendChild(chip);
+        last = at + token.length;
+      }
+      if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+      if (node.parentNode) node.parentNode.replaceChild(frag, node);
+    });
+  }
+  kit.watchers.push(linkBodyMentions);
+
   customElements.define('walnut-task', WalnutTask);
   customElements.define('walnut-thread', WalnutThread);
   customElements.define('walnut-strip', WalnutStrip);

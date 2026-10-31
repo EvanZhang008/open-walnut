@@ -5766,6 +5766,23 @@ select {
   color: #fff;
 }
 
+/* Every task pill wears its task's live status (web/src/utils/task-pill-status.ts
+   stamps data-user-state): needs you red, working green, done blue, waiting grey.
+   A link inside code is never stamped. */
+a.task-link[data-user-state]::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 4px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  background: var(--fg-muted, #86868b);
+}
+a.task-link[data-user-state='needs']::before { background: var(--error, #ff3b30); }
+a.task-link[data-user-state='working']::before { background: var(--success, #34c759); }
+a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff); }
+
 /* A task id linked in place inside code (bare-task-ids.ts): the code keeps its
    own font and box, the id reads as a link the way a path in code does. The
    tool-block selectors are repeated so their pill rules lose here too. */

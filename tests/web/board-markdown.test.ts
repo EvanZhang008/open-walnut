@@ -261,3 +261,48 @@ describe('loading', () => {
     expect(SRC).not.toMatch(/\b(document|customElements|postMessage|innerHTML)\b/)
   })
 })
+
+describe('task mentions become live chips (2026-10-31: every task a message names reads as its name)', () => {
+  // The host resolves each token the text writes (board-model.ts mentionFrameRefs) and keys
+  // the refs by the token as written; the renderer only asks the refs.
+  function withRefs(refs: Record<string, unknown>): (text: unknown) => string {
+    const kit: Record<string, unknown> = { esc: coreEsc(), state: { refs } }
+    new Function('window', SRC)({ __wnBoardKit: kit })
+    return kit.richText as (text: unknown) => string
+  }
+  const ref = { id: 'mvu0ubnq-a02d', title: 'Home task panel', phase: 'IN_PROGRESS', status: '' }
+  const render = withRefs({ 'mvu0ubnq-a02d': ref, mvkghc5v: { ...ref, id: 'mvkghc5v-278c' } })
+  const chip = (t: string) => `<walnut-task id="${t}" data-wn-text="${t}"></walnut-task>`
+
+  it('a bare id, a prefix, a backticked id and a task-ref become chips', () => {
+    expect(render('done by mvu0ubnq-a02d and mvkghc5v')).toBe(`done by ${chip('mvu0ubnq-a02d')} and ${chip('mvkghc5v')}`)
+    expect(render('see `mvu0ubnq-a02d`')).toBe(`see ${chip('mvu0ubnq-a02d')}`)
+    expect(render('<task-ref id="mvu0ubnq-a02d" label="old"/> ok')).toBe(`${chip('mvu0ubnq-a02d')} ok`)
+    expect(render('\u4EFB\u52A1\uFF08mvkghc5v\uFF09')).toBe(`\u4EFB\u52A1\uFF08${chip('mvkghc5v')}\uFF09`)
+  })
+
+  it('an unknown token, a path, longer code and an empty task-ref stay text', () => {
+    expect(render('hash 2ac88910 and mzzzzzzz-0000')).toBe('hash 2ac88910 and mzzzzzzz-0000')
+    expect(render('/tmp/mvu0ubnq-a02d/x')).toBe('/tmp/mvu0ubnq-a02d/x')
+    expect(render('`walnut task show mvu0ubnq-a02d`')).toBe('<code>walnut task show mvu0ubnq-a02d</code>')
+    expect(render('<task-ref id="" label="A &quot;quoted&quot; task"/>')).toBe('A &quot;quoted&quot; task')
+    expect(render('<task-ref id="mzzzzzzz-0000" label="<b>x</b>"/>')).toBe('&lt;b&gt;x&lt;/b&gt;')
+  })
+
+  it('a hostile token cannot become markup', () => {
+    const r = withRefs({ 'abc1234"><img': ref })
+    expect(r('abc1234"><img')).not.toContain('<img')
+  })
+})
+
+describe('task mentions: code and fallbacks (review 2026-10-31)', () => {
+  const kit: Record<string, unknown> = { esc: coreEsc(), state: { refs: { 'mpwidref-7c2e': { id: 'mpwidref-7c2e', title: 'T', phase: '', status: '' } } } }
+  new Function('window', SRC)({ __wnBoardKit: kit })
+  const render = kit.richText as (t: string) => string
+  it('a task-ref written inside backticks stays the code it explains', () => {
+    expect(render('`<task-ref id="mpwidref-7c2e" label="x"/>`')).toBe('<code>&lt;task-ref id=&quot;mpwidref-7c2e&quot; label=&quot;x&quot;/&gt;</code>')
+  })
+  it('an unresolved task-ref with no label shows its id, as the web does', () => {
+    expect(render('see <task-ref id="mvghost1-0000"/>')).toBe('see mvghost1-0000')
+  })
+})

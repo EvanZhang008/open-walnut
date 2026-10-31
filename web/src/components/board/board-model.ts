@@ -14,6 +14,8 @@ export type {
   LaneTemplateId,
 } from '../../../../src/core/boards/board-lanes';
 
+import { taskTokensIn } from '../../utils/task-id-shape';
+
 export type BoardAuthor = 'user' | 'agent' | `task:${string}`;
 
 export interface BoardMessage {
@@ -262,6 +264,47 @@ export function buildFrameRefs(
     if (!id || out[id]) continue;
     const live = storeById?.get(id);
     if (live) out[id] = frameTask(live);
+  }
+  return out;
+}
+
+/**
+ * Every task id token the Board's own text and its messages write outside a
+ * `<walnut-task>` chip (a bare id, an id's first segment, a `<task-ref/>`'s id):
+ * the frame turns each one the refs know into a live chip (board-elements and
+ * board-markdown frames), so a task a message names reads as its name.
+ */
+export function boardMentionTokens(
+  html: string,
+  threads: Record<string, BoardMessage[]>,
+  choices: Record<string, BoardChoice> = {},
+): string[] {
+  const out = new Set<string>();
+  const add = (text: string) => { for (const t of taskTokensIn(text)) out.add(t); };
+  // Tags become spaces, so an id in an attribute (`<walnut-task id>`, a class) is
+  // read only where the frame reads it too: in text.
+  add(html.replace(/<(?:[^>"']|"[^"]*"|'[^']*')*>/g, ' '));
+  for (const list of Object.values(threads)) for (const m of list) add(m.text);
+  for (const c of Object.values(choices)) if (c.text) add(c.text);
+  return [...out];
+}
+
+/** The refs entries of the mention tokens `resolve` names (the store's row when
+ *  it has one), keyed by the token as written; an existing key is kept. */
+export function mentionFrameRefs(
+  refs: Record<string, FrameTask>,
+  tokens: readonly string[],
+  resolve: (token: string) => { id: string; label: { title: string } } | undefined,
+  storeById: ReadonlyMap<string, StoreTaskLike> | null,
+): Record<string, FrameTask> {
+  let out = refs;
+  for (const token of tokens) {
+    if (out[token]) continue;
+    const hit = resolve(token);
+    if (!hit) continue;
+    const live = storeById?.get(hit.id);
+    if (out === refs) out = { ...refs };
+    out[token] = live ? frameTask(live) : { id: hit.id, title: hit.label.title, phase: '', status: '' };
   }
   return out;
 }

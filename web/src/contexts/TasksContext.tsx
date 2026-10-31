@@ -1,8 +1,12 @@
-import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { useTasks, type CreateHooks, type FolderMeta } from '@/hooks/useTasks';
 import type { Task } from '@open-walnut/core';
 import type { BatchTaskOutcome, CreateTaskInput, PluginFieldRef, UpdateTaskInput } from '@/api/tasks';
-import { syncTasks as syncEntityLabels } from '@/stores/entity-label-store';
+import { setTaskLabelFetcher, syncTasks as syncEntityLabels } from '@/stores/entity-label-store';
+import { fetchTasksBulk } from '@/api/tasks';
+import { userStateOf } from '@open-walnut/org-tree';
+import type { UserState } from '@open-walnut/user-status';
+import { startTaskPillStatus } from '@/utils/task-pill-status';
 
 /** The shape exposed by TasksContext — mirrors useTasks() return. */
 export interface TasksContextValue {
@@ -75,6 +79,31 @@ export function TasksProvider({ children }: { children: ReactNode }) {
   // would otherwise wipe the registry on boot.
   useEffect(() => {
     if (!t.loading) syncEntityLabels(t.tasks);
+  }, [t.tasks, t.loading]);
+
+  // A task a message names that the list does not hold is looked up (one
+  // batched call, entity-label-store.ts), and every pill on the page shows its
+  // task's live status (task-pill-status.ts).
+  const statesRef = useRef<{ list: ReadonlyMap<string, UserState>; fetched: Map<string, UserState> }>({ list: new Map(), fetched: new Map() });
+  const pillStatus = useRef<{ refresh(): void } | null>(null);
+  useEffect(() => {
+    setTaskLabelFetcher(async (tokens) => {
+      const rows = await fetchTasksBulk(tokens, ['title', 'project', 'org_role', 'phase', 'user_status'], { timeoutMs: 8_000 });
+      return tokens.map((token, i) => {
+        const row = rows[i];
+        if (!row || row.error || typeof row.title !== 'string') return { token };
+        statesRef.current.fetched.set(row.id, userStateOf(row as Pick<Task, 'phase' | 'user_status'>));
+        return { token, task: { id: row.id, title: row.title, project: row.project, org_role: row.org_role } };
+      });
+    });
+    const status = startTaskPillStatus(document.body, (id) => statesRef.current.list.get(id) ?? statesRef.current.fetched.get(id));
+    pillStatus.current = status;
+    return () => { setTaskLabelFetcher(null); status.stop(); pillStatus.current = null; };
+  }, []);
+  useEffect(() => {
+    if (t.loading) return;
+    statesRef.current.list = new Map(t.tasks.map((task) => [task.id, userStateOf(task)] as const));
+    pillStatus.current?.refresh();
   }, [t.tasks, t.loading]);
 
   // Stabilize context value: useMemo prevents new object identity on every render.

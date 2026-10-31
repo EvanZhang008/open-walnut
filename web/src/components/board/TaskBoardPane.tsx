@@ -24,6 +24,8 @@ import { useNavigate } from 'react-router-dom';
 import { ApiError, apiDelete, apiPost, apiPut } from '@/api/client';
 import { ICON_REFRESH } from '@/components/common/Icons';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
+import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
+import { resolveTaskToken } from '@/stores/entity-label-store';
 import { log } from '@/utils/log';
 import { locateTaskOnHome } from '@/utils/open-session';
 import { resolveTaskSessionId } from '@/utils/session-status';
@@ -36,7 +38,7 @@ import runtimeSections from './board-sections.frame.js?raw';
 import { BOARD_PHONE_CSS, BOARD_RUNTIME_CSS } from './board-runtime.css.ts';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import {
-  BOARD_SEEN_PREFIX, advanceSeen, boardWriterLabel, buildFrameRefs, frameRefsEqual, newBoardNonce, parseSeen,
+  BOARD_SEEN_PREFIX, advanceSeen, boardMentionTokens, boardWriterLabel, buildFrameRefs, frameRefsEqual, mentionFrameRefs, newBoardNonce, parseSeen,
   safeExternalHref, threadAuthorIds, wrapBoardHtml, type BoardMessage, type BoardSectionSeen,
   type BoardSeen, type FrameTask, type StoreTaskLike,
 } from './board-model';
@@ -164,13 +166,21 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
   }, [pickView]);
 
   // ── Live refs: the store's row wins, the payload's copy is the fallback ──
+  // Task ids the text and its messages write (bare, a prefix, a task-ref) become chips too;
+  // the label version re-reads them when a lookup for an id the list lacks answers.
+  const labelsVersion = useEntityLabelsVersion();
+  const mentions = useMemo(
+    () => (payload ? boardMentionTokens(payload.board?.html ?? '', payload.threads, payload.choices) : []),
+    [payload],
+  );
   const refsNow = useMemo(
     () => (payload
-      ? buildFrameRefs(payload.refs, storeById, [
+      ? mentionFrameRefs(buildFrameRefs(payload.refs, storeById, [
         ownerId, taskId, ...threadAuthorIds(payload.threads), ...projectTaskIds(payload.projects),
-      ])
+      ]), mentions, resolveTaskToken, storeById)
       : {}),
-    [payload, storeById, ownerId, taskId],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- labelsVersion invalidates resolveTaskToken
+    [payload, storeById, ownerId, taskId, mentions, labelsVersion],
   );
   // Same content, same object: a store change elsewhere does not re-post the frame.
   const refsKept = useRef<Record<string, FrameTask>>(refsNow);

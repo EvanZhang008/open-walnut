@@ -79,18 +79,20 @@ Acceptance gate: `tests/web/markdown/link-to-local-path.test.ts` (the report ver
 
 Dev servers print `localhost:5173` / `0.0.0.0:8080` / `127.0.0.1:8000/x` without a scheme, and GFM only autolinks `http(s)://` and `www.`. The inline extension links those, registered on BOTH instances. It requires a port and a word start: the previous token's last char must not be one of `\w : / . @ - [`, so an ssh `-L 8080:localhost:8080` spec, `ws://localhost:1`, `user@localhost:22` stay text; `localhost:8080:host:80` is refused by a lookahead. It returns a plain `link` token, so the renderer adds nothing Walnut-specific: which links open in the session's Web view is decided at click time (see `walnut-web-frontend`, "Service links"). Tests: `tests/web/markdown/bare-loopback-url.test.ts`.
 
-## Bare task ids become pills (`bare-task-ids.ts`)
+## Task mentions become pills (`bare-task-ids.ts`, `task-id-shape.ts`)
 
-Models cite other tasks by id (`` `mpwidref-7c2e` confirmed it ``, "written into task mpwidrf2-9b10's report") far more often than by `<task-ref/>`, however the prompt asks. `linkBareTaskIds` runs on marked's OUTPUT, after `linkifyPathsInCode`, in `renderMarkdownWithRefs` and `renderToolResultWithRefs`, so it only adds anchors. Rules it encodes:
+Models cite other tasks by id (`` `mpwidref-7c2e` confirmed it ``, "written into task mpwidrf2-9b10's report", "being changed by mvkghc5v", "the Chat order task (2ac88910)") far more often than by `<task-ref/>`, however the prompt asks. The user's rule (2026-10-31): every task a chat names reads as its NAME and is clickable. `linkBareTaskIds` runs on marked's OUTPUT, after `linkifyPathsInCode`, in `renderMarkdownWithRefs`, `renderToolResultWithRefs` and (through `linkTaskMentions`) every renderer of its own (`renderUserMessage`, ChatMessage's `renderMarkdown`/`renderInlineMarkdown`), so it only adds anchors. Rules it encodes:
 
-- An id links only when the client task store knows it (`lookupTaskLabel`; the store holds the whole board, completed tasks included). That, plus a boundary guard (no `\w - . / @ #` before, no `\w - / @` or `.ext` after), keeps UUID fragments, file names and path segments as text. The lookup marks the id observed, so a message rendered before the task list arrived re-renders with its pills.
-- Prose and a code span holding only the id get the title pill; the id stays the label when the title is already written beside it (`id (Title)`, `Title (id)`), so it is not printed twice. An id inside longer code is linked in place (`a.task-link.task-link-code`, code font kept).
+- Token shapes live in `task-id-shape.ts` (the Board frame and the phone mirror them): a UUID, a short id, or an id's first segment(s). A token links only when `resolveTaskToken` (entity-label-store) names one task: an exact id in the client list, a prefix exactly one listed id starts with `token + '-'`, or the answer of the batched lookup (`/api/tasks/bulk`, registered by `TasksProvider`) for an id the list lacks (the list holds a week of completions). A list-settled prefix is confirmed with the server once (the list is partial). Only a full id or a prefix with a digit is ever looked up; a word of letters alone is matched against the list only. A failed lookup waits 30 s before it is asked again; an all-missing answer re-renders nothing unless a `<task-ref/>` pill waited on it.
+- Prose and a code span holding only the id get the title pill, ALWAYS the title (also when the title is written beside the id: the old "keep the id when the title is beside it" rule is gone). An id inside longer code is linked in place (`a.task-link.task-link-code`, code font kept).
+- `<task-ref/>` and `[id|title]` (`taskRefAnchor`): the current title when the id names a task; plain text (the label, else the id) when the id is empty or the lookup found nothing; the label as a pill only while undecided.
 - Skips complete anchor pairs plus an unclosed trailing `<a …>`, and button / textarea / svg / style and the like.
-- `taskIds` option: `pills` (default, conversation output), `links` (DATA: tool input/results, injected context, the context inspector; every id keeps its own text, so `"depends_on": ["<id>"]` is never rewritten into a title), `off` (file surfaces: Files preview, file diffs). Copy-as-rich-text never gets pills.
-- Tags are split quote-aware, so a `>` inside a model-written attribute value does not end the tag.
+- `taskIds` option: `pills` (default, conversation output), `links` (DATA: tool input/results, injected context, the context inspector; every id keeps its own text), `off` (file surfaces: Files preview, file diffs). Copy-as-rich-text never gets pills.
+- Every pill wears its task's live status: `task-pill-status.ts` (started by `TasksProvider`) stamps `data-user-state` on every `a.task-link` in the document, in place, never in the HTML (a status move would rebuild each message and flush the cache). The Brief's own pass sets only Partial / Not verified.
+- The Board: the host collects the tokens its text, messages and choice answers write (`boardMentionTokens`) and resolves them into the frame's refs (`mentionFrameRefs`); `board-markdown.frame.js` turns them into `<walnut-task>` chips in messages, `board-elements.frame.js` (`linkBodyMentions`, a watcher) in the page text, with `data-wn-text` keeping the written token for the sections' "updated" hash.
 - `useTaskLinkClickFallback` (App.tsx) catches a pill click on any surface that has no `useEntityClickHandler`, so it navigates in-app instead of loading `/tasks/<id>` as a page.
 
-Tests: `tests/web/markdown/bare-task-id.test.ts`, `tests/e2e/browser/bare-task-id-pills.spec.ts` (seed `pw-idref-session`).
+Ratchet: `tests/web/task-mention-surfaces.test.ts` lists every web file that renders text as HTML and fails on a new one until it is classified (a chat surface must render through the pipeline). Tests: `tests/web/markdown/bare-task-id.test.ts`, `tests/web/markdown/task-mention-lookup.test.ts`, `tests/web/markdown/user-message-refs.test.ts`, `tests/web/board-markdown.test.ts`, `tests/e2e/browser/bare-task-id-pills.spec.ts` (seed `pw-idref-session`), `tests/e2e/browser/board-task-mentions.spec.ts`.
 
 ## DOMPurify policy per surface
 
@@ -117,7 +119,9 @@ Every fix here should carry a negative control: neuter the fix and confirm the b
 |---|---|
 | `web/src/utils/markdown.ts` | all markdown rendering; retunes and both `Marked` instances at top and bottom |
 | `web/src/utils/rich-blocks.ts` | chunker, blank-line collapsing, app-block detection |
-| `web/src/utils/bare-task-ids.ts` | bare task ids in rendered output become task pills |
+| `web/src/utils/bare-task-ids.ts` | task ids in rendered output become task pills |
+| `web/src/utils/task-id-shape.ts` | what a task mention looks like (shared with the Board frame and the phone) |
+| `web/src/utils/task-pill-status.ts` | the live status dot on every task pill |
 | `web/src/utils/rich-css-scope.ts` | `<style>` selector rewriting to message scope |
 | `web/src/components/chat/RichBlocks.tsx` | the single render call site; block freezing |
 | `src/core/stream/pending-markup.ts` | unfinished-markup split, shared by client and server |

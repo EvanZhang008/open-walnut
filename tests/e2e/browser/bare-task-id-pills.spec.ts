@@ -3,9 +3,13 @@
  *
  * Reported 2026-09-29: a session cited other tasks by id only, one in backticks
  * and one bare inside CJK prose, and both showed as dead text. The pass that
- * fixes it (web/src/utils/bare-task-ids.ts) links an id only when the task store
- * knows it, shows the CURRENT title for a citation, keeps the id when its title
- * is already written beside it, and links an id inside a command in place.
+ * fixes it (web/src/utils/bare-task-ids.ts) links an id only when it names a
+ * task, shows the CURRENT title for a citation (also when the title is written
+ * beside it: 2026-10-31, "all name"), and links an id inside a command in place.
+ * An id's first segment names its task when exactly one id starts with it; a
+ * task outside the client list (completed long ago) comes from one batched
+ * lookup; a task-ref whose id is empty or names no task is plain text. Every
+ * pill wears its task's live status (data-user-state, a dot).
  *
  * Seed: pw-idref-session (test-server.ts) replies with every one of those
  * shapes, naming mpwidref-7c2e (open, has a session) and mpwidrf2-9b10 (done).
@@ -17,7 +21,9 @@ const SESSION_ID = 'pw-idref-session'
 const TASK_ID = 'pw-task-idref'
 const OPEN_ID = 'mpwidref-7c2e'
 const DONE_ID = 'mpwidrf2-9b10'
-const SHOTS = '/tmp/walnut-bare-task-id-pills'
+const UUID_ID = '9c1d4e2a-7b3f-5a6c-8d9e-0f1a2b3c4d5e'
+const OLD_ID = 'mpwold01-aa11'
+const SHOTS = process.env.PW_SHOT_DIR ?? '/tmp/walnut-bare-task-id-pills'
 
 test.setTimeout(120_000)
 
@@ -34,6 +40,18 @@ async function openSessionPanel(page: Page): Promise<Locator> {
 test('task ids in a reply render as task pills and open the task', async ({ page }, info) => {
   let loads = 0
   page.on('load', () => { loads++ })
+  const lookups: string[] = []
+  page.on('request', (r) => { if (new URL(r.url()).pathname === '/api/tasks/bulk') lookups.push(new URL(r.url()).searchParams.get('ids') ?? '') })
+  const pageErrors: string[] = []
+  page.on('pageerror', (e) => pageErrors.push(e.message))
+  // A task the client list never holds (in the real app: one completed long ago,
+  // or the list still loading): every list answer leaves it out, only the lookup has it.
+  await page.route(/\/api\/tasks(\?|$)/, async (route) => {
+    const res = await route.fetch()
+    const body = await res.json() as { tasks?: Array<{ id: string }> }
+    if (Array.isArray(body.tasks)) body.tasks = body.tasks.filter((t) => t.id !== OLD_ID)
+    await route.fulfill({ response: res, json: body })
+  })
 
   await page.goto('/')
   await page.waitForLoadState('networkidle')
@@ -45,9 +63,10 @@ test('task ids in a reply render as task pills and open the task', async ({ page
 
   // The backticked citation and the in-command id: one title pill, one link
   // inside the code that keeps the id text.
+  // (A third names it by its first segment, below.)
   const openPills = reply.locator(`a.task-link[data-task-id="${OPEN_ID}"]`)
-  await expect(openPills).toHaveCount(2)
-  const titlePill = reply.locator(`a.task-link:not(.task-link-code)[data-task-id="${OPEN_ID}"]`)
+  await expect(openPills).toHaveCount(3)
+  const titlePill = reply.locator(`a.task-link:not(.task-link-code)[data-task-id="${OPEN_ID}"]`).first()
   await expect(titlePill).toHaveText('Quarterly invoice reconciliation')
   await expect(titlePill).toHaveAttribute('title', 'Walnut / Quarterly invoice reconciliation')
   const codeLink = reply.locator(`code a.task-link.task-link-code[data-task-id="${OPEN_ID}"]`)
@@ -60,18 +79,48 @@ test('task ids in a reply render as task pills and open the task', async ({ page
   ])
   expect(linkFont).toBe(codeFont)
 
-  // The completed task: its title pill in the CJK sentence, and the id itself
-  // where the reply already wrote the title beside it.
+  // The completed task: its title pill in the CJK sentence, and again where the
+  // reply already wrote the title beside the id (the name, never the id).
   const donePills = reply.locator(`a.task-link[data-task-id="${DONE_ID}"]`)
   await expect(donePills).toHaveCount(2)
   await expect(donePills.nth(0)).toHaveText('Rotate the staging API keys')
-  await expect(donePills.nth(1)).toHaveText(DONE_ID)
-  expect(await reply.textContent()).toContain(`From task ${DONE_ID} (Rotate the staging API keys)`)
+  await expect(donePills.nth(1)).toHaveText('Rotate the staging API keys')
+  expect(await reply.textContent()).not.toContain(DONE_ID)
+
+  // An id's first segment, and a UUID task's first segment in full-width parentheses.
+  const prefixPill = reply.locator(`p:has-text("Ask here is being changed by") a.task-link[data-task-id="${OPEN_ID}"]`)
+  await expect(prefixPill).toHaveText('Quarterly invoice reconciliation')
+  const uuidPill = reply.locator(`a.task-link[data-task-id="${UUID_ID}"]`)
+  await expect(uuidPill).toHaveText('Chat order fixture')
+  // A task outside the client list: one batched lookup names it.
+  const oldPill = reply.locator(`a.task-link[data-task-id="${OLD_ID}"]`)
+  await expect(oldPill).toHaveText('Archived migration plan', { timeout: 15_000 })
+  // task-refs with no id or an id that names no task: plain words, never a dead pill.
+  await expect(reply.locator('a.task-link[data-task-id="mpwgone1-0000"]')).toHaveCount(0, { timeout: 15_000 })
+  await expect(reply.locator('a[data-task-id=""]')).toHaveCount(0)
+  await expect(reply).toContainText('Follow-ups: Unnamed follow-up and Deleted task alias.')
+  expect(lookups.filter((ids) => ids.split(',').includes(OLD_ID))).toHaveLength(1)
+  expect(lookups.join(',')).toContain('mpwgone1-0000')
+  expect(lookups.join(','), 'an id the list holds is never looked up').not.toContain(OPEN_ID)
 
   // id-shaped text that names no task stays text.
-  await expect(reply.locator('a.task-link')).toHaveCount(4)
+  await expect(reply.locator('a.task-link')).toHaveCount(7)
   await expect(reply).toContainText('550e8400-e29b-41d4-a716-446655440000')
   await expect(reply).toContainText('mzzzzzzz-0000')
+
+  // Every pill wears its task's live status; a link inside code stays plain.
+  await expect(donePills.nth(0)).toHaveAttribute('data-user-state', 'done')
+  await expect(oldPill).toHaveAttribute('data-user-state', 'done')
+  await expect(titlePill).toHaveAttribute('data-user-state', /^(needs|working|waiting)$/)
+  await expect(uuidPill).toHaveAttribute('data-user-state', /^(needs|working|waiting)$/)
+  await expect(codeLink).not.toHaveAttribute('data-user-state', /.*/)
+  const dot = await donePills.nth(0).evaluate((a) => {
+    const st = getComputedStyle(a, '::before')
+    return { content: st.content, w: st.width, bg: st.backgroundColor }
+  })
+  expect(dot.content).not.toBe('none')
+  expect(dot.w).toBe('7px')
+  expect(pageErrors).toEqual([])
 
   await reply.scrollIntoViewIfNeeded()
   await reply.screenshot({ path: `${SHOTS}/${info.project.name}-01-reply.png` })

@@ -47,6 +47,26 @@
   var EM_STAR_RE = /\*(?=[^\s*])([^*]*?[^\s*])\*/g;
   var EM_UND_RE = new RegExp('(^|[^' + W + '])_(?=[^\\s_])([\\s\\S]*?[^\\s_])_(?![' + W + '])', 'g');
 
+  // A task the message names (web/src/utils/task-id-shape.ts, the same shapes; no lookbehind,
+  // so the char before is captured): a UUID, a short id, or an id's first segment. It becomes a
+  // live <walnut-task> chip only when the host put it in the refs (it resolves it to one task).
+  var TASK_TOKEN_SRC = '(^|[^\\w\\-./@#])'
+    + '((?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z0-9]{7,10}-[a-f0-9]{4}|[a-z0-9]{7,}))'
+    + '(?![\\w\\-/@]|\\.\\w)';
+  var TASK_REF_RE = /<task-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?\s*\/?>/g;
+  var LEGACY_REF_RE = /\[([a-z0-9]{7,10}-[a-f0-9]{4})\|([^\]\n]+)\]/g;
+  kit.TASK_TOKEN_SRC = TASK_TOKEN_SRC;
+  function taskRef(token) {
+    var refs = kit.state && kit.state.refs;
+    return token && refs && Object.prototype.hasOwnProperty.call(refs, token) ? refs[token] : null;
+  }
+  /** The chip for a token the refs know; `data-wn-text` keeps what was written (a section's hash reads it). */
+  function taskChip(token) {
+    return '<walnut-task id="' + esc(token) + '" data-wn-text="' + esc(token) + '"></walnut-task>';
+  }
+  kit.taskRef = taskRef;
+  kit.taskChip = taskChip;
+
   var FENCE_RE = /^[ \t]*(`{3,})[ \t]*[^`]*$/;
   var FENCE_CLOSE_RE = /^[ \t]*(`{3,})[ \t]*$/;
   var HEADING_RE = /^ {0,3}#{1,6}[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/;
@@ -82,7 +102,18 @@
       if (code.length > 2 && code.charAt(0) === ' ' && code.charAt(code.length - 1) === ' ' && /[^ ]/.test(code)) {
         code = code.slice(1, -1);
       }
+      // A code span holding only a task's id is that task cited in backticks.
+      if (taskRef(code.trim())) return pre + hold(taskChip(code.trim()));
       return pre + hold('<code>' + esc(code) + '</code>');
+    });
+    // A <task-ref/> (what sessions are told to write) or a `[id|title]` outside code: the chip,
+    // else the words (the id when it has none), as the web's renderer shows them.
+    s = s.replace(TASK_REF_RE, function (m, id, label) {
+      var token = id.trim();
+      var words = String(label || '').replace(/&quot;/g, '"');
+      return taskRef(token) ? hold(taskChip(token)) : (words || token);
+    }).replace(LEGACY_REF_RE, function (m, id, label) {
+      return taskRef(id) ? hold(taskChip(id)) : m;
     });
     s = s.replace(LINK_RE, function (m, text, url) {
       if (!HTTP_RE.test(url)) return m;
@@ -91,6 +122,9 @@
     s = s.replace(URL_RE, function (m) {
       var url = m.replace(URL_TRAIL_RE, '');
       return hold('<a class="wn-link" href="' + esc(url) + '">' + esc(url) + '</a>') + m.slice(url.length);
+    });
+    s = s.replace(new RegExp(TASK_TOKEN_SRC, 'g'), function (m, pre, token) {
+      return taskRef(token) ? pre + hold(taskChip(token)) : m;
     });
     return restore(emph(esc(s), 0)).replace(/\n/g, '<br>');
   }

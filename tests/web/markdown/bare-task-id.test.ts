@@ -70,16 +70,16 @@ describe('bare task ids become task pills', () => {
     expect(inBlock[0]).toContain(`>${B}</a>`);
   });
 
-  it('keeps the id as the label when the title is already written beside it', () => {
+  it('shows the title even when the title is already written beside the id', () => {
+    // 2026-10-31, the user: a lead wrote `"<title>" (<id>)` and the pill showed
+    // only the id, so he could not tell which task it was ("all name").
     const after = renderMarkdownWithRefs(`From task ${B} (${TITLE_B.toLowerCase()}) a reply came back.`);
-    expect(pills(after, B)).toHaveLength(1);
-    expect(pills(after, B)[0]).toContain(`>${B}</a>`);
+    expect(pills(after, B)).toEqual([expect.stringContaining(`>${TITLE_B}</a>`)]);
     const before = renderMarkdownWithRefs(`**${TITLE_A}** (\`${A}\`) is done.`);
-    expect(pills(before, A)).toHaveLength(1);
-    expect(pills(before, A)[0]).toContain(`>${A}</a>`);
-    // A title mentioned far away does not count.
-    const far = renderMarkdownWithRefs(`${TITLE_A} came up earlier in a long unrelated sentence. Later, ${A} finished.`);
-    expect(pills(far, A)[0]).toContain(`>${TITLE_A}</a>`);
+    expect(pills(before, A)).toEqual([expect.stringContaining(`>${TITLE_A}</a>`)]);
+    // The reported shape: a quoted title, then the id in full-width parentheses.
+    const cjk = renderMarkdownWithRefs(`\u662F "${TITLE_A}"\uFF08 \`${A}\` \uFF09\u3002`);
+    expect(pills(cjk, A)).toEqual([expect.stringContaining(`>${TITLE_A}</a>`)]);
   });
 
   it('an unknown id stays text; a known id links only in the rendered output', () => {

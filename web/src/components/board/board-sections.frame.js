@@ -37,6 +37,8 @@
     (function walk(n) {
       for (var c = n.firstChild; c; c = c.nextSibling) {
         if (c.nodeType === 3) out.push(c.nodeValue);
+        // A chip Walnut made from an id the author wrote counts as that id (board-elements.frame.js).
+        else if (c.nodeType === 1 && c.hasAttribute('data-wn-text')) out.push(c.getAttribute('data-wn-text'));
         else if (c.nodeType === 1 && !c.matches(SKIP)) walk(c);
       }
     })(el);
