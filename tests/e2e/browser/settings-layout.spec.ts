@@ -4,11 +4,11 @@
  * `PW_WEBKIT=1 ... --project=webkit`. Pane switches are real nav clicks.
  * Writes are intercepted with page.route unless a test says otherwise.
  */
-import { test, expect, type Page, type Request } from '@playwright/test'
+import { devices, test, expect, type Page, type Request } from '@playwright/test'
 import { routeCosts } from './usage-costs-fixture'
 import { cssColorToRgba, withCssColor } from './css-color'
 
-if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit' })
+if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
 
 const NAV = (id: string) => `settings-nav-${id}`

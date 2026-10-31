@@ -8,10 +8,10 @@
  * which is why the pin has to be its own file rather than a `PW_WEBKIT=1` flag
  * someone remembers to pass. Scenario matrix: code-block-hscroll-helpers.ts.
  */
-import { test, expect } from '@playwright/test';
+import { devices, test, expect } from '@playwright/test';
 import { expectNoOverlapWhenNarrowed, expectReservedTrackContract } from './code-block-hscroll-helpers';
 
-test.use({ browserName: 'webkit' });
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent });
 
 test('really runs in WebKit', async ({ browserName }) => {
   expect(browserName).toBe('webkit');

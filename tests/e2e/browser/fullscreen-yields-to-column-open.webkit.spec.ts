@@ -7,10 +7,10 @@
  * a file, not a CLI flag someone remembers to pass. Scenario matrix and rationale:
  * fullscreen-yields-to-column-open.spec.ts (Chromium).
  */
-import { test, expect } from '@playwright/test'
+import { devices, test, expect } from '@playwright/test'
 import { ensureScreenshotDir, openSessionFromToastRevealsTargetColumn, prepareHome } from './fullscreen-yield-helpers'
 
-test.use({ browserName: 'webkit' })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 
 test.beforeAll(ensureScreenshotDir)
 test.beforeEach(async ({ page }) => { await prepareHome(page) })

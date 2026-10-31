@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises'
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { devices, expect, test, type Locator, type Page } from '@playwright/test'
 import { HARBOUR, MailFixtureServer, MARINA, PANE, folderRow, openMail, shoot, showAllMail } from './mail-review-helpers'
 
 // Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
@@ -21,7 +21,7 @@ test.beforeEach(async ({ page }) => { await showAllMail(page) })
 
 const SHOT_DIR = '/tmp/mail-context-folder/webkit'
 
-test.use({ browserName: 'webkit', viewport: { width: 1280, height: 800 } })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent, viewport: { width: 1280, height: 800 } })
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(420_000)
 

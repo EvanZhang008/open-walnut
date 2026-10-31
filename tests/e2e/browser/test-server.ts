@@ -1411,6 +1411,29 @@ await fs.writeFile(
         note: '',
         subtasks: [],
       },
+      // model-picker-1m.spec.ts: its own task and session per browser. Its tests save
+      // a model and an effort on the record, and five other specs pick models on
+      // pw-model-switch-session in parallel, which overwrote the saved pick a test
+      // read back (2026-10-31).
+      ...['chromium', 'webkit'].map((browser) => ({
+        id: `pw-task-model-picker-${browser}`,
+        title: `Model picker test task ${browser}`,
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'immediate',
+        project: 'Walnut',
+        source: 'local',
+        session_id: `pw-model-picker-session-${browser}`,
+        session_status: { process_status: 'running', mode: 'bypass' },
+        session_ids: [`pw-model-picker-session-${browser}`],
+        active_session_ids: [`pw-model-picker-session-${browser}`],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      })),
       {
         // Used by model-switch.spec.ts — task with a RUNNING session
         id: 'pw-task-model-switch',
@@ -3928,6 +3951,19 @@ await fs.writeFile(
         cwd: process.cwd(),
         title: 'Deep link secondary session',
       },
+      ...['chromium', 'webkit'].map((browser) => ({
+        claudeSessionId: `pw-model-picker-session-${browser}`,
+        taskId: `pw-task-model-picker-${browser}`,
+        project: 'Walnut',
+        process_status: 'running',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 60_000).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 1,
+        cwd: process.cwd(),
+        title: `Bypass: model picker test session ${browser}`,
+      })),
       {
         // Used by model-switch.spec.ts — RUNNING session for model picker tests
         claudeSessionId: 'pw-model-switch-session',

@@ -3,7 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
 import net from 'node:net'
 import { expect, test } from './shortcut-test-fixture'
-import { type Page } from '@playwright/test'
+import { devices, type Page } from '@playwright/test'
 
 /**
  * The mail sidebar in WEBKIT, which is the engine the Mac app is.
@@ -26,7 +26,7 @@ const SHOT_DIR = '/tmp/mail-sidebar-ux/sidebar-webkit'
 const HARBOUR = 'dense:harbour'
 const MARINA = 'dense:marina'
 
-test.use({ browserName: 'webkit', viewport: { width: 1280, height: 800 } })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent, viewport: { width: 1280, height: 800 } })
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(420_000)
 

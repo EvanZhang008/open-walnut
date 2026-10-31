@@ -22,7 +22,7 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 import {
-  anyBanner, banner, connected, failed, outdated, setup, signedOut, type HS, type Hosts, type LocalState,
+  CHAT_VISIBLE_KEY, anyBanner, banner, connected, expandSystemAttention, failed, outdated, setup, signedOut, type HS, type Hosts, type LocalState,
 } from './host-problems-helpers'
 import { bell, openBell, panelBanner } from './host-problems-fixture-helpers'
 import { presetPanelView } from './todo-panel-helpers'
@@ -204,6 +204,10 @@ export async function bpSetup(page: Page, opts: BpOptions = {}): Promise<Hosts> 
   await seedFeed(page, opts.feed ?? [])
   if (opts.allTasks) await presetPanelView(page)
   if (opts.before) await opts.before(page)
+  // The layout these specs measure: the task panel with the Ask Walnut slot hidden. A browser
+  // that never chose opens the slot since 2026-10-21 (HOME_CHAT_VISIBLE_DEFAULT), which narrows
+  // the task panel and covers it on a phone. Absent-only, so a `before` that picks a layout wins.
+  await page.addInitScript((c) => { if (localStorage.getItem(c) === null) localStorage.setItem(c, 'false') }, CHAT_VISIBLE_KEY)
   const h = await setup(page, opts.hosts ?? fixtureHosts(), opts.local, { listHosts: opts.listHosts ?? true })
   return h
 }
@@ -217,25 +221,35 @@ export async function expectFocusAfterSystemAttention(page: Page): Promise<void>
         && el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0 && getComputedStyle(el).visibility !== 'hidden')
     // The card is the panel's last element (the filter footer that followed it is gone):
     // Tab continues to another panel or wraps to the first page control.
-    const next = stops.find((el) => !mount.contains(el)
-      && !!(mount.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)) ?? stops[0]
+    const after = stops.find((el) => !mount.contains(el)
+      && !!(mount.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING))
+    // Nothing focusable follows (the Ask Walnut slot hidden): Tab may leave the page for the
+    // browser's own controls, which leaves the body active. That is the end of the page, not a trap.
+    const leftPage = !after && active === document.body
+    const next = after ?? stops[0]
     return {
-      body: active === document.body,
+      body: active === document.body && !leftPage,
       inCard: !!active?.closest('[data-testid="attention-banner"]'),
       hidden: !!active?.closest('[hidden], [inert]'),
       forbidden: !!active?.closest('.todo-group-action-btn-plus, [class*="filter-chip"], [data-testid="agent-search-panel"] button'),
       visible: !!active && active.getBoundingClientRect().width > 0 && active.getBoundingClientRect().height > 0,
-      expected: !!next && active === next,
+      expected: leftPage || (!!next && active === next),
     }
   })
   expect(state).toEqual({ body: false, inCard: false, hidden: false, forbidden: false, visible: true, expected: true })
 }
 
-/** The card is in the task panel, the only one on the page, with the fixture's rows. */
+/**
+ * The card is in the task panel, the only one on the page, with the fixture's rows,
+ * and on screen: the task panel holds it in the folded System attention section, so
+ * this opens the section (a spec about the fold itself reads the toggle directly).
+ */
 export async function expectTasksCard(page: Page, order: string[] = FIXTURE_ORDER): Promise<void> {
   await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
   await expect(anyBanner(page)).toHaveCount(1)
   await expect.poll(() => hostsOf(banner(page)), { timeout: 20_000 }).toEqual(order)
+  await expandSystemAttention(page)
+  await expect(banner(page)).toBeVisible()
 }
 
 /** Pick a rail section with a real click and wait until it is the current one. */

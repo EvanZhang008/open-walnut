@@ -9,10 +9,10 @@
  * the full screen").
  * Run both engines: PW_WEBKIT=1 ... for the Mac app.
  */
-import { test, expect } from '@playwright/test'
+import { devices, test, expect } from '@playwright/test'
 import { enterFilesFullscreen, expectOnTop, openSessionPanel, prepareHome } from './fullscreen-yield-helpers'
 
-if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit' })
+if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.beforeEach(async ({ page }) => { await prepareHome(page) })
 
 test('the sidebar stays usable in full screen, and the tab is still full screen on the way back', async ({ page }) => {

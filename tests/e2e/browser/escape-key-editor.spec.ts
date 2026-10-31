@@ -22,9 +22,9 @@
  * condition the beep depends on, so that is what this asserts: `defaultPrevented`
  * false while the page can still act, true once it cannot.
  */
-import { test, expect, type Page } from '@playwright/test'
+import { devices, test, expect, type Page } from '@playwright/test'
 
-test.use({ browserName: 'webkit' })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 
 // The project is named "chromium", so the run's own labels and output folders keep
 // saying chromium even when this override takes. Assert the engine instead of

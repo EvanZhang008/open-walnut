@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises'
-import { expect, test } from '@playwright/test'
+import { devices, expect, test } from '@playwright/test'
 import {
   HARBOUR,
   MARINA,
@@ -39,7 +39,7 @@ const ROLE_ROWS = ['INBOX', 'Archive', 'Drafts', 'Sent', 'Spam', 'Trash']
 const ROLE_ROWS_MARINA = ['Inbox', 'Archived', 'Bin', 'Drafts', 'Junk', 'Sent Mail']
 
 test.setTimeout(420_000)
-test.use({ browserName: 'webkit', viewport: NARROW_COLUMN })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent, viewport: NARROW_COLUMN })
 test.describe.configure({ mode: 'serial' })
 
 const server = new MailFixtureServer()

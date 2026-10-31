@@ -34,6 +34,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { showCustomBoard } from './board-view-helpers'
+import { USER_STATE_LABELS } from '../../../src/core/user-status'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -197,7 +198,7 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
   const frame = page.frameLocator('.task-board-frame')
   const workerChip = frame.locator(`#sec-a walnut-task[id="${worker}"] .wn-task`)
   await expect(workerChip.locator('.wn-title')).toHaveText(workerTitle, { timeout: 15_000 })
-  await expect(workerChip.locator('.wn-phase')).toHaveText('Waiting') // not started yet
+  await expect(workerChip.locator('.wn-phase')).toHaveText(USER_STATE_LABELS.waiting) // not started yet
   await expect(workerChip).toHaveAttribute('data-phase', 'TODO')
   await expect(frame.locator(`#sec-b walnut-task[id="${worker}"] .wn-phase`)).toHaveCount(0) // compact
   const unknown = frame.locator('walnut-task[id="nosuchtask0000"] .wn-task')
@@ -215,7 +216,7 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
 
   // The chip follows the store: a phase change lands without re-rendering the frame.
   await api('PATCH', `/api/tasks/${worker}`, { phase: 'IN_PROGRESS' })
-  await expect(workerChip.locator('.wn-phase')).toHaveText('Working', { timeout: 15_000 })
+  await expect(workerChip.locator('.wn-phase')).toHaveText(USER_STATE_LABELS.working, { timeout: 15_000 })
   await expect(workerChip).toHaveAttribute('data-phase', 'IN_PROGRESS')
   expect(await frame.locator('body').evaluate(() => (window as unknown as { __sameDoc?: number }).__sameDoc)).toBe(1)
 

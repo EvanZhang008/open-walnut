@@ -16,7 +16,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect, type Page } from '@playwright/test'
 import {
-  anyBanner, banner, bareLayout, connected, expandSystemAttention, failed, hideTaskPanel, isolatePrefs, resetServerHostFixture, routeHealth, signedOut,
+  anyBanner, banner, bareLayout, connected, expandSystemAttention, failed, hideTaskPanel, isolatePrefs, resetServerHostFixture, routeHealth, routinesBeside, signedOut,
 } from './host-problems-helpers'
 import { bell, fixtureFile, HEALTHY, loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
@@ -35,7 +35,8 @@ test.beforeAll(async ({ request }) => {
 const HOSTS_REASON = 'Notifications: remote hosts need attention'
 const LOCAL_REASON = 'Notifications: Claude Code needs attention'
 const BOTH_REASON = 'Notifications: Claude Code and remote hosts need attention'
-const chatHidden = async (p: Page) => { await p.addInitScript(() => localStorage.setItem('open-walnut-home-chat-visible', 'false')) }
+// Chat hidden and Routines open: Home shows the task panel while nothing else is open, so a hide leaves no mount only beside another panel.
+const chatHidden = async (p: Page) => { await p.addInitScript(() => localStorage.setItem('open-walnut-home-chat-visible', 'false')); await routinesBeside(p) }
 
 test.describe('the rail and the bell speak when no card is on the page', () => {
   test('BP-C15: task panel and chat hidden, no draft: no card; the rail Settings dot and the bell dot name remote hosts', async ({ page }) => {

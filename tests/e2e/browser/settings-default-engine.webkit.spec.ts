@@ -10,10 +10,10 @@
  * spec; what is pinned here is that WebKit paints the row, agrees with the
  * server about the current value, and can open the list.
  */
-import { test, expect } from '@playwright/test'
+import { devices, test, expect } from '@playwright/test'
 import { openSessionsSection } from './engine-settings-helpers'
 
-test.use({ browserName: 'webkit' })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(90_000)
 
 test('really runs in WebKit', async ({ browserName }) => {

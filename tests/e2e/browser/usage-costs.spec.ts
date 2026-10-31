@@ -6,10 +6,10 @@
  * `PW_WEBKIT=1 ... --project=webkit`. Reads come from the fixture; every write is
  * refused so the page cannot change anything.
  */
-import { test, expect, type Page } from '@playwright/test'
+import { devices, test, expect, type Page } from '@playwright/test'
 import { LONG_TITLE, routeCosts } from './usage-costs-fixture'
 
-if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit' })
+if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
 
 async function openUsage(page: Page) {

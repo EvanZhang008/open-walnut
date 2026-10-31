@@ -22,7 +22,7 @@
  * its cases in this engine as well.
  */
 import fs from 'node:fs/promises'
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { devices, expect, test, type Locator, type Page } from '@playwright/test'
 import { MailFixtureServer, folderRow, openMail, shoot, showAllMail } from './mail-review-helpers'
 
 // Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
@@ -34,7 +34,7 @@ const WRITER = 'fixture:ctx-writer@example.invalid'
 const KEEPER = 'INBOX:1:31'
 const LUNCH = 'INBOX:1:30'
 
-test.use({ browserName: 'webkit', viewport: { width: 1280, height: 800 } })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent, viewport: { width: 1280, height: 800 } })
 test.describe.configure({ mode: 'default' })
 test.setTimeout(420_000)
 

@@ -19,6 +19,7 @@ import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import {
   call, getSession, kanbanApi, pollUntil, seedKanbanTeam, startSession, ticketOf, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
+import { openSessionBoard } from './board-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const BASE = `http://localhost:${TEST_PORT}`
@@ -28,7 +29,8 @@ let api: KanbanApi
 let team: KanbanTeam
 const litter: string[] = []
 
-test.describe.configure({ mode: 'serial' })
+// Each test opens Home and the Board; under load that alone can take most of the default 30s.
+test.describe.configure({ mode: 'serial', timeout: 180_000 })
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
 
 test.beforeAll(async ({ browserName }, info) => {
@@ -82,8 +84,7 @@ async function openBoard(page: Page): Promise<Locator> {
   await row.locator('.todo-item-title').click()
   const panel = page.locator(`${REAL_PANEL}[data-session-id="${team.leaderSid}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
-  await panel.getByTestId('session-board-chip').click()
-  const pane = page.getByTestId('task-board-pane')
+  const pane = await openSessionBoard(page, panel)
   // The Board opens on Status (the default since 2026-10-25): the kanban is one click away.
   await pane.getByTestId('board-view-cards').click()
   await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 30_000 })
@@ -223,8 +224,13 @@ test.describe('layout C, a 520px window', () => {
   test.use({ viewport: { width: 520, height: 800 } })
 
   test('C58: a Bash prompt answered in the card: Allow, and Deny on another', async ({ page }, info) => {
-    // A second Bash prompt for the Deny path, on an idle card.
-    const denyCard = team.all[8]
+    // A second Bash prompt for the Deny path, on a new worker: an idle card's one session runs in
+    // the fixture's bypass mode, where the prompt would be approved for it (startSession).
+    const { task: deny } = await call<{ task: { id: string } }>(api, 'POST', '/api/tasks', {
+      title: `${ticketOf(220)} ledger probe to deny`, source: 'local', pinned: false, project: team.project, parent_task_id: team.leader,
+    })
+    litter.push(deny.id)
+    const denyCard = deny.id
     const denySid = await startSession(api, denyCard, 'status-permission-test:Bash', 'default')
     await pollUntil('second prompt', async () => (await getSession(api, denySid)).pendingPermission?.toolName ?? '', (t) => t === 'Bash')
     const pane = await openBoard(page)

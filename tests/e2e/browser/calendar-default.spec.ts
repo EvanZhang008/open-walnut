@@ -12,12 +12,12 @@
  * Runs in both engines: Chromium by default, WebKit (the Mac app is a WKWebView) with
  * `PW_WEBKIT=1 npx playwright test calendar-default --project webkit`.
  */
-import { test, expect, type Page } from '@playwright/test'
+import { devices, test, expect, type Page } from '@playwright/test'
 import fs from 'node:fs'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { calendarEmptySlotPoint, calendarSlotPoint } from './calendar-helpers'
 
-if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit' })
+if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.use({ viewport: { width: 1280, height: 900 } })
 test.setTimeout(120_000)
 

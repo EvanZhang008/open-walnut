@@ -12,13 +12,13 @@
  * pin only applies at a spec file's top level, which is why this is its own file
  * rather than a flag on the Chromium spec.
  */
-import { expect, test } from '@playwright/test';
+import { devices, expect, test } from '@playwright/test';
 import {
   AGENT_PAYLOAD, EMPTY_PAYLOAD, expectNothingClippedAtNarrowest, expectOneClickOpensSession,
   openHome, stubAgentSearch, stubEmptyInstantSearch, uniqueQuery,
 } from './agent-search-open-session-helpers';
 
-test.use({ browserName: 'webkit' });
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent });
 test.describe.configure({ mode: 'serial' });
 test.setTimeout(180_000);
 

@@ -8,9 +8,9 @@
  * Writes are intercepted with page.route, so nothing here changes the fixture
  * config other specs read.
  */
-import { test, expect, type Page } from '@playwright/test'
+import { devices, test, expect, type Page } from '@playwright/test'
 
-if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit' })
+if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(90_000)
 
 const NAV = (id: string) => `settings-nav-${id}`

@@ -3,12 +3,12 @@
  * the engine the Mac app is. Scenarios: ask-chat-earlier-helpers.ts.
  */
 import fs from 'node:fs'
-import { expect, test } from '@playwright/test'
+import { devices, expect, test } from '@playwright/test'
 import {
   SHOTS, aDegradedAnswerIsAskedAgain, continuedChatPutsTheEarlierPartAboveTheSession, oldChatOpensWithItsHistory,
 } from './ask-chat-earlier-helpers'
 
-test.use({ browserName: 'webkit' })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(120_000)
 test.beforeAll(() => { fs.mkdirSync(SHOTS, { recursive: true }) })

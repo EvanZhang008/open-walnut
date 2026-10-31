@@ -16,7 +16,7 @@
  * vacuous pass, and this file exists for the other engine.
  */
 import fs from 'node:fs/promises'
-import { expect, test } from '@playwright/test'
+import { devices, expect, test } from '@playwright/test'
 import { MailFixtureServer, folderRow, openMail, shoot, smartRow, showAllMail } from './mail-review-helpers'
 import {
   KEEPER, LEASE, LUNCH, READER, WRITER,
@@ -33,7 +33,7 @@ const SHOTS = '/tmp/mail-ctx-r3/webkit'
 const READ_ROW = 'INBOX:2:11'
 const DRAFT_ROW = 'Drafts:1:4'
 
-test.use({ browserName: 'webkit', viewport: { width: 1280, height: 800 } })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent, viewport: { width: 1280, height: 800 } })
 test.describe.configure({ mode: 'default' })
 test.setTimeout(420_000)
 

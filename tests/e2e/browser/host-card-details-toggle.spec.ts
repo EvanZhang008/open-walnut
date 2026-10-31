@@ -19,7 +19,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test, expect, type Locator } from '@playwright/test'
-import { banner, failed, resetServerHostFixture, row, setup, type HS } from './host-problems-helpers'
+import { banner, expandSystemAttention, failed, resetServerHostFixture, row, setup, type HS } from './host-problems-helpers'
 
 const SHOTS = process.env.HOST_CARD_SHOTS ?? path.join(os.tmpdir(), 'walnut-host-card-shots')
 test.describe.configure({ timeout: 120_000 })
@@ -78,6 +78,8 @@ async function showToggle(r: Locator): Promise<void> {
 for (const c of CASES) {
   test(`${c.name}: one details toggle, open and closed, and the raw text opens with the row`, async ({ page, browserName }) => {
     await setup(page, [c.status])
+    // The card sits in the task panel's folded System attention section.
+    await expandSystemAttention(page)
     const r = row(page, c.status.host)
     await expect(r).toBeVisible({ timeout: 30_000 })
     await expect(r).toContainText(c.headline)
@@ -106,6 +108,7 @@ for (const c of CASES) {
 test('an SSH failure keeps its SSH output behind its own toggle (unchanged)', async ({ page }) => {
   const s = failed('netbox', 'Net box', 'unreachable')
   await setup(page, [s])
+  await expandSystemAttention(page)
   const r = row(page, 'netbox')
   await expect(r).toBeVisible({ timeout: 30_000 })
   if (await toggles(r).first().innerText() === 'Show details') await toggles(r).first().click()

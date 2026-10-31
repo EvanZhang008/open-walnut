@@ -113,3 +113,19 @@ describe('dictation setup rows', () => {
     expect(offenders).toEqual([])
   })
 })
+
+describe('specs that pin WebKit', () => {
+  // The chromium project's device (Desktop Chrome) sets a Chrome user agent, and a
+  // file's `test.use({ browserName: 'webkit' })` keeps it, so WebKit ran saying it was
+  // Chrome: every check of the engine by its user agent failed, and the page saw a
+  // browser it was not (2026-10-31: the mail .webkit specs, "this file must really be
+  // webkit"). Each pin sets Safari's user agent; `userAgent: undefined` does not
+  // clear the project's (Playwright reads it as unset).
+  const pins = sources.flatMap(({ file, text }) =>
+    [...text.matchAll(/test\.use\(\{([^}]*browserName:\s*'webkit'[^}]*)\}/g)].map((m) => ({ file, body: m[1]! })))
+
+  it('every one also drops the project\'s user agent', () => {
+    expect(pins.length).toBeGreaterThan(30)
+    expect(pins.filter((p) => !p.body.includes("userAgent: devices['Desktop Safari'].userAgent")).map((p) => p.file)).toEqual([])
+  })
+})

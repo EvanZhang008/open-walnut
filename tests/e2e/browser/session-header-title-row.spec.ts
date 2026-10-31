@@ -43,7 +43,8 @@ async function openHome(page: Page) {
   await presetPanelView(page)
   await page.setContent(`<a href="${test.info().project.use.baseURL}/">Open Walnut</a>`)
   await page.getByRole('link', { name: 'Open Walnut' }).click()
-  await expect(page.locator('.main-page')).toBeVisible()
+  // A full app boot: 5 s was too short on a busy runner, a different test each run.
+  await expect(page.locator('.main-page')).toBeVisible({ timeout: 20_000 })
 }
 
 const CLOCK = new Date('2026-01-15T18:00:00Z')

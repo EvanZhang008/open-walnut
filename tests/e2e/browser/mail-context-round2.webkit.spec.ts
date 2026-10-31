@@ -18,7 +18,7 @@
  *   PW_WEBKIT=1 npx playwright test tests/e2e/browser/mail-context-round2.webkit.spec.ts --project=webkit
  */
 import fs from 'node:fs/promises'
-import { expect, test } from '@playwright/test'
+import { devices, expect, test } from '@playwright/test'
 import { MailFixtureServer, folderRow, pickTheme, shoot, showAllMail } from './mail-review-helpers'
 import {
   KEEPER, LUNCH, READER, WRITER,
@@ -31,7 +31,7 @@ test.beforeEach(async ({ page }) => { await showAllMail(page) })
 
 const SHOT_DIR = '/tmp/mail-context-ux/r3/webkit'
 
-test.use({ browserName: 'webkit', viewport: { width: 1280, height: 800 } })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent, viewport: { width: 1280, height: 800 } })
 test.describe.configure({ mode: 'default' })
 test.setTimeout(420_000)
 

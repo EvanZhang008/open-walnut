@@ -4,13 +4,13 @@
  * menu and the status strip have to fit the middle column; the search row's back button is the only
  * back, and the reader's back returns to the list with the open group and the scroll kept.
  */
-import { expect, test, type Page } from '@playwright/test'
+import { devices, expect, test, type Page } from '@playwright/test'
 import {
   ALL_INBOXES, getGroups, groupLine, openGroupLine, openMailAnyWidth, startGroupsFixture, statusLine, waitLabeled,
 } from './mail-grouping-helpers'
 import { shoot, smartRow, type MailFixture, type MailFixtureServer } from './mail-review-helpers'
 
-test.use({ browserName: 'webkit' })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(300_000)
 

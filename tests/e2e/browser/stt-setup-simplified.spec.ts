@@ -19,10 +19,10 @@
  * endpoints themselves. Run both engines: PW_WEBKIT=1 ... --project webkit for the Mac app.
  * Screenshots: /tmp/onboarding-walk/stt/ (never committed).
  */
-import { test, expect, type Page, type Request } from '@playwright/test'
+import { devices, test, expect, type Page, type Request } from '@playwright/test'
 import fs from 'node:fs/promises'
 
-if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit' })
+if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
 test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'ignoreErrors' }) })
 

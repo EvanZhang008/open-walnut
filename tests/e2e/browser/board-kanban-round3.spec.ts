@@ -15,6 +15,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { call, kanbanApi, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
+import { openSessionBoard } from './board-view-helpers'
 import { cssColorToRgba } from './css-color'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -58,8 +59,7 @@ async function openBoard(page: Page): Promise<Locator> {
   await row.locator('.todo-item-title').click()
   const panel = page.locator(`${REAL_PANEL}[data-session-id="${team.leaderSid}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
-  await panel.getByTestId('session-board-chip').click()
-  const pane = page.getByTestId('task-board-pane')
+  const pane = await openSessionBoard(page, panel)
   // The Board opens on Status (the default since 2026-10-25): the kanban is one click away.
   await pane.getByTestId('board-view-cards').click()
   await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 30_000 })

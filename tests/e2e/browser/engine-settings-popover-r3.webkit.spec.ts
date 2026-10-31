@@ -9,14 +9,14 @@
  *
  * Run: PW_WEBKIT=1 npx playwright test tests/e2e/browser/engine-settings-popover-r3.webkit.spec.ts --project=webkit
  */
-import { test, expect, type Locator } from '@playwright/test'
+import { devices, test, expect, type Locator } from '@playwright/test'
 import {
   LOCAL_SCOPE_NOTE, captureView, claimUserFile, filterBox, fixtureRoot, makeGitProject, openPanels, openPopover, otherGroupsOf,
   groupOpen, settleToggle, popoverGroup, popoverGroups, popoverRow, popoverRowWrap, rect, restoreSeed, rowControl, rowsArea, scopeOption, shot, startSessionAt, stubGet, waitForRows,
 } from './engine-settings-popover-helpers'
 import { withCssColor } from './css-color'
 
-test.use({ browserName: 'webkit' })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(90_000)
 

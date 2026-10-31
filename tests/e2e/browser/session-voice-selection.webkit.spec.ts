@@ -21,13 +21,13 @@
  * The dictation itself, and the stray-word report end to end, are in
  * session-voice-selection.spec.ts (Chromium).
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { devices, expect, test, type Locator, type Page } from '@playwright/test'
 import {
   PHRASE, PHRASE2, SESSION_ID, heldPainted, highlightsSupported, openSession, questionPage,
   requestHoldFromPage, selectPassage, selectedText, shot, stubSttStatus, wheel,
 } from './voice-selection-helpers'
 
-test.use({ browserName: 'webkit' })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 
 /** Ask here asks in Conversation Mode (2026-10-23): the column switches, the
  *  question's card opens beside the passage with its own box focused; the

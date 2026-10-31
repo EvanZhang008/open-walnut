@@ -21,6 +21,7 @@ import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
+import { stateCountLabel } from '../../../src/core/user-status'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import {
   call, getSession, kanbanApi, pollUntil, seedKanbanTeam, startSession, ticketOf, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
@@ -249,7 +250,11 @@ function info(): { engine: string } { return { engine: team.engine } }
 
 // A hand back is not an ask (src/core/user-status.ts): the worker waits on its lead.
 const RED_TEXTS = ['Needs you: approve Bash', 'Needs you: question', 'Needs you: worker below']
-const ERROR_CARD = () => team.all[12]
+// The card whose session fails (C14), and its recovery (C33). A task keeps one session since
+// 2026-10-21 (quick-start continues it), and the mock CLI fails only on a process's first
+// message: the error needs a worker of its own with no session yet.
+let errorCard = ''
+const ERROR_CARD = () => errorCard
 
 test('C14 C71: Needs you counts only what the user must do, once, and the Page view says the same number', async ({ page }) => {
   const pane = await openBoard(page)
@@ -275,14 +280,25 @@ test('C14 C71: Needs you counts only what the user must do, once, and the Page v
   await pageSeg.click()
   await expect(pane.getByTestId('board-view-attention')).toHaveText('3')
   await expect(pane.getByTestId('board-view-status').getByTestId('board-view-attention')).toHaveText('3')
-  await expect(pane.getByTestId('board-view-status')).toHaveAttribute('title', 'Every task of the team: what needs you, what is working, what waits: 3 need you')
+  await expect(pane.getByTestId('board-view-status')).toHaveAttribute('title', `Every task of the team: what needs you, what is working, what waits: ${stateCountLabel('needs', 3)}`)
   await pane.getByTestId('board-view-cards').click()
 
-  // An error, injected on an idle card, joins the count (the spec's runtime error).
+  // An error, injected on a new worker's first turn, joins the count (the spec's runtime error).
+  const { task: failing } = await call<{ task: { id: string } }>(api, 'POST', '/api/tasks', {
+    title: `${ticketOf(210)} ledger probe that fails`, source: 'local', pinned: false, project: team.project, parent_task_id: team.leader,
+  })
+  litter.push(failing.id)
+  errorCard = failing.id
+  await call(api, 'PATCH', `/api/tasks/${failing.id}`, { set_tags: [`ticket:${ticketOf(210)}`, 'sev:2'] })
   await startSession(api, ERROR_CARD(), 'error')
   await expect(card(pane, ERROR_CARD()).getByTestId('kanban-card-status')).toContainText('Error:', { timeout: 60_000 })
   await expect.poll(() => chipCount(needs), { timeout: 15_000 }).toBe(4)
   await expect(pane.getByTestId('kanban-workers-error')).toHaveText('1 error')
+  // 2026-10-31: the failing worker is a new card. End the visit here (leave Cards) and wait
+  // for its seen write, so C33's first look does not race this page closing.
+  const ended = page.waitForResponse((r) => r.url().includes('/board/kanban-seen') && r.request().method() === 'PUT' && r.ok(), { timeout: 15_000 })
+  await pane.getByTestId('board-view-status').click()
+  await ended
 })
 
 test('C33 C72: a filter counts lanes, grey chips do nothing, handled cards stay until the chip changes', async ({ page }) => {
@@ -300,7 +316,8 @@ test('C33 C72: a filter counts lanes, grey chips do nothing, handled cards stay 
   await needs.click()
   // R3-08: a lane with no cards at all says 0 under a filter, never `0 / 0`.
   for (const t of await pane.getByTestId('kanban-lane-count').allTextContents()) expect(t).toMatch(/^(\d+ \/ \d+|0)$/)
-  await expect(laneHead(pane, 'investigating').getByTestId('kanban-lane-count')).toHaveText(new RegExp(`^${await chipCount(needs)} / 13$`))
+  // Investigating holds its 13 seeded cards and C14's failing worker.
+  await expect(laneHead(pane, 'investigating').getByTestId('kanban-lane-count')).toHaveText(new RegExp(`^${await chipCount(needs)} / 14$`))
   await expect(pane.locator('[data-testid="kanban-lane"][data-lane-id="mitigating"]')).toContainText('No matching cards')
 
   // Allow the Bash prompt in place: the card stays, at 50%, `Handled`.
@@ -362,8 +379,12 @@ test('C39: the leader needing the user shows in the rollup, the count and its ow
   if (!(await row.isVisible())) await chip(pane, 'needs').click()
   if (!(await row.getByTestId('kanban-prompt-allow').isVisible())) await row.getByTestId('kanban-leader-row-toggle').click()
   await row.getByTestId('kanban-prompt-allow').click()
-  await expect(lead).toHaveCount(0, { timeout: 60_000 })
-  await expect.poll(() => chipCount(chip(pane, 'needs')), { timeout: 30_000 }).toBe(before)
+  await expect(row.getByTestId('kanban-prompt-allow')).toHaveCount(0, { timeout: 30_000 })
+  // The turn the allow finished ended asking nothing, and a leader with no lead of its own then
+  // needs the user to read it (its hand back, src/core/user-status.ts): the prompt is gone, the
+  // leader still counts once.
+  await expect(lead).not.toContainText('approve Bash', { timeout: 30_000 })
+  await expect.poll(() => chipCount(chip(pane, 'needs')), { timeout: 30_000 }).toBe(before + 1)
 })
 
 test('C32: the search finds a ticket and a summary word, Escape empties it, and it intersects the chip', async ({ page }) => {

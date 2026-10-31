@@ -10,7 +10,7 @@ import { PHONE, findSmallTargets } from './phone-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { presetPanelDesign } from './status-section-helpers'
 import { bpSetup } from './banner-placement-helpers'
-import { banner, failed, resetServerHostFixture } from './host-problems-helpers'
+import { banner, expandSystemAttention, failed, resetServerHostFixture } from './host-problems-helpers'
 
 const SHOTS = '/tmp/mobile-web/phone-home-r4'
 test.beforeAll(async () => { await fs.mkdir(SHOTS, { recursive: true }) })
@@ -96,6 +96,8 @@ test('R3-02: a host card in the list holds still too: it comes with the first ro
   await watchFirstLoad(page)
   await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable')], before: phoneHome })
   const res = await firstLoadResult(page)
+  // The card lives folded in System attention (0eacec605): unfold it to see it.
+  await expandSystemAttention(page)
   await expect(banner(page)).toBeVisible()
   expect(res.moved, 'a painted control moved under the thumb').toEqual([])
   expect(res.first['.phone-needs-you']).toBeLessThanOrEqual(res.first['[data-testid="attention-banner"]'] ?? Infinity)

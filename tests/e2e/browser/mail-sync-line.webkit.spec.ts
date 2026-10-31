@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises'
-import { expect, test } from '@playwright/test'
+import { devices, expect, test } from '@playwright/test'
 import {
   HARBOUR,
   MARINA,
@@ -30,7 +30,7 @@ test.beforeEach(async ({ page }) => { await showAllMail(page) })
 const SHOT_DIR = '/tmp/mail-sync-line/webkit'
 const LINE = 'mail-sync-line'
 
-test.use({ browserName: 'webkit', viewport: { width: 1280, height: 800 } })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent, viewport: { width: 1280, height: 800 } })
 test.describe.configure({ mode: 'default' })
 test.setTimeout(420_000)
 

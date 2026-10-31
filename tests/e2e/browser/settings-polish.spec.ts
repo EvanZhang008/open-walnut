@@ -4,11 +4,11 @@
  * settings-layout-fields.spec.ts: both engines, real nav clicks, config writes
  * intercepted so the fixture config never changes under another spec.
  */
-import { test, expect, type Page, type Request } from '@playwright/test'
+import { devices, test, expect, type Page, type Request } from '@playwright/test'
 import { backToApps, openPluginDetail } from './apps-store-helpers'
 import { withCssColor } from './css-color'
 
-if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit' })
+if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
 // The app keeps polling /api/config; an intercepted read can still be in flight
 // when a test ends, and its route.fetch would fail the finished test.

@@ -19,7 +19,7 @@ import { test, expect, type Page } from '@playwright/test'
 import { banner, connected, failed, outdated, resetServerHostFixture, row } from './host-problems-helpers'
 import { openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
-  BP_SHOTS, bpSetup, closePanel, errorsBadge, expectHomeCardStill, expectTasksCard, hostErrorRecord, markHomeCard, maxCards,
+  BP_SHOTS, bpSetup, closePanel, errorsBadge, expectFocusAfterSystemAttention, expectHomeCardStill, expectTasksCard, hostErrorRecord, markHomeCard, maxCards,
   openSystemHosts, panelMount, panelProblems, pickRail, problemCards, problemHosts, problemRow, railButton, systemBadge,
   systemHostRow, systemHosts,
 } from './banner-placement-helpers'
@@ -118,16 +118,19 @@ test.describe('the notification panel holds no card', () => {
 })
 
 const TAB_BAR_KEY = 'walnut-todo-quick-views-visible'
-/** Mark the first visible list row under the card (a task, else a project or tier row) and return its selector. */
+/**
+ * Mark the first visible list row (a task, else a project or tier row) and return its
+ * selector. The card is the panel's bottom section, so the list sits above it.
+ */
 async function firstRow(page: Page): Promise<string> {
   const ok = await page.evaluate(() => {
     const panel = document.querySelector('.todo-panel')!
     const mount = panel.querySelector('.ab-mount')
     const shown = (e: Element) => { const r = e.getBoundingClientRect(); return r.height > 0 && r.width > 0 && r.top < window.innerHeight }
-    const below = (e: Element) => !mount || (!mount.contains(e) && !!(mount.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING))
+    const outside = (e: Element) => !mount || !mount.contains(e)
     const toolbar = panel.querySelector('.todo-panel-toolbar')
-    const cands = [...panel.querySelectorAll('[data-task-id], button')].filter((e) => !toolbar?.contains(e))
-    const el = cands.find((e) => shown(e) && below(e))
+    const cands = [...panel.querySelectorAll('[data-task-id], button')].filter((e) => !toolbar?.contains(e) && !e.closest('.system-attention'))
+    const el = cands.find((e) => shown(e) && outside(e))
     el?.setAttribute('data-bp-row', '1')
     return !!el
   })
@@ -177,11 +180,10 @@ test.describe('the task panel mount', () => {
     await expect(banner(page).getByRole('button', { name: 'Undo' })).toBeFocused()
     await page.mouse.move(1000, 600)
     await expect.poll(() => page.evaluate(() => document.activeElement?.matches('.todo-panel > .ab-mount') ?? false), { timeout: 15_000 }).toBe(true)
-    await expect(page.locator('.todo-panel > .ab-mount')).toHaveAttribute('aria-label', 'Task panel')
+    // The mount's "Task panel" group label went with the move to the bottom System attention section (0eacec605).
+    // The card is the panel's last section (0eacec605): Tab goes on past it, never into a hidden or forbidden control.
     await page.keyboard.press('Tab')
-    const landed = await activeDescr(page)
-    expect(await page.evaluate(() => !!document.activeElement?.closest('.todo-panel'))).toBe(true)
-    expect(landed).not.toMatch(/tier-plus|filter-chip|agent-search/)
+    await expectFocusAfterSystemAttention(page)
   })
 })
 
@@ -211,6 +213,8 @@ test.describe('the task panel mount holds the list still', () => {
     await page.setViewportSize({ width: 1280, height: 420 })
     await bpSetup(page)
     await expectTasksCard(page)
+    // The card can land before the task list does: wait for the list's scroll range.
+    await expect.poll(() => listScroller(page), { timeout: 20_000 }).not.toBe('')
     const scroller = await listScroller(page)
     expect(scroller, 'a scrollable task list').not.toBe('')
     const target = await page.locator(scroller).evaluate((el) => { el.scrollTop = 400; return el.scrollTop })
@@ -281,26 +285,6 @@ test.describe('the task panel mount holds the list still', () => {
   })
 })
 
-/** Frames from now until the mount's height stops changing: [ms of first nonzero frame, ms of the last change]. */
-async function enterTiming(page: Page): Promise<{ first: number; settled: number }> {
-  return page.evaluate(() => new Promise<{ first: number; settled: number }>((resolve) => {
-    const el = document.querySelector('.todo-panel > .ab-mount')!
-    const t0 = performance.now()
-    let first = -1
-    let last = -1
-    let lastH = el.getBoundingClientRect().height
-    const tick = () => {
-      const h = el.getBoundingClientRect().height
-      const t = performance.now() - t0
-      if (h > 0 && first < 0) first = t
-      if (h !== lastH) { last = t; lastH = h }
-      if (t > 1500) resolve({ first, settled: last })
-      else requestAnimationFrame(tick)
-    }
-    requestAnimationFrame(tick)
-  }))
-}
-
 test.describe('the card waits for the pointer (5.5)', () => {
   for (const motion of ['no-preference', 'reduce'] as const) {
     test(`C51 (${motion}): a new problem waits while the pointer rests on the first task, then enters once it leaves`, async ({ page }) => {
@@ -315,15 +299,12 @@ test.describe('the card waits for the pointer (5.5)', () => {
       await hosts.push(failed('netbox', 'Net box', 'unreachable'))
       await page.waitForTimeout(1500)
       expect(Math.abs(await topOf(page, rowSel) - before), 'the row under the pointer stays put').toBeLessThanOrEqual(1)
-      const timing = enterTiming(page)
       await page.mouse.move(1000, 600)
-      const { first, settled } = await timing
       await expect(banner(page)).toHaveCount(1)
       await expect(banner(page).locator('li.hpb-row[data-host="netbox"]')).toHaveCount(1)
-      expect(first, 'the card entered after the pointer left').toBeGreaterThanOrEqual(0)
-      if (motion === 'reduce') expect(settled - first, 'no grow under reduced motion').toBeLessThanOrEqual(40)
-      else expect(settled - first, 'the grow takes at most 200ms').toBeLessThanOrEqual(220)
-      expect(await topOf(page, rowSel)).toBeGreaterThan(before + 20)
+      // The card is the panel's bottom section (0eacec605): its entry no longer grows in
+      // from 0 or pushes the list down, so the row keeps its place after it lands too.
+      expect(Math.abs(await topOf(page, rowSel) - before), 'the row stays put after the card lands').toBeLessThanOrEqual(1)
     })
   }
 })

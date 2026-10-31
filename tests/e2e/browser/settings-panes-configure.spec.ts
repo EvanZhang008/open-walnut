@@ -14,12 +14,12 @@
  * read, except C77, which needs a real cross-context round trip and restores
  * what it changed.
  */
-import { test, expect, type Page, type Route } from '@playwright/test'
+import { devices, test, expect, type Page, type Route } from '@playwright/test'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit' })
+if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.use({ viewport: { width: 1280, height: 900 } })
 test.setTimeout(120_000)
 

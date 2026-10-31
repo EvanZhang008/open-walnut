@@ -282,6 +282,8 @@ test.describe('the card holds still around it', () => {
     await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     const tasks = () => page.locator('.todo-panel .todo-panel-item').evaluateAll((els) => els.map((e) => e.getAttribute('data-task-id')))
+    // The card can land before the task list does: read the order once the rows are there.
+    await expect(page.locator('.todo-panel .todo-panel-item').first()).toBeAttached({ timeout: 20_000 })
     const before = await tasks()
     await page.evaluate(() => {
       const w = window as unknown as { __bpDrag: boolean }
@@ -338,13 +340,7 @@ test.describe('height changes wait for the pointer; Errors; the announcer', () =
     await page.mouse.move(2, 2)
     await expandSystemAttention(page)
     await expect(row(page, 'netbox')).toBeVisible({ timeout: 5_000 })
-    const dur = await page.locator('.todo-panel .ab-mount-anim').first().evaluate((el) => getComputedStyle(el).transitionDuration)
-      .catch(() => '0s')
-    expect(Math.max(...dur.split(',').map((d) => parseFloat(d) * (d.trim().endsWith('ms') ? 0.001 : 1)))).toBeLessThanOrEqual(0.2)
-    await page.emulateMedia({ reducedMotion: 'reduce' })
-    const reduced = await page.locator('.todo-panel .ab-mount-anim').first().evaluate((el) => getComputedStyle(el).transitionDuration)
-      .catch(() => '0s')
-    expect(reduced.split(',').every((d) => parseFloat(d) === 0)).toBe(true)
+    // The grow-in transition (.ab-mount-anim) went with the move to the bottom System attention section (0eacec605).
   })
 
   test('BP-C57: Errors leads with Dev box\'s row and its cards directly under it, indented and inside the Remote hosts card, with no Can\'t reach block and no Shown in System link; the keyboard goes from the row into its cards; after a Home card dismissal the row leaves and the cards stand as a Can\'t reach Dev box block below the problems', async ({ page, browserName }) => {

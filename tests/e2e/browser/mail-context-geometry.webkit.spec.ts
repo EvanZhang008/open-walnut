@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { devices, expect, test, type Page } from '@playwright/test'
 import {
   HARBOUR,
   MailFixtureServer,
@@ -42,7 +42,7 @@ test.beforeEach(async ({ page }) => { await showAllMail(page) })
  */
 
 test.setTimeout(600_000)
-test.use({ browserName: 'webkit', viewport: { width: 1280, height: 800 } })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent, viewport: { width: 1280, height: 800 } })
 // Not serial: the local worker budget is ONE anyway, every test navigates its own page, and a serial
 // describe SKIPS the rest after the first failure, which hides the verdict of every other check behind
 // whichever one happens to be first.

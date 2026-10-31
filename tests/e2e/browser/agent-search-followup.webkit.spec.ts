@@ -11,7 +11,7 @@
  * Scenarios live in agent-search-followup-helpers.ts (a `test.use` pin only applies
  * at a spec file's top level).
  */
-import { expect, test } from '@playwright/test';
+import { devices, expect, test } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import {
   AGENT_PAYLOAD, openHome, panel, stubAgentSearch, stubEmptyInstantSearch, uniqueQuery,
@@ -23,7 +23,7 @@ import {
 
 const STAMP = Date.now().toString(36);
 
-test.use({ browserName: 'webkit' });
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent });
 test.describe.configure({ mode: 'serial' });
 test.setTimeout(180_000);
 

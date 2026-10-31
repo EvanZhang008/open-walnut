@@ -4,14 +4,14 @@
  * 336px middle column and at a 900px window (the one-column narrow mode). Every card opens fully
  * inside the viewport, never scrolls sideways, and completes its main path.
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { devices, expect, test, type Locator, type Page } from '@playwright/test'
 import {
   ALL_INBOXES, MARINA, ROW, fileRules, getGroups, groupLine, groupOfMessage, mailRow, openGroupLine, openGroupMenu,
   openGrouped, startGroupsFixture, statusLine, waitLabeled, waitSorted,
 } from './mail-grouping-helpers'
 import { shoot, type MailFixture, type MailFixtureServer } from './mail-review-helpers'
 
-test.use({ browserName: 'webkit' })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(240_000)
 

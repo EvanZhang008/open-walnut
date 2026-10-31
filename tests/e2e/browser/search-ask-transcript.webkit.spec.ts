@@ -10,14 +10,14 @@
  * Scenarios live in search-ask-transcript-helpers.ts — a `test.use` browser pin
  * only applies at a spec file's top level.
  */
-import { expect, test } from '@playwright/test';
+import { devices, expect, test } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import {
   SCREENSHOT_DIR, expectAnswerCarded, expectNoSidewaysScroll, expectPromptFolded,
   expectReasoningKeptAboveCard, expectSeedDisclosed, expectTitleLabelled, openSearchAsk,
 } from './search-ask-transcript-helpers';
 
-test.use({ browserName: 'webkit' });
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent });
 test.describe.configure({ mode: 'serial' });
 test.setTimeout(180_000);
 

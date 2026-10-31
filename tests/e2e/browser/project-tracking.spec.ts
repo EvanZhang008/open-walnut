@@ -16,14 +16,14 @@
  * when this file has passed under chromium AND webkit:
  *     npx playwright test tests/e2e/browser/project-tracking.spec.ts
  *     PW_WEBKIT=1 npx playwright test --project=webkit tests/e2e/browser/project-tracking.spec.ts
- * There is deliberately NO `test.use({ browserName: 'webkit' })` here — that pin
+ * There is deliberately NO `test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })` here — that pin
  * only holds at a spec file's top level and would force every run to WebKit.
  *
  * Seeding goes through the REAL APIs (the project registry, the notes vault, the
  * metadata merge), because the thing under test is exactly that chain:
  * metadata.tracking_note → fetchNoteContent → renderNoteMarkdown → the pane.
  */
-import { test, expect, type APIRequestContext } from '@playwright/test'
+import { devices, test, expect, type APIRequestContext } from '@playwright/test'
 import { openProjectDetails, showEverything } from './todo-panel-helpers'
 
 const API = 'http://localhost:3457'

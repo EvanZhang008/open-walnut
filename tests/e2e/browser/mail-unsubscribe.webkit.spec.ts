@@ -26,7 +26,7 @@
  * in this engine too.
  */
 import fs from 'node:fs/promises'
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { devices, expect, test, type Locator, type Page } from '@playwright/test'
 import { MailFixtureServer, folderRow, openMail, shoot, showAllMail } from './mail-review-helpers'
 
 // Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
@@ -39,7 +39,7 @@ const ONE_CLICK = 'INBOX:8:1'
 const MAILTO = 'INBOX:8:2'
 const SIBLING = 'INBOX:8:5'
 
-test.use({ browserName: 'webkit', viewport: { width: 1280, height: 800 } })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent, viewport: { width: 1280, height: 800 } })
 test.describe.configure({ mode: 'default' })
 test.setTimeout(420_000)
 

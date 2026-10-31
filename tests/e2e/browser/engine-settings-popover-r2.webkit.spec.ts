@@ -7,7 +7,7 @@
  *
  * Run: PW_WEBKIT=1 npx playwright test tests/e2e/browser/engine-settings-popover-r2.webkit.spec.ts --project=webkit
  */
-import { test, expect, type Locator } from '@playwright/test'
+import { devices, test, expect, type Locator } from '@playwright/test'
 import path from 'node:path'
 import { fixtureHome, readClaudeSettings } from './engine-settings-helpers'
 import {
@@ -15,7 +15,7 @@ import {
   rowControl, rowsArea, rowsGeometry, savedLine, savedProjectBase, scopeOption, shortCwd, shot, startSessionAt, stubPatch, waitForRows,
 } from './engine-settings-popover-helpers'
 
-test.use({ browserName: 'webkit' })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(90_000)
 

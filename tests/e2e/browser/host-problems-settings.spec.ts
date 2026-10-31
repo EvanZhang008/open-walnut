@@ -29,7 +29,7 @@ import {
   HEALTHY, bannerRow, bell, fixtureCounters, fixtureFile, hostFixture, hostRow, hostTab, isolatePrefs, loadApp, loadFixture,
   openPicker, openRemoteHosts, picker, resetServerHostFixture, wireHost,
 } from './host-problems-fixture-helpers'
-import { bareLayout } from './host-problems-helpers'
+import { bareLayout, expandSystemAttention } from './host-problems-helpers'
 import { openRow } from './banner-placement-helpers'
 
 const SHOTS = '/tmp/walnut-host-problems-slice/fix2'
@@ -66,6 +66,8 @@ test.describe('one failure, one sentence: Key box on every surface', () => {
     expect(wire.retryable).toBe(false)
     expect(wire.retryAt).toBeUndefined()
     await loadApp(page)
+    // The card sits in the task panel's folded System attention section.
+    await expandSystemAttention(page)
 
     // 1. The banner row (the first row: connect failures lead, in Settings order).
     const row = bannerRow(page, 'keybox')
@@ -146,6 +148,7 @@ test.describe('the Settings row itself', () => {
   test('title is the label, then the alias; Open Settings from the banner flashes the row every time (C68)', async ({ page }) => {
     await loadApp(page)
     const flashOnce = async () => {
+      await expandSystemAttention(page)
       await bannerRow(page, 'signbox').getByTestId('hpb-open-settings').click()
       await expect(page).toHaveURL(/\/settings#rh-host-signbox$/)
       const r = hostRow(page, 'signbox')
@@ -160,7 +163,7 @@ test.describe('the Settings row itself', () => {
     await expect(r.locator('.rh-host-alias')).toHaveText('signbox')
     // Back home and the same Open Settings again: the same hash, a second flash.
     await page.getByTestId('sidebar-core-app-home').click()
-    await expect(bannerRow(page, 'signbox')).toBeVisible({ timeout: 20_000 })
+    await expect(bannerRow(page, 'signbox')).toBeAttached({ timeout: 20_000 })
     await flashOnce()
   })
 
@@ -217,7 +220,9 @@ test.describe('an ephemeral fixture: Settings says off and offers nothing', () =
       await expect(r.getByRole('button', { name: /^(Connect now|Retry|Update|Install|Check again)$/ })).toHaveCount(0)
       await expect(r.locator('.rh-readiness, .rh-failure')).toHaveCount(0)
     }
-    await expect(page.locator('#remote-hosts')).not.toContainText('Not connected')
+    // The host rows' status lines: the fleet overview above them (2026-10-31) reads a host's
+    // live state as its own Now line, "Not connected" for an off host, and offers nothing.
+    for (const r of await page.locator('#remote-hosts .rh-host-row').all()) await expect(r).not.toContainText('Not connected')
     await page.locator('#remote-hosts').screenshot({ path: `${SHOTS}/settings-ephemeral.png` })
   })
 })

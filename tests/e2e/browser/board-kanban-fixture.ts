@@ -12,11 +12,14 @@
  * route backdates completed_at or phase_changed_at), so they are SEEDED before
  * boot: test-server.ts adds `kanbanSeedTasks(agoIso)` to its tasks.json and the
  * fixture adopts the rows of its engine (PATCH parent_task_id + project).
- * Without the seed, assertFixtureDensity fails loudly (C90).
+ * Without the seed, assertFixtureDensity fails loudly (C90). Each Playwright
+ * worker adopts its own copy of the rows (claimSeedSlot).
  *
  * No @playwright/test import at runtime: test-server.ts imports this file.
  * Neutral invented names only.
  */
+import fs from 'node:fs'
+import path from 'node:path'
 import type { BrowserContext } from '@playwright/test'
 
 export const KANBAN_LEADER_TITLE = 'Payments resolver group triage'
@@ -73,13 +76,52 @@ export function summaryFor(i: number, label: string): string {
 
 export const ticketOf = (n: number) => `V${KANBAN_FIRST_TICKET + n}`
 
-/** The seeded ids of one engine: 10 old completions and one 3 day stall. */
-export function kanbanSeedIds(engine: string): { oldDone: string[]; stale: string; staleSession: string } {
+/**
+ * Copies of the seeded rows per engine, one per Playwright worker (CI runs 4): each team adopts
+ * its rows, so two kanban files running at once on one copy took them from each other
+ * (2026-10-31: a team read `Resolved 13` for 23, and its stall was "not on this board's team").
+ */
+export const KANBAN_SEED_SLOTS = 4
+
+/** The seeded ids of one engine's slot: 10 old completions and one 3 day stall. Slot 0 keeps the first names. */
+export function kanbanSeedIds(engine: string, slot = 0): { oldDone: string[]; stale: string; staleSession: string } {
   const e = engine.replace(/[^a-z0-9]/gi, '').toLowerCase()
+  const p = slot ? `pw-kanban-${e}-s${slot}` : `pw-kanban-${e}`
   return {
-    oldDone: Array.from({ length: 10 }, (_, k) => `pw-kanban-${e}-olddone-${String(k + 1).padStart(2, '0')}`),
-    stale: `pw-kanban-${e}-stale`,
-    staleSession: `pw-kanban-${e}-stale-session`,
+    oldDone: Array.from({ length: 10 }, (_, k) => `${p}-olddone-${String(k + 1).padStart(2, '0')}`),
+    stale: `${p}-stale`,
+    staleSession: `${p}-stale-session`,
+  }
+}
+
+const pidAlive = (pid: number) => {
+  try { process.kill(pid, 0); return true } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM' }
+}
+
+/**
+ * Takes a free seed slot of `engine` for this worker process, under the fixture root, so every
+ * worker of the run sees the same claims. A worker runs one file at a time: it gives back what
+ * its previous file held first, and a claim whose process is gone is free.
+ */
+export async function claimSeedSlot(fixtureRoot: string, engine: string): Promise<number> {
+  const dir = path.join(fixtureRoot, 'kanban-seed-claims')
+  fs.mkdirSync(dir, { recursive: true })
+  const file = (slot: number) => path.join(dir, `${engine.replace(/[^a-z0-9]/gi, '')}-${slot}.json`)
+  const end = Date.now() + 300_000
+  for (;;) {
+    for (let slot = 0; slot < KANBAN_SEED_SLOTS; slot++) {
+      let holder = 0
+      try { holder = Number(JSON.parse(fs.readFileSync(file(slot), 'utf8')).pid) } catch { /* free or half written */ }
+      if (holder === process.pid || (holder && !pidAlive(holder))) fs.rmSync(file(slot), { force: true })
+    }
+    for (let slot = 0; slot < KANBAN_SEED_SLOTS; slot++) {
+      try {
+        fs.writeFileSync(file(slot), JSON.stringify({ pid: process.pid }), { flag: 'wx' })
+        return slot
+      } catch { /* taken */ }
+    }
+    if (Date.now() > end) throw new Error(`no free kanban seed slot of ${engine} in ${dir}: more than ${KANBAN_SEED_SLOTS} workers?`)
+    await new Promise((r) => setTimeout(r, 1000))
   }
 }
 
@@ -95,8 +137,8 @@ const STALE_TICKET = 6
  */
 export function kanbanSeedTasks(agoIso: (msAgo: number) => string): Array<Record<string, unknown>> {
   const rows: Array<Record<string, unknown>> = []
-  for (const engine of KANBAN_SEED_ENGINES) {
-    const ids = kanbanSeedIds(engine)
+  for (const engine of KANBAN_SEED_ENGINES) for (let slot = 0; slot < KANBAN_SEED_SLOTS; slot++) {
+    const ids = kanbanSeedIds(engine, slot)
     const base = { priority: 'none', source: 'local', project: `Kanban seed ${engine}`, active_session_ids: [], description: '', note: '', subtasks: [] }
     ids.oldDone.forEach((id, k) => {
       const n = OLD_DONE_FIRST_TICKET + k
@@ -188,7 +230,7 @@ export async function getTask(api: KanbanApi, id: string): Promise<TaskView | nu
   return body.task ?? (body.id ? body : null)
 }
 
-interface SessionView { process_status?: string; pendingPermission?: { toolName?: string } | null }
+interface SessionView { process_status?: string; mode?: string; pendingPermission?: { toolName?: string } | null }
 
 export async function getSession(api: KanbanApi, sid: string): Promise<SessionView> {
   const res = await fetch(`${api.base}/api/sessions/${encodeURIComponent(sid)}`)
@@ -196,8 +238,19 @@ export async function getSession(api: KanbanApi, sid: string): Promise<SessionVi
   return ((await res.json()) as { session?: SessionView }).session ?? {}
 }
 
-/** A mock CLI session on a task (the fixture's MockDaemon runs tests/providers/mock-claude.mjs). */
+/**
+ * A mock CLI session on a task (the fixture's MockDaemon runs tests/providers/mock-claude.mjs).
+ * A task keeps one session (2026-10-21): on a task that has one, the message continues it, in
+ * the mode that session's CLI was spawned with (the mock CLI never switches it live). A `mode`
+ * the session does not run in is refused here, since a prompt asked in bypass mode is approved
+ * for it and never reaches the user (2026-10-31: two prompt specs waited for one that never came).
+ */
 export async function startSession(api: KanbanApi, taskId: string, message: string, mode?: string): Promise<string> {
+  const existing = mode ? (await call<{ task: { session_id?: string } }>(api, 'GET', `/api/tasks/${taskId}`)).task.session_id : undefined
+  if (existing) {
+    const running = (await getSession(api, existing)).mode
+    if (running && running !== mode) throw new Error(`task ${taskId} already has session ${existing} in ${running} mode: a message continues it there, not in ${mode}`)
+  }
   const { sessionId } = await call<{ sessionId: string }>(api, 'POST', '/api/sessions/quick-start', {
     cwd: `${api.fixtureRoot}/projects/walnut`, message, taskId, ...(mode ? { mode } : {}),
   })
@@ -214,6 +267,9 @@ async function createCard(api: KanbanApi, title: string, opts: { project: string
   if (opts.summary) await call(api, 'PUT', `/api/tasks/${task.id}/summary`, { content: opts.summary })
   return task.id
 }
+
+/** The summary the mock CLI's turn end triage writes (tests/providers/mock-claude.mjs EXEC_SUMMARY). */
+const TURN_END_SUMMARY = 'The fixture turn finished.'
 
 const waitPhase = (api: KanbanApi, id: string, phase: string, ms = 90_000) =>
   pollUntil(`task ${id} phase ${phase}`, async () => (await getTask(api, id))?.phase ?? '', (p) => p === phase, ms)
@@ -260,7 +316,7 @@ export async function seedKanbanTeam(api: KanbanApi, opts: SeedKanbanOptions): P
   })
   litter.push(lead.id)
   const leader = lead.id
-  const seeds = kanbanSeedIds(engine)
+  const seeds = kanbanSeedIds(engine, await claimSeedSlot(api.fixtureRoot, engine))
   const team: KanbanTeam = {
     engine, stamp, project, leader, leaderSid: '', perm: '', permSid: '', question: '', questionSid: '', handedBack: '',
     handedBackSid: '', stale: '', idle: [], running: [], runningSids: [], waiting: '', done: [], oldDone: [], nested: '',
@@ -333,7 +389,8 @@ async function finishTeam(api: KanbanApi, team: KanbanTeam, roles: Map<string, R
   team.question = byRole('question')[0]
   team.questionSid = await sid(team.question, 'status-permission-test:AskUserQuestion', 'default')
   await waitPrompt(api, team.questionSid, 'AskUserQuestion')
-  team.leaderSid = await sid(team.leader, 'snapshot-clean-turn:Kanban leader ready')
+  // `default`: a prompt the leader asks later (C39) must reach the user, and its one session keeps this mode.
+  team.leaderSid = await sid(team.leader, 'snapshot-clean-turn:Kanban leader ready', 'default')
   const stale = byRole('stale')[0]
   team.stale = stale
   const seededStale = team.seeded.includes(stale)
@@ -345,11 +402,17 @@ async function finishTeam(api: KanbanApi, team: KanbanTeam, roles: Map<string, R
   team.permSid = await sid(team.perm, 'status-permission-test:Bash', 'default') // `default`: the fixture's mode would approve it
   team.nestedSid = await sid(nested, 'status-permission-test:Bash', 'default')
 
-  for (const id of [...plainIdle, team.handedBack]) await waitPhase(api, id, 'NEED_ACTION')
-  // A finished turn writes its reply as the task summary: put the long summaries back.
-  for (const id of [...plainIdle, team.handedBack]) {
-    if (team.summaries[id]) await call(api, 'PUT', `/api/tasks/${id}/summary`, { content: team.summaries[id] })
-  }
+  const turnEnded = [team.leader, ...plainIdle, team.handedBack]
+  for (const id of turnEnded) await waitPhase(api, id, 'NEED_ACTION')
+  // A finished turn's triage writes the task summary a moment after the turn ends (its side
+  // question to the mock CLI): wait for it before the long summaries go back (keepSummaries).
+  await pollUntil('turn end summaries', async () => (await Promise.all(turnEnded.map((id) => getTask(api, id))))
+    .filter((t) => t?.summary !== TURN_END_SUMMARY).map((t) => t?.id), (left) => left.length === 0, 120_000)
+  // A top level task whose turn ended asking nothing needs the user (its hand back,
+  // src/core/user-status.ts), and every Needs you count of a team adds a leader that needs the
+  // user. This leader carries on, collecting its workers' reports: the line a person sets through
+  // the task's report (2026-10-31: its hand back made every such count one more than the cards).
+  await call(api, 'PUT', `/api/v1/tasks/${team.leader}/report`, { state: 'working', next: "Collect the workers' reports" })
   // The worker itself hands its task back (its own sid as the caller): handed_back_at, red (G2).
   await patchTask(api, team.handedBack, { phase: 'IN_PROGRESS' })
   await call(api, 'PATCH', `/api/v1/tasks/${team.handedBack}`, { phase: 'NEED_ACTION' }, { 'x-walnut-caller-sid': team.handedBackSid })
@@ -365,8 +428,28 @@ async function finishTeam(api: KanbanApi, team: KanbanTeam, roles: Map<string, R
     await waitStatus(api, s, 'running')
     await call(api, 'PATCH', `/api/sessions/${s}`, { activity: 'Reading logs' })
   }
+  await keepSummaries(api, team, [...plainIdle, team.handedBack].filter((id) => team.summaries[id]))
   await waitUserStatuses(api, team)
   return team
+}
+
+/**
+ * Puts each card's long task summary back over its turn end's, and holds it until none was
+ * rewritten for `quietMs`. A snapshot that sees a turn end may run the turn end hooks again
+ * (SESSION_TURN_SETTLED, src/core/session-hooks/derive/session.ts), and so the triage, which
+ * rewrites the summary up to about 40 s later (2026-10-31: cards read "The fixture turn
+ * finished." over their seeded summary in the middle of a test).
+ */
+async function keepSummaries(api: KanbanApi, team: KanbanTeam, ids: readonly string[], quietMs = 45_000): Promise<void> {
+  const end = Date.now() + 240_000
+  let quietSince = Date.now()
+  while (Date.now() - quietSince < quietMs) {
+    const off = (await Promise.all(ids.map((id) => getTask(api, id)))).filter((t) => t && t.summary !== team.summaries[t.id])
+    for (const t of off) await call(api, 'PUT', `/api/tasks/${t!.id}/summary`, { content: team.summaries[t!.id] })
+    if (off.length) quietSince = Date.now()
+    if (Date.now() > end) throw new Error(`task summaries kept being rewritten: ${off.map((t) => t!.id).join(', ')}`)
+    await new Promise((r) => setTimeout(r, 1000))
+  }
 }
 
 type StatusRow = { id: string; phase: string; user_status?: { state: string } }
@@ -375,13 +458,13 @@ type StatusRow = { id: string; phase: string; user_status?: { state: string } }
  * The server derives each task's user status a moment after its facts move (a debounced pass,
  * src/core/user-status-sync.ts); until then a surface reads the phase. Wait for the derived
  * values, so no test reads that first guess: every open card has one, the prompts need the
- * user, and the hand back waits on its lead.
+ * user, the hand back waits on its lead, and the leader works (finishTeam).
  */
 async function waitUserStatuses(api: KanbanApi, team: KanbanTeam): Promise<void> {
-  const want: Record<string, string> = { [team.perm]: 'needs', [team.handedBack]: 'waiting' }
+  const want: Record<string, string> = { [team.perm]: 'needs', [team.handedBack]: 'waiting', [team.leader]: 'working' }
   for (const id of team.running) want[id] = 'working'
   await pollUntil('derived user statuses', async () => {
-    const rows = await Promise.all(team.all.map(async (id) => (await call<{ task: StatusRow }>(api, 'GET', `/api/tasks/${id}`)).task))
+    const rows = await Promise.all([team.leader, ...team.all].map(async (id) => (await call<{ task: StatusRow }>(api, 'GET', `/api/tasks/${id}`)).task))
     return rows.filter((t) => t.phase !== 'COMPLETE' && (!t.user_status || (want[t.id] && t.user_status.state !== want[t.id]))).map((t) => t.id)
   }, (missing) => missing.length === 0, 90_000)
 }

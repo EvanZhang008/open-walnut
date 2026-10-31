@@ -4,10 +4,10 @@
  * whose hidden end started this). Its own file because a WebKit pin only holds
  * at the top level of a spec file. Scenario matrix: composer-in-flow-helpers.ts.
  */
-import { test, expect } from '@playwright/test';
+import { devices, test, expect } from '@playwright/test';
 import { runComposerInFlowMatrix } from './composer-in-flow-helpers';
 
-test.use({ browserName: 'webkit' });
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent });
 
 test('really runs in WebKit', async ({ browserName }) => {
   expect(browserName).toBe('webkit');

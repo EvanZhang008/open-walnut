@@ -6,14 +6,14 @@
  *
  * Run: PW_WEBKIT=1 npx playwright test tests/e2e/browser/engine-settings-popover.webkit.spec.ts --project=webkit
  */
-import { test, expect } from '@playwright/test'
+import { devices, test, expect } from '@playwright/test'
 import { fixtureHome, readClaudeSettings } from './engine-settings-helpers'
 import {
   claimUserFile, clickComposerOutside, composerTextarea, fixtureRoot, makeGitProject, openPanels, openPopover, plusButton, popoverRow,
   readLocal, restoreSeed, rowControl, savedLine, savedUserSentence, shot, startSessionAt, waitForRows,
 } from './engine-settings-popover-helpers'
 
-test.use({ browserName: 'webkit' })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(90_000)
 

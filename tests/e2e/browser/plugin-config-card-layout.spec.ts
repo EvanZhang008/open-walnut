@@ -17,10 +17,10 @@
  * Runs in both engines: Chromium by default, WebKit (the Mac app is a WKWebView)
  * with `PW_WEBKIT=1 ... --project=webkit`.
  */
-import { test, expect, type Page, type Route } from '@playwright/test'
+import { devices, test, expect, type Page, type Route } from '@playwright/test'
 import { backToApps, openPluginDetail } from './apps-store-helpers'
 
-if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit' })
+if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.use({ viewport: { width: 1280, height: 900 } })
 test.setTimeout(120_000)
 

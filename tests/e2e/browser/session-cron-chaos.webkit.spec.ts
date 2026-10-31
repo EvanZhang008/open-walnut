@@ -10,7 +10,7 @@
  *
  * Opt in with PW_WEBKIT=1 ... --project webkit (playwright.config.ts).
  */
-import { expect, test } from '@playwright/test'
+import { devices, expect, test } from '@playwright/test'
 import {
   SEEDS,
   ensureShots,
@@ -23,7 +23,7 @@ import {
   runSurfaceConsistency,
 } from './session-cron-chaos-helpers'
 
-test.use({ browserName: 'webkit', viewport: { width: 1280, height: 850 }, deviceScaleFactor: 1 })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent, viewport: { width: 1280, height: 850 }, deviceScaleFactor: 1 })
 test.setTimeout(240_000)
 
 test.beforeAll(ensureShots)

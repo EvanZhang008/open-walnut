@@ -23,12 +23,12 @@
  * "passed"). The fix is engine-agnostic — a changed image gets a new URL — but
  * the bug is only reliably visible here.
  */
-import { test, expect, type Locator, type Page } from '@playwright/test'
+import { devices, test, expect, type Locator, type Page } from '@playwright/test'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import zlib from 'node:zlib'
 
-test.use({ browserName: 'webkit' })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'

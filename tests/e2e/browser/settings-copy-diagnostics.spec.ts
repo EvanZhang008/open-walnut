@@ -12,10 +12,10 @@
  * developer, so both are real values here).
  */
 import os from 'node:os'
-import { test, expect, type Page } from '@playwright/test'
+import { devices, test, expect, type Page } from '@playwright/test'
 import { accountInfo } from '../../../src/lib/account.js'
 
-if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit' })
+if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
 
 declare global {

@@ -152,7 +152,10 @@ test.describe('Model Switch UI', () => {
     await expect(sonnetRow).toHaveAttribute('title', /Balanced/)
   })
 
-  test('selecting model closes picker', async ({ page }) => {
+  test('selecting model closes picker', async ({ page, request }) => {
+    // Saved on another model first: a click on the row already saved sends nothing
+    // and leaves the picker open, so a run after this one found Sonnet saved.
+    expect((await request.post('/api/sessions/pw-model-switch-session/model', { data: { model: 'haiku' } })).ok()).toBe(true)
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
 

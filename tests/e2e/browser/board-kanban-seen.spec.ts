@@ -34,7 +34,8 @@ let api: KanbanApi
 let team: KanbanTeam
 const litter: string[] = []
 
-test.describe.configure({ mode: 'serial' })
+// Each test opens Home and the Board; under load that alone can take most of the default 30s.
+test.describe.configure({ mode: 'serial', timeout: 180_000 })
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
 
 test.beforeAll(async ({ browserName }, info) => {

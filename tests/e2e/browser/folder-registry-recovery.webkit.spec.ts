@@ -6,12 +6,12 @@
  * exactly where engines differ, so a Chromium pass alone does not cover the
  * Mac app. Opt in with `PW_WEBKIT=1 npx playwright test <spec> --project webkit`.
  */
-import { expect, test } from '@playwright/test'
+import { devices, expect, test } from '@playwright/test'
 import {
   expectFolderNameRecovers, newLitter, seedFolder, sweepLitter, type Litter,
 } from './folder-registry-recovery-helpers'
 
-test.use({ browserName: 'webkit' })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
 
 let litter: Litter = newLitter()

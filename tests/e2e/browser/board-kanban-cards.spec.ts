@@ -200,10 +200,12 @@ test('C25: Open session opens its column on Home; a click on the card opens the 
 test('C56: a turn that ends leaves the card where it was; the sticky auto lane is recorded', async ({ page }) => {
   test.setTimeout(240_000)
   const { task } = await call<{ task: { id: string } }>(api, 'POST', '/api/tasks', {
-    title: 'V1000000160 short probe', source: 'local', pinned: false, project: team.project, parent_task_id: team.leader,
+    title: 'Card short probe', source: 'local', pinned: false, project: team.project, parent_task_id: team.leader,
   })
   litter.push(task.id)
-  const sid = await startSession(api, task.id, 'slow:12000 V1000000160 short probe')
+  // Long enough to still run once the Board is open: under load the page alone took over 12 s
+  // and the card read the ended turn (2026-10-31).
+  const sid = await startSession(api, task.id, 'slow:40000 Card short probe')
   await pollUntil('running', () => call<{ session?: { process_status?: string } }>(api, 'GET', `/api/sessions/${sid}`), (v) => v.session?.process_status === 'running', 60_000)
   await call(api, 'PUT', `/api/v1/tasks/${team.leader}/board/kanban-seen`, { cards: 'all' })
   const pane = await openBoard(page)
@@ -251,7 +253,10 @@ test('C69: a refused leader move becomes a suggestion; Accept moves it, Dismiss 
   const s = await fetch(`${api.base}/api/v1/tasks/${team.leader}/board/cards/${d}/suggestion`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', ...leaderHeaders() }, body: JSON.stringify({ action: 'dismiss' }),
   })
-  expect(s.status).toBe(403)
+  // An agent may answer a suggestion too (every human action is an agent action, 2026-10-27):
+  // the user's Dismiss already cleared this one, so there is nothing left for the leader to answer.
+  expect(s.status).toBe(404)
+  expect(((await s.json()) as { error: { code: string } }).error.code).toBe('no_suggestion')
 })
 
 test('C70: the newer summary shows, the tooltip says whose', async ({ page }) => {

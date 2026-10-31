@@ -22,7 +22,7 @@
  * is a vacuous pass and this file exists for the other engine.
  */
 import fs from 'node:fs/promises'
-import { expect, test } from '@playwright/test'
+import { devices, expect, test } from '@playwright/test'
 import { MailFixtureServer, shoot, showAllMail } from './mail-review-helpers'
 import {
   KEEPER, LUNCH, WRITER,
@@ -35,7 +35,7 @@ test.beforeEach(async ({ page }) => { await showAllMail(page) })
 
 const SHOT_DIR = '/tmp/mail-context-fixes/webkit'
 
-test.use({ browserName: 'webkit', viewport: { width: 1280, height: 800 } })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent, viewport: { width: 1280, height: 800 } })
 test.describe.configure({ mode: 'default' })
 test.setTimeout(420_000)
 

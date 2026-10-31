@@ -216,7 +216,8 @@ test('home and popout share the update notice; a popout draft, which a restart d
   const child = await opened
   const errors: string[] = []
   child.on('pageerror', e => errors.push(e.message))
-  await expect(child.locator('.session-panel-input textarea')).toBeVisible()
+  // A popout is a cold load of the whole app in a new window: it gets the 20 s a first load does.
+  await expect(child.locator('.session-panel-input textarea')).toBeVisible({ timeout: 20_000 })
   await expect(pill(child)).toHaveCount(1)
   await expect(action(child)).toHaveText('Restart')
   await expect(child.getByTestId('installed-app-update')).toHaveCount(0)

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { devices, test, expect } from '@playwright/test';
 import {
   CTRL_SESSION, CTRL_FILLER, COLUMN_NAME_ONLY, mockControlsSession, openControlsSession, clampColumn,
   overflowBtn, controlOf, rowState, expectSingleRow, shootComposer,
@@ -6,7 +6,7 @@ import {
 } from './composer-controls-overflow-helpers';
 import { openDraft } from './draft-helpers';
 
-test.use({ browserName: 'webkit' });
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent });
 
 test('WebKit wide composer leaves full model and Bypass inline while the add menu lists other controls', async ({ page, browserName }) => {
   expect(browserName).toBe('webkit');

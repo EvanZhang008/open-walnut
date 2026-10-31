@@ -15,8 +15,8 @@
  *     (full provider ID) — the load-bearing contract of the whole feature.
  *
  * Requires seed data in test-server.ts:
- *  - Task: pw-task-model-switch (in_progress, with session)
- *  - Session: pw-model-switch-session (seeded as running, reconciled to stopped)
+ *  - Task: pw-task-model-picker-<browser> (in_progress, with session)
+ *  - Session: pw-model-picker-session-<browser> (seeded as running, reconciled to stopped)
  */
 import { test, expect } from '@playwright/test'
 import path from 'node:path'
@@ -24,7 +24,31 @@ import { presetPanelView } from './todo-panel-helpers'
 import { REAL_PANEL } from './draft-helpers'
 
 const SCREENSHOT_DIR = '/tmp/test-and-verify'
-const SESSION_ID = 'pw-model-switch-session'
+// Its own session per browser (test-server.ts): other specs pick models on
+// pw-model-switch-session at the same time, and a saved pick is shared state.
+let SESSION_ID = 'pw-model-picker-session-chromium'
+let TASK_TITLE = 'Model picker test task chromium'
+// In file order, in one worker: two tests read back what they saved on the record.
+test.describe.configure({ mode: 'default' })
+test.beforeEach(async ({ request }, info) => {
+  const browser = info.project.name.includes('webkit') ? 'webkit' : 'chromium'
+  SESSION_ID = `pw-model-picker-session-${browser}`
+  TASK_TITLE = `Model picker test task ${browser}`
+  // Every test starts on the same saved model: a click on the row already saved
+  // sends nothing, and a saved out-of-catalog pick adds a row, so what an earlier
+  // run saved changed what the next one saw.
+  expect((await request.post(`/api/sessions/${SESSION_ID}/model`, { data: { model: 'sonnet' } })).ok()).toBe(true)
+})
+
+/** Answer a model or effort switch without saving it: a test that checks only what
+ *  the request carries must not change the saved settings the next test reads. */
+async function answerSwitch(page: import('@playwright/test').Page, what: 'model' | 'effort') {
+  await page.route((url) => url.pathname === `/api/sessions/${SESSION_ID}/${what}`, (route) => {
+    if (route.request().method() !== 'POST') return route.fallback()
+    const body = route.request().postDataJSON() as Record<string, string>
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ [what]: body[what], appliedLive: false }) })
+  })
+}
 
 /** A CLI-shaped catalog (2.1.199 initialize response, trimmed) used by the
  *  interception tests: one default row, one enabled row, one disabled row. */
@@ -95,7 +119,7 @@ async function openSessionPanel(page: import('@playwright/test').Page) {
   await page.waitForLoadState('networkidle')
 
   // Plain click on a task row with a session opens the SessionPanel inline.
-  const taskItem = page.locator('.todo-panel-item', { hasText: 'Model switch test task' }).first()
+  const taskItem = page.locator('.todo-panel-item', { hasText: TASK_TITLE }).first()
   await expect(taskItem).toBeVisible({ timeout: 5000 })
   await taskItem.click()
   await page.waitForTimeout(500)
@@ -190,7 +214,7 @@ test.describe('ModelPicker fallback registry', () => {
   // A 1M pick is stored as its CLI value ('sonnet[1m]'). The active-row match
   // used to strip '[1m]' first and check the plain 'Sonnet' row, so the user saw
   // the 200K model selected and picking it "again" really switched to 200K.
-  // Runs before the Haiku switch below, which leaves the session as it found it.
+  // The tests below answer their switches without saving, so nothing else writes this pick.
   test('a 1M pick is the checked row after a reload', async ({ page }) => {
     const rowNamed = (picker: import('@playwright/test').Locator, name: string) =>
       picker.locator('.model-picker-col-models .model-picker-row')
@@ -215,6 +239,7 @@ test.describe('ModelPicker fallback registry', () => {
   })
 
   test('Switch in fallback mode sends the legacy alias id', async ({ page }) => {
+    await answerSwitch(page, 'model')
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
 
@@ -249,8 +274,8 @@ test.describe('ModelPicker CLI catalog', () => {
     const input = await openSessionPanel(page)
     const picker = await openModelPicker(page, input)
 
-    const modelNames = await picker.locator('.model-picker-col-models .model-picker-row-name').allTextContents()
-    expect(modelNames).toEqual([
+    // Retried: the picker draws the static rows until the catalog fetch answers.
+    await expect(picker.locator('.model-picker-col-models .model-picker-row-name')).toHaveText([
       'Haiku 4.5',
       'Sonnet 5',
       'claude-fable-5 1M',
@@ -260,8 +285,7 @@ test.describe('ModelPicker CLI catalog', () => {
       'Opus 5 1M',
     ])
 
-    const effortNames = await picker.locator('.model-picker-col-effort .model-picker-row-name').allTextContents()
-    expect(effortNames).toEqual(['Low', 'Medium', 'High', 'X-High', 'Max'])
+    await expect(picker.locator('.model-picker-col-effort .model-picker-row-name')).toHaveText(['Low', 'Medium', 'High', 'X-High', 'Max'])
 
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-strength-order.png') })
   })
@@ -302,6 +326,7 @@ test.describe('ModelPicker CLI catalog', () => {
   })
 
   test('Switch sends the catalog row VALUE (full provider ID) verbatim', async ({ page }) => {
+    await answerSwitch(page, 'model')
     await interceptCatalog(page, CLI_CATALOG)
     // Live = opus[1m] (the disabled row) so Fable is switchable.
     await interceptLiveSettings(page, 'global.anthropic.claude-opus-4-8[1m]')
@@ -366,6 +391,7 @@ test.describe('ModelPicker CLI catalog', () => {
   })
 
   test('GPT live capabilities enable all effort levels and use configured xhigh', async ({ page }) => {
+    await answerSwitch(page, 'effort')
     const gptCatalog = {
       source: 'cli',
       live: true,
@@ -402,6 +428,7 @@ test.describe('ModelPicker CLI catalog', () => {
   })
 
   test('custom model input sends an out-of-catalog ID verbatim (terminal /model parity)', async ({ page }) => {
+    await answerSwitch(page, 'model')
     await interceptCatalog(page, CLI_CATALOG)
     await interceptLiveSettings(page, 'global.anthropic.claude-fable-5')
 
@@ -490,7 +517,7 @@ test.describe('ModelPicker requested before the session loads', () => {
 
     await presetPanelView(page)
     await page.goto('/')
-    const taskItem = page.locator('.todo-panel-item', { hasText: 'Model switch test task' }).first()
+    const taskItem = page.locator('.todo-panel-item', { hasText: TASK_TITLE }).first()
     await expect(taskItem).toBeVisible({ timeout: 15_000 })
     await taskItem.click()
     const input = page.locator(`${REAL_PANEL} .chat-input-textarea`)

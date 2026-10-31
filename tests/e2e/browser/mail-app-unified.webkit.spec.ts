@@ -3,7 +3,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
 import net from 'node:net'
 import { expect, test } from './shortcut-test-fixture'
-import { type Locator, type Page } from '@playwright/test'
+import { devices, type Locator, type Page } from '@playwright/test'
 
 /**
  * The merged row's account label, measured in WebKit at the widths this console is actually used at.
@@ -38,7 +38,7 @@ let output = ''
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(420_000)
-test.use({ browserName: 'webkit', viewport: { width: 1280, height: 800 } })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent, viewport: { width: 1280, height: 800 } })
 
 async function reservePort(): Promise<number> {
   const server = net.createServer()

@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises'
-import { expect, test, type Page } from '@playwright/test'
+import { devices, expect, test, type Page } from '@playwright/test'
 import {
   HARBOUR,
   MARINA,
@@ -28,7 +28,7 @@ import {
 const SHOT_DIR = '/tmp/mail-sidebar-ux/round3'
 
 test.setTimeout(420_000)
-test.use({ browserName: 'webkit', viewport: { width: 1280, height: 800 } })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent, viewport: { width: 1280, height: 800 } })
 test.describe.configure({ mode: 'serial' })
 
 const server = new MailFixtureServer()

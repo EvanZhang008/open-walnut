@@ -4,9 +4,9 @@
  * settings-layout.spec.ts: both engines, real nav clicks, writes intercepted.
  */
 import { routeCosts } from './usage-costs-fixture'
-import { test, expect, type Page, type Request } from '@playwright/test'
+import { devices, test, expect, type Page, type Request } from '@playwright/test'
 
-if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit' })
+if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.setTimeout(120_000)
 
 const NAV = (id: string) => `settings-nav-${id}`

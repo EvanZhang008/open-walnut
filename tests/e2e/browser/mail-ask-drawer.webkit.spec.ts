@@ -24,7 +24,7 @@
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { devices, expect, test, type Locator, type Page } from '@playwright/test'
 import { draftCwdPill, draftTaskMenu, openDraftSettings, draftSend } from './draft-helpers'
 import { MailFixtureServer, folderRow, openMail, shoot, showAllMail } from './mail-review-helpers'
 
@@ -44,7 +44,7 @@ const SUMMARIZE = 'Summarize with Walnut'
 const DRAFT_REPLY = 'Draft a reply with Walnut'
 const ASK = 'Ask Walnut about this…'
 
-test.use({ browserName: 'webkit', viewport: { width: 1280, height: 800 } })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent, viewport: { width: 1280, height: 800 } })
 test.describe.configure({ mode: 'default' })
 test.setTimeout(420_000)
 

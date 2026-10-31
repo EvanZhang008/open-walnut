@@ -158,6 +158,8 @@ test.describe('one attempt, one state, whichever mount shows it', () => {
     await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable'), signedOut('signbox', 'Sign box')], allTasks: true })
     await expandSystemAttention(page)
     await expect(row(page, 'signbox')).toBeVisible({ timeout: 20_000 })
+    // The card can come before the task list: read the rows once they are there.
+    await expect(page.locator('.todo-panel .todo-panel-item').first()).toBeVisible({ timeout: 20_000 })
     const tasksState = () => page.locator('.todo-panel .todo-panel-item').evaluateAll((els) =>
       els.map((e) => `${e.getAttribute('data-task-id')}|${e.className}`))
     const before = await tasksState()

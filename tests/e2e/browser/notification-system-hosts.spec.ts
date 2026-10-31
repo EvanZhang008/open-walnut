@@ -17,7 +17,7 @@
  */
 import fs from 'node:fs'
 import { test, expect, type Locator } from '@playwright/test'
-import { HINTS, anyBanner, banner, connected, failed, isolatePrefs, resetServerHostFixture, routeHealth, row } from './host-problems-helpers'
+import { HINTS, anyBanner, banner, connected, expandSystemAttention, failed, isolatePrefs, resetServerHostFixture, routeHealth, row } from './host-problems-helpers'
 import { hostRow, loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
   FIXTURE_ORDER, bpSetup, closePanel, errorsBadge, expectTasksCard, goRail, healthyGitSync, hostErrorRecord, maxCards, openProblems,
@@ -264,6 +264,7 @@ test.describe('this machine\'s Claude Code leads the problems (f)', () => {
   test('NSH-f: the Claude Code card leads All and Errors only while the local notice shows, and counts once on the Errors badge; System never holds it', async ({ page, browserName }) => {
     await page.setViewportSize({ width: 1280, height: 800 })
     const h = await bpSetup(page, { hosts: [connected('devbox', 'Dev box'), failed('netbox', 'Net box', 'unreachable')], local: 'sign-in' })
+    await expandSystemAttention(page)
     await expect(banner(page).locator('[data-testid="setup-banner-sign-in"]')).toBeVisible({ timeout: 20_000 })
     await openProblems(page)
     const local = panelLocalCard(page)

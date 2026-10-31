@@ -4,14 +4,14 @@
  * unsubscribe checklist; no horizontal overflow at the default 336px column; every overlay inside the
  * viewport.
  */
-import { expect, test, type Page } from '@playwright/test'
+import { devices, expect, test, type Page } from '@playwright/test'
 import {
   ALL_INBOXES, MARINA, ROW, fileHash, getGroups, groupLine, mailRow, markReadLog, openGroupLine, openGroupMenu,
   openGrouped, resetLogs, startGroupsFixture, unsubLog, waitLabeled,
 } from './mail-grouping-helpers'
 import { shoot, type MailFixture, type MailFixtureServer } from './mail-review-helpers'
 
-test.use({ browserName: 'webkit' })
+test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(300_000)
 
