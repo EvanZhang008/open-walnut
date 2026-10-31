@@ -198,9 +198,19 @@ function moved(before: Record<string, Box>, after: Record<string, Box>): string[
   return out
 }
 
-/** Two frames for React and the row's fit observer, then a beat for its re-measure. */
+/**
+ * Two frames for React and the row's fit observer, the column strip's own slide or
+ * scale-in (auto-animate on the columns, up to 480 ms) over, then a beat for the
+ * row's re-measure. A read taken while a column still scales in is a few px off
+ * whatever the record does (2026-10-31, Mac WebKit: Files at 807 and 812 before the
+ * record, 804 at rest, on a fast machine that read the row 100 ms after the open).
+ */
 async function settle(page: Page) {
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  await expect.poll(() => page.evaluate(() => document.getAnimations().filter((a) => {
+    const target = (a.effect as KeyframeEffect | null)?.target
+    return a.playState === 'running' && !!target?.parentElement?.classList.contains('main-page-sessions-area')
+  }).length), { timeout: 5_000, message: 'the column strip comes to rest' }).toBe(0)
   await page.waitForTimeout(250)
 }
 
@@ -523,6 +533,15 @@ async function openSeededFromTaskRow(page: Page, seeded: { sid: string; taskId: 
   await expect(task).toBeVisible({ timeout: 20_000 })
   await task.locator('.todo-item-title').click()
   const panel = column(page, seeded.sid)
+  // The seed made the task through the API, and the page hears that its session was attached a
+  // moment after the record exists: a click before that focuses the task and opens nothing
+  // (seen in WebKit, 2026-10-31: the server's task named the session, no column opened). Click
+  // the row again once (beside the title, which would now rename the focused task).
+  if (!(await panel.isVisible().catch(() => false))) {
+    await expect(panel).toBeVisible({ timeout: 5_000 }).catch(async () => {
+      await task.click({ position: { x: 4, y: 4 } })
+    })
+  }
   await expect(panel).toBeVisible({ timeout: 20_000 })
   return panel
 }
@@ -560,6 +579,8 @@ test('a click aimed at Files while the session record loads opens Files', async 
     const files = panel.locator('button[data-header-id="files"]')
     await expect(files).toBeVisible()
     await expect.poll(() => hold.held(), { message: 'the record is still on its way while the person aims' }).toBeGreaterThan(0)
+    // Aim at the row at rest: the column scales in when it opens, record or not.
+    await settle(page)
     const before = await rowBoxes(panel)
     const box = (await files.boundingBox())!
     const aim = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
@@ -810,6 +831,7 @@ test('a record that fails to load leaves the chips in place, saying why they can
     const fork = panel.getByRole('button', { name: 'Fork session into a child task' })
     await expect(fork).toBeVisible()
     await expect(panel.getByTestId('session-board-chip')).toBeVisible()
+    await settle(page)
     const before = await rowBoxes(panel)
     // The panel retries a failed read a few times, then gives up on it.
     await expect(fork).toHaveAccessibleDescription("Fork is unavailable because this session's details did not load", { timeout: 30_000 })
