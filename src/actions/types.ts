@@ -25,9 +25,8 @@ export interface ActionResult {
    * How the RUN should be recorded when this action is a routine's init processor.
    *
    * Omitted (the default) means "ok": `invoke:false` then simply hands `content`
-   * to the agent as text, which is what a screenshot action's "screen unchanged"
-   * does. `'skipped'` is stronger — it REFUSES the fire, so the executor never
-   * runs and no session is minted (an init processor is the only place that can
+   * to the agent as text. `'skipped'` is stronger: it REFUSES the fire, so the
+   * executor never runs and no session is minted (an init processor is the only place that can
    * decline before that happens; Inbox Triage's active-hours window is the first
    * user). `'error'` fails the run and engages the engine's error backoff.
    *

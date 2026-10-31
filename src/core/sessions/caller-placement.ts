@@ -56,8 +56,7 @@
  * the task beside its parent's folder when it takes the create.
  */
 
-import path from 'node:path';
-import { CLOUD_MODE, PROJECTS_MEMORY_DIR } from '../../constants.js';
+import { CLOUD_MODE } from '../../constants.js';
 import { bus, EventNames } from '../event-bus.js';
 import { isCompanion } from '../server-role.js';
 import { log } from '../../logging/index.js';
@@ -436,24 +435,33 @@ export async function createTimeCwd(
   if (req.launch_cwd !== undefined) return req.launch_cwd;
   const cwd = caller.session.cwd;
   if (!cwd || !sameProject(project, caller.task.project) || caller.session.host !== defaultHost) return undefined;
-  const memoryDir = path.join(PROJECTS_MEMORY_DIR, (project || 'inbox').toLowerCase());
-  return cwd === meta?.default_cwd || cwd === memoryDir ? undefined : cwd;
+  const { isFallbackFolder } = await import('./task-dir-place.js');
+  if (cwd === meta?.default_cwd || await isFallbackFolder(cwd, caller.session.host)) return undefined;
+  return cwd;
 }
+
+
 
 /**
  * The host + cwd pair a start inherits from its caller, or undefined. Applies
  * only to a worker starting another task of its own project that names neither
  * and has no cwd of its own (task / parent chain), so an explicit or recorded
- * place always wins and the pair never splits across machines.
+ * place always wins and the pair never splits across machines. A caller whose
+ * folder is only its own task directory gives no cwd: the start takes the new
+ * task's own directory on that host.
  */
 export async function inheritedLaunchPair(
   callerSid: string | undefined,
   task: { id: string; project?: string },
-): Promise<{ host: string; cwd: string } | undefined> {
+): Promise<{ host: string; cwd?: string } | undefined> {
   const caller = await resolveCallerPlacement(callerSid).catch(() => undefined);
   if (caller?.kind !== 'worker' || !caller.session.cwd) return undefined;
   if (caller.task.id === task.id || !sameProject(task.project, caller.task.project)) return undefined;
   const host = caller.session.host;
+  const { isFallbackFolder } = await import('./task-dir-place.js');
+  // A caller in its own task directory hands on its host only: the new task works
+  // in its own directory there, never in the caller's (task-launch-plan.ts).
+  const ownDirOnly = await isFallbackFolder(caller.session.cwd, host);
   if (host) {
     const { getConfig } = await import('../config-manager.js');
     const entry = (await getConfig()).hosts?.[host];
@@ -462,7 +470,7 @@ export async function inheritedLaunchPair(
       return undefined;
     }
   }
-  return { host, cwd: caller.session.cwd };
+  return ownDirOnly ? { host } : { host, cwd: caller.session.cwd };
 }
 
 /**

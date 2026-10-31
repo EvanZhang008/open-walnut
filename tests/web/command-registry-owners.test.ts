@@ -76,7 +76,6 @@ function skill(name: string): SkillInfo {
     location: `/skills/${name}/SKILL.md`,
     content: '',
     eligible: true,
-    enabled: true,
     hasReferences: false,
   }
 }

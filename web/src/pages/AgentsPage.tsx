@@ -13,7 +13,7 @@ type FilterTab = 'all' | 'builtin' | 'config';
 const isConsoleAgent = (a: AgentDefinition) => a.id === 'general' || a.console === true;
 
 export function AgentsPage() {
-  const { agents, availableModels, skills, loading, error, create, update, remove, clone } = useAgents();
+  const { agents, loading, error, create, update, remove } = useAgents();
   const [filter, setFilter] = usePersistentState<FilterTab>(
     'walnut-agents-page-filter', 'all', oneOf(['all', 'builtin', 'config']),
   );
@@ -99,8 +99,6 @@ export function AgentsPage() {
           <AgentForm
             agent={editingAgent}
             cloneFrom={cloningFrom}
-            availableModels={availableModels}
-            skillsMeta={skills}
             onSave={handleSave}
             onCancel={handleCancel}
           />

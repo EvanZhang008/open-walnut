@@ -1,5 +1,3 @@
-import path from 'node:path';
-import { PROJECTS_MEMORY_DIR } from '../../constants.js';
 import { getProjectMetadata } from '../task-manager.js';
 import { QuickStartError } from './quick-start.js';
 import { recordedCwd } from './task-start.js';
@@ -16,17 +14,6 @@ export function requireFrozenWorkspaceReady(task: Task, params: Pick<SessionStar
   if (task.workspace && (params.cwd === undefined || belongsToWorkspace(task.workspace, params.cwd)) && !isLaunchReady(task.workspace)) {
     throw new QuickStartError('This task workspace is not ready. Open the task, wait for its workspace, then review this action again.', 409);
   }
-}
-
-/** The folder a task with no folder of its own starts in on this machine; its start makes it. */
-export function taskMemoryFolder(project: string | undefined): string {
-  return path.join(PROJECTS_MEMORY_DIR, (project || 'inbox').toLowerCase());
-}
-
-/** A folder strictly inside PROJECTS_MEMORY_DIR (a project name with `..` lands outside it). */
-export function insideMemoryFolders(dir: string): boolean {
-  const rel = path.relative(PROJECTS_MEMORY_DIR, dir);
-  return !!rel && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
 }
 
 /**
@@ -72,22 +59,30 @@ export async function resolveTaskLaunchReadOnly(task: Task, params: SessionStart
     const entry = (await getConfig()).hosts?.[host];
     if (!entry || entry.enabled === false) throw new QuickStartError(`Unknown host: ${host}`, 400);
   }
-  cwd ||= pair?.cwd || (named ? defaultCwdOnHost(metadata, host) : metadata?.default_cwd);
+  // A host the caller handed on without a folder counts as named: only a default on it applies.
+  const onHost = named || (!!pair && !pair.cwd);
+  cwd ||= pair?.cwd || (onHost ? defaultCwdOnHost(metadata, host) : metadata?.default_cwd);
   // A named remote host with no folder of this task's there: the task's own directory on it.
   let createTaskDir = false;
-  if (!cwd && named && host) {
+  if (!cwd && onHost && host) {
     const { taskDirForHost } = await import('./task-dir-place.js');
     const dir = await taskDirForHost(task.id, host).catch(() => null);
     if (dir) { cwd = dir; createTaskDir = true; }
   }
-  let createLocalDirectory = false;
   if (!cwd) {
     if (host) throw new QuickStartError(`Task ${task.id} needs a cwd on host "${host}". Pass cwd or set project default_cwd.`, 400);
-    cwd = taskMemoryFolder(task.project);
-    createLocalDirectory = true;
+    // No folder anywhere: the task's own directory on this Mac (never the memory tree).
+    const { taskDirForHost } = await import('./task-dir-place.js');
+    const dir = await taskDirForHost(task.id, '__local__');
+    if (!dir) throw new QuickStartError(`Task ${task.id} has no folder: pass cwd.`, 400);
+    cwd = dir;
+    createTaskDir = true;
+  } else if (!host && !createTaskDir) {
+    // A start pinned to the folder this plan named before (an org contact's draft).
+    const { taskDirForHost } = await import('./task-dir-place.js');
+    if (cwd === await taskDirForHost(task.id, '__local__')) createTaskDir = true;
   }
-  if (!host && cwd === taskMemoryFolder(task.project)) createLocalDirectory = true;
   return { taskId: task.id, project: task.project, cwd, host, model, createTaskDir,
-    mode: params.mode, ...(params.effort ? { effort: params.effort } : {}), engine: normalizeEngine(params.engine), createLocalDirectory,
+    mode: params.mode, ...(params.effort ? { effort: params.effort } : {}), engine: normalizeEngine(params.engine),
     message: params.message?.trim() || task.description || `Working on task: ${task.title}` };
 }

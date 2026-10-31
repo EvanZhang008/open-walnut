@@ -1,6 +1,6 @@
 /* Section-level styles for the add-on, machine and diagnostics panes
    (Plugins, Calendar, macOS Access, Backup, Phones & Cloud, Remote Hosts,
-   Audio Capture, Usage, Suggestion Accuracy, Screen Tracking, Bug Report).
+   Audio Capture, Usage, Suggestion Accuracy, Bug Report).
    Colors only through tokens. */
 
 .settings-addons-mono {
@@ -167,16 +167,6 @@ a.settings-button { text-decoration: none; }
   box-shadow: none;
   margin: 0;
 }
-
-/* Screen Tracking */
-.settings-addons-catbar {
-  display: flex;
-  border-radius: 6px;
-  overflow: hidden;
-  height: 24px;
-  width: 100%;
-}
-.settings-addons-flip { transform: rotate(180deg); }
 
 /* Row wrappers that keep a testid (plugin account, config, app rows): a plain
    block with no box, so its rows are still rows of the surrounding group. The

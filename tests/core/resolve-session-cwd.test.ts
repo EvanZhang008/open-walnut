@@ -3,8 +3,9 @@
  *
  * Priority chain:
  *   ① explicit param → ② task.cwd → ③ parent chain walk → ④ project metadata
- *   (registry default_cwd) → ⑤ project memory dir (single level: memory/projects/<proj>,
- *   'inbox' for a task with no project)
+ *   (registry default_cwd) → ⑤ the task's own directory (task-dir-place.ts
+ *   localFallbackFolder; until 2026-10-31 a memory/projects/<proj> folder, which
+ *   left an empty folder in the memory tree for every project)
  *
  * The chain itself lives in two lock-stepped copies (resolveSessionContext in
  * claude-code-session.ts) and is not exported, so
@@ -16,6 +17,7 @@ import path from 'node:path'
 import { WALNUT_HOME, PROJECTS_MEMORY_DIR } from '../../src/constants.js'
 import { addTask, getTask, updateTask, setProjectMetadata, getProjectMetadata } from '../../src/core/task-manager.js'
 import type { Task } from '../../src/core/types.js'
+import { localFallbackFolder, taskDirForHost } from '../../src/core/sessions/task-dir-place.js'
 
 /** Priority 2–3: task.cwd, then walk the parent chain (cycle-guarded). */
 async function cwdFromTaskChain(task: Task): Promise<string | undefined> {
@@ -30,19 +32,13 @@ async function cwdFromTaskChain(task: Task): Promise<string | undefined> {
   return undefined
 }
 
-/** Priority 5: the project memory dir, created on demand. One level now. */
-function projectMemoryDir(project: string | undefined): string {
-  const dir = path.join(PROJECTS_MEMORY_DIR, (project || 'inbox').toLowerCase())
-  fs.mkdirSync(dir, { recursive: true })
-  return dir
-}
 
 async function resolveCwd(task: Task): Promise<string> {
   const fromChain = await cwdFromTaskChain(task)
   if (fromChain) return fromChain
   const metadata = await getProjectMetadata(task.project || '')
   if (metadata?.default_cwd) return metadata.default_cwd as string
-  return projectMemoryDir(task.project)
+  return localFallbackFolder(task.id)
 }
 
 describe('session cwd resolution', () => {
@@ -57,37 +53,29 @@ describe('session cwd resolution', () => {
     try { fs.rmSync(WALNUT_HOME, { recursive: true, force: true }) } catch { /* ok */ }
   })
 
-  it('Priority 5: falls back to the single-level project memory dir', async () => {
+  it("Priority 5: falls back to the task's own directory, even when a legacy project memory folder exists", async () => {
     const { task } = await addTask({ title: 'test cwd resolution', project: 'TestProj' })
     expect(task.cwd).toBeUndefined()
+    const legacy = path.join(PROJECTS_MEMORY_DIR, 'testproj')
+    ensureDir(legacy)
 
-    const projectMemDir = path.join(PROJECTS_MEMORY_DIR, 'testproj')
-    ensureDir(projectMemDir)
-    fs.writeFileSync(path.join(projectMemDir, 'MEMORY.md'), '---\nname: TestProj\ndescription: test\n---\n')
-
-    expect(await resolveCwd(task)).toBe(projectMemDir)
+    const dir = await resolveCwd(task)
+    expect(dir).toBe(await taskDirForHost(task.id, '__local__'))
+    expect(fs.existsSync(dir)).toBe(true)
   })
 
-  it('Priority 5: always resolves — creates the memory dir if it does not exist', async () => {
-    const { task } = await addTask({ title: 'test no memory dir', project: 'NoProj' })
-
-    const expectedDir = path.join(PROJECTS_MEMORY_DIR, 'noproj')
-    expect(fs.existsSync(expectedDir)).toBe(false)
-
-    expect(await resolveCwd(task)).toBe(expectedDir)
-    expect(fs.existsSync(expectedDir)).toBe(true)
+  it('Priority 5: makes no folder in the memory tree, for a project or the Inbox', async () => {
+    fs.rmSync(PROJECTS_MEMORY_DIR, { recursive: true, force: true })
+    for (const project of ['NoProj', '']) {
+      const { task } = await addTask({ title: 'loose thought', project })
+      const dir = await resolveCwd(task)
+      expect(dir.startsWith(PROJECTS_MEMORY_DIR)).toBe(false)
+      expect(fs.existsSync(dir)).toBe(true)
+    }
+    expect(fs.existsSync(PROJECTS_MEMORY_DIR)).toBe(false)
   })
 
-  it("Priority 5: an Inbox task (no project) resolves to the 'inbox' memory dir", async () => {
-    const { task } = await addTask({ title: 'loose thought' })
-    expect(task.project).toBe('')
-
-    const expectedDir = path.join(PROJECTS_MEMORY_DIR, 'inbox')
-    expect(await resolveCwd(task)).toBe(expectedDir)
-    expect(fs.existsSync(expectedDir)).toBe(true)
-  })
-
-  it('Priority 4: the registry default_cwd wins over the memory dir', async () => {
+  it('Priority 4: the registry default_cwd wins over the fallback folder', async () => {
     const { task } = await addTask({ title: 'metadata cwd', project: 'MetaProj' })
     await setProjectMetadata('MetaProj', { default_cwd: '/workspace/meta' })
 

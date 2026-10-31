@@ -8,6 +8,7 @@
  * is unknown and callers name only `$WALNUT_TASK_DIR`.
  */
 import os from 'node:os'
+import path from 'node:path'
 import { taskDirPath, taskDirRoot } from '../../lib/task-dir.js'
 
 const isLocal = (host: string | null | undefined) => !host || host === '__local__'
@@ -67,4 +68,63 @@ export async function ensureTaskDirOnHost(taskId: string, host?: string | null):
       ? { path: res.path, host: host! }
       : { error: res?.error || 'the host did not make the task directory', status: 502 }
   })
+}
+
+/**
+ * The folder a local start uses when the task, its parents and its project name none:
+ * the task's own directory, made now. It used to be `memory/projects/<project>/`, which
+ * left an empty folder in the user's memory tree for every project a session ever
+ * started in, test runs' projects included (2026-10-31: "zz test heron 141057" and
+ * twenty more on the Memory page). tests/core/memory-tree-writers.test.ts keeps every
+ * start path off the memory tree.
+ */
+export async function localFallbackFolder(taskId: string): Promise<string> {
+  const made = await ensureTaskDirOnHost(taskId, '__local__')
+  if ('error' in made) throw new Error(`Task ${taskId} has no folder and its task directory could not be made: ${made.error}`)
+  return made.path
+}
+
+/**
+ * A folder a session got only because its task named none: a task's own directory
+ * or, for sessions started before 2026-10-31, a project's memory folder. Nobody picks
+ * it again: another task never takes it over (a worker filed by a lead in its own
+ * directory would work in the lead's), and the launcher never offers it as a
+ * frequent directory.
+ */
+export async function isFallbackFolder(cwd: string, host: string | null | undefined): Promise<boolean> {
+  const { PROJECTS_MEMORY_DIR } = await import('../../constants.js')
+  const local = isLocal(host)
+  if (local && isMemoryProjectFolder(cwd, PROJECTS_MEMORY_DIR)) return true
+  const probe = await taskDirForHost('probe', local ? '__local__' : host).catch(() => null)
+  return !!probe && path.posix.dirname(cwd.replace(/\/+$/, '')) === path.posix.dirname(probe)
+}
+
+/** The same test with no daemon to ask, for this Mac only (a synchronous reader). */
+export function isLocalFallbackFolder(cwd: string, projectsMemoryDir: string): boolean {
+  if (isMemoryProjectFolder(cwd, projectsMemoryDir)) return true
+  return path.dirname(cwd.replace(/\/+$/, '')) === localTaskDirRoot()
+}
+
+/** The tree itself or one project's folder in it; a folder the user keeps deeper is theirs. */
+function isMemoryProjectFolder(cwd: string, projectsMemoryDir: string): boolean {
+  const c = cwd.replace(/\/+$/, '')
+  return c === projectsMemoryDir || path.dirname(c) === projectsMemoryDir
+}
+
+/**
+ * A session whose folder is its task's own directory gets that directory back when
+ * the sweep removed it (task-dir-sweep.ts, 7 days after completion): the CLI keeps
+ * the conversation under the path, not inside the folder, so the same path resumes
+ * it. Any other gone folder stays gone (folder-gone.ts). True when it was remade.
+ */
+export async function restoreOwnTaskDir(taskId: string, cwd: string, host: string | null | undefined): Promise<boolean> {
+  if (!taskId || !cwd) return false
+  const own = await taskDirForHost(taskId, host).catch(() => null)
+  if (!own || cwd.replace(/\/+$/, '') !== own) return false
+  if (isLocal(host)) {
+    const fs = await import('node:fs')
+    if (fs.existsSync(own)) return false
+  }
+  const made = await ensureTaskDirOnHost(taskId, host).catch(() => null)
+  return !!made && !('error' in made)
 }

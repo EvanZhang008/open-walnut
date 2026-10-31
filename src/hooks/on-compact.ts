@@ -38,9 +38,6 @@ function main(): void {
 
     // Update the session store to mark last active time — scoped to THIS session.
     updateSessionLastActive(summary.id);
-
-    // Git versioning: commits are now handled centrally by GitVersioningService
-    // in the server process. Hooks only write data files.
   } catch (err) {
     logHookError('on-compact', err);
   }

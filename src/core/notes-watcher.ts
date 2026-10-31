@@ -9,9 +9,8 @@
  * feeds binary attachments (PDF/images) to the out-of-process text extractor.
  *
  * MEMORY_DIR: memory files are written by the AI mid-conversation; each
- * change notifies git-versioning (auto-commit) and upserts the single file
- * into the search index so it is recallable within seconds, not at the next
- * 10-min sweep.
+ * change upserts the single file into the search index so it is recallable
+ * within seconds, not at the next 10-min sweep.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -73,12 +72,6 @@ export function hearWatchErrors(watcher: fs.FSWatcher, root: string): fs.FSWatch
   return watcher;
 }
 
-function notifyGitVersioning(filename: string): void {
-  import('./git-versioning.js')
-    .then(({ getGitVersioning }) => { getGitVersioning()?.notifyMemoryChange(filename); })
-    .catch(() => {});
-}
-
 export function startNotesWatcher(opts?: { semantic?: boolean }): { stop: () => void } {
   // semantic:false = structural-only mode (cloud replica / WALNUT_DISABLE_SEARCH):
   // the NOTES_DIR leg must still run there (see R14 above), but nothing feeds
@@ -114,7 +107,6 @@ export function startNotesWatcher(opts?: { semantic?: boolean }): { stop: () => 
       watchers.push(hearWatchErrors(fs.watch(MEMORY_DIR, { recursive: true }, (_event, filename) => {
         if (filename && filename.endsWith('.md')) {
           scheduleMemoryUpsert(path.join(MEMORY_DIR, filename));
-          notifyGitVersioning(filename);
         }
       }), MEMORY_DIR));
     }

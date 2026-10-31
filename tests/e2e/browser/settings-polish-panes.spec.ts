@@ -302,7 +302,7 @@ test('N3-20, N3-21, N3-22: host row shows its address, Remove sits by Edit, limi
   await page.screenshot({ path: `${SHOTS}/${ENGINE}-remote-hosts-edit.png` })
 })
 
-test('N3-23, N3-24, N3-25, N3-26: Advanced dims the SDK port, shows seconds and minutes, edges the raw config', async ({ page }) => {
+test('N3-23, N3-25, N3-26: Advanced dims the SDK port, edges the raw config', async ({ page }) => {
   await recordWrites(page)
   await openSettings(page)
   await clickNav(page, 'advanced')
@@ -312,10 +312,6 @@ test('N3-23, N3-24, N3-25, N3-26: Advanced dims the SDK port, shows seconds and 
     await expect(page.locator('.settings-row', { has: page.locator('#sdk-port') })).toHaveAttribute('aria-disabled', 'true')
     await expect(page.locator('#sdk-port')).toHaveAttribute('readonly', '')
   }
-  await page.locator('[data-testid="advanced-disclosure-git"], #advanced-git [aria-expanded]').first().click().catch(() => {})
-  const unit = (id: string) => page.locator('.settings-input-with-unit', { has: page.locator(`#${id}`) }).locator('.settings-input-unit')
-  await expect(unit('git-debounce')).toHaveText('seconds')
-  await expect(unit('git-interval')).toHaveText('minutes')
   await page.getByTestId('advanced-disclosure-raw').click()
   const pre = page.getByTestId('advanced-raw-config')
   const css = await pre.evaluate((el) => ({ pb: parseFloat(getComputedStyle(el).paddingBottom), bw: parseFloat(getComputedStyle(el).borderBottomWidth) }))

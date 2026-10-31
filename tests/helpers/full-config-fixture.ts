@@ -69,7 +69,6 @@ export function fullConfigFixture(): Record<string, unknown> {
     keep_awake: { enabled: false },
     time: { work_hours: { start: '09:00', end: '17:00', days: [1, 2, 3, 4, 5] }, meetings: { ignore: ['Acme standup'] } },
     search: { model: 'acme-embed', api_key: toolsKey },
-    git_versioning: { enabled: true, remote: `https://marina:${syncPass}@git.example.com/data.git` },
     session_hooks: { enabled: true },
     hooks: { defs: [{ id: 'notify', action: { type: 'webhook', secret: hookSecret } }] },
     self_repair: { enabled: false },

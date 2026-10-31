@@ -17,9 +17,10 @@
  *                             the skill path) and stateful-agent memory
  *                             injection (subagent-runner + cron actions).
  *   - `getAllProjectSummaries` → `file_list memory/project`.
- *   - `ensureProjectDir`    → stateful-agent creation. Only ever called with an
- *                             agent's own `memory_project`, so it does NOT
- *                             resurrect the whole legacy tree (see init.ts).
+ *   - `ensureProjectDir`    → only the write paths below. Agent create/update
+ *                             no longer calls it (an agent's `stateful` field
+ *                             is retired), so nothing resurrects the legacy
+ *                             tree (see init.ts).
  *
  * `appendProjectMemory` and `editProjectMemory` have ZERO production callers —
  * appends were rerouted to skill history in `tools/files/memory-handler.ts`, and
@@ -152,7 +153,7 @@ export function ensureProjectDir(projectPath: string): void {
   if (parts.length > 3) {
     throw new Error(`Project path "${projectPath}" exceeds max depth of 3 levels.`);
   }
-  // Path segments come from user/agent config (stateful memory_project) and
+  // Path segments come from callers' project paths and
   // project names — reject traversal and hidden-dir shapes before mkdir.
   if (parts.some((p) => p === '.' || p === '..' || p.startsWith('.') || p.includes('\\') || p.includes('\0'))) {
     throw new Error(`Project path "${projectPath}" contains an invalid segment.`);

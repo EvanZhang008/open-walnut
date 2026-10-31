@@ -68,10 +68,6 @@ function main(): void {
         error: err instanceof Error ? err.message : String(err),
       })
     }
-
-    // Git versioning: commits are now handled centrally by GitVersioningService
-    // in the server process. Hooks only write data files; the service detects
-    // changes via bus events and fs watchers, then commits with debouncing.
   } catch (err) {
     log.hook.error('on-stop hook failed', {
       error: err instanceof Error ? err.message : String(err),

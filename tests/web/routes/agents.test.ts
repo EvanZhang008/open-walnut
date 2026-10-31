@@ -73,8 +73,7 @@ describe('POST /api/agents', () => {
       id: 'test-agent',
       name: 'Test Agent',
       description: 'A test agent',
-      runner: 'embedded',
-      max_tool_rounds: 5,
+      system_prompt: 'You test things.',
     });
 
     expect(res.status).toBe(201);
@@ -86,7 +85,21 @@ describe('POST /api/agents', () => {
     const get = await request(app).get('/api/agents/test-agent');
     expect(get.status).toBe(200);
     expect(get.body.agent.name).toBe('Test Agent');
-    expect(get.body.agent.max_tool_rounds).toBe(5);
+    expect(get.body.agent.system_prompt).toBe('You test things.');
+  });
+
+  it('accepts the retired fields of the old agent loop and stores none of them', async () => {
+    const app = createApp();
+    const res = await request(app).post('/api/agents').send({
+      id: 'legacy-form', name: 'Legacy Form', runner: 'cli', model: 'made-up-model', region: 'us-west-2',
+      max_tokens: 1000, max_tool_rounds: 5, allowed_tools: ['file_read'], denied_tools: ['shell_exec'],
+      working_directory: '/tmp/x', skills: ['walnut'], provider: 'bedrock',
+      stateful: { memory_project: 'legacy/form', memory_budget_tokens: 100, memory_source: 'x' },
+    });
+    expect(res.status).toBe(201);
+    expect(Object.keys(res.body.agent).sort()).toEqual(['id', 'name', 'source']);
+    const saved = (yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as { agent: { agents: Array<Record<string, unknown>> } }).agent.agents;
+    expect(saved).toEqual([{ id: 'legacy-form', name: 'Legacy Form' }]);
   });
 
   it('rejects missing id', async () => {
@@ -120,20 +133,21 @@ describe('PATCH /api/agents/:id', () => {
     const app = createApp();
     await request(app).post('/api/agents').send({ id: 'edit-me', name: 'Original' });
 
-    const res = await request(app).patch('/api/agents/edit-me').send({ name: 'Updated', model: 'global.anthropic.claude-opus-4-6-v1' });
+    // A model (an older form sends one) is ignored, never refused.
+    const res = await request(app).patch('/api/agents/edit-me').send({ name: 'Updated', model: 'made-up-model' });
     expect(res.status).toBe(200);
     expect(res.body.agent.name).toBe('Updated');
-    expect(res.body.agent.model).toBe('global.anthropic.claude-opus-4-6-v1');
+    expect(res.body.agent.model).toBeUndefined();
   });
 
   it('creates config override when patching builtin agent', async () => {
     const app = createApp();
-    const res = await request(app).patch('/api/agents/general').send({ name: 'Custom General', max_tool_rounds: 8 });
+    const res = await request(app).patch('/api/agents/general').send({ name: 'Custom General', system_prompt: 'Be brief.' });
     expect(res.status).toBe(200);
     expect(res.body.agent.source).toBe('config');
     expect(res.body.agent.overrides_builtin).toBe(true);
     expect(res.body.agent.name).toBe('Custom General');
-    expect(res.body.agent.max_tool_rounds).toBe(8);
+    expect(res.body.agent.system_prompt).toBe('Be brief.');
 
     // Verify it persists and shows up with override flag
     const get = await request(app).get('/api/agents/general');
@@ -189,10 +203,8 @@ describe('POST /api/agents/:id/clone', () => {
     await request(app).post('/api/agents').send({
       id: 'source-agent',
       name: 'Source',
-      // Use CURRENT tool names — this asserts that cloning preserves
-      // allowed_tools, so legacy names (which load-time migration rewrites)
-      // would test the migration map instead.
-      allowed_tools: ['task_search', 'file_read'],
+      system_prompt: 'You are the source.',
+      context_sources: [{ id: 'global_memory', enabled: true }],
     });
 
     const res = await request(app).post('/api/agents/source-agent/clone').send({
@@ -202,7 +214,8 @@ describe('POST /api/agents/:id/clone', () => {
     expect(res.status).toBe(201);
     expect(res.body.agent.id).toBe('cloned-agent');
     expect(res.body.agent.name).toBe('Source (Copy)');
-    expect(res.body.agent.allowed_tools).toEqual(['task_search', 'file_read']);
+    expect(res.body.agent.system_prompt).toBe('You are the source.');
+    expect(res.body.agent.context_sources).toEqual([{ id: 'global_memory', enabled: true }]);
   });
 
   it('returns 404 when cloning nonexistent agent', async () => {
@@ -219,20 +232,10 @@ describe('POST /api/agents/:id/clone', () => {
   });
 });
 
-describe('GET /api/agents/meta/models', () => {
-  it('returns default models when config has none', async () => {
-    const app = createApp();
-    const res = await request(app).get('/api/agents/meta/models');
-
-    expect(res.status).toBe(200);
-    expect(res.body.models).toBeDefined();
-    expect(Array.isArray(res.body.models)).toBe(true);
-    expect(res.body.models.length).toBeGreaterThan(0);
-    // Should contain at least the defaults from the route
-    expect(res.body.models.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('returns config-defined models when present', async () => {
+describe('GET /api/agents/meta/models and /meta/skills', () => {
+  // Agents pick no model and no skills any more; a window on an older bundle
+  // still asks for both when it opens /agents and must get an answer, not a 404.
+  it('answer empty, even when an older config.yaml still lists models', async () => {
     const config = {
       version: 1,
       user: {},
@@ -244,10 +247,12 @@ describe('GET /api/agents/meta/models', () => {
     _resetForTest();
 
     const app = createApp();
-    const res = await request(app).get('/api/agents/meta/models');
-
-    expect(res.status).toBe(200);
-    expect(res.body.models).toEqual(['custom-model-1', 'custom-model-2']);
+    const models = await request(app).get('/api/agents/meta/models');
+    expect(models.status).toBe(200);
+    expect(models.body).toEqual({ models: [] });
+    const skills = await request(app).get('/api/agents/meta/skills');
+    expect(skills.status).toBe(200);
+    expect(skills.body).toEqual({ skills: [] });
   });
 });
 
@@ -276,19 +281,22 @@ describe('PATCH /api/agents/:id (config write-through)', () => {
     expect(cfgAgent).toBeDefined();
     expect(cfgAgent.source).toBe('config');
 
-    // Update it
+    // Update it (the model it sends is ignored)
     const res = await request(app).patch('/api/agents/cfg-agent').send({ model: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', name: 'Updated Config Agent' });
     expect(res.status).toBe(200);
-    expect(res.body.agent.model).toBe('us.anthropic.claude-haiku-4-5-20251001-v1:0');
+    expect(res.body.agent.model).toBeUndefined();
+    expect(res.body.agent.runner).toBeUndefined();
     expect(res.body.agent.name).toBe('Updated Config Agent');
     expect(res.body.agent.source).toBe('config');
 
-    // Verify persisted to config.yaml
+    // Verify persisted to config.yaml: the new name, and the retired fields the
+    // user's file held left exactly as they were (read by nothing)
     const raw = await fs.readFile(CONFIG_FILE, 'utf-8');
     const savedConfig = yaml.load(raw) as typeof config;
     const savedAgent = savedConfig.agent.agents[0];
-    expect(savedAgent.model).toBe('us.anthropic.claude-haiku-4-5-20251001-v1:0');
     expect(savedAgent.name).toBe('Updated Config Agent');
+    expect(savedAgent.model).toBe('global.anthropic.claude-opus-4-6-v1');
+    expect(savedAgent.runner).toBe('embedded');
   });
 
   it('creates config override when patching builtin via config write-through', async () => {
@@ -301,13 +309,6 @@ describe('PATCH /api/agents/:id (config write-through)', () => {
     expect(res.body.agent.description).toBe('customized');
   });
 
-  it('rejects update with invalid model', async () => {
-    const app = createApp();
-    await request(app).post('/api/agents').send({ id: 'model-test', name: 'Model Test' });
-    const res = await request(app).patch('/api/agents/model-test').send({ model: 'made-up-model' });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toContain('not in the available models list');
-  });
 });
 
 describe('Builtin agent override lifecycle', () => {
@@ -315,7 +316,7 @@ describe('Builtin agent override lifecycle', () => {
     const app = createApp();
 
     // Patch builtin → creates override
-    const patch = await request(app).patch('/api/agents/general').send({ name: 'Custom General', max_tool_rounds: 8 });
+    const patch = await request(app).patch('/api/agents/general').send({ name: 'Custom General', system_prompt: 'Custom.' });
     expect(patch.status).toBe(200);
     expect(patch.body.agent.overrides_builtin).toBe(true);
 
@@ -338,10 +339,10 @@ describe('Builtin agent override lifecycle', () => {
     await request(app).patch('/api/agents/general').send({ name: 'V1' });
 
     // Second patch → updates existing override
-    const res = await request(app).patch('/api/agents/general').send({ name: 'V2', max_tool_rounds: 12 });
+    const res = await request(app).patch('/api/agents/general').send({ name: 'V2', description: 'second' });
     expect(res.status).toBe(200);
     expect(res.body.agent.name).toBe('V2');
-    expect(res.body.agent.max_tool_rounds).toBe(12);
+    expect(res.body.agent.description).toBe('second');
 
     // Verify no duplicate in list
     const list = await request(app).get('/api/agents');

@@ -31,11 +31,12 @@ const EXPECTED_IDS = [
   'providers',
   // Diagnostics group. No `time` row: time tracking's only UI is the walnut-time
   // Plugin App, and the duplicate Settings section was deleted in 95473094.
-  // `timeline` below is a different feature (the screen-activity Life Tracker,
-  // labelled Screen Tracking) and stayed.
-  'usage', 'suggest-accuracy', 'timeline', 'bug-report',
+  // No `timeline` row either: the screen-activity Life Tracker (Screen Tracking)
+  // was removed on 2026-10-31.
+  // Page Use (2026-10-31): local counts of which pages and panes get opened.
+  'usage', 'page-use', 'suggest-accuracy', 'bug-report',
 ]
-const DIAGNOSTICS_IDS = ['usage', 'suggest-accuracy', 'timeline', 'bug-report']
+const DIAGNOSTICS_IDS = ['usage', 'page-use', 'suggest-accuracy', 'bug-report']
 
 describe('core settings registry', () => {
   it('keeps one owner-scoped source of truth for page and navigation order', () => {

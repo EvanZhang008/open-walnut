@@ -1062,36 +1062,22 @@ export interface ContextSourceConfig {
   token_budget?: number;  // override default budget
 }
 
-export interface AgentStatefulConfig {
-  /** Project memory path (e.g. "life/tracker"). */
-  memory_project: string;
-  /** Max tokens of memory injected per call. Default: 4000. */
-  memory_budget_tokens?: number;
-  /** Source tag for memory writes. Default: agent id. */
-  memory_source?: string;
-}
-
+/**
+ * An agent is a persona for a Claude Code session (an Ask lane, a subagent-runner
+ * dispatch, a hook's run_agent): its name, prompt and context. Every run is a
+ * normal session, so the session decides model, tools and directory. Older
+ * definitions may still carry runner, model, provider, region, max_tokens,
+ * max_tool_rounds, allowed_tools, denied_tools, working_directory, skills or
+ * stateful (fields of the removed in-process agent loop): they load and are
+ * ignored (agent-registry.ts, LIVE_AGENT_FIELDS).
+ */
 export interface AgentDefinition {
   id: string;
   name: string;
   description?: string;
-  runner: 'embedded' | 'cli';
-  model?: string;
-  /** Provider name — maps to config.providers[name]. Falls back to subagent default. */
-  provider?: string;
-  region?: string;
-  max_tokens?: number;
-  max_tool_rounds?: number;
   system_prompt?: string;
-  denied_tools?: string[];
-  allowed_tools?: string[];
-  working_directory?: string;
   /** Context sources to inject when invoked with a task. */
   context_sources?: ContextSourceConfig[];
-  /** Stateful mode: agent accumulates persistent memory across invocations. */
-  stateful?: AgentStatefulConfig;
-  /** Selective list of skill directory names to inject into this agent's prompt. */
-  skills?: string[];
   /** True for agents that appear in the main chat console (AgentSwitcher). */
   console?: boolean;
   source: 'builtin' | 'config' | 'plugin';
@@ -1117,9 +1103,9 @@ export interface AgentRun {
 }
 
 export interface AgentConfig {
-  /** Retired (nothing reads them); typed only because an older leader's config copy still carries them. */
-  region?: string;
-  maxTokens?: number;
+  // Retired and read by nothing: `region`, `maxTokens`, `available_models` (the
+  // agent form's model list). Older config.yaml files and an older leader's
+  // config copy still carry them (replication/config-allowlist.ts admits them).
   agents?: Omit<AgentDefinition, 'source'>[];
   /**
    * Triage throttling. Turn-complete triage trailing-debounces by `debounce_minutes`
@@ -1133,9 +1119,6 @@ export interface AgentConfig {
     debounce_minutes?: number;
     notify_mode?: 'off' | 'buffered' | 'realtime';
   };
-  /** Predefined model IDs shown in the agent form dropdown. Supports both string[] (legacy Bedrock IDs)
-   *  and ModelEntry[] (new multi-provider format). */
-  available_models?: string[] | import('../model/providers/types.js').ModelEntry[];
   /** Default reasoning-effort passed as --effort to claude CLI sessions (low/medium/high/max).
    *  Unset = let the CLI/API pick its default (resolves to 'high'). */
   session_effort?: SessionEffort;
@@ -1377,9 +1360,8 @@ export interface Config {
      *  (core/host-server/, docs/plan/walnut-servers-everywhere.md). Off unless enabled. */
     server?: {
       enabled?: boolean;
-      /** @deprecated Not read: a host server is the compiled walnut file, so nothing is
-       *  built on the host. Older configs carry it; its secrets stay masked (config-redact.ts). */
-      build_env?: Record<string, string>;
+      // `build_env` is retired (a host server is the compiled walnut file, nothing is
+      // built on the host). Older configs carry it; its secrets stay masked (config-redact.ts).
       /** The host's own tunnel, so a browser anywhere can open it. */
       expose?: {
         enabled?: boolean;
@@ -1610,13 +1592,6 @@ export interface Config {
     };
   };
   search?: import('./embedding/types.js').EmbeddingConfig;
-  git_versioning?: {
-    enabled?: boolean;              // default: true
-    commit_debounce_ms?: number;    // default: 30000
-    push_enabled?: boolean;         // default: false
-    push_interval_ms?: number;      // default: 600000 (10 min)
-    push_on_session_end?: boolean;  // default: true
-  };
   /** @deprecated Superseded by `hooks`. `session_hooks.overrides` is still
    *  honored (merged UNDER `hooks.overrides` — the new key wins on conflict).
    *  The `session_hooks.hooks` array was never read and stays inert. */

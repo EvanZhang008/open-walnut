@@ -48,6 +48,7 @@ import { contextInspectorRouter } from './routes/context-inspector.js'
 import { registerChatRpc } from './routes/chat.js'
 import { registerSessionChatRpc } from './routes/session-chat.js'
 import { registerBrowserLogsRpc, browserLogsRouter } from './routes/browser-logs.js'
+import { pageVisitsRouter } from './routes/page-visits.js'
 import { bugReportRouter } from './routes/bug-report.js'
 import { diagnosticsRouter } from './routes/diagnostics.js'
 import { usageRouter } from './routes/usage.js'
@@ -70,7 +71,6 @@ import { createConversationsRouter } from './routes/conversations.js'
 import { createCommandsRouter } from './routes/commands.js'
 import { createSkillsRouter } from './routes/skills.js'
 import { createSlashCommandsRouter } from './routes/slash-commands.js'
-import { timelineRouter } from './routes/timeline.js'
 import { CronService } from '../core/cron/index.js'
 import os from 'node:os'
 import { CRON_FILE, IS_EPHEMERAL, LOG_DIR, PLUGIN_STORES_DIR, WALNUT_HOME } from '../constants.js'
@@ -2150,7 +2150,6 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/skills', createSkillsRouter())
   app.use('/api/slash-commands', createSlashCommandsRouter())
   app.use('/api/keep-awake', (await import('./routes/keep-awake.js')).keepAwakeRouter)
-  app.use('/api/timeline', timelineRouter)
   app.use('/api/notes', notesRouter)
   app.use('/api/notes-v2', notesV2Router)
   app.use('/api/mention-sources', mentionSourcesRouter)
@@ -2481,6 +2480,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // primary-bound stores answer 501 on a REPLICA.
   app.use('/api/v1', consoleExtrasV1Router)
   app.use('/api/browser-logs', browserLogsRouter)
+  // Local page-use counts (Settings > Page use); machine-local, never sent anywhere.
+  app.use('/api/page-visits', pageVisitsRouter)
   // One-shot diagnostic bundle (Settings → Bug Report; also curl-able).
   app.use('/api/bug-report', bugReportRouter)
   // `open-walnut doctor` report (Settings > Copy diagnostics; also curl-able).
@@ -6441,6 +6442,8 @@ export async function stopServer(): Promise<void> {
   // never hands it the lead. Bounded: never holds the shutdown up.
   leaderLoopHandle?.stop()
   leaderLoopHandle = null
+  // Visits still in memory (at most FLUSH_MS of them); bounded like every write here.
+  await (await import('../core/page-visits.js')).flushVisitsNow().catch(() => {})
   await searchCopyHandle?.stop().catch(() => {})
   searchCopyHandle = null
   await hostReplicaDoor?.close().catch(() => {})

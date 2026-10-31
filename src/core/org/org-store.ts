@@ -411,15 +411,14 @@ export interface ContactLaunch { cwd: string; host: string | null }
 
 /**
  * Where a task with no session would start, read only (task-launch-plan.ts): its
- * own folder, else its project's, else the project's memory folder, which the
- * start makes. None when the start would refuse (a remote host with no folder, an
- * unknown host) or the memory folder would fall outside PROJECTS_MEMORY_DIR.
+ * own folder, else its project's, else the task's own directory, which the start
+ * makes. None when the start would refuse (a remote host with no folder, an
+ * unknown host).
  */
 export async function contactLaunch(task: Task): Promise<ContactLaunch | undefined> {
   try {
-    const { insideMemoryFolders, resolveTaskLaunchReadOnly } = await import('../sessions/task-launch-plan.js');
+    const { resolveTaskLaunchReadOnly } = await import('../sessions/task-launch-plan.js');
     const plan = await resolveTaskLaunchReadOnly(task, { taskIdPrefix: task.id, source: 'org-contact' });
-    if (plan.createLocalDirectory && !insideMemoryFolders(plan.cwd)) return undefined;
     return { cwd: plan.cwd, host: plan.host || null };
   } catch (err) {
     log.task.info('org: no launch place for contact', { taskId: task.id, error: err instanceof Error ? err.message : String(err) });

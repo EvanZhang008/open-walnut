@@ -12,7 +12,7 @@ import { firstSentence } from '../../web/src/components/settings/sections/Engine
 import { toggleMode } from '../../web/src/components/settings/sections/SessionsSection.js'
 import { toggleSource } from '../../web/src/components/settings/sections/TriageSection.js'
 import { parseExcludedFolders } from '../../web/src/components/settings/sections/SearchSection.js'
-import { gitSummary, keepAwakeSummary } from '../../web/src/components/settings/sections/AdvancedSection.js'
+import { keepAwakeSummary } from '../../web/src/components/settings/sections/AdvancedSection.js'
 import { providerDisplayName, providersSummary, testResultText } from '../../web/src/components/settings/sections/ProvidersSection.js'
 import { jevTestText } from '../../web/src/components/settings/sections/JevSettings.js'
 import { unknownProjectWarning } from '../../web/src/components/settings/sections/TasksSection.js'
@@ -49,12 +49,11 @@ describe('lists that must never be empty or reordered', () => {
 })
 
 describe('summaries and result lines are plain words', () => {
-  it('summarizes keep awake and git', () => {
+  it('summarizes keep awake', () => {
     expect(keepAwakeSummary(false, null)).toBe('Off')
     expect(keepAwakeSummary(true, { needsSudo: true, setupDone: false, holding: false } as never)).toBe('Needs setup')
     expect(keepAwakeSummary(true, { needsSudo: false, setupDone: true, holding: true } as never)).toBe('Active')
     expect(keepAwakeSummary(true, { needsSudo: false, setupDone: true, holding: false } as never)).toBe('On')
-    expect(gitSummary(true, false)).toBe('Auto commit on, push off')
   })
 
   it('summarizes the API provider and connection tests', () => {
@@ -104,7 +103,7 @@ describe('summaries and result lines are plain words', () => {
 
   it('never uses a dash in these strings', () => {
     const all = [
-      gitSummary(false, true), providersSummary('custom', 'X'), usesHelp('default' as never, 'openrouter'),
+      keepAwakeSummary(true, null), providersSummary('custom', 'X'), usesHelp('default' as never, 'openrouter'),
       unknownProjectWarning('A', true, () => false) ?? '', testResultText({ kind: 'fail', error: 'e' }) ?? '',
     ]
     for (const s of all) expect(s).not.toMatch(DASH)

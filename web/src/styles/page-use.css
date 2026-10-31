@@ -1,0 +1,36 @@
+/* Settings > Page Use (PageUseSection.tsx): counts line up as tabular numbers. */
+.page-use-table {
+  width: 100%;
+  max-width: 620px;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.page-use-table th {
+  text-align: right;
+  font-weight: 600;
+  color: var(--fg-muted);
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.page-use-table td {
+  text-align: right;
+  padding: 3px 8px;
+  color: var(--fg-secondary);
+}
+.page-use-table th:first-child,
+.page-use-table td:first-child,
+.page-use-table th:nth-child(2),
+.page-use-table td:nth-child(2) { text-align: left; }
+.page-use-table td:first-child { color: var(--fg); }
+.page-use-never {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 12px;
+  color: var(--fg);
+}
+.page-use-where { color: var(--fg-muted); }

@@ -288,7 +288,6 @@ export function agentDailyDir(agentId?: string): string {
   return path.join(MEMORY_DIR, 'agents', agentPathSegment(agentId), 'daily');
 }
 export const GLOBAL_SKILLS_DIR = path.join(WALNUT_HOME, 'skills');
-export const SKILL_SETTINGS_FILE = path.join(WALNUT_HOME, 'skill-settings.json');
 export const CLAUDE_SKILLS_DIR = path.join(CLAUDE_HOME, 'skills');
 /** Claude Code plugin registry — where enabled plugins + marketplaces are recorded. */
 export const CLAUDE_SETTINGS_FILE = path.join(CLAUDE_HOME, 'settings.json');
@@ -404,7 +403,6 @@ export const WORKING_MEMORY_FILE = path.join(MEMORY_DIR, 'working-memory.md');
 export function workingMemoryFile(agentId: string, conversationId: string): string {
   return path.join(conversationDir(agentId), `${validateConversationId(conversationId)}.working-memory.md`);
 }
-export const TIMELINE_DIR = path.join(WALNUT_HOME, 'timeline');
 /**
  * Cross-device user preferences — the SYNCED half of Walnut's configuration.
  *

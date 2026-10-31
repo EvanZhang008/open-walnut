@@ -1117,7 +1117,7 @@ export interface CloudSetupUpdateEvent {
   currentStep: import('./cloud-setup/job-types.js').CloudSetupStepId;
 }
 
-// ── Cron events (emitted via broadcastEvent, consumed by git-versioning) ──
+// ── Cron events (emitted via broadcastEvent) ──
 
 export interface CronJobEvent {
   action: string;

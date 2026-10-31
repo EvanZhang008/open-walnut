@@ -13,5 +13,4 @@
  */
 export const BUILTIN_ACTION_MODULES: Readonly<Record<string, () => Promise<Record<string, unknown>>>> = {
   'inbox-triage-batch': () => import('./inbox-triage-batch.js'),
-  'screenshot-track': () => import('./screenshot-track.js'),
 };

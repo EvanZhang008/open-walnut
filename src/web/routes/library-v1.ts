@@ -17,7 +17,6 @@
  *   DELETE /commands/:name                       → 204
  *   POST   /skills                               → 201 { skill }
  *   PUT    /skills/:dirName                      → { skill }
- *   PATCH  /skills/:dirName { enabled }          → { skill }
  *   DELETE /skills/:dirName                      → 204
  *   GET    /skills/:dirName/references           → { files }
  *   GET    /skills/:dirName/references/:file     → { content }
@@ -29,9 +28,7 @@
  * Scope rule for skills (deliberate): v1 only WRITES the Walnut-managed skills
  * dir (~/.open-walnut/skills — git-synced). The Claude CLI's own global store
  * (~/.claude/skills) stays READ-ONLY through v1: create forces target
- * 'walnut', and update/delete refuse 'claude'-sourced skills with 403. The
- * enable/disable toggle is allowed for every source because it only writes
- * Walnut's own skill-settings.json, never the CLI's directory.
+ * 'walnut', and update/delete refuse 'claude'-sourced skills with 403.
  *
  * Cloud companion (REPLICA):
  * - Agents are stored in config.yaml, which is MACHINE-LOCAL (never
@@ -89,15 +86,10 @@ libraryV1Router.get('/agents/meta/skills', async (_req: Request, res: Response, 
   }
 })
 
-// GET /api/v1/agents/meta/models — model-id catalog for the agent editor.
-libraryV1Router.get('/agents/meta/models', async (_req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { getConfig } = await import('../../core/config-manager.js')
-    const config = await getConfig()
-    res.json({ models: config.agent?.available_models ?? [] })
-  } catch (err) {
-    next(err)
-  }
+// GET /api/v1/agents/meta/models — kept for the frozen shape, always empty: an
+// agent is a persona for a Claude Code session and picks no model (the session does).
+libraryV1Router.get('/agents/meta/models', (_req: Request, res: Response) => {
+  res.json({ models: [] })
 })
 
 // GET /api/v1/agents/:id — one agent definition (full editor payload; the
@@ -128,7 +120,7 @@ function sendAgentError(res: Response, err: unknown): boolean {
     sendError(res, 404, 'not_found', err.message)
     return true
   }
-  if (err.message.includes('not in the available models') || err.message.includes('cannot be deleted')) {
+  if (err.message.includes('cannot be deleted')) {
     sendError(res, 400, 'bad_request', err.message)
     return true
   }
@@ -150,7 +142,7 @@ libraryV1Router.post('/agents', async (req: Request, res: Response, next: NextFu
     }
     const { createAgent } = await import('../../core/agent-registry.js')
     try {
-      const agent = await createAgent({ id, name, runner: 'embedded', ...rest })
+      const agent = await createAgent({ ...rest, id, name })
       res.status(201).json({ agent })
     } catch (err) {
       if (sendAgentError(res, err)) return
@@ -433,27 +425,6 @@ libraryV1Router.put('/skills/:dirName', async (req: Request, res: Response, next
     const { updateSkill } = await import('../../core/skill-store.js')
     try {
       res.json({ skill: await updateSkill(dirName, content) })
-    } catch (err) {
-      if (sendSkillError(res, err)) return
-      throw err
-    }
-  } catch (err) {
-    next(err)
-  }
-})
-
-// PATCH /api/v1/skills/:dirName { enabled } — enable/disable. Allowed for ANY
-// source (it only writes Walnut's own skill-settings.json, never the skill dir).
-libraryV1Router.patch('/skills/:dirName', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { enabled } = (req.body ?? {}) as Record<string, unknown>
-    if (typeof enabled !== 'boolean') {
-      sendError(res, 400, 'bad_request', 'enabled must be a boolean')
-      return
-    }
-    const { setSkillEnabled } = await import('../../core/skill-store.js')
-    try {
-      res.json({ skill: await setSkillEnabled(String(req.params.dirName ?? ''), enabled) })
     } catch (err) {
       if (sendSkillError(res, err)) return
       throw err

@@ -8,8 +8,6 @@
  */
 
 import { getConfig, updateConfig, _resetWriteLockForTest } from './config-manager.js';
-import { MODEL_CATALOG } from '../model/providers/model-catalog.js';
-import { ensureProjectDir } from './project-memory.js';
 import type { AgentDefinition } from './types.js';
 import type { Disposable } from './plugins/disposable.js';
 import { OwnedRegistry } from './plugins/owned-registry.js';
@@ -21,7 +19,6 @@ const BUILTIN_GENERAL: AgentDefinition = {
   id: 'general',
   name: 'Walnut',
   description: 'Your main AI — tasks, sessions, memory, and everything else.',
-  runner: 'embedded',
   console: true,
   source: 'builtin',
 };
@@ -30,7 +27,6 @@ const BUILTIN_MENTOR: AgentDefinition = {
   id: 'mentor',
   name: 'Mentor',
   description: 'Thoughtful companion for reflection, planning, journaling, and self-exploration.',
-  runner: 'embedded',
   console: true,
   system_prompt: `You are Mentor — a calm, thoughtful companion for reflection, planning, and self-exploration.
 
@@ -54,7 +50,6 @@ const BUILTIN_NOTE: AgentDefinition = {
   id: 'note-agent',
   name: 'Note Assistant',
   description: 'Reads, searches, edits, and creates your notes — the AI panel on the Notes page.',
-  runner: 'embedded',
   console: true,
   system_prompt: `You are the Note Assistant — an AI that helps the user work with their notes (a personal Obsidian-style markdown vault).
 
@@ -73,10 +68,6 @@ const BUILTIN_NOTE: AgentDefinition = {
 - When asked to change or create a note, do it directly with the file tools, then briefly confirm what you did and where.
 - Match the user's language and tone. Be concise. Don't dump raw file contents unless asked.
 - The notes live under \`notes/\`. Never touch files outside the vault unless explicitly asked.`,
-  allowed_tools: [
-    'file_read', 'file_write', 'file_edit', 'file_list', 'file_glob', 'file_grep',
-    'memory_notes_search', 'web_fetch',
-  ],
   context_sources: [
     { id: 'global_memory', enabled: true },
   ],
@@ -96,7 +87,6 @@ const BUILTIN_TRIAGE: AgentDefinition = {
   id: 'triage',
   name: 'Inbox Triage',
   description: 'Works through each batch of new mail and Slack: hands items to the tasks that already own them, keeps the project tracking notes true, marks the noise read when allowed, and asks you, with the homework done, about anything that needs a decision.',
-  runner: 'embedded',
   console: true,
   system_prompt: `You are Inbox Triage. Once every batch of new mail and Slack you decide what each item means for work the user already has, and you keep the project tracking notes true. In order: read State.md and the batch; read what you need; match items to projects and tasks; update Tracking.md; hand an item to the task that already owns its work (task_send) so that task carries on; for anything that needs the user, do the homework first (read the thread, gather the related mail, tasks and notes, draft the reply) and then ask, in at most three decision letters, with one summary letter only when the run has something for the user; then rewrite State.md, append the run journal, and memory_write anything durable you learned. You never send mail, post to Slack or unsubscribe on your own: you ask (mail_request_send, slack_request_post, mail_unsubscribe_request). You mark mail read only when your run instructions allow it, and nothing you have deletes, archives or moves mail. You never invent a project or a task for something the user has not shown they care about.`,
   source: 'builtin',
@@ -137,10 +127,7 @@ export function registerOwnedAgent(
   if (BUILTIN_ID_SET.has(definition.id)) {
     throw new Error(`Plugin agent "${definition.id}" cannot replace a builtin agent`);
   }
-  const agent: AgentDefinition = { ...definition, source: 'plugin' };
-  if (agent.stateful?.memory_project) {
-    try { ensureProjectDir(agent.stateful.memory_project); } catch { /* best-effort */ }
-  }
+  const agent: AgentDefinition = { ...liveAgentFields(definition), source: 'plugin' };
   return pluginAgents.register(owner, agent.id, agent);
 }
 
@@ -179,77 +166,29 @@ export async function getConsoleAgent(id: string): Promise<AgentDefinition | und
   return agent.console ? agent : undefined;
 }
 
-// ── Tool Name Migration Map (old → new) ──
-// Config-defined agents may have saved old tool names in allowed_tools/denied_tools.
-// This map auto-migrates them at load time.
-//
-// Notes on absorbed tools:
-// - pin_task → absorbed into task_update (use pinned/focus_tier fields)
-// - search → task_search (task-only search); memory search is now memory_notes_search (not auto-migrated, different semantics)
-const TOOL_NAME_MIGRATION: Record<string, string> = {
-  query_tasks: 'task_query',
-  get_task: 'task_get',
-  create_task: 'task_create',
-  update_task: 'task_update',
-  delete_task: 'task_delete',
-  search: 'task_search',
-  pin_task: 'task_update',
-  memory_get: 'file_read',
-  list_sessions: 'session_list',
-  get_session_summary: 'session_summary',
-  start_session: 'session_start',
-  import_session: 'session_import',
-  send_to_session: 'session_send',
-  get_session_history: 'session_history',
-  update_session: 'session_update',
-  get_config: 'config_get',
-  update_config: 'config_update',
-  exec: 'shell_exec',
-  slack: 'integration_slack',
-  tts: 'integration_tts',
-  list_cron_jobs: 'cron_list',
-  manage_cron_job: 'cron_manage',
-  list_agents: 'agent_list',
-  get_agent: 'agent_get',
-  create_agent: 'agent_create',
-  update_agent: 'agent_update',
-  delete_agent: 'agent_delete',
-  list_commands: 'command_list',
-  get_command: 'command_get',
-  create_command: 'command_create',
-  update_command: 'command_update',
-  delete_command: 'command_delete',
-  ask_question: 'user_ask',
-  create_subagent: 'subagent_create',
-  files_read: 'file_read',
-  files_write: 'file_write',
-  files_edit: 'file_edit',
-  files_list: 'file_list',
-  files_glob: 'file_glob',
-  files_grep: 'file_grep',
-  // Pre-consolidation standalone file tools (renamed files_* in Apr 2026, then file_*).
-  // Old configs skipped straight from these to today's names, so map them directly.
-  read_file: 'file_read',
-  write_file: 'file_write',
-  edit_file: 'file_edit',
-  // The monolithic `memory` tool was split in Mar 2026. Its read half is the
-  // closest surviving equivalent; its write actions (update_summary/append) have
-  // no successor for project stores — those persist via <memory_update> instead
-  // (see stateful-memory.ts). Mapping to file_read keeps an allowed_tools
-  // whitelist from silently collapsing to almost nothing.
-  memory: 'file_read',
-};
+// ── Live fields ──
 
-// Removed tools — silently drop from allowed/denied lists
-const REMOVED_TOOLS = new Set(['apply_patch', 'process', 'analyze_image']);
+/**
+ * The agent fields something reads: the persona builder (system_prompt, name),
+ * the context loader (context_sources, id), the chat pickers (console,
+ * description). Every run is a Claude Code session, so the fields of the removed
+ * in-process loop (runner, model, provider, region, max_tokens, max_tool_rounds,
+ * allowed_tools, denied_tools, working_directory, skills, stateful) are read by
+ * nothing. A stored definition or a request that still carries them loads and
+ * saves fine: they are left out here, never refused.
+ */
+const LIVE_AGENT_FIELDS = ['id', 'name', 'description', 'system_prompt', 'context_sources', 'console'] as const;
 
-export function migrateToolNames(names: string[] | undefined): string[] | undefined {
-  if (!names || names.length === 0) return names;
-  const migrated = names
-    .filter(n => !REMOVED_TOOLS.has(n))
-    .map(n => TOOL_NAME_MIGRATION[n] ?? n);
-  // Deduplicate (e.g. pin_task + update_task both map to task_update)
-  return [...new Set(migrated)];
+type LiveAgentFields = Pick<AgentDefinition, (typeof LIVE_AGENT_FIELDS)[number]>;
+
+/** `raw` with only the live agent fields (an absent field stays absent). */
+export function liveAgentFields<T extends Partial<LiveAgentFields>>(raw: T): T {
+  const out: Record<string, unknown> = {};
+  const src = raw as Record<string, unknown>;
+  for (const key of LIVE_AGENT_FIELDS) {
+    if (src[key] !== undefined) out[key] = src[key];
+  }
+  return out as T;
 }
 
 /**
@@ -258,11 +197,8 @@ export function migrateToolNames(names: string[] | undefined): string[] | undefi
 export async function getAllAgents(): Promise<AgentDefinition[]> {
   const config = await getConfig();
   const configAgents: AgentDefinition[] = (config.agent?.agents ?? []).map((a) => ({
-    ...a,
+    ...liveAgentFields(a),
     source: 'config' as const,
-    // Migrate old tool names in saved agent configs
-    allowed_tools: migrateToolNames(a.allowed_tools),
-    denied_tools: migrateToolNames(a.denied_tools),
   }));
 
   // Merge by ID: builtin first, then Plugin, then user config overrides.
@@ -290,38 +226,12 @@ export async function getAgent(id: string): Promise<AgentDefinition | undefined>
 }
 
 /**
- * Validate that a model ID is in the available_models list from config.
- * Throws if the model is not recognized.
- */
-async function validateModel(model: string | undefined): Promise<void> {
-  if (!model) return;
-  const config = await getConfig();
-  const defaultModels = (MODEL_CATALOG.bedrock ?? []).map(m => m.id);
-  const allowed = config.agent?.available_models ?? defaultModels;
-  if (!Array.isArray(allowed) || allowed.length === 0) return; // Empty list = allow all
-  // Handle both legacy string[] and new ModelEntry[] formats
-  const isLegacy = typeof allowed[0] === 'string';
-  const isAllowed = isLegacy
-    ? (allowed as string[]).includes(model)
-    : (allowed as Array<{ id?: string; model_id?: string }>).some(
-        (e) => typeof e === 'object' && (e.id === model || e.model_id === model),
-      );
-  if (!isAllowed) {
-    const names = isLegacy
-      ? (allowed as string[]).join(', ')
-      : (allowed as Array<{ id?: string }>).map(e => typeof e === 'object' ? e.id : String(e)).join(', ');
-    throw new Error(`Model "${model}" is not in the available models list. Allowed: ${names}`);
-  }
-}
-
-/**
  * Create a config agent. Persisted to config.yaml.
  */
 export async function createAgent(
-  definition: Omit<AgentDefinition, 'source'>,
+  input: Omit<AgentDefinition, 'source'>,
 ): Promise<AgentDefinition> {
-  await validateModel(definition.model);
-
+  const definition = liveAgentFields(input);
   // Check for ID collision with builtin or existing config agents
   const all = await getAllAgents();
   const existing = all.find((a) => a.id === definition.id);
@@ -331,22 +241,10 @@ export async function createAgent(
 
   const config = await getConfig();
   const configAgents = config.agent?.agents ?? [];
-  const { ...defWithoutSource } = definition;
-  configAgents.push(defWithoutSource);
+  configAgents.push(definition);
   await updateConfig({ agent: { ...config.agent, agents: configAgents } });
 
   const agent: AgentDefinition = { ...definition, source: 'config' };
-
-  // Auto-create memory directory for stateful agents (best-effort)
-  if (definition.stateful?.memory_project) {
-    try { ensureProjectDir(definition.stateful.memory_project); } catch (err) {
-      log.subagent.warn('failed to create memory dir for stateful agent', {
-        agent: definition.id, project: definition.stateful.memory_project,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
   log.subagent.info('agent created', { id: agent.id, name: agent.name });
   return agent;
 }
@@ -357,30 +255,22 @@ export async function createAgent(
  */
 export async function updateAgent(
   id: string,
-  updates: Partial<Omit<AgentDefinition, 'id' | 'source'>>,
+  input: Partial<Omit<AgentDefinition, 'id' | 'source'>>,
 ): Promise<AgentDefinition> {
-  await validateModel(updates.model);
+  const { id: _id, ...updates } = liveAgentFields(input as Partial<AgentDefinition>);
 
   const config = await getConfig();
   const configAgents = config.agent?.agents ?? [];
   const configIdx = configAgents.findIndex((a) => a.id === id);
   if (configIdx !== -1) {
+    // Over the stored entry, so a retired field the user's config.yaml still
+    // holds stays in the file as they left it (read by nothing either way).
     const merged = { ...configAgents[configIdx], ...updates };
     configAgents[configIdx] = merged;
     await updateConfig({ agent: { ...config.agent, agents: configAgents } });
 
-    // Auto-create memory directory if stateful config changed (best-effort)
-    if (updates.stateful?.memory_project) {
-      try { ensureProjectDir(updates.stateful.memory_project); } catch (err) {
-        log.subagent.warn('failed to create memory dir for stateful agent', {
-          agent: id, project: updates.stateful.memory_project,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
     log.subagent.info('agent updated', { id });
-    return { ...merged, id, source: 'config' } as AgentDefinition;
+    return { ...liveAgentFields(merged), id, source: 'config' } as AgentDefinition;
   }
 
   if (pluginAgents.has(id)) {
@@ -394,10 +284,6 @@ export async function updateAgent(
     const overrideEntry = { ...builtinFields, ...updates };
     configAgents.push(overrideEntry);
     await updateConfig({ agent: { ...config.agent, agents: configAgents } });
-
-    if (overrideEntry.stateful?.memory_project) {
-      try { ensureProjectDir(overrideEntry.stateful.memory_project); } catch { /* best-effort */ }
-    }
 
     log.subagent.info('builtin agent overridden', { id });
     return { ...overrideEntry, id, source: 'config', overrides_builtin: true } as AgentDefinition;

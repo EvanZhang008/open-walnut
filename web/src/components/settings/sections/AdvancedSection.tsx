@@ -37,11 +37,6 @@ export function keepAwakeSummary(enabled: boolean, status: KeepAwakeStatus['stat
   return 'On';
 }
 
-/** Git disclosure summary (pure, unit tested). */
-export function gitSummary(enabled: boolean, push: boolean): string {
-  return `Auto commit ${enabled ? 'on' : 'off'}, push ${push ? 'on' : 'off'}`;
-}
-
 /** One status line for Keep awake, joined with commas. */
 export function keepAwakeStatusLine(s: KeepAwakeStatus['state']): string {
   const parts = [
@@ -51,25 +46,6 @@ export function keepAwakeStatusLine(s: KeepAwakeStatus['state']): string {
   if (s.battery) parts.push(`battery ${s.battery.pct}%${s.battery.onAc ? ' (AC)' : ''}`);
   if (s.online === false) parts.push('offline');
   return parts.join(', ');
-}
-
-const SECOND = 1_000;
-const MINUTE = 60_000;
-
-/** Intervals show in seconds or minutes, never raw milliseconds (N3-24). Pure. */
-export function fromMs(ms: number | undefined, unit: number): number | undefined {
-  return ms === undefined ? undefined : Math.round((ms / unit) * 100) / 100;
-}
-
-/**
- * Back to milliseconds. A field the user did not touch shows `original`
- * rounded for display; it saves `original` exactly, so an autosave of an
- * unrelated switch never rewrites 12345 as 12350.
- */
-export function toMs(value: number | undefined, unit: number, original?: number): number | undefined {
-  if (value === undefined || Number.isNaN(value)) return undefined;
-  if (original !== undefined && fromMs(original, unit) === value) return original;
-  return Math.round(value * unit);
 }
 
 /**
@@ -85,13 +61,6 @@ export function readAdvancedForm(form: HTMLFormElement, config: Config): Partial
   const num = (name: string) => { const v = val(name); return v ? Number(v) : undefined; };
   const bool = (name: string) => fd.get(name) === 'on';
   const patch: Partial<Config> = {
-    git_versioning: {
-      ...config.git_versioning,
-      enabled: bool('git-enabled'),
-      push_enabled: bool('git-push'),
-      commit_debounce_ms: toMs(num('git-debounce'), SECOND, config.git_versioning?.commit_debounce_ms),
-      push_interval_ms: toMs(num('git-interval'), MINUTE, config.git_versioning?.push_interval_ms),
-    },
     session_server: { ...config.session_server, enabled: bool('sdk-enabled'), port: num('sdk-port') ?? 7890 },
   };
   if (has('ka-enabled')) {
@@ -107,9 +76,9 @@ export function readAdvancedForm(form: HTMLFormElement, config: Config): Partial
 }
 
 /** A number field of the uncontrolled form (FormData reads it by `name`). */
-function FormNumber({ id, defaultValue, unit, placeholder, min, max, step, readOnly }: {
+function FormNumber({ id, defaultValue, unit, placeholder, min, max, readOnly }: {
   id: string; defaultValue: number | string | undefined; unit?: string; placeholder?: string;
-  min?: number; max?: number; step?: number | 'any'; readOnly?: boolean;
+  min?: number; max?: number; readOnly?: boolean;
 }) {
   return (
     <span className="number-input-wrapper settings-input-with-unit">
@@ -124,7 +93,6 @@ function FormNumber({ id, defaultValue, unit, placeholder, min, max, step, readO
         placeholder={placeholder}
         min={min}
         max={max}
-        step={step}
         readOnly={readOnly}
         tabIndex={readOnly ? -1 : undefined}
       />
@@ -135,20 +103,15 @@ function FormNumber({ id, defaultValue, unit, placeholder, min, max, step, readO
 }
 
 export function AdvancedSection({ config, onSave }: Props) {
-  const git = config.git_versioning ?? {};
   const keepAwake = config.keep_awake ?? {};
   const offlineReleaseMinutes = keepAwake.offline_grace_minutes ?? 5;
   const { notifySaved } = useSettingsSaved();
 
   // Switches are controlled locally; their hidden mirrors feed FormData.
-  const [gitEnabled, setGitEnabled] = useState(git.enabled !== false);
-  const [gitPush, setGitPush] = useState(git.push_enabled === true);
   const [kaEnabled, setKaEnabled] = useState(keepAwake.enabled === true);
   const [sdkEnabled, setSdkEnabled] = useState(config.session_server?.enabled ?? false);
   // Follow a change made elsewhere; otherwise the next autosave of this form
   // would send the switch's stale state back.
-  useEffect(() => { setGitEnabled(git.enabled !== false); }, [git.enabled]);
-  useEffect(() => { setGitPush(git.push_enabled === true); }, [git.push_enabled]);
   useEffect(() => { setKaEnabled(keepAwake.enabled === true); }, [keepAwake.enabled]);
   useEffect(() => { setSdkEnabled(config.session_server?.enabled ?? false); }, [config.session_server?.enabled]);
 
@@ -252,17 +215,6 @@ export function AdvancedSection({ config, onSave }: Props) {
   return (
     <SectionCard id="advanced" title="Advanced" onSave={handleSave} showSave={false}>
       <SettingsGroup data-testid="advanced-group">
-        <SettingsDisclosure id="advanced-git" data-testid="advanced-disclosure-git" label="Git versioning" summary={gitSummary(gitEnabled, gitPush)}>
-          <SettingsRow indent label="Auto commit" htmlFor="git-enabled"
-            control={<ToggleSwitch id="git-enabled" name="git-enabled" checked={gitEnabled} onChange={setGitEnabled} />} />
-          <SettingsRow indent label="Push to remote" htmlFor="git-push"
-            control={<ToggleSwitch id="git-push" name="git-push" checked={gitPush} onChange={setGitPush} />} />
-          <SettingsRow indent label="Commit debounce" htmlFor="git-debounce"
-            control={<FormNumber id="git-debounce" defaultValue={fromMs(git.commit_debounce_ms ?? 30000, SECOND)} unit="seconds" min={1} step="any" />} />
-          <SettingsRow indent label="Push interval" htmlFor="git-interval" disabled={!gitPush}
-            control={<FormNumber id="git-interval" defaultValue={fromMs(git.push_interval_ms ?? 600000, MINUTE)} unit="minutes" min={1} step="any" readOnly={!gitPush} />} />
-        </SettingsDisclosure>
-
         {/* Keep Awake: macOS console only, hidden when the route reports unsupported. */}
         {kaSupported && (
           <SettingsDisclosure
@@ -311,8 +263,7 @@ export function AdvancedSection({ config, onSave }: Props) {
         <SettingsDisclosure id="advanced-sdk" data-testid="advanced-disclosure-sdk" label="SDK session server" summary={sdkEnabled ? 'On' : 'Off'}>
           <SettingsRow indent label="Use the Agent SDK server" help="Runs sessions through the SDK server instead of the CLI." htmlFor="sdk-enabled"
             control={<ToggleSwitch id="sdk-enabled" name="sdk-enabled" checked={sdkEnabled} onChange={setSdkEnabled} />} />
-          {/* Depends on the switch above: dimmed and read-only while it is off,
-              like Push interval (N3-23). */}
+          {/* Depends on the switch above: dimmed and read-only while it is off (N3-23). */}
           <SettingsRow indent label="Port" htmlFor="sdk-port" disabled={!sdkEnabled}
             control={<FormNumber id="sdk-port" defaultValue={config.session_server?.port ?? 7890} min={1024} max={65535} readOnly={!sdkEnabled} />} />
         </SettingsDisclosure>

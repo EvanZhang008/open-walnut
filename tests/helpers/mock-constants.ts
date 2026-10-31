@@ -68,7 +68,6 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
     GLOBAL_SKILLS_DIR: path.join(tmpBase, 'skills'),
     BUILTIN_SKILLS_DIR: path.join(tmpBase, 'data', 'skills'),
     CLAUDE_SKILLS_DIR: path.join(tmpBase, '.claude', 'skills'),
-    SKILL_SETTINGS_FILE: path.join(tmpBase, 'skill-settings.json'),
     CHAT_HISTORY_FILE: path.join(tmpBase, 'chat-history.json'),
     chatHistoryFile: (agentId?: string) => {
       if (!agentId || agentId === 'general') return path.join(tmpBase, 'chat-history.json');
@@ -132,7 +131,6 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
     NOTES_CLAUDE_FILE: path.join(tmpBase, 'notes', 'CLAUDE.md'),
     REPOSITORIES_DIR: path.join(tmpBase, 'repositories'),
     REPOS_MEMORY_DIR: path.join(tmpBase, 'skills', 'repos'),
-    TIMELINE_DIR: path.join(tmpBase, 'timeline'),
     COMMANDS_DIR: path.join(tmpBase, 'commands'),
     BUILTIN_COMMANDS_DIR: path.join(tmpBase, 'data', 'slash-commands'),
     DAEMON_BINARIES_DIR: REAL_DAEMON_BINARIES_DIR,

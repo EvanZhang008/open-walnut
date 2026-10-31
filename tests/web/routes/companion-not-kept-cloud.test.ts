@@ -399,7 +399,6 @@ describe('memory and skill changes are the Mac\'s (policy.ts CONSOLE_COPY_WRITES
       ['POST', '/api/memory/daily-log/compact', {}],
       ['POST', '/api/skills', { name: 'acme-new', content: '# New\n' }],
       ['PUT', '/api/skills/acme-tool', { content: '# Changed\n' }],
-      ['PATCH', '/api/skills/acme-tool', { enabled: false }],
       ['DELETE', '/api/skills/acme-tool', undefined],
     ]
     mac.answers = true

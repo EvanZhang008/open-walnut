@@ -3,8 +3,7 @@
  * boundary: `task:reordered` and `project:created`.
  *
  * Why shape tests rather than behavior tests: both payloads are consumed by code
- * the type-checker cannot reach — the web client's WS handler and
- * git-versioning's switch. Renaming `project` back to `category`, or firing
+ * the type-checker cannot reach — the web client's WS handler. Renaming `project` back to `category`, or firing
  * PROJECT_CREATED on every ensureProject() call, compiles fine and only shows up
  * as a live UI that never refreshes its project list (or one that thrashes).
  */

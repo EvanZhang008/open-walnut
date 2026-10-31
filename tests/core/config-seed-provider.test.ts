@@ -1,6 +1,6 @@
 /**
- * The boot seed (seedConfigDefaults) writes the Claude default set: a Claude model
- * list under agent.available_models and `provider: {type: claude-code}`. A config
+ * The boot seed (seedConfigDefaults) writes the Claude default set: a Claude main
+ * model under agent.main_model and `provider: {type: claude-code}`. A config
  * whose main provider is something else keeps only what its user wrote
  * (2026-10-30: a Path D config with main_provider ollama grew 13 Claude ids and a
  * claude-code provider block at first start). A Claude setup is seeded as before.
@@ -66,20 +66,41 @@ describe('seedConfigDefaults and the main provider', () => {
 
   it('a Bedrock setup is seeded as before', async () => {
     const doc = yaml.load(await bootWith('agent:\n  main_provider: bedrock\n')) as Record<string, any>
-    expect(doc.agent.available_models.length).toBeGreaterThan(0)
+    expect(doc.agent.main_model).toBeTruthy()
+    // The agent form's model list is retired: no seed writes it any more.
+    expect(doc.agent.available_models).toBeUndefined()
     expect(doc.provider).toEqual({ type: 'claude-code' })
   })
 
   it('a config that names no provider (the Claude default) is seeded as before', async () => {
     const doc = yaml.load(await bootWith('user:\n  name: A\n')) as Record<string, any>
-    expect(doc.agent.available_models.length).toBeGreaterThan(0)
+    expect(doc.agent.main_model).toBeTruthy()
     expect(doc.user.name).toBe('A')
   })
 
   it('a first run with no config.yaml is seeded as before', async () => {
     await cm.seedConfigDefaults()
     const doc = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as Record<string, any>
-    expect(doc.agent.available_models.length).toBeGreaterThan(0)
+    expect(doc.agent.main_model).toBeTruthy()
+  })
+
+  it('a file an older Walnut seeded (it holds the retired model list) is left byte for byte', async () => {
+    const text = 'agent:\n  available_models:\n    - acme-model-large\nuser:\n  name: A\n'
+    expect(await bootWith(text)).toBe(text)
+  })
+
+  it('a hand-written Claude config with only a main model still gets the rest, keeping its model', async () => {
+    const doc = yaml.load(await bootWith('agent:\n  main_model: acme-model-small\n')) as Record<string, any>
+    expect(doc.agent.main_model).toBe('acme-model-small')
+    expect(doc.provider).toEqual({ type: 'claude-code' })
+    expect(doc.agent.available_models).toBeUndefined()
+  })
+
+  it('a file this seed wrote is never written again', async () => {
+    const first = await bootWith('')
+    await sleep(TIMINGS.settleMs * 2)
+    await cm.seedConfigDefaults()
+    expect(await fs.readFile(CONFIG_FILE, 'utf-8')).toBe(first)
   })
 
   // Ratchet: every known provider is decided, and only Claude-catalog ones seed.

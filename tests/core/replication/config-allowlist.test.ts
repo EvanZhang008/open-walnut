@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
-  CONFIG_COPY_ALLOWLIST, CONFIG_COPY_DROPPED, CONFIG_COPY_DROPPED_FIELDS, allowThrough, configCopyRows, configRowAdmissible, findSecrets,
+  CONFIG_COPY_ALLOWLIST, CONFIG_COPY_DROPPED, CONFIG_COPY_DROPPED_FIELDS, CONFIG_COPY_RETIRED_FIELDS, allowThrough, configCopyRows, configRowAdmissible, findSecrets,
   secretKeyName, secretShapedValue, RETIRED_CONFIG_KEYS, type AllowSpec,
 } from '../../../src/core/replication/config-allowlist.js'
 import { maskSecretTail, PLUGIN_FORM_MASK } from '../../../src/core/config-secret-shape.js'
@@ -44,7 +44,12 @@ function specProblems(node: TypeNode, spec: AllowSpec, at: string, out: string[]
     else if (!copied && !gone) out.push(`${at}.${f}: in neither the section's spec nor CONFIG_COPY_DROPPED_FIELDS`)
     else if (copied) specProblems(node.fields[f]!, spec[f]!, `${at}.${f}`, out, seen)
   }
-  for (const f of Object.keys(spec)) if (!own(node.fields, f)) out.push(`${at}.${f}: named in the spec, not a field of the type`)
+  const retired = CONFIG_COPY_RETIRED_FIELDS[at] ?? {}
+  for (const f of Object.keys(spec)) {
+    if (own(retired, f)) { if (own(node.fields, f)) out.push(`${at}.${f}: retired, but still a field of the type`) }
+    else if (!own(node.fields, f)) out.push(`${at}.${f}: named in the spec, not a field of the type`)
+  }
+  for (const f of Object.keys(retired)) if (!own(spec, f)) out.push(`${at}.${f}: retired, but not in the spec (an older leader's row would be refused)`)
   for (const f of Object.keys(dropped)) if (!own(node.fields, f)) out.push(`${at}.${f}: dropped, not a field of the type`)
 }
 
@@ -91,12 +96,16 @@ describe('the ratchet: every config key is allowlisted or dropped', () => {
     expect(r.unknown).toEqual(['brand_new_section'])
   })
 
-  it('an older leader\'s agent row (still carrying region and maxTokens) is admitted', () => {
+  it('an older leader\'s agent row (still carrying region, maxTokens and available_models) is admitted', () => {
     expect(configRowAdmissible({ key: 'agent', value: { main_model: 'acme-model-large', region: 'us-west-2', maxTokens: 8192 } })).toBe(true)
+    expect(configRowAdmissible({ key: 'agent', value: { main_model: 'acme-model-large', available_models: ['acme-model-large', 'acme-model-small'] } })).toBe(true)
   })
 
   it('a retired key an older config.yaml still holds is dropped quietly, never named as unknown', () => {
-    const r = configCopyRows({ version: 1, heartbeat: { enabled: true, every: '30m' }, developer: { show_ui_only_triage: true } })
+    const r = configCopyRows({
+      version: 1, heartbeat: { enabled: true, every: '30m' }, developer: { show_ui_only_triage: true },
+      git_versioning: { auto_commit: true, remote: 'https://marina:planted@git.example.com/data.git' },
+    })
     expect(r.rows.map((x) => x.key)).toEqual(['version'])
     expect(r.unknown).toEqual([])
     for (const k of RETIRED_CONFIG_KEYS) expect([k, own(CONFIG_COPY_ALLOWLIST, k) || own(CONFIG_COPY_DROPPED, k)]).toEqual([k, false])
@@ -118,6 +127,7 @@ describe('the ratchet goes into every copied section', () => {
     expect(problems).toEqual([])
     // Every dropped list names a section the walk reached (no stale path).
     expect(Object.keys(CONFIG_COPY_DROPPED_FIELDS).filter((p) => !seen.has(p))).toEqual([])
+    expect(Object.keys(CONFIG_COPY_RETIRED_FIELDS).filter((p) => !seen.has(p))).toEqual([])
     for (const fields of Object.values(CONFIG_COPY_DROPPED_FIELDS)) for (const why of Object.values(fields)) expect(why.length).toBeGreaterThan(5)
   })
 

@@ -12,7 +12,7 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants());
 
-import { WALNUT_HOME, GLOBAL_SKILLS_DIR, CLAUDE_SKILLS_DIR, SKILL_SETTINGS_FILE } from '../../src/constants.js';
+import { WALNUT_HOME, GLOBAL_SKILLS_DIR, CLAUDE_SKILLS_DIR } from '../../src/constants.js';
 import { clearSkillsCache } from '../../src/core/skill-loader.js';
 import { startServer, stopServer } from '../../src/web/server.js';
 
@@ -104,7 +104,7 @@ beforeEach(async () => {
   // Clean skill directories and settings between tests
   await fsp.rm(GLOBAL_SKILLS_DIR, { recursive: true, force: true });
   await fsp.rm(CLAUDE_SKILLS_DIR, { recursive: true, force: true });
-  try { await fsp.rm(SKILL_SETTINGS_FILE); } catch { /* may not exist */ }
+  try { await fsp.rm(path.join(WALNUT_HOME, 'skill-settings.json')); } catch { /* may not exist */ }
   clearSkillsCache();
 });
 
@@ -346,94 +346,19 @@ description: original
   });
 });
 
-// ── Tests: Enable/Disable ──
+// ── Tests: the retired on/off switch ──
 
-describe('PATCH /api/skills/:dirName (enable/disable)', () => {
-  it('disables a skill and persists across requests', async () => {
-    await seedSkill(GLOBAL_SKILLS_DIR, 'toggle-me', '---\nname: Toggle\n---\n');
-
-    // Disable
-    const res1 = await apiJson('/api/skills/toggle-me', {
-      method: 'PATCH',
-      body: JSON.stringify({ enabled: false }),
-    });
-    expect(res1.status).toBe(200);
-    const body1 = await res1.json();
-    expect(body1.skill.enabled).toBe(false);
-
-    // Verify persisted: clear cache and re-fetch
+describe('an old skill-settings.json (the on/off switch removed 2026-10-31)', () => {
+  it('is ignored: a skill it lists is still listed and read, and the switch route is gone', async () => {
+    await seedSkill(GLOBAL_SKILLS_DIR, 'was-off', '---\nname: WasOff\n---\n');
+    await fsp.writeFile(path.join(WALNUT_HOME, 'skill-settings.json'), JSON.stringify({ disabled: ['was-off'] }));
     clearSkillsCache();
-    const res2 = await api('/api/skills/toggle-me');
-    const body2 = await res2.json();
-    expect(body2.skill.enabled).toBe(false);
-
-    // Verify in settings file
-    const settings = JSON.parse(await fsp.readFile(SKILL_SETTINGS_FILE, 'utf-8'));
-    expect(settings.disabled).toContain('toggle-me');
-  });
-
-  it('re-enables a disabled skill', async () => {
-    await seedSkill(GLOBAL_SKILLS_DIR, 'reenable', '---\nname: ReEn\n---\n');
-
-    // Disable first
-    await apiJson('/api/skills/reenable', {
-      method: 'PATCH',
-      body: JSON.stringify({ enabled: false }),
-    });
-
-    // Re-enable
-    const res = await apiJson('/api/skills/reenable', {
-      method: 'PATCH',
-      body: JSON.stringify({ enabled: true }),
-    });
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.skill.enabled).toBe(true);
-
-    // Verify settings file no longer lists it
-    const settings = JSON.parse(await fsp.readFile(SKILL_SETTINGS_FILE, 'utf-8'));
-    expect(settings.disabled).not.toContain('reenable');
-  });
-
-  it('validates skill exists BEFORE writing settings', async () => {
-    // This tests the must-fix #1: should NOT write settings for nonexistent skill
-    const res = await apiJson('/api/skills/ghost-skill', {
-      method: 'PATCH',
-      body: JSON.stringify({ enabled: false }),
-    });
-    expect(res.status).toBe(404);
-
-    // Settings file should NOT contain ghost-skill
-    try {
-      const settings = JSON.parse(await fsp.readFile(SKILL_SETTINGS_FILE, 'utf-8'));
-      expect(settings.disabled).not.toContain('ghost-skill');
-    } catch {
-      // File doesn't exist — that's also correct
-    }
-  });
-
-  it('returns 400 when enabled is not boolean', async () => {
-    await seedSkill(GLOBAL_SKILLS_DIR, 'boolcheck', '---\nname: bc\n---\n');
-    const res = await apiJson('/api/skills/boolcheck', {
-      method: 'PATCH',
-      body: JSON.stringify({ enabled: 'yes' }),
-    });
-    expect(res.status).toBe(400);
-  });
-
-  it('disabled skills appear in list with enabled=false', async () => {
-    await seedSkill(GLOBAL_SKILLS_DIR, 'visible-disabled', '---\nname: VD\n---\n');
-    await apiJson('/api/skills/visible-disabled', {
-      method: 'PATCH',
-      body: JSON.stringify({ enabled: false }),
-    });
-
-    clearSkillsCache();
-    const res = await api('/api/skills');
-    const body = await res.json();
-    const skill = body.skills.find((s: { dirName: string }) => s.dirName === 'visible-disabled');
-    expect(skill).toBeDefined();
-    expect(skill.enabled).toBe(false);
+    const list = await (await api('/api/skills')).json();
+    expect(list.skills.find((s: { dirName: string }) => s.dirName === 'was-off')?.enabled).toBe(true);
+    const one = await (await api('/api/skills/was-off')).json();
+    expect(one.skill.enabled).toBe(true);
+    const patch = await apiJson('/api/skills/was-off', { method: 'PATCH', body: JSON.stringify({ enabled: false }) });
+    expect(patch.status).toBe(404);
   });
 });
 
@@ -538,14 +463,11 @@ describe('GET /api/skills/:dirName/references/:file', () => {
 // ── Tests: Edge cases ──
 
 describe('Edge cases', () => {
-  it('handles corrupt skill-settings.json gracefully', async () => {
+  it('a corrupt skill-settings.json left by an older Walnut is never read', async () => {
     await seedSkill(GLOBAL_SKILLS_DIR, 'edge1', '---\nname: E1\n---\n');
-
-    // Write corrupt settings
-    await fsp.writeFile(SKILL_SETTINGS_FILE, 'not json{{{');
+    await fsp.writeFile(path.join(WALNUT_HOME, 'skill-settings.json'), 'not json{{{');
     clearSkillsCache();
 
-    // Should still list skills (corrupt settings = all enabled)
     const { seeded } = await listSkills();
     expect(seeded).toHaveLength(1);
     expect(seeded[0].enabled).toBe(true);
@@ -590,8 +512,7 @@ describe('Edge cases', () => {
     expect(dupe[0].source).toBe('walnut');
   });
 
-  it('create + toggle + list round-trip', async () => {
-    // Create
+  it('create + list + delete round-trip', async () => {
     const createRes = await apiJson('/api/skills', {
       method: 'POST',
       body: JSON.stringify({
@@ -601,29 +522,13 @@ describe('Edge cases', () => {
     });
     expect(createRes.status).toBe(201);
 
-    // Toggle off
-    await apiJson('/api/skills/roundtrip', {
-      method: 'PATCH',
-      body: JSON.stringify({ enabled: false }),
-    });
-
-    // List should show disabled
     clearSkillsCache();
-    const listRes = await api('/api/skills');
-    const body = await listRes.json();
-    const skill = body.skills.find((s: { dirName: string }) => s.dirName === 'roundtrip');
-    expect(skill.enabled).toBe(false);
+    const body = await (await api('/api/skills')).json();
+    expect(body.skills.some((s: { dirName: string }) => s.dirName === 'roundtrip')).toBe(true);
 
-    // Toggle back on
-    await apiJson('/api/skills/roundtrip', {
-      method: 'PATCH',
-      body: JSON.stringify({ enabled: true }),
-    });
-
+    expect((await api('/api/skills/roundtrip', { method: 'DELETE' })).status).toBeLessThan(300);
     clearSkillsCache();
-    const listRes2 = await api('/api/skills');
-    const body2 = await listRes2.json();
-    const skill2 = body2.skills.find((s: { dirName: string }) => s.dirName === 'roundtrip');
-    expect(skill2.enabled).toBe(true);
+    const body2 = await (await api('/api/skills')).json();
+    expect(body2.skills.some((s: { dirName: string }) => s.dirName === 'roundtrip')).toBe(false);
   });
 });

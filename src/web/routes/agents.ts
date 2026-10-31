@@ -11,9 +11,7 @@ import {
   deleteAgent,
 } from '../../core/agent-registry.js'
 import { getToolSchemas } from '../../core/tools/read-only.js'
-import { getConfig } from '../../core/config-manager.js'
 import { bus } from '../../core/event-bus.js'
-import { listAvailableSkills } from '../../core/skill-loader.js'
 
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9_-]*$/
 
@@ -43,27 +41,12 @@ export function createAgentsRouter(): Router {
     }
   })
 
-  // GET /api/agents/meta/skills — list available skills
-  router.get('/meta/skills', async (_req: Request, res: Response, next: NextFunction) => {
-    try {
-      const all = await listAvailableSkills()
-      const skills = all.map((s) => ({ dirName: s.dirName, name: s.name, description: s.description }))
-      res.json({ skills })
-    } catch (err) {
-      next(err)
-    }
-  })
-
-  // GET /api/agents/meta/models — list available model IDs
-  router.get('/meta/models', async (_req: Request, res: Response, next: NextFunction) => {
-    try {
-      const config = await getConfig()
-      const models = config.agent?.available_models ?? []
-      res.json({ models })
-    } catch (err) {
-      next(err)
-    }
-  })
+  // GET /api/agents/meta/skills and /meta/models fed the agent form's skill
+  // picker and model dropdown, whose fields nothing reads any more. A window
+  // still running an older bundle asks for both when it opens /agents, so they
+  // answer empty instead of falling through to /:id as "Agent not found: meta".
+  router.get('/meta/skills', (_req: Request, res: Response) => { res.json({ skills: [] }) })
+  router.get('/meta/models', (_req: Request, res: Response) => { res.json({ models: [] }) })
 
   // GET /api/agents — list all agents (merged from all sources)
   router.get('/', async (_req: Request, res: Response, next: NextFunction) => {
@@ -106,16 +89,12 @@ export function createAgentsRouter(): Router {
         res.status(400).json({ error: 'name is required' })
         return
       }
-      const agent = await createAgent({ id, name, runner: 'embedded', ...rest })
+      const agent = await createAgent({ ...rest, id, name })
       announceAgentsChanged('created', agent.id)
       res.status(201).json({ agent })
     } catch (err) {
       if (err instanceof Error && err.message.includes('already exists')) {
         res.status(409).json({ error: err.message })
-        return
-      }
-      if (err instanceof Error && err.message.includes('not in the available models')) {
-        res.status(400).json({ error: err.message })
         return
       }
       next(err)
@@ -131,9 +110,8 @@ export function createAgentsRouter(): Router {
       announceAgentsChanged('updated', id)
       res.json({ agent })
     } catch (err) {
-      if (err instanceof Error && (err.message.includes('not found') || err.message.includes('not in the available models'))) {
-        const status = err.message.includes('not found') ? 404 : 400
-        res.status(status).json({ error: err.message })
+      if (err instanceof Error && err.message.includes('not found')) {
+        res.status(404).json({ error: err.message })
         return
       }
       next(err)

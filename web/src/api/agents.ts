@@ -11,37 +11,16 @@ export interface ContextSourceConfig {
   token_budget?: number;
 }
 
-export interface AgentStatefulConfig {
-  memory_project: string;
-  memory_budget_tokens?: number;
-  memory_source?: string;
-}
-
+/** A persona for a Claude Code session: the session itself picks model, tools and directory. */
 export interface AgentDefinition {
   id: string;
   name: string;
   description?: string;
-  runner: 'embedded' | 'cli';
-  model?: string;
-  region?: string;
-  max_tokens?: number;
-  max_tool_rounds?: number;
   system_prompt?: string;
-  denied_tools?: string[];
-  allowed_tools?: string[];
-  working_directory?: string;
   context_sources?: ContextSourceConfig[];
   console?: boolean;
-  stateful?: AgentStatefulConfig;
-  skills?: string[];
-  source: 'builtin' | 'config';
+  source: 'builtin' | 'config' | 'plugin';
   overrides_builtin?: boolean;
-}
-
-export interface SkillMeta {
-  dirName: string;
-  name: string;
-  description: string;
 }
 
 export type CreateAgentInput = Omit<AgentDefinition, 'source'>;
@@ -55,11 +34,6 @@ export async function fetchAgents(): Promise<AgentDefinition[]> {
 export async function fetchAgent(id: string): Promise<AgentDefinition> {
   const res = await apiGet<{ agent: AgentDefinition }>(`/api/agents/${id}`);
   return res.agent;
-}
-
-export async function fetchAvailableModels(): Promise<string[]> {
-  const res = await apiGet<{ models: string[] }>('/api/agents/meta/models');
-  return res.models;
 }
 
 export async function createAgentDef(input: CreateAgentInput): Promise<AgentDefinition> {
@@ -79,9 +53,4 @@ export async function deleteAgentDef(id: string): Promise<void> {
 export async function cloneAgentDef(id: string, newId: string, newName?: string): Promise<AgentDefinition> {
   const res = await apiPost<{ agent: AgentDefinition }>(`/api/agents/${id}/clone`, { id: newId, name: newName });
   return res.agent;
-}
-
-export async function fetchAvailableSkills(): Promise<SkillMeta[]> {
-  const res = await apiGet<{ skills: SkillMeta[] }>('/api/agents/meta/skills');
-  return res.skills;
 }

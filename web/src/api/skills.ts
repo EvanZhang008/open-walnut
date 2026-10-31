@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiPut, apiPatch, apiDelete } from './client';
+import { apiGet } from './client';
 
 export interface SkillInfo {
   dirName: string;
@@ -9,59 +9,13 @@ export interface SkillInfo {
   content: string;
   metadata?: Record<string, unknown>;
   eligible: boolean;
-  enabled: boolean;
   hasReferences: boolean;
-}
-
-export interface RefFile {
-  name: string;
-  size: number;
 }
 
 /** `priority: 'low'` for the "/" palette's background load: nobody is looking at
  *  that list when it is fetched, so it must not hold a slot the page is waiting
- *  for (see the admission notes in ./client). The Skills page keeps the default. */
+ *  for (see the admission notes in ./client). */
 export async function fetchSkills(opts?: { priority?: 'low'; onDispatch?: () => void }): Promise<SkillInfo[]> {
   const res = await apiGet<{ skills: SkillInfo[] }>('/api/skills', undefined, opts);
   return res.skills;
-}
-
-export async function fetchSkill(dirName: string): Promise<SkillInfo> {
-  const res = await apiGet<{ skill: SkillInfo }>(`/api/skills/${encodeURIComponent(dirName)}`);
-  return res.skill;
-}
-
-export async function createSkillApi(input: {
-  dirName: string;
-  content: string;
-  target?: 'claude' | 'walnut';
-}): Promise<SkillInfo> {
-  const res = await apiPost<{ skill: SkillInfo }>('/api/skills', input);
-  return res.skill;
-}
-
-export async function updateSkillApi(dirName: string, content: string): Promise<SkillInfo> {
-  const res = await apiPut<{ skill: SkillInfo }>(`/api/skills/${encodeURIComponent(dirName)}`, { content });
-  return res.skill;
-}
-
-export async function toggleSkillApi(dirName: string, enabled: boolean): Promise<SkillInfo> {
-  const res = await apiPatch<{ skill: SkillInfo }>(`/api/skills/${encodeURIComponent(dirName)}`, { enabled });
-  return res.skill;
-}
-
-export async function deleteSkillApi(dirName: string): Promise<void> {
-  await apiDelete(`/api/skills/${encodeURIComponent(dirName)}`);
-}
-
-export async function fetchReferences(dirName: string): Promise<RefFile[]> {
-  const res = await apiGet<{ files: RefFile[] }>(`/api/skills/${encodeURIComponent(dirName)}/references`);
-  return res.files;
-}
-
-export async function fetchReferenceContent(dirName: string, filename: string): Promise<string> {
-  const res = await apiGet<{ content: string }>(
-    `/api/skills/${encodeURIComponent(dirName)}/references/${encodeURIComponent(filename)}`,
-  );
-  return res.content;
 }

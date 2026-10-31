@@ -8,7 +8,6 @@ import {
   createSkill,
   updateSkill,
   deleteSkill,
-  setSkillEnabled,
   listReferences,
   getReference,
 } from '../../core/skill-store.js';
@@ -98,25 +97,6 @@ export function createSkillsRouter(): Router {
           res.status(409).json({ error: err.message });
           return;
         }
-      }
-      next(err);
-    }
-  });
-
-  // PATCH /api/skills/:dirName — enable/disable skill
-  router.patch('/:dirName', async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const { enabled } = req.body;
-      if (typeof enabled !== 'boolean') {
-        res.status(400).json({ error: 'enabled must be a boolean' });
-        return;
-      }
-      const skill = await setSkillEnabled(req.params.dirName as string, enabled);
-      res.json({ skill });
-    } catch (err) {
-      if (err instanceof Error && err.message.includes('not found')) {
-        res.status(404).json({ error: err.message });
-        return;
       }
       next(err);
     }

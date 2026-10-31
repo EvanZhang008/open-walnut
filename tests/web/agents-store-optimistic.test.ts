@@ -10,15 +10,13 @@ import type { AgentDefinition } from '../../web/src/api/agents.js'
  *  1. Every write lands in the ONE list both surfaces read.
  *  2. A refused write rolls back — including a delete, which must go back to the
  *     position it came from.
- *  3. The list and the form metadata load separately (the homepage must not pay
- *     for catalogues it never renders), each shared across callers.
+ *  3. One list fetch is shared across callers (the form has no catalogues to
+ *     load any more: agents pick no model and no skills).
  */
 
 const mocks = vi.hoisted(() => ({
   fetchAgents: vi.fn(),
   fetchAgent: vi.fn(),
-  fetchAvailableModels: vi.fn(),
-  fetchAvailableSkills: vi.fn(),
   createAgentDef: vi.fn(),
   updateAgentDef: vi.fn(),
   deleteAgentDef: vi.fn(),
@@ -29,8 +27,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/api/agents', () => ({
   fetchAgents: mocks.fetchAgents,
   fetchAgent: mocks.fetchAgent,
-  fetchAvailableModels: mocks.fetchAvailableModels,
-  fetchAvailableSkills: mocks.fetchAvailableSkills,
   createAgentDef: mocks.createAgentDef,
   updateAgentDef: mocks.updateAgentDef,
   deleteAgentDef: mocks.deleteAgentDef,
@@ -43,7 +39,6 @@ import {
   createAgentDefinition,
   deleteAgentDefinition,
   getAgentsSnapshot,
-  loadAgentMeta,
   loadAgents,
   subscribeAgents,
   updateAgentDefinition,
@@ -57,7 +52,7 @@ function deferred<T>(): { promise: Promise<T>; resolve(v: T): void; reject(e: un
 }
 
 function agent(over: Partial<AgentDefinition> = {}): AgentDefinition {
-  return { id: 'researcher', name: 'Researcher', runner: 'embedded', source: 'config', ...over }
+  return { id: 'researcher', name: 'Researcher', source: 'config', ...over }
 }
 
 function ids(): string[] {
@@ -70,27 +65,17 @@ describe('agents store', () => {
     for (const fn of Object.values(mocks)) fn.mockReset()
   })
 
-  it('one list fetch serves every surface, and metadata is a separate ask', async () => {
+  it('one list fetch serves every surface', async () => {
     const held = deferred<AgentDefinition[]>()
     mocks.fetchAgents.mockReturnValue(held.promise)
     void loadAgents()
     void loadAgents()
     expect(mocks.fetchAgents).toHaveBeenCalledTimes(1)
-    // Nothing pulled the form catalogues in with the list.
-    expect(mocks.fetchAvailableModels).not.toHaveBeenCalled()
-    expect(mocks.fetchAvailableSkills).not.toHaveBeenCalled()
 
     held.resolve([agent()])
     await loadAgents()
     expect(ids()).toEqual(['researcher'])
     expect(getAgentsSnapshot().agentsLoaded).toBe(true)
-    expect(getAgentsSnapshot().metaLoaded).toBe(false)
-
-    mocks.fetchAvailableModels.mockResolvedValue(['model-a'])
-    mocks.fetchAvailableSkills.mockResolvedValue([{ dirName: 's', name: 'S', description: 'd' }])
-    await loadAgentMeta()
-    expect(getAgentsSnapshot().availableModels).toEqual(['model-a'])
-    expect(getAgentsSnapshot().metaLoaded).toBe(true)
   })
 
   it('a create lands in the one list both surfaces read', async () => {
@@ -100,7 +85,7 @@ describe('agents store', () => {
     const unsub = subscribeAgents(() => notified++)
     mocks.createAgentDef.mockResolvedValue(agent({ id: 'writer', name: 'Writer', console: true }))
 
-    await createAgentDefinition({ id: 'writer', name: 'Writer', runner: 'embedded' })
+    await createAgentDefinition({ id: 'writer', name: 'Writer' })
     expect(ids()).toEqual(['researcher', 'writer'])
     expect(notified).toBe(1)
     // No blanket refetch — the returned record is enough.

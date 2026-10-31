@@ -51,7 +51,6 @@ export const HINT_MAX = 32
 /** Fixed keywords for the off-page links (they have no registry entry). */
 export const PAGE_LINK_KEYWORDS: Readonly<Record<string, readonly string[]>> = {
   agents: ['agent', 'persona'],
-  skills: ['skill'],
   commands: ['slash', 'command'],
   memory: ['memory', 'remember'],
   apps: ['plugin', 'plugins', 'install', 'update', 'store', 'app', 'sidebar', 'hide', 'mail', 'slack', 'to-do', 'sync', 'configure'],

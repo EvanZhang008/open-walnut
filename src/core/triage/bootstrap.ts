@@ -29,14 +29,9 @@
  * in the batch action; see the note on isTriageWithinActiveHours in config.ts for
  * why that is the only place that can decline a fire without minting a session.
  *
- * ONE thing S13 must land with the action: an initProcessor naming an action that
- * does not exist does NOT fail the run. src/actions/registry.ts answers
- * `{invoke:false, content:'Action "…" not found'}`, the server's runAction adapter
- * maps any `invoke:false` to `{status:'ok', summary: content}`, and executeJobCore
- * then prepends that sentence to the instructions and starts a session anyway. It
- * never crashes, but it is not an error result either — so between this slice and
- * the action landing, an ENABLED triage would mint a batch-less session per
- * interval. Triage is off by default, which is what keeps that window harmless.
+ * An initProcessor naming an action that does not exist fails the run with a
+ * reason (src/actions/registry.ts answers `status:'error'` for an unknown id), so
+ * a routine whose action is gone never mints a session on its fires.
  */
 
 import { WALNUT_HOME } from '../../constants.js';

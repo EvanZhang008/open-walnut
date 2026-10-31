@@ -57,9 +57,23 @@ describe('agents CRUD', () => {
     expect(skills.status).toBe(200)
     expect(Array.isArray(skills.body.skills)).toBe(true)
 
+    // Kept for the frozen shape; an agent picks no model, so the list is empty.
     const models = await request(app).get('/api/v1/agents/meta/models')
     expect(models.status).toBe(200)
-    expect(Array.isArray(models.body.models)).toBe(true)
+    expect(models.body).toEqual({ models: [] })
+  })
+
+  it('a create or patch carrying the retired agent-loop fields succeeds and ignores them', async () => {
+    const app = createApp()
+    const created = await request(app).post('/api/v1/agents').send({
+      id: 'legacy', name: 'Legacy', runner: 'cli', model: 'made-up-model', allowed_tools: ['file_read'],
+      stateful: { memory_project: 'legacy/v1' },
+    })
+    expect(created.status).toBe(201)
+    expect(created.body.agent).toEqual({ id: 'legacy', name: 'Legacy', source: 'config' })
+    const patched = await request(app).patch('/api/v1/agents/legacy').send({ model: 'other-made-up', max_tool_rounds: 3, name: 'Legacy 2' })
+    expect(patched.status).toBe(200)
+    expect(patched.body.agent).toEqual({ id: 'legacy', name: 'Legacy 2', source: 'config' })
   })
 
   it('create → detail → patch → clone → delete round trip', async () => {
@@ -187,17 +201,6 @@ describe('skills write', () => {
 
     const delWalnut = await request(app).delete('/api/v1/skills/walnut-skill')
     expect(delWalnut.status).toBe(204)
-  })
-
-  it('PATCH enabled toggles ANY source (settings file, not the skill dir)', async () => {
-    await fs.mkdir(path.join(CLAUDE_SKILLS_DIR, 'cli-skill'), { recursive: true })
-    await fs.writeFile(path.join(CLAUDE_SKILLS_DIR, 'cli-skill', 'SKILL.md'), SKILL_MD.replace('NAME', 'cli-skill'))
-    const app = createApp()
-    const off = await request(app).patch('/api/v1/skills/cli-skill').send({ enabled: false })
-    expect(off.status).toBe(200)
-    expect(off.body.skill.enabled).toBe(false)
-    const bad = await request(app).patch('/api/v1/skills/cli-skill').send({ enabled: 'yes' })
-    expect(bad.status).toBe(400)
   })
 
   it('references list + read + 404', async () => {

@@ -324,7 +324,7 @@ test('C34: session modes are six styled checkboxes; the last one cannot be untic
   await expect(sessions.locator('#session-output-mode[role="radiogroup"] [role="radio"]')).toHaveCount(2)
 })
 
-test('C35: Advanced opens with four closed disclosures; an open one survives a pane switch', async ({ page }) => {
+test('C35: Advanced opens with three closed disclosures; an open one survives a pane switch', async ({ page }) => {
   await fakeConfig(page)
   // Keep awake is macOS only and hides itself when its route says unsupported
   // (this fixture may run on Linux): answer as a Mac would, so the count is fixed.
@@ -334,28 +334,29 @@ test('C35: Advanced opens with four closed disclosures; an open one survives a p
   await page.evaluate(() => { for (const k of Object.keys(sessionStorage)) if (k.startsWith('walnut.settings.disclosure.')) sessionStorage.removeItem(k) })
   const advanced = await clickNav(page, 'advanced')
   const rows = advanced.getByTestId('advanced-group').locator(':scope > .settings-disclosure-row')
-  // Git versioning, Keep awake, SDK session server, Raw config (Command safety
-  // and Subagent defaults were removed on 2026-10-27).
-  await expect(rows).toHaveCount(4)
+  // Keep awake, SDK session server, Raw config (Command safety and Subagent
+  // defaults were removed on 2026-10-27, Git versioning on 2026-10-31).
+  await expect(rows).toHaveCount(3)
   expect(await rows.evaluateAll((els) => els.map((e) => e.getAttribute('data-testid'))))
-    .toEqual(['advanced-disclosure-git', 'advanced-disclosure-keep-awake', 'advanced-disclosure-sdk', 'advanced-disclosure-raw'])
-  for (let i = 0; i < 4; i++) await expect(rows.nth(i)).toHaveAttribute('aria-expanded', 'false')
-  const git = advanced.getByTestId('advanced-disclosure-git')
-  await git.click()
-  await expect(git).toHaveAttribute('aria-expanded', 'true')
-  const content = page.locator(`#${await git.getAttribute('aria-controls')}`)
+    .toEqual(['advanced-disclosure-keep-awake', 'advanced-disclosure-sdk', 'advanced-disclosure-raw'])
+  for (let i = 0; i < 3; i++) await expect(rows.nth(i)).toHaveAttribute('aria-expanded', 'false')
+  const sdk = advanced.getByTestId('advanced-disclosure-sdk')
+  await sdk.click()
+  await expect(sdk).toHaveAttribute('aria-expanded', 'true')
+  const content = page.locator(`#${await sdk.getAttribute('aria-controls')}`)
   await expect(content.locator('.settings-row').first()).toBeVisible()
   expect(await content.locator('.settings-group').count()).toBe(0)
   const inset = await content.locator('.settings-row').first().evaluate((el) => getComputedStyle(el).paddingLeft)
   expect(parseFloat(inset)).toBeGreaterThanOrEqual(30)
   await clickNav(page, 'general')
   const again = await clickNav(page, 'advanced')
-  await expect(again.getByTestId('advanced-disclosure-git')).toHaveAttribute('aria-expanded', 'true')
+  await expect(again.getByTestId('advanced-disclosure-sdk')).toHaveAttribute('aria-expanded', 'true')
 })
 
 test('C56: flipping one switch in a folded form keeps every other field (FormData reads collapsed rows)', async ({ page }) => {
   const cfg = await fakeConfig(page, (c) => {
-    c.git_versioning = { enabled: true, push_enabled: false, commit_debounce_ms: 45000, push_interval_ms: 700000 }
+    // A key of the removed Git versioning group an older config.yaml may still hold.
+    c.git_versioning = { enabled: true, push_enabled: false, commit_debounce_ms: 45000 }
     c.keep_awake = { ...c.keep_awake, enabled: true, battery_floor_pct: 25 }
     c.session_server = { ...c.session_server, enabled: true, port: 7891 }
     c.tools = { ...c.tools, exec: { ...c.tools?.exec, timeout: 12345, max_output: 5000 } }
@@ -365,16 +366,16 @@ test('C56: flipping one switch in a folded form keeps every other field (FormDat
   await openSettings(page)
   await page.evaluate(() => { for (const k of Object.keys(sessionStorage)) if (k.startsWith('walnut.settings.disclosure.')) sessionStorage.removeItem(k) })
   const advanced = await clickNav(page, 'advanced')
-  await advanced.getByTestId('advanced-disclosure-git').click()
+  await advanced.getByTestId('advanced-disclosure-sdk').click()
   const before = cfg.puts.length
-  await row(advanced, 'Push to remote').getByRole('switch').click()
+  await row(advanced, 'Use the Agent SDK server').getByRole('switch').click()
   await expect.poll(() => cfg.puts.length, { timeout: 10_000 }).toBeGreaterThan(before)
   const put = cfg.puts[cfg.puts.length - 1]
-  expect(put.git_versioning.enabled).toBe(true)
-  expect(put.git_versioning.push_enabled).toBe(true)
-  expect(put.git_versioning.commit_debounce_ms).toBe(45000)
-  expect(put.session_server.enabled).toBe(true)
+  expect(put.session_server.enabled).toBe(false)
   expect(put.session_server.port).toBe(7891)
+  // Nothing writes the removed key; the stored value is left as it was.
+  expect(put.git_versioning).toBeUndefined()
+  expect(cfg.state().git_versioning.commit_debounce_ms).toBe(45000)
   // Advanced no longer owns `tools` or `agent`: it never writes them, so the
   // values another surface keeps there survive untouched.
   expect(put.tools).toBeUndefined()

@@ -121,6 +121,11 @@ export async function getAction(id: string): Promise<ActionDefinition | undefine
   return actions.find((a) => a.id === id);
 }
 
+/** Actions Walnut no longer ships, with what replaced them. */
+const RETIRED_ACTIONS = new Map<string, string>([
+  ['screenshot-track', 'Screen Tracking was removed on 2026-10-31'],
+]);
+
 /**
  * Run an action by ID with given context.
  * Dynamic-imports the module fresh each time to pick up user file changes.
@@ -130,8 +135,22 @@ export async function runAction(
   params: Record<string, unknown>,
 ): Promise<ActionResult> {
   const action = await getAction(id);
+  if (!action && RETIRED_ACTIONS.has(id)) {
+    // A feature Walnut removed: its routine is skipped quietly (no error badge, no
+    // backoff, no session) and says so on its card, where the user can delete it.
+    return { invoke: false, status: 'skipped', content: `Action "${id}" was retired: ${RETIRED_ACTIONS.get(id)}. Delete this routine.` };
+  }
   if (!action) {
-    return { invoke: false, content: `Action "${id}" not found` };
+    // A routine can outlive its action (a stored job naming a user action that
+    // was deleted). Fail that run with a reason on its card
+    // instead of handing "not found" to the executor as text, which would start
+    // a session that has nothing to do on every fire.
+    log.cron.warn('action not found', { actionId: id });
+    return {
+      invoke: false,
+      status: 'error',
+      content: `Action "${id}" not found: it may have been removed. Disable or delete this routine.`,
+    };
   }
 
   try {

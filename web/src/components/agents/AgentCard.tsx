@@ -24,12 +24,6 @@ function badgeInfo(agent: AgentDefinition): { label: string; className: string }
   return [kindBadge, { label: 'config', className: 'agent-badge agent-badge-config' }];
 }
 
-function toolSummary(agent: AgentDefinition): string {
-  if (agent.allowed_tools?.length) return `${agent.allowed_tools.length} tools (allow)`;
-  if (agent.denied_tools?.length) return `${agent.denied_tools.length} denied`;
-  return 'all tools';
-}
-
 export function AgentCard({ agent, onEdit, onClone, onDelete, onReset }: AgentCardProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState<'delete' | 'reset' | null>(null);
@@ -108,14 +102,11 @@ export function AgentCard({ agent, onEdit, onClone, onDelete, onReset }: AgentCa
         <div className="agent-card-desc text-sm text-muted">{agent.description}</div>
       )}
       <div className="agent-card-meta text-xs text-muted">
-        <span>{agent.runner}</span>
-        <span>{agent.model ? agent.model.split('/').pop()?.slice(0, 30) : 'default model'}</span>
-        <span>{agent.max_tool_rounds ?? 10} rounds</span>
-        <span>{toolSummary(agent)}</span>
-        {agent.skills && agent.skills.length > 0 && (
-          <span>{agent.skills.length} skill{agent.skills.length !== 1 ? 's' : ''}</span>
-        )}
-        {agent.stateful && <span className="agent-badge-stateful">stateful</span>}
+        <span>{agent.system_prompt?.trim() ? 'custom prompt' : 'default prompt'}</span>
+        {(() => {
+          const n = (agent.context_sources ?? []).filter((c) => c.enabled).length;
+          return n > 0 ? <span>{n} context source{n !== 1 ? 's' : ''}</span> : null;
+        })()}
       </div>
     </div>
   );

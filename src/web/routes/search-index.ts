@@ -136,15 +136,3 @@ searchIndexRouter.post('/download', async (_req: Request, res: Response, next: N
   }
 })
 
-// POST /rebuild-history — the conversation history FTS index (history.db), not
-// the search index. Lives here because this is where the UI's maintenance
-// buttons already point. Synchronous (FTS only, no embeddings).
-searchIndexRouter.post('/rebuild-history', async (_req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { rebuildHistoryDb } = await import('../../core/history-db.js')
-    const result = await rebuildHistoryDb()
-    res.json({ status: 'ok', ...result })
-  } catch (err) {
-    next(err)
-  }
-})

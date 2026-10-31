@@ -52,6 +52,7 @@ import { log } from '@/utils/log'
 import { usePhoneSettingsPane } from '@/components/settings/usePhoneSettingsPane'
 import '@/styles/phone-settings.css'
 import { announceSettingsAnchor } from '@/components/settings/settings-anchor-event'
+import { recordVisit, settingsVisitKey } from '@/api/page-visits'
 
 /** Any of these means the person took the wheel: hash anchoring lets go. */
 const USER_TAKEOVER_EVENTS = ['wheel', 'touchmove', 'keydown', 'pointerdown'] as const
@@ -294,6 +295,11 @@ export function SettingsPage() {
     }
     return { kind: 'core', paneId: DEFAULT_PANE_ID }
   }, [resolved, hash, model.ready, runtime.plugins, runtime.errors, runtime.tombstones])
+
+  // Local page-use counts (Settings > Page use): one visit per pane shown. A plugin
+  // panel's `<plugin>:<panel>` key is spelled with `~` (the visit key allows no `:`).
+  const visitKey = view.kind === 'core' || view.kind === 'plugin' ? settingsVisitKey(view.paneId) : null
+  useEffect(() => { recordVisit(visitKey) }, [visitKey])
 
   // <Navigate>, not navigate() in a layout effect: on a first load that effect runs before
   // the router subscribes to history, so the URL changed and the screen stayed on Settings.

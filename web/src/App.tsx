@@ -8,6 +8,7 @@ import { ensureCoreAppsRegistered } from './apps/core-apps';
 import { useAppCatalog } from './apps/hooks';
 import { navigateToTarget, openSessionOnHome } from './utils/open-session';
 import { rememberLocation } from './utils/last-location';
+import { pageKeyForPath, recordVisit } from './api/page-visits';
 import { parseSessionInboxTarget } from './components/inbox/session-inbox-link';
 import { AppShell } from './components/layout/AppShell';
 import { DebugCrashProbe } from './components/common/AppErrorBoundary';
@@ -25,7 +26,6 @@ import { TaskDetailPage } from './pages/TaskDetailPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { OrgPage } from './pages/OrgPage';
 import { CommandsPage } from './pages/CommandsPage';
-import { SkillsPage } from './pages/SkillsPage';
 import { MemoryPage } from './pages/MemoryPage';
 import { CreatePluginPage } from './pages/CreatePluginPage';
 import { PopoutRoot } from './popout/PopoutRoot';
@@ -91,6 +91,8 @@ export function App() {
   // ?view=&d=, Settings' #pane) — see utils/last-location.ts for which locations
   // are recorded.
   useEffect(() => { rememberLocation(location); }, [location]);
+  // Local page-use counts (Settings > Page use); Settings records its pane itself.
+  useEffect(() => { recordVisit(pageKeyForPath(location.pathname)); }, [location.pathname]);
 
   // Warm the Notes page's tree + autocomplete corpora once the app has settled,
   // at low priority, so the first note the user opens is served from memory.
@@ -151,7 +153,9 @@ export function App() {
         <Route path="/org" element={<OrgPage />} />
         <Route path="/agents" element={<AgentsPage />} />
         <Route path="/commands" element={<CommandsPage />} />
-        <Route path="/skills" element={<SkillsPage />} />
+        {/* The Skills page was removed 2026-10-31 (its on/off switch was never used and
+            Claude Code never read it); an old link lands on Settings. */}
+        <Route path="/skills" element={<Navigate to="/settings" replace />} />
         <Route path="/memory" element={<MemoryPage />} />
         <Route path="/plugins/new" element={<CreatePluginPage />} />
         <Route path="/hooks" element={<Navigate to="/settings#hooks" replace />} />
@@ -162,7 +166,7 @@ export function App() {
             App answers with its own "disabled or uninstalled" card, which is a
             better answer than a Settings page with no Time row on it. */}
         <Route path="/time" element={<Navigate to="/apps/walnut-time~main" replace />} />
-        <Route path="/timeline" element={<Navigate to="/settings#timeline" replace />} />
+        <Route path="/timeline" element={<Navigate to="/settings" replace />} />
         <Route path="/chat" element={<Navigate to="/" replace />} />
         <Route path="/apps/:appId/*" element={<AppHostPage />} />
         {pluginUi.pages.map((page) => {

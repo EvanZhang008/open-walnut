@@ -654,6 +654,11 @@ describe('every free-form map in the Config type is accounted for', () => {
     'expose.options': (s) => ({ expose: { options: { token: s } } }),
     action: (s) => ({ hooks: { defs: [{ id: 'acme', on: ['onTurnComplete'], action: { type: 'notify', token: s } }] } }),
   }
+  /**
+   * Masked maps the Config type no longer declares: read by nothing, but an older
+   * config.yaml still carries them, so a secret in one stays masked.
+   */
+  const RETIRED_MASKED = new Set(['build_env'])
   /** Maps whose values are typed (each field judged by name and, on a replica, by shape) or hold no secret. */
   const NOT_FREE_FORM: Record<string, string> = {
     providers: 'keyed by provider name; each value is a typed ProviderConfig',
@@ -693,7 +698,8 @@ describe('every free-form map in the Config type is accounted for', () => {
     // A new map fails here: mask it in maskFreeFormMaps and add it to MASKED, or say in
     // NOT_FREE_FORM why it holds no secret.
     expect(found.filter((k) => !accounted.has(k))).toEqual([])
-    expect([...new Set(found)].sort()).toEqual([...accounted].sort())
+    expect([...new Set(found)].sort()).toEqual([...accounted].filter((k) => !RETIRED_MASKED.has(k)).sort())
+    for (const k of RETIRED_MASKED) expect([k, k in MASKED, found.includes(k)]).toEqual([k, true, false])
   })
 
   it('every section of the config the code reads without its type is declared in Config, so the check above sees its maps', () => {

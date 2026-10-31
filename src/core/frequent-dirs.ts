@@ -11,7 +11,8 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { FREQUENT_DIRS_FILE, WALNUT_HOME } from '../constants.js'
+import { FREQUENT_DIRS_FILE, PROJECTS_MEMORY_DIR, WALNUT_HOME } from '../constants.js'
+import { isLocalFallbackFolder } from './sessions/task-dir-place.js'
 import type { SessionEngine } from './types.js'
 import { log } from '../logging/index.js'
 
@@ -86,6 +87,23 @@ function foldLocalSpellings(store: FrequentDirsStore): FrequentDirsStore {
   return store
 }
 
+/**
+ * A folder Walnut picked, never one a person picks again, so never a suggestion: the
+ * data dir itself (Personal AI sessions run there), a task's own directory and an old
+ * project memory folder (the fallback for a task with no folder, task-dir-place.ts).
+ * A store written before 2026-10-31 still lists memory folders; they drop on read.
+ */
+function walnutPickedLocal(cwd: string): boolean {
+  const r = path.resolve(cwd)
+  return r === path.resolve(WALNUT_HOME) || isLocalFallbackFolder(r, PROJECTS_MEMORY_DIR)
+}
+
+async function walnutPicked(cwd: string, host: string | null): Promise<boolean> {
+  if (!host) return walnutPickedLocal(cwd)
+  const { isFallbackFolder } = await import('./sessions/task-dir-place.js')
+  return isFallbackFolder(cwd, host)
+}
+
 function readStore(): FrequentDirsStore | null {
   try {
     if (!fs.existsSync(FREQUENT_DIRS_FILE)) return null
@@ -93,7 +111,9 @@ function readStore(): FrequentDirsStore | null {
     const parsed = JSON.parse(raw)
     // Schema validation: reject corrupted or incompatible data
     if (parsed?.version !== 1 || !Array.isArray(parsed?.directories)) return null
-    return foldLocalSpellings(parsed as FrequentDirsStore)
+    const store = parsed as FrequentDirsStore
+    store.directories = store.directories.filter((d) => d?.host || !d?.cwd || !walnutPickedLocal(d.cwd))
+    return foldLocalSpellings(store)
   } catch (err) {
     log.session.debug('frequent-dirs: failed to read store', {
       error: err instanceof Error ? err.message : String(err),
@@ -149,8 +169,9 @@ export async function recordDirectory(cwd: string, hostArg: string | null, proje
   // The Walnut data dir is where Personal-AI sessions run (main chat lanes,
   // Ask Walnut) — it is never a coding folder. Recording it made it the
   // highest-frequency entry, so fresh drafts opened POINTING AT the config/db
-  // directory and quick chips offered it as a workspace.
-  if (!host && path.resolve(cwd) === path.resolve(WALNUT_HOME)) return
+  // directory and quick chips offered it as a workspace. A task's own directory
+  // is the same kind of folder, one per task (walnutPicked).
+  if (await walnutPicked(cwd, host)) return
   return withWriteLock(async () => {
     let store = readStore()
     if (!store) {
@@ -207,9 +228,11 @@ export interface DirectoryUse {
  * added on top of that compile (it would count each of them twice).
  */
 export async function recordDirectoryUses(uses: readonly DirectoryUse[]): Promise<void> {
-  const kept = uses
-    .map(u => ({ ...u, host: u.host || null }))
-    .filter(u => u.cwd && !(!u.host && path.resolve(u.cwd) === path.resolve(WALNUT_HOME)))
+  const kept: DirectoryUse[] = []
+  for (const u of uses) {
+    const use = { ...u, host: u.host || null }
+    if (use.cwd && !(await walnutPicked(use.cwd, use.host))) kept.push(use)
+  }
   if (kept.length === 0) return
   return withWriteLock(async () => {
     let store = readStore()
@@ -312,8 +335,18 @@ async function compileFromSessionsInternal(): Promise<void> {
     // Aggregate by cwd::host
     const dirMap = new Map<string, FrequentDirEntry>()
 
+    // A remote host's fallback test, asked once per host (its task-dir root).
+    const remotePicked = new Map<string, Map<string, boolean>>()
+    const pickedOn = async (cwd: string, host: string) => {
+      let seen = remotePicked.get(host)
+      if (!seen) remotePicked.set(host, (seen = new Map()))
+      if (!seen.has(cwd)) seen.set(cwd, await walnutPicked(cwd, host))
+      return seen.get(cwd)!
+    }
+
     for (const s of sessions) {
       if (!s.cwd) continue
+      if (!s.host ? walnutPickedLocal(s.cwd) : await pickedOn(s.cwd, s.host)) continue
       if (isTriageSession(s)) continue
       // Lane sessions (chat lanes, side threads) inherit their parent's cwd —
       // counting them would let one conversation stuff the launcher's ranking.

@@ -6,14 +6,13 @@
  * switcher (see the store's header for why that used to need a page reload).
  */
 import { useEffect, useSyncExternalStore } from 'react';
-import type { AgentDefinition, CreateAgentInput, UpdateAgentInput, SkillMeta } from '@/api/agents';
+import type { AgentDefinition, CreateAgentInput, UpdateAgentInput } from '@/api/agents';
 import { useEvent } from './useWebSocket';
 import {
   cloneAgentDefinition,
   createAgentDefinition,
   deleteAgentDefinition,
   getAgentsSnapshot,
-  loadAgentMeta,
   loadAgents,
   subscribeAgents,
   updateAgentDefinition,
@@ -21,8 +20,6 @@ import {
 
 interface UseAgentsReturn {
   agents: AgentDefinition[];
-  availableModels: string[];
-  skills: SkillMeta[];
   loading: boolean;
   error: string | null;
   refetch: () => void;
@@ -41,18 +38,15 @@ export function useAgents(): UseAgentsReturn {
 
   useEffect(() => {
     void loadAgents();
-    void loadAgentMeta();
   }, []);
 
   useEvent('agents:changed', () => { void loadAgents(true); });
 
   return {
     agents: shared.agents,
-    availableModels: shared.availableModels,
-    skills: shared.skills,
     // Only the FIRST resolve blocks the page. A refresh after a write must not
     // swap the whole list for a spinner.
-    loading: !shared.agentsLoaded || !shared.metaLoaded,
+    loading: !shared.agentsLoaded,
     error: shared.error,
     refetch,
     create: createAgentDefinition,

@@ -20,7 +20,6 @@ import { effectiveTotalTokens, getLastTurnTokens, clearLastTurnTokens } from './
 import { log } from '../logging/index.js';
 import fsp from 'node:fs/promises';
 import { compressForApi, MAX_BASE64_BYTES } from '../utils/image-compress.js';
-import { indexChatEntries } from './history-db.js';
 import { addNotification as addFeedNotification } from './notifications/store.js';
 
 /** Compaction triggers at 80% of the model's context window. */
@@ -735,12 +734,6 @@ export async function addAIMessages(
     }
     await writeStore(store, aid, cid);
     await touchConversationBestEffort(store, aid, cid);
-    // Mirror into the conversation FTS index (history.db) — best-effort,
-    // derived data; a failure must never break chat persistence.
-    const appendedCount = msgs.length - (skipFirstUser ? 1 : 0);
-    if (appendedCount > 0) {
-      indexChatEntries(store.entries!.slice(-appendedCount), aid, cid);
-    }
     log.agent.info('AI messages persisted', { count: msgs.length, agentId: aid });
   }, aid, cid);
 }
@@ -794,8 +787,6 @@ export async function addUserMessage(
     store.entries!.push(entry);
     await writeStore(store, aid, cid);
     await touchConversationBestEffort(store, aid, cid);
-    // Mirror into the conversation FTS index — best-effort (see addAIMessages).
-    indexChatEntries([entry], aid, cid);
     log.agent.info('User message eagerly persisted', { turnId: options?.turnId, agentId: aid });
   }, aid, cid);
 }
@@ -1047,9 +1038,6 @@ export async function adoptRecoveredAssistantMessage(opts: {
     store.entries = entries;
     await writeStore(store, agentId, conversationId);
     await touchConversationBestEffort(store, agentId, conversationId);
-    // Mirror into the conversation FTS index — best-effort, and position-free
-    // (rows are appended with their own timestamp), so a mid-list insert is fine.
-    indexChatEntries([entry], agentId, conversationId);
     log.agent.warn('adopted a stranded lane answer into the conversation', {
       agentId, conversationId, turnId, textLength: text.length, insertedAt: idx + 1,
     });
@@ -1244,7 +1232,6 @@ export async function adoptCloudTurn(opts: CloudTurnAdoption): Promise<'adopted'
     store.entries = entries;
     await writeStore(store, agentId, conversationId);
     await touchConversationBestEffort(store, agentId, conversationId);
-    indexChatEntries([user, answer], agentId, conversationId);
     log.agent.info('adopted a turn the cloud companion answered', {
       agentId, conversationId, turnId, engine: opts.engine, answered: !!opts.answerText,
       insertedAt: at, appended: at === entries.length - 2,

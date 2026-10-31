@@ -84,7 +84,7 @@ test('the Settings SIDEBAR carries every management entry, no Tasks table', asyn
   await expect(nav.locator('.settings-nav-group-label', { hasText: 'Configure' })).toBeVisible()
 
   // Full pages: real anchors, so they route away rather than scrolling.
-  for (const id of ['agents', 'skills', 'commands', 'memory']) {
+  for (const id of ['agents', 'commands', 'memory']) {
     const link = nav.getByTestId(`settings-nav-${id}`)
     await expect(link).toBeVisible()
     await expect(link).toHaveAttribute('href', /./)
@@ -102,9 +102,11 @@ test('the Settings SIDEBAR carries every management entry, no Tasks table', asyn
   await expect(nav.getByTestId('settings-nav-repositories')).toHaveCount(0)
 
   // A page link actually navigates (real click, no page.goto).
-  await nav.getByTestId('settings-nav-skills').click()
-  await expect(page).toHaveURL(/\/skills$/)
-  await expect(page.locator('.skills-page')).toBeVisible({ timeout: 30_000 })
+  await nav.getByTestId('settings-nav-memory').click()
+  await expect(page).toHaveURL(/\/memory$/)
+  // The Skills page is gone (2026-10-31): no nav link to it.
+  await page.goBack()
+  await expect(nav.getByTestId('settings-nav-skills')).toHaveCount(0)
 
   // And a Manage SECTION opens its own pane on the settings page itself.
   await page.locator('.sidebar a[href^="/settings"]').click()

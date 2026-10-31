@@ -11,6 +11,7 @@ import { FocusTiersSection } from './sections/FocusTiersSection'
 import { GeneralSection } from './sections/GeneralSection'
 import { HooksSection } from './sections/HooksSection'
 import { MailRulesSection } from './sections/MailRulesSection'
+import { PageUseSection } from './sections/PageUseSection'
 import { PermissionsSection } from './sections/PermissionsSection'
 import { ProvidersSection } from './sections/ProvidersSection'
 import { RemoteHostsSection } from './sections/RemoteHostsSection'
@@ -20,7 +21,6 @@ import { SttSection } from './sections/SttSection'
 import { SuggestAccuracySection } from './sections/SuggestAccuracySection'
 import { TagsSection } from './sections/TagsSection'
 import { TasksSection } from './sections/TasksSection'
-import { TimelineSection } from './sections/TimelineSection'
 import { TriageSection } from './sections/TriageSection'
 import { UsageSection } from './sections/UsageSection'
 import type { SettingsGlyphName } from './settings-icons'
@@ -251,9 +251,8 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   {
     owner: 'walnut', id: 'advanced', label: 'Advanced', title: 'Advanced', group: 'configure',
     icon: 'sliders', tint: '#8E8E93',
-    description: 'Git versioning, keep awake and developer options.',
+    description: 'Keep awake and developer options.',
     keywords: [
-      'git', 'commit', 'push',
       'keep awake', 'lid', 'battery', 'sdk',
       { word: 'port', rowLabel: 'Port', anchor: 'sdk-port' }, // the row's real label (N17)
       'raw config', 'json', 'background jobs',
@@ -281,6 +280,13 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     render: () => <UsageSection />,
   },
   {
+    owner: 'walnut', id: 'page-use', label: 'Page Use', title: 'Page Use', group: 'diagnostics',
+    icon: 'bar-chart', tint: '#5AC8FA',
+    description: 'Where you go in Walnut and what you never open, counted on this Mac only.',
+    keywords: ['page use', 'visits', 'analytics', 'statistics', 'never opened', 'unused'],
+    render: () => <PageUseSection corePanes={CORE_SETTINGS_CONTRIBUTIONS} />,
+  },
+  {
     owner: 'walnut', id: 'suggest-accuracy', label: 'Suggestion Accuracy', title: 'Suggestion Accuracy', group: 'diagnostics',
     icon: 'target', tint: '#FF9500',
     description: "How often a new session's draft guesses its project and folder right.",
@@ -291,18 +297,8 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   // `time` section was a second copy of it and was deleted; the server side
   // (/api/time/*, the heartbeat capture) is untouched and is what the app reads.
   //
-  // This `timeline` row is NOT that feature and did not go with it: it is the
-  // screen-activity Life Tracker (/api/timeline/*, screenshot-derived categories, and
-  // the only control that enables or disables its cron). Nothing else exposes it, so
-  // deleting it as "the duplicated Timeline" would delete a live feature. Labelled
-  // "Screen Tracking" so it stops reading as a third Time/Timeline thing.
-  {
-    owner: 'walnut', id: 'timeline', label: 'Screen Tracking', title: 'Screen Tracking', group: 'diagnostics',
-    icon: 'display', tint: '#30B0C7',
-    description: 'Screen activity tracking and how it is categorized.',
-    keywords: ['screen time', 'screenshots', 'life tracker', 'categories'],
-    render: () => <TimelineSection />,
-  },
+  // The `timeline` pane (Screen Tracking, the screenshot Life Tracker) was removed
+  // with that feature on 2026-10-31; /timeline links land on Settings.
   {
     owner: 'walnut', id: 'bug-report', label: 'Bug Report', title: 'Bug Report', group: 'diagnostics',
     icon: 'ladybug', tint: '#FF3B30',

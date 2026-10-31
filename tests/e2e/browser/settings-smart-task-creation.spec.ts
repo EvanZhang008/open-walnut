@@ -25,7 +25,7 @@ test.setTimeout(90_000)
 
 type Cfg = {
   agent?: Record<string, unknown>; jev?: Record<string, unknown>; tools?: Record<string, unknown>; providers?: Record<string, unknown>
-  git_versioning?: Record<string, unknown>; session_server?: Record<string, unknown>; keep_awake?: Record<string, unknown>
+  session_server?: Record<string, unknown>; keep_awake?: Record<string, unknown>
 }
 
 async function serverConfig(request: APIRequestContext): Promise<Cfg> {
@@ -56,8 +56,8 @@ test.afterAll(async ({ request }) => {
   await request.put('/api/config', { data: { agent: original.agent ?? {} } })
   await request.put('/api/config', { data: { jev: original.jev ?? null } })
   await request.put('/api/config', { data: { tools: original.tools ?? {} } })
-  // The Advanced autosave below writes these three keys whole.
-  for (const key of ['git_versioning', 'session_server', 'keep_awake'] as const) {
+  // The Advanced autosave below writes these two keys whole.
+  for (const key of ['session_server', 'keep_awake'] as const) {
     await request.put('/api/config', { data: { [key]: original[key] ?? null } })
   }
 })
@@ -236,21 +236,22 @@ test('an autosave on a page opened earlier keeps what another window changed', a
   const nav = page.getByTestId('settings-nav-advanced')
   await expect(nav).toBeVisible({ timeout: 30_000 })
   await nav.click()
-  // Git versioning's debounce (Command safety, which this test used, is gone).
-  await page.getByTestId('advanced-disclosure-git').click()
-  const debounce = page.locator('#git-debounce')
-  await expect(debounce).toBeVisible({ timeout: 15_000 })
+  // The SDK session server switch (Command safety and Git versioning, which
+  // this test used before, are gone).
+  await page.getByTestId('advanced-disclosure-sdk').click()
+  const sdk = page.locator('#sdk-enabled')
+  await expect(sdk).toBeVisible({ timeout: 15_000 })
+  const sdkBefore = (await sdk.getAttribute('aria-checked')) === 'true'
 
   // Another writer, after this page loaded.
   const agent = (await serverConfig(request)).agent ?? {}
   await request.put('/api/config', { data: { agent: { ...agent, session_organize: false, language: 'stale-page-marker' } } })
 
-  // The field is in seconds (N3-24); config keeps milliseconds.
-  await debounce.fill('43')
+  await sdk.click()
   await expect.poll(async () => {
-    const git = (await serverConfig(request)).git_versioning as { commit_debounce_ms?: number } | undefined
-    return git?.commit_debounce_ms
-  }, { timeout: 15_000 }).toBe(43000)
+    const server = (await serverConfig(request)).session_server as { enabled?: boolean } | undefined
+    return server?.enabled ?? false
+  }, { timeout: 15_000 }).toBe(!sdkBefore)
 
   const after = (await serverConfig(request)).agent ?? {}
   expect(after.session_organize).toBe(false)

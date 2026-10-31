@@ -57,7 +57,7 @@ const DEFAULT_CONFIG: Config = {
 /**
  * Strip the retired category fields from a parsed config object, in place.
  *
- * Field-level and idempotent (same pattern as the available_models seed):
+ * Field-level and idempotent (same pattern as the boot seed):
  *   - `defaults.category`      → deleted (Inbox is now "no project")
  *   - `local.categories`       → deleted (whole `local` section goes with it)
  *   - `favorites.categories`   → deleted (`favorites.projects` already flat)
@@ -211,10 +211,7 @@ export function normalizeReadConfig(config: Config): Config {
     else if (p === 'medium' || p === 'low') config.defaults.priority = 'backlog';
     else config.defaults.priority = 'none';
   }
-  // Seed defaults from MODEL_CATALOG
-  if (!config.agent?.available_models) {
-    config.agent = { ...config.agent, available_models: (MODEL_CATALOG.bedrock ?? []).map(m => m.id) };
-  }
+  // Seed the main model from MODEL_CATALOG
   if (!config.agent?.main_model) {
     config.agent = { ...config.agent, main_model: (MODEL_CATALOG.bedrock ?? [])[0]?.id };
   }
@@ -266,7 +263,6 @@ export async function getConfig(): Promise<Config> {
     const detail = { error: err instanceof Error ? err.message : String(err), configFile: CONFIG_FILE };
     if (firstRun) log.session.info('config-manager: no config.yaml and no backup — first run, using defaults', detail);
     else log.session.error('config-manager: config.yaml UNREADABLE and backup did not cover it — falling back to DEFAULTS. Machine-local settings (hosts/plugins/stt/provider) are missing until this is fixed.', detail);
-    const defaultModels = (MODEL_CATALOG.bedrock ?? []).map(m => m.id);
     // Spread DEFAULT_CONFIG.agent — do NOT replace the object, so a key added to
     // the defaults keeps surviving this path. Dropping one here reads to the user
     // as an unrelated outage: on 2026-08-28 06:03 a lost `agent:` section sent one
@@ -274,7 +270,7 @@ export async function getConfig(): Promise<Config> {
     // not load credentials from any providers".
     const fallback: Config = {
       ...DEFAULT_CONFIG,
-      agent: { ...DEFAULT_CONFIG.agent, available_models: defaultModels, main_model: defaultModels[0] },
+      agent: { ...DEFAULT_CONFIG.agent, main_model: (MODEL_CATALOG.bedrock ?? [])[0]?.id },
     };
     fallbackConfigs.add(fallback);
     return fallback;
@@ -330,7 +326,6 @@ async function mergeSshDiscoveredHosts(config: Config): Promise<void> {
 
 /**
  * Write config object to config.yaml (full replacement).
- * Injects a comment above `available_models` so users know it's managed by us.
  *
  * WARNING: This replaces the entire file. Use `updateConfig()` for partial updates
  * to avoid accidentally dropping unmentioned sections.
@@ -510,7 +505,7 @@ export async function migrateStoredConfig(mutate: (doc: Record<string, unknown>)
  * One-time migration: strip the retired category fields from config.yaml on disk.
  *
  * Full-file rewrite (not `updateConfig`, which can only replace top-level keys —
- * it has no way to DELETE `local:`). Runs before the available_models seed at
+ * it has no way to DELETE `local:`). Runs before the boot seed at
  * startup; idempotent, so a second run is a cheap parse + no write.
  */
 export async function migrateConfigFileToProjectOnly(): Promise<boolean> {
@@ -549,27 +544,36 @@ export function seedsClaudeDefaults(doc: Record<string, unknown>): boolean {
 export const CLAUDE_CATALOG_PROTOCOLS: ReadonlySet<string> = new Set(['bedrock', 'anthropic-messages', 'claude-cli']);
 
 /**
- * One-time migration: seed `agent.available_models` into config.yaml if missing.
- * Called at startup from init.ts.
+ * One-time seed: write the defaults (agent.main_model, provider, ...) into a
+ * config.yaml that was never seeded. Called at startup from init.ts.
  */
 export async function seedConfigDefaults(): Promise<void> {
   if (isHostReplicaProgram()) return;
   await migrateConfigFileToProjectOnly();
   try {
     await modifyConfigDoc((existing) => {
-      // available_models must be ON DISK (getConfig fills it in memory either way).
-      const agent = existing.agent as { available_models?: unknown } | undefined;
-      if (agent && typeof agent === 'object' && agent.available_models !== undefined) return { write: false, result: undefined };
-      // The seed is the Claude default set (a Claude model list, `provider: claude-code`).
+      // Seeded already by an older seed, which marked the file with the retired
+      // agent-form model list (available_models).
+      const agent = existing.agent as { main_model?: unknown; available_models?: unknown } | undefined;
+      if (agent && typeof agent === 'object' && agent.available_models !== undefined) {
+        return { write: false, result: undefined };
+      }
+      // The seed is the Claude default set (a Claude main model, `provider: claude-code`).
       // A file that picked another main provider (Ollama, OpenAI, a local server) keeps
       // only what its user wrote (2026-10-30: a Path D config grew 13 Claude ids).
       if (!seedsClaudeDefaults(existing)) return { write: false, result: undefined };
       // Seeded from the stored file itself, inside the lock, so a save that landed
       // after boot began is what gets the defaults, not an older read of it.
       const config = normalizeReadConfig({ ...DEFAULT_CONFIG, ...structuredClone(existing) } as Config);
-      const seeded = { agent: config.agent, version: config.version, user: config.user, defaults: config.defaults, provider: config.provider };
-      for (const [key, value] of Object.entries(seeded)) if (value !== undefined) existing[key] = value;
-      return { write: true, result: undefined };
+      // Field by field, so a file the user wrote by hand (only a main model, say)
+      // still gets the rest, and a seeded file is never written again.
+      const seeded = { version: config.version, user: config.user, defaults: config.defaults, provider: config.provider };
+      let changed = false;
+      if (!(agent && typeof agent === 'object' && agent.main_model !== undefined)) { existing.agent = config.agent; changed = true; }
+      for (const [key, value] of Object.entries(seeded)) {
+        if (value !== undefined && existing[key] === undefined) { existing[key] = value; changed = true; }
+      }
+      return { write: changed, result: undefined };
     });
   } catch (err) {
     // A config.yaml that does not parse stays as the user left it; boot goes on

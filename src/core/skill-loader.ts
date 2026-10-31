@@ -33,7 +33,7 @@ import { log } from '../logging/index.js';
 import { isMemorySafetyEnforced, screenMemoryText } from './memory-safety.js';
 import { registry } from './integration-registry.js';
 import { listOwnedSkillDirs } from './plugins/skill-registry.js';
-import { GLOBAL_SKILLS_DIR, CLAUDE_SKILLS_DIR, BUILTIN_SKILLS_DIR, SKILL_SETTINGS_FILE } from '../constants.js';
+import { GLOBAL_SKILLS_DIR, CLAUDE_SKILLS_DIR, BUILTIN_SKILLS_DIR } from '../constants.js';
 import { sortedNames } from '../lib/dir-order.js';
 
 export type SkillType = 'action' | 'knowledge';
@@ -189,17 +189,6 @@ export function resolveSkillDirName(dirName: string, discovered: Map<string, unk
   if (discovered.has(dirName)) return dirName;
   const renamed = LEGACY_SKILL_DIR_ALIASES[dirName];
   return renamed && discovered.has(renamed) ? renamed : dirName;
-}
-
-/** A disabled list that also disables the renamed form of every legacy name it holds. */
-export function expandDisabledSkillNames(disabled: Iterable<string>): Set<string> {
-  const set = new Set<string>();
-  for (const name of disabled) {
-    set.add(name);
-    const renamed = LEGACY_SKILL_DIR_ALIASES[name];
-    if (renamed) set.add(renamed);
-  }
-  return set;
 }
 
 async function discoverSkills(dirs: string[]): Promise<Map<string, DiscoveredSkill>> {
@@ -506,22 +495,9 @@ export function getSkillsCacheGeneration(): number {
   return skillsCacheGeneration;
 }
 
-/** Read the set of disabled skill dirNames from skill-settings.json. */
-async function getDisabledSkillSet(): Promise<Set<string>> {
-  try {
-    const raw = await fsp.readFile(SKILL_SETTINGS_FILE, 'utf-8');
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed.disabled)) return expandDisabledSkillNames(parsed.disabled);
-  } catch {
-    // file doesn't exist or invalid — all skills enabled
-  }
-  return new Set();
-}
-
 /** Discover and cache eligible skills with their directory names, for one discovery scope. */
 async function loadEligibleSkills(dirs: string[]): Promise<(SkillMeta & { dirName: string })[]> {
   const discovered = await discoverSkills(dirs);
-  const disabledSet = await getDisabledSkillSet();
   const skills: (SkillMeta & { dirName: string })[] = [];
 
   for (const [dirName, { file, category }] of discovered) {
@@ -536,7 +512,6 @@ async function loadEligibleSkills(dirs: string[]): Promise<(SkillMeta & { dirNam
       continue;
     }
     const { frontmatter } = parseFrontmatter(raw);
-    if (disabledSet.has(dirName)) continue;
     if (!(await isEligible(frontmatter))) continue;
 
     skills.push({

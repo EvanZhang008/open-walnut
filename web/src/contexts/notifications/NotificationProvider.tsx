@@ -497,7 +497,6 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       dedupKey: `skill:${name}:${timestamp ?? 0}`,
       persistent: true,
       ...(timestamp ? { timestamp } : {}),
-      action: { label: 'Review Skill', kind: 'navigate', to: '/skills' },
     });
   });
 

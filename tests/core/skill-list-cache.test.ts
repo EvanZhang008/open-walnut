@@ -12,9 +12,9 @@ import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-skill-list-cache'));
 
-import { GLOBAL_SKILLS_DIR, SKILL_SETTINGS_FILE, WALNUT_HOME } from '../../src/constants.js';
+import { GLOBAL_SKILLS_DIR, WALNUT_HOME } from '../../src/constants.js';
 import { clearSkillsCache } from '../../src/core/skill-loader.js';
-import { listAllSkills, setSkillEnabled, _resetSkillListCacheForTest } from '../../src/core/skill-store.js';
+import { listAllSkills, _resetSkillListCacheForTest } from '../../src/core/skill-store.js';
 
 let originalCwd: string;
 let skillReads: string[];
@@ -145,16 +145,9 @@ describe('listAllSkills cache', () => {
     for (const r of results) expect(r).toEqual(results[0]);
   });
 
-  it('applies the current settings file to `enabled` on a cache hit', async () => {
+  it('ignores an old skill-settings.json: every skill stays listed and enabled', async () => {
     await seed('alpha', 'first');
-    expect((await listAllSkills())[0].enabled).toBe(true);
-
-    // Written behind the store's back: no clearSkillsCache, and not in the key.
-    await fsp.writeFile(SKILL_SETTINGS_FILE, JSON.stringify({ disabled: ['alpha'] }));
-    expect((await listAllSkills())[0].enabled).toBe(false);
-    expect(skillReads).toHaveLength(1);
-
-    await setSkillEnabled('alpha', true);
+    await fsp.writeFile(path.join(WALNUT_HOME, 'skill-settings.json'), JSON.stringify({ disabled: ['alpha'] }));
     expect((await listAllSkills())[0].enabled).toBe(true);
   });
 

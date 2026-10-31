@@ -16,14 +16,12 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-shipped-skill-prefix'))
 
-import { WALNUT_HOME, BUILTIN_SKILLS_DIR, GLOBAL_SKILLS_DIR, SKILL_SETTINGS_FILE } from '../../src/constants.js'
-import { getSkill, listAllSkills, setSkillEnabled, listReferences } from '../../src/core/skill-store.js'
+import { WALNUT_HOME, BUILTIN_SKILLS_DIR, GLOBAL_SKILLS_DIR } from '../../src/constants.js'
+import { getSkill, listAllSkills, listReferences } from '../../src/core/skill-store.js'
 import {
   clearSkillsCache,
   LEGACY_SKILL_DIR_ALIASES,
   resolveSkillDirName,
-  expandDisabledSkillNames,
-  buildSkillsPrompt,
 } from '../../src/core/skill-loader.js'
 import { createSkillsRouter } from '../../src/web/routes/skills.js'
 
@@ -78,10 +76,6 @@ describe('legacy name resolution', () => {
     expect(resolveSkillDirName('triage', discovered)).toBe('triage')
   })
 
-  it('a disabled list disables the renamed form of every legacy name', () => {
-    const set = expandDisabledSkillNames(['morning-brief', 'walnut-learn', 'mine'])
-    expect([...set].sort()).toEqual(['mine', 'morning-brief', 'walnut-learn', 'walnut-morning-brief'])
-  })
 })
 
 describe('the store under an old name', () => {
@@ -112,16 +106,11 @@ describe('the store under an old name', () => {
     expect(res.body.skill.dirName).toBe('walnut-triage')
   })
 
-  it('a disabled entry saved under the old name keeps the renamed skill off, and re-enabling clears it', async () => {
-    await fs.writeFile(SKILL_SETTINGS_FILE, JSON.stringify({ disabled: ['triage'] }))
+  it('an old disabled entry under the old name no longer hides the renamed skill', async () => {
+    await fs.writeFile(path.join(WALNUT_HOME, 'skill-settings.json'), JSON.stringify({ disabled: ['triage'] }))
     clearSkillsCache()
-    expect((await getSkill('walnut-triage'))?.enabled).toBe(false)
-    expect((await listAllSkills()).find((s) => s.dirName === 'walnut-triage')?.enabled).toBe(false)
-    expect(await buildSkillsPrompt()).not.toContain('walnut-triage')
-
-    const on = await setSkillEnabled('triage', true)
-    expect(on.enabled).toBe(true)
-    expect(JSON.parse(await fs.readFile(SKILL_SETTINGS_FILE, 'utf-8')).disabled).toEqual([])
+    expect((await getSkill('walnut-triage'))?.enabled).toBe(true)
+    expect((await listAllSkills()).find((s) => s.dirName === 'walnut-triage')?.enabled).toBe(true)
   })
 
   it("a user's own skill under the old name is the one answered", async () => {

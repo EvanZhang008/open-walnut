@@ -14,6 +14,8 @@ vi.mock('../../src/constants.js', () => createMockConstants('builtin-action-modu
 
 import { BUILTIN_ACTION_MODULES } from '../../src/actions/builtin-modules.js'
 import { discoverActions, runAction } from '../../src/actions/registry.js'
+import { CronService } from '../../src/core/cron/service.js'
+import { WALNUT_HOME } from '../../src/constants.js'
 
 const root = path.resolve(import.meta.dirname, '../..')
 const NOT_ACTIONS = new Set(['types', 'registry', 'index', 'builtin-modules'])
@@ -39,5 +41,71 @@ describe('built-in actions load as host modules', () => {
     // Off by default: the action answers without touching anything.
     const result = await runAction('inbox-triage-batch', {})
     expect(result.content).not.toMatch(/not found|failed:/)
+  })
+})
+
+describe('a routine whose action was removed', () => {
+  // An older install keeps its routines: one may still name 'screenshot-track',
+  // the screen-capture action removed with the Life Tracker on 2026-10-31.
+  const REMOVED = 'screenshot-track'
+
+  it('runAction skips a retired action with the reason, never a text the executor would act on', async () => {
+    const result = await runAction(REMOVED, {})
+    expect(result).toMatchObject({ invoke: false, status: 'skipped' })
+    expect(result.content).toMatch(/retired/)
+  })
+
+  it('an action that never existed (a deleted user action) fails the run', async () => {
+    const result = await runAction('no-such-action-ever', {})
+    expect(result).toMatchObject({ invoke: false, status: 'error' })
+    expect(result.content).toMatch(/not found/)
+  })
+
+  it('the engine boots with that routine and records its fire as a skipped run, starting nothing', async () => {
+    const storePath = path.join(WALNUT_HOME, `cron-removed-action-${Date.now()}.json`)
+    fs.mkdirSync(WALNUT_HOME, { recursive: true })
+    fs.writeFileSync(storePath, JSON.stringify({ version: 1, jobs: [] }), 'utf-8')
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn(), fatal: vi.fn(), child: vi.fn().mockReturnThis() }
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: 'ok', summary: 'done' })
+    const deps = () => ({
+      log: log as never,
+      storePath,
+      cronEnabled: true,
+      broadcastCronNotification: vi.fn(),
+      runMainAgentWithPrompt: vi.fn().mockResolvedValue(undefined),
+      runIsolatedAgentJob,
+      // The server's adapter (src/web/server.ts), reduced to the branches this run takes.
+      runAction: async (actionId: string, params: Record<string, unknown>) => {
+        const ar = await runAction(actionId, params)
+        if (ar.status === 'skipped') return { status: 'skipped' as const, summary: ar.content }
+        if (ar.status === 'error') return { status: 'error' as const, error: ar.content }
+        return { status: 'ok' as const, summary: ar.content }
+      },
+    })
+
+    const first = new CronService(deps())
+    const job = await first.add({
+      name: 'Life Tracker - Screenshot',
+      enabled: false,
+      schedule: { kind: 'every', everyMs: 60_000 },
+      sessionTarget: 'isolated',
+      wakeMode: 'now',
+      payload: { kind: 'agentTurn', message: 'analyze the screenshot' },
+      initProcessor: { actionId: REMOVED },
+    })
+    first.stop()
+
+    // Boot again on the stored file, as a restart does.
+    const service = new CronService(deps())
+    await expect(service.start()).resolves.toBeUndefined()
+    try {
+      expect((await service.list({ includeDisabled: true })).map((j) => j.id)).toContain(job.id)
+      await service.run(job.id, 'force')
+      const updated = (await service.list({ includeDisabled: true })).find((j) => j.id === job.id)
+      expect(updated?.state.lastStatus).toBe('skipped')
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled()
+    } finally {
+      service.stop()
+    }
   })
 })

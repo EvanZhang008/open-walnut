@@ -131,7 +131,6 @@ const OTHER_PANE_ENDPOINTS = [
   /^\/api\/calendar\/sources/,
   /^\/api\/plugin-sources/,
   /^\/api\/devices/,
-  /^\/api\/timeline/,
   /^\/api\/engines\/[^/]+\/settings/,
 ]
 
@@ -250,14 +249,14 @@ const hexToRgb = (hex: string) => {
 
 test('C24: off-page links carry the arrow and title, and navigate in the SPA', async ({ page }) => {
   await openSettings(page)
-  for (const [id, label] of [['agents', 'Agents'], ['skills', 'Skills'], ['commands', 'Commands'], ['memory', 'Memory']]) {
+  for (const [id, label] of [['agents', 'Agents'], ['commands', 'Commands'], ['memory', 'Memory']]) {
     const link = page.getByTestId(NAV(id))
     await expect(link).toHaveAttribute('title', `Opens the ${label} page`)
     await expect(link.locator('svg[data-glyph="arrow-up-right"]')).toHaveCount(1)
   }
   await page.evaluate(() => { (window as unknown as { __paneMarker: string }).__paneMarker = 'kept' })
-  await page.getByTestId(NAV('skills')).click()
-  await expect(page).toHaveURL(/\/skills/)
+  await page.getByTestId(NAV('commands')).click()
+  await expect(page).toHaveURL(/\/commands/)
   expect(await page.evaluate(() => (window as unknown as { __paneMarker?: string }).__paneMarker)).toBe('kept')
 })
 
@@ -295,8 +294,8 @@ test('C25: every nav tile is a 20px tinted square; the active entry is accent wi
 })
 
 test('C47: nav clicks replace history, so one Back leaves Settings', async ({ page }) => {
-  await page.goto('/skills')
-  await expect(page).toHaveURL(/\/skills/)
+  await page.goto('/commands')
+  await expect(page).toHaveURL(/\/commands/)
   await page.evaluate(() => {
     window.history.pushState({}, '', '/settings')
     window.dispatchEvent(new PopStateEvent('popstate', { state: {} }))
@@ -306,7 +305,7 @@ test('C47: nav clicks replace history, so one Back leaves Settings', async ({ pa
   await clickNav(page, 'sessions')
   await clickNav(page, 'tasks')
   await page.goBack()
-  await expect(page).toHaveURL(/\/skills/)
+  await expect(page).toHaveURL(/\/commands/)
 })
 
 test('C48: the document title names the pane', async ({ page }) => {
@@ -319,7 +318,7 @@ test('C48: the document title names the pane', async ({ page }) => {
 })
 
 test('C82: a same-page #link keeps history flat: Back returns to the page before Settings', async ({ page }) => {
-  await page.goto('/skills')
+  await page.goto('/commands')
   await page.evaluate(() => {
     window.history.pushState({}, '', '/settings')
     window.dispatchEvent(new PopStateEvent('popstate', { state: {} }))
@@ -335,7 +334,7 @@ test('C82: a same-page #link keeps history flat: Back returns to the page before
   await page.locator('#fixture-hash-link').click()
   await expect(page.getByTestId(NAV('advanced'))).toHaveAttribute('aria-current', 'page')
   await page.goBack()
-  await expect(page).toHaveURL(/\/skills/)
+  await expect(page).toHaveURL(/\/commands/)
 })
 
 type TestHooks = {

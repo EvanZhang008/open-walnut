@@ -367,7 +367,6 @@ export function actionOf(
 export function linkTargetOf(n: Notification): string | null {
   if (n.sessionId) return `/sessions?id=${n.sessionId}`;
   if (n.taskId) return `/tasks/${n.taskId}`;
-  if (n.kind === 'skill') return '/skills';
   if (n.action?.kind === 'navigate' && n.action.to) return n.action.to;
   return null;
 }

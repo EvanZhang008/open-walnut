@@ -7,7 +7,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { GLOBAL_SKILLS_DIR, CLAUDE_SKILLS_DIR, BUILTIN_SKILLS_DIR, SKILL_SETTINGS_FILE } from '../constants.js';
+import { GLOBAL_SKILLS_DIR, CLAUDE_SKILLS_DIR, BUILTIN_SKILLS_DIR } from '../constants.js';
 import { SHIPPED_SKILL_READ_ONLY_DELETE, SHIPPED_SKILL_READ_ONLY_EDIT } from './skill-errors.js';
 import {
   discoverSkills,
@@ -21,8 +21,6 @@ import {
   type DiscoveredSkill,
   type SkillType,
   resolveSkillDirName,
-  expandDisabledSkillNames,
-  LEGACY_SKILL_DIR_ALIASES,
 } from './skill-loader.js';
 import { sortedNames } from '../lib/dir-order.js';
 
@@ -42,30 +40,14 @@ export interface SkillInfo {
   type: SkillType;
   metadata?: Record<string, unknown>;
   eligible: boolean;
-  enabled: boolean;
+  /**
+   * Always true. The per-skill on/off switch (skill-settings.json) was removed on
+   * 2026-10-31: nobody had ever used it, and Claude Code sessions never read it.
+   * Kept in the shape so an older companion or host copy that filters on it keeps
+   * every skill; an old skill-settings.json is ignored.
+   */
+  enabled: true;
   hasReferences: boolean;
-}
-
-interface SkillSettings {
-  disabled: string[];
-}
-
-// ─── settings persistence ──────────────────────────────────────────
-
-async function readSettings(): Promise<SkillSettings> {
-  try {
-    const raw = await fsp.readFile(SKILL_SETTINGS_FILE, 'utf-8');
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed.disabled)) return parsed as SkillSettings;
-  } catch {
-    // file doesn't exist or invalid — defaults
-  }
-  return { disabled: [] };
-}
-
-async function writeSettings(settings: SkillSettings): Promise<void> {
-  await fsp.mkdir(path.dirname(SKILL_SETTINGS_FILE), { recursive: true });
-  await fsp.writeFile(SKILL_SETTINGS_FILE, JSON.stringify(settings, null, 2) + '\n');
 }
 
 // ─── source resolution ─────────────────────────────────────────────
@@ -187,7 +169,6 @@ function skillListKey(generation: number, dirs: string[], discovered: Map<string
 
 async function buildSkillList(
   discovered: Map<string, DiscoveredSkill>,
-  disabledSet: Set<string>,
 ): Promise<SkillInfo[]> {
   const roots = await loadSourceRoots();
   const built = await Promise.all([...discovered].map(async ([dirName, { dir, file, category }]): Promise<SkillInfo | null> => {
@@ -215,7 +196,7 @@ async function buildSkillList(
       type: normalizeSkillType(frontmatter.type),
       metadata: frontmatter.metadata,
       eligible,
-      enabled: !disabledSet.has(dirName),
+      enabled: true,
       hasReferences,
     };
   }));
@@ -225,8 +206,7 @@ async function buildSkillList(
 export async function listAllSkills(): Promise<SkillInfo[]> {
   const generation = getSkillsCacheGeneration();
   const dirs = getSearchDirs();
-  const [discovered, settings] = await Promise.all([discoverSkills(dirs), readSettings()]);
-  const disabledSet = expandDisabledSkillNames(settings.disabled);
+  const discovered = await discoverSkills(dirs);
   const key = skillListKey(generation, dirs, discovered);
   const startedAt = Date.now();
 
@@ -236,7 +216,7 @@ export async function listAllSkills(): Promise<SkillInfo[]> {
   } else {
     // Concurrent callers with the same key share one build.
     if (!skillListBuild || skillListBuild.key !== key) {
-      const promise: Promise<SkillInfo[]> = buildSkillList(discovered, disabledSet)
+      const promise: Promise<SkillInfo[]> = buildSkillList(discovered)
         .then((built) => {
           skillListCache = { key, builtAt: startedAt, skills: built };
           return built;
@@ -249,9 +229,8 @@ export async function listAllSkills(): Promise<SkillInfo[]> {
     skills = await skillListBuild.promise;
   }
 
-  // Fresh objects per call, and `enabled` from this call's settings read: the settings
-  // file is not part of the key, and callers must not be able to edit the cache.
-  return skills.map((s) => ({ ...s, enabled: !disabledSet.has(s.dirName) }));
+  // Fresh objects per call: callers must not be able to edit the cache.
+  return skills.map((s) => ({ ...s }));
 }
 
 export async function getSkill(requested: string): Promise<SkillInfo | null> {
@@ -269,9 +248,8 @@ export async function getSkill(requested: string): Promise<SkillInfo | null> {
   }
 
   const { frontmatter } = parseFrontmatter(raw);
-  const [source, settings, eligible, hasReferences] = await Promise.all([
+  const [source, eligible, hasReferences] = await Promise.all([
     resolveSource(entry.dir),
-    readSettings(),
     isEligible(frontmatter),
     pathExists(path.join(entry.dir, 'references')),
   ]);
@@ -287,7 +265,7 @@ export async function getSkill(requested: string): Promise<SkillInfo | null> {
     type: normalizeSkillType(frontmatter.type),
     metadata: frontmatter.metadata,
     eligible,
-    enabled: !expandDisabledSkillNames(settings.disabled).has(dirName),
+    enabled: true,
     hasReferences,
   };
 }
@@ -386,37 +364,6 @@ export async function deleteSkill(requested: string): Promise<void> {
   clearSkillsCache();
 }
 
-export async function setSkillEnabled(requested: string, enabled: boolean): Promise<SkillInfo> {
-  // Validate skill exists BEFORE modifying settings
-  const dirs = getSearchDirs();
-  const discovered = await discoverSkills(dirs);
-  const dirName = resolveSkillDirName(requested, discovered);
-  if (!discovered.has(dirName)) {
-    throw new Error(`Skill not found: ${dirName}`);
-  }
-
-  const settings = await readSettings();
-  const disabledSet = new Set(settings.disabled);
-  // Re-enabling a renamed skill must also drop the entry saved under its old name.
-  const legacyNames = Object.entries(LEGACY_SKILL_DIR_ALIASES)
-    .filter(([, renamed]) => renamed === dirName)
-    .map(([legacy]) => legacy);
-
-  if (enabled) {
-    disabledSet.delete(dirName);
-    for (const legacy of legacyNames) disabledSet.delete(legacy);
-  } else {
-    disabledSet.add(dirName);
-  }
-
-  settings.disabled = [...disabledSet].sort();
-  await writeSettings(settings);
-  clearSkillsCache();
-
-  const skill = await getSkill(dirName);
-  if (!skill) throw new Error(`Skill not found: ${dirName}`);
-  return skill;
-}
 
 // ─── references ─────────────────────────────────────────────────────
 

@@ -206,12 +206,9 @@ async function writeBase(deadline: number): Promise<WriteBase> {
   }
 }
 
-/** yaml.dump plus the comment above available_models (js-yaml drops comments). */
+/** The stored config as config.yaml text. */
 export function dumpConfig(doc: Record<string, unknown>): string {
-  return yaml.dump(doc, { indent: 2, lineWidth: 120 }).replace(
-    /^(\s+)available_models:/m,
-    '$1# Available models for the agent form dropdown.\n$1# Edit this list to add or remove models.\n$1available_models:',
-  );
+  return yaml.dump(doc, { indent: 2, lineWidth: 120 });
 }
 
 let beforeCommitForTest: (() => Promise<void>) | null = null;

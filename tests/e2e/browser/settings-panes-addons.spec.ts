@@ -688,7 +688,7 @@ test('C65 C36: cascade asks before writing, quarantine offers Try again, setup r
 // Plugins is not a Settings pane any more: the test audits it last, on the Apps page.
 const OWNED_PANES = [
   'calendar', 'permissions', 'backup', 'devices', 'remote-hosts',
-  'audio-capture', 'usage', 'suggest-accuracy', 'timeline', 'bug-report',
+  'audio-capture', 'usage', 'suggest-accuracy', 'bug-report',
 ]
 
 interface PaneAudit { transformed: string[]; upper: string[]; glyphs: string[]; emoji: string[]; checkboxes: number; legacy: number }

@@ -304,10 +304,6 @@ path on the companion".
 | GET | `/api/v1/qmd/status` | Search index health, frozen path name (501 on REPLICA) |
 | GET | `/api/v1/integrations` | Registered plugin display metadata |
 | GET | `/api/v1/integrations/settings` | Plugin settings metadata, secrets masked |
-| GET | `/api/v1/timeline?date=` | Life Tracker day timeline (501 on REPLICA) |
-| GET | `/api/v1/timeline/dates` | Dates with capture data (501 on REPLICA) |
-| GET | `/api/v1/timeline/images/:date/:file` | Thumbnail JPG (501 on REPLICA) |
-| POST | `/api/v1/timeline/toggle` | Enable/disable the Life Tracker job (501 on REPLICA) |
 | GET | `/api/v1/projects/:name/metadata` | Project detail-pane payload |
 | PUT | `/api/v1/projects/:name/metadata` | Merge project settings (501 on REPLICA) |
 | POST | `/api/v1/projects/:name/summary/regenerate` | Rebuild the AI project summary (501 on REPLICA) |
@@ -3573,12 +3569,13 @@ usual (absent → `general`).
   a REPLICA**; reads answer with the replica's own registry):
   - `GET /api/v1/agents/meta/tools` → `{ "tools": [names] }`;
     `…/meta/skills` → `{ "skills": [{ dirName, name, description }] }`;
-    `…/meta/models` → `{ "models": [ids] }` — the agent-editor dropdowns.
+    `…/meta/models` → `{ "models": [] }` (always empty since 2026-10-31: an
+    agent is a persona for a Claude Code session and picks no model).
   - `GET /api/v1/agents/:id` → `{ "agent" }` — the FULL definition (the
     frozen `GET /v1/agents` list stays the slim chat-picker projection).
   - `POST /api/v1/agents` body `{ "id" (lowercase slug), "name", … }` →
-    `201 { "agent" }`; duplicate id → `409 conflict`; a model outside
-    `available_models` → `400`.
+    `201 { "agent" }`; duplicate id → `409 conflict`. Fields of the removed
+    in-process agent loop (runner, model, tools, stateful, …) are ignored.
   - `PATCH /api/v1/agents/:id` → `{ "agent" }` (id/source immutable).
   - `DELETE /api/v1/agents/:id` → `204`; builtins refuse with `400`.
   - `POST /api/v1/agents/:id/clone` body `{ "id", "name"? }` →
@@ -3597,9 +3594,8 @@ usual (absent → `general`).
   - `POST /api/v1/skills` body `{ "dirName", "content", "category"? }` →
     `201 { "skill" }`; existing name anywhere → `409`.
   - `PUT /api/v1/skills/:dirName` body `{ "content" }` → `{ "skill" }`.
-  - `PATCH /api/v1/skills/:dirName` body `{ "enabled": boolean }` →
-    `{ "skill" }` — allowed for ANY source (it only writes Walnut's own
-    skill-settings.json, never the skill's directory).
+  - (`PATCH /api/v1/skills/:dirName`, the on/off switch, was removed
+    2026-10-31: it answers `404`, and `enabled` in a skill is always `true`.)
   - `DELETE /api/v1/skills/:dirName` → `204`.
   - `GET …/:dirName/references` → `{ "files": [{ name, size }] }`;
     `GET …/:dirName/references/:file` → `{ "content" }`.
@@ -3612,7 +3608,7 @@ usual (absent → `general`).
     non-slug names (traversal probes) → `400`.
   - `DELETE /api/v1/repositories/:name` → `{ "ok": true }`.
 
-### Console extras (additive, Wave 3 2026-08) — usage detail / providers / qmd / integrations / timeline
+### Console extras (additive, Wave 3 2026-08) — usage detail / providers / qmd / integrations
 
 - Usage detail breakdowns (complete the Wave-2 composite `/usage/overview`;
   **`501 not_supported_cloud` on a REPLICA** — the usage DB lives on the
@@ -3639,15 +3635,8 @@ usual (absent → `general`).
   `GET /api/v1/integrations/settings` → per-plugin configSchema + uiHints +
   current values masked at any depth (a secret-shaped key as `••••••`, in a list too, never with a tail; a URL's password as eight bullets), by
   the rule GET /api/config uses (src/core/config-secret-shape.ts). Class A.
-- Life Tracker timeline (**REPLICA: 501** — the capture dir holds screenshots
-  of the primary Mac and is deliberately excluded from git-sync):
-  - `GET /api/v1/timeline?date=YYYY-MM-DD` → `{ date, entries, summary,
-    tracking }`; bad date → `400`.
-  - `GET /api/v1/timeline/dates` → `{ "dates" }` newest first.
-  - `GET /api/v1/timeline/images/:date/:file` → JPEG bytes (jpg/jpeg only,
-    traversal rejected).
-  - `POST /api/v1/timeline/toggle` → `{ "enabled", "jobId" }`; no tracker
-    job yet → `404`.
+- Life Tracker timeline (`/api/v1/timeline*`): removed 2026-10-31 with Screen
+  Tracking; the four routes answer `404`.
 - Heartbeat: removed on 2026-10-27 with the heartbeat feature.
   `GET /api/v1/heartbeat`, `POST /api/v1/heartbeat/trigger` and
   `GET/PUT /api/v1/heartbeat/checklist` now answer `404`; no client used them.

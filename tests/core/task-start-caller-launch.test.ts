@@ -20,6 +20,7 @@ vi.mock('../../src/core/sessions/task-dir-place.js', async (orig) => ({
   ...(await orig<typeof import('../../src/core/sessions/task-dir-place.js')>()),
   taskDirForHost: async (taskId: string, host?: string | null) => (host && host !== '__local__' && host !== 'local' ? `/home/me/.local/state/open-walnut/tasks/${taskId}` : `/Users/me/.local/state/open-walnut/tasks/${taskId}`),
   ensureTaskDirOnHost: mocks.ensureTaskDirOnHost,
+  isFallbackFolder: async (cwd: string) => cwd.includes('/.local/state/open-walnut/tasks/'),
 }))
 vi.mock('../../src/core/task-manager.js', () => ({
   getTask: mocks.getTask, getProjectMetadata: mocks.getProjectMetadata, linkSession: mocks.linkSession,
@@ -89,6 +90,18 @@ describe('a worker starting another task of its own project', () => {
     callerSession({ host: 'devbox', cwd: '/home/me/marina' })
     const launch = await launchOf({ id: 't-sib', title: 'Sibling', project: 'MARINA' })
     expect(launch).toMatchObject({ cwd: '/home/me/marina', host: 'devbox' })
+  })
+
+  it('a caller in its own task directory hands on its host only: the new task works in its own directory there', async () => {
+    // The project's default host is this Mac with a default folder; neither applies on devbox.
+    callerSession({ host: 'devbox', cwd: '/home/me/.local/state/open-walnut/tasks/t-caller' })
+    const remote = await launchOf({ id: 't-sib', title: 'Sibling', project: 'marina' })
+    expect(remote).toEqual({ cwd: '/home/me/.local/state/open-walnut/tasks/t-sib', host: 'devbox' })
+    expect(mocks.ensureTaskDirOnHost).toHaveBeenCalledWith('t-sib', 'devbox')
+    callerSession({ host: '', cwd: '/Users/me/.local/state/open-walnut/tasks/t-caller' })
+    mocks.getProjectMetadata.mockResolvedValue({})
+    const local = await launchOf({ id: 't-sib2', title: 'Sibling', project: 'marina' })
+    expect(local).toEqual({ cwd: '/Users/me/.local/state/open-walnut/tasks/t-sib2', host: '' })
   })
 
   it('a task with its own cwd keeps it and the project host', async () => {

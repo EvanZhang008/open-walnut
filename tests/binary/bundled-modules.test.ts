@@ -48,7 +48,7 @@ describe('bundled module table', () => {
 describe('bundledModule()', () => {
   it('is null outside the compiled file', () => {
     expect(singleFile()).toBeNull()
-    expect(bundledModule('/any/dist/actions/screenshot-track.js')).toBeNull()
+    expect(bundledModule('/any/dist/actions/inbox-triage-batch.js')).toBeNull()
   })
 
   it('maps an absolute path inside the runtime root to its loader, and nothing else', () => {

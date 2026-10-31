@@ -587,19 +587,6 @@ test.describe('Routines', () => {
 // ── Settings ────────────────────────────────────────────────────────────────
 
 test.describe('Settings', () => {
-  test('a skill\'s content has the mic inside it', async ({ page }) => {
-    test.setTimeout(120_000)
-    await home(page)
-    await openSettings(page)
-    await settingsLinkTo(page, 'skills', '/skills')
-    await expect(page.locator('.skills-page')).toBeVisible({ timeout: 30_000 })
-    await page.locator('.skill-card').filter({ hasText: 'walnut-routines' }).first().click()
-    const field = page.locator('.mic-field').filter({ has: page.locator('.skill-detail-textarea') })
-    await expect(field.locator('.skill-detail-textarea')).not.toHaveValue('', { timeout: 20_000 })
-    // Looked at only: a save would write a shipped skill.
-    await expectMicField(page, 'skill-content', field)
-  })
-
   test('a new agent\'s system prompt has the mic inside it', async ({ page }) => {
     test.setTimeout(120_000)
     await home(page)

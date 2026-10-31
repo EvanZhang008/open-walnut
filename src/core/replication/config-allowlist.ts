@@ -39,8 +39,9 @@ const ALLOW: Record<string, AllowSpec> = {
   defaults: { priority: true, platform: true, project: true, engine: true },
   provider: { type: true, model: true, bedrock_region: true },
   agent: {
-    // region and maxTokens are read by nothing now, but an older leader still sends them in
-    // this row, and a row with a field outside the spec is refused whole (configRowAdmissible).
+    // region, maxTokens and available_models are retired (CONFIG_COPY_RETIRED_FIELDS), but an
+    // older leader still sends them in this row, and a row with a field outside the spec is
+    // refused whole (configRowAdmissible).
     region: true, maxTokens: true, session_effort: true, main_model: true, fast_model: true, quick_parse: true,
     available_models: { '[]': { id: true, provider: true, model_id: true, label: true, context_window: true, max_tokens: true } },
     triage: { debounce_minutes: true, notify_mode: true },
@@ -98,7 +99,6 @@ export const CONFIG_COPY_DROPPED: Readonly<Record<string, string>> = Object.free
   placement_weights: 'placement by load decides on the Mac',
   backup: 'backup targets of the Mac',
   search: 'embedding endpoints and keys; the search copy carries its own',
-  git_versioning: 'data backups of the Mac',
   session_hooks: 'hook actions run on the Mac',
   hooks: 'hook actions run on the Mac and may carry credentials',
   self_repair: 'the repair loop of the Mac',
@@ -130,7 +130,6 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
     reply_language: 'the reply-language line the Mac adds to each message it delivers',
     hints: 'the message hints the Mac composes into each message it delivers (core/hints/)',
   },
-  'agent.available_models.[]': { compat: 'request quirks for calls the Mac makes', cost: 'pricing of usage on the Mac' },
   'hosts.*': {
     shell_setup: 'a shell command line that may carry tokens',
     capabilities: 'capability tags read by the fleet cards and host selectors, built on the Mac',
@@ -154,6 +153,20 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
     prewarm_on_start: 'a speech server of the Mac', qwen_size: 'a speech model of the Mac',
     keep_recordings: 'each server sizes its own recordings to its own disk',
     auto_context: 'each server reads its own task titles (and an older replica would refuse an stt row naming it)',
+  },
+})
+
+/**
+ * Fields a section's spec still names that the Config type no longer has: read by
+ * nothing, kept in the spec only so an older leader's row that carries them is
+ * still admitted (a row with a field outside the spec is refused whole). The
+ * ratchet allows exactly these to be in a spec and not in the type.
+ */
+export const CONFIG_COPY_RETIRED_FIELDS: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
+  agent: {
+    region: 'the removed in-process agent loop',
+    maxTokens: 'the removed in-process agent loop',
+    available_models: 'the agent form model list (agents pick no model; their sessions do)',
   },
 })
 
@@ -238,8 +251,10 @@ export function allowThrough(value: unknown, spec: AllowSpec): unknown {
  * notification switches nothing read any more) and tools (settings of the
  * removed in-process agent's tools; older files may still hold search and
  * chat keys there, which is one more reason never to copy it).
+ * Removed 2026-10-31: git_versioning (settings of an auto-commit service that
+ * nothing started; data backups are git sync's job).
  */
-export const RETIRED_CONFIG_KEYS: ReadonlySet<string> = new Set(['heartbeat', 'developer', 'tools'])
+export const RETIRED_CONFIG_KEYS: ReadonlySet<string> = new Set(['heartbeat', 'developer', 'tools', 'git_versioning'])
 
 export interface ConfigCopyRow { key: string; value: unknown }
 

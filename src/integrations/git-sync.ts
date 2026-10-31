@@ -820,8 +820,7 @@ node_modules/
 *.corrupt-*
 
 # Dead pre-SQLite stores (0-byte sessions.db / tasks.db leftovers). ROOT-LEVEL
-# ONLY: memory/history.db is live chat data and must stay tracked — a blanket
-# *.db would silence it.
+# ONLY: a blanket *.db would also hide a store kept deeper in the tree.
 /*.db
 
 # One-shot migration output (e.g. chat-history.json.migrated, 1.8MB).

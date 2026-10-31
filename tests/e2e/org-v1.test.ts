@@ -112,9 +112,14 @@ describe('/api/v1/org', () => {
     expect(lead).toMatchObject({ title: 'Walnut lead', project: 'Walnut', source: 'local', org_role: 'lead' })
     expect(lead.parent_task_id).toBeFalsy()
     // No folder of its own; the contact says where a chat with it would start: a project with
-    // no folder runs in its memory folder, as every task start does.
+    // no folder runs in the lead's own task directory, as every task start does, never in
+    // the memory tree (2026-10-31: every project left an empty memory folder).
     expect(lead.cwd).toBeUndefined()
-    for (const c of contacts) expect(c.json).toMatchObject({ started: false, launch: { cwd: path.join(PROJECTS_MEMORY_DIR, 'walnut'), host: null } })
+    const { taskDirForHost } = await import('../../src/core/sessions/task-dir-place.js')
+    const leadDir = await taskDirForHost(lead.id, '__local__')
+    expect(leadDir).toBeTruthy()
+    expect(leadDir!.startsWith(PROJECTS_MEMORY_DIR)).toBe(false)
+    for (const c of contacts) expect(c.json).toMatchObject({ started: false, launch: { cwd: leadDir, host: null } })
     // The teams were not touched: no parent link, same project.
     for (const id of [a.id, b.id]) expect((await getTask(id)).parent_task_id).toBeFalsy()
     expect((await listTasks()).filter((x) => x.org_role === 'lead')).toHaveLength(1)

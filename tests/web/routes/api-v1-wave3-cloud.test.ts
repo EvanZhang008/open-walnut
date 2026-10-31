@@ -94,14 +94,12 @@ describe('console extras on a REPLICA', () => {
     for (const p of [
       '/api/v1/usage/summary', '/api/v1/usage/daily', '/api/v1/usage/by-source',
       '/api/v1/usage/by-model', '/api/v1/usage/by-agent', '/api/v1/usage/recent',
-      '/api/v1/qmd/status', '/api/v1/timeline', '/api/v1/timeline/dates',
+      '/api/v1/qmd/status',
     ]) {
       const res = await request(app).get(p)
       expect(res.status, p).toBe(501)
       expect(res.body.error.code, p).toBe('not_supported_cloud')
     }
-    const toggle = await request(app).post('/api/v1/timeline/toggle')
-    expect(toggle.status).toBe(501)
   })
 
   it('pricing / providers / integrations answer locally', async () => {

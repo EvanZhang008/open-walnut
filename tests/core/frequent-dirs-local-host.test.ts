@@ -61,3 +61,24 @@ describe('frequent-dirs: the empty host is this machine', () => {
     expect((rows[0] as { lastLaunch?: unknown }).lastLaunch).toEqual({ model: 'm2' })
   })
 })
+
+describe('frequent-dirs: folders Walnut picked are never suggestions', () => {
+  it('a task directory and an old memory folder are not recorded, and old rows of them drop on read', async () => {
+    const { PROJECTS_MEMORY_DIR } = await import('../../src/constants.js')
+    const { taskDirForHost } = await import('../../src/core/sessions/task-dir-place.js')
+    const taskDir = (await taskDirForHost('mvtest-0001', '__local__'))!
+    seed([
+      { cwd: '/repo', host: null, count: 5, lastUsed: '2026-10-01T00:00:00Z', projectVotes: {} },
+      { cwd: `${PROJECTS_MEMORY_DIR}/zz test heron 141057`, host: null, count: 1, lastUsed: '2026-10-27T00:00:00Z', projectVotes: {} },
+    ])
+    expect((await getFrequentDirs()).map((d) => d.cwd)).toEqual(['/repo'])
+    await recordDirectory(taskDir, null, 'Walnut')
+    await recordDirectory(`${PROJECTS_MEMORY_DIR}/routines`, '', 'Routines')
+    await recordDirectoryUses([{ cwd: taskDir, host: null }])
+    expect(stored().map((d) => d.cwd)).not.toContain(taskDir)
+    expect((await getFrequentDirs()).map((d) => d.cwd)).toEqual(['/repo'])
+    // A folder inside a task directory (a clone there) is a real place to work.
+    await recordDirectory(`${taskDir}/repo`, null, 'Walnut')
+    expect(stored().map((d) => d.cwd)).toContain(`${taskDir}/repo`)
+  })
+})

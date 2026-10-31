@@ -2735,6 +2735,10 @@ export class ClaudeCodeSession {
     const startSpawn = async (): Promise<{ pid: number | null; outputFile: string; fileSize: number } & SpawnLineOutcome> => {
       const { sessionStops } = await import('../core/sessions/session-stop.js')
       const stopFence = opts?.stopFence !== undefined ? opts.stopFence : await sessionStops.fence(tmpId)
+      if (this.taskId) {
+        const { restoreOwnTaskDir } = await import('../core/sessions/task-dir-place.js')
+        await restoreOwnTaskDir(this.taskId, resolvedCwd, host).catch(() => false)
+      }
       const cwdCheck = await checkCwdExists(resolvedCwd, host, sshTarget)
       if (!cwdCheck.ok) {
         const errMsg = cwdCheck.error ?? 'Working directory not available'
@@ -11453,7 +11457,7 @@ export class SessionRunner {
             log.session.info('handleStart: adopted project default_host', { taskId, host: data.host })
           }
           if (!cwd) cwd = named ? defaultCwdOnHost(metadata, data.host) : metadata?.default_cwd as string | undefined
-          // Last resort: project memory directory (LOCAL sessions only).
+          // Last resort: the task's own directory (LOCAL sessions only).
           // For remote sessions, a local path won't exist on the remote host —
           // fail with a clear error instead of sending a bogus cwd.
           if (!cwd) {
@@ -11466,12 +11470,8 @@ export class SessionRunner {
                 `(e.g. /home/you/... on the remote host).`
               )
             }
-            const { PROJECTS_MEMORY_DIR } = await import('../constants.js')
-            const path = await import('node:path')
-            const nodeFs = await import('node:fs')
-            const projectDir = path.join(PROJECTS_MEMORY_DIR, (task.project || 'inbox').toLowerCase())
-            nodeFs.mkdirSync(projectDir, { recursive: true })
-            cwd = projectDir
+            const { localFallbackFolder } = await import('../core/sessions/task-dir-place.js')
+            cwd = await localFallbackFolder(task.id)
           }
         }
       } catch (err) {
@@ -11858,12 +11858,8 @@ export class SessionRunner {
                 `Set a cwd on the task, or set default_cwd in project "${projectLabel}" metadata.`
               )
             }
-            const { PROJECTS_MEMORY_DIR } = await import('../constants.js')
-            const path = await import('node:path')
-            const nodeFs = await import('node:fs')
-            const projectDir = path.join(PROJECTS_MEMORY_DIR, (task.project || 'inbox').toLowerCase())
-            nodeFs.mkdirSync(projectDir, { recursive: true })
-            cwd = projectDir
+            const { localFallbackFolder } = await import('../core/sessions/task-dir-place.js')
+            cwd = await localFallbackFolder(task.id)
           }
         }
       } catch (err) {

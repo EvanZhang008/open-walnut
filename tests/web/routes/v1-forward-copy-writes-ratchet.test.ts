@@ -37,7 +37,7 @@ describe('ratchet: memory and skill writes go to the Mac from the companion', ()
 
   it('the write routes are exactly the expected ones', () => {
     expect(routes).toEqual([
-      'DELETE /api/skills/:dirName', 'PATCH /api/skills/:dirName', 'POST /api/memory/daily-log/compact', 'POST /api/skills',
+      'DELETE /api/skills/:dirName', 'POST /api/memory/daily-log/compact', 'POST /api/skills',
       'PUT /api/memory/global', 'PUT /api/memory/user', 'PUT /api/skills/:dirName',
     ])
   })

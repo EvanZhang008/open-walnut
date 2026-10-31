@@ -416,7 +416,8 @@ describe('linkTargetOf (the click-through both permission surfaces share)', () =
 
   it('falls back to the task, then a kind-specific page, then the record action', () => {
     expect(linkTargetOf(n({ kind: 'cron', taskId: 'task-9' }))).toBe('/tasks/task-9');
-    expect(linkTargetOf(n({ kind: 'skill' }))).toBe('/skills');
+    // No Skills page any more (2026-10-31): a skill notice names its file and links nowhere.
+    expect(linkTargetOf(n({ kind: 'skill' }))).toBeNull();
     expect(linkTargetOf(n({
       kind: 'operation-error',
       action: { label: 'Open Settings', kind: 'navigate', to: '/settings' },

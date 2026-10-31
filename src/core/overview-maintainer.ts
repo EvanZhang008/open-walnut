@@ -74,10 +74,11 @@ export function resetMaintainerState(): void {
   queueTail = Promise.resolve();
 }
 
-function notifySkillCreated(skillName: string, category: string): void {
+function notifySkillCreated(skillName: string, category: string, location: string): void {
   const timestamp = Date.now();
   const title = `New skill: ${skillName}`;
-  const body = `The overview maintainer created skill '${skillName}' (category: ${category}) from a task lifecycle event. Review it in Skills.`;
+  // The file itself is the place to review it (the Skills page was removed 2026-10-31).
+  const body = `The overview maintainer created skill '${skillName}' (category: ${category}) from a task lifecycle event: ${location}`;
   bus.emit('skill:notification', { name: skillName, category, title, body, timestamp }, ['web-ui'], {
     source: 'task-hook',
   });
@@ -376,7 +377,7 @@ async function applyMaintainerAnswer(
       const created = await createSkill(name, md, 'walnut', category);
       await recordSkillCreated(name);
       writes.skillCreated = name;
-      notifySkillCreated(name, created.category);
+      notifySkillCreated(name, created.category, created.location);
     } catch (err) {
       // A name clash or an invalid segment is the model's mistake, not a hook
       // failure: the log entry above already landed.

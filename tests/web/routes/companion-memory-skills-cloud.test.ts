@@ -281,7 +281,6 @@ describe('skills on the box', () => {
     const writes: Array<[string, string, unknown]> = [
       ['POST', '/api/skills', { dirName: 'new-skill', content: '# New' }],
       ['PUT', '/api/skills/acme-tool', { content: '# Changed' }],
-      ['PATCH', '/api/skills/acme-tool', { enabled: false }],
       ['DELETE', '/api/skills/acme-tool', undefined],
       ['POST', '/api/v1/skills', { dirName: 'new-skill', content: '# New' }],
       ['PUT', '/api/v1/skills/acme-tool', { content: '# Changed' }],

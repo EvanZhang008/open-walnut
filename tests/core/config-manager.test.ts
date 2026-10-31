@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import yaml from 'js-yaml';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
@@ -245,13 +246,12 @@ describe('a config-read hiccup never silently drops the agent section', () => {
   });
 
   it('an UNPARSEABLE file with no sidecar still yields a usable agent section', async () => {
-    // The catch branch returns DEFAULT_CONFIG with the model catalog seeded. It
+    // The catch branch returns DEFAULT_CONFIG with the main model seeded. It
     // must SPREAD the default agent object rather than replace it, or a key added
     // to the defaults silently disappears on this path.
     await fs.writeFile(CONFIG_FILE, '{ this is not yaml: [oops', 'utf-8');
     const config = await getConfig();
     expect(config.agent?.main_model).toBeTruthy();
-    expect((config.agent?.available_models ?? []).length).toBeGreaterThan(0);
   });
 });
 
@@ -335,5 +335,40 @@ describe('the companion keep choice moves from hosts.companion to cloud_bridge',
     const config = await getConfig();
     expect(config.hosts?.companion).toMatchObject({ hostname: 'box.example', keep: { notes: false } });
     expect(config.cloud_bridge?.keep).toBeUndefined();
+  });
+});
+
+// Git versioning (an auto-commit service nothing started) was removed on
+// 2026-10-31. An older config.yaml may still carry its `git_versioning:` block.
+describe('a config.yaml that still carries the removed git_versioning key', () => {
+  it('loads without error, and a later write keeps the block as the user left it', async () => {
+    const initial = { version: 1, user: { name: 'TestUser' }, git_versioning: { auto_commit: true, push_enabled: true } };
+    await fs.writeFile(CONFIG_FILE, yaml.dump(initial), 'utf-8');
+
+    const config = await getConfig();
+    expect(config.user?.name).toBe('TestUser');
+
+    await updateConfig({ defaults: { priority: 'backlog', project: 'Life' } } as any);
+    const result = yaml.load(await fs.readFile(CONFIG_FILE, 'utf-8')) as any;
+    expect(result.defaults.project).toBe('Life');
+    expect(result.git_versioning).toEqual({ auto_commit: true, push_enabled: true });
+  });
+
+  it('nothing in the server or the web app reads it', async () => {
+    const root = path.resolve(__dirname, '../..');
+    // The replica copy names it once, as a retired key it drops quietly.
+    const allowed = new Set([path.join('src', 'core', 'replication', 'config-allowlist.ts')]);
+    const readers: string[] = [];
+    const walk = async (dir: string): Promise<void> => {
+      for (const e of await fs.readdir(path.join(root, dir), { withFileTypes: true })) {
+        const rel = path.join(dir, e.name);
+        if (e.isDirectory()) { if (e.name !== 'node_modules') await walk(rel); continue; }
+        if (!/\.(ts|tsx|mjs|js)$/.test(e.name) || allowed.has(rel)) continue;
+        if ((await fs.readFile(path.join(root, rel), 'utf-8')).includes('git_versioning')) readers.push(rel);
+      }
+    };
+    await walk('src');
+    await walk(path.join('web', 'src'));
+    expect(readers).toEqual([]);
   });
 });

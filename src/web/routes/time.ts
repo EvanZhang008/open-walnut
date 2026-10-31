@@ -21,7 +21,8 @@
  * rather than pinning a connection while disk/store work finishes. One stalled
  * response starves the browser's 6-connection pool.
  *
- * Not `/api/timeline` — that path belongs to the screen-activity Life Tracker.
+ * Not `/api/timeline`: that path was the screen-activity Life Tracker, removed
+ * on 2026-10-31.
  */
 
 import { Router, type Request, type Response } from 'express';

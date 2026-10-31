@@ -39,7 +39,7 @@ function startLoad(): SkillLoad {
       // entries instead of leaving the palette with no skills at all.
       removeOwner('skill');
       for (const skill of skills) {
-        if (!skill.eligible || !skill.enabled) continue;
+        if (!skill.eligible) continue;
 
         const cmd: SlashCommand = {
           name: skill.name,

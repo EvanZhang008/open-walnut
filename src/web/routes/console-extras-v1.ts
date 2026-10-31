@@ -1,8 +1,8 @@
 /**
  * /api/v1 console extras (additive, Wave 3) — usage detail breakdowns,
- * provider status, search-index status, plugin metadata and Life Tracker
- * timeline. Semantics identical to the internal routes
- * (usage.ts / config.ts / search-index.ts / integrations.ts / timeline.ts) —
+ * provider status, search-index status and plugin metadata. Semantics
+ * identical to the internal routes
+ * (usage.ts / config.ts / search-index.ts / integrations.ts) —
  * same shared functions, zero duplicated logic.
  *
  *   GET  /usage/summary | /daily | /by-source | /by-model | /by-agent
@@ -11,18 +11,16 @@
  *   GET  /qmd/status                         → search index health
  *   GET  /integrations                       → [plugin metadata]
  *   GET  /integrations/settings              → [plugin settings, secrets masked]
- *   GET  /timeline?date=                     → day timeline
- *   GET  /timeline/dates                     → { dates }
- *   GET  /timeline/images/:date/:file        → JPEG bytes
- *   POST /timeline/toggle                    → { enabled, jobId }
  *
  * The heartbeat routes (/heartbeat, /heartbeat/trigger, /heartbeat/checklist)
  * went with the heartbeat feature on 2026-10-27 and now answer 404.
  *
  * Replica classes:
- * - usage / qmd status / timeline: C — the usage DB, search index and
- *   timeline captures (gitignored dir) all live on the primary → 501
- *   not_supported_cloud.
+ * - usage / qmd status: C — the usage DB and search index live on the
+ *   primary → 501 not_supported_cloud.
+ * - The Life Tracker timeline (/timeline, /timeline/dates, /timeline/images,
+ *   /timeline/toggle) was removed with the feature on 2026-10-31 and now
+ *   answers 404.
  * - config/providers: local read describing the ANSWERING box's provider
  *   credentials (the replica's Personal AI uses its own) — served on both boxes,
  *   with `key_hint` (last-4 of a key) STRIPPED: any paired device can call
@@ -234,68 +232,6 @@ consoleExtrasV1Router.get('/integrations/settings', async (_req: Request, res: R
   } catch (err) {
     next(err)
   }
-})
-
-// ── Life Tracker timeline ────────────────────────────────────────────────────
-// C-class: the capture dir is deliberately gitignored (screenshots of the
-// Mac), so a REPLICA has no data — an honest 501 beats an empty 200.
-
-/** Run a timeline op, mapping TimelineOpError onto the frozen v1 shape. */
-async function runTimelineOp(res: Response, next: NextFunction, fn: () => Promise<unknown>): Promise<void> {
-  const { TimelineOpError } = await import('./timeline.js')
-  try {
-    res.json(await fn())
-  } catch (err) {
-    if (err instanceof TimelineOpError) {
-      sendError(res, err.statusCode, err.statusCode === 404 ? 'not_found' : err.statusCode >= 500 ? 'internal' : 'bad_request', err.message)
-      return
-    }
-    next(err)
-  }
-}
-
-// GET /api/v1/timeline?date=YYYY-MM-DD — one day's parsed activity timeline.
-consoleExtrasV1Router.get('/timeline', async (req: Request, res: Response, next: NextFunction) => {
-  if (primaryOnly(res, 'The Life Tracker timeline')) return
-  const { getTimelineForDate } = await import('./timeline.js')
-  await runTimelineOp(res, next, () => getTimelineForDate(req.query.date))
-})
-
-// GET /api/v1/timeline/dates — dates with capture data, newest first.
-consoleExtrasV1Router.get('/timeline/dates', async (_req: Request, res: Response, next: NextFunction) => {
-  if (primaryOnly(res, 'The Life Tracker timeline')) return
-  const { listTimelineDates } = await import('./timeline.js')
-  await runTimelineOp(res, next, () => listTimelineDates())
-})
-
-// GET /api/v1/timeline/images/:date/:file — one thumbnail JPG (binary).
-consoleExtrasV1Router.get('/timeline/images/:date/:file', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    if (primaryOnly(res, 'The Life Tracker timeline')) return
-    const { readTimelineImage, TimelineOpError } = await import('./timeline.js')
-    try {
-      const buffer = await readTimelineImage(req.params.date, req.params.file)
-      res.setHeader('Content-Type', 'image/jpeg')
-      res.setHeader('Cache-Control', 'public, max-age=86400')
-      res.setHeader('Content-Length', buffer.length)
-      res.send(buffer)
-    } catch (err) {
-      if (err instanceof TimelineOpError) {
-        sendError(res, err.statusCode, err.statusCode === 404 ? 'not_found' : 'bad_request', err.message)
-        return
-      }
-      throw err
-    }
-  } catch (err) {
-    next(err)
-  }
-})
-
-// POST /api/v1/timeline/toggle — enable/disable the Life Tracker cron job.
-consoleExtrasV1Router.post('/timeline/toggle', async (_req: Request, res: Response, next: NextFunction) => {
-  if (primaryOnly(res, 'The Life Tracker cron job')) return
-  const { toggleLifeTracker } = await import('./timeline.js')
-  await runTimelineOp(res, next, () => toggleLifeTracker())
 })
 
 // Router-level error funnel — keeps unexpected failures in the frozen shape.

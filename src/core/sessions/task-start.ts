@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { requireFrozenWorkspaceReady, resolveTaskLaunchReadOnly, validateLaunchChoices } from './task-launch-plan.js';
 import path from 'node:path';
-import { mkdir } from 'node:fs/promises';
 import { getTask, linkSession, updateTaskRaw } from '../task-manager.js';
 import { createSessionRecord, getSessionsForTask, updateSessionRecord } from '../session-tracker.js';
 import { QuickStartError } from './quick-start.js';
@@ -566,8 +565,8 @@ async function startInNewWorkspace(
       + `A workspace is for new work: task_create with workspace, or task_transfer {"id":"${task.id}"} to move this work.`, 409);
   }
   const place = await resolveTaskLaunchReadOnly(task, { ...params, workspace: undefined });
-  if (place.createLocalDirectory || place.createTaskDir) {
-    throw new QuickStartError(`Task ${task.id} has no folder for a workspace to copy: pass cwd (an existing folder, usually a repository).`, 400);
+  if (place.createTaskDir) {
+    throw new QuickStartError(`Task ${task.id} has no folder of its own for a workspace to copy (only its task directory): pass cwd (an existing folder, usually a repository).`, 400);
   }
   (await admitStartWithinLimits(task, params.callerSid, params.userRequest))();
   const made = await requestTaskStartWorkspace(task, params, workspace, place);
@@ -576,19 +575,18 @@ async function startInNewWorkspace(
 
 async function prepareLaunch(task: Task, params: SessionStartParams) {
   const launch = await resolveTaskLaunchReadOnly(task, params);
-  if (params.createCwd && !launch.createLocalDirectory) {
+  if (params.createCwd && !launch.createTaskDir) {
     // Same sanitize rule as the quick-start route: this path may ride a daemon RPC.
     if (/[;&|`$(){}!<>]/.test(launch.cwd)) throw new QuickStartError('invalid characters in cwd', 400);
     const { ensureCwd } = await import('./ensure-cwd.js');
     await ensureCwd(launch.cwd, launch.host || undefined);
   }
-  if (launch.createLocalDirectory) await mkdir(launch.cwd, { recursive: true });
   if (launch.createTaskDir) {
     // A named host with no folder of its own for this task: its task directory there.
     const { ensureTaskDirOnHost } = await import('./task-dir-place.js');
     const made = await ensureTaskDirOnHost(task.id, launch.host || undefined);
     if ('error' in made) throw new QuickStartError(`Task ${task.id} needs a cwd on host "${launch.host}": its task directory there could not be made (${made.error}). Pass cwd.`, made.status);
   }
-  const { createLocalDirectory, createTaskDir, ...resolved } = launch;
+  const { createTaskDir, ...resolved } = launch;
   return resolved;
 }

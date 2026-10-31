@@ -23,7 +23,7 @@ import { getCommand, removeOwner } from '../../web/src/commands/registry.js'
 function skill(name: string): SkillInfo {
   return {
     dirName: name, name, description: `${name} skill`, source: 'walnut',
-    location: `/skills/${name}/SKILL.md`, content: '', eligible: true, enabled: true, hasReferences: false,
+    location: `/skills/${name}/SKILL.md`, content: '', eligible: true, hasReferences: false,
   }
 }
 

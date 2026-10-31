@@ -6,33 +6,24 @@
  * MainPage which never unmounts). They used to hold independent private copies
  * with no shared event, so creating or renaming an agent on /agents left the tab
  * bar showing the old list until a full page reload.
- *
- * The agent list and the form's metadata (tool names, models, skills) load
- * SEPARATELY on purpose: the homepage needs only the list, and pulling three
- * extra catalogues into every home load to serve one settings page is waste.
  */
 import * as agentsApi from '@/api/agents';
-import type { AgentDefinition, CreateAgentInput, SkillMeta, UpdateAgentInput } from '@/api/agents';
+import type { AgentDefinition, CreateAgentInput, UpdateAgentInput } from '@/api/agents';
 import { log } from '@/utils/log';
 
 export interface AgentsSnapshot {
   agents: AgentDefinition[];
-  availableModels: string[];
-  skills: SkillMeta[];
   /** The list has resolved once (`[]` is a real answer, not "still loading"). */
   agentsLoaded: boolean;
-  metaLoaded: boolean;
   error: string | null;
 }
 
 let snapshot: AgentsSnapshot = {
-  agents: [], availableModels: [], skills: [],
-  agentsLoaded: false, metaLoaded: false, error: null,
+  agents: [], agentsLoaded: false, error: null,
 };
 const subscribers = new Set<() => void>();
 let listInflight: Promise<void> | null = null;
 let wantsRefetch = false;
-let metaInflight: Promise<void> | null = null;
 
 function emit(): void {
   for (const fn of [...subscribers]) fn();
@@ -78,27 +69,6 @@ export function loadAgents(force = false): Promise<void> {
     }
   })();
   return listInflight;
-}
-
-/** Models and skills — only the /agents form needs these. */
-export function loadAgentMeta(): Promise<void> {
-  if (metaInflight) return metaInflight;
-  if (snapshot.metaLoaded) return Promise.resolve();
-  metaInflight = (async () => {
-    try {
-      const [availableModels, skills] = await Promise.all([
-        agentsApi.fetchAvailableModels(),
-        agentsApi.fetchAvailableSkills(),
-      ]);
-      setSnapshot({ availableModels, skills, metaLoaded: true });
-    } catch (err) {
-      log.warn('agents', 'agent metadata load failed', { error: String(err).slice(0, 200) });
-      setSnapshot({ metaLoaded: true, error: err instanceof Error ? err.message : String(err) });
-    } finally {
-      metaInflight = null;
-    }
-  })();
-  return metaInflight;
 }
 
 function mergeAgent(agent: AgentDefinition): void {
@@ -177,11 +147,9 @@ export async function cloneAgentDefinition(id: string, newId: string, newName?: 
 /** Tests only: forget everything the store learned. */
 export function __resetAgentsStore(): void {
   snapshot = {
-    agents: [], availableModels: [], skills: [],
-    agentsLoaded: false, metaLoaded: false, error: null,
+    agents: [], agentsLoaded: false, error: null,
   };
   subscribers.clear();
   listInflight = null;
   wantsRefetch = false;
-  metaInflight = null;
 }

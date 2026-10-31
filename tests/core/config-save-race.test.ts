@@ -292,13 +292,13 @@ describe('a config.yaml that really is lost or broken', () => {
     expect((await load()).user.name).toBe('x')
   })
 
-  it('boot puts back a lost file from the backup and seeds the model list', async () => {
+  it('boot puts back a lost file from the backup and seeds the main model', async () => {
     await seedWalnutWrite()
     await fs.rm(CONFIG_FILE)
     await cm.seedConfigDefaults()
     const doc = await load()
     expect(doc.editor_marker).toBe('walnut-old')
-    expect(doc.agent.available_models.length).toBeGreaterThan(0)
+    expect(doc.agent.main_model).toBeTruthy()
   })
 
   it('boot leaves a file that does not parse alone', async () => {

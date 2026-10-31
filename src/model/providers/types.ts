@@ -88,7 +88,7 @@ export interface ProviderConfig {
 
 // ── Model catalog ──
 
-/** Model entry in available_models catalog. */
+/** Model entry in a provider's `models` catalog (ProviderConfig.models). */
 export interface ModelEntry {
   id: string;                  // User-facing ID (unique key)
   provider: string;            // Provider ID key from providers section

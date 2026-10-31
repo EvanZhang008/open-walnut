@@ -5,7 +5,7 @@
  * a time; a nav click only changes the hash (replace), SettingsPage mounts that
  * pane.
  *
- * Off-page links (Agents, Skills, Commands, Memory, Apps) route away and carry an arrow-up-right mark. Plugin rows arrive
+ * Off-page links (Agents, Commands, Memory, Apps) route away and carry an arrow-up-right mark. Plugin rows arrive
  * asynchronously, so until the plugin runtime is ready the Plugins group
  * renders as many quiet placeholders as last time (localStorage) and the
  * Configure group does not jump when the real rows land.
@@ -42,7 +42,6 @@ export const PLUGIN_COUNT_KEY = 'walnut.settings.nav.pluginCount'
 
 const MANAGE_PAGES: ReadonlyArray<{ id: string; to: string; label: string; glyph: SettingsGlyphName; tint: string }> = [
   { id: 'agents', to: '/agents', label: 'Agents', glyph: 'two-person', tint: '#5856D6' },
-  { id: 'skills', to: '/skills', label: 'Skills', glyph: 'sparkles', tint: '#AF52DE' },
   { id: 'commands', to: '/commands', label: 'Commands', glyph: 'slash-in-square', tint: '#636366' },
   { id: 'memory', to: '/memory', label: 'Memory', glyph: 'bookmark-stack', tint: '#FF2D55' },
 ]

@@ -8,7 +8,6 @@ import { sttScanSummary } from '../../web/src/components/settings/sections/stt-s
 import { fieldOwnerFor } from '../../web/src/components/settings/plugin-config-fields.js'
 import { truncateHint, HINT_MAX } from '../../web/src/components/settings/settings-filter.js'
 import { groupShowsTags } from '../../web/src/components/settings/sections/HooksSection.js'
-import { fromMs, toMs } from '../../web/src/components/settings/sections/AdvancedSection.js'
 import { providerStatusTag } from '../../web/src/components/settings/sections/ProvidersSection.js'
 import { jevTestText } from '../../web/src/components/settings/sections/JevSettings.js'
 import { permissionActionLabel, permissionTag } from '../../web/src/components/settings/sections/PermissionsSection.js'
@@ -79,17 +78,6 @@ describe('N3-11: a tag only when it tells rows apart', () => {
   })
 })
 
-describe('N3-24: intervals in seconds and minutes, saved as milliseconds', () => {
-  it('round-trips', () => {
-    expect(fromMs(30_000, 1_000)).toBe(30)
-    expect(fromMs(600_000, 60_000)).toBe(10)
-    expect(toMs(10, 60_000)).toBe(600_000)
-    expect(toMs(1.5, 1_000)).toBe(1_500)
-    expect(fromMs(undefined, 1_000)).toBeUndefined()
-    expect(toMs(undefined, 1_000)).toBeUndefined()
-  })
-})
-
 describe('N3-26: a Ready tag says where the credential comes from', () => {
   const ready = (credential_source: string) => ({ status: 'ready', credential_source } as never)
   it('tells saved keys from keys found elsewhere', () => {
@@ -114,14 +102,5 @@ describe('N3-28: macOS Access names its action and what is known', () => {
     expect(permissionActionLabel({ state: 'not-determined', optional: true } as never)).toBe('Set up...')
     expect(permissionActionLabel({ state: 'granted' } as never)).toBeNull()
     expect(permissionTag({ state: 'unknown' } as never).text).toBe("Couldn't check")
-  })
-})
-
-describe('N3-24: an untouched interval saves its exact milliseconds', () => {
-  it('keeps 12345 and 700000 through the rounded display', () => {
-    expect(toMs(fromMs(12_345, 1_000), 1_000, 12_345)).toBe(12_345)
-    expect(toMs(fromMs(700_000, 60_000), 60_000, 700_000)).toBe(700_000)
-    // A value the user typed wins over the stored one.
-    expect(toMs(20, 1_000, 12_345)).toBe(20_000)
   })
 })

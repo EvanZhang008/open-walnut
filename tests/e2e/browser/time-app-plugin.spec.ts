@@ -290,11 +290,11 @@ test('the App declares its own surface: no Sidebar row, no Settings row, a row o
   await shoot(page, 'views-app-settings-nav')
 
   // This App is the ONLY Time UI now: the console's duplicate `time` section is gone,
-  // so Configure must not offer a second door to the same numbers. `timeline` is NOT
-  // that door — it is the screen-activity Life Tracker, which nothing else exposes.
+  // so Configure must not offer a second door to the same numbers. The old `timeline`
+  // pane (Screen Tracking, the screenshot Life Tracker) was removed with that feature.
   await expect(page.getByTestId('settings-nav-time')).toHaveCount(0)
   await expect(page.locator('.settings-nav-item', { hasText: 'Time Tracking' })).toHaveCount(0)
-  await expect(page.getByTestId('settings-nav-timeline')).toHaveText('Screen Tracking')
+  await expect(page.getByTestId('settings-nav-timeline')).toHaveCount(0)
   await shoot(page, 'configure-group-no-time')
 
   await openApps(page)

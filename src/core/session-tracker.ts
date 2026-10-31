@@ -1,7 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { SESSIONS_DIR, WALNUT_HOME } from '../constants.js';
-import { ensureDir } from '../utils/fs.js';
 import { isSessionProcessAlive } from '../utils/session-liveness.js';
 import { log } from '../logging/index.js';
 import type {
@@ -2971,8 +2970,6 @@ export async function getSessionSummaries(limit = 10): Promise<SessionSummary[]>
       .map((f) => parseSessionMarkdown(f.content, f.file))
       .filter((s): s is SessionSummary => s !== null);
   }
-  await ensureDir(SESSIONS_DIR);
-
   let files: string[];
   try {
     files = await fs.readdir(SESSIONS_DIR);

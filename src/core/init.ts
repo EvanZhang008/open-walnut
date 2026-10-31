@@ -5,14 +5,10 @@ import {
   TASKS_DIR,
   ARCHIVE_DIR,
   MEMORY_DIR,
-  SESSIONS_DIR,
   SYNC_DIR,
-  DAILY_DIR,
   REPOS_MEMORY_DIR,
-  COMPACTION_DIR,
   NOTES_DIR,
   REPOSITORIES_DIR,
-  TIMELINE_DIR,
   RECORDINGS_DIR,
   TMP_DIR,
   CONFIG_SHARE_DIR,
@@ -59,21 +55,20 @@ export async function initDirectories(): Promise<void> {
   await ensureDir(TASKS_DIR);
   await ensureDir(ARCHIVE_DIR);
   await ensureDir(MEMORY_DIR);
-  await ensureDir(SESSIONS_DIR);
   await ensureDir(SYNC_DIR);
-  await ensureDir(DAILY_DIR);
+  // memory/sessions/, memory/daily/ and memory/compaction/ are the old in-process
+  // agent's logs: whatever still writes one makes its own dir, and an empty dir made
+  // at every boot was only clutter in the memory tree (2026-10-31 cleanup).
   // memory/projects/ retired (2026-07 unification) — knowledge lives under skills/.
   // Do NOT ensureDir it: PROJECTS_DIR and PROJECTS_MEMORY_DIR are the SAME path
   // (memory/projects), so recreating it here resurrected the legacy tree on every
   // boot after the full migration deleted it. TOPICS_DIR is retired for the same reason.
   await ensureDir(REPOS_MEMORY_DIR);
-  await ensureDir(COMPACTION_DIR);
   await ensureDir(NOTES_DIR);
   // PARA scaffolding (Areas/Projects/Resources/Archive) retired 2026-08 — the
   // vault is topic-first now (see notes/CLAUDE.md routing table). Recreating
   // them here resurrected empty PARA dirs on every boot after the migration.
   await ensureDir(REPOSITORIES_DIR);
-  await ensureDir(TIMELINE_DIR);
   // tmp/ is the ONE sanctioned home for app-generated scratch (gitignored).
   // Created before anything that writes into it (RECORDINGS_DIR lives inside).
   await ensureDir(TMP_DIR);
