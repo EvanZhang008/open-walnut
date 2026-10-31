@@ -128,7 +128,7 @@ const PHASE_READERS: Record<string, number> = {
   'web/src/components/tasks/AgentSearchResultRows.tsx': 1,
   'web/src/components/tasks/FocusSatelliteCards.tsx': 1,
   'web/src/components/tasks/footer-scope.ts': 1,
-  'web/src/components/tasks/status-sections.ts': 3,
+  'web/src/components/tasks/status-sections.ts': 2,
   'web/src/components/tasks/StatusSections.tsx': 3,
   'web/src/components/tasks/TaskDetailPane.tsx': 1,
   'web/src/components/tasks/TaskStatusControl.tsx': 8,

@@ -113,8 +113,12 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
   const activity = recentActivityTime(task, 'updated');
   const ago = timeAgo(isDone && task.completed_at ? task.completed_at : activity.at);
   const vanishing = handlers.isVanishing(task);
-  // Under Waiting / snoozed, a task that is not parked sleeps until its start date.
-  const snoozedUntil = sectionKey === 'waiting' && task.phase !== 'WAITING' && task.start_date ? formatStartDateDisplay(task.start_date) : '';
+  // Under Waiting / snoozed: the date the shared status says it sleeps until (its own start
+  // date or an ancestor's); a task the server has not derived yet reads its own start date.
+  const snoozeDate = sectionKey !== 'waiting' ? ''
+    : task.user_status ? task.user_status.snoozed?.until ?? ''
+    : task.phase !== 'WAITING' ? task.start_date ?? '' : '';
+  const snoozedUntil = snoozeDate ? formatStartDateDisplay(snoozeDate) : '';
   const projectName = task.project || 'Inbox';
   const title = <span className={`todo-pinned-title${task.walnut_agent ? ' walnut-task-title' : ''}`} title={task.title}>{task.title}</span>;
   const pills = (
@@ -125,7 +129,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
     </>
   );
   const wake = snoozedUntil ? (
-    <span className="todo-item-due-pill todo-item-start-pill" title={`Snoozed: starts ${task.start_date}`}>▶︎ {snoozedUntil}</span>
+    <span className="todo-item-due-pill todo-item-start-pill" title={`Snoozed: starts ${snoozeDate}`}>▶︎ {snoozedUntil}</span>
   ) : task.phase === 'WAITING' && task.wait_until && !isDone ? (
     <span
       className="todo-item-due-pill todo-item-wait-pill"

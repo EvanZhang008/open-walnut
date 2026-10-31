@@ -184,7 +184,7 @@ test.describe('Status, sections and persistence', () => {
     }
   })
 
-  test('a task not available yet sleeps under Waiting / snoozed only under the default Date (C39)', async ({ page, baseURL }) => {
+  test('a task not available yet sleeps under Waiting / snoozed, whatever Date shows it (C39)', async ({ page, baseURL }) => {
     const stamp = runStamp()
     const garden = `Garden ${stamp}`
     const ids = await seed(page, garden, [{ title: `g now ${stamp}` }, { title: `g later ${stamp}`, start: '2099-01-01' }])
@@ -202,11 +202,12 @@ test.describe('Status, sections and persistence', () => {
       await expect(snoozed).toBeVisible()
       await expect(snoozed.locator('.todo-item-start-pill')).toBeVisible()
       await setStatusSectionOpen(page, 'waiting', false)
-      // Any date draws it with the open rows, so Waiting has nothing left to hold.
+      // Any date shows it as well, and it is still snoozed: the shared status says so
+      // (src/core/user-status.ts, 2026-10-31), so it stays under Waiting / snoozed.
       await addFilter(page, 'date', 'Any date')
       await expect(filterChip(page, 'date')).toContainText('Any date')
-      await expect(statusSectionCard(page, 'working', ids[1])).toBeVisible()
-      await expect(statusSection(page, 'waiting')).toHaveCount(0)
+      await expect(statusSectionCount(page, 'waiting')).toHaveText('1')
+      await expect(statusSectionCard(page, 'working', ids[1])).toHaveCount(0)
       await removeFilterChip(page, 'date')
       await expect(statusSectionCard(page, 'working', ids[1])).toHaveCount(0)
       await expect(statusSectionCount(page, 'waiting')).toHaveText('1')

@@ -18,7 +18,7 @@
  * runs, and the stored open state. StatusSections.tsx draws them.
  */
 import type { Task } from '@open-walnut/core';
-import { taskNeedsAction } from '@/utils/session-status';
+import { taskUserState } from '@/utils/session-status';
 import { USER_STATE_LABELS } from '@open-walnut/user-status';
 import { recentActivityTime } from './recent-activity-time';
 
@@ -62,24 +62,26 @@ export function isWatched(task: Watchable): boolean {
   return !!task.watched_at;
 }
 
-/** The state section a task belongs to. Done wins, then a snooze (`snoozed`: its start
- *  date is still to come, the Date rule's call), then the user's turn, then a park. A
- *  snoozed task waits even when it needs the user: they put it away until that date
- *  (2026-10-30; the server's user status says the same, src/core/user-status.ts). */
+/** The state section a task belongs to: the one user status (taskUserState), where the
+ *  server already weighed a snooze (the task's own start date or an ancestor's, 2026-10-31).
+ *  `snoozed` is the panel's own read of the start date, used only for a task the server has
+ *  not derived yet. One mapping of the panel's: a task nobody started and not snoozed is open
+ *  work, ready to pick up, so it sits under Working, not Waiting ("Not started yet"). */
 export function stateSectionOf(task: Task, snoozed?: (task: Task) => boolean): StateSectionKey {
-  if (task.status === 'done' || task.phase === 'COMPLETE') return 'done';
-  if (snoozed?.(task)) return 'waiting';
-  if (taskNeedsAction(task)) return 'needs';
-  if (task.phase === 'WAITING') return 'waiting';
-  return 'working';
+  const us = task.user_status;
+  const asleep = us ? !!us.snoozed : !!snoozed?.(task);
+  const state = taskUserState(task, !us && asleep);
+  if (state !== 'waiting') return state;
+  const notStarted = us ? us.kind === 'not-started' : task.phase === 'TODO';
+  return notStarted && !asleep ? 'working' : 'waiting';
 }
 
 /** The state section in a design with no Needs you section: a row that needs the user
- *  is open work, unless it is parked or snoozed (the list would hide it there). */
+ *  is open work, unless it is parked (the list would hide it there). */
 export function stateSectionNoNeeds(task: Task, snoozed?: (task: Task) => boolean): StateSectionKey {
   const s = stateSectionOf(task, snoozed);
   if (s !== 'needs') return s;
-  return task.phase === 'WAITING' || snoozed?.(task) ? 'waiting' : 'working';
+  return task.phase === 'WAITING' ? 'waiting' : 'working';
 }
 
 /** When a waiting row wakes: its clock, else its start date. */

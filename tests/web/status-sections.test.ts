@@ -40,7 +40,7 @@ describe('stateSectionOf / statusSectionOf', () => {
   it('the one user status decides Needs you; the phase is the fallback', () => {
     expect(stateSectionOf(task({ phase: 'NEED_ACTION' }))).toBe('needs');
     // A turn that ended with nothing for the user reads Waiting in user_status: not Needs you.
-    expect(stateSectionOf(task({ phase: 'NEED_ACTION', user_status: { state: 'waiting' } as Task['user_status'] }))).toBe('working');
+    expect(stateSectionOf(task({ phase: 'NEED_ACTION', user_status: { state: 'waiting', kind: 'lead' } as Task['user_status'] }))).toBe('waiting');
     expect(stateSectionOf(task({ phase: 'WAITING', user_status: { state: 'needs' } as Task['user_status'] }))).toBe('needs');
   });
   it('a park and a snooze are Waiting; the rest is Working', () => {
@@ -51,10 +51,22 @@ describe('stateSectionOf / statusSectionOf', () => {
     expect(stateSectionOf(task())).toBe('working');
   });
   it('a snoozed task waits even when it needs the user (2026-10-30: snoozed, still under Needs you)', () => {
-    const later = task({ phase: 'NEED_ACTION', user_status: { state: 'needs' } as Task['user_status'], start_date: '2099-01-01' });
-    expect(stateSectionOf(later, (t) => t.id === later.id)).toBe('waiting');
-    // Its date come (the Date rule no longer calls it snoozed): back under Needs you.
-    expect(stateSectionOf(later, () => false)).toBe('needs');
+    // The shared status holds the snooze: its own start date or an ancestor's (no date of its own here).
+    const asleep = { state: 'waiting', kind: 'time', waitingOn: 'Snoozed until 2099-01-01', snoozed: { until: '2099-01-01', ask: 'Review it' } } as Task['user_status'];
+    expect(stateSectionOf(task({ phase: 'NEED_ACTION', user_status: asleep }))).toBe('waiting');
+    // The server is the one owner: the panel's own start-date read never overrides it.
+    const needs = task({ phase: 'NEED_ACTION', user_status: { state: 'needs' } as Task['user_status'], start_date: '2099-01-01' });
+    expect(stateSectionOf(needs, () => true)).toBe('needs');
+    // A task an older server has not derived: the panel's read stands in, and its date come, Needs you.
+    const old = task({ phase: 'NEED_ACTION', start_date: '2099-01-01' });
+    expect(stateSectionOf(old, (t) => t.id === old.id)).toBe('waiting');
+    expect(stateSectionOf(old, () => false)).toBe('needs');
+  });
+  it('a task nobody started is open work under Working, unless snoozed; one that stopped waits', () => {
+    expect(stateSectionOf(task({ user_status: { state: 'waiting', kind: 'not-started' } as Task['user_status'] }))).toBe('working');
+    expect(stateSectionOf(task({ user_status: { state: 'waiting', kind: 'not-started', snoozed: { until: '2099-01-01' } } as Task['user_status'] }))).toBe('waiting');
+    expect(stateSectionOf(task({ phase: 'IN_PROGRESS', user_status: { state: 'waiting', kind: 'stuck' } as Task['user_status'] }))).toBe('waiting');
+    expect(stateSectionOf(task({ phase: 'IN_PROGRESS', user_status: { state: 'working', snoozed: { until: '2099-01-01' } } as Task['user_status'] }))).toBe('working');
   });
   it('a watched task is drawn under Watching whatever its state', () => {
     expect(statusSectionOf(task({ phase: 'COMPLETE', status: 'done', watched_at: '2026-10-29T00:00:00Z' }))).toBe('watching');
