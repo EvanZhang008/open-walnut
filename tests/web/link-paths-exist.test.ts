@@ -16,6 +16,7 @@ vi.mock('../../src/core/config-manager.js', () => ({
 vi.mock('../../src/replica/self-host.js', () => ({
   hostEntryOf: (hosts: Record<string, unknown> | undefined, host: string) => hosts?.[host],
   selfHostConnection: () => null,
+  isSelfHost: () => false,
 }))
 vi.mock('../../src/core/hosts/remote-read-bound.js', async (orig) => ({
   ...(await orig<object>()),

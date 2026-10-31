@@ -66,6 +66,7 @@ import { DaemonFileReader } from '../core/daemon-file-reader.js'
 // Image transfer for remote sessions: RemoteSessionManager.prepareOutbound() uploads
 // local images via daemon and rewrites paths inside start() and writeMessage().
 import type { SshTarget } from './session-io.js'
+import { linkTarget } from '../core/hosts/link.js'
 import { createSessionManager, registerSessionManager, unregisterSessionManager } from './session-manager.js'
 import type { SessionManager } from './session-manager.js'
 import type { DaemonTaskState } from './daemon-connection.js'
@@ -3260,18 +3261,7 @@ export class ClaudeCodeSession {
         try {
           const { getConfig } = await import('../core/config-manager.js')
           const config = await getConfig()
-          const hostDef = config.hosts?.[record.host]
-          if (hostDef) {
-            const hostname = hostDef.hostname ?? (hostDef as Record<string, unknown>).ssh as string | undefined
-            if (hostname) {
-              sshTarget = {
-                hostname,
-                user: hostDef.user,
-                port: hostDef.port,
-                shell_setup: hostDef.shell_setup,
-              }
-            }
-          }
+          if (config.hosts?.[record.host]) sshTarget = linkTarget(record.host, config)
         } catch {
           log.session.warn('failed to resolve host config for attach', {
             sessionId: record.claudeSessionId,
@@ -11668,17 +11658,7 @@ export class SessionRunner {
       if (!hostDef) {
         throw new Error(`Unknown host "${data.host}" — configure it in config.yaml under hosts.${data.host}`)
       }
-      // Support both 'hostname' and legacy 'ssh' field names
-      const hostname = hostDef.hostname ?? (hostDef as Record<string, unknown>).ssh as string | undefined
-      if (!hostname) {
-        throw new Error(`Host "${data.host}" is missing 'hostname' field in config.yaml`)
-      }
-      sshTarget = {
-        hostname,
-        user: hostDef.user,
-        port: hostDef.port,
-        shell_setup: hostDef.shell_setup,
-      }
+      sshTarget = linkTarget(data.host, config)
     }
 
     // Local images are uploaded to the remote host by RemoteSessionManager.prepareOutbound()
@@ -12980,9 +12960,7 @@ export class SessionRunner {
     if (record.host) {
       const hostDef = cfg.hosts?.[record.host]
       if (!hostDef) throw new Error(`reinitialize: host "${record.host}" not found in config.hosts`)
-      const hostname = hostDef.hostname ?? (hostDef as Record<string, unknown>).ssh as string | undefined
-      if (!hostname) throw new Error(`reinitialize: host "${record.host}" has no hostname configured`)
-      sshTarget = { hostname, user: hostDef.user, port: hostDef.port, shell_setup: hostDef.shell_setup }
+      sshTarget = linkTarget(record.host, cfg)
     }
 
     // Reuse the live session object if we have one (send() detaches its old
@@ -13773,18 +13751,7 @@ export class SessionRunner {
           let sshTarget: SshTarget | undefined
           if (record.host) {
             try {
-              const hostDef = resumeConfig.hosts?.[record.host]
-              if (hostDef) {
-                const hostname = hostDef.hostname ?? (hostDef as Record<string, unknown>).ssh as string | undefined
-                if (hostname) {
-                  sshTarget = {
-                    hostname,
-                    user: hostDef.user,
-                    port: hostDef.port,
-                    shell_setup: hostDef.shell_setup,
-                  }
-                }
-              }
+              if (resumeConfig.hosts?.[record.host]) sshTarget = linkTarget(record.host, resumeConfig)
             } catch {
               log.session.warn('failed to resolve host config for resume', { sessionId, host: record.host })
             }
@@ -13838,13 +13805,7 @@ export class SessionRunner {
       const resumeHost = targetSession.host
       if (resumeHost) {
         try {
-          const hostDef = resumeConfig2.hosts?.[resumeHost]
-          if (hostDef) {
-            const hostname = hostDef.hostname ?? (hostDef as Record<string, unknown>).ssh as string | undefined
-            if (hostname) {
-              resumeSshTarget = { hostname, user: hostDef.user, port: hostDef.port, shell_setup: hostDef.shell_setup }
-            }
-          }
+          if (resumeConfig2.hosts?.[resumeHost]) resumeSshTarget = linkTarget(resumeHost, resumeConfig2)
         } catch {
           log.session.warn('failed to resolve host config for resume (existing target)', { sessionId, host: resumeHost })
         }

@@ -56,11 +56,10 @@ export async function ensureTaskDirOnHost(taskId: string, host?: string | null):
   const { hostEntryOf } = await import('../../replica/self-host.js')
   const hostDef = hostEntryOf((await getConfig()).hosts, host!)
   if (!hostDef?.hostname) return { error: `unknown host ${host}`, status: 404 }
-  const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
+  const { link } = await import('../hosts/link.js')
   const { boundHostRead } = await import('../hosts/remote-read-bound.js')
-  const sshTarget = { hostname: hostDef.hostname ?? host!, user: hostDef.user, port: hostDef.port }
   return boundHostRead(host!, async () => {
-    const conn = await getDaemonConnection(host!, sshTarget)
+    const conn = await link(host!)
     if (!conn.hasCapability?.('task-dir-v1')) return { error: `the daemon on ${host} is too old for task directories; it upgrades on the next session start`, status: 409 }
     const { WALNUT_HOME } = await import('../../constants.js')
     const res = await conn.send('taskdir.ensure', { taskId, home: WALNUT_HOME }) as { ok?: boolean; path?: unknown; error?: string }

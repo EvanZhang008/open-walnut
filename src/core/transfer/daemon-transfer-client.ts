@@ -76,19 +76,9 @@ async function defaultResolver(host: string): Promise<TransferConn[]> {
   const pick = (): TransferConn[] => (dc.listConnectedDaemonsByHost().get(host) ?? []) as unknown as TransferConn[]
   const conns = pick()
   if (conns.length > 0) return conns
-  let target: { hostname: string; user?: string; port?: number } | null = null
-  const { isSelfHost } = await import('../../replica/self-host.js')
-  if (host === '__local__' || isSelfHost(host)) {
-    target = { hostname: host }
-  } else {
-    const { getConfig } = await import('../config-manager.js')
-    const def = (await getConfig()).hosts?.[host] as { hostname?: string; ssh?: string; user?: string; port?: number } | undefined
-    const hostname = def?.hostname ?? def?.ssh
-    if (def && hostname) target = { hostname, user: def.user, port: def.port }
-  }
-  if (!target) return []
   let timer: NodeJS.Timeout | undefined
-  const dial = dc.getDaemonConnection(host, target)
+  // An unknown host rejects and reads as offline (the catch below).
+  const dial = (await import('../hosts/link.js')).link(host)
   dial.catch(() => { /* the pool keeps the failure */ })
   try {
     const conn = await Promise.race([

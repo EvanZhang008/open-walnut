@@ -209,15 +209,13 @@ type HostDaemon = Awaited<ReturnType<typeof import('../providers/daemon-connecti
  * (HostReconnectingError, a transport failure) is "could not ask" to the callers.
  */
 async function onHostDaemon<T>(host: string, work: (conn: HostDaemon) => Promise<T>): Promise<T | null> {
-  const { getDaemonConnection } = await import('../providers/daemon-connection.js')
+  const { link } = await import('./hosts/link.js')
   const { getConfig } = await import('./config-manager.js')
   const config = await getConfig()
   const hostDef = config.hosts?.[host]
   if (!hostDef?.hostname) return null
   const { boundHostRead } = await import('./hosts/remote-read-bound.js')
-  return boundHostRead(host, async () => work(await getDaemonConnection(host, {
-    hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port,
-  })))
+  return boundHostRead(host, async () => work(await link(host)))
 }
 
 async function statRemote(host: string, remotePath: string): Promise<{ mtimeMs: number; size: number } | null> {

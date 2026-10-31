@@ -49,7 +49,7 @@ import {
   resolveOverridePath,
 } from '../core/agents/engine-probe.js'
 import { localDaemon } from './local-daemon.js'
-import { getDaemonConnection, getDirectDaemonConnection, DaemonConnection, type DaemonEvent } from './daemon-connection.js'
+import { getDirectDaemonConnection, DaemonConnection, type DaemonEvent } from './daemon-connection.js'
 import type { AcpHostAdapterSpec } from './acp-host-artifacts.js'
 import { hostAdapterSpec } from '../core/agents/host-adapter-spec.js'
 import { AcpJournalProjector } from './acp-journal-projector.js'
@@ -141,16 +141,6 @@ export function hostAdapterEnv(env: Record<string, string> | undefined, home: st
     out[k] = v
   }
   return out
-}
-
-/** How a session on another host reaches that host's daemon (config.hosts). */
-async function remoteSshTarget(host: string): Promise<{ hostname: string; user?: string; port?: number; shell_setup?: string }> {
-  const { getConfig } = await import('../core/config-manager.js')
-  const hostDef = (await getConfig()).hosts?.[host]
-  if (!hostDef) throw new Error(`Unknown host: ${host}`)
-  const hostname = hostDef.hostname ?? (hostDef as Record<string, unknown>).ssh as string | undefined
-  if (!hostname) throw new Error(`Host ${host} has no hostname`)
-  return { hostname, user: hostDef.user, port: hostDef.port, shell_setup: hostDef.shell_setup }
 }
 
 export function resolveAcpArtifacts(
@@ -821,7 +811,7 @@ export class AcpSession {
 
   private async ensureConn(): Promise<DaemonConnection> {
     if (this.conn?.connected) return this.conn
-    if (this.remote && !this.cfg.directWsUrl) return this.adoptConn(await getDaemonConnection(this.host, await remoteSshTarget(this.host)))
+    if (this.remote && !this.cfg.directWsUrl) return this.adoptConn(await (await import('../core/hosts/link.js')).link(this.host))
     const wsUrl = this.cfg.directWsUrl || localDaemon.wsUrl
     if (!wsUrl) {
       await localDaemon.ensureRunning()

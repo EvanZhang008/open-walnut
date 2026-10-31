@@ -70,7 +70,7 @@ export async function checkCwdExists(
 
   // Remote — ask the daemon
   try {
-    const { getDaemonConnection } = await import('./daemon-connection.js');
+    const { link } = await import('../core/hosts/link.js');
     const timeoutPromise = new Promise<never>((_, reject) => {
       setTimeout(
         () => reject(new Error('cwd check timed out')),
@@ -78,7 +78,7 @@ export async function checkCwdExists(
       );
     });
     const conn = await Promise.race([
-      getDaemonConnection(host, sshTarget),
+      link(host),
       timeoutPromise,
     ]);
     const result = await Promise.race([

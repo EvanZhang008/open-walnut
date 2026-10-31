@@ -36,18 +36,15 @@ async function realConnection(host: string): Promise<WorkspaceConn> {
   const dc = await import('../../providers/daemon-connection.js')
   let conn: WorkspaceConn | null = dc.getConnectedDaemonConnection(host)
   if (!conn) {
-    let target: { hostname: string; user?: string; port?: number } = { hostname: '__local__' }
     if (host !== '__local__') {
       const { getConfig } = await import('../config-manager.js')
       const def = (await getConfig()).hosts?.[host]
-      const hostname = def?.hostname ?? ((def as Record<string, unknown> | undefined)?.ssh as string | undefined)
-      if (!def || def.enabled === false || !hostname) throw new WorkspaceError(`Unknown host: ${host}`, 400, 'unknown-host')
-      target = { hostname, user: def.user, port: def.port }
+      if (!def || def.enabled === false) throw new WorkspaceError(`Unknown host: ${host}`, 400, 'unknown-host')
     }
     let timer: NodeJS.Timeout | undefined
     try {
       conn = await Promise.race([
-        dc.getDaemonConnection(host, target),
+        (await import('../hosts/link.js')).link(host),
         new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('dial timeout')), DIAL_MS) }),
       ])
     } catch (err) {

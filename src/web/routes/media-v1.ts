@@ -59,7 +59,7 @@ async function hostForSession(sessionId: string): Promise<string | null> {
 /** Primary box: fetch via the trusted daemon channel (falls back to fs.read for old daemons). */
 async function fetchViaDaemon(host: string, remotePath: string): Promise<Buffer | null> {
   try {
-    const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
+    const { link } = await import('../../core/hosts/link.js')
     const { getConfig } = await import('../../core/config-manager.js')
     const config = await getConfig()
     const hostDef = config.hosts?.[host]
@@ -69,7 +69,7 @@ async function fetchViaDaemon(host: string, remotePath: string): Promise<Buffer 
     // is noticed in seconds instead of after two 30s command timeouts (boundHostRead).
     const { boundHostRead } = await import('../../core/hosts/remote-read-bound.js')
     const result = await boundHostRead(host, async () => {
-      const conn = await getDaemonConnection(host, { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port })
+      const conn = await link(host)
       const image = await conn.send('fs.readImage', { path: remotePath }).catch(() => null)
       if (image?.ok) return image
       // Old daemon without fs.readImage — trusted SSH channel, fs.read is fine.

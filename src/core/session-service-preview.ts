@@ -25,7 +25,7 @@ import https from 'node:https'
 import { checkServerIdentity, type TLSSocket } from 'node:tls'
 import os from 'node:os'
 import { getConfig } from './config-manager.js'
-import { getDaemonConnection } from '../providers/daemon-connection.js'
+import { link } from './hosts/link.js'
 import { HostReconnectingError, boundHostRead, hostLinkAnswers } from './hosts/remote-read-bound.js'
 import { hostDisplayName, inHostTerms } from './hosts/host-display-name.js'
 import type { SessionRecord } from './types.js'
@@ -293,13 +293,13 @@ async function resolvePreview(session: SessionRecord, url: URL, deps: ServicePre
     throw new ServicePreviewError(`Unknown session host alias: ${target.host}`, 422, 'unknown_host')
   }
   const name = hostDisplayName(target.host, def.label)
-  let conn: Awaited<ReturnType<typeof getDaemonConnection>>
+  let conn: Awaited<ReturnType<typeof link>>
   try {
     // The host-read deadline (core/hosts/remote-read-bound.ts): a host still
     // connecting answers at once instead of at this route's 30s deadline, and a
     // connected link is asked once whether it still answers before an ssh
     // forward is opened on it.
-    conn = await boundHostRead(target.host, () => getDaemonConnection(target.host, { hostname: def.hostname, user: def.user, port: def.port }))
+    conn = await boundHostRead(target.host, () => link(target.host))
     if (!(await hostLinkAnswers(target.host))) throw new HostReconnectingError(target.host, name)
   } catch (err) {
     if (err instanceof HostReconnectingError) {

@@ -74,24 +74,14 @@ async function capableConnection(record: SessionRecord): Promise<{ conn: Conn | 
 }
 
 async function dial(key: string): Promise<Conn | null> {
-  const dc = await import('../../providers/daemon-connection.js')
-  let target: { hostname: string; user?: string; port?: number } | null = null
-  if (key === '__local__') {
-    target = { hostname: '__local__' }
-  } else {
-    const { getConfig } = await import('../config-manager.js')
-    const def = (await getConfig()).hosts?.[key] as { hostname?: string; user?: string; port?: number } | undefined
-    if (def) target = { hostname: def.hostname ?? key, user: def.user, port: def.port }
-  }
-  if (!target) return null
-  const t = target
+  const { link } = await import('../hosts/link.js')
   // A dial that fails is "no daemon"; one still going past the wait is a 503
   // the caller can retry (the pool keeps dialing; this request does not wait).
   return new Promise<Conn | null>((resolve, reject) => {
     const timer = setTimeout(() => reject(new SessionControlError(
       `Still connecting to ${key === '__local__' ? 'this Mac' : key}; try again in a moment`, 503, { code: 'host_connecting', host: key },
     )), DIAL_WAIT_MS)
-    dc.getDaemonConnection(key, t).then(
+    link(key).then(
       (c) => { clearTimeout(timer); resolve(c as unknown as Conn) },
       () => { clearTimeout(timer); resolve(null) },
     )

@@ -4,7 +4,7 @@ import { USAGE_DB_FILE } from '../../constants.js';
 import { ResponseUsageStore, type UsageEvidence, type UsageOwner, type SourceCheck } from './response-store.js';
 import { getConfig } from '../config-manager.js';
 import { listSessions } from '../session-tracker.js';
-import { getDaemonConnection } from '../../providers/daemon-connection.js';
+import { link } from '../hosts/link.js';
 import type { UsageFilter } from './types.js';
 import { engineCaps } from '../agents/engine-registry.js';
 import type { DayBucket } from './cost-rollup.js';
@@ -83,10 +83,7 @@ async function collect(since: string | undefined, until: string) {
   const results = [];
   for (const [host, owners] of hosts) {
     try {
-      const def = config.hosts?.[host];
-      const target = host === '__local__' ? { hostname: '__local__' }
-        : { hostname: def?.hostname ?? host, user: def?.user, port: def?.port };
-      const conn = await getDaemonConnection(host, target);
+      const conn = await link(host);
       await conn.connect();
       if (!conn.hasCapability('usage-scan-v1')) throw new Error('This host needs the usage collector daemon upgrade.');
       let reply = await conn.send('usage.scan', { since: sinceFor(host), until, sessionIds: owners.map(o => o.sessionId),

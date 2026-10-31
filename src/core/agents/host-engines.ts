@@ -45,7 +45,7 @@ async function askRemote(host: string, dial: boolean): Promise<HostAnswer | null
     const hostDef = (await getConfig()).hosts?.[host];
     const hostname = hostDef?.hostname ?? (hostDef as Record<string, unknown> | undefined)?.ssh as string | undefined;
     if (!hostDef || !hostname) return null;
-    conn = await dc.getDaemonConnection(host, { hostname, user: hostDef.user, port: hostDef.port, shell_setup: hostDef.shell_setup });
+    conn = await (await import('../hosts/link.js')).link(host);
   }
   const out: HostAnswer = { claude: { installed: true, version: null, reason: null } };
   const acpIds = [...ENGINE_REGISTRY.keys()].filter((id) => isAcpEngine(id));

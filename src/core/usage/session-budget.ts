@@ -12,7 +12,7 @@ import crypto from 'node:crypto';
 import { WALNUT_HOME } from '../../constants.js';
 import { getConfig } from '../config-manager.js';
 import { getSessionByClaudeId } from '../session-tracker.js';
-import { getDaemonConnection } from '../../providers/daemon-connection.js';
+import { link } from '../hosts/link.js';
 import { currentPriceSnapshot, ensurePriceBook } from './price-book.js';
 import type { PriceSnapshot } from './price-data.js';
 import type { BudgetPrices, BudgetState } from '../../providers/usage-budget-runtime.js';
@@ -44,10 +44,7 @@ export async function budgetPrices(): Promise<BudgetPrices> {
 }
 
 async function hostConnection(host: string) {
-  const config = await getConfig();
-  const def = config.hosts?.[host];
-  const conn = await getDaemonConnection(host, host === '__local__' ? { hostname: '__local__' }
-    : { hostname: def?.hostname ?? host, user: def?.user, port: def?.port });
+  const conn = await link(host);
   await conn.connect();
   return conn;
 }

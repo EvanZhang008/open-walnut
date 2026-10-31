@@ -50,6 +50,7 @@ import { DTACH_SOCKET_DIR, WALNUT_HOME } from '../../constants.js'
 import { SHARED_DAEMON_DIR, localDaemonDirChoice } from '../../lib/daemon-dir.js'
 import { log } from '../../logging/index.js'
 import { remoteDtachPath, localDtachPath } from './dtach-provision.js'
+import { linkTarget } from '../../core/hosts/link.js'
 
 /**
  * SSH ControlMaster args shared by the dtach probe/provision AND the terminal
@@ -179,8 +180,7 @@ export async function resolveSshTarget(host: string): Promise<SshTarget> {
   // hang. The session panel hides the tab from the same capability; this is the
   // server's own guard.
   if (!hostOffersTerminal(def)) throw new Error(`A terminal is not available on ${def.label ?? host}: this Mac reaches it through the cloud companion, not SSH`)
-  if (!def.hostname) throw new Error(`Host "${host}" has no hostname`)
-  return { hostname: def.hostname, user: def.user, port: def.port, shell_setup: def.shell_setup }
+  return linkTarget(host, config)
 }
 
 function sshHostString(t: SshTarget): string {

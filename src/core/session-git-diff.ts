@@ -45,9 +45,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { getConfig } from './config-manager.js';
-import { getDaemonConnection } from '../providers/daemon-connection.js';
-import { hostEntryOf } from '../replica/self-host.js';
+import { link } from './hosts/link.js';
 import {
   computeGitDiff,
   GitDiffError,
@@ -104,12 +102,8 @@ async function runGitDiffForRepo(
 ): Promise<GitDiffResult | null> {
   if (host) {
     // Remote: the daemon runs the SAME core on the host (no per-file SSH hops).
-    const config = await getConfig();
-    const hostDef = hostEntryOf(config.hosts, host);
-    if (!hostDef) throw new Error(`Unknown host: ${host}`);
-    const hostname = hostDef.hostname ?? (hostDef as Record<string, unknown>).ssh as string;
-    if (!hostname) throw new Error(`Host ${host} missing hostname`);
-    const conn = await getDaemonConnection(host, { hostname, user: hostDef.user, port: hostDef.port });
+    // The link resolves the host (an unknown one throws `Unknown host: <alias>`).
+    const conn = await link(host);
 
     // `paths` narrows the blob materialization to the files we'll show (old
     // daemons ignore the extra key — full result, same correctness).

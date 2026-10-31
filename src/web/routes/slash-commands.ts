@@ -271,8 +271,7 @@ async function scanRemoteItems(host: string, cwd?: string): Promise<SlashCommand
   const hostDef = config.hosts?.[host]
   if (!hostDef?.hostname) throw new Error(`Unknown host or missing hostname: ${host}`)
 
-  const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
-  const sshTarget = { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port }
+  const { link } = await import('../../core/hosts/link.js')
 
   // The host-read deadline (remote-read-bound.ts) over the connection AND the
   // scan: the palette degrades at once while the host is connecting, and a
@@ -281,7 +280,7 @@ async function scanRemoteItems(host: string, cwd?: string): Promise<SlashCommand
   const { boundHostRead } = await import('../../core/hosts/remote-read-bound.js')
   const [remoteSkills, remoteProjectCmds, remoteProjectSkills, openWalnutCmds] = await boundHostRead(host, async () => {
     // No timer of its own: boundHostRead bounds the dial in every pool state.
-    const conn = await getDaemonConnection(host, sshTarget)
+    const conn = await link(host)
     return Promise.all([
       listRemoteSkills(conn).then((all) => all.map(pluginSkillItem)),
       cwd

@@ -682,7 +682,6 @@ export async function listSessionDirs(
 
   const dc = await import('../../providers/daemon-connection.js');
   const getDaemonConnectState = route.kind === 'fixture' ? route.state : dc.getDaemonConnectState;
-  const sshTarget = { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port };
   const { hostDisplayName, inHostTerms } = await import('../hosts/host-display-name.js');
   const hostLabel = hostDisplayName(host, hostDef.label);
   const sshTargetText = hostDef.user ? `${hostDef.user}@${hostDef.hostname}` : hostDef.hostname;
@@ -708,8 +707,8 @@ export async function listSessionDirs(
     // Without `pending` the caller gets no progress answer, so the host-read
     // deadline applies (remote-read-bound.ts): a host already connecting answers
     // 503 host_reconnecting at once, and this request waits at most its cap.
-    const { boundHostRead } = await import('../hosts/remote-read-bound.js');
-    const dial = () => (route.kind === 'fixture' ? route.connect() : dc.getDaemonConnection(host, sshTarget));
+    const [{ boundHostRead }, { link }] = await Promise.all([import('../hosts/remote-read-bound.js'), import('../hosts/link.js')]);
+    const dial = () => (route.kind === 'fixture' ? route.connect() : link(host));
     const connecting = opts.pending || route.kind === 'fixture' ? dial() : boundHostRead(host, dial);
     const raced = await Promise.race([connecting, timeoutPromise])
       .finally(() => clearTimeout(timeoutId!));

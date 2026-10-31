@@ -150,6 +150,9 @@ beforeAll(async () => {
   // The pause-letter sweep visits connected hosts; this fixture's daemon stands in for the local one.
   vi.spyOn(daemonConnections, 'getConnectedDaemonConnection').mockImplementation(key =>
     key === '__local__' ? connection as unknown as daemonConnections.DaemonConnection : null);
+  // The session's host is a configured one: the link (src/core/hosts/link.ts) dials only those.
+  const { updateConfig } = await import('../../src/core/config-manager.js');
+  await updateConfig({ hosts: { [host]: { hostname: host } } });
   const server = await startServer({ port: 0, dev: true });
   serverStarted = true;
   // The server starts its own local daemon (in the harness's runtime dir) and keeps its pid.

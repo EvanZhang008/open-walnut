@@ -95,19 +95,10 @@ const realDeps: SessionCommitDeps = {
     if (conns.length === 0) {
       // Nobody dialed this host yet: dial it, with a deadline (the route's own
       // deadline sits above this one).
-      // The local daemon needs no SSH target (getDaemonConnection's __local__ branch).
-      let target: { hostname: string; user?: string; port?: number } | null = null
-      if (key === '__local__') {
-        target = { hostname: '__local__' }
-      } else {
-        const { getConfig } = await import('./config-manager.js')
-        const hostDef = (await getConfig()).hosts?.[key]
-        const hostname = hostDef?.hostname ?? ((hostDef as Record<string, unknown> | undefined)?.ssh as string | undefined)
-        if (hostDef && hostname) target = { hostname, user: hostDef.user, port: hostDef.port }
-      }
-      if (target) {
+      {
         let timer: NodeJS.Timeout | undefined
-        const dial = dc.getDaemonConnection(key, target)
+        // An unknown host rejects here and reads as not connected, below.
+        const dial = (await import('./hosts/link.js')).link(key)
         dial.catch(() => { /* the pool caches the failure */ })
         try {
           const conn = await Promise.race([

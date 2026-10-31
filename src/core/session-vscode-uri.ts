@@ -4,7 +4,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { getConfig } from './config-manager.js'
 import { findGitRoot } from './session-changes.js'
-import { getDaemonConnection } from '../providers/daemon-connection.js'
+import { link, linkTarget } from './hosts/link.js'
 import type { SessionRecord } from './types.js'
 import type { SshTarget } from '../providers/session-io.js'
 
@@ -144,15 +144,11 @@ export async function buildSessionVscodeUri(
     throw new SessionVscodeUriError(`Unknown session host alias: ${host}`, 400)
   }
 
-  const target: SshTarget = {
-    hostname: hostDef.hostname,
-    user: hostDef.user,
-    port: hostDef.port,
-  }
-  // Widen to the Like interface — getDaemonConnection returns the concrete
-  // class, whose Promise type would otherwise poison the union for withTimeout.
+  const target: SshTarget = linkTarget(host, config)
+  // Widen to the Like interface: link returns the concrete class, whose Promise
+  // type would otherwise poison the union for withTimeout.
   const connectRemote: (host: string, target: SshTarget) => Promise<DaemonConnectionLike> =
-    dependencies.connectRemote ?? getDaemonConnection
+    dependencies.connectRemote ?? ((h) => link(h))
   const deadline = Date.now() + REMOTE_TIMEOUT_MS
   let root: string
   try {

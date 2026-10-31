@@ -41,11 +41,10 @@ export async function ensureCwd(cwd: string, host?: string): Promise<void> {
     throw new QuickStartError(`Unknown host: ${host}`, 400)
   }
 
-  const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
+  const { link } = await import('../hosts/link.js')
   const { boundHostRead, HostReconnectingError, HOST_RECONNECTING } = await import('../hosts/remote-read-bound.js')
   const { linkFailureKind } = await import('../../providers/link-failure.js')
   const { hostDisplayName, inHostTerms } = await import('../hosts/host-display-name.js')
-  const sshTarget = { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port }
   // Every sentence names the host by its label, once: "Cannot create directory
   // on __cloudbox__: Remote connection to __cloudbox__ timed out" put an
   // internal alias in front of the user twice.
@@ -61,7 +60,7 @@ export async function ensureCwd(cwd: string, host?: string): Promise<void> {
     // A user action, not a background read: it waits for a dial already under way
     // (15s at most), so a send right after the picker started a first connect goes through.
     const conn = await Promise.race([
-      getDaemonConnection(host, sshTarget),
+      link(host),
       timeoutPromise,
     ]).finally(() => clearTimeout(timeoutId!))
     // The mkdir rides the host-read liveness rule: a connected link that stopped

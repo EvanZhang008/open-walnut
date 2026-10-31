@@ -51,14 +51,12 @@ const REMOTE_TIMEOUT_MS = 15_000
  */
 async function onHost<T>(
   host: string,
-  hostDef: { hostname?: string; user?: string; port?: number; label?: string },
   work: (conn: DaemonConnection) => Promise<T>,
 ): Promise<T> {
-  const { getDaemonConnection } = await import('../../providers/daemon-connection.js')
-  const sshTarget = { hostname: hostDef.hostname ?? host, user: hostDef.user, port: hostDef.port }
+  const { link } = await import('../../core/hosts/link.js')
   // No timer of its own: boundHostRead bounds the dial in every pool state (5s
   // at most), so the old 15s "timed out" sentence could never come first.
-  return boundHostRead(host, async () => work(await getDaemonConnection(host, sshTarget)))
+  return boundHostRead(host, async () => work(await link(host)))
 }
 /** Search budget handed to a REMOTE host's resolver. Larger than the resolver's
  *  in-process default (a remote tree is usually a big monorepo on slower disk),
@@ -135,7 +133,7 @@ async function resolveViaHost(
 
   let res
   try {
-    res = await onHost(host, hostDef, async (conn) => {
+    res = await onHost(host, async (conn) => {
       if (!conn.hasCapability?.('path-resolve-v1')) return null
       // A remote host's tree is typically a big monorepo on slower storage, and this
       // is ONE RPC either way, so give the search a wider budget than the in-process
@@ -327,7 +325,7 @@ export async function resolveSessionPath(
     const unresolved = { path: fallback, resolved: false, ...pos }
     // The connection and every RPC below share the host-read deadline (onHost);
     // a host that does not answer degrades to the naive path.
-    return onHost(host, hostDef, async (conn) => {
+    return onHost(host, async (conn) => {
       // Total time budget across the walk-up stats + the downward find: the
       // loop is up to 2 serial RPCs per ancestor level (~18 on a deep path),
       // and per-RPC timeouts alone don't bound the SUM. Expiring falls back to
@@ -454,7 +452,7 @@ export async function linkPathsExist(rawPaths: readonly unknown[], rawHost: stri
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     await Promise.race([
-      onHost(host, hostDef, async (conn) => {
+      onHost(host, async (conn) => {
         await Promise.all(allowed.map(async ({ raw, filePath }) => {
           const st = await conn.send('fs.stat', { path: filePath }).catch(() => undefined)
           if (st?.ok && typeof st.exists === 'boolean' && (st.exists || !follower)) exists[raw] = st.exists
@@ -541,7 +539,7 @@ filesRouter.get('/references', async (req: Request, res: Response, next: NextFun
     }
     let result
     try {
-      result = await onHost(host, hostDef, async (conn) => {
+      result = await onHost(host, async (conn) => {
         if (!conn.hasCapability?.('grep-v1')) return null
         return conn.send('fs.grep', {
           file: filePath, symbol,
@@ -687,7 +685,7 @@ async function listOneDir(
     if (!hostname) throw new FilesOpError(`Host "${host}" has no hostname`, 400)
 
     let remoteSelectedFile: string | undefined
-    const result = await onHost(host, hostDef, async (conn) => {
+    const result = await onHost(host, async (conn) => {
       const first = await conn.send('fs.ls', { path: dirPath })
       // If the path is a file (not a dir), the daemon's readdir fails with ENOTDIR.
       // Behave like VS Code: list the parent dir and flag the file for preview.

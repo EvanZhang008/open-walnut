@@ -11,7 +11,7 @@
  * must answer degraded rather than hang (production server rule).
  */
 import { getConfig } from './config-manager.js'
-import { getDaemonConnection } from '../providers/daemon-connection.js'
+import { link } from './hosts/link.js'
 import { HOST_RECONNECTING, HostReconnectingError, boundHostRead, hostLinkAnswers } from './hosts/remote-read-bound.js'
 import { hostDisplayName, inHostTerms } from './hosts/host-display-name.js'
 import {
@@ -20,7 +20,6 @@ import {
   CODE_SERVER_VERSION,
 } from '../providers/vscode-server-core.js'
 import type { SessionRecord } from './types.js'
-import type { SshTarget } from '../providers/session-io.js'
 import { log } from '../logging/index.js'
 
 /** Remote ensure can include a first-time ~100MB install; give it room. */
@@ -99,16 +98,15 @@ export async function buildSessionVscodeEmbed(
   if (!hostDef?.hostname) {
     throw new SessionVscodeEmbedError(`Unknown session host alias: ${host}`, 400)
   }
-  const target: SshTarget = { hostname: hostDef.hostname, user: hostDef.user, port: hostDef.port }
   const name = hostDisplayName(host, hostDef.label)
 
   // The host-read deadline for the connection (core/hosts/remote-read-bound.ts):
   // a host still connecting answers at once, not after its dial (30s cold), and
   // a connected link is asked once whether it still answers before an install
   // that may run for minutes is started on it (a silent one held this 150s).
-  let conn: Awaited<ReturnType<typeof getDaemonConnection>>
+  let conn: Awaited<ReturnType<typeof link>>
   try {
-    conn = await boundHostRead(host, () => getDaemonConnection(host, target))
+    conn = await boundHostRead(host, () => link(host))
     if (!(await hostLinkAnswers(host))) throw new HostReconnectingError(host, name)
   } catch (err) {
     if (err instanceof HostReconnectingError) {

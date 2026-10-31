@@ -181,7 +181,7 @@ async function dialJobHosts(): Promise<void> {
         const { getConfig } = await import('../config-manager.js')
         const def = (await getConfig()).hosts?.[key]
         if (!def || def.enabled === false) continue
-        await dc.getDaemonConnection(key, { hostname: def.hostname, user: def.user, port: def.port })
+        await (await import('../hosts/link.js')).link(key)
       } catch (err) {
         log.session.warn('plugin jobs: could not reach the machine they run on', { host: key, error: err instanceof Error ? err.message : String(err) })
       }

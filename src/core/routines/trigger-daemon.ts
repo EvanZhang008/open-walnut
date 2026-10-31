@@ -67,7 +67,7 @@ export async function findTriggerDaemon(host: string): Promise<TriggerDaemon | n
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      dc.getDaemonConnection('__local__', { hostname: '__local__' }),
+      (await import('../hosts/link.js')).link('__local__'),
       new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), LOCAL_WARM_TIMEOUT_MS); }),
     ]);
   } catch {

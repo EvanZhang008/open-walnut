@@ -25,6 +25,7 @@ import {
 } from './host-fixture.js'
 import { maybeStartFixtureAutofix } from './host-fixture-autofix.js'
 import { CLOUD_BOX_HOST_ALIAS, cloudBoxRefusal } from './cloud-box-host.js'
+import { linkTarget } from './link.js'
 
 export type ConfigHostDef = HostDef & { shell_setup?: string }
 
@@ -135,7 +136,9 @@ export async function connectHostNow(host: string, opts: { deadlineMs?: number }
   // cloudBox re-mint window only paces the automatic redials.
   const cloudBox = def.cloud_box === true
   if (cloudBox) (await import('../../integrations/cloud-bridge-config.js')).allowNextRemint('__local__')
-  const target = { hostname: def.hostname, user: def.user, port: def.port }
+  // The pool directly, with the link's target: a person's Connect now starts the
+  // dial before it answers, so the status it returns already says connecting.
+  const target = linkTarget(host, { hosts: { [host]: def } })
   const before = getDaemonConnectState(host).phase
   // The reconnect loop owns the host: its attempt runs now, and a failure puts
   // the loop back on its schedule. Cancelling the loop and calling connect()

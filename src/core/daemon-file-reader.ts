@@ -7,11 +7,10 @@
 
 import path from 'node:path'
 import { log } from '../logging/index.js'
-import { getDaemonConnection } from '../providers/daemon-connection.js'
+import { link, linkTarget } from './hosts/link.js'
 import { isSelfHost } from '../replica/self-host.js'
 import { getConfig } from './config-manager.js'
 import { claudeProjectsSearchRoots } from './claude-config-dir.js'
-import type { SshTarget } from '../providers/session-io.js'
 import type { SessionFileReader } from './session-file-reader.js'
 import type { FileGitCommit } from './file-history-git.js'
 
@@ -36,33 +35,19 @@ export class DaemonNeedsUpgradeError extends Error {
 
 export class DaemonFileReader implements SessionFileReader {
   private host: string
-  private sshTarget: SshTarget | null = null
+  private known = false
 
   constructor(host: string) {
     this.host = host
   }
 
   private async resolve(): Promise<void> {
-    if (this.sshTarget) return
-    // Local daemon: no SSH target needed. getDaemonConnection('__local__', …)
-    // routes through the in-process localDaemon and ignores sshTarget entirely
-    // (see DaemonConnection connect()'s __local__ branch). We still pass a dummy
-    // target so the shared signature holds; it is never dereferenced for local.
-    if (this.host === '__local__') {
-      this.sshTarget = { hostname: '__local__' }
-      return
-    }
-    // A host replica's own host: the follower link, no SSH target (replica/self-host.ts, WP6).
-    if (isSelfHost(this.host)) {
-      this.sshTarget = { hostname: this.host }
-      return
-    }
-    const config = await getConfig()
-    const hostDef = config.hosts?.[this.host]
-    if (!hostDef) throw new Error(`Unknown host: ${this.host}`)
-    const hostname = hostDef.hostname ?? (hostDef as Record<string, unknown>).ssh as string
-    if (!hostname) throw new Error(`Host ${this.host} missing hostname`)
-    this.sshTarget = { hostname, user: hostDef.user, port: hostDef.port }
+    if (this.known) return
+    // Only the check that the host is known (UnknownHostError otherwise): the link
+    // (hosts/link.ts) dials it. The local daemon and a host replica's own host need
+    // no config entry.
+    if (this.host !== '__local__' && !isSelfHost(this.host)) linkTarget(this.host, await getConfig())
+    this.known = true
   }
 
   /** Above this size, whole-file fs.read is unsafe as ONE WS frame — remote,
@@ -131,7 +116,7 @@ export class DaemonFileReader implements SessionFileReader {
 
   async readFile(remotePath: string): Promise<string | null> {
     await this.resolve()
-    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const conn = await link(this.host)
 
     // Handle glob patterns by using fs.find
     if (remotePath.includes('*')) {
@@ -184,7 +169,7 @@ export class DaemonFileReader implements SessionFileReader {
    */
   async readFileBytes(remotePath: string, maxBytes: number): Promise<Buffer | null> {
     await this.resolve()
-    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const conn = await link(this.host)
     const st = await this.stat(remotePath)
     if (st === null) return null
     if (st.size > maxBytes) {
@@ -224,7 +209,7 @@ export class DaemonFileReader implements SessionFileReader {
    */
   async writeFile(remotePath: string, content: string): Promise<void> {
     await this.resolve()
-    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const conn = await link(this.host)
     const result = await conn.send('fs.write', {
       path: remotePath,
       data: Buffer.from(content, 'utf-8').toString('base64'),
@@ -248,7 +233,7 @@ export class DaemonFileReader implements SessionFileReader {
    */
   async writeFileAtomic(remotePath: string, content: string, expectSha256: string): Promise<void> {
     await this.resolve()
-    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const conn = await link(this.host)
     // Stricter than mutateConnection(): UNKNOWN capabilities refuse too. A daemon
     // that predates the option ignores it, writes plainly and answers ok, and
     // since it also predates `~` expansion on fs.write, that plain write lands in
@@ -286,7 +271,7 @@ export class DaemonFileReader implements SessionFileReader {
    */
   async ensureGitExcluded(cwd: string, filePath: string): Promise<'added' | 'already' | 'not-a-repo' | 'unavailable'> {
     await this.resolve()
-    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const conn = await link(this.host)
     if (!conn.capabilitiesKnown || !conn.hasCapability('git-exclude-v1')) return 'unavailable'
     const result = await conn.send('git.ensureExcluded', { cwd, path: filePath })
     if (!result.ok) {
@@ -318,7 +303,7 @@ export class DaemonFileReader implements SessionFileReader {
    */
   private async mutateConnection() {
     await this.resolve()
-    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const conn = await link(this.host)
     if (conn.capabilitiesKnown && !conn.hasCapability('fs-mutate-v1')) {
       throw new DaemonNeedsUpgradeError(this.host)
     }
@@ -327,7 +312,7 @@ export class DaemonFileReader implements SessionFileReader {
 
   async readCostState(sessionId: string, cwd?: string): Promise<{ totalCostUsd: number } | null> {
     await this.resolve()
-    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const conn = await link(this.host)
     if (!conn.hasCapability('usage-scan-v1')) return null
     const reply = await conn.send('usage.costState', { sid: sessionId, cwd }, 30_000)
     if (!reply.ok) throw new Error(String(reply.error ?? 'Cost state read failed'))
@@ -345,7 +330,7 @@ export class DaemonFileReader implements SessionFileReader {
    */
   async readSessionCost(params: { sessionId: string; engine: string; cwd?: string; thresholds: number[]; byDay?: { timeZone: string } }, timeoutMs = 25_000): Promise<unknown | null> {
     await this.resolve()
-    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const conn = await link(this.host)
     await conn.connect()
     if (!conn.hasCapability('session-cost-v1')) return null
     const byDay = params.byDay && conn.hasCapability('session-cost-day-v1') ? { byDay: { timeZone: params.byDay.timeZone } } : {}
@@ -392,7 +377,7 @@ export class DaemonFileReader implements SessionFileReader {
   /** Make a directory and its parents; an existing one is fine. */
   async ensureDir(remotePath: string): Promise<void> {
     await this.resolve()
-    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const conn = await link(this.host)
     const result = await conn.send('fs.mkdir', { path: remotePath })
     if (!result.ok) {
       throw new Error('fs.mkdir failed: ' + (typeof result.error === 'string' ? result.error : 'unknown'))
@@ -430,7 +415,7 @@ export class DaemonFileReader implements SessionFileReader {
 
   private async gitHistoryConnection() {
     await this.resolve()
-    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const conn = await link(this.host)
     if (conn.capabilitiesKnown && !conn.hasCapability('git-file-history-v1')) {
       throw new DaemonNeedsUpgradeError(this.host, 'git-file-history-v1')
     }
@@ -485,7 +470,7 @@ export class DaemonFileReader implements SessionFileReader {
    */
   async readFileRangeBuffer(remotePath: string, start: number): Promise<{ buf: Buffer; fileSize: number } | null> {
     await this.resolve()
-    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const conn = await link(this.host)
     const chunks: Buffer[] = []
     let offset = start
     let fileSize = 0
@@ -542,7 +527,7 @@ export class DaemonFileReader implements SessionFileReader {
     length: number,
   ): Promise<{ buf: Buffer; fileSize: number; eof: boolean } | null> {
     await this.resolve()
-    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const conn = await link(this.host)
     const res = await conn.send('fs.readRange', { path: remotePath, start, length })
     if (!res.ok) {
       const errMsg = typeof res.error === 'string' ? res.error : ''
@@ -592,7 +577,7 @@ export class DaemonFileReader implements SessionFileReader {
    */
   async stat(remotePath: string): Promise<{ mtimeMs: number; size: number; epoch?: string } | null> {
     await this.resolve()
-    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const conn = await link(this.host)
     const result = await conn.send('fs.stat', { path: remotePath })
     if (result.ok) {
       if (!result.exists) return null
@@ -612,7 +597,7 @@ export class DaemonFileReader implements SessionFileReader {
 
   async listDir(remotePath: string): Promise<string[]> {
     await this.resolve()
-    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const conn = await link(this.host)
     const result = await conn.send('fs.ls', { path: remotePath })
     return result.ok ? (result.entries as { name: string }[]).map(e => e.name) : []
   }
@@ -620,7 +605,7 @@ export class DaemonFileReader implements SessionFileReader {
   /** listDir that throws when the folder cannot be read (listDir answers [] then). */
   async listDirStrict(remotePath: string): Promise<string[]> {
     await this.resolve()
-    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const conn = await link(this.host)
     const result = await conn.send('fs.ls', { path: remotePath })
     if (!result.ok) throw new Error(`could not list ${remotePath}: ${String((result as { error?: unknown }).error ?? 'fs.ls failed')}`)
     return (result.entries as { name: string }[]).map(e => e.name)
@@ -633,7 +618,7 @@ export class DaemonFileReader implements SessionFileReader {
    */
   async listDirDetailed(remotePath: string): Promise<Array<{ name: string; type: string; size?: number; mtimeMs?: number }>> {
     await this.resolve()
-    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const conn = await link(this.host)
     const result = await conn.send('fs.ls', { path: remotePath, detail: true })
     if (!result.ok) return []
     return result.entries as Array<{ name: string; type: string; size?: number; mtimeMs?: number }>
@@ -648,7 +633,7 @@ export class DaemonFileReader implements SessionFileReader {
    */
   async findSessionPath(sessionId: string, timeoutMs?: number): Promise<string | null> {
     await this.resolve()
-    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const conn = await link(this.host)
     // The resolved transcripts root first (the local CLAUDE_CONFIG_DIR), then the
     // default one, which a daemon walks together with its own CLAUDE_CONFIG_DIR.
     for (const root of claudeProjectsSearchRoots(this.host)) {
@@ -686,7 +671,7 @@ export class DaemonFileReader implements SessionFileReader {
    */
   async batchReadSubagents(remoteDirPath: string): Promise<Map<string, string>> {
     await this.resolve()
-    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const conn = await link(this.host)
     const result = new Map<string, string>()
 
     const lsResult = await conn.send('fs.ls', { path: remoteDirPath })

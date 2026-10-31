@@ -4100,8 +4100,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // A replica has no ssh and no daemons of its own — the whole block is the
   // primary's job.
   if (bootPolicy('host-wiring')) {
-    const { addOnDaemonPhaseChange, addOnDaemonHostConnected, getDaemonConnectState, getDaemonConnection, isDaemonConnected } =
+    const { addOnDaemonPhaseChange, addOnDaemonHostConnected, getDaemonConnectState, isDaemonConnected } =
       await import('../providers/daemon-connection.js')
+    const { link, linkTarget } = await import('../core/hosts/link.js')
     const { getConfig } = await import('../core/config-manager.js')
     const { buildHostStatus } = await import('../core/hosts/host-status.js')
     const { getHostReadiness, wireHostReadiness } = await import('../core/hosts/host-readiness.js')
@@ -4191,12 +4192,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
           const hosts = (await getConfig()).hosts ?? {}
           return Object.entries(hosts).map(([key, def]) => ({
             key,
-            sshTarget: { hostname: def.hostname, user: def.user, port: def.port },
+            // No hostname: the warmup skips it (host-warmup.ts), as before the link layer.
+            sshTarget: def.hostname ? linkTarget(key, { hosts }) : { hostname: '' },
             enabled: def.enabled,
             discovered: def.discovered,
           }))
         },
-        connect: (key, sshTarget) => getDaemonConnection(key, sshTarget),
+        connect: (key) => link(key),
         isConnected: (key) => isDaemonConnected(key),
         // A host mid-connect (picker click, its own reconnect loop) is left alone.
         isConnecting: (key) => CONNECT_IN_FLIGHT_PHASES.has(getDaemonConnectState(key).phase),
