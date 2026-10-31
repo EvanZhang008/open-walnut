@@ -146,6 +146,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         dictation?.registerHotKey()
         // Only listens if the user opted in and Input Monitoring is granted.
         dictation?.startFnMonitorIfEnabled()
+        // Spotlight and Shortcuts actions run in this process (WalnutIntents.swift).
+        WalnutIntentsPort.provider = { [weak self] in self?.serverPort }
 
         let windowRect = NSRect(x: 0, y: 0, width: 1200, height: 800)
         window = NSWindow(

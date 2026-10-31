@@ -3,12 +3,14 @@
  * Mac app's bridge call and the `#open-link=` fragment end in the same pending
  * install, the fragment leaves the address bar so a reload never asks again, the
  * link waits until Install or Cancel settles it (a store mounted again still sees
- * it), and nothing that is not an install link gets through.
+ * it), and nothing that is not an install link gets through. An open link (a launcher's "open this
+ * task") goes to the page's listener, or waits for the first one when the page is not up yet.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildInstallLink, openLinkFragment } from '../../src/core/plugin-install-link';
 import {
   consumeOpenLinkFragment, installOpenLinks, openLink, peekPendingInstall, settlePendingInstall, subscribeOpenLinks,
+  subscribeOpenTargets, takePendingTarget,
 } from '@/utils/open-link';
 import { installDesktopBridge } from '@/utils/desktop-bridge';
 
@@ -77,5 +79,19 @@ describe('open-walnut links in the console', () => {
     expect(bridge.openLink('open-walnut://pair?code=1')).toBe(false);
     expect(openLink('https://example.com/plugins.git')).toBe(false);
     expect(peekPendingInstall()).toBeNull();
+  });
+
+  it('an open link goes to the listener, or waits for one, and never becomes an install', () => {
+    expect(openLink('open-walnut://open?to=%2Ftasks%2Fabc')).toBe(true);
+    expect(peekPendingInstall()).toBeNull();
+    expect(takePendingTarget()).toBe('/tasks/abc');
+    expect(takePendingTarget()).toBeNull();
+    const seen: string[] = [];
+    const stop = subscribeOpenTargets((to) => seen.push(to));
+    expect(openLink('open-walnut://open?to=/org')).toBe(true);
+    expect(takePendingTarget()).toBeNull();
+    expect(openLink('open-walnut://open?to=' + encodeURIComponent('/?walnut-test-run=x'))).toBe(false);
+    stop();
+    expect(seen).toEqual(['/org']);
   });
 });

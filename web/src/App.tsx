@@ -6,7 +6,7 @@ import { AppHostPage } from './apps/AppHostPage';
 import { syncAppCommands } from './apps/commands';
 import { ensureCoreAppsRegistered } from './apps/core-apps';
 import { useAppCatalog } from './apps/hooks';
-import { openSessionOnHome } from './utils/open-session';
+import { navigateToTarget, openSessionOnHome } from './utils/open-session';
 import { rememberLocation } from './utils/last-location';
 import { parseSessionInboxTarget } from './components/inbox/session-inbox-link';
 import { AppShell } from './components/layout/AppShell';
@@ -32,7 +32,7 @@ import { PopoutRoot } from './popout/PopoutRoot';
 import { isPopoutPath } from './popout/openPopout';
 import { scheduleNotesPrefetch } from './utils/notes-prefetch';
 import { useTaskLinkClickFallback } from './hooks/useTaskLinkClickFallback';
-import { PLUGIN_STORE_PATH, peekPendingInstall, subscribeOpenLinks } from './utils/open-link';
+import { PLUGIN_STORE_PATH, peekPendingInstall, subscribeOpenLinks, subscribeOpenTargets, takePendingTarget } from './utils/open-link';
 import { RouteShownContext } from './contexts/RouteShownContext';
 
 ensureCoreAppsRegistered();
@@ -76,6 +76,14 @@ export function App() {
     const go = () => { if (peekPendingInstall()) navigate(PLUGIN_STORE_PATH); };
     go();
     return subscribeOpenLinks(go);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // An open link (a launcher's "open this task", utils/open-link.ts) goes there like a notification's link.
+  useEffect(() => {
+    const go = (to: string) => navigateToTarget(to, navigate);
+    const waiting = takePendingTarget();
+    if (waiting) go(waiting);
+    return subscribeOpenTargets(go);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

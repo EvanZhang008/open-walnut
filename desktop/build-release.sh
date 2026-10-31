@@ -51,25 +51,31 @@ rm -rf "$APP_BUNDLE" "$DMG_OUT"
 mkdir -p "$MACOS" "$RESOURCES"
 
 # Compile for both architectures and create a universal binary
-echo "Compiling for arm64..."
-swiftc -O -o "$MACOS/${APP_NAME}_arm64" \
+SOURCES=(
     "$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/DesktopDiagnostics.swift" "$SCRIPT_DIR/GlobalDictation.swift" \
     "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
     "$SCRIPT_DIR/SessionHost.swift" "$SCRIPT_DIR/CalendarBridge.swift" "$SCRIPT_DIR/ReaderBridge.swift" \
     "$SCRIPT_DIR/BundledRuntime.swift" "$SCRIPT_DIR/AppBuiltCheckout.swift" "$SCRIPT_DIR/AppUpdateMachine.swift" "$SCRIPT_DIR/AppUpdater.swift" \
     "$SCRIPT_DIR/AppUpdateBridge.swift" "$SCRIPT_DIR/DesktopUpdateBridge.swift" "$SCRIPT_DIR/AppLink.swift" "$SCRIPT_DIR/CommandLineTool.swift" \
-    "$SCRIPT_DIR/../src/data/walnut-calendar.swift" "$SCRIPT_DIR/../src/data/walnut-reader.swift" -D WALNUT_APP \
-    -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit -framework Security -target arm64-apple-macos12.0
+    "$SCRIPT_DIR/../src/data/walnut-calendar.swift" "$SCRIPT_DIR/../src/data/walnut-reader.swift" "$SCRIPT_DIR/WalnutIntents.swift"
+)
+FRAMEWORKS=(-framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit -framework Security -Xlinker -weak_framework -Xlinker AppIntents)
+# The Spotlight and Shortcuts actions are listed from the arm64 compile's constants (app-intents.sh);
+# the list describes Swift types, the same for both architectures.
+source "$SCRIPT_DIR/app-intents.sh"
+INTENTS_OBJ="$(mktemp -d "${TMPDIR:-/tmp}/walnut-intents.XXXXXX")"
+INTENTS_FLAGS=()
+while IFS= read -r flag; do INTENTS_FLAGS+=("$flag"); done < <(app_intents_swift_flags "$INTENTS_OBJ")
+
+echo "Compiling for arm64..."
+swiftc -O -o "$MACOS/${APP_NAME}_arm64" "${SOURCES[@]}" -D WALNUT_APP "${INTENTS_FLAGS[@]}" \
+    "${FRAMEWORKS[@]}" -target arm64-apple-macos12.0
 
 echo "Compiling for x86_64..."
-swiftc -O -o "$MACOS/${APP_NAME}_x86_64" \
-    "$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/DesktopDiagnostics.swift" "$SCRIPT_DIR/GlobalDictation.swift" \
-    "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
-    "$SCRIPT_DIR/SessionHost.swift" "$SCRIPT_DIR/CalendarBridge.swift" "$SCRIPT_DIR/ReaderBridge.swift" \
-    "$SCRIPT_DIR/BundledRuntime.swift" "$SCRIPT_DIR/AppBuiltCheckout.swift" "$SCRIPT_DIR/AppUpdateMachine.swift" "$SCRIPT_DIR/AppUpdater.swift" \
-    "$SCRIPT_DIR/AppUpdateBridge.swift" "$SCRIPT_DIR/DesktopUpdateBridge.swift" "$SCRIPT_DIR/AppLink.swift" "$SCRIPT_DIR/CommandLineTool.swift" \
-    "$SCRIPT_DIR/../src/data/walnut-calendar.swift" "$SCRIPT_DIR/../src/data/walnut-reader.swift" -D WALNUT_APP \
-    -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit -framework Security -target x86_64-apple-macos12.0
+swiftc -O -o "$MACOS/${APP_NAME}_x86_64" "${SOURCES[@]}" -D WALNUT_APP \
+    "${FRAMEWORKS[@]}" -target x86_64-apple-macos12.0
+
+app_intents_metadata "$APP_BUNDLE" "$MACOS/${APP_NAME}_arm64" "$INTENTS_OBJ" arm64-apple-macos12.0 com.local.walnut-desktop "${SOURCES[@]}"
 
 echo "Creating universal binary..."
 lipo -create "$MACOS/${APP_NAME}_arm64" "$MACOS/${APP_NAME}_x86_64" \

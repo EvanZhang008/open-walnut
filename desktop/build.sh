@@ -20,14 +20,23 @@ rm -rf "$APP_BUNDLE"
 mkdir -p "$MACOS" "$RESOURCES"
 
 # Compile the Swift source
-swiftc -O -o "$MACOS/$APP_NAME" \
+SOURCES=(
     "$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/DesktopDiagnostics.swift" "$SCRIPT_DIR/GlobalDictation.swift" \
     "$SCRIPT_DIR/WebContentPolicy.swift" "$SCRIPT_DIR/WebContentWatchdog.swift" "$SCRIPT_DIR/LinkPolicy.swift" \
     "$SCRIPT_DIR/SessionHost.swift" "$SCRIPT_DIR/CalendarBridge.swift" "$SCRIPT_DIR/ReaderBridge.swift" \
     "$SCRIPT_DIR/BundledRuntime.swift" "$SCRIPT_DIR/AppBuiltCheckout.swift" "$SCRIPT_DIR/AppUpdateMachine.swift" "$SCRIPT_DIR/AppUpdater.swift" \
     "$SCRIPT_DIR/AppUpdateBridge.swift" "$SCRIPT_DIR/DesktopUpdateBridge.swift" "$SCRIPT_DIR/AppLink.swift" "$SCRIPT_DIR/CommandLineTool.swift" \
-    "$SCRIPT_DIR/../src/data/walnut-calendar.swift" "$SCRIPT_DIR/../src/data/walnut-reader.swift" -D WALNUT_APP \
-    -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit -framework Security
+    "$SCRIPT_DIR/../src/data/walnut-calendar.swift" "$SCRIPT_DIR/../src/data/walnut-reader.swift" "$SCRIPT_DIR/WalnutIntents.swift"
+)
+source "$SCRIPT_DIR/app-intents.sh"
+# Scratch for the compiler and the processor; its log stays there when listing fails.
+INTENTS_OBJ="$(mktemp -d "${TMPDIR:-/tmp}/walnut-intents.XXXXXX")"
+INTENTS_FLAGS=()
+while IFS= read -r flag; do INTENTS_FLAGS+=("$flag"); done < <(app_intents_swift_flags "$INTENTS_OBJ")
+# The release runs on macOS 12 too: the same target here catches an API that is newer.
+TRIPLE="$(uname -m)-apple-macos12.0"
+swiftc -O -o "$MACOS/$APP_NAME" "${SOURCES[@]}" -D WALNUT_APP "${INTENTS_FLAGS[@]}" -target "$TRIPLE" \
+    -framework Cocoa -framework WebKit -framework AVFoundation -framework Carbon -framework EventKit -framework Security -Xlinker -weak_framework -Xlinker AppIntents
 
 # The installer a first launch runs (BundledRuntime.swift): the same install.sh
 # every release attaches, so the app and `curl … | sh` install the same way.
@@ -103,6 +112,9 @@ EOF
 
 # WALNUT_APP_VERSION: a test of the app's update builds two versions.
 sed -i '' "s/@APP_VERSION@/${WALNUT_APP_VERSION:-1.0}/g" "$CONTENTS/Info.plist"
+
+# Spotlight and Shortcuts actions (app-intents.sh).
+app_intents_metadata "$APP_BUNDLE" "$MACOS/$APP_NAME" "$INTENTS_OBJ" "$TRIPLE" com.local.walnut-desktop "${SOURCES[@]}"
 
 # Create .icns from the PNG icon — first rounding it into the macOS Big Sur
 # icon shape (824pt squircle on a transparent 1024 canvas), so it sits in the

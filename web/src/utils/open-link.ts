@@ -7,7 +7,9 @@
  * the fragment, read once before the app mounts and on every hash change. The
  * fragment leaves the address bar at once, so a reload never asks again.
  *
- * Only an install link is understood today. It never installs anything: the
+ * Two links are understood. An open link (`open-walnut://open?to=/tasks/<id>`, from a
+ * launcher such as Alfred or Raycast, src/core/open-target-link.ts) goes to that place in the
+ * console, the way a notification's link does. An install link never installs anything: the
  * Plugin Store shows it as a card, and the user still turns on the trust switch
  * and presses Install. It waits here until they act on that card (Install or
  * Cancel), so a store that mounts again (a re-render, a trip to another page)
@@ -15,6 +17,7 @@
  * and lost it when it mounted a second time.
  */
 import { buildInstallLink, parseInstallLink, parseOpenLinkFragment, type InstallLinkTarget } from '../../../src/core/plugin-install-link';
+import { parseOpenTargetLink } from '../../../src/core/open-target-link';
 import { log } from '@/utils/log';
 
 /** The Apps page: every plugin and App, built in or not (pages/AppsPage.tsx). */
@@ -33,8 +36,36 @@ function notify(): void {
   }
 }
 
+let pendingTarget: string | null = null;
+const targetListeners = new Set<(to: string) => void>();
+
+/** The place an open link asked for that no page has gone to yet (taken once). */
+export function takePendingTarget(): string | null {
+  const to = pendingTarget;
+  pendingTarget = null;
+  return to;
+}
+
+/** App.tsx goes to each place an open link names; one that came before it listened waits. */
+export function subscribeOpenTargets(fn: (to: string) => void): () => void {
+  targetListeners.add(fn);
+  return () => { targetListeners.delete(fn); };
+}
+
 /** Hand a link to the console. True when it was one this build understands. */
 export function openLink(link: string): boolean {
+  const to = parseOpenTargetLink(link);
+  if (to) {
+    log.info('open-link', 'open link received', { to });
+    if (targetListeners.size === 0) {
+      pendingTarget = to;
+      return true;
+    }
+    for (const fn of targetListeners) {
+      try { fn(to); } catch (err) { log.warn('open-link', 'open target listener failed', { error: String(err) }); }
+    }
+    return true;
+  }
   const target = parseInstallLink(link);
   if (!target) {
     log.warn('open-link', 'link not understood', { link: link.slice(0, 200) });

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "walnut",
+  "title": "Walnut",
+  "description": "Ask Walnut from Raycast: quick answers, Tell Main, find a task. Needs Walnut running on this Mac.",
+  "icon": "walnut-icon.png",
+  "author": "openwalnut",
+  "categories": [
+    "Productivity",
+    "Artificial Intelligence"
+  ],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "ask",
+      "title": "Ask Walnut",
+      "subtitle": "Walnut",
+      "description": "Type a question: Enter for a quick answer, Cmd+Enter to tell Main; matching tasks list below.",
+      "mode": "view"
+    },
+    {
+      "name": "ask-selection",
+      "title": "Ask Walnut About Selection",
+      "subtitle": "Walnut",
+      "description": "Bring the selected text from the app you are in, then say what to do with it.",
+      "mode": "view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "port",
+      "title": "Walnut port",
+      "description": "Where the local Walnut server listens",
+      "type": "textfield",
+      "required": false,
+      "default": "3456"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^2.10.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "typescript": "^5.6.0"
+  },
+  "scripts": {
+    "icon": "mkdir -p assets && cp ../../../../web/public/walnut-icon.png assets/walnut-icon.png",
+    "prebuild": "npm run icon",
+    "build": "ray build -e dist",
+    "predev": "npm run icon",
+    "dev": "ray develop"
+  }
+}

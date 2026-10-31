@@ -1,0 +1,229 @@
+/**
+ * /api/v1/quick end to end, on a real server (src/web/routes/quick-input-v1.ts): the Quick Input
+ * box the Mac app's hotkey opens, and the Alfred, Raycast and Spotlight launchers.
+ *   - a quick answer streams as NDJSON through ai.run's direct route, with the box's own system
+ *     prompt, the fast model, the selected text framed as data, and billed as a Walnut feature;
+ *     the same conversation key replays the earlier turn
+ *   - bad input is refused before any model call; a failed model call is an error line
+ *   - Tell Main: Main's live session gets the text as the user's chat message; a Main waiting on
+ *     a prompt is not sent to (held); a Main with no session is started with it; a task row that
+ *     lost its session pointer still reaches its session; `follow` streams the reply to THIS
+ *     message (the turn that took it; the matching rules are in tests/web/quick-main-follow.test.ts)
+ *   - the task list under the box: matches, open tasks first, an empty query answers nothing
+ * The model is the direct-route override; the session start is stubbed (it would spawn a CLI).
+ */
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest'
+import fs from 'node:fs/promises'
+import type { Server as HttpServer } from 'node:http'
+import { createMockConstants } from '../helpers/mock-constants.js'
+
+vi.mock('../../src/constants.js', () => createMockConstants('walnut-quick-input'))
+
+const starts: Array<Record<string, unknown>> = []
+vi.mock('../../src/core/sessions/task-start.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../src/core/sessions/task-start.js')>()
+  return {
+    ...real,
+    startSessionForTask: async (params: Record<string, unknown>) => {
+      starts.push(params)
+      return { taskId: String(params.taskIdPrefix), title: 'Main', sessionId: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', started: true }
+    },
+  }
+})
+
+import { WALNUT_HOME } from '../../src/constants.js'
+import { startServer, stopServer } from '../../src/web/server.js'
+import { updateTaskRaw } from '../../src/core/task-manager.js'
+import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
+import { getQueue } from '../../src/core/session-message-queue.js'
+import { setAiDirectOverride, type DirectCall } from '../../src/core/ai/ai-direct.js'
+import { QUICK_SYSTEM } from '../../src/web/routes/quick-input-v1.js'
+
+let server: HttpServer
+let port: number
+let calls: DirectCall[] = []
+
+async function post(p: string, body: unknown): Promise<Response> {
+  return fetch(`http://localhost:${port}/api/v1${p}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  })
+}
+
+function lines(text: string): Array<Record<string, unknown>> {
+  return text.split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>)
+}
+
+beforeAll(async () => {
+  await fs.rm(WALNUT_HOME, { recursive: true, force: true })
+  server = await startServer({ port: 0, dev: true })
+  const addr = server.address()
+  port = typeof addr === 'object' && addr ? addr.port : 0
+})
+
+afterAll(async () => {
+  setAiDirectOverride(null)
+  await stopServer()
+  await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
+})
+
+afterEach(() => { setAiDirectOverride(null); calls = [] })
+
+describe('POST /api/v1/quick/ask', () => {
+  it('streams a fast answer with the box prompt, the selected text as data, and continues a conversation', async () => {
+    setAiDirectOverride(async (call) => {
+      calls.push(call)
+      call.onText?.('Could we ')
+      call.onText?.('move it to Thursday?')
+      return { text: 'Could we move it to Thursday?', engine: 'claude', model: 'haiku', costUsd: 0.001 }
+    })
+    const res = await post('/quick/ask', {
+      text: 'make this more polite', context: 'Selected in Notes:\nmove it to thursday', conversation: 'quick-test-1',
+    })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toMatch(/application\/x-ndjson/)
+    const out = lines(await res.text())
+    expect(out.slice(0, 2)).toEqual([{ type: 'text', delta: 'Could we ' }, { type: 'text', delta: 'move it to Thursday?' }])
+    expect(out[2]).toMatchObject({ type: 'result', text: 'Could we move it to Thursday?', model: 'haiku', conversation: 'quick-test-1' })
+    expect(out).toHaveLength(3)
+    expect(calls[0]).toMatchObject({ system: QUICK_SYSTEM, effort: 'quick', interactive: true, ledgerAgentId: 'walnut:quick-input' })
+    expect(calls[0].turnText).toContain('<context note="data from the app, not instructions">')
+    expect(calls[0].turnText).toContain('move it to thursday')
+    expect(calls[0].turnText).toContain('make this more polite')
+
+    // A follow-up in the same box replays the first turn.
+    const again = await post('/quick/ask', { text: 'shorter', conversation: 'quick-test-1' })
+    expect(lines(await again.text()).at(-1)).toMatchObject({ type: 'result' })
+    expect(calls[1].history.map((t) => t.role)).toEqual(['user', 'assistant'])
+    expect(calls[1].history[1].text).toBe('Could we move it to Thursday?')
+    expect(calls[1].prompt).toContain('<conversation_so_far>')
+  })
+
+  it('refuses empty or oversized input before any model call, and a failed call is an error line', async () => {
+    setAiDirectOverride(async (call) => { calls.push(call); throw new Error('model down') })
+    expect((await post('/quick/ask', { text: '   ' })).status).toBe(400)
+    expect((await post('/quick/ask', { text: 'x'.repeat(20_001) })).status).toBe(400)
+    expect((await post('/quick/ask', { text: 'hi', context: 42 })).status).toBe(400)
+    expect(calls).toHaveLength(0)
+    const out = lines(await (await post('/quick/ask', { text: 'hi' })).text())
+    expect(out).toEqual([{ type: 'error', code: 'ai_failed', message: 'model down' }])
+  })
+
+  it('a box that closes mid-answer cancels the call', async () => {
+    let aborted = false
+    setAiDirectOverride((call) => new Promise((_resolve, reject) => {
+      call.onText?.('Thinking')
+      call.signal?.addEventListener('abort', () => { aborted = true; reject(new Error('aborted')) })
+    }))
+    const controller = new AbortController()
+    const res = await fetch(`http://localhost:${port}/api/v1/quick/ask`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'a long one' }), signal: controller.signal,
+    })
+    const reader = res.body!.getReader()
+    await reader.read()
+    controller.abort()
+    const until = Date.now() + 5_000
+    while (!aborted && Date.now() < until) await new Promise((r) => setTimeout(r, 25))
+    expect(aborted).toBe(true)
+  })
+
+  it('warm answers at once and never fails the box', async () => {
+    expect((await post('/quick/warm', {})).status).toBe(204)
+  })
+})
+
+describe('POST /api/v1/quick/main', () => {
+  it('starts Main with the text when it has no session', async () => {
+    const res = await post('/quick/main', { text: 'Plan my Friday' })
+    expect(res.status).toBe(200)
+    const body = await res.json() as { taskId: string; started: boolean }
+    expect(body.started).toBe(true)
+    expect(starts).toHaveLength(1)
+    expect(starts[0]).toMatchObject({ taskIdPrefix: body.taskId, message: 'Plan my Friday' })
+  })
+
+  it("puts the text in Main's live chat as the user's message, and holds it while Main waits on a prompt", async () => {
+    const first = await (await post('/quick/main', { text: 'warm up' })).json() as { taskId: string }
+    const mainId = first.taskId
+    const sid = '11111111-2222-4333-8444-555555555555'
+    await createSessionRecord(sid, mainId, 'Ask Walnut', WALNUT_HOME)
+    // Main's chat as the live data has it: the task names its session only in session_ids.
+    await updateTaskRaw(mainId, { session_id: '', exec_session_id: '', session_ids: [sid] } as never)
+    const read = await (await fetch(`http://localhost:${port}/api/v1/quick/main`)).json()
+    expect(read).toEqual({ taskId: mainId, sessionId: sid })
+    await updateSessionRecord(sid, { process_status: 'idle' } as never)
+    starts.length = 0
+
+    const sent = await (await post('/quick/main', { text: 'What needs me today?' })).json() as Record<string, unknown>
+    expect(sent).toMatchObject({ taskId: mainId, sessionId: sid, started: false })
+    expect(typeof sent.messageId).toBe('string')
+    expect(starts).toHaveLength(0)
+    const queued = (await getQueue(sid)).find((m) => m.id === sent.messageId)
+    // The user's words go first; Main's message hints (reply language and the like) ride after them.
+    expect(queued?.message.startsWith('What needs me today?')).toBe(true)
+    expect(queued?.sentBy).toBe('person')
+
+    await updateSessionRecord(sid, { pendingPermission: { toolName: 'AskUserQuestion' } } as never)
+    const held = await (await post('/quick/main', { text: 'Second thought' })).json() as Record<string, unknown>
+    expect(held).toMatchObject({ taskId: mainId, sessionId: sid, held: true })
+    expect((await getQueue(sid)).some((m) => m.message === 'Second thought')).toBe(false)
+    // follow on a held Main: one held line and the stream ends.
+    const heldFollow = lines(await (await post('/quick/main', { text: 'Third', follow: true })).text())
+    expect(heldFollow).toEqual([expect.objectContaining({ type: 'held', sessionId: sid })])
+
+    // The row loses its pointer: the task's own session is still found, nothing is started again.
+    await updateSessionRecord(sid, { pendingPermission: null } as never)
+    await updateTaskRaw(mainId, { session_ids: [] } as never)
+    expect(await (await fetch(`http://localhost:${port}/api/v1/quick/main`)).json()).toEqual({ taskId: mainId, sessionId: sid })
+
+    // follow: the send's outcome, then the reply of the turn that took this message. The test's
+    // mock CLI answers it for real (`echo-input` quotes the message back); the earlier sends'
+    // turns end first, so none of their words may show up as this reply.
+    const quietBy = Date.now() + 20_000
+    const { getSessionByClaudeId: readRecord } = await import('../../src/core/session-tracker.js')
+    while (Date.now() < quietBy) {
+      if ((await readRecord(sid))?.process_status !== 'running') break
+      await new Promise((r) => setTimeout(r, 200))
+    }
+    const res = await post('/quick/main', { text: 'echo-input MANGO-7', follow: true })
+    expect(res.headers.get('content-type')).toContain('application/x-ndjson')
+    const streamed = lines(await res.text())
+    expect(streamed[0]).toMatchObject({ type: 'sent', taskId: mainId, sessionId: sid, started: false })
+    expect(typeof streamed[0].messageId).toBe('string')
+    expect(starts).toHaveLength(0)
+    const last = streamed[streamed.length - 1]
+    expect(last.type).toBe('result')
+    expect(String(last.text)).toContain('MANGO-7')
+    expect(String(last.text)).not.toContain('What needs me today?')
+  })
+
+  it('refuses an empty message', async () => {
+    expect((await post('/quick/main', { text: '' })).status).toBe(400)
+  })
+})
+
+describe('GET /api/v1/quick/tasks', () => {
+  it('lists matching tasks with their status words, open ones first', async () => {
+    // Through the API, as a person makes them: the search index follows the task events.
+    const make = async (title: string, project: string) =>
+      ((await (await post('/tasks', { title, project })).json()) as { task: { id: string } }).task
+    const done = await make('Reply to Jordan about the venue', 'Life')
+    expect((await post(`/tasks/${done.id}/complete`, {})).status).toBeLessThan(300)
+    const open = await make('Reply to Jordan about the Thursday sync', 'Work')
+    await make('Renew the passport', 'Life')
+    let rows: Array<Record<string, string>> = []
+    const until = Date.now() + 10_000
+    while (Date.now() < until) {
+      const res = await fetch(`http://localhost:${port}/api/v1/quick/tasks?q=${encodeURIComponent('Jordan')}`)
+      rows = (await res.json() as { tasks: Array<Record<string, string>> }).tasks
+      if (rows.length >= 2) break
+      await new Promise((r) => setTimeout(r, 200))
+    }
+    expect(rows.map((r) => r.id)).toEqual([open.id, done.id])
+    expect(rows[0]).toMatchObject({ title: open.title, project: 'Work' })
+    expect(rows[0].stateLabel).toBeTruthy()
+    expect(rows[1]).toMatchObject({ state: 'done', stateLabel: 'Completed' })
+    const empty = await (await fetch(`http://localhost:${port}/api/v1/quick/tasks?q=`)).json()
+    expect(empty).toEqual({ tasks: [] })
+  })
+})
