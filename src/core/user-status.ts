@@ -535,7 +535,7 @@ export interface TaskBrief {
 /** The longest Brief kept: a dozen lines, not a document (Main's lines carry two task refs). */
 export const BRIEF_MAX_CHARS = 4000;
 
-/** The fields the Brief's team and its moves are read from. */
+/** The fields the Brief's team is read from. */
 export interface BriefTask {
   id: string;
   title: string;
@@ -574,128 +574,29 @@ export function briefTeam<T extends BriefTask>(owner: BriefTask, tasks: readonly
   ));
 }
 
-/** The team's tasks whose phase moved after `sinceMs` (the Brief's time), newest first. */
-export function briefMoves<T extends BriefTask>(owner: BriefTask, tasks: readonly T[], sinceMs: number, limit = 8): Array<{ task: T; at: number }> {
-  if (!Number.isFinite(sinceMs)) return [];
-  return briefTeam(owner, tasks)
-    .map((task) => ({ task, at: task.phase_changed_at ? Date.parse(task.phase_changed_at) : NaN }))
-    .filter((m) => Number.isFinite(m.at) && m.at > sinceMs)
-    .sort((a, b) => b.at - a.at)
-    .slice(0, limit);
-}
+// ── The Brief's three sections: what needs the user, what works, what waits ──
 
-// ── What is still open under a Brief (program-made, never from the session's memory) ──
+/**
+ * Every Brief has these three sections, in this order, under these headings (2026-10-30, the user:
+ * "what is being done, what does not need me, what needs me ... this task itself actually has this
+ * status ... we must put this whole structure in"). A task's line goes in the section of its own
+ * live status (Task.user_status), whose Waiting covers a snoozed or parked task. Done work has no
+ * section: it leaves the Brief. sessions/brief-structure.ts keeps every stored Brief in this shape.
+ */
+export const BRIEF_SECTIONS: ReadonlyArray<{ state: Exclude<UserState, 'done'>; heading: string }> = [
+  { state: 'needs', heading: 'Needs you' },
+  { state: 'working', heading: 'Working' },
+  { state: 'waiting', heading: 'Waiting / snoozed' },
+];
 
-/** A team task as the still-open footer reads it. */
-export interface StillOpenTask extends BriefTask {
+/** A team task as the Brief's section lists read it. */
+export interface BriefSectionTask extends BriefTask {
   status?: string;
   user_status?: UserStatus;
   /** Its latest result (peers/structured-reply.ts): Partial while not_done is set and unsettled. */
   result_report?: { not_done?: readonly string[]; settled?: unknown; at?: string };
-  due_date?: string;
-  /** A follow-up Walnut set for what its turn promised (sessions/promise-alarm.ts). */
-  promise_alarm?: { at: string; words: string } | null;
 }
 
-/** An overdue request (session-requests.ts `expired`, still open), by the tasks of its two sides. */
-export interface StillOpenAsk { id: string; fromTaskId?: string; toTaskId?: string; preview: string; createdAt: string }
-
-export interface BriefStillOpen<T extends StillOpenTask> {
-  /** Open work below the owner (Main: also its VPs) that the letter does not name. */
-  unmentioned: T[];
-  moreUnmentioned: number;
-  /** Work whose latest result left things not done, and nobody took them up. */
-  partial: Array<{ task: T; notDone: readonly string[] }>;
-  /** Requests in the team past their deadline with no reply. */
-  overdue: StillOpenAsk[];
-  /** Work on the user or its lead for longer than BRIEF_WAIT_LONG_MS. */
-  waitingLong: Array<{ task: T; on: 'you' | 'lead'; since: number }>;
-  /** Open work past its due date or due within a day, the earliest first. */
-  due: Array<{ task: T; at: string; state: 'overdue' | 'soon' }>;
-  /** Follow-ups Walnut set for promises with nothing to bring them back (the owner's too). */
-  promises: Array<{ task: T; at: string; words: string }>;
-}
-
-/** Waiting on the user or the lead longer than this is listed ("more than a few hours"). */
-export const BRIEF_WAIT_LONG_MS = 4 * 60 * 60_000;
-/** A finished Partial result is listed this long. */
-const PARTIAL_LISTED_MS = 7 * 24 * 60 * 60_000;
-
-function taskOpen(t: StillOpenTask): boolean {
-  return t.phase !== 'COMPLETE' && t.status !== 'done';
-}
-
-export function resultIsPartial(r: StillOpenTask['result_report']): boolean {
+export function resultIsPartial(r: BriefSectionTask['result_report']): boolean {
   return !!r?.not_done?.length && !r.settled;
-}
-
-/**
- * The Brief's "still open" footer (2026-10-28, the tracking research: the letters of Main and
- * the VPs were written from memory, and work the letter forgot was lost from view). Read from
- * the tasks and the request ledger, never from the letter, except to know which tasks it names.
- */
-export function briefStillOpen<T extends StillOpenTask>(
-  owner: BriefTask,
-  tasks: readonly T[],
-  opts: { mentioned: ReadonlySet<string>; overdue?: readonly StillOpenAsk[]; now?: number; limit?: number },
-): BriefStillOpen<T> {
-  const now = opts.now ?? Date.now();
-  const limit = opts.limit ?? 8;
-  const team = briefTeam(owner, tasks);
-  const byId = new Map(tasks.map((t) => [t.id, t] as const));
-  const below = (t: T): boolean => {
-    let cur: T | undefined = t;
-    for (let hops = 0; cur?.parent_task_id && hops < 12; hops++) {
-      if (cur.parent_task_id === owner.id) return true;
-      cur = byId.get(cur.parent_task_id);
-    }
-    return false;
-  };
-  const stateOf = (t: T): UserState => t.user_status?.state ?? fallbackUserState(t.phase, t.status);
-  const rank: Record<UserState, number> = { needs: 0, working: 1, waiting: 2, done: 3 };
-  const own = team
-    .filter((t) => taskOpen(t) && (below(t) || (owner.org_role === 'main' && t.org_role === 'lead')) && !opts.mentioned.has(t.id))
-    .sort((a, b) => rank[stateOf(a)] - rank[stateOf(b)]);
-  const partial = team
-    .filter((t) => resultIsPartial(t.result_report)
-      && (taskOpen(t) || now - Date.parse(t.result_report?.at ?? '') <= PARTIAL_LISTED_MS))
-    .slice(0, limit)
-    .map((task) => ({ task, notDone: task.result_report!.not_done! }));
-  const inTeam = new Set([owner.id, ...team.map((t) => t.id)]);
-  const overdue = (opts.overdue ?? [])
-    .filter((r) => (!!r.fromTaskId && inTeam.has(r.fromTaskId)) || (!!r.toTaskId && inTeam.has(r.toTaskId)))
-    .slice(0, limit);
-  const waitingLong = team
-    .filter(taskOpen)
-    .map((task) => {
-      const s = task.user_status;
-      const on: 'you' | 'lead' | undefined = s?.state === 'needs' ? 'you' : s?.state === 'waiting' && s.kind === 'lead' ? 'lead' : undefined;
-      const since = task.phase_changed_at ? Date.parse(task.phase_changed_at) : NaN;
-      return on && Number.isFinite(since) && now - since > BRIEF_WAIT_LONG_MS ? { task, on, since } : null;
-    })
-    .filter((w): w is { task: T; on: 'you' | 'lead'; since: number } => !!w)
-    .sort((a, b) => a.since - b.since)
-    .slice(0, limit);
-  const due = team
-    .filter(taskOpen)
-    .map((task) => {
-      const d = dueStatus(task.due_date, now);
-      return d ? { task, at: d.at, state: d.state } : null;
-    })
-    .filter((d): d is { task: T; at: string; state: 'overdue' | 'soon' } => !!d)
-    .sort((a, b) => dueAtMs(a.at) - dueAtMs(b.at))
-    .slice(0, limit);
-  const promises = [...tasks.filter((t) => t.id === owner.id), ...team]
-    .filter((t) => taskOpen(t) && !!t.promise_alarm?.at)
-    .map((task) => ({ task, at: task.promise_alarm!.at, words: task.promise_alarm!.words }))
-    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at))
-    .slice(0, limit);
-  return { unmentioned: own.slice(0, limit), moreUnmentioned: Math.max(0, own.length - limit), partial, overdue, waitingLong, due, promises };
-}
-
-/** The task ids a Brief names (its <task-ref id="..."/> tags, or rendered data-task-id anchors). */
-export function briefMentions(text: string): Set<string> {
-  const ids = new Set<string>();
-  for (const m of text.matchAll(/(?:<task-ref\b[^>]*\bid|data-task-id)="([^"]+)"/g)) ids.add(m[1]);
-  return ids;
 }

@@ -16,6 +16,7 @@
  */
 import { pickLead } from '../org/org-tree.js';
 import type { BriefTask, TaskBrief } from '../user-status.js';
+import { BRIEF_STRUCTURE_RULE, briefSectionsBlock, type BriefSectionKey } from './brief-structure.js';
 
 /** One line that breaks a rule: no task, no VP (Main), several things. */
 export type BriefIssue = NonNullable<TaskBrief['issues']>[number];
@@ -127,7 +128,8 @@ export function briefVpLines(owner: BriefTask, tasks: readonly BriefTask[]): str
  */
 export function briefFixPrompt(opts: {
   text: string; issues: readonly BriefIssue[]; main: boolean; vps?: readonly string[];
-  moves?: readonly string[]; language?: string; ownId?: string;
+  /** briefSectionLines: the team's open work by section, as the first ask gave it. */
+  sections?: Record<BriefSectionKey, readonly string[]>; language?: string; ownId?: string;
 }): string {
   const own = opts.ownId ? `<task-ref id="${opts.ownId}" label="..."/>` : 'your own task';
   return `Walnut checked the Brief you just wrote for the user (below) and these lines break its rules:
@@ -135,7 +137,7 @@ ${formatBriefIssues(opts.issues).join('\n')}
 <brief>
 ${opts.text}
 </brief>
-Rewrite the whole Brief now, keeping every line that is right as it is${opts.language ? `, in ${opts.language}` : ''}: every line starts with the <task-ref/> of the task it is about${opts.main ? ', then the <task-ref/> of the VP who leads it' : ''} (${own} for your own work), holds one thing, and says enough to act on without the chat (which document, repo or release, what the user must decide or do).${opts.vps?.length ? `\nYour VPs:\n${opts.vps.join('\n')}` : ''}${opts.moves?.length ? `\nWhat moved in your team since your last Brief:\n${opts.moves.join('\n')}` : ''}
+Rewrite the whole Brief now, keeping every line that is right as it is${opts.language ? `, in ${opts.language}` : ''}: every line starts with the <task-ref/> of the task it is about${opts.main ? ', then the <task-ref/> of the VP who leads it' : ''} (${own} for your own work), holds one thing, and says enough to act on without the chat (which document, repo or release, what the user must decide or do). ${BRIEF_STRUCTURE_RULE}${opts.vps?.length ? `\nYour VPs:\n${opts.vps.join('\n')}` : ''}${opts.sections ? `\nWalnut's lists, from each task's live status:\n${briefSectionsBlock(opts.sections)}` : ''}
 Answer with nothing but:
 FOR_USER_BRIEF:
 <the letter>`;

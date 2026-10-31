@@ -1,7 +1,8 @@
 /**
  * The Brief through the real turn-end self-report (runTriage in src/core/session-hooks/builtins.ts,
- * sessions/brief.ts), only the CLI faked: a lead is asked for FOR_USER_BRIEF with what moved in its
- * team since its last Brief, and its answer is stored on its task; a worker is never asked.
+ * sessions/brief.ts), only the CLI faked: a lead is asked for FOR_USER_BRIEF with its team's live
+ * status in the Brief's three sections, and its answer is stored on its task in those sections
+ * (sessions/brief-structure.ts); a worker is never asked.
  */
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -13,6 +14,8 @@ import { WALNUT_HOME } from '../../../src/constants.js'
 import { sessionRunner } from '../../../src/providers/claude-code-session.js'
 import { addTask, getTask, updateTaskRaw } from '../../../src/core/task-manager.js'
 import { runTriage, __resetTriageRateLimiter } from '../../../src/core/session-hooks/builtins.js'
+import { structureBrief } from '../../../src/core/sessions/brief-structure.js'
+import { listTasks } from '../../../src/core/task-manager.js'
 import type { OnTurnCompletePayload } from '../../../src/core/session-hooks/types.js'
 import type { Task } from '../../../src/core/types.js'
 
@@ -40,6 +43,9 @@ const REPORT = (brief: string) => [
 
 let lead: Task
 let worker: Task
+const SUPPLIER = '### Needs you\n- the fence supplier.\n\n### Working\n- None\n\n### Waiting / snoozed\n- None'
+/** What Walnut stores for a letter: it in its three sections, by the tasks' status now. */
+const shaped = async (text: string) => structureBrief(text, lead.id, await listTasks()).text
 
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
@@ -68,13 +74,14 @@ describe('the Brief in the turn-end self-report', () => {
     expect(prompt).toContain('FOR_USER_BRIEF:')
     expect(prompt).toContain('Write it every time')
     const stored = (await getTask(lead.id)).brief
-    expect(stored?.text).toBe(letter)
+    // Stored in its three sections: the worker has not started, so it is under Waiting.
+    expect(stored?.text).toBe(`### Needs you\n- nothing.\n\n### Working\n- None\n\n### Waiting / snoozed\n- <task-ref id="${worker.id}" label="Fix the fence"/>: half done.`)
     expect(Date.parse(stored!.at)).toBeGreaterThan(Date.now() - 60_000)
     // The Brief is the last field: FOR_USER_NEXT before it ends where the Brief starts.
     expect((await getTask(lead.id)).status_report?.next).toBe('They carry on.')
   })
 
-  it('next time names what moved in the team since, and the rewrite replaces the letter', async () => {
+  it('next time lists the team by its live status, and the rewrite replaces the letter', async () => {
     await new Promise((r) => setTimeout(r, 20))
     await updateTaskRaw(worker.id, { phase: 'NEED_ACTION' } as never)
     const fake = fakeSession(LEAD_SID, REPORT('**Needs you:** the fence supplier.'))
@@ -82,15 +89,14 @@ describe('the Brief in the turn-end self-report', () => {
     await runTriage(payload(LEAD_SID, lead))
     const prompt = fake.askSideQuestion.mock.calls[0]![0] as string
     expect(prompt).toContain('Rewrite it whole every time')
-    expect(prompt).toContain('Since your last Brief, these moved in your team')
-    expect(prompt).toContain(`<task-ref id="${worker.id}" label="Fix the fence"/>: now Needs you`)
-    expect((await getTask(lead.id)).brief?.text).toBe('**Needs you:** the fence supplier.')
+    expect(prompt).toContain(`### Needs you\n- <task-ref id="${worker.id}" label="Fix the fence"/>: needs the user`)
+    expect((await getTask(lead.id)).brief?.text).toBe(SUPPLIER)
   })
 
   it('keeps the letter when the answer is "unchanged"', async () => {
     fakeSession(LEAD_SID, REPORT('unchanged'))
     await runTriage(payload(LEAD_SID, await getTask(lead.id)))
-    expect((await getTask(lead.id)).brief?.text).toBe('**Needs you:** the fence supplier.')
+    expect((await getTask(lead.id)).brief?.text).toBe(SUPPLIER)
   })
 
   it('writes nothing on a task completed while it was asked', async () => {
@@ -100,7 +106,7 @@ describe('the Brief in the turn-end self-report', () => {
       return REPORT('should not be stored')
     })
     await runTriage(payload(LEAD_SID, await getTask(lead.id)))
-    expect((await getTask(lead.id)).brief?.text).toBe('**Needs you:** the fence supplier.')
+    expect((await getTask(lead.id)).brief?.text).toBe(SUPPLIER)
   })
 
   it('a Brief that breaks its rules is stored with its issues and asked for once more, right then', async () => {
@@ -111,11 +117,12 @@ describe('the Brief in the turn-end self-report', () => {
     await updateTaskRaw(lead.id, { phase: 'IN_PROGRESS' } as never, { reopenTerminal: true })
     await runTriage(payload(LEAD_SID, await getTask(lead.id)))
     // The re-ask runs after the hook, without holding it.
-    await vi.waitFor(async () => expect((await getTask(lead.id)).brief?.text).toBe(good))
+    const goodShaped = await shaped(good)
+    await vi.waitFor(async () => expect((await getTask(lead.id)).brief?.text).toBe(goodShaped))
     expect(fake.askSideQuestion).toHaveBeenCalledTimes(2)
     const fix = fake.askSideQuestion.mock.calls[1]![0] as string
     expect(fix).toContain('- names no task (start it with the <task-ref/> of the task it is about): - The docs sync can be pushed.')
-    expect(fix).toContain(`<brief>\n${bad}\n</brief>`)
+    expect(fix).toContain(`<brief>\n${await shaped(bad)}\n</brief>`)
     expect((await getTask(lead.id)).brief).not.toHaveProperty('issues')
   })
 
@@ -126,7 +133,7 @@ describe('the Brief in the turn-end self-report', () => {
     await runTriage(payload(LEAD_SID, await getTask(lead.id)))
     await vi.waitFor(() => expect(fake.askSideQuestion).toHaveBeenCalledTimes(2))
     await new Promise((r) => setTimeout(r, 50))
-    expect((await getTask(lead.id)).brief).toMatchObject({ text: bad, issues: [{ kind: 'no_task', line: bad }] })
+    expect((await getTask(lead.id)).brief).toMatchObject({ text: await shaped(bad), issues: [{ kind: 'no_task', line: bad }] })
     // The same broken line again is not re-asked: the next ask lists it.
     __resetTriageRateLimiter()
     const same = fakeSession(LEAD_SID, REPORT(bad))

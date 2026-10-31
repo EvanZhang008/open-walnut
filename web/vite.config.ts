@@ -43,6 +43,8 @@ export default defineConfig({
       '@open-walnut/org-tree': path.resolve(__dirname, '../src/core/org/org-tree.ts'),
       '@open-walnut/user-status': path.resolve(__dirname, '../src/core/user-status.ts'),
       '@open-walnut/live-activity': path.resolve(__dirname, '../src/core/live-activity.ts'),
+      // The Brief's three sections: the server stores the letter in them, the page keeps them live.
+      '@open-walnut/brief-structure': path.resolve(__dirname, '../src/core/sessions/brief-structure.ts'),
       // Where the cloud companion's keep choice lives: Settings reads it as the server does.
       '@open-walnut/companion-keep': path.resolve(__dirname, '../src/core/replication/companion-keep.ts'),
       '@open-walnut/history-turn-window': path.resolve(__dirname, '../src/lib/history-turn-window.ts'),

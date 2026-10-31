@@ -6,7 +6,7 @@
 import { describe, it, expect } from 'vitest'
 import type { Task } from '../../../src/core/types.js'
 import { briefFixPrompt, briefIssues, briefNeedsRewrite, briefVpLines, formatBriefIssues, completeBriefRefs } from '../../../src/core/sessions/brief-rules.js'
-import { briefMoveLines, briefPrompt } from '../../../src/core/sessions/brief.js'
+import { briefPrompt, briefSectionLines } from '../../../src/core/sessions/brief.js'
 
 const t = (over: Partial<Task>): Task => ({ title: 'x', phase: 'IN_PROGRESS', ...over } as Task)
 const main = t({ id: 'main', title: 'Main', org_role: 'main', project: 'Ask Walnut' })
@@ -60,18 +60,16 @@ describe("Main's Brief", () => {
     expect(formatBriefIssues(issues)[0]).toContain('add <task-ref id="vp1" label="Lighthouse lead"/> after the task')
   })
 
-  it('is told its VPs and the VP of every move', () => {
+  it('is told its VPs, and the VP beside each worker in its lists', () => {
     expect(briefVpLines(main, all)).toEqual([`- ${ref(vp)} leads Lighthouse`, `- ${ref(vp2)} leads Garden`])
     expect(briefVpLines(vp, all)).toEqual([])
-    const owner = { ...main, brief: { text: 'x', at: '2026-10-27T09:00:00Z' } } as Task
-    // Main's own worker in a VP's project, and a VP that moved.
-    const moved = { ...fence, parent_task_id: 'main', phase_changed_at: '2026-10-27T10:00:00Z' } as Task
-    const vpMoved = { ...vp, phase_changed_at: '2026-10-27T09:30:00Z' } as Task
-    expect(briefMoveLines(owner, [owner, vpMoved, vp2, docSync, moved])).toEqual([
-      `- ${ref(fence)} (VP ${ref(vp2)}): now Working`,
-      `- ${ref(vp)}: now Working`,
-    ])
-    const prompt = briefPrompt({ hadBrief: true, moves: [], main: true, vps: briefVpLines(main, all), issues: ['- names no task: x'] })
+    // Main's own worker in a VP's project, and a VP.
+    const mine = { ...fence, parent_task_id: 'main', user_status: { state: 'working', now: 'building the fence' } } as Task
+    const lead = { ...vp, user_status: { state: 'waiting', waitingOn: 'a supplier' } } as Task
+    const lists = briefSectionLines(main, [main, lead, vp2, docSync, mine])
+    expect(lists.working).toContain(`- ${ref(fence)} (VP ${ref(vp2)}): building the fence`)
+    expect(lists.waiting).toContain(`- ${ref(vp)}: waits on a supplier`)
+    const prompt = briefPrompt({ hadBrief: true, main: true, vps: briefVpLines(main, all), issues: ['- names no task: x'] })
     expect(prompt).toContain('names two tasks: first the <task-ref id="..." label="..."/> of the task doing the work, then the <task-ref/> of the VP who leads it')
     expect(prompt).toContain(`Your VPs:\n- ${ref(vp)} leads Lighthouse`)
     expect(prompt).toContain('Walnut found these lines of your last Brief breaking the rules')
@@ -79,17 +77,18 @@ describe("Main's Brief", () => {
     expect(prompt).toContain('which document, repo or release')
   })
 
-  it('the rewrite ask carries the Brief, the VPs, the moves and the language, and ends on the field', () => {
+  it('the rewrite ask carries the Brief, the VPs, the lists, the structure and the language, and ends on the field', () => {
     const ask = briefFixPrompt({
       text: '- The docs sync can be pushed.', issues: [{ kind: 'no_task', line: '- The docs sync can be pushed.' }], main: true,
-      vps: briefVpLines(main, all), moves: [`- ${ref(fence)}: now Working`], language: 'Chinese', ownId: 'main',
+      vps: briefVpLines(main, all), sections: { needs: [], working: [`- ${ref(fence)}: building`], waiting: [] }, language: 'Chinese', ownId: 'main',
     })
     expect(ask).toContain('- names no task (start it with the <task-ref/> of the task it is about): - The docs sync can be pushed.')
     expect(ask).toContain('<brief>\n- The docs sync can be pushed.\n</brief>')
     expect(ask).toContain('keeping every line that is right as it is, in Chinese')
     expect(ask).toContain('then the <task-ref/> of the VP who leads it')
     expect(ask).toContain(`Your VPs:\n- ${ref(vp)} leads Lighthouse`)
-    expect(ask).toContain(`What moved in your team since your last Brief:\n- ${ref(fence)}: now Working`)
+    expect(ask).toContain(`### Working\n- ${ref(fence)}: building`)
+    expect(ask).toContain('"### Needs you", "### Working", "### Waiting / snoozed"')
     expect(ask).toMatch(/FOR_USER_BRIEF:\n<the letter>$/)
   })
 

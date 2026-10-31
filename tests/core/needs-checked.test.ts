@@ -2,7 +2,7 @@
  * A session's "needs you" says when it was last checked, and stops reading as fact once that is
  * too long ago (2026-10-28, the user: "I've already resolved some of these. You should at least
  * verify"): the status stamps it (user-status.ts), every surface prints the same words
- * (checkedLine), Main's and a lead's Brief prompt lists the asks with their time (briefNeedsLines),
+ * (checkedLine), Main's and a lead's Brief prompt lists the asks with their time (briefSectionLines),
  * and the re-check clock asks the owning session again (sessions/needs-recheck.ts recheckDue).
  */
 import { describe, it, expect } from 'vitest'
@@ -10,7 +10,7 @@ import {
   NEEDS_RECHECK_MS, UNVERIFIED_AFTER_MS, checkedLine, deriveUserStatus, type StatusReport,
 } from '../../src/core/user-status.js'
 import { MAX_RECHECKS, recheckBody, recheckDue } from '../../src/core/sessions/needs-recheck.js'
-import { briefNeedsLines, briefPrompt, briefStillOpenLines } from '../../src/core/sessions/brief.js'
+import { briefPrompt, briefSectionLines } from '../../src/core/sessions/brief.js'
 import type { Task } from '../../src/core/types.js'
 
 const NOW = Date.parse('2026-10-28T18:00:00Z')
@@ -134,16 +134,12 @@ describe("the Brief's live list of what needs the user", () => {
   ]
 
   it('lists each open ask with when it was checked, marks the old ones NOT VERIFIED, and escapes words', () => {
-    const lines = briefNeedsLines(lead, tasks, NOW)
+    const lines = briefSectionLines(lead, tasks, NOW).needs
     expect(lines).toHaveLength(3)
-    expect(lines[0]).toContain('"Sign in on the Mac" (NOT VERIFIED: last checked 9 hours ago, the user may have done it already)')
-    expect(lines[1]).toContain('"Pick a &lt;name&gt;" (checked 2 hours ago by its session)')
-    expect(lines[2]).toContain("(Walnut's live record)")
-    // The still-open footer's "waiting on the user for N hours" carries the same stamp.
-    const old = { ...tasks[1], phase_changed_at: ago(9 * H) } as Task
-    const footer = briefStillOpenLines(lead, [lead, old], [], NOW)
-    expect(footer.find((l) => l.includes('waiting on the user'))).toContain('(NOT VERIFIED: last checked 9 hours ago, may be done already)')
-    const prompt = briefPrompt({ hadBrief: true, moves: [], needs: lines })
+    expect(lines.find((l) => l.includes('T a'))).toContain('"Sign in on the Mac" (NOT VERIFIED: last checked 9 hours ago, the user may have done it already)')
+    expect(lines.find((l) => l.includes('T b'))).toContain('"Pick a &lt;name&gt;" (checked 2 hours ago by its session)')
+    expect(lines.find((l) => l.includes('T c'))).toContain("(Walnut's live record)")
+    const prompt = briefPrompt({ hadBrief: true, sections: { needs: lines, working: [], waiting: [] } })
     expect(prompt).toContain('never as a step the user still owes')
     expect(prompt).toContain(lines[0])
   })

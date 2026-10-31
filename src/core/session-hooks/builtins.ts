@@ -14,7 +14,7 @@ import { buildTitleQuestion, cleanTitleAnswer } from '../session-title-backend.j
 import { configuredUiLanguage, nonEnglishUiLanguage, uiLanguageName } from '../ui-language.js';
 import { cutEnd } from '../text-cut.js';
 import type { SessionRecord, Task } from '../types.js';
-import type { StatusReport, WaitKind } from '../user-status.js';
+import type { StatusReport, TaskBrief, WaitKind } from '../user-status.js';
 import type { SubtaskNoticeKind } from '../sessions/subtask-notices.js';
 import type {
   SessionHookDefinition,
@@ -28,7 +28,8 @@ import { engineCaps, isAcpEngine } from '../agents/engine-registry.js';
 import { hintDriftHook } from '../hints/hint-drift.js';
 import { toDisplayedUserText } from '../sessions/reference-cards.js';
 import { isAwaitingTurnEnd } from '../sessions/self-complete-stop.js';
-import { briefMoveLines, briefNeedsLines, briefPrompt, briefStillOpenLines, keepsBrief, overdueAsks, readBrief } from '../sessions/brief.js';
+import { briefPrompt, briefSectionLines, keepsBrief, readBrief } from '../sessions/brief.js';
+import { structureBrief } from '../sessions/brief-structure.js';
 import { briefFixPrompt, briefIssues, briefNeedsRewrite, briefVpLines, completeBriefRefs, formatBriefIssues, type BriefIssue } from '../sessions/brief-rules.js';
 import { agentMemoryPrompt, applyAgentMemoryAnswer, keepsAgentMemory, readAgentMemoryField, splitAgentMemory } from '../sessions/agent-memory.js';
 import { setReportPending, __resetReportPending } from '../sessions/report-pending.js';
@@ -784,6 +785,15 @@ async function storeBrief(
   }
 }
 
+/** The Brief in its three sections (sessions/brief-structure.ts), logged when Walnut fixed its shape. */
+function shapeBrief(sessionId: string, taskId: string, brief: TaskBrief, owner: Task, tasks: readonly Task[], language?: string): TaskBrief {
+  const shaped = structureBrief(brief.text, owner.id, tasks, { ...(language ? { language } : {}) });
+  if (shaped.moved || shaped.added.length) {
+    log.session.info('turn-complete-summary: Brief put in its sections', { sessionId, taskId, moved: shaped.moved, added: shaped.added });
+  }
+  return { ...brief, text: shaped.text };
+}
+
 const BRIEF_FIX_TIMEOUT_MS = 90_000;
 // Its own single-flight, apart from the turn-end ask's: a turn that ends while this runs still
 // gets its whole report, and a Brief that turn writes wins over this answer (storeBrief replacing).
@@ -808,7 +818,7 @@ async function rewriteBrokenBrief(
   }
   const read = readBrief(extractField(answer, 'FOR_USER_BRIEF'), askedAt || undefined);
   if (!read) return;
-  const fixed = completeBriefRefs(read, tasks);
+  const fixed = shapeBrief(sessionId, taskId, completeBriefRefs(read, tasks), owner, tasks, context.language);
   const still = briefIssues(fixed.text, owner, tasks);
   log.session.info('turn-complete-summary: Brief rewritten after the rule check', { sessionId, taskId, before: issues.length, after: still.length });
   if (still.length < issues.length) await storeBrief(sessionId, taskId, fixed, still, askedAt);
@@ -898,8 +908,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
     // The Brief's owner and its world, for the rule check after the answer (sessions/brief-rules.ts).
     let briefOwner: Task | undefined;
     let briefTasks: Task[] = [];
-    // When the moves were read: a move after this was not in the prompt, so it must show as
-    // "Since then" under the new Brief and be listed in the next prompt.
+    // When the team's statuses were read for the ask: the Brief is dated then.
     let briefAskedAt = '';
     let memory: { title: string; current?: NonNullable<Task['agent_memory']> } | undefined;
     const askedAt = Date.now();
@@ -914,7 +923,8 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
         promptedTitle = (taskRow.title ?? '').trim();
         taskPhase = taskRow.phase;
         mainAgent = taskRow.org_role === 'main';
-        // Main and every lead rewrite their Brief at each turn end, told what moved since the last.
+        // Main and every lead rewrite their Brief at each turn end, handed the team's live status
+        // in its three sections (sessions/brief.ts).
         if (keepsBrief(taskRow)) {
           briefAskedAt = new Date().toISOString();
           const { listTasks } = await import('../task-manager.js');
@@ -922,9 +932,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
           briefOwner = taskRow;
           briefTasks = all;
           brief = {
-            hadBrief: !!taskRow.brief?.text, moves: briefMoveLines(taskRow, all), ownId: taskRow.id,
-            stillOpen: briefStillOpenLines(taskRow, all, await overdueAsks().catch(() => [])),
-            needs: briefNeedsLines(taskRow, all),
+            hadBrief: !!taskRow.brief?.text, ownId: taskRow.id, sections: briefSectionLines(taskRow, all),
             main: taskRow.org_role === 'main', vps: briefVpLines(taskRow, all),
             ...(taskRow.brief?.issues?.length ? { issues: formatBriefIssues(taskRow.brief.issues) } : {}),
           };
@@ -1122,8 +1130,10 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
     const statusReport = readStatusReport(selfReport);
     // (a1c) Main's or a lead's Brief, the letter above its chat (sessions/brief.ts).
     const briefRead = brief ? readBrief(extractField(selfReport, 'FOR_USER_BRIEF'), briefAskedAt || undefined) : null;
-    // A task named by the head of its id gets its whole id, so its pill shows its live status.
-    const briefNow = briefRead ? completeBriefRefs(briefRead, briefTasks) : null;
+    // A task named by the head of its id gets its whole id, so its pill shows its live status;
+    // then the letter is put in its three sections, each line under its task's live status.
+    const briefLanguage = nonEnglishUiLanguage(uiLanguage) ? uiLanguageName(nonEnglishUiLanguage(uiLanguage)!) : undefined;
+    const briefNow = briefRead && briefOwner ? shapeBrief(p.sessionId, taskId, completeBriefRefs(briefRead, briefTasks), briefOwner, briefTasks, briefLanguage) : null;
     // Checked against the Brief's rules (sessions/brief-rules.ts): stored with what breaks them,
     // and the writer is asked once more, at the end of this hook, to rewrite it.
     const briefBroke: BriefIssue[] = briefNow && briefOwner ? briefIssues(briefNow.text, briefOwner, briefTasks) : [];
@@ -1272,7 +1282,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
       if (!isAcpEngine((await getSessionByClaudeId(p.sessionId).catch(() => undefined))?.engine)) {
         void rewriteBrokenBrief(p.sessionId, taskId, briefOwner, briefTasks, briefBroke, briefAskedAt, {
           text: briefNow.text, main: briefOwner.org_role === 'main', ...(brief.vps ? { vps: brief.vps } : {}),
-          moves: brief.moves, ownId: briefOwner.id, ...(nonEnglishUiLanguage(uiLanguage) ? { language: uiLanguageName(nonEnglishUiLanguage(uiLanguage)!) } : {}),
+          ...(brief.sections ? { sections: brief.sections } : {}), ownId: briefOwner.id, ...(briefLanguage ? { language: briefLanguage } : {}),
         }).catch(() => {});
       }
     }

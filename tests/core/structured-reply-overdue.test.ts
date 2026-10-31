@@ -4,8 +4,8 @@
  *     not_done reads as Partial (src/core/peers/structured-reply.ts);
  *   - a request past its deadline stays OVERDUE, STILL OPEN until a reply settles it, with
  *     one reminder at twice the deadline (src/core/session-requests.ts);
- *   - the Brief's program-made "still open" footer (briefStillOpen in src/core/user-status.ts)
- *     and the post-compaction list (open-items-text.ts) name both.
+ *   - the post-compaction list (open-items-text.ts) names both, and the Brief's ask lists a
+ *     Partial result beside its task (sessions/brief.ts briefSectionLines).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import fs from 'node:fs';
@@ -19,7 +19,6 @@ import {
   type SessionRequest,
 } from '../../src/core/session-requests.js';
 import { composeReplyText, isPartial, partialLine, readStructuredReply } from '../../src/core/peers/structured-reply.js';
-import { briefMentions, briefStillOpen, resultIsPartial, type StillOpenTask } from '../../src/core/user-status.js';
 import { createOpenItemsText } from '../../src/core/sessions/open-items-text.js';
 import { parseWalnutMessage } from '../../src/core/peers/walnut-message-tag.js';
 
@@ -134,50 +133,6 @@ describe('the post-compaction list names Partial and overdue work', () => {
   });
 });
 
-describe('the Brief\'s still-open footer', () => {
-  const t = (id: string, extra: Partial<StillOpenTask> = {}): StillOpenTask => ({ id, title: id.toUpperCase(), phase: 'IN_PROGRESS', parent_task_id: 'lead', ...extra });
-  const lead: StillOpenTask = { id: 'lead', title: 'Lead', phase: 'IN_PROGRESS', org_role: 'lead', project: 'P' };
-
-  it('lists open work the letter does not name, Partial results, overdue asks and long waits', () => {
-    const tasks: StillOpenTask[] = [
-      lead,
-      t('named'),
-      t('forgot', { user_status: { state: 'needs', ask: 'approve' } }),
-      t('deep', { parent_task_id: 'forgot' }),
-      t('done-partial', { phase: 'COMPLETE', result_report: { not_done: ['iOS'], at: new Date(NOW - H).toISOString() } }),
-      t('settled', { phase: 'COMPLETE', result_report: { not_done: ['x'], settled: { at: 'y' }, at: new Date(NOW - H).toISOString() } }),
-      t('old-partial', { phase: 'COMPLETE', result_report: { not_done: ['x'], at: new Date(NOW - 9 * 24 * H).toISOString() } }),
-      t('stale', { user_status: { state: 'waiting', kind: 'lead' }, phase_changed_at: new Date(NOW - 50 * H).toISOString() }),
-      // Another project's task, not below the lead: not its team.
-      { id: 'other', title: 'Other', phase: 'IN_PROGRESS', project: 'Q' },
-      // In its project but not its subtask: in the team (Partial, waits), never "not in the letter".
-      { id: 'peer', title: 'Peer', phase: 'IN_PROGRESS', project: 'P' },
-    ];
-    const mentioned = briefMentions('Done: <task-ref id="named" label="Named"/> and <a class="task-link" data-task-id="stale">x</a>');
-    const open = briefStillOpen(lead, tasks, {
-      mentioned, now: NOW,
-      overdue: [
-        { id: 'rq-1', fromTaskId: 'lead', toTaskId: 'forgot', preview: 'status?', createdAt: new Date(NOW - 3 * H).toISOString() },
-        { id: 'rq-2', fromTaskId: 'other', toTaskId: 'nobody', preview: 'x', createdAt: new Date(NOW).toISOString() },
-      ],
-    });
-    // Needs first, then working.
-    expect(open.unmentioned.map((x) => x.id)).toEqual(['forgot', 'deep']);
-    expect(open.partial.map((p) => [p.task.id, p.notDone])).toEqual([['done-partial', ['iOS']]]);
-    expect(open.overdue.map((r) => r.id)).toEqual(['rq-1']);
-    expect(open.waitingLong.map((w) => [w.task.id, w.on])).toEqual([['stale', 'lead']]);
-    expect(resultIsPartial(tasks[4].result_report)).toBe(true);
-  });
-
-  it('counts the rest past the limit, and Main\'s VPs are its own work', () => {
-    const many = Array.from({ length: 11 }, (_, i) => t(`w${i}`));
-    expect(briefStillOpen(lead, [lead, ...many], { mentioned: new Set(), now: NOW }).moreUnmentioned).toBe(3);
-    const main: StillOpenTask = { id: 'main', title: 'Main', phase: 'IN_PROGRESS', org_role: 'main' };
-    const vp: StillOpenTask = { id: 'vp', title: 'VP', phase: 'IN_PROGRESS', org_role: 'lead', project: 'P' };
-    expect(briefStillOpen(main, [main, vp], { mentioned: new Set(), now: NOW }).unmentioned.map((x) => x.id)).toEqual(['vp']);
-  });
-});
-
 describe('due dates feed the status (2026-10-28, the Grok Bot study: deadlines in the status)', () => {
   it('a bare date is due at the end of that day; overdue past it, soon within a day, silent before', async () => {
     const { dueStatus, dueAtMs, deriveUserStatus } = await import('../../src/core/user-status.js');
@@ -194,17 +149,4 @@ describe('due dates feed the status (2026-10-28, the Grok Bot study: deadlines i
     expect(deriveUserStatus({ phase: 'COMPLETE', dueDate: '2026-10-27' }, NOW).due).toBeUndefined();
   });
 
-  it('the Brief footer lists open team work past or near its due date, earliest first', () => {
-    const lead: StillOpenTask = { id: 'lead', title: 'Lead', phase: 'IN_PROGRESS', org_role: 'lead', project: 'P' };
-    const at = (h: number) => new Date(NOW + h * H).toISOString();
-    const tasks: StillOpenTask[] = [
-      lead,
-      { id: 'late', title: 'Late', phase: 'IN_PROGRESS', parent_task_id: 'lead', due_date: at(-5) },
-      { id: 'soon', title: 'Soon', phase: 'TODO', parent_task_id: 'lead', due_date: at(3) },
-      { id: 'later', title: 'Later', phase: 'TODO', parent_task_id: 'lead', due_date: at(72) },
-      { id: 'closed', title: 'Closed', phase: 'COMPLETE', parent_task_id: 'lead', due_date: at(-5) },
-    ];
-    const open = briefStillOpen(lead, tasks, { mentioned: new Set(), now: NOW });
-    expect(open.due.map((d) => [d.task.id, d.state])).toEqual([['late', 'overdue'], ['soon', 'soon']]);
-  });
 });

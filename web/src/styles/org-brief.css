@@ -75,9 +75,9 @@
 .org-brief-body > :last-child { margin-bottom: 0; }
 .org-brief-body p, .org-brief-body ul, .org-brief-body ol { margin: 0 0 4px; }
 .org-brief-body ul, .org-brief-body ol { padding-left: 18px; }
-/* Each task the letter names wears its live status. */
+/* Each task the letter names wears its live status, and so does each section heading. */
 .org-brief-body a.task-link[data-user-state]::before,
-.org-brief-move[data-user-state]::before {
+.org-brief-body [data-brief-section]::before {
   content: '';
   display: inline-block;
   width: 7px;
@@ -88,11 +88,21 @@
   background: var(--fg-muted, #86868b);
 }
 .org-brief-body a.task-link[data-user-state='needs']::before,
-.org-brief-move[data-user-state='needs']::before { background: var(--error, #ff3b30); }
+.org-brief-body [data-brief-section='needs']::before { background: var(--error, #ff3b30); }
 .org-brief-body a.task-link[data-user-state='working']::before,
-.org-brief-move[data-user-state='working']::before { background: var(--success, #34c759); }
-.org-brief-body a.task-link[data-user-state='done']::before,
-.org-brief-move[data-user-state='done']::before { background: var(--accent, #0a84ff); }
+.org-brief-body [data-brief-section='working']::before { background: var(--success, #34c759); }
+.org-brief-body a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff); }
+/* The three section headings (Needs you, Working, Waiting / snoozed): small, not a document's. */
+.org-brief-body h1, .org-brief-body h2, .org-brief-body h3, .org-brief-body h4 {
+  margin: 8px 0 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-secondary, var(--fg));
+  border: 0;
+  padding: 0;
+}
+.org-brief-body > h1:first-child, .org-brief-body > h2:first-child,
+.org-brief-body > h3:first-child, .org-brief-body > h4:first-child { margin-top: 0; }
 .org-brief-foot {
   display: flex;
   flex-wrap: wrap;
@@ -101,64 +111,6 @@
   margin-top: 6px;
   font-size: 12px;
 }
-.org-brief-moves { display: contents; }
-.org-brief-issues { color: color-mix(in srgb, var(--warning) 55%, var(--fg)); cursor: help; }
-.org-brief-move {
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 1px 8px;
-  background: var(--bg-secondary);
-  color: var(--fg);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
 .org-page.is-phone .org-top.has-switch { padding-left: 12px; }
 .org-page.is-phone .org-brief { padding: 8px 12px; }
 .org-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
-/* A task whose latest result left things not done (structured-reply.ts). */
-.org-brief-body a.task-link[data-partial]::after {
-  content: 'Partial';
-  margin-left: 4px;
-  padding: 0 5px;
-  border-radius: 999px;
-  font-size: 10.5px;
-  vertical-align: 1px;
-  background: color-mix(in srgb, var(--warning, #ff9f0a) 18%, var(--bg));
-  color: var(--fg);
-}
-/* A "needs you" its session confirmed too long ago to be fact (user-status.ts checkedLine). */
-.org-brief-body a.task-link[data-unverified]::after {
-  content: 'Not verified';
-  margin-left: 4px;
-  padding: 0 5px;
-  border-radius: 999px;
-  font-size: 10.5px;
-  vertical-align: 1px;
-  background: color-mix(in srgb, var(--warning, #ff9f0a) 18%, var(--bg));
-  color: var(--fg);
-}
-/* The program-made "still open" footer (BriefStillOpen.tsx). */
-.org-brief-open-checked { color: var(--fg-muted); font-size: 11px; }
-.org-brief-open-checked.is-unverified { color: color-mix(in srgb, var(--warning, #FF9500) 70%, var(--fg)); font-weight: 600; }
-.org-brief-open {
-  margin-top: 8px;
-  padding-top: 6px;
-  border-top: 1px dashed var(--border);
-  font-size: 12px;
-  max-height: min(180px, 26vh);
-  overflow-y: auto;
-}
-.org-brief-open-head { font-weight: 600; margin-bottom: 4px; }
-.org-brief-open-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 3px 0; }
-.org-brief-open-item { display: inline-flex; align-items: center; gap: 4px; }
-.org-brief-open-why { color: var(--fg); min-width: 0; overflow-wrap: anywhere; }
-.org-brief-partial,
-.org-brief-overdue {
-  padding: 0 6px;
-  border-radius: 999px;
-  font-size: 11px;
-  background: color-mix(in srgb, var(--warning, #ff9f0a) 18%, var(--bg));
-  color: var(--fg);
-}
-.org-brief-overdue { background: color-mix(in srgb, var(--error, #ff3b30) 14%, var(--bg)); }

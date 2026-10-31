@@ -205,7 +205,7 @@ describe('MEMORY.md in the turn-end self-report', () => {
     expect(prompt.indexOf('AGENT_MEMORY:')).toBeGreaterThan(prompt.indexOf('FOR_USER_BRIEF:'))
     expect(prompt).toContain('a deadline days away, a reminder or a thing for later goes into your own MEMORY.md')
     const stored = await getTask(lead.id)
-    expect(stored.brief?.text).toBe('**Needs you:** nothing.')
+    expect(stored.brief?.text).toBe('### Needs you\n- nothing.\n\n### Working\n- None\n\n### Waiting / snoozed\n- None')
     expect(stored.agent_memory?.text).toMatch(/^- \d{4}-\d{2}-\d{2}: The fence supplier answers by Friday\.$/)
   })
 

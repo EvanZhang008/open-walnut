@@ -2,9 +2,13 @@
  * The Org page's right side: the selected node (Main, or a project's lead).
  *
  *   header   who it is, its counts, when its work last moved; tabs
- *   Latest   the row's line: what needs the user, else what moves
- *   Needs you  every prompt, failure or status ask (a letter, a Board choice) in its work: its task's
- *            name opens it, Quote puts it in this node's chat, Answer answers it in place (OrgAlertAnswer)
+ *   Task     (above the chat, the default; a lead's or Main's switch also offers its Brief, OrgBrief)
+ *     Latest   the row's line: what needs the user, else what moves
+ *     four tabs, the home panel's names (org-task-tabs.ts): Needs you (the default), Working,
+ *              Waiting / snoozed, Completed, each with its count; the header's count pills open them
+ *     Needs you  every prompt, failure or status ask (a letter, a Board choice) in its work: its task's
+ *              name opens it, Quote puts it in this node's chat, Answer answers it in place (OrgAlertAnswer),
+ *              Snooze puts it off until a time (OrgAlertSnooze)
  *   Board    the Board its lead keeps (TaskBoardPane), when it keeps one
  *   Team     its work by the user's status (Needs you / Working / Waiting), each with its line
  *   Chat     its own session (SessionPanel), or a way to start one
@@ -22,6 +26,8 @@ import { resolveTaskSessionId } from '@/utils/session-status';
 import { timeAgo } from '@/utils/time';
 import { OrgComposerBar } from './OrgComposerBar';
 import { OrgAlertAnswer, type AnswerFailure, type AnswerSettle } from './OrgAlertAnswer';
+import { OrgAlertSnooze } from './OrgAlertSnooze';
+import { formatStartDateDisplay } from '@/components/common/DatePicker';
 import { holdOrder } from './hold-order';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 import { recentMainStart } from './ask-main';
@@ -30,7 +36,9 @@ import { useHasBoard } from './useBoardOwner';
 import { OrgBrief } from './OrgBrief';
 import { flashProbeEnabled } from '@/utils/flash-probe';
 import { log } from '@/utils/log';
-import { briefUnread, markBriefSeen, readBriefFolded, readTopView, writeBriefFolded, writeTopView, type OrgTopView } from './org-brief-model';
+import { briefUnread, markBriefSeen, readBriefFolded, writeBriefFolded, type OrgTopView } from './org-brief-model';
+import { ORG_TASK_TABS, ORG_TASK_TAB_LABELS, orgTaskTabs, snoozeAhead, taskTabNote, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
+import { orgDisplayTitle } from '@open-walnut/org-tree';
 import {
   mainTeamColumns, teamColumns, type ChannelRow, type OrgAlertView, type TeamColumn,
 } from './org-channels-model';
@@ -81,21 +89,81 @@ const COLUMN_DOT: Record<TeamColumn['key'], string> = {
   needs: 'var(--error, #FF3B30)', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)',
 };
 
-/** The user's status of the node's work, in the words the Board uses (src/core/user-status.ts). */
-function CountPills({ row }: { row: ChannelRow }) {
-  const { counts, needs } = row;
+const TAB_DOT: Record<OrgTaskTab, string> = { ...COLUMN_DOT, done: 'var(--accent, #0A84FF)' };
+
+/** The user's status of the node's work, in the words the Board uses (src/core/user-status.ts),
+ *  counted from the same lists as the Task view's tabs; each pill opens its tab. */
+function CountPills({ row, tabs, onOpen }: { row: ChannelRow; tabs: OrgTaskTabs; onOpen: (tab: OrgTaskTab) => void }) {
+  const pill = (tab: OrgTaskTab, n: number, words: string) => (
+    <button type="button" className="org-pill is-button" data-testid={`org-pill-${tab}`} onClick={() => onOpen(tab)} title={`Show ${ORG_TASK_TAB_LABELS[tab]}`}>
+      <i style={{ background: TAB_DOT[tab] }} />{n} {words}
+    </button>
+  );
   return (
     <span className="org-pills" data-testid="org-detail-counts">
-      {needs > 0 && <span className="org-pill"><i style={{ background: COLUMN_DOT.needs }} />{needs} {needs === 1 ? 'needs' : 'need'} you</span>}
-      {counts.running > 0 && <span className="org-pill"><i style={{ background: COLUMN_DOT.working }} />{counts.running} working</span>}
-      {counts.waiting > 0 && <span className="org-pill"><i style={{ background: COLUMN_DOT.waiting }} />{counts.waiting} waiting</span>}
-      <span className="org-pill">{counts.open} open</span>
+      {tabs.needs.length > 0 && pill('needs', tabs.needs.length, tabs.needs.length === 1 ? 'needs you' : 'need you')}
+      {tabs.working.length > 0 && pill('working', tabs.working.length, 'working')}
+      {tabs.waiting.length > 0 && pill('waiting', tabs.waiting.length, 'waiting')}
+      <span className="org-pill">{row.counts.open} open</span>
     </span>
   );
 }
 
+/** The Task view's tabs: the home panel's four names, each with its count. */
+function TaskTabBar({ tabs, tab, onPick }: { tabs: OrgTaskTabs; tab: OrgTaskTab; onPick: (tab: OrgTaskTab) => void }) {
+  return (
+    <div className="org-task-tabs" role="tablist" aria-label="Tasks by status" data-testid="org-task-tabs">
+      {ORG_TASK_TABS.map((t) => (
+        <button
+          key={t}
+          type="button"
+          role="tab"
+          aria-selected={tab === t}
+          className={`org-task-tab${tab === t ? ' is-on' : ''}`}
+          data-testid="org-task-tab"
+          data-tab={t}
+          onClick={() => onPick(t)}
+        >
+          <i style={{ background: TAB_DOT[t] }} />{ORG_TASK_TAB_LABELS[t]}<span className="org-task-tab-count">{tabs[t].length}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** A tab other than Needs you: one row per task, its line, when it last moved. */
+function TaskTabList({ tasks, tab, onOpen, compact, now }: {
+  tasks: readonly Task[]; tab: OrgTaskTab; onOpen: (id: string) => void; compact?: boolean; now: number;
+}) {
+  if (!tasks.length) {
+    return <p className="org-task-empty" data-testid="org-task-empty">{tab === 'done' ? 'Nothing completed in the last week.' : `Nothing is ${tab === 'working' ? 'working' : 'waiting or snoozed'} here.`}</p>;
+  }
+  return (
+    <ul className={`org-task-list${compact ? ' is-compact' : ''}`} data-testid="org-task-list" data-tab={tab}>
+      {tasks.map((t) => {
+        const note = taskTabNote(t, tab);
+        const at = tab === 'done' ? t.completed_at ?? t.updated_at : t.updated_at;
+        return (
+          <li key={t.id}>
+            <button type="button" className="org-task-row" data-testid="org-task-row" data-task-id={t.id} onClick={() => onOpen(t.id)} title={t.title}>
+              <i style={{ background: TAB_DOT[tab] }} aria-hidden="true" />
+              <span className="org-task-text">
+                <span className="org-task-title">{orgDisplayTitle(t)}</span>
+                {note && <span className="org-task-note">{note}</span>}
+              </span>
+              {at && <span className="org-task-time">{timeAgo(at, { now })}</span>}
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 /** One row per ask (2026-10-26, the user: "it need to show the task link clickable, just 2 button,
- *  quote just quote ... and answer"): the task's name is a link to it, Quote and Answer. */
+ *  quote just quote ... and answer"; 2026-10-31: "3 button, quote, answer, and snooze"): the task's
+ *  name is a link to it, Quote, Answer and Snooze. A snoozed row reads "Snoozed until <time>" until
+ *  its task's status leaves Needs you. */
 function AlertList({ alerts, tasks, onOpen, onQuote, canQuote, answers, compact }: {
   alerts: readonly OrgAlertView[];
   tasks: readonly Task[];
@@ -113,6 +181,10 @@ function AlertList({ alerts, tasks, onOpen, onQuote, canQuote, answers, compact 
     () => holdOrder(alerts.map((a) => ({ key: a.taskId, a })), held).map((x) => x.a),
     [alerts, held],
   );
+  /** Rows snoozed here, by task: until when, or why the write failed. */
+  const [snoozed, setSnoozed] = useState<ReadonlyMap<string, { until: string | null; error?: string }>>(new Map());
+  const onSnoozed = (taskId: string, until: string | null, error?: string) =>
+    setSnoozed((m) => new Map(m).set(taskId, { until, ...(error ? { error } : {}) }));
   return (
     <div
       className={`org-alerts${compact ? ' is-compact' : ''}`}
@@ -138,7 +210,13 @@ function AlertList({ alerts, tasks, onOpen, onQuote, canQuote, answers, compact 
               <span className={`org-alert-checked${a.checked.unverified ? ' is-unverified' : ''}`} data-testid="org-alert-checked" data-unverified={a.checked.unverified ? '1' : '0'}>{a.checked.text}</span>
             )}
           </span>
+          {snoozeAhead(snoozed.get(a.taskId)?.until, Date.now()) ? (
+            <span className="org-alert-snoozed" data-testid="org-alert-snoozed">Snoozed until {formatStartDateDisplay(snoozed.get(a.taskId)!.until)}</span>
+          ) : (
           <span className="org-alert-actions">
+            {snoozed.get(a.taskId)?.error && (
+              <span className="org-alert-snooze-error" data-testid="org-alert-snooze-error" title={snoozed.get(a.taskId)!.error}>Snooze failed</span>
+            )}
             <button
               type="button"
               className="btn btn-sm"
@@ -154,7 +232,9 @@ function AlertList({ alerts, tasks, onOpen, onQuote, canQuote, answers, compact 
               onFailureSeen={answers.seen}
               {...(answers.failed.get(a.taskId) ? { failure: answers.failed.get(a.taskId)! } : {})}
             />
+            <OrgAlertSnooze alert={a} current={byId.get(a.taskId)?.start_date} onSnoozed={onSnoozed} />
           </span>
+          )}
         </div>
       ))}
     </div>
@@ -220,16 +300,22 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   /** The chat's Inbox tab, asked for by Answer on a letter (SessionPanel inboxRequest), for the
    *  session it was asked of: a replaced session's new panel does not reopen it. */
   const [chatInbox, setChatInbox] = useState<{ sid: string; n: number } | null>(null);
-  /** Above the chat: Status (Latest and Needs you) or the Brief its lead or Main keeps (OrgBrief). */
-  const [topPick, setTopPick] = useState<OrgTopView>(readTopView);
+  /** Above the chat: Task (Latest and the tasks by status) or the Brief its lead or Main keeps
+   *  (OrgBrief). A node always opens on Task (2026-10-30, the user: "default 是显示这个 status 的";
+   *  2026-10-31: "这个 status 可能就是应该叫做 task 吧"). */
+  const [topPick, setTopPick] = useState<OrgTopView>('task');
   const [briefFolded, setBriefFolded] = useState(readBriefFolded);
   const keepsBrief = contact?.org_role === 'main' || contact?.org_role === 'lead';
-  const topView: OrgTopView = keepsBrief ? topPick : 'status';
+  const topView: OrgTopView = keepsBrief ? topPick : 'task';
+  /** The Task view's tab: Needs you unless the user picked another (a node opens on it). */
+  const [taskTab, setTaskTab] = useState<OrgTaskTab>('needs');
+  const tabs = useMemo(() => orgTaskTabs(row, rows, tasks, now), [row, rows, tasks, now]);
+  const openTab = (t: OrgTaskTab) => { setTopPick('task'); setTaskTab(t); };
   const brief = keepsBrief ? contact?.brief : undefined;
-  const pickTop = (v: OrgTopView) => { setTopPick(v); writeTopView(v); };
+  const pickTop = (v: OrgTopView) => setTopPick(v);
   // Read while shown: the dot on the Brief tab is for a rewrite the user has not seen.
   useEffect(() => { if (topView === 'brief' && contact && brief?.at) markBriefSeen(contact.id, brief.at); }, [topView, contact, brief?.at]);
-  const briefNew = topView === 'status' && !!contact && briefUnread(contact.id, brief?.at);
+  const briefNew = topView === 'task' && !!contact && briefUnread(contact.id, brief?.at);
   const title = row.kind === 'main' ? 'CEO' : row.contactTitle;
   // Main is always someone to talk to: its task is made by the first chat.
   const canTalk = row.kind === 'main' || !!row.contactId || !!row.node?.needsLead;
@@ -320,7 +406,9 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   }, [quote, shown, sessionId]);
   const lastMoved = row.lastAt ? timeAgo(new Date(row.lastAt).toISOString(), { now }) : '';
   const tabId = (t: OrgTab) => `org-tab-${t}-${row.key}`;
-  const alertsShown = shown === 'chat' ? row.alerts.filter((a) => a.taskId !== row.contactId || !shownInChat(a)) : row.alerts;
+  // The Needs you cards are part of the Task view: the Brief view is the letter alone (2026-10-30,
+  // the user: "应该是在 status 里面呢，不应该单独放在这儿吧").
+  const alertsShown = shown === 'chat' ? tabs.needs.filter((a) => a.taskId !== row.contactId || !shownInChat(a)) : tabs.needs;
 
   return (
     <div className="org-detail" data-testid="org-detail" data-key={row.key}>
@@ -330,7 +418,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
         <div className="org-detail-who">
           <h2 className="org-detail-title" data-testid="org-detail-title">{title}</h2>
           <div className="org-detail-sub">
-            <CountPills row={row} />
+            <CountPills row={row} tabs={tabs} onOpen={openTab} />
             {lastMoved && <span className="org-muted">· moved {lastMoved}</span>}
           </div>
           {!!row.led?.length && (
@@ -355,13 +443,13 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
       <div className={`org-top${keepsBrief ? ' has-switch' : ''}`} data-testid="org-top" data-view={topView}>
         {keepsBrief && (
           <div className="org-top-switch" role="group" aria-label="Above the chat">
-            <button type="button" aria-pressed={topView === 'status'} className={topView === 'status' ? 'is-on' : ''} data-testid="org-top-status" onClick={() => pickTop('status')}>Status</button>
+            <button type="button" aria-pressed={topView === 'task'} className={topView === 'task' ? 'is-on' : ''} data-testid="org-top-task" onClick={() => pickTop('task')}>Task</button>
             <button type="button" aria-pressed={topView === 'brief'} className={topView === 'brief' ? 'is-on' : ''} data-testid="org-top-brief" onClick={() => pickTop('brief')}>
               Brief{briefNew && <i className="org-top-new" data-testid="org-top-brief-new"><span className="org-sr-only">, rewritten since you read it</span></i>}
             </button>
           </div>
         )}
-        {topView === 'status' ? (
+        {topView === 'task' ? (
           /* The time first: a long line is cut at its end. */
           <div className="org-detail-latest" data-testid="org-detail-latest" title={row.latestTask ? `${row.latestTask}: ${row.latest}` : row.latest}>
             <span className="org-muted">Latest{row.kind === 'project' && row.latestAt > 0 ? ` · ${timeAgo(new Date(row.latestAt).toISOString(), { now })}` : ''}</span> {row.latest}
@@ -381,10 +469,24 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
       {topView === 'brief' && (
         <OrgBrief owner={contact} tasks={tasks} name={title} onOpenTask={openChip} now={now} folded={briefFolded} />
       )}
-      {/* On the chat, the contact's own prompt is in view already; its letter or choice is not, so it stays.
-          Both views keep it: what needs the user never hides behind the Brief. */}
-      {alertsShown.length > 0 && (
-        <AlertList alerts={alertsShown} tasks={tasks} onOpen={openAlert} onQuote={quoteAlert} canQuote={!!sessionId} answers={answers} compact={shown === 'chat'} />
+      {topView === 'task' && (
+        <div className="org-task-view" data-testid="org-task-view" data-tab={taskTab}>
+          <TaskTabBar tabs={tabs} tab={taskTab} onPick={setTaskTab} />
+          {/* On the chat, the contact's own prompt is in view already; its letter or choice is not, so it stays. */}
+          {taskTab === 'needs' ? (<>
+            {alertsShown.length > 0 && (
+              <AlertList alerts={alertsShown} tasks={tasks} onOpen={openAlert} onQuote={quoteAlert} canQuote={!!sessionId} answers={answers} compact={shown === 'chat'} />
+            )}
+            {/* Counted in the tab: the contact's own prompt, which the chat below shows. */}
+            {(alertsShown.length < tabs.needs.length || !tabs.needs.length) && (
+              <p className="org-task-empty" data-testid="org-task-empty">
+                {!tabs.needs.length ? 'Nothing needs you here.' : alertsShown.length ? `And ${tabs.needs.length - alertsShown.length} in the chat below.` : 'Its ask is in the chat below.'}
+              </p>
+            )}
+          </>) : (
+            <TaskTabList tasks={tabs[taskTab]} tab={taskTab} onOpen={openChip} compact={shown === 'chat'} now={now} />
+          )}
+        </div>
       )}
 
       <div

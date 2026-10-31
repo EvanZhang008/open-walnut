@@ -29,6 +29,7 @@
       "@open-walnut/org-tree": ["../src/core/org/org-tree"],
       "@open-walnut/user-status": ["../src/core/user-status"],
       "@open-walnut/live-activity": ["../src/core/live-activity"],
+      "@open-walnut/brief-structure": ["../src/core/sessions/brief-structure"],
       "@open-walnut/companion-keep": ["../src/core/replication/companion-keep"],
       "@open-walnut/history-turn-window": ["../src/lib/history-turn-window"],
       "@open-walnut/history-injected-banner": ["../src/lib/history-injected-banner"],

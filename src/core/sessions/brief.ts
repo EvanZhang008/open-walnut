@@ -5,121 +5,75 @@
  * direct to the chat, this is constantly managed by agent, must be up to date"; "All the leader or
  * main agent, or VP need to utilize this."
  *
- * Kept current by the program, not by the session remembering to:
- *   - every turn end's self-report asks for it (FOR_USER_BRIEF) and lists what moved in the team
- *     since the last one, so the rewrite cannot miss a move;
- *   - the page shows every task it names with its live status, and lists what moved after it was
- *     written (briefMoves in src/core/user-status.ts), so an idle owner's Brief never reads stale.
+ * Only the letter, in three sections (2026-10-30, the user: "brief 就是 AI 写的一个 brief. That's
+ * it", with Needs you, Working and Waiting / snoozed: BRIEF_SECTIONS). Kept current by the
+ * program, not by the session remembering to: every turn end's self-report asks for it
+ * (FOR_USER_BRIEF) and hands it the team's live status as those three lists, and the stored letter
+ * is put in that shape (brief-structure.ts). The page shows each task it names with its live
+ * status dot; nothing else is added to it.
  */
 import {
-  BRIEF_MAX_CHARS, COMPLETE_IS_VERIFIED, USER_STATE_LABELS, briefMentions, briefMoves, agoWords, briefStillOpen, briefTeam, checkedLine, fallbackUserState,
-  type StillOpenAsk, type TaskBrief,
+  BRIEF_MAX_CHARS, BRIEF_SECTIONS, COMPLETE_IS_VERIFIED, agoWords, briefTeam, resultIsPartial, type TaskBrief,
 } from '../user-status.js';
 import type { Task } from '../types.js';
 import { briefVpOf } from './brief-rules.js';
+import { BRIEF_STRUCTURE_RULE, briefSectionOf, briefSectionsBlock, type BriefSectionKey } from './brief-structure.js';
 
 export function keepsBrief(task: Pick<Task, 'org_role'>): boolean {
   return task.org_role === 'main' || task.org_role === 'lead';
 }
 
-/** One line per team task that moved since the Brief, for the self-report prompt. */
-export function briefMoveLines(owner: Task, tasks: readonly Task[]): string[] {
-  const at = owner.brief?.at ? Date.parse(owner.brief.at) : NaN;
-  return briefMoves(owner, tasks, at, 12).map(({ task }) => {
-    // Main names the VP over each worker (brief-rules.ts): the ref to copy, beside the move.
-    const vp = owner.org_role === 'main' ? briefVpOf(task, tasks) : undefined;
-    const vpRef = vp ? ` (VP <task-ref id="${vp.id}" label="${vp.title.replace(/"/g, '&quot;')}"/>)` : '';
-    const s = task.user_status;
-    // A completed task is verified (the user mostly closes it after checking): its last open
-    // words ("waits on the user to install the build") are history, never a pending step.
-    const done = task.phase === 'COMPLETE' || task.status === 'done';
-    const state = USER_STATE_LABELS[done ? 'done' : s?.state ?? fallbackUserState(task.phase, task.status)];
-    const why = done ? undefined : s?.ask ?? s?.waitingOn ?? s?.now;
-    return `- <task-ref id="${task.id}" label="${task.title.replace(/"/g, '&quot;')}"/>${vpRef}: now ${state}${why ? ` (${why})` : ''}`;
-  });
-}
+/** Lines per section in the ask; the rest are counted. */
+const SECTION_LIST_MAX = 15;
 
-/** Every overdue request still open (session-requests.ts), by the tasks of its two sides. */
-export async function overdueAsks(now = Date.now()): Promise<StillOpenAsk[]> {
-  const { overdueOpenRequests } = await import('../session-requests.js');
-  const rows = await overdueOpenRequests(now).catch(() => []);
-  if (rows.length === 0) return [];
-  const { getSessionByClaudeId } = await import('../session-tracker.js');
-  const taskOf = new Map<string, string | undefined>();
-  for (const r of rows) {
-    if (!taskOf.has(r.fromSessionId)) taskOf.set(r.fromSessionId, (await getSessionByClaudeId(r.fromSessionId).catch(() => undefined))?.taskId);
-  }
-  // A request whose asker or target task has since closed waits for nothing any more.
-  const { getTask } = await import('../task-manager.js');
-  const closed = new Map<string, boolean>();
-  const isClosed = async (id: string | undefined): Promise<boolean> => {
-    if (!id) return false;
-    if (!closed.has(id)) {
-      const t = await getTask(id).catch(() => null);
-      closed.set(id, !!t && (t.phase === 'COMPLETE' || t.status === 'done'));
-    }
-    return closed.get(id)!;
-  };
-  const out: StillOpenAsk[] = [];
-  for (const r of rows) {
-    const fromTaskId = taskOf.get(r.fromSessionId);
-    if (await isClosed(fromTaskId) || await isClosed(r.toTaskId)) continue;
-    out.push({ id: r.id, ...(fromTaskId ? { fromTaskId } : {}), ...(r.toTaskId ? { toTaskId: r.toTaskId } : {}), preview: r.preview, createdAt: r.createdAt });
-  }
-  return out;
-}
-
-/** What the team asks of the user right now, from the live statuses, each with when it was last
- *  checked (2026-10-28, the user: asks he had already done read to him as fact). */
-export function briefNeedsLines(owner: Task, tasks: readonly Task[], now = Date.now()): string[] {
+/**
+ * The team's open work by the section it belongs in now, as lines for the Brief ask: what each
+ * asks of the user (with when it was last checked, 2026-10-28: asks he had done were read to him
+ * as fact), what it is doing, what it waits on. Main's Needs you covers the whole org, each with
+ * its VP; its Working and Waiting are its VPs and the work below Main.
+ */
+export function briefSectionLines(owner: Task, tasks: readonly Task[], now = Date.now()): Record<BriefSectionKey, string[]> {
   const flat = (v: string) => v.replace(/\s+/g, ' ').trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const lines: string[] = [];
-  // Main answers for the whole org: what any task asks the user, with its VP beside it.
-  const team = owner.org_role === 'main' ? tasks.filter((t) => !t.plugin_only) : briefTeam(owner, tasks);
-  for (const t of team) {
+  const ref = (t: { id: string; title: string }) => `<task-ref id="${t.id}" label="${flat(t.title).replace(/"/g, '&quot;')}"/>`;
+  const main = owner.org_role === 'main';
+  const team = briefTeam(owner, tasks);
+  const org = main ? tasks.filter((t) => !t.plugin_only && t.id !== owner.id) : team;
+  const out: Record<BriefSectionKey, Array<{ line: string; at: number }>> = { needs: [], working: [], waiting: [] };
+  const inTeam = new Set(team.map((t) => t.id));
+  for (const t of org) {
+    const section = briefSectionOf(t);
+    if (!section || (section !== 'needs' && !inTeam.has(t.id))) continue;
     const s = t.user_status;
-    if (t.id === owner.id || t.phase === 'COMPLETE' || t.status === 'done' || s?.state !== 'needs' || !s.ask) continue;
-    const checked = s.checkedAt ? Date.parse(s.checkedAt) : NaN;
-    const when = s.source !== 'session' ? 'Walnut\'s live record'
-      : !Number.isFinite(checked) ? 'never checked'
-        : s.unverified ? `NOT VERIFIED: last checked ${agoWords(now - checked)}, the user may have done it already`
-          : `checked ${agoWords(now - checked)} by its session`;
-    const vp = owner.org_role === 'main' ? briefVpOf(t, tasks) : undefined;
-    const vpRef = vp ? ` (VP <task-ref id="${vp.id}" label="${flat(vp.title).replace(/"/g, '&quot;')}"/>)` : '';
-    lines.push(`- <task-ref id="${t.id}" label="${flat(t.title).replace(/"/g, '&quot;')}"/>${vpRef}: "${flat(s.ask).slice(0, 200)}" (${when})`);
+    let words = '';
+    if (section === 'needs') {
+      const checked = s?.checkedAt ? Date.parse(s.checkedAt) : NaN;
+      const when = s?.source !== 'session' ? 'Walnut\'s live record'
+        : !Number.isFinite(checked) ? 'never checked'
+          : s.unverified ? `NOT VERIFIED: last checked ${agoWords(now - checked)}, the user may have done it already`
+            : `checked ${agoWords(now - checked)} by its session`;
+      words = `${s?.ask ? `"${flat(s.ask).slice(0, 200)}"` : 'needs the user'} (${when})`;
+    } else if (section === 'waiting') {
+      // Snoozed (src/core/snooze.ts, on the status itself): its date, and the ask it holds back.
+      const snoozed = (s as { snoozed?: { until?: string; ask?: string } } | undefined)?.snoozed;
+      const on = s?.waitingOn ?? s?.now;
+      if (snoozed?.until) words = `snoozed until ${snoozed.until}${snoozed.ask ? ` (then asks: "${flat(snoozed.ask).slice(0, 160)}")` : ''}`;
+      else {
+        words = on ? `waits on ${flat(on).slice(0, 160)}` : 'waiting';
+        if (s?.until) words += ` (wakes ${s.until})`;
+      }
+    } else {
+      words = s?.now ? flat(s.now).slice(0, 160) : 'working';
+    }
+    if (resultIsPartial(t.result_report)) words += `; Partial, not done: ${flat(t.result_report!.not_done!.join('; ')).slice(0, 200)}`;
+    const vp = main ? briefVpOf(t, tasks) : undefined;
+    const at = t.phase_changed_at ? Date.parse(t.phase_changed_at) : 0;
+    out[section].push({ line: `- ${ref(t)}${vp ? ` (VP ${ref(vp)})` : ''}: ${words}`, at: Number.isFinite(at) ? at : 0 });
   }
-  return lines.slice(0, 12);
-}
-
-/** What is still open in the team (briefStillOpen), as lines for the self-report prompt. */
-export function briefStillOpenLines(owner: Task, tasks: readonly Task[], overdue: readonly StillOpenAsk[], now = Date.now()): string[] {
-  // Titles and agent words are data inside the prompt: one line each, no markup of their own.
-  const flat = (v: string) => v.replace(/\s+/g, ' ').trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  const ref = (t: Task) => `<task-ref id="${t.id}" label="${flat(t.title).replace(/"/g, '&quot;')}"/>`;
-  const open = briefStillOpen(owner, tasks, { mentioned: briefMentions(owner.brief?.text ?? ''), overdue, now });
-  const byId = new Map(tasks.map((t) => [t.id, t] as const));
-  const span = (ms: number) => {
-    const h = Math.max(1, Math.round(ms / 3_600_000));
-    return h < 48 ? `${h} hour${h === 1 ? '' : 's'}` : `${Math.round(h / 24)} days`;
-  };
-  const lines: string[] = [];
-  for (const t of open.unmentioned) {
-    const state = USER_STATE_LABELS[t.user_status?.state ?? fallbackUserState(t.phase, t.status)];
-    lines.push(`- ${ref(t)}: ${state}, not in your last Brief`);
-  }
-  if (open.moreUnmentioned > 0) lines.push(`- and ${open.moreUnmentioned} more open tasks not in your last Brief`);
-  for (const p of open.partial) lines.push(`- ${ref(p.task)}: Partial, not done: ${flat(p.notDone.join('; ')).slice(0, 300)}`);
-  for (const r of open.overdue) {
-    const from = r.fromTaskId ? byId.get(r.fromTaskId) : undefined;
-    const to = r.toTaskId ? byId.get(r.toTaskId) : undefined;
-    lines.push(`- a request${from ? ` from ${ref(from)}` : ''}${to ? ` to ${ref(to)}` : ''} is overdue with no reply: "${flat(r.preview).slice(0, 120)}"`);
-  }
-  for (const d of open.due) lines.push(`- ${ref(d.task)}: ${d.state === 'overdue' ? 'past its due date' : 'due within a day'} (${d.at})`);
-  for (const pr of open.promises) lines.push(`- ${ref(pr.task)}: said it waits on or will follow up on "${flat(pr.words).slice(0, 120)}"; Walnut's follow-up is ${pr.at}`);
-  for (const w of open.waitingLong) {
-    // On the user: when it was last confirmed, so an old ask is never passed on as fact.
-    const c = w.on === 'you' ? checkedLine(w.task.user_status, now) : null;
-    lines.push(`- ${ref(w.task)}: waiting on ${w.on === 'you' ? 'the user' : 'its lead'} for ${span(now - w.since)}${c ? ` (${c.unverified ? c.text.replace(/^Not verified/, 'NOT VERIFIED') : c.text.charAt(0).toLowerCase() + c.text.slice(1)})` : ''}`);
+  const lines = {} as Record<BriefSectionKey, string[]>;
+  for (const { state } of BRIEF_SECTIONS) {
+    const rows = out[state].sort((a, b) => b.at - a.at);
+    lines[state] = rows.slice(0, SECTION_LIST_MAX).map((r) => r.line);
+    if (rows.length > SECTION_LIST_MAX) lines[state].push(`- and ${rows.length - SECTION_LIST_MAX} more`);
   }
   return lines;
 }
@@ -127,29 +81,22 @@ export function briefStillOpenLines(owner: Task, tasks: readonly Task[], overdue
 /** The self-report's Brief section (after the FOR_USER lines), for Main and leads only. `vps`
  *  (Main's) are the refs it names beside each worker; `issues` what broke the rules last time. */
 export function briefPrompt(opts: {
-  hadBrief: boolean; moves: readonly string[]; language?: string; ownId?: string;
-  main?: boolean; vps?: readonly string[]; issues?: readonly string[]; stillOpen?: readonly string[];
-  /** briefNeedsLines: what the team asks of the user now, with when each was checked. */
-  needs?: readonly string[];
+  hadBrief: boolean; language?: string; ownId?: string;
+  main?: boolean; vps?: readonly string[]; issues?: readonly string[];
+  /** briefSectionLines: the team's open work by section, from the live statuses. */
+  sections?: Record<BriefSectionKey, readonly string[]>;
 }): string {
-  const moved = opts.moves.length
-    ? `\nSince your last Brief, these moved in your team (Walnut's list; each must be right in the new one):\n${opts.moves.join('\n')}`
-    : '';
   const own = opts.ownId ? `<task-ref id="${opts.ownId}" label="..."/>` : 'your own task';
   const refs = opts.main
-    ? `EVERY line, the ones that need the user too, names two tasks: first the <task-ref id="..." label="..."/> of the task doing the work, then the <task-ref/> of the VP who leads it (${own} alone for your own work, the VP alone for the VP's own work).${opts.vps?.length ? `\nYour VPs:\n${opts.vps.join('\n')}` : ''}\n`
-    : `EVERY line, the ones that need the user too, starts with the <task-ref id="..." label="..."/> of the task it is about (the worker that owns it; ${own} for your own work). `;
-  const still = opts.stillOpen?.length
-    ? `\nStill open in your team (Walnut's list, from the tasks and requests, not from your memory); cover what needs the user or is at risk, and Walnut shows the rest under your Brief:\n${opts.stillOpen.join('\n')}`
-    : '';
-  const needs = opts.needs?.length
-    ? `\nWhat your team asks of the user now (Walnut's live list, with when each was last checked). Only these need the user; one NOT VERIFIED may be done already: write it as "may be done, being checked", never as a step the user still owes:\n${opts.needs.join('\n')}`
-    : '';
+    ? `EVERY line names two tasks: first the <task-ref id="..." label="..."/> of the task doing the work, then the <task-ref/> of the VP who leads it (${own} alone for your own work, the VP alone for the VP's own work).${opts.vps?.length ? `\nYour VPs:\n${opts.vps.join('\n')}` : ''}\n`
+    : `EVERY line starts with the <task-ref id="..." label="..."/> of the task it is about (the worker that owns it; ${own} for your own work). `;
   const broke = opts.issues?.length
     ? `\nWalnut found these lines of your last Brief breaking the rules; the new one must not:\n${opts.issues.join('\n')}`
     : '';
   return `
-Then your BRIEF, the short letter the user reads at the top of your chat instead of scrolling it. ${opts.hadBrief ? 'Rewrite it whole' : 'Write it'} every time (never "unchanged"): Markdown, at most 12 lines, plain words${opts.language ? `, in ${opts.language}` : ''}. First what needs the user (the decision or action), then one line per piece of work: what is done, what it waits on now and on whom. One thing per line: several asks are several lines, each with its task. ${refs}Each line says enough to act on without the chat: which document, repo or release, and exactly what the user must decide or do. Walnut shows each named task's live status beside it, so name tasks with <task-ref/>, never a bare id, and Walnut checks these rules. ${COMPLETE_IS_VERIFIED} Only what needs the user now or changes their picture of the work: a deadline days away, a reminder or a thing for later goes into your own MEMORY.md (asked below), not here. Plain Markdown with no bold labels around the field name. No codenames, hashes or file names.${needs}${moved}${still}${broke}
+Then your BRIEF, the short letter the user reads at the top of your chat instead of scrolling it. ${opts.hadBrief ? 'Rewrite it whole' : 'Write it'} every time (never "unchanged"): Markdown, plain words${opts.language ? `, in ${opts.language}` : ''}, the headings as given. ${BRIEF_STRUCTURE_RULE} Under each heading one line per piece of work: under Needs you exactly what the user must decide or do; under Working what it is doing now; under Waiting / snoozed what it waits on and on whom. One thing per line: several asks are several lines, each with its task. ${refs}Each line says enough to act on without the chat: which document, repo or release, and exactly what the user must decide or do. Only the asks in Walnut's Needs you list need the user; one NOT VERIFIED may be done already: write it as "may be done, being checked", never as a step the user still owes. Name tasks with <task-ref/>, never a bare id. ${COMPLETE_IS_VERIFIED} Keep it to what matters now, at most 15 lines of work: a deadline days away, a reminder or a thing for later goes into your own MEMORY.md (asked below), not here. No bold labels, no codenames, hashes or file names.
+Walnut's lists, from each task's live status now (not from your memory):
+${briefSectionsBlock(opts.sections)}${broke}
 FOR_USER_BRIEF:
 <the letter>`;
 }

@@ -1,10 +1,11 @@
 /**
  * The Brief's pure helpers (web/src/components/org/org-brief-model.ts): each task pill in the
- * letter wears its task's live status, and the dot on the Brief tab marks a rewrite the user has
- * not read here yet.
+ * letter wears its task's live status, each section heading its section, and the dot on the Brief
+ * tab marks a rewrite the user has not read here yet.
  */
 import { describe, it, expect, beforeEach } from 'vitest'
-import { applyBriefDecorations, briefUnread, decorateBriefHtml, markBriefSeen, readBriefFolded, readTopView, writeBriefFolded, writeTopView } from '../../web/src/components/org/org-brief-model'
+import { applyBriefDecorations, briefUnread, markBriefSeen, readBriefFolded, writeBriefFolded } from '../../web/src/components/org/org-brief-model'
+import { BRIEF_SECTIONS } from '../../src/core/user-status'
 
 const store = new Map<string, string>()
 beforeEach(() => {
@@ -14,17 +15,6 @@ beforeEach(() => {
     setItem: (k: string, v: string) => { store.set(k, v) },
     removeItem: (k: string) => { store.delete(k) },
   }
-})
-
-describe('decorateBriefHtml', () => {
-  it('stamps each known task pill with its status, and leaves the rest as rendered', () => {
-    const html = '<p><a href="/tasks/t1" class="task-link" data-task-id="t1" title="x">Parser</a> and '
-      + '<a href="/tasks/t2" class="task-link" data-task-id="t2">Review</a> and <a href="https://example.com">a link</a></p>'
-    const out = decorateBriefHtml(html, new Map([['t1', 'needs']]))
-    expect(out).toContain('<a href="/tasks/t1" class="task-link" data-user-state="needs" data-task-id="t1" title="x">Parser</a>')
-    expect(out).toContain('<a href="/tasks/t2" class="task-link" data-task-id="t2">Review</a>')
-    expect(out).toContain('<a href="https://example.com">a link</a>')
-  })
 })
 
 describe('applyBriefDecorations', () => {
@@ -54,24 +44,23 @@ describe('applyBriefDecorations', () => {
     expect(t2.writes).toBe(before)
   })
 
-  it('sets and clears the partial and unverified marks, and drops a status no longer known', () => {
+  it('drops a status no longer known', () => {
     const t1 = pill('t1', { 'data-user-state': 'needs' })
-    const letter = root([t1])
-    applyBriefDecorations(letter, new Map([['t1', 'needs']]), new Set(['t1']), new Set(['t1']))
-    expect(t1.getAttribute('data-partial')).toBe('1')
-    expect(t1.getAttribute('data-unverified')).toBe('1')
-    applyBriefDecorations(letter, new Map())
+    applyBriefDecorations(root([t1]), new Map())
     expect(t1.getAttribute('data-user-state')).toBeNull()
-    expect(t1.getAttribute('data-partial')).toBeNull()
-    expect(t1.getAttribute('data-unverified')).toBeNull()
+  })
+
+  it('marks each of the three section headings with its section, and no other heading', () => {
+    const heading = (text: string) => ({ ...pill(''), textContent: text })
+    const heads = [...BRIEF_SECTIONS.map((s) => heading(s.heading)), heading('Notes')]
+    const letter = { querySelectorAll: (sel: string) => (sel === 'a[data-task-id]' ? [] : heads) }
+    applyBriefDecorations(letter, new Map())
+    expect(heads.map((h) => h.getAttribute('data-brief-section'))).toEqual([...BRIEF_SECTIONS.map((s) => s.state), null])
   })
 })
 
 describe('the switch\'s memory', () => {
-  it('opens on Status until the user picks the Brief, and keeps the fold', () => {
-    expect(readTopView()).toBe('status')
-    writeTopView('brief')
-    expect(readTopView()).toBe('brief')
+  it('keeps the fold', () => {
     expect(readBriefFolded()).toBe(false)
     writeBriefFolded(true)
     expect(readBriefFolded()).toBe(true)

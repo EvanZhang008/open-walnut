@@ -11,10 +11,10 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-brief-rule'))
 
 import { BRIEF_LINE, buildSessionContext } from '../../../src/core/sessions/session-context.js'
-import { briefMoveLines, briefPrompt, keepsBrief, readBrief } from '../../../src/core/sessions/brief.js'
+import { briefPrompt, briefSectionLines, keepsBrief, readBrief } from '../../../src/core/sessions/brief.js'
 import { briefIssues, briefItemLines } from '../../../src/core/sessions/brief-rules.js'
 import { buildSelfReportPrompt, extractField } from '../../../src/core/session-hooks/builtins.js'
-import { BRIEF_MAX_CHARS, briefMoves, briefTeam } from '../../../src/core/user-status.js'
+import { BRIEF_MAX_CHARS, briefTeam } from '../../../src/core/user-status.js'
 import type { Task } from '../../../src/core/types.js'
 
 function task(over: Partial<Task>): Task {
@@ -32,9 +32,11 @@ describe('the Brief rule', () => {
       /At the end of every turn Walnut asks you for it in a separate question of its own \(FOR_USER_BRIEF\)/,
       // 2026-10-29: after a compaction a lead wrote the Brief into its reply.
       /never write the Brief or that field into your replies/,
-      /rewrite it whole each time/,
-      /what needs the user first/,
-      /one thing per line, each line starting with the <task-ref\/> of the task it is about/,
+      /Rewrite it whole each time/,
+      // 2026-10-30: three sections every time, each task under its own live status.
+      /in three sections, always all three, in this order: "### Needs you" \(what the user must decide or do\), "### Working" \(in progress\) and "### Waiting \/ snoozed"/,
+      /each task goes in the section of its own live status/,
+      /One thing per line, each line starting with the <task-ref\/> of the task it is about/,
       /Main names the VP who leads it right after/,
       /Walnut checks these rules/,
       /shows each task it names with its live status/,
@@ -52,18 +54,18 @@ describe('the Brief rule', () => {
 })
 
 describe('the turn-end ask', () => {
-  it('is asked of Main and leads only, with what moved since the last Brief', () => {
-    const moves = ['- <task-ref id="w1" label="Fix the fence"/>: now Needs you (Pick a supplier?)']
-    const lead = buildSelfReportPrompt('', 'Garden lead', { brief: { hadBrief: true, moves } })
+  it('is asked of Main and leads only, in its three sections, with the team\'s live lists', () => {
+    const sections = { needs: ['- <task-ref id="w1" label="Fix the fence"/>: "Pick a supplier?" (checked 5 minutes ago by its session)'], working: [], waiting: [] }
+    const lead = buildSelfReportPrompt('', 'Garden lead', { brief: { hadBrief: true, sections } })
     expect(lead).toContain('FOR_USER_BRIEF:')
     expect(lead).toContain('Rewrite it whole every time (never "unchanged")')
-    expect(lead).toContain('Since your last Brief, these moved in your team')
-    expect(lead).toContain(moves[0])
+    expect(lead).toContain('"### Needs you", "### Working", "### Waiting / snoozed"')
+    expect(lead).toContain(`### Needs you\n${sections.needs[0]}\n### Working\n(none now)\n### Waiting / snoozed\n(none now)`)
     expect(buildSelfReportPrompt('', 'A worker')).not.toContain('FOR_USER_BRIEF')
-    expect(briefPrompt({ hadBrief: false, moves: [], language: 'Chinese' })).toContain('in Chinese')
-    // Every line names its task, the needs-you lines too, the writer's own task for its own work.
-    const own = briefPrompt({ hadBrief: true, moves: [], ownId: 'lead-1' })
-    expect(own).toContain('EVERY line, the ones that need the user too, starts with the <task-ref')
+    expect(briefPrompt({ hadBrief: false, language: 'Chinese' })).toContain('in Chinese')
+    // Every line names its task, the writer's own task for its own work.
+    const own = briefPrompt({ hadBrief: true, ownId: 'lead-1' })
+    expect(own).toContain('EVERY line starts with the <task-ref')
     expect(own).toContain('<task-ref id="lead-1" label="..."/>')
   })
 
@@ -96,7 +98,7 @@ describe('lines that name no task', () => {
   })
 })
 
-describe('the team and what moved', () => {
+describe('the team and its lists', () => {
   const at = (min: number) => new Date(Date.parse('2026-10-26T10:00:00Z') + min * 60_000).toISOString()
   const lead = task({ id: 'lead', title: 'Garden lead', project: 'Garden', org_role: 'lead', org_leads: ['Seeds'] })
   const main = task({ id: 'main', title: 'Main', project: 'Ask Walnut', org_role: 'main' })
@@ -124,11 +126,13 @@ describe('the team and what moved', () => {
     const loose = task({ id: 'loose', title: 'Loose lead', project: '', org_role: 'lead', org_leads: ['Seeds'] })
     expect(briefTeam(loose, all).map((t) => t.id)).toEqual(['s1'])
   })
-  it('lists what moved after the Brief, newest first, in the prompt\'s words', () => {
-    expect(briefMoves(lead, all, Date.parse(at(0))).map((m) => m.task.id)).toEqual(['s1', 'x1', 'g1'])
-    expect(briefMoves(lead, all, NaN)).toEqual([])
-    const lines = briefMoveLines({ ...lead, brief: { text: 'x', at: at(0) } }, all)
-    expect(lines[0]).toBe('- <task-ref id="s1" label="Label the jars"/>: now Done')
-    expect(lines[2]).toBe('- <task-ref id="g1" label="Plant the beds"/>: now Needs you (Which beds?)')
+  it('lists the team\'s open work by the section its live status puts it in', () => {
+    const lists = briefSectionLines(lead, all)
+    expect(lists.needs).toEqual(['- <task-ref id="g1" label="Plant the beds"/>: "Which beds?" (Walnut\'s live record)'])
+    // Done work (s1) has no section; another project's task (o1) is not the team.
+    const named = [...lists.needs, ...lists.working, ...lists.waiting].join('\n')
+    expect(named).not.toContain('id="s1"')
+    expect(named).not.toContain('id="o1"')
+    expect(lists.working.length + lists.waiting.length).toBe(3)
   })
 })

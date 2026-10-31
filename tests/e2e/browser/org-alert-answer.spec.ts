@@ -2,7 +2,10 @@
  * The Org page's "Needs you" rows (2026-10-26, the user: "it need to show the task link clickable,
  * just 2 button, quote just quote ... and answer ... answer this button should be rendered
  * differently each time, is it a yes or no, or multiple choice, just render it there"):
- *   - each row is the task's name (a link to it), Quote and Answer, nothing else
+ *   - each row is the task's name (a link to it), Quote, Answer and Snooze, nothing else (2026-10-31,
+ *     the user: "3 button, quote, answer, and snooze which after click will show snooze until x time")
+ *   - Snooze opens the task panel's date picker; a pick writes the task's start date (the task
+ *     menu's "Start / Snooze until") and the row reads "Snoozed until <time>" at once
  *   - Answer opens a dropdown shaped by the ask: a live question's options, a decision letter's
  *     actions (two side by side), a Board choice's options, and a line for an ask with no shape
  *   - one pick answers it where it is: the answer reaches the task, and the row stops counting at
@@ -93,8 +96,8 @@ async function watchRowGone(page: Page, id: string): Promise<() => Promise<{ gon
 async function openAnswer(page: Page, id: string, shape: string) {
   const row = alertRow(page, id)
   await expect(row).toBeVisible({ timeout: 60_000 })
-  // Two buttons, nothing else.
-  await expect(row.locator('button')).toHaveText(['Quote', /^Answer/])
+  // Three buttons, nothing else.
+  await expect(row.locator('button')).toHaveText(['Quote', /^Answer/, /^Snooze/])
   await row.getByTestId('org-alert-answer').click()
   const menu = page.locator(`[data-testid="org-answer-menu"][data-task-id="${id}"]`)
   await expect(menu).toBeVisible()
@@ -195,6 +198,31 @@ test('each row is the task\'s name, Quote and Answer; the rows hold still under 
   // A letter's task opens beside the page on its Inbox, the Org page stays.
   await expect(page.getByTestId('org-side')).toBeVisible({ timeout: 30_000 })
   await expect(page).toHaveURL(/\/org\?/)
+})
+
+test('Snooze opens the date picker; a pick snoozes the task and the row says until when', async ({ page, request }) => {
+  const id = await createTask(request, `Snoozable ${STAMP}`)
+  await needsUser(request, id)
+  await openTeam(page)
+  const row = alertRow(page, id)
+  await expect(row).toBeVisible({ timeout: 60_000 })
+  await row.getByTestId('org-alert-snooze').click()
+  const menu = page.locator(`[data-testid="org-snooze-menu"][data-task-id="${id}"]`)
+  await expect(menu).toBeVisible()
+  // Inside the viewport (useMenuPlacement), and the task panel's picker: times, days, a date.
+  const box = (await menu.boundingBox())!
+  const vp = page.viewportSize()!
+  expect(box.y + box.height).toBeLessThanOrEqual(vp.height)
+  await expect(menu.locator('.dp-pill').first()).toBeVisible()
+  await expect(menu.locator('input[type="date"]')).toBeVisible()
+  const day = menu.locator('.dp-pill[title]').first()
+  const date = (await day.getAttribute('title'))!
+  await day.click()
+  await expect(menu).toHaveCount(0)
+  await expect(row.getByTestId('org-alert-snoozed')).toHaveText(/^Snoozed until /)
+  await expect(row.locator('button')).toHaveCount(0)
+  await expect.poll(async () => (await (await request.get(`/api/tasks/${id}`)).json()).task?.start_date).toBe(date)
+  await page.getByTestId('org-alerts').screenshot({ path: `test-results/org-alert-snoozed-${test.info().project.name}.png` })
 })
 
 test('a decision letter: its two actions side by side, one click answers it, the row goes at once', async ({ page, request }) => {
