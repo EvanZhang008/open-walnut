@@ -94,7 +94,7 @@ describe('quick-start with a reference in the launch message', () => {
     const card = wire.slice(cardStart, wire.indexOf(REFERENCE_CARDS_CLOSE))
     expect(card).toContain(`task ${referenced}`)
     expect(card).toContain('Login button stays grey')
-    expect(card).toContain('use task_get / task_send for more')
+    expect(card).toContain('each line says what the thing is and its id')
 
     // The session is named after the words, with the reference read as its label.
     const record = await waitFor(() => {

@@ -15,6 +15,15 @@
  *
  * One id, one source; one keyword, one source. A second registration of an id is refused;
  * a keyword or alias already taken is dropped from the newcomer (it keeps its tab).
+ *
+ * Every source follows the same picker rules, whoever registers it (2026-10-31, the user:
+ * "All" must search everything, tasks first, the remote ones below, never blocking):
+ *   - its own tab, after All and Tasks, in `order`;
+ *   - asked in All too, in one of two lanes: `top` (core's own fast sources: Notes, beside
+ *     Tasks and Files) or `below` (every plugin: under them, a few rows, filled in when it
+ *     answers, never holding the list). A plugin cannot claim `top`;
+ *   - a picked row's card opens with what core knows (the source's label, the row's kind,
+ *     its title and ref), whatever the source's own resolve text says.
  */
 
 import type { Disposable } from '../plugins/disposable.js'
@@ -62,10 +71,18 @@ export interface MentionSourceSpec {
    *  only are shown there). Default true; a source whose every search costs a remote
    *  call and whose exact matches are rare (a mail subject) says false. */
   inAll?: boolean
+  /** Where All shows this source: `top` beside Tasks and Files (core sources only; a
+   *  plugin's is always `below`). Default `below`. */
+  lane?: MentionSourceLane
+  /** The kind of a ref (`person`, `channel`), for a card whose row was not searched in this
+   *  process (a restart between pick and send). Optional: a source with one kind needs none. */
+  kindOf?(ref: string): string | undefined
   search(q: string, ctx: MentionSearchContext): Promise<MentionSourceItem[]>
   /** The text the model gets for a picked row, or null when the ref no longer resolves. */
   resolve(ref: string, ctx: { signal: AbortSignal }): Promise<string | null>
 }
+
+export type MentionSourceLane = 'top' | 'below'
 
 export interface RegisteredMentionSource {
   spec: MentionSourceSpec
@@ -75,13 +92,18 @@ export interface RegisteredMentionSource {
   timeoutMs: number
   /** Keyword plus aliases this source actually owns (taken ones dropped). */
   keywords: string[]
+  /** Kept for older clients, which ask All only for sources marked so: every source is. */
   inAll: boolean
+  lane: MentionSourceLane
 }
 
 // Wide enough for every plugin id (`[a-z0-9._-]`, up to 64) plus `-<local id>`; never ':',
 // which separates the source from its ref in a tag id.
 export const SOURCE_ID_RE = /^[a-z0-9][a-z0-9._-]{0,95}$/
 const KEYWORD_RE = /^[a-z0-9]{1,24}$/
+/** The picker's own tabs (All, Tasks) and the Tasks keywords: never a source's. */
+const RESERVED_IDS = new Set(['all', 'tasks'])
+const RESERVED_KEYWORDS = new Set(['tasks', 'task'])
 const DEFAULT_ORDER = 50
 const DEFAULT_TIMEOUT_MS = 3000
 
@@ -92,6 +114,7 @@ function validate(spec: MentionSourceSpec): void {
   if (typeof spec.id !== 'string' || !SOURCE_ID_RE.test(spec.id)) {
     throw new Error(`mention source: id "${String(spec.id)}" must be lowercase letters, digits, ".", "_" and "-"`)
   }
+  if (RESERVED_IDS.has(spec.id)) throw new Error(`mention source: id "${spec.id}" is the picker's own tab`)
   if (typeof spec.label !== 'string' || !spec.label.trim()) throw new Error(`mention source "${spec.id}": label is required`)
   if (typeof spec.keyword !== 'string' || !KEYWORD_RE.test(spec.keyword)) {
     throw new Error(`mention source "${spec.id}": keyword must be lowercase letters and digits`)
@@ -116,6 +139,7 @@ export function registerMentionSource(owner: string, spec: MentionSourceSpec): D
     throw new Error(`mention source "${spec.id}" is already registered by ${existing.owner}`)
   }
   const taken = takenKeywords(spec.id)
+  for (const k of RESERVED_KEYWORDS) taken.add(k)
   const wanted = [spec.keyword, ...(Array.isArray(spec.aliases) ? spec.aliases : [])]
     .map((k) => String(k).toLowerCase())
     .filter((k) => KEYWORD_RE.test(k))
@@ -129,7 +153,8 @@ export function registerMentionSource(owner: string, spec: MentionSourceSpec): D
     minChars: typeof spec.minChars === 'number' && spec.minChars > 0 ? Math.min(8, Math.floor(spec.minChars)) : 0,
     timeoutMs: timeout,
     keywords,
-    inAll: spec.inAll !== false,
+    inAll: true,
+    lane: owner === 'core' && spec.lane === 'top' ? 'top' : 'below',
   }
   sources.set(spec.id, entry)
   return {

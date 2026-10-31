@@ -12,6 +12,7 @@ import {
   resolveTaskToken,
 } from '../stores/entity-label-store';
 import { isTaskLookupToken, isTaskTokenCandidate, TASK_TOKEN_SRC } from './task-id-shape';
+import { sourceDisplayName } from './entity-ref-tags';
 import { absorbWrittenTitles, pillNames, type WrittenMention } from './task-title-absorb';
 // Relative for the same reason. Shared with the server's path resolver and its
 // HTTP edges so that "what position does `file.go#L58` name" and "is this a
@@ -710,7 +711,8 @@ export function entityRefsToHtml(text: string): string {
   result = result.replace(SOURCE_REF_RE, (_match, id: string, label?: string) => {
     const source = sourceIdOf(decodeRefAttr(id));
     const escaped = escapeHtmlText(resolveSourceRefDisplay(id, label));
-    return `<span class="source-link" data-source="${escapeHtmlText(source)}" title="${escapeHtmlText(`${source}: ${resolveSourceRefDisplay(id, label)}`)}">${escaped}</span>`;
+    const name = sourceDisplayName(source);
+    return `<span class="source-link" data-source="${escapeHtmlText(source)}" data-source-name="${escapeHtmlText(name)}" aria-label="${escapeHtmlText(`${name}: ${resolveSourceRefDisplay(id, label)}`)}" title="${escapeHtmlText(`${name}: ${resolveSourceRefDisplay(id, label)}`)}">${escaped}</span>`;
   });
   return result;
 }
@@ -774,7 +776,7 @@ export function entityRefsToMarkdownLinks(text: string): string {
 }
 
 /** DOMPurify attributes preserved for entity ref, image, and file link rendering */
-const SANITIZE_ATTRS = ['data-task-id', 'data-session-id', 'data-project', 'data-source', 'data-lightbox-src', 'data-file-path', 'data-file-line', 'data-file-end-line', 'data-rel-path', 'data-cwd', 'loading', 'target', 'rel'];
+const SANITIZE_ATTRS = ['data-task-id', 'data-session-id', 'data-project', 'data-source', 'data-source-name', 'data-lightbox-src', 'data-file-path', 'data-file-line', 'data-file-end-line', 'data-rel-path', 'data-cwd', 'loading', 'target', 'rel'];
 
 /**
  * True for an http(s) href that points OUTSIDE the console's own origin.

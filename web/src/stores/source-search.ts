@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from 'react';
 import { apiGet } from '@/api/client';
 import { log } from '@/utils/log';
 import type { MentionSourceInfo, MentionSourceRow } from '@/components/chat/mention-sources-model';
+import { rememberSourceLabels } from '@/utils/entity-ref-tags';
 
 const LIST_TTL_MS = 60_000;
 const SEARCH_DEBOUNCE_MS = 200;
@@ -31,6 +32,7 @@ export async function fetchMentionSources(): Promise<MentionSourceInfo[]> {
       const sources = (res.sources ?? []).filter((s) => s && typeof s.id === 'string' && typeof s.label === 'string')
         .map((s) => ({ ...s, keywords: Array.isArray(s.keywords) ? s.keywords : [], kinds: Array.isArray(s.kinds) ? s.kinds : [] }));
       listMemo = { at: Date.now(), sources };
+      rememberSourceLabels(sources);
       return sources;
     })
     .catch((err) => {

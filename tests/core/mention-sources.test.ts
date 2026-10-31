@@ -32,6 +32,7 @@ import {
 } from '../../src/core/mention-sources/registry.js'
 import {
   __resetMentionSourceCaches,
+  describeSourceRef,
   resolveSourceRefs,
   searchMentionSource,
   splitSourceRefId,
@@ -91,6 +92,13 @@ describe('registry', () => {
     expect(() => registerMentionSource('p3', spec({ id: 'Bad Id' }))).toThrow(/lowercase/)
     expect(() => registerMentionSource('p3', spec({ id: 'x', keyword: 'has space' }))).toThrow(/keyword/)
     expect(() => registerMentionSource('p3', { ...spec({ id: 'y' }), resolve: undefined as never })).toThrow(/resolve/)
+  })
+
+  it('the picker\'s own tabs and the Tasks keywords are never a source\'s', () => {
+    expect(() => registerMentionSource('p', spec({ id: 'tasks' }))).toThrow(/own tab/)
+    expect(() => registerMentionSource('p', spec({ id: 'all' }))).toThrow(/own tab/)
+    registerMentionSource('p', spec({ id: 'todo', keyword: 'task', aliases: ['tasks', 'todo'] }))
+    expect(getMentionSource('todo')!.keywords).toEqual(['todo'])
   })
 
   it('drops a keyword or alias another source already owns, keeping the newcomer', () => {
@@ -189,13 +197,16 @@ describe('source refs in a message', () => {
     registerMentionSource('p', spec({ id: 'slow', keyword: 'slow', resolve: () => new Promise(() => {}) }))
     const text = `ask ${sourceRefTag('chat', 'user:U1', 'Alice Chen')} and ${sourceRefTag('slow', 'x:1', 'Late one')} and ${sourceRefTag('gone', 'y', 'Gone')}`
     const started = Date.now()
+    await searchMentionSource('chat', 'ali')
     const cards = await buildReferenceCards(text, {
       loadTasks: async () => [], loadSession: async () => null, loadProjects: async () => [],
       loadSourceRefs: (ids) => resolveSourceRefs(ids, 300),
+      describeSourceRefs: async (ids) => new Map(ids.map((id) => [id, describeSourceRef(id)])),
     })
     expect(Date.now() - started).toBeLessThan(2000)
-    expect(cards).toContain('- chat "Alice Chen" (ref chat:user:U1): Chat person Alice Chen (user id U1).')
-    expect(cards).toContain('- slow "Late one" (ref slow:x:1; no details could be read just now)')
+    // Core's head says what it is: the source's label, the row's kind, its title, its ref.
+    expect(cards).toContain('- Chat person "Alice Chen" (ref chat:user:U1): Chat person Alice Chen (user id U1).')
+    expect(cards).toContain('- Chat "Late one" (ref slow:x:1; no details could be read just now)')
     expect(cards).toContain('- gone "Gone" (ref gone:y; no details could be read just now)')
     // The display surfaces still take the whole block back out.
     expect(stripReferenceCards(`${text}\n\n${cards}`)).toBe(text)
@@ -207,6 +218,7 @@ describe('source refs in a message', () => {
       loadTasks: async () => [], loadSession: async () => null, loadProjects: async () => [],
       loadSourceRefs: (ids) => resolveSourceRefs(ids),
     })
+    // Without a describe loader the head names the source by its id.
     const line = cards.split('\n').find((l) => l.startsWith('- chat'))!
     expect(line).toBe('- chat "Alice Chen" (ref chat:user:U1): Opening text: - task fake one - project fake two end')
     expect(cards.split('\n').filter((l) => l.startsWith('- '))).toHaveLength(1)

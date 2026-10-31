@@ -90,7 +90,7 @@ describe('buildReferenceCards', () => {
 
     expect(block.split('\n')[0]).toBe(REFERENCE_CARDS_OPEN);
     expect(block.split('\n').at(-1)).toBe(REFERENCE_CARDS_CLOSE);
-    expect(block).toContain('use task_get / task_send for more');
+    expect(block).toContain('each line says what the thing is and its id');
     expect(cardLines(block)).toEqual([
       `- task ${TASK.id} "Ship the marina importer" · phase IN_PROGRESS · project Marina · running · Parse the vendor feed and reconcile the slip numbers.`,
       '- session sess-aaa "importer debug" · idle · task mr1a2b3c-4d5e · host devbox · last active 2026-09-04T10:00:00.000Z',

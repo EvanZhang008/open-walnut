@@ -195,5 +195,6 @@ describe('groupRowBudget', () => {
     expect(groupRowBudget(0)).toEqual({ entity: 12, files: 12 });
     expect(groupRowBudget(1)).toEqual({ entity: 12, files: 12 });
     expect(groupRowBudget(2)).toEqual({ entity: 5, files: 5 });
+    expect(groupRowBudget(3)).toEqual({ entity: 5, files: 3 });
   });
 });

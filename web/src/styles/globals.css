@@ -5765,6 +5765,13 @@ select {
   background: rgba(255, 255, 255, 0.22);
   color: #fff;
 }
+/* The source's name leads the pill ("Slack · Bob Stone"), drawn from data-source-name
+   so a copy of the message keeps only the row's own words. */
+.markdown-body span.source-link[data-source-name]::before {
+  content: attr(data-source-name) ' · ';
+  opacity: 0.75;
+  font-weight: 400;
+}
 
 /* Every task pill wears its task's live status (web/src/utils/task-pill-status.ts
    stamps data-user-state): needs you red, working green, done blue, waiting grey.

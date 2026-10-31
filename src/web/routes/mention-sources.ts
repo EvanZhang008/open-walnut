@@ -1,7 +1,7 @@
 /**
  * The composer's "@" sources over HTTP (core/mention-sources/).
  *
- *   GET /api/mention-sources                       → { sources: [{ id, label, keyword, keywords, kinds, minChars, inAll }] }
+ *   GET /api/mention-sources                       → { sources: [{ id, label, keyword, keywords, kinds, minChars, inAll, lane }] }
  *   GET /api/mention-sources/:id/search?q=&limit=  → { items, error?, cached?, tookMs }
  *
  * A search never answers 5xx for a source's own trouble: a timeout or a throw comes back
@@ -24,6 +24,7 @@ mentionSourcesRouter.get('/', (_req: Request, res: Response) => {
       kinds: Array.isArray(s.spec.kinds) ? s.spec.kinds.filter((k) => typeof k === 'string') : [],
       minChars: s.minChars,
       inAll: s.inAll,
+      lane: s.lane,
     })),
   })
 })

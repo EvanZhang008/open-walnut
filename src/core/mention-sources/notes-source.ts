@@ -52,6 +52,7 @@ export function ensureCoreMentionSources(): void {
     aliases: ['note'],
     kinds: ['note'],
     order: 10,
+    lane: 'top',
     minChars: 0,
     timeoutMs: 3000,
     async search(q, { limit }) {
@@ -78,7 +79,8 @@ export function ensureCoreMentionSources(): void {
       const points = [...body]
       const excerpt = points.length > EXCERPT_CHARS ? `${points.slice(0, EXCERPT_CHARS).join('')}…` : body
       return [
-        `Note "${row.title}" (vault path ${row.path}${day(row.modified) ? `, edited ${day(row.modified)}` : ''}; read all of it with note_read path="${row.path}").`,
+        // The card's head already says `Notes note "<title>" (ref notes:<path>)`.
+        `A note in the user's notes vault at vault path ${row.path}${day(row.modified) ? `, edited ${day(row.modified)}` : ''}; read all of it with note_read path="${row.path}".`,
         excerpt ? `Opening text: ${excerpt}` : 'The note is empty.',
       ].join(' ')
     },

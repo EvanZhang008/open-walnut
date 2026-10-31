@@ -60,6 +60,26 @@ export function sourceOfRefId(id: string): string {
   return i > 0 ? id.slice(0, i) : id;
 }
 
+const sourceLabels = new Map<string, string>();
+
+/** The server's source list arrived (stores/source-search.ts): its tab labels name the sources. */
+export function rememberSourceLabels(list: ReadonlyArray<{ id: string; label: string }>): void {
+  for (const s of list) if (s.id && s.label?.trim()) sourceLabels.set(s.id, s.label.trim());
+}
+
+/**
+ * The name a reference shows for its source: its tab label ("Slack", "Notes"), or, before
+ * the source list has loaded (a draft restored at startup) or for a source since removed,
+ * one made from the id (`team-chat` → `Team chat`). Every surface, the composer's token,
+ * the sent pill, asks here, so they never disagree.
+ */
+export function sourceDisplayName(sourceId: string): string {
+  const known = sourceLabels.get(sourceId);
+  if (known) return known;
+  const words = sourceId.replace(/[-_.]+/g, ' ').trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : 'Source';
+}
+
 export type EntityRefKind = 'task' | 'session' | 'project' | 'source';
 
 /** One tag occurrence: its kind, attributes, and `[start, end)` span in the text. */

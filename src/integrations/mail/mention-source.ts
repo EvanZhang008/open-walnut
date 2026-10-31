@@ -5,7 +5,7 @@
  *          q   → each account's search, in parallel: the mail server's own index when its
  *                provider has one (subject and body, every folder), else the local cache's
  *                full-text index (subject, sender, preview, body); newest first
- *   not in "All": an exact subject is rare and each search may be a mail-server call
+ *   in "All" below Tasks, Notes and Files, a few rows, filled in when it answers
  *   resolve    → who sent it, when, where, its ids and the op that reads the body. The
  *                subject and preview are the sender's words, so they are labelled as such.
  *
@@ -69,9 +69,6 @@ export function createMailMentionSource(service: MailService) {
     order: 30,
     minChars: 0,
     timeoutMs: 6000,
-    // Every search can be a mail-server call, and nobody types a subject exactly, so
-    // the mixed "All" view does not ask Mail; its tab and "@mail " do.
-    inAll: false,
     async search(q: string, { limit }: { limit: number; signal: AbortSignal }): Promise<MailMentionItem[]> {
       const accounts = await service.listAccounts({ capabilities: false })
       if (accounts.length === 0) return []

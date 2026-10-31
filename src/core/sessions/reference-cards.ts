@@ -81,6 +81,12 @@ export interface ProjectCard {
  * as pure logic (no DB, no config, no live session registry) and so a caller in
  * another process could resolve refs its own way.
  */
+/** What core knows about a picked source row: its source's label and the row's kind. */
+export interface SourceRefAbout {
+  source: string;
+  kind?: string;
+}
+
 export interface ReferenceCardLoaders {
   loadTasks(ids: string[]): Promise<TaskCard[]>;
   loadSession(id: string): Promise<SessionCard | null>;
@@ -91,6 +97,10 @@ export interface ReferenceCardLoaders {
    *  one deadline; an id missing from the map gets the fallback card. Optional so a
    *  caller with its own loaders need not know about sources. */
   loadSourceRefs?(ids: string[]): Promise<Map<string, string>>;
+  /** The source's label and the row's kind for each `<source-ref/>` id, for the card's
+   *  head. Optional: without it (or for an id it leaves out) the head names the source
+   *  by its id. */
+  describeSourceRefs?(ids: string[]): Promise<Map<string, SourceRefAbout>>;
 }
 
 /**
@@ -179,6 +189,11 @@ export const defaultReferenceCardLoaders: ReferenceCardLoaders = {
     const { resolveSourceRefs } = await import('../mention-sources/run.js');
     return resolveSourceRefs(ids);
   },
+
+  async describeSourceRefs(ids: string[]): Promise<Map<string, SourceRefAbout>> {
+    const { describeSourceRef } = await import('../mention-sources/run.js');
+    return new Map(ids.map((id) => [id, describeSourceRef(id)]));
+  },
 };
 
 /** Collapse whitespace and cut to FIELD_LIMIT code points, marking the cut. A
@@ -232,13 +247,23 @@ function renderProjectCard(card: ProjectCard): string {
   )}`;
 }
 
-/** A picked "@" source row: what its source said about it, else its label and id so the
- *  model still knows what was pointed at (and can look it up with the plugin's ops). */
-function renderSourceCard(id: string, label: string | undefined, text: string | undefined): string {
-  const name = label?.trim() ? ` "${label.trim()}"` : '';
+/**
+ * A picked "@" source row. The head is core's, the same for every source, so the model
+ * always reads what the thing is and its id like a URI ("Slack channel "#deploys" (ref
+ * slack:channel:C9)"), whatever the source's own text says or when it says nothing; the
+ * source's text follows it.
+ */
+function renderSourceCard(
+  id: string,
+  label: string | undefined,
+  text: string | undefined,
+  about: SourceRefAbout,
+): string {
+  const what = [condense(about.source, 40), about.kind ? condense(about.kind, 24) : ''].filter(Boolean).join(' ');
+  const name = label?.trim() ? ` "${condense(label, 200)}"` : '';
   return text
-    ? `- ${id.slice(0, id.indexOf(':'))}${name} (ref ${id}): ${text}`
-    : `- ${id.slice(0, id.indexOf(':'))}${name} (ref ${id}; no details could be read just now)`;
+    ? `- ${what}${name} (ref ${id}): ${text}`
+    : `- ${what}${name} (ref ${id}; no details could be read just now)`;
 }
 
 /**
@@ -308,10 +333,21 @@ export async function buildReferenceCards(
   }
 
   const sourceTexts = await sourceLoad;
+  let sourceAbout = new Map<string, SourceRefAbout>();
+  if (sourceIds.length > 0 && loaders.describeSourceRefs) {
+    try {
+      sourceAbout = await loaders.describeSourceRefs(sourceIds);
+    } catch (err) {
+      log.session.debug('reference card source describe failed — heads by id', {
+        sourceIds, error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  const describe = (id: string): SourceRefAbout => sourceAbout.get(id) ?? { source: id.slice(0, id.indexOf(':')) };
 
   for (const ref of wanted) {
     if (ref.kind === 'source') {
-      if (ref.id.indexOf(':') > 0) lines.push(renderSourceCard(ref.id, ref.label, sourceTexts.get(ref.id)));
+      if (ref.id.indexOf(':') > 0) lines.push(renderSourceCard(ref.id, ref.label, sourceTexts.get(ref.id), describe(ref.id)));
       continue;
     }
     if (ref.kind === 'task') {
@@ -342,7 +378,7 @@ export async function buildReferenceCards(
     REFERENCE_CARDS_OPEN,
     // Naming the tools is what keeps the block SHORT: it is a summary, and the
     // model needs to know where the rest lives.
-    'Referenced by the user (Walnut context; use task_get / task_send for more):',
+    'Referenced by the user (Walnut context: each line says what the thing is and its id; use task_get / task_send for a task, and the op a line names for the rest):',
     ...lines,
     REFERENCE_CARDS_CLOSE,
   ].join('\n');

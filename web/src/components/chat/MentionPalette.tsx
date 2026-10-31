@@ -23,13 +23,14 @@
  * Files lead; both stay visible at once thanks to the shared row budget
  * (groupRowBudget).
  *
- * Sources (Notes, Slack, Mail, any a plugin adds: core/mention-sources/ on the
- * server) get a tab each after "All" (mention-sources-model.ts has the rules):
+ * Tabs: All · Tasks · Notes · Slack · Mail · … (the sources after Tasks come from
+ * core/mention-sources/ on the server; mention-sources-model.ts has the rules).
  * Tab/Shift+Tab or ←/→ at the edges of the query cycle them, and "@slack deploy"
- * (keyword + space) jumps to one. "All" is the mixed view: the Tasks and Files
- * groups, plus a source row only when the query names it exactly. A picked
- * source row inserts a `<source-ref/>` pill; the server resolves it into a
- * reference card for the model at send time.
+ * (keyword + space) jumps to one. "All" searches everything: Tasks, then Notes
+ * (a `top` source), then Files, at once; then every `below` source (Slack, Mail,
+ * a plugin's) a few rows each, added when it answers, so a slow one never holds
+ * the list. A picked source row inserts a `<source-ref/>` pill; the server
+ * resolves it into a reference card for the model at send time.
  *
  * Keyboard is driven by ChatInput through the imperative handle:
  *   move(±1) / cycleSource(±1) / jumpGroup() / primary() / selectCurrent() / up()
@@ -66,15 +67,19 @@ import {
   type RankedEntity,
 } from './mention-entities';
 import { useEntitySearch } from '@/stores/mention-search';
-import { useMentionSources, useSourceSearch } from '@/stores/source-search';
+import { useMentionSources, useSourceSearch, type SourceSearchState } from '@/stores/source-search';
 import {
-  ALL_SOURCE_DEBOUNCE_MS,
-  ALL_SOURCE_MIN_CHARS,
+  ALL_BELOW_DEBOUNCE_MS,
   ALL_TAB,
+  ALL_TOP_DEBOUNCE_MS,
+  allPlan,
   cycleTab,
+  laneOf,
   parseKeywordScope,
-  preciseRowsForAll,
+  rowsForAll,
   tabsOf,
+  TASKS_TAB,
+  type MentionSourceInfo,
   type MentionSourceRow,
 } from './mention-sources-model';
 import { sessionStatusStore } from '@/stores/session-status-store';
@@ -123,9 +128,10 @@ type Row =
   | { key: string; kind: 'entry'; group: 'files'; entry: DirEntry; positions: number[] }
   | { key: string; kind: 'source'; group: string; sourceId: string; item: MentionSourceRow };
 
-/** Rows a source tab asks for, and what "All" asks each source for (exact matches only). */
+/** Rows a source tab asks for, what "All" asks each source for, and the Tasks tab's rows. */
 const SOURCE_TAB_LIMIT = 12;
 const SOURCE_ALL_LIMIT = 6;
+const TASKS_TAB_LIMIT = 20;
 
 const KIND_ICON: Record<string, React.ReactNode> = { person: ICON_PERSON, channel: '#', message: ICON_MAIL, note: ICON_NOTE };
 
@@ -158,6 +164,17 @@ function Highlighted({ text, positions }: { text: string; positions: number[] })
 
 const FILE_SOLO_LIMIT = 12;
 
+/** All's rows of the sources `ids` (one lane), from their answers to `query`. */
+function laneRows(sources: readonly MentionSourceInfo[], ids: readonly string[], answered: SourceSearchState, query: string): Row[] {
+  if (answered.forQuery !== query.trim()) return [];
+  const answers = ids.map((id) => {
+    const src = sources.find((s) => s.id === id);
+    return { sourceId: id, lane: src ? laneOf(src) : 'below' as const, rows: answered.answers.get(id)?.rows ?? [] };
+  });
+  return rowsForAll(query, answers).map(({ sourceId, row }) =>
+    ({ key: `s:${sourceId}:${row.ref}`, kind: 'source' as const, group: `src:${sourceId}`, sourceId, item: row }));
+}
+
 export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPaletteProps>(
   function MentionPalette(
     { query, order, entitiesEnabled, selfSessionId, selfTaskId, cwd, host, onPickRef, onSetQuery, onPickFile, onNavigate, onClose },
@@ -174,15 +191,19 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
     const scope = useMemo(() => (entitiesEnabled ? parseKeywordScope(query, sources) : null), [query, sources, entitiesEnabled]);
     const tab = scope?.sourceId ?? (tabs.includes(pickedTab) ? pickedTab : ALL_TAB);
     const onAll = tab === ALL_TAB;
+    const onTasks = tab === TASKS_TAB;
     const sourceQuery = scope ? scope.rest : query;
-    const activeSource = onAll ? undefined : sources.find((src) => src.id === tab);
-    const allSourceIds = useMemo(() => {
-      const q = query.trim();
-      if (!entitiesEnabled || !onAll || q.length < ALL_SOURCE_MIN_CHARS || q.includes('/')) return [] as string[];
-      return sources.filter((src) => src.inAll !== false && q.length >= src.minChars).map((src) => src.id);
-    }, [entitiesEnabled, onAll, query, sources]);
+    const activeSource = onAll || onTasks ? undefined : sources.find((src) => src.id === tab);
+    // All asks every source, each in its lane (mention-sources-model.ts allPlan).
+    const plan = useMemo(
+      () => (entitiesEnabled && onAll ? allPlan(sources, query) : { top: [] as string[], below: [] as string[] }),
+      [entitiesEnabled, onAll, sources, query],
+    );
     const tabSearch = useSourceSearch(activeSource ? [activeSource.id] : [], sourceQuery, SOURCE_TAB_LIMIT);
-    const allSearch = useSourceSearch(allSourceIds, query, SOURCE_ALL_LIMIT, ALL_SOURCE_DEBOUNCE_MS);
+    const topSearch = useSourceSearch(plan.top, query, SOURCE_ALL_LIMIT, ALL_TOP_DEBOUNCE_MS);
+    const belowSearch = useSourceSearch(plan.below, query, SOURCE_ALL_LIMIT, ALL_BELOW_DEBOUNCE_MS);
+    // The Tasks tab searches what follows its keyword ("@tasks deploy" → "deploy").
+    const taskQuery = onTasks ? sourceQuery : query;
 
     // ---- Tasks group: instant local layer --------------------------------
     // The status epoch is a dependency so a task that starts or stops running
@@ -204,16 +225,16 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
     const taskById = useMemo(() => new Map(taskEntities.map((e) => [e.id, e])), [taskEntities]);
 
     // ---- Tasks group: hybrid search layer (debounced, folded in) ---------
-    const search = useEntitySearch(query, entitiesEnabled && onAll && order === 'entities-first');
-    const searchCurrent = search.forQuery === query.trim() && search.forQuery !== '';
+    const search = useEntitySearch(taskQuery, entitiesEnabled && (onTasks || (onAll && order === 'entities-first')));
+    const searchCurrent = search.forQuery === taskQuery.trim() && search.forQuery !== '';
     const serverTasks = useMemo<MentionEntity[]>(
       () => (searchCurrent ? hitsAsTasks(search.hits, taskById, ownTaskId) : []),
       [search.hits, searchCurrent, taskById, ownTaskId],
     );
 
     const rankedTasks = useMemo<RankedEntity[]>(
-      () => mergeServerHits(query, rankEntities(query, taskEntities, { limit: 12 }), serverTasks),
-      [query, taskEntities, serverTasks],
+      () => mergeServerHits(taskQuery, rankEntities(taskQuery, taskEntities, { limit: onTasks ? TASKS_TAB_LIMIT : 12 }), serverTasks),
+      [taskQuery, taskEntities, serverTasks, onTasks],
     );
 
     // ---- Files group: the query doubles as a path (parseQuery) ----------
@@ -286,19 +307,27 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
     // The Files group always renders when enabled (rows, skeleton, or the
     // "No matching file" line), so it always counts — otherwise the entity
     // groups would snap from tall to short when the async listing lands.
-    const nonEmpty = (rankedTasks.length > 0 ? 1 : 0) + (filesEnabled ? 1 : 0);
+    // "All": every source's rows in its lane, each added when its answer lands.
+    const topRows = useMemo<Row[]>(
+      () => (onAll ? laneRows(sources, plan.top, topSearch, query) : []),
+      [onAll, sources, plan.top, topSearch, query],
+    );
+    const belowRows = useMemo<Row[]>(
+      () => (onAll ? laneRows(sources, plan.below, belowSearch, query) : []),
+      [onAll, sources, plan.below, belowSearch, query],
+    );
+
+    const nonEmpty = (rankedTasks.length > 0 ? 1 : 0) + (filesEnabled ? 1 : 0) + (topRows.length > 0 ? 1 : 0);
     const budget = groupRowBudget(nonEmpty);
-    const taskRows = useMemo(() => rankedTasks.slice(0, budget.entity), [rankedTasks, budget.entity]);
+    const taskRows = useMemo(
+      () => (onTasks ? rankedTasks : rankedTasks.slice(0, budget.entity)),
+      [rankedTasks, budget.entity, onTasks],
+    );
     const fileRows = useMemo(() => fileRowsAll.slice(0, budget.files), [fileRowsAll, budget.files]);
 
     // ---- Flat row model (selection by key, stable across async loads) ---
-    // "All": a source row joins only when the query names it exactly.
-    const preciseRows = useMemo<Row[]>(() => {
-      if (!onAll || allSearch.forQuery !== query.trim()) return [];
-      const answers = allSourceIds.map((id) => ({ sourceId: id, rows: allSearch.answers.get(id)?.rows ?? [] }));
-      return preciseRowsForAll(query, answers).map(({ sourceId, row }) =>
-        ({ key: `s:${sourceId}:${row.ref}`, kind: 'source' as const, group: `src:${sourceId}`, sourceId, item: row }));
-    }, [onAll, allSearch, allSourceIds, query]);
+    const laneLoading = (lane: SourceSearchState, ids: string[]) =>
+      ids.length > 0 && (lane.loading.size > 0 || lane.forQuery !== query.trim());
 
     const tabAnswer = activeSource ? tabSearch.answers.get(activeSource.id) : undefined;
     const tabLoading = !!activeSource && (tabSearch.forQuery !== sourceQuery.trim() || tabSearch.loading.has(activeSource.id));
@@ -309,14 +338,17 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
     }, [activeSource, tabAnswer]);
 
     const rows = useMemo<Row[]>(() => {
-      if (!onAll) return sourceRows;
       const entityRows: Row[] = taskRows.map((ranked) =>
         ({ key: `task:${ranked.entity.id}`, kind: 'entity' as const, group: 'task' as const, ranked }));
+      if (onTasks) return entityRows;
+      if (!onAll) return sourceRows;
       const files: Row[] = fileRows.map(({ entry, positions }) =>
         ({ key: `f:${entry.type}:${entry.name}`, kind: 'entry' as const, group: 'files' as const, entry, positions }));
-      const both = order === 'entities-first' ? [...entityRows, ...files] : [...files, ...entityRows];
-      return [...both, ...preciseRows];
-    }, [onAll, sourceRows, taskRows, fileRows, order, preciseRows]);
+      // The same order the list draws: Tasks, Notes, Files (Files first for a path),
+      // then the sources that answer later, so their rows only ever add at the foot.
+      const lead = order === 'entities-first' ? [...entityRows, ...topRows, ...files] : [...files, ...entityRows, ...topRows];
+      return [...lead, ...belowRows];
+    }, [onAll, onTasks, sourceRows, taskRows, fileRows, order, topRows, belowRows]);
 
     const [selectedKey, setSelectedKey] = useState<string | null>(null);
     const selectedIndex = Math.max(0, rows.findIndex((r) => r.key === selectedKey));
@@ -338,7 +370,8 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
     // Only in "All": on a source tab the user asked that source on purpose, so an
     // empty answer stays on screen (Esc closes) instead of vanishing mid-thought.
     const settledEmpty = onAll && rows.length === 0 && !filesLoading
-      && (!entitiesEnabled || (!search.loading && search.forQuery === query.trim()));
+      && (!entitiesEnabled || (!search.loading && search.forQuery === query.trim()
+        && !laneLoading(topSearch, plan.top) && !laneLoading(belowSearch, plan.below)));
     useEffect(() => {
       if (settledEmpty && /\s/.test(query)) onClose();
     }, [settledEmpty, query, onClose]);
@@ -386,10 +419,13 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
       selectCurrent: () => { const r = rows[selectedIndex]; if (r) pick(r, { forceSelect: true }); },
       up: () => {
         if (!filesEnabled) return;
-        const parent = parentPath(browseDir);
-        if (parent !== browseDir) onNavigate(parent);
+        // From the folder the query names, not the one on screen: right after a
+        // descend its listing may not have landed yet, and ← must still go up one.
+        const from = targetDir.replace(/\/+$/, '') || '/';
+        const parent = parentPath(from);
+        if (parent !== from) onNavigate(parent);
       },
-    }), [rows, selectedIndex, pick, filesEnabled, browseDir, onNavigate, tabs, tab, scope, onSetQuery]);
+    }), [rows, selectedIndex, pick, filesEnabled, targetDir, onNavigate, tabs, tab, scope, onSetQuery]);
 
     // ---- Render ----------------------------------------------------------
     const renderEntityRow = (row: Extract<Row, { kind: 'entity' }>) => {
@@ -476,21 +512,27 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
     );
 
     const labelOf = (id: string) => sources.find((src) => src.id === id)?.label ?? id;
-    const preciseGroups: React.ReactNode[] = [];
-    let headFor = '';
-    for (const row of preciseRows) {
-      if (row.kind !== 'source') continue;
-      if (headFor !== row.sourceId) {
-        headFor = row.sourceId;
-        preciseGroups.push(
-          <div key={`pg-${row.sourceId}`} className="mention-group-head" data-group={`src:${row.sourceId}`}>
-            <span className="mention-group-name">{labelOf(row.sourceId)}</span>
-            <span className="mention-group-verb">exact match · ⏎ inserts a reference</span>
-          </div>,
-        );
+    /** All's rows of the sources in one lane, a group (head and rows) per source. */
+    const laneGroups = (lane: 'top' | 'below', list: Row[]): React.ReactNode[] => {
+      const bySource = new Map<string, Array<Extract<Row, { kind: 'source' }>>>();
+      for (const row of list) {
+        if (row.kind !== 'source') continue;
+        const rowsOf = bySource.get(row.sourceId) ?? [];
+        rowsOf.push(row);
+        bySource.set(row.sourceId, rowsOf);
       }
-      preciseGroups.push(renderSourceRow(row));
-    }
+      return [...bySource].map(([sourceId, rowsOf]) => (
+        <div key={`lg-${sourceId}`} data-group={`src:${sourceId}`} data-lane={lane}>
+          <div className="mention-group-head">
+            <span className="mention-group-name">{labelOf(sourceId)}</span>
+            <span className="mention-group-verb">⏎ inserts a reference</span>
+          </div>
+          {rowsOf.map(renderSourceRow)}
+        </div>
+      ));
+    };
+    const topGroups = laneGroups('top', topRows);
+    const belowGroups = laneGroups('below', belowRows);
 
     const sourceTab = activeSource ? (
       <div data-group={`src:${activeSource.id}`}>
@@ -531,7 +573,7 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
               renderEntityRow({ key: `task:${ranked.entity.id}`, kind: 'entity', group: 'task', ranked }))}
           </div>
         )}
-        {taskRows.length === 0 && (query.trim() || !filesEnabled) && (
+        {taskRows.length === 0 && (taskQuery.trim() || !filesEnabled || onTasks) && (
           <div className="mention-group-head">
             <span className="mention-group-name">{GROUP_LABEL.task}</span>
             <span className="mention-group-verb">
@@ -581,15 +623,17 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
                   if (scope && id !== scope.sourceId) onSetQuery?.(scope.rest);
                 }}
               >
-                {id === ALL_TAB ? 'All' : labelOf(id)}
+                {id === ALL_TAB ? 'All' : id === TASKS_TAB ? 'Tasks' : labelOf(id)}
               </button>
             ))}
           </div>
         )}
         <div className="mention-list" ref={listRef}>
-          {onAll
-            ? <>{order === 'entities-first' ? <>{entityGroups}{filesGroup}</> : <>{filesGroup}{entityGroups}</>}{preciseGroups}</>
-            : sourceTab}
+          {onTasks
+            ? entityGroups
+            : onAll
+              ? <>{order === 'entities-first' ? <>{entityGroups}{topGroups}{filesGroup}</> : <>{filesGroup}{entityGroups}{topGroups}</>}{belowGroups}</>
+              : sourceTab}
         </div>
         <div className="mention-hintbar">
           <span><b>↑↓</b> move</span>

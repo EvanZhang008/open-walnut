@@ -24,7 +24,7 @@
  *
  * PURE MODULE: no React, no DOM. It has to load in a bare node test.
  */
-import { extractEntityRefs } from '@/utils/entity-ref-tags';
+import { extractEntityRefs, sourceDisplayName, sourceOfRefId } from '@/utils/entity-ref-tags';
 
 /** label → tag, in insertion order. */
 export type RefTable = ReadonlyMap<string, string>;
@@ -46,11 +46,13 @@ function refKey(tag: string): string | null {
 }
 
 /** The text a token shows for a tag: its label (its id when unlabeled), with
- *  the characters the token syntax reserves replaced and whitespace collapsed. */
+ *  the characters the token syntax reserves replaced and whitespace collapsed. A
+ *  source row names its source first (`@[Slack · Bob Stone]`, `@[Notes · Plan]`),
+ *  so the box says what each reference is. */
 function tokenLabel(tag: string): string {
   const m = extractEntityRefs(tag)[0];
-  const raw = (m?.label || m?.id || '').replace(/[\[\]]/g, ' ').replace(/\s+/g, ' ').trim();
-  return raw || 'reference';
+  const raw = (m?.label || m?.id || '').replace(/[\[\]]/g, ' ').replace(/\s+/g, ' ').trim() || 'reference';
+  return m?.kind === 'source' ? `${sourceDisplayName(sourceOfRefId(m.id))} · ${raw}` : raw;
 }
 
 /** `@[label]` */

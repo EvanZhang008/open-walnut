@@ -257,5 +257,7 @@ export function mergeServerHits(
  */
 export function groupRowBudget(nonEmptyGroups: number): { entity: number; files: number } {
   if (nonEmptyGroups <= 1) return { entity: 12, files: 12 };
+  // Notes beside them (All's third group): Files gives up rows, Tasks keep theirs.
+  if (nonEmptyGroups >= 3) return { entity: 5, files: 3 };
   return { entity: 5, files: 5 };
 }

@@ -3,6 +3,8 @@
  * fixture server's own process the way a plugin's would be:
  *
  *   team-chat  people and channels (keyword "chat", alias "tc"); deterministic rows
+ *   late       answers every search after 1.5 s, so All shows its rows only later, under
+ *              everything else, without ever holding the list
  *   stuck      never answers, so its tab shows the timeout state
  *
  * Notes, the built-in source, reads the fixture's notes folder (vault-note.md).
@@ -31,6 +33,21 @@ export function installMentionSourcesFixture(): void {
     async resolve(ref) {
       const row = CHAT_ROWS.find((r) => r.ref === ref)
       return row ? `Chat ${row.kind} ${row.title} (${ref}). FIXTURE_SOURCE_CARD` : null
+    },
+  })
+  registerMentionSource('fixture', {
+    id: 'late',
+    label: 'Late',
+    keyword: 'late',
+    kinds: ['message'],
+    order: 80,
+    timeoutMs: 4000,
+    async search(q) {
+      await new Promise((r) => setTimeout(r, 1500))
+      return [{ ref: 'm:1', title: `Late answer for ${q || 'nothing'}`, subtitle: 'arrives after 1.5 s' }]
+    },
+    async resolve(ref) {
+      return ref === 'm:1' ? 'Late message m:1. FIXTURE_LATE_CARD' : null
     },
   })
   registerMentionSource('fixture', {

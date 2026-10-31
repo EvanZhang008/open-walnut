@@ -181,7 +181,7 @@ test('the "@" palette lists tasks only, a task carries its session, and the pick
   // names as its name (a link carrying the id), so the id is the link's.
   await expect(panel.locator(`[data-msg-role="assistant"] a.task-link[data-task-id="${waitingTask}"]`).first()).toBeVisible({ timeout: 60_000 })
   await expect(panel).toContainText('project Walnut · waiting on you')
-  await expect(panel).toContainText('use task_get / task_send for more')
+  await expect(panel).toContainText('each line says what the thing is and its id')
   await expect(panel).not.toContainText(`session ${waitingSid}`)
   await expect(panel).not.toContainText('session-ref id=')
 })
@@ -231,7 +231,7 @@ test('a draft column offers the same Tasks group, and a Start carrying a referen
   // The echoed card names the task by its id; the page reads every task a chat
   // names as its name (a link carrying the id), so the id is the link's.
   await expect(panel.locator(`[data-msg-role="assistant"] a.task-link[data-task-id="${referenced}"]`).first()).toBeVisible({ timeout: 60_000 })
-  await expect(panel).toContainText('use task_get / task_send for more')
+  await expect(panel).toContainText('each line says what the thing is and its id')
   const humanBubble = panel.locator('.session-msg-user').filter({ hasText: 'please read' })
   await expect(humanBubble).toContainText('first')
   await expect(humanBubble).not.toContainText('walnut-refs')

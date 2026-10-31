@@ -96,7 +96,8 @@ describe('GET /api/mention-sources', () => {
     const { status, json } = await getJson<{ sources: Array<{ id: string; label: string; keywords: string[] }> }>('/api/mention-sources')
     expect(status).toBe(200)
     expect(json.sources.map((s) => s.id)).toEqual(['notes', 'team-chat', 'stuck'])
-    expect(json.sources[1]).toMatchObject({ label: 'Team chat', keywords: ['chat', 'tc'] })
+    expect(json.sources[1]).toMatchObject({ label: 'Team chat', keywords: ['chat', 'tc'], inAll: true, lane: 'below' })
+    expect(json.sources[0]).toMatchObject({ id: 'notes', inAll: true, lane: 'top' })
   })
 
   it('searches one source, answers a stuck one with an error instead of hanging, and 404s an unknown one', async () => {
@@ -127,6 +128,7 @@ describe('a picked source row in a launch message', () => {
     const wire = start.payload.message as string
     expect(wire.startsWith(message)).toBe(true)
     const card = wire.slice(wire.indexOf(REFERENCE_CARDS_OPEN), wire.indexOf(REFERENCE_CARDS_CLOSE))
-    expect(card).toContain('- team-chat "Alice Chen" (ref team-chat:user:U1): Chat person Alice Chen (@alice, user id U1).')
+    // Core's head (source label, row kind from the search above, title, ref), then the source's words.
+    expect(card).toContain('- Team chat person "Alice Chen" (ref team-chat:user:U1): Chat person Alice Chen (@alice, user id U1).')
   })
 })

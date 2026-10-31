@@ -5,6 +5,8 @@
  *                        result cache (60 s, keyed by source + query + limit) and a shared
  *                        in-flight promise, so the browser's keystrokes and a second open
  *                        picker never ask a plugin the same thing twice at once.
+ *   describeSourceRef    the source label and row kind core itself knows for a tag id
+ *                        (the card's head, the same for every source).
  *   resolveSourceRefs    the refs of one outgoing message, in parallel, under ONE deadline
  *                        for all of them (a send never waits on a plugin longer than that).
  *                        A resolved text is cached for 2 minutes.
@@ -34,7 +36,12 @@ const RESOLVE_CACHE_CAP = 300
 export const RESOLVE_TEXT_LIMIT = 1200
 const MAX_LIMIT = 30
 
+const REF_KIND_CAP = 2000
+
 const searchCache = new Map<string, { at: number; items: MentionSourceItem[] }>()
+/** Tag id → the kind its row had when a search offered it, so the card can say
+ *  "Slack channel" for a row picked from a source with several kinds. */
+const refKinds = new Map<string, string>()
 const inFlight = new Map<string, Promise<MentionSearchAnswer>>()
 const resolveCache = new Map<string, { at: number; text: string }>()
 
@@ -89,6 +96,10 @@ function withDeadline<T>(ms: number, run: (signal: AbortSignal) => Promise<T>): 
   })
 }
 
+function rememberKinds(sourceId: string, items: readonly MentionSourceItem[]): void {
+  for (const item of items) if (item.kind) remember(refKinds, REF_KIND_CAP, `${sourceId}:${item.ref}`, item.kind)
+}
+
 export async function searchMentionSource(sourceId: string, rawQ: string, rawLimit = 12): Promise<MentionSearchAnswer> {
   const started = Date.now()
   ensureCoreMentionSources()
@@ -99,7 +110,10 @@ export async function searchMentionSource(sourceId: string, rawQ: string, rawLim
   if (q.length < source.minChars) return { items: [], tookMs: 0 }
   const key = `${sourceId}\u0000${limit}\u0000${q.toLowerCase()}`
   const hit = searchCache.get(key)
-  if (hit && Date.now() - hit.at < SEARCH_TTL_MS) return { items: hit.items, cached: true, tookMs: 0 }
+  if (hit && Date.now() - hit.at < SEARCH_TTL_MS) {
+    rememberKinds(sourceId, hit.items)
+    return { items: hit.items, cached: true, tookMs: 0 }
+  }
   const pending = inFlight.get(key)
   if (pending) return pending
   const run = (async (): Promise<MentionSearchAnswer> => {
@@ -111,6 +125,7 @@ export async function searchMentionSource(sourceId: string, rawQ: string, rawLim
     }
     const items = cleanItems(answer.value, limit)
     remember(searchCache, SEARCH_CACHE_CAP, key, { at: Date.now(), items })
+    rememberKinds(sourceId, items)
     return { items, tookMs }
   })()
   inFlight.set(key, run)
@@ -164,6 +179,30 @@ export async function resolveSourceRefs(ids: string[], deadlineMs = 2500): Promi
   return out
 }
 
+/**
+ * What core itself knows about a tag id, for the head of its card: the source's label
+ * ("Slack") and the row's kind ("channel"). From the row a search offered, else the
+ * source's `kindOf`, else its one kind when it has only one. A source no longer
+ * registered (its plugin turned off) gives its id and no kind.
+ */
+export function describeSourceRef(id: string): { source: string; kind?: string } {
+  ensureCoreMentionSources()
+  const parts = splitSourceRefId(id)
+  if (!parts) return { source: id }
+  const source = getMentionSource(parts.sourceId)
+  if (!source) return { source: parts.sourceId }
+  let kind = refKinds.get(id)
+  if (!kind && typeof source.spec.kindOf === 'function') {
+    try {
+      const k = source.spec.kindOf(parts.ref)
+      if (typeof k === 'string' && k.trim()) kind = k.trim().slice(0, 24)
+    } catch { /* a plugin's throw costs the kind word, not the card */ }
+  }
+  const kinds = Array.isArray(source.spec.kinds) ? source.spec.kinds.filter((k) => typeof k === 'string' && k) : []
+  if (!kind && kinds.length === 1) kind = kinds[0]
+  return { source: source.spec.label.trim() || parts.sourceId, ...(kind ? { kind } : {}) }
+}
+
 /** The sources the picker shows, core ones included. */
 export function mentionSourcesNow(): RegisteredMentionSource[] {
   ensureCoreMentionSources()
@@ -175,4 +214,5 @@ export function __resetMentionSourceCaches(): void {
   searchCache.clear()
   inFlight.clear()
   resolveCache.clear()
+  refKinds.clear()
 }
