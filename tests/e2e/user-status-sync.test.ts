@@ -93,10 +93,13 @@ describe('user status sync', () => {
     await setBoardHtml(lead.id, `<html><body><walnut-choice id="c1" title="Which host?" options="a:Mac,b:Cloud" task="${choice.id}"></walnut-choice></body></html>`, { by: `task:${lead.id}` })
 
     expect((await statusOf(running.id, (t) => t.user_status!.state === 'working')).user_status).toMatchObject({ state: 'working' })
-    expect((await statusOf(ended.id, (t) => t.user_status!.state === 'waiting')).user_status).toMatchObject({ state: 'waiting', kind: 'lead', now: 'Shipped it.' })
+    // A pass may store Working first (its record starts as running); the hand-back after it is held
+    // HANDBACK_SETTLE_MS (20 s) before it is stored, so wait past that for the whole status.
+    expect((await statusOf(ended.id, (t) => t.user_status!.state === 'waiting' && t.user_status!.now === 'Shipped it.', 35_000)).user_status)
+      .toMatchObject({ state: 'waiting', kind: 'lead', now: 'Shipped it.' })
     expect((await statusOf(asks.id, (t) => t.user_status!.state === 'needs')).user_status).toMatchObject({ state: 'needs', source: 'letter', ask: 'Pick a design' })
     expect((await statusOf(choice.id, (t) => t.user_status!.state === 'needs')).user_status).toMatchObject({ state: 'needs', source: 'choice', ask: 'Which host?' })
-    expect((await statusOf(todo.id, (t) => t.user_status!.state === 'waiting')).user_status).toMatchObject({ kind: 'not-started' })
+    expect((await statusOf(todo.id, (t) => t.user_status!.kind === 'not-started')).user_status).toMatchObject({ state: 'waiting', kind: 'not-started' })
 
     // The phone's projection carries the same value.
     const { tasks } = await v1<{ tasks: { id: string; user_status?: { state: string } }[] }>('/tasks')

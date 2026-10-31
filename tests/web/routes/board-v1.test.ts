@@ -167,8 +167,9 @@ describe('writing the html', () => {
     const got = await call('GET', boardPath(team.leader))
     expect(got.json.board.html).toContain('Status: fixing')
     expect(got.json.board.html).toContain('owner: me')
-    // refs carry the worker's LIVE title and state.
-    expect(got.json.refs).toEqual([{ ref: team.worker, id: team.worker, title: 'Fix the cache', phase: 'TODO', status: 'todo', user: 'waiting' }])
+    // refs carry the worker's LIVE title and state. Its session record reads running (a record
+    // starts so), and Working is a running turn whatever the phase says (user-status.ts, 2026-10-31).
+    expect(got.json.refs).toEqual([{ ref: team.worker, id: team.worker, title: 'Fix the cache', phase: 'TODO', status: 'todo', user: 'working' }])
 
     const html = events.filter((e) => e.name === EventNames.BOARD_CHANGED).map((e) => e.data)
     expect(html).toEqual([1, 2, 3, 4].map((version) => ({ taskId: team.leader, kind: 'html', version })))
