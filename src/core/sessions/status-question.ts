@@ -57,7 +57,13 @@ export async function applyStatusAnswer(taskId: string, sessionId: string, repor
   // announce it as completed again (updateTaskRaw names the event by phase).
   const current = await getTask(taskId).catch(() => null);
   if (!current || current.phase === 'COMPLETE' || current.status === 'done') return false;
-  await updateTaskRaw(taskId, { status_report: { ...report, turn_ended_at: new Date(turnEndedMs).toISOString() } }, {
+  // Whether this turn answered a person's message: such a turn never parks the task (report-phase.ts).
+  const { getSessionByClaudeId } = await import('../session-tracker.js');
+  const { turnAnsweredPerson } = await import('./report-phase.js');
+  const rec = await getSessionByClaudeId(sessionId).catch(() => null);
+  const answered = turnAnsweredPerson(rec?.humanInputAt, turnEndedMs, current.status_report);
+  report = { ...report, turn_ended_at: new Date(turnEndedMs).toISOString(), ...(answered ? { answered_person: true } : {}) };
+  await updateTaskRaw(taskId, { status_report: report }, {
     emitEvent: true, source: 'status-report', shouldUpdate: (cur) => cur.phase !== 'COMPLETE' && cur.status !== 'done',
   });
   const { applyReportPhase } = await import('./report-phase.js');

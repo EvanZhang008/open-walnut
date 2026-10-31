@@ -28,32 +28,43 @@ function code(text: string): string {
   return text.split('\n').filter((l) => !/^\s*(?:\*|\/\/|\/\*)/.test(l)).join('\n')
 }
 
-interface Site { count: number; gate: string; mustContain: RegExp }
+/**
+ * `answered`: how the site keeps a turn that answered the user's message off WAITING (2026-10-31,
+ * the user: "wait should be wait external"; tests/core/answered-turn-stays-needs.test.ts), and the
+ * code that does it. A new site names its own, or is not a park after a turn.
+ */
+interface Site { count: number; gate: string; mustContain: RegExp; answered: string; answeredGate: RegExp }
 
 const SITES: Record<string, Site> = {
   'src/core/sessions/report-phase.ts': {
     count: 2, gate: 'a waiting report parks only on a named outside wait or outsideWaitEvidence; done parks on its lead',
     mustContain: /outsideWaitEvidence\(/,
+    answered: 'a report of a turn that answered a person reads NEED_ACTION', answeredGate: /case 'waiting': if \(report\.answered_person\) return 'NEED_ACTION'/,
   },
   'src/core/routines/trigger-api.ts': {
     count: 1, gate: 'a trigger parks its task only when it does not watch the user (`watches`)',
     mustContain: /const park = !watches &&/,
+    answered: 'parks only on the session\'s own trigger call, a step it chose (its prompt: never right after answering the user)', answeredGate: /const park = !watches &&/,
   },
   'src/core/phase.ts': {
     count: 3, gate: 'an interrupted wait, a standing routine and an idle reap come back only on triggers that are not watchesUser',
     mustContain: /resumableWait\(|triggersStanding\(/,
+    answered: 'a person\'s send ends an interrupted wait for good and unmarks a fire turn', answeredGate: /noteTurnSend\([^\n]*isPersonSendSource\(/,
   },
   'src/core/session-health-monitor.ts': {
     count: 1, gate: 'an idle reap parks only on standingRoutineWaits (triggers that are not watchesUser)',
     mustContain: /standingRoutineWaits\(/,
+    answered: 'parks only work in flight: a task handed back to the user stays so', answeredGate: /shouldApply: \(current[^\n]*sessionErrorPhase\(current\.phase\) !== null/,
   },
   'src/core/task-db.ts': {
     count: 1, gate: 'v12 migration: a live pre-0.5.2 `waiting` record becomes the phase once; no new park',
     mustContain: /migrateWaitingRecordsToPhase/,
+    answered: 'a one-time migration, no turn', answeredGate: /migrateWaitingRecordsToPhase/,
   },
   'src/web/routes/api-v1.ts': {
     count: 1, gate: 'the phase_ignored answer for Main (no write); a session PATCH to WAITING asks admitSessionPark',
     mustContain: /admitSessionPark\(/,
+    answered: 'a session\'s own deliberate park (its prompt: never right after answering the user)', answeredGate: /admitSessionPark\(/,
   },
 }
 
@@ -84,6 +95,14 @@ describe('every literal WAITING write goes through the park gate', () => {
     for (const [file, site] of Object.entries(SITES)) {
       expect(fs.readFileSync(path.join(ROOT, file), 'utf8'), `${file}: ${site.gate}`).toMatch(site.mustContain)
     }
+  })
+
+  it('each listed site keeps a turn that answered the user off WAITING', () => {
+    for (const [file, site] of Object.entries(SITES)) {
+      expect(fs.readFileSync(path.join(ROOT, file), 'utf8'), `${file}: ${site.answered}`).toMatch(site.answeredGate)
+    }
+    // The report records it for every turn whose status is asked (native side question and summary).
+    expect(fs.readFileSync(path.join(SRC, 'core/sessions/status-question.ts'), 'utf8')).toMatch(/turnAnsweredPerson\(rec\?\.humanInputAt, turnEndedMs, current\.status_report\)/)
   })
 
   it('the session PATCH asks the gate exactly when it writes WAITING', () => {

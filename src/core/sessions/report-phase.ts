@@ -40,7 +40,7 @@ const STORED_REPORT_WINDOW_MS = 10 * 60_000;
  * writing (applyReportPhase).
  */
 export function phaseForReport(
-  report: Pick<StatusReport, 'state' | 'waiting_kind' | 'waiting_on'>, task: Pick<Task, 'parent_task_id' | 'org_role'>, alive: boolean,
+  report: Pick<StatusReport, 'state' | 'waiting_kind' | 'waiting_on' | 'answered_person'>, task: Pick<Task, 'parent_task_id' | 'org_role'>, alive: boolean,
   armed: boolean | 'unknown' = false,
 ): TaskPhase | null {
   const onUser = report.state === 'needs' || (report.state === 'waiting' && (report.waiting_kind === 'you'
@@ -54,17 +54,41 @@ export function phaseForReport(
 }
 
 function individualPhase(
-  report: Pick<StatusReport, 'state' | 'waiting_kind' | 'waiting_on'>, task: Pick<Task, 'parent_task_id' | 'org_role'>, alive: boolean,
+  report: Pick<StatusReport, 'state' | 'waiting_kind' | 'waiting_on' | 'answered_person'>, task: Pick<Task, 'parent_task_id' | 'org_role'>, alive: boolean,
   armed: boolean | 'unknown', onUser: boolean,
 ): TaskPhase | null {
   if (onUser) return 'NEED_ACTION';
   switch (report.state) {
     case 'working': return alive ? 'IN_PROGRESS' : null;
-    // A wait it cannot show is outside is the user's (2026-10-30: "the meeting notes" read as "other").
-    case 'waiting': return reportNamesOutsideWait(report, task) || armed !== false ? 'WAITING' : 'NEED_ACTION';
+    // A turn that answered the user's message is theirs to read first, whatever the task waits on
+    // next (2026-10-31, the user: "wait should be wait external"; a walkthrough he had asked for
+    // left his list while he read it, because the task also waited on a CR approval).
+    case 'waiting': if (report.answered_person) return 'NEED_ACTION';
+      // A wait it cannot show is outside is the user's (2026-10-30: "the meeting notes" read as "other").
+      return reportNamesOutsideWait(report, task) || armed !== false ? 'WAITING' : 'NEED_ACTION';
     case 'done': return task.parent_task_id ? 'WAITING' : null;
     default: return null;
   }
+}
+
+/**
+ * Whether the turn a report covers answered a message a person sent: one reached the session
+ * (`humanInputAt`, stamped at the send) after the turn the task's previous report covered ended,
+ * and no later than this turn's end. With no previous turn's report (none, or one a person or a
+ * lead set with task_report_set, which covers no turn), any message before this turn's end
+ * counts, so an unknown reads as answered and the task stays on the user's list. A report asked
+ * again for the same turn (status-reconcile.ts) keeps what the first one found. A message sent
+ * while an earlier turn ran that the CLI then answers in a turn of its own counts for the earlier
+ * turn only (the stamp is the send's).
+ */
+export function turnAnsweredPerson(
+  humanInputAt: string | undefined, turnEndedAt: number, prev?: Pick<StatusReport, 'turn_ended_at' | 'answered_person'> | null,
+): boolean {
+  const sent = Date.parse(humanInputAt ?? '');
+  if (!Number.isFinite(sent) || sent > turnEndedAt + SLACK_MS) return false;
+  const prevEnd = Date.parse(prev?.turn_ended_at ?? '');
+  if (Number.isFinite(prevEnd) && Math.abs(prevEnd - turnEndedAt) <= SLACK_MS) return !!prev?.answered_person;
+  return !Number.isFinite(prevEnd) || sent > prevEnd;
 }
 
 /** Whether a report's WAITING rests on facts the task must have (the caller looks them up). */

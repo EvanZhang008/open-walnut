@@ -102,6 +102,9 @@ export interface StatusReport {
   at: string;
   /** When the turn it reports on ended (ISO); absent on a report an older Walnut stored. */
   turn_ended_at?: string;
+  /** The turn it reports on answered a message a person sent (sessions/report-phase.ts
+   *  answeredPerson): its words are for the user to read, so it never parks the task. */
+  answered_person?: boolean;
   /** needs: how the user answers (AskForm.kind); left out = text. */
   ask_kind?: AskKind;
   /** needs, single or multi: the few options worth showing. */
@@ -222,6 +225,8 @@ export interface UserStatusInput {
  *  this is generic rules". Every agent-facing text that lists or reports tasks says it. */
 /** The ask of a task handed back only because its turn ended, with nothing asked of its own
  *  (user-status-sync.ts holds it a moment: the next turn often starts within seconds). */
+/** A turn that answered the user's message: read the answer (report.answered_person). */
+export const ANSWERED_ASK = 'It answered your message: read it and reply.';
 export const HANDED_BACK_ASK = 'Its turn ended and handed the task back to you: read it and reply.';
 export const COMPLETE_IS_VERIFIED = 'A COMPLETE task counts as verified by the user: write it as done, never as waiting on their check or test, and never remind them of it.';
 
@@ -719,6 +724,14 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     // A wait that is the user's (2026-10-30: "other: the meeting notes") is their ask, in its words.
     if (waitIsUsers(report) && !none(report!.waiting_on)) {
       return strip({ state: 'needs', source: 'session', ask: clean(report!.waiting_on), ...w });
+    }
+    // It answered the user's message and then waits on something outside (2026-10-31, the user: "I
+    // have not even read it and it is put into wait"): the answer is the user's to read and reply to
+    // first. It stays on their list until they write again, or the 4-hour re-check of this ask
+    // (needs-recheck.ts) wakes the task with a turn of its own, whose report may park it.
+    if (report?.state === 'waiting' && report.answered_person && !input.isMain && !input.isLead) {
+      const on = clean(report.waiting_on);
+      return strip({ state: 'needs', source: 'session', ask: on ? `${ANSWERED_ASK} Then it waits on: ${on.slice(0, 160)}` : ANSWERED_ASK, ...w });
     }
     // Handed back only because its turn ended (2026-10-27, the lead on the user's demo: a turn that
     // answered the user's question and only confirmed the plan read Needs you everywhere). Its own
