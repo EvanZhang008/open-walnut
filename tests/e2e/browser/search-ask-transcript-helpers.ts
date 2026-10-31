@@ -53,15 +53,14 @@ async function expectOnlyQuestion(bubble: Locator): Promise<void> {
 }
 
 /**
- * The first turn reads as the QUESTION. By default (ui.show_walnut_additions off)
- * the seeded prompt is not drawn at all and the bubble's footer offers it as
- * "Walnut added"; opened, it is one folded disclosure row, and no part of the
- * row dump is on screen either way.
+ * The first turn reads as the QUESTION. By default (ui.show_walnut_additions on,
+ * 2026-10-31) the seeded prompt is one folded disclosure row above it, with no
+ * "Walnut added" button in the footer, and no part of the row dump is on screen.
  */
 export async function expectPromptFolded(panel: Locator): Promise<void> {
   const bubble = queryBubble(panel);
-  await expect(bubble.locator(PROMPT_BANNER)).toHaveCount(0);
-  await expect(bubble.getByTestId('walnut-added-toggle')).toHaveAttribute('aria-expanded', 'false');
+  await expect(bubble.locator(PROMPT_BANNER)).toBeVisible();
+  await expect(bubble.getByTestId('walnut-added-toggle')).toHaveCount(0);
   await expectOnlyQuestion(bubble);
   await revealWalnutAdded(bubble);
   await expect(bubble.locator(PROMPT_BANNER)).toBeVisible();

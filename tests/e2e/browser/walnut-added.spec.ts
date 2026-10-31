@@ -1,22 +1,24 @@
 /**
- * What Walnut added to a person's message stays out of the chat by default and
- * is one click away (2026-10-29, the user: hidden by default behind a "more" in
- * the message footer, always visible for me; and a way to turn each hint off).
+ * What Walnut added to a person's message shows by default, in plain words, with
+ * the exact text one click away (2026-10-31, the user: "the user can see these is
+ * better"; before, 2026-10-29: hidden behind a "more"). A person who turns
+ * "Always show what Walnut added" off gets the footer's "Walnut added N" instead.
  *
  * Drives the real panel against the rider fixture (`pw-rider-session`,
  * test-server.ts): turn 10 is a status note in front of the person's words,
  * with a rich-output hint after them. It checks:
- *  · by default the bubble holds only the words: no note row above it, no
- *    hints row in it, and its footer says "Walnut added 2";
- *  · that button shows the note line and the hints row for this message, and
- *    hides them again;
- *  · a hint's "Turn off in Settings" link opens Sessions at that hint's switch;
- *  · with "Always show what Walnut added" on, they show with no click (the
- *    config write is answered by the test, so the shared fixture server's
- *    setting never changes under other specs).
+ *  · by default the note row and the hints line show with no click, the line
+ *    saying in plain words what Walnut added and why (no codename), and the
+ *    footer has no "Walnut added" button;
+ *  · the line opens to the exact text and a "Change in Settings" link to that
+ *    hint's switch;
+ *  · with the setting off (the config read is answered by the test, so the
+ *    shared fixture server's setting never changes under other specs), the bubble
+ *    holds only the words and "Walnut added 2" shows and hides them.
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { REAL_PANEL } from './draft-helpers'
+import { pinWalnutAdditions } from './walnut-added-helpers'
 
 const SESSION_ID = 'pw-rider-session'
 const TASK_ID = 'pw-task-rider'
@@ -69,31 +71,37 @@ async function shot(page: Page, target: Locator, name: string): Promise<void> {
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-${name}.png`, clip }).catch(() => {})
 }
 
-test('by default the bubble is only the words; its footer shows what Walnut added, and hides it again', async ({ page }) => {
+test('by default what Walnut added shows in plain words, with no click', async ({ page }) => {
   test.setTimeout(90_000)
   const panel = await openSession(page)
   const b = bubbleOf(panel)
   await expect(b).toHaveCount(1)
   await expect(b).toContainText(`${MARK} yes, go for it.`)
+  const line = b.getByTestId('message-hints')
+  await expect(line).toContainText('Walnut added a reminder that rich output is on (your Output mode setting).')
+  await expect(line).not.toContainText('rich-output')
+  await expect(riderAbove(b).locator('[data-testid="rider-fold"]')).toHaveCount(1)
+  await b.hover()
+  await expect(b.getByTestId('walnut-added-toggle')).toHaveCount(0)
+  await reveal(page, panel, b)
+  await shot(page, b, 'default-shown')
+})
+
+test('with the setting off, the bubble is only the words; its footer shows what Walnut added, and hides it again', async ({ page }) => {
+  test.setTimeout(90_000)
+  await pinWalnutAdditions(page, false)
+  const panel = await openSession(page)
+  const b = bubbleOf(panel)
+  await expect(b).toHaveCount(1)
   await expect(b.getByTestId('message-hints')).toHaveCount(0)
   await expect(riderAbove(b)).toHaveCount(0)
-  await reveal(page, panel, b)
-  await shot(page, b, 'default-hidden')
-
   const toggle = b.getByTestId('walnut-added-toggle')
   await b.hover()
   await expect(toggle).toHaveText(/^Walnut added 2›?$/)
-  await expect(toggle).toHaveAttribute('aria-expanded', 'false')
   await toggle.click()
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
-  await expect(b.getByTestId('message-hints')).toContainText('Walnut hints: Rich output')
+  await expect(b.getByTestId('message-hints')).toContainText('Walnut added a reminder that rich output is on')
   await expect(riderAbove(b).locator('[data-testid="rider-fold"] .tool-run-toggle')).toHaveText(/^Received 1 message(?: from [^·›]+?)?›?$/)
-  // The note's card is one more click away, as before.
-  await riderAbove(b).locator('[data-testid="rider-fold"] .tool-run-toggle').click()
-  await expect(riderAbove(b)).toContainText('changed its status')
-  await reveal(page, panel, b)
-  await shot(page, riderAbove(b).locator('xpath=..'), 'shown')
-
   await b.hover()
   await toggle.click()
   await expect(toggle).toHaveAttribute('aria-expanded', 'false')
@@ -106,11 +114,11 @@ test('a hint leads to its switch in Settings', async ({ page }) => {
   const panel = await openSession(page)
   const b = bubbleOf(panel)
   await reveal(page, panel, b)
-  await b.hover()
-  await b.getByTestId('walnut-added-toggle').click()
   await b.getByTestId('message-hints').locator('.tool-run-toggle').click()
+  // The exact text the AI received is one click from the plain line.
+  await expect(b.getByTestId('message-hint-exact')).toContainText('rich output mode is still on')
   const link = b.getByTestId('message-hint-settings-link')
-  await expect(link).toHaveText('Turn off in Settings')
+  await expect(link).toHaveText('Change in Settings')
   await shot(page, b, 'hint-open')
   await link.click()
   await expect(page).toHaveURL(/\/settings#message-hint-rich-output$/)
@@ -119,27 +127,4 @@ test('a hint leads to its switch in Settings', async ({ page }) => {
   await expect(row.locator('#hint-enabled-rich-output')).toBeVisible()
   await expect(page.locator('#show-walnut-additions')).toHaveCount(1)
   await shot(page, row, 'settings-row')
-})
-
-test('with "Always show what Walnut added" on, the additions show with no click', async ({ page }) => {
-  test.setTimeout(90_000)
-  // This page reads the setting as on; the shared fixture server's config never changes.
-  await page.route('**/api/config', async (route) => {
-    if (route.request().method() !== 'GET') {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
-      return
-    }
-    const res = await route.fetch()
-    const body = await res.json() as { config: { ui?: Record<string, unknown> } }
-    body.config.ui = { ...(body.config.ui ?? {}), show_walnut_additions: true }
-    await route.fulfill({ response: res, json: body })
-  })
-  const panel = await openSession(page)
-  const b = bubbleOf(panel)
-  await expect(b.getByTestId('message-hints')).toContainText('Walnut hints: Rich output')
-  await expect(riderAbove(b).locator('[data-testid="rider-fold"]')).toHaveCount(1)
-  await b.hover()
-  await expect(b.getByTestId('walnut-added-toggle')).toHaveCount(0)
-  await reveal(page, panel, b)
-  await shot(page, riderAbove(b).locator('xpath=..'), 'always-on')
 })

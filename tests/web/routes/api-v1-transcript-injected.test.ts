@@ -110,7 +110,7 @@ function expectInjected(rows: Row[], label: string): void {
   // The person's words are theirs, with what Walnut added named.
   const person = rows.find((r) => r.role === 'user' && r.text.startsWith(PERSON))
   expect(person?.sentBy, label).toBe('person')
-  expect(person?.added?.map((i) => i.label), label).toEqual(['Rich output'])
+  expect(person?.added?.map((i) => i.label), label).toEqual(['a note that rich output is on, so answers may use tables, diagrams and layout (your Output mode setting)'])
   // Only the first row carries the lines from before it.
   expect(rows.slice(1).every((r) => r.injectedBefore === undefined), label).toBe(true)
 }

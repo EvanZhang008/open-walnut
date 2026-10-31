@@ -34,3 +34,40 @@
   color: var(--accent);
   text-decoration: underline;
 }
+
+/* The hints row says in a sentence what Walnut added (MessageHintsRow.tsx): it may
+   wrap, so it reads as a short line of text, not a one-line pill. */
+.message-hints-row .tool-run-toggle {
+  max-width: 100%;
+  text-align: left;
+}
+.message-hints-row .message-hints-sentence {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.session-msg-user .message-hints-row .tool-run-toggle {
+  border-radius: 10px;
+}
+.message-hint-item + .message-hint-item {
+  margin-top: 10px;
+}
+.message-hint-item p {
+  margin: 0 0 4px;
+}
+.message-hint-exact-label {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.message-hint-exact {
+  margin: 0 0 4px;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  /* A long hint (the rich-output rules) scrolls inside its box, not the chat. */
+  max-height: 14em;
+  overflow-y: auto;
+}

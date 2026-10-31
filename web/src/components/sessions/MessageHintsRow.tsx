@@ -1,17 +1,26 @@
 /**
- * The message hints a user row carried (src/core/hints/), as one folded row under
- * the person's words: "Walnut hints: Rich output · Reply language". The text of each
- * opens on click. The hints are taken off the bubble by structure (the history
- * projection), so this row is the one place the normal view says they were there;
- * the raw view (SessionRawView) shows the whole input as the model received it.
+ * The message hints a user row carried (src/core/hints/), as one line under the
+ * person's words that says in plain words what Walnut added and why: "Walnut
+ * added a request to write to you in Chinese (your Reply language setting)."
+ * (2026-10-31, the user saw `Walnut (reply-language): ...` and asked what it was
+ * and where it came from.) One click opens the exact text the AI received and a
+ * link to the setting. The hints are taken off the bubble by structure (the
+ * history projection); the raw view (SessionRawView) shows the whole input.
  */
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { CarriedHint } from '@open-walnut/hint-format';
-import { hintLabel } from '@open-walnut/walnut-added';
+import { hintLabel, hintSummary } from '@open-walnut/walnut-added';
 import '@/styles/injected-banner.css';
 
-export { hintLabel };
+export { hintLabel, hintSummary };
+
+/** "Walnut added a request to ..." for every hint, one sentence. */
+export function hintsSentence(hints: readonly CarriedHint[]): string {
+  return `Walnut added ${hints.map(hintSummary).join('; ')}.`;
+}
+
+const capitalized = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** Kinds Walnut adds outside the hint registry, so Settings has no switch for them. */
 const NOT_IN_REGISTRY = new Set(['session-context', 'engine-switch']);
@@ -31,17 +40,19 @@ export function MessageHintsRow({ hints }: { hints: readonly CarriedHint[] }) {
         className="tool-run-toggle"
         onClick={(e) => { e.stopPropagation(); setOpen((p) => !p); }}
         aria-expanded={open}
-        title="Text Walnut sent to the model with this message"
+        title={open ? 'Hide the exact text' : 'Show the exact text the AI received'}
       >
-        <span className="tool-run-label">Walnut hints: {hints.map(hintLabel).join(' · ')}</span>
+        <span className="tool-run-label message-hints-sentence">{hintsSentence(hints)}</span>
         <span className={`tool-run-chevron${open ? ' tool-run-chevron--open' : ''}`}>{'›'}</span>
       </button>
       {open && (
         <div className="tool-run-body" data-testid="message-hints-body">
           <div className="chat-tool-block-result">
             {hints.map((h, i) => (
-              <p key={`${h.kind}-${i}`} className="message-hint-item" data-hint-kind={h.kind}>
-                <strong>{hintLabel(h)}:</strong> {h.text}
+              <div key={`${h.kind}-${i}`} className="message-hint-item" data-hint-kind={h.kind}>
+                <p className="message-hint-summary"><strong>{capitalized(hintSummary(h))}.</strong></p>
+                <p className="message-hint-exact-label">Exact text the AI received:</p>
+                <pre className="message-hint-exact" data-testid="message-hint-exact">{h.text}</pre>
                 {!NOT_IN_REGISTRY.has(h.kind) && (
                   <>
                     {' '}
@@ -51,11 +62,11 @@ export function MessageHintsRow({ hints }: { hints: readonly CarriedHint[] }) {
                       onClick={(e) => e.stopPropagation()}
                       data-testid="message-hint-settings-link"
                     >
-                      Turn off in Settings
+                      Change in Settings
                     </Link>
                   </>
                 )}
-              </p>
+              </div>
             ))}
           </div>
         </div>

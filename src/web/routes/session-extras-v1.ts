@@ -475,7 +475,8 @@ async function companionHeldRows(sessionId: string): Promise<Array<Record<string
   const rows = (await listBankedSends()).filter((op) => op.sessionId === sessionId)
   if (rows.length === 0) return []
   const why = await heldFor(sessionId)
-  return rows.map((op) => ({
+  const { displayQueueRow } = await import('../../core/sessions/reference-cards.js')
+  return rows.map((op) => displayQueueRow({
     id: op.messageId, sessionId, message: op.message, status: 'held', enqueuedAt: op.at, held: true,
     ...(why ? { waitingForName: why.waitingForName, heldNote: why.heldNote } : {}),
   }))

@@ -5,9 +5,9 @@ import { wsClient } from '@/api/ws';
 /**
  * `ui.show_walnut_additions`: whether the session chat always shows what Walnut
  * added to a message (its notes in front of the words, its message hints, the
- * context it prepended). Default OFF: each message's footer then has a "Walnut
- * added" control that shows them for that one message (2026-10-29, the user:
- * hidden by default behind a "more", always visible for me).
+ * context it prepended). Default ON (2026-10-31, the user: "the user can see these
+ * is better"); turned off, each message's footer has a "Walnut added" control that
+ * shows them for that one message.
  *
  * One app-wide value read by every chat row: one cached value, one config fetch
  * and one `config:changed` subscription for the whole page (the useShowPriority
@@ -23,16 +23,25 @@ const listeners = new Set<(v: boolean) => void>();
 // Our own write echoes back as config:changed ~2s later; ignore that window.
 const SELF_CHANGE_COOLDOWN = 3000;
 
+// The last value this browser read, so a person who turned it off never sees
+// every chat's additions flash on while the config loads.
+const LAST_KEY = 'walnut:show-walnut-additions';
+
+function lastRead(): boolean {
+  try { return localStorage.getItem(LAST_KEY) !== '0'; } catch { return true; }
+}
+
 function publish(v: boolean) {
   cached = v;
+  try { localStorage.setItem(LAST_KEY, v ? '1' : '0'); } catch { /* private mode */ }
   for (const l of listeners) l(v);
 }
 
 function load(): Promise<void> {
   if (inflight) return inflight;
   inflight = fetchConfig()
-    .then((c) => publish(c.ui?.show_walnut_additions === true))
-    .catch(() => { /* keep whatever we have; default stays hidden */ })
+    .then((c) => publish(c.ui?.show_walnut_additions !== false))
+    .catch(() => { /* keep whatever we have; default stays shown */ })
     .finally(() => { inflight = null; });
   return inflight;
 }
@@ -48,9 +57,9 @@ function bindConfigChanges() {
   });
 }
 
-/** Whether the chat always shows what Walnut added. Starts from the cached value (or hidden). */
+/** Whether the chat always shows what Walnut added. Starts from the cached value (or the last one read here, or shown). */
 export function useShowWalnutAdditions(): boolean {
-  const [value, setValue] = useState<boolean>(cached ?? false);
+  const [value, setValue] = useState<boolean>(() => cached ?? lastRead());
   useEffect(() => {
     listeners.add(setValue);
     bindConfigChanges();

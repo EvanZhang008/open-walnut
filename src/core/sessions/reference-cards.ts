@@ -422,3 +422,19 @@ export function projectUserText(text: string, at?: number | string | null): { te
 export function toDisplayedUserText(text: string, at?: number | string | null): string {
   return projectUserText(text, at).text;
 }
+
+/**
+ * A queue row as a person reads it: `message` is the words without Walnut's hint
+ * blocks and reference cards (what history will show), `rawMessage` the text the
+ * model receives, `hints` what rode along. The v1 queue reads (the phone, the
+ * companion's held rows, the Mac relay) go through here (2026-10-31: the phone's
+ * queue list showed `<system-reminder> Walnut (reply-language): ...` as the
+ * message). The web's WS `session:get-queue` keeps the composed text, which its
+ * queue rows strip themselves (queuedRowText) and its edits rewrite.
+ */
+export function displayQueueRow<T extends { message: string }>(row: T): T & { rawMessage?: string; hints?: CarriedHint[] } {
+  if (typeof row.message !== 'string') return row;
+  const { text, hints } = projectUserText(row.message);
+  if (text === row.message && !hints.length) return row;
+  return { ...row, message: text, rawMessage: row.message, ...(hints.length ? { hints } : {}) };
+}

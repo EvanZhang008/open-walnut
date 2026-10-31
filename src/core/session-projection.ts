@@ -519,7 +519,9 @@ export interface ProjectedTranscriptMessage {
   /** User text rows only (additive, 2026-10-29): what Walnut added to the row besides
    *  its notes in front (which a client splits from `text` itself): the message hints
    *  taken off the text, and the context blocks Walnut put first. A client shows them
-   *  folded, or only on request (`ui.show_walnut_additions`). Absent when none. */
+   *  on every message (`ui.show_walnut_additions`, default on) or on request. A hint's
+   *  `label` is a plain phrase of what it asked and why ("a request to write to you in
+   *  Chinese (your Reply language setting)"), read after "Walnut added". Absent when none. */
   added?: WalnutAddedItem[]
   /** With `added` context blocks: `text` without them (its notes in front kept), the
    *  person's words to draw. `text` stays whole for an older client. */

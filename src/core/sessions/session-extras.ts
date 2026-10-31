@@ -540,7 +540,8 @@ export async function getSessionQueuePayload(sessionId: string): Promise<{ messa
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   if (!(await getSessionByClaudeId(sessionId))) throw new SessionControlError('session not found', 404);
   const { getQueue } = await import('../session-message-queue.js');
-  return { messages: await getQueue(sessionId) };
+  const { displayQueueRow } = await import('./reference-cards.js');
+  return { messages: (await getQueue(sessionId)).map(displayQueueRow) };
 }
 
 /** Edit a still-pending queued message's text. */

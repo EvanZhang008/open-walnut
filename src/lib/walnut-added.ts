@@ -6,7 +6,7 @@
  * quote: history-injected-banner.ts). Pure; the web chat and the phone
  * transcript read the same labels.
  */
-import type { CarriedHint } from '../core/hints/hint-format.js';
+import { parseHinted, replaceHintBlocks, type CarriedHint } from '../core/hints/hint-format.js';
 import { splitLeadingBanners } from './history-injected-banner.js';
 import { isEnvelopeOnly, parseSessionEnvelopes } from './history-session-envelope.js';
 import { splitLeadingRiders } from './history-walnut-riders.js';
@@ -24,6 +24,64 @@ const HINT_LABELS: Record<string, string> = {
 export function hintLabel(h: Pick<CarriedHint, 'kind' | 'arg'>): string {
   const base = HINT_LABELS[h.kind] ?? h.kind;
   return h.arg ? `${base} ${h.kind === 'question' ? `Q${h.arg}` : h.arg}` : base;
+}
+
+/** Language names a Reply language rule may name, longest first so "Simplified Chinese" beats "Chinese". */
+const LANGUAGE_NAMES = [
+  'Simplified Chinese', 'Traditional Chinese', 'Brazilian Portuguese', 'European Portuguese',
+  'Arabic', 'Bengali', 'Cantonese', 'Chinese', 'Czech', 'Danish', 'Dutch', 'English', 'Filipino',
+  'Finnish', 'French', 'German', 'Greek', 'Hebrew', 'Hindi', 'Hungarian', 'Indonesian', 'Italian',
+  'Japanese', 'Korean', 'Malay', 'Mandarin', 'Norwegian', 'Persian', 'Polish', 'Portuguese',
+  'Romanian', 'Russian', 'Spanish', 'Swahili', 'Swedish', 'Tagalog', 'Tamil', 'Thai', 'Turkish',
+  'Ukrainian', 'Urdu', 'Vietnamese',
+];
+const LANGUAGE_RE = new RegExp(`\\b(?:in|into)\\s+(${LANGUAGE_NAMES.join('|')})\\b`, 'gi');
+
+/**
+ * The one language a Reply language rule asks for ("Talk to the user in Chinese;
+ * code stays English" = Chinese). Null when it names none, or more than one after
+ * "in" ("code in English, talk to me in Chinese"): the reader then gets the plain
+ * reminder, never a wrong language.
+ */
+function replyLanguageName(rule: string): string | null {
+  const found = new Set<string>();
+  for (const m of rule.matchAll(LANGUAGE_RE)) found.add(LANGUAGE_NAMES.find((n) => n.toLowerCase() === m[1].toLowerCase())!);
+  return found.size === 1 ? [...found][0] : null;
+}
+
+/**
+ * What one hint asked of the AI and where that comes from, in plain words a person
+ * reads after "Walnut added": "a request to write to you in Chinese (your Reply
+ * language setting)". Never a codename (2026-10-31, the user saw `reply-language`
+ * and asked what it was and where it came from). The phone shows it as the item's
+ * `label`, so an app that predates it reads the sentence too.
+ */
+export function hintSummary(h: Pick<CarriedHint, 'kind' | 'arg' | 'text'>): string {
+  const text = h.text.trim();
+  switch (h.kind) {
+    case 'reply-language': {
+      const lang = replyLanguageName(text);
+      return lang
+        ? `a request to write to you in ${lang} (your Reply language setting)`
+        : 'a reminder of your Reply language setting';
+    }
+    case 'rich-output':
+      if (/^rich output mode is off/i.test(text)) return 'a note that rich output is off again (your Output mode setting)';
+      if (/^rich output mode is still on/i.test(text)) return 'a reminder that rich output is on (your Output mode setting)';
+      return 'a note that rich output is on, so answers may use tables, diagrams and layout (your Output mode setting)';
+    case 'question':
+      return h.arg
+        ? `a request to start the answer with [Q${h.arg}], so it is filed under question ${h.arg}`
+        : 'a request to tag the answer with its question number';
+    case 'voice-reply':
+      return 'a request for a short spoken answer first, because you sent this by voice';
+    case 'session-context':
+      return "Walnut's session instructions, because this engine has no system prompt of its own";
+    case 'engine-switch':
+      return 'the conversation so far, because this task switched engines';
+    default:
+      return `your hint "${h.kind}" (Settings, Sessions, Message hints)`;
+  }
 }
 
 /**
@@ -67,7 +125,8 @@ export function walnutAddedOf(text: string, hints?: readonly CarriedHint[]): Wal
     }
     textWithoutContext = text.slice(0, text.length - own.length) + banners.body;
   }
-  for (const h of hints ?? []) items.push({ kind: 'hint', name: h.kind, label: hintLabel(h), text: h.text });
+  // A hint's label is its plain summary: the phone reads it after "Walnut added:".
+  for (const h of hints ?? []) items.push({ kind: 'hint', name: h.kind, label: hintSummary(h), text: h.text });
   return { items, ...(textWithoutContext !== undefined ? { textWithoutContext } : {}) };
 }
 
@@ -80,7 +139,14 @@ export function hookContextText(content: unknown, hookEvent: unknown): string | 
     .filter((c): c is string => typeof c === 'string' && c.trim() !== '');
   if (!parts.length) return null;
   const event = typeof hookEvent === 'string' && /^[A-Za-z]+$/.test(hookEvent) ? hookEvent : 'a';
-  return `${HOOK_CONTEXT_PREFIX} (${event} hook):\n\n${parts.join('\n\n')}`;
+  // The post-compaction hook restates the hints as Walnut blocks: each reads as a
+  // plain line here, with its exact text, never as the block (2026-10-31).
+  return `${HOOK_CONTEXT_PREFIX} (${event} hook):\n\n${replaceHintBlocks(parts.join('\n\n'), hintPlainLine)}`;
+}
+
+/** One hint as a line of plain text: what Walnut added and why, then its exact words. */
+export function hintPlainLine(h: Pick<CarriedHint, 'kind' | 'arg' | 'text'>): string {
+  return `Walnut added ${hintSummary(h)}. Exact text: "${h.text}"`;
 }
 
 /** How a CLI-injected line is named in its one closed row ("Loaded skill walnut"). */
@@ -116,9 +182,12 @@ export interface CliAddedItem {
  * interrupt marker, which the chat never shows.
  */
 export function cliAddedOf(text: string): CliAddedItem | 'message' | null {
-  const t = text.trim();
-  if (!t || /^\[Request interrupted by user( for tool use)?\]$/.test(t)) return null;
-  if (isEnvelopeOnly(parseSessionEnvelopes(t))) return 'message';
+  const raw = text.trim();
+  if (!raw || /^\[Request interrupted by user( for tool use)?\]$/.test(raw)) return null;
+  // A Walnut message the CLI delivered carries its hint blocks: without them it is the message.
+  if (isEnvelopeOnly(parseSessionEnvelopes(parseHinted(raw).text))) return 'message';
+  // Anything else reads its blocks as plain lines (2026-10-31), never the blocks.
+  const t = replaceHintBlocks(raw, hintPlainLine);
   const kind = /^Base directory for this skill:/.test(t) ? 'skill'
     : t.startsWith(`${HOOK_CONTEXT_PREFIX} (`) ? 'hook' : 'context';
   // A hook's text opens with the line its label already says ("Hook context (Stop hook):").

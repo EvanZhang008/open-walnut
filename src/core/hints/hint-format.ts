@@ -203,3 +203,26 @@ export function hasHintBlock(raw: string): boolean {
   BLOCK_RE.lastIndex = 0;
   return BLOCK_RE.test(raw);
 }
+
+/**
+ * Text a person reads that may still hold Walnut's blocks inside it (a hook's added
+ * context restates the hints after a compaction, a CLI-injected Walnut message
+ * carries them): each block becomes what `line` says for its hint, in place. The
+ * words around the blocks are left exactly as they are: this text was never
+ * composed (a hook's context holds memory and notes verbatim), or a later read
+ * undoes the escape once (projectUserText), so unescaping here would change words
+ * nobody escaped. A hint's own text is unescaped, as parseHinted does.
+ */
+export function replaceHintBlocks(raw: string, line: (hint: CarriedHint) => string): string {
+  if (!raw.includes('system-reminder')) return raw;
+  let out = '';
+  let last = 0;
+  BLOCK_RE.lastIndex = 0;
+  for (let m = BLOCK_RE.exec(raw); m; m = BLOCK_RE.exec(raw)) {
+    const [, kind, arg, body] = m;
+    out += raw.slice(last, m.index);
+    out += line({ kind, ...(arg !== undefined ? { arg } : {}), text: unescapeHintTags(body.replace(/\n\s*\n/g, '\n').trim()) });
+    last = m.index + m[0].length;
+  }
+  return out + raw.slice(last);
+}

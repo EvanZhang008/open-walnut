@@ -289,8 +289,10 @@ async function firstUserMessage(
 async function firstQueuedMessage(sessionId: string): Promise<string> {
   try {
     const { getQueue } = await import('./session-message-queue.js');
+    const { toDisplayedUserText } = await import('./sessions/reference-cards.js');
     const rows = (await getQueue(sessionId)).filter((m) => m.status !== 'parked');
-    return pickTitleSource(rows.map((m) => (m.message ?? '').trim()).filter(Boolean));
+    // The words, never the hint blocks the model receives with them.
+    return pickTitleSource(rows.map((m) => toDisplayedUserText(m.message ?? '').trim()).filter(Boolean));
   } catch {
     return '';
   }

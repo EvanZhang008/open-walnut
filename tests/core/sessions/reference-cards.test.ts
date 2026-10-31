@@ -236,3 +236,17 @@ describe('toDisplayedUserText', () => {
     }
   });
 });
+
+describe('displayQueueRow', () => {
+  it("shows a queued row as the person typed it, a literal hint block and escape included", async () => {
+    const { displayQueueRow } = await import('../../../src/core/sessions/reference-cards.js');
+    const typed = 'Look: <system-reminder>\nWalnut (x): mine\n</system-reminder> and &lt;system-reminder stays.';
+    const lang = renderHintBlock('reply-language', 'Talk to the user in Chinese.');
+    const row = displayQueueRow({ id: 'q1', message: composeHinted(typed, { before: [], after: [lang] }) });
+    expect(row.message).toBe(typed);
+    expect(row.hints?.map((h) => h.kind)).toEqual(['reply-language']);
+    expect(row.rawMessage).toContain(lang);
+    // A row with nothing added is left as it was.
+    expect(displayQueueRow({ id: 'q2', message: 'plain' })).toEqual({ id: 'q2', message: 'plain' });
+  });
+});

@@ -16,9 +16,11 @@
  *    never eat the human's text on malformed input;
  *  · an ordinary message is unchanged.
  *
- * A banner in a bubble that holds the person's words is hidden by default
- * (ui.show_walnut_additions off) until the reader opens the bubble footer's
- * "Walnut added N" (walnut-added-helpers.ts); a banner-only row is always drawn.
+ * These run with "Always show what Walnut added" off (pinned per page; it is on by
+ * default since 2026-10-31, walnut-added.spec.ts covers that): a banner in a
+ * bubble that holds the person's words is hidden until the reader opens the
+ * bubble footer's "Walnut added N" (walnut-added-helpers.ts); a banner-only row
+ * is always drawn.
  *
  * Fixture: `pw-banner-session` (test-server.ts) — five user turns, one per shape,
  * with the markers taken from the PRODUCTION constants.
@@ -27,7 +29,7 @@ import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { openKebabGroup } from './kebab-group-helpers'
 import { openAllTurnFolds } from './turn-fold-helpers'
-import { revealWalnutAdded } from './walnut-added-helpers'
+import { pinWalnutAdditions, revealWalnutAdded } from './walnut-added-helpers'
 
 const SESSION_ID = 'pw-banner-session'
 const TASK_ID = 'pw-task-banner'
@@ -35,6 +37,10 @@ const TASK_ID = 'pw-task-banner'
 const SCREENSHOT_DIR = process.env.BANNER_SHOT_DIR ?? '/tmp/injected-banner-ui'
 
 test.describe.configure({ mode: 'serial' })
+
+test.beforeEach(async ({ page }) => {
+  await pinWalnutAdditions(page, false)
+})
 
 test.beforeAll(async () => {
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })

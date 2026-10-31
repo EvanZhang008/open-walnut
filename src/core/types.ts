@@ -1668,8 +1668,9 @@ export interface Config {
      *  this only decides whether the UI draws it. */
     show_priority?: boolean;
     /** Show what Walnut added to a message (its notes in front, its hints, the context
-     *  it prepended) in the chat at all times. Default: false, where each message's
-     *  footer has a "Walnut added" control that shows them for that message. */
+     *  it prepended) in the chat at all times. Default: true (2026-10-31, the user: what
+     *  Walnut adds should be visible); false hides them behind each message's footer
+     *  "Walnut added" control, which shows them for that message. */
     show_walnut_additions?: boolean;
   };
   /** How a task's tags show (core/tag-display-rules.ts): a tag (`label:urgent`) or a key

@@ -214,13 +214,13 @@ export function MessageHintsGroup() {
       heading="Message hints"
       id="message-hints"
       data-testid="message-hints"
-      footer="Short Walnut text sent with a message to the model, kept out of the bubble. Agents can change these too (hint_set)."
+      footer="Short Walnut text sent with a message to the AI. Under each message, a line says in plain words what Walnut added and why; a click shows the exact text. Agents can change these too (hint_set)."
     >
       <SettingsRow
         anchor="settings-show-walnut-additions"
         label="Always show what Walnut added to a message"
         htmlFor="show-walnut-additions"
-        help="Its hints, its notes in front of a message, the context it put first. Off: each message's Walnut added button shows them."
+        help="Its hints, its notes in front of a message, the context it put first, each said in plain words. On by default. Off: each message's Walnut added button shows them."
         control={(
           <ToggleSwitch
             id="show-walnut-additions"

@@ -82,7 +82,8 @@ async function buildConfigProjection(res?: Response): Promise<Record<string, unk
       ...(config.session?.enabled_modes ? { enabled_modes: config.session.enabled_modes } : {}),
     },
     // Whether the chat always shows what Walnut added to a message (additive, 2026-10-29).
-    ui: { show_walnut_additions: config.ui?.show_walnut_additions === true },
+    // On unless the person turned it off (2026-10-31, the user: they should be visible).
+    ui: { show_walnut_additions: config.ui?.show_walnut_additions !== false },
   }
   return projection
 }

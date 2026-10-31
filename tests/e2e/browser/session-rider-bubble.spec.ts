@@ -23,13 +23,14 @@
  *  · copy yields the words only;
  *  · the live send: the optimistic bubble turns into ONE history bubble, before
  *    and after a reload.
- * The notices above a person's words are hidden by default (ui.show_walnut_additions
- * off): each test that checks them opens them the reader's way, with the bubble
- * footer's "Walnut added N" button (walnut-added-helpers.ts).
+ * These run with "Always show what Walnut added" off (pinned per page; it is on by
+ * default since 2026-10-31, walnut-added.spec.ts covers that): each test that
+ * checks the notices above a person's words opens them the reader's way, with
+ * the bubble footer's "Walnut added N" button (walnut-added-helpers.ts).
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { REAL_PANEL } from './draft-helpers'
-import { revealWalnutAdded } from './walnut-added-helpers'
+import { pinWalnutAdditions, revealWalnutAdded } from './walnut-added-helpers'
 
 const SESSION_ID = 'pw-rider-session'
 const TASK_ID = 'pw-task-rider'
@@ -38,6 +39,7 @@ const SHOTS = process.env.RIDER_SHOT_DIR ?? '/tmp/rider-bubble'
 test.describe.configure({ mode: 'serial' })
 
 test.beforeEach(async ({ page }) => {
+  await pinWalnutAdditions(page, false)
   // Capture what "Copy message" writes, in both engines, without a clipboard grant.
   await page.addInitScript(() => {
     const w = window as unknown as { __copied: string[] }
@@ -188,12 +190,12 @@ test('the words after a status change of a followed task are a user bubble; the 
   expect(shown).toContain('RIDER_TYPED_STATUS yes, go for it.')
   expect(shown).not.toContain('RIDER_STATUS_MARKER')
   expect(shown).not.toContain('changed its status')
-  // Hidden by default: neither the note nor the hint is drawn, the words are.
+  // Hidden with the setting off: neither the note nor the hint is drawn, the words are.
   await expect(riderAbove(b)).toHaveCount(0)
   await expect(b.getByTestId('message-hints')).toHaveCount(0)
   await showAdded(page, panel, b)
-  // The message hint stays the bubble's own row, as on any message.
-  await expect(b.getByText(/Walnut hints: Rich output/)).toHaveCount(1)
+  // The message hint stays the bubble's own row, as on any message, in plain words.
+  await expect(b.getByTestId('message-hints')).toContainText('Walnut added a reminder that rich output is on (your Output mode setting).')
   // No card row holds the words.
   await expect(panel.locator('.session-history .session-msg-envelope', { hasText: 'RIDER_TYPED_STATUS' })).toHaveCount(0)
   const rider = riderAbove(b)
