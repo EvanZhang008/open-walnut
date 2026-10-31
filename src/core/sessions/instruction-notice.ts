@@ -29,7 +29,7 @@
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import { isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
 import { WALNUT_PROMPT_MARK, defaultInstructions, type InstructionTask } from './session-context.js';
-import { refreshUserProfile } from './user-profile-context.js';
+import { currentUserProfile, refreshUserProfile } from './user-profile-context.js';
 import { dueChanges, hash, parseInstructions, renderDue, viewsAfter, type BlockView, type Due, type Parsed } from './instruction-diff.js';
 import {
   NOTICE_OPENING, bumpNoticeTold, clearNoticeDelivering, leadsWithNotice, noticeDelivering, noticeInFlight,
@@ -94,7 +94,9 @@ function dueFor(record: NoticeRecord, task: InstructionTask, ignoreTold?: boolea
   const current = parseInstructions(defaultInstructions(task));
   const parsedPrompt = parseInstructions(prompt);
   const { told, views } = heldBeyondPrompt(record, current, parsedPrompt, ignoreTold);
-  const due = dueChanges(current, parsedPrompt, told, views);
+  // Lines of USER.md past its budget are still the user's rules: never told as removed.
+  const cut = currentUserProfile().cut;
+  const due = dueChanges(current, parsedPrompt, told, views, cut?.length ? { 'user-profile': new Set(cut) } : {});
   return due ? { due, views } : null;
 }
 

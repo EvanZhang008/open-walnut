@@ -289,7 +289,7 @@ export async function writeMemoryDoc(
   target: 'memory' | 'user',
   content: string,
   expectedHash?: unknown,
-): Promise<{ ok: true; updatedAt: string; contentHash: string }> {
+): Promise<{ ok: true; updatedAt: string; contentHash: string; warning?: string }> {
   const file = target === 'memory' ? MEMORY_FILE : USER_FILE
   await fsp.mkdir(path.dirname(file), { recursive: true })
   const previous = await fsp.readFile(file, 'utf-8').catch(() => '')
@@ -300,7 +300,24 @@ export async function writeMemoryDoc(
   log.memory.info(`${target === 'memory' ? 'Global MEMORY.md' : 'USER.md'} updated via editor`, { size: content.length })
   const relPath = target === 'memory' ? 'MEMORY.md' : 'USER.md'
   emitMemoryUpdated(relPath, content)
-  return { ok: true, updatedAt: stat.mtime.toISOString(), contentHash: computeContentHash(content) }
+  return { ok: true, updatedAt: stat.mtime.toISOString(), contentHash: computeContentHash(content), ...(await overBudget(target, content)) }
+}
+
+/**
+ * USER.md past its budget: saved, but every session reads only its head, so the writer hears it
+ * and can trim (2026-10-30: a save past the budget left two rules out of every session's prompt).
+ */
+async function overBudget(target: 'memory' | 'user', content: string): Promise<{ warning?: string }> {
+  if (target !== 'user') return {}
+  const { userProfileFit } = await import('../../core/sessions/user-profile-context.js')
+  const { USER_CHAR_BUDGET } = await import('../../core/bounded-memory.js')
+  const fit = userProfileFit(content)
+  if (!fit.cut.length) return {}
+  return {
+    warning: `Saved, but USER.md is ${fit.size} characters and sessions read only the first ${USER_CHAR_BUDGET}: `
+      + `${fit.cut.length} line(s) from "${fit.cut[0].slice(0, 80)}" on are left out of every session's prompt `
+      + `(they are not lost, and memory_read still has them). Trim it under ${USER_CHAR_BUDGET} characters.`,
+  }
 }
 
 memoryRouter.get('/global', async (_req: Request, res: Response, next: NextFunction) => {

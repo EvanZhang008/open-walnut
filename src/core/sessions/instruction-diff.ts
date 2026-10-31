@@ -39,6 +39,8 @@ const formOf = (head: string) => hash(head.replace(/v[0-9a-f]{8}/g, 'v').replace
 
 /** The "Added by X:" line of a Main's or lead's instructions: whose words the lines after it are. */
 const opensAuthor = (word: string) => /^Added by .+:$/.test(word);
+/** The line a block ends with when not all of it fit ("(USER.md runs past 4000 characters here; ...)"): not a rule. */
+const TRUNCATED_RE = /^\(.+ runs past \d+ characters here;.+\)$/;
 /** A sub-heading inside a block (inside an author's part, when it has one). */
 const opensSection = (word: string) => word.startsWith('#');
 
@@ -123,7 +125,11 @@ export interface Due { plain: Changed[]; blocks: BlockChange[]; gone: BlockGone[
  * one the session holds (`views`, by block id; a block missing there is read from
  * the prompt). Null when nothing is due.
  */
-export function dueChanges(current: Parsed, prompt: Parsed, toldPlain: Set<string>, views: Record<string, BlockView>): Due | null {
+export function dueChanges(
+  current: Parsed, prompt: Parsed, toldPlain: Set<string>, views: Record<string, BlockView>,
+  // By block id: lines its source still holds that did not fit in the block (user-profile-context.ts `cut`).
+  beyond: Record<string, Set<string>> = {},
+): Due | null {
   const plain = current.plain.filter((c) => !prompt.all.has(c.line) && !toldPlain.has(hash(c.line)));
   const held = (id: string): BlockView | undefined => {
     if (views[id]) return views[id];
@@ -140,9 +146,17 @@ export function dueChanges(current: Parsed, prompt: Parsed, toldPlain: Set<strin
       blocks.push({ block, whole: true, added: block.words.map((word) => ({ word })), removed: [] });
       continue;
     }
-    const { added, removed } = wordChanges(view.words, block.words);
+    const changes = wordChanges(view.words, block.words);
+    // The truncation note is not a rule, and a line the budget cut is still in force.
+    const added = changes.added.filter((l) => !TRUNCATED_RE.test(l.word));
+    const removed = changes.removed.filter((l) => !TRUNCATED_RE.test(l.word) && !beyond[block.id]?.has(l.word));
     // A save that kept every word (a new time stamp alone) changes nothing the session reads.
-    if (added.length || removed.length) blocks.push({ block, whole: false, from: view.version, added, removed });
+    if (!added.length && !removed.length) continue;
+    const delta: BlockChange = { block, whole: false, from: view.version, added, removed };
+    const whole: BlockChange = { block, whole: true, added: block.words.map((word) => ({ word })), removed: [] };
+    // A save that rewrote most lines lists each new line and each old one: then the block whole
+    // is shorter, and says the same (2026-10-31: a 6.1 KB change for a 4.5 KB block).
+    blocks.push(blockText(delta).length < blockText(whole).length ? delta : whole);
   }
   const gone: BlockGone[] = [];
   const ids = new Set([...prompt.blocks.keys(), ...Object.keys(views)]);
@@ -216,9 +230,35 @@ function deltaHead(c: BlockChange): string {
   const head = c.block.head.replace(HEAD_RE, '').trim()
     .replace(/They replace every earlier version and/, 'They replace')
     .replace(/\s*They replace every earlier version\.?/, '');
+  const cut = c.block.words.find((w) => TRUNCATED_RE.test(w));
   return `${head} Only what changed since the version you were given last (${c.from}) is below, each line `
     + `starting with [${c.block.version}]. Every line you hold for this part, whatever version it is tagged with, `
-    + `stays in force${c.removed.length ? ' unless it is listed as removed' : ''}.`;
+    + `stays in force${c.removed.length ? ' unless it is listed as removed' : ''}.`
+    + (cut ? ` Not every line of it fits here: ${cut.slice(1, -1)}.` : '');
+}
+
+/** One block as told: whole (its head and every line), or its head as changes, the new lines and the removed ones. */
+function blockText(c: BlockChange): string {
+  if (c.whole) return `${c.block.head}\n${c.block.tagged.join('\n')}\n`;
+  const tag = `[${c.block.version}] `;
+  const out = [deltaHead(c)];
+  if (c.added.length) {
+    // Each new line under the parts it belongs to, so its scope and, for a lead, whose words it is stay.
+    const lines: string[] = [];
+    let author: string | undefined;
+    let section: string | undefined;
+    for (const l of c.added) {
+      if (l.author && l.author !== author) { lines.push(tag + l.author); section = undefined; }
+      if (l.section && l.section !== section) lines.push(tag + l.section);
+      author = opensAuthor(l.word) ? l.word : l.author;
+      section = opensAuthor(l.word) ? undefined : opensSection(l.word) ? l.word : l.section;
+      lines.push(tag + l.word);
+    }
+    out.push(`New or reworded:\n${lines.join('\n')}`);
+  }
+  if (c.removed.length) out.push(`Removed, no longer in force:\n${c.removed.map(item(c.block.words)).join('\n')}`);
+  out.push('');
+  return out.join('\n');
 }
 
 /** The notice body below its opening sentence: lines in prompt order, each under its heading. */
@@ -235,28 +275,7 @@ export function renderDue(due: Due): string {
   }
   for (const c of due.blocks) {
     under(c.block.heading);
-    if (c.whole) {
-      out.push(`${c.block.head}\n${c.block.tagged.join('\n')}\n`);
-      continue;
-    }
-    const tag = `[${c.block.version}] `;
-    out.push(deltaHead(c));
-    if (c.added.length) {
-      // Each new line under the parts it belongs to, so its scope and, for a lead, whose words it is stay.
-      const lines: string[] = [];
-      let author: string | undefined;
-      let section: string | undefined;
-      for (const l of c.added) {
-        if (l.author && l.author !== author) { lines.push(tag + l.author); section = undefined; }
-        if (l.section && l.section !== section) lines.push(tag + l.section);
-        author = opensAuthor(l.word) ? l.word : l.author;
-        section = opensAuthor(l.word) ? undefined : opensSection(l.word) ? l.word : l.section;
-        lines.push(tag + l.word);
-      }
-      out.push(`New or reworded:\n${lines.join('\n')}`);
-    }
-    if (c.removed.length) out.push(`Removed, no longer in force:\n${c.removed.map(item(c.block.words)).join('\n')}`);
-    out.push('');
+    out.push(blockText(c));
   }
   for (const g of due.gone) {
     under(g.heading);

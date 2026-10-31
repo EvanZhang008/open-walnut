@@ -26,6 +26,8 @@ const PREAMBLE = '---\nname: User Profile\ndescription: >\n  Who the user is.\n-
 const doc = (...parts: string[]) => `${PREAMBLE}\n${parts.join('\n\n')}\n`
 const IDENTITY = '## Identity\n\nAvery, a software engineer.'
 const RULES = '## Standing rules\n\n- Private repo keys are not a leak.\n- Reply in short sentences.'
+/** A section every version keeps, so a small change is told as a change (a block whole is sent when it is shorter). */
+const KEPT = `## Habits\n\n${Array.from({ length: 12 }, (_, i) => `- Habit ${i + 1}, the same in every version of the file.`).join('\n')}`
 
 async function writeUser(text: string) {
   await fs.mkdir(path.dirname(USER_FILE), { recursive: true })
@@ -145,7 +147,7 @@ describe('every task session', () => {
   })
 
   it('hears an edit while it runs: only the changed lines, and what was removed', async () => {
-    await writeUser(doc(IDENTITY))
+    await writeUser(doc(IDENTITY, KEPT))
     const { task } = await addTask({ title: 'Worker', project: 'marina' })
     const sid = randomUUID()
     await createSessionRecord(sid, task.id, task.project, WALNUT_HOME)
@@ -153,7 +155,7 @@ describe('every task session', () => {
     // Spawned on the current file: nothing to tell.
     expect(await instructionNoticeForSession(sid)).toBeNull()
 
-    await writeUser(doc(IDENTITY, RULES))
+    await writeUser(doc(IDENTITY, RULES, KEPT))
     const added = (await instructionNoticeForSession(sid))!.text
     expect(added).toContain('Walnut changed your default instructions')
     expect(added).toMatch(/\[v[0-9a-f]{8}\] - Private repo keys are not a leak\./)
@@ -164,7 +166,7 @@ describe('every task session', () => {
     // The session takes that line: told.
     expect(await deliver(sid, 'Next step')).toContain('Private repo keys are not a leak.')
 
-    await writeUser(doc(RULES))
+    await writeUser(doc(RULES, KEPT))
     const removed = (await instructionNoticeForSession(sid))!.text
     expect(removed).toMatch(/Removed, no longer in force:\n- ## Identity\n- Avery, a software engineer\./)
     expect(removed).not.toContain('Reply in short sentences')
@@ -187,7 +189,7 @@ describe('every task session', () => {
   })
 
   it('hears an undo and an emptied file too, each told once', async () => {
-    await writeUser(doc(IDENTITY))
+    await writeUser(doc(IDENTITY, KEPT))
     const { task } = await addTask({ title: 'Lead', project: 'marina', org_role: 'lead' })
     const sid = randomUUID()
     await createSessionRecord(sid, task.id, task.project, WALNUT_HOME)
@@ -197,12 +199,12 @@ describe('every task session', () => {
       const m = await deliver(sid, 'Next step')
       return m.startsWith('<walnut-message') ? m : null
     }
-    await writeUser(doc(IDENTITY, RULES))
+    await writeUser(doc(IDENTITY, RULES, KEPT))
     expect(await tell()).toContain('Private repo keys are not a leak.')
     expect(await tell()).toBeNull()
     // Back to the spawn-time words: the added rules are named as removed, the kept one is not repeated.
     await new Promise((r) => setTimeout(r, 15))
-    await writeUser(doc(IDENTITY))
+    await writeUser(doc(IDENTITY, KEPT))
     const undo = (await tell())!
     expect(undo).toMatch(/Removed, no longer in force:\n- ## Standing rules\n- Private repo keys are not a leak\./)
     expect(undo).not.toContain('Avery')

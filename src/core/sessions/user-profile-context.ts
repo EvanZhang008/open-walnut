@@ -31,8 +31,13 @@ import { USER_FILE } from '../../constants.js'
 import { parseMemoryContent, preambleProse, USER_CHAR_BUDGET } from '../bounded-memory.js'
 import { screenEntriesForPrompt } from '../memory-safety.js'
 
-/** What a session reads of USER.md: its words, when they were saved, and whether the file exists at all. */
-export interface UserProfile { text: string; savedAt: string; exists: boolean }
+/**
+ * What a session reads of USER.md: its words, when they were saved, and whether the file exists
+ * at all. `cut`: the lines past the character budget, still in the file but not in the prompt;
+ * a line the budget cuts is never told as removed (2026-10-30: a save over the budget told every
+ * session two rules that were still in the file were no longer in force).
+ */
+export interface UserProfile { text: string; savedAt: string; exists: boolean; cut?: string[] }
 
 const NONE: UserProfile = { text: '', savedAt: '', exists: false }
 /** A hand-edited file can be any size: only its head is parsed and screened. */
@@ -42,29 +47,39 @@ const WITHHELD = '(Walnut held back one entry of USER.md: it reads like an instr
 
 /** The words a session reads: the file's sections (and any prose above them), screened and capped. */
 export function userProfileText(raw: string): string {
+  return userProfileFit(raw).text
+}
+
+/** The capped words, and the lines the budget left out (`cut`), with how long the whole would be. */
+export function userProfileFit(raw: string): { text: string; cut: string[]; size: number } {
   const { preamble, entries } = parseMemoryContent(raw.slice(0, READ_MAX).replace(/\r\n/g, '\n'))
   // The preamble holds the frontmatter and the "# USER.md" title; prose a person wrote there stays.
   const prose = preambleProse(preamble).split('\n').filter((l) => !/^#\s+USER\.md\b/i.test(l.trim())).join('\n').trim()
   const parts = [prose, ...entries].filter((p) => p.trim())
   const screened = screenEntriesForPrompt(parts, 'USER.md').map((p, i) => (p === parts[i] ? p : WITHHELD))
   const kept: string[] = []
+  const cut: string[] = []
   let used = 0
-  for (const part of screened) {
+  for (const [i, part] of screened.entries()) {
     const room = USER_CHAR_BUDGET - used - (kept.length ? 2 : 0)
     if (part.length <= room) { kept.push(part); used += part.length + (kept.length > 1 ? 2 : 0); continue }
     // Over the budget: whole lines of this section while they fit, then a note.
     const lines: string[] = []
     let n = 0
-    for (const line of part.split('\n')) {
+    const all = part.split('\n')
+    for (const line of all) {
       if (n + line.length + 1 > room) break
       lines.push(line)
       n += line.length + 1
     }
     if (lines.length) kept.push(lines.join('\n'))
     kept.push(`(USER.md runs past ${USER_CHAR_BUDGET} characters here; memory_read doc "user" has the rest.)`)
+    for (const rest of [...all.slice(lines.length), ...screened.slice(i + 1).flatMap((p) => p.split('\n'))]) {
+      if (rest.trim()) cut.push(rest.trimEnd().trim())
+    }
     break
   }
-  return kept.join('\n\n')
+  return { text: kept.join('\n\n'), cut, size: screened.join('\n\n').length }
 }
 
 /**
@@ -86,6 +101,11 @@ export function userProfileLine(p: UserProfile): string {
     + `earlier version. Each line of this version starts with [${version}]:\n${tagged}\n\n`
 }
 
+function profileOf(raw: string, savedAt: string): UserProfile {
+  const { text, cut } = userProfileFit(raw)
+  return { text, savedAt, exists: true, ...(cut.length ? { cut } : {}) }
+}
+
 let cached: { key: string; profile: UserProfile } = { key: '', profile: NONE }
 let checkedAt = 0
 let inflight: Promise<UserProfile> | null = null
@@ -105,7 +125,7 @@ async function companionUserDoc(): Promise<{ key: string; profile: () => UserPro
     if (!doc) return { key: 'copy:none', profile: () => NONE }
     return {
       key: `copy:${doc.contentHash}:${doc.updatedAt}`,
-      profile: () => ({ text: userProfileText(doc.content), savedAt: doc.updatedAt, exists: true }),
+      profile: () => profileOf(doc.content, doc.updatedAt),
     }
   } catch {
     return 'keep'
@@ -127,7 +147,7 @@ export function refreshUserProfile(): Promise<UserProfile> {
         const key = st ? `${USER_FILE}:${st.ino}:${st.size}:${st.mtimeMs}` : `${USER_FILE}:none`
         if (key !== cached.key) {
           const raw = st ? await fsp.readFile(USER_FILE, 'utf-8').catch(() => null) : null
-          cached = { key, profile: raw === null || !st ? NONE : { text: userProfileText(raw), savedAt: st.mtime.toISOString(), exists: true } }
+          cached = { key, profile: raw === null || !st ? NONE : profileOf(raw, st.mtime.toISOString()) }
         }
       }
     } catch { /* keep the last copy */ }

@@ -173,11 +173,13 @@ describe('a lead made here reaches every open page', () => {
 
 describe('the user\'s own instructions for the CEO or a VP', () => {
   it('ride the prompt after the role line, and a session spawned before an edit is told the whole set', async () => {
+    // Lines every version keeps, so a one-line edit is told as a change (a block whole is sent when shorter).
+    const KEEP = Array.from({ length: 12 }, (_, n) => `Garden rule ${n + 1}, the same in every version.`).join('\n');
     const lead = await createOrgNode({ name: 'Orchard' }, false);
     const sid = await sessionOf(lead.id, 'Orchard');
     expect(await instructionNoticeForSession(sid)).toBeNull();
 
-    await editOrgNode(lead.id, { name: 'Moss Keeper', instructions: 'Water before nine.\nAsk me before you buy seeds.' });
+    await editOrgNode(lead.id, { name: 'Moss Keeper', instructions: `Water before nine.\nAsk me before you buy seeds.\n${KEEP}` });
     const now = await getTask(lead.id);
     expect(now).toMatchObject({ title: 'Orchard lead', org_name: 'Moss Keeper' });
     const prompt = defaultInstructions(now);
@@ -198,7 +200,7 @@ describe('the user\'s own instructions for the CEO or a VP', () => {
     // The VP's own name rides its prompt: it is how the user and the chart call it.
     expect(defaultInstructions(now)).toContain('The user calls you the "Moss Keeper" VP.');
     await new Promise((r) => setTimeout(r, 5));
-    const edited = await editOrgNode(lead.id, { instructions: 'Water before nine.\nShip on Fridays only.' });
+    const edited = await editOrgNode(lead.id, { instructions: `Water before nine.\nShip on Fridays only.\n${KEEP}` });
     const next = /instructions for your role \((v[0-9a-f]{8}),/.exec(defaultInstructions(edited))?.[1];
     expect(next).not.toBe(version);
     const retold = (await instructionNoticeForSession(told))?.text ?? '';
@@ -211,7 +213,7 @@ describe('the user\'s own instructions for the CEO or a VP', () => {
 
     // The same words again write nothing; a cleared set says so, and null clears too: a stored
     // prompt may still hold the old words, and only a newer version tells it to drop them.
-    expect((await editOrgNode(lead.id, { instructions: 'Water before nine.\nShip on Fridays only.' })).org_instructions?.at).toBe(edited.org_instructions?.at);
+    expect((await editOrgNode(lead.id, { instructions: `Water before nine.\nShip on Fridays only.\n${KEEP}` })).org_instructions?.at).toBe(edited.org_instructions?.at);
     await new Promise((r) => setTimeout(r, 5));
     const cleared = await editOrgNode(lead.id, { instructions: '' });
     expect(defaultInstructions(cleared)).toContain('Your user cleared the instructions for your role');

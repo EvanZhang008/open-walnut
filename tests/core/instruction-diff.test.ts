@@ -17,6 +17,8 @@ import { instructionNoticeFor, toldOnto } from '../../src/core/sessions/instruct
 const TAG = /^\[v[0-9a-f]{8}\] /
 const USER = (rules: string[]) => `---\nname: User Profile\n---\n\n# USER.md\n\n## Standing rules\n\n${rules.map((r) => `- ${r}`).join('\n')}\n`
 const RULES = Array.from({ length: 30 }, (_, i) => `Rule number ${i + 1}: keep this standing preference in every task.`)
+/** Enough lines that a one-line change is shorter told as a change than whole. */
+const FILLER = Array.from({ length: 12 }, (_, i) => `Standing line ${i + 1}, kept as it is across every save.`)
 
 async function writeUser(text: string) {
   await fs.mkdir(path.dirname(USER_FILE), { recursive: true })
@@ -85,7 +87,7 @@ describe('a one-line change is told as one line', () => {
 
   it('core instructions: one line of a lead\'s own instructions edited', () => {
     const lead = (text: string): InstructionTask => ({ id: 'l', project: 'marina', org_role: 'lead', org_instructions: { text, at, by: 'human' } })
-    const lines = ['Keep the Board current.', 'Ship daily, behind a flag.', 'Ask Main before any outward step.']
+    const lines = ['Keep the Board current.', 'Ship daily, behind a flag.', 'Ask Main before any outward step.', ...FILLER]
     const before = defaultInstructions(lead(lines.join('\n')))
     const edited = [...lines]
     edited[1] = 'A line the user reworded.'
@@ -112,7 +114,7 @@ describe('a one-line change is told as one line', () => {
 })
 
 describe('a change keeps the context it needs', () => {
-  const sectioned = (home: string) => `---\nname: User Profile\n---\n\n# USER.md\n\n## Home\n\n- ${home}\n- Water the plants.\n\n## Work\n\n- use pnpm\n`
+  const sectioned = (home: string) => `---\nname: User Profile\n---\n\n# USER.md\n\n## Home\n\n- ${home}\n- Water the plants.\n\n## Work\n\n- use pnpm\n\n## Standing\n\n${FILLER.map((f) => `- ${f}`).join('\n')}\n`
 
   it('the same line under two sub-headings: an edit of one is a removal there, and the new line names its part', async () => {
     const task: InstructionTask = { id: 'w', project: 'marina' }
@@ -148,10 +150,10 @@ describe('a change keeps the context it needs', () => {
 
   it('the head of a change reads as whole sentences in every form', async () => {
     const forms: Array<[InstructionTask, InstructionTask]> = [
-      [{ id: 'l', project: 'marina', org_role: 'lead', org_instructions: { text: 'Keep the Board current.\nShip daily.', at, by: 'human' } },
-        { id: 'l', project: 'marina', org_role: 'lead', org_instructions: { text: 'Keep the Board current.\nShip weekly.', at: '2026-10-30T08:00:00.000Z', by: 'human' } }],
-      [{ id: 'l', project: 'marina', org_role: 'lead', org_instructions: { text: 'Check CI first.', at, by: 'task:main' } },
-        { id: 'l', project: 'marina', org_role: 'lead', org_instructions: { text: 'Check CI twice.', at: '2026-10-30T08:00:00.000Z', by: 'task:main' } }],
+      [{ id: 'l', project: 'marina', org_role: 'lead', org_instructions: { text: `Keep the Board current.\nShip daily.\n${FILLER.join('\n')}`, at, by: 'human' } },
+        { id: 'l', project: 'marina', org_role: 'lead', org_instructions: { text: `Keep the Board current.\nShip weekly.\n${FILLER.join('\n')}`, at: '2026-10-30T08:00:00.000Z', by: 'human' } }],
+      [{ id: 'l', project: 'marina', org_role: 'lead', org_instructions: { text: `Check CI first.\n${FILLER.join('\n')}`, at, by: 'task:main' } },
+        { id: 'l', project: 'marina', org_role: 'lead', org_instructions: { text: `Check CI twice.\n${FILLER.join('\n')}`, at: '2026-10-30T08:00:00.000Z', by: 'task:main' } }],
     ]
     for (const [a, b] of forms) {
       const text = renderDue(dueChanges(parseInstructions(defaultInstructions(b)), parseInstructions(defaultInstructions(a)), new Set(), {})!)
@@ -173,23 +175,24 @@ describe('review cases (2026-10-30)', () => {
   const agentLead = (text: string, by_name?: string): InstructionTask => ({ id: 'l', project: 'marina', org_role: 'lead', org_instructions: { text, at, by: 'task:main', ...(by_name ? { by_name } : {}) } })
 
   it('a new line under a heading inside an agent\'s part keeps both its heading and whose words it is', () => {
-    const before = defaultInstructions(agentLead('Check CI first.\n# Rules\nOne.'))
-    const text = renderDue(dueChanges(parseInstructions(defaultInstructions(agentLead('Check CI first.\n# Rules\nOne.\nTwo.'))), parseInstructions(before), new Set(), {})!)
+    const base = `Check CI first.\n${FILLER.join('\n')}\n# Rules\nOne.`
+    const before = defaultInstructions(agentLead(base))
+    const text = renderDue(dueChanges(parseInstructions(defaultInstructions(agentLead(`${base}\nTwo.`))), parseInstructions(before), new Set(), {})!)
     expect(text).toMatch(/New or reworded:\n\[v[0-9a-f]{8}\] Added by an agent:\n\[v[0-9a-f]{8}\] # Rules\n\[v[0-9a-f]{8}\] Two\./)
   })
 
   it('a long rule reworded at its end is listed removed in full, never as a cut that reads like the new one', async () => {
     const task: InstructionTask = { id: 'w', project: 'marina' }
     const long = `Always ${'keep the release notes short and plain, '.repeat(5)}and send them on Friday.`
-    await writeUser(USER([long, 'Another rule.']))
+    await writeUser(USER([long, 'Another rule.', ...FILLER]))
     const before = defaultInstructions(task)
-    await writeUser(USER([long.replace('Friday', 'Monday'), 'Another rule.']))
+    await writeUser(USER([long.replace('Friday', 'Monday'), 'Another rule.', ...FILLER]))
     const text = renderDue(dueChanges(parseInstructions(defaultInstructions(task)), parseInstructions(before), new Set(), {})!)
     expect(text).toContain(`- ${long}`)
   })
 
   it('the user\'s own words told as changes: "They replace Walnut\'s default", never "every earlier" next to "stays in force"', () => {
-    const own = (t: string, when: string): InstructionTask => ({ id: 'l', project: 'marina', org_role: 'lead', org_instructions: { text: t, at: when, by: 'human' } })
+    const own = (t: string, when: string): InstructionTask => ({ id: 'l', project: 'marina', org_role: 'lead', org_instructions: { text: `${t}\n${FILLER.join('\n')}`, at: when, by: 'human' } })
     const text = renderDue(dueChanges(parseInstructions(defaultInstructions(own('A.\nC.', '2026-10-30T08:00:00.000Z'))), parseInstructions(defaultInstructions(own('A.\nB.', at))), new Set(), {})!)
     expect(text).toContain('They replace Walnut\'s default, and where any other part of these instructions says otherwise, they win.')
     expect(text).not.toContain('every earlier')
@@ -222,5 +225,56 @@ describe('review cases (2026-10-30)', () => {
     const merged = toldOnto(record, { noted: { version: 'n', ...base, lines: ['l2'], blocks: { a: { version: 'v2', words: ['old'] }, b: { version: 'v9', words: ['y'] } } }, changed: ['b'] })!
     expect(merged.blocks).toEqual({ a: { version: 'v3', words: ['x'] }, b: { version: 'v9', words: ['y'] } })
     expect(merged.lines).toEqual(['l1', 'l2'])
+  })
+
+  it('a save that rewrote most lines comes whole: a change is never longer than the block (2026-10-31)', async () => {
+    // A condensing edit reworded nearly every rule; listing each new line and each old one made
+    // a 6.1 KB notice for a 4.5 KB block.
+    const task: InstructionTask = { id: 'w', project: 'marina' }
+    const before = defaultInstructions(task)
+    await writeUser(USER(RULES.map((r, i) => (i < 27 ? `Rule ${i + 1}, said shorter.` : r))))
+    const current = parseInstructions(defaultInstructions(task))
+    const due = dueChanges(current, parseInstructions(before), new Set(), {})!
+    expect(due.blocks[0].whole).toBe(true)
+    expect(renderDue(due).length).toBeLessThanOrEqual(current.blocks.get('user-profile')!.head.length + current.blocks.get('user-profile')!.tagged.join('\n').length + 100)
+  })
+
+  it('a line the budget cuts is never told as removed, and the change says not every line fits (2026-10-30)', async () => {
+    // The 18:50Z save ran past 4000 characters: two rules still in the file were told "no longer in force".
+    const task: InstructionTask = { id: 'w', project: 'marina' }
+    const long = Array.from({ length: 60 }, (_, i) => `Rule ${i + 1}: a standing preference worded at some length, like a real rule of the user.`)
+    // As many rules as fit under the budget, then one more at the head pushes the last ones out.
+    const { userProfileFit } = await import('../../src/core/sessions/user-profile-context.js')
+    const head = 'A new first rule, which pushes the last ones past the budget of the profile.'
+    let n = 1
+    while (!userProfileFit(USER(long.slice(0, n + 1))).cut.length) n++
+    await writeUser(USER(long.slice(0, n)))
+    const before = defaultInstructions(task)
+    expect(before).not.toContain('runs past')
+    await writeUser(USER([head, ...long.slice(0, n)]))
+    const now = defaultInstructions(task)
+    expect(now).toContain('runs past 4000 characters')
+    const { currentUserProfile } = await import('../../src/core/sessions/user-profile-context.js')
+    const cut = currentUserProfile().cut!
+    expect(cut).toContain(`- ${long[n - 1]}`)
+    expect(cut.length).toBeGreaterThan(0)
+    const due = dueChanges(parseInstructions(now), parseInstructions(before), new Set(), {}, { 'user-profile': new Set(cut) })!
+    expect(due.blocks[0].whole).toBe(false)
+    expect(due.blocks[0].removed).toEqual([])
+    const text = renderDue(due)
+    expect(text).not.toContain('Removed, no longer in force')
+    expect(text).toContain('Not every line of it fits here: USER.md runs past 4000 characters here; memory_read doc "user" has the rest.')
+    // Through the notice itself, which reads the cut lines from the profile.
+    const notice = instructionNoticeFor({ appliedAppendSystemPrompt: before }, task)!
+    expect(notice).not.toContain('no longer in force')
+    expect(notice).toContain('A new first rule')
+  })
+
+  it('a save past the budget answers with a warning that names what is left out', async () => {
+    const { writeMemoryDoc } = await import('../../src/web/routes/memory.js')
+    const long = Array.from({ length: 60 }, (_, i) => `Rule ${i + 1}: a standing preference worded at some length, like a real rule.`)
+    const over = await writeMemoryDoc('user', USER(long))
+    expect(over.warning).toMatch(/sessions read only the first 4000: \d+ line\(s\) from "- Rule \d+/)
+    expect((await writeMemoryDoc('user', USER(long.slice(0, 5)))).warning).toBeUndefined()
   })
 })

@@ -235,7 +235,8 @@ defineOp({
   description:
     'Replace the FULL content of a memory document ("global" = MEMORY.md, "user" = USER.md). ' +
     'Read it first (memory_read) and write back the complete revised text — this is a whole-file ' +
-    'replace, not an append.',
+    'replace, not an append. Every session reads only the first 4000 characters of USER.md: a save ' +
+    'past that is kept, and answers with a `warning` naming what is left out; trim it then.',
   input: {
     doc: z.enum(['global', 'user']).describe('Which memory document'),
     content: z.string().describe('Complete new document content'),
