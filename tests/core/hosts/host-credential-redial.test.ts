@@ -18,6 +18,8 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import fsp from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-credential-redial'))
@@ -275,11 +277,14 @@ describe('retrySession on a remote session dials its host like Connect now', () 
   })
 
   it('a local session never touches a host', async () => {
-    await tracker.createSessionRecord('retry-local', 'task-local', 'proj', '/tmp/rc', { initialProcessStatus: 'error' })
+    // A folder that exists: a gone one is answered 'folder_gone' instead (sessions/folder-gone.ts).
+    const cwd = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-redial-local-'))
+    await tracker.createSessionRecord('retry-local', 'task-local', 'proj', cwd, { initialProcessStatus: 'error' })
     const spy = vi.spyOn(dc, 'reconnectHostNow')
     const res = await retrySession('retry-local')
     expect(res.status).toBe('resumable')
     expect(spy).not.toHaveBeenCalled()
+    await fsp.rm(cwd, { recursive: true, force: true })
   })
 
   it('a host no longer in config keeps the old behaviour (the steps below decide)', async () => {
