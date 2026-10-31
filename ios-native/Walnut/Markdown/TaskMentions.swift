@@ -101,8 +101,11 @@ enum TaskMentions {
     ///
     /// Unlike `MarkdownParser.replaceEntityRefs`, which stays the plain-label
     /// NORMALIZATION the chat stores compare rows by, this is display only.
+    ///
+    /// A title written beside a mention of the same task is dropped first
+    /// (`TaskTitleAbsorb`), so the link names the task once.
     static func rewriteRefs(_ text: String, resolver: TaskMentionResolver = .shared) -> String {
-        var out = text
+        var out = TaskTitleAbsorb.absorbWrittenTitles(text, resolver: resolver)
         if out.contains("-ref"), let regex = refRegex {
             let ns = out as NSString
             let matches = regex.matches(in: out, range: NSRange(location: 0, length: ns.length))

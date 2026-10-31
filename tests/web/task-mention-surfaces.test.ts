@@ -183,8 +183,23 @@ describe('a title written beside a mention is absorbed by every renderer that ma
     }
   });
 
-  it('the test suites read the shared cases', () => {
-    for (const r of ['tests/web/markdown/task-title-absorb.test.ts', 'tests/web/board-markdown.test.ts']) {
+  it('the phone runs it inside rewriteRefs, which every place that links mentions calls', () => {
+    const mentions = read('ios-native/Walnut/Markdown/TaskMentions.swift');
+    expect(mentions).toMatch(/static func rewriteRefs\([^)]*\) -> String \{\n\s+var out = TaskTitleAbsorb\.absorbWrittenTitles\(text, resolver: resolver\)/);
+    const swift = (function walkSwift(dir: string, out: string[] = []): string[] {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) walkSwift(p, out); else if (e.name.endsWith('.swift')) out.push(p);
+      }
+      return out;
+    })(path.join(ROOT, 'ios-native/Walnut')).map(rel);
+    const linking = swift.filter((r) => /TaskMentions\.apply\(/.test(read(r)));
+    expect(linking.length).toBeGreaterThan(0);
+    expect(linking.filter((r) => !/TaskMentions\.rewriteRefs\(/.test(read(r)))).toEqual([]);
+  });
+
+  it('all three test suites read the shared cases', () => {
+    for (const r of ['tests/web/markdown/task-title-absorb.test.ts', 'tests/web/board-markdown.test.ts', 'ios-native/WalnutTests/TaskTitleAbsorbTests.swift']) {
       expect(read(r), r).toContain('fixtures/task-title-absorb.json');
     }
   });
