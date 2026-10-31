@@ -1,7 +1,7 @@
 /**
  * The CI job that runs the iOS app's tests on GitHub's macOS runners. It must
  * need no secrets (no signing, no App Store key: those are the owner's to add),
- * stay out of CI OK until it has a record, and run WalnutUITests only through
+ * block CI OK on the unit leg only (the UI leg has no record yet), and run WalnutUITests only through
  * run-ui-tests.sh, the one way its pairing reaches the XCUITest runner.
  */
 import fs from 'node:fs'
@@ -68,9 +68,17 @@ describe('the iOS job in ci.yml', () => {
     expect(text).not.toMatch(/DEVELOPMENT_TEAM|APP_STORE|altool|notarytool|archive/)
   })
 
-  it('stays out of CI OK, and only the UI leg may fail without failing the run', () => {
-    expect(doc.jobs['ci-ok']!.needs).not.toContain('ios')
+  it('blocks CI OK on the unit leg alone: the UI leg may fail without failing the run', () => {
+    const ok = doc.jobs['ci-ok']!
+    expect(ok.needs).toContain('ios')
     expect(job['continue-on-error']).toBe("${{ matrix.layer == 'ui' }}")
+    // ios's result says nothing about one leg once the UI leg may fail, so CI OK reads the
+    // unit leg's own conclusion by its job name, which must match the matrix name
+    const gate = ok.steps.find((s) => s.run?.includes('needs.ios.result'))!
+    expect(gate.run).toContain('select(.name == "iOS app (unit)")')
+    expect(gate.run).toMatch(/\[ "\$unit" = "success" \] \|\| \{[^}]*failed=1/)
+    expect((ok as { permissions?: Record<string, string> }).permissions).toEqual({ actions: 'read' })
+    expect((job as { name?: string }).name).toBe('iOS app (${{ matrix.layer }})')
   })
 
   it('runs WalnutTests with xcodebuild and WalnutUITests through run-ui-tests.sh', () => {
