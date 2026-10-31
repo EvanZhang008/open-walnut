@@ -259,18 +259,63 @@ describe('POST /api/sessions/:sessionId/retry — reconnect path (process alive)
     expect(sendMessageToSession).not.toHaveBeenCalled();
   });
 
-  it('clears error state and sets process_status to running', async () => {
+  // 2026-10-30: Retry on a live Codex worker with no turn wrote 'running', so the
+  // panel showed "Codex is working" for minutes and the user's message was never
+  // answered. A live process is not a running turn.
+  it('clears error state and says idle when no turn runs', async () => {
     vi.mocked(isSessionProcessAlive).mockResolvedValueOnce(true);
     const taskId = await makeTask();
     await createSessionRecord('alive-sess-3', taskId, 'project-reconnect');
     await updateSessionRecord('alive-sess-3', { process_status: 'error', errorMessage: 'SSH disconnected' });
 
     const app = createApp();
-    await request(app).post('/api/sessions/alive-sess-3/retry');
+    const res = await request(app).post('/api/sessions/alive-sess-3/retry');
 
+    expect(res.body.status).toBe('reconnected');
     const record = await getSessionByClaudeId('alive-sess-3');
-    expect(record!.process_status).toBe('running');
+    expect(record!.process_status).toBe('idle');
     expect(record!.errorMessage).toBeFalsy();
+  });
+
+  it('says running only while a turn really runs', async () => {
+    vi.mocked(isSessionProcessAlive).mockResolvedValueOnce(true);
+    const { sessionRunner } = await import('../../../src/providers/claude-code-session.js');
+    const spy = vi.spyOn(sessionRunner, 'isTurnRunning').mockReturnValue(true);
+    try {
+      const taskId = await makeTask();
+      await createSessionRecord('alive-sess-5', taskId, 'project-reconnect');
+      await updateSessionRecord('alive-sess-5', { process_status: 'error', errorMessage: 'blip' });
+
+      const app = createApp();
+      await request(app).post('/api/sessions/alive-sess-5/retry');
+
+      const record = await getSessionByClaudeId('alive-sess-5');
+      expect(record!.process_status).toBe('running');
+      expect(getQueue).not.toHaveBeenCalledWith('alive-sess-5');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('sends a message still waiting in the queue of a live idle session', async () => {
+    vi.mocked(isSessionProcessAlive).mockResolvedValueOnce(true);
+    vi.mocked(getQueue).mockResolvedValueOnce([
+      { id: 'qm-waiting', sessionId: 'alive-sess-6', message: 'hi', status: 'pending', enqueuedAt: new Date().toISOString() } as never,
+    ]);
+    const taskId = await makeTask();
+    await createSessionRecord('alive-sess-6', taskId, 'project-reconnect');
+    await updateSessionRecord('alive-sess-6', { process_status: 'error', errorMessage: 'protocol' });
+
+    const app = createApp();
+    const res = await request(app).post('/api/sessions/alive-sess-6/retry');
+
+    expect(res.body.status).toBe('resuming');
+    expect(res.body.restoredMessages).toBe(1);
+    const { bus } = await import('../../../src/core/event-bus.js');
+    expect(vi.mocked(bus.emit)).toHaveBeenCalledWith(
+      'session:send', expect.objectContaining({ sessionId: 'alive-sess-6', message: '' }), ['session-runner'], { source: 'retry' },
+    );
+    expect(sendMessageToSession).not.toHaveBeenCalled();
   });
 
   it('does not archive the session when reconnecting', async () => {

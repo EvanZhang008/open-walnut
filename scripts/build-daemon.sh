@@ -61,14 +61,17 @@ SOURCES=(
   src/ops/op-help.ts
   src/providers/mcp-cli-args.ts
   src/providers/acp-daemon.ts
+  src/providers/acp-thread-restore.ts
   src/providers/acp-host-artifacts.ts
   node_modules/@agentclientprotocol/codex-acp/package.json
+  node_modules/@agentclientprotocol/codex-acp/dist/index.js
   src/providers/codex-model-probe.ts
   src/providers/agent-command-map.ts
   src/providers/acp-worker/worker.ts
   src/providers/acp-worker/worker-main.ts
   src/providers/acp-worker/journal.ts
   src/providers/acp-worker/protocol.ts
+  src/logging/redact.ts
   src/providers/session-changes-core.ts
   src/providers/usage-host-core.ts
   src/providers/usage-scan-core.ts

@@ -419,23 +419,6 @@ export function acpEventDestinations(eventName: string): string[] {
   return [...(ACP_EVENT_DESTINATIONS[eventName] ?? ['main-ai'])]
 }
 
-export function emitAcpIdentityBoundary(
-  taskId: string,
-  previousSessionId: string,
-  newSessionId: string,
-  engine?: SessionEngine,
-): void {
-  bus.emit(EventNames.SESSION_SYSTEM_EVENT, {
-    sessionId: previousSessionId,
-    taskId,
-    variant: 'error',
-    message: `Could not resume the previous ${engineCaps(engine ?? 'codex').displayName} thread. `
-      + 'A fresh provider thread was started; earlier history remains visible in this transcript.',
-    previousSessionId,
-    newSessionId,
-  } as never, ['main-ai'])
-}
-
 export function sessionMcpServerToAcp(
   name: string,
   server: { command: string; args?: string[]; env?: Record<string, string> },
@@ -1444,9 +1427,9 @@ export class AcpSession {
             mcpServers,
           }, ACP_COLD_RESUME_TIMEOUT_MS)
           if (!fresh.ok) throw new Error('acp newSession fallback failed: ' + fresh.error)
+          // The transcript says the thread changed: the journal's session-created
+          // after another thread is projected as a notice (acp-journal-projector.ts).
           await this.publishSessionResponse((fresh as { result?: unknown }).result)
-          const newSessionId = this.trackingId()
-          emitAcpIdentityBoundary(this.taskId, previousSessionId, newSessionId, this.engineId)
         } else if ((startResp as { errorKind?: string }).errorKind === 'budget_paused') {
           throw new BudgetPausedError()
         } else if ((startResp as { errorKind?: string }).errorKind === 'budget_checking') {
@@ -1468,12 +1451,8 @@ export class AcpSession {
         if (state?.capabilities) this._capabilities = state.capabilities
         if (result.session) await this.publishSessionResponse(result.session)
         if (state) await this.adoptStateSnapshot(state)
-        // Pre-empted resume: the worker minted a new provider thread, so tell
-        // the transcript once (same message the load_failed fallback emits). A
-        // warm attach keeps the same id and stays silent.
-        if (boundaryFrom && this.trackingId() !== boundaryFrom) {
-          emitAcpIdentityBoundary(this.taskId, boundaryFrom, this.trackingId(), this.engineId)
-        }
+        // Pre-empted resume: the worker minted a new provider thread; the
+        // transcript says so from the journal (acp-journal-projector.ts).
       }
     } catch (error) {
       await this.discardUnpublishedWorker()

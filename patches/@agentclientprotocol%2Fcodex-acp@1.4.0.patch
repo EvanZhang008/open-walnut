@@ -1,0 +1,70 @@
+diff --git a/dist/index.js b/dist/index.js
+index af0a0d95af266a0ab1d83a61ba4d5ee3f1567d90..42bb008c24729bbebfa74c84ca12fac2bf112804 100755
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -22065,14 +22065,53 @@ var Logger = class {
+ var logger = new Logger();
+ 
+ // src/CodexJsonRpcConnection.ts
+-function startCodexConnection(codexPath, env) {
++function walnutTomlInline(value) {
++  // JSON string escapes are TOML basic-string escapes, except DEL, which TOML wants escaped.
++  if (typeof value === "string") return JSON.stringify(value).replace(/\u007f/g, "\\u007F");
++  if (typeof value === "number" || typeof value === "boolean") return String(value);
++  if (Array.isArray(value)) return `[${value.filter((v) => v !== null && v !== void 0).map(walnutTomlInline).join(", ")}]`;
++  if (value && typeof value === "object") {
++    const parts = Object.entries(value).filter(([, v]) => v !== null && v !== void 0).map(([k, v]) => `${/^[A-Za-z0-9_-]+$/.test(k) ? k : JSON.stringify(k)} = ${walnutTomlInline(v)}`);
++    return `{${parts.join(", ")}}`;
++  }
++  return '""';
++}
++// Walnut: Codex 0.166 checks a thread's model provider against the app-server's
++// OWN configured provider (modelProviderMismatch), and the per-thread config
++// override never reaches that check. A provider chosen through CODEX_CONFIG must
++// therefore be the app-server's own, or every resume and every turn is refused.
++// A command line is readable by every user of the host (ps), so a provider's
++// secrets stay out of it: they still reach every thread through its own config.
++var WALNUT_PROVIDER_SECRET_KEYS = /* @__PURE__ */ new Set(["experimental_bearer_token", "http_headers", "query_params"]);
++function walnutProviderStartupArgs(config) {
++  const args = [];
++  if (!config || typeof config !== "object") return args;
++  const providers = config["model_providers"];
++  const named = /* @__PURE__ */ new Set();
++  if (providers && typeof providers === "object" && !Array.isArray(providers)) {
++    for (const [name, def] of Object.entries(providers)) {
++      if (!/^[A-Za-z0-9_-]+$/.test(name) || !def || typeof def !== "object" || Array.isArray(def)) continue;
++      const startup = Object.fromEntries(Object.entries(def).filter(([key]) => !WALNUT_PROVIDER_SECRET_KEYS.has(key)));
++      args.push("-c", `model_providers.${name}=${walnutTomlInline(startup)}`);
++      named.add(name);
++    }
++  }
++  const provider = config["model_provider"];
++  // A provider this config defines but could not pass would fail the app-server's start: leave both out then.
++  const definedHere = providers && typeof providers === "object" && Object.prototype.hasOwnProperty.call(providers, provider);
++  if (typeof provider === "string" && provider && (!definedHere || named.has(provider))) {
++    args.push("-c", `model_provider=${JSON.stringify(provider)}`);
++  }
++  return args;
++}
++function startCodexConnection(codexPath, env, startupArgs = []) {
+   const spawnEnv = env ?? process.env;
+   let codex;
+   if (codexPath) {
+-    codex = process.platform === "win32" ? spawn(`"${codexPath}" app-server`, { shell: true, env: spawnEnv }) : spawn(codexPath, ["app-server"], { env: spawnEnv });
++    codex = process.platform === "win32" ? spawn(`"${codexPath}" app-server`, { shell: true, env: spawnEnv }) : spawn(codexPath, [...startupArgs, "app-server"], { env: spawnEnv });
+   } else {
+     const bundledCodexPath = createRequire(import.meta.url).resolve("@openai/codex/bin/codex.js");
+-    codex = spawn(process.execPath, [bundledCodexPath, "app-server"], { env: spawnEnv });
++    codex = spawn(process.execPath, [bundledCodexPath, ...startupArgs, "app-server"], { env: spawnEnv });
+   }
+   attachLogs(codex);
+   const reader = createJSONRPCReader(codex.stdout);
+@@ -32728,7 +32767,7 @@ function startAcpServer() {
+     authRequest: authRequestString ?? null,
+     defaultAuthRequest: defaultAuthRequest ?? null
+   });
+-  const codexConnection = startCodexConnection(codexPath);
++  const codexConnection = startCodexConnection(codexPath, void 0, walnutProviderStartupArgs(config2));
+   const maxStderrTailChars = 2 * 1024;
+   let stderr = "";
+   codexConnection.process.stderr.addListener("data", (data) => {

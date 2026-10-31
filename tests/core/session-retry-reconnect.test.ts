@@ -14,6 +14,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fsp from 'node:fs/promises'
+import os from 'node:os'
 import { createMockConstants } from '../helpers/mock-constants.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-retry-reconnect'))
@@ -51,6 +52,9 @@ vi.mock('../../src/core/session-message-queue.js', async (importOriginal) => {
 })
 
 import { WALNUT_HOME } from '../../src/constants.js'
+
+// A folder that exists on every host: Retry offers a new folder for a gone one (folder-gone.ts).
+const CWD = os.tmpdir()
 import { bus, EventNames, type BusEvent } from '../../src/core/event-bus.js'
 import {
   createSessionRecord,
@@ -96,7 +100,7 @@ afterEach(async () => {
 describe('retrySession — dead process, resumable conversation, EMPTY queue', () => {
   it('sends NO message and leaves the record resumable, stamped as user intent', async () => {
     const sid = 'retry-rc-empty'
-    await createSessionRecord(sid, 'task-rc1', 'proj', '/tmp/rc', { initialProcessStatus: 'error' })
+    await createSessionRecord(sid, 'task-rc1', 'proj', CWD, { initialProcessStatus: 'error' })
     await updateSessionRecord(sid, {
       errorMessage: 'Connection lost — unable to reach remote host',
       status_reason: 'remote_unreachable',
@@ -131,7 +135,7 @@ describe('retrySession — dead process, resumable conversation, EMPTY queue', (
 
   it('never injects the word "continue" (the exact regression)', async () => {
     const sid = 'retry-rc-nocontinue'
-    await createSessionRecord(sid, 'task-rc2', 'proj', '/tmp/rc', { initialProcessStatus: 'error' })
+    await createSessionRecord(sid, 'task-rc2', 'proj', CWD, { initialProcessStatus: 'error' })
 
     await retrySession(sid)
 
@@ -144,7 +148,7 @@ describe('retrySession — dead process, resumable conversation, EMPTY queue', (
 describe('retrySession — dead process with a NON-empty pending queue', () => {
   it("re-sends the user's ORIGINAL message and injects nothing", async () => {
     const sid = 'retry-rc-queued'
-    await createSessionRecord(sid, 'task-rc3', 'proj', '/tmp/rc', { initialProcessStatus: 'error' })
+    await createSessionRecord(sid, 'task-rc3', 'proj', CWD, { initialProcessStatus: 'error' })
     await sendMessageToSession(sid, 'original user prompt', { taskId: 'task-rc3' })
     stub.sendCalls.length = 0 // the seed above is the user's own send, not the retry's
 
@@ -168,7 +172,7 @@ describe('retrySession — dead process with a NON-empty pending queue', () => {
 
   it('revives a PARKED row instead of reporting a retry that did nothing', async () => {
     const sid = 'retry-rc-parked'
-    await createSessionRecord(sid, 'task-rc4', 'proj', '/tmp/rc', { initialProcessStatus: 'error' })
+    await createSessionRecord(sid, 'task-rc4', 'proj', CWD, { initialProcessStatus: 'error' })
     await sendMessageToSession(sid, 'parked prompt', { taskId: 'task-rc4' })
     const seeded = await getQueue(sid)
     const { parkMessages } = await import('../../src/core/session-message-queue.js')
@@ -187,7 +191,7 @@ describe('retrySession — process still alive', () => {
   it('returns reconnected and clears the stale error without sending anything', async () => {
     const sid = 'retry-rc-alive'
     stub.alive = true
-    await createSessionRecord(sid, 'task-rc5', 'proj', '/tmp/rc', { initialProcessStatus: 'error' })
+    await createSessionRecord(sid, 'task-rc5', 'proj', CWD, { initialProcessStatus: 'error' })
     await updateSessionRecord(sid, {
       errorMessage: 'Connection lost — unable to reach remote host',
     } as never)
@@ -203,7 +207,9 @@ describe('retrySession — process still alive', () => {
 
     expect(stub.sendCalls).toEqual([])
     const rec = await getSessionByClaudeId(sid)
-    expect(rec?.process_status).toBe('running')
+    // A live process with no turn is idle: Running would promise a turn that is
+    // not there (2026-10-30: Retry showed "Codex is working" for minutes).
+    expect(rec?.process_status).toBe('idle')
     expect(rec?.errorMessage ?? null).toBeNull()
     expect(rec?.status_reason).toBe('retry_reconnect')
     expect(rec?.status_changed_by).toBe('user')

@@ -116,6 +116,32 @@ describe('daemon version hash: the two source lists agree', () => {
     for (const rel of ['src/providers/fs-ls-core.ts', 'src/providers/git-diff-core.ts']) expect(shell).toContain(rel)
   })
 
+  // Same ratchet for the ACP sidecars (acp-daemon-core.cjs, acp-worker.js), which bundle
+  // their whole import tree, plus the codex-acp bundle copied beside them. 2026-10-30: the
+  // thread restore (acp-thread-restore.ts) and the worker's redaction (src/logging/redact.ts)
+  // were bundled there, and a codex-acp patch changes only the bundle's bytes: none of them
+  // moved the version, so a host kept the old ACP code after a deploy.
+  it('every module bundled into the ACP sidecars, and the codex-acp bundle, is in BOTH lists', () => {
+    const bundled = new Set<string>()
+    const todo = ['src/providers/acp-daemon.ts', 'src/providers/acp-worker/worker-main.ts']
+    while (todo.length > 0) {
+      const rel = todo.pop()!
+      if (bundled.has(rel)) continue
+      bundled.add(rel)
+      const src = fs.readFileSync(path.join(ROOT, rel), 'utf-8')
+      for (const m of src.matchAll(/^import\s+(?!type\b)[\s\S]*?\s+from\s+'(\.{1,2}\/[^']+)\.js'/gm)) {
+        todo.push(path.posix.normalize(path.posix.join(path.posix.dirname(rel), m[1]!)) + '.ts')
+      }
+    }
+    expect(bundled).toContain('src/providers/acp-thread-restore.ts')
+    expect(bundled).toContain('src/logging/redact.ts')
+    bundled.add('node_modules/@agentclientprotocol/codex-acp/dist/index.js')
+    const shell = shellSourceList()
+    const ts = tsSourceList()
+    const missing = [...bundled].filter((rel) => !shell.includes(rel) || !ts.includes(rel))
+    expect(missing, `bundled into the ACP sidecars but not hashed: ${missing.join(', ')}`).toEqual([])
+  })
+
   // Same ratchet for the daemon-service-cli.cjs sidecar, which ships with every daemon and
   // bundles its whole import tree. src/utils/file-lock.ts was missing, so a lock change left
   // old and new lock code running side by side on the service files.

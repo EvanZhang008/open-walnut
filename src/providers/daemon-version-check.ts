@@ -70,8 +70,12 @@ const DAEMON_SOURCE_FILES = [
   // ACP worker stack — compiled into the daemon deploy unit (worker artifact
   // ships with the daemon; version skew impossible by construction).
   'src/providers/acp-daemon.ts',
+  'src/providers/acp-thread-restore.ts',
   'src/providers/acp-host-artifacts.ts',
   'node_modules/@agentclientprotocol/codex-acp/package.json',
+  // The adapter itself, as installed: Walnut patches it (patches/), and a patch
+  // edit leaves package.json as it was, so only its contents move the version.
+  'node_modules/@agentclientprotocol/codex-acp/dist/index.js',
   'src/providers/codex-model-probe.ts',
   // Unified agent.* command routing table (agent-commands-v1) — bundled into
   // the standalone twin and inlined in the source twin; a routing-table-only
@@ -81,6 +85,8 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/acp-worker/worker-main.ts',
   'src/providers/acp-worker/journal.ts',
   'src/providers/acp-worker/protocol.ts',
+  // The worker redacts provider error words with it before the daemon logs them.
+  'src/logging/redact.ts',
   // Session-changes host-local compute (changes.compute / changes.file).
   'src/providers/session-changes-core.ts',
   'src/providers/usage-host-core.ts',

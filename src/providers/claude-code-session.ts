@@ -75,7 +75,7 @@ import { isWakeupArmed } from './daemon-fold.js'
 import { noteSuppressedErrorReason } from '../core/session-snapshot-gate.js'
 import { BudgetCheckingError, BudgetPausedError, classifyDeliveryFailure, isDaemonCommandOutcomeUnknown, isSlowHostFailure, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
 import { describeClaudeLaunchFailure } from './host-runtime-core.js'
-import { AcpSession, emitAcpIdentityBoundary, sessionMcpServerToAcp, splitAcpModelId } from './acp-session.js'
+import { AcpSession, sessionMcpServerToAcp, splitAcpModelId } from './acp-session.js'
 import { engineCaps, isAcpEngine, resolveEngine } from '../core/agents/engine-registry.js'
 import { extractImageFilePathFromInput } from '../core/session-history.js'
 import { launchNamingPlainText } from '../core/sessions/launch-naming.js'
@@ -10719,7 +10719,6 @@ export class SessionRunner {
       }
       await migrateSessionQueue(sessionId, replacementId)
       await deleteSessionRecords(new Set([sessionId]), 'acp-identity-migration-attach')
-      emitAcpIdentityBoundary(record.taskId, sessionId, replacementId, recordEngine)
       migratedFrom = sessionId
       record = replacement
     }
@@ -10876,6 +10875,17 @@ export class SessionRunner {
       if (s.sessionId === sessionId || s.runtimeId === sessionId) return s
     }
     return undefined
+  }
+
+  /**
+   * True only when this server is running a turn of the session right now: a
+   * batch it delivered and has not seen end, or a live ACP turn. A live process
+   * alone is not a running turn (2026-10-30: Retry marked an idle Codex worker
+   * Running, and the panel showed "Codex is working" for minutes with no turn).
+   */
+  isTurnRunning(sessionId: string): boolean {
+    if (this.activeProcessing.has(sessionId)) return true
+    return this.findAcpSession(sessionId)?.activity === 'processing'
   }
 
   /** Find a live ACP session or lazily attach it from its durable record. */
@@ -13002,9 +13012,14 @@ export class SessionRunner {
       target!.send('', record.cwd ?? undefined, sessionId, resumeMode, model, resumePrompt, record.host ?? undefined, sshTarget, undefined, cfg.session?.permission_prompt, undefined, cfg.session?.stream_partial_messages, effort,
         (ok, err) => {
           if (ok) {
+            // No turn runs here, so the record says idle: Running would promise a
+            // turn and keep "working" on screen with none (same rule as Retry).
+            // Written before the restart returns, so it can never land after the
+            // queued message the caller sends next has made the session Running.
             import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
-              updateSessionRecord(sessionId, { process_status: 'running', errorMessage: undefined, status_reason: 'restart_reinitialize', status_changed_by: 'user' } as Record<string, unknown>)).catch(() => {})
-            resolve()
+              updateSessionRecord(sessionId, { process_status: 'idle', activity: undefined, errorMessage: undefined, status_reason: 'restart_reinitialize', status_changed_by: 'user' } as Record<string, unknown>))
+              .catch(() => {})
+              .finally(() => resolve())
           } else {
             reject(err ?? new Error('reinitialize spawn failed'))
           }

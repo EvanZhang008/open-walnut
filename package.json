@@ -198,6 +198,7 @@
     "yaml": "^2.8.3"
   },
   "patchedDependencies": {
-    "@anthropic-ai/claude-agent-sdk@0.2.50": "patches/@anthropic-ai%2Fclaude-agent-sdk@0.2.50.patch"
+    "@anthropic-ai/claude-agent-sdk@0.2.50": "patches/@anthropic-ai%2Fclaude-agent-sdk@0.2.50.patch",
+    "@agentclientprotocol/codex-acp@1.4.0": "patches/@agentclientprotocol%2Fcodex-acp@1.4.0.patch"
   }
 }

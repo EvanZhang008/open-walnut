@@ -34,6 +34,7 @@ import type {
   PermissionOptionId,
 } from '@agentclientprotocol/sdk'
 import { AcpJournal, readJournal } from './journal.js'
+import { redactSensitiveText } from '../../logging/redact.js'
 import { mergeAcpSpawnEnv, snapshotAcpTurnUsage } from './protocol.js'
 import type {
   AcpMcpServer,
@@ -100,6 +101,7 @@ export class AcpWorker {
   private onJournalAppend: (offset: number) => void
   private onAdapterStderr: (bytes: number) => void
   private onAdapterGone: () => void
+  private onProviderError: (report: ProviderErrorReport) => void
   /** Set by shutdown: the adapter's exit is then the one asked for. */
   private shuttingDown = false
 
@@ -108,11 +110,13 @@ export class AcpWorker {
     onJournalAppend: (offset: number) => void = () => {},
     onAdapterStderr: (bytes: number) => void = () => {},
     onAdapterGone: () => void = () => {},
+    onProviderError: (report: ProviderErrorReport) => void = () => {},
   ) {
     this.journal = new AcpJournal(journalPath)
     this.onJournalAppend = onJournalAppend
     this.onAdapterStderr = onAdapterStderr
     this.onAdapterGone = onAdapterGone
+    this.onProviderError = onProviderError
     this.rebuildAcceptedCommands(journalPath)
   }
 
@@ -145,6 +149,8 @@ export class AcpWorker {
         message: e instanceof Error ? e.message : String(e),
       }
       const safeError = sanitizeWorkerError(werr, adapterError.provider)
+      // A WorkerError is Walnut's own wrap: its provider words, if any, were reported where it was made.
+      if (!isWorkerError(e)) this.reportProviderError(req.op, safeError.kind, e)
       const control = req.op === 'prompt'
         && (req.params as Partial<PromptParams> | undefined)?.control === 'self-report'
       const recoverableLoadFailure = req.op === 'loadSession' && werr.kind === 'load_failed'
@@ -170,6 +176,12 @@ export class AcpWorker {
       if (!recoverableLoadFailure) this.notifyJournal()
       return this.err(req, safeError)
     }
+  }
+
+  /** The provider's own words for a failure go to the daemon's log, redacted, and never to the journal. */
+  private reportProviderError(op: string, kind: WorkerError['kind'], error: unknown): void {
+    const detail = providerErrorDetail(error)
+    if (detail) this.onProviderError({ op, kind, detail })
   }
 
   private async opInitialize(params: InitializeParams): Promise<unknown> {
@@ -307,6 +319,8 @@ export class AcpWorker {
       return resp
     } catch (e) {
       if (classifyPromptRejection(e) === 'auth_required' || ['provider_incompatible', 'provider_missing'].includes(String(asObject(asObject(e).data).walnutError))) throw e
+      // The words ride the adapter's error data, which the wrap below drops.
+      this.reportProviderError('loadSession', 'load_failed', e)
       throw <WorkerError>{ kind: 'load_failed', message: e instanceof Error ? e.message : String(e) }
     } finally {
       this.loadingSession = false
@@ -398,6 +412,7 @@ export class AcpWorker {
       this.lastEnded = 'turn'
       // Only the error category is safe to persist; provider diagnostics may contain credentials.
       const kind = classifyPromptRejection(e)
+      this.reportProviderError('prompt', kind, e)
       this.journal.appendMeta({
         type: 'error',
         errorKind: kind,
@@ -514,12 +529,12 @@ export class AcpWorker {
     }).then((resp) => {
       this.finishControlPrompt(params.commandId, resp.stopReason)
     }).catch((error) => {
+      this.reportProviderError('prompt', 'protocol', error)
       this.finishControlPrompt(
         params.commandId,
         'error',
         safeWorkerErrorMessage('protocol'),
       )
-      void error
     })
     return acceptedResult
   }
@@ -953,6 +968,28 @@ function asObject(value: unknown): Record<string, unknown> {
     : {}
 }
 
+export interface ProviderErrorReport { op: string; kind: WorkerError['kind']; detail: string }
+
+const PROVIDER_DETAIL_MAX = 500
+
+/**
+ * What the provider said about a failure, for the daemon's log only. The journal
+ * (shown in chat, mirrored off the machine) keeps the category alone, but with
+ * only the category nobody could tell why a session broke: on 2026-10-30 Codex
+ * answered "This chat uses local-proxy, but your current provider is
+ * hosted-provider" for every resume and turn, and every log said "ACP provider
+ * protocol operation failed". Redacted (src/logging/redact.ts), one line, capped.
+ */
+export function providerErrorDetail(error: unknown): string | undefined {
+  const record = asObject(error)
+  const data = asObject(record.data)
+  const pick = [data.details, data.message, error instanceof Error ? error.message : record.message]
+    .find((v): v is string => typeof v === 'string' && v.trim() !== '' && v.trim() !== 'Internal error')
+  if (!pick) return undefined
+  const line = redactSensitiveText(pick).replace(/\s+/g, ' ').trim()
+  return line.length > PROVIDER_DETAIL_MAX ? line.slice(0, PROVIDER_DETAIL_MAX) + '…' : line
+}
+
 function sanitizeWorkerError(error: WorkerError, provider?: unknown): WorkerError {
   const message = error.kind === 'provider_incompatible' && provider === 'pi'
     ? 'Pi 0.80.4 or newer is required; update the Pi CLI.'
@@ -1006,6 +1043,7 @@ export function runWorkerMain(): void {
     (bytes) => writeLine({ ev: 'adapter_stderr', bytes }),
     // Exit once stdout has drained, so the lines already written reach the daemon.
     () => { process.stdout.write('', () => process.exit(3)) },
+    (report) => writeLine({ ev: 'provider_error', ...report }),
   )
 
   const rl = readline.createInterface({ input: process.stdin, terminal: false })

@@ -92,6 +92,48 @@ export function discardedSince(key: string, mark: number): boolean {
 let saveSeq = 0;
 const discardedAt = new Map<string, number>();
 
+/**
+ * The box sent `text` from `key`. From now on a copy of those words is never
+ * written back as the key's draft: a save a box owed from before the send, a
+ * reload flush of a box still showing them, the server's copy from before
+ * (2026-10-30: a debounced save fired while the send was on its way, and the
+ * sent message came back as the draft and was sent twice). Words typed after
+ * the send take a newer mark and save as usual, the same words included.
+ * Returns the send's mark, for unmarkDraftSent when the send fails.
+ */
+export function markDraftSent(key: string, text: string): number {
+  const mark = ++saveSeq;
+  if (text.trim()) sentAt.set(key, { text: text.trim(), mark, at: Date.now() });
+  return mark;
+}
+
+/**
+ * How long after a send a server copy of the sent words is still a copy. Long
+ * enough for every window's owed save and the mirror's debounce to have gone up;
+ * the same words typed on another device later than that are that device's draft.
+ */
+const SENT_COPY_WINDOW_MS = 60_000;
+
+/** The send marked `mark` failed: its words are the draft again. */
+export function unmarkDraftSent(key: string, mark: number): void {
+  if (sentAt.get(key)?.mark === mark) sentAt.delete(key);
+}
+
+/**
+ * Is `text` a copy of the words last sent from `key`? With `mark` (when the
+ * writer's words were typed), only words typed before that send count.
+ */
+export function isSentDraftCopy(key: string, text: string | null, mark?: number, stampedAt?: number): boolean {
+  const sent = sentAt.get(key);
+  if (!sent || !text?.trim()) return false;
+  if (mark !== undefined && mark > sent.mark) return false;
+  // A server copy (stamped when its writer saved it) from well after the send was typed again.
+  if (stampedAt !== undefined && stampedAt > sent.at + SENT_COPY_WINDOW_MS) return false;
+  return text.trim() === sent.text;
+}
+
+const sentAt = new Map<string, { text: string; mark: number; at: number }>();
+
 /** A draft as a JSON value (a form's several fields under one key). */
 export function readDraftJson<T>(key: string): T | undefined {
   const raw = readDraft(key);
@@ -237,6 +279,15 @@ async function pull(notify: boolean, timeoutMs: number): Promise<void> {
   for (const [key, entry] of Object.entries(plan.adopt)) {
     // A write waiting to go up is newer than anything the server could hold.
     if (pending.has(key)) continue;
+    // Words this window sent are not a draft, however the copy is stamped:
+    // this browser's value (or none, for one kept here only) goes back up over it.
+    if (isSentDraftCopy(key, entry.v, undefined, entry.ts)) {
+      const ts = Math.max(Date.now(), entry.ts + 1);
+      const v = rawLocalStorage.get(key);
+      meta[key] = ts;
+      foldPending(pending, key, { v: v === null || v.length > MAX_SYNCED_DRAFT_LEN || hasCredential(v) ? null : v, ts });
+      continue;
+    }
     try {
       if (entry.v === null) rawLocalStorage.remove(key);
       else rawLocalStorage.set(key, entry.v);

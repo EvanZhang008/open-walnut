@@ -17,7 +17,7 @@
  * is no draft.
  */
 import { useCallback, useEffect, useRef, useState, type SetStateAction } from 'react';
-import { discardedSince, draftSaveMark, readDraft, subscribeDraft, writeDraft } from '@/utils/drafts';
+import { discardedSince, draftSaveMark, isSentDraftCopy, markDraftSent, readDraft, subscribeDraft, writeDraft } from '@/utils/drafts';
 import { DRAFT_FLUSH_EVENT, noteDraftWrite, type DraftFlushDetail } from '@/utils/unsaved-work';
 
 const DEBOUNCE_MS = 300;
@@ -57,13 +57,16 @@ export function useDraft(key: string | null | undefined, opts: { baseline?: stri
   const keyRef = useRef(k);
   const pending = useRef<{ key: string; text: string; mark: number } | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // The mark of the words last typed here (0: none), for the reload flush.
+  const typedMark = useRef(0);
 
   const flush = useCallback(() => {
     clearTimeout(timer.current);
     const p = pending.current;
     pending.current = null;
-    // The owner discarded the draft after these words were typed (utils/drafts.ts).
-    if (!p || discardedSince(p.key, p.mark)) return;
+    // The owner discarded the draft after these words were typed, or they were
+    // sent since (utils/drafts.ts).
+    if (!p || discardedSince(p.key, p.mark) || isSentDraftCopy(p.key, p.text, p.mark)) return;
     writeDraft(p.key, p.text === baselineRef.current ? '' : p.text);
     noteDraftWrite();
   }, []);
@@ -96,7 +99,8 @@ export function useDraft(key: string | null | undefined, opts: { baseline?: stri
     setTextState(value);
     const kk = keyRef.current;
     if (!kk) return;
-    pending.current = { key: kk, text: value, mark: draftSaveMark() };
+    typedMark.current = draftSaveMark();
+    pending.current = { key: kk, text: value, mark: typedMark.current };
     clearTimeout(timer.current);
     timer.current = setTimeout(flush, DEBOUNCE_MS);
   }, [flush]);
@@ -104,6 +108,9 @@ export function useDraft(key: string | null | undefined, opts: { baseline?: stri
   const clear = useCallback((sentKey?: string | null, sentText?: string) => {
     const kk = keyRef.current;
     const target = sentKey === undefined ? kk : sentKey;
+    // Every box of the key, and the server's copy, now leaves the sent words out.
+    const sent = sentText ?? (target === kk ? textRef.current : '');
+    if (target) markDraftSent(target, sent);
     if (sentText !== undefined && target === kk && textRef.current.trim() !== sentText.trim()) return;
     if (target) { writeDraft(target, ''); noteDraftWrite(); }
     if (target !== kk && sentKey !== undefined) return;
@@ -122,7 +129,7 @@ export function useDraft(key: string | null | undefined, opts: { baseline?: stri
       if (pending.current) flush();
       const stored = readDraft(kk);
       const t = textRef.current;
-      if (t !== baselineRef.current && stored !== t) { writeDraft(kk, t); noteDraftWrite(); }
+      if (t !== baselineRef.current && stored !== t && !isSentDraftCopy(kk, t, typedMark.current)) { writeDraft(kk, t); noteDraftWrite(); }
       for (const element of draftElements(kk)) detail.claims.push({ element, key: kk, text: readDraft(kk) });
     };
     window.addEventListener(DRAFT_FLUSH_EVENT, onFlush);

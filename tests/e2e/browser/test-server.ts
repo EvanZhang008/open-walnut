@@ -54,6 +54,9 @@ process.env.WALNUT_DISABLE_BACKGROUND_AI = '1'
 process.env.WALNUT_RELATED_CHECK = '0'
 process.env.MOCK_ACP_LOAD_DELAY_MS = '10000'
 process.env.MOCK_ACP_LOAD_DELAY_SESSION_ID = 'pw-codex-cold-detail-session'
+// Inert until a spec creates the file: the mock adapter then fails its next
+// session/load once (codex-interrupt-send.spec.ts).
+process.env.MOCK_ACP_FAIL_LOAD_FILE = path.join(tmpBase, 'mock-acp-fail-next-load')
 // Every engine reports installed in GET /api/engines, so the engine toggle is the
 // same on any machine: sessions here run the mock ACP adapter, never a real
 // gemini/opencode/goose/codex CLI, so probing the host for those binaries would

@@ -8,7 +8,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { AcpWorker, classifyPromptRejection } from '../../src/providers/acp-worker/worker.js'
+import { AcpWorker, providerErrorDetail, classifyPromptRejection } from '../../src/providers/acp-worker/worker.js'
 import { readJournal } from '../../src/providers/acp-worker/journal.js'
 import {
   WALNUT_MCP_SERVER,
@@ -280,6 +280,31 @@ describe('AcpWorker lifecycle', () => {
     expect(err?.message).toBe('ACP provider authentication is required')
     expect(fs.readFileSync(journalPath(), 'utf-8')).not.toContain('SUPER_SECRET_TOKEN')
     expect(fs.readFileSync(journalPath(), 'utf-8')).not.toContain('abc123')
+  })
+
+  it('the provider words of a rejected prompt reach the daemon log redacted, and only there', async () => {
+    const reports: Array<{ op: string; kind: string; detail: string }> = []
+    const w = new AcpWorker(journalPath(), () => {}, () => {}, () => {}, (r) => reports.push(r))
+    worker = w
+    const secret = 'This chat uses local-proxy, but your current provider is hosted-provider. api_key=sk-abcdefghijklmnopqrstuvwx'
+    expect((await op(w, 'initialize', { adapterCommand: [process.execPath, MOCK_AGENT], cwd: tmpDir, env: { MOCK_ACP_REJECT_PROMPT: secret } })).ok).toBe(true)
+    await op(w, 'newSession', { cwd: tmpDir })
+    await op(w, 'prompt', { commandId: 'acp-prompt:qm-said', walnutMessageId: 'qm-said', text: 'hello' })
+    await waitForJournal((r) => metas(r).some((e) => e.type === 'turn-interrupted'))
+    expect(reports).toHaveLength(1)
+    expect(reports[0]).toMatchObject({ op: 'prompt', kind: 'protocol' })
+    expect(reports[0].detail).toContain('This chat uses local-proxy, but your current provider is hosted-provider.')
+    expect(reports[0].detail).not.toContain('sk-abcdefghijklmnopqrstuvwx')
+    expect(fs.readFileSync(journalPath(), 'utf-8')).not.toContain('local-proxy')
+  })
+
+  it('providerErrorDetail reads the adapter error shapes and caps them', () => {
+    // codex-acp: JSON-RPC -32603 "Internal error" with the provider words in data.details.
+    expect(providerErrorDetail({ code: -32603, message: 'Internal error', data: { details: 'thread not found' } })).toBe('thread not found')
+    expect(providerErrorDetail(new Error('Invalid params:\n  bad block'))).toBe('Invalid params: bad block')
+    expect(providerErrorDetail({ code: -32603, message: 'Internal error', data: {} })).toBeUndefined()
+    expect(providerErrorDetail(undefined)).toBeUndefined()
+    expect(providerErrorDetail(new Error('x'.repeat(2000)))!.length).toBe(501)
   })
 
   it('classifyPromptRejection: auth-shaped text → auth_required, anything else → protocol', () => {
@@ -892,6 +917,15 @@ describe('load / resume', () => {
     expect(resp.error?.kind).toBe('load_failed')
     const recs = readJournal(journalPath()).records.map(({ record }) => record)
     expect(metas(recs).some((event) => event.type === 'error')).toBe(false)
+  })
+
+  it('a failed load reports the provider words once, to the daemon log only', async () => {
+    const reports: Array<{ op: string; kind: string; detail: string }> = []
+    const w = new AcpWorker(journalPath(), () => {}, () => {}, () => {}, (r) => reports.push(r))
+    worker = w
+    expect((await op(w, 'initialize', { adapterCommand: [process.execPath, MOCK_AGENT], cwd: tmpDir, env: { MOCK_ACP_FAIL_LOAD: '1' } })).ok).toBe(true)
+    expect((await op(w, 'loadSession', { providerSessionId: 'mock-session-1', cwd: tmpDir })).error?.kind).toBe('load_failed')
+    expect(reports).toEqual([{ op: 'loadSession', kind: 'load_failed', detail: 'mock agent: scripted load failure' }])
   })
 
   it('prompt without a session → no_session error', async () => {

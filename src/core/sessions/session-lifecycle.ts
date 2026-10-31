@@ -858,14 +858,35 @@ export async function retrySession(sessionId: string): Promise<RetryResult> {
     const alive = await isSessionProcessAlive(record);
 
     if (alive) {
+      // A live process is not a running turn. Say Running only when a turn
+      // runs; otherwise the session is idle, and a message still waiting in
+      // its queue is sent now (2026-10-30: Retry marked an idle Codex worker
+      // Running, so the panel spun "working" with no turn and the user's
+      // message was never answered).
+      const { sessionRunner } = await import('../../providers/claude-code-session.js');
+      const turnRunning = sessionRunner.isTurnRunning(sessionId);
+      const { getQueue, unparkMessage } = await import('../session-message-queue.js');
+      const pendingMsgs = turnRunning ? [] : await getQueue(sessionId);
+      for (const parked of pendingMsgs.filter((m) => m.status === 'parked')) {
+        await unparkMessage(sessionId, parked.id);
+      }
       const updated = await updateSessionRecord(sessionId, {
-        process_status: 'running',
+        process_status: turnRunning ? 'running' : 'idle',
         errorMessage: undefined,
+        errorKind: undefined,
+        ...(turnRunning ? {} : { activity: undefined }),
+        last_status_change: new Date().toISOString(),
         status_reason: 'retry_reconnect',
         status_changed_by: 'user',
-      } as Partial<SessionRecord>);
+      } as Record<string, unknown> as Partial<SessionRecord>);
       emitSessionStatusChanged(updated, {}, ['*']);
-      log.session.info('session retry: reconnected (process alive)', { sessionId, taskId: record.taskId });
+      log.session.info('session retry: reconnected (process alive)', {
+        sessionId, taskId: record.taskId, turnRunning, pending: pendingMsgs.length,
+      });
+      if (pendingMsgs.length > 0) {
+        bus.emit(EventNames.SESSION_SEND, { sessionId, taskId: record.taskId, message: '' }, ['session-runner'], { source: 'retry' });
+        return { status: 'resuming', sessionId, restoredMessages: pendingMsgs.length };
+      }
       return { status: 'reconnected', sessionId };
     }
 

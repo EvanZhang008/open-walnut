@@ -543,11 +543,13 @@ describe('ACP task linking and fork routing', () => {
     ]);
     expect(oldAttach).toBe(newAttach);
     expect(establish).toHaveBeenCalledOnce();
+    // The migration itself says nothing to the transcript: a thread change is told
+    // once, from the journal's session-created / session-loaded (acp-journal-projector.ts),
+    // so a migration that runs twice can never tell it twice.
     expect(emit.mock.calls.filter(([name, data]) =>
       name === 'session:system-event'
-        && (data as { previousSessionId?: string }).previousSessionId === oldId
-        && (data as { newSessionId?: string }).newSessionId === newId))
-      .toHaveLength(1);
+        && (data as { previousSessionId?: string }).previousSessionId === oldId))
+      .toHaveLength(0);
     expect(runner.findAcpSession(oldId)).toBe(oldAttach);
     expect(await getSessionByClaudeId(oldId)).toBeNull();
     expect(await getSessionByClaudeId(newId)).toMatchObject({

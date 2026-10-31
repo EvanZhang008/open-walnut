@@ -23,6 +23,37 @@ const frame = (
 })
 
 describe('ACP journal projector', () => {
+  // 2026-10-30: a failed load after an interrupt replaced a Codex thread with an
+  // empty one, and the only notice went live to a session id the panel had left.
+  // Every engine journals session-created / session-loaded, so the fold says it.
+  it('says in the transcript when the provider thread changes, and when the earlier one is back', () => {
+    const history = projectAcpJournalHistory('runtime-thread', [
+      meta(1, { type: 'session-created', providerSessionId: 'thread-a' } as never),
+      meta(2, { type: 'prompt-accepted', commandId: 'turn-1', walnutMessageId: 'm1', text: 'first' } as never),
+      meta(3, { type: 'turn-ended', commandId: 'turn-1', stopReason: 'end_turn' } as never),
+      // A cold start that loads the same thread is not a change.
+      meta(4, { type: 'session-loaded', providerSessionId: 'thread-a' } as never),
+      meta(5, { type: 'session-created', providerSessionId: 'thread-b' } as never),
+      meta(6, { type: 'session-loaded', providerSessionId: 'thread-a' } as never),
+    ])
+    const notices = history.filter((m) => m.role === 'system')
+    expect(notices.map((m) => [m.systemVariant, m.text])).toEqual([
+      ['error', 'Could not resume the earlier conversation, so a new provider thread was started. The model does not see the messages above.'],
+      ['info', 'Resumed the earlier conversation in its own provider thread.'],
+    ])
+    // The first thread of a runtime is no change at all.
+    expect(projectAcpJournalHistory('runtime-thread', [
+      meta(1, { type: 'session-created', providerSessionId: 'thread-a' } as never),
+    ]).filter((m) => m.role === 'system')).toEqual([])
+  })
+
+  it('streams the thread change live through the same fold', () => {
+    const normalizer = new AcpStreamNormalizer(new AcpJournalProjector('runtime-live'))
+    normalizer.normalize(meta(1, { type: 'session-loaded', providerSessionId: 'thread-a' } as never))
+    const events = normalizer.normalize(meta(2, { type: 'session-created', providerSessionId: 'thread-b' } as never))
+    expect(events).toEqual([expect.objectContaining({ name: 'session:system-event', payload: expect.objectContaining({ variant: 'error' }) })])
+  })
+
   it.each(['prompt-accepted', 'steer-accepted'])('strips display-only wrappers from %s without rewriting the journal', (type) => {
     // A message hint block (the current form) and the reference cards.
     const text = composeHinted('Keep this message.\n\n---walnut-refs---\nInternal reference card.\n---/walnut-refs---',

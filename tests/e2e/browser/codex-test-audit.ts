@@ -86,6 +86,13 @@ async function pageLogTab(page: Page): Promise<string | null> {
   return page.evaluate(() => sessionStorage.getItem('walnut-log-tab')).catch(() => null)
 }
 
+/** How each engine words a request a navigation or an AbortController cut. */
+const ABORT_ERROR_TEXTS = new Set([
+  'net::ERR_ABORTED',          // Chromium
+  'cancelled',
+  'Load request cancelled',    // WebKit
+])
+
 function isExpectedNavigationAbort(message: string): boolean {
   return /^\[api\] GET \/api\/sessions\/[^ ]+\/history\?\S* → (?:200|304) JSON parse failed in \d+ms(?: AbortError: The user aborted a request\.)?$/
     .test(message)
@@ -197,7 +204,7 @@ export async function installBrowserAudit(page: Page, walnutHome: string): Promi
   page.on('requestfailed', (request) => {
     inFlight.delete(request)
     const errorText = request.failure()?.errorText
-    if (cutByNavigation.has(request) && (errorText === 'net::ERR_ABORTED' || errorText === 'cancelled')) return
+    if (cutByNavigation.has(request) && errorText !== undefined && ABORT_ERROR_TEXTS.has(errorText)) return
     failedRequests.push({
       method: request.method(),
       url: request.url(),
@@ -228,7 +235,7 @@ export async function installBrowserAudit(page: Page, walnutHome: string): Promi
     async assertClean(allowances = {}) {
       const standardAbort = (failure: { method: string; url: string; errorText?: string }) => {
         const pathname = new URL(failure.url).pathname
-        if (failure.errorText !== 'net::ERR_ABORTED' && failure.errorText !== 'cancelled') return false
+        if (failure.errorText === undefined || !ABORT_ERROR_TEXTS.has(failure.errorText)) return false
         // The app-wide pollers (quiet mode, the rail's plugin status items) fetch
         // with an AbortController, so a navigation or unmount cancels them by design.
         return (failure.method === 'GET'

@@ -104,6 +104,7 @@
   ],
   "patchedDependencies": {
     "@anthropic-ai/claude-agent-sdk@0.2.50": "patches/@anthropic-ai%2Fclaude-agent-sdk@0.2.50.patch",
+    "@agentclientprotocol/codex-acp@1.4.0": "patches/@agentclientprotocol%2Fcodex-acp@1.4.0.patch",
   },
   "packages": {
     "@agentclientprotocol/codex-acp": ["@agentclientprotocol/codex-acp@1.4.0", "", { "dependencies": { "@agentclientprotocol/sdk": "^1.3.0", "@openai/codex": "^0.147.0", "diff": "^9.0.0", "open": "^11.0.0", "vscode-jsonrpc": "^9.0.1", "zod": "^4.0.0" }, "bin": { "codex-acp": "dist/index.js" } }, "sha512-Fo12tKFerUZltUgM8PxBiUBVxrYrIMK24zlOmQabnJtysPHrAwNq+CXMA0AMepPPEP3RlfDXOQPtjBGhv+Rd4w=="],

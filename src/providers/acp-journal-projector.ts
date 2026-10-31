@@ -152,6 +152,8 @@ export class AcpJournalProjector {
    *  request frame so an ANSWER can tell an allow from a reject. Dropped as
    *  soon as the request resolves. */
   private permissionOptionKinds = new Map<string, Map<string, string>>()
+  /** The provider thread the journal last named (session-created / -loaded). */
+  private threadId: string | undefined
 
   constructor(readonly runtimeId: string) {}
 
@@ -267,6 +269,9 @@ export class AcpJournalProjector {
           allowed: false,
           cancelled: true,
         }]
+      case 'session-created':
+      case 'session-loaded':
+        return this.projectThread(record.ts, event.type, event.providerSessionId)
       case 'error': {
         this.turnHasError = true
         const commandId = event.commandId ?? this.currentCommandId
@@ -440,6 +445,31 @@ export class AcpJournalProjector {
     const segment = { ordinal: this.segmentOrdinal++, text: '', thinking: '', ...(providerMessageId ? { providerMessageId } : {}) }
     this.currentSegment = segment
     return segment
+  }
+
+  /**
+   * A change of provider thread inside one runtime is a change of what the
+   * model remembers, so the transcript says it, durably (2026-10-30: a failed
+   * load after an interrupt replaced a Codex thread with an empty one, and the
+   * only notice was a live event on the session id the panel had just left).
+   * A new thread after another one: the model no longer sees what is above. A
+   * load of a different thread after that: the earlier conversation is back.
+   */
+  private projectThread(ts: number, type: 'session-created' | 'session-loaded', id: string): AcpProjectedEvent[] {
+    const previous = this.threadId
+    this.threadId = id
+    if (!previous || previous === id) return []
+    const fresh = type === 'session-created'
+    return [{
+      type: 'system',
+      ts,
+      commandId: this.currentCommandId,
+      msgId: this.id('thread', id),
+      variant: fresh ? 'error' : 'info',
+      message: fresh
+        ? 'Could not resume the earlier conversation, so a new provider thread was started. The model does not see the messages above.'
+        : 'Resumed the earlier conversation in its own provider thread.',
+    }]
   }
 
   private system(ts: number, commandId: string, message: string): Extract<AcpProjectedEvent, { type: 'system' }> {

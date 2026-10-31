@@ -28,6 +28,7 @@ import readline from 'node:readline'
 import { StringDecoder } from 'node:string_decoder'
 import { mergeAcpSpawnEnv, type AcpMcpServer } from './acp-worker/protocol.js'
 import { probeCodexModels } from './codex-model-probe.js'
+import { findThreadToRestore } from './acp-thread-restore.js'
 import { createHostEngineProbe, resolveHostAcpArtifacts, type AcpHostAdapterSpec } from './acp-host-artifacts.js'
 
 const ACP_IDLE_KILL_MS = 2 * 60 * 60 * 1000   // mirror native SESSION_IDLE_KILL_MS
@@ -434,10 +435,16 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     const rl = readline.createInterface({ input: proc.stdout!, terminal: false })
     rl.on('line', (line) => {
       if (!line.trim()) return
-      let msg: { id?: number; ev?: string; offset?: number; bytes?: number }
+      let msg: { id?: number; ev?: string; offset?: number; bytes?: number; op?: string; kind?: string; detail?: string }
       try { msg = JSON.parse(line) } catch { return }
       if (msg.ev === 'journal' && typeof msg.offset === 'number') {
         pushJournal(entry, msg.offset)
+        return
+      }
+      if (msg.ev === 'provider_error' && typeof msg.detail === 'string') {
+        // The provider's own words (redacted by the worker): the one place they
+        // are kept, so a failure the chat shows only as a category can be explained.
+        log('warn', 'acp: provider error', { sid, op: msg.op, kind: msg.kind, detail: msg.detail })
         return
       }
       if (msg.ev === 'adapter_stderr' && typeof msg.bytes === 'number') {
@@ -474,7 +481,18 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     }
     // Same mount list on both paths: ACP's mcpServers is the complete set for
     // the session, so omitting it on load would drop the mounts on cold resume.
-    const sessionResp = providerSessionId
+    // A thread a failed load replaced, and that never got a turn of its own,
+    // is not the conversation: try the one it replaced first (acp-thread-restore.ts).
+    const restoreId = await findThreadToRestore(journalPath, providerSessionId)
+    let sessionResp: WorkerRpcResponse | undefined
+    if (restoreId) {
+      const restored = await rpc(entry, 'loadSession', { providerSessionId: restoreId, cwd, mcpServers })
+      log(restored.ok ? 'info' : 'warn', restored.ok ? 'acp: restored the thread a fresh one had replaced' : 'acp: replaced thread did not load, loading the requested one', {
+        sid, requested: providerSessionId, restored: restoreId,
+      })
+      if (restored.ok) sessionResp = restored
+    }
+    sessionResp ??= providerSessionId
       ? await rpc(entry, 'loadSession', { providerSessionId, cwd, mcpServers })
       : await rpc(entry, 'newSession', { cwd, mcpServers })
     if (!sessionResp.ok) {

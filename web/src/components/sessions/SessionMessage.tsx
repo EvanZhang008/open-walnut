@@ -1027,7 +1027,9 @@ function specialSessionRow({ message }: SessionMessageProps): ReactNode | undefi
   // substitution notices) — same visual language as the streaming system blocks
   // (session-system-line), never a chat bubble.
   if (role === 'system') {
-    return <SystemLineCollapsible {...systemGroupMemberFromHistory(message)} />;
+    // The member's key is for a grouped list; spread into JSX it is a key React warns about.
+    const { variant, message: line, detail, time: lineTime } = systemGroupMemberFromHistory(message);
+    return <SystemLineCollapsible variant={variant} message={line} detail={detail} time={lineTime} />;
   }
 
   // Interrupt marker — render as muted system banner, not a "You" bubble.

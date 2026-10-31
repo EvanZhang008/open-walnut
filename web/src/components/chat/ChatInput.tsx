@@ -20,7 +20,7 @@ import { MicButton } from '../common/MicButton';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { pasteRichTextAsMarkdown, isOfficeClipboardHtml } from '@/utils/html-to-markdown';
 import { DRAFT_FLUSH_EVENT, noteDraftWrite, type DraftFlushDetail } from '@/utils/unsaved-work';
-import { discardedSince, draftSaveMark, subscribeDraft } from '@/utils/drafts';
+import { discardedSince, draftSaveMark, isSentDraftCopy, markDraftSent, subscribeDraft, unmarkDraftSent } from '@/utils/drafts';
 import { PlusMenuActionRows } from './PlusMenuActionRows';
 import { plusButtonLabel, selectPlusMenuAction, type PlusMenuAction } from './plus-menu-actions';
 import { keepCommandFirst } from './leading-command';
@@ -300,12 +300,16 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // once when the composer unmounts or moves to another key, so the last
   // keystrokes before either are never dropped.
   const pendingDraftRef = useRef<{ key: string; text: string; mark: number } | null>(null);
+  // The mark of the words last typed here: a reload flush tells words typed
+  // after a send from a copy of the sent ones.
+  const typedMarkRef = useRef(0);
   const flushDraft = useCallback(() => {
     clearTimeout(draftTimerRef.current);
     const pending = pendingDraftRef.current;
     pendingDraftRef.current = null;
-    // The owner discarded the draft after these words were typed (utils/drafts.ts).
-    if (!pending || discardedSince(pending.key, pending.mark)) return;
+    // The owner discarded the draft after these words were typed, or they were
+    // sent since (utils/drafts.ts).
+    if (!pending || discardedSince(pending.key, pending.mark) || isSentDraftCopy(pending.key, pending.text, pending.mark)) return;
     try {
       if (pending.text) localStorage.setItem(pending.key, pending.text);
       else localStorage.removeItem(pending.key);
@@ -329,7 +333,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       if (detail.scope === 'leave' && window.location.pathname === '/popout') return;
       try {
         const text = composeRefs(el.value, tableRef.current);
-        if (!text.trim()) return;
+        if (!text.trim() || isSentDraftCopy(key, text, typedMarkRef.current)) return;
         if (localStorage.getItem(key) !== text) { localStorage.setItem(key, text); noteDraftWrite(); }
         detail.claims.push({ element: el, key, text });
       } catch { /* not saved: the text still counts as unsaved */ }
@@ -699,7 +703,9 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     clearTimeout(draftTimerRef.current);
     // The key it is typed under now: a key change before the timer fires flushes it there.
     const key = draftKeyRef.current;
-    pendingDraftRef.current = key ? { key, text, mark: draftSaveMark() } : null;
+    const mark = draftSaveMark();
+    typedMarkRef.current = mark;
+    pendingDraftRef.current = key ? { key, text, mark } : null;
     if (!key) return;
     draftTimerRef.current = setTimeout(flushDraft, 300);
   }, [flushDraft]);
@@ -788,8 +794,21 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     // The key the words were typed under: the box may show another one by the
     // time the send settles.
     const sentKey = draftKeyRef.current;
+    // The words being sent are the draft until the send settles (a reload now
+    // keeps them), written at once: the save the debounce still owes would fire
+    // during the send and put them back in the emptied box (2026-10-30).
+    clearTimeout(draftTimerRef.current);
+    pendingDraftRef.current = null;
+    let sentMark = 0;
+    if (sentKey) {
+      try {
+        if (text.trim() && localStorage.getItem(sentKey) !== text) { localStorage.setItem(sentKey, text); noteDraftWrite(); }
+      } catch { /* unavailable */ }
+      sentMark = markDraftSent(sentKey, text);
+    }
     resetInput(true);
     const failed = () => {
+      if (sentKey) unmarkDraftSent(sentKey, sentMark);
       if (sentKey === draftKeyRef.current) restoreInput(text, imgs);
       else if (sentKey) { try { localStorage.setItem(sentKey, text); } catch { /* unavailable */ } }
     };
