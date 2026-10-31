@@ -63,6 +63,9 @@ export function StatusSectionHeading({ sectionKey, count, open, onToggle, more }
         title={`${STATUS_SECTION_TITLES[sectionKey]}. Click to ${open ? 'collapse' : 'expand'}.`}
         onClick={() => onToggle(sectionKey)}
       >
+        {/* Each section's own mark (an eye, a red ring, an hourglass...), so Watching and
+            Waiting never read alike (2026-10-31, the user: "watching vs waiting ... mixed"). */}
+        <span className="status-section-heading-icon" aria-hidden="true">{SECTION_ICONS[sectionKey]}</span>
         <span className="navigation-label">{label}</span>
         <span className="navigation-heading-count status-section-count" data-testid={`status-section-${sectionKey}-count`}>{count}{more ? '+' : ''}</span>
         <span className="navigation-heading-rule" aria-hidden="true" />
@@ -312,15 +315,8 @@ export function StatusSectionGroup({ keys, model, open, onToggle, handlers }: {
     <>
       {keys.map((key) => {
         const { tasks, count } = sectionRowsOf(model, key);
-        if (key === 'needs') {
-          // The attention list on top: its rows, no heading to fold them away.
-          if (count === 0) return null;
-          return (
-            <section key={key} className="status-section status-section-block-needs status-section-headless" aria-label={STATUS_SECTION_LABELS[key]}>
-              <SectionRows sectionKey={key} tasks={tasks} total={count} handlers={handlers} />
-            </section>
-          );
-        }
+        // Every section has its heading, Needs you included (2026-10-31: its rows ran on
+        // under Watching's heading and read as Watching's).
         // Completed with older tasks still unloaded stays reachable, even at 0 loaded.
         const archiveLeft = key === 'done' && model.archiveLeft;
         if (count === 0 && !archiveLeft) return null;

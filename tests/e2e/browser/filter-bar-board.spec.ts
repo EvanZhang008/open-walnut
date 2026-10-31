@@ -94,7 +94,7 @@ test.describe('Status, sections and persistence', () => {
       await expect(anyRow(page, done)).toHaveCount(0)
       await expect(anyRow(page, waiting)).toHaveCount(0)
       // C49: the section counts follow the Project chip (Home's done and waiting do not
-      // count). The task that needs you leads the panel, with no heading.
+      // count). The task that needs you leads the panel, under its own heading.
       // "1+" when older completed tasks are still unloaded: a chip keeps them out of the count.
       await expect(statusSectionCount(page, 'done')).toHaveText(/^1\+?$/)
       await expect(statusSectionCount(page, 'waiting')).toHaveText('1')

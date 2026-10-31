@@ -62,12 +62,13 @@ test.describe('Flat layout', () => {
     await selectSection(page, 'All')
     const panel = page.locator('.todo-panel').first()
 
-    // Needs you leads with no heading; its row is two lines, the project on the small one.
+    // Needs you has its heading like every section; its row is two lines, the project on the small one.
     const needsRow = panel.locator(`[data-testid="status-section-needs-rows"] [data-task-id="${needs}"]`)
     await expect(needsRow).toBeVisible({ timeout: 20_000 })
     await expect(needsRow.locator('.status-card-meta .status-card-project')).toHaveText(project)
     await expect(needsRow.locator('.status-card-body > .todo-pinned-title')).toHaveText(`flat needs ${stamp}`)
-    await expect(panel.getByTestId('status-section-needs')).toHaveCount(0)
+    await expect(panel.getByTestId('status-section-needs')).toHaveCount(1)
+    await expect(panel.getByTestId('status-section-needs')).toContainText('Needs you')
     // The snoozed one is not among them (its user status is the status owner's: src/core).
     await expect(panel.locator(`[data-testid="status-section-needs-rows"] [data-task-id="${snoozed}"]`)).toHaveCount(0)
 
