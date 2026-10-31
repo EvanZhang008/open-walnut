@@ -14,11 +14,11 @@
 
 import crypto from 'node:crypto'
 import { DaemonNeedsUpgradeError } from '../daemon-file-reader.js'
-import type { PackReply, PackMeta, PackFile, PackUntracked, ScanReply, ApplyReply } from '../../providers/transfer-pack-core.js'
+import type { PackReply, PackMeta, PackFile, PackUntracked, ScanReply, ApplyReply, ClearReply, PackedFile } from '../../providers/transfer-pack-core.js'
 import type { WritePartReply, ReachReply, FetchReply, FetchFileResult } from '../../providers/transfer-core.js'
 import type { HostFacts, HostLoad } from '../../providers/host-facts-core.js'
 
-export type { PackReply, PackMeta, PackFile, PackUntracked, ScanReply, ApplyReply, WritePartReply, ReachReply, FetchReply, FetchFileResult, HostFacts, HostLoad }
+export type { PackReply, PackMeta, PackFile, PackUntracked, ScanReply, ApplyReply, ClearReply, PackedFile, WritePartReply, ReachReply, FetchReply, FetchFileResult, HostFacts, HostLoad }
 
 export const TRANSFER_CAPABILITY = 'transfer-v1'
 export const WRITE_PART_CAPABILITY = 'fs-write-part-v1'
@@ -128,6 +128,9 @@ export interface PackOptions {
   cwd: string; outDir: string; maxUntrackedBytes?: number; maxTarBytes?: number; timeoutMs?: number
   /** Only these repository paths' changes ride ('task-move-v1'). */
   paths?: string[]
+  /** With `paths`: the sha256 of each file when the session first touched it, so the pack can
+   *  tell which files hold only this task's change ('task-move-clear-v1'; older daemons ignore it). */
+  ownBefore?: Record<string, string>
   /** A folder pack leaves these relative folders out ('task-move-v1'). */
   exclude?: string[]
   /** Pack as a plain folder even inside a repository ('task-move-v1'). */
@@ -148,6 +151,21 @@ export async function hostCanMove(host: string): Promise<boolean> {
     if (err instanceof DaemonNeedsUpgradeError) return false
     throw err
   }
+}
+
+export const TASK_MOVE_CLEAR_CAPABILITY = 'task-move-clear-v1'
+
+/** The host's daemon can clear a moved shared checkout's files ('task-move-clear-v1'). Offline throws. */
+export async function hostCanClear(host: string): Promise<boolean> {
+  try { await connectionFor(host, TASK_MOVE_CLEAR_CAPABILITY); return true } catch (err) {
+    if (err instanceof DaemonNeedsUpgradeError) return false
+    throw err
+  }
+}
+
+/** Back up and clear files a move carried away from a shared checkout on `host`. */
+export function clearMovedFiles(host: string, opts: { root: string; files: PackedFile[]; backupFrom: string; backupTo: string }): Promise<ClearReply> {
+  return call<ClearReply>(host, TASK_MOVE_CLEAR_CAPABILITY, 'transfer.clear', { ...opts }, 2 * 60_000)
 }
 
 /** The git repositories and loose files in `dir` on `host`. */

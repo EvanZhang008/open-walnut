@@ -23,7 +23,7 @@ import { log } from '../../logging/index.js';
 import type { SessionRecord, Task } from '../types.js';
 import { LOCAL_HOST } from './planner.js';
 import { copyPack, transfersDir, workspaceInstructions, type MovedWorkspace } from './workspace.js';
-import type { PackMeta, PackReply, ScanReply } from './daemon-transfer-client.js';
+import type { PackedFile, PackMeta, PackReply, ScanReply } from './daemon-transfer-client.js';
 import { readHostProfile, repoKey } from '../hosts/host-profile.js';
 
 export interface WorkPiece {
@@ -66,6 +66,8 @@ export interface MovedWork {
   cleanRepos: Array<{ source: string; url?: string }>;
   /** Plain words for the outcome and the new session: what moved and what did not. */
   summary: string[];
+  /** A shared checkout's own files that rode: cleared from it once the move is done (clearMovedCopies). */
+  clearable: Array<{ root: string; files: PackedFile[]; backupFrom: string; leftUntracked?: number }>;
 }
 
 export class TaskWorkError extends Error {
@@ -110,8 +112,13 @@ function inside(child: string, parent: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !path.posix.isAbsolute(rel));
 }
 
-/** Files the session changed under `repoRoot`, repo-relative; null when unknown. */
-async function ownFiles(session: SessionRecord, repoRoot: string, host: string): Promise<string[] | null> {
+/**
+ * Files the session changed under `repoRoot`, repo-relative, and for each one whose whole
+ * history the session's record holds, the sha256 of the file when the session first touched
+ * it (`before`): the clear after a move takes a file back only when that equals HEAD, so no
+ * other writer's edit sits under the session's. null when the list is unknown.
+ */
+async function ownFiles(session: SessionRecord, repoRoot: string, host: string): Promise<{ paths: string[]; before: Record<string, string> } | null> {
   try {
     const { computeSessionChanges } = await import('../session-changes.js');
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -122,14 +129,26 @@ async function ownFiles(session: SessionRecord, repoRoot: string, host: string):
     if (timer) clearTimeout(timer);
     if (!res) return null;
     const out = new Set<string>();
+    const before: Record<string, string> = {};
+    const { createHash } = await import('node:crypto');
+    const sha = (t: string) => createHash('sha256').update(t, 'utf8').digest('hex');
+    const until = Date.now() + CHANGES_DEADLINE_MS;
     for (const g of res.groups) {
       if (g.repoRoot.replace(/\/+$/, '') !== repoRoot.replace(/\/+$/, '')) continue;
       for (const f of g.files) {
         if (f.relPath) out.add(f.relPath);
         if (f.oldRelPath) out.add(f.oldRelPath);
+        // A rename, or a record that could not be rebuilt whole, never clears.
+        if (!f.relPath || f.oldRelPath || f.status === 'renamed') continue;
+        let full: { before: string; partial: boolean } | null = res.light ? null : f;
+        if (!full && f.filePath && Date.now() < until && Object.keys(before).length < 200) {
+          const { fetchSessionFileChangeViaDaemon } = await import('../session-changes.js');
+          full = (await fetchSessionFileChangeViaDaemon(session.claudeSessionId, session.cwd ?? undefined, host === LOCAL_HOST ? undefined : host, f.filePath).catch(() => null))?.file ?? null;
+        }
+        if (full && !full.partial && typeof full.before === 'string') before[f.relPath] = sha(full.before);
       }
     }
-    return [...out];
+    return { paths: [...out], before };
   } catch (err) {
     log.session.info('task move: the session\'s own changes could not be read', { sessionId: session.claudeSessionId, error: err instanceof Error ? err.message : String(err) });
     return null;
@@ -211,6 +230,7 @@ export async function moveTaskWork(opts: {
   let relCwd = cwdPiece && cwd ? path.posix.relative(cwdPiece.piece.source, cwd) : '';
   const ownUnknown = new Set<Packed>();
   const notes: string[] = [];
+  const clearable: MovedWork['clearable'] = [];
   if (!cwdPiece && cwd && !(sourceTaskDir && inside(cwd, sourceTaskDir))) {
     const probe = await client.packWorkspace(sourceHost, { cwd, outDir: outDir(n++), paths: [] });
     relCwd = probe.meta.relCwd ?? '';
@@ -218,15 +238,16 @@ export async function moveTaskWork(opts: {
       const same = packed.find((p) => p.pack.meta.kind === 'git' && (sameRepoUrl(cloneUrlOf(p.pack.meta), cloneUrlOf(probe.meta))
         || p.pack.meta.remotes?.some((r) => r.url.replace(/\/+$/, '') === probe.meta.root)));
       const mine = await ownFiles(session, probe.meta.root, sourceHost);
-      if (same && (!mine || mine.length === 0)) {
+      if (same && (!mine || mine.paths.length === 0)) {
         // The work is the task directory's clone of this repository: the session continues there.
         cwdPiece = same;
       } else {
-        const pack = mine && mine.length > 0
-          ? await client.packWorkspace(sourceHost, { cwd, outDir: outDir(n++), paths: mine })
+        const pack = mine && mine.paths.length > 0
+          ? await client.packWorkspace(sourceHost, { cwd, outDir: outDir(n++), paths: mine.paths, ownBefore: mine.before })
           : probe;
         cwdPiece = { piece: { kind: 'checkout', source: probe.meta.root, rel: nameFor(path.posix.basename(probe.meta.root)) }, pack };
         if (!mine) ownUnknown.add(cwdPiece);
+        else if (pack.meta.limited?.files?.length) clearable.push({ root: probe.meta.root, files: pack.meta.limited.files, backupFrom: pack.outDir, leftUntracked: pack.meta.untracked?.skippedCount ?? 0 });
         packed.push(cwdPiece);
       }
     } else if (unmovableFolder(probe.meta.root)) {
@@ -298,7 +319,58 @@ export async function moveTaskWork(opts: {
     // An unset-up clone starts in its (empty) root, so the session can clone into it.
     return piece.applied && relCwd && !relCwd.startsWith('..') ? `${piece.dest}/${relCwd}` : piece.dest;
   })();
-  return { cwd: cwdOnTarget, targetTaskDir, pieces, cleanRepos, summary: [...describeMovedWork(pieces, cleanRepos), ...notes] };
+  return {
+    cwd: cwdOnTarget, targetTaskDir, pieces, cleanRepos, summary: [...describeMovedWork(pieces, cleanRepos), ...notes],
+    // Only a whole move clears anything: every piece set up on the target.
+    clearable: pieces.every((p) => p.applied) ? clearable : [],
+  };
+}
+
+/**
+ * After a move is done (its new session started), the files it carried away from a shared
+ * checkout on the old host are backed up under the task's directory there and cleared, so
+ * a later landing in that checkout does not meet them as another writer's edits (2026-10-31:
+ * three such sets were cleared by hand in one day). Each file is cleared only while it still
+ * holds what was packed; one a writer changed since stays and is named. One line per checkout.
+ */
+export async function clearMovedCopies(work: Pick<MovedWork, 'clearable'>, opts: { taskId: string; sourceHost: string; targetHost: string }): Promise<string[]> {
+  if (work.clearable.length === 0) return [];
+  const client = await import('./daemon-transfer-client.js');
+  const lines: string[] = [];
+  const { taskDirForHost } = await import('../sessions/task-dir-place.js');
+  const taskDir = await taskDirForHost(opts.taskId, opts.sourceHost).catch(() => null);
+  const can = await client.hostCanClear(opts.sourceHost).catch(() => false);
+  const day = new Date().toISOString().slice(0, 10);
+  const to = opts.targetHost === LOCAL_HOST ? 'this-mac' : opts.targetHost.replace(/[^\w.-]+/g, '_');
+  for (const c of work.clearable) {
+    const names = c.files.map((f) => f.path);
+    const list = `${names.slice(0, 5).join(', ')}${names.length > 5 ? ', …' : ''}`;
+    if (!can || !taskDir) {
+      lines.push(`Still in ${c.root} on the old host: ${names.length} file${names.length === 1 ? '' : 's'} this task changed (${list}); ${!taskDir ? 'its task directory there is unknown' : 'that host\'s daemon cannot clear them yet'}, so they were left as they are.`);
+      continue;
+    }
+    try {
+      let backupTo = '';
+      let res: Awaited<ReturnType<typeof client.clearMovedFiles>> | null = null;
+      for (let i = 1; i <= 5 && !res; i++) {
+        backupTo = `${taskDir}/moved-out/${day}-${path.posix.basename(c.root)}-to-${to}${i > 1 ? `-${i}` : ''}`;
+        res = await client.clearMovedFiles(opts.sourceHost, { root: c.root, files: c.files, backupFrom: c.backupFrom, backupTo }).catch((err: unknown) => {
+          if ((err as { code?: string }).code === 'dest_not_empty') return null;
+          throw err;
+        });
+      }
+      if (!res) throw new Error('no free backup folder');
+      if (res.cleared.length) lines.push(`Cleared from ${c.root} on the old host: ${res.cleared.length} file${res.cleared.length === 1 ? '' : 's'} this task changed, backed up in ${res.backup} (README.txt says how to put them back).`);
+      if (c.leftUntracked) lines.push(`  Left in ${c.root}: ${c.leftUntracked} new file${c.leftUntracked === 1 ? '' : 's'} over the copy's size cap (they did not move).`);
+      if (res.kept.length) {
+        lines.push(`  Left in ${c.root}: ${res.kept.map((k) => `${k.path} (${k.reason})`).slice(0, 5).join(', ')}${res.kept.length > 5 ? ', …' : ''}.`);
+      }
+    } catch (err) {
+      log.session.warn('task move: the moved files could not be cleared from the shared checkout', { taskId: opts.taskId, root: c.root, error: err instanceof Error ? err.message : String(err) });
+      lines.push(`Still in ${c.root} on the old host: ${names.length} file${names.length === 1 ? '' : 's'} this task changed (${list}); clearing them failed (${err instanceof Error ? err.message : String(err)}).`);
+    }
+  }
+  return lines;
 }
 
 /** One line per piece, plain words, for the outcome and the new session's first message. */

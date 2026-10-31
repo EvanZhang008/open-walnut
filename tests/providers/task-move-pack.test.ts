@@ -213,6 +213,74 @@ describe('a task moves with exactly its own work', () => {
     expect(probe.files.map((f) => f.name)).toEqual(['meta.json'])
   }, 60_000)
 
+  it('clear backs up and clears exactly the moved files of a shared checkout, only those that hold this task\'s change alone', async () => {
+    const sha = (t: string) => crypto.createHash('sha256').update(t, 'utf8').digest('hex')
+    for (const [label, factory] of [['imported', createTransferPack], ['inlined', strict(createTransferPack)]] as const) {
+      const w = world(`clear-${label}`)
+      const packer = factory({ fs, path, crypto, spawn: guardedSpawn as unknown as TransferPackDeps['spawn'], env, home: tmp })
+      // The task's own files in the shared checkout: an edit (own.txt), a new file, one a peer
+      // touches after the pack (b.txt), one a peer had edited before the task did (a.txt), and
+      // an ignored file the session wrote (secret.env: never packed, so never cleared).
+      write(path.join(w.shared, 'mine-new.txt'), 'the task\'s new file\n')
+      write(path.join(w.shared, 'b.txt'), 'the task edited b\n')
+      write(path.join(w.shared, 'a.txt'), 'FOREIGN edit\nand the task\'s line\n')
+      write(path.join(w.shared, '.git', 'info', 'exclude'), 'secret.env\n')
+      write(path.join(w.shared, 'secret.env'), 'TOKEN=x\n')
+      const ownBefore = { 'own.txt': sha('own1\n'), 'mine-new.txt': sha(''), 'b.txt': sha('b1\n'), 'a.txt': sha('FOREIGN edit\n'), 'secret.env': sha('') }
+      const out = path.join(w.root, 'pk')
+      const paths = ['own.txt', 'mine-new.txt', 'b.txt', 'a.txt', 'secret.env']
+      const pk = await packer.pack({ cwd: w.shared, outDir: out, paths, ownBefore })
+      const byPath = Object.fromEntries((pk.meta.limited?.files ?? []).map((f) => [f.path, f]))
+      expect(Object.keys(byPath).sort()).toEqual(['a.txt', 'b.txt', 'mine-new.txt', 'own.txt'])
+      expect(byPath['a.txt']).toMatchObject({ clearable: false, why: 'it held other edits before this task changed it' })
+      expect(byPath['own.txt']).toMatchObject({ clearable: true, inHead: true })
+      expect(byPath['mine-new.txt']).toMatchObject({ clearable: true, inHead: false })
+      write(path.join(w.shared, 'b.txt'), 'a peer wrote b after the pack\n')
+      const backupTo = path.join(w.taskDir, 'moved-out', 'x')
+      const res = await packer.clear({ root: w.shared, files: pk.meta.limited!.files, backupFrom: out, backupTo })
+      expect(res.cleared.sort()).toEqual(['mine-new.txt', 'own.txt'])
+      expect(res.kept.sort((x, y) => x.path.localeCompare(y.path))).toEqual([
+        { path: 'a.txt', reason: 'it held other edits before this task changed it' },
+        { path: 'b.txt', reason: 'changed since the move packed it' },
+      ])
+      expect(fs.readFileSync(path.join(w.shared, 'own.txt'), 'utf8')).toBe('own1\n')
+      expect(fs.existsSync(path.join(w.shared, 'mine-new.txt'))).toBe(false)
+      expect(fs.readFileSync(path.join(w.shared, 'b.txt'), 'utf8')).toBe('a peer wrote b after the pack\n')
+      expect(fs.readFileSync(path.join(w.shared, 'a.txt'), 'utf8')).toBe('FOREIGN edit\nand the task\'s line\n')
+      expect(fs.readFileSync(path.join(w.shared, 'secret.env'), 'utf8')).toBe('TOKEN=x\n')
+      expect(fs.existsSync(path.join(w.shared, 'foreign.txt'))).toBe(true)
+      expect(fs.readdirSync(backupTo).sort()).toEqual(['README.txt', 'changes.patch', 'meta.json', 'untracked.tgz'])
+      const readme = fs.readFileSync(path.join(backupTo, 'README.txt'), 'utf8')
+      expect(readme).toContain('Kept:\n  a.txt (it held other edits')
+      expect(readme).toContain('apply --3way')
+      // The backup puts the cleared files back.
+      git(w.shared, ['apply', path.join(backupTo, 'changes.patch'), '--include=own.txt'])
+      expect(fs.readFileSync(path.join(w.shared, 'own.txt'), 'utf8')).toBe('own2 by this task\n')
+      execFileSync('tar', ['-xzf', path.join(backupTo, 'untracked.tgz'), '-C', w.shared, '--keep-old-files'], { stdio: 'pipe' })
+      expect(fs.readFileSync(path.join(w.shared, 'mine-new.txt'), 'utf8')).toBe('the task\'s new file\n')
+      // A second clear into the same backup folder is refused before it touches anything.
+      await expect(packer.clear({ root: w.shared, files: pk.meta.limited!.files, backupFrom: out, backupTo })).rejects.toMatchObject({ code: 'dest_not_empty' })
+      await expect(packer.clear({ root: w.shared, files: [{ path: '../x', sha256: null, inHead: false, clearable: true }], backupFrom: out, backupTo: path.join(w.root, 'b3') })).rejects.toMatchObject({ code: 'bad_request' })
+    }
+  }, 120_000)
+
+  it('new files past the size cap did not move, so they are never cleared; without ownBefore nothing is', async () => {
+    const w = world('clear-cap')
+    const packer = createTransferPack({ fs, path, crypto, spawn: guardedSpawn as unknown as TransferPackDeps['spawn'], env, home: tmp })
+    write(path.join(w.shared, 'big-new.txt'), 'x'.repeat(4096))
+    const sha = (t: string) => crypto.createHash('sha256').update(t, 'utf8').digest('hex')
+    const out = path.join(w.root, 'pk')
+    const pk = await packer.pack({ cwd: w.shared, outDir: out, paths: ['own.txt', 'big-new.txt'], ownBefore: { 'own.txt': sha('own1\n'), 'big-new.txt': sha('') }, maxUntrackedBytes: 100 })
+    expect(pk.meta.untracked?.skippedCount).toBe(1)
+    expect(pk.meta.limited?.files?.map((f) => f.path)).toEqual(['own.txt'])
+    const none = await packer.pack({ cwd: w.shared, outDir: path.join(w.root, 'pk2'), paths: ['own.txt'] })
+    expect(none.meta.limited?.files).toEqual([expect.objectContaining({ path: 'own.txt', clearable: false, why: 'which edits are this task\'s is unknown' })])
+    const res = await packer.clear({ root: w.shared, files: none.meta.limited!.files, backupFrom: path.join(w.root, 'pk2'), backupTo: path.join(w.root, 'bk') })
+    expect(res.cleared).toEqual([])
+    expect(fs.readFileSync(path.join(w.shared, 'own.txt'), 'utf8')).toBe('own2 by this task\n')
+    expect(fs.existsSync(path.join(w.shared, 'big-new.txt'))).toBe(true)
+  }, 60_000)
+
   it('apply without a checkout or URL to clone from says so', async () => {
     const w = world('nosource')
     const packer = createTransferPack({ fs, path, crypto, spawn: guardedSpawn as unknown as TransferPackDeps['spawn'], env, home: tmp })

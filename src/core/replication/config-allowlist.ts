@@ -94,6 +94,7 @@ export const CONFIG_COPY_DROPPED: Readonly<Record<string, string>> = Object.free
   ssh_login_files: 'ssh files on the Mac',
   ssh_login_hint: 'the ssh sign-in letter is sent on the Mac',
   triage: 'inbox triage runs on the Mac',
+  placement_weights: 'placement by load decides on the Mac',
   backup: 'backup targets of the Mac',
   search: 'embedding endpoints and keys; the search copy carries its own',
   git_versioning: 'data backups of the Mac',
@@ -136,6 +137,7 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
     keep: 'what the Mac pushes to that host',
     server: 'that host server settings and build env',
     server_program: 'which program the Mac starts there',
+    place: 'placement by load decides on the Mac',
   },
   stt: {
     sherpa_model_dir: 'a model path on the Mac', sherpa_model_type: 'a model of the Mac',

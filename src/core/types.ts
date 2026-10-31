@@ -1413,6 +1413,11 @@ export interface Config {
    *  Other keys = host aliases from config.hosts (e.g. 'devbox', 'nas-server').
    *  Default: local=7, remote hosts=20. */
   session_limits?: Record<string, number>;
+  /** How much placement by load prefers each host when the default one is over a cap
+   *  (core/hosts/placement.ts), T3 Code's four steps: 100 prefer, 50 normal (the default),
+   *  25 less often, 0 never (as `hosts[x].place: false`). Keys: 'local' (this Mac) or a
+   *  host alias. */
+  placement_weights?: Record<string, number>;
   external_session_import?: {
     excluded_cwds?: Record<string, string[]>;
     /** Days an imported session may sit idle before its task is auto-completed

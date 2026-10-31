@@ -455,6 +455,12 @@ async function execute(taskId: string, state: EngineSwitchState): Promise<Engine
   await tracker.updateSessionRecord(old.claudeSessionId, { supersededBy: sessionId }).catch(() => {});
   const { retargetRequestsToSession } = await import('../session-requests.js');
   const movedRequests = await retargetRequestsToSession(old.claudeSessionId, sessionId).catch(() => 0);
+  // The move is done: what it carried away from a shared checkout leaves it (backed up first).
+  if (state.move && prepared.clearable) {
+    const { clearMovedCopies } = await import('../transfer/task-work.js');
+    const cleared = await clearMovedCopies(prepared.clearable, { taskId, sourceHost: normalizeHost(old.host), targetHost: host }).catch(() => [] as string[]);
+    if (cleared.length) prepared.moved = [...(prepared.moved ?? []), ...cleared];
+  }
   // Messages that came during a move (or before a restart cut an earlier try of it) were held
   // on the old session: they go too, deliverable again.
   if (state.move) held = [...held, ...(await takeQueuedRows(old.claudeSessionId))].map(releaseMoveHeld);
@@ -483,15 +489,24 @@ async function execute(taskId: string, state: EngineSwitchState): Promise<Engine
 /** Everything the new session needs, computed while nothing has changed yet. */
 async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], state: EngineSwitchState, engine: SessionEngine, host: string) {
   const oldHost = normalizeHost(old.host);
-  let cwd = old.cwd ?? task.cwd ?? undefined;
+  // A session that kept no folder: the task's recorded one, only when it lives on the session's host (launch-place.ts).
+  let cwd = old.cwd ?? undefined;
+  if (!cwd) {
+    const { getProjectMetadata } = await import('../task-manager.js');
+    const { recordedCwdOnHost } = await import('./launch-place.js');
+    const meta = await getProjectMetadata(task.project || '').catch(() => null);
+    cwd = await recordedCwdOnHost(task, oldHost, meta?.default_host);
+  }
   let moveMeta: NonNullable<Parameters<typeof renderCarriedContext>[1]['move']> | undefined;
   let moved: string[] | undefined;
+  let clearable: Pick<import('../transfer/task-work.js').MovedWork, 'clearable'> | undefined;
   if (state.move) {
     // The task's own work, packed on the old host and set up under its task directory here.
     const { moveTaskWork } = await import('../transfer/task-work.js');
     const work = await moveTaskWork({ task, session: old, sourceHost: oldHost, targetHost: host, moveId: `xf-${state.id.replace(/^es-/, '')}` });
     cwd = work.cwd;
     moved = work.summary;
+    clearable = work;
     const label = (h: string) => (h === LOCAL_HOST ? 'this Mac' : h);
     moveMeta = {
       fromHost: label(oldHost), toHost: label(host), ...(old.cwd ? { fromCwd: old.cwd } : {}), cwd: work.cwd,
@@ -535,7 +550,7 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
   const message = composeHinted(state.message ?? '', { before: blocks, after: [] });
   const mode = state.to.permission_mode ?? old.mode;
   return {
-    message, cwd, carried, transcriptPath, compacted: ctx.compacted, source: ctx.source, mode, left, moved,
+    message, cwd, carried, transcriptPath, compacted: ctx.compacted, source: ctx.source, mode, left, moved, clearable,
     ...(resume ? { resume: { ...resume, message: composeHinted(state.message ?? '', { before: [renderHintBlock(ENGINE_SWITCH_HINT, resume.text)], after: [] }) } } : {}),
   };
 }

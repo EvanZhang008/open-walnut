@@ -1707,6 +1707,15 @@ set-up made. A home, system or Walnut data folder is never copied whole. A
 message sent to the task while it moves is held on the old session (parked,
 `parkedReason` "Held while its task moves to another host") and goes with the
 task, or back to the old session when the move fails; it never waits for the copy.
+Once the move is done (every piece set up, the new session started), the files it
+carried from a shared checkout on the old host leave that checkout: their pack is kept
+under the task's directory there (`moved-out/<date>-<repo>-to-<host>/`, with a
+README.txt on putting them back), then each file goes back to HEAD (or is removed when
+HEAD lacks it) while it still holds what was packed; one a writer changed since stays,
+and `moved` names it (daemon capability `task-move-clear-v1`). A start that names a
+host never takes a recorded folder of another machine (the task's or its lead's cwd,
+the project's `default_cwd` of another default host): it runs in the task's own
+directory on that host.
 
 - `POST /api/v1/tasks/:id/move { host, text?, engine?, model?, team?, wait_ms?,
   user_request? }` → `200 { state: "done", taskId, sessionId, host, fromHost,
@@ -1725,7 +1734,9 @@ task, or back to the old session when the move fails; it never waits for the cop
   not_supported_cloud` on the companion.
 - `GET /api/v1/hosts/load` → `200 { hosts: [{ host, label, known, cpus, load1,
   loadPerCpu, cpuBusy, memAvailShare, diskFreeBytes, running, runningLimit,
-  busy, reasons, score }], caps }`. A first `POST /tasks/:id/start` that names no
+  busy, reasons, score, weight }], caps }`. `weight` is config `placement_weights`
+  (keys `local` or a host alias; 100 prefer, 50 normal, 25 less often, 0 never, as
+  `hosts[x].place: false`): it scales `score`, so a preferred host takes overflow first. A first `POST /tasks/:id/start` that names no
   host and no cwd keeps the host it would use unless that host is over a cap and
   another has room; its answer then carries `placement: { host, from, moved,
   reason, cwd?, setUp? }`. Mac-only work (iOS, the Mac app, the user's screen)

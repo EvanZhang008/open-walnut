@@ -4,6 +4,7 @@ import { getProjectMetadata } from '../task-manager.js';
 import { QuickStartError } from './quick-start.js';
 import { recordedCwd } from './task-start.js';
 import { inheritedLaunchPair } from './caller-placement.js';
+import { defaultCwdOnHost, recordedCwdOnHost } from './launch-place.js';
 import { resolveModelSwitchValue, VALID_SESSION_EFFORT_IDS, VALID_SESSION_MODEL_IDS, VALID_SESSION_MODE_IDS } from '../types.js';
 import type { Task } from '../types.js';
 import type { SessionStartParams } from './task-start.js';
@@ -58,7 +59,10 @@ export async function resolveTaskLaunchReadOnly(task: Task, params: SessionStart
   const model = params.model && params.model !== 'default' ? resolveModelSwitchValue(params.model) ?? undefined : undefined;
   const metadata = await getProjectMetadata(task.project || '');
   const wsPlace = workspaceStartPlace(task, params);
-  let cwd = wsPlace?.cwd ?? params.cwd ?? await recordedCwd(task);
+  // A start that names a host takes only a recorded folder that lives on it (launch-place.ts).
+  const named = !wsPlace && params.host !== undefined;
+  let cwd = wsPlace?.cwd ?? params.cwd
+    ?? (named ? await recordedCwdOnHost(task, params.host, metadata?.default_host) : await recordedCwd(task));
   const pair = !cwd && params.host === undefined && params.callerSid
     ? await inheritedLaunchPair(params.callerSid, task).catch(() => undefined) : undefined;
   const requestedHost = wsPlace ? wsPlace.host : params.host ?? (pair ? pair.host : metadata?.default_host);
@@ -68,7 +72,14 @@ export async function resolveTaskLaunchReadOnly(task: Task, params: SessionStart
     const entry = (await getConfig()).hosts?.[host];
     if (!entry || entry.enabled === false) throw new QuickStartError(`Unknown host: ${host}`, 400);
   }
-  cwd ||= pair?.cwd || metadata?.default_cwd;
+  cwd ||= pair?.cwd || (named ? defaultCwdOnHost(metadata, host) : metadata?.default_cwd);
+  // A named remote host with no folder of this task's there: the task's own directory on it.
+  let createTaskDir = false;
+  if (!cwd && named && host) {
+    const { taskDirForHost } = await import('./task-dir-place.js');
+    const dir = await taskDirForHost(task.id, host).catch(() => null);
+    if (dir) { cwd = dir; createTaskDir = true; }
+  }
   let createLocalDirectory = false;
   if (!cwd) {
     if (host) throw new QuickStartError(`Task ${task.id} needs a cwd on host "${host}". Pass cwd or set project default_cwd.`, 400);
@@ -76,7 +87,7 @@ export async function resolveTaskLaunchReadOnly(task: Task, params: SessionStart
     createLocalDirectory = true;
   }
   if (!host && cwd === taskMemoryFolder(task.project)) createLocalDirectory = true;
-  return { taskId: task.id, project: task.project, cwd, host, model,
+  return { taskId: task.id, project: task.project, cwd, host, model, createTaskDir,
     mode: params.mode, ...(params.effort ? { effort: params.effort } : {}), engine: normalizeEngine(params.engine), createLocalDirectory,
     message: params.message?.trim() || task.description || `Working on task: ${task.title}` };
 }

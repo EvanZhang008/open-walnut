@@ -761,6 +761,13 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // not bridge-reachable, not for followers. Optional: without it a move packs the
   // session's folder as task_transfer does and the new session sets it up.
   'task-move-v1',
+  // 'task-move-clear-v1' (transfer-pack-core.ts): `transfer.clear {root, files,
+  // backupFrom, backupTo}` keeps a moved shared checkout's own files (the pack: patch,
+  // untracked files) in the task directory and takes each back to HEAD while it still
+  // holds what was packed; `transfer.pack` with `paths` records each file's hash for it.
+  // Both twins, not bridge-reachable, not for followers. Optional: without it a move
+  // leaves those copies in the shared checkout and its summary says so.
+  'task-move-clear-v1',
   // 'oneshot-v1' (oneshot-core.ts): every `claude -p` Walnut starts outside a
   // session runs here (micro-Claude, inline subagents, the claude-cli model
   // adapter). `oneshot.run {runId, command, args, cwd, env, input, endInput,

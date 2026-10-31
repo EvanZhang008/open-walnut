@@ -25,8 +25,8 @@ const ROOT = path.resolve(__dirname, '../..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
 const standalone = read('src/providers/daemon-standalone.ts')
 const source = read('src/providers/daemon-source.ts')
-const COMMANDS = ['fs.writePart', 'transfer.pack', 'transfer.reach', 'transfer.fetch', 'transfer.realpath', 'host.facts', 'host.load', 'transfer.scan', 'transfer.apply']
-const CAPS = ['fs-write-part-v1', 'transfer-v1', 'host-facts-v1', 'host-load-v1', 'task-move-v1']
+const COMMANDS = ['fs.writePart', 'transfer.pack', 'transfer.reach', 'transfer.fetch', 'transfer.realpath', 'host.facts', 'host.load', 'transfer.scan', 'transfer.apply', 'transfer.clear']
+const CAPS = ['fs-write-part-v1', 'transfer-v1', 'host-facts-v1', 'host-load-v1', 'task-move-v1', 'task-move-clear-v1']
 const CORES = ['src/providers/transfer-core.ts', 'src/providers/transfer-pack-core.ts', 'src/providers/host-facts-core.ts']
 
 function setLiteral(src: string, name: string): string {

@@ -41,7 +41,7 @@ const W = vi.hoisted(() => {
     nextSid: 0,
     history: {} as Record<string, Array<Record<string, unknown>>>,
     /** The Changed tab's groups for the old session. */
-    changes: [] as Array<{ repoRoot: string; label: string; kind: string; files: Array<{ relPath: string }> }>,
+    changes: [] as Array<{ repoRoot: string; label: string; kind: string; files: Array<Record<string, unknown> & { relPath: string }> }>,
   };
 });
 
@@ -159,6 +159,7 @@ function daemonFor(host: string): TransferConn {
         case 'transfer.pack': return answer(() => pack.pack(p));
         case 'transfer.scan': return answer(() => pack.scan(p));
         case 'transfer.apply': return answer(() => pack.apply(p));
+        case 'transfer.clear': return answer(() => pack.clear(p));
         case 'fs.writePart': return answer(() => core.writePart(p, { boundHome: null, origin: null }));
         case 'fs.find': return { ok: true, files: [] };
         case 'fs.readRange': {
@@ -306,7 +307,8 @@ describe('task_move', () => {
     // No clone of its own this time; it edited own.txt in the shared checkout itself.
     fs.rmSync(path.dirname(clone), { recursive: true, force: true });
     write(path.join(shared, 'own.txt'), 'the task\'s edit\n');
-    W.changes = [{ repoRoot: shared, label: 'marina', kind: 'cwd', files: [{ relPath: 'own.txt' }] }];
+    // The Changed list as the session recorded it: own.txt was new when it first wrote it.
+    W.changes = [{ repoRoot: shared, label: 'marina', kind: 'cwd', files: [{ relPath: 'own.txt', filePath: path.join(shared, 'own.txt'), status: 'added', before: '', after: 'the task\'s edit\n', ops: 1, partial: false }] }];
 
     const res = await requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' });
 
@@ -318,6 +320,15 @@ describe('task_move', () => {
     expect(fs.existsSync(`${dest}/foreign.txt`)).toBe(false);
     const said = res.moved!.join('\n');
     expect(said).toContain('a shared checkout: only this task\'s own files');
+    // Done: the task's own file left the shared checkout, backed up under its task directory on the Mac.
+    expect(fs.existsSync(path.join(shared, 'own.txt'))).toBe(false);
+    expect(said).toMatch(/Cleared from .* 1 file this task changed, backed up in .*\/tasks\/.*\/moved-out\/\d{4}-\d{2}-\d{2}-marina-to-cloud/);
+    const backups = fs.readdirSync(`${W.homes.__local__}/tasks/${taskId}/moved-out`);
+    expect(backups).toHaveLength(1);
+    expect(fs.readdirSync(`${W.homes.__local__}/tasks/${taskId}/moved-out/${backups[0]}`)).toContain('untracked.tgz');
+    // Never another writer's files.
+    expect(fs.readFileSync(path.join(shared, 'a.txt'), 'utf8')).toBe('FOREIGN edit\n');
+    expect(fs.existsSync(path.join(shared, 'foreign.txt'))).toBe(true);
     expect(said).toMatch(/Left on the old host: 2 changed files .* that this task did not change \((a\.txt, foreign\.txt|foreign\.txt, a\.txt)\)/);
     expect((await getSessionByClaudeId(sid))?.archived).toBe(true);
   }, 120_000);
@@ -371,6 +382,9 @@ describe('task_move', () => {
 
   it('a failed start puts the task back on its host; the copy stays for a retry', async () => {
     const { taskId, sid } = await taskInSharedCheckout();
+    // Its own file in the shared checkout stays there: only a finished move clears it.
+    write(path.join(shared, 'own.txt'), 'the task\'s edit\n');
+    W.changes = [{ repoRoot: shared, label: 'marina', kind: 'cwd', files: [{ relPath: 'own.txt' }] }];
     W.failStart = true;
     await expect(requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' }))
       .rejects.toMatchObject({ code: 'start_failed', message: expect.stringContaining('The task stays on this Mac') });
@@ -378,6 +392,7 @@ describe('task_move', () => {
     const old = await getSessionByClaudeId(sid);
     expect(old?.archived).toBeFalsy();
     expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'failed', move: true });
+    expect(fs.readFileSync(path.join(shared, 'own.txt'), 'utf8')).toBe('the task\'s edit\n');
   }, 120_000);
 
   it('a message sent while the task moves is held at once (never waits for the copy) and goes with the task', async () => {

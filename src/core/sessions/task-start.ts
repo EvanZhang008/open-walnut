@@ -479,14 +479,23 @@ async function cancelUnconfirmedStart(task: Task, record?: Awaited<ReturnType<ty
  * exists remotely).
  */
 export async function recordedCwd(task: Pick<Task, 'id' | 'project' | 'cwd' | 'parent_task_id' | 'workspace'>): Promise<string | undefined> {
+  return (await recordedPlace(task))?.cwd;
+}
+
+/**
+ * recordedCwd with the task that recorded it, and the host when the record names one
+ * (a ready workspace). Which host a plain recorded cwd lives on: launch-place.ts.
+ */
+export async function recordedPlace(task: Pick<Task, 'id' | 'project' | 'cwd' | 'parent_task_id' | 'workspace'>): Promise<{ cwd: string; ownerId: string; host?: string } | undefined> {
   const project = (task.project ?? '').trim().toLowerCase();
   let current: Pick<Task, 'id' | 'project' | 'cwd' | 'parent_task_id' | 'workspace'> | undefined = task;
   const seen = new Set<string>();
   while (current && !seen.has(current.id)) {
     if ((current.project ?? '').trim().toLowerCase() !== project) return undefined;
     // A ready isolated workspace is where the task's work lives (core/workspaces).
-    const own = workspaceCwdOf(current) ?? current.cwd;
-    if (own) return own;
+    const ws = workspaceCwdOf(current);
+    if (ws) return { cwd: ws, ownerId: current.id, host: current.workspace!.host };
+    if (current.cwd) return { cwd: current.cwd, ownerId: current.id };
     seen.add(current.id);
     current = current.parent_task_id ? await getTask(current.parent_task_id).catch(() => undefined) : undefined;
   }
@@ -536,7 +545,7 @@ async function startInNewWorkspace(
       + `A workspace is for new work: task_create with workspace, or task_transfer {"id":"${task.id}"} to move this work.`, 409);
   }
   const place = await resolveTaskLaunchReadOnly(task, { ...params, workspace: undefined });
-  if (place.createLocalDirectory) {
+  if (place.createLocalDirectory || place.createTaskDir) {
     throw new QuickStartError(`Task ${task.id} has no folder for a workspace to copy: pass cwd (an existing folder, usually a repository).`, 400);
   }
   (await admitStartWithinLimits(task, params.callerSid, params.userRequest))();
@@ -553,6 +562,12 @@ async function prepareLaunch(task: Task, params: SessionStartParams) {
     await ensureCwd(launch.cwd, launch.host || undefined);
   }
   if (launch.createLocalDirectory) await mkdir(launch.cwd, { recursive: true });
-  const { createLocalDirectory, ...resolved } = launch;
+  if (launch.createTaskDir) {
+    // A named host with no folder of its own for this task: its task directory there.
+    const { ensureTaskDirOnHost } = await import('./task-dir-place.js');
+    const made = await ensureTaskDirOnHost(task.id, launch.host || undefined);
+    if ('error' in made) throw new QuickStartError(`Task ${task.id} needs a cwd on host "${launch.host}": its task directory there could not be made (${made.error}). Pass cwd.`, made.status);
+  }
+  const { createLocalDirectory, createTaskDir, ...resolved } = launch;
   return resolved;
 }

@@ -7,15 +7,15 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fsp from 'node:fs/promises';
 import { createMockConstants } from '../../helpers/mock-constants.js';
 
-const cfg = vi.hoisted(() => ({ hosts: {} as Record<string, unknown>, session_limits: undefined as Record<string, number> | undefined }));
+const cfg = vi.hoisted(() => ({ hosts: {} as Record<string, unknown>, session_limits: undefined as Record<string, number> | undefined, placement_weights: undefined as Record<string, number> | undefined }));
 vi.mock('../../../src/constants.js', () => createMockConstants('placement'));
 vi.mock('../../../src/core/config-manager.js', async (orig) => {
   const real = await orig<typeof import('../../../src/core/config-manager.js')>();
-  return { ...real, getConfig: async () => ({ ...(await real.getConfig()), hosts: cfg.hosts, ...(cfg.session_limits ? { session_limits: cfg.session_limits } : {}) }) };
+  return { ...real, getConfig: async () => ({ ...(await real.getConfig()), hosts: cfg.hosts, ...(cfg.session_limits ? { session_limits: cfg.session_limits } : {}), ...(cfg.placement_weights ? { placement_weights: cfg.placement_weights } : {}) }) };
 });
 
 import { WALNUT_HOME } from '../../../src/constants.js';
-import { __setHostLoadProberForTesting, choosePlacement, judgeHost, macOnlyReason, placementCaps } from '../../../src/core/hosts/placement.js';
+import { __setHostLoadProberForTesting, choosePlacement, hostLoads, judgeHost, macOnlyReason, placementCaps, placementWeight } from '../../../src/core/hosts/placement.js';
 import type { HostLoad } from '../../../src/providers/host-facts-core.js';
 
 const GB = 1024 ** 3;
@@ -33,6 +33,7 @@ beforeEach(async () => {
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
   cfg.hosts = { cloud: { hostname: 'cloud', enabled: true }, spare: { hostname: 'spare', enabled: true } };
   cfg.session_limits = undefined;
+  cfg.placement_weights = undefined;
   loads = {};
   __setHostLoadProberForTesting(async (host) => {
     const v = loads[host];
@@ -135,5 +136,34 @@ describe('choosePlacement', () => {
     loads = { __local__: load({ load1: 600 }), cloud: load({ cpus: 48, load1: 1 }) };
     process.env.WALNUT_PLACE_BY_LOAD = '0';
     try { expect(await choosePlacement({ defaultHost: '', text: 'x', cwd: '/w' })).toBeNull(); } finally { delete process.env.WALNUT_PLACE_BY_LOAD; }
+  });
+});
+
+// T3 Code's per-machine preference (Prefer 100 / Normal 50 / Less often 25 / Manual only 0).
+describe('placement weights', () => {
+  it('reads config, 0 for place:false, 50 by default', () => {
+    expect(placementWeight('cloud', {})).toBe(50);
+    expect(placementWeight('cloud', { placement_weights: { cloud: 100 } })).toBe(100);
+    expect(placementWeight('__local__', { placement_weights: { local: 25 } })).toBe(25);
+    expect(placementWeight('cloud', { hosts: { cloud: { place: false } }, placement_weights: { cloud: 100 } })).toBe(0);
+    expect(placementWeight('cloud', { placement_weights: { cloud: -3 } })).toBe(50);
+  });
+  it('a preferred host wins over a roomier one, and the weight is in the host list', async () => {
+    loads = { __local__: load({ load1: 600 }), cloud: load({ cpus: 48, load1: 3 }), spare: load({ cpus: 16, load1: 1 }) };
+    // Unweighted, cloud has the most room.
+    expect(await choosePlacement({ defaultHost: '', text: 'x', cwd: '/w' })).toMatchObject({ host: 'cloud', moved: true });
+    cfg.placement_weights = { spare: 100, cloud: 25 };
+    __setHostLoadProberForTesting(async (host) => loads[host] as never);
+    expect(await choosePlacement({ defaultHost: '', text: 'x', cwd: '/w' })).toMatchObject({ host: 'spare', moved: true });
+    const views = await hostLoads();
+    expect(views.find((h) => h.host === 'spare')).toMatchObject({ weight: 100 });
+    expect(views.find((h) => h.host === '__local__')).toMatchObject({ weight: 50 });
+  });
+  it('weight 0 is never a place to go, even when it is the only host with room', async () => {
+    loads = { __local__: load({ load1: 600 }), cloud: load({ cpus: 48, load1: 3 }), spare: load({ load1: 900 }) };
+    cfg.placement_weights = { cloud: 0 };
+    const d = await choosePlacement({ defaultHost: '', text: 'x', cwd: '/w' });
+    expect(d).toMatchObject({ host: '', moved: false });
+    expect(d!.reason).toContain('no other host has room');
   });
 });

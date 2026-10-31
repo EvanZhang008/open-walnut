@@ -77,7 +77,11 @@ export interface PackMeta {
   ahead?: number
   /** Packed with `paths`: only those files' changes rode; the rest of the checkout's
    *  dirty files belong to someone else and were left (counts, and the first names). */
-  limited?: { paths: number; leftOutTracked: number; leftOutUntracked: number; leftOut: string[] }
+  limited?: {
+    paths: number; leftOutTracked: number; leftOutUntracked: number; leftOut: string[]
+    /** Each listed path as packed: its content's sha256 (null: missing) and whether HEAD has it ('task-move-clear-v1'). */
+    files?: PackedFile[]
+  }
   // dir only
   tooLarge?: boolean
   /** Bytes of workspace.tgz; a lower bound when tooLarge (the tar was cut there). */
@@ -100,6 +104,22 @@ export interface ScanReply {
 }
 
 /** `transfer.apply` ('task-move-v1'): a pack set up as a working checkout on this host. */
+export interface PackedFile {
+  path: string; sha256: string | null; inHead: boolean
+  /** Only this task's change is in it (see packedFiles); false with `why` otherwise. */
+  clearable?: boolean
+  why?: string
+}
+
+export interface ClearReply {
+  root: string
+  backup: string
+  /** Back to HEAD (a tracked file) or removed (one HEAD lacks). */
+  cleared: string[]
+  /** Left as they are, with why (a writer changed them after the pack). */
+  kept: Array<{ path: string; reason: string }>
+}
+
 export interface ApplyReply {
   dest: string
   kind: 'git' | 'dir'
@@ -355,7 +375,7 @@ export function createTransferPack(deps: TransferPackDeps) {
     return text(await git(root, ['merge-base', 'HEAD', best])) || null
   }
 
-  async function packGit(cwd: string, root: string, outDir: string, maxUntracked: number, written: string[], only: string[] | null): Promise<PackMeta> {
+  async function packGit(cwd: string, root: string, outDir: string, maxUntracked: number, written: string[], only: string[] | null, ownBefore: Record<string, unknown> | null): Promise<PackMeta> {
     var realCwd = await deps.fs.promises.realpath(cwd).then(function (p) { return p }, function () { return cwd })
     var relCwd = deps.path.relative(root, realCwd)
     if (relCwd.indexOf('..') === 0 || deps.path.isAbsolute(relCwd)) relCwd = ''
@@ -382,9 +402,12 @@ export function createTransferPack(deps: TransferPackDeps) {
     if (deep && deep.url) meta.upstreamUrl = deep.url
     // Only these paths ride (a shared checkout: the files this task changed there).
     var onlySet: Record<string, boolean> | null = null
+    // Each listed file's content before the patch is taken: one that changes during the pack is never cleared.
+    var hashedBefore: Record<string, string | null> = {}
     if (only) {
       onlySet = {}
       for (var q = 0; q < only.length; q++) onlySet[only[q]] = true
+      for (var hb = 0; hb < only.length && hb < 500; hb++) hashedBefore[only[hb]] = await contentHash(deps.path.join(root, only[hb]))
     }
     var pathspec: string[] = only ? ['--'].concat(only) : []
     if (!head) meta.noCommits = true
@@ -437,6 +460,13 @@ export function createTransferPack(deps: TransferPackDeps) {
       written.push('untracked.tgz')
     }
     meta.untracked = untracked
+    if (onlySet && meta.limited) {
+      // Only what really rode (in the patch, or in untracked.tgz) may ever be cleared: an ignored
+      // file, or untracked files past the size cap, stay where they are.
+      var rode = changed!.filter(function (n) { return onlySet![n] })
+      if (written.indexOf('untracked.tgz') >= 0) rode = rode.concat(u.files)
+      meta.limited.files = await packedFiles(root, rode, !!head, hashedBefore, ownBefore)
+    }
     meta.dirty = onlySet ? written.indexOf('changes.patch') >= 0 || u.files.length > 0 : !!tracked || u.files.length > 0
 
     if (head && !headOnRemote) {
@@ -702,7 +732,8 @@ export function createTransferPack(deps: TransferPackDeps) {
     for (var i = 0; i < NAMES.length; i++) await deps.fs.promises.unlink(deps.path.join(outDir, NAMES[i])).catch(function () { /* none */ })
     var written: string[] = []
     // `paths: []` of a plain folder asks only what it is (a probe): nothing is archived.
-    var meta = top ? await packGit(cwd, root, outDir, maxUntracked, written, only)
+    var ownBefore = cmd.ownBefore && typeof cmd.ownBefore === 'object' ? cmd.ownBefore as Record<string, unknown> : null
+    var meta = top ? await packGit(cwd, root, outDir, maxUntracked, written, only, ownBefore)
       : only && only.length === 0 ? { kind: 'dir' as const, root: root, relCwd: '', createdAt: '' }
       : await packDir(cwd, outDir, maxTar, written, exclude)
     meta.createdAt = new Date(now()).toISOString()
@@ -717,5 +748,111 @@ export function createTransferPack(deps: TransferPackDeps) {
     return { outDir: outDir, meta: meta, files: files }
   }
 
-  return { pack: pack, scan: scan, apply: apply }
+  /**
+   * The files that rode, each one a later `transfer.clear` may take back: its content as packed
+   * (unchanged across the pack), whether HEAD has it, and whether the session's own change is
+   * the whole change (`ownBefore[path]`, the sha256 of the file when the session first touched
+   * it, equals HEAD's: no other writer's edit sits under it), with the index at HEAD.
+   */
+  async function packedFiles(root: string, paths: string[], hasHead: boolean, before: Record<string, string | null>, ownBefore: Record<string, unknown> | null): Promise<PackedFile[]> {
+    var out: PackedFile[] = []
+    var EMPTY = deps.crypto.createHash('sha256').update('').digest('hex')
+    for (var i = 0; i < paths.length && i < 500; i++) {
+      var p = paths[i]
+      var now = await contentHash(deps.path.join(root, p))
+      if (!(p in before) || before[p] !== now || now === 'other') continue
+      var inHead = hasHead && (await git(root, ['cat-file', '-e', 'HEAD:' + p])).code === 0
+      var f: PackedFile = { path: p, sha256: now, inHead: inHead, clearable: false }
+      var own = ownBefore ? ownBefore[p] : undefined
+      if (typeof own !== 'string') f.why = 'which edits are this task\'s is unknown'
+      else if (inHead) {
+        var blob = await run(['git', 'cat-file', 'blob', 'HEAD:' + p], { cwd: root, git: true, maxOut: 64 * 1024 * 1024 })
+        var headSha = blob.code === 0 && !blob.overLimit ? deps.crypto.createHash('sha256').update(blob.stdout).digest('hex') : null
+        if (headSha !== own) f.why = 'it held other edits before this task changed it'
+      } else if (own !== EMPTY) f.why = 'it held other content before this task changed it'
+      if (!f.why && (await git(root, ['diff', '--cached', '--quiet', 'HEAD', '--', p], { env: { GIT_LITERAL_PATHSPECS: '1' } })).code !== 0) f.why = 'it has staged changes'
+      if (!f.why) f.clearable = true
+      out.push(f)
+    }
+    return out
+  }
+
+  async function contentHash(file: string): Promise<string | null> {
+    var st = await deps.fs.promises.lstat(file).then(function (x) { return x }, function () { return null })
+    if (!st) return null
+    if (!st.isFile()) return 'other'
+    return sha256File(file)
+  }
+
+  /**
+   * After a move set a shared checkout's files up on another host ('task-move-clear-v1',
+   * `transfer.clear {root, files, backupFrom, backupTo}`): keep the pack of them (patch,
+   * untracked files, meta) in `backupTo` with a note on how to put them back, then take
+   * each file back to HEAD (or remove one HEAD lacks) only while it still holds what was
+   * packed. A file a writer changed since stays, named in `kept`. Nothing is cleared when
+   * the backup cannot be written.
+   */
+  async function clear(cmd: Record<string, unknown>): Promise<ClearReply> {
+    var root = localPath(cmd.root, 'root')
+    var backupFrom = localPath(cmd.backupFrom, 'backupFrom')
+    var backupTo = localPath(cmd.backupTo, 'backupTo')
+    var top = text(await git(root, ['rev-parse', '--show-toplevel']))
+    if (!top || deps.path.resolve(top) !== deps.path.resolve(root)) throw fail('bad_request', 'root is not the top of a git repository: ' + root)
+    if (inside(backupTo, root)) throw fail('bad_request', 'backupTo must lie outside the repository')
+    var raw = Array.isArray(cmd.files) ? cmd.files as Array<Record<string, unknown>> : null
+    if (!raw || raw.length === 0) throw fail('bad_request', 'files lists what to clear')
+    var listed = relList(raw.map(function (f) { return f && f.path }), 'files') || []
+    var files: PackedFile[] = raw.map(function (f, i) {
+      return {
+        path: listed[i], sha256: typeof f.sha256 === 'string' ? f.sha256 : null, inHead: f.inHead === true,
+        clearable: f.clearable === true, why: typeof f.why === 'string' ? f.why : undefined,
+      }
+    })
+    if (!(await emptyOrMissing(backupTo))) throw fail('dest_not_empty', 'backupTo is not an empty folder: ' + backupTo)
+    await deps.fs.promises.mkdir(backupTo, { recursive: true })
+    var names = ['meta.json', 'changes.patch', 'untracked.tgz']
+    var backed: Record<string, boolean> = {}
+    for (var n = 0; n < names.length; n++) {
+      var from = deps.path.join(backupFrom, names[n])
+      if (!(await deps.fs.promises.stat(from).then(function () { return true }, function () { return false }))) continue
+      await deps.fs.promises.copyFile(from, deps.path.join(backupTo, names[n]))
+      backed[names[n]] = true
+    }
+    var cleared: string[] = []
+    var kept: Array<{ path: string; reason: string }> = []
+    var literal = { GIT_LITERAL_PATHSPECS: '1' }
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i]
+      var abs = deps.path.join(root, f.path)
+      if (!f.clearable) { kept.push({ path: f.path, reason: f.why || 'not marked clearable when packed' }); continue }
+      // Its copy must be in the backup: a tracked file's change in the patch, a new file in the archive.
+      if (!backed[f.inHead ? 'changes.patch' : 'untracked.tgz']) { kept.push({ path: f.path, reason: 'its copy is not in the backup' }); continue }
+      var now = await contentHash(abs)
+      if (now !== f.sha256 || now === 'other') { kept.push({ path: f.path, reason: now === 'other' ? 'not a plain file' : 'changed since the move packed it' }); continue }
+      if ((await git(root, ['diff', '--cached', '--quiet', 'HEAD', '--', f.path], { env: literal })).code !== 0) { kept.push({ path: f.path, reason: 'it has staged changes' }); continue }
+      var r: RunResult
+      if (f.inHead) r = await git(root, ['checkout', '-q', 'HEAD', '--', f.path], { env: literal })
+      else {
+        r = await git(root, ['rm', '-q', '--cached', '--ignore-unmatch', '--', f.path], { env: literal })
+        if (r.code === 0) await deps.fs.promises.unlink(abs).catch(function () { /* already gone */ })
+      }
+      if (r.code !== 0) kept.push({ path: f.path, reason: 'git: ' + lastLine(r.stderr) })
+      else cleared.push(f.path)
+    }
+    var q = function (x: string) { return "'" + x.split("'").join("'\\''") + "'" }
+    await deps.fs.promises.writeFile(deps.path.join(backupTo, 'README.txt'), [
+      'These files of ' + root + ' moved to another host with their task. The ones under "Cleared" were',
+      'taken back to HEAD (or removed) here; the ones under "Kept" were left as they were.',
+      'To put the cleared ones back in ' + root + ':',
+      backed['changes.patch'] ? '  git -C ' + q(root) + ' apply --3way ' + q(deps.path.join(backupTo, 'changes.patch')) : '',
+      backed['untracked.tgz'] ? '  tar -xzf ' + q(deps.path.join(backupTo, 'untracked.tgz')) + ' -C ' + q(root) + ' --keep-old-files' : '',
+      '(the patch and the archive also hold the kept files; --3way and --keep-old-files leave those alone)',
+      '',
+      'Cleared:',
+    ].concat(cleared.map(function (c) { return '  ' + c }), ['', 'Kept:'], kept.map(function (k) { return '  ' + k.path + ' (' + k.reason + ')' }))
+      .filter(function (l, idx, all) { return l !== '' || all[idx - 1] !== '' }).join('\n') + '\n')
+    return { root: root, backup: backupTo, cleared: cleared, kept: kept }
+  }
+
+  return { pack: pack, scan: scan, apply: apply, clear: clear }
 }

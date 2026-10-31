@@ -15,8 +15,10 @@
  * stalled on memory, which CPU use alone misses), CPU busy 95%, memory available 5%,
  * free disk 20 GB, and the host's running-session limit (`session_limits`). A host's
  * numbers come from its daemon (`host.load`, 'host-load-v1'), the Mac's from this
- * process; one older than 30 s is asked again, and a host that does not answer in 4 s
- * is unknown and never chosen. Like T3: a placed task keeps its host (no rebalancing).
+ * process; one older than 15 s is asked again (as T3 Code), and a host that does not answer in 4 s
+ * is unknown and never chosen. Like T3: a placed task keeps its host (no rebalancing), and
+ * each host carries a weight (config placement_weights: 100 prefer, 50 normal, 25 less
+ * often, 0 never) that scales its room score.
  */
 import os from 'node:os';
 import { execFile } from 'node:child_process';
@@ -27,7 +29,19 @@ import { log } from '../../logging/index.js';
 import type { HostLoad } from '../../providers/host-facts-core.js';
 
 export const LOCAL = '__local__';
-const FRESH_MS = 30_000;
+/** A host's numbers are asked again after this (T3 Code drops a sample older than 15 s). */
+const FRESH_MS = 15_000;
+/** placement_weights' default step (T3 Code's "Normal"). */
+export const DEFAULT_WEIGHT = 50;
+
+/** A host's placement weight: config placement_weights, 0 for `place: false`, else 50. */
+export function placementWeight(host: string, config: { placement_weights?: Record<string, number>; hosts?: Record<string, { place?: boolean }> }): number {
+  if (host !== LOCAL && config.hosts?.[host]?.place === false) return 0;
+  const w = config.placement_weights;
+  const raw = host === LOCAL ? w?.local ?? w?.[LOCAL] : w?.[host];
+  const n = Number(raw);
+  return raw !== undefined && Number.isFinite(n) && n >= 0 ? Math.min(n, 1000) : DEFAULT_WEIGHT;
+}
 const ASK_MS = 4_000;
 
 function num(env: string | undefined, dflt: number): number {
@@ -57,6 +71,8 @@ export interface HostLoadView {
   diskFreeBytes?: number | null;
   running: number;
   runningLimit: number;
+  /** How much placement prefers it (placement_weights; 50 normal, 0 never). */
+  weight?: number;
   /** Over at least one cap (`reasons` say which), or unknown. */
   busy: boolean;
   reasons: string[];
@@ -175,7 +191,11 @@ export async function hostLoads(opts: { hosts?: string[] } = {}): Promise<HostLo
     const running = (active[key] ?? []).length;
     const got = await loadOf(host);
     const label = host === LOCAL ? 'this Mac' : hostDisplayName(host, config.hosts?.[host]?.label);
-    return judgeHost(host, label, got.load, running, activeSessionLimitFor(key, config.session_limits), caps, got.error);
+    const view = judgeHost(host, label, got.load, running, activeSessionLimitFor(key, config.session_limits), caps, got.error);
+    // T3 Code's weight: the room score scaled by how much the user prefers this host.
+    view.weight = placementWeight(host, config);
+    view.score = Math.round(view.score * (view.weight / DEFAULT_WEIGHT) * 1000) / 1000;
+    return view;
   }));
 }
 
@@ -215,7 +235,7 @@ export async function choosePlacement(input: {
   const { getConfig } = await import('../config-manager.js');
   const config = await getConfig();
   const candidates = [LOCAL, ...Object.entries(config.hosts ?? {})
-    .filter(([, h]) => h.enabled !== false && !h.cloud_box && h.place !== false).map(([k]) => k)];
+    .filter(([k, h]) => h.enabled !== false && !h.cloud_box && placementWeight(k, config) > 0).map(([k]) => k)];
   if (!candidates.includes(from)) candidates.push(from);
   if (candidates.length < 2) return null;
   const hosts = await hostLoads({ hosts: candidates });
@@ -227,7 +247,8 @@ export async function choosePlacement(input: {
   if (!here.busy || !here.known) {
     return { host: input.defaultHost, moved: false, from, reason: here.known ? `${name(here)} has room` : `${name(here)}'s load is unknown; it stays there`, hosts };
   }
-  const others = hosts.filter((h) => h.host !== from && !h.busy).sort((a, b) => b.score - a.score);
+  // Weight 0 ("never") is no place to go; the Mac stays a candidate only above it.
+  const others = hosts.filter((h) => h.host !== from && !h.busy && (h.weight ?? DEFAULT_WEIGHT) > 0 && h.score > 0).sort((a, b) => b.score - a.score);
   for (const best of others) {
     const why = input.eligible ? await input.eligible(best.host).catch((e: unknown) => String(e)) : null;
     if (why) { best.reasons.push(`not eligible: ${why}`); continue; }
