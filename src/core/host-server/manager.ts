@@ -320,6 +320,19 @@ export function createHostServerManager(deps: ManagerDeps) {
   }
 
   function set(hostKey: string, patch: Partial<HostServerView>): void {
+    // The link dropped while the reconcile installs: its next steps update the view it will
+    // show when the link returns, and the view says the link dropped meanwhile. A phase that
+    // ends the install (running, error, off, ...) ends that and shows as it is.
+    const kept = resumeView.get(hostKey)
+    if (kept) {
+      if (patch.phase === undefined || patch.phase === 'installing') {
+        if (patch.message !== undefined) kept.message = patch.message
+        const { phase: _phase, message: _message, ...rest } = patch
+        patch = { ...rest, message: kept.message ? `${DROPPED_LINE} ${kept.message}` : DROPPED_LINE }
+      } else {
+        resumeView.delete(hostKey)
+      }
+    }
     const v = view(hostKey)
     const phaseChanged = patch.phase !== undefined && patch.phase !== v.phase
     Object.assign(v, patch)
@@ -581,7 +594,7 @@ export function createHostServerManager(deps: ManagerDeps) {
   }
 
   async function reconcileOnce(hostKey: string, retry = false): Promise<void> {
-    const host = hosts.get(hostKey)
+    let host = hosts.get(hostKey)
     if (await deps.frozen?.()) return
     const settings = await deps.settingsOf(hostKey)
     // Read while this server began to stop (its plugins going): what they say is not the person's.
@@ -651,6 +664,8 @@ export function createHostServerManager(deps: ManagerDeps) {
         return
       }
       const install = await ensureInstalled(host, retry)
+      // The link may have dropped and come back as a new connection during the install.
+      host = hosts.get(hostKey) ?? host
       const rec = await portsFor(host, install.program)
       set(hostKey, { phase: 'starting', message: 'Starting the server on the host.', port: rec.publicPort })
       // The door its streams come in by (the tunnel port trusts nothing on loopback).
@@ -807,10 +822,8 @@ export function createHostServerManager(deps: ManagerDeps) {
    */
   const resumeView = new Map<string, { phase: HostServerPhase; message?: string }>()
 
-  /** A progress line: on the view, or kept for its return while the link is down. */
+  /** A progress line: on the view, or kept for its return while the link is down (set). */
   function showProgress(hostKey: string, message: string): void {
-    const kept = resumeView.get(hostKey)
-    if (kept) { kept.message = message; set(hostKey, { message: `${DROPPED_LINE} ${message}` }); return }
     set(hostKey, { message })
   }
 
@@ -834,7 +847,14 @@ export function createHostServerManager(deps: ManagerDeps) {
         const retry = retries.delete(hostKey)
         await reconcileOnce(hostKey, retry)
       } while (rerun.has(hostKey))
-    })().finally(() => { running.delete(hostKey) })
+    })().finally(() => {
+      running.delete(hostKey)
+      // Ended while the link was down (stopping, frozen, left as configured): no step will
+      // say so, and the next disconnect must not be read as the same drop.
+      if (resumeView.delete(hostKey) && !hosts.get(hostKey)?.connected) {
+        set(hostKey, { phase: 'waiting-for-host', message: 'The host is not connected right now.' })
+      }
+    })
     running.set(hostKey, run)
     return run
   }
@@ -857,9 +877,10 @@ export function createHostServerManager(deps: ManagerDeps) {
       })
       if (!view(hostKey).enabled) return
       const v = view(hostKey)
-      if (running.has(hostKey) && v.phase !== 'waiting-for-host') {
-        resumeView.set(hostKey, { phase: v.phase, ...(v.message ? { message: v.message } : {}) })
-        set(hostKey, { phase: 'waiting-for-host', message: v.message ? `${DROPPED_LINE} ${v.message}` : DROPPED_LINE })
+      if (running.has(hostKey) && v.phase === 'installing') {
+        const was = { phase: v.phase, ...(v.message ? { message: v.message } : {}) }
+        set(hostKey, { phase: 'waiting-for-host', message: was.message ? `${DROPPED_LINE} ${was.message}` : DROPPED_LINE })
+        resumeView.set(hostKey, was)
         return
       }
       if (resumeView.has(hostKey)) return

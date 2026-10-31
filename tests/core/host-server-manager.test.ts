@@ -241,6 +241,45 @@ describe('host server manager: a link that drops while the build goes over', () 
     expect(m.view('devbox').install?.state).toBe('ready')
   })
 
+  it('a step made while the link is down is what shows on reconnect, never the older progress', async () => {
+    const m = createHostServerManager(deps())
+    const host = fakeHost()
+    host.pollsUntilReady = 3
+    let release!: () => void
+    host.gate = new Promise<void>((r) => { release = r })
+    const run = m.connected(host)
+    await vi.waitFor(() => expect(m.view('devbox').message).toMatch(/Sending Walnut .*\(50%, 3 MB\)/))
+    host.connected = false
+    m.disconnected('devbox')
+    // The upload ends and the install starts while the link is still down.
+    release()
+    await vi.waitFor(() => expect(m.view('devbox').message).toMatch(/link to the host dropped for a moment.*Installing Walnut/))
+    expect(m.view('devbox').phase).toBe('waiting-for-host')
+    host.connected = true
+    void m.connected(host)
+    expect(m.view('devbox')).toMatchObject({ phase: 'installing' })
+    expect(m.view('devbox').message).toMatch(/^Installing Walnut/)
+    await run
+    await vi.waitFor(() => expect(m.view('devbox').phase).toBe('running'))
+  })
+
+  it('a drop before the install (checking) reads as not connected: those steps need the link', async () => {
+    const m = createHostServerManager(deps())
+    const host = fakeHost()
+    let seen: { phase: string; message?: string } | null = null
+    host.onStatePoll = () => {
+      if (seen) return
+      host.connected = false
+      m.disconnected('devbox')
+      seen = { ...m.view('devbox') }
+      host.connected = true
+      void m.connected(host)
+    }
+    await m.connected(host)
+    expect(seen).toMatchObject({ phase: 'waiting-for-host', message: 'The host is not connected right now.' })
+    await vi.waitFor(() => expect(m.view('devbox').phase).toBe('running'))
+  })
+
   it('with nothing running, a dropped link reads as before', async () => {
     const m = createHostServerManager(deps())
     const host = fakeHost()

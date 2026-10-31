@@ -4197,7 +4197,10 @@ export class DaemonConnection {
     // failure in four chunks, at least 30 (resumeFailureCap).
     const MAX_CHUNK_RETRIES = 5
     const BACKOFF_MS = this.chunkPacing.backoffMs
-    const MAX_TOTAL_FAILURES = resume ? resumeFailureCap(totalChunks) : 30
+    // A few lanes for a resumable upload only: the daemon deploy starts over from nothing when it
+    // fails, so it keeps one. The failure cap counts per lane (a relay outage costs each lane).
+    const laneCap = Math.max(1, this.chunkPacing.parallel ?? (resume ? UPLOAD_PARALLEL : 1))
+    const MAX_TOTAL_FAILURES = (resume ? resumeFailureCap(totalChunks) : 30) * laneCap
     let totalFailures = 0
     let sent = 0
 
@@ -4249,6 +4252,8 @@ export class DaemonConnection {
         // Second abort gate: don't burn the full backoff if we're being torn down.
         if (this._destroyed) throw new Error('deploy aborted: connection destroyed')
         await new Promise(r => setTimeout(r, delayMs))
+        // Another lane failed during the backoff: its error is the answer, not one more try.
+        if (failure) return
         ok = await this.pipeChunk(chunk, chunkDir, i)
       }
       doneChunks++
@@ -4274,7 +4279,7 @@ export class DaemonConnection {
         if (next < todo.length) await new Promise(r => setTimeout(r, this.chunkPacing.gapMs))
       }
     }
-    const lanes = Math.max(1, Math.min(this.chunkPacing.parallel ?? UPLOAD_PARALLEL, todo.length))
+    const lanes = Math.max(1, Math.min(laneCap, todo.length))
     await Promise.all(Array.from({ length: lanes }, () => worker().catch((err: unknown) => {
       failure ??= err instanceof Error ? err : new Error(String(err))
     })))
