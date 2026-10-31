@@ -45,6 +45,8 @@ describe('readPluginJobsState', () => {
   it('answers null for an answer that is not a jobs view (an older server, an error body)', () => {
     expect(readPluginJobsState(null)).toBeNull()
     expect(readPluginJobsState({ error: 'this plugin has no jobs' })).toBeNull()
+    // What the server answers for a plugin with no jobs, or where it places none.
+    expect(readPluginJobsState({ pluginId: 'x', declared: [], jobs: [], reason: 'this plugin has no jobs' })).toBeNull()
     expect(readPluginJobsState({ pluginId: 'x' })).toBeNull()
   })
 })

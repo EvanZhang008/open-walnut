@@ -6,7 +6,10 @@
  *   GET  /:pluginId/jobs/:job/logs?lines&host the newest lines of one job's log (10 s deadline)
  *   PUT  /:pluginId/jobs/run-on {runOn}      "" / "__local__" (this computer) or a host key
  *
- * Only the Mac says what runs where: a replica answers 503.
+ * Only the Mac says what runs where: a replica answers 503, except to the GET.
+ * The GET is a status the plugin page reads every 10 s, so a normal state (a plugin
+ * with no jobs, a replica, a test server, which places none) answers 200 with no
+ * jobs and the reason, never an error status the browser logs on every read.
  */
 import type { Router } from 'express'
 import { validatePluginId } from '../../core/plugins/ids.js'
@@ -28,14 +31,14 @@ export function mountPluginJobsRoutes(router: Router, opts: { cloudMode: boolean
   }
 
   router.get('/:pluginId/jobs', async (req, res) => {
-    if (onMacOnly(res)) return
     try {
+      const pluginId = idOf(req.params.pluginId)
+      const none = (reason: string) => ({ pluginId, declared: [], jobs: [], reason })
+      if (opts.cloudMode) { res.json(none('plugin jobs are shown and placed on the Mac')); return }
       const { getPluginJobsManager, pluginJobsOffReason } = await import('../../core/plugin-jobs/index.js')
       const m = getPluginJobsManager()
-      if (!m) { res.status(503).json({ error: pluginJobsOffReason() ?? 'plugin jobs are not available here' }); return }
-      const view = await m.status(idOf(req.params.pluginId))
-      if (!view) { res.status(404).json({ error: 'this plugin has no jobs' }); return }
-      res.json(view)
+      if (!m) { res.json(none(pluginJobsOffReason() ?? 'plugin jobs are not available here')); return }
+      res.json(await m.status(pluginId) ?? none('this plugin has no jobs'))
     } catch (error) {
       res.status(statusOf(error)).json({ error: error instanceof Error ? error.message : String(error) })
     }
