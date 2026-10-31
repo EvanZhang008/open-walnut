@@ -126,9 +126,9 @@ describe('withTagAnchors', () => {
   const q1 = anchor('u2', 'r1', { quote: { exact: 'passage' } });
 
   it('files a turn under the question its first answer text names, user row included', () => {
-    // u3 was sent as a follow-up on question 1 but its uuid was lost (resume
-    // fallback): no anchor. The reply carries [Q1].
-    const messages = [user('u1'), reply('r1'), user('u2'), reply('r2'), user('u3'), reply('r3', '[Q1]\nmore on it')];
+    // u3 was sent as a follow-up on question 1 (its question hint says 1) but its
+    // uuid was lost (resume fallback): no anchor. The reply carries [Q1].
+    const messages = [user('u1'), reply('r1'), user('u2'), reply('r2'), asked('u3', 'more?', 1), reply('r3', '[Q1]\nmore on it')];
     const out = withTagAnchors(messages, [q1], headsBySeq([meta('u2', { seq: 1 })]));
     expect(out).toHaveLength(2);
     const extra = out.find((a) => a.msgId === 'u3')!;
@@ -143,10 +143,20 @@ describe('withTagAnchors', () => {
     // Two questions sent quickly; Walnut guessed the second reply was for u3,
     // the model says it answers question 1.
     const q2 = anchor('u3', 'r2');
-    const messages = [user('u1'), reply('r1'), user('u2'), reply('r2'), user('u3'), reply('r3', '**[Q1]**\nanswer one')];
+    const messages = [user('u1'), reply('r1'), user('u2'), reply('r2'), asked('u3', 'second', 2), reply('r3', '**[Q1]**\nanswer one')];
     const out = withTagAnchors(messages, [q1, q2], headsBySeq([meta('u2', { seq: 1 }), meta('u3', { seq: 2 })]));
     expect(out.filter((a) => a.msgId === 'u3')).toHaveLength(1);
     expect(out.find((a) => a.msgId === 'u3')).toMatchObject({ parent: 'r1', quote: { exact: 'passage' } });
+  });
+
+  it('a tag never moves a line typed in the main conversation (the model echoes the last tag)', () => {
+    // 2026-10-31: no question hint, no anchor; the model opened its answer with
+    // the question's tag it saw last.
+    const main = [user('u1'), reply('r1'), user('u2'), reply('r2'), user('m1', 'back to the main topic'), reply('r3', '[Q1] right, in short')];
+    const mainAnchors = [q1];
+    const out = withTagAnchors(main, mainAnchors, headsBySeq([meta('u2', { seq: 1 })]));
+    expect(out).toBe(mainAnchors);
+    expect(buildThreadTree(main, out).byRow.get('r3')?.key).toBe(ROOT_THREAD_KEY);
   });
 
   it('changes nothing when the tag agrees, is unknown, or names a later question', () => {
@@ -170,7 +180,7 @@ describe('withTagAnchors', () => {
   it('reads only the FIRST answer text of a turn; tool rows and empty texts are skipped', () => {
     const messages = [
       user('u1'), reply('r1'), user('u2'), reply('r2'),
-      user('u3'), reply('r3a', ''), reply('r3b', '[Q1]\nfirst text'), reply('r3c', '[Q2]\nlater text'),
+      asked('u3', 'again?', 1), reply('r3a', ''), reply('r3b', '[Q1]\nfirst text'), reply('r3c', '[Q2]\nlater text'),
     ];
     const heads = headsBySeq([meta('u2', { seq: 1 }), meta('u9', { seq: 2 })]);
     const out = withTagAnchors(messages, [q1, anchor('u9', 'r2')], heads);
@@ -195,7 +205,7 @@ describe('withTagAnchors', () => {
   });
 
   it('a synthetic anchor never reaches the tree twice: the tagged turn keeps one row entry', () => {
-    const messages = [user('u1'), reply('r1'), user('u2'), reply('r2'), user('u3'), reply('r3', '[Q1]\nx')];
+    const messages = [user('u1'), reply('r1'), user('u2'), reply('r2'), asked('u3', 'and?', 1), reply('r3', '[Q1]\nx')];
     const out = withTagAnchors(messages, [q1], headsBySeq([meta('u2', { seq: 1 })]));
     const tree = buildThreadTree(messages, out);
     // Question 1 owns u2, r2, u3, r3; nothing new was created.

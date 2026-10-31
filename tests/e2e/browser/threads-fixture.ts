@@ -483,12 +483,17 @@ export function buildTaggedSession(nowMs: number): ThreadsFixtureSession & { ids
   const ids = { R1: t(1), Q1: t(2), LOST: t(3), ROOT: t(4), Q2: t(5), MERGED: t(6) };
   const STEP2 = t(50);
   const T = TAGGED_TEXT;
+  // The number each send went out with (the old banner; a hint today): the lost
+  // follow-up was typed in question 1, the merged one while the composer still
+  // sat on question 2. A line with no number (the main conversation) never
+  // follows a tag (question-tag.ts withTagAnchors, 2026-10-31).
+  const banner = (n: number) => `[Question Q${n}]\nThis message is question ${n} of this conversation. Begin your reply with the line "[Q${n}]" (nothing else on that line) so the reply is filed under question ${n}.\n[/Question Q${n}]`;
   const rows: FixtureRow[] = [
     { role: 'user', uuid: ids.R1.u, text: TAGGED_READY },
     { role: 'assistant', uuid: ids.R1.a, text: `${filler(201, 60)}\n\n${TAGGED_PASSAGE} ${filler(202, 60)}` },
     { role: 'user', uuid: ids.Q1.u, text: `> ${TAGGED_PASSAGE}\n\n${T.q1}` },
     { role: 'assistant', uuid: ids.Q1.a, text: `[Q1]\n${T.a1} ${filler(203, 40)}` },
-    { role: 'user', uuid: ids.LOST.u, text: T.lost },
+    { role: 'user', uuid: ids.LOST.u, text: `${banner(1)}\n\n${T.lost}` },
     { role: 'assistant', uuid: ids.LOST.a, text: `[Q1]\n${T.aLost} ${filler(204, 40)}` },
     { role: 'user', uuid: ids.ROOT.u, text: T.root },
     { role: 'assistant', uuid: ids.ROOT.a, text: `${T.aRoot} ${filler(205, 40)}` },
@@ -504,7 +509,7 @@ export function buildTaggedSession(nowMs: number): ThreadsFixtureSession & { ids
     },
     { role: 'user', uuid: STEP2.u, text: '', content: [{ type: 'tool_result', tool_use_id: 'toolu_fx_tagged_q2', content: 'export const owner = null' }] },
     { role: 'assistant', uuid: ids.Q2.a, text: `${T.a2} ${filler(206, 40)}` },
-    { role: 'user', uuid: ids.MERGED.u, text: T.merged },
+    { role: 'user', uuid: ids.MERGED.u, text: `${banner(2)}\n\n${T.merged}` },
     { role: 'assistant', uuid: ids.MERGED.a, text: `[Q1]\n${T.aMerged} ${filler(207, 40)}` },
   ];
   const at = (k: number) => new Date(nowMs - 2_000_000 + k * 1000).toISOString();

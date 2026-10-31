@@ -655,6 +655,11 @@ export interface SessionHistoryMessage {
    *  is the only way a prefix synced mid-flight ever gets corrected
    *  (inc-1785965937858). See src/core/history-delta.ts. */
   unsettled?: boolean;
+  /** A user row still in Claude Code's queue: sent, not yet handed to the model.
+   *  It has no place in the conversation yet (the CLI puts it where it takes it),
+   *  so the parse moves it past everything written since its enqueue and a chat
+   *  draws it after the live output, never above words the model wrote first. */
+  queued?: boolean;
   /** True for CLI-injected user lines the human did NOT type (skill content
    *  dumps, compaction continuation summaries, image-read metadata, auto
    *  "Continue" prompts). Detected via the CLI's own flags — canonical JSONL
@@ -925,6 +930,35 @@ function logSkippedRewindCuts(skipped: readonly SkippedRewindCut[] | undefined):
 }
 
 /**
+ * A row still in Claude Code's queue (`queued`) has no place yet: the CLI takes
+ * queued lines in order (FIFO) and the row goes where it is taken. Until then
+ * everything the CLI wrote after its enqueue was written before the model saw it,
+ * so the row moves to the end. In place, the reply being written under it read as
+ * its answer, and a question asked there took that reply into its turn.
+ *
+ * Only the last turn's rows move (no real user row after them): a queued row with
+ * a user line after it is an orphan a dead process left (a later line was taken
+ * first), which stays where it was sent and stops being `queued`, so it never
+ * blocks the incremental parse. Moves `parentIds` with the rows.
+ */
+export function floatQueuedRows(rows: SessionHistoryMessage[], parentIds: (string | undefined)[]): void {
+  let lastUser = -1;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i];
+    if (r.role === 'user' && !r.injected && !r.queued) { lastUser = i; break; }
+  }
+  const moved: Array<{ row: SessionHistoryMessage; parent: string | undefined }> = [];
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (!rows[i].queued) continue;
+    // An orphan never moves again: nothing to re-ask for (a re-asked user row
+    // rebuilds the history, history-delta.ts), so it is settled where it is.
+    if (i < lastUser) { delete rows[i].queued; delete rows[i].unsettled; continue; }
+    moved.unshift({ row: rows.splice(i, 1)[0], parent: parentIds.splice(i, 1)[0] });
+  }
+  for (const m of moved) { rows.push(m.row); parentIds.push(m.parent); }
+}
+
+/**
  * Core parsing logic: parse raw JSONL content string into SessionHistoryMessage[].
  * Deduplicates by message.id, handles queue-operations. Optionally applies the
  * in-place rewind filter INSIDE the single per-line JSON.parse (fused — no
@@ -997,6 +1031,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     walnutMessageId?: string;
     sourceUuid?: string;
     unsettled?: boolean;
+    queued?: boolean;
     injected?: boolean;
     systemVariant?: 'compact' | 'error' | 'info';
     systemDetail?: string;
@@ -1084,6 +1119,12 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
   const ranMidTurn = new Set<number>();
   /** Enqueue index to the uuid its attachment says it was sent under. */
   const sourceUuidOf = new Map<number, string>();
+  /** Attachment index to the enqueue it carries. A send that ran mid-turn is placed
+   *  at its `queued_command` attachment, the line the CLI writes where it hands the
+   *  message to the model (Claude Code renders it there too), never at its enqueue:
+   *  everything the model wrote between the two was written before it saw the
+   *  message, and drawn under it read as its answer (2026-10-31). */
+  const enqueueOfAttachment = new Map<number, number>();
   for (let i = 0; i < rawMessages.length; i++) {
     const raw = rawMessages[i];
     if (raw.type !== 'queue-operation' || raw.operation !== 'remove' || !raw.content) continue;
@@ -1107,6 +1148,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
       if (claimedAttachments.has(k) || e.type !== 'attachment' || e.attachment?.type !== 'queued_command') continue;
       if (queuedCommandText(e.attachment.prompt)?.trim() === wanted) {
         claimedAttachments.add(k);
+        enqueueOfAttachment.set(k, j);
         ran = true;
         const src = e.attachment.source_uuid;
         if (typeof src === 'string' && src) sourceUuidOf.set(j, src);
@@ -1196,6 +1238,21 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     for (const i of queue) stillQueued.add(i);
     for (const t of taken) if (t.by > lastLine) stillQueued.add(t.at);
   }
+  // Only a CLI that logs where it takes a queued line makes a line not logged as
+  // taken one still waiting, whose row moves to the end (`queued`, floatQueuedRows).
+  // A mid-turn take (a `remove` naming the line, a `queued_command` attachment)
+  // proves it. A dequeue alone proves it only while no earlier send was left untaken
+  // (a typed prompt after it): an older CLI that logged turn-start dequeues but
+  // nothing for a line it ran mid-turn leaves exactly such rows, which then stay
+  // where they were sent.
+  const logsMidTurnTakes = rawMessages.some((r) => (r.type === 'queue-operation' && r.operation === 'remove' && !!r.content)
+    || (r.type === 'attachment' && r.attachment?.type === 'queued_command'));
+  let logsTakes = logsMidTurnTakes;
+  if (!logsTakes && stillQueued.size > 0 && rawMessages.some((r) => r.type === 'queue-operation' && r.operation === 'dequeue')) {
+    const firstWaiting = Math.min(...stillQueued);
+    logsTakes = !rawMessages.some((r, i) => i > firstWaiting && r.type === 'user'
+      && typeof r.message?.content === 'string' && !isInjectedLine(r));
+  }
 
   // ── Batched-twin pass (inc-1784349380504) ──
   // When ≥2 sends sit in the CLI's queue at turn start, the CLI drains them into ONE
@@ -1264,6 +1321,28 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     const toolUseId = c.match(/<tool-use-id>([^<]+)<\/tool-use-id>/)?.[1]?.trim();
     if (toolUseId) finishedBgToolUseIds.add(toolUseId);
   }
+
+  /** One user row for the queue-operation enqueue at `j` (Pattern B: the CLI never
+   *  re-logged it as a user line). Rewind leak fix: an enqueue written inside a
+   *  dead region is the queue echo of a rewound-away message, its real twin
+   *  filtered out above, so it is suppressed by IDENTITY (the region enqueue's own
+   *  timestamp+content key, computeRewindDeadSet): a live enqueue with identical
+   *  text outside the region survives unless it also shares the exact
+   *  millisecond, and the synthetic `queue-<timestamp>` id collapses that pair. */
+  const emitQueueRow = (j: number): void => {
+    const raw = rawMessages[j];
+    if (!raw.content || skipEnqueueIndices.has(j)) return;
+    if (queueDeadKeys.size > 0 && queueDeadKeys.has(queueEnqueueKey(raw))) return;
+    const syntheticId = `queue-${raw.timestamp ?? j}`;
+    const sourceUuid = sourceUuidOf.get(j);
+    messageMap.set(syntheticId, {
+      role: 'user',
+      timestamp: raw.timestamp ?? new Date().toISOString(),
+      ...(sourceUuid ? { sourceUuid } : {}),
+      ...(stillQueued.has(j) ? { unsettled: true, ...(logsTakes ? { queued: true } : {}) } : {}),
+      contentBlocks: [{ type: 'text' as const, text: raw.content }],
+    });
+  };
 
   for (let i = 0; i < rawMessages.length; i++) {
     const raw = rawMessages[i];
@@ -1364,31 +1443,19 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     }
 
     // Handle queue-operation entries (FIFO-injected user messages from mid-stream send).
-    // These are interleaved at the correct chronological position in the JSONL.
     if (raw.type === 'queue-operation') {
-      // Only parse Pattern B enqueues (no matching later user STRING — the message was
-      // consumed mid-stream and never re-logged as a real user line). Pattern A enqueues
-      // are in skipEnqueueIndices (their identical user STRING twin is emitted below).
-      // Rewind leak fix: an enqueue written inside a dead region is the queue
-      // echo of a rewound-away message — its real twin was filtered out above,
-      // so it would re-render as a Pattern-B queue row. Suppress by IDENTITY
-      // (the region enqueue's own timestamp+content key, collected by
-      // computeRewindDeadSet): a live enqueue with identical text outside the
-      // region survives unless it also shares the exact millisecond, and the
-      // synthetic `queue-<timestamp>` id below collapses that pair into one
-      // row anyway.
-      if (raw.operation === 'enqueue' && raw.content && !skipEnqueueIndices.has(i)
-        && !(queueDeadKeys.size > 0 && queueDeadKeys.has(queueEnqueueKey(raw)))) {
-        const syntheticId = `queue-${raw.timestamp ?? i}`;
-        const sourceUuid = sourceUuidOf.get(i);
-        messageMap.set(syntheticId, {
-          role: 'user',
-          timestamp: raw.timestamp ?? new Date().toISOString(),
-          ...(sourceUuid ? { sourceUuid } : {}),
-          ...(stillQueued.has(i) ? { unsettled: true } : {}),
-          contentBlocks: [{ type: 'text' as const, text: raw.content }],
-        });
-      }
+      // Only Pattern B enqueues make a row (no matching later user STRING: the message
+      // was consumed mid-stream and never re-logged as a real user line). Pattern A
+      // enqueues are in skipEnqueueIndices (their user STRING twin is emitted below).
+      // A send that ran mid-turn is emitted at its attachment (below), not here.
+      if (raw.operation === 'enqueue' && !ranMidTurn.has(i)) emitQueueRow(i);
+      continue;
+    }
+
+    // The CLI handed a queued send to the model here: its row goes here.
+    if (raw.type === 'attachment' && raw.attachment?.type === 'queued_command') {
+      const j = enqueueOfAttachment.get(i);
+      if (j !== undefined) emitQueueRow(j);
       continue;
     }
 
@@ -1717,6 +1784,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
       ...(msg.walnutMessageId ? { walnutMessageId: msg.walnutMessageId } : {}),
       ...(msg.sourceUuid ? { sourceUuid: msg.sourceUuid } : {}),
       ...(msg.unsettled ? { unsettled: true } : {}),
+      ...(msg.queued ? { queued: true } : {}),
       ...(msg.injected && msg.role === 'user' ? { injected: true } : {}),
       ...(msg.systemVariant ? { systemVariant: msg.systemVariant } : {}),
       ...(msg.systemDetail ? { systemDetail: msg.systemDetail } : {}),
@@ -1725,6 +1793,8 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     });
     resultParentIds.push(msg.parentToolUseId);
   }
+
+  floatQueuedRows(result, resultParentIds);
 
   // Group inline subagent children (e.g. Agent tool calls from Claude Code).
   // Unlike Task tools (which have separate JSONL files), Agent children are inline
@@ -2115,6 +2185,10 @@ function seedIncrementalState(
     return undefined;
   }
   if (prefixMessages.length + tailMessages.length !== fullMessages.length) return gateFailed();
+  // A row still in the CLI's queue moves to where the CLI takes it, and that line
+  // lands after the boundary, where a tail re-parse cannot reach the enqueue: never
+  // freeze one into the prefix (a later full read seeds at a grown boundary).
+  if (prefixMessages.some((m) => m.queued)) return undefined;
   for (let i = 0; i < fullMessages.length; i++) {
     const seg = i < prefixMessages.length ? prefixMessages[i] : tailMessages[i - prefixMessages.length];
     const full = fullMessages[i];

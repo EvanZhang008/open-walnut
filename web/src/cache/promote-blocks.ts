@@ -92,6 +92,9 @@ export interface DeltaEvidence {
    *  inc-1783746028392). A subagent-lane block whose parentToolUseId is here
    *  is archived-elsewhere → promotable. */
   finishedBgParents: Set<string>;
+  /** Ids a persisted USER row is known by (its msgId, and the uuid a mid-turn
+   *  `queue-…` row was sent under): the twin of a taken-line marker. */
+  userLineIds: Set<string>;
 }
 
 /** Tool names that anchor a subagent lane in the STREAMING view (kept in sync
@@ -106,6 +109,7 @@ export function buildDeltaEvidence(delta: SessionHistoryMessage[]): DeltaEvidenc
   const thinkingMsgIds = new Set<string>();
   const systemMsgIds = new Set<string>();
   const finishedBgParents = new Set<string>();
+  const userLineIds = new Set<string>();
   const bump = (s: string | undefined) => {
     if (!s) return;
     texts.set(s, (texts.get(s) ?? 0) + 1);
@@ -122,6 +126,10 @@ export function buildDeltaEvidence(delta: SessionHistoryMessage[]): DeltaEvidenc
         if (m.msgId) systemMsgIds.add(m.msgId);
         continue;
       }
+      if (m.role === 'user') {
+        if (m.msgId) userLineIds.add(m.msgId);
+        if (m.sourceUuid) userLineIds.add(m.sourceUuid);
+      }
       if (m.text) bump(m.text);
       if (m.thinking) bump(m.thinking);
       if (m.msgId && m.text) textMsgIds.add(m.msgId);
@@ -136,7 +144,7 @@ export function buildDeltaEvidence(delta: SessionHistoryMessage[]): DeltaEvidenc
     }
   };
   walk(delta);
-  return { toolUseIds, texts, textMsgIds, thinkingMsgIds, systemMsgIds, finishedBgParents };
+  return { toolUseIds, texts, textMsgIds, thinkingMsgIds, systemMsgIds, finishedBgParents, userLineIds };
 }
 
 /** ID-ONLY evidence over the FULL history (terminal-state cleanup). Content
@@ -353,6 +361,12 @@ export function computeAbsorbedIndices(
     // again, and the pure-UI path could never collect the compaction notice — it
     // sat on screen beside its own persisted twin for the rest of the session
     // (2026-09-21: "Context compacted" rendered twice around the summary row).
+    // A taken-line marker draws nothing: its twin is the user row of that line.
+    if (b.type === 'user_line') {
+      if (ev.userLineIds.has(b.uuid) || full?.userLineIds.has(b.uuid)) absorbed.add(i);
+      else pureUiIndices.push(i);
+      continue;
+    }
     if (b.type === 'system' && b.uuid
       && (ev.systemMsgIds.has(b.uuid) || full?.systemMsgIds.has(b.uuid))) {
       absorbed.add(i);

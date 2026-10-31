@@ -122,6 +122,7 @@ export function resolveDeltaStart(
  */
 export interface RevisableRow {
   msgId?: string;
+  role?: string;
   /** ACP's active text segment may still grow or become a retry notice. */
   unsettled?: boolean;
   tools?: { toolUseId?: string; name?: string; result?: string; bgTaskFinished?: boolean }[];
@@ -173,6 +174,10 @@ export function collectRequestedRevisions<T extends RevisableRow>(
   for (const id of requestedIds) {
     const hit = byId.get(id);
     if (!hit || hit.count !== 1) return { revised: [], ambiguous: true };
+    // An unsettled USER row is one still in Claude Code's queue: what can change is
+    // its PLACE (it moves to where the CLI takes it), and a revision only replaces a
+    // row where the client holds it. Rebuild, so the client gets it in its place.
+    if (hit.row.role === 'user') return { revised: [], ambiguous: true };
     revised.push(hit.row);
   }
   return { revised, ambiguous: false };

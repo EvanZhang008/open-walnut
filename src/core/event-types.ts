@@ -530,6 +530,24 @@ export interface SessionPermissionResolvedEvent {
   expired?: boolean;
 }
 
+/**
+ * Claude Code took one of the user's lines: the model has it from this point of
+ * the stream on (`command_lifecycle` `started`, keyed by the uuid Walnut sent the
+ * line under). The live stream keeps it as a marker block where it happened, and
+ * every chat surface places that message there: a sent message sits where the
+ * model got it, never above words the model wrote before seeing it.
+ */
+export interface SessionUserLinePayload {
+  sessionId: string;
+  taskId?: string;
+  /** The line's uuid: the optimistic bubble's `userUuid`, the history row's
+   *  `msgId` (a user line) or `sourceUuid` (a mid-turn `queue-…` row). */
+  uuid: string;
+  /** The queue rows the line carries (their ids are the bubbles' `queueId`): a
+   *  send without a uuid of its own goes out under one derived from these. */
+  rowIds?: string[];
+}
+
 export interface SessionSystemEventPayload {
   /** Exact interrupted response preserved in this notice's detail. */
   replacesMsgId?: string;
@@ -1351,6 +1369,7 @@ export interface EventPayloadMap {
   'session:delivery-held': SessionDeliveryHeldEvent;
   'session:message-queued': SessionMessageQueuedEvent;
   'session:system-event': SessionSystemEventPayload;
+  'session:user-line': SessionUserLinePayload;
   'session:background-tasks': SessionBackgroundTasksPayload;
   'session:usage-update': SessionUsageUpdateEvent;
   'session:turn-speed': SessionTurnSpeedEvent;

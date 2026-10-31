@@ -48,13 +48,17 @@ const parse = (n: number) => parseSessionMessages(LINES.slice(0, n).map((l) => J
 const typedRows = (rows: ReturnType<typeof parse>) => rows.filter((m) => m.role === 'user' && m.text === TYPED);
 
 describe('a message the CLI still holds in its queue', () => {
-  it('is an unsettled row at its enqueue while the CLI has not taken it', () => {
+  it('is an unsettled row after the reply it waits behind while the CLI has not taken it', () => {
     const racy = parse(7) // the deny's reply is written, the dequeue is not
     const rows = typedRows(racy)
     expect(rows).toHaveLength(1)
     expect(rows[0].msgId).toMatch(/^queue-/)
     expect(rows[0].unsettled).toBe(true)
+    expect(rows[0].queued).toBe(true)
     expect(isUnsettledRow(rows[0])).toBe(true)
+    // Written before the model saw it, the deny's reply is not its answer (2026-10-31).
+    const order = racy.map((m) => m.text)
+    expect(order.indexOf(TYPED)).toBeGreaterThan(order.indexOf('The write was denied, so notes.txt was not created.'))
   })
 
   it('stays unsettled after its dequeue until the CLI writes its user line', () => {
@@ -81,8 +85,10 @@ describe('a message the CLI still holds in its queue', () => {
     const full = parse(LINES.length)
     const revise = collectUnsettledIds(served)
     expect(revise).toEqual([typedRows(served)[0].msgId])
-    // The anchor still resolves, so without the re-ask the route would append.
-    expect(resolveDeltaStart(full, { since: served.length, ...computeHistoryAnchor(served) }).kind).toBe('delta')
+    // The waiting row sat at the end of the racy read (it has no place until the
+    // CLI takes it), so the anchor names it and no longer resolves: a rebuild.
+    expect(served[served.length - 1].queued).toBe(true)
+    expect(resolveDeltaStart(full, { since: served.length, ...computeHistoryAnchor(served) }).kind).toBe('rebuild')
     // The re-asked id is gone from the new parse: ambiguous, the route serves the full history.
     expect(collectRequestedRevisions(full, revise).ambiguous).toBe(true)
   })

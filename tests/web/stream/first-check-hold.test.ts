@@ -211,7 +211,7 @@ describe('ratchet: render sites read the held set', () => {
 
   it('the render sites read shownHiddenBlocks', () => {
     const text = lines.join('\n')
-    expect(text).toMatch(/buildTimeline\([^)]*shownHiddenBlocks\)/)
+    expect(text).toMatch(/buildTimeline\([^)]*shownHiddenBlocks[,)]/)
     expect(text).toMatch(/groupStreamingBlocks\(blocks, shownHiddenBlocks\)/)
     expect(text).toMatch(/countStreamChars\(blocks, shownHiddenBlocks\)/)
   })

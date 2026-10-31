@@ -108,12 +108,30 @@ export interface StreamingThinkingBlock {
   parentToolUseId?: string;
 }
 
+/**
+ * Where Claude Code TOOK one of the user's lines (`command_lifecycle` started,
+ * src/web/session-stream-buffer.ts is the twin): the model has the message from
+ * here on. It draws nothing. It is the one place a live chat learns where a sent
+ * message belongs: a bubble sits at its line's marker, a bubble with no marker
+ * yet sits after all live output (it waits in the queue), and the words after a
+ * marker answer that line (web/src/stream/chat-order.ts).
+ */
+export interface StreamingUserLineBlock {
+  type: 'user_line';
+  /** The uuid the line was sent under (the bubble's `userUuid`). */
+  uuid: string;
+  /** The queue rows the line carries (the bubbles' `queueId`): a send with no
+   *  uuid of its own goes out under one derived from these. */
+  rowIds?: string[];
+}
+
 export type StreamingBlock =
   | StreamingTextBlock
   | StreamingToolCallBlock
   | StreamingSystemBlock
   | StreamingPermissionBlock
-  | StreamingThinkingBlock;
+  | StreamingThinkingBlock
+  | StreamingUserLineBlock;
 
 // ── Lane anchoring ──────────────────────────────────────────────────────────
 
@@ -148,6 +166,8 @@ export function lastMainLaneText(
   for (let i = blocks.length - 1; i >= Math.max(0, completedLen); i--) {
     const b = blocks[i];
     if (b.type === 'system' && b.replacesMsgId) return undefined;
+    // The model took a user line here: what it writes next is a new message.
+    if (b.type === 'user_line') return undefined;
     if (b.type === 'text' && !b.parentToolUseId) return b;
   }
   return undefined;
@@ -443,6 +463,15 @@ export function appendSystemBlock(
     return updated;
   }
   return [...blocks, row];
+}
+
+// ── Taken user lines ────────────────────────────────────────────────────────
+
+/** Claude Code took the line `uuid` here. Once per uuid (a reconnect snapshot
+ *  and the live event may both carry it). */
+export function appendUserLineBlock(blocks: readonly StreamingBlock[], uuid: string, rowIds?: readonly string[]): StreamingBlock[] {
+  if (!uuid || blocks.some((b) => b.type === 'user_line' && b.uuid === uuid)) return blocks as StreamingBlock[];
+  return [...blocks, { type: 'user_line', uuid, ...(rowIds?.length ? { rowIds: [...rowIds] } : {}) }];
 }
 
 // ── Permission requests ─────────────────────────────────────────────────────

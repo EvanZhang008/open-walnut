@@ -84,7 +84,18 @@ export interface StreamingThinkingBlock {
   parentToolUseId?: string
 }
 
-export type StreamingBlock = StreamingTextBlock | StreamingToolCallBlock | StreamingSystemBlock | StreamingPermissionBlock | StreamingThinkingBlock
+/** Where Claude Code took one of the user's lines (`command_lifecycle` started):
+ *  the model has the message from here on. Draws nothing itself; the chat places
+ *  that message at this block (see the browser twin in web/src/stream/stream-reducer.ts). */
+export interface StreamingUserLineBlock {
+  type: 'user_line'
+  /** The uuid the line was sent under. */
+  uuid: string
+  /** The queue rows the line carries (a bubble's `queueId`). */
+  rowIds?: string[]
+}
+
+export type StreamingBlock = StreamingTextBlock | StreamingToolCallBlock | StreamingSystemBlock | StreamingPermissionBlock | StreamingThinkingBlock | StreamingUserLineBlock
 
 export interface StreamSnapshot {
   blocks: StreamingBlock[]
@@ -305,6 +316,18 @@ class SessionStreamBuffer {
       ...(subagentType ? { subagentType } : {}),
       ...(taskDescription ? { taskDescription } : {}),
     })
+  }
+
+  /** Claude Code took a user line here. Main-lane data: a line taken as a NEW turn
+   *  opens that turn (lifecycle `started` lands before its init), so a finished
+   *  turn's blocks go first. Once per uuid in the held blocks. */
+  appendUserLine(sessionId: string, uuid: string, rowIds?: string[]): void {
+    const entry = this.getOrCreate(sessionId)
+    this.resetIfTurnEnded(entry, sessionId)
+    if (entry.blocks.some((b) => b.type === 'user_line' && b.uuid === uuid)) return
+    this.carryPendingMarkup(entry)
+    this.touch(entry)
+    entry.blocks.push({ type: 'user_line', uuid, ...(rowIds?.length ? { rowIds } : {}) })
   }
 
   appendToolResult(sessionId: string, toolUseId: string, result: string): void {

@@ -21,6 +21,7 @@ import {
   appendToolCall,
   backfillToolResult,
   appendSystemBlock,
+  appendUserLineBlock,
   appendPermissionBlock,
   resolvePermissionBlock,
   flushMainTextBuffer,
@@ -325,6 +326,15 @@ function registerGlobalListeners(): void {
     if (!sid || !trackedSessions.has(sid)) return;
     const state = ensureState(sid);
     state.blocks = backfillToolResult(state.blocks, toolUseId, result, isToolResultError(result));
+  });
+
+  // ── user-line (Claude Code took a user line here; see stream-reducer) ──
+  onSessionEvent('session:user-line', (data: unknown) => {
+    const { sessionId: sid, uuid, rowIds } = data as { sessionId: string; uuid: string; rowIds?: string[] };
+    if (!sid || !uuid || !trackedSessions.has(sid)) return;
+    const state = ensureState(sid);
+    interruptText(state);
+    state.blocks = appendUserLineBlock(state.blocks, uuid, rowIds);
   });
 
   // ── system-event ──

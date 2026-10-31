@@ -43,16 +43,33 @@ const QuestionBubble = memo(function QuestionBubble({ message, cwd }: { message:
   );
 });
 
+type LiveText = { index: number; block: StreamingBlock };
+
+/** One live text block, as the chat's assistant message. */
+function LiveAnswer({ live, streaming, h }: { live: LiveText; streaming: boolean; h: RowHandlers }) {
+  return (
+    <div className="session-msg session-msg-assistant">
+      <div className="session-msg-content">
+        <StreamingBlockView
+          block={live.block} sessionId={h.sessionId} sessionCwd={h.sessionCwd} sessionHost={h.sessionHost}
+          live={streaming} onTaskClick={h.onTaskClick} onSessionClick={h.onSessionClick} onFileOpen={h.onFileOpen}
+        />
+      </div>
+    </div>
+  );
+}
+
 export interface ThreadCardConversationProps extends RowHandlers {
   turns: CardTurn<SessionHistoryMessage>[];
   /** The newest turn's persisted reply, hidden while its live block replaces it. */
   supersededReply?: SessionHistoryMessage;
   /** The newest turn may still be answering (no "No answer" for it). */
   lastLive: boolean;
-  /** Sent, not in the transcript yet. */
-  optimistic: Array<SessionHistoryMessage & { queueId: string; status: string }>;
-  /** The newest live text block of the turn answering this question. */
-  live?: { index: number; block: StreamingBlock };
+  /** Sent, not in the transcript yet, in the chat's order: each question with
+   *  the newest live text answering it (web/src/stream/chat-order.ts). */
+  rounds: Array<{ bubble: SessionHistoryMessage & { queueId: string; status: string }; live?: LiveText }>;
+  /** Live text answering the newest persisted turn (before any round). */
+  live?: LiveText;
   streaming: boolean;
   /** Nothing to show at all. */
   empty: boolean;
@@ -79,21 +96,13 @@ export const ThreadCardConversation = memo(function ThreadCardConversation(p: Th
           )}
         </div>
       ))}
-      {p.optimistic.map((m) => (
+      {p.live && <LiveAnswer key={`live-${p.live.index}`} live={p.live} streaming={p.streaming} h={h} />}
+      {p.rounds.map(({ bubble: m, live }) => (
         <div key={`opt-${m.queueId}`} className="thread-card-turn" data-status={m.status}>
           <QuestionBubble message={m} cwd={h.sessionCwd} />
+          {live && <LiveAnswer key={`live-${live.index}`} live={live} streaming={p.streaming} h={h} />}
         </div>
       ))}
-      {p.live && (
-        <div key={`live-${p.live.index}`} className="session-msg session-msg-assistant">
-          <div className="session-msg-content">
-            <StreamingBlockView
-              block={p.live.block} sessionId={h.sessionId} sessionCwd={h.sessionCwd} sessionHost={h.sessionHost}
-              live={p.streaming} onTaskClick={h.onTaskClick} onSessionClick={h.onSessionClick} onFileOpen={h.onFileOpen}
-            />
-          </div>
-        </div>
-      )}
       {p.empty && <div className="thread-card-empty">No message in this question yet.</div>}
     </>
   );

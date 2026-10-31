@@ -84,6 +84,7 @@ export const EventNames = {
   SESSION_DELIVERY_HELD: 'session:delivery-held',
   SESSION_MESSAGE_QUEUED: 'session:message-queued',
   SESSION_SYSTEM_EVENT: 'session:system-event',
+  SESSION_USER_LINE: 'session:user-line',
   SESSION_BACKGROUND_TASKS: 'session:background-tasks',
   SESSION_USAGE_UPDATE: 'session:usage-update',
   SESSION_TURN_SPEED: 'session:turn-speed',

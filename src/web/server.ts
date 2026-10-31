@@ -4461,6 +4461,12 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
         sessionStreamBuffer.appendSystem(sessionId, variant, message, detail, progress, uuid, replacesMsgId)
         sendStreamEvent(sessionId, event.name, event.data)
       }
+    } else if (event.name === 'session:user-line') {
+      const { sessionId, uuid, rowIds } = eventData<'session:user-line'>(event)
+      if (sessionId && uuid) {
+        sessionStreamBuffer.appendUserLine(sessionId, uuid, rowIds)
+        sendStreamEvent(sessionId, event.name, event.data)
+      }
     } else if (event.name === 'session:background-tasks') {
       // Dynamic-workflow / background-subagent progress snapshot → forward to the UI
       // so it can render the live workflow-progress panel. No stream-buffer append

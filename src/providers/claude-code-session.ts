@@ -7872,6 +7872,20 @@ export class ClaudeCodeSession {
         }
         this._lostLines.delete(lc.command_uuid)
         if (lc.state === 'cancelled') { this.returnCancelledLines([lc.command_uuid]); break }
+        if (lc.state === 'started' && this.claudeSessionId && this._isReplayedByOffset() !== true) {
+          // Where the model got the line: the chat places the message here. A replayed
+          // frame is history: its marker would land at the tail of today's stream.
+          // The queue rows the line carries name it too: a send with no uuid of its
+          // own goes out under one derived from its row ids (batch-uuid.ts lineUuidFor).
+          const rowIds = [...new Set([
+            ...lineRows(this.claudeSessionId, lc.command_uuid).map((r) => r.id),
+            ...(this._queuedLines.get(lc.command_uuid) ?? []).map((m) => m.messageId),
+          ].filter(Boolean))]
+          bus.emit(EventNames.SESSION_USER_LINE, {
+            sessionId: this.claudeSessionId, taskId: this.taskId, uuid: lc.command_uuid,
+            ...(rowIds.length > 0 ? { rowIds } : {}),
+          }, ['main-ai'], { source: 'session-runner', urgency: 'urgent' })
+        }
         if (lc.state === 'started' || lc.state === 'completed') {
           this._queuedLines.delete(lc.command_uuid)
           // The model has the line: only now do its rows leave the queue.

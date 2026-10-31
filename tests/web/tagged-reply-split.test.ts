@@ -119,4 +119,17 @@ describe('splitTaggedReplies', () => {
     ]);
     expect(rows.map((r) => r.msgId)).toEqual(['u1', 'a1', 'queue-1', 'a1~1', 'u2', 'a2']);
   });
+  it('a line typed in the main conversation, taken mid-turn, ends the stretch: an echoed tag after it is not the question\'s (2026-10-31)', () => {
+    const mainLine: Row = { role: 'user', msgId: 'queue-9', sourceUuid: 'src-main', text: 'Back to the main topic.' };
+    const rows = [
+      user('u1', 'go'),
+      midTurn('queue-1', 'src-q6', 'Why six?', 6),
+      reply('a1', 'Done.\n[Q6]\nBecause six.'),
+      mainLine,
+      reply('a2', '[Q6] right, in short: it is fine.'),
+    ];
+    const out = splitTaggedReplies(rows);
+    expect(out.map((r) => r.msgId)).toEqual(['u1', 'a1', 'queue-1', 'a1~1', 'queue-9', 'a2']);
+    expect(out.find((r) => r.msgId === 'a2')?.text).toBe('[Q6] right, in short: it is fine.');
+  });
 });

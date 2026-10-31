@@ -125,6 +125,9 @@ export const StreamingBlockView = memo(function StreamingBlockView({ block, sess
     return <SessionThinking text={block.content} live={live} />;
   }
 
+  // A taken-line marker is a place, not content (stream/chat-order.ts).
+  if (block.type === 'user_line') return null;
+
   // Below: block.type === 'tool_call'
   // ExitPlanMode with plan content → PlanCard (check planContent field, then input.plan)
   if (block.name === 'ExitPlanMode') {

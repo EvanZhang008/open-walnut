@@ -265,6 +265,10 @@ export interface SessionHistoryMessage {
    *  on the next delta — otherwise a prefix synced mid-flight stays frozen and that
    *  agent's lane blocks never get absorption proof (inc-1785965937858). */
   unsettled?: boolean;
+  /** A user row still in Claude Code's queue (sent, not handed to the model yet).
+   *  The server puts it after everything written since its enqueue; the chat draws
+   *  it after the live output too, where an untaken bubble sits. */
+  queued?: boolean;
   /** True for CLI-injected user lines the human did NOT type (skill content
    *  dumps, compaction continuation summaries, image-read metadata). Rendered
    *  as a collapsed context row, never a "You" bubble. */

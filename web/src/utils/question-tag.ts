@@ -124,7 +124,8 @@ export function keysBySeq(numbers: ReadonlyMap<string, number>): Map<number, str
 
 /**
  * The anchors plus one synthetic anchor per turn whose FIRST answer text carries
- * a tag for a question the user row is not (or not yet) anchored to. The
+ * a tag for a question the user row is not (or not yet) anchored to, when that
+ * row asked a question (a line typed in the main conversation never moves). The
  * synthetic anchor copies the target question's own (parent + passage), so the
  * tree files the whole turn, user row included, under that question. Client
  * only, never persisted: the tag in the transcript is the durable record.
@@ -163,6 +164,12 @@ export function withTagAnchors<M extends ThreadTreeMessage>(
     const target = anchorFor.get(targetHead);
     // The tagged question must exist (its own anchor) and precede this turn.
     if (!target) continue;
+    // A tag moves only a row that asked a question (its question hint or old
+    // banner): the model repeats the tag it saw last, so the answer to a line
+    // typed in the main conversation opened with `[Q6]` and the whole turn was
+    // filed under question 6 (2026-10-31). The live chat keeps the same rule
+    // (web/src/stream/chat-order.ts liveLineOwners).
+    if (headSeq === null) continue;
     const own = anchorFor.get(headId);
     if (own && own.parent === target.parent && (own.quote?.exact ?? '') === (target.quote?.exact ?? '')) continue;
     // A tag that only repeats the row's own banner says nothing the anchor does

@@ -103,9 +103,13 @@ export function splitTaggedReplies<M extends SplitRow>(rows: M[]): M[] {
       i++;
       continue;
     }
-    // The rest of this CLI turn: up to the next line the CLI ran as a turn of its own.
-    let end = i;
-    while (end < rows.length && !(rows[end].role === 'user' && !isMidTurn(rows[end]))) end++;
+    // The rest of this CLI turn: up to the next line the CLI ran as a turn of its
+    // own, or a line taken mid-turn that asked no question (typed in the main
+    // conversation): what the model writes after that answers it, whatever tag it
+    // repeats (2026-10-31: a main line's answer opened with `[Q6]` and was filed
+    // under question 6).
+    let end = i + 1;
+    while (end < rows.length && !(rows[end].role === 'user' && midTurnSeq(rows[end]) === null)) end++;
     const stretch = rows.slice(i, end);
     const questions = new Map<number, M>();
     for (const r of stretch) {

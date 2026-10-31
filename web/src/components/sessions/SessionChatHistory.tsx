@@ -34,7 +34,8 @@ import { historyTurnWindowLimit, INITIAL_HISTORY_TURNS, EARLIER_HISTORY_TURNS, i
 import { parseHistoryUnavailable, visibleHistoryUnavailable } from './history-unavailable';
 import { shouldRefetchForTurnPrompt, turnPromptMissing, PROMPT_REFETCH_RETRY_DELAYS_MS } from './turn-prompt-refetch';
 import { computeRenderFilter, allBlocksAbsorbed, buildHistoryEvidence, withFirstCheckHold, turnQuestionShown, firstCheckHeldBelow } from '@/stream/render-filter';
-import { isPendingPermissionBlock } from '@/stream/stream-reducer';
+import { isPendingPermissionBlock, type StreamingUserLineBlock } from '@/stream/stream-reducer';
+import { bubbleIndexOf, cardLiveRounds, liveLineOwners, splitQueuedTail, takenLinesOf, type TakenLines } from '@/stream/chat-order';
 import { getFinishedAgentIds, subscribeFinishedAgentIds } from '@/cache/finished-agents-store';
 import { groupStreamingBlocks, collectLanes, isLaneChild, isRunMemberBlock, trailingThinkingStart, type GroupedStreamItem } from '@/stream/group-blocks';
 import { TeamCard } from './TeamCard';
@@ -77,7 +78,7 @@ import { useThreadReviewPane } from './useThreadReviewPane';
 import { ThreadStackMenu } from './ThreadStackMenu';
 import { useThreadCardPlace } from '@/hooks/useThreadCardPlace';
 import { allPassageMarks, cardTurnsOf, hasWords } from '@/utils/thread-card';
-import { blockTagKeys, headsBySeq, keysBySeq, questionNumbers, tagKeyAtBlock, tagKeysOfBlocks, withTagAnchors } from '@/utils/question-tag';
+import { blockTagKeys, headsBySeq, keysBySeq, parseQuestionTag, questionNumbers, questionSeqOfRow, tagKeyAtBlock, tagKeysOfBlocks, withTagAnchors } from '@/utils/question-tag';
 import { splitTaggedReplies } from '@/utils/tagged-reply-split';
 import { ThreadResolvedStrip } from './ThreadResolvedStrip';
 import { useThreadToast } from './ThreadPanelToast';
@@ -409,9 +410,11 @@ function isTransparentStreamItem(item: TimelineItem): boolean {
 }
 
 /**
- * Interleave streaming blocks and active optimistic messages by blockIndex.
- * Each user message was sent at a specific blocks.length — it renders at that
- * position. `hidden` = blocks absorbed by persisted history (render filter):
+ * Interleave streaming blocks and active optimistic messages. A message sits
+ * where Claude Code TOOK its line (its `user_line` marker), or after all live
+ * output while it waits in the queue (stream/chat-order.ts); `blockIndexMap`
+ * (the block count when it was sent) only places it in a stream that reports no
+ * taken lines. `hidden` = blocks absorbed by persisted history (render filter):
  * they keep their INDEX (anchors stay stable) but emit no timeline item.
  */
 function buildTimeline(
@@ -421,14 +424,15 @@ function buildTimeline(
   isStreaming: boolean,
   isResuming: boolean,
   hidden?: Set<number>,
+  lines: TakenLines = takenLinesOf(blocks),
 ): TimelineItem[] {
   const items: TimelineItem[] = [];
   let visibleCount = 0;
 
-  // Group user messages by their blockIndex
+  // Group user messages by the block they render before
   const usersByIndex = new Map<number, OptimisticMessage[]>();
   for (const msg of activeOptimistic) {
-    const idx = blockIndexMap.get(msg.queueId) ?? blocks.length;
+    const idx = bubbleIndexOf(msg, lines, blocks.length, blockIndexMap.get(msg.queueId));
     const arr = usersByIndex.get(idx);
     if (arr) arr.push(msg);
     else usersByIndex.set(idx, [msg]);
@@ -443,6 +447,7 @@ function buildTimeline(
       }
     }
     if (hidden?.has(i)) continue; // absorbed by history — its twin renders above
+    if (blocks[i].type === 'user_line') continue; // a place, not content
     visibleCount++;
     items.push({ kind: 'block', block: blocks[i], index: i });
   }
@@ -463,6 +468,9 @@ function buildTimeline(
 
   return items;
 }
+
+/** No live block is placed by a taken line (a stream without markers). */
+const NO_LINE_OWNERS: Array<string | null> = [];
 
 // ── Auto-scroll constant ──
 const NEAR_BOTTOM_PX = 80;  // px from bottom to consider "at bottom"
@@ -648,7 +656,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
   }, [openLightbox]);
 
-  const { messages: loadedMessages, loading, phase2Pending, firstCheckPending, error, stale, loadingFrom, forkBoundaryIndex: loadedForkBoundary, olderHidden, olderWindowed, olderUnavailable, olderUnavailableWhy, olderPageSeq, loadFullHistory, gaps, gapStatus, fillHistoryGap } = useSessionHistory(sessionId, historyVersion);
+  const { messages: historyRows, loading, phase2Pending, firstCheckPending, error, stale, loadingFrom, forkBoundaryIndex: loadedForkBoundary, olderHidden, olderWindowed, olderUnavailable, olderUnavailableWhy, olderPageSeq, loadFullHistory, gaps, gapStatus, fillHistoryGap } = useSessionHistory(sessionId, historyVersion);
+  // Rows still in Claude Code's queue have no place yet (stream/chat-order.ts):
+  // the bubbles show them, after the live output, until the CLI takes them.
+  const { rows: loadedMessages, queued: queuedRows } = useMemo(() => splitQueuedTail(historyRows), [historyRows]);
   // Questions answered inside the running turn's reply are cut out of it and
   // filed under their own rows (tagged-reply-split.ts). Only display and the
   // thread tree read the split rows: the turn watermark, stream absorption,
@@ -2701,7 +2712,18 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // render; visibility is decided here, at render time, not by deleting state.
   const isResuming = !isStreaming && foregroundActive !== false && phase === 'IN_PROGRESS'
     && deduped.length > 0;
-  const timeline = buildTimeline(blocks, timelineOptimistic, blockIndexMap.current, isStreaming, isResuming, shownHiddenBlocks);
+  // Where Claude Code took each line (its markers): what every placement below reads.
+  const takenLines = useMemo(() => takenLinesOf(blocks), [blocks]);
+  // Transcript rows still in the CLI's queue that no bubble here stands for (a send
+  // from another device): drawn where a waiting bubble sits, after the live output.
+  const queuedRowBubbles = useMemo((): OptimisticMessage[] => queuedRows.map((r, i) => ({
+    ...r, queueId: `queued-row:${r.msgId ?? i}`, status: 'delivered' as const,
+    // The uuid it was sent under: once taken, it moves to its line's marker.
+    ...(r.sourceUuid ? { userUuid: r.sourceUuid } : {}),
+  })), [queuedRows]);
+  const liveBubbles = queuedRowBubbles.length > 0 && !timelineOptimistic.some((m) => m.status !== 'failed')
+    ? [...timelineOptimistic, ...queuedRowBubbles] : timelineOptimistic;
+  const timeline = buildTimeline(blocks, liveBubbles, blockIndexMap.current, isStreaming, isResuming, shownHiddenBlocks, takenLines);
 
   // Prepare both render partitions together so a persisted tool run can absorb
   // the unpersisted run at the streaming boundary instead of producing two rows.
@@ -3288,6 +3310,63 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // that answers one question and moves on to the next (a question line the CLI
   // took mid-turn) is answering the newer one; the first tag kept the older card
   // on "Answering" while the newer never showed in progress (2026-10-06).
+  // The question each live block answers, from the lines Claude Code took
+  // (stream/chat-order.ts): the line's own question, and a reply tag only while
+  // that question is open (asked since the last line that asked none).
+  // A line is known by its uuid, or (a send without a uuid of its own) by the
+  // queue rows it carried. Indexed once per render: lineOwners asks per marker.
+  const lineIndex = takenLines.reports ? (() => {
+    const bubbles = new Map<string, OptimisticMessage>();
+    for (const m of allOptimistic) {
+      if (m.userUuid && !bubbles.has(m.userUuid)) bubbles.set(m.userUuid, m);
+      if (!bubbles.has(m.queueId)) bubbles.set(m.queueId, m);
+    }
+    const rows = new Map<string, SessionHistoryMessage>();
+    for (const m of loadedMessages) {
+      if (m.role !== 'user') continue;
+      if (m.msgId && !rows.has(m.msgId)) rows.set(m.msgId, m);
+      if (m.sourceUuid && !rows.has(m.sourceUuid)) rows.set(m.sourceUuid, m);
+    }
+    return { bubbles, rows };
+  })() : null;
+  /** The line's bubbles: one that asked a question first (a line carrying a main
+   *  message and a question asks that question). */
+  const bubbleOfLine = (line: StreamingUserLineBlock): OptimisticMessage | undefined => {
+    if (!lineIndex) return undefined;
+    const found: OptimisticMessage[] = [];
+    for (const id of [line.uuid, ...(line.rowIds ?? [])]) {
+      const m = lineIndex.bubbles.get(id);
+      if (m && !found.includes(m)) found.push(m);
+    }
+    return found.find((m) => !!m.requestedHints?.question?.arg) ?? found[0];
+  };
+  const rowOfLine = (line: StreamingUserLineBlock): SessionHistoryMessage | undefined => lineIndex?.rows.get(line.uuid);
+  const lineKeyOf = (line: StreamingUserLineBlock): string | null => {
+    const known = rowThreadInfo(line.uuid);
+    if (known) return known.key;
+    const bubble = bubbleOfLine(line);
+    if (bubble) return optimisticThreadKey(bubble);
+    const row = rowOfLine(line);
+    return row ? rowThreadKey(row.sourceUuid ?? row.msgId) : null;
+  };
+  const lineSeqsOf = (line: StreamingUserLineBlock): readonly number[] | null => {
+    const bubble = bubbleOfLine(line);
+    if (bubble) {
+      const arg = bubble.requestedHints?.question?.arg;
+      return arg && /^\d{1,5}$/.test(arg) ? [Number(arg)] : [];
+    }
+    const row = rowOfLine(line);
+    if (!row) return null;
+    const seq = questionSeqOfRow(row);
+    return seq === null ? [] : [seq];
+  };
+  const lineOwners = hasQuestions && takenLines.reports
+    ? liveLineOwners(blocks, takenLines, lineKeyOf, lineSeqsOf, (b) => {
+      const tag = b.type === 'text' ? parseQuestionTag(b.content) : null;
+      const key = tag ? keyBySeq.get(tag.seq) : undefined;
+      return tag && key !== undefined ? { key, seq: tag.seq } : null;
+    }, turnSegmentsRef.current.map((seg) => seg.end))
+    : NO_LINE_OWNERS;
   const liveTurnStart = turnSegmentsRef.current.length > 0 ? turnSegmentsRef.current[turnSegmentsRef.current.length - 1].end : 0;
   const liveTagKey = hasQuestions && blocks.length > liveTurnStart
     ? tagKeyAtBlock(blocks, liveTurnStart, blocks.length, blocks.length - 1, keyBySeq) : null;
@@ -3295,6 +3374,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const liveLeftKeys = hasQuestions ? tagKeysOfBlocks(blocks, liveTurnStart, blocks.length, keyBySeq).filter((k) => k !== liveTagKey) : [];
   const liveStreamKey = (() => {
     if (!hasQuestions) return ROOT_THREAD_KEY;
+    // The newest line Claude Code took in the live turn: the model answers it now.
+    const lastLine = takenLines.indices.length > 0 ? takenLines.indices[takenLines.indices.length - 1] : -1;
+    if (lastLine >= liveTurnStart) {
+      const owner = lineOwners[blocks.length - 1] ?? lineOwners[lastLine];
+      if (owner != null) return owner;
+    }
     if (liveTagKey !== null) return liveTagKey;
     let nextQueued: OptimisticMessage | undefined;
     for (let i = deduped.length - 1; i >= 0; i--) {
@@ -3365,11 +3450,14 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     turnBook.current = newTurnBook();
   }, [sessionId]);
 
-  /** The page a live block renders on: the newest tag at or before it in its
+  /** The page a live block renders on: the line Claude Code took before it (its
+   *  marker, stream/chat-order.ts), else the newest tag at or before it in its
    *  turn, else that turn's recorded owner, else the live turn's key (tag first,
    *  see liveStreamKey). */
   let blockTags: { segs: readonly StreamTurnSegment[]; keys: Array<string | null> } | null = null;
   const pageKeyOfBlock = (index: number): string => {
+    const byLine = lineOwners[index];
+    if (byLine != null) return byLine;
     const segs = turnSegments.current;
     if (blockTags?.segs !== segs) blockTags = { segs, keys: blockTagKeys(blocks, segs.map((seg) => seg.end), keyBySeq) };
     const tagged = blockTags.keys[index] ?? null;
@@ -3666,13 +3754,24 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const reviewLive: Array<[string, string]> = [];
   // Only while the sidebar shows (read back from the last render: it turns on
   // with a resize or a class change, and the next streamed token brings the words).
+  // In the chat's order (stream/chat-order.ts `cardLiveRounds`): words written
+  // before a follow-up of the same question was taken are not its answer.
   if (convMode && reviewShownRef.current) {
-    const newest = new Map<string, string>();
+    const seqs = new Map<string, Array<{ user: OptimisticMessage } | { block: string }>>();
+    const push = (k: string, e: { user: OptimisticMessage } | { block: string }) => {
+      if (k === ROOT_THREAD_KEY) return;
+      const arr = seqs.get(k);
+      if (arr) arr.push(e); else seqs.set(k, [e]);
+    };
     for (const item of timeline) {
-      if (item.kind === 'block' && item.block.type === 'text') newest.set(pageKeyOfBlock(item.index), stripQuestionTag(item.block.content));
+      if (item.kind === 'block' && item.block.type === 'text') push(pageKeyOfBlock(item.index), { block: stripQuestionTag(item.block.content) });
+      else if (item.kind === 'user' && item.msg.role === 'user' && item.msg.status !== 'failed') push(optimisticThreadKey(item.msg), { user: item.msg });
     }
-    newest.delete(ROOT_THREAD_KEY);
-    reviewLive.push(...newest);
+    for (const [k, seq] of seqs) {
+      const { lead, rounds } = cardLiveRounds(seq);
+      const text = rounds.length > 0 ? rounds[rounds.length - 1].live : lead;
+      if (text !== undefined) reviewLive.push([k, text]);
+    }
   }
   const reviewLiveSig = reviewLive.map(([k, t]) => `${k}\u0001${t.length}`).join('\u0002');
   // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the signature
@@ -4315,34 +4414,50 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const cardViewStatus = cardNode ? viewStatusOf(cardNode, threadsApi.metaIndex, threadDerived.live) : undefined;
   const cardStatus = cardWaiting && cardViewStatus !== 'resolved' ? 'queued' : cardViewStatus;
   const cardTitle = cardKey ? displayTitleOf(cardNode, threadsApi.metaIndex) : undefined;
-  // The card shows one message per turn: the reply's final words. While a turn
-  // for this question still streams, its newest live text block is that message,
-  // and the words the same turn already persisted (a step before a tool call)
+  // The card shows one message per turn: the reply's final words, in the chat's
+  // own order (stream/chat-order.ts `cardLiveRounds`): each question sent and not
+  // persisted yet sits where the timeline put it, answered by the newest live
+  // text after it; live text before the first such question answers the last
+  // persisted turn, whose words from the same turn (a step before a tool call)
   // give way to it.
-  let cardLive: Extract<TimelineItem, { kind: 'block' }> | undefined;
+  const cardOptimistic = cardKey
+    ? deduped.filter((m) => m.role === 'user' && m.status !== 'failed' && optimisticThreadKey(m) === cardKey) : [];
+  const cardSeq: Array<{ user: OptimisticMessage } | { block: Extract<TimelineItem, { kind: 'block' }> }> = [];
   if (cardKey) {
+    const placed = new Set<string>();
     for (const item of timeline) {
-      if (item.kind === 'block' && item.block.type === 'text' && pageKeyOfBlock(item.index) === cardKey) cardLive = item;
+      if (item.kind === 'user') {
+        if (item.msg.status !== 'failed' && item.msg.role === 'user' && optimisticThreadKey(item.msg) === cardKey) {
+          cardSeq.push({ user: item.msg });
+          placed.add(item.msg.queueId);
+        }
+      } else if (item.kind === 'block' && item.block.type === 'text' && pageKeyOfBlock(item.index) === cardKey) {
+        cardSeq.push({ block: item });
+      }
     }
+    // A bubble the timeline does not draw (a session's launch line) leads its rounds.
+    const unplaced = cardOptimistic.filter((m) => !placed.has(m.queueId));
+    if (unplaced.length > 0) cardSeq.unshift(...unplaced.map((m) => ({ user: m })));
   }
+  const cardOrder = cardLiveRounds(cardSeq);
+  const cardLive = cardOrder.lead;
   const cardLastReply = cardTurns[cardTurns.length - 1]?.replies[0];
   // The watermark counts the transcript's own rows; a split part stands for the row it came from.
   const cardReplySuperseded = !!cardLive && !!cardLastReply
     && loadedMessages.findIndex((m) => m === cardLastReply || (!!m.msgId && m.msgId === cardLastReply.msgId?.split('~')[0])) >= turnWatermark.current;
-  // Sent, not yet in the transcript: the question as typed, then the answer as it arrives.
-  const cardOptimistic = cardKey
-    ? deduped.filter((m) => m.role === 'user' && m.status !== 'failed' && optimisticThreadKey(m) === cardKey) : [];
   // The newest turn may still be answering (unless a newer send of this question
   // follows it); any other turn without words got none.
   const cardLiveState = cardKey ? threadDerived.live.get(cardKey) : undefined;
-  const cardLastLive = cardOptimistic.length === 0
+  const cardLastLive = cardOrder.rounds.length === 0
     && (!!cardLive || cardLiveState === 'answering' || cardLiveState === 'queued');
   const cardBody = cardKey ? (
     <ThreadCardConversation
       turns={cardTurns}
       {...(cardLastReply && cardReplySuperseded ? { supersededReply: cardLastReply } : {})}
       lastLive={cardLastLive}
-      optimistic={cardOptimistic}
+      rounds={cardOrder.rounds.map((r) => ({
+        bubble: r.bubble, ...(r.live ? { live: { index: r.live.index, block: r.live.block } } : {}),
+      }))}
       {...(cardLive ? { live: { index: cardLive.index, block: cardLive.block } } : {})}
       streaming={isStreaming}
       empty={cardTurns.length === 0 && !deduped.some((m) => m.role === 'user' && optimisticThreadKey(m) === cardKey)}

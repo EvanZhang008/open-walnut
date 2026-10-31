@@ -22,6 +22,7 @@ import {
   backfillToolResult,
   findToolCall,
   appendSystemBlock,
+  appendUserLineBlock,
   appendPermissionBlock,
   resolvePermissionBlock,
   isPendingPermissionBlock,
@@ -724,6 +725,17 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     flushPendingThinking();
 
     setBlocks((prev) => appendSystemBlock(prev, { variant, message, detail, progress, uuid, replacesMsgId }));
+  });
+
+  // Claude Code took a user line here: a marker block (renders nothing; the chat
+  // places that message at it, web/src/stream/chat-order.ts). The text before it is
+  // flushed first, so the marker lands after every word the model wrote before.
+  useEvent('session:user-line', (data) => {
+    const { sessionId: sid, uuid, rowIds } = data as { sessionId: string; uuid: string; rowIds?: string[] };
+    if (!sessionId || sid !== sessionId || !uuid) return;
+    interruptPendingText();
+    flushPendingThinking();
+    setBlocks((prev) => appendUserLineBlock(prev, uuid, rowIds));
   });
 
   // Handle permission request events (control_request from Claude Code)
