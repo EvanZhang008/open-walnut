@@ -159,6 +159,29 @@ final class TurnFoldTests: XCTestCase {
         ])
     }
 
+    /// 2026-10-31, Main's chat: a turn's quiet steps read "Received 13 messages"
+    /// and, right under it, the notes in front of the person's next message read
+    /// "Received 2 messages": two rows with nothing between them. The notes are
+    /// messages received too, so they join the row before the bubble.
+    func testWalnutsNotesInFrontOfAPersonsWordsJoinTheQuietStepsBeforeThem() {
+        let moved = "<walnut-message kind=\"notification\" from=\"Walnut\" outcome=\"moved\">\nThis task moved.\n</walnut-message>"
+        let org = "<walnut-message kind=\"notification\" from=\"Walnut\" outcome=\"org-update\">\nThe team changed.\n</walnut-message>"
+        let rows = [person(), said("Answer."), peer(), tool("Read"), line,
+                    person("\(moved)\n\n\(org)\n\nPlease draft the notes."), said("Drafted.")]
+        XCTAssertEqual(outline(plan(rows, additions: showAll)), [
+            "bubble:Can you check the build?", "text",
+            "fold:turn:Received 3 messages \u{00B7} Ran 1 tool"
+                + "[\"inbound\", \"run:1\", \"ack\", \"inbound\", \"inbound\"]",
+            "bubble:Please draft the notes.", "text",
+        ])
+        // Hidden (the default): the notes stay on the bubble's long press, the fold is as it was.
+        XCTAssertEqual(outline(plan(rows)), [
+            "bubble:Can you check the build?", "text",
+            "fold:turn:Received 1 message \u{00B7} Ran 1 tool[\"inbound\", \"run:1\", \"ack\"]",
+            "bubble:Please draft the notes.", "text",
+        ])
+    }
+
     /// 2026-10-29: a status change of a followed task rode in front of the person's
     /// words, and its outcome was missing from the closed list, so the whole row
     /// read as one notice with the words inside it. Every note the queue puts in

@@ -258,10 +258,23 @@ private final class Planner {
                                   members: quiet.map { member($0, acks: true) },
                                   failCount: rows.filter(TimelineTurnShape.isFailure).count)))
         }
+        // A person's message right after quiet steps: the notes Walnut put in front
+        // of it are messages received too, so they join that row instead of drawing
+        // a second one above the bubble (the web's `ridersFolded`; 2026-10-31, Main's
+        // chat read "Received 13 messages" right above "Received 2 messages").
+        func person(_ item: TimelineToolRunFold.Part) {
+            var folded = false
+            if additions.showAll, !quiet.isEmpty, case .message(let m) = item, TimelineTurnShape.isPerson(m),
+               m.sentBy != nil, let split = TimelineInboundMessage.splitRiders(TimelineTurnFold.ownText(m)) {
+                quiet += split.riders.enumerated().map { .message(Self.rider($1, of: m, at: $0)) }
+                folded = true
+            }
+            flushQuiet()
+            out += defaultParts([item], ridersFolded: folded)
+        }
         func place(_ item: TimelineToolRunFold.Part) {
             if Self.isQuiet(item) { quiet.append(item); return }
-            flushQuiet()
-            out += defaultParts([item])
+            person(item)
         }
         var p = 0
         for turn in turns {
@@ -274,7 +287,7 @@ private final class Planner {
             var ans = answerAt
             // The person's own message always shows.
             let lead = turn.byPerson && mine[0].start == turn.start ? 1 : 0
-            if lead == 1 { flushQuiet(); out += defaultParts([mine[0].part]) }
+            if lead == 1 { person(mine[0].part) }
             // The answer's own reasoning (the same message, split into its own row on
             // the phone) stays with the answer when nothing quiet comes before it;
             // after quiet steps it is their last one.
@@ -341,7 +354,8 @@ private final class Planner {
     /// shows only when `additions` says so: each note as its one-line description
     /// above the bubble, the rest as one row under it. Hidden, the bubble carries
     /// the long-press item that shows them (`walnutAddedToggle`).
-    private func defaultParts(_ items: [TimelineToolRunFold.Part]) -> [Part] {
+    /// `ridersFolded`: its notes already went into the fold before it.
+    private func defaultParts(_ items: [TimelineToolRunFold.Part], ridersFolded: Bool = false) -> [Part] {
         var out: [Part] = []
         for item in items {
             guard case .message(let m) = item, TimelineTurnShape.isPerson(m), m.sentBy != nil else {
@@ -362,17 +376,22 @@ private final class Planner {
             if !additions.showAll {
                 bubble.walnutAddedToggle = WalnutAddedToggle(count: count, shown: shown, key: key)
             }
-            if shown {
-                out += (split?.riders ?? []).enumerated().map { n, rider in
-                    // Named by place: the row's own id hashes its text, which a rich read replaces.
-                    Part.inbound(ChatMessage(id: "rider|\(m.createdAt)|\(n)", role: "user", text: rider,
-                                             createdAt: m.createdAt, kind: nil))
-                }
+            if shown, !ridersFolded {
+                out += (split?.riders ?? []).enumerated().map { Part.inbound(Self.rider($1, of: m, at: $0)) }
             }
             out.append(.message(bubble))
             if shown, !added.isEmpty { out.append(.added(key: key, items: added)) }
         }
         return out
+    }
+
+    /// One of Walnut's notes in front of a person's message, as the message it is.
+    /// Named by place: the row's own id hashes its text, which a rich read replaces.
+    private static func rider(_ text: String, of m: ChatMessage, at n: Int) -> ChatMessage {
+        var rider = ChatMessage(id: "rider|\(m.createdAt)|\(n)", role: "user", text: text,
+                                createdAt: m.createdAt, kind: nil)
+        rider.sentBy = "agent"
+        return rider
     }
 
     /// A person's message's place, for its reveal and its "Walnut added" row: the

@@ -213,6 +213,9 @@ interface SessionMessageProps {
   /** The words alone, as a question's comment card shows its answer: no tools
    *  and no thinking (whose part of the turn it was is not knowable there). */
   answerOnly?: boolean;
+  /** The notes Walnut put in front of the person's words are drawn by the fold
+   *  right above this row (SessionChatHistory), so this row draws the words alone. */
+  ridersFolded?: boolean;
   /** Only the last assistant output renders copy actions, keeping middle rows compact. */
   showCopyActions?: boolean;
   onTaskClick?: (taskId: string) => void;
@@ -1079,7 +1082,7 @@ export const SessionMessage = memo(function SessionMessage(props: SessionMessage
   return <SessionMessageBubble {...props} />;
 });
 
-function SessionMessageBubble({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, answerOnly, showCopyActions = false, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
+function SessionMessageBubble({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, answerOnly, ridersFolded, showCopyActions = false, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
   const { role, text: rawText, timestamp, tools: rawTools, thinking } = message;
   // A reply's `[Q<n>]` tag names its question (question-tag.ts); the label above
   // the turn shows the number, so the line itself never renders. Nor does the
@@ -1374,7 +1377,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
       )}
     </div>
   );
-  if (!riderSegments || (personWords && !showAdded)) return row;
+  if (!riderSegments || (personWords && (!showAdded || ridersFolded))) return row;
   // Not `.session-msg-content`: that class marks THE message body, which quote
   // pins and passage selection find as the row's first match.
   const cards = (

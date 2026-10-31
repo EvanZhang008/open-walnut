@@ -62,7 +62,7 @@ import { envelopeSteps, foldStepsPhrase, type FoldStep } from './fold-steps';
 import { lookupTaskByRef } from '@/stores/entity-label-store';
 import { joinsQuiet, MSG_KIND_ROLE, SYSTEM_VARIANT_ROLE, toolRole, TOOL_ROLE_FOLDS, type MsgKind, type RowRole } from './fold-rows';
 import { chunkByKind, leadingStepGroup, stepGroups, type StepGroup, type StepKind } from './stream-step-groups';
-import { isEnvelopeOnly, parseSessionEnvelopes } from '@open-walnut/history-session-envelope';
+import { isEnvelopeOnly, parseSessionEnvelopes, type EnvelopeSegment } from '@open-walnut/history-session-envelope';
 import { NoActionMark, ProcessFoldRow, ReaderOpenedFolds, openTurnFold, turnFoldKey } from './TurnFolds';
 import { foldPlace, joinedRows, readReaderView, restoreReaderRow, rowKeysAttr, rowsAsDrawn, type HeldBefore, type ReaderView } from './fold-reader-hold';
 import { shapeTurns, type TurnShape } from '@/utils/turn-shape';
@@ -70,6 +70,9 @@ import { noActionRows, readTurnMarker, stripTurnMarker } from '@/utils/turn-end-
 import { detectOutboundSend } from './session-outbound';
 import { isRoutedQuestion } from './tool-run-phrase';
 import { isMergeableHistoryTool } from './SessionMessage';
+import { SessionEnvelopeSegments } from './SessionProvenanceCard';
+import { splitLeadingRiders } from '@open-walnut/history-walnut-riders';
+import { useShowWalnutAdditions } from '@/hooks/useShowWalnutAdditions';
 import { injectedContextKind } from './injected-context';
 import { stripQuestionTag } from '@/utils/question-tag';
 import { ThreadCommentCard } from './ThreadCommentCard';
@@ -1422,6 +1425,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   /** Conversation Mode with questions: every turn in order, each question's
    *  turns labelled; the stack path is the composer's target, never a filter. */
   const convMode = threadsApi.viewMode === 'linear' && hasQuestions;
+  // The notes above a person's words show (Settings, Message hints): right after a
+  // fold they join it, so two fold rows never sit back to back (fold-rows.ts).
+  const alwaysShowAdded = useShowWalnutAdditions();
   const currentKey = stackMode ? stack.currentKey : ROOT_THREAD_KEY;
   /** The question the composer posts into (both views). */
   const targetKey = hasQuestions ? stack.currentKey : ROOT_THREAD_KEY;
@@ -4026,6 +4032,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
    */
   // Answers whose reasoning the turn's fold holds (pushTurnFold): they show the words alone.
   const thinkingFolded = new Set<number>();
+  const ridersFolded = new Set<number>();
   const renderHistoryPart = (part: HistoryPart) => {
     if (part.kind === 'run') {
       const first = part.members[0];
@@ -4103,7 +4110,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             {noActionSet.has(globalIndex) ? <NoActionMark /> : null}
           </>
         ) : (
-          <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} {...(thinkingFolded.has(globalIndex) ? { answerOnly: true } : {})} showCopyActions={globalIndex === lastAssistantTextIndex} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+          <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} {...(thinkingFolded.has(globalIndex) ? { answerOnly: true } : {})} {...(ridersFolded.has(globalIndex) ? { ridersFolded: true } : {})} showCopyActions={globalIndex === lastAssistantTextIndex} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
         )}
       </div>
     );
@@ -4388,22 +4395,30 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   };
   let quiet: Item[] = [];
   let quietKey = '';
-  const emitQuiet = (answerThinking?: string) => {
+  const emitQuiet = (answerThinking?: string, riders?: EnvelopeSegment[]) => {
     const items = quiet;
     quiet = [];
     if (items.length === 0) return;
     // One step alone renders as itself, except a message received or sent: that
     // is always a folded row, never its whole card between two answers.
     const sends = (part: HistoryPart) => rowsOf(part).some((m) => (m.tools ?? []).some(isOutboundTool));
-    if (items.length === 1 && !answerThinking && !isInboundPart(items[0].part) && !sends(items[0].part)) { renderOne(items[0]); return; }
+    if (items.length === 1 && !answerThinking && !riders && !isInboundPart(items[0].part) && !sends(items[0].part)) { renderOne(items[0]); return; }
     const id = idOf(items[0].part);
     const body = items.map((x) => renderHistoryPart(x.part));
     if (answerThinking) body.push(<SessionThinking key={`fold-thinking-${id}`} text={answerThinking} />);
+    if (riders) {
+      body.push(
+        <div key={`fold-riders-${id}`} className="session-msg session-msg-envelope session-msg-riders" data-testid="session-rider-row">
+          <div className="session-msg-rider-content"><SessionEnvelopeSegments segments={riders} sessionCwd={sessionCwd} /></div>
+        </div>,
+      );
+    }
     markAll(items, turnFoldKey(id));
     meetReader(turnFoldKey(id), items);
     const failed = failedOf(items.map((x) => x.part));
     const steps = items.flatMap((x) => foldStepsOf(x.part));
     if (answerThinking) steps.push({ kind: 'thought' });
+    if (riders) steps.push(...envelopeSteps(riders));
     const head = headOf(items[0].part);
     // A call with no result yet folds with the rest (fold-rows.ts); the row breathes
     // for it only while the session runs a turn (a dead session's leftover never does).
@@ -4433,7 +4448,19 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       thinking = part.m.thinking;
       thinkingFolded.add(part.globalIndex);
     }
-    emitQuiet(thinking);
+    // The notes that rode in front of the person's words join the fold right above
+    // them (2026-10-31, Main's chat: "Received 13 messages · Sent 2 · Ran 9 tools"
+    // sat on "Received 2 messages", the notes of the person's next message).
+    let riders: EnvelopeSegment[] | undefined;
+    if (alwaysShowAdded && part.kind === 'msg' && part.m.role === 'user' && quiet.length > 0
+      && quietKey === groupKeyOf(part) && !askedAfter.has(item.i)) {
+      const split = splitLeadingRiders(part.m.text ?? '');
+      if (split && split.riders.length > 0 && split.body.trim()) {
+        riders = split.riders.map((envelope) => ({ kind: 'envelope' as const, envelope }));
+        ridersFolded.add(part.globalIndex);
+      }
+    }
+    emitQuiet(thinking, riders);
     renderOne(item);
   };
   /** A step of the work (fold-rows.ts) that no Asked-from list hangs off. */

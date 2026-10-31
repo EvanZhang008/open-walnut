@@ -118,6 +118,55 @@ for (const [name, history, a, b, phrase] of [
   });
 }
 
+/** The fold headers the reader sees, top-level, in order (an opened fold's own
+ *  members excluded): two in a row with nothing visible between them is the split. */
+async function foldHeadersAround(hist: Locator, from: string, to: string): Promise<string[]> {
+  return hist.evaluate((el, [a, b]) => {
+    const textNode = (needle: string) => {
+      const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      for (let n = walk.nextNode(); n; n = walk.nextNode()) if (n.textContent?.includes(needle)) return n;
+      return null;
+    };
+    const start = textNode(a);
+    const end = textNode(b);
+    if (!start || !end) return [`missing ${start ? b : a}`];
+    const follows = (x: Node, y: Node) => (x.compareDocumentPosition(y) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    return [...el.querySelectorAll('.tool-run-toggle')]
+      .filter((t) => follows(start, t) && follows(t, end))
+      .filter((t) => !t.parentElement?.closest('[data-open="true"]'))
+      .map((t) => (t.textContent ?? '').replace(/\s+/g, ' ').trim());
+  }, [from, to] as const);
+}
+
+// 2026-10-31, Main's chat on the live server: "Received 13 messages · Sent 2 · Ran
+// 9 tools" and right under it "Received 2 messages", the notes Walnut put in front
+// of the person's next message. They are messages received too: one row.
+test('the notes in front of a person\'s message join the fold of the steps before it', async ({ page }) => {
+  let n = 400;
+  const moved = '<walnut-message kind="notification" from="Walnut" outcome="moved">\nThis task moved to Sample project.\n</walnut-message>';
+  const org = '<walnut-message kind="notification" from="Walnut" outcome="org-update">\nThe team changed.\n</walnut-message>';
+  const history = [
+    { role: 'user', text: 'OR_ASK4 go', timestamp: at(n++) },
+    { role: 'assistant', text: 'OR_ANSWER_F the first part is done.', timestamp: at(n++) },
+    { role: 'user', text: peer('Docs lead [aaaaaaaa]', 'The review is done.'), timestamp: at(n++) },
+    { role: 'assistant', text: '', tools: [bash('n1', 'sample-review --read')], timestamp: at(n++) },
+    { role: 'assistant', text: TAG, timestamp: at(n++) },
+    { role: 'user', text: `${moved}\n\n${org}\n\nOR_PERSON please draft the notes`, timestamp: at(n++) },
+    { role: 'assistant', text: 'OR_ANSWER_G drafted.', timestamp: at(n++) },
+  ];
+  await mockSession(page, history, 'idle');
+  const hist = await open(page);
+  await expect(hist).toContainText('OR_ANSWER_G', { timeout: 60000 });
+  await expect.poll(() => foldHeadersAround(hist, 'OR_ANSWER_F', 'OR_PERSON'))
+    .toEqual([expect.stringMatching(/^Received 3 messages · Ran 1 tool/)]);
+  // The person's words stay their bubble, and the notes are inside the one fold.
+  await expect(hist.locator('[data-msg-index]', { hasText: 'OR_PERSON' }).filter({ hasText: 'The team changed' })).toHaveCount(0);
+  const fold = hist.locator('[data-testid="turn-fold"]', { has: page.locator('.tool-run-toggle', { hasText: 'Received 3 messages' }) });
+  await fold.locator(':scope > .tool-run-toggle').click();
+  await expect(fold).toContainText('The team changed');
+  await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-rider-joins-fold.png`, clip: (await hist.boundingBox())! }).catch(() => {});
+});
+
 test('words still split the stretch, and a question to the person stays out', async ({ page }) => {
   let n = 300;
   const history = [
