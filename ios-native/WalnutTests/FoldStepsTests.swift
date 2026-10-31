@@ -14,24 +14,24 @@ final class FoldStepsTests: XCTestCase {
             + [.calls(1), .calls(2), .sent(to: nil), .inbox]
             + Array(repeating: .calls(1), count: 4)
         XCTAssertEqual(TimelineFoldSteps.phrase(steps),
-                       "Received 13 messages from Walnut VP and Board tags +10 \u{00B7} Sent 3 to your inbox +2 \u{00B7} Ran 8 tools")
+                       "Received 13 messages from Walnut VP, from Board tags +10 \u{00B7} Sent 3 to your inbox +2 \u{00B7} Ran 8 tools")
     }
 
     func testATitleWithItsOwnDotOrCommaNeverReadsAsTheSeparator() {
         XCTAssertEqual(TimelineFoldSteps.phrase([.sent(to: "Brief: the letter, in three sections \u{00B7} Tabs"), .sent(to: "Docs")]),
-                       "Sent 2 to Brief: the letter, in three sections / Tabs and Docs")
+                       "Sent 2 to Brief: the letter, in three sections / Tabs, to Docs")
     }
 
     func testASendNamesItsTasksOnTheLineAndTheChip() {
         XCTAssertEqual(TimelineFoldSteps.phrase([.sent(to: "Brief task"), .sent(to: "Task status foundation")]),
-                       "Sent 2 to Brief task and Task status foundation")
+                       "Sent 2 to Brief task, to Task status foundation")
         var send = ChatMessage(id: "t1", role: "assistant", text: "Bash", createdAt: "2026-10-30T00:00:00Z", kind: .tool,
                                detail: nil, resultPreview: "Message delivered on this host to abcd12",
                                inputPreview: "command: for id in abcd1234 99887766; do walnut tools call task_send x; done")
         send.sentTo = [SentTarget(ref: "abcd12", taskId: "abcd1234-ef56", title: "Brief task"),
                        SentTarget(ref: "998877", taskId: nil, title: nil)]
         XCTAssertEqual(TimelineFoldSteps.steps(send), [.sent(to: "Brief task"), .sent(to: nil)])
-        XCTAssertEqual(TimelineTurnFold.sendLabel(send), "Sent to Brief task")
+        XCTAssertEqual(TimelineTurnFold.sendLabel(send), "Sent to Brief task +1")
         // An older server sends no targets: one unnamed send, the chip's own label.
         send.sentTo = nil
         XCTAssertEqual(TimelineFoldSteps.steps(send), [.sent(to: nil)])
@@ -57,6 +57,8 @@ final class FoldStepsTests: XCTestCase {
         XCTAssertEqual(rows[0].sentTo?.first?.taskId, "abcd1234-ef56")
         XCTAssertEqual(rows[0].detailRef, "ref-1")
         XCTAssertTrue(TimelineTurnFold.isOutbound(rows[0]))
+        // It stays out of "Ran a command" on its own row, as a send does.
+        XCTAssertFalse(TimelineToolRunFold.isRunMember(rows[0]))
         XCTAssertEqual(TimelineFoldSteps.steps(rows[0]), [.sent(to: "Brief task \u{00B7} Tabs")])
         XCTAssertEqual(TimelineFoldSteps.phrase(TimelineFoldSteps.steps(rows[0])), "Sent 1 to Brief task / Tabs")
         XCTAssertEqual(TimelineTurnFold.sendLabel(rows[0]), "Sent to Brief task / Tabs")

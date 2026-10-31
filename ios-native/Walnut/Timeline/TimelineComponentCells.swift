@@ -840,10 +840,13 @@ private struct TimelineToolChipView: View {
                     .truncationMode(.middle)
                     .layoutPriority(2)
                 if let detail, !detail.isEmpty {
+                    // A long name never squeezes the detail to a glyph or two (the iOS
+                    // gate, 2026-10-30: "T" with no ellipsis read as a broken render).
                     Text(detail)
                         .font(.caption)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .frame(minWidth: detail.count >= 6 ? 44 : nil, alignment: .leading)
                         .layoutPriority(1)
                 }
             }

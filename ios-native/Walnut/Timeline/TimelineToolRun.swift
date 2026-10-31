@@ -106,6 +106,8 @@ enum TimelineToolRunFold {
         guard !message.isUser else { return false }
         if message.kind == .thinking { return true }
         guard message.kind == .tool else { return false }
+        // The server read it as a send (`sentTo`), whatever its command begins with.
+        if !(message.sentTo ?? []).isEmpty { return false }
         return !staysOutOfRuns(name: message.text, detail: message.detail,
                                inputPreview: message.inputPreview)
     }

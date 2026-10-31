@@ -59,6 +59,15 @@ describe('a transcript field reaches the timeline row', () => {
     expect(sent.filter((f) => chat.includes(f) && !fields.includes(f))).toEqual([])
   })
 
+  it('every test of "is this row a send" on the phone reads the server\'s answer (sentTo)', () => {
+    // 2026-10-30, the iOS gate twice: isOutbound read only the command's head, then
+    // isRunMember did, so a send the line counted sat inside "Ran a command".
+    const RUN = read('ios-native/Walnut/Timeline/TimelineToolRun.swift')
+    for (const [src, fn] of [[FOLD, 'static func isOutbound('], [RUN, 'static func isRunMember(']] as const) {
+      expect(block(src, fn, '    '), fn).toContain('sentTo')
+    }
+  })
+
   it('the decoder\'s init takes every field', () => {
     const init = message.slice(message.indexOf('init('))
     expect(carried.filter((f) => !init.includes(`self.${f} = ${f}`))).toEqual([])

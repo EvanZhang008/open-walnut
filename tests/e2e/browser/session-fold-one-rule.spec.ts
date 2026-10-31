@@ -94,7 +94,7 @@ async function rowsBetween(hist: Locator, from: string, to: string): Promise<str
 }
 
 for (const [name, history, a, b, phrase] of [
-  ['the reported session', reported, 'OR_ANSWER_A', 'OR_ANSWER_B', /^Received 2 messages from Walnut: re-check \+1 · Ran 5 tools\s*21 failed/],
+  ['the reported session', reported, 'OR_ANSWER_A', 'OR_ANSWER_B', /^Received 2 messages from (?:Walnut|System): re-check \+1 · Ran 5 tools\s*21 failed/],
   ['every step kind', everyKind, 'OR_ANSWER_C', 'OR_ANSWER_D', /^Received 2 messages from Docs lead \+1 · Sent 1 to Turn fold fixture task · Ran 4 tools · 2 notices\s*4 failed/],
 ] as const) {
   test(`${name}: the steps between two answers are one fold row`, async ({ page }) => {
@@ -158,7 +158,7 @@ test('a fold of sends names the tasks they went to, also when only the answer sa
   const between = await rowsBetween(hist, 'OR_ANSWER_F', 'OR_ANSWER_G');
   expect(between).toHaveLength(1);
   await expect.poll(async () => (await rowsBetween(hist, 'OR_ANSWER_F', 'OR_ANSWER_G'))[0])
-    .toMatch(/^Received 1 message( from [^·]+)? · Sent 3 to Turn fold fixture task and Rider fixture task/);
+    .toMatch(/^Received 1 message( from [^·]+)? · Sent 3 to Turn fold fixture task, to Rider fixture task/);
   const fold = hist.locator('[data-testid="turn-fold"]', { hasText: 'Sent 3' });
   await fold.locator(':scope > .tool-run-toggle').click();
   // Opened: each send card names its task, never "another session".

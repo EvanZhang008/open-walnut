@@ -89,14 +89,15 @@ enum TimelineFoldSteps {
     }
 
     private static func parties(_ word: String, _ raw: [String?]) -> String {
-        // A title's own " · " would read as the line's separator, and its commas as
-        // a list: the names are joined with "and", their dots made slashes (the web's `parties`).
+        // A title's own " · " would read as the line's separator, and its commas and
+        // its "and" as a list: each name keeps its own word ("to A, to B"), its dots
+        // made slashes (the web's `parties`).
         let names = raw.map { $0.map(partyName) }
         var shown: [String] = []
         for case let name? in names where !name.isEmpty && !shown.contains(name) && shown.count < 2 { shown.append(name) }
         guard !shown.isEmpty else { return "" }
         let more = names.filter { name in !(name.map(shown.contains) ?? false) }.count
-        return " \(word) \(shown.joined(separator: " and "))\(more > 0 ? " +\(more)" : "")"
+        return " \(word) \(shown.joined(separator: ", \(word) "))\(more > 0 ? " +\(more)" : "")"
     }
 
     /// The fold's line. A stretch with none of the three counts reads by what it

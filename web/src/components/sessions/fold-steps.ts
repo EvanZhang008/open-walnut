@@ -68,13 +68,14 @@ const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : 
  *  came from or went to anyone else ("from Docs lead, Walnut +3"). `names` holds
  *  one entry per message, '' when it names no one. */
 function parties(word: 'from' | 'to', raw: readonly string[]): string {
-  // A title's own " · " would read as the line's separator, and its commas as a
-  // list: the names are joined with "and", their dots made slashes.
+  // A title's own " · " would read as the line's separator, and its commas and its
+  // "and" as a list: each name keeps its own word ("to A, to B", the lead's ask of
+  // 2026-10-30), its dots made slashes.
   const names = raw.map((n) => n.trim().replace(/\s+·\s+/g, ' / '));
   const shown = [...new Set(names.filter(Boolean))].slice(0, 2);
   if (shown.length === 0) return '';
   const more = names.filter((n) => !shown.includes(n)).length;
-  return ` ${word} ${shown.join(' and ')}${more > 0 ? ` +${more}` : ''}`;
+  return ` ${word} ${shown.join(`, ${word} `)}${more > 0 ? ` +${more}` : ''}`;
 }
 
 /** The fold's line: counts only, "Received 12 messages · Sent 3 · Ran 8 tools",

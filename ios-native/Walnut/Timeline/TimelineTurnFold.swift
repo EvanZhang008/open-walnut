@@ -165,13 +165,16 @@ enum TimelineTurnFold {
         }
     }
 
-    /// A send's chip names the tasks it went to ("Sent to Brief task and Task status
-    /// foundation") when the server resolved them (`sentTo`); nil for any other row.
+    /// A send's chip names the task it went to ("Sent to Brief task", "Sent to Brief
+    /// task +2" for a loop over three) when the server resolved it (`sentTo`); nil for
+    /// any other row. The chip is one line: a second name would be cut in its middle
+    /// and read as one title (the iOS gate, 2026-10-30); the opened row lists them all.
     /// 2026-10-30, the user, of a send that said "another session": which session?
     /// A title's own " · " shows as " / ", as on the fold line (`TimelineFoldSteps`).
     static func sendLabel(_ m: ChatMessage) -> String? {
-        guard isOutbound(m), let titles = m.sentTo?.compactMap(\.title), !titles.isEmpty else { return nil }
-        return "Sent to " + titles.map(TimelineFoldSteps.partyName).joined(separator: " and ")
+        guard isOutbound(m), let targets = m.sentTo, let first = targets.compactMap(\.title).first else { return nil }
+        let more = targets.count - 1
+        return "Sent to " + TimelineFoldSteps.partyName(first) + (more > 0 ? " +\(more)" : "")
     }
 
     static func capitalized(_ s: String) -> String {
