@@ -1073,6 +1073,13 @@ function runWnMinimal(argv, stdinText) {
         args = { name: helpName };
       }
       else {
+        // A word after the arguments is refused, never dropped: twin of trailingArgsMessage in
+        // tool-args-source.ts (a stray --dry-run there once let a real message go out).
+        var wnExtra = rest.slice(2).filter(function (a) { return a !== '--json'; });
+        if (wnExtra.length) {
+          errOut('walnut: nothing was run: tools call reads <op> and one argument (inline JSON, @file or -) and nothing after it, so ' + wnExtra[0] + ' would have been ignored');
+          return exitWn(2);
+        }
         var src = wnSrc || wnArgsSource(rest[1]);
         if (src.kind === 'usage-error') { errOut('walnut: ' + src.message); return exitWn(2); }
         var rawText = '';

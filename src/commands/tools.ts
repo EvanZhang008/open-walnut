@@ -167,6 +167,17 @@ export async function runTools(args: string[], globals: GlobalOptions): Promise<
       return
     }
 
+    // The JSON form reads ONE argument: a word after it is refused, not dropped (tool-args-source.ts).
+    if (!rest[0]?.startsWith('--')) {
+      const { trailingArgsMessage } = await import('../providers/tool-args-source.js')
+      const trailing = trailingArgsMessage(rest.slice(1))
+      if (trailing) {
+        console.error(trailing)
+        process.exitCode = 1
+        return
+      }
+    }
+
     // An op this process does not know may be a plugin's, which only the server
     // holds: inside a session the host daemon runs it there, with the raw
     // arguments (JSON, @file or stdin). Outside one, the usual unknown-op error.

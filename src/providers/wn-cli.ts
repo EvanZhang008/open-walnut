@@ -28,7 +28,7 @@ import path from 'node:path'
 import type { GatewayError, GatewayErrorCode, GatewayOp, GatewayRequest, GatewayResponse } from './gateway-core.js'
 import { EXTERNAL_CALLER_SID, wellKnownGatewaySocketPaths } from './gateway-core.js'
 import { withFileLock } from '../utils/file-lock.js'
-import { GATEWAY_INLINE_ARGS_MAX_BYTES, classifyArgsSource, parseToolArgs, strippedShellText, strippedShellTextMessage } from './tool-args-source.js'
+import { GATEWAY_INLINE_ARGS_MAX_BYTES, classifyArgsSource, parseToolArgs, strippedShellText, strippedShellTextMessage, trailingArgsMessage } from './tool-args-source.js'
 import {
   classifyTemplateGateway, templateCheckGap, templateCheckInput, templateCheckReplyMs, templateCheckRequestInput,
 } from './trigger-check-core.js'
@@ -143,6 +143,8 @@ function parseToolsArgs(args: string[]): WalnutCliParsed {
     if (rest.slice(1).some((a) => a === '--help' || a === '-h')) {
       return { kind: 'tools.help', name }
     }
+    const trailing = trailingArgsMessage(rest.slice(2))
+    if (trailing) return { kind: 'usage-error', message: trailing }
     return { kind: 'tools.call', name, rawJson: rest[1] }
   }
   return { kind: 'usage-error', message: `unknown tools subcommand: ${sub} (expected list | help | call)` }
