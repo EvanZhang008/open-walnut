@@ -167,6 +167,8 @@ const peerNote = {
  *  stream (then `tail`'s tool call), the reader wheels up to mid-container, and
  *  the archive flushes the turn. `lead` rows open the turn in history. */
 async function readerThroughAbsorption(page: Page, tail: readonly unknown[], lead: readonly unknown[] = []) {
+  // 120 streamed paragraphs and a turn end: well past 30 s on a loaded machine.
+  test.setTimeout(60_000);
   let flushed = false;
   await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
     const url = new URL(route.request().url());
@@ -202,6 +204,11 @@ async function readerThroughAbsorption(page: Page, tail: readonly unknown[], lea
   // (1331). At top=0 the collapse happens below the reader and no clamp
   // occurs, so that variant doesn't reproduce the jump.
   const box = (await page.locator('.session-history').boundingBox())!;
+  await page.evaluate(() => {
+    const w = window as unknown as { __lastScrollAt: number };
+    w.__lastScrollAt = performance.now();
+    document.querySelector('.session-history')!.addEventListener('scroll', () => { w.__lastScrollAt = performance.now(); });
+  });
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   for (let i = 0; i < 30; i++) {
     await page.mouse.wheel(0, -600);
@@ -209,6 +216,12 @@ async function readerThroughAbsorption(page: Page, tail: readonly unknown[], lea
     const g = await geom(page);
     if (g.top <= (g.sh - g.ch) / 2) break; // reached mid-range, stop here
   }
+  // WebKit applies a wheel step it queued well after mouse.wheel returns (2026-10-31:
+  // one landed after the reader's place was read, moving them from paragraph 32 to
+  // 23 before the turn ended, and the spec blamed the fold), so the place is read
+  // once no scroll came for 800 ms.
+  await expect.poll(() => page.evaluate(() =>
+    performance.now() - (window as unknown as { __lastScrollAt: number }).__lastScrollAt), { timeout: 10_000 }).toBeGreaterThan(800);
   const before = await geom(page);
   const beforeAnchor = await viewportAnchor(page);
   // Preconditions for the bug: far from bottom AND far from top (clampable).
