@@ -35,8 +35,10 @@
 .ab-fit-rows .hpb-row:not(.hpb-open) .hpb-actions > :not(:first-child) { display: none; }
 .ab-fit-rows .hpb-row:not(.hpb-open) > .hpb-x { grid-column: 3; align-self: center; }
 .ab-fit-rows .hpb-row:not(.hpb-open) { min-height: 28px; }
-/* The local section keeps its title, sentence and action; the command chip is in the sentence already. */
-.ab-fit .ab-local .setup-copy-wrap { display: none; }
+/* The local section keeps its title, sentence and action; the command chip is in the sentence already,
+   and Fix with agent waits for a card with room, as a folded host row's other actions do (N3-3). */
+.ab-fit .ab-local .setup-copy-wrap,
+.ab-fit .ab-local .host-agent-fix { display: none; }
 .ab-fit .ab-local-alt { margin-top: 6px; }
 .ab-fit.ab-both .ab-local + .hpb { margin-top: 8px; padding-top: 8px; }
 

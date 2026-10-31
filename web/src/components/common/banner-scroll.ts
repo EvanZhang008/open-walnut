@@ -49,11 +49,16 @@ export function useScrollCue(scroll: HTMLElement | null, dep: string): { below: 
   return { below, above, clamped };
 }
 
-/** A row's head: its height down to the bottom of its buttons (or its headline when it has none). */
-export function rowHeadPx(li: HTMLElement): number {
+/**
+ * A row's head: its height down to the bottom of its buttons (or its headline when
+ * it has none). `withRepair`: down to Fix with agent too, which may wrap under the
+ * buttons of an opened row (the first row's room in the list keeps it whole); an
+ * undo line leaves it out, so it stays about one row tall (BP-R3-N7).
+ */
+export function rowHeadPx(li: HTMLElement, withRepair = true): number {
   const stop = li.querySelector<HTMLElement>('.hpb-actions')
     ?? li.querySelector<HTMLElement>('.hft-headline, .hpb-headline, .hpb-trying, .hpb-fixing');
-  const repair = li.querySelector<HTMLElement>('.host-agent-fix-button');
+  const repair = withRepair || !stop ? li.querySelector<HTMLElement>('.host-agent-fix-button') : null;
   if (!stop && !repair) return 0;
   const bottom = Math.max(stop?.getBoundingClientRect().bottom ?? 0, repair?.getBoundingClientRect().bottom ?? 0);
   return Math.ceil(bottom - li.getBoundingClientRect().top) + 2;
@@ -72,7 +77,7 @@ export function firstRowMinPx(scroll: HTMLElement): number {
 export function undoLinePx(li: HTMLElement | null | undefined): number {
   if (!li) return 0;
   const whole = li.getBoundingClientRect().height;
-  const head = rowHeadPx(li);
+  const head = rowHeadPx(li, false);
   return head > 0 ? Math.min(whole, Math.max(head, 34)) : whole;
 }
 
@@ -213,4 +218,43 @@ export function useScrollBudget(
 /** 'N more below': bring the first row the fold cuts to the top of the list (the list scrolls, never the page). */
 export function scrollRowIntoView(scroll: HTMLElement, li: HTMLElement): void {
   scroll.scrollTop += li.getBoundingClientRect().top - scroll.getBoundingClientRect().top;
+}
+
+/**
+ * While `hold`, the host list never grows past the height it had when the hold
+ * began: a row that arrives under a resting pointer goes below the fold (the list
+ * scrolls, 'N more below' says so) instead of growing the card. The task panel
+ * holds the card at its bottom, so growth there pushes every row above upward
+ * (C62, 2026-10-31). The user's own click or key in the card lets go, so what
+ * they open grows the card, and the hold takes the new height once it settles.
+ * Released, the list takes its budget again.
+ */
+export const HELD_LIST_SETTLE_MS = 400;
+
+export function useHeldListHeight(card: HTMLElement | null, scroll: HTMLElement | null, hold: boolean): void {
+  useLayoutEffect(() => {
+    if (!scroll || !hold) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const release = (): void => { scroll.style.removeProperty('max-height'); };
+    // A ceiling only, under the budget's own (--hpb-max): the list may still settle
+    // smaller (a card that appeared under the pointer is laid out a frame later), it
+    // never grows.
+    const take = (): void => {
+      const h = scroll.getBoundingClientRect().height;
+      if (h <= 0) return;
+      scroll.style.maxHeight = `min(var(--hpb-max, ${h}px), ${h}px)`;
+    };
+    const own = (): void => { release(); clearTimeout(timer); timer = setTimeout(take, HELD_LIST_SETTLE_MS); };
+    take();
+    // On the click, never the press: letting go at the press moves the card under a
+    // click still under way, and its release lands on something else.
+    card?.addEventListener('click', own, true);
+    card?.addEventListener('keydown', own, true);
+    return () => {
+      clearTimeout(timer);
+      card?.removeEventListener('click', own, true);
+      card?.removeEventListener('keydown', own, true);
+      release();
+    };
+  }, [card, scroll, hold]);
 }

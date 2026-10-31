@@ -4,9 +4,9 @@
 .host-agent-fix { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; max-width: 100%; margin: 4px 0; }
 .host-agent-fix-button { flex: none; }
 .host-agent-fix-error { flex: 1 1 100%; color: var(--error); font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; max-height: 72px; overflow-y: auto; }
-/* Repair is an explicit row action, not part of the compact primary-action cap. */
-.attention-banner .hpb-row .host-agent-fix { flex: 0 1 auto; margin: 0; }
-.attention-banner .hpb-row:has(.host-agent-fix) > .hpb-body { flex-wrap: wrap; }
+/* On a row's or the local section's action line, beside the other buttons (rowActionsFor). */
+.attention-banner .hpb-row .host-agent-fix,
+.ab-local .setup-alt .host-agent-fix { flex: 0 1 auto; margin: 0; }
 
 
 .attention-banner {

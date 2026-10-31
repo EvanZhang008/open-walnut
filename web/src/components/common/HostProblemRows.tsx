@@ -102,6 +102,29 @@ const CONNECT_NOW_LABELS = ['Connect now', 'Retrying...'];
 const UPDATE_LABELS = ['Update', 'Updating...', 'Try again'];
 const INSTALL_LABELS = ['Install', 'Installing...', 'Try again'];
 
+/**
+ * What a row shows of its actions: its own buttons (`ids`) and Fix with agent
+ * (`fix`), which is the last of them. A folded dense row and a one-line row show
+ * one action, the first (BP-R3-N1: every problem reads at a glance); the rest,
+ * Fix with agent included, are behind Show details (`folds`, the toggle shows
+ * even when the row has no words to open). A row with no action of its own leads
+ * with Fix with agent. 2026-10-21 added Fix with agent after the cap, and every
+ * folded row took a third line (2026-10-31: BP-R3-N1, BP-C54, C61).
+ */
+export function rowActionsFor(all: HostActionId[], canFix: boolean,
+  form: { singleLine?: boolean; dense?: boolean; expanded?: boolean; statusList?: boolean }):
+  { ids: HostActionId[]; fix: boolean; folds: boolean } {
+  // Every action stays one Show details away: an opened row (or one whose fix failed, which
+  // opens by itself) shows them all, and the toggle folds them back.
+  const folding = !!form.singleLine || !!form.dense;
+  const total = all.length + (canFix ? 1 : 0);
+  if (!folding || form.expanded) return { ids: all, fix: canFix, folds: folding && total > 1 };
+  const ids = all.slice(0, 1);
+  // The System list (statusList) is where a repair starts: its rows keep Fix with agent folded too.
+  const fix = canFix && (ids.length === 0 || !!form.statusList);
+  return { ids, fix, folds: all.length + (canFix && !fix ? 1 : 0) > 1 };
+}
+
 /** The row's buttons, in spec order; the secondary Open Settings is quieter and last. */
 function ActionButtons({ ids, actions, alias, name, many, fixFailed, onOpenSettings, onLock }: {
   ids: HostActionId[]; actions: HostActions; alias: string; many?: boolean; fixFailed?: boolean;
@@ -176,6 +199,14 @@ function Receipts({ actions }: { actions: HostActions }) {
 /** The last height of each host's problem row: its success line takes the same height (nothing below moves). */
 const lastRowHeight = new Map<string, number>();
 
+/** While `on`, the height the host's problem row had when the attempt began (undefined otherwise). */
+function useSelfTryHeight(host: string, on: boolean): number | undefined {
+  const held = useRef<number | undefined>(undefined);
+  if (!on) held.current = undefined;
+  else if (held.current === undefined) held.current = lastRowHeight.get(host);
+  return held.current;
+}
+
 function RowFrame({ row, lockRef, minHeight, maxHeight, leaving, body, onDismiss, dot, singleLine, dense, open, receipt, statusList }: {
   row: BannerRow; lockRef: React.RefObject<HTMLLIElement | null>; minHeight?: number; maxHeight?: number; leaving?: boolean;
   body: ReactNode; onDismiss?: () => void; dot: ReactNode; singleLine?: boolean; dense?: boolean; open?: boolean; receipt?: boolean;
@@ -218,8 +249,10 @@ function RowFrame({ row, lockRef, minHeight, maxHeight, leaving, body, onDismiss
  * behind its own toggle. The fold toggle is the row's, so its state is the
  * session's and a remount keeps it.
  */
-function ConnectBody({ row, expanded, onToggle, singleLine, after, receipt }: {
+function ConnectBody({ row, expanded, onToggle, singleLine, after, receipt, more }: {
   row: BannerRow; expanded: boolean; onToggle: () => void; singleLine?: boolean;
+  /** The folded row keeps actions back (rowActionsFor): the toggle opens them even with no words to show. */
+  more?: boolean;
   /** The row's buttons (and its receipt), right under the headline. */
   after?: ReactNode;
   /** A receipt is showing: it stands where the hint and the countdown were (same height). */
@@ -242,7 +275,7 @@ function ConnectBody({ row, expanded, onToggle, singleLine, after, receipt }: {
         {...((singleLine && !expanded) || receipt ? {} : { retryAt: row.retryAt })}
         afterHeadline={after}
       />
-      {foldable && <DetailsToggle open={expanded} onToggle={onToggle} />}
+      {(foldable || more) && <DetailsToggle open={expanded} onToggle={onToggle} />}
     </>
   );
 }
@@ -271,11 +304,16 @@ export function SingleHostRow({ row, defaultExpanded, singleLine, dense, leaving
   const userRetry = actions.pending === 'retry' || row.by === 'user';
   // A Retry reads 'Connecting to X...' the moment it lands, before the server's first frame.
   const trying = row.type === 'trying' || (actions.pending === 'retry' && (row.type === 'connect' || row.type === 'reconnecting'));
+  // An attempt of its own ('Trying again...') keeps the height of the problem row it
+  // stands in for, the success line's rule: nothing around it moves (C61). The user's
+  // own Retry is held by the click's lock instead.
+  const selfTry = useSelfTryHeight(alias, trying && !userRetry && !statusList);
   const problem = row.problem;
   const fixFailed = problem?.fix?.state === 'failed';
   const fixing = row.type === 'readiness' && !!actions.fixing && !fixFailed;
   const allIds = fixing ? row.actions.filter((a) => a !== 'update' && a !== 'install') : row.actions;
-  const ids = singleLine || (dense && !expanded) ? allIds.slice(0, 1) : allIds;
+  const shown = rowActionsFor(allIds, row.type !== 'trying', { singleLine, dense, expanded: expanded || fixFailed, statusList });
+  const ids = shown.ids;
   const autofix = problem ? autofixVerbFor(problem, status?.readiness?.claude?.installMethod) : null;
   const actionsNode = trying
     ? (userRetry
@@ -283,7 +321,8 @@ export function SingleHostRow({ row, defaultExpanded, singleLine, dense, leaving
       : null)
     : <ActionButtons ids={ids} actions={actions} alias={alias} name={label} fixFailed={fixFailed && !!autofix}
         onOpenSettings={onOpenSettings} onLock={lock} />;
-  const after = <>{actionsNode}{row.type !== 'trying' && <HostFixButton target={{ host: row.hosts.length === 1 ? row.hosts[0] : row.hosts }} name={row.labels.join(', ')} onNavigate={onNavigate} />}<Receipts actions={actions} /></>;
+  const after = <>{actionsNode}{shown.fix && <HostFixButton target={{ host: alias }} name={label} onNavigate={onNavigate} />}<Receipts actions={actions} /></>;
+  const more = shown.folds;
   let body: ReactNode;
   if (trying) {
     const mine = userRetry || actions.pending === 'fix';
@@ -299,7 +338,7 @@ export function SingleHostRow({ row, defaultExpanded, singleLine, dense, leaving
     );
   } else if (row.type === 'connect') {
     body = <ConnectBody row={row} expanded={expanded} onToggle={toggle}
-      singleLine={singleLine} after={after} receipt={hasReceipt} />;
+      singleLine={singleLine} after={after} receipt={hasReceipt} more={more} />;
   } else if (row.type === 'reconnecting') {
     body = (
       <div className="hft">
@@ -307,7 +346,7 @@ export function SingleHostRow({ row, defaultExpanded, singleLine, dense, leaving
         {after}
         {!hasReceipt && <div className="hpb-last">Last attempt: {row.headline}</div>}
         {expanded && row.hint && <div className="hft-hint"><InlineCodeText text={row.hint} /></div>}
-        {row.hint && <DetailsToggle open={expanded} onToggle={toggle} />}
+        {(row.hint || more) && <DetailsToggle open={expanded} onToggle={toggle} />}
       </div>
     );
   } else {
@@ -322,13 +361,13 @@ export function SingleHostRow({ row, defaultExpanded, singleLine, dense, leaving
         {after}
         {!fixing && open && rest && !hasReceipt && <div className="hpb-rest"><InlineCodeText text={rest} /></div>}
         {!fixing && open && hasCommands && <HostCommands commands={problem!.commands} />}
-        {!fixing && !fixFailed && (hasCommands || !!rest) && <DetailsToggle open={expanded} onToggle={toggle} />}
+        {!fixing && !fixFailed && (hasCommands || !!rest || more) && <DetailsToggle open={expanded} onToggle={toggle} />}
       </>
     );
   }
   return (
     <RowFrame
-      row={row} lockRef={ref} minHeight={minHeight} maxHeight={maxHeight} leaving={leaving}
+      row={row} lockRef={ref} minHeight={minHeight ?? (leaving ? undefined : selfTry)} maxHeight={maxHeight} leaving={leaving}
       body={body} receipt={hasReceipt}
       onDismiss={!statusList && onDismiss && row.dismissKeys.length ? () => onDismiss(row) : undefined}
       dot={<HostStatusDot host={alias} label={label} decorative />}
@@ -382,13 +421,14 @@ export function GroupRow({ row, defaultExpanded, singleLine, dense, leaving, onD
   };
   const mine = pending || row.by === 'user';
   const labels = row.hosts.length > 1 ? RETRY_ALL_LABELS : RETRY_LABELS;
+  const shown = rowActionsFor(row.actions, row.type !== 'trying', { singleLine, dense, expanded });
   const actionsNode = row.type === 'trying' || pending
     ? (mine ? <div className="hpb-actions"><StableButton label="Retrying..." labels={labels} disabled onClick={() => {}} testId="hpb-retry" /></div> : null)
     : (
-      <ActionButtons ids={singleLine || (dense && !expanded) ? row.actions.slice(0, 1) : row.actions} actions={actions} alias={row.hosts[0]} name={row.labels.join(', ')} many={row.hosts.length > 1}
+      <ActionButtons ids={shown.ids} actions={actions} alias={row.hosts[0]} name={row.labels.join(', ')} many={row.hosts.length > 1}
         onOpenSettings={onOpenSettings} onLock={lock} />
     );
-  const after = <>{actionsNode}{row.type !== 'trying' && <HostFixButton target={{ host: row.hosts.length === 1 ? row.hosts[0] : row.hosts }} name={row.labels.join(', ')} onNavigate={onNavigate} />}<Receipts actions={actions} /></>;
+  const after = <>{actionsNode}{shown.fix && <HostFixButton target={{ host: row.hosts.length === 1 ? row.hosts[0] : row.hosts }} name={row.labels.join(', ')} onNavigate={onNavigate} />}<Receipts actions={actions} /></>;
   const body = row.type === 'trying' || pending
     ? (
       <>
@@ -401,7 +441,7 @@ export function GroupRow({ row, defaultExpanded, singleLine, dense, leaving, onD
       </>
     )
     : <ConnectBody row={row} expanded={expanded} onToggle={() => setExpanded(!expanded)}
-        singleLine={singleLine} after={after} receipt={!!receipt} />;
+        singleLine={singleLine} after={after} receipt={!!receipt} more={shown.folds} />;
   return (
     <RowFrame
       row={row} lockRef={ref} minHeight={minHeight} maxHeight={maxHeight} leaving={leaving}

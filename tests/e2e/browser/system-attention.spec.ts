@@ -141,6 +141,9 @@ test('12 host faults leave 100 tasks usable in narrow short light and dark panel
   await count(page, 12);
   await expand(page);
   await expect(banner(page).locator('.hpb-more')).toHaveText('and 9 more');
+  // A folded row shows its first action; Fix with agent is behind Show details with the rest (BP-R3-N1).
+  await expect(row(page, 'box0').getByRole('button', { name: /^Fix with agent/ })).toHaveCount(0);
+  await row(page, 'box0').getByRole('button', { name: 'Show details', exact: true }).click();
   const fix = row(page, 'box0').getByRole('button', { name: 'Fix with agent for Long neutral workstation 00', exact: true });
   await expect(fix).toBeVisible();
   await fix.focus();
@@ -202,7 +205,8 @@ for (const section of ['All', 'System']) {
     await pickRail(page, section);
     await page.locator('.notification-panel').getByRole('button', { name: 'Fix with agent for Alpha box', exact: true }).click();
     await expect(page.locator('.notification-panel')).toHaveCount(0);
-    await expect(page).toHaveURL(new RegExp(`/tasks/${taskId}$`));
+    // The task opens on Home (navigateToTarget: `/?task=<id>`), or on its own page.
+    await expect(page).toHaveURL(new RegExp(`(/tasks/${taskId}|[?&]task=${taskId})$`));
     await page.goBack();
     await expect(page).toHaveURL(/\/(\?.*)?$/);
     await expect(page.locator('.notification-panel')).toHaveCount(0);

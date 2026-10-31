@@ -42,7 +42,7 @@ import { UNDO_ALL_TEXT, UNDO_ROW_TEXT, UndoLine, undoAllText, undoRowText, useBa
 import {
   CARD_MIN_CAP_PX, cardCapPx, focusAfter, prefersReducedMotion, useHeldLayout, useHiddenReady, useMountHeight, usePointerFocus, useWakeAt, verticalMarginPx,
 } from './attention-banner-hooks';
-import { fitsTight, keepRowInView, nextCompact, scrollRowIntoView, undoLinePx, useFirstRowMin, useScrollBudget, useScrollCue } from './banner-scroll';
+import { fitsTight, keepRowInView, nextCompact, scrollRowIntoView, undoLinePx, useFirstRowMin, useHeldListHeight, useScrollBudget, useScrollCue } from './banner-scroll';
 import { log } from '@/utils/log';
 import '@/styles/attention-banner.css';
 import '@/styles/attention-banner-dense.css';
@@ -205,6 +205,8 @@ export function AttentionBanner({
   const rowsKey = `${rows.map((r) => r.id).join('|')}#${shown.undo.length}`;
   const { below, above, clamped } = useScrollCue(scrollEl, rowsKey);
   useFirstRowMin(scrollEl, rowsKey);
+  // The task panel's card sits at the panel's bottom: under a resting pointer it never grows.
+  useHeldListHeight(el, scrollEl, tasks && pointerInside);
   // Inside the fitted form: one-line rows only when one two-line row does not fit (N3-3).
   const [compactRows, setCompactRows] = useState(false);
   const denseHead = useRef(0);

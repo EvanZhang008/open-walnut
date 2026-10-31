@@ -17,7 +17,7 @@ vi.mock('@/utils/log', () => ({ log: { info: () => {}, warn: () => {}, error: ()
 vi.mock('@/api/ws', () => ({ wsClient: { state: 'connected', onEvent() {}, offEvent() {} } }))
 
 const { MemoryRouter } = await import('../../web/node_modules/react-router-dom')
-const { rowsBelow, keepRowInView, firstRowMinPx } = await import('../../web/src/components/common/banner-scroll')
+const { rowsBelow, keepRowInView, firstRowMinPx, undoLinePx } = await import('../../web/src/components/common/banner-scroll')
 const { appearsInstantly, finalWidthOf, OWNER_SWITCH_MS, PAGE_LOAD_MS } = await import('../../web/src/components/common/banner-mount-hooks')
 const { bellPresentation } = await import('../../web/src/utils/host-banner-placement')
 const { attentionDotsOf } = await import('../../web/src/hooks/useAttentionDots')
@@ -59,6 +59,8 @@ describe('scroll cue and focus keeping (N3, N4)', () => {
     const li = { ...box({ top: 100, bottom: 250 }), querySelector: (selector: string) => selector === '.hpb-actions'
       ? box({ top: 130, bottom: 162.4 }) : selector === '.host-agent-fix-button' ? box({ top: 170, bottom: 194 }) : null }
     expect(firstRowMinPx({ querySelector: () => li } as never)).toBe(96)
+    // An undo line is about one row: down to the buttons, not the repair wrapped under them (BP-R3-N7).
+    expect(undoLinePx(li as never)).toBe(65)
   })
 
   it('firstRowMinPx is the first row down to its buttons', () => {

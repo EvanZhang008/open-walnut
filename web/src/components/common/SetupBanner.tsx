@@ -187,10 +187,11 @@ function InstallSection({ header, dismiss, view, pending, error, onFix, onNaviga
 }) {
   const install = view?.kind === 'install' ? view : null;
   const problem = install?.problem;
+  // On the section's action line, never a line of its own (2026-10-31: BP-R4-N3-3).
+  const repair = <HostFixButton target={{ host: '__local__' }} name="this computer" onNavigate={onRepairNavigate} />;
   return (
     <section className="ab-local" data-testid="setup-banner-install">
       {header}
-      <HostFixButton target={{ host: '__local__' }} name="this computer" onNavigate={onRepairNavigate} />
       {install?.fixable ? (
         <p className="setup-lead">
           Walnut runs on <strong>Claude Code</strong>. {problem && problem.kind !== 'claude_missing'
@@ -203,7 +204,7 @@ function InstallSection({ header, dismiss, view, pending, error, onFix, onNaviga
         </p>
       )}
       {install?.fixable && <FixRow view={install} label="Install Claude Code" pending={pending} error={error}
-        onFix={() => onFix(problem!.kind)} />}
+        onFix={() => onFix(problem!.kind)} repair={repair} />}
       {!install?.failed?.command && (
         <div className="setup-alt">
           {install?.fixable && <span className="text-sm text-muted">Or install it yourself:</span>}
@@ -215,6 +216,7 @@ function InstallSection({ header, dismiss, view, pending, error, onFix, onNaviga
         <button type="button" tabIndex={0} className="setup-step-btn" onClick={() => onNavigateSettings('#providers')}>
           Open API settings
         </button>
+        {!install?.fixable && repair}
         {dismiss}
       </div>
     </section>
@@ -253,8 +255,10 @@ function ProviderSection({ header, dismiss, health, onNavigateSettings }: {
 }
 
 /** The one-click fix: its button, "Installing Claude Code...", or why it failed with the command to run. */
-function FixRow({ view, label, pending, error, onFix }: {
+function FixRow({ view, label, pending, error, onFix, repair }: {
   view: ClaudeBannerView; label: string; pending: boolean; error: string | null; onFix: () => void;
+  /** Fix with agent, on the same line as the section's own fix. */
+  repair?: ReactNode;
 }) {
   if (view.running) return <p className="setup-lead" data-testid="setup-banner-fixing">{view.running}...</p>;
   return (
@@ -269,6 +273,7 @@ function FixRow({ view, label, pending, error, onFix }: {
         <button type="button" tabIndex={0} className="setup-step-btn" disabled={pending} onClick={onFix} data-testid="setup-banner-fix">
           {view.failed ? 'Try again' : label}
         </button>
+        {repair}
         {error && <span className="text-sm text-muted">{error}</span>}
       </div>
     </>
@@ -281,10 +286,11 @@ function QuietSection({ header, dismiss, view, pending, error, onFix, onCheck, o
 }) {
   const problem = view.problem!;
   const signIn = view.kind === 'sign-in';
+  // On the section's action line, never a line of its own (2026-10-31: BP-R4-N3-3).
+  const repair = <HostFixButton target={{ host: '__local__' }} name="this computer" onNavigate={onRepairNavigate} />;
   return (
     <section className="ab-local" data-testid={signIn ? 'setup-banner-sign-in' : 'setup-banner-outdated'}>
       {header}
-      <HostFixButton target={{ host: '__local__' }} name="this computer" onNavigate={onRepairNavigate} />
       <LeadText message={problem.message} />
       {signIn ? (
         <>
@@ -292,14 +298,18 @@ function QuietSection({ header, dismiss, view, pending, error, onFix, onCheck, o
           <div className="setup-alt">
             <span className="text-sm text-muted">Walnut checks again every 15 seconds and hides this once you are signed in.</span>
             <button type="button" tabIndex={0} className="setup-step-btn" disabled={pending} onClick={onCheck} data-testid="setup-banner-check">Check again</button>
+            {repair}
             {error && <span className="text-sm text-muted">{error}</span>}
             {dismiss}
           </div>
         </>
       ) : view.fixable ? (
-        <FixRow view={view} label="Update Claude Code" pending={pending} error={error} onFix={onFix} />
+        <FixRow view={view} label="Update Claude Code" pending={pending} error={error} onFix={onFix} repair={repair} />
       ) : (
-        problem.commands[0] && <CopyCommand command={problem.commands[0]} />
+        <>
+          {problem.commands[0] && <CopyCommand command={problem.commands[0]} />}
+          <div className="setup-alt">{repair}</div>
+        </>
       )}
       {!signIn && dismiss}
     </section>

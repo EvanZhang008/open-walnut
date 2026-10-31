@@ -296,3 +296,56 @@ describe('Retry reads the attempt at once, and one attempt is shared across moun
     expect(host.querySelector('[data-testid="hpb-receipt"]')?.textContent).toBe('Tried again just now: same result')
   })
 })
+
+describe('what a row shows of its actions (rowActionsFor)', () => {
+  it('a folded dense row and a one-line row show their first action; Fix with agent waits behind Show details', async () => {
+    const { rowActionsFor } = await import('../../web/src/components/common/HostProblemRows')
+    expect(rowActionsFor(['retry', 'openSettings'], true, { dense: true })).toEqual({ ids: ['retry'], fix: false, folds: true })
+    expect(rowActionsFor(['retry'], true, { singleLine: true })).toEqual({ ids: ['retry'], fix: false, folds: true })
+    expect(rowActionsFor(['retry'], true, { singleLine: true, expanded: true })).toEqual({ ids: ['retry'], fix: true, folds: true })
+    // Opened, or alone on the card: every action, Fix with agent last.
+    expect(rowActionsFor(['retry', 'openSettings'], true, { dense: true, expanded: true })).toEqual({ ids: ['retry', 'openSettings'], fix: true, folds: true })
+    expect(rowActionsFor(['retry'], true, {})).toEqual({ ids: ['retry'], fix: true, folds: false })
+    // No action of its own: Fix with agent is its one action, and nothing is folded away.
+    expect(rowActionsFor([], true, { dense: true })).toEqual({ ids: [], fix: true, folds: false })
+    // The System list's row keeps its repair folded (the pane where a repair starts).
+    expect(rowActionsFor(['retry'], true, { dense: true, statusList: true })).toEqual({ ids: ['retry'], fix: true, folds: false })
+    // A row trying again offers no repair.
+    expect(rowActionsFor(['retry'], false, { dense: true })).toEqual({ ids: ['retry'], fix: false, folds: false })
+  })
+
+  it('every folded action is one Show details away: a one-line row, opened, has Fix with agent', async () => {
+    await render(createElement(SingleHostRow, { row: connectRow(), defaultExpanded: false, singleLine: true, onDismiss: noop, onOpenSettings: noop }))
+    expect(byText('Fix with agent')).toBeUndefined()
+    await click(byText('Show details')!)
+    expect(byText('Fix with agent')).toBeDefined()
+  })
+
+  it('a dense row whose one-click fix failed opens by itself and offers Fix with agent', async () => {
+    const problem = { kind: 'claude_needs_node', message: 'Claude Code on Build box needs Node.js, which is not installed there.', commands: [] as string[],
+      fix: { action: 'install-claude', state: 'failed', text: 'the installer exited with 1' } }
+    const row: BannerRow = {
+      id: 'host:buildbox-failed', type: 'readiness', group: 'readiness', hosts: ['buildbox'], labels: ['Build box'], kind: 'claude_needs_node',
+      problem: problem as BannerRow['problem'], dismissKeys: ['buildbox|claude_needs_node|2.1.280'], actions: ['install', 'checkAgain'],
+    }
+    await render(createElement(SingleHostRow, { row, defaultExpanded: false, dense: true, onDismiss: noop, onOpenSettings: noop }))
+    // No Show details while the failure shows, so nothing may be folded behind it.
+    expect(byText('Show details')).toBeUndefined()
+    expect(byText('Fix with agent')).toBeDefined()
+    expect(byText('Check again')).toBeDefined()
+  })
+
+  it('ratchet: every action a host row draws comes from rowActionsFor', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const src = readFileSync(join(__dirname, '../../web/src/components/common/HostProblemRows.tsx'), 'utf8')
+    // A repair or an action list drawn beside the cap took every folded row to a third line (2026-10-31).
+    const fixes = src.match(/[^\n]*<HostFixButton\b[^\n]*/g) ?? []
+    expect(fixes.length).toBeGreaterThan(0)
+    for (const line of fixes) expect(line, line.trim()).toMatch(/\bshown\.fix && <HostFixButton\b/)
+    const lists = src.match(/<ActionButtons ids=\{[^}]*\}/g) ?? []
+    expect(lists.length).toBeGreaterThan(0)
+    for (const l of lists) expect(l).toMatch(/<ActionButtons ids=\{(?:ids|shown\.ids)\}/)
+    expect(src).toMatch(/const ids = shown\.ids/)
+  })
+})

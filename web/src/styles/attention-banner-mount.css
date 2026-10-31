@@ -33,7 +33,13 @@
   .system-attention-toggle { min-height: 44px; }
   .system-attention-feedback { font-size: 12px; }
 }
-.system-attention-body .attention-banner { margin-top: 0; margin-bottom: 0; max-height: var(--ab-cap, 240px); overflow-y: auto; }
+/* A card with a host list keeps itself under its cap: the list is its one scroll
+   region, sized from the card's own height (useScrollBudget). A cap here too made a
+   second scroller and fed that budget a clipped height, so the one-line rows never
+   came (BP-R3-N2, BP-R4-N3-3). A card with no list (the local section alone) has
+   nothing to budget: there the card is the one that scrolls. */
+.system-attention-body .attention-banner { margin-top: 0; margin-bottom: 0; }
+.system-attention-body .attention-banner:not(:has(.hpb-scroll)) { max-height: var(--ab-cap, 240px); overflow-y: auto; }
 
 .nfc-cat-title {
   display: flex;

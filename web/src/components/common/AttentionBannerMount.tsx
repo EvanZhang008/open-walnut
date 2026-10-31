@@ -12,7 +12,7 @@ import type { SystemHealth } from '@/hooks/useSystemHealth';
 import { useHostBannerOwner, type BannerMount, type HostBannerOwner } from '@/utils/host-banner-placement';
 import { AttentionBanner } from './AttentionBanner';
 import {
-  useBannerHealth, useClickGuard, useHoldLayout,
+  useBannerHealth, useClickGuard, useFinalWidthDuringOpen, useHoldLayout,
 } from './banner-mount-hooks';
 import '@/styles/attention-banner-mount.css';
 
@@ -54,9 +54,15 @@ function Card({ where, health, healthLoading, onNavigateSettings, onStartSession
   );
 }
 
-/** The bottom task-panel disclosure retains the card while its body is hidden. */
+/**
+ * The bottom task-panel disclosure retains the card while its body is hidden.
+ * While the task panel opens (its width animates), the card is laid out at the
+ * panel's final width, so its rows wrap once, not at every step (BP-N18).
+ */
 function TasksMount(props: AttentionBannerMountProps & { owner: HostBannerOwner }): ReactNode {
   const [el, setEl] = useState<HTMLDivElement | null>(null);
+  const showCard = props.owner === 'tasks';
+  const finalWidth = useFinalWidthDuringOpen(el, showCard);
   const hold = useHoldLayout('tasks', el);
   useClickGuard(el, '.todo-panel');
   const focusOnLeave = useCallback((): void => {
@@ -65,7 +71,11 @@ function TasksMount(props: AttentionBannerMountProps & { owner: HostBannerOwner 
   return (
     <div ref={setEl} className="ab-mount" data-mount="tasks" tabIndex={-1}
       onPointerDown={(e) => e.stopPropagation()}>
-      {props.owner === 'tasks' && <Card {...props} holdLayout={hold} focusOnLeave={focusOnLeave} />}
+      {showCard && (
+        <div className="ab-mount-content" {...(finalWidth !== null ? { style: { width: finalWidth } } : {})}>
+          <Card {...props} holdLayout={hold} focusOnLeave={focusOnLeave} />
+        </div>
+      )}
     </div>
   );
 }

@@ -130,7 +130,8 @@ describe('dense rows (N1)', () => {
     const li = await render({ dense: true, defaultExpanded: false })
     expect(li.classList.contains('hpb-dense')).toBe(true)
     expect(li.classList.contains('hpb-open')).toBe(false)
-    expect(texts(li)).toEqual(['Retry', 'Fix with agent', 'Show details', '×'])
+    // Fix with agent is one of the row's actions: behind Show details with the rest (BP-R3-N1).
+    expect(texts(li)).toEqual(['Retry', 'Show details', '×'])
     expect(li.querySelector('.hft-hint')).toBeNull()
   })
   it('opened by the user, a dense row shows every action and the details', async () => {
@@ -140,7 +141,17 @@ describe('dense rows (N1)', () => {
     const open = host.querySelector('li.hpb-row')!
     expect(open.classList.contains('hpb-open')).toBe(true)
     expect(texts(open)).toContain('Open Settings')
+    expect(texts(open)).toContain('Fix with agent')
     expect(open.querySelector('.hft-hint')).not.toBeNull()
+  })
+  it('a dense row with no words to open still offers Show details when it keeps an action back', async () => {
+    const bare = { ...keybox, hint: undefined, summary: undefined, actions: ['retry'] } as unknown as BannerRow
+    await act(async () => { root!.render(createElement(MemoryRouter, null, createElement(SingleHostRow, { row: bare, onDismiss: () => {}, onOpenSettings: () => {}, dense: true, defaultExpanded: false } as never))) })
+    const li = host.querySelector('li.hpb-row')!
+    expect(texts(li)).toEqual(['Retry', 'Show details', '×'])
+    const toggle = Array.from(li.querySelectorAll('button')).find((b) => b.textContent === 'Show details')!
+    await act(async () => { toggle.dispatchEvent(new (doc.defaultView as unknown as typeof globalThis).Event('click', { bubbles: true }) as Event) })
+    expect(texts(host.querySelector('li.hpb-row')!)).toEqual(['Retry', 'Fix with agent', 'Hide details', '×'])
   })
   it('a lone row (not dense) opens by position with all of its actions, as before', async () => {
     const li = await render({ dense: false, defaultExpanded: true })
