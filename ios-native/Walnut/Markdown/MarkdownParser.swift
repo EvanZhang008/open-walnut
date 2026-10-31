@@ -292,9 +292,11 @@ enum MarkdownParser {
     /// entity-pill markup (self-knowledge contract). The web console renders
     /// them as clickable pills; without this rewrite they reach the phone as
     /// raw XML in every canonical assistant row. Render the label (id as the
-    /// fallback) — linking can come later, honest text now.
+    /// fallback) — linking can come later, honest text now. `<project-ref/>` and
+    /// `<source-ref/>` (a row picked from the composer's "@" sources: a Slack
+    /// person, a mail, a note) share the shape and render the same way.
     private static let entityRefRegex = try? NSRegularExpression(
-        pattern: #"<(task|session)-ref\s+([^>]*?)/?>"#
+        pattern: #"<(task|session|project|source)-ref\s+([^>]*?)/?>"#
     )
     private static let refAttrRegex = try? NSRegularExpression(
         pattern: #"(id|label)="([^"]*)""#

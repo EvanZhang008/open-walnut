@@ -107,7 +107,7 @@ const NO_PARAGRAPH_CHILDREN = new Set([
  * Every kind entityRefsToHtml rewrites belongs here — add a new pill tag to both
  * in the same edit, or the pill starts classifying its paragraph as model HTML.
  */
-const REF_TAGS = new Set(['task-ref', 'session-ref', 'project-ref']);
+const REF_TAGS = new Set(['task-ref', 'session-ref', 'project-ref', 'source-ref']);
 
 /**
  * Every element name that may affect structure — DOMPurify's default html + svg

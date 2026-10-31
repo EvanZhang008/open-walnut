@@ -19,6 +19,7 @@ import { MailFilterMover } from './mail-filter-moves.js'
 import { MailMessageTasks } from './message-tasks.js'
 import { registerMailItemSource } from './item-source.js'
 import { createMailOps } from './ops.js'
+import { createMailMentionSource } from './mention-source.js'
 import { MailProviderRegistry, PROVIDERS_CHANGED_EVENT } from './provider-registry.js'
 import { createMailTriggerTemplate } from './trigger-template.js'
 import { MailRetention } from './retention.js'
@@ -400,6 +401,9 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
         store, listAccounts: () => service.listAccounts({ capabilities: false }),
       })))
       fresh.push(walnut.registry.agentContext(line))
+      // The "@" picker's Mail tab. Optional on the host: an older Walnut has no picker sources.
+      const mention = walnut.registry.mentionSource?.(createMailMentionSource(service))
+      if (mention) fresh.push(mention)
     } catch (error) {
       for (const handle of fresh.splice(0)) {
         try { await handle.dispose() } catch { /* the throw below is the story */ }

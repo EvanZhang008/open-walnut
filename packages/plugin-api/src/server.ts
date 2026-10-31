@@ -1316,6 +1316,48 @@ export interface PluginTimelineSourceDefinition {
   }>
 }
 
+/** One row a plugin's "@" source offers the composer's picker. */
+export interface PluginMentionItem {
+  /** The source's own handle for the row (`user:U123`, a message id). Comes back to resolve(). */
+  ref: string
+  title: string
+  /** One line under the title: who, where, when. */
+  subtitle?: string
+  /** What the row is (`person`, `channel`, `message`), for the icon. */
+  kind?: string
+  /** Other exact names the row answers to (a handle, an address). The picker's mixed
+   *  "All" view shows a plugin row only when the query equals its title or one of these. */
+  keys?: string[]
+}
+
+/**
+ * A source for the composer's "@" picker: its own tab ("@<keyword> " jumps to it), and
+ * exact matches in the mixed view. Walnut debounces the calls, runs search under
+ * `timeoutMs` and caches answers, so search can be a plain lookup. resolve() turns a
+ * picked row into the text the model receives with the message (one short paragraph:
+ * what it is, its ids, and which op reads more).
+ */
+export interface PluginMentionSourceDefinition {
+  /** The plugin id, or a local id the host prefixes with it. */
+  id: string
+  label: string
+  /** Lowercase letters and digits; a keyword another source owns is dropped. */
+  keyword: string
+  aliases?: string[]
+  kinds?: string[]
+  /** Tab order, lower first (core notes is 10, default 50). */
+  order?: number
+  /** Shortest query searched; 0 (default) = an empty query asks for your defaults. */
+  minChars?: number
+  /** 200..8000 ms, default 3000. */
+  timeoutMs?: number
+  /** Also searched while the user types in the mixed "All" view (default true). Say false
+   *  when every search is a remote call and an exact title match is rare. */
+  inAll?: boolean
+  search(q: string, ctx: { limit: number; signal: AbortSignal }): Promise<PluginMentionItem[]>
+  resolve(ref: string, ctx: { signal: AbortSignal }): Promise<string | null>
+}
+
 export interface RegistryService {
   sync(adapter: PluginIntegrationSync): Disposable
   sourceClaim(
@@ -1331,6 +1373,9 @@ export interface RegistryService {
   op(definition: PluginOpDefinition): Disposable
   /** Add a source to the day timeline (see PluginTimelineSourceDefinition). */
   timelineSource(definition: PluginTimelineSourceDefinition): Disposable
+  /** Add a source to the composer's "@" picker (see PluginMentionSourceDefinition). Absent on
+   *  Walnut before 2026-10-31: call it as `registry.mentionSource?.(...)`. */
+  mentionSource?(definition: PluginMentionSourceDefinition): Disposable
   wsMethod(id: string, handler: (payload: unknown) => unknown | Promise<unknown>): Disposable
   agent(definition: PluginAgentDefinition): Disposable
   provider(id: string, adapter: PluginProviderAdapter): Disposable

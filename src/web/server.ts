@@ -113,6 +113,7 @@ import { searchIndexRouter } from './routes/search-index.js'
 import { componentsRouter } from './routes/components.js'
 import { notesRouter } from './routes/notes.js'
 import { notesV2Router } from './routes/notes-v2.js'
+import { mentionSourcesRouter } from './routes/mention-sources.js'
 import { repositoriesRouter } from './routes/repositories.js'
 import { audioRouter } from './routes/audio.js'
 import { sttRouter } from './routes/stt.js'
@@ -2129,6 +2130,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/timeline', timelineRouter)
   app.use('/api/notes', notesRouter)
   app.use('/api/notes-v2', notesV2Router)
+  app.use('/api/mention-sources', mentionSourcesRouter)
   app.use('/api/repositories', repositoriesRouter)
   app.use('/api/integrations', integrationsRouter)
   // ON, shared by the store's switch and its "install the missing dependency" path, so a

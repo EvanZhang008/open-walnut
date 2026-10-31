@@ -4728,6 +4728,9 @@ if (process.env.PW_INBOX_ITEMS_FIXTURE === '1') {
   await installInboxItemsFixture(tmpBase)
 }
 
+// "@" picker sources beyond the built-in Notes (mention-sources-fixture.ts).
+;(await import('./mention-sources-fixture')).installMentionSourcesFixture()
+
 // The stale-question row needs a live pid. The health monitor's orphan dead-pool
 // stops any local running record with pid==null once last_status_change is >2
 // min old, and this record is deliberately 10 min stale. The fixture server's own

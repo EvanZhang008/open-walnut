@@ -46,7 +46,21 @@ export function projectRefTag(name: string, label?: string): string {
   return `<project-ref id="${escAttr(name)}" label="${escAttr(label ?? name)}"/>`;
 }
 
-export type EntityRefKind = 'task' | 'session' | 'project';
+/**
+ * Build a `<source-ref/>` tag for a row picked from an "@" source: `id` is
+ * `<source id>:<the source's ref>`. Mirror of the server's sourceRefTag.
+ */
+export function sourceRefTag(sourceId: string, ref: string, label: string): string {
+  return `<source-ref id="${escAttr(`${sourceId}:${ref}`)}" label="${escAttr(label)}"/>`;
+}
+
+/** The source a `<source-ref/>` id names (`slack:user:U1` → `slack`). */
+export function sourceOfRefId(id: string): string {
+  const i = id.indexOf(':');
+  return i > 0 ? id.slice(0, i) : id;
+}
+
+export type EntityRefKind = 'task' | 'session' | 'project' | 'source';
 
 /** One tag occurrence: its kind, attributes, and `[start, end)` span in the text. */
 export interface EntityRefMatch {
@@ -60,7 +74,7 @@ export interface EntityRefMatch {
 
 // Module-private: a shared `g`-flag regex is a lastIndex footgun for any consumer
 // using .test()/.exec(). Only matchAll (which clones per spec) reads it.
-const ENTITY_REF_RE = /<(task|session|project)-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?\s*\/?>/g;
+const ENTITY_REF_RE = /<(task|session|project|source)-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?\s*\/?>/g;
 
 /**
  * Every ref tag in `text`, in document order, with the span each one occupies.
@@ -79,7 +93,8 @@ export function extractEntityRefs(text: string): EntityRefMatch[] {
       kind,
       // A task/session id is opaque and never carries a quote; a project's id
       // IS its display name, so it must come back decoded like a label does.
-      id: kind === 'project' ? decodeAttr(m[2] ?? '') : (m[2] ?? ''),
+      // A source ref's id embeds the source's own handle, which may carry a quote.
+      id: kind === 'project' || kind === 'source' ? decodeAttr(m[2] ?? '') : (m[2] ?? ''),
       start,
       end: start + m[0].length,
     };

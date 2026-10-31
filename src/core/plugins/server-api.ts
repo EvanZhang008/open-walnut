@@ -64,6 +64,8 @@ import '../../ops/index.js'
 import { executeOp } from '../../ops/executor.js'
 import { countOwnerOps, definePluginOp, listOpEntries, type HttpBinding, type WalnutOp } from '../../ops/registry.js'
 import { registerTimelineSource } from '../time-tracking/timeline/registry.js'
+import { registerMentionSource, type MentionSourceSpec } from '../mention-sources/registry.js'
+import { ensureCoreMentionSources } from '../mention-sources/notes-source.js'
 import type { TimelineSourceSpec } from '../time-tracking/timeline/types.js'
 import { jsonSchemaToZodShape } from '../../ops/schema-to-zod.js'
 import { LOCAL_ORIGIN } from '../../lib/caller-origin.js'
@@ -1250,6 +1252,16 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         assertLive(`registry.timelineSource("${String(spec?.id)}")`)
         const id = namespacePluginId(pluginId, String(spec?.id ?? ''))
         return own(registerTimelineSource(pluginId, { ...spec, id }))
+      },
+      // One more source for the composer's "@" picker (core/mention-sources/registry.ts).
+      // Its id is the plugin id, or `<plugin id>-<local id>`, so a ref names its owner.
+      mentionSource(spec: MentionSourceSpec) {
+        assertLive(`registry.mentionSource("${String(spec?.id)}")`)
+        const local = String(spec?.id ?? '').toLowerCase()
+        const id = !local || local === pluginId || local.startsWith(`${pluginId}-`) ? (local || pluginId) : `${pluginId}-${local}`
+        // Core's own sources first, so a plugin activating at boot never takes Notes' keywords.
+        ensureCoreMentionSources()
+        return own(registerMentionSource(pluginId, { ...spec, id }))
       },
       wsMethod(id: string, handler: (payload: unknown) => unknown | Promise<unknown>) {
         assertLive(`registry.wsMethod("${id}")`)

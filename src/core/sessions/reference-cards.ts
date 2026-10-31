@@ -87,6 +87,10 @@ export interface ReferenceCardLoaders {
   /** Resolve every named project in ONE pass (names match case-insensitively);
    *  unknown names are simply absent from the result. */
   loadProjects(names: string[]): Promise<ProjectCard[]>;
+  /** Resolve `<source-ref/>` ids (`slack:user:U1`) through their "@" source, all under
+   *  one deadline; an id missing from the map gets the fallback card. Optional so a
+   *  caller with its own loaders need not know about sources. */
+  loadSourceRefs?(ids: string[]): Promise<Map<string, string>>;
 }
 
 /**
@@ -170,6 +174,11 @@ export const defaultReferenceCardLoaders: ReferenceCardLoaders = {
     }
     return out;
   },
+
+  async loadSourceRefs(ids: string[]): Promise<Map<string, string>> {
+    const { resolveSourceRefs } = await import('../mention-sources/run.js');
+    return resolveSourceRefs(ids);
+  },
 };
 
 /** Collapse whitespace and cut to FIELD_LIMIT code points, marking the cut. A
@@ -223,6 +232,15 @@ function renderProjectCard(card: ProjectCard): string {
   )}`;
 }
 
+/** A picked "@" source row: what its source said about it, else its label and id so the
+ *  model still knows what was pointed at (and can look it up with the plugin's ops). */
+function renderSourceCard(id: string, label: string | undefined, text: string | undefined): string {
+  const name = label?.trim() ? ` "${label.trim()}"` : '';
+  return text
+    ? `- ${id.slice(0, id.indexOf(':'))}${name} (ref ${id}): ${text}`
+    : `- ${id.slice(0, id.indexOf(':'))}${name} (ref ${id}; no details could be read just now)`;
+}
+
 /**
  * Build the card block for one outgoing message, or '' when there is nothing to
  * say (no refs, or nothing resolved).
@@ -252,7 +270,19 @@ export async function buildReferenceCards(
 
   const taskIds = wanted.filter((r) => r.kind === 'task').map((r) => r.id);
   const projectNames = wanted.filter((r) => r.kind === 'project').map((r) => r.id);
+  const sourceIds = wanted.filter((r) => r.kind === 'source' && r.id.indexOf(':') > 0).map((r) => r.id);
   const lines: string[] = [];
+
+  // Source refs go to their plugins (up to the 2.5 s deadline in mention-sources/run.ts),
+  // so they start first and run while tasks and projects load.
+  const sourceLoad: Promise<Map<string, string>> = sourceIds.length > 0 && loaders.loadSourceRefs
+    ? loaders.loadSourceRefs(sourceIds).catch((err) => {
+      log.session.debug('reference card source load failed — fallback cards', {
+        sourceIds, error: err instanceof Error ? err.message : String(err),
+      });
+      return new Map<string, string>();
+    })
+    : Promise.resolve(new Map<string, string>());
 
   // Tasks and projects each resolve in ONE batched call, so a message with eight
   // pills of either kind still costs one query / one scan.
@@ -277,7 +307,13 @@ export async function buildReferenceCards(
     }
   }
 
+  const sourceTexts = await sourceLoad;
+
   for (const ref of wanted) {
+    if (ref.kind === 'source') {
+      if (ref.id.indexOf(':') > 0) lines.push(renderSourceCard(ref.id, ref.label, sourceTexts.get(ref.id)));
+      continue;
+    }
     if (ref.kind === 'task') {
       const card = tasksById.get(ref.id);
       if (card) lines.push(renderTaskCard(card));

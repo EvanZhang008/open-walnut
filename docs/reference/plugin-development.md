@@ -347,6 +347,7 @@ Every local id is validated and namespaced by the host. Register a Tool with a l
 - `provider`: a runtime model provider adapter.
 - `command`: a namespaced slash command whose `content` is sent to the Personal AI.
 - `skill`: an extra absolute directory holding one or more `SKILL.md` files.
+- `mentionSource`: a tab in the composer's "@" picker (people, channels, messages, anything the user may want to point the AI at). See "@" sources below.
 - `agentContext`: **deprecated, reaches no model.** It fed a system prompt Walnut no longer builds; register a skill instead. The call still succeeds so plugin loading never breaks, and each plugin that uses it gets one warning per load.
 - `sync`, `sourceClaim`, `display`, `migration`, `extIndex`: task integration registration.
 
@@ -410,6 +411,44 @@ export function activate(walnut: WalnutServerApi) {
 **Know how far an op reaches before you declare one.** A read-only op defaults to `remote: 'allow'`, and `'allow'` means `walnut tools call <op>` inside **every** Walnut-managed session, on every host, can invoke it the moment the plugin activates: those calls arrive through the gateway, which resolves against this server process's own catalogue. `remote: 'deny'` (the default for a write op) keeps the op to in-process callers: `walnut.ops.call`, `GET /api/plugin-runtime/<pluginId>/ops`, `POST /api/plugin-runtime/<pluginId>/ops/<opName>`, and action cards clicked on this Mac (a card clicked on a paired phone is refused). A session on another host cannot reach it through the `api` passthrough's plugin-runtime route either. The passthrough does still reach the plugin's own HTTP routes, so do not put a write that only this Mac may make behind a plain route. Set `remote` explicitly whenever the default is not what you want.
 
 Two surfaces are still blind to plugin ops, because they are separate processes with their own registry: a standalone `walnut …` command, and the stdio MCP server. `docs/reference/ops.md` is generated from the repo's core ops only, for the same reason.
+
+### "@" sources: let the user point the AI at your things
+
+The composer's "@" picker has a tab per source after **All**: Notes is built in, and a plugin adds its own with `walnut.registry.mentionSource`. Tab and Shift+Tab cycle the tabs, and typing the keyword and a space (`@slack deploy`) jumps straight to one. **All** stays tasks and files first: a plugin row shows there only when the query equals its `title` or one of its `keys` exactly.
+
+You write two functions. Walnut debounces the user's typing, runs `search` under `timeoutMs` (a late answer is aborted and costs only your tab), caches each answer for a minute, and shares one call between identical requests, so `search` can be a plain lookup. A picked row rides the message as `<source-ref id="<source id>:<ref>" label="<title>"/>`; when the message is sent, Walnut calls `resolve(ref)` (cached for ten minutes, under one short deadline for the whole message) and gives the model your text in the message's reference cards. Make that text one short paragraph: what the thing is, its ids, and which of your ops reads more. When `resolve` fails or is late, the model still gets the label and the ref.
+
+```ts compile=mention-source
+import type { WalnutServerApi } from '@open-walnut/plugin-api/server'
+
+const PEOPLE = [{ id: 'U1', name: 'Alice Chen', handle: 'alice' }]
+
+export function activate(walnut: WalnutServerApi) {
+  // Optional on the host: a Walnut older than "@" sources has no such method.
+  const source = walnut.registry.mentionSource?.({
+    id: 'people', // the host makes it `<plugin id>-people` (or the plugin id itself)
+    label: 'People',
+    keyword: 'people',
+    aliases: ['pe'],
+    kinds: ['person'],
+    minChars: 0, // an empty query asks for your defaults: the people used most
+    timeoutMs: 3000,
+    async search(q, { limit }) {
+      const needle = q.toLowerCase()
+      return PEOPLE.filter((p) => !needle || p.name.toLowerCase().includes(needle) || p.handle.includes(needle))
+        .slice(0, limit)
+        .map((p) => ({ ref: `user:${p.id}`, title: p.name, subtitle: `@${p.handle}`, kind: 'person', keys: [p.handle] }))
+    },
+    async resolve(ref) {
+      const p = PEOPLE.find((x) => `user:${x.id}` === ref)
+      return p ? `Person ${p.name} (@${p.handle}, user id ${p.id}).` : null
+    },
+  })
+  return { dispose: () => source?.dispose() }
+}
+```
+
+Rules the host keeps: the id is lowercase letters, digits, `.`, `_` and `-` (never `:`), prefixed with your plugin id; Notes registers first, and a keyword or alias another source already owns is dropped from yours (your tab stays), so pick keywords that are not everyday words, since "@<keyword> " always jumps to your tab; rows without a `ref` or `title` are dropped, and at most 30 are kept. **All** asks every source with `inAll` (default true) once the query has three characters and typing pauses; set `inAll: false` when each search is a remote call and an exact title match is rare (the Mail source does), and the source is then searched only on its own tab. The source goes away with the plugin. `GET /api/mention-sources` lists the sources and `GET /api/mention-sources/<id>/search?q=` runs one, which is handy while you build.
 
 ### App state: what the AI beside your App sees
 

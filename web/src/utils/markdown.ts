@@ -489,6 +489,21 @@ const SESSION_REF_RE = /<session-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?\s*\/?
  * name), so one shape means one regex per surface instead of a special case.
  */
 const PROJECT_REF_RE = /<project-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?\s*\/?>/g;
+/**
+ * Source-ref regex: a row picked from an "@" source (Slack, Mail, Notes, ...). `id` is
+ * `<source id>:<the source's ref>`; the label is the row's title when it was picked.
+ */
+const SOURCE_REF_RE = /<source-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?\s*\/?>/g;
+
+/** `slack:user:U1` → `slack`. */
+function sourceIdOf(refId: string): string {
+  const i = refId.indexOf(':');
+  return i > 0 ? refId.slice(0, i) : refId;
+}
+
+function resolveSourceRefDisplay(id: string, label?: string): string {
+  return label ? decodeRefAttr(label) : decodeRefAttr(id);
+}
 
 /** Legacy bracket ref: [mr9i88ys-87a4|Some Label] → Some Label. */
 const LEGACY_REF_RE = /\[([a-z0-9]{7,10}-[a-f0-9]{4})\|([^\]]+)\]/g;
@@ -559,6 +574,7 @@ export function stripEntityRefsToText(text: string): string {
     .replace(TASK_REF_RE, (_m, id: string, label?: string) => resolveTaskRefDisplay(id, label))
     .replace(SESSION_REF_RE, (_m, id: string, label?: string) => resolveSessionRefDisplay(id, label))
     .replace(PROJECT_REF_RE, (_m, id: string, label?: string) => resolveProjectRefDisplay(id, label))
+    .replace(SOURCE_REF_RE, (_m, id: string, label?: string) => resolveSourceRefDisplay(id, label))
     .replace(LEGACY_REF_RE, (_m, id: string, label: string) => lookupTaskLabel(id)?.title ?? label);
 }
 
@@ -605,6 +621,13 @@ export function entityRefsToHtml(text: string): string {
     const name = decodeRefAttr(id);
     return `<a href="/tasks" class="project-link" data-project="${escapeHtmlText(name)}" title="${escapeHtmlText(`Project: ${name}`)}">${escaped}</a>`;
   });
+  // A source pill is a reference, not a link: the model got its details with the
+  // message, and the source (a Slack person, a mail) has no page here to open.
+  result = result.replace(SOURCE_REF_RE, (_match, id: string, label?: string) => {
+    const source = sourceIdOf(decodeRefAttr(id));
+    const escaped = escapeHtmlText(resolveSourceRefDisplay(id, label));
+    return `<span class="source-link" data-source="${escapeHtmlText(source)}" title="${escapeHtmlText(`${source}: ${resolveSourceRefDisplay(id, label)}`)}">${escaped}</span>`;
+  });
   return result;
 }
 
@@ -629,11 +652,12 @@ export function entityRefsToMarkdownLinks(text: string): string {
     const display = resolveProjectRefDisplay(id, label).replace(/[\[\]]/g, '\\$&');
     return `[${display}](/tasks)`;
   });
+  result = result.replace(SOURCE_REF_RE, (_match, id: string, label?: string) => resolveSourceRefDisplay(id, label));
   return result;
 }
 
 /** DOMPurify attributes preserved for entity ref, image, and file link rendering */
-const SANITIZE_ATTRS = ['data-task-id', 'data-session-id', 'data-project', 'data-lightbox-src', 'data-file-path', 'data-file-line', 'data-file-end-line', 'data-rel-path', 'data-cwd', 'loading', 'target', 'rel'];
+const SANITIZE_ATTRS = ['data-task-id', 'data-session-id', 'data-project', 'data-source', 'data-lightbox-src', 'data-file-path', 'data-file-line', 'data-file-end-line', 'data-rel-path', 'data-cwd', 'loading', 'target', 'rel'];
 
 /**
  * True for an http(s) href that points OUTSIDE the console's own origin.

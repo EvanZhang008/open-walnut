@@ -14,6 +14,7 @@ import { composeRefs, cutSpan, inlineRefs, tokenEndingAt, type InlineRefSplit, t
 import { relativeTo } from './mention-path';
 import { routeMention } from './session-mention';
 import { detectMention } from './mention-trigger';
+import { arrowSwitchesTab } from './mention-sources-model';
 import type { Task } from '@open-walnut/core';
 import { StatusBadge } from '../common/StatusBadge';
 import { MicButton } from '../common/MicButton';
@@ -649,6 +650,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   const mentionPopupRef = useRef<FileMentionHandle>(null); // "@?" recents popup
   const mentionPaletteRef = useRef<MentionPaletteHandle>(null); // unified palette
   // Ref mirrors so handleKeyDown reads latest state without stale closure.
+  // The last key switched the palette's source tab: ←/→ keep switching tabs.
+  const mentionTabSwitchedRef = useRef(false);
   const mentionOpenRef = useRef(false);
   mentionOpenRef.current = mentionOpen;
   const mentionKindRef = useRef<'palette' | 'recents'>('palette');
@@ -929,6 +932,24 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     }
   }, [value, saveComposed, closeMention, applyText]);
 
+  // Rewrite the "@query" text in place and keep the palette open: a source
+  // keyword's tab left drops the keyword ("@slack memory" becomes "@memory"), and
+  // directory navigation (below) writes its browse path the same way.
+  const handleMentionSetQuery = useCallback((query: string) => {
+    const at = mentionAtIndexRef.current;
+    const end = mentionEndRef.current;
+    if (at < 0 || end < at) return;
+    const inserted = `@${query}`;
+    const newValue = value.slice(0, at) + inserted + value.slice(end);
+    applyText(newValue);
+    saveComposed(newValue);
+    const newCaret = at + inserted.length;
+    mentionEndRef.current = newCaret;
+    setMentionQuery(query);
+    const ta = textareaRef.current;
+    if (ta) { ta.focus(); ta.setSelectionRange(newCaret, newCaret); }
+  }, [value, saveComposed, applyText]);
+
   // Rewrite the "@query" span so the palette browses `absDir` (descend into a
   // dir / go to the parent / jump to a recent folder). The query text IS the
   // browse state, so navigation rewrites it: relative to the mention root when
@@ -940,14 +961,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     const rel = mentionCwd ? relativeTo(mentionCwd.replace(/\/+$/, ''), absDir) : absDir;
     // Back at the root → bare "@" (empty query browses the cwd again).
     const display = rel === '.' ? '' : rel.replace(/\/+$/, '');
-    const inserted = display ? `@${display}/` : '@';
-    const newValue = value.slice(0, at) + inserted + value.slice(end);
-    applyText(newValue);
-    saveComposed(newValue);
-    const newCaret = at + inserted.length;
-    mentionEndRef.current = newCaret;
-    const query = inserted.slice(1); // drop the leading "@"
-    setMentionQuery(query);
+    const query = display ? `${display}/` : '';
+    handleMentionSetQuery(query);
     // A recents jump lands in the unified palette (the query no longer starts
     // with "?"), so keep the routing state in sync with what handleChange
     // would have computed for this text.
@@ -957,9 +972,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       mentionKindRef.current = 'palette';
       setMentionOrder(enableEntityMention ? route.order : 'files-first');
     }
-    const ta = textareaRef.current;
-    if (ta) { ta.focus(); ta.setSelectionRange(newCaret, newCaret); }
-  }, [value, saveComposed, mentionCwd, enableEntityMention, applyText]);
+  }, [handleMentionSetQuery, mentionCwd, enableEntityMention]);
 
   // Entity pick: the "@query" span becomes the reference's inline `@[label]`
   // token, right where the "@" was, with a space after it, exactly like a file
@@ -1005,9 +1018,15 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   }, [applyText, saveComposed]);
 
   const handleKeyDown = (e: KeyboardEvent) => {
-    // Shift+Tab: caller-defined mode cycle (sessions: permission mode)
+    // Shift+Tab: caller-defined mode cycle (sessions: permission mode), except
+    // while the "@" palette has source tabs, where it steps back one tab.
     if (e.key === 'Tab' && e.shiftKey) {
       e.preventDefault();
+      if (mentionOpenRef.current && mentionKindRef.current === 'palette' && !e.nativeEvent.isComposing
+        && mentionPaletteRef.current?.cycleSource(-1)) {
+        mentionTabSwitchedRef.current = true;
+        return;
+      }
       onToggleMode?.();
       return;
     }
@@ -1043,7 +1062,35 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           return;
         }
       } else {
-        if (e.key === 'Tab') { e.preventDefault(); mentionPaletteRef.current?.jumpGroup(); return; }
+        // ⇥ / ⇧⇥ cycle the source tabs (All · Notes · Slack · Mail); with no
+        // sources (an older server) ⇥ still jumps between the Tasks and Files groups.
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          const switched = mentionPaletteRef.current?.cycleSource(e.shiftKey ? -1 : 1) ?? false;
+          if (!switched) mentionPaletteRef.current?.jumpGroup();
+          mentionTabSwitchedRef.current = switched;
+          return;
+        }
+        // ←/→ switch tabs only where the caret would otherwise leave the "@query"
+        // (→ at its end, ← right after the "@"), or right after a switch. A
+        // path-shaped query keeps ← for the parent directory (below).
+        if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !e.shiftKey && !e.metaKey && !e.altKey && !e.ctrlKey
+          && !(e.key === 'ArrowLeft' && /\/$/.test(mentionQuery))) {
+          const ta = textareaRef.current;
+          if (ta && arrowSwitchesTab({
+            key: e.key,
+            caret: ta.selectionStart,
+            hasSelection: ta.selectionStart !== ta.selectionEnd,
+            atIndex: mentionAtIndexRef.current,
+            end: mentionEndRef.current,
+            justSwitched: mentionTabSwitchedRef.current,
+          }) && mentionPaletteRef.current?.cycleSource(e.key === 'ArrowRight' ? 1 : -1)) {
+            e.preventDefault();
+            mentionTabSwitchedRef.current = true;
+            return;
+          }
+        }
+        mentionTabSwitchedRef.current = false;
         if (e.key === 'Enter') {
           e.preventDefault();
           // ⌘/Ctrl+Enter is deliberately swallowed (it's the global send
@@ -1491,6 +1538,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
           onPickRef={handlePickRef}
           onPickFile={handleMentionSelect}
           onNavigate={handleMentionNavigate}
+          onSetQuery={handleMentionSetQuery}
           onClose={dismissMention}
         />
       )}

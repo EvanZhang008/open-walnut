@@ -267,9 +267,9 @@ test('a draft with no folder yet shows the same two groups, Files rooted at home
   const fixtureRoot = await discoverFixtureRoot()
   const homeDir = fixtureRoot.replace(/\/ps-fixture$/, '')
   expect(await fileRows.first().getAttribute('title')).toMatch(new RegExp(`^${homeDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/`))
-  // The file hints a session's palette shows (group / parent / recents).
+  // The file hints a session's palette shows (source tabs / parent / recents).
   const hints = await palette.locator('.mention-hintbar').textContent()
-  for (const hint of ['group', 'parent', 'recents']) expect(hints, `hintbar: ${hints}`).toContain(hint)
+  for (const hint of ['source', 'parent', 'recents']) expect(hints, `hintbar: ${hints}`).toContain(hint)
   const shots = `/tmp/wn-inline-ref/${test.info().project.name}`
   await fs.mkdir(shots, { recursive: true })
   await page.locator('.draft-session-panel').screenshot({ path: `${shots}/04-draft-no-folder-tasks-and-files.png` })

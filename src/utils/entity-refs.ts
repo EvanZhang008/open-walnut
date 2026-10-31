@@ -14,7 +14,7 @@
 // Module-private on purpose: a shared `g`-flag regex is a lastIndex footgun for
 // any consumer using .test()/.exec(). The only safe operations (replace,
 // matchAll — which clones per spec) live in this file.
-const ENTITY_REF_RE = /<(task|session|project)-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?\s*\/?>/g
+const ENTITY_REF_RE = /<(task|session|project|source)-ref\s+id="([^"]*)"(?:\s+label="([^"]*)")?\s*\/?>/g
 
 /** Legacy bracket ref: [mr9i88ys-87a4|Some Label] → Some Label. */
 const LEGACY_REF_RE = /\[([a-z0-9]{7,10}-[a-f0-9]{4})\|([^\]]+)\]/g
@@ -45,6 +45,16 @@ export function projectRefTag(name: string, label?: string): string {
   return `<project-ref id="${esc(name)}" label="${esc(label ?? name)}"/>`
 }
 
+/**
+ * Build a `<source-ref/>` tag: a row picked from an "@" source (core/mention-sources/).
+ * `id` is `<source id>:<the source's own ref>` (`slack:user:U123`), so one attribute shape
+ * still serves every kind; the send path resolves it into a reference card.
+ */
+export function sourceRefTag(sourceId: string, ref: string, label: string): string {
+  const esc = (s: string): string => s.replace(/"/g, '&quot;')
+  return `<source-ref id="${esc(`${sourceId}:${ref}`)}" label="${esc(label)}"/>`
+}
+
 /** Undo taskRefTag's attribute escaping when a label leaves attribute context. */
 function decodeAttr(s: string): string {
   return s.replace(/&quot;/g, '"')
@@ -62,7 +72,7 @@ export function stripEntityRefs(text: string): string {
 /** One parsed ref. `id` holds the entity's identity — for a project that IS its
  *  name — and `label` is whatever the emitter wrote (absent when unlabeled). */
 export interface EntityRef {
-  kind: 'task' | 'session' | 'project'
+  kind: 'task' | 'session' | 'project' | 'source'
   id: string
   label?: string
 }

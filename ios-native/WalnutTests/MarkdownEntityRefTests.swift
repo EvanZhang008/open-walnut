@@ -25,6 +25,13 @@ final class MarkdownEntityRefTests: XCTestCase {
         XCTAssertEqual(MarkdownParser.replaceEntityRefs(plain), plain)
     }
 
+    func testProjectAndSourceRefsRenderTheirLabels() {
+        // A row picked from the composer's "@" sources rides the user's message
+        // as <source-ref/>; it must read as its label here, never raw XML.
+        let input = #"ask <source-ref id="slack:user:U1" label="Alice Chen"/> about <project-ref id="Garden"/>"#
+        XCTAssertEqual(MarkdownParser.replaceEntityRefs(input), "ask **Alice Chen** about **Garden**")
+    }
+
     func testUnclosedOrEmptyRefIsLeftAlone() {
         // A ref with neither id nor label has no honest rendering — leave the
         // raw text rather than silently deleting content.

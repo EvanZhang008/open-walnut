@@ -5749,6 +5749,23 @@ select {
   text-decoration: none;
 }
 
+/* A row picked from an "@" source (Slack person, mail, note): a pill that names
+   what was referenced, not a link (markdown.ts entityRefsToHtml). */
+.markdown-body span.source-link {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+  font-size: 0.9em;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--accent-subtle, rgba(0, 122, 255, 0.08));
+  color: var(--accent);
+}
+.session-msg-user .markdown-body span.source-link,
+.chat-message-user .markdown-body span.source-link {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+
 /* A task id linked in place inside code (bare-task-ids.ts): the code keeps its
    own font and box, the id reads as a link the way a path in code does. The
    tool-block selectors are repeated so their pill rules lose here too. */
@@ -7600,6 +7617,29 @@ select {
 }
 .mention-into { flex-shrink: 0; color: var(--fg-muted); font-size: 12px; }
 .mention-size { flex-shrink: 0; color: var(--fg-muted); font-size: 11px; }
+/* Source tabs (All · Notes · Slack · Mail): ⇥ / ⇧⇥ or ←→ at the query's edges. */
+.mention-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px 6px 0;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.mention-tab {
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  padding: 5px 10px 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  cursor: pointer;
+}
+.mention-tab:hover { color: var(--fg); }
+.mention-tab.on { color: var(--fg); border-bottom-color: var(--accent); }
 .mention-pick-btn {
   flex-shrink: 0;
   display: none;
