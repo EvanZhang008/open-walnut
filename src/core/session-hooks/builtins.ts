@@ -319,7 +319,7 @@ export function buildSelfReportPrompt(
   // hand-off document for a fresh AI, and plugin content rules validate it.
   const uiLang = nonEnglishUiLanguage(opts?.uiLanguage);
   const tipLanguage = uiLang
-    ? `\nOVERVIEW, RECAP, FOR_USER_ASK, FOR_USER_WAITING_ON, FOR_USER_NOW, FOR_USER_NEXT and FOR_USER_BRIEF are shown to the user in the UI: write them in ${uiLanguageName(uiLang)} (the user's display language), keeping identifiers, file names, and technical terms in their original form. Every other field stays English.`
+    ? `\nOVERVIEW, RECAP, FOR_USER_ASK, FOR_USER_ASK_OPTIONS, FOR_USER_ASK_MORE, FOR_USER_WAITING_ON, FOR_USER_NOW, FOR_USER_NEXT and FOR_USER_BRIEF are shown to the user in the UI: write them in ${uiLanguageName(uiLang)} (the user's display language), keeping identifiers, file names, and technical terms in their original form. Every other field stays English.`
     : '';
 
   let noteBlock: string;
@@ -370,9 +370,12 @@ ${FOR_USER_PROMPT}${opts?.brief ? briefPrompt({ ...opts.brief, ...(uiLang ? { la
  *  missing this list makes the new label bleed into the previous field. */
 /** The four lines every task's status is shown from (src/core/user-status.ts). The user reads
  *  them on the Board, the Org page and the phone, so the plain-words rule is the point. */
-export const FOR_USER_PROMPT = `Then four lines on how this task stands FOR THE USER, who reads them on their board without opening the session. Plain words a non-engineer understands: no codenames, abbreviations, ticket or test-run labels, commit hashes, file names or internal ids; one short sentence each.
+export const FOR_USER_PROMPT = `Then these lines on how this task stands FOR THE USER, who reads them on their board without opening the session. Plain words a non-engineer understands: no codenames, abbreviations, ticket or test-run labels, commit hashes, file names or internal ids; one short sentence each.
 FOR_USER_STATE: one of needs-you | working | waiting | done. needs-you when the next move is the user's: something only they can give (input, a file or text to paste, a review, a decision, an approval, a login, an action on their device), even with no rush; a wait on the user is ALWAYS needs-you, never waiting (waiting takes the task off their list). A question for your lead or another task is waiting, not needs-you; so is a failure of the machine (a full disk, a Walnut restart, a lost connection to a host): that is waiting on machine, which Walnut and your lead retry once it clears. working when you will carry on by yourself right now (a background job you started will wake you). waiting ONLY when the next move belongs to something outside Walnut and the user (a pipeline or CI run, a build, a deploy, a CR or PR review, a Slack or mail reply) or to another task or your lead; arm a trigger on an outside wait. done when what the task asked for is finished.
-FOR_USER_ASK: needs-you only: the one thing the user must decide or do, as a question or an instruction ("Approve testing on your real iPhone?"). Otherwise none. Check first that it is still needed: the user may have done it outside Walnut (a sign-in in a terminal, a tap on the phone), and a stale ask is read to them as fact. When a script can tell it is done (a login works, a file appears, a review lands), arm a trigger on it (trigger_create, wait:false) so the ask clears the moment it is; Walnut also asks you to check it again every few hours.
+FOR_USER_ASK: needs-you only: the one thing the user must decide or do, as a question or an instruction ("Approve testing on your real iPhone?"). Otherwise none. Check first that it is still needed: the user may have done it outside Walnut (a sign-in in a terminal, a tap on the phone), and a stale ask is read to them as fact. When a script can tell it is done (a login works, a file appears, a review lands), arm a trigger on it (trigger_create, wait:false) so the ask clears the moment it is; Walnut also asks you to check it again every few hours. Write it so the user gets the whole issue at a glance (at most 120 characters), and so they can answer with one click whenever that can work.
+FOR_USER_ASK_KIND: needs-you only: how the user answers: yes-no | single | multi | text. Prefer yes-no, then a choice (single: pick one; multi: pick several), over text; text only when no short list of answers fits. Otherwise none.
+FOR_USER_ASK_OPTIONS: single or multi only: 2 to 5 options worth choosing, separated by " | ", each a few words; put "(recommended)" after the one you recommend. No filler options (no "Other", no "Something else": the user can always write their own words). Otherwise none.
+FOR_USER_ASK_MORE: needs-you only, optional: the detail behind the ask that the summary leaves out (why it matters, what each option does), a few short sentences. Otherwise none.
 FOR_USER_WAITING_ON: waiting only: <outside | task | lead | machine>: on what exactly ("outside: the CI run on main", "outside: the code review", "task: the Bun migration lead's commit", "machine: 20 GB of free disk"). A wait on the user is needs-you, not here. Walnut parks the task only for one of these; anything else puts it back on the user's list. Otherwise none.
 FOR_USER_NOW: where the work stands now.
 FOR_USER_NEXT: who does what next ("You decide, then I run the tests", "I deploy once the tests pass").`;
@@ -382,7 +385,7 @@ const SELF_REPORT_LABELS = [
   'TITLE', 'OVERVIEW', 'LINKS', 'RECAP',
   'TASK_SUMMARY', 'WHAT_I_DID', 'STATUS', 'CHANGES_TRIED', 'PHASE_SIGNAL', 'NEXT_STEPS',
   'BLOCKERS', 'USER_INTENT', 'VERIFIED', 'ARTIFACTS',
-  'FOR_USER_STATE', 'FOR_USER_ASK', 'FOR_USER_WAITING_ON', 'FOR_USER_NOW', 'FOR_USER_NEXT', 'FOR_USER_BRIEF', 'AGENT_MEMORY',
+  'FOR_USER_STATE', 'FOR_USER_ASK', 'FOR_USER_ASK_KIND', 'FOR_USER_ASK_OPTIONS', 'FOR_USER_ASK_MORE', 'FOR_USER_WAITING_ON', 'FOR_USER_NOW', 'FOR_USER_NEXT', 'FOR_USER_BRIEF', 'AGENT_MEMORY',
 ] as const;
 const NEXT_LABEL_LOOKAHEAD = `(?:${[
   ...SELF_REPORT_LABELS,
@@ -480,7 +483,10 @@ export function readStatusReport(report: string, now: Date = new Date()): Status
   if (!state) return null;
   const out: StatusReport = { state, at: now.toISOString() };
   const ask = read('FOR_USER_ASK');
-  if (state === 'needs' && ask) out.ask = ask;
+  if (state === 'needs' && ask) {
+    out.ask = ask;
+    Object.assign(out, readAskShape(report, read));
+  }
   const waiting = read('FOR_USER_WAITING_ON');
   if (state === 'waiting' && waiting) {
     const m = /^(outside|task|time|machine|you|user|lead|other)\s*:\s*(.+)$/i.exec(waiting);
@@ -492,6 +498,33 @@ export function readStatusReport(report: string, now: Date = new Date()): Status
   if (nowLine) out.now = nowLine;
   const next = read('FOR_USER_NEXT');
   if (next) out.next = next;
+  return out;
+}
+
+/** The ask's answer shape (AskForm in user-status.ts) from FOR_USER_ASK_KIND / _OPTIONS / _MORE:
+ *  `yes-no`, `single`, `multi`, `text`; options split on `|` (or one per line), "(recommended)" marks one. */
+function readAskShape(report: string, read: (label: string) => string | undefined): Pick<StatusReport, 'ask_kind' | 'ask_options' | 'ask_more'> {
+  const out: Pick<StatusReport, 'ask_kind' | 'ask_options' | 'ask_more'> = {};
+  const kindWord = (read('FOR_USER_ASK_KIND') ?? '').toLowerCase().replace(/[\s_/-]+/g, '');
+  const kind = kindWord.startsWith('yes') ? 'yes_no'
+    : kindWord.startsWith('single') || kindWord.startsWith('one') ? 'single'
+    : kindWord.startsWith('multi') || kindWord.startsWith('several') ? 'multi'
+    : kindWord.startsWith('text') ? 'text' : undefined;
+  if (kind) out.ask_kind = kind;
+  const raw = extractField(report, 'FOR_USER_ASK_OPTIONS').trim();
+  if ((kind === 'single' || kind === 'multi') && raw && !/^(none|n\/a)\b\.?$/i.test(raw)) {
+    // " | " as the prompt asks; a list written one option per line is read the same way.
+    const parts = raw.includes('|') ? raw.split('|') : raw.split(/\r?\n/);
+    const options = parts.map((part, i) => {
+      let label = part.replace(/\s+/g, ' ').trim().replace(/^(?:[-*]\s+|\d+[.)]\s+)/, '').replace(/^\*\*(.+)\*\*$/, '$1');
+      const recommended = /\(recommended\)/i.test(label);
+      label = label.replace(/\s*\(recommended\)\s*/ig, ' ').trim();
+      return label ? { id: `o${i + 1}`, label: label.slice(0, cutEnd(label, 80)), ...(recommended ? { recommended: true } : {}) } : null;
+    }).filter((o): o is NonNullable<typeof o> => !!o).slice(0, 5);
+    if (options.length >= 2) out.ask_options = options;
+  }
+  const more = extractField(report, 'FOR_USER_ASK_MORE').replace(/[^\S\n]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  if (more && !/^(none|n\/a|unchanged)\b\.?$/i.test(more)) out.ask_more = more.slice(0, cutEnd(more, 2000));
   return out;
 }
 

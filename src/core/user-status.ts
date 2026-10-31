@@ -24,6 +24,7 @@
 
 import { infraStopCause } from './session-error-kind.js';
 import { startDateMs } from './snooze.js';
+import { cutEnd } from './text-cut.js';
 
 export type UserState = 'needs' | 'working' | 'waiting' | 'done';
 
@@ -101,11 +102,39 @@ export interface StatusReport {
   at: string;
   /** When the turn it reports on ended (ISO); absent on a report an older Walnut stored. */
   turn_ended_at?: string;
+  /** needs: how the user answers (AskForm.kind); left out = text. */
+  ask_kind?: AskKind;
+  /** needs, single or multi: the few options worth showing. */
+  ask_options?: AskOption[];
+  /** needs: the detail behind the ask, shown under More. */
+  ask_more?: string;
   /** Who wrote it when not the task's own session (sessions/report-set.ts): its lead, VP or Main
    *  (`task:<id>`), or a person. The task's next own report replaces it. */
   by?: StatusLineBy;
   /** The setter task's title, for display. */
   by_name?: string;
+}
+
+/** How the user answers an ask: yes or no, one of a few options, several of them, or their own words. */
+export type AskKind = 'yes_no' | 'single' | 'multi' | 'text';
+export interface AskOption { id: string; label: string; recommended?: boolean }
+export const ASK_KINDS: readonly AskKind[] = ['yes_no', 'single', 'multi', 'text'];
+export const ASK_SUMMARY_MAX = 120;
+export const ASK_MORE_MAX = 2000;
+export const ASK_OPTIONS_MAX = 5;
+
+/**
+ * A session's ask in a shape a person answers in one click (2026-10-31, the user: "don't put too many
+ * options to just occupied space, put actually valuable one, they can just yes and no, or single or
+ * multiple choice, or text right, ideally prefer non text, and show the summary of the issue very
+ * clear, with potentially a more section"). `ask` stays its plain text for older readers. Yes / No
+ * carry no options (ids `yes`, `no`); single and multi carry 2 to 5; text none.
+ */
+export interface AskForm {
+  summary: string;
+  more?: string;
+  kind: AskKind;
+  options?: AskOption[];
 }
 
 /** Who wrote a task's own line: the task itself, another task, or a person. */
@@ -238,6 +267,8 @@ export interface UserStatus {
   snoozed?: { until: string; ask?: string };
   /** The task's own line (StatusLine); absent when no current report gives words for its state. */
   line?: StatusLine;
+  /** needs from its own report: the ask in a one-click shape (AskForm). */
+  askForm?: AskForm;
 }
 
 /** "2 hours ago", "3 days ago". */
@@ -376,6 +407,8 @@ export function deriveUserStatus(input: UserStatusInput, nowMs: number = Date.no
   const derived = derive(input, nowMs);
   const line = lineOf(input, derived);
   if (line) derived.line = line;
+  const form = askFormOf(input, derived);
+  if (form) derived.askForm = form;
   const out = snoozeOf(input, derived, nowMs) ?? derived;
   if (out.state !== 'done' && !out.snoozed) {
     const due = dueStatus(input.dueDate, nowMs);
@@ -387,6 +420,65 @@ export function deriveUserStatus(input: UserStatusInput, nowMs: number = Date.no
   // handed it back" is no claim about the world.
   if (out.state === 'needs' && out.source === 'session' && out.ask && out.ask === reportAsk(input.report)) stampChecked(out, input, nowMs);
   return out;
+}
+
+/** The ask of a current needs report in its one-click shape (AskForm), when the status is that ask. */
+function askFormOf(input: UserStatusInput, s: UserStatus): AskForm | undefined {
+  const r = reportIsCurrent(input) ? input.report : null;
+  if (!r || s.state !== 'needs' || s.source !== 'session' || r.state !== 'needs' || none(r.ask)) return undefined;
+  if (clean(r.ask) !== clean(s.ask)) return undefined;
+  return askFormFrom(r.ask!, r.ask_kind, r.ask_options, r.ask_more);
+}
+
+/** An AskForm from loose parts, held to its limits: a choice with fewer than 2 options is text. Pure. */
+export function askFormFrom(ask: string, kind?: string, options?: ReadonlyArray<AskOption | string>, more?: string): AskForm {
+  const full = clean(ask);
+  const summary = headOf(full, ASK_SUMMARY_MAX);
+  const k: AskKind = (ASK_KINDS as readonly string[]).includes(kind ?? '') ? kind as AskKind : 'text';
+  let seenRecommended = false;
+  const opts = (options ?? []).map((o, i) => {
+    const raw = clean(typeof o === 'string' ? o : o.label);
+    const label = raw.slice(0, cutEnd(raw, 80));
+    const id = (typeof o === 'string' ? '' : clean(o.id)) || `o${i + 1}`;
+    // A single choice recommends one option at most: the first one marked.
+    let recommended = typeof o !== 'string' && !!o.recommended;
+    if (recommended && k === 'single' && seenRecommended) recommended = false;
+    if (recommended) seenRecommended = true;
+    return label ? strip<AskOption>({ id, label, recommended: recommended || undefined }) : null;
+  }).filter((o): o is AskOption => !!o).slice(0, ASK_OPTIONS_MAX);
+  const choice = k === 'single' || k === 'multi';
+  const finalKind: AskKind = choice && opts.length < 2 ? 'text' : k;
+  // A summary cut to its head keeps the whole ask under More when the writer gave no detail.
+  const given = (more ?? '').trim() || (summary !== full ? full : '');
+  const detail = given.slice(0, cutEnd(given, ASK_MORE_MAX));
+  return strip<AskForm>({
+    summary, kind: finalKind,
+    more: detail || undefined,
+    options: finalKind === 'single' || finalKind === 'multi' ? opts : undefined,
+  });
+}
+
+/** At most `max` characters, cut at a word with an ellipsis when it had to be cut. */
+function headOf(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const head = text.slice(0, cutEnd(text, max - 1));
+  const space = head.lastIndexOf(' ');
+  return `${(space > max / 2 ? head.slice(0, space) : head).replace(/[\s,;:.]+$/, '')}\u2026`;
+}
+
+/**
+ * The one message an answer to an AskForm sends into the task's session (2026-10-31: answers go back
+ * as one message, the way a Board choice does): the summary, then the option(s) picked and the
+ * person's own words. Pure; the web and the phone build the same text.
+ */
+export function askAnswerText(form: Pick<AskForm, 'summary' | 'kind' | 'options'>, answer: { picked?: string[]; words?: string }): string {
+  const ids = answer.picked ?? [];
+  const labels = form.kind === 'yes_no'
+    ? ids.map((id) => (id === 'yes' ? 'Yes' : id === 'no' ? 'No' : '')).filter(Boolean)
+    : ids.map((id) => form.options?.find((o) => o.id === id)?.label).filter((l): l is string => !!l);
+  const words = (answer.words ?? '').trim();
+  const parts = [labels.join(', '), words].filter(Boolean);
+  return `Answer to "${form.summary}": ${parts.join('. ') || '(no answer)'}`;
 }
 
 /** The task's own line for the state it is in (StatusLine), from its current report. */

@@ -38,7 +38,8 @@ import { recheckDue } from '../../src/core/sessions/needs-recheck.js'
 import { snoozeEndedMs } from '../../src/core/snooze.js'
 import { buildStatusBoard } from '../../web/src/components/board/board-status-model.js'
 import { taskNeedsAction, taskUserState } from '../../web/src/utils/session-status.js'
-import type { StatusReport } from '../../src/core/user-status.js'
+import { askAnswerText, type StatusReport } from '../../src/core/user-status.js'
+import { readStatusReport } from '../../src/core/session-hooks/builtins.js'
 import type { Task } from '../../src/core/types.js'
 
 type State = 'needs' | 'working' | 'waiting' | 'done'
@@ -256,5 +257,44 @@ describe('every surface shows the same state after every step', () => {
     await turnStarts(worker, sid, 'web')
     await turnEnds(worker, sid, { state: 'needs', ask: 'Review the draft' })
     expect((await line())?.line).toMatchObject({ text: 'Review the draft', by: 'self' })
+  }, 120_000)
+
+  it('an ask in a one-click shape reaches every reader, from the task itself or its lead', async () => {
+    const { lead, worker, sid } = await team('Askflow')
+    const leadSid = 'sess-askflow-lead'
+    await createSessionRecord(leadSid, lead.id, 'Askflow')
+    const stored = async () => {
+      await syncUserStatuses(new Set([worker.id]))
+      return (await getTask(worker.id)).user_status
+    }
+    // Its own turn-end self-report, read the way the session runtime reads it.
+    const own = readStatusReport([
+      'FOR_USER_STATE: needs-you',
+      'FOR_USER_ASK: Which plan do we run first?',
+      'FOR_USER_ASK_KIND: single',
+      'FOR_USER_ASK_OPTIONS: Fix the sync first (recommended) | Ship the new view',
+      'FOR_USER_ASK_MORE: The sync bug loses edits.',
+    ].join('\n'))!
+    await turnEnds(worker, sid, own)
+    const form = { summary: 'Which plan do we run first?', kind: 'single', more: 'The sync bug loses edits.',
+      options: [{ id: 'o1', label: 'Fix the sync first', recommended: true }, { id: 'o2', label: 'Ship the new view' }] }
+    expect(await stored()).toMatchObject({ state: 'needs', ask: 'Which plan do we run first?', askForm: form })
+    await expectEverywhere(worker.id, lead.id, 'needs', 'its own one-click ask')
+    const { tasks: phoneRows } = await v1<{ tasks: { id: string; user_status?: { askForm?: unknown } }[] }>('/tasks')
+    expect(phoneRows.find((r) => r.id === worker.id)?.user_status?.askForm).toEqual(form)
+    // Its lead rewrites it as a yes / no; a bad shape is refused and changes nothing.
+    const put = (body: unknown) => fetch(`http://localhost:${port}/api/v1/tasks/${worker.id}/report`, {
+      method: 'PUT', headers: { 'content-type': 'application/json', 'x-walnut-caller-sid': leadSid }, body: JSON.stringify(body),
+    })
+    const badRes = await put({ state: 'needs', ask: 'Pick one', ask_kind: 'single', ask_options: ['Only'] })
+    expect(badRes.status).toBe(400)
+    expect((await stored())?.askForm).toEqual(form)
+    expect((await put({ state: 'needs', ask: 'Ship the sync fix today?', ask_kind: 'yes_no' })).status).toBe(200)
+    expect(await stored()).toMatchObject({ askForm: { summary: 'Ship the sync fix today?', kind: 'yes_no' }, line: { by: `task:${lead.id}` } })
+    // The answer goes in as one message and its turn runs; the next report has no ask.
+    expect(askAnswerText((await stored())!.askForm!, { picked: ['yes'] })).toBe('Answer to "Ship the sync fix today?": Yes')
+    await turnStarts(worker, sid, 'web')
+    await turnEnds(worker, sid, { state: 'working', next: 'Deploy the sync fix' })
+    expect((await stored())?.askForm).toBeUndefined()
   }, 120_000)
 })

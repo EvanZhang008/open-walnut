@@ -686,10 +686,16 @@ const REPORT_CHANGE = z.object({
   waiting_on: z.string().max(300).optional().describe('With waiting: on whom or what exactly ("its lead, to land commit abc", "the CI run on main")'),
   waiting_kind: z.enum(['task', 'time', 'machine', 'outside', 'you', 'lead', 'other']).optional().describe('With waiting: what kind of thing it waits on'),
   next: z.string().max(300).optional().describe('Who does what next, one sentence'),
+  ask_kind: z.enum(['yes_no', 'single', 'multi', 'text']).optional()
+    .describe('With needs: how the user answers. Prefer yes_no, then single (pick one) or multi (pick several), over text'),
+  ask_options: z.array(z.union([z.string().max(80), z.object({ id: z.string().max(40).optional(), label: z.string().max(80), recommended: z.boolean().optional() })]))
+    .max(5).optional().describe('With single or multi: 2 to 5 options worth choosing, a few words each; mark the one you recommend. No filler such as "Other"'),
+  ask_more: z.string().max(2000).optional().describe('With needs: the detail behind the ask, shown under More'),
 })
 const REPORT_SET_TEXT = 'Set what a task waits on next, as its own turn-end report would: its line on the Org page, the Board and the phone, '
   + 'recorded as yours (by). For a task you lead, or as its VP or Main; the task\'s next own report replaces it. It moves the '
-  + 'phase as that report would (needs = NEED_ACTION; waiting on something outside = WAITING). Needs always names the ask.'
+  + 'phase as that report would (needs = NEED_ACTION; waiting on something outside = WAITING). Needs always names the ask, '
+  + 'at a glance, and says how the user answers in one click when it can (ask_kind, ask_options, ask_more).'
 
 defineOp({
   name: 'task_update',

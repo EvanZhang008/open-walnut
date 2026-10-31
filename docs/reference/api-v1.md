@@ -881,10 +881,12 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   title }], routines: [{ id, name?, target, enabled, kind: 'trigger' | 'routine' }], clocks:
   [{ taskId, kind: 'wait_until' | 'promise_alarm', at }], stopped? }`.
   `PUT /tasks/:id/report` (added 2026-10-31) `{ state: 'needs' | 'working' | 'waiting', ask?,
-  waiting_on?, waiting_kind?, next? }` → `{ task, phase }` sets what the task waits on next from
+  waiting_on?, waiting_kind?, next?, ask_kind?, ask_options?, ask_more? }` → `{ task, phase }` sets what the task waits on next from
   outside its turn, recorded with who set it (the caller's task, or `human`); the phase moves as the
   task's own report would (`phase` is the new one, or null). `needs` without an `ask`, or `waiting`
-  without `waiting_on`, is `400 bad_request`; a completed task is `409 conflict`. The task's next own
+  without `waiting_on`, a `single` or `multi` `ask_kind` without 2 to 5 `ask_options` (strings, or
+  `{ id?, label, recommended? }`), or options on `yes_no` or `text`, is `400 bad_request`; a completed
+  task is `409 conflict`. The task's next own
   report replaces it. Op: `task_report_set` (and `task_update`'s `report`).
   `user_status` (added 2026-10) is the ONE status the user sees, present on open
   tasks: `{ state, kind?, ask?, source?, waitingOn?, until?, now?, next?, at?, stale? }`.
@@ -909,7 +911,13 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   Main with none `waiting` on the user (added 2026-10-31). `line` `{ text, by, byName?, at }` (added
   2026-10-31) is the task's own words for its state (the ask, what it waits on, or its next step),
   from its current report: `by` is `self` (its turn-end report), `task:<id>` (its lead, VP or Main
-  set it with `PUT /tasks/:id/report`) or `human`. The server derives it (src/core/user-status.ts) and
+  set it with `PUT /tasks/:id/report`) or `human`. `askForm` `{ summary, kind, more?, options? }`
+  (added 2026-10-31) is a session's `needs` in a one-click shape, from the same current report:
+  `kind` is `yes_no` (answer `yes` or `no`, no options), `single` or `multi` (2 to 5 `options`
+  `{ id, label, recommended? }`) or `text`; `summary` is the ask in at most 120 characters, `more`
+  its detail (at most 2000). `ask` stays the plain text for clients that do not read it. An answer
+  goes into the task's session as one message, `Answer to "<summary>": <labels picked>. <own words>`
+  (`askAnswerText` in src/core/user-status.ts). The server derives it (src/core/user-status.ts) and
   every surface shows it instead of the phase, so a `NEED_ACTION` phase alone is
   not "needs you". A client reading an older server sees no field and falls back
   to the phase. Additive and optional.
