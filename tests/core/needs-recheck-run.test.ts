@@ -107,3 +107,22 @@ describe('a team stopped or quieted in one step', () => {
     expect(await runNeedsRecheck(NOW)).toEqual(['old'])
   })
 })
+
+describe('a Board choice that asks the user about a task', () => {
+  it("wakes the Board owner's session, never the task's, and never a COMPLETE owner", async () => {
+    tasks.clear()
+    tasks.set('own1', { id: 'own1', title: 'Leader', phase: 'WAITING', status: 'in_progress' } as Task)
+    tasks.set('w1', { id: 'w1', title: 'Receivers', phase: 'NEED_ACTION', status: 'in_progress',
+      user_status: { state: 'needs', source: 'choice', ask: 'When do we delete them?', choice: { board: 'own1', id: 'ask-stacks' }, checkedAt: new Date(NOW - 5 * 3_600_000).toISOString(), unverified: true } } as Task)
+    expect(await runNeedsRecheck(NOW)).toEqual(['w1'])
+    expect(sends).toHaveLength(1)
+    expect(sends[0].sid).toBe('s-own1')
+    // Only words are asked of the owner: its own wait comes back at that turn's end.
+    expect(sends[0].source).toBe('choice-recheck')
+    expect(sends[0].text).toContain('<walnut-choice id="ask-stacks">')
+    expect(tasks.get('w1')!.needs_recheck!.count).toBe(1)
+    tasks.set('own1', { ...tasks.get('own1')!, phase: 'COMPLETE' })
+    tasks.set('w1', { ...tasks.get('w1')!, needs_recheck: null })
+    expect(await runNeedsRecheck(NOW)).toEqual([])
+  })
+})

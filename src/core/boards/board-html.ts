@@ -146,6 +146,21 @@ export function parsePairs(attr: string | undefined): Array<{ key: string; label
   return out;
 }
 
+/**
+ * Each choice's start tag as written, by id: a choice whose tag changed (its question, options,
+ * task, or a `checked` date its owner set to confirm it) was written again (board-store.ts
+ * stampChoiceTimes).
+ */
+export function choiceSigs(html: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const attrs of startTags(html, 'walnut-choice')) {
+    const id = parseAttrs(attrs).get('id');
+    if (!id || !BOARD_ITEM_ID_RE.test(id) || Object.hasOwn(out, id)) continue;
+    out[id] = attrs.replace(/\s+/g, ' ').trim();
+  }
+  return out;
+}
+
 /** Every `<walnut-choice>` on the page by id (first occurrence wins); `recommended` only when it names an option. */
 export function choiceSpecs(html: string): Record<string, BoardChoiceSpec> {
   const out: Record<string, BoardChoiceSpec> = {};

@@ -71,3 +71,44 @@ export function markBriefSeen(taskId: string, at: string): void {
     localStorage.setItem(SEEN_KEY, JSON.stringify(kept));
   } catch { /* as above */ }
 }
+
+/** A line's task whose status moved since the letter was written (brief-fresh.ts BriefLineMove). */
+export interface BriefMoveView { id: string; state: UserState; words: string }
+
+const NOW_CLASS = 'org-brief-now';
+
+/**
+ * Each line whose task moved since the letter was written is marked as changed and carries its
+ * task's live words under the writer's (2026-10-31, the user: a VP's Brief read 3.5 hours old), and
+ * each line Walnut added for an ask the letter missed says so (`added`: id -> its note). A line is
+ * a list item; its task is its first pill. Set in place like applyBriefDecorations, and undone on a
+ * line whose task no longer reads so. Returns how many lines are marked.
+ */
+export function applyBriefMoves(root: HTMLElement, moves: ReadonlyMap<string, BriefMoveView>, added: ReadonlyMap<string, string> = new Map()): number {
+  let marked = 0;
+  for (const li of Array.from(root.querySelectorAll('li'))) {
+    const id = li.querySelector('a[data-task-id]')?.getAttribute('data-task-id') ?? '';
+    const move = id ? moves.get(id) : undefined;
+    const note = id && !move ? added.get(id) : undefined;
+    let now = Array.from(li.children).find((c) => c.classList.contains(NOW_CLASS)) as HTMLElement | undefined;
+    if (!move && !note) {
+      li.removeAttribute('data-brief-moved');
+      li.removeAttribute('data-brief-added');
+      now?.remove();
+      continue;
+    }
+    marked += 1;
+    if (move) { li.setAttribute('data-brief-moved', move.state); li.removeAttribute('data-brief-added'); }
+    else { li.setAttribute('data-brief-added', '1'); li.removeAttribute('data-brief-moved'); }
+    if (!now) {
+      now = li.ownerDocument.createElement('span');
+      now.className = NOW_CLASS;
+      now.setAttribute('data-testid', 'org-brief-now');
+      li.appendChild(now);
+    }
+    const text = move ? `Now: ${move.words}` : note!;
+    if (now.textContent !== text) now.textContent = text;
+    now.setAttribute('data-user-state', move ? move.state : 'needs');
+  }
+  return marked;
+}

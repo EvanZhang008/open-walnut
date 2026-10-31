@@ -111,6 +111,11 @@ traffic (2026-10-31, 12 of 45 replies). The server's next message tells it once;
 deliveries carry it until then or until a later turn is in the language again, which clears the
 mark. A turn the chat hides (something else started it and it ended on the no-action line) is
 not judged.
+`brief` (Main and the leads only) at session start, after a compaction, every 3 messages and
+when the node's team moved since its Brief was written (`src/core/sessions/brief-hint.ts`): how
+old the Brief is, what moved, and to update it with `brief_write`; a node with no Brief hears to
+write one. A Brief that is current and only its write changed says nothing (2026-10-31, the user:
+"每三轮提示他一下").
 `user-away` (Main and the leads only) at session start, on a change and after a
 compaction: the user has not been in this chat for 30 minutes and it is not open
 anywhere (`src/core/org/user-away.ts`: the last message a person typed into it,

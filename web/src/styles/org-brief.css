@@ -92,14 +92,34 @@
 }
 .org-brief-body > h1:first-child, .org-brief-body > h2:first-child,
 .org-brief-body > h3:first-child, .org-brief-body > h4:first-child { margin-top: 0; }
-.org-brief-foot {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 6px;
-  margin-top: 6px;
-  font-size: 12px;
-}
 .org-page.is-phone .org-top.has-switch { padding-left: 12px; }
 .org-page.is-phone .org-brief { padding: 8px 12px; }
 .org-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+
+/* When it was written, what moved since, and a refresh on its way (OrgBrief.tsx head). */
+.org-brief-head { margin: 0 0 6px; font-size: 11.5px; }
+.org-brief-moved { color: var(--warning, #b25000); }
+.org-brief-updating { color: var(--accent, #0a84ff); }
+/* A line whose task moved since the letter was written: the writer's words dimmed, the live ones under it. */
+.org-brief-body li[data-brief-moved] { color: var(--fg-muted, #86868b); }
+.org-brief-body .org-brief-now {
+  display: block;
+  color: var(--fg);
+  font-size: 12px;
+}
+.org-brief-body .org-brief-now::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 4px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  background: var(--fg-muted, #86868b);
+}
+.org-brief-body .org-brief-now[data-user-state='needs']::before { background: var(--error, #ff3b30); }
+.org-brief-body .org-brief-now[data-user-state='working']::before { background: var(--success, #34c759); }
+.org-brief-body .org-brief-now[data-user-state='done']::before { background: var(--accent, #0a84ff); }
+.org-top-updating { font-size: 12px; color: var(--accent, #0a84ff); }
+/* A line Walnut added for an ask the letter missed: the ask in the task's words, then the note. */
+.org-brief-body li[data-brief-added] .org-brief-now { color: var(--fg-muted, #86868b); }

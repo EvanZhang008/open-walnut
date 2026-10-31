@@ -235,3 +235,24 @@ describe('a line that ends the wait before the turn\'s wait is noted', () => {
     resetInterruptedWaitsForTest()
   })
 })
+
+describe('a wait interrupted only to ask for words', () => {
+  // 2026-10-31: a look at a parked lead asked it for a Brief refresh, and the lead lost the clock
+  // it had set (a wait with only a clock is not brought back after other interruptions).
+  it('comes back at the turn end with its clock, with no trigger to hold it', async () => {
+    const { resumableWait } = await import('../../src/core/task-wait-resume.js')
+    const leftAt = '2026-10-31T10:00:00.000Z'
+    for (const source of ['brief-refresh', 'choice-recheck']) {
+      resetInterruptedWaitsForTest()
+      expect(waitExitCause('session:input', source), source).toBe('message')
+      noteInterruptedWait('lead1', { waitUntil: '2026-10-31T15:00:00.000Z', leftAt, sessionId: 's1', cause: 'message', source })
+      const task = { id: 'lead1', phase: 'IN_PROGRESS', phase_changed_at: leftAt } as never
+      expect(await resumableWait(task, 's1'), source).toEqual({ waitUntil: '2026-10-31T15:00:00.000Z' })
+    }
+    // A peer's note is not that: with no armed trigger the wait does not come back.
+    resetInterruptedWaitsForTest()
+    noteInterruptedWait('lead1', { waitUntil: '2026-10-31T15:00:00.000Z', leftAt, sessionId: 's1', cause: 'message', source: 'peer' })
+    expect(await resumableWait({ id: 'lead1', phase: 'IN_PROGRESS', phase_changed_at: leftAt } as never, 's1')).toBeNull()
+    resetInterruptedWaitsForTest()
+  })
+})

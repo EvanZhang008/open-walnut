@@ -10,13 +10,13 @@
  *      into the writer's own MEMORY.md): said in the prompt; Walnut cannot judge detail.
  *
  * A Brief whose lines name no task (or, Main's, no VP) is stored with those issues (the page says
- * so) and the writer is asked once, right then, to rewrite it; a line holding a list of asks is
- * noted too. Every next turn-end ask lists what is still wrong. The checks are kept narrow on
- * purpose: a false hit costs a re-ask at every turn end of Main and every lead.
+ * so), and its writer is answered with them (brief_write) and reads them again in brief_read; a
+ * line holding a list of asks is noted too. The checks are kept narrow on purpose: a false hit
+ * nags Main and every lead at each write.
  */
-import { pickLead } from '../org/org-tree.js';
 import type { BriefTask, TaskBrief } from '../user-status.js';
-import { BRIEF_STRUCTURE_RULE, briefSectionsBlock, type BriefSectionKey } from './brief-structure.js';
+import { ADDED_MORE_RE, briefVpOf } from './brief-structure.js';
+export { briefVpOf };
 
 /** One line that breaks a rule: no task, no VP (Main), several things. */
 export type BriefIssue = NonNullable<TaskBrief['issues']>[number];
@@ -54,12 +54,6 @@ function severalThings(line: string): boolean {
 }
 
 /** The VP over a task for Main's Brief: its project's open lead, never the task itself. */
-export function briefVpOf(task: BriefTask, tasks: readonly BriefTask[]): BriefTask | undefined {
-  if (!task.project || task.org_role === 'lead' || task.org_role === 'main') return undefined;
-  const vp = pickLead(tasks as never[], task.project) as BriefTask | undefined;
-  return vp && vp.id !== task.id && vp.phase !== 'COMPLETE' ? vp : undefined;
-}
-
 /**
  * Each <task-ref/> whose id is only the head of a task's id, written out in full (2026-10-27:
  * Main wrote `id="65c5766d"`, and the page drew that pill with no live status: pills, clicks and
@@ -83,6 +77,7 @@ export function briefIssues(text: string, owner: BriefTask, tasks: readonly Brie
   const byId = new Map(tasks.map((t) => [t.id, t] as const));
   const issues: BriefIssue[] = [];
   for (const line of briefItemLines(text)) {
+    if (ADDED_MORE_RE.test(line)) continue;
     const refs = refsOf(line);
     if (!refs.length) { issues.push({ kind: 'no_task', line }); continue; }
     if (severalThings(line)) issues.push({ kind: 'several_things', line });
@@ -93,13 +88,6 @@ export function briefIssues(text: string, owner: BriefTask, tasks: readonly Brie
     if (vp && !refs.includes(vp.id)) issues.push({ kind: 'no_vp', line, vp: { id: vp.id, title: vp.title } });
   }
   return issues;
-}
-
-/** The issues worth an immediate re-ask: a line with no task or no VP, not seen last time. */
-export function briefNeedsRewrite(issues: readonly BriefIssue[], before: readonly BriefIssue[] | undefined): boolean {
-  const key = (i: BriefIssue) => `${i.kind}\u0000${i.line}`;
-  const seen = new Set((before ?? []).map(key));
-  return issues.some((i) => i.kind !== 'several_things' && !seen.has(key(i)));
 }
 
 const quote = (s: string) => s.replace(/"/g, '&quot;');
@@ -120,25 +108,4 @@ export function briefVpLines(owner: BriefTask, tasks: readonly BriefTask[]): str
   return tasks
     .filter((t) => t.org_role === 'lead' && t.phase !== 'COMPLETE')
     .map((t) => `- <task-ref id="${t.id}" label="${quote(t.title)}"/> leads ${[t.project, ...(t.org_leads ?? [])].filter(Boolean).join(', ')}`);
-}
-
-/**
- * The second ask, right after a Brief that broke the rules. A side question does not see the
- * one before it, so this carries the Brief itself and what the first ask gave to write it.
- */
-export function briefFixPrompt(opts: {
-  text: string; issues: readonly BriefIssue[]; main: boolean; vps?: readonly string[];
-  /** briefSectionLines: the team's open work by section, as the first ask gave it. */
-  sections?: Record<BriefSectionKey, readonly string[]>; language?: string; ownId?: string;
-}): string {
-  const own = opts.ownId ? `<task-ref id="${opts.ownId}" label="..."/>` : 'your own task';
-  return `Walnut checked the Brief you just wrote for the user (below) and these lines break its rules:
-${formatBriefIssues(opts.issues).join('\n')}
-<brief>
-${opts.text}
-</brief>
-Rewrite the whole Brief now, keeping every line that is right as it is${opts.language ? `, in ${opts.language}` : ''}: every line starts with the <task-ref/> of the task it is about${opts.main ? ', then the <task-ref/> of the VP who leads it' : ''} (${own} for your own work), holds one thing, and says enough to act on without the chat (which document, repo or release, what the user must decide or do). ${BRIEF_STRUCTURE_RULE}${opts.vps?.length ? `\nYour VPs:\n${opts.vps.join('\n')}` : ''}${opts.sections ? `\nWalnut's lists, from each task's live status:\n${briefSectionsBlock(opts.sections)}` : ''}
-Answer with nothing but:
-FOR_USER_BRIEF:
-<the letter>`;
 }

@@ -13,8 +13,9 @@
  *   working      IN_PROGRESS  it carries on by itself, and its process is still there
  *   done         WAITING      with a leader, which checks and closes it; without one it stays handed back
  *
- * Main moves only to NEED_ACTION, when it is stopped on the user: otherwise it stays as it is (in
- * progress, waiting on the user's next message). A WAITING it is moved to gets the default clock
+ * Main and a lead never move to NEED_ACTION (Needs you is only ever an individual task, 2026-10-31):
+ * a turn of theirs that asks the user keeps its question in their chat, and Main otherwise stays as it
+ * is (waiting on the user's next message or its teams' news). A WAITING it is moved to gets the default clock
  * (prepareRawUpdate), so a task its leader never picks up still comes back.
  *
  * Never over a move made after the turn ended (a person's pick, its leader's, a new turn), never
@@ -44,8 +45,18 @@ export function phaseForReport(
 ): TaskPhase | null {
   const onUser = report.state === 'needs' || (report.state === 'waiting' && (report.waiting_kind === 'you'
     || waitWordsNameUser(report.waiting_on, !!report.waiting_kind && OUTSIDE_WAIT_KINDS.has(report.waiting_kind))));
-  // Main's turn ends on the user's next message as a rule: only a real stop on them moves it.
-  if (task.org_role === 'main') return report.state === 'needs' ? 'NEED_ACTION' : null;
+  // Needs you is only ever an individual task (2026-10-31, the user): Main or a lead whose turn asks
+  // the user something keeps its question in its chat and waits on its teams; it never moves to
+  // NEED_ACTION. Main's turn ends on the user's next message as a rule: nothing else moves it.
+  if (task.org_role === 'main') return null;
+  const phase = individualPhase(report, task, alive, armed, onUser);
+  return task.org_role && phase === 'NEED_ACTION' ? null : phase;
+}
+
+function individualPhase(
+  report: Pick<StatusReport, 'state' | 'waiting_kind' | 'waiting_on'>, task: Pick<Task, 'parent_task_id' | 'org_role'>, alive: boolean,
+  armed: boolean | 'unknown', onUser: boolean,
+): TaskPhase | null {
   if (onUser) return 'NEED_ACTION';
   switch (report.state) {
     case 'working': return alive ? 'IN_PROGRESS' : null;

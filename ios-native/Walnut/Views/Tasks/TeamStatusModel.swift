@@ -179,12 +179,15 @@ enum TeamStatusModel {
         return bare ? day : "\(day) \(time)"
     }
 
-    /// Under a session's own "needs you": when it was last checked, or that it is not verified and
-    /// may be done already. Nil for Walnut's live records (a prompt, a letter, a choice). Mirrors
-    /// `checkedLine` in src/core/user-status.ts.
+    /// Under a session's own "needs you" or a Board choice's: when it was last checked, or that it
+    /// is not verified and may be done already. Nil for Walnut's live records (a prompt, a letter).
+    /// Mirrors `checkedLine` in src/core/user-status.ts.
     static func checkedLine(_ s: WalnutUserStatus?, now: Date = AppClock.now()) -> (text: String, unverified: Bool)? {
-        guard let s, s.state == "needs", s.source == "session",
-              let iso = s.checkedAt, let at = WalnutTask.parseISO(iso) else { return nil }
+        guard let s, s.state == "needs", s.source == "session" || s.source == "choice" else { return nil }
+        guard let iso = s.checkedAt, let at = WalnutTask.parseISO(iso) else {
+            // A Board choice with no recorded time was never checked.
+            return s.source == "choice" && s.unverified == true ? ("Not verified: no check recorded, may be done already", true) : nil
+        }
         let ago = RelativeTime.short(date: at, relativeTo: now)
         // A trigger watches the task, not necessarily this ask: shown, never a check.
         let ran = s.watchedAt.flatMap { WalnutTask.parseISO($0) }

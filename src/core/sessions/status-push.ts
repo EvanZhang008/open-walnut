@@ -28,6 +28,7 @@ import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import type { SessionRecord, Task } from '../types.js';
 import { fallbackUserState, stateWord, type UserState, type UserStatus } from '../user-status.js';
 import { buildWalnutMessage as buildMessage } from '../peers/walnut-message-tag.js';
+import { statusMark } from './brief-fresh.js';
 
 const SUBSCRIBER = 'status-push';
 export const SETTLE_MS = 90_000;
@@ -48,6 +49,8 @@ let quietUntil = 0;
 
 /** How long a re-check turn's Working is held back at most: its end decides what changed. */
 const RECHECK_HOLD_MS = 2 * 60 * 60_000;
+/** How long a Brief refresh turn's Working is held back at most. */
+const REFRESH_HOLD_MS = 30 * 60_000;
 
 const baseline = new Map<string, Seen>();
 /** Asker session id -> task id -> its newest line, riding that session's next message. */
@@ -71,7 +74,7 @@ export function seenOf(task: Pick<Task, 'phase' | 'status' | 'user_status'>): Se
   const state: UserState = done ? 'done' : s?.state ?? fallbackUserState(task.phase, task.status);
   const words = state === 'needs' ? clip(s?.ask) : state === 'waiting' ? clip(s?.waitingOn) : '';
   const label = stateWord(state, !!s?.snoozed) + (state === 'waiting' && s?.kind && s.kind !== 'other' ? ` (${s.kind === 'you' ? 'on you' : s.kind === 'task' ? 'on another task' : s.kind === 'lead' ? 'on its lead' : s.kind})` : '');
-  return { key: `${state}|${state === 'waiting' ? s?.kind ?? '' : ''}|${words}`, label, words, state, ...(s?.snoozed ? { snoozed: true } : {}) };
+  return { key: statusMark(task), label, words, state, ...(s?.snoozed ? { snoozed: true } : {}) };
 }
 
 function hhmm(ms: number): string {
@@ -109,7 +112,11 @@ function note(task: Task, now = Date.now()): void {
   const recheckAt = Date.parse(task.needs_recheck?.at ?? '');
   const from = open?.from ?? was;
   const recheckTurn = next.state === 'working' && from.state === 'needs' && Number.isFinite(recheckAt) && now - recheckAt < RECHECK_HOLD_MS;
-  pending.set(task.id, { taskId: task.id, title: task.title, from, to: next, at: now, ...(recheckTurn ? { holdUntil: recheckAt + RECHECK_HOLD_MS } : {}) });
+  // A Brief refresh turn the user's look started (brief-refresh.ts) is the same: its end decides.
+  const refreshAt = Date.parse(task.brief_refresh?.at ?? '');
+  const refreshTurn = next.state === 'working' && from.state !== 'working' && Number.isFinite(refreshAt) && now - refreshAt < REFRESH_HOLD_MS;
+  const holdUntil = recheckTurn ? recheckAt + RECHECK_HOLD_MS : refreshTurn ? refreshAt + REFRESH_HOLD_MS : undefined;
+  pending.set(task.id, { taskId: task.id, title: task.title, from, to: next, at: now, ...(holdUntil ? { holdUntil } : {}) });
   baseline.set(task.id, next);
   if (!timer && live) {
     timer = setTimeout(() => { timer = null; void flushStatusPush(); }, SETTLE_MS);

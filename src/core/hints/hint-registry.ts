@@ -30,6 +30,7 @@ import {
 } from '../sessions/output-mode.js';
 import { VOICE_REPLY_TEXT } from '../sessions/voice-reply.js';
 import { languageDrift } from './hint-drift-detect.js';
+import { briefHintText, type BriefHintState } from '../sessions/brief-hint.js';
 
 export const HINT_TRIGGERS: readonly MessageHintTrigger[] = [
   'every_turn', 'every_n_turns', 'session_start', 'after_compaction', 'on_change', 'on_drift', 'on_request',
@@ -49,6 +50,8 @@ export interface HintContentInput {
   toldHash?: string;
   /** Main's or a lead's chat: is the user away from it (org/user-away.ts)? Absent elsewhere. */
   away?: { away: boolean; lastSeenAt: number | null } | null;
+  /** Main's or a lead's Brief: how old, what moved since (sessions/brief-hint.ts). Absent elsewhere. */
+  brief?: BriefHintState | null;
 }
 
 export interface HintRender { text: string; arg?: string }
@@ -159,6 +162,21 @@ const BUILT_IN: readonly HintSpec[] = [
       if (i.away.away) return { text: userAwayText(i.away.lastSeenAt) };
       // Back: said once, after an away note; a chat he never left needs no words.
       return i.toldHash === 'away' ? { text: USER_BACK_TEXT } : null;
+    },
+  },
+  {
+    kind: 'brief',
+    label: 'Brief reminder',
+    description: 'Main and the leads: keep the Brief (the letter above their chat) current, written by the node itself with brief_write. Every 3 messages, and when its team moved since it was written.',
+    allowed: SCHEDULED,
+    // 2026-10-31, the user: "每三轮提示他一下 ... 你有什么新的 update，你要自己去写 ... 这就是一个 file".
+    defaults: { enabled: true, triggers: ['session_start', 'after_compaction', 'on_change', 'every_n_turns'], every_turns: 3, placement: 'after' },
+    identity: (i) => (i.brief ? `${i.brief.at ?? 'none'}|${i.brief.key}` : null),
+    render: (i, reasons) => {
+      if (!i.brief) return null;
+      // A rewrite changes what it says; only a Brief that is behind needs words then.
+      if (!i.brief.stale && [...reasons].every((r) => r === 'on_change')) return null;
+      return { text: briefHintText(i.brief) };
     },
   },
 ];
@@ -309,7 +327,7 @@ export function hintApplies(hint: EffectiveHint, target: HintTarget): boolean {
 /** Does any enabled hint restrict by role or agent (so the send must read the task)? */
 export function needsTaskForAudience(hints: readonly EffectiveHint[]): boolean {
   // user-away reads the task to know it is Main or a lead (org/user-away.ts).
-  return hints.some((h) => h.enabled && (h.audience.roles.length > 0 || h.audience.agents.length > 0 || h.everyTurnRoles.length > 0 || h.kind === 'user-away'));
+  return hints.some((h) => h.enabled && (h.audience.roles.length > 0 || h.audience.agents.length > 0 || h.everyTurnRoles.length > 0 || h.kind === 'user-away' || h.kind === 'brief'));
 }
 
 export class HintSettingsError extends Error {

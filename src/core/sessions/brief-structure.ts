@@ -15,7 +15,8 @@
  *   - a section left empty gets one "nothing" line in the Brief's language, and a task's line
  *     written bare becomes a list item.
  */
-import { BRIEF_SECTIONS, fallbackUserState, type BriefSectionTask, type UserState } from '../user-status.js';
+import { BRIEF_SECTIONS, briefTeam, fallbackUserState, type BriefSectionTask, type BriefTask, type UserState } from '../user-status.js';
+import { pickLead } from '../org/org-tree.js';
 
 export type BriefSectionKey = (typeof BRIEF_SECTIONS)[number]['state'];
 
@@ -56,6 +57,38 @@ export function briefSectionOf(task: BriefSectionTask): BriefSectionKey | null {
   return state === 'done' ? null : state;
 }
 
+/** The VP who leads a task's project, named after it on Main's lines; none for a lead or Main itself. */
+export function briefVpOf(task: BriefTask, tasks: readonly BriefTask[]): BriefTask | undefined {
+  if (!task.project || task.org_role === 'lead' || task.org_role === 'main') return undefined;
+  const vp = pickLead(tasks as never[], task.project) as BriefTask | undefined;
+  return vp && vp.id !== task.id && vp.phase !== 'COMPLETE' ? vp : undefined;
+}
+
+/** The tasks whose Needs you a Brief covers: a lead's team, Main's whole org. */
+export function briefAskScope<T extends BriefSectionTask>(owner: BriefSectionTask, tasks: readonly T[]): T[] {
+  return owner.org_role === 'main'
+    ? tasks.filter((t) => !t.plugin_only && t.id !== owner.id)
+    : briefTeam(owner, tasks);
+}
+
+const attr = (v: string) => v.replace(/\s+/g, ' ').trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const words = (v: string) => v.replace(/\s+/g, ' ').trim().replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/** At most this many asks Walnut adds to a letter, newest first, each clipped: the rest are one
+ *  line (ADDED_MORE_RE), so Main's org-wide Needs you never pushes a letter past what its writer
+ *  can edit (brief-write.ts). */
+export const ADDED_ASKS_MAX = 8;
+const ADDED_ASK_CHARS = 200;
+/** Walnut's line for the asks past ADDED_ASKS_MAX: no task of its own, never a rule issue. */
+export const ADDED_MORE_RE = /^- And \d+ more asks? the user: the Task view lists (?:it|them)\.$/;
+
+/** Walnut's line for a task that asks the user and that the letter does not name: its own ask. */
+export function addedAskLine(task: BriefSectionTask, main: boolean, tasks: readonly BriefSectionTask[]): string {
+  const vp = main ? briefVpOf(task, tasks) : undefined;
+  const ask = words(task.user_status?.ask ?? '').slice(0, ADDED_ASK_CHARS) || 'Needs you';
+  return `- <task-ref id="${task.id}" label="${attr(task.title)}"/>${vp ? ` (VP <task-ref id="${vp.id}" label="${attr(vp.title)}"/>)` : ''}: ${ask}`;
+}
+
 /** "- Nothing", "- None", "- 无", "- 暂无": a whole line that only says the section is empty.
  *  Anchored: a real line that merely contains such a word ("对方还没有回复") is the writer's. */
 function saysNothing(line: string): boolean {
@@ -70,12 +103,21 @@ export function emptySectionLine(language?: string, text = ''): string {
   return /chinese|中文|^zh/i.test(language ?? '') || (!language && /[\u4e00-\u9fff]/.test(words)) ? '- 无' : '- None';
 }
 
+function askedAt(t: BriefSectionTask): number {
+  const at = Date.parse(t.user_status?.checkedAt ?? t.user_status?.at ?? t.phase_changed_at ?? '');
+  return Number.isFinite(at) ? at : 0;
+}
+
 export interface StructuredBrief {
   text: string;
   /** The lines put under another section than the one they were written in. */
   moved: number;
   /** The sections that had no heading of their own. */
   added: BriefSectionKey[];
+  /** With `live`: the tasks asking the user that Walnut added to Needs you, and how many lines of
+   *  finished tasks left. */
+  asksAdded?: string[];
+  dropped?: number;
 }
 
 /**
@@ -84,7 +126,14 @@ export interface StructuredBrief {
  */
 export function structureBrief(
   text: string, ownerId: string, tasks: readonly BriefSectionTask[],
-  opts: { language?: string } = {},
+  opts: {
+    language?: string;
+    /** The Brief's owner (Main or a lead): with it the letter is held to the live state too
+     *  (2026-10-31, the user: a task asking him to pick a design was in no Needs you): a task that
+     *  asks the user and that the letter does not name gets its own line in Needs you, and a line
+     *  whose task finished leaves. */
+    live?: BriefSectionTask;
+  } = {},
 ): StructuredBrief {
   const byId = new Map(tasks.map((t) => [t.id, t] as const));
   const lead: string[] = [];
@@ -94,9 +143,17 @@ export function structureBrief(
   let moved = 0;
   // Where the last line went: an indented line under it (a wrapped item) follows it.
   let last: string[] | null = null;
+  // A finished task's line is leaving, with the indented lines under it.
+  let dropping = false;
+  let dropped = 0;
+  const named = new Set<string>();
   for (const raw of text.split('\n')) {
     let line = raw.trimEnd();
+    // Walnut's own count of the asks past the cap is made again below, from the live state.
+    if (opts.live && ADDED_MORE_RE.test(line.trim())) { last = null; continue; }
     const indented = /^\s+\S/.test(line);
+    if (dropping && indented && !REF_RE.test(line)) continue;
+    dropping = false;
     // An indented line under an item is the item's, even when it reads like a label ("  Working:").
     const heading: BriefSectionKey | null = last && indented ? null : headingSection(line);
     if (heading) { current = heading; seen.add(heading); last = null; continue; }
@@ -114,8 +171,11 @@ export function structureBrief(
     // A task's line written bare is a list item, so lines never run together into one paragraph.
     if (/^<task-ref\b/.test(line)) line = `- ${line}`;
     const ref = line.match(REF_RE)?.[1];
+    // A line is about its first task (Main's names the VP second).
+    if (ref) named.add(ref);
     const task = ref && ref !== ownerId ? byId.get(ref) : undefined;
     const target = task ? briefSectionOf(task) : null;
+    if (opts.live && task && !target) { dropping = true; dropped++; last = null; continue; }
     if (target && target !== current) moved++;
     const dest: string[] = target ? body[target] : current ? body[current] : ref && ref === ownerId ? body.working : lead;
     // A sub-item that leaves its item becomes an item of its own: kept indented, it would nest under
@@ -124,6 +184,20 @@ export function structureBrief(
     last = dest;
     last.push(line);
     if (!line.trim()) last = null;
+  }
+  // Every task that asks the user now is in Needs you, in its own words when the letter has none.
+  const added: string[] = [];
+  if (opts.live) {
+    const main = opts.live.org_role === 'main';
+    const missing = briefAskScope(opts.live, tasks)
+      .filter((t) => !named.has(t.id) && briefSectionOf(t) === 'needs' && !t.user_status?.transient)
+      .sort((a, b) => askedAt(b) - askedAt(a));
+    for (const t of missing.slice(0, ADDED_ASKS_MAX)) {
+      body.needs.push(addedAskLine(t, main, tasks));
+      added.push(t.id);
+    }
+    const more = missing.length - ADDED_ASKS_MAX;
+    if (more > 0) body.needs.push(`- And ${more} more ${more === 1 ? 'ask' : 'asks'} the user: the Task view lists ${more === 1 ? 'it' : 'them'}.`);
   }
   const trim = (ls: string[]) => {
     let a = 0; let b = ls.length;
@@ -146,6 +220,7 @@ export function structureBrief(
     text: out.join('\n').trim(),
     moved,
     added: BRIEF_SECTIONS.map((s) => s.state).filter((k) => !seen.has(k)),
+    ...(opts.live ? { asksAdded: added, dropped } : {}),
   };
 }
 

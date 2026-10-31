@@ -28,9 +28,6 @@ import { engineCaps, isAcpEngine } from '../agents/engine-registry.js';
 import { hintDriftHook } from '../hints/hint-drift.js';
 import { toDisplayedUserText } from '../sessions/reference-cards.js';
 import { isAwaitingTurnEnd } from '../sessions/self-complete-stop.js';
-import { briefPrompt, briefSectionLines, keepsBrief, readBrief } from '../sessions/brief.js';
-import { structureBrief } from '../sessions/brief-structure.js';
-import { briefFixPrompt, briefIssues, briefNeedsRewrite, briefVpLines, completeBriefRefs, formatBriefIssues, type BriefIssue } from '../sessions/brief-rules.js';
 import { agentMemoryPrompt, applyAgentMemoryAnswer, keepsAgentMemory, readAgentMemoryField, splitAgentMemory } from '../sessions/agent-memory.js';
 import { setReportPending, __resetReportPending } from '../sessions/report-pending.js';
 
@@ -72,7 +69,6 @@ export function __resetTriageRateLimiter(): void {
   triageLastDispatch.clear();
   lastNotifiedSignal.clear();
   selfReportInFlight.clear();
-  briefFixInFlight.clear();
   triageRuns.clear();
   turnEndedAt.clear();
   finalSummaries.clear();
@@ -308,7 +304,7 @@ This is the MAIN AGENT's task: its NOTE is the user's tracking note for everythi
 export function buildSelfReportPrompt(
   existingNote?: string,
   currentTitle?: string,
-  opts?: { uiLanguage?: string; mainAgent?: boolean; complete?: boolean; brief?: Omit<Parameters<typeof briefPrompt>[0], 'language'>; memory?: { title: string; current?: NonNullable<Task['agent_memory']> } },
+  opts?: { uiLanguage?: string; mainAgent?: boolean; complete?: boolean; memory?: { title: string; current?: NonNullable<Task['agent_memory']> } },
 ): string {
   const existing = existingNote?.trim() ?? '';
   const reorg = existing.length > NOTE_REORG_CAP;
@@ -319,7 +315,7 @@ export function buildSelfReportPrompt(
   // hand-off document for a fresh AI, and plugin content rules validate it.
   const uiLang = nonEnglishUiLanguage(opts?.uiLanguage);
   const tipLanguage = uiLang
-    ? `\nOVERVIEW, RECAP, FOR_USER_ASK, FOR_USER_ASK_OPTIONS, FOR_USER_ASK_MORE, FOR_USER_WAITING_ON, FOR_USER_NOW, FOR_USER_NEXT and FOR_USER_BRIEF are shown to the user in the UI: write them in ${uiLanguageName(uiLang)} (the user's display language), keeping identifiers, file names, and technical terms in their original form. Every other field stays English.`
+    ? `\nOVERVIEW, RECAP, FOR_USER_ASK, FOR_USER_ASK_OPTIONS, FOR_USER_ASK_MORE, FOR_USER_WAITING_ON, FOR_USER_NOW and FOR_USER_NEXT are shown to the user in the UI: write them in ${uiLanguageName(uiLang)} (the user's display language), keeping identifiers, file names, and technical terms in their original form. Every other field stays English.`
     : '';
 
   let noteBlock: string;
@@ -356,7 +352,7 @@ NEXT_STEPS: What you'd do next, or what you need from the human.
 BLOCKERS: Anything blocking, or "none".
 USER_INTENT: <question-pending | workflow-command | autonomous> — gist of user's last message.
 VERIFIED: <ran-and-saw-pass | assumed | not-applicable>.
-${FOR_USER_PROMPT}${opts?.brief ? briefPrompt({ ...opts.brief, ...(uiLang ? { language: uiLanguageName(uiLang) } : {}) }) : ''}${opts?.memory ? agentMemoryPrompt(opts.memory.current, opts.memory.title) : ''}`;
+${FOR_USER_PROMPT}${opts?.memory ? agentMemoryPrompt(opts.memory.current, opts.memory.title) : ''}`;
 }
 
 /** The exact labels emitted by buildSelfReportPrompt. Used to anchor extractField's
@@ -794,68 +790,6 @@ export async function applyTitleDirective(taskId: string, directive: string, exp
 }
 
 
-/** The Brief written to its task, with the lines that break its rules (none: no issues field).
- *  `replacing`: write only while the stored Brief is still the one written at that time. */
-async function storeBrief(
-  sessionId: string, taskId: string, brief: NonNullable<Task['brief']>, issues: readonly BriefIssue[], replacing?: string,
-): Promise<void> {
-  if (issues.length) {
-    log.session.warn('turn-complete-summary: Brief breaks its rules', {
-      sessionId, taskId, count: issues.length, issues: issues.slice(0, 6).map((i) => `${i.kind}: ${i.line.slice(0, 120)}`),
-    });
-  }
-  try {
-    const { updateTaskRaw } = await import('../task-manager.js');
-    // A write to a COMPLETE row would announce the completion again (as the report below).
-    await updateTaskRaw(taskId, { brief: { text: brief.text, at: brief.at, ...(issues.length ? { issues: [...issues] } : {}) } }, {
-      emitEvent: true, source: 'status-report',
-      shouldUpdate: (current) => current.phase !== 'COMPLETE' && (replacing === undefined || current.brief?.at === replacing),
-    });
-  } catch (err) {
-    log.session.debug('turn-complete-summary: brief persist skipped', {
-      sessionId, taskId, error: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
-
-/** The Brief in its three sections (sessions/brief-structure.ts), logged when Walnut fixed its shape. */
-function shapeBrief(sessionId: string, taskId: string, brief: TaskBrief, owner: Task, tasks: readonly Task[], language?: string): TaskBrief {
-  const shaped = structureBrief(brief.text, owner.id, tasks, { ...(language ? { language } : {}) });
-  if (shaped.moved || shaped.added.length) {
-    log.session.info('turn-complete-summary: Brief put in its sections', { sessionId, taskId, moved: shaped.moved, added: shaped.added });
-  }
-  return { ...brief, text: shaped.text };
-}
-
-const BRIEF_FIX_TIMEOUT_MS = 90_000;
-// Its own single-flight, apart from the turn-end ask's: a turn that ends while this runs still
-// gets its whole report, and a Brief that turn writes wins over this answer (storeBrief replacing).
-const briefFixInFlight = new Set<string>();
-
-/** One more ask for a Brief that broke its rules; the answer is kept when it breaks fewer. */
-async function rewriteBrokenBrief(
-  sessionId: string, taskId: string, owner: Task, tasks: Task[], issues: readonly BriefIssue[], askedAt: string,
-  context: Omit<Parameters<typeof briefFixPrompt>[0], 'issues'>,
-): Promise<void> {
-  if (briefFixInFlight.has(sessionId)) return;
-  briefFixInFlight.add(sessionId);
-  let answer = '';
-  try {
-    const { sessionRunner } = await import('../../providers/claude-code-session.js');
-    answer = (await sessionRunner.requestTurnCompleteSelfReport(sessionId, briefFixPrompt({ ...context, issues }), BRIEF_FIX_TIMEOUT_MS)).trim();
-  } catch (err) {
-    log.session.warn('turn-complete-summary: Brief rewrite ask failed', { sessionId, taskId, error: err instanceof Error ? err.message : String(err) });
-    return;
-  } finally {
-    briefFixInFlight.delete(sessionId);
-  }
-  const read = readBrief(extractField(answer, 'FOR_USER_BRIEF'), askedAt || undefined);
-  if (!read) return;
-  const fixed = shapeBrief(sessionId, taskId, completeBriefRefs(read, tasks), owner, tasks, context.language);
-  const still = briefIssues(fixed.text, owner, tasks);
-  log.session.info('turn-complete-summary: Brief rewritten after the rule check', { sessionId, taskId, before: issues.length, after: still.length });
-  if (still.length < issues.length) await storeBrief(sessionId, taskId, fixed, still, askedAt);
-}
 
 /**
  * runTriage: the turn-complete summary work. Invoked from the trailing-debounce
@@ -937,12 +871,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
     let selfReport = '';
     let uiLanguage: string | undefined;
     let mainAgent = false;
-    let brief: Omit<Parameters<typeof briefPrompt>[0], 'language'> | undefined;
-    // The Brief's owner and its world, for the rule check after the answer (sessions/brief-rules.ts).
-    let briefOwner: Task | undefined;
-    let briefTasks: Task[] = [];
     // When the team's statuses were read for the ask: the Brief is dated then.
-    let briefAskedAt = '';
     let memory: { title: string; current?: NonNullable<Task['agent_memory']> } | undefined;
     const askedAt = Date.now();
     try {
@@ -956,22 +885,8 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
         promptedTitle = (taskRow.title ?? '').trim();
         taskPhase = taskRow.phase;
         mainAgent = taskRow.org_role === 'main';
-        // Main and every lead rewrite their Brief at each turn end, handed the team's live status
-        // in its three sections (sessions/brief.ts).
-        if (keepsBrief(taskRow)) {
-          briefAskedAt = new Date().toISOString();
-          const { listTasks } = await import('../task-manager.js');
-          const all = await listTasks().catch(() => [] as Task[]);
-          briefOwner = taskRow;
-          briefTasks = all;
-          brief = {
-            hadBrief: !!taskRow.brief?.text, ownId: taskRow.id, sections: briefSectionLines(taskRow, all),
-            main: taskRow.org_role === 'main', vps: briefVpLines(taskRow, all),
-            ...(taskRow.brief?.issues?.length ? { issues: formatBriefIssues(taskRow.brief.issues) } : {}),
-          };
-        }
         // Main, every lead and every leader keep their own MEMORY.md (sessions/agent-memory.ts).
-        const leads = !brief && (await (await import('../task-manager.js')).getChildTasks(taskRow.id).catch(() => [] as Task[]))
+        const leads = (await (await import('../task-manager.js')).getChildTasks(taskRow.id).catch(() => [] as Task[]))
           .some((c) => c.phase !== 'COMPLETE');
         if (keepsAgentMemory(taskRow, leads)) {
           memory = { title: taskRow.title, ...(taskRow.agent_memory ? { current: taskRow.agent_memory } : {}) };
@@ -993,7 +908,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
       uiLanguage = await configuredUiLanguage();
       selfReport = (await sessionRunner.requestTurnCompleteSelfReport(
         p.sessionId,
-        buildSelfReportPrompt(existingNote, promptedTitle, { uiLanguage, mainAgent, complete: taskPhase === 'COMPLETE', ...(brief ? { brief } : {}), ...(memory ? { memory } : {}) }), SELF_REPORT_TIMEOUT_MS,
+        buildSelfReportPrompt(existingNote, promptedTitle, { uiLanguage, mainAgent, complete: taskPhase === 'COMPLETE', ...(memory ? { memory } : {}) }), SELF_REPORT_TIMEOUT_MS,
       )).trim();
     } catch (err) {
       log.session.warn('turn-complete-summary: provider self-report failed — skipped (next turn will merge)', {
@@ -1161,16 +1076,6 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
     // (a1b) The task's status for the user (FOR_USER_*): what the Board, the Org page and the
     // phone show, derived together with live facts in src/core/user-status.ts.
     const statusReport = readStatusReport(selfReport);
-    // (a1c) Main's or a lead's Brief, the letter above its chat (sessions/brief.ts).
-    const briefRead = brief ? readBrief(extractField(selfReport, 'FOR_USER_BRIEF'), briefAskedAt || undefined) : null;
-    // A task named by the head of its id gets its whole id, so its pill shows its live status;
-    // then the letter is put in its three sections, each line under its task's live status.
-    const briefLanguage = nonEnglishUiLanguage(uiLanguage) ? uiLanguageName(nonEnglishUiLanguage(uiLanguage)!) : undefined;
-    const briefNow = briefRead && briefOwner ? shapeBrief(p.sessionId, taskId, completeBriefRefs(briefRead, briefTasks), briefOwner, briefTasks, briefLanguage) : null;
-    // Checked against the Brief's rules (sessions/brief-rules.ts): stored with what breaks them,
-    // and the writer is asked once more, at the end of this hook, to rewrite it.
-    const briefBroke: BriefIssue[] = briefNow && briefOwner ? briefIssues(briefNow.text, briefOwner, briefTasks) : [];
-    if (briefNow) await storeBrief(p.sessionId, taskId, briefNow, briefBroke);
     // (a1d) Its own MEMORY.md: the entry or rewrite it gave, under the row lock, within the limit
     // (sessions/agent-memory.ts). A rewrite of a file that changed since the ask is skipped.
     const memoryAsk = memory ? readAgentMemoryField(memoryField) : null;
@@ -1305,20 +1210,6 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
       });
     }
 
-    // (e) A Brief with a line naming no task (or no VP) it did not have last time is asked for once
-    // more, now, without holding this hook: the user reads it before the next turn end. Not on the
-    // session's last turn (it stops), a completed task, or an ACP engine (there the ask is a hidden
-    // turn that refuses the user's message meanwhile; its next turn-end ask lists the issues).
-    if (briefNow && brief && briefOwner && !opts.final && taskPhase !== 'COMPLETE'
-      && briefNeedsRewrite(briefBroke, briefOwner.brief?.issues)) {
-      const { getSessionByClaudeId } = await import('../session-tracker.js');
-      if (!isAcpEngine((await getSessionByClaudeId(p.sessionId).catch(() => undefined))?.engine)) {
-        void rewriteBrokenBrief(p.sessionId, taskId, briefOwner, briefTasks, briefBroke, briefAskedAt, {
-          text: briefNow.text, main: briefOwner.org_role === 'main', ...(brief.vps ? { vps: brief.vps } : {}),
-          ...(brief.sections ? { sections: brief.sections } : {}), ownId: briefOwner.id, ...(briefLanguage ? { language: briefLanguage } : {}),
-        }).catch(() => {});
-      }
-    }
   } catch (err) {
     log.session.error('turn-complete-summary hook failed', {
       sessionId: p.sessionId,

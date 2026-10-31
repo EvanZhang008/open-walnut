@@ -24,6 +24,7 @@ import { OrgInlineAnswer, type AnswerFailure, type AnswerSettle } from './OrgInl
 import { OrgAlertSnooze } from './OrgAlertSnooze';
 import { holdOrder } from './hold-order';
 import { writeBriefFolded, type OrgTopView } from './org-brief-model';
+import type { BriefFreshness } from '@open-walnut/brief-fresh';
 import { ORG_TASK_TABS, ORG_TASK_TAB_LABELS, taskTabNote, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
 import { snoozeTakesOff } from '@open-walnut/user-status';
 import { askSummary, lineSetBy, readStatusLine } from './org-ask-form';
@@ -187,7 +188,7 @@ function AskList({ alerts, tasks, vpOf, onOpen, onQuote, canQuote, answers }: {
   );
 }
 
-export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, onView, keepsBrief, briefNew, briefFolded, onBriefFolded, contact, title, onOpenAlert, onQuote, canQuote, answers, onOpenTask, now, placement }: {
+export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, onView, keepsBrief, briefNew, briefFolded, onBriefFolded, briefFresh, briefUpdating, contact, title, onOpenAlert, onQuote, canQuote, answers, onOpenTask, now, placement }: {
   row: ChannelRow;
   rows: readonly ChannelRow[];
   tasks: readonly Task[];
@@ -202,6 +203,9 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
   briefNew: boolean;
   briefFolded: boolean;
   onBriefFolded: (folded: boolean) => void;
+  /** What moved since the Brief was written, and whether its refresh turn is on its way. */
+  briefFresh: BriefFreshness | null;
+  briefUpdating: boolean;
   contact: Task | undefined;
   title: string;
   onOpenAlert: (a: OrgAlertView) => void;
@@ -231,6 +235,8 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
             </button>
           </div>
         )}
+        {/* Its refresh turn is on its way (core/sessions/brief-refresh.ts): the chat and the Brief are being brought up to date. */}
+        {view === 'task' && briefUpdating && <span className="org-top-updating" data-testid="org-top-updating">Updating…</span>}
         {view === 'brief' && brief?.text && (
           <button type="button" className="org-top-fold" data-testid="org-brief-fold" aria-expanded={!briefFolded} onClick={() => { onBriefFolded(!briefFolded); writeBriefFolded(!briefFolded); }}>
             {briefFolded ? 'Show all' : 'Fold'}
@@ -239,7 +245,7 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
       </div>
       {view === 'brief' ? (
         <div className="org-rail-body">
-          <OrgBrief owner={contact} tasks={tasks} name={title} onOpenTask={onOpenTask} now={now} folded={briefFolded} />
+          <OrgBrief owner={contact} tasks={tasks} name={title} onOpenTask={onOpenTask} now={now} folded={briefFolded} fresh={briefFresh} updating={briefUpdating} />
         </div>
       ) : (
         <div className="org-task-view" data-testid="org-task-view" data-tab={tab}>

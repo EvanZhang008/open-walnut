@@ -34,6 +34,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
+import { role } from '../../core/server-role.js'
 import { bus } from '../../core/event-bus.js'
 import { emitSse, attachSse, sseConnCount } from '../sse-channels.js'
 import { sessionStreamBuffer, budgetSnapshotBlocks } from '../session-stream-buffer.js'
@@ -356,6 +357,12 @@ sessionStreamV1Router.get('/sessions/:id/stream', async (req: Request, res: Resp
         log.web.debug('session stream closed', { sessionId, remaining: sseConnCount(channelKey(sessionId)) })
       },
     })
+    // The phone opened Main's or a lead's chat: a stale Brief gets its one refresh turn
+    // (core/sessions/brief-refresh.ts; any other session answers not_org_node at once).
+    if (role() === 'leader' && record.taskId) {
+      const taskId = record.taskId
+      void import('../../core/sessions/brief-refresh.js').then((m) => m.requestBriefRefresh(taskId, 'phone')).catch(() => {})
+    }
   } catch (err) {
     next(err)
   }

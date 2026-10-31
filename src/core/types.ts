@@ -929,9 +929,12 @@ export interface Task {
    *  `status_report`, and kept current by user-status-sync.ts. Every surface (Board, Org, task
    *  list, iOS) reads this instead of the phase. Local-only, payload blob. */
   user_status?: UserStatus;
-  /** Main's or a lead's Brief: the short letter to the user it rewrites at every turn end
-   *  (FOR_USER_BRIEF), shown above its chat on the Org page. Local-only, payload blob. */
+  /** Main's or a lead's Brief: the short letter to the user its session edits itself
+   *  (brief_write, sessions/brief-write.ts), shown above its chat on the Org page. Local-only, payload blob. */
   brief?: TaskBrief;
+  /** The last refresh turn Walnut asked of Main or a lead because the user opened it while its
+   *  Brief was stale (src/core/sessions/brief-refresh.ts). Local-only, payload blob. */
+  brief_refresh?: import('./sessions/brief-fresh.js').BriefRefreshRecord | null;
   /** Its latest result (src/core/peers/structured-reply.ts): from its session's reply to a request
    *  (`task_send` with `in_reply_to`) or from the call that completed it, with `result` / `evidence`
    *  / `not_done`. A non-empty `not_done` not yet taken up or dropped reads as Partial on the Board,

@@ -303,6 +303,27 @@ orgV1Router.put('/org/settings', async (req: Request, res: Response, next: NextF
   }
 })
 
+// POST /api/v1/org/nodes/:id/brief-refresh { by?: 'web' | 'phone' } → { sent, why?, moved? }
+// The user is looking at Main or a lead: when its Brief is stale, Walnut asks it for one refresh
+// turn, at most once per 15 minutes (src/core/sessions/brief-refresh.ts). A test run on the real
+// Walnut (an automated browser) never starts one.
+orgV1Router.post('/org/nodes/:id/brief-refresh', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    primaryOnly('A Brief refresh is asked')
+    const { TEST_RUN_HEADER, parseTestRunLabel, testRunMarkingEnabled } = await import('../../core/test-run.js')
+    if (parseTestRunLabel(req.headers[TEST_RUN_HEADER]) && await testRunMarkingEnabled()) {
+      res.json({ sent: false, why: 'test_run' })
+      return
+    }
+    const raw = (req.body ?? {}) as { by?: unknown }
+    const by = header(req, 'x-walnut-caller-sid') ? 'agent' : raw.by === 'phone' ? 'phone' : 'web'
+    const { requestBriefRefresh } = await import('../../core/sessions/brief-refresh.js')
+    res.json(await requestBriefRefresh(String(req.params.id), by))
+  } catch (err) {
+    sendError(res, next, err)
+  }
+})
+
 // POST /api/v1/org/report { of?, since?, at?, send? } → { report } | { letterId } | { scheduledAt }
 // Main's or a lead's report for the user (src/core/org/morning-report.ts): shown now, sent now, or
 // scheduled for `at` ("08:00", an ISO time, "8h"). `of` defaults to the calling session's task.

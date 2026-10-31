@@ -197,15 +197,15 @@ afterAll(async () => {
 beforeEach(() => __resetTriageRateLimiter())
 
 describe('MEMORY.md in the turn-end self-report', () => {
-  it('asks a lead after its Brief and stores the entry; the Brief stops where the memory starts', async () => {
+  it('asks a lead for its memory with no Brief (it writes that itself); a stray Brief field is neither stored nor memory', async () => {
+    const before = (await getTask(lead.id)).brief
     const fake = fakeSession(LEAD_SID, REPORT('**Needs you:** nothing.', 'append: The fence supplier answers by Friday.'))
     await runTriage(payload(LEAD_SID, lead))
     const prompt = fake.askSideQuestion.mock.calls[0]![0] as string
-    expect(prompt.indexOf('FOR_USER_BRIEF:')).toBeGreaterThan(0)
-    expect(prompt.indexOf('AGENT_MEMORY:')).toBeGreaterThan(prompt.indexOf('FOR_USER_BRIEF:'))
-    expect(prompt).toContain('a deadline days away, a reminder or a thing for later goes into your own MEMORY.md')
+    expect(prompt).not.toContain('FOR_USER_BRIEF')
+    expect(prompt).toContain('AGENT_MEMORY:')
     const stored = await getTask(lead.id)
-    expect(stored.brief?.text).toBe('### Needs you\n- nothing.\n\n### Working\n- None\n\n### Waiting / snoozed\n- None')
+    expect(stored.brief).toEqual(before)
     expect(stored.agent_memory?.text).toMatch(/^- \d{4}-\d{2}-\d{2}: The fence supplier answers by Friday\.$/)
   })
 

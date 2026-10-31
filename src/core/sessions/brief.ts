@@ -7,13 +7,13 @@
  *
  * Only the letter, in three sections (2026-10-30, the user: "brief 就是 AI 写的一个 brief. That's
  * it", with Needs you, Working and Waiting / snoozed: BRIEF_SECTIONS). Kept current by the
- * program, not by the session remembering to: every turn end's self-report asks for it
- * (FOR_USER_BRIEF) and hands it the team's live status as those three lists, and the stored letter
- * is put in that shape (brief-structure.ts). The page shows each task it names with its live
- * status dot; nothing else is added to it.
+ * node itself, a document it edits any time (brief-write.ts, 2026-10-31); Walnut reminds it (the
+ * `brief` message hint), hands it the team's live status as those three lists and these rules
+ * (brief_read), and every write is put in that shape (brief-structure.ts). The page shows each
+ * task it names with its live status dot.
  */
 import {
-  BRIEF_MAX_CHARS, BRIEF_SECTIONS, COMPLETE_IS_VERIFIED, agoWords, briefTeam, resultIsPartial, type TaskBrief,
+  BRIEF_SECTIONS, COMPLETE_IS_VERIFIED, agoWords, briefTeam, resultIsPartial,
 } from '../user-status.js';
 import type { Task } from '../types.js';
 import { briefVpOf } from './brief-rules.js';
@@ -47,10 +47,12 @@ export function briefSectionLines(owner: Task, tasks: readonly Task[], now = Dat
     let words = '';
     if (section === 'needs') {
       const checked = s?.checkedAt ? Date.parse(s.checkedAt) : NaN;
-      const when = s?.source !== 'session' ? 'Walnut\'s live record'
-        : !Number.isFinite(checked) ? 'never checked'
+      // A Board choice is checked like a session's own ask (its write on the Board is its check).
+      const by = s?.source === 'choice' ? 'on its Board' : 'by its session';
+      const when = s?.source !== 'session' && s?.source !== 'choice' ? 'Walnut\'s live record'
+        : !Number.isFinite(checked) ? (s.unverified ? 'NOT VERIFIED: never checked, the user may have done it already' : 'never checked')
           : s.unverified ? `NOT VERIFIED: last checked ${agoWords(now - checked)}, the user may have done it already`
-            : `checked ${agoWords(now - checked)} by its session`;
+            : `checked ${agoWords(now - checked)} ${by}`;
       words = `${s?.ask ? `"${flat(s.ask).slice(0, 200)}"` : 'needs the user'} (${when})`;
     } else if (section === 'waiting') {
       // Snoozed (src/core/snooze.ts, on the status itself): its date, and the ask it holds back.
@@ -78,9 +80,10 @@ export function briefSectionLines(owner: Task, tasks: readonly Task[], now = Dat
   return lines;
 }
 
-/** The self-report's Brief section (after the FOR_USER lines), for Main and leads only. `vps`
- *  (Main's) are the refs it names beside each worker; `issues` what broke the rules last time. */
-export function briefPrompt(opts: {
+/** How to write the Brief, returned with it by brief_read (GET /api/v1/tasks/:id/brief) for Main
+ *  and the leads. `vps` (Main's) are the refs it names beside each worker; `issues` what broke the
+ *  rules in the stored letter; `sections` the team's open work from the live statuses. */
+export function briefRules(opts: {
   hadBrief: boolean; language?: string; ownId?: string;
   main?: boolean; vps?: readonly string[]; issues?: readonly string[];
   /** briefSectionLines: the team's open work by section, from the live statuses. */
@@ -91,20 +94,9 @@ export function briefPrompt(opts: {
     ? `EVERY line names two tasks: first the <task-ref id="..." label="..."/> of the task doing the work, then the <task-ref/> of the VP who leads it (${own} alone for your own work, the VP alone for the VP's own work).${opts.vps?.length ? `\nYour VPs:\n${opts.vps.join('\n')}` : ''}\n`
     : `EVERY line starts with the <task-ref id="..." label="..."/> of the task it is about (the worker that owns it; ${own} for your own work). `;
   const broke = opts.issues?.length
-    ? `\nWalnut found these lines of your last Brief breaking the rules; the new one must not:\n${opts.issues.join('\n')}`
+    ? `\nWalnut found these lines of your Brief breaking the rules; fix them:\n${opts.issues.join('\n')}`
     : '';
-  return `
-Then your BRIEF, the short letter the user reads at the top of your chat instead of scrolling it. ${opts.hadBrief ? 'Rewrite it whole' : 'Write it'} every time (never "unchanged"): Markdown, plain words${opts.language ? `, in ${opts.language}` : ''}, the headings as given. ${BRIEF_STRUCTURE_RULE} Under each heading one line per piece of work: under Needs you exactly what the user must decide or do; under Working what it is doing now; under Waiting / snoozed what it waits on and on whom. One thing per line: several asks are several lines, each with its task. ${refs}Each line says enough to act on without the chat: which document, repo or release, and exactly what the user must decide or do. Only the asks in Walnut's Needs you list need the user; one NOT VERIFIED may be done already: write it as "may be done, being checked", never as a step the user still owes. Name tasks with <task-ref/>, never a bare id. ${COMPLETE_IS_VERIFIED} Keep it to what matters now, at most 15 lines of work: a deadline days away, a reminder or a thing for later goes into your own MEMORY.md (asked below), not here. No bold labels, no codenames, hashes or file names.
+  return `Your BRIEF is the short letter the user reads at the top of your chat instead of scrolling it. ${opts.hadBrief ? 'Edit the lines that changed' : 'Write it'} with brief_write: Markdown, plain words${opts.language ? `, in ${opts.language}` : ''}, the headings as given. ${BRIEF_STRUCTURE_RULE} Under each heading one line per piece of work: under Needs you exactly what the user must decide or do; under Working what it is doing now; under Waiting / snoozed what it waits on and on whom. One thing per line: several asks are several lines, each with its task. ${refs}Each line says enough to act on without the chat: which document, repo or release, and exactly what the user must decide or do. Only the asks in Walnut's Needs you list need the user; one NOT VERIFIED may be done already: write it as "may be done, being checked", never as a step the user still owes. Name tasks with <task-ref/>, never a bare id. ${COMPLETE_IS_VERIFIED} Keep it to what matters now, at most 15 lines of work: a deadline days away, a reminder or a thing for later goes into your own memory, not here. No bold labels, no codenames, hashes or file names. Walnut removes a finished task's line and adds any ask you left out, in that task's own words.
 Walnut's lists, from each task's live status now (not from your memory):
-${briefSectionsBlock(opts.sections)}${broke}
-FOR_USER_BRIEF:
-<the letter>`;
-}
-
-/** The Brief out of a self-report, or null when it wrote none. A line of bare emphasis marks
- *  at its top (a label bold left open) is dropped. */
-export function readBrief(field: string, nowIso: string = new Date().toISOString()): TaskBrief | null {
-  const text = field.replace(/^<the letter>\s*/i, '').replace(/^(?:[ \t]*[*_]+[ \t]*\r?\n)+/, '').trim();
-  if (!text || /^(unchanged|none|n\/a)\.?$/i.test(text)) return null;
-  return { text: text.length > BRIEF_MAX_CHARS ? `${text.slice(0, BRIEF_MAX_CHARS - 1).trimEnd()}…` : text, at: nowIso };
+${briefSectionsBlock(opts.sections)}${broke}`;
 }

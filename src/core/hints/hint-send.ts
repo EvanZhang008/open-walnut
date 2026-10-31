@@ -23,6 +23,7 @@ import { effectiveHints, hintApplies, needsTaskForAudience, type EffectiveHint, 
 import { dueReasons } from './hint-schedule.js';
 import { hookStatementVoid } from '../sessions/hook-statement.js';
 import type { AwayState } from '../org/user-away.js';
+import type { BriefHintState } from '../sessions/brief-hint.js';
 
 type HintRecord = Pick<SessionRecord, 'output_mode' | 'output_mode_injected' | 'hintState' | 'lastCompactUuid' | 'lastCompactAt'>
   & Partial<Pick<SessionRecord, 'claudeSessionId' | 'taskId'>>;
@@ -101,6 +102,8 @@ export function planHints(input: {
   sentBy?: 'person' | 'agent';
   /** Main's or a lead's chat: the user's presence there (org/user-away.ts). */
   away?: { away: boolean; lastSeenAt: number | null } | null;
+  /** Main's or a lead's Brief (sessions/brief-hint.ts). */
+  brief?: BriefHintState | null;
   /** A person typed this message into the chat (not a letter's answer): he is in it. */
   inChat?: boolean;
 }): HintPlan {
@@ -115,7 +118,7 @@ export function planHints(input: {
     const away = input.inChat && input.away ? { away: false, lastSeenAt: Date.now() } : input.away;
     const content = {
       config: input.config, record: input.record ?? null, ...(request ? { request } : {}), ...(told ? { toldHash: told.hash } : {}),
-      ...(away ? { away } : {}),
+      ...(away ? { away } : {}), ...(input.brief ? { brief: input.brief } : {}),
     };
     const identity = hint.identity(content);
     if (identity === null) continue;
@@ -187,7 +190,7 @@ export async function writeHintState(
   }
 }
 
-async function targetFor(sessionId: string, record: HintRecord | null | undefined, hints: readonly EffectiveHint[]): Promise<{ target: HintTarget; away: AwayState | null }> {
+async function targetFor(sessionId: string, record: HintRecord | null | undefined, hints: readonly EffectiveHint[]): Promise<{ target: HintTarget; away: AwayState | null; brief?: BriefHintState | null }> {
   if (!record?.taskId || !needsTaskForAudience(hints)) return { target: { sessionId }, away: null };
   try {
     const { listTasksByIds } = await import('../task-manager.js');
@@ -196,9 +199,22 @@ async function targetFor(sessionId: string, record: HintRecord | null | undefine
     // Only Main and the leads hear whether the user is in their chat (hint user-away).
     const wantsAway = (target.role === 'main' || target.role === 'lead') && hints.some((h) => h.kind === 'user-away' && h.enabled);
     const away = wantsAway ? await import('../org/user-away.js').then((m) => m.userAwayFrom(task)).catch(() => null) : null;
-    return { target, away };
+    const brief = await briefFor(task, target, hints);
+    return { target, away, brief };
   } catch {
     return { target: { sessionId }, away: null };
+  }
+}
+
+/** Main's or a lead's Brief state, for the `brief` hint (sessions/brief-hint.ts); null elsewhere. */
+async function briefFor(task: Task | undefined | null, target: HintTarget, hints: readonly EffectiveHint[]): Promise<BriefHintState | null> {
+  if (!task || (target.role !== 'main' && target.role !== 'lead') || !hints.some((h) => h.kind === 'brief' && h.enabled)) return null;
+  try {
+    const { listTasks } = await import('../task-manager.js');
+    const { briefHintStateOf } = await import('../sessions/brief-hint.js');
+    return briefHintStateOf(task, await listTasks());
+  } catch {
+    return null;
   }
 }
 
@@ -269,12 +285,12 @@ export async function prepareHintedSend(
   try {
     const config = opts.config !== undefined ? opts.config : await import('../config-manager.js').then((m) => m.getConfig()).catch(() => null);
     const hints = effectiveHints(config);
-    const { target, away } = await targetFor(sessionId, record, hints);
+    const { target, away, brief } = await targetFor(sessionId, record, hints);
     // A message composed upstream (the companion's voice hint) keeps those blocks.
     const upstream = opts.upstreamBlocks?.length ? splitHinted(message, opts.upstreamBlocks) : null;
     const words = upstream ? upstream.text : message;
     const plan = planHints({
-      hints, target, record, config, away, inChat: opts.inChat ?? opts.sentBy === 'person',
+      hints, target, record, config, away, brief, inChat: opts.inChat ?? opts.sentBy === 'person',
       ...(opts.requested ? { requested: opts.requested } : {}),
       ...(upstream ? { skip: new Set(upstream.kinds) } : {}),
       ...(opts.sentBy ? { sentBy: opts.sentBy } : {}),
@@ -316,7 +332,7 @@ export async function prepareHintedSend(
  */
 export const QUEUE_HINT_SOURCES: ReadonlySet<string> = new Set([
   'routine-trigger', 'routine-watcher', 'wait-until', 'peer', 'walnut-notify',
-  'human-inbox', 'auto-continue', 'auto-recover', 'app-state', 'cli',
+  'human-inbox', 'auto-continue', 'auto-recover', 'app-state', 'cli', 'brief-refresh', 'choice-recheck',
 ]);
 
 /**
@@ -372,8 +388,10 @@ export async function stateHintsAfterCompaction(
     const away = record.taskId && (target.role === 'main' || target.role === 'lead') && hints.some((h) => h.kind === 'user-away' && h.enabled)
       ? await import('../org/user-away.js').then((m) => m.userAwayFrom({ id: record.taskId!, org_role: task?.org_role }, now)).catch(() => null)
       : null;
+    const owner = record.taskId ? await import('../task-manager.js').then((m) => m.getTask(record.taskId!)).catch(() => null) : null;
+    const brief = owner ? await briefFor(owner, target, hints) : null;
     const plan = planHints({
-      hints, target, record, config: cfg, afterCompaction: true, away,
+      hints, target, record, config: cfg, afterCompaction: true, away, brief,
     });
     if (!plan.carried.length) return '';
     await writeHintState(record.claudeSessionId, (cur) => ({

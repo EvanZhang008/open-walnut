@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { phaseDerivedFields } from '../../src/core/phase.js';
 import { taskView } from '../../src/ops/task-execution.js';
-import { briefPrompt, briefSectionLines } from '../../src/core/sessions/brief.js';
+import { briefRules, briefSectionLines } from '../../src/core/sessions/brief.js';
 import { buildSelfReportPrompt } from '../../src/core/session-hooks/builtins.js';
 import { COMPLETE_IS_VERIFIED } from '../../src/core/user-status.js';
 import type { Task } from '../../src/core/types.js';
@@ -47,7 +47,7 @@ describe('COMPLETE counts as verified', () => {
   });
 
   it('the prompts say it', () => {
-    expect(briefPrompt({ hadBrief: true })).toContain(COMPLETE_IS_VERIFIED);
+    expect(briefRules({ hadBrief: true })).toContain(COMPLETE_IS_VERIFIED);
     expect(buildSelfReportPrompt('', 'Phone video', { complete: true })).toContain('This task is COMPLETE: the user closed it, so it is verified.');
     expect(buildSelfReportPrompt('', 'Phone video', {})).not.toContain('This task is COMPLETE');
     expect(buildSelfReportPrompt('', 'Main', { mainAgent: true })).toContain('whose task is COMPLETE, becomes one short [DONE] line');

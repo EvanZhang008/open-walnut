@@ -82,7 +82,14 @@ const INTERRUPTING_SEND_SOURCES: ReadonlySet<string> = new Set([
   'walnut-notify', // a subtask's status notice, a trigger-health note
   'auto-continue', // session-auto-continue.ts AUTO_CONTINUE_SOURCE
   'auto-recover',  // sessions/auto-recover-env.ts AUTO_RECOVER_SOURCE
+  'brief-refresh', // sessions/brief-refresh.ts: the user opened a node whose Brief is stale
+  'choice-recheck', // sessions/needs-recheck.ts: a Board owner asked to confirm a choice
 ]);
+
+/** Sends Walnut makes only to ask for words (a Brief, a check of a Board choice): the wait they
+ *  interrupt comes back at the turn end whatever held it, its clock included, because nothing the
+ *  task waited for came (2026-10-31: a look at a parked lead lost the clock it had set). */
+const WORDS_ONLY_SOURCES: ReadonlySet<string> = new Set(['brief-refresh', 'choice-recheck']);
 
 /**
  * The cause a WAITING → IN_PROGRESS edge records, or null when its turn ends the wait for good.
@@ -278,6 +285,7 @@ export async function resumableWait(task: Readonly<Task>, sessionId: string | un
   }
   // Another session of the task ending its turn is not the end of this one.
   if (entry.sessionId && sessionId && entry.sessionId !== sessionId) return null;
+  if (entry.cause === 'message' && entry.source && WORDS_ONLY_SOURCES.has(entry.source)) return { waitUntil: entry.waitUntil };
   if (entry.cause === 'self') {
     const { sessionRunner } = await import('../providers/claude-code-session.js');
     const origin = sessionId ? sessionRunner.findSessionByClaudeId(sessionId)?.lastResultOrigin : undefined;

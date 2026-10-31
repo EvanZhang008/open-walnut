@@ -5,8 +5,8 @@
  */
 import { describe, it, expect } from 'vitest'
 import type { Task } from '../../../src/core/types.js'
-import { briefFixPrompt, briefIssues, briefNeedsRewrite, briefVpLines, formatBriefIssues, completeBriefRefs } from '../../../src/core/sessions/brief-rules.js'
-import { briefPrompt, briefSectionLines } from '../../../src/core/sessions/brief.js'
+import { briefIssues, briefVpLines, formatBriefIssues, completeBriefRefs } from '../../../src/core/sessions/brief-rules.js'
+import { briefRules, briefSectionLines } from '../../../src/core/sessions/brief.js'
 
 const t = (over: Partial<Task>): Task => ({ title: 'x', phase: 'IN_PROGRESS', ...over } as Task)
 const main = t({ id: 'main', title: 'Main', org_role: 'main', project: 'Ask Walnut' })
@@ -69,35 +69,12 @@ describe("Main's Brief", () => {
     const lists = briefSectionLines(main, [main, lead, vp2, docSync, mine])
     expect(lists.working).toContain(`- ${ref(fence)} (VP ${ref(vp2)}): building the fence`)
     expect(lists.waiting).toContain(`- ${ref(vp)}: waits on a supplier`)
-    const prompt = briefPrompt({ hadBrief: true, main: true, vps: briefVpLines(main, all), issues: ['- names no task: x'] })
+    const prompt = briefRules({ hadBrief: true, main: true, vps: briefVpLines(main, all), issues: ['- names no task: x'] })
     expect(prompt).toContain('names two tasks: first the <task-ref id="..." label="..."/> of the task doing the work, then the <task-ref/> of the VP who leads it')
     expect(prompt).toContain(`Your VPs:\n- ${ref(vp)} leads Lighthouse`)
-    expect(prompt).toContain('Walnut found these lines of your last Brief breaking the rules')
+    expect(prompt).toContain('Walnut found these lines of your Brief breaking the rules')
     expect(prompt).toContain('One thing per line')
     expect(prompt).toContain('which document, repo or release')
-  })
-
-  it('the rewrite ask carries the Brief, the VPs, the lists, the structure and the language, and ends on the field', () => {
-    const ask = briefFixPrompt({
-      text: '- The docs sync can be pushed.', issues: [{ kind: 'no_task', line: '- The docs sync can be pushed.' }], main: true,
-      vps: briefVpLines(main, all), sections: { needs: [], working: [`- ${ref(fence)}: building`], waiting: [] }, language: 'Chinese', ownId: 'main',
-    })
-    expect(ask).toContain('- names no task (start it with the <task-ref/> of the task it is about): - The docs sync can be pushed.')
-    expect(ask).toContain('<brief>\n- The docs sync can be pushed.\n</brief>')
-    expect(ask).toContain('keeping every line that is right as it is, in Chinese')
-    expect(ask).toContain('then the <task-ref/> of the VP who leads it')
-    expect(ask).toContain(`Your VPs:\n- ${ref(vp)} leads Lighthouse`)
-    expect(ask).toContain(`### Working\n- ${ref(fence)}: building`)
-    expect(ask).toContain('"### Needs you", "### Working", "### Waiting / snoozed"')
-    expect(ask).toMatch(/FOR_USER_BRIEF:\n<the letter>$/)
-  })
-
-  it('re-asks only for a new line with no task or no VP', () => {
-    const noTask = { kind: 'no_task' as const, line: '- a' }
-    expect(briefNeedsRewrite([noTask], undefined)).toBe(true)
-    expect(briefNeedsRewrite([noTask], [noTask])).toBe(false)
-    expect(briefNeedsRewrite([{ kind: 'several_things', line: '- b' }], undefined)).toBe(false)
-    expect(briefNeedsRewrite([], undefined)).toBe(false)
   })
 
   it('never asks for a VP whose lead is complete', () => {

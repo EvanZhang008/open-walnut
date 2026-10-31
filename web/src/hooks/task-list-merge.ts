@@ -44,6 +44,8 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
   if (sw(a) !== sw(b)) return false;
   // Main's or a lead's Brief (Org page): its rewrite leaves updated_at alone.
   if (a.brief?.at !== b.brief?.at || a.brief?.text !== b.brief?.text) return false;
+  // Its refresh turn asked (sessions/brief-refresh.ts): the Brief reads "Updating" until it lands.
+  if ((a.brief_refresh?.at ?? null) !== (b.brief_refresh?.at ?? null)) return false;
   // The org's own fields (the Org page and its chart): a VP's name and instructions, a VP made
   // only to put projects under, and those projects are written raw, leaving updated_at alone.
   if (a.org_role !== b.org_role || a.org_name !== b.org_name || a.org_vp_only !== b.org_vp_only

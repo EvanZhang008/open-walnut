@@ -1966,6 +1966,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // Whether the user is in Main's or a lead's chat (src/core/org/user-away.ts), and the reports he asked for.
     void import('../core/org/user-away.js').then((m) => m.startUserAway()).catch(() => {})
     if (role() === 'leader') void import('../core/org/morning-report.js').then((m) => m.startReportClock()).catch(() => {})
+    // A look at Main or a lead whose Brief is stale asks it for one refresh turn (src/core/sessions/brief-refresh.ts).
+    if (role() === 'leader') void import('../core/sessions/brief-refresh.js').then((m) => m.startBriefRefreshLooks()).catch(() => {})
     // A completed task's own "please check this" letters leave the inbox (src/core/human-inbox/complete-archive.ts).
     const { startCompleteArchive } = await import('../core/human-inbox/complete-archive.js')
     startCompleteArchive()
@@ -2334,6 +2336,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // Reads work on a replica; writes are primary-only (501).
   app.use('/api/v1', boardV1Router)
   app.use('/api/v1', (await import('./routes/agent-memory-v1.js')).agentMemoryV1Router)
+  app.use('/api/v1', (await import('./routes/brief-v1.js')).briefV1Router)
   // The message-hint registry: list, change, reset (reads anywhere, writes primary-only).
   app.use('/api/v1', (await import('./routes/hints-v1.js')).hintsV1Router)
   // When this home first ran the hint registry: only older rows can carry the old bracket lines.
@@ -6563,6 +6566,7 @@ export async function stopServer(): Promise<void> {
   void import('../core/user-status-sync.js').then((m) => m.stopUserStatusSync()).catch(() => { /* never started */ })
   void import('../core/sessions/status-push.js').then((m) => m.stopStatusPush()).catch(() => { /* never started */ })
   void import('../core/sessions/needs-recheck.js').then((m) => m.stopNeedsRecheck()).catch(() => { /* never started */ })
+  void import('../core/sessions/brief-refresh.js').then((m) => m.stopBriefRefreshLooks()).catch(() => { /* never started */ })
   void import('../core/status-consistency.js').then((m) => m.stopStatusCheck()).catch(() => { /* never started */ })
   void import('../core/human-inbox/complete-archive.js').then((m) => m.stopCompleteArchive()).catch(() => { /* never started */ })
   void import('../core/org/lead-waits.js').then((m) => m.stopLeadWaits()).catch(() => { /* never started */ })

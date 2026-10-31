@@ -157,10 +157,12 @@ describe('the lists the ask hands the writer', () => {
 describe('the Brief view is the letter alone', () => {
   // Every element OrgBrief.tsx draws, by test id. A new one under the letter (a footer, a list of
   // what moved, cards) fails here: what needs the user lives in the Status view.
-  it('draws only the letter, its written time and its empty state', () => {
+  // Its head says when it was written, what moved since and a refresh on its way (2026-10-31: a VP's
+  // Brief read 3.5 hours old with nothing saying so).
+  it('draws only the letter, its head (written, moved, updating) and its empty state', () => {
     const src = fs.readFileSync(path.join(import.meta.dirname, '../../../web/src/components/org/OrgBrief.tsx'), 'utf8')
     const ids = [...src.matchAll(/data-testid="([^"]+)"/g)].map((m) => m[1]).sort()
-    expect(ids).toEqual(['org-brief', 'org-brief', 'org-brief-body', 'org-brief-foot'])
+    expect(ids).toEqual(['org-brief', 'org-brief', 'org-brief-body', 'org-brief-head', 'org-brief-moved', 'org-brief-updating'])
     expect(src).not.toMatch(/<[A-Z]\w*(?<!Fragment)\s/)
   })
 })

@@ -71,6 +71,11 @@ final class TeamStatusModelTests: XCTestCase {
         // Walnut's own live records (a letter) and an older server's status carry no line.
         XCTAssertNil(TeamStatusModel.checkedLine(.init(state: "needs", ask: "Answer the letter", source: "letter"), now: now))
         XCTAssertNil(TeamStatusModel.checkedLine(.init(state: "needs", ask: "Sign in", source: "session"), now: now))
+        // A Board choice is stamped when it was written; one with no time was never checked.
+        let choice = WalnutUserStatus(state: "needs", ask: "When?", source: "choice", checkedAt: iso(now.addingTimeInterval(-3600)))
+        XCTAssertEqual(TeamStatusModel.checkedLine(choice, now: now)?.unverified, false)
+        XCTAssertEqual(TeamStatusModel.checkedLine(.init(state: "needs", ask: "When?", source: "choice", unverified: true), now: now)?.text,
+                       "Not verified: no check recorded, may be done already")
     }
 
     func testADoneTaskNeverReadsStuck() {

@@ -33,10 +33,12 @@ describe('the state is the phase', () => {
     expect(deriveUserStatus({ phase: 'IN_PROGRESS', status: 'done' }, NOW).state).toBe('done')
   })
 
-  it('in progress is working while something runs, else says on whom it waits', () => {
+  // 2026-10-31, the user: "working 就是他现在必须正在 working ... 这个在任何地方都是这样".
+  it('in progress is working only while a turn runs, else says on whom it waits', () => {
     expect(deriveUserStatus({ phase: 'IN_PROGRESS', hasSession: true, processStatus: 'running' }, NOW).state).toBe('working')
-    expect(deriveUserStatus({ phase: 'IN_PROGRESS', hasSession: false }, NOW).state).toBe('working')
-    expect(deriveUserStatus({ phase: 'IN_PROGRESS', hasSession: true, processStatus: 'idle', report: report({ state: 'working' }) }, NOW).state).toBe('working')
+    expect(deriveUserStatus({ phase: 'IN_PROGRESS', hasSession: false }, NOW)).toMatchObject({ state: 'waiting', kind: 'not-started' })
+    expect(deriveUserStatus({ phase: 'IN_PROGRESS', hasSession: true, processStatus: 'idle', report: report({ state: 'working' }) }, NOW))
+      .toMatchObject({ state: 'waiting', kind: 'other', waitingOn: expect.stringContaining('carries on by itself') })
     expect(deriveUserStatus({ phase: 'IN_PROGRESS', hasSession: true, processStatus: 'idle', isMain: true }, NOW))
       .toMatchObject({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams' })
     expect(deriveUserStatus({ phase: 'IN_PROGRESS', hasSession: true, processStatus: 'idle', openWorkers: 3 }, NOW))
@@ -44,9 +46,11 @@ describe('the state is the phase', () => {
     expect(deriveUserStatus({ phase: 'IN_PROGRESS', hasSession: true, processStatus: 'stopped' }, NOW)).toMatchObject({ state: 'waiting', kind: 'stuck' })
   })
 
-  it('a running session never makes a parked or handed-back task "working"', () => {
-    expect(deriveUserStatus({ phase: 'NEED_ACTION', processStatus: 'running', hasSession: true }, NOW).state).toBe('needs')
-    expect(deriveUserStatus({ phase: 'WAITING', processStatus: 'running', hasSession: true }, NOW).state).toBe('waiting')
+  it('a running turn is Working whatever the phase says; a live prompt is the user\'s', () => {
+    expect(deriveUserStatus({ phase: 'NEED_ACTION', processStatus: 'running', hasSession: true }, NOW).state).toBe('working')
+    expect(deriveUserStatus({ phase: 'WAITING', processStatus: 'running', hasSession: true }, NOW).state).toBe('working')
+    expect(deriveUserStatus({ phase: 'TODO', processStatus: 'running', hasSession: true }, NOW).state).toBe('working')
+    expect(deriveUserStatus({ phase: 'IN_PROGRESS', processStatus: 'running', hasSession: true, pendingPermissionTool: 'Bash' }, NOW)).toMatchObject({ state: 'needs', source: 'prompt' })
   })
 })
 
@@ -106,8 +110,10 @@ describe('the words say why', () => {
     expect(deriveUserStatus({ ...base, hasLeader: false, isMain: true, processStatus: 'idle' }, NOW)).toMatchObject({ state: 'waiting', kind: 'you' })
     // A turn that only ended (its process alive between turns), with no ask: its lead's, too.
     expect(deriveUserStatus({ ...base, processStatus: 'idle' }, NOW)).toMatchObject({ state: 'waiting', kind: 'lead', waitingOn: expect.stringContaining('without asking you') })
-    // A lead with a real ask still needs the user.
-    expect(deriveUserStatus({ ...base, isLead: true, report: report({ state: 'needs', ask: 'Pick A or B?' }) }, NOW)).toMatchObject({ state: 'needs', ask: 'Pick A or B?' })
+    // A lead with an ask of its own is never Needs you (2026-10-31, the user: Needs you is only ever
+    // an individual task): its question stays in its chat, on the user there.
+    expect(deriveUserStatus({ ...base, isLead: true, report: report({ state: 'needs', ask: 'Pick A or B?' }) }, NOW))
+      .toMatchObject({ state: 'waiting', kind: 'you', waitingOn: expect.stringContaining('"Pick A or B?"') })
   })
 
   it('a report from before the latest phase move lends its words, never its ask', () => {
@@ -160,9 +166,11 @@ describe('a turn\'s report moves its phase (sessions/report-phase.ts)', () => {
     expect(phaseForReport({ state: 'waiting', waiting_kind: 'lead' }, solo, true, false)).toBe('NEED_ACTION')
     expect(phaseForReport({ state: 'waiting', waiting_kind: 'task', waiting_on: 'user: a review' }, worker, true, true)).toBe('NEED_ACTION')
   })
-  it('Main moves only when it is stopped on the user', () => {
+  it('Main and a lead never move to Needs you on their own report', () => {
     const main = { org_role: 'main' as const }
-    expect(phaseForReport({ state: 'needs' }, main, true)).toBe('NEED_ACTION')
+    expect(phaseForReport({ state: 'needs' }, main, true)).toBeNull()
+    expect(phaseForReport({ state: 'needs' }, { org_role: 'lead' as const }, true)).toBeNull()
+    expect(phaseForReport({ state: 'waiting', waiting_kind: 'you' }, { org_role: 'lead' as const }, true)).toBeNull()
     // Its turns end on the user's next message: that is no stop on them.
     expect(phaseForReport({ state: 'waiting', waiting_kind: 'you' }, main, true)).toBeNull()
     expect(phaseForReport({ state: 'waiting', waiting_kind: 'task' }, main, true)).toBeNull()

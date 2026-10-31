@@ -61,7 +61,9 @@ describe('a snoozed task asks nothing of the user until its date', () => {
   it('an outside wait keeps its words and only carries the mark; Main is never snoozed', () => {
     const s = deriveUserStatus({ phase: 'WAITING', report: report({ state: 'waiting', waiting_kind: 'outside', waiting_on: 'The CI run' }), phaseChangedAt: ago(120_000), snoozedUntil: UNTIL }, NOW)
     expect(s).toMatchObject({ state: 'waiting', kind: 'outside', waitingOn: 'The CI run', snoozed: { until: UNTIL } })
-    expect(deriveUserStatus({ ...asking, isMain: true, snoozedUntil: UNTIL }, NOW).state).toBe('needs')
+    // Main is never snoozed, and never Needs you either (its question stays in its chat).
+    expect(deriveUserStatus({ ...asking, isMain: true, snoozedUntil: UNTIL }, NOW)).toMatchObject({ state: 'waiting', kind: 'you' })
+    expect(deriveUserStatus({ ...asking, isMain: true, snoozedUntil: UNTIL }, NOW).snoozed).toBeUndefined()
   })
 
   it('a deadline is not raised while snoozed', () => {

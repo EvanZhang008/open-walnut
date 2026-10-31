@@ -10,7 +10,7 @@ import {
   NEEDS_RECHECK_MS, UNVERIFIED_AFTER_MS, checkedLine, deriveUserStatus, type StatusReport,
 } from '../../src/core/user-status.js'
 import { MAX_RECHECKS, recheckBody, recheckDue } from '../../src/core/sessions/needs-recheck.js'
-import { briefPrompt, briefSectionLines } from '../../src/core/sessions/brief.js'
+import { briefRules, briefSectionLines } from '../../src/core/sessions/brief.js'
 import type { Task } from '../../src/core/types.js'
 
 const NOW = Date.parse('2026-10-28T18:00:00Z')
@@ -139,7 +139,7 @@ describe("the Brief's live list of what needs the user", () => {
     expect(lines.find((l) => l.includes('T a'))).toContain('"Sign in on the Mac" (NOT VERIFIED: last checked 9 hours ago, the user may have done it already)')
     expect(lines.find((l) => l.includes('T b'))).toContain('"Pick a &lt;name&gt;" (checked 2 hours ago by its session)')
     expect(lines.find((l) => l.includes('T c'))).toContain("(Walnut's live record)")
-    const prompt = briefPrompt({ hadBrief: true, sections: { needs: lines, working: [], waiting: [] } })
+    const prompt = briefRules({ hadBrief: true, sections: { needs: lines, working: [], waiting: [] } })
     expect(prompt).toContain('never as a step the user still owes')
     expect(prompt).toContain(lines[0])
   })

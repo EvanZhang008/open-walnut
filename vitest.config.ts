@@ -26,6 +26,7 @@ export default defineConfig({
       '@open-walnut/user-status': path.resolve(import.meta.dirname, 'src/core/user-status.ts'),
       '@open-walnut/live-activity': path.resolve(import.meta.dirname, 'src/core/live-activity.ts'),
       '@open-walnut/brief-structure': path.resolve(import.meta.dirname, 'src/core/sessions/brief-structure.ts'),
+      '@open-walnut/brief-fresh': path.resolve(import.meta.dirname, 'src/core/sessions/brief-fresh.ts'),
       '@open-walnut/companion-keep': path.resolve(import.meta.dirname, 'src/core/replication/companion-keep.ts'),
       '@open-walnut/history-turn-window': path.resolve(import.meta.dirname, 'src/lib/history-turn-window.ts'),
       '@open-walnut/history-injected-banner': path.resolve(import.meta.dirname, 'src/lib/history-injected-banner.ts'),

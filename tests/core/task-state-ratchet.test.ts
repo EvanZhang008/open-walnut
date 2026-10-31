@@ -102,7 +102,7 @@ const PHASE_READERS: Record<string, number> = {
   'src/core/sessions/machine-wake.ts': 2,
   'src/core/sessions/outside-wait.ts': 4,
   'src/core/sessions/promise-alarm.ts': 1,
-  'src/core/sessions/report-phase.ts': 3,
+  'src/core/sessions/report-phase.ts': 4,
   'src/core/sessions/restart-loss.ts': 2,
   'src/core/sessions/session-request-notify.ts': 1,
   'src/core/sessions/team-stop.ts': 3,
@@ -237,7 +237,7 @@ describe('the stored state has one writer, and it applies the snooze', () => {
   it('every derived state passes the snooze: deriveUserStatus has one exit, through snoozeOf', () => {
     const src = fs.readFileSync(path.join(ROOT, 'src/core/user-status.ts'), 'utf8')
     const body = src.slice(src.indexOf('export function deriveUserStatus('), src.indexOf('\n}\n', src.indexOf('export function deriveUserStatus(')))
-    expect(body).toMatch(/const derived = derive\(input, nowMs\);[\s\S]*?const out = snoozeOf\(input, derived, nowMs\) \?\? derived;/)
+    expect(body).toMatch(/const derived = orgNodeNeverNeeds\(derive\(input, nowMs\), input\);[\s\S]*?const out = snoozeOf\(input, derived, nowMs\) \?\? derived;/)
     expect(body.match(/\breturn\b/g)).toHaveLength(1)
   })
 })

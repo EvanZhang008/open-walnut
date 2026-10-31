@@ -936,6 +936,66 @@ defineOp({
   tags: { readonly: false, remote: 'allow' },
 })
 
+// Main's or a lead's Brief (src/core/sessions/brief-write.ts): the letter the user reads above its chat.
+const BRIEF_SCOPE = 'Your Brief is the short Markdown letter the user reads at the top of your chat on the Org page (Main and '
+  + 'every lead keep one): three sections, "### Needs you", "### Working", "### Waiting / snoozed", one line per piece of work, '
+  + 'each starting with the <task-ref id="..." label="..."/> of its task. Update it yourself whenever something changes what the '
+  + 'user should know, any time in a turn. Walnut keeps it in shape: each line under its task\'s live section, a finished task\'s '
+  + 'line removed, and every task that asks the user added to Needs you.'
+
+defineOp({
+  name: 'brief_read',
+  title: 'Read a Brief',
+  description: `${BRIEF_SCOPE} Returns its text, when it was written, what moved since (fresh) and the team's open work by section from the live statuses (sections). task defaults to your own task.`,
+  input: {
+    task: z.string().min(1).optional().describe('Task id or unique prefix of Main or a lead; default: your own task'),
+  },
+  handler: async (args, call) => {
+    const id = typeof args.task === 'string' && args.task.trim()
+      ? args.task.trim()
+      : ((await call('GET', '/me')) as { task?: { id?: string } } | undefined)?.task?.id
+    if (!id) throw new Error('No task of your own: pass task.')
+    const body = await call('GET', `/tasks/${encodeURIComponent(id)}/brief`) as
+      { title?: string; brief?: { text: string; at: string } | null; fresh?: { stale?: boolean; words?: string } | null }
+    return withOutcome(
+      body,
+      body.brief ? `Brief of "${body.title}", written ${body.brief.at}${body.fresh?.words ? `: ${body.fresh.words}` : ''}.` : `"${body.title}" has no Brief yet.`,
+      body.fresh?.stale || !body.brief ? 'Update it with brief_write (edits for a few lines, content for the whole letter), from sections.' : 'No further action is required.',
+    )
+  },
+  tags: { readonly: true, remote: 'allow' },
+})
+
+defineOp({
+  name: 'brief_write',
+  title: 'Write a Brief',
+  description: `${BRIEF_SCOPE} Pass \`edits\` (exact-string [{old,new}], each old once, all or none) to change a few lines, or \`content\` for the whole letter. `
+    + 'The answer carries the stored letter and the lines that break its rules (issues): fix those with another write. task defaults to your own task.',
+  input: {
+    content: z.string().max(8000).optional().describe('The whole letter (Markdown, the three sections)'),
+    edits: z.array(z.object({ old: z.string().min(1), new: z.string() })).max(40).optional().describe('Exact-string edits on the stored letter'),
+    task: z.string().min(1).optional().describe('Task id or unique prefix of Main or a lead; default: your own task'),
+  },
+  handler: async (args, call) => {
+    const id = typeof args.task === 'string' && args.task.trim()
+      ? args.task.trim()
+      : ((await call('GET', '/me')) as { task?: { id?: string } } | undefined)?.task?.id
+    if (!id) throw new Error('No task of your own: pass task.')
+    const edits = Array.isArray(args.edits) ? (args.edits as Array<{ old: string; new: string }>) : []
+    if (typeof args.content !== 'string' && !edits.length) throw new Error('Pass content (the whole letter) or edits.')
+    const body = await call('PUT', `/tasks/${encodeURIComponent(id)}/brief`, {
+      ...(typeof args.content === 'string' ? { content: args.content } : {}), ...(edits.length ? { edits } : {}),
+    }) as { title?: string; chars?: number; issues?: Array<{ kind: string; line: string }> }
+    const issues = body.issues ?? []
+    return withOutcome(
+      body,
+      `Brief of "${body.title}" written: ${body.chars} characters.`,
+      issues.length ? `${issues.length} line(s) break its rules (${issues.map((i) => i.kind).join(', ')}): fix them with another brief_write.` : 'No further action is required.',
+    )
+  },
+  tags: { readonly: false, remote: 'allow' },
+})
+
 /** What completion does to the task's own sessions (completeTaskSessions): a live one is stopped, the caller's own at its turn end. */
 const COMPLETED_OUTCOME = 'Task marked complete. Its own session, if one was live, is stopped (yours, if this is your task, when this turn ends); its leader, if it has one and is still open, hears about it unless the leader is you.'
 

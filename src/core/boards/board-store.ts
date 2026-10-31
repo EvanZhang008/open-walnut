@@ -30,7 +30,7 @@ import { withFileLock } from '../../utils/file-lock.js';
 import { log } from '../../logging/index.js';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import type { BoardChangedEvent } from '../event-types.js';
-import { BOARD_ITEM_ID_RE, own } from './board-html.js';
+import { BOARD_ITEM_ID_RE, choiceSigs, own } from './board-html.js';
 import {
   isLaneTemplateId, normalizeCards, normalizeKanbanSeen, normalizeLanes,
   type BoardCard, type BoardKanbanSeen, type BoardLane, type LaneTemplateId,
@@ -228,6 +228,29 @@ export interface BoardFile {
   kanban_seen: BoardKanbanSeen | null;
   /** The last agent's baseline (with `by`), kept apart from the user's. */
   kanban_seen_agent?: BoardKanbanSeen | null;
+  /** When each choice was last written (its tag changed: stampChoiceTimes), by id. A choice asks the
+   *  user from that time; it reads as not verified once that is old (user-status.ts). Absent on a
+   *  choice written before Walnut kept the time: never checked. */
+  choice_at?: Record<string, { at: string; sig: string }>;
+}
+
+/**
+ * The write times of a page's choices after a write: a choice whose tag is as it was keeps its
+ * time (or its lack of one), a new or changed one is written now, a removed one is dropped.
+ */
+export function stampChoiceTimes(
+  prevHtml: string, prev: BoardFile['choice_at'], nextHtml: string, nowIso: string,
+): Record<string, { at: string; sig: string }> | undefined {
+  const before = choiceSigs(prevHtml);
+  const out: Record<string, { at: string; sig: string }> = {};
+  for (const [id, sig] of Object.entries(choiceSigs(nextHtml))) {
+    if (before[id] === sig) {
+      if (prev?.[id]) out[id] = { ...prev[id], sig };
+    } else {
+      out[id] = { at: nowIso, sig };
+    }
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /** Fired, or its time has passed: the user sees it as due until they act on that item. */
@@ -406,6 +429,7 @@ function normalize(raw: BoardFile | null, taskId: string): BoardFile | null {
     cards: normalizeCards(raw.cards),
     kanban_seen: normalizeKanbanSeen(raw.kanban_seen),
     ...(raw.kanban_seen_agent ? { kanban_seen_agent: normalizeKanbanSeen(raw.kanban_seen_agent) } : {}),
+    ...(Object.keys(map(raw.choice_at)).length ? { choice_at: map<{ at: string; sig: string }>(raw.choice_at) } : {}),
   };
 }
 
@@ -416,6 +440,15 @@ export function emptyBoard(taskId: string, by: BoardWriter): BoardFile {
     threads: {}, marks: {}, projects: {}, checks: {}, choices: {}, reminders: {}, section_seen: {},
     lanes: null, cards: {}, kanban_seen: null,
   };
+}
+
+/** `current` with its choices' write times moved to the page `html` replaces its own with. */
+function withChoiceTimes(current: BoardFile, html: string): BoardFile;
+function withChoiceTimes(current: BoardFile | null, html: string): Partial<BoardFile>;
+function withChoiceTimes(current: BoardFile | null, html: string): Partial<BoardFile> {
+  const { choice_at: prev, ...rest } = current ?? ({} as Partial<BoardFile>);
+  const stamps = stampChoiceTimes(current?.html ?? '', prev, html, new Date().toISOString());
+  return { ...rest, ...(stamps ? { choice_at: stamps } : {}) };
 }
 
 /** For the writers in this directory. */
@@ -469,7 +502,7 @@ export async function setBoardHtml(
       lanes: null,
       cards: {},
       kanban_seen: null,
-      ...current,
+      ...withChoiceTimes(current, html),
       task_id: taskId,
       html,
       version: (current?.version ?? 0) + 1,
@@ -529,7 +562,7 @@ export async function editBoardHtml(
     const html = applyBoardEdits(current.html, edits);
     checkHtml(html);
     return {
-      ...current,
+      ...withChoiceTimes(current, html),
       html,
       version: current.version + 1,
       updated_at: new Date().toISOString(),

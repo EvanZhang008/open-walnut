@@ -1,9 +1,10 @@
 /**
  * The Brief (src/core/sessions/brief.ts): Main and every lead keep a short letter for the user at
  * the top of their chat, and Walnut keeps it current. 2026-10-26, the user: "All the leader or main
- * agent, or VP need to utilize this", and it "must be up to date". This ratchet keeps the rule in
- * the default prompt of Main and of every lead (and out of a worker's), the turn-end ask in their
- * self-report, and the team model the page and the ask share.
+ * agent, or VP need to utilize this", and it "must be up to date". 2026-10-31: it is a document
+ * the node edits itself with brief_write, never asked at a turn end ("这就是一个 file"). This
+ * ratchet keeps the rule in the default prompt of Main and of every lead (and out of a worker's),
+ * the turn-end self-report free of it, and the team model the page and brief_read share.
  */
 import { describe, it, expect, vi } from 'vitest'
 import { createMockConstants } from '../../helpers/mock-constants.js'
@@ -11,10 +12,10 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-brief-rule'))
 
 import { BRIEF_LINE, buildSessionContext } from '../../../src/core/sessions/session-context.js'
-import { briefPrompt, briefSectionLines, keepsBrief, readBrief } from '../../../src/core/sessions/brief.js'
+import { briefRules, briefSectionLines, keepsBrief } from '../../../src/core/sessions/brief.js'
 import { briefIssues, briefItemLines } from '../../../src/core/sessions/brief-rules.js'
-import { buildSelfReportPrompt, extractField } from '../../../src/core/session-hooks/builtins.js'
-import { BRIEF_MAX_CHARS, briefTeam } from '../../../src/core/user-status.js'
+import { buildSelfReportPrompt } from '../../../src/core/session-hooks/builtins.js'
+import { briefTeam } from '../../../src/core/user-status.js'
 import type { Task } from '../../../src/core/types.js'
 
 function task(over: Partial<Task>): Task {
@@ -25,20 +26,23 @@ const promptOf = async (over: Partial<Task>) =>
   (await buildSessionContext('mt-brief-1', '/x', 'h', { task: task(over) })).systemPrompt
 
 describe('the Brief rule', () => {
-  it('names what the Brief is, when Walnut asks for it, and what it holds', () => {
+  it('names what the Brief is, how the node keeps it, and what it holds', () => {
     for (const re of [
       /the short letter the user reads at the top of your chat/,
       /they answer in your chat/,
-      /At the end of every turn Walnut asks you for it in a separate question of its own \(FOR_USER_BRIEF\)/,
+      /It is a document you edit yourself, any time/,
+      /update it then with brief_write/,
+      /brief_read shows it, what moved since and your team's live lists/,
+      /Walnut reminds you every few messages and when your team moved since you wrote it/,
       // 2026-10-29: after a compaction a lead wrote the Brief into its reply.
-      /never write the Brief or that field into your replies/,
-      /Rewrite it whole each time/,
+      /never write the Brief into your replies/,
       // 2026-10-30: three sections every time, each task under its own live status.
-      /in three sections, always all three, in this order: "### Needs you" \(what the user must decide or do\), "### Working" \(in progress\) and "### Waiting \/ snoozed"/,
+      /Three sections, always all three, in this order: "### Needs you" \(what the user must decide or do\), "### Working" \(in progress\) and "### Waiting \/ snoozed"/,
       /each task goes in the section of its own live status/,
       /One thing per line, each line starting with the <task-ref\/> of the task it is about/,
       /Main names the VP who leads it right after/,
       /Walnut checks these rules/,
+      /removes a finished task's line, adds every task that asks the user to Needs you/,
       /shows each task it names with its live status/,
     ]) expect(BRIEF_LINE).toMatch(re)
   })
@@ -53,38 +57,21 @@ describe('the Brief rule', () => {
   })
 })
 
-describe('the turn-end ask', () => {
-  it('is asked of Main and leads only, in its three sections, with the team\'s live lists', () => {
-    const sections = { needs: ['- <task-ref id="w1" label="Fix the fence"/>: "Pick a supplier?" (checked 5 minutes ago by its session)'], working: [], waiting: [] }
-    const lead = buildSelfReportPrompt('', 'Garden lead', { brief: { hadBrief: true, sections } })
-    expect(lead).toContain('FOR_USER_BRIEF:')
-    expect(lead).toContain('Rewrite it whole every time (never "unchanged")')
-    expect(lead).toContain('"### Needs you", "### Working", "### Waiting / snoozed"')
-    expect(lead).toContain(`### Needs you\n${sections.needs[0]}\n### Working\n(none now)\n### Waiting / snoozed\n(none now)`)
-    expect(buildSelfReportPrompt('', 'A worker')).not.toContain('FOR_USER_BRIEF')
-    expect(briefPrompt({ hadBrief: false, language: 'Chinese' })).toContain('in Chinese')
-    // Every line names its task, the writer's own task for its own work.
-    const own = briefPrompt({ hadBrief: true, ownId: 'lead-1' })
-    expect(own).toContain('EVERY line starts with the <task-ref')
-    expect(own).toContain('<task-ref id="lead-1" label="..."/>')
+describe('the turn end asks for no Brief; brief_read gives the rules and the lists', () => {
+  it('no FOR_USER_BRIEF field in any self-report, Main and leads included', () => {
+    for (const name of ['Garden lead', 'Main', 'A worker']) expect(buildSelfReportPrompt('', name)).not.toContain('FOR_USER_BRIEF')
   })
-
-  it('reads the letter back whole, after the FOR_USER lines, and caps it', () => {
-    const report = 'FOR_USER_STATE: waiting\nFOR_USER_NEXT: I merge once the review passes.\nFOR_USER_BRIEF:\n**Needs you:** pick a supplier.\n- <task-ref id="w1" label="Fix the fence"/>: done, waits on the review.'
-    expect(extractField(report, 'FOR_USER_NEXT')).toBe('I merge once the review passes.')
-    const brief = readBrief(extractField(report, 'FOR_USER_BRIEF'), '2026-10-26T10:00:00.000Z')
-    expect(brief).toEqual({ text: '**Needs you:** pick a supplier.\n- <task-ref id="w1" label="Fix the fence"/>: done, waits on the review.', at: '2026-10-26T10:00:00.000Z' })
-    expect(readBrief('unchanged')).toBeNull()
-    // A session that bolds the label ("**FOR_USER_BRIEF:**") closes the bold after the colon:
-    // those stars are the label's, and the letter keeps its own bold (2026-10-26, Main's Brief
-    // opened with a lone "**" line).
-    const bolded = '**FOR_USER_NEXT:** I merge.\n**FOR_USER_BRIEF:**\n**Needs you:**\n- <task-ref id="w1" label="Fence"/>: pick a supplier.'
-    expect(extractField(bolded, 'FOR_USER_NEXT')).toBe('I merge.')
-    expect(extractField(bolded, 'FOR_USER_BRIEF')).toBe('**Needs you:**\n- <task-ref id="w1" label="Fence"/>: pick a supplier.')
-    expect(extractField('FOR_USER_BRIEF: **Needs you:** nothing.', 'FOR_USER_BRIEF')).toBe('**Needs you:** nothing.')
-    expect(readBrief('**\n**Needs you:** nothing.')!.text).toBe('**Needs you:** nothing.')
-    expect(readBrief('')).toBeNull()
-    expect(readBrief('x'.repeat(BRIEF_MAX_CHARS + 50))!.text.length).toBe(BRIEF_MAX_CHARS)
+  it("the rules carry the three sections, the team's live lists, the language and the writer's own ref", () => {
+    const sections = { needs: ['- <task-ref id="w1" label="Fix the fence"/>: "Pick a supplier?" (checked 5 minutes ago by its session)'], working: [], waiting: [] }
+    const rules = briefRules({ hadBrief: true, sections, language: 'Chinese', ownId: 'lead-1' })
+    expect(rules).toContain('Edit the lines that changed with brief_write')
+    expect(rules).toContain('in Chinese')
+    expect(rules).toContain('"### Needs you", "### Working", "### Waiting / snoozed"')
+    expect(rules).toContain(`### Needs you\n${sections.needs[0]}\n### Working\n(none now)\n### Waiting / snoozed\n(none now)`)
+    expect(rules).toContain('EVERY line starts with the <task-ref')
+    expect(rules).toContain('<task-ref id="lead-1" label="..."/>')
+    expect(rules).not.toContain('FOR_USER_BRIEF')
+    expect(briefRules({ hadBrief: false })).toContain('Write it with brief_write')
   })
 })
 

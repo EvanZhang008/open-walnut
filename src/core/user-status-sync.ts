@@ -55,8 +55,9 @@ export interface StatusFacts {
   }>;
   /** Task id -> subject of its newest unanswered action_required letter. */
   letters: Map<string, string>;
-  /** Task id -> title of an unanswered Board choice about it. */
-  choices: Map<string, string>;
+  /** Task id -> the unanswered Board choices about it, in Board order: its title, the Board it is
+   *  on and its id, and when it was last written there (board-store.ts choice_at; absent: never). */
+  choices: Map<string, ChoiceFact[]>;
   /** Session id -> target task ids it waits on for a reply. */
   requestsFrom: Map<string, string[]>;
   /** Task id -> armed triggers that deliver into it. */
@@ -105,8 +106,10 @@ function dropSlow(...kinds: SlowSource[]): void {
   if (!kinds.length) boardChoices.clear();
 }
 
+export interface ChoiceFact { title: string; board: string; id: string; at?: string }
+
 /** Per Board owner: its unanswered choices, so one Board's write re-reads that Board alone. */
-const boardChoices = new Map<string, { ref?: string; title: string }[]>();
+const boardChoices = new Map<string, { ref?: string; title: string; id: string; at?: string }[]>();
 
 async function cachedSlow<K extends SlowSource>(kind: K, allIds: readonly string[]): Promise<NonNullable<StatusFacts[K]>> {
   const hit = slow[kind];
@@ -148,7 +151,8 @@ async function readChoices(allIds: readonly string[]): Promise<StatusFacts['choi
         const board = await getBoard(owner).catch(() => null);
         for (const [id, spec] of Object.entries(board?.html ? choiceSpecs(board.html) : {})) {
           if (board?.choices?.[id]) continue; // answered
-          open.push({ ref: spec.task?.trim() || undefined, title: spec.title?.trim() || 'Answer the choice on its Board.' });
+          const at = board?.choice_at?.[id]?.at;
+          open.push({ ref: spec.task?.trim() || undefined, title: spec.title?.trim() || 'Answer the choice on its Board.', id, ...(at ? { at } : {}) });
         }
         boardChoices.set(owner, open);
       }
@@ -157,7 +161,10 @@ async function readChoices(allIds: readonly string[]): Promise<StatusFacts['choi
         // board-v1 resolves refs); one that names none is the owner's. The Org page's Answer
         // finds it by the same rule (boards/open-choice.ts).
         const tid = c.ref ? resolveChoiceRef(c.ref, allIds) : owner;
-        if (tid && !out.has(tid)) out.set(tid, c.title);
+        if (!tid) continue;
+        const list = out.get(tid) ?? [];
+        list.push({ title: c.title, board: owner, id: c.id, ...(c.at ? { at: c.at } : {}) });
+        out.set(tid, list);
       }
     }
   }, undefined);
@@ -296,6 +303,20 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
   return { sessions, letters, choices, requestsFrom, triggers, schedules, checks, titles, sessionsOf, undelivered };
 }
 
+/**
+ * The Board choice that asks the user about a task: the first unanswered one on a Board whose
+ * owner is still open. A completed task's Board asks nothing more (2026-10-31: a COMPLETE leader's
+ * old choice kept a Needs you card on its worker), as its letters leave the inbox at completion.
+ */
+function choiceInput(task: Task, facts: StatusFacts): Pick<UserStatusInput, 'openChoice' | 'openChoiceAt' | 'openChoiceRef'> {
+  const open = (facts.choices.get(task.id) ?? []).find((c) => {
+    const owner = c.board === task.id ? task : facts.tasksById?.get(c.board);
+    return !(owner && (owner.phase === 'COMPLETE' || owner.status === 'done'));
+  });
+  if (!open) return { openChoice: null };
+  return { openChoice: open.title, openChoiceAt: open.at ?? null, openChoiceRef: { board: open.board, id: open.id } };
+}
+
 /** A park lands just before the hand-back it causes; the two clocks are the same process's. */
 const UNDELIVERED_SLACK_MS = 60_000;
 
@@ -335,7 +356,7 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     statusSince: main?.statusSince ?? null,
     pendingPermissionTool: prompt,
     openLetter: facts.letters.get(task.id) ?? null,
-    openChoice: facts.choices.get(task.id) ?? null,
+    ...choiceInput(task, facts),
     waitingOnTasks: [...new Set(waitingOnTasks)],
     // A trigger on the user's own ask or letter (trigger_create `watches`) is no outside watch:
     // the task still needs the user (sessions/outside-wait.ts, 2026-10-30).

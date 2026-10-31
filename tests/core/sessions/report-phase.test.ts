@@ -145,7 +145,8 @@ describe('applyReportPhase', () => {
     const id = await taskAt('IN_PROGRESS', 2 * MIN, { org_role: 'main' })
     const ended = Date.now() - 2 * MIN
     expect(await applyReportPhase(id, SID, report({ state: 'waiting', waiting_kind: 'you' }), ended)).toBeNull()
-    expect(await applyReportPhase(id, SID, report({ state: 'needs', ask: 'Which one?' }), ended)).toBe('NEED_ACTION')
+    // Its question stays in its chat: Main is never Needs you (2026-10-31).
+    expect(await applyReportPhase(id, SID, report({ state: 'needs', ask: 'Which one?' }), ended)).toBeNull()
   })
 })
 

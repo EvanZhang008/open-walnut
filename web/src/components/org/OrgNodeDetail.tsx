@@ -30,6 +30,8 @@ import { useHasBoard } from './useBoardOwner';
 import { flashProbeEnabled } from '@/utils/flash-probe';
 import { log } from '@/utils/log';
 import { briefUnread, markBriefSeen, readBriefFolded, type OrgTopView } from './org-brief-model';
+import { briefUpdating } from '@open-walnut/brief-fresh';
+import { useBriefRefresh } from './useBriefRefresh';
 import { ORG_TASK_TAB_LABELS, orgTaskTabs, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
 import { stateCountLabel } from '@open-walnut/user-status';
 import {
@@ -168,6 +170,9 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   // Read while shown: the dot on the Brief tab is for a rewrite the user has not seen.
   useEffect(() => { if (topView === 'brief' && contact && brief?.at) markBriefSeen(contact.id, brief.at); }, [topView, contact, brief?.at]);
   const briefNew = topView === 'task' && !!contact && briefUnread(contact.id, brief?.at);
+  // Opening a node whose Brief is stale asks it for one refresh turn (core/sessions/brief-refresh.ts).
+  const briefFresh = useBriefRefresh(keepsBrief ? contact : undefined, tasks);
+  const updating = keepsBrief && !!contact && briefUpdating(contact, now);
   const title = row.kind === 'main' ? 'CEO' : row.contactTitle;
   // Main is always someone to talk to: its task is made by the first chat.
   const canTalk = row.kind === 'main' || !!row.contactId || !!row.node?.needsLead;
@@ -279,7 +284,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   const rail = (
     <OrgTaskRail
       row={row} rows={rows} tasks={tasks} tabs={tabs} alerts={alertsShown} tab={taskTab} onTab={setTaskTab}
-      view={topView} onView={pickTop} keepsBrief={keepsBrief} briefNew={briefNew} briefFolded={briefFolded} onBriefFolded={setBriefFolded}
+      view={topView} onView={pickTop} keepsBrief={keepsBrief} briefNew={briefNew} briefFolded={briefFolded} onBriefFolded={setBriefFolded} briefFresh={briefFresh} briefUpdating={updating}
       contact={contact} title={title} onOpenAlert={openAlert} onQuote={quoteAlert} canQuote={!!sessionId} answers={answers}
       onOpenTask={openChip} now={now} placement={railSide ? 'side' : 'top'}
     />

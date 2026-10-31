@@ -13,7 +13,8 @@
  * does, while it is armed (recheck-watch.ts). At most MAX_RECHECKS in a row while it keeps asking the user
  * (reworded or not); after that it shows as not verified until someone looks. Primary only; an
  * ephemeral server never wakes a task for a status it copied from the real Walnut. The task's open
- * decision letters to the user ride the same clock (letter-recheck.ts).
+ * decision letters to the user ride the same clock (letter-recheck.ts), and so does a Board choice
+ * that asks the user about it: its Board owner is asked to confirm or remove it (choiceRecheckBody).
  */
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
@@ -48,18 +49,50 @@ export function recheckBody(ask: string, checkedAt: string | undefined, nowMs: n
   ].join('\n');
 }
 
+/**
+ * The note a Board choice's re-check brings into its Board owner's session (2026-10-31: a choice
+ * nobody re-checked kept a task on the user's list a day after the task had moved on).
+ */
+export function choiceRecheckBody(
+  choice: { board: string; id: string }, title: string,
+  about: Pick<Task, 'id' | 'title' | 'user_status' | 'status_report'>, checkedAt: string | undefined, nowMs: number,
+): string {
+  const at = Date.parse(checkedAt ?? '');
+  const own = about.status_report?.ask ?? about.status_report?.now;
+  return [
+    `The choice "${title}" (id ${choice.id}) on your Board asks the user about "${about.title}" (${about.id}), ${Number.isFinite(at) ? `and nobody confirmed it since it was written ${agoWords(nowMs - at)}` : 'and no one ever confirmed it (no time recorded)'}.`,
+    own ? `That task's own latest words: "${own.replace(/\s+/g, ' ').slice(0, 300)}".` : '',
+    'The task may have moved on, or the user may have answered it elsewhere (in the task\'s chat, on the phone). Check it now: read the task (task_get) and its latest messages.',
+    `No longer needed: remove the <walnut-choice id="${choice.id}"> from your Board (board_edit). Still needed: set its checked attribute to the time now (board_edit on its tag, checked="${new Date(nowMs).toISOString().slice(0, 16)}Z"), which records it as checked now. `
+      + 'Then answer with only the agent-ack line, <walnut-turn status="agent-ack"/>, unless something needs saying.',
+  ].filter(Boolean).join('\n');
+}
+
+/** A stable point in the re-check window for one task (FNV-1a of its id). */
+function spreadOf(id: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 0x01000193) >>> 0;
+  return h % NEEDS_RECHECK_MS;
+}
+
 /** Whether a task is due a re-check now. Pure; exported for tests. */
-export function recheckDue(task: Pick<Task, 'phase' | 'status' | 'user_status' | 'needs_recheck'>, opts: {
+export function recheckDue(task: Pick<Task, 'phase' | 'status' | 'user_status' | 'needs_recheck'> & { id?: string }, opts: {
   nowMs: number; notBefore?: number;
+  /** Since when a choice with no recorded time has been seen (this server's start): each is due
+   *  at its own point of the re-check window after it, so a Board stored before the times were
+   *  kept does not wake every owner in the first pass. */
+  unknownSince?: number;
   /** When a snooze of the task ran out (snooze.ts snoozeEndedMs): the clock starts again there. */
   snoozeEndedMs?: number;
 }): boolean {
   const s = task.user_status;
-  if (!s || s.state !== 'needs' || s.source !== 'session' || !s.ask || s.snoozed) return false;
+  if (!s || s.state !== 'needs' || (s.source !== 'session' && s.source !== 'choice') || !s.ask || s.snoozed) return false;
   if (task.phase === 'COMPLETE' || task.status === 'done') return false;
-  // Stamped only on an ask the session wrote itself (user-status.ts stampChecked). A snooze that ran
-  // out since counts as the last look: the user put it away until then (snooze.ts).
-  const stamped = Date.parse(s.checkedAt ?? '');
+  // Stamped only on an ask the session wrote itself (user-status.ts stampChecked), or on a Board
+  // choice when it was written (stampChoiceChecked; one with no time was never checked). A snooze
+  // that ran out since counts as the last look: the user put it away until then (snooze.ts).
+  const stamped = Date.parse(s.checkedAt ?? '')
+    || (s.source === 'choice' ? (opts.unknownSince ?? 0) + spreadOf(task.id ?? '') - NEEDS_RECHECK_MS : NaN);
   const checked = Number.isFinite(opts.snoozeEndedMs) && opts.snoozeEndedMs! > stamped ? opts.snoozeEndedMs! : stamped;
   if (!Number.isFinite(checked) || opts.nowMs - checked < NEEDS_RECHECK_MS) return false;
   if (opts.notBefore !== undefined && checked < opts.notBefore) return false;
@@ -94,10 +127,11 @@ export async function runNeedsRecheck(nowMs = Date.now()): Promise<string[]> {
         await updateTaskRaw(task.id, { needs_recheck: null }, { push: false, source: 'needs-recheck' }).catch(() => null);
         continue;
       }
-      if (task.plugin_only || task.user_status?.state !== 'needs' || task.user_status.source !== 'session') continue;
+      const source = task.user_status?.source;
+      if (task.plugin_only || task.user_status?.state !== 'needs' || (source !== 'session' && source !== 'choice')) continue;
       // A trigger of the task does not exempt it (it watches the task, maybe not this ask), unless
       // the session armed it to watch this ask (trigger_create watches:"ask", recheck-watch.ts).
-      if (!recheckDue(task, { nowMs, snoozeEndedMs: snoozeEndedMs(task, byId, nowMs), ...(ephemeral ? { notBefore: startedAt } : {}) })) continue;
+      if (!recheckDue(task, { nowMs, snoozeEndedMs: snoozeEndedMs(task, byId, nowMs), unknownSince: startedAt || nowMs, ...(ephemeral ? { notBefore: startedAt } : {}) })) continue;
       if (quieted.has(task.id)) continue;
       if (task.recheck_watch?.length) {
         const { liveTriggerIds, watchedBy } = await import('./recheck-watch.js');
@@ -109,9 +143,14 @@ export async function runNeedsRecheck(nowMs = Date.now()): Promise<string[]> {
         }
       }
       const ask = task.user_status!.ask!;
+      // A Board choice is its Board owner's to confirm or remove: that session gets the note.
+      const choice = source === 'choice' ? task.user_status!.choice : undefined;
+      if (source === 'choice' && !choice) continue;
+      const owner = choice ? byId.get(choice.board) : task;
+      if (!owner || owner.phase === 'COMPLETE' || owner.status === 'done') continue;
       const { getSessionsForTask } = await import('../session-tracker.js');
       const { pickDeliverySession } = await import('../routines/session-target.js');
-      const target = pickDeliverySession(await getSessionsForTask(task.id).catch(() => []));
+      const target = pickDeliverySession(await getSessionsForTask(owner.id).catch(() => []));
       if (!target) continue;
       const prev = task.needs_recheck;
       const next: NeedsRecheck = { at: new Date(nowMs).toISOString(), count: (prev?.count ?? 0) + 1, ask };
@@ -123,9 +162,10 @@ export async function runNeedsRecheck(nowMs = Date.now()): Promise<string[]> {
       try {
         await sendMessageToSession(target.claudeSessionId, buildWalnutMessage({
           kind: 'trigger',
-          attrs: { from: 'Walnut: re-check', note: 'is what you asked the user still needed' },
-          body: recheckBody(ask, task.user_status!.checkedAt, nowMs),
-        }), { source: WAIT_UNTIL_SEND_SOURCE, taskId: task.id });
+          attrs: { from: 'Walnut: re-check', note: choice ? 'is the choice on your Board still needed' : 'is what you asked the user still needed' },
+          body: choice ? choiceRecheckBody(choice, ask, task, task.user_status!.checkedAt, nowMs) : recheckBody(ask, task.user_status!.checkedAt, nowMs),
+        // A Board owner asked about a choice only gives words: its own wait comes back (task-wait-resume.ts).
+        }), { source: choice ? 'choice-recheck' : WAIT_UNTIL_SEND_SOURCE, taskId: owner.id });
         woken.push(task.id);
         log.task.info('needs-you re-check sent', { taskId: task.id, sessionId: target.claudeSessionId, count: next.count });
       } catch (err) {

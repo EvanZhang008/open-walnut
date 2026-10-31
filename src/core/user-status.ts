@@ -183,6 +183,10 @@ export interface UserStatusInput {
   openLetter?: string | null;
   /** An unanswered Board choice about this task (its title). */
   openChoice?: string | null;
+  /** When that choice was last written on its Board (ISO); null = no time recorded (older Board). */
+  openChoiceAt?: string | null;
+  /** The Board it is on (its owner task) and its id, for the re-check (sessions/needs-recheck.ts). */
+  openChoiceRef?: { board: string; id: string } | null;
   /** Titles of tasks this task's session waits on for a reply. */
   waitingOnTasks?: readonly string[];
   /** Armed triggers that will wake this task (their names). */
@@ -227,6 +231,8 @@ export interface UserStatus {
   kind?: WaitKind;
   /** needs: what the user must do. */
   ask?: string;
+  /** needs from a Board choice: the Board it is on (its owner task) and the choice's id. */
+  choice?: { board: string; id: string };
   /** needs: where the ask lives, so a surface can take the user there: a prompt in the
    *  session, a letter in the inbox, a choice on the Board, a failed session, or the
    *  session's own question at the end of its turn. */
@@ -279,12 +285,13 @@ export function agoWords(ms: number): string {
   return h < 48 ? `${h} hour${h === 1 ? '' : 's'} ago` : `${Math.round(h / 24)} days ago`;
 }
 
-/** The words every surface prints under a session's "needs you": when it was last checked, or
- *  that it is not verified. Null for Walnut's own live records (a prompt, a letter, a choice). */
+/** The words every surface prints under a session's or a Board choice's "needs you": when it was
+ *  last checked, or that it is not verified. Null for Walnut's own live records (a prompt, a letter). */
 export function checkedLine(s: Pick<UserStatus, 'state' | 'source' | 'checkedAt' | 'watchedAt' | 'unverified'> | null | undefined, nowMs: number = Date.now()): { text: string; unverified: boolean } | null {
-  if (s?.state !== 'needs' || s.source !== 'session') return null;
+  if (s?.state !== 'needs' || (s.source !== 'session' && s.source !== 'choice')) return null;
   const at = Date.parse(s.checkedAt ?? '');
-  if (!Number.isFinite(at)) return null;
+  // A Board choice with no recorded time was never checked (stampChoiceChecked).
+  if (!Number.isFinite(at)) return s.source === 'choice' && s.unverified ? { text: 'Not verified: no check recorded, may be done already', unverified: true } : null;
   const ran = Date.parse(s.watchedAt ?? '');
   const watched = Number.isFinite(ran) ? `; its trigger ran ${agoWords(nowMs - ran)}` : '';
   if (s.unverified) return { text: `Not verified: last checked ${agoWords(nowMs - at)}, may be done already${watched}`, unverified: true };
@@ -404,7 +411,7 @@ export function reportIsCurrent(input: Pick<UserStatusInput, 'report' | 'phaseCh
 }
 
 export function deriveUserStatus(input: UserStatusInput, nowMs: number = Date.now()): UserStatus {
-  const derived = derive(input, nowMs);
+  const derived = orgNodeNeverNeeds(derive(input, nowMs), input);
   const line = lineOf(input, derived);
   if (line) derived.line = line;
   const form = askFormOf(input, derived);
@@ -419,6 +426,7 @@ export function deriveUserStatus(input: UserStatusInput, nowMs: number = Date.no
   // Only an ask the session itself wrote can be checked again; Walnut's own "its turn ended and
   // handed it back" is no claim about the world.
   if (out.state === 'needs' && out.source === 'session' && out.ask && out.ask === reportAsk(input.report)) stampChecked(out, input, nowMs);
+  if (out.state === 'needs' && out.source === 'choice') stampChoiceChecked(out, input, nowMs);
   return out;
 }
 
@@ -530,6 +538,28 @@ function reportAsk(report: StatusReport | null | undefined): string | undefined 
   return undefined;
 }
 
+/**
+ * A Board choice asks the user from when it was written there (2026-10-31: a choice nobody
+ * re-checked read as Needs you for a day after the task had moved on and the user had answered
+ * in its chat). Its written time is its check, and it goes unverified like a session's ask; one
+ * from an older Board has no time and is not verified. Its owner confirms it by writing it again.
+ */
+function stampChoiceChecked(out: UserStatus, input: UserStatusInput, nowMs: number): void {
+  const at = Date.parse(input.openChoiceAt ?? '');
+  if (!Number.isFinite(at)) { out.unverified = true; return; }
+  out.checkedAt = new Date(at).toISOString();
+  if (nowMs - at > UNVERIFIED_AFTER_MS) out.unverified = true;
+}
+
+/** The task spoke after the choice was written: its own newer words say what it needs, not an
+ *  older choice its Board owner never confirmed since. A choice with no recorded time is kept, read
+ *  as not verified, and its owner is asked to confirm it (sessions/needs-recheck.ts). */
+function choiceOverruled(input: UserStatusInput, report: StatusReport | null): boolean {
+  const said = Date.parse(report?.at ?? '');
+  const written = Date.parse(input.openChoiceAt ?? '');
+  return Number.isFinite(said) && Number.isFinite(written) && said > written;
+}
+
 /** When a session's ask was last confirmed, by whom, and whether that is too long ago to be fact. */
 function stampChecked(out: UserStatus, input: UserStatusInput, nowMs: number): void {
   // Its last word on it: the newest of its report and its last phase move (a turn's end).
@@ -559,6 +589,25 @@ function wakeSource(input: UserStatusInput, w: ReturnType<typeof words>, nowMs: 
   return strip<UserStatus>({ state: 'waiting', kind: 'time', waitingOn: `Its next scheduled run (${runs.map((r) => clean(r.name)).join(', ')})`, ...(next ? { until: next } : {}), ...w });
 }
 
+/**
+ * Needs you is only ever an individual task (2026-10-31, the user: a VP's copy of a task's ask, a
+ * task he had snoozed, stood in Main's Needs you: "这个都是 individual task is needs you ... We can
+ * choose talk to VP"). Main or a lead whose status would ask the user waits instead: on its teams,
+ * with its question in its chat, where he talks to it. A decision that belongs to no task goes on a
+ * task of its own. Its prompt or failure is in its chat too.
+ */
+function orgNodeNeverNeeds(s: UserStatus, input: UserStatusInput): UserStatus {
+  if (s.state !== 'needs' || !(input.isMain || input.isLead)) return s;
+  const { ask, source, askForm: _form, checkedAt: _c, checkedBy: _b, unverified: _u, watchedAt: _wa, choice: _ch, ...rest } = s;
+  const said = clean(ask);
+  const waitingOn = source === 'prompt' ? `You, in its chat: ${said}`
+    : source === 'error' ? `You or Walnut, in its chat: ${said}`
+      : said && said !== HANDED_BACK_ASK ? `Its teams; its question to you is in its chat: "${said.slice(0, 200)}"`
+        : 'Your next message, or news from its teams';
+  // On the user, in its chat (status-push says "on you"), never a Needs you of its own.
+  return { ...rest, state: 'waiting', kind: 'you', waitingOn };
+}
+
 function derive(input: UserStatusInput, nowMs: number): UserStatus {
   const anyReport = input.report ?? null;
   if (input.phase === 'COMPLETE' || input.status === 'done') return { state: 'done' };
@@ -576,14 +625,22 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   if (input.pendingPermissionTool) {
     return strip({ state: 'needs', source: 'prompt', ask: `Answer the ${input.pendingPermissionTool} prompt in its session.`, ...w, stale: undefined });
   }
+  // Working is a turn running right now, and nothing else (2026-10-31, the user: "working 就是他现在
+  // 必须正在 working ... 这个在任何地方都是这样"), whatever its phase says.
+  if (running) return strip({ state: 'working', ...w });
 
   // The state is the task's own phase (2026-10-26, the user: "this status need to be self updated
   // by task, can also be updated by leader ... task has status, we already have good task system").
   // The task sets it (its turn's own report moves it, session-hooks/builtins.ts), its leader or the
   // user may set it, and nothing here overrides it: what follows only says why, in words.
   if (input.phase === 'NEED_ACTION') {
+    // The task's own words come first (2026-10-31, the user: what it needs is the task's to say; a
+    // letter or a Board choice is a place he can answer, never what overrides it).
+    if (report?.state === 'needs' && !none(report.ask)) return strip({ state: 'needs', source: 'session', ask: clean(report.ask), ...w });
     if (!none(input.openLetter)) return strip({ state: 'needs', source: 'letter', ask: clean(input.openLetter), ...w });
-    if (!none(input.openChoice)) return strip({ state: 'needs', source: 'choice', ask: clean(input.openChoice), ...w });
+    if (!none(input.openChoice) && !choiceOverruled(input, anyReport)) {
+      return strip({ state: 'needs', source: 'choice', ask: clean(input.openChoice), ...(input.openChoiceRef ? { choice: { ...input.openChoiceRef } } : {}), ...w });
+    }
     // A message that never reached the session: the cause is what the user fixes,
     // not a session that "failed" or a turn that ended (2026-10-28).
     if (!none(input.undeliveredMessage)) {
@@ -652,10 +709,13 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   }
 
   if (input.phase === 'IN_PROGRESS') {
-    if (running || !input.hasSession) return strip({ state: 'working', ...w });
+    // In progress with no turn running is Waiting, with its reason (Working is a running turn only).
+    if (!input.hasSession) return strip({ state: 'waiting', kind: 'not-started', waitingOn: 'Marked in progress; no session runs it', ...w });
     if (machine) return machine;
     // It said it carries on by itself (a background job it started will wake it) and its process is there.
-    if (report?.state === 'working' && input.processStatus === 'idle') return strip({ state: 'working', ...w });
+    if (report?.state === 'working' && input.processStatus === 'idle') {
+      return strip({ state: 'waiting', kind: 'other', waitingOn: 'Its own background work: it said it carries on by itself', ...w });
+    }
     // In progress with nothing running: on whom it waits, so no one reads "working" on an idle session.
     if (input.isMain) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
     if ((input.openWorkers ?? 0) > 0) {
@@ -720,7 +780,7 @@ export function userStatusLine(c: UserStatusCounts, opts: { withDone?: boolean }
   return parts.join(' · ');
 }
 
-// ── The Brief (FOR_USER_BRIEF): Main's or a lead's short letter to the user ──
+// ── The Brief: Main's or a lead's short letter to the user (sessions/brief-write.ts) ──
 
 /** What the session wrote, and when (Task.brief). */
 export interface TaskBrief {
@@ -728,6 +788,11 @@ export interface TaskBrief {
   at: string;
   /** The lines that break the Brief's rules (sessions/brief-rules.ts), as Walnut found them. */
   issues?: Array<{ kind: 'no_task' | 'no_vp' | 'several_things'; line: string; vp?: { id: string; title: string } }>;
+  /** Each named task's status mark when it was written (sessions/brief-fresh.ts briefSnapshot):
+   *  a line whose task's mark differs now moved since. Absent on a letter stored before. */
+  marks?: Record<string, string>;
+  /** The tasks that asked the user when it was written (a lead's team, Main's org). */
+  asks?: string[];
 }
 
 /** The longest Brief kept: a dozen lines, not a document (Main's lines carry two task refs). */

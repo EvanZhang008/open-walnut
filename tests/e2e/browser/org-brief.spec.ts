@@ -1,10 +1,9 @@
 /**
  * The Brief above a lead's chat on the Org page (web/src/components/org/OrgBrief.tsx): the short
- * letter the lead's session rewrites at every turn end (FOR_USER_BRIEF, sessions/brief.ts), kept
- * current by Walnut.
+ * letter the lead's session keeps itself (brief_write = PUT /api/v1/tasks/:id/brief,
+ * sessions/brief-write.ts), kept current by Walnut.
  *
- * The fixture's mock CLI writes as its Brief what followed "brief: " in its last message, through
- * the real turn-end self-report.
+ * The lead's writes go through the route its brief_write op calls, as its session would.
  *
  * Scenario matrix (2026-10-30, the user: the Brief is only the AI's letter, in three sections, and
  * the Needs you cards belong to the default view, Task, whose four tabs read like the home panel):
@@ -13,11 +12,14 @@
  *     sections (Needs you, Working, Waiting / snoozed) with each task under its live status, its
  *     pills wearing that status, its time, no Needs you cards; Task brings the cards back; the
  *     Task view's four tabs carry the home panel's names and counts, and a count pill opens its tab;
- *  2. a named task moves: its pill recolors at once and its line moves to its new section, and
- *     nothing is added under the letter;
+ *  2. a named task moves: its pill recolors at once, its line moves to its new section and shows
+ *     the task's words now, marked as moved, and the head says how many lines moved since; opening
+ *     a stale Brief asks the lead for a refresh and the page says it is updating; a task asking the
+ *     user that the letter leaves out is added in its own words; a named task that finishes leaves;
  *  3. Fold keeps the first lines and survives a reload; a reload opens on Task again;
  *  4. the lead rewrites its Brief while the page is open: the new letter shows with no reload, in
- *     its sections; a line with no task is stored with its issue, and the page shows no notice;
+ *     its sections, no longer moved or updating; a line with no task is stored with its issue, and
+ *     the page shows no notice;
  *  5. a node whose contact keeps no Brief (one team, no lead) has no switch.
  * The fixture is shared, so this file makes its own projects and removes what it made.
  */
@@ -31,7 +33,7 @@ const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const LED = `Brief led ${STAMP}`
 const SOLO = `Brief solo ${STAMP}`
 const made: string[] = []
-const ids = { lead: '', parser: '', review: '', solo: '' }
+const ids = { lead: '', parser: '', review: '', extra: '', solo: '' }
 let cwd = ''
 
 test.describe.configure({ mode: 'serial' })
@@ -44,6 +46,13 @@ async function post<T>(request: APIRequestContext, url: string, data: unknown): 
   const res = await request.post(url, { data })
   expect(res.ok(), `${url}: ${await res.text()}`).toBe(true)
   return (await res.json()) as T
+}
+
+/** The lead's session writing its Brief (its brief_write op calls this route). */
+async function writeBrief(request: APIRequestContext, data: unknown): Promise<{ issues: string[] }> {
+  const res = await request.put(`/api/v1/tasks/${ids.lead}/brief`, { data })
+  expect(res.ok(), await res.text()).toBe(true)
+  return (await res.json()) as { issues: string[] }
 }
 
 async function createTask(request: APIRequestContext, title: string, project: string): Promise<string> {
@@ -99,15 +108,12 @@ test.beforeAll(async ({ request }) => {
     `- <task-ref id="${ids.review}" label="Review"/>: waits on the code review.`,
     `- <task-ref id="${ids.parser}" label="Parser"/>: the parser is half done, pick its output format.`,
   ].join('\n')
-  // The lead's session writes it at its turn end, through the real self-report: the fixture's
-  // mock CLI answers FOR_USER_BRIEF with what followed "brief: " in its message.
-  await post(request, '/api/sessions/quick-start', { cwd, message: `snapshot-clean-turn:Brief written.\nbrief: ${letter}`, taskId: ids.lead })
-  let last: Record<string, unknown> = {}
-  await expect.poll(async () => {
-    last = (await (await request.get(`/api/tasks/${ids.lead}`)).json()).task ?? {}
-    return (last.brief as { text?: string } | undefined)?.text ?? ''
-  }, { timeout: 90_000, message: 'the lead\'s Brief' }).toContain('the parser is half done')
-    .catch((err) => { throw new Error(`${err}\nlead: ${JSON.stringify({ org_role: last.org_role, phase: last.phase, status_report: last.status_report, summary: last.summary })}`) })
+  // The lead has a session (its chat), whose turn ended; it writes its Brief itself.
+  await post(request, '/api/sessions/quick-start', { cwd, message: 'snapshot-clean-turn:Started.', taskId: ids.lead })
+  await expect.poll(async () => (await (await request.get(`/api/tasks/${ids.lead}`)).json()).task?.session_id ?? '', { timeout: 90_000 }).not.toBe('')
+  await writeBrief(request, { content: letter })
+  const stored = (await (await request.get(`/api/tasks/${ids.lead}`)).json()).task.brief as { text: string }
+  expect(stored.text).toContain('the parser is half done')
 })
 
 test.afterAll(async ({ request }) => {
@@ -138,7 +144,8 @@ test('a lead opens on Task with its Needs you cards; its Brief is the letter alo
   await expect.poll(() => sectionOf(body, ids.review)).toBe('Waiting / snoozed')
   await expect(body.locator(`a.task-link[data-task-id="${ids.parser}"]`)).toHaveAttribute('data-user-state', 'needs')
   await expect(body.locator(`a.task-link[data-task-id="${ids.review}"]`)).toHaveAttribute('data-user-state', 'waiting')
-  await expect(detail.getByTestId('org-brief-foot')).toHaveText(/^Written /)
+  await expect(detail.getByTestId('org-brief-head')).toHaveText(/^Written [^·]*$/)
+  await expect(body.locator('[data-brief-moved], [data-brief-added]')).toHaveCount(0)
   await detail.screenshot({ path: `test-results/org-brief-letter-${test.info().project.name}.png` })
   // The Brief view is the letter alone: no Needs you rows, no tabs.
   await expect(detail.getByTestId('org-alerts')).toHaveCount(0)
@@ -163,7 +170,7 @@ test('a lead opens on Task with its Needs you cards; its Brief is the letter alo
   await detail.screenshot({ path: `test-results/org-task-waiting-${test.info().project.name}.png` })
 })
 
-test('a task the Brief names moves: its pill recolors and its line changes section, and nothing is added under the letter', async ({ page, request }) => {
+test('a task the Brief names moves: its line shows it now, the head counts it, a refresh is asked; a new ask is added, a finished line leaves', async ({ page, request }) => {
   await isolateUiPrefs(page)
   await loadHome(page)
   await openNode(page, LED)
@@ -175,11 +182,31 @@ test('a task the Brief names moves: its pill recolors and its line changes secti
   const body = detail.getByTestId('org-brief-body')
   const pill = body.locator(`a.task-link[data-task-id="${ids.review}"]`)
   await expect(pill).toHaveAttribute('data-user-state', 'needs', { timeout: 30_000 })
-  // Its line follows it into Needs you, with no new turn of the lead.
+  // Its line follows it into Needs you, with no new turn of the lead, and says where it is now.
   await expect.poll(() => sectionOf(body, ids.review)).toBe('Needs you')
-  // Only the letter and its written time: no list of moves, no still-open footer, no cards.
+  const line = body.locator('li', { has: page.locator(`a.task-link[data-task-id="${ids.review}"]`) })
+  await expect(line).toHaveAttribute('data-brief-moved', 'needs')
+  await expect(line.getByTestId('org-brief-now')).toHaveText(/^Now: /)
+  await expect(detail.getByTestId('org-brief-moved')).toHaveText(' · 1 line moved since')
+  // The user is looking at a stale Brief: one refresh is asked of the lead, and the page says so.
+  await expect(detail.getByTestId('org-brief-updating')).toBeVisible({ timeout: 20_000 })
+  const asked = (await (await request.get(`/api/tasks/${ids.lead}`)).json()).task.brief_refresh as { by: string; moved: number }
+  expect(asked).toMatchObject({ by: 'web', moved: 1 })
+  await detail.screenshot({ path: `test-results/org-brief-moved-${test.info().project.name}.png` })
+  // A task that asks the user and is not in the letter: Walnut adds it, in its own words.
+  ids.extra = await createTask(request, `Extra ${STAMP}`, LED)
+  const ask = await request.patch(`/api/tasks/${ids.extra}`, { data: { phase: 'NEED_ACTION' } })
+  expect(ask.ok(), await ask.text()).toBe(true)
+  const added = body.locator(`li[data-brief-added]`, { has: page.locator(`a.task-link[data-task-id="${ids.extra}"]`) })
+  await expect(added).toBeVisible({ timeout: 30_000 })
+  await expect(added.getByTestId('org-brief-now')).toHaveText(/^Added by Walnut/)
+  await expect.poll(() => sectionOf(body, ids.extra)).toBe('Needs you')
+  // A named task that finishes leaves the letter.
+  const done = await request.patch(`/api/tasks/${ids.extra}`, { data: { phase: 'COMPLETE' } })
+  expect(done.ok(), await done.text()).toBe(true)
+  await expect(body.locator(`a.task-link[data-task-id="${ids.extra}"]`)).toHaveCount(0, { timeout: 30_000 })
+  // Only the head and the letter: no list of moves under it, no cards.
   await expect(detail.getByTestId('org-brief').locator(':scope > *')).toHaveCount(2)
-  await expect(detail.getByTestId('org-brief-foot')).toHaveText(/^Written [^·]*$/)
   await expect(detail.getByTestId('org-alerts')).toHaveCount(0)
   const back = await request.patch(`/api/tasks/${ids.review}`, { data: { phase: 'TODO' } })
   expect(back.ok(), await back.text()).toBe(true)
@@ -211,18 +238,21 @@ test('a rewrite reaches an open Brief at once, with no reload', async ({ page, r
   await detail.getByTestId('org-top-brief').click()
   const body = detail.getByTestId('org-brief-body')
   await expect(body).toContainText('the parser is half done')
-  const sid = (await (await request.get(`/api/tasks/${ids.lead}`)).json()).task.session_id as string
   const letter = `### Needs you\n- Pick the parser's output format.\n- <task-ref id="${ids.parser}" label="Parser"/>: waits on your pick.`
-  const send = await request.post(`/api/v1/sessions/${sid}/messages`, { data: { text: `snapshot-clean-turn:Rewritten.\nbrief: ${letter}` } })
-  expect(send.status(), await send.text()).toBeLessThan(300)
-  await expect(body).toContainText('waits on your pick', { timeout: 60_000 })
+  const { issues } = await writeBrief(request, { content: letter })
+  expect(issues).toHaveLength(1)
+  await expect(body).toContainText('waits on your pick', { timeout: 30_000 })
   await expect(body).not.toContainText('the parser is half done')
   await expect(body.locator('h3')).toHaveText(['Needs you', 'Working', 'Waiting / snoozed'])
   await expect(body.locator(`a.task-link[data-task-id="${ids.parser}"]`)).toHaveAttribute('data-user-state', 'needs')
   // Its first line names no task: stored with that issue (brief-rules.ts), which the page does not show.
   const stored = (await (await request.get(`/api/tasks/${ids.lead}`)).json()).task.brief as { issues?: Array<{ kind: string }> }
   expect(stored.issues?.map((i) => i.kind)).toEqual(['no_task'])
-  await expect(detail.getByTestId('org-brief-foot')).toHaveText(/^Written [^·]*$/)
+  await expect(detail.getByTestId('org-brief-head')).toHaveText(/^Written [^·]*$/)
+  await expect(body.locator('[data-brief-moved], [data-brief-added]')).toHaveCount(0)
+  // An edit of one line, as brief_write's edits do.
+  await writeBrief(request, { edits: [{ old: 'waits on your pick.', new: 'waits on your pick of the format.' }] })
+  await expect(body).toContainText('waits on your pick of the format.', { timeout: 30_000 })
 })
 
 test('a node whose contact keeps no Brief has no switch', async ({ page }) => {
