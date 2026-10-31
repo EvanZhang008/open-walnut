@@ -46,6 +46,8 @@ export interface HostDef {
   discovered?: boolean
   /** The paired cloud box (core/hosts/cloud-box-host.ts): reached over the companion's tunnel, not SSH. */
   cloud_box?: boolean
+  /** The user's capability tags for it (core/hosts/capabilities.ts). */
+  capabilities?: string[]
 }
 
 export interface HostStatus {

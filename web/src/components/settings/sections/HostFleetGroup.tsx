@@ -41,7 +41,7 @@ function HostCard({ host, now }: { host: FleetHost; now: number }) {
         {rows.map((r) => (
           <div className="hf-row" key={r.key} data-row={r.key} data-tone={r.tone}>
             <dt>{r.label}</dt>
-            <dd>{r.value}</dd>
+            <dd title={r.title}>{r.value}</dd>
           </div>
         ))}
       </dl>

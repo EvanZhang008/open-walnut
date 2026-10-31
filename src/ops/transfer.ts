@@ -119,6 +119,9 @@ defineOp({
     + 'model spend there over 30 days at public list prices (not a bill), how it connects (local, SSH tunnel, bridge; round trip), '
     + 'the Walnut server it runs for the Mac, its daemon (version, whether it starts by itself after a reboot), '
     + 'and placement: the room score session placement judges it by (busy, which caps, its weight) and whether a job that must keep running fits there, with the reasons. '
+    + '`capabilities` says what a task can use it for: `tags` (always-on, cloud or local, macos or linux, ios with its Xcode and simulator runtimes, '
+    + 'browser = the user\'s own signed-in browser through the Walnut extension, docker, mcp:<server> for each Claude Code MCP server there, and the user\'s own tags), '
+    + 'with `unknown` naming what its daemon has not reported yet. Ask for a host by tag in task_create or task_start: host "@ios", "@browser", "@ios+always-on". '
     + 'Read-only; never dials a host.',
   input: {
     days: z.number().int().min(1).max(31).optional().describe('History window in days (default 30, one bucket a day)'),

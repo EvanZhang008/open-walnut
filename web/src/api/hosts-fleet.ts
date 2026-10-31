@@ -25,6 +25,21 @@ export interface FleetHost {
   server: { enabled: boolean; program: string | null; phase: string; phaseLabel: string; build: string | null; phone: string | null; message: string | null } | null;
   daemon: { version: string | null; startedAt: number | null; startup: string; startsAfterReboot: boolean; runtime: string | null; vitals: boolean } | null;
   placement: { score: number | null; busy: boolean | null; reasons: string[]; weight: number | null; longRunning: { ok: boolean; reasons: string[] } };
+  /** What the host can do (src/core/hosts/capabilities.ts); absent from a server older than it. */
+  capabilities?: FleetCapabilities;
+}
+
+export interface FleetCapabilities {
+  tags: string[];
+  alwaysOn: boolean | null;
+  placement: 'cloud' | 'local' | null;
+  os: 'macos' | 'linux' | 'windows' | null;
+  ios: { xcode: string; runtimes: string[] } | null;
+  browsers: Array<{ name: string; relay: boolean }>;
+  mcp: Array<{ name: string; plugin?: string }>;
+  clis: string[];
+  declared: string[];
+  unknown: string[];
 }
 
 export function fetchFleet(opts?: { signal?: AbortSignal }): Promise<{ hosts: FleetHost[]; checkedAt: number }> {

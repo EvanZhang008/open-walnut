@@ -750,6 +750,14 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // every probe bounded (3 s each, 12 s in all), a failed probe is null. Both twins; like
   // host.preflight, not bridge-reachable and not for followers. Optional.
   'host-facts-v1',
+  // 'host-caps-v1' (host-facts-core.ts): host.facts also answers what this host can do:
+  // `ios` (macOS with the full Xcode: its version and iOS simulator runtimes), `browsers`
+  // (Chromium-family browsers and whether the Walnut browser extension's native host is
+  // registered) and `mcp` (the Claude Code MCP servers of this account, by name only, never
+  // a command, environment or header). The fleet view builds each host's capabilities from
+  // it (src/core/hosts/capabilities.ts) and probes again when a cached profile lacks them.
+  // Same rules as host-facts-v1. Optional: without it those capabilities read as unknown.
+  'host-caps-v1',
   // 'host-load-v1' (host-facts-core.ts load): `host.load {path?}` answers how busy this
   // host is now: load average, CPU busy share over two samples 200 ms apart, memory
   // available, free and total disk under `path` (default HOME). Read-only, every probe

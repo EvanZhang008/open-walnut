@@ -9,6 +9,7 @@ import type { HostStats, HostVitals, VitalsBucket, VitalsOutage, VitalsWindow } 
 import type { HostProfile } from './host-profile.js'
 import type { HostLoadView } from './placement.js'
 import type { HostServerPhase } from '../host-server/manager.js'
+import { capabilityWords, hostCapabilities, type HostCapabilities } from './capabilities.js'
 
 export type FleetConnectionKind = 'local' | 'ssh-tunnel' | 'bridge'
 
@@ -76,6 +77,8 @@ export interface FleetHost {
     /** Whether a job that must keep running fits here, and why not. */
     longRunning: { ok: boolean; reasons: string[] }
   }
+  /** What the host can do (capabilities.ts): `tags` is what a `@tag` host selector matches. */
+  capabilities: HostCapabilities
   checkedAt: number
   /** The card in one line, for an agent (fleetHostLine). */
   line: string
@@ -147,6 +150,8 @@ export interface FleetInputs {
   spendFrom: string | null
   server: Omit<NonNullable<FleetHost['server']>, 'phaseLabel'> | null
   daemon: Omit<NonNullable<FleetHost['daemon']>, 'startsAfterReboot'> | null
+  /** The user's own tags for the host (config `hosts.<key>.capabilities`). */
+  declaredCapabilities?: unknown
   now: number
 }
 
@@ -196,6 +201,10 @@ export function buildFleetHost(i: FleetInputs): FleetHost {
     placement: i.load?.known
       ? { score: i.load.score, busy: i.load.busy, reasons: i.load.reasons, weight: i.load.weight ?? null, longRunning: { ok: false, reasons: [] } }
       : { score: null, busy: null, reasons: [], weight: i.load?.weight ?? null, longRunning: { ok: false, reasons: [] } },
+    capabilities: hostCapabilities({
+      probed: probed ?? null, kind: i.profile?.kind ?? null, local: i.local,
+      week: history?.windows.find((w) => w.days === 7) ?? null, declared: i.declaredCapabilities,
+    }),
     checkedAt: i.now,
     line: '',
   }
@@ -213,6 +222,8 @@ export function fleetHostLine(h: FleetHost): string {
   const parts: string[] = [`${h.label} (${h.host})`]
   parts.push(h.connection.connected ? `connected over ${CONNECTION_KIND_WORDS[h.connection.kind]}` : `not connected (${h.connection.phaseLabel})`)
   if (h.system?.os) parts.push(h.system.os)
+  const can = h.capabilities ? capabilityWords(h.capabilities, { os: !h.system?.os }) : ''
+  if (can) parts.push(`can: ${can}`)
   if (h.now) {
     const cpu = h.now.cpuUtil === null ? null : `${Math.round(h.now.cpuUtil * 100)}% CPU of ${h.now.cpus}`
     const mem = h.now.memAvailBytes === null ? null : `${Math.round(h.now.memAvailBytes / 1024 ** 3)} of ${Math.round(h.now.memTotalBytes / 1024 ** 3)} GB free`

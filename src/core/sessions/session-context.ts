@@ -324,7 +324,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
  * lines with the stored prompt and tells it the ones it lacks.
  */
 export function defaultInstructions(task: InstructionTask): string {
-  return composePrompt(task, { taskLine: '', taskDir: '' })
+  return composePrompt(task, { taskLine: '', taskDir: '', fleet: '' })
 }
 
 /**
@@ -388,10 +388,14 @@ export async function buildSessionContext(
       found = task
     } catch { /* unknown task — identity + tooling lines still apply */ }
   }
-  const taskDir = taskId ? taskDirLine(await taskDirForHost(taskId, host).catch(() => null)) : ''
+  const [taskDir, fleet] = await Promise.all([
+    taskId ? taskDirForHost(taskId, host).catch(() => null).then(taskDirLine) : Promise.resolve(''),
+    // Which machines it can use and what each can do (hosts/fleet-prompt.ts): state, never waits on a host.
+    import('../hosts/fleet-prompt.js').then((m) => m.buildFleetPromptLine(host), () => ''),
+  ])
   // The copy composePrompt reads: as on disk now, not as at the last read.
   await refreshUserProfile()
-  return { systemPrompt: composePrompt(found, { taskLine, taskDir }) }
+  return { systemPrompt: composePrompt(found, { taskLine, taskDir, fleet }) }
 }
 
 /** The task fields the default instructions depend on (role, project, ask, its standing instructions). */
@@ -453,7 +457,7 @@ function orgInstructionsLine(task: InstructionTask): string {
  * (its title and place, its leader, its workers, its directory); everything
  * else is the default instructions for the task's role.
  */
-function composePrompt(task: InstructionTask | undefined, state: { taskLine: string; taskDir: string }): string {
+function composePrompt(task: InstructionTask | undefined, state: { taskLine: string; taskDir: string; fleet: string }): string {
   const ask = task ? isAskTask(task) : false
   const projectLead = task?.org_role === 'lead'
   const mainAgent = task?.org_role === 'main'
@@ -543,6 +547,7 @@ function composePrompt(task: InstructionTask | undefined, state: { taskLine: str
     // yet is named by the env var alone; the path is the same on every resume.
     + state.taskDir
     + WORK_PLACE_RULE + '\n\n'
+    + state.fleet
     // The team charter (see 8 above).
     + TEAM_CHARTER
     // The user's profile and standing rules (see 9 above), for a session of a task: last, under

@@ -495,7 +495,7 @@ taskV1Router.post('/tasks/:id/start', async (req: Request, res: Response, next: 
       if (err instanceof QuickStartError) {
         // A lead that handed its project over: its own code and where to send instead (org/retired-lead.ts).
         const { code, ...detail } = err.body ?? {}
-        if (code === 'lead_handed_over') sendError(res, err.statusCode, code, err.message, detail)
+        if (code === 'lead_handed_over' || code === 'no_capable_host' || code === 'bad_selector') sendError(res, err.statusCode, code, err.message, detail)
         else sendError(res, err.statusCode, launchErrorCode(err.statusCode), err.message)
         return
       }

@@ -142,6 +142,32 @@ describe('listFleet', () => {
     expect(card.system).toMatchObject({ os: 'Ubuntu 24.04', cpus: 8 })
     expect(card.line).toContain('Ubuntu 24.04')
   }, 20_000)
+
+  it('a fresh profile probed before host-caps-v1 is probed again once the daemon can say what it can do', async () => {
+    const { recordProbedFacts } = await import('../../../src/core/hosts/host-profile.js')
+    const { ok: _ok, ...oldFacts } = facts
+    await recordProbedFacts('devbox', oldFacts as never) // fresh, but without ios/browsers/mcp
+    config.hosts.devbox = { ...config.hosts.devbox, capabilities: ['GPU'] } as never
+    ;(config as { local_capabilities?: string[] }).local_capabilities = ['Studio-Display']
+    try {
+      const withCaps = { ...facts, ios: null, browsers: [], mcp: [{ name: 'docs-mcp' }] }
+      dev = fake(['host-vitals-v1', 'host-facts-v1', 'host-caps-v1'], async (cmd) => cmd === 'host.vitals' ? vitalsReply(19) : withCaps, 'i-caps')
+      __setFleetConnectionsForTesting(() => new Map([['__local__', [local.conn]], ['devbox', [dev.conn]]]) as never)
+      const before = (await listFleet()).find((h) => h.host === 'devbox')!
+      expect(before.capabilities.unknown).toContain('mcp')
+      expect(before.capabilities.tags).toContain('gpu')
+      await vi.waitFor(async () => expect((await readHostProfile('devbox')).probed?.mcp).toEqual([{ name: 'docs-mcp' }]))
+      const after = (await listFleet()).find((h) => h.host === 'devbox')!
+      expect(after.capabilities.tags).toEqual(expect.arrayContaining(['linux', 'gpu', 'mcp:docs-mcp']))
+      expect(after.capabilities.unknown).not.toContain('mcp')
+      expect(dev.sends.filter((s) => s.cmd === 'host.facts')).toHaveLength(1)
+      // This machine has no hosts entry: its own tags come from local_capabilities.
+      expect((await listFleet()).find((h) => h.host === '__local__')!.capabilities.declared).toEqual(['studio-display'])
+    } finally {
+      delete (config.hosts.devbox as { capabilities?: string[] }).capabilities
+      delete (config as { local_capabilities?: string[] }).local_capabilities
+    }
+  }, 20_000)
 })
 
 describe('placement', () => {

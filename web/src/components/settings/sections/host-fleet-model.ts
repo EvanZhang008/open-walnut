@@ -5,7 +5,7 @@
  */
 import type { FleetBucket, FleetHost } from '@/api/hosts-fleet';
 
-export interface FleetRow { key: string; label: string; value: string; tone?: 'good' | 'warn' | 'bad' | 'muted' }
+export interface FleetRow { key: string; label: string; value: string; tone?: 'good' | 'warn' | 'bad' | 'muted'; title?: string }
 
 const GB = 1024 ** 3;
 
@@ -66,6 +66,32 @@ export function statusKind(h: FleetHost): 'connected' | 'failed' | 'off' | 'warn
   return h.connection.phase === 'failed' ? 'failed' : 'off';
 }
 
+const UNKNOWN_WORDS: Record<string, string> = { ios: 'iOS', browser: 'browser', mcp: 'MCP servers', 'always-on': 'always on', system: 'system' };
+
+/** What a task can use this host for (capabilities.ts on the server): iOS, the user's browser, tools, MCP servers. */
+export function canDoRow(h: FleetHost): FleetRow | null {
+  const c = h.capabilities;
+  if (!c) return null;
+  const parts: string[] = [];
+  if (c.ios) parts.push(c.ios.runtimes.length ? `iOS (${c.ios.xcode}, ${c.ios.runtimes.join(', ')})` : `${c.ios.xcode}, no iOS simulator runtime`);
+  const relayed = c.browsers.filter((b) => b.relay).map((b) => b.name);
+  if (relayed.length) parts.push(`your browser (${relayed.join(', ')})`);
+  if (c.alwaysOn) parts.push('always on');
+  if (c.tags.includes('docker')) parts.push('docker');
+  if (c.mcp.length) parts.push(`${c.mcp.length} MCP server${c.mcp.length === 1 ? '' : 's'}`);
+  for (const t of c.declared) if (!['cloud', 'local', 'always-on'].includes(t)) parts.push(t);
+  const unknown = c.unknown.filter((u) => u !== 'system').map((u) => UNKNOWN_WORDS[u] ?? u);
+  const value = parts.length
+    ? parts.join(' · ') + (unknown.length ? ` · not reported yet: ${unknown.join(', ')}` : '')
+    : unknown.length ? `Not reported yet: ${unknown.join(', ')} (its daemon tells once it is current)` : 'Nothing beyond its system';
+  const title = [
+    c.tags.length ? `A task asks for a host by tag (host "@ios"). This one's tags: ${c.tags.join(', ')}` : '',
+    c.mcp.length ? `MCP: ${c.mcp.map((m) => (m.plugin ? `${m.name} (${m.plugin})` : m.name)).join(', ')}` : '',
+    c.clis.length ? `Tools: ${c.clis.join(', ')}` : '',
+  ].filter(Boolean).join('\n');
+  return { key: 'can', label: 'Can do', value, tone: parts.length ? undefined : 'muted', ...(title ? { title } : {}) };
+}
+
 export function fleetRows(h: FleetHost, now: number): FleetRow[] {
   const rows: FleetRow[] = [];
   const s = h.system;
@@ -75,6 +101,8 @@ export function fleetRows(h: FleetHost, now: number): FleetRow[] {
       : 'Not probed yet (it is, once the host connects)',
     tone: s ? undefined : 'muted',
   });
+  const can = canDoRow(h);
+  if (can) rows.push(can);
   if (h.now) {
     const n = h.now;
     const parts = [

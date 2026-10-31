@@ -580,6 +580,16 @@ defineOp({
     for (const [key, value] of Object.entries(rest)) {
       if (value !== undefined) (key in TASK_START_INPUT ? launch : fields)[key] = value
     }
+    // A `@tag` host (host-select.ts) is resolved before the create: a refusal makes no task.
+    let hostNote = ''
+    if (!recordOnly && typeof launch.host === 'string' && launch.host.trim().startsWith('@')) {
+      const picked = await call('GET', `/hosts/pick?need=${encodeURIComponent(launch.host.trim().slice(1))}`) as
+        { pick?: { host?: string; reason?: string } } | undefined
+      if (!picked?.pick?.host) throw new Error(`No host was picked for ${launch.host}. Read host_list and name a host.`)
+      fields.launch_host_asked = launch.host.trim()
+      launch.host = picked.pick.host
+      hostNote = `Host: ${picked.pick.reason}. `
+    }
     // Where the first start runs also decides what cwd the task records (a task
     // stores no host), so the create hears it too, as hints it never stores raw.
     if (typeof launch.cwd === 'string') fields.launch_cwd = launch.cwd
@@ -603,7 +613,7 @@ defineOp({
     }
     const extra = placement ? { placement } : {}
     const where = placementSentence(placement) + titleCutSentence(placement, task, fields.description !== undefined)
-      + teamSentence(placement)
+      + teamSentence(placement) + hostNote
     // Where its card sits depends on whether a session started, so it is read after the start answers.
     const parentId = placement?.parent_task_id ?? (task.parent_task_id as string | undefined)
     const cardLine = (started: boolean) => boardCardSentence(parentId, id, started, call)

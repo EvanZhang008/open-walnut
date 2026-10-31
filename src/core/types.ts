@@ -1333,6 +1333,9 @@ export interface Config {
     /** Port for the local session server. Default: 7890. */
     port?: number;
   };
+  /** The user's own capability tags for THIS machine (`__local__`), as `hosts.<alias>.capabilities`
+   *  is for another host (core/hosts/capabilities.ts). */
+  local_capabilities?: string[];
   hosts?: Record<string, {
     hostname: string;
     user?: string;
@@ -1355,6 +1358,10 @@ export interface Config {
      *  a start would use is overloaded. Default on for an enabled host; `false` keeps it
      *  out (work still starts here when someone names this host). */
     place?: boolean;
+    /** The user's own capability tags for this host (lower case: "gpu", "cloud",
+     *  "always-on"), added to what its probes find (core/hosts/capabilities.ts) and
+     *  matched by `@tag` host selectors (host: "@gpu"). */
+    capabilities?: string[];
     /** Set only on the row config-manager injects for the paired cloud box
      *  (core/hosts/cloud-box-host.ts). Never written to config.yaml. */
     cloud_box?: boolean;

@@ -2857,6 +2857,8 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
     // The idempotency fingerprint is the ask, not how it got past the check: a replay of
     // the original payload after a confirmed create reuses that task, never conflicts.
     const { confirm_new: _confirm, new_reason: _reason, ...fingerprintBody } = (req.body ?? {}) as Record<string, unknown>
+    // A `@tag` host (host-select.ts) is the ask; the host it picked may differ on a retry.
+    if (typeof fingerprintBody.launch_host_asked === 'string') delete fingerprintBody.launch_host
     const stampedCwd = await createTimeCwd(placementReq, caller, decision).catch(() => undefined)
     const { refineShortTitle } = await import('../../core/sessions/task-title-brake.js')
     const finalTitle = rules.title

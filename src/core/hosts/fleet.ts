@@ -29,6 +29,7 @@ export type { FleetHost } from './fleet-model.js'
 
 export const LOCAL_HOST = '__local__'
 export const VITALS_CAPABILITY = 'host-vitals-v1'
+export const CAPS_CAPABILITY = 'host-caps-v1'
 const VITALS_DEADLINE_MS = 3_000
 const VITALS_TTL_MS = 15_000
 const VITALS_CACHE_MAX = 32
@@ -88,6 +89,7 @@ let connectionsOverride: (() => Map<string, VitalsConn[]>) | null = null
 export function __setFleetConnectionsForTesting(next: (() => Map<string, VitalsConn[]>) | null): void {
   connectionsOverride = next
   spendCache = null
+  lastFleet = null
   vitalsCache.clear()
   inflight.clear()
   probedInstances.clear()
@@ -147,7 +149,9 @@ async function vitalsFor(host: string, conn: VitalsConn | undefined, days: numbe
 const probedInstances = new Set<string>()
 function probeInBackground(host: string, conn: VitalsConn | undefined, profile: HostProfile | null): void {
   if (!conn?.connected || !conn.hasCapability('host-facts-v1')) return
-  if (profile && !probeIsStale(profile)) return
+  // A profile probed before the daemon learned host-caps-v1 lacks the capabilities: probe it again.
+  const capsMissing = !!profile?.probed && !('mcp' in profile.probed) && conn.hasCapability(CAPS_CAPABILITY)
+  if (profile && !probeIsStale(profile) && !capsMissing) return
   const key = `${host}\u0000${conn.daemonInstanceId ?? ''}\u0000${new Date().toISOString().slice(0, 10)}`
   if (probedInstances.has(key)) return
   probedInstances.add(key)
@@ -194,12 +198,13 @@ async function spend(now: number): Promise<{ byHost: Map<string, number>; from: 
   return spendCache?.byHost ? { byHost: spendCache.byHost, from: spendCache.from } : null
 }
 
-interface HostEntry { host: string; def: HostDef | null; label: string; local: boolean; kind: FleetConnectionKind }
+interface HostEntry { host: string; def: HostDef | null; label: string; local: boolean; kind: FleetConnectionKind; declared?: unknown }
 
 function entries(config: Config): HostEntry[] {
-  const out: HostEntry[] = [{ host: LOCAL_HOST, def: null, label: 'This computer', local: true, kind: 'local' }]
+  // This machine has no hosts entry: its own tags are `local_capabilities`.
+  const out: HostEntry[] = [{ host: LOCAL_HOST, def: null, label: 'This computer', local: true, kind: 'local', declared: config.local_capabilities }]
   for (const { key, def } of listStatusHosts(config)) {
-    out.push({ host: key, def, label: def.label?.trim() || key, local: false, kind: def.cloud_box ? 'bridge' : 'ssh-tunnel' })
+    out.push({ host: key, def, label: def.label?.trim() || key, local: false, kind: def.cloud_box ? 'bridge' : 'ssh-tunnel', declared: def.capabilities })
   }
   return out
 }
@@ -247,6 +252,7 @@ async function card(e: HostEntry, conns: Map<string, VitalsConn[]>, days: number
       version: conn.daemonVersion, startedAt: conn.daemonStartedAt, startup: conn.daemonStartup,
       runtime: conn.remoteRuntime ?? null, vitals: conn.hasCapability(VITALS_CAPABILITY),
     } : null,
+    declaredCapabilities: e.declared,
     now,
   }))
 }
@@ -262,8 +268,14 @@ export async function listFleet(opts: { days?: number } = {}): Promise<FleetHost
   const conns = connectionsOverride ? connectionsOverride() : await defaultConnections()
   const all = entries(config)
   const [spendNow, loads] = await Promise.all([spend(now), placementViews(placeable(all))])
-  return Promise.all(all.map((e) => card(e, conns, days, now, spendNow, loads)))
+  const cards = await Promise.all(all.map((e) => card(e, conns, days, now, spendNow, loads)))
+  lastFleet = { at: now, cards }
+  return cards
 }
+
+let lastFleet: { at: number; cards: FleetHost[] } | null = null
+/** The cards of the last full read, for the session prompt's host line (fleet-prompt.ts); null before one. */
+export function lastFleetRead(): { at: number; cards: FleetHost[] } | null { return lastFleet }
 
 /** One host with its history at the asked resolution; null for a host Walnut does not know. */
 export async function getFleetHost(host: string, opts: { days?: number; bucketMinutes?: number } = {}): Promise<FleetHost | null> {

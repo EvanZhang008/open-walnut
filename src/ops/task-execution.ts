@@ -9,7 +9,7 @@ type Call = Parameters<NonNullable<WalnutOp['handler']>>[1]
 export const TASK_START_INPUT = {
   message: z.string().trim().min(1).optional().describe('Instruction for the task; defaults to its description or title'),
   cwd: z.string().startsWith('/').optional().describe('Absolute working directory; omit to inherit task/project defaults'),
-  host: z.string().optional().describe('Execution host alias; omit to inherit task/project defaults'),
+  host: z.string().optional().describe('Execution host alias; omit to inherit task/project defaults. Or ask for what a host has: "@ios", "@browser" (the user\'s own signed-in browser), "@mcp:<server>", "@always-on", "@ios+always-on" for both: Walnut picks a connected host that has it (host_list shows each host\'s capabilities.tags) or refuses, saying which hosts have it'),
   model: z.string().optional().describe('Model id or provider model value'),
   mode: z.enum(SESSION_MODE_IDS).optional().describe('Permission mode. Leave it out for a new coding task: never plan except when the user asks for plan; the owner writes its own plan and carries on.'),
   engine: z.enum(SESSION_ENGINE_IDS).optional().describe('Coding engine; default: the default engine (Settings > Engines), claude when none is set'),

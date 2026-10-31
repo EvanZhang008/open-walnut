@@ -1645,7 +1645,7 @@ completes unless `keep_source`; it is for work the user wants as a new task.
 - `PATCH /api/v1/hosts/:host/profile { kind?: kind | null, user_note?, refresh?:
   true }` → `200 { profile }`; `kind: null` returns to the automatic kind.
 
-### Host fleet (additive, 2026-10): `/hosts`, `/hosts/:host`
+### Host fleet (additive, 2026-10): `/hosts`, `/hosts/:host`, `/hosts/pick`
 
 Every host Walnut runs work on, one card each: the same data the Settings page
 (Remote Hosts, Overview), the phone and agents (`host_list`, `host_get`) read.
@@ -1659,6 +1659,14 @@ daemon predates the capability has `now` and `history` null.
 - `GET /api/v1/hosts/:host?days=&bucket=` → `200 { host: FleetHost }` with its
   history over `days` (1 to 31, default 30) in buckets of `bucket` minutes (at
   least 5; default 1440, or 60 when `days` is 1); `400 bad_host`, `404 unknown_host`.
+- `GET /api/v1/hosts/pick?need=ios` (several tags: `ios+always-on`, URL-encoded) →
+  `200 { pick: { host, label, tags, reason } }`: a connected host whose
+  `capabilities.tags` hold every tag, the caller's own host first (from
+  `x-walnut-caller-sid`), then the ones placement does not call busy, then the most
+  room; `409 no_capable_host` with a sentence naming who has it and why none can take
+  it now, `400 bad_selector`. `POST /tasks/:id/start` and the `task_create` op take the
+  same selector as `host: "@ios"` and resolve it here (the op before it creates the
+  task, so a refusal makes none).
 
 `FleetHost`: `{ host, label, local, line, checkedAt, connection: { kind: "local" |
 "ssh-tunnel" | "bridge", connected, phase, phaseLabel, since, rttMs, error },
@@ -1672,7 +1680,17 @@ linkedShare, drops, downs, daemonStarts, boots }], outages: [{ from, to, minutes
 last30dUsd, from, basis: "list-price" } | null, server: { enabled, program,
 phase, build, phone, message } | null, daemon: { version, startedAt, startup,
 runtime, vitals } | null, placement: { score, busy, reasons, weight, longRunning: { ok,
-reasons } } }`.
+reasons } }, capabilities: { tags, alwaysOn, placement: "cloud" | "local" | null, os:
+"macos" | "linux" | "windows" | null, ios: { xcode, runtimes } | null, browsers: [{ name,
+relay }], mcp: [{ name, plugin? }], clis, declared, unknown } }`.
+`capabilities` (additive, 2026-10-31) is what a task can use the host for, built from its
+`host.facts` probe (capability `host-caps-v1` adds `ios`, `browsers` and `mcp`: MCP server
+names only, never a command, environment or header), its 7-day ledger (`alwaysOn`: up 95%
+of at least a day of record, never a laptop) and the user's own tags
+(`hosts.<alias>.capabilities` in config, which may also say `cloud` or `always-on`).
+`unknown` lists what the host has not reported yet (an older daemon), which is never read
+as "no". `browsers[x].relay` is true when the Walnut browser extension's native host is
+registered there, which is what the `browser` tag means.
 History comes from a ledger each daemon writes itself, one line a minute, kept 31
 days under the host's HOME, so a Mac that slept never counts as the host being
 down: `up` minutes had the host and its daemon running, `linked` minutes also had

@@ -49,6 +49,11 @@ const FLEET = [
     sessions: { running: 12 }, spend: { last30dUsd: 2345.6, from: '2026-10-02', basis: 'list-price' },
     daemon: { version: 'walnut-daemon-0123456789ab', startedAt: NOW - DAY, startup: 'on-demand', startsAfterReboot: false, runtime: 'binary', vitals: true },
     placement: { score: 3, busy: false, reasons: [], weight: 50, longRunning: { ok: false, reasons: ['It is a laptop: a job here stops while it sleeps.'] } },
+    capabilities: {
+      tags: ['macos', 'local', 'ios', 'browser', 'mcp:playwright'], alwaysOn: false, placement: 'local', os: 'macos',
+      ios: { xcode: 'Xcode 26.1', runtimes: ['iOS 26.1', 'iOS 18.6'] }, browsers: [{ name: 'chrome', relay: true }, { name: 'brave', relay: false }],
+      mcp: [{ name: 'playwright' }], clis: ['git', 'node', 'xcodegen'], declared: [], unknown: [],
+    },
   }),
   card({
     host: 'devbox', label: 'Big dev box',
@@ -59,6 +64,11 @@ const FLEET = [
     server: { enabled: true, program: 'replica', phase: 'running', phaseLabel: 'running', build: '0.6.20-abc1234', phone: 'connected', message: null },
     daemon: { version: 'walnut-daemon-0123456789ab', startedAt: NOW - DAY, startup: 'on-demand', startsAfterReboot: false, runtime: 'bun', vitals: true },
     placement: { score: 32, busy: false, reasons: [], weight: 50, longRunning: { ok: false, reasons: ['Its daemon does not start by itself after a reboot (run `walnut daemon install --yes` on it, then `sudo loginctl enable-linger $USER` there so it starts at boot, not only at login).'] } },
+    capabilities: {
+      tags: ['always-on', 'cloud', 'linux', 'docker', 'mcp:docs-mcp', 'mcp:tickets-mcp', 'mcp:mail-mcp', 'gpu'], alwaysOn: true, placement: 'cloud', os: 'linux',
+      ios: null, browsers: [], mcp: [{ name: 'docs-mcp', plugin: 'Tools' }, { name: 'tickets-mcp', plugin: 'Tools' }, { name: 'mail-mcp' }],
+      clis: ['docker', 'gh', 'git', 'go', 'node'], declared: ['gpu'], unknown: [],
+    },
   }),
   card({
     host: 'olddev', label: 'Spare box with a rather long label that must not break the card',
@@ -82,6 +92,7 @@ const FLEET = [
     now: { cpus: 8, cpuUtil: 0.05, load: [0.2, 0.2, 0.2], memTotalBytes: 32 * GB, memAvailBytes: 20 * GB, uptimeSec: 3600, bootedAt: NOW - 3600_000, linked: false, at: NOW - 7 * 60_000, stale: true },
     sessions: { running: null }, server: { enabled: false, program: null, phase: 'off', phaseLabel: 'off', build: null, phone: null, message: null },
     placement: { score: null, busy: null, reasons: [], weight: null, longRunning: { ok: false, reasons: ['Walnut is not connected to it now.'] } },
+    capabilities: { tags: ['linux'], alwaysOn: null, placement: null, os: 'linux', ios: null, browsers: [], mcp: [], clis: ['git'], declared: [], unknown: ['always-on', 'browser', 'mcp'] },
   }),
 ]
 
@@ -122,6 +133,14 @@ test('a fleet of five reads in words, with day cells and the long-running verdic
   await expect(dev.getByTestId('host-fleet-days').locator('i[data-tone="bad"]')).toHaveCount(1)
   await expect(dev.getByTestId('host-fleet-fit')).toHaveText(/^Not for a job that must keep running: Its daemon does not start by itself/)
   await expect(dev.getByTestId('host-fleet-fit').locator('code')).toHaveText(['walnut daemon install --yes', 'sudo loginctl enable-linger $USER'])
+  // What each host can do: the Mac's iOS and the user's browser, the dev box's tools, a host not reported yet.
+  const mac = group.locator('[data-host="__local__"]')
+  await expect(mac.locator('[data-row="can"] dd')).toHaveText('iOS (Xcode 26.1, iOS 26.1, iOS 18.6) · your browser (chrome) · 1 MCP server')
+  await expect(mac.locator('[data-row="can"] dd')).toHaveAttribute('title', /tags: macos, local, ios, browser, mcp:playwright/)
+  await expect(dev.locator('[data-row="can"] dd')).toHaveText('always on · docker · 3 MCP servers · gpu')
+  await expect(dev.locator('[data-row="can"] dd')).toHaveAttribute('title', /MCP: docs-mcp \(Tools\), tickets-mcp \(Tools\), mail-mcp/)
+  await expect(group.locator('[data-host="homepc"] [data-row="can"] dd')).toHaveText('Not reported yet: always on, browser, MCP servers (its daemon tells once it is current)')
+  await expect(group.locator('[data-host="olddev"] [data-row="can"]')).toHaveCount(0) // an older server sends no capabilities
   const old = group.locator('[data-host="olddev"]')
   await expect(old.locator('[data-row="now"] dd')).toHaveText('Its daemon is older than this view (it upgrades on the next connect)')
   await expect(old.getByTestId('host-fleet-days')).toHaveCount(0)
@@ -183,5 +202,6 @@ test('the fixture server answers its own fleet: this computer first', async ({ p
   await expect(first).toHaveAttribute('data-host', '__local__', { timeout: 30_000 })
   await expect(first.locator('.hf-card-name')).toHaveText('This computer')
   await expect(first.locator('[data-row="spend"]')).toBeVisible()
+  await expect(first.locator('[data-row="can"]')).toBeVisible() // the real server sends capabilities
   await shot(page, '3-fixture-server', page.getByTestId('host-fleet'))
 })

@@ -135,3 +135,120 @@ describe('host.facts', () => {
     expect(tight.probedAt).toBe('2026-10-21T00:00:00.000Z')
   })
 })
+
+// 'host-caps-v1': what a host can do. The Mac probes run absolute paths
+// (/usr/bin/xcode-select, xcodebuild, xcrun), so the darwin case answers them
+// from a fake execFile; files come from a temp HOME. Each case also runs the
+// factory from its TEXT, as daemon-source.ts inlines it.
+describe('host.facts capabilities (host-caps-v1)', () => {
+  const strict = <T>(fn: T): T => new Function('"use strict"; return (' + String(fn) + ')')() as T
+  const SECRET = 'tok-must-never-leave-the-host'
+
+  function home(name: string): string {
+    const h = path.join(tmp, name)
+    fs.mkdirSync(path.join(h, '.claude', 'plugins'), { recursive: true })
+    fs.writeFileSync(path.join(h, '.claude.json'), JSON.stringify({
+      mcpServers: { 'mail-mcp': { command: 'mail', env: { TOKEN: SECRET } }, "notes-mcp": { type: 'http', headers: { Authorization: 'Bearer ' + SECRET } } },
+      projects: { '/x': { mcpServers: { 'project-only': { command: 'p' } } } },
+    }))
+    const plugin = path.join(h, 'plugin-a')
+    fs.mkdirSync(path.join(plugin, '.claude-plugin'), { recursive: true })
+    fs.writeFileSync(path.join(plugin, '.mcp.json'), JSON.stringify({ mcpServers: { 'docs-mcp': { command: 'b', env: { K: SECRET } } } }))
+    fs.writeFileSync(path.join(plugin, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'a', mcpServers: { 'second-mcp': { command: 's' } } }))
+    const off = path.join(h, 'plugin-off')
+    fs.mkdirSync(off)
+    fs.writeFileSync(path.join(off, '.mcp.json'), JSON.stringify({ mcpServers: { 'disabled-mcp': { command: 'd' } } }))
+    fs.writeFileSync(path.join(h, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'PluginA@market': true, 'PluginOff@market': false } }))
+    fs.writeFileSync(path.join(h, '.claude', 'plugins', 'installed_plugins.json'), JSON.stringify({ version: 2, plugins: {
+      'PluginA@market': [{ scope: 'user', installPath: plugin }], 'PluginOff@market': [{ scope: 'user', installPath: off }],
+    } }))
+    return h
+  }
+
+  const macExec = ((file: string, args: string[], _o: unknown, cb: (e: Error | null, out: string, err: string) => void) => {
+    const reply = (out: string, code = 0) => setImmediate(() => cb(code ? Object.assign(new Error('exit'), { code }) : null, out, ''))
+    if (file === '/usr/bin/xcode-select') return reply('/Applications/Xcode.app/Contents/Developer\n')
+    if (file === '/usr/bin/xcodebuild') return reply('Xcode 26.1\nBuild version 17B55\n')
+    if (file === '/usr/bin/xcrun' && args[0] === 'simctl') {
+      return reply([
+        '== Runtimes ==',
+        'iOS 26.1 (26.1 - 23B80) - com.apple.CoreSimulator.SimRuntime.iOS-26-1',
+        'watchOS 26.0 (26.0 - 23R353) - com.apple.CoreSimulator.SimRuntime.watchOS-26-0',
+        'iOS 17.5 (17.5 - 21F79) - com.apple.CoreSimulator.SimRuntime.iOS-17-5 (unavailable, runtime path not found)',
+      ].join('\n') + '\n')
+    }
+    if (file === 'sw_vers') return reply('26.1\n')
+    return reply('', 1)
+  }) as unknown as HostFactsDeps['execFile']
+
+  for (const [label, factory] of [['imported', createHostFacts], ['inlined', strict(createHostFacts)]] as const) {
+    it(`${label}: a Mac with Xcode and the browser extension reports iOS, the browser and MCP names only`, async () => {
+      const h = home(`mac-${label}`)
+      fs.mkdirSync(path.join(h, 'Library', 'Application Support', 'Google', 'Chrome', 'NativeMessagingHosts'), { recursive: true })
+      fs.writeFileSync(path.join(h, 'Library', 'Application Support', 'Google', 'Chrome', 'NativeMessagingHosts', 'com.walnut.browser.json'), '{}')
+      const r = await factory({
+        fs, os, execFile: macExec, http: imds, https: fakeHttp(() => ({ status: 301, body: '' })),
+        env: { PATH: bin }, home: h, platform: 'darwin', arch: 'arm64', timeouts: { probeMs: 1500, totalMs: 5000 },
+      }).facts({ network: false })
+      expect(r.ios).toEqual({ xcode: 'Xcode 26.1', runtimes: ['iOS 26.1'] })
+      expect(r.browsers).toContainEqual({ name: 'chrome', relay: true })
+      expect(r.mcp).toEqual([
+        { name: 'mail-mcp' }, { name: 'notes-mcp' },
+        { name: 'docs-mcp', plugin: 'PluginA' }, { name: 'second-mcp', plugin: 'PluginA' },
+      ])
+      // Names only: no command, environment, header or token rides the answer.
+      const text = JSON.stringify(r)
+      expect(text).not.toContain(SECRET)
+      expect(text).not.toContain('disabled-mcp')
+      expect(text).not.toContain('project-only')
+    })
+  }
+
+  it('the command line tools alone are no iOS; Linux has none and never runs the Mac probes', async () => {
+    const seen: string[] = []
+    const clt = ((file: string, args: string[], o: unknown, cb: (e: Error | null, out: string, err: string) => void) => {
+      seen.push(file)
+      if (file === '/usr/bin/xcode-select') { setImmediate(() => cb(null, '/Library/Developer/CommandLineTools\n', '')); return }
+      return (macExec as unknown as (...a: unknown[]) => void)(file, args, o, cb)
+    }) as unknown as HostFactsDeps['execFile']
+    const mac = await make({ execFile: clt, platform: 'darwin', home: home('clt') }).facts({ network: false })
+    expect(mac.ios).toBeNull()
+    expect(seen).not.toContain('/usr/bin/xcodebuild')
+
+    const linuxSeen: string[] = []
+    const linuxExec = ((file: string, args: string[], o: Record<string, unknown>, cb: (...a: unknown[]) => void) => {
+      linuxSeen.push(file)
+      return (execFile as unknown as (...a: unknown[]) => void)(file, args, o, cb)
+    }) as unknown as HostFactsDeps['execFile']
+    const h = home('linux')
+    fs.mkdirSync(path.join(h, '.config', 'google-chrome', 'NativeMessagingHosts'), { recursive: true })
+    fs.writeFileSync(path.join(h, '.config', 'google-chrome', 'NativeMessagingHosts', 'com.walnut.browser.json'), '{}')
+    const linux = await make({ execFile: linuxExec, home: h }).facts({ network: false })
+    expect(linux.ios).toBeNull()
+    expect(linuxSeen.some((f) => f.startsWith('/usr/bin/xc'))).toBe(false)
+    expect(linux.browsers).toEqual([{ name: 'chrome', relay: true }])
+    expect(linux.mcp?.map((m) => m.name)).toContain('docs-mcp')
+  })
+
+  it('no Claude config is mcp:null; a broken or huge file is skipped, never thrown', async () => {
+    const empty = path.join(tmp, 'no-claude')
+    fs.mkdirSync(empty, { recursive: true })
+    expect((await make({ home: empty }).facts({ network: false })).mcp).toBeNull()
+    const broken = path.join(tmp, 'broken-claude')
+    fs.mkdirSync(path.join(broken, '.claude'), { recursive: true })
+    fs.writeFileSync(path.join(broken, '.claude.json'), '{not json')
+    fs.writeFileSync(path.join(broken, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'Gone@m': true } }))
+    const r = await make({ home: broken }).facts({ network: false })
+    expect(r.mcp).toEqual([])
+    expect(r.browsers).toEqual([])
+  })
+
+  it('CLAUDE_CONFIG_DIR moves where the names are read', async () => {
+    const h = home('cfgdir-home')
+    const cfg = path.join(tmp, 'cfgdir')
+    fs.mkdirSync(cfg, { recursive: true })
+    fs.writeFileSync(path.join(cfg, '.claude.json'), JSON.stringify({ mcpServers: { 'from-config-dir': {} } }))
+    const r = await make({ home: h, env: { PATH: bin, CLAUDE_CONFIG_DIR: cfg } }).facts({ network: false })
+    expect(r.mcp).toEqual([{ name: 'from-config-dir' }])
+  })
+})

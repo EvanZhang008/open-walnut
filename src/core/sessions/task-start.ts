@@ -156,6 +156,8 @@ async function inheritedEngine(task: Task, params: SessionStartParams): Promise<
 }
 
 export async function startSessionForTask(params: SessionStartParams): Promise<SessionStartResult> {
+  // `host: "@ios"` asks for what a host has (host-select.ts): resolved to one host before anything else reads it.
+  params = await resolveHostSelector(params);
   let task: Task;
   try {
     task = await getTask(params.taskIdPrefix);
@@ -409,6 +411,30 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
 
 const LOCAL_ALIASES = new Set(['', 'local', '__local__']);
 const sameHost = (a?: string, b?: string) => (LOCAL_ALIASES.has(a ?? '') && LOCAL_ALIASES.has(b ?? '')) || a === b;
+
+/** The start with a `@tag` host resolved to a host; a refusal is a 409 that says which hosts have it. */
+async function resolveHostSelector(params: SessionStartParams): Promise<SessionStartParams> {
+  const { parseHostSelector, resolveHostParam, HostSelectorError } = await import('../hosts/host-select.js');
+  try {
+    if (!parseHostSelector(params.host)) return params;
+    const prefer: Array<{ host: string; why: string }> = [];
+    // The task's own conversation first: a start on another host would be refused as a move.
+    const task = await getTask(params.taskIdPrefix).catch(() => null);
+    const conversation = task ? await taskConversation(task.id).catch(() => undefined) : undefined;
+    if (conversation) prefer.push({ host: conversation.host || '__local__', why: 'is where this task already runs' });
+    if (params.callerSid) {
+      const { resolveCaller } = await import('./session-send-core.js');
+      const caller = await resolveCaller(params.callerSid).catch(() => null);
+      if (caller?.kind === 'session') prefer.push({ host: caller.record.host || '__local__', why: 'is where the caller runs' });
+    }
+    const { host, pick } = await resolveHostParam(params.host, { prefer });
+    log.session.info('host selector resolved', { selector: params.host, host, reason: pick?.reason, taskId: params.taskIdPrefix });
+    return { ...params, host };
+  } catch (err) {
+    if (err instanceof HostSelectorError) throw new QuickStartError(err.message, err.code === 'bad_selector' ? 400 : 409, { code: err.code });
+    throw err;
+  }
+}
 
 /** A start that names another engine, host or directory than the task's active
  *  conversation is refused: the engine changes inside the task (task_switch_engine);

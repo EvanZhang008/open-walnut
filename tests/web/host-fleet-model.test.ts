@@ -117,3 +117,26 @@ describe('words, never codes, on the card', () => {
     expect(value(cloud, 'daemon')).toMatchObject({ value: 'build 0123456789ab · bun · starts after a reboot', tone: undefined })
   })
 })
+
+describe('the Can do row', () => {
+  const caps = (over: Partial<NonNullable<FleetHost['capabilities']>> = {}): NonNullable<FleetHost['capabilities']> => ({
+    tags: ['macos', 'local', 'ios', 'browser', 'mcp:playwright'], alwaysOn: false, placement: 'local', os: 'macos',
+    ios: { xcode: 'Xcode 26.1', runtimes: ['iOS 26.1'] }, browsers: [{ name: 'chrome', relay: true }, { name: 'brave', relay: false }],
+    mcp: [{ name: 'playwright' }, { name: 'docs-mcp', plugin: 'ToolsPlugin' }], clis: ['git', 'node'], declared: ['gpu'], unknown: [], ...over,
+  })
+  it('says what a task can use the host for, with the tags and MCP names on hover', () => {
+    const row = value(host({ capabilities: caps() }), 'can')!
+    expect(row.value).toBe('iOS (Xcode 26.1, iOS 26.1) · your browser (chrome) · 2 MCP servers · gpu')
+    expect(row.title).toContain('tags: macos, local, ios, browser, mcp:playwright')
+    expect(row.title).toContain('MCP: playwright, docs-mcp (ToolsPlugin)')
+    expect(row.title).toContain('Tools: git, node')
+  })
+  it('a daemon that has not reported yet reads so, never as "none"', () => {
+    const row = value(host({ capabilities: caps({ tags: ['linux'], ios: null, browsers: [], mcp: [], declared: [], unknown: ['browser', 'mcp', 'system'] }) }), 'can')!
+    expect(row.value).toBe('Not reported yet: browser, MCP servers (its daemon tells once it is current)')
+    expect(row.tone).toBe('muted')
+  })
+  it('a server older than capabilities shows no row at all', () => {
+    expect(value(host(), 'can')).toBeUndefined()
+  })
+})

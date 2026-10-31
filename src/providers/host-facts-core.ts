@@ -57,6 +57,20 @@ export interface HostFacts {
   /** github: true when github.com answered over HTTPS, false when it did not. null when skipped. */
   internet: { github?: boolean } | null
   tools: Record<string, string | null>
+  /**
+   * What this host can do beyond its toolchain ('host-caps-v1'); absent from an older
+   * daemon. iOS: macOS only, the full Xcode (not the command line tools) and its
+   * simulator runtimes; null on any other system or without Xcode.
+   */
+  ios?: { xcode: string; runtimes: string[] } | null
+  /** Chromium-family browsers with the Walnut browser extension's native host registered (it drives the user's own browser). */
+  browsers?: Array<{ name: string; relay: boolean }>
+  /**
+   * The Claude Code MCP servers configured for this account, by NAME only: never a
+   * command line, environment or header, which carry credentials. `plugin` names the
+   * Claude Code plugin that brings it; user-scope servers have none.
+   */
+  mcp?: Array<{ name: string; plugin?: string }> | null
   uptimeSec: number
   probedAt: string
 }
@@ -262,6 +276,101 @@ export function createHostFacts(deps: HostFactsDeps) {
     }
   }
 
+  // 'host-caps-v1': what this host can do (ios, browsers, mcp in HostFacts).
+  async function iosFacts(): Promise<HostFacts['ios']> {
+    if (deps.platform !== 'darwin') return null
+    var sel = await exec('/usr/bin/xcode-select', ['-p'], PROBE_MS)
+    // The command line tools alone answer /Library/Developer/CommandLineTools: no simulators.
+    if (!sel || sel.code !== 0 || firstLine(sel.stdout).indexOf('.app/') < 0) return null
+    // The text listing, not --json: the JSON carries every device type per runtime and
+    // outgrows the probe's output cap on a Mac with many runtimes.
+    var got = await Promise.all([
+      exec('/usr/bin/xcodebuild', ['-version'], PROBE_MS),
+      exec('/usr/bin/xcrun', ['simctl', 'list', 'runtimes'], PROBE_MS * 2),
+    ])
+    var xcode = got[0] && got[0].code === 0 ? firstLine(got[0].stdout) : ''
+    if (!xcode) return null
+    var runtimes: string[] = []
+    String(got[1] && got[1].code === 0 ? got[1].stdout : '').split('\n').forEach(function (line) {
+      var m = /^iOS\s+(\d+(?:\.\d+)*)\b/.exec(line.trim())
+      if (m && line.indexOf('unavailable') < 0 && runtimes.indexOf('iOS ' + m[1]) < 0) runtimes.push('iOS ' + m[1])
+    })
+    return { xcode: xcode, runtimes: runtimes.slice(0, 12) }
+  }
+
+  async function exists(p: string): Promise<boolean> {
+    try { await deps.fs.promises.access(p, 0); return true } catch (_e) { return false }
+  }
+
+  async function browserFacts(): Promise<NonNullable<HostFacts['browsers']>> {
+    var mac = deps.platform === 'darwin'
+    var support = deps.home + '/Library/Application Support/'
+    var conf = (deps.env.XDG_CONFIG_HOME || deps.home + '/.config') + '/'
+    // [name, app or binary that says it is installed, its profile dir for native hosts]
+    var known: Array<[string, string, string]> = mac
+      ? [['chrome', '/Applications/Google Chrome.app', support + 'Google/Chrome'],
+        ['brave', '/Applications/Brave Browser.app', support + 'BraveSoftware/Brave-Browser'],
+        ['edge', '/Applications/Microsoft Edge.app', support + 'Microsoft Edge'],
+        ['chromium', '/Applications/Chromium.app', support + 'Chromium']]
+      : deps.platform === 'linux'
+        ? [['chrome', 'google-chrome', conf + 'google-chrome'], ['brave', 'brave-browser', conf + 'BraveSoftware/Brave-Browser'],
+          ['edge', 'microsoft-edge', conf + 'microsoft-edge'], ['chromium', 'chromium', conf + 'chromium']]
+        : []
+    var out: NonNullable<HostFacts['browsers']> = []
+    for (var i = 0; i < known.length; i++) {
+      var k = known[i]
+      var installed = mac ? await exists(k[1]) : !!(await which(k[1]))
+      var relay = await exists(k[2] + '/NativeMessagingHosts/com.walnut.browser.json')
+      if (installed || relay) out.push({ name: k[0], relay: relay })
+    }
+    return out
+  }
+
+  async function readJson(p: string, maxBytes: number): Promise<Record<string, unknown> | null> {
+    try {
+      var st = await deps.fs.promises.stat(p)
+      if (!st.isFile() || st.size > maxBytes) return null
+      var v = JSON.parse(await deps.fs.promises.readFile(p, 'utf8'))
+      return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null
+    } catch (_e) { return null }
+  }
+
+  function keysOf(v: unknown): string[] {
+    return v && typeof v === 'object' && !Array.isArray(v) ? Object.keys(v as Record<string, unknown>) : []
+  }
+
+  /** MCP server names only, from the files Claude Code itself reads; values never leave this function. */
+  async function mcpFacts(): Promise<HostFacts['mcp']> {
+    var dir = deps.env.CLAUDE_CONFIG_DIR || deps.home + '/.claude'
+    var mainFile = deps.env.CLAUDE_CONFIG_DIR ? dir + '/.claude.json' : deps.home + '/.claude.json'
+    var LIMIT = 32 * 1024 * 1024
+    var got = await Promise.all([readJson(mainFile, LIMIT), readJson(dir + '/settings.json', LIMIT), readJson(dir + '/plugins/installed_plugins.json', LIMIT)])
+    if (!got[0] && !got[1]) return null
+    var out: NonNullable<HostFacts['mcp']> = []
+    var seen: Record<string, boolean> = {}
+    var add = function (name: string, plugin?: string) {
+      var key = (plugin || '') + '\u0000' + name
+      if (seen[key] || out.length >= 64) return
+      seen[key] = true
+      out.push(plugin ? { name: name.slice(0, 80), plugin: plugin.slice(0, 80) } : { name: name.slice(0, 80) })
+    }
+    keysOf(got[0] && got[0].mcpServers).forEach(function (n) { add(n) })
+    var enabled = (got[1] && got[1].enabledPlugins) as Record<string, unknown> | undefined
+    var installed = ((got[2] && got[2].plugins) || {}) as Record<string, Array<{ installPath?: unknown }>>
+    var ids = keysOf(enabled).filter(function (id) { return enabled![id] === true })
+    for (var i = 0; i < ids.length && i < 64; i++) {
+      var entry = Array.isArray(installed[ids[i]]) ? installed[ids[i]][0] : null
+      var root = entry && typeof entry.installPath === 'string' ? entry.installPath : ''
+      if (!root) continue
+      var plugin = ids[i].split('@')[0]
+      var files = await Promise.all([readJson(root + '/.mcp.json', 1024 * 1024), readJson(root + '/.claude-plugin/plugin.json', 1024 * 1024)])
+      var fromMcp = files[0] ? (files[0].mcpServers !== undefined ? files[0].mcpServers : files[0]) : null
+      keysOf(fromMcp).forEach(function (n) { add(n, plugin) })
+      keysOf(files[1] && files[1].mcpServers).forEach(function (n) { add(n, plugin) })
+    }
+    return out
+  }
+
   async function fqdn(): Promise<string> {
     var r = await exec('hostname', ['-f'], PROBE_MS)
     var name = r && r.code === 0 ? firstLine(r.stdout) : ''
@@ -341,6 +450,9 @@ export function createHostFacts(deps: HostFactsDeps) {
       probe(osFacts, PROBE_MS, function (v) { Object.assign(out.os, v) }),
       probe(diskFree, PROBE_MS, function (v) { out.diskFreeBytes = v }),
       probe(fqdn, PROBE_MS, function (v) { out.fqdn = v }),
+      probe(iosFacts, PROBE_MS * 4 + 400, function (v) { out.ios = v }),
+      probe(browserFacts, PROBE_MS, function (v) { out.browsers = v }),
+      probe(mcpFacts, PROBE_MS, function (v) { out.mcp = v }),
     ]
     TOOLS.forEach(function (tool) {
       // A macOS shim waits for its tools check first, so it gets two probe windows.

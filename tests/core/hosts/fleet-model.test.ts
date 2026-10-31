@@ -110,7 +110,7 @@ describe('the card', () => {
     expect(h.sessions.running).toBe(19)
     expect(h.spend).toEqual({ last30dUsd: 1234.46, from: '2026-10-01', basis: 'list-price' })
     expect(h.history?.daemonStarts).toBe(15)
-    expect(h.line).toBe('Dev box (devbox); connected over SSH tunnel; Debian 12; 25% CPU of 32, 96 of 128 GB free; up 99% over 7 days; 19 sessions open; $1234 in 30 days (list price); Walnut server running')
+    expect(h.line).toBe('Dev box (devbox); connected over SSH tunnel; Debian 12; can: always on; 25% CPU of 32, 96 of 128 GB free; up 99% over 7 days; 19 sessions open; $1234 in 30 days (list price); Walnut server running')
   })
 
   it('a host with no probe, no vitals and no spend yet', () => {
