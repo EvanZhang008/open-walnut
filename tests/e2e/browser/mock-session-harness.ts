@@ -32,6 +32,17 @@ export async function streamTools(page: Page, calls: (readonly [string, string, 
   }
 }
 
+/**
+ * Claude Code took the queued line(s) `rowIds` here: the `user_line` marker the
+ * server emits on the CLI's `command_lifecycle` started (claude-code-session.ts).
+ * A queued message sits where its line was taken, or after all live output while
+ * it waits (web/src/stream/chat-order.ts), so a spec that queues a line mid-turn
+ * and checks where it sits reports the take, as a real CLI does.
+ */
+export async function takeLine(page: Page, ...rowIds: string[]) {
+  await injectEvent(page, 'session:user-line', { sessionId: MOCK_SESSION_ID, uuid: `line-${rowIds[0]}`, rowIds });
+}
+
 export async function mockSession(page: Page, messages: unknown[], status: 'running' | 'idle') {
   await page.addInitScript(() => {
     const OrigWebSocket = window.WebSocket;

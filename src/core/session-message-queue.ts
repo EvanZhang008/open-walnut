@@ -30,7 +30,7 @@ import fs from 'node:fs/promises';
 import { withFileLock } from '../utils/file-lock.js';
 import { SESSION_QUEUE_FILE } from '../constants.js';
 import { log } from '../logging/index.js';
-import { lineUuidFor, splitBatchAtUuid } from '../providers/batch-uuid.js';
+import { lineUuidFor, noteLineCarries, splitBatchAtUuid } from '../providers/batch-uuid.js';
 import {
   fateOf, isPhoneMessageId, noteDelivered, setFate, withdrawIn, STOP_PARKED_REASON,
   type RelayFate, type WithdrawState,
@@ -384,6 +384,8 @@ export async function markProcessing(
     return batch;
   }, stopFence !== undefined);
   if (pending.length === 0) return [];
+  // The take marker names these rows whichever way the line goes out.
+  noteLineCarries(sessionId, pending[0].lineUuid, pending.map((m) => m.id));
   log.session.info('messages batched for delivery', { sessionId, count: pending.length });
   return pending;
 }

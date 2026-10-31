@@ -97,3 +97,32 @@ Place its bubbles with bubbleIndexOf / cardLiveRounds (or mount SessionChatHisto
     expect(parser).toMatch(/floatQueuedRows\(result, resultParentIds\)/);
   });
 });
+
+/**
+ * Browser specs that queue a line into a mocked running turn. A queued message sits
+ * where Claude Code took its line, or after all live output while it waits, so a
+ * mock that queues a line and never reports its take (`takeLine`, the server's
+ * `session:user-line`) checks a line that is still waiting. 2026-10-31: the
+ * step-group fold spec still assumed the old send-time place and read every card
+ * after every step. A spec listed here only checks waiting lines, with the reason.
+ */
+const WAITING_ONLY_SPECS: Record<string, string> = {
+  // Checks how a card folds the moment it arrives, before any take.
+  'tests/e2e/browser/session-queued-card-fold.spec.ts': 'folds on arrival',
+};
+
+describe('ratchet: a mocked live turn says where its queued lines were taken', () => {
+  it('every browser spec that queues a line mid-turn reports the take, or is listed', () => {
+    const dir = join(ROOT, 'tests', 'e2e', 'browser');
+    const specs = readdirSync(dir).filter((n) => n.endsWith('.ts'))
+      .map((n) => ({ rel: relative(ROOT, join(dir, n)), src: readFileSync(join(dir, n), 'utf8') }));
+    const queuing = specs.filter((f) => /'session:message-queued'/.test(f.src)).map((f) => f.rel);
+    const unreported = queuing.filter((rel) => {
+      const src = specs.find((f) => f.rel === rel)!.src;
+      return !/\btakeLine\(|'session:user-line'/.test(src) && !(rel in WAITING_ONLY_SPECS);
+    });
+    expect(unreported, `A spec queues a line into a live turn and never reports where Claude Code took it.
+Call takeLine(page, rowId) (mock-session-harness.ts) where the CLI would take it, or list the spec in WAITING_ONLY_SPECS.`).toEqual([]);
+    expect(Object.keys(WAITING_ONLY_SPECS).filter((rel) => !queuing.includes(rel))).toEqual([]);
+  });
+});

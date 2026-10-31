@@ -55,7 +55,7 @@ import {
   unmarkUnwritten,
 } from '../core/session-message-queue.js'
 import type { QueuedMessage } from '../core/session-message-queue.js'
-import { lineUuidFor, noteTurnUserUuid, pickBatchUuid, turnUserUuid } from './batch-uuid.js'
+import { lineUuidFor, noteTurnUserUuid, pickBatchUuid, rowsCarriedBy, turnUserUuid } from './batch-uuid.js'
 import {
   announceReclaimed, awaitLine, awaitedLines, dropLine, heldRows, isLineAwaited, lineRows, markUnconfirmed, noteHeld, noteLineState, onLinesReclaimed, releaseHeld, PROMPT_HOLD_REASON,
   takeLine, takeUntold, untakenLines, type LineState, type ReclaimReason, type UntakenLine,
@@ -7871,6 +7871,7 @@ export class ClaudeCodeSession {
           const rowIds = [...new Set([
             ...lineRows(this.claudeSessionId, lc.command_uuid).map((r) => r.id),
             ...(this._queuedLines.get(lc.command_uuid) ?? []).map((m) => m.messageId),
+            ...rowsCarriedBy(this.claudeSessionId, lc.command_uuid),
           ].filter(Boolean))]
           bus.emit(EventNames.SESSION_USER_LINE, {
             sessionId: this.claudeSessionId, taskId: this.taskId, uuid: lc.command_uuid,

@@ -74,3 +74,40 @@ export function noteTurnUserUuid(sessionId: string, uuid: string | undefined): v
 export function turnUserUuid(sessionId: string): string | undefined {
   return turnUuids.get(sessionId);
 }
+
+/**
+ * Which queue rows each recent line carries, per session: noted where the queue
+ * gives a batch its line uuid (markProcessing), on every path the line then goes
+ * out (a live write, a write behind a running turn, the first line of a cold
+ * --resume). The take marker (`session:user-line`) names these rows, and the chat
+ * places a sent message by them (web/src/stream/chat-order.ts): a bubble knows
+ * its row id, never the line's uuid. 2026-10-31: a cold resume's first line was
+ * registered nowhere the marker read, so its message sat below the whole answer.
+ * In memory: a line an earlier server process sent is named once this one sends
+ * it again (its rows keep their uuid across a restart, QueuedMessage.lineUuid).
+ */
+const carried = new Map<string, Map<string, string[]>>();
+/** Bounds: a line's marker comes within its turn; old lines must not pin memory. */
+const MAX_CARRIED_LINES = 64;
+const MAX_CARRIED_SESSIONS = 256;
+
+export function noteLineCarries(sessionId: string, uuid: string | undefined, rowIds: readonly string[]): void {
+  if (!sessionId || !uuid || rowIds.length === 0) return;
+  let lines = carried.get(sessionId);
+  if (lines) carried.delete(sessionId);
+  else lines = new Map();
+  carried.set(sessionId, lines);
+  if (carried.size > MAX_CARRIED_SESSIONS) carried.delete(carried.keys().next().value!);
+  lines.delete(uuid);
+  lines.set(uuid, [...rowIds]);
+  if (lines.size > MAX_CARRIED_LINES) lines.delete(lines.keys().next().value!);
+}
+
+/** The rows a line carries (empty when this server never sent it). */
+export function rowsCarriedBy(sessionId: string | null | undefined, uuid: string): readonly string[] {
+  return (sessionId ? carried.get(sessionId)?.get(uuid) : undefined) ?? [];
+}
+
+export function resetLineCarriesForTesting(): void {
+  carried.clear();
+}

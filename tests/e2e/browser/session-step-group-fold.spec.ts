@@ -9,11 +9,14 @@
  * split it.
  *
  * History and the WS are mocked (mock-session-harness.ts); stream and queue events
- * are pushed one by one while the turn really runs.
+ * are pushed one by one while the turn really runs. A card sits where Claude Code
+ * took its line (web/src/stream/chat-order.ts), so each one is reported taken as
+ * it arrives, the way a running CLI takes a card at its next tool boundary; one
+ * that is not taken yet waits after everything (the first test's fourth card).
  */
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import { createEnvelopeKit } from '../../../src/core/peers/envelope-kit';
-import { MOCK_SESSION_ID as SESSION_ID, injectEvent, mockSession, open, streamTools, waitForWs } from './mock-session-harness';
+import { MOCK_SESSION_ID as SESSION_ID, injectEvent, mockSession, open, streamTools, takeLine, waitForWs } from './mock-session-harness';
 
 const SHOTS = '/tmp/step-group-fold';
 if (process.env.STEP_GROUP_VIDEO) test.use({ video: { mode: 'on', size: { width: 1280, height: 900 } } });
@@ -26,16 +29,18 @@ const notice = (n: number) => kit.buildWalnutMessage({
 });
 const at = (n: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, n)).toISOString();
 
-async function card(page: Page, id: string, n: number) {
+/** A card queued into the running turn, taken at once unless `waiting`. */
+async function card(page: Page, id: string, n: number, { waiting = false } = {}) {
   await injectEvent(page, 'session:message-queued', {
     sessionId: SESSION_ID, messageId: id, message: notice(n), source: 'walnut-notify', sentBy: 'agent', enqueuedAt: new Date().toISOString(),
   });
+  if (!waiting) await takeLine(page, id);
 }
 /** A card, then wait until the panel shows it: a row is placed where the stream
  *  stood when it arrived, so the next event must not race it. The fold's line
  *  counts cards, so it shows once the line reads `total` received. */
-async function cardShown(page: Page, hist: Locator, id: string, n: number, total: number) {
-  await card(page, id, n);
+async function cardShown(page: Page, hist: Locator, id: string, n: number, total: number, opts?: { waiting?: boolean }) {
+  await card(page, id, n, opts);
   await expect.poll(() => hist.locator('.tool-run-label').allTextContents(), { timeout: 10000 })
     .toContainEqual(expect.stringMatching(new RegExp(`^Received ${total} messages?\\b`)));
 }
@@ -97,9 +102,22 @@ test('cards, reasoning and commands in one stretch are one row while the turn ru
   await page.waitForTimeout(600);
 
   // More arrives while it is open: it joins the same row, which stays open.
-  await cardShown(page, hist, 'qm-sg-4', 4, 4);
+  await cardShown(page, hist, 'qm-sg-4', 4, 4, { waiting: true });
   await expect(fold.locator(':scope > .tool-run-toggle')).toHaveText(/^Received 4 messages(?: from [^·›]+?)? \u00b7 Ran 4 tools/);
   await expect(fold).toHaveAttribute('data-open', 'true');
+  // Not taken yet, it waits below what streams meanwhile; taken, it stays where
+  // Claude Code took it, above what came after.
+  const before = (a: string, b: string) => body.evaluate((el, [a, b]) => {
+    const text = el.textContent ?? '';
+    return text.indexOf(a) >= 0 && text.indexOf(b) > text.indexOf(a);
+  }, [a, b] as const);
+  await streamTools(page, [['sg-5', 'make deploy']]);
+  await expect.poll(() => before('make deploy', 'SG_NOTICE_4')).toBe(true);
+  await takeLine(page, 'qm-sg-4');
+  await streamTools(page, [['sg-6', 'git tag']]);
+  await expect(body).toContainText('git tag');
+  expect(await before('make deploy', 'SG_NOTICE_4')).toBe(true);
+  expect(await before('SG_NOTICE_4', 'git tag')).toBe(true);
   await page.waitForTimeout(600);
 });
 
@@ -120,6 +138,7 @@ test('words or a person\'s message split the stretch, and stay on screen', async
   await injectEvent(page, 'session:message-queued', {
     sessionId: SESSION_ID, messageId: 'qm-sw-p', message: 'SG_PERSON also check the logs', source: 'mobile', sentBy: 'person', enqueuedAt: new Date().toISOString(),
   });
+  await takeLine(page, 'qm-sw-p');
   await card(page, 'qm-sw-3', 3);
   await page.waitForTimeout(400);
   await streamTools(page, [['sw-3', 'tail log']]);
