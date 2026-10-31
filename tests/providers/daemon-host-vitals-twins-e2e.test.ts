@@ -16,6 +16,7 @@ import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { testBun } from '../helpers/bun-runtime.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 let scriptPath = ''
 const BUN: string | undefined = testBun()
@@ -38,7 +39,7 @@ async function boot(twin: Twin): Promise<{ home: string; daemon: string }> {
   const daemon = path.join(root, 'daemon')
   const env: Record<string, string | undefined> = {
     ...process.env,
-    SHELL: '/bin/sh', PATH: '/usr/bin:/bin', HOME: home,
+    SHELL: '/bin/sh', PATH: guardedPath([], '/usr/bin:/bin'), HOME: home,
     WALNUT_DAEMON_DIR: daemon,
     WALNUT_STREAMS_DIR: path.join(root, 'streams'),
     WALNUT_LEGACY_STREAMS_DIR: path.join(root, 'no-legacy-streams'),

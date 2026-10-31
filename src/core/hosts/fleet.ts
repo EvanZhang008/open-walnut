@@ -14,7 +14,7 @@
  * placement's own view (placement.ts hostLoads, held to PLACEMENT_DEADLINE_MS),
  * so the card shows the room the next start is judged by, never a second score.
  */
-import { CLOUD_MODE } from '../../constants.js'
+import { isCompanion } from '../server-role.js'
 import { getConfig } from '../config-manager.js'
 import { log } from '../../logging/index.js'
 import type { Config } from '../types.js'
@@ -256,7 +256,9 @@ export async function listFleet(opts: { days?: number } = {}): Promise<FleetHost
   const days = clampDays(opts.days)
   const config = await getConfig()
   const now = Date.now()
-  if (CLOUD_MODE) return cloudFleet(config, now)
+  // The companion holds no daemon link: its cards come from the bridges. A host replica never
+  // runs this route (the route table forwards it to the Mac, or answers needs-leader).
+  if (isCompanion()) return cloudFleet(config, now)
   const conns = connectionsOverride ? connectionsOverride() : await defaultConnections()
   const all = entries(config)
   const [spendNow, loads] = await Promise.all([spend(now), placementViews(placeable(all))])
@@ -269,7 +271,7 @@ export async function getFleetHost(host: string, opts: { days?: number; bucketMi
   const e = entries(config).find((x) => x.host === host)
   if (!e) return null
   const now = Date.now()
-  if (CLOUD_MODE) return (await cloudFleet(config, now)).find((h) => h.host === host) ?? null
+  if (isCompanion()) return (await cloudFleet(config, now)).find((h) => h.host === host) ?? null
   const conns = connectionsOverride ? connectionsOverride() : await defaultConnections()
   const bucket = Number.isFinite(opts.bucketMinutes) && (opts.bucketMinutes as number) >= 5 ? Math.round(opts.bucketMinutes as number) : undefined
   const [spendNow, loads] = await Promise.all([spend(now), placementViews(placeable([e]))])
