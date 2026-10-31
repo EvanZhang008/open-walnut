@@ -70,7 +70,7 @@ describe('bare task ids become task pills', () => {
     expect(inBlock[0]).toContain(`>${B}</a>`);
   });
 
-  it('shows the title even when the title is already written beside the id', () => {
+  it('shows the title even when the title is already written beside the id, and only once', () => {
     // 2026-10-31, the user: a lead wrote `"<title>" (<id>)` and the pill showed
     // only the id, so he could not tell which task it was ("all name").
     const after = renderMarkdownWithRefs(`From task ${B} (${TITLE_B.toLowerCase()}) a reply came back.`);
@@ -80,6 +80,11 @@ describe('bare task ids become task pills', () => {
     // The reported shape: a quoted title, then the id in full-width parentheses.
     const cjk = renderMarkdownWithRefs(`\u662F "${TITLE_A}"\uFF08 \`${A}\` \uFF09\u3002`);
     expect(pills(cjk, A)).toEqual([expect.stringContaining(`>${TITLE_A}</a>`)]);
+    // The pill absorbs the written title (task-title-absorb.ts): each reads once.
+    const once = (html: string, title: string) => html.replace(/<[^>]+>/g, '').toLowerCase().split(title.toLowerCase()).length - 1;
+    expect(once(after, TITLE_B)).toBe(1);
+    expect(once(before, TITLE_A)).toBe(1);
+    expect(once(cjk, TITLE_A)).toBe(1);
   });
 
   it('an unknown id stays text; a known id links only in the rendered output', () => {

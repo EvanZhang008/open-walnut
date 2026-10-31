@@ -80,12 +80,14 @@ test('task ids in a reply render as task pills and open the task', async ({ page
   expect(linkFont).toBe(codeFont)
 
   // The completed task: its title pill in the CJK sentence, and again where the
-  // reply already wrote the title beside the id (the name, never the id).
+  // reply already wrote the title beside the id (the name once, never the id).
   const donePills = reply.locator(`a.task-link[data-task-id="${DONE_ID}"]`)
   await expect(donePills).toHaveCount(2)
   await expect(donePills.nth(0)).toHaveText('Rotate the staging API keys')
   await expect(donePills.nth(1)).toHaveText('Rotate the staging API keys')
   expect(await reply.textContent()).not.toContain(DONE_ID)
+  // The title the reply wrote beside the id is absorbed by the pill: it reads once.
+  await expect(reply.locator('p:has-text("a reply came back")')).toHaveText('From task Rotate the staging API keys a reply came back.')
 
   // An id's first segment, and a UUID task's first segment in full-width parentheses.
   const prefixPill = reply.locator(`p:has-text("Ask here is being changed by") a.task-link[data-task-id="${OPEN_ID}"]`)

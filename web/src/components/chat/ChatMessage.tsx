@@ -8,7 +8,7 @@ import { useLightbox } from '@/hooks/useLightbox';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { Lightbox } from '@/components/common/Lightbox';
 import { FileViewer } from '@/components/common/FileViewer';
-import { entityRefsToHtml, renderToolResultWithRefs, extractMarkdownFields, renderMarkdownWithRefs, linkTaskMentions, renderUserMessage } from '@/utils/markdown';
+import { entityRefsToHtml, renderToolResultWithRefs, extractMarkdownFields, renderMarkdownWithRefs, linkTaskMentions, renderUserMessage, absorbWrittenTaskTitles } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { lookupTaskLabel } from '@/stores/entity-label-store';
@@ -73,7 +73,7 @@ function formatTimestamp(ts: string | undefined): string {
 }
 
 export function renderMarkdown(text: string): string {
-  const preprocessed = entityRefsToHtml(text);
+  const preprocessed = entityRefsToHtml(absorbWrittenTaskTitles(text));
   const raw = marked.parse(preprocessed);
   return typeof raw === 'string' ? DOMPurify.sanitize(linkTaskMentions(raw), { ADD_ATTR: ['data-task-id', 'data-session-id', 'data-lightbox-src', 'loading'] }) : '';
 }
@@ -81,7 +81,7 @@ export function renderMarkdown(text: string): string {
 /** Inline-only markdown: renders bold, links, task pills — no <p> wrapper.
  *  Used for single-line contexts like collapsed summaries. */
 export function renderInlineMarkdown(text: string): string {
-  const preprocessed = entityRefsToHtml(text);
+  const preprocessed = entityRefsToHtml(absorbWrittenTaskTitles(text));
   const raw = marked.parseInline(preprocessed);
   return typeof raw === 'string' ? DOMPurify.sanitize(linkTaskMentions(raw), { ADD_ATTR: ['data-task-id', 'data-session-id', 'data-lightbox-src', 'loading'] }) : '';
 }

@@ -148,3 +148,44 @@ describe('the Board names tasks in its messages and its text', () => {
     expect(sections).toMatch(/hasAttribute\('data-wn-text'\)/);
   });
 });
+
+describe('a title written beside a mention is absorbed by every renderer that makes pills', () => {
+  // 2026-10-31, the lead: "the pill should absorb the written title so it shows once".
+  // One rule (web/src/utils/task-title-absorb.ts), mirrored by the Board frame and the
+  // phone; all three read tests/fixtures/task-title-absorb.json.
+  const md = read('web/src/utils/markdown.ts');
+  const core = read('web/src/utils/task-title-absorb.ts');
+  const frame = read('web/src/components/board/board-markdown.frame.js');
+
+  it('every web renderer that makes pills drops the written title first', () => {
+    const body = /export function renderMarkdownWithRefs\([\s\S]*?\n}\n/.exec(md)?.[0] ?? '';
+    expect(body).toMatch(/if \(taskIds === 'pills'\) preprocessed = absorbWrittenTaskTitles\(/);
+    // A renderer of its own: every marked parse that links task pills absorbs first.
+    for (const r of Object.keys(CHAT)) {
+      const src = read(r);
+      if (!/linkTaskMentions\(raw\)/.test(src)) continue;
+      const parses = (src.match(/marked\.parse(?:Inline)?\(/g) ?? []).length;
+      const absorbed = (src.match(/entityRefsToHtml\(absorbWrittenTaskTitles\(text\)\)/g) ?? []).length;
+      expect(absorbed, r).toBe(parses);
+    }
+  });
+
+  it('the Board frame mirrors the rule and runs it before its inline passes', () => {
+    expect(frame).toMatch(/var s = absorbTaskTitles\(raw\)\.replace\(CODE_RE/);
+    const lits = (src: string, decl: string) => (new RegExp(`${decl} = \\[([\\s\\S]*?)\\];`).exec(src)?.[1] ?? '').split('\n').map((l) => l.trim().replace(/,$/, '')).filter(Boolean);
+    expect(lits(md, 'const NOT_PILL_RES')).toHaveLength(3);
+    expect(lits(frame, 'var NOT_CHIP_RES')).toEqual(lits(md, 'const NOT_PILL_RES'));
+    for (const name of ['ELLIPSIS_END_RE', 'PAREN_BEFORE_RE', 'CLOSE_AFTER_RE', 'LIST_SEP_AFTER_RE', 'DASH_BEFORE_RE', 'DASH_AFTER_RE', 'PAREN_AFTER_RE', 'SPACE_AFTER_RE']) {
+      const ts = new RegExp(`const ${name} = (/.*/);`).exec(core)?.[1];
+      const js = new RegExp(`var ${name} = (/.*/);`).exec(frame)?.[1];
+      expect(ts, name).toBeTruthy();
+      expect(js, name).toBe(ts);
+    }
+  });
+
+  it('the test suites read the shared cases', () => {
+    for (const r of ['tests/web/markdown/task-title-absorb.test.ts', 'tests/web/board-markdown.test.ts']) {
+      expect(read(r), r).toContain('fixtures/task-title-absorb.json');
+    }
+  });
+});

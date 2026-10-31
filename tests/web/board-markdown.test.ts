@@ -306,3 +306,28 @@ describe('task mentions: code and fallbacks (review 2026-10-31)', () => {
     expect(render('see <task-ref id="mvghost1-0000"/>')).toBe('see mvghost1-0000')
   })
 })
+
+describe('a title written beside a mention is dropped (the cases the web and the phone share)', () => {
+  const FIXTURE = JSON.parse(fs.readFileSync(fileURLToPath(new URL('../fixtures/task-title-absorb.json', import.meta.url)), 'utf-8')) as {
+    tasks: Record<string, string>
+    cases: { name: string; in: string; out: string }[]
+  }
+  // The host keys the refs by the token as written: each id and its first segment here.
+  const refs: Record<string, unknown> = {}
+  for (const [id, title] of Object.entries(FIXTURE.tasks)) {
+    const t = { id, title, phase: '', status: '' }
+    refs[id] = t
+    refs[id.split('-')[0]!] = t
+  }
+  const kit: Record<string, unknown> = { esc: coreEsc(), state: { refs } }
+  new Function('window', SRC)({ __wnBoardKit: kit })
+  const render = kit.richText as (t: string) => string
+  const absorb = kit.absorbTaskTitles as (t: string) => string
+  for (const c of FIXTURE.cases) {
+    it(c.name, () => {
+      // A fence is a block: its text never reaches the inline pass.
+      if (!c.in.includes('```')) expect(absorb(c.in)).toBe(c.out)
+      expect(render(c.in)).toBe(render(c.out))
+    })
+  }
+})

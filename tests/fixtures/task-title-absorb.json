@@ -1,0 +1,131 @@
+{
+  "_doc": "Task titles written beside a mention of the same task, and what the source reads after the pill absorbs them. Read by tests/web/markdown/task-title-absorb.test.ts (web), tests/web/board-markdown.test.ts (Board frame) and ios-native/WalnutTests/TaskTitleAbsorbTests.swift (phone). Ids resolve exactly or by a unique first segment.",
+  "tasks": {
+    "mvu0ubnq-a02d": "Home task panel: Flat layout and status sections",
+    "2ac88910-7b3f-5a6c-8d9e-0f1a2b3c4d5e": "Chat order: a message stays where it was sent",
+    "cd9b029e-1d2c-5e3f-8a4b-6c7d8e9f0a1b": "Keep the Home layout on disk \u00b7 Org Lock",
+    "mpwidref-7c2e": "Quarterly invoice reconciliation"
+  },
+  "cases": [
+    {
+      "name": "bold quoted title before, full-width parens (a real reply)",
+      "in": "\u662f **\"Home task panel: Flat layout and status sections\"**\uff08mvu0ubnq-a02d\uff09\u3002\u9996\u9875",
+      "out": "\u662f mvu0ubnq-a02d\u3002\u9996\u9875"
+    },
+    {
+      "name": "quoted title cut with an ellipsis before",
+      "in": "\"Home task panel\u2026\"\uff08mvu0ubnq-a02d\uff09",
+      "out": "mvu0ubnq-a02d"
+    },
+    {
+      "name": "plain title before, ASCII parens",
+      "in": "Moved to Home task panel: Flat layout and status sections (mvu0ubnq-a02d) today.",
+      "out": "Moved to mvu0ubnq-a02d today."
+    },
+    {
+      "name": "short name of two words before an id prefix",
+      "in": "Home task panel (mvu0ubnq) shipped.",
+      "out": "mvu0ubnq shipped."
+    },
+    {
+      "name": "title before, the parens go on with more (a real reply)",
+      "in": "**\"Chat order: a message stays where it was sent\"**\uff082ac88910\uff0c\u5df2\u5728 Mac \u4e0a\u5f00\u59cb\uff09",
+      "out": "2ac88910\uff08\u5df2\u5728 Mac \u4e0a\u5f00\u59cb\uff09"
+    },
+    {
+      "name": "title in parens after",
+      "in": "mvu0ubnq (Home task panel: Flat layout and status sections) shipped",
+      "out": "mvu0ubnq shipped"
+    },
+    {
+      "name": "backticked id, cut title in parens after",
+      "in": "`mvu0ubnq-a02d` (Home task panel...)",
+      "out": "`mvu0ubnq-a02d`"
+    },
+    {
+      "name": "quoted title after",
+      "in": "See mvu0ubnq-a02d \"Home task panel: Flat layout and status sections\".",
+      "out": "See mvu0ubnq-a02d."
+    },
+    {
+      "name": "title after a dash",
+      "in": "mvu0ubnq-a02d \u2014 Home task panel: Flat layout and status sections, in review",
+      "out": "mvu0ubnq-a02d, in review"
+    },
+    {
+      "name": "title before a dash, cut where the name ends",
+      "in": "Keep the Home layout on disk \u2014 cd9b029e is done",
+      "out": "cd9b029e is done"
+    },
+    {
+      "name": "task-ref with the title after",
+      "in": "<task-ref id=\"mvu0ubnq-a02d\" label=\"x\"/> (Home task panel: Flat layout and status sections)",
+      "out": "<task-ref id=\"mvu0ubnq-a02d\" label=\"x\"/>"
+    },
+    {
+      "name": "legacy ref with the title before",
+      "in": "Home task panel: Flat layout and status sections ([mvu0ubnq-a02d|Home])",
+      "out": "[mvu0ubnq-a02d|Home]"
+    },
+    {
+      "name": "two mentions on one line",
+      "in": "**\"Home task panel: Flat layout and status sections\"**\uff08mvu0ubnq-a02d\uff09\u548c\"Keep the Home layout on disk\"\uff08cd9b029e\uff09",
+      "out": "mvu0ubnq-a02d\u548ccd9b029e"
+    },
+    {
+      "name": "other words before stay",
+      "in": "the Chat order task (2ac88910) is open",
+      "out": "the Chat order task (2ac88910) is open"
+    },
+    {
+      "name": "one word before stays",
+      "in": "Home (mvu0ubnq-a02d)",
+      "out": "Home (mvu0ubnq-a02d)"
+    },
+    {
+      "name": "an older name stays",
+      "in": "\"Old flat layout plan\"\uff08mvu0ubnq-a02d\uff09",
+      "out": "\"Old flat layout plan\"\uff08mvu0ubnq-a02d\uff09"
+    },
+    {
+      "name": "another table cell stays",
+      "in": "| Home task panel: Flat layout | mvu0ubnq-a02d |",
+      "out": "| Home task panel: Flat layout | mvu0ubnq-a02d |"
+    },
+    {
+      "name": "a fenced block stays",
+      "in": "```\nmvu0ubnq-a02d (Home task panel: Flat layout and status sections)\n```",
+      "out": "```\nmvu0ubnq-a02d (Home task panel: Flat layout and status sections)\n```"
+    },
+    {
+      "name": "an id inside longer code stays",
+      "in": "`walnut task show mvu0ubnq-a02d` (Home task panel: Flat layout and status sections)",
+      "out": "`walnut task show mvu0ubnq-a02d` (Home task panel: Flat layout and status sections)"
+    },
+    {
+      "name": "an unknown id stays",
+      "in": "Quarterly invoice reconciliation (zzzzzzz9-0000)",
+      "out": "Quarterly invoice reconciliation (zzzzzzz9-0000)"
+    },
+    {
+      "name": "a title cut inside a word stays",
+      "in": "Quarterly invoice recon (mpwidref-7c2e)",
+      "out": "Quarterly invoice recon (mpwidref-7c2e)"
+    },
+    {
+      "name": "a link's text stays",
+      "in": "[Home task panel \u2014 mvu0ubnq-a02d](https://example.com/pr/1)",
+      "out": "[Home task panel \u2014 mvu0ubnq-a02d](https://example.com/pr/1)"
+    },
+    {
+      "name": "an id inside a URL stays",
+      "in": "https://x.dev/t?id=mvu0ubnq-a02d (Home task panel)",
+      "out": "https://x.dev/t?id=mvu0ubnq-a02d (Home task panel)"
+    },
+    {
+      "name": "a session-ref label stays",
+      "in": "<session-ref id=\"s1\" label=\"Home task panel (mvu0ubnq-a02d)\"/> ran it",
+      "out": "<session-ref id=\"s1\" label=\"Home task panel (mvu0ubnq-a02d)\"/> ran it"
+    }
+  ]
+}

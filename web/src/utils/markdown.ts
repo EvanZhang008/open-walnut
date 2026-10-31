@@ -11,7 +11,8 @@ import {
   noteUndecidedTaskRef,
   resolveTaskToken,
 } from '../stores/entity-label-store';
-import { isTaskLookupToken } from './task-id-shape';
+import { isTaskLookupToken, isTaskTokenCandidate, TASK_TOKEN_SRC } from './task-id-shape';
+import { absorbWrittenTitles, pillNames, type WrittenMention } from './task-title-absorb';
 // Relative for the same reason. Shared with the server's path resolver and its
 // HTTP edges so that "what position does `file.go#L58` name" and "is this a
 // traversal" each have exactly one definition; the module is dependency-free by
@@ -577,6 +578,57 @@ const bareTaskIdPills: BareTaskIdRenderer = {
  */
 export function linkTaskMentions(html: string, mode: BareTaskIdMode = 'pills'): string {
   return linkBareTaskIds(html, bareTaskIdPills, mode);
+}
+
+const WHOLE_TASK_TOKEN_RE = new RegExp(`^${TASK_TOKEN_SRC}$`);
+const NOT_PILL_RES = [
+  /\[[^\[\]\n]*\]\((?:[^()\s]|\([^()\s]*\))*\)/g,
+  /https?:\/\/[^\s<>"')\]]+/g,
+  /<[^<>\n]+>/g,
+];
+
+/**
+ * Drop a task title the model wrote beside a mention of the same task, so the
+ * pill names it once (task-title-absorb.ts). Runs on the SOURCE, before refs and
+ * markdown, for conversation output only (pills); code is left as written,
+ * except a code span holding only the id, which is that mention in backticks.
+ */
+export function absorbWrittenTaskTitles(text: string): string {
+  if (text.length < 7 || !/[a-z0-9]{7}/.test(text)) return text;
+  const code = codeRegions(text);
+  const mentions: WrittenMention[] = [];
+  const add = (start: number, end: number, token: string) => {
+    const hit = resolveTaskToken(token.trim());
+    if (hit) mentions.push({ start, end, titles: pillNames(hit.label.title) });
+  };
+  // Code, and every ref tag (resolved or not): a bare token inside one is not a mention of its own.
+  const blocked: [number, number][] = [...code];
+  const taken = (a: number, b: number) => blocked.some(([s, e]) => s < b && a < e);
+  for (const [s, e] of code) {
+    // An inline code span on one line (a fence holding an id is a block, never a pill).
+    if (text.charAt(s) !== '`' || text.slice(s, e).includes('\n')) continue;
+    const inner = text.slice(s, e).replace(/^`+|`+$/g, '').trim();
+    if (isTaskTokenCandidate(inner) && WHOLE_TASK_TOKEN_RE.test(inner)) add(s, e, inner);
+  }
+  for (const re of [TASK_REF_RE, LEGACY_REF_RE]) {
+    for (const m of text.matchAll(re)) {
+      const at = m.index ?? 0;
+      if (taken(at, at + m[0].length)) continue;
+      add(at, at + m[0].length, m[1] ?? '');
+      blocked.push([at, at + m[0].length]);
+    }
+  }
+  // Never a pill, so never a mention: a markdown link (its text and destination), a URL, any
+  // other tag (its attributes, a session-ref's label).
+  for (const re of NOT_PILL_RES) {
+    for (const m of text.matchAll(re)) blocked.push([m.index ?? 0, (m.index ?? 0) + m[0].length]);
+  }
+  for (const m of text.matchAll(new RegExp(TASK_TOKEN_SRC, 'g'))) {
+    const at = m.index ?? 0;
+    if (!isTaskTokenCandidate(m[0]) || taken(at, at + m[0].length)) continue;
+    add(at, at + m[0].length, m[0]);
+  }
+  return mentions.length ? absorbWrittenTitles(text, mentions) : text;
 }
 
 /**
@@ -1635,6 +1687,7 @@ export function renderMarkdownWithRefs(
   let html: string;
   try {
     let preprocessed = stripLeakedToolCalls(text);
+    if (taskIds === 'pills') preprocessed = absorbWrittenTaskTitles(preprocessed);
     preprocessed = entityRefsToHtml(preprocessed);
     preprocessed = filePathsToHtml(preprocessed, sessionCwd);
     // In-app render: the `link` renderer may turn a local-path destination into
