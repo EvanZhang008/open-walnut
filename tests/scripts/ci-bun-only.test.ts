@@ -26,7 +26,7 @@ const workflow = (file: string) => parseYaml(fs.readFileSync(path.join(REPO, '.g
 
 /** Jobs that build or test Walnut: bun only, the image's Node removed first. */
 const NODE_FREE: Record<string, string[]> = {
-  'ci.yml': ['build', 'test', 'test-heavy', 'test-e2e', 'remote-host'],
+  'ci.yml': ['build', 'test', 'test-heavy', 'test-e2e', 'remote-host', 'browser-baseline'],
   'flake-hunt.yml': ['hunt'],
 }
 /** Jobs that keep Node, each for a reason. */

@@ -939,10 +939,10 @@ describe('ci.yml', () => {
   })
 
   it('the browser suite runs in shards and reports through the tested summary script', () => {
-    expect(doc.jobs.browser!.strategy!.matrix.shard).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+    expect(doc.jobs.browser!.strategy!.matrix.shard).toEqual(Array.from({ length: 16 }, (_, i) => i + 1))
     // `bun x` starts the runner on the job's Node (playwright's own shebang); its servers run on bun.
     // Both projects run: specs that swap the host fixture go one at a time in their own.
-    expect(runs('browser')).toContain('bun x playwright test --project=chromium --project=chromium-host-fixture --shard=${{ matrix.shard }}/8')
+    expect(runs('browser')).toContain('bun x playwright test --project=chromium --project=chromium-host-fixture --shard=${{ matrix.shard }}/16')
     // The run ends itself before the job timeout, so its report is always uploaded.
     // Its budget is counted from the job's first step (2026-10-23: a 14 min browser
     // install left a fixed 45 min run still going when the job's 60 ran out).

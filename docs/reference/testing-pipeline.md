@@ -104,6 +104,18 @@ Two properties make this gate trustworthy rather than decorative:
 - **Collection failures count.** A file that dies at import time reports `status: "failed"` with an *empty* `assertionResults` array, so harvesting only assertion results made the most likely regression of a refactor — a broken import — produce zero new keys and pass. The gate now synthesizes a `<file failed to load or collect>` key for those.
 - **A truncated run is never a pass.** Before the run the gate asks `vitest list` for the tier's files and cuts the run's `--shard` slice the way vitest does (sha1 of the root-relative path, `ceil(total / n)` per slice); every file of that slice must be in the report, and the ones that are not are named. `WALNUT_BASELINE_MIN_FILES` is a floor on the whole tier's listed files (default 1400; quick listed 1529 on 2026-10-02), for an include glob that broke. The fixed floor this replaced had gone stale (290 against 1529 files), so most of the tier could have vanished unnoticed. `tests/scripts/test-baseline-shard-cut.test.ts` checks the cut against the real vitest.
 
+### The browser suite's baseline
+
+The Playwright suite (`tests/e2e/browser/`, sixteen CI shards) has its own list, `tests/setup/known-failures-browser.json`, keyed `spec file :: describe › title`. First recorded 2026-10-31 from two CI runs: 516 tests, the union of what failed in either. Each shard only reports; the `Browser baseline` job reads the `browser-report-<n>` artifacts and fails on a failure the list does not name, or on an error outside a test (a spec that does not load, a fixture server that does not start):
+
+```bash
+bun scripts/browser-baseline.mjs check <reports dir | report.json>...           # judge reports (what CI does)
+bun scripts/browser-baseline.mjs record [--prune] <reports dir | report.json>... # update the list from them
+bun run test:browser:baseline [playwright args]                                 # run the suite here, then judge
+```
+
+A test counts as failed only when it failed on every retry: flaky is a pass, and a test that never ran (skipped, or cut off by a shard's 45-minute `--global-timeout`) is neutral. `record` only adds: new failures go in, and a test gone from a spec file that ran goes out. A known failure that passes stays, because about 86 of them came and went between two CI runs of one day; after fixing one, prune it from a run that repeats the fixed specs: `bun scripts/browser-baseline.mjs record --prune --run --repeat-each=3 <specs>`. With eight shards, six ran out of time and about 760 tests never ran in two runs in a row; sixteen fit. `Browser baseline` is not in `CI OK`, so a release never waits on it, but its red turns the run red. Fix the clusters at the root; a spec that tests a removed feature is deleted, with the reason in its commit.
+
 ### A superseded run is not red
 
 A newer push cancels the run in progress (`concurrency` with `cancel-in-progress`). `CI OK` used to run under `if: always()` and judge the cancelled legs, so every quick re-push left a red run behind: 6 of the 9 red runs on main between 2026-10-02 and 10-04. It now runs under `if: ${{ !cancelled() }}`: a run that ends cancelled has no verdict, and `scripts/ci-gate.mjs` reads it as `cancelled`, never `red`. A job that hits its timeout does not cancel the run, so `CI OK` still runs and fails on it.

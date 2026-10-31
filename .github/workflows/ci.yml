@@ -676,21 +676,22 @@ jobs:
           path: ${{ runner.temp }}/rehearsal/*/log.txt
           if-no-files-found: ignore
 
-  # ── Informational: the browser suite ────────────────────────────────────────
+  # ── The browser suite ───────────────────────────────────────────────────────
   # The Playwright specs drive the real SPA against a fixture server with a mock
-  # CLI (tests/e2e/browser/). Eight shards, retries on (playwright.config.ts under
-  # CI). Reported, not judged, until a recorded baseline lets new failures block.
+  # CLI (tests/e2e/browser/). Sixteen shards, retries on (playwright.config.ts under
+  # CI). Each shard only reports; job `browser-baseline` judges the reports
+  # against tests/setup/known-failures-browser.json.
   # The runner is the one part of the pipeline on Node; every server it starts
   # runs on bun (tests/helpers/bun-runtime.ts).
   browser:
-    name: Report (browser ${{ matrix.shard }}/8)
+    name: Report (browser ${{ matrix.shard }}/16)
     runs-on: ubuntu-24.04
     needs: build
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
       # The test run's budget is counted from here, not from its own start: on
       # 2026-10-23 installing the browsers took 14 min instead of 20 s, a run
@@ -724,8 +725,11 @@ jobs:
           PW_IGNORE_LOAD: '1'
           WALNUT_DAEMON_DIR: ${{ runner.temp }}/open-walnut-browser
           PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/browser-${{ matrix.shard }}.json
-        # Eight shards of ~280 tests fit the hour; four took 58+ min and two hit the
-        # job timeout with no report. One retry still tells flaky from failing, and
+        # Eight shards of ~430 tests did not fit: on 2026-10-30/31 six of eight hit the
+        # 45 min --global-timeout, and about 760 tests never ran in two runs in a row,
+        # so the baseline could not judge them; sixteen of ~215 each should fit. (Before that, four
+        # shards took 58+ min and two hit the job timeout with no report.)
+        # One retry still tells flaky from failing, and
         # --global-timeout ends the run itself, so the JSON report is always written:
         # 45 min at most, and never past 55 min into the job, which leaves the
         # teardown, the summary and the upload 5 min before the job timeout.
@@ -734,7 +738,7 @@ jobs:
           budget=$(( left < 2700 ? left : 2700 ))
           [ "$budget" -ge 60 ] || budget=60
           echo "test budget: ${budget}s"
-          bun x playwright test --project=chromium --project=chromium-host-fixture --shard=${{ matrix.shard }}/8 --retries=1 --global-timeout=$(( budget * 1000 )) --reporter=line,json
+          bun x playwright test --project=chromium --project=chromium-host-fixture --shard=${{ matrix.shard }}/16 --retries=1 --global-timeout=$(( budget * 1000 )) --reporter=line,json
       - name: Summarize
         if: always()
         run: |
@@ -748,6 +752,50 @@ jobs:
           name: browser-report-${{ matrix.shard }}
           path: ${{ runner.temp }}/browser-${{ matrix.shard }}.json
           if-no-files-found: ignore
+
+  # Fails on a browser failure the known list does not name (a flaky test, one
+  # that passed on its retry, passes; a test a shard's time ran out before is
+  # neutral), and on an error outside a test (a spec that does not load, a fixture
+  # server that does not start). Not in CI OK, so a release does not wait on it;
+  # a red here turns the run red and the release watch reads it. A new entry goes
+  # in with `bun scripts/browser-baseline.mjs record <the reports>`, a fixed one
+  # leaves with `record --prune` (docs/reference/testing-pipeline.md).
+  browser-baseline:
+    name: Browser baseline
+    runs-on: ubuntu-24.04
+    needs: browser
+    if: ${{ !cancelled() }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bash scripts/ci-remove-node.sh
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
+      - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: browser-report-*
+          path: ${{ runner.temp }}/browser-reports
+          merge-multiple: true
+      # shell: bash is `bash -eo pipefail`; the default (`bash -e`) took tee's exit
+      # code, so a new failure left the job green.
+      - name: Judge the browser reports
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/browser-reports"
+          n=$(find "$RUNNER_TEMP/browser-reports" -name '*.json' | wc -l)
+          echo "browser reports: $n of 16"
+          [ "$n" -gt 0 ] || { echo "::warning::no browser shard wrote a report: nothing to judge" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; }
+          [ "$n" = 16 ] || echo "::warning::only $n of 16 browser shards wrote a report; the tests of the others are not judged"
+          bun scripts/browser-baseline.mjs check "$RUNNER_TEMP/browser-reports" | tee -a "$GITHUB_STEP_SUMMARY"
 
   # ── The single required check ───────────────────────────────────────────────
   #
