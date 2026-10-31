@@ -12049,7 +12049,13 @@ try {
   hostExec = hostExecCore.createHostExec({
     spawn: function (command, args, opts) { return spawn(command, args, opts); },
     killGroup: function (pid, signal) { if (pid > 1) process.kill(-pid, signal); },
-    shell: process.env.SHELL || '/bin/sh',
+    // The user's $SHELL when it runs, else bash, else sh (the standalone twin's sessionShell()).
+    shell: (function () {
+      const runs = function (file) { try { fs.accessSync(file, fs.constants.X_OK); return fs.statSync(file).isFile(); } catch { return false; } };
+      const shell = process.env.SHELL;
+      if (shell && path.isAbsolute(shell) && runs(shell)) return shell;
+      return ['/bin/bash', '/bin/sh'].find(runs) || '/bin/sh';
+    })(),
     home: HOME_DIR,
     taskDirRoot: TASK_DIR_ROOT,
     stateDir: HOST_EXEC_DIR,

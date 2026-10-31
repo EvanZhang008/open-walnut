@@ -43,7 +43,7 @@ export interface HostExecDeps {
   spawn: (cmd: string, args: string[], opts: SpawnOptions) => ChildProcess
   /** Signal a whole process group (the twin's own, signal-checked helper). */
   killGroup: (pid: number, signal: NodeJS.Signals) => void
-  /** The user's login shell (`$SHELL`), else /bin/sh. */
+  /** The user's login shell (`$SHELL` when it runs), else bash, else sh. */
   shell: string
   home: string
   /** Where task directories live on this host (task-dir-core taskDirRoot), null when unknown. */

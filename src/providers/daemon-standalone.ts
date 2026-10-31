@@ -10372,7 +10372,7 @@ function hostExecEnv(): Record<string, string> {
 const hostExec = createHostExec({
   spawn: (command, args, opts) => spawn(command, args, opts),
   killGroup: (pid, signal) => { if (pid > 1) process.kill(-pid, signal) },
-  shell: process.env.SHELL || '/bin/sh',
+  shell: sessionShell(),
   home: HOME_DIR,
   taskDirRoot: TASK_DIR_ROOT,
   stateDir: HOST_EXEC_DIR,
