@@ -907,18 +907,24 @@ function sendTargetsOf(t: { name: string; input?: Record<string, unknown>; resul
   return refs.length > 0 ? { sentTo: refs.map((ref) => ({ ref })) } : {}
 }
 
-/** Resolve each send target to its task (an id or a unique prefix), once per ref. */
+/** Resolve each send target to its task (an id, a unique prefix or a session id), once per ref. */
 async function nameSendTargets(messages: ProjectedTranscriptMessage[]): Promise<void> {
   const rows = messages.filter((m) => m.sentTo)
   if (rows.length === 0) return
   const { getTask } = await import('./task-manager.js')
   // The name the web shows (Main is the CEO, a lead its VP), so both read the same.
   const { orgDisplayTitle } = await import('./org/org-tree.js')
+  const { getSessionByClaudeId } = await import('./session-tracker.js')
   const known = new Map<string, { taskId: string; title: string } | null>()
   for (const row of rows) {
     for (const target of row.sentTo!) {
       if (!known.has(target.ref)) {
-        known.set(target.ref, await getTask(target.ref).then((task) => ({ taskId: task.id, title: orgDisplayTitle(task) }), () => null))
+        // A task id or its prefix; else a session id, which a same-host delivery answers with.
+        const task = await getTask(target.ref).catch(async () => {
+          const record = await getSessionByClaudeId(target.ref)
+          return record?.taskId ? getTask(record.taskId).catch(() => null) : null
+        })
+        known.set(target.ref, task ? { taskId: task.id, title: orgDisplayTitle(task) } : null)
       }
       const hit = known.get(target.ref)
       if (hit) Object.assign(target, hit)

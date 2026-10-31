@@ -31,7 +31,7 @@ interface TaskLabelEntry {
   src: unknown;
 }
 
-type TaskLike = { id: string; title?: string; project?: string; org_role?: string; org_name?: string };
+type TaskLike = { id: string; title?: string; project?: string; org_role?: string; org_name?: string; session_id?: string; session_ids?: readonly string[] };
 
 /** Main reads as the CEO, a project's lead ("Walnut lead") as its VP: display only. The same rule
  *  as orgDisplayTitle (src/core/org/org-tree.ts), written here because this module imports
@@ -73,6 +73,33 @@ export function lookupSessionTitle(id: string): string | undefined {
 const unresolvedRefs = new Set<string>();
 /** Each ref's answer until the task list changes (a fold line reads it per frame). */
 const refCache = new Map<string, string | null>();
+/** Each session id to its task: a delivery the target's host made answers with
+ *  the session alone (`targetSessionId`). */
+const sessionOwner = new Map<string, string>();
+
+/** Note the task's sessions; true when one is new (an unresolved ref may name it). */
+function indexSessions(task: TaskLike): boolean {
+  let added = false;
+  for (const sid of [task.session_id, ...(task.session_ids ?? [])]) {
+    if (!sid || sessionOwner.get(sid) === task.id) continue;
+    sessionOwner.set(sid, task.id);
+    added = true;
+  }
+  return added;
+}
+
+/** The one task a prefix names among `keys` (mapped through `owner`), or null. */
+function uniqueByPrefix(ref: string, keys: Iterable<string>, owner: (k: string) => string | undefined): string | null {
+  let id: string | null = null;
+  for (const key of keys) {
+    if (!key.startsWith(ref)) continue;
+    const t = owner(key);
+    if (!t || !taskLabels.has(t)) continue;
+    if (id && id !== t) return null;
+    id = t;
+  }
+  return id;
+}
 
 /**
  * A task by its id or a unique id prefix (6+ characters), as a send's answer
@@ -83,13 +110,12 @@ export function lookupTaskByRef(ref: string): { id: string; label: TaskLabel } |
   let id = refCache.get(ref);
   if (id === undefined) {
     id = null;
+    const owner = sessionOwner.get(ref);
     if (taskLabels.has(ref)) id = ref;
+    else if (owner && taskLabels.has(owner)) id = owner;
     else if (ref.length >= 6) {
-      for (const key of taskLabels.keys()) {
-        if (!key.startsWith(ref)) continue;
-        if (id) { id = null; break; }
-        id = key;
-      }
+      id = uniqueByPrefix(ref, taskLabels.keys(), (k) => k)
+        ?? uniqueByPrefix(ref, sessionOwner.keys(), (k) => sessionOwner.get(k));
     }
     refCache.set(ref, id);
   }
@@ -118,6 +144,7 @@ export function syncTasks(tasks: readonly TaskLike[]): void {
     const existing = taskLabels.get(task.id);
     if (existing) {
       if (existing.src === task) continue; // identity early-out (steady state)
+      if (indexSessions(task)) dirty = refreshRefs(task) || dirty;
       if (existing.label.title === title && existing.label.project === (task.project || undefined)) {
         existing.src = task;
         continue;
@@ -129,17 +156,9 @@ export function syncTasks(tasks: readonly TaskLike[]): void {
       if (observed.has(task.id)) dirty = true;
     } else {
       taskLabels.set(task.id, { label: { title, project: task.project || undefined }, src: task });
-      // A prefix that named one task may now name two: its rows read again.
-      for (const [ref, id] of refCache) if (id && task.id.startsWith(ref)) dirty = true;
-      refCache.clear();
+      indexSessions(task);
+      if (refreshRefs(task)) dirty = true;
       if (observed.has(task.id)) dirty = true;
-      else if (unresolvedRefs.size > 0) {
-        for (const ref of unresolvedRefs) {
-          if (!task.id.startsWith(ref)) continue;
-          unresolvedRefs.delete(ref);
-          dirty = true;
-        }
-      }
     }
   }
   // Deletion sweep only when the map holds more ids than the incoming list —
@@ -150,12 +169,29 @@ export function syncTasks(tasks: readonly TaskLike[]): void {
     for (const id of taskLabels.keys()) {
       if (!incoming.has(id)) {
         taskLabels.delete(id);
+        for (const [sid, owner] of sessionOwner) if (owner === id) sessionOwner.delete(sid);
         refCache.clear();
         if (observed.has(id)) dirty = true;
       }
     }
   }
   if (dirty) emit();
+}
+
+/** A task arrived or gained a session: every ref answer may change. True when a
+ *  row reading one must render again (a prefix that named one task may now name
+ *  two; a ref nothing named may now name this task). */
+function refreshRefs(task: TaskLike): boolean {
+  const ids = [task.id, task.session_id, ...(task.session_ids ?? [])].filter((x): x is string => !!x);
+  let dirty = false;
+  for (const [ref, id] of refCache) if (id && ids.some((x) => x.startsWith(ref))) dirty = true;
+  refCache.clear();
+  for (const ref of unresolvedRefs) {
+    if (!ids.some((x) => x.startsWith(ref))) continue;
+    unresolvedRefs.delete(ref);
+    dirty = true;
+  }
+  return dirty;
 }
 
 /** Opportunistic session title seeding from any fetched session record. */
@@ -181,5 +217,6 @@ export function resetEntityLabelsForTesting(): void {
   observed.clear();
   unresolvedRefs.clear();
   refCache.clear();
+  sessionOwner.clear();
   emit();
 }

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   getEntityLabelsVersion,
   lookupSessionTitle,
+  lookupTaskByRef,
   lookupTaskLabel,
   peekTaskLabel,
   registerSessionTitle,
@@ -142,5 +143,25 @@ describe('org names in labels', () => {
     for (const t of [{ title: 'Main', org_role: 'main' }, { title: 'Marina lead', org_role: 'lead' }, { title: 'Marina lead', org_role: 'lead', org_name: 'Docs' }, { title: 'Garden lead' }, { title: 'x' }]) {
       expect(shownTaskTitle(t)).toBe(orgDisplayTitle(t));
     }
+  });
+
+  it('a send ref names its task by id, unique prefix or session id, and a late task renames its rows', () => {
+    syncTasks([
+      { id: 'abcd1234-0001', title: 'Brief task', session_id: '5e55a000-0001' },
+      { id: 'abcd1234-0002', title: 'Status task', session_ids: ['5e55b000-0002'] },
+    ]);
+    expect(lookupTaskByRef('abcd1234-0001')?.label.title).toBe('Brief task');
+    expect(lookupTaskByRef('abcd1234')).toBeUndefined(); // two tasks: names neither
+    expect(lookupTaskByRef('5e55a000-0001')?.id).toBe('abcd1234-0001');
+    expect(lookupTaskByRef('5e55b0')?.id).toBe('abcd1234-0002');
+    expect(lookupTaskByRef('99887766-01')).toBeUndefined();
+    const v = getEntityLabelsVersion();
+    syncTasks([
+      { id: 'abcd1234-0001', title: 'Brief task', session_id: '5e55a000-0001' },
+      { id: 'abcd1234-0002', title: 'Status task', session_ids: ['5e55b000-0002'] },
+      { id: '99887766-0100', title: 'Late task' },
+    ]);
+    expect(getEntityLabelsVersion()).toBeGreaterThan(v);
+    expect(lookupTaskByRef('99887766-01')?.label.title).toBe('Late task');
   });
 });

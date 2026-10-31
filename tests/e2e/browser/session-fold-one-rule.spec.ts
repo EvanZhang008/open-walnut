@@ -103,7 +103,8 @@ for (const [name, history, a, b, phrase] of [
     await expect(hist).toContainText(b, { timeout: 60000 });
     const between = await rowsBetween(hist, a, b);
     expect(between).toHaveLength(1);
-    expect(between[0]).toMatch(phrase);
+    // A send's task is named once the task list has loaded (it may land after the history).
+    await expect.poll(async () => (await rowsBetween(hist, a, b))[0]).toMatch(phrase);
     await hist.locator('.session-msg', { hasText: b }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-${name.replace(/\s+/g, '-')}.png`, clip: (await hist.boundingBox())! }).catch(() => {});
 
@@ -157,14 +158,14 @@ test('a fold of sends names the tasks they went to, also when only the answer sa
   const between = await rowsBetween(hist, 'OR_ANSWER_F', 'OR_ANSWER_G');
   expect(between).toHaveLength(1);
   await expect.poll(async () => (await rowsBetween(hist, 'OR_ANSWER_F', 'OR_ANSWER_G'))[0])
-    .toMatch(/^Received 1 message( from [^·]+)? · Sent 3 to Turn fold fixture task, Rider fixture task/);
+    .toMatch(/^Received 1 message( from [^·]+)? · Sent 3 to Turn fold fixture task and Rider fixture task/);
   const fold = hist.locator('[data-testid="turn-fold"]', { hasText: 'Sent 3' });
   await fold.locator(':scope > .tool-run-toggle').click();
   // Opened: each send card names its task, never "another session".
   const cards = fold.locator('.provenance-card[data-envelope-kind="outbound"]');
   await expect(cards).toHaveCount(2);
   await expect(cards.nth(0)).toContainText('Turn fold fixture task');
-  await expect(cards.nth(1)).toContainText('Turn fold fixture task, Rider fixture task');
+  await expect(cards.nth(1)).toContainText('Turn fold fixture task and Rider fixture task');
   for (let i = 0; i < 2; i++) await expect(cards.nth(i)).not.toContainText('another session');
   await hist.locator('.session-msg', { hasText: 'OR_ANSWER_G' }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-named-sends.png`, clip: (await hist.boundingBox())! }).catch(() => {});

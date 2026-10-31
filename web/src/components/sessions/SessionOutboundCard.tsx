@@ -86,7 +86,7 @@ function useRefTargets(send: OutboundSend, resolved: ResolvedTarget): ResolvedTa
     return {
       ...resolved,
       taskId: tasks[0].id,
-      title: tasks.map((t) => t.label.title).join(', '),
+      title: tasks.map((t) => t.label.title).join(' and '),
       ...(tasks.length > 1 ? { others: tasks.slice(1).map((t) => ({ id: t.id, title: t.label.title })) } : {}),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- version invalidates the label lookups

@@ -1,6 +1,6 @@
 /**
  * A quiet fold's line (web/src/components/sessions/fold-steps.ts): counts and
- * whom from and to, "Received 12 messages from Docs lead, Walnut +9 · Sent 3 to
+ * whom from and to, "Received 12 messages from Docs lead and Walnut +9 · Sent 3 to
  * Brief task · Ran 8 tools". 2026-10-28, the user, of a line that named every
  * sender, notice and command and ran past the screen: no titles or commands, at
  * most two names a piece. 2026-10-30, the user, of a "Sent 2" that never said
@@ -29,7 +29,7 @@ describe('foldStepsPhrase', () => {
       ...Array.from({ length: 4 }, () => bash('bun test')),
     ];
     const line = foldStepsPhrase(steps);
-    expect(line).toBe('Received 13 messages from Walnut VP, Board tags +10 · Sent 3 to your inbox +2 · Ran 8 tools');
+    expect(line).toBe('Received 13 messages from Walnut VP and Board tags +10 · Sent 3 to your inbox +2 · Ran 8 tools');
     for (const word of ['Bun migration', 'Team update', 'git', 'acknowledged', 'thought', 'Sender']) {
       expect(line).not.toContain(word);
     }
@@ -39,10 +39,15 @@ describe('foldStepsPhrase', () => {
     expect(foldStepsPhrase([note('Team lead', 'Migration is top priority'), ack])).toBe('Received 1 message from Team lead');
     expect(foldStepsPhrase([{ kind: 'received', from: 'other' }])).toBe('Received 1 message');
     expect(foldStepsPhrase([{ kind: 'sent', to: 'Brief task' }, { kind: 'sent', to: 'Task status foundation' }]))
-      .toBe('Sent 2 to Brief task, Task status foundation');
+      .toBe('Sent 2 to Brief task and Task status foundation');
     expect(foldStepsPhrase([sent])).toBe('Sent 1');
     expect(foldStepsPhrase([bash('ls')])).toBe('Ran 1 tool');
     expect(foldStepsPhrase([note('A'), bash('ls'), thought, bash('pwd')])).toBe('Received 1 message from A · Ran 2 tools');
+  });
+
+  it('a title with its own dot or comma never reads as the line\'s separator or list', () => {
+    expect(foldStepsPhrase([{ kind: 'sent', to: 'Brief: the letter, in three sections \u00b7 Tabs' }, { kind: 'sent', to: 'Docs' }, bash('ls')]))
+      .toBe('Sent 2 to Brief: the letter, in three sections / Tabs and Docs \u00b7 Ran 1 tool');
   });
 
   it('a letter to the inbox counts as sent', () => {

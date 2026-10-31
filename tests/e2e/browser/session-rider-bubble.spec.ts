@@ -280,7 +280,8 @@ test('a notice alone, or ahead of a trigger delivery, is still no bubble', async
   await expect(trigger).toHaveClass(/session-msg-envelope/)
   expect(await previousRowClass(trigger)).toContain('session-msg-riders')
   // Shapes 8 and 9 put no user bubble anywhere: only the fixture's worded turns have one.
-  const bubbles = panel.locator('.session-history .session-msg-user')
+  // (Another project's live send below writes into the same fixture session.)
+  const bubbles = panel.locator('.session-history .session-msg-user').filter({ hasNotText: /RIDER_LIVE_/ })
   // (plain, digest + words, digest + image, four notices, the cut-off notice
   // drawn whole as before, status note + words; never the forged, the
   // tail-notice or these two).

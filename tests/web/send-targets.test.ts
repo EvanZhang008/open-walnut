@@ -49,6 +49,17 @@ describe('sendTargetRefs', () => {
     expect(sendTargetRefs({ to: 'docs-lead' }, undefined, undefined)).toEqual(['docs-lead'])
   })
 
+  it('jq\'s bare key, and a same-host delivery that answers with the session alone (prod, 2026-10-30)', () => {
+    const cmd = `walnut tools call task_send "$(jq -nc '{to:"abcd1234-ef56",title:"Do not start it"}')"`
+    expect(commandTargetRefs(cmd)).toEqual(['abcd1234-ef56'])
+    expect(sendTargetRefs(undefined, cmd, '{"delivery":"queued","via":"host"}')).toEqual(['abcd1234-ef56'])
+    const reply = `walnut tools call task_send "$(jq -nc '{in_reply_to:"rq-0001",title:"ready"}')"`
+    expect(sendTargetRefs(undefined, reply, '{\n  "delivery": "queued",\n  "via": "host",\n  "targetSessionId": "5e55a000-0000-4000-8000-000000000001"\n}'))
+      .toEqual(['5e55a000-0000-4000-8000-000000000001'])
+    // Text that merely says "to:" is no target.
+    expect(commandTargetRefs('echo "reply to: later"')).toEqual([])
+  })
+
   it('a name or a too-short word is never a target', () => {
     expect(sendTargetRefs({ to: 'Docs lead' }, undefined, 'Message queued for Docs lead. Do NOT resend.')).toEqual([])
     expect(sendTargetRefs({ to: 'ab12' }, undefined, undefined)).toEqual([])

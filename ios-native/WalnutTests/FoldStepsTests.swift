@@ -14,12 +14,17 @@ final class FoldStepsTests: XCTestCase {
             + [.calls(1), .calls(2), .sent(to: nil), .inbox]
             + Array(repeating: .calls(1), count: 4)
         XCTAssertEqual(TimelineFoldSteps.phrase(steps),
-                       "Received 13 messages from Walnut VP, Board tags +10 \u{00B7} Sent 3 to your inbox +2 \u{00B7} Ran 8 tools")
+                       "Received 13 messages from Walnut VP and Board tags +10 \u{00B7} Sent 3 to your inbox +2 \u{00B7} Ran 8 tools")
+    }
+
+    func testATitleWithItsOwnDotOrCommaNeverReadsAsTheSeparator() {
+        XCTAssertEqual(TimelineFoldSteps.phrase([.sent(to: "Brief: the letter, in three sections \u{00B7} Tabs"), .sent(to: "Docs")]),
+                       "Sent 2 to Brief: the letter, in three sections / Tabs and Docs")
     }
 
     func testASendNamesItsTasksOnTheLineAndTheChip() {
         XCTAssertEqual(TimelineFoldSteps.phrase([.sent(to: "Brief task"), .sent(to: "Task status foundation")]),
-                       "Sent 2 to Brief task, Task status foundation")
+                       "Sent 2 to Brief task and Task status foundation")
         var send = ChatMessage(id: "t1", role: "assistant", text: "Bash", createdAt: "2026-10-30T00:00:00Z", kind: .tool,
                                detail: nil, resultPreview: "Message delivered on this host to abcd12",
                                inputPreview: "command: for id in abcd1234 99887766; do walnut tools call task_send x; done")

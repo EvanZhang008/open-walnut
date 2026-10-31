@@ -19,10 +19,11 @@
 const ID_LIKE = /^(?=[^\s]*[\d-])[a-z0-9][a-z0-9-]{5,}$/i;
 
 /** The `to` values a command line spells out, its quotes escaped or not
- *  (`'{"to":"x"}'`, `"{\"to\":\"x\"}"`, a Python dict inside `$(…)`). */
+ *  (`'{"to":"x"}'`, `"{\"to\":\"x\"}"`, a Python dict inside `$(…)`, jq's bare
+ *  `{to:"x"}`). */
 export function commandTargetRefs(command: string): string[] {
   const out: string[] = [];
-  for (const m of command.matchAll(/\\*["']to\\*["']\s*:\s*\\*["']([^"'\\\s]+)/g)) out.push(m[1]);
+  for (const m of command.matchAll(/(?:\\*["']to\\*["']|(?<![\w"'])to)\s*:\s*\\*["']([^"'\\\s]+)/g)) out.push(m[1]);
   return out.filter((r) => ID_LIKE.test(r));
 }
 
@@ -30,6 +31,8 @@ const ANSWER_JSON = [
   /"targetTaskId"\s*:\s*"([^"]+)"/g,
   /"target"\s*:\s*\{[^{}]*?"taskId"\s*:\s*"([^"]+)"/g,
 ];
+/** A delivery the target's own host made answers with the session alone. */
+const ANSWER_SESSION = [/"targetSessionId"\s*:\s*"([^"]+)"/g];
 const ANSWER_LINES = [
   /Message delivered on this host to ([A-Za-z0-9-]+)/g,
   /Message queued for ([A-Za-z0-9-]+)/g,
@@ -47,12 +50,16 @@ function inOrder(text: string, patterns: RegExp[]): string[] {
 
 /** The targets the server's answer names, in order: its JSON task ids when it
  *  printed them (one answer also carries an outcome line naming the same send by
- *  its session id, so the lines are read only when there is no JSON), else its
- *  outcome lines. */
+ *  its session id, so the lines are read only when there is no JSON), else the
+ *  session a same-host delivery names (a ref the reader maps to its task), else
+ *  its outcome lines. */
 export function resultTargetRefs(result: string | undefined): string[] {
   if (!result) return [];
-  const json = inOrder(result, ANSWER_JSON);
-  return json.length > 0 ? json : inOrder(result, ANSWER_LINES);
+  for (const tier of [ANSWER_JSON, ANSWER_SESSION, ANSWER_LINES]) {
+    const refs = inOrder(result, tier);
+    if (refs.length > 0) return refs;
+  }
+  return [];
 }
 
 /** A ref that is a prefix of another one already listed is the same target. */

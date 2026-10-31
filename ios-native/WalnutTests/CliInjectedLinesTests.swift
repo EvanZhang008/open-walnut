@@ -264,7 +264,7 @@ final class CliInjectedLinesTests: XCTestCase {
                           said(TimelineTurnMarker.tag)])
         XCTAssertEqual(outline(parts), [
             "bubble:Draft the release notes.", "text",
-            "fold:Received 1 message \u{00B7} Ran 1 tool[\"injected:\(stopHook.label)\", \"inbound\", \"run:1\", \"ack\"]",
+            "fold:Received 1 message from Docs \u{00B7} Ran 1 tool[\"injected:\(stopHook.label)\", \"inbound\", \"run:1\", \"ack\"]",
         ])
     }
 

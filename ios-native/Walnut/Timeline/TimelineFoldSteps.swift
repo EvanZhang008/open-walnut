@@ -82,12 +82,15 @@ enum TimelineFoldSteps {
 
     /// Who a piece was from or to: at most two names, then how many of its
     /// messages came from or went to anyone else (the web's `parties`).
-    private static func parties(_ word: String, _ names: [String?]) -> String {
+    private static func parties(_ word: String, _ raw: [String?]) -> String {
+        // A title's own " · " would read as the line's separator, and its commas as
+        // a list: the names are joined with "and", their dots made slashes (the web's `parties`).
+        let names = raw.map { $0?.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: #"\s+·\s+"#, with: " / ", options: .regularExpression) }
         var shown: [String] = []
         for case let name? in names where !name.isEmpty && !shown.contains(name) && shown.count < 2 { shown.append(name) }
         guard !shown.isEmpty else { return "" }
         let more = names.filter { name in !(name.map(shown.contains) ?? false) }.count
-        return " \(word) \(shown.joined(separator: ", "))\(more > 0 ? " +\(more)" : "")"
+        return " \(word) \(shown.joined(separator: " and "))\(more > 0 ? " +\(more)" : "")"
     }
 
     /// The fold's line. A stretch with none of the three counts reads by what it

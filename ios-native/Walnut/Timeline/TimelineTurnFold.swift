@@ -167,7 +167,7 @@ enum TimelineTurnFold {
     /// 2026-10-30, the user, of a send that said "another session": which session?
     static func sendLabel(_ m: ChatMessage) -> String? {
         guard isOutbound(m), let titles = m.sentTo?.compactMap(\.title), !titles.isEmpty else { return nil }
-        return "Sent to " + titles.joined(separator: ", ")
+        return "Sent to " + titles.joined(separator: " and ")
     }
 
     static func capitalized(_ s: String) -> String {

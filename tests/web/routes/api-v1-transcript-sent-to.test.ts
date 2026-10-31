@@ -72,11 +72,14 @@ describe('a send row names its targets', () => {
       ...call('t3', `for id in ${brief.id} ${status.id}; do walnut tools call task_send "{\\"to\\":\\"$id\\"}"; done`,
         `Message delivered on this host to ${brief.id}\nMessage delivered on this host to ${status.id}`),
       ...call('t4', 'ls -la', 'total 0'),
+      // Delivered by the target's own host: the answer names its session alone.
+      ...call('t6', `walnut tools call task_send "$(jq -nc '{in_reply_to:"rq-1",title:"ready"}')"`, '{"delivery":"queued","via":"host","targetSessionId":"sess-brief-1"}'),
       // A search for a send is not one, though its output names a task.
       ...call('t5', `grep -n "walnut tools call task_send" notes.log`, `12: Message queued for ${brief.id}`),
       { type: 'assistant', uuid: `a-${++seq}`, timestamp: at(), message: { id: 'msg_end', role: 'assistant', content: [{ type: 'text', text: 'Both told.' }] } },
     ]
     await createSessionRecord(sid, '', '', CWD, { title: 'Sends', initialProcessStatus: 'idle' })
+    await createSessionRecord('sess-brief-1', brief.id, '', CWD, { title: 'Brief work', initialProcessStatus: 'idle' })
     const dir = path.join(CLAUDE_HOME, 'projects', encodeProjectPath(CWD))
     await fs.mkdir(dir, { recursive: true })
     await fs.writeFile(path.join(dir, `${sid}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
@@ -90,11 +93,13 @@ describe('a send row names its targets', () => {
         ['Task status foundation'],
         ['Brief task', 'Task status foundation'],
         [],
+        ['Brief task'],
         [],
       ])
       expect(rows[2].sentTo!.map((t) => t.taskId), qs).toEqual([brief.id, status.id])
       expect(rows[3].sentTo, qs).toBeUndefined()
-      expect(rows[4].sentTo, qs).toBeUndefined()
+      expect(rows[4].sentTo![0].taskId, qs).toBe(brief.id)
+      expect(rows[5].sentTo, qs).toBeUndefined()
     }
   })
 })
