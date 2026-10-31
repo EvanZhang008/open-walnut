@@ -191,7 +191,7 @@ enum TimelineRowContent {
     /// measured for one line during the frames after a text-size change.
     case toolChip(name: String, detail: String?, inputPreview: String?,
                   resultPreview: String?, agent: String?, phase: TimelineToolPhase,
-                  detailRef: String?, stacked: Bool)
+                  detailRef: String?, stacked: Bool, sentTo: [SentTarget] = [])
     /// Thinking row: a grey capsule reading the fixed word "Thinking" FOLLOWED BY
     /// the server's collapsed reasoning line, with the FULL reasoning behind a tap
     /// (same drawer the tool row opens).
@@ -367,7 +367,7 @@ extension TimelineRowContent {
         case .table(let table):
             hasher.combine(table)
         case .toolChip(let name, let detail, let inputPreview, let resultPreview,
-                       let agent, let phase, let detailRef, let stacked):
+                       let agent, let phase, let detailRef, let stacked, let sentTo):
             hasher.combine(name)
             hasher.combine(detail)
             hasher.combine(inputPreview)
@@ -382,6 +382,8 @@ extension TimelineRowContent {
             // Drawn AND measured: a text-size change that only flips this must still
             // reload the cell.
             hasher.combine(stacked)
+            // The drawer lists them, so a send whose names resolved later reloads.
+            hasher.combine(sentTo)
         case .thinking(let line, let preview, let fullText, let maxLines, let detailRef,
                        let stacked):
             hasher.combine(line)
@@ -598,6 +600,10 @@ struct TimelineActivityDetail: Identifiable, Equatable {
     /// yet). nil is the NORMAL case, not a failure: the drawer shows everything
     /// it holds and offers no fetch at all.
     let detailRef: String?
+    /// Tool rows only: the tasks a send reached, as the server named them
+    /// (`ChatMessage.sentTo`). The chip names the first; the drawer lists every one
+    /// as a link to its task.
+    var sentTo: [SentTarget] = []
 
     static func thinking(id: String, text: String, detailRef: String? = nil) -> Self {
         Self(id: id, kind: .thinking, title: TimelineActivityVocabulary.thinking,
@@ -607,9 +613,9 @@ struct TimelineActivityDetail: Identifiable, Equatable {
 
     static func tool(id: String, name: String, detail: String?, input: String?,
                      result: String?, agent: String?, phase: TimelineToolPhase,
-                     detailRef: String? = nil) -> Self {
+                     detailRef: String? = nil, sentTo: [SentTarget] = []) -> Self {
         Self(id: id, kind: .tool, title: name, subtitle: detail, input: input,
-             body: result, agent: agent, phase: phase, detailRef: detailRef)
+             body: result, agent: agent, phase: phase, detailRef: detailRef, sentTo: sentTo)
     }
 
     /// The payload a `.toolChip` row opens with, and nil for any other row.
@@ -622,13 +628,14 @@ struct TimelineActivityDetail: Identifiable, Equatable {
     /// and the payload the sheet receives are one call apart.
     static func tool(row: TimelineRow) -> Self? {
         guard case .toolChip(let name, let detail, let inputPreview, let resultPreview,
-                             let agent, let phase, let detailRef, _) = row.content else {
+                             let agent, let phase, let detailRef, _, let sentTo) = row.content else {
             return nil
         }
         return tool(id: row.id, name: name, detail: detail,
                     input: inputPreview?.isEmpty == false ? inputPreview : nil,
                     result: resultPreview?.isEmpty == false ? resultPreview : nil,
-                    agent: agent, phase: phase, detailRef: detailRef)
+                    agent: agent, phase: phase, detailRef: detailRef,
+                    sentTo: sentTo.filter { $0.taskId?.isEmpty == false })
     }
 }
 

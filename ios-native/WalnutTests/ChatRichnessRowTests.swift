@@ -82,7 +82,7 @@ final class ChatRichnessRowTests: XCTestCase {
                  result: String?, agent: String?, phase: TimelineToolPhase,
                  stacked: Bool) {
         guard case .toolChip(let name, let detail, let input, let result, let agent,
-                             let phase, _, let stacked)
+                             let phase, _, let stacked, _)
                 = try XCTUnwrap(row, "no tool row", file: file, line: line).content else {
             XCTFail("expected the .toolChip case", file: file, line: line)
             throw XCTSkip("not a tool row")

@@ -68,6 +68,14 @@ describe('a transcript field reaches the timeline row', () => {
     }
   })
 
+  it('an opened send lists the tasks the server named (the drawer reads sentTo)', () => {
+    // 2026-10-31, the iOS gate: the chip said "+3" and nothing on the phone named the three.
+    const CELLS = read('ios-native/Walnut/Timeline/TimelineComponentCells.swift')
+    const ROW = read('ios-native/Walnut/Timeline/TimelineRowModel.swift')
+    expect(block(ROW, 'static func tool(row: TimelineRow) -> Self? {', '    ')).toContain('sentTo')
+    expect(block(CELLS, 'private var toolBody: some View {', '    ')).toContain('TimelineSentToSection(targets: detail.sentTo)')
+  })
+
   it('the decoder\'s init takes every field', () => {
     const init = message.slice(message.indexOf('init('))
     expect(carried.filter((f) => !init.includes(`self.${f} = ${f}`))).toEqual([])

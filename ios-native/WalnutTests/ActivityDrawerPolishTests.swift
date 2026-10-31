@@ -710,7 +710,7 @@ final class ActivityDrawerPolishTests: XCTestCase {
             expandedRowIDs: []).openingAllRuns()).rows
         guard case .toolRun = rows[0].content,
               case .thinking(_, _, _, _, let reasoningRef, _) = rows[1].content,
-              case .toolChip(_, _, _, _, _, _, let toolRef, _) = rows[2].content,
+              case .toolChip(_, _, _, _, _, _, let toolRef, _, _) = rows[2].content,
               case .thinking(_, _, _, _, let noRef, _) = rows[3].content else {
             return XCTFail("unexpected row kinds: \(rows.map(\.content.reuseKind))")
         }

@@ -65,6 +65,36 @@ final class ToolRunFoldTests: XCTestCase {
 
     private func kinds(_ rows: [TimelineRow]) -> [String] { rows.map(\.content.reuseKind) }
 
+    /// The chip names one task and counts the rest ("+3"); the drawer it opens lists
+    /// every task, each a link to it (the iOS gate, 2026-10-31: the other three names
+    /// were nowhere on the phone).
+    func testAnOpenedSendListsEveryTaskItReachedAsALink() async throws {
+        var send = ChatMessage(id: "s", role: "assistant", text: "Bash", createdAt: "2026-10-03T00:00:01Z",
+                               kind: .tool, detail: "Tell four workers",
+                               inputPreview: "command: for t in a b c d; do walnut tools call task_send x; done")
+        send.sentTo = [SentTarget(ref: "aaaa11", taskId: "aaaa1111", title: "Brief task \u{00B7} Tabs"),
+                       SentTarget(ref: "bbbb22", taskId: "bbbb2222", title: "Task status foundation"),
+                       SentTarget(ref: "cccc33", taskId: "cccc3333", title: "Docs"),
+                       SentTarget(ref: "dddd44", taskId: "dddd4444", title: nil)]
+        let built = await rows([send, prose("p")])
+        guard case .toolChip(let name, _, _, _, _, _, _, _, _) = built[0].content else {
+            return XCTFail("the send is not a chip of its own")
+        }
+        XCTAssertEqual(name, "Sent to Brief task / Tabs +3")
+        let payload = try XCTUnwrap(TimelineActivityDetail.tool(row: built[0]))
+        let links = TimelineSentToSection.links(payload.sentTo)
+        XCTAssertEqual(links.map(\.name), ["Brief task / Tabs", "Task status foundation", "Docs", "dddd44"])
+        XCTAssertEqual(links.map { TaskMentionLink.taskID(from: $0.url) }, ["aaaa1111", "bbbb2222", "cccc3333", "dddd4444"])
+        // One line per task: a second ref of the same task, or a ref no task answered, adds none.
+        XCTAssertEqual(TimelineSentToSection.links(payload.sentTo + [SentTarget(ref: "bbbb2222", taskId: "bbbb2222"),
+                                                                      SentTarget(ref: "zz99")]).count, 4)
+        // A send the server did not name opens with no list.
+        var unnamed = send
+        unnamed.sentTo = nil
+        let plain = await rows([unnamed, prose("p")])
+        XCTAssertEqual(try XCTUnwrap(TimelineActivityDetail.tool(row: plain[0])).sentTo, [])
+    }
+
     private func runPayload(
         _ row: TimelineRow?, _ file: StaticString = #filePath, _ line: UInt = #line
     ) throws -> (phrase: String, failCount: Int, running: Bool, expanded: Bool) {
@@ -157,7 +187,7 @@ final class ToolRunFoldTests: XCTestCase {
         XCTAssertTrue(try runPayload(built[0]).expanded)
         // The members are the SAME rows they were before the fold existed: the chip
         // still opens the drawer with its input and result.
-        guard case .toolChip(let name, let detail, let inputPreview, let result, _, let phase, _, _)
+        guard case .toolChip(let name, let detail, let inputPreview, let result, _, let phase, _, _, _)
                 = built[1].content else { return XCTFail("member is not a tool chip") }
         XCTAssertEqual(name, "Bash")
         XCTAssertEqual(detail, "npm test")
@@ -283,7 +313,7 @@ final class ToolRunFoldTests: XCTestCase {
         XCTAssertEqual(after[0].id, before[0].id)
         XCTAssertEqual(kinds(after), ["toolRun", "toolChip", "text"], "still open")
         XCTAssertEqual(try runPayload(after[0]).failCount, 1, "the new payload still reaches the run")
-        guard case .toolChip(_, _, _, let result, _, _, _, _) = after[1].content else {
+        guard case .toolChip(_, _, _, let result, _, _, _, _, _) = after[1].content else {
             return XCTFail("member is not a tool chip")
         }
         XCTAssertEqual(result, "12 passed", "and its member")
@@ -306,7 +336,7 @@ final class ToolRunFoldTests: XCTestCase {
                                 tool("t3", "Read", "/r/a.ts"), prose("p")])
         XCTAssertEqual(kinds(built), ["toolRun", "toolChip", "toolRun", "toolChip", "toolChip", "toolChip",
                                       "toolRun", "text"])
-        guard case .toolChip(let name, let detail, _, _, _, _, _, _) = built[1].content else {
+        guard case .toolChip(let name, let detail, _, _, _, _, _, _, _) = built[1].content else {
             return XCTFail("the send is not a chip of its own")
         }
         XCTAssertEqual(name, "Bash")
@@ -325,7 +355,7 @@ final class ToolRunFoldTests: XCTestCase {
         let runs = Set(closed.filter { $0.content.reuseKind == "toolRun" }.map(\.id))
         let built = await rows([failed, send], expanded: runs)
         let chips = built.compactMap { row -> (String, TimelineToolPhase)? in
-            guard case .toolChip(let name, _, _, _, _, let phase, _, _) = row.content else { return nil }
+            guard case .toolChip(let name, _, _, _, _, let phase, _, _, _) = row.content else { return nil }
             return (name, phase)
         }
         XCTAssertEqual(chips.map(\.0), ["Bash", "Sent a message"])
@@ -396,7 +426,7 @@ final class ToolRunFoldTests: XCTestCase {
                               liveTools: [call("a", "Bash", "ls", finished: true),
                                           call("c", "Bash", "npm test")])
         XCTAssertEqual(kinds(open), ["bubble", "toolRun", "toolChip", "toolChip"])
-        guard case .toolChip(let name, _, _, _, _, let phase, _, _) = open[3].content else {
+        guard case .toolChip(let name, _, _, _, _, let phase, _, _, _) = open[3].content else {
             return XCTFail("the running call is not a chip")
         }
         XCTAssertEqual(name, "Bash")
@@ -457,7 +487,7 @@ final class ToolRunFoldTests: XCTestCase {
                                            call("b", "Read", "/r/a.ts", finished: true)])
         XCTAssertEqual(kinds(built), ["toolRun", "toolChip", "toolChip", "activity"])
         XCTAssertTrue(try runPayload(built[0]).expanded)
-        guard case .toolChip(_, _, _, let result, _, let phase, _, _) = built[1].content else {
+        guard case .toolChip(_, _, _, let result, _, let phase, _, _, _) = built[1].content else {
             return XCTFail("member is not a chip")
         }
         XCTAssertEqual(phase, TimelineToolPhase.liveFinished)
@@ -478,7 +508,7 @@ final class ToolRunFoldTests: XCTestCase {
                                            call("b", "Read", "/r/a.ts", finished: true)])
         XCTAssertEqual(kinds(built), ["toolRun", "toolChip", "activity"])
         XCTAssertEqual(try runPayload(built[0]).phrase, "Ran a command, read a file")
-        guard case .toolChip(_, let detail, _, _, _, let phase, _, _) = built[1].content else {
+        guard case .toolChip(_, let detail, _, _, _, let phase, _, _, _) = built[1].content else {
             return XCTFail("the send is not a chip")
         }
         XCTAssertEqual(detail, "Tell the reviewer")

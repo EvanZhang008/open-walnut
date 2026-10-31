@@ -147,7 +147,7 @@ final class TimelineEngineTests: XCTestCase {
         let snapshot = await actor.buildSnapshot(input([msg]))
         // The chip sits under its (opened) run row.
         let chip = snapshot.rows.first { $0.content.reuseKind == "toolChip" }
-        guard case .toolChip(_, _, _, _, let agent, _, _, _) = chip?.content else {
+        guard case .toolChip(_, _, _, _, let agent, _, _, _, _) = chip?.content else {
             return XCTFail("expected toolChip row in \(snapshot.rows.map(\.content.reuseKind))")
         }
         XCTAssertEqual(agent, "researcher")

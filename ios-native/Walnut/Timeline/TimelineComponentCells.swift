@@ -88,7 +88,7 @@ enum TimelineHostedCell {
     private static func rowContent(for row: TimelineRow,
                                    delegate: TimelineCellActionDelegate?) -> some View {
         switch row.content {
-        case .toolChip(let name, let detail, _, _, let agent, let phase, _, let stacked):
+        case .toolChip(let name, let detail, _, _, let agent, let phase, _, let stacked, _):
             TimelineToolChipView(
                 name: name, detail: detail, agent: agent, running: phase == .running,
                 failed: phase == .failed, stacked: stacked,
@@ -1227,6 +1227,46 @@ struct TimelineDrawerSection: Equatable {
 ///    `detailRef` is not a failure at all: it means the excerpt IS the whole text,
 ///    which is also what an older PRIMARY reports (a relaying replica hands back the
 ///    primary's rows, so its own age does not decide this).
+/// The tasks a send reached, one link per task (`TimelineActivityDetail.sentTo`).
+/// Each name is the task's own title, whole and wrapped, never the chip's clipped
+/// form; a tap goes through the `walnut-task://` link every task mention uses.
+struct TimelineSentToSection: View {
+    let targets: [SentTarget]
+
+    /// One line per task that has an id, in the order the server named them.
+    static func links(_ targets: [SentTarget]) -> [(id: String, name: String, url: URL)] {
+        var seen = Set<String>()
+        return targets.compactMap { target in
+            guard let id = target.taskId, !id.isEmpty, seen.insert(id).inserted,
+                  let url = TaskMentionLink.url(for: id) else { return nil }
+            let title = target.title.map(TimelineFoldSteps.partyName) ?? ""
+            return (id, title.isEmpty ? target.ref : title, url)
+        }
+    }
+
+    var body: some View {
+        let rows = Self.links(targets)
+        VStack(alignment: .leading, spacing: TimelineMetrics.expandLabelGap) {
+            Text(rows.count == 1 ? "Sent to" : "Sent to \(rows.count) tasks")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(ReadableText.secondary)
+                .textCase(.uppercase)
+            ForEach(rows, id: \.id) { row in
+                Link(destination: row.url) {
+                    Label(row.name, systemImage: "arrow.up.forward.square")
+                        .font(.callout)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityIdentifier("activity.sentTo.\(row.id)")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 struct TimelineActivitySheet: View {
     let detail: TimelineActivityDetail
 
@@ -1287,6 +1327,8 @@ struct TimelineActivitySheet: View {
             // after 12 swipes). A bottom inset is on screen at every text size and
             // every scroll offset.
             .safeAreaInset(edge: .bottom, spacing: 0) { statusBar }
+            // A task link in the sheet (the Sent to list) opens the task sheet.
+            .handlingFilePathLinks()
             .navigationTitle(detail.title)
             .navigationBarTitleDisplayMode(.inline)
             // An explicit close, not drag-to-dismiss alone: the drag indicator is
@@ -1325,6 +1367,13 @@ struct TimelineActivitySheet: View {
 
     @ViewBuilder
     private var toolBody: some View {
+        // A send: every task it reached, each one opening its task. The chip and the
+        // fold line name one or two and count the rest ("+3"); this is where the rest
+        // are read (the lead's ask, 2026-10-30: "the opened row shows each target as a
+        // task link", web and phone).
+        if !detail.sentTo.isEmpty {
+            TimelineSentToSection(targets: detail.sentTo)
+        }
         // Input FIRST: "what did it run" is the question a tool name raises.
         if let subtitle = detail.subtitle, !subtitle.isEmpty, subtitle != input.text {
             Text(subtitle)

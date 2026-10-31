@@ -941,7 +941,8 @@ final class TimelineRowBuilder {
                                resultPreview: message.resultPreview,
                                agent: message.agent,
                                phase: TimelineTurnShape.isFailure(message) ? .failed : .transcript,
-                               detailRef: message.activityDetailRef, stacked: stacked),
+                               detailRef: message.activityDetailRef, stacked: stacked,
+                               sentTo: TimelineTurnFold.isOutbound(message) ? (message.sentTo ?? []) : []),
             height: Self.capsuleRowHeight(badged: message.agent?.isEmpty == false,
                                           stacked: stacked)
         )
