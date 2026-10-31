@@ -1156,6 +1156,8 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
   // drag from hijacking text selection and focus inside the contentEditable
   const activeAttributes = isEditing ? {} : attributes;
   const activeListeners = isEditing ? {} : listeners;
+  // Where a search / flat-list hit lives (the row's second line, row-pills.css).
+  const hasSearchMeta = !!(searchContext || (searchTierLabel && pinnedTier));
 
   return (
     <>
@@ -1246,7 +1248,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
       )}
 
       {/* — content area: single-line [attention] [phase] [title] [badges] [⋮] — */}
-      <div className="todo-item-content">
+      <div className="todo-item-content" data-search-meta={hasSearchMeta || undefined}>
         <div className="todo-item-title-row">
           {/* Unread dot — leftmost, keeps everything on one line. Clears when the
               user opens the task (MainPage.handleFocusTask marks it read). */}
@@ -1352,7 +1354,7 @@ const TaskRowBody = memo(function TaskRowBody({ task, isFocused, isDetailOpen, i
           />
         </div>
         {/* Where a search / flat-list hit lives, on its own line so the title keeps the row */}
-        {(searchContext || (searchTierLabel && pinnedTier)) && (
+        {hasSearchMeta && (
           <div className="todo-search-meta-row">
             {searchTierLabel && pinnedTier && (
               <span className={`todo-search-tier-pill todo-search-tier-${isBuiltinTier(pinnedTier) ? pinnedTier : 'custom'}`} title={`Pinned in ${searchTierLabel}`}>

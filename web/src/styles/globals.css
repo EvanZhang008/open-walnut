@@ -29402,7 +29402,7 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
    glass header and drop the history's compensating padding (the history's
    top edge is then below them; content can't slide under the header). */
 .session-panel-body > :first-child:not(.session-history, .thread-stack-off, :where(.thread-stack[data-thread-bare])) {
-  margin-top: calc(var(--sp-header-h, 76px) + 4px);
+  margin-top: var(--sp-first-flow-top, calc(var(--sp-header-h, 76px) + 4px));
 }
 .session-panel-body:has(> :first-child:not(.session-history, .thread-stack-off, :where(.thread-stack[data-thread-bare]))) .session-history {
   padding-top: 12px;
@@ -29434,8 +29434,11 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
 .session-panel:not(.pending-session-panel):not(.draft-session-panel):has(> .session-error-banner, > .session-action-panel) .session-panel-body .session-history {
   padding-top: 12px;
 }
-.session-panel:not(.pending-session-panel):not(.draft-session-panel):has(> .session-error-banner, > .session-action-panel) .session-panel-body > :first-child:not(.session-history, .thread-stack-off, :where(.thread-stack[data-thread-bare])) {
-  margin-top: 4px;
+/* Set on the panel and read by the first flow child's rule above: a `:has()` followed by that
+   universal `:first-child:not(...)` made every row a chat inserted restyle the whole page
+   (tests/web/css-has-invalidation-ratchet.test.ts). */
+.session-panel:not(.pending-session-panel):not(.draft-session-panel):has(> .session-error-banner, > .session-action-panel) {
+  --sp-first-flow-top: 4px;
 }
 
 /* ── Session composer card: G4 floating card (radius + shadow always) ── */

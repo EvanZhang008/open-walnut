@@ -48,9 +48,11 @@ html .todo-panel .tag-pill-group > .tag-chip-overflow { padding-left: 3px; }
    tier and project on the second, never on a third line of their own (2026-10-23). The title
    row dissolves into the row's content box, which takes over its padding and its role as the
    anchor of the circle, the dot and the kebab. Desktop list only, the same query that lays the
-   title row out this way (home-navigation.css). */
+   title row out this way (home-navigation.css). The row says it has the meta line with an attribute,
+   not `:has()`: with a `:has()` here, every row a session chat inserted restyled the whole page
+   (tests/web/css-has-invalidation-ratchet.test.ts). */
 @media (min-width: 769px) and (min-height: 501px), (min-width: 769px) and (pointer: fine) {
-  .home-navigation-scroll .todo-search-results .todo-item-content:has(> .todo-search-meta-row) {
+  .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] {
     position: relative;
     display: flex;
     flex-direction: row;
@@ -61,23 +63,23 @@ html .todo-panel .tag-pill-group > .tag-chip-overflow { padding-left: 3px; }
     padding-left: 24px;
     padding-right: 28px;
   }
-  .home-navigation-scroll .todo-search-results .todo-item-content:has(> .todo-search-meta-row) > .todo-item-title-row {
+  .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] > .todo-item-title-row {
     display: contents;
   }
-  .home-navigation-scroll .todo-search-results .todo-item-content:has(> .todo-search-meta-row) .todo-item-title {
+  .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] .todo-item-title {
     flex: 1 0 100%;
     width: auto;
   }
   /* The tier and project take what the pills leave (basis 0), the project name cut short
      first, so a crowded row still fits its pills on the second line. */
-  .home-navigation-scroll .todo-search-results .todo-item-content:has(> .todo-search-meta-row) > .todo-search-meta-row {
+  .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] > .todo-search-meta-row {
     order: 1;
     flex: 1 1 0;
     min-width: 64px;
     overflow: hidden;
     padding-left: 0;
   }
-  .home-navigation-scroll .todo-search-results .todo-item-content:has(> .todo-search-meta-row) > .todo-item-title-row > :not(.todo-item-title, .task-phase-icon-btn, .task-kebab-wrapper, .task-unread-dot, .task-start-btn) {
+  .home-navigation-scroll .todo-search-results .todo-item-content[data-search-meta] > .todo-item-title-row > :not(.todo-item-title, .task-phase-icon-btn, .task-kebab-wrapper, .task-unread-dot, .task-start-btn) {
     order: 2;
   }
 }

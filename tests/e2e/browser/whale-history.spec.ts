@@ -265,11 +265,13 @@ test('a transcript that cannot be paged says so instead of showing a dead button
 test('the pages survive leaving the session and coming back', async ({ page, baseURL }) => {
   const panel = await openWhale(page, baseURL!);
   const btn = await loadEarlierBtn(panel);
+  const tailFirst = Number((await markers(panel))[0].split(':')[1]);
   await btn.click();
   await expect(panel.locator('.session-show-earlier-btn:disabled')).toHaveCount(0, { timeout: 60_000 });
   await expandHeld(panel);
   const first = Number((await markers(panel))[0].split(':')[1]);
-  expect(first).toBeLessThan(WHALE_TURNS - 100);
+  // A page holds at least 20 user turns (the client asks `turns=20`).
+  expect(first, 'a page of older turns landed').toBeLessThanOrEqual(tailFirst - 20);
 
   // Another session's column, then back to this one.
   await page.locator('.todo-search-input').fill('Outline window fixture task');

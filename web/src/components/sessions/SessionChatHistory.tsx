@@ -115,6 +115,8 @@ import type { ContinueInNewFolderResult } from '@/api/sessions';
 import { historyErrorText, olderUnavailableText } from './history-notice-text';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 
+import { PartIdentity } from './part-identity';
+
 /** A send call's targets (send-targets.ts), parsed once per call and result: a
  *  fold line reads them on every render of a long session. */
 const sendRefsCache = new WeakMap<SessionHistoryTool, { result: unknown; refs: string[] }>();
@@ -2760,7 +2762,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const rowThreadKeyRef = useRef(rowThreadKey);
   rowThreadKeyRef.current = rowThreadKey;
   const windowAnchors = rootPageWindow ? threadsApi.anchors : null;
+  // What the pass mints keeps its identity from pass to pass (part-identity.ts),
+  // so a page of older rows re-renders the new rows only.
+  const partIdentity = useMemo(() => new PartIdentity(), [sessionId]);
   const { historyParts, hiddenCount } = useMemo(() => {
+    const ids = partIdentity;
     const keyOf = rowThreadKeyRef.current;
     const rawLimit = truncationOffset;
     const turnLimit = historyTurnWindowLimit(messages, INITIAL_HISTORY_TURNS,
@@ -2789,7 +2795,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       } else if (members.length > 0) {
         // Reasoning with no tool around it is one "Thinking ›" row, not a run
         // with an empty phrase.
-        parts.push({ kind: 'msg', m: mergeThinkingOnly(members.map(({ m }) => m)), globalIndex: members[0].globalIndex });
+        const rows = members.map(({ m }) => m);
+        parts.push({ kind: 'msg', m: ids.derive(rows[0], 'thinking-only', rows, () => mergeThinkingOnly(rows)), globalIndex: members[0].globalIndex });
       }
     };
     /** `ended` = a visible non-run message follows: trailing thinking-only rows
@@ -2807,7 +2814,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       if (systemRun.length === 1) {
         parts.push({ kind: 'msg', ...systemRun[0] });
       } else if (systemRun.length > 1) {
-        parts.push({ kind: 'system-run', members: systemRun, systemMembers: systemRun.map(({ m }) => systemGroupMemberFromHistory(m)) });
+        const systemMembers = systemRun.map(({ m }) => ids.derive(m, 'system-member', [], () => systemGroupMemberFromHistory(m)));
+        parts.push({ kind: 'system-run', members: systemRun, systemMembers: ids.list('system', systemMembers) });
       }
       systemRun = [];
     };
@@ -2844,24 +2852,26 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       let msg = m;
       if (prevIsThinkingOnly && !atForkDivider
         && m.role === 'assistant' && (m.thinking ?? '').trim()) {
-        msg = { ...m, thinking: `${prevPart.m.thinking}\n\n${m.thinking}` };
+        const before = prevPart.m;
+        msg = ids.derive(m, 'after-thinking', [before], () => ({ ...m, thinking: `${before.thinking}\n\n${m.thinking}` }));
         parts.pop();
       } else if (prevPart?.kind === 'run' && !atForkDivider
         && m.role === 'assistant' && (m.thinking ?? '').trim()) {
         // Reasoning that led to this answer right after a run rides that run,
         // not a "Thinking ›" row of its own between the run and the answer
         // (2026-10-04). The stream folds it the same way (trailingThinkingStart).
-        const reasoning = { ...m, text: '', tools: undefined };
+        const reasoning = ids.derive(m, 'reasoning', [], () => ({ ...m, text: '', tools: undefined }));
         prevPart.members.push({ m: reasoning, globalIndex });
         prevPart.memberMsgs.push(reasoning);
-        msg = { ...m, thinking: undefined };
+        msg = ids.derive(m, 'answer', [], () => ({ ...m, thinking: undefined }));
       }
       if (isTextPlusMergeableTools(msg)) {
         // CLI content order is prose first, tool_use after. Render the prose as
         // its own part and dissolve the tools FORWARD into the next run so a
         // text-carrying message no longer splits two adjacent runs apart.
         parts.push({ kind: 'msg', m: msg, globalIndex, suppressTools: true });
-        historyRun.push({ m: { ...msg, text: '', thinking: undefined }, globalIndex });
+        const prose = msg;
+        historyRun.push({ m: ids.derive(prose, 'tools-forward', [], () => ({ ...prose, text: '', thinking: undefined })), globalIndex });
         historyRunSeeded = true;
         continue;
       }
@@ -2869,9 +2879,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     }
     flushHistoryRun(false);
     flushSystemRun();
+    // Last, once every run is complete (a run's array grows above).
+    for (const part of parts) if (part.kind === 'run') part.memberMsgs = ids.list('run', part.memberMsgs);
     return { historyParts: parts, hiddenCount: visibleStart };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- rowThreadKeyRef: see above; windowAnchors stands for it
-  }, [messages, truncationOffset, olderPageSeq, forkBoundaryIndex, gapAt, rootPageWindow, windowAnchors]);
+  }, [messages, truncationOffset, olderPageSeq, forkBoundaryIndex, gapAt, rootPageWindow, windowAnchors, partIdentity]);
   // What `Show N earlier` counts: on the root page only root rows (N9), since
   // the rows of questions above it render on their own pages.
   const hiddenOnPage = useMemo(() => {
