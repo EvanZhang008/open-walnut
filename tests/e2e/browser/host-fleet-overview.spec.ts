@@ -34,7 +34,7 @@ function card(over: Record<string, unknown>) {
     sessions: { running: 3 },
     spend: { last30dUsd: 812.4, from: '2026-10-02', basis: 'list-price' },
     server: null,
-    daemon: { version: 'walnut-daemon-0123456789ab', startedAt: NOW - DAY, startup: 'service', runtime: 'bun', vitals: true },
+    daemon: { version: 'walnut-daemon-0123456789ab', startedAt: NOW - DAY, startup: 'service', startsAfterReboot: true, runtime: 'bun', vitals: true },
     placement: { score: 12, busy: false, reasons: [], weight: 50, longRunning: { ok: true, reasons: [] } },
     ...over,
   }
@@ -47,7 +47,7 @@ const FLEET = [
     system: { os: 'macOS 15.1', arch: 'arm64', cpus: 10, memBytes: 32 * GB, diskFreeBytes: 50 * GB, kind: 'laptop', probedAt: null },
     history: { coverageFrom: NOW - 30 * DAY, bucketMinutes: 1440, buckets: days((i) => (i % 3 === 0 ? 0.7 : 0.95)), windows: [{ days: 7, minutes: 7 * 1440, up: 9374, linked: 9374, online: 0.93, linkedShare: 0.93, drops: 0, downs: 6 }], outages: [], boots: [], daemonStarts: 4 },
     sessions: { running: 12 }, spend: { last30dUsd: 2345.6, from: '2026-10-02', basis: 'list-price' },
-    daemon: { version: 'walnut-daemon-0123456789ab', startedAt: NOW - DAY, startup: 'on-demand', runtime: 'binary', vitals: true },
+    daemon: { version: 'walnut-daemon-0123456789ab', startedAt: NOW - DAY, startup: 'on-demand', startsAfterReboot: false, runtime: 'binary', vitals: true },
     placement: { score: 3, busy: false, reasons: [], weight: 50, longRunning: { ok: false, reasons: ['It is a laptop: a job here stops while it sleeps.'] } },
   }),
   card({
@@ -56,29 +56,31 @@ const FLEET = [
     now: { cpus: 32, cpuUtil: 0.25, load: [6.16, 8.1, 14.7], memTotalBytes: 128 * GB, memAvailBytes: 96 * GB, uptimeSec: 13 * 86400, bootedAt: NOW - 13 * DAY, linked: true, at: NOW, stale: false },
     history: { coverageFrom: NOW - 30 * DAY, bucketMinutes: 1440, buckets: days((i) => (i === 27 ? 0.85 : 0.999)), windows: [{ days: 7, minutes: 7 * 1440, up: 10000, linked: 9500, online: 0.992, linkedShare: 0.94, drops: 41, downs: 1, daemonStarts: 15, boots: 0 }], outages: [], boots: [], daemonStarts: 15 },
     sessions: { running: 19 }, spend: { last30dUsd: 1234.2, from: '2026-10-02', basis: 'list-price' },
-    server: { enabled: true, program: 'replica', phase: 'running', build: '0.6.20-abc1234', phone: 'connected', message: null },
-    daemon: { version: 'walnut-daemon-0123456789ab', startedAt: NOW - DAY, startup: 'on-demand', runtime: 'bun', vitals: true },
-    placement: { score: 32, busy: false, reasons: [], weight: 50, longRunning: { ok: false, reasons: ['Its daemon does not start by itself after a reboot (run `walnut daemon service install` on it).'] } },
+    server: { enabled: true, program: 'replica', phase: 'running', phaseLabel: 'running', build: '0.6.20-abc1234', phone: 'connected', message: null },
+    daemon: { version: 'walnut-daemon-0123456789ab', startedAt: NOW - DAY, startup: 'on-demand', startsAfterReboot: false, runtime: 'bun', vitals: true },
+    placement: { score: 32, busy: false, reasons: [], weight: 50, longRunning: { ok: false, reasons: ['Its daemon does not start by itself after a reboot (run `walnut daemon install --yes` on it, then `sudo loginctl enable-linger $USER` there so it starts at boot, not only at login).'] } },
   }),
   card({
     host: 'olddev', label: 'Spare box with a rather long label that must not break the card',
     now: null, history: null, system: null, sessions: { running: null },
-    server: { enabled: false, program: null, phase: 'off', build: null, phone: null, message: null },
-    daemon: { version: 'walnut-daemon-0aa1bb2cc3dd', startedAt: NOW - DAY, startup: 'on-demand', runtime: 'bun', vitals: false },
+    server: { enabled: false, program: null, phase: 'off', phaseLabel: 'off', build: null, phone: null, message: null },
+    daemon: { version: 'walnut-daemon-0aa1bb2cc3dd', startedAt: NOW - DAY, startup: 'on-demand', startsAfterReboot: false, runtime: 'bun', vitals: false },
     spend: { last30dUsd: 0, from: '2026-10-02', basis: 'list-price' },
-    placement: { score: null, busy: null, reasons: [], weight: null, longRunning: { ok: false, reasons: ['No Walnut server runs on it (Settings, Remote Hosts, host servers).', 'Its daemon does not start by itself after a reboot (run `walnut daemon service install` on it).'] } },
+    placement: { score: null, busy: null, reasons: [], weight: null, longRunning: { ok: false, reasons: ['No Walnut server runs on it (Settings, Remote Hosts, host servers).', 'Its daemon does not start by itself after a reboot (run `walnut daemon install --yes` on it, then `sudo loginctl enable-linger $USER` there so it starts at boot, not only at login).'] } },
   }),
   card({
     host: '__cloudbox__', label: 'Cloud',
     connection: { kind: 'bridge', connected: true, phase: 'connected', phaseLabel: 'Connected', since: NOW - 2 * 3600_000, rttMs: 120, error: null },
     system: { os: 'Alpine 3.20', arch: 'arm64', cpus: 2, memBytes: 8 * GB, diskFreeBytes: 20 * GB, kind: 'public-cloud-vm', probedAt: null },
+    // As prod reports it: on-demand, yet it comes back with the companion's systemd unit.
+    daemon: { version: 'walnut-daemon-0123456789ab', startedAt: NOW - DAY, startup: 'on-demand', startsAfterReboot: true, runtime: 'bun', vitals: true },
     history: { coverageFrom: NOW - 2 * DAY, bucketMinutes: 1440, buckets: days(() => 1, 2), windows: [{ days: 7, minutes: 2 * 1440, up: 2 * 1440, linked: 2 * 1440, online: 1, linkedShare: 1, drops: 0, downs: 0 }], outages: [], boots: [], daemonStarts: 1 },
   }),
   card({
     host: 'homepc', label: 'Home PC',
     connection: { kind: 'ssh-tunnel', connected: false, phase: 'failed', phaseLabel: 'Could not reach Home PC', since: null, rttMs: null, error: 'ssh: connection timed out' },
     now: { cpus: 8, cpuUtil: 0.05, load: [0.2, 0.2, 0.2], memTotalBytes: 32 * GB, memAvailBytes: 20 * GB, uptimeSec: 3600, bootedAt: NOW - 3600_000, linked: false, at: NOW - 7 * 60_000, stale: true },
-    sessions: { running: null }, server: { enabled: false, program: null, phase: 'off', build: null, phone: null, message: null },
+    sessions: { running: null }, server: { enabled: false, program: null, phase: 'off', phaseLabel: 'off', build: null, phone: null, message: null },
     placement: { score: null, busy: null, reasons: [], weight: null, longRunning: { ok: false, reasons: ['Walnut is not connected to it now.'] } },
   }),
 ]
@@ -119,7 +121,7 @@ test('a fleet of five reads in words, with day cells and the long-running verdic
   await expect(dev.getByTestId('host-fleet-days').locator('i')).toHaveCount(30)
   await expect(dev.getByTestId('host-fleet-days').locator('i[data-tone="bad"]')).toHaveCount(1)
   await expect(dev.getByTestId('host-fleet-fit')).toHaveText(/^Not for a job that must keep running: Its daemon does not start by itself/)
-  await expect(dev.getByTestId('host-fleet-fit').locator('code')).toHaveText('walnut daemon service install')
+  await expect(dev.getByTestId('host-fleet-fit').locator('code')).toHaveText(['walnut daemon install --yes', 'sudo loginctl enable-linger $USER'])
   const old = group.locator('[data-host="olddev"]')
   await expect(old.locator('[data-row="now"] dd')).toHaveText('Its daemon is older than this view (it upgrades on the next connect)')
   await expect(old.getByTestId('host-fleet-days')).toHaveCount(0)
@@ -128,6 +130,7 @@ test('a fleet of five reads in words, with day cells and the long-running verdic
   await expect(home.locator('[data-row="connection"] dd')).toHaveText('SSH tunnel · Could not reach Home PC (ssh: connection timed out)')
   await expect(group.locator('[data-host="__cloudbox__"] [data-row="online"] dd')).toHaveText('100% of the 2 days recorded')
   await expect(group.locator('[data-host="__cloudbox__"]').getByTestId('host-fleet-fit')).toHaveText('Fits a job that must keep running.')
+  await expect(group.locator('[data-host="__cloudbox__"] [data-row="daemon"] dd')).toHaveText('build 0123456789ab · bun · starts after a reboot')
   // No card overflows its column at this density.
   for (let i = 0; i < 5; i++) {
     const box = await cards.nth(i).boundingBox()

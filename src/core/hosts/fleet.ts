@@ -204,7 +204,7 @@ function entries(config: Config): HostEntry[] {
   return out
 }
 
-async function serverOf(host: string, def: HostDef | null): Promise<FleetHost['server']> {
+async function serverOf(host: string, def: HostDef | null): Promise<FleetInputs['server']> {
   if (!def || def.cloud_box) return null
   const { getHostServerManager } = await import('../host-server/index.js')
   const view = getHostServerManager()?.view(host)

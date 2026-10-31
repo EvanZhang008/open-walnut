@@ -8,6 +8,7 @@
 import type { HostStats, HostVitals, VitalsBucket, VitalsOutage, VitalsWindow } from '../../providers/host-vitals-core.js'
 import type { HostProfile } from './host-profile.js'
 import type { HostLoadView } from './placement.js'
+import type { HostServerPhase } from '../host-server/manager.js'
 
 export type FleetConnectionKind = 'local' | 'ssh-tunnel' | 'bridge'
 
@@ -28,6 +29,8 @@ export interface FleetHost {
   /** What the host is, from its last probe (host.facts). */
   system: {
     os: string | null
+    /** os.platform() of the host (linux, darwin), null when the probe did not say. */
+    platform: string | null
     arch: string | null
     cpus: number | null
     memBytes: number | null
@@ -52,8 +55,13 @@ export interface FleetHost {
   /** Model spend of the sessions that ran there, last 30 days, at public list prices (not a bill). */
   spend: { last30dUsd: number; from: string; basis: 'list-price' } | null
   /** The Walnut server the host runs for this Mac (replica or plain host server); null for the Mac and the cloud box. */
-  server: { enabled: boolean; program: string | null; phase: string; build: string | null; phone: string | null; message: string | null } | null
-  daemon: { version: string | null; startedAt: number | null; startup: string; runtime: string | null; vitals: boolean } | null
+  server: { enabled: boolean; program: string | null; phase: HostServerPhase; phaseLabel: string; build: string | null; phone: string | null; message: string | null } | null
+  /**
+   * `startup` is what the daemon reports ('service' or 'on-demand'); `startsAfterReboot`
+   * is the verdict: a service daemon does, and so does the cloud box's, which its
+   * systemd-run companion starts with itself.
+   */
+  daemon: { version: string | null; startedAt: number | null; startup: string; startsAfterReboot: boolean; runtime: string | null; vitals: boolean } | null
   placement: {
     /**
      * Where new work goes, as session placement judges it now (src/core/hosts/placement.ts
@@ -75,6 +83,38 @@ export interface FleetHost {
 
 export const LONG_RUNNING_MIN_ONLINE = 0.95
 
+/** Words for each Walnut server phase; a phase code is never shown to a person or an agent. */
+export const SERVER_PHASE_WORDS: Record<HostServerPhase, string> = {
+  off: 'off',
+  'waiting-for-host': 'waiting for the host to connect',
+  unsupported: 'needs a newer daemon on the host',
+  checking: 'checking the host',
+  installing: 'installing',
+  starting: 'starting',
+  running: 'running',
+  error: 'stopped on an error',
+}
+
+/** Words for how a host connects. */
+export const CONNECTION_KIND_WORDS: Record<FleetConnectionKind, string> = { local: 'this computer', 'ssh-tunnel': 'SSH tunnel', bridge: 'bridge' }
+
+/** A span of recorded minutes in words: minutes under an hour, hours under a day, then days. */
+export function recordedSpan(minutes: number): string {
+  const m = Math.max(0, Math.round(minutes))
+  if (m < 60) return m === 1 ? '1 minute' : `${m} minutes`
+  if (m < 1440) { const h = Math.round(m / 6) / 10; return h === 1 ? '1 hour' : `${h} hours` }
+  const d = Math.round(m / 144) / 10
+  return d === 1 ? '1 day' : `${d} days`
+}
+
+/** How to make a daemon start by itself; on Linux a user service starts at boot only with linger. */
+function serviceAdvice(platform: string | null | undefined): string {
+  const install = 'run `walnut daemon install --yes` on it'
+  return platform === 'linux'
+    ? `${install}, then \`sudo loginctl enable-linger $USER\` there so it starts at boot, not only at login`
+    : install
+}
+
 /** Plain reasons a job that must keep running does not belong on this host now. */
 export function longRunningReasons(h: Pick<FleetHost, 'local' | 'connection' | 'server' | 'daemon' | 'history' | 'system'>): string[] {
   const reasons: string[] = []
@@ -82,9 +122,9 @@ export function longRunningReasons(h: Pick<FleetHost, 'local' | 'connection' | '
   if (h.local && h.system?.kind === 'laptop') reasons.push('It is a laptop: a job here stops while it sleeps.')
   if (!h.local && h.connection.kind !== 'bridge') {
     if (!h.server?.enabled) reasons.push('No Walnut server runs on it (Settings, Remote Hosts, host servers).')
-    else if (h.server.phase !== 'running') reasons.push(`Its Walnut server is not running (${h.server.phase}).`)
+    else if (h.server.phase !== 'running') reasons.push(`Its Walnut server is not running (${h.server.phaseLabel}).`)
   }
-  if (h.daemon && h.daemon.startup !== 'service' && !h.local) reasons.push('Its daemon does not start by itself after a reboot (run `walnut daemon service install` on it).')
+  if (h.daemon && !h.daemon.startsAfterReboot && !h.local) reasons.push(`Its daemon does not start by itself after a reboot (${serviceAdvice(h.system?.platform)}).`)
   const week = h.history?.windows.find((w) => w.days === 7)
   if (week && week.online !== null && week.minutes >= 24 * 60 && week.online < LONG_RUNNING_MIN_ONLINE) {
     reasons.push(`It was up ${Math.round(week.online * 1000) / 10}% of the last 7 days.`)
@@ -105,8 +145,8 @@ export interface FleetInputs {
   load?: Pick<HostLoadView, 'known' | 'score' | 'busy' | 'reasons' | 'weight'> | null
   spendUsd: number | null
   spendFrom: string | null
-  server: FleetHost['server']
-  daemon: FleetHost['daemon']
+  server: Omit<NonNullable<FleetHost['server']>, 'phaseLabel'> | null
+  daemon: Omit<NonNullable<FleetHost['daemon']>, 'startsAfterReboot'> | null
   now: number
 }
 
@@ -114,6 +154,7 @@ export function buildFleetHost(i: FleetInputs): FleetHost {
   const probed = i.profile?.probed
   const system: FleetHost['system'] = probed ? {
     os: probed.os?.prettyName ?? ([probed.os?.platform, probed.os?.release].filter(Boolean).join(' ') || null),
+    platform: probed.os?.platform ?? null,
     arch: probed.arch ?? null,
     cpus: probed.cpus || null,
     memBytes: probed.memBytes || null,
@@ -140,8 +181,8 @@ export function buildFleetHost(i: FleetInputs): FleetHost {
       rttMs: i.status.connected && i.rttMs ? i.rttMs : null,
       error: i.status.error ?? null,
     },
-    server: i.server,
-    daemon: i.daemon,
+    server: i.server ? { ...i.server, phaseLabel: SERVER_PHASE_WORDS[i.server.phase] ?? 'in a state this Walnut does not know' } : null,
+    daemon: i.daemon ? { ...i.daemon, startsAfterReboot: i.daemon.startup === 'service' || i.kind === 'bridge' } : null,
     history,
     system,
   }
@@ -170,7 +211,7 @@ export function withPlacement(h: FleetHost): FleetHost {
 /** The day buckets and outages are long; a short text for an agent reads the card in a line. */
 export function fleetHostLine(h: FleetHost): string {
   const parts: string[] = [`${h.label} (${h.host})`]
-  parts.push(h.connection.connected ? `connected over ${h.connection.kind}` : `not connected (${h.connection.phase})`)
+  parts.push(h.connection.connected ? `connected over ${CONNECTION_KIND_WORDS[h.connection.kind]}` : `not connected (${h.connection.phaseLabel})`)
   if (h.system?.os) parts.push(h.system.os)
   if (h.now) {
     const cpu = h.now.cpuUtil === null ? null : `${Math.round(h.now.cpuUtil * 100)}% CPU of ${h.now.cpus}`
@@ -179,14 +220,13 @@ export function fleetHostLine(h: FleetHost): string {
   }
   const week = h.history?.windows.find((w) => w.days === 7)
   if (week?.online !== null && week?.online !== undefined) {
-    const over = week.minutes >= 1440 ? `${Math.round(week.minutes / 1440 * 10) / 10} days` : `${Math.round(week.minutes / 60 * 10) / 10} hours`
-    parts.push(`up ${Math.round(week.online * 1000) / 10}% over ${over}`)
+    parts.push(`up ${Math.round(week.online * 1000) / 10}% over ${recordedSpan(week.minutes)}`)
   }
   if (h.sessions.running !== null) parts.push(`${h.sessions.running} sessions open`)
   if (h.spend) parts.push(`$${Math.round(h.spend.last30dUsd)} in 30 days (list price)`)
-  if (h.server) parts.push(h.server.enabled ? `Walnut server ${h.server.phase}` : 'no Walnut server')
+  if (h.server) parts.push(h.server.enabled ? `Walnut server ${h.server.phaseLabel}` : 'no Walnut server')
   if (h.placement.weight === 0) parts.push('placement never picks it (weight 0)')
   else if (h.placement.busy) parts.push('too busy for new sessions: ' + h.placement.reasons.join(', '))
-  if (!h.placement.longRunning.ok && h.placement.longRunning.reasons.length) parts.push('not for long-running jobs: ' + h.placement.longRunning.reasons.join(' '))
+  if (!h.placement.longRunning.ok && h.placement.longRunning.reasons.length) parts.push('not for a job that must keep running: ' + h.placement.longRunning.reasons.join(' '))
   return parts.join('; ')
 }

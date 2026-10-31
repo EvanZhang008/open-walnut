@@ -16,13 +16,14 @@ export interface FleetHost {
   line: string;
   checkedAt: number;
   connection: { kind: 'local' | 'ssh-tunnel' | 'bridge'; connected: boolean; phase: string; phaseLabel: string; since: number | null; rttMs: number | null; error: string | null };
-  system: { os: string | null; arch: string | null; cpus: number | null; memBytes: number | null; diskFreeBytes: number | null; kind: string; probedAt: string | null } | null;
+  system: { os: string | null; platform?: string | null; arch: string | null; cpus: number | null; memBytes: number | null; diskFreeBytes: number | null; kind: string; probedAt: string | null } | null;
   now: { cpus: number; cpuUtil: number | null; load: [number, number, number] | null; memTotalBytes: number; memAvailBytes: number | null; uptimeSec: number; bootedAt: number; linked: boolean; at: number; stale: boolean } | null;
   history: { coverageFrom: number | null; bucketMinutes: number; buckets: FleetBucket[]; windows: FleetWindow[]; outages: FleetOutage[]; boots: number[]; daemonStarts: number } | null;
   sessions: { running: number | null };
   spend: { last30dUsd: number; from: string; basis: 'list-price' } | null;
-  server: { enabled: boolean; program: string | null; phase: string; build: string | null; phone: string | null; message: string | null } | null;
-  daemon: { version: string | null; startedAt: number | null; startup: string; runtime: string | null; vitals: boolean } | null;
+  /** `phaseLabel` is the phase in words; show it, never `phase`. */
+  server: { enabled: boolean; program: string | null; phase: string; phaseLabel: string; build: string | null; phone: string | null; message: string | null } | null;
+  daemon: { version: string | null; startedAt: number | null; startup: string; startsAfterReboot: boolean; runtime: string | null; vitals: boolean } | null;
   placement: { score: number | null; busy: boolean | null; reasons: string[]; weight: number | null; longRunning: { ok: boolean; reasons: string[] } };
 }
 

@@ -30,6 +30,15 @@ export function span(ms: number): string {
   return `${s} s`;
 }
 
+/** Recorded minutes in words: minutes under an hour, hours under a day, then days (src/core/hosts/fleet-model.ts recordedSpan). */
+export function recordedSpan(minutes: number): string {
+  const m = Math.max(0, Math.round(minutes));
+  if (m < 60) return m === 1 ? '1 minute' : `${m} minutes`;
+  if (m < 1440) { const h = Math.round(m / 6) / 10; return h === 1 ? '1 hour' : `${h} hours`; }
+  const d = Math.round(m / 144) / 10;
+  return d === 1 ? '1 day' : `${d} days`;
+}
+
 export function usd(v: number): string {
   return `$${Math.round(v).toLocaleString('en-US')}`;
 }
@@ -81,7 +90,7 @@ export function fleetRows(h: FleetHost, now: number): FleetRow[] {
   const week = h.history?.windows.find((w) => w.days === 7);
   if (week && week.online !== null) {
     const days = week.minutes / 1440;
-    const over = days >= 6.95 ? 'the last 7 days' : `the ${days >= 1 ? `${Math.round(days * 10) / 10} days` : `${Math.round(week.minutes / 60)} hours`} recorded`;
+    const over = days >= 6.95 ? 'the last 7 days' : `the ${recordedSpan(week.minutes)} recorded`;
     const extra = [week.downs ? `${week.downs} down` : null, week.drops ? `${week.drops} link drops` : null, (week.daemonStarts ?? 0) > 1 ? `daemon started ${week.daemonStarts} times` : null].filter(Boolean);
     rows.push({ key: 'online', label: 'Online', value: `${pct(week.online, 1)} of ${over}` + (extra.length ? ` · ${extra.join(' · ')}` : ''), tone: week.online >= 0.99 ? 'good' : week.online >= 0.9 ? 'warn' : 'bad' });
   } else {
@@ -100,14 +109,14 @@ export function fleetRows(h: FleetHost, now: number): FleetRow[] {
     const sv = h.server;
     rows.push({
       key: 'server', label: 'Walnut server',
-      value: sv.enabled ? [sv.program === 'replica' ? 'Replica' : sv.program === 'fallback' ? 'Plain host server (fallback)' : sv.program ? 'Plain host server' : null, sv.phase, sv.build, sv.phone ? `phone tunnel ${sv.phone}` : null].filter(Boolean).join(' · ') : 'Off',
+      value: sv.enabled ? [sv.program === 'replica' ? 'Replica' : sv.program === 'fallback' ? 'Plain host server (fallback)' : sv.program ? 'Plain host server' : null, sv.phaseLabel, sv.build, sv.phone ? `phone tunnel ${sv.phone}` : null].filter(Boolean).join(' · ') : 'Off',
       tone: !sv.enabled ? 'muted' : sv.phase === 'running' ? undefined : 'warn',
     });
   }
   if (h.daemon) {
     const d = h.daemon;
-    const reboot = h.local ? null : d.startup === 'service' ? 'starts after a reboot' : 'does not start by itself after a reboot';
-    rows.push({ key: 'daemon', label: 'Daemon', value: [d.version ? `build ${d.version.replace(/^walnut-daemon-/, '')}` : null, d.runtime, reboot].filter(Boolean).join(' · '), tone: reboot && d.startup !== 'service' ? 'warn' : undefined });
+    const reboot = h.local ? null : d.startsAfterReboot ? 'starts after a reboot' : 'does not start by itself after a reboot';
+    rows.push({ key: 'daemon', label: 'Daemon', value: [d.version ? `build ${d.version.replace(/^walnut-daemon-/, '')}` : null, d.runtime, reboot].filter(Boolean).join(' · '), tone: reboot && !d.startsAfterReboot ? 'warn' : undefined });
   }
   return rows;
 }

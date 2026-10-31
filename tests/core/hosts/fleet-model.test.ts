@@ -4,8 +4,10 @@
  * one card and one line for an agent.
  */
 import { describe, expect, it } from 'vitest'
+import fs from 'node:fs'
+import path from 'node:path'
 import {
-  buildFleetHost, longRunningReasons, withPlacement, type FleetHost, type FleetInputs,
+  buildFleetHost, longRunningReasons, recordedSpan, withPlacement, SERVER_PHASE_WORDS, type FleetHost, type FleetInputs,
 } from '../../../src/core/hosts/fleet-model.js'
 import type { HostVitals } from '../../../src/providers/host-vitals-core.js'
 import type { HostProfile } from '../../../src/core/hosts/host-profile.js'
@@ -77,8 +79,8 @@ describe('the long-running verdict', () => {
     expect(h.placement.longRunning.ok).toBe(false)
     expect(h.placement.longRunning.reasons).toEqual([
       'Walnut is not connected to it now.',
-      'Its Walnut server is not running (error).',
-      'Its daemon does not start by itself after a reboot (run `walnut daemon service install` on it).',
+      'Its Walnut server is not running (stopped on an error).',
+      'Its daemon does not start by itself after a reboot (run `walnut daemon install --yes` on it, then `sudo loginctl enable-linger $USER` there so it starts at boot, not only at login).',
       'It was up 90% of the last 7 days.',
     ])
     expect(h.connection).toMatchObject({ since: null, rttMs: null, error: 'ssh refused' })
@@ -108,12 +110,78 @@ describe('the card', () => {
     expect(h.sessions.running).toBe(19)
     expect(h.spend).toEqual({ last30dUsd: 1234.46, from: '2026-10-01', basis: 'list-price' })
     expect(h.history?.daemonStarts).toBe(15)
-    expect(h.line).toBe('Dev box (devbox); connected over ssh-tunnel; Debian 12; 25% CPU of 32, 96 of 128 GB free; up 99% over 7 days; 19 sessions open; $1234 in 30 days (list price); Walnut server running')
+    expect(h.line).toBe('Dev box (devbox); connected over SSH tunnel; Debian 12; 25% CPU of 32, 96 of 128 GB free; up 99% over 7 days; 19 sessions open; $1234 in 30 days (list price); Walnut server running')
   })
 
   it('a host with no probe, no vitals and no spend yet', () => {
     const h = withPlacement(buildFleetHost(inputs({ profile: null, vitals: null, spendUsd: null, daemon: null })))
     expect(h).toMatchObject({ system: null, now: null, history: null, spend: null, daemon: null, sessions: { running: null } })
     expect(h.placement).toMatchObject({ score: null, busy: null })
+  })
+})
+
+const ROOT = path.resolve(__dirname, '../../..')
+const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
+
+describe('words, never codes', () => {
+  // Every phase the host server manager can be in, read from its type, so a new phase fails here.
+  const union = /export type HostServerPhase =([^;]+)/.exec(read('src/core/host-server/manager.ts'))![1]
+  const phases = [...union.matchAll(/'([a-z-]+)'/g)].map((m) => m[1])
+
+  it('every Walnut server phase has words, and neither the reasons nor the line print a code', () => {
+    expect(phases.length).toBeGreaterThan(5)
+    for (const phase of phases) {
+      const words = SERVER_PHASE_WORDS[phase as keyof typeof SERVER_PHASE_WORDS]
+      expect(words, phase).toBeTruthy()
+      const h = withPlacement(buildFleetHost(inputs({ server: { enabled: true, program: 'replica', phase: phase as never, build: null, phone: null, message: null } })))
+      expect(h.server?.phaseLabel).toBe(words)
+      const text = [h.line, ...h.placement.longRunning.reasons].join('\n')
+      expect(h.line, phase).toContain(`Walnut server ${words}`)
+      // No kebab-case code anywhere in what a person or an agent reads.
+      expect(text.replace(/`[^`]*`/g, ''), phase).not.toMatch(/\b[a-z]+-[a-z]+(-[a-z]+)*\b/)
+    }
+  })
+
+  it('a connection that is down is named by its words', () => {
+    const h = withPlacement(buildFleetHost(inputs({ status: { connected: false, phase: 'waiting-for-host', phaseLabel: 'Waiting for Dev box' } })))
+    expect(h.line).toContain('not connected (Waiting for Dev box)')
+    expect(h.line).not.toContain('waiting-for-host')
+  })
+})
+
+describe('recorded spans', () => {
+  it('count minutes under an hour, never "0 hours"', () => {
+    expect(recordedSpan(0)).toBe('0 minutes')
+    expect(recordedSpan(1)).toBe('1 minute')
+    expect(recordedSpan(10)).toBe('10 minutes')
+    expect(recordedSpan(59)).toBe('59 minutes')
+    expect(recordedSpan(60)).toBe('1 hour')
+    expect(recordedSpan(90)).toBe('1.5 hours')
+    expect(recordedSpan(1440)).toBe('1 day')
+    expect(recordedSpan(3 * 1440)).toBe('3 days')
+    const fresh = withPlacement(buildFleetHost(inputs({ vitals: { value: vitals({}, { online: 1, minutes: 10 }), at: NOW, stale: false } })))
+    expect(fresh.line).toContain('up 100% over 10 minutes')
+  })
+})
+
+describe('starting after a reboot', () => {
+  it('the cloud box comes back with its companion, whatever its daemon reports', () => {
+    const cloud = withPlacement(buildFleetHost(inputs({ kind: 'bridge', server: null, daemon: { version: '1', startedAt: 1, startup: 'on-demand', runtime: 'bun', vitals: true } })))
+    expect(cloud.daemon?.startsAfterReboot).toBe(true)
+    expect(cloud.placement.longRunning).toEqual({ ok: true, reasons: [] })
+  })
+
+  it('a service daemon does; an on-demand one on SSH does not, and the advice names a command that exists', () => {
+    expect(buildFleetHost(inputs()).daemon?.startsAfterReboot).toBe(true)
+    const linux = longRunningReasons(buildFleetHost(inputs({ daemon: { version: '1', startedAt: 1, startup: 'on-demand', runtime: 'bun', vitals: true } })))
+    const mac = { ...profile(), probed: { ...profile().probed!, os: { platform: 'darwin', release: '24', prettyName: 'macOS 15' } } }
+    const darwin = longRunningReasons(buildFleetHost(inputs({ profile: mac, daemon: { version: '1', startedAt: 1, startup: 'on-demand', runtime: 'bun', vitals: true } })))
+    expect(linux).toEqual(['Its daemon does not start by itself after a reboot (run `walnut daemon install --yes` on it, then `sudo loginctl enable-linger $USER` there so it starts at boot, not only at login).'])
+    expect(darwin).toEqual(['Its daemon does not start by itself after a reboot (run `walnut daemon install --yes` on it).'])
+    // The action named is one `walnut daemon` accepts.
+    const actions = /\[('status'[^\]]*)\]\.includes\(action\)/.exec(read('src/providers/daemon-service-cli.ts'))![1]
+    const named = /`walnut daemon (\w+)/.exec(linux[0])![1]
+    expect(actions).toContain(`'${named}'`)
+    expect(read('src/providers/daemon-service-cli.ts')).toContain('--yes')
   })
 })

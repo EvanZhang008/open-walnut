@@ -19,8 +19,8 @@ function host(over: Partial<FleetHost> = {}): FleetHost {
     history: { coverageFrom: 0, bucketMinutes: 1440, buckets: [], windows: [{ days: 7, minutes: 7 * 1440, up: 10000, linked: 9000, online: 0.9921, linkedShare: 0.89, drops: 41, downs: 1, daemonStarts: 15, boots: 0 }], outages: [], boots: [], daemonStarts: 15 },
     sessions: { running: 19 },
     spend: { last30dUsd: 1234.4, from: '2026-10-01', basis: 'list-price' },
-    server: { enabled: true, program: 'replica', phase: 'running', build: '0.6.20-abc1234', phone: 'connected', message: null },
-    daemon: { version: 'walnut-daemon-0123456789ab', startedAt: 0, startup: 'on-demand', runtime: 'bun', vitals: true },
+    server: { enabled: true, program: 'replica', phase: 'running', phaseLabel: 'running', build: '0.6.20-abc1234', phone: 'connected', message: null },
+    daemon: { version: 'walnut-daemon-0123456789ab', startedAt: 0, startup: 'on-demand', startsAfterReboot: false, runtime: 'bun', vitals: true },
     placement: { score: 1, busy: false, reasons: [], weight: 50, longRunning: { ok: false, reasons: [] } },
     ...over,
   }
@@ -59,7 +59,7 @@ describe('a full card', () => {
 
 describe('missing readings say why', () => {
   it('an older daemon, a host never probed, nothing counted yet', () => {
-    const h = host({ system: null, now: null, history: null, spend: null, sessions: { running: null }, daemon: { version: null, startedAt: null, startup: 'on-demand', runtime: null, vitals: false } })
+    const h = host({ system: null, now: null, history: null, spend: null, sessions: { running: null }, daemon: { version: null, startedAt: null, startup: 'on-demand', startsAfterReboot: false, runtime: null, vitals: false } })
     expect(value(h, 'system')?.value).toBe('Not probed yet (it is, once the host connects)')
     expect(value(h, 'now')?.value).toBe('Its daemon is older than this view (it upgrades on the next connect)')
     expect(value(h, 'online')?.value).toBe('No record yet')
@@ -94,5 +94,26 @@ describe('day cells', () => {
     expect(dayTone(b(0, 0))).toBe('none')
     expect(dayTitle(b(1440, 1440), 1440)).toMatch(/^24 h to .*: up 100%, linked 100%$/)
     expect(dayTitle(b(0, 0), 1440)).toMatch(/: no record yet$/)
+  })
+})
+
+describe('words, never codes, on the card', () => {
+  it('the Walnut server row reads the phase in words', () => {
+    const h = host({ server: { enabled: true, program: 'replica', phase: 'waiting-for-host', phaseLabel: 'waiting for the host to connect', build: null, phone: null, message: null } })
+    expect(value(h, 'server')).toMatchObject({ value: 'Replica · waiting for the host to connect', tone: 'warn' })
+    expect(fleetRows(h, NOW).map((r) => r.value).join('\n')).not.toContain('waiting-for-host')
+  })
+
+  it('a week recorded for less than an hour counts minutes, never "0 hours"', () => {
+    const w = { days: 7, minutes: 10, up: 10, linked: 10, online: 1, linkedShare: 1, drops: 0, downs: 0 }
+    const h = host({ history: { coverageFrom: NOW - 600_000, bucketMinutes: 1440, buckets: [], windows: [w], outages: [], boots: [], daemonStarts: 1 } })
+    expect(value(h, 'online')?.value).toBe('100% of the 10 minutes recorded')
+    const one = host({ history: { coverageFrom: NOW - 60_000, bucketMinutes: 1440, buckets: [], windows: [{ ...w, minutes: 1, up: 1, linked: 1 }], outages: [], boots: [], daemonStarts: 1 } })
+    expect(value(one, 'online')?.value).toBe('100% of the 1 minute recorded')
+  })
+
+  it('the daemon row follows the server\'s reboot verdict (the cloud box reports on-demand yet comes back)', () => {
+    const cloud = host({ connection: { kind: 'bridge', connected: true, phase: 'connected', phaseLabel: 'Connected', since: null, rttMs: 100, error: null }, daemon: { version: 'walnut-daemon-0123456789ab', startedAt: 0, startup: 'on-demand', startsAfterReboot: true, runtime: 'bun', vitals: true } })
+    expect(value(cloud, 'daemon')).toMatchObject({ value: 'build 0123456789ab · bun · starts after a reboot', tone: undefined })
   })
 })
