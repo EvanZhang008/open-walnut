@@ -282,35 +282,68 @@ export function printableRuns(buf, min = 8) {
 
 /** A matched word this short turns up by chance in compressed bytes. */
 const CHANCE_WORD_MAX = 5
-/** A run at least this long and this much plain text is a string, not noise. */
+/** A run shorter than this is noise, whatever it holds. */
 const TEXT_RUN_MIN = 16
-const TEXT_SHARE_MIN = 0.7
+/** How far on each side of a short word its neighbourhood reaches. */
+const TEXT_WINDOW = 48
+/** A plain word: lower case, Capitalized or ALLCAPS. With camelCase: those joined. */
+const PLAIN_WORD = /^(?:[a-z]+|[A-Z][a-z]+|[A-Z]+)$/
+const CAMEL_WORD = /^(?:[a-z]+|[A-Z][a-z]+|[A-Z]+)(?:[A-Z][a-z]+)*$/
 
-/** The run of printableRuns() an offset of its text falls in, or null. */
-export function runAt(runs, offset) {
+/** The run an offset of printableRuns().text falls in, and the offset inside that run. */
+function runSpot(runs, offset) {
   let pos = 0
-  for (const part of runs.parts) {
-    if (offset < pos + part.length) return part
-    pos += part.length + 1
+  for (const run of runs.parts) {
+    if (offset < pos + run.length) return { run, at: offset - pos }
+    pos += run.length + 1
   }
   return null
 }
 
+/** The share of a text that is words of 3+ letters of the given shape, or white space. */
+function wordShare(text, shape) {
+  let n = text.match(/\s/g)?.length ?? 0
+  for (const m of text.matchAll(/[A-Za-z]{3,}/g)) if (shape.test(m[0])) n += m[0].length
+  return n / text.length
+}
+
+/** Shannon entropy of a text's characters, in bits per character. */
+function entropy(text) {
+  const counts = new Map()
+  for (const c of text) counts.set(c, (counts.get(c) ?? 0) + 1)
+  let h = 0
+  for (const k of counts.values()) h -= (k / text.length) * Math.log2(k / text.length)
+  return h
+}
+
+/**
+ * Whether the bytes around a short word read as text: mostly plain words and spaces, or
+ * mostly words with camelCase allowed (code) and the low entropy of a language. Random
+ * printable bytes, base64 and source map mappings pass about 1 time in 300; a string, a
+ * path or a bundle's source almost always does (measured 2026-10-31 on the server bundle,
+ * a doc and a minified web chunk against generated noise).
+ */
+export function readsAsText(run, at, length) {
+  const near = run.slice(Math.max(0, at - TEXT_WINDOW), at + length + TEXT_WINDOW)
+  return wordShare(near, PLAIN_WORD) >= 0.3 || (wordShare(near, CAMEL_WORD) >= 0.5 && entropy(near) < 4.8)
+}
+
 /**
  * The hits of a binary file's printable runs, without the chance ones: a short word
- * (CHANCE_WORD_MAX letters or fewer) in a run that is not text. Compressed data is full
- * of short runs, and every file of a build carries the same compressed blobs, so a
- * three-letter term in one 9-byte run of noise failed all six files of a build
- * (2026-10-29). A real string holding the word sits in a long run of plain text (a
- * bundle's source, a message), and a longer term is no chance at all.
+ * (CHANCE_WORD_MAX letters or fewer) whose neighbourhood is not text. Compressed data is
+ * full of printable runs, and every file of a build carries the same compressed blobs, so
+ * one chance word fails all six files of a build: a three-letter term in a 9-byte run
+ * (2026-10-29), then a three-letter one inside a long run of random letters, digits and
+ * punctuation, which an older test (70% of the run letters, digits or punctuation) read as
+ * text (2026-10-31). A real string holding the word sits among words (a bundle's source, a
+ * message, a path), and a longer term is no chance at all.
  */
 export function binaryHits(rules, runs) {
   return scanText(rules, runs.text).filter((h) => {
     if (h.length > CHANCE_WORD_MAX) return true
-    const run = runAt(runs, h.offset)
-    if (!run || run.length < TEXT_RUN_MIN) return false
-    const plain = run.match(/[A-Za-z0-9 \t._,:;/'"()-]/g)?.length ?? 0
-    return plain / run.length >= TEXT_SHARE_MIN
+    const spot = runSpot(runs, h.offset)
+    if (!spot || spot.run.length < TEXT_RUN_MIN) return false
+    return readsAsText(spot.run, spot.at, h.length)
   })
 }
 

@@ -35,9 +35,13 @@ at the literal and put the class in a lookbehind: `(?<=[a-z0-9.])@example\.com`.
 and the scan both refuse such a rule.
 
 A binary is read through its printable runs, and a phrase never spans two of them. A word
-of five letters or fewer counts there only in a run of plain text (16 bytes or more, mostly
-letters, digits and punctuation): compressed data makes such a word by chance, and every
-file of a build carries the same compressed blobs.
+of five letters or fewer counts there only in a run of 16 bytes or more whose 48 bytes on
+each side read as text: at least 30% words of three or more plain letters (lower case,
+Capitalized or ALLCAPS) and spaces, or 50% such words with camelCase allowed at a character
+entropy under 4.8 bits. Compressed data makes such a word by chance, every file of a build
+carries the same compressed blobs, and a run of random letters, digits and punctuation is
+mostly "plain" characters, so a share of those is no test (2026-10-31). Random printable
+bytes, base64 and source map mappings pass the word test about once in 300 tries.
 
 A file whose bytes were already scanned in the same run is counted as a copy and not scanned
 again: a release's platform archives and the archive inside the Mac app share most of their

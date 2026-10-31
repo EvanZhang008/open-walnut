@@ -151,6 +151,34 @@ describe('leak-scan rules', () => {
     expect(binaryHits(rules(), text).map((h) => h.label)).toEqual(['tool', 'acronym'])
   })
 
+  it('counts a short word in a long run of random printable bytes only when it sits among words', () => {
+    // 2026-10-31: a three-letter term stood inside a long run of random letters, digits and
+    // punctuation in all six compiled files of a build. That run was 70% "plain" characters,
+    // which the old guard read as text. Here a short term rides 500 such runs (seeded, so the
+    // test is the same every time), each between control bytes, as compressed data holds them.
+    const shortRules = loadRules(compileRules(parseSource('short\tterm\tqim')))
+    let seed = 7
+    const rand = (n: number) => { seed = (seed * 1103515245 + 12345) % 2 ** 31; return seed % n }
+    const alphabet = Array.from({ length: 94 }, (_, i) => String.fromCharCode(33 + i)).join('')
+    const noise = (n: number) => Array.from({ length: n }, () => alphabet[rand(alphabet.length)]).join('')
+    const chunks: Buffer[] = []
+    for (let i = 0; i < 500; i++) chunks.push(Buffer.from(`${noise(8 + rand(60))}}qim!${noise(8 + rand(60))}`, 'latin1'), Buffer.from([0x01, 0x9f]))
+    const runs = printableRuns(Buffer.concat([Buffer.from([0x02]), ...chunks]))
+    expect(scanText(shortRules, runs.text).length).toBeGreaterThanOrEqual(500)
+    expect(binaryHits(shortRules, runs).length).toBeLessThanOrEqual(2)
+    // the same word in a path, a message, a JSON value and minified code still counts
+    const real = [
+      '/Users/qim/work/app/src/index.ts',
+      'failed to reach the qim host after 3 tries',
+      '{"user":"qim","home":"/home/qim"}',
+      'const n="qim-token";return e.get(n)||null',
+    ]
+    for (const s of real) {
+      const text = printableRuns(Buffer.concat([Buffer.from([0x01]), Buffer.from(`${noise(30)}\u0001${s}`, 'latin1'), Buffer.from([0x01])]))
+      expect(binaryHits(shortRules, text).length, s).toBeGreaterThan(0)
+    }
+  })
+
   it('refuses a term rule with a malformed hash', () => {
     const json = compileRules(parseSource(SOURCE))
     expect(() => loadRules({ ...json, terms: [{ label: 'x', h: 'zz', n: 1 }] })).toThrow(/malformed term rule/)
