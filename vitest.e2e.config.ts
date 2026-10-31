@@ -1,5 +1,5 @@
 import { defineConfig } from 'vitest/config';
-import { maxWorkers, workerExecArgv } from './tests/setup/worker-budget';
+import { E2E_MAX_WORKERS, maxWorkers, workerExecArgv } from './tests/setup/worker-budget';
 import { runtimeAliases, runtimeDeps } from './tests/setup/runtime-deps';
 import baseConfig from './vitest.config';
 
@@ -31,10 +31,11 @@ export default defineConfig({
     // Module interop on bun: see tests/setup/runtime-deps.ts.
     deps: runtimeDeps(),
     pool: 'forks',
-    // Machine-wide budget — see tests/setup/worker-budget.ts. Deliberately
-    // maxWorkers (not poolOptions.forks.maxForks): maxForks would override the
-    // --maxWorkers CLI flag and silently defeat any external throttle.
-    maxWorkers: maxWorkers(),
+    // One worker: the files share one test home and its instance lock
+    // (E2E_MAX_WORKERS in tests/setup/worker-budget.ts). Deliberately maxWorkers
+    // (not poolOptions.forks.maxForks): maxForks would override the --maxWorkers
+    // CLI flag and silently defeat any external throttle.
+    maxWorkers: Math.min(maxWorkers(), E2E_MAX_WORKERS),
     poolOptions: {
       forks: {
         execArgv: workerExecArgv(),

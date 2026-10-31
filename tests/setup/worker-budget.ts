@@ -42,6 +42,19 @@ export function maxWorkers(): number {
 }
 
 /** Per-worker V8 heap cap. One uncapped worker was measured at 4.7GB RSS. */
+/**
+ * The e2e files share one test home (tests/setup/global-setup.ts) and its instance
+ * lock, so two of them in parallel workers refuse each other with InstanceLockError.
+ * CI runs that tier with --maxWorkers=1; this keeps every other run (CI=1 in a dev
+ * container, a focus run naming e2e files) the same.
+ */
+export const E2E_MAX_WORKERS = 1
+
+/** A focus run naming any tests/e2e file takes the e2e tier's one worker. */
+export function namesE2eFiles(argv: readonly string[] = process.argv): boolean {
+  return argv.some((a) => /(^|\/)tests\/e2e(\/|$)/.test(a))
+}
+
 export function workerExecArgv(): string[] {
   const mb = Number(process.env.WALNUT_TEST_WORKER_HEAP_MB)
   const heap = Number.isFinite(mb) && mb >= 512 ? Math.floor(mb) : 2048

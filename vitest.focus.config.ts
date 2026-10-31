@@ -1,6 +1,7 @@
 import { defineConfig, mergeConfig } from 'vitest/config';
 import path from 'path';
 import baseConfig from './vitest.config.js';
+import { E2E_MAX_WORKERS, namesE2eFiles } from './tests/setup/worker-budget';
 
 /**
  * L2 — `npm run test:focus <path>`: run whatever the developer names, full stop.
@@ -41,6 +42,8 @@ const config = mergeConfig(
     test: {
       testTimeout: 60_000,
       hookTimeout: 60_000,
+      // e2e files share one test home: they run one at a time (worker-budget.ts).
+      ...(namesE2eFiles() ? { maxWorkers: E2E_MAX_WORKERS } : {}),
     },
   }),
 );
