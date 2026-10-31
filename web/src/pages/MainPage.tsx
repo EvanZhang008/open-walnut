@@ -85,6 +85,7 @@ import {
   withDraftSlots,
   removeSessionColumn,
   replaceSessionColumn,
+  columnKey,
   toggleLockSlot,
 } from './sessionColumns';
 import { useColumnCompleteClose } from './useColumnCompleteClose';
@@ -3301,12 +3302,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             />
           </div>
         )}
-        {/* Note: key={sid} means a pending→real id swap (quick-start/fork) remounts
-            the column, which auto-animate will show as a remove+insert. Harmless
-            visually (the panel swaps from PendingSessionPanel → SessionPanel anyway)
-            but worth knowing if someone later investigates "panel pops on session start". */}
+        {/* A column is keyed by columnKey(slot), which an in-place id swap (a prefix
+            adopting its full id, pending -> real, draft -> launch, plan -> exec) keeps:
+            the column element stays, so auto-animate never plays the swap as a
+            remove + insert under a click. The panel inside is keyed by the id, so it
+            still remounts for its new session (tests/web/session-column-key.test.ts). */}
         {sessionColumns.map((slot, idx) => {
           const sid = slot.id;
+          const colKey = columnKey(slot);
           const needsDivider = idx > 0 || triagePanelOpen;
           const isDraft = isDraftColumnId(sid);
           const draft = isDraft ? draftById.get(sid) : undefined;
@@ -3323,9 +3326,9 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
             : {};
           // Phone: only the open column is on screen, so only it mounts (and fetches).
           if (phoneLayout && idx !== mobileActiveIdx) {
-            return <div key={sid} className="main-page-session-column" data-column-id={sid} data-phone-parked="true" />;
+            return <div key={colKey} className="main-page-session-column" data-column-id={sid} data-phone-parked="true" />;
           }
-          return (<Fragment key={sid}>
+          return (<Fragment key={colKey}>
             {/* This divider trades width between colIdx-1 and colIdx only. */}
             {needsDivider && <div className="session-col-resize-handle" {...colSplitHandleProps(colIdx - 1)} />}
             <div
@@ -3339,7 +3342,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                 // found"). Missing row = the draft was just consumed/closed while
                 // the column lingers for a tick → render nothing, not a fallback.
                 draft ? (
-                  <DraftSessionPanel
+                  <DraftSessionPanel key={sid}
                     draft={draft}
                     autoFocus={sid === focusDraftId}
                     onStart={handleDraftStart}
@@ -3374,7 +3377,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                   />
                 ) : null
               ) : workspacePendingTaskId(sid) ? (
-                <WorkspacePreparingPanel
+                <WorkspacePreparingPanel key={sid}
                   taskId={workspacePendingTaskId(sid)!}
                   initialTask={workspaceLaunchInfo(workspacePendingTaskId(sid)!).task}
                   message={workspaceLaunchInfo(workspacePendingTaskId(sid)!).message}
@@ -3383,7 +3386,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                   onSessionReady={(sessionId) => setSessionColumns(prev => replaceSessionColumn(prev, sid, sessionId))}
                 />
               ) : isPending && pendingMeta ? (
-                <PendingSessionPanel
+                <PendingSessionPanel key={sid}
                   taskId={sid}
                   realTaskId={'realTaskId' in pendingMeta ? (pendingMeta as { realTaskId?: string }).realTaskId : undefined}
                   cwd={pendingMeta.cwd}
@@ -3396,7 +3399,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
                   onClose={() => handleCloseSession(sid)}
                 />
               ) : (
-                <SessionPanel
+                <SessionPanel key={sid}
                   sessionId={sid}
                   locked={slot.locked}
                   onToggleLock={handleToggleLockSession}

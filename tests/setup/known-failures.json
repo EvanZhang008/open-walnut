@@ -1,10 +1,6 @@
 {
   "config": "vitest.quick.config.ts",
-  "count": 1,
-  "failures": [
-    "tests/providers/session-outputfile-clobber.test.ts :: outputFile survives the session-id rename stays a remote:// sentinel after the init event renames the transport"
-  ],
-  "reasons": {
-    "tests/providers/session-outputfile-clobber.test.ts :: outputFile survives the session-id rename stays a remote:// sentinel after the init event renames the transport": "A real bug, on Node and on bun alike: the session-id rename re-reads RemoteSessionManager.outputFile, which is null by design, and overwrites the remote:// sentinel transport.start() published (outputFile is null about 175 ms after spawn)."
-  }
+  "count": 0,
+  "failures": [],
+  "reasons": {}
 }

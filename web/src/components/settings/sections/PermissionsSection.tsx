@@ -7,8 +7,8 @@
  * who don't know this grant to the wrong app and conclude Walnut is broken
  * (the calendar outage in a sentence).
  *
- * Renders nothing off-macOS/cloud (report.applicable=false): showing rows of
- * "not applicable" would just be noise on those platforms.
+ * Off-macOS/cloud (report.applicable=false) the pane has no nav entry, and a
+ * link to it reads one line saying why: rows of "not applicable" would be noise.
  */
 import { useCallback, useEffect, useState } from 'react';
 import { SectionCard } from '../inputs/SectionCard';
@@ -77,8 +77,18 @@ export function PermissionsSection() {
     load();
   }, [load]);
 
-  // Off-macOS/cloud there is nothing actionable: omit the section entirely.
-  if (report && !report.applicable) return null;
+  // Off-macOS/cloud there is nothing actionable. The nav lists no entry for this
+  // pane there (its `requires: 'mac-access'` gate), so this shows only when the
+  // pane is reached by its #permissions link: say why it is empty, never nothing.
+  if (report && !report.applicable) {
+    return (
+      <SectionCard id="permissions" title="macOS Access">
+        <SettingsGroup>
+          <SettingsNotice>macOS permissions apply only to a Walnut running on a Mac.</SettingsNotice>
+        </SettingsGroup>
+      </SectionCard>
+    );
+  }
 
   // not-applicable = this box never needs it, or the feature behind it is
   // switched off. A row saying "not applicable" is pure noise, and for a

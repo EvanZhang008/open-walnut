@@ -77,7 +77,7 @@ const OTHERS: Array<[string, number, string]> = [
   ['src/core/notifications/origin.ts', 1, leader('its own notifications file in its own data dir')],
   ['src/core/observability/bug-report.ts', 1, ROUTE],
   ['src/core/peers/capability-router.ts', 2, ROUTE],
-  ['src/core/permissions/darwin.ts', 2, leader('darwin TCC probes only')],
+  ['src/core/permissions/applicable.ts', 1, leader('darwin TCC probes only')],
   ['src/core/places/db.ts', 2, leader('a places store only in its own data dir')],
   ['src/core/plugins/plugin-file-area.ts', 1, off('plugins')],
   ['src/core/plugins/server-api.ts', 3, off('plugins')],

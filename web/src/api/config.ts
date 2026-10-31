@@ -64,6 +64,8 @@ interface ServerFacts {
   selfRepair?: SelfRepairInfo | null;
   notesDir?: string | null;
   canRevealLocalFiles?: boolean;
+  /** /api/permissions has a report here (a Mac console); absent on an older server. */
+  macAccess?: boolean;
   cloud?: boolean;
   /** Which server answered: the Mac (leader, mac), the companion (replica, cloud) or a host replica (replica, host). */
   role?: 'leader' | 'replica';
@@ -134,6 +136,19 @@ export function fetchNotesDir(): Promise<string | null> {
  */
 export function fetchCanRevealLocalFiles(): Promise<boolean> {
   return selectFact(f => f.canRevealLocalFiles === true, false);
+}
+
+/**
+ * Whether this server has macOS permissions to show (a Mac console, never a
+ * replica). null when the server is older than the fact or did not answer:
+ * callers keep what they show rather than guess.
+ */
+export function fetchMacAccess(): Promise<boolean | null> {
+  return selectFact(f => typeof f.macAccess === 'boolean' ? f.macAccess : null, null);
+}
+/** The same fact if already fetched, so a remounting view starts from it. */
+export function peekMacAccess(): boolean | null {
+  return typeof _facts?.macAccess === 'boolean' ? _facts.macAccess : null;
 }
 
 /**

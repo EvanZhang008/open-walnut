@@ -16,6 +16,7 @@ import { useAppCatalog } from '@/apps/hooks'
 import { usePluginUi, useWebPluginRuntime } from '@/plugins/hooks'
 import { isPhoneLayout } from '@/hooks/usePhoneLayout'
 import { CORE_SETTINGS_CONTRIBUTIONS, type CoreSettingsContribution } from './core-settings-registry'
+import { useClosedPaneGates, type SettingsPaneGate } from './settings-pane-gates'
 import { corePaneFilterEntry } from './settings-routing'
 import { compareHits, filterEntries, primaryHit, PAGE_LINK_KEYWORDS, type FilterEntry, type FilterHit } from './settings-filter'
 import { SettingsIcon, assignPluginTint, monogramFor, tileKey, type SettingsGlyphName } from './settings-icons'
@@ -106,6 +107,10 @@ function coreRow(entry: CoreSettingsContribution): NavRow {
 }
 
 const CORE_ROWS: readonly NavRow[] = CORE_VISIBLE.map(coreRow)
+/** Pane id -> the server fact its entry waits on (core-settings-registry `requires`). */
+const CORE_GATES: ReadonlyMap<string, SettingsPaneGate> = new Map(
+  CORE_VISIBLE.flatMap((entry) => (entry.requires ? [[entry.id, entry.requires] as const] : [])),
+)
 
 const PAGE_ROWS: readonly NavRow[] = MANAGE_PAGES.map((page) => ({
   key: `link:${page.id}`,
@@ -184,8 +189,13 @@ export function useSettingsNavModel(): SettingsNavModel {
     return { panelRows, pluginPanes }
   }, [apps.all, pluginUi.settings])
 
+  const closedGates = useClosedPaneGates()
+
   return useMemo(() => {
-    const byGroup = (g: NavGroup) => CORE_ROWS.filter((r) => r.group === g)
+    const byGroup = (g: NavGroup) => CORE_ROWS.filter((r) => {
+      const gate = CORE_GATES.get(r.key)
+      return r.group === g && !(gate && closedGates.has(gate))
+    })
     const rows: NavRow[] = [
       ...PAGE_ROWS,
       ...byGroup('manage'),
@@ -204,7 +214,7 @@ export function useSettingsNavModel(): SettingsNavModel {
       pluginPanes: dynamic.pluginPanes,
       metaFor: (sectionId: string) => metaByKey.get(sectionId),
     }
-  }, [dynamic, ready])
+  }, [dynamic, ready, closedGates])
 }
 
 function readPluginCount(): number {

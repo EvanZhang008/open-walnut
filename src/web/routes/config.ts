@@ -58,6 +58,7 @@ import { configForClients, emitConfigChanged } from '../../core/config-broadcast
 import { MaskedValueError, restoreMaskedSecrets } from '../../core/config-secret-shape.js'
 import { getSelfRepairStatus } from '../../core/self-repair/walnut-source.js'
 import { getBuildInfo } from '../../lib/build-info.js'
+import { permissionsApplicable } from '../../core/permissions/applicable.js'
 import { withoutCloudBoxHost } from '../../core/hosts/cloud-box-host.js'
 
 // GET /api/config
@@ -107,6 +108,9 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     // its "Reveal in Finder / Open in default app" items when false instead of
     // offering menu entries that always 400.
     const canRevealLocalFiles = !CLOUD_MODE && process.platform === 'darwin'
+    // macAccess: whether /api/permissions has a report here (a Mac console). Settings
+    // lists its macOS Access pane only then, never as an entry that opens nothing.
+    const macAccess = permissionsApplicable()
     // remoteIdUniquenessGaps: non-empty means a sync plugin's remote-id UNIQUE
     // index could NOT be opened because the tasks table already holds two rows
     // owning one remote id. That is the task-forking bug's footprint, and the
@@ -141,7 +145,7 @@ configRouter.get('/', async (_req: Request, res: Response, next: NextFunction) =
     // that run here, so the console tells a session here from one on the Mac. Absent
     // everywhere else (the Mac, the companion): their answer is unchanged.
     const replicaHostKey = role() === 'replica' && placement() === 'host' ? (process.env.WALNUT_HOST_KEY ?? '').trim() : ''
-    res.json({ config: configForClients(shown), ...(configCopied === undefined ? {} : { configCopied }), envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, remoteIdUniquenessGaps, cloud: CLOUD_MODE, role: role(), placement: placement(), webAssets, selfRepair, build: getBuildInfo(), ...(replicaHostKey ? { replica: { hostKey: replicaHostKey } } : {}) })
+    res.json({ config: configForClients(shown), ...(configCopied === undefined ? {} : { configCopied }), envTokenHint, installDir: CLOUD_MODE ? null : WALNUT_INSTALL_DIR, notesDir: CLOUD_MODE ? null : NOTES_DIR, processNice, memory, canRevealLocalFiles, macAccess, remoteIdUniquenessGaps, cloud: CLOUD_MODE, role: role(), placement: placement(), webAssets, selfRepair, build: getBuildInfo(), ...(replicaHostKey ? { replica: { hostKey: replicaHostKey } } : {}) })
   } catch (err) {
     next(err)
   }

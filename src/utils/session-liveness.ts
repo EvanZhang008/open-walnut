@@ -57,7 +57,7 @@ import { engineCaps } from '../core/agents/engine-registry.js'
  */
 export function isLocalJsonlFresh(session: SessionRecord, windowMs: number): boolean | 'unknown' {
   // Remote sessions have no local streams file (RemoteSessionManager.outputFile is
-  // null); their liveness is the daemon's concern, not a local mtime.
+  // a remote:// sentinel); their liveness is the daemon's concern, not a local mtime.
   if (session.host) return 'unknown'
   // Since the daemon-uniform migration, local CLI sessions stream through the
   // LOCAL DAEMON, which writes its jsonl under WALNUT_STREAMS_DIR (the

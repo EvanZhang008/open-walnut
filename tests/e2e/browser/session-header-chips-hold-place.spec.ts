@@ -29,7 +29,11 @@
  * the replaced panel's memory goes only to a panel the host mounts for it (the
  * r3 gate, L-17); that row is checked on every frame its column is at rest,
  * not in the frames where the column slides (r4 gate, M-3). Plan, which only
- * some sessions have, sits after the chips every session has.
+ * some sessions have, sits after the chips every session has, and is drawn from
+ * the first frame when the page already knows the session's plan (the status
+ * store the finder seeds): in a full narrow row its late "..." pushed Open in
+ * new tab off the row (2026-10-31). A view's chip clicked again closes the view
+ * and keeps full screen (695dfcc14), so the tests leave full screen themselves.
  *
  * Board is a lead's chip only since 2026-10-26 (useBoardTab: a task with open
  * subtasks or a Board of its own with content). Whether a task leads may be
@@ -465,6 +469,24 @@ async function aimAtFilesAcrossNoTask(page: Page, panel: Locator, panelSel: stri
   return reading
 }
 
+/**
+ * Close the open view (Files) and leave full screen. Since 2026-10-27 a second click on the open
+ * view's chip closes the view and keeps the panel full screen (695dfcc14), so Exit full screen
+ * follows it to put the column back where it was.
+ */
+async function closeViewAndFullScreen(panel: Locator) {
+  const active = panel.locator('.session-meta-row-2 .session-action-chip-active')
+  if (await active.count()) {
+    await active.first().click()
+    await expect(active).toHaveCount(0)
+  }
+  const exit = panel.getByRole('button', { name: 'Exit full screen' })
+  if (await exit.count()) {
+    await exit.click()
+    await expect(exit).toHaveCount(0)
+  }
+}
+
 /** Close every session column, so the next round starts from none. */
 async function closeAllColumns(page: Page) {
   const panels = page.locator('.main-page-session-column .session-panel')
@@ -472,13 +494,8 @@ async function closeAllColumns(page: Page) {
     const open = await panels.count()
     if (open === 0) break
     const panel = panels.first()
-    // An open view (Files) takes the panel full screen, where Close gives way to Exit full screen:
-    // its own chip closes the view first.
-    const active = panel.locator('.session-meta-row-2 .session-action-chip-active')
-    if (await active.count()) {
-      await active.first().click()
-      await expect(active).toHaveCount(0)
-    }
+    // An open view (Files) takes the panel full screen, where Close gives way to Exit full screen.
+    await closeViewAndFullScreen(panel)
     await panel.getByRole('button', { name: 'Close session panel' }).click()
     // A closing column animates out before it leaves the DOM: wait for it to go.
     await expect(panels).toHaveCount(open - 1)
@@ -666,26 +683,28 @@ test('Fork, Board and Locate wait disabled in their places, then work once the r
   }
 })
 
-test('a plan session: Plan arrives after the chips every session has, and Files stays put', async ({ page }) => {
+test('a plan session: Plan is on the row from the first frame, after the chips every session has, and Files stays put', async ({ page }) => {
   const hold = await holdRecord(page, PLAN_SESSION.id)
   try {
     const panel = await openViaFinder(page, PLAN_SESSION.query, PLAN_SESSION.id)
     const files = panel.locator('button[data-header-id="files"]')
     await expect(files).toBeVisible()
     await expect.poll(() => hold.held()).toBeGreaterThan(0)
-    await expect(panel.locator('[data-header-id="plan"]'), 'no plan is known before the record').toHaveCount(0)
+    // The finder seeded the session's status (planCompleted), so Plan does not wait for the record
+    // (headerPlanFacts): a late Plan's "..." once took a window button's place in a full row.
+    const plan = panel.locator('button[data-header-id="plan"]')
+    await expect(plan, 'the plan the finder named is on the row before the record').toBeVisible()
     // The column opened from the finder scales in; measure it at rest (seen: the whole row 4 px off).
     await settle(page)
     const before = await rowBoxes(panel)
     const box = (await files.boundingBox())!
 
     hold.release()
-    const plan = panel.locator('button[data-header-id="plan"]')
-    await expect(plan).toBeVisible({ timeout: 15_000 })
+    await expect(panel.locator('.session-panel-badge', { hasText: 'Loading...' })).toHaveCount(0, { timeout: 15_000 })
     await settle(page)
     const after = await rowBoxes(panel)
     await shootHeader(page, panel, '3-plan')
-    expect(moved(before, after), 'Plan joined the row without moving anything on it').toEqual([])
+    expect(moved(before, after), 'the record landed without moving anything on the row').toEqual([])
     expect(after.plan!.x, 'Plan sits after Terminal').toBeGreaterThan(after.terminal!.x)
 
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
@@ -1009,9 +1028,9 @@ test('a prefix chat reference to a session already open folds into its column an
 
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
     await expect(open.locator('.session-action-chip-active'), 'the click aimed at Files opens Files').toHaveText(['Files'])
-    // Closing Files renders the panel again: still nothing drawn for the three, nothing moved.
-    await open.locator('.session-meta-row-2 .session-action-chip-active').click()
-    await expect(open.locator('.session-action-chip-active')).toHaveCount(0)
+    // Closing Files (and its full screen) renders the panel again: still nothing drawn for the three,
+    // nothing moved.
+    await closeViewAndFullScreen(open)
     await settle(page)
     await page.mouse.move(0, 0)
     await expectNoTaskControls(open, 'after Files')

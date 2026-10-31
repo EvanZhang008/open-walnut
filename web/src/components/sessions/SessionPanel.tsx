@@ -79,7 +79,7 @@ import type { FocusTier } from '@/api/focus';
 import { timeAgo } from '@/utils/time';
 import { ProcessStatusBadge } from './WorkStatusPicker';
 import { SessionForkButton } from './SessionForkButton';
-import { headerTaskPresence, recordGateReason, TASK_SLOT_IDS, TASK_SLOT_SPACER } from './header-record-gate';
+import { headerPlanFacts, headerTaskPresence, recordGateReason, TASK_SLOT_IDS, TASK_SLOT_SPACER } from './header-record-gate';
 import { useTaskControlSlot } from './useTaskControlSlot';
 import { useBoardTab } from './useBoardTab';
 import { panelTaskCopy } from './panel-task-copy';
@@ -515,11 +515,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
       : undefined);
 
   // Plan content for plan chip and execute buttons
-  const hasPlan = !!session?.planCompleted;
-  const isFromPlan = !!session?.fromPlanSessionId;
+  // Before the record, what the status store knows (headerPlanFacts): Plan is drawn from the first frame.
+  const { hasPlan, isFromPlan, planMode } = headerPlanFacts(session, liveStatus);
   // mode === 'plan' covers sessions still actively planning — planCompleted is only set after the plan tool call finishes,
   // so without this the Plan chip would be hidden during active planning.
-  const shouldFetchPlan = hasPlan || isFromPlan || session?.mode === 'plan';
+  const shouldFetchPlan = hasPlan || isFromPlan || planMode;
   const { plan, loading: planLoading, refresh: planRefresh } = useSessionPlan(sessionId || undefined, shouldFetchPlan);
   // Plan chip visibility is gated on whether a plan actually EXISTS — not on mode.
   // A bypass session that produced a plan (planCompleted / from-plan) still shows it;

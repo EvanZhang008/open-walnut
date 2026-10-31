@@ -21,6 +21,23 @@ import { MAX_PANELS } from '@/hooks/session-panel-limits';
 export interface SessionSlot {
   id: string;
   locked: boolean;
+  /**
+   * The column's React key while its id changes in place (a prefix adopting its
+   * full id, a pending column getting its session, a draft becoming its launch,
+   * plan -> exec): absent means the id. The column element stays, so the sessions
+   * area's auto-animate never plays the swap as a remove plus an insert, which
+   * scaled the new panel in under a click aimed at its header (2026-10-31,
+   * WebKit: Files 24 px off for a frame). The panel inside still remounts (keyed
+   * by the id). Never persisted (writeColumns keeps id and locked).
+   */
+  key?: string;
+}
+
+let columnKeySeq = 0;
+
+/** The React key of a column: kept across in-place id swaps (SessionSlot.key). */
+export function columnKey(slot: SessionSlot): string {
+  return slot.key ?? slot.id;
 }
 
 /** Real (budget-counting) columns: everything but the free-riding placeholders. */
@@ -287,10 +304,13 @@ export function replaceSessionColumn(cols: SessionSlot[], oldId: string, newId: 
     const locked = cols[existing].locked || cols[idx].locked;
     return cols
       .filter((_, i) => i !== idx)
-      .map(c => (c.id === newId ? { id: newId, locked } : c));
+      .map(c => (c.id === newId ? { ...c, locked } : c));
   }
   const next = [...cols];
-  next[idx] = { id: newId, locked: cols[idx].locked };
+  // A fresh `col:<n>` keeps the kept key apart from every id and from every other
+  // kept key: one id swapped away twice (plan P -> E1, P opened again -> E2) must
+  // not give two columns one key.
+  next[idx] = { id: newId, locked: cols[idx].locked, key: cols[idx].key ?? `col:${++columnKeySeq}` };
   return next;
 }
 
@@ -305,6 +325,6 @@ export function toggleLockSlot(cols: SessionSlot[], id: string): SessionSlot[] {
   const rest = cols.filter(c => c.id !== id);
   const { unlocked, locked } = splitByLock(rest);
   return target.locked
-    ? [...unlocked, { id, locked: false }, ...locked]
-    : [...unlocked, { id, locked: true }, ...locked];
+    ? [...unlocked, { ...target, locked: false }, ...locked]
+    : [...unlocked, { ...target, locked: true }, ...locked];
 }

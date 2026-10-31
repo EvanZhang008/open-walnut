@@ -2,7 +2,7 @@
  * Regression: the session-id rename must not wipe `outputFile`.
  *
  * BUG (found 2026-07-25). Every session — local included — now runs through the
- * daemon, and `RemoteSessionManager.outputFile` is a hardcoded `null` by design
+ * daemon, and `RemoteSessionManager.outputFile` was a hardcoded `null`
  * (the JSONL lives wherever the daemon put it, so there is no local path). The
  * real value is the `remote://<host>/<sid>` sentinel returned by
  * `transport.start()`, which ClaudeCodeSession stores when the spawn resolves.
@@ -23,11 +23,9 @@
  * the orphan sweeper SIGTERM real CLI processes. That backfill treats the symptom;
  * this test pins the cause.
  *
- * The fix belongs in src/providers/claude-code-session.ts (do not re-read
- * `transport.outputFile` after renameForSession — keep the value from start(), or
- * make the daemon transport return the sentinel from its getter). That file has
- * uncommitted work from another agent, so this test lands first and documents the
- * contract; it is expected to FAIL until the clobber is removed.
+ * Fixed 2026-10-31: the daemon transport's getter returns the sentinel once a sid
+ * is bound (and the renamed sid after renameForSession), so every re-read of
+ * `transport.outputFile` is safe; daemon-transport-unit.test.ts pins the getter.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import path from 'node:path'
@@ -75,8 +73,8 @@ describe('outputFile survives the session-id rename', () => {
       const current = session.outputFile
       expect(
         typeof current === 'string' && current.startsWith('remote://'),
-        `outputFile became ${JSON.stringify(current)} at ~${i * 25}ms after spawn — the rename path ` +
-          're-read RemoteSessionManager.outputFile, which is hardcoded null by design, ' +
+        `outputFile became ${JSON.stringify(current)} at ~${i * 25}ms after spawn: the rename path ` +
+          're-read RemoteSessionManager.outputFile and got null, ' +
           'overwriting the sentinel that transport.start() published',
       ).toBe(true)
     }

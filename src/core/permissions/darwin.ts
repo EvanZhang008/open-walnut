@@ -18,7 +18,7 @@
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { CLOUD_MODE } from '../../constants.js';
+import { permissionsApplicable } from './applicable.js';
 import { calendarAccessReport, calendarGrantApp, calendarHelperFallback } from '../calendar/sources/eventkit.js';
 import { log } from '../../logging/index.js';
 import { fullDiskAccessRows, probeFullDiskAccess } from './darwin-fda.js';
@@ -104,7 +104,7 @@ export async function detectLauncher(): Promise<LauncherInfo> {
  * parents exit (see detectLauncher). Fire-and-forget; never blocks startup.
  */
 export function warmLauncherDetection(): void {
-  if (process.platform !== 'darwin' || CLOUD_MODE) return;
+  if (!permissionsApplicable()) return;
   detectLauncher().catch(() => {});
 }
 
@@ -160,7 +160,7 @@ onFullDiskAccessUsesChanged(() => { reportCache = null; });
  */
 export async function getPermissionsReport(force = false): Promise<PermissionsReport> {
   // Cloud replica / Linux: TCC doesn't exist there. Frozen n/a report.
-  if (process.platform !== 'darwin' || CLOUD_MODE) return NOT_APPLICABLE;
+  if (!permissionsApplicable()) return NOT_APPLICABLE;
   if (!force && reportCache && Date.now() - reportCache.at < REPORT_TTL_MS) {
     return reportCache.report;
   }

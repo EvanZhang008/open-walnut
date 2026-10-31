@@ -1,3 +1,5 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { CORE_SETTINGS_CONTRIBUTIONS } from '../../web/src/components/settings/core-settings-registry.js'
 import { isSettingsGlyph, tileKey } from '../../web/src/components/settings/settings-icons.js'
@@ -109,5 +111,35 @@ describe('core settings registry', () => {
     const visible = CORE_SETTINGS_CONTRIBUTIONS.filter((entry) => !entry.navHidden)
     const keys = visible.map((entry) => tileKey(entry.tint, entry.icon))
     expect(new Set(keys).size).toBe(keys.length)
+  })
+
+  // 2026-10-31: on a server that is not a Mac, macOS Access rendered nothing (its
+  // section returned null) while its nav entry stayed. A section whose component can
+  // return null at its top level is a pane that may be empty, so its contribution
+  // must name the server fact (`requires`) that keeps its entry off the nav there.
+  it('gives every section that can render nothing a gate that hides its nav entry', () => {
+    const registry = fs.readFileSync(path.resolve(import.meta.dirname, '../../web/src/components/settings/core-settings-registry.tsx'), 'utf8')
+    const sectionsDir = path.resolve(import.meta.dirname, '../../web/src/components/settings/sections')
+    const ungated: string[] = []
+    for (const entry of CORE_SETTINGS_CONTRIBUTIONS) {
+      const block = registry.slice(registry.indexOf(`id: '${entry.id}'`))
+      const component = /render:[^\n]*<([A-Z]\w*)/.exec(block)?.[1]
+      expect(component, `${entry.id}: render names its section component`).toBeTruthy()
+      const src = fs.readFileSync(path.join(sectionsDir, `${component}.tsx`), 'utf8')
+      const start = src.indexOf(`export function ${component}(`)
+      expect(start, `${component} is exported from sections/${component}.tsx`).toBeGreaterThanOrEqual(0)
+      const end = src.indexOf('\n}\n', start)
+      const body = src.slice(start, end < 0 ? undefined : end)
+      // A statement at the component's own indent (two spaces), not one inside a callback:
+      // `return null`, `return <></>`, as one line or as the body of an `if (...) {` block.
+      const EMPTY = '(?:null|<></>|<Fragment\\s*/>)'
+      const empty = new RegExp(`^  (?:if \\(.*\\) )?return ${EMPTY};?\\s*$|^  if \\(.*\\) \\{\\n {4}return ${EMPTY};?\\s*\\n  \\}`, 'm')
+      if (empty.test(body) && !entry.requires) ungated.push(entry.id)
+    }
+    expect(ungated, 'sections that can render nothing with no `requires` gate').toEqual([])
+  })
+
+  it('lists the macOS Access entry only where the server has a report', () => {
+    expect(CORE_SETTINGS_CONTRIBUTIONS.find((e) => e.id === 'permissions')?.requires).toBe('mac-access')
   })
 })

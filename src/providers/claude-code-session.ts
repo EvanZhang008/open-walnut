@@ -3036,7 +3036,9 @@ export class ClaudeCodeSession {
       }
     })
 
-    this._outputFile = transport.outputFile
+    // A transport not bound yet answers null: keep the path this session already
+    // knows (a resume's sentinel) until the spawn above publishes the new one.
+    this._outputFile = transport.outputFile ?? this._outputFile
     this.emitStatusChanged('IN_PROGRESS')
     this.startLivenessMonitor()
     // Init-only spawn: silence is EXPECTED (the CLI idles until the first user
@@ -4074,9 +4076,8 @@ export class ClaudeCodeSession {
    * Writes ONLY to the streams file (_outputFile), never to canonical JSONL.
    * The walnutMessageId enables deterministic dedup against optimistic copies.
    *
-   * NOTE: Remote sessions have _outputFile=null (RemoteSessionManager.outputFile
-   * returns null), so this is effectively a no-op for remote sessions.
-   * RemoteSessionManager overrides this method as an explicit no-op.
+   * NOTE: a daemon session's _outputFile is a remote:// sentinel, not a local
+   * file; RemoteSessionManager overrides this method as an explicit no-op.
    */
   writeSyntheticUserEvent(message: string, walnutMessageId: string): void {
     if (this._transport) {

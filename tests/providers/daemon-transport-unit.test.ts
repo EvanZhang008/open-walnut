@@ -175,9 +175,16 @@ describe('B2: RemoteSessionManager.writeMessage guard (before start)', () => {
     expect(transport.lastEventAt).toBe(0)
   })
 
-  it('outputFile is null for remote sessions', () => {
+  it('outputFile is null before a sid is bound, then the remote:// sentinel that follows a rename', () => {
     const transport = new RemoteSessionManager('daemon-b2-006', 'testhost', testSshTarget)
     expect(transport.outputFile).toBeNull()
+    // Bind the sid the way start()/attach() do, without a daemon.
+    ;(transport as unknown as { _sid: string })._sid = 'daemon-b2-006'
+    expect(transport.outputFile).toBe('remote://testhost/daemon-b2-006')
+    // The init event renames the transport; the getter must name the new sid,
+    // never fall back to null (the session re-reads it after renameForSession).
+    transport.renameForSession('real-session-id')
+    expect(transport.outputFile).toBe('remote://testhost/real-session-id')
   })
 })
 

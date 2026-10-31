@@ -54,6 +54,11 @@ import type {
 // twice, the duplication is upstream of walnut.
 let __rsmIdCounter = 0
 
+/** The stand-in path a daemon session's outputFile carries: its stream lives on the host. */
+export function remoteOutputSentinel(hostKey: string, sid: string): string {
+  return `remote://${hostKey}/${sid}`
+}
+
 /** A `send` carrying `dedupe` writes nothing when the daemon can tell what became of the line. */
 const SEND_DEDUPE_CAPABILITY = 'send-dedupe-v1'
 /** A dedupe `send` carrying `lostPid` writes the line again into the process that read past it. */
@@ -236,8 +241,14 @@ export class RemoteSessionManager implements SessionManager {
   get pid(): number | null { return this._pid }
   /** start()/attach() bind the sid; before that isAlive() knows nothing. */
   get bound(): boolean { return this._sid !== null }
-  /** Remote sessions have no local output file. Returns null. */
-  get outputFile(): string | null { return null }
+  /**
+   * Remote sessions have no local output file: once start()/attach() bound a sid
+   * this is the `remote://<host>/<sid>` sentinel start() returns, and it follows
+   * renameForSession(). Null only before a sid is bound. It was a hardcoded null,
+   * so the session's re-read after the init rename wiped the sentinel that
+   * readSessionHistory, the changes view and the reconciler key on.
+   */
+  get outputFile(): string | null { return this._sid ? remoteOutputSentinel(this.hostKey, this._sid) : null }
   get hasPipe(): boolean { return this._hasPipe }
   /** See _lastPreparedOutbound — the echo-claim text source for delivery points. */
   get lastPreparedOutbound(): string | undefined { return this._lastPreparedOutbound }
@@ -453,7 +464,7 @@ export class RemoteSessionManager implements SessionManager {
       pid: this._pid!,
       // Remote sessions use a sentinel path — not a real local file.
       // Callers should check isRemote before attempting file I/O.
-      outputFile: `remote://${this.hostKey}/${this._sid}`,
+      outputFile: remoteOutputSentinel(this.hostKey, this._sid!),
       fileSize,
       ...(cut ? { cut: true } : {}),
       ...(fate ? { fate } : {}),
@@ -607,7 +618,7 @@ export class RemoteSessionManager implements SessionManager {
     return {
       pid: this._pid ?? 0,
       alive,
-      outputFile: `remote://${this.hostKey}/${this._sid}`,
+      outputFile: remoteOutputSentinel(this.hostKey, this._sid!),
       pendingCtrl: pendingCtrl ?? null,
     }
   }

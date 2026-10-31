@@ -24,7 +24,7 @@ vi.mock('../../web/src/hooks/useEngineCatalog', async () => {
 })
 
 const {
-  headerTaskPresence, recordGateReason, TASK_SLOT_IDS, TASK_SLOT_SPACER, taskControlSlot,
+  headerPlanFacts, headerTaskPresence, recordGateReason, TASK_SLOT_IDS, TASK_SLOT_SPACER, taskControlSlot,
 } = await import('../../web/src/components/sessions/header-record-gate')
 const { SessionForkButton } = await import('../../web/src/components/sessions/SessionForkButton')
 const { SessionHeaderMoreMenu } = await import('../../web/src/components/sessions/SessionHeaderMore')
@@ -189,5 +189,19 @@ describe('SessionHeaderMoreMenu: spacers fold like the rest but are never listed
   it('renders nothing when nothing is folded', () => {
     expect(menu([], TASK_SLOT_IDS)).toBe('')
     expect(menu([])).toBe('')
+  })
+})
+
+describe('headerPlanFacts: Plan from the first frame', () => {
+  it('reads the status store before the record, so a known plan is drawn on first paint', () => {
+    expect(headerPlanFacts(null, { planCompleted: true, mode: 'default' })).toEqual({ hasPlan: true, isFromPlan: false, planMode: false })
+    expect(headerPlanFacts(undefined, { planCompleted: false, mode: 'plan' })).toEqual({ hasPlan: false, isFromPlan: false, planMode: true })
+    expect(headerPlanFacts(null, null)).toEqual({ hasPlan: false, isFromPlan: false, planMode: false })
+  })
+
+  it('lets the record decide once it is here', () => {
+    expect(headerPlanFacts({ planCompleted: false, mode: 'default', fromPlanSessionId: 'src-1' }, { planCompleted: true, mode: 'plan' }))
+      .toEqual({ hasPlan: false, isFromPlan: true, planMode: false })
+    expect(headerPlanFacts({ planCompleted: true }, null)).toEqual({ hasPlan: true, isFromPlan: false, planMode: false })
   })
 })

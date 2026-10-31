@@ -99,3 +99,21 @@ export function recordGateReason(
     ? `${name} becomes available once the session has loaded`
     : `${name} is unavailable because this session's details did not load`;
 }
+
+/**
+ * The plan facts the header decides Plan from on this frame: the record once it
+ * is here, before it the session-status store's entry (the finder, the task list
+ * and status events seed `planCompleted` and `mode`). Plan sits after the chips
+ * every session has, but in a row with no room left its "..." took a window
+ * button's place when the record landed (2026-10-31, CI at 300px: Open in new tab
+ * left the row), so a plan the page already knows of is drawn from the first frame.
+ */
+export function headerPlanFacts(
+  record: { planCompleted?: boolean; mode?: string; fromPlanSessionId?: string | null } | null | undefined,
+  status: { planCompleted?: boolean; mode?: string } | null | undefined,
+): { hasPlan: boolean; isFromPlan: boolean; planMode: boolean } {
+  if (record) {
+    return { hasPlan: !!record.planCompleted, isFromPlan: !!record.fromPlanSessionId, planMode: record.mode === 'plan' };
+  }
+  return { hasPlan: !!status?.planCompleted, isFromPlan: false, planMode: status?.mode === 'plan' };
+}

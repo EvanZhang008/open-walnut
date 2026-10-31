@@ -396,7 +396,7 @@ export async function readSessionJsonlContent(
 
   // 2. Local streaming capture (SESSION_STREAMS_DIR) — fallback for LOCAL sessions only.
   //    Only local sessions create streams files (via LocalIO); remote sessions have no
-  //    local output file (RemoteSessionManager.outputFile returns null).
+  //    local output file (RemoteSessionManager.outputFile is a remote:// sentinel).
   //    Useful when the canonical JSONL is missing (e.g. deleted or not yet written).
   //    Direct filename lookup: streams files are renamed to {sessionId}.jsonl
   //    (see SessionIO.renameForSession() in session-io.ts).

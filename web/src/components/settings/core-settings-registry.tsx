@@ -24,6 +24,7 @@ import { TimelineSection } from './sections/TimelineSection'
 import { TriageSection } from './sections/TriageSection'
 import { UsageSection } from './sections/UsageSection'
 import type { SettingsGlyphName } from './settings-icons'
+import type { SettingsPaneGate } from './settings-pane-gates'
 
 export interface SaveSectionOptions {
   /** Row that made the change: a failure is replayed on that row if its pane was hidden. */
@@ -52,6 +53,12 @@ export interface CoreSettingsContribution {
   divider?: boolean
   /** Rendered in its owner's pane (keeps its `#id` deep link) but has no nav entry of its own. */
   navHidden?: boolean
+  /**
+   * A server fact the pane needs to have anything to show (settings-pane-gates.ts).
+   * A section that can render nothing names one, so no nav entry opens an empty pane
+   * (tests/web/settings-registry.test.ts finds the ones that do not).
+   */
+  requires?: SettingsPaneGate
   /** Glyph name in SETTINGS_ICONS (settings-icons.tsx). */
   icon: SettingsGlyphName
   /** Tile colour behind the white glyph. */
@@ -175,6 +182,7 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
   },
   {
     owner: 'walnut', id: 'permissions', label: 'macOS Access', title: 'macOS Access', group: 'configure',
+    requires: 'mac-access',
     icon: 'hand-raised', tint: '#007AFF',
     description: 'What macOS allows Walnut to do on this Mac.',
     keywords: ['privacy', 'accessibility', 'screen recording', 'full disk', 'automation', 'tcc'],

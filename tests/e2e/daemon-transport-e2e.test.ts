@@ -258,11 +258,11 @@ describe('RemoteSessionManager event tracking', () => {
     await transport.cleanup()
   })
 
-  it('outputFile is null for remote sessions', async () => {
+  it('outputFile is null before start() binds a sid', async () => {
     const tmpId = `test-nofile-${Date.now()}`
     const transport = new RemoteSessionManager(tmpId, 'test-host', fakeSshTarget, `ws://127.0.0.1:${daemon.port}`)
 
-    // Remote sessions should not have a local output file
+    // Remote sessions have no local output file: nothing before start() binds a sid
     expect(transport.outputFile).toBeNull()
 
     await transport.cleanup()
