@@ -47,6 +47,20 @@ async function createInboxTask(
   return body.task.id;
 }
 
+/** The task the URL names is focused (its card active), and no full-screen detail covers Home. */
+async function expectFocusedWithoutDetail(page: Page, title: string, taskId: string): Promise<void> {
+  await expect(page.locator('.todo-pinned-card.todo-pinned-card-active', { hasText: title }).first()).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator('.task-detail-modal')).toHaveCount(0);
+  expect(new URL(page.url()).searchParams.get('task')).toBe(taskId);
+}
+
+/** Open a card's detail the way a person does: its More actions menu, then Details. */
+async function openDetails(page: Page, title: string): Promise<void> {
+  const card = page.locator('.todo-pinned-card', { hasText: title }).first();
+  await card.getByRole('button', { name: 'More actions' }).click();
+  await page.getByRole('button', { name: 'Details', exact: true }).click();
+}
+
 async function expectExactTargetUrl(page: Page): Promise<void> {
   await expect.poll(() => {
     const url = new URL(page.url());
@@ -153,6 +167,10 @@ test('malformed HTTP 200 task list retains and restores the deep-linked task', a
   });
 
   failList = false;
+  // The reload brings the focus back (the card, the URL), never the full-screen detail:
+  // 2026-10-31, "every time walnut restarts it always shows some task in full screen".
+  await expectFocusedWithoutDetail(page, title, taskId);
+  await openDetails(page, title);
   const modal = page.locator('.task-detail-modal');
   await expect(modal.locator('.todo-detail-title')).toHaveText(title, { timeout: 10_000 });
   await expect(modal.getByText(description, { exact: true })).toBeVisible();
@@ -270,6 +288,7 @@ test('warm-page popstate survives a failed background task refresh', async ({
   });
 
   failList = false;
+  // Back/Forward is the user's own step: it reopens the detail the entry names (only a load does not).
   const modal = page.locator('.task-detail-modal');
   await expect(modal.locator('.todo-detail-title')).toHaveText(title, { timeout: 10_000 });
   await expect(modal.getByText(description, { exact: true })).toBeVisible();

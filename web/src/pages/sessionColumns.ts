@@ -185,6 +185,22 @@ export function fitRestoredColumns(cols: SessionSlot[], max: number): SessionSlo
 }
 
 /**
+ * The strip a URL names (`?sessions=`, ids only, on load or Back/Forward), given the saved
+ * strip: each id keeps the lock it had there, and every saved PIN the URL leaves out stays
+ * open. A pin is the user's "keep this panel"; an old link or a Back must not close it.
+ * Pins go to the locked region on the right, in their saved order.
+ */
+export function mergeUrlColumns(urlIds: readonly string[], saved: readonly SessionSlot[]): SessionSlot[] {
+  const lockedById = new Map(saved.map(s => [s.id, s.locked]));
+  const named = new Set(urlIds);
+  const fromUrl = urlIds.map(id => ({ id, locked: lockedById.get(id) ?? false }));
+  const keptPins = saved.filter(s => s.locked && !named.has(s.id)).map(s => ({ id: s.id, locked: true }));
+  if (keptPins.length === 0) return fromUrl;
+  const { unlocked, locked } = splitByLock(fromUrl);
+  return [...unlocked, ...locked, ...keptPins];
+}
+
+/**
  * Unconditional leftmost insert — the "overflow license".
  *
  * Contract, and every clause of it is deliberate: NO max check, NO trim, NO

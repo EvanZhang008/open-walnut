@@ -182,3 +182,20 @@ describe('PUT /api/ui-prefs', () => {
     expect(Object.keys(res.body.prefs)).toEqual(['open-walnut-fine']);
   });
 });
+
+describe('the layout record (Home and Org columns) is kept on disk', () => {
+  it('stores every field and reads it back from the file', async () => {
+    const { LAYOUT_FIELDS, encodeField } = await import('../../../web/src/utils/layout-record.js');
+    // Six locked columns with long ids: the largest strip a window keeps.
+    const strip = Array.from({ length: 6 }, (_, i) => ({ id: `session-${i}-${'x'.repeat(48)}`, locked: true }));
+    const prefs = Object.fromEntries(Object.values(LAYOUT_FIELDS).map((key, i) => [key, { v: encodeField(key.includes('columns') ? strip : `value-${i}`), ts: 1000 + i }]));
+    const put = await request(createApp()).put('/api/ui-prefs').send({ prefs });
+    expect(put.status).toBe(200);
+    const onDisk = JSON.parse(await fs.readFile(UI_PREFS_FILE, 'utf8')) as Record<string, { v: string }>;
+    const res = await request(createApp()).get('/api/ui-prefs');
+    for (const key of Object.values(LAYOUT_FIELDS)) {
+      expect(onDisk[key]?.v, key).toBe(prefs[key].v);
+      expect(res.body.prefs[key], key).toEqual(prefs[key]);
+    }
+  });
+});

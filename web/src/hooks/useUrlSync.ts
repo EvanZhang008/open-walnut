@@ -15,6 +15,8 @@ export interface UrlPending {
   sessionIds: string[];
   /** Active task-panel tab: a project name, the INBOX_TAB sentinel, or null when absent. */
   project: string | null;
+  /** Read from the address the page loaded at (a relaunch, a reload, a recycle), not a Back/Forward. */
+  fromLoad: boolean;
 }
 
 // Session columns ride the URL as s1..sN. Capped at the same ceiling as the panel
@@ -25,7 +27,7 @@ export interface UrlPending {
 const MAX_URL_SESSIONS = MAX_PANELS;
 const SESSION_PARAMS = Array.from({ length: MAX_URL_SESSIONS }, (_, i) => `s${i + 1}`);
 
-function parseUrlParams(): UrlPending | null {
+function parseUrlParams(fromLoad: boolean): UrlPending | null {
   if (window.location.pathname !== '/') return null;
   const sp = new URLSearchParams(window.location.search);
   const task = sp.get('task');
@@ -39,6 +41,7 @@ function parseUrlParams(): UrlPending | null {
     taskId: task || null,
     sessionIds,
     project: proj ? projectFromUrl(proj) : null,
+    fromLoad,
   };
 }
 
@@ -75,7 +78,7 @@ export function useUrlSync(opts: UseUrlSyncOpts): {
   const { focusedTaskId, sessionColumns, activeProject, visible } = opts;
 
   // Parse URL once on first render
-  const [pending, setPending] = useState<UrlPending | null>(() => parseUrlParams());
+  const [pending, setPending] = useState<UrlPending | null>(() => parseUrlParams(true));
 
   const clearPending = useCallback(() => setPending(null), []);
 
@@ -124,7 +127,7 @@ export function useUrlSync(opts: UseUrlSyncOpts): {
       // carries the `?task=` a row tap wrote, so applying it here reopened the
       // task detail the user had just peeled off with two backs.
       if (isPhoneLayout()) return;
-      const parsed = parseUrlParams();
+      const parsed = parseUrlParams(false);
       if (parsed) setPending(parsed);
     };
     window.addEventListener('popstate', handlePopState);

@@ -4,12 +4,15 @@
  * the Org page. A task with a session shows that session (the same embedded SessionPanel
  * as the Ask Walnut slot, with its own close, popout and fullscreen), and a Home button
  * opens it on home instead. A task with no session shows what it is and how to start one.
+ * On a wide window a panel carries a lock: a locked panel stays beside the page while the
+ * next task opens next to it (org-side-columns.ts), and it is still there after a restart.
  */
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { fetchTask } from '@/api/tasks';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
+import { ICON_LOCK, ICON_UNLOCK } from '@/components/common/Icons';
 import { locateTaskOnHome, openSessionOnHome } from '@/utils/open-session';
 import { resolveTaskSessionId } from '@/utils/session-status';
 
@@ -40,6 +43,9 @@ interface Props {
   onStartChat: (taskId: string) => void;
   /** Open the session on its Inbox tab (a letter's Answer), once per new value. */
   inboxRequest?: number;
+  /** Whether the panel is pinned beside the page; with onToggleLock, its header shows the lock. */
+  locked?: boolean;
+  onToggleLock?: () => void;
 }
 
 const HOME_ICON = (
@@ -48,7 +54,7 @@ const HOME_ICON = (
   </svg>
 );
 
-export function OrgSidePanel({ target, tasks, onClose, onOpenTask, onOpenSession, onStartChat, inboxRequest }: Props) {
+export function OrgSidePanel({ target, tasks, onClose, onOpenTask, onOpenSession, onStartChat, inboxRequest, locked, onToggleLock }: Props) {
   const navigate = useNavigate();
   const stored = target.kind === 'task' ? tasks.find((t) => t.id === target.id) : undefined;
   // A task the store does not hold (a completed one, say) is read once.
@@ -67,12 +73,13 @@ export function OrgSidePanel({ target, tasks, onClose, onOpenTask, onOpenSession
 
   if (sessionId) {
     return (
-      <aside className="org-side" data-testid="org-side" data-session-id={sessionId} aria-label="Opened task">
+      <aside className={`org-side${locked ? ' is-locked' : ''}`} data-testid="org-side" data-session-id={sessionId} data-target={sideTargetParam(target)} aria-label="Opened task">
         <SessionPanel
           key={sessionId}
           sessionId={sessionId}
           embedded
           {...(inboxRequest ? { inboxRequest } : {})}
+          {...(onToggleLock ? { locked: !!locked, onToggleLock: () => onToggleLock() } : {})}
           onClose={onClose}
           headerLeading={(
             <button
@@ -95,11 +102,24 @@ export function OrgSidePanel({ target, tasks, onClose, onOpenTask, onOpenSession
   }
 
   return (
-    <aside className="org-side org-side-card" data-testid="org-side" aria-label="Opened task">
+    <aside className={`org-side org-side-card${locked ? ' is-locked' : ''}`} data-testid="org-side" data-target={sideTargetParam(target)} aria-label="Opened task">
       <header className="org-side-card-head">
         <h3 className="org-side-card-title" data-testid="org-side-title">
           {loading ? 'Loading…' : task ? task.title : 'That task is gone.'}
         </h3>
+        {onToggleLock && (
+          <button
+            type="button"
+            className={`org-side-close org-side-lock${locked ? ' is-locked' : ''}`}
+            data-testid="org-side-lock"
+            aria-pressed={!!locked}
+            aria-label={locked ? 'Unlock panel' : 'Lock panel beside the page'}
+            title={locked ? 'Unlock: the next task opened replaces this panel' : 'Lock: the next task opens next to this panel'}
+            onClick={onToggleLock}
+          >
+            {locked ? ICON_LOCK : ICON_UNLOCK}
+          </button>
+        )}
         <button type="button" className="org-side-close" data-testid="org-side-close" aria-label="Close" title="Close" onClick={onClose}>×</button>
       </header>
       {task && (

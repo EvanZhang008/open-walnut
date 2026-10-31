@@ -475,17 +475,25 @@
   background: var(--bg);
 }
 .org-side > * { flex: 1; min-width: 0; min-height: 0; }
+/* A wide window's strip of side panels: the opened one, then the locked ones on the right.
+   Two or more share the room; past what fits, the strip scrolls sideways. */
+.org-side-strip { flex: none; display: flex; min-width: 0; min-height: 0; max-width: 70%; overflow-x: auto; }
+.org-side-strip.is-multi .org-side { width: clamp(340px, 26vw, 520px); }
 @media (max-width: 1180px) {
-  .org-page:not(.is-phone) .org-side {
+  .org-page:not(.is-phone) .org-side-strip {
     position: absolute;
     top: 0;
     right: 0;
     bottom: 0;
     z-index: 6;
-    width: min(480px, 92%);
+    max-width: 92%;
     box-shadow: -10px 0 28px rgba(0, 0, 0, 0.14);
+    background: var(--bg);
   }
+  .org-page:not(.is-phone) .org-side { width: min(480px, 92vw); }
+  .org-page:not(.is-phone) .org-side-strip.is-multi .org-side { width: min(420px, 46vw); }
 }
+.org-side-lock.is-locked { color: var(--accent, var(--fg)); }
 .org-page.is-phone .org-side { width: 100%; border-left: none; }
 .org-side-home {
   display: inline-flex;

@@ -6,6 +6,7 @@ import {
   trimUnlockedToMax,
   panelBudget,
   fitRestoredColumns,
+  mergeUrlColumns,
   removeSessionColumn,
   replaceSessionColumn,
   restoreSessionColumn,
@@ -652,5 +653,24 @@ describe('sessionColumns: restoreSessionColumn (Undo of a completed task\'s colu
     const cols = Array.from({ length: MAX_PANELS }, (_, i) => slot(`p${i}`, true));
     expect(restore(cols, slot('b'), 0, false, MAX_PANELS)).toBe(cols);
     expect(restore(cols, slot('b', true), 2, false, MAX_PANELS)).toBe(cols);
+  });
+});
+
+describe('sessionColumns: mergeUrlColumns', () => {
+  it('takes the URL order with the saved locks', () => {
+    expect(mergeUrlColumns(['a', 'b'], [slot('b', true), slot('a')])).toEqual([slot('a'), slot('b', true)]);
+  });
+  it('keeps a saved pin the URL does not name, on the right', () => {
+    expect(mergeUrlColumns(['x'], [slot('a'), slot('p2', true), slot('p1', true)])).toEqual([
+      slot('x'), slot('p2', true), slot('p1', true),
+    ]);
+  });
+  it('drops a saved free column the URL does not name', () => {
+    expect(mergeUrlColumns(['x'], [slot('a'), slot('b')])).toEqual([slot('x')]);
+  });
+  it('puts the URL pins before the kept ones, the free columns first', () => {
+    expect(mergeUrlColumns(['p1', 'x'], [slot('p1', true), slot('p2', true)])).toEqual([
+      slot('x'), slot('p1', true), slot('p2', true),
+    ]);
   });
 });

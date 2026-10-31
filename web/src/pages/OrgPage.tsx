@@ -12,7 +12,9 @@
  * waits on a prompt comes from the session status store. The selection, tab and
  * opened task ride the URL (?node=…&tab=…&open=…), so a reload or Back keeps them.
  * A task clicked on the page opens in the side panel, so the user stays here (a
- * narrow window lays it over the detail). On a phone the list, the detail and the
+ * narrow window lays it over the detail). A wide window keeps a strip of side panels:
+ * the one `open` names plus the ones the user locked (org-side-columns.ts), saved in the
+ * layout record so the pins come back after a restart. On a phone the list, the detail and the
  * opened task take turns. The old org chart (drag to reparent) stays one click away.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -27,6 +29,8 @@ import { resolveOrgContact } from '@/api/org';
 import { fetchTask } from '@/api/tasks';
 import { sessionStatusStore } from '@/stores/session-status-store';
 import { resolveTaskSessionId } from '@/utils/session-status';
+import { createStripWriter, readColumns } from '@/utils/layout-record';
+import type { SessionSlot } from '@/pages/sessionColumns';
 import { log } from '@/utils/log';
 import { OrgChartSheet, type ChartStart } from '@/components/org/OrgChartSheet';
 import { OrgChannelList, type ChannelMenuTarget } from '@/components/org/OrgChannelList';
@@ -38,6 +42,9 @@ import { orgRowMenu, type OrgRowPick } from '@/components/org/org-row-menu';
 import { OrgNodeDetail, type OrgAnswers, type OrgTab } from '@/components/org/OrgNodeDetail';
 import type { AnswerFailure } from '@/components/org/OrgAlertAnswer';
 import { OrgSidePanel, parseSideTarget, sideTargetParam, type OrgSideTarget } from '@/components/org/OrgSidePanel';
+import {
+  orgStripToggleLock, orgStripView, type SameSession,
+} from '@/components/org/org-side-columns';
 import {
   MAIN_KEY, buildChannels, filterChannels, flattenNodes, movedProjects, pickChannel, projectRowKey, rowOf, type AlertProbe, type ChannelRow,
 } from '@/components/org/org-channels-model';
@@ -194,6 +201,31 @@ export function OrgPage() {
   const moved = useMemo(() => movedProjects(channels, tasks), [channels, tasks]);
   const openParam = params.get('open') ?? pendingPlace?.open ?? null;
   const side = useMemo(() => parseSideTarget(openParam), [openParam]);
+
+  // The side strip (desktop): the panel `open` names plus the pinned ones. A task and its
+  // session are one panel, whichever id named it.
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
+  const sameSession = useCallback<SameSession>((a, b) => {
+    const sessionOf = (raw: string): string | null => {
+      const t = parseSideTarget(raw);
+      if (!t) return null;
+      if (t.kind === 'session') return t.id;
+      const task = tasksRef.current.find((x) => x.id === t.id);
+      return task ? resolveTaskSessionId(task) ?? null : null;
+    };
+    const sa = sessionOf(a);
+    return !!sa && sa === sessionOf(b);
+  }, []);
+  // Only the pins are state; the free panel is the URL's (orgStripView). A saved id this build
+  // cannot read is dropped, never drawn as an empty panel.
+  const [pins, setPins] = useState<SessionSlot[]>(() => readColumns('orgColumns').filter((s) => s.locked && !!parseSideTarget(s.id)));
+  // `tasks` too: a task's panel and its session's become one once the tasks are known.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const strip = useMemo(() => orgStripView(pins, openParam, sameSession), [pins, openParam, sameSession, tasks]);
+  // A phone shows one panel from the URL and never touches the desktop's saved strip.
+  const [writeStrip] = useState(() => createStripWriter('orgColumns'));
+  useEffect(() => { if (!phone) writeStrip(strip); }, [strip, phone, writeStrip]);
   // Remember the place as the URL moves (not before the URL has caught up with a restore).
   const urlPlaced = !!(params.get('node') || params.get('open'));
   useEffect(() => {
@@ -281,6 +313,19 @@ export function OrgPage() {
       { replace: true, state: (window.history.state as { usr?: unknown } | null)?.usr ?? null });
   }, [navigate, setParams]);
 
+  /** × on one panel of the strip: the free one closes through the URL, a pin leaves the strip. */
+  const closePanel = useCallback((id: string) => {
+    setPins((cols) => cols.filter((c) => c.id !== id && !sameSession(c.id, id)));
+    if (openParam && (id === openParam || sameSession(id, openParam))) closeSide();
+  }, [openParam, closeSide, sameSession]);
+  /** The lock: the free panel joins the pins; an unlocked pin becomes the free panel (one per page). */
+  const togglePanelLock = useCallback((id: string) => {
+    const wasPinned = pins.some((c) => c.id === id);
+    setPins(orgStripToggleLock(strip, id).filter((c) => c.locked));
+    const target = parseSideTarget(id);
+    if (wasPinned && target && id !== openParam && !(openParam && sameSession(id, openParam))) openSide(target);
+  }, [pins, strip, openParam, sameSession, openSide]);
+
   /** Talk to a task off this page: its session on home, or a composer bound to it (MainPage). */
   const chatOnHome = useCallback((taskId: string) => {
     log.info('org-page', 'open on home', { taskId });
@@ -314,7 +359,7 @@ export function OrgPage() {
   const phoneView = !phone ? null : side ? 'side' : showDetail ? 'detail' : 'list';
 
   return (
-    <div className={`org-page${phone ? ' is-phone' : ''}${showDetail ? ' shows-detail' : ''}${side ? ' shows-side' : ''}`} data-testid="org-page">
+    <div className={`org-page${phone ? ' is-phone' : ''}${showDetail ? ' shows-detail' : ''}${(phone ? side : strip.length > 0) ? ' shows-side' : ''}`} data-testid="org-page">
       {(!phone || phoneView === 'list') && (
         <OrgChannelList
           main={channels.main}
@@ -360,7 +405,7 @@ export function OrgPage() {
           />
         </section>
       )}
-      {side && (
+      {phone && side && (
         <OrgSidePanel
           target={side}
           tasks={tasks}
@@ -370,6 +415,28 @@ export function OrgPage() {
           onStartChat={chatOnHome}
           {...(side.kind === 'task' && sideInbox?.taskId === side.id ? { inboxRequest: sideInbox.n } : {})}
         />
+      )}
+      {!phone && strip.length > 0 && (
+        <div className={`org-side-strip${strip.length > 1 ? ' is-multi' : ''}`} data-testid="org-side-strip">
+          {strip.map((slot) => {
+            const target = parseSideTarget(slot.id);
+            if (!target) return null;
+            return (
+              <OrgSidePanel
+                key={slot.id}
+                target={target}
+                tasks={tasks}
+                locked={slot.locked}
+                onToggleLock={() => togglePanelLock(slot.id)}
+                onClose={() => closePanel(slot.id)}
+                onOpenTask={openTask}
+                onOpenSession={openSession}
+                onStartChat={chatOnHome}
+                {...(target.kind === 'task' && sideInbox?.taskId === target.id ? { inboxRequest: sideInbox.n } : {})}
+              />
+            );
+          })}
+        </div>
       )}
       {chartOpen && (
         <OrgChartSheet

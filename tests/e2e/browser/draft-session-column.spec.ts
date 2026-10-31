@@ -301,7 +301,7 @@ test('closing a draft leaves no trace: no task, no persisted column, no draft ke
   // nothing after a reload, so persisting one would mount a broken column), and
   // the composer's localStorage key is swept too.
   const residue = await page.evaluate(() => {
-    const cols = sessionStorage.getItem('open-walnut-home-session-columns') ?? ''
+    const cols = localStorage.getItem('open-walnut-layout:home-columns') ?? ''
     const draftKeys: string[] = []
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i)

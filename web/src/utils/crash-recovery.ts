@@ -11,7 +11,9 @@
  * clears the persisted UI state that reproduces them:
  *
  *   crash 1 (within window) → no auto action; AppErrorBoundary shows recover UI
- *   crash 2                 → SOFT heal: clear sessionStorage + URL params, reload
+ *   crash 2                 → SOFT heal: clear sessionStorage + URL params, and the
+ *                             layout record (utils/layout-record.ts) down to the
+ *                             locked columns, reload (the hard heal clears the pins)
  *   crash 3                 → HARD heal: also clear walnut layout keys from
  *                             localStorage (through the instance methods, so the
  *                             ui-prefs sync layer pushes delete tombstones and a
@@ -19,7 +21,14 @@
  *                             prefs merge for one boot, then reload
  *   crash 4+                → give up auto-healing (never reload-loop); the
  *                             recover UI stays up with a manual reset button
+ *
+ * A locked column is the user's "keep this panel", so the soft heal keeps the pins
+ * (a crashing session is contained by its own panel's error boundary anyway); the
+ * hard heal clears them too, since a pin that crashes the page would otherwise
+ * survive every heal.
  */
+
+import { LAYOUT_PREFIX, healedLayoutValue } from './layout-record';
 
 const CRASH_LOG_KEY = 'open-walnut-crash-log';
 /** Read by initUiPrefsSync: when set, skip adopting server prefs for one boot. */
@@ -44,6 +53,10 @@ function resolveDeps(deps?: Partial<StorageDeps>): StorageDeps {
   };
 }
 
+function safeGet(store: Storage, key: string): string | null {
+  try { return store.getItem(key); } catch { return null; }
+}
+
 /** Record one crash and decide how aggressively to heal. Never throws. */
 export function recordCrash(deps?: Partial<StorageDeps>): HealAction {
   const { session, now } = resolveDeps(deps);
@@ -66,6 +79,8 @@ export function recordCrash(deps?: Partial<StorageDeps>): HealAction {
  * Clear the persisted UI state that re-triggers a crash on every load.
  * - session: everything except the crash log (it must survive to escalate,
  *   and to stop the loop at give-up).
+ * - the soft heal trims the layout record to its locked columns; the hard heal
+ *   and the manual reset clear it whole.
  * - hard also removes walnut layout keys from localStorage. Deliberately via
  *   the (possibly monkey-patched) instance methods: the ui-prefs sync layer
  *   then records delete tombstones, so a poisoned server-synced pref cannot
@@ -82,19 +97,24 @@ export function clearPersistedUiState(hard: boolean, deps?: Partial<StorageDeps>
   if (keep !== null) {
     try { session.setItem(CRASH_LOG_KEY, keep); } catch { /* ignore */ }
   }
-  if (!hard) return;
   const doomed: string[] = [];
   try {
     for (let i = 0; i < local.length; i++) {
       const k = local.key(i);
-      if (k && k !== SKIP_PREFS_MERGE_FLAG && LOCAL_KEY_PREFIXES.some((p) => k.startsWith(p))) {
-        doomed.push(k);
-      }
+      if (!k || k === SKIP_PREFS_MERGE_FLAG) continue;
+      // The layout record was sessionStorage before it went to disk: every heal clears it.
+      if (k.startsWith(LAYOUT_PREFIX) || (hard && LOCAL_KEY_PREFIXES.some((p) => k.startsWith(p)))) doomed.push(k);
     }
   } catch { /* ignore */ }
   for (const k of doomed) {
-    try { local.removeItem(k); } catch { /* ignore */ }
+    // A layout key is cleared by writing, never removed (layout-record.ts writeLayoutField).
+    const healed = k.startsWith(LAYOUT_PREFIX) ? healedLayoutValue(k, safeGet(local, k), !hard) : null;
+    try {
+      if (healed !== null) { if (safeGet(local, k) !== healed) local.setItem(k, healed); }
+      else local.removeItem(k);
+    } catch { /* ignore */ }
   }
+  if (!hard) return;
   // Belt-and-braces: the tombstone flush above rides pagehide keepalive and can
   // lose the race with the next page load's GET — skip that one merge entirely.
   try { session.setItem(SKIP_PREFS_MERGE_FLAG, '1'); } catch { /* ignore */ }

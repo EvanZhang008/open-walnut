@@ -140,6 +140,7 @@ import { useTitleMetaFit, useToolRowFit } from './useSessionHeaderFit';
 import { HiddenPillRows, SessionHeaderMoreMenu } from './SessionHeaderMore';
 import '@/styles/session-header-fit.css';
 import { IslandHostContext, type IslandHost } from '@/components/chat/island-host';
+import { dropSavedColumn } from '@/utils/layout-record';
 
 /**
  * Below this viewport width a split view opens with the chat column collapsed:
@@ -209,7 +210,8 @@ class SessionPanelErrorBoundary extends Component<SessionPanelErrorBoundaryProps
             <button
               className="btn btn-sm btn-primary"
               onClick={() => {
-                if (clearsColumnLayout) sessionStorage.removeItem('open-walnut-home-session-columns');
+                // Only this column leaves the saved strip; the other columns and the pins stay.
+                if (clearsColumnLayout) { dropSavedColumn('homeColumns', this.props.sessionId); dropSavedColumn('phoneColumns', this.props.sessionId); }
                 onClose(this.props.sessionId);
               }}
             >
@@ -2377,10 +2379,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   {ICON_NEW_TAB}
                 </button>
               )}
-              {/* Embedded (the Ask Walnut slot): lock pins a panel within the
-                  column rotation, and there is no rotation there. Everything else
-                  behaves as in a column. */}
-              {!embedded && onToggleLock && (
+              {/* Lock shows wherever the host keeps a strip to pin within (Home's
+                  columns, the Org page's side panels, a plugin that asked). The Ask
+                  Walnut slot has no strip and passes no onToggleLock. */}
+              {onToggleLock && (
                 <button
                   className={`task-action-btn session-panel-lock${locked ? ' is-locked' : ''}`}
                   data-header-id="lock"

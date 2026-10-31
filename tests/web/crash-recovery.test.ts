@@ -82,5 +82,23 @@ describe('crash-recovery', () => {
       expect(local.getItem('walnut.deviceToken')).toBe('tok_123');
       expect(session.getItem(SKIP_PREFS_MERGE_FLAG)).toBe('1');
     });
+
+    it('the soft heal keeps the locked columns of the layout record and clears the rest of it, by writing', () => {
+      const cols = JSON.stringify({ v: 1, value: [{ id: 'a', locked: false }, { id: 'b', locked: true }] });
+      const cleared = JSON.stringify({ v: 1, value: null });
+      local.setItem('open-walnut-layout:home-columns', cols);
+      local.setItem('open-walnut-layout:org-columns', JSON.stringify({ v: 1, value: [{ id: 'task:x', locked: false }] }));
+      local.setItem('open-walnut-layout:home-focused-task', JSON.stringify({ v: 1, value: 't1' }));
+      clearPersistedUiState(false, deps());
+      expect(local.getItem('open-walnut-layout:home-columns')).toBe(JSON.stringify({ v: 1, value: [{ id: 'b', locked: true }] }));
+      expect(local.getItem('open-walnut-layout:org-columns')).toBe(cleared);
+      expect(local.getItem('open-walnut-layout:home-focused-task')).toBe(cleared);
+    });
+
+    it('the hard heal (and the manual reset) clears the pins too, still by writing', () => {
+      local.setItem('open-walnut-layout:home-columns', JSON.stringify({ v: 1, value: [{ id: 'b', locked: true }] }));
+      clearPersistedUiState(true, deps());
+      expect(local.getItem('open-walnut-layout:home-columns')).toBe(JSON.stringify({ v: 1, value: null }));
+    });
   });
 });

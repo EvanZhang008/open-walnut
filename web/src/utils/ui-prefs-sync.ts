@@ -26,6 +26,7 @@
 import { apiGet, apiPut } from '@/api/client';
 import { getDeviceToken } from '@/api/device-token';
 import { SKIP_PREFS_MERGE_FLAG } from './crash-recovery';
+import { LAYOUT_PREFIX, adoptsServerLayout } from './layout-record';
 
 const INCLUDE_PREFIXES = ['open-walnut-', 'walnut-todo-'];
 /**
@@ -139,6 +140,9 @@ async function flush() {
 
 function queue(key: string, value: string | null) {
   if (!syncable(key)) return;
+  // An automated browser that did not read the server's layout record must not write it
+  // either: a Playwright look at the live server would replace the user's pins.
+  if (key.startsWith(LAYOUT_PREFIX) && !adoptsServerLayout()) return;
   const ts = Date.now();
   // Re-read meta before mutating: several tabs share this store, and writing
   // a stale in-memory copy would erase another tab's timestamps (its keys
@@ -196,8 +200,12 @@ export async function initUiPrefsSync(): Promise<void> {
       '/api/ui-prefs', undefined, { timeoutMs: 2500 },
     );
     const localOnly: Record<string, PrefEntry> = {};
+    // Under browser automation the shared fixture server's layout record belongs to
+    // whichever spec wrote it last (layout-record.ts adoptsServerLayout).
+    const adoptLayout = adoptsServerLayout();
     for (const [key, entry] of Object.entries(res.prefs ?? {})) {
       if (!syncable(key) || !entry || typeof entry.ts !== 'number') continue;
+      if (!adoptLayout && key.startsWith(LAYOUT_PREFIX)) continue;
       const localVal = rawGet.call(localStorage, key);
       const localTs = meta[key];
       // Server wins ONLY when this browser has nothing for the key, or when

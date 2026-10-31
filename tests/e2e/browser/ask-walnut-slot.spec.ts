@@ -495,7 +495,7 @@ test('the selected ask survives a reload', async ({ page }) => {
   await expect(slotSession(page)).toHaveAttribute('data-session-id', firstSessionId, { timeout: 30_000 })
   // The contract's storage key. `toContain`, so a JSON-wrapped value still passes.
   await expect
-    .poll(() => page.evaluate(() => sessionStorage.getItem('walnut:ask-slot:selected')), {
+    .poll(() => page.evaluate(() => localStorage.getItem('open-walnut-layout:ask-selected')), {
       timeout: 10_000,
       message: 'the slot never persisted its selection',
     })

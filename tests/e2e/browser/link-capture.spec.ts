@@ -100,6 +100,7 @@ async function prepare(page: Page): Promise<{ errors: string[]; tabs: () => stri
     try {
       localStorage.setItem('open-walnut-home-chat-visible', '0')
       sessionStorage.removeItem('open-walnut-home-session-columns')
+      localStorage.removeItem('open-walnut-layout:home-columns')
     } catch { /* storage off */ }
     // Copy link goes through navigator.clipboard (no desktop bridge here): keep what it wrote.
     const w = window as unknown as { __copied: string[] }

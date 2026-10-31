@@ -25,8 +25,9 @@
  *   session  → `SessionPanel embedded` (every window control but lock — there
  *              is no column rotation to pin within).
  *
- * Selection persists in sessionStorage and is re-resolved whenever the task list
- * changes; the decisions live in ./ask-walnut-slot-model so they can be pinned
+ * Selection persists in the layout record (utils/layout-record.ts, on disk through
+ * the ui-prefs mirror, so a Mac app relaunch keeps it) and is re-resolved whenever
+ * the task list changes; the decisions live in ./ask-walnut-slot-model so they can be pinned
  * without a DOM.
  */
 
@@ -47,6 +48,7 @@ import type { QuickStartTaskMeta } from '@/components/sessions/SessionPathSelect
 import { useEvent } from '@/hooks/useWebSocket';
 import { getAgentsSnapshot, loadAgents, subscribeAgents } from '@/stores/agents-store';
 import { log } from '@/utils/log';
+import { readString, writeLayoutField } from '@/utils/layout-record';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { seedLaunchPrompt } from '@/components/sessions/launch-prompt-seed';
 import { AskWalnutDrawer, AskWalnutMenuButton, type DrawerRow } from './AskWalnutDrawer';
@@ -59,13 +61,11 @@ import {
 } from './ask-walnut-slot-model';
 import '@/styles/walnut-agent.css';
 
-/** Which task the slot is showing. sessionStorage (not localStorage): a tab is a
- *  per-window view, and two windows should be able to watch two asks. */
-const SS_SELECTED_KEY = 'walnut:ask-slot:selected';
-/** Which agent the drawer is on. Per-window like the selection; it matters on
- *  its own only while the agent has no asks (a reload must not drop the user
- *  from Mentor's empty composer back to Walnut). */
-const SS_AGENT_KEY = 'walnut:ask-slot:agent';
+// Which task the slot shows (`askSelected`) and which agent the drawer is on (`askAgent`)
+// are layout record fields: they survive a relaunch. Two windows each keep their own
+// pick while open; the one written last is what the next window opens with. The agent
+// matters on its own only while it has no asks (a reload must not drop the user from
+// Mentor's empty composer back to Walnut).
 
 /**
  * The selection that means Main, the main agent: one conversation that sees all
@@ -84,7 +84,7 @@ const SHOW_ASK_EVENT = 'ask-slot:show';
  * storage too, because the slot only mounts while the chat is open: a slot mounting after this reads it.
  */
 export function showAskInSlot(taskId: string): void {
-  try { sessionStorage.setItem(SS_SELECTED_KEY, taskId); } catch { /* the event still reaches a mounted slot */ }
+  writeLayoutField('askSelected', taskId);
   window.dispatchEvent(new CustomEvent(SHOW_ASK_EVENT, { detail: { taskId } }));
 }
 
@@ -188,13 +188,14 @@ export function AskWalnutSlot({
   const agentsLoaded = agentsSnapshot.agentsLoaded;
 
   const [agentId, setAgentId] = useState<string>(() => {
-    try { return sessionStorage.getItem(SS_AGENT_KEY) || GENERAL_AGENT_ID; } catch { return GENERAL_AGENT_ID; }
+    return readString('askAgent') ?? GENERAL_AGENT_ID;
   });
   // An agent id nobody knows (deleted from config, a stale key) falls back to
   // Walnut rather than to an empty drawer with an unnamed title.
   const agent = useMemo(() => agents.find((a) => a.id === agentId) ?? agents[0] ?? GENERAL_ASK_AGENT, [agents, agentId]);
   useEffect(() => {
-    try { sessionStorage.setItem(SS_AGENT_KEY, agentId); } catch { /* per-render only */ }
+    // Walnut is the default: a browser that never switched keeps no key (and so adopts another's).
+    writeLayoutField('askAgent', agentId === GENERAL_AGENT_ID ? null : agentId);
   }, [agentId]);
 
   const isGeneral = agent.id === GENERAL_AGENT_ID;
@@ -206,7 +207,7 @@ export function AskWalnutSlot({
     [askTasks, isGeneral],
   );
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(() => {
-    try { return sessionStorage.getItem(SS_SELECTED_KEY); } catch { return null; }
+    return readString('askSelected');
   });
 
   /** The user asked for a fresh ask (the "New" action). */
@@ -224,10 +225,7 @@ export function AskWalnutSlot({
   const menuBtnRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    try {
-      if (selectedTaskId) sessionStorage.setItem(SS_SELECTED_KEY, selectedTaskId);
-      else sessionStorage.removeItem(SS_SELECTED_KEY);
-    } catch { /* storage disabled — selection is per-render only */ }
+    writeLayoutField('askSelected', selectedTaskId);
   }, [selectedTaskId]);
 
   // Ref mirrors for the []-dep callbacks below (they must not be re-created on

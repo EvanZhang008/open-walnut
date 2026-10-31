@@ -106,6 +106,7 @@ async function openNote(page: Page): Promise<Note> {
     try {
       localStorage.setItem('open-walnut-home-chat-visible', '0')
       sessionStorage.removeItem('open-walnut-home-session-columns')
+      localStorage.removeItem('open-walnut-layout:home-columns')
     } catch { /* storage off */ }
   })
   await page.goto(`http://127.0.0.1:${fixture.port}/`)

@@ -53,6 +53,7 @@ test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('open-walnut-home-chat-visible', 'false');
     sessionStorage.removeItem('open-walnut-home-session-columns');
+    localStorage.removeItem('open-walnut-layout:home-columns');
   });
 });
 

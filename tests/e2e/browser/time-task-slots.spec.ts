@@ -70,6 +70,7 @@ async function loadHome(page: Page, pins?: string[]): Promise<void> {
     try {
       localStorage.setItem('open-walnut-home-chat-visible', '0')
       sessionStorage.removeItem('open-walnut-home-session-columns')
+      localStorage.removeItem('open-walnut-layout:home-columns')
       if (!sessionStorage.getItem('pw-pins-set')) {
         localStorage.setItem(key, value)
         sessionStorage.setItem('pw-pins-set', '1')

@@ -78,6 +78,7 @@ import {
   type SessionSlot,
   trimUnlockedToMax,
   fitRestoredColumns,
+  mergeUrlColumns,
   realColumnCount,
   addSessionColumn,
   forceAddSessionColumn,
@@ -88,6 +89,7 @@ import {
 } from './sessionColumns';
 import { useColumnCompleteClose } from './useColumnCompleteClose';
 import { isDraftColumnId, isPendingColumnId, isPlaceholderColumnId, DRAFT_COL_PREFIX } from '@/utils/column-ids';
+import { createStripWriter, readColumns, readString, writeLayoutField, type LayoutField } from '@/utils/layout-record';
 import { restoreDraftColumns, saveDraftColumns } from '@/components/sessions/draft-column-persist';
 import { reconcileActiveSession } from '@/stores/active-session';
 import { loadColWeights, saveColWeights, resizeAtBoundary } from './columnSizing';
@@ -100,10 +102,10 @@ import { WorkspacePreparingPanel } from '@/components/workspaces/WorkspacePrepar
 import { draftWorkspaceRequest, setDraftWorkspace } from '@/components/workspaces/draft-workspace-store';
 import { rememberWorkspaceLaunch, workspaceLaunchInfo, workspacePendingColumnId, workspacePendingTaskId } from '@/components/workspaces/preparing-columns';
 
-const SS_TASK_KEY = 'open-walnut-home-focused-task';
-
-const SS_SUPPRESS_DETAIL_KEY = 'open-walnut-home-suppress-detail';
-const SS_SESSION_COLUMNS_KEY = 'open-walnut-home-session-columns';
+// The session columns, the focused task and the detail choice are layout record fields
+// (utils/layout-record.ts): kept on disk, so a Mac app relaunch (which drops
+// sessionStorage) brings back the same strip, pins included. Only the todo list's
+// scroll offset stays per tab, in sessionStorage.
 const SS_TODO_SCROLL_KEY = 'walnut-home-todo-scroll';
 // Panel visibility is a layout preference, so it lives in localStorage (and rides
 // the ui-prefs mirror like the other layout keys), NOT sessionStorage: the Mac app
@@ -143,28 +145,24 @@ const SESSION_WIDTH_BY_COUNT = [0, 65, 65, 70];
 const sessionWidthForCount = (count: number): number =>
   SESSION_WIDTH_BY_COUNT[Math.min(Math.max(count, 0), SESSION_WIDTH_BY_COUNT.length - 1)];
 
-/** Load session columns from sessionStorage, with migration from legacy single-session key */
+/** The strip this window keeps: a phone has its own, so a phone showing one column never
+ *  overwrites the Mac's strip of three. Decided by the device (a touch screen in the phone
+ *  layout), not the width alone: a Mac window opened narrow is still the Mac's strip. */
+const COLUMNS_FIELD: LayoutField =
+  isPhoneLayout() && typeof window !== 'undefined' && !!window.matchMedia?.('(pointer: coarse)').matches ? 'phoneColumns' : 'homeColumns';
+
+/** Load the saved session columns, with migration from the legacy single-session key. */
 function loadSessionColumns(): SessionSlot[] {
-  const saved = sessionStorage.getItem(SS_SESSION_COLUMNS_KEY);
-  if (saved) {
-    try {
-      const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed)) {
-        // Accept legacy string[] and current SessionSlot[].
-        return parsed.map((entry: unknown) =>
-          typeof entry === 'string'
-            ? { id: entry, locked: false }
-            : { id: (entry as SessionSlot).id, locked: !!(entry as SessionSlot).locked }
-        );
-      }
-    } catch { /* fall through */ }
-  }
+  const saved = readColumns(COLUMNS_FIELD);
+  if (saved.length > 0) return saved;
   // Migrate from legacy single-session key
-  const legacy = sessionStorage.getItem(SS_SESSION_KEY_LEGACY);
-  if (legacy) {
-    sessionStorage.removeItem(SS_SESSION_KEY_LEGACY);
-    return [{ id: legacy, locked: false }];
-  }
+  try {
+    const legacy = sessionStorage.getItem(SS_SESSION_KEY_LEGACY);
+    if (legacy) {
+      sessionStorage.removeItem(SS_SESSION_KEY_LEGACY);
+      return [{ id: legacy, locked: false }];
+    }
+  } catch { /* storage off */ }
   return [];
 }
 
@@ -421,6 +419,20 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // showing the previous project indefinitely.
   const focusedTask = storeFocusedTask ?? selectedTask;
   const setFocusedTask = setSelectedTask;
+  // Whether the full-screen task detail stays closed for the focused task. In memory only:
+  // the detail is a passing overlay, never part of what a load restores.
+  const [suppressDetail, setSuppressDetail] = useState(false);
+  /**
+   * Focus a task a load brings back (the URL's `?task=` at load, the saved layout) WITHOUT
+   * its full-screen detail. 2026-10-31, the user: "every time walnut restarts it
+   * always shows some task in full screen": the URL keeps the focused task, and every reload,
+   * deploy reload and page-process recycle reopened its detail over Home. The focus (the row,
+   * the URL) is restored; opening the detail is the user's own click.
+   */
+  const restoreFocus = useCallback((task: Task) => {
+    setFocusedTask(task);
+    setSuppressDetail(true);
+  }, [setFocusedTask]);
   // Nonce that increments on every focus action — forces re-scroll even for same task
   const [focusNonce, setFocusNonce] = useState(0);
   // Locate scope for the current focus action. 'pinned' = only scroll/expand the
@@ -642,7 +654,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // Auto-evict excess session columns when effectiveMaxPanels shrinks (e.g. auto mode + window resize).
   // Gated on `panelModeLoaded`: until the config fetch settles the hook reports the
   // '2' DEFAULT, and evicting on that would silently drop a 3rd restored column
-  // (sessionStorage/deep link) before the user's real '3' arrives — eviction is
+  // (saved layout/deep link) before the user's real '3' arrives — eviction is
   // one-way, so the column never comes back.
   //
   // OVERFLOW LICENSE: "+" inserts unconditionally (forceAddSessionColumn), and
@@ -847,7 +859,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     if (!tasks.some((t) => t.id === selectedTask.id)) setFocusedTask(null);
   }, [tasks, selectedTask, setFocusedTask]);
 
-  // Restore state once tasks have loaded — URL params take priority over sessionStorage.
+  // Restore state once tasks have loaded — URL params take priority over the saved layout.
   // Also handles popstate events (browser back/forward) that arrive after initial load.
   const restoredTaskRef = useRef(false);
   useEffect(() => {
@@ -862,16 +874,18 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       }
 
       restoredTaskRef.current = true;
-      if (p.taskId) {
-        if (task) setFocusedTask(task);
+      if (p.taskId && task) {
+        // A load brings the focus back without the detail; Back/Forward is the user's own
+        // step back to where the detail was open (a Time page's Back, say), and reopens it.
+        if (p.fromLoad) restoreFocus(task);
+        else setFocusedTask(task);
       }
       if (p.sessionIds.length > 0) {
-        // URL carries ids only — preserve lock state from sessionStorage where ids match.
-        const saved = loadSessionColumns();
-        const lockedById = new Map(saved.map(s => [s.id, s.locked]));
+        // URL carries ids only: locks come from the saved strip, and a pin the URL does
+        // not name stays open (a deep link or Back never closes a locked column).
         // Same rationale as the visibility restore below: don't truncate a deep
         // link against the pre-config default panel count.
-        const cols = p.sessionIds.map(id => ({ id, locked: lockedById.get(id) ?? false }));
+        const cols = mergeUrlColumns(p.sessionIds, loadSessionColumns());
         const fitted = panelModeLoadedRef.current ? fitRestoredColumns(cols, maxPanelsRef.current) : cols;
         // The URL never names a new-session draft: one kept with its words keeps its slot.
         setSessionColumns(prev => withDraftSlots(fitted, prev.filter(s => isDraftColumnId(s.id)).map(s => s.id)));
@@ -881,19 +895,19 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       return;
     }
 
-    // No URL params — fallback to sessionStorage restore (once)
+    // No URL params — fallback to the saved layout (once)
     if (loading || restoredTaskRef.current) return;
     restoredTaskRef.current = true;
-    const savedTaskId = sessionStorage.getItem(SS_TASK_KEY);
+    const savedTaskId = readString('homeFocusedTask');
     if (savedTaskId && !focusedTask) {
       const task = tasks.find((t) => t.id === savedTaskId);
-      if (task) setFocusedTask(task);
+      if (task) restoreFocus(task);
     }
-  }, [loading, tasksRefreshing, tasksError, tasks, focusedTask, urlSync.pending, urlSync.clearPending]);
+  }, [loading, tasksRefreshing, tasksError, tasks, focusedTask, urlSync.pending, urlSync.clearPending, restoreFocus]);
 
-  // Restore state from sessionStorage when returning from another page.
+  // Restore state from the saved layout when returning from another page.
   // This is a defensive safety net: if React state was somehow lost while hidden,
-  // re-read from sessionStorage when becoming visible again.
+  // re-read the saved layout when becoming visible again.
   const prevVisibleRef = useRef(visible);
   useEffect(() => {
     const wasHidden = !prevVisibleRef.current;
@@ -901,10 +915,10 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     if (!visible || !wasHidden) return;
     // Becoming visible — check if state needs restoration
     if (!focusedTask && tasks.length > 0) {
-      const savedTaskId = sessionStorage.getItem(SS_TASK_KEY);
+      const savedTaskId = readString('homeFocusedTask');
       if (savedTaskId) {
         const task = tasks.find((t) => t.id === savedTaskId);
-        if (task) setFocusedTask(task);
+        if (task) restoreFocus(task);
       }
     }
     if (sessionColumns.length === 0) {
@@ -921,21 +935,18 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     // when the page becomes visible again, not on every sessionColumns tick.
   }, [visible, tasks, focusedTask, sessionColumns]);
 
-  // Persist focusedTask.id to sessionStorage
+  // Persist focusedTask.id
   // Guard: don't clear until restore has run, otherwise the initial null state
   // wipes the saved value before it can be read back.
   useEffect(() => {
-    if (focusedTask?.id) sessionStorage.setItem(SS_TASK_KEY, focusedTask.id);
-    else if (restoredTaskRef.current) sessionStorage.removeItem(SS_TASK_KEY);
+    if (focusedTask?.id) writeLayoutField('homeFocusedTask', focusedTask.id);
+    else if (restoredTaskRef.current) writeLayoutField('homeFocusedTask', null);
   }, [focusedTask?.id]);
 
-  useEffect(() => {
-    // Only persist real session IDs (draft:/pending: placeholders resolve to
-    // nothing after a reload) to sessionStorage
-    const persistable = sessionColumns.filter(s => !isPlaceholderColumnId(s.id));
-    if (persistable.length > 0) sessionStorage.setItem(SS_SESSION_COLUMNS_KEY, JSON.stringify(persistable));
-    else sessionStorage.removeItem(SS_SESSION_COLUMNS_KEY);
-  }, [sessionColumns]);
+  // Only real session ids are kept (draft:/pending: placeholders resolve to nothing
+  // after a reload; writeColumns leaves them out).
+  const [writeStrip] = useState(() => createStripWriter(COLUMNS_FIELD));
+  useEffect(() => { writeStrip(sessionColumns); }, [sessionColumns, writeStrip]);
 
   // Persist chatVisible + broadcast to FocusDock / Sidebar
   useEffect(() => {
@@ -2217,14 +2228,6 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   const focusedTaskRef = useRef(focusedTask);
   focusedTaskRef.current = focusedTask;
 
-  const [suppressDetail, setSuppressDetail] = useState(() => {
-    try { return sessionStorage.getItem(SS_SUPPRESS_DETAIL_KEY) === '1'; } catch { return false; }
-  });
-
-  // Persist suppressDetail so the detail panel open/closed state survives refresh.
-  useEffect(() => {
-    sessionStorage.setItem(SS_SUPPRESS_DETAIL_KEY, suppressDetail ? '1' : '0');
-  }, [suppressDetail]);
 
   const handleFocusTask = useCallback((task: Task, opts?: { openDetail?: boolean; fromOutside?: boolean }) => {
     // Always focus (never toggle off) — unfocusing is done via detail panel close / Esc.
@@ -3198,7 +3201,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
           display:none, so an always-mounted slot kept a whole live SessionPanel
           (its history fetch, its WS subscriptions, its streaming re-renders)
           running behind a zero-width invisible box. The selection lives in
-          sessionStorage, so the remount restores the same ask. */}
+          the layout record, so the remount restores the same ask. */}
       <div className={`main-page-chat${chatVisible ? '' : ' collapsed'}`}>
         {chatVisible && (
         <AskWalnutSlot
