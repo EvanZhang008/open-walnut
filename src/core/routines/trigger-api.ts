@@ -160,7 +160,7 @@ async function callerSessionHost(callerSid?: string): Promise<string> {
 
 /**
  * Resolve the task a fire should be delivered to. `own` = it is the calling
- * session's own task, the one a trigger parks by default.
+ * session's own task.
  */
 async function resolveTarget(session: string, callerSid?: string): Promise<{
   target: string;
@@ -287,7 +287,7 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
   host: string;
   /** Always null: the daemon owns the clock and reports the real next check. */
   nextCheckAt: null;
-  /** What happened to the task it delivers into (parked by default for the caller's own task). */
+  /** What happened to the task it delivers into (parked only with wait:true). */
   wait: TriggerWaitResult;
 }> {
   const b = record(body) ?? {};
@@ -379,20 +379,20 @@ export async function createTriggerRoutine(body: unknown, callerSid?: string, or
     }
   }
 
-  // A session's trigger parks its own task by default: the work is waiting on
-  // the thing the trigger watches, so the task leaves the user's list until it
-  // fires (2026-10-04). wait:false keeps it there while work remains; a trigger
-  // aimed at another task leaves that task alone unless wait:true says so.
+  // A trigger parks the task only when the caller asks with wait:true (2026-10-31, the user: "a
+  // trigger does not always mean it goes into wait ... don't overuse wait"; a session that armed a
+  // watch right after answering him took its answer off his list). Parking is the session's call,
+  // made when only the outside wait is left and the user has nothing of its turn to read.
   // A trigger on the user's ask or letter (`watches`) is a wait on the user: the task stays
   // Needs you, whatever `wait` says (sessions/outside-wait.ts, 2026-10-30).
-  const park = !watches && (b.wait === true || (b.wait === undefined && resolved.own));
+  const park = !watches && b.wait === true;
   const wait: TriggerWaitResult = park
     ? await parkForTrigger(resolved.target, { waitUntil, callerSid })
     : watches
       ? { parked: false, task_id: resolved.target, reason: 'watches_user' }
       : await isMainTarget(resolved.target)
       ? { parked: false, task_id: resolved.target, reason: 'main_stays_active' }
-      : { parked: false, task_id: resolved.target, reason: b.wait === false ? 'wait_false' : 'other_task' };
+      : { parked: false, task_id: resolved.target, reason: b.wait === false || resolved.own ? 'wait_false' : 'other_task' };
 
   log.web.info('trigger created', {
     host, target: resolved.target, everyMs, ...(fromTemplate ? { template: fromTemplate.template.id } : {}),

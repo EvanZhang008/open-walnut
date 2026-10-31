@@ -9,8 +9,8 @@ description: >-
   Also when the user says "snooze until", "wait until", "park this until",
   "come back to this when". Use it on your own, without being asked, whenever
   the rest of the work waits on something outside the session (a review, a
-  merge, a deploy, a build, a reply): creating the trigger parks the task as
-  Waiting (never the main agent's task), and the fire brings it back. Check trigger_templates first: a plugin
+  merge, a deploy, a build, a reply). A trigger does not park the task: park it
+  yourself once only that wait is left (never the main agent's task), and the fire brings it back. Check trigger_templates first: a plugin
   (Slack channel, new mail) may already offer the watch with no script.
 ---
 
@@ -211,8 +211,9 @@ or a file only that host has), and never paste one inline as `curl -H
    event, kept short (see below); left out it is 4 hours.
    `session` defaults to `"this"`, so the fire lands in this conversation (resumed
    if it has gone quiet by then). `cwd` and `host` default to this session's.
-   This also **parks this task as Waiting** (see "Waiting is the default"
-   below). Pass `"wait":false` while you still have work to do here.
+   It does **not** park this task (see "Parking is your call" below). Pass
+   `"wait":true` only when the rest of the work truly waits on the watched thing
+   and nothing of this turn is for the user to read.
    Watching something you asked the user (your status's ask, or a letter you
    sent them)? Add `"watches":"ask"` or `"watches":"<letter id>"`: Walnut's
    4-hour re-check of it then stays quiet while this trigger is armed.
@@ -252,10 +253,16 @@ trigger. One or two plain sentences, 600 characters at most, covering three thin
 
 Write it in the language you use with the user.
 
-## Waiting is the default
+## Parking is your call, never the default
 
-A trigger exists because something is not done yet, so `trigger_create` on this
-session's own task **parks the task as Waiting** in the same call:
+A trigger watches; it is no reason by itself to take the task off the user's
+list (2026-10-31, the user: "a trigger does not always mean it goes into wait
+... don't overuse wait"). `trigger_create` parks the task only with
+`"wait":true`; `task_update phase=WAITING` parks it too. Park only when the rest
+of the work truly waits on the outside thing **and nothing of this turn is for
+the user to read**. Never in the turn that answers the user's message: they
+read your answer first, so the task stays Needs you (Walnut also keeps a turn
+that answered them on their list when its report says waiting). A park:
 
 - The task leaves the user's default task list (it keeps its board section; the
   user reveals it with "Show waiting") and the end of your turn does not hand it
@@ -295,7 +302,7 @@ which channel).
 
 **But not while work remains.** If you or the user still have work on this
 task (more changes to make, the user is mid-conversation with you about it),
-pass `"wait":false`: the trigger is armed and the task stays where it is. Park
+leave `wait` out: the trigger is armed and the task stays where it is. Park
 it later, once only the wait is left, as the LAST call of that turn:
 
 ```
@@ -337,12 +344,12 @@ Then, if it is still to come, park again as your last call with a fresh, short
 (long overdue, or the plan changed), tell the user in one line and leave the
 task with them.
 
-- A trigger on ANOTHER task does not park it unless you pass `"wait":true`.
+- No trigger parks a task, yours or another's, unless you pass `"wait":true`.
   A completed task is never parked.
 - The main agent's task is never parked either: it stays active and on the
   user's list, since replies, notices and the user's messages wake it. As the
   main agent, arm a trigger only for an outside event that sends no notice,
-  with `"wait":false`, and never set your task to WAITING.
+  and never set your task to WAITING.
 - Make the check fire ONCE per event: give each event an item id (the PR's
   state + revision, the message id), so an unchanged state is quiet.
 - Write the `prompt` for the moment it fires: "Check what changed on PR 123 and

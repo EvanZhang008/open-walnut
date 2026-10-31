@@ -70,7 +70,7 @@ describe('buildSessionContext (identity note)', () => {
     expect(systemPrompt).toMatch(/Your tracking note is your task note/)
     expect(systemPrompt).toMatch(/memory_write doc "user"/)
     const worker = await buildSessionContext(await seedTask('marina'))
-    expect(worker.systemPrompt).toMatch(/It parks this task as Waiting/)
+    expect(worker.systemPrompt).toMatch(/It does not park this task: pass wait:true/)
     expect(worker.systemPrompt).not.toContain(MAIN_STAYS_ACTIVE_LINE)
   })
 
@@ -326,7 +326,9 @@ describe('buildSessionContext (identity note)', () => {
     // user twice, a worker's letter and Main's chat a minute apart. 7,102.
     // 7150 → 7400 (2026-10-29) for the charter's bug line: three bugs reported fixed
     // came back the same day, each checked on another build and fixed for one case.
-    expect(systemPrompt.length).toBeLessThan(7400)
+    // 7400 → 7450 (2026-10-31) for when a trigger parks: only with wait:true, never in
+    // the turn that answers the user; an answer he had asked for left his list unread.
+    expect(systemPrompt.length).toBeLessThan(7450)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {
@@ -349,8 +351,8 @@ describe('buildSessionContext (identity note)', () => {
     for (const id of ['', await seedTask('marina')]) {
       const { systemPrompt } = await buildSessionContext(id)
       expect(systemPrompt).toMatch(/never ask the user to watch it: arm a trigger yourself \(walnut-trigger skill\)/i)
-      expect(systemPrompt).toMatch(/parks this task as Waiting, off the user's list; the fire brings it back/i)
-      expect(systemPrompt).toMatch(/while work remains, arm it with wait:false/i)
+      // 2026-10-31, the user: "a trigger does not always mean it goes into wait"; never right after answering him.
+      expect(systemPrompt).toMatch(/It does not park this task: pass wait:true only once nothing is left for the user to read, never when answering them; the fire brings it back/)
       // 2026-10-30, the user: park only on an outside wait; the user's move is Needs you.
       expect(systemPrompt).toMatch(/waits on something outside Walnut and the user/i)
       expect(systemPrompt).toMatch(/when the next move is the user's \(input, a review, a decision\), it is Needs you \(NEED_ACTION\), never Waiting/i)

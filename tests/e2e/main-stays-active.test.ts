@@ -38,7 +38,7 @@ import { MAIN_DELEGATES_LINE, MAIN_STAYS_ACTIVE_LINE, MAIN_TRACKING_LINE } from 
 
 const CAPTURE_CLI = path.resolve(import.meta.dirname, 'fixtures/mock-claude-argv-capture.mjs')
 const ARGV_DIR = path.join(os.tmpdir(), `walnut-main-argv-${process.pid}`)
-const PARK_RULE = 'It parks this task as Waiting'
+const PARK_RULE = 'It does not park this task: pass wait:true'
 
 let server: HttpServer
 let port: number

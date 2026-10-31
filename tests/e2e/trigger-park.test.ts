@@ -4,9 +4,12 @@
  *
  * 2026-10-04: a session finished its part, reported that a review was pending
  * and asked the user to watch it; the user had to say "make a trigger" and then
- * "don't ask me to do it". Now `trigger_create` on the caller's own task moves it
- * to WAITING in the same call (`wait:false` keeps it where it is while work
- * remains).
+ * "don't ask me to do it". Now `trigger_create` with `wait:true` moves it to
+ * WAITING in the same call.
+ *
+ * 2026-10-31, the user: "a trigger does not always mean it goes into wait ...
+ * don't overuse wait". A session that armed a watch right after answering him took
+ * the answer off his list, so a trigger no longer parks by default: only wait:true.
  *
  * 2026-10-05: the inbox letter every park then sent ("Waiting: <title>") filled
  * the user's inbox, one per re-park after each fire. Parks are quiet now; a stray
@@ -92,8 +95,10 @@ const triggerBody = (extra: Record<string, unknown> = {}) => ({
   ...extra,
 })
 
+/** A trigger on the caller's own task asks to park it (wait:true) unless `extra` says otherwise. */
 async function createTrigger(sid: string | null, extra: Record<string, unknown> = {}) {
-  return req('POST', '/api/v1/routines/trigger', triggerBody(extra), sid ? { 'x-walnut-caller-sid': sid } : {})
+  const ask = !('wait' in extra) && extra.session === undefined ? { wait: true } : {}
+  return req('POST', '/api/v1/routines/trigger', triggerBody({ ...ask, ...extra }), sid ? { 'x-walnut-caller-sid': sid } : {})
 }
 
 async function letters(): Promise<any[]> {
@@ -127,7 +132,7 @@ afterAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
-describe('trigger_create parks the caller\'s own task by default', () => {
+describe('trigger_create parks the caller\'s own task with wait:true', () => {
   it('Waiting with the 4-hour clock, and no letter', async () => {
     const { sid, taskId } = await startSession('fix the menu page and get PR 123 merged')
     const before = Date.now()
@@ -166,7 +171,7 @@ describe('trigger_create parks the caller\'s own task by default', () => {
     }
     // trigger_create is a bound op: the executor calls its route, then mapResult.
     const op = getOp('trigger_create')!
-    const out = op.mapResult!({ body: await call(op.bind!.method, op.bind!.path, triggerBody()), args: {} }) as any
+    const out = op.mapResult!({ body: await call(op.bind!.method, op.bind!.path, triggerBody({ wait: true })), args: {} }) as any
     expect(out.outcome).toContain('The task is now Waiting, off the user\'s list, until it fires or ')
     expect(out.outcome).not.toMatch(/receipt|inbox/)
     expect(out.next).toMatch(/^End your turn now with one line saying what you wait on/)
@@ -224,6 +229,14 @@ describe('trigger_create parks the caller\'s own task by default', () => {
 })
 
 describe('when a trigger does not park', () => {
+  it('with no wait it arms and leaves the caller\'s own task where it is', async () => {
+    const { sid, taskId } = await startSession('answer the user, then watch the review')
+    const r = await createTrigger(sid, { wait: undefined })
+    expect(r.status).toBe(201)
+    expect(r.json.wait).toEqual({ parked: false, task_id: taskId, reason: 'wait_false' })
+    expect((await task(taskId)).phase).toBe('NEED_ACTION')
+  })
+
   it('wait:false arms it and leaves the task where it is, with no letter', async () => {
     const { sid, taskId } = await startSession('still working on it')
     const r = await createTrigger(sid, { wait: false })

@@ -50,7 +50,7 @@
  *      before any tool description is read.
  *   6. Waiting is the session's job, not the user's: when the rest of the work
  *      waits on something outside the session (a review, a merge, a deploy, a
- *      reply), it arms a trigger itself, which parks the task (2026-10-04: a
+ *      reply), it arms a trigger itself, and parks the task once only that wait is left (2026-10-04: a
  *      session finished its part, then asked the user to "make a trigger" for
  *      the review; the user wanted that done unasked).
  *   6b. The inbox is for what needs the user (2026-10-05: parks, progress and
@@ -537,11 +537,10 @@ function composePrompt(task: InstructionTask | undefined, state: { taskLine: str
     // Waiting is the session's job (see 6 above). Not Main's: it never parks (2e).
     + (mainAgent ? '' : 'When the rest of the work waits on something outside Walnut and the user (a build, '
     + 'a review, a reply), never ask the user to watch it: arm a trigger yourself '
-    + '(walnut-trigger skill). It parks this task as Waiting, off the user\'s list; the fire '
-    + 'brings it back. Give it a short wait_until for when you expect it; when the clock '
-    + 'runs out first, check the thing and the trigger before parking again. While work remains, '
-    + 'arm it with wait:false. When the next move is the user\'s (input, a review, a decision), '
-    + 'it is Needs you (NEED_ACTION), never Waiting.\n\n')
+    + '(walnut-trigger skill). It does not park this task: pass wait:true only once nothing is left for '
+    + 'the user to read, never when answering them; the fire brings it back. Give it a short wait_until for when you expect it; when the clock '
+    + 'runs out first, check the thing and the trigger before parking again. When the next move is the '
+    + 'user\'s (input, a review, a decision), it is Needs you (NEED_ACTION), never Waiting.\n\n')
     // The inbox (see 6b above).
     + 'The user\'s inbox is only for what needs them: send a letter (human_inbox_send) '
     + 'when you are blocked on their decision, something needs their review, or they asked '

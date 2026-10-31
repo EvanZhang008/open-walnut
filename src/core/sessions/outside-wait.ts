@@ -80,7 +80,7 @@ export const WAIT_ON_USER_MESSAGE =
   + 'no subtask at work), so WAITING would take it off the user\'s list while it may need them. When the next move '
   + 'is the user\'s (their input, review or decision), set phase=NEED_ACTION. When you wait on an outside thing '
   + '(a pipeline, a build, a deploy, a CR or PR review, a Slack or mail reply, another task), arm a trigger on it '
-  + '(trigger_create parks the task), or pass waiting_on naming it, with a short wait_until.';
+  + '(trigger_create with wait:true parks the task), or pass waiting_on naming it, with a short wait_until.';
 
 /** Shortest `waiting_on` that names a wait (the `project_reason` floor). */
 export const WAITING_ON_MIN = 10;

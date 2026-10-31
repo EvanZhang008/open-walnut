@@ -85,17 +85,18 @@ defineOp({
     + 'Keep credentials inside the script file: `run` is stored with the routine and shown on its card. '
     + '`description` is required: the card otherwise shows only a name and a script path, which does not '
     + 'tell the user what fires it. '
-    + 'It PARKS your own task by default: the task goes to Waiting (off the user\'s list, no letter is sent), '
-    + 'because a trigger watches something outside Walnut and the user; one that watches the user\'s ask '
-    + '(`watches`) never parks, since a wait on the user is Needs you. '
-    + 'and the fire (or its clock, wait_until) brings it back. Set wait_until yourself to when you expect the '
+    + 'It does NOT park the task unless you pass wait:true: a watch alone is no reason to leave the user\'s list. '
+    + 'Pass wait:true only when the rest of the work truly waits on that outside thing and nothing of this turn '
+    + 'is for the user to read (never in the turn that answers the user\'s message: that stays Needs you). Then the '
+    + 'task goes to Waiting (off the user\'s list, no letter is sent) and the fire (or its clock, wait_until) '
+    + 'brings it back; one that watches the user\'s ask (`watches`) never parks, since a wait on the user is '
+    + 'Needs you. Set wait_until yourself to when you expect the '
     + 'event, kept short (hours, a day at most unless the user named a later time; 4 hours when left out): a new '
     + 'trigger may be wrong or miss the event, and the clock running out is how you find out. On each fire and '
     + 'each clock wake, look at the thing itself and at whether the trigger is still right and enough, fix it, '
     + 'and only then park again with a fresh wait_until. '
-    + 'Pass wait:false while you or the user still have '
-    + 'work on this task, and park it later with task_update phase=WAITING once only the wait is left. '
-    + 'The main agent\'s task is never parked: it stays active, so it passes wait:false. '
+    + 'While you or the user still have work on this task, leave wait out, and park it later with task_update '
+    + 'phase=WAITING once only the wait is left. The main agent\'s task is never parked. '
     + 'Use it on your own whenever the rest of the work is waiting on something outside this session '
     + '(a review, a merge, a deploy, a build, someone\'s reply): do not ask the user to watch it.',
   input: {
@@ -122,8 +123,9 @@ defineOp({
       + 'A session on another host may arm checks only on its own host'),
     timeoutSeconds: z.number().int().positive().optional().describe('Kill the check after this long (default 30, max 300)'),
     maxFiresPerDay: z.number().int().min(0).optional().describe('Fire budget: up to this many fires in a burst, refilling at this many per 24h (default 24, so once an hour once spent; a held fire comes later, never lost). For a busy source checked often (chat, mail) set it to the checks per day, e.g. 288 for every 5m. 0 = unlimited'),
-    wait: z.boolean().optional().describe('Park the task the fire lands in (Waiting) until it fires. Default true for your own task, '
-      + 'false for another task. Pass false while you or the user still have work on this task'),
+    wait: z.boolean().optional().describe('Park the task the fire lands in (Waiting) until it fires. Default false. Pass true only when '
+      + 'the rest of the work waits on that outside thing and nothing of this turn is for the user to read (never in the turn that answers '
+      + 'the user\'s message)'),
     watches: z.string().optional().describe('What this trigger watches for you, so Walnut\'s 4-hour re-check of it stays quiet while '
       + 'the trigger is armed: "ask" = your status\'s ask of the user, or a letter id (lt-...) you sent them. '
       + 'Such a trigger never parks the task: it waits on the user, so it stays Needs you'),
@@ -156,7 +158,7 @@ defineOp({
       ? ` The task is now Waiting, off the user's list, until it fires${w.wait_until ? ` or ${w.wait_until}` : ''}.${unnamed}`
       : w?.reason === 'main_stays_active' ? ' The task it delivers into is the main agent\'s, which never parks: it stays active and on the user\'s list, and the fire wakes it like any message.'
       : w?.reason === 'watches_user' ? ' The task was not parked: this trigger watches the user\'s ask, and a wait on the user stays Needs you.'
-      : w?.reason === 'wait_false' ? ' The task was left as it is (wait:false); park it with task_update phase=WAITING once only the wait is left.'
+      : w?.reason === 'wait_false' ? ' The task was left as it is (no wait:true); park it with task_update phase=WAITING once only the wait is left and the user has nothing of yours to read.'
       : w?.reason === 'other_task' ? ' The task it delivers into was left as it is (not your task; pass wait:true to park it).'
       : w?.reason === 'complete' ? ' The task it delivers into is complete, so it was not parked and the fire cannot land there.'
       : w ? ` The task could not be parked${w.error ? ` (${w.error})` : ''}.`

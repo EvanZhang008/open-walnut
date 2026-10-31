@@ -1,8 +1,8 @@
 /**
  * A session's trigger parks its task quietly (2026-10-04: a session asked the
- * user to watch a review it could have watched itself, so every trigger parks the
- * task by default; 2026-10-05: the inbox letter each park then sent filled the
- * user's inbox, so a park sends none).
+ * user to watch a review it could have watched itself; 2026-10-05: the inbox
+ * letter each park then sent filled the user's inbox, so a park sends none;
+ * 2026-10-31: a trigger parks only with wait:true, never by default).
  *
  * The agent side is done the way an agent does it: a REAL quick-start session on
  * the fixture server (mock CLI) calls `POST /api/v1/routines/trigger` with the
@@ -83,13 +83,14 @@ test('a session\'s trigger parks its task off the list, and no letter reaches th
   const anyRow = page.locator(`[data-task-id="${taskId}"]`)
   await expect(anyRow.first()).toBeVisible({ timeout: 15_000 })
 
-  // ── The agent arms its trigger (the default parks the task) ──
+  // ── The agent arms its trigger and parks the task (wait:true) ──
   const created = await request.post('/api/v1/routines/trigger', {
     headers: { 'x-walnut-caller-sid': sid },
     data: {
       run: 'bash ~/.open-walnut/triggers/pr-123/check.sh', every: '5m',
       prompt: 'Read the review on PR 123 and do the next step.',
       description: 'Checks PR 123 for a review every 5 minutes; the session makes the requested change or merges it.',
+      wait: true,
     },
   })
   expect(created.status(), await created.text()).toBe(201)

@@ -83,7 +83,7 @@ describe('trigger_create output', () => {
 
   it('says why the task was left alone', () => {
     expect(mapWith({ parked: false, task_id: 't1', reason: 'wait_false' }).outcome)
-      .toContain('left as it is (wait:false); park it with task_update phase=WAITING once only the wait is left')
+      .toContain('left as it is (no wait:true); park it with task_update phase=WAITING once only the wait is left')
     expect(mapWith({ parked: false, task_id: 't2', reason: 'other_task' }).outcome)
       .toContain('not your task; pass wait:true to park it')
     expect(mapWith({ parked: false, task_id: 't3', reason: 'complete' }).outcome)
@@ -107,10 +107,11 @@ describe('trigger_create wait inputs', () => {
     expect(schema().safeParse({ ...base, wait_report: 'PR 123 is pushed.' }).success).toBe(false)
   })
 
-  it('tells the model it parks by default, to use it unasked, and how to opt out', () => {
+  it('tells the model it parks only with wait:true, never after answering the user, and to use it unasked', () => {
     const op = getOp('trigger_create')!
-    expect(op.description).toContain('It PARKS your own task by default')
-    expect(op.description).toContain('Pass wait:false while you or the user still have work on this task')
+    expect(op.description).toContain('It does NOT park the task unless you pass wait:true')
+    expect(op.description).toContain('never in the turn that answers the user\'s message')
+    expect(op.input.wait.description).toMatch(/Default false/)
     expect(op.description).toContain('do not ask the user to watch it')
   })
 
