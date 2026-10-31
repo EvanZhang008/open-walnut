@@ -856,13 +856,16 @@ jobs:
         if: matrix.layer == 'ui'
         shell: bash
         run: WALNUT_UITEST_UDID="$SIM_UDID" WALNUT_UITEST_DD="$RUNNER_TEMP/dd" bash ios-native/tests/ui/run-ui-tests.sh
-      - name: Keep the result bundle
+      # The failures go into the log, never the result bundle as an artifact: a public
+      # repo's artifacts are anyone's to download, and the 130 MB bundle (build logs,
+      # the runner's environment) failed the leak audit on 2026-10-31.
+      - name: The failed tests
         if: failure() && matrix.layer == 'unit'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-unit-xcresult
-          path: ${{ runner.temp }}/ios-unit.xcresult
-          retention-days: 7
+        shell: bash
+        run: |
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/ios-unit.xcresult" --compact \
+            | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d.get("result"), d.get("totalTestCount"), "tests,", d.get("failedTests"), "failed"); [print(f.get("testIdentifierString"), ":", f.get("failureText")) for f in d.get("testFailures", [])]' \
+            || echo "no readable result bundle"
 
   # ── The single required check ───────────────────────────────────────────────
   #

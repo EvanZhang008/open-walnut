@@ -43,6 +43,12 @@ describe('the iOS job in ci.yml', () => {
     expect(fs.existsSync(path.join(ROOT, 'ios-native/tests/ui/run-ui-tests.sh'))).toBe(true)
   })
 
+  it('uploads no artifact: the failures go into the log', () => {
+    // The 130 MB result bundle it uploaded on failure failed the leak audit (2026-10-31).
+    expect(job.steps.filter((s) => s.uses?.startsWith('actions/upload-artifact'))).toEqual([])
+    expect(job.steps.find((s) => s.name === 'The failed tests')?.run).toContain('xcresulttool get test-results summary')
+  })
+
   it('picks a simulator the image has, never a fixed device name', () => {
     const boot = job.steps.find((s) => s.name === 'Boot an iPhone simulator')!
     expect(boot.run).toContain('simctl list devices available -j')
