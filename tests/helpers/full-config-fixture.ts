@@ -54,9 +54,10 @@ export function fullConfigFixture(): Record<string, unknown> {
     ordering: { projects: ['Acme', 'Marina'] },
     session_server: { port: 4123 },
     hosts: {
-      devbox: { hostname: 'devbox.example.com', user: 'marina', port: 22, label: 'Dev box', enabled: true, server: { enabled: true, build_env: { NPM_TOKEN: npmToken }, expose: { options: { auth_token: exposeAuth } } } },
+      devbox: { hostname: 'devbox.example.com', user: 'marina', port: 22, label: 'Dev box', enabled: true, capabilities: ['gpu'], server: { enabled: true, build_env: { NPM_TOKEN: npmToken }, expose: { options: { auth_token: exposeAuth } } } },
     },
     hosts_warmup: { enabled: true },
+    local_capabilities: ['gpu'],
     ssh_login_files: ['/Users/marina/.ssh/id_planted'],
     ssh_login_hint: 'run the planted login command on this Mac',
     session_limits: { devbox: 4 },

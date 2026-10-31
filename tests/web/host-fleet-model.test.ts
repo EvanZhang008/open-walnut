@@ -133,8 +133,12 @@ describe('the Can do row', () => {
   })
   it('a daemon that has not reported yet reads so, never as "none"', () => {
     const row = value(host({ capabilities: caps({ tags: ['linux'], ios: null, browsers: [], mcp: [], declared: [], unknown: ['browser', 'mcp', 'system'] }) }), 'can')!
-    expect(row.value).toBe('Not reported yet: browser, MCP servers (its daemon tells once it is current)')
+    expect(row.value).toBe('browser: not reported yet · MCP servers: not reported yet')
     expect(row.tone).toBe('muted')
+  })
+  it('each unknown names its capability first, after what the host can do', () => {
+    const row = value(host({ capabilities: caps({ tags: ['linux', 'docker'], ios: null, browsers: [], mcp: [{ name: 'docs-mcp' }], clis: ['docker'], declared: [], unknown: ['always-on'] }) }), 'can')!
+    expect(row.value).toBe('docker · 1 MCP server · always on: known after a day of uptime records')
   })
   it('a server older than capabilities shows no row at all', () => {
     expect(value(host(), 'can')).toBeUndefined()

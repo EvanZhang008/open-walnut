@@ -66,7 +66,14 @@ export function statusKind(h: FleetHost): 'connected' | 'failed' | 'off' | 'warn
   return h.connection.phase === 'failed' ? 'failed' : 'off';
 }
 
-const UNKNOWN_WORDS: Record<string, string> = { ios: 'iOS', browser: 'browser', mcp: 'MCP servers', 'always-on': 'always on', system: 'system' };
+/** A capability the host could not tell yet, named first so the reader sees which one. */
+const UNKNOWN_WORDS: Record<string, string> = {
+  ios: 'iOS: not reported yet',
+  browser: 'browser: not reported yet',
+  mcp: 'MCP servers: not reported yet',
+  // Not the daemon's word: the uptime ledger needs a day before it can say.
+  'always-on': 'always on: known after a day of uptime records',
+};
 
 /** What a task can use this host for (capabilities.ts on the server): iOS, the user's browser, tools, MCP servers. */
 export function canDoRow(h: FleetHost): FleetRow | null {
@@ -80,10 +87,8 @@ export function canDoRow(h: FleetHost): FleetRow | null {
   if (c.tags.includes('docker')) parts.push('docker');
   if (c.mcp.length) parts.push(`${c.mcp.length} MCP server${c.mcp.length === 1 ? '' : 's'}`);
   for (const t of c.declared) if (!['cloud', 'local', 'always-on'].includes(t)) parts.push(t);
-  const unknown = c.unknown.filter((u) => u !== 'system').map((u) => UNKNOWN_WORDS[u] ?? u);
-  const value = parts.length
-    ? parts.join(' · ') + (unknown.length ? ` · not reported yet: ${unknown.join(', ')}` : '')
-    : unknown.length ? `Not reported yet: ${unknown.join(', ')} (its daemon tells once it is current)` : 'Nothing beyond its system';
+  const unknown = c.unknown.filter((u) => u !== 'system').map((u) => UNKNOWN_WORDS[u] ?? `${u}: not reported yet`);
+  const value = [...parts, ...unknown].join(' · ') || 'Nothing beyond its system';
   const title = [
     c.tags.length ? `A task asks for a host by tag (host "@ios"). This one's tags: ${c.tags.join(', ')}` : '',
     c.mcp.length ? `MCP: ${c.mcp.map((m) => (m.plugin ? `${m.name} (${m.plugin})` : m.name)).join(', ')}` : '',

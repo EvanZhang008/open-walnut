@@ -91,6 +91,7 @@ export const CONFIG_COPY_DROPPED: Readonly<Record<string, string>> = Object.free
   favorites: 'copied by the prefs kind',
   session_server: 'the Mac server process settings',
   hosts_warmup: 'ssh warmup on the Mac',
+  local_capabilities: 'the Mac\'s own capability tags, read where its fleet card is built, on the Mac',
   ssh_login_files: 'ssh files on the Mac',
   ssh_login_hint: 'the ssh sign-in letter is sent on the Mac',
   triage: 'inbox triage runs on the Mac',
@@ -132,6 +133,7 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
   'agent.available_models.[]': { compat: 'request quirks for calls the Mac makes', cost: 'pricing of usage on the Mac' },
   'hosts.*': {
     shell_setup: 'a shell command line that may carry tokens',
+    capabilities: 'capability tags read by the fleet cards and host selectors, built on the Mac',
     autofix: 'repair runs from the Mac',
     cloud_box: 'the companion link of the Mac',
     keep: 'what the Mac pushes to that host',

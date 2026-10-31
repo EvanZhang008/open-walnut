@@ -139,7 +139,7 @@ test('a fleet of five reads in words, with day cells and the long-running verdic
   await expect(mac.locator('[data-row="can"] dd')).toHaveAttribute('title', /tags: macos, local, ios, browser, mcp:playwright/)
   await expect(dev.locator('[data-row="can"] dd')).toHaveText('always on · docker · 3 MCP servers · gpu')
   await expect(dev.locator('[data-row="can"] dd')).toHaveAttribute('title', /MCP: docs-mcp \(Tools\), tickets-mcp \(Tools\), mail-mcp/)
-  await expect(group.locator('[data-host="homepc"] [data-row="can"] dd')).toHaveText('Not reported yet: always on, browser, MCP servers (its daemon tells once it is current)')
+  await expect(group.locator('[data-host="homepc"] [data-row="can"] dd')).toHaveText('always on: known after a day of uptime records · browser: not reported yet · MCP servers: not reported yet')
   await expect(group.locator('[data-host="olddev"] [data-row="can"]')).toHaveCount(0) // an older server sends no capabilities
   const old = group.locator('[data-host="olddev"]')
   await expect(old.locator('[data-row="now"] dd')).toHaveText('Its daemon is older than this view (it upgrades on the next connect)')
