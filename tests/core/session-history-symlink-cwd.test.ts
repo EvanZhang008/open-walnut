@@ -121,6 +121,33 @@ describe('a transcript stored under the real spelling of the recorded cwd', () =
   });
 });
 
+describe('a big transcript (over the tail window) under the real spelling of the cwd', () => {
+  const TAIL = 8_000;
+  it('polling it moves nothing while unchanged and about the appended bytes once grown', async () => {
+    const size = await writeTranscript(200);
+    expect(size).toBeGreaterThan(TAIL * 4);
+    const first = await readSessionHistoryTail(SID, RECORDED_CWD, undefined, undefined, TAIL);
+    expect(first?.length).toBeGreaterThan(0);
+    expect(bytes).toBeLessThanOrEqual(TAIL * 2);
+
+    bytes = 0;
+    for (let i = 0; i < 3; i++) {
+      expect((await readSessionHistoryTail(SID, RECORDED_CWD, undefined, undefined, TAIL))?.length).toBe(first!.length);
+    }
+    expect(bytes).toBe(0);
+
+    const added = turn('the newest answer');
+    await fsp.appendFile(realPath(), added);
+    const later = new Date(Date.now() + 5_000);
+    await fsp.utimes(realPath(), later, later);
+    bytes = 0;
+    const grown = await readSessionHistoryTail(SID, RECORDED_CWD, undefined, undefined, TAIL);
+    expect(JSON.stringify(grown?.at(-1))).toContain('the newest answer');
+    // The held last line again (the proof of an append) and the new turn: far under the window.
+    expect(bytes).toBeLessThan(Buffer.byteLength(added) * 3);
+  });
+});
+
 describe('every transcript stat in session-history goes through locateTranscript', () => {
   it('builds the cwd-encoded path in one place only', () => {
     const src = fs.readFileSync(path.join(__dirname, '../../src/core/session-history.ts'), 'utf8');

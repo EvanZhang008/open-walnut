@@ -42,6 +42,7 @@ import { REMOTE_IMAGES_DIR } from '../constants.js';
 import { backfillMirrorSidecar, resolveSessionMirrorPath, looksAlreadyMirrored, startMirrorDownload } from './remote-image-mirror.js';
 import { isCacheWarmupText } from './sessions/side-thread-warmup.js';
 import { noteMessageBlockTypes, noteTranscriptLineType } from './transcript-line-types.js';
+import { _resetTailWindowsForTesting } from './history-tail-window.js';
 import {
   SIDE_THREAD_DIGEST_TAG, stripSideThreadDigestRequest,
 } from './sessions/side-thread-digest.js';
@@ -389,6 +390,7 @@ export function _historyCacheGetForTesting(sessionId: string, host?: string): Pa
   return cacheGet(sessionId, host);
 }
 export function _resetHistoryCacheForTesting(): void {
+  _resetTailWindowsForTesting();
   parsedHistoryCache.clear();
   historyCacheChars = 0;
   historyCacheBudgetChars = MAX_HISTORY_CACHE_CHARS;
@@ -2468,7 +2470,14 @@ export async function readSessionHistoryTail(
         // the rewound-away branch as live. Fall through to the full
         // (cut-filtering) read instead.
         if (!(await getInPlaceRewinds(sessionId))) {
-          return await readSessionHistoryTailWindow(sessionId, cwd, host, maxTailBytes);
+          // Kept between reads and grown by the appended bytes: an unchanged
+          // transcript moves nothing, a grown one about what was added.
+          const { readTailWindow } = await import('./history-tail-window.js');
+          const window = Math.min(maxTailBytes, DaemonFileReader.maxReadBytes());
+          return await readTailWindow(
+            `${cacheKey(sessionId, host)}|${window}`, reader, st.path, st, window,
+            (text) => parseHistoryWindowText(sessionId, text),
+          );
         }
       }
     } catch (err) {
