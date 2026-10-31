@@ -141,7 +141,8 @@ describe('retired fields are still dropped, never hinted or counted', () => {
   })
 
   it('a call with only a retired extra still passes', () => {
-    expect(parseOpArgs(op('task_update'), { id: 't1', wait_report: 'x' })).toEqual({ ok: true, args: { id: 't1' } })
+    // task_update carries wait_report's text into waiting_on (renamedInput); trigger_create drops it.
+    expect(parseOpArgs(op('task_update'), { id: 't1', wait_report: 'x' })).toEqual({ ok: true, args: { id: 't1', waiting_on: 'x' } })
   })
 })
 
