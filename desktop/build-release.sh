@@ -293,10 +293,9 @@ mkdir -p "$DMG_TEMP"
 ditto "$APP_BUNDLE" "$DMG_TEMP/$APP_NAME.app"
 ln -s /Applications "$DMG_TEMP/Applications"
 
-hdiutil create -volname "$APP_NAME" \
-    -srcfolder "$DMG_TEMP" \
-    -ov -format UDZO \
-    "$DMG_OUT" > /dev/null
+# make_dmg: a sized, retried hdiutil create (desktop/make-dmg.sh).
+source "$SCRIPT_DIR/make-dmg.sh"
+make_dmg "$APP_NAME" "$DMG_TEMP" "$DMG_OUT"
 
 rm -rf "$DMG_TEMP"
 
