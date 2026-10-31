@@ -6,7 +6,7 @@
  * host-server-target.test.ts, the real install and start of the compiled file in
  * host-server-file-e2e.test.ts; a whole host server in tests/e2e/host-server-e2e.test.ts.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fs from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
@@ -47,6 +47,10 @@ interface FakeHost extends HostServerHost {
   answers?: (command: string) => boolean
   /** The pid the report names (the server's own process.pid). */
   reportPid?: number
+  /** Holds the build's upload until it resolves, after reporting half of it sent. */
+  gate?: Promise<void>
+  /** Called at every install state poll (the link may drop there). */
+  onStatePoll?: () => void
 }
 
 /** The host server's end of a stream: what the Mac posts to it. */
@@ -87,6 +91,7 @@ function fakeHost(): FakeHost {
       if (script.includes('nohup sh')) { h.calls.push('launch'); h.installState = 'running'; return 'launched' }
       if (script.includes('if [ -f "$ROOT/app/$ID/.ready" ]')) {
         h.calls.push('state')
+        h.onStatePoll?.()
         if (h.installState === 'running' && --h.pollsUntilReady <= 0) h.installState = 'ready'
         if (h.installState === 'failed') return 'FAILED\nthe walnut file does not start on this host (Linux x86_64, glibc 2.26): boom\n__LOG__\nboom'
         return { absent: 'ABSENT', running: 'RUNNING', ready: 'READY' }[h.installState] ?? 'ABSENT'
@@ -103,7 +108,10 @@ function fakeHost(): FakeHost {
       }
       throw new Error('unexpected script: ' + script.slice(0, 80))
     },
-    async uploadFile(p, data, opts) { h.uploads.push({ path: p, bytes: data.length }); h.uploadShas.push(opts?.sha256); if (p.endsWith('.install.sh')) h.script = data.toString() },
+    async uploadFile(p, data, opts) {
+      h.uploads.push({ path: p, bytes: data.length }); h.uploadShas.push(opts?.sha256); if (p.endsWith('.install.sh')) h.script = data.toString()
+      if (h.gate && p.endsWith('.gz')) { opts?.onProgress?.(data.length / 2, data.length); await h.gate; opts?.onProgress?.(data.length, data.length) }
+    },
     keepStreamLane(on) { h.lane.push(on) },
     async openStream(to, purpose) {
       h.streams.push(`${to}:${purpose}`)
@@ -191,6 +199,57 @@ afterEach(() => {
 })
 
 const ids = () => targets.map((t) => t.id)
+
+describe('host server manager: a link that drops while the build goes over', () => {
+  it('reads the upload, not "not connected", and is back to the upload\'s progress at once on reconnect', async () => {
+    const m = createHostServerManager(deps())
+    const host = fakeHost()
+    let release!: () => void
+    host.gate = new Promise<void>((r) => { release = r })
+    const run = m.connected(host)
+    await vi.waitFor(() => expect(m.view('devbox').message).toMatch(/Sending Walnut .*\(50%, 3 MB\)/))
+    // The daemon link drops; the upload goes on over its own connections.
+    host.connected = false
+    m.disconnected('devbox')
+    expect(m.view('devbox').phase).toBe('waiting-for-host')
+    expect(m.view('devbox').message).toMatch(/link to the host dropped for a moment.*Sending Walnut .*50%/)
+    expect(m.view('devbox').message).not.toMatch(/not connected/)
+    // Back within seconds: the view says the upload again, before the running reconcile ends.
+    host.connected = true
+    void m.connected(host)
+    expect(m.view('devbox')).toMatchObject({ phase: 'installing' })
+    expect(m.view('devbox').message).toMatch(/^Sending Walnut .*50%/)
+    release()
+    await run
+    await vi.waitFor(() => expect(m.view('devbox').phase).toBe('running'))
+  })
+
+  it('an install poll that finds the link down waits for it instead of failing the install', async () => {
+    const m = createHostServerManager(deps())
+    const host = fakeHost()
+    host.pollsUntilReady = 3
+    let dropped = false
+    host.onStatePoll = () => {
+      if (dropped) return
+      dropped = true
+      host.connected = false
+      m.disconnected('devbox')
+      setTimeout(() => { host.connected = true; void m.connected(host) }, 30)
+    }
+    await m.connected(host)
+    await vi.waitFor(() => expect(m.view('devbox').phase).toBe('running'))
+    expect(m.view('devbox').install?.state).toBe('ready')
+  })
+
+  it('with nothing running, a dropped link reads as before', async () => {
+    const m = createHostServerManager(deps())
+    const host = fakeHost()
+    await m.connected(host)
+    host.connected = false
+    m.disconnected('devbox')
+    expect(m.view('devbox')).toMatchObject({ phase: 'waiting-for-host', message: 'The host is not connected right now.' })
+  })
+})
 
 describe('host server manager', () => {
   it('a host without the setting gets nothing but a look at what its daemon runs', async () => {

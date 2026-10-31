@@ -36,16 +36,18 @@ const readLog = (): string[] => {
 }
 const clearLog = () => fs.rmSync(path.join(state, 'log'), { force: true })
 /** The chunks the host took whole, in order. */
-const chunksOk = () => readLog().filter((l) => /^chunk_\d+ ok$/.test(l)).map((l) => l.split(' ')[0])
+/** The chunks the host took, by name (lanes send a few at once, so arrival order varies). */
+const chunksOk = () => readLog().filter((l) => /^chunk_\d+ ok$/.test(l)).map((l) => l.split(' ')[0]).sort()
 const range = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => `chunk_${String(from + i).padStart(4, '0')}`)
 /** Make `tool` answer nothing on the "host" (exit 127, as when it is not installed). */
 const hide = (tool: string) => fs.writeFileSync(path.join(state, 'hide', tool), '#!/bin/sh\nexit 127\n', { mode: 0o755 })
 const onMachine = (tool: string) => (process.env.PATH ?? '').split(path.delimiter).some((d) => d && fs.existsSync(path.join(d, tool)))
 
-function connection(): DaemonConnection {
+function connection(parallel = 3): DaemonConnection {
   const conn = new DaemonConnection('devbox', { hostname: 'devbox.example.test', user: 'me' })
-  // No ControlMaster (sshExec stays one-shot), and no seconds-long backoff.
-  ;(conn as unknown as Record<string, unknown>).chunkPacing = { backoffMs: [1, 1, 1, 1, 1], gapMs: 0 }
+  // No ControlMaster (sshExec stays one-shot), and no seconds-long backoff. Three chunks at a
+  // time, as a real upload sends them; one at a time where a test cuts the host off at a chunk.
+  ;(conn as unknown as Record<string, unknown>).chunkPacing = { backoffMs: [1, 1, 1, 1, 1], gapMs: 0, parallel }
   return conn
 }
 
@@ -98,7 +100,7 @@ describe('uploadFile over a stand-in ssh, real files', () => {
   it('an upload cut off after six chunks resumes with the rest, and a wrong-size chunk is sent again', async () => {
     flag('max-bytes', '1000000')
     flag('refuse-after', 'chunk_0005')
-    await expect(connection().uploadFile(remote, DATA)).rejects.toThrow(/chunk 7\/12 killed 6 times/)
+    await expect(connection(1).uploadFile(remote, DATA)).rejects.toThrow(/chunk 7\/12 killed 6 times/)
     expect(chunksOk()).toEqual(range(0, 6))
     const [dir] = chunkDirs()
     const sha = crypto.createHash('sha256').update(DATA).digest('hex')

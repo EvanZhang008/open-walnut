@@ -79,6 +79,7 @@ import { AwakeDownClock } from './awake-down-clock.js'
 import { FOLD_CHECKPOINT_FORMAT } from './fold-checkpoint-core.js'
 import { annotateCredentialFailure, SSH_EVIDENCE_PREFIX } from './ssh-credential-evidence.js'
 import { cancelRecordedForwards, controlSocketPath, exitControlMaster, masterLastWords, planControlMaster, recordForward, startControlMaster } from './ssh-control-master.js'
+import { lastWordsExcerpt, UPLOAD_PARALLEL } from './ssh-last-words.js'
 import {
   clearReconnectCause, decideReconnectStep, getReconnectCause, isCredentialWaitKind, lastHostSignalAt, recordReconnectCause,
 } from './daemon-reconnect-cause.js'
@@ -666,7 +667,7 @@ export class DaemonConnection {
   /** ControlMaster SSH process — kept alive for the lifetime of this DaemonConnection. */
   private _controlMaster: ChildProcess | null = null
   /** pipeChunked's retry backoff per attempt and its pause between chunks. Only tests shorten them. */
-  private chunkPacing: { backoffMs: readonly number[]; gapMs: number } = { backoffMs: [3_000, 5_000, 10_000, 15_000, 20_000], gapMs: 250 }
+  private chunkPacing: { backoffMs: readonly number[]; gapMs: number; parallel?: number } = { backoffMs: [3_000, 5_000, 10_000, 15_000, 20_000], gapMs: 250 }
   /** Tracks whether the last deploy used source (not binary) — affects startDaemon() command. */
   private _deployedViaSource = false
   /** Resolved path to bun on the remote host, or null if unavailable / not yet probed. */
@@ -2312,18 +2313,24 @@ export class DaemonConnection {
    * sha, so the next attempt sends only the missing ones (upload-resume.ts).
    * `opts.sha256` is the caller's sha256 of `data` in hex, when it has one.
    */
-  async uploadFile(remotePath: string, data: Buffer, opts: { sha256?: string } = {}): Promise<{ skipped: boolean }> {
+  async uploadFile(
+    remotePath: string, data: Buffer,
+    opts: { sha256?: string; onProgress?: (sent: number, total: number) => void } = {},
+  ): Promise<{ skipped: boolean }> {
     if (this.isCloudTunnel) throw new Error('Cloud is reached through the cloud companion, not SSH')
     const sha = (opts.sha256 ?? await sha256Hex(data)).toLowerCase()
     if (!/^[0-9a-f]{64}$/.test(sha)) throw new Error('uploadFile: sha256 must be 64 hex characters')
     const there = parseUploadPrecheck(await this.sshExec(uploadPrecheckScript(remotePath, sha), 60_000))
     if (there && there.sha === sha && there.size === data.length) {
       log.session.info('DaemonConnection: upload skipped, the host already has the file', { host: this.hostKey, bytes: data.length, remotePath })
+      opts.onProgress?.(data.length, data.length)
       return { skipped: true }
     }
-    if (await this.pipeSingleStream(data, remotePath, sha)) return { skipped: false }
+    if (await this.pipeSingleStream(data, remotePath, sha)) { opts.onProgress?.(data.length, data.length); return { skipped: false } }
     log.session.warn('DaemonConnection: single-stream upload failed, falling back to chunked', { host: this.hostKey, bytes: data.length, remotePath })
-    await this.pipeChunked(data, remotePath, `${remotePath}.chunks-${sha.slice(0, 16)}`, 'upload', { resume: { sha256: sha } })
+    await this.pipeChunked(data, remotePath, `${remotePath}.chunks-${sha.slice(0, 16)}`, 'upload', {
+      resume: { sha256: sha }, ...(opts.onProgress ? { onProgress: opts.onProgress } : {}),
+    })
     return { skipped: false }
   }
 
@@ -2429,7 +2436,7 @@ export class DaemonConnection {
       hasCapability: (cap: string) => conn.hasCapability(cap),
       send: (cmd: string, params?: Record<string, unknown>, timeoutMs?: number) => conn.send(cmd, params, timeoutMs),
       runRemoteScript: (script: string, timeoutMs?: number) => conn.runRemoteScript(script, timeoutMs),
-      uploadFile: (remotePath: string, data: Buffer, opts?: { sha256?: string }) => conn.uploadFile(remotePath, data, opts),
+      uploadFile: (remotePath: string, data: Buffer, opts?: { sha256?: string; onProgress?: (sent: number, total: number) => void }) => conn.uploadFile(remotePath, data, opts),
       seedFromDaemon: (sha256: string, gz: string) => conn.seedHostFileFromDaemon(sha256, gz),
       openStream: (to: 'follower', purpose?: string) => conn.openStream(to, purpose),
       keepStreamLane: (on: boolean) => conn.keepStreamLane(on),
@@ -4137,7 +4144,7 @@ export class DaemonConnection {
    */
   private async pipeChunked(
     data: Buffer, remotePath: string, chunkDir: string, what: string,
-    opts: { resume?: { sha256: string } } = {},
+    opts: { resume?: { sha256: string }; onProgress?: (sent: number, total: number) => void } = {},
   ): Promise<{ chunks: number; totalFailures: number; sent: number }> {
     // 256KB — deep under the corporate proxy’s ~5MB kill threshold AND any per-connection
     // byte-rate throttling. Larger chunks (1MB) were the main failure mode
@@ -4184,21 +4191,31 @@ export class DaemonConnection {
     let totalFailures = 0
     let sent = 0
 
+    // A few chunks at a time, each on its own fresh connection (2026-10-31: one after another,
+    // a 64 MB build took 9 minutes, 2.2 s a chunk, nearly all of it connection setup through the
+    // SSH relay). Each is still one small upload, which is what the proxy lets through; the
+    // retry budget and the gap per connection stay as they were.
+    const todo: number[] = []
+    let doneBytes = 0
     for (let i = 0; i < totalChunks; i++) {
-      // Abort fast if the connection was torn down mid-deploy — user should
-      // not have to wait out retries/backoff after a destroy().
-      if (this._destroyed) throw new Error('deploy aborted: connection destroyed')
-
+      const len = Math.min(CHUNK_SIZE, data.length - i * CHUNK_SIZE)
+      // On the host at full size already (resume): written and size-checked by an earlier attempt.
+      if (have.get(i) === len) doneBytes += len
+      else todo.push(i)
+    }
+    sent = todo.length
+    opts.onProgress?.(doneBytes, data.length)
+    let doneChunks = totalChunks - todo.length
+    let failure: Error | null = null
+    let next = 0
+    const sendOne = async (i: number): Promise<void> => {
       const offset = i * CHUNK_SIZE
       const chunk = data.subarray(offset, offset + CHUNK_SIZE)
-      // On the host at full size already (resume): written and size-checked by an earlier attempt.
-      if (have.get(i) === chunk.length) continue
-      sent++
-
       let chunkAttempt = 0
       // Each chunk writes to its own file (overwrite) — retries are safe
       let ok = await this.pipeChunk(chunk, chunkDir, i)
       while (!ok) {
+        if (failure) return
         chunkAttempt++
         totalFailures++
         if (totalFailures > MAX_TOTAL_FAILURES) {
@@ -4224,23 +4241,34 @@ export class DaemonConnection {
         await new Promise(r => setTimeout(r, delayMs))
         ok = await this.pipeChunk(chunk, chunkDir, i)
       }
-
+      doneChunks++
+      doneBytes += chunk.length
+      opts.onProgress?.(doneBytes, data.length)
       // Progress log every 16 chunks (~4MB) so a 160-chunk (~40MB) upload
       // shows ~10 progress markers without log spam.
-      if (i % 16 === 0 || i === totalChunks - 1) {
+      if (doneChunks % 16 === 0 || doneChunks === totalChunks) {
         log.session.info('DaemonConnection: chunked upload progress', {
-          host: this.hostKey, what, chunk: i + 1, totalChunks,
-          percent: Math.round(((i + 1) / totalChunks) * 100),
+          host: this.hostKey, what, chunk: doneChunks, totalChunks,
+          percent: Math.round((doneChunks / totalChunks) * 100),
         })
       }
-
-      // Brief pause between chunks to avoid triggering rate limits.
-      // 250ms (vs old 1000ms) because 256KB chunks = 4x as many chunks;
-      // keep total deploy wall-clock roughly constant.
-      if (i < totalChunks - 1) {
-        await new Promise(r => setTimeout(r, this.chunkPacing.gapMs))
+    }
+    const worker = async (): Promise<void> => {
+      while (!failure && next < todo.length) {
+        // Abort fast if the connection was torn down mid-deploy — user should
+        // not have to wait out retries/backoff after a destroy().
+        if (this._destroyed) throw new Error('deploy aborted: connection destroyed')
+        const i = todo[next++]
+        await sendOne(i)
+        // Brief pause between a connection's chunks to avoid triggering rate limits.
+        if (next < todo.length) await new Promise(r => setTimeout(r, this.chunkPacing.gapMs))
       }
     }
+    const lanes = Math.max(1, Math.min(this.chunkPacing.parallel ?? UPLOAD_PARALLEL, todo.length))
+    await Promise.all(Array.from({ length: lanes }, () => worker().catch((err: unknown) => {
+      failure ??= err instanceof Error ? err : new Error(String(err))
+    })))
+    if (failure) throw failure
 
     // Reassemble chunks and verify size
     const remoteSize = parseInt(
@@ -4275,8 +4303,11 @@ export class DaemonConnection {
     const source = getDaemonSource()
     const t0 = Date.now()
     const preamble = buildRemotePreamble(this.ssh.shell_setup)
-    // A retry leaves the shared master alone: it is what just failed.
-    const sshArgs = opts.fresh ? this.freshSshArgs : this.baseSshArgs
+    // Never on the shared master: a 1.3 MB write through it is what a relay cuts, and the
+    // master takes every session's link down with it (2026-10-31, 09:04:26). `fresh` stays
+    // for the callers that ask for it.
+    void opts.fresh
+    const sshArgs = this.freshSshArgs
     const exec = (cmd: string, timeoutMs = 10_000) => runRemoteSh([...sshArgs, this.sshHostString], cmd, timeoutMs)
 
     try {
@@ -4515,7 +4546,7 @@ export class DaemonConnection {
       const masterSaid = !tunnelStderr.trim() && this._controlPath ? masterLastWords(this._controlPath) : ''
       log.session.warn('DaemonConnection: SSH tunnel died', {
         host: this.hostKey, code, localPort, remotePort,
-        ...(tunnelStderr.trim() ? { stderr: tunnelStderr.trim().slice(-300) } : {}),
+        ...(tunnelStderr.trim() ? { stderr: lastWordsExcerpt(tunnelStderr) } : {}),
         ...(masterSaid ? { masterSaid: masterSaid.slice(-300) } : {}),
       })
       this.tunnel = null

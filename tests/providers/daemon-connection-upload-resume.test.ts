@@ -79,7 +79,8 @@ const streamCalls = () => spawned.filter((s) => chunkOf(s.args) === null)
 interface ExecAnswers { precheck?: string; list?: string; joinedSize?: number; joinedSha?: string }
 function setup(data: Buffer, answers: ExecAnswers = {}) {
   const conn = new DaemonConnection('devbox', { hostname: 'devbox.example.test', user: 'me' })
-  ;(conn as unknown as Priv).chunkPacing = { backoffMs: [0, 0, 0, 0, 0], gapMs: 0 }
+  // One chunk at a time: these cases pin the resume and retry rules in order (lanes: below).
+  ;(conn as unknown as Priv).chunkPacing = { backoffMs: [0, 0, 0, 0, 0], gapMs: 0, parallel: 1 }
   const execs: string[] = []
   vi.spyOn(conn as unknown as Record<string, (...a: unknown[]) => Promise<string>>, 'sshExec').mockImplementation(async (...a: unknown[]) => {
     const cmd = String(a[0])
@@ -293,5 +294,44 @@ describe('parsing the host\'s answers', () => {
   it('reads the chunk list in GNU, BSD and busybox shapes', () => {
     const have = parseChunkList(['262144 chunk_0000', '  262144 chunk_0001', '17 chunk_0012', '   524305 total', 'noise'].join('\n'))
     expect([...have.entries()]).toEqual([[0, 262144], [1, 262144], [12, 17]])
+  })
+})
+
+describe('pipeChunked: a few chunks at a time, with progress', () => {
+  const DATA = Buffer.alloc(10 * CHUNK + 5, 3)
+
+  it('runs at most `parallel` chunks at once, more than one, and reports every byte', async () => {
+    const { conn } = setup(DATA, { joinedSha: sha256(DATA) })
+    ;(conn as unknown as Priv).chunkPacing = { backoffMs: [0, 0, 0, 0, 0], gapMs: 0, parallel: 3 }
+    let inFlight = 0
+    let peak = 0
+    const seen: number[] = []
+    vi.spyOn(conn as unknown as Record<string, (...a: unknown[]) => Promise<boolean>>, 'pipeChunk').mockImplementation(async (...a: unknown[]) => {
+      inFlight++; peak = Math.max(peak, inFlight)
+      seen.push(a[2] as number)
+      await new Promise((r) => setTimeout(r, 5))
+      inFlight--
+      return true
+    })
+    const progress: number[] = []
+    await conn.uploadFile(REMOTE, DATA, { onProgress: (sent, total) => { expect(total).toBe(DATA.length); progress.push(sent) } })
+    expect(peak).toBe(3)
+    expect([...seen].sort((x, y) => x - y)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+    expect(progress[0]).toBe(0)
+    expect(progress.at(-1)).toBe(DATA.length)
+    expect(progress).toEqual([...progress].sort((x, y) => x - y))
+  })
+
+  it('a chunk past its retries fails the upload, whatever the other lanes did', async () => {
+    const { conn } = setup(DATA)
+    ;(conn as unknown as Priv).chunkPacing = { backoffMs: [0, 0, 0, 0, 0], gapMs: 0, parallel: 3 }
+    const calls: number[] = []
+    vi.spyOn(conn as unknown as Record<string, (...a: unknown[]) => Promise<boolean>>, 'pipeChunk').mockImplementation(async (...a: unknown[]) => {
+      calls.push(a[2] as number)
+      await new Promise((r) => setTimeout(r, 1))
+      return a[2] !== 1
+    })
+    await expect(conn.uploadFile(REMOTE, DATA)).rejects.toThrow(/chunk 2\/11 killed 6 times/)
+    expect(calls.filter((c) => c === 1)).toHaveLength(6)
   })
 })

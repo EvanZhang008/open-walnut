@@ -70,8 +70,11 @@ export interface HostServerHost {
   hasCapability(cap: string): boolean
   send(cmd: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<Record<string, unknown>>
   runRemoteScript(script: string, timeoutMs?: number): Promise<string>
-  /** `sha256` of `data`: a file already there with it is not sent again (DaemonConnection.uploadFile). */
-  uploadFile(remotePath: string, data: Buffer, opts?: { sha256?: string }): Promise<unknown>
+  /**
+   * `sha256` of `data`: a file already there with it is not sent again (DaemonConnection.uploadFile).
+   * `onProgress`: the bytes the host holds so far, as the upload goes.
+   */
+  uploadFile(remotePath: string, data: Buffer, opts?: { sha256?: string; onProgress?: (sent: number, total: number) => void }): Promise<unknown>
   /**
    * Put the walnut file with `sha256` at `gz` from the host's daemon slot, when a
    * compiled Mac made the same file the host's daemon (DaemonConnection
@@ -240,6 +243,10 @@ interface HostProgram { command: string; prefix: string[]; asBun: boolean }
 
 /** Unpack, check and try the file once: seconds, minutes on a slow disk. */
 const INSTALL_TIMEOUT_MS = 5 * 60_000
+/** How long an install waits for a link that dropped to come back. */
+const LINK_BACK_MS = 60_000
+/** Leads the view while the link is down and an upload or install still goes on. */
+const DROPPED_LINE = 'The link to the host dropped for a moment; the build keeps going over its own connection.'
 const FIRST_REPORT_MS = 60_000
 /** A report older than this says the server is not answering its daemon. */
 const REPORT_STALE_MS = 20_000
@@ -418,11 +425,21 @@ export function createHostServerManager(deps: ManagerDeps) {
       const target = parseHostTarget(await host.runRemoteScript(targetProbeScript(), 15_000))
       set(host.hostKey, { phase: 'installing', message: `Getting Walnut ${id} for ${target.target}.`, install: { state: 'running' } })
       const file = await deps.hostFile.file(target.target, (message) => set(host.hostKey, { message }))
-      set(host.hostKey, { message: `Sending Walnut ${id} for ${target.target} to the host (${Math.max(1, Math.round(file.gz.length / 2 ** 20))} MB).` })
+      const mb = (n: number) => Math.max(1, Math.round(n / 2 ** 20))
+      const sending = (pct?: number) => `Sending Walnut ${id} for ${target.target} to the host (${pct === undefined ? '' : `${pct}%, `}${mb(file.gz.length)} MB).`
+      set(host.hostKey, { message: sending() })
       // The daemon deploy's path: one SSH stream, small chunks over their own connections when a
-      // proxy kills it; one already there (an earlier try) is not sent again.
+      // proxy kills it; one already there (an earlier try) is not sent again. Those connections
+      // are not the daemon link's, so the upload goes on while the link drops and comes back.
       const gzPath = `${root}/incoming/${id}.gz`
-      if (!(await host.seedFromDaemon?.(file.sha256, gzPath).catch(() => false))) await host.uploadFile(gzPath, file.gz, { sha256: file.gzSha256 })
+      let shown = -1
+      const onProgress = (sent: number, total: number): void => {
+        const pct = total > 0 ? Math.floor((sent / total) * 100) : 0
+        if (pct === shown || (pct - shown < 2 && pct < 100)) return
+        shown = pct
+        showProgress(host.hostKey, sending(pct))
+      }
+      if (!(await host.seedFromDaemon?.(file.sha256, gzPath).catch(() => false))) await host.uploadFile(gzPath, file.gz, { sha256: file.gzSha256, onProgress })
       const script = fileInstallScript({ id, version: file.version, commit: file.commit, sha256: file.sha256, host: target.describe, ...(deps.hostRoot ? { root: rootSpec } : {}) })
       await host.uploadFile(`${root}/incoming/${id}.install.sh`, Buffer.from(script))
       await host.runRemoteScript(launchScript(id, rootSpec), 15_000)
@@ -433,7 +450,9 @@ export function createHostServerManager(deps: ManagerDeps) {
     const until = deps.now() + INSTALL_TIMEOUT_MS
     for (;;) {
       await new Promise((r) => setTimeout(r, deps.installPollMs ?? 2_000))
-      if (!host.connected) throw new Error('the host went away during the install')
+      // The install runs on the host by itself: a link that drops for a moment is waited for.
+      if (!(await linkBack(host.hostKey))) throw new Error('the host went away during the install')
+      host = hosts.get(host.hostKey) ?? host
       state = parseInstallState(await host.runRemoteScript(stateScript(id, rootSpec), 15_000))
       if (state.state === 'ready') { set(host.hostKey, { install: state }); return installed }
       if (state.state === 'failed') { set(host.hostKey, { install: state }); throw new Error(`the install of Walnut ${id} on the host failed: ${state.message}`) }
@@ -781,6 +800,30 @@ export function createHostServerManager(deps: ManagerDeps) {
    * Serialized per host; a call while one runs makes it run once more. `retry`:
    * the person asked (Retry): a failed install and a refused build are tried again.
    */
+  /**
+   * What a host's view said when its link dropped while a reconcile ran there (an upload or an
+   * install goes on over its own connections): put back when the link returns, so the view
+   * never reads "not connected" for the whole upload (2026-10-31: nine minutes).
+   */
+  const resumeView = new Map<string, { phase: HostServerPhase; message?: string }>()
+
+  /** A progress line: on the view, or kept for its return while the link is down. */
+  function showProgress(hostKey: string, message: string): void {
+    const kept = resumeView.get(hostKey)
+    if (kept) { kept.message = message; set(hostKey, { message: `${DROPPED_LINE} ${message}` }); return }
+    set(hostKey, { message })
+  }
+
+  /** True once the host's link is up again, within LINK_BACK_MS. */
+  async function linkBack(hostKey: string): Promise<boolean> {
+    const until = deps.now() + LINK_BACK_MS
+    while (!hosts.get(hostKey)?.connected) {
+      if (deps.now() > until) return false
+      await new Promise((r) => setTimeout(r, deps.installPollMs ?? 2_000))
+    }
+    return true
+  }
+
   function reconcile(hostKey: string, opts: { retry?: boolean } = {}): Promise<void> {
     if (opts.retry) retries.add(hostKey)
     const current = running.get(hostKey)
@@ -800,6 +843,9 @@ export function createHostServerManager(deps: ManagerDeps) {
     /** A host's daemon connected and was told which Walnut speaks. */
     connected(host: HostServerHost): Promise<void> {
       hosts.set(host.hostKey, host)
+      const kept = resumeView.get(host.hostKey)
+      resumeView.delete(host.hostKey)
+      if (kept && running.has(host.hostKey)) set(host.hostKey, kept)
       return reconcile(host.hostKey)
     },
     disconnected(hostKey: string): void {
@@ -809,7 +855,15 @@ export function createHostServerManager(deps: ManagerDeps) {
       void deps.releaseTunnelPort(`host-server:${hostKey}`).catch((err: unknown) => {
         log.session.warn('host server: the tunnel port was not released on disconnect', { host: hostKey, error: err instanceof Error ? err.message : String(err) })
       })
-      if (view(hostKey).enabled) set(hostKey, { phase: 'waiting-for-host', message: 'The host is not connected right now.' })
+      if (!view(hostKey).enabled) return
+      const v = view(hostKey)
+      if (running.has(hostKey) && v.phase !== 'waiting-for-host') {
+        resumeView.set(hostKey, { phase: v.phase, ...(v.message ? { message: v.message } : {}) })
+        set(hostKey, { phase: 'waiting-for-host', message: v.message ? `${DROPPED_LINE} ${v.message}` : DROPPED_LINE })
+        return
+      }
+      if (resumeView.has(hostKey)) return
+      set(hostKey, { phase: 'waiting-for-host', message: 'The host is not connected right now.' })
     },
     reconcile,
     views: (): HostServerView[] => [...views.values()].map((v) => ({ ...v })),

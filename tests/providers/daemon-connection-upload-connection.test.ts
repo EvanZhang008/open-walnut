@@ -150,12 +150,14 @@ describe('source deploy connections', () => {
     return ((conn as unknown as Priv).deploySource as Deploy).call(conn, opts)
   }
 
-  it('the first attempt rides the master; a retry opens its own connection for every step', async () => {
+  // Never through the shared master, the first attempt included: a relay cut the master on that
+  // 1.3 MB write and took every session's link with it (2026-10-31, 09:04:26).
+  it('every attempt opens its own connection for every step', async () => {
     const { conn } = setup()
     replies.push({ code: 0, stdout: marked('') })
     await deploySource(conn)
     expect(sshCalls().length).toBeGreaterThanOrEqual(2)
-    for (const args of sshCalls()) expect(args.join(' ')).toContain(MASTER)
+    for (const args of sshCalls()) expect(freshOnly(args), args.join(' ')).toBe(true)
 
     calls.length = 0
     replies.push({ code: 0, stdout: marked('') })
