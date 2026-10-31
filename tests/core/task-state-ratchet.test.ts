@@ -44,6 +44,7 @@ const NOT_REMINDERS: Record<string, string> = {
   'src/core/sessions/machine-wake.ts': 'resumes work a machine stop interrupted; it reminds no one of an ask',
   'src/core/org/lead-waits.ts': 'wakes a lead for its worker: team work, not a reminder to the user, so a snooze does not stop it',
   'src/core/routines/run-start-deps.ts': 'a routine start failure writes NEED_ACTION; the derived status applies the snooze',
+  'src/web/routes/quick-input-v1.ts': "sends the user's own typed message to Main and lists tasks by their stored status (snooze applied); it reminds no one",
 }
 
 describe('every reminder path asks the snooze', () => {
