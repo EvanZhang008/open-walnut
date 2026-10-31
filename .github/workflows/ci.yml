@@ -797,6 +797,73 @@ jobs:
           [ "$n" = 16 ] || echo "::warning::only $n of 16 browser shards wrote a report; the tests of the others are not judged"
           bun scripts/browser-baseline.mjs check "$RUNNER_TEMP/browser-reports" | tee -a "$GITHUB_STEP_SUMMARY"
 
+  # ── The iOS app's tests on a simulator: informational, not in CI OK ───────
+  #
+  # GitHub's macOS runners are free for this public repo, so the phone app's tests
+  # run here instead of only on a developer's Mac. No secrets and no signing
+  # identity: a simulator build signs to run locally, which keeps the entitlements
+  # (CODE_SIGNING_ALLOWED=NO drops them, and the keychain tests then read
+  # errSecMissingEntitlement). It stays out of CI OK until it has
+  # been green for a few runs, and the UI layer may fail without failing the run
+  # (continue-on-error) while its stability on a hosted runner is unknown.
+  # WalnutUITests runs through ios-native/tests/ui/run-ui-tests.sh, the only way its
+  # pairing reaches the XCUITest runner (ios-native/README.md), at its offline
+  # default: a dead loopback port, no server and nobody's data.
+  ios:
+    name: iOS app (${{ matrix.layer }})
+    runs-on: macos-26
+    timeout-minutes: 60
+    continue-on-error: ${{ matrix.layer == 'ui' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        layer: [unit, ui]
+    steps:
+      - uses: actions/checkout@v5
+      - name: XcodeGen
+        run: command -v xcodegen >/dev/null || brew install xcodegen
+      - name: Boot an iPhone simulator
+        shell: bash
+        run: |
+          xcodebuild -version
+          # The newest iOS runtime's first available iPhone: a fixed name ("iPhone 16
+          # Pro") disappears when the image moves to a new Xcode.
+          udid=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          rt = json.load(sys.stdin)["devices"]
+          ios = sorted((k for k in rt if ".SimRuntime.iOS-" in k), key=lambda k: [int(x) for x in k.rsplit("iOS-", 1)[1].split("-")])
+          for k in reversed(ios):
+              for d in rt[k]:
+                  if d["name"].startswith("iPhone") and d.get("isAvailable", True):
+                      print(d["udid"]); sys.exit(0)
+          sys.exit("no available iPhone simulator")
+          ')
+          echo "simulator: $udid"
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          echo "SIM_UDID=$udid" >> "$GITHUB_ENV"
+      - name: Unit tests (WalnutTests)
+        if: matrix.layer == 'unit'
+        shell: bash
+        working-directory: ios-native
+        run: |
+          xcodegen generate
+          xcodebuild test -project Walnut.xcodeproj -scheme Walnut \
+            -destination "platform=iOS Simulator,id=$SIM_UDID" \
+            -derivedDataPath "$RUNNER_TEMP/dd" -resultBundlePath "$RUNNER_TEMP/ios-unit.xcresult" \
+            -only-testing:WalnutTests
+      - name: UI tests (WalnutUITests, offline pairing)
+        if: matrix.layer == 'ui'
+        shell: bash
+        run: WALNUT_UITEST_UDID="$SIM_UDID" WALNUT_UITEST_DD="$RUNNER_TEMP/dd" bash ios-native/tests/ui/run-ui-tests.sh
+      - name: Keep the result bundle
+        if: failure() && matrix.layer == 'unit'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unit-xcresult
+          path: ${{ runner.temp }}/ios-unit.xcresult
+          retention-days: 7
+
   # ── The single required check ───────────────────────────────────────────────
   #
   # Point branch protection at THIS job, never at individual matrix legs: leg

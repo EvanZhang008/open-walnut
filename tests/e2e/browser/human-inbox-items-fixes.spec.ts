@@ -119,15 +119,20 @@ test('submitted work offers Close instead of Cancel and closing does not undo th
   expect((await receipt(request, sent.id, 'fix-submitted')).receipts).toEqual(before.receipts);
 });
 
-test('notification reading panel is opaque in both themes without backdrop support', async ({ page, request }, info) => {
+// The panel is opaque, or glass with a real blur (overlay-glass.css, 2026-10-26: the
+// glass applies only where @supports finds backdrop-filter, else the panel keeps its
+// opaque background). Either way the page behind never reads through. The test used
+// to switch the blur off with an override, which leaves the glass's tint and proves
+// nothing about a browser without backdrop support.
+test('notification reading panel never lets the page read through, in both themes', async ({ page, request }, info) => {
   const sent = await sendItems(request, [mailItem('fix-opaque')]);
   await page.setViewportSize({ width: 1280, height: 800 });
   await home(page); await openLetter(page, sent.subject);
-  await page.addStyleTag({ content: '.notification-panel { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }' });
   const panel = page.locator('.notification-panel');
   for (const theme of ['light', 'dark']) {
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
-    expect(await panel.evaluate(el => getComputedStyle(el).backgroundColor)).toMatch(/^rgb\(/);
+    const look = await panel.evaluate(el => { const cs = getComputedStyle(el); return { bg: cs.backgroundColor, blur: cs.backdropFilter || cs.getPropertyValue('-webkit-backdrop-filter') }; });
+    if (!/^rgb\(/.test(look.bg)) expect(look.blur, `a see-through background (${look.bg}) needs a blur`).toMatch(/blur\((?:[2-9]\d|\d{3,})px\)/);
     await page.screenshot({ path: `${SHOTS}/${info.project.name}-opaque-${theme}.png`, scale: 'css' });
   }
 });

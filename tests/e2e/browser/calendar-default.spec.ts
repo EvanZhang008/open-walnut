@@ -15,6 +15,7 @@
 import { test, expect, type Page } from '@playwright/test'
 import fs from 'node:fs'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { calendarEmptySlotPoint, calendarSlotPoint } from './calendar-helpers'
 
 if (process.env.PW_WEBKIT) test.use({ browserName: 'webkit' })
 test.use({ viewport: { width: 1280, height: 900 } })
@@ -101,13 +102,13 @@ test('quick-create preselects the default calendar and the event lands there', a
   await page.click('a[href="/calendar"]')
   await expect(page.locator('.cal-toolbar')).toBeVisible()
 
-  // 19:00: no fixture event sits there (a 16:00 click opened the invited series instead).
+  // The first empty half hour from `hour` on: today's column is shared with every
+  // spec on the fixture (a 16:00 click opened the invited series, and in a repeated
+  // run 19:00 held another spec's event).
   async function openEventForm(hour = 19) {
     const today = localDay(0)
-    await page.locator('.cal-grid-scroll').evaluate((el, h) => { el.scrollTop = h * 48 - el.clientHeight / 2 }, hour)
-    const box = await page.locator(`.cal-day-col[data-day="${today}"]`).boundingBox()
-    if (!box) throw new Error('today column not visible')
-    await page.mouse.click(box.x + box.width / 2, box.y + hour * 48 + 1)
+    const slot = await calendarEmptySlotPoint(page, today, hour)
+    await page.mouse.click(slot.x, slot.y)
     const popover = page.locator('.cal-create-popover')
     await expect(popover).toBeVisible()
     await popover.locator('.cal-create-tabs button:has-text("Event")').click()
@@ -145,7 +146,7 @@ test('quick-create preselects the default calendar and the event lands there', a
 
   // A second open in the same page still starts on the default (not on the last pick).
   await page.keyboard.press('Escape')
-  // 21:00: the event just made sits at 19:00.
+  // From 21:00: the event just made sits earlier.
   const again = await openEventForm(21)
   await expect(again.getByTestId('cal-event-form-calendar')).toHaveValue('cal-personal')
   await page.keyboard.press('Escape')
@@ -170,10 +171,8 @@ test('quick-create picks nothing when the configured default is unusable, and sa
   await page.click('a[href="/calendar"]')
   await expect(page.locator('.cal-toolbar')).toBeVisible()
   const today = localDay(0)
-  await page.locator('.cal-grid-scroll').evaluate((el) => { el.scrollTop = 20 * 48 - el.clientHeight / 2 })
-  const box = await page.locator(`.cal-day-col[data-day="${today}"]`).boundingBox()
-  if (!box) throw new Error('today column not visible')
-  await page.mouse.click(box.x + box.width / 2, box.y + 20 * 48 + 1)
+  const slot = await calendarEmptySlotPoint(page, today, 20)
+  await page.mouse.click(slot.x, slot.y)
   const popover = page.locator('.cal-create-popover')
   await expect(popover).toBeVisible()
   await popover.locator('.cal-create-tabs button:has-text("Event")').click()

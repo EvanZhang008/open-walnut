@@ -37,7 +37,9 @@ async function createTaskViaApi(
   const res = await fetch(`${API}/api/tasks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title: uniqueTitle, source: 'local', ...opts }),
+    // Unpinned: these tests look for the row in the task list. A create is born on
+    // the pinned board unless it says otherwise (ddda11ac4, newTaskPinDefault).
+    body: JSON.stringify({ title: uniqueTitle, source: 'local', pinned: false, ...opts }),
   })
   if (!res.ok) throw new Error(`API call failed: ${res.status} ${await res.text()}`)
   const body = (await res.json()) as { task: { id: string; title: string } }
@@ -56,15 +58,6 @@ async function pinTaskViaApi(taskId: string, tier = 'focus'): Promise<void> {
   if (!tierRes.ok) throw new Error(`Tier API call failed: ${tierRes.status} ${await tierRes.text()}`)
 }
 
-async function groupTasksViaApi(taskIds: string[]): Promise<void> {
-  const res = await fetch(`${API}/api/tasks/groups`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ task_ids: taskIds, label: 'Search filter drag test' }),
-  })
-  if (!res.ok) throw new Error(`Group API call failed: ${res.status} ${await res.text()}`)
-}
-
 // The home panel toggles (Todo collapse below) are synced layout preferences; isolate
 // ui-prefs so a collapse left behind by a failed run never reaches the shared fixture.
 test.beforeEach(async ({ page }) => { await isolateUiPrefs(page) })
@@ -80,7 +73,9 @@ test('app loads and shows main page elements', async ({ page }) => {
   // Todo panel should be visible
   await expect(page.locator('.todo-panel')).toBeVisible()
 
-  // Chat input should exist
+  // The chat slot starts hidden here (isolateUiPrefs seeds it closed, as a returning
+  // user's layout): the sidebar's Ask Walnut opens it with its composer.
+  await page.getByRole('group', { name: 'Home panels' }).getByRole('button', { name: 'Ask Walnut', exact: true }).click()
   await expect(page.locator('.chat-input-textarea')).toBeVisible()
 })
 
@@ -124,133 +119,10 @@ test('Date=Now hides future tasks from the pinned area', async ({ page }) => {
   await expect(pinnedCard(currentPinned.id)).toBeVisible()
 })
 
-test('search and filters apply across pinned, recent, and task sections', async ({ page }) => {
-  const query = `shared-query-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  // The toolbar-filter leg below uses the legacy DATE filter (Priority and Tag
-  // were retired from Quick filters 2026-08-23: priority lives in the
-  // canonical query rail, which search deliberately does NOT bypass).
-  // filterMismatch is deferred (future start_date), so Date=Now hides it.
-  const matchingPinned = await createTaskViaApi(`Pinned ${query} match`, {
-    project: 'Work',
-  })
-  const filterMismatch = await createTaskViaApi(`Pinned ${query} deferred mismatch`, {
-    project: 'Work',
-    start_date: new Date(Date.now() + 30 * 86_400_000).toISOString(),
-  })
-  const searchMismatch = await createTaskViaApi('Pinned unrelated search target', {
-    project: 'Work',
-  })
-  const unpinnedMatch = await createTaskViaApi(`Unpinned ${query} match`, {
-    project: 'Work',
-  })
-  await pinTaskViaApi(matchingPinned.id)
-  await pinTaskViaApi(filterMismatch.id)
-  await pinTaskViaApi(searchMismatch.id)
-  await groupTasksViaApi([matchingPinned.id, filterMismatch.id, searchMismatch.id])
-
-  await page.goto('/')
-  await page.waitForLoadState('networkidle')
-  await showAllTasks(page)
-
-  // Date defaults to Now, which would hide the deferred fixture from the very
-  // first assertion: start from the neutral All view; the filter leg below
-  // flips it to Now mid-search.
-  // Date lives in the Filter popover's Date row (Any date).
-  await addFilter(page, 'date', '')
-
-  const pinnedHeader = page.locator('.todo-pinned-label').filter({ hasText: /^Pinned$/ }).locator('..')
-  const pinnedSection = pinnedHeader.locator('..')
-  const pinnedCard = (taskId: string) => pinnedSection.locator(`[data-task-id="${taskId}"]`)
-  const pinnedCount = pinnedHeader.locator('.todo-pinned-count')
-  const recentHeader = page.locator('.todo-pinned-label').filter({ hasText: /^Recent$/ }).locator('..')
-  const recentSection = recentHeader.locator('..')
-  const recentCard = (taskId: string) => recentSection.locator(`[data-task-id="${taskId}"]`)
-  const recentCount = recentHeader.locator('.todo-pinned-count')
-  const taskList = page.locator('.todo-panel-list')
-  const searchInput = page.locator('.todo-search-input')
-
-  await expect(pinnedCard(matchingPinned.id)).toBeVisible({ timeout: 5000 })
-  await expect(pinnedCard(filterMismatch.id)).toBeVisible()
-  await expect(pinnedCard(searchMismatch.id)).toBeVisible()
-  await expect(recentCard(searchMismatch.id)).toBeVisible()
-
-  // Hold the semantic response so the assertions below exercise the urgent local pass.
-  let releaseServerSearch!: () => void
-  let markServerSearchStarted!: () => void
-  const serverSearchStarted = new Promise<void>((resolve) => { markServerSearchStarted = resolve })
-  const serverSearchRelease = new Promise<void>((resolve) => { releaseServerSearch = resolve })
-  await page.route('**/api/search?**', async (route) => {
-    markServerSearchStarted()
-    await serverSearchRelease
-    await route.fulfill({ json: { results: [] } })
-  })
-
-  await searchInput.pressSequentially(query)
-  await expect(searchInput).toHaveValue(query)
-  await expect(pinnedCard(matchingPinned.id)).toBeVisible()
-  await expect(pinnedCard(filterMismatch.id)).toBeVisible()
-  await expect(pinnedCard(searchMismatch.id)).toBeHidden()
-  await expect(pinnedCount).toHaveText('2')
-  await expect(recentCard(matchingPinned.id)).toBeVisible()
-  await expect(recentCard(filterMismatch.id)).toBeVisible()
-  await expect(recentCard(unpinnedMatch.id)).toBeVisible()
-  await expect(recentCard(searchMismatch.id)).toBeHidden()
-  await expect(recentCount).toHaveText('3')
-  await expect(taskList.locator('.todo-panel-item', { hasText: unpinnedMatch.title })).toBeVisible()
-
-  await serverSearchStarted
-  releaseServerSearch()
-  await expect(page.locator('.todo-search-spinner')).toBeHidden()
-  await expect(pinnedCard(matchingPinned.id)).toBeVisible()
-  await expect(pinnedCard(filterMismatch.id)).toBeVisible()
-  await expect(recentCard(unpinnedMatch.id)).toBeVisible()
-
-  // Date lives in the Filter popover's Date row (Available now).
-  await addFilter(page, 'date', 'now')
-
-  // Search ignores EVERY toolbar filter (user ruling 2026-08-09: see
-  // todo-search-ignores-filters.spec.ts): while the query is active, the
-  // Date=Now filter must NOT hide a matching (deferred) card anywhere. It only
-  // takes effect once the query is cleared (asserted below).
-  await expect(pinnedCard(matchingPinned.id)).toBeVisible()
-  await expect(pinnedCard(filterMismatch.id)).toBeVisible()
-  await expect(pinnedCard(searchMismatch.id)).toBeHidden()
-  await expect(pinnedCount).toHaveText('2')
-  await expect(recentCard(matchingPinned.id)).toBeVisible()
-  await expect(recentCard(filterMismatch.id)).toBeVisible()
-  await expect(recentCard(searchMismatch.id)).toBeHidden()
-  await expect(recentCard(unpinnedMatch.id)).toBeVisible()
-  await expect(recentCount).toHaveText('3')
-  await expect(taskList.locator('.todo-panel-item', { hasText: unpinnedMatch.title })).toBeVisible()
-
-  await page.getByTitle('Clear search (Esc)').click()
-  await expect(pinnedCard(matchingPinned.id)).toBeVisible()
-  await expect(pinnedCard(filterMismatch.id)).toBeHidden()
-  await expect(pinnedCard(searchMismatch.id)).toBeVisible()
-  await expect(recentCard(matchingPinned.id)).toBeVisible()
-  await expect(recentCard(filterMismatch.id)).toBeHidden()
-  await expect(recentCard(searchMismatch.id)).toBeVisible()
-
-  const sourceHandle = pinnedCard(matchingPinned.id).locator('.todo-pinned-drag-handle')
-  const targetCard = pinnedCard(searchMismatch.id)
-  const sourceBox = await sourceHandle.boundingBox()
-  const targetBox = await targetCard.boundingBox()
-  expect(sourceBox).not.toBeNull()
-  expect(targetBox).not.toBeNull()
-  await page.mouse.move(sourceBox!.x + sourceBox!.width / 2, sourceBox!.y + sourceBox!.height / 2)
-  await page.mouse.down()
-  await page.mouse.move(sourceBox!.x + sourceBox!.width / 2, sourceBox!.y + sourceBox!.height / 2 + 8)
-  await page.mouse.move(targetBox!.x + targetBox!.width / 2, targetBox!.y + targetBox!.height / 2, { steps: 8 })
-  await page.mouse.up()
-
-  await expect.poll(async () => {
-    const res = await fetch(`${API}/api/focus/tasks`)
-    const body = (await res.json()) as { pinned_tasks: string[] }
-    return body.pinned_tasks.filter((id) =>
-      id === matchingPinned.id || id === filterMismatch.id || id === searchMismatch.id
-    )
-  }).toEqual([searchMismatch.id, filterMismatch.id, matchingPinned.id])
-})
+// "search and filters apply across pinned, recent, and task sections" was deleted
+// 2026-10-31: it read the retired `.todo-pinned-label` headings and a Recent feed
+// that All no longer draws. todo-search-pinned-recent.spec.ts and
+// todo-search-and-filters.spec.ts cover search over the pin area and the filters.
 
 // ── Create task ──
 
@@ -330,7 +202,7 @@ test('task created via REST API appears in browser without refresh', async ({ pa
 
 // ── Task detail navigation ──
 
-test('click task navigates to detail page', async ({ page }) => {
+test('click task opens it on Home', async ({ page }) => {
   const task = await createTaskViaApi('Detail nav task', { project: 'Work' })
 
   await page.goto('/')
@@ -344,12 +216,11 @@ test('click task navigates to detail page', async ({ page }) => {
   // Click the row padding to focus it without entering inline title editing.
   await taskItem.click({ position: { x: 4, y: 4 } })
 
-  // Should show task context pill or navigate to detail
-  // The TodoPanel focuses the task in the chat context
-  await expect(page.locator('.chat-input-task-pill')).toBeVisible({ timeout: 3000 }).catch(async () => {
-    // If no context pill, check if we navigated to task detail page
-    await expect(page).toHaveURL(new RegExp(`/tasks/${task.id}`))
-  })
+  // A task opens on Home with its row selected and named in the URL, never the
+  // separate task page (2026-10-26).
+  await expect(page).toHaveURL(new RegExp(`[?&]task=${task.id}`))
+  await expect(page.locator(`[data-task-id="${task.id}"].task-focused, [data-task-id="${task.id}"].todo-pinned-card-active`).first()).toBeVisible()
+  await expect(page).not.toHaveURL(/\/tasks\//)
 })
 
 // ── Project chips ──
@@ -372,35 +243,10 @@ test('project chips filter tasks', async ({ page }) => {
   await expect(page.locator('.todo-panel-item', { hasText: lifeTask.title })).toBeHidden()
 })
 
-test('pinned + recent stay visible across project chips (cross-project focus view)', async ({ page }) => {
-  // Regression: a pinned task from another project must NOT vanish when the user
-  // navigates to a different project chip. Pins are a cross-project focus view:
-  // scoping the Pinned/Recent sections to the active chip made "all my focused tasks
-  // disappeared" (they reappeared only on search, which bypasses the chip).
-  const query = `xproj-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  const lifePinned = await createTaskViaApi(`Life pinned ${query}`, { project: 'Life' })
-  const workTask = await createTaskViaApi(`Work list ${query}`, { project: 'Work' })
-  await pinTaskViaApi(lifePinned.id)
-
-  await page.goto('/')
-  await page.waitForLoadState('networkidle')
-  await showAllTasks(page)
-
-  const pinnedCard = page.locator(`.todo-focus-card[data-task-id="${lifePinned.id}"]`)
-  const recentCard = page.locator(`.todo-pinned-section-recent .todo-pinned-card[data-task-id="${lifePinned.id}"]`)
-  await expect(pinnedCard).toBeVisible({ timeout: 5000 })
-
-  // Navigate to the Work chip: the Life-project pin must remain visible in both the
-  // Pinned tier and the Recent feed even though it belongs to a different project.
-  // (No global pinned-count assertion: /api/focus/tasks is shared state and this suite
-  // runs fully parallel, so other tests' pins would make an exact count flaky.)
-  await selectProject(page, 'Work')
-  await expect(page.locator('.todo-panel-item', { hasText: workTask.title })).toBeVisible()
-  await expect(pinnedCard).toBeVisible()
-  await expect(recentCard).toBeVisible()
-  // The Work-project list item must NOT leak into the Pinned tier (it isn't pinned).
-  await expect(page.locator(`.todo-focus-card[data-task-id="${workTask.id}"]`)).toHaveCount(0)
-})
+// "pinned + recent stay visible across project chips" was deleted 2026-10-31: it
+// guarded the old project chips, which scoped only the list. The Filter bar
+// (67ee2a38d, 2026-10-02) has one hit test for every surface, so a Project filter
+// narrows the pin area too, by design (filter-predicate.ts).
 
 // ── Todo panel collapse/expand ──
 

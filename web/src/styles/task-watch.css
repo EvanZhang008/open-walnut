@@ -10,3 +10,7 @@
 /* In the detail header it sits at the right, just before the close button. */
 .tdp-head-top .tdp-watch { margin-left: auto; }
 .tdp-head-top .tdp-watch + .todo-detail-close { margin-left: 0; }
+/* On a phone the eye takes a finger (phone-pages.spec.ts C18), as the close button beside it does. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  html .app-shell-navigation .task-watch-btn { width: 44px; height: 44px; }
+}

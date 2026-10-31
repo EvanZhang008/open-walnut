@@ -102,6 +102,14 @@ await fs.writeFile(path.join(tmpBase, 'config.yaml'), JSON.stringify({
 }, null, 2))
 
 await fs.writeFile(path.join(tmpBase, 'tasks', 'tasks.json'), JSON.stringify({ version: 1, tasks: [] }, null, 2))
+// A new install opens on the chat slot, which on a phone is a layer with Back where the
+// Menu button was (2026-10-31: phone-mail-groups and phone-mail-r4 waited 90 s for Menu).
+// Like the shared fixture (test-server.ts), this home remembers the slot closed.
+await fs.mkdir(path.join(tmpBase, 'config', 'share'), { recursive: true })
+await fs.writeFile(
+  path.join(tmpBase, 'config', 'share', 'ui-prefs.json'),
+  JSON.stringify({ 'open-walnut-home-chat-visible': { v: 'false', ts: 1 } }, null, 2),
+)
 
 // Install the canned provider the documented author way: a symlink in the data home's plugins/
 // directory, which is exactly what `walnut-plugin link` writes. It declares

@@ -18,7 +18,7 @@
  */
 
 import { expect, type Locator, type Page } from '@playwright/test'
-import { addFilter, chooseDisplayOption, closeDisplayMenu, closeFilterMenu, filterChip, filterValue, openFilterPage, removeFilterChip } from './filter-bar-helpers'
+import { addFilter, chooseDisplayOption, closeDisplayMenu, closeFilterMenu, displayMenu, filterChip, filterValue, openDisplayMenu, openFilterPage, removeFilterChip } from './filter-bar-helpers'
 
 /**
  * Open a Projects-list project the way a user does, with a click on its name, unless
@@ -120,10 +120,64 @@ export async function selectProject(page: Page, project: string): Promise<void> 
   await addFilter(page, 'project', project)
 }
 
-/** Both axes wide open: stacked sections + the "All" project chip. */
+/** Both axes wide open: stacked sections + the "All" project chip, every project open and drawn whole. */
 export async function showEverything(page: Page): Promise<void> {
   await showAllSections(page)
   await selectProject(page, 'All')
+  await openAllListProjects(page)
+  await drawAllListRows(page)
+}
+
+/**
+ * Open every folded project of the task list, through Display's "Expand all
+ * projects" as a user does. A list starts folded (ea6d9cb0e, 2026-09-23), so a spec
+ * that only cleared the filters found no `.todo-panel-item` at all (2026-10-31:
+ * every app.spec.ts and phase.spec.ts test that looks for a seeded row). One click
+ * per header took most of a 30 s test on a fixture with dozens of projects.
+ */
+export async function openAllListProjects(page: Page): Promise<void> {
+  const folded = page.locator('.todo-group-project-header').filter({ has: page.locator('.collapse-chevron:not(.expanded)') })
+  if ((await folded.count()) === 0) return
+  // What a fold writes is a synced layout pref: keep it in this tab, never on the
+  // shared fixture server, where every later page would open with all projects open.
+  await page.route('**/api/ui-prefs', (route) => route.request().method() === 'GET'
+    ? route.fallback()
+    : route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' }))
+  const names = await folded.locator('.todo-group-name-btn').allTextContents()
+  const action = displayMenu(page).locator('[data-view-option="collapse"]')
+  // The action says Expand only when EVERY project is folded; with some open it
+  // folds them all first, and the next press opens them all. A search hides it.
+  for (let i = 0; i < 2 && (await folded.count()) > 0; i++) {
+    await openDisplayMenu(page)
+    if ((await action.count()) === 0) { await closeDisplayMenu(page); break }
+    await action.click()
+    if (await displayMenu(page).isVisible()) await closeDisplayMenu(page)
+  }
+  for (let i = 0; i < 40 && (await folded.count()) > 0; i++) {
+    const before = await folded.count()
+    await folded.first().locator('.todo-group-name-btn').click()
+    await expect.poll(() => folded.count()).toBeLessThan(before)
+  }
+  // Only the projects that were folded: another worker may add a project meanwhile.
+  await expect.poll(async () => (await folded.locator('.todo-group-name-btn').allTextContents()).filter((n) => names.includes(n))).toEqual([])
+}
+
+/**
+ * Press every project's "Show more" until the whole list is drawn. An open project
+ * draws its first 30 rows (list-batch.ts), and every spec of a shard adds tasks to
+ * the one fixture server, so a seeded row fell past the cut (2026-10-31: the
+ * Walnut project held 66 rows, and app.spec.ts never found "Playwright test task").
+ */
+export async function drawAllListRows(page: Page): Promise<void> {
+  const more = page.locator('.todo-panel .todo-list-show-more')
+  // Each row's title names how many it still hides ("36 more tasks").
+  const hiddenRows = async () => (await more.evaluateAll((els) => els.map((e) => e.getAttribute('title') ?? '')))
+    .reduce((sum, t) => sum + (Number(t.match(/\d+/)?.[0]) || 0), 0)
+  for (let i = 0; i < 60 && (await more.count()) > 0; i++) {
+    const before = await hiddenRows()
+    await more.first().click()
+    await expect.poll(hiddenRows).toBeLessThan(before)
+  }
 }
 
 /**

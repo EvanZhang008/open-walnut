@@ -270,9 +270,11 @@
     align-items: center;
   }
 
-  /* A link inside help text: the line keeps its height, the tap area grows. */
-  .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane .settings-row-help a[href] {
-    padding: 13px 0;
-    margin: -13px 0;
+  /* A link inside help or notice text: the line keeps its height, the tap area grows
+     (15 px each side: the notice's 11 px text has a 14 px box, 13 left it at 41). */
+  .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane .settings-row-help a[href],
+  .app-shell-navigation .settings-layout[data-phone-settings] .settings-pane .settings-notice a[href] {
+    padding: 15px 0;
+    margin: -15px 0;
   }
 }

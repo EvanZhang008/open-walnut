@@ -20,6 +20,7 @@ import { centreInHistory, openThreadsSession, resetThreadsFixture, selectPassage
 import { TAGGED_PASSAGE, TAGGED_READY, TAGGED_SESSION, TAGGED_TASK, TAGGED_TITLES } from './threads-fixture'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { draftPanel, openDraft } from './draft-helpers'
+import { calendarEmptySlotPoint } from './calendar-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const NONCE = Date.now().toString(36)
@@ -267,10 +268,8 @@ test.describe('Every input box keeps its unsent draft', () => {
       const today = new Date()
       const pad = (n: number) => String(n).padStart(2, '0')
       const day = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`
-      await page.locator('.cal-grid-scroll').evaluate((el) => { el.scrollTop = 14 * 48 - el.clientHeight / 2 })
-      const box = await page.locator(`.cal-day-col[data-day="${day}"]`).boundingBox()
-      if (!box) throw new Error(`day column ${day} not visible`)
-      await page.mouse.click(box.x + box.width / 2, box.y + 14 * 48 + 12)
+      const slot = await calendarEmptySlotPoint(page, day)
+      await page.mouse.click(slot.x, slot.y)
       const composer = page.locator('.cal-create-popover .quick-task-composer')
       await expect(composer).toBeVisible()
       return composer

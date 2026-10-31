@@ -84,6 +84,19 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
 .project-status-fold:hover, .project-status-fold.open { background: var(--bg-hover); color: var(--fg-secondary); }
 .project-status-fold .project-status-count-icon svg { width: 11px; height: 11px; }
 .home-navigation-scroll .project-status-folds-project { margin-top: 12px; }
+/* On a phone no text is under 12 px and every button takes a finger (phone-home.spec.ts
+   C18, C19): the counts and fold lines above are 10 and 11.5 px, and a fold is 22 px tall. */
+@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
+  html .app-shell-navigation .project-status-counts,
+  html .app-shell-navigation .inbox-project-line .project-status-counts,
+  html .app-shell-navigation .project-status-fold { font-size: 12px; }
+  html .app-shell-navigation .project-status-count-icon svg { width: 12px; height: 12px; }
+  html .app-shell-navigation .project-status-fold { min-height: 44px; padding: 0 10px; }
+  html .app-shell-navigation .status-section-more,
+  html .app-shell-navigation .inbox-project-line-btn,
+  html .app-shell-navigation .inbox-project-task { min-height: 44px; font-size: 13px; }
+  html .app-shell-navigation .inbox-project-strip-head { font-size: 12px; }
+}
 
 /* The Inbox's per-project strip (InboxProjectStrip.tsx). */
 .inbox-project-strip { margin: 4px 8px 8px; padding: 6px 4px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }

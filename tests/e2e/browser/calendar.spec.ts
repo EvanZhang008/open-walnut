@@ -8,6 +8,7 @@
  */
 import { test, expect, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { calendarEmptySlotPoint, calendarHourPx, calendarSlotPoint } from './calendar-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
@@ -76,7 +77,7 @@ async function openCalendar(page: Page): Promise<void> {
 }
 
 /**
- * Viewport point inside a day column at a given hour (SLOT_PX=24 → 48px/hour).
+ * Viewport point inside a day column at a given hour (the grid's own hour height, calendar-helpers.ts).
  * boundingBox() is already in viewport coords (reflects scroll), so the hour
  * offset is added to it directly — no scrollTop arithmetic.
  */
@@ -86,14 +87,7 @@ async function columnPoint(
   hour: number,
   scope?: ReturnType<Page['locator']>,
 ): Promise<{ x: number; y: number }> {
-  const root = scope ?? page.locator('body')
-  // Scroll the grid so the target hour is in view before measuring.
-  await root.locator('.cal-grid-scroll').evaluate((el, h) => {
-    el.scrollTop = h * 48 - el.clientHeight / 2
-  }, hour)
-  const box = await root.locator(`.cal-day-col[data-day="${day}"]`).boundingBox()
-  if (!box) throw new Error(`day column ${day} not visible`)
-  return { x: box.x + box.width / 2, y: box.y + hour * 48 + 1 }
+  return calendarSlotPoint(scope ?? page, day, hour)
 }
 
 // The home Agenda toggle is a synced layout preference (`open-walnut-home-calendar-visible`
@@ -174,10 +168,11 @@ test.describe('Calendar view', () => {
     let box = await chip.boundingBox()
     if (!box) throw new Error('chip not visible')
 
-    // Move down 2 hours (96px) → 07:00
+    // Move down 2 hours → 07:00
+    const hourPx = await calendarHourPx(page)
     await page.mouse.move(box.x + box.width / 2, box.y + 4)
     await page.mouse.down()
-    await page.mouse.move(box.x + box.width / 2, box.y + 4 + 96, { steps: 10 })
+    await page.mouse.move(box.x + box.width / 2, box.y + 4 + hourPx * 2, { steps: 10 })
     // Mid-drag: the solid ghost tracks the pointer and carries the title
     await expect(page.locator('.cal-move-ghost-solid')).toBeVisible()
     await expect(page.locator('.cal-move-ghost-solid .cal-move-ghost-title')).toContainText('CalChipMove')
@@ -298,10 +293,11 @@ test.describe('Calendar view', () => {
     const box = await chip.boundingBox()
     if (!box) throw new Error('event chip not visible')
 
-    // down 2 hours (96px): 06:00 → 08:00, 30-min duration preserved
+    // down 2 hours: 06:00 → 08:00, 30-min duration preserved
+    const hourPx = await calendarHourPx(page)
     await page.mouse.move(box.x + box.width / 2, box.y + 4)
     await page.mouse.down()
-    await page.mouse.move(box.x + box.width / 2, box.y + 4 + 96, { steps: 10 })
+    await page.mouse.move(box.x + box.width / 2, box.y + 4 + hourPx * 2, { steps: 10 })
     await page.mouse.up()
 
     const today = localDay(0)
@@ -322,10 +318,11 @@ test.describe('Calendar view', () => {
     const hbox = await handle.boundingBox()
     if (!hbox) throw new Error('resize handle not visible')
 
-    // pull the bottom edge down one hour (48px): 03:30 → ~04:30
+    // pull the bottom edge down one hour: 03:30 → ~04:30
+    const hourPx = await calendarHourPx(page)
     await page.mouse.move(hbox.x + hbox.width / 2, hbox.y + hbox.height / 2)
     await page.mouse.down()
-    await page.mouse.move(hbox.x + hbox.width / 2, hbox.y + hbox.height / 2 + 48, { steps: 8 })
+    await page.mouse.move(hbox.x + hbox.width / 2, hbox.y + hbox.height / 2 + hourPx, { steps: 8 })
     await page.mouse.up()
 
     await expect
@@ -507,7 +504,8 @@ test.describe('Calendar view', () => {
     const { event } = (await created.json()) as { event: { id: string } }
 
     await openCalendar(page)
-    const chip = page.locator(`.cal-day-col .cal-chip[data-item-id="event:${event.id}"]`)
+    // It crosses midnight, so it draws in two columns: take today's.
+    const chip = page.locator(`.cal-day-col .cal-chip[data-day="${today}"][data-item-id="event:${event.id}"]`)
     await chip.scrollIntoViewIfNeeded()
     await chip.click()
 
@@ -544,7 +542,8 @@ test.describe('Calendar view', () => {
     const { event } = (await created.json()) as { event: { id: string } }
 
     await openCalendar(page)
-    const chip = page.locator(`.cal-day-col .cal-chip[data-item-id="event:${event.id}"]`)
+    // It crosses midnight, so it draws in two columns: take today's.
+    const chip = page.locator(`.cal-day-col .cal-chip[data-day="${today}"][data-item-id="event:${event.id}"]`)
     await chip.scrollIntoViewIfNeeded()
     await expect(chip).toBeVisible()
     await chip.click({ button: 'right' })
@@ -581,7 +580,8 @@ test.describe('Calendar view', () => {
     const { event } = (await created.json()) as { event: { id: string } }
 
     await openCalendar(page)
-    const chip = page.locator(`.cal-day-col .cal-chip[data-item-id="event:${event.id}"]`)
+    // It crosses midnight, so it draws in two columns: take today's.
+    const chip = page.locator(`.cal-day-col .cal-chip[data-day="${today}"][data-item-id="event:${event.id}"]`)
     await chip.scrollIntoViewIfNeeded()
     await chip.click()
     const popover = page.locator('[data-testid="cal-item-popover"]')
@@ -635,7 +635,8 @@ test.describe('Calendar view', () => {
     const { event } = (await created.json()) as { event: { id: string } }
 
     await openCalendar(page)
-    const chip = page.locator(`.cal-day-col .cal-chip[data-item-id="event:${event.id}"]`)
+    // It crosses midnight, so it draws in two columns: take today's.
+    const chip = page.locator(`.cal-day-col .cal-chip[data-day="${today}"][data-item-id="event:${event.id}"]`)
     await chip.scrollIntoViewIfNeeded()
     await chip.click()
     const popover = page.locator('[data-testid="cal-item-popover"]')
@@ -814,7 +815,8 @@ test.describe('Calendar view', () => {
     const { event } = (await created.json()) as { event: { id: string } }
 
     await openCalendar(page)
-    const chip = page.locator(`.cal-day-col .cal-chip[data-item-id="event:${event.id}"]`)
+    // It crosses midnight, so it draws in two columns: take today's.
+    const chip = page.locator(`.cal-day-col .cal-chip[data-day="${today}"][data-item-id="event:${event.id}"]`)
     await chip.scrollIntoViewIfNeeded()
     await chip.click()
     const popover = page.locator('[data-testid="cal-item-popover"]')
@@ -843,7 +845,10 @@ test.describe('Calendar view', () => {
     // → a zero-length 23:00–23:00 range, form pre-broken with an error the
     // user never caused. Now the end clamps to 23:59.
     await openCalendar(page)
-    const day = localDay(2)
+    // A day the grid shows: two days on is next week's when today is Saturday, and
+    // its column is not drawn at all. Not today, whose 23:00 other tests fill.
+    const days = await page.locator('.cal-day-col').evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.day ?? ''))
+    const day = days.filter((d) => d && d !== localDay(0)).at(-1) ?? days[0]!
     const point = await columnPoint(page, day, 23)
     await page.mouse.click(point.x, point.y)
     const popover = page.locator('.cal-create-popover')
@@ -869,7 +874,8 @@ test.describe('Calendar view', () => {
     const task = await createTaskViaApi('CalDblClick', { start_date: `${today}T03:00:00` })
     await openCalendar(page)
 
-    const point = await columnPoint(page, today, 19)
+    // An EMPTY slot: today's 19:00 may hold another spec's item on the shared fixture.
+    const point = await calendarEmptySlotPoint(page, today, 19)
     await page.mouse.dblclick(point.x, point.y)
     await expect(page.locator('.cal-create-popover')).toBeVisible()
     await page.keyboard.press('Escape')
@@ -1140,8 +1146,9 @@ test.describe('Calendar view', () => {
     await chip.scrollIntoViewIfNeeded()
     const box = await chip.boundingBox()
     if (!box) throw new Error('chip not visible')
-    // 2h at 48px/hour = 96px (not the point-in-time 24px slot).
-    expect(box.height).toBeGreaterThan(90)
+    // 2h tall (not the point-in-time half-hour slot).
+    const hourPx = await calendarHourPx(page)
+    expect(box.height).toBeGreaterThan(hourPx * 2 - 6)
 
     // Drag the bottom resize handle +1h → end_date 05:00.
     const handle = chip.locator('.cal-chip-resize-handle')
@@ -1149,7 +1156,7 @@ test.describe('Calendar view', () => {
     if (!hb) throw new Error('resize handle not visible')
     await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2)
     await page.mouse.down()
-    await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2 + 48, { steps: 8 })
+    await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2 + hourPx, { steps: 8 })
     await page.mouse.up()
     await expect
       .poll(async () => (await getTaskViaApi(task.id)).end_date, { timeout: 5000 })
@@ -1160,7 +1167,7 @@ test.describe('Calendar view', () => {
     if (!box2) throw new Error('chip not visible after resize')
     await page.mouse.move(box2.x + box2.width / 2, box2.y + 6)
     await page.mouse.down()
-    await page.mouse.move(box2.x + box2.width / 2, box2.y + 6 + 96, { steps: 10 })
+    await page.mouse.move(box2.x + box2.width / 2, box2.y + 6 + hourPx * 2, { steps: 10 })
     await page.mouse.up()
     await expect
       .poll(async () => (await getTaskViaApi(task.id)).start_date, { timeout: 5000 })

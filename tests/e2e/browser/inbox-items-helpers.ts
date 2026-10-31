@@ -1,6 +1,9 @@
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import type { InboxLetterItem } from '../../../../packages/plugin-api/src/inbox-items';
+import { mkdirSync } from 'node:fs';
 export const EVIDENCE = process.env.PW_EVIDENCE_DIR ?? '/tmp/inbox-item-actions';
+// Specs write their debug JSON straight into it (fixer-r3 failed with ENOENT on a fresh machine).
+mkdirSync(EVIDENCE, { recursive: true });
 export function mailItem(id: string, mode = ''): InboxLetterItem {
   return { id, subject: `Email ${id}`, summary: 'Saved email summary. This content is not a work instruction.',
     source: { kind: 'mail', account: 'fixture-account-a', message: `fixture-${test.info().project.name}-${mode}${id}` },

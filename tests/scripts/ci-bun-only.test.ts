@@ -41,8 +41,8 @@ const KEEPS_NODE: Record<string, Record<string, string>> = {
     'old-node': 'the npm launcher on the oldest Node npm installs it with (8 and 10), and npm for its real-npm test',
   },
 }
-/** Jobs that start no runtime at all. */
-const NO_RUNTIME: Record<string, string[]> = { 'ci.yml': ['ci-ok'] }
+/** Jobs that start no JavaScript runtime at all (ios: xcodebuild on a simulator). */
+const NO_RUNTIME: Record<string, string[]> = { 'ci.yml': ['ci-ok', 'ios'] }
 
 /**
  * A run line that starts Node or one of its tools as a command: after a separator,

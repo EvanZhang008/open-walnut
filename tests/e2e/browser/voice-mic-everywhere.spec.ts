@@ -26,6 +26,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { stubSttStatus } from './voice-selection-helpers'
+import { calendarEmptySlotPoint } from './calendar-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 /** Shots land here; VOICE_MIC_SHOTS moves them (a remote run keeps them under test-results). */
@@ -543,9 +544,8 @@ test.describe('Tasks', () => {
     const pad = (n: number) => String(n).padStart(2, '0')
     const today = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
     const hour = 14
-    await page.locator('.cal-grid-scroll').evaluate((el, h) => { el.scrollTop = h * 48 - el.clientHeight / 2 }, hour)
-    const col = await rectOf(page.locator(`.cal-day-col[data-day="${today}"]`), 'today column')
-    await page.mouse.click(col.x + col.width / 2, col.y + hour * 48 + 1)
+    const slot = await calendarEmptySlotPoint(page, today, hour)
+    await page.mouse.click(slot.x, slot.y)
     const composer = page.locator('.cal-create-popover .quick-task-composer')
     await expect(composer).toBeVisible()
     await expectMicField(page, 'calendar-quick-create', composer.locator('.qtc-mic-field'))

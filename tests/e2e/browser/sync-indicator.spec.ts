@@ -9,7 +9,7 @@
  * Relies on seeded tasks in test-server.ts:
  * - pw-task-plugina-synced: source=plugin-a, ext set
  * - pw-task-plugina-unsynced: source=plugin-a, no ext
- * - pw-task-001: source=ms-todo, no ms_todo_id
+ * - pw-task-ms-unsynced: source=ms-todo, no ms_todo_id (project Errands, which To Do owns)
  */
 import { test, expect } from '@playwright/test'
 import { showEverything } from './todo-panel-helpers'
@@ -52,7 +52,7 @@ test.describe('TaskCard SyncIndicator', () => {
   test('unsynced MS To-Do task shows unsynced indicator', async ({ page }) => {
     await showAllStatuses(page)
 
-    const taskCard = page.locator('.tp-row', { hasText: 'Playwright test task' })
+    const taskCard = page.locator('.tp-row', { hasText: 'MS To-Do unsynced task' })
     await expect(taskCard).toBeVisible({ timeout: 5000 })
 
     const indicator = taskCard.locator('.sync-indicator')

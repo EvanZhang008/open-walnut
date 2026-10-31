@@ -1,4 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
+import { calendarEmptySlotPoint } from './calendar-helpers'
+import { patchClientConfig } from './draft-helpers'
 
 interface ApiTask {
   id: string
@@ -25,12 +27,16 @@ async function openComposer(page: Page): Promise<void> {
   const today = new Date()
   const pad = (n: number) => String(n).padStart(2, '0')
   const day = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`
-  await page.locator('.cal-grid-scroll').evaluate((el) => { el.scrollTop = 14 * 48 - el.clientHeight / 2 })
-  const box = await page.locator(`.cal-day-col[data-day="${day}"]`).boundingBox()
-  if (!box) throw new Error(`day column ${day} not visible`)
-  await page.mouse.click(box.x + box.width / 2, box.y + 14 * 48 + 12)
+  const slot = await calendarEmptySlotPoint(page, day)
+  await page.mouse.click(slot.x, slot.y)
   await expect(page.locator('.cal-create-popover .quick-task-composer')).toBeVisible()
 }
+
+// The parse is opt-in (`agent.quick_parse`, default off since 2026-09-17,
+// useQuickParse.ts), so with the fixture's config the composer never asked and every
+// parse test here waited for a request that could not come. Turned on for this page
+// only (the fixture server is shared); every test stubs /api/tasks/quick-parse.
+test.beforeEach(async ({ page }) => { await patchClientConfig(page, { quickParse: true }) })
 
 async function listTasks(request: APIRequestContext): Promise<ApiTask[]> {
   const response = await request.get('/api/tasks')
@@ -286,6 +292,8 @@ test('panel overrides pin, project, priority, and star before create', async ({ 
     body: JSON.stringify({ title, pinTier: 'focus', project: parsedProject }),
   }))
   const existingIds = new Set((await listTasks(request)).map((task) => task.id))
+  // The priority chip shows only with `ui.show_priority` (off by default).
+  await patchClientConfig(page, { quickParse: true, showPriority: true })
 
   await openComposer(page)
   await page.locator('.qtc-input').fill('plan shopping trip')

@@ -223,11 +223,42 @@ await fs.mkdir(linkFixtureRoot, { recursive: true })
 await fs.writeFile(path.join(linkFixtureRoot, 'MATRIX-r5.md'), '# Test matrix r5\n')
 await fs.writeFile(path.join(linkFixtureRoot, 'FIX-PLAN-r5b.md'), '# Fix plan r5b\n')
 
+/**
+ * Refuse a seed the task-db migration would rewrite: a task whose source is not its
+ * project's owner boots as that owner, with its plugin link dropped, and the specs
+ * that read its badge fail far from the cause. The owner is the source of the
+ * project's category in `categories`, else local.
+ */
+function checkSeedSources<T extends { categories?: Record<string, { source: string }>; tasks: Array<{ id: string; source?: string; project?: string; category?: string }> }>(seed: T): T {
+  // The owner is the project's, matched without case as the migration matches it;
+  // every task of the project must carry it, also one with no `category` of its own.
+  const owners = new Map(Object.entries(seed.categories ?? {}).map(([name, c]) => [name.toLowerCase(), c.source]))
+  const bad = seed.tasks.filter((t) => {
+    if (t.project && t.category !== undefined && t.category !== t.project) return true
+    const owner = t.project ? owners.get(t.project.toLowerCase()) ?? 'local' : 'local'
+    return (t.source ?? 'local') !== owner
+  })
+  if (bad.length) {
+    throw new Error(`test-server seed: these tasks' source is not their project's owner (seed categories): ${bad.map((t) => `${t.id} (${t.source} in ${t.project || 'Inbox'})`).join(', ')}`)
+  }
+  return seed
+}
+
 // Seed test data
 await fs.writeFile(
   path.join(tasksDir, 'tasks.json'),
-  JSON.stringify({
+  JSON.stringify(checkSeedSources({
     version: 1,
+    // A project belongs to one source: the task-db migration moves every task onto
+    // its project's owner, read from the legacy `categories` map (task-db-migration.ts).
+    // Seeded plugin tasks inside the local Walnut project booted as local, so every
+    // badge and sync spec saw "L" (2026-10-31, plugin-system.spec.ts and
+    // sync-indicator.spec.ts). Each plugin's tasks live in a project it owns.
+    categories: {
+      Atlas: { source: 'plugin-a' },
+      Backend: { source: 'plugin-b' },
+      Errands: { source: 'ms-todo' },
+    },
     tasks: [
       {
         id: 'pw-task-001',
@@ -236,7 +267,7 @@ await fs.writeFile(
         phase: 'IN_PROGRESS',
         priority: 'immediate',
         project: 'Walnut',
-        source: 'ms-todo',
+        source: 'local',
         session_ids: [
           'pw-mode-test-session',
           // Synthetic UUID used by the delayed semantic-search regression spec.
@@ -1158,7 +1189,8 @@ await fs.writeFile(
         status: 'todo',
         phase: 'TODO',
         priority: 'none',
-        project: 'Walnut',
+        project: 'Atlas',
+        category: 'Atlas',
         source: 'plugin-a',
         ext: { 'plugin-a': { id: 'PA-123', short_id: 'A-123' } },
         external_url: 'https://plugin-a.example.com/tasks/A-123',
@@ -1178,7 +1210,8 @@ await fs.writeFile(
         status: 'todo',
         phase: 'TODO',
         priority: 'immediate',
-        project: 'Walnut',
+        project: 'Atlas',
+        category: 'Atlas',
         source: 'plugin-a',
         session_ids: [],
         active_session_ids: [],
@@ -1196,6 +1229,7 @@ await fs.writeFile(
         phase: 'IN_PROGRESS',
         priority: 'important',
         project: 'Backend',
+        category: 'Backend',
         source: 'plugin-b',
         ext: { 'plugin-b': { issue_id: '10042', issue_key: 'BE-42', project_key: 'BE' } },
         external_url: 'https://plugin-b.example.com/browse/BE-42',
@@ -1272,7 +1306,8 @@ await fs.writeFile(
         status: 'todo',
         phase: 'TODO',
         priority: 'important',
-        project: 'Walnut',
+        project: 'Errands',
+        category: 'Errands',
         source: 'ms-todo',
         sync_error: 'Graph API 401: Token expired',
         session_ids: [],
@@ -1291,9 +1326,28 @@ await fs.writeFile(
         phase: 'TODO',
         priority: 'none',
         project: 'Errands',
+        category: 'Errands',
         source: 'ms-todo',
         ext: { 'ms-todo': { id: 'AAMkAGI2', list: 'list-1' } },
         external_url: 'https://to-do.microsoft.com',
+        session_ids: [],
+        active_session_ids: [],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        id: 'pw-task-ms-unsynced',
+        title: 'MS To-Do unsynced task',
+        status: 'todo',
+        phase: 'TODO',
+        priority: 'none',
+        project: 'Errands',
+        category: 'Errands',
+        source: 'ms-todo',
         session_ids: [],
         active_session_ids: [],
         created_at: new Date().toISOString(),
@@ -1310,7 +1364,7 @@ await fs.writeFile(
         phase: 'IN_PROGRESS',
         priority: 'immediate',
         project: 'Walnut',
-        source: 'ms-todo',
+        source: 'local',
         session_ids: [],
         active_session_ids: [],
         created_at: new Date().toISOString(),
@@ -1327,7 +1381,7 @@ await fs.writeFile(
         phase: 'NEED_ACTION',
         priority: 'none',
         project: 'Walnut',
-        source: 'ms-todo',
+        source: 'local',
         session_ids: [],
         active_session_ids: [],
         created_at: new Date().toISOString(),
@@ -1345,7 +1399,7 @@ await fs.writeFile(
         phase: 'IN_PROGRESS',
         priority: 'immediate',
         project: 'Walnut',
-        source: 'ms-todo',
+        source: 'local',
         session_id: 'pw-model-switch-session',
         session_status: { process_status: 'running', mode: 'bypass' },
         session_ids: ['pw-model-switch-session'],
@@ -1408,7 +1462,7 @@ await fs.writeFile(
         phase: 'IN_PROGRESS',
         priority: 'immediate',
         project: 'Walnut',
-        source: 'ms-todo',
+        source: 'local',
         session_ids: [],
         active_session_ids: [],
         created_at: new Date().toISOString(),
@@ -1535,7 +1589,7 @@ await fs.writeFile(
       },
       ...kanbanSeedTasks(agoIso),
     ],
-  }),
+  })),
 )
 
 // Seed sessions.json with plan-mode session data for plan mode browser tests
@@ -4769,7 +4823,11 @@ if (builtSpa && !process.env.WALNUT_WEB_STATIC_DIR) {
   throw new Error('PW_BUILT_SPA requires WALNUT_WEB_STATIC_DIR')
 }
 const apiServer = await startServer({ port: builtSpa ? testPort : 0, dev: !builtSpa })
-if (process.env.PW_INBOX_ITEMS_FIXTURE === '1') {
+// The inbox item specs' mail provider (fixture-* accounts only). It was behind
+// PW_INBOX_ITEMS_FIXTURE=1, which neither playwright.config.ts nor CI ever set, so
+// every human-inbox-items spec met "the exact source is not in the mail cache"
+// (2026-10-31: 12 tests, every run). On unless a run turns it off.
+if (process.env.PW_INBOX_ITEMS_FIXTURE !== '0') {
   const { installInboxItemsFixture } = await import('./inbox-items-fixture')
   await installInboxItemsFixture(tmpBase)
 }

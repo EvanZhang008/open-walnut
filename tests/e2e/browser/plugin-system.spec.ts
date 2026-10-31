@@ -4,14 +4,15 @@
  * Verifies sync badges, source routing, display metadata, and error states
  * render correctly across TodoPanel (main page) and TaskCard (dashboard).
  *
- * Relies on seeded tasks in test-server.ts:
- * - pw-task-001:              source=ms-todo, no ext (unsynced)
- * - pw-task-plugina-synced:   source=plugin-a, ext.plugin-a.id set (synced)
- * - pw-task-plugina-unsynced: source=plugin-a, no ext (unsynced)
+ * Relies on seeded tasks in test-server.ts. A project belongs to one source, so
+ * each plugin's tasks sit in a project that plugin owns (the seed's `categories`):
+ * - pw-task-plugina-synced:   source=plugin-a, ext.plugin-a.id set (synced), project=Atlas
+ * - pw-task-plugina-unsynced: source=plugin-a, no ext (unsynced), project=Atlas
  * - pw-task-pluginb-synced:   source=plugin-b, ext.plugin-b set (synced), project=Backend
  * - pw-task-local:            source=local, project=Ideas
- * - pw-task-sync-error:       source=ms-todo, sync_error set
+ * - pw-task-sync-error:       source=ms-todo, sync_error set, project=Errands
  * - pw-task-ms-synced:        source=ms-todo, ext.ms-todo set (synced), project=Errands
+ * - pw-task-ms-unsynced:      source=ms-todo, no ext (unsynced), project=Errands
  */
 import { test, expect } from '@playwright/test'
 import { showEverything } from './todo-panel-helpers'
@@ -29,6 +30,20 @@ async function showAllTasksInTodoPanel(page: import('@playwright/test').Page) {
   await page.waitForTimeout(300)
 }
 
+/**
+ * The source row of a task's menu. The badge left the panel's rows for the menu
+ * (TaskKebabMenu.tsx: the badge, then the integration's name and its sync state),
+ * so the row-badge classes and tooltip these tests read are gone.
+ */
+async function openSourceRow(page: import('@playwright/test').Page, taskTitle: string) {
+  const todoItem = page.locator('.todo-panel-item', { hasText: taskTitle })
+  await expect(todoItem).toBeVisible({ timeout: 5000 })
+  await todoItem.getByRole('button', { name: 'More actions' }).click()
+  const sourceRow = page.locator('.task-kebab-menu .task-kebab-info')
+  await expect(sourceRow).toBeVisible()
+  return sourceRow
+}
+
 async function goToDashboard(page: import('@playwright/test').Page) {
   await page.goto('/tasks')
   await page.waitForLoadState('networkidle')
@@ -42,9 +57,9 @@ test.describe('1. App loads with plugin system', () => {
     await page.screenshot({ path: 'playwright-report/plugin-01-app-load.png' })
     await expect(page.locator('.todo-panel')).toBeVisible()
 
-    // At least one task-source-badge should be visible
-    const badges = page.locator('.task-source-badge')
-    await expect(badges.first()).toBeVisible({ timeout: 5000 })
+    // A seeded plugin task's menu names its source with the badge.
+    const sourceRow = await openSourceRow(page, 'PluginA synced task')
+    await expect(sourceRow.locator('.task-source-badge')).toBeVisible()
   })
 })
 
@@ -67,18 +82,16 @@ test.describe('2. Create task — source auto-assigned', () => {
   test('task appears in UI with source badge after page load', async ({ page }) => {
     // Create task, then load page — task should be in the todo panel
     const title = `Plugin badge test ${Date.now()}`
+    // Unpinned, so it is a row of the task list (a create is born pinned: ddda11ac4).
     await page.request.post(`${API}/api/tasks`, {
-      data: { title },
+      data: { title, pinned: false },
     })
 
     await showAllTasksInTodoPanel(page)
 
-    const taskItem = page.locator('.todo-panel-item', { hasText: title })
-    await expect(taskItem).toBeVisible({ timeout: 5000 })
+    const sourceRow = await openSourceRow(page, title)
     await page.screenshot({ path: 'playwright-report/plugin-02-badge-visible.png' })
-
-    const badge = taskItem.locator('.task-source-badge')
-    await expect(badge).toBeVisible()
+    await expect(sourceRow.locator('.task-source-badge')).toHaveText('L')
   })
 })
 
@@ -252,76 +265,50 @@ test.describe('7. Task detail page', () => {
   })
 })
 
-// ── 8. TodoPanel source badges ──
+// ── 8. The source row of a task's menu ──
 
-test.describe('8. TodoPanel source badges', () => {
-  test('synced plugin-a badge: no error/unsynced class', async ({ page }) => {
+test.describe('8. Task menu source row', () => {
+  test('synced plugin-a task: badge, no sync warning', async ({ page }) => {
     await showAllTasksInTodoPanel(page)
-
-    const todoItem = page.locator('.todo-panel-item', { hasText: 'PluginA synced task' })
-    await expect(todoItem).toBeVisible({ timeout: 5000 })
-
-    const badge = todoItem.locator('.task-source-badge')
-    await expect(badge).not.toHaveClass(/task-source-badge-error/)
-    await expect(badge).not.toHaveClass(/task-source-badge-unsynced/)
+    const sourceRow = await openSourceRow(page, 'PluginA synced task')
+    await expect(sourceRow.locator('.task-source-badge')).toBeVisible()
+    await expect(sourceRow).not.toContainText('(unsynced)')
+    await expect(sourceRow).not.toContainText('(sync error)')
     await page.screenshot({ path: 'playwright-report/plugin-08-badge-synced-plugina.png' })
   })
 
-  test('unsynced plugin-a badge: with unsynced class', async ({ page }) => {
+  test('unsynced plugin-a task: says unsynced', async ({ page }) => {
     await showAllTasksInTodoPanel(page)
-
-    const todoItem = page.locator('.todo-panel-item', { hasText: 'PluginA unsynced task' })
-    await expect(todoItem).toBeVisible({ timeout: 5000 })
-
-    const badge = todoItem.locator('.task-source-badge')
-    await expect(badge).toHaveClass(/task-source-badge-unsynced/)
+    const sourceRow = await openSourceRow(page, 'PluginA unsynced task')
+    await expect(sourceRow).toContainText('(unsynced)')
   })
 
-  test('sync error badge: "!" with error class and tooltip', async ({ page }) => {
+  test('sync error task: "!" and says sync error', async ({ page }) => {
     await showAllTasksInTodoPanel(page)
-
-    const todoItem = page.locator('.todo-panel-item', { hasText: 'Sync error task' })
-    await expect(todoItem).toBeVisible({ timeout: 5000 })
-
-    const badge = todoItem.locator('.task-source-badge')
-    await expect(badge).toHaveText('!')
-    await expect(badge).toHaveClass(/task-source-badge-error/)
-    await expect(badge).toHaveAttribute('title', /Sync error.*Token expired/)
+    const sourceRow = await openSourceRow(page, 'Sync error task')
+    await expect(sourceRow.locator('.task-source-badge')).toHaveText('!')
+    await expect(sourceRow).toContainText('(sync error)')
     await page.screenshot({ path: 'playwright-report/plugin-08-badge-sync-error.png' })
   })
 
-  test('local badge: "L" with local tooltip', async ({ page }) => {
+  test('local task: "L"', async ({ page }) => {
     await showAllTasksInTodoPanel(page)
-
-    const todoItem = page.locator('.todo-panel-item', { hasText: 'Local only task' })
-    await expect(todoItem).toBeVisible({ timeout: 5000 })
-
-    const badge = todoItem.locator('.task-source-badge')
-    await expect(badge).toHaveText('L')
-    await expect(badge).toHaveAttribute('title', /Local only/)
+    const sourceRow = await openSourceRow(page, 'Local only task')
+    await expect(sourceRow.locator('.task-source-badge')).toHaveText('L')
     await page.screenshot({ path: 'playwright-report/plugin-08-badge-local.png' })
   })
 
-  test('MS To-Do synced badge: "M"', async ({ page }) => {
+  test('MS To-Do synced task: "M"', async ({ page }) => {
     await showAllTasksInTodoPanel(page)
-
-    const todoItem = page.locator('.todo-panel-item', { hasText: 'MS To-Do synced task' })
-    await expect(todoItem).toBeVisible({ timeout: 5000 })
-
-    const badge = todoItem.locator('.task-source-badge')
-    await expect(badge).toHaveText('M')
-    await expect(badge).not.toHaveClass(/task-source-badge-unsynced/)
-    await expect(badge).not.toHaveClass(/task-source-badge-error/)
+    const sourceRow = await openSourceRow(page, 'MS To-Do synced task')
+    await expect(sourceRow.locator('.task-source-badge')).toHaveText('M')
   })
 
-  test('PluginB synced badge visible', async ({ page }) => {
+  test('PluginB synced task: badge, no sync warning', async ({ page }) => {
     await showAllTasksInTodoPanel(page)
-
-    const todoItem = page.locator('.todo-panel-item', { hasText: 'PluginB synced task' })
-    await expect(todoItem).toBeVisible({ timeout: 5000 })
-
-    const badge = todoItem.locator('.task-source-badge')
-    await expect(badge).not.toHaveClass(/task-source-badge-unsynced/)
+    const sourceRow = await openSourceRow(page, 'PluginB synced task')
+    await expect(sourceRow.locator('.task-source-badge')).toBeVisible()
+    await expect(sourceRow).not.toContainText('(unsynced)')
   })
 })
 
@@ -347,15 +334,9 @@ test.describe('9. Multi-project source assignment', () => {
 // ── 10. Sync error / tooltip details ──
 
 test.describe('10. Sync error and tooltip details', () => {
-  test('TodoPanel error badge tooltip has full error message', async ({ page }) => {
-    await showAllTasksInTodoPanel(page)
-
-    const badge = page.locator('.todo-panel-item', { hasText: 'Sync error task' }).locator('.task-source-badge')
-    const tooltip = await badge.getAttribute('title')
-    expect(tooltip).toContain('Sync error')
-    expect(tooltip).toContain('Token expired')
-    await page.screenshot({ path: 'playwright-report/plugin-10-error-tooltip.png' })
-  })
+  // "TodoPanel error badge tooltip has full error message" was deleted 2026-10-31:
+  // the panel's rows have no badge or tooltip now (section 8 reads the menu's), and
+  // the full error text is the Dashboard's, below.
 
   test('Dashboard error indicator tooltip has full error message', async ({ page }) => {
     await goToDashboard(page)

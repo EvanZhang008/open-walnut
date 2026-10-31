@@ -116,6 +116,10 @@ bun run test:browser:baseline [playwright args]                                 
 
 A test counts as failed only when it failed on every retry: flaky is a pass, and a test that never ran (skipped, or cut off by a shard's 45-minute `--global-timeout`) is neutral. `record` only adds: new failures go in, and a test gone from a spec file that ran goes out. A known failure that passes stays, because about 86 of them came and went between two CI runs of one day; after fixing one, prune it from a run that repeats the fixed specs: `bun scripts/browser-baseline.mjs record --prune --run --repeat-each=3 <specs>`. With eight shards, six ran out of time and about 760 tests never ran in two runs in a row; sixteen fit. `Browser baseline` is not in `CI OK`, so a release never waits on it, but its red turns the run red. Fix the clusters at the root; a spec that tests a removed feature is deleted, with the reason in its commit.
 
+### The iOS app's tests
+
+The `iOS app` job (`ios` in `ci.yml`, two legs on `macos-26`) runs the phone app's tests on a simulator for every push to main and every pull request: `unit` runs `xcodebuild test -only-testing:WalnutTests`, `ui` runs WalnutUITests through `ios-native/tests/ui/run-ui-tests.sh` at its offline pairing (a dead loopback port). It reads no secret and signs nothing; a TestFlight build needs the signing certificate and the App Store Connect key, which are the owner's to add. It is not in `CI OK`, and the `ui` leg may fail without failing the run (`continue-on-error`), until both have a record of green runs. `tests/scripts/ci-ios.test.ts` pins that shape.
+
 ### A superseded run is not red
 
 A newer push cancels the run in progress (`concurrency` with `cancel-in-progress`). `CI OK` used to run under `if: always()` and judge the cancelled legs, so every quick re-push left a red run behind: 6 of the 9 red runs on main between 2026-10-02 and 10-04. It now runs under `if: ${{ !cancelled() }}`: a run that ends cancelled has no verdict, and `scripts/ci-gate.mjs` reads it as `cancelled`, never `red`. A job that hits its timeout does not cancel the run, so `CI OK` still runs and fails on it.
