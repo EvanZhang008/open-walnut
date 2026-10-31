@@ -41,11 +41,14 @@ const DRAFTED = 'why does phase'
 const ANY_WORDS = /why does phase/
 
 /** A fake capture device for the dictation tests. File level, because Playwright
- *  refuses launchOptions inside a describe; WebKit ignores these Chromium args. The
- *  microphone PERMISSION is granted per test: WebKit rejects that name outright. */
+ *  refuses launchOptions inside a describe; Chromium only, because Linux WebKit refuses to
+ *  launch with them (macOS WebKit ignores them). The microphone PERMISSION is granted per
+ *  test: WebKit rejects that name outright. */
 test.use({
   viewport: { width: 1280, height: 800 },
-  launchOptions: { args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] },
+  launchOptions: async ({ browserName }, use) => {
+    await use(browserName === 'chromium' ? { args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] } : {})
+  },
 })
 
 test.beforeAll(async () => {
@@ -312,9 +315,10 @@ test.describe('Inbox letter', () => {
     })
     await home(page)
     const reader = await openLetter(page, subject)
-    const field = reader.locator('.hib-actions .mic-field').filter({ has: page.locator('.hib-freetext') })
-    await expect(field.locator('.hib-freetext')).toHaveAttribute('placeholder', 'Optional note to send with your choice')
-    await expectMicField(page, 'inbox-choice-note', field)
+    // The shared AnswerBox: the mic in the bar, beside the words.
+    const bar = reader.locator('.hib-actions .answer-box').filter({ has: page.locator('.hib-freetext') })
+    await expect(bar.locator('.hib-freetext')).toHaveAttribute('placeholder', 'Optional note to send with your choice')
+    await expectBoxMic(page, 'inbox-choice-note', bar.locator('.hib-freetext'), bar)
   })
 
   test('dictation into the reply box lands there, a send clears it, a send mid-recording stops it', async ({ page, request, browserName }) => {
@@ -328,7 +332,7 @@ test.describe('Inbox letter', () => {
     const reader = await openLetter(page, subject)
     const box = reader.locator('.hib-composer-input')
     const mic = reader.locator('.hib-composer .box-mic .mic-btn')
-    await dictateInto(page, box, mic, 'hib-composer-input', seen)
+    await dictateInto(page, box, mic, 'answer-box-input hib-composer-input', seen)
     await crop(page, 'dictation-inbox-landed', union(await rectOf(box, 'reply box'), await rectOf(mic, 'reply mic')))
     const words = await box.inputValue()
     await reader.locator('.hib-send-btn').click()
@@ -488,6 +492,38 @@ test.describe('Org page', () => {
     const composer = detail.getByTestId('org-composer')
     await expect(composer).toBeVisible({ timeout: 30_000 })
     await expectBoxMic(page, 'org-composer', composer.locator('textarea'), composer)
+  })
+
+  test('an ask\'s answer box on the Task rail is the AnswerBox: it grows, has no grip, and dictation lands in it', async ({ page, request, browserName }) => {
+    test.setTimeout(180_000)
+    const { fixtureRoot } = await discoverBrowserFixture(TEST_PORT)
+    const asker = await createTask(request, made, { title: `Voice mic ask ${STAMP}`, project })
+    await startSession(request, `${fixtureRoot}/projects/walnut`, asker, `Voice mic ask ready ${STAMP}`)
+    const res = await request.patch(`/api/tasks/${asker}`, { data: { phase: 'NEED_ACTION' } })
+    expect(res.ok(), await res.text()).toBe(true)
+    const seen = await stubDictation(page)
+    if (browserName === 'chromium') await page.context().grantPermissions(['microphone'])
+    await home(page)
+    await page.getByTestId('sidebar-org').click()
+    await expect(page.getByTestId('org-page')).toBeVisible({ timeout: 30_000 })
+    await page.locator(`[data-testid="org-channel"][data-key="project:${project.toLowerCase()}"]`).click()
+    const card = page.locator(`[data-testid="org-alert"][data-task-id="${asker}"]`)
+    await expect(card).toBeVisible({ timeout: 60_000 })
+    const bar = card.getByTestId('org-answer-input-box')
+    const box = card.getByTestId('org-answer-input')
+    await expect(box).toBeVisible({ timeout: 30_000 })
+    const mic = bar.locator('.box-mic .mic-btn')
+    await expectBoxMic(page, 'org-rail-answer', box, bar)
+    // The composer's bar: no native resize grip, and it grows with the words.
+    expect(await box.evaluate((el) => getComputedStyle(el).resize)).toBe('none')
+    const one = (await box.boundingBox())!.height
+    await box.fill('one\ntwo\nthree')
+    await expect.poll(async () => (await box.boundingBox())!.height).toBeGreaterThan(one + 20)
+    await box.fill('')
+    await crop(page, `org-rail-answer-bar`, await rectOf(bar, 'answer bar'))
+    if (browserName !== 'chromium') return
+    await dictateInto(page, box, mic, 'answer-box-input', seen)
+    await crop(page, 'dictation-org-rail-landed', await rectOf(bar, 'answer bar'))
   })
 })
 

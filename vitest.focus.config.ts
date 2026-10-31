@@ -33,6 +33,7 @@ const config = mergeConfig(
         '@open-walnut/ask-list': path.resolve(import.meta.dirname, 'src/core/sessions/ask-list.ts'),
         '@open-walnut/org-tree': path.resolve(import.meta.dirname, 'src/core/org/org-tree.ts'),
         '@open-walnut/user-status': path.resolve(import.meta.dirname, 'src/core/user-status.ts'),
+        '@open-walnut/message-about': path.resolve(import.meta.dirname, 'src/core/org/message-about.ts'),
         '@open-walnut/live-activity': path.resolve(import.meta.dirname, 'src/core/live-activity.ts'),
         '@open-walnut/brief-structure': path.resolve(import.meta.dirname, 'src/core/sessions/brief-structure.ts'),
         '@open-walnut/brief-fresh': path.resolve(import.meta.dirname, 'src/core/sessions/brief-fresh.ts'),

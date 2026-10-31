@@ -278,4 +278,9 @@ export interface SessionHistoryMessage {
   /** User rows whose display differs from what the model received: the text as
    *  received, every hint included (the raw view). */
   rawText?: string;
+  /** Assistant rows: the tasks this message is about (src/core/org/message-about.ts), drawn under it
+   *  in an Org node's chat. */
+  about?: string[];
+  /** `about` came from the message's own `<walnut-about>` line. */
+  aboutTagged?: boolean;
 }

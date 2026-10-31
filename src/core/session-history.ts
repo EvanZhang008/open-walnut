@@ -43,6 +43,7 @@ import { backfillMirrorSidecar, resolveSessionMirrorPath, looksAlreadyMirrored, 
 import { isCacheWarmupText } from './sessions/side-thread-warmup.js';
 import { noteMessageBlockTypes, noteTranscriptLineType } from './transcript-line-types.js';
 import { _resetTailWindowsForTesting, dropTailWindows, setTailWindowShedding } from './history-tail-window.js';
+import { messageAbout, readAboutTag } from './org/message-about.js';
 import {
   SIDE_THREAD_DIGEST_TAG, stripSideThreadDigestRequest,
 } from './sessions/side-thread-digest.js';
@@ -688,6 +689,12 @@ export interface SessionHistoryMessage {
   /** User rows whose display differs from what the model received: the text as
    *  received, hints and every other machine wrapper included (the raw view). */
   rawText?: string;
+  /** Assistant rows: the tasks this message is about (core/org/message-about.ts), drawn under it
+   *  in Main's, a VP's and a lead's chat: the `<walnut-about>` line it ended with (taken off
+   *  `text`), else its turn's asker and the tasks the turn sent to. */
+  about?: string[];
+  /** `about` came from the message's own line, not the turn's fallback. */
+  aboutTagged?: boolean;
 }
 
 export interface PaginationMeta {
@@ -1811,6 +1818,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
   }
 
   floatQueuedRows(result, resultParentIds);
+  markMessageAbout(result, resultParentIds);
 
   // Group inline subagent children (e.g. Agent tool calls from Claude Code).
   // Unlike Task tools (which have separate JSONL files), Agent children are inline
@@ -1843,6 +1851,40 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
   // and seedIncrementalState can reuse the exact set for its segment parses.
   if (chainMark) chainFilterMarks.set(grouped, chainMark);
   return grouped;
+}
+
+/** Rows a subagent wrote (they had a parent tool), remembered across the incremental read's re-pass. */
+const aboutChildRows = new WeakSet<SessionHistoryMessage>();
+
+/**
+ * Each top-level assistant row's tasks (message-about.ts); the `<walnut-about>` line leaves its text.
+ * Runs again over the incremental read's merged rows (prefix + new tail), because a turn's fallback
+ * reads from where the turn began, which may sit in the frozen prefix: a tagged row keeps what its
+ * tag said (its line is gone by then), every other row is computed afresh.
+ */
+function markMessageAbout(rows: SessionHistoryMessage[], parentIds: readonly (string | undefined)[] = []): void {
+  const top: number[] = [];
+  rows.forEach((row, i) => {
+    if (parentIds[i]) aboutChildRows.add(row);
+    // A child row whose parent tool is not in the file stays top level after grouping: still a child.
+    else if (!aboutChildRows.has(row)) top.push(i);
+  });
+  const about = messageAbout(top.map((i) => rows[i]!));
+  top.forEach((i, k) => {
+    const row = rows[i]!;
+    if (row.aboutTagged) return;
+    // The line leaves the text even when it named no task.
+    if (row.role === 'assistant' && row.text.includes('<walnut-about')) {
+      const tag = readAboutTag(row.text);
+      row.text = tag.text;
+      // A tag naming no task still settles it: no fallback on a later pass.
+      if (tag.tagged) row.aboutTagged = true;
+    }
+    const hit = about.get(k);
+    if (!hit) { delete row.about; return; }
+    row.about = hit.ids;
+    if (hit.tagged) row.aboutTagged = true;
+  });
 }
 
 /**
@@ -2062,6 +2104,8 @@ async function tryIncrementalHistoryRead(
       chainFilter: { deadUuids: inc.deadUuids, queueDeadKeys: inc.queueDeadKeys },
     });
     const messages = [...inc.prefixMessages, ...tailMessages];
+    // A turn begun in the prefix gives its asker to the tail's replies (grouped rows: all top level).
+    markMessageAbout(messages);
 
     // Orphan finished-agent ids: the tail parse only marked tailMessages (a
     // different object), and the merged array is new — union the cached ids

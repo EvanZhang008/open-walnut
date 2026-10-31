@@ -17,6 +17,7 @@ import { apiGet, apiPut } from '@/api/client';
 import { answerLetter } from '@/api/human-inbox';
 import { retrySession } from '@/api/sessions';
 import { KanbanCardPrompt } from '@/components/board/kanban/KanbanCardPrompt';
+import { AnswerBox } from '@/components/common/AnswerBox';
 import { getLetterSnapshot, loadLetters, patchLetter, subscribeLetters } from '@/components/inbox/letter-store';
 import { useSessionSend } from '@/hooks/useSessionSend';
 import { useDraft } from '@/hooks/useDraft';
@@ -30,7 +31,7 @@ import { answerMessage, formOptions, inlineShape, type AskOption } from './org-a
 import type { OrgAlertView } from './org-channels-model';
 
 /** Where an answer failed: the reason, and the words the user had typed, to put back. */
-export interface AnswerFailure { message: string; draft?: string }
+export interface AnswerFailure { message: string; draft?: string; /** What failed: an answer (default), or the row's snooze, which the row says itself. */ of?: 'answer' | 'snooze' }
 /** Settles an answer sent from a row: no argument once it was taken, a failure to bring the row back. */
 export type AnswerSettle = (failure?: AnswerFailure) => void;
 
@@ -49,7 +50,7 @@ function Options({ options, recommended, onPick, testId }: {
           className={`btn btn-sm${o.value === recommended ? ' btn-primary' : ''}`}
           data-testid="org-answer-option"
           data-value={o.value}
-          title={o.title ?? (o.value === recommended ? 'Recommended' : o.label)}
+          {...(o.title || o.value === recommended ? { 'aria-description': o.title ?? 'Recommended' } : {})}
           onClick={() => onPick(o.value)}
         >{o.label}</button>
       ))}
@@ -71,25 +72,20 @@ function WordsField({ placeholder, initial = '', draftKey: key, onSend, sendLabe
   const [plain, setPlain] = useState(initial);
   const text = key ? draft.text : plain;
   const setText = key ? draft.setText : setPlain;
-  const send = () => { const t = text.trim(); if (t) { draft.flush(); onSend(t); } };
+  const send = (t: string) => { draft.flush(); onSend(t); };
   return (
-    <div className="org-answer-words">
-      <textarea
-        className="org-answer-input"
-        data-testid="org-answer-input"
-        data-draft-key={key ?? undefined}
-        rows={1}
-        value={text}
-        placeholder={placeholder}
-        autoFocus={autoFocus}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          // Enter sends, Shift+Enter breaks the line.
-          if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
-        }}
-      />
-      <button type="button" className="btn btn-sm btn-primary" data-testid="org-answer-send" disabled={!text.trim()} onClick={send}>{sendLabel}</button>
-    </div>
+    <AnswerBox
+      className="org-answer-words"
+      testId="org-answer-input"
+      sendTestId="org-answer-send"
+      draftKey={key}
+      value={text}
+      placeholder={placeholder}
+      autoFocus={autoFocus}
+      onChange={setText}
+      onSubmit={send}
+      sendLabel={sendLabel}
+    />
   );
 }
 

@@ -38,7 +38,8 @@ import { askAILabel } from './item-receipt-model';
 import { refreshWatchedItems } from './item-store';
 import { senderLabelOf } from './LetterEnvelopeRow';
 import { useLetterEvents } from '@/hooks/useHumanInbox';
-import { BoxMic, MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { type BoxMicHandle } from '@/components/common/BoxMic';
+import { AnswerBox } from '@/components/common/AnswerBox';
 import { useLetterEnvelope } from './letter-store';
 import { sessionInboxLetterHref } from './session-inbox-link';
 import { useThreadPane } from './useThreadPane';
@@ -358,17 +359,18 @@ export function LetterView({
                 )}
               </button>
             ))}
-            <MicField boxRef={noteBox} text={freeText} setText={setFreeText} handleRef={noteMic} disabled={busy}>
-              <textarea
-                ref={noteBox}
-                data-draft-key={noteDraft.key ?? undefined}
-                className="hib-freetext"
-                placeholder="Optional note to send with your choice"
-                value={freeText}
-                onChange={(e) => setFreeText(e.target.value)}
-                rows={2}
-              />
-            </MicField>
+            <AnswerBox
+              className="hib-freetext-box"
+              inputClassName="hib-freetext"
+              boxRef={noteBox}
+              micRef={noteMic}
+              draftKey={noteDraft.key}
+              placeholder="Optional note to send with your choice"
+              value={freeText}
+              onChange={setFreeText}
+              sending={busy}
+              minRows={2}
+            />
           </div>
         )}
         {decisionWithoutOptions && (
@@ -470,26 +472,29 @@ export function LetterView({
 
       <div className="hib-composer">
         {delivery && <div className="hib-delivery">{delivery}</div>}
-        <textarea
-          ref={replyBox}
-          data-draft-key={replyDraft.key ?? undefined}
-          className="hib-composer-input"
+        <AnswerBox
+          className="hib-composer-box"
+          inputClassName="hib-composer-input"
+          boxRef={replyBox}
+          micRef={replyMic}
+          draftKey={replyDraft.key}
           placeholder="Reply to this letter…"
           value={replyText}
-          onChange={(e) => setReplyText(e.target.value)}
+          onChange={setReplyText}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void onReply(); }
           }}
-          rows={2}
-        />
-        <BoxMic boxRef={replyBox} text={replyText} setText={setReplyText} handleRef={replyMic} disabled={busy} />
-        <button
-          className="hib-send-btn"
-          disabled={busy || !replyText.trim()}
-          onClick={() => void onReply()}
+          sending={busy}
+          minRows={2}
         >
-          Send
-        </button>
+          <button
+            className="hib-send-btn"
+            disabled={busy || !replyText.trim()}
+            onClick={() => void onReply()}
+          >
+            Send
+          </button>
+        </AnswerBox>
       </div>
     </div>
   );

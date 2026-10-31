@@ -1,0 +1,18 @@
+/* AnswerBox (components/common/AnswerBox.tsx): the composer's look for every answer in words. */
+.answer-box {
+  display: flex; align-items: flex-end; gap: 4px; min-width: 0;
+  padding: 3px 4px 3px 10px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--bg-secondary, var(--bg)); transition: border-color 0.12s;
+}
+.answer-box:focus-within { border-color: var(--accent); }
+.answer-box.is-disabled { opacity: 0.6; }
+.answer-box-input {
+  flex: 1; min-width: 0; align-self: center; margin: 0; padding: 4px 0;
+  border: none; outline: none; background: transparent; color: var(--fg, var(--fg-primary));
+  font: inherit; font-size: 13px; line-height: 18px; resize: none; overflow-y: auto;
+  field-sizing: content; box-sizing: border-box;
+}
+.answer-box-input::placeholder { color: var(--fg-muted); }
+.answer-box-tools { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.answer-box-tools .mic-btn { min-width: 28px; height: 28px; }
+.answer-box-send { border-radius: 9px; }

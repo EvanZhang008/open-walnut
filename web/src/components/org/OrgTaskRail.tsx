@@ -15,7 +15,11 @@
  *   Threads  the user's own requests to it, one per subject (OrgThreads)
  *
  * A row in Needs you always says what it asks (askSummary is never empty); a node is never a bare
- * row of its own (the user: "u need to show what are actually waiting").
+ * row of its own (the user: "u need to show what are actually waiting"). The node's own ask is a row
+ * too, the first, named for the node: every Needs you count has its rows (2026-10-31). Each row says
+ * when its ask was checked, or Not verified, on a line of its own (cardChecked), and any action that
+ * takes a row off (an answer, a snooze) takes it off on the click. No title tooltips: they drew over
+ * the row's own menus.
  */
 import '@/styles/org-rail.css';
 import { useEffect, useMemo, useState } from 'react';
@@ -35,7 +39,7 @@ import { isPinnedTo, pinnedNodesOf } from '@open-walnut/org-tree';
 import { ThreadPinIcon } from '@/components/sessions/ThreadIcons';
 import { snoozeTakesOff } from '@open-walnut/user-status';
 import { askSummary, lineSetBy, readStatusLine } from './org-ask-form';
-import type { ChannelRow, OrgAlertView } from './org-channels-model';
+import { cardChecked, type ChannelRow, type OrgAlertView } from './org-channels-model';
 
 /** What the rows need from the page to answer in place. */
 export interface OrgAnswers {
@@ -89,7 +93,6 @@ export function PinToggle({ task, pinning, className = '' }: { task: Task; pinni
       data-task-id={task.id}
       aria-pressed={on}
       aria-label={on ? `Unpin ${task.title}` : `Pin ${task.title} here`}
-      title={on ? 'Pinned here. Click to unpin' : 'Pin it here, to keep it in view'}
       onClick={(e) => { e.stopPropagation(); pinning.set(task.id, !on); }}
     ><ThreadPinIcon size={13} /></button>
   );
@@ -135,20 +138,20 @@ function TaskTabList({ tasks, tab, onOpen, now, pinning }: { tasks: readonly Tas
   );
 }
 
-function AskRow({ a, task, vp, onOpen, onQuote, canQuote, answers, snoozeError, onSnoozeFailed, onSnoozeDone, pinning }: {
+function AskRow({ a, task, vp, own, onOpen, onQuote, canQuote, answers, pinning }: {
   pinning: OrgPinning;
   a: OrgAlertView;
   task: Task | undefined;
   vp: string | undefined;
+  /** The node's own ask: the row is named for the node. */
+  own: string | undefined;
   onOpen: (a: OrgAlertView) => void;
   onQuote: (a: OrgAlertView) => void;
   canQuote: boolean;
   answers: OrgAnswers;
-  snoozeError: string | undefined;
-  onSnoozeFailed: (taskId: string, error: string) => void;
-  onSnoozeDone: (taskId: string) => void;
 }) {
   const { summary, more } = askSummary(a);
+  const checked = cardChecked(a);
   const [open, setOpen] = useState(false);
   const failure = answers.failed.get(a.taskId);
   // A failure belongs to the ask it answered: a new ask of the task drops it.
@@ -160,7 +163,8 @@ function AskRow({ a, task, vp, onOpen, onQuote, canQuote, answers, snoozeError, 
     if (failedFor !== askKey) { setFailedFor(''); answers.seen(a.taskId); }
   }, [failure, failedFor, askKey, answers, a.taskId]);
   return (
-    <div className="org-alert org-ask" data-testid="org-alert" data-task-id={a.taskId} data-kind={a.kind} {...(a.source ? { 'data-source': a.source } : {})}>
+    <div className={`org-alert org-ask${own ? ' is-own' : ''}`} data-testid="org-alert" data-task-id={a.taskId} data-kind={a.kind} {...(own ? { 'data-own': '1' } : {})} {...(a.source ? { 'data-source': a.source } : {})}>
+      {own && <div className="org-ask-own" data-testid="org-ask-own">{own} asks you</div>}
       {a.via && (
         // The top-level task itself, opened as a task: the subtask's letter or Board choice is not its.
         <div className="org-ask-via-line">
@@ -168,24 +172,22 @@ function AskRow({ a, task, vp, onOpen, onQuote, canQuote, answers, snoozeError, 
             className="org-ask-via"
             data-testid="org-ask-via"
             href={`/tasks/${encodeURIComponent(a.via.id)}`}
-            title={`Part of ${a.via.title}`}
+            aria-label={`Part of ${a.via.title}`}
             onClick={(e) => { e.preventDefault(); onOpen({ ...a, taskId: a.via!.id, title: a.via!.title, source: undefined }); }}
           >{a.via.title} ›</a>
         </div>
       )}
-      <div className="org-ask-summary" data-testid="org-ask-summary" title={summary}>{summary}</div>
+      <div className="org-ask-summary" data-testid="org-ask-summary">{summary}</div>
+      <div className={`org-alert-checked${checked.unverified ? ' is-unverified' : ''}`} data-testid="org-alert-checked" data-unverified={checked.unverified ? '1' : '0'}>{checked.text}</div>
       <div className="org-ask-meta">
         <a
           className="org-alert-link"
           data-testid="org-alert-link"
           href={`/tasks/${encodeURIComponent(a.taskId)}`}
-          title={`Open ${a.title}`}
+          aria-label={`Open ${a.title}`}
           onClick={(e) => { e.preventDefault(); onOpen(a); }}
         >{a.title}</a>
         {vp && <span className="org-ask-vp" data-testid="org-ask-vp">{vp}</span>}
-        {a.checked && (
-          <span className={`org-alert-checked${a.checked.unverified ? ' is-unverified' : ''}`} data-testid="org-alert-checked" data-unverified={a.checked.unverified ? '1' : '0'} title={a.checked.text}>{a.checked.text}</span>
-        )}
         <span className="org-ask-tools">
           {more && (
             <button type="button" className="org-ask-tool" data-testid="org-ask-more-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? 'Less' : 'More'}</button>
@@ -195,27 +197,30 @@ function AskRow({ a, task, vp, onOpen, onQuote, canQuote, answers, snoozeError, 
             className="org-ask-tool"
             data-testid="org-alert-quote"
             disabled={!canQuote}
-            title={canQuote ? 'Quote it in this chat, to talk it over here' : 'Start a chat here first'}
+            aria-label={canQuote ? 'Quote it in this chat, to talk it over here' : 'Start a chat here first'}
             onClick={() => onQuote(a)}
           >Quote</button>
           {/* Only where a snooze takes the ask off the user (never a live prompt, never Main's own). */}
           {snoozeTakesOff({ state: 'needs', source: a.kind === 'question' || a.kind === 'permission' ? 'prompt' : a.source }, task?.org_role === 'main') && (
-            <OrgAlertSnooze alert={a} current={task?.start_date ?? undefined} onFailed={onSnoozeFailed} onDone={onSnoozeDone} />
+            <OrgAlertSnooze alert={a} current={task?.start_date ?? undefined} onStart={() => answers.start(a.taskId)} />
           )}
-          {snoozeError && <span className="org-alert-snooze-error" data-testid="org-alert-snooze-error" title={snoozeError}>Snooze failed</span>}
           {task && <PinToggle task={task} pinning={pinning} className="org-ask-tool" />}
         </span>
       </div>
       {open && more && <div className="org-ask-more" data-testid="org-ask-more">{more}</div>}
-      <OrgInlineAnswer alert={a} task={task} summary={summary} onAnswer={answers.start} {...(failure ? { failure } : {})} />
+      {/* A refused snooze says so on the row, whatever the answer form is (a task with no session has none). */}
+      {failure?.of === 'snooze' && <div className="org-answer-error" role="alert" data-testid="org-answer-error">{failure.message}</div>}
+      <OrgInlineAnswer alert={a} task={task} summary={summary} onAnswer={answers.start} {...(failure && failure.of !== 'snooze' ? { failure } : {})} />
     </div>
   );
 }
 
 /** The asks, one row each. Under the pointer the rows keep their order and a new ask joins at the
  *  end, so a click lands on the row aimed at (as the VP list does). */
-function AskList({ alerts, tasks, vpOf, onOpen, onQuote, canQuote, answers, pinning }: {
+function AskList({ alerts, tasks, vpOf, ownId, ownName, onOpen, onQuote, canQuote, answers, pinning }: {
   pinning: OrgPinning;
+  ownId: string | undefined;
+  ownName: string;
   alerts: readonly OrgAlertView[];
   tasks: readonly Task[];
   vpOf: (taskId: string) => string | undefined;
@@ -227,16 +232,11 @@ function AskList({ alerts, tasks, vpOf, onOpen, onQuote, canQuote, answers, pinn
   const byId = useMemo(() => new Map(tasks.map((t) => [t.id, t])), [tasks]);
   const [held, setHeld] = useState<string[] | null>(null);
   const shown = useMemo(() => holdOrder(alerts.map((a) => ({ key: a.taskId, a })), held).map((x) => x.a), [alerts, held]);
-  /** A snooze write that failed, by task. A snooze that took moves the task to Waiting / snoozed:
-   *  its user status says so (src/core/user-status.ts), never this list. */
-  const [snoozeFailed, setSnoozeFailed] = useState<ReadonlyMap<string, string>>(new Map());
-  const onSnoozeFailed = (taskId: string, error: string) => setSnoozeFailed((m) => new Map(m).set(taskId, error));
-  const onSnoozeDone = (taskId: string) => setSnoozeFailed((m) => { if (!m.has(taskId)) return m; const n = new Map(m); n.delete(taskId); return n; });
   return (
     <div className="org-alerts" data-testid="org-alerts" role="region" aria-label="Needs you"
       onPointerEnter={() => setHeld(alerts.map((a) => a.taskId))} onPointerLeave={() => setHeld(null)}>
       {shown.map((a) => (
-        <AskRow key={a.taskId} a={a} task={byId.get(a.taskId)} vp={vpOf(a.taskId)} onOpen={onOpen} onQuote={onQuote} canQuote={canQuote} answers={answers} snoozeError={snoozeFailed.get(a.taskId)} onSnoozeFailed={onSnoozeFailed} onSnoozeDone={onSnoozeDone} pinning={pinning} />
+        <AskRow key={a.taskId} a={a} task={byId.get(a.taskId)} vp={a.taskId === ownId ? undefined : vpOf(a.taskId)} own={a.taskId === ownId ? ownName : undefined} onOpen={onOpen} onQuote={onQuote} canQuote={canQuote} answers={answers} pinning={pinning} />
       ))}
     </div>
   );
@@ -247,7 +247,7 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
   rows: readonly ChannelRow[];
   tasks: readonly Task[];
   tabs: OrgTaskTabs;
-  /** The asks shown (the node's own ask its chat shows is left out there). */
+  /** The asks, the node's own first. */
   alerts: readonly OrgAlertView[];
   tab: OrgRailTab;
   onTab: (tab: OrgRailTab) => void;
@@ -323,15 +323,9 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
           <TaskTabBar tabs={tabs} tab={tab} onPick={onTab} />
           <div className="org-rail-body">
             {tab === 'needs' ? (<>
-              {alerts.length > 0 && (
-                <AskList alerts={alerts} tasks={tasks} vpOf={(id) => vpByTask.get(id)} onOpen={onOpenAlert} onQuote={onQuote} canQuote={canQuote} answers={answers} pinning={pinning} />
-              )}
-              {/* Counted in the tab: the contact's own prompt, which the chat shows. */}
-              {(alerts.length < tabs.needs.length || !tabs.needs.length) && (
-                <p className="org-task-empty" data-testid="org-task-empty">
-                  {!tabs.needs.length ? 'Nothing needs you here.' : alerts.length ? `And ${tabs.needs.length - alerts.length} in the chat.` : 'Its ask is in the chat.'}
-                </p>
-              )}
+              {alerts.length > 0
+                ? <AskList alerts={alerts} tasks={tasks} vpOf={(id) => vpByTask.get(id)} ownId={contact?.id} ownName={title} onOpen={onOpenAlert} onQuote={onQuote} canQuote={canQuote} answers={answers} pinning={pinning} />
+                : <p className="org-task-empty" data-testid="org-task-empty">{EMPTY.needs}</p>}
             </>) : (
               <TaskTabList tasks={tabs[tab]} tab={tab} onOpen={onOpenTask} now={now} pinning={pinning} />
             )}

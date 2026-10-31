@@ -54,6 +54,15 @@ export function topLevelOf(task: Task, byId: ReadonlyMap<string, Task>): Task | 
   return cur.id === task.id ? undefined : cur;
 }
 
+/** What every ask card says about how fresh its ask is (2026-10-31, the user: every card shows when
+ *  it was checked): its session's check, a prompt open in its session now, or Not verified. */
+export function cardChecked(a: OrgAlertView): { text: string; unverified: boolean } {
+  if (a.checked) return a.checked;
+  if (a.kind === 'question' || a.kind === 'permission') return { text: 'Open in its session now', unverified: false };
+  if (a.kind === 'error') return { text: 'Failed in its session now', unverified: false };
+  return { text: 'Not verified', unverified: true };
+}
+
 /** What waits on the user in one task's session right now, or null. */
 export type AlertProbe = (task: Task) => { kind: Exclude<OrgAlertView['kind'], 'needs'>; tool?: string } | null;
 

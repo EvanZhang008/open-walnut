@@ -386,12 +386,8 @@
     font-size: 13px;
   }
 
-  .app-shell-navigation .ask-user-question-card .qp-input {
-    width: 100%;
-    min-height: 44px;
-    font-size: 16px;
-    box-sizing: border-box;
-  }
+  .app-shell-navigation .ask-user-question-card .qp-input { font-size: 16px; }
+  .app-shell-navigation .ask-user-question-card .answer-box { min-height: 44px; }
 
   .app-shell-navigation .ask-user-submit-hint {
     margin-top: 8px;

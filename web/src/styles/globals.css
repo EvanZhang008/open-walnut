@@ -15569,27 +15569,28 @@ a.task-kebab-info:hover {
 .dp-pill:hover { background: var(--accent-subtle, var(--bg-tertiary)); color: var(--fg-primary); }
 .dp-pill-none { border-style: dashed; color: var(--fg-muted); }
 .dp-pill-none:hover { background: var(--error-subtle, rgba(255, 59, 48, 0.15)); color: var(--error); border-color: var(--error); }
-.dp-calendar-row { display: flex; align-items: center; gap: 4px; }
-.dp-date-input {
-  flex: 1;
-  font-size: 12px;
-  padding: 3px 6px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-secondary, var(--bg-primary));
-  color: var(--fg-primary);
-  color-scheme: dark;
+/* DatePicker's month (MonthGrid.tsx): Walnut's own, never the browser's date field. */
+.dp-month { display: flex; flex-direction: column; gap: 2px; min-width: 210px; }
+.dp-month-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 0; }
+.dp-month-name { font-size: 12px; font-weight: 600; color: var(--fg-primary); }
+.dp-month-step {
+  width: 24px; height: 24px; border: none; border-radius: 6px; background: none;
+  color: var(--fg-secondary); font-size: 16px; line-height: 1; cursor: pointer;
 }
-.dp-clear {
-  padding: 2px 6px;
-  border: none;
-  background: none;
-  color: var(--fg-muted);
-  font-size: 14px;
-  cursor: pointer;
-  border-radius: 4px;
+.dp-month-step:hover { background: var(--bg-tertiary); color: var(--fg-primary); }
+.dp-month-grid { display: flex; flex-direction: column; gap: 1px; }
+.dp-month-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; }
+.dp-month-dow { font-size: 10px; text-align: center; color: var(--fg-muted); padding: 2px 0; }
+.dp-month-day {
+  width: 100%; height: 26px; border: 1px solid transparent; border-radius: 6px; background: none;
+  font-size: 11px; color: var(--fg-secondary); cursor: pointer; font-variant-numeric: tabular-nums;
 }
-.dp-clear:hover { background: var(--bg-tertiary); color: var(--error); }
+.dp-month-day.is-blank { display: block; height: 26px; }
+.dp-month-day:hover { background: var(--accent-subtle, var(--bg-tertiary)); color: var(--fg-primary); }
+.dp-month-day.is-past { color: var(--fg-muted); }
+.dp-month-day:disabled { opacity: 0.35; cursor: default; background: none; }
+.dp-month-day.is-today { border-color: var(--border); font-weight: 600; color: var(--fg-primary); }
+.dp-month-day.is-selected, .dp-month-day.is-selected:hover { background: var(--accent); border-color: var(--accent); color: var(--accent-fg, #fff); }
 
 /* Info badges in title row — keep compact */
 .todo-item-title-row .todo-item-due-pill,
@@ -22084,31 +22085,7 @@ a.tag-chip:focus-visible,
   color: color-mix(in srgb, var(--accent) 70%, var(--fg-muted));
 }
 
-.qp-input-row {
-  display: flex;
-  gap: 8px;
-}
-
-.qp-input {
-  flex: 1;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
-  color: var(--fg);
-  font-size: 13px;
-  outline: none;
-  transition: border-color 0.15s;
-}
-
-.qp-input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-subtle);
-}
-
-.qp-input::placeholder {
-  color: var(--fg-muted);
-}
+/* The "Other" box of a question card is the shared AnswerBox (styles/answer-box.css). */
 
 .qp-submit {
   padding: 8px 16px;
@@ -31173,18 +31150,8 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
 
 .nfc-answer-opt:disabled { opacity: 0.5; cursor: default; }
 
-.nfc-answer-input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 5px 8px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--bg-secondary);
-  font-size: 12px;
-  color: var(--fg);
-}
-
-.nfc-answer-input:focus { outline: none; border-color: var(--accent); }
+/* A question's "Other" box is the shared AnswerBox (styles/answer-box.css). */
+.answer-box .nfc-answer-input { font-size: 12px; }
 
 /* ── Answerable permission toast (top-right) ── */
 

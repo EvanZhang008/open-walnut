@@ -90,7 +90,7 @@ test('a write on /tasks/:id reaches the mounted home board row before the server
   const dueTrigger = page.locator('.tdv2-side button.dp-trigger[title="Set due"]')
   await dueTrigger.click()
   const dayPill = page.locator('.dp-popover .dp-pills').nth(1).locator('.dp-pill').first()
-  const picked = await dayPill.getAttribute('title')
+  const picked = await dayPill.getAttribute('data-date')
   expect(picked).toMatch(/^\d{4}-\d{2}-\d{2}$/)
   const patchesBefore = patchesAnswered
   await dayPill.click()

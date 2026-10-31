@@ -9,7 +9,8 @@
  * under `draftKey` until the rule is saved).
  */
 import { useId, useRef, type RefObject } from 'react';
-import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { type BoxMicHandle } from '@/components/common/BoxMic';
+import { AnswerBox } from '@/components/common/AnswerBox';
 import {
   COPY,
   MAX_GROUP_NAME,
@@ -108,20 +109,20 @@ export function MailCorrectStepWhere(props: StepWhereProps) {
         )}
       </div>
       <label className="mail-correct-why-label" htmlFor={whyId}>{COPY.whyLabel}</label>
-      <MicField boxRef={whyRef} text={note} setText={(t) => props.onNote(t.slice(0, MAX_NOTE))} handleRef={mic}>
-        <textarea
-          ref={whyRef}
-          data-draft-key={props.draftKey ?? undefined}
-          id={whyId}
-          className="mail-correct-why"
-          data-testid="mail-correct-why"
-          rows={2}
-          maxLength={MAX_NOTE}
-          placeholder={COPY.whyPlaceholder}
-          value={note}
-          onChange={(event) => props.onNote(event.target.value.slice(0, MAX_NOTE))}
-        />
-      </MicField>
+      <AnswerBox
+        id={whyId}
+        boxRef={whyRef}
+        micRef={mic}
+        draftKey={props.draftKey}
+        className="mail-correct-why-box"
+        inputClassName="mail-correct-why"
+        testId="mail-correct-why"
+        minRows={2}
+        maxLength={MAX_NOTE}
+        placeholder={COPY.whyPlaceholder}
+        value={note}
+        onChange={(t) => props.onNote(t.slice(0, MAX_NOTE))}
+      />
       {note.length > NOTE_COUNTER_FROM && (
         <span className="mail-correct-counter" data-testid="mail-correct-counter" aria-live="polite">
           {note.length} / {MAX_NOTE}

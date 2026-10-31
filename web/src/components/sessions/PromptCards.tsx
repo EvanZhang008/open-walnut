@@ -10,15 +10,14 @@
  * card and gives the buttons back. The command reads in full: over 6 lines it
  * shows the first 3, an ellipsis and the last 3, with `Show all (N lines)`.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { usePhoneLayerWithBar } from './phone-session-layer';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { useArmAfterAppear, useHoldSettled } from '@/hooks/useArmAfterAppear';
 import { foldLongCommand } from './tool-call-grouping';
 import { ChevronRightIcon, QuestionCircleIcon } from '@/components/common/PhoneIcons';
-import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
-import { BoxMic } from '@/components/common/BoxMic';
+import { AnswerBox } from '@/components/common/AnswerBox';
 import { useDraftValue } from '@/hooks/useDraft';
 import { askAnswerDraftKey } from '@/utils/drafts';
 import {
@@ -32,21 +31,17 @@ import { parseAskUserQuestionInput, buildAskUserAnswers, allAskUserQuestionsAnsw
 function AskOtherInput({ placeholder, value, disabled, onChange, draftKey }: {
   placeholder: string; value: string; disabled: boolean; onChange: (v: string) => void; draftKey: string | null;
 }) {
-  const box = useRef<HTMLInputElement | null>(null);
   return (
-    <div className="qp-input-row">
-      <input
-        ref={box}
-        className="qp-input"
-        data-draft-key={draftKey ?? undefined}
-        placeholder={placeholder}
-        value={value}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.value)}
-        {...NO_AUTOFILL_PROPS}
-      />
-      <BoxMic boxRef={box} text={value} setText={onChange} disabled={disabled} />
-    </div>
+    <AnswerBox
+      className="qp-input-row"
+      inputClassName="qp-input"
+      draftKey={draftKey}
+      placeholder={placeholder}
+      value={value}
+      disabled={disabled}
+      onChange={onChange}
+      maxRows={4}
+    />
   );
 }
 

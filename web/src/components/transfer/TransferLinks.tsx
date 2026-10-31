@@ -13,7 +13,8 @@ import '@/styles/transfer.css';
 /** Titles of tasks the board list does not carry (a completed source), read once per page. */
 const fetched = new Map<string, Promise<string | null>>();
 
-function useTaskTitle(taskId: string): string | null {
+/** A task's live title: the label store's, else read once from the server. */
+export function useTaskTitle(taskId: string): string | null {
   const label = useTaskLabel(taskId);
   const [title, setTitle] = useState<string | null>(null);
   useEffect(() => {

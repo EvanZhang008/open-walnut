@@ -28,6 +28,7 @@
       "@open-walnut/ask-list": ["../src/core/sessions/ask-list"],
       "@open-walnut/org-tree": ["../src/core/org/org-tree"],
       "@open-walnut/user-status": ["../src/core/user-status"],
+      "@open-walnut/message-about": ["../src/core/org/message-about"],
       "@open-walnut/live-activity": ["../src/core/live-activity"],
       "@open-walnut/brief-structure": ["../src/core/sessions/brief-structure"],
       "@open-walnut/brief-fresh": ["../src/core/sessions/brief-fresh"],

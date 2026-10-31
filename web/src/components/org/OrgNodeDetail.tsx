@@ -34,7 +34,7 @@ import { log } from '@/utils/log';
 import { briefUnread, markBriefSeen, readBriefFolded, type OrgTopView } from './org-brief-model';
 import { briefUpdating } from '@open-walnut/brief-fresh';
 import { useBriefRefresh } from './useBriefRefresh';
-import { ORG_TASK_TAB_LABELS, orgTaskTabs, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
+import { ORG_TASK_TAB_LABELS, orgTaskTabs, ownAskFirst, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
 import { stateCountLabel } from '@open-walnut/user-status';
 import {
   mainTeamColumns, teamColumns, type ChannelRow, type OrgAlertView, type TeamColumn,
@@ -79,15 +79,12 @@ interface Props {
   now: number;
 }
 
-/** An ask its own chat shows: a prompt, a failure, its words. A letter or a Board choice is elsewhere. */
-const shownInChat = (a: OrgAlertView) => a.kind !== 'needs' || (a.source !== 'letter' && a.source !== 'choice');
 /** The quote Quote puts in the chat: which task, and what it asks. */
 export const alertQuote = (a: OrgAlertView): string => `> ${a.title}: ${askWords(a)}\n\n`;
 
 const COLUMN_DOT: Record<TeamColumn['key'], string> = {
   needs: 'var(--error, #FF3B30)', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)',
 };
-
 
 /** The user's status of the node's work, in the words the Board uses (src/core/user-status.ts),
  *  counted from the same lists as the Task view's tabs; each pill opens its tab. */
@@ -312,8 +309,9 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   const railCss = `clamp(${RAIL_MIN_PX}px, ${railWidth.pct}vw, max(${RAIL_MIN_PX}px, calc(100% - ${CHAT_MIN_PX}px)))`;
   const lastMoved = row.lastAt ? timeAgo(new Date(row.lastAt).toISOString(), { now }) : '';
   const tabId = (t: OrgTab) => `org-tab-${t}-${row.key}`;
-  // On the chat, the contact's own prompt is in view already; its letter or choice is not, so it stays.
-  const alertsShown = shown === 'chat' ? tabs.needs.filter((a) => a.taskId !== row.contactId || !shownInChat(a)) : tabs.needs;
+  // Every ask the Needs you count holds is a row, the node's own first (2026-10-31: a count with
+  // "Its ask is in the chat." under it left the user hunting for it).
+  const alertsShown = useMemo(() => ownAskFirst(tabs.needs, row.contactId), [tabs.needs, row.contactId]);
 
   const rail = (
     <OrgTaskRail

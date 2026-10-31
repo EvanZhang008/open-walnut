@@ -189,6 +189,13 @@ export const THREADS_LINE =
   + 'thread_update: a short title, what he wants, its state (working, needs: waiting on him, answered), one line of where it '
   + 'stands and the tasks you handed it to. Several asks about the same thing are one thread: put a new one under the open thread '
   + 'it belongs to (merge_into). He closes a thread with Acknowledge; a new ask about a closed subject is a new thread.\n\n'
+/** The tasks a reply is about, as live pills under it (core/org/message-about.ts; 2026-10-31, the user). */
+export const MESSAGE_ABOUT_LINE =
+  'End each reply the user reads with one line of its own naming the tasks it is about: '
+  + '<walnut-about tasks="<id>,<id>"/> (task ids, at most 6, outside any code block). The main agent names the VP\'s own task '
+  + 'and the task itself; a VP names the task and, when that task leads a team of its own, its lead too. Walnut takes the '
+  + 'line off and shows those tasks under your message as live pills; a reply without it shows the task whose message '
+  + 'you answered and the tasks you sent to. It goes in a chat reply only, never in the self-report or the Brief; an agent-ack turn needs none.\n\n'
 
 /** Main's and every lead's Brief (sessions/brief.ts): the user reads it instead of the chat. */
 export const BRIEF_LINE =
@@ -266,7 +273,7 @@ export const AWAY_INBOX_LINE =
  */
 export function orgRoleLine(task: { org_role?: string; project?: string; org_leads?: readonly string[]; org_vp_only?: boolean; org_name?: string }): string {
   if (task.org_role === 'main') {
-    return  'You are the user\'s main agent: with the user you run their org as co-CEOs, and you set its direction '
+    return    'You are the user\'s main agent: with the user you run their org as co-CEOs, and you set its direction '
       + 'with them. Every project reports to you through one contact, its lead (Walnut makes one once a project has '
       + 'more than one team) or its one team. For "how is it going" read org_get (one line per project); for detail, '
       + 'coordination or short evidence, talk to that project\'s contact with org_send (it makes the lead on first '
@@ -283,6 +290,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + AWAY_INBOX_LINE
       + BRIEF_LINE
       + THREADS_LINE
+      + MESSAGE_ABOUT_LINE
       + MAIN_DELEGATES_LINE
       + MAIN_TRACKING_LINE
       + MAIN_STAYS_ACTIVE_LINE
@@ -306,7 +314,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
           + `top-level tasks (their teams) then report to you. "${project}" is only your home. You `
     // The name the user gave this VP (Task.org_name): how they and the org chart call it.
     const name = task.org_name?.trim()
-    return (name ? `The user calls you the "${name}" VP. ` : '') + head
+    return  (name ? `The user calls you the "${name}" VP. ` : '') + head
       + 'report to the user\'s main agent, whose messages are the user\'s direction. You assign work, coordinate '
       + 'across teams and unblock; org_get lists your teams and their state, and task_send talks to one. Read a '
       + 'team\'s work (task_get, task_history) only when an outcome looks wrong. Route work by deliverable, not area: '
@@ -325,6 +333,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + AWAY_INBOX_LINE
       + BRIEF_LINE
       + THREADS_LINE
+      + MESSAGE_ABOUT_LINE
       + TASK_ROUTING_CONTRACT + '\n\n'
   }
   return ''

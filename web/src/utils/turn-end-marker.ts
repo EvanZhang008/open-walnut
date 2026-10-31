@@ -21,6 +21,8 @@
  * the text. Pure: tests/web/turn-end-marker.test.ts.
  */
 
+import { readAboutTag, stripAboutTag } from '@open-walnut/message-about';
+
 export const NO_ACTION_TAG = '<walnut-turn status="agent-ack"/>';
 /** The line's first name, still written by sessions spawned on the old prompt. */
 export const LEGACY_NO_ACTION_TAG = '<walnut-turn status="no-action"/>';
@@ -39,7 +41,7 @@ export interface TurnMarker {
 
 /** Read the marker off a message's text. */
 export function readTurnMarker(text: string | undefined): TurnMarker {
-  const src = text ?? '';
+  const src = readAboutTag(text ?? '').text;
   if (!TAGS.some((t) => src.includes(t))) return { text: src, noAction: false };
   const lines = src.split('\n');
   let last = lines.length - 1;
@@ -67,7 +69,8 @@ export function readTurnMarker(text: string | undefined): TurnMarker {
  * held back too, so the tag never flashes up character by character.
  */
 export function stripTurnMarker(text: string, streaming = false): string {
-  text = stripSelfReportBlock(text);
+  // The tasks line of an Org chat (message-about.ts) goes first: it may follow the marker.
+  text = stripSelfReportBlock(stripAboutTag(text, streaming));
   const read = readTurnMarker(text);
   if (read.noAction) return read.text;
   if (!streaming) return text;

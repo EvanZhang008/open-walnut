@@ -66,9 +66,11 @@
 .org-ask-meta > * { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .org-ask-meta .org-alert-link { flex: 0 1 auto; }
 .org-ask-vp { flex: none; }
-/* The task name keeps its room first; the checked time gives way (its title holds the whole line). */
-.org-ask-meta .org-alert-checked { flex: 0 4 auto; }
-.org-ask-vp::before, .org-ask-meta .org-alert-checked::before { content: '·'; margin-right: 6px; color: var(--fg-muted); }
+/* When the ask was checked: a line of its own, whole at any rail width (never cut to "C…"). */
+.org-ask .org-alert-checked { font-size: 11px; line-height: 1.3; color: var(--fg-muted); overflow-wrap: anywhere; }
+.org-ask-vp::before { content: '·'; margin-right: 6px; color: var(--fg-muted); }
+/* The node's own ask, first: named for the node. */
+.org-ask-own { font-size: 11px; font-weight: 600; letter-spacing: 0.02em; color: var(--error, #d70015); }
 .org-ask-more { white-space: pre-wrap; font-size: 12px; line-height: 1.45; color: var(--fg-secondary, var(--fg)); padding: 6px 8px; border-radius: 6px; background: var(--bg-secondary); max-height: 220px; overflow-y: auto; }
 .org-alert-link { color: var(--fg-secondary, var(--fg)); text-decoration: none; }
 /* A subtask's ask names the top-level task it rolls up to on its own line above it. */
@@ -86,7 +88,6 @@
 }
 .org-ask-tool:hover:not(:disabled), .org-ask-tools .org-alert-snooze:hover { background: var(--bg-secondary); color: var(--fg); }
 .org-ask-tool:disabled { opacity: 0.5; cursor: default; }
-.org-alert-snooze-error { font-size: 11px; color: var(--error, #d70015); cursor: help; }
 
 /* The answer, in the row (OrgInlineAnswer). */
 /* Buttons flow on one line with "Other…" after them; a words box, a note or an error takes a line. */
@@ -100,12 +101,7 @@
 .org-answer-check.is-on { border-color: var(--accent); background: color-mix(in srgb, var(--accent, #0a84ff) 8%, var(--bg)); }
 .org-answer-check input { margin: 0; }
 .org-answer-other { border: 0; background: transparent; padding: 0; color: var(--accent, #0a84ff); font: inherit; font-size: 11.5px; cursor: pointer; }
-.org-answer-words { display: flex; gap: 4px; align-items: flex-end; }
-.org-answer-input {
-  flex: 1; min-width: 0; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px;
-  background: var(--bg-secondary, var(--bg)); color: var(--fg); font: inherit; font-size: 12.5px; resize: vertical; min-height: 28px;
-}
-.org-answer-input:focus { outline: none; border-color: var(--accent); }
+/* The words box is the shared AnswerBox (styles/answer-box.css). */
 .org-answer-note, .org-answer-error { font-size: 11.5px; color: var(--fg-muted); }
 .org-answer-note:empty { display: none; }
 .org-answer-error { color: var(--error, #d70015); }

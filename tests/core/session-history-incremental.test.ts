@@ -260,6 +260,31 @@ describe('incremental append-read', () => {
     expect(getOrphanFinishedAgentIds(second)?.has('toolu_deep_prefix')).toBe(true);
   });
 
+  it('a reply appended later still names the task whose message began its turn in the frozen prefix', async () => {
+    // org/message-about.ts: a reply without the tasks line falls back to its turn's asker, and that
+    // turn may begin before the boundary, where the tail parse cannot see it.
+    const sid = 'inc-about-prefix';
+    const ask = '<walnut-message kind="request" from="Lead" from-task="mt-lead-1" request="rq-1">Status?</walnut-message>';
+    const lines: unknown[] = [userLine(ask), assistantLine('On it.\n<walnut-about tasks="mt-x-9"/>')];
+    for (let i = 0; i < 12; i++) {
+      lines.push(toolUseLine(`about-${i}`, 'Bash'), toolResultLine(`about-${i}`, 'X'.repeat(250_000)));
+    }
+    await writeLines(sid, lines);
+    const first = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    expect(first.find((m) => m.text === 'On it.')?.about).toEqual(['mt-x-9']);
+    expect(_historyCacheGetForTesting(sid)?.inc?.tailText).not.toContain('mt-lead-1');
+
+    await appendLines(sid, [assistantLine('All done.')]);
+    await bumpMtime(sid);
+    const second = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    expect(second.find((m) => m.text === 'All done.')?.about).toEqual(['mt-lead-1']);
+    // The tagged reply keeps what its line said, though the line is gone from its text.
+    expect(second.find((m) => m.text === 'On it.')?.about).toEqual(['mt-x-9']);
+    _resetHistoryCacheForTesting();
+    const cold = await readSessionHistory(sid, CWD, undefined, undefined, { skipSubagents: true });
+    expect(second.map((m) => m.about ?? null)).toEqual(cold.map((m) => m.about ?? null));
+  });
+
   it('assistant message blocks split across an append boundary stay merged', async () => {
     const sid = 'inc-splitmsg';
     // Same message.id across two lines — second line appended later.

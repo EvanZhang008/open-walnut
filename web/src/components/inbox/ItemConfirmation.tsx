@@ -7,7 +7,8 @@ import { itemError } from '@/api/human-inbox-items';
 import { ItemOperationDetails } from './ItemOperationDetails';
 import { PHASE_TEXT, mailDateText } from './item-receipt-model';
 import { itemDraftKey, useItemDraft } from './item-drafts';
-import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { type BoxMicHandle } from '@/components/common/BoxMic';
+import { AnswerBox } from '@/components/common/AnswerBox';
 import '@/styles/inbox-mic.css';
 
 export function ItemConfirmation({ draftKey, item, actionId, target, retry, again, submitting, prepare, execute, onClose, onFind, onNavigate }: {
@@ -99,10 +100,9 @@ export function ItemConfirmation({ draftKey, item, actionId, target, retry, agai
           className="hib-row-btn" disabled={submitting || submitted} onClick={() => change(setProject, p.name)}>{p.name || 'Inbox'}</button>)}
       </div>
     </>}
-    {!again && <label htmlFor={goalId}>Work goal<MicField boxRef={goalBox} text={goal} setText={v => change(setGoal, v)} handleRef={goalMic}
-      disabled={submitting || submitted || !!retry || workLocked}>
-      <textarea ref={goalBox} id={goalId} data-draft-key={itemDraftKey(draftKey, `${field}goal`)} aria-label="Work goal" rows={3} value={goal} readOnly={submitting || submitted || !!retry || workLocked}
-        onChange={e => change(setGoal, e.target.value)} /></MicField></label>}
+    {!again && <label htmlFor={goalId}>Work goal<AnswerBox boxRef={goalBox} micRef={goalMic} id={goalId}
+      draftKey={itemDraftKey(draftKey, `${field}goal`)} ariaLabel="Work goal" minRows={3} value={goal}
+      readOnly={submitting || submitted || !!retry || workLocked} onChange={v => change(setGoal, v)} /></label>}
     {!again && !goal.trim() && <p>Add a work goal before continuing.</p>}
     <p>{again ? 'Set this email to read again. The previous receipt is kept.'
       : retryCreate ? 'Retry the original task identity and work goal. A second task will not be created.'

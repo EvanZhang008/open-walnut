@@ -9,6 +9,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
+import { MonthGrid } from './MonthGrid';
 
 /**
  * Parse an ISO date string as local time.
@@ -138,11 +139,13 @@ interface DatePickerProps {
    *  the trigger shows the date alone, or a muted "Set date" while empty. `label`
    *  still decides the semantics (a passed Start reads "Started", never overdue). */
   bare?: boolean;
+  /** The first day the month offers (YYYY-MM-DD): a snooze cannot start in the past. */
+  minDate?: string;
 }
 
 /** Inner content shared by popover and inline modes. */
-function DatePickerContent({ date, onChange }: Pick<DatePickerProps, 'date' | 'onChange'>) {
-  // Convert current date to YYYY-MM-DD for the input
+function DatePickerContent({ date, onChange, minDate }: Pick<DatePickerProps, 'date' | 'onChange' | 'minDate'>) {
+  // The current date as YYYY-MM-DD, the day the month marks
   const inputValue = date ? (() => {
     const d = parseDateLocal(date);
     if (isNaN(d.getTime())) return '';
@@ -156,12 +159,6 @@ function DatePickerContent({ date, onChange }: Pick<DatePickerProps, 'date' | 'o
     onChange(new Date(Date.now() + ms).toISOString());
   };
 
-  const handleCalendarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    if (!val) { onChange(null); return; }
-    onChange(val);
-  };
-
   const dayPills = buildDayPills();
 
   return (
@@ -172,7 +169,7 @@ function DatePickerContent({ date, onChange }: Pick<DatePickerProps, 'date' | 'o
           <button
             className="dp-pill dp-pill-none"
             onClick={(e) => { e.stopPropagation(); onChange(null); }}
-            title="Clear date"
+            aria-label="Clear date"
           >
             None
           </button>
@@ -194,35 +191,19 @@ function DatePickerContent({ date, onChange }: Pick<DatePickerProps, 'date' | 'o
             key={p.date}
             className="dp-pill"
             onClick={(e) => { e.stopPropagation(); onChange(p.date); }}
-            title={p.date}
+            data-date={p.date}
           >
             {p.label}
           </button>
         ))}
       </div>
-      <div className="dp-calendar-row">
-        <input
-          type="date"
-          className="dp-date-input"
-          value={inputValue}
-          onChange={handleCalendarChange}
-          onClick={(e) => e.stopPropagation()}
-        />
-        {date && (
-          <button
-            className="dp-clear"
-            onClick={(e) => { e.stopPropagation(); onChange(null); }}
-            title="Clear date"
-          >
-            &times;
-          </button>
-        )}
-      </div>
+      {/* Walnut's own month, never the browser's date field (MonthGrid). None above clears. */}
+      <MonthGrid selected={inputValue} onPick={onChange} {...(minDate ? { min: minDate } : {})} />
     </div>
   );
 }
 
-export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty, bare }: DatePickerProps) {
+export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty, bare, minDate }: DatePickerProps) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -272,7 +253,7 @@ export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty, bare
 
   // Inline mode: render content directly
   if (inline) {
-    return <DatePickerContent date={date} onChange={onChange} />;
+    return <DatePickerContent date={date} onChange={onChange} minDate={minDate} />;
   }
 
   // Popover mode. Start pickers must never show red "Overdue" — a passed start
@@ -314,7 +295,7 @@ export function DatePicker({ date, onChange, inline, label, ghostWhenEmpty, bare
           className="dp-popover"
           style={menuPlacementStyle(menuPos)}
         >
-          <DatePickerContent date={date} onChange={handleChange} />
+          <DatePickerContent date={date} onChange={handleChange} minDate={minDate} />
         </div>,
         document.body,
       )}

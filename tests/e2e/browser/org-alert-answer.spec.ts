@@ -220,16 +220,37 @@ test('Snooze opens the date picker; a pick snoozes the task, which moves to Wait
   const vp = page.viewportSize()!
   expect(box.y + box.height).toBeLessThanOrEqual(vp.height)
   await expect(menu.locator('.dp-pill').first()).toBeVisible()
-  await expect(menu.locator('input[type="date"]')).toBeVisible()
-  const day = menu.locator('.dp-pill[title]').first()
-  const date = (await day.getAttribute('title'))!
+  // Walnut's own month, never the browser's date field, and no title tooltip over the menu or the row.
+  await expect(menu.getByTestId('dp-month')).toBeVisible()
+  await expect(menu.locator('input')).toHaveCount(0)
+  await expect(menu.locator('[title]')).toHaveCount(0)
+  await expect(row.locator('[title]')).toHaveCount(0)
+  await menu.screenshot({ path: `test-results/org-snooze-menu-${test.info().project.name}.png` })
+  // A day already begun is no snooze: today and before are drawn, not offered.
+  const d = new Date()
+  const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  await expect(menu.locator(`[data-testid="dp-month-day"][data-date="${today}"]`)).toBeDisabled()
+  // A day of next month, from the grid; the row goes on the click, while the write is still held.
+  await menu.getByTestId('dp-month-next').click()
+  const day = menu.locator('[data-testid="dp-month-day"]').nth(14)
+  const date = (await day.getAttribute('data-date'))!
+  let release!: () => void
+  const held = new Promise<void>((r) => { release = r })
+  await page.route(`**/api/tasks/${id}`, async (route) => {
+    if (route.request().method() !== 'PATCH' && route.request().method() !== 'PUT') return route.fallback()
+    await held
+    await route.fallback()
+  })
   await day.click()
   await expect(menu).toHaveCount(0)
+  await expect(row).toHaveCount(0, { timeout: 1_500 })
+  release()
+  await page.unroute(`**/api/tasks/${id}`)
   await expect.poll(async () => (await (await request.get(`/api/tasks/${id}`)).json()).task?.start_date).toBe(date)
   // A snoozed ask is Waiting / snoozed until then (the one user status, src/core/user-status.ts):
   // it leaves Needs you, and the Waiting / snoozed tab lists it.
   await expect.poll(async () => (await (await request.get(`/api/tasks/${id}`)).json()).task?.user_status?.state, { timeout: 30_000 }).toBe('waiting')
-  await expect(row).toHaveCount(0, { timeout: 30_000 })
+  await expect(row).toHaveCount(0)
   const tabs = page.getByTestId('org-detail').getByTestId('org-task-tab')
   // The click can land while the list redraws for the row that left: click until the tab is on.
   const waitingTab = tabs.filter({ hasText: /^Waiting/ })
@@ -244,6 +265,38 @@ test('Snooze opens the date picker; a pick snoozes the task, which moves to Wait
   await tabs.filter({ hasText: /^Needs you/ }).click()
   await expect(alertRow(page, id)).toBeVisible({ timeout: 30_000 })
   await expect(alertRow(page, id).getByTestId('org-alert-snooze')).toHaveText(/^Snooze/)
+})
+
+test('a refused snooze brings the row back with the reason', async ({ page, request }) => {
+  const id = await createTask(request, `Snooze refused ${STAMP}`)
+  await needsUser(request, id)
+  await openTeam(page)
+  const row = alertRow(page, id)
+  await expect(row).toBeVisible({ timeout: 60_000 })
+  await page.route(`**/api/tasks/${id}`, (route) => (route.request().method() === 'GET' ? route.fallback()
+    : route.fulfill({ status: 409, contentType: 'application/json', body: '{"error":"The task is locked"}' })))
+  await row.getByTestId('org-alert-snooze').click()
+  await page.locator(`[data-testid="org-snooze-menu"][data-task-id="${id}"] .dp-pill`).first().click()
+  await expect(alertRow(page, id).getByTestId('org-answer-error')).toContainText('Snooze failed', { timeout: 15_000 })
+  await page.unroute(`**/api/tasks/${id}`)
+  expect((await (await request.get(`/api/tasks/${id}`)).json()).task?.start_date ?? null).toBeNull()
+})
+
+test('a refused unsnooze says so on the row, which stays', async ({ page, request }) => {
+  const id = await createTask(request, `Unsnooze refused ${STAMP}`)
+  await needsUser(request, id)
+  // A start date already past: the task asks again, and its picker offers None.
+  await request.patch(`/api/tasks/${id}`, { data: { start_date: '2026-01-02' } })
+  await openTeam(page)
+  const row = alertRow(page, id)
+  await expect(row).toBeVisible({ timeout: 60_000 })
+  await page.route(`**/api/tasks/${id}`, (route) => (route.request().method() === 'GET' ? route.fallback()
+    : route.fulfill({ status: 409, contentType: 'application/json', body: '{"error":"The task is locked"}' })))
+  await row.getByTestId('org-alert-snooze').click()
+  await page.locator(`[data-testid="org-snooze-menu"][data-task-id="${id}"] .dp-pill-none`).click()
+  await expect(row.getByTestId('org-alert-snooze-note')).toContainText('Unsnooze failed', { timeout: 15_000 })
+  await expect(row).toBeVisible()
+  await page.unroute(`**/api/tasks/${id}`)
 })
 
 test('a decision letter: its two actions in the row, one click answers it, the row goes at once', async ({ page, request }) => {

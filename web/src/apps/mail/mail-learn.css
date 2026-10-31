@@ -33,8 +33,7 @@
 .mail-correct-summary { min-width: 0; overflow-wrap: anywhere; }
 
 .mail-correct-new-group { padding-left: 24px; display: flex; flex-direction: column; gap: 4px; }
-.mail-correct-input,
-.mail-correct-why {
+.mail-correct-input {
   width: 100%;
   box-sizing: border-box;
   font: inherit;
@@ -44,7 +43,8 @@
   border-radius: var(--radius-sm);
   padding: 4px 6px;
 }
-.mail-correct-why { resize: vertical; min-height: 44px; }
+/* The why box is the shared AnswerBox (styles/answer-box.css). */
+.mail-correct-why-box { width: 100%; box-sizing: border-box; }
 .mail-correct-why-label { color: var(--fg-secondary); margin-top: 4px; }
 .mail-correct-counter { align-self: flex-end; color: var(--fg-muted); font-size: 12px; }
 .mail-correct-field-error { margin: 0; color: var(--error); overflow-wrap: anywhere; }

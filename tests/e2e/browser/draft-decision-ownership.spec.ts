@@ -288,7 +288,7 @@ test('a Start set in More takes over Start and its End together, and neither a f
   // Walnut's start keeps its row in More (a date row shows only while set).
   const menu = await openDraftSettings(panel, 'startDate')
   await menu.locator('.task-kebab-date-toggle').filter({ hasText: /Start/ }).click()
-  await menu.locator(`.task-kebab-date.open .dp-pill[title="${isoDay(4)}"]`).click()
+  await menu.locator(`.task-kebab-date.open .dp-pill[data-date="${isoDay(4)}"]`).click()
   await expect(draftTaskMenu(page)).toHaveCount(0)
   await expectUserChip(panel, 'startDate', `Start ${dayWords(4)}`)
   await expect(draftDecisionChip(panel, 'startDate')).not.toContainText(' to ')

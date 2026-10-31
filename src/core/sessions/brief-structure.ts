@@ -15,6 +15,7 @@
  *   - a section left empty gets one "nothing" line in the Brief's language, and a task's line
  *     written bare becomes a list item.
  */
+import { ABOUT_TAG_NAME } from '../org/message-about.js';
 import { BRIEF_SECTIONS, briefTeam, fallbackUserState, type BriefSectionTask, type BriefTask, type UserState } from '../user-status.js';
 import { pickLead } from '../org/org-tree.js';
 
@@ -147,7 +148,9 @@ export function structureBrief(
   let dropping = false;
   let dropped = 0;
   const named = new Set<string>();
-  for (const raw of text.split('\n')) {
+  // A chat reply's tasks line (org/message-about.ts) is never the letter's.
+  const aboutLine = new RegExp(`^\\s{0,3}<${ABOUT_TAG_NAME}\\b[^>]*/>\\s*$`);
+  for (const raw of text.split('\n').filter((l) => !aboutLine.test(l))) {
     let line = raw.trimEnd();
     // Walnut's own count of the asks past the cap is made again below, from the live state.
     if (opts.live && ADDED_MORE_RE.test(line.trim())) { last = null; continue; }

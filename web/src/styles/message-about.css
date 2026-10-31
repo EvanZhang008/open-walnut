@@ -1,0 +1,4 @@
+/* The tasks a reply in an Org node's chat is about (components/sessions/message-about.tsx). */
+.msg-about { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 6px; font-size: 12px; }
+.msg-about-label { color: var(--fg-muted); font-size: 11px; font-weight: 600; letter-spacing: 0.02em; }
+.msg-about-pills { display: inline-flex; flex-wrap: wrap; gap: 4px 6px; min-width: 0; }

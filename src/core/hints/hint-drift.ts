@@ -16,6 +16,7 @@
 import type { OnTurnCompletePayload, SessionHookDefinition } from '../session-hooks/types.js';
 import { effectiveHints } from './hint-registry.js';
 import { hintTargetOf, writeHintState } from './hint-send.js';
+import { stripAboutTag } from '../org/message-about.js';
 
 /** The no-action line a turn ends on (web/src/utils/turn-end-marker.ts). */
 const NO_ACTION_END = /(?:^|\n)[ \t]{0,3}<walnut-turn status="(?:agent-ack|no-action)"\/>\s*$/;
@@ -32,7 +33,8 @@ export const hintDriftHook: SessionHookDefinition = {
 
   handler: async (payload) => {
     const p = payload as OnTurnCompletePayload;
-    const replies = [...(p.replies ?? []), ...(p.result ? [p.result] : [])];
+    // The tasks line (org/message-about.ts) is Walnut's, never the user's to read: judged without it.
+    const replies = [...(p.replies ?? []), ...(p.result ? [p.result] : [])].map((r) => stripAboutTag(r));
     if (!p.sessionId || !replies.length) return;
     // A turn that ended on the no-action line is hidden whole in the chat unless a person
     // started it (web/src/utils/turn-shape.ts): nothing of it was read.

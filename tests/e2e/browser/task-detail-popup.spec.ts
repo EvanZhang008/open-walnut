@@ -160,7 +160,7 @@ test('rows lead where they say, and the rail\'s dates change in place', async ({
   // A day pill, and the server has it; the picker closes on the pick.
   await due.locator('.dp-trigger').click()
   const pill = page.locator('.dp-content .dp-pills').nth(1).locator('.dp-pill').first()
-  const day = (await pill.getAttribute('title'))!
+  const day = (await pill.getAttribute('data-date'))!
   await pill.click()
   await expect.poll(async () => {
     const res = await page.request.get(`${base()}/api/tasks/${TASK}`)

@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, memo, type ReactNode } from 'react';
+import { useState, useCallback, useContext, useMemo, memo, type ReactNode } from 'react';
 import type { SessionHistoryMessage, SessionHistoryTool } from '@/types/session';
 import type { StreamingBlock } from '@/stream/stream-reducer';
 import {
@@ -37,6 +37,7 @@ import { MessageHintsRow } from './MessageHintsRow';
 import { useShowWalnutAdditions } from '@/hooks/useShowWalnutAdditions';
 import { showHintTagsAsTyped } from '@/utils/hint-display';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
+import { MessageAbout, MessageAboutContext, rowAbout } from './message-about';
 import { shortenFileAboutLine } from '@/utils/thread-tree';
 import { InjectedBannerRow } from './InjectedBannerRow';
 import { searchPromptBannerSplit } from './search-ask';
@@ -1088,6 +1089,9 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
   // the turn shows the number, so the line itself never renders. Nor does the
   // "no action needed" marker line (turn-end-marker.ts): it is for the timeline.
   const text = role === 'assistant' ? stripTurnMarker(stripQuestionTag(rawText ?? '')) : rawText;
+  // In Main's or a lead's chat, the tasks a reply is about show under it (message-about.tsx).
+  const showAbout = useContext(MessageAboutContext);
+  const aboutIds = useMemo(() => (showAbout && role === 'assistant' ? rowAbout(message.about, rawText) : []), [showAbout, role, message.about, rawText]);
   const tools = suppressTools || answerOnly ? undefined : rawTools;
   const time = formatTime(timestamp);
   const isUser = role === 'user';
@@ -1285,6 +1289,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
         ) : (
           <RichMarkdown text={bodyText} cwd={sessionCwd} scope={message.msgId} />
         ))}
+        {bodyText && aboutIds.length > 0 && <MessageAbout ids={aboutIds} />}
         {isUser && showAdded && message.hints && message.hints.length > 0 && <MessageHintsRow hints={message.hints} />}
         {tools && tools.length > 0 && (() => {
           // CLI content order is prose first, tool_use blocks after — render

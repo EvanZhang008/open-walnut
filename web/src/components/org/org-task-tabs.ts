@@ -99,3 +99,7 @@ export function taskTabNote(task: Task, tab: OrgTaskTab): string {
   if (tab === 'waiting') return (s?.waitingOn ?? s?.now ?? '').trim();
   return '';
 }
+
+/** The node's own ask first, the rest in their order: every ask the Needs you tab counts is a card. */
+export const ownAskFirst = (alerts: readonly OrgAlertView[], ownId: string | undefined): OrgAlertView[] =>
+  [...alerts.filter((a) => a.taskId === ownId), ...alerts.filter((a) => a.taskId !== ownId)];

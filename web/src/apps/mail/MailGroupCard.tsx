@@ -15,11 +15,12 @@
  * Nothing is written before Save. Placed by `useMenuPlacement` (never past the viewport), portalled,
  * `onPointerDown` stopped at the root, Esc closes and hands focus back to the group line.
  */
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { getMailRules, putMailRules, renameMailGroup } from '@/api/mail-groups';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
-import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { type BoxMicHandle } from '@/components/common/BoxMic';
+import { AnswerBox } from '@/components/common/AnswerBox';
 import { log } from '@/utils/log';
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
@@ -195,26 +196,21 @@ export function MailGroupCard({ request }: { request: MailGroupCardRequest }) {
           <>
             <p className="mail-group-card-body">{importantCardBody(request.label)}</p>
             <label className="mail-correct-why-label" htmlFor={fieldId}>{WHY_LABEL}</label>
-            <MicField
-              boxRef={fieldRef}
-              text={text}
-              setText={(next) => setText(next.slice(0, MAX_NOTE))}
-              handleRef={mic}
-              disabled={saving}
-            >
-              <textarea
-                id={fieldId}
-                ref={(el) => { fieldRef.current = el; }}
-                data-draft-key={draft.key ?? undefined}
-                className="mail-correct-why"
-                data-testid="mail-group-card-why"
-                rows={2}
-                maxLength={MAX_NOTE}
-                placeholder="For example: tickets that name me need me"
-                value={text}
-                onChange={(event) => setText(event.target.value.slice(0, MAX_NOTE))}
-              />
-            </MicField>
+            <AnswerBox
+              id={fieldId}
+              boxRef={fieldRef as RefObject<HTMLTextAreaElement | null>}
+              micRef={mic}
+              draftKey={draft.key}
+              className="mail-correct-why-box"
+              inputClassName="mail-correct-why"
+              testId="mail-group-card-why"
+              minRows={2}
+              maxLength={MAX_NOTE}
+              placeholder="For example: tickets that name me need me"
+              value={text}
+              onChange={(next) => setText(next.slice(0, MAX_NOTE))}
+              sending={saving}
+            />
           </>
         ) : (
           <input

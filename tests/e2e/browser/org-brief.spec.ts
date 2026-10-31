@@ -160,9 +160,13 @@ test('a lead opens on Task with its Needs you cards; its Brief is the letter alo
   await expect(tabs).toHaveText([/^Pinned\s*\d+$/, /^Needs you\s*\d+$/, /^Working\s*\d+$/, /^Waiting \/ snoozed\s*\d+$/, /^Completed\s*\d+$/])
   await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true')
   const needsCount = Number((await tabs.nth(1).locator('.org-task-tab-count').textContent()) ?? '-1')
-  // Every one is a card, or the chat below holds it (the lead's own ask, its chat being open).
-  const cards = await detail.getByTestId('org-alert').count()
-  if (cards < needsCount) await expect(detail.getByTestId('org-task-empty')).toHaveText(cards ? `And ${needsCount - cards} in the chat.` : 'Its ask is in the chat.')
+  // Every one is a card, the lead's own ask included (the first, named for the node).
+  await expect(detail.getByTestId('org-alert')).toHaveCount(needsCount)
+  const own = detail.locator('[data-testid="org-alert"][data-own="1"]')
+  if (await own.count()) {
+    await expect(detail.getByTestId('org-alert').first()).toHaveAttribute('data-own', '1')
+    await expect(own.getByTestId('org-ask-own')).toContainText('asks you')
+  }
   await expect(detail.getByTestId('org-pill-needs')).toContainText(String(needsCount))
   await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-tab', 'needs')
   await detail.getByTestId('org-pill-waiting').click()

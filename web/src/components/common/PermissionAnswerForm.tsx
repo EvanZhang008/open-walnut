@@ -16,8 +16,8 @@
  * `answers` construction, the completeness gate, pill toggling) — this component
  * owns only the selection state and the markup.
  */
-import { useEffect, useRef, useState } from 'react';
-import { MicField } from '@/components/common/BoxMic';
+import { useEffect, useState } from 'react';
+import { AnswerBox } from '@/components/common/AnswerBox';
 import { useDraftValue } from '@/hooks/useDraft';
 import { askAnswerDraftKey } from '@/utils/drafts';
 import '@/styles/prompt-mic.css';
@@ -31,19 +31,17 @@ import {
 function OtherAnswerInput({ placeholder, value, disabled, onChange, draftKey }: {
   placeholder: string; value: string; disabled: boolean; onChange: (v: string) => void; draftKey: string | null;
 }) {
-  const box = useRef<HTMLInputElement | null>(null);
   return (
-    <MicField inline fieldClassName="nfc-answer-field" boxRef={box} text={value} setText={onChange} disabled={disabled}>
-      <input
-        ref={box}
-        className="nfc-answer-input"
-        data-draft-key={draftKey ?? undefined}
-        placeholder={placeholder}
-        value={value}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    </MicField>
+    <AnswerBox
+      className="nfc-answer-field"
+      inputClassName="nfc-answer-input"
+      draftKey={draftKey}
+      placeholder={placeholder}
+      value={value}
+      disabled={disabled}
+      onChange={onChange}
+      maxRows={4}
+    />
   );
 }
 

@@ -3078,6 +3078,14 @@ an id outside `[A-Za-z0-9_-]`.
   `text`) is the message exactly as the model received it, hints and every
   other Walnut addition included. A raw view shows `rawText ?? text` as a turn's
   input and the assistant rows after it as its output.
+  Assistant rows (additive, 2026-10-31): `about` (optional) lists the task ids
+  the message is about, at most 6, and `aboutTagged: true` says the message
+  named them itself with its last line `<walnut-about tasks="<id>,<id>"/>`,
+  which Walnut takes off `text`; without the line, `about` is the task whose
+  message started the turn (its envelope's `from-task`) and the tasks the turn
+  sent to (`task_send`, `org_send`). A client draws them as live task pills
+  under the replies of Main's and a lead's (VP's) session, and should also hide
+  the line in streamed text it shows before the row arrives.
 - `GET /api/v1/sessions/:id/chat-earlier` (additive, 2026-10) → `200 {
   "agentId", "conversationId", "messages": [rows] }` for a chat's lane
   session: what the chat said before this session started (the chat history

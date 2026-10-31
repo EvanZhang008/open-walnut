@@ -141,6 +141,7 @@ import { useTitleMetaFit, useToolRowFit } from './useSessionHeaderFit';
 import { HiddenPillRows, SessionHeaderMoreMenu } from './SessionHeaderMore';
 import '@/styles/session-header-fit.css';
 import { IslandHostContext, type IslandHost } from '@/components/chat/island-host';
+import { MessageAboutContext } from './message-about';
 import { dropSavedColumn } from '@/utils/layout-record';
 
 /**
@@ -2849,6 +2850,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           )}
           <CronJobsCard sid={sessionId} snapshot={supervisionSnapshot} open={cronDetailOpen} onClose={() => setCronDetailOpen(false)} archived={session?.archived} />
           <IslandHostContext.Provider value={islandHost}>
+          <MessageAboutContext.Provider value={sessionTask?.org_role === 'main' || sessionTask?.org_role === 'lead'}>
           <SessionChatHistory
             key={`${sessionId}:${rewindEpoch}`}
             sessionId={sessionId}
@@ -2887,6 +2889,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             onRequestComposerFocus={requestComposerFocus}
             onQuoteInChat={quoteInChat}
           />
+          </MessageAboutContext.Provider>
           </IslandHostContext.Provider>
         </div>
 
