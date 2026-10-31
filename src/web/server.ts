@@ -2427,9 +2427,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // groups + tier CRUD 501 on a REPLICA (outbox whitelist lacks them).
   app.use('/api/v1', taskExtrasV1Router)
   app.use('/api/v1', transferV1Router)
-  app.use('/api/v1', hostsFleetV1Router)
   app.use('/api/v1', engineSwitchV1Router)
+  // Before the fleet view: its GET /hosts/:host would answer GET /hosts/load
+  // (tests/web/v1-route-shadow-ratchet.test.ts).
   app.use('/api/v1', taskMoveV1Router)
+  app.use('/api/v1', hostsFleetV1Router)
   // Session extras (additive, Wave 2): controls/settings/side-questions/
   // workflow/plan/subagent-history/execute-compact/queue + list-dirs — all
   // B-class relay on a REPLICA.
