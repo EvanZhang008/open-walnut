@@ -76,12 +76,22 @@ async function goFullscreen(panel: Locator): Promise<void> {
  *  :266 on macOS WebKit, 2026-10-31). Returns with the timeline at rest. */
 async function wheelIntoView(page: Page, scroller: Locator, target: Locator): Promise<void> {
   const box = (await scroller.boundingBox())!
+  // The panel's glass header lies over the scroller's top padding: a target
+  // there is under it, not in view (2026-10-31: card 18 stopped under the header
+  // on macOS WebKit and a click there hit the header).
+  const coveredTo = await scroller.evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    const header = el.closest('.session-panel')?.querySelector('.session-panel-header')
+    const pad = r.top + (parseFloat(getComputedStyle(el).paddingTop) || 0)
+    return Math.max(pad, header ? header.getBoundingClientRect().bottom : r.top)
+  })
+  const top = coveredTo + 8
   await page.mouse.move(box.x + box.width * 0.3, box.y + box.height / 2)
   for (let i = 0; i < 80; i++) {
     await settledScrollTop(scroller)
     const t = await target.boundingBox()
-    if (t && t.y >= box.y + 40 && t.y + t.height <= box.y + box.height - 40) return
-    await page.mouse.wheel(0, t && t.y < box.y + 40 ? -300 : 300)
+    if (t && t.y >= top && t.y + t.height <= box.y + box.height - 40) return
+    await page.mouse.wheel(0, t && t.y < top ? -300 : 300)
     await page.waitForTimeout(80)
   }
   throw new Error('never scrolled the card into the timeline')

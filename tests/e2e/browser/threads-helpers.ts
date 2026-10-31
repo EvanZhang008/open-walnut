@@ -391,5 +391,14 @@ export async function settledScrollTop(history: Locator): Promise<number> {
 export async function clickInPlace(page: Page, target: Locator): Promise<void> {
   await expect(target).toBeInViewport()
   const b = (await target.boundingBox())!
-  await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2)
+  const x = b.x + b.width / 2
+  const y = b.y + b.height / 2
+  // What a reader's click there would hit: the target, or something lying over
+  // it (the panel's glass header did, on macOS WebKit). Never click blind.
+  const hit = await target.evaluate((el, [px, py]) => {
+    const at = document.elementFromPoint(px, py)
+    return at && (at === el || el.contains(at)) ? null : (at ? `${at.tagName}.${String((at as HTMLElement).className).slice(0, 60)}` : 'nothing')
+  }, [x, y] as const)
+  if (hit) throw new Error(`clickInPlace: the target is covered at its centre by ${hit}`)
+  await page.mouse.click(x, y)
 }
