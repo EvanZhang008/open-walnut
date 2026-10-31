@@ -45,6 +45,7 @@ import {
   useImperativeHandle,
   forwardRef,
 } from 'react';
+import { ICON_FILE, ICON_FOLDER, ICON_MAIL, ICON_NOTE, ICON_PERSON } from '@/components/common/Icons';
 import { fetchDirList, type DirEntry } from '@/api/files';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
@@ -126,7 +127,7 @@ type Row =
 const SOURCE_TAB_LIMIT = 12;
 const SOURCE_ALL_LIMIT = 6;
 
-const KIND_ICON: Record<string, string> = { person: '👤', channel: '#', message: '✉️', note: '📝' };
+const KIND_ICON: Record<string, React.ReactNode> = { person: ICON_PERSON, channel: '#', message: ICON_MAIL, note: ICON_NOTE };
 
 type GroupId = 'task' | 'files';
 
@@ -434,7 +435,7 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
           onMouseDown={(e) => { e.preventDefault(); pick(row); }}
           title={joinPath(browseDir, entry.name)}
         >
-          <span className="mention-ficon">{entry.type === 'dir' ? '📁' : '📄'}</span>
+          <span className="mention-ficon" aria-hidden="true">{entry.type === 'dir' ? ICON_FOLDER : ICON_FILE}</span>
           <span className="mention-main">
             <span className="mention-title"><Highlighted text={entry.name} positions={positions} /></span>
           </span>
@@ -466,7 +467,7 @@ export const MentionPalette = forwardRef<MentionPaletteHandle, MentionPalettePro
         onMouseDown={(e) => { e.preventDefault(); pick(row); }}
         title={row.item.subtitle ? `${row.item.title} · ${row.item.subtitle}` : row.item.title}
       >
-        <span className="mention-ficon">{KIND_ICON[row.item.kind ?? ''] ?? '•'}</span>
+        <span className="mention-ficon" aria-hidden="true">{KIND_ICON[row.item.kind ?? ''] ?? '•'}</span>
         <span className="mention-main">
           <span className="mention-title">{row.item.title}</span>
           {row.item.subtitle && <span className="mention-meta">{row.item.subtitle}</span>}

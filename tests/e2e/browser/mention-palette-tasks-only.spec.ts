@@ -177,7 +177,9 @@ test('the "@" palette lists tasks only, a task carries its session, and the pick
   // task line with its run state, one id, no second one to address.
   const panel = col.locator('.session-panel')
   await expect(panel.locator(`a.task-link[data-task-id="${waitingTask}"]`).first()).toBeVisible({ timeout: 30_000 })
-  await expect(panel).toContainText(`task ${waitingTask}`, { timeout: 60_000 })
+  // The echoed card names the task by its id; the page reads every task a chat
+  // names as its name (a link carrying the id), so the id is the link's.
+  await expect(panel.locator(`[data-msg-role="assistant"] a.task-link[data-task-id="${waitingTask}"]`).first()).toBeVisible({ timeout: 60_000 })
   await expect(panel).toContainText('project Walnut · waiting on you')
   await expect(panel).toContainText('use task_get / task_send for more')
   await expect(panel).not.toContainText(`session ${waitingSid}`)
@@ -226,7 +228,9 @@ test('a draft column offers the same Tasks group, and a Start carrying a referen
   // input, so the reply carries the reference card quick-start appended, and the
   // card block itself never shows as the human's words.
   await expect(panel.locator(`a.task-link[data-task-id="${referenced}"]`).first()).toBeVisible({ timeout: 30_000 })
-  await expect(panel).toContainText(`task ${referenced}`, { timeout: 60_000 })
+  // The echoed card names the task by its id; the page reads every task a chat
+  // names as its name (a link carrying the id), so the id is the link's.
+  await expect(panel.locator(`[data-msg-role="assistant"] a.task-link[data-task-id="${referenced}"]`).first()).toBeVisible({ timeout: 60_000 })
   await expect(panel).toContainText('use task_get / task_send for more')
   const humanBubble = panel.locator('.session-msg-user').filter({ hasText: 'please read' })
   await expect(humanBubble).toContainText('first')

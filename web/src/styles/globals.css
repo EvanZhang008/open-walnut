@@ -7608,7 +7608,7 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
 .mention-dot.running { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 18%, transparent); }
 .mention-dot.waiting { background: var(--warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 18%, transparent); }
 .mention-dot.idle { background: var(--fg-muted); opacity: 0.55; }
-.mention-ficon { flex-shrink: 0; width: 16px; text-align: center; font-size: 13px; }
+.mention-ficon { flex-shrink: 0; width: 16px; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; color: var(--fg-muted); }
 .mention-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .mention-title {
   font-size: 13px;

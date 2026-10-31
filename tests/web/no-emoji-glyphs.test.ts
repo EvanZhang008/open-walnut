@@ -92,7 +92,6 @@ const BASELINE: Record<string, number> = {
   'components/chat/ChatInput.tsx': 1,
   'components/chat/ChatMessage.tsx': 1,
   'components/chat/FileMentionPopup.tsx': 4,
-  'components/chat/MentionPalette.tsx': 2,
   'components/common/MicButton.tsx': 1,
   'components/common/NotificationSystemPane.tsx': 2,
   'components/notes/NotesBubbleMenu.tsx': 1,
