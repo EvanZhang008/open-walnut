@@ -43,6 +43,11 @@ function testClasses(target: string): { name: string; file: string; body: string
 // A UI class that talks to a fixture server: its routes, the Inbox fixture marker, or
 // a test that fails without an isolated server.
 const TALKS_TO_FIXTURE = /__stub\/|"\/__\w+\/|WALNUT_UITEST_INBOX_ITEMS|InboxItemActionsUITests\.launch|isolated server/
+// A UI class that drives the home screen (SpringBoard: the icon's long-press menu, a
+// shortcut). On a hosted runner its animations stalled 60 s at a time and the shortcut
+// came minutes late (2026-10-31, VoiceQuickActionUITests in run 41225175176); the Mac
+// runs it.
+const DRIVES_HOME_SCREEN = /com\.apple\.springboard/
 // Fixture classes that probe their server and skip on the offline pairing, so CI runs
 // them as skips. A new fixture class goes here (when it probes) or into IOS_CI_SKIP_UI.
 const PROBES_ITS_FIXTURE = [
@@ -100,10 +105,15 @@ describe('the iOS job in ci.yml', () => {
     expect(unit.run).toContain('$IOS_CI_SKIP_UNIT')
   })
 
-  it('skips each UI class that needs its own fixture server, and only those', () => {
+  it('skips each UI class that needs its own fixture server or drives the home screen, and only those', () => {
     const skips = skipped(job.env?.IOS_CI_SKIP_UI, 'WalnutUITests')
-    const fixture = testClasses('WalnutUITests').filter((c) => TALKS_TO_FIXTURE.test(c.body)).map((c) => c.name)
-    for (const name of skips) expect(fixture, `${name} needs no fixture`).toContain(name)
+    const classes = testClasses('WalnutUITests')
+    const fixture = classes.filter((c) => TALKS_TO_FIXTURE.test(c.body)).map((c) => c.name)
+    const homeScreen = classes.filter((c) => DRIVES_HOME_SCREEN.test(c.body)).map((c) => c.name)
+    for (const name of skips) expect([...fixture, ...homeScreen], `${name} needs no fixture and drives no home screen`).toContain(name)
+    for (const name of homeScreen) {
+      expect(skips.includes(name) || PROBES_ITS_FIXTURE.includes(name), `${name} drives the home screen: list it in IOS_CI_SKIP_UI`).toBe(true)
+    }
     for (const name of fixture) {
       const probes = PROBES_ITS_FIXTURE.includes(name)
       expect(probes !== skips.includes(name), `${name}: list it in PROBES_ITS_FIXTURE (it skips without its fixture) or in IOS_CI_SKIP_UI`).toBe(true)

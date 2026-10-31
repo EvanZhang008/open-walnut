@@ -847,6 +847,7 @@ jobs:
         -skip-testing:WalnutUITests/MediaFileUITests
         -skip-testing:WalnutUITests/PeerMessageUITests
         -skip-testing:WalnutUITests/VoiceHistoryUITests
+        -skip-testing:WalnutUITests/VoiceQuickActionUITests
     steps:
       - uses: actions/checkout@v5
       - name: XcodeGen
