@@ -23,6 +23,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import zlib from 'node:zlib'
 import http from 'node:http'
 import net from 'node:net'
 import https from 'node:https'
@@ -4612,7 +4613,10 @@ function cmdHostSlice(ws: ServerWebSocket<WsData>, id: number, cmd: Record<strin
       if (have) bindGatewayClientHome(ws, cmd.home)
       return sendOk(ws, id, have ? { have: true, changed: false, pendingHandover: offlineHost.hasRecords(cmd.home) } : { have: false })
     }
-    const slice = cmd.slice as HostSlice
+    // host-slice-gz-v1: the copy gzipped (a tenth of the bytes on the shared link).
+    const slice = (typeof cmd.sliceGz === 'string'
+      ? JSON.parse(zlib.gunzipSync(Buffer.from(cmd.sliceGz, 'base64')).toString('utf8'))
+      : cmd.slice) as HostSlice
     const r = offlineHost.configure(slice)
     bindGatewayClientHome(ws, slice.home)
     sendOk(ws, id, { changed: r.changed, pendingHandover: offlineHost.hasRecords(slice.home) })

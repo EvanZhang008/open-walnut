@@ -851,6 +851,7 @@ const http = require('http');
 const net = require('net');
 const { spawn, execSync, execFile, execFileSync } = require('child_process');
 const crypto = require('crypto');
+const zlib = require('zlib');
 
 process.umask(0o077);
 const daemonCommands = (__CREATE_COMMAND_DRAIN__)();
@@ -5679,9 +5680,13 @@ function cmdHostSlice(ws, id, cmd) {
       if (have) bindGatewayClientHome(ws, cmd.home);
       return sendOk(ws, id, have ? { have: true, changed: false, pendingHandover: offlineHost.hasRecords(cmd.home) } : { have: false });
     }
-    var r = offlineHost.configure(cmd.slice);
-    bindGatewayClientHome(ws, cmd.slice.home);
-    sendOk(ws, id, { changed: r.changed, pendingHandover: offlineHost.hasRecords(cmd.slice.home) });
+    // host-slice-gz-v1: the copy gzipped (a tenth of the bytes on the shared link).
+    var slice = typeof cmd.sliceGz === 'string'
+      ? JSON.parse(zlib.gunzipSync(Buffer.from(cmd.sliceGz, 'base64')).toString('utf8'))
+      : cmd.slice;
+    var r = offlineHost.configure(slice);
+    bindGatewayClientHome(ws, slice.home);
+    sendOk(ws, id, { changed: r.changed, pendingHandover: offlineHost.hasRecords(slice.home) });
   } catch (err) {
     sendError(ws, id, 'host.slice: ' + err.message);
   }

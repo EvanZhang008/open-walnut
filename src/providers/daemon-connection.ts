@@ -80,6 +80,8 @@ import { FOLD_CHECKPOINT_FORMAT } from './fold-checkpoint-core.js'
 import { annotateCredentialFailure, SSH_EVIDENCE_PREFIX } from './ssh-credential-evidence.js'
 import { cancelRecordedForwards, controlSocketPath, exitControlMaster, masterLastWords, planControlMaster, recordForward, startControlMaster } from './ssh-control-master.js'
 import { lastWordsExcerpt, UPLOAD_PARALLEL } from './ssh-last-words.js'
+import { gzip } from 'node:zlib'
+import { promisify } from 'node:util'
 import {
   clearReconnectCause, decideReconnectStep, getReconnectCause, isCredentialWaitKind, lastHostSignalAt, recordReconnectCause,
 } from './daemon-reconnect-cause.js'
@@ -93,6 +95,9 @@ import { isHostReplicaProgram } from '../core/server-role.js'
 import { NeedsLeaderError } from '../core/replication/needs-leader.js'
 // The companion's forward on a stream ('bridge-stream-v1', replica plan WP13): the Mac's door.
 import { companionStreamAcceptor } from '../web/v1-forward/stream-door.js'
+
+/** host.slice goes gzipped (host-slice-gz-v1), compressed off the event loop. */
+const gzipAsync = promisify(gzip)
 
 /** The source-deploy uploads (daemon.cjs + sidecars, tens of KB each). */
 const SOURCE_UPLOAD_TIMEOUT_MS = 60_000
@@ -1383,8 +1388,13 @@ export class DaemonConnection {
             }
             break
           }
-          const bytes = JSON.stringify(slice).length
-          const reply = await this.send('host.slice', { slice: slice as unknown as Record<string, unknown> })
+          // Gzipped where the daemon reads it (host-slice-gz-v1): the bytes on the shared link
+          // are what pacing and the relay count. Compressed off the event loop.
+          const json = JSON.stringify(slice)
+          const sliceGz = this.hostKey !== '__local__' && this.hasCapability('host-slice-gz-v1')
+            ? (await gzipAsync(Buffer.from(json))).toString('base64') : null
+          const bytes = sliceGz ? sliceGz.length : json.length
+          const reply = await this.send('host.slice', sliceGz ? { sliceGz } : { slice: slice as unknown as Record<string, unknown> })
           this.hostSliceSentAt = Date.now()
           this.hostSliceSentBytes = bytes
           if (reply.ok !== true) {

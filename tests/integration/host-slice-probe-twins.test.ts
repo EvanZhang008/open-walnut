@@ -16,6 +16,7 @@ import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
+import zlib from 'node:zlib'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
@@ -150,8 +151,9 @@ function slice(overrides: Partial<HostSlice> = {}): HostSlice {
 
 const twins: Array<'source' | 'standalone'> = bunPath ? ['source', 'standalone'] : ['source']
 
-it('advertises host-slice-probe-v1', () => {
+it('advertises host-slice-probe-v1 and host-slice-gz-v1', () => {
   expect(ADVERTISED_DAEMON_CAPABILITIES).toContain('host-slice-probe-v1')
+  expect(ADVERTISED_DAEMON_CAPABILITIES).toContain('host-slice-gz-v1')
 })
 
 describe.each(twins)('host.slice probe on the real %s daemon', (twin) => {
@@ -177,6 +179,26 @@ describe.each(twins)('host.slice probe on the real %s daemon', (twin) => {
   }, 60_000)
 
   afterAll(() => { if (d) stopDaemon(d) })
+
+  it('takes a gzipped copy (host-slice-gz-v1) as it takes the JSON one', async () => {
+    const ws = await connectWs(d.port)
+    try {
+      const gz = zlib.gzipSync(Buffer.from(JSON.stringify(slice({ hash: 'h-gz-1', tasks: [{ id: TASK_A, title: 'Gzipped work', phase: 'IN_PROGRESS', project: 'Acme' }] })))).toString('base64')
+      const r = await cmd(ws, { cmd: 'host.slice', sliceGz: gz })
+      expect(r.ok, JSON.stringify(r)).toBe(true)
+      expect(data(r).changed).toBe(true)
+      const held = await cmd(ws, { cmd: 'host.slice', home: HOME, hash: 'h-gz-1', asOf: T0 })
+      expect(data(held).have).toBe(true)
+    } finally { ws.close() }
+    await new Promise((r) => setTimeout(r, 300))
+    const g = await gateway(d.sock, A, 'task_get', { id: TASK_A })
+    expect(g.ok, JSON.stringify(g)).toBe(true)
+    if (g.ok) expect(JSON.stringify(g.result)).toContain('Gzipped work')
+    // Back to the copy the other cases read.
+    const ws2 = await connectWs(d.port)
+    try { expect((await cmd(ws2, { cmd: 'host.slice', slice: slice() })).ok).toBe(true) } finally { ws2.close() }
+    await new Promise((r) => setTimeout(r, 300))
+  }, 30_000)
 
   it('a probe naming another copy is told to send it, and binds nothing', async () => {
     const ws = await connectWs(d.port)

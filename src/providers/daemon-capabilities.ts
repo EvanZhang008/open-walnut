@@ -318,6 +318,11 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // what a relay drops the SSH link on). Both twins. Optional: without it every
   // reconnect pushes the whole copy.
   'host-slice-probe-v1',
+  // 'host-slice-gz-v1': `host.slice {sliceGz}` carries the copy gzipped, base64 (about a
+  // tenth of 1.5 MB). Whole copies were in flight in 74 of 95 deaths of the shared SSH
+  // master (2026-10-30/31): a relay on the SSH path drops the link on an upload burst, and
+  // every session's link with it. Both twins. Optional: without it the copy goes as JSON.
+  'host-slice-gz-v1',
   // 'leader-epoch-v1' (leader-core.ts, docs/plan/walnut-control-plane.md): the
   // primary describes its Walnut with `leader.configure` ({home, walnutId,
   // backup}) and takes the lead back with `leader.claim` (trusted socket). The
