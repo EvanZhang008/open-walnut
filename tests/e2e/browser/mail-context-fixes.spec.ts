@@ -21,12 +21,15 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
-import { MailFixtureServer, folderRow, shoot } from './mail-review-helpers'
+import { MailFixtureServer, folderRow, shoot, showAllMail } from './mail-review-helpers'
 import {
   KEEPER, LUNCH, READER, WRITER,
   folderTops, headingLines, intoWriterInbox, item, itemLabels, menu, menuOverflow, openRowMenu,
   probeKeyboard, row, rowTops, rowToast,
 } from './mail-context-fixes-core'
+
+// Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
+test.beforeEach(async ({ page }) => { await showAllMail(page) })
 
 const SHOT_DIR = '/tmp/mail-context-fixes/chromium'
 
@@ -164,7 +167,7 @@ test('N6: the heading fits its box and the account is on a line of its own', asy
   // Nothing clips: the heading used to render 78 characters in a 340px box and lose the account field
   // entirely, which is the field a merged list is asked about.
   const clipped = await page.evaluate(() => Array.from(
-    document.querySelectorAll('.wn-context-menu-info .wn-context-menu-label'),
+    document.querySelectorAll('.wn-context-menu-info:not(.wn-context-menu-item ~ *) .wn-context-menu-label'),
   ).map((one) => (one as HTMLElement).scrollWidth > (one as HTMLElement).clientWidth + 1))
   expect(clipped, 'no heading line is cut off by its own box').toEqual([false, false])
   console.log(`heading: ${JSON.stringify(lines)}`)
@@ -205,7 +208,7 @@ test('N7: a left-pane row is marked while its own menu is open, and the menu nam
   const smart = page.locator('.mail-accounts-pane .mail-mailbox.smart[data-smart="inbox"]')
   await smart.click({ button: 'right' })
   await expect(page.getByTestId('mail-smart-ctx-menu')).toHaveCount(1)
-  const smartHead = await page.locator('.wn-context-menu-info .wn-context-menu-label').allInnerTexts()
+  const smartHead = await page.locator('.wn-context-menu-info:not(.wn-context-menu-item ~ *) .wn-context-menu-label').allInnerTexts()
   expect(smartHead.map((one) => one.trim())).toEqual(['All Inboxes'])
   await expect(page.locator('[data-ctx-open] > .mail-mailbox.smart')).toHaveCount(1)
   await page.keyboard.press('Escape')
@@ -213,7 +216,7 @@ test('N7: a left-pane row is marked while its own menu is open, and the menu nam
   const drafts = page.locator(`.mail-accounts-pane [data-testid="mail-drafts-row"][data-account-id="${WRITER}"]`)
   await drafts.click({ button: 'right' })
   await expect(page.getByTestId('mail-folder-ctx-menu')).toHaveCount(1)
-  const draftsHead = await page.locator('.wn-context-menu-info .wn-context-menu-label').allInnerTexts()
+  const draftsHead = await page.locator('.wn-context-menu-info:not(.wn-context-menu-item ~ *) .wn-context-menu-label').allInnerTexts()
   expect(draftsHead[0]!.trim().startsWith('Drafts')).toBe(true)
   await expect(page.locator('[data-ctx-open] > [data-testid="mail-drafts-row"]')).toHaveCount(1)
   console.log(`shot: ${await shoot(page, SHOT_DIR, 'n7-sidebar-marks')}`)

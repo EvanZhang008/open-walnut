@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { createCandidate, home, itemRow, mailItem, openLetter, receipt, sendItems } from './inbox-items-helpers';
+import { cssColorToRgba } from './css-color';
 const SHOTS = process.env.PW_EVIDENCE_DIR ?? '/tmp/inbox-item-actions/fixer-r1/shots';
 test.describe.configure({ mode: 'serial' });
 
@@ -132,7 +133,7 @@ test('notification reading panel never lets the page read through, in both theme
   for (const theme of ['light', 'dark']) {
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
     const look = await panel.evaluate(el => { const cs = getComputedStyle(el); return { bg: cs.backgroundColor, blur: cs.backdropFilter || cs.getPropertyValue('-webkit-backdrop-filter') }; });
-    if (!/^rgb\(/.test(look.bg)) expect(look.blur, `a see-through background (${look.bg}) needs a blur`).toMatch(/blur\((?:[2-9]\d|\d{3,})px\)/);
+    if (cssColorToRgba(look.bg)[3] < 1) expect(look.blur, `a see-through background (${look.bg}) needs a blur`).toMatch(/blur\((?:[2-9]\d|\d{3,})px\)/);
     await page.screenshot({ path: `${SHOTS}/${info.project.name}-opaque-${theme}.png`, scale: 'css' });
   }
 });

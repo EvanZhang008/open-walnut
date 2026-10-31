@@ -9,6 +9,7 @@ import {
   smartRow,
   tailToggle,
   twist,
+  showAllMail,
 } from './mail-review-helpers'
 import {
   ITEM,
@@ -28,6 +29,9 @@ import {
   writeEvidence,
 } from './mail-context-audit-helpers'
 import { cssColorToRgba } from './css-color'
+
+// Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
+test.beforeEach(async ({ page }) => { await showAllMail(page) })
 
 /**
  * The half of the mail right-click slice that is neither an item list nor a request: where the menu
@@ -397,7 +401,7 @@ test.describe('ctx: paragraphs, the keyboard, and a long title', () => {
     // the `posts` assertion below is the proof of.
     const focusable = await page.locator(ITEM).allInnerTexts()
     expect(focusable.length, 'this menu has nothing to walk').toBeGreaterThan(1)
-    const info = (await page.locator('.wn-context-menu-info').innerText()).trim()
+    const info = (await page.locator('.wn-context-menu-info:not(.wn-context-menu-item ~ *)').innerText()).trim()
 
     const walk: string[] = []
     for (let step = 0; step < focusable.length + 2; step += 1) {
@@ -455,7 +459,7 @@ test.describe('ctx: paragraphs, the keyboard, and a long title', () => {
     await expect(page.locator(MENU)).toHaveCount(1)
 
     const title = await page.evaluate(() => {
-      const info = document.querySelector('.wn-context-menu-info') as HTMLElement
+      const info = document.querySelector('.wn-context-menu-info:not(.wn-context-menu-item ~ *)') as HTMLElement
       const label = info.querySelector('.wn-context-menu-label') as HTMLElement
       const style = getComputedStyle(label)
       return {

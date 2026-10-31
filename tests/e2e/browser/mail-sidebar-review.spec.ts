@@ -14,7 +14,11 @@ import {
   smartRow,
   tailToggle,
   twist,
+  showAllMail,
 } from './mail-review-helpers'
+
+// Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
+test.beforeEach(async ({ page }) => { await showAllMail(page) })
 
 /**
  * The review's own findings, each pinned by the case that found it, at the dense fixture's density.

@@ -25,7 +25,7 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { MailFixtureServer, PANE, folderRow, openMail, shoot } from './mail-review-helpers'
+import { MailFixtureServer, PANE, folderRow, openMail, shoot, showAllMail } from './mail-review-helpers'
 
 const SHOT_DIR = '/tmp/mail-context-row/chromium'
 
@@ -69,7 +69,8 @@ test.afterAll(async () => { await server.stop() })
  * A render crash in the mail app shows up here as "the pane never appeared", which is a timeout with
  * no cause attached; the console line is the whole diagnosis.
  */
-test.beforeEach(({ page }) => {
+test.beforeEach(async ({ page }) => {
+  await showAllMail(page)
   page.on('pageerror', (error) => { console.log(`[pageerror] ${error.message}`) })
   page.on('console', (message) => {
     if (message.type() === 'error') console.log(`[console] ${message.text().slice(0, 300)}`)
@@ -194,10 +195,15 @@ test('C6, C7, C8, C9, C10, C12, C23: a right-click opens the menu and does nothi
     'Make a task',
     'Find mail from this sender',
     'Copy Walnut link',
+    // The Walnut group (28df4326c) and Unsubscribe (432deed2f), added after this spec.
+    'Summarize with Walnut',
+    'Draft a reply with Walnut',
+    'Ask Walnut about this…',
+    'Unsubscribe',
   ])
   // The heading is the TARGET, not a group name, and it is not focusable: the first ArrowDown has to
   // land on the read toggle, which is the item the menu exists for.
-  const heading = menu(page).locator('.wn-context-menu-info')
+  const heading = menu(page).locator('.wn-context-menu-info:not(.wn-context-menu-item ~ *)')
   await expect(heading).toHaveText('Keeper Reports · Quarterly keeper report')
   await expect(heading).toHaveAttribute('title', 'Keeper Reports · Quarterly keeper report')
   await page.keyboard.press('ArrowDown')
@@ -418,7 +424,7 @@ test('C22, C24: a merged list acts on the row it opened over, account by account
   await openRowMenu(page, READER, NOTICE)
   // The account is a heading line OF ITS OWN now: the single line clipped from the right on real mail,
   // and the account field (the one thing a merged list is asked about) was the first thing lost.
-  await expect(menu(page).locator('.wn-context-menu-info').last()).toHaveText('Fixture Mail (inbound only)')
+  await expect(menu(page).locator('.wn-context-menu-info:not(.wn-context-menu-item ~ *)').last()).toHaveText('Fixture Mail (inbound only)')
   expect(await itemLabels(page)).not.toContain('Mark as read')
   expect(await itemLabels(page)).not.toContain('Mark as unread')
   await clickItem(page, 'Make a task')
@@ -426,7 +432,7 @@ test('C22, C24: a merged list acts on the row it opened over, account by account
 
   // And the writer's row in the same list carries the toggle, whose write goes to the WRITER.
   await openRowMenu(page, WRITER, KEEPER)
-  await expect(menu(page).locator('.wn-context-menu-info').last()).toHaveText('Fixture Mail')
+  await expect(menu(page).locator('.wn-context-menu-info:not(.wn-context-menu-item ~ *)').last()).toHaveText('Fixture Mail')
   await clickItem(page, 'Mark as read')
   await expect(row(page, WRITER, KEEPER)).toHaveAttribute('data-unread', 'false', { timeout: 30_000 })
 
@@ -564,7 +570,7 @@ test('C67, C68: the right-clicked row is marked, and not the way a selected row 
   await expect(row(page, WRITER, LEASE)).toHaveClass(/selected/)
   await openRowMenu(page, WRITER, KEEPER)
   // The heading names the row the menu is ABOUT, which is not the row that is selected.
-  await expect(menu(page).locator('.wn-context-menu-info')).toContainText('Quarterly keeper report')
+  await expect(menu(page).locator('.wn-context-menu-info:not(.wn-context-menu-item ~ *)')).toContainText('Quarterly keeper report')
 
   const marks = await page.evaluate(() => {
     const read = (selector: string) => {

@@ -29,7 +29,7 @@ export async function headingShape(page: Page): Promise<{
   return page.evaluate(() => {
     const box = document.querySelector('.wn-context-menu')!
     const num = (value: string) => Math.round(parseFloat(value) * 100) / 100
-    const infos = Array.from(box.querySelectorAll('.wn-context-menu-info')).map((one) => {
+    const infos = Array.from(box.querySelectorAll('.wn-context-menu-info:not(.wn-context-menu-item ~ *)')).map((one) => {
       const style = getComputedStyle(one)
       return {
         font: num(style.fontSize),
@@ -71,9 +71,18 @@ export async function reasonShape(page: Page): Promise<{
   return page.evaluate(() => {
     const box = document.querySelector('.wn-context-menu')!
     const left = (node: Element) => Math.round(node.getBoundingClientRect().left)
-    const reason = box.querySelector('.wn-context-menu-reason')
+    // The send group (Reply, Reply all, Forward) and the reasons drawn inside it, up to the next
+    // item: the Walnut group's Draft a reply and Unsubscribe carry their own (28df4326c, 432deed2f).
+    const rows = Array.from(box.children)
+    const label = (one: Element) => one.querySelector('.wn-context-menu-label')?.textContent?.trim() ?? ''
+    const first = rows.findIndex((one) => one.classList.contains('wn-context-menu-item') && label(one) === 'Reply')
+    const lastSend = rows.findIndex((one) => one.classList.contains('wn-context-menu-item') && label(one) === 'Forward')
+    const after = rows.findIndex((one, i) => i > lastSend && one.classList.contains('wn-context-menu-item'))
+    const group = first < 0 || lastSend < 0 ? [] : rows.slice(first, after < 0 ? undefined : after)
+    const inGroup = group.filter((one) => one.classList.contains('wn-context-menu-reason'))
+    const reason = inGroup[0] ?? null
     return {
-      reasons: box.querySelectorAll('.wn-context-menu-reason').length,
+      reasons: inGroup.length,
       // The TEXT's left edge, not the box's: the sentence is a block with its own padding, and the
       // question is whether it lines up with the labels it explains.
       reasonLeft: reason

@@ -12,7 +12,10 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { MailFixtureServer, folderRow, openMail, pickTheme, smartRow } from './mail-review-helpers'
+import { MailFixtureServer, folderRow, openMail, pickTheme, smartRow, showAllMail } from './mail-review-helpers'
+
+// Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
+test.beforeEach(async ({ page }) => { await showAllMail(page) })
 
 const SHOTS = '/tmp/mail-verify-v3'
 const WRITER = 'fixture:ctx-writer@example.invalid'
@@ -156,8 +159,8 @@ test.describe('mail right-click, verifier round 3', () => {
     await intoInbox(page)
     await row(page, WRITER, KEEPER).click({ button: 'right', position: { x: 12, y: 10 } })
     const unreadFirst = (await page.locator(`${MENU} [role="menuitem"]`).first().innerText()).trim()
-    const heading = (await page.locator(`${MENU} .wn-context-menu-info`).first().innerText()).trim()
-    const headingTitle = await page.locator(`${MENU} .wn-context-menu-info`).first().getAttribute('title')
+    const heading = (await page.locator(`${MENU} .wn-context-menu-info:not(.wn-context-menu-item ~ *)`).first().innerText()).trim()
+    const headingTitle = await page.locator(`${MENU} .wn-context-menu-info:not(.wn-context-menu-item ~ *)`).first().getAttribute('title')
     // ONE ArrowDown must land on the read toggle: the heading is not focusable.
     await page.keyboard.press('ArrowDown')
     const focused = (await page.locator(`${MENU} .wn-context-menu-item.focused`).innerText()).trim()
@@ -222,7 +225,7 @@ test.describe('mail right-click, verifier round 3', () => {
     const owner = {
       keeper: await row(page, WRITER, KEEPER).getAttribute('data-ctx-open'),
       lunch: await row(page, WRITER, LUNCH).getAttribute('data-ctx-open'),
-      heading: menus ? (await page.locator(`${MENU} .wn-context-menu-info`).first().innerText()).trim() : '',
+      heading: menus ? (await page.locator(`${MENU} .wn-context-menu-info:not(.wn-context-menu-item ~ *)`).first().innerText()).trim() : '',
       keeperBox: await row(page, WRITER, KEEPER).boundingBox(),
       lunchBox: await row(page, WRITER, LUNCH).boundingBox(),
     }
@@ -300,9 +303,13 @@ test.describe('mail right-click, verifier round 3', () => {
     await last.scrollIntoViewIfNeeded()
     const box = (await last.boundingBox())!
     const view = page.viewportSize()!
-    // As close to the bottom-right of the WINDOW as a row reaches.
-    const x = Math.min(box.x + box.width - 2, view.width - 6)
+    // As close to the bottom-right of the WINDOW as a row reaches, on the row itself: the pane
+    // splitter lies over the row's last pixels (2026-10-31, the right-click landed on it).
     const y = Math.min(box.y + box.height - 2, view.height - 6)
+    let x = Math.min(box.x + box.width - 2, view.width - 6)
+    const onRow = () => page.evaluate(([a, b]) => !!document.elementFromPoint(a!, b!)?.closest('.mail-row'), [x, y])
+    while (x > box.x + box.width - 40 && !(await onRow())) x -= 2
+    expect(await onRow(), `a point of the last row near its right edge (x ${x}, y ${y})`).toBe(true)
     await page.mouse.click(x, y, { button: 'right' })
     await expect(page.locator(MENU)).toHaveCount(1)
     const first = (await page.locator(MENU).boundingBox())!

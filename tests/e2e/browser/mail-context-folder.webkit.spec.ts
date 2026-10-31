@@ -1,6 +1,9 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { HARBOUR, MailFixtureServer, MARINA, PANE, folderRow, openMail, shoot } from './mail-review-helpers'
+import { HARBOUR, MailFixtureServer, MARINA, PANE, folderRow, openMail, shoot, showAllMail } from './mail-review-helpers'
+
+// Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
+test.beforeEach(async ({ page }) => { await showAllMail(page) })
 
 /**
  * The left pane's right-click menus in WEBKIT, which is the engine the Mac app is.

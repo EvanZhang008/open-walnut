@@ -23,12 +23,15 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
-import { MailFixtureServer, shoot } from './mail-review-helpers'
+import { MailFixtureServer, shoot, showAllMail } from './mail-review-helpers'
 import {
   KEEPER, LUNCH, WRITER,
   dragAcross, engineOf, headingLines, intoWriterInbox, item, menu, menuOverflow, openRowMenu,
   probeKeyboard, row, rowTops, rowToast,
 } from './mail-context-fixes-core'
+
+// Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
+test.beforeEach(async ({ page }) => { await showAllMail(page) })
 
 const SHOT_DIR = '/tmp/mail-context-fixes/webkit'
 
@@ -135,7 +138,7 @@ test('N6, N11: the heading fits, and a capped menu shows there is more', async (
   await openRowMenu(page, WRITER, KEEPER)
   expect((await headingLines(page)).length, 'the account has its own line').toBe(2)
   const clipped = await page.evaluate(() => Array.from(
-    document.querySelectorAll('.wn-context-menu-info .wn-context-menu-label'),
+    document.querySelectorAll('.wn-context-menu-info:not(.wn-context-menu-item ~ *) .wn-context-menu-label'),
   ).map((one) => (one as HTMLElement).scrollWidth > (one as HTMLElement).clientWidth + 1))
   expect(clipped).toEqual([false, false])
   await page.keyboard.press('Escape')
@@ -157,7 +160,7 @@ test('N7: a left-pane row is marked while its menu is open', async ({ page }) =>
   await smart.click({ button: 'right' })
   await expect(page.getByTestId('mail-smart-ctx-menu')).toHaveCount(1)
   await expect(page.locator('[data-ctx-open] > .mail-mailbox.smart')).toHaveCount(1)
-  const head = await page.locator('.wn-context-menu-info .wn-context-menu-label').allInnerTexts()
+  const head = await page.locator('.wn-context-menu-info:not(.wn-context-menu-item ~ *) .wn-context-menu-label').allInnerTexts()
   expect(head.map((one) => one.trim())).toEqual(['All Inboxes'])
   console.log(`shot: ${await shoot(page, SHOT_DIR, 'n7-sidebar-marks')}`)
   await page.keyboard.press('Escape')

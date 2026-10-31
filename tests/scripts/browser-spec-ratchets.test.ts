@@ -38,3 +38,26 @@ describe('calendar time grid positions', () => {
     expect(fixedHour.test(line) && positional.test(line)).toBe(true)
   })
 })
+
+describe('a context menu heading', () => {
+  // A menu's `info` rows are its title lines AND the name of a group further down (the
+  // mail menu's "Walnut" group, 28df4326c). Specs that read every info row as the heading
+  // counted three lines for two and read "Walnut" as the account (2026-10-31). The heading
+  // is the info rows before the first item.
+  const HEADING = '.wn-context-menu-info:not(.wn-context-menu-item ~ *)'
+  // Reads the group's own name on purpose (its `.last()` is the "Walnut" row).
+  const GROUP_NAME_READERS = new Set(['mail-ask-drawer.spec.ts'])
+
+  it('every spec reads the heading block, not every info row', () => {
+    const offenders: string[] = []
+    for (const { file, text } of sources) {
+      if (GROUP_NAME_READERS.has(file)) continue
+      text.split('\n').forEach((line, i) => {
+        if (line.trim().startsWith('//') || line.trim().startsWith('*')) return
+        const bare = line.replaceAll(HEADING, '')
+        if (/\.wn-context-menu-info(?![-\w])/.test(bare)) offenders.push(`${file}:${i + 1}: ${line.trim()}`)
+      })
+    }
+    expect(offenders).toEqual([])
+  })
+})

@@ -10,7 +10,11 @@ import {
   shoot,
   smartRow,
   tailToggle,
+  showAllMail,
 } from './mail-review-helpers'
+
+// Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
+test.beforeEach(async ({ page }) => { await showAllMail(page) })
 
 /**
  * The mail pane's last line: "Checked 2 min ago" (S1).

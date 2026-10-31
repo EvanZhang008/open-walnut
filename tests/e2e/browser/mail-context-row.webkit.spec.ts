@@ -23,7 +23,10 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { MailFixtureServer, folderRow, openMail, shoot } from './mail-review-helpers'
+import { MailFixtureServer, folderRow, openMail, shoot, showAllMail } from './mail-review-helpers'
+
+// Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
+test.beforeEach(async ({ page }) => { await showAllMail(page) })
 
 const SHOT_DIR = '/tmp/mail-context-row/webkit'
 

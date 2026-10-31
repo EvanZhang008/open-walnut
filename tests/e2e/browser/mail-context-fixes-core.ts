@@ -51,7 +51,7 @@ export async function itemLabels(page: Page): Promise<string[]> {
 
 /** The heading lines (`info` rows), which is where the account moved to. */
 export async function headingLines(page: Page): Promise<string[]> {
-  const found = await menu(page).locator('.wn-context-menu-info .wn-context-menu-label').allInnerTexts()
+  const found = await menu(page).locator('.wn-context-menu-info:not(.wn-context-menu-item ~ *) .wn-context-menu-label').allInnerTexts()
   return found.map((one) => one.trim())
 }
 

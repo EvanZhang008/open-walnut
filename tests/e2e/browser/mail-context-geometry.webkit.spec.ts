@@ -8,6 +8,7 @@ import {
   pickTheme,
   smartRow,
   twist,
+  showAllMail,
 } from './mail-review-helpers'
 import {
   ITEM,
@@ -26,6 +27,9 @@ import {
   sweepPoints,
   writeEvidence,
 } from './mail-context-audit-helpers'
+
+// Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
+test.beforeEach(async ({ page }) => { await showAllMail(page) })
 
 /**
  * The three checks that have to hold in the engine the Mac app actually is (WKWebView): where the menu

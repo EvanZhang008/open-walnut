@@ -9,6 +9,11 @@
  *   npx playwright test tests/e2e/browser/mail-context-independent.spec.ts
  *   PW_WEBKIT=1 npx playwright test tests/e2e/browser/mail-context-independent.spec.ts --project=webkit
  */
+import { test } from '@playwright/test'
 import { registerIndependentAll } from './mail-context-independent-core'
+import { showAllMail } from './mail-review-helpers'
+
+// Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
+test.beforeEach(async ({ page }) => { await showAllMail(page) })
 
 registerIndependentAll('chromium')

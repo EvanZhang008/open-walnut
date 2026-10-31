@@ -131,6 +131,18 @@ export async function shellUp(page: Page, port: number): Promise<void> {
   }
 }
 
+/**
+ * Open the mail list as All mail, not Grouped, before the first load. Grouped became the default
+ * on 2026-09-30 (mail-grouped-pref.ts) and folds every read row into its group, so a spec written
+ * for the flat list found none of its rows (the row-menu specs, which CI had never reached: their
+ * shards ran out of time first). Per page, so nothing reaches another spec.
+ */
+export async function showAllMail(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    try { localStorage.setItem('walnut.mail.grouped.v2', JSON.stringify({ on: false })) } catch { /* private window */ }
+  })
+}
+
 /** Into the Mail console through the real UI: the sidebar app row, never a deep link. */
 export async function openMail(page: Page, port: number): Promise<void> {
   await shellUp(page, port)

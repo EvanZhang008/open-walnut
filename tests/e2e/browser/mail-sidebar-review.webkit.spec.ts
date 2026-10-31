@@ -11,7 +11,11 @@ import {
   smartRow,
   tailToggle,
   twist,
+  showAllMail,
 } from './mail-review-helpers'
+
+// Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
+test.beforeEach(async ({ page }) => { await showAllMail(page) })
 
 /**
  * The same review findings in WEBKIT, which is the engine the Mac app is.

@@ -121,7 +121,7 @@ export function registerIndependentChecks(engine: 'chromium' | 'webkit'): void {
     await row(page, WRITER, KEEPER).click({ button: 'right', position: { x: 12, y: 10 } })
     await expect(page.locator(MENU)).toHaveCount(1)
     const unreadRowItems = await labels(page)
-    const info = page.locator(`${MENU} .wn-context-menu-info`).first()
+    const info = page.locator(`${MENU} .wn-context-menu-info:not(.wn-context-menu-item ~ *)`).first()
     const infoText = (await info.innerText()).trim()
     const infoTitle = await info.getAttribute('title')
     const infoIsItem = (await page.locator(`${MENU} [role="menuitem"]`).first().innerText()).trim()
@@ -233,7 +233,8 @@ export function registerIndependentGeometry(engine: 'chromium' | 'webkit'): void
       console.log(`[${tag}] V-C17 items ${JSON.stringify(items)}`)
       console.log(`[${tag}] V-C31 disabled ${JSON.stringify(disabled)} replyTitle "${replyTitle}" writesAfterClick ${JSON.stringify(writes)}`)
       expect(items.filter((one) => /Mark as/.test(one)), 'no read item at all, not a disabled one').toEqual([])
-      expect(disabled).toEqual(['Reply', 'Reply all', 'Forward'])
+      // Drafting a reply needs a send too; this mail carries no unsubscribe link.
+      expect(disabled).toEqual(['Reply', 'Reply all', 'Forward', 'Draft a reply with Walnut', 'Unsubscribe'])
       expect(replyTitle).toBe('This account cannot send; add SMTP settings')
       // And the reason is readable without a pointer, which is what a keyboard walk can now reach.
       expect(replyWhy).toBe('This account cannot send; add SMTP settings')
@@ -242,7 +243,9 @@ export function registerIndependentGeometry(engine: 'chromium' | 'webkit'): void
 
     test('V-C30: no menu on either surface offers an action the server cannot do', async ({ page }) => {
       await intoInbox(page)
-      const banned = /Delete|Move|Archive to|Flag|Star|Mark all as read|Unsubscribe/
+      // Unsubscribe is one the server can do since 432deed2f (leave a list by mail or by asking),
+      // so a message may offer it; a folder still may not.
+      const banned = /Delete|Move|Archive to|Flag|Star|Mark all as read/
       await row(page, WRITER, KEEPER).click({ button: 'right', position: { x: 12, y: 10 } })
       await expect(page.locator(MENU)).toHaveCount(1)
       const message = await page.locator(MENU).innerText()
@@ -254,6 +257,7 @@ export function registerIndependentGeometry(engine: 'chromium' | 'webkit'): void
       console.log(`[${tag}] V-C30 message ${JSON.stringify(message)} folder ${JSON.stringify(folder)}`)
       expect(message).not.toMatch(banned)
       expect(folder).not.toMatch(banned)
+      expect(folder).not.toMatch(/Unsubscribe/)
     })
   })
 }

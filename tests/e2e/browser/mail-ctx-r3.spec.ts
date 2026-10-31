@@ -20,7 +20,7 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
-import { MailFixtureServer, folderRow, openMail, shoot, smartRow } from './mail-review-helpers'
+import { MailFixtureServer, folderRow, openMail, shoot, smartRow, showAllMail } from './mail-review-helpers'
 import {
   KEEPER, LEASE, LUNCH, READER, WRITER,
   intoWriterInbox, item, itemLabels, menu, openRowMenu, row,
@@ -28,6 +28,9 @@ import {
 import {
   activeRowId, filterShape, focusedShape, headingShape, menuWidth, reasonShape, refusalMark,
 } from './mail-ctx-r3-core'
+
+// Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
+test.beforeEach(async ({ page }) => { await showAllMail(page) })
 
 const SHOTS = '/tmp/mail-ctx-r3'
 const READ_ROW = 'INBOX:2:11'
@@ -195,7 +198,7 @@ test.describe('mail right-click, round 3 fixes', () => {
     await expect(draft, 'the fixture now has a provider draft to right-click').toBeVisible({ timeout: 60_000 })
     await draft.click({ button: 'right' })
     await expect(menu(page)).toHaveCount(1)
-    expect(await itemLabels(page)).toEqual(['Continue editing', 'Make a task', 'Copy Walnut link'])
+    expect(await itemLabels(page)).toEqual(['Continue editing', 'Make a task', 'Copy Walnut link', 'Summarize with Walnut', 'Ask Walnut about this…'])
     console.log(`shot: ${await shoot(page, SHOTS, 'r3-10-drafts-row-menu')}`)
   })
 })

@@ -17,7 +17,7 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
-import { MailFixtureServer, folderRow, openMail, shoot, smartRow } from './mail-review-helpers'
+import { MailFixtureServer, folderRow, openMail, shoot, smartRow, showAllMail } from './mail-review-helpers'
 import {
   KEEPER, LEASE, LUNCH, READER, WRITER,
   engineOf, intoWriterInbox, item, itemLabels, menu, openRowMenu, row,
@@ -25,6 +25,9 @@ import {
 import {
   activeRowId, focusedShape, headingShape, menuWidth, reasonShape,
 } from './mail-ctx-r3-core'
+
+// Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
+test.beforeEach(async ({ page }) => { await showAllMail(page) })
 
 const SHOTS = '/tmp/mail-ctx-r3/webkit'
 const READ_ROW = 'INBOX:2:11'

@@ -26,7 +26,10 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { HARBOUR, MARINA, MailFixtureServer, PANE, folderRow, openMail, shoot } from './mail-review-helpers'
+import { HARBOUR, MARINA, MailFixtureServer, PANE, folderRow, openMail, shoot, showAllMail } from './mail-review-helpers'
+
+// Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
+test.beforeEach(async ({ page }) => { await showAllMail(page) })
 
 const SHOT_DIR = '/tmp/mail-context-folder/pw'
 const FETCH_URL = '**/api/plugins/mail/mailboxes/fetch'
@@ -155,7 +158,7 @@ test('C34: a right-click opens a menu and changes nothing else', async ({ page }
     'Show all folders in this account',
   ])
   // The heading names the folder AND its account, because two accounts are listed.
-  await expect(menu(page).locator('.wn-context-menu-info')).toHaveText('Archive · Harbour mail')
+  await expect(menu(page).locator('.wn-context-menu-info:not(.wn-context-menu-item ~ *)')).toHaveText('Archive · Harbour mail')
 
   expect(await activeMailboxId(page), 'the selection did not move').toBe('INBOX')
   await expect(folderRow(page, HARBOUR, 'Archive')).not.toHaveClass(/active/)

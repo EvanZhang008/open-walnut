@@ -18,12 +18,15 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
-import { MailFixtureServer, folderRow, shoot } from './mail-review-helpers'
+import { MailFixtureServer, folderRow, shoot, showAllMail } from './mail-review-helpers'
 import {
   KEEPER, LUNCH, READER, WRITER,
   contrastOf, folderTops, highlightBox, intoWriterInbox, item, markShape, menu, openFolderMenu,
   openRowMenu, row, stripShape, unreadChip,
 } from './mail-context-round2-core'
+
+// Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
+test.beforeEach(async ({ page }) => { await showAllMail(page) })
 
 const SHOT_DIR = '/tmp/mail-context-ux/r3'
 
@@ -200,7 +203,8 @@ test('R2-05: in a short window the keyboard highlight stays inside the clamped b
   // End is where the box really has to move: the last item sat 37px below it with scrollTop 0.
   await page.keyboard.press('End')
   const last = await highlightBox(page)
-  expect(last.label).toBe('Copy Walnut link')
+  // The last row since the Walnut group and Unsubscribe were added (28df4326c, 432deed2f).
+  expect(last.label).toBe('Unsubscribe')
   expect(last.inside, 'End lands on a row the person can see').toBe(true)
   expect(last.scrollTop, 'because the box followed the highlight').toBeGreaterThan(0)
   console.log(`shot: ${await shoot(page, SHOT_DIR, 'r205-end-visible')}`)
@@ -270,7 +274,13 @@ test('R2-17: with a menu open, a wheel over the list closes it', async ({ page }
   await openRowMenu(page, WRITER, KEEPER)
   const rows = page.locator('.mail-rows')
   const box = (await rows.boundingBox())!
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  // Over the list and clear of the menu: the menu grew (the Walnut group, Unsubscribe) and now
+  // covers the list's middle, where a wheel scrolls the menu itself.
+  const over = (await menu(page).boundingBox())!
+  const clear = [0.15, 0.5, 0.85].flatMap((fy) => [0.15, 0.5, 0.85].map((fx) => ({ x: box.x + box.width * fx, y: box.y + box.height * fy })))
+    .find((p) => p.x < over.x - 8 || p.x > over.x + over.width + 8 || p.y < over.y - 8 || p.y > over.y + over.height + 8)
+  expect(clear, 'a point of the list the menu does not cover').toBeTruthy()
+  await page.mouse.move(clear!.x, clear!.y)
   await page.mouse.wheel(0, 300)
   // The documented rule (a scroll dismisses a menu anchored to a frozen viewport point) now really
   // fires: the backdrop used to swallow the wheel, so the gesture did nothing at all.
@@ -328,7 +338,7 @@ test('R2-09, R2-10: the heading clears AA and the right-clicked mark is not a se
   await expect(page.locator('[data-testid="mail-reader"][data-message-id]')).toHaveCount(1, { timeout: 30_000 })
   await openRowMenu(page, WRITER, LUNCH)
 
-  const heading = await contrastOf(page, '.wn-context-menu-info')
+  const heading = await contrastOf(page, '.wn-context-menu-info:not(.wn-context-menu-item ~ *)')
   expect(heading.ratio, `the heading naming the row is ${heading.colour} on ${heading.background}`)
     .toBeGreaterThanOrEqual(4.5)
   const marks = await markShape(page, WRITER, LUNCH)
@@ -369,7 +379,7 @@ test('R2-07, R2-16: a draft row answers with a Walnut menu, and the task copy re
   const labels = await menu(page).locator('[role="menuitem"] .wn-context-menu-label').allInnerTexts()
   expect(labels.map((one) => one.trim())).toEqual(['Continue editing', 'Discard draft'])
   // Named, because the menu covers the row it is about.
-  await expect(menu(page).locator('.wn-context-menu-info')).toContainText('Berth swap')
+  await expect(menu(page).locator('.wn-context-menu-info:not(.wn-context-menu-item ~ *)')).toContainText('Berth swap')
   console.log(`shot: ${await shoot(page, SHOT_DIR, 'r207-drafts-menu')}`)
 
   await item(page, 'Discard draft').click()

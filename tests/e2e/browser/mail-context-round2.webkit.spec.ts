@@ -19,12 +19,15 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
-import { MailFixtureServer, folderRow, pickTheme, shoot } from './mail-review-helpers'
+import { MailFixtureServer, folderRow, pickTheme, shoot, showAllMail } from './mail-review-helpers'
 import {
   KEEPER, LUNCH, READER, WRITER,
   contrastOf, engineOf, highlightBox, intoWriterInbox, item, markShape, menu, openFolderMenu,
   openRowMenu, row, stripShape, unreadChip,
 } from './mail-context-round2-core'
+
+// Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
+test.beforeEach(async ({ page }) => { await showAllMail(page) })
 
 const SHOT_DIR = '/tmp/mail-context-ux/r3/webkit'
 
@@ -98,7 +101,7 @@ test('R2-09, R2-10: light-mode heading contrast, and two marks that do not repla
   await expect(page.locator('[data-testid="mail-reader"][data-message-id]')).toHaveCount(1, { timeout: 30_000 })
   await openRowMenu(page, WRITER, LUNCH)
 
-  const heading = await contrastOf(page, '.wn-context-menu-info')
+  const heading = await contrastOf(page, '.wn-context-menu-info:not(.wn-context-menu-item ~ *)')
   expect(heading.ratio, `${heading.colour} on ${heading.background} at ${heading.size}`)
     .toBeGreaterThanOrEqual(4.5)
   const marks = await markShape(page, WRITER, LUNCH)
