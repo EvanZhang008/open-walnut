@@ -24,8 +24,11 @@
  * "(working, 3 min ago): running type check"). A worker's progress words and a new task are no
  * longer news: the lead reads those on the Org page or with task_get when it needs them. And a
  * later note goes out at most once per TEAM_NOTE_GAP_MS, except when it carries something the lead
- * must act on now (a task waiting on it, stopped by the machine, or stuck): that one goes at once and
- * takes everything else held with it.
+ * must act on now (a task waiting on it, or stuck): that one goes at once and takes everything else
+ * held with it. A task the machine stopped waits for the hour too: Walnut resumes it by itself, and
+ * the lead's part is only a stop that lasts, which the next note still lists (2026-10-31, the first
+ * six hours after the change: 13 of 24 notes went out at once for stops Walnut was resuming after
+ * deploys, three of them in one minute).
  */
 
 import path from 'node:path';
@@ -183,13 +186,13 @@ export interface TeamNotePlan {
 }
 
 /** A later note that may wait for the gap: nothing in it is the lead's to act on now (a task
- *  waiting on it, stopped by the machine, or stuck). */
-export function canWait(plan: Pick<TeamNotePlan, 'kind' | 'waits' | 'machine' | 'moved'>): boolean {
-  return plan.kind === 'moved' && plan.waits.length === 0 && plan.machine.length === 0 && plan.moved.length === 0;
+ *  waiting on it, or stuck). */
+export function canWait(plan: Pick<TeamNotePlan, 'kind' | 'waits' | 'moved'>): boolean {
+  return plan.kind === 'moved' && plan.waits.length === 0 && plan.moved.length === 0;
 }
 
 /** The note may go now: the first one, one the lead must act on, or the gap since the last has passed. */
-export function noteDue(plan: Pick<TeamNotePlan, 'kind' | 'waits' | 'machine' | 'moved'>, prevAt: string | undefined, nowMs: number, gapMs = TEAM_NOTE_GAP_MS): boolean {
+export function noteDue(plan: Pick<TeamNotePlan, 'kind' | 'waits' | 'moved'>, prevAt: string | undefined, nowMs: number, gapMs = TEAM_NOTE_GAP_MS): boolean {
   if (!canWait(plan)) return true;
   const last = Date.parse(prevAt ?? '');
   // A last note "after" now (the clock went back) never holds one.

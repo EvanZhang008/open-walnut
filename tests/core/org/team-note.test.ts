@@ -293,7 +293,7 @@ describe('team note: no progress lines, paced like the main agent\'s', () => {
     }
   })
 
-  it('a note with nothing to act on waits an hour after the last; one the lead must act on goes at once', () => {
+  it('a note with nothing to act on waits an hour after the last; a wait on the lead or a stuck task goes at once', () => {
     const prev = planTeamNote(undefined, base, [], at(0), ctx).next
     const needs = planTeamNote(prev, [...base, t('d', { phase: 'NEED_ACTION', user_status: { state: 'needs', ask: 'Sign it' } })], [], at(30), ctx)
     expect(needs.kind).toBe('moved')
@@ -301,12 +301,19 @@ describe('team note: no progress lines, paced like the main agent\'s', () => {
     expect(noteDue(needs, prev.at, Date.parse(at(0)) + TEAM_NOTE_GAP_MS)).toBe(true)
     const done = planTeamNote(prev, base.slice(1), [{ id: 'a', title: 'a title' }], at(5), ctx)
     expect(noteDue(done, prev.at, Date.parse(at(5)))).toBe(false)
-    // Waiting on the lead, stopped by the machine, or stuck: the lead's to act on now.
-    for (const s of statuses.filter((x) => x.kind === 'lead' || x.kind === 'machine' || x.kind === 'stuck')) {
+    // Waiting on the lead, or stuck: the lead's to act on now.
+    for (const s of statuses.filter((x) => x.kind === 'lead' || x.kind === 'stuck')) {
       const plan = planTeamNote(prev, [...base.slice(0, 2), t('c', { parent_task_id: LEAD, user_status: s })], [], at(5), ctx)
       expect(plan.kind, s.kind).toBe('moved')
       expect(noteDue(plan, prev.at, Date.parse(at(5))), s.kind).toBe(true)
     }
+    // Stopped by the machine: Walnut resumes it, so it waits for the hour like the rest, still listed then.
+    const stopped = statuses.find((x) => x.kind === 'machine')!
+    const held = planTeamNote(prev, [...base.slice(0, 2), t('c', { user_status: stopped })], [], at(5), ctx)
+    expect(held.machine.map((i) => i.taskId)).toEqual(['c'])
+    expect(noteDue(held, prev.at, Date.parse(at(5)))).toBe(false)
+    const later = planTeamNote(prev, [...base.slice(0, 2), t('c', { user_status: stopped })], [], at(61), ctx)
+    expect([noteDue(later, prev.at, Date.parse(at(61))), later.machine.map((i) => i.taskId)]).toEqual([true, ['c']])
     // The first note is where things stand: at once.
     expect(noteDue(planTeamNote(undefined, base, [], at(5), ctx), undefined, Date.parse(at(5)))).toBe(true)
   })
