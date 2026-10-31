@@ -408,7 +408,8 @@ file's diff), not wholesale.
 
 **The same split applies to RUNNING things, not just reading them: the server is the API, storage,
 delivery and UI plane; a clock, a poll loop, a check script, anything that executes on a host, runs
-in that host's daemon (precedent: walnut-trigger, `docs/plan/walnut-trigger.md`). Offload to the
+in that host's daemon (precedents: walnut-trigger, `docs/plan/walnut-trigger.md`; a plugin's jobs, which
+the daemon of the machine the user picked runs as processes, `plugin-jobs-v1`, `src/providers/plugin-jobs-core.ts`). Offload to the
 daemon whenever the work can live there.**
 
 **If a feature can be self-managed, self-manage it in the daemon; when it cannot, go to the

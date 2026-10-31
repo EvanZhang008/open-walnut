@@ -1243,6 +1243,10 @@ export interface Config {
   /** Per-plugin AI switch and monthly budget for `walnut.ai.run` (src/core/ai/ai-policy.ts). Kept
    *  out of `plugins.<id>` on purpose: a plugin may patch its own section, never its own budget. */
   plugin_ai?: Record<string, { enabled?: boolean; monthly_usd?: number }>;
+  /** Where each plugin's jobs run (src/core/plugin-jobs/): `run_on` is a host key, or unset /
+   *  `__local__` for this computer. Kept out of `plugins.<id>` for the same reason as
+   *  `plugin_ai`: a plugin may patch its own section, never move its own code. */
+  plugin_jobs?: Record<string, { run_on?: string }>;
   /** External calendar display (EventKit — all macOS system-account calendars).
    *
    *  LEGACY as of the calendar becoming a plugin: the live section is `plugins.calendar`

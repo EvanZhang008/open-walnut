@@ -3,6 +3,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import type { PluginManifest } from '../integration-types.js'
+import { moduleHasJobs } from '../plugin-jobs/manifest.js'
 import {
   createPluginGeneration,
   disposePluginGeneration,
@@ -164,6 +165,8 @@ export async function preparePluginModule(options: LoadOptions): Promise<PluginM
           ? await loadBundled(options, entry)
           : await loadPrecompiled(options, entry)
       const functions = functionsFrom(loaded.mod, unified)
+      // A plugin that is only jobs (its compute runs under a daemon) needs no activate.
+      if (!functions.activate && unified && manifest.jobs && moduleHasJobs(loaded.mod)) functions.activate = () => undefined
       if (!functions.activate) throw new Error('module has no activation export')
       return {
         ...functions,

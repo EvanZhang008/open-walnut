@@ -144,6 +144,8 @@ SOURCES=(
   src/providers/attachment-copy-core.ts
   src/providers/follower-reads-core.ts
   src/providers/host-server-core.ts
+  src/providers/plugin-jobs-core.ts
+  src/providers/plugin-job-harness.ts
   src/providers/stream-relay-core.ts
   src/providers/feature-relay-core.ts
   src/providers/host-resume-core.ts

@@ -54,6 +54,7 @@ const STORE_LOCKS = new Set<string>([
   'src/core/triage/runs.ts: file',                              // triage run log
   'src/core/triage/state.ts: file',                             // triage state
   'src/providers/daemon-service-files.ts: ownershipPath',       // daemon dir ownership record
+  'src/providers/wn-cli.ts: file',                              // a plugin job's secrets, <walnut home>/secrets/plugins/<id>.json (PluginSecretStore's lock)
   'src/utils/fs.ts: filePath',                                  // updateJsonFile, Walnut JSON stores only
   'src/utils/user-file-lock.ts: await userFileLockTarget(filePath)', // withUserFileLock itself
   'src/web/routes/drafts.ts: DRAFTS_FILE()',                    // WALNUT_HOME/local/drafts.json, unsent input drafts

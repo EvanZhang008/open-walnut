@@ -399,6 +399,24 @@ export async function updatePluginConfig(
 }
 
 /**
+ * Where one plugin's jobs run (`plugin_jobs.<id>.run_on`, src/core/plugin-jobs/):
+ * a host key, or `''` for this computer (the entry is then removed).
+ */
+export async function setPluginJobsRunOn(pluginId: string, runOn: string): Promise<void> {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(pluginId)) throw new Error(`Invalid plugin id: ${pluginId}`);
+  await modifyConfigDoc((existing) => {
+    const all = existing.plugin_jobs && typeof existing.plugin_jobs === 'object' && !Array.isArray(existing.plugin_jobs)
+      ? { ...(existing.plugin_jobs as Record<string, Record<string, unknown>>) }
+      : {};
+    if (!runOn || runOn === '__local__') delete all[pluginId];
+    else all[pluginId] = { ...(all[pluginId] ?? {}), run_on: runOn };
+    if (Object.keys(all).length > 0) existing.plugin_jobs = all;
+    else delete existing.plugin_jobs;
+    return { write: true, result: undefined };
+  });
+}
+
+/**
  * Atomically patch one host's `server` section (`hosts.<key>.server`, the server
  * this Mac keeps on that host: core/host-server/). Each patched key replaces
  * its value; `expose` is replaced whole. Throws for a host config.yaml does not

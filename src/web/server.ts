@@ -4198,6 +4198,11 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       setHostWarmup(hostWarmup)
       hostWarmup.start()
     }
+    // The machines that run plugin jobs, this computer included, are dialled now, so the
+    // jobs start without waiting for a session to open a link (core/plugin-jobs/).
+    void import('../core/plugin-jobs/index.js').then((m) => m.startPluginJobs()).catch((err) => {
+      log.web.warn('plugin jobs: could not start', { error: err instanceof Error ? err.message : String(err) })
+    })
     // Lid opened / network changed: redial failed and reconnecting hosts once (C51).
     if (!isEphemeral && !process.env.VITEST && process.env.WALNUT_TEST_HOST_FIXTURE_MODE !== '1') {
       const { startHostWakeRedial } = await import('../core/hosts/host-connect-action.js')

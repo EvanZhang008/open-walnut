@@ -26,6 +26,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { preparePluginModule, type PluginModuleFunctions } from './plugins/plugin-module.js';
 import { BUILTIN_HOST_MODULES } from '../integrations/host-modules.js';
 import { bundleEsm } from '../lib/transpile.js';
+import { parseManifestJobs } from './plugin-jobs/manifest.js';
 import { bunGlobal } from '../lib/runtime.js';
 import { readPluginWebModule, retainPluginWebModule, type PluginWebModule } from './plugins/plugin-web-module.js';
 import { WALNUT_HOME, IS_EPHEMERAL } from '../constants.js';
@@ -804,46 +805,79 @@ async function bundleExternalPlugin(
     // stays an import resolved at runtime from walnut's node_modules (listing them
     // was whack-a-mole: one native module, then the next, broke it). src/, not dist/:
     // tsup bundles everything, so dist/ lacks individual module files.
-    const rebaseDir = tree.srcIntegrationsDir ?? BUILTIN_DIR;
     await bundleEsm({
       entry: entryFile,
       outfile,
-      banner: 'import { createRequire as __cr } from "node:module"; const require = __cr(import.meta.url);',
-      resolveParent: (specifier, importer) => {
-        // Only rebase imports originating from the plugin directory itself.
-        // Once resolved into the open-walnut src/ tree, the bundler resolves natively.
-        if (!importer.startsWith(pluginDir + '/')) return undefined;
-        const subPath = path.relative(pluginDir, importer);
-        const assumedImporter = path.join(rebaseDir, pluginName, subPath);
-        const resolved = path.resolve(path.dirname(assumedImporter), specifier);
-        // Try .ts extension (the bundler resolves .js → .ts naturally in the src tree)
-        for (const candidate of [
-          resolved.replace(/\.js$/, '.ts'),
-          resolved,
-          path.join(resolved.replace(/\.js$/, ''), 'index.ts'),
-        ]) {
-          try { if (fs.statSync(candidate).isFile()) return candidate; } catch { /* expected: candidate doesn't exist */ }
-        }
-        return undefined;
-      },
+      banner: PLUGIN_BUNDLE_BANNER,
+      resolveParent: pluginParentResolver(pluginDir, tree.srcIntegrationsDir ?? BUILTIN_DIR),
     });
 
     return { outfile };
   } catch (err) {
-    const raw = err instanceof Error ? err.message : String(err);
-    // The bundler's message is "Build failed with N errors:" followed by one line per
-    // error (src/lib/transpile.ts); the first error line is the one that explains the
-    // failure, and "Could not resolve '../../core/x.js'" (bun adds a colon) additionally
-    // means no source checkout is reachable from here.
-    const firstError = raw.split('\n').map(l => l.trim()).find(l => l.includes('ERROR:')) ?? raw.split('\n')[0];
-    const tree = resolvePluginSourceTree(RUNNING_PACKAGE_ROOT);
-    const hint = !tree.srcIntegrationsDir && /Could not resolve:? "\.\./.test(raw)
-      ? ' (this plugin imports Walnut source modules, but no source checkout is reachable from the running package)'
-      : '';
-    const error = `${firstError}${hint}`;
-    log.warn('failed to bundle external plugin', { dir: pluginDir, error: raw, packageRoot: RUNNING_PACKAGE_ROOT, srcIntegrationsDir: tree.srcIntegrationsDir });
-    return { error };
+    return { error: bundleErrorText(err, pluginDir) };
   }
+}
+
+const PLUGIN_BUNDLE_BANNER = 'import { createRequire as __cr } from "node:module"; const require = __cr(import.meta.url);';
+
+/** Rebase the plugin's own parent-relative imports (`../../core/x.js`) onto walnut's src/ tree. */
+function pluginParentResolver(pluginDir: string, rebaseDir: string): (specifier: string, importer: string) => string | undefined {
+  const pluginName = path.basename(pluginDir);
+  return (specifier, importer) => {
+    // Only rebase imports originating from the plugin directory itself, never from a
+    // package it installed. Once resolved into the open-walnut src/ tree, the bundler
+    // resolves natively.
+    if (!importer.startsWith(pluginDir + '/') || importer.startsWith(pluginDir + '/node_modules/')) return undefined;
+    const subPath = path.relative(pluginDir, importer);
+    const assumedImporter = path.join(rebaseDir, pluginName, subPath);
+    const resolved = path.resolve(path.dirname(assumedImporter), specifier);
+    // Try .ts extension (the bundler resolves .js → .ts naturally in the src tree)
+    for (const candidate of [
+      resolved.replace(/\.js$/, '.ts'),
+      resolved,
+      path.join(resolved.replace(/\.js$/, ''), 'index.ts'),
+    ]) {
+      try { if (fs.statSync(candidate).isFile()) return candidate; } catch { /* expected: candidate doesn't exist */ }
+    }
+    return undefined;
+  };
+}
+
+/**
+ * A plugin's server module as ONE file that runs on its own (its jobs' code,
+ * src/core/plugin-jobs/bundle.ts): every package inlined, Node's target, the same
+ * parent-import rebase as the server's own load. The caller names the output file.
+ */
+export async function bundlePluginForJobs(pluginDir: string, entryFile: string, outfile: string): Promise<{ error?: string }> {
+  try {
+    const tree = resolvePluginSourceTree(RUNNING_PACKAGE_ROOT);
+    await bundleEsm({
+      entry: entryFile,
+      outfile,
+      banner: PLUGIN_BUNDLE_BANNER,
+      resolveParent: pluginParentResolver(pluginDir, tree.srcIntegrationsDir ?? BUILTIN_DIR),
+      selfContained: true,
+    });
+    return {};
+  } catch (err) {
+    return { error: bundleErrorText(err, pluginDir) };
+  }
+}
+
+function bundleErrorText(err: unknown, pluginDir: string): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  // The bundler's message is "Build failed with N errors:" followed by one line per
+  // error (src/lib/transpile.ts); the first error line is the one that explains the
+  // failure, and "Could not resolve '../../core/x.js'" (bun adds a colon) additionally
+  // means no source checkout is reachable from here.
+  const firstError = raw.split('\n').map(l => l.trim()).find(l => l.includes('ERROR:')) ?? raw.split('\n')[0];
+  const tree = resolvePluginSourceTree(RUNNING_PACKAGE_ROOT);
+  const hint = !tree.srcIntegrationsDir && /Could not resolve:? "\.\./.test(raw)
+    ? ' (this plugin imports Walnut source modules, but no source checkout is reachable from the running package)'
+    : '';
+  const error = `${firstError}${hint}`;
+  log.warn('failed to bundle external plugin', { dir: pluginDir, error: raw, packageRoot: RUNNING_PACKAGE_ROOT, srcIntegrationsDir: tree.srcIntegrationsDir });
+  return error;
 }
 
 // ── Built-in integrations dir resolution ──
@@ -926,6 +960,33 @@ export function pluginsKeepingTasks(registry: IntegrationRegistry): Set<string> 
 
 export function getPluginSourceDir(registry: IntegrationRegistry, pluginId: string): string | undefined {
   return pluginSources.get(registry)?.get(pluginId)?.dir;
+}
+
+/** A discovered plugin whose manifest declares jobs (src/core/plugin-jobs/): where its code is and its state. */
+export interface PluginJobSource {
+  id: string;
+  version: string;
+  dir: string;
+  /** Absolute path of its server module. */
+  entry: string;
+  jobs: NonNullable<PluginManifest['jobs']>;
+  state: string;
+}
+
+/** Every external plugin with jobs, whatever its state (only an `active` one runs them). Builtins have none. */
+export function getPluginJobSources(registry: IntegrationRegistry): PluginJobSource[] {
+  const sources = pluginSources.get(registry);
+  const states = new Map(getPluginLifecycleRecords(registry).map((r) => [r.id, r.state as string]));
+  const out: PluginJobSource[] = [];
+  for (const [id, manifest] of manifestMap(registry)) {
+    const source = sources?.get(id);
+    if (!manifest.jobs || !manifest.server || !source || source.isBuiltin) continue;
+    out.push({
+      id, version: manifest.version ?? '', dir: source.dir, entry: path.join(source.dir, manifest.server),
+      jobs: manifest.jobs, state: states.get(id) ?? 'discovered',
+    });
+  }
+  return out.sort((a, b) => a.id.localeCompare(b.id));
 }
 
 /** The builtin plugin folder this build discovers: `dist/integrations` built, `src/integrations` from source. */
@@ -1505,6 +1566,11 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
   // Lenient like icon: a bad area costs that area, never the load.
   const storageParsed = parseStorageDeclaration(obj.storage);
   for (const reason of storageParsed.dropped) log.warn('Manifest storage entry dropped', { filePath, reason });
+  // Jobs live in the unified server module: elsewhere they are dropped, never the load.
+  const jobsParsed = parseManifestJobs(obj.jobs);
+  for (const reason of jobsParsed.dropped) log.warn('Manifest job dropped', { filePath, reason });
+  const jobs = jobsParsed.jobs && (obj.apiVersion !== 1 || !server) ? undefined : jobsParsed.jobs;
+  if (jobsParsed.jobs && !jobs) log.warn('Manifest jobs dropped: jobs need "apiVersion": 1 and a "server" entry', { filePath });
   // Closed set; an unknown word is dropped so the catalog or the derivation decides.
   const category = parsePluginCategory(obj.category);
 
@@ -1541,6 +1607,7 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
     ...(storageParsed.storage ? { storage: storageParsed.storage } : {}),
     // Closed set: only `"plugin"` changes anything; junk reads as the default.
     ...(parseTaskVisibility(obj.taskVisibility) ? { taskVisibility: 'plugin' as const } : {}),
+    ...(jobs ? { jobs } : {}),
   };
 }
 

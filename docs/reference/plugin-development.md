@@ -122,6 +122,7 @@ Walnut loads built files, never your TypeScript sources. A published plugin pack
 - **`taskVisibility`**: optional `"everywhere"` (the default) or `"plugin"`: where the tasks your plugin's agents run in show (see [Tasks only your plugin shows](#tasks-only-your-plugin-shows)). Leave it out when the work is useful beyond your plugin, as it is for ticket handling, notes or any lookup: the tasks are ordinary tasks on the board. Say `"plugin"` when an agent exists only inside your App, such as a practice partner: its tasks then show only in your own view. Any other value reads as the default, and `walnut-plugin validate` reports it as an error.
 - **`taskFields`**: optional task fields for a sync integration.
 - **`phases`**: optional list of task phases added after the plugin API's first release that your sync plugin understands. Today that is `["WAITING"]`: a task parked until something happens, which belongs to the `todo` status bucket. A sync plugin that does not list it receives every WAITING task folded onto `TODO` (in `pushTask`, the `update*` calls, the content hooks and the `getTasks()` snapshot of its poll), so a plugin that maps the phase set exhaustively keeps working unchanged. List the phase once your mapping has a row for it; `legacyPhase()` from the API folds a phase onto the older set when you need a stable 3-state view. Whatever a plugin writes back, a sync pull can move a WAITING task only to COMPLETE; a phase it does not know should be treated as `TODO`.
+- **`jobs`**: optional work that keeps running on a machine of the person's choosing, `{ "<name>": { "every": "5m" } }` or `{ "<name>": { "kind": "long-running" } }` (see [Jobs](#jobs-work-that-keeps-running)). It needs `"server"`: the jobs are exported from the server entry.
 - **`catalog`**: optional `{ "adds": ["App"], "homepage": "...", "docs": "..." }`, read by the Settings store to describe a plugin in the bundled store before it is installed (see [Bundled store](#bundled-store)). Values of the wrong type are dropped.
 
 Legacy manifests without `apiVersion` keep their old capability gates and registration API. New work should use `apiVersion: 1`.
@@ -762,6 +763,55 @@ export function activate(walnut: WalnutServerApi) {
 ```
 
 Tests read what an item shows from `createFakeWalnut().statusItems`, a map from id to the last state you set.
+
+### Jobs: work that keeps running
+
+A job is code that runs on its own, apart from the Walnut server: a loop that keeps a queue drained, a poll every five minutes. Declare each one in the manifest and export it from the server entry:
+
+```json
+"jobs": {
+  "worker": { "kind": "long-running" },
+  "sweep": { "every": "5m" }
+}
+```
+
+```ts
+export const jobs = {
+  async worker(walnut, signal) {
+    while (!signal.aborted) {
+      const done = await drainOnce(walnut.config.queue)
+      walnut.metrics.inc('processed', done)
+      await sleep(2_000, signal)
+    }
+  },
+  async sweep(walnut) {
+    await walnut.ops.call('task_list', { limit: 50 })
+    walnut.metrics.inc('sweeps')
+  },
+}
+```
+
+That is all a plugin says about them. Walnut runs every job of the plugin on one machine: this computer unless the person picks another under **Runs on** on the plugin's page (one of their hosts in Settings, Hosts). The daemon of that machine runs each job as its own process, so a job keeps running while the Walnut server restarts, deploys or sleeps, and after a reboot of that machine once its daemon is up again:
+
+- **`every`** (`"1m"` to `"7d"`): the job runs about 2 s after it is added, then once per period, measured from the start of the last run. Runs never overlap: a run longer than the period is followed by the next a second after it ends. A run is stopped once it takes twice the period (at least 10 minutes, at most 6 hours). A run that throws is counted as failed, and the schedule goes on.
+- **`long-running`**: the job runs until its function returns or throws, then it is started again after 5 s, doubling up to 5 minutes while it keeps stopping. Ten minutes of running resets the wait.
+
+Two runs of one job never overlap, not even when its settings change or its daemon restarts: the new run waits until the old one has exited. A run whose daemon is gone for good (no daemon has looked after it for 6 hours) stops itself the way it stops when Walnut stops it. One machine takes at most 64 jobs, and a plugin whose settings are larger than 64 KB runs none until they are smaller. A test server (an ephemeral one, or one whose data folder is a temporary or task folder) runs no jobs, because a job is the plugin's real code with its real accounts; `WALNUT_PLUGIN_JOBS_IN_TEST=1` turns them on there.
+
+Inside a job, `walnut` is a small API, not the server one:
+
+| Member | What it is |
+|---|---|
+| `walnut.config` | The plugin's settings. On a host other than this computer, every secret-shaped field is left out and the password of a URL is masked. |
+| `walnut.secrets.get/set/delete/keys` | The plugin's secrets on the machine the job runs on. A job on a host reads what was set there. |
+| `walnut.ops.call(name, args)` / `walnut.ops.list()` | Walnut's ops, through the daemon of that machine, as an outside caller: they reach the Walnut that runs the job and no other. While that Walnut's server is away (the Mac asleep or restarting), a call throws an error with `code` `hub_unreachable`; the job keeps running, so try again later. An error answer throws an `Error` with the op's `code`. |
+| `walnut.log.debug/info/warn/error(msg, data)` | One line in the job's log, which the plugin's page shows. |
+| `walnut.metrics.set/inc/get/all` | Numbers the plugin's page shows under the job. |
+| `walnut.plugin`, `walnut.job`, `walnut.host` | Who is running and where. |
+
+The second argument is an `AbortSignal`, aborted when Walnut stops the job (the plugin is turned off or updated, the job moves to another machine, or a run took too long). A job has 8 s to return after that; then its process is ended. An exception or a rejected promise the job leaves uncaught ends the run as a failure, with the error in its log.
+
+A job runs from one self-contained file Walnut builds from your server entry, so it has no `node_modules` on the machine it runs on and the same file runs under Bun and Node. Keep code that only works on one kind of machine (a Mac app, a local file) behind a check of `walnut.host`, or say in your README where the job should run.
 
 ## Storage and secrets
 

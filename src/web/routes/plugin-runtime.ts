@@ -32,6 +32,7 @@ import {
 } from './plugin-linked-ops.js'
 import { markHandledFailure } from '../middleware/handled-failure.js'
 import { mountBundledPluginRoutes, type BundledPluginConfigWriter } from './plugin-bundled-routes.js'
+import { mountPluginJobsRoutes } from './plugin-jobs-routes.js'
 import { mountPluginIconRoute, withPluginIconUrls, type PluginIconDirs } from './plugin-icon-route.js'
 import { pluginManifestHasUi } from '../../core/integration-loader.js'
 import { resolveBundledStoreDir } from '../../core/plugins/bundled-store.js'
@@ -388,6 +389,7 @@ export function createPluginRuntimeRouter(deps: PluginRuntimeRouterDeps): Router
   })
 
   // Before every `/:pluginId/...` route, so `bundled` is never read as a plugin id.
+  mountPluginJobsRoutes(router, { cloudMode })
   mountBundledPluginRoutes(router, {
     cloudMode,
     list: () => deps.list(),

@@ -27,6 +27,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { GatewayError, GatewayErrorCode, GatewayOp, GatewayRequest, GatewayResponse } from './gateway-core.js'
 import { EXTERNAL_CALLER_SID, wellKnownGatewaySocketPaths } from './gateway-core.js'
+import { withFileLock } from '../utils/file-lock.js'
 import { GATEWAY_INLINE_ARGS_MAX_BYTES, classifyArgsSource, parseToolArgs, strippedShellText, strippedShellTextMessage } from './tool-args-source.js'
 import {
   classifyTemplateGateway, templateCheckGap, templateCheckInput, templateCheckReplyMs, templateCheckRequestInput,
@@ -492,6 +493,31 @@ export async function callHostDaemonTool(
   }
 }
 
+/** `walnut plugin-job <bundle> <job>` (plugin-job-harness.ts), with this process's real I/O. */
+async function runPluginJobProcess(argv: string[]): Promise<number> {
+  const { createPluginJobHarness } = await import('./plugin-job-harness.js')
+  const { pathToFileURL } = await import('node:url')
+  const harness = createPluginJobHarness({
+    fs, path, net, env: process.env,
+    importModule: (file) => import(pathToFileURL(file).href) as Promise<Record<string, unknown>>,
+    now: () => Date.now(),
+    setTimer: (fn, ms) => setTimeout(fn, ms),
+    clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
+    onSignal: (signal, fn) => { process.on(signal, fn) },
+    write: (text) => { process.stdout.write(text + '\n') },
+    exit: (code) => process.exit(code),
+    onFatal: (fn) => {
+      for (const kind of ['uncaughtException', 'unhandledRejection'] as const) {
+        process.removeAllListeners(kind)
+        process.on(kind, (err: unknown) => fn(err, kind))
+      }
+    },
+    lock: (file, fn) => withFileLock(file, fn),
+    home: os.homedir(),
+  })
+  return harness.run(argv)
+}
+
 // ── entry point ──
 
 /** Cap on waiting for a stdout flush — a runtime that never calls back must not hang walnut. */
@@ -584,6 +610,8 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
     const { runDaemonServiceArgs } = await import('./daemon-service-cli.js')
     return runDaemonServiceArgs(argv.slice(1))
   }
+  // A plugin job's process: the daemon starts it (plugin-jobs-core.ts), never a person.
+  if (argv[0] === 'plugin-job') return runPluginJobProcess(argv.slice(1))
   // `walnut guide | head` closes the pipe early: EPIPE on stdout is the reader
   // saying "enough", not an error — without this Node prints an uncaught stack.
   process.stdout.on('error', (e: NodeJS.ErrnoException) => { if (e?.code === 'EPIPE') process.exit(0) })

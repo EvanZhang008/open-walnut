@@ -58,6 +58,8 @@ import { createHostReplica } from './host-replica-core.js'
 import { createAttachmentCopy } from './attachment-copy-core.js'
 import { createFollowerReads } from './follower-reads-core.js'
 import { createHostServerSupervisor } from './host-server-core.js'
+import { createPluginJobSupervisor } from './plugin-jobs-core.js'
+import { createPluginJobHarness } from './plugin-job-harness.js'
 import { createStreamRelay } from './stream-relay-core.js'
 import { createHostResume } from './host-resume-core.js'
 import { createCliOwner } from './cli-owner-core.js'
@@ -266,6 +268,8 @@ export function getDaemonSource(): string {
     ['__CREATE_ATTACHMENT_COPY__', createAttachmentCopy.toString()],
     ['__CREATE_FOLLOWER_READS__', createFollowerReads.toString()],
     ['__CREATE_HOST_SERVER__', createHostServerSupervisor.toString()],
+    ['__CREATE_PLUGIN_JOBS__', createPluginJobSupervisor.toString()],
+    ['__CREATE_PLUGIN_JOB_HARNESS__', createPluginJobHarness.toString()],
     ['__CREATE_FEATURE_RELAY__', createFeatureRelay.toString()],
     ['__CREATE_STREAM_RELAY__', createStreamRelay.toString()],
     ['__CREATE_HOST_RESUME__', createHostResume.toString()],
@@ -850,6 +854,31 @@ const daemonCommands = (__CREATE_COMMAND_DRAIN__)();
 // (async: the socket handlers call process.exit). Keep exit codes + command
 // surface in sync with wn-cli.ts and daemon-standalone.ts.
 function runWnMinimal(argv, stdinText) {
+  // A plugin job's process (plugin-job-harness.ts, inlined): the daemon starts it, never a person.
+  if (argv[0] === 'plugin-job') {
+    var jobHarness = (__CREATE_PLUGIN_JOB_HARNESS__)({
+      fs: fs, path: path, net: net, env: process.env,
+      importModule: function (file) { return import(require('url').pathToFileURL(file).href); },
+      now: function () { return Date.now(); },
+      setTimer: function (fn, ms) { return setTimeout(fn, ms); },
+      clearTimer: function (t) { clearTimeout(t); },
+      onSignal: function (signal, fn) { process.on(signal, fn); },
+      write: function (text) { process.stdout.write(text + '\\n'); },
+      exit: function (code) { process.exit(code); },
+      onFatal: function (fn) {
+        ['uncaughtException', 'unhandledRejection'].forEach(function (kind) {
+          process.removeAllListeners(kind);
+          process.on(kind, function (err) { fn(err, kind); });
+        });
+      },
+      home: os.homedir(),
+    });
+    jobHarness.run(argv.slice(1)).then(function (code) { process.exit(code); }, function (err) {
+      process.stderr.write('walnut plugin-job: ' + String(err && err.stack ? err.stack : err) + '\\n');
+      process.exit(1);
+    });
+    return;
+  }
   // 'walnut daemon ...' manages THIS host's daemon service and runs locally —
   // it never relays to the hub. The sidecar must already be deployed next to
   // this script; this path does not install anything. Mirror wn-cli.ts.
@@ -3862,6 +3891,10 @@ function dispatchCommand(ws, id, cmd) {
       return streamRelay.frame(ws, cmd.cmd.slice('stream.'.length), cmd);
     case 'server.configure': return cmdServerConfigure(ws, id, cmd);
     case 'server.status': return cmdServerStatus(ws, id, cmd);
+    // Plugin jobs ('plugin-jobs-v1', plugin-jobs-core.ts, inlined). Twin of daemon-standalone.ts.
+    case 'jobs.configure': return cmdJobsConfigure(ws, id, cmd);
+    case 'jobs.status': return cmdJobsStatus(ws, id, cmd);
+    case 'jobs.logs': return cmdJobsLogs(ws, id, cmd);
     case 'leader.claim': return cmdLeaderClaim(ws, id, cmd);
     case 'leader.witness': return cmdLeaderWitness(ws, id);
     case 'leader.deliver': return daemonCommands.run(function () { return cmdLeaderDeliver(ws, id, cmd); });
@@ -5097,6 +5130,85 @@ function cmdServerStatus(ws, id, cmd) {
   sendOk(ws, id, { status: hostServers.status(home) });
 }
 
+// Plugin jobs ('plugin-jobs-v1', plugin-jobs-core.ts, inlined): the leader says which
+// plugin jobs run on this machine for its Walnut; each runs as this daemon's own
+// "walnut plugin-job <bundle> <job>". Durable dir, as the host server's. Twin of daemon-standalone.ts.
+var PLUGIN_JOBS_DIR = SERVICE_MODE && DAEMON_STATE_DIR
+  ? path.join(DAEMON_STATE_DIR, 'plugin-jobs')
+  : IS_PROD_DAEMON_DIR ? path.join(HOME_DIR, '.open-walnut', 'tmp', 'plugin-jobs') : path.join(DAEMON_DIR, 'plugin-jobs');
+// What the PATH shim runs; writeWalnutShim sets the stable copy it names.
+var walnutCliArgv = [process.execPath, process.argv[1] || ''];
+function pluginJobBaseEnv() {
+  var env = {};
+  for (var k of Object.keys(process.env)) {
+    var v = process.env[k];
+    if (typeof v !== 'string' || k.indexOf('WALNUT_') === 0 || k.indexOf('OPEN_WALNUT_') === 0 || k === 'BUN_BE_BUN') continue;
+    env[k] = v;
+  }
+  env.PATH = (process.env.PATH || '') + path.delimiter + GATEWAY_SHIM_DIR;
+  env.HOME = process.env.HOME || HOME_DIR;
+  return env;
+}
+var pluginJobs = (__CREATE_PLUGIN_JOBS__)({
+  fs: fs, path: path,
+  spawn: function (command, args, opts) { return spawn(command, args, opts); },
+  dir: PLUGIN_JOBS_DIR,
+  keyOf: function (home) { return crypto.createHash('sha1').update(home).digest('hex').slice(0, 16); },
+  now: function () { return Date.now(); },
+  setTimer: function (fn, ms) { var t = setTimeout(fn, ms); if (t.unref) t.unref(); return t; },
+  clearTimer: function (t) { clearTimeout(t); },
+  log: function (level, msg, data) { logMsg(level, msg, data); },
+  startTimeOf: hostServerStartTime,
+  alive: function (pid) { try { process.kill(pid, 0); return true; } catch (e) { return !!(e && e.code === 'EPERM'); } },
+  bootTime: function () { var up = os.uptime(); return up > 0 ? Date.now() - up * 1000 : null; },
+  randomToken: function () { return crypto.randomBytes(32).toString('hex'); },
+  killGroup: function (pid, signal) { if (pid > 1) process.kill(-pid, signal); },
+  program: function () { return { command: walnutCliArgv[0], args: walnutCliArgv.slice(1).concat(['walnut', 'plugin-job']) }; },
+  baseEnv: pluginJobBaseEnv,
+  gatewaySocket: function () { return GATEWAY_SOCK_PATH; },
+  sha256File: function (file) { try { return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex'); } catch (e) { return null; } },
+  maxLogBytes: Number(process.env.WALNUT_PLUGIN_JOB_LOG_MAX_BYTES) || undefined,
+  // A test knob: never on the production daemon dir.
+  minEveryMs: IS_PROD_DAEMON_DIR ? undefined : Number(process.env.WALNUT_PLUGIN_JOB_MIN_EVERY_MS) || undefined,
+});
+
+// The leader only, on the socket its leader.configure tagged, for its own Walnut.
+function jobsLeaderHome(ws, id, cmd, name) {
+  if (!isServerClient(ws)) { sendError(ws, id, name + ': the leader only'); return null; }
+  var home = typeof cmd.home === 'string' ? cmd.home : '';
+  if (!home || gatewayClientHomes.get(ws) !== home) { sendError(ws, id, name + ': send leader.configure for this Walnut first'); return null; }
+  return home;
+}
+
+function cmdJobsConfigure(ws, id, cmd) {
+  var home = jobsLeaderHome(ws, id, cmd, 'jobs.configure');
+  if (!home) return;
+  var spec = cmd.spec;
+  var rec = leaderBook.recordOf(home);
+  if (!spec || spec.walnutId !== (rec && rec.walnutId)) return sendError(ws, id, 'jobs.configure: the spec names another Walnut');
+  try {
+    sendOk(ws, id, pluginJobs.configure(home, spec));
+  } catch (err) {
+    sendError(ws, id, err.message);
+  }
+}
+
+function cmdJobsStatus(ws, id, cmd) {
+  var home = jobsLeaderHome(ws, id, cmd, 'jobs.status');
+  if (!home) return;
+  sendOk(ws, id, pluginJobs.status(home));
+}
+
+function cmdJobsLogs(ws, id, cmd) {
+  var home = jobsLeaderHome(ws, id, cmd, 'jobs.logs');
+  if (!home) return;
+  try {
+    sendOk(ws, id, pluginJobs.logs(home, String(cmd.plugin == null ? '' : cmd.plugin), String(cmd.job == null ? '' : cmd.job), cmd.lines));
+  } catch (err) {
+    sendError(ws, id, err.message);
+  }
+}
+
 function cmdLeaderClaim(ws, id, cmd) {
   if (ws.origin === 'bridge') {
     var r = leaderBook.backupClaim(cmd.walnutId, cmd.epoch);
@@ -5779,12 +5891,33 @@ function cmdGatewayResult(ws, id, cmd) {
   sendOk(ws, id, {});
 }
 
+// A plugin job's call: to the server of the Walnut that runs the job and no other,
+// as 'external' (twin of daemon-standalone.ts).
+function sendPluginJobGatewayRequest(home, capability, payload, respond) {
+  var target = null;
+  for (const client of wsClients) {
+    if (!isServerClient(client) || isQuietTrustedClient(client)) continue;
+    if (gatewayClientHomes.get(client) === home) target = client;
+  }
+  if (target && ((target.missedBeats || 0) >= GATEWAY_SILENT_BEATS || leaderBook.backupLead(home) || primaryQuietWithFollower(home))) target = null;
+  if (!target) {
+    logMsg('info', 'gateway: plugin job call, its Walnut is not connected', { home: home, op: payload.name });
+    return respond(gatewayError('hub_unreachable', 'the Walnut that runs this job is not connected now; try again later'));
+  }
+  relayToPrimary(target, home, capability, EXTERNAL_CALLER_SID, payload, respond, false);
+}
+
 // One parsed NDJSON line from the agent socket → local reject or hub relay.
 function handleGatewayLine(line, respond) {
   if (daemonCommands.closed) return respond(gatewayError('hub_unreachable', 'daemon is shutting down; retry after reconnecting'));
   var parsed = parseGatewayLine(line);
   if (parsed.ok !== true) return respond(parsed);
   var req = parsed.request;
+  if (pluginJobs.isRunSid(req.sid)) {
+    var jobHome = pluginJobs.homeOfRun(req.sid);
+    if (!jobHome) return respond(gatewayError('unknown_caller', 'no plugin job of this daemon runs under this id'));
+    return sendPluginJobGatewayRequest(jobHome, req.op, req.args, respond);
+  }
   // ACP sessions live in the acp worker map, not in sessions; their sid is the
   // runtimeId, stable for the worker's life (twin of daemon-standalone.ts).
   var callerSid = resolveCallerSid(req.sid) || (acp && acp.hasWorker(req.sid) ? req.sid : null);
@@ -6044,6 +6177,7 @@ function writeWalnutShim() {
     var entry = process.argv[1] || '';
     var target = entry ? (ensureShimCoreCopy(entry) || entry) : entry;
     var shim = '#!/bin/sh\\nexec ' + q(process.execPath) + ' ' + q(target) + ' walnut "$@"\\n';
+    walnutCliArgv = [process.execPath, target];
     // One name: walnut. The retired wn file is removed, not rewritten.
     var sp = path.join(GATEWAY_SHIM_DIR, 'walnut');
     fs.writeFileSync(sp, shim, { mode: 0o755 });
@@ -14085,6 +14219,8 @@ async function startDaemon() {
     fs.writeFileSync(VERSION_FILE, DAEMON_VERSION);
     // The servers an earlier daemon kept running here (twin of daemon-standalone.ts).
     try { hostServers.boot(); } catch (err) { logMsg('warn', 'host server: boot failed', { error: err.message }); }
+    // The plugin jobs an earlier daemon ran here (twin of daemon-standalone.ts).
+    try { pluginJobs.boot(); } catch (err) { logMsg('warn', 'plugin jobs: boot failed', { error: err.message }); }
     console.log(port); // Print port for parent to capture
     // turnRetry: read from env ONCE at boot, so this line is the only way to
     // answer "is this daemon retrying, and with what budget?" without shell

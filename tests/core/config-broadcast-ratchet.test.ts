@@ -133,6 +133,7 @@ describe('the source: config:changed carries a config only through the helper', 
       'src/web/routes/expose.ts',
       'src/web/routes/hooks.ts',
       'src/web/routes/host-servers.ts',
+      'src/web/routes/plugin-jobs-routes.ts',
       'src/web/routes/test-host-fixture.ts',
     ])
   })

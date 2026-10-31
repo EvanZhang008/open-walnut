@@ -999,6 +999,7 @@ export class DaemonConnection {
     // (core/host-server/); it is set up again after the next leader.configure.
     if (changed && !value) {
       void import('../core/host-server/index.js').then((m) => m.hostServerDisconnected(this.hostKey)).catch(() => {})
+      void import('../core/plugin-jobs/index.js').then((m) => m.pluginJobsDisconnected(this.hostKey)).catch(() => {})
     }
     // The stream lane lives with the link: down with it, and up again when the
     // host server is set up on the next one (after its leader.configure).
@@ -1412,6 +1413,10 @@ export class DaemonConnection {
             // on the host may be set up (core/host-server/; off unless enabled).
             void import('../core/host-server/index.js').then((m) => m.hostServerConnected(this.hostServerHandle())).catch((err) => {
               log.session.warn('DaemonConnection: host server setup failed to start', { host: this.hostKey, error: err instanceof Error ? err.message : String(err) })
+            })
+            // And which plugin jobs run on this machine (core/plugin-jobs/; nothing is sent to an older daemon).
+            void import('../core/plugin-jobs/index.js').then((m) => m.pluginJobsConnected(this.hostServerHandle())).catch((err) => {
+              log.session.warn('DaemonConnection: plugin jobs setup failed to start', { host: this.hostKey, error: err instanceof Error ? err.message : String(err) })
             })
           }
         }

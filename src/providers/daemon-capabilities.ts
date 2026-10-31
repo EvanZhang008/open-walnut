@@ -773,6 +773,16 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // process, so not bridge-reachable and not for followers. Both twins.
   // Optional: without it the server runs the same core in-process.
   'oneshot-v1',
+  // 'plugin-jobs-v1' (plugin-jobs-core.ts, plugin-job-harness.ts): `jobs.configure {home,
+  // spec: {v, home, walnutId, jobs}}` sets the WHOLE set of plugin jobs this machine runs for
+  // that Walnut (a job left out is stopped); `jobs.status {home}` answers each job's state and
+  // the bundle dir the leader puts code in; `jobs.logs {home, plugin, job, lines}` the newest
+  // lines of one job's log. Each job is its own process group (`<this daemon's program> walnut
+  // plugin-job <bundle> <job>`), restarted with backoff or run every N, adopted by a new
+  // daemon, its spec and run times kept in a durable dir. A trusted leader socket whose
+  // leader.configure named `home` only; not bridge-reachable, not for followers. Both twins
+  // (the cores are text-injected). Optional: without it the Mac sends no jobs to that machine.
+  'plugin-jobs-v1',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

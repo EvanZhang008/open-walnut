@@ -92,6 +92,7 @@ import { createHostReplica } from './host-replica-core.js'
 import { createAttachmentCopy } from './attachment-copy-core.js'
 import { createFollowerReads } from './follower-reads-core.js'
 import { createHostServerSupervisor } from './host-server-core.js'
+import { createPluginJobSupervisor } from './plugin-jobs-core.js'
 import { createStreamRelay } from './stream-relay-core.js'
 import { createHostResume } from './host-resume-core.js'
 import { createCliOwner } from './cli-owner-core.js'
@@ -184,6 +185,7 @@ import {
   GATEWAY_MAX_LINE_BYTES,
   gatewayHubTimeoutMs,
   gatewayShimScript,
+  EXTERNAL_CALLER_SID,
   isDaemonCliKeyword,
   isExternalCallerSid,
   parseGatewayLine,
@@ -2552,6 +2554,10 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       return streamRelay.frame(ws, (cmd.cmd as string).slice('stream.'.length), cmd)
     case 'server.configure': return cmdServerConfigure(ws, id as number, cmd)
     case 'server.status': return cmdServerStatus(ws, id as number, cmd)
+    // Plugin jobs ('plugin-jobs-v1', plugin-jobs-core.ts). Keep in sync with daemon-source.ts.
+    case 'jobs.configure': return cmdJobsConfigure(ws, id as number, cmd)
+    case 'jobs.status': return cmdJobsStatus(ws, id as number, cmd)
+    case 'jobs.logs': return cmdJobsLogs(ws, id as number, cmd)
     case 'leader.claim': return cmdLeaderClaim(ws, id as number, cmd)
     case 'leader.witness': return cmdLeaderWitness(ws, id as number)
     case 'leader.deliver': return daemonCommands.run(() => cmdLeaderDeliver(ws, id as number, cmd))
@@ -4061,6 +4067,83 @@ function cmdServerStatus(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   sendOk(ws, id, { status: hostServers.status(home) })
 }
 
+// ── Plugin jobs ('plugin-jobs-v1', plugin-jobs-core.ts) ──
+// The leader says which plugin jobs run on this machine for its Walnut; the daemon
+// runs each as `<this daemon's program> walnut plugin-job <bundle> <job>` and keeps
+// it running. Durable dir (never /tmp), as the host server's. Keep in sync with daemon-source.ts.
+const PLUGIN_JOBS_DIR = SERVICE_MODE && DAEMON_STATE_DIR
+  ? path.join(DAEMON_STATE_DIR, 'plugin-jobs')
+  : IS_PROD_DAEMON_DIR ? path.join(HOME_DIR, '.open-walnut', 'tmp', 'plugin-jobs') : path.join(DAEMON_DIR, 'plugin-jobs')
+/** A job's environment: this daemon's, minus Walnut's own variables, with the shim dir on PATH. */
+function pluginJobBaseEnv(): Record<string, string> {
+  const env: Record<string, string> = {}
+  for (const [k, v] of Object.entries(process.env)) {
+    if (typeof v !== 'string' || k.startsWith('WALNUT_') || k.startsWith('OPEN_WALNUT_') || k === 'BUN_BE_BUN') continue
+    env[k] = v
+  }
+  env.PATH = (process.env.PATH || '') + path.delimiter + GATEWAY_SHIM_DIR
+  env.HOME = process.env.HOME || HOME_DIR
+  return env
+}
+const pluginJobs = createPluginJobSupervisor({
+  fs, path,
+  spawn: (command, args, opts) => spawn(command, args, opts),
+  dir: PLUGIN_JOBS_DIR,
+  keyOf: (home) => crypto.createHash('sha1').update(home).digest('hex').slice(0, 16),
+  now: () => Date.now(),
+  setTimer: (fn, ms) => { const t = setTimeout(fn, ms); (t as { unref?: () => void }).unref?.(); return t },
+  clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>),
+  log: (level, msg, data) => logMsg(level, msg, data),
+  startTimeOf: hostServerStartTime,
+  alive: (pid) => { try { process.kill(pid, 0); return true } catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM' } },
+  bootTime: () => { const up = os.uptime(); return up > 0 ? Date.now() - up * 1000 : null },
+  randomToken: () => crypto.randomBytes(32).toString('hex'),
+  killGroup: (pid, signal) => { if (pid > 1) process.kill(-pid, signal) },
+  program: () => ({ command: walnutCliArgv[0]!, args: [...walnutCliArgv.slice(1), 'walnut', 'plugin-job'] }),
+  baseEnv: pluginJobBaseEnv,
+  gatewaySocket: () => GATEWAY_SOCK_PATH,
+  sha256File: (file) => { try { return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') } catch { return null } },
+  maxLogBytes: Number(process.env.WALNUT_PLUGIN_JOB_LOG_MAX_BYTES) || undefined,
+  // A test knob: never on the production daemon dir.
+  minEveryMs: IS_PROD_DAEMON_DIR ? undefined : Number(process.env.WALNUT_PLUGIN_JOB_MIN_EVERY_MS) || undefined,
+})
+
+/** The leader only, on the socket its leader.configure tagged, for its own Walnut. */
+function jobsLeaderHome(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>, name: string): string | null {
+  if (!isServerClient(ws)) { sendError(ws, id, `${name}: the leader only`); return null }
+  const home = typeof cmd.home === 'string' ? cmd.home : ''
+  if (!home || gatewayClientHomes.get(ws) !== home) { sendError(ws, id, `${name}: send leader.configure for this Walnut first`); return null }
+  return home
+}
+
+function cmdJobsConfigure(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const home = jobsLeaderHome(ws, id, cmd, 'jobs.configure')
+  if (!home) return
+  const spec = cmd.spec as { walnutId?: unknown } | null | undefined
+  if (!spec || spec.walnutId !== leaderBook.recordOf(home)?.walnutId) return sendError(ws, id, 'jobs.configure: the spec names another Walnut')
+  try {
+    sendOk(ws, id, pluginJobs.configure(home, spec))
+  } catch (err) {
+    sendError(ws, id, (err as Error).message)
+  }
+}
+
+function cmdJobsStatus(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const home = jobsLeaderHome(ws, id, cmd, 'jobs.status')
+  if (!home) return
+  sendOk(ws, id, pluginJobs.status(home))
+}
+
+function cmdJobsLogs(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const home = jobsLeaderHome(ws, id, cmd, 'jobs.logs')
+  if (!home) return
+  try {
+    sendOk(ws, id, pluginJobs.logs(home, String(cmd.plugin ?? ''), String(cmd.job ?? ''), cmd.lines))
+  } catch (err) {
+    sendError(ws, id, (err as Error).message)
+  }
+}
+
 function cmdLeaderClaim(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
   if (ws.data?.origin === 'bridge') {
     const r = leaderBook.backupClaim(cmd.walnutId, cmd.epoch)
@@ -4806,12 +4889,36 @@ function cmdGatewayResult(ws: ServerWebSocket<WsData>, id: number, cmd: Record<s
   sendOk(ws, id, {})
 }
 
+/**
+ * A plugin job's call (plugin-jobs-core.ts): to the server of the Walnut that runs the
+ * job and no other, as `external` (no session: what the user's own terminal may do).
+ * While that server is away the job is told so at once and tries again later.
+ */
+function sendPluginJobGatewayRequest(home: string, capability: string, payload: Record<string, unknown>, respond: (resp: GatewayResponse) => void) {
+  let target: ServerWebSocket<WsData> | null = null
+  for (const client of wsClients) {
+    if (!isServerClient(client) || isQuietTrustedClient(client)) continue
+    if (gatewayClientHomes.get(client) === home) target = client
+  }
+  if (target && ((target.data?.missedBeats ?? 0) >= GATEWAY_SILENT_BEATS || leaderBook.backupLead(home) || primaryQuietWithFollower(home))) target = null
+  if (!target) {
+    logMsg('info', 'gateway: plugin job call, its Walnut is not connected', { home, op: payload.name })
+    return respond(gatewayError('hub_unreachable', 'the Walnut that runs this job is not connected now; try again later'))
+  }
+  relayToPrimary(target, home, capability, EXTERNAL_CALLER_SID, payload, respond, false)
+}
+
 /** One parsed NDJSON line from the agent socket → local reject or hub relay. */
 function handleGatewayLine(line: string, respond: (resp: GatewayResponse) => void) {
   if (daemonCommands.closed) return respond(gatewayError('hub_unreachable', 'daemon is shutting down; retry after reconnecting'))
   const parsed = parseGatewayLine(line)
   if (!parsed.ok) return respond({ ok: false, error: parsed.error })
   const req = parsed.request
+  if (pluginJobs.isRunSid(req.sid)) {
+    const home = pluginJobs.homeOfRun(req.sid)
+    if (!home) return respond(gatewayError('unknown_caller', 'no plugin job of this daemon runs under this id'))
+    return sendPluginJobGatewayRequest(home, req.op, req.args, respond)
+  }
   // ACP sessions (engine=codex) live in the acp worker map, not `sessions` —
   // their WALNUT_SESSION_ID is the runtimeId, stable for the worker's life.
   // sid 'external' (env-less `walnut`: a hand-started agent or the user's own
@@ -5098,6 +5205,9 @@ function reapShimCoreArtifacts(referenced: string[]) {
   } catch { /* hygiene — never fail startup over it */ }
 }
 
+/** What the PATH shim runs (this daemon's program): a plugin job's process is `<it> walnut plugin-job ...`. */
+let walnutCliArgv: string[] = [process.execPath, ...(process.argv[1] && !process.argv[1].includes('$bunfs') && !process.argv[1].includes('~BUN') && process.argv[1] !== process.execPath ? [process.argv[1]] : [])]
+
 /** PATH shim so `walnut` inside spawned sessions reaches this daemon's dispatch. */
 function writeWalnutShim() {
   try {
@@ -5120,6 +5230,7 @@ function writeWalnutShim() {
     // real npm walnut still wins; on remote hosts this shim IS the walnut
     // command. The retired `wn` file is removed, not rewritten.
     const shim = gatewayShimScript(argv)
+    walnutCliArgv = argv
     const p = path.join(GATEWAY_SHIM_DIR, 'walnut')
     fs.writeFileSync(p, shim, { mode: 0o755 })
     fs.chmodSync(p, 0o755)
@@ -11898,6 +12009,8 @@ if (action === '--start' || SERVICE_MODE) {
   // The servers an earlier daemon kept running here: adopt or start them, now
   // that the port file they connect through is written.
   try { hostServers.boot() } catch (err) { logMsg('warn', 'host server: boot failed', { error: (err as Error).message }) }
+  // The plugin jobs an earlier daemon ran here (plugin-jobs-core.ts): adopt, schedule or start them.
+  try { pluginJobs.boot() } catch (err) { logMsg('warn', 'plugin jobs: boot failed', { error: (err as Error).message }) }
   console.log(port) // Print port for parent to capture
   logMsg('info', 'daemon started', {
     port,

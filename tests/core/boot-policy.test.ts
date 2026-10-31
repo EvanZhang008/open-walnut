@@ -34,6 +34,7 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'companion-ingest-routes': cloudOnly,
   'backup-routes': leaderOnly,
   'plugin-apps': leaderOnly,
+  'plugin-jobs': leaderOnly, // new: only the Mac places plugin jobs
   'v1-forward': cloudOnly,
   'backup-leader': cloudOnly,
   'leader-heartbeat': leaderOnly,
@@ -111,6 +112,7 @@ const SELF_GATED: Array<[BootJob, string]> = [
   ['title-reconciler', 'src/core/session-title-reconciler.ts'],
   ['notes-semantic', 'src/core/notes-indexer.ts'],
   ['workspace-watch', 'src/core/workspaces/watch.ts'],
+  ['plugin-jobs', 'src/core/plugin-jobs/index.ts'],
 ]
 
 /** What a host replica starts: the tunnel's proxy trust and its own credentialed calls. Everything else is off. */

@@ -5,6 +5,7 @@
  * Core never references specific integrations — only talks through the registry.
  */
 
+import type { PluginJobDeclaration } from './plugin-jobs/manifest.js';
 import type { Task, TaskPhase, TaskPriority } from './types.js';
 import type { SubsystemLogger } from '../logging/index.js';
 import type { Router } from 'express';
@@ -610,4 +611,8 @@ export interface PluginManifest {
    *  Settings → Plugins (src/core/plugins/plugin-icon.ts). An unusable value is dropped
    *  with a warning; the row then shows a monogram. */
   icon?: string;
+  /** Compute Walnut keeps running (src/core/plugin-jobs/): each a function of the server
+   *  module's `jobs` export, run every N or kept running, by the daemon of the machine
+   *  `plugins.<id>.run_on` names (this computer when unset). A bad entry is dropped. */
+  jobs?: Record<string, PluginJobDeclaration>;
 }

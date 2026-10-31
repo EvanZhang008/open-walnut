@@ -661,6 +661,7 @@ describe('every free-form map in the Config type is accounted for', () => {
     hosts: 'keyed by host name; each value is a typed host record',
     session_limits: 'numbers',
     plugin_ai: 'keyed by plugin id; each value is an on/off switch and a monthly budget',
+    plugin_jobs: 'keyed by plugin id; each value names the machine its jobs run on',
     excluded_cwds: 'directory paths per host',
     overrides: 'hooks.overrides: enabled, priority, timeoutMs',
     tag_display: 'shown | value | hidden',

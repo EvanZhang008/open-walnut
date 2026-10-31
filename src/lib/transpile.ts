@@ -22,6 +22,12 @@ export interface BundleRequest {
   banner: string
   /** A file for a parent-relative import (`../`), or undefined to resolve it the usual way. */
   resolveParent(specifier: string, importer: string): string | undefined
+  /**
+   * One file that runs anywhere on its own (a plugin job, src/core/plugin-jobs/bundle.ts):
+   * every npm package inlined and Node's target, so node and bun alike can run it on a
+   * machine with no node_modules. Default: packages stay imports, for bun.
+   */
+  selfContained?: boolean
 }
 
 
@@ -45,9 +51,9 @@ interface BunBuildPluginBuilder {
 
 interface BunBuildConfig {
   entrypoints: string[]
-  target: 'bun'
+  target: 'bun' | 'node'
   format: 'esm'
-  packages: 'external'
+  packages: 'external' | 'bundle'
   banner: string
   throw: false
   plugins: Array<{ name: string; setup(builder: BunBuildPluginBuilder): void }>
@@ -58,9 +64,9 @@ export async function bundleEsm(req: BundleRequest): Promise<void> {
   if (!ON_BUN) throw new Error(`bundling a plugin needs bun's bundler, and this process runs on Node ${process.version}`)
   const result = await bunGlobal<{ build(config: BunBuildConfig): Promise<BunBuildOutput> }>().build({
     entrypoints: [req.entry],
-    target: 'bun',
+    target: req.selfContained ? 'node' : 'bun',
     format: 'esm',
-    packages: 'external',
+    packages: req.selfContained ? 'bundle' : 'external',
     banner: req.banner,
     throw: false,
     plugins: [{

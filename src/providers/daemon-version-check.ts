@@ -206,6 +206,10 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/follower-reads-core.ts',
   // The host server the daemon keeps running (host-server-v1): same rule.
   'src/providers/host-server-core.ts',
+  // The plugin jobs the daemon keeps running (plugin-jobs-v1) and the harness each job
+  // process runs in (imported by the walnut CLI of the standalone, inlined by the JS twin).
+  'src/providers/plugin-jobs-core.ts',
+  'src/providers/plugin-job-harness.ts',
   // Streams between servers through the daemon (stream-relay-v1): same rule.
   'src/providers/stream-relay-core.ts',
   'src/providers/feature-relay-core.ts',

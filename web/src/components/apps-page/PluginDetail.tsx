@@ -22,6 +22,7 @@ import { PluginIcon, pluginTileTints } from '@/components/settings/PluginIcon'
 import { PluginAppFailure } from '@/components/settings/PluginAppFailure'
 import { PluginMcpControls } from '@/components/settings/PluginMcpControls'
 import { PluginAiControls } from '@/components/settings/PluginAiControls'
+import { PluginJobsControls } from '@/components/settings/PluginJobsControls'
 import { PluginConnectionPanel, CONNECTION_BADGE } from '@/components/settings/PluginConnectionPanel'
 import { PluginConfigCards } from '@/components/settings/sections/PluginConfigCards'
 import { PluginAlsoNeeds, PluginCascadeConfirm, PluginDependencyNeeds, PluginPendingDependencies, dependencyBusyKey } from '@/components/settings/sections/PluginDependencyRows'
@@ -187,6 +188,7 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back }: 
     <>
       <PluginMcpControls pluginId={row.id} />
       <PluginAiControls pluginId={row.id} />
+      <PluginJobsControls pluginId={row.id} />
       {connection && <PluginConnectionPanel pluginId={row.id} initial={connection} onReport={store.onConnectionReport} />}
     </>
   )
