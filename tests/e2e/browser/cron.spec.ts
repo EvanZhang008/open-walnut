@@ -1,5 +1,6 @@
 /**
- * Playwright browser tests for the Cron Scheduled Jobs page.
+ * Playwright browser tests for the Routines page (/routines; /cron redirects there),
+ * the scheduled jobs list it grew out of.
  *
  * Runs against the real test server (started by playwright.config.ts webServer)
  * with a pre-built SPA served from dist/web/static/.
@@ -45,20 +46,17 @@ async function deleteCronJobViaApi(id: string): Promise<void> {
 
 // ── Sidebar navigation ──
 
-test('sidebar link navigates to cron page', async ({ page }) => {
+test('sidebar link navigates to the Routines page', async ({ page }) => {
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 
-  // Click the "Scheduled" link in the sidebar
-  const scheduledLink = page.locator('.sidebar a', { hasText: 'Scheduled' })
-  await expect(scheduledLink).toBeVisible()
-  await scheduledLink.click()
+  // testid, not the label: a collapsed sidebar hides the text.
+  const routinesLink = page.getByTestId('sidebar-core-app-routines')
+  await expect(routinesLink).toBeVisible()
+  await routinesLink.click()
 
-  // Verify we landed on /cron
-  await expect(page).toHaveURL(/\/cron/)
-
-  // Verify page title
-  await expect(page.locator('.page-title')).toContainText('Scheduled Jobs')
+  await expect(page).toHaveURL(/\/routines/)
+  await expect(page.locator('.page-title')).toContainText('Routines')
 })
 
 // ── Empty state ──
@@ -80,7 +78,7 @@ test('cron page shows empty state when no jobs exist', async ({ page }) => {
   // Verify empty state message
   const emptyState = page.locator('.empty-state')
   await expect(emptyState).toBeVisible({ timeout: 5000 })
-  await expect(emptyState).toContainText('No scheduled jobs yet')
+  await expect(emptyState).toContainText('No routines yet')
 })
 
 // ── Job card displays ──
@@ -100,7 +98,7 @@ test('job card displays correctly with name, schedule, and toggle', async ({ pag
     await expect(card.locator('.cron-job-name')).toContainText(job.name)
 
     // Verify schedule text (everyMs: 60000 = "Every 1 minute")
-    await expect(card).toContainText('Every 1 minute')
+    await expect(card).toContainText('Every 1 min')
 
     // Verify toggle button exists and shows "On" (enabled by default)
     const toggleBtn = card.locator('.cron-toggle-btn')
@@ -151,43 +149,8 @@ test('toggle button disables and enables a job', async ({ page }) => {
   }
 })
 
-// ── Filter tabs ──
-
-test('filter tabs show correct jobs for All, Enabled, Disabled', async ({ page }) => {
-  // Create one enabled and one disabled job
-  const enabledJob = await createCronJobViaApi('Filter enabled job')
-  const disabledJob = await createCronJobViaApi('Filter disabled job')
-
-  // Disable the second job via API
-  await fetch(`${API}/api/cron/${disabledJob.id}/toggle`, { method: 'POST' })
-
-  try {
-    await page.goto('/cron')
-    await page.waitForLoadState('networkidle')
-
-    // "All" tab should show both
-    const allTab = page.locator('.cron-filter-tab', { hasText: 'All' })
-    await expect(allTab).toBeVisible()
-    await allTab.click()
-    await expect(page.locator('.cron-job-card', { hasText: enabledJob.name })).toBeVisible({ timeout: 5000 })
-    await expect(page.locator('.cron-job-card', { hasText: disabledJob.name })).toBeVisible({ timeout: 5000 })
-
-    // "Enabled" tab should show only the enabled job
-    const enabledTab = page.locator('.cron-filter-tab', { hasText: 'Enabled' })
-    await enabledTab.click()
-    await expect(page.locator('.cron-job-card', { hasText: enabledJob.name })).toBeVisible({ timeout: 5000 })
-    await expect(page.locator('.cron-job-card', { hasText: disabledJob.name })).toBeHidden({ timeout: 5000 })
-
-    // "Disabled" tab should show only the disabled job
-    const disabledTab = page.locator('.cron-filter-tab', { hasText: 'Disabled' })
-    await disabledTab.click()
-    await expect(page.locator('.cron-job-card', { hasText: disabledJob.name })).toBeVisible({ timeout: 5000 })
-    await expect(page.locator('.cron-job-card', { hasText: enabledJob.name })).toBeHidden({ timeout: 5000 })
-  } finally {
-    await deleteCronJobViaApi(enabledJob.id)
-    await deleteCronJobViaApi(disabledJob.id)
-  }
-})
+// The All / Enabled / Disabled filter tabs went with the old page: Routines lists
+// every routine with its own switch (routines-store-same-browser-instant.spec.ts).
 
 // ── Three-dot menu ──
 
@@ -325,57 +288,8 @@ test('run now via menu does not crash and card remains', async ({ page }) => {
 
 // ── Create job form ──
 
-test('create job via form adds a new card', async ({ page }) => {
-  const uniqueName = `Form created job ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  let createdJobId: string | null = null
-
-  try {
-    await page.goto('/cron')
-    await page.waitForLoadState('networkidle')
-
-    // Click "+ New Job" button
-    const newJobBtn = page.locator('.btn.btn-primary', { hasText: '+ New Job' })
-    await expect(newJobBtn).toBeVisible()
-    await newJobBtn.click()
-
-    // Form should appear
-    const form = page.locator('.cron-form')
-    await expect(form).toBeVisible({ timeout: 5000 })
-    await expect(form.locator('.cron-form-title')).toContainText('New Scheduled Job')
-
-    // Fill in name
-    await page.locator('#cron-name').fill(uniqueName)
-
-    // Schedule type "every" is already selected by default
-    // Fill in interval value
-    await page.locator('#cron-every-val').fill('5')
-
-    // Session target "main" is already selected by default
-    // Fill in system event text
-    await page.locator('#cron-event-text').fill('test form event')
-
-    // Click Create
-    await form.locator('.btn.btn-primary', { hasText: 'Create' }).click()
-
-    // Form should close
-    await expect(form).toBeHidden({ timeout: 5000 })
-
-    // New card should appear
-    const card = page.locator('.cron-job-card', { hasText: uniqueName })
-    await expect(card).toBeVisible({ timeout: 5000 })
-
-    // Verify schedule text
-    await expect(card).toContainText('Every 5 minutes')
-
-    // Get the job ID for cleanup via API
-    const listRes = await fetch(`${API}/api/cron?includeDisabled=true`)
-    const { jobs } = (await listRes.json()) as { jobs: { id: string; name: string }[] }
-    const created = jobs.find((j) => j.name === uniqueName)
-    if (created) createdJobId = created.id
-  } finally {
-    if (createdJobId) await deleteCronJobViaApi(createdJobId)
-  }
-})
+// Creating a routine by hand ("Build it myself") is routine-watcher.spec.ts; the old
+// "+ New Job" form it replaced is gone.
 
 // ── Edit job ──
 
@@ -397,20 +311,19 @@ test('edit job via menu opens form with pre-filled values and saves changes', as
     await card.locator('.cron-menu-item', { hasText: 'Edit' }).click()
 
     // Form should appear in edit mode
-    const form = page.locator('.cron-form')
+    const form = page.locator('.routine-modal')
     await expect(form).toBeVisible({ timeout: 5000 })
-    await expect(form.locator('.cron-form-title')).toContainText('Edit Job')
+    await expect(form.locator('h3')).toContainText('Edit routine')
 
     // Name should be pre-filled
-    const nameInput = page.locator('#cron-name')
+    const nameInput = form.locator('#routine-name')
     await expect(nameInput).toHaveValue(job.name)
 
     // Clear and enter new name
     await nameInput.clear()
     await nameInput.fill(newName)
 
-    // Click Update
-    await form.locator('.btn.btn-primary', { hasText: 'Update' }).click()
+    await form.locator('.btn.btn-primary', { hasText: 'Save' }).click()
 
     // Form should close
     await expect(form).toBeHidden({ timeout: 5000 })
@@ -449,8 +362,8 @@ test('multiple jobs all appear in the list', async ({ page }) => {
     await expect(page.locator('.cron-job-card', { hasText: job3.name })).toBeVisible({ timeout: 5000 })
 
     // Verify different schedule texts
-    await expect(page.locator('.cron-job-card', { hasText: job1.name })).toContainText('Every 1 minute')
-    await expect(page.locator('.cron-job-card', { hasText: job2.name })).toContainText('Every 5 minutes')
+    await expect(page.locator('.cron-job-card', { hasText: job1.name })).toContainText('Every 1 min')
+    await expect(page.locator('.cron-job-card', { hasText: job2.name })).toContainText('Every 5 min')
     await expect(page.locator('.cron-job-card', { hasText: job3.name })).toContainText('Every 1 hour')
   } finally {
     await deleteCronJobViaApi(job1.id)

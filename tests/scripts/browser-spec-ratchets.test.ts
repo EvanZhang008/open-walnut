@@ -61,3 +61,17 @@ describe('a context menu heading', () => {
     expect(offenders).toEqual([])
   })
 })
+
+describe('the project detail pane', () => {
+  // A project header's name folds the project; the pane opens from its ··· menu,
+  // "View project details". Three specs still clicked the name and waited 15 s for a
+  // pane that never came (2026-10-31). openProjectDetails (todo-panel-helpers.ts)
+  // is the way in; a spec may also take the menu item itself.
+  it('every spec that reads the pane opens it from the menu', () => {
+    const offenders = sources
+      .filter(({ file, text }) => file !== 'todo-panel-helpers.ts' && text.includes('project-detail-pane'))
+      .filter(({ text }) => !text.includes('openProjectDetails(') && !text.includes("'View project details'"))
+      .map(({ file }) => file)
+    expect(offenders).toEqual([])
+  })
+})

@@ -26,16 +26,45 @@ import { addFilter, chooseDisplayOption, closeDisplayMenu, closeFilterMenu, disp
  * appears after the page loaded (a new one, a rename, a move target) starts folded.
  */
 export async function openListProject(page: Page, project: string): Promise<void> {
-  const exact = new RegExp('^' + project.replace(/[.*+?^$()|[\]\\{}]/g, '\\$&') + '$')
-  const header = page.locator('.todo-group-project-header').filter({
-    has: page.locator('.todo-group-project-name').filter({ hasText: exact }),
-  }).first()
+  const header = listProjectHeader(page, project)
   await expect(header).toBeVisible({ timeout: 15_000 })
   const chevron = header.locator('.collapse-chevron')
   if (!(await chevron.evaluate((el) => el.classList.contains('expanded')))) {
     await header.locator('.todo-group-name-btn').click()
     await expect(chevron).toHaveClass(/expanded/)
   }
+}
+
+/** A Projects-list project's header row, by its exact name. */
+export function listProjectHeader(page: Page, project: string): Locator {
+  const exact = new RegExp('^' + project.replace(/[.*+?^$()|[\]\\{}]/g, '\\$&') + '$')
+  return page.locator('.todo-group-project-header').filter({
+    has: page.locator('.todo-group-project-name').filter({ hasText: exact }),
+  }).first()
+}
+
+/** Open a Projects-list project's ··· menu from its header (hover-revealed at rest). */
+export async function openListProjectMenu(page: Page, project: string): Promise<Locator> {
+  const header = listProjectHeader(page, project)
+  await expect(header).toBeVisible({ timeout: 15_000 })
+  await header.hover()
+  await header.getByRole('button', { name: `${project || 'Inbox'} menu`, exact: true }).click()
+  const menu = page.getByRole('menu').filter({ has: page.getByRole('menuitem', { name: 'View project details' }) }).last()
+  await expect(menu).toBeVisible()
+  return menu
+}
+
+/**
+ * Open a project's detail pane the way a user does now: the header's ··· menu,
+ * "View project details". Its name only folds the project (2026-10: one row, one
+ * meaning); specs that clicked the name for the pane waited for nothing.
+ */
+export async function openProjectDetails(page: Page, project: string): Promise<Locator> {
+  const menu = await openListProjectMenu(page, project)
+  await menu.getByRole('menuitem', { name: 'View project details' }).click()
+  const pane = page.locator('.project-detail-pane')
+  await expect(pane).toBeVisible({ timeout: 10_000 })
+  return pane
 }
 
 /** A long list draws in batches: click `scope`'s "Show more" until `target` is drawn. */

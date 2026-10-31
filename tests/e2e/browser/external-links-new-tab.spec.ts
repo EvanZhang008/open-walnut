@@ -6,14 +6,15 @@
  * fix is a DOMPurify hook on the shared singleton (web/src/utils/markdown.ts);
  * this drives the rendered anchor like a user and checks where the click lands.
  *
- * Seed: the entity-refs assistant message in test-server.ts carries one external
+ * Seed: the chat content session's first reply (chat-content-helpers.ts) carries one external
  * markdown link and one relative link.
  */
 import { test, expect } from '@playwright/test'
+import { openChatContent } from './chat-content-helpers'
 
 test.describe('external links in chat', () => {
   test('external markdown link carries target=_blank and opens a new tab', async ({ page, context }) => {
-    await page.goto('/')
+    await openChatContent(page)
 
     const external = page.locator('a[href="https://example.com/walnut-docs"]').first()
     await expect(external).toBeVisible({ timeout: 15_000 })
@@ -33,7 +34,7 @@ test.describe('external links in chat', () => {
   })
 
   test('in-app links (relative href, task pill) get no target', async ({ page }) => {
-    await page.goto('/')
+    await openChatContent(page)
 
     const board = page.locator('a[href="/tasks"]', { hasText: 'board' }).first()
     await expect(board).toBeVisible({ timeout: 15_000 })

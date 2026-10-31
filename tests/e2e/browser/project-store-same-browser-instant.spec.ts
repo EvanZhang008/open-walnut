@@ -22,7 +22,7 @@
  * `GET /api/projects` per visible row through the browser's 6-slot fetch gate.
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { isolateUiPrefs, openListProject, openListProjectMenu, openProjectDetails, presetPanelView } from './todo-panel-helpers'
 import { navigateToTasksPage } from './draft-surface-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
@@ -69,7 +69,7 @@ async function createTaskViaApi(title: string, opts: Record<string, unknown> = {
   const res = await fetch(`${API}/api/tasks`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title: `${title} ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, source: 'local', ...opts }),
+    body: JSON.stringify({ title: `${title} ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, source: 'local', pinned: false, ...opts }),
   })
   if (!res.ok) throw new Error(`task create failed: ${res.status} ${await res.text()}`)
   const body = (await res.json()) as { task: { id: string } }
@@ -115,12 +115,9 @@ function detailPane(page: Page): Locator {
 
 /** Open the project header's kebab and take one of its items. */
 async function clickProjectKebabItem(page: Page, project: string, item: string): Promise<void> {
-  const header = listHeader(page, project)
-  await expect(header).toBeVisible({ timeout: 30_000 })
-  await header.hover() // header actions are hover-revealed in a resting list
-  await header.locator(`[aria-label="Actions for ${project}"]`).click()
-  const menu = page.locator('.task-kebab-menu:visible').last()
-  const entry = menu.locator('.task-kebab-item', { hasText: item }).first()
+  await expect(listHeader(page, project)).toBeVisible({ timeout: 30_000 })
+  const menu = await openListProjectMenu(page, project)
+  const entry = menu.getByRole('menuitem', { name: new RegExp(`^${item}`) }).first()
   await expect(entry).toBeVisible({ timeout: 5_000 })
   await entry.click()
 }
@@ -167,8 +164,7 @@ test('a project rename from the header kebab reaches the board header, the detai
 
   // The detail pane is the surface that holds the OLD name in its own state: its
   // host captured `project` when the pane opened and never hears about a rename.
-  await header.locator('.todo-group-name-btn').click()
-  await expect(detailPane(page)).toBeVisible({ timeout: 15_000 })
+  await openProjectDetails(page, before)
   await expect(detailPane(page).locator('.todo-detail-project')).toHaveText(before)
 
   // Hold every project PATCH at the network layer. The server does not even see
@@ -205,6 +201,8 @@ test('a project rename from the header kebab reaches the board header, the detai
 
   // 4. A project PICKER on a third surface: the option list must offer the new
   //    name and no longer the old one (picking a dead name re-creates it).
+  // The renamed project is new to the list, so it starts folded (todo-panel-helpers.ts).
+  await openListProject(page, after)
   const flyout = await openProjectPicker(page, task.id)
   await expect(flyout.locator('.task-kebab-project-opt-name', { hasText: new RegExp(`^${after}$`) })).toHaveCount(1)
   await expect(flyout.locator('.task-kebab-project-opt-name', { hasText: new RegExp(`^${before}$`) })).toHaveCount(0)
@@ -244,9 +242,7 @@ test('a Working Dir set in the detail pane is what the next /api/projects consum
 
   const header = listHeader(page, project)
   await expect(header).toBeVisible({ timeout: 30_000 })
-  await header.locator('.todo-group-name-btn').click()
-  const pane = detailPane(page)
-  await expect(pane).toBeVisible({ timeout: 15_000 })
+  const pane = await openProjectDetails(page, project)
   const cwdRow = pane.locator('.detail-setting-row').filter({ hasText: 'Working Dir' })
   await expect(cwdRow.locator('.detail-setting-value')).toHaveText('not set')
 
@@ -283,7 +279,7 @@ test('a Working Dir set in the detail pane is what the next /api/projects consum
   metadataGets.length = 0
   await pane.locator('.todo-detail-close').click()
   await expect(detailPane(page)).toHaveCount(0)
-  await listHeader(page, project).locator('.todo-group-name-btn').click()
+  await openProjectDetails(page, project)
   const reopened = detailPane(page).locator('.detail-setting-row').filter({ hasText: 'Working Dir' })
   await expect(reopened.locator('.detail-setting-value')).toHaveText(newCwd, { timeout: INSTANT_MS })
   expect(putsAnswered, 'the re-opened pane waited for the server').toBe(0)
@@ -315,6 +311,8 @@ test('the /tasks table reads the project registry once for the whole table, not 
   })
 
   await presetPanelView(page, { section: 'all', project: '' })
+  // The Project column is off by default (tasks-table-columns.ts): choose it.
+  await page.addInitScript(() => localStorage.setItem('walnut-tasks-page-columns', JSON.stringify(['project', 'updated'])))
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 

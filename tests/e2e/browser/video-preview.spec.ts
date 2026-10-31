@@ -1,43 +1,41 @@
 /**
  * Playwright browser tests for inline video playback + Download fallback.
  *
- * A seeded assistant message (test-server.ts) contains an .mp4 path. Clicking it
- * must open the FileViewer with a real <video> player (src = raw file-content URL)
- * and a Download button — no "Binary file — cannot display" dead end.
+ * A reply of the chat content session (chat-content-helpers.ts) contains an .mp4
+ * path. Clicking it must open the session's Files tab with a real <video> player
+ * (src = the raw file URL) and a Download button, never a "Binary file, cannot
+ * display" dead end.
  */
 import { test, expect } from '@playwright/test'
+import { openChatContent } from './chat-content-helpers'
 
 const SCREENSHOT_DIR = 'test-results/video-preview-verify'
 
 test.describe('video file preview in chat', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.goto('/')
-    await page.waitForLoadState('networkidle')
-  })
-
   test('mp4 path renders as a clickable file link', async ({ page }) => {
+    await openChatContent(page)
     const link = page.locator('a.file-link', { hasText: 'walkthrough.mp4' })
     await expect(link.first()).toBeVisible({ timeout: 5000 })
     await page.screenshot({ path: `${SCREENSHOT_DIR}/step1-link.png` })
   })
 
   test('clicking the mp4 link opens a playing-capable video viewer with Download', async ({ page }) => {
+    const panel = await openChatContent(page)
     const link = page.locator('a.file-link', { hasText: 'walkthrough.mp4' })
     await expect(link.first()).toBeVisible({ timeout: 5000 })
     const urlBefore = page.url()
     await link.first().click()
 
-    // FileViewer overlay opens (no SPA navigation)
-    const overlay = page.locator('.file-viewer-overlay')
-    await expect(overlay).toBeVisible({ timeout: 3000 })
-    expect(page.url()).toBe(urlBefore)
+    // The session's Files tab shows it, beside the chat (no SPA navigation)
+    const overlay = panel
+    await expect(panel.locator('.fv-media-preview')).toBeVisible({ timeout: 5000 })
+    expect(new URL(page.url()).pathname).toBe(new URL(urlBefore).pathname)
 
-    // A real <video controls> whose src is the raw streaming endpoint
+    // A real <video controls> whose src is the raw streaming endpoint (by host and path)
     const video = overlay.locator('.fv-media-preview video')
     await expect(video).toBeVisible({ timeout: 5000 })
     const src = await video.getAttribute('src')
-    expect(src).toContain('/api/file-content')
-    expect(src).toContain('raw=1')
+    expect(src).toContain('/api/file-raw/')
     expect(src).toContain('walkthrough.mp4')
     await expect(video).toHaveAttribute('controls', '')
 
@@ -78,11 +76,12 @@ test.describe('video file preview in chat', () => {
   })
 
   test('download URL serves the file as an attachment', async ({ page }) => {
+    const panel = await openChatContent(page)
     const link = page.locator('a.file-link', { hasText: 'walkthrough.mp4' })
     await expect(link.first()).toBeVisible({ timeout: 5000 })
     await link.first().click()
 
-    const download = page.locator('.file-viewer-overlay a.fv-download-btn')
+    const download = panel.locator('a.fv-download-btn')
     await expect(download).toBeVisible({ timeout: 5000 })
     const href = (await download.getAttribute('href'))!
 

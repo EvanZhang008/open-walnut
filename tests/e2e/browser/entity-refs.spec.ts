@@ -6,14 +6,15 @@
  * text is the CURRENT task title resolved from the client task store —
  * the AI-provided label is only a fallback for unresolvable ids.
  *
- * Test data is seeded in test-server.ts — chat-history.json contains
+ * Test data is seeded in test-server.ts: the chat content session (chat-content-helpers.ts) has
  * entity refs in assistant messages.
  */
 import { test, expect } from '@playwright/test'
+import { openChatContent } from './chat-content-helpers'
 
 test.describe('entity references in chat', () => {
   test('task-ref renders the CURRENT task title, not the AI label', async ({ page }) => {
-    await page.goto('/')
+    await openChatContent(page)
 
     // The seeded label is "Walnut / Playwright test task" but the pill must
     // show the store-resolved title only (project rides the hover tooltip).
@@ -23,7 +24,7 @@ test.describe('entity references in chat', () => {
   })
 
   test('a stale AI label is overridden by the real task title', async ({ page }) => {
-    await page.goto('/')
+    await openChatContent(page)
 
     // Seeded as label="Totally Wrong Pill Name" for pw-task-in-progress,
     // whose real title is "In progress phase task".
@@ -33,7 +34,7 @@ test.describe('entity references in chat', () => {
   })
 
   test('session-ref renders as clickable purple pill with label', async ({ page }) => {
-    await page.goto('/')
+    await openChatContent(page)
 
     // The session-ref should render as a clickable session-link pill
     const sessionPill = page.locator('a.session-link', { hasText: 'Plan: investigate auth module' })
@@ -44,7 +45,7 @@ test.describe('entity references in chat', () => {
   })
 
   test('unlabeled task-ref resolves to the title; an id that names no task is its alias as plain text', async ({ page }) => {
-    await page.goto('/')
+    await openChatContent(page)
 
     // Unlabeled ref to an EXISTING task → resolved title (was: raw id).
     const resolvedPill = page.locator('a.task-link[data-task-id="pw-task-in-progress"]').first()
@@ -57,7 +58,7 @@ test.describe('entity references in chat', () => {
   })
 
   test('renaming a task updates its pill text live (no reload)', async ({ page }) => {
-    await page.goto('/')
+    await openChatContent(page)
 
     const taskPill = page.locator('a.task-link[data-task-id="pw-task-001"]')
     await expect(taskPill).toHaveText('Playwright test task', { timeout: 15_000 })
@@ -87,7 +88,7 @@ test.describe('entity references in chat', () => {
   })
 
   test('clicking session pill opens the session in a home-page session column', async ({ page }) => {
-    await page.goto('/')
+    await openChatContent(page)
 
     const sessionPill = page.locator('a.session-link', { hasText: 'Plan: investigate auth module' })
     await expect(sessionPill).toBeVisible({ timeout: 15_000 })

@@ -4,17 +4,17 @@
  * Verifies that clicking inline images in chat opens a lightbox modal
  * instead of navigating away from the page.
  *
- * Test data is seeded in test-server.ts — chat-history.json contains
+ * Test data is seeded in test-server.ts: the chat content session (chat-content-helpers.ts) has
  * assistant messages with image file paths that render as inline images.
  */
 import { test, expect } from '@playwright/test'
+import { openChatContent } from './chat-content-helpers'
 
 const SCREENSHOT_DIR = 'test-results/lightbox-verify'
 
 test.describe('image lightbox in chat', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/')
-    await page.waitForLoadState('networkidle')
+    await openChatContent(page)
   })
 
   test('inline images render with data-lightbox-src attribute', async ({ page }) => {

@@ -478,6 +478,26 @@ await fs.writeFile(
         subtasks: [],
       })),
       {
+        // The chat content session (entity-refs.spec.ts and its neighbours).
+        id: 'pw-task-chat-content',
+        title: 'Chat content fixture task',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-chat-content-session'],
+        active_session_ids: [],
+        session_id: 'pw-chat-content-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         // Bare task ids in session output (bare-task-id-pills.spec.ts): this
         // task's session names the two tasks below by id only, the way a model
         // does, and each id must render as a clickable task pill.
@@ -2336,6 +2356,35 @@ await fs.mkdir(idrefFixtureRoot, { recursive: true })
   )
 }
 
+// Chat content fixture (entity-refs, lightbox, video-preview and external-links
+// specs): task refs, a session ref, links, two images and a video in one session's
+// replies. They lived in the Personal AI's chat-history.json, which Home no longer
+// shows (its chat slot holds the asks), so the specs read them in a session column.
+const chatContentFixtureRoot = path.join(tmpBase, 'projects', 'chat-content-fixture')
+await fs.mkdir(chatContentFixtureRoot, { recursive: true })
+{
+  const jsonlDir = path.join(tmpBase, '.claude', 'projects', chatContentFixtureRoot.replace(/[^a-zA-Z0-9]/g, '-'))
+  await fs.mkdir(jsonlDir, { recursive: true })
+  const sid = 'pw-chat-content-session'
+  const line = (ts: number, role: 'user' | 'assistant', text: string) => JSON.stringify({
+    type: role,
+    sessionId: sid,
+    timestamp: new Date(ts).toISOString(),
+    message: role === 'user' ? { role, content: text } : { role, content: [{ type: 'text', text }] },
+  })
+  const images = path.join(tmpBase, 'test-images')
+  const video = path.join(tmpBase, 'test-videos', 'walkthrough.mp4')
+  await fs.writeFile(path.join(jsonlDir, `${sid}.jsonl`), [
+    line(sessionFixtureNow - 30_000, 'user', 'Show me my tasks and sessions'),
+    line(sessionFixtureNow - 25_000, 'assistant', 'I found your task <task-ref id="pw-task-001" label="Walnut / Playwright test task"/>. I also checked session <session-ref id="pw-plan-session-completed" label="Plan: investigate auth module"/>. Here is another ref without label: <task-ref id="pw-task-in-progress"/>. A stale paraphrase: <task-ref id="pw-task-in-progress" label="Totally Wrong Pill Name"/>. And a deleted task: <task-ref id="pw-task-ghost-404" label="Ghost Task Alias"/>. Docs: [external guide](https://example.com/walnut-docs) and the in-app [board](/tasks).'),
+    line(sessionFixtureNow - 20_000, 'user', 'Show me the test images'),
+    line(sessionFixtureNow - 15_000, 'assistant', `Here are two test images:\n\n${path.join(images, 'blue.png')}\n\n${path.join(images, 'red.png')}`),
+    line(sessionFixtureNow - 10_000, 'user', 'Record the walkthrough video'),
+    line(sessionFixtureNow - 5_000, 'assistant', `Video recorded and delivered: ${video}`),
+    '',
+  ].join('\n'))
+}
+
 // Paths in code blocks fixture (code-block-paths.spec.ts), the 2026-10-27
 // report with neutral names: a Go block whose first line is a path comment with
 // a line range, the user's own message quoting it (``` opened mid-line, closed
@@ -3473,6 +3522,19 @@ await fs.writeFile(
         cwd: codepathFixtureRoot,
         title: 'Code block paths fixture session',
       },
+      {
+        claudeSessionId: 'pw-chat-content-session',
+        taskId: 'pw-task-chat-content',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(sessionFixtureNow - 35_000).toISOString(),
+        lastActiveAt: new Date(sessionFixtureNow - 5_000).toISOString(),
+        messageCount: 6,
+        cwd: chatContentFixtureRoot,
+        title: 'Chat content fixture session',
+      },
       ...(['pw-idref-session', 'pw-idref-target-session'] as const).map((sid) => ({
         claudeSessionId: sid,
         taskId: sid === 'pw-idref-session' ? 'pw-task-idref' : 'mpwidref-7c2e',
@@ -4178,74 +4240,6 @@ await fs.mkdir(testVideoDir, { recursive: true })
   for (let i = 0; i < filler.length; i++) filler[i] = i % 251
   await fs.writeFile(path.join(testVideoDir, 'walkthrough.mp4'), Buffer.concat([ftyp, filler]))
 }
-
-// Seed chat-history.json with entity reference content for entity-refs.spec.ts
-// and image paths for lightbox.spec.ts
-await fs.writeFile(
-  path.join(tmpBase, 'chat-history.json'),
-  JSON.stringify({
-    version: 2,
-    lastUpdated: new Date().toISOString(),
-    compactionCount: 0,
-    compactionSummary: null,
-    entries: [
-      {
-        tag: 'ai',
-        role: 'user',
-        content: 'Show me my tasks and sessions',
-        timestamp: new Date(Date.now() - 30_000).toISOString(),
-        displayText: 'Show me my tasks and sessions',
-      },
-      {
-        tag: 'ai',
-        role: 'assistant',
-        content: [
-          {
-            type: 'text',
-            text: 'I found your task <task-ref id="pw-task-001" label="Walnut / Playwright test task"/>. I also checked session <session-ref id="pw-plan-session-completed" label="Plan: investigate auth module"/>. Here is another ref without label: <task-ref id="pw-task-in-progress"/>. A stale paraphrase: <task-ref id="pw-task-in-progress" label="Totally Wrong Pill Name"/>. And a deleted task: <task-ref id="pw-task-ghost-404" label="Ghost Task Alias"/>. Docs: [external guide](https://example.com/walnut-docs) and the in-app [board](/tasks).',
-          },
-        ],
-        timestamp: new Date(Date.now() - 25_000).toISOString(),
-      },
-      {
-        tag: 'ai',
-        role: 'user',
-        content: 'Show me the test images',
-        timestamp: new Date(Date.now() - 20_000).toISOString(),
-        displayText: 'Show me the test images',
-      },
-      {
-        tag: 'ai',
-        role: 'assistant',
-        content: [
-          {
-            type: 'text',
-            text: `Here are two test images:\n\n${path.join(testImgDir, 'blue.png')}\n\n${path.join(testImgDir, 'red.png')}`,
-          },
-        ],
-        timestamp: new Date(Date.now() - 15_000).toISOString(),
-      },
-      {
-        tag: 'ai',
-        role: 'user',
-        content: 'Record the walkthrough video',
-        timestamp: new Date(Date.now() - 10_000).toISOString(),
-        displayText: 'Record the walkthrough video',
-      },
-      {
-        tag: 'ai',
-        role: 'assistant',
-        content: [
-          {
-            type: 'text',
-            text: `Video recorded and delivered: ${path.join(testVideoDir, 'walkthrough.mp4')}`,
-          },
-        ],
-        timestamp: new Date(Date.now() - 5_000).toISOString(),
-      },
-    ],
-  }),
-)
 
 // Seed memory files for memory-v2.spec.ts
 const memoryDir = path.join(tmpBase, 'memory')

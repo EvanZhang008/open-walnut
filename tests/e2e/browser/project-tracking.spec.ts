@@ -24,7 +24,7 @@
  * metadata.tracking_note → fetchNoteContent → renderNoteMarkdown → the pane.
  */
 import { test, expect, type APIRequestContext } from '@playwright/test'
-import { showEverything } from './todo-panel-helpers'
+import { openProjectDetails, showEverything } from './todo-panel-helpers'
 
 const API = 'http://localhost:3457'
 
@@ -73,7 +73,8 @@ async function seedTrackedProject(
 ): Promise<string> {
   const notePath = `Projects/${project}/Tracking.md`
   // A task is what makes the project row exist AND puts the group in the panel.
-  const task = await request.post(`${API}/api/tasks`, { data: { title: `${project} seed task`, project } })
+  // Unpinned: a new task is born in Focus, outside the project groups.
+  const task = await request.post(`${API}/api/tasks`, { data: { title: `${project} seed task`, project, pinned: false } })
   expect(task.ok()).toBeTruthy()
   // PUT creates a note in notes-v2 (there is no POST create).
   const note = await request.put(`${API}/api/notes-v2/content/${notePath}`, {
@@ -87,16 +88,6 @@ async function seedTrackedProject(
   return notePath
 }
 
-/** Open the project's detail pane from the TodoPanel group header. */
-async function openProjectPane(page: import('@playwright/test').Page, project: string) {
-  const projBtn = page.locator('.todo-group-name-btn', { hasText: project }).first()
-  await projBtn.waitFor({ state: 'visible', timeout: 15_000 })
-  await projBtn.click()
-  const pane = page.locator('.project-detail-pane')
-  await expect(pane).toBeVisible({ timeout: 10_000 })
-  return pane
-}
-
 test.beforeEach(async ({ page }) => {
   await page.goto('/')
   await showEverything(page)
@@ -108,7 +99,7 @@ test('the tracking note renders in the pane, and its markup is inert', async ({ 
 
   await page.reload()
   await showEverything(page)
-  const pane = await openProjectPane(page, project)
+  const pane = await openProjectDetails(page, project)
 
   const section = pane.locator('.project-tracking-section')
   await expect(section).toBeVisible({ timeout: 10_000 })
@@ -153,7 +144,7 @@ test('Open in Notes navigates to the note', async ({ page, request }) => {
 
   await page.reload()
   await showEverything(page)
-  const pane = await openProjectPane(page, project)
+  const pane = await openProjectDetails(page, project)
 
   // A real click, not a goto: this is the SPA route the human takes.
   await pane.locator('.project-tracking-open').click()
@@ -173,12 +164,12 @@ test('Open in Notes navigates to the note', async ({ page, request }) => {
 
 test('a project with no tracking_note has no Tracking section at all', async ({ page, request }) => {
   const project = 'UntrackedProj'
-  const task = await request.post(`${API}/api/tasks`, { data: { title: 'Untracked seed task', project } })
+  const task = await request.post(`${API}/api/tasks`, { data: { title: 'Untracked seed task', project, pinned: false } })
   expect(task.ok()).toBeTruthy()
 
   await page.reload()
   await showEverything(page)
-  const pane = await openProjectPane(page, project)
+  const pane = await openProjectDetails(page, project)
 
   // The other sections are there, so this is a real pane — the Tracking one is
   // absent, not empty. An empty box would advertise a feature nobody asked for.
@@ -194,7 +185,7 @@ test('a key pointing at a deleted note says so and offers nothing broken', async
 
   await page.reload()
   await showEverything(page)
-  const pane = await openProjectPane(page, project)
+  const pane = await openProjectDetails(page, project)
 
   const section = pane.locator('.project-tracking-section')
   await expect(section).toBeVisible({ timeout: 10_000 })

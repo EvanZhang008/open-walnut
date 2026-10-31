@@ -12,7 +12,7 @@
  * exactly the storage path refreshProjectSummary writes through.
  */
 import { test, expect } from '@playwright/test'
-import { showEverything } from './todo-panel-helpers'
+import { openProjectDetails, showEverything } from './todo-panel-helpers'
 
 const API = 'http://localhost:3457'
 
@@ -23,8 +23,9 @@ test.beforeEach(async ({ page }) => {
 
 test('project pane shows the stored AI summary', async ({ page, request }) => {
   // Seed: a real task auto-creates the project registry row; metadata carries the summary.
+  // Unpinned: a new task is born in Focus, outside the project groups.
   const res = await request.post(`${API}/api/tasks`, {
-    data: { title: 'Summary pane seed task', project: 'SummaryProj' },
+    data: { title: 'Summary pane seed task', project: 'SummaryProj', pinned: false },
   })
   expect(res.ok()).toBeTruthy()
   const put = await request.put(
@@ -36,32 +37,21 @@ test('project pane shows the stored AI summary', async ({ page, request }) => {
   await page.reload()
   await showEverything(page)
 
-  // Open the project detail pane via the project header button.
-  const projBtn = page.locator('.todo-group-name-btn', { hasText: 'SummaryProj' }).first()
-  await projBtn.waitFor({ state: 'visible', timeout: 15_000 })
-  await projBtn.click()
-
-  const pane = page.locator('.project-detail-pane')
-  await expect(pane).toBeVisible({ timeout: 10_000 })
+  const pane = await openProjectDetails(page, 'SummaryProj')
   await expect(pane).toContainText('About')
   await expect(pane).toContainText('Building the summary pane demo.')
 })
 
 test('project pane shows the empty-state hint and refresh button when no summary exists', async ({ page, request }) => {
   const res = await request.post(`${API}/api/tasks`, {
-    data: { title: 'No summary seed task', project: 'BareProj' },
+    data: { title: 'No summary seed task', project: 'BareProj', pinned: false },
   })
   expect(res.ok()).toBeTruthy()
 
   await page.reload()
   await showEverything(page)
 
-  const projBtn = page.locator('.todo-group-name-btn', { hasText: 'BareProj' }).first()
-  await projBtn.waitFor({ state: 'visible', timeout: 15_000 })
-  await projBtn.click()
-
-  const pane = page.locator('.project-detail-pane')
-  await expect(pane).toBeVisible({ timeout: 10_000 })
+  const pane = await openProjectDetails(page, 'BareProj')
   await expect(pane).toContainText('No summary yet')
   await expect(pane.locator('.detail-summary-refresh')).toBeVisible()
 })
