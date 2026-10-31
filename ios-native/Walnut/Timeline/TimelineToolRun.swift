@@ -145,7 +145,7 @@ enum TimelineToolRunFold {
                 return arg != "--help" && arg != "-h"
             }
             atHead = word.contains("=") && !word.hasPrefix("-")
-                || ["env", "exec", "sudo", "time", "nice", "command", "builtin"].contains(String(word))
+                || ["env", "exec", "sudo", "time", "nice", "command", "builtin", "do", "then", "else"].contains(String(word))
         }
         return false
     }

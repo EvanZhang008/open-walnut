@@ -31,13 +31,14 @@ interface TaskLabelEntry {
   src: unknown;
 }
 
-type TaskLike = { id: string; title?: string; project?: string; org_role?: string };
+type TaskLike = { id: string; title?: string; project?: string; org_role?: string; org_name?: string };
 
 /** Main reads as the CEO, a project's lead ("Walnut lead") as its VP: display only. The same rule
  *  as orgDisplayTitle (src/core/org/org-tree.ts), written here because this module imports
  *  nothing; tests/web/entity-label-store.test.ts pins the two equal. */
-export function shownTaskTitle(task: { title: string; org_role?: string }): string {
+export function shownTaskTitle(task: { title: string; org_role?: string; org_name?: string }): string {
   if (task.org_role === 'main') return 'CEO';
+  if (task.org_role === 'lead' && task.org_name?.trim()) return `${task.org_name.trim()} VP`;
   if (task.org_role === 'lead') return task.title.replace(/ lead$/i, ' VP');
   return task.title;
 }
@@ -67,6 +68,36 @@ export function lookupSessionTitle(id: string): string | undefined {
   return sessionTitles.get(id);
 }
 
+/** Refs the render path could not resolve yet: a task that loads later under a
+ *  matching id bumps the version, so its row gets the name. */
+const unresolvedRefs = new Set<string>();
+/** Each ref's answer until the task list changes (a fold line reads it per frame). */
+const refCache = new Map<string, string | null>();
+
+/**
+ * A task by its id or a unique id prefix (6+ characters), as a send's answer
+ * prints it ("Message delivered on this host to 2536be97-277f-53"). Observing,
+ * like `lookupTaskLabel`; an ambiguous prefix names nothing.
+ */
+export function lookupTaskByRef(ref: string): { id: string; label: TaskLabel } | undefined {
+  let id = refCache.get(ref);
+  if (id === undefined) {
+    id = null;
+    if (taskLabels.has(ref)) id = ref;
+    else if (ref.length >= 6) {
+      for (const key of taskLabels.keys()) {
+        if (!key.startsWith(ref)) continue;
+        if (id) { id = null; break; }
+        id = key;
+      }
+    }
+    refCache.set(ref, id);
+  }
+  if (!id) { unresolvedRefs.add(ref); return undefined; }
+  observed.add(id);
+  return { id, label: taskLabels.get(id)!.label };
+}
+
 /** Non-observing read for React components (pair with useTaskLabel). */
 export function peekTaskLabel(id: string): TaskLabel | undefined {
   return taskLabels.get(id)?.label;
@@ -83,7 +114,7 @@ export function syncTasks(tasks: readonly TaskLike[]): void {
   for (const task of tasks) {
     if (!task?.id || typeof task.title !== 'string' || !task.title) continue;
     validCount++;
-    const title = shownTaskTitle({ title: task.title, org_role: task.org_role });
+    const title = shownTaskTitle({ title: task.title, org_role: task.org_role, org_name: task.org_name });
     const existing = taskLabels.get(task.id);
     if (existing) {
       if (existing.src === task) continue; // identity early-out (steady state)
@@ -98,7 +129,17 @@ export function syncTasks(tasks: readonly TaskLike[]): void {
       if (observed.has(task.id)) dirty = true;
     } else {
       taskLabels.set(task.id, { label: { title, project: task.project || undefined }, src: task });
+      // A prefix that named one task may now name two: its rows read again.
+      for (const [ref, id] of refCache) if (id && task.id.startsWith(ref)) dirty = true;
+      refCache.clear();
       if (observed.has(task.id)) dirty = true;
+      else if (unresolvedRefs.size > 0) {
+        for (const ref of unresolvedRefs) {
+          if (!task.id.startsWith(ref)) continue;
+          unresolvedRefs.delete(ref);
+          dirty = true;
+        }
+      }
     }
   }
   // Deletion sweep only when the map holds more ids than the incoming list —
@@ -109,6 +150,7 @@ export function syncTasks(tasks: readonly TaskLike[]): void {
     for (const id of taskLabels.keys()) {
       if (!incoming.has(id)) {
         taskLabels.delete(id);
+        refCache.clear();
         if (observed.has(id)) dirty = true;
       }
     }
@@ -137,5 +179,7 @@ export function resetEntityLabelsForTesting(): void {
   taskLabels.clear();
   sessionTitles.clear();
   observed.clear();
+  unresolvedRefs.clear();
+  refCache.clear();
   emit();
 }

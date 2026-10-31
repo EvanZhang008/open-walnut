@@ -87,7 +87,7 @@ test('everything before a turn\'s answer is one row; the answer shows', async ({
   await expect(history).toContainText('FOLD_FINAL_A here is the answer.')
   const fold = history.locator('[data-testid="turn-fold"]').first()
   // Counts only: two reads and two edits are four tools, the task_send one sent.
-  await expect(fold.locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText('Sent 1 \u00b7 Ran 4 tools')
+  await expect(fold.locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText(/^Sent 1(?: to [^·›]+?)? \u00b7 Ran 4 tools$/)
   await expect(fold).toHaveAttribute('data-open', 'false')
   // Folded, the narration, the steps and the sent card are off screen.
   expect(await history.innerText()).not.toContain('FOLD_NARRATION_A')
@@ -110,7 +110,7 @@ test('sends, replies and messaging ops fold with the steps, reasoning included; 
   const history = panel.locator('.session-history')
   await expect(history).toContainText('FOLD_FINAL_I passed it on.')
   // Two task_sends, an org_send and an inbox reply are four sent; task_update is the one tool.
-  const fold = history.locator('[data-testid="turn-fold"]').filter({ hasText: 'Sent 4 \u00b7 Ran 1 tool' })
+  const fold = history.locator('[data-testid="turn-fold"]').filter({ hasText: /Sent 4(?: to [^·›]+?)? \u00b7 Ran 1 tool/ })
   await expect(fold).toHaveCount(1)
   expect(await history.innerText()).not.toContain('FOLD_SENT_NINE')
   expect(await history.innerText()).not.toContain('FOLD_REPLY_NINE')
@@ -166,7 +166,7 @@ test('a turn a peer started that needed nothing is one row counting what happene
   // Both peer FYIs (after turn five's answer, and after G's; the second on the line's first name).
   const hidden = history.locator('[data-testid="turn-fold"]').filter({ hasText: 'Received 1 message' })
   await expect(hidden).toHaveCount(2)
-  await expect(hidden.last().locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText('Received 1 message')
+  await expect(hidden.last().locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText(/^Received 1 message(?: from [^·›]+?)?$/)
   await expect(history).not.toContainText(/hidden turn/)
   // Folded, the note is off screen: its words and its title.
   expect(await history.innerText()).not.toContain('Second status, nothing to do.')

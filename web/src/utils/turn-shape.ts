@@ -12,8 +12,9 @@
  *  · answered: a turn that ended in an answer: everything before the answer
  *    (the message that started it unless a person wrote it, notices, tools,
  *    sends, narration) is one folded row, and the answer shows;
- *  · open: anything else (it ended in a tool call, an error, nothing): rows
- *    render as they always did, so a failure is never folded away unread.
+ *  · open: anything else (it ended in a tool call, an error, nothing): its words
+ *    show, and its steps fold with the steps around them by the one rule of
+ *    components/sessions/fold-rows.ts (a failure counts in the fold's header).
  * A person's own message always shows. Turns split at every row sent into the
  * session; a delivery that came in while the session was still working (the rows
  * before it end in a tool call, not an answer) belongs to the turn it interrupted.

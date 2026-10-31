@@ -42,7 +42,7 @@ function rows(): Array<Record<string, unknown>> {
 // The line is counts only (2026-10-28): the lead's note, the notice and the reply
 // are three messages received, the task_send one sent. What each step was is
 // inside the fold, checked below once it is opened.
-const LINE = /^Received 3 messages \u00b7 Sent 1$/;
+const LINE = /^Received 3 messages(?: from [^·›]+?)? \u00b7 Sent 1(?: to [^·›]+?)?$/;
 
 /** The timeline's own rows (not the rows inside an opened fold), as kind + text. */
 async function topRows(page: Page) {
@@ -157,7 +157,7 @@ test('a task\'s answer to a letter folds with the steps around it', async ({ pag
   };
   await expect.poll(between, { timeout: 10_000 }).toEqual([true]);
   const fold = hist.locator('[data-testid="turn-fold"]');
-  await expect(fold.locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText(/^Received 2 messages \u00b7 Sent 1 \u00b7 Ran 1 tool$/);
+  await expect(fold.locator(':scope > .tool-run-toggle .tool-run-label')).toHaveText(/^Received 2 messages(?: from [^·›]+?)? \u00b7 Sent 1(?: to [^·›]+?)? \u00b7 Ran 1 tool$/);
   // No person bubble for it, closed or open.
   await expect(hist.locator('.session-msg-user', { hasText: 'Letter reply' })).toHaveCount(0);
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-letter-closed.png`, clip: (await hist.boundingBox())! }).catch(() => {});

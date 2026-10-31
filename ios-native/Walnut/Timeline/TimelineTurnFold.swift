@@ -162,6 +162,14 @@ enum TimelineTurnFold {
         }
     }
 
+    /// A send's chip names the tasks it went to ("Sent to Brief task, Task status
+    /// foundation") when the server resolved them (`sentTo`); nil for any other row.
+    /// 2026-10-30, the user, of a send that said "another session": which session?
+    static func sendLabel(_ m: ChatMessage) -> String? {
+        guard isOutbound(m), let titles = m.sentTo?.compactMap(\.title), !titles.isEmpty else { return nil }
+        return "Sent to " + titles.joined(separator: ", ")
+    }
+
     static func capitalized(_ s: String) -> String {
         guard let first = s.first else { return s }
         return first.uppercased() + s.dropFirst()
@@ -268,8 +276,8 @@ private final class Planner {
             quiet += mine[lead..<ans].map(\.part)
             flushQuiet()
             out += defaultParts(mine[ans...answerAt].map(\.part))
-            // After the answer: info cards show as they always did, and a line the CLI
-            // put in (a Stop hook's context) joins the quiet steps that follow.
+            // After the answer: each row by the one rule (a line the CLI put in, a
+            // notice, a call joins the quiet steps that follow; words show).
             mine[(answerAt + 1)...].forEach { place($0.part) }
         }
         if p < end { parts[p..<end].forEach { place($0.part) } }
@@ -286,15 +294,25 @@ private final class Planner {
                                                members: tail.map { member($0, acks: true) }))
     }
 
-    /// A quiet row: a finished step, a message received or sent, reasoning alone,
-    /// the no-action line, a line the CLI put in. A failed call or a question is
-    /// never folded away unread.
+    /// A quiet row, the web's one rule (`fold-rows.ts`): every step of the work
+    /// joins the stretch around it, in every kind of turn: a finished call (a
+    /// failed one too: the fold's header counts it, "1 failed"), a message
+    /// received or sent, reasoning alone, the no-action line, a line the CLI put
+    /// in, a notice the runtime wrote (a turn interrupted). Only a row the person
+    /// reads ends a stretch: words, the person's message, a question to them.
+    /// 2026-10-30, the user's fourth report: a failed command split one stretch
+    /// into three rows. Every `ChatMessage.Kind` is named here
+    /// (tests/web/fold-rows.test.ts reads this switch).
     private static func isQuiet(_ part: TimelineToolRunFold.Part) -> Bool {
         switch part {
         case .run(_, let members): return members.allSatisfy(isFinishedStep)
         case .message(let m):
-            return TimelineTurnShape.isInbound(m) || (TimelineTurnFold.isOutbound(m) && isFinishedStep(m))
-                || m.kind == .thinking || m.kind == .injected || TimelineTurnFold.isAckOnly(m)
+            if TimelineTurnShape.isInbound(m) || TimelineTurnFold.isAckOnly(m) { return true }
+            switch m.kind {
+            case .tool: return TimelineTurnFold.isOutbound(m) && isFinishedStep(m)
+            case .thinking, .injected, .notification: return true
+            case nil: return false
+            }
         }
     }
 
@@ -367,12 +385,11 @@ private final class Planner {
         }
     }
 
-    /// A step a quiet row may fold: not a failure (a routed question is an
-    /// answer), not a question to the person (`processToolsOf` on the web).
+    /// A step a quiet row may fold: anything but a question to the person
+    /// (`toolRole` on the web). A failed call is a step; its fold says "N failed".
     private static func isFinishedStep(_ m: ChatMessage) -> Bool {
         guard m.kind == .tool else { return true }
-        if m.text == "AskUserQuestion" { return false }
-        return !TimelineTurnShape.isFailure(m)
+        return m.text != "AskUserQuestion"
     }
 
     private static func rows(_ part: TimelineToolRunFold.Part) -> [ChatMessage] {

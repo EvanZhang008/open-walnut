@@ -935,7 +935,8 @@ final class TimelineRowBuilder {
             // RETURNED, and one with no `resultPreview` there produced no output.
             // Only the live region knows a call still in flight, or one whose
             // output has not been relayed yet.
-            content: .toolChip(name: TimelineTurnFold.toolLabel(message.text), detail: message.detail,
+            content: .toolChip(name: TimelineTurnFold.sendLabel(message) ?? TimelineTurnFold.toolLabel(message.text),
+                               detail: message.detail,
                                inputPreview: message.inputPreview,
                                resultPreview: message.resultPreview,
                                agent: message.agent,

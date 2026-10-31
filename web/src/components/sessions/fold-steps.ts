@@ -4,11 +4,14 @@
  * A coordinating session takes in notices and peer messages between its answers
  * and works through each with a tool call or a one-line acknowledgement. Every
  * such stretch between two answers is one folded row (SessionChatHistory), and
- * its line is counts only: "Received 12 messages \u00b7 Sent 3 \u00b7 Ran 8 tools".
- * The opened fold shows each step. 2026-10-28, the user, of a line that named
- * every sender, notice and command and ran past the screen: "you just received
- * so many messages, sent so many, ran so many tools, that's it". Pure: the caller
- * turns its rows into steps.
+ * its line counts what came in, went out and ran, and names whom from and to:
+ * "Received 12 messages from Docs lead, Walnut +3 \u00b7 Sent 2 to Brief task \u00b7
+ * Ran 8 tools". The opened fold shows each step. 2026-10-28, the user, of a line
+ * that named every sender, notice and command and ran past the screen: "you just
+ * received so many messages, sent so many, ran so many tools, that's it"; so no
+ * titles or commands, and at most two names a piece. 2026-10-30, the user, of a
+ * lead's "Sent 2" whose card said "To another session": which session? So the
+ * parties are named. Pure: the caller turns its rows into steps.
  */
 import type { EnvelopeSegment, SessionEnvelopePeer } from '@open-walnut/history-session-envelope';
 import { noticeTitle } from './message-fold';
@@ -22,8 +25,9 @@ export type FoldStep =
   | { kind: 'received'; from: ReceivedKind; name?: string; title?: string }
   /** Tool calls (not messages to someone). */
   | { kind: 'calls'; tools: ToolRunMember[] }
-  /** A message the session sent to another task. */
-  | { kind: 'sent' }
+  /** A message the session sent to another task, one per target; `to`: the
+   *  target task's title when the call names it (send-targets.ts). */
+  | { kind: 'sent'; to?: string }
   /** A letter the session wrote to the person's inbox. */
   | { kind: 'inbox' }
   /** Reasoning with no words and no call. */
@@ -33,7 +37,10 @@ export type FoldStep =
   /** The no-action line alone: the turn needed nothing. */
   | { kind: 'ack' }
   /** Words the session wrote on the way (folded before an answer). */
-  | { kind: 'update' };
+  | { kind: 'update' }
+  /** A line the session's runtime wrote (an API error, a retry, a compaction).
+   *  An error one is counted by the fold's red "N failed", not on its line. */
+  | { kind: 'notice'; error?: boolean };
 
 /** A received row's steps, one per envelope it holds; a row with none is one
  *  message from no one in particular. `nameOf` names a sender (peer-name.ts). */
@@ -57,28 +64,47 @@ export function envelopeSteps(
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-/** The fold's line: counts only, "Received 12 messages · Sent 3 · Ran 8 tools".
+/** Who a piece was from or to: at most two names, then how many of its messages
+ *  came from or went to anyone else ("from Docs lead, Walnut +3"). `names` holds
+ *  one entry per message, '' when it names no one. */
+function parties(word: 'from' | 'to', names: readonly string[]): string {
+  const shown = [...new Set(names.filter((n) => n.trim()))].slice(0, 2);
+  if (shown.length === 0) return '';
+  const more = names.filter((n) => !shown.includes(n)).length;
+  return ` ${word} ${shown.join(', ')}${more > 0 ? ` +${more}` : ''}`;
+}
+
+/** The fold's line: counts only, "Received 12 messages · Sent 3 · Ran 8 tools",
+ *  and the runtime's lines other than errors ("· 1 notice"; errors are the red count).
  *  What each step was is inside the fold, one row per step, when it is opened.
- *  A stretch with none of the three reads by what it was: an update, an
- *  acknowledgement, or "Thinking", the old empty-fold line. */
+ *  A stretch with none of the three reads by what it was: an update, a
+ *  runtime notice, an acknowledgement, or "Thinking", the old empty-fold line. */
 export function foldStepsPhrase(steps: readonly FoldStep[]): string {
   let received = 0;
   let sent = 0;
+  const senders: string[] = [];
+  const targets: string[] = [];
   let tools = 0;
   let updates = 0;
   let acks = 0;
+  let notices = 0;
+  let errorNotices = 0;
   for (const s of steps) {
-    if (s.kind === 'received') received++;
-    else if (s.kind === 'sent' || s.kind === 'inbox') sent++;
+    if (s.kind === 'received') { received++; senders.push(s.name ?? ''); }
+    else if (s.kind === 'sent') { sent++; targets.push(s.to ?? ''); }
+    else if (s.kind === 'inbox') { sent++; targets.push('your inbox'); }
     else if (s.kind === 'calls') tools += s.tools.length;
     else if (s.kind === 'update') updates++;
     else if (s.kind === 'ack') acks++;
+    else if (s.kind === 'notice') { if (s.error) errorNotices++; else notices++; }
   }
   const pieces: string[] = [];
-  if (received > 0) pieces.push(`Received ${count(received, 'message', 'messages')}`);
-  if (sent > 0) pieces.push(`Sent ${sent}`);
+  if (received > 0) pieces.push(`Received ${count(received, 'message', 'messages')}${parties('from', senders)}`);
+  if (sent > 0) pieces.push(`Sent ${sent}${parties('to', targets)}`);
   if (tools > 0) pieces.push(`Ran ${count(tools, 'tool', 'tools')}`);
+  if (notices > 0) pieces.push(count(notices, 'notice', 'notices'));
   if (pieces.length > 0) return pieces.join(' \u00b7 ');
   if (updates > 0) return updates === 1 ? 'An update' : `${updates} updates`;
+  if (errorNotices > 0) return count(errorNotices, 'notice', 'notices');
   return acks > 0 ? 'Acknowledged' : 'Thinking';
 }

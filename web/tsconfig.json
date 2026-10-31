@@ -35,6 +35,7 @@
       "@open-walnut/history-session-envelope": ["../src/lib/history-session-envelope"],
       "@open-walnut/history-walnut-riders": ["../src/lib/history-walnut-riders"],
       "@open-walnut/walnut-added": ["../src/lib/walnut-added"],
+      "@open-walnut/send-targets": ["../src/lib/send-targets"],
       "@open-walnut/three-way-merge": ["../src/lib/three-way-merge"]
     }
   },

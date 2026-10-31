@@ -199,7 +199,7 @@ test('hidden turns, a notice and the answer\'s reasoning before an answer are on
     return all.filter((n) => (a1.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING) && (a2.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_PRECEDING) && !a2.contains(n))
       .map((n) => n.textContent?.trim());
   });
-  expect(between).toEqual(['Received 2 messages']);
+  expect(between).toEqual([expect.stringMatching(/^Received 2 messages(?: from [^·›]+?)?$/)]);
   // The answer shows its words alone; its reasoning is in the row.
   await expect(answer2).not.toContainText('Thinking');
   const fold = hist.locator('[data-testid="turn-fold"]', { hasText: 'Received 2 messages' });
@@ -211,7 +211,7 @@ test('hidden turns, a notice and the answer\'s reasoning before an answer are on
   await expect(fold).toContainText('Acknowledged');
   await expect(fold).toContainText('Thinking');
   // The quiet turn before the person's next message keeps its own row.
-  await expect(hist.locator('[data-testid="turn-fold"] > .tool-run-toggle .tool-run-label', { hasText: /^Received 1 message$/ }))
+  await expect(hist.locator('[data-testid="turn-fold"] > .tool-run-toggle .tool-run-label', { hasText: /^Received 1 message(?: from [^·›]+?)?$/ }))
     .toHaveCount(1);
   await page.waitForTimeout(600);
 });

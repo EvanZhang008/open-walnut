@@ -1775,7 +1775,11 @@ session instead.
   that opens to the text; `injectedBefore` carries such lines from before every row of
   the read, on the first row only. They are never rows of their own, so an older client
   that ignores the fields never draws them as the person's bubble. A Walnut message the
-  CLI delivered as an injected line is a user row with `sentBy: "agent"`. Rows of one message come as thinking,
+  CLI delivered as an injected line is a user row with `sentBy: "agent"`. `sentTo`
+  (additive, 2026-10-30) rides a send's tool row (`task_send` by MCP or the CLI):
+  `[ { ref, taskId?, title? } ]`, its targets in order, `ref` as the call or its answer
+  printed it (an id or id prefix) and `taskId`/`title` when it resolved to one task; a
+  loop over several tasks is one row with several. Rows of one message come as thinking,
   then the text, then the tool calls (see the `/conversations/:id/messages`
   notes on row order). The primary
   box exports tails for every session it can reach — local from disk, remote

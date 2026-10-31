@@ -200,6 +200,10 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     var injectedAfter: [CliInjectedItem]? = nil
     /// The first row of a read only: such lines from before every row of it.
     var injectedBefore: [CliInjectedItem]? = nil
+    /// Tool rows of a send only (additive 2026-10-30, server `session-projection.ts`):
+    /// whom it went to, in order, each with its task's title when the server
+    /// resolved it. A loop over several tasks is one row with several.
+    var sentTo: [SentTarget]? = nil
 
     /// The bubble's long-press item that shows or hides what Walnut added to this
     /// message (set by `TimelineTurnFold` on the copy it draws; never on the wire).
@@ -237,7 +241,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case id, role, text, createdAt, kind, source, detail, resultPreview, agent
         case thinkingText, inputPreview, detailRef, inFlight, answeredBy, isError
-        case messageId, sentBy, added, textWithoutContext, injectedAfter, injectedBefore
+        case messageId, sentBy, added, textWithoutContext, injectedAfter, injectedBefore, sentTo
     }
 
     init(id: String, role: String, text: String, createdAt: String, kind: Kind?, source: String? = nil,
@@ -302,6 +306,14 @@ struct WalnutAddedItem: Codable, Equatable, Hashable {
 /// loaded skill's text), "hook" (a hook's added context) or "context" (anything
 /// else, e.g. a continuation summary); `label` names it ("Loaded skill
 /// release-notes"); `text` is its words. Decodes leniently, like `WalnutAddedItem`.
+/// One target of a send (`ChatMessage.sentTo`): the ref the call or its answer
+/// printed (an id or id prefix), and the task it resolved to.
+struct SentTarget: Codable, Equatable, Hashable {
+    let ref: String
+    var taskId: String? = nil
+    var title: String? = nil
+}
+
 struct CliInjectedItem: Codable, Equatable, Hashable {
     let kind: String
     let label: String

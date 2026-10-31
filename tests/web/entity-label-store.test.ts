@@ -139,7 +139,7 @@ describe('org names in labels', () => {
       { id: 't', title: 'Fix the lead pipe' },
     ]);
     expect(['m', 'l', 'r', 't'].map((id) => peekTaskLabel(id)?.title)).toEqual(['CEO', 'Walnut VP', 'My own lead name', 'Fix the lead pipe']);
-    for (const t of [{ title: 'Main', org_role: 'main' }, { title: 'Marina lead', org_role: 'lead' }, { title: 'Garden lead' }, { title: 'x' }]) {
+    for (const t of [{ title: 'Main', org_role: 'main' }, { title: 'Marina lead', org_role: 'lead' }, { title: 'Marina lead', org_role: 'lead', org_name: 'Docs' }, { title: 'Garden lead' }, { title: 'x' }]) {
       expect(shownTaskTitle(t)).toBe(orgDisplayTitle(t));
     }
   });

@@ -87,7 +87,7 @@ test('by default the bubble is only the words; its footer shows what Walnut adde
   await toggle.click()
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
   await expect(b.getByTestId('message-hints')).toContainText('Walnut hints: Rich output')
-  await expect(riderAbove(b).locator('[data-testid="rider-fold"] .tool-run-toggle')).toHaveText(/^Received 1 message›?$/)
+  await expect(riderAbove(b).locator('[data-testid="rider-fold"] .tool-run-toggle')).toHaveText(/^Received 1 message(?: from [^·›]+?)?›?$/)
   // The note's card is one more click away, as before.
   await riderAbove(b).locator('[data-testid="rider-fold"] .tool-run-toggle').click()
   await expect(riderAbove(b)).toContainText('changed its status')

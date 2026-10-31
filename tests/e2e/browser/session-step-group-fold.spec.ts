@@ -71,7 +71,7 @@ test('cards, reasoning and commands in one stretch are one row while the turn ru
 
   // Counts only: three cards, four commands (the reasoning is not counted).
   await expect.poll(() => labelsAfter(hist, 'SG_ASK')).toEqual([
-    'Received 3 messages \u00b7 Ran 4 tools',
+    expect.stringMatching(/^Received 3 messages(?: from [^·›]+?)? \u00b7 Ran 4 tools$/),
   ]);
   await expect(hist.locator('.provenance-card')).toHaveCount(0);
   await expect(hist.locator('.session-working-indicator')).toBeVisible();
@@ -98,7 +98,7 @@ test('cards, reasoning and commands in one stretch are one row while the turn ru
 
   // More arrives while it is open: it joins the same row, which stays open.
   await cardShown(page, hist, 'qm-sg-4', 4, 4);
-  await expect(fold.locator(':scope > .tool-run-toggle')).toHaveText(/^Received 4 messages \u00b7 Ran 4 tools/);
+  await expect(fold.locator(':scope > .tool-run-toggle')).toHaveText(/^Received 4 messages(?: from [^·›]+?)? \u00b7 Ran 4 tools/);
   await expect(fold).toHaveAttribute('data-open', 'true');
   await page.waitForTimeout(600);
 });
@@ -128,9 +128,9 @@ test('words or a person\'s message split the stretch, and stay on screen', async
   await expect(hist.locator('.session-msg', { hasText: 'SG_PERSON' })).toBeVisible();
   // Three rows, each a card and a command.
   await expect.poll(() => labelsAfter(hist, 'SG_ASK2')).toEqual([
-    'Received 1 message \u00b7 Ran 1 tool',
-    'Received 1 message \u00b7 Ran 1 tool',
-    'Received 1 message \u00b7 Ran 1 tool',
+    expect.stringMatching(/^Received 1 message(?: from [^·›]+?)? \u00b7 Ran 1 tool$/),
+    expect.stringMatching(/^Received 1 message(?: from [^·›]+?)? \u00b7 Ran 1 tool$/),
+    expect.stringMatching(/^Received 1 message(?: from [^·›]+?)? \u00b7 Ran 1 tool$/),
   ]);
 });
 
@@ -152,7 +152,7 @@ test('a turn a notice started: the notice in history and the live steps are one 
 
   // The notice in history, the live card and the command.
   await expect.poll(() => labelsAfter(hist, 'SG_ANSWER3')).toEqual([
-    'Received 2 messages \u00b7 Ran 1 tool',
+    expect.stringMatching(/^Received 2 messages(?: from [^·›]+?)? \u00b7 Ran 1 tool$/),
   ]);
   const fold = hist.locator('[data-testid="turn-fold"]').last();
   await fold.locator(':scope > .tool-run-toggle').click();

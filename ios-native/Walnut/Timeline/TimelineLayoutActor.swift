@@ -228,7 +228,6 @@ actor TimelineLayoutActor {
                             after: [TimelineFoldSteps.Step] = []) {
             let id = TimelineTurnFold.rowID(scope: input.scope, key: tail.key)
             let expanded = input.expandedRowIDs.contains(id)
-            let historyTools = tail.rows.filter { $0.kind == .tool }
             // Only this turn's rows can be a live call's history twin: the row may
             // span earlier quiet turns, each ended by its no-action line, and one of
             // them may have run the very same call.
@@ -255,7 +254,8 @@ actor TimelineLayoutActor {
             rows.append(builder.foldRow(
                 id: id,
                 phrase: TimelineFoldSteps.phrase(steps),
-                failCount: historyTools.filter(TimelineTurnShape.isFailure).count,
+                // Every failure history holds, error notices too (the settled fold counts them).
+                failCount: tail.rows.filter(TimelineTurnShape.isFailure).count,
                 expanded: expanded, running: input.streaming && liveCalls.contains { !$0.finished },
                 width: input.width))
             if expanded {

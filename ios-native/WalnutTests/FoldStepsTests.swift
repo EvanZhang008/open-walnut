@@ -1,30 +1,53 @@
 import XCTest
 @testable import Walnut
 
-/// A quiet fold's line (`TimelineFoldSteps`): counts only, "Received 12 messages ·
-/// Sent 3 · Ran 8 tools". Mirrors the web console's tests/web/fold-steps.test.ts;
-/// the two read the same.
+/// A quiet fold's line (`TimelineFoldSteps`): counts and whom from and to,
+/// "Received 12 messages from Docs lead +11 · Sent 3 to Brief task · Ran 8 tools".
+/// Mirrors the web console's tests/web/fold-steps.test.ts; the two read the same.
 final class FoldStepsTests: XCTestCase {
     private typealias S = TimelineFoldSteps.Step
 
-    func testTheReportedDenseStretchReadsAsThreeCounts() {
-        let steps: [S] = [.received, .received, .calls(1), .sent, .ack, .received, .thought, .ack]
-            + Array(repeating: .received, count: 10)
-            + [.calls(1), .calls(2), .sent, .inbox]
+    func testTheReportedDenseStretchReadsAsThreeCountsTwoNamesAPiece() {
+        let steps: [S] = [.received(from: "Walnut VP"), .received(from: "Board tags"), .calls(1), .sent(to: nil), .ack,
+                          .received(from: "Walnut VP"), .thought, .ack]
+            + (0..<10).map { .received(from: "Sender \($0)") }
+            + [.calls(1), .calls(2), .sent(to: nil), .inbox]
             + Array(repeating: .calls(1), count: 4)
-        XCTAssertEqual(TimelineFoldSteps.phrase(steps), "Received 13 messages \u{00B7} Sent 3 \u{00B7} Ran 8 tools")
+        XCTAssertEqual(TimelineFoldSteps.phrase(steps),
+                       "Received 13 messages from Walnut VP, Board tags +10 \u{00B7} Sent 3 to your inbox +2 \u{00B7} Ran 8 tools")
+    }
+
+    func testASendNamesItsTasksOnTheLineAndTheChip() {
+        XCTAssertEqual(TimelineFoldSteps.phrase([.sent(to: "Brief task"), .sent(to: "Task status foundation")]),
+                       "Sent 2 to Brief task, Task status foundation")
+        var send = ChatMessage(id: "t1", role: "assistant", text: "Bash", createdAt: "2026-10-30T00:00:00Z", kind: .tool,
+                               detail: nil, resultPreview: "Message delivered on this host to abcd12",
+                               inputPreview: "command: for id in abcd1234 99887766; do walnut tools call task_send x; done")
+        send.sentTo = [SentTarget(ref: "abcd12", taskId: "abcd1234-ef56", title: "Brief task"),
+                       SentTarget(ref: "998877", taskId: nil, title: nil)]
+        XCTAssertEqual(TimelineFoldSteps.steps(send), [.sent(to: "Brief task"), .sent(to: nil)])
+        XCTAssertEqual(TimelineTurnFold.sendLabel(send), "Sent to Brief task")
+        // An older server sends no targets: one unnamed send, the chip's own label.
+        send.sentTo = nil
+        XCTAssertEqual(TimelineFoldSteps.steps(send), [.sent(to: nil)])
+        XCTAssertNil(TimelineTurnFold.sendLabel(send))
+        // The wire field decodes; an older row without it still does.
+        let json = #"{"id":"x","role":"assistant","text":"Bash","createdAt":"","kind":"tool","sentTo":[{"ref":"abcd12","taskId":"abcd1234-ef56","title":"Brief task"}]}"#
+        let row = try? JSONDecoder().decode(ChatMessage.self, from: Data(json.utf8))
+        XCTAssertEqual(row?.sentTo?.first?.title, "Brief task")
     }
 
     func testOneIsSingularAndWhatDidNotHappenIsLeftOut() {
-        XCTAssertEqual(TimelineFoldSteps.phrase([.received, .ack]), "Received 1 message")
-        XCTAssertEqual(TimelineFoldSteps.phrase([.sent]), "Sent 1")
+        XCTAssertEqual(TimelineFoldSteps.phrase([.received(from: "Team lead"), .ack]), "Received 1 message from Team lead")
+        XCTAssertEqual(TimelineFoldSteps.phrase([.received(from: nil)]), "Received 1 message")
+        XCTAssertEqual(TimelineFoldSteps.phrase([.sent(to: nil)]), "Sent 1")
         XCTAssertEqual(TimelineFoldSteps.phrase([.calls(1)]), "Ran 1 tool")
-        XCTAssertEqual(TimelineFoldSteps.phrase([.received, .calls(1), .thought, .calls(1)]),
-                       "Received 1 message \u{00B7} Ran 2 tools")
+        XCTAssertEqual(TimelineFoldSteps.phrase([.received(from: "A"), .calls(1), .thought, .calls(1)]),
+                       "Received 1 message from A \u{00B7} Ran 2 tools")
     }
 
     func testAnInboxLetterCountsAsSent() {
-        XCTAssertEqual(TimelineFoldSteps.phrase([.inbox, .sent]), "Sent 2")
+        XCTAssertEqual(TimelineFoldSteps.phrase([.inbox, .sent(to: nil)]), "Sent 2 to your inbox +1")
         let letter = ChatMessage(id: "t1", role: "assistant", text: "mcp__walnut__human_inbox_send", createdAt: "2026-10-27T00:00:02Z",
                                  kind: .tool, detail: nil, resultPreview: "ok")
         XCTAssertEqual(TimelineFoldSteps.steps(letter), [.inbox])
@@ -52,7 +75,7 @@ final class FoldStepsTests: XCTestCase {
                                 + "<walnut-message kind=\"peer-note\" from=\"Lead\">\nhi\n</walnut-message>",
                               createdAt: "2026-10-27T00:00:00Z", kind: nil)
         row.sentBy = "agent"
-        XCTAssertEqual(TimelineFoldSteps.steps(row), [.received, .received])
+        XCTAssertEqual(TimelineFoldSteps.steps(row), [.received(from: "Login script"), .received(from: "Lead")])
         let ack = ChatMessage(id: "a1", role: "assistant", text: TimelineTurnMarker.tag, createdAt: "2026-10-27T00:00:01Z", kind: nil)
         XCTAssertEqual(TimelineFoldSteps.steps(ack), [.ack])
         let bash = ChatMessage(id: "t1", role: "assistant", text: "Bash", createdAt: "", kind: .tool,

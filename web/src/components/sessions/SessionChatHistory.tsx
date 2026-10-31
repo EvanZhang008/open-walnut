@@ -58,6 +58,8 @@ import { ThreadStackHeader } from './ThreadStackHeader';
 import { ThreadTurnLabel } from './ThreadTurnLabel';
 import { foldGroupOf, foldOpenKeys, foldParts, isFolded } from '@/utils/thread-fold';
 import { envelopeSteps, foldStepsPhrase, type FoldStep } from './fold-steps';
+import { lookupTaskByRef } from '@/stores/entity-label-store';
+import { joinsQuiet, MSG_KIND_ROLE, SYSTEM_VARIANT_ROLE, toolRole, TOOL_ROLE_FOLDS, type MsgKind, type RowRole } from './fold-rows';
 import { chunkByKind, leadingStepGroup, stepGroups, type StepGroup, type StepKind } from './stream-step-groups';
 import { isEnvelopeOnly, parseSessionEnvelopes } from '@open-walnut/history-session-envelope';
 import { usePeerNameOf } from './peer-name';
@@ -111,6 +113,17 @@ import { ContinueInNewFolderButton } from './FolderGoneBanner';
 import type { ContinueInNewFolderResult } from '@/api/sessions';
 import { historyErrorText, olderUnavailableText } from './history-notice-text';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
+
+/** A send call's targets (send-targets.ts), parsed once per call and result: a
+ *  fold line reads them on every render of a long session. */
+const sendRefsCache = new WeakMap<SessionHistoryTool, { result: unknown; refs: string[] }>();
+function sendRefsOf(t: SessionHistoryTool): string[] {
+  const hit = sendRefsCache.get(t);
+  if (hit && hit.result === t.result) return hit.refs;
+  const refs = detectOutboundSend(t, t.result)?.refs ?? [];
+  sendRefsCache.set(t, { result: t.result, refs });
+  return refs;
+}
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
@@ -3011,7 +3024,10 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const isInbound = part.kind === 'msg' && part.m.role === 'user' && part.globalIndex !== forkBoundaryIndex
         && !gapAt.has(part.globalIndex) && isHistorySentRow(part.m) && !isHistoryUserTurn(part.m);
       const isContext = !isInbound && isContextPart(part);
-      if (!isInbound && !isContext && part.kind !== 'run' && !isThinkingPart(part) && !isAckPart(part)) break;
+      // The runtime's own lines (an API error, a retry) are steps too (fold-rows.ts).
+      const sysAt = part.kind === 'system-run' ? part.members[0].globalIndex : part.kind === 'msg' && part.m.role === 'system' ? part.globalIndex : -1;
+      const isSystem = sysAt >= 0 && sysAt !== forkBoundaryIndex && !gapAt.has(sysAt);
+      if (!isInbound && !isContext && !isSystem && part.kind !== 'run' && !isThinkingPart(part) && !isAckPart(part)) break;
       inbound ||= isInbound;
       context ||= isContext;
       s--;
@@ -3908,11 +3924,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   };
 
   /**
-   * The finished steps of a turn, folded (process-fold.ts): a row's tools when it
-   * is one, `null` when it must stay on screen. Text, a failure, a question, a
-   * plan or agent card, and a row carrying a fork or gap divider all stay out, so
-   * nothing the reader must see goes behind a click. Reasoning alone is not a
-   * tool row either; it joins a group as `isThinkingPart` (process-fold.ts).
+   * The finished steps of a turn, folded (fold-rows.ts): a row's tools when it
+   * is one, `null` when it must stay on screen. Text, a question, a call still
+   * running, a plan or agent card, and a row carrying a fork or gap divider stay
+   * out; a failed call is a step (its fold's header counts it in red). Reasoning
+   * alone is not a tool row; it joins a group as `isThinkingPart`.
    */
   const processToolsOf = (part: HistoryPart): SessionHistoryTool[] | null => {
     // Read once per part object: the parts array is memoized, and this runs on
@@ -3934,15 +3950,45 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       // (the CLI writes almost every send with its thinking in the same row).
       if (m.role !== 'assistant' || (m.text ?? '').trim()) return null;
       for (const t of m.tools ?? []) {
-        if (t.name === 'AskUserQuestion') return null;
-        if (t.isError && !isRoutedQuestion(t.name, t.result)) return null;
-        // Still running (no result yet): it stays on screen with its own bar.
-        if (t.result === undefined && !t.isError) return null;
-        if (!isMergeableHistoryTool(t) && !detectOutboundSend(t)) return null;
+        if (!TOOL_ROLE_FOLDS[toolRole(t, isFoldableCall)]) return null;
         tools.push(t);
       }
     }
     return tools.length > 0 ? tools : null;
+  };
+  const isFoldableCall = (t: SessionHistoryTool) => isMergeableHistoryTool(t) || !!detectOutboundSend(t);
+  /** What a row is for the fold rule (fold-rows.ts); its role is MSG_KIND_ROLE's. */
+  const msgKindOf = (part: HistoryPart): MsgKind => {
+    const first = part.kind === 'msg' ? part.globalIndex : part.members[0].globalIndex;
+    if ((forkBoundaryIndex != null && first === forkBoundaryIndex) || gapAt.has(first)) return 'boundary';
+    switch (part.kind) {
+      case 'system-run': return 'system';
+      case 'run': return processToolsOf(part) !== null ? 'calls' : 'other';
+      case 'msg':
+        if (part.m.role === 'system') return 'system';
+        if (isInboundPart(part)) return 'received';
+        if (isContextPart(part)) return 'context';
+        if (isThinkingPart(part)) return 'thinking';
+        if (isAckPart(part)) return 'ack';
+        return processToolsOf(part) !== null ? 'calls' : 'other';
+      default: {
+        // A new part kind must be placed by the fold rule (tests/web/fold-rows.test.ts).
+        const unplaced: never = part;
+        return unplaced;
+      }
+    }
+  };
+  /** The failures a stretch of rows holds, for its fold's red count: the runtime's
+   *  error lines and the failed calls (a routed question is an answer). */
+  const failedOf = (parts: readonly HistoryPart[]): number => {
+    let failed = 0;
+    for (const part of parts) {
+      for (const m of rowsOf(part)) {
+        if (m.role === 'system' && m.systemVariant === 'error') failed++;
+        if (!(part.kind === 'msg' && part.suppressTools)) failed += (m.tools ?? []).filter((t) => t.isError && !isRoutedQuestion(t.name, t.result)).length;
+      }
+    }
+    return failed;
   };
   // A message to someone: a send card, or Walnut's other messaging ops (to a
   // lead, to the inbox, an answer in it), which render as plain tool rows.
@@ -3964,9 +4010,18 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     ENVELOPE_CACHE.set(text, segs);
     return envelopeSteps(segs, peerName);
   };
-  const toolSteps = (tools: readonly SessionHistoryTool[]): FoldStep[] => tools.map((t) => (
-    isOutboundTool(t) ? { kind: /__human_inbox_(?:send|reply)$/.test(t.name) ? 'inbox' : 'sent' } : { kind: 'calls', tools: [{ name: t.name, input: t.input as Record<string, unknown> | undefined }] }
-  ));
+  const toolSteps = (tools: readonly SessionHistoryTool[]): FoldStep[] => tools.flatMap((t): FoldStep[] => {
+    if (!isOutboundTool(t)) return [{ kind: 'calls', tools: [{ name: t.name, input: t.input as Record<string, unknown> | undefined }] }];
+    if (/__human_inbox_(?:send|reply)$/.test(t.name)) return [{ kind: 'inbox' }];
+    // One step per target, named by its task (send-targets.ts): a loop over two
+    // tasks is two sends, and the line says to whom.
+    const refs = sendRefsOf(t);
+    if (refs.length === 0) return [{ kind: 'sent' }];
+    return refs.map((r) => {
+      const to = lookupTaskByRef(r)?.label.title;
+      return to ? { kind: 'sent', to } : { kind: 'sent' };
+    });
+  });
   const foldStepsOf = (part: HistoryPart): FoldStep[] => {
     if (isInboundPart(part) && part.kind === 'msg') return receivedSteps(part.m.text ?? '');
     const ctx = contextKindOf(part);
@@ -3975,6 +4030,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (isAckPart(part)) return [{ kind: 'ack' }];
     const out: FoldStep[] = [];
     for (const m of part.kind === 'msg' ? [part.m] : part.members.map((x) => x.m)) {
+      if (m.role === 'system') { out.push({ kind: 'notice', error: m.systemVariant === 'error' }); continue; }
       if (m.role === 'user' && isHistorySentRow(m) && !isHistoryUserTurn(m)) { out.push(...receivedSteps(m.text ?? '')); continue; }
       if (m.role !== 'assistant') continue;
       const read = readTurnMarker(stripQuestionTag(m.text ?? ''));
@@ -4054,12 +4110,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       );
     }
   };
-  // The quiet steps between two things the person reads (fold-steps.ts): every
-  // finished step, message received or sent, reasoning alone, the no-action line,
-  // a whole turn that needed nothing, and everything before a turn's answer. Each
-  // stretch of them is ONE row whatever turns it spans, its line saying what the
-  // steps were (2026-10-27, the user: "if it is collapsed near collapsed, need to
-  // combine"; one Main reply was followed by five such rows). In Conversation
+  // The quiet steps between two things the person reads (fold-rows.ts): every
+  // step of the work (a failed call too, a message received or sent, reasoning
+  // alone, the no-action line, the runtime's own lines), a whole turn that needed
+  // nothing, and everything before a turn's answer. Each stretch of them is ONE
+  // row whatever turns it spans, its line saying what the steps were (2026-10-27,
+  // the user: "if it is collapsed near collapsed, need to combine"; 2026-10-30,
+  // the fourth report, a failed command split one stretch in three). In Conversation
   // Mode a stretch stays within one question, and a question's own rows keep
   // their label.
   let quiet: Item[] = [];
@@ -4076,13 +4133,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const body = items.map((x) => renderHistoryPart(x.part));
     if (answerThinking) body.push(<SessionThinking key={`fold-thinking-${id}`} text={answerThinking} />);
     markAll(items, turnFoldKey(id));
-    let failed = 0;
-    for (const { part } of items) {
-      for (const m of rowsOf(part)) {
-        if (m.role === 'system' && m.systemVariant === 'error') failed++;
-        if (!(part.kind === 'msg' && part.suppressTools)) failed += (m.tools ?? []).filter((t) => t.isError && !isRoutedQuestion(t.name, t.result)).length;
-      }
-    }
+    const failed = failedOf(items.map((x) => x.part));
     const steps = items.flatMap((x) => foldStepsOf(x.part));
     if (answerThinking) steps.push({ kind: 'thought' });
     const head = headOf(items[0].part);
@@ -4114,10 +4165,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     emitQuiet(thinking);
     renderOne(item);
   };
-  /** A row an open turn renders: quiet when it is a finished step, a message
-   *  received, reasoning alone or the no-action line, and no Asked-from list hangs off it. */
-  const isQuietItem = ({ part, i }: Item) => !askedAfter.has(i)
-    && (isInboundPart(part) || isContextPart(part) || isThinkingPart(part) || isAckPart(part) || processToolsOf(part) !== null);
+  /** A step of the work (fold-rows.ts) that no Asked-from list hangs off. */
+  const rowRoleOf = ({ part, i }: Item): RowRole => {
+    if (askedAfter.has(i)) return 'reads';
+    const kind = msgKindOf(part);
+    if (kind === 'system') return rowsOf(part).every((m) => SYSTEM_VARIANT_ROLE[m.systemVariant ?? 'none'] === 'step') ? 'step' : 'reads';
+    return MSG_KIND_ROLE[kind];
+  };
   // Each row's turn (turn-shape.ts); a turn an Asked-from list hangs off renders open.
   const turnOfIndex = new Map<number, TurnShape>();
   for (const t of turnShapes) for (let g = Math.max(0, t.start); g < t.end; g++) turnOfIndex.set(g, t);
@@ -4132,12 +4186,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const place = (item: Item) => {
     const g = headOf(item.part).globalIndex;
     const t = turnOfIndex.get(g);
-    const kind = !t || askedTurns.has(t) ? 'open' : t.kind;
-    const person = !!t && t.byPerson && g === t.start;
-    if (person || isLabelledRow(item.part)) { pushVisible(item); return; }
-    if (kind === 'hidden' || (kind === 'answered' && g < t!.answer)) { pushQuiet(item); return; }
-    if (kind === 'open' && isQuietItem(item)) { pushQuiet(item); return; }
-    pushVisible(item);
+    const quietRow = joinsQuiet({
+      role: rowRoleOf(item),
+      turn: !t || askedTurns.has(t) ? 'open' : t.kind,
+      personStart: !!t && t.byPerson && g === t.start,
+      labelled: isLabelledRow(item.part),
+      beforeAnswer: !!t && t.kind === 'answered' && g < t.answer,
+    });
+    if (quietRow) pushQuiet(item);
+    else pushVisible(item);
   };
   if (convMode) {
     for (const item of foldParts(visibleHistoryParts, (part) => foldGroupOf(threadTree, partThreadKey(part)), groupFolded)) {
@@ -4169,10 +4226,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       liveTailRow = () => {
         const stepIdx = group.members.filter((k) => stepKinds[k] === 'step');
         const members = runMembersOf(stepIdx);
-        // Every call in it, a failed one in history too (it is folded with the rest
-        // while the turn runs, so the header has to say so).
-        const tailTools = tail.flatMap((part) => (part.kind === 'run' ? part.memberMsgs : [])).flatMap((m) => m.tools ?? []);
-        const failed = tailTools.filter((t) => t.isError && !isRoutedQuestion(t.name, t.result)).length + streamFailedOf(members);
+        // Every failure in it, history's failed calls and error lines too (they are
+        // folded with the rest while the turn runs, so the header has to say so).
+        const failed = failedOf(tail) + streamFailedOf(members);
         const live = isThinkingTail(stepIdx[stepIdx.length - 1] ?? -1);
         // Keyed like the answered turn's fold, so the row and its open state carry
         // over when the turn ends and history takes the tools.

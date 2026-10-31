@@ -88,6 +88,7 @@ import { clipTranscriptText } from './sessions/transcript-clip.js'
 import { transcriptSentBy, type TranscriptSentBy } from './sessions/transcript-sent-by.js'
 import { walnutAddedOf, type CliAddedItem, type WalnutAddedItem } from '../lib/walnut-added.js'
 import { InjectedLines } from './sessions/transcript-injected.js'
+import { sendTargetRefs } from '../lib/send-targets.js'
 import { cutEnd } from './text-cut.js'
 
 /** LEGACY git-synced paths — dual-written while `sync.legacy_projection_files`
@@ -501,6 +502,12 @@ export interface ProjectedTranscriptMessage {
    *  client folding consecutive tool rows into one line can count the failures
    *  the way the web console's "N failed" badge does. Absent = succeeded. */
   isError?: true
+  /** kind:'tool' only (additive, 2026-10-30) — a send's targets (`task_send`, by
+   *  MCP or the CLI), in order: `ref` as the call or its answer printed it (an id
+   *  or id prefix, lib/send-targets.ts), `taskId` and `title` when it resolved to
+   *  one task. A loop over several tasks is one row with several. A client names
+   *  the send by them ("Sent to Brief task") instead of "another session". */
+  sentTo?: { ref: string; taskId?: string; title?: string }[]
   /** User text rows only (additive, 2026-10): who put the row into the session.
    *  `person` = a person's own message, `agent` = a delivery from another task or
    *  from Walnut (a peer note, a reply, a notification, a trigger), `cli` = a line
@@ -869,10 +876,12 @@ export async function buildSessionTranscript(
         ...(ref ? { detailRef: ref } : {}),
         ...(agent ? { agent } : {}),
         ...(t.isError ? { isError: true as const } : {}),
+        ...sendTargetsOf(t),
       })
     }
   }
   injected.finish(messages)
+  await nameSendTargets(messages)
   return {
     version: 1,
     sessionId,
@@ -881,6 +890,39 @@ export async function buildSessionTranscript(
     // shorter than the tail, so `windowed` alone already means "there is more".
     truncated: !opts?.full && ((bounds ? bounds.start > 0 : history.length > TRANSCRIPT_TAIL) || windowed),
     messages,
+  }
+}
+
+/** `walnut tools call task_send` where a command starts (not inside a grep's pattern):
+ *  the line's start, after a separator, a subshell or a loop's `do`/`then`/`else`. */
+const CLI_SEND = /(?:^|[;&|(\n]|\b(?:do|then|else)\b)\s*(?:\w+=\S*\s+)*(?:open-)?walnut\s+tools\s+call\s+(?:task|session)_send\b/
+
+/** A send call's targets, unresolved (`sentTo` with refs only), or nothing. */
+function sendTargetsOf(t: { name: string; input?: Record<string, unknown>; result?: string }): Pick<ProjectedTranscriptMessage, 'sentTo'> {
+  const command = typeof t.input?.command === 'string' ? t.input.command : undefined
+  const isSend = /^mcp__.+__(?:task|session)_send$/.test(t.name)
+    || (t.name === 'Bash' && !!command && CLI_SEND.test(command))
+  if (!isSend) return {}
+  const refs = sendTargetRefs(t.input, command, t.result)
+  return refs.length > 0 ? { sentTo: refs.map((ref) => ({ ref })) } : {}
+}
+
+/** Resolve each send target to its task (an id or a unique prefix), once per ref. */
+async function nameSendTargets(messages: ProjectedTranscriptMessage[]): Promise<void> {
+  const rows = messages.filter((m) => m.sentTo)
+  if (rows.length === 0) return
+  const { getTask } = await import('./task-manager.js')
+  // The name the web shows (Main is the CEO, a lead its VP), so both read the same.
+  const { orgDisplayTitle } = await import('./org/org-tree.js')
+  const known = new Map<string, { taskId: string; title: string } | null>()
+  for (const row of rows) {
+    for (const target of row.sentTo!) {
+      if (!known.has(target.ref)) {
+        known.set(target.ref, await getTask(target.ref).then((task) => ({ taskId: task.id, title: orgDisplayTitle(task) }), () => null))
+      }
+      const hit = known.get(target.ref)
+      if (hit) Object.assign(target, hit)
+    }
   }
 }
 

@@ -35,6 +35,7 @@
  * showing even when its arguments cannot be read.
  */
 import type { SessionHistoryTool } from '@/types/session';
+import { sendTargetRefs } from '@open-walnut/send-targets';
 
 /** The resolved target, as the server reports it back. */
 export interface OutboundTarget {
@@ -53,6 +54,10 @@ export interface OutboundSend {
   kind: 'peer-note' | 'reply';
   /** What the caller addressed: an id, a prefix, a task, or a title substring. */
   to?: string;
+  /** Every target the call reached, as ids or id prefixes (send-targets.ts): the
+   *  server's answer, then the arguments. A loop over targets is one call with
+   *  several; arguments built in a subshell leave only the answer to name them. */
+  refs?: string[];
   /** The words that were sent. Absent when the payload never rode the command. */
   body?: string;
   /** The one-line TL;DR the sender gave (`title`), the folded card's line. */
@@ -83,7 +88,10 @@ const SEND_OPS = new Set(['task_send', 'session_send']);
 const OPERATOR_CHARS = new Set([';', '|', '&', '(', ')', '{', '}', '\n']);
 
 /** Tokens that may precede a command without moving it out of head position. */
-const COMMAND_WRAPPERS = new Set(['env', 'exec', 'sudo', 'time', 'nice', 'command', 'builtin']);
+const COMMAND_WRAPPERS = new Set(['env', 'exec', 'sudo', 'time', 'nice', 'command', 'builtin',
+  // Shell keywords a command follows: `for id in A B; do walnut tools call task_send …; done`
+  // sends once per id (a lead's loop over its workers).
+  'do', 'then', 'else']);
 
 /** `NAME=value` prefix assignments, which also keep the head position. */
 const ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -377,11 +385,13 @@ export function detectOutboundSend(
     : undefined;
   const error = errorText(res?.error) ?? fallbackError;
   const to = str(args?.to);
+  const refs = sendTargetRefs(args, via === 'cli' ? raw : undefined, result);
 
   return {
     via,
     kind: inReplyTo || str(res?.repliedTo) ? 'reply' : 'peer-note',
     ...(to ? { to } : {}),
+    ...(refs.length > 0 ? { refs } : {}),
     ...(typeof args?.text === 'string' && args.text ? { body: args.text } : {}),
     ...(str(args?.title) ? { title: str(args?.title)!.replace(/\s+/g, ' ').trim() } : {}),
     ...(requestId ? { requestId } : {}),

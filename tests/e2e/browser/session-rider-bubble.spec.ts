@@ -159,7 +159,7 @@ test('the words after an org digest are a user bubble; the digest is a card abov
   const rider = riderAbove(b)
   const fold = rider.locator('[data-testid="rider-fold"]')
   await expect(fold).toHaveAttribute('data-open', 'false')
-  await expect(fold.locator('.tool-run-toggle')).toHaveText(/^Received 1 message›?$/)
+  await expect(fold.locator('.tool-run-toggle')).toHaveText(/^Received 1 message(?: from [^·›]+?)?›?$/)
   await expect(rider.locator('.provenance-card')).toHaveCount(0)
   await reveal(page, panel, b)
   await shot(page, rider, 'org-digest-folded')
@@ -199,7 +199,7 @@ test('the words after a status change of a followed task are a user bubble; the 
   const rider = riderAbove(b)
   const fold = rider.locator('[data-testid="rider-fold"]')
   await expect(fold).toHaveAttribute('data-open', 'false')
-  await expect(fold.locator('.tool-run-toggle')).toHaveText(/^Received 1 message›?$/)
+  await expect(fold.locator('.tool-run-toggle')).toHaveText(/^Received 1 message(?: from [^·›]+?)?›?$/)
   await reveal(page, panel, b)
   await shot(page, b.locator('xpath=..'), 'status-note-folded')
   await reveal(page, panel, fold)
@@ -236,7 +236,7 @@ test('four stacked notices fold into cards above one bubble', async ({ page }) =
   await showAdded(page, panel, b)
   expect(await previousRowClass(b)).toContain('session-msg-envelope')
   // All four behind one muted line that counts them.
-  await expect(riderAbove(b).locator('[data-testid="rider-fold"] .tool-run-toggle')).toHaveText(/^Received 4 messages›?$/)
+  await expect(riderAbove(b).locator('[data-testid="rider-fold"] .tool-run-toggle')).toHaveText(/^Received 4 messages(?: from [^·›]+?)?›?$/)
   await expect(riderAbove(b).locator('.provenance-card')).toHaveCount(0)
 })
 
@@ -266,7 +266,7 @@ test('a notice alone, or ahead of a trigger delivery, is still no bubble', async
   // digest and the trigger delivery two. Open those to read the cards. (Matched on
   // the line itself: an opened fold's text is its body too.)
   const folds = panel.locator('.session-history [data-testid="turn-fold"]')
-    .filter({ has: page.locator('.tool-run-toggle > .tool-run-label', { hasText: /^Received (?:1 message|2 messages)$/ }) })
+    .filter({ has: page.locator('.tool-run-toggle > .tool-run-label', { hasText: /^Received (?:1 message|2 messages)(?: from [^·›]+?)?$/ }) })
   await expect(folds).toHaveCount(2)
   for (let i = 0; i < 2; i++) {
     await reveal(page, panel, folds.nth(i))

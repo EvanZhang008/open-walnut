@@ -48,7 +48,8 @@ import {
 } from '@/stores/session-mention-index';
 import { sessionStatusStore } from '@/stores/session-status-store';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
-import { useRenderedMarkdown, useTaskLabel } from '@/hooks/useEntityLabels';
+import { useEntityLabelsVersion, useRenderedMarkdown, useTaskLabel } from '@/hooks/useEntityLabels';
+import { lookupTaskByRef } from '@/stores/entity-label-store';
 import { copyTextRobust } from '@/utils/clipboard';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import { fallbackTitle, foldKey, useMessageFold } from './message-fold';
@@ -66,6 +67,30 @@ interface ResolvedTarget {
   taskId?: string;
   /** A printed short id matched more than one session: text, never a link. */
   ambiguous: boolean;
+  /** The call's other targets (a loop over several tasks), by task. */
+  others?: { id: string; title: string }[];
+}
+
+/**
+ * Where the send went when nothing above named it: the tasks its answer or its
+ * arguments name (`refs`, send-targets.ts), by id or id prefix. 2026-10-30, the
+ * user, of "To another session": which session? Arguments built in a subshell
+ * leave only the answer's "delivered on this host to <id>".
+ */
+function useRefTargets(send: OutboundSend, resolved: ResolvedTarget): ResolvedTarget {
+  const version = useEntityLabelsVersion();
+  return useMemo(() => {
+    if (resolved.taskId || resolved.fullId || !send.refs?.length) return resolved;
+    const tasks = send.refs.map((r) => lookupTaskByRef(r)).filter((t) => !!t);
+    if (tasks.length === 0) return resolved;
+    return {
+      ...resolved,
+      taskId: tasks[0].id,
+      title: tasks.map((t) => t.label.title).join(', '),
+      ...(tasks.length > 1 ? { others: tasks.slice(1).map((t) => ({ id: t.id, title: t.label.title })) } : {}),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- version invalidates the label lookups
+  }, [resolved, send.refs, version]);
 }
 
 /** '__local__' is the wire value; a card prints 'local'. */
@@ -174,6 +199,9 @@ function CopyChip({ value, label, title }: { value: string; label: string; title
 function TargetChips({ resolved }: { resolved: ResolvedTarget }) {
   const taskLabel = useTaskLabel(resolved.taskId);
   const hostName = useHostDisplayLabels();
+  const others = (resolved.others ?? []).map((t) => (
+    <a key={t.id} className="provenance-chip provenance-chip-task task-link" data-task-id={t.id} href={`/tasks/${t.id}`} title={t.title}>{t.title}</a>
+  ));
   const chip = resolved.taskId ? (
     <a
       className="provenance-chip provenance-chip-task task-link"
@@ -193,6 +221,7 @@ function TargetChips({ resolved }: { resolved: ResolvedTarget }) {
   return (
     <div className="provenance-chips">
       {chip}
+      {others}
       {resolved.host && <span className="provenance-host">{hostName(resolved.host)}</span>}
     </div>
   );
@@ -254,7 +283,7 @@ export function SessionOutboundCard({
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
 }) {
-  const resolved = useResolvedTarget(send);
+  const resolved = useRefTargets(send, useResolvedTarget(send));
   const handleClick = useEntityClickHandler(onTaskClick, onSessionClick, undefined, sessionHost, sessionId);
   const taskLabel = useTaskLabel(resolved.taskId);
   const [open, toggle] = useMessageFold(foldKey(send.raw));
@@ -287,7 +316,7 @@ export function SessionOutboundCard({
       <MessageFoldSummary
         glyph={outboundDirectionGlyph(send.kind)}
         direction={send.kind === 'reply' ? 'Reply to' : 'To'}
-        sender={taskLabel?.title || headline}
+        sender={resolved.others ? headline : taskLabel?.title || headline}
         senderTitle={headline}
         title={send.title || fallbackTitle(send.body) || note || undefined}
         open={open}

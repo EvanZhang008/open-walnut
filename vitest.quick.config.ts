@@ -46,6 +46,7 @@ const config = mergeConfig(
         '@open-walnut/history-session-envelope': path.resolve(import.meta.dirname, 'src/lib/history-session-envelope.ts'),
         '@open-walnut/history-walnut-riders': path.resolve(import.meta.dirname, 'src/lib/history-walnut-riders.ts'),
         '@open-walnut/walnut-added': path.resolve(import.meta.dirname, 'src/lib/walnut-added.ts'),
+        '@open-walnut/send-targets': path.resolve(import.meta.dirname, 'src/lib/send-targets.ts'),
         '@open-walnut/three-way-merge': path.resolve(import.meta.dirname, 'src/lib/three-way-merge.ts'),
       },
     },
