@@ -1502,8 +1502,9 @@ Every route answers `501 not_supported_cloud` on a cloud companion.
   `{"type":"error","code","message"}`. The reply is the turn that took this message (matched by
   its delivery and turn generation), never a turn that was running before it; `unfinished` means
   the follow gave up after 15 minutes. Closing the request stops the follow, not Main's turn.
-- `GET /quick/tasks?q=&limit=6`: `{tasks: [{id, title, project, state, stateLabel}]}`, open tasks
-  first; `state` is the user status (`needs`, `working`, `waiting`, `done`). Open one with the
+- `GET /quick/tasks?q=&limit=6&recent=`: `{tasks: [{id, title, project, state, stateLabel}]}`, open
+  tasks first; `state` is the user status (`needs`, `working`, `waiting`, `done`). With no `q`,
+  nothing, unless `recent=1`: then the open board tasks, the ones needing the user first. Open one with the
   link `open-walnut://open?to=/tasks/<id>`, which the Mac app sends to that page (a target is a
   console path; the only query it may carry is a session's `id`, `tab` and `letter`).
 

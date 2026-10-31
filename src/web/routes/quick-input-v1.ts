@@ -17,8 +17,9 @@
  *        With `follow: true` the answer is an NDJSON stream instead: `{"type":"sent"|"held",
  *        taskId, sessionId, started}`, then Main's reply to THIS message as it is written
  *        (`text` deltas, `activity` lines, one `result` or `error`; quick-main-follow.ts).
- *   GET  /quick/tasks?q=&limit=                          → { tasks: [{ id, title, project, state, stateLabel }] }
- *        Tasks matching the words, for the list under the box.
+ *   GET  /quick/tasks?q=&limit=&recent=                  → { tasks: [{ id, title, project, state, stateLabel }] }
+ *        Tasks matching the words, for the list under the box; with no words and `recent=1`, the
+ *        open tasks, the ones needing the user first.
  *   POST /quick/warm                                     → 204
  *        The box opened: boot the quick-answer child now so the first answer skips the CLI boot.
  *
@@ -296,7 +297,8 @@ quickInputV1Router.get('/quick/tasks', async (req: Request, res: Response, next:
     const asked = Number(req.query.limit)
     const limit = Number.isFinite(asked) ? Math.max(1, Math.min(20, Math.floor(asked))) : 6
     if (!q) {
-      res.json({ tasks: [] })
+      // `recent`: the open tasks to offer before any words (the Spotlight action's task picker).
+      res.json({ tasks: req.query.recent === '1' ? await recentQuickTasks(limit) : [] })
       return
     }
     res.json({ tasks: await quickTasks(q, limit) })
@@ -314,6 +316,24 @@ export interface QuickTaskRow {
 }
 
 /** Tasks matching the words, best first, open ones before finished ones. */
+const STATE_RANK: Record<string, number> = { needs: 0, working: 1, waiting: 2, done: 3 }
+
+/** Open board tasks, the ones needing the user first, then the most recently changed. */
+export async function recentQuickTasks(limit: number): Promise<QuickTaskRow[]> {
+  const [{ listTasks }, { USER_STATE_LABELS, fallbackUserState }] = await Promise.all([
+    import('../../core/task-manager.js'),
+    import('../../core/user-status.js'),
+  ])
+  return (await listTasks())
+    // What the board shows: no plugin's own task (test runs included), not Main or a lead.
+    .filter((t) => t.phase !== 'COMPLETE' && !t.plugin_only && !t.org_role)
+    .map((task) => ({ task, state: task.user_status?.state ?? fallbackUserState(task.phase) }))
+    .sort((a, b) => (STATE_RANK[a.state] ?? 9) - (STATE_RANK[b.state] ?? 9)
+      || String(b.task.updated_at ?? '').localeCompare(String(a.task.updated_at ?? '')))
+    .slice(0, limit)
+    .map(({ task, state }) => ({ id: task.id, title: task.title, project: task.project ?? '', state, stateLabel: USER_STATE_LABELS[state] }))
+}
+
 export async function quickTasks(q: string, limit: number): Promise<QuickTaskRow[]> {
   const [{ search }, { getTask }, { USER_STATE_LABELS, fallbackUserState }] = await Promise.all([
     import('../../core/search.js'),

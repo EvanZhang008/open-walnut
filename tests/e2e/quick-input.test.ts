@@ -225,5 +225,13 @@ describe('GET /api/v1/quick/tasks', () => {
     expect(rows[1]).toMatchObject({ state: 'done', stateLabel: 'Completed' })
     const empty = await (await fetch(`http://localhost:${port}/api/v1/quick/tasks?q=`)).json()
     expect(empty).toEqual({ tasks: [] })
+    // No words and recent=1 (the Spotlight picker): open board tasks only, never Main or a done one.
+    const recent = (await (await fetch(`http://localhost:${port}/api/v1/quick/tasks?q=&recent=1&limit=20`)).json() as { tasks: Array<Record<string, string>> }).tasks
+    expect(recent.map((r) => r.id)).toContain(open.id)
+    expect(recent.map((r) => r.id)).not.toContain(done.id)
+    expect(recent.every((r) => r.state !== 'done')).toBe(true)
+    const { listTasks } = await import('../../src/core/task-manager.js')
+    const main = (await listTasks()).find((t) => t.org_role === 'main')
+    if (main) expect(recent.map((r) => r.id)).not.toContain(main.id)
   })
 })

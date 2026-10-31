@@ -38,7 +38,10 @@ enum WalnutIntentsServer {
         let deadline = Date().addingTimeInterval(startupWait)
         while true {
             let base = await base()
-            var req = URLRequest(url: base.appendingPathComponent(path), timeoutInterval: timeout)
+            // Relative to the base, so a path's own query stays a query (appendingPathComponent
+            // would escape its "?").
+            guard let url = URL(string: path, relativeTo: base)?.absoluteURL else { throw WalnutIntentError.failed("Bad request path.") }
+            var req = URLRequest(url: url, timeoutInterval: timeout)
             req.httpMethod = method
             if let body {
                 req.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -163,13 +166,17 @@ struct WalnutTaskQuery: EntityStringQuery {
         identifiers.map { WalnutTaskEntity(id: $0, title: $0, subtitle: "") }
     }
 
-    func suggestedEntities() async throws -> [WalnutTaskEntity] { [] }
+    /// What the picker lists before any words: the open tasks, the ones needing the user first.
+    func suggestedEntities() async throws -> [WalnutTaskEntity] {
+        try await find("", recent: true)
+    }
 
-    private func find(_ words: String) async throws -> [WalnutTaskEntity] {
+    private func find(_ words: String, recent: Bool = false) async throws -> [WalnutTaskEntity] {
         let q = words.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return [] }
+        guard !q.isEmpty || recent else { return [] }
         var path = URLComponents(string: "api/v1/quick/tasks")!
-        path.queryItems = [URLQueryItem(name: "q", value: q), URLQueryItem(name: "limit", value: "12")]
+        path.queryItems = [URLQueryItem(name: "q", value: q), URLQueryItem(name: "limit", value: recent ? "20" : "12")]
+        if recent { path.queryItems?.append(URLQueryItem(name: "recent", value: "1")) }
         let (data, status) = try await WalnutIntentsServer.request(path.string!, startupWait: 5)
         guard (200..<300).contains(status),
               let body = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
