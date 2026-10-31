@@ -21,6 +21,7 @@ const SCREENSHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/codex-interrupt-se
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const BASE_PROMPT = 'interrupt baseline lifecycle-slow-mobile'
 const NEW_THREAD_NOTICE = 'Could not resume the earlier conversation, so a new provider thread was started.'
+const RESUMED_NOTICE = 'Resumed the earlier conversation in its own provider thread.'
 const ROUNDS = [1, 2, 3].map((n) => `codex fast send round ${n}`)
 const replyFor = (prompt: string) => `hello from mock-acp (you said: ${prompt})`
 
@@ -40,12 +41,19 @@ async function openCodexQuickStart(page: Page): Promise<Locator> {
   return openDraftOnCwd(page, `${fixtureRoot}/projects/walnut`, { engine: 'Codex' })
 }
 
-/** System notes of a turn fold into one "N errors ›" row; open it, then find the notice. */
+/**
+ * System notes in a row fold into one "N errors ›" (or "N system messages ›" when
+ * one is info) row; open it, then find the notice. When the turn-end self-report
+ * took the failed load, the next send finds that new thread unused and restores
+ * the earlier one (acp-thread-restore.ts), so "Resumed the earlier conversation"
+ * may follow: the conversation is back, which is the point.
+ */
 async function expectNewThreadNotice(panel: Locator): Promise<void> {
-  const group = panel.getByRole('button', { name: /^\d+ errors?/ })
+  const group = panel.getByRole('button', { name: /^\d+ (errors?|system messages?)/ })
   await expect(group).toHaveCount(1, { timeout: 10_000 })
   await group.click()
   await expect(panel.getByText(NEW_THREAD_NOTICE, { exact: false })).toHaveCount(1, { timeout: 10_000 })
+  expect(await panel.getByText(RESUMED_NOTICE, { exact: true }).count()).toBeLessThanOrEqual(1)
 }
 
 /**
