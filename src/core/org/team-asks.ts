@@ -31,7 +31,9 @@ import { buildOrgTree, type OrgTaskNode } from './org-tree.js';
 import type { TeamAsk } from './team-note.js';
 
 const FILE = path.join(WALNUT_HOME, 'org', 'team-asks.json');
-const MAX_PER_LEAD = 20;
+// A note with nothing the lead must act on now waits up to an hour (team-note.ts), so the store
+// keeps an hour's asks.
+const MAX_PER_LEAD = 60;
 const GIST_MAX = 200;
 
 async function readAll(): Promise<Record<string, TeamAsk[]>> {

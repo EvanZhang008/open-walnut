@@ -1,6 +1,6 @@
 /** What a lead hears about its teams before its next message (src/core/org/team-note.ts), pure part. */
 import { describe, it, expect } from 'vitest'
-import { buildTeamNoteText, groupTeamAsks, planTeamNote, teamFingerprint, TEAM_NOTE_MAX } from '../../../src/core/org/team-note.js'
+import { buildTeamNoteText, groupTeamAsks, noteDue, planTeamNote, teamFingerprint, TEAM_NOTE_FORM, TEAM_NOTE_GAP_MS, TEAM_NOTE_MAX } from '../../../src/core/org/team-note.js'
 import type { TeamNewsTask } from '../../../src/core/org/team-news.js'
 
 const at = (min: number) => new Date(Date.UTC(2026, 9, 26, 12, min)).toISOString()
@@ -44,17 +44,17 @@ describe('team note plan', () => {
     expect(plan.next.seen.c).toBeDefined()
   })
 
-  it('later tells only what moved: new words, a new ask, a task stuck, new and finished tasks', () => {
+  it('later tells only what moved: a new ask, a task stuck, finished tasks; never progress or a new task', () => {
     const prev = planTeamNote(undefined, base, [], at(40)).next
     expect(planTeamNote(prev, base, [], NOW).kind).toBe('none')
     // A turn that only started or ended (same words, same time) is no news.
     const flipped = [base[0]!, t('b', { phase: 'NEED_ACTION', user_status: { state: 'waiting', kind: 'you', now: 'Running the suite', at: at(45) } }), base[2]!]
     expect(planTeamNote(prev, flipped, [], NOW).kind).toBe('none')
-    // Words that went away (a report with nothing new) are recorded, not told.
+    // Words that went away, or new progress words, are no news either.
     const quiet = [base[0]!, t('b', { phase: 'NEED_ACTION', user_status: { state: 'waiting', kind: 'you', waitingOn: 'You' } }), base[2]!]
-    const gone = planTeamNote(prev, quiet, [], NOW)
-    expect(gone.kind).toBe('none')
-    expect(gone.next.seen.b).not.toBe(prev.seen.b)
+    expect(planTeamNote(prev, quiet, [], NOW).kind).toBe('none')
+    const progress = [base[0]!, t('b', { user_status: { state: 'working', now: 'Running the type check', at: at(58) } }), base[2]!]
+    expect(planTeamNote(prev, progress, [], NOW).kind).toBe('none')
 
     const later = [
       t('a', { phase: 'NEED_ACTION', user_status: { state: 'waiting', kind: 'you', now: 'Passed the identity check; only your signature is left', at: at(50) } }),
@@ -65,23 +65,23 @@ describe('team note plan', () => {
     const plan = planTeamNote(prev, later, [{ id: 'gone-new', title: 'never told' }], NOW)
     expect(plan.kind).toBe('moved')
     expect(plan.needs.map((i) => i.taskId)).toEqual(['b'])
-    expect(plan.moved.map((i) => i.taskId)).toEqual(['a', 'c'])
-    expect(plan.added.map((i) => i.taskId)).toEqual(['e'])
+    // 'a' only said new words and 'e' is new: progress, not news.
+    expect(plan.moved.map((i) => i.taskId)).toEqual(['c'])
     // Only a task the lead was told about is reported done.
     expect(plan.done).toEqual([])
     const told = planTeamNote(plan.next, later.slice(1), [{ id: 'a', title: 'a title' }], NOW)
-    expect(told).toMatchObject({ kind: 'moved', done: ['a title'], needs: [], moved: [], added: [] })
+    expect(told).toMatchObject({ kind: 'moved', done: ['a title'], needs: [], moved: [] })
   })
 
-  it('the fingerprint moves with the ask and the session\'s words, not with a turn or a phase', () => {
+  it('the fingerprint moves with the ask and being stuck, not with progress words, a turn or a phase', () => {
     const ask = (text: string) => t('x', { phase: 'NEED_ACTION', user_status: { state: 'needs', ask: text } })
     expect(teamFingerprint(ask('Sign it'))).not.toBe(teamFingerprint(ask('Send the scan')))
     expect(teamFingerprint(t('x', { user_status: { state: 'working', at: at(1) } })))
       .toBe(teamFingerprint(t('x', { phase: 'NEED_ACTION', user_status: { state: 'waiting', at: at(1) } })))
-    // Every turn end writes a report with a new time: the same words again are no news.
     const said = (words: string, min: number) => t('x', { phase: 'NEED_ACTION', user_status: { state: 'waiting', kind: 'you', now: words, at: at(min) } })
-    expect(teamFingerprint(said('Running the suite', 1))).toBe(teamFingerprint(said('Running the suite', 9)))
-    expect(teamFingerprint(said('Running the suite', 1))).not.toBe(teamFingerprint(said('The suite passed', 9)))
+    expect(teamFingerprint(said('Running the suite', 1))).toBe(teamFingerprint(said('The suite passed', 9)))
+    expect(teamFingerprint(said('Running the suite', 1)))
+      .not.toBe(teamFingerprint(t('x', { user_status: { state: 'waiting', kind: 'stuck', now: 'Running the suite', at: at(1) } })))
     // What Walnut says a task waits on after a phase move is not the lead's news.
     const waits = (waitingOn: string) => t('x', { phase: 'NEED_ACTION', user_status: { state: 'waiting', kind: 'task', waitingOn } })
     expect(teamFingerprint(waits('Not started yet'))).toBe(teamFingerprint(waits('Its worker (1 open)')))
@@ -91,14 +91,14 @@ describe('team note plan', () => {
 describe('team note text', () => {
   it('reads as one Walnut notification: sections, times, words, and counts past the cap', () => {
     const prev = planTeamNote(undefined, [], [], at(0)).next
-    const many = Array.from({ length: TEAM_NOTE_MAX.added + 2 }, (_, i) => t(`n${i}`, { updated_at: at(i), user_status: { state: 'working', now: `Step ${i}`, at: at(i) } }))
+    const many = Array.from({ length: TEAM_NOTE_MAX.moved + 2 }, (_, i) => t(`n${i}`, { updated_at: at(i), user_status: { state: 'waiting', kind: 'stuck', now: `Step ${i}`, at: at(i) } }))
     const plan = planTeamNote(prev, [t('d', { phase: 'NEED_ACTION', user_status: { state: 'needs', ask: 'Sign it', at: at(30) } }), ...many], [], NOW)
     const text = buildTeamNoteText(lead, plan, at(0), Date.parse(NOW), (id) => (id === 'd' ? 'Seeds' : 'Garden'))
     expect(text).toContain('outcome="org-update"')
     expect(text).toContain('about-task="lead-1"')
     expect(text).toContain('Team update (last note 1 h ago)')
     expect(text).toContain('Needs the user:\n- [Seeds] "d title": Sign it')
-    expect(text).toContain(`- [Garden] "n${TEAM_NOTE_MAX.added + 1} title" (working, ${60 - TEAM_NOTE_MAX.added - 1} min ago): Step ${TEAM_NOTE_MAX.added + 1}`)
+    expect(text).toContain('Stuck (nothing will wake it):\n- [Garden] "n9 title" (waiting, 51 min ago): Step 9')
     expect(text).toContain('- and 2 more')
     expect(text).toContain('Background, not a request')
   })
@@ -155,7 +155,7 @@ describe('what waits on the lead, what it leads, what others asked', () => {
     const prev = planTeamNote(undefined, base, [], at(40), ctx).next
     const idea = [t('i1', { project: 'Idea', user_status: { state: 'working', now: 'Sketching', at: at(55) } }), t('i2', { project: 'Idea' })]
     const plan = planTeamNote(prev, [...base, ...idea], [], NOW, { leadId: LEAD, led: ['Garden', 'Idea'] })
-    expect([plan.kind, plan.ledAdded, plan.added]).toEqual(['moved', ['Idea'], []])
+    expect([plan.kind, plan.ledAdded, plan.moved]).toEqual(['moved', ['Idea'], []])
     expect(buildTeamNoteText(lead, plan, at(40), Date.parse(NOW))).toContain('You lead "Garden", "Idea". New to you: "Idea".')
     const gone = planTeamNote(plan.next, base, [], NOW, ctx)
     expect([gone.kind, gone.ledRemoved]).toEqual(['moved', ['Idea']])
@@ -236,5 +236,111 @@ describe('team note: stopped by the machine', () => {
     expect(planTeamNote(prev, [...base.slice(0, 2), disk], [], NOW).machine.map((i) => i.taskId)).toEqual(['c'])
     // No instruction when nothing stopped.
     expect(buildTeamNoteText(lead, planTeamNote(undefined, base, [], NOW), undefined, Date.parse(NOW))).not.toContain('task_restart')
+  })
+})
+
+// 2026-10-31, the org's reflection: the Walnut lead got 80 notes in 12 hours (about 200K characters),
+// most of them progress such as '(working, 3 min ago): running type check'. A later note carries only
+// what the lead may act on or must know: what needs the user, waits on it, stopped, stuck, done, or
+// was asked of its teams. Progress, in any section, must not come back.
+describe('team note: no progress lines, paced like the main agent\'s', () => {
+  const LEAD = 'lead-1'
+  const ctx = { leadId: LEAD, led: ['Garden'] }
+  // Every status a team task can show, each with its own progress words.
+  const statuses: NonNullable<TeamNewsTask['user_status']>[] = [
+    { state: 'working', now: 'Running the type check' },
+    { state: 'working', now: 'Type check passed; running the suite' },
+    { state: 'waiting', kind: 'you', now: 'Parked on CI' },
+    { state: 'waiting', kind: 'outside', waitingOn: 'The CI run', now: 'Waiting on CI to finish' },
+    { state: 'waiting', kind: 'task', waitingOn: 'Its worker (1 open)', now: 'Its worker builds it' },
+    { state: 'waiting', kind: 'not-started', waitingOn: 'Not started yet' },
+    { state: 'waiting', kind: 'stuck', waitingOn: 'It stopped, and nothing will wake it', now: 'Half done' },
+    { state: 'waiting', kind: 'lead', waitingOn: 'Its lead, to check the result', now: 'Fixed the parser' },
+    { state: 'waiting', kind: 'machine', waitingOn: 'Its host to come back', stoppedBy: 'machine', now: 'Was building' },
+    { state: 'needs', ask: 'Sign it', now: 'Ready to send' },
+  ]
+  // The sections a note may carry. A new section goes here only if it is not progress.
+  const ALLOWED = ['Needs the user:', 'Waiting on you:', 'Stopped by the machine, not the work (Walnut resumes these once the cause clears):',
+    'Asked of your teams by others:', 'Latest:', 'Stuck (nothing will wake it):']
+
+  it('every section the note can write is one the lead acts on; progress has none', async () => {
+    const fs = await import('node:fs/promises')
+    const src = await fs.readFile(new URL('../../../src/core/org/team-note.ts', import.meta.url), 'utf8')
+    const heads = [...src.matchAll(/section\(\s*(?:plan\.kind === 'now' \? )?'([^']+)'(?: : '([^']+)')?/g)].flatMap((m) => [m[1], m[2]].filter(Boolean))
+    heads.push(...[...src.matchAll(/`(Asked of your teams by others:)/g)].map((m) => m[1]!))
+    expect(heads.length).toBeGreaterThan(4)
+    for (const h of heads) expect(ALLOWED, `a new section "${h}": progress must not ride a team note`).toContain(h)
+  })
+
+  it('a later note never carries a working line or a progress section, whatever moved', () => {
+    for (const [i, from] of statuses.entries()) {
+      for (const [j, to] of statuses.entries()) {
+        const before = [t('x', { parent_task_id: LEAD, user_status: { ...from, at: at(10) } }), t('y', { user_status: { state: 'working', now: 'Step one', at: at(10) } })]
+        const after = [
+          t('x', { parent_task_id: LEAD, phase_changed_at: at(50), user_status: { ...to, now: `${to.now ?? ''} (later)`, at: at(50) } }),
+          t('y', { user_status: { state: 'working', now: 'Step two', at: at(55) } }),
+          t(`new-${i}-${j}`, { user_status: { state: 'working', now: 'Just started', at: at(56) } }),
+        ]
+        const prev = planTeamNote(undefined, before, [], at(10), ctx).next
+        const plan = planTeamNote(prev, after, [], NOW, ctx)
+        if (plan.kind === 'none') continue
+        const text = buildTeamNoteText(lead, plan, at(10), Date.parse(NOW))
+        expect(text, `${from.state}/${from.kind} -> ${to.state}/${to.kind}`).not.toMatch(/\(working[,)]/)
+        expect(text).not.toContain('Step two')
+        expect(text).not.toContain('Just started')
+        expect(text).not.toMatch(/^(Changed|New|Latest):/m)
+      }
+    }
+  })
+
+  it('a note with nothing to act on waits an hour after the last; one the lead must act on goes at once', () => {
+    const prev = planTeamNote(undefined, base, [], at(0), ctx).next
+    const needs = planTeamNote(prev, [...base, t('d', { phase: 'NEED_ACTION', user_status: { state: 'needs', ask: 'Sign it' } })], [], at(30), ctx)
+    expect(needs.kind).toBe('moved')
+    expect(noteDue(needs, prev.at, Date.parse(at(30)))).toBe(false)
+    expect(noteDue(needs, prev.at, Date.parse(at(0)) + TEAM_NOTE_GAP_MS)).toBe(true)
+    const done = planTeamNote(prev, base.slice(1), [{ id: 'a', title: 'a title' }], at(5), ctx)
+    expect(noteDue(done, prev.at, Date.parse(at(5)))).toBe(false)
+    // Waiting on the lead, stopped by the machine, or stuck: the lead's to act on now.
+    for (const s of statuses.filter((x) => x.kind === 'lead' || x.kind === 'machine' || x.kind === 'stuck')) {
+      const plan = planTeamNote(prev, [...base.slice(0, 2), t('c', { parent_task_id: LEAD, user_status: s })], [], at(5), ctx)
+      expect(plan.kind, s.kind).toBe('moved')
+      expect(noteDue(plan, prev.at, Date.parse(at(5))), s.kind).toBe(true)
+    }
+    // The first note is where things stand: at once.
+    expect(noteDue(planTeamNote(undefined, base, [], at(5), ctx), undefined, Date.parse(at(5)))).toBe(true)
+  })
+
+  it('a state an older Walnut wrote, words in its fingerprints: the change of form is no news, a real move still is', () => {
+    // The old form, as an older Walnut hashed it: '|<now words>|<stuck>|machine:<on>', or 'needs|<ask>'.
+    const hash = (raw: string) => { let h = 5381; for (let i = 0; i < raw.length; i++) h = ((h * 33) ^ raw.charCodeAt(i)) >>> 0; return h.toString(36) }
+    const team = [
+      t('m', { user_status: { state: 'waiting', kind: 'machine', waitingOn: 'Its host to come back', stoppedBy: 'machine', now: 'Was building' } }),
+      t('s', { user_status: { state: 'waiting', kind: 'stuck', waitingOn: 'Nothing will wake it', now: 'Half done' } }),
+      t('w', { parent_task_id: LEAD, phase_changed_at: at(3), user_status: { state: 'waiting', kind: 'lead', waitingOn: 'Its lead' } }),
+      t('n', { phase: 'NEED_ACTION', user_status: { state: 'needs', ask: 'Sign it' } }),
+      t('p', { user_status: { state: 'working', now: 'Running the suite' } }),
+    ]
+    const old = { at: at(0), led: ['Garden'], seen: {
+      m: hash('|Was building||machine:Its host to come back'), s: hash('|Half done|stuck'),
+      w: hash('||') + '+lead@' + at(3), n: hash('needs|Sign it'), p: hash('|Running the suite|'),
+    } }
+    const plan = planTeamNote(old, team, [], at(10), ctx)
+    expect(plan.kind).toBe('none')
+    expect(plan.next.form).toBe(TEAM_NOTE_FORM)
+    // Told before the upgrade as working; now it needs the user, is stuck, or the machine stopped it: told.
+    const was = { ...old, seen: { ...old.seen, x: hash('|Building it|'), y: hash('|Building it|'), z: hash('|Building it|') } }
+    const moved = planTeamNote(was, [...team,
+      t('x', { phase: 'NEED_ACTION', user_status: { state: 'needs', ask: 'Pick one' } }),
+      t('y', { user_status: { state: 'waiting', kind: 'stuck', waitingOn: 'Nothing will wake it', now: 'Building it' } }),
+      t('z', { user_status: { state: 'waiting', kind: 'machine', waitingOn: 'Its host to come back', stoppedBy: 'machine', now: 'Building it' } }),
+    ], [], at(10), ctx)
+    expect([moved.needs.map((i) => i.taskId), moved.moved.map((i) => i.taskId), moved.machine.map((i) => i.taskId)]).toEqual([['x'], ['y'], ['z']])
+    // Only new words: still no news.
+    const words = planTeamNote({ ...old, seen: { ...old.seen, p: hash('|Started the suite|') } }, team, [], at(10), ctx)
+    expect(words.kind).toBe('none')
+    // A wait it was not told about is still news.
+    const fresh = planTeamNote({ ...old, seen: { ...old.seen, w: hash('||') } }, team, [], at(10), ctx)
+    expect(fresh.waits.map((w) => w.taskId)).toEqual(['w'])
   })
 })

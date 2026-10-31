@@ -4,7 +4,9 @@
  * never from a worker writing to its lead.
  *   - the first message says where the teams stand now
  *   - nothing moved: no note; a turn that only ended is no news
- *   - new words, a task that needs the user, a finished task, a new task: one note, told once
+ *   - a task that needs the user, a finished task: one note, told once; new progress words and a
+ *     new task are no news
+ *   - a note with nothing the lead must act on waits an hour after the last; a wait on the lead goes at once
  *   - the note rides the queued row of an ordinary send, and only that one
  *   - a worker that waits on the lead wakes it with the note, once (lead-waits.ts)
  *   - an ask into a team task from outside the team is listed; the team's own is not (team-asks.ts)
@@ -23,7 +25,7 @@ import { startServer, stopServer } from '../../src/web/server.js'
 import { addTask, completeTask, getTask, updateTask, updateTaskRaw } from '../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { ensureProjectLead, pendingOrgDigest } from '../../src/core/org/org-store.js'
-import { _resetTeamNoteClaimsForTesting } from '../../src/core/org/team-note.js'
+import { _resetTeamNoteClaimsForTesting, _setTeamNoteGapMsForTesting } from '../../src/core/org/team-note.js'
 import { deleteMessage, getQueue, sendMessageToSession } from '../../src/core/session-message-queue.js'
 import { sendLetter } from '../../src/core/human-inbox/store.js'
 import { _setLeadWaitClocksForTesting, tellLead } from '../../src/core/org/lead-waits.js'
@@ -58,9 +60,12 @@ beforeAll(async () => {
   ids['Order seeds'] = (await addTask({ title: 'Order seeds', project: 'Garden', parent_task_id: ids['Plan the beds'] })).task.id
   leadId = (await ensureProjectLead('Garden')).id
   await createSessionRecord(LEAD_SID, leadId, 'Garden', WALNUT_HOME)
+  // The hour between notes is its own case below; the rest read each note as it comes.
+  _setTeamNoteGapMsForTesting(0)
 })
 
 afterAll(async () => {
+  _setTeamNoteGapMsForTesting()
   await stopServer()
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
@@ -83,7 +88,7 @@ describe('a lead\'s team note', () => {
     await updateTask(ids['Plan the beds']!, { phase: 'NEED_ACTION' }, { source: 'api' })
     expect(await pendingOrgDigest(LEAD_SID, t0 + 800)).toBeNull()
 
-    // The task the user's example was about: new words, a worker that needs the user, one done, one new.
+    // New words (progress, no news), a worker that needs the user, one done, one new (no news).
     await report(ids['Renew the permit']!, 'The identity check passed; only your signature is left.', t0 + 1_000)
     // Its turn ends on the user (its own status), with a decision letter that says what.
     await updateTask(ids['Order seeds']!, { phase: 'NEED_ACTION' }, { source: 'api' })
@@ -102,9 +107,10 @@ describe('a lead\'s team note', () => {
     expect(note).not.toBeNull()
     expect(note!.text).toContain('Team update (last note 1 min ago)')
     expect(note!.text).toContain('Needs the user:\n- "Order seeds": Which supplier?')
-    expect(note!.text).toContain('Changed:\n- "Renew the permit" (waiting, 1 min ago): The identity check passed; only your signature is left.')
+    expect(note!.text).not.toContain('The identity check passed')
     expect(note!.text).toContain('Done: "Plan the beds"')
     expect(note!.text).not.toContain('Fix the fence')
+    expect(note!.text).not.toMatch(/\(working[,)]/)
     // Two sends at the same moment: one carries it.
     expect(await pendingOrgDigest(LEAD_SID, t0 + 61_100)).toBeNull()
     await note!.markTold()
@@ -112,13 +118,20 @@ describe('a lead\'s team note', () => {
   })
 
   it('rides the queued row of an ordinary send, and only that one', async () => {
+    // Progress words alone: no note.
     await report(ids['Renew the permit']!, 'Signed copy received; filing it now.', Date.now())
+    _resetTeamNoteClaimsForTesting()
+    const quiet = await sendMessageToSession(LEAD_SID, 'Anything new?', { source: 'peer' })
+    expect((await getQueue(LEAD_SID)).find((m) => m.id === quiet.id)?.message).not.toContain('outcome="org-update"')
+    for (const m of await getQueue(LEAD_SID)) await deleteMessage(LEAD_SID, m.id)
+    await completeTask(ids['Renew the permit']!)
     _resetTeamNoteClaimsForTesting()
     const sent = await sendMessageToSession(LEAD_SID, 'How is Garden going?', { source: 'peer' })
     const rows = await getQueue(LEAD_SID)
     const row = rows.find((m) => m.id === sent.id)!
     expect(row.message).toContain('outcome="org-update"')
-    expect(row.message).toContain('Signed copy received; filing it now.')
+    expect(row.message).toContain('Done: "Renew the permit"')
+    expect(row.message).not.toContain('Signed copy received')
     // The note goes in front of the message, in the same row.
     expect(row.message.indexOf('outcome="org-update"')).toBeLessThan(row.message.indexOf('How is Garden going?'))
     const again = await sendMessageToSession(LEAD_SID, 'And the fence?', { source: 'peer' })
@@ -128,10 +141,81 @@ describe('a lead\'s team note', () => {
     for (const m of await getQueue(LEAD_SID)) await deleteMessage(LEAD_SID, m.id)
   })
 
+  it('a first look that told nothing starts no hour', async () => {
+    _setTeamNoteGapMsForTesting()
+    try {
+      const quietLead = (await ensureProjectLead('Pond')).id
+      const sid = '88888888-9999-4aaa-8bbb-cccccccccccc'
+      await createSessionRecord(sid, quietLead, 'Pond', WALNUT_HOME)
+      const pump = (await addTask({ title: 'Clean the pump', project: 'Pond' })).task.id
+      const t0 = Date.now()
+      _resetTeamNoteClaimsForTesting()
+      expect(await pendingOrgDigest(sid, t0)).toBeNull()
+      await completeTask(pump)
+      _resetTeamNoteClaimsForTesting()
+      const note = await pendingOrgDigest(sid, t0 + 5 * 60_000)
+      expect(note?.text).toContain('Done: "Clean the pump"')
+      await note!.markTold()
+    } finally {
+      _setTeamNoteGapMsForTesting(0)
+    }
+  })
+
   it('any other session never gets one', async () => {
     const other = '44444444-5555-4666-8777-888888888888'
     await createSessionRecord(other, ids['Renew the permit']!, 'Garden', WALNUT_HOME)
     expect(await pendingOrgDigest(other)).toBeNull()
+  })
+})
+
+describe('the hour between notes', () => {
+  afterAll(() => { _setTeamNoteGapMsForTesting(0) })
+
+  it('a note with nothing to act on waits an hour after the last, then carries all that piled up; a wait on the lead goes at once', async () => {
+    _setTeamNoteGapMsForTesting()
+    // Two hours after the note the case before told, on the clock the plan reads.
+    const t0 = Date.now() + 2 * 60 * 60_000
+    // A note just went out.
+    const a = (await addTask({ title: 'Mulch the path', project: 'Garden' })).task.id
+    await updateTask(a, { phase: 'NEED_ACTION' }, { source: 'api' })
+    await sendLetter({ subject: 'Bark or straw?', type: 'action_required', markdown: 'Which?', actions: [{ id: 'b', label: 'Bark' }], sender: { taskId: a } } as never)
+    await until('it needs the user', async () => (await getTask(a)).user_status?.state === 'needs')
+    _resetTeamNoteClaimsForTesting()
+    const first = await pendingOrgDigest(LEAD_SID, t0)
+    expect(first?.text).toContain('"Mulch the path": Bark or straw?')
+    await first!.markTold()
+    // Something done ten minutes later is held, and so is a second thing at forty minutes.
+    await completeTask(a)
+    _resetTeamNoteClaimsForTesting()
+    expect(await pendingOrgDigest(LEAD_SID, t0 + 10 * 60_000)).toBeNull()
+    const b = (await addTask({ title: 'Sharpen the shears', project: 'Garden' })).task.id
+    await updateTask(b, { phase: 'NEED_ACTION' }, { source: 'api' })
+    await sendLetter({ subject: 'New blades?', type: 'action_required', markdown: 'Buy?', actions: [{ id: 'y', label: 'Yes' }], sender: { taskId: b } } as never)
+    await until('it needs the user', async () => (await getTask(b)).user_status?.state === 'needs')
+    _resetTeamNoteClaimsForTesting()
+    expect(await pendingOrgDigest(LEAD_SID, t0 + 40 * 60_000)).toBeNull()
+    // An hour after the last note: one note with both.
+    _resetTeamNoteClaimsForTesting()
+    const hour = await pendingOrgDigest(LEAD_SID, t0 + 60 * 60_000 + 1_000)
+    expect(hour?.text).toContain('Done: "Mulch the path"')
+    expect(hour?.text).toContain('"Sharpen the shears": New blades?')
+    await hour!.markTold()
+    // A worker waiting on the lead a minute later is not held.
+    const c = (await addTask({ title: 'Oil the hinge', project: 'Garden', parent_task_id: leadId })).task.id
+    await updateTask(c, { phase: 'WAITING' }, { source: 'api' })
+    await updateTaskRaw(c, { status_report: { state: 'done', now: 'Oiled both hinges.', at: new Date(Date.now() + 1_000).toISOString() } }, { emitEvent: true, source: 'status-report' })
+    await until('the worker waits on its lead', async () => (await getTask(c)).user_status?.kind === 'lead')
+    _resetTeamNoteClaimsForTesting()
+    const now = await pendingOrgDigest(LEAD_SID, t0 + 61 * 60_000 + 1_000)
+    expect(now?.text).toContain('Waiting on you:')
+    expect(now?.text).toContain('"Oil the hinge"')
+    await now!.markTold()
+    await completeTask(b)
+    await completeTask(c)
+    _resetTeamNoteClaimsForTesting()
+    // Leaves the next cases a told state with these gone.
+    const rest = await pendingOrgDigest(LEAD_SID, t0 + 3 * 60 * 60_000)
+    await rest?.markTold()
   })
 })
 

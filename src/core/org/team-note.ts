@@ -14,10 +14,18 @@
  *   first message   where its teams stand now: the projects it leads, what needs the user,
  *                   what waits on it, the newest news
  *   later           what moved since the last note: a project it now leads or no longer does,
- *                   a new ask for the user, a task that now waits on it, an ask that came
- *                   into a team task from outside the team (team-asks.ts: the user, the main
- *                   agent, another team), new status words, a task done, a new task.
+ *                   a new ask for the user, a task that now waits on it, a task the machine
+ *                   stopped, a task stuck, an ask that came into a team task from outside the
+ *                   team (team-asks.ts: the user, the main agent, another team), a task done.
  *                   Nothing moved, no note.
+ *
+ * Paced like the main agent's update (2026-10-31, the org's reflection: the Walnut lead got 80
+ * notes in 12 hours, about 200K characters, more than all its workers' replies, most of them
+ * "(working, 3 min ago): running type check"). A worker's progress words and a new task are no
+ * longer news: the lead reads those on the Org page or with task_get when it needs them. And a
+ * later note goes out at most once per TEAM_NOTE_GAP_MS, except when it carries something the lead
+ * must act on now (a task waiting on it, stopped by the machine, or stuck): that one goes at once and
+ * takes everything else held with it.
  */
 
 import path from 'node:path';
@@ -38,7 +46,15 @@ export interface TeamNoteState {
   seen: Record<string, string>;
   /** Project names ('Inbox' for ''); absent in a state an older Walnut wrote. */
   led?: string[];
+  /** The fingerprint's form (TEAM_NOTE_FORM); absent when an older Walnut wrote it (words were in it). */
+  form?: number;
 }
+
+/** The fingerprint's form: 2 = without the session's progress words. */
+export const TEAM_NOTE_FORM = 2;
+
+/** Least time between two notes that carry nothing the lead must act on now. */
+export const TEAM_NOTE_GAP_MS = 60 * 60_000;
 
 /** An ask that went into a team task from outside the team (team-asks.ts). */
 export interface TeamAsk {
@@ -155,8 +171,8 @@ export interface TeamNotePlan {
   waits: LeadWait[];
   /** Team tasks the machine stopped, newly: Walnut resumes them, the lead restarts what it cannot. */
   machine: LeadWait[];
+  /** The first note: the newest own words (where things stand). Later: the tasks newly stuck. */
   moved: TeamNewsItem[];
-  added: TeamNewsItem[];
   done: string[];
   asks: TeamAskLine[];
   /** The projects the lead leads now; and, against the last note, the ones it took over or let go. */
@@ -164,6 +180,20 @@ export interface TeamNotePlan {
   ledAdded: string[];
   ledRemoved: string[];
   next: TeamNoteState;
+}
+
+/** A later note that may wait for the gap: nothing in it is the lead's to act on now (a task
+ *  waiting on it, stopped by the machine, or stuck). */
+export function canWait(plan: Pick<TeamNotePlan, 'kind' | 'waits' | 'machine' | 'moved'>): boolean {
+  return plan.kind === 'moved' && plan.waits.length === 0 && plan.machine.length === 0 && plan.moved.length === 0;
+}
+
+/** The note may go now: the first one, one the lead must act on, or the gap since the last has passed. */
+export function noteDue(plan: Pick<TeamNotePlan, 'kind' | 'waits' | 'machine' | 'moved'>, prevAt: string | undefined, nowMs: number, gapMs = TEAM_NOTE_GAP_MS): boolean {
+  if (!canWait(plan)) return true;
+  const last = Date.parse(prevAt ?? '');
+  // A last note "after" now (the clock went back) never holds one.
+  return !Number.isFinite(last) || nowMs < last || nowMs - last >= gapMs;
 }
 
 export interface TeamNoteContext {
@@ -207,20 +237,30 @@ export function isMachineStop(t: TeamNewsTask): boolean {
   return !!s && s.state !== 'needs' && (s.stoppedBy === 'machine' || (s.state === 'waiting' && s.kind === 'machine'));
 }
 
-/** What a lead is told about: an ask for the user, the session's own words, or being stuck.
- *  A turn that only started or ended, the same words reported again, or what Walnut says a
- *  task waits on after a phase move ("Its worker (1 open)") is not news. */
+/** What a lead is told about: an ask for the user, being stuck, or a stop by the machine.
+ *  A worker's progress words ("running the type check"), a turn that only started or ended,
+ *  or what Walnut says a task waits on after a phase move ("Its worker (1 open)") is not news. */
 function newsKey(t: TeamNewsTask): string {
   const item = newsItem(t);
   if (item.state === 'needs') return `needs|${item.words}`;
-  return `|${(t.user_status?.now ?? '').replace(/\s+/g, ' ').trim()}|${isStuck(t) ? 'stuck' : ''}${isMachineStop(t) ? `|machine:${clean(t.user_status?.waitingOn)}` : ''}`;
+  return `|${isStuck(t) ? 'stuck' : ''}${isMachineStop(t) ? `|machine:${clean(t.user_status?.waitingOn)}` : ''}`;
 }
 
-export function teamFingerprint(t: TeamNewsTask): string {
-  const raw = newsKey(t);
+function hashKey(raw: string): string {
   let h = 5381;
   for (let i = 0; i < raw.length; i++) h = ((h * 33) ^ raw.charCodeAt(i)) >>> 0;
   return h.toString(36);
+}
+
+export function teamFingerprint(t: TeamNewsTask): string {
+  return hashKey(newsKey(t));
+}
+
+/** The fingerprint an older Walnut (form 1) wrote for the task as it is now: the words were in it. */
+function formOneFingerprint(t: TeamNewsTask): string {
+  const item = newsItem(t);
+  if (item.state === 'needs') return hashKey(`needs|${item.words}`);
+  return hashKey(`|${clean(t.user_status?.now)}|${isStuck(t) ? 'stuck' : ''}${isMachineStop(t) ? `|machine:${clean(t.user_status?.waitingOn)}` : ''}`);
 }
 
 /** What the lead's next message carries, given what it was told and its teams now. */
@@ -237,15 +277,29 @@ export function planTeamNote(
     : { ...t, user_status: { state: t.phase === 'IN_PROGRESS' ? 'working' as const : 'waiting' as const } }));
   const seen: Record<string, string> = {};
   for (const t of open) seen[t.id] = seenOf(t, ctx.leadId);
+  // A state an older Walnut wrote had the words in each fingerprint. A task that stands as it was
+  // told (its old fingerprint now is the stored one) is read in the new form, so the change of form
+  // is no news; one that moved keeps the old value, so the move is still told. Marks of a wait on
+  // the lead keep their meaning.
+  if (prev && prev.form !== TEAM_NOTE_FORM) {
+    const byIdNow = new Map(open.map((t) => [t.id, t] as const));
+    const rebased: Record<string, string> = {};
+    for (const [id, v] of Object.entries(prev.seen)) {
+      const [was, mark] = splitSeen(v);
+      const t = byIdNow.get(id);
+      rebased[id] = t && was === formOneFingerprint(t) ? teamFingerprint(t) + (mark === undefined ? '' : `${LEAD_MARK}${mark}`) : v;
+    }
+    prev = { ...prev, seen: rebased, form: TEAM_NOTE_FORM };
+  }
   const led = [...new Set(ctx.led ?? [])].sort((a, b) => a.localeCompare(b));
-  const next: TeamNoteState = { at: now, seen, ...(ctx.led ? { led } : {}) };
+  const next: TeamNoteState = { at: now, seen, ...(ctx.led ? { led } : {}), form: TEAM_NOTE_FORM };
   const news = teamNews(open);
   const byId = new Map(open.map((t) => [t.id, t] as const));
   const waitOf = (i: TeamNewsItem): LeadWait => ({ ...i, waitingOn: clean(byId.get(i.taskId)?.user_status?.waitingOn) });
   const waiting = (i: TeamNewsItem) => waitsOnLead(byId.get(i.taskId)!, ctx.leadId);
   const stopped = (i: TeamNewsItem) => isMachineStop(byId.get(i.taskId)!);
   const asks = groupTeamAsks(ctx.asks ?? []);
-  const none = { added: [] as TeamNewsItem[], done: [] as string[], ledAdded: [] as string[], ledRemoved: [] as string[] };
+  const none = { done: [] as string[], ledAdded: [] as string[], ledRemoved: [] as string[] };
   if (!prev) {
     const needs = news.filter((i) => i.state === 'needs');
     const waits = news.filter((i) => i.state !== 'needs' && waiting(i)).map(waitOf);
@@ -264,7 +318,6 @@ export function planTeamNote(
   const waits: LeadWait[] = [];
   const machine: LeadWait[] = [];
   const moved: TeamNewsItem[] = [];
-  const added: TeamNewsItem[] = [];
   for (const item of news) {
     const before = prev.seen[item.taskId];
     if (before === seen[item.taskId]) continue;
@@ -277,18 +330,18 @@ export function planTeamNote(
     else if (isWaiting !== undefined && isWaiting !== wasWaiting) waits.push(waitOf(item));
     // Then what the machine stopped: Walnut's to resume, the lead's when Walnut cannot.
     else if (isMachineStop(t)) { if (was !== is) machine.push(waitOf(item)); }
-    else if (before === undefined) { if (!fresh.has(projectKey(t.project || 'Inbox'))) added.push(item); }
-    // Words that went away (a report with nothing new) are no news.
-    else if (was !== is && (item.reported || isStuck(t))) moved.push(item);
+    // Then a task newly stuck: it meant to carry on and nothing will wake it. Progress is no news,
+    // and neither is a new task by itself (the Org page lists it).
+    else if (was !== is && isStuck(t) && !(before === undefined && fresh.has(projectKey(t.project || 'Inbox')))) moved.push(item);
   }
-  const done = completed.filter((t) => prev.seen[t.id] !== undefined).map((t) => t.title);
-  const any = needs.length + waits.length + machine.length + moved.length + added.length + done.length + asks.length
+  const done = completed.filter((t) => prev!.seen[t.id] !== undefined).map((t) => t.title);
+  const any = needs.length + waits.length + machine.length + moved.length + done.length + asks.length
     + ledAdded.length + ledRemoved.length > 0;
-  return { kind: any ? 'moved' : 'none', needs, waits, machine, moved, added, done, asks, led, ledAdded, ledRemoved, next };
+  return { kind: any ? 'moved' : 'none', needs, waits, machine, moved, done, asks, led, ledAdded, ledRemoved, next };
 }
 
 /** Most lines a section carries; the rest are counted. */
-export const TEAM_NOTE_MAX = { needs: 6, waits: 8, machine: 8, asks: 6, moved: 8, added: 6, done: 6 } as const;
+export const TEAM_NOTE_MAX = { needs: 6, waits: 8, machine: 8, asks: 6, moved: 8, done: 6 } as const;
 const WORDS_MAX = 240;
 
 function ago(at: number, nowMs: number): string {
@@ -357,8 +410,7 @@ export function buildTeamNoteText(
     + section('Waiting on you:', plan.waits, TEAM_NOTE_MAX.waits, (i) => waitLine(i as LeadWait))
     + section('Stopped by the machine, not the work (Walnut resumes these once the cause clears):', plan.machine ?? [], TEAM_NOTE_MAX.machine, (i) => waitLine(i as LeadWait))
     + asksSection
-    + section(plan.kind === 'now' ? 'Latest:' : 'Changed:', plan.moved, TEAM_NOTE_MAX.moved, (i) => `${label(i)} (${when(i)})${words(i)}`)
-    + section('New:', plan.added, TEAM_NOTE_MAX.added, (i) => `${label(i)} (${when(i)})${words(i)}`)
+    + section(plan.kind === 'now' ? 'Latest:' : 'Stuck (nothing will wake it):', plan.moved, TEAM_NOTE_MAX.moved, (i) => `${label(i)} (${when(i)})${words(i)}`)
     + doneLine
     + (plan.machine?.length
       ? 'A task the machine stopped is yours to bring back, not the user\'s: once its cause clears (the host answers, the disk has room), check it (task_get) and restart it (task_restart) or send it a message if Walnut has not. Tell the user only what you cannot fix yourself (a sign-in or a payment only they can give). '
@@ -421,6 +473,11 @@ function walk(nodes: readonly OrgTaskNode[], out: OrgTaskNode[] = []): OrgTaskNo
 /** Notes handed out but not yet recorded: two sends racing into one lead carry one note. */
 const claims = new Map<string, number>();
 const CLAIM_MS = 60_000;
+let gapMs = TEAM_NOTE_GAP_MS;
+/** Tests: change the gap between notes (no argument restores it). */
+export function _setTeamNoteGapMsForTesting(ms?: number): void {
+  gapMs = ms ?? TEAM_NOTE_GAP_MS;
+}
 
 export interface PendingTeamNote {
   text: string;
@@ -466,11 +523,15 @@ export async function pendingTeamNote(lead: Task, sessionId: string, nowMs = Dat
       : [];
     const now = new Date(nowMs).toISOString();
     const plan = planTeamNote(prev, open, completed, now, { leadId: lead.id, led: led.map((p) => p.project || 'Inbox'), asks });
+    // Held: the next message after the gap carries it, with whatever moved meanwhile. Nothing is
+    // recorded, so the next plan still starts from what the lead was last told.
+    if (plan.kind !== 'none' && !noteDue(plan, prev?.at, nowMs, gapMs)) return null;
     if (plan.kind === 'none') {
       // Nothing to say. A first look, or a team that changed only in ways that are no news (a task
       // left, words went away), is still recorded, so the next note starts from here.
       if (!prev || !sameSeen(prev.seen, plan.next.seen) || (prev.led ?? []).join('\n') !== (plan.next.led ?? []).join('\n')) {
-        await writeState(lead.id, prev ? { ...plan.next, at: prev.at } : plan.next);
+        // A first look told nothing, so it starts no hour (noteDue reads '' as never told).
+        await writeState(lead.id, { ...plan.next, at: prev ? prev.at : '' });
       }
       return null;
     }
@@ -491,7 +552,7 @@ export async function pendingTeamNote(lead: Task, sessionId: string, nowMs = Dat
         log.session.info('team note queued', {
           sessionId, taskId: lead.id, kind: plan.kind,
           needs: plan.needs.length, waits: plan.waits.length, asks: plan.asks.length, moved: plan.moved.length,
-          added: plan.added.length, done: plan.done.length, ledAdded: plan.ledAdded.length, ledRemoved: plan.ledRemoved.length,
+          done: plan.done.length, ledAdded: plan.ledAdded.length, ledRemoved: plan.ledRemoved.length,
         });
       },
       release: () => { claims.delete(lead.id); },
@@ -539,3 +600,4 @@ export async function teamSnapshotText(lead: Task, nowMs = Date.now()): Promise<
 export function _resetTeamNoteClaimsForTesting(): void {
   claims.clear();
 }
+
