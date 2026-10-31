@@ -458,14 +458,16 @@ type StatusRow = { id: string; phase: string; user_status?: { state: string } }
  * The server derives each task's user status a moment after its facts move (a debounced pass,
  * src/core/user-status-sync.ts); until then a surface reads the phase. Wait for the derived
  * values, so no test reads that first guess: every open card has one, the prompts need the
- * user, the hand back waits on its lead, and the leader works (finishTeam).
+ * user, the hand back waits on its lead, and the leader does not need the user (finishTeam).
  */
 async function waitUserStatuses(api: KanbanApi, team: KanbanTeam): Promise<void> {
-  const want: Record<string, string> = { [team.perm]: 'needs', [team.handedBack]: 'waiting', [team.leader]: 'working' }
+  // The leader carries on with no turn running, so it reads Waiting (on its workers), never Needs you.
+  const want: Record<string, string> = { [team.perm]: 'needs', [team.handedBack]: 'waiting' }
   for (const id of team.running) want[id] = 'working'
   await pollUntil('derived user statuses', async () => {
     const rows = await Promise.all([team.leader, ...team.all].map(async (id) => (await call<{ task: StatusRow }>(api, 'GET', `/api/tasks/${id}`)).task))
-    return rows.filter((t) => t.phase !== 'COMPLETE' && (!t.user_status || (want[t.id] && t.user_status.state !== want[t.id]))).map((t) => t.id)
+    const off = (t: StatusRow) => !t.user_status || (t.id === team.leader ? t.user_status.state === 'needs' : !!want[t.id] && t.user_status.state !== want[t.id])
+    return rows.filter((t) => t.phase !== 'COMPLETE' && off(t)).map((t) => `${t.id} ${t.phase} ${t.user_status?.state ?? 'none'} want ${t.id === team.leader ? 'not needs' : want[t.id] ?? 'any'}`)
   }, (missing) => missing.length === 0, 90_000)
 }
 

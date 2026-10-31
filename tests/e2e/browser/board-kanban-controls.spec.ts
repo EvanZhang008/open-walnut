@@ -367,9 +367,9 @@ test('C39: the leader needing the user shows in the rollup, the count and its ow
   await expect(pane.getByTestId('kanban-leader-row')).toContainText('The leader: approve Bash')
   await pane.getByTestId('kanban-leader-row-toggle').click()
   await expect(pane.getByTestId('kanban-leader-row').getByTestId('kanban-prompt-allow')).toBeVisible()
-  await pane.getByTestId('board-view-custom').click()
+  // Off the default view, the Status button carries the count. (The Custom view is disabled until
+  // the leader writes a page, so the count is read from the Cards view this test is on.)
   await expect(pane.getByTestId('board-view-attention')).toHaveText(String(before + 1))
-  await pane.getByTestId('board-view-cards').click()
   // The leader is this panel's own task: its button brings the leader's chat (the Chat tab) beside the board.
   await lead.click()
   await expect(page.locator('.session-panel-split.is-changed-open .session-panel-chat-col').first()).toBeVisible({ timeout: 15_000 })
