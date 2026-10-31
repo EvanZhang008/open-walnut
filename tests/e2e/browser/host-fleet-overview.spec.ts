@@ -138,6 +138,16 @@ test('a fleet of five reads in words, with day cells and the long-running verdic
     expect(box && box.width > 200).toBe(true)
     expect(scroll).toBeLessThanOrEqual(1)
   }
+  // A host sits in the group as Settings rows do: no box of its own (the rule
+  // settings-layout.spec.ts F10 holds every pane to: under 3 borders, no fill).
+  const boxes = await cards.evaluateAll((els) => els.map((el) => {
+    const cs = getComputedStyle(el)
+    const sides = ['top', 'right', 'bottom', 'left'].filter((s) => parseFloat(cs.getPropertyValue(`border-${s}-width`)) > 0 && cs.getPropertyValue(`border-${s}-style`) !== 'none').length
+    const groupBg = getComputedStyle(el.closest('.settings-group')!).backgroundColor
+    const filled = cs.backgroundColor !== 'rgba(0, 0, 0, 0)' && cs.backgroundColor !== groupBg && parseFloat(cs.borderTopLeftRadius) > 0
+    return { sides, filled }
+  }))
+  for (const b of boxes) expect(b).toEqual({ sides: 0, filled: false })
   await group.scrollIntoViewIfNeeded()
   await shot(page, '1-fleet', group)
   expect(calls).toBeGreaterThanOrEqual(1)

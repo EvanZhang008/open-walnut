@@ -1,24 +1,32 @@
 /*
- * Settings › Remote Hosts › Overview (HostFleetGroup.tsx): a grid of host
- * cards. Existing theme variables only; color is never the only signal (each
- * day cell has a title, each warning row says it in words).
+ * Settings › Remote Hosts › Overview (HostFleetGroup.tsx): one host per block,
+ * laid in the group the way Settings rows are (no box of its own: no border, no
+ * fill), with the rows' inset hairline between hosts (settings-rows.css).
+ * Existing theme variables only; color is never the only signal (each day cell
+ * has a title, each warning row says it in words).
  */
 .hf-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 10px;
-  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
 }
 .hf-card {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 10px 12px;
-  background: var(--bg-secondary);
+  position: relative;
+  padding: 12px var(--settings-row-pad-x);
   color: var(--fg);
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+.hf-card + .hf-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: var(--settings-row-pad-x);
+  right: 0;
+  height: 1px;
+  background: var(--settings-hairline);
+  pointer-events: none;
 }
 .hf-card-head {
   display: flex;
@@ -42,14 +50,14 @@
   flex: none;
 }
 .hf-rows { margin: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
-.hf-row { display: grid; grid-template-columns: 96px 1fr; gap: 8px; }
+.hf-row { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 8px; }
 .hf-row dt { color: var(--fg-muted); margin: 0; }
 .hf-row dd { margin: 0; overflow-wrap: anywhere; }
 .hf-row[data-tone="muted"] dd { color: var(--fg-muted); }
 .hf-row[data-tone="good"] dd { color: var(--success); }
 .hf-row[data-tone="warn"] dd { color: var(--warning); }
 .hf-row[data-tone="bad"] dd { color: var(--error); }
-.hf-days { display: flex; gap: 2px; margin-top: 2px; }
+.hf-days { display: flex; gap: 2px; margin-top: 2px; max-width: 360px; }
 .hf-days i {
   flex: 1 1 0;
   max-width: 10px;
@@ -63,5 +71,5 @@
 .hf-fit { margin: 2px 0 0; font-size: 12px; color: var(--fg-muted); }
 .hf-fit[data-ok="false"] { color: var(--warning); }
 .hf-fit code { font-size: 11.5px; }
-.hf-error, .hf-loading { margin: 8px 12px; font-size: 12.5px; color: var(--fg-muted); }
+.hf-error, .hf-loading { margin: 8px var(--settings-row-pad-x); font-size: 12.5px; color: var(--fg-muted); }
 .hf-error { color: var(--warning); }
