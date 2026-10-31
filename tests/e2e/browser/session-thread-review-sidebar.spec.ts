@@ -69,11 +69,16 @@ async function goFullscreen(panel: Locator): Promise<void> {
 }
 
 /** A real wheel, as a reader scrolls: the timeline holds its bottom against a
- *  programmatic scroll (WebKit snapped scrollIntoView straight back). */
+ *  programmatic scroll (WebKit snapped scrollIntoView straight back). Each step
+ *  waits for the scroll to come to rest: WebKit animates a wheel scroll, so a
+ *  fixed short wait read a frame of the glide, sent more steps than needed, and
+ *  the queued ones landed after this returned (the "timeline moved" 690px of
+ *  :266 on macOS WebKit, 2026-10-31). Returns with the timeline at rest. */
 async function wheelIntoView(page: Page, scroller: Locator, target: Locator): Promise<void> {
   const box = (await scroller.boundingBox())!
   await page.mouse.move(box.x + box.width * 0.3, box.y + box.height / 2)
   for (let i = 0; i < 80; i++) {
+    await settledScrollTop(scroller)
     const t = await target.boundingBox()
     if (t && t.y >= box.y + 40 && t.y + t.height <= box.y + box.height - 40) return
     await page.mouse.wheel(0, t && t.y < box.y + 40 ? -300 : 300)
@@ -275,9 +280,8 @@ test.describe('the fullscreen review sidebar', () => {
     // Card 18, far below: a click opens its question over it, the timeline put.
     const target = sidebarCards(panel).filter({ hasText: REVIEW_TITLES[17] })
     await wheelIntoView(page, history, target)
-    await page.waitForTimeout(300)
+    const at = await settledScrollTop(history)
     const rc = (await target.boundingBox())!
-    const at = await history.evaluate((el) => el.scrollTop)
     await target.locator('button.thread-review-head').click()
     await expect(card.locator('.thread-card-title')).toHaveText(REVIEW_TITLES[17])
     await expect(target).toHaveAttribute('data-selected', 'true')
