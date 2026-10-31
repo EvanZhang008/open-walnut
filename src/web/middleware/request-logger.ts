@@ -224,6 +224,14 @@ export function requestLogger(req: Request, res: Response, next: NextFunction): 
     // On a host replica, who answered: `replica` is an away answer (a journaled write).
     const opId = req.headers['x-walnut-op-id']
     if (typeof opId === 'string' && opId && method !== 'GET' && method !== 'HEAD') meta.opId = opId.slice(0, 80)
+    // Who wrote: a test window's label and the client, so a write nobody remembers
+    // (2026-10-31: the task panel hidden in the user's synced prefs) can be traced.
+    if (method !== 'GET' && method !== 'HEAD') {
+      const testRun = req.headers['x-walnut-test-run']
+      if (typeof testRun === 'string' && testRun) meta.testRun = testRun.slice(0, 60)
+      const ua = req.headers['user-agent']
+      if (typeof ua === 'string' && ua) meta.ua = ua.slice(0, 160)
+    }
     const answeredVia = res.getHeader('x-walnut-answered-via')
     if (typeof answeredVia === 'string') meta.answeredVia = answeredVia
 

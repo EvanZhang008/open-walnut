@@ -43,7 +43,6 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { followerKind, isFollower } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
-import { bus, EventNames } from '../../core/event-bus.js'
 import { relayControlAction, sendV1Error as sendError } from './v1-control-relay.js'
 import { stripEntityRefs } from '../../utils/entity-refs.js'
 import { isNeedsLeaderError } from '../../core/replication/needs-leader.js'
@@ -414,14 +413,10 @@ searchMemoryV1Router.post('/favorites/notes', async (req: Request, res: Response
       sendError(res, 400, 'bad_request', 'path is required')
       return
     }
-    const { getConfig, updateConfig } = await import('../../core/config-manager.js')
-    const config = await getConfig()
-    if (!config.favorites) config.favorites = {}
-    if (!config.favorites.notes) config.favorites.notes = []
-    if (!config.favorites.notes.includes(notePath)) config.favorites.notes.push(notePath)
-    await updateConfig({ favorites: config.favorites })
-    bus.emit(EventNames.CONFIG_CHANGED, { key: 'favorites' }, ['web-ui'])
-    res.json({ notes: config.favorites.notes })
+    // The web route's write: a test run's own copy, else config.yaml (routes/favorites.ts).
+    const { editFavorites } = await import('./favorites.js')
+    const f = await editFavorites((f) => { if (!f.notes.includes(notePath)) f.notes.push(notePath) })
+    res.json({ notes: f.notes })
   } catch (err) {
     next(err)
   }
@@ -435,13 +430,9 @@ searchMemoryV1Router.delete('/favorites/notes', async (req: Request, res: Respon
       sendError(res, 400, 'bad_request', 'path is required')
       return
     }
-    const { getConfig, updateConfig } = await import('../../core/config-manager.js')
-    const config = await getConfig()
-    if (!config.favorites) config.favorites = {}
-    config.favorites.notes = (config.favorites.notes ?? []).filter((p) => p !== notePath)
-    await updateConfig({ favorites: config.favorites })
-    bus.emit(EventNames.CONFIG_CHANGED, { key: 'favorites' }, ['web-ui'])
-    res.json({ notes: config.favorites.notes })
+    const { editFavorites } = await import('./favorites.js')
+    const f = await editFavorites((f) => { f.notes = f.notes.filter((p) => p !== notePath) })
+    res.json({ notes: f.notes })
   } catch (err) {
     next(err)
   }

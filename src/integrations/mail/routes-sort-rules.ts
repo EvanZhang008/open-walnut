@@ -7,6 +7,7 @@
  */
 import type { WalnutServerPluginApi } from '../../core/plugins/server-api.js'
 import { PRIMARY_ONLY, errorReply } from './contract.js'
+import { testRunPrefsWrite } from '../../core/test-run-prefs.js'
 import type { MailSortEngine } from './sort-engine.js'
 import type { MailStore } from './store.js'
 
@@ -85,6 +86,9 @@ export function registerMailSortRulesRoutes(
       return { status: 400, json: { error: 'invalid', message: 'on must be true or false' } }
     }
     try {
+      // A test run's switch is its own copy, never the user's (core/test-run-prefs.ts).
+      const own = testRunPrefsWrite<{ on: boolean }>('mail-grouped', () => ({ on: body.on as boolean }))
+      if (own) { own.on = body.on; return { json: { on: own.on } } }
       await sort.ready()
       await sort.setGroupedOn(body.on)
       return { json: { on: sort.groupedOn() } }

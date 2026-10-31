@@ -33,7 +33,6 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
-import { bus, EventNames } from '../../core/event-bus.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 import { isNeedsLeaderError } from '../../core/replication/needs-leader.js'
 
@@ -306,9 +305,9 @@ projectsV1Router.get('/ordering', async (_req: Request, res: Response, next: Nex
         return
       }
     }
-    const { getConfig } = await import('../../core/config-manager.js')
-    const config = await getConfig()
-    res.json({ projects: config.ordering?.projects ?? [] })
+    // The web route's read: a test run's own copy, else config.yaml (routes/ordering.ts).
+    const { readOrdering } = await import('./ordering.js')
+    res.json({ projects: (await readOrdering()).projects })
   } catch (err) {
     next(err)
   }
@@ -322,13 +321,8 @@ projectsV1Router.put('/ordering/projects', async (req: Request, res: Response, n
       sendError(res, 400, 'bad_request', 'order must be an array of strings')
       return
     }
-    const { getConfig, updateConfig } = await import('../../core/config-manager.js')
-    const config = await getConfig()
-    if (!config.ordering) config.ordering = {}
-    config.ordering.projects = order as string[]
-    await updateConfig({ ordering: config.ordering })
-    bus.emit(EventNames.CONFIG_CHANGED, { key: 'ordering' }, ['web-ui'])
-    res.json({ projects: config.ordering.projects })
+    const { writeOrdering } = await import('./ordering.js')
+    res.json({ projects: await writeOrdering('projects', order as string[]) })
   } catch (err) {
     next(err)
   }
@@ -353,17 +347,13 @@ projectsV1Router.post('/favorites/projects/:name', async (req: Request, res: Res
       const { getProjectRecord } = await import('../../core/task-manager.js')
       name = (await getProjectRecord(raw))?.name ?? raw
     } catch { /* registry unavailable — keep the caller's spelling */ }
-    const { getConfig, updateConfig } = await import('../../core/config-manager.js')
-    const config = await getConfig()
-    if (!config.favorites) config.favorites = {}
-    if (!config.favorites.projects) config.favorites.projects = []
+    // The web route's write: a test run's own copy, else config.yaml (routes/favorites.ts).
+    const { editFavorites } = await import('./favorites.js')
     const lower = name.toLowerCase()
-    if (!config.favorites.projects.some((p) => p.toLowerCase() === lower)) {
-      config.favorites.projects.push(name)
-    }
-    await updateConfig({ favorites: config.favorites })
-    bus.emit(EventNames.CONFIG_CHANGED, { key: 'favorites' }, ['web-ui'])
-    res.json({ projects: config.favorites.projects })
+    const f = await editFavorites((f) => {
+      if (!f.projects.some((p) => p.toLowerCase() === lower)) f.projects.push(name)
+    })
+    res.json({ projects: f.projects })
   } catch (err) {
     next(err)
   }
@@ -378,13 +368,9 @@ projectsV1Router.delete('/favorites/projects/:name', async (req: Request, res: R
       return
     }
     const lower = raw.toLowerCase()
-    const { getConfig, updateConfig } = await import('../../core/config-manager.js')
-    const config = await getConfig()
-    if (!config.favorites) config.favorites = {}
-    config.favorites.projects = (config.favorites.projects ?? []).filter((p) => p.toLowerCase() !== lower)
-    await updateConfig({ favorites: config.favorites })
-    bus.emit(EventNames.CONFIG_CHANGED, { key: 'favorites' }, ['web-ui'])
-    res.json({ projects: config.favorites.projects })
+    const { editFavorites } = await import('./favorites.js')
+    const f = await editFavorites((f) => { f.projects = f.projects.filter((p) => p.toLowerCase() !== lower) })
+    res.json({ projects: f.projects })
   } catch (err) {
     next(err)
   }

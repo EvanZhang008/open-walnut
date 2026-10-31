@@ -133,7 +133,14 @@ objects. Deleting a test task removes its session records too, and the primary's
 (`src/core/test-run-sweep.ts`, every 30 min) deletes test tasks idle for
 `WALNUT_TEST_RUN_TTL_HOURS` (6) with their sessions, then their empty projects, with no tombstone.
 Still delete what you made when you are done, and never touch the user's own objects from a test
-run: the marker covers what you create, not what you edit. Throwaway servers (ephemeral, the test
+run: the marker covers what you create, not what you edit. Its preference writes (the synced
+layout in ui-prefs, favorites, project order, the mail Grouped switch, a push choice) are kept
+apart (`src/core/test-run-prefs.ts`, 2026-10-31: a hidden task panel in the user's synced prefs
+left every fresh browser on an empty Home): only its own changes, in memory under its label, laid
+over the user's live values in its reads, gone 30 minutes after its last write; an automated
+browser's label names its browser context (`webdriver-<id>`), so a fresh browser opens on the
+user's layout. `tests/core/test-run-prefs-gate.test.ts` lists every preference write route and
+fails on one that does not go through it. Throwaway servers (ephemeral, the test
 runner, a data home in a temp or task dir) ignore the header; `WALNUT_TEST_RUN_MARK=1` turns it on
 there, as `tests/e2e/test-run-objects.test.ts` does.
 

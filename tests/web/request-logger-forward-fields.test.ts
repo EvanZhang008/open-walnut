@@ -78,3 +78,34 @@ describe('request log: a host replica\'s away write', () => {
     expect(one!.meta).not.toHaveProperty('answeredVia')
   })
 })
+
+describe('request log: who wrote', () => {
+  /** One request of `method` through the logger; the meta of its line. */
+  function one(method: string, reqHeaders: Record<string, string>): Record<string, unknown> {
+    const info = vi.spyOn(log.web, 'info')
+    const res = new EventEmitter() as unknown as Response & EventEmitter
+    ;(res as unknown as { statusCode: number }).statusCode = 200
+    ;(res as unknown as Record<string, unknown>).setHeader = () => res
+    ;(res as unknown as Record<string, unknown>).getHeader = () => undefined
+    const req = { method, originalUrl: '/api/ui-prefs', path: '/api/ui-prefs', query: {}, headers: reqHeaders } as unknown as Request
+    requestLogger(req, res, () => {})
+    res.emit('finish')
+    const call = info.mock.calls.find(([m]) => String(m).startsWith(`${method} /api/ui-prefs`))
+    return (call?.[1] ?? {}) as Record<string, unknown>
+  }
+
+  it('a write names its test window and client (2026-10-31: a hidden task panel nobody remembered setting)', () => {
+    const meta = one('PUT', { 'x-walnut-test-run': 'webdriver', 'user-agent': 'Mozilla/5.0 HeadlessChrome/140' })
+    expect(meta).toMatchObject({ testRun: 'webdriver', ua: 'Mozilla/5.0 HeadlessChrome/140' })
+    expect(String(one('PUT', { 'user-agent': 'x'.repeat(400) }).ua)).toHaveLength(160)
+  })
+
+  it('a read carries neither, nor does a write without them', () => {
+    const read = one('GET', { 'x-walnut-test-run': 'webdriver', 'user-agent': 'Mozilla/5.0' })
+    expect(read).not.toHaveProperty('testRun')
+    expect(read).not.toHaveProperty('ua')
+    const bare = one('PUT', {})
+    expect(bare).not.toHaveProperty('testRun')
+    expect(bare).not.toHaveProperty('ua')
+  })
+})

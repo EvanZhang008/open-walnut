@@ -178,6 +178,10 @@ describe('headers that cross', () => {
     })).toEqual({ 'content-type': 'application/json', accept: 'application/json', 'if-none-match': '"abc"' })
   })
 
+  it('a test window\'s marker crosses, so its writes are test objects on the Mac too', () => {
+    expect(forwardRequestHeaders({ 'x-walnut-test-run': 'webdriver', 'x-walnut-caller-sid': 'x' })).toEqual({ 'x-walnut-test-run': 'webdriver' })
+  })
+
   it('a header value with a line break is dropped', () => {
     expect(forwardRequestHeaders({ accept: 'a\r\nx-walnut-origin: __local__' })).toEqual({})
   })

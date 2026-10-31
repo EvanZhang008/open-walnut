@@ -280,10 +280,15 @@ export function parseConsoleCopyCall(method: unknown, url: unknown): { rel: stri
   return { rel: pathname.slice('/api'.length), pathname, search }
 }
 
-/** The request headers that cross: what a route reads to understand the body and the cache. */
+/**
+ * The request headers that cross: what a route reads to understand the body and the cache,
+ * and a test window's marker (core/test-run.ts), so what a test run writes through the
+ * companion is a test object on the Mac too, never the user's (2026-10-31: prefs).
+ */
 const REQUEST_HEADERS = new Set([
   'accept', 'accept-language', 'content-type',
   'if-match', 'if-none-match', 'if-modified-since', 'if-unmodified-since',
+  'x-walnut-test-run',
 ])
 
 /**
@@ -309,7 +314,7 @@ function pick(input: unknown, keep: (name: string) => boolean): Record<string, s
   return out
 }
 
-/** Only the content and cache headers: never a credential, a cookie, or a Walnut caller header. */
+/** Only the content and cache headers and the test-run marker: never a credential, a cookie, or a Walnut caller header. */
 export function forwardRequestHeaders(input: unknown): Record<string, string> {
   return pick(input, (n) => REQUEST_HEADERS.has(n))
 }

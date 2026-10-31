@@ -8,6 +8,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { getConfig, updateConfig } from '../../core/config-manager.js'
 import type { Config } from '../../core/types.js'
 import { bus, EventNames } from '../../core/event-bus.js'
+import { testRunPrefsRead, testRunPrefsWrite } from '../../core/test-run-prefs.js'
 
 export const orderingRouter = Router()
 
@@ -75,13 +76,35 @@ function parseSeparator(raw: unknown): Separator | null {
 }
 
 // GET /api/ordering
+export interface Ordering { projects: string[]; separators: Separator[] }
+
+/** The order this request reads: config.yaml, with a test run's own lists on top (test-run-prefs.ts). */
+export async function readOrdering(): Promise<Ordering> {
+  const config = await getConfig()
+  return withTestRunOrdering({ projects: config.ordering?.projects ?? [], separators: config.ordering?.separators ?? [] })
+}
+
+/** `o` with the lists the current test run set (as is for a real request). */
+export function withTestRunOrdering(o: Ordering): Ordering {
+  const own = testRunPrefsRead<Partial<Ordering>>('ordering')
+  return own ? { ...o, ...own } : o
+}
+
+/** Set one part of the order: a test run's own copy, else config.yaml. */
+export async function writeOrdering<K extends keyof Ordering>(key: K, value: Ordering[K]): Promise<Ordering[K]> {
+  const own = testRunPrefsWrite<Partial<Ordering>>('ordering', () => ({}))
+  if (own) { own[key] = value; return value }
+  const config = await getConfig()
+  if (!config.ordering) config.ordering = {}
+  config.ordering[key] = value
+  await updateConfig({ ordering: config.ordering })
+  bus.emit(EventNames.CONFIG_CHANGED, { key: 'ordering' }, ['web-ui'])
+  return value
+}
+
 orderingRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const config = await getConfig()
-    res.json({
-      projects: config.ordering?.projects ?? [],
-      separators: config.ordering?.separators ?? [],
-    })
+    res.json(await readOrdering())
   } catch (err) {
     next(err)
   }
@@ -110,12 +133,7 @@ orderingRouter.put('/separators', async (req: Request, res: Response, next: Next
     }
     // Last id wins — a client that replays a stale list can't fork one line into two.
     const deduped = [...new Map(parsed.map((s) => [s.id, s])).values()]
-    const config = await getConfig()
-    if (!config.ordering) config.ordering = {}
-    config.ordering.separators = deduped
-    await updateConfig({ ordering: config.ordering })
-    bus.emit(EventNames.CONFIG_CHANGED, { key: 'ordering' }, ['web-ui'])
-    res.json({ separators: deduped })
+    res.json({ separators: await writeOrdering('separators', deduped) })
   } catch (err) {
     next(err)
   }
@@ -129,12 +147,7 @@ orderingRouter.put('/projects', async (req: Request, res: Response, next: NextFu
       res.status(400).json({ error: 'order must be an array of strings' })
       return
     }
-    const config = await getConfig()
-    if (!config.ordering) config.ordering = {}
-    config.ordering.projects = order
-    await updateConfig({ ordering: config.ordering })
-    bus.emit(EventNames.CONFIG_CHANGED, { key: 'ordering' }, ['web-ui'])
-    res.json({ projects: config.ordering.projects })
+    res.json({ projects: await writeOrdering('projects', order) })
   } catch (err) {
     next(err)
   }

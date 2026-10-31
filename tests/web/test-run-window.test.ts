@@ -15,6 +15,13 @@ describe('decideTestRun', () => {
     expect(decideTestRun(PAGE, null, true)).toEqual({ label: 'webdriver', store: undefined })
   })
 
+  it('an automated window names its browser, so one run\'s prefs stay its own', () => {
+    expect(decideTestRun(PAGE, null, true, 'k3x9q2')).toEqual({ label: 'webdriver-k3x9q2', store: undefined })
+    expect(decideTestRun(PAGE, null, false, 'k3x9q2')).toEqual({ label: null, store: undefined })
+    // An asked label is the asker's, whoever drives the window.
+    expect(decideTestRun(`${PAGE}?walnut-test-run=org`, null, true, 'k3x9q2').label).toBe('org')
+  })
+
   it('?walnut-test-run=<label> starts one for the tab, =0 ends it', () => {
     expect(decideTestRun(`${PAGE}?walnut-test-run=org%20chart`, null, false)).toEqual({ label: 'org chart', store: 'org chart' })
     expect(decideTestRun(PAGE, 'org chart', false)).toEqual({ label: 'org chart', store: undefined })

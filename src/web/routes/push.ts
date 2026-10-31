@@ -37,6 +37,7 @@ import { revokePushTokensForDevice, takeBackPushRegistration } from '../../core/
 import { pushClaimOf, pushTokenSha } from '../../core/push/claims.js'
 import { callPrimaryControl, type RelayFailure } from './v1-control-relay.js'
 import type { SessionControlAction } from '../../core/sessions/session-controls.js'
+import { ambientTestRun } from '../../core/test-run.js'
 
 export const pushRouter = Router()
 
@@ -290,7 +291,9 @@ pushRouter.post('/preferences', async (req, res, next) => {
   try {
     const body = (req.body ?? {}) as { mode?: unknown; letterTypes?: unknown }
     const device = deviceOf(req)
-    if (CLOUD_MODE) {
+    // A test run's choice stays in its own copy here (core/test-run-prefs.ts), never relayed:
+    // on the companion, whose own rows are not the phones', it reads as an unknown device.
+    if (CLOUD_MODE && !ambientTestRun()) {
       const result = await relayToPrimary(res, 'server.push.preferences', {
         mode: body.mode,
         ...(body.letterTypes !== undefined ? { letterTypes: body.letterTypes } : {}),

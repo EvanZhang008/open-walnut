@@ -32,6 +32,7 @@ import { log } from '../../logging/index.js'
 import { MAX_KEY_LEN, machineLocalKey, syncableKey } from '../../core/ui-prefs-keys.js'
 import { isCompanion, isHostReplicaProgram } from '../../core/server-role.js'
 import { NeedsLeaderError } from '../../core/replication/needs-leader.js'
+import { testRunPrefsRead, testRunPrefsWrite } from '../../core/test-run-prefs.js'
 import { KIND_NOT_COPIED, COPY_AS_OF_HEADER, copyKindAsOf } from '../../core/replication/kinds/gate.js'
 
 export const uiPrefsRouter = Router()
@@ -138,6 +139,12 @@ async function loadPrefs(): Promise<Record<string, PrefEntry>> {
   return prefs
 }
 
+/** A test run's own writes (test-run-prefs.ts), over the user's prefs it reads. */
+function withTestRunWrites(prefs: Record<string, PrefEntry>): Record<string, PrefEntry> {
+  const own = testRunPrefsRead<Record<string, PrefEntry>>('ui-prefs')
+  return own ? { ...prefs, ...own } : prefs
+}
+
 // GET /api/ui-prefs → { prefs: Record<string, { v: string|null, ts: number }> }
 uiPrefsRouter.get('/', async (_req: Request, res: Response, next: NextFunction) => {
   try {
@@ -149,7 +156,7 @@ uiPrefsRouter.get('/', async (_req: Request, res: Response, next: NextFunction) 
       const prefs = asOf === null ? null : await (await import('../../core/replication/kinds/prefs.js')).readUiPrefsCopy()
       if (prefs) {
         res.setHeader(COPY_AS_OF_HEADER, String(asOf))
-        res.json({ prefs })
+        res.json({ prefs: withTestRunWrites(prefs) })
         return
       }
     }
@@ -158,10 +165,10 @@ uiPrefsRouter.get('/', async (_req: Request, res: Response, next: NextFunction) 
       const prefs = await (await import('../../core/replication/kinds/prefs.js')).readUiPrefsCopy()
       // No copy yet (or the host turned it off): not "no prefs", which a client would merge as such.
       if (!prefs) throw new NeedsLeaderError(KIND_NOT_COPIED)
-      res.json({ prefs })
+      res.json({ prefs: withTestRunWrites(prefs) })
       return
     }
-    res.json({ prefs: await loadPrefs() })
+    res.json({ prefs: withTestRunWrites(await loadPrefs()) })
   } catch (err) {
     next(err)
   }
@@ -170,13 +177,20 @@ uiPrefsRouter.get('/', async (_req: Request, res: Response, next: NextFunction) 
 // PUT /api/ui-prefs { prefs: { key: { v, ts } } } — LWW merge; v null = delete tombstone.
 uiPrefsRouter.put('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    // The copy is the Mac's: a layout change made here waits for it.
-    if (isHostReplicaProgram()) throw new NeedsLeaderError('prefs_writes_need_mac')
     const patch = req.body?.prefs
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
       res.status(400).json({ error: 'prefs object is required' })
       return
     }
+    // A test run writes its own copy, never the user's file (test-run-prefs.ts).
+    const own = testRunPrefsWrite<Record<string, PrefEntry>>('ui-prefs', () => ({}))
+    if (own) {
+      applyUiPrefsPatch(own, patch)
+      res.json({ ok: true })
+      return
+    }
+    // The copy is the Mac's: a layout change made here waits for it.
+    if (isHostReplicaProgram()) throw new NeedsLeaderError('prefs_writes_need_mac')
     if (isCompanion()) {
       res.json(await putOnMac(patch as Record<string, unknown>))
       return
@@ -201,6 +215,14 @@ export class UiPrefsInputError extends Error {}
 export async function mergeUiPrefs(patch: unknown): Promise<{ ok: true }> {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new UiPrefsInputError('prefs object is required')
   const prefs = await loadPrefs()
+  applyUiPrefsPatch(prefs, patch)
+  await writeJsonFile(PREFS_FILE(), prefs)
+  for (const cb of writeListeners) { try { cb() } catch { /* never fails the write */ } }
+  return { ok: true }
+}
+
+/** The PUT's LWW merge of `patch` into `prefs`, in place (the file's, or a test run's copy). */
+function applyUiPrefsPatch(prefs: Record<string, PrefEntry>, patch: object): void {
   for (const [key, value] of Object.entries(patch as Record<string, unknown>)) {
     if (!syncableKey(key) || key.length > MAX_KEY_LEN) continue
     if (!value || typeof value !== 'object') continue
@@ -216,9 +238,6 @@ export async function mergeUiPrefs(patch: unknown): Promise<{ ok: true }> {
   if (keys.length > MAX_KEYS) {
     for (const k of keys.slice(0, keys.length - MAX_KEYS)) delete prefs[k]
   }
-  await writeJsonFile(PREFS_FILE(), prefs)
-  for (const cb of writeListeners) { try { cb() } catch { /* never fails the write */ } }
-  return { ok: true }
 }
 
 /** One bridge frame is shared by every relay: a PUT larger than this is refused, never sent. */

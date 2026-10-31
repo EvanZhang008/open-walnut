@@ -8,6 +8,8 @@ import { bus, EventNames } from '../../core/event-bus.js'
 import { isHostReplicaProgram } from '../../core/server-role.js'
 import { NeedsLeaderError } from '../../core/replication/needs-leader.js'
 import { KIND_NOT_COPIED } from '../../core/replication/kinds/gate.js'
+import { testRunPrefsRead, testRunPrefsWrite } from '../../core/test-run-prefs.js'
+import { ambientTestRun } from '../../core/test-run.js'
 
 // Express 5 ALREADY percent-decodes route params. Do NOT re-decode
 // `req.params.name`: a project name with a literal '%' double-decodes and
@@ -38,7 +40,55 @@ async function canonicalProjectName(name: string): Promise<string> {
  * (core/replication/kinds/prefs.ts); with no copy yet (or the host turned it
  * off) it answers needs_leader kind_not_copied, never "no favorites".
  */
-export async function readFavorites(): Promise<{ projects: string[]; notes: string[] }> {
+export async function readFavorites(): Promise<Favorites> {
+  // A test run reads the user's favorites with its own changes on top (test-run-prefs.ts).
+  return withTestRunFavorites(await readUserFavorites())
+}
+
+interface Favorites { projects: string[]; notes: string[] }
+
+/** A test run's changes: a project (by lowercased name) added under its name, or removed (null); a note added or removed. */
+interface FavoritesChanges { projects: Map<string, string | null>; notes: Map<string, boolean> }
+
+/** `f` with the current test run's changes on top (as is for a real request). */
+export function withTestRunFavorites(f: Favorites): Favorites {
+  const own = testRunPrefsRead<FavoritesChanges>('favorites')
+  if (!own) return f
+  const projects = f.projects.filter((p) => own.projects.get(p.toLowerCase()) !== null)
+  for (const [lower, name] of own.projects) if (name && !projects.some((p) => p.toLowerCase() === lower)) projects.push(name)
+  const notes = f.notes.filter((n) => own.notes.get(n) !== false)
+  for (const [n, on] of own.notes) if (on && !notes.includes(n)) notes.push(n)
+  return { projects, notes }
+}
+
+/** Apply `edit` to the favorites this request writes: a test run's changes, else config.yaml. */
+export async function editFavorites(edit: (f: Favorites) => void): Promise<Favorites> {
+  if (ambientTestRun()) {
+    const now = withTestRunFavorites(await readUserFavorites())
+    const next: Favorites = { projects: [...now.projects], notes: [...now.notes] }
+    edit(next)
+    const own = testRunPrefsWrite<FavoritesChanges>('favorites', () => ({ projects: new Map(), notes: new Map() }))!
+    const lower = (list: string[]) => new Set(list.map((p) => p.toLowerCase()))
+    const had = lower(now.projects)
+    const has = lower(next.projects)
+    for (const p of now.projects) if (!has.has(p.toLowerCase())) own.projects.set(p.toLowerCase(), null)
+    for (const p of next.projects) if (!had.has(p.toLowerCase())) own.projects.set(p.toLowerCase(), p)
+    for (const n of now.notes) if (!next.notes.includes(n)) own.notes.set(n, false)
+    for (const n of next.notes) if (!now.notes.includes(n)) own.notes.set(n, true)
+    return next
+  }
+  const config = await getConfig()
+  if (!config.favorites) config.favorites = {}
+  const f: Favorites = { projects: [...(config.favorites.projects ?? [])], notes: [...(config.favorites.notes ?? [])] }
+  edit(f)
+  if (config.favorites.projects || f.projects.length) config.favorites.projects = f.projects
+  if (config.favorites.notes || f.notes.length) config.favorites.notes = f.notes
+  await updateConfig({ favorites: config.favorites })
+  bus.emit(EventNames.CONFIG_CHANGED, { key: 'favorites' }, ['web-ui'])
+  return f
+}
+
+async function readUserFavorites(): Promise<Favorites> {
   // Turned off for this replica (Settings): the Mac's favorites alone, never this box's config.
   await (await import('../../core/replication/kinds/gate.js')).assertCopyKept('prefs')
   if (isHostReplicaProgram()) {
@@ -69,16 +119,11 @@ favoritesRouter.get('/', async (_req: Request, res: Response, next: NextFunction
 favoritesRouter.post('/projects/:name', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const name = await canonicalProjectName(req.params.name as string)
-    const config = await getConfig()
-    if (!config.favorites) config.favorites = {}
-    if (!config.favorites.projects) config.favorites.projects = []
     const lower = name.toLowerCase()
-    if (!config.favorites.projects.some((p) => p.toLowerCase() === lower)) {
-      config.favorites.projects.push(name)
-    }
-    await updateConfig({ favorites: config.favorites })
-    bus.emit(EventNames.CONFIG_CHANGED, { key: 'favorites' }, ['web-ui'])
-    res.json({ projects: config.favorites.projects })
+    const f = await editFavorites((f) => {
+      if (!f.projects.some((p) => p.toLowerCase() === lower)) f.projects.push(name)
+    })
+    res.json({ projects: f.projects })
   } catch (err) {
     next(err)
   }
@@ -88,12 +133,8 @@ favoritesRouter.post('/projects/:name', async (req: Request, res: Response, next
 favoritesRouter.delete('/projects/:name', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const lower = (req.params.name as string).toLowerCase()
-    const config = await getConfig()
-    if (!config.favorites) config.favorites = {}
-    config.favorites.projects = (config.favorites.projects ?? []).filter((p) => p.toLowerCase() !== lower)
-    await updateConfig({ favorites: config.favorites })
-    bus.emit(EventNames.CONFIG_CHANGED, { key: 'favorites' }, ['web-ui'])
-    res.json({ projects: config.favorites.projects })
+    const f = await editFavorites((f) => { f.projects = f.projects.filter((p) => p.toLowerCase() !== lower) })
+    res.json({ projects: f.projects })
   } catch (err) {
     next(err)
   }
@@ -110,15 +151,8 @@ favoritesRouter.post('/notes', async (req: Request, res: Response, next: NextFun
       res.status(400).json({ error: 'path is required' })
       return
     }
-    const config = await getConfig()
-    if (!config.favorites) config.favorites = {}
-    if (!config.favorites.notes) config.favorites.notes = []
-    if (!config.favorites.notes.includes(path)) {
-      config.favorites.notes.push(path)
-    }
-    await updateConfig({ favorites: config.favorites })
-    bus.emit(EventNames.CONFIG_CHANGED, { key: 'favorites' }, ['web-ui'])
-    res.json({ notes: config.favorites.notes })
+    const f = await editFavorites((f) => { if (!f.notes.includes(path)) f.notes.push(path) })
+    res.json({ notes: f.notes })
   } catch (err) {
     next(err)
   }
@@ -132,12 +166,8 @@ favoritesRouter.delete('/notes', async (req: Request, res: Response, next: NextF
       res.status(400).json({ error: 'path is required' })
       return
     }
-    const config = await getConfig()
-    if (!config.favorites) config.favorites = {}
-    config.favorites.notes = (config.favorites.notes ?? []).filter((p) => p !== path)
-    await updateConfig({ favorites: config.favorites })
-    bus.emit(EventNames.CONFIG_CHANGED, { key: 'favorites' }, ['web-ui'])
-    res.json({ notes: config.favorites.notes })
+    const f = await editFavorites((f) => { f.notes = f.notes.filter((p) => p !== path) })
+    res.json({ notes: f.notes })
   } catch (err) {
     next(err)
   }

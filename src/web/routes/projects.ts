@@ -103,7 +103,10 @@ export async function buildProjectsPayload(): Promise<{
     collectCounts(),
     getConfig(),
   ])
-  const favorites = new Set((config.favorites?.projects ?? []).map((p) => p.toLowerCase()))
+  // A test run reads its own favorites (test-run-prefs.ts), the ones its writes changed.
+  const { withTestRunFavorites } = await import('./favorites.js')
+  const starred = withTestRunFavorites({ projects: config.favorites?.projects ?? [], notes: [] }).projects
+  const favorites = new Set(starred.map((p) => p.toLowerCase()))
 
   // A test run's project (src/core/test-run.ts) is in no list while only test work lives in it.
   const shown = listedProjects(storeProjects, (name) => {

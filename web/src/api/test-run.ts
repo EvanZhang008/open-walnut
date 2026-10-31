@@ -19,11 +19,17 @@ function clean(raw: string): string {
   return raw.replace(/[^\x20-\x7e]/g, '').trim().slice(0, 60);
 }
 
-/** Pure: the label for a page, given its URL, its stored label and whether automation drives it. */
+/**
+ * Pure: the label for a page, given its URL, its stored label and whether automation drives it.
+ * An automated window's label names its browser context (`browser`, kept in its localStorage),
+ * so the layout one automated run writes stays that run's (src/core/test-run-prefs.ts) and the
+ * next fresh browser opens on the user's own (2026-10-31).
+ */
 export function decideTestRun(
   href: string,
   stored: string | null,
   webdriver: boolean,
+  browser?: string,
 ): { label: string | null; store: string | undefined } {
   let asked: string | null = null;
   try { asked = new URL(href).searchParams.get(PARAM); } catch { /* unreadable URL: no ask */ }
@@ -35,10 +41,24 @@ export function decideTestRun(
   }
   if (stored === OFF) return { label: null, store: undefined };
   if (stored) return { label: clean(stored) || null, store: undefined };
-  return { label: webdriver ? 'webdriver' : null, store: undefined };
+  return { label: webdriver ? (browser ? `webdriver-${browser}` : 'webdriver') : null, store: undefined };
 }
 
 let cached: string | null | undefined;
+
+const BROWSER_KEY = 'walnut-test-run-browser';
+
+/** This browser context's id, made once and kept in its localStorage (none when storage is blocked). */
+function browserId(): string | undefined {
+  try {
+    let id = window.localStorage.getItem(BROWSER_KEY);
+    if (!id || !/^[a-z0-9]{6,16}$/.test(id)) {
+      id = Math.random().toString(36).slice(2, 10).padEnd(6, '0');
+      window.localStorage.setItem(BROWSER_KEY, id);
+    }
+    return id;
+  } catch { return undefined; }
+}
 
 /** This window's test-run label, or null for a person's window. Decided once per page load. */
 export function testRunLabel(): string | null {
@@ -47,7 +67,7 @@ export function testRunLabel(): string | null {
   let stored: string | null = null;
   try { stored = window.sessionStorage.getItem(PARAM); } catch { /* storage blocked */ }
   const webdriver = typeof navigator !== 'undefined' && navigator.webdriver === true;
-  const { label, store } = decideTestRun(window.location.href, stored, webdriver);
+  const { label, store } = decideTestRun(window.location.href, stored, webdriver, webdriver ? browserId() : undefined);
   try {
     if (store !== undefined) window.sessionStorage.setItem(PARAM, store);
   } catch { /* storage blocked: the label still holds for this load */ }

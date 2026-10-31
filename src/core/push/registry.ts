@@ -21,6 +21,7 @@ import { log } from '../../logging/index.js'
 import { apnsStatus } from './apns.js'
 import { legacyTokenPrefix, tokenKind, tokenTag } from './send.js'
 import { ACTIVE_LEASE_MS, parseMode, type LetterPushMode } from './letter-push-policy.js'
+import { testRunPrefsRead, testRunPrefsWrite } from '../test-run-prefs.js'
 import { LETTER_TYPES } from '../human-inbox/types.js'
 import type { PushTokenEntry } from '../types.js'
 import { CLAIM_RE, MAX_LIVE_CLAIMS, TOKEN_SHA_RE, mergeClaims, pushTokenSha } from './claims.js'
@@ -324,6 +325,20 @@ export async function setDevicePushPreferences(
   }
   const mode = parseMode(body.mode)
   const letterTypes = cleanLetterTypes(body.letterTypes)
+  // A test run's choice is its own copy, per device, never the user's config (test-run-prefs.ts),
+  // answered as the real write would be: an unknown device is still a 404.
+  const own = testRunPrefsWrite<Map<string, PreferencesResult>>('push-preferences', () => new Map())
+  if (own) {
+    const tokens = (await getConfig()).push_tokens ?? []
+    if (!tokens.some((t: PushTokenEntry) => ownedBy(t, device, origin))) {
+      throw new PushRegistryError('This device has no registered push token — register it again', 'device_not_registered', 404)
+    }
+    const key = `${origin}:${device}`
+    // Like the real write, a choice that names no letter types keeps the ones set before.
+    const kept = letterTypes ?? own.get(key)?.letterTypes
+    own.set(key, { ok: true, mode, ...(kept !== undefined ? { letterTypes: kept } : {}) })
+    return { ok: true, mode, ...(letterTypes ? { letterTypes } : {}) }
+  }
 
   let found = 0
   await updatePushTokens((tokens) => {
@@ -456,6 +471,8 @@ export async function pushRegistrationStatus(
   const apns = await apnsStatus()
   const { keyName } = resolveDeviceIdentity(device)
   const mine = tokens.find((t: PushTokenEntry) => ownedBy(t, keyName, origin))
+  // A test run reads back the choice it made (its own copy, setDevicePushPreferences).
+  const own = testRunPrefsRead<Map<string, PreferencesResult>>('push-preferences')?.get(`${origin}:${device}`)
   return {
     registered: tokens.length > 0,
     // `thisDevice` absent while `registered` is true is the state a client should
@@ -472,9 +489,10 @@ export async function pushRegistrationStatus(
     ...(mine
       ? {
         thisDevice: {
-          mode: parseMode(mine.mode),
+          mode: own?.mode ?? parseMode(mine.mode),
           kind: tokenKind(mine),
-          letterTypes: mine.letter_types,
+          // An empty list clears the filter, as the real write deletes `letter_types`.
+          letterTypes: own?.letterTypes !== undefined ? (own.letterTypes.length ? own.letterTypes : undefined) : mine.letter_types,
         },
       }
       : {}),
