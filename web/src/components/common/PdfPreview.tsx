@@ -23,9 +23,11 @@ const LOAD_TIMEOUT_MS = 120_000;
 type PdfModule = typeof import('pdfjs-dist');
 type Gesture = Event & { scale: number; clientX: number; clientY: number };
 
-function PdfPage({ pdf, lib, number, size, scale, root, onSize }: {
+function PdfPage({ pdf, lib, number, size, scale, root, onSize, onJump }: {
   pdf: PDFDocumentProxy; lib: PdfModule; number: number; size: PageSize; scale: number;
   root: React.RefObject<HTMLDivElement | null>; onSize: (number: number, size: PageSize) => void;
+  /** A link took the reader to this page. */
+  onJump: (number: number) => void;
 }) {
   const pageRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -77,6 +79,7 @@ function PdfPage({ pdf, lib, number, size, scale, root, onSize }: {
       const pane = scroll.getBoundingClientRect();
       scroll.scrollLeft += box.left - pane.left + x * box.width / viewport.width;
       scroll.scrollTop += box.top - pane.top + y * box.height / viewport.height;
+      onJump(index + 1);
     })().catch(() => {});
   }
 
@@ -335,8 +338,21 @@ export function PdfPreview({ path, host, reloadToken }: Props) {
     };
   }, []);
 
+  // The page a link jumped to is the page count's until the reader scrolls on:
+  // a destination low on its page leaves the next page across the reading line.
+  const jumpRef = useRef<{ page: number; top: number } | undefined>(undefined);
+  const onJump = useCallback((page: number) => {
+    const root = scrollRef.current;
+    if (!root) return;
+    jumpRef.current = { page, top: root.scrollTop };
+    setPageNumber(page);
+  }, []);
+
   function onScroll() {
     const root = scrollRef.current!;
+    const jump = jumpRef.current;
+    if (jump && Math.abs(root.scrollTop - jump.top) < 2) { setPageNumber(jump.page); return; }
+    jumpRef.current = undefined;
     const y = root.getBoundingClientRect().top + root.clientHeight / 3;
     const page = Array.from(pagesRef.current?.children ?? []).find((el) => el.getBoundingClientRect().bottom >= y) as HTMLElement | undefined;
     if (page) setPageNumber(Number(page.dataset.page));
@@ -371,7 +387,7 @@ export function PdfPreview({ path, host, reloadToken }: Props) {
           : !document ? <div className="fv-pdf-status" role="status">Loading PDF…</div> : null}
         <div ref={pagesRef} className="fv-pdf-pages">
           {document?.sizes.map((size, index) => <PdfPage key={index} pdf={document.pdf} lib={document.lib}
-            number={index + 1} size={size} scale={scale} root={scrollRef} onSize={onPageSize} />)}
+            number={index + 1} size={size} scale={scale} root={scrollRef} onSize={onPageSize} onJump={onJump} />)}
         </div>
       </div>
     </div>
