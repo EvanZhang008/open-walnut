@@ -37,7 +37,7 @@ import { setLeaderPresence } from '../core/server-role.js'
 import { readHostServerEnv, type HostServerEnv } from './env.js'
 import { createDaemonLink, type DaemonLink, type FollowerView } from './daemon-link.js'
 import { chooseRoute, leaderAnswers, SUSPECT_MS, type Route } from './route.js'
-import { forwardHttp, forwardUpgrade, type ForwardTarget } from './proxy.js'
+import { forwardHttp, forwardUpgrade, isLinkDropped, type ForwardTarget } from './proxy.js'
 import { createHostExpose, followExposeSettings, type HostExpose } from './expose.js'
 import { answerTunnelProbe } from '../core/expose/probe.js'
 import { sendAlone } from './pages.js'
@@ -157,16 +157,26 @@ export async function startHostServer(opts: HostServerOptions = {}): Promise<Hos
     }
     const route = routeNow()
     if (route.kind === 'alone') return answerAlone(req, res, route.why)
-    forwardHttp(req, res, target(route), (err) => {
+    const read = req.method === 'GET' || req.method === 'HEAD'
+    let again = false
+    const onFail = (err: Error): void => {
+      // The link under it dropped, not the target: a read goes to it once more (proxy.ts isLinkDropped).
+      if (read && !again && isLinkDropped(err)) {
+        again = true
+        log.web.info('host server: a read lost its link, sending it again', { to: route.kind })
+        forwardHttp(req, res, target(route), onFail)
+        return
+      }
       suspectOf(route.kind, err)
       const next = routeNow()
       // A read may go to the next one; a write that may have reached the first is never repeated.
-      if (next.kind !== 'alone' && next.kind !== route.kind && (req.method === 'GET' || req.method === 'HEAD')) {
+      if (next.kind !== 'alone' && next.kind !== route.kind && read) {
         forwardHttp(req, res, target(next), (err2) => { suspectOf(next.kind, err2); answerAlone(req, res, 'nobody-answers') })
         return
       }
       answerAlone(req, res, next.kind === 'alone' ? next.why : 'nobody-answers')
-    })
+    }
+    forwardHttp(req, res, target(route), onFail)
   }
 
   function handlePublicUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {

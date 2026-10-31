@@ -25,6 +25,7 @@ import { createDispatcher, closeFrame, ensureOpId, writeBudgetOf, WRITE_BUDGET_M
 import { classify, type RouteDecision } from '../../src/replica/route-table.js'
 import type { Route } from '../../src/host-server/route.js'
 import { notSent } from '../../src/host-server/daemon-link.js'
+import { LINK_DROPPED } from '../../src/host-server/proxy.js'
 import { encodeBearerProtocol, offeredProtocols, selectWsProtocol, wsProtocolsFor, WS_APP_PROTOCOL } from '../../src/lib/ws-bearer-protocol.js'
 
 interface Seen { method: string; url: string; headers: http.IncomingHttpHeaders; body: string }
@@ -101,6 +102,8 @@ const state = {
   /** The route after the first failure (a read retried), else the same. */
   routeAfterFail: null as Route | null,
   failConnect: new Set<'leader' | 'companion'>(),
+  /** The next this many streams close as the daemon's relay closes one whose link dropped. */
+  linkDrops: 0,
   /** A stream takes this long to open (or to fail). */
   connectDelayMs: 0,
   /** Whether the request carries a known device token (an away write body is read only then). */
@@ -133,6 +136,7 @@ function reset(): void {
   state.route = { kind: 'leader' }
   state.routeAfterFail = null
   state.failConnect.clear()
+  state.linkDrops = 0
   state.connectDelayMs = 0
   state.authorized = true
   state.connects = []; state.suspects = []; state.ops = []; state.opAnswers = []; state.logs = []
@@ -179,6 +183,7 @@ beforeAll(async () => {
       state.connects.push(kind)
       if (state.connectDelayMs) await new Promise((r) => setTimeout(r, state.connectDelayMs))
       if (state.failConnect.has(kind)) throw new Error(`no stream to the ${kind}`)
+      if (state.linkDrops > 0) { state.linkDrops--; throw new Error(LINK_DROPPED) }
       return connectTo(kind === 'leader' ? mac.port : companion.port)
     },
     suspect: (kind) => {
@@ -291,6 +296,31 @@ describe('the Mac answers', () => {
     expect(r.json).toMatchObject({ from: 'companion' })
     expect(r.headers['x-walnut-answered-via']).toBe('companion')
     expect(companion.seen[0]!.headers).toMatchObject({ host: 'companion.example', origin: 'https://companion.example' })
+    expect(state.suspects).toEqual(['leader'])
+  })
+
+  it('a read whose stream lost its link (not the Mac) goes to the Mac once more, and the Mac is not suspect', async () => {
+    state.linkDrops = 1
+    const r = await call('GET', '/api/tasks?lane=dropped')
+    expect(r.json).toMatchObject({ from: 'mac', url: '/api/tasks?lane=dropped' })
+    expect(state.connects).toEqual(['leader', 'leader'])
+    expect(state.suspects).toEqual([])
+  })
+
+  it('a link that drops twice: the second time is the Mac\'s failure, as before', async () => {
+    state.linkDrops = 2
+    state.routeAfterFail = { kind: 'alone', why: 'mac-away' }
+    const r = await call('GET', '/api/tasks')
+    expect(state.connects).toEqual(['leader', 'leader'])
+    expect(state.suspects).toEqual(['leader'])
+    expect(r.headers[OFFLINE_HEADER]).toBeTruthy()
+  })
+
+  it('a write whose stream lost its link is never sent again', async () => {
+    state.linkDrops = 1
+    state.routeAfterFail = { kind: 'alone', why: 'mac-away' }
+    await call('POST', '/api/tasks', { body: JSON.stringify({ title: 'Acme' }) })
+    expect(state.connects).toEqual(['leader'])
     expect(state.suspects).toEqual(['leader'])
   })
 

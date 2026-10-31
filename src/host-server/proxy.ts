@@ -75,6 +75,20 @@ function request(req: IncomingMessage, to: ForwardTarget, socket: Duplex, upgrad
   } as http.RequestOptions)
 }
 
+/**
+ * The words the daemon's stream relay closes a stream with when the link it rode dropped
+ * (providers/stream-relay-core.ts `dropLink`): the target may well answer on its other link.
+ * 2026-10-31: the Mac's stream lane was stopped as a read went out; the daemon had routed it to
+ * the lane, closed it with these words, and the read was answered "Neither your Mac nor your
+ * cloud companion is answering" while the Mac's session link was up.
+ */
+export const LINK_DROPPED = 'the other server is no longer linked to this host'
+
+/** A forward that failed only because the link carrying it dropped: a read may go to the same target again. */
+export function isLinkDropped(err: Error | undefined): boolean {
+  return !!err && err.message.includes(LINK_DROPPED)
+}
+
 /** Forward one HTTP request. `onFail` runs when the target could not be reached (nothing was sent back yet). */
 export function forwardHttp(req: IncomingMessage, res: ServerResponse, to: ForwardTarget, onFail: (err: Error) => void, opts?: ForwardOptions): void {
   let gone = false

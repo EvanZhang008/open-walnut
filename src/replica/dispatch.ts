@@ -54,7 +54,7 @@ import crypto from 'node:crypto'
 import type http from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
-import { forwardHttp, forwardUpgrade, type ForwardTarget, type UpgradeForward } from '../host-server/proxy.js'
+import { forwardHttp, forwardUpgrade, isLinkDropped, type ForwardTarget, type UpgradeForward } from '../host-server/proxy.js'
 import { wasNotSent } from '../host-server/daemon-link.js'
 import type { Route } from '../host-server/route.js'
 import { classify, isRead, type AwayRule, type RouteDecision } from './route-table.js'
@@ -608,7 +608,15 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
     const write = !isRead(req.method ?? 'GET')
     // A read the Mac went away under (a flip, before any answer byte): the copies answer it.
     const away = () => { if (!res.headersSent && !res.destroyed) answerAway(req, res, next, decision, 'mac-away') }
-    forward(req, res, route, write, (err, sent) => {
+    let again = false
+    const onFail = (err: Error, sent: boolean): void => {
+      // The link under it dropped, not the target: a read goes to it once more (proxy.ts isLinkDropped).
+      if (!write && !again && isLinkDropped(err)) {
+        again = true
+        deps.log('info', 'replica: a read lost its link, sending it again', { to: route.kind, path: pathOf(req) })
+        forward(req, res, route, false, onFail, { away })
+        return
+      }
       deps.suspect(route.kind, err)
       if (!write) {
         // A read may go to the next one, and is answered here when nobody else can.
@@ -629,7 +637,8 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       }
       // Provably not sent: answered as away.
       answerAway(req, res, next, decision, 'unreachable')
-    }, { away })
+    }
+    forward(req, res, route, write, onFail, { away })
   }
 
   return {
