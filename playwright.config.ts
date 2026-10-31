@@ -3,6 +3,7 @@ import path from 'node:path'
 import { defineConfig, devices } from '@playwright/test'
 import { perRunWorkers } from './tests/e2e/browser/pw-concurrency.js'
 import { engageGate } from './tests/e2e/browser/pw-gate.js'
+import { sideConfigSpecs } from './tests/e2e/browser/side-config-specs.js'
 import { bunCommand } from './tests/helpers/bun-runtime.js'
 
 const testPort = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -23,12 +24,15 @@ const browserDir = path.join(import.meta.dirname, 'tests/e2e/browser')
 const hostFixtureSpecs = fs.readdirSync(browserDir)
   .filter((f) => f.endsWith('.spec.ts') && HOST_FIXTURE_CALL.test(fs.readFileSync(path.join(browserDir, f), 'utf8')))
   .map((f) => `**/${f}`)
+// Specs with their own config and fixture (replica, cloud host, host alone, ...).
+// Every project names them again: a project's testIgnore replaces the top-level one.
+const sideSpecs = sideConfigSpecs(browserDir)
 
 export default defineConfig({
   testDir: 'tests/e2e/browser',
-  // Its own fixture and config (tests/e2e/browser/replica.config.ts); the main
-  // config runs replica-smoke.spec.ts for that path instead.
-  testIgnore: ['**/replica-away-read.spec.ts', '**/replica-away-write.spec.ts', '**/replica-away-notes.spec.ts', '**/replica-away-ask.spec.ts'],
+  // Their own fixture and config (tests/e2e/browser/side-config-specs.ts); the main
+  // config runs replica-smoke.spec.ts for the replica path instead.
+  testIgnore: sideSpecs,
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
@@ -60,18 +64,19 @@ export default defineConfig({
     {
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
-      testIgnore: hostFixtureSpecs,
+      testIgnore: [...sideSpecs, ...hostFixtureSpecs],
     },
     {
       name: 'chromium-host-fixture',
       use: { ...devices['Desktop Chrome'] },
       testMatch: hostFixtureSpecs,
+      testIgnore: sideSpecs,
       workers: 1,
     },
     // The desktop app is a WKWebView, so a desktop-only scroll/paint bug needs a
     // WebKit run to count as verified. Opt in: PW_WEBKIT=1 … --project webkit
     // The replica smoke is one chromium spec (its WebKit runs are replica.config.ts's).
-    ...(process.env.PW_WEBKIT ? [{ name: 'webkit', use: { ...devices['Desktop Safari'] }, testIgnore: ['**/replica-away-read.spec.ts', '**/replica-away-write.spec.ts', '**/replica-away-notes.spec.ts', '**/replica-away-ask.spec.ts', '**/replica-smoke.spec.ts'] }] : []),
+    ...(process.env.PW_WEBKIT ? [{ name: 'webkit', use: { ...devices['Desktop Safari'] }, testIgnore: [...sideSpecs, '**/replica-smoke.spec.ts'] }] : []),
   ],
 
   webServer: {

@@ -6,6 +6,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { testMatchNames } from '../e2e/browser/side-config-specs'
 
 const DIR = path.resolve(__dirname, '../e2e/browser')
 const sources = fs.readdirSync(DIR)
@@ -73,5 +74,28 @@ describe('the project detail pane', () => {
       .filter(({ text }) => !text.includes('openProjectDetails(') && !text.includes("'View project details'"))
       .map(({ file }) => file)
     expect(offenders).toEqual([])
+  })
+})
+
+describe('specs with their own config', () => {
+  // A side config (replica, cloud host, host alone, ...) starts the fixtures its specs
+  // need; under the main config they ran against the plain fixture and failed
+  // (2026-10-31: 13 known failures). side-config-specs.ts reads each config's
+  // testMatch, so the main config can leave them out.
+  const configs = fs.readdirSync(DIR).filter((f) => f.endsWith('.config.ts'))
+
+  it('every side config names its specs in a testMatch the main config can read', () => {
+    for (const file of configs) {
+      const names = testMatchNames(fs.readFileSync(path.join(DIR, file), 'utf8'))
+      expect(names.length, `${file}: no readable testMatch`).toBeGreaterThan(0)
+      for (const name of names) expect(fs.existsSync(path.join(DIR, name)), `${file} names ${name}`).toBe(true)
+    }
+  })
+
+  it('every project of the main config leaves them out', () => {
+    const main = fs.readFileSync(path.resolve(DIR, '../../../playwright.config.ts'), 'utf8')
+    const ignores = [...main.matchAll(/testIgnore:\s*([^\n]+)/g)].map((m) => m[1]!)
+    expect(ignores.length).toBeGreaterThan(0)
+    for (const line of ignores) expect(line, 'a testIgnore without sideSpecs').toContain('sideSpecs')
   })
 })
