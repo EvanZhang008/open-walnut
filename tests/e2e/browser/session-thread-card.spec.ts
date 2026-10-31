@@ -18,9 +18,10 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
   centreInHistory, modePill, nextQuestionNumber, openThreadsSession, passageRects, resetThreadsFixture, selectPassage, switchView,
-  unfoldQuestions,
+  settledScrollTop, trackHistoryScroll, unfoldQuestions,
 } from './threads-helpers'
 import { buildTaggedSession, TAGGED_PASSAGE, TAGGED_READY, TAGGED_SESSION, TAGGED_TASK, TAGGED_TEXT, TAGGED_TITLES } from './threads-fixture'
+import { REVIEW_COUNT, REVIEW_READY, REVIEW_SESSION, REVIEW_TASK, reviewPassage } from './threads-review-fixture'
 
 const IDS = buildTaggedSession(Date.now()).ids
 const T = TAGGED_TEXT
@@ -70,9 +71,16 @@ test.describe('The comment card in Conversation Mode', () => {
     expect(before).toBeGreaterThan(200)
 
     const rows = panel.locator('.thread-map .thread-map-row[data-kind="thread"]')
+    const moves = await trackHistoryScroll(panel)
     await rows.nth(0).click()
     const c = card(panel)
     await expect(c).toBeVisible()
+    // ONE move to the passage: the card's own reveal used to scroll first (to the
+    // card, still placed off screen) and the jump second, with the passage under
+    // the header in between, for a second in WebKit (2026-10-31).
+    await page.waitForTimeout(600)
+    const path = await moves.stop()
+    expect(path.length, `the timeline moved in one step: ${path.join(' -> ')}`).toBe(2)
     await expect(c.locator('.thread-card-head .thread-map-num')).toHaveText('1')
     await expect(c.locator('.thread-card-title')).toHaveText(TAGGED_TITLES.Q1)
     await expect(c.locator('.thread-card-status')).toHaveText(/Answered|New/)
@@ -114,19 +122,32 @@ test.describe('The comment card in Conversation Mode', () => {
 
     // The passage already on screen: a row click moves NOTHING (the 2026-09-30
     // report: every click landed on the first message).
+    // Somewhere else than where the open left it, the passage still in view (the
+    // open lands it near the top of what can scroll, 0.3 down can be that place).
     await centreInHistory(page, panel, TAGGED_PASSAGE.slice(0, 30), { at: 0.3 })
+    if (Math.abs(await hist.evaluate((el) => el.scrollTop) - top) < 30) await hist.evaluate((el) => { el.scrollTop += 80 })
     const held = await hist.evaluate((el) => el.scrollTop)
     expect(held).not.toBe(top)
+    const seen = (await passageRects(panel, TAGGED_PASSAGE.slice(0, 30)))[0]
+    const hv = await rect(hist)
+    expect(seen.top).toBeGreaterThan(hv.y)
+    expect(seen.top + seen.height).toBeLessThan(hv.y + hv.height - 40)
     await rows.nth(0).click()
     await expect(card(panel)).toBeVisible()
     await page.waitForTimeout(400)
     expect(await hist.evaluate((el) => el.scrollTop), 'the timeline stayed put').toBe(held)
-    await card(panel).locator('.thread-card-input').press('Escape')
-    await expect(card(panel)).toHaveCount(0)
 
-    // Another row: the card swaps to question 2 (anchored to its reply, no quote).
+    // Another row, the card still open: it swaps to question 2 (anchored to its
+    // reply, no quote) in one move. The open card keeps its instance, so at the
+    // switch it still wore question 1's place, and its own reveal scrolled back
+    // toward it (review, 2026-10-31).
+    const swap = await trackHistoryScroll(panel)
     await rows.nth(1).click()
     await expect(card(panel).locator('.thread-card-head .thread-map-num')).toHaveText('2')
+    await page.waitForTimeout(600)
+    const swapPath = await swap.stop()
+    expect(swapPath.length, `the swap moved the timeline at most once: ${swapPath.join(' -> ')}`).toBeLessThanOrEqual(2)
+    await expect(card(panel)).toBeInViewport()
     await expect(card(panel).locator('.thread-card-q')).toHaveText([T.q2])
     await expect(card(panel).locator('.thread-card-body')).toContainText(T.a2)
     // Only the answer: not the thought, the step before the tool call, or the
@@ -251,5 +272,58 @@ test.describe('The comment card in Conversation Mode', () => {
     expect(cb.x + cb.width).toBeLessThanOrEqual(hb.x + hb.width + 1)
     await expect(c.locator('.thread-card-body')).toContainText(T.a1)
     await shot(page, 'card-narrow')
+  })
+})
+
+// A card already open swaps to another question whose passage is drawn but off
+// screen: the card keeps its instance (and, at the switch, the last question's
+// place), so its own reveal used to scroll back toward that place (review,
+// 2026-10-31). One move, and the card lands under the new passage.
+test.describe('Swapping the open card between drawn passages', () => {
+  test.setTimeout(240_000)
+  test.beforeEach(async ({ request }) => { await resetThreadsFixture(request, REVIEW_SESSION) })
+
+  test('the card follows to the new passage in one move', async ({ page }) => {
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    await pinPanelWidth(page, 1100)
+    const panel = await openThreadsSession(page, REVIEW_SESSION, REVIEW_TASK, REVIEW_READY, { view: 'linear' })
+    const hist = history(panel)
+    const rows = panel.locator('.thread-map .thread-map-row[data-kind="thread"]')
+    await expect(rows).toHaveCount(REVIEW_COUNT)
+    for (const [from, to] of [[0, 19], [19, 2]] as const) {
+      if (from === 0) {
+        await rows.nth(from).click()
+        await expect(card(panel).locator('.thread-card-head .thread-map-num')).toHaveText(String(from + 1))
+        await expect(card(panel)).toBeInViewport()
+      }
+      await settledScrollTop(hist)
+      const moves = await trackHistoryScroll(panel)
+      await rows.nth(to).click()
+      await expect(card(panel).locator('.thread-card-head .thread-map-num')).toHaveText(String(to + 1))
+      await page.waitForTimeout(600)
+      const path = await moves.stop()
+      expect(path.length, `${from + 1} -> ${to + 1} moved once: ${path.join(' -> ')}`).toBe(2)
+      // Both read in one frame: the card hangs under the passage's last line.
+      const gap = await panel.evaluate((root, needle) => {
+        const c = root.querySelector('.thread-card') as HTMLElement
+        for (const body of Array.from(root.querySelectorAll('.session-history [data-message-id] .session-msg-content'))) {
+          const tw = document.createTreeWalker(body, NodeFilter.SHOW_TEXT)
+          for (let n = tw.nextNode(); n; n = tw.nextNode()) {
+            const at = (n as Text).data.indexOf(needle)
+            if (at < 0) continue
+            const r = document.createRange(); r.setStart(n, at); r.setEnd(n, at + needle.length)
+            const rects = r.getClientRects()
+            return c.getBoundingClientRect().top - rects[rects.length - 1].bottom
+          }
+        }
+        return null
+      }, reviewPassage(to).slice(0, 24))
+      expect(gap, 'the passage is drawn').not.toBeNull()
+      expect(gap!).toBeGreaterThanOrEqual(-1)
+      expect(gap!).toBeLessThan(40)
+      await expect(card(panel)).toBeInViewport()
+      expect(await hist.evaluate((el) => el.scrollTop)).toBe(path[path.length - 1])
+    }
   })
 })

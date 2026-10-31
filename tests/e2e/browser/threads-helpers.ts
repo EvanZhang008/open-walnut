@@ -336,3 +336,48 @@ export async function askHereThenTree(page: Page, panel: Locator, pill: Locator 
   await switchView(panel, 'stack')
   await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '1', { timeout: 15_000 })
 }
+
+/** Every scrollTop the timeline takes, one sample per frame, from now until
+ *  `stop()`: a jump that lands in two moves shows a value it rests on between. */
+export async function trackHistoryScroll(panel: Locator): Promise<{ stop: () => Promise<number[]> }> {
+  await panel.evaluate((root) => {
+    const h = root.querySelector('.session-history') as HTMLElement
+    const w = window as unknown as { __scrollTrack?: { on: boolean; v: number[] } }
+    const t = { on: true, v: [Math.round(h.scrollTop)] }
+    w.__scrollTrack = t
+    const tick = () => {
+      if (!t.on) return
+      const v = Math.round(h.scrollTop)
+      if (v !== t.v[t.v.length - 1]) t.v.push(v)
+      requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  })
+  return {
+    stop: () => panel.evaluate(() => {
+      const t = (window as unknown as { __scrollTrack: { on: boolean; v: number[] } }).__scrollTrack
+      t.on = false
+      return t.v
+    }),
+  }
+}
+
+/** The timeline's scrollTop once it has stopped moving: WebKit keeps animating
+ *  a wheel scroll well past a fixed wait, so a reading taken right after one
+ *  is a frame of the glide, not where the reader is (2026-10-31: read 676 while
+ *  the box came to rest at 626). */
+export async function settledScrollTop(history: Locator): Promise<number> {
+  return history.evaluate((el) => new Promise<number>((resolve) => {
+    let last = el.scrollTop
+    let still = 0
+    const started = performance.now()
+    const tick = () => {
+      const v = el.scrollTop
+      still = v === last ? still + 1 : 0
+      last = v
+      if (still >= 12 || performance.now() - started > 3000) resolve(v)
+      else requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  }))
+}

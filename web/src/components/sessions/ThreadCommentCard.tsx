@@ -31,6 +31,7 @@ import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useDraft } from '@/hooks/useDraft';
 import { ThreadStatusWord } from './ThreadStatusWord';
 import { ThreadCloseIcon } from './ThreadIcons';
+import { afterOwnTransitions } from '@/utils/after-transitions';
 import '@/styles/thread-card.css';
 
 /** The grow animation (`.thread-card.is-sizing` in thread-card.css). */
@@ -101,6 +102,9 @@ export interface ThreadCommentCardProps {
   /** The scroll box whose visible area the card fills in full screen (⤢). Given,
    *  ⤢ toggles full screen; without it, ⤢ grows the card where it is. */
   fillRef?: RefObject<HTMLElement | null>;
+  /** True while the owner is moving the timeline to the passage: the card's
+   *  reveal on open waits, and the owner reveals it once it lands. */
+  revealHeld?: RefObject<boolean>;
 }
 
 interface FillBox { top: number; left: number; width: number; height: number }
@@ -218,7 +222,9 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
     if (firstRender.current) { firstRender.current = false; return; }
     if (p.canAsk) boxRef.current?.focus({ preventScroll: true });
     if (!expanded) restoreGrowScroll(grewScroll.current);
-    const t = window.setTimeout(() => {
+    // Once the glide is really over: measured mid-glide, the reveal is short
+    // and the card's foot ends under the fold (WebKit, 2026-10-31).
+    return afterOwnTransitions(cardRef.current, () => {
       setSizing(false);
       const card = cardRef.current;
       // Over its review row the card is placed on screen already (useThreadCardPlace).
@@ -227,8 +233,7 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
       const before = boxes.map((el) => el.scrollTop);
       card.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       grewScroll.current = boxes.map((el, i) => ({ el, before: before[i], after: el.scrollTop })).filter((b) => b.before !== b.after);
-    }, GROW_MS + 40);
-    return () => window.clearTimeout(t);
+    }, GROW_MS);
   }, [expanded, p.canAsk]);
   useEffect(() => () => restoreGrowScroll(grewScroll.current), []);
 
@@ -237,7 +242,8 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
   // Not over a review row: placed on screen there, and its scroll margin would
   // still move the timeline (2026-10-29, 40px on prod).
   useLayoutEffect(() => {
-    if (!canFillRef.current) cardRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    if (canFillRef.current || p.revealHeld?.current) return;
+    cardRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [p.threadKey]);
 
   // The answer grows: follow it while the reader has not scrolled up.

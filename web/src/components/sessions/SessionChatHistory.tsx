@@ -1582,7 +1582,21 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const leavePending = stack.leavePending;
   /** The card closes; an Ask on it that was never written goes with it (only a
    *  sent question, or one with words typed for it, is kept). */
+  // A card opened from openCard does not reveal itself (show it whole) at its
+  // mount: the owner does, once the timeline is at the passage and the card is
+  // placed for THIS question (a card already open keeps its instance, so at the
+  // switch it still wears the last question's place). Each open has a number:
+  // a later open supersedes an earlier one still on its way.
+  const cardRevealHeld = useRef(false);
+  const cardOpenSeq = useRef(0);
+  const releaseCardReveal = useCallback(() => {
+    cardRevealHeld.current = false;
+    containerRef.current?.querySelector<HTMLElement>('.thread-card-layer > .thread-card')
+      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, []);
   const closeCard = useCallback((via: string = 'card-close') => {
+    cardOpenSeq.current += 1;
+    cardRevealHeld.current = false;
     setCardOpen(false);
     setCardOverKey(null);
     const leave = cardLeave();
@@ -1716,14 +1730,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
    *  gutter bars, which all name a place the same way. `via` only labels the log
    *  lines. */
   const jumpToPlace = useCallback((
-    msgId: string, quote: SessionPinnedQuote | undefined, via: string, opts?: { armBack?: boolean },
+    msgId: string, quote: SessionPinnedQuote | undefined, via: string, opts?: { armBack?: boolean; onLanded?: () => void; stillWanted?: () => boolean },
   ) => {
     // `armBack: false` (a stack pop's fallback): no outline Back, and no smooth
     // scroll either, since a pop lands instantly.
     const armBack = opts?.armBack !== false;
     const behavior: ScrollBehavior = armBack ? 'smooth' : 'auto';
+    // Told once the timeline is where the jump puts it (or the jump gave up).
+    const landed = () => opts?.onLanded?.();
     const el = containerRef.current;
-    if (!el || !msgId) return;
+    if (!el || !msgId) { landed(); return; }
     const index = messages.findIndex((m) => (m.msgId ?? m.walnutMessageId) === msgId);
     if (index < 0) {
       // The loaded rows are a TAIL window; a pin on an older message is a real
@@ -1737,9 +1753,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         });
         pendingJump.current = { msgId, quote, via, armBack, heldAtRequest: messages.length };
         loadFullHistory();
+        landed();
         return;
       }
       log.warn('session', 'pin jump: message not in the loaded transcript', { sessionId, msgId, via });
+      landed();
       return;
     }
     if (armBack) {
@@ -1756,12 +1774,15 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     revealFolded(msgId);
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
+        // Superseded on the way (another question's card opened since): not ours to move.
+        if (opts?.stillWanted && !opts.stillWanted()) { landed(); return; }
         // Identity first (`data-message-id`), index second: merged tool runs carry
         // only the index of their first member.
         const target = el.querySelector(`[data-message-id="${CSS.escape(msgId)}"]`)
           ?? el.querySelector(`[data-msg-index="${index}"]`);
         if (!target) {
           log.warn('session', 'pin jump: target row did not render', { sessionId, msgId, index });
+          landed();
           return;
         }
         // Leave the bottom again as the jump scrolls, as the reader's own input. Between
@@ -1784,6 +1805,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             const delta = (rect.top + rect.height / 2) - (box.top + box.height / 2);
             el.scrollTo({ top: el.scrollTop + delta, behavior });
             flashRange(range);
+            landed();
             return;
           }
           // Passage gone (message edited, /compact rewrote it): the row is still
@@ -1793,6 +1815,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
           });
         }
         target.scrollIntoView({ behavior, block: 'center' });
+        landed();
         target.classList.add('user-messages-highlight');
         setTimeout(() => target.classList.remove('user-messages-highlight'), 1500);
       });
@@ -3678,9 +3701,40 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const box = el.getBoundingClientRect();
     const range = quotePaint.locatePin(passage);
     const r = range?.getBoundingClientRect();
-    const onScreen = !!r && (r.width || r.height) && r.top >= box.top && r.bottom <= box.bottom - 40;
-    if (!onScreen) jumpToPlace(passage.msgId, passage.quote, `card:${via}`, { armBack: false });
-  }, [threadsApi.viewMode, threadsApi.fileCardHost?.path, stack, passageOf, filePlaceOf, onFileOpen, quotePaint, jumpToPlace, sessionId, cardLeave]);
+    const drawn = !!range && !!r && (r.width > 0 || r.height > 0);
+    const onScreen = drawn && r.top >= box.top && r.bottom <= box.bottom - 40;
+    // ONE move, after React has committed the switch (folds, the card's place)
+    // and before the frame paints. The old way let the card's own reveal scroll
+    // first, toward a card placed off screen, and the jump two frames later: the
+    // passage sat under the header for a beat, a whole second in WebKit
+    // (2026-10-31). Not drawn yet (folded, a row outside the rendered window, a
+    // question on a reply): jumpToPlace, and the reveal when it lands.
+    const seq = ++cardOpenSeq.current;
+    const current = () => seq === cardOpenSeq.current;
+    const release = () => { if (current()) releaseCardReveal(); };
+    cardRevealHeld.current = true;
+    if (onScreen) { requestAnimationFrame(release); return; }
+    if (drawn) {
+      requestAnimationFrame(() => {
+        if (!current()) return;
+        const at = quotePaint.locatePin(passage);
+        const rr = at?.getBoundingClientRect();
+        const bb = el.getBoundingClientRect();
+        if (!at || !rr || !(rr.width || rr.height)) {
+          // Folded away by the switch itself: the jump unfolds it first.
+          jumpToPlace(passage.msgId, passage.quote, `card:${via}`, { armBack: false, onLanded: release, stillWanted: current });
+          return;
+        }
+        isAtBottom.current = false;
+        lastUserInput.current = Date.now();
+        el.scrollTop += (rr.top + rr.height / 2) - (bb.top + bb.height / 2);
+        flashRange(at);
+        releaseCardReveal();
+      });
+      return;
+    }
+    jumpToPlace(passage.msgId, passage.quote, `card:${via}`, { armBack: false, onLanded: release, stillWanted: current });
+  }, [releaseCardReveal, threadsApi.viewMode, threadsApi.fileCardHost?.path, stack, passageOf, filePlaceOf, onFileOpen, quotePaint, jumpToPlace, sessionId, cardLeave]);
   openCardRef.current = openCard;
 
   // The Files tab (a mark in a file, Ask here on a selection) and the sidebar
@@ -4973,6 +5027,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 onClose={closeCard}
                 onQuote={quoteCardInChat}
                 style={cardPlace}
+                revealHeld={cardRevealHeld}
                 {...(enlargedKey && reviewOn ? { fillRef: containerRef } : {})}
               >
                 {cardBody}
