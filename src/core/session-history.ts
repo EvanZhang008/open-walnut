@@ -54,6 +54,11 @@ const LOCAL_HOME = os.homedir();
 
 interface ParsedHistoryCacheEntry {
   mtimeMs: number;
+  /** The transcript's size at the stat this entry answers. With mtime it is the
+   *  freshness key: a Linux kernel stamps files once a tick (10 ms at HZ=100),
+   *  so a line appended in the tick of the last read keeps the mtime and only
+   *  the size tells (`isFresh`). Absent on an entry from before it was kept. */
+  size?: number;
   messages: SessionHistoryMessage[];
   /** Approx retained chars (raw JSONL length proxy) — drives the byte budget. */
   approxChars: number;
@@ -239,6 +244,11 @@ const MAX_HISTORY_CACHE = 30;
 // own budget); they don't share a pool, so tune each on its own evidence.
 const MAX_HISTORY_CACHE_CHARS = 64 * 1024 * 1024;
 const parsedHistoryCache = new Map<string, ParsedHistoryCacheEntry>();
+
+/** The entry still answers a stat of the transcript: same mtime, and same size when both are known. */
+function isFresh(entry: ParsedHistoryCacheEntry, mtimeMs: number, size: number | undefined): boolean {
+  return entry.mtimeMs === mtimeMs && (entry.size === undefined || size === undefined || entry.size === size);
+}
 let historyCacheChars = 0;
 
 /**
@@ -1988,6 +1998,7 @@ async function tryIncrementalHistoryRead(
   cached: ParsedHistoryCacheEntry,
   newMtimeMs: number,
   reader: InstanceType<(typeof import('./daemon-file-reader.js'))['DaemonFileReader']>,
+  newSize?: number,
 ): Promise<SessionHistoryMessage[] | null> {
   const inc = cached.inc!;
   try {
@@ -2100,7 +2111,7 @@ async function tryIncrementalHistoryRead(
     // ~40 chars per uuid (36-char uuid + Set overhead).
     const approxChars = inc.parsedBytes + (inc.deadUuids?.size ?? 0) * 40;
     cacheSet(sessionId, {
-      mtimeMs: newMtimeMs, messages, approxChars, inc,
+      mtimeMs: newMtimeMs, ...(newSize !== undefined ? { size: newSize } : {}), messages, approxChars, inc,
       ...(orphanUnion.size > 0 ? { orphanFinishedIds: [...orphanUnion] } : {}),
     }, host);
 
@@ -2108,7 +2119,7 @@ async function tryIncrementalHistoryRead(
     // mtime included so the post-restart mtime fast-path can validate it.
     if (messages.length > 0) {
       import('./history-disk-cache.js').then(({ writeHistoryCache }) => {
-        writeHistoryCache(sessionId, messages, newMtimeMs, [...orphanUnion]);
+        writeHistoryCache(sessionId, messages, newMtimeMs, [...orphanUnion], newSize);
       }).catch(() => {});
     }
     return messages;
@@ -2469,7 +2480,7 @@ export async function readSessionHistoryTail(
       if (st && st.size > maxTailBytes) {
         // Serve from the shared cache when fresh — same data, zero I/O.
         const cached = cacheGet(sessionId, host);
-        if (cached && cached.mtimeMs === st.mtimeMs) return cached.messages;
+        if (cached && isFresh(cached, st.mtimeMs, st.size)) return cached.messages;
         // A session with recorded in-place rewinds can't use the window: the
         // cut anchors resolve against the FULL file, and the cut/anchor lines
         // may precede the window's start — an unfilterable window would serve
@@ -2572,7 +2583,7 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
           // parse yields. Every return below this point inherits that fact.
           sourceFound = true;
           const cached = cacheGet(sessionId, host);
-          if (cached && cached.mtimeMs === mtimeMs) {
+          if (cached && isFresh(cached, mtimeMs, statSize)) {
             // A windowed entry (bounded cold tail) may only answer callers that
             // are themselves tail-bounded — a full-read caller (Load earlier,
             // fork ancestor read) falls through to the real full read below,
@@ -2592,7 +2603,7 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
             try {
               const { readHistoryCache } = await import('./history-disk-cache.js');
               const disk = await readHistoryCache(sessionId);
-              if (disk?.mtimeMs !== undefined && disk.mtimeMs === mtimeMs) {
+              if (disk?.mtimeMs !== undefined && disk.mtimeMs === mtimeMs && (disk.size === undefined || disk.size === statResult.size)) {
                 log.session.info('history disk cache hit (mtime match) — skipping full read', {
                   sessionId, host: host ?? '__local__', messages: disk.messages.length,
                 });
@@ -2605,7 +2616,7 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
                 // real parse pass; the next mtime change does one full read and
                 // re-seeds it, same as any inc-state hazard).
                 cacheSet(sessionId, {
-                  mtimeMs, messages: disk.messages,
+                  mtimeMs, size: statResult.size, messages: disk.messages,
                   approxChars: statResult.size,
                   ...(disk.finishedAgentIds?.length ? { orphanFinishedIds: disk.finishedAgentIds } : {}),
                 }, host);
@@ -2617,7 +2628,7 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
           // read + parse just the appended bytes instead of the whole file.
           if (cached?.inc && options?.skipSubagents && statResult.size >= cached.inc.parsedBytes) {
             const incMessages = await tryIncrementalHistoryRead(
-              sessionId, host, cached, statResult.mtimeMs, reader,
+              sessionId, host, cached, statResult.mtimeMs, reader, statResult.size,
             );
             if (incMessages) return handOff(incMessages);
             // Incremental failed (rewrite detected / transport) — state was
@@ -2667,7 +2678,7 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
       });
       if (mtimeMs !== undefined) {
         cacheSet(sessionId, {
-          mtimeMs, messages: win, approxChars: options.maxColdReadBytes, windowed: true,
+          mtimeMs, size: statSize, messages: win, approxChars: options.maxColdReadBytes, windowed: true,
           ...(getOrphanFinishedAgentIds(win)?.size
             ? { orphanFinishedIds: [...getOrphanFinishedAgentIds(win)!] } : {}),
         }, host);
@@ -2895,7 +2906,7 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
     // mark) — charge it to the byte budget: ~40 chars per uuid.
     const deadSetChars = (getChainFilterMark(messages)?.deadUuids?.size ?? 0) * 40;
     cacheSet(sessionId, {
-      mtimeMs, messages, approxChars: sourceChars + deadSetChars,
+      mtimeMs, ...(statSize !== undefined ? { size: statSize } : {}), messages, approxChars: sourceChars + deadSetChars,
       ...(inc ? { inc } : {}),
       ...(orphanIds && orphanIds.size > 0 ? { orphanFinishedIds: [...orphanIds] } : {}),
     }, host);
@@ -2910,7 +2921,7 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
   if (messages.length > 0) {
     const orphanForDisk = getOrphanFinishedAgentIds(messages);
     import('./history-disk-cache.js').then(({ writeHistoryCache }) => {
-      writeHistoryCache(sessionId, messages, mtimeMs, orphanForDisk ? [...orphanForDisk] : undefined);
+      writeHistoryCache(sessionId, messages, mtimeMs, orphanForDisk ? [...orphanForDisk] : undefined, statSize);
     }).catch(() => {});
   }
 

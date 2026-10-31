@@ -76,18 +76,21 @@ export function writeHistoryCache(
   messages: SessionHistoryMessage[],
   mtimeMs?: number,
   finishedAgentIds?: readonly string[],
+  /** The transcript's size at that mtime: a coarse file clock keeps the mtime across an append. */
+  size?: number,
 ): void {
   if (messages.length === 0) return;
   const queued = pendingWrites.get(sessionId);
   if (queued) {
     queued.messages = messages;
     queued.mtimeMs = mtimeMs;
+    queued.size = size;
     queued.finishedAgentIds = finishedAgentIds;
     return;
   }
   const timer = setTimeout(() => flushWrite(sessionId), WRITE_COALESCE_MS);
   timer.unref?.();
-  pendingWrites.set(sessionId, { messages, mtimeMs, finishedAgentIds, timer });
+  pendingWrites.set(sessionId, { messages, mtimeMs, size, finishedAgentIds, timer });
 }
 
 /**
@@ -102,6 +105,7 @@ const WRITE_COALESCE_MS = 2_000;
 interface PendingWrite {
   messages: SessionHistoryMessage[];
   mtimeMs: number | undefined;
+  size: number | undefined;
   finishedAgentIds: readonly string[] | undefined;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -117,6 +121,8 @@ function flushWrite(sessionId: string): void {
     messages: entry.messages,
     cachedAt: new Date().toISOString(),
     ...(entry.mtimeMs !== undefined ? { mtimeMs: entry.mtimeMs } : {}),
+    // Additive: an older Walnut reads the file and ignores it, so no schema bump.
+    ...(entry.size !== undefined ? { size: entry.size } : {}),
     // Orphan finished-agent ids (see session-history.ts getOrphanFinishedAgentIds):
     // proof that lives OUTSIDE the messages array, so it must be persisted
     // explicitly or a post-restart disk-cache hit silently drops it.
@@ -160,7 +166,7 @@ export async function deleteHistoryCache(sessionId: string): Promise<void> {
  * entry was written by a different shape of this code (see HISTORY_CACHE_SCHEMA) —
  * every caller already treats null as "no cache" and re-parses.
  */
-export async function readHistoryCache(sessionId: string): Promise<{ messages: SessionHistoryMessage[]; cachedAt: string; mtimeMs?: number; finishedAgentIds?: string[] } | null> {
+export async function readHistoryCache(sessionId: string): Promise<{ messages: SessionHistoryMessage[]; cachedAt: string; mtimeMs?: number; size?: number; finishedAgentIds?: string[] } | null> {
   // A write still in its coalescing window is the newest entry there is.
   const queued = pendingWrites.get(sessionId);
   if (queued) {
@@ -168,6 +174,7 @@ export async function readHistoryCache(sessionId: string): Promise<{ messages: S
       messages: queued.messages,
       cachedAt: new Date().toISOString(),
       ...(queued.mtimeMs !== undefined ? { mtimeMs: queued.mtimeMs } : {}),
+      ...(queued.size !== undefined ? { size: queued.size } : {}),
       ...(queued.finishedAgentIds && queued.finishedAgentIds.length > 0 ? { finishedAgentIds: [...queued.finishedAgentIds] } : {}),
     };
   }
@@ -187,6 +194,7 @@ export async function readHistoryCache(sessionId: string): Promise<{ messages: S
         messages: parsed.messages,
         cachedAt: parsed.cachedAt ?? 'unknown',
         ...(typeof parsed.mtimeMs === 'number' ? { mtimeMs: parsed.mtimeMs } : {}),
+        ...(typeof parsed.size === 'number' ? { size: parsed.size } : {}),
         ...(Array.isArray(parsed.finishedAgentIds) && parsed.finishedAgentIds.length > 0
           ? { finishedAgentIds: parsed.finishedAgentIds.filter((x: unknown): x is string => typeof x === 'string') }
           : {}),

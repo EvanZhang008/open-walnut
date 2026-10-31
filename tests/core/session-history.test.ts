@@ -40,13 +40,6 @@ async function writeJsonl(sessionId: string, cwd: string, lines: unknown[]) {
   await fsp.writeFile(path.join(dir, `${sessionId}.jsonl`), content);
 }
 
-/**
- * Let the file clock tick before a rewrite the mtime cache must see. Linux
- * stamps files with the kernel's coarse clock (one jiffy: 10 ms on an HZ=100
- * kernel), so a rewrite inside the same jiffy keeps the old mtime.
- */
-const fileClockTick = () => new Promise((r) => setTimeout(r, 25));
-
 /** Helper: build a JSONL message line. */
 function msg(id: string, role: 'user' | 'assistant', text: string, extras?: {
   tools?: unknown[];
@@ -892,6 +885,28 @@ describe('readSessionHistoryPaginated', () => {
 // arriving in the same tick both missed and both read the whole file. Observed in
 // production: the same 38.9 MB JSONL read twice inside one second (attach + the
 // reconnecting UI's GET /history).
+describe('readSessionHistory cache freshness', () => {
+  // A Linux kernel stamps files once a tick (10 ms at HZ=100): a line the CLI
+  // appends in the tick of the last read keeps the transcript's mtime. The size
+  // still moves, and the cache must take it as a change (2026-10-31).
+  it('a transcript that grew under the same mtime is read again', async () => {
+    const lines = [msg('m0', 'user', 'First'), msg('m1', 'assistant', 'Second')];
+    await writeJsonl('fresh-size', '/test', lines);
+    const file = path.join(tmpBase, 'projects', encodeProjectPath('/test'), 'fresh-size.jsonl');
+    // Whole milliseconds, so the stamp after the rewrite is exactly the one the read saw.
+    const pinned = new Date(Math.floor((await fsp.stat(file)).mtimeMs));
+    await fsp.utimes(file, pinned, pinned);
+    expect(await readSessionHistory('fresh-size', '/test', undefined, undefined, { skipSubagents: true })).toHaveLength(2);
+
+    await writeJsonl('fresh-size', '/test', [...lines, msg('m2', 'assistant', 'Third, in the same tick')]);
+    await fsp.utimes(file, pinned, pinned);
+    expect((await fsp.stat(file)).mtimeMs).toBe(pinned.getTime());
+
+    const again = await readSessionHistory('fresh-size', '/test', undefined, undefined, { skipSubagents: true });
+    expect(again?.map((m) => m.text)).toContain('Third, in the same tick');
+  });
+});
+
 describe('readSessionHistory in-flight dedup', () => {
   /** Count real file reads by spying on the fs the mock daemon reader uses. */
   const countReads = async (sessionId: string): Promise<{ reads: () => number; restore: () => void }> => {
@@ -921,7 +936,6 @@ describe('readSessionHistory in-flight dedup', () => {
 
     // Force a re-read (the mtime cache would otherwise serve all three for free,
     // which would pass even with dedup broken).
-    await fileClockTick();
     await writeJsonl('dedup-concurrent', '/test', [...lines, msg('m40', 'user', 'more')]);
 
     counter = await countReads('dedup-concurrent');
@@ -960,7 +974,6 @@ describe('readSessionHistory in-flight dedup', () => {
     expect(first).toHaveLength(1);
 
     // A sequential second call must not be served a stale in-flight promise.
-    await fileClockTick();
     await writeJsonl('dedup-release', '/test', [
       msg('m0', 'user', 'First'),
       msg('m1', 'assistant', 'Second'),
