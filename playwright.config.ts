@@ -46,6 +46,14 @@ export default defineConfig({
     // PW_VIDEO=1 records every test (demo/verification clips); pair with
     // `--output <dir>` outside test-results/, which peer runs wipe.
     video: process.env.PW_VIDEO ? 'on' : 'off',
+    // The task panel opens Flat (web/src/components/tasks/panel-design.ts), its status
+    // sections and no list. The specs written against the list remember By project, in
+    // every page's storage, so a spec that serves its own ui-prefs keeps it too; a spec
+    // about Flat presets it (status-section-helpers.ts presetPanelDesign).
+    storageState: {
+      cookies: [],
+      origins: [{ origin: `http://localhost:${testPort}`, localStorage: [{ name: 'walnut-todo-panel-design', value: 'project' }] }],
+    },
   },
 
   projects: [

@@ -15,7 +15,7 @@
 import { test, expect, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { filterChip, setStatus } from './filter-bar-helpers'
-import { setStatusSectionOpen, showSectionCard, statusSection, statusSectionCountOf, statusSectionToggle } from './status-section-helpers'
+import { presetPanelDesign, setStatusSectionOpen, showSectionCard, statusSection, statusSectionCountOf, statusSectionToggle } from './status-section-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const SCREENSHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/completed-archive-lazy-load'
@@ -76,6 +76,8 @@ async function setShowCompleted(page: Page, on: boolean): Promise<void> {
 
 test('a board load leaves old completions on the server; Status Complete loads them once', async ({ page }) => {
   await isolateUiPrefs(page)
+  // The Completed section at the bottom is Flat's (By project folds it into each project).
+  await presetPanelDesign(page, 'status')
   const open = await createTaskViaApi('Archive open')
   const done = await createTaskViaApi('Archive done')
   await unpinViaApi(open.id)
@@ -161,6 +163,8 @@ test('a board load leaves old completions on the server; Status Complete loads t
 
 test('the Completed section reads the archive only when its Show more runs past the loaded rows, once, without a Status chip', async ({ page }) => {
   await isolateUiPrefs(page)
+  // The Completed section at the bottom is Flat's (By project folds it into each project).
+  await presetPanelDesign(page, 'status')
   const done = await createTaskViaApi('Archive section done')
   await unpinViaApi(done.id)
   await completeViaApi(done.id)

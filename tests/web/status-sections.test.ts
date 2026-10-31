@@ -16,6 +16,7 @@ import {
   statusSectionOf,
   writeSectionOpen,
 } from '../../web/src/components/tasks/status-sections';
+import { PANEL_DESIGNS, readPanelDesign } from '../../web/src/components/tasks/panel-design';
 
 let n = 0;
 const task = (patch: Partial<Task> = {}): Task => ({
@@ -48,6 +49,12 @@ describe('stateSectionOf / statusSectionOf', () => {
     expect(stateSectionOf(later, (t) => t.id === later.id)).toBe('waiting');
     expect(stateSectionOf(task({ phase: 'IN_PROGRESS' }))).toBe('working');
     expect(stateSectionOf(task())).toBe('working');
+  });
+  it('a snoozed task waits even when it needs the user (2026-10-30: snoozed, still under Needs you)', () => {
+    const later = task({ phase: 'NEED_ACTION', user_status: { state: 'needs' } as Task['user_status'], start_date: '2099-01-01' });
+    expect(stateSectionOf(later, (t) => t.id === later.id)).toBe('waiting');
+    // Its date come (the Date rule no longer calls it snoozed): back under Needs you.
+    expect(stateSectionOf(later, () => false)).toBe('needs');
   });
   it('a watched task is drawn under Watching whatever its state', () => {
     expect(statusSectionOf(task({ phase: 'COMPLETE', status: 'done', watched_at: '2026-10-29T00:00:00Z' }))).toBe('watching');
@@ -109,13 +116,15 @@ describe('buildStatusSections', () => {
     return { needs, working, todo, parked, done, watchedDone, elsewhere };
   };
 
-  it('splits the view; Working is only counted (the list draws it)', () => {
+  it('splits the view; Working holds the open rest, latest activity first (Flat draws it)', () => {
     const t = all();
+    t.todo.updated_at = '2026-10-20T00:00:00.000Z';
     const scope = [t.needs, t.working, t.todo, t.parked, t.done, t.watchedDone];
     const m = buildStatusSections({ scope, all: [...scope, t.elsewhere], passes: () => true });
     expect(ids(m.needs)).toEqual([t.needs.id]);
     expect(ids(m.waiting)).toEqual([t.parked.id]);
     expect(ids(m.done)).toEqual([t.done.id]);
+    expect(ids(m.working)).toEqual([t.todo.id, t.working.id]);
     expect(m.workingCount).toBe(2);
     // Watching spans every view, the task outside this view's scope included.
     expect(ids(m.watching)).toEqual([t.watchedDone.id, t.elsewhere.id]);
@@ -133,6 +142,7 @@ describe('buildStatusSections', () => {
     const t = all();
     const m = buildStatusSections({ scope: [t.todo, t.todo, t.needs, t.needs], all: [], passes: () => true });
     expect(m.workingCount).toBe(1);
+    expect(m.working).toHaveLength(1);
     expect(m.needs).toHaveLength(1);
   });
 
@@ -185,5 +195,19 @@ describe('readSectionOpen / writeSectionOpen', () => {
   it('a corrupt or foreign value reads as the defaults', () => {
     expect(readSectionOpen('{not json')).toEqual(STATUS_SECTION_DEFAULT_OPEN);
     expect(readSectionOpen('{"done":"yes","bogus":true}')).toEqual(STATUS_SECTION_DEFAULT_OPEN);
+  });
+});
+
+describe('panel layout (panel-design.ts)', () => {
+  it('two layouts, Flat first and the default', () => {
+    expect(PANEL_DESIGNS.map((d) => [d.id, d.label])).toEqual([['status', 'Flat'], ['project', 'By project']]);
+    expect(readPanelDesign(null)).toBe('status');
+    expect(readPanelDesign('project')).toBe('project');
+  });
+
+  it('a stored layout no longer offered reads as Flat', () => {
+    // 'shelf' was the third layout on trial (2026-10-29).
+    expect(readPanelDesign('shelf')).toBe('status');
+    expect(readPanelDesign('garbage')).toBe('status');
   });
 });

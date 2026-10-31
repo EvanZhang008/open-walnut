@@ -24,7 +24,7 @@
  *    pointerdown itself — that IS the mechanism that keeps pressing "+" from
  *    folding the project, so no target sniffing is needed here.
  */
-import { type CSSProperties, type HTMLAttributes, type ReactNode } from 'react';
+import { type CSSProperties, type HTMLAttributes } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import * as ICONS from '../common/Icons';
@@ -66,14 +66,12 @@ export interface TierProjectLabelRowProps {
   onViewDetails?: (project: string) => void;
   onMoveUp?: (project: string) => void;
   onMoveDown?: (project: string) => void;
-  /** The project's counts by status (StatusSections.ProjectStatusCounts), after the count. */
-  statusCounts?: ReactNode;
 }
 
 export function TierProjectLabelRow({
   project, sortableId, count, collapsed, inert, dropIndicator, dragProps,
   onToggleCollapse, onAddTask, onAddSeparator, onAddFolder, onAddSession,
-  isFavorite, onToggleFavorite, onViewDetails, onMoveUp, onMoveDown, statusCounts,
+  isFavorite, onToggleFavorite, onViewDetails, onMoveUp, onMoveDown,
 }: TierProjectLabelRowProps) {
   // Only the node, the transform and the transition: no attributes or listeners, so
   // dnd-kit never starts a drag here and the native project drag keeps the row.
@@ -142,7 +140,6 @@ export function TierProjectLabelRow({
         {/* Same rule as the folder chip's badge: draw it only when there is
             something to count. */}
         {count > 0 && <span className="tier-project-label-count" aria-hidden="true">{count}</span>}
-        {statusCounts}
         {/* Project "+" (GAP-2) — the same control the All-view project header
             carries, so a by-project tier reads and behaves the same way: new
             task / new task with session / new folder / add separator.

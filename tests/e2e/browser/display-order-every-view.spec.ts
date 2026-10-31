@@ -146,8 +146,8 @@ test('a tier view sorts and groups its own cards; a reorder in a sorted tier swi
   expect(await displayMenu(page).innerText()).not.toMatch(/Tier layout|Recent order|Only in/)
   await closeDisplayMenu(page)
 
-  // Flat + Manual is the pin order; Flat + Priority is priority, newest first among equals.
-  await arrange(page, 'Flat')
+  // In one list + Manual is the pin order; + Priority is priority, newest first among equals.
+  await arrange(page, 'In one list')
   await expect.poll(() => drawn(page, tierA)).toEqual([a1, a2, a3, a4, a5])
   await arrange(page, 'Priority')
   await expect.poll(() => drawn(page, tierA)).toEqual([a5, a2, a4, a1, a3])
@@ -165,7 +165,7 @@ test('a tier view sorts and groups its own cards; a reorder in a sorted tier swi
   await closeDisplayMenu(page)
 
   // A sorted tier draws no divider lines and offers none.
-  await arrange(page, 'Flat')
+  await arrange(page, 'In one list')
   await expect.poll(() => drawn(page, tierA)).toEqual([a5, a2, a4, a1, a3])
   const bar = page.getByTestId('tier-view-bar')
   await bar.locator('[data-testid="plus-menu-trigger"], .navigation-more').first().click()
@@ -294,7 +294,7 @@ test('Recent sorts by Priority, Created or Updated (no Manual) and groups by pro
   await expect(label(p2)).toHaveCount(1)
   await expect(label(p1).locator('.tier-project-label-count')).toHaveText('2')
   await page.locator('.todo-panel').screenshot({ path: `${SHOTS}/recent-by-project.png` })
-  await arrange(page, 'Flat')
+  await arrange(page, 'In one list')
   await expect(page.locator('.todo-pinned-list-recent .recent-project-label')).toHaveCount(0)
 })
 

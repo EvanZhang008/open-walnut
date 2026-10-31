@@ -31,8 +31,6 @@ import {
   STATUS_SECTION_BATCH,
   STATUS_SECTION_LABELS,
   STATUS_SECTION_TITLES,
-  projectRuns,
-  type StateCounts,
   type StatusSectionKey,
   type StatusSectionsModel,
 } from './status-sections';
@@ -56,7 +54,7 @@ export function StatusSectionHeading({ sectionKey, count, open, onToggle, more }
 }) {
   const label = STATUS_SECTION_LABELS[sectionKey];
   return (
-    <div className={`navigation-heading todo-pinned-header status-section-heading status-section-${sectionKey}`} data-testid={`status-section-${sectionKey}`}>
+    <div className={`navigation-heading navigation-heading-divider todo-pinned-header status-section-heading status-section-${sectionKey}`} data-testid={`status-section-${sectionKey}`}>
       <button
         type="button"
         className="navigation-heading-open"
@@ -64,9 +62,9 @@ export function StatusSectionHeading({ sectionKey, count, open, onToggle, more }
         title={`${STATUS_SECTION_TITLES[sectionKey]}. Click to ${open ? 'collapse' : 'expand'}.`}
         onClick={() => onToggle(sectionKey)}
       >
-        <span className="navigation-icon status-section-icon" aria-hidden="true">{SECTION_ICONS[sectionKey]}</span>
         <span className="navigation-label">{label}</span>
-        <span className="status-section-count" data-testid={`status-section-${sectionKey}-count`}>{count}{more ? '+' : ''}</span>
+        <span className="navigation-heading-count status-section-count" data-testid={`status-section-${sectionKey}-count`}>{count}{more ? '+' : ''}</span>
+        <span className="navigation-heading-rule" aria-hidden="true" />
         <NavigationChevron collapsed={!open} />
       </button>
     </div>
@@ -83,6 +81,8 @@ export interface SectionRowHandlers {
   tierLabel: (tier: FocusTier) => string;
   /** The panel's view: a tier tab names the tier already, so its cards draw no tier glyph. */
   viewSection?: string;
+  /** Flat's two-line rows (the project and its tags above the title); elsewhere one line. */
+  twoLine?: boolean;
   isVanishing: (task: Task) => boolean;
   onClick: (task: Task, e?: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean }) => void;
   onSetPhase?: (id: string, phase: string) => void;
@@ -102,7 +102,7 @@ export interface SectionRowHandlers {
   onLoadMore?: () => void;
 }
 
-const SectionCard = memo(function SectionCard({ task, sectionKey, handlers }: { task: Task; sectionKey: StatusSectionKey; handlers: SectionRowHandlers }) {
+const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoLine }: { task: Task; sectionKey: StatusSectionKey; handlers: SectionRowHandlers; twoLine: boolean }) {
   const circleClass = useTaskCircle(task);
   const isDone = task.status === 'done' || task.phase === 'COMPLETE';
   const needsAction = taskNeedsAction(task);
@@ -115,10 +115,33 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers }: { 
   const vanishing = handlers.isVanishing(task);
   // Under Waiting / snoozed, a task that is not parked sleeps until its start date.
   const snoozedUntil = sectionKey === 'waiting' && task.phase !== 'WAITING' && task.start_date ? formatStartDateDisplay(task.start_date) : '';
+  const projectName = task.project || 'Inbox';
+  const title = <span className={`todo-pinned-title${task.walnut_agent ? ' walnut-task-title' : ''}`} title={task.title}>{task.title}</span>;
+  const pills = (
+    <>
+      <SubtaskPill task={task} />
+      <LeaderPill task={task} />
+      <AwaySyncMark item={task} />
+    </>
+  );
+  const wake = snoozedUntil ? (
+    <span className="todo-item-due-pill todo-item-start-pill" title={`Snoozed: starts ${task.start_date}`}>▶︎ {snoozedUntil}</span>
+  ) : task.phase === 'WAITING' && task.wait_until && !isDone ? (
+    <span
+      className="todo-item-due-pill todo-item-wait-pill"
+      data-testid="task-row-wait-until"
+      title={`Waiting until ${new Date(task.wait_until).toLocaleString()}, or until something happens first`}
+    >
+      until {formatWaitUntil(task.wait_until)}
+    </span>
+  ) : null;
+  const agoEl = ago ? (
+    <span className="todo-recent-ago" title={isDone && task.completed_at ? `Completed ${new Date(task.completed_at).toLocaleString()}` : recentActivityTitle(activity)}>{ago}</span>
+  ) : null;
   return (
     <div
       data-task-id={task.id}
-      className={`todo-pinned-card status-section-card${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${handlers.openSessionTaskIds?.has(task.id) ? ' todo-pinned-card-session-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}${vanishing ? ' todo-card-vanishing' : ''}`}
+      className={`todo-pinned-card status-section-card${twoLine ? ' status-card-two-line' : ''}${isFocused ? ' todo-pinned-card-active' : ''}${needsAction ? ' todo-pinned-card-needs-action' : ''}${handlers.openSessionTaskIds?.has(task.id) ? ' todo-pinned-card-session-open' : ''}${isDone ? ' todo-pinned-card-done' : ''}${vanishing ? ' todo-card-vanishing' : ''}`}
       onClick={(e) => {
         if ((e.target as HTMLElement).closest('.pinned-phase-picker')) return;
         handlers.onClick(task, e);
@@ -153,23 +176,25 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers }: { 
       >
         {ICONS.binaryPhaseIcon(isDone, task.phase)}
       </button>
-      <span className={`todo-pinned-title${task.walnut_agent ? ' walnut-task-title' : ''}`} title={task.title}>{task.title}</span>
-      <SubtaskPill task={task} />
-      <LeaderPill task={task} />
-      <AwaySyncMark item={task} />
-      {snoozedUntil ? (
-        <span className="todo-item-due-pill todo-item-start-pill" title={`Snoozed: starts ${task.start_date}`}>▶︎ {snoozedUntil}</span>
-      ) : task.phase === 'WAITING' && task.wait_until && !isDone ? (
-        <span
-          className="todo-item-due-pill todo-item-wait-pill"
-          data-testid="task-row-wait-until"
-          title={`Waiting until ${new Date(task.wait_until).toLocaleString()}, or until something happens first`}
-        >
-          until {formatWaitUntil(task.wait_until)}
+      {twoLine ? (
+        // Flat: a small line with the project, its tags and the time, then the title alone.
+        <span className="status-card-body">
+          <span className="status-card-meta">
+            <span className="status-card-project">{projectName}</span>
+            {pills}
+            {wake}
+            <span className="status-card-meta-fill" />
+            {agoEl}
+          </span>
+          {title}
         </span>
-      ) : ago ? (
-        <span className="todo-recent-ago" title={isDone && task.completed_at ? `Completed ${new Date(task.completed_at).toLocaleString()}` : recentActivityTitle(activity)}>{ago}</span>
-      ) : null}
+      ) : (
+        <>
+          {title}
+          {pills}
+          {wake ?? agoEl}
+        </>
+      )}
       <TaskStartButton task={task} isDone={isDone} onStartSession={handlers.onStartSession} />
       <TaskKebabMenu
         task={task}
@@ -196,8 +221,12 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers }: { 
   );
 });
 
-/** One section's rows: project labels when it spans two or more projects, then a "Show more" row. */
-export function SectionRows({ sectionKey, tasks, total, handlers, archiveLeft }: {
+/**
+ * One section's rows, then a "Show more" row. Flat (the panel's sections) draws each
+ * row in two lines, its project on the small top line; a project's own fold (By
+ * project) draws one-line rows, since the project heading above names it already.
+ */
+export function SectionRows({ sectionKey, tasks, total, handlers, archiveLeft, inProject = false }: {
   sectionKey: StatusSectionKey;
   tasks: readonly Task[];
   /** The section's full count (Completed includes tasks not loaded yet). */
@@ -205,35 +234,29 @@ export function SectionRows({ sectionKey, tasks, total, handlers, archiveLeft }:
   handlers: SectionRowHandlers;
   /** Completed only: older tasks not loaded and not counted (a chip narrows the view). */
   archiveLeft?: boolean;
+  /** The rows sit under their project's heading (a By project fold). */
+  inProject?: boolean;
 }) {
   const [asked, setAsked] = useState(false);
   const [shown, setShown] = useState(STATUS_SECTION_BATCH);
+  // A located (focused) row past the batch grows the batch to it, so Locate can scroll
+  // there; the rows stay when the focus moves on (set during render: React redraws at once).
+  const focusAt = handlers.focusedTaskId ? tasks.findIndex((t) => t.id === handlers.focusedTaskId) : -1;
+  if (focusAt >= shown) setShown(Math.ceil((focusAt + 1) / STATUS_SECTION_BATCH) * STATUS_SECTION_BATCH);
   const head = tasks.slice(0, shown);
-  const runs = projectRuns(head);
-  const labelled = runs.length > 1;
   const more = Math.max(0, total - head.length);
   // Every loaded row is out: the rest is the archive, fetched only now (not on open).
   const unloaded = head.length >= tasks.length;
   return (
     <div className="todo-pinned-list status-section-list" data-testid={`status-section-${sectionKey}-rows`}>
-      {runs.map((run) => (
-        <div key={run.project} className="status-section-run">
-          {labelled && (
-            <div className="tier-project-label recent-project-label status-section-project" data-project={run.project}>
-              <span className="tier-project-label-name">{run.project || 'Inbox'}</span>
-              <span className="tier-project-label-count" aria-hidden="true">{run.tasks.length}</span>
-            </div>
-          )}
-          {run.tasks.map((task) => <SectionCard key={task.id} task={task} sectionKey={sectionKey} handlers={handlers} />)}
-        </div>
-      ))}
+      {head.map((task) => <SectionCard key={task.id} task={task} sectionKey={sectionKey} handlers={handlers} twoLine={!inProject && !!handlers.twoLine} />)}
       {more > 0 && (
         <button
           type="button"
           className="status-section-more"
           data-testid={`status-section-${sectionKey}-more`}
           disabled={unloaded && !handlers.onLoadMore}
-          onClick={() => { if (unloaded) handlers.onLoadMore?.(); setShown((n) => n + STATUS_SECTION_BATCH); }}
+          onClick={() => { if (unloaded) handlers.onLoadMore?.(); setShown(shown + STATUS_SECTION_BATCH); }}
         >
           {`Show ${Math.min(more, STATUS_SECTION_BATCH)} more`}
         </button>
@@ -260,7 +283,7 @@ export function sectionRowsOf(model: StatusSectionsModel, key: StatusSectionKey)
     case 'needs': return { tasks: model.needs, count: model.needs.length };
     case 'waiting': return { tasks: model.waiting, count: model.waiting.length };
     case 'done': return { tasks: model.done, count: model.done.length + model.doneUnloaded };
-    default: return { tasks: [], count: model.workingCount };
+    default: return { tasks: model.working, count: model.workingCount };
   }
 }
 
@@ -276,6 +299,15 @@ export function StatusSectionGroup({ keys, model, open, onToggle, handlers }: {
     <>
       {keys.map((key) => {
         const { tasks, count } = sectionRowsOf(model, key);
+        if (key === 'needs') {
+          // The attention list on top: its rows, no heading to fold them away.
+          if (count === 0) return null;
+          return (
+            <section key={key} className="status-section status-section-block-needs status-section-headless" aria-label={STATUS_SECTION_LABELS[key]}>
+              <SectionRows sectionKey={key} tasks={tasks} total={count} handlers={handlers} />
+            </section>
+          );
+        }
         // Completed with older tasks still unloaded stays reachable, even at 0 loaded.
         const archiveLeft = key === 'done' && model.archiveLeft;
         if (count === 0 && !archiveLeft) return null;
@@ -287,34 +319,5 @@ export function StatusSectionGroup({ keys, model, open, onToggle, handlers }: {
         );
       })}
     </>
-  );
-}
-
-const COUNT_WORDS: Record<'needs' | 'waiting' | 'done', [string, string]> = {
-  needs: ['needs you', 'need you'],
-  waiting: ['waiting or snoozed', 'waiting or snoozed'],
-  done: ['completed', 'completed'],
-};
-
-/**
- * A project heading's status counts, after its own number (the rows the list draws
- * under Working): the project's tasks in the other sections, with the sections'
- * own glyphs. Zero counts draw nothing, so a project with only working rows reads
- * as before.
- */
-export function ProjectStatusCounts({ counts }: { counts: StateCounts | undefined }) {
-  if (!counts) return null;
-  const parts = (['needs', 'waiting', 'done'] as const).filter((k) => counts[k] > 0);
-  if (parts.length === 0) return null;
-  const title = [`${counts.working} working`, ...parts.map((k) => `${counts[k]} ${COUNT_WORDS[k][counts[k] === 1 ? 0 : 1]}`)].join(', ');
-  return (
-    <span className="project-status-counts" title={title} aria-label={title} data-testid="project-status-counts">
-      {parts.map((k) => (
-        <span key={k} className={`project-status-count project-status-count-${k}`}>
-          <span className="project-status-count-icon" aria-hidden="true">{SECTION_ICONS[k]}</span>
-          {counts[k]}
-        </span>
-      ))}
-    </span>
   );
 }

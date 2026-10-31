@@ -206,6 +206,15 @@ export async function isolateUiPrefs(page: Page, opts: { newInstall?: boolean } 
   // closed, as the shared fixture's prefs do (test-server.ts). `newInstall` is the
   // real first screen, with nothing stored at all.
   const prefs = opts.newInstall ? {} : { 'open-walnut-home-chat-visible': { v: 'false', ts: 1 } }
+  // Nothing stored: not even the By project layout every page's storage starts with
+  // (playwright.config.ts storageState). Once per tab, so a pick the spec makes survives a reload.
+  if (opts.newInstall) {
+    await page.addInitScript(() => {
+      if (sessionStorage.getItem('pw-new-install')) return
+      sessionStorage.setItem('pw-new-install', '1')
+      localStorage.removeItem('walnut-todo-panel-design')
+    })
+  }
   await page.route('**/api/ui-prefs', async (route) => {
     // GET → the boot shape, so the merge adopts nothing another spec left.
     // PUT → accepted and dropped (the real route answers `{ ok: true }`).

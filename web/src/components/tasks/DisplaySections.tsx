@@ -14,15 +14,27 @@ import { useSessionPanelsViewGroup } from './session-panels-view-group';
 import { DisplayRow, SORT_CHOICES, Segmented, SortRow, SwitchRow, type SegChoice } from './DisplaySortRows';
 import { ICON_VIEW } from './filter-dim-icons';
 import { arrowFocus } from './FilterValueList';
+import { PANEL_DESIGNS, type PanelDesign } from './panel-design';
 
 export const TAB_BAR_SWITCH_TITLE = 'All, Pinned and the other views as tabs across the top';
 export const VIEW_ROW_TITLE = 'View: All, Pinned and the other views';
 
 const GROUP_CHOICES: readonly SegChoice<GroupBy>[] = [
   { key: 'project', label: 'By project', title: 'Group the list by project' },
-  { key: 'none', label: 'Flat', title: 'One flat list' },
+  { key: 'none', label: 'In one list', title: 'One list, in pin order' },
 ];
 export const MIXED_ORDER_NOTE = 'Lists in this view differ';
+
+/**
+ * The panel's layout as the Group row (panel-design.ts): Flat is the status sections,
+ * By project the list as it was, and In one list that list without project runs (pin
+ * order, separators), which a single tier view reaches only here.
+ */
+type LayoutChoice = PanelDesign | 'none';
+const LAYOUT_CHOICES: readonly SegChoice<LayoutChoice>[] = [
+  ...PANEL_DESIGNS.map((d) => ({ key: d.id, label: d.label, title: d.title })),
+  GROUP_CHOICES[1],
+];
 
 /** Every view in menu order: the tabs kept on the bar first, then the rest, Projects last. */
 export function useMenuViews(customTiers: DisplayMenuProps['customTiers']): { first: TabBarTab[]; more: TabBarTab[] } {
@@ -44,6 +56,10 @@ export function DisplaySections({ display: p, flashOption, viewLabel, onOpenView
   const sessionRow = useSessionPanelsViewGroup().options[0] as ViewChoiceRow;
   const sessionValue = sessionRow.choices.find((c) => c.active)?.key ?? null;
   const o = p.order;
+  // Flat sorts each section by its own state (latest activity, soonest wake), so Sort
+  // has nothing to act on there; Group is the layout whenever the panel has one.
+  const layout = p.layout && p.onLayoutChange ? { value: p.layout, pick: p.onLayoutChange } : null;
+  const flat = layout?.value === 'status';
   return (
     <>
       {/* Sort and Group, the same two rows at the same y in every view (C29b, spec
@@ -57,13 +73,26 @@ export function DisplaySections({ display: p, flashOption, viewLabel, onOpenView
           </>
         ) : (
           <>
-            <SortRow sortBy={o.sort} choices={SORT_CHOICES.filter((c) => o.sortChoices.includes(c.key))}
-              projectSortCount={o.projectSortCount} onSortForAll={o.onSort} />
-            <DisplayRow option="group" label="Group">
-              <Segmented label="Group" choices={GROUP_CHOICES} value={o.group}
-                onPick={(k) => { if (k !== o.group) o.onGroup(k); }} />
-            </DisplayRow>
-            {((o.sort === null && o.projectSortCount === 0) || o.group === null) && <div className="dm-note">{MIXED_ORDER_NOTE}</div>}
+            {!flat && (
+              <SortRow sortBy={o.sort} choices={SORT_CHOICES.filter((c) => o.sortChoices.includes(c.key))}
+                projectSortCount={o.projectSortCount} onSortForAll={o.onSort} />
+            )}
+            {layout ? (
+              <DisplayRow option="group" label="Group">
+                <Segmented label="Group" choices={LAYOUT_CHOICES} value={flat ? 'status' : o.group}
+                  onPick={(k) => {
+                    if (k === 'status') { if (!flat) layout.pick('status'); return; }
+                    if (flat) layout.pick('project');
+                    if (k !== o.group) o.onGroup(k);
+                  }} />
+              </DisplayRow>
+            ) : (
+              <DisplayRow option="group" label="Group">
+                <Segmented label="Group" choices={GROUP_CHOICES} value={o.group}
+                  onPick={(k) => { if (k !== o.group) o.onGroup(k); }} />
+              </DisplayRow>
+            )}
+            {!flat && ((o.sort === null && o.projectSortCount === 0) || o.group === null) && <div className="dm-note">{MIXED_ORDER_NOTE}</div>}
           </>
         )}
       </div>

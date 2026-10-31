@@ -78,7 +78,7 @@
       order: 0;
       margin-left: calc(-1 * var(--phone-card-indent));
     }
-    html .app-shell-navigation .todo-panel :is(.todo-pinned-card, .todo-focus-card) > .todo-pinned-title {
+    html .app-shell-navigation .todo-panel :is(.todo-pinned-card, .todo-focus-card) > :is(.todo-pinned-title, .status-card-body) {
       order: 0;
       flex: 1 1 0;
       min-width: 0;
@@ -93,7 +93,7 @@
       order: 5;
       margin: 0 6px 6px 0;
     }
-    html .app-shell-navigation .todo-panel :is(.todo-pinned-card, .todo-focus-card) > :not(.task-phase-icon-btn, .todo-pinned-title, .task-start-btn, .task-kebab-wrapper, .todo-recent-ago, .task-unread-dot, .phone-row-needs-you, .todo-pinned-card-override, input, textarea) {
+    html .app-shell-navigation .todo-panel :is(.todo-pinned-card, .todo-focus-card) > :not(.task-phase-icon-btn, .todo-pinned-title, .status-card-body, .task-start-btn, .task-kebab-wrapper, .todo-recent-ago, .task-unread-dot, .phone-row-needs-you, .todo-pinned-card-override, input, textarea) {
       order: 6;
       flex: 0 0 auto;
       max-width: 100%;

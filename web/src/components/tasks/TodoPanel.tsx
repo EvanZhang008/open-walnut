@@ -121,11 +121,11 @@ import { markTierUsed, readTierUsed } from './filter-bar-persist';
 import { buildFilterEvalContext, dimPasses, hiddenByReasons, passesChips } from './filter-predicate';
 import { useHomeFilters, useArchiveFetch, useCreatedOutsideToast } from './useHomeFilters';
 import { archiveNarrowed, footerScope } from './TodoFilterFooter';
-import { ProjectStatusCounts, StatusSectionGroup, StatusSectionHeading, sectionRowsOf, type SectionRowHandlers } from './StatusSections';
-import { PanelDesignSwitch, ProjectStatusFolds, foldTasksByProject, leftoverFoldProjects, useProjectFolds, type ProjectFoldTasks } from './PanelDesignParts';
+import { StatusSectionGroup, sectionRowsOf, type SectionRowHandlers } from './StatusSections';
+import { ProjectStatusFolds, foldTasksByProject, leftoverFoldProjects, useProjectFolds, type ProjectFoldTasks } from './PanelDesignParts';
 import { projectFoldKey, usePanelDesign } from './panel-design';
 import {
-  LS_STATUS_SECTIONS_KEY, buildStatusSections, countByProject, isWatched, stateSectionNoNeeds, type StateCounts, type StateSectionKey, readSectionOpen, writeSectionOpen, type StatusSectionKey,
+  LS_STATUS_SECTIONS_KEY, buildStatusSections, isWatched, stateSectionNoNeeds, stateSectionOf, type StateSectionKey, readSectionOpen, writeSectionOpen, type StatusSectionKey,
 } from './status-sections';
 import { TodoProjectsMiniBar } from './TodoProjectsMiniBar';
 import { TodoFilterEmpty, FilterOverrideReasons, isJustCreated } from './TodoFilterEmpty';
@@ -1453,13 +1453,11 @@ function DroppableHeader({ id, project, disabled, children }: DroppableHeaderPro
 function ProjectHeaderRow({
   project, taskCount, collapsed, source, droppableDisabled, dragHandleProps,
   isFavorite, onToggleFavorite, onToggleCollapse, onViewDetails, onAddTask, onAddFolder, onAddSession,
-  onMoveUp, onMoveDown, sort, onSetSort, onFilterToProject, statusCounts,
+  onMoveUp, onMoveDown, sort, onSetSort, onFilterToProject,
 }: {
   /** '' = Inbox. */
   project: string;
   taskCount: number;
-  /** The project's counts by status (StatusSections.ProjectStatusCounts), after the count. */
-  statusCounts?: ReactNode;
   /** "Filter to this project" (spec 6.8). */
   onFilterToProject?: (project: string) => void;
   /** How this project's tasks are ordered, and the menu rows that change it. */
@@ -1544,7 +1542,6 @@ function ProjectHeaderRow({
               <span className="project-kind-tag">project</span>
               <ProjectSourceBadge source={source} />
               <span className="todo-group-count text-xs text-muted">{taskCount}</span>
-              {statusCounts}
             </div>
             {onToggleFavorite && project && (
               <button
@@ -1884,9 +1881,10 @@ const NO_SEPARATORS: TierSeparator[] = [];
 //
 // The header is a NavigationHeading, so the row IS the reorder handle, the chevron
 // IS the collapse control, and every tier verb lives in its ··· / right-click menu.
-// No grip, no icon, no count, and no per-tier resize handle: the All view is one
-// scroller now, so a per-tier maxHeight would carve a second scrollbar out of it.
-function TierNavigationGroup({ def, isAll, headless, folded, collapsed, onToggle, visibleIds, children, isEmpty, onAdd, onAddSession, onAddTask, onAddSeparator, dropProps, addOpenSignal, onAddSignalConsumed, viewMode, onChangeViewMode, sortBy, onChangeSort }: {
+// It reads as the status sections' divider row (name, count, a line). No grip and no
+// per-tier resize handle: the All view is one scroller now, so a per-tier maxHeight
+// would carve a second scrollbar out of it.
+function TierNavigationGroup({ def, isAll, headless, folded, collapsed, onToggle, visibleIds, taskCount, children, isEmpty, onAdd, onAddSession, onAddTask, onAddSeparator, dropProps, addOpenSignal, onAddSignalConsumed, viewMode, onChangeViewMode, sortBy, onChangeSort }: {
   /** `id` + `label` of the tier — the four built-ins pass a synthetic def. */
   def: CustomTierDef;
   /** In a stacked view (All or Pinned): the tier draws its heading and takes header drops. */
@@ -1900,6 +1898,8 @@ function TierNavigationGroup({ def, isAll, headless, folded, collapsed, onToggle
   onToggle: (id: string) => void;
   /** Sortable ids for this tier's SortableContext (mirrors visibleFocusIds etc.). */
   visibleIds: string[];
+  /** The tasks the tier holds, for its heading's count. */
+  taskCount: number;
   children: ReactNode;
   isEmpty: boolean;
   onAdd: (title: string) => Promise<unknown> | void;
@@ -1954,6 +1954,9 @@ function TierNavigationGroup({ def, isAll, headless, folded, collapsed, onToggle
           label={def.label}
           className="todo-pinned-sublabel"
           icon={<span className={`todo-tier-icon-${isBuiltinTier(def.id) ? def.id : 'custom'}`}>{ICONS.tierIcon(def.id)}</span>}
+          // The status sections' divider row, "Focus (3) ---- >" (2026-10-31, the user:
+          // the regular Focus should use "the same pattern with a line, super clear").
+          divider={{ count: taskCount }}
           collapsed={collapsed}
           onClick={() => onToggle(def.id)}
           actions={actions}
@@ -2386,6 +2389,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   /** Shows a task a status section or a project fold draws (opening it for a locate) and
    *  says whether one does; published below, read by the focus effect above the memos. */
   const revealInSectionRef = useRef<(t: Task, locate: boolean) => boolean>(() => false);
+  /** The last focus handled, and whether the user asked for it (a page-load restore did not). */
+  const focusLocateRef = useRef<{ id: string; locate: boolean } | null>(null);
   // 5.10: tier headings stay off a one-tier board until the user picks a tier once.
   const [tierUsed, setTierUsed] = useState(readTierUsed);
   const noteTierUsed = useCallback(() => { markTierUsed(); setTierUsed(true); }, []);
@@ -2974,6 +2979,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     focusHandledRef.current = true;
     const isUserLocate = pendingLocateRef.current;
     pendingLocateRef.current = false;
+    focusLocateRef.current = { id: focusedTaskId, locate: isUserLocate };
     // A phone opens the row as a layer: the list keeps the place the thumb left (N2-01).
     if (phoneOpenKeepsList(focusScope)) return;
     // 'pinned' scope (tier quick-adds): the new card is already visible in its tier —
@@ -4841,9 +4847,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // with no sections; a watched task stays on top either way. A search ranks
   // everything in one list.
   const sectionsActive = !isSearchMode && statusOnSections;
-  // Which of the layouts on trial organizes the panel (panel-design.ts).
+  // Which layout organizes the panel (panel-design.ts): Flat or By project.
   const [panelDesign, setPanelDesign] = usePanelDesign();
-  /** By status pulls Needs you out of the list into its own section; the others keep it in place. */
+  /** Flat draws Needs you as its own section; By project keeps those rows in the list. */
   const needsSection = sectionsActive && panelDesign === 'status';
   const [sectionOpen, setSectionOpen] = useState(() => {
     try { return readSectionOpen(localStorage.getItem(LS_STATUS_SECTIONS_KEY)); } catch { return readSectionOpen(null); }
@@ -6958,6 +6964,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     tierOf: getTier,
     viewSection: effectiveSection,
     tierLabel: (tier) => tierDisplayLabel(tier, customTiers),
+    twoLine: needsSection && effectiveSection !== 'recent' && effectiveSection !== 'tasks',
     // A watched task stays under Watching when it completes: it never fades out.
     isVanishing: (t) => graceExiting && heldInGrace(t) && !isWatched(t),
     onLoadMore: askArchive,
@@ -6975,7 +6982,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     onStartSession,
     onMoveToProject: onMoveTask ? handleMoveToProject : undefined,
     onDelete,
-  }), [focusedTaskId, suppressDetail, openSessionTaskIds, pinnedTaskIds, getTier, effectiveSection, customTiers, graceExiting, heldInGrace, askArchive, handleTaskClick, setPhaseOrComplete, onSetPriority, onSetDate, onSetStartDate, onPinTask, onUnpinTask, onSetTier, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, onMoveTask, handleMoveToProject, onDelete]);
+  }), [focusedTaskId, suppressDetail, openSessionTaskIds, pinnedTaskIds, getTier, effectiveSection, needsSection, customTiers, graceExiting, heldInGrace, askArchive, handleTaskClick, setPhaseOrComplete, onSetPriority, onSetDate, onSetStartDate, onPinTask, onUnpinTask, onSetTier, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, onMoveTask, handleMoveToProject, onDelete]);
   // The By project design (panel-design.ts): each region's waiting and completed tasks
   // by project, drawn as folds at the end of the project. A tier region holds its own
   // pins; the list holds the rest (the pins too, outside the stacked view).
@@ -7006,12 +7013,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       snoozed: dateDefault ? (t: Task) => !dimPasses(t, 'date', filterEvalCtx) : undefined,
     };
   }, [filterEvalCtx]);
-  /** region → project → counts by state, for the project headings (every design). */
-  const projectStateCounts = useMemo(() => {
-    const out = new Map<string, Map<string, StateCounts>>();
-    for (const [region, arr] of regionTasks) out.set(region, countByProject(arr, regionRules.passes, regionRules.snoozed));
-    return out;
-  }, [regionTasks, regionRules]);
   const foldRegions = useMemo(() => {
     const regions = new Map<string, Map<string, ProjectFoldTasks>>();
     if (!projectFoldsOn) return regions;
@@ -7194,7 +7195,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             sortableId={labelId}
             project={proj}
             count={projectRowCount.get(proj) ?? 0}
-            statusCounts={sectionsActive ? <ProjectStatusCounts counts={projectStateCounts.get(tier)?.get(proj)} /> : undefined}
             collapsed={isRunCollapsed(tier, proj)}
             inert={foldersInert}
             dropIndicator={labelDropProj === proj && labelDragProj !== proj ? dropSide(proj) : null}
@@ -7379,7 +7379,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       for (const p of leftoverFoldProjects(region, drawnRuns)) out.push(projectFoldsFor(tier, p, true));
     }
     return out;
-  }, [filterOverrideId, fadingOverrideId, filterOverrideNode, movePinnedRow, tierIdsAtRest, pinnedTaskMap, taskGroups, folderMeta, folderFolds, toggleFolder, handleMoveFolderToProject, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, keepWhileParking, waitingWillHide, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject, separators, sepPreview, sepDrag, setSepDrag, clearSepDrag, deleteSeparator, renameSeparator, addSeparator, addTaskToRun, runAddRow, runAddSignal, isRunCollapsed, toggleRun, favorites, showProjectDetail, onCreateFolder, handleCreateFolder, moveProjectBy, folderParents, folderTargetId, tierChains, activeDragPinnedId, tierSort, projectFoldsOn, foldRegions, projectFoldsFor, sectionsActive, projectStateCounts]);
+  }, [filterOverrideId, fadingOverrideId, filterOverrideNode, movePinnedRow, tierIdsAtRest, pinnedTaskMap, taskGroups, folderMeta, folderFolds, toggleFolder, handleMoveFolderToProject, focusedTaskId, openSessionTaskIds, suppressDetail, handlePinnedCardClick, onSetTier, onUnpinTask, onPinTask, onSetPriority, onSetDate, handleExpandDetail, onClearFocus, onOpenSession, onStartSession, setPhaseOrComplete, onUpdate, handleUpdateTitle, onDelete, onMoveTask, handleMoveToProject, selectMode, selectedIds, onSelectToggle, onStartSelect, groupTargetId, handleRenameGroup, handleDissolveGroup, handleHideGroup, keepWhileCompleting, keepWhileParking, waitingWillHide, recentTick, graceExiting, isPinnedDragActive, labelDragProj, labelDropProj, handleLabelDrop, tierViewMode, onOpenLauncherForProject, separators, sepPreview, sepDrag, setSepDrag, clearSepDrag, deleteSeparator, renameSeparator, addSeparator, addTaskToRun, runAddRow, runAddSignal, isRunCollapsed, toggleRun, favorites, showProjectDetail, onCreateFolder, handleCreateFolder, moveProjectBy, folderParents, folderTargetId, tierChains, activeDragPinnedId, tierSort, projectFoldsOn, foldRegions, projectFoldsFor, sectionsActive]);
 
   // The regular task list gets its own PINNED/RECENT-style collapsible bar.
   // Outside the stacked view the Tasks tab IS the list — it can't be folded away.
@@ -7504,7 +7504,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (!tierView || !hiddenGroups || hiddenGroups.size === 0) return footerTasks;
     return footerTasks.filter((t) => !(t.group_id && hiddenGroups.has(t.group_id)));
   }, [footerTasks, effectiveSection, hiddenGroups]);
-  const sectionModel = useMemo(() => {
+  const baseSectionModel = useMemo(() => {
     // Date at its default ("Available now") only puts a task that has not started yet
     // under Waiting / snoozed; any other Date is the user's chip and narrows every section.
     const dateDefault = filterEvalCtx.state.date === 'now';
@@ -7523,28 +7523,57 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       // Under a chip (a project, a priority) some of it may still belong: offered, not counted.
       archiveOffered: footerTasks === tasks && archiveNarrowed(filterEvalCtx),
       // A row in its exit grace stays where it was drawn. Needs you is a section only in
-      // By status; elsewhere those rows stay in the list unless parked or snoozed.
+      // Flat; elsewhere those rows stay in the list unless parked or snoozed.
       placeOf: (t) => (heldInGrace(t) ? (lastPlace.get(t.id) ?? 'working')
         : !needsSection ? stateSectionNoNeeds(t, snoozed) : undefined),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- recentTick re-runs the grace check
   }, [sectionsActive, needsSection, sectionScope, isSearchMode, tasks, filterEvalCtx, tasksStore?.completedHidden, footerTasks, heldInGrace, recentTick]);
-  const sectionsTop: readonly StatusSectionKey[] = needsSection ? ['watching', 'needs'] : ['watching'];
+  /**
+   * Flat: the view's own list (tiers, projects) is not drawn; Working is a section.
+   * Recent and Projects keep their lists: their order is what they are for.
+   */
+  const flatSections = needsSection && effectiveSection !== 'recent' && effectiveSection !== 'tasks';
+  // A task shown past the chips (5.12: a locate, a task just made) leads the section of
+  // its state in Flat, the way the list draws it in place; its reasons show above the
+  // sections, and that section opens for it.
+  const overrideSection = useMemo((): StateSectionKey | null => {
+    const t = filterOverrideReasons?.task;
+    if (!flatSections || !t) return null;
+    const m = baseSectionModel;
+    if ([m.watching, m.needs, m.working, m.waiting, m.done].some((rows) => rows.some((x) => x.id === t.id))) return null;
+    return stateSectionOf(t, regionRules.snoozed);
+  }, [baseSectionModel, flatSections, filterOverrideReasons, regionRules]);
+  const sectionModel = useMemo(() => {
+    const t = filterOverrideReasons?.task;
+    if (!t || !overrideSection) return baseSectionModel;
+    const m = baseSectionModel;
+    const next = { ...m, [overrideSection]: [t, ...m[overrideSection]] };
+    return overrideSection === 'working' ? { ...next, workingCount: m.workingCount + 1 } : next;
+  }, [baseSectionModel, overrideSection, filterOverrideReasons]);
+  const overrideId = overrideSection ? filterOverrideReasons?.task.id : undefined;
+  useEffect(() => {
+    // Only for a locate: a page-load restore never opens (and saves) a section the user folded.
+    const asked = focusLocateRef.current?.id === overrideId && focusLocateRef.current?.locate;
+    if (overrideSection && overrideId && asked && !sectionOpenRef.current[overrideSection]) setSectionOpenTo(overrideSection, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per task shown, not on every open toggle
+  }, [overrideId, overrideSection]);
+  // Flat draws every section itself, Working too; elsewhere the list is Working.
+  const sectionsTop: readonly StatusSectionKey[] = flatSections ? ['watching', 'needs', 'working'] : needsSection ? ['watching', 'needs'] : ['watching'];
   // Waiting / snoozed and Completed fold at the bottom, except By project, which folds
   // them inside each project (Recent has no projects to fold into, so it keeps them here).
   const sectionsBottom: readonly StatusSectionKey[] = !sectionsActive ? []
     : panelDesign !== 'project' || effectiveSection === 'recent' ? ['waiting', 'done'] : [];
-  const workingHeading = needsSection;
   // Publish where each task is drawn, after the commit that drew it.
   useLayoutEffect(() => {
     const drawn = new Set<StatusSectionKey>([...sectionsTop, ...sectionsBottom]);
     const place = new Map<string, StatusSectionKey>();
     const graceAt = new Map<string, StateSectionKey>();
-    for (const key of ['watching', 'needs', 'waiting', 'done'] as const) {
+    for (const key of ['watching', 'needs', 'working', 'waiting', 'done'] as const) {
       if (!drawn.has(key)) continue;
       for (const t of sectionRowsOf(sectionModel, key).tasks) {
         place.set(t.id, key);
-        if (key !== 'watching') graceAt.set(t.id, key);
+        if (key !== 'watching' && key !== 'working') graceAt.set(t.id, key);
       }
     }
     lastPlaceRef.current = graceAt;
@@ -7564,11 +7593,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
           return true;
         }
       }
-      // In the list: a folded Working opens for it.
-      if (locate && workingHeading && !sectionOpenRef.current.working) setSectionOpenTo('working', true);
       return false;
     };
-  }, [sectionModel, sectionsTop.join(), sectionsBottom.join(), projectFoldsOn, regionRules, pinnedTaskIds, effectiveSection, getTier, foldRegions, openProjectFolds, toggleProjectFold, workingHeading, setSectionOpenTo]);
+  }, [sectionModel, sectionsTop.join(), sectionsBottom.join(), projectFoldsOn, regionRules, pinnedTaskIds, effectiveSection, getTier, foldRegions, openProjectFolds, toggleProjectFold, setSectionOpenTo]);
   /** Some section draws rows of this view, so an empty list under Working is no "No tasks found". */
   const sectionRowsDrawn = sectionModel.watching.length + sectionModel.needs.length + sectionModel.waiting.length
     + sectionModel.done.length + sectionModel.doneUnloaded > 0;
@@ -7702,10 +7729,16 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     order: displayOrder,
     allCollapsed,
     onCollapseExpandAll: handleCollapseExpandAll,
+    // The layout (panel-design.ts) leads the Group row, beside the list's own grouping.
+    // Only in the views it organizes: Recent and Projects draw their own list in either
+    // layout, and a narrow Status pick or a search draws the plain list, so their Group
+    // row is the list's.
+    layout: sectionsActive && effectiveSection !== 'recent' && effectiveSection !== 'tasks' ? panelDesign : undefined,
+    onLayoutChange: setPanelDesign,
     // F05: only in the views whose list has project groups for the action to fold
     // (All and Projects, with at least one project). Under Flat it still sets the
     // folds the By project list opens with.
-    showCollapse: listOrderApplies && liveGroupKeys.size > 0,
+    showCollapse: !flatSections && listOrderApplies && liveGroupKeys.size > 0,
   };
 
   const tierSectionActive = isTierSection(effectiveSection) && !isSearchMode;
@@ -7721,7 +7754,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
             label={tierDisplayLabel(effectiveSection, customTiers)}
             onAddSession={onOpenLauncherForTier}
             onAddTask={addTaskToTier}
-            onAddSeparator={tierSort(effectiveSection) === 'manual' ? addSeparator : undefined}
+            onAddSeparator={!flatSections && tierSort(effectiveSection) === 'manual' ? addSeparator : undefined}
           />
         </div>
   ) : null;
@@ -7799,17 +7832,25 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
       <div ref={setListScrollEl} className={`home-navigation-scroll${isStacked ? ' is-stacked' : ''}${unpinZone ? ' is-unpin-dragging' : ''}${showFilterEmpty && overrideOnlyIds.size === 0 ? ' is-filter-empty' : ''}`}>
       {bannerInList && tierSoloHeading}
-      {/* Status sections (status-sections.ts): Watching and Needs you above the view's
-          own list, which is Working; Waiting and Completed fold below it. */}
-      {/* The layouts are on trial on the desktop; a phone keeps the default. */}
-      {!isSearchMode && !phoneFirstLoad && !bannerInList && <PanelDesignSwitch design={panelDesign} onChange={setPanelDesign} />}
+      {/* Status sections (status-sections.ts): in Flat every section is drawn here and in
+          the group below, with no list; By project draws Watching here, then its list. */}
+      {flatSections && tierSectionActive && (
+        // The tier's "+" → New task opens this row (the list's own tier row is not drawn).
+        <InlineAdd
+          draftId={`tier:${effectiveSection}:flat`}
+          label={`Add to ${tierDisplayLabel(effectiveSection, customTiers)}…`}
+          onAdd={(title) => onCreate({ title, priority: 'none', pinnedTier: effectiveSection, capture: true })}
+          openSignal={tierAddOpenSignal(effectiveSection)}
+          onOpenSignalConsumed={consumeTierAddSignal}
+          // An empty tier keeps its "Add to …" row, as the list's own tier row does.
+          hideClosed={sectionRowsDrawn || sectionModel.working.length > 0}
+        />
+      )}
+      {flatSections && filterOverrideNode}
       {!isSearchMode && !phoneFirstLoad && (
         <StatusSectionGroup keys={sectionsTop} model={sectionModel} open={sectionOpen} onToggle={toggleStatusSection} handlers={sectionRowHandlers} />
       )}
-      {workingHeading && !phoneFirstLoad && (
-        <StatusSectionHeading sectionKey="working" count={sectionModel.workingCount} open={sectionOpen.working} onToggle={toggleStatusSection} />
-      )}
-      {(!workingHeading || sectionOpen.working) && (
+      {!flatSections && (
       <NavigationSections storageKey="walnut-todo-navigation-order">
         <NavigationSection key="pinned" navId="pinned">
       {/* Unified DndContext wrapping both Pinned + Recent — enables drag from Recent to Pin.
@@ -7881,6 +7922,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                           collapsed={chevronCollapsed(tier)}
                           onToggle={toggleSection}
                           visibleIds={model.visibleIds}
+                          // The rows under it, less one shown only past the chips (the tab's count skips it too).
+                          taskCount={model.display.reduce((n, t) => (overrideOnlyIds.has(t.id) ? n : n + 1), 0)}
                           isEmpty={model.display.length === 0}
                           // capture:true → the configured Default Platform/Project (fast
                           // local Inbox by default). Deliberately NO onFocusTask:
@@ -8335,7 +8378,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
                       <ProjectHeaderRow
                         project={project}
                         taskCount={projTasks.length}
-                        statusCounts={sectionsActive ? <ProjectStatusCounts counts={projectStateCounts.get('list')?.get(project)} /> : undefined}
                         collapsed={isListProjectCollapsed(project)}
                         source={projectRegistry.sourceByName.get(project.toLowerCase())}
                         droppableDisabled={activeDragType !== 'task'}
@@ -8490,6 +8532,24 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       )}
       {sectionsBottom.length > 0 && !phoneFirstLoad && (
         <StatusSectionGroup keys={sectionsBottom} model={sectionModel} open={sectionOpen} onToggle={toggleStatusSection} handlers={sectionRowHandlers} />
+      )}
+      {/* Flat draws no list, so its empty states are here. */}
+      {flatSections && loading && (
+        <div className="empty-state" style={{ padding: '24px 8px' }}>
+          <div className="spinner" style={{ width: 20, height: 20, borderWidth: 2, margin: '0 auto' }} />
+        </div>
+      )}
+      {flatSections && !loading && !phoneFirstLoad && !sectionRowsDrawn && !sectionModel.archiveLeft && sectionModel.workingCount === 0 && !showFilterEmpty && (
+        tasks.length === 0 ? (
+          <div className="empty-state todo-empty-board" data-testid="todo-empty-board">
+            <p className="todo-empty-board-title">No tasks yet</p>
+            <p className="text-sm">Start with New task above. Projects are created for you as you go.</p>
+          </div>
+        ) : (
+          <div className="empty-state" style={{ padding: '24px 8px' }}>
+            <p className="text-sm">No tasks found</p>
+          </div>
+        )
       )}
       </div>
 

@@ -12,9 +12,9 @@ test.setTimeout(120_000);
 
 async function boot(page: Page, baseURL: string) {
   await isolateUiPrefs(page);
-  // The grid checks place a task that needs you in its tier and project; List + shelf
-  // keeps it there (By status, the default, draws it in the Needs you section).
-  await presetPanelDesign(page, 'shelf');
+  // The grid checks place a task that needs you in its tier and project; By project
+  // keeps it there (Flat, the default, draws it in the Needs you section).
+  await presetPanelDesign(page, 'project');
   // These tests are about tier headings. A user who never picked a tier sees none while one
   // tier holds cards (spec 5.10, pinned in filter-bar-board.spec.ts), so mark one picked.
   await page.addInitScript(() => localStorage.setItem('walnut-todo-tier-used', '1'));
@@ -139,9 +139,10 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   expect(Math.round(await leftOf(project.locator('.todo-group-name-btn')) - panelX)).toBe(12);
   expect(Math.round(await leftOf(homeToolbar(page).locator('.todo-search-bar')) - panelX)).toBe(12);
   expect(Math.round(circleX - panelX)).toBe(22);
-  // A tier heading carries its coloured icon on that column and its name at 32px; a project
-  // is its name alone (no folder icon), with air above it. A folder sits one step in, its
-  // icon on the circle column. Section headings (Pinned, Projects) stay plain text.
+  // A tier heading is the status sections' divider row (2026-10-31): its name on that
+  // column, no icon, then its count and a rule. A project is its name alone (no folder icon),
+  // with air above it. A folder sits one step in, its icon on the circle column. Section
+  // headings (Pinned, Projects) stay plain text.
   const textStart = (locator: ReturnType<Page['locator']>) => locator.evaluate(el => {
     const range = document.createRange();
     range.selectNodeContents(el);
@@ -149,9 +150,9 @@ test('rail, toolbar, menu-only filters, trailing chevrons and responsive layouts
   });
   await expect(heading(page, 'pinned').locator('.navigation-icon')).toHaveCount(0);
   const focusHeading = heading(page, 'focus');
-  expect(Math.round(await leftOf(focusHeading.locator('.navigation-icon')) - panelX)).toBe(12);
-  expect(Math.round(await textStart(focusHeading.locator('.navigation-label')) - panelX)).toBe(32);
-  expect(await focusHeading.locator('.todo-tier-icon-focus').evaluate(el => getComputedStyle(el).color)).toBe('rgb(0, 122, 255)');
+  await expect(focusHeading.locator('.navigation-icon')).toHaveCount(0);
+  await expect(focusHeading).toHaveClass(/navigation-heading-divider/);
+  expect(Math.round(await textStart(focusHeading.locator('.navigation-label')) - panelX)).toBe(12);
   await expect(project.locator('.todo-group-project-icon')).toBeHidden();
   expect(Math.round(await textStart(project.locator('.todo-group-project-name')) - panelX)).toBe(12);
   expect(await project.evaluate(el => getComputedStyle(el).marginTop)).toBe('12px');
@@ -573,7 +574,8 @@ test('a single tier, Recent and the Projects list draw on the same grid as All',
   const gapAbove = (selector: string) => navigation(page).evaluate((nav, selector) => {
     const target = nav.querySelector(selector)!;
     const top = target.getBoundingClientRect().top;
-    const above = [...nav.querySelectorAll('[data-task-id], .navigation-heading, .tier-project-label, .task-group-chip, .todo-show-more')]
+    // A project's fold row (its waiting and completed rows, By project) is a row too.
+    const above = [...nav.querySelectorAll('[data-task-id], .navigation-heading, .tier-project-label, .task-group-chip, .todo-show-more, .project-status-fold-row')]
       .filter(el => !target.contains(el) && el.getBoundingClientRect().height > 0 && el.getBoundingClientRect().bottom <= top + 0.5)
       .map(el => el.getBoundingClientRect().bottom);
     return Math.round(top - Math.max(...above));

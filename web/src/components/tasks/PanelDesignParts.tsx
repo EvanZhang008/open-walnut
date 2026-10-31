@@ -1,34 +1,11 @@
 /**
- * The parts only some panel designs draw (panel-design.ts): the switch that picks a
- * design, and the By project design's per-project folds.
+ * The parts only the By project layout draws (panel-design.ts): its per-project folds.
  */
 import { useCallback, useState } from 'react';
 import type { Task } from '@open-walnut/core';
-import { PANEL_DESIGNS, LS_PROJECT_FOLDS_KEY, projectFoldKey, type PanelDesign } from './panel-design';
+import { LS_PROJECT_FOLDS_KEY, projectFoldKey } from './panel-design';
 import { SECTION_ICONS, SectionRows, type SectionRowHandlers } from './StatusSections';
 import { STATUS_SECTION_TITLES, projectRuns, sortSectionTasks, stateSectionNoNeeds, isWatched } from './status-sections';
-
-export function PanelDesignSwitch({ design, onChange }: { design: PanelDesign; onChange: (d: PanelDesign) => void }) {
-  return (
-    <div className="panel-design-switch" role="radiogroup" aria-label="Task panel layout" data-testid="panel-design-switch">
-      <span className="panel-design-switch-label">Layout</span>
-      {PANEL_DESIGNS.map((d) => (
-        <button
-          key={d.id}
-          type="button"
-          role="radio"
-          aria-checked={design === d.id}
-          className={`panel-design-option${design === d.id ? ' on' : ''}`}
-          data-testid={`panel-design-${d.id}`}
-          title={d.title}
-          onClick={() => onChange(d.id)}
-        >
-          {d.label}
-        </button>
-      ))}
-    </div>
-  );
-}
 
 export interface ProjectFoldTasks { waiting: Task[]; done: Task[] }
 
@@ -128,7 +105,7 @@ export function ProjectStatusFolds({ region, project, tasks, open, onToggle, han
         })}
       </div>
       {kinds.map((k) => open.has(projectFoldKey(region, project, k)) && (
-        <SectionRows key={k} sectionKey={k} tasks={tasks[k]} total={tasks[k].length} handlers={rowHandlers} />
+        <SectionRows key={k} sectionKey={k} tasks={tasks[k]} total={tasks[k].length} handlers={rowHandlers} inProject />
       ))}
     </div>
   );

@@ -19,7 +19,7 @@ import fs from 'node:fs/promises'
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
-import { setStatusSectionOpen, showSectionCard, statusSectionCountOf, statusSectionToggle } from './status-section-helpers'
+import { presetPanelDesign, setStatusSectionOpen, showSectionCard, statusSectionCountOf, statusSectionToggle } from './status-section-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -40,6 +40,8 @@ test.beforeAll(async () => {
 
 test.beforeEach(async ({ page }) => {
   await isolateUiPrefs(page)
+  // The Waiting / snoozed section at the bottom is Flat's.
+  await presetPanelDesign(page, 'status')
   await presetPanelView(page, { section: 'all' })
   await page.setViewportSize({ width: 1280, height: 860 })
 })

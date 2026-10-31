@@ -1,32 +1,31 @@
 /**
- * The home task panel's layout designs, for the user to try on real data before one
- * ships (2026-10-29, the user: "give me a few designs first, let me try how we should
- * organize these tasks"). All three keep the shared parts: Watching on top, status
- * counts on each project heading, waiting and completed tasks folded out of sight.
- * They differ in how the rest is organized:
+ * The home task panel's two layouts, picked as the Display menu's Group row
+ * (2026-10-30, the user: "default can be flat ... you can also in display by project,
+ * by project is our normal way"):
  *
- *   status   By status: the panel is five status sections (Watching, Needs you,
- *            Working, Waiting / snoozed, Completed), each grouped by project.
- *   project  By project: projects stay the top level; each project ends with its
- *            own folded Waiting / snoozed and Completed rows.
- *   shelf    List + shelf: the list as it was (a red row needs you, in place), with
- *            Waiting / snoozed and Completed folded on one shelf at the bottom.
+ *   status   Flat (the default): the panel is its status sections, each a flat list
+ *            of two-line rows (project and tags on a small line, then the title):
+ *            Watching and Needs you on top, then Working, Waiting / snoozed and
+ *            Completed as folded divider rows.
+ *   project  By project: the list as it was, projects at the top level; each project
+ *            ends with its own folded Waiting / snoozed and Completed rows.
+ *
+ * A stored 'shelf' (a third layout once on trial) reads as Flat.
  */
 import { useCallback, useEffect, useState } from 'react';
 
-export type PanelDesign = 'status' | 'project' | 'shelf';
+export type PanelDesign = 'status' | 'project';
 
 export const PANEL_DESIGNS: readonly { id: PanelDesign; label: string; title: string }[] = [
-  { id: 'status', label: 'By status', title: 'Five status sections across the panel, projects inside each' },
-  { id: 'project', label: 'By project', title: 'Projects on top; each project folds its own waiting and completed tasks' },
-  { id: 'shelf', label: 'List + shelf', title: 'The list as before; waiting and completed tasks fold on one shelf at the bottom' },
+  { id: 'status', label: 'Flat', title: 'One list per status (Needs you, Working, Waiting, Completed), each task with its project above the title' },
+  { id: 'project', label: 'By project', title: 'Grouped by project; each project folds its own waiting and completed tasks' },
 ];
 
 /** walnut-todo-* keys sync across devices (ui-prefs-sync.ts). */
 export const LS_PANEL_DESIGN_KEY = 'walnut-todo-panel-design';
 
 export function readPanelDesign(raw: string | null): PanelDesign {
-  return raw === 'project' || raw === 'shelf' ? raw : 'status';
+  return raw === 'project' ? 'project' : 'status';
 }
 
 export function usePanelDesign(): [PanelDesign, (next: PanelDesign) => void] {

@@ -184,6 +184,9 @@ export interface DisplayMenuProps {
   onCollapseExpandAll(): void;
   /** The view draws project groups that Collapse all acts on (F05). */
   showCollapse: boolean;
+  /** The panel's layout (panel-design.ts), leading the Group row; absent = the list's own Group row (a view the layout does not organize). */
+  layout?: 'status' | 'project';
+  onLayoutChange?(layout: 'status' | 'project'): void;
 }
 
 /** The Display menu's Sort and Group rows, the same two in every view. */

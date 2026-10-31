@@ -64,12 +64,15 @@ export function isWatched(task: Watchable): boolean {
   return !!task.watched_at;
 }
 
-/** The state section a task belongs to. Done wins, then the user's turn, then a park
- *  or a snooze (`snoozed`: its start date is still to come, the Date rule's call). */
+/** The state section a task belongs to. Done wins, then a snooze (`snoozed`: its start
+ *  date is still to come, the Date rule's call), then the user's turn, then a park. A
+ *  snoozed task waits even when it needs the user: they put it away until that date
+ *  (2026-10-30; the server's user status says the same, src/core/user-status.ts). */
 export function stateSectionOf(task: Task, snoozed?: (task: Task) => boolean): StateSectionKey {
   if (task.status === 'done' || task.phase === 'COMPLETE') return 'done';
+  if (snoozed?.(task)) return 'waiting';
   if (taskNeedsAction(task)) return 'needs';
-  if (task.phase === 'WAITING' || snoozed?.(task)) return 'waiting';
+  if (task.phase === 'WAITING') return 'waiting';
   return 'working';
 }
 
@@ -144,7 +147,8 @@ export interface StatusSectionsModel {
   needs: Task[];
   waiting: Task[];
   done: Task[];
-  /** Open tasks the view's own list draws under Working. */
+  /** Open tasks under Working: Flat draws them as rows, By project's list draws them itself. */
+  working: Task[];
   workingCount: number;
   /** Completed tasks not loaded yet that belong in the Completed count (the archive). */
   doneUnloaded: number;
@@ -181,7 +185,7 @@ export function buildStatusSections(input: StatusSectionsInput): StatusSectionsM
   const needs: Task[] = [];
   const waiting: Task[] = [];
   const done: Task[] = [];
-  let workingCount = 0;
+  const working: Task[] = [];
   const seen = new Set<string>();
   for (const t of input.scope) {
     if (seen.has(t.id)) continue;
@@ -191,7 +195,7 @@ export function buildStatusSections(input: StatusSectionsInput): StatusSectionsM
       case 'needs': needs.push(t); break;
       case 'waiting': waiting.push(t); break;
       case 'done': done.push(t); break;
-      default: workingCount += 1;
+      default: working.push(t);
     }
   }
   for (const t of input.all) if (isWatched(t) && input.passes(t)) watching.push(t);
@@ -200,7 +204,8 @@ export function buildStatusSections(input: StatusSectionsInput): StatusSectionsM
     needs: sortSectionTasks('needs', needs),
     waiting: sortSectionTasks('waiting', waiting),
     done: sortSectionTasks('done', done),
-    workingCount,
+    working: sortSectionTasks('working', working),
+    workingCount: working.length,
     doneUnloaded: input.archiveCounts ? input.archiveHidden ?? 0 : 0,
     archiveLeft: !input.archiveCounts && !!input.archiveOffered && (input.archiveHidden ?? 0) > 0,
   };
@@ -226,30 +231,4 @@ export function writeSectionOpen(open: Record<StatusSectionKey, boolean>): strin
   const diff: Partial<Record<StatusSectionKey, boolean>> = {};
   for (const key of STATUS_SECTION_ORDER) if (open[key] !== STATUS_SECTION_DEFAULT_OPEN[key]) diff[key] = open[key];
   return Object.keys(diff).length ? JSON.stringify(diff) : null;
-}
-
-export type StateCounts = Record<StateSectionKey, number>;
-
-/**
- * Each project's tasks in the view by state, for the project headings in the list
- * (2026-10-29, the user: a project should say "how many are waiting, how many
- * working"). A watched task counts by its state too: it is still that project's.
- * Keyed by project name ('' = Inbox).
- */
-export function countByProject(
-  scope: readonly Task[],
-  passes: (task: Task) => boolean,
-  snoozed?: (task: Task) => boolean,
-): Map<string, StateCounts> {
-  const out = new Map<string, StateCounts>();
-  const seen = new Set<string>();
-  for (const t of scope) {
-    if (seen.has(t.id) || !passes(t)) continue;
-    seen.add(t.id);
-    const key = t.project || '';
-    let c = out.get(key);
-    if (!c) { c = { needs: 0, working: 0, waiting: 0, done: 0 }; out.set(key, c); }
-    c[stateSectionOf(t, snoozed)] += 1;
-  }
-  return out;
 }

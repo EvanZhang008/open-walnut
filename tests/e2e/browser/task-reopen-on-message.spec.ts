@@ -32,12 +32,12 @@ let fixtureRoot = ''
 test.describe.configure({ mode: 'serial' })
 test.use({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 })
 
-// These checks follow a tier card's needs-action class as the task moves; List +
-// shelf keeps that card in its tier (By status, the default, would move a task that
+// These checks follow a tier card's needs-action class as the task moves;
+// By project keeps that card in its tier (Flat, the default, would move a task that
 // needs you into the Needs you section above the tiers).
 test.beforeEach(async ({ context }) => {
   await isolateUiPrefsContext(context)
-  await presetPanelDesign(context, 'shelf')
+  await presetPanelDesign(context, 'project')
 })
 
 test.beforeAll(async () => {

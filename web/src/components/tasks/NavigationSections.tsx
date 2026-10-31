@@ -62,11 +62,13 @@ interface HeadingProps {
   collapsed?: boolean;
   /** A group's glyph (a tier's), drawn before the name. Section headings have none. */
   icon?: ReactNode;
+  /** The divider look the status sections have, "Label (N) ---- >" (status-sections.css). */
+  divider?: { count?: number };
   onClick: () => void;
   actions?: ContextMenuItem[];
 }
 
-export function NavigationHeading({ id, label, className = '', collapsed, icon, onClick, actions = [] }: HeadingProps) {
+export function NavigationHeading({ id, label, className = '', collapsed, icon, divider, onClick, actions = [] }: HeadingProps) {
   const order = useContext(NavigationOrder);
   const [tabBar, setTabBar] = useNavigationPreference(TASK_SHORTCUTS_KEY);
   const [menu, setMenu] = useState<{ x: number; y: number; origin: HTMLElement } | null>(null);
@@ -87,7 +89,7 @@ export function NavigationHeading({ id, label, className = '', collapsed, icon, 
     { key: 'tab-bar', label: 'Show tab bar', toggle: true, checked: tabBar, onSelect: () => setTabBar(!tabBar) },
   ];
   return <>
-    <div className={`navigation-heading ${className}${over ? ' navigation-drop-target' : ''}`} data-navigation-id={id}
+    <div className={`navigation-heading ${className}${divider ? ' navigation-heading-divider' : ''}${over ? ' navigation-drop-target' : ''}`} data-navigation-id={id}
       onContextMenu={event => openMenu(event, true)}
       onDragOver={event => { if (event.dataTransfer.types.includes(`text/${order?.storageKey}`)) { event.preventDefault(); event.stopPropagation(); setOver(true); } }}
       onDragLeave={() => setOver(false)}
@@ -97,8 +99,10 @@ export function NavigationHeading({ id, label, className = '', collapsed, icon, 
         onClick={onClick}
         onKeyDown={event => { if (event.altKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown') && order) { event.preventDefault(); const target = order.ids[index + (event.key === 'ArrowUp' ? -1 : 1)]; if (target !== undefined) order.move(id, target); } }}
         onDragStart={event => { event.stopPropagation(); event.dataTransfer.setData(`text/${order?.storageKey}`, id); event.dataTransfer.effectAllowed = 'move'; }}>
-        {icon && <span className="navigation-icon" aria-hidden="true">{icon}</span>}
+        {icon && !divider && <span className="navigation-icon" aria-hidden="true">{icon}</span>}
         <span className="navigation-label">{label}</span>
+        {divider?.count !== undefined && <span className="navigation-heading-count">{divider.count}</span>}
+        {divider && <span className="navigation-heading-rule" aria-hidden="true" />}
         {collapsed !== undefined && <NavigationChevron collapsed={collapsed} />}
       </button>
       <button type="button" className="navigation-more" aria-label={`${label} menu`} aria-haspopup="menu" onClick={event => openMenu(event)} onPointerDown={event => event.stopPropagation()}>···</button>

@@ -58,7 +58,7 @@ const ARRANGE: Record<string, [string, string]> = {
   Created: ['sort', 'date'],
   Updated: ['sort', 'updated'],
   'By project': ['group', 'project'],
-  Flat: ['group', 'none'],
+  'In one list': ['group', 'none'],
 }
 
 /** Sort or group the list through Display (`[data-view-option="sort"|"group"] [data-choice]`). */

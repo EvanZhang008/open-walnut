@@ -173,8 +173,8 @@ test('a pinned tier draws the order orderPinnedTier computes, By project and Fla
   }, { timeout: 30_000 }).toEqual([birch, cedar, '', alder])
   await page.screenshot({ path: `${SHOTS}/web-tier-by-project.png` })
 
-  // Flat: pin order, the folder's rows gathered at its first member.
-  await arrange(page, 'Flat')
+  // In one list: pin order, the folder's rows gathered at its first member.
+  await arrange(page, 'In one list')
   const custom = [c1, i1, a1, a3, b1, a2, i2]
   await expectDrawnAsComputed(page, tier.id, 'custom', birch, custom)
   await page.screenshot({ path: `${SHOTS}/web-tier-custom.png` })

@@ -28,10 +28,10 @@ test.use({
 
 async function phoneHome(page: Page): Promise<void> {
   await isolateUiPrefs(page)
-  // List + shelf: the phone's Needs-you strip (R3-02) and a task that needs you as its
-  // full card in the list (R3-04) are its parts; By status, the default, shows those
+  // By project: the phone's Needs-you strip (R3-02) and a task that needs you as its
+  // full card in the list (R3-04) are its parts; Flat, the default, shows those
   // tasks in its Needs you section instead.
-  await presetPanelDesign(page, 'shelf')
+  await presetPanelDesign(page, 'project')
   await page.addInitScript(() => {
     try { localStorage.setItem('open-walnut-home-chat-visible', 'false') } catch { /* storage off */ }
   })

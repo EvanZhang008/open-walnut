@@ -42,12 +42,12 @@ const densityProject = `Status checks ${Date.now()}`
 // The tests share one set of tasks and one server; fullyParallel is forbidden because it would create the data twice and cross-edit it.
 test.describe.configure({ mode: 'serial' })
 
-// These checks follow a tier card's needs-action class as the task moves; List +
-// shelf keeps that card in its tier (By status, the default, would move a task that
+// These checks follow a tier card's needs-action class as the task moves;
+// By project keeps that card in its tier (Flat, the default, would move a task that
 // needs you into the Needs you section above the tiers).
 test.beforeEach(async ({ context }) => {
   await isolateUiPrefsContext(context)
-  await presetPanelDesign(context, 'shelf')
+  await presetPanelDesign(context, 'project')
 })
 test.use({ viewport: { width: 1200, height: 800 }, deviceScaleFactor: 1 })
 

@@ -3,15 +3,16 @@
  * (web/src/components/tasks/status-sections.ts, StatusSections.tsx, panel-design.ts).
  *
  * With the Status filter at its default and no search, the panel draws its tasks
- * under status headings: Watching and (in the By status design) Needs you on top,
- * the list itself as Working, and Waiting / snoozed and Completed folded at the
- * bottom. These replaced the old footer ("N Waiting hidden", "N Complete hidden",
+ * under status headings. Flat (the default): Watching, Needs you (no heading), Working,
+ * Waiting / snoozed and Completed, with no list. By project: Watching on top, the list
+ * itself, and each project folding its own waiting and completed rows. These replaced the old footer ("N Waiting hidden", "N Complete hidden",
  * "N not available yet: show").
  */
 import { expect, type BrowserContext, type Locator, type Page } from '@playwright/test'
 
 export type StatusSectionKey = 'watching' | 'needs' | 'working' | 'waiting' | 'done'
-export type PanelDesign = 'status' | 'project' | 'shelf'
+/** 'status' is Flat (the product default), 'project' By project (what every page's storage starts with). */
+export type PanelDesign = 'status' | 'project'
 
 /** Keys must match panel-design.ts / status-sections.ts. */
 export const LS_PANEL_DESIGN_KEY = 'walnut-todo-panel-design'
@@ -19,9 +20,8 @@ export const LS_STATUS_SECTIONS_KEY = 'walnut-todo-status-sections'
 
 /**
  * Pick the panel layout before the first render: call BEFORE `page.goto()`.
- * 'shelf' (List + shelf) keeps a task that needs the user in its place in the list,
- * as the panel drew it before the sections; specs whose subject is a row's place in
- * a tier or project use it. Takes a context too, so a second page of the same
+ * Every page's storage starts with 'project' (playwright.config.ts storageState; By project, the list with its rows in their
+ * tiers and projects); a spec about Flat presets 'status'. Takes a context too, so a second page of the same
  * context (an observer tab) gets the same layout. The key is ui-prefs mirrored, so
  * pair this with `isolateUiPrefs` (or `isolateUiPrefsContext`) to keep the pick out
  * of the shared fixture's preferences.

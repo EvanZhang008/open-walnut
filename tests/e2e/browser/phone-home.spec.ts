@@ -55,9 +55,9 @@ async function patchSessionStatus(page: Page, status: { process_status: string; 
 
 async function bootHome(page: Page): Promise<string[]> {
   await isolateUiPrefs(page)
-  // The rows that need you (C67, C68) are checked in their project tree; List + shelf
-  // keeps them there (By status, the default, draws them in the Needs you section).
-  await presetPanelDesign(page, 'shelf')
+  // The rows that need you (C67, C68) are checked in their project tree; By project
+  // keeps them there (Flat, the default, draws them in the Needs you section).
+  await presetPanelDesign(page, 'project')
   await page.addInitScript(() => {
     try {
       if (sessionStorage.getItem('phone-home-seeded')) return

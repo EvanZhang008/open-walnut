@@ -539,7 +539,8 @@ test('keyboard reaches every Display control, with a visible ring and readable c
   expect(await status.evaluate((el) => getComputedStyle(el).outlineStyle)).toBe('solid')
   await page.keyboard.press('ArrowUp')
   await expect(filterSearch(page)).toBeFocused()
-  // Segments (All has Group): Left/Right move AND pick (roving tabindex), the ring follows.
+  // Segments (All has Group: Flat, By project, In one list): Left/Right move AND pick
+  // (roving tabindex), the ring follows.
   const group = option(page, 'group')
   await group.locator('[data-choice="project"]').focus()
   await page.keyboard.press('ArrowRight')
@@ -547,7 +548,7 @@ test('keyboard reaches every Display control, with a visible ring and readable c
   await expect(group.locator('[data-choice="none"]')).toHaveAttribute('aria-pressed', 'true')
   await page.keyboard.press('ArrowLeft')
   await expect(group.locator('[data-choice="project"]')).toHaveAttribute('aria-pressed', 'true')
-  expect(await group.locator('[data-choice]').evaluateAll((els) => els.map((el) => (el as HTMLElement).tabIndex))).toEqual([0, -1])
+  expect(await group.locator('[data-choice]').evaluateAll((els) => els.map((el) => (el as HTMLElement).tabIndex))).toEqual([-1, 0, -1])
   expect(await group.locator('[data-choice="project"]').evaluate((el) => getComputedStyle(el).outlineStyle)).toBe('solid')
   // Down from Group (its active segment) is the View row; Right opens the View page on the current view.
   await page.keyboard.press('ArrowDown')

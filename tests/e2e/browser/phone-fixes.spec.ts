@@ -6,7 +6,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
-import { presetPanelDesign } from './status-section-helpers'
+import { presetPanelDesign, type PanelDesign } from './status-section-helpers'
 import { PHONE, findSmallTargets, findSmallText, injectSafeArea, menuButton, openDrawer, openHomeRow } from './phone-helpers'
 void openHomeRow
 
@@ -23,11 +23,11 @@ test.use({
 
 test.beforeAll(async () => { await fs.mkdir(SHOTS, { recursive: true }) })
 
-async function bootHome(page: Page): Promise<string[]> {
+async function bootHome(page: Page, design: PanelDesign = 'project'): Promise<string[]> {
   await isolateUiPrefs(page)
-  // List + shelf keeps a task that needs you in its tier or project (N5 is about that
-  // row); By status, the default, would draw it in the Needs you section instead.
-  await presetPanelDesign(page, 'shelf')
+  // By project keeps a task that needs you in its tier or project (N5 is about that
+  // row); Flat, the default, would draw it in the Needs you section instead.
+  await presetPanelDesign(page, design)
   await page.addInitScript(() => {
     try {
       if (sessionStorage.getItem('phone-fixes-seeded')) return
@@ -152,7 +152,8 @@ test('N14: a stuck project header sits below the stuck section heading, never un
 })
 
 test('N17: the task panel\'s last status section keeps its words above the home indicator', async ({ page }) => {
-  const errors = await bootHome(page)
+  // The folded sections that close the panel are Flat's.
+  const errors = await bootHome(page, 'status')
   await injectSafeArea(page, { top: 47, bottom: 34 })
   // The filter footer is gone; the folded Waiting / snoozed and Completed sections
   // close the list now (R3-03: the list's last lines on a phone).

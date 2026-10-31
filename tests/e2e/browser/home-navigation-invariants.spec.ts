@@ -41,7 +41,7 @@ test('completed pins remain available and filtering never expands unrelated proj
   expect(opened).not.toContain('Navigation Alpha');
   expect(opened).not.toContain('Navigation Beta');
   await setShowCompleted(page, true);
-  await arrange(page, 'Flat');
+  await arrange(page, 'In one list');
   await chooseViewOption(page, 'collapse');
   await arrange(page, 'By project');
   await expect(project('Navigation Beta').locator('.todo-panel-item')).toHaveCount(0);

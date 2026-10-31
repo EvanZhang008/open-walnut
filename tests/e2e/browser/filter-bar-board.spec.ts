@@ -15,7 +15,7 @@ import { MIA, MIA_PINS, stubBoard } from './filter-bar-fixtures'
 import { openHome } from './home-navigation-helpers'
 import { addFilter, chooseDisplayOption, displayButton, displayMenu, filterChip, filterRow, removeFilterChip, setStatus } from './filter-bar-helpers'
 import { SHOTS, runStamp, boot, seed, cleanup, row, card, anyRow, tab, tabCount, hitIds, selectTab, filterProjects, panelClip } from './filter-bar-board-helpers'
-import { setStatusSectionOpen, statusSection, statusSectionCard, statusSectionCount, statusSectionToggle } from './status-section-helpers'
+import { presetPanelDesign, setStatusSectionOpen, statusSection, statusSectionCard, statusSectionCount, statusSectionRows, statusSectionToggle } from './status-section-helpers'
 
 test.setTimeout(150_000)
 
@@ -74,6 +74,8 @@ test.describe('one predicate for every view', () => {
 })
 
 test.describe('Status, sections and persistence', () => {
+  // The status sections at the bottom are Flat's (By project folds them into each project).
+  test.beforeEach(async ({ page }) => { await presetPanelDesign(page, 'status') })
   test('Complete, Waiting and Need Action really show their rows; the status sections are a second door (C8, C9, C10, C49)', async ({ page, baseURL }) => {
     const stamp = runStamp()
     const garden = `Garden ${stamp}`
@@ -86,25 +88,25 @@ test.describe('Status, sections and persistence', () => {
     await boot(page, baseURL!)
     try {
       await filterProjects(page, [garden])
-      await openListProject(page, garden)
-      await expect(row(page, open)).toBeVisible()
-      await expect(row(page, done)).toHaveCount(0)
-      await expect(row(page, waiting)).toHaveCount(0)
+      // Flat draws no list: the open row is Working's.
+      await setStatusSectionOpen(page, 'working', true)
+      await expect(statusSectionCard(page, 'working', open)).toBeVisible()
+      await expect(anyRow(page, done)).toHaveCount(0)
+      await expect(anyRow(page, waiting)).toHaveCount(0)
       // C49: the section counts follow the Project chip (Home's done and waiting do not
-      // count). By status (the default design) draws the task that needs you in its own
-      // section above the list.
+      // count). The task that needs you leads the panel, with no heading.
       // "1+" when older completed tasks are still unloaded: a chip keeps them out of the count.
       await expect(statusSectionCount(page, 'done')).toHaveText(/^1\+?$/)
       await expect(statusSectionCount(page, 'waiting')).toHaveText('1')
-      await expect(statusSectionCount(page, 'needs')).toHaveText('1')
+      await expect(statusSectionRows(page, 'needs').locator('[data-task-id]')).toHaveCount(1)
       await expect(statusSectionCard(page, 'needs', need)).toBeVisible()
-      await expect(row(page, need)).toHaveCount(0)
+      await expect(statusSectionCard(page, 'working', need)).toHaveCount(0)
       await expect(statusSectionToggle(page, 'waiting')).toHaveAttribute('aria-expanded', 'false')
       await expect(statusSectionToggle(page, 'done')).toHaveAttribute('aria-expanded', 'false')
 
       // C9: the section door shows the row with no chip. A Status pick that holds every
-      // open phase keeps the sections: Open + Waiting gives the chip, the list keeps the
-      // open rows, and the waiting row is drawn in its section, not in the list.
+      // open phase keeps the sections: Open + Waiting gives the chip, Working keeps the
+      // open rows, and the waiting row is drawn in its own section.
       await setStatusSectionOpen(page, 'waiting', true)
       await expect(statusSectionCard(page, 'waiting', waiting)).toBeVisible()
       await expect(statusSectionCard(page, 'waiting', homeIds[1])).toHaveCount(0)
@@ -113,28 +115,28 @@ test.describe('Status, sections and persistence', () => {
       await expect(statusSectionCard(page, 'waiting', waiting)).toHaveCount(0)
       await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Waiting'])
       await expect(filterChip(page, 'status')).toContainText('Open, Waiting')
-      await expect(row(page, open)).toBeVisible()
-      await expect(row(page, waiting)).toHaveCount(0)
+      await expect(statusSectionCard(page, 'working', open)).toBeVisible()
+      await expect(statusSectionCard(page, 'working', waiting)).toHaveCount(0)
       await expect(statusSectionCount(page, 'waiting')).toHaveText('1')
       await setStatusSectionOpen(page, 'waiting', true)
       await expect(statusSectionCard(page, 'waiting', waiting)).toBeVisible()
-      await expect(row(page, waiting)).toHaveCount(0)
       await setStatusSectionOpen(page, 'waiting', false)
 
       // C8: Open + Complete likewise keeps the done row in its Completed section.
       await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Complete'])
       await expect(filterChip(page, 'status')).toContainText('Open, Complete')
-      await expect(row(page, open)).toBeVisible()
-      await expect(row(page, done)).toHaveCount(0)
+      await expect(statusSectionCard(page, 'working', open)).toBeVisible()
+      await expect(statusSectionCard(page, 'working', done)).toHaveCount(0)
       // "1+" when older completed tasks are still unloaded: a chip keeps them out of the count.
       await expect(statusSectionCount(page, 'done')).toHaveText(/^1\+?$/)
       await setStatusSectionOpen(page, 'done', true)
       await expect(statusSectionCard(page, 'done', done)).toBeVisible()
-      await expect(row(page, done)).toHaveCount(0)
       await setStatusSectionOpen(page, 'done', false)
 
-      // C10: Complete alone shows only completed rows; Need Action alone only those.
+      // C10: Complete alone shows only completed rows; Need Action alone only those. A
+      // narrower pick is a plain filter: the list, under its project.
       await setStatus(page, ['Complete'])
+      await openListProject(page, garden)
       await expect(filterChip(page, 'status')).toHaveText(/Complete/)
       await expect(row(page, done)).toBeVisible()
       await expect(row(page, open)).toHaveCount(0)
@@ -156,21 +158,21 @@ test.describe('Status, sections and persistence', () => {
     await boot(page, baseURL!)
     try {
       await filterProjects(page, [garden])
-      await openListProject(page, garden)
-      // Open + Waiting, picked through the Status chip menu: the list keeps the open
+      // Open + Waiting, picked through the Status chip menu: Working keeps the open
       // row, the waiting row lives in the folded Waiting / snoozed section.
       await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Waiting'])
       await expect(filterChip(page, 'status')).toContainText('Open, Waiting')
-      await expect(row(page, open)).toBeVisible()
+      await setStatusSectionOpen(page, 'working', true)
+      await expect(statusSectionCard(page, 'working', open)).toBeVisible()
       await expect(statusSection(page, 'waiting')).toBeVisible()
       expect(Number((await statusSectionCount(page, 'waiting').textContent())?.trim())).toBeGreaterThanOrEqual(1)
-      await expect(row(page, waiting)).toHaveCount(0)
+      await expect(statusSectionCard(page, 'working', waiting)).toHaveCount(0)
       await setStatusSectionOpen(page, 'waiting', true)
       await expect(statusSectionCard(page, 'waiting', waiting)).toBeVisible()
-      await expect(row(page, waiting)).toHaveCount(0)
       await setStatusSectionOpen(page, 'waiting', false)
       // Waiting alone is narrower than Open: no section headings, the row is in the list.
       await setStatus(page, ['Waiting'])
+      await openListProject(page, garden)
       await expect(filterChip(page, 'status')).toHaveText(/Waiting/)
       await expect(row(page, waiting)).toBeVisible()
       await expect(row(page, open)).toHaveCount(0)
@@ -189,23 +191,24 @@ test.describe('Status, sections and persistence', () => {
     await boot(page, baseURL!)
     try {
       await filterProjects(page, [garden])
-      await openListProject(page, garden)
       // The old footer offered "1 not available yet: show"; the snoozed task now
       // counts under the folded Waiting / snoozed section, with its start date.
       await expect(statusSectionCount(page, 'waiting')).toHaveText('1')
-      await expect(row(page, ids[1])).toHaveCount(0)
+      await setStatusSectionOpen(page, 'working', true)
+      await expect(statusSectionCard(page, 'working', ids[0])).toBeVisible()
+      await expect(statusSectionCard(page, 'working', ids[1])).toHaveCount(0)
       await setStatusSectionOpen(page, 'waiting', true)
       const snoozed = statusSectionCard(page, 'waiting', ids[1])
       await expect(snoozed).toBeVisible()
       await expect(snoozed.locator('.todo-item-start-pill')).toBeVisible()
       await setStatusSectionOpen(page, 'waiting', false)
-      // Any date draws it in the list, so the section has nothing left to hold.
+      // Any date draws it with the open rows, so Waiting has nothing left to hold.
       await addFilter(page, 'date', 'Any date')
       await expect(filterChip(page, 'date')).toContainText('Any date')
-      await expect(row(page, ids[1])).toBeVisible()
+      await expect(statusSectionCard(page, 'working', ids[1])).toBeVisible()
       await expect(statusSection(page, 'waiting')).toHaveCount(0)
       await removeFilterChip(page, 'date')
-      await expect(row(page, ids[1])).toHaveCount(0)
+      await expect(statusSectionCard(page, 'working', ids[1])).toHaveCount(0)
       await expect(statusSectionCount(page, 'waiting')).toHaveText('1')
       // Any other Date is the user's chip and narrows every section: nothing waits here.
       await addFilter(page, 'date', 'overdue')
