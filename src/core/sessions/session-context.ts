@@ -198,12 +198,21 @@ export const BRIEF_LINE =
 /**
  * Main's and every lead's chat is read by the user (the Org page, the phone) whoever started the
  * turn (2026-10-29: leads answered Walnut notices in English there). The reply-language hint rides
- * those turns too (hints/hint-registry.ts agentTurnRoles).
+ * every turn there, the user's own included (hints/hint-registry.ts everyTurnRoles).
  */
 export const ORG_REPLY_LANGUAGE_LINE =
   'The user reads your chat (the Org page, the phone), so every reply you write here is to them, whoever started '
   + 'the turn (the user, a Walnut notice, a worker\'s message, a trigger): write it, every line down to a short progress '
   + 'note between tool calls, in the language they asked replies in (their reply-language note and standing rules). What you send to other tasks (task_send, org_send) stays in English.\n\n'
+
+/**
+ * One fault, one owner (2026-10-30 org review: "the same deliverable continues its exact task" sent each
+ * screen's copy of one snooze bug to the task that built that screen, three tasks in all, before the
+ * user asked for the root cause to be fixed). The same for Main and every lead, after its routing rule.
+ */
+export const ONE_CAUSE_LINE =
+  'One fault that shows in several places is one deliverable, its cause: give it to the one task that owns the '
+  + 'cause, not to each screen\'s builder.\n\n'
 
 /**
  * News reaches the user once (2026-10-30 org review: a lead passed a finished result to Main and
@@ -240,6 +249,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + 'details. Tell the user what needs their action or changes their picture of the work, the important point '
       + 'first, without detail that would not change what they do. Walnut puts a folded org update before a message '
       + 'when work moved: background, mention it only when it matters to what the user says.\n\n'
+      + ONE_CAUSE_LINE
       + DECISION_CONTEXT_LINE + MAIN_DECISION_LINE
       + ORG_REPLY_LANGUAGE_LINE
       + MAIN_NEWS_ONCE_LINE
@@ -279,6 +289,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + 'new status words, what finished, what is new, and what others asked of your teams: the user, the main agent, '
       + 'another team) before a message when something moved; it is background. A task that waits on you is yours: '
       + 'Walnut wakes you with it under "Waiting on you"; read it and answer or close it.\n\n'
+      + ONE_CAUSE_LINE
       + DECISION_CONTEXT_LINE + LEAD_DECISION_LINE
       + ORG_REPLY_LANGUAGE_LINE
       + LEAD_NEWS_ONCE_LINE

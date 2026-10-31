@@ -35,6 +35,7 @@ import {
   settleReplied,
   settleLateReply,
   withdrawRequest,
+  listAllSessionRequests,
   type SessionRequest,
 } from '../session-requests.js';
 import { queueSentBy } from './send-sent-by.js';
@@ -121,6 +122,8 @@ export interface SessionSendResult {
   handOnRefused?: { id: string; reason: string }[];
   /** Present on an in_reply_to send. */
   repliedTo?: string;
+  /** The requests the answered one carried, answered by it too: the answer went to the outermost one's asker. */
+  answeredFor?: string[];
   messageId?: string;
 }
 
@@ -696,7 +699,11 @@ async function performReply(
   // the request any more (see reply-routing.ts for the incident). The common case
   // — an asker that is still live — resolves to itself, unchanged.
   const { resolveReplyDestination, logReplyReroute } = await import('./reply-routing.js');
-  const destination = await resolveReplyDestination(request.fromSessionId, {
+  // A request that carries another one (hands_on) is answered for that one's asker: the answer
+  // goes straight there, and the asker in between reads one line (reply-handoff.ts).
+  const { onwardAnswer, wentPastLine } = await import('./reply-handoff.js');
+  const onward = await onwardAnswer(request, caller.record.claudeSessionId);
+  const destination = onward?.destination ?? await resolveReplyDestination(request.fromSessionId, {
     // Never route the answer back into the session that is answering.
     exclude: [caller.record.claudeSessionId],
   });
@@ -704,12 +711,17 @@ async function performReply(
     throw new SendError('origin_session_gone',
       `the asking session (${shortId(request.fromSessionId)}) is gone — nothing to deliver to`, 410);
   }
-  logReplyReroute(id, request.fromSessionId, destination);
+  logReplyReroute(onward?.final.id ?? id, onward?.final.fromSessionId ?? request.fromSessionId, destination);
   const origin = destination.session;
   // Before the settle: a refused answer leaves the request open for a forced retry.
   const replyBody = await admitCompleteTarget(caller, origin.taskId, input, text, 'reply');
 
-  if (request.status !== 'pending') {
+  // Settles one request with this answer, pending or overdue; `fwd` marks one whose asker the answer went past.
+  const settleOpen = async (rid: string, fwd?: string) =>
+    (await settleReplied(rid, fields, fwd).catch(() => null)) ?? await settleLateReply(rid, fields, fwd).catch(() => null);
+  if (onward) {
+    // Settled once the answer is delivered: a failed delivery leaves the whole chain open.
+  } else if (request.status !== 'pending') {
     // Late but honest: the asker was already notified (turn end / timeout), yet
     // a real answer beats a status notice — deliver it anyway, marked late.
     log.session.info('session reply after settle — delivering late', { requestId: id, status: request.status });
@@ -721,14 +733,15 @@ async function performReply(
       log.session.info('session reply lost the settle race — delivering late', { requestId: id });
     }
   }
+  const answeredFor = onward?.final ?? request;
   // The replier's latest result, kept on its task: the Board and the Brief read Partial from it.
   if (caller.record.taskId) {
     await noteResultReport(caller.record.taskId, {
-      via: 'reply', request_id: id, ...(origin.taskId ? { to_task_id: origin.taskId } : {}), by: `task:${caller.record.taskId}`,
+      via: 'reply', request_id: answeredFor.id, ...(origin.taskId ? { to_task_id: origin.taskId } : {}), by: `task:${caller.record.taskId}`,
     }, fields);
   }
 
-  const wrapped = buildReplyDeliveryText(request, {
+  const wrapped = buildReplyDeliveryText(answeredFor, {
     // No title → the handle is just `[8hex]`; never invent a name.
     title: caller.record.title ?? '',
     shortId: shortId(caller.record.claudeSessionId),
@@ -744,9 +757,36 @@ async function performReply(
   });
 
   const originSid = origin.claudeSessionId;
+  // The asks this answer went past: the chain below the outermost one, or the asks that handed
+  // `request` on to the task answering it directly. Each settles, and its asker reads one line.
+  const { directCarriers } = await import('./reply-handoff.js');
+  const passed = onward
+    ? [request, ...onward.chain.slice(0, -1)]
+    : directCarriers(request, caller.record.taskId, await listAllSessionRequests().catch(() => []));
+  if (onward) {
+    for (const r of passed) await settleOpen(r.id, onward.final.id);
+    await settleOpen(onward.final.id);
+  } else {
+    for (const r of passed) await settleOpen(r.id, id);
+  }
+  if (passed.length) {
+    // Where each asker reads now (never woken; the answer itself is not repeated).
+    const { tellOrRide } = await import('./status-push.js');
+    for (const r of passed) {
+      const at = await resolveReplyDestination(r.fromSessionId, { exclude: [caller.record.claudeSessionId, originSid] });
+      if (!at) continue;
+      await tellOrRide(at.session.claudeSessionId, `onward-${r.id}`, wentPastLine({
+        replier: { title: caller.record.title ?? null, taskId: caller.record.taskId ?? null },
+        yours: r.id,
+        final: answeredFor,
+        finalAsker: { title: origin.title ?? null, taskId: origin.taskId ?? null },
+      }));
+    }
+  }
   log.session.info('session reply delivered to asker', {
     requestId: id, fromSessionId: caller.record.claudeSessionId,
     requesterSessionId: request.fromSessionId,
+    ...(onward ? { answeredFor: onward.chain.map((r) => r.id) } : {}),
     toSessionId: originSid, delivery, messageId,
   });
   return {
@@ -763,6 +803,7 @@ async function performReply(
       ...(origin.taskId ? { taskId: origin.taskId } : {}),
     },
     repliedTo: id,
+    ...(onward ? { answeredFor: onward.chain.map((r) => r.id) } : {}),
     ...(messageId ? { messageId } : {}),
   };
 }

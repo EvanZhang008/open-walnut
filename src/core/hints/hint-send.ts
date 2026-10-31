@@ -115,8 +115,8 @@ export function planHints(input: {
         triggers: hint.triggers, everyTurns: hint.everyTurns, told, send, identity,
         compactUuid: input.record?.lastCompactUuid, driftAt: state.drift?.[hint.kind], requested: !!request,
       });
-    // A role whose chat the user reads gets it on every turn a person did not start.
-    if (!input.afterCompaction && input.sentBy !== 'person' && input.target.role && hint.agentTurnRoles.includes(input.target.role)
+    // A role whose chat the user reads gets it on every turn, the user's own included (hint-registry.ts everyTurnRoles).
+    if (!input.afterCompaction && input.target.role && hint.everyTurnRoles.includes(input.target.role)
       && !reasons.includes('every_turn')) reasons = [...reasons, 'every_turn'];
     if (input.only) reasons = reasons.filter((r) => input.only!.has(r));
     if (!reasons.length) continue;

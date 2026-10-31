@@ -42,6 +42,7 @@ const getTask = vi.fn();
 vi.mock('../../src/core/task-manager.js', () => ({
   getTask: (...args: unknown[]) => getTask(...args),
   listTasks: async () => tasks,
+  listTasksByIds: async (ids: string[]) => tasks.filter((t) => ids.includes(t.id)),
 }));
 
 const sendMessageToSession = vi.fn();
@@ -735,6 +736,193 @@ describe('performSessionSend — in_reply_to', () => {
     );
     expect(err.message).toContain('sess-ask');
     expect(sendMessageToSession).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A reply to a request that carries another one (hands_on) is the answer to that one too, so it
+ * goes straight to that one's asker (reply-handoff.ts). 2026-10-30: Main asked a lead, the lead
+ * handed it to a worker, the worker's answer reached only the lead, and Main got it when the lead
+ * re-sent it by hand.
+ */
+describe('performSessionSend — an answer to a handed-on request goes to the original asker', () => {
+  const MAIN = 'sess-main-1';
+  const LEAD = 'sess-lead-1';
+  const WORKER = 'sess-worker-1';
+  const HELPER = 'sess-helper-1';
+
+  beforeEach(() => {
+    sessions = [
+      rec(MAIN, { title: 'Main', taskId: 'task-main' }),
+      rec(LEAD, { title: 'Personal lead', taskId: 'task-lead' }),
+      rec(WORKER, { title: 'Worker', taskId: 'task-worker' }),
+      rec(HELPER, { title: 'Helper', taskId: 'task-helper' }),
+      rec('sess-worker-2', { title: 'Second worker', taskId: 'task-worker-2' }),
+    ];
+    tasks = [
+      { id: 'task-main', title: 'Main', phase: 'IN_PROGRESS', org_role: 'main' },
+      { id: 'task-lead', title: 'Personal lead', phase: 'IN_PROGRESS', org_role: 'lead' },
+      { id: 'task-worker', title: 'Worker', phase: 'IN_PROGRESS', parent_task_id: 'task-lead' },
+      { id: 'task-worker-2', title: 'Second worker', phase: 'IN_PROGRESS', parent_task_id: 'task-lead' },
+      { id: 'task-helper', title: 'Helper', phase: 'IN_PROGRESS', parent_task_id: 'task-worker' },
+    ];
+  });
+
+  async function chain() {
+    const { createSessionRequest } = await import('../../src/core/session-requests.js');
+    const a = await createSessionRequest({ fromSessionId: MAIN, fromTaskId: 'task-main', toSessionId: LEAD, toTaskId: 'task-lead', text: 'how many rows?' });
+    const b = await createSessionRequest({ fromSessionId: LEAD, fromTaskId: 'task-lead', toSessionId: WORKER, toTaskId: 'task-worker', text: 'count the rows', handsOn: [a.id] });
+    expect((await getSessionRequest(b.id))?.carries).toEqual([a.id]);
+    return { a, b };
+  }
+
+  it('goes to Main as the answer to its request; both settle; the idle lead reads one line on its next message', async () => {
+    const { a, b } = await chain();
+    const result = await performSessionSend({ text: 'Done: 412 rows.', inReplyTo: b.id, callerSid: WORKER });
+
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+    expect(dispatched().sid).toBe(MAIN);
+    const text = deliveredText();
+    expect(text).toContain('Done: 412 rows.');
+    expect(text).toContain(a.id);
+    expect(result.targetSessionId).toBe(MAIN);
+    expect(result.repliedTo).toBe(b.id);
+    expect(result.answeredFor).toEqual([a.id]);
+    expect((await getSessionRequest(a.id))?.status).toBe('replied');
+    expect((await getSessionRequest(b.id))?.status).toBe('replied');
+    // The lead was not woken; the line rides its next message and holds no copy of the answer.
+    const { pendingStatusNote } = await import('../../src/core/sessions/status-push.js');
+    const note = pendingStatusNote(LEAD);
+    expect(note?.text).toContain(`answered your ${b.id}`);
+    expect(note?.text).toContain(`the answer to ${a.id}`);
+    expect(note?.text).toContain('Nothing to relay');
+    expect(note?.text).not.toContain('412 rows');
+    note?.markTold();
+  });
+
+  it('a lead whose turn runs hears the line now, as a status note, not the answer', async () => {
+    sessions = sessions.map((s) => (s.claudeSessionId === LEAD ? { ...s, process_status: 'running' as const } : s));
+    const { a, b } = await chain();
+    await performSessionSend({ text: 'Done: 412 rows.', inReplyTo: b.id, callerSid: WORKER });
+    expect(sendMessageToSession).toHaveBeenCalledTimes(2);
+    expect(dispatched(0).sid).toBe(MAIN);
+    expect(dispatched(1).sid).toBe(LEAD);
+    expect(dispatched(1).opts.source).toBe('walnut-notify');
+    const line = deliveredText(1);
+    expect(line).toContain('outcome="status"');
+    expect(line).toContain(a.id);
+    expect(line).not.toContain('412 rows');
+  });
+
+  it('a chain of hand-offs ends at the outermost asker, and every asker in between reads one line', async () => {
+    const { a, b } = await chain();
+    const { createSessionRequest } = await import('../../src/core/session-requests.js');
+    const c = await createSessionRequest({ fromSessionId: WORKER, fromTaskId: 'task-worker', toSessionId: HELPER, toTaskId: 'task-helper', text: 'run the count', handsOn: [b.id] });
+    const result = await performSessionSend({ text: 'Done: 412 rows.', inReplyTo: c.id, callerSid: HELPER });
+    expect(dispatched().sid).toBe(MAIN);
+    expect(result.answeredFor).toEqual([b.id, a.id]);
+    for (const r of [a, b, c]) expect((await getSessionRequest(r.id))?.status).toBe('replied');
+    const { pendingStatusNote } = await import('../../src/core/sessions/status-push.js');
+    for (const sid of [WORKER, LEAD]) {
+      const note = pendingStatusNote(sid);
+      expect(note?.text, sid).toContain(a.id);
+      note?.markTold();
+    }
+  });
+
+  it('an overdue carried request is answered late, the same way', async () => {
+    const { a, b } = await chain();
+    await settleNotified(a.id, 'timeout');
+    expect((await getSessionRequest(a.id))?.status).toBe('expired');
+    await performSessionSend({ text: 'Done: 412 rows.', inReplyTo: b.id, callerSid: WORKER });
+    expect(dispatched().sid).toBe(MAIN);
+    const row = await getSessionRequest(a.id);
+    expect(row?.status).toBe('replied');
+    expect(row?.lateFrom).toBe('expired');
+  });
+
+  it('the second of two workers answering after the first: still a part, still the lead\'s to combine', async () => {
+    const { a, b } = await chain();
+    const { createSessionRequest } = await import('../../src/core/session-requests.js');
+    const b2 = await createSessionRequest({ fromSessionId: LEAD, fromTaskId: 'task-lead', toSessionId: 'sess-worker-2', toTaskId: 'task-worker-2', text: 'count the other half', handsOn: [a.id] });
+    await performSessionSend({ text: 'Half: 200 rows.', inReplyTo: b.id, callerSid: WORKER });
+    expect(dispatched(0).sid).toBe(LEAD);
+    const second = await performSessionSend({ text: 'Other half: 212 rows.', inReplyTo: b2.id, callerSid: 'sess-worker-2' });
+    expect(dispatched(1).sid).toBe(LEAD);
+    expect(second.answeredFor).toBeUndefined();
+    expect((await getSessionRequest(a.id))?.status).toBe('pending');
+  });
+
+  it('a delivery to Main that fails leaves every request open, so nothing reads answered', async () => {
+    const { a, b } = await chain();
+    sendMessageToSession.mockRejectedValueOnce(new Error('host gone'));
+    await expect(performSessionSend({ text: 'Done: 412 rows.', inReplyTo: b.id, callerSid: WORKER })).rejects.toThrow();
+    expect((await getSessionRequest(a.id))?.status).toBe('pending');
+    expect((await getSessionRequest(b.id))?.status).toBe('pending');
+    // The retry goes the same way.
+    const again = await performSessionSend({ text: 'Done: 412 rows.', inReplyTo: b.id, callerSid: WORKER });
+    expect(again.targetSessionId).toBe(MAIN);
+    expect((await getSessionRequest(a.id))?.status).toBe('replied');
+  });
+
+  it('a worker answering the carried request itself settles the lead\'s ask too, and the lead reads one line', async () => {
+    const { a, b } = await chain();
+    const result = await performSessionSend({ text: 'Done: 412 rows.', inReplyTo: a.id, callerSid: WORKER });
+    expect(dispatched().sid).toBe(MAIN);
+    expect(result.repliedTo).toBe(a.id);
+    expect((await getSessionRequest(a.id))?.status).toBe('replied');
+    const lead = await getSessionRequest(b.id);
+    expect(lead?.status).toBe('replied');
+    expect(lead?.forwardedTo).toBe(a.id);
+    const { pendingStatusNote } = await import('../../src/core/sessions/status-push.js');
+    const note = pendingStatusNote(LEAD);
+    expect(note?.text).toContain(`answered your ${b.id}, which carried ${a.id}`);
+    note?.markTold();
+  });
+
+  it('an answer that went past the lead does not count as the worker answering the lead', async () => {
+    const { b } = await chain();
+    await performSessionSend({ text: 'Done: 412 rows.', inReplyTo: b.id, callerSid: WORKER });
+    expect((await getSessionRequest(b.id))?.forwardedTo).toBeTruthy();
+    const { repliedRecently } = await import('../../src/core/session-requests.js');
+    expect(await repliedRecently([LEAD], 'task-worker', 60_000)).toBe(false);
+    const { pendingStatusNote } = await import('../../src/core/sessions/status-push.js');
+    pendingStatusNote(LEAD)?.markTold();
+  });
+
+  it('two workers each carrying the request: the answer is a part, so it goes to the lead to combine', async () => {
+    const { a, b } = await chain();
+    const { createSessionRequest } = await import('../../src/core/session-requests.js');
+    await createSessionRequest({ fromSessionId: LEAD, fromTaskId: 'task-lead', toSessionId: 'sess-worker-2', toTaskId: 'task-worker-2', text: 'count the other half', handsOn: [a.id] });
+    const result = await performSessionSend({ text: 'Half: 200 rows.', inReplyTo: b.id, callerSid: WORKER });
+    expect(dispatched().sid).toBe(LEAD);
+    expect(result.answeredFor).toBeUndefined();
+    expect((await getSessionRequest(a.id))?.status).toBe('pending');
+    expect((await getSessionRequest(b.id))?.status).toBe('replied');
+  });
+
+  it('goes to the lead as before when the original asker is gone or its task is complete, or the carried one is settled', async () => {
+    const { a, b } = await chain();
+    tasks = tasks.map((t) => (t.id === 'task-main' ? { ...t, phase: 'COMPLETE' } : t));
+    await performSessionSend({ text: 'Done.', inReplyTo: b.id, callerSid: WORKER });
+    expect(dispatched().sid).toBe(LEAD);
+    expect((await getSessionRequest(a.id))?.status).toBe('pending');
+
+    sendMessageToSession.mockClear();
+    tasks = tasks.map((t) => (t.id === 'task-main' ? { ...t, phase: 'IN_PROGRESS' } : t));
+    const second = await chain();
+    sessions = sessions.filter((s) => s.claudeSessionId !== MAIN);
+    await performSessionSend({ text: 'Done.', inReplyTo: second.b.id, callerSid: WORKER });
+    expect(dispatched().sid).toBe(LEAD);
+
+    sendMessageToSession.mockClear();
+    sessions.push(rec(MAIN, { title: 'Main', taskId: 'task-main' }));
+    const third = await chain();
+    await performSessionSend({ text: 'I have it already.', inReplyTo: third.a.id, callerSid: LEAD });
+    sendMessageToSession.mockClear();
+    const late = await performSessionSend({ text: 'Done.', inReplyTo: third.b.id, callerSid: WORKER });
+    expect(dispatched().sid).toBe(LEAD);
+    expect(late.answeredFor).toBeUndefined();
   });
 });
 

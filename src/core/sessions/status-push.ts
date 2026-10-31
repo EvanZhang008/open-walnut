@@ -245,6 +245,32 @@ export function pendingStatusNote(sessionId: string, now = Date.now()): { text: 
   };
 }
 
+/**
+ * One line for a session about work it handed on: now when its turn runs, else riding its next
+ * message, never a wake (the note of a reply that went past it to the original asker,
+ * reply-handoff.ts). `key` keeps one line per subject. Never throws.
+ */
+export async function tellOrRide(sessionId: string, key: string, line: string, now = Date.now()): Promise<'told' | 'riding' | 'none'> {
+  try {
+    const { getSessionByClaudeId } = await import('../session-tracker.js');
+    const rec = await getSessionByClaudeId(sessionId).catch(() => null);
+    if (!rec) return 'none';
+    if (rec.process_status === 'running') {
+      const { deliverToSession } = await import('./session-send-core.js');
+      const text = statusText([line]);
+      await deliverToSession(rec, { busText: text, enqueueText: text, source: 'walnut-notify', ...(rec.taskId ? { taskId: rec.taskId } : {}) });
+      return 'told';
+    }
+    const held = riding.get(sessionId) ?? new Map<string, { line: string; at: number }>();
+    held.set(key, { line, at: now });
+    riding.set(sessionId, held);
+    return 'riding';
+  } catch (err) {
+    log.session.warn('status note not delivered', { sessionId, error: err instanceof Error ? err.message : String(err) });
+    return 'none';
+  }
+}
+
 /** Start (server boot, primary only): every task's status now is the baseline. Idempotent. */
 export async function startStatusPush(opts: { quietMs?: number } = {}): Promise<void> {
   live = true;

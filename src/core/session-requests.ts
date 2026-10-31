@@ -89,6 +89,11 @@ export interface SessionRequest {
   carriedBy?: { id: string; taskId?: string; at?: number }[];
   /** The other side: the requests its sender handed on with it. */
   carries?: string[];
+  /**
+   * Its answer went past its asker, as the answer to this carried request (sessions/reply-handoff.ts):
+   * the asker read one line, not the answer. Additive, 2026-10.
+   */
+  forwardedTo?: string;
   /** The deadline the asker set, before a hand-off moved it (unlinkHandoff puts it back). */
   ownDeadlineAt?: number;
   /** The structured fields of the reply that settled it (peers/structured-reply.ts; additive, 2026-10). */
@@ -393,6 +398,7 @@ async function settle(
   status: Exclude<SessionRequestStatus, 'pending'>,
   outcome?: SessionRequestOutcome,
   reply?: SessionRequest['reply'],
+  forwardedTo?: string,
 ): Promise<SessionRequest | null> {
   let settled: SessionRequest | null = null;
   await updateRequests((store) => {
@@ -405,6 +411,7 @@ async function settle(
       settledAt: new Date().toISOString(),
       ...(outcome ? { outcome } : {}),
       ...(reply ? { reply } : {}),
+      ...(forwardedTo ? { forwardedTo } : {}),
       ...(status === 'expired' ? { overdueAt: new Date().toISOString() } : {}),
     };
     requests[idx] = settled;
@@ -415,21 +422,21 @@ async function settle(
   return settled;
 }
 
-export async function settleReplied(id: string, reply?: SessionRequest['reply'] | null): Promise<SessionRequest | null> {
-  return settle(id, 'replied', undefined, reply ?? undefined);
+export async function settleReplied(id: string, reply?: SessionRequest['reply'] | null, forwardedTo?: string): Promise<SessionRequest | null> {
+  return settle(id, 'replied', undefined, reply ?? undefined, forwardedTo);
 }
 
 /**
  * A reply to an OVERDUE request (status 'expired'): it is answered now, so it leaves every
  * "overdue, still open" list. Exactly once, like settle: null when it was not overdue.
  */
-export async function settleLateReply(id: string, reply?: SessionRequest['reply'] | null): Promise<SessionRequest | null> {
+export async function settleLateReply(id: string, reply?: SessionRequest['reply'] | null, forwardedTo?: string): Promise<SessionRequest | null> {
   let settled: SessionRequest | null = null;
   await updateRequests((store) => {
     const requests = [...(store.requests ?? [])];
     const idx = requests.findIndex((r) => r.id === id);
     if (idx === -1 || requests[idx].status !== 'expired') return undefined;
-    settled = { ...requests[idx], status: 'replied', settledAt: new Date().toISOString(), lateFrom: 'expired', ...(reply ? { reply } : {}) };
+    settled = { ...requests[idx], status: 'replied', settledAt: new Date().toISOString(), lateFrom: 'expired', ...(reply ? { reply } : {}), ...(forwardedTo ? { forwardedTo } : {}) };
     requests[idx] = settled;
     return { requests };
   });
@@ -594,7 +601,7 @@ export async function requestsFromSession(sessionId: string, status: SessionRequ
  * Did the task `toTaskId` answer a request from one of `fromSessionIds` within
  * the last `windowMs`? The subtask watch asks this so a child that just replied
  * to its parent is not reported "stopped" a moment later: the reply was the
- * update.
+ * update. An answer that went past the parent (`forwardedTo`) never reached it, so it does not count.
  */
 export async function repliedRecently(
   fromSessionIds: Iterable<string>,
@@ -606,7 +613,7 @@ export async function repliedRecently(
   if (askers.size === 0 || !toTaskId) return false;
   const store = await readJsonFile<RequestStore>(REQUESTS_FILE, EMPTY);
   return (store.requests ?? []).some((r) =>
-    r.status === 'replied' && r.toTaskId === toTaskId && askers.has(r.fromSessionId)
+    r.status === 'replied' && !r.forwardedTo && r.toTaskId === toTaskId && askers.has(r.fromSessionId)
     && !!r.settledAt && now - Date.parse(r.settledAt) <= windowMs);
 }
 

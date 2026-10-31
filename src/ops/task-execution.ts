@@ -22,7 +22,7 @@ export const TASK_START_INPUT = {
   }).strict().optional().describe('Start in an isolated workspace (the draft\'s "Isolated workspace" row): Walnut makes it on the host, then starts the session in it; the answer says preparing'),
   expect_reply: z.boolean().optional().describe('Report back to the caller; defaults to true for a tracked caller. false opts out'),
   reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before a no-reply notification (default 3600)'),
-  hands_on: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('A request you owe (rq-…) that you hand to this task instead of answering it now: its asker waits for this task\'s answer and is told where the work went. Answer it yourself once the work is back'),
+  hands_on: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('A request you owe (rq-…) that you hand to this task instead of answering it now: its asker waits for this task\'s answer, is told where the work went, and gets that answer straight from it (handed to several tasks, the answers come to you to combine)'),
   start_attempt_id: z.string().uuid().optional().describe('Stable attempt identity for a confirmed launch'),
 }
 

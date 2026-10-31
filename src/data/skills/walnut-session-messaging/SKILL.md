@@ -158,7 +158,7 @@ walnut tools call task_send '{"in_reply_to":"rq-4f2a91b30c7d","title":"Rebased a
 
 The `title` is the answer in one line ("Rebased and green, 412 rows migrated"), never "Done" or "Reply": the asker reads it before deciding to open the rest.
 
-To hand the request to another task instead of doing it yourself, name it on your ask to that task: `{"to":"<task id>","title":"...","text":"...","hands_on":"rq-4f2a91b30c7d"}` (task_start takes `hands_on` too). The asker then waits for that task's answer instead of hearing that you ended without a reply, and its one notice names where the work went. You still owe the answer: send it with `in_reply_to` once the work is back.
+To hand the request to another task instead of doing it yourself, name it on your ask to that task: `{"to":"<task id>","title":"...","text":"...","hands_on":"rq-4f2a91b30c7d"}` (task_start takes `hands_on` too). The asker then waits for that task's answer instead of hearing that you ended without a reply, and its one notice names where the work went. That task's answer goes straight to the asker as the answer to its request, both requests settle, and you read one line saying so: nothing to relay. When you handed one request to several tasks, each answer comes to you instead: combine them and answer with `in_reply_to` yourself.
 
 Only the work the request was addressed to can close it; a late reply is still delivered, marked late, so answering after Walnut already sent its fallback notice is fine. To tell the sender something that is NOT the answer to its request, address it by the `from` attribute you were given: `{"to":"Fix auth fixture [9f3a2c1d]","title":"...","text":"..."}`.
 

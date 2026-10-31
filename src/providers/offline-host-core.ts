@@ -108,6 +108,8 @@ export interface OfflineSliceRequest {
   deadlineAt: number
   fromHost?: string
   toHost?: string
+  /** It carries another request (hands_on): its answer may go past its asker, so the server delivers it. */
+  carries?: true
 }
 
 export interface HostSlice {
@@ -1559,6 +1561,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     const me = callerIdentity(home, callerSid)
     const isTarget = row.toSessionId === callerSid || (!!row.toTaskId && row.toTaskId === me.taskId)
     if (!isTarget) return null
+    // Its answer may go to the asker of the request it carries (sessions/reply-handoff.ts): the server's to route.
+    if (copy?.carries) return null
     const asker = row.fromSessionId
     // The server's first rung (reply-routing.ts): a live asker is its own address.
     if (asker === callerSid || !deps.isLive(asker) || deps.pendingPrompt!(asker)) return null

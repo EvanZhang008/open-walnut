@@ -40,7 +40,8 @@ defineOp({
     'leader, your VP, or Main: a result, a deploy, a status) asks for no reply by default: pass expect_reply=true to ask a ' +
     'question up. To hand a request you owe to this task ' +
     'instead of answering it now, pass hands_on=rq-… (its id): its asker waits for this task\'s answer instead of hearing you ended ' +
-    'without a reply, and is told where the work went; answer it yourself once the work is back. ' +
+    'without a reply, and is told where the work went; that task\'s answer goes straight to the asker as the answer to it, ' +
+    'and you read one line (handed to several tasks, the answers come to you: combine them and answer it yourself). ' +
     'To ANSWER such a request, call this op with ' +
     'in_reply_to=rq-… (omit `to` — the answer routes to the asker automatically). ' +
     'An answer may carry `result` (one sentence: what came of it), `evidence` (paths or links) and `not_done` ' +
@@ -61,7 +62,7 @@ defineOp({
     expect_reply: z.boolean().optional().describe('Ask the receiver to reply; Walnut notifies you if it finishes without replying. DEFAULT true when a session sends down or across; false when it reports up (to its own leader, its VP, or Main). Pass true to ask a question up, false for fire-and-forget'),
     reply_timeout: z.number().int().min(60).max(86_400).optional().describe('Seconds before the no-reply notification (default 3600)'),
     in_reply_to: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('Request id you are answering — routes to the asker'),
-    hands_on: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('A request you owe (rq-…) that you hand to this task instead of answering it now: its asker waits for this task\'s answer and is told where the work went'),
+    hands_on: z.string().regex(/^rq-[a-f0-9]{6,}$/).optional().describe('A request you owe (rq-…) that you hand to this task instead of answering it now: its asker waits for this task\'s answer, is told where the work went, and gets that answer straight from it'),
     force: z.boolean().optional().describe('Send to (or answer) a task that is COMPLETE, which reopens it. Needs `reason`'),
     reason: z.string().min(1).max(500).optional().describe('With force: what changed and why the complete task must act again. Shown to that task and the user'),
     messageId: z.string().regex(/^qm-[A-Za-z0-9-]{1,64}$/).optional().describe('Stable id for retry deduplication'),
@@ -91,7 +92,10 @@ defineOp({
       + (typeof b.requestId === 'string' && b.requestId
         ? `You asked for a reply (${b.requestId}). ${REPLY_ARRIVES_HINT}`
         : args.in_reply_to ? REPLY_ARRIVES_HINT : NO_REPLY_ASKED)
-        + (Array.isArray(b.handedOn) && b.handedOn.length ? ` Handed on: ${b.handedOn.join(', ')} now wait for this answer; answer them once it is back.` : '')
+        + (Array.isArray(b.answeredFor) && b.answeredFor.length
+          ? ` It answered ${b.answeredFor.join(', ')} too, so it went straight to the original asker (${b.targetTaskId || target}); the task that handed it to you got one line saying so.`
+          : '')
+        + (Array.isArray(b.handedOn) && b.handedOn.length ? ` Handed on: ${b.handedOn.join(', ')} now wait for this task's answer, which goes straight to their asker; you read one line. Handed to several tasks, each answer comes to you: combine them and answer.` : '')
         + (Array.isArray(b.handOnRefused) && b.handOnRefused.length
           ? ` Not handed on: ${(b.handOnRefused as { id: string; reason: string }[]).map((r) => `${r.id} (${r.reason})`).join(', ')}.`
           : ''),

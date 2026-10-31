@@ -13,7 +13,7 @@ import { createMockConstants } from '../../helpers/mock-constants.js'
 
 vi.mock('../../../src/constants.js', () => createMockConstants('walnut-org-messaging-rules'))
 
-import { LEAD_NEWS_ONCE_LINE, MAIN_NEWS_ONCE_LINE, ORG_REPLY_LANGUAGE_LINE, WALNUT_PROMPT_MARK, defaultInstructions } from '../../../src/core/sessions/session-context.js'
+import { LEAD_NEWS_ONCE_LINE, MAIN_NEWS_ONCE_LINE, ONE_CAUSE_LINE, ORG_REPLY_LANGUAGE_LINE, WALNUT_PROMPT_MARK, defaultInstructions } from '../../../src/core/sessions/session-context.js'
 import { instructionNoticeFor } from '../../../src/core/sessions/instruction-notice.js'
 
 describe('the org messaging rules ride the default instructions', () => {
@@ -48,10 +48,22 @@ describe('the org messaging rules ride the default instructions', () => {
     expect(defaultInstructions({ project: 'Walnut' })).not.toMatch(/News reaches the user once/)
   })
 
+  // 2026-10-30 org review: one snooze bug showed on three screens and went to the three tasks
+  // that built them, before the user asked for its cause to be fixed.
+  it('one fault in several places is one deliverable: Main and a lead give it to the task that owns the cause', () => {
+    expect(ONE_CAUSE_LINE).toMatch(/One fault that shows in several places is one deliverable, its cause/)
+    expect(ONE_CAUSE_LINE).toMatch(/not to each screen's builder/)
+    expect(defaultInstructions({ org_role: 'lead', project: 'Walnut' })).toContain(ONE_CAUSE_LINE.trim())
+    expect(defaultInstructions({ org_role: 'main', project: 'Main' })).toContain(ONE_CAUSE_LINE.trim())
+    expect(defaultInstructions({ project: 'Walnut' })).not.toContain(ONE_CAUSE_LINE.trim())
+  })
+
   it('a running lead and Main spawned before the rule hear it through the instruction notice', () => {
     for (const [task, line] of [
       [{ org_role: 'lead', project: 'Walnut' }, LEAD_NEWS_ONCE_LINE],
       [{ org_role: 'main', project: 'Main' }, MAIN_NEWS_ONCE_LINE],
+      [{ org_role: 'lead', project: 'Walnut' }, ONE_CAUSE_LINE],
+      [{ org_role: 'main', project: 'Main' }, ONE_CAUSE_LINE],
     ] as const) {
       const old = `${WALNUT_PROMPT_MARK}\n` + defaultInstructions(task).split('\n').filter((l) => l.trim() !== line.trim()).join('\n')
       const notice = instructionNoticeFor({ appliedAppendSystemPrompt: old } as never, task)

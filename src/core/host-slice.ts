@@ -243,6 +243,8 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
         preview: r.preview, status: 'pending' as const, createdAt: r.createdAt, deadlineAt: r.deadlineAt,
         ...(fromHost ? { fromHost } : {}),
         ...(toHost ? { toHost } : {}),
+        // Its answer may go past its asker (sessions/reply-handoff.ts): only the server can tell.
+        ...(r.carries?.length ? { carries: true as const } : {}),
       };
     });
 

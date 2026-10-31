@@ -374,4 +374,26 @@ describe('a request the lead hands on waits for that answer (real server, real d
     expect(row).toMatchObject({ status: 'pending', carriedBy: [{ id: handed, taskId: workerTask }] })
     expect(row?.deadlineAt).toBe(row?.ownDeadlineAt)
   }, 120_000)
+
+  // 2026-10-30: the worker's plain answer was delivered by the host to the lead, and the asker got it
+  // only when the lead re-sent it. A request that carries another one is the server's to route.
+  it('the worker answers the handed-on work in plain words: it goes straight to the asker, the lead relays nothing', async () => {
+    const leadBefore = inboxOf(lead).length
+    const askerBefore = inboxOf(asker).length
+    const r = await gateway(asker, 'task_send', { to: leadTask, text: 'How many rows moved?', title: 'Rows moved' })
+    expect(r.ok, JSON.stringify(r)).toBe(true)
+    const owed = String(r.ok && r.result.requestId)
+    await waitFor(() => inboxOf(lead).slice(leadBefore).some((m) => m.includes(owed)), 15_000, 'the lead reads the request')
+    const onward = await gateway(lead, 'task_send', { to: workerTask, text: 'Count the rows. PLEASE-REPLY', title: 'Count rows', hands_on: owed })
+    expect(onward.ok && onward.result.handedOn, JSON.stringify(onward)).toEqual([owed])
+    const handed = String(onward.ok && onward.result.requestId)
+
+    await waitFor(() => inboxOf(asker).slice(askerBefore).some((m) => m.includes('kind="reply"') && m.includes('Build is green.')), 30_000, 'the answer at the asker')
+    await waitFor(() => requestRow(owed)?.status === 'replied' && requestRow(handed)?.status === 'replied', 15_000, 'both requests to settle')
+    expect(requestRow(handed)?.forwardedTo).toBe(owed)
+    await new Promise((r) => setTimeout(r, 3_000))
+    // The lead never got the answer itself, and the asker got it once.
+    expect(inboxOf(lead).slice(leadBefore).filter((m) => m.includes('Build is green.'))).toEqual([])
+    expect(inboxOf(asker).slice(askerBefore).filter((m) => m.includes('Build is green.'))).toHaveLength(1)
+  }, 120_000)
 })

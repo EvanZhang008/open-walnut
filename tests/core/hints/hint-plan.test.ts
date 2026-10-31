@@ -120,8 +120,9 @@ describe('user and agent settings', () => {
     expect(sx).toEqual([['other']]);
   });
 
-  it('Main and the leads hear the reply language on every turn a person did not write', () => {
+  it('Main and the leads hear the reply language on every turn, the user\'s own included', () => {
     // 2026-10-29: leads answered Walnut notices in English in the chats the user reads.
+    // 2026-10-30: the user typed English into a lead's chat, no hint rode it, and the lead answered in English.
     const config = cfg({ reply_language: 'Talk to the user in Chinese.' });
     const plan = (role: 'main' | 'lead' | 'worker', rec: Rec, sentBy?: 'person' | 'agent') => {
       const p = planHints({ hints: effectiveHints(config), target: { sessionId: rec.claudeSessionId, role }, record: rec, config, ...(sentBy ? { sentBy } : {}) });
@@ -131,7 +132,8 @@ describe('user and agent settings', () => {
     for (const role of ['main', 'lead'] as const) {
       const rec: Rec = { claudeSessionId: `org-${role}`, output_mode: 'markdown' };
       expect(plan(role, rec, 'person')).toEqual(['reply-language']);
-      expect(plan(role, rec, 'person')).toEqual([]);
+      expect(plan(role, rec, 'person')).toEqual(['reply-language']);
+      expect(plan(role, rec, 'person')).toEqual(['reply-language']);
       expect(plan(role, rec, 'agent')).toEqual(['reply-language']);
       expect(plan(role, rec, 'agent')).toEqual(['reply-language']);
       // A host's peer note says nobody wrote it: not a person.
