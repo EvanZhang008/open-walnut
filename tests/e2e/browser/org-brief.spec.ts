@@ -233,3 +233,33 @@ test('a node whose contact keeps no Brief has no switch', async ({ page }) => {
   await expect(detail.getByTestId('org-top-brief')).toHaveCount(0)
   await expect(detail.getByTestId('org-brief')).toHaveCount(0)
 })
+
+test('the chat starts below the Task or Brief panel and its own header, at any window height', async ({ page }) => {
+  // 2026-10-31, prod WebKit: the session header floated over the chat as in a session column, so the
+  // chat's lines ran under it right below the panel and read as the panel overlapping the chat.
+  await isolateUiPrefs(page)
+  await loadHome(page)
+  await openNode(page, LED)
+  const detail = page.getByTestId('org-detail')
+  const header = detail.locator('[data-testid="org-chat"] .session-panel > .session-panel-header')
+  await expect(header).toBeVisible({ timeout: 30_000 })
+  const boxes = () => page.evaluate(() => {
+    const rect = (s: string) => document.querySelector(s)?.getBoundingClientRect() ?? null
+    const top = rect('[data-testid="org-task-view"]') ?? rect('[data-testid="org-brief"]') ?? rect('[data-testid="org-top"]')
+    const head = rect('[data-testid="org-chat"] .session-panel > .session-panel-header')
+    const history = rect('[data-testid="org-chat"] .session-history')
+    return { panelBottom: top?.bottom ?? -1, headTop: head?.top ?? -1, headBottom: head?.bottom ?? -1, historyTop: history?.top ?? -1 }
+  })
+  for (const height of [800, 560]) {
+    await page.setViewportSize({ width: 1280, height })
+    for (const view of ['org-top-task', 'org-top-brief'] as const) {
+      await detail.getByTestId(view).click()
+      await expect(header).toBeVisible()
+      await expect.poll(async () => {
+        const b = await boxes()
+        return b.headTop >= b.panelBottom - 0.5 && b.historyTop >= b.headBottom - 0.5 && b.historyTop > 0
+      }, { message: `${view} at ${height}px: ${JSON.stringify(await boxes())}` }).toBe(true)
+      await detail.screenshot({ path: `test-results/org-chat-below-${view}-${height}-${test.info().project.name}.png` })
+    }
+  }
+})

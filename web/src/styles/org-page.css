@@ -376,6 +376,13 @@
 
 .org-chat-host { flex: 1; min-height: 0; display: flex; }
 .org-chat-host > * { flex: 1; min-width: 0; min-height: 0; }
+/* The chat's header is in flow here, under the Task or Brief panel: as the glass overlay of a session
+   column, the chat scrolled under it, and right below that panel the lines read as the panel and the
+   chat overlapping (2026-10-31, prod WebKit). A zero header height drops every padding and margin
+   that made room for the overlay (globals.css "Session panel: header overlay"); !important because
+   SessionPanel writes the measured height inline. Guard: tests/e2e/browser/org-brief.spec.ts. */
+.org-chat-host .session-panel { --sp-header-h: 0px !important; }
+.org-chat-host .session-panel:not(.pending-session-panel):not(.draft-session-panel) > .session-panel-header { position: relative; }
 .org-chat-start {
   margin: auto;
   display: flex;
