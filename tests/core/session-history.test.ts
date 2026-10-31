@@ -40,6 +40,13 @@ async function writeJsonl(sessionId: string, cwd: string, lines: unknown[]) {
   await fsp.writeFile(path.join(dir, `${sessionId}.jsonl`), content);
 }
 
+/**
+ * Let the file clock tick before a rewrite the mtime cache must see. Linux
+ * stamps files with the kernel's coarse clock (one jiffy: 10 ms on an HZ=100
+ * kernel), so a rewrite inside the same jiffy keeps the old mtime.
+ */
+const fileClockTick = () => new Promise((r) => setTimeout(r, 25));
+
 /** Helper: build a JSONL message line. */
 function msg(id: string, role: 'user' | 'assistant', text: string, extras?: {
   tools?: unknown[];
@@ -914,6 +921,7 @@ describe('readSessionHistory in-flight dedup', () => {
 
     // Force a re-read (the mtime cache would otherwise serve all three for free,
     // which would pass even with dedup broken).
+    await fileClockTick();
     await writeJsonl('dedup-concurrent', '/test', [...lines, msg('m40', 'user', 'more')]);
 
     counter = await countReads('dedup-concurrent');
@@ -952,6 +960,7 @@ describe('readSessionHistory in-flight dedup', () => {
     expect(first).toHaveLength(1);
 
     // A sequential second call must not be served a stale in-flight promise.
+    await fileClockTick();
     await writeJsonl('dedup-release', '/test', [
       msg('m0', 'user', 'First'),
       msg('m1', 'assistant', 'Second'),

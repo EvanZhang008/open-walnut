@@ -56,6 +56,12 @@ describe('findRewriteAnchor', () => {
 
 // git before 2.40 has no `merge-tree --merge-base` (Ubuntu 22.04 ships 2.34): the
 // replay then runs file by file and must land on the same trees.
+// The machine's own git may predate 2.40 too; then the "modern" run is file by file as well.
+const gitHasMergeTreeBase = (() => {
+  const m = /(\d+)\.(\d+)/.exec(execSync('git --version', { encoding: 'utf-8' }));
+  return !!m && (Number(m[1]) > 2 || (Number(m[1]) === 2 && Number(m[2]) >= 40));
+})();
+
 describe('carryLocalCommits without merge-tree --merge-base', () => {
   let repo: string;
   const sh = (cmd: string, env?: Record<string, string>) =>
@@ -99,7 +105,7 @@ describe('carryLocalCommits without merge-tree --merge-base', () => {
     const head = localWork();
     const modern = await carryLocalCommits(run, head, tip, index());
     const fallback = await carryLocalCommits(oldGit, head, tip, index());
-    expect(modern.fileLevel).toBe(false);
+    expect(modern.fileLevel).toBe(!gitHasMergeTreeBase);
     expect(fallback.fileLevel).toBe(true);
     expect(fallback.replayed).toBe(2);
     expect(sh(`git rev-parse ${fallback.head}^{tree}`)).toBe(sh(`git rev-parse ${modern.head}^{tree}`));

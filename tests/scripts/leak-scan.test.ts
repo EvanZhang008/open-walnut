@@ -197,8 +197,12 @@ describe('leak-scan rules', () => {
   })
 })
 
+// The scanner itself only needs `unzip`; `zip` builds the fixture here, and a
+// slim container may lack it (GitHub's ubuntu runner has it).
+const hasZip = spawnSync('zip', ['-v'], { stdio: 'ignore' }).status === 0
+
 describe('leak-scan CLI', () => {
-  it('finds hits in files, binaries, tarballs and zips, and exits 1', () => {
+  it.skipIf(!hasZip)('finds hits in files, binaries, tarballs and zips, and exits 1 (needs zip)', () => {
     const dir = tmp()
     try {
       const r = writeRules(dir)

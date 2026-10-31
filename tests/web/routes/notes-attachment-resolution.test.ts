@@ -170,9 +170,16 @@ describe('resolveAttachmentPath — index freshness', () => {
    * just-pasted image renders as a broken embed.
    */
   it('resolves a file created after the cache was warmed', async () => {
+    // The notes tree snapshot is checked against directory mtimes, which Linux
+    // stamps with the kernel's coarse clock (10 ms on an HZ=100 kernel): a vault
+    // rebuilt inside the jiffy of the last scan (the previous test's) reads as
+    // unchanged. Let the clock tick before each change.
+    const fileClockTick = () => new Promise((r) => setTimeout(r, 25));
+    await fileClockTick();
     await writeFile('_attachment/first.png');
     expect(await resolve('first.png')).toBe('_attachment/first.png');
 
+    await fileClockTick();
     await writeFile('Areas/_attachment/second.png');
     expect(await resolve('second.png')).toBe('Areas/_attachment/second.png');
   });

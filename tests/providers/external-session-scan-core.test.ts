@@ -794,6 +794,10 @@ describe('scanExternalSessions — remembered verdicts and a responsive event lo
     fs.utimesSync(probe, pinned, pinned)
     expect((await scan()).candidates.map((c) => c.title)).toEqual(['still thinking about this one'])
     const before = fs.statSync(probe)
+    // Let the file clock tick first: Linux stamps ctime with the kernel's coarse
+    // clock (10 ms on an HZ=100 kernel), so a rewrite inside the same jiffy as the
+    // utimes above keeps its ctime too, and nothing could tell it apart.
+    await new Promise((r) => setTimeout(r, 25))
     fs.writeFileSync(probe, fs.readFileSync(probe, 'utf8').replace('still thinking', 'quiet thinking'))
     fs.utimesSync(probe, pinned, pinned)
     expect(fs.statSync(probe)).toMatchObject({ size: before.size, mtimeMs: before.mtimeMs })
