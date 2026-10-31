@@ -233,8 +233,12 @@ async function resolveSendTargetAddress(to: string): Promise<ResolvedTarget> {
     let sessions = liveSessionsForTask(await getSessionsForTask(taskHit.id));
     if (sessions.length === 0) {
       // Mid engine switch the task has no active session for a few seconds: wait for the new one.
-      const { awaitSwitch } = await import('./engine-switch.js');
-      if (await awaitSwitch(taskHit.id)) sessions = liveSessionsForTask(await getSessionsForTask(taskHit.id));
+      const { awaitSwitch, movingFrom } = await import('./engine-switch.js');
+      // A move takes minutes: the message is held on the session it replaces and moves with the task.
+      const moving = movingFrom({ taskId: taskHit.id });
+      const from = moving ? (await getSessionsForTask(taskHit.id)).find((s) => s.claudeSessionId === moving) : undefined;
+      if (from) sessions = [from];
+      else if (await awaitSwitch(taskHit.id)) sessions = liveSessionsForTask(await getSessionsForTask(taskHit.id));
     }
     if (sessions.length === 0) {
       throw new SendError('task_has_no_session',

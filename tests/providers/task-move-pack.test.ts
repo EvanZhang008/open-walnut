@@ -174,6 +174,45 @@ describe('a task moves with exactly its own work', () => {
     expect(fs.readdirSync(dest)).toEqual(['keep.txt'])
   }, 60_000)
 
+  it('a failed apply removes only what it made: a missing folder is gone again, an empty one stays empty', async () => {
+    const w = world('failclean')
+    const packer = createTransferPack({ fs, path, crypto, spawn: guardedSpawn as unknown as TransferPackDeps['spawn'], env, home: tmp })
+    await packer.pack({ cwd: w.clone, outDir: path.join(w.root, 'p') })
+    // A clone source of another history, and no remote holding the bundle's base: fetching the bundle fails.
+    const empty = path.join(w.root, 'other')
+    fs.mkdirSync(empty, { recursive: true })
+    git(empty, ['init', '-q'])
+    write(path.join(empty, 'x.txt'), 'other\n')
+    git(empty, ['add', '-A'])
+    git(empty, ['commit', '-q', '-m', 'other history'])
+    const missing = path.join(w.targetTaskDir, 'gone')
+    const err1 = await packer.apply({ dest: missing, bundleDir: path.join(w.root, 'p'), cloneFrom: empty }).catch((e: unknown) => e as { code?: string; data?: Record<string, unknown> })
+    expect(err1).toMatchObject({ code: 'apply_failed', data: { removed: true } })
+    expect(fs.existsSync(missing)).toBe(false)
+    const kept = path.join(w.targetTaskDir, 'kept')
+    fs.mkdirSync(kept, { recursive: true })
+    await expect(packer.apply({ dest: kept, bundleDir: path.join(w.root, 'p'), cloneFrom: empty })).rejects.toMatchObject({ code: 'apply_failed' })
+    expect(fs.readdirSync(kept)).toEqual([])
+    // A refusal for an occupied folder removes nothing (see the test above); neither does one for bad input.
+    write(path.join(w.targetTaskDir, 'busy', 'keep.txt'), 'x\n')
+    await expect(packer.apply({ dest: path.join(w.targetTaskDir, 'busy'), bundleDir: path.join(w.root, 'p'), cloneFrom: empty })).rejects.toMatchObject({ code: 'dest_not_empty' })
+    expect(fs.readdirSync(path.join(w.targetTaskDir, 'busy'))).toEqual(['keep.txt'])
+  }, 60_000)
+
+  it('a folder over the size cap never sets up as an empty copy, and a probe of a plain folder archives nothing', async () => {
+    const w = world('toolarge')
+    const packer = createTransferPack({ fs, path, crypto, spawn: guardedSpawn as unknown as TransferPackDeps['spawn'], env, home: tmp })
+    write(path.join(w.root, 'notes', 'big.bin'), crypto.randomBytes(64 * 1024).toString('base64'))
+    const big = await packer.pack({ cwd: path.join(w.root, 'notes'), outDir: path.join(w.root, 'pb'), asDir: true, maxTarBytes: 1024 })
+    expect(big.meta.tooLarge).toBe(true)
+    const dest = path.join(w.targetTaskDir, 'notes')
+    await expect(packer.apply({ dest, bundleDir: path.join(w.root, 'pb') })).rejects.toMatchObject({ code: 'too_large' })
+    expect(fs.existsSync(dest)).toBe(false)
+    const probe = await packer.pack({ cwd: path.join(w.root, 'notes'), outDir: path.join(w.root, 'pp'), paths: [] })
+    expect(probe.meta.kind).toBe('dir')
+    expect(probe.files.map((f) => f.name)).toEqual(['meta.json'])
+  }, 60_000)
+
   it('apply without a checkout or URL to clone from says so', async () => {
     const w = world('nosource')
     const packer = createTransferPack({ fs, path, crypto, spawn: guardedSpawn as unknown as TransferPackDeps['spawn'], env, home: tmp })

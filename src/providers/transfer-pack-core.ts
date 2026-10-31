@@ -555,7 +555,6 @@ export function createTransferPack(deps: TransferPackDeps) {
   async function apply(cmd: Record<string, unknown>): Promise<ApplyReply> {
     var dest = localPath(cmd.dest, 'dest')
     var bundleDir = localPath(cmd.bundleDir, 'bundleDir')
-    var CLONE_MS = posInt(cmd.cloneTimeoutMs, 10 * 60000)
     var meta = JSON.parse(await deps.fs.promises.readFile(deps.path.join(bundleDir, 'meta.json'), 'utf8')) as PackMeta
     var has = async function (name: string) {
       return deps.fs.promises.stat(deps.path.join(bundleDir, name)).then(function (s) { return s.isFile() }, function () { return false })
@@ -563,6 +562,8 @@ export function createTransferPack(deps: TransferPackDeps) {
     var steps: string[] = []
     if (inside(dest, bundleDir) || inside(bundleDir, dest)) throw fail('bad_request', 'dest and bundleDir must not hold each other')
     if (meta.kind === 'dir') {
+      // A folder cut at the size cap carried nothing: an empty copy would read as moved.
+      if (meta.tooLarge) throw fail('too_large', 'the folder was too large to copy (' + (meta.tarBytes || 0) + ' bytes and more)')
       await deps.fs.promises.mkdir(dest, { recursive: true })
       if (await has('workspace.tgz')) {
         var x = await run(['tar', '-xzf', deps.path.join(bundleDir, 'workspace.tgz'), '--no-same-owner', '-C', dest], { cwd: dest, timeoutMs: TAR_MS })
@@ -572,6 +573,24 @@ export function createTransferPack(deps: TransferPackDeps) {
       return { dest: dest, kind: 'dir', steps: steps }
     }
     if (!(await emptyOrMissing(dest))) throw fail('dest_not_empty', 'dest is not an empty folder: ' + dest)
+    // Only what this apply made is removed when it fails: dest was missing or empty here.
+    var existed = await deps.fs.promises.stat(dest).then(function () { return true }, function () { return false })
+    try {
+      return await applyGit(cmd, meta, dest, bundleDir, has, steps)
+    } catch (err) {
+      await deps.fs.promises.rm(dest, { recursive: true, force: true }).catch(function () { /* none */ })
+      if (existed) await deps.fs.promises.mkdir(dest, { recursive: true }).catch(function () { /* none */ })
+      var data = (err as { data?: Record<string, unknown> }).data
+      if (data) data.removed = true
+      throw err
+    }
+  }
+
+  async function applyGit(
+    cmd: Record<string, unknown>, meta: PackMeta, dest: string, bundleDir: string,
+    has: (name: string) => Promise<boolean>, steps: string[],
+  ): Promise<ApplyReply> {
+    var CLONE_MS = posInt(cmd.cloneTimeoutMs, 10 * 60000)
     await deps.fs.promises.mkdir(deps.path.dirname(dest), { recursive: true })
     var cloneFrom = typeof cmd.cloneFrom === 'string' && cmd.cloneFrom ? localPath(cmd.cloneFrom, 'cloneFrom') : null
     var url = typeof cmd.url === 'string' && cmd.url ? String(cmd.url) : ''
@@ -682,7 +701,10 @@ export function createTransferPack(deps: TransferPackDeps) {
     if (inside(realOut, root) || inside(outDir, root)) throw fail('bad_request', 'outDir must lie outside the workspace ' + root)
     for (var i = 0; i < NAMES.length; i++) await deps.fs.promises.unlink(deps.path.join(outDir, NAMES[i])).catch(function () { /* none */ })
     var written: string[] = []
-    var meta = top ? await packGit(cwd, root, outDir, maxUntracked, written, only) : await packDir(cwd, outDir, maxTar, written, exclude)
+    // `paths: []` of a plain folder asks only what it is (a probe): nothing is archived.
+    var meta = top ? await packGit(cwd, root, outDir, maxUntracked, written, only)
+      : only && only.length === 0 ? { kind: 'dir' as const, root: root, relCwd: '', createdAt: '' }
+      : await packDir(cwd, outDir, maxTar, written, exclude)
     meta.createdAt = new Date(now()).toISOString()
     await deps.fs.promises.writeFile(deps.path.join(outDir, 'meta.json'), JSON.stringify(meta, null, 2) + '\n')
     written.unshift('meta.json')

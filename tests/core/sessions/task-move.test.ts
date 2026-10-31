@@ -34,6 +34,10 @@ const W = vi.hoisted(() => {
     starts: [] as Array<Record<string, unknown>>,
     stops: [] as string[],
     failStart: false,
+    /** A start waits on this while set (a move still in flight). */
+    gate: null as Promise<void> | null,
+    /** fs.ls of the target fails (the listing is no answer). */
+    failList: false,
     nextSid: 0,
     history: {} as Record<string, Array<Record<string, unknown>>>,
     /** The Changed tab's groups for the old session. */
@@ -71,6 +75,10 @@ vi.mock('../../../src/core/daemon-file-reader.js', () => {
         nfs.writeFileSync(f, content);
       }
       async listDir(p: string) { return (await import('node:fs')).readdirSync(expand(this.host, p)); }
+      async listDirStrict(p: string) {
+        if (W.failList) throw new Error('could not list: the link dropped');
+        return (await import('node:fs')).readdirSync(expand(this.host, p));
+      }
       async removePath(p: string) {
         const f = expand(this.host, p);
         if (!f.startsWith(W.root)) throw new Error('outside the test root');
@@ -95,6 +103,7 @@ vi.mock('../../../src/core/session-changes.js', () => ({
 vi.mock('../../../src/core/sessions/task-start.js', () => ({
   startSessionForTask: async (params: Record<string, unknown>) => {
     W.starts.push(params);
+    if (W.gate) await W.gate;
     const { createSessionRecord, updateSessionRecord } = await import('../../../src/core/session-tracker.js');
     const sid = `moved-sid-${++W.nextSid}`;
     await createSessionRecord(sid, String(params.taskIdPrefix), 'Marina', String(params.cwd));
@@ -119,6 +128,8 @@ import { createTransferCore, type TransferCoreDeps } from '../../../src/provider
 import { recordRepoPath, repoKey } from '../../../src/core/hosts/host-profile.js';
 import { __setHostLoadProberForTesting } from '../../../src/core/hosts/placement.js';
 import { placeStartByLoad } from '../../../src/core/sessions/start-placement.js';
+import { sendMessageToSession } from '../../../src/core/session-message-queue.js';
+import { MOVE_HELD_REASON } from '../../../src/core/sessions/engine-switch-io.js';
 
 const gitconfig = path.join(W.root, 'gitconfig');
 fs.writeFileSync(gitconfig, '[user]\n\tname = Mover\n\temail = mover@example.com\n[init]\n\tdefaultBranch = main\n')
@@ -213,7 +224,7 @@ beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
   for (const h of Object.values(W.homes)) { fs.rmSync(h, { recursive: true, force: true }); fs.mkdirSync(h, { recursive: true }); }
-  W.starts.length = 0; W.stops.length = 0; W.failStart = false; W.history = {}; W.changes = [];
+  W.starts.length = 0; W.stops.length = 0; W.failStart = false; W.history = {}; W.changes = []; W.gate = null; W.failList = false;
   await mutateStore((st) => { st.queues = {}; }, false, true);
   __setTransferConnectionResolverForTesting(async (host) => (W.homes[host] ? [daemonFor(host)] : []));
 });
@@ -339,6 +350,20 @@ describe('task_move', () => {
       expect(await placeStartByLoad(task, { host: '' }, { host: '', cwd: shared, message: 'x' }, 'claude')).toBeNull();
       const ios = await placeStartByLoad({ ...task, title: 'Fix the iOS share sheet' }, {}, { host: '', cwd: shared, message: 'x' }, 'claude');
       expect(ios).toMatchObject({ host: '', moved: false });
+      // A task with an isolated workspace runs in it.
+      expect(await placeStartByLoad({ ...task, workspace: { state: 'preparing' } as never }, {}, { host: '', cwd: shared, message: 'x' }, 'claude')).toBeNull();
+      // Setting up past the budget: the start stays where it was, untouched.
+      process.env.WALNUT_PLACE_SETUP_MS = '1';
+      try {
+        const late = { host: '', cwd: shared, message: 'x' };
+        const slow = await placeStartByLoad(task, {}, late, 'claude');
+        expect(slow).toMatchObject({ host: '', moved: false });
+        // Either the read of the folder or the setup ran out of the budget.
+        expect(slow!.reason).toMatch(/(could not be prepared there in time; it stays|no other host has room)$/);
+        expect(late).toEqual({ host: '', cwd: shared, message: 'x' });
+      } finally {
+        delete process.env.WALNUT_PLACE_SETUP_MS;
+      }
     } finally {
       __setHostLoadProberForTesting(null);
     }
@@ -354,6 +379,58 @@ describe('task_move', () => {
     expect(old?.archived).toBeFalsy();
     expect((await getTask(taskId)).engine_switch).toMatchObject({ state: 'failed', move: true });
   }, 120_000);
+
+  it('a message sent while the task moves is held at once (never waits for the copy) and goes with the task', async () => {
+    const { taskId, sid } = await taskInSharedCheckout();
+    let open!: () => void;
+    W.gate = new Promise<void>((r) => { open = r; });
+    const moving = requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' });
+    await vi.waitFor(() => expect(W.starts).toHaveLength(1), { timeout: 60_000, interval: 50 });
+    const t0 = Date.now();
+    const row = await sendMessageToSession(sid, 'Also add a test.', { source: 'ui', taskId });
+    expect(Date.now() - t0).toBeLessThan(5_000);
+    expect(row).toMatchObject({ sessionId: sid, status: 'parked', parkedReason: MOVE_HELD_REASON });
+    open();
+    const res = await moving;
+    const queued = (await getStore()).queues[res.sessionId!] ?? [];
+    expect(queued.find((r) => r.id === row.id)).toMatchObject({ status: 'pending', sessionId: res.sessionId });
+    expect(queued.find((r) => r.id === row.id)?.parkedReason).toBeUndefined();
+    expect((await getStore()).queues[sid] ?? []).toEqual([]);
+  }, 120_000);
+
+  it('a held message goes back to the old session when the move fails', async () => {
+    const { taskId, sid } = await taskInSharedCheckout();
+    let open!: () => void;
+    W.gate = new Promise<void>((r) => { open = r; });
+    W.failStart = true;
+    const moving = requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' }).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(W.starts).toHaveLength(1), { timeout: 60_000, interval: 50 });
+    const row = await sendMessageToSession(sid, 'Also add a test.', { source: 'ui', taskId });
+    open();
+    expect(await moving).toMatchObject({ code: 'start_failed' });
+    expect(((await getStore()).queues[sid] ?? []).find((r) => r.id === row.id)).toMatchObject({ status: 'pending' });
+  }, 120_000);
+
+  it('a move back never touches what the target task directory already holds', async () => {
+    const { taskId } = await taskInSharedCheckout();
+    const destTaskDir = `${W.homes.cloud}/tasks/${taskId}`;
+    // The copy an earlier move left there, with work of its own.
+    write(`${destTaskDir}/marina/keep.txt`, 'an older copy\n');
+    const res = await requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' });
+    expect(res).toMatchObject({ state: 'done' });
+    expect(W.starts[0]).toMatchObject({ cwd: `${destTaskDir}/marina-2` });
+    expect(fs.readdirSync(`${destTaskDir}/marina`)).toEqual(['keep.txt']);
+    expect(git(`${destTaskDir}/marina-2`, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('wt/move');
+  }, 120_000);
+
+  it('a target task directory that cannot be read fails the move; the task stays', async () => {
+    const { taskId, sid } = await taskInSharedCheckout();
+    W.failList = true;
+    await expect(requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' }))
+      .rejects.toMatchObject({ code: 'target_task_dir' });
+    expect((await taskConversation(taskId))?.claudeSessionId).toBe(sid);
+    expect(W.starts).toHaveLength(0);
+  }, 60_000);
 
   it('a move waits for a running turn (an agent moving itself), and refuses the host it is on', async () => {
     const { taskId, sid } = await taskInSharedCheckout();

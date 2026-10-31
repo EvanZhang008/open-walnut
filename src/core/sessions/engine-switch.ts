@@ -37,7 +37,7 @@ import { engineCaps, resolveEngine } from '../agents/engine-registry.js';
 import { engineHostBlocker, LOCAL_HOST, normalizeHost } from '../transfer/planner.js';
 import { engineSwitchedReason, isSupersededSession } from './engine-switch-marker.js';
 import { contextFingerprint, planResume, resumeEarlier } from './engine-switch-resume.js';
-import { hostPath, putQueuedRows, takeQueuedRows, writeTaskTranscript, type HeldRow } from './engine-switch-io.js';
+import { hostPath, putQueuedRows, releaseMoveHeld, releaseMoveHeldRows, takeQueuedRows, writeTaskTranscript, type HeldRow } from './engine-switch-io.js';
 import {
   CARRY_WINDOW_SHARE, ENGINE_SWITCH_HINT, readActiveContext, renderCarriedContext, targetWindowTokens,
 } from './engine-switch-context.js';
@@ -90,9 +90,10 @@ export interface EngineSwitchResult {
 
 const LIVE = new Set(['running', 'idle']);
 /** taskId → the switch running now and the session it replaces. */
-const inFlight = new Map<string, { from: string; work: Promise<EngineSwitchResult>; maxMs: number }>();
-/** A move copies and sets up repositories (a clone can take minutes); a message for the
- *  session it replaces waits that long for it rather than reaching the stopped one. */
+const inFlight = new Map<string, { from: string; work: Promise<EngineSwitchResult>; maxMs: number; move: boolean }>();
+/** A move copies and sets up repositories (a clone can take minutes). A message for the
+ *  session it replaces never waits for it: it is held on the old session's queue
+ *  (MOVE_HELD_REASON) and goes with the task (or back to the old session when the move fails). */
 const MOVE_WAIT_MS = 15 * 60_000;
 const SWITCH_WAIT_MS = 120_000;
 
@@ -251,7 +252,7 @@ export function runEngineSwitch(taskId: string, state: EngineSwitchState): Promi
   const running = inFlight.get(taskId);
   if (running) return running.work;
   const work = execute(taskId, state).finally(() => inFlight.delete(taskId));
-  inFlight.set(taskId, { from: state.from_session_id, work, maxMs: state.move ? MOVE_WAIT_MS : SWITCH_WAIT_MS });
+  inFlight.set(taskId, { from: state.from_session_id, work, maxMs: state.move ? MOVE_WAIT_MS : SWITCH_WAIT_MS, move: !!state.move });
   return work;
 }
 
@@ -265,6 +266,16 @@ export function switchingFrom(sessionId: string): string | undefined {
   return undefined;
 }
 
+/** The session a running MOVE replaces, for `sessionId` or for its task: a message for it is held, never waited on. */
+export function movingFrom(sessionIdOrTask: { sessionId?: string; taskId?: string }): string | undefined {
+  if (sessionIdOrTask.taskId) {
+    const sw = inFlight.get(sessionIdOrTask.taskId);
+    return sw?.move ? sw.from : undefined;
+  }
+  for (const sw of inFlight.values()) if (sw.move && sw.from === sessionIdOrTask.sessionId) return sw.from;
+  return undefined;
+}
+
 /**
  * The session a message for `sessionId` belongs in: itself, or, for a session an
  * engine switch replaced, its task's active session (waiting for a switch still
@@ -275,6 +286,8 @@ export async function activeSessionFor(sessionId: string): Promise<string> {
     // A message for the session a running switch replaces waits for the switch:
     // it then belongs in the new session (or in this one again, when the start failed).
     const switching = switchingFrom(sessionId);
+    // A move takes minutes: its message is held on this session and moves with the task.
+    if (switching && inFlight.get(switching)?.move) return sessionId;
     if (switching) await awaitSwitch(switching);
     const { getSessionByClaudeId } = await import('../session-tracker.js');
     const rec = await getSessionByClaudeId(sessionId);
@@ -442,6 +455,9 @@ async function execute(taskId: string, state: EngineSwitchState): Promise<Engine
   await tracker.updateSessionRecord(old.claudeSessionId, { supersededBy: sessionId }).catch(() => {});
   const { retargetRequestsToSession } = await import('../session-requests.js');
   const movedRequests = await retargetRequestsToSession(old.claudeSessionId, sessionId).catch(() => 0);
+  // Messages that came during a move (or before a restart cut an earlier try of it) were held
+  // on the old session: they go too, deliverable again.
+  if (state.move) held = [...held, ...(await takeQueuedRows(old.claudeSessionId))].map(releaseMoveHeld);
   await putQueuedRows(sessionId, held);
   await tm.updateTaskRaw(taskId, {
     engine_switch: {
@@ -542,6 +558,11 @@ async function restore(taskId: string, old: SessionRecord, newSid: string | unde
     taskId, sessionId: old.claudeSessionId, error: err instanceof Error ? err.message : String(err),
   }));
   await putQueuedRows(old.claudeSessionId, held);
+  // Messages held during a failed move are the old session's again.
+  if (await releaseMoveHeldRows(old.claudeSessionId)) {
+    const { bus, EventNames } = await import('../event-bus.js');
+    bus.emit(EventNames.SESSION_SEND, { sessionId: old.claudeSessionId, taskId, message: '' }, ['session-runner'], { source: 'engine-switch' });
+  }
 }
 
 /**

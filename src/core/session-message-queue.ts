@@ -103,7 +103,7 @@ export async function loadQueue(): Promise<void> {
 export async function enqueueMessage(
   sessionId: string,
   message: string,
-  opts?: { id?: string; userUuid?: string; stopFence?: string | null; relayTaken?: boolean; lineUuid?: string; closesPrompt?: boolean; sentBy?: 'person' | 'agent' },
+  opts?: { id?: string; userUuid?: string; stopFence?: string | null; relayTaken?: boolean; lineUuid?: string; closesPrompt?: boolean; sentBy?: 'person' | 'agent'; heldReason?: string },
 ): Promise<QueuedMessage> {
   if (opts?.id?.startsWith('qm-inbox-') && !opts.id.startsWith('qm-inbox-ai-')) {
     const { validateInboxMessageBoundary } = await import('./human-inbox/item-execution.js');
@@ -122,7 +122,8 @@ export async function enqueueMessage(
     ...(stopFence ? { stopFence } : {}),
     sessionId,
     message,
-    status: 'pending',
+    status: opts?.heldReason ? 'parked' : 'pending',
+    ...(opts?.heldReason ? { parkedAt: new Date().toISOString(), parkedReason: opts.heldReason } : {}),
     enqueuedAt: new Date().toISOString(),
     seq: nextEnqueueSeq(),
     // Additive: absent ⇒ the key never lands on the row, so an old-shaped row and
@@ -206,8 +207,11 @@ export async function sendMessageToSession(
   const { bus, EventNames } = await import('./event-bus.js');
   // A session an engine switch replaced never takes a message: it goes to the
   // task's active session (sessions/engine-switch.ts).
-  const { activeSessionFor } = await import('./sessions/engine-switch.js');
+  const { activeSessionFor, movingFrom } = await import('./sessions/engine-switch.js');
   sessionId = await activeSessionFor(sessionId);
+  // Its task is moving to another host: the row is held here and goes with the task.
+  const { MOVE_HELD_REASON } = await import('./sessions/engine-switch-io.js');
+  const heldForMove = movingFrom({ sessionId }) ? MOVE_HELD_REASON : undefined;
   // A task that moved since its session was told rides a place note on this
   // message, in the same row, so it never costs a turn (sessions/place-notice.ts).
   const { pendingPlaceNotice } = await import('./sessions/place-notice.js');
@@ -253,6 +257,7 @@ export async function sendMessageToSession(
       ...(opts?.lineUuid ? { lineUuid: opts.lineUuid } : {}),
       ...(opts?.closesPrompt || PERSON_SEND_SOURCES.has(opts?.source ?? '') ? { closesPrompt: true } : {}),
       ...(queueSentBy(opts?.source) ? { sentBy: queueSentBy(opts?.source) } : {}),
+      ...(heldForMove ? { heldReason: heldForMove } : {}),
     });
   } catch (err) {
     appState?.release();
@@ -286,8 +291,8 @@ export async function sendMessageToSession(
     await refreshWalnutSessionProfile(sessionId);
   } catch { /* stale persona until next attempt */ }
 
-  // Tell session-runner to process the queued message
-  bus.emit(EventNames.SESSION_SEND, {
+  // Tell session-runner to process the queued message (a row held for a move waits for it)
+  if (!heldForMove) bus.emit(EventNames.SESSION_SEND, {
     sessionId,
     taskId: opts?.taskId,
     message,

@@ -142,8 +142,12 @@ export function packWorkspace(host: string, opts: PackOptions): Promise<PackRepl
 }
 
 /** Whether `host` runs the move steps itself (scan, limited packs, apply). */
+/** The host's daemon has 'task-move-v1'. A host that is offline throws (it is not an old daemon). */
 export async function hostCanMove(host: string): Promise<boolean> {
-  try { await connectionFor(host, TASK_MOVE_CAPABILITY); return true } catch { return false }
+  try { await connectionFor(host, TASK_MOVE_CAPABILITY); return true } catch (err) {
+    if (err instanceof DaemonNeedsUpgradeError) return false
+    throw err
+  }
 }
 
 /** The git repositories and loose files in `dir` on `host`. */

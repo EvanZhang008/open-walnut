@@ -5,6 +5,7 @@
  *   POST /tasks/:id/move   { host, text?, engine?, model?, team?, wait_ms?, user_request? }
  *                          → 200 done (same task id, its new session, what moved), 202 pending
  *                          (its turn ends first) or moving (still copying after wait_ms).
+ *                          wait_ms 0: 202 switching once the move is checked and under way.
  *                          `team: true` moves every open task under it with it, one after another.
  *   GET  /hosts/load       { hosts: [...] } each host's numbers, whether it is over a cap and why
  */
@@ -73,17 +74,21 @@ taskMoveV1Router.post('/tasks/:id/move', async (req: Request, res: Response, nex
     const { requestEngineSwitch } = await import('../../core/sessions/engine-switch.js')
     const caller = callerSid(req)
     const userWords = typeof body.user_request === 'string' ? body.user_request : undefined
+    const waitFor = Math.min(Math.max(Number(body.wait_ms ?? 25_000) || 0, 0), 180_000)
+    // wait_ms 0 answers once the move is checked and under way: a refusal still answers as one.
     const ask = (id: string) => requestEngineSwitch({
-      taskId: id, engine, host, message: text, ...(userWords ? { userWords } : {}),
+      taskId: id, engine, host, message: text, ...(userWords ? { userWords } : {}), ...(waitFor === 0 ? { detach: true } : {}),
       ...(typeof body.model === 'string' && body.model ? { model: body.model } : {}),
       callerSid: caller, source: 'api',
     })
     const team = body.team === true ? await teamToMove(task, host) : []
-    const waitFor = Math.min(Math.max(Number(body.wait_ms ?? 25_000) || 0, 0), 180_000)
     const work = normalizeHost(conversation.host) === host && team.length > 0 ? null : ask(task.id)
     // The team follows one at a time: each move packs and copies on the same two hosts.
     const followers = team.length ? (async () => {
       if (work) await work.catch(() => {})
+      // A detached move (wait_ms 0) answers while it still copies: the team waits for it to end.
+      const { awaitSwitch } = await import('../../core/sessions/engine-switch.js')
+      await awaitSwitch(task.id).catch(() => false)
       const results: Array<{ taskId: string; state?: string; error?: string }> = []
       for (const t of team) {
         try {

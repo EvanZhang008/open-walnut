@@ -45,6 +45,8 @@ export function MoveHostMenuItems({ task, afterAction }: { task: Task; afterActi
   const [rows, setRows] = useState<HostLoadRow[] | null>(null);
   const [here, setHere] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [asking, setAsking] = useState<string | null>(null);
+  const [refused, setRefused] = useState<string | null>(null);
   const sessionId = resolveTaskSessionId(task);
   useEffect(() => {
     if (!open) return;
@@ -62,12 +64,23 @@ export function MoveHostMenuItems({ task, afterAction }: { task: Task; afterActi
     return () => { live = false; };
   }, [open, task.id]);
   if (!sessionId) return null;
+  // The server answers once the move is checked and under way (wait_ms 0): a refusal shows
+  // here; the session panel's engine-switch line follows the move itself.
   const move = (host: string) => {
     log.info('tasks', 'task move requested', { taskId: task.id, host });
+    setAsking(host);
+    setRefused(null);
     apiPost(`/api/v1/tasks/${encodeURIComponent(task.id)}/move`, { host, wait_ms: 0 }, { timeoutMs: 30_000 })
-      .then((out) => log.info('tasks', 'task move answered', { taskId: task.id, host, result: out as Record<string, unknown> }))
-      .catch((err) => log.warn('tasks', 'task move failed', { taskId: task.id, host, error: err instanceof Error ? err.message : String(err) }));
-    afterAction();
+      .then((out) => {
+        log.info('tasks', 'task move answered', { taskId: task.id, host, result: out as Record<string, unknown> });
+        afterAction();
+      })
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn('tasks', 'task move refused', { taskId: task.id, host, error: message });
+        setRefused(message);
+      })
+      .finally(() => setAsking(null));
   };
   const others = (rows ?? []).filter((h) => h.host !== here);
   return (
@@ -89,18 +102,20 @@ export function MoveHostMenuItems({ task, afterAction }: { task: Task; afterActi
           {error && <div className="task-kebab-item task-kebab-info" data-testid="kebab-move-host-error">Could not read the hosts: {error}</div>}
           {!error && !rows && <div className="task-kebab-item task-kebab-info">Reading each host&apos;s load…</div>}
           {!error && rows && others.length === 0 && <div className="task-kebab-item task-kebab-info">No other host is set up</div>}
+          {refused && <div className="task-kebab-item task-kebab-info task-kebab-move-host-refused" role="alert" data-testid="kebab-move-host-refused">The move did not start: {refused}</div>}
           {others.map((h) => (
             <button
               key={h.host}
               type="button"
               className="task-kebab-item task-kebab-move-host"
               data-testid={`kebab-move-host-${h.host}`}
+              disabled={asking !== null}
               title={h.reasons.length ? h.reasons.join('; ') : `Has room: load ${h.loadPerCpu ?? '?'} per CPU on ${h.cpus ?? '?'} CPUs, ${h.running} of ${h.runningLimit} sessions in a turn`}
               onClick={(e) => { e.stopPropagation(); move(h.host); }}
             >
               <span className="task-kebab-icon" aria-hidden="true">→</span>
               <span className="task-kebab-move-host-text">
-                <span>Move to {h.label}</span>
+                <span>{asking === h.host ? `Moving to ${h.label}…` : `Move to ${h.label}`}</span>
                 <span className={`task-kebab-move-host-load${h.busy ? ' busy' : ''}`}>{hostLoadLine(h)}</span>
               </span>
             </button>

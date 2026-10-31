@@ -1677,17 +1677,26 @@ repository in the old task directory that holds something a remote lacks
 when the session ran in a checkout outside it, only the files that session
 changed there (a shared checkout's other files never ride). The new host's
 daemon sets each repository up (`transfer.apply`, capability `task-move-v1`); a
-piece it could not becomes the new session's first steps. The old copies stay.
+piece it could not becomes the new session's first steps. The old copies stay,
+and nothing the target already holds is reused or removed: a move back lands
+beside its earlier copy (`marina-2`), and a failed set-up removes only what that
+set-up made. A home, system or Walnut data folder is never copied whole. A
+message sent to the task while it moves is held on the old session (parked,
+`parkedReason` "Held while its task moves to another host") and goes with the
+task, or back to the old session when the move fails; it never waits for the copy.
 
 - `POST /api/v1/tasks/:id/move { host, text?, engine?, model?, team?, wait_ms?,
   user_request? }` → `200 { state: "done", taskId, sessionId, host, fromHost,
   moved: [one line per piece], carriedTurns, ... }`, `202 { state: "pending" }`
   (its turn ends first) or `202 { state: "moving" }` (still copying after
-  `wait_ms`, default 25000). `team: true` moves every open task under it too,
+  `wait_ms`, default 25000; `wait_ms: 0` answers `202 { state: "switching" }`
+  once the move is checked and under way, so a refusal still answers as one).
+  `team: true` moves every open task under it too,
   one after another (`team: [{ taskId, title }]`). Refusals: `400 host_required`,
   `400 unknown_host`, `400 same_host`, `409 no_conversation` (start it with a host
-  instead), `409 workspace_task`, `409 daemon_upgrade_required`, `502
-  start_failed` (the task stays where it was). `Task.engine_switch` carries
+  instead), `409 workspace_task`, `409 engine_not_on_host`, `409
+  switch_in_progress`, `409 daemon_upgrade_required`, `502 target_task_dir`,
+  `502 start_failed` (the task stays where it was). `Task.engine_switch` carries
   `move: true`, `from_host`, `from_cwd`, `moved`, `user_words`;
   `switched_from` of the new session carries `fromHost`/`fromCwd`. `501
   not_supported_cloud` on the companion.
@@ -1697,7 +1706,9 @@ piece it could not becomes the new session's first steps. The old copies stay.
   host and no cwd keeps the host it would use unless that host is over a cap and
   another has room; its answer then carries `placement: { host, from, moved,
   reason, cwd?, setUp? }`. Mac-only work (iOS, the Mac app, the user's screen)
-  stays on the Mac.
+  stays on the Mac, and so does a task with an isolated workspace. Placement holds
+  a start at most `WALNUT_PLACE_SETUP_MS` (25000); past it the start stays where it
+  would have run.
 
 ### Sessions (read-only)
 

@@ -76,6 +76,19 @@ test('each other host shows its room or why it is busy; a click moves the task t
   await cloud.click()
   await expect.poll(() => posted.length).toBe(1)
   expect(posted[0]).toEqual({ host: 'clouddev', wait_ms: 0 })
-  // The menu closes on the click.
+  // The menu closes once the server took the move.
   await expect(page.locator('.task-kebab-menu:visible')).toHaveCount(0)
+})
+
+test('a refused move says why in the menu, and the menu stays open', async ({ page }) => {
+  await page.route('**/api/v1/hosts/load', (route) => route.fulfill({ json: HOSTS }))
+  await page.route(`**/api/v1/tasks/${TASK_ID}/move`, (route) => route.fulfill({
+    status: 409, json: { error: 'Claude Code is not available on clouddev: not installed.', code: 'engine_not_on_host' },
+  }))
+  const menu = await openMoveRow(page)
+  await menu.getByTestId('kebab-move-host-clouddev').click()
+  const refused = menu.getByTestId('kebab-move-host-refused')
+  await expect(refused).toContainText('The move did not start: Claude Code is not available on clouddev: not installed.')
+  await expect(menu.getByTestId('kebab-move-host-clouddev')).toBeEnabled()
+  await menu.screenshot({ path: `${SHOTS}/move-refused.png` })
 })

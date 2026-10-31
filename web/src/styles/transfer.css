@@ -97,3 +97,9 @@
   max-width: 260px;
 }
 .task-kebab-move-host-load.busy { color: var(--warning, #b7791f); }
+.task-kebab-item.task-kebab-info.task-kebab-move-host-refused {
+  color: var(--error);
+  white-space: normal;
+  max-width: 300px;
+  font-size: 12px;
+}

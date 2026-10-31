@@ -36,6 +36,32 @@ export async function writeTaskTranscript(task: Task, rows: SessionRecord[], hos
 
 export type HeldRow = import('../session-queue-store.js').QueuedMessage;
 
+/** Why a message waits on a session its task is moving away from (never auto-delivered while parked). */
+export const MOVE_HELD_REASON = 'Held while its task moves to another host';
+
+/** A row held for a move, deliverable again. */
+export function releaseMoveHeld(r: HeldRow): HeldRow {
+  if (r.status !== 'parked' || r.parkedReason !== MOVE_HELD_REASON) return r;
+  const { parkedAt: _a, parkedReason: _r, ...rest } = r;
+  return { ...rest, status: 'pending' };
+}
+
+/** Release the rows held for a move on `sessionId`, in place. How many were released. */
+export async function releaseMoveHeldRows(sessionId: string): Promise<number> {
+  const { mutateStore } = await import('../session-queue-store.js');
+  return mutateStore((s) => {
+    const rows = s.queues[sessionId];
+    if (!rows) return 0;
+    let n = 0;
+    s.queues[sessionId] = rows.map((r) => {
+      const out = releaseMoveHeld(r);
+      if (out !== r) n++;
+      return out;
+    });
+    return n;
+  }, false, true);
+}
+
 /** Take the old session's waiting rows out of its queue (a row already in a CLI stays). */
 export async function takeQueuedRows(sessionId: string): Promise<HeldRow[]> {
   const { mutateStore } = await import('../session-queue-store.js');

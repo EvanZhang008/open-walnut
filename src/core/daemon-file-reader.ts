@@ -607,6 +607,15 @@ export class DaemonFileReader implements SessionFileReader {
     return result.ok ? (result.entries as { name: string }[]).map(e => e.name) : []
   }
 
+  /** listDir that throws when the folder cannot be read (listDir answers [] then). */
+  async listDirStrict(remotePath: string): Promise<string[]> {
+    await this.resolve()
+    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const result = await conn.send('fs.ls', { path: remotePath })
+    if (!result.ok) throw new Error(`could not list ${remotePath}: ${String((result as { error?: unknown }).error ?? 'fs.ls failed')}`)
+    return (result.entries as { name: string }[]).map(e => e.name)
+  }
+
   /**
    * listDir with per-file size/mtimeMs (fs.ls detail:true). Old daemons ignore
    * the flag and return entries without size — callers must treat a missing

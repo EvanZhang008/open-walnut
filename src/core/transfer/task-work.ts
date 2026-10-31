@@ -97,6 +97,14 @@ export function cloneUrlOf(meta: PackMeta): string | undefined {
   return meta.remotes?.find((r) => !/^(\/|~\/|file:\/\/)/.test(r.url))?.url;
 }
 
+/** A folder never copied whole: the root, a home folder, a system folder, Walnut's own data. */
+export function unmovableFolder(dir: string): boolean {
+  const d = dir.replace(/\/+$/, '') || '/';
+  if (/^\/(?:[^/]+)?$/.test(d)) return true;
+  if (/^\/(?:home|Users)\/[^/]+$/.test(d) || /^\/local\/home\/[^/]+$/.test(d)) return true;
+  return /(^|\/)\.open-walnut(\/|$)/.test(d);
+}
+
 function inside(child: string, parent: string): boolean {
   const rel = path.posix.relative(parent, child);
   return rel === '' || (!rel.startsWith('..') && !path.posix.isAbsolute(rel));
@@ -128,12 +136,26 @@ async function ownFiles(session: SessionRecord, repoRoot: string, host: string):
   }
 }
 
-/** A name under the target task dir that no other piece took. */
-function freeRel(want: string, taken: Set<string>): string {
-  let rel = want || 'workspace';
-  for (let i = 2; taken.has(rel); i++) rel = `${want}-${i}`;
-  taken.add(rel);
-  return rel;
+/**
+ * Names under the target task dir. A piece's top folder never reuses a name the target
+ * already holds (a move back finds its old copies there) or another piece took; the
+ * repositories of one source task dir keep their layout (`repos/a`, `repos/b` share
+ * one top folder, renamed together).
+ */
+export function targetNamer(existing: Iterable<string>): (want: string, layout?: boolean) => string {
+  const used = new Set(existing);
+  const tops = new Map<string, string>();
+  return (want, layout = false) => {
+    const [top, ...rest] = (want || 'workspace').split('/');
+    let mapped = layout ? tops.get(top) : undefined;
+    if (!mapped) {
+      mapped = top;
+      for (let i = 2; used.has(mapped); i++) mapped = `${top}-${i}`;
+      used.add(mapped);
+      if (layout) tops.set(top, mapped);
+    }
+    return [mapped, ...rest].join('/');
+  };
 }
 
 interface Packed { piece: WorkPiece; pack: PackReply }
@@ -162,8 +184,11 @@ export async function moveTaskWork(opts: {
   const scan: ScanReply | null = sourceTaskDir ? await client.scanWorkDir(sourceHost, sourceTaskDir) : null;
   // A name the target's task directory already holds (a move back finds its old copies there) is never reused.
   const { DaemonFileReader } = await import('../daemon-file-reader.js');
-  const existing = await new DaemonFileReader(targetHost).listDir(targetTaskDir).catch(() => [] as string[]);
-  const taken = new Set<string>(existing);
+  // A listing that fails is no answer: a name thought free could hold an older copy.
+  const existing = await new DaemonFileReader(targetHost).listDirStrict(targetTaskDir).catch((err: unknown) => {
+    throw new TaskWorkError(`The task directory on ${targetHost} could not be read: ${err instanceof Error ? err.message : String(err)}`, 502, 'target_task_dir');
+  });
+  const nameFor = targetNamer(existing);
   const packed: Packed[] = [];
   const cleanRepos: MovedWork['cleanRepos'] = [];
   const outDir = (n: number) => `${transfersDir(sourceHost)}/${moveId}/${n}/pack`;
@@ -177,7 +202,7 @@ export async function moveTaskWork(opts: {
       cleanRepos.push({ source: repo.root, ...(cloneUrlOf(m) ? { url: cloneUrlOf(m) } : {}) });
       continue;
     }
-    packed.push({ piece: { kind: 'repo', source: repo.root, rel: freeRel(repo.rel || path.posix.basename(repo.root), taken) }, pack });
+    packed.push({ piece: { kind: 'repo', source: repo.root, rel: nameFor(repo.rel || path.posix.basename(repo.root), true) }, pack });
   }
 
   // The session's folder outside the task directory: a checkout others may share.
@@ -185,6 +210,7 @@ export async function moveTaskWork(opts: {
   // Where in its repository the session ran, kept when it continues in another copy of it.
   let relCwd = cwdPiece && cwd ? path.posix.relative(cwdPiece.piece.source, cwd) : '';
   const ownUnknown = new Set<Packed>();
+  const notes: string[] = [];
   if (!cwdPiece && cwd && !(sourceTaskDir && inside(cwd, sourceTaskDir))) {
     const probe = await client.packWorkspace(sourceHost, { cwd, outDir: outDir(n++), paths: [] });
     relCwd = probe.meta.relCwd ?? '';
@@ -199,15 +225,22 @@ export async function moveTaskWork(opts: {
         const pack = mine && mine.length > 0
           ? await client.packWorkspace(sourceHost, { cwd, outDir: outDir(n++), paths: mine })
           : probe;
-        cwdPiece = { piece: { kind: 'checkout', source: probe.meta.root, rel: freeRel(path.posix.basename(probe.meta.root), taken) }, pack };
+        cwdPiece = { piece: { kind: 'checkout', source: probe.meta.root, rel: nameFor(path.posix.basename(probe.meta.root)) }, pack };
         if (!mine) ownUnknown.add(cwdPiece);
         packed.push(cwdPiece);
       }
+    } else if (unmovableFolder(probe.meta.root)) {
+      // A home folder, the root or Walnut's data never ride (dotfiles, credentials): the session continues in the task directory.
+      notes.push(`${probe.meta.root}: not copied (a home, system or Walnut data folder); the session continues in the task directory.`);
     } else {
-      // A plain folder outside the task directory (notes, a scratch dir): it moves whole.
-      const pack = await client.packWorkspace(sourceHost, { cwd, outDir: outDir(n++), asDir: true });
-      cwdPiece = { piece: { kind: 'files', source: probe.meta.root, rel: freeRel(path.posix.basename(probe.meta.root), taken) }, pack };
-      packed.push(cwdPiece);
+      // A plain folder outside the task directory (notes, a scratch dir): it moves whole, up to the size cap.
+      const pack = await client.packWorkspace(sourceHost, { cwd, outDir: outDir(n++), asDir: true, maxTarBytes: MAX_LOOSE_BYTES });
+      if (pack.meta.tooLarge) {
+        notes.push(`${probe.meta.root}: not copied, over ${MAX_LOOSE_BYTES / 1024 ** 2} MB; the session continues in the task directory.`);
+      } else {
+        cwdPiece = { piece: { kind: 'files', source: probe.meta.root, rel: nameFor(path.posix.basename(probe.meta.root)) }, pack };
+        packed.push(cwdPiece);
+      }
     }
   }
 
@@ -215,6 +248,7 @@ export async function moveTaskWork(opts: {
   if (sourceTaskDir && scan && scan.loose.count > 0) {
     if (scan.loose.bytes > MAX_LOOSE_BYTES) {
       log.session.info('task move: the task directory\'s loose files are too large to move', { taskId: task.id, bytes: scan.loose.bytes });
+      notes.push(`${sourceTaskDir}: its loose files (${Math.round(scan.loose.bytes / 1024 ** 2)} MB) are over ${MAX_LOOSE_BYTES / 1024 ** 2} MB and stayed on the old host.`);
     } else {
       const pack = await client.packWorkspace(sourceHost, {
         cwd: sourceTaskDir, outDir: outDir(n++), asDir: true, exclude: scan.repos.map((r) => r.rel).filter(Boolean), maxTarBytes: MAX_LOOSE_BYTES,
@@ -249,11 +283,8 @@ export async function moveTaskWork(opts: {
         continue;
       } catch (err) {
         base.error = err instanceof Error ? err.message.replace(/^transfer\.apply failed: /, '') : String(err);
+        // The target's daemon removed what its own apply made; nothing else is touched here.
         log.session.warn('task move: the target could not set a piece up; the new session will', { taskId: task.id, dest, error: base.error });
-        // A repository's folder was free before this apply (freeRel), so what is there now is its half-made clone.
-        if (m.kind === 'git' && p.piece.rel && dest.startsWith(`${targetTaskDir}/`)) {
-          await new DaemonFileReader(targetHost).removePath(dest, true).catch(() => {});
-        }
       }
     }
     base.steps = workspaceInstructions(moved, { repoRoot: knownPath && !targetMoves ? knownPath : dest, known: !!knownPath && !targetMoves });
@@ -267,7 +298,7 @@ export async function moveTaskWork(opts: {
     // An unset-up clone starts in its (empty) root, so the session can clone into it.
     return piece.applied && relCwd && !relCwd.startsWith('..') ? `${piece.dest}/${relCwd}` : piece.dest;
   })();
-  return { cwd: cwdOnTarget, targetTaskDir, pieces, cleanRepos, summary: describeMovedWork(pieces, cleanRepos) };
+  return { cwd: cwdOnTarget, targetTaskDir, pieces, cleanRepos, summary: [...describeMovedWork(pieces, cleanRepos), ...notes] };
 }
 
 /** One line per piece, plain words, for the outcome and the new session's first message. */
