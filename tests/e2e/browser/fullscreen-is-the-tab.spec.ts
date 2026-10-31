@@ -19,15 +19,21 @@ test('the sidebar stays usable in full screen, and the tab is still full screen 
   const panel = await openSessionPanel(page)
   await enterFilesFullscreen(page, panel)
 
-  // The sheet sits in the page area (a 12px gutter), not over the sidebar.
+  // The sheet sits in the page area, not over the sidebar, centred, each side
+  // keeping about a tenth of the area (never past a 960px sheet, never under the
+  // 12px gutter; 2026-10-31, the user: leave about 10% on the left and right).
   const org = page.getByTestId('sidebar-org')
   // Polled: the strip's 320ms slide-in (a transform on the column) holds the
   // sheet inside the column until it settles.
   await expect.poll(() => page.evaluate(() => {
     const side = document.querySelector('.sidebar')!.getBoundingClientRect().right
-    const sheet = document.querySelector('.open-walnut-fullscreen')!.getBoundingClientRect().left
-    return Math.round(sheet - side)
-  })).toBe(12)
+    const sheet = document.querySelector('.open-walnut-fullscreen')!.getBoundingClientRect()
+    const area = window.innerWidth - side
+    const want = Math.max(12, Math.min(area * 0.1, (area - 960) / 2))
+    const left = sheet.left - side
+    const right = window.innerWidth - sheet.right
+    return Math.abs(left - want) <= 1 && Math.abs(right - want) <= 1 ? 'centred' : `left ${left} right ${right} want ${want}`
+  })).toBe('centred')
   await expectOnTop(org)
 
   // Home -> Org by a real sidebar click: Org is on top and scrolls.

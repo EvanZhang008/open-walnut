@@ -1,10 +1,10 @@
 /**
  * Waiting as a status (2026-09-30): where it sits among the options, how its
- * optional clock (`wait_until`) reads and is written, and the line above a
- * Waiting task's composer.
+ * optional clock (`wait_until`) reads and is written, and the words of a
+ * Waiting task's header chip (WaitingChip) and its detail card.
  *
- * The pure helpers run as plain functions. The status row and the composer
- * line are mounted with React under linkedom, with the same stubs as
+ * The pure helpers run as plain functions. The status row is mounted with
+ * React under linkedom, with the same stubs as
  * task-action-menu-draft-props.test.ts (TaskStatusControl is part of that
  * module graph).
  */
@@ -24,9 +24,10 @@ vi.mock('@/components/tasks/QuoteInSessionItem', () => ({ QuoteInSessionItem: ()
 vi.mock('@/api/sessions', () => ({ peekWorkingDirs: () => null }));
 
 const {
-  STATUS_OPTIONS, statusLabel, formatWaitUntil, waitUntilFromPick, waitingLineText,
-  TaskStatusMenuSection, WaitingComposerLine,
+  STATUS_OPTIONS, statusLabel, formatWaitUntil, waitUntilFromPick,
+  TaskStatusMenuSection,
 } = await import('../../web/src/components/tasks/TaskStatusControl');
+const { waitingChipLabel, waitingDetailLines } = await import('../../web/src/components/tasks/WaitingChip');
 
 let doc: Document;
 let win: Window & typeof globalThis;
@@ -98,34 +99,31 @@ describe('wait_until helpers', () => {
     expect(waitUntilFromPick('2026-10-02T16:30:00.000Z')).toBe('2026-10-02T16:30:00.000Z');
   });
 
-  it('writes the composer line for a Waiting task only', () => {
+  it('labels the header chip for a Waiting task only', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 8, 29, 10, 0));
-    expect(waitingLineText({ phase: 'WAITING', wait_until: new Date(2026, 9, 2, 13, 27).toISOString() }))
-      .toBe('Waiting until Fri 13:27 · a message here moves it to In Progress');
-    expect(waitingLineText({ phase: 'WAITING' })).toBe('Waiting until something happens · a message here moves it to In Progress');
-    expect(waitingLineText({ phase: 'TODO' })).toBe('');
+    expect(waitingChipLabel({ phase: 'WAITING', wait_until: new Date(2026, 9, 2, 13, 27).toISOString() })).toBe('Wait until Fri 13:27');
+    expect(waitingChipLabel({ phase: 'WAITING' })).toBe('Waiting');
+    expect(waitingChipLabel({ phase: 'TODO' })).toBe('');
   });
 });
 
-describe('WaitingComposerLine', () => {
-  it('renders one line for a Waiting task, with no buttons', async () => {
-    const host = await mount(WaitingComposerLine, { task: task({ phase: 'WAITING' }) });
-    const line = host.querySelector('[data-testid="session-waiting-line"]')!;
-    expect(line).toBeTruthy();
-    expect(line.textContent).toBe('Waiting until something happens · a message here moves it to In Progress');
-    expect(line.querySelectorAll('button')).toHaveLength(0);
+describe('the Waiting chip\'s detail card', () => {
+  it('says when it wakes, on whom it waits, its triggers, and what a message does', () => {
+    const lines = waitingDetailLines(
+      { phase: 'WAITING', wait_until: new Date(2026, 10, 2, 6, 53).toISOString(), user_status: { state: 'waiting', waitingOn: 'the CR review', next: 'merge it' } } as never,
+      'review-watch: every 10m\n',
+    );
+    expect(lines[0]).toMatch(/^Wakes by itself .+, or sooner when something happens\.$/);
+    expect(lines).toContain('Waiting on the CR review.');
+    expect(lines).toContain('Next: merge it');
+    expect(lines).toContain('Trigger review-watch: every 10m');
+    expect(lines.at(-1)).toBe('A message here moves it to In Progress.');
   });
 
-  it('names the time when the task has one, and renders nothing for any other phase', async () => {
-    const wait_until = new Date(Date.now() + 3 * 3_600_000).toISOString();
-    const host = await mount(WaitingComposerLine, { task: task({ phase: 'WAITING', wait_until }) });
-    expect(host.querySelector('[data-testid="session-waiting-line"]')!.textContent)
-      .toBe(waitingLineText({ phase: 'WAITING', wait_until }));
-    await rerender(WaitingComposerLine, { task: task({ phase: 'TODO' }) });
-    expect(host.querySelector('[data-testid="session-waiting-line"]')).toBeNull();
-    await rerender(WaitingComposerLine, { task: null });
-    expect(host.innerHTML).toBe('');
+  it('with no clock says it waits for something to happen; nothing for another phase', () => {
+    expect(waitingDetailLines({ phase: 'WAITING' } as never)[0]).toMatch(/^No clock/);
+    expect(waitingDetailLines({ phase: 'IN_PROGRESS' } as never)).toEqual([]);
   });
 });
 

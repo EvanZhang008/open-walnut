@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import type { ThreadMark } from '@/utils/thread-mark-hit';
 import { anchorsSig, REVIEW_MIN_BOX, reviewGutterOf, reviewSidebarOn, type ReviewGutter } from '@/utils/review-sidebar';
 import { useReviewSidebarCollapsed } from './useReviewSidebarCollapsed';
+import { log } from '@/utils/log';
 
 export interface ReviewSidebarArgs {
   containerRef: RefObject<HTMLElement | null>;
@@ -38,6 +39,20 @@ export interface ReviewSidebar {
 
 const NO_ANCHORS: ReadonlyMap<string, number> = new Map();
 const REVIEW_EMPTY_HOLD_MS = 1200;
+
+/**
+ * Is the passage on a turn the timeline has loaded and draws? A question whose
+ * passage sits before "Load earlier turns" has no row here, so it has no card
+ * and no place on the bar (2026-10-31, the user: the folded bar showed "1" for
+ * an ask on a turn above the loaded ones).
+ */
+function passageInLoadedTurn(range: Range, container: HTMLElement | null): boolean {
+  const node = range.startContainer;
+  if (!container || !node.isConnected) return false;
+  const el = node.nodeType === 1 ? (node as Element) : node.parentElement;
+  const row = el?.closest('[data-message-id]');
+  return !!row && container.contains(row);
+}
 
 /** The session panel around `el` is fullscreen (useFullscreen's class). */
 function inFullscreen(el: HTMLElement | null): boolean {
@@ -92,20 +107,29 @@ export function useReviewSidebar(a: ReviewSidebarArgs): ReviewSidebar {
 
   const measure = useCallback(() => {
     const layer = layerRef.current;
-    if (!onRef.current || !layer) return;
+    if (!onRef.current) return;
+    if (!layer) {
+      if (sigRef.current) { sigRef.current = ''; setAnchors(NO_ANCHORS); }
+      return;
+    }
     const origin = layer.getBoundingClientRect().top;
     const next = new Map<string, number>();
     for (const m of marksRef.current) {
-      if (next.has(m.key) || m.draft) continue;
+      if (next.has(m.key) || m.draft || !passageInLoadedTurn(m.range, containerRef.current)) continue;
       const rect = m.range.getClientRects()[0] ?? m.range.getBoundingClientRect();
       if (!rect || (rect.width === 0 && rect.height === 0)) continue;
-      next.set(m.key, Math.round(rect.top - origin));
+      const top = Math.round(rect.top - origin);
+      if (top < 0) continue;
+      next.set(m.key, top);
     }
     const sig = anchorsSig(next);
     if (sig === sigRef.current) return;
     sigRef.current = sig;
+    // Which questions the bar counts, by head id (a key carries the quote's words).
+    const heads = marksRef.current.filter((m) => next.has(m.key)).map((m) => m.headId ?? '?');
+    log.info('thread-review', 'passages beside the text', { count: next.size, headIds: [...new Set(heads)] });
     setAnchors(next.size ? next : NO_ANCHORS);
-  }, []);
+  }, [containerRef]);
 
   const onMarks = useCallback((marks: readonly ThreadMark[]) => {
     marksRef.current = marks;
@@ -141,6 +165,7 @@ export function useReviewSidebar(a: ReviewSidebarArgs): ReviewSidebar {
     const t = setTimeout(() => setHeld(false), REVIEW_EMPTY_HOLD_MS);
     return () => clearTimeout(t);
   }, [available, anchors.size]);
-  const gutter = reviewGutterOf({ available, collapsed, cards: anchors.size > 0 || held ? Math.max(1, anchors.size) : 0 });
+  // Folded, the bar is there only while a card would be: its count is never 0.
+  const gutter = reviewGutterOf({ available, collapsed, cards: anchors.size > 0 || (held && !collapsed) ? Math.max(1, anchors.size) : 0 });
   return { available, gutter, on: gutter === 'open', collapsed, setCollapsed, layerRef, anchors, onMarks };
 }

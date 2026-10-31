@@ -5,7 +5,7 @@
 .session-history[data-review-sidebar] {
   --thread-review-w: 300px;
   --thread-review-gap: 20px;
-  --thread-review-fold-w: 22px;
+  --thread-review-fold-w: 16px;
 }
 .session-history[data-review-sidebar="open"] {
   padding-right: calc(clamp(24px, 4%, 40px) + var(--thread-review-w) + var(--thread-review-gap));
@@ -66,42 +66,37 @@
 .thread-review-bar-chevron {
   position: relative;
   z-index: 1;
-  width: 16px;
-  height: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border-strong);
-  border-radius: 50%;
-  background: var(--bg-elevated);
+  /* Plain text on the line's own background: no ring, no fill (2026-10-31, the
+     user: the bar read as heavy; a slim band is enough). */
+  padding: 2px 0;
+  background: var(--bg);
   font-size: 12px;
   line-height: 1;
-  /* Faint until hovered, never hidden: the bar has to read as a control. */
-  opacity: 0.55;
+  opacity: 0.6;
   transition: opacity 120ms ease;
 }
 .thread-review-bar:hover .thread-review-bar-chevron,
 .thread-review-bar:focus-visible .thread-review-bar-chevron { opacity: 1; }
-/* Folded: a strip at the right edge, the chevron and count always shown. */
+/* Folded: the same slim band at the right edge, a little wider than the open
+   line so it reads as the way back, with the count in plain small text. */
 .thread-review-bar-slot[data-collapsed="true"] .thread-review-bar {
   left: calc(100% + 8px);
   width: var(--thread-review-fold-w);
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
 }
-.thread-review-bar-slot[data-collapsed="true"] .thread-review-bar::before { display: none; }
-.thread-review-bar-slot[data-collapsed="true"] .thread-review-bar-chevron { opacity: 1; }
-.thread-review-bar-slot[data-collapsed="true"] .thread-review-bar:hover { background: var(--bg-tertiary); color: var(--fg); }
+.thread-review-bar-slot[data-collapsed="true"] .thread-review-bar::before { width: 3px; }
+.thread-review-bar-slot[data-collapsed="true"] .thread-review-bar:hover::before { width: 5px; background: var(--fg-muted); }
+.thread-review-bar-slot[data-collapsed="true"] .thread-review-bar:hover { color: var(--fg); }
 .thread-review-bar-count {
-  min-width: 16px;
-  padding: 0 3px;
-  border-radius: 8px;
-  background: var(--fg);
-  color: var(--bg-elevated);
+  position: relative;
+  z-index: 1;
+  padding: 1px 0;
+  background: var(--bg);
+  color: var(--fg-muted);
   font-size: 10.5px;
-  font-weight: 600;
-  line-height: 15px;
+  font-weight: 500;
+  line-height: 14px;
   text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 .thread-review-layer {
   position: relative;

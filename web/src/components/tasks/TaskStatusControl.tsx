@@ -1,8 +1,8 @@
 /**
  * Task status, visible and changeable: the collapsed Status row in the task
  * menu, the clickable status badge in the detail pane, the "Something happens…"
- * row under the menu's Start / Snooze until, and the line above a Waiting
- * task's composer.
+ * row under the menu's Start / Snooze until. (A Waiting task's wait shows as a
+ * chip in the session header: WaitingChip.tsx.)
  *
  * All five phases are offered. The row checkbox still toggles To Do / Complete;
  * this is where Waiting, In Progress and Need Action can be read and set by hand.
@@ -113,12 +113,6 @@ export function waitUntilFromPick(pick: string): string {
   return Number.isNaN(at.getTime()) ? pick : at.toISOString();
 }
 
-/** The line above a Waiting task's composer, '' for any other phase. */
-export function waitingLineText(task: Pick<Task, 'phase' | 'wait_until'>): string {
-  if (task.phase !== 'WAITING') return '';
-  return `Waiting until ${formatWaitUntil(task.wait_until) || 'something happens'} · a message here moves it to In Progress`;
-}
-
 /**
  * Under the status options while the task is (or was just set) Waiting: the
  * time the server wakes it by itself. Collapsed like the date rows, the inline
@@ -221,32 +215,6 @@ function StatusPills({ task, onPick }: { task: Pick<Task, 'id' | 'phase'>; onPic
           </button>
         );
       })}
-    </div>
-  );
-}
-
-/**
- * Above a Waiting task's composer: what it waits for, and what writing here
- * does. A message into the session is one of the ways out of Waiting, so a
- * human about to send one is told so at the moment it matters. No buttons: the
- * status control is where the status changes.
- */
-export function WaitingComposerLine({ task }: { task: Task | null | undefined }) {
-  if (!task || task.phase !== 'WAITING') return null;
-  const until = formatWaitUntil(task.wait_until);
-  return (
-    <div
-      className="task-waiting-line"
-      data-testid="session-waiting-line"
-      title={task.wait_until
-        ? `Waiting until ${new Date(task.wait_until).toLocaleString()}, or until something happens first`
-        : 'Waiting until something happens (a trigger fires, a message arrives)'}
-    >
-      <span className="task-waiting-icon" aria-hidden="true">{WAIT_UNTIL_ICON}</span>
-      <span className="task-waiting-text">
-        Waiting until <b>{until || 'something happens'}</b>
-        <span className="task-waiting-note"> · a message here moves it to In Progress</span>
-      </span>
     </div>
   );
 }

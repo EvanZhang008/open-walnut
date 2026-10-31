@@ -8,13 +8,19 @@
    a sidebar click navigates, and that route change ends their full screen.
    Loaded after globals.css; `html` gives the weight over the centred-sheet
    rules there. */
+/* Height stays nearly full; each side keeps about a tenth of the page area
+   (2026-10-31, the user: "上下大概占满，但是左右各留个百分之十"), but never so
+   much that the sheet drops under 960px (the review sidebar's wide box), and a
+   narrow window or a phone keeps the plain gutter. */
 html .open-walnut-fullscreen,
 html .open-walnut-fullscreen.is-changed-open {
   --fullscreen-gutter: 12px;
+  --fullscreen-area: calc(100vw - var(--fullscreen-left, 0px));
+  --fullscreen-side: max(var(--fullscreen-gutter), min(calc(var(--fullscreen-area) * 0.1), calc((var(--fullscreen-area) - 960px) / 2)));
   top: var(--fullscreen-gutter);
   bottom: var(--fullscreen-gutter);
-  left: calc(var(--fullscreen-left, 0px) + var(--fullscreen-gutter));
-  right: var(--fullscreen-gutter);
+  left: calc(var(--fullscreen-left, 0px) + var(--fullscreen-side));
+  right: var(--fullscreen-side);
   width: auto;
   height: auto;
   max-width: none;

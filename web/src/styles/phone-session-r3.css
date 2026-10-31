@@ -3,16 +3,6 @@
    landscape phone), never the desktop layout. */
 
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
-  /* N2-06: keyboard up, a Waiting task's line above the composer folds away
-     like the recap and the notes row, so the timeline keeps its 300 px. Its
-     words move into the composer's placeholder (SessionPanel), which is what
-     shows when the field takes focus. */
-  html[data-wn-keyboard='open'] .app-shell-navigation .session-panel.is-phone-layer .task-waiting-line {
-    display: none !important;
-  }
-}
-
-@media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   /* N2-08 / C19 at real density: the timeline's own controls take a finger
      and its labels read at 12 px. A trigger or peer message's fold (41 px),
      "Load earlier turns" (30 px), and the background-task and subagent chips

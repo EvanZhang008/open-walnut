@@ -71,3 +71,41 @@ export function buildReviewSession(nowMs: number): ThreadsFixtureSession & { ids
     rows, threadAnchors: anchors, threadMeta: meta, pinnedMessages: [], parked: [], ids: { reply: root.a, heads },
   }
 }
+
+/**
+ * Asks only on the first turn, then twelve more turns, so that turn opens behind
+ * "Load earlier turns" (2026-10-31, the user: the folded bar showed "1" for an ask
+ * above the loaded turns).
+ */
+export const REVIEW_OLD_SESSION = 'pw-threads-askold-session'
+export const REVIEW_OLD_TASK = 'pw-task-threads-askold'
+export const REVIEW_OLD_READY = 'Last check before we close this out?'
+export const REVIEW_OLD_PASSAGES = ['The old seal step runs before the flush.', 'The old trim pass never reads a sealed page.'] as const
+
+export function buildReviewOldSession(nowMs: number): ThreadsFixtureSession {
+  const P = '0199fb'
+  const at = (k: number) => new Date(nowMs - 1_600_000 + k * 1000).toISOString()
+  const rows: FixtureRow[] = []
+  let n = 0
+  const turn = (q: string, a: string) => {
+    n += 1
+    const u = fxUuid(P, n, 'u')
+    const aId = fxUuid(P, n, 'a')
+    rows.push({ role: 'user', uuid: u, text: q }, { role: 'assistant', uuid: aId, text: a })
+    return { u, a: aId }
+  }
+  const root = turn('Walk me through the old storage path.', REVIEW_OLD_PASSAGES.map((p, i) => `${p} ${filler(700 + i, 60).replace(/\n\n/g, ' ')}`).join('\n\n'))
+  const anchors: FixtureAnchor[] = []
+  const meta: FixtureMeta[] = []
+  REVIEW_OLD_PASSAGES.forEach((passage, i) => {
+    const t = turn(`> ${passage}\n\nWhy does that hold?`, `[Q${i + 1}]\n${filler(720 + i, 40)}`)
+    anchors.push({ msgId: t.u, parent: root.a, quote: { exact: passage }, source: 'selection', at: at(n) })
+    meta.push({ headId: t.u, status: 'open', title: `Old point ${i + 1}`, titleSource: 'ai', titleState: 'done', seq: i + 1, updatedAt: at(100) })
+  })
+  for (let k = 0; k < 12; k++) turn(`Next step ${k + 1}?`, filler(740 + k, 30))
+  turn(REVIEW_OLD_READY, filler(790, 40))
+  return {
+    sessionId: REVIEW_OLD_SESSION, taskId: REVIEW_OLD_TASK, title: 'Threads review old-asks fixture session',
+    rows, threadAnchors: anchors, threadMeta: meta, pinnedMessages: [], parked: [],
+  }
+}

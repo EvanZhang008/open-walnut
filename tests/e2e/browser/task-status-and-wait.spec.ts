@@ -32,6 +32,7 @@ import { filterChip, removeFilterChip, setStatus } from './filter-bar-helpers'
 import { DRAFT_PANEL } from './draft-helpers'
 import { setStatusSectionOpen, showSectionCard, statusSection, statusSectionCountOf, statusSectionToggle } from './status-section-helpers'
 import { composerTextarea, openPanels, openPlusMenu } from './engine-settings-popover-helpers'
+import { DEFAULT_WAIT_HOURS } from '../../../src/core/types'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const SHOTS = '/tmp/waiting-status/shots'
@@ -242,16 +243,17 @@ test('Waiting from the menu: the until row, the collapsed row, the task row and 
   await expect(statusPill(row, 'Waiting')).toHaveAttribute('aria-checked', 'true', { timeout: 10_000 })
   await expect.poll(async () => (await taskOf(task.id)).phase, { timeout: 10_000 }).toBe('WAITING')
   // No time named: the server (and the optimistic row) put the default clock on
-  // it, 1 day out, and the until row already shows it with the no-limit button.
+  // it, DEFAULT_WAIT_HOURS out, and the until row already shows it with the
+  // no-limit button.
   const until = row.getByTestId('task-status-until')
   await expect(until).toBeVisible()
   await expect(until.getByTestId('task-status-until-toggle')).toHaveText(/^Until: /)
   await expect(until.getByTestId('task-status-until-clear')).toHaveText('No limit')
   await expect.poll(async () => (await taskOf(task.id)).wait_until, { timeout: 10_000 }).toBeTruthy()
   const parked = await taskOf(task.id)
-  const daysAhead = (Date.parse(parked.wait_until) - Date.now()) / 86_400_000
-  expect(daysAhead).toBeGreaterThan(0.99)
-  expect(daysAhead).toBeLessThan(1.01)
+  const defaultHoursAhead = (Date.parse(parked.wait_until) - Date.now()) / 3_600_000
+  expect(defaultHoursAhead).toBeGreaterThan(DEFAULT_WAIT_HOURS - 0.1)
+  expect(defaultHoursAhead).toBeLessThan(DEFAULT_WAIT_HOURS + 0.1)
   await expectInViewport(page, menu)
   await shot(menu, 'menu-waiting-open', browserName)
 
@@ -594,7 +596,7 @@ test('"Snooze until something happens" leads the task session\'s composer, from 
   await box.fill('')
 })
 
-test('the composer of a Waiting task says so, and a message moves it to In Progress, then Need Action', async ({ page, request, browserName }) => {
+test('a Waiting task\'s header chip says until when and why, and a message moves it to In Progress, then Need Action', async ({ page, request, browserName }) => {
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'pw-waiting-session-'))
   const started = await request.post('/api/sessions/quick-start', { data: { cwd, message: '' } })
   expect(started.ok(), await started.text()).toBeTruthy()
@@ -604,12 +606,21 @@ test('the composer of a Waiting task says so, and a message moves it to In Progr
   await api('PATCH', `/api/tasks/${taskId}`, { phase: 'WAITING', wait_until: until })
 
   const [panel] = await openPanels(page, [sid])
-  const line = panel.getByTestId('session-waiting-line')
+  // The wait is a chip on the left of the header's title row, never a bar above the composer.
+  const line = panel.locator('.session-panel-title-area').getByTestId('session-waiting-chip')
   await expect(line).toBeVisible({ timeout: 15_000 })
-  await expect(line).toContainText('Waiting until ')
-  await expect(line).toContainText('· a message here moves it to In Progress')
-  await expect(line.getByRole('button')).toHaveCount(0)
-  await shot(panel.locator('.session-panel-input'), 'session-waiting-line', browserName)
+  await expect(line).toHaveText(/^Wait until /)
+  await expect(panel.locator('.session-panel-input .task-waiting-line')).toHaveCount(0)
+  // Hover shows the details: the clock, and that a message here ends the wait.
+  await line.hover()
+  const card = page.getByTestId('session-waiting-card')
+  await expect(card).toBeVisible()
+  await expect(card).toContainText('Wakes by itself')
+  await expect(card).toContainText('A message here moves it to In Progress.')
+  await shot(panel.locator('.session-panel-header'), 'session-waiting-chip', browserName)
+  await page.screenshot({ path: `${process.env.WALNUT_TASK_DIR ?? '/tmp'}/shots/fullscreen-band/${browserName}/header-chip-card.png` })
+  await page.mouse.move(5, 5)
+  await expect(card).toHaveCount(0)
 
   // A message: In Progress at once, the line goes, and the turn ends as Need Action.
   const box = composerTextarea(panel)
@@ -624,11 +635,12 @@ test('the composer of a Waiting task says so, and a message moves it to In Progr
   expect(after.wait_until).toBeUndefined()
   await shot(panel, 'session-after-message', browserName)
 
-  // Parked again with no time named: the default 1-day clock shows; an explicit
-  // "" (no limit) is the one way to a wait with no time at all, and the line says so.
+  // Parked again with no time named: the default clock shows; an explicit ""
+  // (no limit) is the one way to a wait with no time at all, and the chip says so.
   await api('PATCH', `/api/tasks/${taskId}`, { phase: 'WAITING' })
-  await expect(line).toContainText(/^Waiting until \S/, { timeout: 15_000 })
-  await expect(line).not.toContainText('something happens')
+  await expect(line).toHaveText(/^Wait until \S/, { timeout: 15_000 })
   await api('PATCH', `/api/tasks/${taskId}`, { wait_until: '' })
-  await expect(line).toContainText('Waiting until something happens', { timeout: 15_000 })
+  await expect(line).toHaveText('Waiting', { timeout: 15_000 })
+  await line.hover()
+  await expect(page.getByTestId('session-waiting-card')).toContainText('No clock: it waits until something happens', { timeout: 5_000 })
 })

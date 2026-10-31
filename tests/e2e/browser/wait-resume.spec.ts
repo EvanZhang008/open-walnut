@@ -81,10 +81,10 @@ test('a leader\'s message into a Waiting worker: In Progress for the turn, then 
   await expect(row).toHaveCount(0)
 
   const [panel] = await openPanels(page, [worker.sid])
-  const line = panel.getByTestId('session-waiting-line')
+  const line = panel.getByTestId('session-waiting-chip')
   await expect(line).toBeVisible({ timeout: 15_000 })
   const before = (await line.textContent()) ?? ''
-  expect(before).toContain('Waiting until ')
+  expect(before).toContain('Wait until ')
 
   // The leader writes (task_send, a peer's message): the turn runs, then the wait is back.
   await api('POST', '/api/v1/messages', { to: worker.taskId, title: 'Status?', text: 'how far is the run?', expect_reply: false }, { 'x-walnut-caller-sid': lead.sid })

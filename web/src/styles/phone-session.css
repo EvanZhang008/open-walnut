@@ -47,6 +47,39 @@
     height: 44px;
   }
 
+  /* A Waiting task's chip beside the kebab (WaitingChip compact): an hourglass
+     in a 44 px target. The title is centred over the whole bar, so its gutters
+     grow by that one button on both sides and the chip never covers it. */
+  .phone-topbar .phone-bar-slot .task-waiting-chip.is-compact {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    max-width: none;
+    padding: 0;
+    border-color: transparent;
+    background: transparent;
+  }
+  .phone-topbar .phone-bar-slot .task-waiting-chip-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--phase-waiting) 14%, transparent);
+    color: var(--phase-waiting);
+  }
+  .phone-topbar .phone-bar-slot .task-waiting-chip-icon svg {
+    width: 16px;
+    height: 16px;
+  }
+  .app-shell-navigation .phone-topbar:has(.phone-bar-slot .task-waiting-chip) .phone-topbar-title {
+    left: calc(96px + var(--wn-safe-left));
+    right: calc(96px + var(--wn-safe-right));
+  }
+
   .phone-topbar .phone-bar-slot .task-kebab-btn {
     width: 44px;
     height: 44px;

@@ -16,7 +16,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { centreInHistory, clickInPlace, openThreadsSession, settledScrollTop, passageRects, readRecord, resetThreadsFixture } from './threads-helpers'
-import { REVIEW_COUNT, REVIEW_READY, REVIEW_ROUNDS, REVIEW_ROUND_CODE, REVIEW_SESSION, REVIEW_TASK, REVIEW_TITLES, reviewPassage } from './threads-review-fixture'
+import { REVIEW_COUNT, REVIEW_OLD_PASSAGES, REVIEW_OLD_READY, REVIEW_OLD_SESSION, REVIEW_OLD_TASK, REVIEW_READY, REVIEW_ROUNDS, REVIEW_ROUND_CODE, REVIEW_SESSION, REVIEW_TASK, REVIEW_TITLES, reviewPassage } from './threads-review-fixture'
 
 const SHOTS = () => `/tmp/ask-review/e2e/${test.info().project.name}`
 async function shot(page: Page, name: string): Promise<void> {
@@ -535,5 +535,47 @@ test.describe('the fullscreen review sidebar', () => {
     console.log(`[review-perf] ${browserName} frame gaps p50=${gaps[30].toFixed(1)} p90=${p90.toFixed(1)} max=${gaps[gaps.length - 1].toFixed(1)}`)
     // Loose: a loaded test box runs slow frames too; a per-frame layout loop would be far worse.
     expect(p90).toBeLessThan(120)
+  })
+})
+
+test.describe('asks on turns that are not loaded', () => {
+  test.setTimeout(180_000)
+  test.beforeEach(async ({ request }) => { await resetThreadsFixture(request, REVIEW_OLD_SESSION) })
+
+  test('no bar while every ask sits above "Load earlier turns"; loading them brings the cards and the bar', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto('/')
+    await page.waitForLoadState('networkidle')
+    const panel = await openThreadsSession(page, REVIEW_OLD_SESSION, REVIEW_OLD_TASK, REVIEW_OLD_READY, { view: 'linear' })
+    await panel.getByRole('button', { name: 'Expand session to full screen' }).click()
+    await expect(panel).toHaveClass(/open-walnut-fullscreen/)
+    const history = panel.locator('.session-history')
+    await expect(history.getByRole('button', { name: 'Load earlier turns', exact: true }).first()).toBeVisible({ timeout: 15_000 })
+    await expect(history.getByText(REVIEW_OLD_PASSAGES[0])).toHaveCount(0)
+    // Past the column's hold: nothing to show, so no gutter and no bar, folded or open.
+    await page.waitForTimeout(1600)
+    await expect(panel.locator('[data-testid="thread-review-bar"]')).toHaveCount(0)
+    await expect(panel.locator('.session-history[data-review-sidebar]')).toHaveCount(0)
+
+    // Load the turn: its two asks get their cards and the bar, which folds to a band
+    // counting them.
+    await expect.poll(async () => {
+      if (await history.getByText(REVIEW_OLD_PASSAGES[0].slice(0, 20)).count()) return true
+      const more = history.getByRole('button', { name: 'Load earlier turns', exact: true })
+      if (await more.count()) await more.first().evaluate((el) => (el as HTMLElement).click())
+      return false
+    }, { timeout: 20_000, intervals: [300] }).toBe(true)
+    await expect(sidebarCards(panel)).toHaveCount(2, { timeout: 15_000 })
+    const bar = panel.locator('[data-testid="thread-review-bar"]')
+    await bar.click()
+    await expect(panel.locator('.session-history[data-review-sidebar="collapsed"]')).toHaveCount(1)
+    await expect(bar).toHaveAttribute('aria-label', 'Show questions (2)')
+    await expect(bar.locator('.thread-review-bar-count')).toHaveText('2')
+    const shots = `${process.env.WALNUT_TASK_DIR ?? '/tmp'}/shots/fullscreen-band/${test.info().project.name}`
+    await page.screenshot({ path: `${shots}/folded-band.png` })
+    await bar.click()
+    await page.waitForTimeout(400)
+    await page.screenshot({ path: `${shots}/open-column.png` })
+    await expect(panel.locator('.session-history[data-review-sidebar="open"]')).toHaveCount(1)
   })
 })

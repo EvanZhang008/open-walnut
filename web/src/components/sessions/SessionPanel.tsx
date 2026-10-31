@@ -130,7 +130,8 @@ import { setActiveSession } from '@/stores/active-session';
 import { COMPOSER_INSERT_EVENT, leadStoredDraft, sessionDraftKey, type ComposerInsertDetail } from '@/utils/composer-insert';
 import { ROOT_THREAD_KEY } from '@/utils/thread-tree';
 import { startsWithWaitUntil, waitUntilPrefix, WAIT_UNTIL_LABEL, WAIT_UNTIL_TITLE } from '@/utils/wait-until';
-import { WaitingComposerLine, WAIT_UNTIL_ICON } from '@/components/tasks/TaskStatusControl';
+import { WAIT_UNTIL_ICON } from '@/components/tasks/TaskStatusControl';
+import { WaitingChip } from '@/components/tasks/WaitingChip';
 import { useTriggerPickerEntry } from './useTriggerPickerEntry';
 import { MacAwayComposer } from '@/components/layout/AwayLine';
 import { useMacSessionAway } from '@/hooks/useLeaderPresence';
@@ -2462,6 +2463,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   />
                 : <span className="session-panel-title text-muted">Untitled session</span>
               }
+              {/* The wait, on the left beside the title (the status pills are on the
+                  right); its card says what it waits on and that a message here ends it. */}
+              {!loading && !kebabSlot && <WaitingChip task={sessionTask} />}
             </div>
             {/* The one question control up here: the mode pill (Tree Mode /
                 Conversation Mode). Counts and the list live in the sidebar. */}
@@ -2523,6 +2527,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               )}
               {loading && <span className="session-panel-badge" style={{ color: 'var(--fg-muted)' }}>Loading...</span>}
               {!loading && sessionId && !kebabSlot && renderSessionKebab()}
+              {/* A phone draws its own top bar (no title row): the wait rides in its
+                  action slot, before the kebab, and a tap shows its details. */}
+              {!loading && kebabSlot && createPortal(<WaitingChip task={sessionTask} compact />, kebabSlot, 'waiting-chip')}
               {!loading && sessionId && kebabSlot && createPortal(renderSessionKebab((close) => (
                 <PhoneSessionHeaderRows
                   sessionId={sessionId}
@@ -2886,8 +2893,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           )}
           {/* The recap (Overall / Latest) is no longer drawn here: it opens from
               the "+" menu's "Latest update" (useLatestUpdateEntry), 2026-10-26. */}
-          {/* A Waiting task leaves Waiting on a message: say so where one is written. */}
-          <WaitingComposerLine task={sessionTask} />
           <EngineSwitchLine
             pick={engineSwitch.pick}
             server={engineSwitch.server}

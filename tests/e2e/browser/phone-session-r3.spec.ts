@@ -128,7 +128,7 @@ const waitingTask = (id: string, sid: string) => ({
   created_at: iso(86_400_000), updated_at: iso(60_000), description: '', summary: '', note: '', subtasks: [],
 })
 
-test('N2-06: keyboard up, a Waiting task\'s line folds away, its words move to the placeholder, the timeline keeps 300 px', async ({ page }) => {
+test('N2-06: keyboard up, a Waiting task keeps its header chip, its words are the placeholder, the timeline keeps 300 px', async ({ page }) => {
   const sid = 'pw-r3-waiting-session'
   const taskId = 'pw-r3-waiting-task'
   const errors = await stubSession(page, { sid, taskId, task: waitingTask(taskId, sid) })
@@ -137,9 +137,27 @@ test('N2-06: keyboard up, a Waiting task\'s line folds away, its words move to t
   await page.goto(`/?s1=${sid}`)
   const panel = overlayOf(page, sid)
   await expect(panel.locator('[data-message-id="a-1"]')).toBeAttached({ timeout: 30_000 })
-  const line = panel.getByTestId('session-waiting-line')
+  // The wait is a chip in the phone's top bar, beside the kebab; nothing above the composer.
+  const line = page.locator('.phone-topbar').getByTestId('session-waiting-chip')
   await expect(line).toBeVisible({ timeout: 15_000 })
-  // What the line says while it shows is also what the empty field says.
+  // An hourglass only: the words are its label and the card's head.
+  await expect(line).toHaveAttribute('aria-label', /^Wait until /)
+  await expect(panel.locator('.task-waiting-line')).toHaveCount(0)
+  // It never covers the title, which stays centred on the bar.
+  const chipBox = (await line.boundingBox())!
+  const title = page.locator('.phone-topbar .phone-topbar-title')
+  const titleBox = (await title.boundingBox())!
+  expect(chipBox.x).toBeGreaterThanOrEqual(titleBox.x + titleBox.width - 0.5)
+  const vw = page.viewportSize()!.width
+  expect(Math.abs(titleBox.x + titleBox.width / 2 - vw / 2)).toBeLessThan(2)
+  // A tap shows the details (a phone has no hover).
+  await line.tap()
+  await expect(page.getByTestId('session-waiting-card')).toContainText(/^Wait until /)
+  await page.screenshot({ path: `${process.env.WALNUT_TASK_DIR ?? '/tmp'}/shots/fullscreen-band/${test.info().project.name}/phone-chip-card.png` })
+  await expect(page.getByTestId('session-waiting-card')).toContainText('A message here moves it to In Progress.')
+  await line.tap()
+  await expect(page.getByTestId('session-waiting-card')).toHaveCount(0)
+  // The empty field says what a message does.
   await expect(panel.locator('.session-panel-input textarea').first()).toHaveAttribute('placeholder', 'Message: moves it to In Progress')
   await page.evaluate(() => {
     const r = document.documentElement.style
@@ -147,7 +165,7 @@ test('N2-06: keyboard up, a Waiting task\'s line folds away, its words move to t
     r.setProperty('--wn-keyboard-inset', '336px')
     document.documentElement.dataset.wnKeyboard = 'open'
   })
-  await expect(line).toBeHidden()
+  await expect(line).toBeVisible()
   await expect.poll(async () => Math.round((await panel.locator('.session-history').boundingBox())?.height ?? 0)).toBeGreaterThanOrEqual(300)
   // One row, and nothing in it is cut: the controls the + menu holds take no
   // room (an invisible in-flow pill clipped the mode word to 'Bypas').
