@@ -24,9 +24,18 @@ import '@/styles/task-status.css';
 const OPEN_DELAY_MS = 250;
 const CLOSE_DELAY_MS = 200;
 
+/**
+ * The task is parked: the chip labels the WAITING phase itself (its clock, and that a
+ * message ends it), not the status the user reads, which also says Waiting for a snoozed
+ * or not-started task that has no park to show (listed in task-state-ratchet).
+ */
+function isParked(task: Pick<Task, 'phase'> | null | undefined): boolean {
+  return task?.phase === 'WAITING';
+}
+
 /** The chip's words. */
 export function waitingChipLabel(task: Pick<Task, 'phase' | 'wait_until'>): string {
-  if (task.phase !== 'WAITING') return '';
+  if (!isParked(task)) return '';
   const until = formatWaitUntil(task.wait_until);
   return until ? `Wait until ${until}` : 'Waiting';
 }
@@ -36,7 +45,7 @@ export function waitingDetailLines(
   task: Pick<Task, 'phase' | 'wait_until' | 'user_status'>,
   triggersText = '',
 ): string[] {
-  if (task.phase !== 'WAITING') return [];
+  if (!isParked(task)) return [];
   const lines: string[] = [];
   lines.push(task.wait_until
     ? `Wakes by itself ${new Date(task.wait_until).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}, or sooner when something happens.`
@@ -56,7 +65,7 @@ export function waitingDetailLines(
  * widens the title's gutters by one button and nothing overlaps.
  */
 export function WaitingChip({ task, compact = false }: { task: Task | null | undefined; compact?: boolean }) {
-  const triggers = useTaskTriggers(task?.phase === 'WAITING' ? task.id : undefined);
+  const triggers = useTaskTriggers(isParked(task) ? task!.id : undefined);
   const [open, setOpen] = useState(false);
   const chipRef = useRef<HTMLButtonElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -93,7 +102,7 @@ export function WaitingChip({ task, compact = false }: { task: Task | null | und
     };
   }, [open]);
 
-  if (!task || task.phase !== 'WAITING') return null;
+  if (!task || !isParked(task)) return null;
   const label = waitingChipLabel(task);
   const lines = waitingDetailLines(task, triggerPillTitle(triggers));
   return (

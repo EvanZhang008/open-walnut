@@ -132,8 +132,10 @@ const PHASE_READERS: Record<string, number> = {
   'web/src/components/tasks/status-sections.ts': 2,
   'web/src/components/tasks/StatusSections.tsx': 3,
   'web/src/components/tasks/TaskDetailPane.tsx': 1,
-  'web/src/components/tasks/TaskStatusControl.tsx': 8,
+  'web/src/components/tasks/TaskStatusControl.tsx': 6,
   'web/src/components/tasks/TodoFilterFooter.tsx': 1,
+  // The header chip labels the WAITING phase itself (its clock, and that a message ends it).
+  'web/src/components/tasks/WaitingChip.tsx': 1,
   'web/src/components/tasks/TodoPanel.tsx': 9,
   'web/src/hooks/useTasks.ts': 2,
   'web/src/utils/session-status.ts': 2,
