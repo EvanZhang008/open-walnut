@@ -148,8 +148,9 @@ export function fleetRows(h: FleetHost, now: number): FleetRow[] {
   }
   if (h.daemon) {
     const d = h.daemon;
-    const reboot = h.local ? null : d.startsAfterReboot ? 'starts after a reboot' : 'does not start by itself after a reboot';
-    rows.push({ key: 'daemon', label: 'Daemon', value: [d.version ? `build ${d.version.replace(/^walnut-daemon-/, '')}` : null, d.runtime, reboot].filter(Boolean).join(' · '), tone: reboot && !d.startsAfterReboot ? 'warn' : undefined });
+    const reboot = h.local ? null : d.reboot ?? (d.startsAfterReboot ? 'starts after a reboot' : 'does not start by itself after a reboot');
+    const settingUp = d.bootStart?.setupRunning === true;
+    rows.push({ key: 'daemon', label: 'Daemon', value: [d.version ? `build ${d.version.replace(/^walnut-daemon-/, '')}` : null, d.runtime, reboot].filter(Boolean).join(' · '), tone: reboot && !d.startsAfterReboot && !settingUp ? 'warn' : undefined });
   }
   return rows;
 }

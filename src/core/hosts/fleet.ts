@@ -22,7 +22,8 @@ import type { HostVitals } from '../../providers/host-vitals-core.js'
 import { hostStatusFrame } from './host-connect-action.js'
 import { listStatusHosts, type HostDef } from './host-status.js'
 import { probeIsStale, readHostProfile, recordProbedFacts, type HostProfile } from './host-profile.js'
-import { buildFleetHost, withPlacement, type FleetConnectionKind, type FleetHost, type FleetInputs } from './fleet-model.js'
+import { buildFleetHost, withPlacement, type FleetBootStart, type FleetConnectionKind, type FleetHost, type FleetInputs } from './fleet-model.js'
+import type { BootStartView } from '../../providers/remote-boot-start-keeper.js'
 import type { HostLoadView } from './placement.js'
 
 export type { FleetHost } from './fleet-model.js'
@@ -74,6 +75,15 @@ interface VitalsConn {
   readonly daemonStartup: string
   readonly daemonInstanceId: string | null
   readonly remoteRuntime?: string | null
+  readonly bootStart?: BootStartView | null
+}
+
+function fleetBootStart(b: BootStartView | null): FleetBootStart | null {
+  if (!b) return null
+  return {
+    mode: b.mode, backend: b.backend, reason: b.reason, checkedAt: b.checkedAt,
+    setupRunning: b.setup?.running === true, setupError: b.setup?.running ? null : (b.setup?.error ?? null),
+  }
 }
 
 async function defaultConnections(): Promise<Map<string, VitalsConn[]>> {
@@ -251,6 +261,7 @@ async function card(e: HostEntry, conns: Map<string, VitalsConn[]>, days: number
     daemon: conn ? {
       version: conn.daemonVersion, startedAt: conn.daemonStartedAt, startup: conn.daemonStartup,
       runtime: conn.remoteRuntime ?? null, vitals: conn.hasCapability(VITALS_CAPABILITY),
+      bootStart: fleetBootStart(conn.bootStart ?? null),
     } : null,
     declaredCapabilities: e.declared,
     now,

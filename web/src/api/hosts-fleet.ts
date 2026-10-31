@@ -23,7 +23,13 @@ export interface FleetHost {
   spend: { last30dUsd: number; from: string; basis: 'list-price' } | null;
   /** `phaseLabel` is the phase in words; show it, never `phase`. */
   server: { enabled: boolean; program: string | null; phase: string; phaseLabel: string; build: string | null; phone: string | null; message: string | null } | null;
-  daemon: { version: string | null; startedAt: number | null; startup: string; startsAfterReboot: boolean; runtime: string | null; vitals: boolean } | null;
+  daemon: {
+    version: string | null; startedAt: number | null; startup: string; startsAfterReboot: boolean; runtime: string | null; vitals: boolean;
+    /** The host's own answer about a reboot (null until asked; absent from an older server). */
+    bootStart?: { mode: 'boot' | 'login' | 'none'; backend: string | null; reason: string | null; checkedAt: number; setupRunning: boolean; setupError: string | null } | null;
+    /** That answer in words, from the server. */
+    reboot?: string;
+  } | null;
   placement: { score: number | null; busy: boolean | null; reasons: string[]; weight: number | null; longRunning: { ok: boolean; reasons: string[] } };
   /** What the host can do (src/core/hosts/capabilities.ts); absent from a server older than it. */
   capabilities?: FleetCapabilities;

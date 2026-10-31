@@ -251,3 +251,33 @@ export async function stageDaemonServiceArtifact(
     await fsp.rm(staging, { recursive: true, force: true }).catch(() => {})
   }
 }
+
+/**
+ * Remove staged versions nothing needs: every version dir except the ones whose
+ * executable is in `keep` (the running service and its rollback target) and any
+ * a live process of this account still runs (a plugin job the daemon started
+ * from it). Linux only: /proc says what runs where; elsewhere nothing is removed.
+ * Only plain, private, sha-named dirs are touched. Returns the removed dirs.
+ */
+export async function pruneDaemonServiceVersions(installRoot: string, keep: string[]): Promise<string[]> {
+  if (process.platform !== 'linux') return []
+  const versions = daemonArtifactVersionsDir(installRoot)
+  const kept = new Set(keep.map((exe) => path.basename(path.dirname(exe))))
+  const root = await fsp.realpath(versions).catch(() => versions)
+  for (const pid of await fsp.readdir('/proc').catch(() => [] as string[])) {
+    if (!/^\d+$/.test(pid)) continue
+    const exe = await fsp.readlink(`/proc/${pid}/exe`).catch(() => null)
+    if (exe && exe.startsWith(root + path.sep)) kept.add(path.relative(root, exe).split(path.sep)[0])
+  }
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null
+  const removed: string[] = []
+  for (const name of await fsp.readdir(versions).catch(() => [] as string[])) {
+    if (!/^[0-9a-f]{64}$/.test(name) || kept.has(name)) continue
+    const dir = path.join(versions, name)
+    const stat = await fsp.lstat(dir).catch(() => null)
+    if (!stat || !stat.isDirectory() || stat.isSymbolicLink() || (uid !== null && stat.uid !== uid) || (stat.mode & 0o077)) continue
+    await fsp.rm(dir, { recursive: true, force: true })
+    removed.push(dir)
+  }
+  return removed
+}

@@ -532,12 +532,14 @@ export class LocalDaemon {
     if (!isProductionDaemonDir(this.daemonDir) || binaryPath.endsWith('.cjs')) return null
     const takeover = this.detectServiceTakeover()
     const configs = daemonServiceConfigPaths()
-    if (takeover.unknown.length || !configs[0] || !takeover.present.includes(configs[0])
-      || configs.slice(1).some((config) => takeover.present.includes(config))) return null
+    // Exactly one config of Walnut's: the LaunchAgent, the user unit, or the cron boot script (never a system unit).
+    const present = configs.filter((config) => takeover.present.includes(config))
+    const scope = present.length !== 1 ? null : present[0] === configs[0] ? 'user' : process.platform === 'linux' && present[0] === configs[2] ? 'cron' : null
+    if (takeover.unknown.length || !scope) return null
     if (this._lastManagedUpdate?.expected === expected && Date.now() - this._lastManagedUpdate.at < 600_000) return null
     this._lastManagedUpdate = { expected, at: Date.now() }
     const { runDaemonServiceCommand } = await import('./daemon-service-cli.js')
-    const result = await runDaemonServiceCommand(binaryPath, ['walnut', 'daemon', 'update', '--yes', '--scope', 'user', '--executable', binaryPath])
+    const result = await runDaemonServiceCommand(binaryPath, ['walnut', 'daemon', 'update', '--yes', '--scope', scope, '--executable', binaryPath])
     if (result.code !== 0) throw new Error(`Managed daemon update failed; no unmanaged replacement was started: ${result.stdout || result.stderr}`)
     const reply = JSON.parse(result.stdout) as { ok?: boolean }
     if (reply.ok !== true) throw new Error('Managed daemon update was not confirmed')

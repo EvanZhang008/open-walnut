@@ -80,6 +80,7 @@ const RAW_SIGNAL_BUDGET: Record<string, number> = {
   'src/providers/acp-daemon.ts': 8,                // ACP workers the daemon spawned (a straggler only while ps proves it is one)
   'src/providers/codex-model-probe.ts': 1,          // its own detached model-probe child group
   'src/providers/claude-check-core.ts': 3,         // its own probe child (a process.kill wrapper + its two calls)
+  'src/providers/daemon-service-cron-host.ts': 1, // its own service daemon (exe under its versions/) and boot supervisor (cmdline names its script), never a CLI
   'src/providers/host-fix-core.ts': 3,             // its own fix-script child (a process.kill wrapper + its two calls)
   'src/providers/local-daemon.ts': 1,              // an ISOLATED daemon it manages (refuses the production dir)
   'src/providers/trigger-check-core.ts': 1,        // its own check-script child's group

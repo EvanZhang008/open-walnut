@@ -123,3 +123,12 @@ if (process.env.WALNUT_SEARCH_V2_SEMANTIC === undefined) {
 if (process.env.WALNUT_TURN_SNAPSHOTS === undefined) {
   process.env.WALNUT_TURN_SNAPSHOTS = '0'
 }
+
+// Every remote host's DaemonConnection probes the host over ssh 45 s after it
+// connects and may install the daemon as a service there
+// (remote-boot-start-keeper.ts). A test with fake timers that runs past that
+// would reach a real ssh. The keeper's own tests drive it directly with a fake
+// io; a test of the wiring opts back in by setting this to '1' itself.
+if (process.env.WALNUT_DAEMON_BOOT_START === undefined) {
+  process.env.WALNUT_DAEMON_BOOT_START = '0'
+}

@@ -16,6 +16,8 @@ export interface DaemonServiceConfig {
 export const DAEMON_SERVICE_LABEL = 'dev.openwalnut.session-daemon'
 export const DAEMON_SERVICE_UNIT_NAME = 'open-walnut-daemon.service'
 export const DAEMON_SERVICE_PLIST_NAME = `${DAEMON_SERVICE_LABEL}.plist`
+/** The cron boot backend's supervisor script, in the install root (daemon-service-boot-script.ts). */
+export const DAEMON_BOOT_SCRIPT_NAME = 'daemon-boot.sh'
 
 const STDOUT_LOG_NAME = 'daemon-service.out.log'
 const STDERR_LOG_NAME = 'daemon-service.err.log'
@@ -23,7 +25,7 @@ const STDERR_LOG_NAME = 'daemon-service.err.log'
 const CONTROL_CHAR = /[\u0000-\u001f\u007f]/
 const USER_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/
 
-interface CheckedConfig {
+export interface CheckedConfig {
   home: string
   executable: string
   args: string[]
@@ -74,6 +76,11 @@ function checkUser(value: unknown): string {
 function checkPlatform(value: unknown): DaemonServicePlatform {
   if (value !== 'linux' && value !== 'darwin') fail(`unsupported platform ${JSON.stringify(value)}`)
   return value as DaemonServicePlatform
+}
+
+/** The checks every rendered config runs, for the cron boot script (daemon-service-boot-script.ts). */
+export function checkDaemonServiceConfig(config: DaemonServiceConfig): CheckedConfig {
+  return checkConfig(config, 'linux')
 }
 
 function checkConfig(config: DaemonServiceConfig, expected: DaemonServicePlatform): CheckedConfig {
@@ -187,6 +194,9 @@ export function readDaemonServiceExecutable(platform: DaemonServicePlatform, tex
 }
 
 function readServiceEnv(platform: DaemonServicePlatform, text: string, key: string): string | null {
+  // The cron boot script: `export KEY='value'` in sh single quotes.
+  const exported = platform === 'linux' ? new RegExp(`^export ${key}=((?:'[^']*'|\\\\')+)$`, 'm').exec(text) : null
+  if (exported) return exported[1].replace(/'([^']*)'|\\'/g, (_m, inner: string | undefined) => inner ?? "'")
   if (platform === 'linux') {
     for (const m of text.matchAll(/^Environment=(?:"((?:\\.|[^"\\\n])*)"|(\S+))$/gm)) {
       const decoded = m[1] !== undefined ? m[1].replace(/\\([\\"])|%%/g, (match, escaped) => escaped ?? '%') : m[2].replace(/%%/g, '%')
@@ -211,7 +221,7 @@ export function readDaemonServiceUser(text: string): string | null {
 
 /**
  * The service configs an install may leave for this user on this platform: the
- * LaunchAgent on macOS; the user unit, then the system unit, on Linux.
+ * LaunchAgent on macOS; the user unit, the system unit, then the cron boot script, on Linux.
  */
 export function daemonServiceConfigFiles(platform: string, home: string): string[] {
   if (platform === 'darwin') return [path.join(home, 'Library', 'LaunchAgents', DAEMON_SERVICE_PLIST_NAME)]
@@ -219,6 +229,8 @@ export function daemonServiceConfigFiles(platform: string, home: string): string
     return [
       path.join(home, '.config', 'systemd', 'user', DAEMON_SERVICE_UNIT_NAME),
       path.join('/etc', 'systemd', 'system', DAEMON_SERVICE_UNIT_NAME),
+      // Not daemonInstallRoot: the remote probe passes a literal '$HOME'.
+      path.join(home, '.local', 'share', 'open-walnut', 'daemon', DAEMON_BOOT_SCRIPT_NAME),
     ]
   }
   return []

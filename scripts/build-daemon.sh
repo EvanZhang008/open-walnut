@@ -119,6 +119,11 @@ SOURCES=(
   src/providers/daemon-service-manager.ts
   src/providers/daemon-service-artifact.ts
   src/providers/daemon-service-cli.ts
+  src/providers/daemon-service-boot-script.ts
+  src/providers/daemon-service-cron.ts
+  src/providers/daemon-service-cron-host.ts
+  src/providers/daemon-service-scope.ts
+  src/providers/daemon-service-state-move.ts
   src/lib/account.ts
   src/lib/daemon-dir.ts
   src/providers/daemon-service-files.ts

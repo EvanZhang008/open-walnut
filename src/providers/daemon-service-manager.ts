@@ -1,5 +1,7 @@
 import path from 'node:path'
 import {
+  DAEMON_BOOT_SCRIPT_NAME,
+  daemonInstallRoot,
   DAEMON_SERVICE_LABEL,
   DAEMON_SERVICE_PLIST_NAME,
   DAEMON_SERVICE_UNIT_NAME,
@@ -11,7 +13,16 @@ import {
   type DaemonServicePlatform,
 } from './daemon-service-config.js'
 
-export type DaemonServiceScope = 'user' | 'system'
+/** `cron`: the @reboot crontab line and supervisor script, Linux only (daemon-service-cron.ts). */
+/**
+ * `loginctl show-user -p Linger` prints `Linger=yes`; `--value` (bare `yes`) needs systemd 230, and older
+ * ones (219 on some long-lived distributions) reject it, which read as linger off. Accept both forms.
+ */
+export function lingerValue(stdout: string): string {
+  return stdout.trim().replace(/^Linger=/, '')
+}
+
+export type DaemonServiceScope = 'user' | 'system' | 'cron'
 
 export type DaemonServiceStartup = 'boot' | 'login' | 'on-demand' | 'unavailable'
 
@@ -34,6 +45,8 @@ export type DaemonServiceErrorCode =
   | 'handoverPending'
   | 'serviceInactive'
   | 'updateRefused'
+  | 'cronUnavailable'
+  | 'noBootStart'
 
 export interface DaemonServiceCommandResult {
   code: number
@@ -108,6 +121,7 @@ export function daemonServiceConfigPath(
   scope: DaemonServiceScope,
 ): string {
   if (platform === 'darwin') return path.join(home, 'Library', 'LaunchAgents', DAEMON_SERVICE_PLIST_NAME)
+  if (scope === 'cron') return path.join(daemonInstallRoot('linux', home), DAEMON_BOOT_SCRIPT_NAME)
   return scope === 'system'
     ? path.join('/etc', 'systemd', 'system', DAEMON_SERVICE_UNIT_NAME)
     : path.join(home, '.config', 'systemd', 'user', DAEMON_SERVICE_UNIT_NAME)
@@ -200,8 +214,8 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
       : err instanceof DaemonServiceUpdateRefusedError ? 'updateRefused' : 'hostError', errText(err)))
 
   async function lingerOn(): Promise<boolean> {
-    const result = await deps.run('loginctl', ['show-user', deps.user, '-p', 'Linger', '--value'])
-    return result.code === 0 && result.stdout.trim() === 'yes'
+    const result = await deps.run('loginctl', ['show-user', deps.user, '-p', 'Linger'])
+    return result.code === 0 && lingerValue(result.stdout) === 'yes'
   }
 
   // Loaded does not mean it will start at the next login; the disabled override must be checked separately.
@@ -362,6 +376,7 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
   }
 
   function scopeRefusal(scope: DaemonServiceScope): DaemonServiceResult | null {
+    if (scope === 'cron') return fail('unsupportedScope', 'the cron scope has its own manager (daemon-service-cron.ts)')
     if (deps.platform === 'darwin' && scope === 'system') {
       return fail(
         'unsupportedScope',
@@ -553,7 +568,7 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
         return fail(
           'requiresLinger',
           `the user service only starts before login while linger is on: run "loginctl enable-linger ${deps.user}" yourself, then install again`,
-          `loginctl show-user ${deps.user} -p Linger --value`,
+          `loginctl show-user ${deps.user} -p Linger`,
         )
       }
     }
@@ -615,7 +630,7 @@ export function createDaemonServiceManager(deps: DaemonServiceDeps): DaemonServi
     try {
       text = deps.platform === 'darwin'
         ? renderDaemonLaunchAgent(config)
-        : renderDaemonSystemdUnit(config, scope)
+        : renderDaemonSystemdUnit(config, scope === 'system' ? 'system' : 'user')
     } catch (err) {
       return fail('invalidConfig', err instanceof Error ? err.message : String(err))
     }

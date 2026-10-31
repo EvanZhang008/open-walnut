@@ -4,12 +4,17 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { WebSocket } from '#ws'
 import { setTimeout as delay } from 'node:timers/promises'
-import { daemonInstallRoot } from './daemon-service-config.js'
+import { daemonInstallRoot, readDaemonServiceExecutable } from './daemon-service-config.js'
 import { accountInfo } from '../lib/account.js'
 import { createDaemonServiceManager, DaemonServiceHandoverPendingError, DaemonServiceUpdateRefusedError, type DaemonServiceCommandResult, type DaemonServiceScope } from './daemon-service-manager.js'
-import { stageDaemonServiceArtifact } from './daemon-service-artifact.js'
+import { pruneDaemonServiceVersions, stageDaemonServiceArtifact } from './daemon-service-artifact.js'
 import { openDaemonServiceFiles, withDaemonServiceFiles, type DaemonServiceFiles } from './daemon-service-files.js'
 import { createSystemServiceAccess } from './daemon-service-system.js'
+import { createCronDaemonServiceManager } from './daemon-service-cron.js'
+import { createCronServiceHost } from './daemon-service-cron-host.js'
+import { resolveDaemonServiceScope } from './daemon-service-scope.js'
+import { readDaemonBootExecutable } from './daemon-service-boot-script.js'
+import { moveDaemonState, unmanagedStateRoot } from './daemon-service-state-move.js'
 import { localProductionDaemonDir } from '../lib/daemon-dir.js'
 
 export interface DaemonServiceCliOptions {
@@ -198,6 +203,34 @@ export async function requestRunningDaemonHandover(runtimeDir: string, stateDir:
   } finally { connection?.terminate() }
 }
 
+async function runtimeDaemonAlive(runtimeDir: string): Promise<boolean> {
+  const pid = Number((await fs.readFile(path.join(runtimeDir, 'daemon.pid'), 'utf8').catch(() => '')).trim())
+  if (!Number.isSafeInteger(pid) || pid <= 1) return false
+  try { process.kill(pid, 0); return true } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM' }
+}
+
+async function reportMoved(names: string[], where: string): Promise<void> {
+  if (names.length) process.stderr.write(`walnut daemon: moved the daemon's ${names.join(', ')} ${where}\n`)
+}
+
+/** The executable a service config runs, or null when it cannot be read. */
+function serviceExecutableOf(platform: 'linux' | 'darwin', scope: DaemonServiceScope, text: string | null): string | null {
+  if (!text) return null
+  try { return scope === 'cron' ? readDaemonBootExecutable(text) : readDaemonServiceExecutable(platform, text) } catch { return null }
+}
+
+/**
+ * The PATH a service runs with: this shell's absolute entries, then the usual
+ * places for a user's own tools. An install over ssh runs with the server's
+ * bare PATH, and a boot start has only cron's, so neither alone finds a
+ * `claude` the user installed under their home.
+ */
+export function servicePath(current: string | undefined, home: string): string {
+  const extra = [path.join(home, '.local', 'bin'), path.join(home, 'bin'), path.join(home, '.bun', 'bin'), '/usr/local/bin', '/usr/bin', '/bin']
+  const parts = [...(current ?? '').split(':'), ...extra].filter((part) => path.isAbsolute(part) && part === part.trim() && !/[\u0000-\u001f\u007f]/.test(part))
+  return [...new Set(parts)].join(':')
+}
+
 export async function runDaemonServiceArgs(args: string[]): Promise<number> {
   const action = args[0] ?? 'status'
   const options: DaemonServiceCliOptions = {}
@@ -205,7 +238,7 @@ export async function runDaemonServiceArgs(args: string[]): Promise<number> {
     if (args[i] === '--yes') options.yes = true
     else if (args[i] === '--sudo') options.sudo = true
     else if (args[i] === '--scope') {
-      if (!args[i + 1]) throw new Error('--scope requires user or system')
+      if (!args[i + 1]) throw new Error('--scope requires user, system or cron')
       options.scope = args[++i] as DaemonServiceScope
     } else if (args[i] === '--executable') {
       if (!args[i + 1]) throw new Error('--executable requires a path')
@@ -220,10 +253,9 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
   if (!['status', 'install', 'update', 'uninstall', 'restart'].includes(action)) throw new Error('Expected daemon status, install, update, uninstall, or restart')
   if (process.platform !== 'linux' && process.platform !== 'darwin') throw new Error('Daemon services require Linux or macOS')
   if (action !== 'status' && !options.yes) throw new Error('This changes the host service. Repeat with --yes to confirm; running CLI sessions are not terminated.')
-  if (options.scope && options.scope !== 'user' && options.scope !== 'system') throw new Error('Scope must be user or system')
-  const systemScope = process.platform === 'linux' && options.scope === 'system'
-  if (options.sudo && !systemScope) throw new Error('--sudo requires --scope system on Linux')
-  if (systemScope && action !== 'status' && !options.sudo) throw new Error('System service changes require --sudo --yes; the daemon still runs as your current account')
+  if (options.scope && !['user', 'system', 'cron'].includes(options.scope)) throw new Error('Scope must be user, system or cron')
+  if (options.scope === 'cron' && process.platform !== 'linux') throw new Error('The cron scope is for Linux; macOS starts the daemon as a login agent')
+  if (options.sudo && (process.platform !== 'linux' || options.scope !== 'system')) throw new Error('--sudo requires --scope system on Linux')
   const home = os.homedir()
   const user = accountInfo()
   if (action !== 'status' && user.uid === 0) throw new Error('Run as the original non-root account with --scope system --sudo --yes, not as root')
@@ -231,6 +263,19 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
     || await fs.realpath(home) !== await fs.realpath(user.homedir))) {
     throw new Error('Service changes require the real host account, not a test or isolated home')
   }
+  // No --scope: the installed backend, or for a first install the first boot start this account can have without root.
+  const resolved = await resolveDaemonServiceScope(action, options.scope, {
+    platform: process.platform, home, user: user.username, run: runDaemonServiceCommand,
+    present: (file) => fs.lstat(file).then(() => true, (error) => (error as NodeJS.ErrnoException).code !== 'ENOENT'),
+  })
+  if ('failure' in resolved) {
+    process.stdout.write(JSON.stringify({ ok: false, failure: resolved.failure }, null, 2) + '\n')
+    return 1
+  }
+  const scope = resolved.scope
+  for (const note of resolved.notes) process.stderr.write(`walnut daemon: ${note}\n`)
+  const systemScope = process.platform === 'linux' && scope === 'system'
+  if (systemScope && action !== 'status' && !options.sudo) throw new Error('System service changes require --sudo --yes; the daemon still runs as your current account')
   const root = daemonInstallRoot(process.platform, home)
   try {
     const stat = await fs.lstat(root)
@@ -253,27 +298,59 @@ export async function runDaemonServiceCli(action: string, options: DaemonService
           return undefined
         })
       : undefined
-    const manager = createDaemonServiceManager({
+    const common = {
       platform, home, uid: user.uid, user: user.username,
-      path: (process.env.PATH ?? '/usr/bin:/bin').split(':').filter((part) => path.isAbsolute(part)).join(':'),
-      stateDir: root, runtimeDir, run: system?.run ?? runDaemonServiceCommand,
-      inspectConfig: (target) => files.inspectConfig(target),
-      readConfig: (target) => files.readConfig(target),
-      writeConfig: (target, text) => files.writeConfig(target, text),
-      removeConfig: (target) => files.removeConfig(target),
-      ready: (_status, executable) => daemonReady(runtimeDir, executable, 15_000, previousInstance),
-      handover: () => requestDaemonServiceHandover(runtimeDir, root),
+      path: servicePath(process.env.PATH, home),
+      stateDir: root, runtimeDir,
+      inspectConfig: (target: string) => files.inspectConfig(target),
+      readConfig: (target: string) => files.readConfig(target),
+      writeConfig: (target: string, text: string) => files.writeConfig(target, text),
+      removeConfig: (target: string) => files.removeConfig(target),
+      // The cron supervisor waits 5 s before it reads an updated script, then the daemon boots.
+      ready: (_status: unknown, executable?: string) => daemonReady(runtimeDir, executable, scope === 'cron' ? 60_000 : 15_000, previousInstance),
+      handover: async () => {
+        const handedOver = await requestDaemonServiceHandover(runtimeDir, root)
+        // The unmanaged daemon is gone: its durable state goes where the service daemon reads it.
+        if (!(await runtimeDaemonAlive(runtimeDir))) await reportMoved(await moveDaemonState(unmanagedStateRoot(home), root), 'to the service')
+        return handedOver
+      },
       prepareUpdate: async () => { await requestRunningDaemonHandover(runtimeDir, root, false, true) },
       prepareExecutable: async () => {
         if (!options.executable) throw new Error('No standalone daemon binary supplied; build the daemon before installing')
         return stageDaemonServiceArtifact({ sourceExecutable: options.executable, installRoot: root })
       },
-    })
+    }
+    const manager = scope === 'cron'
+      ? createCronDaemonServiceManager({ ...common, run: runDaemonServiceCommand, ...createCronServiceHost({ home, stateDir: root, runtimeDir }) })
+      : createDaemonServiceManager({ ...common, run: system?.run ?? runDaemonServiceCommand })
     if (action === 'status') {
-      process.stdout.write(JSON.stringify(await manager.status({ scope: options.scope }), null, 2) + '\n')
+      process.stdout.write(JSON.stringify(await manager.status({ scope }), null, 2) + '\n')
       return 0
     }
-    const result = await manager[action as 'install' | 'update' | 'uninstall' | 'restart']({ scope: options.scope })
+    const configPath = manager.configPath(scope)
+    const before = action === 'install' || action === 'update' ? await files.readConfig(configPath).catch(() => null) : null
+    const result = await manager[action as 'install' | 'update' | 'uninstall' | 'restart']({ scope })
+    if (result.ok && (action === 'install' || action === 'update')) {
+      // Each update stages a new ~100 MB version: keep the running one and the one before it (the rollback).
+      const after = await files.readConfig(configPath).catch(() => null)
+      const keep = [after, before].map((text) => serviceExecutableOf(platform, scope, text)).filter((exe): exe is string => !!exe)
+      if (keep.length) {
+        await pruneDaemonServiceVersions(root, keep).catch((error) => {
+          process.stderr.write(`walnut daemon: old daemon versions were not pruned: ${String(error)}\n`)
+        })
+      }
+    }
+    if (result.ok && action === 'install') {
+      const marker = path.join(root, 'boot-setup')
+      if ((await fs.readFile(marker, 'utf8').catch(() => '')).includes('result=removed')) await fs.rm(marker, { force: true }).catch(() => {})
+    }
+    if (result.ok && action === 'uninstall' && !(await runtimeDaemonAlive(runtimeDir))) {
+      await reportMoved(await moveDaemonState(root, unmanagedStateRoot(home)).catch(() => []), 'back for the daemon Walnut starts over SSH')
+    }
+    if (result.ok && action === 'uninstall') {
+      // Tells the server not to set it up again (remote-boot-start.ts BOOT_SETUP_MARKER); a later install wins.
+      await fs.writeFile(path.join(root, 'boot-setup'), `v=uninstall at=${Date.now()} result=removed\n`, { mode: 0o600 }).catch(() => {})
+    }
     process.stdout.write(JSON.stringify(result, null, 2) + '\n')
     return result.ok ? 0 : 1
   }

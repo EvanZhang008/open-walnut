@@ -116,6 +116,17 @@ describe('words, never codes, on the card', () => {
     const cloud = host({ connection: { kind: 'bridge', connected: true, phase: 'connected', phaseLabel: 'Connected', since: null, rttMs: 100, error: null }, daemon: { version: 'walnut-daemon-0123456789ab', startedAt: 0, startup: 'on-demand', startsAfterReboot: true, runtime: 'bun', vitals: true } })
     expect(value(cloud, 'daemon')).toMatchObject({ value: 'build 0123456789ab · bun · starts after a reboot', tone: undefined })
   })
+
+  it('the daemon row reads the host\'s own reboot answer in the server\'s words; a setup in progress is no warning', () => {
+    const d = { version: 'walnut-daemon-0123456789ab', startedAt: 0, startup: 'on-demand', runtime: 'binary', vitals: true }
+    const bs = { mode: 'none' as const, backend: null, reason: 'nothing on it starts the daemon at boot', checkedAt: NOW, setupRunning: false, setupError: null }
+    const cron = host({ daemon: { ...d, startsAfterReboot: true, bootStart: { ...bs, mode: 'boot', backend: 'cron', reason: null }, reboot: 'starts by itself after a reboot (from its crontab)' } })
+    expect(value(cron, 'daemon')).toMatchObject({ value: 'build 0123456789ab · binary · starts by itself after a reboot (from its crontab)', tone: undefined })
+    const busy = host({ daemon: { ...d, startsAfterReboot: false, bootStart: { ...bs, setupRunning: true }, reboot: 'Walnut is setting it up to start after a reboot' } })
+    expect(value(busy, 'daemon')).toMatchObject({ value: 'build 0123456789ab · binary · Walnut is setting it up to start after a reboot', tone: undefined })
+    const none = host({ daemon: { ...d, startsAfterReboot: false, bootStart: bs, reboot: 'does not start by itself after a reboot: nothing on it starts the daemon at boot' } })
+    expect(value(none, 'daemon')?.tone).toBe('warn')
+  })
 })
 
 describe('the Can do row', () => {

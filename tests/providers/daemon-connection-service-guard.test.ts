@@ -39,6 +39,7 @@ import {
   buildRemoteServiceProbeCmd,
   parseRemoteServiceProbe,
   remoteServiceProbePaths,
+  managedUpdateScope,
 } from '../../src/providers/daemon-connection.js'
 import { log } from '../../src/logging/index.js'
 import type { SshTarget } from '../../src/providers/session-io.js'
@@ -141,8 +142,20 @@ describe('remote service probe (pure)', () => {
       '/tmp/open-walnut/daemon.service',
       '$HOME/.config/systemd/user/open-walnut-daemon.service',
       '/etc/systemd/system/open-walnut-daemon.service',
+      '$HOME/.local/share/open-walnut/daemon/daemon-boot.sh',
       '$HOME/Library/LaunchAgents/dev.openwalnut.session-daemon.plist',
     ])
+  })
+
+  it('updates exactly one config of Walnut\'s from the server: a user unit or the cron boot script, never a system unit', () => {
+    const [user, system, cron] = ['$HOME/.config/systemd/user/open-walnut-daemon.service', '/etc/systemd/system/open-walnut-daemon.service', '$HOME/.local/share/open-walnut/daemon/daemon-boot.sh']
+    expect(managedUpdateScope([user])).toBe('user')
+    expect(managedUpdateScope([cron])).toBe('cron')
+    expect(managedUpdateScope(['/tmp/open-walnut/daemon.service', cron])).toBe('cron')
+    expect(managedUpdateScope([system])).toBeNull()
+    expect(managedUpdateScope([user, cron])).toBeNull()
+    expect(managedUpdateScope([user, system])).toBeNull()
+    expect(managedUpdateScope([])).toBeNull()
   })
 
   it('a complete all-absent reply is the only "not managed" answer', () => {

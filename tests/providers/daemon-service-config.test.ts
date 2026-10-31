@@ -548,10 +548,11 @@ describe('which daemon an installed config runs (two users on one machine)', () 
     expect(serviceConfigGovernsDir('linux', '[Service]\nUser=alice\n', '/tmp/open-walnut', ME)).toBe(false)
   })
 
-  it('lists the LaunchAgent on macOS, the user then the system unit on Linux', () => {
+  it('lists the LaunchAgent on macOS, the user unit, the system unit and the cron boot script on Linux', () => {
     expect(daemonServiceConfigFiles('darwin', '/Users/a')).toEqual([`/Users/a/Library/LaunchAgents/${DAEMON_SERVICE_PLIST_NAME}`])
     expect(daemonServiceConfigFiles('linux', '/home/a')).toEqual([
       `/home/a/.config/systemd/user/${DAEMON_SERVICE_UNIT_NAME}`, `/etc/systemd/system/${DAEMON_SERVICE_UNIT_NAME}`,
+      '/home/a/.local/share/open-walnut/daemon/daemon-boot.sh',
     ])
     expect(daemonServiceConfigFiles('win32', '/x')).toEqual([])
   })

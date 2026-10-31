@@ -74,6 +74,7 @@ import {
   parseBunInstall, parseBunProbe, type RemoteRuntime,
 } from './remote-runtime.js'
 import { runRemoteFoldPrewarm } from './remote-fold-prewarm.js'
+import { BootStartKeeper, type BootStartView } from './remote-boot-start-keeper.js'
 import { freshLinkWaitMs, hostSliceWaitMs } from './host-slice-pace.js'
 import { AwakeDownClock } from './awake-down-clock.js'
 import { FOLD_CHECKPOINT_FORMAT } from './fold-checkpoint-core.js'
@@ -277,6 +278,23 @@ export const SERVICE_PROBE_TIMEOUTS_MS = [10_000, 20_000]
  * turn open) and the check is one small ssh round trip.
  */
 export const UPGRADE_RECHECK_DELAYS_MS = [60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000, 15 * 60_000]
+
+/** WALNUT_DAEMON_BOOT_START=0: no boot start probe or setup at all (host autofix off still probes, to say why). */
+function bootStartOff(): boolean {
+  return ['0', 'false', 'off', 'no'].includes((process.env.WALNUT_DAEMON_BOOT_START ?? '').trim().toLowerCase())
+}
+
+/**
+ * The service a server may update on a remote host: exactly one config of
+ * Walnut's, a user unit or the cron boot script (a system unit needs sudo, and
+ * two configs are the user's to sort out). Null: leave it alone.
+ */
+export function managedUpdateScope(present: string[]): 'user' | 'cron' | null {
+  const [user, system, cron] = daemonServiceConfigPaths('linux', '$HOME')
+  const has = (file: string) => present.includes(file)
+  if (has(system) || has(user) === has(cron)) return null
+  return has(user) ? 'user' : 'cron'
+}
 
 /** Marker files the probe below classifies, in the order it reports them. */
 export function remoteServiceProbePaths(runtimeDir = '/tmp/open-walnut'): string[] {
@@ -837,6 +855,39 @@ export class DaemonConnection {
    *  connect paths attempt it, so false = the daemon answered no hello. */
   get capabilitiesKnown(): boolean { return this._capabilities !== null }
   get daemonStartup(): string { return this._daemonStartup }
+  /** Whether the host's daemon starts after a reboot, as the host last said (remote-boot-start.ts); null before it was asked. */
+  get bootStart(): BootStartView | null { return this._bootStart?.state ?? null }
+  private _bootStartKeeper: BootStartKeeper | null = null
+  private get _bootStart(): BootStartKeeper | null {
+    if (this.hostKey === '__local__' || this.isCloudTunnel || this.isReadOnlyRemote || IS_EPHEMERAL || bootStartOff()) return null
+    this._bootStartKeeper ??= new BootStartKeeper({
+      hostKey: this.hostKey,
+      run: (command, timeout) => this.sshExec(command, timeout),
+      chunk: (data, directory, index) => this.pipeChunk(data, directory, index),
+      connected: () => this._connected && !this._destroyed,
+      off: async () => {
+        if (bootStartOff()) return 'automatic boot start setup is turned off (WALNUT_DAEMON_BOOT_START)'
+        const { autofixDisabledReason } = await import('../core/hosts/host-autofix.js')
+        const { getConfig } = await import('../core/config-manager.js')
+        const off = autofixDisabledReason(process.env, (await getConfig().catch(() => null))?.hosts?.[this.hostKey])
+        if (off === 'env') return 'automatic host fixes are turned off (WALNUT_HOST_AUTOFIX), so Walnut does not set it up'
+        if (off === 'config') return `automatic host fixes are off for this host (hosts.${this.hostKey}.autofix), so Walnut does not set it up`
+        const usual = this._remoteDir === PROD_REMOTE_DAEMON_DIR || productionDaemonDirs(this._remoteDir, this._remoteHome).length > 1
+        return usual ? null : 'its daemon runs from a dir of its own, not the usual one'
+      },
+      hold: async () => {
+        if (!this._connected || this._connecting || this._reconnectInFlight) return 'the connection is not settled'
+        const writes = [...this.pendingCommands.values()].filter((p) => p.cmd && UPGRADE_HOLD_COMMANDS.has(p.cmd)).length
+        return writes > 0 ? `${writes} daemon command(s) that change a session or a file are in flight` : null
+      },
+      expectedVersion: () => this.getExpectedDaemonVersion(),
+      localBinary: () => this.getLocalBinaryPath(),
+      remoteBinary: async () => this._runtime === 'binary' ? this.getRemoteDaemonPath() : null,
+      hasCapability: (cap) => this.hasCapability(cap),
+      reconnect: () => { if (this._connected && !this._destroyed) this.handleConnectionLost() },
+    })
+    return this._bootStartKeeper
+  }
   /** 'snapshot-v1' shorthand — the C2 intake gate (contract §5). */
   get supportsSnapshots(): boolean { return this.hasCapability('snapshot-v1') }
   get daemonInstanceId(): string | null { return this._daemonInstanceId }
@@ -921,6 +972,7 @@ export class DaemonConnection {
     const changed = this._connected !== value
     this._connected = value
     if (changed) this._connectionEpoch++
+    if (changed && value) this._bootStart?.schedule()
     if (value) {
       this._disconnectedSince = null
       this._awakeDown.reset()
@@ -2539,6 +2591,7 @@ export class DaemonConnection {
 
   disconnect(opts: { keepSshMaster?: boolean } = {}): void {
     this._destroyed = true
+    this._bootStartKeeper?.stop()
     this.setConnected(false)
     this._connecting = false
 
@@ -3422,9 +3475,9 @@ export class DaemonConnection {
 
   private async updateManagedDaemon(takeover: ServiceTakeover, expected: string): Promise<boolean> {
     // An ephemeral server never updates a box's service daemon, a lifted host's included.
-    if (this.isReadOnlyRemote || IS_EPHEMERAL || takeover.unknown.length
-      || !takeover.present.includes('$HOME/.config/systemd/user/open-walnut-daemon.service')
-      || takeover.present.includes('/etc/systemd/system/open-walnut-daemon.service')) return false
+    if (this.isReadOnlyRemote || IS_EPHEMERAL || takeover.unknown.length) return false
+    const scope = managedUpdateScope(takeover.present)
+    if (!scope) return false
     if (this._lastUpgradeAttempt?.expected === expected
       && Date.now() - this._lastUpgradeAttempt.at < DaemonConnection.UPGRADE_RETRY_COOLDOWN_MS) return false
     const binary = await this.getLocalBinaryPath()
@@ -3434,7 +3487,7 @@ export class DaemonConnection {
       await updateRemoteDaemonService(binary, expected, {
         run: (command, timeout) => this.sshExec(command, timeout),
         chunk: (data, directory, index) => this.pipeChunk(data, directory, index),
-      })
+      }, scope)
     } catch (error) {
       throw new DaemonServiceNotReadyError(this.hostKey, `managed update did not complete: ${String(error)}`, takeover)
     }

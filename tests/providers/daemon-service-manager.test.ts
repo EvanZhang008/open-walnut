@@ -24,7 +24,7 @@ const DARWIN_EXE = '/Users/example/Library/Application Support/Open Walnut/Daemo
 const RUNTIME_DIR = '/tmp/open-walnut'
 
 const SHOW_ENV = 'systemctl --user show-environment'
-const LINGER = 'loginctl show-user walnut -p Linger --value'
+const LINGER = 'loginctl show-user walnut -p Linger'
 const IS_ACTIVE = `systemctl --user is-active ${UNIT}`
 const IS_ENABLED = `systemctl --user is-enabled ${UNIT}`
 const IS_ACTIVE_SYS = `systemctl is-active ${UNIT}`

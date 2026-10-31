@@ -161,6 +161,11 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/daemon-service-manager.ts',
   'src/providers/daemon-service-artifact.ts',
   'src/providers/daemon-service-cli.ts',
+  'src/providers/daemon-service-boot-script.ts',
+  'src/providers/daemon-service-cron.ts',
+  'src/providers/daemon-service-cron-host.ts',
+  'src/providers/daemon-service-scope.ts',
+  'src/providers/daemon-service-state-move.ts',
   // The account lookup daemon-service-cli.ts refuses a faked home with, bundled into its .cjs.
   'src/lib/account.ts',
   // The runtime dir rule `walnut daemon install` pins (~/.cache/open-walnut for a second user).

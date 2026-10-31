@@ -105,10 +105,11 @@ function stubServiceFiles(present: string[], unknown: string[] = [], texts: Reco
 }
 
 describe('service-takeover classification (pure)', () => {
-  it('linux config paths cover the user unit AND the system unit', () => {
+  it('linux config paths cover the user unit, the system unit AND the cron boot script', () => {
     expect(daemonServiceConfigPaths('linux', '/home/u')).toEqual([
       '/home/u/.config/systemd/user/open-walnut-daemon.service',
       '/etc/systemd/system/open-walnut-daemon.service',
+      '/home/u/.local/share/open-walnut/daemon/daemon-boot.sh',
     ])
   })
 

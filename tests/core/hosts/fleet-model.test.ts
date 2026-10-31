@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
+  type FleetBootStart,
   buildFleetHost, longRunningReasons, recordedSpan, withPlacement, SERVER_PHASE_WORDS, type FleetHost, type FleetInputs,
 } from '../../../src/core/hosts/fleet-model.js'
 import type { HostVitals } from '../../../src/providers/host-vitals-core.js'
@@ -80,7 +81,7 @@ describe('the long-running verdict', () => {
     expect(h.placement.longRunning.reasons).toEqual([
       'Walnut is not connected to it now.',
       'Its Walnut server is not running (stopped on an error).',
-      'Its daemon does not start by itself after a reboot (run `walnut daemon install --yes` on it, then `sudo loginctl enable-linger $USER` there so it starts at boot, not only at login).',
+      'Its daemon does not start by itself after a reboot (Walnut checks it once connected).',
       'It was up 90% of the last 7 days.',
     ])
     expect(h.connection).toMatchObject({ since: null, rttMs: null, error: 'ssh refused' })
@@ -165,6 +166,33 @@ describe('recorded spans', () => {
 })
 
 describe('starting after a reboot', () => {
+  const boot = (over: Partial<FleetBootStart> = {}): FleetBootStart => ({ mode: 'boot', backend: 'cron', reason: null, checkedAt: NOW, setupRunning: false, setupError: null, ...over })
+  const onDemand = (bootStart: FleetBootStart | null) => ({ version: '1', startedAt: 1, startup: 'on-demand', runtime: 'bun', vitals: true, bootStart })
+
+  it('the host\'s own answer wins over the start mode the daemon reports', () => {
+    const cron = buildFleetHost(inputs({ daemon: onDemand(boot()) }))
+    expect(cron.daemon).toMatchObject({ startsAfterReboot: true, reboot: 'starts by itself after a reboot (from its crontab)' })
+    const gone = buildFleetHost(inputs({ daemon: { ...onDemand(boot({ mode: 'none', backend: null, reason: 'the @reboot line is missing from its crontab' })), startup: 'service' } }))
+    expect(gone.daemon).toMatchObject({ startsAfterReboot: false, reboot: 'does not start by itself after a reboot: the @reboot line is missing from its crontab' })
+    expect(longRunningReasons(gone)).toContain('Its daemon does not start by itself after a reboot (the @reboot line is missing from its crontab).')
+  })
+
+  it('a login-only service, a setup in progress and a setup that failed each say so', () => {
+    const login = buildFleetHost(inputs({ daemon: onDemand(boot({ mode: 'login', backend: 'systemd-user', reason: 'linger is off' })) }))
+    expect(login.daemon).toMatchObject({ startsAfterReboot: false, reboot: 'starts after a reboot only once you log in there (linger is off)' })
+    const running = buildFleetHost(inputs({ daemon: onDemand(boot({ mode: 'none', backend: null, setupRunning: true })) }))
+    expect(running.daemon).toMatchObject({ startsAfterReboot: false, reboot: 'Walnut is setting it up to start after a reboot' })
+    expect(longRunningReasons(running)).toContain('Its daemon does not start by itself after a reboot (Walnut is setting it up now).')
+    const failed = buildFleetHost(inputs({ daemon: onDemand(boot({ mode: 'none', backend: null, reason: 'nothing on it starts the daemon at boot', setupError: 'Walnut could not set it up: no cron daemon is enabled at boot or running here' })) }))
+    expect(failed.daemon?.reboot).toBe('does not start by itself after a reboot: Walnut could not set it up: no cron daemon is enabled at boot or running here')
+  })
+
+  it('a remote Mac\'s login agent stays a home for long-running work, and its words name the login', () => {
+    const mac = buildFleetHost(inputs({ daemon: { ...onDemand(boot({ mode: 'login', backend: 'launchd', reason: 'a login agent starts it when you log in on that Mac' })), startup: 'service' } }))
+    expect(mac.daemon).toMatchObject({ startsAfterReboot: true, reboot: 'starts after a reboot only once you log in there (a login agent starts it when you log in on that Mac)' })
+    expect(longRunningReasons(mac)).toEqual([])
+  })
+
   it('the cloud box comes back with its companion, whatever its daemon reports', () => {
     const cloud = withPlacement(buildFleetHost(inputs({ kind: 'bridge', server: null, daemon: { version: '1', startedAt: 1, startup: 'on-demand', runtime: 'bun', vitals: true } })))
     expect(cloud.daemon?.startsAfterReboot).toBe(true)
@@ -176,11 +204,11 @@ describe('starting after a reboot', () => {
     const linux = longRunningReasons(buildFleetHost(inputs({ daemon: { version: '1', startedAt: 1, startup: 'on-demand', runtime: 'bun', vitals: true } })))
     const mac = { ...profile(), probed: { ...profile().probed!, os: { platform: 'darwin', release: '24', prettyName: 'macOS 15' } } }
     const darwin = longRunningReasons(buildFleetHost(inputs({ profile: mac, daemon: { version: '1', startedAt: 1, startup: 'on-demand', runtime: 'bun', vitals: true } })))
-    expect(linux).toEqual(['Its daemon does not start by itself after a reboot (run `walnut daemon install --yes` on it, then `sudo loginctl enable-linger $USER` there so it starts at boot, not only at login).'])
+    expect(linux).toEqual(['Its daemon does not start by itself after a reboot (Walnut checks it once connected).'])
     expect(darwin).toEqual(['Its daemon does not start by itself after a reboot (run `walnut daemon install --yes` on it).'])
     // The action named is one `walnut daemon` accepts.
     const actions = /\[('status'[^\]]*)\]\.includes\(action\)/.exec(read('src/providers/daemon-service-cli.ts'))![1]
-    const named = /`walnut daemon (\w+)/.exec(linux[0])![1]
+    const named = /`walnut daemon (\w+)/.exec(darwin[0])![1]
     expect(actions).toContain(`'${named}'`)
     expect(read('src/providers/daemon-service-cli.ts')).toContain('--yes')
   })
