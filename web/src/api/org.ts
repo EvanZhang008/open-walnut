@@ -1,5 +1,5 @@
 import type { Task } from '@open-walnut/core';
-import { apiGet, apiPost, apiPut } from './client';
+import { apiDelete, apiGet, apiPost, apiPut } from './client';
 
 /**
  * The main agent's task, made by the server on first use (POST /api/v1/org/main).
@@ -87,4 +87,13 @@ export async function editOrgNode(taskId: string, edit: { name?: string; instruc
 export async function editProjectVp(project: string, edit: { name?: string; instructions?: string }): Promise<OrgNodeBrief> {
   const res = await apiPut<{ task: OrgNodeBrief }>(`/api/v1/org/projects/${encodeURIComponent(project)}/vp`, edit);
   return res.task;
+}
+
+/** Pin a task to an Org node (`main` or `project:<key>`), or take that pin off (src/core/org/org-pins.ts). */
+export async function setOrgPin(taskId: string, node: string, pinned: boolean): Promise<{ org_pins: NonNullable<Task['org_pins']>; changed: boolean }> {
+  const path = `/api/v1/org/pins/${encodeURIComponent(taskId)}`;
+  const res = pinned
+    ? await apiPut<{ task: { org_pins?: Task['org_pins'] }; changed: boolean }>(path, { node })
+    : await apiDelete<{ task: { org_pins?: Task['org_pins'] }; changed: boolean }>(`${path}?node=${encodeURIComponent(node)}`);
+  return { org_pins: res.task?.org_pins ?? [], changed: res.changed };
 }

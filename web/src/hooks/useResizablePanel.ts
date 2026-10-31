@@ -50,8 +50,21 @@ interface UseResizablePanelReturn {
  * useDragGesture — see that file for why raw document mouse listeners were
  * getting stuck on the Files panel's HTML-preview iframe.
  */
-export function useResizablePanel(storageKey: string, defaultPct = PANEL_PCT_DEFAULT, direction: 'left' | 'right' = 'right'): UseResizablePanelReturn {
+export interface ResizablePanelOptions {
+  /** The panel's room now, as % of the viewport (both sides readable): a drag stops at it. */
+  bounds?: () => { min: number; max: number };
+}
+
+export function useResizablePanel(storageKey: string, defaultPct = PANEL_PCT_DEFAULT, direction: 'left' | 'right' = 'right', opts: ResizablePanelOptions = {}): UseResizablePanelReturn {
   const [pct, setPct] = useState(() => readStoredPct(storageKey, defaultPct));
+  const boundsRef = useRef(opts.bounds);
+  boundsRef.current = opts.bounds;
+  /** The viewport clamp, then the panel's own room when it gives one. */
+  const fit = (v: number): number => {
+    const b = boundsRef.current?.();
+    const c = clampPct(v);
+    return b && b.max >= b.min ? Math.min(b.max, Math.max(b.min, c)) : c;
+  };
   const startPctRef = useRef(pct);
   const pctRef = useRef(pct);
   pctRef.current = pct;
@@ -60,7 +73,8 @@ export function useResizablePanel(storageKey: string, defaultPct = PANEL_PCT_DEF
   const { onPointerDown } = useDragGesture({
     cursor: 'col-resize',
     onStart: () => {
-      startPctRef.current = pctRef.current;
+      // From what shows: a stored width past the room now starts the drag at the edge, not past it.
+      startPctRef.current = fit(pctRef.current);
       panelRef.current?.classList.add('resizing');
     },
     onMove: ({ dx }) => {
@@ -68,7 +82,11 @@ export function useResizablePanel(storageKey: string, defaultPct = PANEL_PCT_DEF
         ? -dx   // drag left = increase (panel right of handle)
         : dx;   // drag right = increase (panel left of handle)
       const pctDelta = (pxDelta / window.innerWidth) * 100;
-      setPct(clampPct(startPctRef.current + pctDelta));
+      const next = fit(startPctRef.current + pctDelta);
+      // onEnd persists this ref and can run before React renders the last move (WebKit does):
+      // set it here, not only from the render, or the drag saves the width it started from.
+      pctRef.current = next;
+      setPct(next);
     },
     onEnd: () => {
       panelRef.current?.classList.remove('resizing');
@@ -80,7 +98,7 @@ export function useResizablePanel(storageKey: string, defaultPct = PANEL_PCT_DEF
   });
 
   const setClampedPct = useCallback((v: number) => {
-    const next = clampPct(v);
+    const next = fit(v);
     setPct(next);
     // Programmatic sets (e.g. the graduated session-area width) aren't part of
     // a drag, so they persist immediately.

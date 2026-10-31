@@ -345,3 +345,38 @@ describe('a host replica\'s mark on a row (WP10, replica_sync)', () => {
     expect(mergeFetchedTasks(prev, [{ ...a }])).toBe(prev)
   })
 })
+
+describe('every Task field is compared or listed as not drawn', () => {
+  it('decides each field: a new one written without updated_at is never dropped as "equal" by default', async () => {
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const { UNCOMPARED_TASK_FIELDS } = await import('../../web/src/hooks/task-list-merge')
+    const root = path.resolve(import.meta.dirname, '../..')
+    const types = fs.readFileSync(path.join(root, 'src/core/types.ts'), 'utf8')
+    const start = types.indexOf('export interface Task {')
+    let depth = 0
+    let end = start
+    for (let i = start; i < types.length; i++) {
+      if (types[i] === '{') depth++
+      else if (types[i] === '}' && --depth === 0) { end = i; break }
+    }
+    const keys = [...types.slice(start, end).matchAll(/^ {2}([a-z_][a-z0-9_]*)\??:/gm)].map((m) => m[1]!)
+    expect(keys.length).toBeGreaterThan(50)
+    const merge = fs.readFileSync(path.join(root, 'web/src/hooks/task-list-merge.ts'), 'utf8')
+    // The code only: a field named in a comment is not compared.
+    const body = merge.slice(merge.indexOf('export function tasksShallowEqual'), merge.indexOf('export function mergeFetchedTasks'))
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+    const undecided = keys.filter((k) => !new RegExp(`['.]${k}\\b`).test(body) && !(k in UNCOMPARED_TASK_FIELDS))
+    expect(undecided, 'compare it in tasksShallowEqual, or list it in UNCOMPARED_TASK_FIELDS with why').toEqual([])
+    // The list names only real fields.
+    expect(Object.keys(UNCOMPARED_TASK_FIELDS).filter((k) => !keys.includes(k))).toEqual([])
+  })
+
+  it('a pin added or taken off is a visible change', async () => {
+    const { tasksShallowEqual } = await import('../../web/src/hooks/task-list-merge')
+    const a = task({ id: 'p' })
+    const pinned = { ...a, org_pins: [{ node: 'main', at: '2026-10-31T10:00:00Z' }] } as Task
+    expect(tasksShallowEqual(a, pinned)).toBe(false)
+    expect(tasksShallowEqual(pinned, { ...pinned, org_pins: [...pinned.org_pins!] } as Task)).toBe(true)
+  })
+})

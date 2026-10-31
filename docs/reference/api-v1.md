@@ -1392,7 +1392,7 @@ itself). The `board_*` ops default to the caller's team board.
   choice?, reminder?, section?, version }` with `taskId` at the top level
   (`task` = the card's task; `kanban: true` on a kanban seen write).
 
-### Org (additive, 2026-10): `/org`, `/org/reports`, `/org/report`, `/org/main`, `/org/contact`, `/org/vp`, `/org/settings`, `/org/projects`, `/org/vps`, `/org/nodes`
+### Org (additive, 2026-10): `/org`, `/org/reports`, `/org/report`, `/org/main`, `/org/contact`, `/org/vp`, `/org/settings`, `/org/projects`, `/org/vps`, `/org/nodes`, `/org/pins`
 
 The org is derived from tasks: Main (the user's main agent) → projects → teams (a
 project's top-level open tasks) → workers (`parent_task_id`). The stored facts
@@ -1452,6 +1452,14 @@ team is talked to through that task; the Inbox never gets a lead.
   its name, instructions and led projects cleared; an agent bringing back one whose instructions
   the user wrote passes `override_user: true` (else `409 user_wrote`), and so does an agent's
   `PUT .../vp` that reopens such a lead.
+- `PUT /api/v1/org/pins/:taskId { node }` → `200 { task: { …, org_pins }, node, changed }`: pins a
+  task to an Org node, the user's focus there (the node's Pinned tab, and the Org list under its
+  chat), apart from the board's pins. `node` is `"main"` / `"CEO"`, a node key (`project:<key>`), the
+  name the user gave a VP, or a project's name (`"Inbox"`); the answer names the node key it
+  resolved. `DELETE /api/v1/org/pins/:taskId?node=` takes that pin off. Stored on the task as
+  `org_pins [{ node, at, by?, by_name? }]` (local-only, additive; an older Walnut ignores it). Pinning
+  twice changes nothing (`changed: false`). `400 bad_node`, `404 task_not_found | not_org_node`,
+  `409 too_many_pins` (50 on one node). The user or any agent may (op `org_pin`).
 - `PUT /api/v1/org/nodes/:id { name?, instructions?, override_user? }` → `200 { task }`: renames a
   VP (`org_name`; its project's name or `""` gives it back) or sets the CEO's or a
   VP's standing instructions (`org_instructions { text, at, by?, by_name?, for_user? }`, at most 4000 characters, and an agent's own

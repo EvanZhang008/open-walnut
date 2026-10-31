@@ -5,10 +5,12 @@
  * chat on a wide page, so the chat keeps its full height; above it on a narrow one.
  *
  *   head     Task | Brief (a lead or Main keeps a Brief), Fold on the Brief
- *   tabs     the home panel's four names with counts: Needs you, Working, Waiting / snoozed, Completed
+ *   tabs     Pinned (the tasks the user pinned to this node, org-pins.ts), then the home panel's four
+ *            names with counts: Needs you, Working, Waiting / snoozed, Completed
  *   Needs you  one row per ask: its summary first, its task and when it was checked, More for the
  *              detail, and the answer right in the row (OrgInlineAnswer); Quote and Snooze small
- *   others   one row per task: its own line (user_status.line, "set by <VP>" when its lead changed it)
+ *   others   one row per task: its own line (user_status.line, "set by <VP>" when its lead changed it);
+ *            Pinned's rows wear their own state's dot, and each row's pin pins it here or takes it off
  *   Brief    the letter its lead or Main keeps (OrgBrief)
  *   Threads  the user's own requests to it, one per subject (OrgThreads)
  *
@@ -28,7 +30,9 @@ import { OrgAlertSnooze } from './OrgAlertSnooze';
 import { holdOrder } from './hold-order';
 import { writeBriefFolded, type OrgTopView } from './org-brief-model';
 import type { BriefFreshness } from '@open-walnut/brief-fresh';
-import { ORG_TASK_TABS, ORG_TASK_TAB_LABELS, taskTabNote, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
+import { ORG_RAIL_TABS, ORG_RAIL_TAB_LABELS, TAB_DOT, rowPinNodes, stateTab, taskTabNote, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
+import { isPinnedTo, pinnedNodesOf } from '@open-walnut/org-tree';
+import { ThreadPinIcon } from '@/components/sessions/ThreadIcons';
 import { snoozeTakesOff } from '@open-walnut/user-status';
 import { askSummary, lineSetBy, readStatusLine } from './org-ask-form';
 import type { ChannelRow, OrgAlertView } from './org-channels-model';
@@ -43,14 +47,12 @@ export interface OrgAnswers {
   seen: (taskId: string) => void;
 }
 
-export const TAB_DOT: Record<OrgTaskTab, string> = {
-  needs: 'var(--error, #FF3B30)', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)', done: 'var(--accent, #0A84FF)',
-};
+export { TAB_DOT };
 
-function TaskTabBar({ tabs, tab, onPick }: { tabs: OrgTaskTabs; tab: OrgTaskTab; onPick: (tab: OrgTaskTab) => void }) {
+function TaskTabBar({ tabs, tab, onPick }: { tabs: OrgTaskTabs; tab: OrgRailTab; onPick: (tab: OrgRailTab) => void }) {
   return (
     <div className="org-task-tabs" role="tablist" aria-label="Tasks by status" data-testid="org-task-tabs">
-      {ORG_TASK_TABS.map((t) => (
+      {ORG_RAIL_TABS.map((t) => (
         <button
           key={t}
           type="button"
@@ -61,28 +63,61 @@ function TaskTabBar({ tabs, tab, onPick }: { tabs: OrgTaskTabs; tab: OrgTaskTab;
           data-tab={t}
           onClick={() => onPick(t)}
         >
-          <i style={{ background: TAB_DOT[t] }} />{ORG_TASK_TAB_LABELS[t]}<span className="org-task-tab-count">{tabs[t].length}</span>
+          {t === 'pinned' ? <ThreadPinIcon size={12} className="org-task-tab-pin" /> : <i style={{ background: TAB_DOT[t] }} />}
+          {ORG_RAIL_TAB_LABELS[t]}<span className="org-task-tab-count">{tabs[t].length}</span>
         </button>
       ))}
     </div>
   );
 }
 
-/** A tab other than Needs you: one row per task, its own line, when it last moved. */
-function TaskTabList({ tasks, tab, onOpen, now }: { tasks: readonly Task[]; tab: OrgTaskTab; onOpen: (id: string) => void; now: number }) {
-  if (!tasks.length) {
-    return <p className="org-task-empty" data-testid="org-task-empty">{tab === 'done' ? 'Nothing completed in the last week.' : `Nothing is ${tab === 'working' ? 'working' : 'waiting or snoozed'} here.`}</p>;
-  }
+/** Pin a row's task to this node, or take the pin off. */
+export interface OrgPinning {
+  /** The nodes this row shows (rowPinNodes): a pin here names the first, its own. */
+  nodes: readonly string[];
+  set: (taskId: string, pinned: boolean) => void;
+}
+
+/** The pin on a row: lit when the task is pinned to this node; a click pins it or takes it off. */
+export function PinToggle({ task, pinning, className = '' }: { task: Task; pinning: OrgPinning; className?: string }) {
+  const on = isPinnedTo(task, pinning.nodes);
+  return (
+    <button
+      type="button"
+      className={`org-pin-toggle${on ? ' is-on' : ''}${className ? ` ${className}` : ''}`}
+      data-testid="org-pin-toggle"
+      data-task-id={task.id}
+      aria-pressed={on}
+      aria-label={on ? `Unpin ${task.title}` : `Pin ${task.title} here`}
+      title={on ? 'Pinned here. Click to unpin' : 'Pin it here, to keep it in view'}
+      onClick={(e) => { e.stopPropagation(); pinning.set(task.id, !on); }}
+    ><ThreadPinIcon size={13} /></button>
+  );
+}
+
+const EMPTY: Record<OrgRailTab, string> = {
+  pinned: 'Nothing pinned here. Pin a task with the pin on its row to keep it in view.',
+  needs: 'Nothing needs you here.',
+  working: 'Nothing is working here.',
+  waiting: 'Nothing is waiting or snoozed here.',
+  done: 'Nothing completed in the last week.',
+};
+
+/** A tab other than Needs you: one row per task, its own line, when it last moved, its pin. On
+ *  Pinned each row wears the dot and the line of its own state. */
+function TaskTabList({ tasks, tab, onOpen, now, pinning }: { tasks: readonly Task[]; tab: Exclude<OrgRailTab, 'needs'>; onOpen: (id: string) => void; now: number; pinning: OrgPinning }) {
+  if (!tasks.length) return <p className="org-task-empty" data-testid="org-task-empty">{EMPTY[tab]}</p>;
   return (
     <ul className="org-task-list" data-testid="org-task-list" data-tab={tab}>
       {tasks.map((t) => {
-        const note = taskTabNote(t, tab);
-        const setBy = tab === 'done' ? null : lineSetBy(readStatusLine(t.user_status));
-        const at = tab === 'done' ? t.completed_at ?? t.updated_at : t.updated_at;
+        const own: OrgTaskTab = tab === 'pinned' ? stateTab(t) : tab;
+        const note = taskTabNote(t, own);
+        const setBy = own === 'done' ? null : lineSetBy(readStatusLine(t.user_status));
+        const at = own === 'done' ? t.completed_at ?? t.updated_at : t.updated_at;
         return (
-          <li key={t.id}>
-            <button type="button" className="org-task-row" data-testid="org-task-row" data-task-id={t.id} onClick={() => onOpen(t.id)} title={note ? `${t.title}\n${note}` : t.title}>
-              <i style={{ background: TAB_DOT[tab] }} aria-hidden="true" />
+          <li key={t.id} className="org-task-item">
+            <button type="button" className="org-task-row" data-testid="org-task-row" data-task-id={t.id} data-state={own} onClick={() => onOpen(t.id)} title={note ? `${t.title}\n${note}` : t.title}>
+              <i style={{ background: TAB_DOT[own] }} aria-hidden="true" />
               <span className="org-task-text">
                 <span className="org-task-title">{orgDisplayTitle(t)}</span>
                 {note && <span className="org-task-note" data-testid="org-task-note">{note}</span>}
@@ -92,6 +127,7 @@ function TaskTabList({ tasks, tab, onOpen, now }: { tasks: readonly Task[]; tab:
                 {setBy && <span className="org-set-by" data-testid="org-set-by">{setBy}</span>}
               </span>
             </button>
+            <PinToggle task={t} pinning={pinning} />
           </li>
         );
       })}
@@ -99,7 +135,8 @@ function TaskTabList({ tasks, tab, onOpen, now }: { tasks: readonly Task[]; tab:
   );
 }
 
-function AskRow({ a, task, vp, onOpen, onQuote, canQuote, answers, snoozeError, onSnoozeFailed, onSnoozeDone }: {
+function AskRow({ a, task, vp, onOpen, onQuote, canQuote, answers, snoozeError, onSnoozeFailed, onSnoozeDone, pinning }: {
+  pinning: OrgPinning;
   a: OrgAlertView;
   task: Task | undefined;
   vp: string | undefined;
@@ -166,6 +203,7 @@ function AskRow({ a, task, vp, onOpen, onQuote, canQuote, answers, snoozeError, 
             <OrgAlertSnooze alert={a} current={task?.start_date ?? undefined} onFailed={onSnoozeFailed} onDone={onSnoozeDone} />
           )}
           {snoozeError && <span className="org-alert-snooze-error" data-testid="org-alert-snooze-error" title={snoozeError}>Snooze failed</span>}
+          {task && <PinToggle task={task} pinning={pinning} className="org-ask-tool" />}
         </span>
       </div>
       {open && more && <div className="org-ask-more" data-testid="org-ask-more">{more}</div>}
@@ -176,7 +214,8 @@ function AskRow({ a, task, vp, onOpen, onQuote, canQuote, answers, snoozeError, 
 
 /** The asks, one row each. Under the pointer the rows keep their order and a new ask joins at the
  *  end, so a click lands on the row aimed at (as the VP list does). */
-function AskList({ alerts, tasks, vpOf, onOpen, onQuote, canQuote, answers }: {
+function AskList({ alerts, tasks, vpOf, onOpen, onQuote, canQuote, answers, pinning }: {
+  pinning: OrgPinning;
   alerts: readonly OrgAlertView[];
   tasks: readonly Task[];
   vpOf: (taskId: string) => string | undefined;
@@ -197,21 +236,21 @@ function AskList({ alerts, tasks, vpOf, onOpen, onQuote, canQuote, answers }: {
     <div className="org-alerts" data-testid="org-alerts" role="region" aria-label="Needs you"
       onPointerEnter={() => setHeld(alerts.map((a) => a.taskId))} onPointerLeave={() => setHeld(null)}>
       {shown.map((a) => (
-        <AskRow key={a.taskId} a={a} task={byId.get(a.taskId)} vp={vpOf(a.taskId)} onOpen={onOpen} onQuote={onQuote} canQuote={canQuote} answers={answers} snoozeError={snoozeFailed.get(a.taskId)} onSnoozeFailed={onSnoozeFailed} onSnoozeDone={onSnoozeDone} />
+        <AskRow key={a.taskId} a={a} task={byId.get(a.taskId)} vp={vpOf(a.taskId)} onOpen={onOpen} onQuote={onQuote} canQuote={canQuote} answers={answers} snoozeError={snoozeFailed.get(a.taskId)} onSnoozeFailed={onSnoozeFailed} onSnoozeDone={onSnoozeDone} pinning={pinning} />
       ))}
     </div>
   );
 }
 
-export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, onView, keepsBrief, briefNew, briefFolded, onBriefFolded, briefFresh, briefUpdating, threads, onThreadFollowUp, contact, title, onOpenAlert, onQuote, canQuote, answers, onOpenTask, now, placement }: {
+export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, onView, keepsBrief, briefNew, briefFolded, onBriefFolded, briefFresh, briefUpdating, threads, onThreadFollowUp, contact, title, onOpenAlert, onQuote, canQuote, answers, onOpenTask, now, placement, onPin, width }: {
   row: ChannelRow;
   rows: readonly ChannelRow[];
   tasks: readonly Task[];
   tabs: OrgTaskTabs;
   /** The asks shown (the node's own ask its chat shows is left out there). */
   alerts: readonly OrgAlertView[];
-  tab: OrgTaskTab;
-  onTab: (tab: OrgTaskTab) => void;
+  tab: OrgRailTab;
+  onTab: (tab: OrgRailTab) => void;
   view: OrgTopView;
   onView: (view: OrgTopView) => void;
   keepsBrief: boolean;
@@ -234,7 +273,16 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
   now: number;
   /** Beside the chat (a wide page), or above it. */
   placement: 'side' | 'top';
+  /** The side rail's width (the user's, OrgNodeDetail); the CSS default otherwise. */
+  width?: string;
+  /** Pin a task to this node, or take the pin off. */
+  onPin: (taskId: string, nodes: readonly string[], pinned: boolean) => void;
 }) {
+  const pinning = useMemo<OrgPinning>(() => {
+    const nodes = rowPinNodes(row);
+    // A pin here names the row's own node; an unpin takes every one of its nodes the task holds.
+    return { nodes, set: (id, on) => onPin(id, on ? [row.key] : pinnedNodesOf(tasks.find((t) => t.id === id) ?? {}, nodes), on) };
+  }, [row, tasks, onPin]);
   // On the CEO's rail each ask names the VP it is under (a VP is a label over its asks, never a row).
   const vpByTask = useMemo(() => {
     const m = new Map<string, string>();
@@ -243,7 +291,7 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
   }, [row.kind, rows]);
   const brief = keepsBrief ? contact?.brief : undefined;
   return (
-    <aside className={`org-rail is-${placement}`} data-testid="org-rail" data-placement={placement}>
+    <aside className={`org-rail is-${placement}`} data-testid="org-rail" data-placement={placement} {...(width ? { style: { width } } : {})}>
       <div className={`org-top${keepsBrief ? ' has-switch' : ''}`} data-testid="org-top" data-view={view}>
         {keepsBrief && (
           <div className="org-top-switch" role="group" aria-label="Task, Brief or Threads">
@@ -276,7 +324,7 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
           <div className="org-rail-body">
             {tab === 'needs' ? (<>
               {alerts.length > 0 && (
-                <AskList alerts={alerts} tasks={tasks} vpOf={(id) => vpByTask.get(id)} onOpen={onOpenAlert} onQuote={onQuote} canQuote={canQuote} answers={answers} />
+                <AskList alerts={alerts} tasks={tasks} vpOf={(id) => vpByTask.get(id)} onOpen={onOpenAlert} onQuote={onQuote} canQuote={canQuote} answers={answers} pinning={pinning} />
               )}
               {/* Counted in the tab: the contact's own prompt, which the chat shows. */}
               {(alerts.length < tabs.needs.length || !tabs.needs.length) && (
@@ -285,7 +333,7 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
                 </p>
               )}
             </>) : (
-              <TaskTabList tasks={tabs[tab]} tab={tab} onOpen={onOpenTask} now={now} />
+              <TaskTabList tasks={tabs[tab]} tab={tab} onOpen={onOpenTask} now={now} pinning={pinning} />
             )}
           </div>
         </div>

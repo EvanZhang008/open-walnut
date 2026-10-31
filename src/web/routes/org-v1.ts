@@ -19,6 +19,9 @@
  *   POST /org/report { of?, since?, at?, send? } → { report } | { letterId } | { scheduledAt, since }
  *                                                     Main's or a lead's report for the user
  *
+ *   PUT    /org/pins/:taskId { node }  → { task, node, nodeName, changed }   pin a task to a node (org-pins.ts)
+ *   DELETE /org/pins/:taskId?node=     → { task, node, nodeName, changed }   take that pin off
+ *
  * Reads work anywhere; the writes make or change org tasks, so they run on the primary
  * only (501 on a replica, like every other task create).
  */
@@ -278,6 +281,24 @@ orgV1Router.put('/org/projects/:project/vp', async (req: Request, res: Response,
     sendError(res, next, err)
   }
 })
+
+// Pin a task to a node, or take the pin off (src/core/org/org-pins.ts): the user's focus there.
+// The user or any agent may; the pin records who made it.
+async function pinRoute(req: Request, res: Response, next: NextFunction, pinned: boolean): Promise<void> {
+  try {
+    primaryOnly(pinned ? 'A task is pinned' : 'A pin is taken off')
+    const node = pinned ? req.body?.node : req.query.node
+    if (typeof node !== 'string' || !node.trim()) throw new OrgError('bad_node', 400, '`node` names the node: "main", a project\'s name, or a VP\'s name.')
+    const { writer } = await nodeCaller(req)
+    const { setOrgPin } = await import('../../core/org/org-pins.js')
+    const out = await setOrgPin(String(req.params.taskId), node, pinned, writer)
+    res.json({ task: { ...brief(out.task), org_pins: out.task.org_pins ?? [] }, node: out.node, nodeName: out.nodeName, changed: out.changed })
+  } catch (err) {
+    sendError(res, next, err)
+  }
+}
+orgV1Router.put('/org/pins/:taskId', (req, res, next) => { void pinRoute(req, res, next, true) })
+orgV1Router.delete('/org/pins/:taskId', (req, res, next) => { void pinRoute(req, res, next, false) })
 
 orgV1Router.get('/org/settings', async (_req: Request, res: Response, next: NextFunction) => {
   try {

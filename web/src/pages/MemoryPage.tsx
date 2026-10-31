@@ -75,7 +75,10 @@ export function MemoryPage() {
       startWidthRef.current = listWidthRef.current;
       listPaneRef.current?.classList.add('resizing');
     },
-    onMove: ({ dx }) => setListWidth(clampWidth(startWidthRef.current + dx)),
+    onMove: ({ dx }) => {
+      listWidthRef.current = clampWidth(startWidthRef.current + dx);
+      setListWidth(listWidthRef.current);
+    },
     onEnd: () => {
       listPaneRef.current?.classList.remove('resizing');
       try { localStorage.setItem(LS_WIDTH_KEY, String(listWidthRef.current)); } catch { /* ignore */ }

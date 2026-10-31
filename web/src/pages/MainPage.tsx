@@ -810,7 +810,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     },
     onMove: ({ dx }) => {
       const { weights, width } = colSplitStartRef.current;
-      setColWeights(resizeAtBoundary(weights, dragBoundaryRef.current, (dx / width) * 100));
+      colWeightsRef.current = resizeAtBoundary(weights, dragBoundaryRef.current, (dx / width) * 100);
+      setColWeights(colWeightsRef.current);
     },
     onEnd: () => {
       sessionPanel.panelRef.current?.classList.remove('resizing');

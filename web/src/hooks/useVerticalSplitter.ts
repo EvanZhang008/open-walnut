@@ -77,7 +77,8 @@ export function useVerticalSplitter(opts: VerticalSplitterOptions = {}): UseVert
       const h = containerHeightRef.current;
       if (!h) return;
       // Moving pointer up (negative dy) → detail grows → ratio increases
-      setRatio(clampRatio(startRatioRef.current + -dy / h));
+      ratioRef.current = clampRatio(startRatioRef.current + -dy / h);
+      setRatio(ratioRef.current);
     },
     onEnd: () => {
       containerRef.current?.classList.remove('splitter-resizing');

@@ -118,6 +118,7 @@ export function useResizableHeight(storageKey: string, opts: { min?: number; max
           });
         }
       }
+      heightRef.current = newH;
       setHeight(newH);
     },
     onEnd: ({ canceled }) => {

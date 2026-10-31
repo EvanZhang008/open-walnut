@@ -370,7 +370,8 @@ export function FocusDock({ focusBar, onQuickAddToFocus }: FocusDockProps) {
     // Dock grows upward, so an upward drag (negative dy) increases the height.
     // Cap at 70% of the viewport (dockHeightMax) rather than a fixed pixel max.
     onMove: ({ dy }) => {
-      setDockHeight(Math.min(dockHeightMax(), Math.max(DOCK_HEIGHT_MIN, startHeightRef.current - dy)));
+      dockHeightRef.current = Math.min(dockHeightMax(), Math.max(DOCK_HEIGHT_MIN, startHeightRef.current - dy));
+      setDockHeight(dockHeightRef.current);
     },
     onEnd: () => {
       try { localStorage.setItem(DOCK_HEIGHT_KEY, String(dockHeightRef.current)); } catch { /* ignore */ }

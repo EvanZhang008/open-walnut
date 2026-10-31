@@ -153,11 +153,13 @@ test('a lead opens on Task with its Needs you cards; its Brief is the letter alo
   await expect(detail.getByTestId('org-top-brief-new')).toHaveCount(0)
   await detail.getByTestId('org-top-task').click()
   await expect(detail.locator(`[data-testid="org-alert"][data-task-id="${ids.parser}"]`)).toBeVisible()
-  // Four tabs, the home panel's names, Needs you first and open; Waiting / snoozed lists the review.
+  // Pinned first (the user's pins on this node, org-pins.ts), then the home panel's four names;
+  // the node opens on Needs you. Waiting / snoozed lists the review.
   // (The lead's own turn ended too, so it may need the user as well: counted, not pinned.)
   const tabs = detail.getByTestId('org-task-tab')
-  await expect(tabs).toHaveText([/^Needs you\s*\d+$/, /^Working\s*\d+$/, /^Waiting \/ snoozed\s*\d+$/, /^Completed\s*\d+$/])
-  const needsCount = Number((await tabs.first().locator('.org-task-tab-count').textContent()) ?? '-1')
+  await expect(tabs).toHaveText([/^Pinned\s*\d+$/, /^Needs you\s*\d+$/, /^Working\s*\d+$/, /^Waiting \/ snoozed\s*\d+$/, /^Completed\s*\d+$/])
+  await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true')
+  const needsCount = Number((await tabs.nth(1).locator('.org-task-tab-count').textContent()) ?? '-1')
   // Every one is a card, or the chat below holds it (the lead's own ask, its chat being open).
   const cards = await detail.getByTestId('org-alert').count()
   if (cards < needsCount) await expect(detail.getByTestId('org-task-empty')).toHaveText(cards ? `And ${needsCount - cards} in the chat.` : 'Its ask is in the chat.')

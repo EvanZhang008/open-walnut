@@ -13,6 +13,27 @@ import type { Task } from '@open-walnut/core';
  * re-renders every row). The list below intentionally excludes `ext`,
  * `_syncedAt`, and other backend-only fields.
  */
+/**
+ * Task fields tasksShallowEqual and listRowEqual do not compare, and why. A field written without
+ * moving updated_at that a row draws must be compared, or its change is dropped as "equal" (it
+ * happened for the Brief, a VP's name, a team stop, the workspace, and the Org pins, one at a time);
+ * tests/web/task-list-merge.test.ts fails on a Task field in neither place, so a new one is decided.
+ */
+export const UNCOMPARED_TASK_FIELDS: Readonly<Record<string, string>> = {
+  // Each write of these moves updated_at with it, or reaches the UI by another event.
+  description: 'written with updated_at', summary: 'written with updated_at', note: 'written with updated_at',
+  conversation_log: 'written with updated_at', end_date: 'written with updated_at', created_at: 'never changes',
+  phase_changed_at: 'moves with phase', field_at: 'bookkeeping of field writes', ext: 'plugin payload, written with updated_at',
+  plugin_only: 'the task:updated handler drops the row itself (dropPluginOnly)',
+  // Kept for the server and the sessions; no row draws them.
+  transfer_state: 'not drawn', last_start: 'not drawn', routine_start: 'not drawn', session_history_count: 'not drawn',
+  session_status_unavailable: 'not drawn', family_group_id: 'not drawn', auto_links: 'not drawn',
+  created_by_op: 'not drawn', applied_ops: 'not drawn', ledger_desc: 'not drawn', walnut_agent: 'set at create',
+  agent_id: 'set at create', status_report: 'drawn through user_status', promise_alarm: 'not drawn',
+  needs_recheck: 'not drawn', letter_recheck: 'not drawn', recheck_watch: 'not drawn', agent_memory: 'read on its own panel',
+  cwd_missing: 'not drawn',
+};
+
 export function tasksShallowEqual(a: Task, b: Task): boolean {
   const scalarKeys: (keyof Task)[] = [
     'title', 'status', 'phase', 'priority', 'project',
@@ -51,10 +72,18 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
   if (a.org_role !== b.org_role || a.org_name !== b.org_name || a.org_vp_only !== b.org_vp_only
     || a.org_instructions?.at !== b.org_instructions?.at || a.org_instructions?.text !== b.org_instructions?.text
     || (a.org_leads ?? []).join('\n') !== (b.org_leads ?? []).join('\n')) return false;
+  // The Org nodes a task is pinned to (src/core/org/org-pins.ts), written raw: the Org list and the
+  // node's Pinned tab draw them.
+  if ((a.org_pins ?? []).map((p) => p.node).join('\n') !== (b.org_pins ?? []).map((p) => p.node).join('\n')) return false;
   // Written raw, leaving updated_at alone: the Board's Partial (a result's not-done list and its
   // settle) and a team stop (Stop / Resume the team, core/sessions/team-stop.ts).
   if (JSON.stringify(a.result_report ?? null) !== JSON.stringify(b.result_report ?? null)) return false;
   if ((a.team_stop?.at ?? null) !== (b.team_stop?.at ?? null)) return false;
+  // Drawn (the transfer links, a watched section, a link's name, the old sessions' list) and some
+  // written raw (a transfer's far end): compared whole, they are small.
+  for (const k of ['transferred_to', 'transferred_from', 'transfer', 'watched_at', 'link_names', 'legacy_session_ids'] as const) {
+    if (JSON.stringify(a[k] ?? null) !== JSON.stringify(b[k] ?? null)) return false;
+  }
   const arrKeys: (keyof Task)[] = ['tags', 'depends_on'];
   for (const k of arrKeys) {
     const av = (a[k] as string[] | undefined) ?? [];

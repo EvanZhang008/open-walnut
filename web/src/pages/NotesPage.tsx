@@ -648,7 +648,10 @@ export function NotesPage() {
       startWidthRef.current = listWidthRef.current;
       listPaneRef.current?.classList.add('resizing');
     },
-    onMove: ({ dx }) => setListWidth(clampWidth(startWidthRef.current + dx)),
+    onMove: ({ dx }) => {
+      listWidthRef.current = clampWidth(startWidthRef.current + dx);
+      setListWidth(listWidthRef.current);
+    },
     onEnd: () => {
       listPaneRef.current?.classList.remove('resizing');
       try { localStorage.setItem(LS_WIDTH_KEY, String(listWidthRef.current)); } catch { /* ignore */ }
@@ -672,7 +675,10 @@ export function NotesPage() {
     cursor: 'col-resize',
     onStart: () => { startChatWidthRef.current = chatWidthRef.current; },
     // The pane is on the RIGHT: dragging the divider left grows it.
-    onMove: ({ dx }) => setChatWidth(clampChatWidth(startChatWidthRef.current - dx)),
+    onMove: ({ dx }) => {
+      chatWidthRef.current = clampChatWidth(startChatWidthRef.current - dx);
+      setChatWidth(chatWidthRef.current);
+    },
     onEnd: () => {
       try { localStorage.setItem(LS_CHAT_WIDTH_KEY, String(chatWidthRef.current)); } catch { /* ignore */ }
     },

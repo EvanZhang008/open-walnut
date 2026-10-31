@@ -37,6 +37,15 @@ export function defaultWaitUntil(nowMs: number = Date.now()): string {
   return new Date(nowMs + DEFAULT_WAIT_MS).toISOString();
 }
 export type TaskPriority = 'immediate' | 'important' | 'backlog' | 'none';
+/** One pin of a task to an Org node (Task.org_pins). */
+export interface OrgPin {
+  /** `main`, or `project:<key>` for a VP's node (the Org page's row key). */
+  node: string;
+  at: string;
+  by?: 'human' | 'agent' | `task:${string}`;
+  by_name?: string;
+}
+
 /** A task's place in the org above the work (Task.org_role). */
 export type OrgRole = 'main' | 'lead';
 /** Canonical list of valid priority values — use for runtime validation. */
@@ -900,6 +909,11 @@ export interface Task {
    *  title stays the session's own (its turn-end topic may grow it), so the chart and the Org list
    *  read this instead (orgDisplayTitle). Payload blob, local-only; an older Walnut ignores it. */
   org_name?: string;
+  /** The Org nodes this task is pinned to (src/core/org/org-pins.ts): the user's focus on that node,
+   *  apart from the board's pins. One entry per node (`main`, or `project:<key>` for a VP), with who
+   *  pinned it and when. Payload blob, local-only, never pushed to sync backends; an older Walnut
+   *  ignores it. */
+  org_pins?: OrgPin[];
   /** The plugin (its id) whose own view is the only place this task shows: a plugin whose
    *  manifest says `taskVisibility: "plugin"` stamps the tasks its agents run in. Hidden from
    *  the board, the task lists, default search, the Org page and every needs-you count, and

@@ -253,7 +253,8 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
     cursor: 'col-resize',
     onStart: () => { startWidthRef.current = treeWidthRef.current; },
     onMove: ({ dx }) => {
-      setTreeWidth(Math.min(TREE_WIDTH_MAX, Math.max(TREE_WIDTH_MIN, startWidthRef.current + dx)));
+      treeWidthRef.current = Math.min(TREE_WIDTH_MAX, Math.max(TREE_WIDTH_MIN, startWidthRef.current + dx));
+      setTreeWidth(treeWidthRef.current);
     },
     onEnd: () => {
       try { localStorage.setItem(LS_TREE_WIDTH, String(treeWidthRef.current)); } catch { /* denied */ }

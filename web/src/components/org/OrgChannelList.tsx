@@ -7,8 +7,12 @@
  * A project another VP took over has no row of its own: it sits in "Archived" at
  * the bottom (folded), saying which VP has it now; a click opens that VP. A right-click on any
  * row opens Walnut's own menu of what that row can do (the page builds it: OrgPage rowMenu).
+ * Under a row, the tasks the user pinned to it (org-pins.ts; 2026-10-31, the user, translated: "under a
+ * chat ... however many you pin, they all show in there ... you can unpin there too ... they are all its children"): one short line each, a
+ * little indented, its own state's dot; a click opens it beside the page, × takes the pin off.
  */
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import '@/styles/org-rail.css';
 import { readOrgPlace, writeOrgPlace } from './org-place';
 import { timeAgo } from '@/utils/time';
 import { ContextMenu, useContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
@@ -16,7 +20,11 @@ import { avatarColor, initials, type ChannelRow, type ChannelState, type MovedRo
 import { holdOrder } from './hold-order';
 import { OrgEditableName } from './OrgEditableName';
 import { useOrgSettings } from './useOrgSettings';
-import { stateCountLabel } from '@open-walnut/user-status';
+import { USER_STATE_LABELS, stateCountLabel } from '@open-walnut/user-status';
+import { orgDisplayTitle } from '@open-walnut/org-tree';
+import type { Task } from '@open-walnut/core';
+import { TAB_DOT, rowPinNodes, stateTab } from './org-task-tabs';
+import { pinnedNodesOf } from '@open-walnut/org-tree';
 
 const STATE_LABEL: Record<ChannelState, string> = {
   alert: 'Needs you', working: 'Working', quiet: 'Waiting', parked: 'Waiting',
@@ -90,6 +98,42 @@ function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; select
   );
 }
 
+/** The tasks pinned to one row, under it, as its own children. Inside the list's listbox a pin is
+ *  an option of a group (all a listbox may hold): Enter opens it, Delete unpins it, and the × is
+ *  the pointer's way to the same unpin. */
+function PinnedChildren({ row, tasks, onOpenTask, onUnpin }: { row: ChannelRow; tasks: readonly Task[]; onOpenTask: (id: string) => void; onUnpin: (taskId: string, nodes: readonly string[]) => void }) {
+  const nodes = rowPinNodes(row);
+  if (!tasks.length) return null;
+  return (
+    <div className="org-pins" role="group" aria-label={`Pinned to ${row.vpName ?? row.name}`} data-testid="org-pins" data-key={row.key}>
+      {tasks.map((t) => {
+        const st = stateTab(t);
+        const title = orgDisplayTitle(t);
+        return (
+          <div key={t.id} className="org-pin" role="presentation" data-testid="org-pin" data-task-id={t.id} data-state={st}>
+            <button
+              type="button"
+              role="option"
+              aria-selected={false}
+              aria-label={`${title}: ${USER_STATE_LABELS[st]}. Delete unpins it`}
+              aria-keyshortcuts="Delete"
+              className="org-pin-open"
+              data-testid="org-pin-open"
+              title={`${title}: ${USER_STATE_LABELS[st]}`}
+              onClick={() => onOpenTask(t.id)}
+              onKeyDown={(e) => { if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); onUnpin(t.id, pinnedNodesOf(t, nodes)); } }}
+            >
+              <i style={{ background: TAB_DOT[st] }} aria-hidden="true" />
+              <span className="org-pin-title">{title}</span>
+            </button>
+            <button type="button" className="org-pin-unpin" data-testid="org-pin-unpin" aria-hidden="true" tabIndex={-1} title="Unpin" onClick={() => onUnpin(t.id, pinnedNodesOf(t, nodes))}>×</button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function MovedSection({ moved, query, onSelect, onMenu }: { moved: readonly MovedRow[]; query: string; onSelect: (key: string) => void; onMenu?: OnMenu }) {
   const [open, setOpen] = useState(false);
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -151,10 +195,14 @@ interface Props {
   onQuery: (q: string) => void;
   onSelect: (key: string) => void;
   onOpenChart: () => void;
+  /** The tasks pinned to a row (nodePins over rowPinNodes), shown under it. */
+  pinsOf?: (row: ChannelRow) => readonly Task[];
+  onOpenTask?: (taskId: string) => void;
+  onUnpin?: (taskId: string, nodes: readonly string[]) => void;
   now: number;
 }
 
-export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selectedKey, query, onQuery, onSelect, onOpenChart, now }: Props) {
+export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selectedKey, query, onQuery, onSelect, onOpenChart, pinsOf: pinsFor, onOpenTask, onUnpin, now }: Props) {
   const listRef = useRef<HTMLDivElement>(null);
   const orgName = useOrgSettings();
   // A right-click selects a word in WebKit before the menu opens: that selection is the
@@ -183,8 +231,13 @@ export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selecte
   const [held, setHeld] = useState<string[] | null>(null);
   const shown = holdOrder(rows, held);
   const keys = [main.key, ...shown.map((r) => r.key)];
+  const pinsOf = (r: ChannelRow) => (pinsFor && onOpenTask && onUnpin
+    ? <PinnedChildren row={r} tasks={pinsFor(r)} onOpenTask={onOpenTask} onUnpin={onUnpin} />
+    : null);
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    // Up and Down move between the chats; on a pinned task under a row they are left alone.
+    if ((e.target as HTMLElement).closest('.org-pins')) return;
     e.preventDefault();
     const at = selectedKey ? keys.indexOf(selectedKey) : -1;
     const next = keys[Math.min(keys.length - 1, Math.max(0, at + (e.key === 'ArrowDown' ? 1 : -1)))];
@@ -220,8 +273,14 @@ export function OrgChannelList({ main, rows, moved = [], rowMenu, total, selecte
         onPointerLeave={() => setHeld(null)}
       >
         <Row row={main} selected={selectedKey === main.key} now={now} onSelect={onSelect} onMenu={onMenu} />
+        {pinsOf(main)}
         <div className="org-list-section" role="presentation">VPs · {total}</div>
-        {shown.map((r) => <Row key={r.key} row={r} selected={selectedKey === r.key} now={now} onSelect={onSelect} onMenu={onMenu} />)}
+        {shown.map((r) => (
+          <div key={r.key} className="org-channel-wrap" role="presentation">
+            <Row row={r} selected={selectedKey === r.key} now={now} onSelect={onSelect} onMenu={onMenu} />
+            {pinsOf(r)}
+          </div>
+        ))}
         <MovedSection moved={moved} query={query} onSelect={onSelect} onMenu={onMenu} />
       </div>
       {total === 0 && <p className="org-empty-note" data-testid="org-empty">No open work yet. Ask the CEO to start something.</p>}

@@ -178,6 +178,40 @@ describe('layout prefs persist on release, not per frame', () => {
   });
 });
 
+describe('a drag saves where it ended, not where it started', () => {
+  // onEnd can run before React renders the drag's last move (WebKit does: the Org rail kept
+  // the width it started from after a reload, 2026-10-31). A ref that only the render
+  // syncs (`xRef.current = x` in the body) then still holds the old value, so every ref an
+  // onEnd saves must also be set in onMove. Every caller of useDragGesture is read from source.
+  const callers: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) { walk(full); continue; }
+      if (!/\.tsx?$/.test(entry.name) || entry.name === 'useDragGesture.ts') continue;
+      if (/useDragGesture\(\{/.test(fs.readFileSync(full, 'utf8'))) callers.push(path.relative(WEB_SRC, full));
+    }
+  };
+  walk(WEB_SRC);
+
+  it('finds the known callers', () => {
+    expect(callers).toEqual(expect.arrayContaining(['hooks/useResizablePanel.ts', 'pages/MainPage.tsx']));
+  });
+
+  it.each(callers)('%s sets in onMove every ref its onEnd saves', (rel) => {
+    const src = read(rel);
+    for (const call of src.split(/useDragGesture\(\{/).slice(1)) {
+      const move = call.indexOf('onMove:');
+      const end = call.indexOf('onEnd:');
+      if (move < 0 || end < 0 || end < move) continue;
+      const onMove = call.slice(move, end);
+      const onEnd = call.slice(end, end + 1500).split(/\n {2}\}\);/)[0]!;
+      const saved = [...onEnd.matchAll(/(?:localStorage\.setItem\([^\n]*?|save\w*\()\s*(?:String\()?(\w+Ref)\.current/g)].map((m) => m[1]!);
+      for (const ref of saved) expect(onMove, `${rel}: onEnd saves ${ref}`).toMatch(new RegExp(`\\b${ref}\\.current\\s*=`));
+    }
+  });
+});
+
 describe('CSS supports the pointer-based drag model', () => {
   it('neutralizes iframes while a drag is in flight', () => {
     // Fallback defense for the case where pointer capture is unavailable.

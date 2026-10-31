@@ -1,12 +1,12 @@
 /**
- * The Task view of an Org node (OrgNodeDetail.tsx), 2026-10-31, the user: "status 里面直接就叫
- * task ... 有四个小 tab: needs you, working, snooze waiting, completed", the same names and order
+ * The Task view of an Org node (OrgNodeDetail.tsx), 2026-10-31, the user, translated: "inside status, just
+ * call it task ... with four small tabs: needs you, working, snooze waiting, completed", the same names and order
  * as the home panel's status sections. Pure: which of the node's tasks is in which tab, read from
  * each task's own user status (userStateOf), the one reading the node's counts and the Brief's
  * sections use too. The Needs you tab holds the node's asks (its row's alerts, the cards).
  */
 import type { Task } from '@open-walnut/core';
-import { projectKey, userStateOf } from '@open-walnut/org-tree';
+import { nodePins, projectKey, userStateOf } from '@open-walnut/org-tree';
 import { STATUS_SECTION_LABELS } from '@/components/tasks/status-sections';
 import { readStatusLine } from './org-ask-form';
 import { flattenNodes, taskTime, type ChannelRow, type OrgAlertView } from './org-channels-model';
@@ -18,10 +18,23 @@ export const ORG_TASK_TAB_LABELS: Record<OrgTaskTab, string> = {
   waiting: STATUS_SECTION_LABELS.waiting, done: STATUS_SECTION_LABELS.done,
 };
 
+/** The rail's tabs: the tasks the user pinned to the node first (2026-10-31, the user picked "B: a
+ *  Pinned tab first"; org-pins.ts), then the four status tabs. A node still opens on Needs you. */
+export type OrgRailTab = 'pinned' | OrgTaskTab;
+export const ORG_RAIL_TABS: readonly OrgRailTab[] = ['pinned', ...ORG_TASK_TABS];
+export const ORG_RAIL_TAB_LABELS: Record<OrgRailTab, string> = { pinned: 'Pinned', ...ORG_TASK_TAB_LABELS };
+
+/** Each status tab's dot. */
+export const TAB_DOT: Record<OrgTaskTab, string> = {
+  needs: 'var(--error, #FF3B30)', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)', done: 'var(--accent, #0A84FF)',
+};
+
 /** Completed work stays listed this long (the Board's Status view and the phone use the same). */
 export const ORG_DONE_WINDOW_DAYS = 7;
 
 export interface OrgTaskTabs {
+  /** The tasks pinned to this node, in the order they were pinned, whatever their state. */
+  pinned: Task[];
   /** The cards: every ask in the node's work. */
   needs: OrgAlertView[];
   working: Task[];
@@ -59,13 +72,22 @@ export function orgTaskTabs(row: ChannelRow, rows: readonly ChannelRow[], tasks:
   const done = tasks
     .filter((t) => userStateOf(t) === 'done' && !t.plugin_only && projects.has(projectKey(t.project)) && doneAt(t) >= cutoff)
     .sort((a, b) => doneAt(b) - doneAt(a));
-  return { needs, working: of('working'), waiting: of('waiting'), done };
+  // A pin is the user's: it shows whatever project the task is in now, done or not.
+  const pinned = nodePins(tasks.filter((t) => !t.plugin_only), rowPinNodes(row));
+  return { pinned, needs, working: of('working'), waiting: of('waiting'), done };
 }
 
 function dedupe(alerts: readonly OrgAlertView[]): OrgAlertView[] {
   const seen = new Set<string>();
   return alerts.filter((a) => (seen.has(a.taskId) ? false : (seen.add(a.taskId), true)));
 }
+
+/** The nodes a row shows the pins of: its own, and each project its VP leads (a project put under
+ *  this VP after a task was pinned to it keeps that pin in view). */
+export const rowPinNodes = (row: Pick<ChannelRow, 'key' | 'led'>): string[] => [row.key, ...(row.led ?? []).map((l) => l.key)];
+
+/** The status tab a task's own state belongs to (a pinned row wears its dot and its line). */
+export const stateTab = (task: Task): OrgTaskTab => userStateOf(task);
 
 /** The line under a task in its tab: what it does, or what it waits on, in its status's words. */
 export function taskTabNote(task: Task, tab: OrgTaskTab): string {

@@ -58,7 +58,10 @@ export function GlobalNotesSection(props: GlobalNotesSectionProps) {
       handleRef.current?.classList.add('dragging');
     },
     // Handle sits above the body: dragging up (negative dy) grows it.
-    onMove: ({ dy }) => setHeight(Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, startH.current - dy))),
+    onMove: ({ dy }) => {
+      heightRef.current = Math.max(MIN_HEIGHT, Math.min(MAX_HEIGHT, startH.current - dy));
+      setHeight(heightRef.current);
+    },
     onEnd: () => {
       handleRef.current?.classList.remove('dragging');
       // Persist latest height from ref (not stale closure value)

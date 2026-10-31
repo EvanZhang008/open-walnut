@@ -1661,7 +1661,7 @@ export async function renameProject(
   const to = assertValidProjectName(newProject);
 
   const {
-    count, merged, renameSource, renamedTasks, renamedTaskIds, canonical, oldAlias,
+    count, merged, renameSource, renamedTasks, renamedTaskIds, canonical, oldAlias, pinMovedIds,
   } = await withWriteLock(async () => {
     const store = await readStore();
     const now = new Date().toISOString();
@@ -1719,6 +1719,20 @@ export async function renameProject(
       task.project = canonical;
       task.updated_at = now;
       renamedTaskIds.push(task.id);
+    }
+    // Pins on the project's Org node follow it: the node is its key (org-pins.ts, orgProjectNode).
+    // A task of another project pinned there only changes its pin, so it is never pushed as moved.
+    const pinMovedIds: string[] = [];
+    const fromNode = `project:${fromLower.trim()}`;
+    const toNode = `project:${canonical.trim().toLowerCase()}`;
+    if (fromNode !== toNode) {
+      for (const task of store.tasks) {
+        if (!task.org_pins?.some((p) => p.node === fromNode)) continue;
+        const held = task.org_pins.some((p) => p.node === toNode);
+        task.org_pins = held ? task.org_pins.filter((p) => p.node !== fromNode) : task.org_pins.map((p) => (p.node === fromNode ? { ...p, node: toNode } : p));
+        task.updated_at = now;
+        if (!renamedTaskIds.includes(task.id)) pinMovedIds.push(task.id);
+      }
     }
 
     // Registry: carry the old row's metadata onto the target. Merge keeps the
@@ -1782,7 +1796,7 @@ export async function renameProject(
     const renamedTasks = store.tasks.filter((t) => renamedTaskIds.includes(t.id));
     return {
       count: renamedTaskIds.length, merged, renameSource, renamedTasks, renamedTaskIds,
-      canonical, oldAlias,
+      canonical, oldAlias, pinMovedIds,
     };
   });
 
@@ -1837,10 +1851,10 @@ export async function renameProject(
     from, to: canonical, merged, count, source: renameSource,
   }, ['web-ui'], { source: 'task-manager' });
 
-  if (renamedTaskIds.length > 0) {
+  if (renamedTaskIds.length > 0 || pinMovedIds.length > 0) {
     bus.emit(EventNames.TASK_UPDATED, {
       task: null,
-      taskIds: renamedTaskIds,
+      taskIds: [...renamedTaskIds, ...pinMovedIds],
       oldProject: from,
       newProject: canonical,
       count,

@@ -12,6 +12,7 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { readOrgPlace, writeOrgPlace } from './org-place';
+import { useResizablePanel } from '@/hooks/useResizablePanel';
 import type { Task } from '@open-walnut/core';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { TaskBoardPane } from '@/components/board/TaskBoardPane';
@@ -33,7 +34,7 @@ import { log } from '@/utils/log';
 import { briefUnread, markBriefSeen, readBriefFolded, type OrgTopView } from './org-brief-model';
 import { briefUpdating } from '@open-walnut/brief-fresh';
 import { useBriefRefresh } from './useBriefRefresh';
-import { ORG_TASK_TAB_LABELS, orgTaskTabs, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
+import { ORG_TASK_TAB_LABELS, orgTaskTabs, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
 import { stateCountLabel } from '@open-walnut/user-status';
 import {
   mainTeamColumns, teamColumns, type ChannelRow, type OrgAlertView, type TeamColumn,
@@ -43,6 +44,14 @@ export type OrgTab = 'board' | 'team' | 'chat';
 
 /** The node's width from which the rail sits beside the chat: a chat of about 520px beside it. */
 export const RAIL_SIDE_MIN_WIDTH = 880;
+/** The side rail's room: never narrower than this, and the chat beside it never narrower than that. */
+export const RAIL_MIN_PX = 300;
+export const CHAT_MIN_PX = 420;
+/** Its width when the user never set one: about a third of a 1280px window's node. */
+export const RAIL_DEFAULT_VW = 27;
+/** The rail's width the user set, per surface (the CEO's, a VP's), as % of the window: an
+ *  `open-walnut-` key, so it follows them to every window and device (ui-prefs-sync.ts). */
+export const railWidthKey = (kind: ChannelRow['kind']) => `open-walnut-org-rail-w-${kind === 'main' ? 'main' : 'vp'}`;
 
 export type { OrgAnswers };
 
@@ -65,6 +74,8 @@ interface Props {
   onStartChat: (row: ChannelRow) => void;
   /** Phone: back to the list. */
   onBack?: () => void;
+  /** Pin a task to a node, or take the pin off (the page's, OrgPage). */
+  onPin: (taskId: string, nodes: readonly string[], pinned: boolean) => void;
   now: number;
 }
 
@@ -137,7 +148,7 @@ function TeamBoard({ columns, onPick, emptyText }: {
   );
 }
 
-export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSelect, onOpenTask, onOpenSession, answers, onStartChat, onBack, now }: Props) {
+export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSelect, onOpenTask, onOpenSession, answers, onStartChat, onBack, onPin, now }: Props) {
   const contact = useMemo(() => (row.contactId ? tasks.find((t) => t.id === row.contactId) : undefined), [tasks, row.contactId]);
   // Temporary (utils/flash-probe.ts): a remount of the node's detail is one cause of a flash.
   useEffect(() => { if (flashProbeEnabled()) log.info('flash-probe', 'org detail mounted', { node: row.key }); }, [row.key]);
@@ -156,14 +167,14 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
    *  session it was asked of: a replaced session's new panel does not reopen it. */
   const [chatInbox, setChatInbox] = useState<{ sid: string; n: number } | null>(null);
   /** Above the chat: Task (Latest and the tasks by status) or the Brief its lead or Main keeps
-   *  (OrgBrief). A node always opens on Task (2026-10-30, the user: "default 是显示这个 status 的";
-   *  2026-10-31: "这个 status 可能就是应该叫做 task 吧"). */
+   *  (OrgBrief). A node always opens on Task (2026-10-30, the user, translated: "by default it shows this status";
+   *  2026-10-31: "this status should probably just be called task"). */
   const [topPick, setTopPick] = useState<OrgTopView>('task');
   const [briefFolded, setBriefFolded] = useState(readBriefFolded);
   const keepsBrief = contact?.org_role === 'main' || contact?.org_role === 'lead';
   const topView: OrgTopView = keepsBrief ? topPick : 'task';
   /** The Task view's tab: Needs you unless the user picked another (a node opens on it). */
-  const [taskTab, setTaskTab] = useState<OrgTaskTab>('needs');
+  const [taskTab, setTaskTab] = useState<OrgRailTab>('needs');
   const tabs = useMemo(() => orgTaskTabs(row, rows, tasks, now), [row, rows, tasks, now]);
   const openTab = (t: OrgTaskTab) => { setTopPick('task'); setTaskTab(t); };
   const brief = keepsBrief ? contact?.brief : undefined;
@@ -280,6 +291,25 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
     return () => ro.disconnect();
   }, []);
   const railSide = wide && !onBack;
+  // The divider between the chat and the side rail moves the rail (2026-10-31, the user, translated: "this
+  // sidebar can't be adjusted ... can't this bar's width be changed?"): dragged, kept, double-click resets.
+  const splitRef = useRef<HTMLDivElement>(null);
+  /** The rail's room now, as % of the window: at least 300px, and the chat keeps 420px. */
+  const railBounds = () => {
+    const room = splitRef.current?.clientWidth ?? 0;
+    const vw = window.innerWidth || 1;
+    return { min: (RAIL_MIN_PX / vw) * 100, max: (Math.max(RAIL_MIN_PX, room - CHAT_MIN_PX) / vw) * 100 };
+  };
+  const railWidth = useResizablePanel(railWidthKey(row.kind), RAIL_DEFAULT_VW, 'right', { bounds: railBounds });
+  // What the divider tells a screen reader: the width that shows, in pixels, within its room.
+  const railAria = (() => {
+    if (!splitRef.current) return null;
+    const b = railBounds();
+    const px = (v: number) => Math.round((v / 100) * window.innerWidth);
+    return { min: px(b.min), max: px(b.max), now: px(Math.min(b.max, Math.max(b.min, railWidth.pct))), b };
+  })();
+  // The window's own clamp too, so a width set on a wider window still leaves both sides readable.
+  const railCss = `clamp(${RAIL_MIN_PX}px, ${railWidth.pct}vw, max(${RAIL_MIN_PX}px, calc(100% - ${CHAT_MIN_PX}px)))`;
   const lastMoved = row.lastAt ? timeAgo(new Date(row.lastAt).toISOString(), { now }) : '';
   const tabId = (t: OrgTab) => `org-tab-${t}-${row.key}`;
   // On the chat, the contact's own prompt is in view already; its letter or choice is not, so it stays.
@@ -291,7 +321,8 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
       view={topView} onView={pickTop} keepsBrief={keepsBrief} briefNew={briefNew} briefFolded={briefFolded} onBriefFolded={setBriefFolded} briefFresh={briefFresh} briefUpdating={updating}
       threads={threads} onThreadFollowUp={followUp}
       contact={contact} title={title} onOpenAlert={openAlert} onQuote={quoteAlert} canQuote={!!sessionId} answers={answers}
-      onOpenTask={openChip} now={now} placement={railSide ? 'side' : 'top'}
+      onOpenTask={openChip} now={now} placement={railSide ? 'side' : 'top'} onPin={onPin}
+      {...(railSide ? { width: railCss } : {})}
     />
   );
 
@@ -327,7 +358,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
       </header>
       {/* One parent for both places, so moving the rail never remounts it (a picked choice, an
           open More and the held order stay when a side panel narrows the page). */}
-      <div className={`org-detail-split ${railSide ? 'has-rail' : 'is-stacked'}`}>
+      <div ref={(el) => { splitRef.current = el; railWidth.panelRef.current = el; }} className={`org-detail-split ${railSide ? 'has-rail' : 'is-stacked'}`}>
       <div className="org-detail-col">
       <div
         ref={bodyRef}
@@ -393,6 +424,29 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
         )
       )}
       </div>
+      {railSide && (
+        <div
+          className="org-rail-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Task panel width: drag, or use the arrow keys; double-click resets it"
+          {...(railAria ? { 'aria-valuemin': railAria.min, 'aria-valuemax': railAria.max, 'aria-valuenow': railAria.now, 'aria-valuetext': `${railAria.now} pixels wide` } : {})}
+          tabIndex={0}
+          data-testid="org-rail-handle"
+          {...railWidth.handleProps}
+          onDoubleClick={() => railWidth.setPct(RAIL_DEFAULT_VW)}
+          onKeyDown={(e) => {
+            // Left widens the rail (it is right of the divider); Home and End go to its edges.
+            const b = railBounds();
+            const shown = Math.min(b.max, Math.max(b.min, railWidth.pct));
+            const next = e.key === 'ArrowLeft' ? shown + 2 : e.key === 'ArrowRight' ? shown - 2
+              : e.key === 'End' ? b.max : e.key === 'Home' ? b.min : null;
+            if (next === null) return;
+            e.preventDefault();
+            railWidth.setPct(next);
+          }}
+        />
+      )}
       {rail}
       </div>
     </div>
