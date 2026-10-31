@@ -102,6 +102,61 @@ describe('cost report', () => {
     expect(report.shortSessions).toBeUndefined();
   });
 
+  it('adds Walnut to the coding agents in the whole picture, with every breakdown per day', async () => {
+    response({ input_tokens: 1 * M });                                                         // Oct 20, t1 Walnut, $4
+    response({ date: '2026-10-21', timestamp: '2026-10-21T18:00:00.000Z', input_tokens: 0, output_tokens: 1 * M, host: 'clouddev' }); // $20
+    response({ model: 'gpt-6.1-sol', session_id: 's2', task_id: 't2', input_tokens: 100_000 });  // Oct 20, t2 Mail, $0.20
+    response({ source: 'chat', session_id: 'c1', task_id: null, input_tokens: 1 * M });         // Walnut chat, $4
+    trackerTable();
+    call({ source: 'title', model: 'global.anthropic.claude-opus-5-5', input_tokens: 500_000 }); // Walnut title, $2
+    await ready();
+    const report = await buildCostReport('all', {}, deps());
+    expect(report.view).toBe('all');
+    expect(report.totals.costUsd).toBeCloseTo(30.2, 9);
+    const lines = (id: string) => report.groups.find(g => g.id === id)!.lines.map(l => [l.label, Number(l.costUsd.toFixed(2))]);
+    expect(report.groups.map(g => g.id)).toEqual(['agent', 'model', 'project', 'host', 'feature']);
+    expect(lines('agent')).toEqual([['Claude Code', 24.2], ['Walnut', 6]]);
+    // The routing prefix is not part of the name: Walnut's title call joins its model's line.
+    expect(lines('model')).toEqual([['claude-opus-5-5', 30], ['gpt-6.1-sol', 0.2]]);
+    expect(lines('project')).toEqual([['Walnut', 24], ['Walnut itself', 6], ['Mail', 0.2]]);
+    expect(lines('host')).toEqual([['clouddev', 20], ['__local__', 10.2]]);
+    // Each group's days add up to its lines and to the period's total.
+    for (const g of report.groups.filter(g => g.id !== 'feature')) {
+      const sum = g.daily.reduce((n, d) => n + Object.values(d.costs).reduce((a, b) => a + b, 0), 0);
+      expect(sum).toBeCloseTo(report.totals.costUsd, 4);
+      for (const line of g.lines) {
+        expect(g.daily.reduce((n, d) => n + (d.costs[line.key] ?? 0), 0)).toBeCloseTo(line.costUsd, 4);
+      }
+    }
+    const project = report.groups.find(g => g.id === 'project')!;
+    expect(project.daily).toEqual([
+      { date: '2026-10-20', costs: { Walnut: 4, __walnut__: 6, Mail: 0.2 } },
+      { date: '2026-10-21', costs: { Walnut: 20 } },
+    ]);
+    // A one-request session under $1 folds into the short sessions, as in the agents view.
+    expect(report.tasks!.map(t => t.label)).toEqual(['Task t1']);
+    expect(report.shortSessions!.lines.map(l => l.label)).toEqual(['Task t2']);
+    // The two older views keep their own shape, now with days too.
+    const agents = await buildCostReport('agents', {}, deps());
+    expect(agents.groups.map(g => g.id)).toEqual(['engine', 'model', 'host', 'project']);
+    expect(agents.totals.costUsd).toBeCloseTo(24.2, 9);
+    const walnut = await buildCostReport('walnut', {}, deps());
+    expect(walnut.groups.map(g => g.id)).toEqual(['feature', 'model']);
+    expect(walnut.totals.costUsd).toBeCloseTo(6, 9);
+    expect(walnut.groups[0].daily).toEqual([{ date: '2026-10-20', costs: { chat: 4, title: 2 } }]);
+  });
+
+  it('keeps a filtered engine out of the whole picture and an empty period empty', async () => {
+    response({ input_tokens: 1 * M });
+    await ready();
+    const all = await buildCostReport('all', { engine: 'codex' }, deps());
+    expect(all.engine).toBeNull();
+    expect(all.totals.costUsd).toBeCloseTo(4, 9);
+    const none = await buildCostReport('all', { start: '2000-01-01', end: '2000-01-02' }, deps());
+    expect(none.totals.requests).toBe(0);
+    expect(none.groups.every(g => g.lines.length === 0 && g.daily.length === 0)).toBe(true);
+  });
+
   it('folds tests and one-off sessions into one line, and names a session that has no task', async () => {
     for (let i = 0; i < 6; i++) response({ input_tokens: 1 * M });                           // t1: 6 requests, $24
     response({ session_id: 's3', task_id: 't3', input_tokens: 1_000 });                       // short: 1 request

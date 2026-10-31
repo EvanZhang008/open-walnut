@@ -1,0 +1,78 @@
+/* Settings > Usage & Costs: the stacked cost chart and the table under it. */
+
+/* Categorical slots in a validated order (each adjacent pair tells apart for color-blind eyes too). */
+.usage-bd {
+  --usage-s1: #2a78d6; --usage-s2: #eb6834; --usage-s3: #1baf7a;
+  --usage-s4: #eda100; --usage-s5: #e87ba4; --usage-s6: #4a3aa7;
+  --usage-other: #a3a3a8;
+}
+:root[data-theme="dark"] .usage-bd {
+  --usage-s1: #3987e5; --usage-s2: #d95926; --usage-s3: #199e70;
+  --usage-s4: #c98500; --usage-s5: #d55181; --usage-s6: #9085e9;
+  --usage-other: #6e6e73;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) .usage-bd {
+    --usage-s1: #3987e5; --usage-s2: #d95926; --usage-s3: #199e70;
+    --usage-s4: #c98500; --usage-s5: #d55181; --usage-s6: #9085e9;
+    --usage-other: #6e6e73;
+  }
+}
+
+.usage-bd-switch { display: inline-flex; align-items: center; gap: 8px; }
+.usage-bd-switch-label { font-size: 12px; color: var(--fg-muted); }
+.usage-bd-body { display: block; padding-top: 12px; container: usage-bd / inline-size; }
+
+.usage-bd-chart { position: relative; width: 100%; min-height: 240px; touch-action: pan-y; cursor: crosshair; }
+.usage-bd-chart[aria-busy] { opacity: 0.6; transition: opacity 0.2s; }
+.usage-bd-chart svg { display: block; overflow: visible; }
+.usage-bd-grid { stroke: var(--border); stroke-width: 1; shape-rendering: crispEdges; }
+.usage-bd-tick { font-size: 11px; fill: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.usage-bd-area { fill-opacity: 0.85; stroke: var(--card-bg); stroke-width: 1.5; stroke-linejoin: round; }
+.usage-bd-cross line { stroke: var(--fg-muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.usage-bd-cross circle { stroke: var(--card-bg); stroke-width: 2; }
+
+.usage-bd-tip {
+  position: absolute; top: 8px; z-index: 2; min-width: 180px; max-width: 280px; pointer-events: none;
+  padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--bg-elevated); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  font-size: 12px; color: var(--fg);
+}
+.usage-bd-tip-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 4px; font-weight: 600; }
+.usage-bd-tip-row { display: flex; align-items: center; gap: 6px; line-height: 1.6; }
+.usage-bd-tip-row span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-bd-tip-row b, .usage-bd-tip-head b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.usage-bd-tip-row.muted { color: var(--fg-muted); }
+.usage-bd-tip-row i, .usage-bd-swatch {
+  display: inline-block; flex: 0 0 auto; width: 9px; height: 9px; border-radius: 3px;
+}
+
+.usage-bd-table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px; table-layout: fixed; }
+.usage-bd-table th {
+  padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left;
+  font-size: 11px; font-weight: 500; color: var(--fg-muted);
+}
+.usage-bd-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.usage-bd-table tr:last-child td { border-bottom: 0; }
+.usage-bd-table :is(th, td):first-child { padding-left: 0; }
+.usage-bd-table :is(th, td):last-child { padding-right: 0; }
+.usage-bd-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.usage-bd-table .muted { color: var(--fg-muted); }
+.usage-bd-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.usage-bd-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-bd-col-cost { width: 92px; }
+.usage-bd-col-share { width: 64px; }
+.usage-bd-col-req { width: 92px; }
+.usage-bd-col-trend { width: 112px; }
+.usage-bd-spark { display: block; overflow: visible; }
+.usage-bd-spark path { fill: none; stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+.usage-bd-more {
+  margin-top: 6px; padding: 0; border: 0; background: none; cursor: pointer;
+  font: inherit; font-size: 12px; color: var(--accent);
+}
+
+/* A narrow card keeps the name readable: requests go first, the trend gets thinner. */
+@container usage-bd (max-width: 600px) {
+  .usage-bd-req { display: none; }
+  .usage-bd-col-trend { width: 72px; }
+}

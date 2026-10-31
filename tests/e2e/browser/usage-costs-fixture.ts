@@ -1,7 +1,8 @@
 /**
- * A realistic GET /api/usage/costs answer for browser specs: a busy week with
+ * A realistic GET /api/usage/costs answer for browser specs: a busy month with
  * long task titles, many models and hosts, folded short sessions and an
- * unpriced model, for both views, and the agents view for one engine.
+ * unpriced model. The page reads the whole picture (`view=all`, every breakdown
+ * per day); the two older views stay for the callers that still ask for them.
  */
 const tokens = (n: number) => ({ input: n * 10, output: n * 40, cacheRead: n * 9000, cacheWrite: n * 300 })
 const line = (key: string, label: string, costUsd: number, requests: number, unpriced = 0) =>
@@ -28,7 +29,44 @@ const common = (view: string, start: string | null, end: string | null) => ({
 
 export const LONG_TITLE = 'Investigate why the nightly export of every archived project to the shared drive keeps timing out after the third retry on the slow host'
 
+/** Each line's cost spread over the period's days, every line with its own shape. */
+function perDay(lines: { key: string; costUsd: number }[], start: string | null, end: string | null) {
+  const dates = days(start, end).map((d) => d.date)
+  const out = dates.map((date) => ({ date, costs: {} as Record<string, number> }))
+  lines.forEach((l, k) => {
+    const w = dates.map((_, i) => 1 + ((i * (k + 1) + k) % 7))
+    const sum = w.reduce((a, b) => a + b, 0)
+    dates.forEach((_, i) => { out[i].costs[l.key] = l.costUsd * w[i] / sum })
+  })
+  return out
+}
+
+function wholePicture(start: string | null, end: string | null) {
+  const agents = agentsReport('agents', start, end)
+  const walnutCost = 68.37
+  const total = agents.totals.costUsd + walnutCost
+  const scale = (lines: ReturnType<typeof line>[], to: number) => {
+    const sum = lines.reduce((n, l) => n + l.costUsd, 0)
+    return lines.map((l) => ({ ...l, costUsd: l.costUsd / sum * to }))
+  }
+  const groups = [
+    { id: 'agent', heading: 'By agent', lines: [line('claude', 'Claude Code', agents.totals.costUsd - 120, 60_000), line('walnut', 'Walnut', walnutCost, 3270), line('codex', 'Codex', 120, 1000)] },
+    { id: 'model', heading: 'By model', lines: scale(Array.from({ length: 11 }, (_, i) => line(`m${i}`, i === 2 ? 'gpt-6.1-sol' : `claude-model-${i}`, 1000 - i * 80, 3000 - i * 100)), total) },
+    { id: 'project', heading: 'By project', lines: [line('Walnut', 'Walnut', (total - walnutCost - 2.4) * 0.7, 40_000), line('Notes', 'Notes', (total - walnutCost - 2.4) * 0.3, 20_000),
+      line('__walnut__', 'Walnut itself', walnutCost, 3270), line('', 'Inbox', 2.4, 24)] },
+    { id: 'host', heading: 'By host', lines: [line('__local__', '__local__', total * 0.6, 36_000), line('devbox', 'devbox', total * 0.4, 25_000)] },
+    { id: 'feature', heading: "By Walnut feature", lines: scale([line('chat', 'Personal AI chat', 61.2, 412), line('title', 'Titles', 3.41, 2210)], walnutCost) },
+  ].map((g) => ({ ...g, lines: [...g.lines].sort((a, b) => b.costUsd - a.costUsd), daily: perDay(g.lines, start, end) }))
+  const daily = groups[0].daily.map((d) => ({ date: d.date, costUsd: Object.values(d.costs).reduce((a, b) => a + b, 0), requests: 1000 }))
+  return { ...agents, view: 'all', engine: null, totals: line('total', 'Total', total, 64_270, 14), daily, groups }
+}
+
 export function costReport(view: string, start: string | null, end: string | null, engine: string | null = null) {
+  if (view === 'all') return wholePicture(start, end)
+  return agentsReport(view, start, end, engine)
+}
+
+function agentsReport(view: string, start: string | null, end: string | null, engine: string | null = null) {
   if (view === 'walnut') {
     const features = [line('chat', 'Personal AI chat', 61.2, 412), line('title', 'Titles', 3.41, 2210), line('task-search-agent', 'AI task search', 2.05, 380),
       line('summary', 'Summaries', 1.12, 140), line('plugin:plugin:mail', 'Plugin: mail', 0.4, 60), line('quick-parse', 'Quick add', 0.08, 41),

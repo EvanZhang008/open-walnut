@@ -144,12 +144,15 @@ export async function fetchPricing(): Promise<{ models: PricingEntry[]; version:
 
 // ── Usage & Costs (GET /api/usage/costs, src/core/usage/cost-report.ts) ──
 
-export type CostView = 'walnut' | 'agents';
+/** `all`: every coding agent plus Walnut's own calls, the page's view; the other two stay for older callers. */
+export type CostView = 'all' | 'walnut' | 'agents';
 export interface CostTokens { input: number; output: number; cacheRead: number; cacheWrite: number }
 export interface CostLine { key: string; label: string; costUsd: number; requests: number; tokens: CostTokens; unpriced: number }
 export interface CostTaskLine extends CostLine { taskId?: string; sessionId?: string; project: string; hosts: string[]; engines: string[] }
 export interface CostUnpriced { model: string; where: string; requests: number }
 export interface CostFold { count: number; costUsd: number; requests: number; tokens?: number }
+/** One breakdown (agent, model, project, host...): its lines over the period and each day's cost per line key. */
+export interface CostGroup { id: string; heading: string; lines: CostLine[]; daily?: { date: string; costs: Record<string, number> }[] }
 export interface CostSourceCheck { source: string; host: string; status: string; matchedCalls: number; unmatchedCalls: number; detail: string }
 
 export interface CostReport {
@@ -161,7 +164,7 @@ export interface CostReport {
   engines?: { key: string; label: string }[];
   totals: CostLine;
   daily: { date: string; costUsd: number; requests: number }[];
-  groups: { id: string; heading: string; lines: CostLine[] }[];
+  groups: CostGroup[];
   tasks?: CostTaskLine[];
   moreTasks?: CostFold;
   shortSessions?: CostFold & { lines: CostTaskLine[] };

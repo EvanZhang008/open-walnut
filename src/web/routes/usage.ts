@@ -27,13 +27,13 @@ usageRouter.get('/overview', (req: Request, res: Response, next: NextFunction) =
   } catch (err) { next(err) }
 })
 
-// GET /api/usage/costs?view=walnut|agents&start&end&engine: the Usage & Costs page,
+// GET /api/usage/costs?view=all|walnut|agents&start&end&engine: the Usage & Costs page,
 // dollars (tokens x public prices) and tokens for a period, read from the
 // per-day sums (cost-report.ts), never from the per-response table. `engine`
 // (claude, codex, opencode, goose...) counts one coding engine; agents view only.
 usageRouter.get('/costs', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const view = req.query.view === 'agents' ? 'agents' : 'walnut'
+    const view = req.query.view === 'agents' || req.query.view === 'all' ? req.query.view : 'walnut'
     const [{ buildCostReport }, { getConfig }, { listTasksByIds }, { listSessions }] = await Promise.all([
       import('../../core/usage/cost-report.js'), import('../../core/config-manager.js'),
       import('../../core/task-manager.js'), import('../../core/session-tracker.js'),

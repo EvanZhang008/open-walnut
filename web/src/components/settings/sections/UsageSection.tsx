@@ -6,12 +6,15 @@ import { SegmentedControl } from '../inputs/SegmentedControl';
 import { useUsageCosts } from '@/hooks/useUsageCosts';
 import type { TimeSelection } from '@/hooks/useUsageOverview';
 import { formatTokens as formatTokenCount } from '@/utils/format';
-import { UsageDailyChart } from '@/components/usage/UsageDailyChart';
+import { UsageBreakdownChart, UsageSparkline } from '@/components/usage/UsageBreakdownChart';
+import { buildBreakdown, dayLabel, periodDays, type BreakdownId, type Bucket } from '@/components/usage/breakdown-model';
+import { usePersistentState } from '@/hooks/usePersistentState';
 import { UsageDateRange } from '@/components/usage/UsageDateRange';
-import { collectUsage, type CostLine, type CostReport, type CostTaskLine, type CostView, type DailyCost, type Period } from '@/api/usage';
+import { collectUsage, type CostLine, type CostReport, type CostTaskLine, type Period } from '@/api/usage';
 import { openSessionOnHome } from '@/utils/open-session';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
 import '@/styles/settings-sections-addons.css';
+import '@/styles/usage-breakdown.css';
 
 const PRESETS: { value: Period; label: string }[] = [
   { value: 'today', label: 'Today' },
@@ -20,23 +23,13 @@ const PRESETS: { value: Period; label: string }[] = [
   { value: 'all', label: 'All time' },
 ];
 
-const VIEWS: { value: CostView; label: string }[] = [
-  { value: 'walnut', label: 'Walnut' },
-  { value: 'agents', label: 'Agents' },
+const BREAKDOWNS: { value: BreakdownId; label: string; noun: string }[] = [
+  { value: 'agent', label: 'Agent', noun: 'Agent' },
+  { value: 'model', label: 'Model', noun: 'Model' },
+  { value: 'project', label: 'Project', noun: 'Project' },
+  { value: 'host', label: 'Host', noun: 'Host' },
 ];
-
-/** The engines always offered in the agents view; another one with sessions in the period joins them. */
-const ENGINES: { value: string; label: string }[] = [
-  { value: 'all', label: 'All engines' },
-  { value: 'claude', label: 'Claude Code' },
-  { value: 'codex', label: 'Codex' },
-  { value: 'opencode', label: 'OpenCode' },
-];
-
-const VIEW_HELP: Record<CostView, string> = {
-  walnut: "Walnut's own model calls: the Personal AI's chat, titles, parsing, summaries, search, plugins.",
-  agents: 'Coding sessions: Claude Code, Codex, OpenCode and other engines, on every host.',
-};
+const isBreakdown = (v: unknown): v is BreakdownId => BREAKDOWNS.some((b) => b.value === v);
 
 /** Rows shown before a group folds the rest into "N more". */
 const VISIBLE = 8;
@@ -64,18 +57,10 @@ function volume(requests: number, tokens?: number): string {
   return tokens === undefined ? count(requests, 'request') : `${count(requests, 'request')} · ${formatTokens(tokens)} tokens`;
 }
 
-/** The engine a report counts, by its label; undefined for all engines. */
-function engineName(report: CostReport): string | undefined {
-  if (report.view !== 'agents' || !report.engine) return undefined;
-  return report.engines?.find((e) => e.key === report.engine)?.label
-    ?? ENGINES.find((e) => e.value === report.engine)?.label ?? report.engine;
-}
-
 export function UsageSection() {
-  const [view, setView] = useState<CostView>('walnut');
-  const [time, setTime] = useState<TimeSelection>({ preset: '7d' });
-  const [engine, setEngine] = useState('all');
-  const { report, current, loading, error, refresh, range } = useUsageCosts(view, time, engine);
+  const [time, setTime] = useState<TimeSelection>({ preset: '30d' });
+  const [breakdown, setBreakdown] = usePersistentState<BreakdownId>('walnut-usage-breakdown', 'agent', isBreakdown);
+  const { report, current, loading, error, refresh, range } = useUsageCosts('all', time);
   const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState('');
   const update = async () => {
@@ -85,26 +70,16 @@ export function UsageSection() {
     finally { setUpdating(false); }
   };
   const shown = current ?? report;
+  // Every day of the period, empty ones too ("All time" runs from the first recorded day).
+  const days = useMemo(() => shown ? periodDays(range.start ?? shown.bounds.min ?? shown.daily[0]?.date,
+    range.end ?? shown.daily[shown.daily.length - 1]?.date) : [], [shown, range.start, range.end]);
   const presetValue = (time.preset === 'custom' ? '' : time.preset) as Period;
-  const chartSelectedDay = time.preset === 'custom' && time.start && time.start === time.end ? time.start : undefined;
-  // The usual engines, plus any other the period has sessions for (Goose, say), plus the picked one.
-  const engineOptions = useMemo(() => {
-    const out = [...ENGINES];
-    for (const e of shown?.view === 'agents' ? shown.engines ?? [] : []) {
-      if (!out.some((o) => o.value === e.key)) out.push({ value: e.key, label: e.label });
-    }
-    if (!out.some((o) => o.value === engine)) out.push({ value: engine, label: engine });
-    return out;
-  }, [shown, engine]);
-  const scope = shown ? engineName(shown) : undefined;
-  // With one engine picked, every heading names it, so no list reads as the whole.
-  const heading = (h: string) => scope ? `${h} · ${scope}` : h;
 
   return (
     <SettingsSection
       id="usage"
       title="Usage & Costs"
-      description="What models cost, estimated from tokens at public list prices."
+      description="What models cost: Walnut itself and every coding agent, estimated from tokens at public list prices."
       actions={(
         <SettingsButton className="usage-refresh-btn" onClick={update} busy={updating || !!shown?.collection?.running} busyLabel="Updating...">
           Update now
@@ -112,20 +87,6 @@ export function UsageSection() {
       )}
     >
       <SettingsGroup>
-        <SettingsRow
-          label="Show"
-          help={VIEW_HELP[view]}
-          control={<SegmentedControl aria-label="Show" value={view} onChange={(v) => setView(v)}
-            options={VIEWS.map((v) => ({ value: v.value, label: v.label, testId: `usage-view-${v.value}` }))} />}
-        />
-        {view === 'agents' && (
-          <SettingsRow
-            label="Engine"
-            help={engine === 'all' ? 'Every coding engine added up. Pick one to see only its sessions.' : `Only ${engineOptions.find((o) => o.value === engine)?.label ?? engine} sessions are counted below.`}
-            control={<SegmentedControl aria-label="Engine" value={engine} onChange={(v) => setEngine(v)}
-              options={engineOptions.map((o) => ({ value: o.value, label: o.label, testId: `usage-engine-${o.value}` }))} />}
-          />
-        )}
         <SettingsRow
           label="Period"
           control={
@@ -147,29 +108,80 @@ export function UsageSection() {
       {!shown ? (
         <SettingsGroup><SettingsLoadingRow>Loading usage...</SettingsLoadingRow></SettingsGroup>
       ) : (
-        <div aria-busy={loading || undefined} data-testid="usage-costs" data-view={shown.view} data-engine={shown.engine ?? 'all'}>
-          <Headline report={shown} />
+        <div aria-busy={loading || undefined} data-testid="usage-costs" data-view={shown.view} data-breakdown={breakdown}>
+          <Headline report={shown} days={days} />
           {shown.totals.requests === 0 ? (
-            <SettingsGroup><SettingsEmpty>{scope ? `No ${scope} sessions in this period.` : 'No model calls in this period.'}</SettingsEmpty></SettingsGroup>
+            <SettingsGroup><SettingsEmpty>No model calls in this period.</SettingsEmpty></SettingsGroup>
           ) : (
             <>
-              <SettingsGroup heading={heading('By day')}>
-                <div className="settings-row settings-row-stacked usage-chart-section" data-wide="true">
-                  <UsageDailyChart data={chartDays(shown, range)} loading={loading} selectedDate={chartSelectedDay}
-                    onSelectDay={(date) => {
-                      if (chartSelectedDay === date) setTime({ preset: '7d' });
-                      else setTime({ preset: 'custom', start: date, end: date });
-                    }} />
-                </div>
-              </SettingsGroup>
-              {shown.view === 'agents' && <TaskList report={shown} heading={heading('By task')} />}
-              {shown.groups.map((group) => <LineGroup key={group.id} id={group.id} heading={heading(group.heading)} lines={group.lines} total={shown.totals.costUsd} />)}
+              <BreakdownCard report={shown} days={days} breakdown={breakdown} onBreakdown={setBreakdown} loading={loading}
+                onPick={(b) => setTime(time.preset === 'custom' && time.start === b.start && time.end === b.end
+                  ? { preset: '30d' } : { preset: 'custom', start: b.start, end: b.end })} />
+              <TaskList report={shown} heading="Most expensive tasks" />
             </>
           )}
           <HowCounted report={shown} />
         </div>
       )}
     </SettingsSection>
+  );
+}
+
+function BreakdownCard({ report, days, breakdown, onBreakdown, loading, onPick }: {
+  report: CostReport; days: string[]; breakdown: BreakdownId;
+  onBreakdown: (b: BreakdownId) => void; loading: boolean; onPick: (b: Bucket) => void;
+}) {
+  const hostName = useHostDisplayLabels();
+  const [open, setOpen] = useState(false);
+  const data = useMemo(() => buildBreakdown(report.groups.find((g) => g.id === breakdown), days,
+    (line) => breakdown === 'host' ? hostName(line.key) : line.label), [report, breakdown, days, hostName]);
+  const noun = BREAKDOWNS.find((b) => b.value === breakdown)!.noun;
+  const rows = open ? data.rows : data.rows.slice(0, VISIBLE);
+  const hidden = data.rows.length - rows.length;
+  // One day (Today) has no trend to draw.
+  const trend = data.buckets.length > 1;
+  return (
+    <SettingsGroup className="usage-bd" data-testid="usage-breakdown"
+      heading={data.byWeek ? 'Cost per week' : 'Cost per day'}
+      headingTrailing={(
+        <span className="usage-bd-switch">
+          <span className="usage-bd-switch-label">Break down by</span>
+          <SegmentedControl aria-label="Break down by" value={breakdown} onChange={(v) => { onBreakdown(v); setOpen(false); }}
+            options={BREAKDOWNS.map((b) => ({ value: b.value, label: b.label, testId: `usage-breakdown-${b.value}` }))} />
+        </span>
+      )}>
+      <div className="settings-row settings-row-stacked usage-bd-body" data-wide="true">
+        <UsageBreakdownChart data={data} loading={loading} onPick={onPick} />
+        <table className="usage-bd-table" data-testid={`usage-group-${breakdown}`}>
+          <thead>
+            <tr>
+              <th>{noun}</th>
+              <th className="num usage-bd-col-cost">Cost</th>
+              <th className="num usage-bd-col-share">Share</th>
+              <th className="num usage-bd-col-req usage-bd-req">Requests</th>
+              {trend && <th className="usage-bd-col-trend">{data.byWeek ? 'By week' : 'By day'}</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.line.key} className="usage-line" data-key={r.line.key}
+                title={`${volume(r.line.requests, totalTokens(r.line))}${r.line.unpriced ? ` · ${r.line.unpriced.toLocaleString('en-US')} without a price` : ''}`}>
+                <td><span className="usage-bd-name"><i className="usage-bd-swatch" style={{ background: r.color }} /><span>{r.label}</span></span></td>
+                <td className="num usage-line-cost">{money(r.line.costUsd)}</td>
+                <td className="num muted">{`${r.share.toFixed(r.share < 10 ? 1 : 0)}%`}</td>
+                <td className="num muted usage-bd-req">{r.line.requests.toLocaleString('en-US')}</td>
+                {trend && <td><UsageSparkline values={r.values} color={r.color} /></td>}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {hidden > 0 && (
+          <button type="button" className="usage-bd-more" onClick={() => setOpen(true)} data-testid="usage-breakdown-more">
+            {`${hidden} more · ${money(data.rows.slice(VISIBLE).reduce((n, r) => n + r.line.costUsd, 0))}`}
+          </button>
+        )}
+      </div>
+    </SettingsGroup>
   );
 }
 
@@ -185,20 +197,20 @@ export function unpricedNote(report: CostReport): string | undefined {
   return `Not in the total: ${parts.join('; ')}.`;
 }
 
-function Headline({ report }: { report: CostReport }) {
+function Headline({ report, days }: { report: CostReport; days: string[] }) {
   const t = report.totals;
-  const scope = engineName(report);
   const unpriced = unpricedNote(report);
+  const busiest = report.daily.reduce<CostReport['daily'][number] | undefined>((m, d) => (!m || d.costUsd > m.costUsd ? d : m), undefined);
+  const dayCount = Math.max(1, days.length);
   return (
     <SettingsGroup className="settings-addons-summary" data-testid="usage-summary">
-      {scope && <p className="usage-scope" data-testid="usage-scope">{`${scope} sessions only`}</p>}
       <div className="settings-addons-stats">
-        <Stat value={money(t.costUsd)} label={scope ? `${scope} cost` : 'Estimated cost'} testId="usage-total-cost" />
-        <Stat value={formatTokens(totalTokens(t))} label="Tokens" />
-        <Stat value={t.requests.toLocaleString('en-US')} label="Requests" />
+        <Stat value={money(t.costUsd)} label="Estimated cost" testId="usage-total-cost" />
+        <Stat value={money(t.costUsd / dayCount)} label="Average day" testId="usage-average-day" />
+        <Stat value={busiest && busiest.costUsd > 0 ? money(busiest.costUsd) : '-'} label={busiest && busiest.costUsd > 0 ? `Busiest day, ${dayLabel(busiest.date)}` : 'Busiest day'} />
       </div>
-      <p className="settings-addons-muted usage-headline-note">
-        {`In ${formatTokens(t.tokens.input)} · out ${formatTokens(t.tokens.output)} · cache read ${formatTokens(t.tokens.cacheRead)} · cache write ${formatTokens(t.tokens.cacheWrite)}.`}
+      <p className="settings-addons-muted usage-headline-note" data-testid="usage-volume">
+        {`${formatTokens(totalTokens(t))} tokens · ${count(t.requests, 'request')}: in ${formatTokens(t.tokens.input)} · out ${formatTokens(t.tokens.output)} · cache read ${formatTokens(t.tokens.cacheRead)} · cache write ${formatTokens(t.tokens.cacheWrite)}.`}
       </p>
       {unpriced && <p className="settings-addons-muted usage-headline-note" data-testid="usage-unpriced">{unpriced}</p>}
     </SettingsGroup>
@@ -223,23 +235,6 @@ function LineRow({ line, share, label, help, onOpen }: { line: CostLine; share?:
       help={help ?? `${volume(line.requests, totalTokens(line))}${share !== undefined ? ` · ${share.toFixed(share < 10 ? 1 : 0)}% of the cost` : ''}${line.unpriced ? ` · ${line.unpriced.toLocaleString('en-US')} without a price` : ''}`}
       control={onOpen ? <SettingsButton onClick={onOpen}>{amount}</SettingsButton> : amount}
     />
-  );
-}
-
-function LineGroup({ id, heading, lines, total }: { id: string; heading: string; lines: CostLine[]; total: number }) {
-  const hostName = useHostDisplayLabels();
-  if (!lines.length) return null;
-  const label = (line: CostLine) => id === 'host' ? hostName(line.key) : line.label;
-  const share = (line: CostLine) => total > 0 ? line.costUsd / total * 100 : undefined;
-  const head = lines.slice(0, VISIBLE), rest = lines.slice(VISIBLE);
-  return (
-    <SettingsGroup heading={heading} data-testid={`usage-group-${id}`}>
-      {head.map((line) => <LineRow key={line.key} line={line} label={label(line)} share={share(line)} />)}
-      {rest.length > 0 && <details className="usage-more">
-        <summary>{`${rest.length} more · ${money(rest.reduce((n, l) => n + l.costUsd, 0))}`}</summary>
-        {rest.map((line) => <LineRow key={line.key} line={line} label={label(line)} share={share(line)} />)}
-      </details>}
-    </SettingsGroup>
   );
 }
 
@@ -272,9 +267,7 @@ function HowCounted({ report }: { report: CostReport }) {
       <summary>How this is counted</summary>
       <SettingsGroup>
         <SettingsRow label="Prices" help={`Each request's tokens at the model's public list price${report.prices.source === 'litellm' ? ' (LiteLLM price list' : ' (built-in price list'}${asOf ? `, ${asOf})` : ')'}, at its prompt-size rate. An estimate, not a bill: discounts, credits and taxes are not known here.`} />
-        {report.view === 'agents'
-          ? <SettingsRow label="Sources" help="Claude Code: each host's transcripts, every response counted once. Codex and OpenCode: their own session records." />
-          : <SettingsRow label="Sources" help="The Personal AI's chat from its transcripts; every other call as Walnut records it. The speech model runs on this Mac and costs nothing." />}
+        <SettingsRow label="Sources" help="Claude Code: each host's transcripts, every response counted once. Codex and OpenCode: their own session records. Walnut: the Personal AI's chat from its transcripts, every other call as Walnut records it; the speech model runs on this Mac and costs nothing." />
         <SettingsRow label="Up to date" help={report.countedUntil.length
           ? report.countedUntil.map((u) => `${hostName(u.host)}: ${u.until ? new Date(u.until).toLocaleString('en-US') : 'not read yet'}`).join(' · ')
           : 'Nothing read yet. Update now reads every host.'} />
@@ -285,21 +278,4 @@ function HowCounted({ report }: { report: CostReport }) {
       </SettingsGroup>
     </details>
   );
-}
-
-/** One bar per day of the period, empty days included, in the chart's shape (the newest 400 days at most). */
-function chartDays(report: CostReport, range: { start?: string; end?: string }): DailyCost[] {
-  const byDate = new Map(report.daily.map((d) => [d.date, d]));
-  const start = range.start ?? report.bounds.min ?? report.daily[0]?.date;
-  const end = range.end ?? report.daily[report.daily.length - 1]?.date ?? start;
-  const out: DailyCost[] = [];
-  if (start && end) {
-    const stop = Date.parse(`${end}T00:00:00Z`);
-    for (let t = Math.max(Date.parse(`${start}T00:00:00Z`), stop - 399 * 86_400_000); t <= stop; t += 86_400_000) {
-      const date = new Date(t).toISOString().slice(0, 10);
-      const d = byDate.get(date);
-      out.push({ date, cost_usd: d?.costUsd ?? 0, api_calls: d?.requests ?? 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0 });
-    }
-  }
-  return out.length ? out : report.daily.map((d) => ({ date: d.date, cost_usd: d.costUsd, api_calls: d.requests, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0 }));
 }

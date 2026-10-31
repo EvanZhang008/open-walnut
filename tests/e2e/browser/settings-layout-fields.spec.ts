@@ -178,7 +178,6 @@ test('F12: Usage Refresh keeps its x when the header turns compact', async ({ pa
   const refresh = page.locator('.usage-refresh-btn')
   await expect(refresh.first()).toBeVisible()
   // Scroll only once the mocked rows are in, or the pane is too short to scroll.
-  await page.getByTestId('usage-view-agents').click()
   await expect(page.getByTestId('usage-group-task').locator('.usage-line:visible')).toHaveCount(25)
   const before = await refresh.first().evaluate((b) => Math.round(b.getBoundingClientRect().right))
   await page.locator('.settings-pane').evaluate((el) => { el.scrollTop = el.scrollHeight })

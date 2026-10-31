@@ -250,7 +250,6 @@ test('F10 F11 F12: Usage rows are one line each, dash free, one scroller', async
   await openSettings(page)
   await clickNav(page, 'usage')
   const pane = page.locator('.settings-pane')
-  await page.getByTestId('usage-view-agents').click()
   await expect(pane.getByTestId('usage-group-task').locator('.usage-line:visible')).toHaveCount(25)
   const audit = await pane.evaluate((el) => {
     const out: string[] = []

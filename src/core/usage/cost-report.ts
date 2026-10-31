@@ -7,6 +7,10 @@
  * - `agents`: coding sessions (Claude Code from each host's transcripts, Codex
  *   and OpenCode from their own session records), by engine, model, host,
  *   project and task; optionally for one engine only.
+ * - `all`: both added up, the page's default: by agent (each engine, and Walnut
+ *   as one more), model, project (Walnut's own calls as "Walnut itself") and host.
+ *
+ * Every breakdown also carries its lines per day, so a chart can stack them.
  *
  * Every amount is tokens x public list prices, priced per request band with the
  * same price book and `priceBucket` as the model picker's cost line, so the two
@@ -20,7 +24,7 @@ import type { SessionCostBucket } from '../../providers/session-cost-core.js';
 import type { CostRollup } from './cost-rollup.js';
 import type { Database as DatabaseType } from '../../lib/sqlite.js';
 
-export type CostView = 'walnut' | 'agents';
+export type CostView = 'walnut' | 'agents' | 'all';
 
 export interface CostTokens { input: number; output: number; cacheRead: number; cacheWrite: number }
 export interface CostLine { key: string; label: string; costUsd: number; requests: number; tokens: CostTokens; unpriced: number }
@@ -29,6 +33,9 @@ export interface CostTaskLine extends CostLine { taskId?: string; sessionId?: st
 /** Requests no price could be put on, by model and where they came from (a feature or an engine). */
 export interface CostUnpriced { model: string; where: string; requests: number }
 export interface CostFold { count: number; costUsd: number; requests: number; tokens: number }
+
+/** A breakdown: its lines by cost, and per day the cost of each line that had any (keyed by line key). */
+export interface CostGroup { id: string; heading: string; lines: CostLine[]; daily: { date: string; costs: Record<string, number> }[] }
 
 export interface CostReport {
   view: CostView;
@@ -39,8 +46,8 @@ export interface CostReport {
   engines: { key: string; label: string }[];
   totals: CostLine;
   daily: { date: string; costUsd: number; requests: number }[];
-  groups: { id: string; heading: string; lines: CostLine[] }[];
-  /** Agents only: tasks by cost, short sessions folded into `shortSessions`. */
+  groups: CostGroup[];
+  /** Agents and all: tasks by cost, short sessions folded into `shortSessions`. */
   tasks?: CostTaskLine[];
   moreTasks?: CostFold;
   shortSessions?: CostFold & { lines: CostTaskLine[] };
@@ -234,13 +241,17 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
   const pricer = new CostPricer(thresholds, deps.overrides);
   const totals = emptyLine('total', 'Total');
   const daily = new Map<string, { date: string; costUsd: number; requests: number }>();
-  const addDay = (date: string, p: Priced) => {
+  const groups = new Map<string, GroupAcc>();
+  const group = (id: string, heading: string) => {
+    const g = groups.get(id) ?? new GroupAcc(id, heading);
+    groups.set(id, g); return g;
+  };
+  /** One priced row: into the total, its day, and each group it names. */
+  const count = (date: string, p: Priced, into: [GroupAcc, string, string][]) => {
+    addPriced(totals, p);
     const d = daily.get(date) ?? { date, costUsd: 0, requests: 0 };
     d.costUsd += p.costUsd; d.requests += p.requests; daily.set(date, d);
-  };
-  const bump = (map: Map<string, CostLine>, key: string, label: string, p: Priced) => {
-    const line = map.get(key) ?? emptyLine(key, label);
-    addPriced(line, p); map.set(key, line);
+    for (const [g, key, label] of into) g.add(key, label, date, p);
   };
   const unpriced = new Map<string, CostUnpriced>();
   /** Names what could not be priced and where it came from, so the page can say why. */
@@ -253,13 +264,27 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
   const engine = view === 'agents' && range.engine && ENGINE_KEY.test(range.engine) ? range.engine : null;
   const report: CostReport = { view, range: { start: range.start ?? null, end: range.end ?? null }, engine, engines: [], totals, daily: [],
     groups: [], unpricedModels: [], unpriced: [], prices: priceBookInfo(), ready };
+  const all = view === 'all';
+  // The whole picture names each model once, as it is priced: an alias row joins its model.
+  const modelLine = (raw: string): [string, string] => {
+    if (!all) return [raw, pricer.label(raw)];
+    const m = shortModel(pricer.resolve(raw));
+    return [m, m];
+  };
 
-  if (view === 'walnut') {
-    const byFeature = new Map<string, CostLine>(), byModel = new Map<string, CostLine>();
-    for (const r of deps.rollup.query({ start: range.start, end: range.end, sources: ['chat'], by: ['date'] })) {
+  if (view === 'walnut' || all) {
+    const byFeature = group('feature', 'By feature'), byModel = group('model', 'By model');
+    const byAgent = group('agent', 'By agent'), byProject = group('project', 'By project'), byHost = group('host', 'By host');
+    const walnutInto = (model: string, feature: string, featureName: string, host: string): [GroupAcc, string, string][] => {
+      const [mk, ml] = modelLine(model);
+      return all
+        ? [[byAgent, WALNUT_KEY, 'Walnut'], [byModel, mk, ml], [byProject, WALNUT_PROJECT_KEY, WALNUT_PROJECT], [byHost, host, host], [byFeature, feature, featureName]]
+        : [[byFeature, feature, featureName], [byModel, mk, ml]];
+    };
+    for (const r of deps.rollup.query({ start: range.start, end: range.end, sources: ['chat'], by: ['date', 'host'] })) {
       const p = pricer.price(r.model, r.band, { ...r, requests: r.calls });
-      addPriced(totals, p); addDay(r.date, p); noteUnpriced(r.model, featureLabel('chat'), p);
-      bump(byFeature, 'chat', featureLabel('chat'), p); bump(byModel, r.model, pricer.label(r.model), p);
+      noteUnpriced(r.model, featureLabel('chat'), p);
+      count(r.date, p, walnutInto(r.model, 'chat', featureLabel('chat'), r.host as string));
     }
     for (const r of trackerRows(deps.db, thresholds, range.start, range.end, deps.timeZone)) {
       let p = pricer.price(r.model, r.band, r, r.recorded > 0);
@@ -268,55 +293,52 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
       const aliased = pricer.resolve(r.model) !== r.model;
       if ((p.unpriced || aliased) && r.recorded > 0) p = { ...p, costUsd: r.recorded, unpriced: 0 };
       else if (r.costOnly > 0) p = { ...p, costUsd: p.costUsd + r.costOnly, unpriced: 0 };
-      addPriced(totals, p); addDay(r.date, p); noteUnpriced(r.model, featureLabel(r.source, r.agent), p);
+      noteUnpriced(r.model, featureLabel(r.source, r.agent), p);
       const feature = r.source === 'plugin' && r.agent?.startsWith('plugin:') ? `plugin:${r.agent}` : r.source;
-      bump(byFeature, feature, featureLabel(r.source, r.agent), p); bump(byModel, r.model, pricer.label(r.model), p);
+      // Walnut's own helper calls run in this server, on the machine it serves from.
+      count(r.date, p, walnutInto(r.model, feature, featureLabel(r.source, r.agent), LOCAL_HOST));
     }
-    report.groups = [
-      { id: 'feature', heading: 'By feature', lines: sorted(byFeature.values()) },
-      { id: 'model', heading: 'By model', lines: sorted(byModel.values()) },
-    ];
-  } else {
-    const all = deps.rollup.query({ start: range.start, end: range.end, sources: ['session'], by: ['date', 'engine', 'host', 'session', 'task'] });
+  }
+  if (view === 'agents' || all) {
+    const rows0 = deps.rollup.query({ start: range.start, end: range.end, sources: ['session'], by: ['date', 'engine', 'host', 'session', 'task'] });
     // The engines offered are the period's, so picking one never hides the others from the choice.
     const seen = new Map<string, number>();
-    for (const r of all) seen.set(r.engine, (seen.get(r.engine) ?? 0) + r.calls);
+    for (const r of rows0) seen.set(r.engine, (seen.get(r.engine) ?? 0) + r.calls);
     report.engines = [...seen].sort((a, b) => b[1] - a[1]).map(([key]) => ({ key, label: engineLabel(key) }));
-    const rows = engine ? all.filter(r => r.engine === engine) : all;
+    const rows = engine ? rows0.filter(r => r.engine === engine) : rows0;
     const sessions = await deps.sessions();
-    const perTask = new Map<string, { taskId?: string; sessionId: string; lineKey: string; hosts: Set<string>; engines: Set<string>; priced: CostLine }>();
-    const byEngine = new Map<string, CostLine>(), byModel = new Map<string, CostLine>(), byHost = new Map<string, CostLine>();
+    const perTask = new Map<string, { taskId?: string; sessionId: string; lineKey: string; hosts: Set<string>; engines: Set<string>;
+      priced: CostLine; days: Map<string, Priced[]> }>();
+    const byEngine = group(all ? 'agent' : 'engine', all ? 'By agent' : 'By engine'), byModel = group('model', 'By model');
+    const byHost = group('host', 'By host');
     for (const r of rows) {
       const p = pricer.price(r.model, r.band, { ...r, requests: r.calls });
-      addPriced(totals, p); addDay(r.date, p); noteUnpriced(r.model, engineLabel(r.engine), p);
+      noteUnpriced(r.model, engineLabel(r.engine), p);
+      const [mk, ml] = modelLine(r.model);
+      count(r.date, p, [[byEngine, r.engine, engineLabel(r.engine)], [byModel, mk, ml], [byHost, r.host, r.host]]);
       const session = sessions.get(r.sessionId as string);
-      bump(byEngine, r.engine, engineLabel(r.engine), p);
-      bump(byModel, r.model, pricer.label(r.model), p);
-      bump(byHost, r.host, r.host, p);
       const taskId = (r.taskId as string | null) ?? session?.taskId ?? undefined;
       const lineKey = taskId ? `task:${taskId}` : `session:${r.sessionId}`;
       // The line opens the first session seen for it (a task may have several).
       const t = perTask.get(lineKey) ?? { taskId, sessionId: r.sessionId as string, lineKey,
-        hosts: new Set<string>(), engines: new Set<string>(), priced: emptyLine(lineKey, '') };
+        hosts: new Set<string>(), engines: new Set<string>(), priced: emptyLine(lineKey, ''), days: new Map<string, Priced[]>() };
       t.hosts.add(r.host); t.engines.add(r.engine); addPriced(t.priced, p);
+      const day = t.days.get(r.date) ?? [];
+      day.push(p); t.days.set(r.date, day);
       perTask.set(lineKey, t);
     }
     const tasks = await deps.tasks([...perTask.values()].flatMap(t => t.taskId ? [t.taskId] : []));
-    const byProject = new Map<string, CostLine>();
+    const byProject = group('project', 'By project');
     const lines: CostTaskLine[] = [...perTask.values()].map(t => {
       const task = t.taskId ? tasks.get(t.taskId) : undefined;
       const session = !task && t.sessionId ? sessions.get(t.sessionId) : undefined;
       const project = task?.project ?? session?.project ?? '';
       const title = oneLine(task?.title || session?.title || (t.taskId ? 'Removed task' : 'Session without a task'));
+      // A project is known only once its task is read, so its days come from the task's.
+      for (const [date, priced] of t.days) for (const p of priced) byProject.add(project, project || 'Inbox', date, p);
       return { ...t.priced, key: t.lineKey, label: title, project, hosts: [...t.hosts], engines: [...t.engines].map(engineLabel),
         ...(t.taskId ? { taskId: t.taskId } : {}), ...(t.sessionId ? { sessionId: t.sessionId } : {}) };
     });
-    for (const line of lines) {
-      const project = byProject.get(line.project) ?? emptyLine(line.project, line.project || 'Inbox');
-      project.costUsd += line.costUsd; project.requests += line.requests; project.unpriced += line.unpriced;
-      for (const k of Object.keys(project.tokens) as (keyof CostTokens)[]) project.tokens[k] += line.tokens[k];
-      byProject.set(line.project, project);
-    }
     const ordered = lines.sort((a, b) => b.costUsd - a.costUsd || b.requests - a.requests);
     const short = ordered.filter(l => l.requests <= SHORT_REQUESTS && l.costUsd < SHORT_USD);
     const kept = ordered.filter(l => !(l.requests <= SHORT_REQUESTS && l.costUsd < SHORT_USD));
@@ -324,19 +346,48 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
     const rest = kept.slice(TOP_TASKS);
     if (rest.length) report.moreTasks = fold(rest);
     if (short.length) report.shortSessions = { ...fold(short), lines: short.slice(0, 50) };
-    report.groups = [
-      // One engine picked: its "By engine" would be one row saying the total again.
-      ...(engine ? [] : [{ id: 'engine', heading: 'By engine', lines: sorted(byEngine.values()) }]),
-      { id: 'model', heading: 'By model', lines: sorted(byModel.values()) },
-      { id: 'host', heading: 'By host', lines: sorted(byHost.values()) },
-      { id: 'project', heading: 'By project', lines: sorted(byProject.values()) },
-    ];
   }
+  const order = all ? ['agent', 'model', 'project', 'host', 'feature']
+    : view === 'walnut' ? ['feature', 'model']
+    // One engine picked: its "By engine" would be one row saying the total again.
+    : [...(engine ? [] : ['engine']), 'model', 'host', 'project'];
+  report.groups = order.flatMap(id => groups.get(id) ? [groups.get(id)!.result()] : []);
   report.daily = [...daily.values()].sort((a, b) => a.date.localeCompare(b.date));
   report.unpricedModels = [...pricer.unpricedModels].sort();
   report.unpriced = [...unpriced.values()].sort((a, b) => b.requests - a.requests);
   return report;
 }
+
+const WALNUT_KEY = 'walnut';
+const WALNUT_PROJECT = 'Walnut itself';
+/** Not a name a project can have, so a project called "walnut" never joins Walnut's own calls. */
+const WALNUT_PROJECT_KEY = '__walnut__';
+const LOCAL_HOST = '__local__';
+
+/** A provider's routing prefix ("global.anthropic.") is not part of the model's name. */
+export function shortModel(model: string): string {
+  return model.replace(/^(?:[a-z]{2,6}\.)?(?:anthropic|openai|meta|amazon|mistral|deepseek|qwen|google)\./i, '');
+}
+
+/** One breakdown: its lines and, per day, each line's cost. */
+class GroupAcc {
+  private lines = new Map<string, CostLine>();
+  private days = new Map<string, Map<string, number>>();
+  constructor(readonly id: string, readonly heading: string) {}
+  add(key: string, label: string, date: string, p: Priced): void {
+    const line = this.lines.get(key) ?? emptyLine(key, label);
+    addPriced(line, p); this.lines.set(key, line);
+    const day = this.days.get(date) ?? new Map<string, number>();
+    day.set(key, (day.get(key) ?? 0) + p.costUsd); this.days.set(date, day);
+  }
+  result(): CostGroup {
+    const daily = [...this.days].sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, costs]) => ({ date, costs: Object.fromEntries([...costs].filter(([, v]) => v > 0).map(([k, v]) => [k, round6(v)])) }));
+    return { id: this.id, heading: this.heading, lines: sorted(this.lines.values()), daily };
+  }
+}
+
+function round6(v: number): number { return Math.round(v * 1e6) / 1e6; }
 
 function fold(rows: CostLine[]): CostFold {
   return { count: rows.length, costUsd: rows.reduce((n, r) => n + r.costUsd, 0), requests: rows.reduce((n, r) => n + r.requests, 0),

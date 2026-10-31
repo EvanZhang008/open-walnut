@@ -65,6 +65,17 @@ describe('reconciled usage through the real server', () => {
     expect(walnut.totals.requests).toBe(0);
     const dated = await get(`/api/usage/costs?view=agents&start=2000-01-01&end=2000-01-02`);
     expect(dated.totals.requests).toBe(0);
+    // The page's whole picture: the agents and Walnut together, every breakdown per day.
+    const whole = await get('/api/usage/costs?view=all');
+    expect(whole.view).toBe('all');
+    expect(whole.totals.costUsd).toBeCloseTo(0.0024, 8);
+    expect(whole.groups.map((g: { id: string }) => g.id)).toEqual(['agent', 'model', 'project', 'host', 'feature']);
+    for (const id of ['agent', 'model', 'project', 'host']) {
+      const g = whole.groups.find((x: { id: string }) => x.id === id);
+      const days = g.daily.reduce((n: number, d: { costs: Record<string, number> }) => n + Object.values(d.costs).reduce((a, b) => a + b, 0), 0);
+      expect(days).toBeCloseTo(0.0024, 6);
+    }
+    expect((await get('/api/usage/costs?view=all&engine=codex')).totals.requests).toBe(3);
   });
   it('counts one coding engine when the page asks for it', async () => {
     const all = await get('/api/usage/costs?view=agents&engine=all');
