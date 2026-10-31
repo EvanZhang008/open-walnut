@@ -122,6 +122,8 @@ const INDIRECT_SIGNAL_BUDGET: Record<string, number> = {
   'src/web/terminal/dtach-lifecycle.ts': 1,
   // `pkill -f " -A <runtimeDir>/term/walnut-"`: the dtach masters of an ephemeral server whose runtime dir is being deleted
   'src/commands/ephemeral-registry.ts': 1,
+  // the pattern-kill guard's own text: the awk that recognises pkill/killall and the refusal it prints; it signals nothing
+  'src/providers/pattern-kill-guard-hook.ts': 4,
 };
 
 const RAW_HELPERS = new Set(['safeKillProcessGroup', 'killProcessGroup', 'signalProcessGroup']);

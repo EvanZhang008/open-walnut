@@ -12,7 +12,7 @@ import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import { guardedPath } from '../setup/exec-guard.js'
-import { PATTERN_KILL_GUARD_COMMAND, patternKillGuardHooks } from '../../src/providers/pattern-kill-guard-hook.js'
+import { PATTERN_KILL_GUARD_COMMAND, patternSignalGuardHooks } from '../../src/providers/pattern-kill-guard-hook.js'
 
 const SHELLS = ['/bin/sh', '/bin/bash', '/bin/dash', '/usr/bin/dash', '/bin/zsh'].filter((s) => fs.existsSync(s))
 
@@ -148,11 +148,11 @@ describe.each(SHELLS)('pattern kill guard under %s', (shell) => {
   })
 })
 
-describe('patternKillGuardHooks', () => {
+describe('patternSignalGuardHooks', () => {
   it('is a PreToolUse Bash hook, off with WALNUT_PATTERN_KILL_GUARD=0', () => {
-    expect(patternKillGuardHooks({})).toEqual({
+    expect(patternSignalGuardHooks({})).toEqual({
       PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: PATTERN_KILL_GUARD_COMMAND, timeout: 10 }] }],
     })
-    expect(patternKillGuardHooks({ WALNUT_PATTERN_KILL_GUARD: '0' })).toBeNull()
+    expect(patternSignalGuardHooks({ WALNUT_PATTERN_KILL_GUARD: '0' })).toBeNull()
   })
 })

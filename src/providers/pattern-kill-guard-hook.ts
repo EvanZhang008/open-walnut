@@ -226,7 +226,7 @@ export const PATTERN_KILL_GUARD_COMMAND = [
 
 const HOOK_TIMEOUT_SECS = 10
 
-export function patternKillGuardHooks(env: NodeJS.ProcessEnv = process.env): Record<string, unknown> | null {
+export function patternSignalGuardHooks(env: NodeJS.ProcessEnv = process.env): Record<string, unknown> | null {
   if (env.WALNUT_PATTERN_KILL_GUARD === '0') return null
   return {
     PreToolUse: [{

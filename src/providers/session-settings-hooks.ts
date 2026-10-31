@@ -10,12 +10,12 @@ import { tmpWriteNoteHooks } from './tmp-write-note-hook.js'
 import { cloneIdentityHooks } from './clone-identity-hook.js'
 import { stopUnansweredHooks } from './stop-unanswered-hook.js'
 import { shellDollarGuardHooks } from './shell-dollar-guard-hook.js'
-import { patternKillGuardHooks } from './pattern-kill-guard-hook.js'
+import { patternSignalGuardHooks } from './pattern-kill-guard-hook.js'
 
 export function sessionSettingsHooks(env: NodeJS.ProcessEnv = process.env): Record<string, unknown> | null {
   const hooks: Record<string, unknown[]> = {}
   // Concatenate per event, so two sources on the same event never drop one.
-  for (const part of [compactOpenItemsHooks(env), gitTmpGuardHooks(env), tmpWriteNoteHooks(env), cloneIdentityHooks(env), shellDollarGuardHooks(env), patternKillGuardHooks(env), stopUnansweredHooks(env)]) {
+  for (const part of [compactOpenItemsHooks(env), gitTmpGuardHooks(env), tmpWriteNoteHooks(env), cloneIdentityHooks(env), shellDollarGuardHooks(env), patternSignalGuardHooks(env), stopUnansweredHooks(env)]) {
     for (const [event, groups] of Object.entries(part ?? {})) hooks[event] = [...(hooks[event] ?? []), ...(groups as unknown[])]
   }
   return Object.keys(hooks).length > 0 ? hooks : null
