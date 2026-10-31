@@ -287,6 +287,11 @@ export function initLetterPush(): void {
     if (event.name !== EventNames.HUMAN_INBOX_LETTER) return
     try {
       const data = eventData<typeof EventNames.HUMAN_INBOX_LETTER>(event)
+      // The user's away thread already buzzed and is still unread: one buzz per absence (away-thread.ts).
+      if (data.quiet) {
+        log.notif.info('letter push', { letterId: data.letterId, kind: data.kind, outcome: 'quiet', reason: 'away thread unread' })
+        return
+      }
       // Envelope only. `textPreview` is capped at 300 chars at write time; the
       // document body never rides a push (it stays behind
       // GET /api/v1/human-inbox/:id).

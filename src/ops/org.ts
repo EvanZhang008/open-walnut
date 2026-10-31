@@ -192,3 +192,36 @@ defineOp({
   routes: [{ method: 'PUT', path: '/org/nodes/:id' }, { method: 'PUT', path: '/org/projects/:project/vp' }],
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
+
+// The report the user asks Main or a lead for (2026-10-31: "give me a report tomorrow morning"):
+// src/core/org/morning-report.ts, POST /api/v1/org/report.
+defineOp({
+  name: 'org_report',
+  title: 'The user\'s report: what needs him, what finished, what moved',
+  description:
+    'Main\'s or a lead\'s report for the user, built from Walnut\'s live record: what needs him (each with the one-tap '
+    + 'way to answer: its decision letter, or its options), what finished and what moved since a time, and your Brief. '
+    + 'Alone it returns the report; send:true sends it to his inbox now; at schedules it ("08:00" = the next time the '
+    + 'clock reads it, an ISO time, or "8h"), and Walnut sends it then by itself, covering everything since you asked. '
+    + 'Use at when he asks for a report at a time ("give me a report tomorrow morning"); one per node, a new time '
+    + 'replaces the old. It is a letter he asked for, so it is never refused as a report.',
+  input: {
+    at: z.string().optional().describe('When to send it: "HH:MM" (server clock), an ISO time, or a duration like "8h"'),
+    send: z.boolean().optional().describe('Send it to the user\'s inbox now'),
+    since: z.string().optional().describe('What counts as moved: an ISO time or a duration back like "12h" (default 12h; for `at`, the time you asked)'),
+    of: z.string().optional().describe('Task id of Main or a lead; default your own task'),
+  },
+  handler: async (args, call) => {
+    const body = await call('POST', '/org/report', args) as {
+      report?: { subject?: string; markdown?: string }; letterId?: string; scheduledAt?: string; since?: string;
+    };
+    if (body?.scheduledAt) {
+      return withOutcome(body, `Scheduled: Walnut sends the report at ${body.scheduledAt}, covering everything since ${body.since}.`,
+        'Nothing to do until then; it needs no turn of yours.');
+    }
+    if (body?.letterId) return withOutcome(body, `Sent to the user's inbox (${body.letterId}).`, 'His answers in its thread come to this session.');
+    return withOutcome(body ?? {}, body?.report?.subject ?? 'Report built.', 'send:true sends it; at schedules it.');
+  },
+  routes: [{ method: 'POST', path: '/org/report' }],
+  tags: { readonly: false, remote: 'allow', primaryOnly: true },
+});

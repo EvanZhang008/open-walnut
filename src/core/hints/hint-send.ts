@@ -22,6 +22,7 @@ import { composeHinted, parseHinted, renderHintBlock, splitHinted, type CarriedH
 import { effectiveHints, hintApplies, needsTaskForAudience, type EffectiveHint, type HintTarget } from './hint-registry.js';
 import { dueReasons } from './hint-schedule.js';
 import { hookStatementVoid } from '../sessions/hook-statement.js';
+import type { AwayState } from '../org/user-away.js';
 
 type HintRecord = Pick<SessionRecord, 'output_mode' | 'output_mode_injected' | 'hintState' | 'lastCompactUuid' | 'lastCompactAt'>
   & Partial<Pick<SessionRecord, 'claudeSessionId' | 'taskId'>>;
@@ -98,6 +99,10 @@ export function planHints(input: {
   afterCompaction?: boolean;
   /** Who wrote this message; absent = not a person (a host's peer note). */
   sentBy?: 'person' | 'agent';
+  /** Main's or a lead's chat: the user's presence there (org/user-away.ts). */
+  away?: { away: boolean; lastSeenAt: number | null } | null;
+  /** A person typed this message into the chat (not a letter's answer): he is in it. */
+  inChat?: boolean;
 }): HintPlan {
   const state = seededState(input.record);
   const send = state.sends + 1;
@@ -106,7 +111,12 @@ export function planHints(input: {
     if (!hint.enabled || input.skip?.has(hint.kind) || !hintApplies(hint, input.target)) continue;
     const request = input.requested?.[hint.kind];
     const told = input.afterCompaction ? undefined : toldHere(hint, state.told[hint.kind], input.record);
-    const content = { config: input.config, record: input.record ?? null, ...(request ? { request } : {}), ...(told ? { toldHash: told.hash } : {}) };
+    // A message he typed into this chat is the user in it, whatever the clock says.
+    const away = input.inChat && input.away ? { away: false, lastSeenAt: Date.now() } : input.away;
+    const content = {
+      config: input.config, record: input.record ?? null, ...(request ? { request } : {}), ...(told ? { toldHash: told.hash } : {}),
+      ...(away ? { away } : {}),
+    };
     const identity = hint.identity(content);
     if (identity === null) continue;
     let reasons = input.afterCompaction
@@ -177,13 +187,18 @@ export async function writeHintState(
   }
 }
 
-async function targetFor(sessionId: string, record: HintRecord | null | undefined, hints: readonly EffectiveHint[]): Promise<HintTarget> {
-  if (!record?.taskId || !needsTaskForAudience(hints)) return { sessionId };
+async function targetFor(sessionId: string, record: HintRecord | null | undefined, hints: readonly EffectiveHint[]): Promise<{ target: HintTarget; away: AwayState | null }> {
+  if (!record?.taskId || !needsTaskForAudience(hints)) return { target: { sessionId }, away: null };
   try {
     const { listTasksByIds } = await import('../task-manager.js');
-    return hintTargetOf(sessionId, (await listTasksByIds([record.taskId]))[0]);
+    const task = (await listTasksByIds([record.taskId]))[0];
+    const target = hintTargetOf(sessionId, task);
+    // Only Main and the leads hear whether the user is in their chat (hint user-away).
+    const wantsAway = (target.role === 'main' || target.role === 'lead') && hints.some((h) => h.kind === 'user-away' && h.enabled);
+    const away = wantsAway ? await import('../org/user-away.js').then((m) => m.userAwayFrom(task)).catch(() => null) : null;
+    return { target, away };
   } catch {
-    return { sessionId };
+    return { target: { sessionId }, away: null };
   }
 }
 
@@ -207,6 +222,8 @@ export interface HintSendOptions {
   config?: HintConfig;
   /** A person typed it (drift is judged only on replies to a person). */
   sentBy?: 'person' | 'agent';
+  /** Typed into the chat itself; default: sentBy is a person. False for a letter's answer. */
+  inChat?: boolean;
   /**
    * The exact blocks an upstream sender may already have composed into `message`
    * (the companion adds the voice block before it relays a phone send). Those are
@@ -252,12 +269,12 @@ export async function prepareHintedSend(
   try {
     const config = opts.config !== undefined ? opts.config : await import('../config-manager.js').then((m) => m.getConfig()).catch(() => null);
     const hints = effectiveHints(config);
-    const target = await targetFor(sessionId, record, hints);
+    const { target, away } = await targetFor(sessionId, record, hints);
     // A message composed upstream (the companion's voice hint) keeps those blocks.
     const upstream = opts.upstreamBlocks?.length ? splitHinted(message, opts.upstreamBlocks) : null;
     const words = upstream ? upstream.text : message;
     const plan = planHints({
-      hints, target, record, config,
+      hints, target, record, config, away, inChat: opts.inChat ?? opts.sentBy === 'person',
       ...(opts.requested ? { requested: opts.requested } : {}),
       ...(upstream ? { skip: new Set(upstream.kinds) } : {}),
       ...(opts.sentBy ? { sentBy: opts.sentBy } : {}),
@@ -323,8 +340,10 @@ export async function prepareQueuedHintedSend(
     const record = await getSessionByClaudeId(sessionId);
     if (!record) return escapedOnly(message);
     const { queueSentBy } = await import('../sessions/send-sent-by.js');
+    const { isChatSendSource } = await import('../phase.js');
     return await prepareHintedSend(sessionId, record, message, {
       sentBy: queueSentBy(source) ?? 'agent',
+      inChat: isChatSendSource(source),
       ...(source === 'wait-until' ? { emptyBodyLine: WAIT_WAKE_EMPTY_LINE } : {}),
     });
   } catch {
@@ -348,8 +367,13 @@ export async function stateHintsAfterCompaction(
   try {
     const cfg = config !== undefined ? config : await import('../config-manager.js').then((m) => m.getConfig()).catch(() => null);
     const hints = effectiveHints(cfg).filter((h) => h.triggers.includes('after_compaction'));
+    const target = hintTargetOf(record.claudeSessionId, task);
+    // An away note a compaction may have dropped is restated while he is still away.
+    const away = record.taskId && (target.role === 'main' || target.role === 'lead') && hints.some((h) => h.kind === 'user-away' && h.enabled)
+      ? await import('../org/user-away.js').then((m) => m.userAwayFrom({ id: record.taskId!, org_role: task?.org_role }, now)).catch(() => null)
+      : null;
     const plan = planHints({
-      hints, target: hintTargetOf(record.claudeSessionId, task), record, config: cfg, afterCompaction: true,
+      hints, target, record, config: cfg, afterCompaction: true, away,
     });
     if (!plan.carried.length) return '';
     await writeHintState(record.claudeSessionId, (cur) => ({

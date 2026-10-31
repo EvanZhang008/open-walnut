@@ -16,6 +16,8 @@
  *                                                     no task changes project
  *   GET  /org/settings        → { name, founderTitle, defaultInstructions }  the org's name, the user's role, Walnut's default core instructions
  *   PUT  /org/settings { name?, founderTitle? } → the same, after the change (blank = default)
+ *   POST /org/report { of?, since?, at?, send? } → { report } | { letterId } | { scheduledAt, since }
+ *                                                     Main's or a lead's report for the user
  *
  * Reads work anywhere; the writes make or change org tasks, so they run on the primary
  * only (501 on a replica, like every other task create).
@@ -296,6 +298,58 @@ orgV1Router.put('/org/settings', async (req: Request, res: Response, next: NextF
     // Every other window (and the Mac app) reads the new names at once.
     bus.emit(EventNames.CONFIG_CHANGED, { key: 'org' }, ['web-ui'], { source: 'api' })
     res.json(settings)
+  } catch (err) {
+    sendError(res, next, err)
+  }
+})
+
+// POST /api/v1/org/report { of?, since?, at?, send? } → { report } | { letterId } | { scheduledAt }
+// Main's or a lead's report for the user (src/core/org/morning-report.ts): shown now, sent now, or
+// scheduled for `at` ("08:00", an ISO time, "8h"). `of` defaults to the calling session's task.
+orgV1Router.post('/org/report', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { getTask } = await import('../../core/task-manager.js')
+    const b = (req.body ?? {}) as { of?: unknown; since?: unknown; at?: unknown; send?: unknown }
+    let of: Task | undefined
+    if (typeof b.of === 'string' && b.of.trim()) of = await getTask(b.of.trim()).catch(() => undefined)
+    else {
+      const sid = header(req, 'x-walnut-caller-sid')
+      if (sid) {
+        const { resolveCallerPlacement } = await import('../../core/sessions/caller-placement.js')
+        const me = await resolveCallerPlacement(sid)
+        if ('task' in me && me.task) of = await getTask(me.task.id).catch(() => undefined)
+      }
+    }
+    if (!of) throw new OrgError('unknown_task', 404, 'No such task: pass `of`, the id of Main or a lead.')
+    if (of.org_role !== 'main' && of.org_role !== 'lead') throw new OrgError('not_org_node', 409, `"${of.title}" is not Main or a lead: only they keep a report.`)
+    const { buildMorningReport, parseReportAt, scheduleReport, sendReport } = await import('../../core/org/morning-report.js')
+    const now = Date.now()
+    let since = now - 12 * 60 * 60_000
+    if (typeof b.since === 'string' && b.since.trim()) {
+      const d = /^(\d+(?:\.\d+)?)\s*(m|h|d)$/i.exec(b.since.trim())
+      since = d ? now - Number(d[1]) * { m: 60_000, h: 3_600_000, d: 86_400_000 }[d[2]!.toLowerCase() as 'm' | 'h' | 'd'] : Date.parse(b.since)
+      if (!Number.isFinite(since) || since >= now) throw new OrgError('bad_since', 400, '`since` is an ISO time or a duration back from now like "12h".')
+    }
+    if (typeof b.at === 'string' && b.at.trim()) {
+      primaryOnly('A report is scheduled')
+      let at: number
+      try { at = parseReportAt(b.at, now) } catch (err) { throw new OrgError('bad_at', 400, err instanceof Error ? err.message : String(err)) }
+      // Scheduled: "since" defaults to the time he asked, so the report covers the time in between.
+      const from = typeof b.since === 'string' && b.since.trim() ? since : now
+      const sid = header(req, 'x-walnut-caller-sid')
+      await scheduleReport({ taskId: of.id, at, since: from, ...(sid ? { by: sid } : {}) })
+      res.json({ scheduledAt: new Date(at).toISOString(), since: new Date(from).toISOString(), of: brief(of) })
+      return
+    }
+    if (b.send === true) {
+      primaryOnly('A report is sent')
+      const letter = await sendReport(of, since, now)
+      res.json({ letterId: letter.id, of: brief(of) })
+      return
+    }
+    const { listTasks } = await import('../../core/task-manager.js')
+    const { listLetters } = await import('../../core/human-inbox/store.js')
+    res.json({ report: buildMorningReport(of, await listTasks(), (await listLetters()).letters, since, now), of: brief(of) })
   } catch (err) {
     sendError(res, next, err)
   }

@@ -30,7 +30,7 @@ import {
   answeredByCaller,
   withUserWords,
   humanReplyAndDeliver,
-  sendLetterAsCaller,
+  sendLetterAsCallerOnce,
 } from './letter-ops.js';
 import type { AgentReplyInput, NewLetter } from './types.js';
 
@@ -132,11 +132,12 @@ export async function handleHumanInboxRelayAction(
     }
     case 'send': {
       const { callerSid, ...input } = p;
-      const letter = await sendLetterAsCaller(
+      const { letter, addedToThread } = await sendLetterAsCallerOnce(
         input as unknown as Omit<NewLetter, 'sender'>,
         typeof callerSid === 'string' ? callerSid : undefined,
       );
-      return { id: letter.id };
+      // The away thread (away-thread.ts) answers the same through a replica as on the primary.
+      return { id: letter.id, ...(addedToThread ? { addedToThread: true } : {}) };
     }
     case 'reply': {
       const { id, ...input } = p;

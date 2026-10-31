@@ -203,6 +203,8 @@ function normalizeRecord(raw: unknown): LetterRecord | null {
       : {}),
     // A rewrite must keep it: it is what makes a redrain of the same journal op a no-op.
     ...(typeof r.createdByOp === 'string' && r.createdByOp ? { createdByOp: r.createdByOp } : {}),
+    // A rewrite must keep it: it is how the node's next update of the absence finds its thread.
+    ...awayThreadOf(r.awayThread),
   });
 }
 
@@ -220,4 +222,10 @@ export function normalizeStore(raw: unknown): LetterStoreFile {
     ...(typeof parsed.lastUpdated === 'string' ? { lastUpdated: parsed.lastUpdated } : {}),
     letters,
   };
+}
+
+function awayThreadOf(v: unknown): { awayThread?: { taskId: string; since: number | null } } {
+  const a = v && typeof v === 'object' ? v as { taskId?: unknown; since?: unknown } : null;
+  if (!a || typeof a.taskId !== 'string' || !a.taskId) return {};
+  return { awayThread: { taskId: a.taskId, since: typeof a.since === 'number' && Number.isFinite(a.since) ? a.since : null } };
 }

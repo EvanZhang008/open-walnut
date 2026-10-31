@@ -3,6 +3,7 @@
 A message hint is Walnut text that rides a message to a session's model without
 being part of what the person wrote: the question number of a conversation
 thread, the rich output instruction, the reply language, the voice-reply ask,
+the note that the user is away from Main's or a lead's chat,
 and any custom hint a person or an agent adds. All of them live in one registry
 and go through one send pipeline. Adding a hint is adding a registry entry (or a
 config entry), never a change to a send path.
@@ -102,6 +103,13 @@ whoever started the turn and his reply language is a setting, not a guess from t
 message (2026-10-29, 2026-10-30; dropped once the triggers are set by hand). A lead's reply to
 such a turn is judged for drift like Main's. Walnut adds one clause after the user's sentence: it covers every
 line the user reads, the short progress lines between tool calls included.
+`user-away` (Main and the leads only) at session start, on a change and after a
+compaction: the user has not been in this chat for 30 minutes and it is not open
+anywhere (`src/core/org/user-away.ts`: the last message a person typed into it,
+`chatInputAt`, never a letter's answer;
+the web's and the phone's attention heartbeats on it, an open session stream on the
+phone; `WALNUT_AWAY_AFTER_MINUTES`), so an important update goes to his inbox, and
+once that he is back. A person's own message is presence (2026-10-31).
 
 After a compaction the CLI's SessionStart hook (`open_items`) states every hint
 with `after_compaction` right away and records it, so the rest of an interrupted

@@ -161,7 +161,7 @@ export async function sendLetterAsCallerOnce(
   input: Omit<NewLetter, 'sender'>,
   callerSid: string | undefined,
   opts: SendLetterOptions = {},
-): Promise<{ letter: LetterRecord; duplicate: boolean }> {
+): Promise<{ letter: LetterRecord; duplicate: boolean; addedToThread?: boolean }> {
   if (opts.opKey) {
     const first = await findLetterByOp(opts.opKey);
     if (first) return { letter: first, duplicate: true };
@@ -182,6 +182,13 @@ export async function sendLetterAsCallerOnce(
   // report above: it was written while the server was away and the host holds no snooze check.
   if (!opts.opKey && input.userAsked !== true && input.user_asked !== true) input = await admitSnoozedLetter(input, sender);
   else { const { snoozeReason: _a, snooze_reason: _b, ...rest } = input; input = rest; }
+  // Main or a lead the user is away from: one thread per absence, one buzz (away-thread.ts). A
+  // host's journal op is sent as written.
+  if (!opts.opKey) {
+    const { sendAway } = await import('./away-thread.js');
+    const sent = await sendAway(input, sender, async (away) => (await sendLetterOnce({ ...input, sender }, { ...opts, ...away })).letter);
+    if (sent) return { letter: sent.letter, duplicate: false, ...(sent.addedToThread ? { addedToThread: true } : {}) };
+  }
   const { guardTriageLetter } = await import('./triage-quota.js');
   const charge = await guardTriageLetter(input, sender);
   let out: { letter: LetterRecord; duplicate: boolean };

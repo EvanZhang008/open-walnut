@@ -231,6 +231,20 @@ export const MAIN_NEWS_ONCE_LINE =
   + 'line about it in its own chat.\n\n'
 
 /**
+ * The user away from the chat (2026-10-31, the user before going to sleep: when "I am not chatting with
+ * you here", an important update goes to the inbox, in one thread; and a morning report on request).
+ * Walnut says when he is away (the `user-away` hint, org/user-away.ts), threads the letters of one
+ * absence (human-inbox/away-thread.ts) and sends the report he asks for (org/morning-report.ts).
+ */
+export const AWAY_INBOX_LINE =
+  'When the user is away from your chat, Walnut says so on the message (a user-away note). An update that needs '
+  + 'him then (a decision only he can make, something to review, a result he asked for) goes to his inbox with '
+  + 'human_inbox_send instead of waiting here, a decision as action_required with its options so one tap answers it. '
+  + 'Walnut adds your letters of that absence to one thread and his phone buzzes once; anything else stays in this '
+  + 'chat and is never a letter. When he asks for a report at a time ("a report tomorrow morning"), schedule it with '
+  + 'org_report at:<time>; Walnut sends it then: what needs him with the one-tap answers, what finished, what moved.\n\n'
+
+/**
  * 2d. The org above the work (src/core/org/): the main agent talks to one
  * contact per project (its lead, or its one team), never to every task, so its
  * chat stays short. Roles follow the team charter (team-charter.ts): Main sets
@@ -255,6 +269,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + DECISION_CONTEXT_LINE + MAIN_DECISION_LINE
       + ORG_REPLY_LANGUAGE_LINE
       + MAIN_NEWS_ONCE_LINE
+      + AWAY_INBOX_LINE
       + BRIEF_LINE
       + MAIN_DELEGATES_LINE
       + MAIN_TRACKING_LINE
@@ -295,6 +310,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + DECISION_CONTEXT_LINE + LEAD_DECISION_LINE
       + ORG_REPLY_LANGUAGE_LINE
       + LEAD_NEWS_ONCE_LINE
+      + AWAY_INBOX_LINE
       + BRIEF_LINE
       + TASK_ROUTING_CONTRACT + '\n\n'
   }

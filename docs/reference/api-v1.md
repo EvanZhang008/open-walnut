@@ -1391,7 +1391,7 @@ itself). The `board_*` ops default to the caller's team board.
   choice?, reminder?, section?, version }` with `taskId` at the top level
   (`task` = the card's task; `kanban: true` on a kanban seen write).
 
-### Org (additive, 2026-10): `/org`, `/org/reports`, `/org/main`, `/org/contact`, `/org/vp`, `/org/settings`, `/org/projects`, `/org/vps`, `/org/nodes`
+### Org (additive, 2026-10): `/org`, `/org/reports`, `/org/report`, `/org/main`, `/org/contact`, `/org/vp`, `/org/settings`, `/org/projects`, `/org/vps`, `/org/nodes`
 
 The org is derived from tasks: Main (the user's main agent) → projects → teams (a
 project's top-level open tasks) → workers (`parent_task_id`). The stored facts
@@ -1432,6 +1432,13 @@ team is talked to through that task; the Inbox never gets a lead.
   their own, and an editor shows it in their place.
   `PUT /api/v1/org/settings { name?, founderTitle? }` → the same after the change;
   a blank value goes back to the default; `400 bad_name` for a non-string.
+- `POST /api/v1/org/report { of?, since?, at?, send? }` (additive, 2026-10-31) → Main's or a
+  lead's report for the user (`of` defaults to the caller's task): `200 { report: { subject,
+  markdown, text, taskRefs, counts }, of }` alone; `{ letterId, of }` with `send: true` (sent to the
+  inbox now); `{ scheduledAt, since, of }` with `at` (`"HH:MM"` on the server's clock, an ISO time
+  or `"8h"`; Walnut sends it then, one per node). `since` is an ISO time or a duration back
+  (`"12h"`, the default; for `at`, the time of the call). `404 unknown_task`, `409 not_org_node`,
+  `400 bad_at` / `bad_since`, `501` on a replica for `at` and `send`.
 - `POST /api/v1/org/projects { name, vpName?, instructions?, override_user? }` → `201 { task }`: a
   new project with its own VP (its lead); `vpName` names the VP when it is not the
   project's name. `POST /api/v1/org/vps { name, instructions?, override_user? }` → `201 { task }`: a
@@ -3633,6 +3640,7 @@ REPLICA: relayed to the primary over `server.human-inbox.human-reply` (`clientId
 
 - **`userWords`** on `POST /api/v1/human-inbox/:id/answer` and `/human-reply` (either spelling, `user_words`): a session caller answering in the user's place quotes the user's own words. Without them: `400 bad_request`. When the answer (the picked option's label and description and the note beside it, or the reply's text; plus the letter's subject and preview when the answer only points at them, such as "Yes", "Option A" or "as recommended") asks for a step that is hard to undo or leaves Walnut (rewriting git history or force-pushing, unpublishing or deprecating a release, deleting, publishing or sending outward, spending, credentials or permissions), the words must ask for that step too; naming the option is not enough, and a step mentioned only to rule it out ("do not rewrite") asks for nothing. Otherwise `403 human-approval-required`, and nothing is recorded. The words are stored as `by.userWords` on `answered` and on the thread turn, and the origin session reads them. A person's answer (no caller session) needs none.
 - **`POST /api/v1/human-inbox/:id/settle`** body `{ "reason" }` → `{ letter }`: a decision letter nobody needs to answer any more leaves the inbox (`archived: true`, `archivedReason: "settled"`) with `settled { reason, at, by? }` (`by` = the calling task). An answered letter answers `409 conflict`. A task's completion settles its own open decision letters the same way (no `by`), except pinned ones, a plugin's, ones with items, ones whose last turn is the user's and ones moved in or out of the archive before; a re-check every few hours settles any it missed and asks an open task's session about a decision letter quiet for 4 hours. REPLICA: relayed as `server.human-inbox.settle`. An older Walnut reads such a letter as archived.
+- **An away thread on `POST /api/v1/human-inbox`** (additive, 2026-10-31): a letter from Main or a lead the user has been away from for 30 minutes (`src/core/org/user-away.ts`) is marked `awayThread { taskId, since }` (the node, and when the user was last in its chat, `null` = never). The node's next `info`, `review` or `completion` letter of that absence (made after the user was last in the chat, within a day, from the same session) joins that letter's thread as an agent turn: `201 { id: <that letter>, addedToThread: true }`, no new letter. A decision (`action_required`) is still its own letter, and the thread gets one turn naming it; a pinned letter or one with mail items is its own letter too. While a letter of the absence is unread, the next ones go out with no phone push (one buzz per absence); a decision still buzzes once the unread letter is over 3 hours old. A letter with `user_asked` stands alone. An older client reads `awayThread` as an unknown field and the turns as ordinary replies.
 - **`409 conflict` on `POST /api/v1/human-inbox`** for an `info`, `completion` or `review` letter from a task that holds another task's request (open, or answered in the last 6 hours): the asker tells the user. `user_asked: true` (the user asked this task for the letter) sends it anyway. A host's journaled letter is never refused on the way in.
 
 ### Human inbox on a replica while the primary is unreachable (additive, 2026-10)

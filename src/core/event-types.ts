@@ -1026,6 +1026,8 @@ export interface HumanInboxLetterEvent {
   senderTitle?: string;
   host: string;
   kind: 'new' | 'reply';
+  /** No phone push: the user's away thread already buzzed and is still unread (human-inbox/away-thread.ts). */
+  quiet?: boolean;
 }
 
 /**

@@ -239,11 +239,12 @@ humanInboxV1Router.post('/human-inbox', async (req: Request, res: Response, next
         { ...b, callerSid: callerSid(req) ?? null }, 201)
       return
     }
-    const { sendLetterAsCaller } = await import('../../core/human-inbox/letter-ops.js')
+    const { sendLetterAsCallerOnce } = await import('../../core/human-inbox/letter-ops.js')
     // The store is the validator (one implementation for every surface), so the
     // body rides through as-is rather than being re-checked field by field here.
-    const letter = await sendLetterAsCaller(b as unknown as Omit<NewLetter, 'sender'>, callerSid(req))
-    res.status(201).json({ id: letter.id })
+    const { letter, addedToThread } = await sendLetterAsCallerOnce(b as unknown as Omit<NewLetter, 'sender'>, callerSid(req))
+    // addedToThread: the user is away from the sender's chat, and the update joined that absence's letter.
+    res.status(201).json({ id: letter.id, ...(addedToThread ? { addedToThread: true } : {}) })
   })
 })
 

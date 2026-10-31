@@ -12079,14 +12079,16 @@ export class SessionRunner {
           if (cancelled > 0) log.session.info('handleSendSdk: cancelled stale triage', { taskId: record.taskId, cancelled })
         } catch { /* non-fatal */ }
 
-        const { applySessionPhase, sendSourceReopensTerminal, isPersonSendSource } = await import('../core/phase.js')
+        const { applySessionPhase, sendSourceReopensTerminal, isPersonSendSource, isChatSendSource } = await import('../core/phase.js')
         await applySessionPhase(record.taskId, 'session:input', 'session.ts:handleSendSdk', {
           sessionId, reopenTerminal: sendSourceReopensTerminal(source),
           sendSource: source, sendEndsWait: endsWait,
         })
         if (isPersonSendSource(source)) {
           const { updateSessionRecord: stampHuman } = await import('../core/session-tracker.js')
-          stampHuman(sessionId, { humanInputAt: new Date().toISOString() }).catch(err =>
+          const at = new Date().toISOString()
+          // Typed into the chat: the user is in it (org/user-away.ts); a letter's answer is not.
+          stampHuman(sessionId, { humanInputAt: at, ...(isChatSendSource(source) ? { chatInputAt: at } : {}) }).catch(err =>
             log.session.warn('humanInputAt stamp failed', { sessionId, error: String(err) }))
         }
         // A message into an imported session adopts its task: the import tag
@@ -12246,14 +12248,16 @@ export class SessionRunner {
           if (cancelled > 0) log.session.info('handleSend: cancelled stale triage', { taskId: record.taskId, cancelled })
         } catch { /* non-fatal */ }
 
-        const { applySessionPhase, sendSourceReopensTerminal, isPersonSendSource } = await import('../core/phase.js')
+        const { applySessionPhase, sendSourceReopensTerminal, isPersonSendSource, isChatSendSource } = await import('../core/phase.js')
         await applySessionPhase(record.taskId, 'session:input', 'session.ts:handleSend', {
           sessionId, reopenTerminal: sendSourceReopensTerminal(source),
           sendSource: source, sendEndsWait: endsWait,
         })
         if (isPersonSendSource(source)) {
           const { updateSessionRecord: stampHuman } = await import('../core/session-tracker.js')
-          stampHuman(sessionId, { humanInputAt: new Date().toISOString() }).catch(err =>
+          const at = new Date().toISOString()
+          // Typed into the chat: the user is in it (org/user-away.ts); a letter's answer is not.
+          stampHuman(sessionId, { humanInputAt: at, ...(isChatSendSource(source) ? { chatInputAt: at } : {}) }).catch(err =>
             log.session.warn('humanInputAt stamp failed', { sessionId, error: String(err) }))
         }
         // A message into an imported session adopts its task: the import tag

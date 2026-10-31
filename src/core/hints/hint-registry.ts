@@ -47,6 +47,8 @@ export interface HintContentInput {
   request?: { arg?: string };
   /** The identity this session was last told, if any. */
   toldHash?: string;
+  /** Main's or a lead's chat: is the user away from it (org/user-away.ts)? Absent elsewhere. */
+  away?: { away: boolean; lastSeenAt: number | null } | null;
 }
 
 export interface HintRender { text: string; arg?: string }
@@ -139,7 +141,34 @@ const BUILT_IN: readonly HintSpec[] = [
     identity: (i) => (i.request ? 'voice' : null),
     render: (i) => (i.request ? { text: VOICE_REPLY_TEXT } : null),
   },
+  {
+    kind: 'user-away',
+    label: 'User away',
+    description: 'Main and the leads: the user has not been in this chat for a while, so an important update goes to his inbox; and that he is back.',
+    allowed: SCHEDULED,
+    defaults: { enabled: true, triggers: ['session_start', 'on_change', 'after_compaction'], placement: 'after' },
+    // 2026-10-31, the user: when he is not in a node's chat, an important update goes to his inbox.
+    // No time in it: a restart that forgets a heartbeat must not make the same absence news again.
+    identity: (i) => (!i.away ? null : i.away.away ? 'away' : 'present'),
+    render: (i) => {
+      if (!i.away) return null;
+      if (i.away.away) return { text: userAwayText(i.away.lastSeenAt) };
+      // Back: said once, after an away note; a chat he never left needs no words.
+      return i.toldHash === 'away' ? { text: USER_BACK_TEXT } : null;
+    },
+  },
 ];
+
+/** What a node hears while the user is away from its chat (org/user-away.ts). */
+export function userAwayText(lastSeenAt: number | null): string {
+  const when = lastSeenAt ? `since ${new Date(lastSeenAt).toISOString().slice(0, 16)}Z` : 'for as long as Walnut knows';
+  return `the user has not been in this chat ${when}, and it is not open anywhere. An update that needs him (a decision only he `
+    + 'can make, something to review, a result he asked for) goes to his inbox now with human_inbox_send, a decision as '
+    + 'action_required with its options so one tap answers it; Walnut adds your letters of this absence to one thread and his '
+    + 'phone buzzes once. Anything else stays in this chat and is never a letter.';
+}
+
+export const USER_BACK_TEXT = 'the user is back in this chat: updates go here again, not to his inbox.';
 
 /** Walnut's own clause after the user's reply-language sentence. */
 export const REPLY_LANGUAGE_SCOPE = 'This covers every line the user reads, the short progress lines between your tool calls included.';
@@ -267,7 +296,8 @@ export function hintApplies(hint: EffectiveHint, target: HintTarget): boolean {
 
 /** Does any enabled hint restrict by role or agent (so the send must read the task)? */
 export function needsTaskForAudience(hints: readonly EffectiveHint[]): boolean {
-  return hints.some((h) => h.enabled && (h.audience.roles.length > 0 || h.audience.agents.length > 0 || h.everyTurnRoles.length > 0));
+  // user-away reads the task to know it is Main or a lead (org/user-away.ts).
+  return hints.some((h) => h.enabled && (h.audience.roles.length > 0 || h.audience.agents.length > 0 || h.everyTurnRoles.length > 0 || h.kind === 'user-away'));
 }
 
 export class HintSettingsError extends Error {

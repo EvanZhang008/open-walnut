@@ -51,11 +51,11 @@ afterAll(async () => {
 })
 
 describe('message hints through a real server', () => {
-  it('lists the four built-ins with their default schedule', async () => {
+  it('lists the five built-ins with their default schedule', async () => {
     const r = await json('GET', '/hints')
     expect(r.status).toBe(200)
     const kinds = r.body.hints.map((h: { kind: string }) => h.kind)
-    expect(kinds).toEqual(['question', 'rich-output', 'reply-language', 'voice-reply'])
+    expect(kinds).toEqual(['question', 'rich-output', 'reply-language', 'voice-reply', 'user-away'])
     const rich = r.body.hints.find((h: { kind: string }) => h.kind === 'rich-output')
     expect(rich).toMatchObject({ enabled: true, every_turns: 5, placement: 'after', overridden: false })
     expect(rich.triggers).toEqual(['session_start', 'after_compaction', 'on_change', 'every_n_turns'])

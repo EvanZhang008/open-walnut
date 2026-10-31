@@ -93,8 +93,12 @@ defineOp({
   bind: { method: 'POST', path: '/human-inbox' },
   mapResult: ({ body }) => ({
     letterId: (body as { id?: unknown } | undefined)?.id,
+    ...((body as { addedToThread?: unknown } | undefined)?.addedToThread === true ? { addedToThread: true } : {}),
     instruction:
-      'The letter is in the human\'s inbox. If they answer, their reply arrives as a message in '
+      ((body as { addedToThread?: unknown } | undefined)?.addedToThread === true
+        ? 'The user is away from your chat, so this update joined your letter of this absence (one thread, one buzz). '
+        : 'The letter is in the human\'s inbox. ')
+      + 'If they answer, their reply arrives as a message in '
       + 'this session; continue the thread with human_inbox_reply and that letterId.',
   }),
   tags: { readonly: false, remote: 'allow' },

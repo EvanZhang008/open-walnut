@@ -37,7 +37,7 @@ import {
 } from './normalize.js';
 import { statStagedBody, takeStagedBody } from './staged-body.js';
 import { validateNewItems, allLetterItems, assertItemIds } from './item-schema.js';
-import type { InboxItemReceipt } from './types.js';
+import type { AwayThreadMark, InboxItemReceipt } from './types.js';
 import {
   LETTER_INLINE_BODY_MAX_BYTES,
   letterFieldMaxBytes,
@@ -425,6 +425,7 @@ function emitLetterEvent(
   record: LetterRecord,
   kind: 'new' | 'reply',
   textPreview: string,
+  quiet = false,
 ): void {
   // The notification bridge is installed HERE, not in server.ts: this store is
   // the only producer of letter events, so "the store is in use" is exactly when
@@ -442,6 +443,7 @@ function emitLetterEvent(
       senderTitle: record.sender.sessionTitle,
       host: record.sender.host,
       kind,
+      ...(quiet ? { quiet: true } : {}),
     },
     ['*'],
     { source: 'human-inbox' },
@@ -462,6 +464,22 @@ export interface SendLetterOptions {
   createdAt?: number;
   /** The journal op it came from: a second send of it answers the letter already sent. */
   opKey?: string;
+  /** Sent while the user is away from the sender's chat (away-thread.ts). */
+  awayThread?: AwayThreadMark;
+  /** No phone push for it (away-thread.ts: the absence already buzzed, still unread). */
+  quiet?: boolean;
+}
+
+/** The store's own check of a new letter (subject, type, one body, buttons only on a decision). */
+export function checkLetterShape(input: Record<string, unknown>): { ok: true } | { ok: false; message: string } {
+  const r = letterCheck.shape(input);
+  return r.ok ? { ok: true } : { ok: false, message: r.message };
+}
+
+/** The open letters an org node sent while the user was away from its chat (away-thread.ts). */
+export async function awayLettersOf(taskId: string): Promise<LetterRecord[]> {
+  if (!taskId) return [];
+  return (await readStore()).letters.filter(l => l.awayThread?.taskId === taskId && !l.archived);
 }
 
 /** The letter a journal op already sent (`createdByOp`), or null. */
@@ -562,6 +580,7 @@ export async function sendLetterOnce(
     // so a chatty caller loses the tail instead of losing the whole letter.
     ...(refs.length > 0 ? { taskRefs: refs } : {}),
     ...(opKey ? { createdByOp: opKey } : {}),
+    ...(opts.awayThread ? { awayThread: { ...opts.awayThread } } : {}),
   };
 
   // Body first: an index entry pointing at a file that was never written would
@@ -590,7 +609,7 @@ export async function sendLetterOnce(
     letterId: id, type: record.type, senderSessionId: record.sender.sessionId, host: record.sender.host,
     ...(opKey ? { opKey, createdAt } : {}),
   });
-  emitLetterEvent(record, 'new', record.textPreview);
+  emitLetterEvent(record, 'new', record.textPreview, opts.quiet === true);
   return { letter: record, duplicate: false };
 }
 
@@ -749,7 +768,7 @@ function setArchivedFlag(letter: LetterRecord, archived: boolean, reason?: Lette
  * Flips the letter unread (the agent answered — that is news) and pulls it back
  * out of the archive, the way a new mail in a thread returns it to an inbox.
  */
-export async function agentReply(id: string, input: AgentReplyInput): Promise<LetterRecord> {
+export async function agentReply(id: string, input: AgentReplyInput, opts: { quiet?: boolean; taskRefs?: unknown } = {}): Promise<LetterRecord> {
   requireValidId(id);
   const text = str(input?.text).trim();
   if (!text) throw invalid('text is required');
@@ -798,6 +817,11 @@ export async function agentReply(id: string, input: AgentReplyInput): Promise<Le
       entry.bodyBytes = richSource.bytes;
     }
     letter.thread.push(entry);
+    // A folded update's task pills join the letter's (away-thread.ts).
+    if (opts.taskRefs !== undefined) {
+      const refs = letterCheck.taskRefs([...new Set([...(letter.taskRefs ?? []), ...letterCheck.taskRefs(opts.taskRefs)])]);
+      if (refs.length) letter.taskRefs = refs;
+    }
     setReadFlag(letter, false);
     setArchivedFlag(letter, false);
     return { ...letter };
@@ -805,7 +829,7 @@ export async function agentReply(id: string, input: AgentReplyInput): Promise<Le
   if (bodyFileToWrite && richSource !== null) await commitBodySource(bodyFileToWrite, richSource);
 
   log.notif.info('human-inbox: agent replied', { letterId: id, turns: record.thread.length });
-  emitLetterEvent(record, 'reply', truncatePreview(text));
+  emitLetterEvent(record, 'reply', truncatePreview(text), opts.quiet === true);
   return record;
 }
 

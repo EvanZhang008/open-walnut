@@ -1963,6 +1963,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     startLeadWaits()
     // A settled status change, told to the askers, the leader, the VP and Main (src/core/sessions/status-push.ts).
     void import('../core/sessions/status-push.js').then((m) => m.startStatusPush()).catch(() => {})
+    // Whether the user is in Main's or a lead's chat (src/core/org/user-away.ts), and the reports he asked for.
+    void import('../core/org/user-away.js').then((m) => m.startUserAway()).catch(() => {})
+    if (role() === 'leader') void import('../core/org/morning-report.js').then((m) => m.startReportClock()).catch(() => {})
     // A completed task's own "please check this" letters leave the inbox (src/core/human-inbox/complete-archive.ts).
     const { startCompleteArchive } = await import('../core/human-inbox/complete-archive.js')
     startCompleteArchive()

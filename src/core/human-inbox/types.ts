@@ -204,6 +204,17 @@ export interface LetterRecord {
    * A redrain finds it here and sends nothing again. Absent on every other letter.
    */
   createdByOp?: string;
+  /**
+   * Sent by Main or a lead while the user was away from its chat (human-inbox/away-thread.ts): the
+   * node's task and when the user was last in that chat (epoch ms, null = never). The node's later
+   * updates of the same absence join this letter's thread instead of becoming letters.
+   */
+  awayThread?: AwayThreadMark;
+}
+
+export interface AwayThreadMark {
+  taskId: string;
+  since: number | null;
 }
 
 /** What a caller supplies to sendLetter. id/createdAt/state are stamped here. */

@@ -353,6 +353,15 @@ export function sendSourceReopensTerminal(source: string | undefined): boolean {
   return source !== undefined && REOPENING_SEND_SOURCES.has(source)
 }
 
+/**
+ * A message a person typed into the session's chat (the console, the phone, the CLI, a chat surface):
+ * the user is IN that chat (org/user-away.ts). An answer from the inbox or a Board thread is a person
+ * too, but read elsewhere: he can answer a letter at 3am and still be away from the chat.
+ */
+export function isChatSendSource(source: string | undefined): boolean {
+  return source === 'ui' || source === 'mobile' || source === 'cli' || source === 'api-v1' || source === 'chat'
+}
+
 /** A send a person made (the reopening sources but a peer's): it ends a wait for good. */
 export function isPersonSendSource(source: string | undefined): boolean {
   return source !== 'peer' && sendSourceReopensTerminal(source)

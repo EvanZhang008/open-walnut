@@ -3030,6 +3030,9 @@ export interface SessionRecord {
   restartLoss?: SessionRestartLoss;
   /** When a person (console, phone, CLI, a letter) last sent this session a message. */
   humanInputAt?: string;
+  /** When a person last typed into this session's chat (console, phone, CLI; never a letter's answer):
+   *  the user's presence in it (org/user-away.ts). */
+  chatInputAt?: string;
   /** The last time the host refused to start this session because another process
    *  had it open (a terminal's `claude -r`, most often the user's; or another Walnut). */
   heldElsewhere?: { at: string; host: string; pid?: number; holder: 'terminal' | 'walnut' };
