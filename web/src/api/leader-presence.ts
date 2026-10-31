@@ -265,6 +265,7 @@ export const NEEDS_LEADER_REASONS: Readonly<Record<string, string>> = {
   terminal_needs_mac: 'The terminal runs through your Mac.',
   files_need_mac: 'Opening files needs your Mac for now.',
   usage_needs_mac: 'Usage and budgets are counted on your Mac.',
+  fleet_needs_mac: 'The hosts overview is read through your Mac.',
   needs_mac: 'Only your Mac can do this.',
   // A session's reads (away-session-reads.ts).
   session_on_mac: 'This session runs through your Mac; its conversation is there.',

@@ -122,6 +122,7 @@ import { createOneShotCore, type OneShotChild } from './oneshot-core.js'
 import { createTransferCore, type TransferCoreDeps } from './transfer-core.js'
 import { createTransferPack, type TransferPackDeps } from './transfer-pack-core.js'
 import { createHostFacts, type HostFactsDeps } from './host-facts-core.js'
+import { createHostVitals, type HostVitalsDeps } from './host-vitals-core.js'
 import { createDesktopUpdate } from './desktop-update-core.js'
 import { createWorkspaceCore, type WorkspaceCoreDeps } from './workspace-core.js'
 import {
@@ -2449,6 +2450,9 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'transfer.scan': return replyTransfer(ws, id as number, 'transfer.scan', () => transferPack.scan(cmd), false)
     case 'transfer.apply': return replyTransfer(ws, id as number, 'transfer.apply', () => transferPack.apply(cmd), true)
     case 'transfer.clear': return replyTransfer(ws, id as number, 'transfer.clear', () => transferPack.clear(cmd), true)
+    // 'host-vitals-v1' (host-vitals-core.ts): now (CPU, load, memory, uptime) and the
+    // ledger fold (up and linked minutes, outages, boots). Read-only, like host.facts.
+    case 'host.vitals': return replyTransfer(ws, id as number, 'host.vitals', () => hostVitals.vitals(cmd) as unknown as Promise<Record<string, unknown>>, false)
     case 'desktop.updateStatus': return replyTransfer(ws, id as number, 'desktop.updateStatus', () => desktopUpdate.status(), false)
     case 'desktop.restart': return replyTransfer(ws, id as number, 'desktop.restart', () => desktopUpdate.restart(cmd.token, cmd.force), true)
     // 'oneshot-v1' (oneshot-core.ts): the hidden one-shot claude runs. NOT in
@@ -10244,6 +10248,18 @@ const hostFacts = createHostFacts({
   fs, os, execFile: execFile as unknown as HostFactsDeps['execFile'], http, https,
   env: process.env, home: HOME_DIR, platform: process.platform, arch: process.arch,
 })
+// The minute ledger lives under HOME beside the streams, so it outlives a reboot
+// (/tmp does not); an isolated daemon keeps it inside its own throwaway dir.
+// PARITY: keep in sync with daemon-source.ts.
+const HOST_VITALS_DIR = process.env.WALNUT_HOST_VITALS_DIR
+  || (IS_PROD_DAEMON_DIR ? path.join(HOME_DIR, '.open-walnut', 'tmp', 'host-vitals') : path.join(DAEMON_DIR, 'host-vitals'))
+const hostVitals = createHostVitals({
+  fs, os, execFile: execFile as unknown as HostVitalsDeps['execFile'], platform: process.platform,
+  dir: HOST_VITALS_DIR, startedAt: DAEMON_START_TS,
+  // A Walnut server's own link: any socket but a follower's, a lane's or the bridge.
+  linked: () => { for (const c of wsClients) if (isServerClient(c)) return true; return false },
+  running: () => { let n = 0; for (const s of sessions.values()) if (s.state === 'running') n++; return n },
+})
 
 /**
  * The raw text of this daemon's owner stamp (`daemon.owner` in its own daemon dir,
@@ -12012,6 +12028,7 @@ if (action === '--start' || SERVICE_MODE) {
   try { hostServers.boot() } catch (err) { logMsg('warn', 'host server: boot failed', { error: (err as Error).message }) }
   // The plugin jobs an earlier daemon ran here (plugin-jobs-core.ts): adopt, schedule or start them.
   try { pluginJobs.boot() } catch (err) { logMsg('warn', 'plugin jobs: boot failed', { error: (err as Error).message }) }
+  hostVitals.start()
   console.log(port) // Print port for parent to capture
   logMsg('info', 'daemon started', {
     port,

@@ -147,6 +147,7 @@ import { triggerTemplatesV1Router } from './routes/trigger-templates-v1.js'
 import { projectsV1Router } from './routes/projects-v1.js'
 import { taskExtrasV1Router } from './routes/task-extras-v1.js'
 import { transferV1Router } from './routes/transfer-v1.js'
+import { hostsFleetV1Router } from './routes/hosts-fleet-v1.js'
 import { engineSwitchV1Router } from './routes/engine-switch-v1.js'
 import { taskMoveV1Router } from './routes/task-move-v1.js'
 import { sessionExtrasV1Router } from './routes/session-extras-v1.js'
@@ -2426,6 +2427,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // groups + tier CRUD 501 on a REPLICA (outbox whitelist lacks them).
   app.use('/api/v1', taskExtrasV1Router)
   app.use('/api/v1', transferV1Router)
+  app.use('/api/v1', hostsFleetV1Router)
   app.use('/api/v1', engineSwitchV1Router)
   app.use('/api/v1', taskMoveV1Router)
   // Session extras (additive, Wave 2): controls/settings/side-questions/

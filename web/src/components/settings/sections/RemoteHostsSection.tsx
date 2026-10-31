@@ -15,6 +15,7 @@ import { flashHostsOf, hostRowId, useHostSettingsFocus } from '@/utils/host-sett
 import { landOnRow } from '@/utils/scroll-land';
 import { AddLimitRow } from './RemoteHostLimits';
 import { HostServersGroup } from './HostServersGroup';
+import { HostFleetGroup } from './HostFleetGroup';
 import { HostProfileDisclosure } from './HostProfileDisclosure';
 import { ReplicaRemovalGroup } from './ReplicaRemovalGroup';
 import { ReplicaKeepRows, normalizeKeep, splitKeepEntries, type ReplicaKeep } from './ReplicaKeepRows';
@@ -311,6 +312,7 @@ export function RemoteHostsSection({ config, onSave }: Props) {
       actions={<>{hasStatusHosts(config) && <CopyHostDiagnosticsButton copy={hostCopy} />}{addButton}</>}
     >
       <DiagnosticsFallback copy={hostCopy} testId="remote-hosts-diagnostics-fallback" />
+      <HostFleetGroup />
       <SettingsGroup heading="Hosts">
         {hosts.length === 0 && (
           <SettingsRow label="No remote hosts yet." control={addButton} />

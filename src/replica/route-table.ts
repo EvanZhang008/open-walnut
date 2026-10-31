@@ -78,6 +78,9 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   { method: W, pattern: '/api/v1/tasks/:id', away: 'needs-leader', why: 'task_writes_need_mac' },
   { method: 'GET', pattern: '/api/v1/sessions', away: 'read' },
   { method: 'GET', pattern: '/api/v1/sessions/list-dirs', away: 'needs-leader', why: 'files_need_mac' },
+  // The fleet view reads every host's daemon through the Mac's links; a host's own server would list itself as the primary.
+  { method: 'GET', pattern: '/api/v1/hosts', away: 'needs-leader', why: 'fleet_needs_mac' },
+  { method: 'GET', pattern: '/api/v1/hosts/:host', away: 'needs-leader', why: 'fleet_needs_mac' },
   { method: 'GET', pattern: '/api/v1/sessions/:id', away: 'read' },
   { method: 'GET', pattern: '/api/v1/sessions/:id/history', cls: 'local', local: 'session', away: 'read' },
   { method: 'GET', pattern: '/api/v1/sessions/:id/transcript', cls: 'local', local: 'session', away: 'read' },

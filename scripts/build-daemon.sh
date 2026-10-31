@@ -163,6 +163,7 @@ SOURCES=(
   src/providers/transfer-core.ts
   src/providers/transfer-pack-core.ts
   src/providers/host-facts-core.ts
+  src/providers/host-vitals-core.ts
   src/providers/desktop-update-core.ts
   src/providers/stream-compact-core.ts
   src/providers/stream-fold-core.ts

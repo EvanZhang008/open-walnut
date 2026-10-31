@@ -81,6 +81,7 @@ import { createOneShotCore } from './oneshot-core.js'
 import { createTransferCore } from './transfer-core.js'
 import { createTransferPack } from './transfer-pack-core.js'
 import { createHostFacts } from './host-facts-core.js'
+import { createHostVitals } from './host-vitals-core.js'
 import { createDesktopUpdate } from './desktop-update-core.js'
 import { createTurnSnapshots } from './turn-snapshot-core.js'
 import { createTurnGuard } from './turn-guard-core.js'
@@ -296,6 +297,7 @@ export function getDaemonSource(): string {
     ['__CREATE_TRANSFER_CORE__', createTransferCore.toString()],
     ['__CREATE_TRANSFER_PACK__', createTransferPack.toString()],
     ['__CREATE_HOST_FACTS__', createHostFacts.toString()],
+    ['__CREATE_HOST_VITALS__', createHostVitals.toString()],
     ['__CREATE_DESKTOP_UPDATE__', createDesktopUpdate.toString()],
     ['__CREATE_TURN_SNAPSHOTS__', createTurnSnapshots.toString()],
     ['__CREATE_TURN_GUARD__', createTurnGuard.toString()],
@@ -732,6 +734,11 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
     if (createFacts) {
       const hf = createFacts({ fs: fs as never, os: {} as never, execFile: () => null, http: {} as never, https: {} as never, env: {}, home: '/h', platform: 'linux', arch: 'x64' })
       if (typeof hf.facts !== 'function') throw new Error('host facts core did not build')
+    }
+    const createVitals = reconstructed['__CREATE_HOST_VITALS__'] as typeof createHostVitals | undefined
+    if (createVitals) {
+      const hv = createVitals({ fs: fs as never, os: {} as never, execFile: () => null, platform: 'linux', dir: '/nonexistent', startedAt: 1, linked: () => false, running: () => 0 })
+      if (hv.parseMeminfo('MemAvailable:  2048 kB\n') !== 2048 * 1024 || hv.parseVmStat('Mach (page size of 4096 bytes)\nPages free:  2.\n') !== 8192) throw new Error('host vitals core did not build')
     }
     // Turn snapshot smoke: the ref-record and diff parsers and the path rule ride
     // this text, so a reconstructed copy must read a record (with its JSON body),
@@ -3804,6 +3811,9 @@ function dispatchCommand(ws, id, cmd) {
     case 'transfer.scan': return replyTransfer(ws, id, 'transfer.scan', function () { return transferPack.scan(cmd); }, false);
     case 'transfer.apply': return replyTransfer(ws, id, 'transfer.apply', function () { return transferPack.apply(cmd); }, true);
     case 'transfer.clear': return replyTransfer(ws, id, 'transfer.clear', function () { return transferPack.clear(cmd); }, true);
+    // 'host-vitals-v1' (host-vitals-core.ts): now (CPU, load, memory, uptime) and the
+    // ledger fold (up and linked minutes, outages, boots). Read-only, like host.facts.
+    case 'host.vitals': return replyTransfer(ws, id, 'host.vitals', function () { return hostVitals.vitals(cmd); }, false);
     case 'desktop.updateStatus': return replyTransfer(ws, id, 'desktop.updateStatus', function () { return desktopUpdate.status(); }, false);
     case 'desktop.restart': return replyTransfer(ws, id, 'desktop.restart', function () { return desktopUpdate.restart(cmd.token, cmd.force); }, true);
     // 'oneshot-v1' (oneshot-core.ts): the hidden one-shot claude runs. NOT in
@@ -12664,6 +12674,18 @@ const hostFacts = (__CREATE_HOST_FACTS__)({
   fs: fs, os: os, execFile: execFile, http: http, https: require('https'),
   env: process.env, home: HOME_DIR, platform: process.platform, arch: process.arch,
 });
+// The minute ledger lives under HOME beside the streams, so it outlives a reboot
+// (/tmp does not); an isolated daemon keeps it inside its own throwaway dir.
+// PARITY: keep in sync with daemon-standalone.ts.
+const HOST_VITALS_DIR = process.env.WALNUT_HOST_VITALS_DIR
+  || (IS_PROD_DAEMON_DIR ? path.join(HOME_DIR, '.open-walnut', 'tmp', 'host-vitals') : path.join(DAEMON_DIR, 'host-vitals'));
+const hostVitals = (__CREATE_HOST_VITALS__)({
+  fs: fs, os: os, execFile: execFile, platform: process.platform,
+  dir: HOST_VITALS_DIR, startedAt: DAEMON_START_TS,
+  // A Walnut server's own link: any socket but a follower's, a lane's or the bridge.
+  linked: function () { for (const c of wsClients) if (isServerClient(c)) return true; return false; },
+  running: function () { let n = 0; for (const s of sessions.values()) if (s.state === 'running') n++; return n; },
+});
 
 // The raw text of this daemon's owner stamp (daemon.owner in its own daemon dir,
 // written only by the local Walnut that spawned it): null when there is none (a
@@ -14222,6 +14244,7 @@ async function startDaemon() {
     try { hostServers.boot(); } catch (err) { logMsg('warn', 'host server: boot failed', { error: err.message }); }
     // The plugin jobs an earlier daemon ran here (twin of daemon-standalone.ts).
     try { pluginJobs.boot(); } catch (err) { logMsg('warn', 'plugin jobs: boot failed', { error: err.message }); }
+    hostVitals.start();
     console.log(port); // Print port for parent to capture
     // turnRetry: read from env ONCE at boot, so this line is the only way to
     // answer "is this daemon retrying, and with what budget?" without shell

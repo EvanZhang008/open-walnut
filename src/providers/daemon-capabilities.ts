@@ -768,6 +768,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // Both twins, not bridge-reachable, not for followers. Optional: without it a move
   // leaves those copies in the shared checkout and its summary says so.
   'task-move-clear-v1',
+  // 'host-vitals-v1' (host-vitals-core.ts): `host.vitals {days?, bucketMinutes?}` answers
+  // how this host is doing (CPU use, load, memory available, uptime, linked, running
+  // sessions) and folds the minute ledger the daemon writes under HOME (31 days) into
+  // up and linked shares, outages and boots. Read-only; not bridge-reachable, not for
+  // followers. Optional: without it the fleet view shows the host's status alone.
+  'host-vitals-v1',
   // 'oneshot-v1' (oneshot-core.ts): every `claude -p` Walnut starts outside a
   // session runs here (micro-Claude, inline subagents, the claude-cli model
   // adapter). `oneshot.run {runId, command, args, cwd, env, input, endInput,

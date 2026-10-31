@@ -1638,6 +1638,46 @@ completes unless `keep_source`; it is for work the user wants as a new task.
 - `PATCH /api/v1/hosts/:host/profile { kind?: kind | null, user_note?, refresh?:
   true }` → `200 { profile }`; `kind: null` returns to the automatic kind.
 
+### Host fleet (additive, 2026-10): `/hosts`, `/hosts/:host`
+
+Every host Walnut runs work on, one card each: the same data the Settings page
+(Remote Hosts, Overview), the phone and agents (`host_list`, `host_get`) read.
+Read-only; a read never dials a host. Each connected host's daemon answers one
+`host.vitals` (capability `host-vitals-v1`) within 3 s; a host that does not
+answer in time keeps its last reading with `now.stale: true`, and a host whose
+daemon predates the capability has `now` and `history` null.
+
+- `GET /api/v1/hosts?days=30` → `200 { hosts: FleetHost[], checkedAt }`, this Mac
+  (`__local__`) first, then each enabled host in config order.
+- `GET /api/v1/hosts/:host?days=&bucket=` → `200 { host: FleetHost }` with its
+  history over `days` (1 to 31, default 30) in buckets of `bucket` minutes (at
+  least 5; default 1440, or 60 when `days` is 1); `400 bad_host`, `404 unknown_host`.
+
+`FleetHost`: `{ host, label, local, line, checkedAt, connection: { kind: "local" |
+"ssh-tunnel" | "bridge", connected, phase, phaseLabel, since, rttMs, error },
+system: { os, arch, cpus, memBytes, diskFreeBytes, kind, probedAt } | null, now: {
+cpus, cpuUtil (0..1 | null), load: [1m, 5m, 15m] | null, memTotalBytes,
+memAvailBytes, uptimeSec, bootedAt, linked, at, stale } | null, history: {
+coverageFrom, bucketMinutes, buckets: [{ start, minutes, up, linked, cpu, mem,
+sessionsMax }], windows: [{ days: 1 | 7 | 30, minutes, up, linked, online,
+linkedShare, drops, downs, daemonStarts, boots }], outages: [{ from, to, minutes, kind: "down" |
+"unlinked" }], boots, daemonStarts } | null, sessions: { running }, spend: {
+last30dUsd, from, basis: "list-price" } | null, server: { enabled, program,
+phase, build, phone, message } | null, daemon: { version, startedAt, startup,
+runtime, vitals } | null, placement: { score, busy, reasons, weight, longRunning: { ok,
+reasons } } }`.
+History comes from a ledger each daemon writes itself, one line a minute, kept 31
+days under the host's HOME, so a Mac that slept never counts as the host being
+down: `up` minutes had the host and its daemon running, `linked` minutes also had
+a Walnut server linked. Shares count only minutes since the ledger began
+(`coverageFrom`). `placement.score`, `busy`, `reasons` and `weight` are session
+placement's own judgment of the host, the same as `GET /api/v1/hosts/load` (all null
+when its load is not known); `placement.longRunning` says whether a job that must keep
+running fits there. `sessions.running`
+counts Claude Code sessions whose process is alive there, idle ones included. The spend is
+token counts at public list prices, not an invoice. On the companion only each
+host's bridge state is known; the rest is null.
+
 ### Engine switch inside a task (additive, 2026-10): `/tasks/:id/sessions`, `/tasks/:id/switch-engine`
 
 A task can change its coding engine (Claude Code to Codex and back, any pair)

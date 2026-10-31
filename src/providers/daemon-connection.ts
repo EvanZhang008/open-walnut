@@ -493,6 +493,8 @@ export class DaemonConnection {
   private _daemonInstanceId: string | null = null
   /** Daemon start timestamp from the most recent successful `hello`. */
   private _daemonStartedAt: number | null = null
+  /** The daemon's own build, from hello (the fleet view shows it). */
+  private _daemonVersion: string | null = null
   /**
    * Capability list from the most recent successful `hello`, null until one
    * completes. EVERY connect path runs the handshake (connect / reconnect /
@@ -836,6 +838,7 @@ export class DaemonConnection {
   /** Bumps on every connect and disconnect edge: a run bound to the old value lost its socket. */
   get connectionEpoch(): number { return this._connectionEpoch }
   get daemonStartedAt(): number | null { return this._daemonStartedAt }
+  get daemonVersion(): string | null { return this._daemonVersion }
   /** Last bridge.configure reply's connected flag (null = never pushed / bridge disabled). */
   get lastBridgeConnected(): boolean | null { return this._lastBridgeConnected }
   get lastBridgeCheckedAt(): number | null { return this._lastBridgeCheckedAt }
@@ -3527,6 +3530,7 @@ export class DaemonConnection {
       // files cannot tell a bun-run daemon from the binary, the daemon can.
       if (res.runtime === 'bun' || res.runtime === 'binary' || res.runtime === 'node') this._runtime = res.runtime
       this._taskDirRoot = typeof res.taskDirRoot === 'string' && res.taskDirRoot.startsWith('/') ? res.taskDirRoot : null
+      this._daemonVersion = typeof res.version === 'string' && res.version.length <= 64 ? res.version : null
       const startup = (res.cronSupervision as { startup?: unknown } | undefined)?.startup
       this._daemonStartup = typeof startup === 'string' && ['boot', 'login', 'on-demand', 'service'].includes(startup) ? startup : 'on-demand'
       const missing = REQUIRED_DAEMON_CAPABILITIES.filter(c => !caps.includes(c))

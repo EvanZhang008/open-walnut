@@ -99,3 +99,50 @@ defineOp({
   bind: { method: 'GET', path: '/hosts/:host/profile' },
   tags: { readonly: true, remote: 'allow' },
 });
+
+/** One line per host, so an agent reads the fleet without walking the day buckets. */
+function fleetOutcome(body: unknown, one: boolean) {
+  const b = (body ?? {}) as { hosts?: Array<Record<string, unknown>>; host?: Record<string, unknown> }
+  const hosts = one ? (b.host ? [b.host] : []) : (b.hosts ?? [])
+  const lines = hosts.map((h) => String((h as { line?: unknown }).line ?? h.host))
+  return withOutcome(b as Record<string, unknown>, lines.length ? lines.join('\n') : 'Walnut knows no hosts yet.',
+    one ? 'history.buckets are oldest first; history.outages newest first.' : 'Pick a host for long-running work only where placement.longRunning.ok; host_get gives one host\'s history.');
+}
+
+defineOp({
+  name: 'host_list',
+  title: 'Every host Walnut runs work on, and how each is doing',
+  description:
+    'The fleet view, the same cards Settings › Remote Hosts shows: for each host (this Mac first) what it is (OS, CPUs, memory), '
+    + 'how it is doing now (CPU use, load, memory available, uptime; `now.stale` when it stopped answering), how it did lately '
+    + '(its own minute ledger: share of minutes up and linked over 1, 7 and 30 days, outages, boots, daemon restarts), running sessions, '
+    + 'model spend there over 30 days at public list prices (not a bill), how it connects (local, SSH tunnel, bridge; round trip), '
+    + 'the Walnut server it runs for the Mac, its daemon (version, whether it starts by itself after a reboot), '
+    + 'and placement: the room score session placement judges it by (busy, which caps, its weight) and whether a job that must keep running fits there, with the reasons. '
+    + 'Read-only; never dials a host.',
+  input: {
+    days: z.number().int().min(1).max(31).optional().describe('History window in days (default 30, one bucket a day)'),
+  },
+  bind: { method: 'GET', path: '/hosts' },
+  timeoutMs: 20_000,
+  mapResult: ({ body }) => fleetOutcome(body, false),
+  tags: { readonly: true, remote: 'allow' },
+});
+
+defineOp({
+  name: 'host_get',
+  title: 'One host\'s card and history',
+  description:
+    'One host of the fleet view (see host_list) with its history at the resolution you ask: `days` back (1 to 31) in buckets of '
+    + '`bucket` minutes (default one a day; one an hour when days is 1). Each bucket: minutes covered, up, linked, average CPU use and '
+    + 'available memory, most sessions running. 404 for a host Walnut does not know.',
+  input: {
+    host: z.string().min(1).describe('Host alias ("__local__" = the primary machine)'),
+    days: z.number().int().min(1).max(31).optional().describe('History window in days (default 30)'),
+    bucket: z.number().int().min(5).max(44_640).optional().describe('Bucket size in minutes (default 1440, or 60 for one day)'),
+  },
+  bind: { method: 'GET', path: '/hosts/:host' },
+  timeoutMs: 20_000,
+  mapResult: ({ body }) => fleetOutcome(body, true),
+  tags: { readonly: true, remote: 'allow' },
+});
