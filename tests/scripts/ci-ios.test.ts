@@ -15,20 +15,25 @@ type Step = { name?: string; run?: string; if?: string; uses?: string; env?: Rec
 const doc = parseYaml(raw) as { jobs: Record<string, { 'runs-on': string; needs?: string[]; 'continue-on-error'?: string; env?: Record<string, string>; strategy?: { matrix: { layer: string[] } }; steps: Step[] }> }
 const job = doc.jobs.ios!
 
-/** The classes a skip list names, `-skip-testing:<Target>/<Class>` each. */
-function skipped(list: string | undefined, target: string): string[] {
+/** What a skip list names, `-skip-testing:<Target>/<Class>[/<method>]` each. */
+function skips(list: string | undefined, target: string): { cls: string; method?: string }[] {
   return (list ?? '').split(/\s+/).filter(Boolean).map((arg) => {
-    const m = arg.match(new RegExp(`^-skip-testing:${target}/(\\w+)$`))
-    if (!m) throw new Error(`not a ${target} class skip: ${arg}`)
-    return m[1]!
+    const m = arg.match(new RegExp(`^-skip-testing:${target}/(\\w+)(?:/(\\w+))?$`))
+    if (!m) throw new Error(`not a ${target} skip: ${arg}`)
+    return { cls: m[1]!, ...(m[2] ? { method: m[2] } : {}) }
   })
+}
+
+/** The classes a skip list leaves out whole. */
+function skipped(list: string | undefined, target: string): string[] {
+  return skips(list, target).filter((s) => !s.method).map((s) => s.cls)
 }
 
 /** Every XCTestCase class of a test target, with its file and its own source. */
 function testClasses(target: string): { name: string; file: string; body: string }[] {
   const dir = path.join(ROOT, 'ios-native', target)
   return fs.readdirSync(dir).filter((f) => f.endsWith('.swift')).flatMap((file) => {
-    const parts = fs.readFileSync(path.join(dir, file), 'utf8').split(/^(?:final )?class (\w+)\s*:\s*XCTestCase/m)
+    const parts = fs.readFileSync(path.join(dir, file), 'utf8').split(/^(?:@\w+\s+)*(?:final\s+)?class (\w+)\s*:\s*XCTestCase/m)
     const out: { name: string; file: string; body: string }[] = []
     for (let i = 1; i < parts.length; i += 2) out.push({ name: parts[i]!, file, body: parts[i + 1]! })
     return out
@@ -75,15 +80,21 @@ describe('the iOS job in ci.yml', () => {
   })
 
   it('leaves only wall-clock perf gates to the Mac, and every one of them', () => {
-    const skips = skipped(job.env?.IOS_CI_SKIP_UNIT, 'WalnutTests')
+    const all = skips(job.env?.IOS_CI_SKIP_UNIT, 'WalnutTests')
     const classes = testClasses('WalnutTests')
     const isTiming = (c: { file: string }) => /Perf|Watchdog/.test(c.file)
-    for (const name of skips) expect(classes.filter(isTiming).map((c) => c.name), `${name} is no perf gate`).toContain(name)
+    for (const s of all) {
+      const c = classes.filter(isTiming).find((c) => c.name === s.cls)
+      expect(c, `${s.cls} is no perf gate`).toBeDefined()
+      if (s.method) expect(c!.body, `${s.cls} has no ${s.method}`).toMatch(new RegExp(`func ${s.method}\\b`))
+    }
+    // A class skipped by method counts as placed: its untimed tests still run here.
+    const skippedNames = new Set(all.map((s) => s.cls))
     // A new timing class is placed on purpose: skipped, or here when its budgets hold
     // on a shared runner (these passed on run 41198110591 with room to spare).
     const holdsOnARunner = ['ScrollPerfTests', 'WatchdogStallAccountingTests']
     for (const c of classes.filter(isTiming)) {
-      expect(skips.includes(c.name) !== holdsOnARunner.includes(c.name), `${c.name} (${c.file}): skip it in IOS_CI_SKIP_UNIT or list it as holding its budget`).toBe(true)
+      expect(skippedNames.has(c.name) !== holdsOnARunner.includes(c.name), `${c.name} (${c.file}): skip it in IOS_CI_SKIP_UNIT or list it as holding its budget`).toBe(true)
     }
     const unit = job.steps.find((s) => s.if === "matrix.layer == 'unit'" && s.run?.includes('xcodebuild test'))!
     expect(unit.run).toContain('$IOS_CI_SKIP_UNIT')

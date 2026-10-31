@@ -60,7 +60,9 @@ export async function openListProjectMenu(page: Page, project: string): Promise<
  * meaning); specs that clicked the name for the pane waited for nothing.
  */
 export async function openProjectDetails(page: Page, project: string): Promise<Locator> {
-  const pane = page.locator('.project-detail-pane')
+  const pane = page.locator('.project-detail-pane').filter({
+    has: page.locator('.todo-detail-project').filter({ hasText: new RegExp('^' + project.replace(/[.*+?^$()|[\]\\{}]/g, '\\$&') + '$') }),
+  })
   // A live update (another spec's task on the shared fixture) can redraw the list and
   // close the menu under the click: open it again until the pane is there.
   let tries = 0

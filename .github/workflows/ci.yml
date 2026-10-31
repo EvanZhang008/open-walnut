@@ -819,14 +819,20 @@ jobs:
       matrix:
         layer: [unit, ui]
     # What this job leaves to the Mac (tests/scripts/ci-ios.test.ts keeps both lists whole):
-    # the wall-clock budgets of the perf gates, which a shared runner misses by up to
+    # the wall-clock budgets of the perf gates (a whole class, or the timed methods of
+    # one whose other tests count work), which a shared runner misses by up to
     # 2.7x (run 41198110591: a 150 ms tick took 193 ms), and the UI classes that need
     # their own fixture server (run-media-ui.sh, run-inbox-items-ui.sh, the peer and
     # stub servers, a real voice model) and fail, by design, on the offline pairing.
     env:
       IOS_CI_SKIP_UNIT: >-
         -skip-testing:WalnutTests/MarkdownPerfTests
-        -skip-testing:WalnutTests/TasksDerivedPerfTests
+        -skip-testing:WalnutTests/TasksDerivedPerfTests/testDerivedPassBudgetAtScale
+        -skip-testing:WalnutTests/TasksDerivedPerfTests/testSearchKeystrokeBudget
+        -skip-testing:WalnutTests/TasksDerivedPerfTests/testBoardSearchKeystrokeBudget
+        -skip-testing:WalnutTests/TasksDerivedPerfTests/testTheBoardPassScalesLinearlyWithTheSessionList
+        -skip-testing:WalnutTests/TasksDerivedPerfTests/testTheBoardPassScalesLinearlyWithTheTaskList
+        -skip-testing:WalnutTests/TasksDerivedPerfTests/testABoardSearchDoesNotPayToSortRowsItDiscards
         -skip-testing:WalnutTests/TimelinePerfGateTests
         -skip-testing:WalnutTests/WatchdogRegressionTests
       IOS_CI_SKIP_UI: >-
