@@ -19,6 +19,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { endRunningTurn, startRunningTurn } from './status-section-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 // Both browser projects load this file at about the same moment: the pid keeps them apart.
@@ -95,7 +96,10 @@ test.beforeAll(async ({ request }) => {
   expect(board.ok(), await board.text()).toBe(true)
 })
 
+const turns: string[] = []
+
 test.afterAll(async ({ request }) => {
+  for (const sid of turns.splice(0)) await endRunningTurn(request, sid)
   for (const id of made) await removeTask(request, id)
 })
 
@@ -195,10 +199,10 @@ test('search, a pick that survives a reload, live state, the keyboard, and the o
   await expect(row(page, BETA)).toHaveAttribute('aria-selected', 'true', { timeout: 30_000 })
   await expect(page.getByTestId('org-detail-title')).toHaveText(`Beta solo ${STAMP}`)
 
-  // Live: work that starts moving recolors the row without a reload.
+  // Live: work that starts moving recolors the row without a reload. Working is a turn running
+  // now (a task only marked In progress, with no session, waits).
   await expect(row(page, BETA)).toHaveAttribute('data-state', 'quiet')
-  const patched = await request.patch(`/api/tasks/${ids.beta}`, { data: { phase: 'IN_PROGRESS' } })
-  expect(patched.ok(), await patched.text()).toBe(true)
+  turns.push(await startRunningTurn(request, ids.beta))
   await expect(row(page, BETA)).toHaveAttribute('data-state', 'working', { timeout: 30_000 })
   await expect(row(page, BETA).getByTestId('org-channel-latest')).toHaveText(`Working on: Beta solo ${STAMP}`)
 

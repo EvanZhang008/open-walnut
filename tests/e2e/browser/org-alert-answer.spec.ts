@@ -437,7 +437,11 @@ test('Quote puts the ask in this VP\'s chat, ahead of what was typed, not in its
   await alertRow(page, ids.words).getByTestId('org-alert-quote').click()
   await expect(page.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
   await expect(composer()).toHaveValue(new RegExp(`^> Budget ${STAMP}: Quote me ${STAMP}`), { timeout: 30_000 })
-  await expect(homeComposer).toHaveValue('')
+  // This chat's panel took it: focus is in it and the page stays on the Org page. The Home column
+  // of the same session shows the same words, since a session keeps one draft (utils/drafts.ts).
+  await expect(composer()).toBeFocused()
+  await expect(page).toHaveURL(/\/org(\?|$)/)
+  await expect(homeComposer).not.toBeFocused()
   // Typed words stay after a second quote of the same row.
   await composer().press('End')
   await composer().pressSequentially(' and why')
