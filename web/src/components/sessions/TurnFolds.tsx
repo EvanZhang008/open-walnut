@@ -8,7 +8,7 @@
  * reader opened stays open when its rows remount: when the turn ends, when
  * history is fetched again, after a reconnect.
  */
-import { useCallback, useSyncExternalStore, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useSyncExternalStore, type ReactNode } from 'react';
 import '@/styles/turn-folds.css';
 
 // Open folds, for the page (a remount keeps a fold the reader opened open), and
@@ -26,6 +26,14 @@ export function openTurnFold(key: string): void {
   notify();
 }
 
+/**
+ * Folds one panel's timeline opened for its reader (fold-reader-hold.ts): open in
+ * that panel only, so another panel on the same session, scrolled elsewhere,
+ * never grows under its own reader. The timeline adds to it during its render,
+ * before the fold's row renders, so nobody needs telling.
+ */
+export const ReaderOpenedFolds = createContext<Set<string> | null>(null);
+
 /** Test seam. */
 export function _clearTurnFolds(): void {
   opened.clear();
@@ -37,11 +45,12 @@ export const processFoldKey = (foldId: string) => `process:${foldId}`;
 export const turnFoldKey = (foldId: string) => `turn:${foldId}`;
 
 function useTurnFold(key: string): [boolean, () => void] {
-  const open = useSyncExternalStore(subscribe, () => opened.has(key));
+  const forReader = useContext(ReaderOpenedFolds);
+  const open = useSyncExternalStore(subscribe, () => opened.has(key) || !!forReader?.has(key));
   const toggle = useCallback(() => {
-    if (opened.has(key)) opened.delete(key); else opened.add(key);
+    if (opened.has(key) || forReader?.has(key)) { opened.delete(key); forReader?.delete(key); } else opened.add(key);
     notify();
-  }, [key]);
+  }, [key, forReader]);
   return [open, toggle];
 }
 

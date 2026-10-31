@@ -19,6 +19,7 @@
  * single-timeline-fault-injection.spec.ts (no daemon, no real CLI).
  */
 import { test, expect, type Page } from '@playwright/test';
+import { createEnvelopeKit } from '../../../src/core/peers/envelope-kit';
 
 const SESSION_ID = 'pw-scroll-absorption';
 
@@ -143,6 +144,114 @@ const viewportAnchor = (page: Page): Promise<string | null> => page.evaluate(() 
   return null;
 });
 
+// A turn that ends in a tool call: it stays open (turn-shape.ts), so nothing folds.
+const END_TOOL_ID = 'toolu_scroll_end';
+const endTool = {
+  role: 'assistant', text: '', msgId: 'turn-end', timestamp: new Date(1700002000000).toISOString(),
+  tools: [{ name: 'Bash', toolUseId: END_TOOL_ID, input: { command: 'ls' }, result: 'ok' }],
+};
+
+// A turn another task's message started: its fold is drawn (over the message)
+// before the turn streams, and at the turn's end it grows under the same key to
+// hold everything before the answer.
+const peerNote = {
+  role: 'user', msgId: 'peer-note', timestamp: new Date(1700000900000).toISOString(),
+  text: createEnvelopeKit().buildWalnutMessage({
+    kind: 'peer-note',
+    attrs: { from: 'Sample lead [abcd1234]', title: 'Check the analysis' },
+    body: 'Please run the analysis again.',
+  }),
+};
+
+/** A reader scrolled up mid-turn through the turn's end: STREAM_COUNT paragraphs
+ *  stream (then `tail`'s tool call), the reader wheels up to mid-container, and
+ *  the archive flushes the turn. `lead` rows open the turn in history. */
+async function readerThroughAbsorption(page: Page, tail: readonly unknown[], lead: readonly unknown[] = []) {
+  let flushed = false;
+  await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
+    const url = new URL(route.request().url());
+    const since = url.searchParams.get('since');
+    const full = flushed ? [...base, ...lead, ...streamed, ...tail] : [...base, ...lead];
+    if (since !== null) {
+      const n = Number(since);
+      return route.fulfill({ json: { messages: full.slice(n), cursor: full.length, delta: true, total: full.length } });
+    }
+    return route.fulfill({ json: { messages: full, cursor: full.length, delta: false, total: full.length } });
+  });
+  await mockSessionDetail(page);
+
+  await page.goto(`/sessions?id=${SESSION_ID}`);
+  await page.waitForSelector('.session-history .session-msg, .session-history .session-msg-bare', { timeout: 15000 });
+  await waitForWs(page);
+  await page.waitForTimeout(500);
+
+  // ── Turn streams 120 paragraphs ──
+  for (let i = 0; i < STREAM_COUNT; i++) {
+    await injectEvent(page, 'session:text-delta', { sessionId: SESSION_ID, delta: streamed[i].text, msgId: `turn-${i}` });
+  }
+  if (tail.length > 0) {
+    await injectEvent(page, 'session:tool-use', { sessionId: SESSION_ID, toolName: 'Bash', toolUseId: END_TOOL_ID, input: { command: 'ls' } });
+    await injectEvent(page, 'session:tool-result', { sessionId: SESSION_ID, toolUseId: END_TOOL_ID, result: 'ok' });
+  }
+  // Let the 150ms text flusher drain and layout settle.
+  await expect.poll(async () => (await geom(page)).sh, { timeout: 8000 }).toBeGreaterThan(6000);
+
+  // ── Reader scrolls UP into older content (real wheel events, mid-turn) ──
+  // Stop MID-container, not at the very top: the production teleport is the
+  // browser CLAMPING a mid-range scrollTop (7106) to the collapsed max
+  // (1331). At top=0 the collapse happens below the reader and no clamp
+  // occurs, so that variant doesn't reproduce the jump.
+  const box = (await page.locator('.session-history').boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  for (let i = 0; i < 30; i++) {
+    await page.mouse.wheel(0, -600);
+    await page.waitForTimeout(40);
+    const g = await geom(page);
+    if (g.top <= (g.sh - g.ch) / 2) break; // reached mid-range, stop here
+  }
+  const before = await geom(page);
+  const beforeAnchor = await viewportAnchor(page);
+  // Preconditions for the bug: far from bottom AND far from top (clampable).
+  expect(before.sh - before.top - before.ch).toBeGreaterThan(1000);
+  expect(before.top).toBeGreaterThan(2000);
+  expect(beforeAnchor).toBeTruthy();
+
+  // ── THE ABSORPTION: turn ends, archive flushes, delta absorbs the blocks ──
+  // Pre-fix this collapsed scrollHeight by thousands of px (streamed blocks
+  // hidden, history rendering only the 30-row tail) and clamped the reader
+  // toward the top. The window pin keeps the reader's rows rendered, so
+  // geometry stays stable: assert stability over a settle window instead
+  // of waiting for a collapse that must no longer happen.
+  flushed = true;
+  await injectEvent(page, 'session:result', { sessionId: SESSION_ID, result: 'done', isError: false });
+  await injectEvent(page, 'session:batch-completed', { sessionId: SESSION_ID, count: 1 });
+
+  // Absorption is proven when the streamed paragraphs exist as PERSISTED
+  // rows: the delta lands, messages grow past base(60), and with the pinned
+  // window they render below the reader. Detect via the earlier-button
+  // hidden-count staying while total DOM rows grow. Simplest robust probe:
+  // wait until row count exceeds what the tail window alone (30) could hold.
+  await expect.poll(async () => page.evaluate(() => {
+    const el = document.querySelector('.session-history') as HTMLElement;
+    return el.querySelectorAll('[data-msg-index]').length;
+  }), { timeout: 10000 }).toBeGreaterThan(40);
+  // Then hold 1.5s so any late collapse (delayed reset/GC) would surface.
+  await page.waitForTimeout(1500);
+
+  const after = await geom(page);
+  const afterAnchor = await viewportAnchor(page);
+
+  // ── THE INVARIANTS (the fix) ──
+  // 1. No teleport: the reader was mid-container; they must stay there.
+  expect(after.top, `teleported: top ${before.top}→${after.top} (sh ${before.sh}→${after.sh})`).toBeGreaterThan(1000);
+  // 2. No collapse under the reader: height may grow (rows appended below)
+  //    but must not shrink out from under a scrolled-up reader.
+  expect(after.sh, `scrollHeight collapsed ${before.sh}→${after.sh}`).toBeGreaterThan(before.sh - 300);
+  // 3. The row the reader was looking at is still the first visible row.
+  expect(afterAnchor, `reader was looking at "${beforeAnchor}" (top=${before.top}/${before.sh}); after absorption the viewport shows "${afterAnchor}" (top=${after.top}/${after.sh})`)
+    .toBe(beforeAnchor);
+}
+
 test.describe('Scroll teleport on turn-end absorption', () => {
   test('wheel-up during live streaming escapes follow-bottom — no drag-back fight', async ({ page }) => {
     // inc-1786690697303: while tokens flowed, debouncedScroll re-armed
@@ -202,84 +311,22 @@ test.describe('Scroll teleport on turn-end absorption', () => {
     // no longer slide the reader's rows out and collapse scrollHeight. This
     // spec now pins the fix: geometry must stay stable and the reader's
     // viewport anchor row must survive the turn-end absorption.
-    let flushed = false;
-    await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
-      const url = new URL(route.request().url());
-      const since = url.searchParams.get('since');
-      const full = flushed ? [...base, ...streamed] : base;
-      if (since !== null) {
-        const n = Number(since);
-        return route.fulfill({ json: { messages: full.slice(n), cursor: full.length, delta: true, total: full.length } });
-      }
-      return route.fulfill({ json: { messages: full, cursor: full.length, delta: false, total: full.length } });
-    });
-    await mockSessionDetail(page);
+    // Since the answered-turn fold (turn-shape.ts) this turn's steps fold at its
+    // end: the fold opens under this reader instead of closing over them.
+    await readerThroughAbsorption(page, []);
+  });
 
-    await page.goto(`/sessions?id=${SESSION_ID}`);
-    await page.waitForSelector('.session-history .session-msg, .session-history .session-msg-bare', { timeout: 15000 });
-    await waitForWs(page);
-    await page.waitForTimeout(500);
+  test('reader scrolled up mid-turn is not moved when the absorbed rows are taller than the stream blocks', async ({ page }) => {
+    // Nothing folds here, but each persisted row carries its action row, which
+    // the stream block it replaces did not: measured 2026-10-30, the reader went
+    // from paragraph 34 to 22 with scrollTop unchanged. Their row is held instead.
+    await readerThroughAbsorption(page, [endTool]);
+  });
 
-    // ── Turn streams 120 paragraphs ──
-    for (let i = 0; i < STREAM_COUNT; i++) {
-      await injectEvent(page, 'session:text-delta', { sessionId: SESSION_ID, delta: streamed[i].text, msgId: `turn-${i}` });
-    }
-    // Let the 150ms text flusher drain and layout settle.
-    await expect.poll(async () => (await geom(page)).sh, { timeout: 8000 }).toBeGreaterThan(6000);
-
-    // ── Reader scrolls UP into older content (real wheel events, mid-turn) ──
-    // Stop MID-container, not at the very top: the production teleport is the
-    // browser CLAMPING a mid-range scrollTop (7106) to the collapsed max
-    // (1331). At top=0 the collapse happens below the reader and no clamp
-    // occurs — that variant doesn't reproduce the jump.
-    const box = (await page.locator('.session-history').boundingBox())!;
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-    for (let i = 0; i < 30; i++) {
-      await page.mouse.wheel(0, -600);
-      await page.waitForTimeout(40);
-      const g = await geom(page);
-      if (g.top <= (g.sh - g.ch) / 2) break; // reached mid-range — stop here
-    }
-    const before = await geom(page);
-    const beforeAnchor = await viewportAnchor(page);
-    // Preconditions for the bug: far from bottom AND far from top (clampable).
-    expect(before.sh - before.top - before.ch).toBeGreaterThan(1000);
-    expect(before.top).toBeGreaterThan(2000);
-    expect(beforeAnchor).toBeTruthy();
-
-    // ── THE ABSORPTION: turn ends, archive flushes, delta absorbs the blocks ──
-    // Pre-fix this collapsed scrollHeight by thousands of px (streamed blocks
-    // hidden, history rendering only the 30-row tail) and clamped the reader
-    // toward the top. The window pin keeps the reader's rows rendered, so
-    // geometry stays stable — assert stability over a settle window instead
-    // of waiting for a collapse that must no longer happen.
-    flushed = true;
-    await injectEvent(page, 'session:result', { sessionId: SESSION_ID, result: 'done', isError: false });
-    await injectEvent(page, 'session:batch-completed', { sessionId: SESSION_ID, count: 1 });
-
-    // Absorption is proven when the streamed paragraphs exist as PERSISTED
-    // rows: the delta lands, messages grow past base(60), and with the pinned
-    // window they render below the reader. Detect via the earlier-button
-    // hidden-count staying while total DOM rows grow — simplest robust probe:
-    // wait until row count exceeds what the tail window alone (30) could hold.
-    await expect.poll(async () => page.evaluate(() => {
-      const el = document.querySelector('.session-history') as HTMLElement;
-      return el.querySelectorAll('[data-msg-index]').length;
-    }), { timeout: 10000 }).toBeGreaterThan(40);
-    // Then hold 1.5s so any late collapse (delayed reset/GC) would surface.
-    await page.waitForTimeout(1500);
-
-    const after = await geom(page);
-    const afterAnchor = await viewportAnchor(page);
-
-    // ── THE INVARIANTS (the fix) ──
-    // 1. No teleport: the reader was mid-container; they must stay there.
-    expect(after.top, `teleported: top ${before.top}→${after.top} (sh ${before.sh}→${after.sh})`).toBeGreaterThan(1000);
-    // 2. No collapse under the reader: height may grow (rows appended below)
-    //    but must not shrink out from under a scrolled-up reader.
-    expect(after.sh, `scrollHeight collapsed ${before.sh}→${after.sh}`).toBeGreaterThan(before.sh - 300);
-    // 3. The row the reader was looking at is still the first visible row.
-    expect(afterAnchor, `reader was looking at "${beforeAnchor}" (top=${before.top}/${before.sh}); after absorption the viewport shows "${afterAnchor}" (top=${after.top}/${after.sh})`)
-      .toBe(beforeAnchor);
+  test('reader scrolled up mid-turn is not moved when the fold already drawn grows over their rows', async ({ page }) => {
+    // The turn's fold is on screen before its end (over the message that started
+    // it), and at the end it takes the streamed paragraphs too, under the same
+    // key. Weighed by key alone it stayed closed over the rows being read.
+    await readerThroughAbsorption(page, [], [peerNote]);
   });
 });

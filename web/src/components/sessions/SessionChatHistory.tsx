@@ -64,7 +64,8 @@ import { joinsQuiet, MSG_KIND_ROLE, SYSTEM_VARIANT_ROLE, toolRole, TOOL_ROLE_FOL
 import { chunkByKind, leadingStepGroup, stepGroups, type StepGroup, type StepKind } from './stream-step-groups';
 import { isEnvelopeOnly, parseSessionEnvelopes } from '@open-walnut/history-session-envelope';
 import { usePeerNameOf } from './peer-name';
-import { NoActionMark, ProcessFoldRow, openTurnFold, turnFoldKey } from './TurnFolds';
+import { NoActionMark, ProcessFoldRow, ReaderOpenedFolds, openTurnFold, turnFoldKey } from './TurnFolds';
+import { foldPlace, joinedRows, readReaderView, restoreReaderRow, rowKeysAttr, rowsAsDrawn, type HeldBefore, type ReaderView } from './fold-reader-hold';
 import { shapeTurns, type TurnShape } from '@/utils/turn-shape';
 import { noActionRows, readTurnMarker, stripTurnMarker } from '@/utils/turn-end-marker';
 import { detectOutboundSend } from './session-outbound';
@@ -114,7 +115,6 @@ import { ContinueInNewFolderButton } from './FolderGoneBanner';
 import type { ContinueInNewFolderResult } from '@/api/sessions';
 import { historyErrorText, olderUnavailableText } from './history-notice-text';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
-
 import { PartIdentity } from './part-identity';
 
 /** A send call's targets (send-targets.ts), parsed once per call and result: a
@@ -3982,6 +3982,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         <div
           key={`mrun-${first.m.msgId ?? first.globalIndex}`}
           data-msg-index={first.globalIndex}
+          data-row-keys={rowKeysAttr(part.memberMsgs.flatMap((m) => (m.tools ?? []).map((t) => t.toolUseId)))}
           {...threadWrapperProps(first.m.msgId ?? first.m.walnutMessageId, 'session-msg-bare')}
         >
           {!part.seeded && forkBoundaryIndex != null && first.globalIndex === forkBoundaryIndex && (
@@ -4024,6 +4025,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         key={m.msgId ?? m.walnutMessageId ?? `${m.role}:${m.timestamp}:${globalIndex}`}
         data-msg-index={globalIndex}
         data-message-id={m.msgId ?? m.walnutMessageId}
+        data-row-keys={rowKeysAttr((m.tools ?? []).map((t) => t.toolUseId))}
         // Read by the quote-pin selection pill, which only has the DOM row it
         // found the selection in — cheaper than threading the messages array
         // into an overlay that needs one row's metadata.
@@ -4252,6 +4254,87 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // the fourth report, a failed command split one stretch in three). In Conversation
   // Mode a stretch stays within one question, and a question's own rows keep
   // their label.
+  // A turn's rows landing never move a scrolled-up reader (fold-reader-hold.ts):
+  // a fold that takes rows they can see opens, and the row they read is held in
+  // place, also when the persisted rows that replace the stream blocks are taller
+  // than the blocks were (their action row). A fold is weighed for the rows that
+  // joined it since last commit, so a fold already drawn that grows (a turn's
+  // fold keeps its mid-turn key at the turn's end) counts too, and each row is
+  // looked up as last commit drew it (committedRows).
+  const committedFoldRows = useRef<ReadonlyMap<string, ReadonlySet<SessionHistoryMessage>>>(new Map());
+  const committedRows = useRef<{ messages: readonly SessionHistoryMessage[]; from: number; blocks: readonly StreamingBlock[] }>({ messages: [], from: 0, blocks: [] });
+  const committedAbsorbed = useRef(0);
+  // Folds opened for this panel's reader (TurnFolds ReaderOpenedFolds).
+  const readerOpened = useMemo(() => new Set<string>(), [sessionId]);
+  // The row to hold, from this render only: a render that never commits leaves none behind.
+  const readerHold: { at: { key: string; top: number } | null } = { at: null };
+  const foldRowsNow = new Map<string, Set<SessionHistoryMessage>>();
+  // Rows drawn as their own message row this render (they wear their id; a row
+  // derived into a run, its reasoning say, borrows its source's id and must not).
+  const ownRows = new Set<SessionHistoryMessage>();
+  let readerView: ReaderView | null | undefined;
+  /** The DOM the reader still sees, read once per render; null at the bottom. */
+  const viewNow = (): ReaderView | null => {
+    if (readerView === undefined) {
+      const box = containerRef.current;
+      readerView = box && !isAtBottom.current ? readReaderView(box) : null;
+    }
+    return readerView;
+  };
+  /** The keys a row's element wears (fold-reader-hold.ts keysOfElement). */
+  const rowKeysOf = (m: SessionHistoryMessage): string[] => {
+    const keys: string[] = [];
+    const id = m.msgId ?? m.walnutMessageId;
+    if (id && ownRows.has(m)) keys.push(`m:${id}`);
+    for (const t of m.tools ?? []) if (t.toolUseId) keys.push(`t:${t.toolUseId}`);
+    return keys;
+  };
+  let committedIndex: HeldBefore<SessionHistoryMessage> | undefined;
+  /** What last commit drew: the keys its window of rows and its stream blocks wore, and each row's index. */
+  const committed = () => {
+    if (!committedIndex) {
+      const { messages: rows, from, blocks: drawnBlocks } = committedRows.current;
+      const keys = new Set<string>();
+      const indexOf = new Map<SessionHistoryMessage, number>();
+      for (let i = from; i < rows.length; i++) {
+        const r = rows[i];
+        indexOf.set(r, i);
+        const id = r.msgId ?? r.walnutMessageId;
+        if (id) keys.add(`m:${id}`);
+        for (const t of r.tools ?? []) if (t.toolUseId) keys.add(`t:${t.toolUseId}`);
+      }
+      for (const b of drawnBlocks) {
+        if (b.type === 'tool_call') keys.add(`t:${b.toolUseId}`);
+        else if ((b.type === 'text' || b.type === 'thinking') && b.msgId) keys.add(`m:${b.msgId}`);
+      }
+      committedIndex = { keysOf: rowKeysOf, keys, indexOf };
+    }
+    return committedIndex;
+  };
+  if (shownHiddenBlocks.size !== committedAbsorbed.current) {
+    const view = viewNow();
+    if (view) readerHold.at ??= view.anchor;
+  }
+  const meetReader = (key: string, items: readonly Item[]) => {
+    const rows = new Set<SessionHistoryMessage>();
+    for (const { part } of items) {
+      if (part.kind === 'msg') ownRows.add(part.m);
+      for (const m of rowsOf(part)) rows.add(m);
+    }
+    foldRowsNow.set(key, rows);
+    const joined = joinedRows(rows, committedFoldRows.current.get(key));
+    if (joined.length === 0 || isAtBottom.current) return;
+    // Rows last commit did not hold at all (an older page just loaded) were not
+    // on screen: nothing to weigh, and no DOM to read.
+    const drawn = rowsAsDrawn(joined, committed());
+    if (!drawn) return;
+    const view = viewNow();
+    if (!view) return;
+    const place = foldPlace(view, drawn);
+    if (!place) return;
+    if (place === 'inside') readerOpened.add(key);
+    readerHold.at ??= view.anchor;
+  };
   let quiet: Item[] = [];
   let quietKey = '';
   const emitQuiet = (answerThinking?: string) => {
@@ -4266,6 +4349,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const body = items.map((x) => renderHistoryPart(x.part));
     if (answerThinking) body.push(<SessionThinking key={`fold-thinking-${id}`} text={answerThinking} />);
     markAll(items, turnFoldKey(id));
+    meetReader(turnFoldKey(id), items);
     const failed = failedOf(items.map((x) => x.part));
     const steps = items.flatMap((x) => foldStepsOf(x.part));
     if (answerThinking) steps.push({ kind: 'thought' });
@@ -4356,6 +4440,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const tail = tailItems.map((x) => x.part);
       const id = idOf(tail[0]);
       markAll(tailItems, turnFoldKey(id));
+      meetReader(turnFoldKey(id), tailItems);
       const head = headOf(tail[0]);
       const group = leadingGroup;
       // Built once renderQueuedRow exists (the group's cards render with it).
@@ -4381,6 +4466,18 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       };
     }
   }
+  // Before paint: what is on screen now becomes last commit's, and a held row
+  // goes back where the reader saw it (a scroll write, so a reader at the bottom,
+  // whom the follow-bottom paths keep there, is left alone).
+  const absorbedNow = shownHiddenBlocks.size;
+  const hold = readerHold.at;
+  useLayoutEffect(() => {
+    committedFoldRows.current = foldRowsNow;
+    committedRows.current = { messages, from: hiddenCount, blocks };
+    committedAbsorbed.current = absorbedNow;
+    const box = containerRef.current;
+    if (hold && box && !isAtBottom.current) restoreReaderRow(box, hold);
+  });
 
   // ── The comment card: the target question beside its passage (Conversation Mode).
   const cardLayerRef = useRef<HTMLDivElement | null>(null);
@@ -4731,7 +4828,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   if (liveTailRow) pageRows.push(liveTailRow());
 
   return (
-    <>
+    <ReaderOpenedFolds.Provider value={readerOpened}>
       {/* Team tab bar — shown when session has team(s) */}
       {teams.length > 0 && (
         <div className="team-tab-bar">
@@ -5170,8 +5267,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 // The same shell and key the stretch will have once a tool joins
                 // it, so a reader who opened the reasoning keeps it open through
                 // the fold.
+                const thinkingIds = thinkingIdx.map((k) => { const t = timeline[k]; return t.kind === 'block' && t.block.type === 'thinking' ? t.block.msgId : undefined; });
                 return (
-                  <div key={`run-${item.index}`} className="session-msg-bare">
+                  <div key={`run-${item.index}`} className="session-msg-bare" data-row-keys={rowKeysAttr([], thinkingIds)}>
                     <ToolRunShell phrase="Thinking" failCount={0} running={isThinkingTail(thinkingIdx[thinkingIdx.length - 1])}>
                       <div className="chat-thinking-content">{content}</div>
                     </ToolRunShell>
@@ -5188,8 +5286,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 const thinkingLive = isThinkingTail(runIdx[runIdx.length - 1]);
                 // A running call is inside the closed run, so the row breathes for it.
                 const running = thinkingLive || streamRunHasCallingTool(members);
+                const rowKeys = rowKeysAttr(members.map((m) => (m.type === 'tool_call' ? m.toolUseId : undefined)));
                 return (
-                  <div key={`run-${item.index}`} className="session-msg-bare">
+                  <div key={`run-${item.index}`} className="session-msg-bare" data-row-keys={rowKeys}>
                     <ToolRunShell phrase={phrase} failCount={failCount} running={running} count={members.filter((m) => m.type === 'tool_call').length}>
                       <StreamRunMembers
                         members={members}
@@ -5345,6 +5444,6 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       </div>
       </ThreadStackFrame>
       {lightboxSrc && <Lightbox src={lightboxSrc} onClose={closeLightbox} />}
-    </>
+    </ReaderOpenedFolds.Provider>
   );
 });
