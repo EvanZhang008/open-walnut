@@ -62,20 +62,16 @@ test('sidebar link navigates to the Routines page', async ({ page }) => {
 // ── Empty state ──
 
 test('cron page shows empty state when no jobs exist', async ({ page }) => {
-  // SAFETY: Never delete pre-existing jobs — this test server uses an isolated
-  // tmpdir, so it should start empty. If it somehow has jobs, skip rather than
-  // destroy data (protects against reuseExistingServer pointing at production).
-  const listRes = await fetch(`${API}/api/cron?includeDisabled=true`)
-  const { jobs } = (await listRes.json()) as { jobs: { id: string }[] }
-  if (jobs.length > 0) {
-    test.skip(true, `Server already has ${jobs.length} cron jobs — refusing to delete (may be production data)`)
-    return
-  }
+  // The page reads an empty list. The shared fixture is never empty for long: every
+  // other spec here makes its own jobs in parallel, so the real list races this test.
+  await page.route('**/api/routines?**', (route) =>
+    route.request().method() === 'GET' ? route.fulfill({ json: { jobs: [] } }) : route.fallback())
+  await page.route('**/api/routines', (route) =>
+    route.request().method() === 'GET' ? route.fulfill({ json: { jobs: [] } }) : route.fallback())
 
   await page.goto('/cron')
   await page.waitForLoadState('networkidle')
 
-  // Verify empty state message
   const emptyState = page.locator('.empty-state')
   await expect(emptyState).toBeVisible({ timeout: 5000 })
   await expect(emptyState).toContainText('No routines yet')
@@ -135,10 +131,11 @@ test('toggle button disables and enables a job', async ({ page }) => {
     await expect(toggleBtn).toContainText('Paused', { timeout: 5000 })
     await expect(card).toHaveClass(/cron-job-disabled/, { timeout: 5000 })
 
-    // Verify via API
-    const res = await fetch(`${API}/api/cron/${job.id}`)
-    const body = (await res.json()) as { job: { enabled: boolean } }
-    expect(body.job.enabled).toBe(false)
+    // Verify via API: the switch flips before the server answers, so wait for it.
+    await expect.poll(async () => {
+      const res = await fetch(`${API}/api/cron/${job.id}`)
+      return ((await res.json()) as { job: { enabled: boolean } }).job.enabled
+    }, { timeout: 10_000 }).toBe(false)
 
     // Click toggle again to re-enable
     await toggleBtn.click()

@@ -60,10 +60,18 @@ export async function openListProjectMenu(page: Page, project: string): Promise<
  * meaning); specs that clicked the name for the pane waited for nothing.
  */
 export async function openProjectDetails(page: Page, project: string): Promise<Locator> {
-  const menu = await openListProjectMenu(page, project)
-  await menu.getByRole('menuitem', { name: 'View project details' }).click()
   const pane = page.locator('.project-detail-pane')
-  await expect(pane).toBeVisible({ timeout: 10_000 })
+  // A live update (another spec's task on the shared fixture) can redraw the list and
+  // close the menu under the click: open it again until the pane is there.
+  let tries = 0
+  await expect(async () => {
+    if (await pane.isVisible()) return
+    if (tries++ > 0) await page.keyboard.press('Escape') // a menu left half-open
+
+    const menu = await openListProjectMenu(page, project)
+    await menu.getByRole('menuitem', { name: 'View project details' }).click({ timeout: 3_000 })
+    await expect(pane).toBeVisible({ timeout: 3_000 })
+  }).toPass({ timeout: 30_000 })
   return pane
 }
 
