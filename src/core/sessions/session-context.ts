@@ -162,6 +162,26 @@ export const MAIN_TRACKING_LINE =
   + 'to memory (memory_read, then memory_write doc "user") so they outlive this session and a compaction.\n\n'
 
 /**
+ * A VP and Main hear the tasks that report to them the way a leader hears its workers
+ * (sessions/org-follow.ts, sessions/task-watch.ts; 2026-10-31, the user: "a VP must always have its
+ * up-to-date status, and it must keep an internal tracking"). Walnut's rule, so the user's own core instructions
+ * never drop it.
+ */
+export const ORG_FOLLOW_LINE =
+  'Every task that reports to you (a top-level task of your projects, or for the main agent a VP and a task no VP '
+  + 'leads) is followed the way a leader follows its workers: when its turn ends, it completes, it errs, it waits on '
+  + 'the user or it parks, Walnut\'s notice with its last message rides your next message, one per task with its status '
+  + 'now, never waking you. To hear from one by a time, watch it (task_watch {"id":"…","every":"3h"}): when the watch '
+  + 'runs out with nothing new from the task, Walnut asks it where it stands and the answer rides your next message. '
+
+export const LEAD_TRACKING_LINE =
+  ORG_FOLLOW_LINE
+  + 'Keep your own tracking in your MEMORY.md (agent_memory_write; it is read back after every compaction): per task, '
+  + 'what you asked of it, what came back, what you watch and why, so you know where each stands without rereading its chat.\n\n'
+
+export const MAIN_FOLLOW_LINE = ORG_FOLLOW_LINE + 'What you learn goes into your tracking note below.\n\n'
+
+/**
  * 2h. A decision for the user carries its context (2026-10-26, the user, after Main passed on a
  * lead's nine-item list almost word for word: no item said which task it came from, what that
  * task does, or what was being decided). The same for Main and for every lead that reports to
@@ -292,6 +312,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + THREADS_LINE
       + MESSAGE_ABOUT_LINE
       + MAIN_DELEGATES_LINE
+      + MAIN_FOLLOW_LINE
       + MAIN_TRACKING_LINE
       + MAIN_STAYS_ACTIVE_LINE
       + TASK_ROUTING_CONTRACT + '\n\n'
@@ -334,6 +355,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + BRIEF_LINE
       + THREADS_LINE
       + MESSAGE_ABOUT_LINE
+      + LEAD_TRACKING_LINE
       + TASK_ROUTING_CONTRACT + '\n\n'
   }
   return ''
@@ -394,6 +416,19 @@ export async function buildSessionContext(
             + 'how your result gets back. Walnut tells it on its own whenever you stop, complete '
             + 'your task or hit an error, so you need not report progress: reply to its request '
             + 'with your result, and complete your task when the work is done.\n\n'
+        }
+      }
+      // A task with no leader reports to the VP of its project, or Main (sessions/org-follow.ts).
+      if (!task.parent_task_id && !task.org_role && !task.walnut_agent && !task.plugin_only) {
+        const { listTasks } = await import('../task-manager.js')
+        const { followContext, statusFollowersOf } = await import('./status-push.js')
+        const { byId, vpOf, main } = await followContext(await listTasks().catch(() => []))
+        const up = statusFollowersOf(task, byId, vpOf, main).find((f) => f.phase !== 'COMPLETE' && f.status !== 'done')
+        if (up?.org_role) {
+          taskLine += `Your task reports to "${up.title}" (id ${up.id}), ${up.org_role === 'main' ? 'the main agent' : 'the VP that leads its project'}. `
+            + 'Walnut tells it on its own whenever your turn ends, you complete your task or hit an error, with your '
+            + 'last message, so you need not report progress. Tell it yourself (task_send) only what it must act on: '
+            + 'a result it is waiting for, a decision, a collision with another team.\n\n'
         }
       }
       // A leader (see 2c above): the user follows its workers on the Board tab,

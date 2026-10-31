@@ -102,7 +102,7 @@ describe('every literal WAITING write goes through the park gate', () => {
       expect(fs.readFileSync(path.join(ROOT, file), 'utf8'), `${file}: ${site.answered}`).toMatch(site.answeredGate)
     }
     // The report records it for every turn whose status is asked (native side question and summary).
-    expect(fs.readFileSync(path.join(SRC, 'core/sessions/status-question.ts'), 'utf8')).toMatch(/turnAnsweredPerson\(rec\?\.humanInputAt, turnEndedMs, current\.status_report\)/)
+    expect(fs.readFileSync(path.join(SRC, 'core/sessions/status-question.ts'), 'utf8')).toMatch(/turnAnsweredPerson\(rec\?\.humanInputAt, turnEndedMs, prev\)/)
   })
 
   it('the session PATCH asks the gate exactly when it writes WAITING', () => {

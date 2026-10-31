@@ -51,7 +51,9 @@ export function buildStatusPrompt(forUserPrompt: string, title: string, uiLangua
 }
 
 /** The task's own words on where it stands: stored, and moving its phase as its report. */
-export async function applyStatusAnswer(taskId: string, sessionId: string, report: StatusReport, turnEndedMs: number): Promise<boolean> {
+export async function applyStatusAnswer(
+  taskId: string, sessionId: string, report: StatusReport, turnEndedMs: number, opts: { midTurn?: boolean } = {},
+): Promise<boolean> {
   const { getTask, updateTaskRaw } = await import('../task-manager.js');
   // A finished task reads Done whatever its session said, and a write to a COMPLETE row would
   // announce it as completed again (updateTaskRaw names the event by phase).
@@ -61,17 +63,26 @@ export async function applyStatusAnswer(taskId: string, sessionId: string, repor
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const { turnAnsweredPerson } = await import('./report-phase.js');
   const rec = await getSessionByClaudeId(sessionId).catch(() => null);
-  const answered = turnAnsweredPerson(rec?.humanInputAt, turnEndedMs, current.status_report);
-  report = { ...report, turn_ended_at: new Date(turnEndedMs).toISOString(), ...(answered ? { answered_person: true } : {}) };
+  // Asked inside a running turn (a watch, task-watch.ts): no turn ended, so the last turn's end
+  // stays the boundary, and that turn's end asks again.
+  const prev = current.status_report;
+  const answered = opts.midTurn ? !!prev?.answered_person : turnAnsweredPerson(rec?.humanInputAt, turnEndedMs, prev);
+  const endedAt = opts.midTurn ? prev?.turn_ended_at : new Date(turnEndedMs).toISOString();
+  report = { ...report, ...(endedAt ? { turn_ended_at: endedAt } : {}), ...(answered ? { answered_person: true } : {}) };
   await updateTaskRaw(taskId, { status_report: report }, {
     emitEvent: true, source: 'status-report', shouldUpdate: (cur) => cur.phase !== 'COMPLETE' && cur.status !== 'done',
   });
   const { applyReportPhase } = await import('./report-phase.js');
-  await applyReportPhase(taskId, sessionId, report, turnEndedMs);
+  if (!opts.midTurn) await applyReportPhase(taskId, sessionId, report, turnEndedMs);
   // A lead's or Main's promise with nothing to bring it back gets a follow-up (promise-alarm.ts).
   const { notePromise } = await import('./promise-alarm.js');
   await notePromise(taskId, report);
   return true;
+}
+
+/** Whether a status ask of this session is on its way now (its answer comes; a watch need not ask). */
+export function statusAskInFlight(sessionId: string): boolean {
+  return inFlight.has(sessionId);
 }
 
 /** A native Claude Code session Walnut can ask now. */
@@ -81,7 +92,7 @@ async function nativeSession(sessionId: string): Promise<boolean> {
 }
 
 /** Ask the status now. Never throws; answers whether a status was stored. */
-export async function askStatus(taskId: string, sessionId: string, turnEndedMs: number, why: 'turn-end' | 'reconcile' = 'turn-end'): Promise<boolean> {
+export async function askStatus(taskId: string, sessionId: string, turnEndedMs: number, why: 'turn-end' | 'reconcile' | 'watch' = 'turn-end'): Promise<boolean> {
   if (inFlight.has(sessionId)) {
     // Its answer may describe the turn before this one: ask again when it settles.
     if (why === 'turn-end') rerun.set(sessionId, { taskId, turnEndedMs });
@@ -106,7 +117,7 @@ export async function askStatus(taskId: string, sessionId: string, turnEndedMs: 
       log.session.warn('status question: no status in the answer', { sessionId, taskId, why, head: answer.slice(0, 200) });
       return false;
     }
-    stored = await applyStatusAnswer(taskId, sessionId, report, turnEndedMs);
+    stored = await applyStatusAnswer(taskId, sessionId, report, turnEndedMs, { midTurn: why === 'watch' && sessionRunner.isTurnRunning(sessionId) });
     log.session.info('status question answered', { sessionId, taskId, why, state: report.state, elapsedMs: Date.now() - askedAt });
     return stored;
   } catch (err) {

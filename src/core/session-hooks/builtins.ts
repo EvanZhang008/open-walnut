@@ -2282,7 +2282,10 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
       .filter((r) => !(Date.parse(r.createdAt) > edgeAt));
     const pending = actorSid ? allPending.filter((r) => r.fromSessionId !== actorSid) : allPending;
     const parentTaskId = task?.parent_task_id ?? undefined;
-    if (allPending.length === 0 && !parentTaskId) return;
+    // A task with no leader reports to the VP or Main that follows it (sessions/org-follow.ts).
+    const { reportsToOrgNode } = await import('../sessions/org-follow.js');
+    const orgTask = !parentTaskId && task && reportsToOrgNode(task) ? task : undefined;
+    if (allPending.length === 0 && !parentTaskId && !orgTask) return;
 
     // Outcome from the target session's live state — eventSource strings are
     // caller tags, not triggers, so the record is the honest signal.
@@ -2301,7 +2304,7 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
         });
       }
     }
-    if (pending.length === 0 && !parentTaskId) return;
+    if (pending.length === 0 && !parentTaskId && !orgTask) return;
 
     // The edge came from a message that never reached the session (the host refused
     // it, or the resumed CLI exited before reading it): its asker was told that when
@@ -2310,7 +2313,7 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     // Only a hand-back with no live CLI behind it: a process that is idle or running
     // just ran a real turn, whatever an older park says. Never a completion or a park.
     let undelivered: { reason: string; parentAsked?: boolean; held: boolean } | undefined;
-    if (isPhaseEdge && parentTaskId && phase === 'NEED_ACTION'
+    if (isPhaseEdge && (parentTaskId || orgTask) && phase === 'NEED_ACTION'
       && record?.process_status !== 'running' && record?.process_status !== 'idle') {
       const { recentNeverRanPark, peerAskOf, isHeldElsewhereReason } = await import('../sessions/undelivered-requests.js');
       const since = Date.now() - UNDELIVERED_EDGE_MS;
@@ -2335,15 +2338,16 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     // answered by the fallback notice; a parent that answered lately needs no
     // "stopped"; a COMPLETE parent, or one with no session, hears nothing.
     let subtask: { kind: SubtaskNoticeKind; answeredLately: boolean } | undefined;
+    const edgeKind: SubtaskNoticeKind =
+      phase === 'COMPLETE' ? 'completed'
+        : outcome === 'error' || undelivered ? 'error'
+          : outcome === 'awaiting_human' ? 'blocked'
+            : phase === 'WAITING' ? 'waiting'
+              : 'stopped';
     if (parentTaskId && task) {
       const { getSessionsForTask } = await import('../session-tracker.js');
       const parentSids = new Set((await getSessionsForTask(parentTaskId).catch(() => [])).map((s) => s.claudeSessionId));
-      const kind: SubtaskNoticeKind =
-        phase === 'COMPLETE' ? 'completed'
-          : outcome === 'error' || undelivered ? 'error'
-            : outcome === 'awaiting_human' ? 'blocked'
-              : phase === 'WAITING' ? 'waiting'
-                : 'stopped';
+      const kind = edgeKind;
       const { repliedRecently } = await import('../session-requests.js');
       const notices = await import('../sessions/subtask-notices.js');
       const answeredLately = await repliedRecently(parentSids, task.id, notices.RECENT_REPLY_MS).catch(() => false);
@@ -2360,7 +2364,15 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
         && await notices.parentCanHear(parentTaskId);
       if (parentHears) subtask = { kind, answeredLately };
     }
-    if (pending.length === 0 && !subtask) return;
+    // The VP or Main that follows a task with no leader hears the same edges (org-follow.ts),
+    // except a stop a team stop made: whoever stopped the team knows.
+    // Nor a message the user's open terminal holds: the task is in use, not failed.
+    let orgHears = false;
+    if (orgTask && !undelivered?.held
+      && !(edgeKind !== 'completed' && edgeKind !== 'error' && (await import('../sessions/team-stop.js')).stoppedByTeam(orgTask.id))) {
+      orgHears = await (await import('../sessions/org-follow.js')).orgFollowerCanHear(orgTask);
+    }
+    if (pending.length === 0 && !subtask && !orgHears) return;
 
     // A request the target handed on (it asked another task while owing this one) waits
     // for that answer: a turn that only parked, waiting for it, is not "no reply". It
@@ -2368,13 +2380,30 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     // and at its deadline (session-requests.ts linkHandoffs).
     const { holdHandedOn } = await import('../sessions/request-handoff.js');
     const speak = await holdHandedOn(pending, { outcome, phase });
-    if (speak.length === 0 && !subtask) return;
+    if (speak.length === 0 && !subtask && !orgHears) return;
 
     // One transcript read serves every notice of this edge.
     const notify = await import('../sessions/session-request-notify.js');
     const lastTurn = lastMessage || (undelivered && speak.length === 0) ? undefined : await notify.readLastTurn(sessionId ?? record?.claudeSessionId);
     for (const request of speak) {
       await notify.notifyRequesterFallback(request, outcome, { phase, lastMessage, lastWords: lastTurn?.words });
+    }
+    const { clipNoticeMessage: clipWords } = await import('../session-requests.js');
+    if (orgHears && orgTask) {
+      const { noteOrgEdge } = await import('../sessions/org-follow.js');
+      await noteOrgEdge(orgTask, {
+        kind: edgeKind,
+        sessionId: sessionId ?? record?.claudeSessionId,
+        // A message that never reached it: the cause, never an older turn's words.
+        lastWords: undelivered ? undefined : lastMessage ? clipWords(lastMessage) : lastTurn?.words,
+        openedBy: undelivered ? undefined : lastTurn?.openedBy,
+        error: edgeKind === 'error' ? (undelivered ? undelivered.reason : 'error' in payload && !isPhaseEdge ? String((payload as { error?: unknown }).error ?? '') : record?.errorMessage) : undefined,
+        blockedOn: edgeKind === 'blocked' ? record?.pendingPermission?.toolName : undefined,
+        waitUntil: edgeKind === 'waiting' ? task?.wait_until ?? undefined : undefined,
+        actorSid,
+        // The node's own open request to it is answered by the request fallback above.
+        askerSids: pending.map((r) => r.fromSessionId),
+      });
     }
     if (!subtask || !parentTaskId || !task) return;
 

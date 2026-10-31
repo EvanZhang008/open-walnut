@@ -13,8 +13,8 @@
  *     VP's Main), running or idle: an idle one reads it with its next message (2026-10-31, the
  *     user: updates go through the leaders one level at a time, and an idle node keeps them for
  *     its next turn). Never two levels: each node passes on what is news in its own words.
- *   The line never goes into a session by itself: it rides the session's next message, in memory
- *   like the place note, never a queue row of its own (a pending row is re-dispatched on a restart
+ *   The line never goes into a session by itself: it rides the session's next message
+ *   (status-riding.ts, kept on disk across a restart), never a queue row of its own (a pending row is re-dispatched on a restart
  *   or a host reconnect, which would wake it). A line written into a running turn landed, often
  *   as that turn ended, as a turn of its own (2026-10-30: three of Main's turns were an agent-ack
  *   to a status line that came 0.1 to 5 s after its last words).
@@ -27,8 +27,10 @@ import { log } from '../../logging/index.js';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import type { SessionRecord, Task } from '../types.js';
 import { fallbackUserState, stateWord, type UserState, type UserStatus } from '../user-status.js';
-import { buildWalnutMessage as buildMessage } from '../peers/walnut-message-tag.js';
 import { statusMark } from './brief-fresh.js';
+import { loadRiding, pendingRiding, pruneRiding, pushBody, rideLine, statusText, stopRiding } from './status-riding.js';
+
+export { pushBody, statusText };
 
 const SUBSCRIBER = 'status-push';
 export const SETTLE_MS = 90_000;
@@ -53,10 +55,6 @@ const RECHECK_HOLD_MS = 2 * 60 * 60_000;
 const REFRESH_HOLD_MS = 30 * 60_000;
 
 const baseline = new Map<string, Seen>();
-/** Asker session id -> task id -> its newest line, riding that session's next message. */
-const riding = new Map<string, Map<string, { line: string; at: number }>>();
-/** A ride-along line older than this is dropped unread: the live list has moved on. */
-const RIDE_MAX_MS = 3 * 24 * 60 * 60_000;
 const pending = new Map<string, Change>();
 let timer: ReturnType<typeof setTimeout> | null = null;
 let live = false;
@@ -89,14 +87,6 @@ export function changeLine(c: Change): string {
   else if (c.from.state === 'needs' && c.from.words) line += ` It no longer asks the user: "${c.from.words}".`;
   else if (c.to.state === 'waiting' && c.to.words) line += ` Waiting on: ${c.to.words}.`;
   return line;
-}
-
-export function pushBody(lines: readonly string[]): string {
-  return [
-    lines.length === 1 ? 'A task you follow changed its status (Walnut\'s record, not a report):' : `${lines.length} tasks you follow changed their status (Walnut's record, not a report):`,
-    ...lines,
-    'Read it as the live state: what the user was asked and has since done is no longer theirs to do. Nothing here asks you to act; task_get shows more.',
-  ].join('\n');
 }
 
 function note(task: Task, now = Date.now()): void {
@@ -178,6 +168,25 @@ export function statusFollowersOf(
   return out;
 }
 
+const openTask = (t: Task | undefined): t is Task => !!t && t.phase !== 'COMPLETE' && t.status !== 'done';
+
+/** Who leads what, for statusFollowersOf: the tasks by id, each project's open VP, the open Main. */
+export async function followContext(all: readonly Task[]): Promise<{
+  byId: Map<string, Task>; vpOf: (task: Task) => Task | undefined; main: Task | undefined;
+}> {
+  const byId = new Map(all.map((t) => [t.id, t] as const));
+  const main = all.find((t) => t.org_role === 'main' && openTask(t));
+  const { projectKey } = await import('../org/org-tree.js');
+  const vpOf = (task: Task): Task | undefined => all.find((t) => t.org_role === 'lead' && openTask(t) && t.id !== task.id
+    && [t.project, ...(t.org_leads ?? [])].some((p) => projectKey(p) === projectKey(task.project)));
+  return { byId, vpOf, main };
+}
+
+/** A task's live session (running first, else the best idle one), or null. */
+export async function followerSession(taskId: string): Promise<SessionRecord | null> {
+  return liveSession(taskId);
+}
+
 /** The first of them. Exported for tests. */
 export function statusFollowerOf(
   task: Pick<Task, 'id' | 'org_role' | 'parent_task_id'>,
@@ -190,11 +199,8 @@ export function statusFollowerOf(
 
 /** Send what settled. Exported for tests. */
 export async function flushStatusPush(now = Date.now()): Promise<number> {
-  // Ride-along lines nobody's message picked up in days are dropped here too.
-  for (const [sid, held] of riding) {
-    for (const [id, v] of held) if (now - v.at > RIDE_MAX_MS) held.delete(id);
-    if (held.size === 0) riding.delete(sid);
-  }
+  // Ride-along items nobody's message picked up in days are dropped here too.
+  pruneRiding(now);
   const due = [...pending.values()].filter((c) => (now - c.at >= SETTLE_MS && !(c.holdUntil && now < c.holdUntil)) || !live);
   for (const c of due) pending.delete(c.taskId);
   // News is a move of the state or of the kind of wait. Settled where it began (a re-check
@@ -211,18 +217,13 @@ export async function flushStatusPush(now = Date.now()): Promise<number> {
   try {
     const { listTasks } = await import('../task-manager.js');
     const all = await listTasks();
-    const byId = new Map(all.map((t) => [t.id, t] as const));
-    const openTask = (t: Task | undefined): t is Task => !!t && t.phase !== 'COMPLETE' && t.status !== 'done';
-    const main = all.find((t) => t.org_role === 'main' && openTask(t));
-    const { projectKey } = await import('../org/org-tree.js');
-    const vpOf = (task: Task): Task | undefined => all.find((t) => t.org_role === 'lead' && openTask(t) && t.id !== task.id
-      && [t.project, ...(t.org_leads ?? [])].some((p) => projectKey(p) === projectKey(task.project)));
+    const { byId, vpOf, main } = await followContext(all);
     const { pendingRequestsForTarget } = await import('../session-requests.js');
     // recipient session id → { record or null (an asker found by its request), lines by task }
-    const out = new Map<string, { rec: SessionRecord | null; lines: Map<string, string>; asker: boolean }>();
-    const add = (sid: string, rec: SessionRecord | null, taskId: string, line: string, asker: boolean) => {
-      const slot = out.get(sid) ?? { rec, lines: new Map<string, string>(), asker };
-      slot.lines.set(taskId, line);
+    const out = new Map<string, { rec: SessionRecord | null; lines: Map<string, { line: string; at: number }>; asker: boolean }>();
+    const add = (sid: string, rec: SessionRecord | null, taskId: string, line: string, asker: boolean, at: number) => {
+      const slot = out.get(sid) ?? { rec, lines: new Map<string, { line: string; at: number }>(), asker };
+      slot.lines.set(taskId, { line, at });
       slot.asker ||= asker;
       slot.rec ??= rec;
       out.set(sid, slot);
@@ -233,7 +234,7 @@ export async function flushStatusPush(now = Date.now()): Promise<number> {
       const line = changeLine(c);
       const own = new Set((await (await import('../session-tracker.js')).getSessionsForTask(task.id).catch(() => [])).map((s) => s.claudeSessionId));
       for (const r of await pendingRequestsForTarget({ taskId: task.id }).catch(() => [])) {
-        if (!own.has(r.fromSessionId)) add(r.fromSessionId, null, task.id, line, true);
+        if (!own.has(r.fromSessionId)) add(r.fromSessionId, null, task.id, line, true, c.at);
       }
       // One level up only (statusFollowersOf: the nearest open node with a session), riding its
       // next message whether it runs now or not. Snoozed (snooze.ts): a VP or Main, who bring news
@@ -245,7 +246,7 @@ export async function flushStatusPush(now = Date.now()): Promise<number> {
         if (c.to.snoozed && f.org_role) break;
         const rec = await liveSession(f.id);
         if (!rec) continue;
-        if (!own.has(rec.claudeSessionId)) add(rec.claudeSessionId, rec, task.id, line, false);
+        if (!own.has(rec.claudeSessionId)) add(rec.claudeSessionId, rec, task.id, line, false, c.at);
         break;
       }
     }
@@ -255,10 +256,9 @@ export async function flushStatusPush(now = Date.now()): Promise<number> {
       const rec = slot.rec ?? await getSessionByClaudeId(sid).catch(() => null);
       if (!rec?.taskId || !openTask(byId.get(rec.taskId))) continue;
       try {
-        // The lines ride its next message (pendingStatusNote), never a turn of their own.
-        const held = riding.get(sid) ?? new Map<string, { line: string; at: number }>();
-        for (const [id, line] of slot.lines) held.set(id, { line, at: now });
-        riding.set(sid, held);
+        // The lines ride its next message (pendingStatusNote), never a turn of their own; one whose
+        // move a notice already told this session (org-follow.ts) is not said again.
+        for (const [id, { line, at }] of slot.lines) rideLine(sid, id, line, now, at);
         sent++;
       } catch (err) {
         log.session.warn('status push not delivered', { sessionId: sid, error: err instanceof Error ? err.message : String(err) });
@@ -272,33 +272,10 @@ export async function flushStatusPush(now = Date.now()): Promise<number> {
   }
 }
 
-/** The note that carries status lines (exported for the rider tests: it rides in front of a message). */
-export function statusText(lines: readonly string[]): string {
-  return buildMessage({
-    kind: 'notification',
-    attrs: { from: 'Walnut', outcome: 'status', note: 'status changes of tasks you follow, not a work request' },
-    body: pushBody(lines),
-  });
-}
-
 /** The status lines waiting for a session's next message (session-message-queue.ts
  *  sendMessageToSession), or null. `markTold` once the message holding them is queued. */
 export function pendingStatusNote(sessionId: string, now = Date.now()): { text: string; markTold: () => void } | null {
-  const held = riding.get(sessionId);
-  if (!held) return null;
-  for (const [id, v] of held) if (now - v.at > RIDE_MAX_MS) held.delete(id);
-  if (held.size === 0) { riding.delete(sessionId); return null; }
-  const snapshot = new Map(held);
-  return {
-    text: statusText([...snapshot.values()].map((v) => v.line)),
-    markTold: () => {
-      const cur = riding.get(sessionId);
-      if (!cur) return;
-      // Only what this message carried: a line that came meanwhile rides the next one.
-      for (const [id, v] of snapshot) if (cur.get(id) === v) cur.delete(id);
-      if (cur.size === 0) riding.delete(sessionId);
-    },
-  };
+  return pendingRiding(sessionId, now);
 }
 
 /**
@@ -317,9 +294,7 @@ export async function tellOrRide(sessionId: string, key: string, line: string, n
       await deliverToSession(rec, { busText: text, enqueueText: text, source: 'walnut-notify', ...(rec.taskId ? { taskId: rec.taskId } : {}) });
       return 'told';
     }
-    const held = riding.get(sessionId) ?? new Map<string, { line: string; at: number }>();
-    held.set(key, { line, at: now });
-    riding.set(sessionId, held);
+    rideLine(sessionId, key, line, now);
     return 'riding';
   } catch (err) {
     log.session.warn('status note not delivered', { sessionId, error: err instanceof Error ? err.message : String(err) });
@@ -330,6 +305,9 @@ export async function tellOrRide(sessionId: string, key: string, line: string, n
 /** Start (server boot, primary only): every task's status now is the baseline. Idempotent. */
 export async function startStatusPush(opts: { quietMs?: number } = {}): Promise<void> {
   live = true;
+  // What an idle node had not read before the restart still rides its next message.
+  const kept = await loadRiding();
+  if (kept) log.session.info('status push: ride-along items kept across the restart', { items: kept });
   quietUntil = Date.now() + (opts.quietMs ?? BOOT_QUIET_MS);
   try {
     const { listTasks } = await import('../task-manager.js');
@@ -350,14 +328,12 @@ export function stopStatusPush(): void {
   timer = null;
   baseline.clear();
   pending.clear();
-  riding.clear();
+  stopRiding();
 }
 
 /** Test seam: a line waiting for a session's next message. */
 export function _rideForTest(sessionId: string, taskId: string, line: string): void {
-  const held = riding.get(sessionId) ?? new Map<string, { line: string; at: number }>();
-  held.set(taskId, { line, at: Date.now() });
-  riding.set(sessionId, held);
+  rideLine(sessionId, taskId, line);
 }
 
 /** Test seam. */

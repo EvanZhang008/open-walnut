@@ -70,8 +70,8 @@ describe('one level at a time', () => {
 
   it('the push adds a follower in one place only', () => {
     const src = readFileSync(join(process.cwd(), 'src/core/sessions/status-push.ts'), 'utf8')
-    // add(sid, rec, taskId, line, asker): asker=true is a session waiting on a reply; false, a follower.
-    expect(src.match(/\badd\([^)]*,\s*false\)/g) ?? []).toHaveLength(1)
+    // add(sid, rec, taskId, line, asker, at): asker=true is a session waiting on a reply; false, a follower.
+    expect(src.match(/\badd\([^)]*,\s*false,\s*c\.at\)/g) ?? []).toHaveLength(1)
     expect(src).not.toMatch(/\[parent, vpOf\(task\), main\]/)
   })
 })

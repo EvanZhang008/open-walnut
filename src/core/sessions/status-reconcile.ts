@@ -12,7 +12,8 @@
  * that never reads is not asked all day), at most PER_PASS per pass and one pass at a time, so a
  * host coming back with many sessions is caught up over a few passes, never in one burst. A
  * Personal AI chat lane has no status of its own (the turn-end hook skips it too), and an ACP
- * engine answers a hidden ask with a turn of its own, so neither is asked.
+ * engine answers a hidden ask with a turn of its own, so neither is asked. The same tick runs out
+ * the watches set on tasks (task-watch.ts).
  */
 import { log } from '../../logging/index.js';
 import type { SessionRecord, Task } from '../types.js';
@@ -87,10 +88,27 @@ export async function runStatusReconcile(nowMs = Date.now()): Promise<string[]> 
   return asked;
 }
 
+let watchRunning = false;
+
+/** One tick: the missed statuses, then the watches that ran out (task-watch.ts). */
+async function reconcileTick(): Promise<void> {
+  await runStatusReconcile();
+  if (watchRunning) return;
+  watchRunning = true;
+  try {
+    const { runWatchPass } = await import('./task-watch.js');
+    await runWatchPass();
+  } catch (err) {
+    log.session.warn('task watch pass failed', { error: err instanceof Error ? err.message : String(err) });
+  } finally {
+    watchRunning = false;
+  }
+}
+
 /** Primary only. */
 export function startStatusReconcile(): void {
   if (timer) return;
-  timer = setInterval(() => { void runStatusReconcile(); }, RECONCILE_EVERY_MS);
+  timer = setInterval(() => { void reconcileTick(); }, RECONCILE_EVERY_MS);
   timer.unref?.();
 }
 

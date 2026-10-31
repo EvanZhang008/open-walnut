@@ -211,6 +211,9 @@ export interface TeamNoteContext {
   /** The task told the lead itself, in a message newer than the lead's last to it (lead-traffic.ts):
    *  its wait on the lead is no news. */
   toldLead?: (taskId: string) => boolean;
+  /** Tasks whose own notice the lead already reads (sessions/status-riding.ts noticeKeysSince):
+   *  the note does not tell their move again, and records them as told. */
+  told?: ReadonlySet<string>;
 }
 
 /** The task's own status says it waits on its leader, and its leader is this lead. */
@@ -301,7 +304,8 @@ export function planTeamNote(
   }
   const led = [...new Set(ctx.led ?? [])].sort((a, b) => a.localeCompare(b));
   const next: TeamNoteState = { at: now, seen, ...(ctx.led ? { led } : {}), form: TEAM_NOTE_FORM };
-  const news = teamNews(open);
+  // A task whose own notice the lead reads (its edge, org-follow.ts) is told there, not here again.
+  const news = teamNews(open).filter((i) => !ctx.told?.has(i.taskId));
   const byId = new Map(open.map((t) => [t.id, t] as const));
   const waitOf = (i: TeamNewsItem): LeadWait => ({ ...i, waitingOn: clean(byId.get(i.taskId)?.user_status?.waitingOn) });
   const waiting = (i: TeamNewsItem) => waitsOnLead(byId.get(i.taskId)!, ctx.leadId);
@@ -343,7 +347,7 @@ export function planTeamNote(
     // and neither is a new task by itself (the Org page lists it).
     else if (was !== is && isStuck(t) && !(before === undefined && fresh.has(projectKey(t.project || 'Inbox')))) moved.push(item);
   }
-  const done = completed.filter((t) => prev!.seen[t.id] !== undefined).map((t) => t.title);
+  const done = completed.filter((t) => prev!.seen[t.id] !== undefined && !ctx.told?.has(t.id)).map((t) => t.title);
   const any = needs.length + waits.length + machine.length + moved.length + done.length + asks.length
     + ledAdded.length + ledRemoved.length > 0;
   return { kind: any ? 'moved' : 'none', needs, waits, machine, moved, done, asks, led, ledAdded, ledRemoved, next };
@@ -532,8 +536,11 @@ export async function pendingTeamNote(lead: Task, sessionId: string, nowMs = Dat
       : [];
     const now = new Date(nowMs).toISOString();
     const { workerToldLead } = await import('./lead-traffic.js');
+    // What its notices already tell (riding this message or told since the last note) is not said again.
+    const { noticeKeysSince } = await import('../sessions/status-riding.js');
+    const told = noticeKeysSince(sessionId, Date.parse(prev?.at ?? '') || 0);
     const plan = planTeamNote(prev, open, completed, now, {
-      leadId: lead.id, led: led.map((p) => p.project || 'Inbox'), asks, toldLead: (id) => workerToldLead(id, lead.id),
+      leadId: lead.id, led: led.map((p) => p.project || 'Inbox'), asks, toldLead: (id) => workerToldLead(id, lead.id), told,
     });
     // Held: the next message after the gap carries it, with whatever moved meanwhile. Nothing is
     // recorded, so the next plan still starts from what the lead was last told.

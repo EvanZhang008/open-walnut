@@ -289,6 +289,7 @@ Prefer the named operations below. Their schemas are the current source of truth
 | `hint_list` | List the message hints (read) | session? (string): A session id: also show its hint state |
 | `hint_set` | Change or add a message hint (write) | kind (string): The hint kind, e.g. "rich-output", "reply-language", or a new one for a custom hint; enabled? (boolean); triggers? (array<every_turn\|every_n_turns\|session_start\|after_compaction\|on_change\|on_drift\|on_request>): When it is sent: any one that holds sends it; every_turns? (integer): For every_n_turns; placement? (before\|after): Before or after the message text; audience? (object): Who gets it; an empty list means everyone; text? (string): A custom hint's text; label? (string): A custom hint's name in Settings |
 | `hint_reset` | Reset a message hint (write) | kind (string): The hint kind |
+| `task_watch` | Watch a task (write) | id (string): The task to watch (id or unique prefix); every? (string): How often at least: "30m", "3h", "1d"; for? (string): The task that hears it; default: your own task; off? (boolean): true ends the watch |
 
 Use `walnut tools help <op>` for the full live description. Use the generic `api` operation only when no named operation exists.
 

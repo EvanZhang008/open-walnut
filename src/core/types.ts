@@ -976,6 +976,9 @@ export interface Task {
    *  user, another task), so the owner never reads another's lines as its own. The owner's appends
    *  keep it; only the owner replacing the whole file clears it. */
   agent_memory?: { text: string; at: string; refused?: { at: string; chars: number }; by?: 'human' | 'agent' | `task:${string}`; by_name?: string; by_at?: string };
+  /** A watch on this task (task_watch): who hears where it stands, and how often at least
+   *  (src/core/sessions/task-watch.ts). Every status it gives restarts the clock; a completion ends it. */
+  watch?: import('./sessions/task-watch.js').TaskWatch | null;
   /** Task-level working directory override. Takes precedence over project default_cwd in session resolution. */
   cwd?: string;
   /** Set by the cwd rename detector / turn-end check when task.cwd no longer exists on disk.

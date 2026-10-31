@@ -31,6 +31,7 @@ import { sendLetter } from '../../src/core/human-inbox/store.js'
 import { _setLeadWaitClocksForTesting, tellLead } from '../../src/core/org/lead-waits.js'
 import { noteTeamAsk, pendingTeamAsks } from '../../src/core/org/team-asks.js'
 import { collectOpenItems } from '../../src/core/sessions/open-items.js'
+import { pendingRiding, ridingKeys } from '../../src/core/sessions/status-riding.js'
 
 const LEAD_SID = '33333333-4444-4555-8666-777777777777'
 
@@ -108,7 +109,10 @@ describe('a lead\'s team note', () => {
     expect(note!.text).toContain('Team update (last note 1 min ago)')
     expect(note!.text).toContain('Needs the user:\n- "Order seeds": Which supplier?')
     expect(note!.text).not.toContain('The identity check passed')
-    expect(note!.text).toContain('Done: "Plan the beds"')
+    // A top-level task's completion reaches the lead as its own notice (sessions/org-follow.ts),
+    // riding the same message: the note does not say it again.
+    expect(note!.text).not.toContain('Done: "Plan the beds"')
+    expect(pendingRiding(LEAD_SID)?.text).toContain('A task you follow, "Plan the beds"')
     expect(note!.text).not.toContain('Fix the fence')
     expect(note!.text).not.toMatch(/\(working[,)]/)
     // Two sends at the same moment: one carries it.
@@ -124,13 +128,18 @@ describe('a lead\'s team note', () => {
     const quiet = await sendMessageToSession(LEAD_SID, 'Anything new?', { source: 'peer' })
     expect((await getQueue(LEAD_SID)).find((m) => m.id === quiet.id)?.message).not.toContain('outcome="org-update"')
     for (const m of await getQueue(LEAD_SID)) await deleteMessage(LEAD_SID, m.id)
+    // A worker's completion is the note's; a top-level task's rides as its own notice, once.
+    await completeTask(ids['Order seeds']!)
     await completeTask(ids['Renew the permit']!)
+    await until('the completion notice rides', async () => ridingKeys(LEAD_SID).includes(ids['Renew the permit']!))
     _resetTeamNoteClaimsForTesting()
     const sent = await sendMessageToSession(LEAD_SID, 'How is Garden going?', { source: 'peer' })
     const rows = await getQueue(LEAD_SID)
     const row = rows.find((m) => m.id === sent.id)!
     expect(row.message).toContain('outcome="org-update"')
-    expect(row.message).toContain('Done: "Renew the permit"')
+    expect(row.message).toContain('Done: "Order seeds"')
+    expect(row.message).not.toContain('Done: "Renew the permit"')
+    expect(row.message.match(/A task you follow, "Renew the permit"/g)).toHaveLength(1)
     expect(row.message).not.toContain('Signed copy received')
     // The note goes in front of the message, in the same row.
     expect(row.message.indexOf('outcome="org-update"')).toBeLessThan(row.message.indexOf('How is Garden going?'))
@@ -176,7 +185,8 @@ describe('the hour between notes', () => {
     // Two hours after the note the case before told, on the clock the plan reads.
     const t0 = Date.now() + 2 * 60 * 60_000
     // A note just went out.
-    const a = (await addTask({ title: 'Mulch the path', project: 'Garden' })).task.id
+    // The lead's own workers: their news is the note's (a top-level task's rides as its own notice).
+    const a = (await addTask({ title: 'Mulch the path', project: 'Garden', parent_task_id: leadId })).task.id
     await updateTask(a, { phase: 'NEED_ACTION' }, { source: 'api' })
     await sendLetter({ subject: 'Bark or straw?', type: 'action_required', markdown: 'Which?', actions: [{ id: 'b', label: 'Bark' }], sender: { taskId: a } } as never)
     await until('it needs the user', async () => (await getTask(a)).user_status?.state === 'needs')
@@ -188,7 +198,7 @@ describe('the hour between notes', () => {
     await completeTask(a)
     _resetTeamNoteClaimsForTesting()
     expect(await pendingOrgDigest(LEAD_SID, t0 + 10 * 60_000)).toBeNull()
-    const b = (await addTask({ title: 'Sharpen the shears', project: 'Garden' })).task.id
+    const b = (await addTask({ title: 'Sharpen the shears', project: 'Garden', parent_task_id: leadId })).task.id
     await updateTask(b, { phase: 'NEED_ACTION' }, { source: 'api' })
     await sendLetter({ subject: 'New blades?', type: 'action_required', markdown: 'Buy?', actions: [{ id: 'y', label: 'Yes' }], sender: { taskId: b } } as never)
     await until('it needs the user', async () => (await getTask(b)).user_status?.state === 'needs')

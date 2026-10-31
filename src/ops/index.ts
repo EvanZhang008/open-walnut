@@ -28,6 +28,7 @@ import './secrets.js'
 import './engine-switch.js'
 import './task-lifecycle.js'
 import './hints.js'
+import './task-watch.js'
 
 export {
   defineOp,

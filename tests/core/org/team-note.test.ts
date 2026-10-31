@@ -71,6 +71,12 @@ describe('team note plan', () => {
     expect(plan.done).toEqual([])
     const told = planTeamNote(plan.next, later.slice(1), [{ id: 'a', title: 'a title' }], NOW)
     expect(told).toMatchObject({ kind: 'moved', done: ['a title'], needs: [], moved: [] })
+    // A task whose own notice the lead reads (status-riding.ts) is told there, not again here,
+    // and is recorded as told, so a later note does not bring it back.
+    const byNotice = planTeamNote(prev, later, [{ id: 'gone-new', title: 'never told' }], NOW, { told: new Set(['b', 'c']) })
+    expect(byNotice).toMatchObject({ kind: 'none', needs: [], moved: [] })
+    expect(byNotice.next.seen.b).toBe(plan.next.seen.b)
+    expect(planTeamNote(prev, later.slice(1), [{ id: 'a', title: 'a title' }], NOW, { told: new Set(['a']) }).done).toEqual([])
   })
 
   it('the fingerprint moves with the ask and being stuck, not with progress words, a turn or a phase', () => {
