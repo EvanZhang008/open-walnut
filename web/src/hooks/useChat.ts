@@ -523,6 +523,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
     // Some providers emit thinking blocks that carry only a signature (empty or
     // whitespace-only text) — those must not create an expandable-but-blank row.
     if (!text || !text.trim()) return;
+    flushTextDelta();
     const src = currentSourceRef.current;
     const turnId = noteTurnId(data);
     setMessages((prev) =>
@@ -539,6 +540,8 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
 
   // Handle streaming text deltas — batch via rAF to coalesce ~100 tokens/sec into ~60 renders/sec
   const textDeltaBuffer = useRef('');
+  // The turn the buffered text belongs to, latched when the buffer starts.
+  const textDeltaTurn = useRef<string | undefined>(undefined);
   const textDeltaRaf = useRef<number | null>(null);
 
   // Cancel pending rAF on unmount to avoid setState on unmounted component
@@ -549,6 +552,39 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
         textDeltaRaf.current = null;
       }
     };
+  }, []);
+
+  // Apply the buffered text now. Every handler that appends a block or a
+  // message, or ends the turn, calls this first: text still waiting for its
+  // frame when a tool call arrives in the same frame (or while the tab is
+  // hidden and rAF is paused) otherwise lands AFTER that tool call and merges
+  // into the next round's text block.
+  const flushTextDelta = useCallback(() => {
+    if (textDeltaRaf.current !== null) {
+      cancelAnimationFrame(textDeltaRaf.current);
+      textDeltaRaf.current = null;
+    }
+    const accumulated = textDeltaBuffer.current;
+    textDeltaBuffer.current = '';
+    if (!accumulated) return;
+
+    const src = currentSourceRef.current;
+    const turnId = textDeltaTurn.current;
+    setMessages((prev) =>
+      upsertLastAssistant(prev, (blocks, content) => {
+        const last = blocks[blocks.length - 1];
+        if (last && last.type === 'text') {
+          return {
+            blocks: [...blocks.slice(0, -1), { type: 'text', content: last.content + accumulated }],
+            content: content + accumulated,
+          };
+        }
+        return {
+          blocks: [...blocks, { type: 'text', content: accumulated }],
+          content: content + accumulated,
+        };
+      }, src, turnId),
+    );
   }, []);
 
   useEvent('agent:text-delta', (data) => {
@@ -562,31 +598,13 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
     }
 
     const turnId = noteTurnId(data);
+    if (!textDeltaBuffer.current) textDeltaTurn.current = turnId;
     textDeltaBuffer.current += delta;
 
     if (textDeltaRaf.current === null) {
       textDeltaRaf.current = requestAnimationFrame(() => {
         textDeltaRaf.current = null;
-        const accumulated = textDeltaBuffer.current;
-        textDeltaBuffer.current = '';
-        if (!accumulated) return;
-
-        const src = currentSourceRef.current;
-        setMessages((prev) =>
-          upsertLastAssistant(prev, (blocks, content) => {
-            const last = blocks[blocks.length - 1];
-            if (last && last.type === 'text') {
-              return {
-                blocks: [...blocks.slice(0, -1), { type: 'text', content: last.content + accumulated }],
-                content: content + accumulated,
-              };
-            }
-            return {
-              blocks: [...blocks, { type: 'text', content: accumulated }],
-              content: content + accumulated,
-            };
-          }, src, turnId),
-        );
+        flushTextDelta();
       });
     }
   });
@@ -594,6 +612,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
   // Handle tool call start
   useEvent('agent:tool-call', (data) => {
     if (!isMine(data)) return;
+    flushTextDelta();
     const { toolName, input, toolUseId } = data as { toolName: string; input: Record<string, unknown>; toolUseId?: string };
     const src = currentSourceRef.current;
     const turnId = noteTurnId(data);
@@ -717,6 +736,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
   // Handle final complete response
   useEvent('agent:response', (data) => {
     if (!isMine(data)) return;
+    flushTextDelta();
     const { source, stats: piggybacked } = (data ?? {}) as { source?: string; stats?: ChatStats };
     setToolActivity(null);
     if (piggybacked) {
@@ -755,6 +775,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
   // Handle cron chat messages — show scheduled job triggers in chat (General only)
   useEvent('cron:chat-message', (data) => {
     if (agentIdRef.current !== 'general') return;
+    flushTextDelta();
     const { content, jobName, timestamp, agentWillRespond } = data as {
       content: string; jobName: string; timestamp: string; agentWillRespond?: boolean;
     };
@@ -778,6 +799,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
   // Handle session results — show completed session output in chat (General only)
   useEvent('session:result', (data) => {
     if (agentIdRef.current !== 'general') return;
+    flushTextDelta();
     const { result, taskId: eventTaskId, isError,
             taskTitle, taskProject } = data as {
       result?: string; taskId?: string; sessionId?: string; isError?: boolean;
@@ -800,6 +822,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
   // Handle chat:history-updated — server pushes compact notifications (triage, subagent)
   useEvent('chat:history-updated', (data) => {
     if (!isMine(data)) return;
+    flushTextDelta();
     const { entry } = data as {
       entry?: { role: 'user' | 'assistant'; content: string; source?: string; notification?: boolean; taskId?: string; timestamp?: string };
     };
@@ -837,6 +860,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
   // Handle errors — don't clear queue; after a delay, drain remaining queued messages
   useEvent('agent:error', (data) => {
     if (!isMine(data)) return;
+    flushTextDelta();
     setToolActivity(null);
 
     // Safety net: force-close stale 'calling' blocks (tool may have succeeded, result was lost)
@@ -856,6 +880,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
   // Handle compaction lifecycle
   useEvent('chat:compacting', (data) => {
     if (!isMine(data)) return;
+    flushTextDelta();
     setIsCompacting(true);
     // Insert a placeholder message at the current position in chat.
     // New messages sent during compaction appear BELOW this spinner.
@@ -1004,6 +1029,8 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
   sendRpcRef.current = sendRpc;
 
   const sendMessage = useCallback(async (text: string, taskContext?: TaskContext, images?: ImageAttachment[], source?: string, mode?: 'plan', planModeFirst?: boolean, planModeOff?: boolean): Promise<ChatSendOutcome> => {
+    // The streamed text goes in before the bubble, never after it.
+    flushTextDelta();
     if (isStreamingRef.current) {
       if (queueRef.current.length >= MAX_QUEUE_SIZE) return 'dropped';
       const queueId = ++queueIdCounter.current;
@@ -1027,17 +1054,19 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
     };
     setMessages((prev) => [...prev, userMsg]);
     return await sendRpc(text, taskContext, images, source, mode, planModeFirst, planModeOff);
-  }, [sendRpc]);
+  }, [sendRpc, flushTextDelta]);
 
   const clearMessages = useCallback(() => {
+    flushTextDelta();
     clearChatHistory(agentIdRef.current, conversationIdRef.current ?? undefined).catch(() => {});
     clearQueue();
     setMessages([]);
     setHasMore(false);
     nextPageRef.current = 2;
-  }, [clearQueue]);
+  }, [clearQueue, flushTextDelta]);
 
   const addLocalMessage = useCallback((content: string, source?: ChatMessage['source']) => {
+    flushTextDelta();
     setMessages((prev) => [...prev, {
       key: nextMessageKey(),
       role: 'assistant',
@@ -1046,7 +1075,7 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
       source,
       timestamp: new Date().toISOString(),
     }]);
-  }, []);
+  }, [flushTextDelta]);
 
   const stopGeneration = useCallback(() => {
     clearQueue();
