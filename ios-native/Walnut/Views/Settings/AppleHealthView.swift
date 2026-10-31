@@ -207,7 +207,7 @@ struct AppleHealthView: View {
         case .locked?:
             lines.append("Your iPhone was locked, so Apple Health could not be read. Walnut syncs after you unlock it.")
         case .unauthorized?:
-            lines.append("Your Mac did not accept this iPhone. Pair it again in Settings.")
+            lines.append("Your Mac didn't accept the last sync's sign-in. Walnut checks the connection and tries again on its own.")
         default:
             if store.macUnreachable {
                 lines.append("Your Mac can't be reached right now. Walnut syncs as soon as it can.")

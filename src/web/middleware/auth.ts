@@ -34,6 +34,7 @@ import { classifyLocalRequest, isCrossSiteRefusal } from './local-trust.js'
 import { isSelfCallToken } from '../../lib/self-api-root.js'
 import { log } from '../../logging/index.js'
 import { isHostReplica } from '../../core/server-role.js'
+import { cookieCredential } from './device-cookie.js'
 
 // Paths (relative to the /api mount) that stay public in cloud mode:
 // - /v1/setup/*: first-boot claim flow — must work before any token exists.
@@ -69,30 +70,7 @@ function requestIp(req: Request): string {
   return req.ip ?? req.socket.remoteAddress ?? 'unknown'
 }
 
-/** The cookie a signed-in browser mirrors its device token into (web/src/api/device-token.ts). */
-export const DEVICE_COOKIE = 'walnut_device'
-
-/**
- * The device token a GET or HEAD carries in the `walnut_device` cookie: an
- * `<img>`, an HTML preview frame or a download cannot send a header. Never for
- * any other method, so a cookie can only ever read; the browser sets it
- * SameSite=Strict, so no other site's page can make it send one at all.
- */
-export function cookieCredential(req: Pick<Request, 'method' | 'headers'>): string {
-  if (req.method !== 'GET' && req.method !== 'HEAD') return ''
-  const raw = req.headers.cookie
-  if (!raw) return ''
-  for (const part of raw.split(';')) {
-    const eq = part.indexOf('=')
-    if (eq < 0 || part.slice(0, eq).trim() !== DEVICE_COOKIE) continue
-    try {
-      return decodeURIComponent(part.slice(eq + 1).trim())
-    } catch {
-      return ''
-    }
-  }
-  return ''
-}
+export { DEVICE_COOKIE, cookieCredential } from './device-cookie.js'
 
 /**
  * Validate a Bearer credential string: device token first (cloud credential),

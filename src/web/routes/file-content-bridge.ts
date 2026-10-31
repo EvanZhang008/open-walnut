@@ -219,6 +219,17 @@ function answerFailure(
 }
 
 /**
+ * What a path-shaped read names (the file-raw routes): the same fields the
+ * query-shaped `file-content` reads from its query string.
+ */
+export interface CloudFileTarget {
+  path: unknown
+  host: unknown
+  raw: boolean
+  download: boolean
+}
+
+/**
  * Serve GET /api/v1/file-content on a CLOUD replica — both the JSON viewer
  * payload and `raw=1` byte mode.
  *
@@ -229,12 +240,17 @@ function answerFailure(
  * - Everything else relays to the target host's daemon over the bridge
  *   ('' / absent → the primary '__local__') via the bounded fs.readBounded.
  */
-export async function serveCloudFileContent(req: Request, res: Response): Promise<void> {
-  const filePath = precheckPath(res, req.query.path)
+export async function serveCloudFileContent(req: Request, res: Response, target?: CloudFileTarget): Promise<void> {
+  const q = target ?? {
+    path: req.query.path,
+    host: req.query.host,
+    raw: req.query.raw === '1' || req.query.raw === 'true',
+    download: req.query.download === '1' || req.query.download === 'true',
+  }
+  const filePath = precheckPath(res, q.path)
   if (filePath === null) return
-  const hostAlias = resolveBridgeHost(req.query.host)
-  const raw = req.query.raw === '1' || req.query.raw === 'true'
-  const download = req.query.download === '1' || req.query.download === 'true'
+  const hostAlias = resolveBridgeHost(q.host)
+  const { raw, download } = q
   const ext = path.extname(filePath).slice(1).toLowerCase()
 
   const {
@@ -247,7 +263,7 @@ export async function serveCloudFileContent(req: Request, res: Response): Promis
   // actually PRESENT here: the primary owns the canonical /tmp/open-walnut
   // contents (e.g. attached images), so a locally-missing path falls through
   // to the bridge instead of answering a false "File not found".
-  const explicitHost = typeof req.query.host === 'string' && req.query.host.length > 0
+  const explicitHost = typeof q.host === 'string' && q.host.length > 0
   const locallyPresent = await fsp.stat(filePath).then((st) => st.isFile()).catch(() => false)
   if (!explicitHost && locallyPresent && cloudLocalReadAllowed(filePath) && !isSecretPath(filePath)) {
     try {

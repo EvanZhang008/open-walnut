@@ -16,6 +16,7 @@ import type { Request, Response, NextFunction } from 'express'
 import { WALNUT_HOME } from '../constants.js'
 import { createDeviceCopy, type DeviceCopy } from '../host-server/device-copy.js'
 import { log } from '../logging/index.js'
+import { cookieCredential } from '../web/middleware/device-cookie.js'
 
 let copy: DeviceCopy | null = null
 
@@ -101,7 +102,12 @@ export async function replicaRefusal(header: string | undefined): Promise<Replic
  */
 export async function replicaAuthMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
   if (req.method === 'GET' && PUBLIC_GET_PATHS.has(req.path)) { next(); return }
-  const header = req.headers.authorization
+  // The same `walnut_device` cookie the primary and the companion take (GET and
+  // HEAD only): a previewed HTML file's frames and images cannot send a header,
+  // and a phone routed to this replica previews files like anywhere else.
+  const raw = req.headers.authorization
+  const cookie = raw?.startsWith('Bearer ') ? '' : cookieCredential(req)
+  const header = cookie ? `Bearer ${cookie}` : raw
   const cred = header?.startsWith('Bearer ') ? verifyReplicaToken(header.slice(7)) : null
   if (!cred) {
     const refusal = await replicaRefusal(header)

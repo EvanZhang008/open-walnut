@@ -84,7 +84,7 @@ final class SessionMediaLoaderTests: XCTestCase {
 
     func testHTTPFailuresUseTheFileErrorLadderAndDeleteTemporaryBodies() async throws {
         let table: [(Int, FileReadFailureKind, Bool)] = [
-            (401, .notAuthorised, false), (403, .refused, false), (404, .notFoundOnHost, true),
+            (401, .signInRefused, true), (403, .refused, false), (404, .notFoundOnHost, true),
             (413, .tooLarge, false), (415, .unsupportedType, false),
             (500, .serverError(status: 500), true), (501, .hostNeedsUpgrade, true),
             (503, .hostUnreachable, true)

@@ -75,6 +75,9 @@ describe('path helpers', () => {
     expect(pathFromRemainder('Users/me/a.txt')).toBe('/Users/me/a.txt')
     expect(pathFromRemainder('/Users/me/a.txt')).toBe('/Users/me/a.txt')
     expect(pathFromRemainder('~/proj/a.txt')).toBe('~/proj/a.txt')
+    expect(pathFromRemainder('~')).toBe('~')
+    // A top-level folder whose name starts with ~ is an ordinary absolute path.
+    expect(pathFromRemainder('~archive/x.html')).toBe('/~archive/x.html')
   })
 })
 

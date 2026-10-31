@@ -46,7 +46,9 @@ extension LetterReplyStore {
         case .rateLimited:
             return Failure(sentence: "Too many requests. Try again in a moment.", mayHaveArrived: false)
         case .unauthorized:
-            return Failure(sentence: "Walnut did not accept this phone's pairing. Pair it again in Settings.",
+            // A 401 is not a verdict on the pairing: the connection re-checks it
+            // with the same token and says so itself if it is really gone.
+            return Failure(sentence: "Walnut didn't accept the sign-in on this request. Your reply is kept here; Retry in a moment.",
                            mayHaveArrived: false)
         case .notConfigured:
             return Failure(sentence: "This phone is not paired with Walnut yet.", mayHaveArrived: false)

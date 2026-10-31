@@ -39,6 +39,7 @@ vi.mock('../../../src/web/ws/bridge-registry.js', () => ({
 import express from 'express'
 import request from 'supertest'
 import { filesV1Router } from '../../../src/web/routes/files-v1.js'
+import { fileRawRouter } from '../../../src/web/routes/file-raw.js'
 import { errorHandler } from '../../../src/web/middleware/error-handler.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { serveBridgeMedia } from '../../../src/web/routes/file-content-bridge-media.js'
@@ -47,6 +48,7 @@ function createApp() {
   const app = express()
   app.use(express.json())
   app.use('/api/v1', filesV1Router)
+  app.use('/api/file-raw', fileRawRouter)
   app.use(errorHandler)
   return app
 }
@@ -276,6 +278,52 @@ function interruptedBody(port: number): Promise<{ aborted: boolean; bytes: numbe
     req.once('error', reject)
   })
 }
+
+// 2026-10-31: the phone's HTML preview of a page of relative iframes. The
+// replica answered the path-shaped URL with a 302 to the query-shaped one, so
+// the document's URL lost its directory and every relative reference resolved
+// to /api/v1/<name> (a 401 the phone read as "Not paired"). The path-shaped
+// URL must be served IN PLACE, on both mounts, for the Mac and a remote host.
+describe('path-shaped file-raw is served in place on a REPLICA (no redirect)', () => {
+  const cases = [
+    { url: '/api/v1/file-raw/local/Users/me/mock%20ups/index.html', host: '__local__', path: '/Users/me/mock ups/index.html' },
+    { url: '/api/v1/file-raw/devbox/~/proj/index.html', host: 'devbox', path: '~/proj/index.html' },
+    { url: '/api/file-raw/local/Users/me/proj/index.html', host: '__local__', path: '/Users/me/proj/index.html' },
+    { url: '/api/file-raw/devbox/home/me/proj/index.html', host: 'devbox', path: '/home/me/proj/index.html' },
+  ]
+  for (const c of cases) {
+    it(`${c.url} relays to ${c.host} and answers 200 text/html`, async () => {
+      const html = '<!doctype html><iframe src="01-inbox-lines.html"></iframe>'
+      bridgeRequestMock.mockResolvedValue(daemonOk(html))
+      const res = await request(createApp()).get(c.url).redirects(0)
+      expect(res.status).toBe(200)
+      expect(res.headers.location).toBeUndefined()
+      expect(res.headers['content-type']).toContain('text/html')
+      expect(res.text).toBe(html)
+      expect(bridgeRequestMock).toHaveBeenCalledWith(c.host, 'fs.readBounded', { path: c.path }, expect.any(Number))
+    })
+  }
+
+  it('a sibling the document references relatively resolves under the same route', async () => {
+    bridgeRequestMock.mockResolvedValue(daemonOk('<p>one</p>'))
+    const docUrl = new URL('http://companion/api/v1/file-raw/local/Users/me/proj/index.html')
+    const sibling = new URL('01-inbox-lines.html', docUrl)
+    const res = await request(createApp()).get(sibling.pathname).redirects(0)
+    expect(res.status).toBe(200)
+    expect(bridgeRequestMock).toHaveBeenCalledWith('__local__', 'fs.readBounded', { path: '/Users/me/proj/01-inbox-lines.html' }, expect.any(Number))
+  })
+
+  it('download=1 still forces an attachment, and the sandbox still refuses a secret path before the bridge', async () => {
+    bridgeRequestMock.mockResolvedValue(daemonOk('a,b\n'))
+    const dl = await request(createApp()).get('/api/v1/file-raw/local/Users/me/x.csv?download=1')
+    expect(dl.status).toBe(200)
+    expect(dl.headers['content-disposition']).toContain('attachment')
+    bridgeRequestMock.mockReset()
+    const secret = await request(createApp()).get('/api/v1/file-raw/local/Users/me/.open-walnut/config.yaml')
+    expect(secret.status).toBe(403)
+    expect(bridgeRequestMock).not.toHaveBeenCalled()
+  })
+})
 
 describe('raw media uses guarded bridge chunks', () => {
   it('streams more than 2 MB byte-exact with sequential chunks, the raw host, and deadlines', async () => {

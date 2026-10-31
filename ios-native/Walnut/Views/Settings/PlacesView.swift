@@ -263,7 +263,7 @@ struct PlacesView: View {
         case .macTooOld?:
             return "Your Mac needs a newer Walnut to keep places. Visits wait here until then."
         case .unauthorized?:
-            return "Your Mac did not accept this iPhone. Pair it again in Settings."
+            return "Your Mac didn't accept the last sync's sign-in. Walnut checks the connection and tries again on its own."
         default:
             if store.recording, store.recent.isEmpty, !store.isDemo {
                 return "iOS records a visit once you have stayed somewhere for a while."

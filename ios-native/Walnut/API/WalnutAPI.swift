@@ -540,6 +540,10 @@ struct WalnutAPI {
     /// the primary box. Callers must attach the Bearer header themselves.
     static func rawFileContentURL(path: String, host: String? = nil) -> URL? {
         guard let base = AppConfig.serverURL else { return nil }
+        return rawFileContentURL(base: base, path: path, host: host)
+    }
+
+    static func rawFileContentURL(base: URL, path: String, host: String?) -> URL? {
         var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
         components?.path = "/api/v1/file-content"
         var items = [URLQueryItem(name: "path", value: path), URLQueryItem(name: "raw", value: "1")]
@@ -547,6 +551,42 @@ struct WalnutAPI {
             items.append(URLQueryItem(name: "host", value: host))
         }
         components?.queryItems = items
+        return components?.url
+    }
+
+    /// The same raw bytes at a PATH-shaped URL,
+    /// `/api/v1/file-raw/<host or local>/<path segments>`: what the HTML preview
+    /// loads, so a relative `src="02-detail.html"` inside the page resolves to
+    /// the sibling file instead of to `/api/v1/02-detail.html` (2026-10-31: every
+    /// frame of a previewed page answered 401 and the preview said "Not paired").
+    /// Only an absolute or `~` path has this shape; anything else is nil, and the
+    /// caller falls back to `rawFileContentURL`. The web view sends no header on
+    /// its own requests, so its frames sign in with the `walnut_device` cookie.
+    static func rawFilePathURL(path: String, host: String? = nil) -> URL? {
+        guard let base = AppConfig.serverURL else { return nil }
+        return rawFilePathURL(base: base, path: path, host: host)
+    }
+
+    static func rawFilePathURL(base: URL, path: String, host: String?) -> URL? {
+        var segments: [String]
+        if path == "~" {
+            segments = ["~"]
+        } else if path.hasPrefix("~/") {
+            segments = ["~"] + path.dropFirst(2).split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        } else if path.hasPrefix("/") {
+            segments = path.dropFirst().split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        } else {
+            return nil
+        }
+        // `..` and empty segments would be normalised away by the URL itself.
+        guard !segments.contains(where: { $0 == ".." || $0 == "." }) else { return nil }
+        let hostSegment = (host?.isEmpty == false && host != "__local__") ? host! : "local"
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "/;?#")
+        let encoded = ([hostSegment] + segments).map { $0.addingPercentEncoding(withAllowedCharacters: allowed) ?? $0 }
+        var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        components?.queryItems = nil
+        components?.percentEncodedPath = "/api/v1/file-raw/" + encoded.joined(separator: "/")
         return components?.url
     }
 

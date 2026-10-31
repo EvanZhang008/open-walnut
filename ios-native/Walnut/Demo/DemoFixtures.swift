@@ -435,7 +435,10 @@ enum DemoFixtures {
     static func htmlPreview(for url: URL) -> String {
         let name = URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?.first(where: { $0.name == "path" })?.value
-            .map { ($0 as NSString).lastPathComponent } ?? "Preview"
+            .map { ($0 as NSString).lastPathComponent }
+            // The path-shaped preview URL carries the file in its own path.
+            ?? (url.path.hasPrefix("/api/v1/file-raw/") ? url.lastPathComponent : nil)
+            ?? "Preview"
         return """
         <!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1">
         <style>body{font:-apple-system-body;margin:24px;color:#222}h1{font-size:22px}</style></head>

@@ -310,8 +310,8 @@ filesV1Router.get('/files/recent-dirs', async (_req: Request, res: Response, nex
 // `diagram.png` resolves to a sibling under the same route. `<host>` is
 // `local` or a host alias; the remainder is the file's absolute (or `~/`,
 // remote only) path, one percent-encoded segment per component. Same shared
-// `serveRawFileContent`, therefore the same sandbox. REPLICA: 302 to the
-// query-shaped bridge relay, which is the one shape the replica can serve.
+// `serveRawFileContent`, therefore the same sandbox. REPLICA: the same
+// bridge relay as the query-shaped read, served at this URL.
 filesV1Router.get('/file-raw/:host/*rest', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { hostFromSegment, pathFromRemainder } = await import('./file-raw.js')
@@ -321,10 +321,11 @@ filesV1Router.get('/file-raw/:host/*rest', async (req: Request, res: Response, n
     const filePath = pathFromRemainder(rest)
     const download = req.query.download === '1' || req.query.download === 'true'
     if (CLOUD_MODE) {
-      const params = new URLSearchParams({ path: filePath, raw: '1' })
-      if (host) params.set('host', host)
-      if (download) params.set('download', '1')
-      res.redirect(302, `/api/v1/file-content?${params}`)
+      // Served in place by the bridge relay. A 302 to the query-shaped URL
+      // would become the document's URL and break its relative references
+      // (2026-10-31: a phone's HTML preview of a page of iframes).
+      const { serveCloudFileContent } = await import('./file-content-bridge.js')
+      await serveCloudFileContent(req, res, { path: filePath, host, raw: true, download })
       return
     }
     const { serveRawFileContent, FileContentError } = await import('./file-content.js')

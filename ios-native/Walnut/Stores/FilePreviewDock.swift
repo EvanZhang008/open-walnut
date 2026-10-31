@@ -860,9 +860,15 @@ final class FilePreviewDock {
     /// Called from the preview's `onAppear`, so it may run before the sheet's own
     /// `present(_:)` — hence the same bank-then-evict rule as `present`.
     func loader(for target: FilePreviewTarget, url: URL, token: String?) -> HTMLPreviewLoader {
-        if let live, live.target == target {
+        if let live, live.target == target, live.url == url, live.token == token {
             live.arm(offsets.offset(for: target.id))
             return live
+        }
+        if let live, live.target == target {
+            // Same file, but the server or the sign-in changed (a re-pair): the
+            // kept page would keep asking with the old token. Keep the position.
+            captureLiveOffset()
+            dropLive(reason: "sign-in-changed")
         }
         replaceLive(unless: target, reason: "target-changed")
         let loader = HTMLPreviewLoader(target: target, url: url, token: token)

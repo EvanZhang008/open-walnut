@@ -307,7 +307,8 @@ final class FilePreviewLinkTests: XCTestCase {
     func testEveryServerFailureKindGetsItsOwnSentenceAndRetryDecision() {
         // status, expected kind, retry offered
         let table: [(Int, FileReadFailureKind, Bool)] = [
-            (401, .notAuthorised, false),
+            (401, .signInRefused, true),
+            (407, .signInRefused, true),
             (403, .refused, false),
             (404, .notFoundOnHost, true),
             (410, .notFoundOnHost, true),
@@ -338,7 +339,7 @@ final class FilePreviewLinkTests: XCTestCase {
     func testDistinguishableCasesDoNotShareCopy() {
         let kinds: [FileReadFailureKind] = [
             .notFoundOnHost, .hostReadFailed("disk I/O error"), .refused, .tooLarge,
-            .hostNeedsUpgrade, .hostUnreachable, .transportFailed, .notAuthorised,
+            .hostNeedsUpgrade, .hostUnreachable, .transportFailed, .signInRefused, .notPaired,
             .unsupportedType, .serverError(status: 500), .serverError(status: nil),
         ]
         let failures = kinds.map { FileReadFailure(kind: $0, host: nil) }
@@ -443,8 +444,11 @@ final class FilePreviewLinkTests: XCTestCase {
         XCTAssertEqual(raw.kind, .transportFailed)
         XCTAssertTrue(raw.isRetryable)
 
-        XCTAssertEqual(FilePreviewLink.failure(for: APIError.unauthorized).kind, .notAuthorised)
-        XCTAssertFalse(FilePreviewLink.failure(for: APIError.unauthorized).isRetryable)
+        // A 401 is not a verdict on the pairing (the connection re-checks it), so
+        // it is retryable; only a phone with no server set up is "not connected".
+        XCTAssertEqual(FilePreviewLink.failure(for: APIError.unauthorized).kind, .signInRefused)
+        XCTAssertTrue(FilePreviewLink.failure(for: APIError.unauthorized).isRetryable)
+        XCTAssertEqual(FilePreviewLink.failure(for: APIError.notConfigured).kind, .notPaired)
         // The primary mid-upgrade is retryable, and reuses the daemon sentence.
         let upgrading = APIError.server(status: 501, code: "session_control_needs_upgrade",
                                        message: "raw", serverHash: nil, serverContent: nil)

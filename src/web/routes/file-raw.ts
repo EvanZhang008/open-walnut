@@ -40,7 +40,8 @@ export function hostFromSegment(seg: string): string | undefined {
  * relative, expanded by the daemon); anything else is made absolute.
  */
 export function pathFromRemainder(rest: string): string {
-  if (rest.startsWith('~')) return rest
+  // `~` alone or `~/…` only: a top-level folder named `~archive` is absolute.
+  if (rest === '~' || rest.startsWith('~/')) return rest
   return '/' + rest.replace(/^\/+/, '')
 }
 
@@ -56,13 +57,11 @@ fileRawRouter.get('/:host/*rest', async (req: Request, res: Response, next: Next
     const download = req.query.download === '1' || req.query.download === 'true'
 
     if (CLOUD_MODE) {
-      // The replica relays reads through the narrow bridge command; that path
-      // is query-shaped and owned by file-content-bridge. Rather than duplicate
-      // it, point the client at the shape the replica does serve.
-      const params = new URLSearchParams({ path: filePath, raw: '1' })
-      if (host) params.set('host', host)
-      if (download) params.set('download', '1')
-      res.redirect(302, `/api/file-content?${params}`)
+      // The replica relays reads through the narrow bridge command. Served here,
+      // never redirected: a redirect to the query-shaped URL makes it the
+      // document's URL, and every relative reference in it breaks again.
+      const { serveCloudFileContent } = await import('./file-content-bridge.js')
+      await serveCloudFileContent(req, res, { path: filePath, host, raw: true, download })
       return
     }
 

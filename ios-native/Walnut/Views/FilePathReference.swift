@@ -191,7 +191,7 @@ extension FilePreviewLink {
     ///  - 502/503: this box could not reach the box that owns the file.
     static func kind(forHTTPStatus status: Int) -> FileReadFailureKind {
         switch status {
-        case 401, 407: return .notAuthorised
+        case 401, 407: return .signInRefused
         case 403: return .refused
         case 404, 410: return .notFoundOnHost
         case 413: return .tooLarge
@@ -222,8 +222,10 @@ extension FilePreviewLink {
                 return FileReadFailure(kind: .hostNeedsUpgrade, host: host)
             }
             return FileReadFailure(kind: kind(forHTTPStatus: status), host: host)
-        case .unauthorized, .notConfigured:
-            return FileReadFailure(kind: .notAuthorised, host: host)
+        case .unauthorized:
+            return FileReadFailure(kind: .signInRefused, host: host)
+        case .notConfigured:
+            return FileReadFailure(kind: .notPaired, host: host)
         case .network, .cancelled:
             return FileReadFailure(kind: .transportFailed, host: host)
         case .rateLimited:
@@ -283,8 +285,13 @@ enum FileReadFailureKind: Equatable {
     case hostUnreachable
     /// The PHONE could not reach the server at all.
     case transportFailed
-    /// This phone isn't allowed to read files.
-    case notAuthorised
+    /// Walnut answered 401 for this read. Not a verdict on the pairing: a
+    /// frame without the sign-in, a token mid-rotation and a revoked phone all
+    /// look like this, and the connection re-checks the pairing on its own.
+    /// Never tell a connected phone to pair again (2026-10-31).
+    case signInRefused
+    /// No server or token is set up on this phone at all.
+    case notPaired
     /// Bytes arrived, but the phone can't render them.
     case unsupportedType
     /// Anything else. `nil` = the answer itself didn't parse.
@@ -331,7 +338,8 @@ struct FileReadFailure: Equatable {
         case .hostNeedsUpgrade: return "Host needs an upgrade"
         case .hostUnreachable: return "Can't reach \(hostLabel)"
         case .transportFailed: return "Can't reach Walnut"
-        case .notAuthorised: return "Not paired"
+        case .signInRefused: return "Sign-in not accepted"
+        case .notPaired: return "Not connected"
         case .unsupportedType: return "Can't show this file"
         case .serverError: return "Can't open file"
         }
@@ -345,7 +353,7 @@ struct FileReadFailure: Equatable {
         case .tooLarge: return "arrow.down.doc"
         case .hostNeedsUpgrade: return "arrow.triangle.2.circlepath"
         case .hostUnreachable, .transportFailed: return "wifi.slash"
-        case .notAuthorised: return "person.badge.key"
+        case .signInRefused, .notPaired: return "person.badge.key"
         case .unsupportedType: return "doc.richtext"
         case .serverError: return "exclamationmark.triangle"
         }
@@ -382,8 +390,10 @@ struct FileReadFailure: Equatable {
             return "Walnut couldn't reach \(hostLabel) just now, so it can't say what is at that path. The host being unreachable does NOT mean the file is gone. Try again once it is back."
         case .transportFailed:
             return "Your phone couldn't reach the Walnut server, so nothing has been said about this file yet. Try again when you're back online."
-        case .notAuthorised:
-            return "This phone isn't allowed to read files from Walnut. Re-pair it in Settings."
+        case .signInRefused:
+            return "Walnut didn't accept the sign-in on this request. Try again; the app checks its connection on its own and tells you if anything needs fixing."
+        case .notPaired:
+            return "This phone isn't connected to a Walnut server yet, so it can't read files."
         case .unsupportedType:
             return "The phone can't render this kind of file. Open it on \(hostLabel)."
         case .serverError(let status):
@@ -399,9 +409,9 @@ struct FileReadFailure: Equatable {
     var isRetryable: Bool {
         switch kind {
         case .notFoundOnHost, .hostReadFailed, .hostNeedsUpgrade,
-             .hostUnreachable, .transportFailed:
+             .hostUnreachable, .transportFailed, .signInRefused:
             return true
-        case .refused, .tooLarge, .notAuthorised, .unsupportedType:
+        case .refused, .tooLarge, .notPaired, .unsupportedType:
             return false
         case .serverError(let status):
             // Retry the statuses that mean "later might differ", not the ones

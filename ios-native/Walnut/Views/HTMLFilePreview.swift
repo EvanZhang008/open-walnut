@@ -126,7 +126,7 @@ struct HTMLFilePreview: View {
                         Text(failure.message)
                     } actions: {
                         if failure.isRetryable {
-                            Button("Try Again") { loader.reload() }
+                            Button("Try Again") { loader.reload(token: AppConfig.token) }
                                 .buttonStyle(.borderedProminent)
                                 .accessibilityIdentifier("file.preview.retry")
                         }
@@ -162,7 +162,7 @@ struct HTMLFilePreview: View {
     }
 
     private func adopt() {
-        guard loader == nil, let url = WalnutAPI.rawFileContentURL(path: path, host: host) else { return }
+        guard loader == nil, let url = HTMLPreviewLoader.documentURL(for: target) else { return }
         if retained, let dock {
             loader = dock.loader(for: target, url: url, token: AppConfig.token)
         } else {
@@ -306,14 +306,30 @@ final class HTMLPreviewLoader {
     private static let maxRestoreAttempts = 2
     private static let restoreRetryDelayMs = 400
 
-    /// Kept for `reload()`: the retry has to present the same Bearer header the
-    /// first attempt did, and a `WKWebView` request cannot be replayed.
-    @ObservationIgnored private let token: String?
+    /// Kept for `reload()`: the retry has to present the Bearer header, and a
+    /// `WKWebView` request cannot be replayed. A Try Again passes the current
+    /// one, so a preview the dock kept across a re-pair signs in with it.
+    @ObservationIgnored private(set) var token: String?
+
+    /// The document navigation in flight, so our own cancel of it (a redirect
+    /// the preview refuses) ends the spinner instead of leaving it forever.
+    @ObservationIgnored private var documentNavigation: WKNavigation?
+
+    /// The query-shaped twin of a path-shaped `url`, tried once when the server
+    /// does not know the path shape (a 404 for the document itself). nil when
+    /// `url` is already the query shape.
+    @ObservationIgnored let fallbackURL: URL?
+    /// What was asked last: `url`, or `fallbackURL` once used. A `reload()`
+    /// starts again from `url`, so a file that was missing on a server with the
+    /// path shape comes back path-shaped, frames and all.
+    @ObservationIgnored private(set) var currentURL: URL
 
     init(target: FilePreviewTarget, url: URL, token: String?) {
         self.target = target
         self.url = url
         self.token = token
+        self.currentURL = url
+        self.fallbackURL = Self.queryTwin(of: url, target: target)
         let config = WKWebViewConfiguration()
         // Ephemeral store: nothing persisted, no cookie jar shared with the
         // app's URLSession or other previews. Remembering a scroll position
@@ -324,12 +340,89 @@ final class HTMLPreviewLoader {
         webView.isOpaque = false
         webView.backgroundColor = .systemBackground
         self.webView = webView
-        let navigator = HTMLPreviewNavigator(url: url, host: target.host)
+        let navigator = HTMLPreviewNavigator(url: url, fallbackURL: fallbackURL, target: target)
         self.navigator = navigator
         navigator.loader = self
         webView.navigationDelegate = navigator
-        webView.walnutLoad(Self.request(url: url, token: token, ignoringCache: false))
         observeOffset()
+        load(url, ignoringCache: false)
+    }
+
+    /// What the preview loads: the path-shaped URL, so the page's relative
+    /// references find its sibling files; the query shape for a path that has
+    /// no path form.
+    static func documentURL(for target: FilePreviewTarget) -> URL? {
+        WalnutAPI.rawFilePathURL(path: target.path, host: target.host)
+            ?? WalnutAPI.rawFileContentURL(path: target.path, host: target.host)
+    }
+
+    /// The query-shaped URL for the same file on the same server, or nil when
+    /// `url` is not path-shaped.
+    static func queryTwin(of url: URL, target: FilePreviewTarget) -> URL? {
+        guard isPathShaped(url), var origin = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        origin.percentEncodedPath = ""
+        origin.query = nil
+        origin.fragment = nil
+        guard let base = origin.url else { return nil }
+        return WalnutAPI.rawFileContentURL(base: base, path: target.path, host: target.host)
+    }
+
+    static func isPathShaped(_ url: URL) -> Bool {
+        url.path.hasPrefix("/api/v1/file-raw/")
+    }
+
+    /// The device cookie a previewed page's own requests sign in with.
+    ///
+    /// The document request carries the Bearer header, but WebKit sends no
+    /// header on the page's frames, images and stylesheets, so each of them
+    /// answered 401 and the preview said "Not paired" on a connected phone
+    /// (2026-10-31). Every server role reads the `walnut_device` cookie on a
+    /// GET or HEAD only. Scoped to the document's own folder on its own host:
+    /// its siblings and subfolders sign in, while a script in the page cannot
+    /// read files elsewhere with it (a `../` reference is refused). The jar is
+    /// this preview's own non-persistent store.
+    static func deviceCookie(for url: URL, token: String?) -> HTTPCookie? {
+        guard let token, !token.isEmpty, let host = url.host, isPathShaped(url) else { return nil }
+        let encodedPath = url.path(percentEncoded: true)
+        guard let slash = encodedPath.lastIndex(of: "/") else { return nil }
+        let folder = String(encodedPath[...slash])
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        var properties: [HTTPCookiePropertyKey: Any] = [
+            .name: "walnut_device",
+            .value: token.addingPercentEncoding(withAllowedCharacters: allowed) ?? token,
+            .domain: host,
+            .path: folder,
+            .sameSitePolicy: HTTPCookieStringPolicy.sameSiteStrict,
+        ]
+        if url.scheme == "https" { properties[.secure] = "TRUE" }
+        return HTTPCookie(properties: properties)
+    }
+
+    /// Set the cookie (when this URL needs one), then load. The cookie store
+    /// answers asynchronously, and a load issued before it lands sends frames
+    /// without it.
+    private func load(_ url: URL, ignoringCache: Bool) {
+        currentURL = url
+        documentNavigation = nil
+        let request = Self.request(url: url, token: token, ignoringCache: ignoringCache)
+        guard let cookie = Self.deviceCookie(for: url, token: token) else {
+            documentNavigation = webView.walnutLoad(request)
+            return
+        }
+        webView.configuration.websiteDataStore.httpCookieStore.setCookie(cookie) { [weak self] in
+            // Torn down while the cookie was being stored: nothing to load into.
+            guard let self, self.navigator != nil, self.currentURL == url else { return }
+            self.documentNavigation = self.webView.walnutLoad(request)
+        }
+    }
+
+    /// Our own cancel ended a navigation. When it was the document's and no
+    /// answer came first (a redirect the preview refused), say so instead of
+    /// spinning forever.
+    func navigationCancelled(_ navigation: WKNavigation?) {
+        guard let navigation, navigation === documentNavigation, phase == .loading else { return }
+        setPhase(.failed(FileReadFailure(kind: .serverError(status: nil), host: target.host)))
     }
 
     private static func request(url: URL, token: String?, ignoringCache: Bool) -> URLRequest {
@@ -341,12 +434,25 @@ final class HTMLPreviewLoader {
         return request
     }
 
+    /// The server answered the path-shaped document with 404: a server that
+    /// predates that route, or a missing file. Ask the query shape once; a
+    /// missing file answers 404 there too and that one is shown.
+    func loadFallback() {
+        guard navigator != nil, let fallbackURL, currentURL != fallbackURL else { return }
+        load(fallbackURL, ignoringCache: true)
+    }
+
     /// Re-issue the SAME read. This is the escape hatch the failed state was
     /// missing, and it is deliberately a re-ask rather than a page refresh: every
     /// retryable failure (the host unreachable for a moment, a file the agent
     /// had not finished writing when its path was announced) resolves by asking
     /// the identical URL again a beat later. The 2026-09-07 report was exactly
     /// that: a 404 that the very same URL answered 200 for seventy seconds later.
+    func reload(token newToken: String?) {
+        token = newToken
+        reload()
+    }
+
     func reload() {
         // A torn-down loader has no navigation delegate, so a load would never
         // report back and the view would spin forever.
@@ -359,7 +465,8 @@ final class HTMLPreviewLoader {
         restoreAttempts = 0
         // Cache-busting matters: WebKit is entitled to keep the 404 (and its
         // body) and answer the retry from its own cache without a round trip.
-        webView.walnutLoad(Self.request(url: url, token: token, ignoringCache: true))
+        // From `url` again: the fallback is allowed once per attempt.
+        load(url, ignoringCache: true)
     }
 
     /// Keep the bank current. `.new` only (no `.initial`): the value the scroll
@@ -538,28 +645,68 @@ private struct HTMLPreviewHostView: UIViewRepresentable {
 /// delegate methods are ObjC entry points): every touch of loader state hops
 /// onto the main actor, and the only thing read synchronously here is the
 /// immutable initial URL.
-private final class HTMLPreviewNavigator: NSObject, WKNavigationDelegate {
+final class HTMLPreviewNavigator: NSObject, WKNavigationDelegate {
     /// Weak: the loader owns this object.
     weak var loader: HTMLPreviewLoader?
     private let url: URL
+    /// The query-shaped twin of a path-shaped `url` (see the loader).
+    private let fallbackURL: URL?
     /// Which box owns the file. Immutable, so these non-isolated delegate
     /// callbacks may read it without hopping — and without it the failure copy
     /// cannot name the machine it asked, which is the whole point of the copy.
     private let host: String?
+    /// The file, for recognising an older companion's redirect to its query shape.
+    private let target: FilePreviewTarget
 
-    init(url: URL, host: String?) {
+    init(url: URL, fallbackURL: URL?, target: FilePreviewTarget) {
         self.url = url
-        self.host = host
+        self.fallbackURL = fallbackURL
+        self.host = target.host
+        self.target = target
     }
 
-    /// Initial document, ignoring fragment (in-page anchors must work).
+    /// Initial document, ignoring fragment (in-page anchors must work). The
+    /// query-shaped twin counts too: the loader may fall back to it, and an
+    /// older companion answers the path shape with a redirect to it.
     private func isInitialDocument(_ candidate: URL?) -> Bool {
         guard let candidate else { return false }
-        var a = URLComponents(url: candidate, resolvingAgainstBaseURL: false)
-        var b = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        a?.fragment = nil
-        b?.fragment = nil
-        return a?.url == b?.url
+        if Self.sameDocument(candidate, url) { return true }
+        if let fallbackURL, Self.sameDocument(candidate, fallbackURL) { return true }
+        return Self.isRawRead(of: target, at: candidate, origin: url)
+    }
+
+    /// A raw read of this same file at the query shape on the same server. A
+    /// companion older than 2026-10-31 answers the path shape with a 302 to
+    /// `/api/file-content?…`, built form-encoded (a space is `+`) and with no
+    /// host for this machine, so `sameDocument` does not match it.
+    static func isRawRead(of target: FilePreviewTarget, at candidate: URL, origin: URL) -> Bool {
+        guard let c = URLComponents(url: candidate, resolvingAgainstBaseURL: false),
+              let o = URLComponents(url: origin, resolvingAgainstBaseURL: false),
+              c.scheme == o.scheme, c.host == o.host, c.port == o.port,
+              c.path == "/api/file-content" || c.path == "/api/v1/file-content" else { return false }
+        var query: [String: String] = [:]
+        for item in c.percentEncodedQueryItems ?? [] {
+            let value = (item.value ?? "").replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? ""
+            query[item.name] = value
+        }
+        func machine(_ host: String?) -> String {
+            guard let host, !host.isEmpty, host != "__local__", host != "local" else { return "" }
+            return host
+        }
+        return query["raw"] == "1" && query["path"] == target.path && machine(query["host"]) == machine(target.host)
+    }
+
+    /// Same document: equal apart from the fragment and the order of query items.
+    static func sameDocument(_ a: URL, _ b: URL) -> Bool {
+        guard var x = URLComponents(url: a, resolvingAgainstBaseURL: false),
+              var y = URLComponents(url: b, resolvingAgainstBaseURL: false) else { return false }
+        x.fragment = nil
+        y.fragment = nil
+        let qx = Set((x.queryItems ?? []).map { "\($0.name)=\($0.value ?? "")" })
+        let qy = Set((y.queryItems ?? []).map { "\($0.name)=\($0.value ?? "")" })
+        x.queryItems = nil
+        y.queryItems = nil
+        return x.url == y.url && qx == qy
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
@@ -592,10 +739,26 @@ private final class HTMLPreviewNavigator: NSObject, WKNavigationDelegate {
         // itself lives in FilePathReference.swift (`FilePreviewLink.failure`) so
         // the TEXT viewer, which sees the same refusals as APIError rather than
         // as status codes, says the same words and offers the same retry.
-        if let http = navigationResponse.response as? HTTPURLResponse, http.statusCode >= 400 {
-            let failure = FilePreviewLink.failure(forHTTPStatus: http.statusCode, host: host)
-            Task { @MainActor [loader] in loader?.setPhase(.failed(failure)) }
+        //
+        // The DOCUMENT only. A frame, image or stylesheet inside the page that
+        // fails is the page's own business, shown the way a browser shows it;
+        // failing the whole preview for one is how a page whose frames lacked
+        // the sign-in read as "Not paired" (2026-10-31).
+        if navigationResponse.isForMainFrame,
+           let http = navigationResponse.response as? HTTPURLResponse, http.statusCode >= 400 {
             decisionHandler(.cancel)
+            if http.statusCode == 404, let fallbackURL, let failed = http.url,
+               !Self.sameDocument(failed, fallbackURL) {
+                Task { @MainActor [loader] in loader?.loadFallback() }
+                return
+            }
+            let failure = FilePreviewLink.failure(forHTTPStatus: http.statusCode, host: host)
+            if failure.kind == .signInRefused {
+                // The connection decides whether the pairing is really gone: it
+                // re-asks with the same token and only a refusal there signs out.
+                NotificationCenter.default.post(name: WalnutAPI.unauthorizedNotification, object: nil)
+            }
+            Task { @MainActor [loader] in loader?.setPhase(.failed(failure)) }
             return
         }
         decisionHandler(.allow)
@@ -616,7 +779,10 @@ private final class HTMLPreviewNavigator: NSObject, WKNavigationDelegate {
         // — setPhase already refuses to clobber a friendly failure; a genuine
         // transport error still reports honestly.
         let nsError = error as NSError
-        if nsError.domain == "WebKitErrorDomain" && nsError.code == 102 { return }
+        if nsError.domain == "WebKitErrorDomain" && nsError.code == 102 {
+            Task { @MainActor [loader, navigation] in loader?.navigationCancelled(navigation) }
+            return
+        }
         // A transport failure is a statement about the PHONE's reachability, not
         // about the file — and it is retryable, which is why it goes through the
         // same ladder instead of dumping Apple's localizedDescription on screen.
