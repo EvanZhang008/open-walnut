@@ -96,6 +96,56 @@ describe('status line (C15, C57)', () => {
     expect(vm(mkTask({ phase: 'COMPLETE', completed_at: ago(5_000), user_status: { state: 'needs', ask: 'x' } })).status.tone).toBe('green');
   });
 
+  it('Start follows the task, whatever words its status line carries (C75)', () => {
+    const states: Array<Task['user_status']> = [
+      undefined,
+      { state: 'waiting', kind: 'not-started', waitingOn: 'Not started yet' },
+      { state: 'waiting', kind: 'lead', waitingOn: 'Its lead' },
+      { state: 'waiting', kind: 'stuck', waitingOn: 'It stopped' },
+      { state: 'waiting', kind: 'time', waitingOn: 'A time', until: ago(-HOUR) },
+      { state: 'needs', ask: 'Approve it?' },
+    ]
+    for (const us of states) {
+      const label = JSON.stringify(us ?? null)
+      expect(vm(mkTask({ phase: 'TODO', ...(us ? { user_status: us } : {}) })).canStart, label).toBe(true)
+      expect(vm(withSession({ phase: 'TODO', ...(us ? { user_status: us } : {}) })).canStart, label).toBe(false)
+    }
+    expect(vm(mkTask({ phase: 'COMPLETE', completed_at: ago(5_000) })).canStart).toBe(false)
+    expect(vm(null).canStart).toBe(false)
+  });
+
+  it('a card whose session started does not read the stale "Not started yet" (C75)', () => {
+    const stale = { state: 'waiting', kind: 'not-started', waitingOn: 'Not started yet' } as Task['user_status']
+    // Before its session: the server's words.
+    expect(vm(mkTask({ phase: 'TODO', user_status: stale })).status.text).toBe('Not started yet')
+    // Its session started, the server has not derived it again yet: the live rows speak.
+    for (const phase of ['TODO', 'IN_PROGRESS', 'NEED_ACTION'] as const) {
+      expect(vm(withSession({ phase, user_status: stale })).status.text, phase).not.toBe('Not started yet')
+    }
+    expect(vm(withSession({ phase: 'IN_PROGRESS', user_status: stale }), { process_status: 'idle' } as KanbanLive).status.kind).toBe('idle')
+    // Any other server words still win over the phase rows.
+    const lead = { state: 'waiting', kind: 'lead', waitingOn: 'Its lead' } as Task['user_status']
+    expect(vm(withSession({ phase: 'NEED_ACTION', user_status: lead })).status.text).toBe('Waiting on its lead')
+  });
+
+  it('ratchet: no card control is gated on the words of its status line', async () => {
+    const { readFileSync, readdirSync } = await import('node:fs')
+    const { join } = await import('node:path')
+    const dir = join(__dirname, '../../web/src/components/board/kanban')
+    // A status line kind may pick words or a style; a control reads a fact of the task.
+    const STYLE_ONLY: Record<string, string> = {
+      "vm.status.kind === 'running'": 'throttles the line text while it runs',
+      "status.kind !== 'waiting-until'": 'the wait line does not repeat the time the status says',
+      // 'still-open' is decided before the user status, from the lane and the phase (quietStatus).
+      "status.kind === 'still-open'": 'the Complete link of a card in a done lane whose task is open',
+    }
+    const uses: string[] = []
+    for (const f of readdirSync(dir).filter((n) => n.endsWith('.tsx'))) {
+      for (const m of readFileSync(join(dir, f), 'utf8').matchAll(/\b(?:vm\.)?status\.kind\s*[!=]==\s*'[^']+'/g)) uses.push(m[0])
+    }
+    expect([...new Set(uses)].filter((u) => !(u in STYLE_ONLY)), 'Gate a card control on a fact (canStart, isComplete), not on the status line kind').toEqual([])
+  });
+
   it('running, waiting, done, idle, stopped, no session', () => {
     expect(vm(withSession(), { process_status: 'running', activity: 'reading logs' }).status).toMatchObject({ text: 'Working: Reading logs', tone: 'green' });
     expect(vm(withSession(), { process_status: 'running' }).status.text).toBe('Working');

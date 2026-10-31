@@ -99,6 +99,13 @@ export interface KanbanCardVM {
   hasSession: boolean;
   sessionId?: string;
   isComplete: boolean;
+  /**
+   * The card offers Start: an open task with no session. A fact of the task, never
+   * the status line's kind, which the server's user status words (2026-10-26: a
+   * card reading "Not started yet" lost its Start, because the line's kind turned
+   * from no-session to waiting).
+   */
+  canStart: boolean;
   summary?: KanbanCardSummary;
   waiting?: KanbanCardWaiting;
   foot: KanbanCardFoot;
@@ -266,7 +273,9 @@ function quietStatus(
     return { text: 'Task still open', tone: 'amber', kind: 'still-open', tooltip: 'This card is in a done lane, but its task is not complete' };
   }
   // The one user status words when the server derived them; the phase rows below are the fallback.
-  const us = task.user_status;
+  // "Not started" from before its session started is stale until the server derives it again
+  // (debounced, seconds later): a task with a session has started, so the live rows speak.
+  const us = task.user_status?.kind === 'not-started' && hasSession ? undefined : task.user_status;
   if (us && display !== 'running' && task.phase !== 'COMPLETE') {
     if (us.state === 'waiting') {
       const on = us.waitingOn || 'Waiting';
@@ -344,7 +353,7 @@ export function buildCardVM(i: KanbanCardInput): KanbanCardVM {
   if (!task) {
     return {
       ...base, title: i.titleOf(i.taskId) || '', loading: true, needsYou: false, running: false, activity: '',
-      hasSession: false, changed: false,
+      hasSession: false, canStart: false, changed: false,
       status: { text: 'Loading', tone: 'grey', kind: 'loading', tooltip: 'Loading this task' },
       foot: { activeText: '', activeTooltip: '', unread: false },
       snapshot: { lane: placed.lane, summaryHash: '' },
@@ -418,7 +427,8 @@ export function buildCardVM(i: KanbanCardInput): KanbanCardVM {
     ...base, title: task.title, ...(ticket ? { ticket } : {}), ...(sev ? { sev } : {}),
     ...(i.openSubtasks ? { leaderCount: i.openSubtasks } : {}),
     status, needsYou: status.tone === 'red', running, activity: running ? capitalize(live?.activity ?? '') : '',
-    hasSession, ...(sessionId ? { sessionId } : {}), ...(summary ? { summary } : {}), ...(waiting ? { waiting } : {}),
+    hasSession, canStart: !hasSession && !isComplete,
+    ...(sessionId ? { sessionId } : {}), ...(summary ? { summary } : {}), ...(waiting ? { waiting } : {}),
     foot, changed: !!change, ...(change ? { change } : {}), ...(suggestion ? { suggestion } : {}), loading: false,
     snapshot: { lane: placed.lane, summaryHash: sumHash, ...(card?.output_at ? { outputAt: card.output_at } : {}), unread: !!task.unread },
   };

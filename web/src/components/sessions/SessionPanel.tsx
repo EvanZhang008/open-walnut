@@ -1749,6 +1749,20 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // Ask Walnut embeds this panel without a phone layer; on a phone its composer
   // takes the same one-line placeholder (N2-32).
   const phoneWidth = usePhoneLayout();
+  // An open view is laid out by the layout it is in now, not only by the one it opened
+  // in: crossing into or out of the phone layout re-decides what opening decided
+  // (onViewClick): full screen on a wide window, and the chat's fate. A Board opened at
+  // 1280px kept its chat beside it at 520px, covering the kanban (board-kanban-round4
+  // screens, 2026-10-31). Every isPhoneLayout() read here is listed in
+  // tests/web/session-panel-phone-layout-ratchet.test.ts.
+  const wasPhoneWidth = useRef(phoneWidth);
+  useEffect(() => {
+    if (wasPhoneWidth.current === phoneWidth) return;
+    wasPhoneWidth.current = phoneWidth;
+    if (!activeView) return;
+    if (!phoneWidth && !isFullscreen) enterFullscreen();
+    applyOpenCollapse(activeView);
+  }, [phoneWidth, activeView, applyOpenCollapse, isFullscreen, enterFullscreen]);
   // Phone: the open column is a layer whose bar is the top bar (one bar, C64).
   const phoneBar = usePhoneLayerWithBar({
     id: `session:${sessionId}`,

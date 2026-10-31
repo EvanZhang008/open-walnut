@@ -309,7 +309,7 @@ function KanbanCardInner({ vm, laneName, tabStop, handled, moved, flash, overlay
             onClick={(e) => { e.stopPropagation(); if (!ro) void api.completeTask(vm.taskId); }}>Complete</button>
         )}
       </div>
-      {status.kind === 'no-session' && !overlay && !vm.isComplete && (
+      {vm.canStart && !overlay && (
         <div className="kanban-card-start-row" data-kanban-zone><KanbanCardStart card={vm} leader={ctx.leader} laneName={laneName} /></div>
       )}
       {promptOpen && status.prompt && (
