@@ -89,7 +89,7 @@ import XCTest
             readObservation: nil, restrictions: [], receipt: nil)
         let first = Task { await store.query(key) }
         let second = Task { await store.query(key) }
-        for _ in 0..<20 where fake.queryGate == nil { await Task.yield() }
+        for _ in 0..<500 where fake.queryGate == nil { try? await Task.sleep(for: .milliseconds(10)) }
         XCTAssertEqual(fake.queryCount, 1)
         store.suspendForBackground()
         fake.queryGate?.resume(); fake.queryGate = nil

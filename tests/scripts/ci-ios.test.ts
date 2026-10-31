@@ -126,3 +126,43 @@ describe('the iOS job in ci.yml', () => {
     expect(job.steps.map((s) => s.run ?? '').join('\n')).not.toMatch(/name=iPhone/)
   })
 })
+
+describe('WalnutTests waits', () => {
+  // A wait of a fixed number of `Task.yield()`s says nothing about time: how far other
+  // tasks get in 20 yields depends on the machine. It held on a Mac and failed on a CI
+  // runner (2026-10-31: testLoadEarlierIsOneReadAtATime asserted before its first page
+  // read had reached the fake). Wait by the clock: sleep in the loop, with a bound.
+  const BARE_YIELD_WAIT = /for _ in 0\.\.<\d+ where [^\n]*\{\s*await Task\.yield\(\)\s*\}/g
+  const dir = path.join(ROOT, 'ios-native/WalnutTests')
+
+  it('no unit test waits by counting bare yields', () => {
+    const offenders = fs.readdirSync(dir).filter((f) => f.endsWith('.swift')).flatMap((f) => {
+      const text = fs.readFileSync(path.join(dir, f), 'utf8')
+      return [...text.matchAll(BARE_YIELD_WAIT)].map((m) => `${f}:${text.slice(0, m.index).split('\n').length}: ${m[0]}`)
+    })
+    expect(offenders).toEqual([])
+  })
+
+  it('catches the shape it was written for, and lets a clocked wait through', () => {
+    expect('for _ in 0..<20 where !store.loadingEarlier { await Task.yield() }'.match(BARE_YIELD_WAIT)).toHaveLength(1)
+    expect('for _ in 0..<20 where x == nil {\n    await Task.yield()\n}'.match(BARE_YIELD_WAIT)).toHaveLength(1)
+    expect('for _ in 0..<500 where x == nil { try? await Task.sleep(for: .milliseconds(10)) }'.match(BARE_YIELD_WAIT)).toBeNull()
+  })
+})
+
+describe('WalnutUITests menu taps', () => {
+  // A menu entry tapped on the line after the tap that opens its menu is looked up
+  // before the menu is drawn, and on a CI runner it was not there yet (2026-10-31:
+  // CalendarInteractionUITests, "Failed to tap List"). Wait for the entry first.
+  const dir = path.join(ROOT, 'ios-native/WalnutUITests')
+
+  it('no UI test taps a menu entry right after the tap that opens it', () => {
+    const offenders = fs.readdirSync(dir).filter((f) => f.endsWith('.swift')).flatMap((f) => {
+      const lines = fs.readFileSync(path.join(dir, f), 'utf8').split('\n')
+      return lines.flatMap((line, i) =>
+        i > 0 && /\.tap\(\)\s*$/.test(lines[i - 1]!) && /^\s*app\.(buttons|menuItems)\["[^"]+"\]\.tap\(\)/.test(line)
+          ? [`${f}:${i + 1}: ${line.trim()}`] : [])
+    })
+    expect(offenders).toEqual([])
+  })
+})

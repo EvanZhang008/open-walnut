@@ -209,7 +209,11 @@ final class SessionTranscriptPagingTests: XCTestCase {
         let gate = CheckedContinuationGate()
         transport.pageGate = gate
         let first = Task { await store.loadEarlier() }
-        for _ in 0..<20 where !store.loadingEarlier { await Task.yield() }
+        // By the clock, until the page read reaches the fake: a fixed count of yields
+        // got there on a Mac and not on a CI runner (2026-10-31).
+        for _ in 0..<500 where !store.loadingEarlier || transport.pageReads.allSatisfy({ $0.before == nil }) {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
         XCTAssertEqual(store.loadEarlierState, .loading)
         await store.loadEarlier() // a second tap while the first is in flight
         XCTAssertEqual(transport.pageReads.filter { $0.before != nil }.count, 1)
@@ -255,7 +259,9 @@ final class SessionTranscriptPagingTests: XCTestCase {
         let gate = CheckedContinuationGate()
         transport.pageGate = gate
         let load = Task { await store.loadEarlier() }
-        for _ in 0..<20 where !store.loadingEarlier { await Task.yield() }
+        for _ in 0..<500 where !store.loadingEarlier || transport.pageReads.allSatisfy({ $0.before == nil }) {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
         // A reconcile replaced the head while the page was in flight: a window
         // that does not reach what is held replaces it.
         let later = conversation(turns: 1, calls: 5, from: server.rows.count)

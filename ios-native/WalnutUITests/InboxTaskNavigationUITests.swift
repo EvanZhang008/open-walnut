@@ -27,8 +27,7 @@ final class InboxTaskNavigationUITests: XCTestCase {
         try await stub.screenshot(app, "title-opens-task")
         closeTask(app)
         XCTAssertEqual(field.value as? String, "Keep this reply while I check the task.")
-        element(app, "inbox.letter.menu").tap()
-        app.buttons["View Task"].tap()
+        viewTaskFromMenu(app)
         assertTask(app)
         try await stub.screenshot(app, "menu-opens-task")
         closeTask(app)
@@ -74,8 +73,7 @@ final class InboxTaskNavigationUITests: XCTestCase {
         try await stub.screenshot(app, "missing-task")
         closeTask(app)
         try await stub.call("POST", "__stub/work-session?on=1&taskMode=unavailable")
-        element(app, "inbox.letter.menu").tap()
-        app.buttons["View Task"].tap()
+        viewTaskFromMenu(app)
         XCTAssertTrue(app.buttons["inbox.task.retry"].waitForExistence(timeout: 15))
         try await stub.screenshot(app, "task-load-failed")
         try await stub.call("POST", "__stub/work-session?on=1&taskMode=completed")
@@ -98,8 +96,7 @@ final class InboxTaskNavigationUITests: XCTestCase {
         app.navigationBars.buttons.element(boundBy: 0).tap()
         element(app, "inbox.row.lt-stub-reply-b").tap()
         XCTAssertTrue(element(app, "inbox.letter.subject").waitForExistence(timeout: 15))
-        element(app, "inbox.letter.menu").tap()
-        app.buttons["View Task"].tap()
+        viewTaskFromMenu(app)
         assertTask(app)
     }
 
@@ -116,8 +113,7 @@ final class InboxTaskNavigationUITests: XCTestCase {
         title.tap()
         assertTask(app)
         closeTask(app)
-        element(app, "inbox.letter.menu").tap()
-        app.buttons["View Task"].tap()
+        viewTaskFromMenu(app)
         assertTask(app)
         try await stub.screenshot(app, "large-text-task-detail")
     }
@@ -172,6 +168,21 @@ final class InboxTaskNavigationUITests: XCTestCase {
         XCTAssertTrue(done.waitForExistence(timeout: 10))
         done.tap()
         XCTAssertTrue(element(app, "inbox.letter.subject").waitForExistence(timeout: 10))
+    }
+
+    /// The letter menu's View Task, waited for: a menu entry tapped right after
+    /// the tap that opens the menu may not exist yet (2026-10-31, the same shape
+    /// failed the calendar view menu on a CI runner). Opens the menu once more
+    /// when the first tap did not.
+    @MainActor
+    private func viewTaskFromMenu(_ app: XCUIApplication) {
+        let menu = element(app, "inbox.letter.menu")
+        XCTAssertTrue(menu.waitForExistence(timeout: 10))
+        menu.tap()
+        let entry = app.buttons["View Task"]
+        if !entry.waitForExistence(timeout: 5) { menu.tap() }
+        XCTAssertTrue(entry.waitForExistence(timeout: 10))
+        entry.tap()
     }
 
     @MainActor

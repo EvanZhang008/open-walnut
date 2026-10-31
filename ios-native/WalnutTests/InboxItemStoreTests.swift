@@ -276,7 +276,7 @@ private final class InboxItemRequestProbe: URLProtocol {
         let store = InboxItemStore(transport: fake); let item = try InboxItemContractTests.item()
         store.seed([item], letterId: Self.key.letter); store.activateDraft(Self.key, action: item.actions[2])
         let pending = Task { await store.beginPrepare(Self.key, action: item.actions[2], input: .init(goal: "Review the update")) }
-        for _ in 0..<20 where fake.prepareGate == nil { await Task.yield() }
+        for _ in 0..<500 where fake.prepareGate == nil { try? await Task.sleep(for: .milliseconds(10)) }
         XCTAssertNotNil(fake.prepareGate)
         store.activateDraft(Self.key, action: item.actions[1])
         fake.prepareGate?.resume(); fake.prepareGate = nil
@@ -394,7 +394,7 @@ private final class InboxItemRequestProbe: URLProtocol {
         var draft = store.draft(Self.key); draft.input.goal = "Private old goal"; store.setDraft(draft, key: Self.key)
         let prepared = Task { await store.beginPrepare(Self.key, action: item.actions[2], input: .init(goal: "Review the update")) }
         let query = Task { await store.query(Self.key) }
-        for _ in 0..<40 where fake.prepareGate == nil || fake.queryGate == nil { await Task.yield() }
+        for _ in 0..<500 where fake.prepareGate == nil || fake.queryGate == nil { try? await Task.sleep(for: .milliseconds(10)) }
         XCTAssertNotNil(fake.prepareGate); XCTAssertNotNil(fake.queryGate)
         store.eraseAll(); store.seed([item], letterId: Self.key.letter)
         fake.prepareGate?.resume(); fake.prepareGate = nil; fake.queryGate?.resume(); fake.queryGate = nil
@@ -411,7 +411,7 @@ private final class InboxItemRequestProbe: URLProtocol {
         let request = try XCTUnwrap(store.beginExecute(Self.key, plan: try XCTUnwrap(prepared), input: input))
         fake.holdExecute = true
         let execution = Task { await store.deliver(Self.key, request: request, lane: "task") }
-        for _ in 0..<20 where fake.executeGate == nil { await Task.yield() }
+        for _ in 0..<500 where fake.executeGate == nil { try? await Task.sleep(for: .milliseconds(10)) }
         XCTAssertNotNil(fake.executeGate)
         store.eraseAll(); store.seed([item], letterId: Self.key.letter)
         fake.executeGate?.resume(); fake.executeGate = nil; await execution.value

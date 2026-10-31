@@ -105,7 +105,7 @@ final class ComposerModeModelTests: XCTestCase {
         let mode = ComposerModeModel(transport: api)
         mode.attach("old")
         let oldLoad = mode.loadTask
-        for _ in 0..<200 where release == nil { await Task.yield() }
+        for _ in 0..<500 where release == nil { try? await Task.sleep(for: .milliseconds(10)) }
         XCTAssertNotNil(release, "the old load never reached the server")
         if release == nil { return }
         api.gate = nil
@@ -133,7 +133,7 @@ final class ComposerModeModelTests: XCTestCase {
         await settle(mode)
         mode.select("plan")
         let pick = mode.pickTask
-        for _ in 0..<200 where release == nil { await Task.yield() }
+        for _ in 0..<500 where release == nil { try? await Task.sleep(for: .milliseconds(10)) }
         XCTAssertNotNil(release, "the pick never reached the server")
         if release == nil { return }
         mode.attach("new")

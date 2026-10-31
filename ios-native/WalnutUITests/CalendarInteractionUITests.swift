@@ -31,6 +31,20 @@ final class CalendarInteractionUITests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }
 
+    /// Choose a view from the view menu. Waits for the menu and for the entry,
+    /// and opens the menu once more when the first tap did not open it: on a
+    /// CI runner a tap right after the first frame can land before the menu
+    /// takes taps (2026-10-31: "Failed to tap List", the menu never opened).
+    private func chooseView(_ title: String, in app: XCUIApplication) {
+        let menu = id("calendar.viewMenu", in: app)
+        XCTAssertTrue(menu.waitForExistence(timeout: 10))
+        menu.tap()
+        let entry = app.buttons[title]
+        if !entry.waitForExistence(timeout: 5) { menu.tap() }
+        XCTAssertTrue(entry.waitForExistence(timeout: 10), "view menu should offer \(title)")
+        entry.tap()
+    }
+
     // MARK: - View switcher
 
     func testViewMenuOffersAllFourViewsAndSwitchesToTheChosenOne() {
@@ -64,8 +78,7 @@ final class CalendarInteractionUITests: XCTestCase {
         XCTAssertTrue(id("calendar.timeline", in: app).waitForExistence(timeout: 30))
         XCTAssertTrue(id("calendar.strip.2026-08-20", in: app).exists)
 
-        id("calendar.viewMenu", in: app).tap()
-        app.buttons["Month"].tap()
+        chooseView("Month", in: app)
 
         XCTAssertTrue(id("calendar.grid", in: app).waitForExistence(timeout: 10))
         XCTAssertTrue(
@@ -150,8 +163,7 @@ final class CalendarInteractionUITests: XCTestCase {
         // WITHOUT a forced view, and the list must come back.
         let app = launch(view: "day")
         XCTAssertTrue(id("calendar.timeline", in: app).waitForExistence(timeout: 30))
-        id("calendar.viewMenu", in: app).tap()
-        app.buttons["List"].tap()
+        chooseView("List", in: app)
         XCTAssertTrue(id("calendar.list", in: app).waitForExistence(timeout: 10))
         app.terminate()
 
