@@ -22,7 +22,9 @@
  *   No package manager applies a dependency's own patches, and with npm hoisting
  *   the SDK lives in the PARENT node_modules. So we read the SDK patch named in
  *   our package.json `patchedDependencies` (single hunk, single-line change) and
- *   apply it directly to the resolved install location.
+ *   apply it directly to the resolved install location. The codex-acp patch
+ *   (the Codex provider as the app-server's own, Codex 0.166+) is applied the
+ *   same way, hunk by hunk (applyCodexAcpPatch).
  *   Fail-open: a cosmetic patch failure must never break `npm install` for a
  *   consumer; warn loudly and continue.
  */
@@ -33,6 +35,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SDK = '@anthropic-ai/claude-agent-sdk';
+const CODEX_ACP = '@agentclientprotocol/codex-acp';
 
 /** True when `root` is a git checkout of this repo rather than an installed package. */
 export function isDevCheckout(root) {
@@ -134,6 +137,87 @@ export function applySdkPatch(root, { warn = (m) => console.warn(`open-walnut po
 }
 
 /**
+ * The hunks of a unified diff of one file, each as the exact text before and after
+ * it (context lines in both). Null when the diff names more than one file.
+ */
+export function diffHunks(patchText) {
+  if ((patchText.match(/^diff --git /gm) ?? []).length > 1) return null;
+  const hunks = [];
+  let cur = null;
+  for (const line of patchText.split('\n')) {
+    if (line.startsWith('@@')) { cur = { before: [], after: [] }; hunks.push(cur); continue; }
+    if (!cur || line.startsWith('\\')) continue;
+    if (line.startsWith('-')) cur.before.push(line.slice(1));
+    else if (line.startsWith('+')) cur.after.push(line.slice(1));
+    else if (line.startsWith(' ') || line === '') { cur.before.push(line.slice(1)); cur.after.push(line.slice(1)); }
+  }
+  // A hunk's trailing blank entry is the split's end, not a context line.
+  for (const h of hunks) {
+    while (h.before.length && h.after.length && h.before.at(-1) === '' && h.after.at(-1) === '') { h.before.pop(); h.after.pop(); }
+  }
+  return hunks.map((h) => ({ before: h.before.join('\n'), after: h.after.join('\n') }));
+}
+
+/**
+ * Apply `hunks` to `content`: every hunk's before text must occur exactly once.
+ * 'already' when every hunk's after text is there and no before text is.
+ */
+export function applyHunks(content, hunks) {
+  const count = (text, part) => text.split(part).length - 1;
+  if (hunks.every((h) => content.includes(h.after) && (h.before === h.after || !content.includes(h.before)))) return { status: 'already' };
+  let out = content;
+  for (const h of hunks) {
+    if (count(out, h.before) !== 1) return { status: 'mismatch' };
+    out = out.replace(h.before, () => h.after);
+  }
+  return { status: 'patched', content: out };
+}
+
+/**
+ * Apply the codex-acp patch our package.json names to the installed adapter
+ * (published installs; a Bun checkout applies it itself). Without it Codex 0.166
+ * and newer refuse every resume and turn of a thread on a configured provider.
+ */
+export function applyCodexAcpPatch(root, { warn = (m) => console.warn(`open-walnut postinstall: ${m}`), resolvePkg } = {}) {
+  let pkg;
+  try {
+    pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+  } catch {
+    return warn('package.json not readable, skipping codex-acp patch');
+  }
+  const entry = Object.entries(pkg.patchedDependencies ?? {}).find(([key]) => key.startsWith(`${CODEX_ACP}@`));
+  if (!entry) return warn('no codex-acp patch named in package.json, skipping');
+  const [key, file] = entry;
+  const version = key.slice(CODEX_ACP.length + 1);
+  const patchPath = join(root, file);
+  if (!existsSync(patchPath)) return warn(`codex-acp patch file ${file} not found, skipping`);
+  let dir;
+  try {
+    dir = dirname((resolvePkg ?? ((name) => createRequire(join(root, 'package.json')).resolve(name)))(CODEX_ACP));
+    while (dir !== dirname(dir) && !existsSync(join(dir, 'package.json'))) dir = dirname(dir);
+  } catch {
+    return warn('codex-acp not resolvable, skipping its patch');
+  }
+  const installed = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).version;
+  if (installed !== version) return warn(`codex-acp ${installed} != patch target ${version}, skipping (Codex 0.166+ may refuse configured providers)`);
+  const hunks = diffHunks(readFileSync(patchPath, 'utf8'));
+  if (!hunks?.length) return warn('codex-acp patch shape changed, skipping');
+  const target = join(dir, 'dist', 'index.js');
+  let content;
+  try {
+    content = readFileSync(target, 'utf8');
+  } catch {
+    return warn(`codex-acp dist not readable at ${target}, skipping`);
+  }
+  const result = applyHunks(content, hunks);
+  if (result.status === 'already') return 'already';
+  if (result.status !== 'patched') return warn('codex-acp dist does not match the patch context, skipping');
+  writeFileSync(target, result.content, 'utf8');
+  console.log(`open-walnut postinstall: patched codex-acp@${installed} (provider as the app-server's own)`);
+  return 'patched';
+}
+
+/**
  * A clone whose node_modules is a symlink to another checkout's: bun links the
  * CLONE's workspace packages into that shared directory before any script runs,
  * so the other checkout then loads this clone's packages (2026-10-29: a clone
@@ -230,6 +314,11 @@ function main() {
     applySdkPatch(root);
   } catch (err) {
     console.warn(`open-walnut postinstall: SDK patch failed (continuing): ${err instanceof Error ? err.message : err}`);
+  }
+  try {
+    applyCodexAcpPatch(root);
+  } catch (err) {
+    console.warn(`open-walnut postinstall: codex-acp patch failed (continuing): ${err instanceof Error ? err.message : err}`);
   }
   process.exit(0);
 }

@@ -490,7 +490,11 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
       log(restored.ok ? 'info' : 'warn', restored.ok ? 'acp: restored the thread a fresh one had replaced' : 'acp: replaced thread did not load, loading the requested one', {
         sid, requested: providerSessionId, restored: restoreId,
       })
-      if (restored.ok) sessionResp = restored
+      // Only a load the provider refused moves on to the requested thread. Any
+      // other failure (a timeout above all) may leave that load running in the
+      // worker, and a second load beside it would race it for the thread: it
+      // fails the start as a failed load always did, and the worker is reaped.
+      if (restored.ok || restored.error?.kind !== 'load_failed') sessionResp = restored
     }
     sessionResp ??= providerSessionId
       ? await rpc(entry, 'loadSession', { providerSessionId, cwd, mcpServers })

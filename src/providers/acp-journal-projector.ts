@@ -464,7 +464,8 @@ export class AcpJournalProjector {
       type: 'system',
       ts,
       commandId: this.currentCommandId,
-      msgId: this.id('thread', id),
+      // The switch's own time too: a thread can come back more than once (A, B, A, C, A).
+      msgId: this.id('thread', id, String(ts)),
       variant: fresh ? 'error' : 'info',
       message: fresh
         ? 'Could not resume the earlier conversation, so a new provider thread was started. The model does not see the messages above.'

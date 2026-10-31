@@ -47,6 +47,18 @@ describe('ACP journal projector', () => {
     ]).filter((m) => m.role === 'system')).toEqual([])
   })
 
+  it('gives every thread change its own id, a thread that comes back twice included', () => {
+    const notices = projectAcpJournalHistory('runtime-thread', [
+      meta(1, { type: 'session-created', providerSessionId: 'thread-a' } as never),
+      meta(2, { type: 'session-created', providerSessionId: 'thread-b' } as never),
+      meta(3, { type: 'session-loaded', providerSessionId: 'thread-a' } as never),
+      meta(4, { type: 'session-created', providerSessionId: 'thread-c' } as never),
+      meta(5, { type: 'session-loaded', providerSessionId: 'thread-a' } as never),
+    ]).filter((m) => m.role === 'system')
+    expect(notices).toHaveLength(4)
+    expect(new Set(notices.map((m) => m.msgId)).size).toBe(4)
+  })
+
   it('streams the thread change live through the same fold', () => {
     const normalizer = new AcpStreamNormalizer(new AcpJournalProjector('runtime-live'))
     normalizer.normalize(meta(1, { type: 'session-loaded', providerSessionId: 'thread-a' } as never))

@@ -192,6 +192,44 @@ describe('resume paths', () => {
   })
 })
 
+describe('acpStart restores the thread a failed load replaced (acp-thread-restore.ts)', () => {
+  /** A journal where thread A held the conversation and B was minted by a failed load, never used. */
+  function replacedJournal(sid: string): void {
+    const meta = (event: Record<string, unknown>) => JSON.stringify({ kind: 'meta', ts: Date.now(), event })
+    fs.writeFileSync(path.join(streamsDir, `${sid}.acp.jsonl`), [
+      meta({ type: 'session-created', providerSessionId: 'mock-thread-A' }),
+      meta({ type: 'turn-ended', stopReason: 'end_turn' }),
+      meta({ type: 'session-created', providerSessionId: 'mock-thread-B' }),
+    ].join('\n') + '\n')
+  }
+  const loads = (logPath: string) => fs.existsSync(logPath)
+    ? fs.readFileSync(logPath, 'utf-8').trim().split('\n').map((l) => JSON.parse(l) as { method: string; sessionId?: string })
+      .filter((r) => r.method === 'session/load').map((r) => r.sessionId)
+    : []
+
+  it('loads the earlier thread instead of the empty one', async () => {
+    const sessionLog = path.join(tmpDir, 'sessions.jsonl')
+    replacedJournal('sid-restore')
+    const resp = await acp.acpStart(makeWs(), startParams('sid-restore', {
+      providerSessionId: 'mock-thread-B', env: { MOCK_ACP_SESSION_LOG: sessionLog },
+    }))
+    expect(resp.ok).toBe(true)
+    expect(loads(sessionLog)).toEqual(['mock-thread-A'])
+  })
+
+  it('a refused restore loads the requested thread, on the same worker', async () => {
+    const sessionLog = path.join(tmpDir, 'sessions.jsonl')
+    const failOnce = path.join(tmpDir, 'fail-next-load')
+    fs.writeFileSync(failOnce, '1')
+    replacedJournal('sid-restore-refused')
+    const resp = await acp.acpStart(makeWs(), startParams('sid-restore-refused', {
+      providerSessionId: 'mock-thread-B', env: { MOCK_ACP_SESSION_LOG: sessionLog, MOCK_ACP_FAIL_LOAD_FILE: failOnce },
+    }))
+    expect(resp.ok).toBe(true)
+    expect(loads(sessionLog)).toEqual(['mock-thread-A', 'mock-thread-B'])
+  })
+})
+
 describe('MCP mount forwarding', () => {
   const WALNUT_MOUNT = {
     name: 'walnut',
