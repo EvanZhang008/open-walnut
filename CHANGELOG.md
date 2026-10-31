@@ -6,6 +6,70 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.21] - 2026-10-31
+
+### Added
+
+- Run Walnut on your own models: with Ollama (or LM Studio/vLLM) as the AI provider and
+  OpenCode, Goose, Codex or a custom ACP agent as the engine, nothing asks for Claude Code;
+  watchers and AI task search run on your model, and every engine gets Walnut's session
+  instructions ([Getting Started](GETTING_STARTED.md#path-d-models-on-your-own-machine-ollama-lm-studio-vllm)).
+
+### Changed
+
+- Walnut installs as one compiled file with everything inside, for macOS and for Linux with
+  glibc or musl (Alpine, with `apk add libstdc++ libgcc`), on arm64 and x64. The one-line `install.sh`, Homebrew and the Mac app
+  install it with nothing else on the machine, not even Node. `npm install -g open-walnut`
+  installs a small launcher and only the package built for your machine
+  (`@open-walnut/<target>`), with nothing to build. install.sh keeps each version in
+  `~/.local/share/open-walnut/versions/` and switches with one link, so the version before stays
+  for a rollback ([Getting Started](GETTING_STARTED.md#updating-and-rolling-back)), and
+  `walnut web` and `walnut update` install new versions the same way. A new version that exits
+  before it serves is gone back from on its own and skipped until a newer release. Homebrew installs update
+  with `brew upgrade open-walnut`. An install from the self-contained Node archive keeps updating
+  itself onto the new packages, and the archives are published for two more releases.
+- Walnut runs on one runtime, bun, from a checkout to production. The server, its build, the
+  tests and the dev scripts all run on bun; Node stays only under the Playwright test runner. To
+  work on Walnut you install git and bun 1.4.4 or newer, then `bun install` and `bun run start`:
+  nothing is compiled on install, and no Node is needed.
+  Repo commands are `bun run <script>` (`bun run dev:ephemeral`, `bun run test:quick`,
+  `bun run build:binary` for this machine's compiled file).
+- A plugin's database binds a whole JS number as an `INTEGER` now (it was a `REAL`), and so
+  does the test fake in `@open-walnut/plugin-api/testing`. Values compare and store the same in
+  `INTEGER`, `REAL` and untyped columns; a `TEXT` column keeps `'3'` where an older Walnut wrote
+  `'3.0'`, and `? / 2` divides as integers. Plugins that keep ids as text should bind strings
+  ([Plugin development](docs/reference/plugin-development.md)).
+- Big optional parts are components, downloaded the first time a feature needs them: search by
+  meaning (`embedding`), image resizing (`images`) and, on macOS, audio capture. Tasks, sessions,
+  the board, notes, keyword search and the tunnel all work from the file alone.
+- A host server is the same compiled file: the Mac sends the file of its own build to the host
+  over the session daemon's SSH path, so the host needs no Node, npm or compiler.
+- `npm install -g open-walnut` keeps working and keeps updating through npm. What it installs is
+  a small launcher plus the one package built for your machine, which holds the compiled file;
+  the launcher needs any Node 18 or newer, and Walnut itself does not run on it.
+- The deploy (`scripts/deploy-committed.sh`, `bun run dev:prod`) serves only the compiled file.
+  `WALNUT_DEVPROD_RUNTIME=node` is gone: a build that fails after the switch rolls back to the
+  last good file, and a deploy with no file to roll back to says so before it stops the old server.
+- The Mac app's "Set Up Now" for a folder installs the self-contained Walnut with its data in that
+  folder, the same way `install.sh` does, instead of cloning and building with npm. A setup an
+  older version of the app built that way moves to the self-contained Walnut on its next launch
+  and keeps its data. A source checkout picked in the app runs on bun.
+- The setup and restore skills install Walnut with `install.sh`, and the README installs Claude
+  Code with its own installer (`curl -fsSL https://claude.ai/install.sh | bash`), so no step a user
+  takes needs npm.
+- The setup wizard deploys the AWS companion from any install, the compiled file included: the
+  file carries the CDK app and installs its dependencies with its own bun. The CDK itself still
+  runs on Node, so that one step needs Node and npm on the machine.
+- The cloud companion runs the compiled file too. The Mac sends its companion the same file its
+  host servers run, built for the box, with a small `dist/cli.js` that starts it, so a box of
+  any age takes it with the update path it already has: a box set up before keeps its service and
+  its launcher, on node, and moves to the file at the Mac's next update, with nothing to do on the
+  box. A Mac that runs the compiled file updates its companion like any other Mac.
+  `scripts/cloud/setup.sh` builds a new box's base tree with bun, and its service starts
+  `bun dist/cli.js web`; Node stays on the box only for agent CLIs installed from npm. A box whose
+  service moves from node to bun skips a build it got on node and runs its base tree until the Mac
+  sends the file.
+
 ## [0.6.20] - 2026-10-30
 
 ### Added
