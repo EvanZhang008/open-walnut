@@ -38,6 +38,11 @@
 .status-card-meta { display: flex; align-items: center; gap: 6px; min-width: 0; height: 15px; font-size: 11px; line-height: 15px; color: var(--fg-muted); white-space: nowrap; }
 .status-card-project { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .status-card-meta-fill { flex: 1; }
+/* Why a Waiting row waits: on the meta line (Flat) or after the title (a project's fold). */
+.status-card-meta:has(.status-card-reason) .status-card-project { min-width: min(7ch, 30%); }
+/* A floor, so a wake time beside it never squeezes the reason to nothing. */
+.status-card-reason { flex: 0 4 auto; min-width: min(8ch, 30%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); }
+.status-section-card:not(.status-card-two-line) > .status-card-reason { flex: 0 2 auto; max-width: 45%; font-size: 11px; margin-left: 6px; }
 /* The tags on the meta line read as words, not pills: no fill, the line's own size.
    `html` + four classes: past subtask-pill.css's dark theme (:root[data-theme] + two). */
 html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill,

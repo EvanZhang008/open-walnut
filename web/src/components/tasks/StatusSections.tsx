@@ -33,6 +33,7 @@ import {
   STATUS_SECTION_TITLES,
   type StatusSectionKey,
   type StatusSectionsModel,
+  waitingReason,
 } from './status-sections';
 import '@/styles/status-sections.css';
 
@@ -119,6 +120,11 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
     : task.user_status ? task.user_status.snoozed?.until ?? ''
     : task.phase !== 'WAITING' ? task.start_date ?? '' : '';
   const snoozedUntil = snoozeDate ? formatStartDateDisplay(snoozeDate) : '';
+  // Under Waiting / snoozed: why it waits (not started, stopped, a watch, ...).
+  const reasonText = sectionKey === 'waiting' && !isDone ? waitingReason(task, formatWaitUntil) : '';
+  const reason = reasonText ? (
+    <span className="status-card-reason" data-testid="status-card-reason" title={reasonText}>{reasonText}</span>
+  ) : null;
   const projectName = task.project || 'Inbox';
   const title = <span className={`todo-pinned-title${task.walnut_agent ? ' walnut-task-title' : ''}`} title={task.title}>{task.title}</span>;
   const pills = (
@@ -186,9 +192,11 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
           <span className="status-card-meta">
             <span className="status-card-project">{projectName}</span>
             {pills}
+            {reason}
             {wake}
             <span className="status-card-meta-fill" />
-            {agoEl}
+            {/* A Waiting row's time is when it wakes, as in the one-line rows. */}
+            {wake ? null : agoEl}
           </span>
           {title}
         </span>
@@ -196,6 +204,7 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
         <>
           {title}
           {pills}
+          {reason}
           {wake ?? agoEl}
         </>
       )}

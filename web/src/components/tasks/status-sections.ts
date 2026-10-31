@@ -5,12 +5,16 @@
  * user's Watching list on top:
  *
  *   Watching   open    tasks the user keeps in front of them, whatever their state
- *   Needs you  open    the one user status says the task waits on the user
- *   Working    open    everything else that is open: the view's own list, with its
- *                      order, folders and drag
- *   Waiting    folded  parked (phase WAITING) until a time or an event, or snoozed:
- *                      a start date ("Start / Snooze until") still to come
+ *   Needs you  open    the task's user status is Needs you
+ *   Working    open    its user status is Working: a turn runs, or it carries on itself
+ *   Waiting    folded  its user status is Waiting: not started, stopped, on a watch,
+ *                      a time, another task or something outside, or snoozed; each row
+ *                      says which (waitingReason)
  *   Completed  folded  done
+ *
+ * The state sections are the one user status (src/core/user-status.ts) as is, the same as
+ * the Org page, the Board and the phone (2026-10-31, the user: Working held tasks whose
+ * sessions had stopped hours to months ago, and tasks nobody started).
  *
  * The sections span the whole view and group by project inside, so "what needs me"
  * is one place at the top instead of a red row inside each project. This file is the
@@ -19,7 +23,8 @@
  */
 import type { Task } from '@open-walnut/core';
 import { taskUserState } from '@/utils/session-status';
-import { USER_STATE_LABELS } from '@open-walnut/user-status';
+import { USER_STATE_LABELS, USER_STATE_MEANINGS } from '@open-walnut/user-status';
+import { waitingLine } from '../board/board-status-model';
 import { recentActivityTime } from './recent-activity-time';
 
 export type StatusSectionKey = 'watching' | 'needs' | 'working' | 'waiting' | 'done';
@@ -35,10 +40,8 @@ export const STATUS_SECTION_LABELS: Record<StatusSectionKey, string> = {
 
 export const STATUS_SECTION_TITLES: Record<StatusSectionKey, string> = {
   watching: 'Tasks you watch: kept here whatever their state',
-  needs: 'Waiting on you: a question, a review or a reply',
-  working: 'Open work: running, or ready to pick up',
-  waiting: 'Parked until a time or an event, or snoozed until a start date',
-  done: 'Completed tasks',
+  ...USER_STATE_MEANINGS,
+  waiting: 'It waits on something: not started, stopped, a watch, a time, another task, or you snoozed it',
 };
 
 /** Open on a first visit: what is in front of the user now. Waiting and Completed fold. */
@@ -62,26 +65,44 @@ export function isWatched(task: Watchable): boolean {
   return !!task.watched_at;
 }
 
-/** The state section a task belongs to: the one user status (taskUserState), where the
- *  server already weighed a snooze (the task's own start date or an ancestor's, 2026-10-31).
- *  `snoozed` is the panel's own read of the start date, used only for a task the server has
- *  not derived yet. One mapping of the panel's: a task nobody started and not snoozed is open
- *  work, ready to pick up, so it sits under Working, not Waiting ("Not started yet"). */
+/** The state section a task belongs to: its one user status (taskUserState), where the
+ *  server already weighed a snooze (the task's own start date or an ancestor's). `snoozed`
+ *  is the panel's own read of the start date, used only for a task the server has not
+ *  derived yet. Nothing else moves a task between sections (tests/web/home-sections-user-status.test.ts). */
 export function stateSectionOf(task: Task, snoozed?: (task: Task) => boolean): StateSectionKey {
-  const us = task.user_status;
-  const asleep = us ? !!us.snoozed : !!snoozed?.(task);
-  const state = taskUserState(task, !us && asleep);
-  if (state !== 'waiting') return state;
-  const notStarted = us ? us.kind === 'not-started' : task.phase === 'TODO';
-  return notStarted && !asleep ? 'working' : 'waiting';
+  return taskUserState(task, !task.user_status && !!snoozed?.(task));
 }
 
-/** The state section in a design with no Needs you section: a row that needs the user
- *  is open work, unless it is parked (the list would hide it there). */
+/** Why a row under Waiting waits, in the Board's words (not started, stopped, a watch...).
+ *  When it wakes is the row's own pill (the snooze date, the wait clock); a time the row has
+ *  no pill for rides on the words, through `formatUntil`. */
+export function waitingReason(task: Task, formatUntil: (iso: string) => string): string {
+  const us = task.user_status;
+  // Not derived yet (an older server): its wait clock pill says when; nothing says why.
+  if (us?.state !== 'waiting') return '';
+  const on = (us.waitingOn ?? '').trim();
+  // Snoozed is why it sleeps here, whatever it would wait on after; its date is on the row.
+  if (us.snoozed) return 'Snoozed';
+  if (us.kind === 'stuck') return on || 'Stopped: nothing will wake it';
+  if (us.kind === 'time') {
+    const when = us.until && !task.wait_until && !us.snoozed ? formatUntil(us.until) : '';
+    return [on || 'A set time', when].filter(Boolean).join(', ');
+  }
+  return waitingLine(us, formatUntil);
+}
+
+/** Where a row goes in a design with no state sections for open work (By project, and the
+ *  list of Recent and Projects): the list is the user's to-do list, so every open task stays
+ *  in it, a task nobody started and one that stopped included, except one parked, or one
+ *  snoozed while Date reads "Available now" (`snoozed` given: any other Date shows it in the
+ *  list), which folds under Waiting, and a row is drawn in one place only
+ *  (tests/web/home-sections-user-status.test.ts). */
 export function stateSectionNoNeeds(task: Task, snoozed?: (task: Task) => boolean): StateSectionKey {
   const s = stateSectionOf(task, snoozed);
-  if (s !== 'needs') return s;
-  return task.phase === 'WAITING' ? 'waiting' : 'working';
+  if (s === 'done') return s;
+  const asleep = !!snoozed && (task.user_status ? !!task.user_status.snoozed : snoozed(task));
+  // A parked row folds whatever its status: the list never draws one (hiddenAsWaiting).
+  return task.phase === 'WAITING' || (s === 'waiting' && asleep) ? 'waiting' : 'working';
 }
 
 /** When a waiting row wakes: its clock, else its start date. */

@@ -2496,10 +2496,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     [statusWidened, filterEvalCtx],
   );
   const waitingRevealed = !statusOnSections && filterState.status.includes('WAITING');
-  /** The list's hiding rule for a task on hold; pins and Recent read it too. */
+  // Which layout organizes the panel (panel-design.ts): Flat or By project.
+  const [panelDesign, setPanelDesign] = usePanelDesign();
+  /** The list's hiding rule for a task on hold; pins and Recent read it too. Under the
+   *  status sections a task Waiting draws (Flat: every task whose user status is Waiting;
+   *  By project: a parked one, or a snoozed one while Date reads "Available now", in its
+   *  project's fold) is never in a list too. */
   const hiddenAsWaiting = useCallback(
-    (t: Task): boolean => t.phase === 'WAITING' && !waitingRevealed,
-    [waitingRevealed],
+    (t: Task): boolean => (t.phase === 'WAITING' && !waitingRevealed)
+      || (statusOnSections && (panelDesign === 'status' ? stateSectionOf(t)
+        : stateSectionNoNeeds(t, filterEvalCtx.state.date === 'now' ? (x) => !dimPasses(x, 'date', filterEvalCtx) : undefined)) === 'waiting'),
+    [waitingRevealed, statusOnSections, panelDesign, filterEvalCtx],
   );
 
   // Registry projects (incl. zero-task ones) + provider source for the badges.
@@ -4852,8 +4859,6 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // with no sections; a watched task stays on top either way. A search ranks
   // everything in one list.
   const sectionsActive = !isSearchMode && statusOnSections;
-  // Which layout organizes the panel (panel-design.ts): Flat or By project.
-  const [panelDesign, setPanelDesign] = usePanelDesign();
   /** Flat draws Needs you as its own section; By project keeps those rows in the list. */
   const needsSection = sectionsActive && panelDesign === 'status';
   const [sectionOpen, setSectionOpen] = useState(() => {
@@ -4896,10 +4901,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   const passesBoard = useCallback((t: Task): boolean => {
     if (inTopSection(t)) return false;
+    if (sectionsActive && hiddenAsWaiting(t) && !keepWhileParking(t)) return false;
     if (passesChips(t, boardEvalCtx)) return true;
     return (keepWhileCompleting(t) || keepWhileParking(t)) && passesChips(t, boardEvalCtx, { except: 'status' });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- recentTick re-runs the grace check
-  }, [boardEvalCtx, keepWhileCompleting, keepWhileParking, recentTick, inTopSection]);
+  }, [boardEvalCtx, keepWhileCompleting, keepWhileParking, recentTick, inTopSection, sectionsActive, hiddenAsWaiting]);
 
   // Publish the predicate for the focus-override effect OUTSIDE render. A layout
   // effect, NOT useEffect: the consumer is a passive effect declared EARLIER in

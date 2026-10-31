@@ -52,6 +52,8 @@ test.describe('Flat layout', () => {
     expect((await page.request.put(`/api/focus/tasks/${working}/tier`, { data: { tier: 'focus' } })).ok()).toBe(true)
     const parked = await seed(page, project, `flat parked ${stamp}`, { phase: 'WAITING' })
     const snoozed = await seed(page, project, `flat snoozed ${stamp}`, { phase: 'NEED_ACTION', start_date: '2099-01-01' })
+    // A to-do nobody started waits like the rest of its user status (2026-10-31: it read Working).
+    const todo = await seed(page, project, `flat todo ${stamp}`, {})
     await page.reload()
     await selectSection(page, 'All')
     const panel = page.locator('.todo-panel').first()
@@ -74,6 +76,11 @@ test.describe('Flat layout', () => {
     await expect(await showSectionCard(panel, 'waiting', parked)).toBeVisible()
     await expect(await showSectionCard(panel, 'waiting', snoozed)).toBeVisible()
     await expect(statusSectionRows(panel, 'waiting').locator(`[data-task-id="${needs}"]`)).toHaveCount(0)
+    // Each Waiting row says why: not started, snoozed.
+    const todoRow = await showSectionCard(panel, 'waiting', todo)
+    await expect(todoRow.getByTestId('status-card-reason')).toHaveText('Not started yet')
+    await expect((await showSectionCard(panel, 'waiting', snoozed)).getByTestId('status-card-reason')).toHaveText('Snoozed')
+    await expect(statusSectionRows(panel, 'working').locator(`[data-task-id="${todo}"]`)).toHaveCount(0)
 
     // Display: Group is the layout, and Sort has nothing to act on in Flat.
     await openDisplayMenu(page)
@@ -96,6 +103,8 @@ test.describe('Flat layout', () => {
     await expect(panel.locator(`[data-testid="project-status-folds"][data-project="${project}"]`).first()).toBeVisible()
     await expect(panel.locator('[data-testid="project-status-counts"]')).toHaveCount(0)
     await expect(panel.locator(`[data-task-id="${snoozed}"]`)).toHaveCount(0)
+    // By project is the to-do list: the to-do stays in it, in one place only.
+    await expect(panel.locator(`[data-task-id="${todo}"]`)).toHaveCount(1)
     // Its tier headings are the sections' divider row, "Focus (N) ---- >", with no glyph,
     // and stay 26 px tall (the sticky offsets in home-navigation.css count on it).
     const tierHeading = panel.locator('.todo-pinned-subgroup-heading [data-navigation-id="focus"]')

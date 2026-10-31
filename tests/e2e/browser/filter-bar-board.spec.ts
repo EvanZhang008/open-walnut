@@ -81,7 +81,7 @@ test.describe('Status, sections and persistence', () => {
     const garden = `Garden ${stamp}`
     const home = `Home ${stamp}`
     const [open, waiting, done, need] = await seed(page, garden, [
-      { title: `g open ${stamp}` }, { title: `g wait ${stamp}`, phase: 'WAITING' },
+      { title: `g open ${stamp}`, phase: 'IN_PROGRESS' }, { title: `g wait ${stamp}`, phase: 'WAITING' },
       { title: `g done ${stamp}`, phase: 'COMPLETE' }, { title: `g need ${stamp}`, phase: 'NEED_ACTION' },
     ])
     const homeIds = await seed(page, home, [{ title: `h done ${stamp}`, phase: 'COMPLETE' }, { title: `h wait ${stamp}`, phase: 'WAITING' }])
@@ -154,7 +154,7 @@ test.describe('Status, sections and persistence', () => {
   test('a Status pick holding every open phase keeps the sections; a narrower pick is a plain filter', async ({ page, baseURL }) => {
     const stamp = runStamp()
     const garden = `Garden ${stamp}`
-    const [open, waiting] = await seed(page, garden, [{ title: `g open ${stamp}` }, { title: `g wait ${stamp}`, phase: 'WAITING' }])
+    const [open, waiting] = await seed(page, garden, [{ title: `g open ${stamp}`, phase: 'IN_PROGRESS' }, { title: `g wait ${stamp}`, phase: 'WAITING' }])
     await boot(page, baseURL!)
     try {
       await filterProjects(page, [garden])
@@ -187,7 +187,7 @@ test.describe('Status, sections and persistence', () => {
   test('a task not available yet sleeps under Waiting / snoozed, whatever Date shows it (C39)', async ({ page, baseURL }) => {
     const stamp = runStamp()
     const garden = `Garden ${stamp}`
-    const ids = await seed(page, garden, [{ title: `g now ${stamp}` }, { title: `g later ${stamp}`, start: '2099-01-01' }])
+    const ids = await seed(page, garden, [{ title: `g now ${stamp}`, phase: 'IN_PROGRESS' }, { title: `g later ${stamp}`, start: '2099-01-01' }])
     await boot(page, baseURL!)
     try {
       await filterProjects(page, [garden])

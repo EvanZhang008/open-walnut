@@ -40,14 +40,15 @@ async function unpinViaApi(id: string): Promise<void> {
   if (!res.ok) throw new Error(`unpin failed: ${res.status} ${await res.text()}`)
 }
 
-async function completeViaApi(id: string): Promise<void> {
+async function phaseViaApi(id: string, phase: string): Promise<void> {
   const res = await fetch(`${API}/api/tasks/${id}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phase: 'COMPLETE' }),
+    body: JSON.stringify({ phase }),
   })
-  if (!res.ok) throw new Error(`complete failed: ${res.status} ${await res.text()}`)
+  if (!res.ok) throw new Error(`${phase} failed: ${res.status} ${await res.text()}`)
 }
+const completeViaApi = (id: string) => phaseViaApi(id, 'COMPLETE')
 
 /** Whole-list GETs, split by whether they asked for the recent window only. */
 function watchListRequests(page: Page): { windowed: () => number; whole: () => number } {
@@ -82,6 +83,8 @@ test('a board load leaves old completions on the server; Status Complete loads t
   const done = await createTaskViaApi('Archive done')
   await unpinViaApi(open.id)
   await unpinViaApi(done.id)
+  // Open work under Working (a to-do nobody started folds under Waiting).
+  await phaseViaApi(open.id, 'IN_PROGRESS')
   await completeViaApi(done.id)
 
   // A 0-day window: anything completed before the request is archive.

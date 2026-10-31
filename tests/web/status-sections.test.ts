@@ -43,12 +43,12 @@ describe('stateSectionOf / statusSectionOf', () => {
     expect(stateSectionOf(task({ phase: 'NEED_ACTION', user_status: { state: 'waiting', kind: 'lead' } as Task['user_status'] }))).toBe('waiting');
     expect(stateSectionOf(task({ phase: 'WAITING', user_status: { state: 'needs' } as Task['user_status'] }))).toBe('needs');
   });
-  it('a park and a snooze are Waiting; the rest is Working', () => {
+  it('a task not derived yet: a park, a snooze and a to-do wait; in progress works', () => {
     expect(stateSectionOf(task({ phase: 'WAITING' }))).toBe('waiting');
-    const later = task({ start_date: '2099-01-01' });
-    expect(stateSectionOf(later, (t) => t.id === later.id)).toBe('waiting');
+    const later = task({ phase: 'IN_PROGRESS', start_date: '2099-01-01' });
+    expect(stateSectionOf(later, (t) => t.id === later.id)).toBe('working');
     expect(stateSectionOf(task({ phase: 'IN_PROGRESS' }))).toBe('working');
-    expect(stateSectionOf(task())).toBe('working');
+    expect(stateSectionOf(task({ phase: 'TODO' }))).toBe('waiting');
   });
   it('a snoozed task waits even when it needs the user (2026-10-30: snoozed, still under Needs you)', () => {
     // The shared status holds the snooze: its own start date or an ancestor's (no date of its own here).
@@ -62,8 +62,8 @@ describe('stateSectionOf / statusSectionOf', () => {
     expect(stateSectionOf(old, (t) => t.id === old.id)).toBe('waiting');
     expect(stateSectionOf(old, () => false)).toBe('needs');
   });
-  it('a task nobody started is open work under Working, unless snoozed; one that stopped waits', () => {
-    expect(stateSectionOf(task({ user_status: { state: 'waiting', kind: 'not-started' } as Task['user_status'] }))).toBe('working');
+  it('a task nobody started waits, and so does one that stopped (2026-10-31: both read Working)', () => {
+    expect(stateSectionOf(task({ user_status: { state: 'waiting', kind: 'not-started' } as Task['user_status'] }))).toBe('waiting');
     expect(stateSectionOf(task({ user_status: { state: 'waiting', kind: 'not-started', snoozed: { until: '2099-01-01' } } as Task['user_status'] }))).toBe('waiting');
     expect(stateSectionOf(task({ phase: 'IN_PROGRESS', user_status: { state: 'waiting', kind: 'stuck' } as Task['user_status'] }))).toBe('waiting');
     expect(stateSectionOf(task({ phase: 'IN_PROGRESS', user_status: { state: 'working', snoozed: { until: '2099-01-01' } } as Task['user_status'] }))).toBe('working');
@@ -128,15 +128,16 @@ describe('buildStatusSections', () => {
     return { needs, working, todo, parked, done, watchedDone, elsewhere };
   };
 
-  it('splits the view; Working holds the open rest, latest activity first (Flat draws it)', () => {
+  it('splits the view by user status; Working latest activity first (Flat draws it)', () => {
     const t = all();
-    t.todo.updated_at = '2026-10-20T00:00:00.000Z';
-    const scope = [t.needs, t.working, t.todo, t.parked, t.done, t.watchedDone];
+    const later = task({ phase: 'IN_PROGRESS', updated_at: '2026-10-20T00:00:00.000Z' });
+    const scope = [t.needs, t.working, later, t.todo, t.parked, t.done, t.watchedDone];
     const m = buildStatusSections({ scope, all: [...scope, t.elsewhere], passes: () => true });
     expect(ids(m.needs)).toEqual([t.needs.id]);
-    expect(ids(m.waiting)).toEqual([t.parked.id]);
+    // A to-do nobody started waits, beside the parked one (2026-10-31).
+    expect(ids(m.waiting).sort()).toEqual([t.parked.id, t.todo.id].sort());
     expect(ids(m.done)).toEqual([t.done.id]);
-    expect(ids(m.working)).toEqual([t.todo.id, t.working.id]);
+    expect(ids(m.working)).toEqual([later.id, t.working.id]);
     expect(m.workingCount).toBe(2);
     // Watching spans every view, the task outside this view's scope included.
     expect(ids(m.watching)).toEqual([t.watchedDone.id, t.elsewhere.id]);
@@ -152,7 +153,7 @@ describe('buildStatusSections', () => {
 
   it('a duplicate in the scope counts once', () => {
     const t = all();
-    const m = buildStatusSections({ scope: [t.todo, t.todo, t.needs, t.needs], all: [], passes: () => true });
+    const m = buildStatusSections({ scope: [t.working, t.working, t.needs, t.needs], all: [], passes: () => true });
     expect(m.workingCount).toBe(1);
     expect(m.working).toHaveLength(1);
     expect(m.needs).toHaveLength(1);
