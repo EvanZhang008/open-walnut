@@ -1,35 +1,26 @@
 # Rhythm (walnut-rhythm)
 
-Focus blocks and movement breaks for Walnut. Rhythm does four things:
+Focus blocks you start yourself, for Walnut. Rhythm is **off until you press Start**: it never starts, counts or records anything on its own.
 
-- **A stand-up reminder that knows when you are at the keyboard.** After an hour of continuous keyboard time it asks you to stand up, with Start break and Snooze buttons. Start break counts a short break down in the sidebar, and the sitting count starts when it ends. Time you spent away already counts as moving, so it never nags someone who just came back from a walk.
-- **A focus block (a pomodoro) tied to a task.** Pick a task, start 25 minutes, and the block's minutes are logged on that task when it ends. Then a short break, and a long break every fourth block.
+- **A run starts only when you start it.** Press Start (in the sidebar ring, the Rhythm App, the phone, or by asking Ask Walnut) and a focus block runs, optionally tied to a task. Its minutes are logged on that task when it ends.
+- **The break follows by itself, then Rhythm asks once.** When the block ends its break counts down (a long break every fourth block). When the break ends, Rhythm asks once whether to start the next block. If you do not, it stays off.
 - **Quiet while you focus.** Walnut quiet mode stays on for the length of a block, and it can follow the Mac's own Focus as well.
 - **Focus music from your own folder.** One click plays the tracks in a folder on your Mac (brown noise, rain, whatever you put there), looping, in the console, the Mac app and the phone. Music started with a block stops when the block ends.
 
-It adds one App (Rhythm), eleven ops, two tools for routine watchers, and one skill that tells Ask Walnut when to use them.
+It adds one App (Rhythm), eight ops, one read-only tool for routine watchers, and one skill that tells Ask Walnut when to use them.
 
-## The three signals it uses
+## What it reads
 
-1. **Attention.** Rhythm reads two events Walnut already produces. `time:banked` is the console's own attention record (the browser sends a batch about once a minute); phone time and agent time are ignored, because neither is you at the keyboard. `time:outside` is the Mac-wide frontmost-app stream, sent when Time's app tracking is on (Settings, Screen Tracking); it already leaves out a locked screen and idle stretches over two minutes. Without app tracking, Rhythm only sees time spent in Walnut itself.
-2. **Agent turns.** A hook on turn start and turn end. When the reminder is due while an agent is answering, Rhythm waits for the turn to finish so the reminder lands at a natural pause, but never longer than `defer_for_natural_pause_minutes`.
-3. **The clock.** A 30 second tick, one timer at the exact end of the running block or break, your quiet hours, and Walnut quiet mode.
-
-The sitting streak works like the chapters in Time: a gap of `away_reset_minutes` with no attention ends it, and the next attention starts a new one. A silent hour is not sitting. The streak is saved in the plugin's data directory, so a server restart keeps it unless the restart took longer than the away threshold.
+Nothing about you. Rhythm does not read keyboard or app time, attention, or agent turns. What moves it is your own Start, Stop and End break, Walnut quiet mode, its settings, and the clock (a 30 second tick and one timer at the exact end of the running block or break). The clock only ever moves a run toward off: a restart, a reload, waking the Mac from sleep or opening another window never starts one. A run that ended while Walnut was down is closed quietly; a notice that would arrive more than 10 minutes late is not shown.
 
 ## What happens when
 
 | Moment | What Rhythm does |
 |---|---|
-| All the time you sit | A small ring at the bottom of the sidebar, above Voice, fills up toward the next reminder. Click it for **Stand up now** (starts the stand-up break) or **Start focus block**. |
-| An hour at the keyboard | The ring turns orange and a "Stand up" reminder appears with **Start break** and **Snooze 10 min**. Ignored, it comes back after another hour. |
-| You press Start break (or Stand up now) | The ring turns green and counts down the stand-up break (`stand_break_minutes`, 10 by default). **End break** ends it early. When it runs out, a "Break over" notice sounds and the ring starts filling toward the next stand-up. |
-| You walk away while it is waiting | The reminder is withdrawn and counted as a break taken. |
-| A focus block starts | Walnut quiet mode on until the block ends (and macOS Do Not Disturb, if you turned that on). The ring turns blue and counts the block down. |
-| The block ends | Quiet off, the minutes logged on the task, and "Focus block done, stand up" with **Start break**, **Skip break** and **Another block**. |
-| The block's break ends | "Break over" with **Start next block** and **Done for today**. |
-
-The stand-up reminder waits during a focus block (the block's own break handles it), inside quiet hours, and while Walnut quiet mode is on. It fires once they end if you are still sitting.
+| Off (the start, and after every run) | The sidebar ring shows **Rhythm is off** with a pause glyph and one button, **Start focus block**. No countdown, because nothing counts. After a run it names the last run ("Last run 10:05 to 10:35"). |
+| You press Start | Walnut quiet mode on until the block ends (and macOS Do Not Disturb, if you turned that on). The ring turns blue, counts the block down and says when it started and ends. **Stop block** ends it; Rhythm is off after it. |
+| The block ends | Quiet off, the minutes logged on the task, and the break starts by itself (`break_minutes`, or `long_break_minutes` every `long_break_every` blocks). One notice says so, with **End break** and **Another block**. The ring turns green and counts the break down. |
+| The break ends | One notice, "Break over. Start the next block?", with **Start next block** and **Not now**. Either way, or with no answer at all, Rhythm is off until the next Start. |
 
 ## Focus music
 
@@ -52,16 +43,10 @@ How it plays:
 
 ## Settings
 
-All keys live under `plugins.walnut-rhythm` and show up in Settings, Plugins, Rhythm.
+All keys live under `plugins.walnut-rhythm` and show up in the Rhythm App's settings.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `reminder_every_minutes` | 60 | Keyboard minutes before the stand-up reminder (15 to 240). |
-| `away_reset_minutes` | 5 | This long with no attention counts as a break, and the count starts over. |
-| `snooze_minutes` | 10 | How long Snooze waits. |
-| `stand_break_minutes` | 10 | Length of the stand-up break that Start break and Stand up now count down (1 to 60). |
-| `quiet_hours` | `22:00-08:00` | Local window with no stand-up reminders. Empty turns it off. Windows across midnight work. |
-| `defer_for_natural_pause_minutes` | 5 | Longest wait for an agent turn to finish before reminding. 0 never waits. |
 | `focus_minutes` | 25 | Length of a focus block. |
 | `break_minutes` | 5 | Length of the break after a block. |
 | `long_break_minutes` | 15 | Length of the long break. |
@@ -72,28 +57,28 @@ All keys live under `plugins.walnut-rhythm` and show up in Settings, Plugins, Rh
 | `music_folder` | empty | Folder on this Mac whose m4a, mp3 and wav files are the focus music. `~/` works. Empty uses the plugin's own `focus-music` folder. |
 | `music_with_focus` | true | A Start button also starts the focus music on that device; it stops when the block ends. |
 
+The stand-up reminder an older version had (it counted keyboard time on its own) is gone, and so are its settings (`reminder_every_minutes`, `away_reset_minutes`, `snooze_minutes`, `stand_break_minutes`, `quiet_hours`, `defer_for_natural_pause_minutes`). Left in config.yaml they are ignored.
+
 ## Ops
 
-Ops are named `walnut_rhythm_<name>`. The everyday ones can be called from any Walnut session (`walnut tools call walnut_rhythm_focus_start '{"taskId":"..."}'`); the install op only runs from the App.
+Ops are named `walnut_rhythm_<name>`. The everyday ones can be called from any Walnut session (`walnut tools call walnut_rhythm_focus_start '{"taskId":"..."}'`), only when the person asked; the Finder and macOS ones only run from the App.
 
 | Op | Arguments | Does |
 |---|---|---|
-| `status` | `refresh?` | Read-only. Streak, next reminder, running block, quiet holds, macOS state, today's scorecard. |
-| `focus_start` | `taskId?`, `minutes?` | Start a block. Refused while one is running. |
-| `focus_stop` | | Stop the block or break and end the cycle. |
-| `break_done` | | Log a stand-up that already happened, with no timer; the sitting count starts over. |
-| `break_snooze` | `minutes?` | Snooze the stand-up reminder. |
-| `break_start` | | Start a timed break: the one a finished block earned, or else the stand-up break. The sitting count starts when it ends. |
-| `break_skip` | | Skip the waiting break, or end the running one early. |
+| `status` | `refresh?` | Read-only. Off or running, the run's start and end, the last run, quiet holds, macOS state, today's scorecard. |
+| `focus_start` | `taskId?`, `minutes?` | Start a block. Refused while one is running. The only thing that starts a run. |
+| `focus_stop` | | Stop the block or break and end the cycle; Rhythm is off after it. |
+| `break_skip` | | End the running break early; Rhythm is off after it. |
 | `music_tracks` | | Read-only. The tracks in the focus music folder, in play order, with their paths on the Mac. |
 | `music_folder_open` | | Show the focus music folder in Finder (Mac only, in-process only). |
 | `macos_shortcuts_install` | | Prepare and open the two shortcuts (Mac only, in-process only). |
+| `macos_privacy_open` | | Open System Settings at Full Disk Access (Mac only, in-process only). |
 
-`status` and `focus_start` are also registered as tools, for routine watchers. The App updates live from the plugin event `plugin:walnut-rhythm:state`.
+Only `status` is also registered as a tool, for routine watchers: a routine runs on a schedule, and a run never starts without you. The App updates live from the plugin event `plugin:walnut-rhythm:state`.
 
 ## macOS Focus
 
-**Following the Mac's Focus.** With `mirror_macos_focus` on, Rhythm reads two files every 30 seconds: `~/Library/DoNotDisturb/DB/Assertions.json` (a Focus is on while `data[0].storeAssertionRecords` is not empty) and `~/Library/DoNotDisturb/DB/ModeConfigurations.json` (for the Focus's name). While one is on, Walnut quiet mode shows "macOS Focus: <name>" and stand-up reminders wait. Only these two files are read, never a folder scan. Those files sit behind Full Disk Access, so Rhythm reads them through Walnut's one grant for it (`walnut.macos.readProtectedFile`): the program to allow is Walnut, the same row in System Settings that stops the file popups in sessions, never the `node` running the server. When it is refused, the App says so and Rhythm checks again every 10 minutes. A Focus turned on by a schedule may not appear in that file.
+**Following the Mac's Focus.** With `mirror_macos_focus` on, Rhythm reads two files every 30 seconds: `~/Library/DoNotDisturb/DB/Assertions.json` (a Focus is on while `data[0].storeAssertionRecords` is not empty) and `~/Library/DoNotDisturb/DB/ModeConfigurations.json` (for the Focus's name). While one is on, Walnut quiet mode shows "macOS Focus: <name>". Only these two files are read, never a folder scan. Those files sit behind Full Disk Access, so Rhythm reads them through Walnut's one grant for it (`walnut.macos.readProtectedFile`): the program to allow is Walnut, the same row in System Settings that stops the file popups in sessions, never the `node` running the server. When it is refused, the App says so and Rhythm checks again every 10 minutes. A Focus turned on by a schedule may not appear in that file.
 
 Rhythm owns one quiet hold. When a focus block and a macOS Focus overlap, the hold names both and lasts until both are over. Rhythm never removes a quiet hold you set yourself.
 
@@ -101,7 +86,7 @@ Rhythm owns one quiet hold. When a focus block and a macOS Focus overlap, the ho
 
 ## What it deliberately does not do
 
-- It does not count phone time or agent time as sitting.
+- It does not start, count or record anything you did not start. Nothing counts in the background, and there is no keyboard or app tracking.
 - It does not remind you on a cloud replica: the primary Walnut owns the timers, so you are never reminded twice.
 - It does not add shortcuts behind your back. Nothing is added to Shortcuts without your click, and nothing under Shortcuts runs unless `macos_focus_shortcuts` is on.
 - It does not turn Do Not Disturb back off when the plugin is disabled in the middle of a block.
@@ -118,4 +103,4 @@ bun packages/plugin-cli/dist/cli.js validate --root plugin-store/walnut-rhythm
 bun run test:focus tests/plugins/walnut-rhythm
 ```
 
-The decisions live in pure modules with their own tests: `presence.ts` (the streak), `scheduler.ts` (the reminder), `focus.ts` (the block cycle and the quiet hold), `clock.ts`, `macos-focus.ts`, `macos-shortcuts.ts` and `music.ts` (which files are tracks). The console's player is `web/music.ts`; the phone's is `ios-native/Walnut/Stores/FocusMusicPlayer.swift`. `runtime.ts` applies them and is tested on a fake clock and a fake host.
+The decisions live in pure modules with their own tests: `focus.ts` (the run and the quiet hold), `clock.ts`, `macos-focus.ts`, `macos-shortcuts.ts` and `music.ts` (which files are tracks). The console's player is `web/music.ts`; the phone's is `ios-native/Walnut/Stores/FocusMusicPlayer.swift`. `runtime.ts` applies them and is tested on a fake clock and a fake host; `tests/plugins/walnut-rhythm/never-starts-alone.test.ts` checks that nothing but a Start begins a run.

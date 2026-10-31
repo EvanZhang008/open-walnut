@@ -1,10 +1,11 @@
 /**
- * The focus block card: a task picker and two Start buttons while idle, a live
- * countdown while a block or break runs, and the three choices once a block ends.
+ * The focus block card: a task picker and two Start buttons while Rhythm is off, and a
+ * live countdown with the run's start and end while a block or its break runs. Start is
+ * the only way in; the break follows the block by itself and Rhythm is off after it.
  */
 import { useEffect, useState } from 'react'
 import type { WalnutWebApi } from '@open-walnut/plugin-api/web'
-import { countdownText, focusPhaseText } from './format'
+import { countdownText, focusPhaseText, runText } from './format'
 import { MusicToggle } from './music-card'
 import type { MusicPlayer } from './music'
 import type { RhythmPublicState, RhythmStore } from './store'
@@ -91,7 +92,9 @@ export function FocusCard({ walnut, store, state, run, busy, music }: FocusCardP
 
       {focus.phase === 'idle' && (
         <>
-          <p className="rhythm-muted">Pick what the block is for, then start. Walnut stays quiet until it ends.</p>
+          <p className="rhythm-muted" data-testid="rhythm-focus-off">
+            Off. {focus.lastRun ? `${runText(focus)}. ` : ''}Pick what the block is for, then start. Walnut stays quiet until it ends, then a {config.breakMinutes} min break counts down.
+          </p>
           <div className="rhythm-picker" role="radiogroup" aria-label="Task for this focus block" data-testid="rhythm-task-picker">
             <button
               type="button"
@@ -146,39 +149,19 @@ export function FocusCard({ walnut, store, state, run, busy, music }: FocusCardP
           <p className="rhythm-focus-title" data-testid="rhythm-focus-title">
             {focus.phase === 'focus' ? (focus.title ?? 'No task') : 'Stand up and move.'}
           </p>
+          <p className="rhythm-muted" data-testid="rhythm-focus-run">{runText(focus)}.{focus.phase === 'break' ? ' Then Rhythm asks before the next block.' : ''}</p>
           {focus.phase === 'focus' && (
             <p className="rhythm-muted">Block {blockNumber} of {focus.longBreakEvery} before the long break.</p>
           )}
           <div className="rhythm-actions">
-            {focus.phase === 'break' && (
-              <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-break-skip" onClick={() => { void run('break_skip') }}>End break</button>
-            )}
-            <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-focus-stop" onClick={() => { void run('focus_stop') }}>Stop</button>
+            {focus.phase === 'break'
+              ? <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-break-skip" onClick={() => { void run('break_skip') }}>End break</button>
+              : <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-focus-stop" onClick={() => { void run('focus_stop') }}>Stop</button>}
             {focus.phase === 'focus' && <MusicToggle player={music} />}
           </div>
         </div>
       )}
 
-      {focus.phase === 'break_due' && (
-        <div className="rhythm-running">
-          <p className="rhythm-focus-title">{focus.title ? `Done: ${focus.title}` : 'Block done.'} Time to stand up.</p>
-          <div className="rhythm-actions">
-            <button type="button" className="rhythm-button rhythm-primary" disabled={busy} data-testid="rhythm-break-start" onClick={() => { void run('break_start') }}>
-              Start {focus.breakKind === 'long' ? `long break (${config.longBreakMinutes})` : `break (${config.breakMinutes})`}
-            </button>
-            <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-break-skip" onClick={() => { void run('break_skip') }}>Skip break</button>
-            <button
-              type="button"
-              className="rhythm-button"
-              disabled={busy}
-              data-testid="rhythm-focus-again"
-              onClick={() => startBlock({ ...(focus.taskId ? { taskId: focus.taskId } : {}), ...(focus.minutes ? { minutes: focus.minutes } : {}) })}
-            >
-              Another block
-            </button>
-          </div>
-        </div>
-      )}
       </div></div>
     </section>
   )

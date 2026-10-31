@@ -1,11 +1,12 @@
 /**
  * Rhythm's server entry: wires the runtime to the host and nothing else.
  *
- * Three signals feed it: attention (`time:banked`, `time:outside`), agent turns (a hook
- * on turn start and end, for the natural pause), and the clock (a 30s tick plus one
- * precise timeout at the end of the running focus phase). Everything it registers is
- * owned by the host, so disable and reload take all of it away, the quiet hold and the
- * sidebar ring included.
+ * Rhythm is off until the person presses Start, so it listens to nothing about them:
+ * no attention events, no agent turns. What feeds it is the person's own ops, quiet
+ * changes, config changes, and the clock (a 30s tick plus one precise timeout at the
+ * end of the running phase), and the clock only ever moves a run toward off.
+ * Everything it registers is owned by the host, so disable and reload take all of it
+ * away, the quiet hold and the sidebar ring included.
  */
 import fsp from 'node:fs/promises'
 import path from 'node:path'
@@ -15,7 +16,6 @@ import { runProcess } from './server/exec'
 import { MacosBridge } from './server/macos-bridge'
 import { focusDbDir, readMacosFocus } from './server/macos-focus'
 import { registerOps } from './server/ops'
-import { spanFromOutside, spansFromBanked } from './server/presence'
 import { buildPublicState, stateFingerprint } from './server/public-state'
 import { RhythmRuntime } from './server/runtime'
 import { rhythmStatusItem, STATUS_ITEM_ID } from './server/status-item'
@@ -32,7 +32,7 @@ export async function activate(walnut: WalnutServerApi): Promise<void> {
   walnut.registry.skill({ id: 'rhythm', directory: path.resolve(moduleDir, '..', 'skills') })
 
   if (walnut.replica) {
-    // The primary owns the timers, the reminders and the Mac. Two boxes would remind twice.
+    // The primary owns the timers, the notices and the Mac. Two boxes would remind twice.
     registerOps(walnut, null)
     walnut.log.info('Rhythm is idle on this cloud replica; the primary runs it')
     return
@@ -106,19 +106,7 @@ export async function activate(walnut: WalnutServerApi): Promise<void> {
 
   registerOps(walnut, runtime)
 
-  walnut.events.on('time:banked', (event) => runtime.attention(spansFromBanked(event.data, runtime.now()), 'walnut'))
-  walnut.events.on('time:outside', (event) => {
-    const span = spanFromOutside(event.data, runtime.now())
-    return runtime.attention(span ? [span] : [], 'mac')
-  })
   walnut.events.on('quiet:changed', () => runtime.kick())
-
-  walnut.registry.hook({
-    id: 'turn-tracker',
-    points: ['onTurnStart', 'onTurnComplete', 'onTurnError'],
-    timeoutMs: 1_000,
-    handler(context) { runtime.turn(context) },
-  })
 
   walnut.config.onChange((config) => {
     runtime.applyConfig(config)
@@ -129,7 +117,7 @@ export async function activate(walnut: WalnutServerApi): Promise<void> {
   await runtime.kick()
   walnut.log.info('Rhythm activated', {
     focus: runtime.focus.phase,
-    reminderEveryMinutes: runtime.config.reminderEveryMinutes,
+    focusMinutes: runtime.config.focusMinutes,
   })
 }
 

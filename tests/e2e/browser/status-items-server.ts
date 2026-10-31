@@ -59,7 +59,7 @@ await fs.writeFile(path.join(tmpBase, 'config.yaml'), JSON.stringify({
   },
   providers: { 'store-cli': { api: 'claude-cli', claude_cli_command: mockMainAgent } },
   plugins: {
-    'walnut-rhythm': { mirror_macos_focus: false, macos_focus_shortcuts: false, quiet_hours: '' },
+    'walnut-rhythm': { mirror_macos_focus: false, macos_focus_shortcuts: false },
   },
 }, null, 2))
 await fs.writeFile(path.join(tmpBase, 'tasks', 'tasks.json'), JSON.stringify({ version: 1, tasks: [] }, null, 2))

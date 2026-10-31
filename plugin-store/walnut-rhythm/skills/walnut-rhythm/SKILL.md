@@ -1,11 +1,11 @@
 ---
 name: walnut-rhythm
-description: Start, stop and read Rhythm focus blocks (pomodoros tied to a task) and answer or snooze its stand-up reminder. Use when someone asks for a pomodoro, a focus block, a break, or to snooze or silence the stand-up reminder.
+description: Start, stop and read Rhythm focus blocks (pomodoros, optionally tied to a task) and their breaks. Use when someone asks for a pomodoro, a focus block, a break, or whether a block is running.
 ---
 
-# Rhythm: focus blocks and stand-up breaks
+# Rhythm: focus blocks the person starts
 
-Rhythm is a Walnut plugin. It counts time at the keyboard, reminds the person to stand up after a stretch of it, and runs focus blocks (pomodoros) that can be tied to a task. Walnut goes quiet while a block runs.
+Rhythm is a Walnut plugin. It is off until the person starts a focus block (a pomodoro), optionally tied to a task. Walnut goes quiet while the block runs, the break follows by itself, and when the break ends Rhythm asks once whether to start the next block; with no answer it stays off. It counts nothing on its own: no keyboard time, no sitting time.
 
 Every op below is called with `walnut tools call <op> '<json args>'`. Read `walnut_rhythm_status` first whenever the answer depends on what is running.
 
@@ -15,31 +15,25 @@ Every op below is called with `walnut tools call <op> '<json args>'`. Read `waln
 |---|---|
 | "start a pomodoro", "focus on this for 25 minutes", "start a focus block on this task" | `walnut_rhythm_focus_start` with `taskId` (the task you are working in, if any) and optional `minutes` |
 | "stop the timer", "cancel the pomodoro", "I'm done focusing" | `walnut_rhythm_focus_stop` |
-| "start my break", "ok, break time" after a block ended | `walnut_rhythm_break_start` |
-| "skip the break", "keep going" | `walnut_rhythm_break_skip`, then `walnut_rhythm_focus_start` if they want another block |
-| "snooze the stand-up reminder", "remind me later" | `walnut_rhythm_break_snooze` with optional `minutes` |
-| "I stood up", "I took a walk", "done" to the reminder | `walnut_rhythm_break_done` |
-| "how long have I been sitting", "how much did I focus today", "is a block running" | `walnut_rhythm_status` |
+| "end the break", "I'm back" during a break | `walnut_rhythm_break_skip`, then `walnut_rhythm_focus_start` if they want another block |
+| "how much did I focus today", "is a block running", "when does it end" | `walnut_rhythm_status` |
 | "what focus music do I have", "is my brown noise there" | `walnut_rhythm_music_tracks` |
 
 ## Ops
 
-- `walnut_rhythm_status` `{ refresh?: boolean }`: read-only. Returns the sitting streak (`sitting.sittingMs`), the next reminder (`reminder.phase`, `reminder.dueAt`, `reminder.pausedBy`), the running block (`focus.phase` is `idle`, `focus`, `break_due` or `break`, with `focus.endsAt` and `focus.title`), quiet mode (`quiet.holds`), macOS state, and `today` (focus minutes, blocks, breaks taken, reminders fired).
+- `walnut_rhythm_status` `{ refresh?: boolean }`: read-only. Returns the run (`focus.phase` is `idle` (off), `focus` or `break`, with `focus.runStartedAt`, `focus.endsAt`, `focus.title`, and `focus.lastRun` when off), quiet mode (`quiet.holds`), macOS state, and `today` (focus minutes, blocks, breaks, blocks stopped early).
 - `walnut_rhythm_focus_start` `{ taskId?: string, minutes?: integer }`: starts a block. Refused while one is already running; stop it first only if the person asked for a new one.
-- `walnut_rhythm_focus_stop` `{}`: stops the block or break and ends the cycle. A stopped block does not count as completed.
-- `walnut_rhythm_break_start` `{}`: starts the break a finished block earned (the long break every Nth block).
-- `walnut_rhythm_break_skip` `{}`: skips the waiting or running break.
-- `walnut_rhythm_break_snooze` `{ minutes?: integer }`: the reminder returns after that many minutes at the keyboard.
-- `walnut_rhythm_break_done` `{}`: records a break and starts the sitting count over.
+- `walnut_rhythm_focus_stop` `{}`: stops the block or break and ends the cycle. Rhythm is off after it. A stopped block does not count as completed.
+- `walnut_rhythm_break_skip` `{}`: ends the running break early. Rhythm is off after it.
 - `walnut_rhythm_music_tracks` `{}`: read-only. The audio files in the focus music folder (`folder`, `tracks[].title`, `tracks[].file`), in play order.
 
 Each mutating op answers `{ message, state }`; relay `message` in one sentence.
 
 ## Rules
 
+- Start a block only when the person asked for one in their own words. Never start one from a routine, a schedule, a guess that they are working, or to "keep the rhythm going". Rhythm is off until they start it, by design.
 - Tie a block to a task only with a real task id (the task you are in, or one the person named). Never invent one.
-- Do not start a block, snooze, or log a break unless the person asked. These are their timers.
-- The stand-up reminder already waits during focus blocks, quiet hours, Walnut quiet mode and a macOS Focus. Do not add your own reminders on top of it.
+- Do not add your own break or stand-up reminders on top of Rhythm. It asks once after each break; that is all the person wants.
 - Focus music plays in the person's browser or phone, never from an op: you cannot start or stop the sound. Tell them to press Play in the Rhythm app (or on the phone, Settings, Focus music). To add music, they put m4a, mp3 or wav files in the folder `music_tracks` names.
 - `macos_shortcuts_install` is not for you: it opens dialogs on the Mac's screen, so it only runs from the Install shortcuts button in the Rhythm app.
-- Settings (reminder interval, block and break lengths, quiet hours) live under `plugins.walnut-rhythm` and are edited in Settings, Plugins, Rhythm. Point the person there rather than changing config yourself.
+- Settings (block and break lengths, quiet, music) live under `plugins.walnut-rhythm` and are edited in the Rhythm app. Point the person there rather than changing config yourself.

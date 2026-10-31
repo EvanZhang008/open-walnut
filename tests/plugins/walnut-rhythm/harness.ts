@@ -12,7 +12,6 @@ import type { PluginNotifyInput, QuietHold } from '../../../packages/plugin-api/
 import type { RunResult, Runner } from '../../../plugin-store/walnut-rhythm/src/server/exec'
 import { MacosBridge } from '../../../plugin-store/walnut-rhythm/src/server/macos-bridge'
 import type { MacosFocusRead } from '../../../plugin-store/walnut-rhythm/src/server/macos-focus'
-import { spansFromBanked } from '../../../plugin-store/walnut-rhythm/src/server/presence'
 import { RhythmRuntime } from '../../../plugin-store/walnut-rhythm/src/server/runtime'
 
 export const MIN = 60_000
@@ -97,22 +96,5 @@ export function makeHarness(options: HarnessOptions) {
       await runtime.kick()
     },
     notices: (key?: string) => calls.filter((call): call is Extract<HostCall, { type: 'notify' }> => call.type === 'notify' && (!key || call.notice.dedupKey === key)),
-  }
-}
-
-/** One console attention record covering [start, start + ms). */
-export function banked(start: number, ms: number, extra: Record<string, unknown> = {}) {
-  return { records: [{ ts: new Date(start).toISOString(), durationMs: ms, kind: 'session', ...extra }] }
-}
-
-/**
- * Feed continuous attention from `from` to `to` in one-minute records, stepping the
- * clock along with it, the way the browser banks a batch about once a minute.
- */
-export async function sitThrough(h: ReturnType<typeof makeHarness>, runtime: RhythmRuntime, from: number, to: number): Promise<void> {
-  for (let t = from; t < to; t += MIN) {
-    const end = Math.min(t + MIN, to)
-    h.clock.t = end
-    await runtime.attention(spansFromBanked(banked(t, end - t), h.clock.t), 'walnut')
   }
 }

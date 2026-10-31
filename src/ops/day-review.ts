@@ -184,8 +184,10 @@ async function focusSection(call: Call, date: string): Promise<SectionResult> {
     value: {
       focusMin: today.focusMinutes ?? 0, blocks: Array.isArray(today.focusBlocks) ? today.focusBlocks.length : 0,
       stoppedBlocks: today.stoppedBlocks ?? 0, breaksTaken: today.breaksTaken ?? 0,
-      standRemindersFired: today.remindersFired ?? 0, standRemindersDone: today.remindersDone ?? 0,
-      longestSittingMin: minutes(today.longestStreakMs),
+      // Rhythm no longer counts sitting time or stand-up reminders (it is off until the
+      // person starts a block); an older day file may still carry them.
+      ...(Number(today.remindersFired) > 0 ? { standRemindersFired: today.remindersFired, standRemindersDone: today.remindersDone ?? 0 } : {}),
+      ...(Number(today.longestStreakMs) > 0 ? { longestSittingMin: minutes(today.longestStreakMs) } : {}),
     },
   }
 }

@@ -1,6 +1,6 @@
 /**
  * What each op does, over the runtime. Every mutating action runs inside the runtime's
- * `serial` queue and ends with one `step`, so the quiet hold, the reminder and the
+ * `serial` queue and ends with one `step`, so the quiet hold, the notices and the
  * `state` event are all settled before the op answers.
  *
  * Refusals are thrown as plain sentences; the host turns a throw into
@@ -10,13 +10,11 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import { clampMinutes } from './config'
 import { runProcess } from './exec'
-import { startBreak, startFocus, stopFocus, skipBreak, advanceFocus } from './focus'
+import { startFocus, stopFocus, skipBreak, advanceFocus } from './focus'
 import { listMusic, resolveMusicFolder, type MusicFs, type MusicListing } from './music'
-import { KEY_BREAK_OVER, KEY_FOCUS_DONE, KEY_STAND_UP } from './notices'
-import { restartStreak } from './presence'
+import { KEY_BREAK_OVER, KEY_FOCUS_DONE } from './notices'
 import { buildPublicState, type RhythmPublicState } from './public-state'
 import type { RhythmRuntime } from './runtime'
-import { snoozeReminder, syncStreak } from './scheduler'
 
 export interface ActionResult {
   message: string
@@ -40,6 +38,7 @@ async function settle(runtime: RhythmRuntime): Promise<void> {
   if (advanced.events.length > 0) await runtime.step()
 }
 
+/** The ONLY way a run starts: an op the person (or an agent they asked) called. */
 export function focusStart(runtime: RhythmRuntime, args: Record<string, unknown>): Promise<ActionResult> {
   return runtime.serial(async () => {
     await settle(runtime)
@@ -69,8 +68,6 @@ export function focusStop(runtime: RhythmRuntime): Promise<ActionResult> {
     runtime.focus = stopped.state
     runtime.markDirty()
     if (stopped.stoppedMinutes !== null) runtime.recordDay({ type: 'stopped' })
-    // Stopping a running break means they are back at the keyboard.
-    if (was === 'break') runtime.presence = restartStreak(runtime.presence, runtime.now())
     if (was === 'focus' && runtime.config.macosFocusShortcuts) {
       runtime.macos.setDoNotDisturb(false, runtime.now)
       runtime.macos.assumeDoNotDisturbOff(runtime.now())
@@ -78,57 +75,9 @@ export function focusStop(runtime: RhythmRuntime): Promise<ActionResult> {
     await runtime.dismiss(KEY_FOCUS_DONE)
     await runtime.dismiss(KEY_BREAK_OVER)
     const message = was === 'idle'
-      ? 'Nothing was running.'
-      : was === 'focus' ? `Focus block stopped after ${stopped.stoppedMinutes ?? 0} min.` : 'Stopped.'
+      ? 'Rhythm is off. It starts when you press Start.'
+      : was === 'focus' ? `Focus block stopped after ${stopped.stoppedMinutes ?? 0} min. Rhythm is off.` : 'Stopped. Rhythm is off.'
     return finish(runtime, message)
-  })
-}
-
-/** Log a stand-up without a timer (agents and scripts): the sitting streak starts over now. */
-export function breakDone(runtime: RhythmRuntime): Promise<ActionResult> {
-  return runtime.serial(async () => {
-    const answered = runtime.reminder.outstanding
-    runtime.presence = restartStreak(runtime.presence, runtime.now())
-    runtime.reminder = syncStreak({ ...runtime.reminder, outstanding: false }, runtime.presence)
-    runtime.markDirty()
-    runtime.recordDay({ type: answered ? 'reminder-done' : 'break' })
-    await runtime.dismiss(KEY_STAND_UP)
-    return finish(runtime, 'Break logged. The sitting count starts over.')
-  })
-}
-
-export function breakSnooze(runtime: RhythmRuntime, args: Record<string, unknown>): Promise<ActionResult> {
-  return runtime.serial(async () => {
-    const minutes = clampMinutes(args.minutes, runtime.config.snoozeMinutes, 1, 240)
-    const now = runtime.now()
-    runtime.reminder = snoozeReminder(syncStreak(runtime.reminder, runtime.presence), now, minutes)
-    runtime.markDirty()
-    runtime.recordDay({ type: 'reminder-snoozed' })
-    await runtime.dismiss(KEY_STAND_UP)
-    return finish(runtime, `Stand-up reminder snoozed for ${minutes} min.`)
-  })
-}
-
-export function breakStart(runtime: RhythmRuntime): Promise<ActionResult> {
-  return runtime.serial(async () => {
-    await settle(runtime)
-    const was = runtime.focus.phase
-    const now = runtime.now()
-    runtime.focus = startBreak(runtime.focus, now, runtime.durations())
-    // Taking the break means standing up: the sitting count starts over, and again when
-    // the break ends (runtime's break-ended), so the break itself never counts as sitting.
-    runtime.presence = restartStreak(runtime.presence, now)
-    // From idle this is the stand-up break, which answers a reminder that is on screen.
-    const answered = was === 'idle' && runtime.reminder.outstanding
-    runtime.reminder = syncStreak({ ...runtime.reminder, outstanding: false }, runtime.presence)
-    runtime.markDirty()
-    if (was === 'break_due') runtime.recordDay({ type: 'focus-break' })
-    else if (was === 'idle') runtime.recordDay({ type: answered ? 'reminder-done' : 'break' })
-    await runtime.dismiss(KEY_STAND_UP)
-    await runtime.dismiss(KEY_FOCUS_DONE)
-    await runtime.dismiss(KEY_BREAK_OVER)
-    const minutes = Math.round((runtime.focus.endsAt - now) / 60_000)
-    return finish(runtime, `Break started: ${minutes} min.`)
   })
 }
 
@@ -138,12 +87,10 @@ export function breakSkip(runtime: RhythmRuntime): Promise<ActionResult> {
     const was = runtime.focus.phase
     const now = runtime.now()
     runtime.focus = skipBreak(runtime.focus, now)
-    // Ending a running break early means they are back: the sitting count starts now.
-    if (was === 'break') runtime.presence = restartStreak(runtime.presence, now)
     runtime.markDirty()
     await runtime.dismiss(KEY_FOCUS_DONE)
     await runtime.dismiss(KEY_BREAK_OVER)
-    return finish(runtime, was === 'break_due' || was === 'break' ? 'Break skipped.' : 'No break was waiting.')
+    return finish(runtime, was === 'break_due' || was === 'break' ? 'Break ended. Rhythm is off until you start the next block.' : 'No break was running.')
   })
 }
 

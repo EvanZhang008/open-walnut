@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest'
 import { createFakeWalnut } from '../../../packages/plugin-api/src/testing.js'
 import { activate, deactivate } from '../../../plugin-store/walnut-rhythm/src/server'
 
-const SAFE_CONFIG = { mirror_macos_focus: false, macos_focus_shortcuts: false, quiet_hours: '' }
+const SAFE_CONFIG = { mirror_macos_focus: false, macos_focus_shortcuts: false }
 
 function op(fake: ReturnType<typeof createFakeWalnut>, name: string) {
   const found = fake.registeredOps.find((definition) => definition.name === name)
@@ -17,7 +17,7 @@ function op(fake: ReturnType<typeof createFakeWalnut>, name: string) {
 }
 
 describe('activate', () => {
-  it('declares the eleven ops with the intended reach', async () => {
+  it('declares the eight ops with the intended reach', async () => {
     const fake = createFakeWalnut({ pluginId: 'walnut-rhythm', config: SAFE_CONFIG })
     await activate(fake.api)
     try {
@@ -26,9 +26,6 @@ describe('activate', () => {
         status: 'read:allow',
         focus_start: 'write:allow',
         focus_stop: 'write:allow',
-        break_done: 'write:allow',
-        break_snooze: 'write:allow',
-        break_start: 'write:allow',
         break_skip: 'write:allow',
         music_tracks: 'read:allow',
         music_folder_open: 'write:deny',
@@ -59,27 +56,10 @@ describe('activate', () => {
 
       await expect(op(fake, 'focus_start')({})).rejects.toThrow(/already running/)
       const stopped = await op(fake, 'focus_stop')() as { message: string }
-      expect(stopped.message).toMatch(/^Focus block stopped after 0 min\.$/)
+      expect(stopped.message).toBe('Focus block stopped after 0 min. Rhythm is off.')
       expect((await fake.api.notifications.quiet.get()).active).toBe(false)
-      // Nobody has been at the keyboard, so there is nothing left to count: the ring goes.
-      expect(fake.statusItems.has('rhythm')).toBe(false)
-    } finally {
-      await deactivate()
-    }
-  })
-
-  it('folds time:banked attention into the sitting streak', async () => {
-    const fake = createFakeWalnut({ pluginId: 'walnut-rhythm', config: SAFE_CONFIG })
-    await activate(fake.api)
-    try {
-      const now = Date.now()
-      fake.api.events.emit('time:banked', {
-        records: [{ ts: new Date(now - 20 * 60_000).toISOString(), durationMs: 20 * 60_000 - 1000, kind: 'session' }],
-      })
-      await new Promise((resolve) => setTimeout(resolve, 20))
-      const status = await op(fake, 'status')() as { sitting: { present: boolean; sittingMs: number } }
-      expect(status.sitting.present).toBe(true)
-      expect(status.sitting.sittingMs).toBeGreaterThanOrEqual(19 * 60_000)
+      // Off again: the ring says so and offers one Start.
+      expect(fake.statusItems.get('rhythm')).toMatchObject({ title: 'Rhythm is off', glyph: 'pause' })
     } finally {
       await deactivate()
     }

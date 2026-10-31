@@ -1,19 +1,21 @@
 /**
- * Focus blocks (a pomodoro tied to a task) and the one quiet hold Rhythm owns. PURE.
+ * The focus run (a pomodoro, optionally tied to a task) and the one quiet hold Rhythm
+ * owns. PURE.
  *
- *   idle ──start──▶ focus ──time up──▶ break_due ──Start break──▶ break ──time up──▶ idle
- *                     │                   │  └──Skip break / expiry──▶ idle
- *                     └──stop──▶ idle     └──Another block──▶ focus
+ *   off ──Start──▶ focus ──time up──▶ break ──time up──▶ off (asks once: start the next one?)
+ *                    │                  └──End break──▶ off
+ *                    └──Stop──▶ off
  *
- * A stand-up break (`idle ──Start break / Stand up now──▶ break`, kind `stand`) uses the
- * same break phase with its own length: it is the timer the stand-up reminder starts,
- * and it leaves the focus cycle alone.
+ * Rhythm is off until the person presses Start, and only a Start (`startFocus`) leaves
+ * off: no clock, restart, attention or reload ever does. A run is the block the person
+ * started and the break that follows it; when the break runs out, Rhythm asks once
+ * whether to start the next one and stays off if nobody does. Every Nth completed block
+ * is followed by the long break, and the cycle count starts over after the long break
+ * or after a long idle spell.
  *
- * `break_due` is the moment the block ended and the person has not answered yet. It
- * waits for a click rather than starting the break on its own, so "Start break" means
- * what it says; if nobody answers it lapses after BREAK_DUE_EXPIRY_MS. Every Nth
- * completed block is followed by the long break, and the cycle count starts over
- * after the long break or after a long idle spell.
+ * `break_due` (an older version waited for a click between the block and its break)
+ * and the old stand-up break (`stand`) are still read from a stored state, so an
+ * upgrade mid-run lands in the right place.
  */
 
 export type FocusPhase = 'idle' | 'focus' | 'break_due' | 'break'
@@ -25,14 +27,19 @@ export interface FocusState {
   title?: string
   /** This block's focus length, kept for "Another block". */
   minutes: number
-  /** The current phase's window, epoch ms. Both 0 while idle. */
+  /** The current phase's window, epoch ms. Both 0 while off. */
   startedAt: number
   endsAt: number
+  /** When the person pressed Start for the run in progress (its block), epoch ms. 0 while off. */
+  runStartedAt: number
   /** Blocks completed since the last long break. */
   completedInCycle: number
   breakKind?: BreakKind
-  /** When the latest block (or break) finished, epoch ms. 0 = never. */
+  /** When the latest phase (block or break) finished, epoch ms. 0 = never. */
   lastEndedAt: number
+  /** The last finished run, for "Last run 10:05 to 10:35". Both 0 = none yet. */
+  lastRunStartedAt: number
+  lastRunEndedAt: number
 }
 
 export interface FocusDurations {
@@ -40,7 +47,6 @@ export interface FocusDurations {
   breakMinutes: number
   longBreakMinutes: number
   longBreakEvery: number
-  standBreakMinutes: number
 }
 
 export interface CompletedBlock {
@@ -52,14 +58,14 @@ export interface CompletedBlock {
 }
 
 export type FocusEvent =
-  | { type: 'focus-completed'; block: CompletedBlock; breakKind: BreakKind; lateMs: number }
+  | { type: 'focus-completed'; block: CompletedBlock; breakKind: BreakKind; breakEndsAt: number; lateMs: number }
   | { type: 'break-ended'; breakKind: BreakKind; lateMs: number }
-  | { type: 'break-due-lapsed' }
 
-export const IDLE_FOCUS: FocusState = { phase: 'idle', minutes: 0, startedAt: 0, endsAt: 0, completedInCycle: 0, lastEndedAt: 0 }
+export const IDLE_FOCUS: FocusState = {
+  phase: 'idle', minutes: 0, startedAt: 0, endsAt: 0, runStartedAt: 0, completedInCycle: 0,
+  lastEndedAt: 0, lastRunStartedAt: 0, lastRunEndedAt: 0,
+}
 
-/** Unanswered "block done" prompt lapses to idle after this. */
-export const BREAK_DUE_EXPIRY_MS = 30 * 60_000
 /** Idle this long and the next block starts a fresh cycle. */
 export const CYCLE_RESET_MS = 2 * 60 * 60_000
 
@@ -69,9 +75,19 @@ export function isFocusRunning(state: FocusState): boolean {
   return state.phase === 'focus'
 }
 
-/** Any phase that owns the person's next break (the stand-up reminder stays out of it). */
-export function ownsBreak(state: FocusState): boolean {
-  return state.phase !== 'idle'
+/** Back to off, remembering the run that just ended (if one did). */
+function off(state: FocusState, endedAt: number): FocusState {
+  const ran = state.phase !== 'idle'
+  return {
+    ...IDLE_FOCUS,
+    completedInCycle: state.completedInCycle,
+    minutes: state.minutes,
+    ...(state.taskId ? { taskId: state.taskId } : {}),
+    ...(state.title ? { title: state.title } : {}),
+    lastEndedAt: ran ? endedAt : state.lastEndedAt,
+    lastRunStartedAt: ran ? state.runStartedAt || state.startedAt : state.lastRunStartedAt,
+    lastRunEndedAt: ran ? endedAt : state.lastRunEndedAt,
+  }
 }
 
 export function startFocus(
@@ -79,6 +95,8 @@ export function startFocus(
   input: { now: number; minutes: number; taskId?: string; title?: string },
 ): FocusState {
   if (state.phase === 'focus') throw new Error('A focus block is already running. Stop it first with focus_stop.')
+  // "Another block" during a break: the run being cut off is the last run now.
+  if (state.phase !== 'idle') state = off(state, input.now)
   const freshCycle = state.phase === 'idle' && state.lastEndedAt > 0 && input.now - state.lastEndedAt > CYCLE_RESET_MS
   return {
     phase: 'focus',
@@ -87,50 +105,51 @@ export function startFocus(
     minutes: input.minutes,
     startedAt: input.now,
     endsAt: input.now + input.minutes * MIN,
+    runStartedAt: input.now,
     completedInCycle: freshCycle ? 0 : state.completedInCycle,
     lastEndedAt: state.lastEndedAt,
+    lastRunStartedAt: state.lastRunStartedAt,
+    lastRunEndedAt: state.lastRunEndedAt,
   }
 }
 
 /** Stop whatever is running. The cycle ends too: stopping means "done for now". */
 export function stopFocus(state: FocusState, now: number): { state: FocusState; stoppedMinutes: number | null } {
   const stoppedMinutes = state.phase === 'focus' ? Math.max(0, Math.floor((now - state.startedAt) / MIN)) : null
-  return { state: { ...IDLE_FOCUS, lastEndedAt: state.phase === 'idle' ? state.lastEndedAt : now }, stoppedMinutes }
+  if (state.phase === 'idle') return { state, stoppedMinutes }
+  return { state: { ...off(state, now), completedInCycle: 0 }, stoppedMinutes }
 }
 
 export function breakLengthMs(kind: BreakKind, d: FocusDurations): number {
-  return (kind === 'long' ? d.longBreakMinutes : kind === 'stand' ? d.standBreakMinutes : d.breakMinutes) * MIN
+  return (kind === 'long' ? d.longBreakMinutes : d.breakMinutes) * MIN
 }
 
-/**
- * Start (or restart) the break now. From `break_due` it is the break the block
- * earned; from `idle` it is the stand-up break (the reminder's Start break).
- */
-export function startBreak(state: FocusState, now: number, d: FocusDurations): FocusState {
-  if (state.phase === 'focus') throw new Error('A focus block is running. Stop it first, or wait for it to end.')
-  const kind: BreakKind = state.phase === 'idle' ? 'stand' : state.breakKind ?? 'short'
-  return { ...state, phase: 'break', breakKind: kind, startedAt: now, endsAt: now + breakLengthMs(kind, d) }
-}
-
-/** Skip the break: back to idle, keeping the cycle count so the long break still comes. */
+/** End the break now (End break): off, keeping the cycle count so the long break still comes. */
 export function skipBreak(state: FocusState, now: number): FocusState {
   if (state.phase !== 'break_due' && state.phase !== 'break') return state
-  return { ...IDLE_FOCUS, completedInCycle: state.completedInCycle, lastEndedAt: now }
+  return off(state, now)
 }
 
 /**
- * Move the cycle forward to `now`, one phase at a time, so a server that was down
- * through a whole block and its break still lands in the right place.
+ * Move the run forward to `now`, one phase at a time, so a server that was down
+ * through a whole block and its break still lands in the right place. It only ever
+ * moves toward off: nothing here starts a block.
  */
 export function advanceFocus(state: FocusState, now: number, d: FocusDurations): { state: FocusState; events: FocusEvent[] } {
   let current = state
   const events: FocusEvent[] = []
-  for (let guard = 0; guard < 4 && current.phase !== 'idle' && current.endsAt > 0 && current.endsAt <= now; guard++) {
+  if (current.phase === 'break_due') {
+    // A stored state from the version that waited for a click: the break began at the block's end.
+    const kind: BreakKind = current.breakKind === 'long' ? 'long' : 'short'
+    current = { ...current, phase: 'break', breakKind: kind, endsAt: current.startedAt + breakLengthMs(kind, d), runStartedAt: legacyRunStart(current) }
+  }
+  for (let guard = 0; guard < 3 && current.phase !== 'idle' && current.endsAt > 0 && current.endsAt <= now; guard++) {
     const endedAt = current.endsAt
     if (current.phase === 'focus') {
       const completed = current.completedInCycle + 1
       const long = d.longBreakEvery > 0 && completed % d.longBreakEvery === 0
       const breakKind: BreakKind = long ? 'long' : 'short'
+      const breakEndsAt = endedAt + breakLengthMs(breakKind, d)
       events.push({
         type: 'focus-completed',
         block: {
@@ -141,36 +160,34 @@ export function advanceFocus(state: FocusState, now: number, d: FocusDurations):
           ...(current.title ? { title: current.title } : {}),
         },
         breakKind,
+        breakEndsAt,
         lateMs: now - endedAt,
       })
       current = {
         ...current,
-        phase: 'break_due',
+        phase: 'break',
         breakKind,
         completedInCycle: long ? 0 : completed,
         startedAt: endedAt,
-        endsAt: endedAt + BREAK_DUE_EXPIRY_MS,
+        endsAt: breakEndsAt,
+        runStartedAt: current.runStartedAt || current.startedAt,
         lastEndedAt: endedAt,
       }
-    } else if (current.phase === 'break_due') {
-      events.push({ type: 'break-due-lapsed' })
-      current = { ...IDLE_FOCUS, completedInCycle: current.completedInCycle, lastEndedAt: current.lastEndedAt }
     } else {
       events.push({ type: 'break-ended', breakKind: current.breakKind ?? 'short', lateMs: now - endedAt })
-      current = {
-        ...IDLE_FOCUS,
-        completedInCycle: current.completedInCycle,
-        minutes: current.minutes,
-        ...(current.taskId ? { taskId: current.taskId } : {}),
-        ...(current.title ? { title: current.title } : {}),
-        lastEndedAt: endedAt,
-      }
+      current = off(current, endedAt)
     }
   }
   return { state: current, events }
 }
 
-/** Parse what state.json held; anything malformed is idle. */
+/** An older version kept no run start: the block began its length before the break did. */
+function legacyRunStart(state: FocusState): number {
+  if (state.runStartedAt > 0) return state.runStartedAt
+  return state.minutes > 0 ? Math.max(0, state.startedAt - state.minutes * MIN) : state.startedAt
+}
+
+/** Parse what state.json held; anything malformed is off. */
 export function focusOnBoot(raw: unknown): FocusState {
   if (!raw || typeof raw !== 'object') return { ...IDLE_FOCUS }
   const value = raw as Partial<FocusState>
@@ -183,11 +200,18 @@ export function focusOnBoot(raw: unknown): FocusState {
     minutes: num(value.minutes),
     startedAt: num(value.startedAt),
     endsAt: num(value.endsAt),
+    runStartedAt: num(value.runStartedAt),
     completedInCycle: Math.floor(num(value.completedInCycle)),
     ...(value.breakKind === 'long' || value.breakKind === 'short' || value.breakKind === 'stand' ? { breakKind: value.breakKind } : {}),
     lastEndedAt: num(value.lastEndedAt),
+    lastRunStartedAt: num(value.lastRunStartedAt),
+    lastRunEndedAt: num(value.lastRunEndedAt),
   }
-  if (state.phase !== 'idle' && state.endsAt === 0) return { ...IDLE_FOCUS, lastEndedAt: state.lastEndedAt }
+  if (state.phase === 'idle') return { ...state, startedAt: 0, endsAt: 0, runStartedAt: 0 }
+  // An older version's stand-up break was no run of a block: it ends here, quietly.
+  if (state.breakKind === 'stand') return { ...state, phase: 'idle', startedAt: 0, endsAt: 0, runStartedAt: 0, completedInCycle: state.completedInCycle }
+  if (state.phase === 'break' && state.runStartedAt === 0 && state.startedAt > 0) state.runStartedAt = legacyRunStart(state)
+  if (state.endsAt === 0 && state.phase !== 'break_due') return { ...IDLE_FOCUS, lastEndedAt: state.lastEndedAt }
   return state
 }
 

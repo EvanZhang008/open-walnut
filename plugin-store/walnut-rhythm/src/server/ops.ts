@@ -1,12 +1,13 @@
 /**
- * Rhythm's ops (for sessions, the App and notice buttons) and two tools (for routine
- * watchers). The host names them `walnut_rhythm_<name>`.
+ * Rhythm's ops (for sessions, the App and notice buttons) and one read-only tool (for
+ * routine watchers). The host names them `walnut_rhythm_<name>`.
  *
- * Reach: the everyday actions (`status`, starting and stopping a block, Done, Snooze,
- * starting or skipping a break) are `remote: 'allow'`, so Ask Walnut can run them from a
- * session when someone says "start a pomodoro on this task". They only move Rhythm's
- * own timers. `macos_shortcuts_install` stays in-process: it writes files and opens a
- * dialog on the Mac's screen, which should always follow a human's click in the App.
+ * Reach: the everyday actions (`status`, starting and stopping a block, ending a break)
+ * are `remote: 'allow'`, so Ask Walnut can run them from a session when someone says
+ * "start a pomodoro on this task". They only move Rhythm's own timers. A routine gets
+ * `status` alone: a run starts only when the person asks, never from a schedule.
+ * `macos_shortcuts_install` stays in-process: it writes files and opens a dialog on the
+ * Mac's screen, which should always follow a human's click in the App.
  */
 import type { PluginOpDefinition, WalnutServerApi } from '@open-walnut/plugin-api/server'
 import * as actions from './actions'
@@ -29,34 +30,21 @@ interface OpSpec {
 export const OP_SPECS: OpSpec[] = [
   {
     name: 'status', title: 'Rhythm status', readonly: true, remote: 'allow',
-    description: 'Read the sitting streak, when the next stand-up reminder is due, the running focus block, quiet mode and today\'s scorecard. Read-only.',
+    description: 'Read whether Rhythm is off or running a focus block or its break (with when the run started and ends), the last run, quiet mode and today\'s scorecard. Read-only.',
     properties: { refresh: { type: 'boolean', description: 'Re-check whether the macOS shortcuts are installed' } },
   },
   {
     name: 'focus_start', title: 'Start a focus block', readonly: false, remote: 'allow',
-    description: 'Start a focus block (a pomodoro), optionally for one task. Walnut goes quiet until it ends, then a reminder offers the break. Refused while a block is already running.',
+    description: 'Start a focus block (a pomodoro), optionally for one task. Only when the person asked for one: Rhythm is off until they start it. Walnut goes quiet until it ends, then its break counts down, then Rhythm asks once whether to start the next block and stays off if nobody does. Refused while a block is already running.',
     properties: { taskId: TASK_ID, minutes: { ...MINUTES, description: 'Block length in minutes (default from settings, 1 to 180)' } },
   },
   {
     name: 'focus_stop', title: 'Stop the focus block', readonly: false, remote: 'allow',
-    description: 'Stop the running focus block or break and end the cycle. A stopped block is not counted as completed.',
+    description: 'Stop the running focus block or break and end the cycle; Rhythm is off after it. A stopped block is not counted as completed.',
   },
   {
-    name: 'break_done', title: 'Log a stand-up break', readonly: false, remote: 'allow',
-    description: 'Record that the person already stood up, with no timer. Answers the stand-up reminder and starts the sitting count over. To start the timed stand-up break instead, use break_start.',
-  },
-  {
-    name: 'break_snooze', title: 'Snooze the stand-up reminder', readonly: false, remote: 'allow',
-    description: 'Snooze the stand-up reminder. It comes back once the person has been at the keyboard for the snooze length.',
-    properties: { minutes: { ...MINUTES, description: 'Snooze length in minutes (default from settings, 1 to 240)' } },
-  },
-  {
-    name: 'break_start', title: 'Start the break', readonly: false, remote: 'allow',
-    description: 'Start a timed break. After a focus block it is the break the block earned (the long one every Nth block); otherwise it is the stand-up break (stand_break_minutes), which answers the stand-up reminder. The sitting count starts when the break ends.',
-  },
-  {
-    name: 'break_skip', title: 'Skip the break', readonly: false, remote: 'allow',
-    description: 'Skip the waiting break, or end the running one early (the sitting count starts now). The block cycle continues, so the long break still comes.',
+    name: 'break_skip', title: 'End the break', readonly: false, remote: 'allow',
+    description: 'End the running break early. Rhythm is off after it until the next Start; the block cycle continues, so the long break still comes.',
   },
   {
     name: 'music_tracks', title: 'List the focus music', readonly: true, remote: 'allow',
@@ -81,9 +69,6 @@ function handlers(runtime: RhythmRuntime): Record<string, Handler> {
     status: (args) => actions.status(runtime, args),
     focus_start: (args) => actions.focusStart(runtime, args),
     focus_stop: () => actions.focusStop(runtime),
-    break_done: () => actions.breakDone(runtime),
-    break_snooze: (args) => actions.breakSnooze(runtime, args),
-    break_start: () => actions.breakStart(runtime),
     break_skip: () => actions.breakSkip(runtime),
     music_tracks: () => actions.musicTracks(runtime),
     music_folder_open: () => actions.musicFolderOpen(runtime),
@@ -117,8 +102,9 @@ export function registerOps(walnut: WalnutServerApi, runtime: RhythmRuntime | nu
     }
     walnut.registry.op(definition)
   }
-  // Routine watchers take a tool list rather than calling ops.
-  for (const name of ['status', 'focus_start'] as const) {
+  // Routine watchers take a tool list rather than calling ops. Read-only on purpose: a
+  // routine fires on a schedule, and a run must never start without the person.
+  for (const name of ['status'] as const) {
     const spec = OP_SPECS.find((one) => one.name === name)!
     walnut.registry.tool({
       name,

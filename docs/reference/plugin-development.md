@@ -656,7 +656,7 @@ The other points cover session start, message send, turn start, tool use and res
 
 ### Reminders, quiet mode and presence
 
-A plugin that interrupts the human on a schedule (a stand-up nudge, a pomodoro, a hydration reminder) needs four things the API provides, and needs nothing from Walnut's core. The bundled `plugin-store/walnut-rhythm` is the worked example.
+A plugin that interrupts the human on a schedule (a stand-up nudge, a pomodoro, a hydration reminder) needs four things the API provides, and needs nothing from Walnut's core. The bundled `plugin-store/walnut-rhythm` is the worked example of points 2 to 4; it reads no presence, because it is off until the person starts a block.
 
 1. **Know when the human is there.** Subscribe to `time:banked` (attention the console or the phone just recorded, roughly once a minute while someone is present) and, when the user has turned on app sampling in the Time App, `time:outside` (attention in other Mac apps). Fold the records yourself: a gap longer than your threshold means the person was away.
 2. **Interrupt with a reminder, not a notice.** `notify({ kind: 'reminder' })` toasts for two minutes, chimes, raises a browser notification when the tab is hidden, and carries up to three buttons. Each button names one of YOUR ops by its local name; the host binds it to your plugin, so a click can never run someone else's op. Re-firing under the same `dedupKey` replaces the previous reminder, and `dismiss` retires it when it stops being true, so the feed never fills with stale copies.

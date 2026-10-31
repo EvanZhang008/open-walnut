@@ -7,7 +7,7 @@
  * The page lives in Settings, so it speaks Settings: a heading above a card, 44px
  * rows separated by hairlines, 14px labels with 12.5px help, and the same tokens the
  * Settings shell exports (`--settings-*`). The one thing that is Rhythm's own is the
- * instrument strip at the top: three dials and a thin meter of time at the keyboard.
+ * instrument strip at the top: three dials (off or running, the run, quiet).
  */
 export const RHYTHM_CSS = `
 .rhythm-root {
@@ -84,32 +84,6 @@ export const RHYTHM_CSS = `
   overflow-wrap: anywhere;
 }
 .rhythm-dial-text { font-size: 14px; line-height: 19px; font-weight: 500; padding-top: 5px; overflow-wrap: anywhere; }
-.rhythm-meter {
-  position: relative;
-  height: 4px;
-  border-radius: 2px;
-  background: color-mix(in srgb, var(--fg) 9%, transparent);
-  overflow: hidden;
-}
-.rhythm-meter-fill {
-  position: absolute;
-  top: 0; bottom: 0; left: 0;
-  border-radius: 2px;
-  background: var(--accent);
-  transition: width 0.6s ease;
-}
-.rhythm-now[data-phase="due"] .rhythm-meter-fill,
-.rhythm-now[data-phase="deferred"] .rhythm-meter-fill { background: var(--priority-important-text, #9e5300); }
-.rhythm-now[data-present="false"] .rhythm-meter-fill { background: var(--fg-muted); opacity: 0.5; }
-.rhythm-meter-note {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  color: var(--fg-muted);
-  font-size: 11.5px;
-  line-height: 15px;
-  font-variant-numeric: tabular-nums;
-}
 
 /* ── Buttons: the Settings button's size and shape ── */
 .rhythm-actions { display: flex; flex-wrap: wrap; gap: 8px; }

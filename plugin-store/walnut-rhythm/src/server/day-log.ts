@@ -2,10 +2,10 @@
  * One day's scorecard, stored as `days/<YYYY-MM-DD>.json` in the plugin's data
  * directory. PURE reducers; the runtime owns reading and writing the file.
  *
- * `breaksTaken` counts every time the person actually moved: Done (on a reminder or on
- * its own), a focus break started, or walking away (for the away threshold) while a reminder or a
- * finished block was still waiting for an answer. That last one matters: the reminder
- * worked even though nobody clicked it.
+ * It records only what happens inside a run the person started: blocks completed,
+ * blocks stopped early, breaks. The reminder and sitting counters are from an older
+ * version that counted keyboard time on its own; they are still read (an old day file
+ * keeps its numbers, and the day review reads them) but nothing adds to them now.
  */
 
 export interface FocusBlockEntry {
@@ -80,13 +80,7 @@ export function parseDay(raw: unknown, date: string): DayLog {
 export type DayChange =
   | { type: 'block'; entry: FocusBlockEntry }
   | { type: 'stopped' }
-  | { type: 'break' }
   | { type: 'focus-break' }
-  | { type: 'reminder-fired' }
-  | { type: 'reminder-done' }
-  | { type: 'reminder-snoozed' }
-  | { type: 'moved-without-click' }
-  | { type: 'streak'; ms: number }
 
 export function applyDay(day: DayLog, change: DayChange): DayLog {
   switch (change.type) {
@@ -97,12 +91,6 @@ export function applyDay(day: DayLog, change: DayChange): DayLog {
         focusMinutes: day.focusMinutes + change.entry.minutes,
       }
     case 'stopped': return { ...day, stoppedBlocks: day.stoppedBlocks + 1 }
-    case 'break': return { ...day, breaksTaken: day.breaksTaken + 1 }
     case 'focus-break': return { ...day, focusBreaks: day.focusBreaks + 1, breaksTaken: day.breaksTaken + 1 }
-    case 'reminder-fired': return { ...day, remindersFired: day.remindersFired + 1 }
-    case 'reminder-done': return { ...day, remindersDone: day.remindersDone + 1, breaksTaken: day.breaksTaken + 1 }
-    case 'reminder-snoozed': return { ...day, remindersSnoozed: day.remindersSnoozed + 1 }
-    case 'moved-without-click': return { ...day, movedWithoutClick: day.movedWithoutClick + 1, breaksTaken: day.breaksTaken + 1 }
-    case 'streak': return change.ms > day.longestStreakMs ? { ...day, longestStreakMs: change.ms } : day
   }
 }

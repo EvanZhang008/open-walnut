@@ -22,34 +22,36 @@ export function countdownText(ms: number): string {
   return h > 0 ? `${h}:${mm}:${String(s).padStart(2, '0')}` : `${mm}:${String(s).padStart(2, '0')}`
 }
 
+/** "09:05": 24-hour local time, the same clock the sidebar ring speaks. */
 export function clockText(epochMs: number): string {
-  return new Date(epochMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
-
-/** One line for "when is the next stand-up reminder". */
-export function nextReminderText(state: RhythmPublicState): string {
-  const { reminder, sitting } = state
-  switch (reminder.phase) {
-    case 'away': return 'Not at the keyboard'
-    case 'paused':
-      if (reminder.pausedBy === 'quiet_hours') return 'Paused: quiet hours'
-      if (reminder.pausedBy === 'focus') return 'Paused: focus block'
-      return 'Paused: quiet mode'
-    case 'deferred': return 'Due, waiting for the agent turn to finish'
-    case 'due': return 'Due now'
-    case 'snoozed':
-    case 'counting': {
-      if (reminder.dueAt === null || sitting.lastActiveAt === null) return 'Counting'
-      const left = Math.max(0, reminder.dueAt - sitting.lastActiveAt)
-      const prefix = reminder.phase === 'snoozed' ? 'Snoozed, back in' : 'In'
-      return `${prefix} ${minutesText(left)} at the keyboard`
-    }
-  }
+  const date = new Date(epochMs)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }
 
 export function focusPhaseText(phase: RhythmPublicState['focus']['phase'], breakKind?: 'short' | 'long' | 'stand'): string {
   if (phase === 'focus') return 'Focus'
-  if (phase === 'break') return breakKind === 'long' ? 'Long break' : breakKind === 'stand' ? 'Stand-up break' : 'Break'
-  if (phase === 'break_due') return 'Block done'
-  return 'Idle'
+  if (phase === 'break') return breakKind === 'long' ? 'Long break' : 'Break'
+  if (phase === 'break_due') return 'Break'
+  return 'Off'
+}
+
+/** "Started 10:05, ends 10:30" for the run in progress, "Last run 10:05 to 10:35" when off. */
+export function runText(focus: RhythmPublicState['focus']): string {
+  if ((focus.phase === 'focus' || focus.phase === 'break') && focus.endsAt !== null) {
+    const started = focus.runStartedAt ?? focus.startedAt
+    const what = focus.phase === 'focus' ? 'ends' : 'break ends'
+    return started !== null ? `Started ${clockText(started)}, ${what} ${clockText(focus.endsAt)}` : `${what} ${clockText(focus.endsAt)}`
+  }
+  if (focus.lastRun) return `Last run ${clockText(focus.lastRun.startedAt)} to ${clockText(focus.lastRun.endedAt)}`
+  return 'No run yet'
+}
+
+/** The dial's value under "This run" / "Last run": just the two times. */
+export function runSpanText(focus: RhythmPublicState['focus']): string {
+  if ((focus.phase === 'focus' || focus.phase === 'break') && focus.endsAt !== null) {
+    const started = focus.runStartedAt ?? focus.startedAt
+    return started !== null ? `${clockText(started)} to ${clockText(focus.endsAt)}` : `Until ${clockText(focus.endsAt)}`
+  }
+  if (focus.lastRun) return `${clockText(focus.lastRun.startedAt)} to ${clockText(focus.lastRun.endedAt)}`
+  return 'None yet'
 }

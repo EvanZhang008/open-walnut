@@ -1,6 +1,6 @@
 /**
  * What the App, the `status` op and the `state` event see. Built from the runtime
- * without changing it, so reading the status can never fire or defer a reminder.
+ * without changing it, so reading the status can never start or move anything.
  *
  * The web entry reads this type with `import type`, which the build erases, so the
  * browser bundle never pulls in server code.
@@ -10,40 +10,30 @@ import type { RhythmConfig } from './config'
 import type { DayLog } from './day-log'
 import type { BreakKind, FocusPhase, HoldSpec } from './focus'
 import type { MirrorView, ShortcutsView } from './macos-bridge'
-import { isPresent } from './presence'
 import type { RhythmRuntime } from './runtime'
-import type { ReminderView } from './scheduler'
 
 export interface RhythmPublicState {
   version: 1
   now: number
   replica: boolean
   config: RhythmConfig
-  sitting: {
-    present: boolean
-    sittingMs: number
-    streakStartedAt: number | null
-    lastActiveAt: number | null
-    /** When each signal last delivered attention, epoch ms. */
-    signals: { walnut: number | null; mac: number | null }
-  }
-  reminder: ReminderView & {
-    /** A reminder fired and nobody answered it yet (the phase has already moved on to the next count). */
-    outstanding: boolean
-    turnsInFlight: number
-    quietHours: { value: string; valid: boolean; inside: boolean }
-  }
   focus: {
+    /** `idle` is off: nothing runs and nothing counts until the person presses Start. */
     phase: FocusPhase
     taskId?: string
     title?: string
     minutes: number
+    /** The current phase's window (the block, or its break). */
     startedAt: number | null
     endsAt: number | null
     remainingMs: number
+    /** When the person pressed Start for the run in progress. */
+    runStartedAt: number | null
     completedInCycle: number
     longBreakEvery: number
     breakKind?: BreakKind
+    /** The last finished run (Start to the end of its break, or to Stop). */
+    lastRun: { startedAt: number; endedAt: number } | null
   }
   quiet: {
     active: boolean
@@ -59,28 +49,13 @@ export interface RhythmPublicState {
 }
 
 export function buildPublicState(runtime: RhythmRuntime, now: number): RhythmPublicState {
-  const { config, presence, focus } = runtime
-  const view = runtime.evaluate(now).view
-  const present = isPresent(presence, now, runtime.awayMs)
+  const { config, focus } = runtime
   const running = focus.phase !== 'idle' && focus.endsAt > 0
   return {
     version: 1,
     now,
     replica: false,
     config,
-    sitting: {
-      present,
-      sittingMs: view.sittingMs,
-      streakStartedAt: presence.streakStartedAt || null,
-      lastActiveAt: presence.lastActiveAt || null,
-      signals: { walnut: runtime.signals.walnut || null, mac: runtime.signals.mac || null },
-    },
-    reminder: {
-      ...view,
-      outstanding: runtime.reminder.outstanding,
-      turnsInFlight: runtime.turnsInFlight(now),
-      quietHours: { value: config.quietHours, valid: runtime.quietHoursValid, inside: runtime.inQuietHours(now) },
-    },
     focus: {
       phase: focus.phase,
       ...(focus.taskId ? { taskId: focus.taskId } : {}),
@@ -89,9 +64,13 @@ export function buildPublicState(runtime: RhythmRuntime, now: number): RhythmPub
       startedAt: running ? focus.startedAt : null,
       endsAt: running ? focus.endsAt : null,
       remainingMs: running ? Math.max(0, focus.endsAt - now) : 0,
+      runStartedAt: running ? focus.runStartedAt || focus.startedAt : null,
       completedInCycle: focus.completedInCycle,
       longBreakEvery: config.longBreakEvery,
       ...(focus.breakKind && focus.phase !== 'idle' && focus.phase !== 'focus' ? { breakKind: focus.breakKind } : {}),
+      lastRun: focus.lastRunStartedAt > 0 && focus.lastRunEndedAt >= focus.lastRunStartedAt
+        ? { startedAt: focus.lastRunStartedAt, endedAt: focus.lastRunEndedAt }
+        : null,
     },
     quiet: {
       active: runtime.quietState.active,

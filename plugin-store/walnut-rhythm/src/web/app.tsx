@@ -1,6 +1,6 @@
 /**
- * The Rhythm page: an instrument strip (sitting time, next reminder, quiet), the focus
- * block, today's scorecard, the focus music, the macOS rows, and the plugin's own settings, all on one
+ * The Rhythm page: an instrument strip (off or running, the run's times, quiet), the
+ * focus block, today's scorecard, the focus music, the macOS rows, and the plugin's own settings, all on one
  * page in Settings. This page IS the plugin, so its settings live here rather than in a
  * second card under Settings → Plugins (manifest `settingsIn: 'app'`).
  *
@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { AppProps, WalnutWebApi } from '@open-walnut/plugin-api/web'
 import { FocusCard } from './focus-card'
-import { clockText, minutesText, nextReminderText } from './format'
+import { clockText, focusPhaseText, minutesText, runSpanText } from './format'
 import { MacCard } from './mac-card'
 import { MusicCard } from './music-card'
 import type { MusicPlayer } from './music'
@@ -45,57 +45,34 @@ function quietText(state: RhythmPublicState): string {
 /** Runs one op and shows its answer; resolves whether it succeeded. */
 type RhythmAppRun = (localOp: string, args?: Record<string, unknown>) => Promise<boolean>
 
-/** Sitting time, next reminder and quiet as three dials over one meter of time at the keyboard. */
-function NowBlock({ state, run, busy }: { state: RhythmPublicState; run: RhythmAppRun; busy: boolean }) {
-  const { sitting, reminder, config } = state
-  const neverSeen = sitting.signals.walnut === null && sitting.signals.mac === null && sitting.lastActiveAt === null
-  const intervalMs = Math.max(1, config.reminderEveryMinutes) * MINUTE_MS
-  const fraction = sitting.present ? Math.min(1, sitting.sittingMs / intervalMs) : 0
+/** Whether Rhythm runs, the run's start and end, and quiet, as three dials. Nothing here counts on its own. */
+function NowBlock({ state }: { state: RhythmPublicState }) {
+  const { focus } = state
+  const on = focus.phase !== 'idle'
   return (
     <section className="rhythm-block" data-testid="rhythm-header-card">
       <div className="rhythm-block-head"><h2>Now</h2></div>
       <div className="rhythm-group">
-        <div className="rhythm-now" data-phase={reminder.phase} data-present={sitting.present ? 'true' : 'false'}>
+        <div className="rhythm-now" data-phase={focus.phase}>
           <div className="rhythm-dials">
             <div className="rhythm-dial">
-              <span className="rhythm-dial-label">Sitting</span>
-              <span className="rhythm-dial-value" data-testid="rhythm-streak">{sitting.present ? minutesText(sitting.sittingMs) : 'Away'}</span>
+              <span className="rhythm-dial-label">Rhythm</span>
+              <span className="rhythm-dial-value" data-testid="rhythm-on">{on ? focusPhaseText(focus.phase, focus.breakKind) : 'Off'}</span>
             </div>
             <div className="rhythm-dial">
-              <span className="rhythm-dial-label">Next stand-up</span>
-              <span className="rhythm-dial-text" data-testid="rhythm-next" data-phase={reminder.phase}>{nextReminderText(state)}</span>
+              <span className="rhythm-dial-label">{on ? 'This run' : 'Last run'}</span>
+              <span className="rhythm-dial-text" data-testid="rhythm-run">{runSpanText(focus)}</span>
             </div>
             <div className="rhythm-dial">
               <span className="rhythm-dial-label">Quiet</span>
               <span className="rhythm-dial-text" data-testid="rhythm-quiet">{quietText(state)}</span>
             </div>
           </div>
-          <div>
-            <div className="rhythm-meter" role="progressbar" aria-label="Time at the keyboard toward the next stand-up" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(fraction * 100)}>
-              <span className="rhythm-meter-fill" data-testid="rhythm-meter-fill" style={{ width: `${fraction * 100}%` }} />
-            </div>
-            <div className="rhythm-meter-note">
-              <span>{sitting.present ? 'At the keyboard' : 'Away from the keyboard'}</span>
-              <span>Stand up at {config.reminderEveryMinutes} min</span>
-            </div>
-          </div>
-          {neverSeen && (
-            <p className="rhythm-muted" data-testid="rhythm-no-signal">
-              No keyboard time seen yet. Rhythm counts time you spend in Walnut, and time in any Mac app when Time's app tracking is on.
+          {!on && (
+            <p className="rhythm-muted" data-testid="rhythm-off-note">
+              Rhythm is off. It starts only when you press Start, runs the block and its break, then asks before the next one.
             </p>
           )}
-          {!reminder.quietHours.valid && (
-            <p className="rhythm-error">Quiet hours "{reminder.quietHours.value}" is not HH:MM-HH:MM, so it is off.</p>
-          )}
-          <div className="rhythm-actions">
-            {/* Starts the stand-up break timer (the ring counts it down); a running block or break owns the next break. */}
-            <button type="button" className="rhythm-button" disabled={busy || state.focus.phase !== 'idle'} data-testid="rhythm-stand-now" onClick={() => { void run('break_start') }}>
-              Stand up now ({config.standBreakMinutes} min)
-            </button>
-            <button type="button" className="rhythm-button" disabled={busy || !sitting.present} data-testid="rhythm-break-snooze" onClick={() => { void run('break_snooze') }}>
-              Snooze {config.snoozeMinutes} min
-            </button>
-          </div>
         </div>
       </div>
     </section>
@@ -107,8 +84,8 @@ function ScoreCard({ state }: { state: RhythmPublicState }) {
   const items: Array<[string, string, string]> = [
     ['focus-minutes', 'Focus', minutesText(today.focusMinutes * MINUTE_MS)],
     ['blocks', 'Blocks', String(today.focusBlocks.length)],
-    ['breaks', 'Breaks / reminders', `${today.breaksTaken} / ${today.remindersFired}`],
-    ['longest', 'Longest sitting', minutesText(today.longestStreakMs)],
+    ['breaks', 'Breaks', String(today.focusBreaks)],
+    ['stopped', 'Stopped early', String(today.stoppedBlocks)],
   ]
   return (
     <section className="rhythm-block" data-testid="rhythm-score-card">
@@ -122,9 +99,6 @@ function ScoreCard({ state }: { state: RhythmPublicState }) {
             </div>
           ))}
         </div>
-        {today.remindersSnoozed > 0 && (
-          <p className="rhythm-muted rhythm-stat-note">Snoozed {today.remindersSnoozed === 1 ? 'once' : `${today.remindersSnoozed} times`} today.</p>
-        )}
       </div>
     </section>
   )
@@ -137,7 +111,7 @@ function SettingsBlock({ walnut, navigate }: { walnut: WalnutWebApi; navigate: A
     <section className="rhythm-block rhythm-settings" data-testid="rhythm-settings-block">
       <div className="rhythm-block-head">
         <h2>Settings</h2>
-        <span className="rhythm-muted">Reminder, focus and quiet, saved for this Mac.</span>
+        <span className="rhythm-muted">Block and break lengths, quiet and music, saved for this Mac.</span>
       </div>
       {SettingsView ? (
         <SettingsView />
@@ -221,12 +195,12 @@ export function RhythmApp({ walnut, store, music, navigate }: RhythmAppProps) {
     <div className="rhythm-root" data-testid="rhythm-app">
       <header>
         <h1>Rhythm</h1>
-        <p className="rhythm-lede">A stand-up reminder that counts only time at the keyboard, focus blocks tied to a task, and quiet while you focus.</p>
+        <p className="rhythm-lede">Focus blocks you start yourself, a break after each, and quiet while you focus. Rhythm is off until you press Start.</p>
         {message && (
           <p className={message.ok ? 'rhythm-status' : 'rhythm-error'} role="status" data-testid="rhythm-message" style={{ marginTop: 8 }}>{message.text}</p>
         )}
       </header>
-      <NowBlock state={state} run={run} busy={busy} />
+      <NowBlock state={state} />
       <div className="rhythm-two">
         <FocusCard walnut={walnut} store={store} state={state} run={run} busy={busy} music={music} />
         <ScoreCard state={state} />

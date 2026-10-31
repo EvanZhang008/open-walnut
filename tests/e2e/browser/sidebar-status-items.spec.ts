@@ -22,10 +22,10 @@ import { type Page } from '@playwright/test'
  *   5. Its footer opens the plugin's App (SPA navigation).
  *   6. Disabling the plugin takes the item away live, a reload brings it back, and a
  *      page reload shows what is live now (the first GET).
- *   7. Rhythm, the real plugin: starting a focus block draws its blue ring, and its
- *      Stop block button ends the block.
- *   8. Rhythm's Stand up now starts the stand-up break (a green countdown), not a new
- *      sitting round; End break starts the sitting count again.
+ *   7. Rhythm, the real plugin: off, its ring's one Start begins a focus block (a blue
+ *      ring that names when it started and ends), and Stop block turns it off again.
+ *   8. Rhythm never starts on its own: keyboard time banked for 90 minutes and a page
+ *      reload leave the ring at "Rhythm is off", with no countdown.
  *   9. A notice (toast) button closes its toast at once, before a slow op answers; a
  *      failing one answers in its own error toast.
  *
@@ -331,73 +331,68 @@ test('the footer opens the plugin App, and the item follows disable, reload and 
   await expect(item(page)).toHaveAttribute('aria-label', 'Survives a page reload', { timeout: 60_000 })
 })
 
-test('Rhythm: a focus block draws the blue ring, and Stop block ends it', async ({ page }) => {
+test('Rhythm: the off ring\'s Start begins a focus block, and Stop block turns it off again', async ({ page }) => {
   await page.goto(`${base()}/`)
   await expect(page.locator('.sidebar')).toBeVisible({ timeout: 60_000 })
   await setCollapsed(page, true)
   await probe(page, 'hide')
-  const started = await page.request.post(`${base()}/api/plugin-runtime/walnut-rhythm/ops/walnut_rhythm_focus_start`, { data: { minutes: 25 } })
-  const startedText = await started.text()
-  expect(started.ok() && (JSON.parse(startedText) as { ok?: unknown }).ok === true, startedText).toBe(true)
-
-  const endsAt = (JSON.parse(startedText) as { result: { state: { focus: { endsAt: number } } } }).result.state.focus.endsAt
   const rhythm = item(page, 'walnut-rhythm:rhythm')
+  await expect(rhythm).toHaveAttribute('aria-label', 'Rhythm is off', { timeout: 30_000 })
+  await rhythm.click()
+  await expect(popover(page).locator('.status-item-btn')).toHaveText(['Start focus block (25 min)'])
+  await shootRail(page, '05-rhythm-off')
+
+  await popover(page).getByRole('button', { name: 'Start focus block (25 min)' }).click()
+  await expect(popover(page)).toHaveCount(0)
   await expect(rhythm).toHaveAttribute('data-tone', 'accent', { timeout: 30_000 })
+  const status = await page.request.post(`${base()}/api/plugin-runtime/walnut-rhythm/ops/walnut_rhythm_status`, { data: {} })
+  const endsAt = ((await status.json()) as { result: { focus: { endsAt: number } } }).result.focus.endsAt
   await expect.poll(async () => (await rhythm.getAttribute('aria-label')) === `Focus · ${minutesLeft(endsAt)} min left`).toBe(true)
   await expect.poll(async () => (await rhythm.locator('svg text').textContent()) === String(minutesLeft(endsAt))).toBe(true)
   await rhythm.click()
-  await expect(popover(page).locator('.status-item-popover-detail')).toHaveText('Walnut is quiet until it ends.')
+  await expect(popover(page).locator('.status-item-popover-detail')).toHaveText(/^Started \d\d:\d\d, ends \d\d:\d\d\. Walnut is quiet until it ends\.$/)
   await expect(popover(page).locator('.status-item-btn')).toHaveText(['Stop block'])
   await expect(popover(page).getByRole('button', { name: 'Open Rhythm' })).toBeVisible()
-  await shootRail(page, '05-rhythm-focus')
+  await shootRail(page, '06-rhythm-focus')
 
   await popover(page).getByRole('button', { name: 'Stop block' }).click()
   await expect(popover(page)).toHaveCount(0)
-  // Stopped: no block runs, so the ring is either gone or back to the grey stand-up count.
-  await expect(page.locator('.sidebar-status-item[data-status-key="walnut-rhythm:rhythm"][data-tone="accent"]')).toHaveCount(0)
-  const status = await page.request.post(`${base()}/api/plugin-runtime/walnut-rhythm/ops/walnut_rhythm_status`, { data: {} })
-  const body = await status.json() as { ok: boolean; result: { focus: { phase: string } } }
-  expect(body.result.focus.phase).toBe('idle')
+  await expect(rhythm).toHaveAttribute('aria-label', 'Rhythm is off')
+  await rhythm.click()
+  await expect(popover(page).locator('.status-item-popover-detail')).toHaveText(/^Last run \d\d:\d\d to \d\d:\d\d\. Nothing runs until you start a block\.$/)
+  await expect(popover(page).locator('.status-item-btn')).toHaveText(['Start focus block (25 min)'])
+  await page.keyboard.press('Escape')
+  const after = await page.request.post(`${base()}/api/plugin-runtime/walnut-rhythm/ops/walnut_rhythm_status`, { data: {} })
+  expect(((await after.json()) as { result: { focus: { phase: string } } }).result.focus.phase).toBe('idle')
 })
 
-test('Rhythm: Stand up now starts the stand-up break countdown, and End break starts the count again', async ({ page }) => {
+test('Rhythm never starts on its own: keyboard time and a reload leave it off, with no countdown', async ({ page }) => {
   await page.goto(`${base()}/`)
   await expect(page.locator('.sidebar')).toBeVisible({ timeout: 60_000 })
   await setCollapsed(page, true)
   await probe(page, 'hide')
-  // Three minutes at the keyboard, banked the way the console's own heartbeat banks it.
+  // Ninety minutes at the keyboard, banked the way the console's own heartbeat banks it:
+  // the old stand-up reminder counted exactly this.
   const now = Date.now()
   const banked = await page.request.post(`${base()}/api/time/heartbeats`, {
-    data: { samples: [{ ts: new Date(now - 3 * 60_000).toISOString(), durationMs: 3 * 60_000, kind: 'triage' }] },
+    data: { samples: [{ ts: new Date(now - 90 * 60_000).toISOString(), durationMs: 90 * 60_000, kind: 'triage' }] },
   })
   expect(banked.status()).toBe(204)
-
   const rhythm = item(page, 'walnut-rhythm:rhythm')
-  await expect(rhythm).toHaveAttribute('data-tone', 'neutral', { timeout: 30_000 })
-  await expect(rhythm).toHaveAttribute('aria-label', /^Stand up in \d+ min$/)
-  await rhythm.click()
-  await expect(popover(page).locator('.status-item-btn')).toHaveText(['Stand up now', 'Start focus block'])
-  await shootRail(page, '06-rhythm-counting')
-
-  // The user's report: this button must start a timer to stand up for, not a new round.
-  await popover(page).getByRole('button', { name: 'Stand up now' }).click()
-  await expect(popover(page)).toHaveCount(0)
-  await expect(rhythm).toHaveAttribute('data-tone', 'success')
-  await expect.poll(async () => rhythm.getAttribute('aria-label')).toMatch(/^Break · (10|9) min left$/)
-  await expect(rhythm.locator('svg text')).toHaveText(/^(10|9)$/)
-  await rhythm.click()
-  await expect(popover(page).locator('.status-item-popover-detail')).toHaveText('Walk, stretch, look away from the screen. The sitting count starts when it ends.')
-  await expect(popover(page).locator('.status-item-btn')).toHaveText(['End break'])
-  await shootRail(page, '07-rhythm-stand-break')
-
-  await popover(page).getByRole('button', { name: 'End break' }).click()
-  await expect(popover(page)).toHaveCount(0)
-  await expect(rhythm).toHaveAttribute('data-tone', 'neutral')
-  await expect(rhythm).toHaveAttribute('aria-label', 'Stand up in 1 h')
-  const status = await page.request.post(`${base()}/api/plugin-runtime/walnut-rhythm/ops/walnut_rhythm_status`, { data: {} })
-  const body = await status.json() as { ok: boolean; result: { focus: { phase: string }; today: { breaksTaken: number } } }
-  expect(body.result.focus.phase).toBe('idle')
-  expect(body.result.today.breaksTaken).toBeGreaterThanOrEqual(1)
+  for (let round = 0; round < 2; round++) {
+    await expect(rhythm).toHaveAttribute('aria-label', 'Rhythm is off', { timeout: 30_000 })
+    await expect(rhythm).toHaveAttribute('data-tone', 'neutral')
+    // The pause glyph, never a number of minutes.
+    await expect(rhythm.locator('svg text')).toHaveCount(0)
+    await rhythm.click()
+    await expect(popover(page).locator('.status-item-btn')).toHaveText(['Start focus block (25 min)'])
+    if (round === 0) await shootRail(page, '07-rhythm-off-after-keyboard-time')
+    await page.keyboard.press('Escape')
+    const status = await page.request.post(`${base()}/api/plugin-runtime/walnut-rhythm/ops/walnut_rhythm_status`, { data: {} })
+    expect(((await status.json()) as { result: { focus: { phase: string } } }).result.focus.phase).toBe('idle')
+    await page.reload()
+    await expect(page.locator('.sidebar')).toBeVisible({ timeout: 60_000 })
+  }
 })
 
 test('a notice button closes its toast at once and runs the op after; a failure answers in its own toast', async ({ page }) => {
