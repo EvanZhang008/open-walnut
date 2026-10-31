@@ -11,6 +11,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
+import fs from 'node:fs'
 import path from 'node:path'
 
 const ROOT = path.resolve(__dirname, '../../..')
@@ -24,14 +25,16 @@ const NOT_A_LAUNCH: Record<string, string> = {
   'src/ops/work.ts': 'validates a project_metadata_update body',
 }
 
-const PATTERN = String.raw`\??\.default_cwd\b|\brecordedCwd\(|\brecordedPlace\(|\bcwd\s*=\s*current\.cwd\b`
+const PATTERN = /\??\.default_cwd\b|\brecordedCwd\(|\brecordedPlace\(|\bcwd\s*=\s*current\.cwd\b/
 
+// Matched here, not with `git grep -E`: macOS's git takes its ERE from the system regex
+// library, which has no \b or \s, so the grep found nothing, exited 1 and threw on the Mac.
 function matches(): Array<{ file: string; line: number; text: string }> {
-  const out = execFileSync('git', ['grep', '-nE', PATTERN, '--', 'src/*.ts', 'src/**/*.ts'], { cwd: ROOT }).toString('utf8')
-  return out.split('\n').filter(Boolean).map((l) => {
-    const m = /^([^:]+):(\d+):(.*)$/.exec(l)!
-    return { file: m[1], line: Number(m[2]), text: m[3] }
-  }).filter((m) => !/^\s*(\*|\/\/)/.test(m.text))
+  const files = execFileSync('git', ['ls-files', '--', 'src/*.ts', 'src/**/*.ts'], { cwd: ROOT }).toString('utf8').split('\n').filter(Boolean)
+  return files.flatMap((file) => fs.readFileSync(path.join(ROOT, file), 'utf8').split('\n')
+    .map((text, i) => ({ file, line: i + 1, text }))
+    .filter((m) => PATTERN.test(m.text)))
+    .filter((m) => !/^\s*(\*|\/\/)/.test(m.text))
 }
 
 describe('launch folders from the record go through launch-place.ts', () => {

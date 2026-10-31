@@ -162,6 +162,24 @@ export function scanTestForMacOnlySpawns(file: string, content: string): Violati
   return out
 }
 
+/** A `git grep -E` pattern of a test that uses `\b`, `\s`, `\w` or `\d`, resolving a
+ *  pattern held in a `const` of the same file. macOS's git takes its ERE from the
+ *  system regex library, which has none of them, so the grep matches nothing there
+ *  (2026-10-31: launch-place-ratchet threw on the Mac and passed on Linux). */
+export function scanTestForGnuOnlyGitGrep(file: string, text: string): Violation[] {
+  const consts = new Map<string, string>()
+  for (const m of text.matchAll(/\bconst (\w+)\s*=\s*(?:String\.raw)?(['"`])((?:\\.|(?!\2).)*)\2/g)) consts.set(m[1]!, m[3]!)
+  const out: Violation[] = []
+  text.split('\n').forEach((line, i) => {
+    const m = line.match(/\[\s*'grep'\s*,\s*'-[a-zA-Z]*E[a-zA-Z]*'\s*,\s*(?:(['"`])((?:\\.|(?!\1).)*)\1|(\w+))/)
+    if (!m) return
+    const pattern = m[2] ?? consts.get(m[3] ?? '') ?? ''
+    const needle = pattern.match(/\\{1,2}[bBsSwWd]/)?.[0]
+    if (needle) out.push({ file, line: i + 1, needle, text: line.trim() })
+  })
+  return out
+}
+
 function testFiles(dir: string): string[] {
   return fs.readdirSync(path.join(REPO, dir), { withFileTypes: true }).flatMap((e) => {
     const rel = path.join(dir, e.name)
@@ -264,5 +282,22 @@ describe('cross-platform ratchet', () => {
     expect(scanTestForMacOnlySpawns('tests/x.test.ts', `it('x', () => {\n  ${call}\n})`)).toHaveLength(1)
     expect(scanTestForMacOnlySpawns('tests/x.test.ts', `if (process.platform === 'darwin') {\n  ${call}\n}`)).toEqual([])
     expect(scanTestForMacOnlySpawns('tests/x.test.ts', `describe.skipIf(!isMac)('x', () => {\n  ${call}\n})`)).toEqual([])
+  })
+
+  it('no test hands `git grep -E` a GNU-only escape (macOS git has no \\b, \\s, \\w or \\d)', () => {
+    const violations = testFiles('tests').flatMap((file) =>
+      scanTestForGnuOnlyGitGrep(file, fs.readFileSync(path.join(REPO, file), 'utf-8')),
+    )
+    const report = violations.map((v) => `${v.file}:${v.line}  ${v.needle}  →  ${v.text}`).join('\n')
+    expect(violations, `GNU-only escape in a git grep -E pattern:\n${report}\n\nUse POSIX classes ([[:space:]]) or match the lines in JS.`).toEqual([])
+  })
+
+  it('the git grep scan catches a literal and a const pattern, and accepts a POSIX one', () => {
+    const q = String.fromCharCode(92, 92)
+    expect(scanTestForGnuOnlyGitGrep('t.ts', `x(['grep', '-nE', 'a${q}bb', '--'])`)).toHaveLength(1)
+    expect(scanTestForGnuOnlyGitGrep('t.ts', `const P = 'a${q}s+b'\nx(['grep', '-nE', P, '--'])`)).toHaveLength(1)
+    const raw = ['const R = String', '.raw`a', String.fromCharCode(92), 'bb`', "\nx(['grep', '-nE', R])"].join('')
+    expect(scanTestForGnuOnlyGitGrep('t.ts', raw)).toHaveLength(1)
+    expect(scanTestForGnuOnlyGitGrep('t.ts', `x(['grep', '-nE', 'a[[:space:]]+b', '--'])`)).toEqual([])
   })
 })
