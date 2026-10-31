@@ -82,6 +82,7 @@ export const ROUTE_TABLE: readonly RouteRow[] = [
   { method: 'GET', pattern: '/api/v1/hosts', away: 'needs-leader', why: 'fleet_needs_mac' },
   { method: 'GET', pattern: '/api/v1/hosts/pick', away: 'needs-leader', why: 'fleet_needs_mac' },
   { method: 'GET', pattern: '/api/v1/hosts/:host', away: 'needs-leader', why: 'fleet_needs_mac' },
+  { method: 'POST', pattern: '/api/v1/hosts/:host/boot-start', away: 'needs-leader', why: 'fleet_needs_mac' },
   // A command on another host runs through the Mac's links, under grants the Mac keeps.
   { method: 'POST', pattern: '/api/v1/hosts/:host/exec', away: 'needs-leader', why: 'host_exec_needs_mac' },
   { method: 'GET', pattern: '/api/v1/hosts/:host/exec/:jobId', away: 'needs-leader', why: 'host_exec_needs_mac' },

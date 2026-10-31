@@ -1,75 +1,231 @@
 /*
- * Settings › Remote Hosts › Overview (HostFleetGroup.tsx): one host per block,
- * laid in the group the way Settings rows are (no box of its own: no border, no
- * fill), with the rows' inset hairline between hosts (settings-rows.css).
- * Existing theme variables only; color is never the only signal (each day cell
- * has a title, each warning row says it in words).
+ * Settings › Remote Hosts › Overview (HostFleetGroup.tsx, HostFleetCard.tsx,
+ * HostFleetTopology.tsx): a summary strip, the diagram, a grid of host cards and
+ * the hosts not connected. It sits in the section beside the groups, never in
+ * one, and each surface wears the group's own look (fill, border, radius), so
+ * nothing is a card inside a card. Theme variables only; colour is never the
+ * only signal (every gauge, segment and node says it in words or a title).
  */
-.hf-grid {
+.hf-dash { margin: 0 0 22px; min-width: 0; }
+.hf-dash-head {
   display: flex;
-  flex-direction: column;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 6px;
+  padding: 0 calc(var(--settings-row-pad-x) + 1px);
 }
-.hf-card {
-  position: relative;
-  padding: 12px var(--settings-row-pad-x);
+.hf-dash-title { margin: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: var(--fg-secondary); }
+.hf-dash-updated { font-size: 12px; color: var(--settings-help-fg); font-variant-numeric: tabular-nums; }
+
+/* The surfaces: the group's look. */
+.hf-stat, .hf-panel, .hf-card {
+  box-sizing: border-box;
+  background: var(--settings-group-bg);
+  border: 1px solid var(--settings-group-border);
+  border-radius: 10px;
   color: var(--fg);
   min-width: 0;
+}
+
+.hf-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 10px;
+}
+.hf-stat { padding: 10px 14px; display: flex; flex-direction: column; gap: 2px; }
+.hf-stat-value { font-size: 22px; line-height: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.hf-stat-label { font-size: 12px; color: var(--settings-help-fg); display: flex; align-items: center; gap: 6px; }
+.hf-stat[data-tone] .hf-stat-label::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+}
+.hf-stat[data-tone="good"] .hf-stat-label::before { background: var(--success); }
+.hf-stat[data-tone="warn"] .hf-stat-label::before { background: var(--warning); }
+
+.hf-panel { margin-top: 10px; padding: 8px 10px; }
+
+/* The diagram. */
+.hf-topo { display: block; height: auto; overflow: visible; }
+.hf-topo-node { cursor: pointer; outline: none; --hf-c: var(--success); }
+.hf-topo-node[data-kind="warn"] { --hf-c: var(--warning); }
+.hf-topo-node[data-kind="failed"] { --hf-c: var(--error); }
+.hf-topo-node[data-kind="off"] { --hf-c: var(--fg-muted); }
+.hf-topo-box {
+  fill: color-mix(in srgb, var(--hf-c) 9%, var(--settings-group-bg));
+  stroke: var(--hf-c);
+  stroke-width: 1.4;
+}
+.hf-topo-node[data-live="false"] .hf-topo-box { fill: var(--settings-group-bg); stroke-dasharray: 5 4; }
+.hf-topo-node:focus-visible .hf-topo-box, .hf-topo-node:hover .hf-topo-box { stroke-width: 2.4; }
+.hf-topo-dot { fill: var(--hf-c); }
+.hf-topo-node[data-live="false"] .hf-topo-dot { fill: none; stroke: var(--fg-muted); stroke-width: 1.4; }
+.hf-topo-name { font-size: 12.5px; font-weight: 600; fill: var(--fg); }
+.hf-topo-sub { font-size: 11px; fill: var(--settings-help-fg); }
+.hf-topo-node[data-live="false"] .hf-topo-name { fill: var(--settings-help-fg); }
+.hf-topo-mark rect { fill: var(--accent-subtle); }
+.hf-topo-mark text { font-size: 10px; font-weight: 600; fill: var(--accent-text); }
+.hf-topo-link { --hf-c: var(--success); fill: none; stroke: var(--hf-c); stroke-width: 1.8; }
+.hf-topo-link[data-kind="warn"] { --hf-c: var(--warning); }
+.hf-topo-link[data-kind="failed"], .hf-topo-link[data-kind="off"] { --hf-c: var(--fg-muted); }
+.hf-topo-link[data-live="false"] { stroke-dasharray: 5 5; opacity: 0.75; }
+.hf-topo-label { font-size: 10.5px; fill: var(--settings-help-fg); font-variant-numeric: tabular-nums; }
+
+/* The host cards. */
+.hf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(264px, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+.hf-card {
+  padding: 12px 14px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
+  outline: none;
 }
-.hf-card + .hf-card::before {
-  content: '';
+.hf-card:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+.hf-card-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.hf-card-head .sps-host-dot { width: 8px; height: 8px; flex: none; }
+.hf-card-name { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.hf-roles { margin-left: auto; display: flex; gap: 4px; flex: none; }
+.hf-card-sys { margin: -6px 0 0; font-size: 12px; color: var(--settings-help-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.hf-chip {
+  display: inline-block;
+  font-size: 11px;
+  line-height: 16px;
+  padding: 0 7px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  color: var(--fg-secondary);
+  white-space: nowrap;
+}
+.hf-chip[data-tone="muted"] { color: var(--settings-help-fg); border-style: dashed; }
+.hf-roles .hf-chip { border-color: transparent; background: var(--accent-subtle); color: var(--accent-text); font-weight: 600; }
+.hf-caps { display: flex; flex-wrap: wrap; gap: 4px; }
+
+.hf-vitals { display: flex; align-items: center; gap: 14px; }
+.hf-gauge { position: relative; width: 52px; display: flex; flex-direction: column; align-items: center; --hf-c: var(--success); }
+.hf-gauge[data-tone="warn"] { --hf-c: var(--warning); }
+.hf-gauge[data-tone="bad"] { --hf-c: var(--error); }
+.hf-gauge svg { display: block; }
+.hf-gauge-track { fill: none; stroke: var(--border); stroke-width: 5; }
+.hf-gauge-fill { fill: none; stroke: var(--hf-c); stroke-width: 5; stroke-linecap: round; }
+.hf-gauge-value {
   position: absolute;
   top: 0;
-  left: var(--settings-row-pad-x);
-  right: 0;
-  height: 1px;
-  background: var(--settings-hairline);
-  pointer-events: none;
+  left: 0;
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
-.hf-card-head {
+.hf-gauge-label, .hf-big-label { font-size: 11.5px; color: var(--settings-help-fg); white-space: nowrap; }
+.hf-disk { margin-left: auto; display: flex; flex-direction: column; align-items: flex-end; }
+.hf-disk[data-low="true"] .hf-big { color: var(--settings-error-text); }
+.hf-big { font-size: 20px; line-height: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.hf-timeline {
+  position: relative;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--border);
+  overflow: hidden;
+}
+.hf-timeline i { position: absolute; top: 0; bottom: 0; }
+/* A drop of a few minutes is still a visible sliver, drawn over the runs beside it. */
+.hf-timeline i[data-tone="warn"], .hf-timeline i[data-tone="bad"] { min-width: 2px; z-index: 1; }
+.hf-timeline i[data-tone="good"] { background: var(--success); }
+.hf-timeline i[data-tone="warn"] { background: var(--warning); }
+.hf-timeline i[data-tone="bad"] { background: var(--error); }
+.hf-timeline-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 3px;
+  font-size: 10.5px;
+  color: var(--settings-help-fg);
+}
+
+.hf-numbers { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.hf-numbers > div { display: flex; flex-direction: column; min-width: 0; }
+
+.hf-problem {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 0;
-}
-.hf-card-head .sps-host-dot { width: 8px; height: 8px; flex: none; }
-.hf-card-name {
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.hf-tag {
-  font-size: 11px;
-  padding: 0 6px;
+  min-height: 28px;
+  padding: 4px 4px 4px 10px;
   border-radius: 8px;
-  border: 1px solid var(--border);
-  color: var(--fg-muted);
-  flex: none;
+  font-size: 12.5px;
+  --hf-c: var(--warning);
+  background: color-mix(in srgb, var(--hf-c) 12%, var(--settings-group-bg));
 }
-.hf-rows { margin: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
-.hf-row { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 8px; }
-.hf-row dt { color: var(--fg-muted); margin: 0; }
+.hf-problem[data-tone="bad"] { --hf-c: var(--error); }
+.hf-problem[data-tone="muted"] { --hf-c: var(--fg-muted); }
+.hf-problem-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 17px;
+}
+.hf-problem .settings-button { flex: none; }
+.hf-action-error { margin: -4px 0 0; font-size: 12px; color: var(--settings-error-text); }
+.hf-action-note { margin: -4px 0 0; font-size: 12px; color: var(--settings-help-fg); }
+
+.hf-card-foot { display: flex; margin-top: -4px; }
+.hf-link {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--accent-text);
+  cursor: pointer;
+}
+.hf-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+.hf-details { border-top: 1px solid var(--settings-hairline); padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.hf-rows { margin: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.hf-row { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px; }
+.hf-row dt { color: var(--settings-help-fg); margin: 0; }
 .hf-row dd { margin: 0; overflow-wrap: anywhere; }
-.hf-row[data-tone="muted"] dd { color: var(--fg-muted); }
-.hf-row[data-tone="good"] dd { color: var(--success); }
-.hf-row[data-tone="warn"] dd { color: var(--warning); }
-.hf-row[data-tone="bad"] dd { color: var(--error); }
-.hf-days { display: flex; gap: 2px; margin-top: 2px; max-width: 360px; }
-.hf-days i {
-  flex: 1 1 0;
-  max-width: 10px;
-  height: 12px;
-  border-radius: 2px;
-  background: var(--border);
-}
+.hf-row[data-tone="muted"] dd { color: var(--settings-help-fg); }
+.hf-row[data-tone="warn"] dd, .hf-row[data-tone="bad"] dd { color: var(--settings-error-text); }
+.hf-days { display: flex; gap: 2px; max-width: 360px; }
+.hf-days i { flex: 1 1 0; max-width: 10px; height: 12px; border-radius: 2px; background: var(--border); }
 .hf-days i[data-tone="good"] { background: var(--success); }
 .hf-days i[data-tone="warn"] { background: var(--warning); }
 .hf-days i[data-tone="bad"] { background: var(--error); }
-.hf-fit { margin: 2px 0 0; font-size: 12px; color: var(--fg-muted); }
-.hf-fit[data-ok="false"] { color: var(--warning); }
+.hf-fit { margin: 0; font-size: 12px; color: var(--settings-help-fg); }
 .hf-fit code { font-size: 11.5px; }
+
+/* The hosts not connected: one line each. */
+.hf-off-list { padding: 4px 14px; }
+.hf-off-head { margin: 6px 0 2px; font-size: 12px; font-weight: 600; color: var(--settings-help-fg); }
+.hf-off { padding: 6px 0; outline: none; }
+.hf-off + .hf-off { border-top: 1px solid var(--settings-hairline); }
+.hf-off:focus-visible { box-shadow: 0 0 0 2px var(--accent); border-radius: 6px; }
+.hf-off-line { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 28px; }
+.hf-off-line .sps-host-dot { width: 8px; height: 8px; flex: none; }
+.hf-off-name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 0 1 auto; max-width: 45%; }
+.hf-off-why { font-size: 12px; color: var(--settings-help-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 1 0; }
+.hf-off .hf-details { margin: 6px 0 2px 18px; }
+
+/* Shared with other Remote Hosts groups (SecretsGroup, HostExecGrantsGroup): kept as it was. */
 .hf-error, .hf-loading { margin: 8px var(--settings-row-pad-x); font-size: 12.5px; color: var(--fg-muted); }
 .hf-error { color: var(--warning); }
+.hf-dash .hf-error, .hf-dash .hf-loading { margin: 0 0 8px; padding: 0 calc(var(--settings-row-pad-x) + 1px); color: var(--settings-help-fg); }
+.hf-dash .hf-error { color: var(--settings-error-text); }

@@ -198,6 +198,21 @@ describe('boot start keeper', () => {
     expect(l.keeper.state?.setup?.error).toMatch(/^Walnut could not set it up: this account cannot start the daemon at boot without root/)
   })
 
+  it('says what a check now could do, for the Overview\'s button', async () => {
+    const next = async (options: LabOptions) => { const l = start(options); await l.keeper.check(); const n = l.keeper.state?.next ?? null; l.keeper.stop(); return n }
+    expect(await next({ facts: CRON_BOOT })).toBeNull() // starts at boot already
+    expect(await next({ facts: LOGIN_UNIT })).toBe('recheck') // only a change on the host fixes it
+    expect(await next({ facts: BLOCKED })).toBe('recheck') // an administrator can enable linger, then a check finishes it
+    expect(await next({ facts: { ...BLOCKED, platform: 'Darwin' } })).toBeNull()
+    expect(await next({ off: 'automatic host fixes are off for this host' })).toBeNull()
+    expect(await next({ expected: null })).toBeNull()
+    expect(await next({ capable: false })).toBeNull()
+    expect(await next({ facts: { ...PLAIN, attempt: `v=${VERSION} at=${NOW - HOUR} result=failed` } })).toBeNull() // within its hold
+    expect(await next({ hold: ['a session turn is running'] })).toBe('install')
+    expect(await next({ after: CRON_BOOT })).toBeNull() // set up now
+    expect(await next({ install: '{"ok":false,"failure":{"code":"x","message":"no","rollback":"nothing was changed"}}' })).toBeNull()
+  })
+
   it('probes again every few hours', async () => {
     vi.useFakeTimers()
     const l = start({ facts: CRON_BOOT })

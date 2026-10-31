@@ -83,6 +83,7 @@ function fleetBootStart(b: BootStartView | null): FleetBootStart | null {
   return {
     mode: b.mode, backend: b.backend, reason: b.reason, checkedAt: b.checkedAt,
     setupRunning: b.setup?.running === true, setupError: b.setup?.running ? null : (b.setup?.error ?? null),
+    next: b.setup?.running || b.mode === 'boot' ? null : (b.next ?? null),
   }
 }
 
@@ -304,6 +305,43 @@ export async function getFleetHost(host: string, opts: { days?: number; bucketMi
 /** The hosts session placement may pick: this Mac and SSH hosts, never the cloud box. */
 function placeable(list: HostEntry[]): string[] {
   return list.filter((e) => e.kind !== 'bridge').map((e) => e.host)
+}
+
+export class BootStartCheckError extends Error {
+  constructor(message: string, readonly code: 'unknown_host' | 'not_connected' | 'not_remote' | 'companion' | 'check_failed') { super(message) }
+}
+
+/**
+ * The Overview's "Set up" / "Check again": the host's boot start keeper probes
+ * now and sets the daemon up to start after a reboot when that is due
+ * (remote-boot-start-keeper.ts decides; this only asks it to look now). Answers
+ * the card as it reads after the check, held to BOOT_CHECK_DEADLINE_MS: a setup
+ * still running then reads setupRunning, and finishes on its own. A probe that
+ * failed is an error, never a quiet unchanged card.
+ */
+const BOOT_CHECK_DEADLINE_MS = 10_000
+export async function checkHostBootStart(host: string): Promise<FleetHost> {
+  if (isCompanion()) throw new BootStartCheckError('Ask your Mac: the companion holds no host link', 'companion')
+  const config = await getConfig()
+  const e = entries(config).find((x) => x.host === host)
+  if (!e) throw new BootStartCheckError('Walnut has no such host', 'unknown_host')
+  if (e.local || e.kind === 'bridge') throw new BootStartCheckError('Only a host Walnut reaches over SSH has a boot start Walnut sets up', 'not_remote')
+  const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js')
+  const conn = getConnectedDaemonConnection(host)
+  if (!conn) throw new BootStartCheckError(`Walnut is not connected to ${e.label} now`, 'not_connected')
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const failed = await Promise.race([
+    conn.checkBootStart().then(() => null, (err: unknown) => (err instanceof Error ? err.message : String(err))),
+    new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), BOOT_CHECK_DEADLINE_MS); timer.unref?.() }),
+  ])
+  if (timer) clearTimeout(timer)
+  if (failed) {
+    log.web.warn('fleet: boot start check failed', { host, error: failed })
+    throw new BootStartCheckError(`Walnut could not check ${e.label}: ${failed.split('\n')[0].slice(0, 300)}`, 'check_failed')
+  }
+  const card = await getFleetHost(host)
+  if (!card) throw new BootStartCheckError('Walnut has no such host', 'unknown_host')
+  return card
 }
 
 function clampDays(days: number | undefined): number {

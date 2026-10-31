@@ -1672,7 +1672,7 @@ completes unless `keep_source`; it is for work the user wants as a new task.
 - `PATCH /api/v1/hosts/:host/profile { kind?: kind | null, user_note?, refresh?:
   true }` → `200 { profile }`; `kind: null` returns to the automatic kind.
 
-### Host fleet (additive, 2026-10): `/hosts`, `/hosts/:host`, `/hosts/pick`
+### Host fleet (additive, 2026-10): `/hosts`, `/hosts/:host`, `/hosts/pick`, `/hosts/:host/boot-start`
 
 Every host Walnut runs work on, one card each: the same data the Settings page
 (Remote Hosts, Overview), the phone and agents (`host_list`, `host_get`) read.
@@ -1694,6 +1694,18 @@ daemon predates the capability has `now` and `history` null.
   it now, `400 bad_selector`. `POST /tasks/:id/start` and the `task_create` op take the
   same selector as `host: "@ios"` and resolve it here (the op before it creates the
   task, so a refusal makes none).
+- `POST /api/v1/hosts/:host/boot-start` → `200 { host: FleetHost }`: the Overview's
+  "Set up" button. The host's boot start keeper probes it now and, when a setup is
+  due (never after a failed attempt within its hold, never after the user ran
+  `walnut daemon uninstall` there), sets the daemon up to start after a reboot. The
+  answer is the card afterwards, held to 10 s: a setup still running then reads
+  `daemon.bootStart.setupRunning: true` and finishes on its own. The card's
+  `daemon.bootStart.next` says what a press can do: `install` (a setup is due),
+  `recheck` (only a change on the host fixes it, such as an administrator enabling
+  linger; a check reads it again), or null (nothing a check from here can change).
+  `404 unknown_host`; `409 not_connected` (Walnut has no link to it now), `409
+  not_remote` (this Mac or the cloud box), `409 companion`; `502 check_failed` (the
+  probe over SSH failed, with its words).
 
 `FleetHost`: `{ host, label, local, line, checkedAt, connection: { kind: "local" |
 "ssh-tunnel" | "bridge", connected, phase, phaseLabel, since, rttMs, error },

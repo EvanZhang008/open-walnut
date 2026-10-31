@@ -99,6 +99,8 @@ export interface FleetBootStart {
   checkedAt: number
   setupRunning: boolean
   setupError: string | null
+  /** What the Overview's button would do (BootStartNext); absent from an older server. */
+  next?: 'install' | 'recheck' | null
 }
 
 export const LONG_RUNNING_MIN_ONLINE = 0.95

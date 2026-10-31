@@ -6,8 +6,9 @@
  *   GET /api/v1/hosts?days=30                 → { hosts: FleetHost[], checkedAt }
  *   GET /api/v1/hosts/:host?days=&bucket=     → { host: FleetHost } (404 unknown)
  *   GET /api/v1/hosts/pick?need=ios           → { pick } (409 no_capable_host): a `@tag` selector resolved
+ *   POST /api/v1/hosts/:host/boot-start       → { host: FleetHost }: check (and set up) its start after a reboot now
  *
- * Read-only and never dials a host; each daemon call has a deadline and a card
+ * The reads never dial a host; each daemon call has a deadline and a card
  * whose host did not answer in time keeps its last reading, marked stale.
  */
 import { Router, type Request, type Response, type NextFunction } from 'express'
@@ -68,5 +69,22 @@ hostsFleetV1Router.get('/hosts/:host', async (req: Request, res: Response, next:
     const card = await getFleetHost(host, { days: numberParam(req.query.days), bucketMinutes: numberParam(req.query.bucket) })
     if (!card) { res.status(404).json({ error: `Walnut has no host named ${host}`, code: 'unknown_host' }); return }
     res.json({ host: card })
+  } catch (err) { next(err) }
+})
+
+// POST /api/v1/hosts/:host/boot-start → { host: FleetHost }: the Overview's "Set up" button. The host's
+// boot start keeper probes now and sets the daemon up to start after a reboot when that is due; the
+// answer is the card after it (held to a deadline: a setup still running reads setupRunning).
+hostsFleetV1Router.post('/hosts/:host/boot-start', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const host = normalizeHost(String(req.params.host ?? ''))
+    if (!ALIAS.test(host)) { res.status(400).json({ error: 'Invalid host alias', code: 'bad_host' }); return }
+    const { checkHostBootStart, BootStartCheckError } = await import('../../core/hosts/fleet.js')
+    try {
+      res.json({ host: await checkHostBootStart(host) })
+    } catch (err) {
+      if (err instanceof BootStartCheckError) { res.status(err.code === 'unknown_host' ? 404 : err.code === 'check_failed' ? 502 : 409).json({ error: err.message, code: err.code }); return }
+      throw err
+    }
   } catch (err) { next(err) }
 })

@@ -39,8 +39,14 @@ vi.mock('../../../src/core/usage/collection.js', () => ({
   responseUsageStore: () => ({ rollup: {}, database: {}, timezone: 'America/Los_Angeles' }),
 }))
 
+const bootConn = { conn: null as null | { checkBootStart: () => Promise<void> } }
+vi.mock('../../../src/providers/daemon-connection.js', async (orig) => ({
+  ...(await orig<typeof import('../../../src/providers/daemon-connection.js')>()),
+  getConnectedDaemonConnection: (host: string) => (host === 'devbox' ? bootConn.conn : null),
+}))
+
 import { WALNUT_HOME } from '../../../src/constants.js'
-import { __setFleetConnectionsForTesting, __setFleetLoadsForTesting, getFleetHost, listFleet } from '../../../src/core/hosts/fleet.js'
+import { __setFleetConnectionsForTesting, __setFleetLoadsForTesting, BootStartCheckError, checkHostBootStart, getFleetHost, listFleet } from '../../../src/core/hosts/fleet.js'
 import { judgeHost, type HostLoadView } from '../../../src/core/hosts/placement.js'
 import { readHostProfile } from '../../../src/core/hosts/host-profile.js'
 
@@ -219,5 +225,28 @@ describe('getFleetHost', () => {
     expect(dev.sends.find((s) => s.cmd === 'host.vitals')?.params).toEqual({ days: 1, bucketMinutes: 60 })
     expect(await getFleetHost('offbox')).toBeNull() // disabled
     expect(await getFleetHost('nosuch')).toBeNull()
+  }, 15_000)
+})
+
+describe('checkHostBootStart (the Overview\'s Set up)', () => {
+  const code = (p: Promise<unknown>) => p.then(() => 'ok', (e) => (e instanceof BootStartCheckError ? e.code : String(e)))
+  it('refuses a host it does not know, this Mac, and a host it has no link to now', async () => {
+    bootConn.conn = null
+    expect(await code(checkHostBootStart('nosuch'))).toBe('unknown_host')
+    expect(await code(checkHostBootStart('offbox'))).toBe('unknown_host')
+    expect(await code(checkHostBootStart('__local__'))).toBe('not_remote')
+    expect(await code(checkHostBootStart('devbox'))).toBe('not_connected')
+  })
+  it('asks the host\'s keeper once and answers the card after it', async () => {
+    let checks = 0
+    bootConn.conn = { checkBootStart: async () => { checks++ } }
+    const card = await checkHostBootStart('devbox')
+    expect(checks).toBe(1)
+    expect(card.host).toBe('devbox')
+    bootConn.conn = { checkBootStart: async () => { throw new Error('ssh: connection reset') } }
+    const err = await checkHostBootStart('devbox').catch((e) => e)
+    expect(err).toBeInstanceOf(BootStartCheckError)
+    expect(err).toMatchObject({ code: 'check_failed', message: 'Walnut could not check Dev box: ssh: connection reset' })
+    bootConn.conn = null
   }, 15_000)
 })

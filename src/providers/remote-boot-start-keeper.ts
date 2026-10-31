@@ -14,9 +14,19 @@ import {
 } from './remote-boot-start.js'
 import { installRemoteDaemonService, type RemoteDaemonUpdateIo } from './daemon-service-update.js'
 
+/**
+ * What a check now could do (the Overview's button): 'install' (a setup is due and
+ * nothing blocks it), 'recheck' (only a change on the host can fix it, such as an
+ * administrator enabling linger: a check reads it again), or null (nothing to do,
+ * or nothing a check from here can change: turned off, no daemon file, a failed
+ * attempt within its hold, an uninstall the user ran).
+ */
+export type BootStartNext = 'install' | 'recheck' | null
+
 export interface BootStartView extends BootStart {
   checkedAt: number
   setup: { running: boolean; error: string | null; at: number } | null
+  next?: BootStartNext
 }
 
 export interface BootStartKeeperIo extends RemoteDaemonUpdateIo {
@@ -84,8 +94,12 @@ export class BootStartKeeper {
     return this.running
   }
 
-  private setSetup(running: boolean, error: string | null): void {
-    if (this.view) this.view = { ...this.view, setup: { running, error, at: this.now() } }
+  private setSetup(running: boolean, error: string | null, next: BootStartNext = null): void {
+    if (this.view) this.view = { ...this.view, setup: { running, error, at: this.now() }, next }
+  }
+
+  private setNext(next: BootStartNext): void {
+    if (this.view) this.view = { ...this.view, next }
   }
 
   private async probe(): Promise<ReturnType<typeof parseBootStartProbe>> {
@@ -103,11 +117,13 @@ export class BootStartKeeper {
     this.arm(BOOT_RECHECK_MS)
     const verdict = this.view!
     if (verdict.mode === 'boot') { this.setSetup(false, null); return }
-    if (verdict.installed) return
+    // A service of the host's own that starts only at login: only a change there fixes it.
+    if (verdict.installed) { this.setNext('recheck'); return }
     const off = await this.io.off()
     if (off) { this.setSetup(false, off); return }
     const blocker = bootSetupBlocker(facts)
-    if (blocker) { this.setSetup(false, blocker); return }
+    // A Linux account without a user manager or cron: an administrator can fix it, then a check finishes it.
+    if (blocker) { this.setSetup(false, blocker, facts.platform === 'linux' ? 'recheck' : null); return }
     const expected = this.io.expectedVersion()
     const binary = await this.io.localBinary()
     if (!expected || !binary) { this.setSetup(false, 'this Walnut has no daemon binary for the host'); return }
@@ -123,6 +139,7 @@ export class BootStartKeeper {
     const held = await this.io.hold()
     if (held) {
       log.session.info('DaemonConnection: boot start setup waits', { host: this.io.hostKey, reason: held })
+      this.setNext('install')
       this.arm(HOLD_RETRY_MS)
       return
     }

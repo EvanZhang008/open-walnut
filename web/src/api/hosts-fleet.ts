@@ -3,7 +3,7 @@
  * The shapes mirror FleetHost there; every reading may be null (a host that is
  * down, an older daemon, a host not probed yet).
  */
-import { apiGet } from './client';
+import { apiGet, apiPost } from './client';
 
 export interface FleetWindow { days: number; minutes: number; up: number; linked: number; online: number | null; linkedShare: number | null; drops: number; downs: number; daemonStarts?: number; boots?: number }
 export interface FleetBucket { start: number; minutes: number; up: number; linked: number; cpu: number | null; mem: number | null; sessionsMax: number }
@@ -26,7 +26,7 @@ export interface FleetHost {
   daemon: {
     version: string | null; startedAt: number | null; startup: string; startsAfterReboot: boolean; runtime: string | null; vitals: boolean;
     /** The host's own answer about a reboot (null until asked; absent from an older server). */
-    bootStart?: { mode: 'boot' | 'login' | 'none'; backend: string | null; reason: string | null; checkedAt: number; setupRunning: boolean; setupError: string | null } | null;
+    bootStart?: { mode: 'boot' | 'login' | 'none'; backend: string | null; reason: string | null; checkedAt: number; setupRunning: boolean; setupError: string | null; next?: 'install' | 'recheck' | null } | null;
     /** That answer in words, from the server. */
     reboot?: string;
   } | null;
@@ -51,4 +51,12 @@ export interface FleetCapabilities {
 export function fetchFleet(opts?: { signal?: AbortSignal }): Promise<{ hosts: FleetHost[]; checkedAt: number }> {
   // The server holds each host to 3 s; a little more covers the gathering.
   return apiGet('/api/v1/hosts', undefined, { signal: opts?.signal, timeoutMs: 12_000, priority: 'low' });
+}
+
+/**
+ * The Overview's "Set up": the host checks its start after a reboot now and sets it up
+ * when due (POST /api/v1/hosts/:host/boot-start). Answers the host's card afterwards.
+ */
+export function setUpBootStart(host: string): Promise<{ host: FleetHost }> {
+  return apiPost(`/api/v1/hosts/${encodeURIComponent(host)}/boot-start`, undefined, { timeoutMs: 30_000, quietStatuses: [404, 409] });
 }

@@ -857,6 +857,8 @@ export class DaemonConnection {
   get daemonStartup(): string { return this._daemonStartup }
   /** Whether the host's daemon starts after a reboot, as the host last said (remote-boot-start.ts); null before it was asked. */
   get bootStart(): BootStartView | null { return this._bootStart?.state ?? null }
+  /** Probe the host's boot start now, and set it up when due (the Overview's Set up button). */
+  checkBootStart(): Promise<void> { return this._bootStart?.check() ?? Promise.resolve() }
   private _bootStartKeeper: BootStartKeeper | null = null
   private get _bootStart(): BootStartKeeper | null {
     if (this.hostKey === '__local__' || this.isCloudTunnel || this.isReadOnlyRemote || IS_EPHEMERAL || bootStartOff()) return null
