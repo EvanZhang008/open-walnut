@@ -84,3 +84,16 @@
 /* The Model row: one pill that opens the model picker (TransferLaunchRows.tsx). */
 .xfer-model-pill .xfer-opt-sub { padding-left: 0; }
 .xfer-model-caret { margin-left: auto; color: var(--fg-muted); font-size: 11px; }
+
+/* "Move to another host" (MoveHostMenuItems): each host with how busy it is. */
+.task-kebab-move-host { align-items: flex-start; }
+.task-kebab-move-host-text { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.task-kebab-move-host-load {
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}
+.task-kebab-move-host-load.busy { color: var(--warning, #b7791f); }

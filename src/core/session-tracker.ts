@@ -770,6 +770,13 @@ export async function listNonTerminalSessions(): Promise<SessionRecord[]> {
 const DEFAULT_LOCAL_LIMIT = 7;
 const DEFAULT_REMOTE_LIMIT = 20;
 
+/** The running-session limit of a host ('local' or an alias): config first, then the defaults. */
+export function activeSessionLimitFor(host: string | undefined | null, sessionLimits?: Record<string, number>): number {
+  const key = host || 'local';
+  return Math.max(1, sessionLimits?.[key]
+    ?? (key === 'local' ? DEFAULT_LOCAL_LIMIT : key === CLOUD_BOX_HOST_ALIAS ? CLOUD_BOX_DEFAULT_LIMIT : DEFAULT_REMOTE_LIMIT));
+}
+
 /** Default idle session limits per host (Layer 2). */
 const DEFAULT_LOCAL_IDLE_LIMIT = 30;
 const DEFAULT_REMOTE_IDLE_LIMIT = 40;

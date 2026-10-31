@@ -14,15 +14,18 @@
 
 import crypto from 'node:crypto'
 import { DaemonNeedsUpgradeError } from '../daemon-file-reader.js'
-import type { PackReply, PackMeta, PackFile, PackUntracked } from '../../providers/transfer-pack-core.js'
+import type { PackReply, PackMeta, PackFile, PackUntracked, ScanReply, ApplyReply } from '../../providers/transfer-pack-core.js'
 import type { WritePartReply, ReachReply, FetchReply, FetchFileResult } from '../../providers/transfer-core.js'
-import type { HostFacts } from '../../providers/host-facts-core.js'
+import type { HostFacts, HostLoad } from '../../providers/host-facts-core.js'
 
-export type { PackReply, PackMeta, PackFile, PackUntracked, WritePartReply, ReachReply, FetchReply, FetchFileResult, HostFacts }
+export type { PackReply, PackMeta, PackFile, PackUntracked, ScanReply, ApplyReply, WritePartReply, ReachReply, FetchReply, FetchFileResult, HostFacts, HostLoad }
 
 export const TRANSFER_CAPABILITY = 'transfer-v1'
 export const WRITE_PART_CAPABILITY = 'fs-write-part-v1'
 export const HOST_FACTS_CAPABILITY = 'host-facts-v1'
+/** transfer.scan / transfer.apply and pack's `paths` / `exclude` / `asDir`. */
+export const TASK_MOVE_CAPABILITY = 'task-move-v1'
+export const HOST_LOAD_CAPABILITY = 'host-load-v1'
 /** fs.writePart `private: true`: the transcript stage a Claude to Claude transfer resumes from. */
 export const PRIVATE_STAGE_CAPABILITY = 'transfer-private-v1'
 /** fs.readRange is a required capability; named here so a fake can leave it out. */
@@ -121,12 +124,42 @@ async function call<T>(host: string, capability: string, command: string, params
   return rest as T
 }
 
-export interface PackOptions { cwd: string; outDir: string; maxUntrackedBytes?: number; maxTarBytes?: number; timeoutMs?: number }
+export interface PackOptions {
+  cwd: string; outDir: string; maxUntrackedBytes?: number; maxTarBytes?: number; timeoutMs?: number
+  /** Only these repository paths' changes ride ('task-move-v1'). */
+  paths?: string[]
+  /** A folder pack leaves these relative folders out ('task-move-v1'). */
+  exclude?: string[]
+  /** Pack as a plain folder even inside a repository ('task-move-v1'). */
+  asDir?: boolean
+}
 
 /** Pack the workspace at `cwd` on `host` into `outDir` there (meta.json and friends). */
 export function packWorkspace(host: string, opts: PackOptions): Promise<PackReply> {
   const { timeoutMs, ...params } = opts
-  return call<PackReply>(host, TRANSFER_CAPABILITY, 'transfer.pack', params, timeoutMs ?? PACK_RPC_MS)
+  const moveOptions = params.paths !== undefined || params.exclude !== undefined || params.asDir !== undefined
+  return call<PackReply>(host, moveOptions ? TASK_MOVE_CAPABILITY : TRANSFER_CAPABILITY, 'transfer.pack', params, timeoutMs ?? PACK_RPC_MS)
+}
+
+/** Whether `host` runs the move steps itself (scan, limited packs, apply). */
+export async function hostCanMove(host: string): Promise<boolean> {
+  try { await connectionFor(host, TASK_MOVE_CAPABILITY); return true } catch { return false }
+}
+
+/** The git repositories and loose files in `dir` on `host`. */
+export function scanWorkDir(host: string, dir: string): Promise<ScanReply> {
+  return call<ScanReply>(host, TASK_MOVE_CAPABILITY, 'transfer.scan', { dir }, 60_000)
+}
+
+/** Set the pack in `bundleDir` up as a working checkout at `dest` on `host`. */
+export function applyPack(host: string, opts: { dest: string; bundleDir: string; cloneFrom?: string; url?: string; timeoutMs?: number }): Promise<ApplyReply> {
+  const { timeoutMs, ...params } = opts
+  return call<ApplyReply>(host, TASK_MOVE_CAPABILITY, 'transfer.apply', params, timeoutMs ?? 12 * 60_000)
+}
+
+/** How busy `host` is now (load, CPU, memory, disk under `path`). */
+export function probeHostLoad(host: string, opts: { path?: string; timeoutMs?: number } = {}): Promise<HostLoad> {
+  return call<HostLoad>(host, HOST_LOAD_CAPABILITY, 'host.load', opts.path ? { path: opts.path } : {}, opts.timeoutMs ?? 8_000)
 }
 
 export interface WritePartOptions {

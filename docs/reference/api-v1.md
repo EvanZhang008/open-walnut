@@ -1653,7 +1653,7 @@ session instead.
   `400 message_required`, `400 same_engine` (change the model instead), `409
   engine_not_on_host` (the task's host cannot run that engine: its CLI is not
   installed there, or it is the custom engine, which runs on the Mac only; move
-  the work with a transfer), `502 start_failed` (the old session is
+  the work with `/tasks/:id/move`), `502 start_failed` (the old session is
   the task's session again), `409 switch_in_progress` (one is running) and `409
   switch_pending` (one already waits for this turn; cancel it first). A task with no conversation yet just starts on the
   engine. The write answers `501 not_supported_cloud` on the companion.
@@ -1665,6 +1665,39 @@ session instead.
   engine, model?, effort?, permission_mode?, host? }, display_text?, session_id?, resumed?,
   carried_turns?, trimmed_turns?, transcript_path?, error?, by? }`, the latest
   switch. Older clients ignore it.
+
+### Move a task to another host, and each host's load (additive, 2026-10): `/tasks/:id/move`, `/hosts/load`
+
+A move is an engine switch with another host: the task keeps its id, its
+conversation (carried as in a switch), its open requests and queued messages.
+The old session is stopped first; then what the task works in is packed on the
+old host and set up under the task's directory on the new one: every git
+repository in the old task directory that holds something a remote lacks
+(commits, uncommitted and untracked files), the task directory's own files, and,
+when the session ran in a checkout outside it, only the files that session
+changed there (a shared checkout's other files never ride). The new host's
+daemon sets each repository up (`transfer.apply`, capability `task-move-v1`); a
+piece it could not becomes the new session's first steps. The old copies stay.
+
+- `POST /api/v1/tasks/:id/move { host, text?, engine?, model?, team?, wait_ms?,
+  user_request? }` → `200 { state: "done", taskId, sessionId, host, fromHost,
+  moved: [one line per piece], carriedTurns, ... }`, `202 { state: "pending" }`
+  (its turn ends first) or `202 { state: "moving" }` (still copying after
+  `wait_ms`, default 25000). `team: true` moves every open task under it too,
+  one after another (`team: [{ taskId, title }]`). Refusals: `400 host_required`,
+  `400 unknown_host`, `400 same_host`, `409 no_conversation` (start it with a host
+  instead), `409 workspace_task`, `409 daemon_upgrade_required`, `502
+  start_failed` (the task stays where it was). `Task.engine_switch` carries
+  `move: true`, `from_host`, `from_cwd`, `moved`, `user_words`;
+  `switched_from` of the new session carries `fromHost`/`fromCwd`. `501
+  not_supported_cloud` on the companion.
+- `GET /api/v1/hosts/load` → `200 { hosts: [{ host, label, known, cpus, load1,
+  loadPerCpu, cpuBusy, memAvailShare, diskFreeBytes, running, runningLimit,
+  busy, reasons, score }], caps }`. A first `POST /tasks/:id/start` that names no
+  host and no cwd keeps the host it would use unless that host is over a cap and
+  another has room; its answer then carries `placement: { host, from, moved,
+  reason, cwd?, setUp? }`. Mac-only work (iOS, the Mac app, the user's screen)
+  stays on the Mac.
 
 ### Sessions (read-only)
 

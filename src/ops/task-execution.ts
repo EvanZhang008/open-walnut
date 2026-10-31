@@ -90,6 +90,13 @@ function launchSettingsNote(body: Record<string, unknown>, started: Record<strin
   return missed.length ? ` Not applied: ${missed.join(', ')} (the session does not run with it; task_get shows where it runs).` : ''
 }
 
+/** Where placement by load put a first start (core/sessions/start-placement.ts), in its own words. */
+function placementNote(started: Record<string, unknown>): string {
+  const p = started.placement as { host?: string; moved?: boolean; reason?: string; cwd?: string } | undefined
+  if (!p?.moved || !p.reason) return ''
+  return ` Placed on ${p.host || 'this Mac'}: ${p.reason}${p.cwd ? `; it works in ${p.cwd}` : ''}.`
+}
+
 export async function startTask(id: string, body: Record<string, unknown>, call: Call): Promise<Record<string, unknown>> {
   const started = await call('POST', `/tasks/${encodeURIComponent(id)}/start`, body) as Record<string, unknown> | undefined
   if (!started || typeof started.taskId !== 'string') {
@@ -104,7 +111,7 @@ export async function startTask(id: string, body: Record<string, unknown>, call:
       : started.preparing === true ? `Task ${started.taskId}'s isolated workspace is being made; its session starts in it once the workspace is ready.`
       : state === 'running' ? `Task ${started.taskId} started.`
       : started.starting === true ? `Task ${started.taskId}'s session is still starting (its engine takes longer than this answer waits); it has not failed so far, and task_get shows it running once it is up.`
-      : `Start accepted for task ${started.taskId}; execution is not yet confirmed.`) + launchSettingsNote(body, started),
+      : `Start accepted for task ${started.taskId}; execution is not yet confirmed.`) + launchSettingsNote(body, started) + placementNote(started),
     typeof started.requestId === 'string'
       ? `Reply request: ${started.requestId}. ${REPLY_ARRIVES_HINT} ${SUBTASK_WATCH_HINT}`
       : `Read task_get for its execution state. Add context with task_send using task id ${started.taskId}.`,

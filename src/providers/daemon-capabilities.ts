@@ -745,6 +745,22 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // every probe bounded (3 s each, 12 s in all), a failed probe is null. Both twins; like
   // host.preflight, not bridge-reachable and not for followers. Optional.
   'host-facts-v1',
+  // 'host-load-v1' (host-facts-core.ts load): `host.load {path?}` answers how busy this
+  // host is now: load average, CPU busy share over two samples 200 ms apart, memory
+  // available, free and total disk under `path` (default HOME). Read-only, every probe
+  // bounded (3 s). Placement weighs it (src/core/hosts/placement.ts). Both twins, not
+  // bridge-reachable, not for followers. Optional: without it the host's load is unknown
+  // and placement never picks it over the default host.
+  'host-load-v1',
+  // 'task-move-v1' (transfer-pack-core.ts): `transfer.scan {dir}` lists the git
+  // repositories in a task directory and its loose files; `transfer.pack` takes `paths`
+  // (only those files of a shared checkout ride) and `exclude` (a folder pack without
+  // its repositories), and measures a clone of a local checkout against that checkout's
+  // own remote; `transfer.apply {dest, bundleDir, cloneFrom?, url?}` sets a pack up as a
+  // working checkout here (clone, bundle, check out, patch, untracked files). Both twins,
+  // not bridge-reachable, not for followers. Optional: without it a move packs the
+  // session's folder as task_transfer does and the new session sets it up.
+  'task-move-v1',
   // 'oneshot-v1' (oneshot-core.ts): every `claude -p` Walnut starts outside a
   // session runs here (micro-Claude, inline subagents, the claude-cli model
   // adapter). `oneshot.run {runId, command, args, cwd, env, input, endInput,

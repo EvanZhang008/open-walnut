@@ -22,6 +22,7 @@ import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { MoveToProjectSection, TaskActionMenuItems } from '@/components/tasks/TaskKebabMenu';
 import { TeamMenuItems } from '@/components/tasks/TeamMenuItems';
 import { TransferMenuItem } from '@/components/transfer/TransferMenuItem';
+import { MoveHostMenuItems } from '@/components/transfer/MoveHostMenuItems';
 import { WorkspaceMenuSection } from '@/components/workspaces/WorkspaceMenuSection';
 import { SnoozeUntilEvent, TaskStatusMenuSection } from '@/components/tasks/TaskStatusControl';
 import { AgentMemoryPanel, hasMemoryAndInstructions } from '@/components/org/AgentMemoryPanel';
@@ -451,6 +452,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
               synced item it mirrors. */}
           <KebabGroup label="Move & team" hint="project · host · team" icon={ICONS.ICON_FOLDER_OUTLINE} testId="kebab-group-move">
             <MoveToProjectSection current={task.project || ''} onMove={handleMoveToProject} afterAction={closeKebab} />
+            <MoveHostMenuItems task={task} afterAction={closeKebab} />
             <TransferMenuItem task={task} afterAction={closeKebab} />
             <TeamMenuItems task={task} afterAction={closeKebab} />
             <WorkspaceMenuSection task={task} afterAction={closeKebab} />

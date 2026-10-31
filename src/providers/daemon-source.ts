@@ -3771,6 +3771,9 @@ function dispatchCommand(ws, id, cmd) {
     case 'transfer.fetch': return replyTransfer(ws, id, 'transfer.fetch', function () { return transferCore.fetch(cmd); }, true);
     case 'transfer.realpath': return replyTransfer(ws, id, 'transfer.realpath', function () { return transferCore.realpath(cmd); }, false);
     case 'host.facts': return replyTransfer(ws, id, 'host.facts', function () { return hostFacts.facts(cmd); }, false);
+    case 'host.load': return replyTransfer(ws, id, 'host.load', function () { return hostFacts.load(cmd); }, false);
+    case 'transfer.scan': return replyTransfer(ws, id, 'transfer.scan', function () { return transferPack.scan(cmd); }, false);
+    case 'transfer.apply': return replyTransfer(ws, id, 'transfer.apply', function () { return transferPack.apply(cmd); }, true);
     case 'desktop.updateStatus': return replyTransfer(ws, id, 'desktop.updateStatus', function () { return desktopUpdate.status(); }, false);
     case 'desktop.restart': return replyTransfer(ws, id, 'desktop.restart', function () { return desktopUpdate.restart(cmd.token, cmd.force); }, true);
     // 'oneshot-v1' (oneshot-core.ts): the hidden one-shot claude runs. NOT in

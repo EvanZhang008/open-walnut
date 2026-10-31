@@ -23,6 +23,7 @@ import { QuoteInSessionItem } from './QuoteInSessionItem';
 import { TeamMenuItems } from './TeamMenuItems';
 import { WatchMenuItem } from './WatchToggle';
 import { TransferMenuItem } from '@/components/transfer/TransferMenuItem';
+import { MoveHostMenuItems } from '@/components/transfer/MoveHostMenuItems';
 import { SnoozeUntilEvent, TaskStatusMenuSection } from './TaskStatusControl';
 import type { DraftTaskField } from '@/components/sessions/draft-column';
 
@@ -672,6 +673,9 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
               <span>Select…</span>
             </button>
           )}
+
+          {/* Move: the same task, its conversation and its own work, on another host */}
+          <MoveHostMenuItems task={task} afterAction={closeMenu} />
 
           {/* Transfer: move the work to another engine or host (a new task takes it over) */}
           <TransferMenuItem task={task} afterAction={closeMenu} />

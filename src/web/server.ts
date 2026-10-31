@@ -147,6 +147,7 @@ import { projectsV1Router } from './routes/projects-v1.js'
 import { taskExtrasV1Router } from './routes/task-extras-v1.js'
 import { transferV1Router } from './routes/transfer-v1.js'
 import { engineSwitchV1Router } from './routes/engine-switch-v1.js'
+import { taskMoveV1Router } from './routes/task-move-v1.js'
 import { sessionExtrasV1Router } from './routes/session-extras-v1.js'
 import { filesV1Router } from './routes/files-v1.js'
 import { consoleV1Router } from './routes/console-v1.js'
@@ -2421,6 +2422,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', taskExtrasV1Router)
   app.use('/api/v1', transferV1Router)
   app.use('/api/v1', engineSwitchV1Router)
+  app.use('/api/v1', taskMoveV1Router)
   // Session extras (additive, Wave 2): controls/settings/side-questions/
   // workflow/plan/subagent-history/execute-compact/queue + list-dirs — all
   // B-class relay on a REPLICA.

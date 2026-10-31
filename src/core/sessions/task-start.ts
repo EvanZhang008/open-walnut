@@ -69,6 +69,8 @@ export interface SessionStartResult {
    * is how a newer op tells the caller what an older Walnut ignored.
    */
   applied?: string[];
+  /** Where placement by load put this first start, and why (start-placement.ts). */
+  placement?: import('./start-placement.js').StartPlacement;
 }
 
 export class SessionExistsError extends QuickStartError {
@@ -246,6 +248,9 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
       };
     }
     const launch = await prepareLaunch(task, { ...params, engine });
+    // A first start that names no host goes where there is room (start-placement.ts).
+    const { placeStartByLoad } = await import('./start-placement.js');
+    const placement = await placeStartByLoad(task, params, launch, engine);
     let callerSessionId: string | undefined;
     // Its task: what that task still owes is handed on with this start's request.
     let callerTaskId: string | undefined;
@@ -295,7 +300,7 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
     // Until the session starts on the message, no edge of the task speaks for its request.
     let delivered: (() => void) | undefined;
     const result: SessionStartResult = { taskId: task.id, title: task.title, sessionId: sid, requestId, started: false,
-      applied: appliedLaunchFields(task, params, launch) };
+      applied: appliedLaunchFields(task, params, launch), ...(placement ? { placement } : {}) };
     const work = (async (): Promise<SessionStartResult> => {
       try {
         if (recovery && previous) {
@@ -425,7 +430,9 @@ export function refuseDifferentPlace(
     `Task ${task.id} already has its active session (${differs.join(', ')}). `
     + (engineOnly
       ? `Continue it with task_send, or change its engine inside the task with task_switch_engine {"id":"${task.id}","engine":"${resolveEngine(params.engine)}","text":"..."}.`
-      : `Continue it with task_send; work on another host or in another directory is a new task: task_transfer {"id":"${task.id}"}.`), 409);
+      : params.host !== undefined && !sameHost(params.host, conversation.host)
+        ? `Continue it with task_send, or move it there in one step (same task, its conversation and its own work): task_move {"id":"${task.id}","host":"${params.host || 'local'}"}.`
+        : `Continue it with task_send; work in another directory is a new task: task_transfer {"id":"${task.id}"}.`), 409);
 }
 
 async function cancelUnconfirmedStart(task: Task, record?: Awaited<ReturnType<typeof getSessionsForTask>>[number], keepRecord = false): Promise<void> {

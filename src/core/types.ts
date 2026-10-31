@@ -1347,6 +1347,10 @@ export interface Config {
      *  gcc under passwordless sudo, build dtach). Default on; `false` turns them
      *  off for this host. WALNUT_HOST_AUTOFIX=0 turns them off for every host. */
     autofix?: boolean;
+    /** Placement by load (core/hosts/placement.ts) may start a task here when the host
+     *  a start would use is overloaded. Default on for an enabled host; `false` keeps it
+     *  out (work still starts here when someone names this host). */
+    place?: boolean;
     /** Set only on the row config-manager injects for the paired cloud box
      *  (core/hosts/cloud-box-host.ts). Never written to config.yaml. */
     cloud_box?: boolean;
@@ -2726,6 +2730,16 @@ export interface EngineSwitchState {
   display_text?: string;
   /** A remote task moving to an engine only this Mac runs: the user confirmed the move. */
   confirm_move?: boolean;
+  /** A move to another host (task_move): `to.host` is where the new session runs, and the
+   *  task's own work goes with it (transfer/task-work.ts). Unset = a switch on the same host. */
+  move?: boolean;
+  /** The host and folder the move left (kept for the outcome and the session list). */
+  from_host?: string;
+  from_cwd?: string;
+  /** What the move carried, one plain line per piece (describeMovedWork). */
+  moved?: string[];
+  /** The user's words asking for it, when an agent passed them on (task_move user_request). */
+  user_words?: string;
   /** The session that took over (done). */
   session_id?: string;
   /** The session that took over is the task's earlier session on that engine, resumed
@@ -2803,6 +2817,8 @@ export interface SessionRecord {
   engineSwitch?: {
     fromSessionId: string; fromEngine?: SessionEngine; fromModel?: string; at: string;
     carriedTurns: number; trimmedTurns: number; compacted?: boolean; transcriptPath?: string;
+    /** Set when the switch moved the task to another host (task_move): where it ran before. */
+    fromHost?: string; fromCwd?: string;
   };
   /** Set on the session an engine switch replaced: the session that took over. */
   supersededBy?: string;

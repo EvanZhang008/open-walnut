@@ -9,7 +9,8 @@ defineOp({
   title: 'Move a task\'s work to a NEW task (another host or engine)',
   description:
     'Move a task\'s work into a NEW task beside this one, on another host and/or coding engine, and start it. ' +
-    'Only for when the user asks for a new task: to change the engine (or the model) of a task, switch it inside the task with task_switch_engine instead. ' +
+    'Only for when the user asks for a new task: to change the engine (or the model) of a task, switch it inside the task with task_switch_engine instead, '
+    + 'and to move a task to another host keeping the task (same id, conversation, requests), task_move. ' +
     'the source task completes unless keep_source is true, and it STAYS OPEN, keep_source:false or not, when the task is still in use: ' +
     'the user wrote in it or its session in the last 7 days, its session was open in a terminal (the user working in it) in that time, ' +
     'or it leads work (open subtasks, an org role, an armed trigger); the answer names why in sourceKeptOpen. ' +

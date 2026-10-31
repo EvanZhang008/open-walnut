@@ -206,6 +206,8 @@ export interface CarryMeta {
   /** The old session's own transcript file, kept where its engine wrote it. */
   rawTranscriptPath?: string;
   compacted: boolean;
+  /** A move to another host (task_move): the hosts, and what of the work came along. */
+  move?: { fromHost: string; toHost: string; fromCwd?: string; cwd: string; work: string[]; steps: string[] };
 }
 
 /**
@@ -249,11 +251,23 @@ export async function renderCarriedContext(
   }
   const trimmedTurns = first;
   const from = `${engineCaps(meta.fromEngine as never).displayName}${meta.fromModel ? ` (${meta.fromModel})` : ''}`;
+  const opening = meta.move
+    ? `This task moved from ${meta.move.fromHost} to ${meta.move.toHost}: same task, same conversation, and you are its session now, on ${meta.move.toHost} in ${meta.move.cwd}. `
+      + `${meta.move.fromCwd ? `The earlier session ran in ${meta.move.fromCwd} there. ` : ''}`
+      + 'Below is everything the earlier session had in its context, '
+    : `The user switched this task from ${from} to ${engineCaps(meta.toEngine as never).displayName}. You take the conversation over: below is everything the earlier session had in its context, `;
   const lines: string[] = [
-    `The user switched this task from ${from} to ${engineCaps(meta.toEngine as never).displayName}. You take the conversation over: below is everything the earlier session had in its context, `
+    opening
       + `${meta.compacted ? 'its compaction summary and then every turn after it' : 'every turn'}, in order (the newest last). `
       + 'Continue from where it stands; do not redo work it already did. The user\'s new message follows the context.',
   ];
+  if (meta.move) {
+    lines.push(meta.move.work.length
+      ? `Its own work came along and is set up here: ${meta.move.work.join(' ')}`
+      : 'It had no work of its own to carry (no repository in its task directory with anything a remote lacks).');
+    lines.push('Paths in the conversation below name the old host; the same work lives at the places above now. Work only there: the old host\'s copies stay as a backup, never edit them.');
+    if (meta.move.steps.length) lines.push(`Set up what the move could not, first:\n${meta.move.steps.join('\n\n')}`);
+  }
   if (trimmedTurns > 0) {
     lines.push(`${trimmedTurns} older turn${trimmedTurns === 1 ? '' : 's'} after the summary did not fit your context window and ${trimmedTurns === 1 ? 'is' : 'are'} left out here.`);
   }

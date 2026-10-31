@@ -2443,6 +2443,9 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'transfer.fetch': return replyTransfer(ws, id as number, 'transfer.fetch', () => transferCore.fetch(cmd), true)
     case 'transfer.realpath': return replyTransfer(ws, id as number, 'transfer.realpath', () => transferCore.realpath(cmd), false)
     case 'host.facts': return replyTransfer(ws, id as number, 'host.facts', () => hostFacts.facts(cmd), false)
+    case 'host.load': return replyTransfer(ws, id as number, 'host.load', () => hostFacts.load(cmd), false)
+    case 'transfer.scan': return replyTransfer(ws, id as number, 'transfer.scan', () => transferPack.scan(cmd), false)
+    case 'transfer.apply': return replyTransfer(ws, id as number, 'transfer.apply', () => transferPack.apply(cmd), true)
     case 'desktop.updateStatus': return replyTransfer(ws, id as number, 'desktop.updateStatus', () => desktopUpdate.status(), false)
     case 'desktop.restart': return replyTransfer(ws, id as number, 'desktop.restart', () => desktopUpdate.restart(cmd.token, cmd.force), true)
     // 'oneshot-v1' (oneshot-core.ts): the hidden one-shot claude runs. NOT in

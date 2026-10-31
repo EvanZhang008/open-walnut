@@ -131,6 +131,20 @@ describe.each(TWINS)('$name', (twin) => {
     expect(packed.meta).toMatchObject({ kind: 'git', branch: 'main', dirty: true, bundle: {} })
     expect(await rpc({ cmd: 'transfer.pack', cwd: repo, outDir: path.join(repo, 'out') })).toMatchObject({ ok: false, code: 'bad_request' })
 
+    // 'host-load-v1' and 'task-move-v1': the move family answers on both twins.
+    const load = await rpc({ cmd: 'host.load', path: '~' })
+    expect(load.ok, String(load.error)).toBe(true)
+    expect(load).toMatchObject({ cpus: expect.any(Number), diskPath: home, memTotalBytes: expect.any(Number) })
+    expect((load.load as number[]).length).toBe(3)
+    const scanned = await rpc({ cmd: 'transfer.scan', dir })
+    expect(scanned.ok, String(scanned.error)).toBe(true)
+    expect((scanned.repos as Array<{ rel: string }>).map((r) => r.rel)).toContain('repo')
+    const limited = await rpc({ cmd: 'transfer.pack', cwd: repo, outDir: path.join(dir, 'out2'), paths: [] })
+    expect(limited).toMatchObject({ ok: true, meta: { limited: { paths: 0, leftOutTracked: 1 } } })
+    const applied = await rpc({ cmd: 'transfer.apply', dest: path.join(dir, 'moved'), bundleDir: path.join(dir, 'out'), url: repo })
+    expect(applied.ok, String(applied.error)).toBe(true)
+    expect(fs.readFileSync(path.join(dir, 'moved', 'a.txt'), 'utf8')).toBe('b\n')
+
     expect(await rpc({ cmd: 'transfer.reach', host: '-oProxyCommand=evil' })).toMatchObject({ ok: false, code: 'bad_request' })
     expect(await rpc({ cmd: 'transfer.fetch', host: 'a', files: [{ remotePath: '/x y', localPath: '/tmp/x' }] })).toMatchObject({ ok: false, code: 'bad_request' })
   }, 120_000)

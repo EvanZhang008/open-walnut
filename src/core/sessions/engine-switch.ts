@@ -21,6 +21,14 @@
  *               (display shows the user's words) and the user's message
  *   7. follow:  open requests and the held queue rows move to the new session
  * A failed start puts everything back: the old session is the task's session again.
+ *
+ * A MOVE (task_move, 2026-10-31, the user: "it is overloaded why u keep put it in mac?")
+ * is the same switch with another host: `state.move`, `to.host` the target, the engine
+ * kept unless one is named. The old session is retired FIRST, so nothing changes the
+ * work while it is copied; then the task's own work (transfer/task-work.ts) is packed
+ * on the old host and set up under the task directory on the new one, and the new
+ * session starts there with the carried context. A failed copy or start restores the
+ * old session as above; the old host's copies are never touched.
  */
 import { randomUUID } from 'node:crypto';
 import { log } from '../../logging/index.js';
@@ -44,6 +52,10 @@ export class EngineSwitchError extends Error {
 export interface EngineSwitchRequest {
   taskId: string;
   engine: SessionEngine;
+  /** Another host than the session's: a move (task_move). Unset = the session's host. */
+  host?: string;
+  /** The user's words asking for it, quoted by the agent that passes them on. */
+  userWords?: string;
   model?: string;
   effort?: SessionEffort;
   permissionMode?: SessionMode;
@@ -71,11 +83,18 @@ export interface EngineSwitchResult {
   transcriptPath?: string;
   /** The task's earlier session on that engine was resumed with the turns it missed. */
   resumed?: boolean;
+  /** A move: the host it left, and what of the work came along (one line per piece). */
+  fromHost?: string;
+  moved?: string[];
 }
 
 const LIVE = new Set(['running', 'idle']);
 /** taskId → the switch running now and the session it replaces. */
-const inFlight = new Map<string, { from: string; work: Promise<EngineSwitchResult> }>();
+const inFlight = new Map<string, { from: string; work: Promise<EngineSwitchResult>; maxMs: number }>();
+/** A move copies and sets up repositories (a clone can take minutes); a message for the
+ *  session it replaces waits that long for it rather than reaching the stopped one. */
+const MOVE_WAIT_MS = 15 * 60_000;
+const SWITCH_WAIT_MS = 120_000;
 
 function by(callerSid: string | undefined, callerTaskId: string | undefined): string {
   return callerSid ? `task:${callerTaskId ?? 'unknown'}` : 'human';
@@ -133,16 +152,30 @@ export async function requestEngineSwitch(req: EngineSwitchRequest): Promise<Eng
     const started = await startSessionForTask({
       taskIdPrefix: task.id, message: req.message, engine, model: req.model, effort: req.effort, mode: req.permissionMode,
       callerSid: req.callerSid, expectReply: false, source: req.source,
+      ...(req.host !== undefined ? { host: normalizeHost(req.host) } : {}),
     });
-    return { state: 'done', taskId: task.id, switchId, sessionId: started.sessionId, engine, host: LOCAL_HOST };
+    return { state: 'done', taskId: task.id, switchId, sessionId: started.sessionId, engine, host: normalizeHost(req.host) };
   }
-  if (resolveEngine(old.engine) === engine) {
+  const oldHost = normalizeHost(old.host);
+  const host = req.host !== undefined ? normalizeHost(req.host) : oldHost;
+  const move = host !== oldHost;
+  if (!move && req.host !== undefined && resolveEngine(old.engine) === engine) {
+    throw new EngineSwitchError(`This task already runs on ${host === LOCAL_HOST ? 'this Mac' : host}`, 400, 'same_host');
+  }
+  if (!move && resolveEngine(old.engine) === engine) {
     throw new EngineSwitchError(`This task already runs on ${engineCaps(engine).displayName}; change its model in the session instead`, 400, 'same_engine');
   }
-  const host = normalizeHost(old.host);
+  if (move) {
+    const { getConfig } = await import('../config-manager.js');
+    const entry = host === LOCAL_HOST ? null : (await getConfig()).hosts?.[host] as { enabled?: boolean } | undefined;
+    if (host !== LOCAL_HOST && (!entry || entry.enabled === false)) throw new EngineSwitchError(`Unknown host: ${host}`, 400, 'unknown_host');
+    if (task.workspace && task.workspace.state === 'ready') {
+      throw new EngineSwitchError('This task works in an isolated workspace, which stays on its host; task_transfer moves it as a new task', 409, 'workspace_task');
+    }
+  }
   const blocker = await switchHostBlocker(host, engine);
   if (blocker) {
-    throw new EngineSwitchError(`${blocker}. A switch keeps the task on its host; to move the work, use task_transfer.`, 409, 'engine_not_on_host');
+    throw new EngineSwitchError(move ? `${blocker}.` : `${blocker}. A switch keeps the task on its host; to move the work, use task_move.`, 409, 'engine_not_on_host');
   }
   const waiting = task.engine_switch?.state === 'pending' ? task.engine_switch : undefined;
   const busy = await sessionBusy(old);
@@ -164,6 +197,8 @@ export async function requestEngineSwitch(req: EngineSwitchRequest): Promise<Eng
       engine, ...(req.model ? { model: req.model } : {}), ...(req.effort ? { effort: req.effort } : {}),
       ...(req.permissionMode ? { permission_mode: req.permissionMode } : {}), host,
     },
+    ...(move ? { move: true, from_host: oldHost, ...(old.cwd ? { from_cwd: old.cwd } : {}) } : {}),
+    ...(req.userWords?.trim() ? { user_words: req.userWords.trim().slice(0, 2000) } : {}),
     message: req.message, ...(req.displayText && req.displayText !== req.message ? { display_text: req.displayText } : {}),
     by: by(req.callerSid, caller.kind === 'session' ? caller.record.taskId : undefined),
   };
@@ -216,7 +251,7 @@ export function runEngineSwitch(taskId: string, state: EngineSwitchState): Promi
   const running = inFlight.get(taskId);
   if (running) return running.work;
   const work = execute(taskId, state).finally(() => inFlight.delete(taskId));
-  inFlight.set(taskId, { from: state.from_session_id, work });
+  inFlight.set(taskId, { from: state.from_session_id, work, maxMs: state.move ? MOVE_WAIT_MS : SWITCH_WAIT_MS });
   return work;
 }
 
@@ -256,9 +291,10 @@ export async function activeSessionFor(sessionId: string): Promise<string> {
 }
 
 /** Wait (bounded) for a switch of `taskId` in flight. True when one was running. */
-export async function awaitSwitch(taskId: string, ms = 120_000): Promise<boolean> {
+export async function awaitSwitch(taskId: string, maxMs?: number): Promise<boolean> {
   const running = inFlight.get(taskId);
   if (!running) return false;
+  const ms = maxMs ?? running.maxMs;
   let timer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([running.work.catch(() => {}), new Promise<void>((r) => { timer = setTimeout(r, ms); timer.unref?.(); })]);
   if (timer) clearTimeout(timer);
@@ -276,8 +312,9 @@ async function execute(taskId: string, state: EngineSwitchState): Promise<Engine
     throw err;
   }
   const engine = resolveEngine(state.to.engine);
-  // Always the old session's host; a pending switch an older Walnut recorded with a move stays put too.
-  const host = normalizeHost(old.host);
+  // The old session's host, except for a move (task_move); a pending switch an older
+  // Walnut recorded with `confirm_move` stays put.
+  const host = state.move ? normalizeHost(state.to.host) : normalizeHost(old.host);
   if (await sessionBusy(old)) {
     // A turn started after the check (a trigger, a peer): the switch waits for it.
     let parked = false;
@@ -301,33 +338,52 @@ async function execute(taskId: string, state: EngineSwitchState): Promise<Engine
   if (!claimed) throw new EngineSwitchError('This switch was cancelled or replaced', 409, 'switch_cancelled');
   log.session.info('engine switch: starting', { taskId, switchId: state.id, from: old.claudeSessionId, fromEngine: resolveEngine(old.engine), to: engine, host });
 
-  // Read and render before anything changes: a failure here leaves the task as it was.
   const rows = await tracker.getSessionsForTask(taskId);
+  // Retire the old session: from here its stop is history, not the task's.
+  const retire = async (left?: { fingerprint: string; messages: number }): Promise<HeldRow[]> => {
+    const oldWasLive = LIVE.has(old.process_status);
+    await tracker.updateSessionRecord(old.claudeSessionId, {
+      archived: true, archive_reason: engineSwitchedReason(engine), ...(left ? { leftContext: { ...left, at: new Date().toISOString() } } : {}),
+    });
+    const taken = await takeQueuedRows(old.claudeSessionId);
+    if (taken.length > 0) {
+      await tm.updateTaskRaw(taskId, (cur) => (cur.engine_switch?.id === state.id ? { engine_switch: { ...cur.engine_switch, held_rows: taken } } : null), { source: 'engine-switch', emitEvent: true }).catch(() => {});
+    }
+    if (oldWasLive) {
+      try {
+        const { terminateSession } = await import('./session-lifecycle.js');
+        await terminateSession(old.claudeSessionId, { force: true });
+      } catch (err) {
+        log.session.warn('engine switch: stopping the old session failed (its process ends with its idle reap)', {
+          taskId, sessionId: old.claudeSessionId, error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return taken;
+  };
   let prepared: Awaited<ReturnType<typeof prepare>>;
-  try {
-    prepared = await prepare(task, old, rows, state, engine, host);
-  } catch (err) {
-    await fail(taskId, state, err);
-    throw err;
-  }
-
-  // Retire the old session first: from here its stop is history, not the task's.
-  const oldWasLive = LIVE.has(old.process_status);
-  await tracker.updateSessionRecord(old.claudeSessionId, {
-    archived: true, archive_reason: engineSwitchedReason(engine), leftContext: { ...prepared.left, at: new Date().toISOString() },
-  });
-  const held = await takeQueuedRows(old.claudeSessionId);
-  if (held.length > 0) {
-    await tm.updateTaskRaw(taskId, (cur) => (cur.engine_switch?.id === state.id ? { engine_switch: { ...cur.engine_switch, held_rows: held } } : null), { source: 'engine-switch', emitEvent: true }).catch(() => {});
-  }
-  if (oldWasLive) {
+  let held: HeldRow[];
+  if (!state.move) {
+    // Read and render before anything changes: a failure here leaves the task as it was.
     try {
-      const { terminateSession } = await import('./session-lifecycle.js');
-      await terminateSession(old.claudeSessionId, { force: true });
+      prepared = await prepare(task, old, rows, state, engine, host);
     } catch (err) {
-      log.session.warn('engine switch: stopping the old session failed (its process ends with its idle reap)', {
-        taskId, sessionId: old.claudeSessionId, error: err instanceof Error ? err.message : String(err),
-      });
+      await fail(taskId, state, err);
+      throw err;
+    }
+    held = await retire(prepared.left);
+  } else {
+    // A move stops the old session before its work is copied, so nothing changes under the copy.
+    held = await retire();
+    try {
+      prepared = await prepare(task, old, rows, state, engine, host);
+    } catch (err) {
+      await restore(taskId, old, undefined, new Date().toISOString(), held);
+      await fail(taskId, state, err);
+      throw err instanceof EngineSwitchError ? err : new EngineSwitchError(
+        `The move to ${host === LOCAL_HOST ? 'this Mac' : host} did not happen: ${err instanceof Error ? err.message : String(err)}. The task stays where it was.`,
+        typeof (err as { status?: unknown }).status === 'number' ? (err as { status: number }).status : 502,
+        typeof (err as { code?: unknown }).code === 'string' ? (err as { code: string }).code : 'move_failed');
     }
   }
 
@@ -367,8 +423,9 @@ async function execute(taskId: string, state: EngineSwitchState): Promise<Engine
     }
     await restore(taskId, old, sessionId, startedAt, held);
     await fail(taskId, state, err);
-    throw err instanceof EngineSwitchError ? err : new EngineSwitchError(
-      `The switch to ${engineCaps(engine).displayName} did not start: ${err instanceof Error ? err.message : String(err)}. The task stays on ${engineCaps(old.engine).displayName}.`,
+    throw err instanceof EngineSwitchError ? err : new EngineSwitchError(state.move
+      ? `The new session on ${host === LOCAL_HOST ? 'this Mac' : host} did not start: ${err instanceof Error ? err.message : String(err)}. The task stays on ${normalizeHost(old.host) === LOCAL_HOST ? 'this Mac' : old.host}; the copied work is kept at ${prepared.cwd ?? 'its task directory'}.`
+      : `The switch to ${engineCaps(engine).displayName} did not start: ${err instanceof Error ? err.message : String(err)}. The task stays on ${engineCaps(old.engine).displayName}.`,
       502, 'start_failed');
   }
 
@@ -379,6 +436,7 @@ async function execute(taskId: string, state: EngineSwitchState): Promise<Engine
       ...((old.cliModel || old.model || old.acpModel) ? { fromModel: old.cliModel || old.model || old.acpModel } : {}),
       at, carriedTurns: prepared.carried.carriedTurns, trimmedTurns: prepared.carried.trimmedTurns,
       compacted: prepared.compacted, ...(prepared.transcriptPath ? { transcriptPath: prepared.transcriptPath } : {}),
+      ...(state.move ? { fromHost: normalizeHost(old.host), ...(old.cwd ? { fromCwd: old.cwd } : {}) } : {}),
     },
   }).catch(() => {});
   await tracker.updateSessionRecord(old.claudeSessionId, { supersededBy: sessionId }).catch(() => {});
@@ -390,6 +448,7 @@ async function execute(taskId: string, state: EngineSwitchState): Promise<Engine
       ...state, state: 'done', message: undefined, display_text: undefined, held_rows: undefined, session_id: sessionId,
       carried_turns: prepared.carried.carriedTurns, trimmed_turns: prepared.carried.trimmedTurns,
       ...(prepared.transcriptPath ? { transcript_path: prepared.transcriptPath } : {}),
+      ...(prepared.moved ? { moved: prepared.moved } : {}),
     },
   }, { source: 'engine-switch', emitEvent: true });
   log.session.info('engine switch: done', {
@@ -401,13 +460,29 @@ async function execute(taskId: string, state: EngineSwitchState): Promise<Engine
     state: 'done', taskId, switchId: state.id, fromSessionId: old.claudeSessionId, sessionId, engine, host,
     carriedTurns: prepared.carried.carriedTurns, trimmedTurns: prepared.carried.trimmedTurns,
     ...(prepared.transcriptPath ? { transcriptPath: prepared.transcriptPath } : {}),
+    ...(state.move ? { fromHost: normalizeHost(old.host), moved: prepared.moved ?? [] } : {}),
   };
 }
 
 /** Everything the new session needs, computed while nothing has changed yet. */
 async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], state: EngineSwitchState, engine: SessionEngine, host: string) {
   const oldHost = normalizeHost(old.host);
-  const cwd = old.cwd ?? task.cwd ?? undefined;
+  let cwd = old.cwd ?? task.cwd ?? undefined;
+  let moveMeta: NonNullable<Parameters<typeof renderCarriedContext>[1]['move']> | undefined;
+  let moved: string[] | undefined;
+  if (state.move) {
+    // The task's own work, packed on the old host and set up under its task directory here.
+    const { moveTaskWork } = await import('../transfer/task-work.js');
+    const work = await moveTaskWork({ task, session: old, sourceHost: oldHost, targetHost: host, moveId: `xf-${state.id.replace(/^es-/, '')}` });
+    cwd = work.cwd;
+    moved = work.summary;
+    const label = (h: string) => (h === LOCAL_HOST ? 'this Mac' : h);
+    moveMeta = {
+      fromHost: label(oldHost), toHost: label(host), ...(old.cwd ? { fromCwd: old.cwd } : {}), cwd: work.cwd,
+      work: work.summary, steps: work.pieces.filter((p) => p.steps).map((p) => `### ${p.dest}\n${p.steps}`),
+    };
+    log.session.info('task move: work moved', { taskId: task.id, switchId: state.id, from: oldHost, to: host, cwd: work.cwd, pieces: work.pieces.length, applied: work.pieces.filter((p) => p.applied).length });
+  }
 
   const ctx = await readActiveContext(old);
   const left = await contextFingerprint(ctx.messages);
@@ -416,8 +491,9 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
     return undefined;
   });
   const window = await targetWindowTokens(engine, state.to.model, host, rows);
-  // Back to an engine the task used before: resume that session when its history is still a prefix.
-  const planned = await planResume({
+  // Back to an engine the task used before: resume that session when its history is still a
+  // prefix. Never on a move: the work was set up anew in another place.
+  const planned = state.move ? { reason: 'a move starts a new session' } : await planResume({
     active: old, activeCtx: ctx, rows, engine, host, cwd, model: state.to.model, windowTokens: window,
     ...(transcriptPath ? { transcriptPath } : {}),
   }).catch((err: unknown) => ({ reason: `the check failed: ${err instanceof Error ? err.message : String(err)}` }));
@@ -430,6 +506,7 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
     fromEngine: resolveEngine(old.engine), fromModel: old.cliModel || old.model || old.acpModel || undefined,
     toEngine: engine, ...(transcriptPath ? { transcriptPath } : {}),
     ...(ctx.rawTranscriptPath ? { rawTranscriptPath: hostPath(ctx.rawTranscriptPath, oldHost, host) } : {}), compacted: ctx.compacted,
+    ...(moveMeta ? { move: moveMeta } : {}),
   }, Math.floor(window * CARRY_WINDOW_SHARE));
   const { composeHinted, renderHintBlock } = await import('../hints/hint-format.js');
   const blocks = [renderHintBlock(ENGINE_SWITCH_HINT, carried.text)];
@@ -442,7 +519,7 @@ async function prepare(task: Task, old: SessionRecord, rows: SessionRecord[], st
   const message = composeHinted(state.message ?? '', { before: blocks, after: [] });
   const mode = state.to.permission_mode ?? old.mode;
   return {
-    message, cwd, carried, transcriptPath, compacted: ctx.compacted, source: ctx.source, mode, left,
+    message, cwd, carried, transcriptPath, compacted: ctx.compacted, source: ctx.source, mode, left, moved,
     ...(resume ? { resume: { ...resume, message: composeHinted(state.message ?? '', { before: [renderHintBlock(ENGINE_SWITCH_HINT, resume.text)], after: [] }) } } : {}),
   };
 }

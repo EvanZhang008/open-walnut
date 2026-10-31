@@ -103,11 +103,13 @@ export function EngineSwitchLine({ pick, server, catalog, taskId, onUndo }: {
   }, [taskId]);
   const toName = useMemo(() => engineName(catalog, server?.to.engine ?? pick?.engine), [catalog, server?.to.engine, pick?.engine]);
   const held = server?.display_text ?? server?.message;
+  // A move to another host (task_move) is the same switch with another host: it reads as a move.
+  const moveTo = server?.move ? (!server.to.host || server.to.host === '__local__' ? 'this Mac' : server.to.host) : null;
 
   if (server?.state === 'pending') {
     return (
       <div className="engine-switch-line" role="status" data-testid="engine-switch-line" data-state="pending">        <span className="engine-switch-text">
-          Switches to <strong>{toName}</strong> when this turn ends{held ? <>, then sends: <em className="engine-switch-held">{held}</em></> : null}
+          {moveTo ? <>Moves to <strong>{moveTo}</strong> when this turn ends</> : <>Switches to <strong>{toName}</strong> when this turn ends</>}{held && !moveTo ? <>, then sends: <em className="engine-switch-held">{held}</em></> : null}
         </span>
         <button type="button" className="engine-switch-btn" disabled={busy} onClick={() => void cancel(true)}>Send here instead</button>
         <button type="button" className="engine-switch-btn" disabled={busy} onClick={() => void cancel(false)}>Cancel</button>
@@ -118,7 +120,9 @@ export function EngineSwitchLine({ pick, server, catalog, taskId, onUndo }: {
     return (
       <div className="engine-switch-line" role="status" data-testid="engine-switch-line" data-state="switching">
         <span className="engine-switch-spinner" aria-hidden="true" />
-        <span className="engine-switch-text">Starting {toName} with this task&apos;s conversation…</span>
+        <span className="engine-switch-text">{moveTo
+          ? <>Moving this task&apos;s work and conversation to <strong>{moveTo}</strong>…</>
+          : <>Starting {toName} with this task&apos;s conversation…</>}</span>
       </div>
     );
   }
@@ -127,10 +131,10 @@ export function EngineSwitchLine({ pick, server, catalog, taskId, onUndo }: {
     return (
       <div className="engine-switch-line engine-switch-line-error" role="alert" data-testid="engine-switch-line" data-state="failed">
         <span className="engine-switch-text">
-          The switch to {toName} did not start: {server.error}. The task stays on this session.
-          {held ? <> Your message was not sent: <em className="engine-switch-held">{held}</em></> : null}
+          {moveTo ? <>The move to {moveTo} did not happen: {server.error}</> : <>The switch to {toName} did not start: {server.error}. The task stays on this session.</>}
+          {held && !moveTo ? <> Your message was not sent: <em className="engine-switch-held">{held}</em></> : null}
         </span>
-        {held && <button type="button" className="engine-switch-btn" disabled={busy} onClick={() => void cancel(true)}>Send here</button>}
+        {held && !moveTo && <button type="button" className="engine-switch-btn" disabled={busy} onClick={() => void cancel(true)}>Send here</button>}
         <button type="button" className="engine-switch-btn" disabled={busy} onClick={() => { setDismissedFail(server.id); if (held) void cancel(false); }}>Dismiss</button>
       </div>
     );

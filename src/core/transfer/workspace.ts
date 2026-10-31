@@ -83,7 +83,17 @@ export async function moveWorkspace(opts: {
   const client = await import('./daemon-transfer-client.js');
   const sourceDir = `${transfersDir(opts.sourceHost)}/${opts.transferId}/pack`;
   const pack: PackReply = await client.packWorkspace(opts.sourceHost, { cwd: opts.sourceCwd, outDir: sourceDir });
-  const bundleDir = `${transfersDir(opts.targetHost)}/${opts.transferId}/pack`;
+  return copyPack(pack, { sourceHost: opts.sourceHost, targetHost: opts.targetHost, bundleDir: `${transfersDir(opts.targetHost)}/${opts.transferId}/pack` });
+}
+
+/**
+ * Put a pack made on `sourceHost` into `bundleDir` on `targetHost`: host to host
+ * over the target's own SSH when it reaches the source, else relayed through
+ * this server in chunks. Each file is checked against its sha256.
+ */
+export async function copyPack(pack: PackReply, opts: { sourceHost: string; targetHost: string; bundleDir: string }): Promise<MovedWorkspace> {
+  const client = await import('./daemon-transfer-client.js');
+  const bundleDir = opts.bundleDir;
   const bytes = pack.files.reduce((n, f) => n + f.size, 0);
 
   const ssh = await sshTargetOf(opts.sourceHost);

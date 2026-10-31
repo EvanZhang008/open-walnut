@@ -28,7 +28,7 @@ import type httpType from 'node:http'
 
 export interface HostFactsDeps {
   fs: typeof fsType
-  os: Pick<typeof osType, 'release' | 'cpus' | 'totalmem' | 'hostname' | 'uptime'>
+  os: Pick<typeof osType, 'release' | 'cpus' | 'totalmem' | 'hostname' | 'uptime'> & Partial<Pick<typeof osType, 'loadavg' | 'freemem'>>
   /** child_process.execFile */
   execFile: (file: string, args: string[], opts: Record<string, unknown>, cb: (err: Error | null, stdout: string | Buffer, stderr: string | Buffer) => void) => { kill(sig?: string): boolean } | unknown
   http: Pick<typeof httpType, 'request'>
@@ -59,6 +59,28 @@ export interface HostFacts {
   tools: Record<string, string | null>
   uptimeSec: number
   probedAt: string
+}
+
+/**
+ * How busy a host is right now ('host-load-v1', `host.load {path?}`), the numbers
+ * placement weighs (src/core/hosts/placement.ts): the load average (it counts the
+ * threads a Mac stalls on memory too, which CPU use alone misses), CPU busy share over
+ * two samples 200 ms apart, memory available (MemAvailable on Linux, free + inactive +
+ * speculative pages on macOS), and the disk that holds `path` (default HOME).
+ * Every probe bounded; an unknown number is null.
+ */
+export interface HostLoad {
+  cpus: number
+  /** os.loadavg(): 1, 5 and 15 minutes. */
+  load: number[]
+  /** Share of CPU time not idle between two samples, 0..1. */
+  cpuBusy: number | null
+  memTotalBytes: number
+  memAvailBytes: number | null
+  diskPath: string
+  diskFreeBytes: number | null
+  diskTotalBytes: number | null
+  at: string
 }
 
 /** Self-contained factory: see the file comment before adding any reference outside it. */
@@ -161,13 +183,83 @@ export function createHostFacts(deps: HostFactsDeps) {
     return out
   }
 
-  async function diskFree(): Promise<number | null> {
-    var r = await exec('df', ['-Pk', deps.home], PROBE_MS)
+  async function diskOf(dir: string): Promise<{ free: number; total: number } | null> {
+    var r = await exec('df', ['-Pk', dir], PROBE_MS)
     if (!r || r.code !== 0) return null
     var lines = r.stdout.trim().split('\n')
     var cols = lines[lines.length - 1].trim().split(/\s+/)
     var kb = Number(cols[3])
-    return isFinite(kb) && cols.length >= 4 ? kb * 1024 : null
+    var totalKb = Number(cols[1])
+    return isFinite(kb) && cols.length >= 4 ? { free: kb * 1024, total: isFinite(totalKb) ? totalKb * 1024 : 0 } : null
+  }
+
+  async function diskFree(): Promise<number | null> {
+    var d = await diskOf(deps.home)
+    return d ? d.free : null
+  }
+
+  function cpuTimes(): { idle: number; total: number } | null {
+    try {
+      var list = deps.os.cpus()
+      var idle = 0
+      var total = 0
+      for (var i = 0; i < list.length; i++) {
+        var t = list[i].times
+        idle += t.idle
+        total += t.user + t.nice + t.sys + t.idle + t.irq
+      }
+      return list.length ? { idle: idle, total: total } : null
+    } catch (_e) { return null }
+  }
+
+  async function cpuBusy(): Promise<number | null> {
+    var a = cpuTimes()
+    await new Promise(function (r) { setTimeout(r, 200) })
+    var b = cpuTimes()
+    if (!a || !b || b.total <= a.total) return null
+    var share = 1 - (b.idle - a.idle) / (b.total - a.total)
+    return Math.max(0, Math.min(1, Math.round(share * 1000) / 1000))
+  }
+
+  async function memAvailable(): Promise<number | null> {
+    if (deps.platform === 'linux') {
+      var text = await deps.fs.promises.readFile('/proc/meminfo', 'utf8')
+      var m = /^MemAvailable:\s+(\d+)\s*kB/m.exec(text)
+      return m ? Number(m[1]) * 1024 : null
+    }
+    if (deps.platform === 'darwin') {
+      var r = await exec('vm_stat', [], PROBE_MS)
+      if (!r || r.code !== 0) return null
+      var size = /page size of (\d+) bytes/.exec(r.stdout)
+      var page = size ? Number(size[1]) : 4096
+      var pages = 0
+      var names = ['Pages free', 'Pages inactive', 'Pages speculative']
+      names.forEach(function (n) {
+        var mm = new RegExp('^' + n + ':\\s+(\\d+)', 'm').exec(r!.stdout)
+        if (mm) pages += Number(mm[1])
+      })
+      return pages * page
+    }
+    return deps.os.freemem ? deps.os.freemem() : null
+  }
+
+  async function load(cmd?: Record<string, unknown>): Promise<HostLoad> {
+    var dir = cmd && typeof cmd.path === 'string' && cmd.path ? cmd.path : deps.home
+    if (dir === '~' || dir.indexOf('~/') === 0) dir = deps.home + dir.slice(1)
+    var cpus = 0
+    try { cpus = deps.os.cpus().length } catch (_e) { /* unknown */ }
+    var avg: number[] = []
+    try { avg = deps.os.loadavg ? deps.os.loadavg().map(function (n) { return Math.round(n * 100) / 100 }) : [] } catch (_e) { /* unknown */ }
+    var got = await Promise.all([
+      within(cpuBusy(), PROBE_MS, null),
+      within(memAvailable(), PROBE_MS, null),
+      within(diskOf(dir), PROBE_MS, null),
+    ])
+    return {
+      cpus: cpus, load: avg, cpuBusy: got[0], memTotalBytes: deps.os.totalmem(), memAvailBytes: got[1],
+      diskPath: dir, diskFreeBytes: got[2] ? got[2].free : null, diskTotalBytes: got[2] ? got[2].total || null : null,
+      at: new Date(now()).toISOString(),
+    }
   }
 
   async function fqdn(): Promise<string> {
@@ -264,5 +356,5 @@ export function createHostFacts(deps: HostFactsDeps) {
     return JSON.parse(JSON.stringify(out)) as HostFacts
   }
 
-  return { facts: facts }
+  return { facts: facts, load: load }
 }
