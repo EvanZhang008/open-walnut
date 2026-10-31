@@ -26,7 +26,7 @@
  * The host's install checks that the file answers `<version> (<commit>, ...`,
  * so a release built from another commit than this server is refused there.
  *
- *   <data>/cache/host-server/files/<id>/walnut-<target>.gz    the newest few builds
+ *   <data>/cache/host-server/files/<id>/walnut-<target>.gz    the build in use and the one before
  *   <data>/cache/host-server/files/<id>/walnut-<target>.json  its sha256s, written last
  */
 
@@ -111,7 +111,8 @@ export interface HostFileSourceOptions {
   batchWindowMs?: number
 }
 
-const KEEP_BUILDS = 3
+/** The build in use and the one before it (a rollback's): about 125 MB each. */
+const KEEP_BUILDS = 2
 const LOG_KEEP_MS = 7 * 24 * 3_600_000
 /** How long a dead process's download dir is left before a prune removes it. */
 const DOWNLOAD_KEEP_MS = 60 * 60_000

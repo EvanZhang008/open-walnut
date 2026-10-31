@@ -210,7 +210,7 @@ describe('from this server\'s checkout', () => {
     expect(calls).toEqual([])
   })
 
-  it('keeps the newest few builds and drops the Node layout\'s host packages, never the companion\'s', async () => {
+  it('keeps the build in use and the one before it, and drops the Node layout\'s host packages, never the companion\'s', async () => {
     const { build } = fakeBuild()
     fs.mkdirSync(cacheDir, { recursive: true })
     fs.writeFileSync(path.join(cacheDir, '0.6.10-aaa.tgz'), 'old host package')
@@ -221,7 +221,7 @@ describe('from this server\'s checkout', () => {
       const t = new Date(Date.now() - (10 - i) * 60_000)
       if (fs.existsSync(d)) fs.utimesSync(d, t, t)
     }
-    expect(fs.readdirSync(path.join(cacheDir, 'files')).sort()).toEqual(['0.6.12-b', '0.6.13-c', '0.6.14-d'])
+    expect(fs.readdirSync(path.join(cacheDir, 'files')).sort()).toEqual(['0.6.13-c', '0.6.14-d'])
     expect(fs.existsSync(path.join(cacheDir, '0.6.10-aaa.tgz'))).toBe(false)
     expect(fs.existsSync(path.join(cacheDir, '0.6.10-aaa-companion-linux-arm64.tgz'))).toBe(true)
   })

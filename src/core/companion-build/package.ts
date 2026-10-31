@@ -45,7 +45,8 @@ export interface CompanionPackage {
 }
 
 /** Keep the newest few packages. */
-const KEEP_PACKAGES = 3
+/** The package in use and the one before it: about 60 MB each. */
+const KEEP_PACKAGES = 2
 const PACKAGE_FILE = /-companion-[a-z0-9]+-[a-z0-9]+\.tgz$/
 
 /** The one dependency set of every file package: nothing. */

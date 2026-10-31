@@ -180,13 +180,14 @@ describe('the companion package', () => {
     expect(fs.readFileSync(path.join(dir, 'package', 'walnut'), 'utf8')).toContain('# other')
   })
 
-  it('keeps the newest three packages', async () => {
+  it('keeps the package in use and the one before it', async () => {
     for (const commit of ['aaa0001', 'aaa0002', 'aaa0003', 'aaa0004']) {
       await buildCompanionPackage({ platform: 'linux', arch: 'arm64' }, { source: fakeSource({ id: `0.7.0-${commit}`, commit }) })
       await new Promise((r) => setTimeout(r, 15))
     }
     const kept = fs.readdirSync(cacheDir()).filter((n) => n.endsWith('.tgz')).sort()
-    expect(kept).toEqual(['0.7.0-aaa0002-companion-linux-arm64.tgz', '0.7.0-aaa0003-companion-linux-arm64.tgz', '0.7.0-aaa0004-companion-linux-arm64.tgz'])
+    expect(kept).toEqual(['0.7.0-aaa0003-companion-linux-arm64.tgz', '0.7.0-aaa0004-companion-linux-arm64.tgz'])
+    expect(fs.readdirSync(cacheDir()).filter((n) => n.endsWith('.tgz.json')).sort()).toEqual(kept.map((n) => `${n}.json`))
   })
 
   it('the build id is the walnut file source\'s, and its error says why there is none', async () => {
