@@ -132,24 +132,23 @@ test.describe('Streaming blocks survive turn boundaries (evidence-based promotio
     // archiveCaughtUp is a Node-side closure the test flips to simulate the archive
     // finally flushing turn 1 to JSONL. While false, every delta fetch is EMPTY
     // (turn not flushed) — the exact "archive lagging" condition that used to
-    // trigger the blind clear.
+    // trigger the blind clear. Once true, every read agrees with the archive, as
+    // the server's does: a full read holds turn 1 and a delta past it is empty.
+    // (A full read that still lacked turn 1 told the client the rows were gone,
+    // so it rightly showed the stream blocks again: turn 1 folded, unfolded and
+    // folded again under the post-turn refetches.)
     let archiveCaughtUp = false;
+    const archived = () => (archiveCaughtUp ? [...base, ...turn1Persisted] : base);
     await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
       const url = new URL(route.request().url());
-      const source = url.searchParams.get('source');
       const since = url.searchParams.get('since');
-      if (source === 'streams') {
-        return route.fulfill({ json: { messages: base, cursor: base.length, delta: false } });
-      }
+      const rows = archived();
       if (since !== null) {
         const n = parseInt(since, 10);
-        if (archiveCaughtUp) {
-          return route.fulfill({ json: { messages: turn1Persisted, cursor: base.length + turn1Persisted.length, delta: true } });
-        }
-        return route.fulfill({ json: { messages: [], cursor: n, delta: true } }); // lagging
+        return route.fulfill({ json: { messages: rows.slice(n), cursor: rows.length, delta: true } });
       }
-      // Phase 2 full (no source, no since)
-      return route.fulfill({ json: { messages: base, cursor: base.length, delta: false } });
+      // Phase 1 (source=streams) and phase 2 full reads
+      return route.fulfill({ json: { messages: rows, cursor: rows.length, delta: false } });
     });
     await mockSessionDetail(page);
 
@@ -204,9 +203,47 @@ test.describe('Streaming blocks survive turn boundaries (evidence-based promotio
     }
 
     // ── Archive catches up → turn 1 promoted into persisted history, turn 2 kept ──
+    // Promoted, the finished turn folds everything before its answer into one
+    // row (turn-shape.ts), so "Step 1 done." leaves the text on screen by design.
+    // The anti-vanish invariant per frame: each block is on screen as text, or
+    // inside the fold row that now holds it (opened and checked below).
+    await page.evaluate(() => {
+      const w = window as unknown as { __vanish: string[]; __vanishOn: boolean };
+      const el = document.querySelector('.session-history') as HTMLElement;
+      w.__vanish = [];
+      w.__vanishOn = true;
+      const tick = () => {
+        if (!w.__vanishOn) return;
+        const t = el.textContent ?? '';
+        // Held by turn 1's fold: a fold drawn before turn 1's answer ("Step 2 done.").
+        const answer = Array.from(el.querySelectorAll('[data-msg-index], [data-message-id]'))
+          .find((r) => (r.textContent ?? '').includes('Step 2 done.') && !(r.textContent ?? '').includes('Step 1 done.'));
+        const folded = !!answer && Array.from(el.querySelectorAll('[data-testid="turn-fold"]'))
+          .some((f) => (f.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
+        if (!t.includes('Step 1 done.') && !folded) w.__vanish.push('Step 1 done.');
+        if (!t.includes('Step 2 done.')) w.__vanish.push('Step 2 done.');
+        if (!t.includes('Message 5 is generating')) w.__vanish.push('Message 5 is generating');
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
     archiveCaughtUp = true;
     await injectEvent(page, 'session:batch-completed', { sessionId: SESSION_ID, count: 1 });
     await page.waitForTimeout(1500);
+    const turnFold = history.locator('[data-testid="turn-fold"]');
+    await expect(turnFold).toHaveCount(1);
+    const lost = await page.evaluate(() => {
+      const w = window as unknown as { __vanish: string[]; __vanishOn: boolean };
+      w.__vanishOn = false;
+      return w.__vanish;
+    });
+    expect(lost, 'a block vanished from a frame while the archive caught up').toEqual([]);
+
+    // The fold holds turn 1's steps as PERSISTED rows (data-msg-index), not as
+    // stream blocks: open it and read them.
+    const toggle = turnFold.locator('.tool-run-toggle').first();
+    if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click();
+    await expect(turnFold.locator('.process-fold-body [data-msg-index]', { hasText: 'Step 1 done.' })).toHaveCount(1);
 
     const finalTxt = (await history.textContent()) ?? '';
     // Nothing lost

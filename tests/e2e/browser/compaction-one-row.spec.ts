@@ -76,6 +76,20 @@ function count(txt: string | null, needle: string): number {
   return txt.split(needle).length - 1
 }
 
+/** Open every closed turn fold: once the turn is answered, its steps before the
+ *  answer (the compaction row among them) fold into one row (fold-steps.ts). */
+async function openTurnFolds(page: Page): Promise<void> {
+  const closed = page.locator('.session-history [data-testid="turn-fold"][data-open="false"] > .tool-run-toggle')
+  for (let i = 0; i < 10 && await closed.count() > 0; i++) await closed.first().click()
+}
+
+/** How often `needle` is in the history with every turn fold open. The fold forms
+ *  when history takes the answered turn, which may land after its words stream. */
+async function countOpen(page: Page, needle: string): Promise<number> {
+  await openTurnFolds(page)
+  return count(await page.locator('.session-history').textContent(), needle)
+}
+
 /** The compaction row's two spans. Live and reloaded must return the SAME object:
  *  one event, one wording, whichever twin is on screen. */
 async function rowShape(page: Page): Promise<{ text: string; detail: string }> {
@@ -124,14 +138,12 @@ test.describe('Compaction renders as ONE row (real mock-CLI pipeline)', () => {
     ).toBe(1)
 
     // (2) The boundary turns that row INTO the outcome — one row, no placeholder.
-    await expect(history).toContainText('Context compacted', { timeout: 25_000 })
+    // The turn ends right after it, so the row is read inside the turn's fold.
     await expect(history).toContainText(POST, { timeout: 25_000 })
-    await expect.poll(async () => count(await history.textContent(), 'Context compacted'), {
-      timeout: 20_000,
-    }).toBe(1)
-    await expect.poll(async () => count(await history.textContent(), 'Compacting context'), {
-      timeout: 20_000,
-    }).toBe(0)
+    await expect.poll(() => countOpen(page, 'Context compacted'), { timeout: 25_000 }).toBe(1)
+    await expect.poll(() => countOpen(page, 'Compacting context'), { timeout: 20_000 }).toBe(0)
+    await page.waitForTimeout(1500)
+    expect(await countOpen(page, 'Context compacted'), 'still one row once history settled').toBe(1)
 
     // The numbers say what they are, at both ends, and that it was automatic.
     await expect(history).toContainText('444K → 49K tokens')
@@ -152,9 +164,7 @@ test.describe('Compaction renders as ONE row (real mock-CLI pipeline)', () => {
     // parser split the row the same way the live one is split.
     await page.reload()
     await expect(history).toContainText(POST, { timeout: 25_000 })
-    await expect.poll(async () => count(await history.textContent(), 'Context compacted'), {
-      timeout: 20_000,
-    }).toBe(1)
+    await expect.poll(() => countOpen(page, 'Context compacted'), { timeout: 20_000 }).toBe(1)
     expect(await rowShape(page)).toEqual(liveShape)
     expect(count(await history.textContent(), 'Compacting context')).toBe(0)
     expect(await history.textContent()).not.toContain('system messages')

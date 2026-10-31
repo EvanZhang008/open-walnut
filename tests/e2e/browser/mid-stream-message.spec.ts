@@ -45,6 +45,62 @@ async function waitForWs(page: Page) {
   }, null, { timeout: 10000 });
 }
 
+type HistoryRow = { role: 'user' | 'assistant'; text: string; timestamp: string; tools?: unknown[] };
+
+/**
+ * Mock a running session and serve its history the way the real server does:
+ * only the rows the CLI has written so far. `?since=N` returns the written rows
+ * after N, a full read returns every written row. The turn's rows start
+ * unwritten; the returned `land(n)` writes the next n of them, so the test
+ * lands each row at the point the CLI would (a queued message when it is
+ * delivered, the answer when the turn ends).
+ *
+ * The panel also reads history DURING a turn: the turn-start refetch
+ * (turn-prompt-refetch.ts, 9fd09fd81) fires at the first model output when no
+ * prompt is on screen. A mock that served the whole turn to any `since` read
+ * handed that refetch rows that did not exist yet, the very message the test
+ * was about to type included, so the bubble was absorbed the moment it was sent.
+ */
+async function mockRunningSession(page: Page, base: HistoryRow[], turnRows: HistoryRow[]): Promise<(n?: number) => void> {
+  const fullHistory = [...base, ...turnRows];
+  let written = base.length;
+  // The glob MUST end in `**` so it matches `history?tail=…` and `history?since=2`.
+  await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
+    const url = new URL(route.request().url());
+    const since = url.searchParams.get('since');
+    const rows = fullHistory.slice(0, written);
+    if (since !== null) {
+      await route.fulfill({ json: { messages: rows.slice(Number(since)), cursor: rows.length, delta: true } });
+    } else {
+      await route.fulfill({ json: { messages: rows, cursor: rows.length, delta: false } });
+    }
+  });
+
+  // Also mock the session detail API so the page renders the session
+  await page.route(`**/api/sessions/${SESSION_ID}`, async (route, request) => {
+    // Only intercept the session detail endpoint, not /history
+    if (request.url().includes('/history')) return route.fallback();
+    await route.fulfill({
+      json: {
+        session: {
+          claudeSessionId: SESSION_ID,
+          taskId: 'pw-task-001',
+          project: 'Walnut',
+          process_status: 'running',
+
+          mode: 'bypass',
+          startedAt: '2026-01-01T00:00:00.000Z',
+          lastActiveAt: new Date().toISOString(),
+          messageCount: base.length,
+          title: 'Test session',
+        },
+      },
+    });
+  });
+
+  return (n = 1) => { written = Math.min(fullHistory.length, written + n); };
+}
+
 // ── Setup: Patch WebSocket before each test ──
 
 test.beforeEach(async ({ page }) => {
@@ -131,14 +187,14 @@ test.describe('Mid-stream user message persistence', () => {
     // in the JSONL (Pattern A enqueue→dequeue, or Pattern B synthesized from a
     // lone enqueue) — see SessionChatHistory.tsx header. Survival is therefore via
     // persisted history; the count-based handleBatchCompleted removes the now-
-    // redundant optimistic copy. The glob MUST end in `**` so it matches
-    // `history?source=streams` and `history?since=2`.
+    // redundant optimistic copy. Each turn row is written only when the CLI
+    // would write it (`land`, see mockRunningSession).
     const midStreamText = 'Hey, also check the test files please';
-    const baseMessages = [
+    const baseMessages: HistoryRow[] = [
       { role: 'user', text: 'Start working on the task', timestamp: '2026-01-01T00:00:00.000Z' },
       { role: 'assistant', text: 'Sure, let me work on that.', timestamp: '2026-01-01T00:00:01.000Z' },
     ];
-    const turnDelta = [
+    const turnDelta: HistoryRow[] = [
       { role: 'user', text: midStreamText, timestamp: '2026-01-01T00:00:30.000Z' },
       { role: 'assistant', text: 'I have completed the task.', timestamp: '2026-01-01T00:01:00.000Z' },
     ];
@@ -149,40 +205,8 @@ test.describe('Mid-stream user message persistence', () => {
     // a second refetch (isStreaming false-edge reliability net): the double
     // merge tripped the length!==cursor rebuild, whose FULL refetch served only
     // the base — a mock-contract vanish, not a product one.
-    const fullHistory = [...baseMessages, ...turnDelta];
-    await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
-      const url = new URL(route.request().url());
-      const since = url.searchParams.get('since');
-      if (since !== null) {
-        // Delta refetch after the turn: rows past the client's cursor.
-        await route.fulfill({ json: { messages: fullHistory.slice(Number(since)), cursor: fullHistory.length, delta: true } });
-      } else {
-        // Phase 1 (streams) + Phase 2 (full): the base exchange.
-        await route.fulfill({ json: { messages: baseMessages, cursor: baseMessages.length, delta: false } });
-      }
-    });
-
-    // Also mock the session detail API so the page renders the session
-    await page.route(`**/api/sessions/${SESSION_ID}`, async (route, request) => {
-      // Only intercept the session detail endpoint, not /history
-      if (request.url().includes('/history')) return route.fallback();
-      await route.fulfill({
-        json: {
-          session: {
-            claudeSessionId: SESSION_ID,
-            taskId: 'pw-task-001',
-            project: 'Walnut',
-            process_status: 'running',
-
-            mode: 'bypass',
-            startedAt: '2026-01-01T00:00:00.000Z',
-            lastActiveAt: new Date().toISOString(),
-            messageCount: 2,
-            title: 'Test session',
-          },
-        },
-      });
-    });
+    // A full read serves every written row for the same reason.
+    const land = await mockRunningSession(page, baseMessages, turnDelta);
 
     // Navigate to sessions page with our session selected
     await page.goto(`/sessions?id=${SESSION_ID}`);
@@ -252,6 +276,9 @@ test.describe('Mid-stream user message persistence', () => {
 
     // Wait for the optimistic message to appear
     await page.waitForTimeout(300);
+    // Sent means gone from the composer: the click took focus off the box, and a
+    // draft save still in its debounce used to put the sent words back.
+    await expect(chatInput).toHaveValue('');
 
     // The RPC auto-responds with messageId → status transitions to 'received'
     // Now inject session:messages-delivered to transition to 'delivered'
@@ -259,6 +286,7 @@ test.describe('Mid-stream user message persistence', () => {
       sessionId: SESSION_ID,
       count: 1,
     });
+    land(1); // the CLI writes a queued message to its transcript when it reads it
     await page.waitForTimeout(200);
 
     // ── Step 3: Verify the user message is visible mid-stream ──
@@ -274,6 +302,7 @@ test.describe('Mid-stream user message persistence', () => {
     // This is where the bug manifests: the user message should survive but disappears
 
     // session:result → isStreaming = false
+    land(1); // the turn's answer
     await injectEvent(page, 'session:result', {
       sessionId: SESSION_ID,
       result: 'I have completed the task.',
@@ -318,17 +347,18 @@ test.describe('Mid-stream user message persistence', () => {
     // Also verify the persisted messages are still there
     expect(fullText).toContain('Start working on the task');
     expect(fullText).toContain('I have completed the task.');
+    await expect(chatInput).toHaveValue('');
   });
 
   test('multiple mid-stream messages all survive turn boundary', async ({ page }) => {
     // Same setup but with 2 messages sent during streaming (delta contract).
-    const baseMessages = [
+    const baseMessages: HistoryRow[] = [
       { role: 'user', text: 'Begin', timestamp: '2026-01-01T00:00:00.000Z' },
       { role: 'assistant', text: 'Starting.', timestamp: '2026-01-01T00:00:01.000Z' },
     ];
     // Both mid-stream messages land in the JSONL (parser Pattern A/B) → they're in
     // the delta re-fetch; survival is via persisted history, no duplicate copies.
-    const turnDelta = [
+    const turnDelta: HistoryRow[] = [
       { role: 'user', text: 'First mid-stream message', timestamp: '2026-01-01T00:01:30.000Z' },
       { role: 'user', text: 'Second mid-stream message', timestamp: '2026-01-01T00:01:40.000Z' },
       { role: 'assistant', text: 'Done with everything.', timestamp: '2026-01-01T00:02:00.000Z' },
@@ -336,36 +366,7 @@ test.describe('Mid-stream user message persistence', () => {
 
     // Honor `since` like the real server (rows after N; second refetch at the
     // turn boundary gets []) — see the contract comment in the first test.
-    const fullHistory = [...baseMessages, ...turnDelta];
-    await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
-      const url = new URL(route.request().url());
-      const since = url.searchParams.get('since');
-      if (since !== null) {
-        await route.fulfill({ json: { messages: fullHistory.slice(Number(since)), cursor: fullHistory.length, delta: true } });
-      } else {
-        await route.fulfill({ json: { messages: baseMessages, cursor: baseMessages.length, delta: false } });
-      }
-    });
-
-    await page.route(`**/api/sessions/${SESSION_ID}`, async (route, request) => {
-      if (request.url().includes('/history')) return route.fallback();
-      await route.fulfill({
-        json: {
-          session: {
-            claudeSessionId: SESSION_ID,
-            taskId: 'pw-task-001',
-            project: 'Walnut',
-            process_status: 'running',
-
-            mode: 'bypass',
-            startedAt: '2026-01-01T00:00:00.000Z',
-            lastActiveAt: new Date().toISOString(),
-            messageCount: 2,
-            title: 'Test session',
-          },
-        },
-      });
-    });
+    const land = await mockRunningSession(page, baseMessages, turnDelta);
 
     await page.goto(`/sessions?id=${SESSION_ID}`);
     await page.waitForLoadState('networkidle');
@@ -399,6 +400,7 @@ test.describe('Mid-stream user message persistence', () => {
     await injectEvent(page, 'session:messages-delivered', {
       sessionId: SESSION_ID, count: 2,
     });
+    land(2);
     await page.waitForTimeout(100);
 
     // Verify both messages visible during streaming
@@ -407,6 +409,7 @@ test.describe('Mid-stream user message persistence', () => {
     await expect(panel.getByText('Second mid-stream message')).toBeVisible();
 
     // Turn completes
+    land(1);
     await injectEvent(page, 'session:result', {
       sessionId: SESSION_ID, result: 'Done.', isError: false, taskId: 'pw-task-001',
     });
@@ -441,7 +444,7 @@ test.describe('Mid-stream user message persistence', () => {
     // the assistant's final response), and the DOM renders them in that order.
 
     // Initial history: just the opening exchange (cursor 2).
-    const baseMessages = [
+    const baseMessages: HistoryRow[] = [
       { role: 'user', text: 'Read 3 files with 5s sleep', timestamp: '2026-01-01T00:00:00.000Z' },
       { role: 'assistant', text: 'Starting file reads.', timestamp: '2026-01-01T00:00:01.000Z',
         tools: [{ name: 'Read', input: { file: 'f1.ts' } }] },
@@ -450,7 +453,7 @@ test.describe('Mid-stream user message persistence', () => {
     // The turn's DELTA (messages after cursor 2) includes the user's mid-stream
     // message at the CORRECT position (between assistant segments) — this simulates
     // what parseSessionMessages produces from queue-operation entries.
-    const turnDelta = [
+    const turnDelta: HistoryRow[] = [
       // Assistant segment 2 (more work)
       { role: 'assistant', text: 'File 2 read.', timestamp: '2026-01-01T00:00:10.000Z',
         tools: [{ name: 'Read', input: { file: 'f2.ts' } }] },
@@ -461,36 +464,7 @@ test.describe('Mid-stream user message persistence', () => {
     ];
 
     // Honor `since` like the real server (rows after N) — see the first test.
-    const fullHistory = [...baseMessages, ...turnDelta];
-    await page.route(`**/api/sessions/${SESSION_ID}/history**`, async (route) => {
-      const url = new URL(route.request().url());
-      const since = url.searchParams.get('since');
-      if (since !== null) {
-        await route.fulfill({ json: { messages: fullHistory.slice(Number(since)), cursor: fullHistory.length, delta: true } });
-      } else {
-        await route.fulfill({ json: { messages: baseMessages, cursor: baseMessages.length, delta: false } });
-      }
-    });
-
-    await page.route(`**/api/sessions/${SESSION_ID}`, async (route, request) => {
-      if (request.url().includes('/history')) return route.fallback();
-      await route.fulfill({
-        json: {
-          session: {
-            claudeSessionId: SESSION_ID,
-            taskId: 'pw-task-001',
-            project: 'Walnut',
-            process_status: 'running',
-
-            mode: 'bypass',
-            startedAt: '2026-01-01T00:00:00.000Z',
-            lastActiveAt: new Date().toISOString(),
-            messageCount: 2,
-            title: 'Test session',
-          },
-        },
-      });
-    });
+    const land = await mockRunningSession(page, baseMessages, turnDelta);
 
     await page.goto(`/sessions?id=${SESSION_ID}`);
     await page.waitForLoadState('networkidle');
@@ -513,6 +487,7 @@ test.describe('Mid-stream user message persistence', () => {
       sessionId: SESSION_ID, toolUseId: 'tool_002',
       result: 'contents of f2.ts', taskId: 'pw-task-001',
     });
+    land(1); // assistant segment 2
     await page.waitForTimeout(50);
 
     // ── Step 2: User sends mid-stream message ──
@@ -524,6 +499,7 @@ test.describe('Mid-stream user message persistence', () => {
     await injectEvent(page, 'session:messages-delivered', {
       sessionId: SESSION_ID, count: 1,
     });
+    land(1);
     await page.waitForTimeout(100);
 
     // More streaming after the user's message
@@ -533,6 +509,7 @@ test.describe('Mid-stream user message persistence', () => {
     await page.waitForTimeout(100);
 
     // ── Step 3: Turn completes ──
+    land(1);
     await injectEvent(page, 'session:result', {
       sessionId: SESSION_ID, result: 'Stopping.', isError: false, taskId: 'pw-task-001',
     });

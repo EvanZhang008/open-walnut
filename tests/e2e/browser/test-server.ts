@@ -2434,8 +2434,32 @@ const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectme
         }),
       ]).flat(),
       // Near the END, deliberately: the timeline renders a WINDOW anchored at the
-      // bottom, so a link buried above the fillers is not in the DOM at all.
-      // stale-build-no-flash.spec.ts needs this one clickable on first paint.
+      // bottom, so a link buried above the fillers is not in the DOM at all. And
+      // each link is the ANSWER of its own turn: a turn's rows before its answer
+      // fold into one closed row, so a link there is not on screen either.
+      // file-view-history.spec.ts and stale-build-no-flash.spec.ts need these
+      // clickable on first paint.
+      JSON.stringify({
+        type: 'user',
+        sessionId: 'pw-vscode-session',
+        timestamp: new Date(sessionFixtureNow - 21_500).toISOString(),
+        message: { role: 'user', content: 'Which file were the notes in again?' },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        sessionId: 'pw-vscode-session',
+        timestamp: new Date(sessionFixtureNow - 21_000).toISOString(),
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: `They are in ${linkedPath}.` }],
+        },
+      }),
+      JSON.stringify({
+        type: 'user',
+        sessionId: 'pw-vscode-session',
+        timestamp: new Date(sessionFixtureNow - 20_500).toISOString(),
+        message: { role: 'user', content: 'Where does the agent live?' },
+      }),
       JSON.stringify({
         type: 'assistant',
         sessionId: 'pw-vscode-session',
@@ -2444,6 +2468,12 @@ const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectme
           role: 'assistant',
           content: [{ type: 'text', text: `The agent lives in ${goPath} if you want the source.` }],
         },
+      }),
+      JSON.stringify({
+        type: 'user',
+        sessionId: 'pw-vscode-session',
+        timestamp: new Date(sessionFixtureNow - 19_500).toISOString(),
+        message: { role: 'user', content: 'Where should I start reading?' },
       }),
       // A markdown LINK whose destination is a local path, with a GitHub-style
       // line anchor, inside CJK full-width parentheses (U+FF08/U+FF09): the exact

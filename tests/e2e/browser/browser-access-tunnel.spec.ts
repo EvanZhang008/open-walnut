@@ -421,7 +421,8 @@ test.describe('Open from a browser', () => {
     const group = await openDevices(page)
     await page.getByTestId('browser-access-enabled').click()
     const state = page.getByTestId('browser-access-state')
-    await expect(state).toContainText('Custom command is not installed here', { timeout: 30_000 })
+    // No "here" (src/core/expose/supervisor.ts): a host's report is read on this computer too.
+    await expect(state).toContainText(`Custom command is not installed (${WORK}/no-such-tunnel not found)`, { timeout: 30_000 })
     await expect(state).toHaveAttribute('data-state', 'missing')
     await expect(page.getByTestId('browser-access-retry')).toBeVisible()
     await shot(page, '7-missing', group)

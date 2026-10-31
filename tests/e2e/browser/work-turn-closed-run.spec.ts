@@ -12,15 +12,31 @@
  * be looked at while a call is in flight. Nothing is injected: session:start RPC
  * → daemon → mock CLI → real stream events → reducer → render, and the history
  * after the turn is the real parser reading the daemon's stream file.
+ *
+ * The turn runs on a task of the test's own: a task holds one session, so a
+ * start on a fixture task that already has a conversation continues THAT one
+ * (src/core/sessions/task-session-claim.ts) and makes no new session.
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 
-const TASK_ID = 'pw-task-001'
 const ANSWER = 'The folder has a readme and a src folder.'
 
-/** Start a real session via the session:start WS RPC from inside the page. */
-async function startRealSession(page: Page, message: string): Promise<void> {
-  await page.evaluate(async ({ message, taskId }) => {
+/** A task of this test's own, titled by browser project and repeat so runs
+ *  against the one fixture server never share a task. */
+async function newTask(request: APIRequestContext): Promise<string> {
+  const info = test.info()
+  const res = await request.post('/api/tasks', {
+    data: { title: `Closed run (${info.project.name} #${info.repeatEachIndex})`, source: 'local', project: 'Walnut' },
+  })
+  expect(res.ok(), `create task: ${res.status()}`).toBe(true)
+  const body = await res.json() as { task?: { id: string }; id?: string }
+  return body.task?.id ?? body.id!
+}
+
+/** Start a real session via the session:start WS RPC from inside the page. A
+ *  refused or unanswered start fails here, not later as a missing session. */
+async function startRealSession(page: Page, message: string, taskId: string): Promise<void> {
+  const answer = await page.evaluate(async ({ message, taskId }) => {
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
     const ws = new WebSocket(`${proto}://${window.location.host}/ws`)
     await new Promise<void>((resolve, reject) => {
@@ -31,39 +47,34 @@ async function startRealSession(page: Page, message: string): Promise<void> {
       type: 'req', id: 'pw-work-start', method: 'session:start',
       payload: { taskId, message, project: 'Walnut' },
     }))
-    await new Promise<void>((resolve) => {
+    const result = await new Promise<string>((resolve) => {
       ws.onmessage = (ev) => {
         try {
           const parsed = JSON.parse(ev.data as string)
-          if (parsed.type === 'res' && parsed.id === 'pw-work-start') resolve()
+          if (parsed.type === 'res' && parsed.id === 'pw-work-start') resolve(parsed.ok ? 'ok' : `error: ${JSON.stringify(parsed.error)}`)
         } catch { /* not ours */ }
       }
-      setTimeout(resolve, 3000)
+      setTimeout(() => resolve('no answer within 10s'), 10_000)
     })
     ws.close()
-  }, { message, taskId: TASK_ID })
+    return result
+  }, { message, taskId })
+  expect(answer, 'session:start answer').toBe('ok')
 }
 
-/** The session the start made: the one the task did not have before it. The
+/** The task's session; the task is new, so it is the one the start made. The
  *  server names a new session itself, so its id says nothing about the CLI. */
-async function waitForSessionId(page: Page, known: Set<string>): Promise<string> {
-  for (let i = 0; i < 80; i++) {
-    const res = await page.request.get(`/api/sessions/task/${TASK_ID}`)
+async function waitForSessionId(page: Page, taskId: string): Promise<string> {
+  for (let i = 0; i < 150; i++) {
+    const res = await page.request.get(`/api/sessions/task/${taskId}`)
     if (res.ok()) {
       const body = await res.json() as { sessions?: Array<{ claudeSessionId: string }> }
-      const sid = body.sessions?.map((s) => s.claudeSessionId)
-        .find((id) => !known.has(id))
+      const sid = body.sessions?.[0]?.claudeSessionId
       if (sid) return sid
     }
-    await page.waitForTimeout(250)
+    await page.waitForTimeout(200)
   }
-  throw new Error(`no new mock session appeared for task ${TASK_ID}`)
-}
-
-async function knownSessions(page: Page): Promise<Set<string>> {
-  const res = await page.request.get(`/api/sessions/task/${TASK_ID}`)
-  const body = res.ok() ? await res.json() as { sessions?: Array<{ claudeSessionId: string }> } : {}
-  return new Set((body.sessions ?? []).map((s) => s.claudeSessionId))
+  throw new Error(`no session appeared for task ${taskId}`)
 }
 
 /** Home with the session in a column, reached by a click (never page.goto). */
@@ -105,11 +116,11 @@ test('a working turn stays one closed run while calls run, and after it ends', a
   test.setTimeout(120_000)
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
+  const taskId = await newTask(page.request)
   await openHome(page)
-  const known = await knownSessions(page)
   // Each call runs 20 x 500ms = 10s: room to look at it under a loaded machine.
-  await startRealSession(page, 'chunk-delay:500 stream-partial-work')
-  const sid = await waitForSessionId(page, known)
+  await startRealSession(page, 'chunk-delay:500 stream-partial-work', taskId)
+  const sid = await waitForSessionId(page, taskId)
 
   await openHome(page, sid)
   const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${sid}"]`)

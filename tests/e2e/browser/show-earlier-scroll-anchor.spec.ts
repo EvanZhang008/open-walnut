@@ -177,12 +177,22 @@ test('bottom content stays above the fog through tool and composer resizing', as
   }
 
   await checkBottom('collapsed');
+  // The tools come before the turn's answer, so they sit in the turn's fold
+  // (fold-steps.ts): open the fold, then the run inside it.
+  const fold = panel.locator('[data-testid="turn-fold"]').last();
+  const foldToggle = fold.locator(':scope > .tool-run-toggle');
+  const run = fold.locator('.process-fold-body .tool-run-toggle').filter({ hasText: 'Ran 4 commands' });
   for (let i = 0; i < 2; i++) {
-    await panel.locator('.tool-run-toggle').filter({ hasText: 'Ran 4 tools' }).click();
+    await foldToggle.click();
+    await expect(fold.locator('.process-fold-body')).toBeVisible();
+    await checkBottom(`fold-open-${i}`);
+    await run.click();
     await expect(panel.locator('.tool-run-body')).toBeVisible();
     await checkBottom(`tools-open-${i}`);
-    await panel.locator('.tool-run-toggle').filter({ hasText: 'Ran 4 tools' }).click();
+    await run.click();
     await expect(panel.locator('.tool-run-body')).toHaveCount(0);
+    await foldToggle.click();
+    await expect(fold.locator('.process-fold-body')).toHaveCount(0);
     await checkBottom(`tools-closed-${i}`);
   }
   await panel.getByRole('button', { name: 'Expand session to full screen', exact: true }).click();

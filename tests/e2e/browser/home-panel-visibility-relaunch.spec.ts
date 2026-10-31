@@ -96,7 +96,7 @@ async function expectChatHidden(page: Page): Promise<void> {
 async function expectSlotOnMain(page: Page): Promise<void> {
   await expect(slotPanel(page)).toBeVisible({ timeout: 60_000 })
   if (await page.locator('[data-testid="ask-walnut-main-draft"]').count()) {
-    await expect(page.locator('[data-testid="ask-walnut-main-draft"] .chat-input-textarea')).toHaveAttribute('placeholder', /Ask Main anything/)
+    await expect(page.locator('[data-testid="ask-walnut-main-draft"] .chat-input-textarea')).toHaveAttribute('placeholder', /Ask CEO anything/)
   }
   const drawer = await openAskWalnutDrawer(page)
   await expect(drawer.locator('[data-testid="ask-walnut-drawer-main"]')).toHaveAttribute('aria-current', 'true')
