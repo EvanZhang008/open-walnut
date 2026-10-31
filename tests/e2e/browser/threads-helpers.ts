@@ -381,3 +381,15 @@ export async function settledScrollTop(history: Locator): Promise<number> {
     requestAnimationFrame(tick)
   }))
 }
+
+/** A click on the part of `target` on screen now, as a reader's. Playwright's
+ *  locator.click() first scrolls its target "into view", and macOS WebKit moved
+ *  a review card's head that was already in view by 690px before any pointer
+ *  event reached the page (2026-10-31, probe: the scroll at 68 ms, pointerdown
+ *  at 72 ms; a click by coordinates moved nothing). A test that checks the
+ *  timeline stays where the reader was clicks this way. */
+export async function clickInPlace(page: Page, target: Locator): Promise<void> {
+  await expect(target).toBeInViewport()
+  const b = (await target.boundingBox())!
+  await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2)
+}

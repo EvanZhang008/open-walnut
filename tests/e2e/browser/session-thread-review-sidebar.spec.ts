@@ -15,7 +15,7 @@
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { centreInHistory, openThreadsSession, settledScrollTop, passageRects, readRecord, resetThreadsFixture } from './threads-helpers'
+import { centreInHistory, clickInPlace, openThreadsSession, settledScrollTop, passageRects, readRecord, resetThreadsFixture } from './threads-helpers'
 import { REVIEW_COUNT, REVIEW_READY, REVIEW_ROUNDS, REVIEW_ROUND_CODE, REVIEW_SESSION, REVIEW_TASK, REVIEW_TITLES, reviewPassage } from './threads-review-fixture'
 
 const SHOTS = () => `/tmp/ask-review/e2e/${test.info().project.name}`
@@ -282,7 +282,7 @@ test.describe('the fullscreen review sidebar', () => {
     await wheelIntoView(page, history, target)
     const at = await settledScrollTop(history)
     const rc = (await target.boundingBox())!
-    await target.locator('button.thread-review-head').click()
+    await clickInPlace(page, target.locator('button.thread-review-head'))
     await expect(card.locator('.thread-card-title')).toHaveText(REVIEW_TITLES[17])
     await expect(target).toHaveAttribute('data-selected', 'true')
     await expect(target).toHaveAttribute('data-enlarged', 'true')
@@ -339,7 +339,7 @@ test.describe('the fullscreen review sidebar', () => {
     const fifth = sidebarCards(panel).filter({ hasText: REVIEW_TITLES[4] })
     await wheelIntoView(page, history, fifth)
     const topBefore = await settledScrollTop(history)
-    await fifth.locator('button.thread-review-head').click()
+    await clickInPlace(page, fifth.locator('button.thread-review-head'))
     await expect(box).toBeVisible()
     await expect(box).toHaveAttribute('placeholder', /Point 5 order/)
     // Every state the review card takes from here on (a poll would miss a short red).
