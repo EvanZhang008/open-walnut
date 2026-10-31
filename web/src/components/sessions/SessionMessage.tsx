@@ -32,7 +32,6 @@ import { splitLeadingRiders } from '@open-walnut/history-walnut-riders';
 import '@/styles/session-riders.css';
 import { ProcessFoldRow } from './TurnFolds';
 import { envelopeSteps, foldStepsPhrase } from './fold-steps';
-import { usePeerNameOf } from './peer-name';
 import { QUESTION_BANNER_RE, stripQuestionTag } from '@/utils/question-tag';
 import { MessageHintsRow } from './MessageHintsRow';
 import { useShowWalnutAdditions } from '@/hooks/useShowWalnutAdditions';
@@ -1058,12 +1057,11 @@ function specialSessionRow({ message }: SessionMessageProps): ReactNode | undefi
   return undefined;
 }
 
-/** Walnut's notes above a person's words, folded; the line names who sent what (fold-steps.ts). */
+/** Walnut's notes above a person's words, folded; the line counts them (fold-steps.ts). */
 function RiderFold({ foldId, segments, children }: { foldId: string; segments: EnvelopeSegment[]; children: ReactNode }) {
-  const peerName = usePeerNameOf();
   return (
     <ProcessFoldRow foldId={foldId} foldKey={`rider:${foldId === 'rider' ? '' : foldId}`} testId="rider-fold"
-      phrase={foldStepsPhrase(envelopeSteps(segments, peerName))}>
+      phrase={foldStepsPhrase(envelopeSteps(segments))}>
       {children}
     </ProcessFoldRow>
   );

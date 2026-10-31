@@ -264,7 +264,7 @@ final class CliInjectedLinesTests: XCTestCase {
                           said(TimelineTurnMarker.tag)])
         XCTAssertEqual(outline(parts), [
             "bubble:Draft the release notes.", "text",
-            "fold:Received 1 message from Docs \u{00B7} Ran 1 tool[\"injected:\(stopHook.label)\", \"inbound\", \"run:1\", \"ack\"]",
+            "fold:Received 1 message \u{00B7} Ran 1 tool[\"injected:\(stopHook.label)\", \"inbound\", \"run:1\", \"ack\"]",
         ])
     }
 
@@ -276,7 +276,7 @@ final class CliInjectedLinesTests: XCTestCase {
         XCTAssertEqual(TimelineFoldSteps.steps(line[2]), [.context(skill: false)])
         XCTAssertEqual(TimelineFoldSteps.phrase([.context(skill: true)]), "Thinking")
         XCTAssertEqual(TimelineFoldSteps.phrase([.calls(1), .context(skill: true)]), "Ran 1 tool")
-        XCTAssertEqual(TimelineFoldSteps.phrase([.received(from: nil), .context(skill: false), .sent(to: nil)]), "Received 1 message \u{00B7} Sent 1")
+        XCTAssertEqual(TimelineFoldSteps.phrase([.received, .context(skill: false), .sent(to: nil)]), "Received 1 message \u{00B7} Sent 1")
     }
 
     // MARK: - Rows

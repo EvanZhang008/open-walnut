@@ -63,7 +63,6 @@ import { lookupTaskByRef } from '@/stores/entity-label-store';
 import { joinsQuiet, MSG_KIND_ROLE, SYSTEM_VARIANT_ROLE, toolRole, TOOL_ROLE_FOLDS, type MsgKind, type RowRole } from './fold-rows';
 import { chunkByKind, leadingStepGroup, stepGroups, type StepGroup, type StepKind } from './stream-step-groups';
 import { isEnvelopeOnly, parseSessionEnvelopes } from '@open-walnut/history-session-envelope';
-import { usePeerNameOf } from './peer-name';
 import { NoActionMark, ProcessFoldRow, ReaderOpenedFolds, openTurnFold, turnFoldKey } from './TurnFolds';
 import { foldPlace, joinedRows, readReaderView, restoreReaderRow, rowKeysAttr, rowsAsDrawn, type HeldBefore, type ReaderView } from './fold-reader-hold';
 import { shapeTurns, type TurnShape } from '@/utils/turn-shape';
@@ -1423,8 +1422,6 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   /** Conversation Mode with questions: every turn in order, each question's
    *  turns labelled; the stack path is the composer's target, never a filter. */
   const convMode = threadsApi.viewMode === 'linear' && hasQuestions;
-  // Who sent each received message, by the live session title (a quiet fold's line).
-  const peerName = usePeerNameOf();
   const currentKey = stackMode ? stack.currentKey : ROOT_THREAD_KEY;
   /** The question the composer posts into (both views). */
   const targetKey = hasQuestions ? stack.currentKey : ROOT_THREAD_KEY;
@@ -4197,7 +4194,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       if (ENVELOPE_CACHE.size >= 2000) ENVELOPE_CACHE.delete(ENVELOPE_CACHE.keys().next().value!);
     } else ENVELOPE_CACHE.delete(text);
     ENVELOPE_CACHE.set(text, segs);
-    return envelopeSteps(segs, peerName);
+    return envelopeSteps(segs);
   };
   const toolSteps = (tools: readonly SessionHistoryTool[]): FoldStep[] => tools.flatMap((t): FoldStep[] => {
     if (!isOutboundTool(t)) return [{ kind: 'calls', tools: [{ name: t.name, input: t.input as Record<string, unknown> | undefined }] }];

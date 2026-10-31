@@ -115,7 +115,7 @@ final class TurnFoldTests: XCTestCase {
         let parts = plan([person(), said("Answer."), peer(), line, peer("Second note."), tool("Read"), line])
         XCTAssertEqual(outline(parts), [
             "bubble:Can you check the build?", "text",
-            "fold:turn:Received 2 messages from Docs lead \u{00B7} Ran 1 tool"
+            "fold:turn:Received 2 messages \u{00B7} Ran 1 tool"
                 + "[\"inbound\", \"ack\", \"inbound\", \"run:1\", \"ack\"]",
         ])
     }
@@ -127,7 +127,7 @@ final class TurnFoldTests: XCTestCase {
                           peer("Ping."), tool("mcp__walnut__task_send"), said("Passed it on.")])
         XCTAssertEqual(outline(parts), [
             "bubble:Can you check the build?", "text",
-            "fold:turn:Received 2 messages from Docs lead \u{00B7} Sent 1"
+            "fold:turn:Received 2 messages \u{00B7} Sent 1"
                 + "[\"inbound\", \"ack\", \"inbound\", \"tool:mcp__walnut__task_send\"]",
             "text",
         ])
@@ -137,7 +137,7 @@ final class TurnFoldTests: XCTestCase {
         let parts = plan([peer(), tool("Bash", "build"), tool("mcp__walnut__task_send"), said("Narration."),
                           tool("Read", "a.md"), said("The answer.")])
         XCTAssertEqual(outline(parts), [
-            "fold:turn:Received 1 message from Docs lead \u{00B7} Sent 1 \u{00B7} Ran 2 tools"
+            "fold:turn:Received 1 message \u{00B7} Sent 1 \u{00B7} Ran 2 tools"
                 + "[\"inbound\", \"run:1\", \"tool:mcp__walnut__task_send\", \"text\", \"run:1\"]",
             "text",
         ])
@@ -185,12 +185,12 @@ final class TurnFoldTests: XCTestCase {
 
     func testAReceivedMessageInAnOpenTurnFoldsWithTheStepsAroundIt() {
         XCTAssertEqual(outline(plan([peer(), tool("Bash", "status"), tool("mcp__walnut__task_send")])),
-                       ["fold:turn:Received 1 message from Docs lead \u{00B7} Sent 1 \u{00B7} Ran 1 tool"
+                       ["fold:turn:Received 1 message \u{00B7} Sent 1 \u{00B7} Ran 1 tool"
                         + "[\"inbound\", \"run:1\", \"tool:mcp__walnut__task_send\"]"])
         // A failed call is a step too: it folds with the message, and the fold's
         // header counts it (the one rule, the web's fold-rows.ts).
         let failed = plan([peer(), tool("Bash", "rebuild", isError: true)])
-        XCTAssertEqual(outline(failed), ["fold:turn:Received 1 message from Docs lead \u{00B7} Ran 1 tool[\"inbound\", \"run:1\"]"])
+        XCTAssertEqual(outline(failed), ["fold:turn:Received 1 message \u{00B7} Ran 1 tool[\"inbound\", \"run:1\"]"])
         if case .fold(let f)? = failed.first { XCTAssertEqual(f.failCount, 1) } else { XCTFail("no fold") }
         // Alone, a received message is its one line, never a bubble and never a fold.
         XCTAssertEqual(outline(plan([said("Earlier."), peer()])), ["text", "inbound"])
@@ -215,7 +215,7 @@ final class TurnFoldTests: XCTestCase {
                           said("Still waiting; the check runs now.")])
         XCTAssertEqual(outline(parts), [
             "bubble:Can you check the build?", "text",
-            "fold:turn:Received 2 messages from Trigger: sample-check +1 \u{00B7} Ran 5 tools \u{00B7} 1 notice"
+            "fold:turn:Received 2 messages \u{00B7} Ran 5 tools \u{00B7} 1 notice"
                 + "[\"inbound\", \"run:4\", \"ack\", \"inbound\", \"bubble:Turn interrupted\", \"run:1\"]",
             "text",
         ])
@@ -232,7 +232,7 @@ final class TurnFoldTests: XCTestCase {
                           said("Halfway there."), tool("AskUserQuestion")])
         XCTAssertEqual(outline(parts), [
             "bubble:Can you check the build?", "text",
-            "fold:turn:Received 1 message from Docs lead \u{00B7} Ran 1 tool[\"inbound\", \"run:1\"]",
+            "fold:turn:Received 1 message \u{00B7} Ran 1 tool[\"inbound\", \"run:1\"]",
             "text", "run:1",
         ])
     }
@@ -243,11 +243,11 @@ final class TurnFoldTests: XCTestCase {
         let answer = ChatMessage(id: "an", role: "assistant", text: "The answer.", createdAt: thinking.createdAt, kind: nil)
         // After quiet steps, the answer's reasoning is their last one: one row, then the answer.
         XCTAssertEqual(outline(plan([peer(), tool("Bash", "b"), said("Narration."), thinking, answer])),
-                       ["fold:turn:Received 1 message from Docs lead \u{00B7} Ran 1 tool"
+                       ["fold:turn:Received 1 message \u{00B7} Ran 1 tool"
                             + "[\"inbound\", \"run:1\", \"text\", \"text\"]",
                         "text"])
         XCTAssertEqual(outline(plan([peer(), thinking, answer])),
-                       ["fold:turn:Received 1 message from Docs lead[\"inbound\", \"text\"]", "text"])
+                       ["fold:turn:Received 1 message[\"inbound\", \"text\"]", "text"])
         // Nothing quiet before it (a person asked): it stays with the answer.
         XCTAssertEqual(outline(plan([person(), thinking, answer])), ["bubble:Can you check the build?", "text", "text"])
     }
@@ -278,12 +278,12 @@ final class TurnFoldTests: XCTestCase {
         XCTAssertEqual(closed.filter { if case .userBubble = $0.content { return true }; return false }.count, 1)
         XCTAssertFalse(texts(closed).contains("walnut-"))
         // The hidden turn and the next turn's work before its answer: one row.
-        XCTAssertEqual(phrases(closed), ["Received 2 messages from Docs lead"])
+        XCTAssertEqual(phrases(closed), ["Received 2 messages"])
         XCTAssertFalse(texts(closed).contains("Docs lead: Review"))
         // Open it by its row id: the members appear, each as its one-line description.
         let ids = closed.filter { if case .toolRun = $0.content { return true }; return false }.map(\.id)
         let open = await rows(messages, expanded: Set(ids))
-        XCTAssertEqual(phrases(open), ["Received 2 messages from Docs lead"])
+        XCTAssertEqual(phrases(open), ["Received 2 messages"])
         XCTAssertTrue(texts(open).contains("Docs lead: Review"))
         XCTAssertEqual(open.filter { if case .peerMessage = $0.content { return true }; return false }.count, 2)
         XCTAssertFalse(open.contains { if case .notification = $0.content { return true }; return false })
@@ -298,7 +298,7 @@ final class TurnFoldTests: XCTestCase {
             return copy
         }
         let again = await rows(refetched, expanded: Set(ids))
-        XCTAssertEqual(phrases(again), ["Received 2 messages from Docs lead"])
+        XCTAssertEqual(phrases(again), ["Received 2 messages"])
     }
 
     func testAListWithoutSendersIsDrawnAsBefore() async {
@@ -328,7 +328,7 @@ final class TurnFoldTests: XCTestCase {
         let actor = TimelineLayoutActor()
         let live = runRows(await rows(history, streaming: true, liveTools: running, actor: actor))
         // One row for the message and the calls, breathing while a call runs; no second run row.
-        XCTAssertEqual(live.map(\.phrase), ["Received 1 message from Docs lead \u{00B7} Ran 2 tools"])
+        XCTAssertEqual(live.map(\.phrase), ["Received 1 message \u{00B7} Ran 2 tools"])
         XCTAssertEqual(live.map(\.running), [true])
         // Opened, it holds the received message's one line (no body) and the live calls.
         let opened = await rows(history, expanded: [live[0].id], streaming: true, liveTools: running, actor: actor)
@@ -340,7 +340,7 @@ final class TurnFoldTests: XCTestCase {
         let ended = history + [tool("Bash", "status"), tool("Read", "a.md"), said("All set.")]
         let after = runRows(await rows(ended, expanded: [live[0].id], actor: actor))
         XCTAssertEqual(after.first?.id, live[0].id)
-        XCTAssertEqual(after.first?.phrase, "Received 1 message from Docs lead \u{00B7} Ran 2 tools")
+        XCTAssertEqual(after.first?.phrase, "Received 1 message \u{00B7} Ran 2 tools")
         // A person's live turn is untouched: its run stays the live run.
         let own = runRows(await rows([person()], streaming: true, liveTools: running))
         XCTAssertEqual(own.map(\.phrase), ["Ran a command, read a file"])
@@ -357,20 +357,20 @@ final class TurnFoldTests: XCTestCase {
         let gap = history + [said("All set.")]
         let during = await rows(gap, expanded: [live[0].id], liveTools: calls, actor: actor)
         XCTAssertEqual(runRows(during).map(\.id), [live[0].id])
-        XCTAssertEqual(runRows(during).map(\.phrase), ["Received 1 message from Docs lead \u{00B7} Ran 2 tools"])
+        XCTAssertEqual(runRows(during).map(\.phrase), ["Received 1 message \u{00B7} Ran 2 tools"])
         XCTAssertEqual(runRows(during).map(\.running), [false])
         XCTAssertEqual(during.filter { if case .toolChip = $0.content { return true }; return false }.count, 2)
         XCTAssertTrue(texts(during).contains("All set."))
         // An ack-only reply prints nothing while it waits; the row reads it last,
         // after the calls, as it will once the refetch puts it there.
         let acked = await rows(history + [said(tag)], liveTools: calls, actor: actor)
-        XCTAssertEqual(runRows(acked).map(\.phrase), ["Received 1 message from Docs lead \u{00B7} Ran 2 tools"])
+        XCTAssertEqual(runRows(acked).map(\.phrase), ["Received 1 message \u{00B7} Ran 2 tools"])
         XCTAssertFalse(texts(acked).contains("walnut-turn"))
         // The refetch lands (the store clears the calls with it): same id, same words.
         let fetched = history + [tool("Bash", "status"), tool("Read", "a.md"), said("All set.")]
         let after = runRows(await rows(fetched, expanded: [live[0].id], actor: actor))
         XCTAssertEqual(after.first?.id, live[0].id)
-        XCTAssertEqual(after.first?.phrase, "Received 1 message from Docs lead \u{00B7} Ran 2 tools")
+        XCTAssertEqual(after.first?.phrase, "Received 1 message \u{00B7} Ran 2 tools")
         // A person's turn that ended is drawn as before: no merged row.
         let own = runRows(await rows([person(), said("Done.")], liveTools: calls))
         XCTAssertTrue(own.isEmpty)
@@ -395,7 +395,7 @@ final class TurnFoldTests: XCTestCase {
     func testCountsMatchTheWebForABoardPostAndASendInsideARun() {
         // A Board post is a tool on the web, never a sent message.
         XCTAssertTrue(outline(plan([peer(), tool("mcp__walnut__board_post")]))[0]
-            .hasPrefix("fold:turn:Received 1 message from Docs lead \u{00B7} Ran 1 tool["))
+            .hasPrefix("fold:turn:Received 1 message \u{00B7} Ran 1 tool["))
         // A lone run that holds a send still folds, as the web's `sends(part)` does.
         let parts = outline(plan([person(), tool("Bash", "b"), tool("mcp__walnut__org_send"), said("Done.")]))
         XCTAssertEqual(parts.count, 3)
@@ -408,11 +408,11 @@ final class TurnFoldTests: XCTestCase {
         let calls = [LiveToolCall(id: "1", name: "Bash", detail: "git status", finished: true)]
         let actor = TimelineLayoutActor()
         let live = runRows(await rows(history, streaming: true, liveTools: calls, actor: actor))
-        XCTAssertEqual(live.map(\.phrase), ["Received 2 messages from Docs lead \u{00B7} Ran 2 tools"])
+        XCTAssertEqual(live.map(\.phrase), ["Received 2 messages \u{00B7} Ran 2 tools"])
         // A mid-turn refetch brings this turn's call: it is counted once.
         let fetched = runRows(await rows(history + [tool("Bash", "git status")], streaming: true,
                                          liveTools: calls, actor: actor))
-        XCTAssertEqual(fetched.map(\.phrase), ["Received 2 messages from Docs lead \u{00B7} Ran 2 tools"])
+        XCTAssertEqual(fetched.map(\.phrase), ["Received 2 messages \u{00B7} Ran 2 tools"])
         XCTAssertEqual(fetched.map(\.id), live.map(\.id))
     }
 
@@ -428,7 +428,7 @@ final class TurnFoldTests: XCTestCase {
         let actor = TimelineLayoutActor()
         let before = await rows(turnA, actor: actor)
         let foldA = runRows(before)
-        XCTAssertEqual(foldA.map(\.phrase), ["Received 1 message from Docs lead"])
+        XCTAssertEqual(foldA.map(\.phrase), ["Received 1 message"])
         let live = await rows(turnA, streaming: true, liveTools: calls, actor: actor)
         let after = await rows(turnA, liveTools: calls, actor: actor)
         for snapshot in [live, after] {
@@ -446,7 +446,7 @@ final class TurnFoldTests: XCTestCase {
         let gap = history + [said("All set."), person("One more thing.")]
         let during = await rows(gap, liveTools: calls, actor: actor)
         XCTAssertEqual(runRows(during).map(\.id), live.map(\.id))
-        XCTAssertEqual(runRows(during).map(\.phrase), ["Received 1 message from Docs lead \u{00B7} Ran 1 tool"])
+        XCTAssertEqual(runRows(during).map(\.phrase), ["Received 1 message \u{00B7} Ran 1 tool"])
         let rowAt = during.firstIndex { $0.id == live.first?.id }
         let replyAt = during.firstIndex { texts([$0]).contains("All set.") }
         let sentAt = during.firstIndex { texts([$0]).contains("One more thing.") }
@@ -460,10 +460,10 @@ final class TurnFoldTests: XCTestCase {
         let history = [person(), said("Answer."), peer(), tool("Bash", "status")]
         let actor = TimelineLayoutActor()
         let live = runRows(await rows(history, streaming: true, liveTools: calls, actor: actor))
-        XCTAssertEqual(live.map(\.phrase), ["Received 1 message from Docs lead \u{00B7} Ran 2 tools"])
+        XCTAssertEqual(live.map(\.phrase), ["Received 1 message \u{00B7} Ran 2 tools"])
         let opened = await rows(history, expanded: [live[0].id], streaming: true, liveTools: calls, actor: actor)
         // The history call is its own folded run; only the call history lacks is a live chip.
-        XCTAssertEqual(runRows(opened).map(\.phrase), ["Received 1 message from Docs lead \u{00B7} Ran 2 tools", "Ran a command"])
+        XCTAssertEqual(runRows(opened).map(\.phrase), ["Received 1 message \u{00B7} Ran 2 tools", "Ran a command"])
         XCTAssertEqual(opened.filter { if case .toolChip = $0.content { return true }; return false }.count, 1)
     }
 

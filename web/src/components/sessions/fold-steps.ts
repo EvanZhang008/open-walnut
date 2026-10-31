@@ -4,25 +4,25 @@
  * A coordinating session takes in notices and peer messages between its answers
  * and works through each with a tool call or a one-line acknowledgement. Every
  * such stretch between two answers is one folded row (SessionChatHistory), and
- * its line counts what came in, went out and ran, and names whom from and to:
- * "Received 12 messages from Docs lead, Walnut +3 \u00b7 Sent 2 to Brief task \u00b7
- * Ran 8 tools". The opened fold shows each step. 2026-10-28, the user, of a line
- * that named every sender, notice and command and ran past the screen: "you just
- * received so many messages, sent so many, ran so many tools, that's it"; so no
- * titles or commands, and at most two names a piece. 2026-10-30, the user, of a
- * lead's "Sent 2" whose card said "To another session": which session? So the
- * parties are named. Pure: the caller turns its rows into steps.
+ * its line counts what came in, went out and ran: "Received 12 messages \u00b7
+ * Sent 2 \u00b7 Ran 8 tools". The opened fold shows each step, who sent it and
+ * where it went. 2026-10-28, the user, of a line that named every sender, notice
+ * and command and ran past the screen: "you just received so many messages, sent
+ * so many, ran so many tools, that's it". 2026-10-31, the user again, of a line
+ * that named its senders: "just Received 1 message", so the line names no one;
+ * the names live in the opened rows. Pure: the caller turns its rows into steps.
  */
-import type { EnvelopeSegment, SessionEnvelopePeer } from '@open-walnut/history-session-envelope';
+import type { EnvelopeSegment } from '@open-walnut/history-session-envelope';
 import { noticeTitle } from './message-fold';
 import type { ToolRunMember } from './tool-run-phrase';
 
 export type ReceivedKind = 'peer-note' | 'reply' | 'notification' | 'trigger' | 'other';
 
 export type FoldStep =
-  /** A message or notice the session received. `name`: who sent it, or for a
-   *  notice whom it is about; `title`: its one-line TL;DR, when it has one. */
-  | { kind: 'received'; from: ReceivedKind; name?: string; title?: string }
+  /** A message or notice the session received; `title`: its one-line TL;DR, when
+   *  it has one. No sender: the line names no one, and a notice's `about` is its
+   *  subject, not its sender (2026-10-31: Main's fold read "from CEO", itself). */
+  | { kind: 'received'; from: ReceivedKind; title?: string }
   /** Tool calls (not messages to someone). */
   | { kind: 'calls'; tools: ToolRunMember[] }
   /** A message the session sent to another task, one per target; `to`: the
@@ -43,11 +43,8 @@ export type FoldStep =
   | { kind: 'notice'; error?: boolean };
 
 /** A received row's steps, one per envelope it holds; a row with none is one
- *  message from no one in particular. `nameOf` names a sender (peer-name.ts). */
-export function envelopeSteps(
-  segments: readonly EnvelopeSegment[] | null | undefined,
-  nameOf: (peer: SessionEnvelopePeer) => string | undefined = (p) => p.title,
-): FoldStep[] {
+ *  message from no one in particular. */
+export function envelopeSteps(segments: readonly EnvelopeSegment[] | null | undefined): FoldStep[] {
   const out: FoldStep[] = [];
   for (const s of segments ?? []) {
     if (s.kind !== 'envelope') continue;
@@ -55,28 +52,12 @@ export function envelopeSteps(
     const from = e.kind === 'peer-note' || e.kind === 'reply' || e.kind === 'notification' || e.kind === 'trigger' ? e.kind : 'other';
     // A notice's outcome sentence is its title; a trigger's note is only its clock.
     const title = e.kind === 'notification' ? noticeTitle(e.statusLine) : e.kind === 'trigger' ? undefined : e.title;
-    // A trigger and an App are named by what they print, as their cards are.
-    const name = e.kind === 'trigger' || e.kind === 'app-state' ? e.peer.title : nameOf(e.peer);
-    out.push({ kind: 'received', from, ...(name ? { name } : {}), ...(title ? { title } : {}) });
+    out.push({ kind: 'received', from, ...(title ? { title } : {}) });
   }
   return out.length > 0 ? out : [{ kind: 'received', from: 'other' }];
 }
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-
-/** Who a piece was from or to: at most two names, then how many of its messages
- *  came from or went to anyone else ("from Docs lead, Walnut +3"). `names` holds
- *  one entry per message, '' when it names no one. */
-function parties(word: 'from' | 'to', raw: readonly string[]): string {
-  // A title's own " · " would read as the line's separator, and its commas and its
-  // "and" as a list: each name keeps its own word ("to A, to B", the lead's ask of
-  // 2026-10-30), its dots made slashes.
-  const names = raw.map((n) => n.trim().replace(/\s+·\s+/g, ' / '));
-  const shown = [...new Set(names.filter(Boolean))].slice(0, 2);
-  if (shown.length === 0) return '';
-  const more = names.filter((n) => !shown.includes(n)).length;
-  return ` ${word} ${shown.join(`, ${word} `)}${more > 0 ? ` +${more}` : ''}`;
-}
 
 /** The fold's line: counts only, "Received 12 messages · Sent 3 · Ran 8 tools",
  *  and the runtime's lines other than errors ("· 1 notice"; errors are the red count).
@@ -86,25 +67,22 @@ function parties(word: 'from' | 'to', raw: readonly string[]): string {
 export function foldStepsPhrase(steps: readonly FoldStep[]): string {
   let received = 0;
   let sent = 0;
-  const senders: string[] = [];
-  const targets: string[] = [];
   let tools = 0;
   let updates = 0;
   let acks = 0;
   let notices = 0;
   let errorNotices = 0;
   for (const s of steps) {
-    if (s.kind === 'received') { received++; senders.push(s.name ?? ''); }
-    else if (s.kind === 'sent') { sent++; targets.push(s.to ?? ''); }
-    else if (s.kind === 'inbox') { sent++; targets.push('your inbox'); }
+    if (s.kind === 'received') received++;
+    else if (s.kind === 'sent' || s.kind === 'inbox') sent++;
     else if (s.kind === 'calls') tools += s.tools.length;
     else if (s.kind === 'update') updates++;
     else if (s.kind === 'ack') acks++;
     else if (s.kind === 'notice') { if (s.error) errorNotices++; else notices++; }
   }
   const pieces: string[] = [];
-  if (received > 0) pieces.push(`Received ${count(received, 'message', 'messages')}${parties('from', senders)}`);
-  if (sent > 0) pieces.push(`Sent ${sent}${parties('to', targets)}`);
+  if (received > 0) pieces.push(`Received ${count(received, 'message', 'messages')}`);
+  if (sent > 0) pieces.push(`Sent ${sent}`);
   if (tools > 0) pieces.push(`Ran ${count(tools, 'tool', 'tools')}`);
   if (notices > 0) pieces.push(count(notices, 'notice', 'notices'));
   if (pieces.length > 0) return pieces.join(' \u00b7 ');

@@ -112,7 +112,7 @@ test('a received message and the tools the live turn runs for it are one fold ro
   const folds = history.locator('[data-testid="turn-fold"]');
   await expect(folds).toHaveCount(1, { timeout: 10000 });
   const fold = folds.first();
-  await expect(fold.locator('.tool-run-toggle')).toHaveText(/^Received 1 message from Sample lead \u00b7 Ran 2 tools/);
+  await expect(fold.locator('.tool-run-toggle')).toHaveText(/^Received 1 message \u00b7 Ran 2 tools/);
   // No second row for the same turn: no tool run, no card outside the fold.
   await expect(history.locator('.tool-run-toggle')).toHaveCount(1);
   await expect(history.locator('.provenance-card')).toHaveCount(0);
