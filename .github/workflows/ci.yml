@@ -614,8 +614,8 @@ jobs:
           dist="https://nodejs.org/dist/v${{ matrix.node }}"
           file="node-v${{ matrix.node }}-linux-x64.tar.xz"
           cd "$RUNNER_TEMP"
-          curl -fsSLO "$dist/$file"
-          curl -fsSL "$dist/SHASUMS256.txt" | grep " $file\$" | sha256sum -c -
+          curl -fsSLO --retry 5 --retry-all-errors --retry-delay 5 "$dist/$file"
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 "$dist/SHASUMS256.txt" | grep " $file\$" | sha256sum -c -
           tar -xJf "$file"
           "$RUNNER_TEMP/node-v${{ matrix.node }}-linux-x64/bin/node" --version
       - name: The launcher's fetch and exit tests, the launcher on Node ${{ matrix.node }}

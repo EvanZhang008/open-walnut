@@ -188,6 +188,9 @@ jobs:
           pattern: archive-*
           path: ${{ runner.temp }}/archives
           merge-multiple: true
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
       # SHA256SUMS keeps every line the release lists (its compiled files), with
       # these archives' lines in place of any older ones; the script fails rather
       # than drop one, and it runs before anything goes up, so a failure uploads
@@ -195,11 +198,15 @@ jobs:
       # install.sh goes up only on a release that has none: release.yml attached
       # the released commit's own.
       - name: Upload the archives, then SHA256SUMS
+        env:
+          LEAK_SCAN_RULES: ${{ secrets.LEAK_SCAN_RULES }}
         run: |
           cd "$RUNNER_TEMP/archives"
           ls open-walnut-"$VERSION"-*.tar.gz > /dev/null 2>&1 || { echo "::error::no archive built"; exit 1; }
           sh "$GITHUB_WORKSPACE/scripts/release-archive-sums.sh" "v$VERSION" "$VERSION" . "$RUNNER_TEMP/SHA256SUMS"
           cat "$RUNNER_TEMP/SHA256SUMS"
+          # The release gate (scripts/release-leak-gate.sh): nothing goes up while it finds a hit.
+          sh "$GITHUB_WORKSPACE/scripts/release-leak-gate.sh" . "$RUNNER_TEMP/SHA256SUMS" "$GITHUB_WORKSPACE/scripts/install.sh"
           gh release upload "v$VERSION" open-walnut-"$VERSION"-*.tar.gz --clobber
           gh release upload "v$VERSION" "$RUNNER_TEMP/SHA256SUMS" --clobber
           assets="$(gh release view "v$VERSION" --json assets --jq '.assets[].name')"
@@ -257,7 +264,11 @@ jobs:
           done
           brew test walnut-release/test/open-walnut
       - name: Attach it to the release
-        run: gh release upload "v$VERSION" "$RUNNER_TEMP/open-walnut.rb" --clobber
+        env:
+          LEAK_SCAN_RULES: ${{ secrets.LEAK_SCAN_RULES }}
+        run: |
+          sh scripts/release-leak-gate.sh "$RUNNER_TEMP/open-walnut.rb"
+          gh release upload "v$VERSION" "$RUNNER_TEMP/open-walnut.rb" --clobber
 
   # Walnut.app, signed and notarized, carrying the release's darwin file
   # (mac-app.yml; its signing secrets live in the `release` environment). After

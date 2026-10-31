@@ -230,6 +230,14 @@ jobs:
         run: |
           sh scripts/release-unpack.sh "$RUNNER_TEMP/release/assets" "$VERSION" "$RUNNER_TEMP/files"
           bun scripts/npm-packages.mjs build --files "$RUNNER_TEMP/files" --version "$VERSION" --out "$RUNNER_TEMP/release/npm" --git-head "$GITHUB_SHA"
+      # Nothing leaves while the leak scan finds a hit in it: npm and the GitHub Release
+      # below both come after this step (scripts/release-leak-gate.sh).
+      - name: No leak in what this release publishes
+        env:
+          LEAK_SCAN_RULES: ${{ secrets.LEAK_SCAN_RULES }}
+        run: |
+          bun scripts/release-notes.mjs "$VERSION" > "$RUNNER_TEMP/gate-notes.md"
+          sh scripts/release-leak-gate.sh --npm "$RUNNER_TEMP/release/npm" "$RUNNER_TEMP/release/assets" "$RUNNER_TEMP/gate-notes.md" scripts/install.sh
       - name: Publish to npm (the platform packages, then open-walnut)
         run: bun scripts/npm-packages.mjs publish --dir "$RUNNER_TEMP/release/npm" --tag latest --provenance
       - name: Draft the GitHub Release with this version's CHANGELOG section
@@ -396,6 +404,11 @@ jobs:
         with:
           ref: ${{ needs.nightly-build.outputs.sha }}
           fetch-depth: 0
+      # The leak gate and its scanner come from this workflow's own commit, in harness/:
+      # the release's commit may be older than the gate (scripts/release-leak-gate.sh).
+      - uses: actions/checkout@v5
+        with:
+          path: harness
       # Publishing to npm (trusted publishing and its provenance) is npm's own, on Node;
       # Walnut's scripts around it run on bun.
       - uses: actions/setup-node@v5
@@ -437,6 +450,11 @@ jobs:
           bun scripts/npm-packages.mjs build --files "$RUNNER_TEMP/files" --version "$VERSION" --out "$RUNNER_TEMP/release/npm" --git-head "$SHA"
       # The platform packages first, open-walnut last (npm-packages.mjs): its nightly
       # dist-tag is what the update check reads.
+      - name: No leak in what this release publishes
+        if: steps.recheck.outputs.publish == 'true'
+        env:
+          LEAK_SCAN_RULES: ${{ secrets.LEAK_SCAN_RULES }}
+        run: sh harness/scripts/release-leak-gate.sh --npm "$RUNNER_TEMP/release/npm"
       - name: Publish it as nightly (the platform packages, then open-walnut)
         if: steps.recheck.outputs.publish == 'true'
         run: bun scripts/npm-packages.mjs publish --dir "$RUNNER_TEMP/release/npm" --tag nightly --provenance
@@ -642,6 +660,11 @@ jobs:
         with:
           ref: ${{ needs.promote-plan.outputs.sha }}
           fetch-depth: 0
+      # The leak gate and its scanner come from this workflow's own commit, in harness/:
+      # the release's commit may be older than the gate (scripts/release-leak-gate.sh).
+      - uses: actions/checkout@v5
+        with:
+          path: harness
       - uses: actions/download-artifact@v4
         with:
           name: release-notes
@@ -671,6 +694,12 @@ jobs:
         run: |
           sh scripts/release-unpack.sh "$RUNNER_TEMP/release/assets" "$VERSION" "$RUNNER_TEMP/files"
           bun scripts/npm-packages.mjs build --files "$RUNNER_TEMP/files" --version "$VERSION" --out "$RUNNER_TEMP/release/npm" --git-head "$SHA"
+      # Nothing leaves while the leak scan finds a hit in it: npm, the tag and the GitHub
+      # Release below all come after this step (scripts/release-leak-gate.sh).
+      - name: No leak in what this release publishes
+        env:
+          LEAK_SCAN_RULES: ${{ secrets.LEAK_SCAN_RULES }}
+        run: sh harness/scripts/release-leak-gate.sh --npm "$RUNNER_TEMP/release/npm" "$RUNNER_TEMP/release/assets" "$RUNNER_TEMP/notes.md" scripts/install.sh
       # npm-packages.mjs skips each package npm already has. npm holds a version it
       # accepted for minutes before it serves it, so that check misses a publish still
       # in that state: one this job made before it stopped, or (before the wait step
