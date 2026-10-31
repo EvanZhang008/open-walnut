@@ -30,9 +30,10 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { filterChip, removeFilterChip, setStatus } from './filter-bar-helpers'
 import { DRAFT_PANEL } from './draft-helpers'
-import { setStatusSectionOpen, showSectionCard, statusSection, statusSectionCountOf, statusSectionToggle } from './status-section-helpers'
+import { endRunningTurn, interruptTurn, presetPanelDesign, setStatusSectionOpen, showSectionCard, startRunningTurn, statusSection, statusSectionCountOf, statusSectionToggle } from './status-section-helpers'
 import { composerTextarea, openPanels, openPlusMenu } from './engine-settings-popover-helpers'
 import { DEFAULT_WAIT_HOURS } from '../../../src/core/types'
+import { TRIGGER_ACTION_LABEL } from '../../../web/src/components/sessions/trigger-picker-model'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const SHOTS = '/tmp/waiting-status/shots'
@@ -43,6 +44,7 @@ test.describe.configure({ mode: 'serial' })
 
 const litterTasks: string[] = []
 const litterRoutines: string[] = []
+const litterTurns: string[] = []
 
 test.beforeEach(async ({ page }) => {
   await isolateUiPrefs(page)
@@ -50,7 +52,8 @@ test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 860 })
 })
 
-test.afterEach(async () => {
+test.afterEach(async ({ request }) => {
+  for (const sid of litterTurns.splice(0)) await endRunningTurn(request, sid)
   for (const id of litterRoutines.splice(0)) await fetch(`${API}/api/routines/${id}`, { method: 'DELETE' }).catch(() => undefined)
   for (const id of litterTasks.splice(0)) await fetch(`${API}/api/tasks/${id}`, { method: 'DELETE' }).catch(() => undefined)
 })
@@ -316,7 +319,10 @@ test('Waiting from the menu: the until row, the collapsed row, the task row and 
   await expect(detail.getByTestId('task-detail-wait-until')).toHaveCount(0)
 })
 
-test('Waiting tasks are out of the list and the tiers by default; Status Waiting brings them back; parking a card fades it out', async ({ page, browserName }) => {
+test('Waiting tasks are out of the list and the tiers by default; Status Waiting brings them back; parking a card fades it out', async ({ page, request, browserName }) => {
+  // The folded Waiting / snoozed and Completed sections under the list are Flat's (the
+  // product default); By project folds them inside each project instead.
+  await presetPanelDesign(page, 'status')
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
   // Both are born pinned (Satellite) like every interactive create; the parked
   // one moves to Focus: a Waiting pin keeps its tier but is not drawn there.
@@ -325,6 +331,10 @@ test('Waiting tasks are out of the list and the tiers by default; Status Waiting
   await api('PUT', `/api/focus/tasks/${parked.id}/tier`, { tier: 'focus' })
   await api('PATCH', `/api/tasks/${parked.id}`, { phase: 'WAITING' })
   expect((await taskOf(parked.id)).focus_tier).toBe('focus')
+  // The plain card is open work: a turn runs on it, so it reads Working (a to-do nobody
+  // started waits).
+  const plainTurn = await startRunningTurn(request, plain.id)
+  litterTurns.push(plainTurn)
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 
@@ -391,21 +401,30 @@ test('Waiting tasks are out of the list and the tiers by default; Status Waiting
   await expect(plainCard).toBeVisible()
   await expect.poll(async () => (await taskOf(plain.id)).phase, { timeout: 10_000 }).toBe('WAITING')
   await page.keyboard.press('Escape')
-  // Held for the grace window (the same 3s a completed row gets), then gone.
-  // (The fade class itself lives for ~600ms, too short to assert through polling.)
+  // Its turn still runs, so it is still Working (Working is a turn that runs now); once
+  // the turn ends it waits, and the card leaves Working.
   await page.waitForTimeout(1_200)
   await expect(plainCard).toBeVisible()
-  await expect(plainCard).toHaveCount(0, { timeout: 8_000 })
+  await interruptTurn(request, plainTurn)
+  await expect.poll(async () => (await taskOf(plain.id)).phase, { timeout: 10_000 }).toBe('WAITING')
+  // The server derives Waiting a moment after the turn ends, inside the echo window of the
+  // park this page wrote: the row must still follow it (useTasks takeServerOwned).
+  await expect.poll(async () => (await taskOf(plain.id)).user_status?.state, { timeout: 30_000 }).toBe('waiting')
+  await expect(plainCard).toHaveCount(0, { timeout: 20_000 })
   // It went to the folded Waiting / snoozed section.
   await setStatusSectionOpen(page, 'waiting', true)
   await showSectionCard(page, 'waiting', plain.id)
   await setStatusSectionOpen(page, 'waiting', false)
-  // A message-free way back: the status by hand.
-  await api('PATCH', `/api/tasks/${plain.id}`, { phase: 'TODO' })
-  await expect(plainCard).toBeVisible({ timeout: 15_000 })
+  // A message-free way back: the status by hand. Need Action brings it under Needs you.
+  await api('PATCH', `/api/tasks/${plain.id}`, { phase: 'NEED_ACTION' })
+  // (A hand-back of a task with a session settles HANDBACK_SETTLE_MS, 20 s, before it is stored.)
+  await expect.poll(async () => (await taskOf(plain.id)).user_status?.state, { timeout: 60_000 }).toBe('needs')
+  await showSectionCard(page, 'needs', plain.id)
 })
 
 test('the status sections count the current view: a tier tab counts its own tier, and Completed shows a tier\'s done pin', async ({ page, browserName }) => {
+  // The view-wide Waiting / snoozed and Completed sections are Flat's.
+  await presetPanelDesign(page, 'status')
   // Every tier tab on the bar, so the view can be switched by clicking. "Hide empty
   // tabs" stays at its default (on): a tier whose only tasks are parked is not empty.
   await page.addInitScript(() => {
@@ -489,7 +508,20 @@ test('the Projects view keeps only Running and Collapse; Waiting comes back thro
   await expect(bar.getByRole('button', { name: /(Collapse|Expand) all projects/ })).toBeVisible()
   expect((await bar.innerText()) + (await bar.innerHTML())).not.toMatch(/[\u2713\u29D7\u2195\u25F7\u2303\u2304]|View panel/)
   await expect(rowEl).toHaveCount(0)
-  await setStatus(page, ['To Do', 'In Progress', 'Need Action', 'Waiting'])
+  // By project folds a parked task into its project's "Waiting / snoozed" line: folded,
+  // it is drawn nowhere; opened, its row is there, never in the list too.
+  const fold = page.locator('[data-testid="project-status-folds"][data-project=""] [data-testid="project-status-fold-waiting"]').first()
+  const anyParked = page.locator(`[data-task-id="${parked.id}"]`)
+  await expect(fold).toBeVisible({ timeout: 15_000 })
+  await expect(anyParked).toHaveCount(0)
+  await fold.click()
+  await expect(fold).toHaveAttribute('aria-expanded', 'true')
+  await expect(anyParked).toHaveCount(1, { timeout: 15_000 })
+  await expect(rowEl).toHaveCount(0)
+  await fold.click()
+  await expect(anyParked).toHaveCount(0)
+  // Waiting alone (narrower than Open) is a plain filter: the parked task is in the list.
+  await setStatus(page, ['Waiting'])
   await expect(rowEl).toBeVisible({ timeout: 15_000 })
   await shot(page.locator('.todo-panel'), 'projects-waiting-on', browserName)
   await setStatus(page, ['To Do', 'In Progress', 'Need Action'])
@@ -579,12 +611,12 @@ test('"Snooze until something happens" leads the task session\'s composer, from 
   await menu.getByTestId('task-wait-until').click()
   await expect(box).toHaveValue(`${PREFIX}ship it`)
 
-  // From the composer's "+" menu, next to "Set up a trigger or cron job".
+  // From the composer's "+" menu, next to "Add a trigger…" (trigger-picker-model.ts).
   await box.fill('the build is green')
   const plus = await openPlusMenu(panel)
   const row = plus.getByRole('menuitem', { name: 'Snooze until something happens…' })
   await expect(row).toBeVisible()
-  await expect(plus.getByRole('menuitem', { name: 'Set up a trigger or cron job' })).toBeVisible()
+  await expect(plus.getByRole('menuitem', { name: TRIGGER_ACTION_LABEL })).toBeVisible()
   await shot(plus, 'plus-menu', browserName)
   await row.click()
   await expect(plus).toBeHidden()

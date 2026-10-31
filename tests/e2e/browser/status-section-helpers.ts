@@ -136,6 +136,17 @@ export async function startRunningTurn(request: APIRequestContext, taskId: strin
   return sessionId
 }
 
+/** End the turn only (an interrupt, which the mock CLI answers by ending it); the process stays, idle. */
+export async function interruptTurn(request: APIRequestContext, sessionId: string): Promise<void> {
+  await request.post(`/api/sessions/${sessionId}/interrupt`).catch(() => {})
+  await expect.poll(async () => {
+    const b = (await (await request.get(`/api/sessions/${sessionId}`)).json().catch(() => ({}))) as { session?: { process_status?: string } }
+    return b.session?.process_status
+  }, { timeout: 30_000 }).not.toBe('running').catch(() => {})
+}
+
+/** End the turn, then the session (cleanup). */
 export async function endRunningTurn(request: APIRequestContext, sessionId: string): Promise<void> {
+  await interruptTurn(request, sessionId)
   await request.post(`/api/sessions/${sessionId}/terminate`).catch(() => {})
 }

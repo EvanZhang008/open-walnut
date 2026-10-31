@@ -799,6 +799,34 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     setTasks((prev) => (prev.some((t) => t.id === id) ? prev.filter((t) => t.id !== id) : prev));
   }, []);
 
+  /**
+   * What a swallowed echo of this page's own write still hands over: the fields only
+   * the server writes, which no optimistic write sets, so the optimistic row stays and
+   * these come from the echo. `user_status` is derived by the server (user-status-sync);
+   * 2026-10-31: a status it derived inside the 5 s echo window (a turn ending just after
+   * a park) was swallowed with the echo, and the Home panel kept the task under Working
+   * until a reload. `replica_sync` is a host replica's mark while the Mac is away ("Syncs
+   * when your Mac is back"); the Mac's events never carry it. Every consumeEcho of a
+   * task event calls this (tests/web/task-echo-server-fields.test.ts).
+   */
+  const takeServerOwned = useCallback((task: Task) => {
+    setTasks((prev) => {
+      const idx = prev.findIndex((t) => t.id === task.id);
+      if (idx === -1) return prev;
+      const cur = prev[idx] as Task & { replica_sync?: unknown };
+      const patch: Partial<Task> & { replica_sync?: unknown } = {};
+      if (Object.prototype.hasOwnProperty.call(task, 'replica_sync')) {
+        const mark = (task as { replica_sync?: unknown }).replica_sync ?? null;
+        if ((cur.replica_sync ?? null) !== mark) patch.replica_sync = mark;
+      }
+      if (task.user_status && JSON.stringify(task.user_status) !== JSON.stringify(cur.user_status ?? null)) patch.user_status = task.user_status;
+      if (Object.keys(patch).length === 0) return prev;
+      const next = prev.slice();
+      next[idx] = { ...cur, ...patch } as Task;
+      return next;
+    });
+  }, []);
+
   // Real-time event handlers — single source of truth for state changes
   // Server emits { task: <Task> } wrapper objects
   useEvent('task:created', (data) => {
@@ -822,7 +850,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
       return;
     }
     // Suppress the echo of our own optimistic create (already reconciled locally).
-    if (consumeEcho(`create:${task.id}`)) return;
+    if (consumeEcho(`create:${task.id}`)) { takeServerOwned(task); return; }
     wsEventCounts.current.created++;
     // Log every 10th event or first event (to spot event storms)
     const c = wsEventCounts.current;
@@ -847,23 +875,6 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
   });
 
   // Session phase hints are not task commits; see docs/decision/task-session-status.md.
-  /**
-   * The echo of this page's own write, from a host replica while the Mac is away:
-   * the optimistic row stays, and only the replica's mark ("Syncs when your Mac is
-   * back", `replica_sync`) is taken from it. The Mac's events never carry the field.
-   */
-  const takeAwayMark = useCallback((task: Task) => {
-    if (!Object.prototype.hasOwnProperty.call(task, 'replica_sync')) return;
-    const mark = (task as { replica_sync?: unknown }).replica_sync ?? null;
-    setTasks((prev) => {
-      const idx = prev.findIndex((t) => t.id === task.id);
-      if (idx === -1 || ((prev[idx] as { replica_sync?: unknown }).replica_sync ?? null) === mark) return prev;
-      const next = prev.slice();
-      next[idx] = { ...prev[idx], replica_sync: mark } as Task;
-      return next;
-    });
-  }, []);
-
   useEvent('task:updated', (data) => {
     wsEventCounts.current.updated++;
     const { task: raw } = data as { task?: Task };
@@ -871,9 +882,9 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     if (!task) { log.info('tasks', 'ws task:updated bulk → refetch (debounced)'); scrollLog('drag-trace-ws-updated-bulk-refetch'); scheduleBulkRefetch(); return; }
     // Kept to a plugin's own view (now or since this write): out of the store.
     if (isPluginOnlyTask(task)) { dropPluginOnly(task.id); return; }
-    if (consumeEcho(`move:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-move', { id: task.id.slice(0,12) }); takeAwayMark(task); return; }
-    if (consumeEcho(`update:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-update', { id: task.id.slice(0,12) }); takeAwayMark(task); return; }
-    if (consumeEcho(`phase:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-phase', { id: task.id.slice(0,12) }); takeAwayMark(task); return; }
+    if (consumeEcho(`move:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-move', { id: task.id.slice(0,12) }); takeServerOwned(task); return; }
+    if (consumeEcho(`update:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-update', { id: task.id.slice(0,12) }); takeServerOwned(task); return; }
+    if (consumeEcho(`phase:${task.id}`)) { scrollLog('drag-trace-ws-updated-echo-phase', { id: task.id.slice(0,12) }); takeServerOwned(task); return; }
     retainServerTask(task.id);
     // An optimistic edit still waiting for its write wins over this echo (localEdits).
     const held = localEdits.current.get(task.id);
@@ -907,7 +918,7 @@ export function useTasks(filter?: tasksApi.TaskQuery): UseTasksReturn {
     const { task: raw } = data as { task?: Task };
     const task = raw && forThisWindow(raw);
     if (!task) { log.info('tasks', 'ws task:completed bulk → refetch (debounced)'); scheduleBulkRefetch(); return; }
-    if (consumeEcho(`complete:${task.id}`)) return;
+    if (consumeEcho(`complete:${task.id}`)) { takeServerOwned(task); return; }
     setTasks((prev) => {
       const idx = prev.findIndex((t) => t.id === task.id);
       if (idx === -1) return prev;

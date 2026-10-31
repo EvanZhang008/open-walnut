@@ -3227,6 +3227,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     let closedSinceRender = false;
     const closedAfterRender = (at: number, elapsed: number) => elapsed >= GRACE_MS && at + GRACE_MS > graceRenderAt;
     for (const task of tasks) {
+      // A row already held whose server echo stamps it later than the optimistic write
+      // did moves the batch's deadline to that stamp: else the clear runs while the row
+      // still reads as inside its window (isIn*Grace), and nothing redraws it after
+      // (2026-10-31: a parked card stayed under Working until another task changed).
+      if (task.status === 'done' && task.completed_at && recentlyCompletedRef.current.has(task.id)) {
+        const until = new Date(task.completed_at).getTime() + GRACE_MS;
+        if (until > graceDeadlineRef.current && until - Date.now() < GRACE_MS * 2) { graceDeadlineRef.current = until; extended = true; }
+      }
       if (task.status === 'done' && task.completed_at && !recentlyCompletedRef.current.has(task.id)) {
         const completedAt = new Date(task.completed_at).getTime();
         const elapsed = Date.now() - completedAt;
@@ -3238,14 +3246,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
         } else if (closedAfterRender(completedAt, elapsed)) closedSinceRender = true;
       }
       // A task just parked joins the same batch (it is about to leave the list too).
-      if (task.phase === 'WAITING' && task.phase_changed_at && !recentlyParkedRef.current.has(task.id)) {
+      if (task.phase === 'WAITING' && task.phase_changed_at) {
         const parkedAt = new Date(task.phase_changed_at).getTime();
-        const elapsed = Date.now() - parkedAt;
-        if (elapsed >= 0 && elapsed < GRACE_MS) {
-          recentlyParkedRef.current.add(task.id);
-          graceDeadlineRef.current = Math.max(graceDeadlineRef.current, parkedAt + GRACE_MS);
-          extended = true;
-        } else if (closedAfterRender(parkedAt, elapsed)) closedSinceRender = true;
+        if (recentlyParkedRef.current.has(task.id)) {
+          const until = parkedAt + GRACE_MS;
+          if (until > graceDeadlineRef.current && until - Date.now() < GRACE_MS * 2) { graceDeadlineRef.current = until; extended = true; }
+        } else {
+          const elapsed = Date.now() - parkedAt;
+          if (elapsed >= 0 && elapsed < GRACE_MS) {
+            recentlyParkedRef.current.add(task.id);
+            graceDeadlineRef.current = Math.max(graceDeadlineRef.current, parkedAt + GRACE_MS);
+            extended = true;
+          } else if (closedAfterRender(parkedAt, elapsed)) closedSinceRender = true;
+        }
       }
     }
     // Reopened tasks leave the batch immediately (they're visible again anyway).
