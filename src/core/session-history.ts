@@ -2249,15 +2249,9 @@ export async function resolveHistoryWindowPath(
   sessionId: string,
   cwd: string | undefined,
   daemonHost: string,
-  reader: { findSessionPath(sessionId: string): Promise<string | null> },
+  reader: { stat(p: string): Promise<{ mtimeMs: number; size: number; epoch?: string } | null>; findSessionPath(sessionId: string): Promise<string | null> },
 ): Promise<string | undefined> {
-  const known = cwd && isSafeForProjectEncoding(cwd)
-    ? remoteJsonlPath(sessionId, cwd, daemonHost)
-    : getResolvedRemotePath(sessionId, daemonHost);
-  if (known) return known;
-  const found = (await reader.findSessionPath(sessionId)) ?? undefined;
-  if (found) setResolvedRemotePath(sessionId, daemonHost, found);
-  return found;
+  return (await locateTranscript(reader, sessionId, cwd, daemonHost))?.path;
 }
 
 /** True when the session has recorded in-place rewinds, which no window can filter. */
@@ -2379,14 +2373,11 @@ export async function readSessionHistoryRange(
 ): Promise<{ messages: SessionHistoryMessage[]; fileSize: number; epoch?: string } | null> {
   if (await getInPlaceRewinds(sessionId)) return null;
   const daemonHost = host ?? '__local__';
-  const statPath = cwd && isSafeForProjectEncoding(cwd)
-    ? remoteJsonlPath(sessionId, cwd, daemonHost)
-    : getResolvedRemotePath(sessionId, daemonHost);
-  if (!statPath) return null;
   const { DaemonFileReader } = await import('./daemon-file-reader.js');
   const reader = new DaemonFileReader(daemonHost);
-  const st = await reader.stat(statPath);
+  const st = await locateTranscript(reader, sessionId, cwd, daemonHost);
   if (!st) return null;
+  const statPath = st.path;
   const stop = Math.min(end, st.size);
   if (start >= stop) return { messages: [], fileSize: st.size, epoch: st.epoch };
   const { readJsonlLineWindow } = await import('./jsonl-window.js');
@@ -2462,17 +2453,11 @@ export async function readSessionHistoryTail(
   maxTailBytes = 4 * 1024 * 1024,
 ): Promise<SessionHistoryMessage[] | null> {
   const daemonHost = host ?? '__local__';
-  let statPath: string | undefined;
-  if (cwd && isSafeForProjectEncoding(cwd)) {
-    statPath = remoteJsonlPath(sessionId, cwd, daemonHost);
-  } else {
-    statPath = getResolvedRemotePath(sessionId, daemonHost);
-  }
-  if (statPath) {
+  {
     try {
       const { DaemonFileReader } = await import('./daemon-file-reader.js');
       const reader = new DaemonFileReader(daemonHost);
-      const st = await reader.stat(statPath);
+      const st = await locateTranscript(reader, sessionId, cwd, daemonHost);
       if (st && st.size > maxTailBytes) {
         // Serve from the shared cache when fresh — same data, zero I/O.
         const cached = cacheGet(sessionId, host);
@@ -2558,16 +2543,12 @@ async function readSessionHistoryInner(sessionId: string, cwd?: string, host?: s
   let localDaemonDown: string | undefined;
   {
     const daemonHost = host ?? '__local__';
-    if (cwd && isSafeForProjectEncoding(cwd)) {
-      statPath = remoteJsonlPath(sessionId, cwd, daemonHost);
-    } else {
-      statPath = getResolvedRemotePath(sessionId, daemonHost);
-    }
-    if (statPath) {
+    {
       try {
         const { DaemonFileReader } = await import('./daemon-file-reader.js');
         const reader = new DaemonFileReader(daemonHost);
-        const statResult = await reader.stat(statPath);
+        const statResult = await locateTranscript(reader, sessionId, cwd, daemonHost);
+        if (statResult) statPath = statResult.path;
         if (statResult) {
           mtimeMs = statResult.mtimeMs;
           statSize = statResult.size;
@@ -3033,33 +3014,36 @@ const PLAN_TAIL_SCAN_BUDGET_MS = 30_000;
 const PLAN_TAIL_PIECE_BYTES = 1024 * 1024;
 
 /**
- * Locate a transcript for range reads and stat it. Same order as
- * readSessionJsonlContent: a path an earlier read found, then the cwd-encoded
- * path, then fs.find. The find covers a hashed cwd (encoded form over 200 chars)
- * AND a cwd the CLI stored under its symlink-resolved encoding; the resolved-path
- * cache is only seeded by a successful whole read, which a file over the ceiling
- * never completes.
+ * Locate a transcript on its host and stat it: every stat of a transcript goes
+ * through here. Same order as readSessionJsonlContent: a path an earlier read
+ * found, then the cwd-encoded path, then fs.find (remembered). The find covers a
+ * hashed cwd (encoded form over 200 chars) AND a cwd the CLI stored under its
+ * symlink-resolved encoding: a session started in /home/u/x on a host where
+ * /home/u links to /local/home/u lives under `-local-home-u-x`. Stat-ing only the
+ * encoded path said "no file" for such a session, so every reader skipped its
+ * cache and its append-only read and read the whole file again, each minute
+ * (2026-10-31: about 700 whole reads, 4 GB, an hour from one host).
  */
-async function statTranscriptForRangeRead(
-  reader: import('./daemon-file-reader.js').DaemonFileReader,
+async function locateTranscript(
+  reader: { stat(p: string): Promise<{ mtimeMs: number; size: number; epoch?: string } | null>; findSessionPath(sessionId: string): Promise<string | null> },
   sessionId: string,
   cwd: string | undefined,
   daemonHost: string,
-): Promise<{ path: string; size: number } | null> {
+): Promise<{ path: string; size: number; mtimeMs: number; epoch?: string } | null> {
   const direct = [
     getResolvedRemotePath(sessionId, daemonHost),
     cwd && isSafeForProjectEncoding(cwd) ? remoteJsonlPath(sessionId, cwd, daemonHost) : undefined,
   ].filter((p): p is string => !!p);
   for (const p of new Set(direct)) {
     const st = await reader.stat(p);
-    if (st) return { path: p, size: st.size };
+    if (st) return { ...st, path: p };
   }
   const found = await reader.findSessionPath(sessionId);
   if (!found) return null;
   const st = await reader.stat(found);
   if (!st) return null;
   setResolvedRemotePath(sessionId, daemonHost, found);
-  return { path: found, size: st.size };
+  return { ...st, path: found };
 }
 
 /** Bytes [start, end) of a file, in frame-sized pieces. Null when the file is gone. */
@@ -3113,7 +3097,7 @@ async function extractPlanFromTranscriptTail(
   try {
     const { DaemonFileReader } = await import('./daemon-file-reader.js');
     const reader = new DaemonFileReader(daemonHost);
-    const target = await statTranscriptForRangeRead(reader, sessionId, cwd, daemonHost);
+    const target = await locateTranscript(reader, sessionId, cwd, daemonHost);
     if (!target) return null;
     const windowBytes = Math.min(PLAN_TAIL_WINDOW_BYTES, DaemonFileReader.maxReadBytes());
     const floor = Math.max(0, target.size - windowBytes * PLAN_TAIL_MAX_WINDOWS);

@@ -36,7 +36,7 @@ export interface AnchorReach {
 }
 
 interface RangeReader {
-  stat(path: string): Promise<{ size: number } | null>;
+  stat(path: string): Promise<{ size: number; mtimeMs: number; epoch?: string } | null>;
   readRangeBytes(path: string, start: number, length: number): Promise<{ buf: Buffer; fileSize: number; eof: boolean } | null>;
   findSessionPath(sessionId: string): Promise<string | null>;
 }

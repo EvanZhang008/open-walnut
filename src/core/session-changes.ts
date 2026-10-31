@@ -827,8 +827,18 @@ async function computeSessionChangesInner(
   // our computed path would be wrong) resolve the ABSOLUTE path once via
   // fs.find and keep it in the cache — without this, such sessions can never
   // stat → never cache → full multi-MB re-read on every request.
-  let jsonlPath = cwd && isSafeForProjectEncoding(cwd) ? remoteJsonlPath(sessionId, cwd, host) : null;
+  // A path found before wins over the encoded guess: a cwd spelled through a symlink
+  // is stored by the CLI under its real path's encoding (session-history locateTranscript).
   let resolvedPath = cachedEntry?.resolvedPath;
+  let jsonlPath = resolvedPath ?? (cwd && isSafeForProjectEncoding(cwd) ? remoteJsonlPath(sessionId, cwd, host) : null);
+  if (jsonlPath && !resolvedPath) {
+    try {
+      if (!(await reader.stat(jsonlPath))) {
+        resolvedPath = (await reader.findSessionPath(sessionId)) ?? undefined;
+        if (resolvedPath) jsonlPath = resolvedPath;
+      }
+    } catch { /* stat failed: the read below decides */ }
+  }
   if (!jsonlPath) {
     if (!resolvedPath) {
       try {
