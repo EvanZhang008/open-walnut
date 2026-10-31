@@ -997,6 +997,7 @@ final class SessionConversationStore {
             digest.combine(m.agent)
             digest.combine(m.isError)
             digest.combine(m.sentBy)
+            digest.combine(m.sentTo)
             let base = "\(m.role)|\(m.createdAt)|\(m.kind?.rawValue ?? "")|\(digest.finalize())"
             let n = counts[base, default: 0]
             counts[base] = n + 1
@@ -1004,12 +1005,13 @@ final class SessionConversationStore {
                                   createdAt: m.createdAt, kind: m.kind,
                                   detail: m.detail, resultPreview: m.resultPreview,
                                   agent: m.agent, thinkingText: m.thinkingText,
-                                  inputPreview: m.inputPreview, isError: m.isError)
+                                  inputPreview: m.inputPreview, detailRef: m.detailRef, isError: m.isError)
             row.sentBy = m.sentBy
             row.added = m.added
             row.textWithoutContext = m.textWithoutContext
             row.injectedAfter = m.injectedAfter
             row.injectedBefore = m.injectedBefore
+            row.sentTo = m.sentTo
             return row
         }
     }
@@ -1111,6 +1113,7 @@ final class SessionConversationStore {
             agent: m.agent,
             thinkingText: m.thinkingText,
             inputPreview: m.inputPreview,
+            detailRef: m.detailRef,
             isError: m.isError
         )
         row.sentBy = m.sentBy
@@ -1118,6 +1121,7 @@ final class SessionConversationStore {
         row.textWithoutContext = m.textWithoutContext
         row.injectedAfter = m.injectedAfter
         row.injectedBefore = m.injectedBefore
+        row.sentTo = m.sentTo
         return row
     }
 

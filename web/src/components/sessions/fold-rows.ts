@@ -7,8 +7,9 @@
  * quiet steps around it, in every kind of turn and across every turn boundary,
  * and each stretch is ONE folded row. Only a row the person reads ends a stretch:
  * words, the person's own message, a question's labelled row, a question to the
- * person, a plan or an agent's card, a call still running, a fork or gap divider,
- * an Asked-from list. A failure is not one of them: the fold's header counts it in
+ * person, a plan or an agent's card, a fork or gap divider, an Asked-from list.
+ * A call still running is a step too (its fold's row breathes while the turn
+ * runs; the phone folds it the same way). A failure is not one of them: the fold's header counts it in
  * red ("1 failed"), and its line names the runtime's other lines ("1 notice"), so
  * nothing is folded away unread. SessionChatHistory's `msgKindOf` switches over
  * every part kind (a new one does not type-check until it is placed).
@@ -61,8 +62,10 @@ export const TOOL_ROLE_FOLDS = {
   step: true,
   /** AskUserQuestion: the person answers it. */
   question: false,
-  /** No result yet: it stays on screen with its own bar. */
-  running: false,
+  /** No result yet: a step, and its fold breathes while the turn runs (2026-10-30:
+   *  a lead's run with one command still going sat as its own "Ran 3 commands"
+   *  row under the fold before it). */
+  running: true,
   /** A plan, an agent's card, leaving plan mode: drawn as their own card. */
   card: false,
 } as const satisfies Record<ToolRole, boolean>;
@@ -76,8 +79,9 @@ export interface ToolRead {
 /** One call's role. A failed call is a step: its fold's header says "N failed". */
 export function toolRole<T extends ToolRead>(t: T, isFoldableCall: (t: T) => boolean): ToolRole {
   if (t.name === 'AskUserQuestion') return 'question';
-  if (t.result === undefined && !t.isError) return 'running';
+  // A card first: an agent still working keeps its own card on screen.
   if (!isFoldableCall(t)) return 'card';
+  if (t.result === undefined && !t.isError) return 'running';
   return 'step';
 }
 

@@ -138,6 +138,9 @@ enum TimelineTurnFold {
     /// A message to someone else (a send to another task, to the lead, to the inbox).
     static func isOutbound(_ m: ChatMessage) -> Bool {
         guard m.kind == .tool else { return false }
+        // The server read the call as a send and named its tasks (`sentTo`), also for a
+        // command where the send is not first (`walnut tools help …; walnut tools call task_send …`).
+        if !(m.sentTo ?? []).isEmpty { return true }
         if m.text.hasPrefix("mcp__"), outboundOps.contains(where: { m.text.hasSuffix("__\($0)") }) { return true }
         return TimelineToolRunFold.staysOutOfRuns(name: m.text, detail: m.detail, inputPreview: m.inputPreview)
             && m.text != "ExitPlanMode" && m.text != "Write"
@@ -162,12 +165,13 @@ enum TimelineTurnFold {
         }
     }
 
-    /// A send's chip names the tasks it went to ("Sent to Brief task, Task status
+    /// A send's chip names the tasks it went to ("Sent to Brief task and Task status
     /// foundation") when the server resolved them (`sentTo`); nil for any other row.
     /// 2026-10-30, the user, of a send that said "another session": which session?
+    /// A title's own " · " shows as " / ", as on the fold line (`TimelineFoldSteps`).
     static func sendLabel(_ m: ChatMessage) -> String? {
         guard isOutbound(m), let titles = m.sentTo?.compactMap(\.title), !titles.isEmpty else { return nil }
-        return "Sent to " + titles.joined(separator: " and ")
+        return "Sent to " + titles.map(TimelineFoldSteps.partyName).joined(separator: " and ")
     }
 
     static func capitalized(_ s: String) -> String {
@@ -434,6 +438,7 @@ extension ChatMessage {
         copy.textWithoutContext = textWithoutContext
         copy.injectedAfter = injectedAfter
         copy.injectedBefore = injectedBefore
+        copy.sentTo = sentTo
         copy.walnutAddedToggle = walnutAddedToggle
         return copy
     }

@@ -42,6 +42,28 @@ final class FoldStepsTests: XCTestCase {
         XCTAssertEqual(row?.sentTo?.first?.title, "Brief task")
     }
 
+    /// The path the app takes (2026-10-30, the iOS gate: names never showed because the
+    /// transcript's own row type dropped `sentTo`): transcript JSON, the store's rows,
+    /// the fold's step and the chip. A send that is not first in its command counts too.
+    @MainActor func testTheTranscriptsTargetsReachTheFoldLineAndTheChip() throws {
+        let json = """
+        {"sessionId":"s","exportedAt":"2026-10-30T00:00:00Z","truncated":false,"messages":[
+          {"role":"assistant","text":"Bash","timestamp":"2026-10-30T00:00:01Z","kind":"tool",
+           "inputPreview":"command: walnut tools help task_send; walnut tools call task_send x","detailRef":"ref-1",
+           "sentTo":[{"ref":"abcd12","taskId":"abcd1234-ef56","title":"Brief task \\u00b7 Tabs"}]}]}
+        """
+        let transcript = try JSONDecoder().decode(SessionTranscript.self, from: Data(json.utf8))
+        let rows = SessionConversationStore.keepingWholeText(transcript.messages, held: [])
+        XCTAssertEqual(rows[0].sentTo?.first?.taskId, "abcd1234-ef56")
+        XCTAssertEqual(rows[0].detailRef, "ref-1")
+        XCTAssertTrue(TimelineTurnFold.isOutbound(rows[0]))
+        XCTAssertEqual(TimelineFoldSteps.steps(rows[0]), [.sent(to: "Brief task \u{00B7} Tabs")])
+        XCTAssertEqual(TimelineFoldSteps.phrase(TimelineFoldSteps.steps(rows[0])), "Sent 1 to Brief task / Tabs")
+        XCTAssertEqual(TimelineTurnFold.sendLabel(rows[0]), "Sent to Brief task / Tabs")
+        // A fold's copy of the row keeps them.
+        XCTAssertEqual(rows[0].replacingText("Bash").sentTo, rows[0].sentTo)
+    }
+
     func testOneIsSingularAndWhatDidNotHappenIsLeftOut() {
         XCTAssertEqual(TimelineFoldSteps.phrase([.received(from: "Team lead"), .ack]), "Received 1 message from Team lead")
         XCTAssertEqual(TimelineFoldSteps.phrase([.received(from: nil)]), "Received 1 message")
@@ -69,7 +91,7 @@ final class FoldStepsTests: XCTestCase {
     func testACountNeverPartsFromItsNounWhenTheLineWraps() {
         let nb = "\u{00A0}"
         XCTAssertEqual(TimelineFoldSteps.wrapping("Received 12 messages \u{00B7} Sent 3 \u{00B7} Ran 8 tools"),
-                       "Received 12\(nb)messages \u{00B7} Sent\(nb)3 \u{00B7} Ran\(nb)8\(nb)tools")
+                       "Received 12\(nb)messages\(nb)\u{00B7} Sent\(nb)3\(nb)\u{00B7} Ran\(nb)8\(nb)tools")
         XCTAssertEqual(TimelineFoldSteps.wrapping("Received 1 message"), "Received 1\(nb)message")
         XCTAssertEqual(TimelineFoldSteps.wrapping("Read a file, ran a command"), "Read a file, ran a command")
     }

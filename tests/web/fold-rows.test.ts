@@ -116,14 +116,17 @@ describe('every row kind is placed by the rule', () => {
 })
 
 describe('the rule', () => {
-  const foldable = (t: { name: string }) => t.name !== 'ExitPlanMode'
-  it('a failed call is a step; a question, a running call and a card are not', () => {
+  const foldable = (t: { name: string }) => t.name !== 'ExitPlanMode' && t.name !== 'Agent'
+  it('a failed call and a running one are steps; a question and a card are not', () => {
     expect(toolRole({ name: 'Bash', result: 'Error: exit 1', isError: true }, foldable)).toBe('step')
     expect(toolRole({ name: 'Bash', result: 'ok' }, foldable)).toBe('step')
     expect(toolRole({ name: 'AskUserQuestion', result: 'A' }, foldable)).toBe('question')
     expect(toolRole({ name: 'Bash' }, foldable)).toBe('running')
     expect(toolRole({ name: 'ExitPlanMode', result: 'ok' }, foldable)).toBe('card')
-    expect(Object.entries(TOOL_ROLE_FOLDS).filter(([, v]) => v).map(([k]) => k)).toEqual(['step'])
+    // An agent still working is its card, never folded away.
+    expect(toolRole({ name: 'Agent' }, foldable)).toBe('card')
+    // 2026-10-30: a run with one command still going sat as its own row under the fold before it.
+    expect(Object.entries(TOOL_ROLE_FOLDS).filter(([, v]) => v).map(([k]) => k)).toEqual(['step', 'running'])
   })
 
   const base: PlaceRead = { role: 'step', turn: 'open', personStart: false, labelled: false, beforeAnswer: false }

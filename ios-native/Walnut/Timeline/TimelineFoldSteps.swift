@@ -82,10 +82,16 @@ enum TimelineFoldSteps {
 
     /// Who a piece was from or to: at most two names, then how many of its
     /// messages came from or went to anyone else (the web's `parties`).
+    /// A name as the fold line and a send's chip show it: a title's own " · " would
+    /// read as the line's separator, so it shows as " / ".
+    static func partyName(_ name: String) -> String {
+        name.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: #"\s+·\s+"#, with: " / ", options: .regularExpression)
+    }
+
     private static func parties(_ word: String, _ raw: [String?]) -> String {
         // A title's own " · " would read as the line's separator, and its commas as
         // a list: the names are joined with "and", their dots made slashes (the web's `parties`).
-        let names = raw.map { $0?.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: #"\s+·\s+"#, with: " / ", options: .regularExpression) }
+        let names = raw.map { $0.map(partyName) }
         var shown: [String] = []
         for case let name? in names where !name.isEmpty && !shown.contains(name) && shown.count < 2 { shown.append(name) }
         guard !shown.isEmpty else { return "" }
@@ -124,9 +130,11 @@ enum TimelineFoldSteps {
 
     /// The line as drawn and measured: a count never parts from its noun at a
     /// large text size ("Sent / 1" read as two things at AX-XXXL); the line may
-    /// still wrap between "Received" and its count, and at each " · ".
+    /// still wrap between "Received" and its count, and after each " · ", never
+    /// before it (2026-10-30, the iOS gate: a wrapped line began "· Ran 50 tools").
     static func wrapping(_ phrase: String) -> String {
         phrase
+            .replacingOccurrences(of: " \u{00B7} ", with: "\u{00A0}\u{00B7} ")
             .replacingOccurrences(of: #"(\d+) (messages?|tools?)\b"#, with: "$1\u{00A0}$2", options: .regularExpression)
             .replacingOccurrences(of: #"\b(Sent|Ran) (\d+)"#, with: "$1\u{00A0}$2", options: .regularExpression)
     }

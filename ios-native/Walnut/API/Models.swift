@@ -898,12 +898,19 @@ struct SessionTranscript: Codable {
         /// The first row only: such lines from before every row of the read
         /// (additive 2026-10-30). See `ChatMessage.injectedBefore`.
         var injectedBefore: [CliInjectedItem]? = nil
+        /// A send's tool row: the tasks it went to (additive 2026-10-30). See
+        /// `ChatMessage.sentTo`.
+        var sentTo: [SentTarget]? = nil
+        /// Rich reads only: the drawer's handle on the full text the previews cut
+        /// (additive). See `ChatMessage.detailRef`.
+        var detailRef: String? = nil
 
         init(role: String, text: String, timestamp: String, kind: String?,
              detail: String? = nil, resultPreview: String? = nil, agent: String? = nil,
              thinkingText: String? = nil, inputPreview: String? = nil, isError: Bool? = nil,
              sentBy: String? = nil, added: [WalnutAddedItem]? = nil, textWithoutContext: String? = nil,
-             injectedAfter: [CliInjectedItem]? = nil, injectedBefore: [CliInjectedItem]? = nil) {
+             injectedAfter: [CliInjectedItem]? = nil, injectedBefore: [CliInjectedItem]? = nil,
+             sentTo: [SentTarget]? = nil, detailRef: String? = nil) {
             self.role = role
             self.text = text
             self.timestamp = timestamp
@@ -919,6 +926,8 @@ struct SessionTranscript: Codable {
             self.textWithoutContext = textWithoutContext
             self.injectedAfter = injectedAfter
             self.injectedBefore = injectedBefore
+            self.sentTo = sentTo
+            self.detailRef = detailRef
         }
     }
 

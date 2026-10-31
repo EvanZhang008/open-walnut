@@ -4236,9 +4236,12 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     const steps = items.flatMap((x) => foldStepsOf(x.part));
     if (answerThinking) steps.push({ kind: 'thought' });
     const head = headOf(items[0].part);
+    // A call with no result yet folds with the rest (fold-rows.ts); the row breathes
+    // for it only while the session runs a turn (a dead session's leftover never does).
+    const running = isStreaming && items.some((x) => rowsOf(x.part).some((m) => (m.tools ?? []).some((t) => toolRole(t, isFoldableCall) === 'running')));
     pageRows.push(
       <div key={`turn-${id}`} data-turn-fold-index={head.globalIndex} {...threadWrapperProps(head.m.msgId ?? head.m.walnutMessageId, 'session-msg-bare')}>
-        <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" failed={failed} phrase={foldStepsPhrase(steps)}>
+        <ProcessFoldRow foldId={id} foldKey={turnFoldKey(id)} testId="turn-fold" failed={failed} running={running} phrase={foldStepsPhrase(steps)}>
           {body}
         </ProcessFoldRow>
       </div>,

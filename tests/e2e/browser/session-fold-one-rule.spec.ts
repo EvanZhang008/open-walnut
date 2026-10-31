@@ -173,3 +173,20 @@ test('a fold of sends names the tasks they went to, also when only the answer sa
   await cards.nth(1).locator('.provenance-fold').first().click();
   await expect(cards.nth(1).locator('a.task-link')).toHaveCount(2);
 });
+
+test('a run with a call still going joins the fold before it (the lead\'s live tail)', async ({ page }) => {
+  let n = 500;
+  const history = [
+    { role: 'user', text: 'OR_ASK5 keep going', timestamp: at(n++) },
+    { role: 'assistant', text: 'OR_ANSWER_H working.', timestamp: at(n++) },
+    { role: 'user', text: notice('Walnut', 'A check ran'), timestamp: at(n++) },
+    { role: 'assistant', text: '', tools: [bash('t1', 'sample-a'), bash('t2', 'sample-b')], timestamp: at(n++) },
+    // Its last command has no result yet: before, this run sat as its own row.
+    { role: 'assistant', text: '', tools: [bash('t3', 'sample-c'), bash('t4', 'sample-d'), { name: 'Bash', toolUseId: 't5', input: { command: 'sample-still-going' } }], timestamp: at(n++) },
+  ];
+  await mockSession(page, history, 'idle');
+  const hist = await open(page);
+  await expect(hist).toContainText('OR_ANSWER_H', { timeout: 60000 });
+  await expect.poll(async () => rowsBetween(hist, 'OR_ANSWER_H', 'OR_NOTHING_AFTER'))
+    .toEqual([expect.stringMatching(/^Received 1 message( from [^·]+)? · Ran 5 tools/)]);
+});
