@@ -3,31 +3,27 @@
  * button, quote, answer, and snooze which after click will show snooze until x time"). It opens
  * the task panel's own date picker (quick times, days, a date) and writes the same snooze the task
  * menu's "Start / Snooze until" does: the task's start date. Which state a snoozed task is in is
- * Walnut's call (the task's user status), never this button's; while the date is ahead the button
- * reads "Snoozed until <time>", and a click changes it or clears it (None).
+ * Walnut's call (the task's user status, which reads a start date still ahead as Waiting /
+ * snoozed), never this button's: the row leaves Needs you, and the Waiting / snoozed tab says until when.
  */
 import { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { updateTask } from '@/api/tasks';
-import { DatePicker, formatStartDateDisplay } from '@/components/common/DatePicker';
+import { DatePicker } from '@/components/common/DatePicker';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { useOverlayLayer } from '@/hooks/useOverlayLayer';
 import { log } from '@/utils/log';
 import type { OrgAlertView } from './org-channels-model';
-import { snoozeAhead } from './org-task-tabs';
 
-/** The Snooze button and its picker. `onSnoozed` is told the moment a time is picked (the row
- *  answers the click; null when the snooze was taken off), and again with an error when the write
- *  failed. */
-export function OrgAlertSnooze({ alert, current, now, onSnoozed }: {
+/** The Snooze button and its picker. `onFailed` is told when the write failed, `onDone` when it took. */
+export function OrgAlertSnooze({ alert, current, onFailed, onDone }: {
   alert: OrgAlertView;
-  /** The task's start date now, if it has one. */
+  /** The task's start date now, if it has one (the picker shows it). */
   current: string | undefined;
-  now: number;
-  onSnoozed: (taskId: string, until: string | null, error?: string) => void;
+  onFailed: (taskId: string, error: string) => void;
+  onDone?: (taskId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const ahead = snoozeAhead(current, now);
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const placement = useMenuPlacement(open, btnRef, menuRef, { align: 'right', minHeight: 140, onAnchorLost: () => setOpen(false) });
@@ -40,11 +36,10 @@ export function OrgAlertSnooze({ alert, current, now, onSnoozed }: {
   const pick = (until: string | null) => {
     setOpen(false);
     if (!until && !current) return;
-    onSnoozed(alert.taskId, until);
-    updateTask(alert.taskId, { start_date: until }).catch((err: unknown) => {
+    updateTask(alert.taskId, { start_date: until }).then(() => onDone?.(alert.taskId), (err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       log.warn('org', 'snooze from a Needs you row failed', { taskId: alert.taskId, until, error: message });
-      onSnoozed(alert.taskId, null, message);
+      onFailed(alert.taskId, message);
     });
   };
   return (
@@ -56,11 +51,9 @@ export function OrgAlertSnooze({ alert, current, now, onSnoozed }: {
         data-testid="org-alert-snooze"
         aria-haspopup="dialog"
         aria-expanded={open}
-        title={ahead ? 'Snoozed: change the time, or None to wake it now' : 'Snooze it until a time (its start date, as in the task menu)'}
+        title="Snooze it until a time (its start date, as in the task menu)"
         onClick={() => setOpen(!open)}
-      >{ahead
-        ? <span className="org-alert-snoozed" data-testid="org-alert-snoozed">Snoozed until {formatStartDateDisplay(current!)}</span>
-        : 'Snooze'} <span aria-hidden="true">▾</span></button>
+      >Snooze <span aria-hidden="true">▾</span></button>
       {open && createPortal(
         <div
           ref={menuRef}

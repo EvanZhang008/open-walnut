@@ -1,6 +1,6 @@
 /**
  * The Board choice a task's status says waits on the user, with what it offers, so the Org page
- * can answer it where the task is listed (web/src/components/org/OrgAlertAnswer.tsx). The same
+ * can answer it where the task is listed (web/src/components/org/OrgInlineAnswer.tsx). The same
  * rule src/core/user-status-sync.ts counts by: every Board, its unanswered choices in page order,
  * a choice naming its task by id or an unambiguous id prefix (4+ characters) and one that names
  * none being its Board owner's. A lead's Board often asks about its project's tasks, which are not

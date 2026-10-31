@@ -8,7 +8,7 @@
 import type { Task } from '@open-walnut/core';
 import { projectKey, userStateOf } from '@open-walnut/org-tree';
 import { STATUS_SECTION_LABELS } from '@/components/tasks/status-sections';
-import { parseDateLocal } from '@/components/common/DatePicker';
+import { readStatusLine } from './org-ask-form';
 import { flattenNodes, taskTime, type ChannelRow, type OrgAlertView } from './org-channels-model';
 
 export type OrgTaskTab = 'needs' | 'working' | 'waiting' | 'done';
@@ -70,16 +70,10 @@ function dedupe(alerts: readonly OrgAlertView[]): OrgAlertView[] {
 /** The line under a task in its tab: what it does, or what it waits on, in its status's words. */
 export function taskTabNote(task: Task, tab: OrgTaskTab): string {
   const s = task.user_status;
+  // The task's own line for the state it is in (user_status.line), when it has one.
+  const own = readStatusLine(s);
+  if (own && tab !== 'done') return own.text;
   if (tab === 'working') return s?.now?.trim() ?? '';
   if (tab === 'waiting') return (s?.waitingOn ?? s?.now ?? '').trim();
   return '';
-}
-
-/** Whether a snooze picked on a Needs you row is still ahead. A day-only start begins at local
- *  midnight, as the task panel reads it: read as UTC midnight, tomorrow's date is already past
- *  every evening west of UTC. */
-export function snoozeAhead(until: string | null | undefined, now: number): boolean {
-  if (!until) return false;
-  const at = parseDateLocal(until).getTime();
-  return Number.isFinite(at) && at > now;
 }

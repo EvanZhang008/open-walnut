@@ -40,7 +40,7 @@ import { vpCards } from '@/components/org/org-chart-model';
 import { OptionPickerFlyout, useCursorFlyout, type CursorPoint } from '@/components/tasks/CursorFlyout';
 import { orgRowMenu, type OrgRowPick } from '@/components/org/org-row-menu';
 import { OrgNodeDetail, type OrgAnswers, type OrgTab } from '@/components/org/OrgNodeDetail';
-import type { AnswerFailure } from '@/components/org/OrgAlertAnswer';
+import type { AnswerFailure } from '@/components/org/OrgInlineAnswer';
 import { OrgSidePanel, parseSideTarget, sideTargetParam, type OrgSideTarget } from '@/components/org/OrgSidePanel';
 import {
   orgStripToggleLock, orgStripView, type SameSession,
@@ -97,7 +97,7 @@ export function OrgPage() {
 
   /** Asks answered from their row, by task: what the task showed then (org-answered.ts). */
   const [answered, setAnswered] = useState<AnsweredHolds>(() => new Map());
-  /** Answers that failed, by task: the row is back with the reason (OrgAlertAnswer). */
+  /** Answers that failed, by task: the row is back with the reason (OrgInlineAnswer); a new ask of the task drops it (OrgTaskRail). */
   const [failedAnswers, setFailedAnswers] = useState<ReadonlyMap<string, AnswerFailure>>(() => new Map());
   const allTasks = tasks;
   const tasksNow = useRef(allTasks);

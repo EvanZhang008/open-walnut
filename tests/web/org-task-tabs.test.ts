@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest'
 import type { Task } from '../../src/core/types.js'
 import { buildOrgTree } from '../../src/core/org/org-tree.js'
 import { buildChannels, type AlertProbe } from '../../web/src/components/org/org-channels-model.js'
-import { ORG_TASK_TABS, ORG_TASK_TAB_LABELS, orgTaskTabs, snoozeAhead, taskTabNote } from '../../web/src/components/org/org-task-tabs.js'
+import { ORG_TASK_TABS, ORG_TASK_TAB_LABELS, orgTaskTabs, taskTabNote } from '../../web/src/components/org/org-task-tabs.js'
 import { STATUS_SECTION_LABELS } from '../../web/src/components/tasks/status-sections.js'
 
 const NOW = Date.UTC(2026, 9, 31, 12, 0)
@@ -57,23 +57,5 @@ describe('the Task view tabs', () => {
     expect(tabs.needs.map((a) => a.taskId)).toEqual(['ask'])
     expect(tabs.waiting.map((x) => x.id).sort()).toEqual(['snz', 'yard1'])
     expect(tabs.working.map((x) => x.id)).toEqual(['run'])
-  })
-})
-
-describe('a snooze picked on a row', () => {
-  const day = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-
-  it('reads a day as local midnight, so tomorrow is ahead late in the evening too', () => {
-    const evening = new Date(2026, 9, 30, 21, 47)
-    expect(snoozeAhead(day(new Date(2026, 9, 31)), evening.getTime())).toBe(true)
-    expect(snoozeAhead(day(evening), evening.getTime())).toBe(false)
-  })
-
-  it('reads a time as itself, and nothing as not snoozed', () => {
-    const now = Date.UTC(2026, 9, 31, 4, 0)
-    expect(snoozeAhead(new Date(now + 30 * 60_000).toISOString(), now)).toBe(true)
-    expect(snoozeAhead(new Date(now - 60_000).toISOString(), now)).toBe(false)
-    expect(snoozeAhead(null, now)).toBe(false)
-    expect(snoozeAhead('', now)).toBe(false)
   })
 })

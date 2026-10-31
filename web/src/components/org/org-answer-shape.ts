@@ -1,5 +1,5 @@
 /**
- * Which form a "Needs you" row's Answer takes (OrgAlertAnswer.tsx), read from the ask's own
+ * Which form a "Needs you" row's Answer takes (OrgInlineAnswer.tsx), read from the ask's own
  * structure, never from its words; and the decision letter it answers. Pure, so tests reach it
  * without the component's UI graph.
  */

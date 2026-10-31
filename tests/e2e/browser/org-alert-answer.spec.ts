@@ -93,22 +93,24 @@ async function watchRowGone(page: Page, id: string): Promise<() => Promise<{ gon
   return () => page.evaluate(() => (window as unknown as { __rowGone: { gone: boolean; counts: string } }).__rowGone)
 }
 
+/** The ask's answer, right in its row: no click opens it (2026-10-31, the user: "so user can just click"). */
 async function openAnswer(page: Page, id: string, shape: string) {
   const row = alertRow(page, id)
   await expect(row).toBeVisible({ timeout: 60_000 })
-  // Three buttons, nothing else.
-  await expect(row.locator('button')).toHaveText(['Quote', /^Answer/, /^Snooze/])
-  await row.getByTestId('org-alert-answer').click()
-  const menu = page.locator(`[data-testid="org-answer-menu"][data-task-id="${id}"]`)
-  await expect(menu).toBeVisible()
-  await expect(menu).toHaveAttribute('data-shape', shape)
-  // Inside the window, as every menu is.
-  const box = (await menu.boundingBox())!
-  const vp = page.viewportSize()!
-  expect(box.x).toBeGreaterThanOrEqual(0)
-  expect(box.x + box.width).toBeLessThanOrEqual(vp.width + 0.5)
-  expect(box.y + box.height).toBeLessThanOrEqual(vp.height + 0.5)
-  return menu
+  // Its summary first, never empty; Quote and Snooze small beside its task. A live prompt has no
+  // Snooze: a snooze cannot take it off the user (snoozeTakesOff).
+  await expect(row.getByTestId('org-ask-summary')).not.toHaveText('')
+  await expect(row.getByTestId('org-alert-quote')).toBeVisible()
+  if (shape === 'prompt') await expect(row.getByTestId('org-alert-snooze')).toHaveCount(0)
+  else await expect(row.getByTestId('org-alert-snooze')).toBeVisible()
+  const inline = page.locator(`[data-testid="org-answer-inline"][data-task-id="${id}"]`)
+  await expect(inline).toHaveAttribute('data-shape', shape)
+  // Inside the rail.
+  const box = (await inline.boundingBox())!
+  const rail = (await page.getByTestId('org-rail').boundingBox())!
+  expect(box.x).toBeGreaterThanOrEqual(rail.x - 0.5)
+  expect(box.x + box.width).toBeLessThanOrEqual(rail.x + rail.width + 0.5)
+  return inline
 }
 
 test.describe.configure({ mode: 'serial' })
@@ -168,18 +170,22 @@ test.afterAll(async ({ request }) => {
   }
 })
 
-test('each row is the task\'s name, Quote and Answer; the rows hold still under the pointer; the name opens the task', async ({ page, request }) => {
+test('each row is its summary, its task, the answer and small Quote and Snooze; the rows hold still under the pointer; the name opens the task', async ({ page, request }) => {
   await openTeam(page)
   const row = alertRow(page, ids.letter)
   await expect(row.getByTestId('org-alert-link')).toHaveText(`Lease ${STAMP}`, { timeout: 60_000 })
   await expect(row.getByTestId('org-alert-link')).toHaveAttribute('href', `/tasks/${ids.letter}`)
-  await expect(row.locator('.org-alert-ask')).toHaveText(`Sign the lease ${STAMP}?`)
+  await expect(row.getByTestId('org-ask-summary')).toHaveText(`Sign the lease ${STAMP}?`)
   await page.getByTestId('org-alerts').screenshot({ path: `test-results/org-alert-rows-${test.info().project.name}.png` })
   // Under the pointer the rows hold their order: a new ask joins at the end.
   const order = () => page.getByTestId('org-alert').evaluateAll((els) => els.map((e) => e.getAttribute('data-task-id')))
   // Every ask the fixture raised is listed: the letter, two choices, the live question and the
   // task whose turn handed it back (the VP's own is in its chat).
   await expect(page.getByTestId('org-alert')).toHaveCount(5, { timeout: 60_000 })
+  // No Needs you row without what it asks (the user: "u need to show what are actually waiting").
+  const summaries = await page.getByTestId('org-alert').evaluateAll((els) => els.map((e) => e.querySelector('[data-testid="org-ask-summary"]')?.textContent?.trim() ?? ''))
+  // Each one in its own words: no row falls back on a bare kind word.
+  expect(summaries.filter((t) => !t || t === 'Needs you')).toEqual([])
   await row.getByTestId('org-alert-link').hover()
   const before = await order()
   const late = await createTask(request, `Late ask ${STAMP}`)
@@ -200,7 +206,7 @@ test('each row is the task\'s name, Quote and Answer; the rows hold still under 
   await expect(page).toHaveURL(/\/org\?/)
 })
 
-test('Snooze opens the date picker; a pick snoozes the task and the row says until when', async ({ page, request }) => {
+test('Snooze opens the date picker; a pick snoozes the task, which moves to Waiting / snoozed until then', async ({ page, request }) => {
   const id = await createTask(request, `Snoozable ${STAMP}`)
   await needsUser(request, id)
   await openTeam(page)
@@ -219,49 +225,50 @@ test('Snooze opens the date picker; a pick snoozes the task and the row says unt
   const date = (await day.getAttribute('title'))!
   await day.click()
   await expect(menu).toHaveCount(0)
-  // The Snooze button itself says until when; Quote and Answer stay, the ask is still the user's.
-  await expect(row.getByTestId('org-alert-snoozed')).toHaveText(/^Snoozed until /)
-  await expect(row.locator('button')).toHaveText(['Quote', /^Answer/, /^Snoozed until /])
   await expect.poll(async () => (await (await request.get(`/api/tasks/${id}`)).json()).task?.start_date).toBe(date)
-  await page.getByTestId('org-alerts').screenshot({ path: `test-results/org-alert-snoozed-${test.info().project.name}.png` })
-  // Read from the task, not kept by the row: to Working and back, and the row still says so.
+  // A snoozed ask is Waiting / snoozed until then (the one user status, src/core/user-status.ts):
+  // it leaves Needs you, and the Waiting / snoozed tab lists it.
+  await expect.poll(async () => (await (await request.get(`/api/tasks/${id}`)).json()).task?.user_status?.state, { timeout: 30_000 }).toBe('waiting')
+  await expect(row).toHaveCount(0, { timeout: 30_000 })
   const tabs = page.getByTestId('org-detail').getByTestId('org-task-tab')
-  await tabs.filter({ hasText: /^Working/ }).click()
-  await expect(page.getByTestId('org-alerts')).toHaveCount(0)
+  // The click can land while the list redraws for the row that left: click until the tab is on.
+  const waitingTab = tabs.filter({ hasText: /^Waiting/ })
+  await expect(async () => {
+    await waitingTab.click()
+    await expect(waitingTab).toHaveAttribute('aria-selected', 'true', { timeout: 2_000 })
+  }).toPass({ timeout: 20_000 })
+  await expect(page.locator(`[data-testid="org-task-row"][data-task-id="${id}"]`)).toBeVisible()
+  await page.getByTestId('org-rail').screenshot({ path: `test-results/org-alert-snoozed-${test.info().project.name}.png` })
+  // Its snooze taken off, it asks again.
+  await request.patch(`/api/tasks/${id}`, { data: { start_date: null } })
   await tabs.filter({ hasText: /^Needs you/ }).click()
-  await expect(alertRow(page, id).getByTestId('org-alert-snoozed')).toHaveText(/^Snoozed until /)
-  // None wakes it: the date is gone and the button reads Snooze again.
-  await alertRow(page, id).getByTestId('org-alert-snooze').click()
-  await menu.locator('.dp-pill-none').click()
+  await expect(alertRow(page, id)).toBeVisible({ timeout: 30_000 })
   await expect(alertRow(page, id).getByTestId('org-alert-snooze')).toHaveText(/^Snooze/)
-  await expect(alertRow(page, id).getByTestId('org-alert-snoozed')).toHaveCount(0)
-  await expect.poll(async () => (await (await request.get(`/api/tasks/${id}`)).json()).task?.start_date ?? null).toBeNull()
 })
 
-test('a decision letter: its two actions side by side, one click answers it, the row goes at once', async ({ page, request }) => {
+test('a decision letter: its two actions in the row, one click answers it, the row goes at once', async ({ page, request }) => {
   await openTeam(page)
   const counts = page.getByTestId('org-detail-counts')
   await expect(counts).toContainText(/\d+ Needs you/, { timeout: 60_000 })
   const before = Number((await counts.textContent())!.match(/(\d+) Needs you/)![1])
   const menu = await openAnswer(page, ids.letter, 'letter')
   const options = menu.getByTestId('org-answer-letter')
-  await expect(options).toHaveClass(/is-pair/)
   await expect(options.getByTestId('org-answer-option')).toHaveText(['Sign it', 'Not yet'])
-  await menu.getByTestId('org-answer-note').fill(`Signed ${STAMP}`)
+  // Side by side: one line of buttons.
+  const [a, b] = await options.getByTestId('org-answer-option').evaluateAll((els) => els.map((e) => e.getBoundingClientRect().top))
+  expect(Math.abs(a! - b!)).toBeLessThan(2)
   await page.screenshot({ path: `test-results/org-answer-letter-${test.info().project.name}.png` })
   // The row answers the click, not the server: it goes at once, and a refused answer brings it back
-  // with the reason, the dropdown open and the note kept.
+  // with the reason.
   const answerUrl = '**/api/v1/human-inbox/*/answer'
   await page.route(answerUrl, (route) => route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"refused"}' }))
   const refused = await watchRowGone(page, ids.letter)
   await options.getByTestId('org-answer-option').filter({ hasText: 'Sign it' }).click()
   await expect.poll(async () => (await refused()).gone).toBe(true)
   await expect(menu.getByTestId('org-answer-error')).toHaveText('Not sent. Try again.', { timeout: 15_000 })
-  await expect(menu.getByTestId('org-answer-note')).toHaveValue(`Signed ${STAMP}`)
   await page.unroute(answerUrl)
   const gone = await watchRowGone(page, ids.letter)
   await options.getByTestId('org-answer-option').filter({ hasText: 'Sign it' }).click()
-  await expect(menu).toHaveCount(0)
   await expect.poll(async () => (await gone()).gone).toBe(true)
   expect((await gone()).counts).not.toContain(`${before} Needs you`)
   // The answer is on record.
@@ -269,7 +276,7 @@ test('a decision letter: its two actions side by side, one click answers it, the
     const res = await request.get('/api/v1/human-inbox')
     const list = ((await res.json()).letters ?? []) as Array<{ subject: string; answered?: { actionId: string; freeText?: string } }>
     return list.find((l) => l.subject === `Sign the lease ${STAMP}?`)?.answered ?? null
-  }, { timeout: 30_000 }).toMatchObject({ actionId: 'sign', freeText: `Signed ${STAMP}` })
+  }, { timeout: 30_000 }).toMatchObject({ actionId: 'sign' })
 })
 
 test('a Board choice: its options, the recommended one marked; a pick answers it on that Board', async ({ page, request }) => {
@@ -278,14 +285,16 @@ test('a Board choice: its options, the recommended one marked; a pick answers it
   const options = menu.getByTestId('org-answer-choice')
   await expect(options.getByTestId('org-answer-option')).toHaveText(['Plan A', 'Plan B', 'Plan C'], { timeout: 30_000 })
   await expect(options.locator('[data-value="b"]')).toHaveClass(/btn-primary/)
-  // The question shows above its options (a clamped line once collapsed to nothing in WebKit).
-  await expect(menu.locator('.org-answer-q')).toHaveText(`Which plan ${STAMP}?`)
-  await expect(menu.locator('.org-answer-q')).toBeVisible()
-  expect((await menu.locator('.org-answer-q').boundingBox())!.height).toBeGreaterThan(10)
+  // The question is the row's summary (a clamped line once collapsed to nothing in WebKit), and
+  // words are one click away, never the first thing shown.
+  const summary = alertRow(page, ids.choice).getByTestId('org-ask-summary')
+  await expect(summary).toBeVisible()
+  expect((await summary.boundingBox())!.height).toBeGreaterThan(10)
+  await expect(menu.getByTestId('org-answer-input')).toHaveCount(0)
+  await expect(menu.getByTestId('org-answer-other')).toBeVisible()
   await page.screenshot({ path: `test-results/org-answer-choice-${test.info().project.name}.png` })
   const gone = await watchRowGone(page, ids.choice)
   await options.locator('[data-value="c"]').click()
-  await expect(menu).toHaveCount(0)
   await expect.poll(async () => (await gone()).gone).toBe(true)
   await expect.poll(async () => ((await (await request.get(`/api/v1/tasks/${ids.lead}/board`)).json()).choices?.[`plan-${STAMP}`]?.option ?? ''),
     { timeout: 30_000 }).toBe('c')
@@ -294,14 +303,15 @@ test('a Board choice: its options, the recommended one marked; a pick answers it
 test('a Board choice with no options: a line, answered on that Board', async ({ page, request }) => {
   await openTeam(page)
   const menu = await openAnswer(page, ids.open, 'choice')
-  await expect(menu.locator('.org-answer-q')).toHaveText(`Where should it be ${STAMP}?`, { timeout: 30_000 })
-  await expect(menu.getByTestId('org-answer-option')).toHaveCount(0)
+  await expect(alertRow(page, ids.open).getByTestId('org-ask-summary')).toHaveText(`Where should it be ${STAMP}?`, { timeout: 30_000 })
   const input = menu.getByTestId('org-answer-input')
-  await expect(input).toBeFocused()
+  await expect(input).toBeVisible({ timeout: 30_000 })
+  await expect(menu.getByTestId('org-answer-option')).toHaveCount(0)
+  // A row never takes the focus by itself.
+  await expect(input).not.toBeFocused()
   await input.fill(`The river hall ${STAMP}`)
   const gone = await watchRowGone(page, ids.open)
   await input.press('Enter')
-  await expect(menu).toHaveCount(0)
   await expect.poll(async () => (await gone()).gone).toBe(true)
   await expect.poll(async () => ((await (await request.get(`/api/v1/tasks/${ids.lead}/board`)).json()).choices?.[`venue-${STAMP}`]?.text ?? ''),
     { timeout: 30_000 }).toBe(`The river hall ${STAMP}`)
@@ -315,7 +325,6 @@ test('a live question: its own options, answered in place, and the session hears
   await menu.locator('.nfc-answer-opt', { hasText: 'Staging' }).click()
   const gone = await watchRowGone(page, ids.q)
   await menu.getByRole('button', { name: 'Submit' }).click()
-  await expect(menu).toHaveCount(0)
   await expect.poll(async () => (await gone()).gone).toBe(true)
   await expect.poll(() => historyText(request, ids.qSid), { timeout: 60_000 }).toContain('AskUserQuestion decision received: Staging')
 })
@@ -335,17 +344,72 @@ test('an ask with no shape: a line, sent to that task\'s session', async ({ page
     await route.fulfill({ response: res, json: body })
   })
   await openTeam(page)
-  const menu = await openAnswer(page, ids.words, 'words')
-  await expect(menu.locator('.org-answer-q')).toHaveText(`How much can it spend ${STAMP}?`)
+  const menu = await openAnswer(page, ids.words, 'text')
+  await expect(alertRow(page, ids.words).getByTestId('org-ask-summary')).toHaveText(`How much can it spend ${STAMP}?`)
   const input = menu.getByTestId('org-answer-input')
-  await expect(input).toBeFocused()
   await input.fill(`Up to 40 dollars ${STAMP}`)
   await page.screenshot({ path: `test-results/org-answer-words-${test.info().project.name}.png` })
   const gone = await watchRowGone(page, ids.words)
   await input.press('Enter')
-  await expect(menu).toHaveCount(0)
   await expect.poll(async () => (await gone()).gone).toBe(true)
-  await expect.poll(() => historyText(request, ids.wordsSid), { timeout: 60_000 }).toContain(`Up to 40 dollars ${STAMP}`)
+  await expect.poll(() => historyText(request, ids.wordsSid), { timeout: 60_000 }).toContain(`Answer to "How much can it spend ${STAMP}?": Up to 40 dollars ${STAMP}`)
+})
+
+test('an ask its task shaped: a clear summary, More for the detail, Yes / No and a multiple choice in the row', async ({ page, request }) => {
+  // The shape comes from the task's report (user_status.askForm): its own at a turn end, or one its
+  // lead sets (PUT /tasks/:id/report, the same fields). The mock CLI reports none, so the test sets it.
+  const yn = await createTask(request, `Ship ${STAMP}`)
+  const ynSid = await startSession(request, yn, `Ship ready ${STAMP}`)
+  const multi = await createTask(request, `Hosts ${STAMP}`)
+  const multiSid = await startSession(request, multi, `Hosts ready ${STAMP}`)
+  for (const [sid, word] of [[ynSid, 'Ship'], [multiSid, 'Hosts']] as const) {
+    await expect.poll(() => historyText(request, sid), { timeout: 60_000 }).toContain(`I processed your message: ${word} ready ${STAMP}`)
+  }
+  const report = async (id: string, body: Record<string, unknown>) => {
+    const res = await request.put(`/api/v1/tasks/${id}/report`, { data: { state: 'needs', ...body } })
+    expect(res.ok(), await res.text()).toBe(true)
+  }
+  await report(yn, { ask: `Ship 0.6.22 on Saturday ${STAMP}?`, ask_kind: 'yes_no', ask_more: 'The notes cover the rail.\nThe review is done.' })
+  await report(multi, { ask: `Which hosts get it first ${STAMP}?`, ask_kind: 'multi', ask_options: [{ id: 'mac', label: 'Mac' }, { id: 'dev', label: 'clouddev' }, { id: 'cloud', label: 'Cloud companion' }] })
+  for (const id of [yn, multi]) {
+    await expect.poll(async () => (await (await request.get(`/api/tasks/${id}`)).json()).task?.user_status?.askForm?.kind ?? '', { timeout: 30_000 }).not.toBe('')
+  }
+  await openTeam(page)
+  // Yes / No: the summary is the form's, More opens the detail.
+  const ynRow = alertRow(page, yn)
+  const ynForm = await openAnswer(page, yn, 'yes_no')
+  await expect(ynRow.getByTestId('org-ask-summary')).toHaveText(`Ship 0.6.22 on Saturday ${STAMP}?`)
+  await expect(ynRow.getByTestId('org-ask-more')).toHaveCount(0)
+  await ynRow.getByTestId('org-ask-more-toggle').click()
+  await expect(ynRow.getByTestId('org-ask-more')).toHaveText(/The notes cover the rail\.\s+The review is done\./)
+  await expect(ynForm.getByTestId('org-answer-option')).toHaveText(['Yes', 'No'])
+  await expect(ynForm.getByTestId('org-answer-input')).toHaveCount(0)
+  // Multiple choice: check, then Send.
+  const mForm = await openAnswer(page, multi, 'multi')
+  const send = mForm.getByTestId('org-answer-send-picked')
+  await expect(send).toBeDisabled()
+  await mForm.locator('[data-testid="org-answer-check"][data-value="mac"]').click()
+  await mForm.locator('[data-testid="org-answer-check"][data-value="cloud"]').click()
+  await expect(send).toHaveText('Send 2')
+  await page.getByTestId('org-rail').screenshot({ path: `test-results/org-rail-forms-${test.info().project.name}.png` })
+  // A narrower page puts the rail above the chat without remounting it: the picks and the open
+  // More stay (a side panel opening narrows the page under the user's hand).
+  const wide = page.viewportSize()!
+  await page.setViewportSize({ width: 900, height: wide.height })
+  await expect(page.getByTestId('org-rail')).toHaveAttribute('data-placement', 'top')
+  await expect(send).toHaveText('Send 2')
+  await expect(ynRow.getByTestId('org-ask-more')).toBeVisible()
+  await page.setViewportSize(wide)
+  await expect(page.getByTestId('org-rail')).toHaveAttribute('data-placement', 'side')
+  await expect(send).toHaveText('Send 2')
+  const ynGone = await watchRowGone(page, yn)
+  await ynForm.locator('[data-value="yes"]').click()
+  await expect.poll(async () => (await ynGone()).gone).toBe(true)
+  await expect.poll(() => historyText(request, ynSid), { timeout: 60_000 }).toContain(`Answer to "Ship 0.6.22 on Saturday ${STAMP}?": Yes`)
+  const mGone = await watchRowGone(page, multi)
+  await send.click()
+  await expect.poll(async () => (await mGone()).gone).toBe(true)
+  await expect.poll(() => historyText(request, multiSid), { timeout: 60_000 }).toContain(`Answer to "Which hosts get it first ${STAMP}?": Mac, Cloud companion`)
 })
 
 test('Quote puts the ask in this VP\'s chat, ahead of what was typed, not in its Home column', async ({ page, request }) => {

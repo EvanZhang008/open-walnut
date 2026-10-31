@@ -122,7 +122,8 @@ test('a lead opens on Task with its Needs you cards; its Brief is the letter alo
   const detail = page.getByTestId('org-detail')
   const top = detail.getByTestId('org-top')
   await expect(top).toHaveAttribute('data-view', 'task')
-  await expect(detail.getByTestId('org-detail-latest')).toBeVisible()
+  // Beside the chat (design 10 of the ten the user was shown).
+  await expect(detail.getByTestId('org-rail')).toHaveAttribute('data-placement', 'side')
   await expect(detail.locator(`[data-testid="org-alert"][data-task-id="${ids.parser}"]`)).toBeVisible()
   await expect(detail.getByTestId('org-top-brief-new')).toBeVisible()
 
@@ -139,10 +140,10 @@ test('a lead opens on Task with its Needs you cards; its Brief is the letter alo
   await expect(body.locator(`a.task-link[data-task-id="${ids.review}"]`)).toHaveAttribute('data-user-state', 'waiting')
   await expect(detail.getByTestId('org-brief-foot')).toHaveText(/^Written /)
   await detail.screenshot({ path: `test-results/org-brief-letter-${test.info().project.name}.png` })
-  // The Brief view is the letter alone: no Needs you cards, no Latest.
+  // The Brief view is the letter alone: no Needs you rows, no tabs.
   await expect(detail.getByTestId('org-alerts')).toHaveCount(0)
+  await expect(detail.getByTestId('org-task-tabs')).toHaveCount(0)
   await expect(detail.getByTestId('org-top-brief-new')).toHaveCount(0)
-  await expect(detail.getByTestId('org-detail-latest')).toHaveCount(0)
   await detail.getByTestId('org-top-task').click()
   await expect(detail.locator(`[data-testid="org-alert"][data-task-id="${ids.parser}"]`)).toBeVisible()
   // Four tabs, the home panel's names, Needs you first and open; Waiting / snoozed lists the review.
@@ -152,7 +153,7 @@ test('a lead opens on Task with its Needs you cards; its Brief is the letter alo
   const needsCount = Number((await tabs.first().locator('.org-task-tab-count').textContent()) ?? '-1')
   // Every one is a card, or the chat below holds it (the lead's own ask, its chat being open).
   const cards = await detail.getByTestId('org-alert').count()
-  if (cards < needsCount) await expect(detail.getByTestId('org-task-empty')).toHaveText(cards ? `And ${needsCount - cards} in the chat below.` : 'Its ask is in the chat below.')
+  if (cards < needsCount) await expect(detail.getByTestId('org-task-empty')).toHaveText(cards ? `And ${needsCount - cards} in the chat.` : 'Its ask is in the chat.')
   await expect(detail.getByTestId('org-pill-needs')).toContainText(String(needsCount))
   await expect(detail.getByTestId('org-task-view')).toHaveAttribute('data-tab', 'needs')
   await detail.getByTestId('org-pill-waiting').click()
@@ -195,7 +196,7 @@ test('Fold keeps the first lines and survives a reload; a reload opens on Task',
   await page.reload()
   await expect(page.getByTestId('org-detail')).toHaveAttribute('data-key', rowKey(LED))
   await expect(page.getByTestId('org-top')).toHaveAttribute('data-view', 'task')
-  await expect(page.getByTestId('org-detail-latest')).toBeVisible()
+  await expect(page.getByTestId('org-task-view')).toBeVisible()
   await page.getByTestId('org-top-brief').click()
   await expect(page.getByTestId('org-brief')).toHaveClass(/is-folded/)
   await page.getByTestId('org-brief-fold').click()
@@ -229,37 +230,41 @@ test('a node whose contact keeps no Brief has no switch', async ({ page }) => {
   await loadHome(page)
   await openNode(page, SOLO)
   const detail = page.getByTestId('org-detail')
-  await expect(detail.getByTestId('org-detail-latest')).toBeVisible()
+  await expect(detail.getByTestId('org-task-view')).toBeVisible()
   await expect(detail.getByTestId('org-top-brief')).toHaveCount(0)
   await expect(detail.getByTestId('org-brief')).toHaveCount(0)
 })
 
-test('the chat starts below the Task or Brief panel and its own header, at any window height', async ({ page }) => {
-  // 2026-10-31, prod WebKit: the session header floated over the chat as in a session column, so the
-  // chat's lines ran under it right below the panel and read as the panel overlapping the chat.
+test('the rail sits beside the chat at full height, or above it on a narrow window; they never overlap', async ({ page }) => {
+  // 2026-10-31: the user picked the rail beside the chat ("10"); before it, prod WebKit showed the
+  // chat running up under its own header right below the Task panel, read as the two overlapping.
   await isolateUiPrefs(page)
   await loadHome(page)
   await openNode(page, LED)
   const detail = page.getByTestId('org-detail')
+  const rail = detail.getByTestId('org-rail')
   const header = detail.locator('[data-testid="org-chat"] .session-panel > .session-panel-header')
   await expect(header).toBeVisible({ timeout: 30_000 })
   const boxes = () => page.evaluate(() => {
     const rect = (s: string) => document.querySelector(s)?.getBoundingClientRect() ?? null
-    const top = rect('[data-testid="org-task-view"]') ?? rect('[data-testid="org-brief"]') ?? rect('[data-testid="org-top"]')
-    const head = rect('[data-testid="org-chat"] .session-panel > .session-panel-header')
-    const history = rect('[data-testid="org-chat"] .session-history')
-    return { panelBottom: top?.bottom ?? -1, headTop: head?.top ?? -1, headBottom: head?.bottom ?? -1, historyTop: history?.top ?? -1 }
+    const r = rect('[data-testid="org-rail"]')!
+    const chat = rect('[data-testid="org-chat"]')!
+    const head = rect('[data-testid="org-chat"] .session-panel > .session-panel-header')!
+    const history = rect('[data-testid="org-chat"] .session-history')!
+    return { railLeft: r.left, railRight: r.right, railTop: r.top, railBottom: r.bottom, chatLeft: chat.left, chatRight: chat.right, chatTop: chat.top, chatBottom: chat.bottom, headTop: head.top, headBottom: head.bottom, historyTop: history.top }
   })
-  for (const height of [800, 560]) {
-    await page.setViewportSize({ width: 1280, height })
+  for (const [width, height, placement] of [[1280, 800, 'side'], [1280, 560, 'side'], [900, 800, 'top']] as const) {
+    await page.setViewportSize({ width, height })
+    await expect(rail).toHaveAttribute('data-placement', placement)
     for (const view of ['org-top-task', 'org-top-brief'] as const) {
       await detail.getByTestId(view).click()
       await expect(header).toBeVisible()
       await expect.poll(async () => {
         const b = await boxes()
-        return b.headTop >= b.panelBottom - 0.5 && b.historyTop >= b.headBottom - 0.5 && b.historyTop > 0
-      }, { message: `${view} at ${height}px: ${JSON.stringify(await boxes())}` }).toBe(true)
-      await detail.screenshot({ path: `test-results/org-chat-below-${view}-${height}-${test.info().project.name}.png` })
+        const apart = placement === 'side' ? b.chatRight <= b.railLeft + 0.5 && b.chatTop <= b.railTop + 0.5 : b.railBottom <= b.chatTop + 0.5
+        return apart && b.headTop >= b.chatTop - 0.5 && b.historyTop >= b.headBottom - 0.5
+      }, { message: `${view} at ${width}x${height}: ${JSON.stringify(await boxes())}` }).toBe(true)
+      await detail.screenshot({ path: `test-results/org-rail-${placement}-${view}-${height}-${test.info().project.name}.png` })
     }
   }
 })

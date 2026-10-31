@@ -121,7 +121,7 @@ test('the sidebar opens Main and the leads; a lead waiting on the user comes fir
   await expect(detail.getByTestId('org-detail-counts')).toContainText('1 Waiting / snoozed')
   const askRow = detail.locator(`[data-testid="org-alert"][data-task-id="${ids.ask}"]`)
   await expect(askRow.getByTestId('org-alert-link')).toHaveText(`Alpha ask ${STAMP}`)
-  await expect(askRow.locator('.org-alert-ask')).toHaveText('Asks you a question')
+  await expect(askRow.getByTestId('org-ask-summary')).toHaveText('Asks you a question')
   // A node opens on its chat, first of the tabs; its Board is one click away.
   await expect(detail.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
   // The Board tab joins once the lead's board is known.
@@ -287,8 +287,8 @@ test('a task whose Board asks the user to choose needs them: its row, its line, 
   await expect(page.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
   const alert = page.getByTestId('org-alert').filter({ hasText: `Renewal ${STAMP}` })
   await expect(alert).toHaveAttribute('data-kind', 'needs')
-  await expect(alert.locator('.org-alert-main')).toHaveText(`Renewal ${STAMP}`)
-  await expect(alert.locator('.org-alert-ask')).toHaveText(`Pick the renewal date ${STAMP}`)
+  await expect(alert.getByTestId('org-alert-link')).toHaveText(`Renewal ${STAMP}`)
+  await expect(alert.getByTestId('org-ask-summary')).toHaveText(`Pick the renewal date ${STAMP}`)
   // The task's name leads to where the ask lives: the Board.
   await alert.getByTestId('org-alert-link').click()
   await expect(page.getByTestId('org-tab-board')).toHaveAttribute('aria-selected', 'true')
@@ -325,7 +325,7 @@ test('a task waiting on a decision letter needs the user: its name opens the let
   await r.click()
   await expect(page.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
   const alert = page.getByTestId('org-alert').filter({ hasText: `Lease ${STAMP}` })
-  await expect(alert.locator('.org-alert-ask')).toHaveText(`Sign the lease ${STAMP}`)
+  await expect(alert.getByTestId('org-ask-summary')).toHaveText(`Sign the lease ${STAMP}`)
   await alert.getByTestId('org-alert-link').click()
   const chat = page.getByTestId('org-chat')
   await expect(chat.locator('.session-inbox-pane')).toBeVisible({ timeout: 30_000 })
@@ -336,7 +336,7 @@ test('a task waiting on a decision letter needs the user: its name opens the let
   await page.getByTestId('org-search').fill(other)
   await row(page, other).click()
   const beside = page.getByTestId('org-alert').filter({ hasText: `Deposit ${STAMP}` })
-  await expect(beside.locator('.org-alert-ask')).toHaveText(`Send the deposit ${STAMP}`)
+  await expect(beside.getByTestId('org-ask-summary')).toHaveText(`Send the deposit ${STAMP}`)
   await beside.getByTestId('org-alert-link').click()
   const side = page.getByTestId('org-side')
   await expect(side.locator('.session-inbox-pane')).toBeVisible({ timeout: 30_000 })

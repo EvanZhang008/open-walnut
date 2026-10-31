@@ -1,5 +1,5 @@
 /**
- * The Org page's in-place Answer (web/src/components/org/OrgAlertAnswer.tsx): which form an ask
+ * The Org page's in-place Answer (web/src/components/org/OrgInlineAnswer.tsx): which form an ask
  * takes, read from the ask itself (org-answer-shape.ts); the letter that waits on the user; and
  * the hold that stops an answered row counting at once (org-answered.ts).
  */

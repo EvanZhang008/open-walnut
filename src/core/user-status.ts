@@ -493,6 +493,13 @@ function lineOf(input: UserStatusInput, s: UserStatus): StatusLine | undefined {
   return strip<StatusLine>({ text: clean(text).slice(0, 300), by: r.by ?? 'self', byName: r.by_name, at: r.at });
 }
 
+/** Whether a snooze takes this status off the user until its date (snoozeOf): a Needs you or a wait
+ *  on them, except a live prompt (it blocks a turn someone started now: the user answers it, snoozed
+ *  or not) and Main (its Needs you is the user's turn to talk). The Org rail offers Snooze only here. */
+export function snoozeTakesOff(s: Pick<UserStatus, 'state' | 'source' | 'kind'>, isMain = false): boolean {
+  return !isMain && ((s.state === 'needs' && s.source !== 'prompt') || (s.state === 'waiting' && s.kind === 'you'));
+}
+
 /**
  * A snoozed task asks nothing of the user until its start date (snooze.ts, 2026-10-30): a status that
  * would ask them (Needs you, or a wait on them) reads Waiting until that date, keeping the ask for the
@@ -506,8 +513,7 @@ function snoozeOf(input: UserStatusInput, s: UserStatus, nowMs: number): UserSta
   if (!until || s.state === 'done' || s.state === 'working' || input.isMain) return null;
   const startMs = startDateMs(until);
   if (!Number.isFinite(startMs) || startMs <= nowMs) return null;
-  // A live prompt blocks a turn someone started now: the user answers it, snoozed or not.
-  const onUser = (s.state === 'needs' && s.source !== 'prompt') || (s.state === 'waiting' && s.kind === 'you');
+  const onUser = snoozeTakesOff(s);
   if (!onUser) return { ...s, snoozed: { until } };
   const ask = s.state === 'needs' ? s.ask : s.waitingOn;
   return strip<UserStatus>({
