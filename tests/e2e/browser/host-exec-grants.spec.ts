@@ -1,5 +1,5 @@
 /**
- * Settings › Remote Hosts › Commands from other hosts (HostExecGrantsGroup.tsx; server:
+ * Settings › Remote Hosts › Tasks using other hosts (HostExecGrantsGroup.tsx; server:
  * src/core/hosts/exec-grants.ts): each task the user let run commands on another host,
  * with where, since when and what it ran, and a Revoke that sends the DELETE and drops
  * the row; a task the user declined, with an Allow that grants it after all; with
@@ -60,9 +60,9 @@ test('grants read in words and Revoke drops one', async ({ page }) => {
   await expect(rows).toHaveCount(2)
   await expect(rows.nth(0)).toContainText('Run the iOS tests')
   await expect(rows.nth(0)).toContainText('On this Mac, allowed')
-  await expect(rows.nth(0)).toContainText('4 commands, last')
+  await expect(rows.nth(0)).toContainText('4 uses, last')
   await expect(rows.nth(0)).toContainText('xcodebuild test -scheme Walnut')
-  await expect(rows.nth(1)).toContainText('no command run yet')
+  await expect(rows.nth(1)).toContainText('not used yet')
   const declined = group.locator('[data-denied]')
   await expect(declined).toHaveCount(1)
   await expect(declined).toContainText('CI health')
@@ -88,7 +88,7 @@ test('grants read in words and Revoke drops one', async ({ page }) => {
   await rows.nth(0).getByRole('button', { name: /^Revoke/ }).click()
   await expect(rows).toHaveCount(1)
   await rows.nth(0).getByRole('button', { name: /^Revoke/ }).click()
-  await expect(group).toContainText('No task may run commands on another host')
+  await expect(group).toContainText('No task may use another host')
   await group.screenshot({ path: `${SHOTS}/${engine}-2-empty.png`, scale: 'css' })
   expect(errors).toEqual([])
 })

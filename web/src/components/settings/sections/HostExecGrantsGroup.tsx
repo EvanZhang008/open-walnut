@@ -1,6 +1,6 @@
 /**
- * "Commands from other hosts" in Remote Hosts: every task the user let run
- * commands on another host (host_exec, src/core/hosts/host-exec.ts), with what
+ * "Tasks using other hosts" in Remote Hosts: every task the user let use another
+ * host (its commands, MCP servers and web services: src/core/hosts/host-exec.ts), with what
  * it ran, and a Revoke for each. A grant comes from the user's Allow on the
  * letter the task's first command sent; it lasts until revoked here.
  */
@@ -19,7 +19,7 @@ function when(ms: number): string {
 /** The row's second line: where, since when, and what it ran. */
 export function grantSummary(g: ExecGrant, hostLabel: string): string {
   const parts = [`On ${hostLabel}, allowed ${when(g.grantedAt)}`];
-  parts.push(g.runs ? `${g.runs} command${g.runs === 1 ? '' : 's'}, last ${when(g.lastRunAt ?? g.grantedAt)}: ${g.lastCommand ?? ''}` : 'no command run yet');
+  parts.push(g.runs ? `${g.runs} use${g.runs === 1 ? '' : 's'}, last ${when(g.lastRunAt ?? g.grantedAt)}: ${g.lastCommand ?? ''}` : 'not used yet');
   return parts.join(' · ');
 }
 
@@ -78,13 +78,13 @@ export function HostExecGrantsGroup({ hostLabels }: { hostLabels: Record<string,
   const label = (host: string) => (host === '__local__' ? 'this Mac' : hostLabels[host] || host);
   return (
     <SettingsGroup
-      heading="Commands from other hosts"
+      heading="Tasks using other hosts"
       data-testid="host-exec-grants"
-      footer="A task on one host asks you by letter before its first command on another. Allow lasts until you revoke it here; a command there can read anything your account can."
+      footer="A task on one host asks you by letter before it first uses another: runs a command, calls an MCP server or reaches a web service there. Allow lasts until you revoke it here; a command there can read anything your account can."
     >
       {error && <p className="hf-error" role="status">{error}</p>}
       {grants.length === 0 && denied.length === 0 && (
-        <SettingsRow label="No task may run commands on another host" help="The first time one asks, a letter in your inbox lets you allow it." />
+        <SettingsRow label="No task may use another host" help="The first time one asks, a letter in your inbox lets you allow it." />
       )}
       {grants.map((g) => (
         <SettingsRow

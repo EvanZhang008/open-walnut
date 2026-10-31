@@ -221,7 +221,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'task-dir-prune-v1', 'host-exec-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'budget-v2'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'task-dir-prune-v1', 'host-exec-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'budget-v2'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -3784,6 +3784,17 @@ function dispatchCommand(ws, id, cmd) {
       if (!hostExec) return sendError(ws, id, cmd.cmd + ' unsupported: host-exec-core sidecar not loaded');
       const op = cmd.cmd.slice(5);
       return replyTransfer(ws, id, cmd.cmd, function () { return hostExec[op](cmd); }, false);
+    }
+    // A task on another host calling this host's MCP servers and web services (host-mcp-v1,
+    // host-http-v1); not bridge- or follower-reachable. Mirrors daemon-standalone.ts.
+    case 'mcp.list': case 'mcp.tools': case 'mcp.call': case 'mcp.result': {
+      if (!hostMcp) return sendError(ws, id, cmd.cmd + ' unsupported: host-reach-core sidecar not loaded');
+      const op = cmd.cmd.slice(4);
+      return replyTransfer(ws, id, cmd.cmd, function () { return hostMcp[op](cmd); }, false);
+    }
+    case 'http.request': {
+      if (!hostHttp) return sendError(ws, id, cmd.cmd + ' unsupported: host-reach-core sidecar not loaded');
+      return replyTransfer(ws, id, cmd.cmd, function () { return hostHttp.request(cmd); }, false);
     }
     // The secrets the user shared with this host (secrets-v1); not bridge- or
     // follower-reachable, and no reply carries a value. Mirrors daemon-standalone.ts.
@@ -12093,6 +12104,33 @@ try {
     env: hostExecEnv,
   });
 } catch (err) { hostExec = null; }
+// MCP servers and web services for tasks on other hosts (host-reach-core.cjs): 'host-mcp-v1'
+// and 'host-http-v1' are advertised only when it loads. Mirrors daemon-standalone.ts.
+let hostMcp = null;
+let hostHttp = null;
+try {
+  const hostReachCore = require(path.join(__dirname, 'host-reach-core.cjs'));
+  const reachEnv = {};
+  for (const k of Object.keys(process.env)) {
+    const v = process.env[k];
+    if (typeof v !== 'string' || k.startsWith('WALNUT_') || k.startsWith('OPEN_WALNUT_') || k === 'BUN_BE_BUN') continue;
+    reachEnv[k] = v;
+  }
+  reachEnv.HOME = process.env.HOME || HOME_DIR;
+  hostMcp = hostReachCore.createHostMcp({
+    spawn: function (command, args, opts) { return spawn(command, args, opts); },
+    killGroup: function (pid, signal) { if (pid > 1) process.kill(-pid, signal); },
+    shell: (function () {
+      const runs = function (file) { try { fs.accessSync(file, fs.constants.X_OK); return fs.statSync(file).isFile(); } catch { return false; } };
+      const shell = process.env.SHELL;
+      if (shell && path.isAbsolute(shell) && runs(shell)) return shell;
+      return ['/bin/bash', '/bin/sh'].find(runs) || '/bin/sh';
+    })(),
+    home: HOME_DIR,
+    env: reachEnv,
+  });
+  hostHttp = hostReachCore.createHostHttp();
+} catch (err) { hostMcp = null; hostHttp = null; }
 function ensureTaskDirFor(taskId, home) {
   if (!taskDirCore || !TASK_DIR_ROOT) return null;
   try { return taskDirCore.ensureTaskDir(TASK_DIR_ROOT, taskId, home); } catch (err) { return null; }
@@ -12202,6 +12240,8 @@ function daemonCapabilities() {
   if (taskDirCore) caps.push('task-dir-v1');
   if (taskDirCore && typeof taskDirCore.pruneTaskDirs === 'function') caps.push('task-dir-prune-v1');
   if (hostExec) caps.push('host-exec-v1');
+  if (hostMcp) caps.push('host-mcp-v1');
+  if (hostHttp) caps.push('host-http-v1');
   if (secretStore) caps.push('secrets-v1');
   if (vscodeServerCore) caps.push('vscode-v1');
   if (transcriptRewindCore) caps.push('rewind-probe-v1');
@@ -13892,6 +13932,8 @@ function cleanupOrphanedProcessGroups() {
 function cleanup() {
   // One-shot claude runs and the warm pool never outlive the daemon (oneshot-core.ts).
   try { oneShot.disposeAll(); } catch {}
+  // MCP servers started for tasks on other hosts end with the daemon (host-mcp-v1). Mirrors daemon-standalone.ts.
+  try { if (hostMcp) hostMcp.closeAll(); } catch (e) {}
   if (usageBudget) usageBudget.close();
   if (budgetControl) budgetControl.close();
   if (cronRuntime) {

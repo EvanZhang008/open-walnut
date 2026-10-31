@@ -49,7 +49,7 @@ export interface ExecParams {
   background?: boolean
 }
 
-interface Caller { sid: string; taskId: string; taskTitle: string; host: string }
+export interface Caller { sid: string; taskId: string; taskTitle: string; host: string }
 
 /** In flight, by job: who runs it and until when it may run (a background job that is never read again ends by itself). */
 const running = new Map<string, { taskId: string; host: string; until: number; at: number }>()
@@ -70,7 +70,7 @@ function normHost(h: string | undefined | null): string {
   return !h || h === 'local' ? LOCAL : h
 }
 
-async function callerOf(sid: string | undefined): Promise<Caller> {
+export async function callerOf(sid: string | undefined): Promise<Caller> {
   const { resolveCaller } = await import('../sessions/session-send-core.js')
   const c = await resolveCaller(sid)
   if (c.kind !== 'session' || !c.record.taskId) {
@@ -81,7 +81,7 @@ async function callerOf(sid: string | undefined): Promise<Caller> {
   return { sid: c.record.claudeSessionId, taskId: c.record.taskId, taskTitle: task?.title ?? c.record.taskId, host: normHost(c.record.host) }
 }
 
-async function targetHost(raw: string, caller: Caller): Promise<string> {
+export async function targetHost(raw: string, caller: Caller, sameHostHint = 'run the command with your own Bash tool'): Promise<string> {
   const { parseHostSelector, pickHost, HostSelectorError } = await import('./host-select.js')
   let host: string
   try {
@@ -92,7 +92,7 @@ async function targetHost(raw: string, caller: Caller): Promise<string> {
     throw err
   }
   if (host === caller.host) {
-    throw new HostExecError(`This session already runs on ${host === LOCAL ? 'this Mac' : host}: run the command with your own Bash tool`, 400, 'same_host')
+    throw new HostExecError(`This session already runs on ${host === LOCAL ? 'this Mac' : host}: ${sameHostHint}`, 400, 'same_host')
   }
   if (host !== LOCAL) {
     const { getConfig } = await import('../config-manager.js')
@@ -102,7 +102,7 @@ async function targetHost(raw: string, caller: Caller): Promise<string> {
   return host
 }
 
-async function hostName(host: string): Promise<string> {
+export async function hostName(host: string): Promise<string> {
   if (host === LOCAL) return 'the Mac'
   const { hostDisplayNameFor } = await import('./host-display-name.js')
   return hostDisplayNameFor(host)
@@ -124,7 +124,7 @@ function fenced(text: string): string {
 const asking = new Map<string, Promise<unknown>>()
 
 /** The grant for this task on this host, or the refusal that asks the user (once) for one. */
-async function grantFor(caller: Caller, host: string, preview: string | null): Promise<string> {
+export async function grantFor(caller: Caller, host: string, preview: string | null): Promise<string> {
   const key = `${caller.taskId}\u0000${host}`
   const before = asking.get(key) ?? Promise.resolve()
   const mine = before.catch(() => {}).then(() => grantOrAsk(caller, host, preview))
@@ -140,7 +140,7 @@ async function grantOrAsk(caller: Caller, host: string, preview: string | null):
   if (g) return g.id
   const name = await hostName(host)
   // Reading or stopping a job needs the grant the run had; it never asks for one.
-  if (preview === null) throw new HostExecError(`This task has no grant to run commands on ${name} (it was revoked).`, 403, 'exec_grant_required')
+  if (preview === null) throw new HostExecError(`This task has no grant to use ${name} (it was revoked).`, 403, 'exec_grant_required')
   let ask = grants.findAsk(caller.taskId, host)
   if (ask?.state === 'pending') {
     const now = await grants.refreshAsk(ask)
@@ -151,29 +151,29 @@ async function grantOrAsk(caller: Caller, host: string, preview: string | null):
     ask = now === 'dropped' ? undefined : grants.findAsk(caller.taskId, host)
   }
   if (ask?.state === 'denied') {
-    throw new HostExecError(`The user declined to let this task run commands on ${name}. Do the step another way, or ask the user in your reply.`, 403, 'exec_grant_denied')
+    throw new HostExecError(`The user declined to let this task use ${name} (commands, MCP servers, web services). Do the step another way, or ask the user in your reply.`, 403, 'exec_grant_denied')
   }
   if (ask?.state === 'pending') {
-    throw new HostExecError(`Waiting for the user to allow this task to run commands on ${name} (letter ${ask.letterId}). You will get a notice when they allow it; do other work meanwhile.`, 403, 'exec_grant_required', { letterId: ask.letterId })
+    throw new HostExecError(`Waiting for the user to allow this task to use ${name} (letter ${ask.letterId}). You will get a notice when they allow it; do other work meanwhile.`, 403, 'exec_grant_required', { letterId: ask.letterId })
   }
   const from = caller.host === LOCAL ? 'this Mac' : await hostName(caller.host)
   const title = caller.taskTitle.replace(/\s+/g, ' ').slice(0, 120)
   const { sendLetter } = await import('../human-inbox/store.js')
   const letter = await sendLetter({
-    subject: `Let "${title}" run commands on ${name}?`,
+    subject: `Let "${title}" use ${name}?`,
     type: 'action_required',
     markdown: [
-      `The task **${mdText(title)}**, running on ${mdText(from)}, wants to run commands on **${mdText(name)}** with \`host_exec\`.`,
+      `The task **${mdText(title)}**, running on ${mdText(from)}, wants to use **${mdText(name)}**: run commands there, call its MCP servers and reach its web services.`,
       '',
-      'Its first command:',
+      'Its first request:',
       '',
       fenced(preview.slice(0, 1500)),
       '',
-      `**Allow** lets this task run commands on ${mdText(name)} as you, in any folder, until you revoke it in Settings › Remote Hosts. `
-        + 'A command there can read anything your account can read on that machine. Every command is logged on that host and counted on the grant.',
+      `**Allow** lets this task run commands, call MCP servers and reach web services on ${mdText(name)} as you, in any folder, until you revoke it in Settings › Remote Hosts. `
+        + 'A command there can read anything your account can read on that machine. Every request is logged and counted on the grant.',
     ].join('\n'),
     actions: [
-      { id: 'allow', label: 'Allow', description: `Grant this task permission to run commands on ${name} until you revoke it` },
+      { id: 'allow', label: 'Allow', description: `Grant this task permission to use ${name} until you revoke it` },
       { id: 'deny', label: 'Deny', description: 'The task is told no and asks nothing more' },
     ],
     taskRefs: [caller.taskId],
@@ -181,10 +181,11 @@ async function grantOrAsk(caller: Caller, host: string, preview: string | null):
   })
   await grants.recordAsk({ taskId: caller.taskId, host, letterId: letter.id, askedAt: Date.now(), sid: caller.sid, state: 'pending' })
   log.session.info('host exec: asked the user for a grant', { taskId: caller.taskId, host, letterId: letter.id })
-  throw new HostExecError(`This task may not run commands on ${name} yet: a letter asks the user (${letter.id}). You will get a notice when they allow it; do other work meanwhile.`, 403, 'exec_grant_required', { letterId: letter.id })
+  throw new HostExecError(`This task may not use ${name} yet: a letter asks the user (${letter.id}). You will get a notice when they allow it; do other work meanwhile.`, 403, 'exec_grant_required', { letterId: letter.id })
 }
 
-async function dial(host: string, within = DIAL_MS) {
+/** The link to `host`, by `within` ms, with the daemon capability the call needs. */
+export async function dial(host: string, within = DIAL_MS, capability = 'host-exec-v1', what = 'run commands') {
   const { link } = await import('./link.js')
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
@@ -192,8 +193,8 @@ async function dial(host: string, within = DIAL_MS) {
       link(host),
       new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('dial timeout')), Math.max(1, Math.min(within, DIAL_MS))) }),
     ])
-    if (!conn.hasCapability('host-exec-v1')) {
-      throw new HostExecError(`The Walnut daemon on ${await hostName(host)} needs an update before it can run commands for other hosts (it updates on its next connect).`, 409, 'daemon_upgrade')
+    if (!conn.hasCapability(capability)) {
+      throw new HostExecError(`The Walnut daemon on ${await hostName(host)} needs an update before it can ${what} for other hosts (it updates on its next connect).`, 409, 'daemon_upgrade')
     }
     return conn
   } catch (err) {
@@ -272,7 +273,7 @@ function holdBudget(caller: Caller, wanted: number, since: number): number {
 }
 
 /** What is left of a call's answer time: unbounded for a caller on the Mac. */
-function budgetLeft(caller: Caller, since: number): number {
+export function budgetLeft(caller: Caller, since: number): number {
   return caller.host === LOCAL ? Number.POSITIVE_INFINITY : RELAYED_HOLD_MS - (Date.now() - since)
 }
 

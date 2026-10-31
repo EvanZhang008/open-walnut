@@ -227,8 +227,8 @@ export async function onLetterAnswered(event: { letterId?: unknown; actionId?: u
     if (!record) return
     const { deliverToSession } = await import('../sessions/session-send-core.js')
     const text = `<walnut-message kind="notification" from="Walnut" outcome="host-exec-granted">\n`
-      + `The user allowed this task to run commands on host "${ask.host}" (host_exec), any folder, until they revoke it. `
-      + `Run the command again.\n</walnut-message>`
+      + `The user allowed this task to use host "${ask.host}" (host_exec, host_mcp_*, host_http), any folder, until they revoke it. `
+      + `Make the call again.\n</walnut-message>`
     await deliverToSession(record, { busText: text, enqueueText: text, source: 'walnut-notify', taskId: ask.taskId, endsWait: true })
   } catch (err) {
     log.session.warn('host exec: the asking session was not told of the grant', { taskId: ask.taskId, host: ask.host, error: String(err) })

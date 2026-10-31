@@ -177,6 +177,8 @@ import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
 import { ensureTaskDir, isTaskDirId, listTaskDirs, pruneTaskDirs, removeTaskDirs, taskDirPath, taskDirRoot } from './task-dir-core.js'
 import { createHostExec } from './host-exec-core.js'
+import { createHostMcp } from './host-mcp-core.js'
+import { createHostHttp } from './host-http-core.js'
 import { createSecretStore, secretsRoot } from './secrets-core.js'
 import { scanHostUsage, scanCostState, scanSessionCost, createUsagePages } from './usage-host-core.js'
 import { createUsageBudgetRuntime, type BudgetPrices, type BudgetVerdict } from './usage-budget-runtime.js'
@@ -2411,6 +2413,14 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'exec.read': return replyTransfer(ws, id as number, 'exec.read', () => hostExec.read(cmd), false)
     case 'exec.kill': return replyTransfer(ws, id as number, 'exec.kill', () => hostExec.kill(cmd), false)
     case 'exec.list': return replyTransfer(ws, id as number, 'exec.list', () => hostExec.list(), false)
+    // A task on another host calling this host's MCP servers and web services (host-mcp-v1,
+    // host-http-v1). The same rule as exec.*: only the trusted walnut socket asks, after the
+    // server checked the user's grant. Keep in sync with daemon-source.ts.
+    case 'mcp.list': return replyTransfer(ws, id as number, 'mcp.list', () => hostMcp.list(cmd), false)
+    case 'mcp.tools': return replyTransfer(ws, id as number, 'mcp.tools', () => hostMcp.tools(cmd), false)
+    case 'mcp.call': return replyTransfer(ws, id as number, 'mcp.call', () => hostMcp.call(cmd), false)
+    case 'mcp.result': return replyTransfer(ws, id as number, 'mcp.result', () => hostMcp.result(cmd), false)
+    case 'http.request': return replyTransfer(ws, id as number, 'http.request', () => hostHttp.request(cmd), false)
     // The secrets the user shared with this host (secrets-v1, secrets-core.ts). NOT in
     // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: only the Mac's trusted socket
     // writes or lists them, and no reply ever carries a value. Keep in sync with daemon-source.ts.
@@ -10412,6 +10422,16 @@ const hostExec = createHostExec({
   stateDir: HOST_EXEC_DIR,
   env: hostExecEnv(),
 })
+// A task on another host calling this host's MCP servers ('host-mcp-v1', host-mcp-core.ts)
+// and its web services ('host-http-v1', host-http-core.ts). PARITY: keep in sync with daemon-source.ts.
+const hostMcp = createHostMcp({
+  spawn: (command, args, opts) => spawn(command, args, opts),
+  killGroup: (pid, signal) => { if (pid > 1) process.kill(-pid, signal) },
+  shell: sessionShell(),
+  home: HOME_DIR,
+  env: hostExecEnv(),
+})
+const hostHttp = createHostHttp()
 
 // ── The secrets the user shared with this host (capability 'secrets-v1') ──
 // PARITY: keep in sync with daemon-source.ts. The logic is secrets-core.ts.
@@ -11152,6 +11172,8 @@ function cleanupOrphanedProcessGroups() {
 function cleanup() {
   // One-shot claude runs and the warm pool never outlive the daemon (oneshot-core.ts).
   try { oneShot.disposeAll() } catch {}
+  // MCP servers started for tasks on other hosts end with the daemon that holds their stdin.
+  try { hostMcp.closeAll() } catch {}
   usageBudget.close()
   budgetControl.close()
   void cronRuntime?.close().catch((error) => logMsg('error', 'cron supervision shutdown failed', { error: String(error) }))

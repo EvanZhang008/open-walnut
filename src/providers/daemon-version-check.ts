@@ -119,6 +119,11 @@ const DAEMON_SOURCE_FILES = [
   // Commands for tasks on other hosts (exec.*) — bundled into the binary AND
   // shipped as the host-exec-core.cjs sidecar.
   'src/providers/host-exec-core.ts',
+  // A task on another host calling the MCP servers and web services of this host
+  // (mcp.*, http.request): bundled into the binary AND shipped as host-reach-core.cjs.
+  'src/providers/host-mcp-core.ts',
+  'src/providers/host-http-core.ts',
+  'src/providers/host-reach-core.ts',
   // Fleet secrets (secrets.*) — bundled into the binary AND shipped as the
   // secrets-core.cjs sidecar.
   'src/providers/secrets-core.ts',

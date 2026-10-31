@@ -141,9 +141,9 @@ describe('host_exec', () => {
     expect(firsts[1].body.letterId).toBe(letterId)
     // A second try while the user has not answered sends no second letter.
     expect(await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo again' }, SID)).toMatchObject({ status: 403, body: { code: 'exec_grant_required', letterId } })
-    const asks = (await letters()).filter((l) => l.subject.includes('run commands on'))
+    const asks = (await letters()).filter((l) => l.subject.includes('" use '))
     expect(asks.map((l) => l.id)).toEqual([letterId])
-    expect(asks[0]).toMatchObject({ type: 'action_required', subject: 'Let "Run the iOS tests" run commands on Mac box?' })
+    expect(asks[0]).toMatchObject({ type: 'action_required', subject: 'Let "Run the iOS tests" use Mac box?' })
     expect(sent).toEqual([])
 
     // A session may not grant itself, nor may another task answer Allow in the user's place.
@@ -241,7 +241,7 @@ describe('host_exec', () => {
     expect(again).toMatchObject({ status: 403, body: { code: 'exec_grant_required' } })
     expect((await api('POST', `/api/v1/human-inbox/${again.body.letterId}/answer`, { actionId: 'deny' })).status).toBeLessThan(300)
     await until(async () => (await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, SID)).body.code === 'exec_grant_denied', 'the denial')
-    const asks = (await letters()).filter((l) => l.subject.includes('run commands on'))
+    const asks = (await letters()).filter((l) => l.subject.includes('" use '))
     expect(asks).toHaveLength(3)
     // Settings lists the Deny with an Allow; the user's Allow there grants it after all.
     const listed = (await api('GET', '/api/v1/host-exec/grants')).body

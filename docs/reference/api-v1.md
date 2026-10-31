@@ -1851,6 +1851,41 @@ A task's session runs one command on ANOTHER host (ops `host_exec`, `host_exec_r
   covers one task on one host, any folder, until revoked; an Allow any task records on the
   letter in the user's place makes no grant.
 
+### MCP servers and web services on another host (additive, 2026-10): `/hosts/:host/mcp`, `/hosts/:host/http`
+
+A task's session calls an MCP server configured on ANOTHER host (ops `host_mcp_list`,
+`host_mcp_tools`, `host_mcp_call`, `host_mcp_result`) or makes one web request from it
+(op `host_http`), through the Mac's link; the host's daemon does the work (capabilities
+`host-mcp-v1`, `host-http-v1`). Same caller rule, same refusals and the SAME grant as
+`host_exec` above: one grant covers a task's commands, MCP calls and web requests on that
+host, and its letter says so. The server's config and env values never leave the host.
+
+- `GET /api/v1/hosts/:host/mcp?cwd=` → `{ host, servers: [{ name, plugin?, scope: "user" |
+  "project" | "plugin", type: "stdio" | "http" | "sse" }] }`: the servers Claude Code there
+  would load (plugin servers named `plugin:<plugin>:<server>`; with `cwd`, that project's
+  too). Names only, no grant needed.
+- `GET /api/v1/hosts/:host/mcp/:server/tools?cwd=` → `{ host, callId, running, server, tools:
+  [{ name, description?, inputSchema? }] }`. The server starts on that host when it is not
+  running (one per task, server and folder; stopped after 10 idle minutes; at most 8 live
+  per host). An `sse` server answers `400 unsupported_transport`.
+- `POST /api/v1/hosts/:host/mcp/:server/call { tool, arguments?, cwd?, timeout_ms? }` →
+  `{ host, callId, running: false, server, tool, isError, text, truncated, images: [{ mimeType,
+  bytes }], structured?, redactedLines? }`. A call ends by `timeout_ms` (default 60000, at most
+  600000). For a session on another host the answer is held about 12 s (its gateway gives up
+  at 20 s): a call still going answers `{ running: true, callId }`. Text is at most 512 KB;
+  credential-looking lines are hidden, and `structured` is dropped when it carries one.
+  Refusals beyond host_exec's: `404 unknown_server`, `502 server_failed` (with the server's
+  own last stderr words), `429 busy` (4 calls at once per task).
+- `GET /api/v1/hosts/:host/mcp-calls/:callId?wait_ms=` → that call's answer, waiting up to
+  `wait_ms` (60000 at most). Kept 10 minutes; only the task that started it reads it
+  (`404 unknown_call`).
+- `POST /api/v1/hosts/:host/http { url, method?, headers?, body? | body_base64?, timeout_ms? }` →
+  `{ host, url, status, statusText, headers, contentType, body | bodyBase64, bodyBytes,
+  truncated, ms, redactedLines? }`: one request made from that host (http and https only,
+  redirects followed, default 30000 ms, at most 300000, about 12 s for a session on another
+  host). At most 256 KB of the body; text as `body`, anything else as `bodyBase64`; Set-Cookie
+  values and credential-looking lines hidden. `504 timeout`, `502 request_failed`.
+
 ### Secrets copied to hosts (additive, 2026-10): `/secrets`
 
 The user keeps a secret on the Mac (the master, `$XDG_STATE_HOME/open-walnut/secrets-master`,

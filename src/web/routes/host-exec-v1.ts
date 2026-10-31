@@ -130,3 +130,63 @@ hostExecV1Router.delete('/host-exec/grants/:id', async (req: Request, res: Respo
     res.json({ grant: g })
   } catch (err) { next(err) }
 })
+
+/*
+ * MCP servers and web services on another host (core/hosts/host-mcp.ts, host-http.ts),
+ * under the same grant as its commands:
+ *
+ *   GET  /api/v1/hosts/:host/mcp?cwd=                    → { servers } (names only, no grant)
+ *   GET  /api/v1/hosts/:host/mcp/:server/tools?cwd=      → { tools } or { running, callId }
+ *   POST /api/v1/hosts/:host/mcp/:server/call            { tool, arguments?, cwd?, timeout_ms? } → the answer or { running, callId }
+ *   GET  /api/v1/hosts/:host/mcp-calls/:callId?wait_ms=  → a call's answer
+ *   POST /api/v1/hosts/:host/http                        { url, method?, headers?, body? | body_base64?, timeout_ms? } → the response
+ */
+function str(v: unknown): string | undefined {
+  const s = Array.isArray(v) ? v[0] : v
+  return typeof s === 'string' && s ? s : undefined
+}
+
+hostExecV1Router.get('/hosts/:host/mcp', (req: Request, res: Response, next: NextFunction) => {
+  if (leaderOnly(res)) return
+  void answer(res, next, async () => (await import('../../core/hosts/host-mcp.js')).listHostMcp({
+    host: param(req.params.host), ...(str(req.query.cwd) ? { cwd: str(req.query.cwd) } : {}),
+  }, callerSid(req)))
+})
+
+hostExecV1Router.get('/hosts/:host/mcp/:server/tools', (req: Request, res: Response, next: NextFunction) => {
+  if (leaderOnly(res)) return
+  void answer(res, next, async () => (await import('../../core/hosts/host-mcp.js')).hostMcpTools({
+    host: param(req.params.host), server: param(req.params.server), ...(str(req.query.cwd) ? { cwd: str(req.query.cwd) } : {}),
+  }, callerSid(req)))
+})
+
+hostExecV1Router.post('/hosts/:host/mcp/:server/call', (req: Request, res: Response, next: NextFunction) => {
+  if (leaderOnly(res)) return
+  const b = (req.body ?? {}) as Record<string, unknown>
+  void answer(res, next, async () => (await import('../../core/hosts/host-mcp.js')).hostMcpCall({
+    host: param(req.params.host), server: param(req.params.server), tool: typeof b.tool === 'string' ? b.tool : '',
+    ...(b.arguments !== undefined ? { arguments: b.arguments as Record<string, unknown> } : {}),
+    ...(typeof b.cwd === 'string' ? { cwd: b.cwd } : {}),
+    ...(num(b.timeout_ms) !== undefined ? { timeout_ms: num(b.timeout_ms) } : {}),
+  }, callerSid(req)))
+})
+
+hostExecV1Router.get('/hosts/:host/mcp-calls/:callId', (req: Request, res: Response, next: NextFunction) => {
+  if (leaderOnly(res)) return
+  void answer(res, next, async () => (await import('../../core/hosts/host-mcp.js')).hostMcpResult({
+    host: param(req.params.host), call_id: param(req.params.callId), wait_ms: num(req.query.wait_ms),
+  }, callerSid(req)))
+})
+
+hostExecV1Router.post('/hosts/:host/http', (req: Request, res: Response, next: NextFunction) => {
+  if (leaderOnly(res)) return
+  const b = (req.body ?? {}) as Record<string, unknown>
+  void answer(res, next, async () => (await import('../../core/hosts/host-http.js')).httpOnHost({
+    host: param(req.params.host), url: typeof b.url === 'string' ? b.url : '',
+    ...(typeof b.method === 'string' ? { method: b.method } : {}),
+    ...(b.headers && typeof b.headers === 'object' && !Array.isArray(b.headers) ? { headers: b.headers as Record<string, string> } : {}),
+    ...(typeof b.body === 'string' ? { body: b.body } : {}),
+    ...(typeof b.body_base64 === 'string' ? { body_base64: b.body_base64 } : {}),
+    ...(num(b.timeout_ms) !== undefined ? { timeout_ms: num(b.timeout_ms) } : {}),
+  }, callerSid(req)))
+})

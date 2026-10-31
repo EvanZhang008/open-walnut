@@ -91,6 +91,9 @@ SOURCES=(
   src/providers/task-dir-core.ts
   src/lib/task-dir.ts
   src/providers/host-exec-core.ts
+  src/providers/host-mcp-core.ts
+  src/providers/host-http-core.ts
+  src/providers/host-reach-core.ts
   src/providers/secrets-core.ts
   src/providers/search-grep-core.ts
   src/providers/vscode-server-core.ts
@@ -298,6 +301,12 @@ cp node_modules/@agentclientprotocol/codex-acp/LICENSE "$OUTDIR/codex-acp.LICENS
 "$BUN" build --minify --target=node --format=cjs \
   --outfile "$OUTDIR/host-exec-core.cjs" \
   src/providers/host-exec-core.ts
+
+# A task on another host calling this host's MCP servers and web services:
+# 'host-mcp-v1' and 'host-http-v1' are advertised only when it loads.
+"$BUN" build --minify --target=node --format=cjs \
+  --outfile "$OUTDIR/host-reach-core.cjs" \
+  src/providers/host-reach-core.ts
 
 # Fleet secrets sidecar: 'secrets-v1' is advertised only when it loads.
 "$BUN" build --minify --target=node --format=cjs \

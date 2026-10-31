@@ -72,6 +72,7 @@ export function fleetPromptLine(hosts: HostCaps[], sessionHost: string | undefin
     + 'or ask by what it has (host "@ios", "@browser" for the user\'s own signed-in browser, "@mcp:<server>", '
     + '"@always-on"); host_list says which are connected now and lists each one\'s capabilities. '
     + 'For one command there (an xcodebuild, a CLI signed in on that machine), host_exec runs it and returns its output; '
+    + 'host_mcp_list / host_mcp_call use an MCP server configured there, and host_http reaches a web service only it can (its localhost); '
     + 'the user allows that once per task and host.\n'
     + rows.join('\n') + '\n\n'
 }

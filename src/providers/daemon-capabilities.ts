@@ -481,6 +481,20 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // server checks the user's grant first (src/core/hosts/host-exec.ts); not bridge-
   // or follower-reachable. Sidecar-gated in the source twin (host-exec-core.cjs).
   'host-exec-v1',
+  // 'host-mcp-v1' — a task on another host calling an MCP server configured here
+  // (host-mcp-core.ts): `mcp.list {cwd}` names the servers Claude Code would see,
+  // `mcp.tools {callId, taskId, server, cwd, wait}` and `mcp.call {..., tool,
+  // arguments, timeoutMs}` start the server (one per task, server and folder, 10
+  // idle minutes) and answer within `wait` or `{running:true}`; `mcp.result {callId,
+  // wait}` reads a kept answer. The server checks the user's grant first
+  // (src/core/hosts/host-mcp.ts); not bridge- or follower-reachable. Sidecar-gated in
+  // the source twin (host-reach-core.cjs).
+  'host-mcp-v1',
+  // 'host-http-v1' — one HTTP request made from this host for a task on another
+  // (host-http-core.ts): `http.request {url, method, headers, body | bodyBase64,
+  // timeoutMs}` answers the status, headers (Set-Cookie hidden) and up to 256 KB of
+  // the body. Same grant, same reachability, same sidecar as host-mcp-v1.
+  'host-http-v1',
   // 'secrets-v1' — the secrets the user shared with this host (secrets-core.ts),
   // one 0600 file each under $XDG_STATE_HOME/open-walnut/secrets: `secrets.list`
   // (names and versions, never a value), `secrets.put {name, version, value, env,
