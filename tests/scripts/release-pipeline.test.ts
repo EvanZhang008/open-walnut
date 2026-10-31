@@ -836,8 +836,14 @@ describe('binary-matrix.yml', () => {
 
   it('a release\'s call never cancels, and is never cancelled by, a push run on the same ref', () => {
     // A nightly or a promote calls it from a run on main, where main's push runs live.
-    expect(doc.concurrency.group).toBe("binary-matrix-${{ inputs.files != '' && format('{0}-{1}', github.run_id, inputs.files) || github.ref }}")
-    expect(doc.concurrency['cancel-in-progress']).toBe("${{ inputs.files == '' }}")
+    expect(doc.concurrency.group).toBe("binary-matrix-${{ inputs.files != '' && format('{0}-{1}', github.run_id, inputs.files) || (github.event_name == 'push' && github.sha) || github.ref }}")
+  })
+
+  it('every push to main gets its own verdict; only a pull request\'s newer push cancels', () => {
+    // 2026-10-31: the next push cancelled 45 of 60 runs, so the commit CI passed
+    // often had none, and ci-gate.mjs publishes a commit only when both passed.
+    expect(doc.concurrency.group).toContain("(github.event_name == 'push' && github.sha)")
+    expect(doc.concurrency['cancel-in-progress']).toBe("${{ inputs.files == '' && github.event_name == 'pull_request' }}")
   })
 })
 
@@ -861,7 +867,13 @@ describe('ci.yml', () => {
     // always() ran it on superseded runs too, against cancelled legs: a red run
     // for every quick re-push. !cancelled() still runs it when a gate failed.
     expect((gate as { if?: string }).if).toBe('${{ !cancelled() }}')
-    expect((parseYaml(text) as { concurrency: { 'cancel-in-progress': boolean } }).concurrency['cancel-in-progress']).toBe(true)
+  })
+
+  it('a newer push cancels only a pull request\'s run, never one on main', () => {
+    // 2026-10-31: a run takes about an hour and main took a push every 13 minutes,
+    // so 40 of 40 runs on main were cancelled and no commit could be released.
+    expect((parseYaml(text) as { concurrency: { group: string; 'cancel-in-progress': string } }).concurrency)
+      .toEqual({ group: 'ci-${{ github.ref }}', 'cancel-in-progress': "${{ github.event_name == 'pull_request' }}" })
   })
 
   it('the rehearsal packs this commit and installs it with npm 12 on Linux and macOS', () => {

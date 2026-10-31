@@ -38,10 +38,14 @@ on:
 # A release's call runs inside the release's run, on its ref (main for a nightly
 # or a promote): with the push runs' group it would cancel main's push run, or
 # be cancelled by the next one. So a call gets a group of its own and is never
-# cancelled; a push supersedes the run before it on the same ref.
+# cancelled. A push to main gets a group of its own commit too: a release needs
+# this verdict on the very commit CI passed, and CI on main runs whichever commit
+# is newest when its last run ends, so every commit of main needs one (2026-10-31:
+# 45 of 60 runs here were cancelled by the next push). Only a pull request's push
+# supersedes the run before it.
 concurrency:
-  group: binary-matrix-${{ inputs.files != '' && format('{0}-{1}', github.run_id, inputs.files) || github.ref }}
-  cancel-in-progress: ${{ inputs.files == '' }}
+  group: binary-matrix-${{ inputs.files != '' && format('{0}-{1}', github.run_id, inputs.files) || (github.event_name == 'push' && github.sha) || github.ref }}
+  cancel-in-progress: ${{ inputs.files == '' && github.event_name == 'pull_request' }}
 
 env:
   # onnxruntime-node's install script fetches its CUDA provider (about 240 MB from

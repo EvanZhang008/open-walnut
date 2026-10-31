@@ -6,12 +6,17 @@ on:
   pull_request:
     branches: [main]
 
-# A newer push to the same branch makes the older run obsolete. Cancelling keeps
-# the queue short and feedback fast (and costs nothing — this repo is public, so
-# GitHub-hosted runners are free with unlimited minutes).
+# A newer push to a pull request makes its older run obsolete: cancelling keeps
+# feedback fast. A run on main is never cancelled. A run takes about an hour and
+# main took a push every 13 minutes or so, so cancelling there left main with no
+# finished run at all (2026-10-31: 40 of 40 cancelled, none finished in 10 hours),
+# and a release publishes only a commit CI passed (scripts/ci-gate.mjs). GitHub
+# keeps one pending run per group, the newest, so main gets a verdict about every
+# hour, on the newest commit when the run before it ends. Runners cost nothing
+# here: the repo is public.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Runner images are pinned (ubuntu-24.04, macos-26), here and in release.yml and
 # flake-hunt.yml: a `-latest` label moves to a new OS on GitHub's date (ubuntu

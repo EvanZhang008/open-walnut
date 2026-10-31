@@ -122,7 +122,7 @@ The `iOS app` job (`ios` in `ci.yml`, two legs on `macos-26`) runs the phone app
 
 ### A superseded run is not red
 
-A newer push cancels the run in progress (`concurrency` with `cancel-in-progress`). `CI OK` used to run under `if: always()` and judge the cancelled legs, so every quick re-push left a red run behind: 6 of the 9 red runs on main between 2026-10-02 and 10-04. It now runs under `if: ${{ !cancelled() }}`: a run that ends cancelled has no verdict, and `scripts/ci-gate.mjs` reads it as `cancelled`, never `red`. A job that hits its timeout does not cancel the run, so `CI OK` still runs and fails on it.
+A newer push to a pull request cancels its run in progress (`concurrency` with `cancel-in-progress`). A run on main is never cancelled: a run takes about an hour and main takes a push every 13 minutes or so, so on 2026-10-31 40 of 40 runs on main had been cancelled and no commit could be released. GitHub keeps the newest pending run per group, so main gets a verdict about every hour. The binary matrix gives each push to main a group of its own commit, so the commit CI passed always has its own matrix verdict too. `CI OK` used to run under `if: always()` and judge the cancelled legs, so every quick re-push left a red run behind: 6 of the 9 red runs on main between 2026-10-02 and 10-04. It now runs under `if: ${{ !cancelled() }}`: a run that ends cancelled has no verdict, and `scripts/ci-gate.mjs` reads it as `cancelled`, never `red`. A job that hits its timeout does not cancel the run, so `CI OK` still runs and fails on it.
 
 ### Flake hunt
 
