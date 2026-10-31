@@ -124,6 +124,9 @@ jobs:
           ref: ${{ inputs.ref }}
       - uses: actions/download-artifact@v4
         if: inputs.files == ''
+        # A failed download (2026-10-31: the artifact service timed out, macos-26-intel)
+        # leaves the file missing too: the check below downloads once more.
+        continue-on-error: true
         with:
           name: walnut-files
           path: dist-bin
@@ -184,6 +187,9 @@ jobs:
           ref: ${{ inputs.ref }}
       - uses: actions/download-artifact@v4
         if: inputs.files == ''
+        # A failed download (2026-10-31: the artifact service timed out, macos-26-intel)
+        # leaves the file missing too: the check below downloads once more.
+        continue-on-error: true
         with:
           name: walnut-files
           path: dist-bin
@@ -240,6 +246,9 @@ jobs:
           ref: ${{ inputs.ref }}
       - uses: actions/download-artifact@v4
         if: inputs.files == ''
+        # A failed download (2026-10-31: the artifact service timed out, macos-26-intel)
+        # leaves the file missing too: the check below downloads once more.
+        continue-on-error: true
         with:
           name: walnut-files
           path: dist-bin

@@ -16,7 +16,7 @@ type Job = { env?: Record<string, string>; steps?: Step[] }
 
 const isFilesDownload = (s: Step) => !!s.uses?.startsWith('actions/download-artifact@') && s.with?.name === 'walnut-files'
 
-describe('binary matrix rows survive a download that ends without the file', () => {
+describe('binary matrix rows survive a download that fails or ends without the file', () => {
   const jobs = Object.entries<Job>(parseYaml(fs.readFileSync(WORKFLOW, 'utf8')).jobs)
   const takers = jobs.filter(([, job]) => (job.steps ?? []).some(isFilesDownload))
 
@@ -30,6 +30,9 @@ describe('binary matrix rows survive a download that ends without the file', () 
       const first = steps.findIndex(isFilesDownload)
       const [check, again, require] = steps.slice(first + 1, first + 4)
       const file = (s: Step | undefined) => s?.env?.FILE ?? job.env?.FILE
+      // A download that fails outright (the artifact service timed out, 2026-10-31)
+      // must not end the job before the second download.
+      expect((steps[first] as Step & { 'continue-on-error'?: boolean })['continue-on-error']).toBe(true)
       expect(check?.id).toBe('files')
       expect(check?.run).toContain('-s "dist-bin/$FILE"')
       expect(check?.run).toContain('missing=true')
