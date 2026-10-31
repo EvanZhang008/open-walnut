@@ -12,8 +12,39 @@ import { parse as parseYaml } from 'yaml'
 const ROOT = path.resolve(__dirname, '../..')
 const raw = fs.readFileSync(path.join(ROOT, '.github/workflows/ci.yml'), 'utf8')
 type Step = { name?: string; run?: string; if?: string; uses?: string; env?: Record<string, string> }
-const doc = parseYaml(raw) as { jobs: Record<string, { 'runs-on': string; needs?: string[]; 'continue-on-error'?: string; strategy?: { matrix: { layer: string[] } }; steps: Step[] }> }
+const doc = parseYaml(raw) as { jobs: Record<string, { 'runs-on': string; needs?: string[]; 'continue-on-error'?: string; env?: Record<string, string>; strategy?: { matrix: { layer: string[] } }; steps: Step[] }> }
 const job = doc.jobs.ios!
+
+/** The classes a skip list names, `-skip-testing:<Target>/<Class>` each. */
+function skipped(list: string | undefined, target: string): string[] {
+  return (list ?? '').split(/\s+/).filter(Boolean).map((arg) => {
+    const m = arg.match(new RegExp(`^-skip-testing:${target}/(\\w+)$`))
+    if (!m) throw new Error(`not a ${target} class skip: ${arg}`)
+    return m[1]!
+  })
+}
+
+/** Every XCTestCase class of a test target, with its file and its own source. */
+function testClasses(target: string): { name: string; file: string; body: string }[] {
+  const dir = path.join(ROOT, 'ios-native', target)
+  return fs.readdirSync(dir).filter((f) => f.endsWith('.swift')).flatMap((file) => {
+    const parts = fs.readFileSync(path.join(dir, file), 'utf8').split(/^(?:final )?class (\w+)\s*:\s*XCTestCase/m)
+    const out: { name: string; file: string; body: string }[] = []
+    for (let i = 1; i < parts.length; i += 2) out.push({ name: parts[i]!, file, body: parts[i + 1]! })
+    return out
+  })
+}
+
+// A UI class that talks to a fixture server: its routes, the Inbox fixture marker, or
+// a test that fails without an isolated server.
+const TALKS_TO_FIXTURE = /__stub\/|"\/__\w+\/|WALNUT_UITEST_INBOX_ITEMS|InboxItemActionsUITests\.launch|isolated server/
+// Fixture classes that probe their server and skip on the offline pairing, so CI runs
+// them as skips. A new fixture class goes here (when it probes) or into IOS_CI_SKIP_UI.
+const PROBES_ITS_FIXTURE = [
+  'BoardOrderParityUITests', 'DemoModeUITests', 'InboxSelectUITests', 'LetterReplyUITests',
+  'MidTurnQueueUITests', 'ModelPillHealUITests', 'ProvenanceAndInboxUITests', 'SendOnceUITests',
+  'SessionMidTurnOrderUITests', 'SessionStreamStormUITests',
+]
 
 describe('the iOS job in ci.yml', () => {
   it('runs on the pinned macOS image, a unit and a UI leg', () => {
@@ -41,6 +72,35 @@ describe('the iOS job in ci.yml', () => {
     const ui = job.steps.find((s) => s.if === "matrix.layer == 'ui'")!
     expect(ui.run).toContain('ios-native/tests/ui/run-ui-tests.sh')
     expect(fs.existsSync(path.join(ROOT, 'ios-native/tests/ui/run-ui-tests.sh'))).toBe(true)
+  })
+
+  it('leaves only wall-clock perf gates to the Mac, and every one of them', () => {
+    const skips = skipped(job.env?.IOS_CI_SKIP_UNIT, 'WalnutTests')
+    const classes = testClasses('WalnutTests')
+    const isTiming = (c: { file: string }) => /Perf|Watchdog/.test(c.file)
+    for (const name of skips) expect(classes.filter(isTiming).map((c) => c.name), `${name} is no perf gate`).toContain(name)
+    // A new timing class is placed on purpose: skipped, or here when its budgets hold
+    // on a shared runner (these passed on run 41198110591 with room to spare).
+    const holdsOnARunner = ['ScrollPerfTests', 'WatchdogStallAccountingTests']
+    for (const c of classes.filter(isTiming)) {
+      expect(skips.includes(c.name) !== holdsOnARunner.includes(c.name), `${c.name} (${c.file}): skip it in IOS_CI_SKIP_UNIT or list it as holding its budget`).toBe(true)
+    }
+    const unit = job.steps.find((s) => s.if === "matrix.layer == 'unit'" && s.run?.includes('xcodebuild test'))!
+    expect(unit.run).toContain('$IOS_CI_SKIP_UNIT')
+  })
+
+  it('skips each UI class that needs its own fixture server, and only those', () => {
+    const skips = skipped(job.env?.IOS_CI_SKIP_UI, 'WalnutUITests')
+    const fixture = testClasses('WalnutUITests').filter((c) => TALKS_TO_FIXTURE.test(c.body)).map((c) => c.name)
+    for (const name of skips) expect(fixture, `${name} needs no fixture`).toContain(name)
+    for (const name of fixture) {
+      const probes = PROBES_ITS_FIXTURE.includes(name)
+      expect(probes !== skips.includes(name), `${name}: list it in PROBES_ITS_FIXTURE (it skips without its fixture) or in IOS_CI_SKIP_UI`).toBe(true)
+    }
+    for (const name of PROBES_ITS_FIXTURE) expect(fixture, `${name} no longer talks to a fixture`).toContain(name)
+    const ui = job.steps.find((s) => s.if === "matrix.layer == 'ui'")!
+    // Arguments replace the runner's default target, so the leg names it itself.
+    expect(ui.run).toMatch(/run-ui-tests\.sh -only-testing:WalnutUITests \$IOS_CI_SKIP_UI/)
   })
 
   it('uploads no artifact: the failures go into the log', () => {

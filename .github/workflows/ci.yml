@@ -818,6 +818,24 @@ jobs:
       fail-fast: false
       matrix:
         layer: [unit, ui]
+    # What this job leaves to the Mac (tests/scripts/ci-ios.test.ts keeps both lists whole):
+    # the wall-clock budgets of the perf gates, which a shared runner misses by up to
+    # 2.7x (run 41198110591: a 150 ms tick took 193 ms), and the UI classes that need
+    # their own fixture server (run-media-ui.sh, run-inbox-items-ui.sh, the peer and
+    # stub servers, a real voice model) and fail, by design, on the offline pairing.
+    env:
+      IOS_CI_SKIP_UNIT: >-
+        -skip-testing:WalnutTests/MarkdownPerfTests
+        -skip-testing:WalnutTests/TasksDerivedPerfTests
+        -skip-testing:WalnutTests/TimelinePerfGateTests
+        -skip-testing:WalnutTests/WatchdogRegressionTests
+      IOS_CI_SKIP_UI: >-
+        -skip-testing:WalnutUITests/InboxItemActionsUITests
+        -skip-testing:WalnutUITests/InboxItemLayoutUITests
+        -skip-testing:WalnutUITests/InboxTaskNavigationUITests
+        -skip-testing:WalnutUITests/MediaFileUITests
+        -skip-testing:WalnutUITests/PeerMessageUITests
+        -skip-testing:WalnutUITests/VoiceHistoryUITests
     steps:
       - uses: actions/checkout@v5
       - name: XcodeGen
@@ -851,11 +869,13 @@ jobs:
           xcodebuild test -project Walnut.xcodeproj -scheme Walnut \
             -destination "platform=iOS Simulator,id=$SIM_UDID" \
             -derivedDataPath "$RUNNER_TEMP/dd" -resultBundlePath "$RUNNER_TEMP/ios-unit.xcresult" \
-            -only-testing:WalnutTests
+            -only-testing:WalnutTests $IOS_CI_SKIP_UNIT
       - name: UI tests (WalnutUITests, offline pairing)
         if: matrix.layer == 'ui'
         shell: bash
-        run: WALNUT_UITEST_UDID="$SIM_UDID" WALNUT_UITEST_DD="$RUNNER_TEMP/dd" bash ios-native/tests/ui/run-ui-tests.sh
+        run: |
+          WALNUT_UITEST_UDID="$SIM_UDID" WALNUT_UITEST_DD="$RUNNER_TEMP/dd" \
+            bash ios-native/tests/ui/run-ui-tests.sh -only-testing:WalnutUITests $IOS_CI_SKIP_UI
       # The failures go into the log, never the result bundle as an artifact: a public
       # repo's artifacts are anyone's to download, and the 130 MB bundle (build logs,
       # the runner's environment) failed the leak audit on 2026-10-31.
