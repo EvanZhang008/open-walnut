@@ -15,8 +15,13 @@
  * here with an error: the daemon kills a run whose socket closed, so nothing
  * would ever answer it.
  */
-import { spawn } from 'node:child_process'
+import { spawn, execFile } from 'node:child_process'
 import { createOneShotCore, type OneShotChild } from './oneshot-core.js'
+import { createCliArgvFiles } from './cli-argv-files-core.js'
+import { localProductionDaemonDir } from '../lib/daemon-dir.js'
+import fs from 'node:fs'
+import path from 'node:path'
+import crypto from 'node:crypto'
 import { isVitestWorker } from '../core/test-claude-guard.js'
 import { linkFailureKind } from './link-failure.js'
 import { log } from '../logging/index.js'
@@ -83,8 +88,19 @@ const MAX_FRAME_BYTES = 8 * 1024 * 1024
 type LocalSink = (ev: string, data: Record<string, unknown>) => void
 let localCore: ReturnType<typeof createOneShotCore<LocalSink>> | null = null
 function local(): ReturnType<typeof createOneShotCore<LocalSink>> {
-  localCore ??= createOneShotCore<LocalSink>({
-    spawn: spawn as unknown as (cmd: string, args: string[], opts: Record<string, unknown>) => OneShotChild,
+  if (localCore) return localCore
+  // A claude run's content arguments ride files, as on the daemon (cli-argv-files-core.ts).
+  // Swept once when the core is built, keeping what a live process names.
+  const argvFiles = createCliArgvFiles({
+    fs, path, crypto,
+    dir: path.join(process.env.WALNUT_DAEMON_DIR || localProductionDaemonDir(), 'argv'),
+    log: (level, msg, data) => log.agent[level](msg, data),
+  })
+  execFile('ps', ['-A', '-ww', '-o', 'args='], { encoding: 'utf-8', timeout: 10_000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => {
+    if (!error) argvFiles.sweep([], String(stdout).split('\n'))
+  })
+  localCore = createOneShotCore<LocalSink>({
+    spawn: (cmd, args, opts) => spawn(cmd, argvFiles.isClaude(cmd, args) ? argvFiles.toFiles(args) : args, opts) as unknown as OneShotChild,
     send: (sink, ev, data) => sink(ev, data),
     env: process.env,
     log: (level, msg, data) => log.agent[level](msg, data),

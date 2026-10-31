@@ -247,7 +247,9 @@ export function createHostStart(deps: HostStartDeps): HostStart {
   const MAX_PERSONA_ARG_BYTES = 120 * 1024
   const MAX_PERSONA_FILE_BYTES = 1024 * 1024
   const MAX_MESSAGE_BYTES = 512 * 1024
-  const MAX_TEMPLATE_STRING = 64 * 1024
+  // The settings JSON (every hook script) is the longest; a CLI gets it as a file
+  // (cli-argv-files-core.ts), but an older daemon still passes it inline, so below MAX_ARG_STRLEN.
+  const MAX_TEMPLATE_STRING = 120 * 1024
   const MAX_STARTING = 2
   const MAX_BUSY = 20
   const MAX_PER_HOUR = 10

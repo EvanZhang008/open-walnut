@@ -40,6 +40,7 @@ import { createFeatureRelay } from './feature-relay-core.js'
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { ADVERTISED_DAEMON_CAPABILITIES } from './daemon-capabilities.js'
 import { computeExpectedDaemonVersion } from './daemon-version-check.js'
@@ -63,6 +64,7 @@ import { createPluginJobHarness } from './plugin-job-harness.js'
 import { createStreamRelay } from './stream-relay-core.js'
 import { createHostResume } from './host-resume-core.js'
 import { createCliOwner } from './cli-owner-core.js'
+import { createCliArgvFiles } from './cli-argv-files-core.js'
 import { argvNamesSession, boundedExecFile, createNoticeOnce } from './daemon-core.js'
 import { createStreamCompact } from './stream-compact-core.js'
 import { createStreamFold } from './stream-fold-core.js'
@@ -275,6 +277,7 @@ export function getDaemonSource(): string {
     ['__CREATE_STREAM_RELAY__', createStreamRelay.toString()],
     ['__CREATE_HOST_RESUME__', createHostResume.toString()],
     ['__CREATE_CLI_OWNER__', createCliOwner.toString()],
+    ['__CREATE_CLI_ARGV_FILES__', createCliArgvFiles.toString()],
     ['__CREATE_STREAM_COMPACT__', createStreamCompact.toString()],
     ['__CREATE_STREAM_FOLD__', createStreamFold.toString()],
     ['__CREATE_HOST_START__', createHostStart.toString()],
@@ -553,6 +556,15 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
       })
       if (owner.transcriptIdOf(['claude', '--resume', 's1']) !== 's1' || owner.transcriptIdOf(['claude', '--resume', 's1', '--fork-session']) !== null) {
         throw new Error('cli owner did not build')
+      }
+    }
+    // CLI argv files smoke (cli-argv-files-core.ts): a reconstructed copy must plan a
+    // settings file for inline JSON and leave a path alone, without touching disk.
+    const createArgvFiles = reconstructed['__CREATE_CLI_ARGV_FILES__'] as typeof createCliArgvFiles | undefined
+    if (createArgvFiles) {
+      const af = createArgvFiles({ fs: fs as never, path, crypto, dir: '/nonexistent/argv' })
+      if (af.namesIn(['claude', '--settings', '{"a":1}']).length !== 1 || af.namesIn(['claude', '--settings', '/x.json']).length !== 0 || !af.isClaude('/bin/claude', []) || af.sweep([], null) !== 0) {
+        throw new Error('cli argv files did not build')
       }
     }
     // Host start smoke (replica-start-v1): a reconstructed copy with no template must
@@ -1652,6 +1664,13 @@ function sweepDeadStreams() {
     }
     reaped.add(sid);
   }
+  // Argv files nothing names: no session of this daemon, no live process (another
+  // daemon's CLI included; a CLI reads its --settings file again). Mirror daemon-standalone.ts.
+  execFile('ps', ['-A', '-ww', '-o', 'args='], { encoding: 'utf-8', timeout: 10000, maxBuffer: 64 * 1024 * 1024 }, function (error, stdout) {
+    if (error) return;
+    const argvRemoved = cliArgvFiles.sweep(Array.from(sessions.values()).map(function (x) { return x.args; }), String(stdout).split('\\n'));
+    if (argvRemoved > 0) logMsg('info', 'argv file sweep: removed', { count: argvRemoved });
+  });
   if (reaped.size > 0) {
     logMsg('info', 'dead-stream retention sweep: reaped', { count: reaped.size, sids: [...reaped] });
   }
@@ -6744,8 +6763,10 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   let barrier = null;
   let proc;
   try {
-    barrier = SERVICE_MODE ? cronRuntimeCore.spawnBehindRegistry(launch.command, launch.args, spawnOptions) : null;
-    proc = barrier ? barrier.process : spawn(launch.command, launch.args, spawnOptions);
+    // Content arguments go to files: the CLI's argv carries paths (cli-argv-files-core.ts).
+    const spawnArgs = cliArgvFiles.toFiles(launch.args);
+    barrier = SERVICE_MODE ? cronRuntimeCore.spawnBehindRegistry(launch.command, spawnArgs, spawnOptions) : null;
+    proc = barrier ? barrier.process : spawn(launch.command, spawnArgs, spawnOptions);
   } catch (error) {
     fs.closeSync(pipeFd); fs.closeSync(outputFd); fs.closeSync(stderrFd);
     throw error;
@@ -6883,6 +6904,15 @@ var hostResume = (__CREATE_HOST_RESUME__)({
   now: function () { return Date.now(); },
   log: function (level, msg, data) { logMsg(level, msg, data); },
   modeCli: MODE_CLI,
+});
+
+// ── The CLI's content arguments ride files, never its argv (cli-argv-files-core.ts) ──
+// A pattern kill matched the hook text in every CLI's command line (2026-10-31).
+// Mirror daemon-standalone.ts.
+var cliArgvFiles = (__CREATE_CLI_ARGV_FILES__)({
+  fs: fs, path: path, crypto: crypto,
+  dir: path.join(STREAMS_DIR, 'argv'),
+  log: function (level, msg, data) { logMsg(level, msg, data); },
 });
 
 // ── One CLI per session id on this host (cli-owner-core.ts) ──
@@ -12683,7 +12713,8 @@ async function cmdTurns(ws, id, cmd) {
 // as text. Not on the command drain: a handover or shutdown kills these runs
 // (their caller sees the link drop) instead of waiting minutes for a model turn.
 const oneShot = (__CREATE_ONESHOT__)({
-  spawn: spawn,
+  // A claude run's content arguments ride files too (cli-argv-files-core.ts). Mirror daemon-standalone.ts.
+  spawn: function (cmd, args, opts) { return spawn(cmd, cliArgvFiles.isClaude(cmd, args) ? cliArgvFiles.toFiles(args) : args, opts); },
   send: function (ws, ev, data) { sendEvent(ws, ev, data); },
   env: process.env,
   log: function (level, msg, data) { logMsg(level, msg, data); },

@@ -97,6 +97,7 @@ import { createPluginJobSupervisor } from './plugin-jobs-core.js'
 import { createStreamRelay } from './stream-relay-core.js'
 import { createHostResume } from './host-resume-core.js'
 import { createCliOwner } from './cli-owner-core.js'
+import { createCliArgvFiles } from './cli-argv-files-core.js'
 import { createHostStart, type HostStartAnswer, type HostStartPlan } from './host-start-core.js'
 import { createClockHostStart } from './clock-host-start-core.js'
 import { createReplicaLogs } from './replica-logs-core.js'
@@ -571,6 +572,13 @@ function sweepDeadStreams(): void {
     }
     reaped.add(sid)
   }
+  // Argv files nothing names: no session of this daemon, no live process (another
+  // daemon's CLI included; a CLI reads its --settings file again). Mirror daemon-source.ts.
+  execFile('ps', ['-A', '-ww', '-o', 'args='], { encoding: 'utf-8', timeout: 10_000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => {
+    if (error) return
+    const argvRemoved = cliArgvFiles.sweep([...sessions.values()].map((x) => x.args), String(stdout).split('\n'))
+    if (argvRemoved > 0) logMsg('info', 'argv file sweep: removed', { count: argvRemoved })
+  })
   if (reaped.size > 0) {
     logMsg('info', 'dead-stream retention sweep: reaped', { count: reaped.size, sids: [...reaped] })
   }
@@ -2735,6 +2743,15 @@ const hostResume = createHostResume({
   now: () => Date.now(),
   log: (level, msg, data) => logMsg(level, msg, data),
   modeCli: MODE_CLI,
+})
+
+// ── The CLI's content arguments ride files, never its argv (cli-argv-files-core.ts) ──
+// A pattern kill matched the hook text in every CLI's command line (2026-10-31).
+// Mirror daemon-source.ts.
+const cliArgvFiles = createCliArgvFiles({
+  fs, path, crypto,
+  dir: path.join(STREAMS_DIR, 'argv'),
+  log: (level, msg, data) => logMsg(level, msg, data),
 })
 
 // ── One CLI per session id on this host (cli-owner-core.ts) ──
@@ -5724,7 +5741,8 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   // sourcing RC files ensures the full dev environment (including node) is available,
   // even on hosts where nvm binaries need newer GLIBC than the system provides.
   const preamble = buildSpawnPreamble(launch.nodeDir)
-  const escapedArgs = launch.args.map((a: string) => shellQuote(a)).join(' ')
+  // Content arguments go to files: the shell's and the CLI's argv carry paths (cli-argv-files-core.ts).
+  const escapedArgs = cliArgvFiles.toFiles(launch.args).map((a: string) => shellQuote(a)).join(' ')
   const shellCmd = `${preamble}; exec ${escapedArgs}`
 
   // Use the user's actual shell to spawn sessions. Hardcoding /bin/bash caused
@@ -10206,7 +10224,8 @@ async function cmdChangesFile(ws: ServerWebSocket<WsData>, id: number, cmd: Reco
 // the command drain: a handover or shutdown kills these runs (their caller
 // sees the link drop) instead of waiting minutes for a model turn.
 const oneShot = createOneShotCore<ServerWebSocket<WsData>>({
-  spawn: spawn as unknown as (cmd: string, args: string[], opts: Record<string, unknown>) => OneShotChild,
+  // A claude run's content arguments ride files too (cli-argv-files-core.ts). Mirror daemon-source.ts.
+  spawn: ((cmd: string, args: string[], opts: Record<string, unknown>) => spawn(cmd, cliArgvFiles.isClaude(cmd, args) ? cliArgvFiles.toFiles(args) : args, opts)) as unknown as (cmd: string, args: string[], opts: Record<string, unknown>) => OneShotChild,
   send: (ws, ev, data) => sendEvent(ws, ev, data),
   env: process.env,
   log: (level, msg, data) => logMsg(level, msg, data),

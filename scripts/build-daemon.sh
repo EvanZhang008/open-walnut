@@ -157,6 +157,7 @@ SOURCES=(
   src/providers/feature-relay-core.ts
   src/providers/host-resume-core.ts
   src/providers/cli-owner-core.ts
+  src/providers/cli-argv-files-core.ts
   src/providers/host-start-core.ts
   src/providers/clock-host-start-core.ts
   src/core/sessions/open-items-text.ts

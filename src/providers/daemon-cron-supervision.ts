@@ -145,6 +145,7 @@ export function buildCronResumeArgs(args: readonly string[], sid: string): strin
   const flags = new Set(['--fork-session', '--continue', '-c'])
   const retainedValues = new Set([
     '--append-system-prompt', '--system-prompt', '--mcp-config', '--permission-mode',
+    '--append-system-prompt-file', '--system-prompt-file',
     '--model', '--effort', '--input-format', '--output-format', '--permission-prompt-tool',
     '--settings', '--setting-sources', '--agent', '--agents', '--debug-file',
     '--allowedTools', '--disallowedTools', '--tools', '--fallback-model',
