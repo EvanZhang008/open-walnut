@@ -106,7 +106,7 @@ test('Main is the CEO and each project a VP card with its own name', async ({ pa
     const own = vp(page, name).getByTestId('org-chart-project')
     await expect(own).toHaveCount(1)
     await expect(own).toContainText(name)
-    await expect(own.getByTestId('org-chart-project-line')).toHaveText('2 waiting')
+    await expect(own.getByTestId('org-chart-project-line')).toHaveText('2 Waiting / snoozed')
     await expect(vp(page, name).getByTestId('org-chart-vp-line')).toHaveCount(0)
   }
 })
@@ -136,7 +136,7 @@ test('a drag onto another VP says what it does, asks first, and puts the project
   const card = vp(page, A)
   await expect(card.getByTestId('org-chart-project')).toHaveCount(2)
   await expect(card.getByTestId('org-chart-project').nth(1)).toContainText(B)
-  await expect(card.getByTestId('org-chart-vp-line')).toHaveText(/^2 projects · \d+ waiting$/)
+  await expect(card.getByTestId('org-chart-vp-line')).toHaveText(/^2 projects · \d+ Waiting \/ snoozed$/)
   await expect(vp(page, B)).toHaveCount(0)
 
   // Both stay projects with their own tasks; B is talked to through A's VP, and B's own

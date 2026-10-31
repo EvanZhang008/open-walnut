@@ -7,8 +7,8 @@
  * one of them gets a tweak.
  *
  * One line per result, the same shape as a board row (circle, title that
- * ellipsizes, muted project on the right; COMPLETE struck through, NEED_ACTION
- * tinted). The model's evidence phrase lives in the hover title — it was a second
+ * ellipsizes, muted project on the right; COMPLETE struck through, a task that
+ * needs the user tinted). The model's evidence phrase lives in the hover title — it was a second
  * and third line before, and a five-row list pushed the board below the fold
  * (user, 2026-09-05).
  *
@@ -16,8 +16,11 @@
  * markdown, no dangerouslySetInnerHTML, no injection surface.
  */
 
+import { useMemo } from 'react';
+import type { Task } from '@open-walnut/core';
 import { binaryPhaseIcon } from '@/components/common/Icons';
-import { PHASE_LABELS } from '@/utils/session-status';
+import { useTasksContextSafe } from '@/contexts/TasksContext';
+import { PHASE_LABELS, taskUserState } from '@/utils/session-status';
 import type { TaskPhase } from '@/types/session';
 
 export interface SearchResultRowView {
@@ -29,6 +32,14 @@ export interface SearchResultRowView {
   evidence?: string;
   /** The id resolves to no task any more (deleted): shown, never clickable. */
   missing?: boolean;
+  /** The task's one user status, when the client's task store holds the row. */
+  user_status?: Task['user_status'];
+}
+
+/** The red "needs you" tint: the task's user status (a snoozed task is not tinted), the
+ *  phase only when the store has no row for it (the search answer carries no status). */
+export function rowNeedsYou(row: Pick<SearchResultRowView, 'phase' | 'user_status'>): boolean {
+  return taskUserState({ phase: (row.phase ?? 'TODO') as TaskPhase, status: 'todo', user_status: row.user_status }) === 'needs';
 }
 
 /** Same circle colours as the board rows (utils/session-status taskCircleClass),
@@ -52,6 +63,14 @@ export function AgentSearchResultRows({ rows, onOpenTask, className }: {
   /** Extra class on the <ul>, so a surface can scope its own spacing. */
   className?: string;
 }) {
+  // The search answer and the bulk lookup carry no user status; the store row does.
+  const tasks = useTasksContextSafe()?.tasks;
+  const statusById = useMemo(() => {
+    const ids = new Set(rows.map((r) => r.taskId));
+    const out = new Map<string, Task['user_status']>();
+    for (const t of tasks ?? []) if (ids.has(t.id) && t.user_status) out.set(t.id, t.user_status);
+    return out;
+  }, [rows, tasks]);
   return (
     <ul className={`agent-search-results${className ? ` ${className}` : ''}`}>
       {rows.map((row) => {
@@ -81,7 +100,7 @@ export function AgentSearchResultRows({ rows, onOpenTask, className }: {
           <li key={row.taskId}>
             <button
               type="button"
-              className={`agent-search-row${isDone ? ' is-done' : ''}${row.phase === 'NEED_ACTION' ? ' is-needs-action' : ''}`}
+              className={`agent-search-row${isDone ? ' is-done' : ''}${rowNeedsYou({ phase: row.phase, user_status: row.user_status ?? statusById.get(row.taskId) }) ? ' is-needs-action' : ''}`}
               data-task-id={row.taskId}
               title={rowTooltip(row)}
               onClick={() => onOpenTask(row.taskId)}

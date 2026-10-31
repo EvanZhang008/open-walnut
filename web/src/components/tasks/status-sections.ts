@@ -19,6 +19,7 @@
  */
 import type { Task } from '@open-walnut/core';
 import { taskNeedsAction } from '@/utils/session-status';
+import { USER_STATE_LABELS } from '@open-walnut/user-status';
 import { recentActivityTime } from './recent-activity-time';
 
 export type StatusSectionKey = 'watching' | 'needs' | 'working' | 'waiting' | 'done';
@@ -29,10 +30,7 @@ export const STATUS_SECTION_ORDER: readonly StatusSectionKey[] = ['watching', 'n
 
 export const STATUS_SECTION_LABELS: Record<StatusSectionKey, string> = {
   watching: 'Watching',
-  needs: 'Needs you',
-  working: 'Working',
-  waiting: 'Waiting / snoozed',
-  done: 'Completed',
+  ...USER_STATE_LABELS,
 };
 
 export const STATUS_SECTION_TITLES: Record<StatusSectionKey, string> = {

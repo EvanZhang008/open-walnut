@@ -238,8 +238,8 @@ describe('when the main agent\'s note goes (planOrgNote)', () => {
   const atMs = Date.parse(at)
   const moved = { lines: [{ project: 'W', done: 0, added: 0, needsYou: 3, needsYouChanged: true }], next: { at: '2026-10-21T10:10:00Z', needsYou: { w: 3 } } }
   const still = { lines: [], next: { at: '2026-10-21T10:10:00Z', needsYou: { w: 2 } } }
-  const ask: OrgAlert = { key: 'ask:t1:rq-1', project: 'W', title: 'Fix it', kind: 'question' }
-  const fail: OrgAlert = { key: 'error:t2:s2', project: 'W', title: 'Ship it', kind: 'error' }
+  const ask: OrgAlert = { key: 'ask:t1:rq-1', project: 'W', taskId: 't1', title: 'Fix it', kind: 'question' }
+  const fail: OrgAlert = { key: 'error:t2:s2', project: 'W', taskId: 't2', title: 'Ship it', kind: 'error' }
 
   it('a count move inside the half hour says nothing and keeps the baseline; after it, one folded note', () => {
     const prev = { at, needsYou: { w: 2 }, alerts: [] }
@@ -274,7 +274,7 @@ describe('when the main agent\'s note goes (planOrgNote)', () => {
   })
 
   it('alerts past the cap are counted, stay untold, and are named on the next message', () => {
-    const many: OrgAlert[] = Array.from({ length: 8 }, (_, i) => ({ key: `ask:t${i}:rq`, project: 'W', title: `T${i}`, kind: 'question' as const }))
+    const many: OrgAlert[] = Array.from({ length: 8 }, (_, i) => ({ key: `ask:t${i}:rq`, project: 'W', taskId: `t${i}`, title: `T${i}`, kind: 'question' as const }))
     const prev = { at, needsYou: { w: 2 }, alerts: [] }
     const first = planOrgNote(prev, still, many, atMs + 60_000, DIGEST_FOLD_MS, 6)
     expect(first.alerts.map((a) => a.title)).toEqual(['T0', 'T1', 'T2', 'T3', 'T4', 'T5'])
@@ -293,9 +293,9 @@ describe('when the main agent\'s note goes (planOrgNote)', () => {
   })
 
   it('an alert line names the project, the task and what it waits on', () => {
-    expect(formatAlertLine(ask)).toBe('W: "Fix it" asks the user a question')
-    expect(formatAlertLine({ ...ask, kind: 'permission', tool: 'Bash' })).toBe('W: "Fix it" waits for the user to approve Bash')
-    expect(formatAlertLine({ ...fail, project: '' })).toBe('Inbox: "Ship it" stopped on an error')
+    expect(formatAlertLine(ask)).toBe('W: "Fix it" (t1) asks the user a question')
+    expect(formatAlertLine({ ...ask, kind: 'permission', tool: 'Bash' })).toBe('W: "Fix it" (t1) waits for the user to approve Bash')
+    expect(formatAlertLine({ ...fail, project: '' })).toBe('Inbox: "Ship it" (t2) stopped on an error')
   })
 
   describe('one VP for several projects (org_leads)', () => {

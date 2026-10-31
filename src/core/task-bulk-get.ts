@@ -27,7 +27,7 @@ export const BULK_GET_FIELDS = [
   'title', 'phase', 'project', 'priority', 'tags',
   'start_date', 'due_date', 'end_date', 'created_at', 'updated_at', 'completed_at',
   'pinned', 'focus_tier', 'pin_order', 'unread', 'blocked_by',
-  'last_session_update', 'summary', 'note', 'progress',
+  'last_session_update', 'summary', 'note', 'progress', 'user_status',
 ] as const;
 export type BulkGetField = (typeof BULK_GET_FIELDS)[number];
 

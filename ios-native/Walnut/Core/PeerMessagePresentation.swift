@@ -130,7 +130,15 @@ enum PeerMessagePresentation {
         guard let kind = attrs["kind"], kinds.contains(kind)
                 || (received && self.kind.firstMatch(in: kind, range: NSRange(kind.startIndex..., in: kind)) != nil)
         else { return nil }
-        let sender = kind == "notification" ? attrs["about"] ?? attrs["from"] : attrs["from"]
+        // Walnut's own notices and checks read as "System": the program, not a person or a task
+        // (the web's systemSender, src/lib/history-session-envelope.ts). The wire keeps from="Walnut".
+        // Only Walnut's own senders are renamed (a trigger's, a notice's), never a task's: a task
+        // titled "Walnut: fix board" that replies keeps its title. A task the notice is `about`
+        // keeps its own title too.
+        let about = kind == "notification" ? attrs["about"] : nil
+        let walnutSends = kind == "trigger" || kind == "notification"
+        let from = attrs["from"].map { walnutSends && ($0 == "Walnut" || $0.hasPrefix("Walnut:")) ? "System" + String($0.dropFirst("Walnut".count)) : $0 }
+        let sender = about ?? from
         let cleanSender = sender.map {
             if kind == "trigger" || kind == "app-state" || (kind == "notification" && attrs["about-session"] == nil) { return $0 }
             return handleSuffix.stringByReplacingMatches(in: $0, range: NSRange($0.startIndex..., in: $0), withTemplate: "")
@@ -147,7 +155,7 @@ enum PeerMessagePresentation {
         }
         return (PeerMessageDescription(
             sender: shortLine(cleanSender, limit: 60,
-                              fallback: kind == "trigger" ? "Routine" : ["reply", "peer-note"].contains(kind) ? "A task" : "Walnut"),
+                              fallback: kind == "trigger" ? "Routine" : ["reply", "peer-note"].contains(kind) ? "A task" : "System"),
             title: shortLine(attrs["title"] ?? "", limit: 120, fallback: fallback)
         ), complete, kind, attrs["request"]?.isEmpty == false)
     }

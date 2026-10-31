@@ -14,6 +14,7 @@
  */
 import type { ChannelRow } from './org-channels-model';
 import { projectKey } from '@open-walnut/org-tree';
+import { stateCountLabel } from '@open-walnut/user-status';
 
 /** One project on a VP card. */
 export interface VpProject {
@@ -54,11 +55,11 @@ export interface VpCard {
   row: ChannelRow;
 }
 
-/** "18 working · 12 waiting": what moves and what waits, else what is open, else nothing. */
+/** "18 Working · 12 Waiting / snoozed": what moves and what waits, else what is open, else nothing. */
 export function vpLine(c: ChannelRow['counts']): string {
   const parts: string[] = [];
-  if (c.running) parts.push(`${c.running} working`);
-  if (c.waiting) parts.push(`${c.waiting} waiting`);
+  if (c.running) parts.push(stateCountLabel('working', c.running));
+  if (c.waiting) parts.push(stateCountLabel('waiting', c.waiting));
   if (parts.length) return parts.join(' · ');
   return c.open ? `${c.open} open` : 'Nothing open';
 }
@@ -120,8 +121,8 @@ export function vpCards(rows: readonly ChannelRow[]): VpCard[] {
 function groupLine(projects: readonly VpProject[]): string {
   const sum = (k: 'running' | 'waiting') => projects.reduce((n, p) => n + p.row.counts[k], 0);
   const parts = [`${projects.length} projects`];
-  if (sum('running')) parts.push(`${sum('running')} working`);
-  if (sum('waiting')) parts.push(`${sum('waiting')} waiting`);
+  if (sum('running')) parts.push(stateCountLabel('working', sum('running')));
+  if (sum('waiting')) parts.push(stateCountLabel('waiting', sum('waiting')));
   return parts.join(' · ');
 }
 
@@ -129,7 +130,7 @@ function groupLine(projects: readonly VpProject[]): string {
 export function ceoLine(cards: readonly VpCard[]): string {
   const vps = cards.filter((c) => c.role === 'VP').length;
   const working = cards.filter((c) => c.projects.some((p) => p.row.counts.running > 0)).length;
-  return `${vps} ${vps === 1 ? 'VP' : 'VPs'}${working ? ` · ${working} working` : ''}`;
+  return `${vps} ${vps === 1 ? 'VP' : 'VPs'}${working ? ` · ${stateCountLabel('working', working)}` : ''}`;
 }
 
 /** The card a project sits on now. */

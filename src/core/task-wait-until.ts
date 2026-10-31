@@ -168,12 +168,16 @@ async function wake(taskId: string, nowMs: number): Promise<boolean> {
     }
   }
 
-  const res = await updateTaskRaw(task.id, { phase: 'NEED_ACTION', unread: true }, {
+  // Snoozed (snooze.ts): handed back, but no red dot and no notice before its date.
+  const { readSnoozedUntil } = await import('./snooze-read.js');
+  const snoozed = await readSnoozedUntil(task, nowMs);
+  const res = await updateTaskRaw(task.id, { phase: 'NEED_ACTION', ...(snoozed ? {} : { unread: true }) }, {
     emitEvent: true, push: true, source: 'wait-until', leaveHeld: true,
     shouldUpdate: (current) => current.phase === 'WAITING' && current.wait_until === task.wait_until,
   });
   if (!res.task) return false; // left WAITING or re-timed meanwhile
-  log.task.info('wait_until passed: task handed back (no session to wake)', { taskId: task.id, until: task.wait_until });
+  log.task.info('wait_until passed: task handed back (no session to wake)', { taskId: task.id, until: task.wait_until, snoozed });
+  if (snoozed) return true;
   try {
     const { addNotification } = await import('./notifications/store.js');
     await addNotification({
@@ -209,13 +213,15 @@ export async function handBackWaitingTaskOfDisabledTrigger(
   const { getTask, updateTaskRaw } = await import('./task-manager.js');
   const task = await getTask(target).catch(() => null);
   if (!task || task.phase !== 'WAITING') return false;
-  const res = await updateTaskRaw(task.id, { phase: 'NEED_ACTION', unread: true }, {
+  const { readSnoozedUntil } = await import('./snooze-read.js');
+  const snoozed = await readSnoozedUntil(task);
+  const res = await updateTaskRaw(task.id, { phase: 'NEED_ACTION', ...(snoozed ? {} : { unread: true }) }, {
     emitEvent: true, push: true, source: 'trigger-check-failed', leaveHeld: true,
     shouldUpdate: (current) => current.phase === 'WAITING',
   });
   if (!res.task) return false;
-  log.task.warn('waiting task handed back: its trigger kept failing', { taskId: task.id, routineId: jobId, error });
-  if (opts.notify === false) return true;
+  log.task.warn('waiting task handed back: its trigger kept failing', { taskId: task.id, routineId: jobId, error, snoozed });
+  if (opts.notify === false || snoozed) return true;
   try {
     const { addNotification } = await import('./notifications/store.js');
     await addNotification({

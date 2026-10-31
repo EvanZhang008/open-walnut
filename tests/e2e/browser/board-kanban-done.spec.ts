@@ -165,7 +165,7 @@ test('C13: into Resolved the task stays open, says so, and completes from the ca
   await expect(pane.locator('[data-testid="kanban-lane-head"][data-lane-id="resolved"] [data-testid="kanban-lane-count"]')).toHaveText('24 (1 open)')
   await card(pane, id).getByTestId('kanban-card-complete-inline').click()
   await expect.poll(() => phaseOf(id)).toBe('COMPLETE')
-  await expect(card(pane, id).getByTestId('kanban-card-status')).toHaveText(/^Done just now/)
+  await expect(card(pane, id).getByTestId('kanban-card-status')).toHaveText(/^Completed just now/)
 })
 
 test('C64: the rollup counts by lane and filters the still open; Always do this completes on every drop', async ({ page }) => {

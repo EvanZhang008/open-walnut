@@ -33,7 +33,7 @@ export function createLetterCheck() {
   const MAX_TASK_REFS = 50
   const TASK_REF_MAX_CHARS = 200
   /** human_inbox_send's inputs (src/ops/human-inbox.ts): the op refuses any other key. */
-  const OP_INPUTS = ['subject', 'type', 'markdown', 'html', 'text', 'actions', 'items', 'task_refs', 'pin', 'user_asked']
+  const OP_INPUTS = ['subject', 'type', 'markdown', 'html', 'text', 'actions', 'items', 'task_refs', 'pin', 'user_asked', 'snooze_reason']
 
   const str = (v: unknown): string => (typeof v === 'string' ? v : '')
   const filled = (v: unknown): boolean => typeof v === 'string' && v.length > 0
@@ -230,6 +230,7 @@ export function createLetterCheck() {
     for (const k of ['markdown', 'html', 'text']) if (args[k] !== undefined && typeof args[k] !== 'string') issues.push(`${k}: must be a string`)
     if (args.pin !== undefined && typeof args.pin !== 'boolean') issues.push('pin: must be a boolean')
     if (args.user_asked !== undefined && typeof args.user_asked !== 'boolean') issues.push('user_asked: must be a boolean')
+    if (args.snooze_reason !== undefined && typeof args.snooze_reason !== 'string') issues.push('snooze_reason: must be a string')
     if (args.task_refs !== undefined && (!Array.isArray(args.task_refs) || args.task_refs.some((t) => typeof t !== 'string'))) {
       issues.push('task_refs: must be an array of strings')
     }

@@ -23,6 +23,7 @@
  */
 
 import { infraStopCause } from './session-error-kind.js';
+import { startDateMs } from './snooze.js';
 
 export type UserState = 'needs' | 'working' | 'waiting' | 'done';
 
@@ -55,9 +56,34 @@ function waitIsUsers(report: StatusReport | null | undefined): boolean {
   return true;
 }
 
+/** The four names a person reads, the same on every surface (2026-10-30, the user: "we make the
+ *  whole system's naming clear ... the same everywhere ... four small tabs"). No other words for them:
+ *  not "need you", "needs me", "handed back" or "stuck" as a state. */
 export const USER_STATE_LABELS: Record<UserState, string> = {
-  needs: 'Needs you', working: 'Working', waiting: 'Waiting', done: 'Done',
+  needs: 'Needs you', working: 'Working', waiting: 'Waiting / snoozed', done: 'Completed',
 };
+
+/**
+ * The one word for a state in text an agent reads about one task (a status push, the subtask
+ * count): "Snoozed" or "Waiting", never the people's tab name "Waiting / snoozed".
+ */
+export function stateWord(state: UserState, snoozed = false): string {
+  if (state !== 'waiting') return USER_STATE_LABELS[state];
+  return snoozed ? 'Snoozed' : 'Waiting';
+}
+
+/** What each name means, in one plain line (shown where a surface explains its tabs). */
+export const USER_STATE_MEANINGS: Record<UserState, string> = {
+  needs: 'The next move is yours (an answer, a review, a decision), and it is not snoozed.',
+  working: 'A turn is running, or it carries on by itself.',
+  waiting: 'It waits on something outside you (a build, a review, another task, a time), or you snoozed it; until when is shown.',
+  done: 'Finished.',
+};
+
+/** A count in those names: "3 Needs you", "8 Working", "2 Waiting / snoozed", "5 Completed". */
+export function stateCountLabel(state: UserState, n: number): string {
+  return `${n} ${USER_STATE_LABELS[state]}`;
+}
 
 /** The session's own report of its last turn, in the user's words (self-report FOR_USER_*). */
 export interface StatusReport {
@@ -133,6 +159,8 @@ export interface UserStatusInput {
   teamStoppedAt?: string | null;
   /** When an armed trigger of the task last ran its check (ISO): shown, never counted as a check. */
   checkRanAt?: string | null;
+  /** The start date it is snoozed until, while that is still to come (snooze.ts snoozedUntil). */
+  snoozedUntil?: string | null;
 }
 
 /** 2026-10-27, the user: "If the task is closed, mostly close by me means I already verified ...
@@ -183,6 +211,9 @@ export interface UserStatus {
   /** Between a turn's end and its report (sessions/report-pending.ts): the report decides the
    *  status in a moment, so a change into this is no news (sessions/status-push.ts). */
   transient?: boolean;
+  /** Snoozed by its start date (snooze.ts): `until` as set, and the ask it would make of the user
+   *  now, which no surface raises until then. Absent on a task that is not snoozed. */
+  snoozed?: { until: string; ask?: string };
 }
 
 /** "2 hours ago", "3 days ago". */
@@ -318,8 +349,9 @@ export function reportIsCurrent(input: Pick<UserStatusInput, 'report' | 'phaseCh
 }
 
 export function deriveUserStatus(input: UserStatusInput, nowMs: number = Date.now()): UserStatus {
-  const out = derive(input, nowMs);
-  if (out.state !== 'done') {
+  const derived = derive(input, nowMs);
+  const out = snoozeOf(input, derived, nowMs) ?? derived;
+  if (out.state !== 'done' && !out.snoozed) {
     const due = dueStatus(input.dueDate, nowMs);
     if (due) out.due = due;
   }
@@ -329,6 +361,30 @@ export function deriveUserStatus(input: UserStatusInput, nowMs: number = Date.no
   // handed it back" is no claim about the world.
   if (out.state === 'needs' && out.source === 'session' && out.ask && out.ask === reportAsk(input.report)) stampChecked(out, input, nowMs);
   return out;
+}
+
+/**
+ * A snoozed task asks nothing of the user until its start date (snooze.ts, 2026-10-30): a status that
+ * would ask them (Needs you, or a wait on them) reads Waiting until that date, keeping the ask for the
+ * Brief's snoozed list; any other status only carries the mark. Working, Done and a live prompt are
+ * as they are, and Main is never snoozed (its Needs you is the user's turn to talk). A session's own
+ * report cannot undo it; only a letter with a stated reason raises the task (letter-ops.ts). Null
+ * when not snoozed.
+ */
+function snoozeOf(input: UserStatusInput, s: UserStatus, nowMs: number): UserStatus | null {
+  const until = clean(input.snoozedUntil);
+  if (!until || s.state === 'done' || s.state === 'working' || input.isMain) return null;
+  const startMs = startDateMs(until);
+  if (!Number.isFinite(startMs) || startMs <= nowMs) return null;
+  // A live prompt blocks a turn someone started now: the user answers it, snoozed or not.
+  const onUser = (s.state === 'needs' && s.source !== 'prompt') || (s.state === 'waiting' && s.kind === 'you');
+  if (!onUser) return { ...s, snoozed: { until } };
+  const ask = s.state === 'needs' ? s.ask : s.waitingOn;
+  return strip<UserStatus>({
+    state: 'waiting', kind: 'time', waitingOn: `Snoozed until ${until}`, until: new Date(startMs).toISOString(),
+    now: s.now, next: s.next, at: s.at, stale: s.stale,
+    snoozed: { until, ...(ask && ask !== HANDED_BACK_ASK ? { ask } : {}) },
+  });
 }
 
 /** The ask a report makes of the user, in the words derive() shows. */
@@ -450,6 +506,12 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
       return strip({ state: 'waiting', kind: 'other', waitingOn: 'Its report on the turn that just ended', ...w, transient: true });
     }
     if (watch) return watch;
+    // No ask of its own (2026-10-31, the user on the CEO node's list: "u can show VP sure, but u need
+    // to show what are actually waiting"): Needs you always carries a concrete ask. A worker whose
+    // turn ended without one waits on its lead, idle or stopped; Main and a lead wait on the user's
+    // next message (or their teams' news), and their node lists its tasks' asks, not itself.
+    if (input.isMain || input.isLead) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
+    if (input.hasLeader) return strip({ state: 'waiting', kind: 'lead', waitingOn: 'Its lead, to look at it: its turn ended without asking you anything', ...w });
     return strip({ state: 'needs', source: 'session', ask: HANDED_BACK_ASK, ...w });
   }
 
@@ -515,10 +577,10 @@ export function countUserStates(statuses: Iterable<Pick<UserStatus, 'state'>>): 
   return c;
 }
 
-/** "2 need you · 10 working · 16 waiting · 12 done", the one line every surface prints. */
+/** "2 Needs you · 10 Working · 16 Waiting / snoozed · 12 Completed", the one line every surface prints. */
 export function userStatusLine(c: UserStatusCounts, opts: { withDone?: boolean } = {}): string {
-  const parts = [`${c.needs} ${c.needs === 1 ? 'needs' : 'need'} you`, `${c.working} working`, `${c.waiting} waiting`];
-  if (opts.withDone !== false) parts.push(`${c.done} done`);
+  const parts = [stateCountLabel('needs', c.needs), stateCountLabel('working', c.working), stateCountLabel('waiting', c.waiting)];
+  if (opts.withDone !== false) parts.push(stateCountLabel('done', c.done));
   return parts.join(' · ');
 }
 

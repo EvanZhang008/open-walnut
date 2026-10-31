@@ -45,7 +45,7 @@ final class PeerMessagePresentationTests: XCTestCase {
         XCTAssertEqual(try descriptions("<walnut-message kind=\"reply\">\nINTERNAL_BODY\n</walnut-message>")[0],
                        PeerMessageDescription(sender: "A task", title: "Task reply"))
         XCTAssertEqual(try descriptions("<walnut-message kind=\"notification\">\nINTERNAL_BODY\n</walnut-message>")[0],
-                       PeerMessageDescription(sender: "Walnut", title: "Task update"))
+                       PeerMessageDescription(sender: "System", title: "Task update"))
     }
 
     func testANoticeWithoutATitleSaysWhatHappenedFromItsOutcome() throws {
@@ -107,7 +107,13 @@ final class PeerMessagePresentationTests: XCTestCase {
         let clock = "<walnut-message kind=\"trigger\" from=\"Walnut: wait until\" "
             + "note=\"the time this task was waiting for has passed\">\nINTERNAL_BODY\n</walnut-message>"
         XCTAssertEqual(try descriptions(clock)[0],
-                       PeerMessageDescription(sender: "Walnut: wait until", title: "the time this task was waiting for has passed"))
+                       PeerMessageDescription(sender: "System: wait until", title: "the time this task was waiting for has passed"))
+        // Only the sender is renamed: a task the notice is about keeps its own title.
+        let aboutTask = "<walnut-message kind=\"notification\" from=\"Walnut\" about=\"Walnut: docs\" outcome=\"stopped\">\nINTERNAL_BODY\n</walnut-message>"
+        XCTAssertEqual(try descriptions(aboutTask)[0].sender, "Walnut: docs")
+        // A task's own title that starts with "Walnut:" is a task, not the program.
+        let reply = "<walnut-message kind=\"reply\" from=\"Walnut: fix board\">\nINTERNAL_BODY\n</walnut-message>"
+        XCTAssertEqual(try descriptions(reply)[0].sender, "Walnut: fix board")
         let scheduled = "<walnut-message kind=\"trigger\" from=\"Trigger: Nightly build\" note=\"scheduled\">\nINTERNAL_BODY\n</walnut-message>"
         XCTAssertEqual(try descriptions(scheduled)[0],
                        PeerMessageDescription(sender: "Trigger: Nightly build", title: "Routine update"))

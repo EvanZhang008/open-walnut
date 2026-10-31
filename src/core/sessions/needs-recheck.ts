@@ -18,6 +18,7 @@
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import { NEEDS_RECHECK_MS, agoWords } from '../user-status.js';
+import { snoozeEndedMs } from '../snooze.js';
 
 /** A "needs you" checked longer ago than this is checked again (user-status.ts reads it as not
  *  verified a little later, once the re-check had its turn). */
@@ -50,12 +51,16 @@ export function recheckBody(ask: string, checkedAt: string | undefined, nowMs: n
 /** Whether a task is due a re-check now. Pure; exported for tests. */
 export function recheckDue(task: Pick<Task, 'phase' | 'status' | 'user_status' | 'needs_recheck'>, opts: {
   nowMs: number; notBefore?: number;
+  /** When a snooze of the task ran out (snooze.ts snoozeEndedMs): the clock starts again there. */
+  snoozeEndedMs?: number;
 }): boolean {
   const s = task.user_status;
-  if (!s || s.state !== 'needs' || s.source !== 'session' || !s.ask) return false;
+  if (!s || s.state !== 'needs' || s.source !== 'session' || !s.ask || s.snoozed) return false;
   if (task.phase === 'COMPLETE' || task.status === 'done') return false;
-  // Stamped only on an ask the session wrote itself (user-status.ts stampChecked).
-  const checked = Date.parse(s.checkedAt ?? '');
+  // Stamped only on an ask the session wrote itself (user-status.ts stampChecked). A snooze that ran
+  // out since counts as the last look: the user put it away until then (snooze.ts).
+  const stamped = Date.parse(s.checkedAt ?? '');
+  const checked = Number.isFinite(opts.snoozeEndedMs) && opts.snoozeEndedMs! > stamped ? opts.snoozeEndedMs! : stamped;
   if (!Number.isFinite(checked) || opts.nowMs - checked < NEEDS_RECHECK_MS) return false;
   if (opts.notBefore !== undefined && checked < opts.notBefore) return false;
   const last = task.needs_recheck;
@@ -78,6 +83,7 @@ export async function runNeedsRecheck(nowMs = Date.now()): Promise<string[]> {
   try {
     const { listTasks, updateTaskRaw } = await import('../task-manager.js');
     const all = await listTasks();
+    const byId = new Map(all.map((t) => [t.id, t] as const));
     // A team stopped or quieted in one step (team-stop.ts) is not woken by a timer until it is resumed.
     const quieted = new Set(all.flatMap((t) => (t.team_stop?.members ?? []).map((m) => m.id)));
     for (const task of all) {
@@ -91,7 +97,7 @@ export async function runNeedsRecheck(nowMs = Date.now()): Promise<string[]> {
       if (task.plugin_only || task.user_status?.state !== 'needs' || task.user_status.source !== 'session') continue;
       // A trigger of the task does not exempt it (it watches the task, maybe not this ask), unless
       // the session armed it to watch this ask (trigger_create watches:"ask", recheck-watch.ts).
-      if (!recheckDue(task, { nowMs, ...(ephemeral ? { notBefore: startedAt } : {}) })) continue;
+      if (!recheckDue(task, { nowMs, snoozeEndedMs: snoozeEndedMs(task, byId, nowMs), ...(ephemeral ? { notBefore: startedAt } : {}) })) continue;
       if (quieted.has(task.id)) continue;
       if (task.recheck_watch?.length) {
         const { liveTriggerIds, watchedBy } = await import('./recheck-watch.js');

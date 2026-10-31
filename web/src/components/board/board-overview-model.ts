@@ -8,7 +8,8 @@
  * group, by the first rule that holds:
  *
  *   Done     the task is complete
- *   Needs you a permission prompt, then a session error, then NEED_ACTION, then
+ *   Needs you a permission prompt, then a session error, then a task whose user
+ *            status needs the user (NEED_ACTION when not derived yet), then
  *            unread output (the last two only while no turn runs), then a board
  *            signal (an unanswered choice, a due reminder, a thread with a new
  *            message) for the task, running or not
@@ -31,9 +32,10 @@
 import type { Task } from '@open-walnut/core';
 import type { BoardChoice, BoardMessage, BoardProject, BoardProjectStatus, BoardReminder, BoardSeen } from './board-model';
 import { reminderDue } from './board-items-model';
-import { PHASE_LABELS, deriveDisplayStatus, resolveTaskSessionId, taskCircleClass } from '@/utils/session-status';
+import { PHASE_LABELS, deriveDisplayStatus, resolveTaskSessionId, taskCircleClass, taskNeedsAction, taskUserState } from '@/utils/session-status';
 import { subtaskPlaceLabel, subtasksOf } from '@/components/tasks/subtask-index';
 import type { ProcessStatus } from '@/types/session';
+import { USER_STATE_LABELS } from '@open-walnut/user-status';
 
 /** Levels walked below the owner. Sessions nest at most 3 (MAX_SUBTASK_DEPTH); humans may nest deeper. */
 export const TEAM_DEPTH_CAP = 8;
@@ -60,7 +62,7 @@ export const REASON_RANK: Record<NeedReason, number> = {
 
 export const GROUP_ORDER: readonly OverviewGroupId[] = ['needs', 'running', 'open', 'done'];
 export const GROUP_LABELS: Record<OverviewGroupId, string> = {
-  needs: 'Needs you', running: 'Running', open: 'Open', done: 'Done',
+  needs: USER_STATE_LABELS.needs, running: 'Running', open: 'Open', done: USER_STATE_LABELS.done,
 };
 
 export interface TeamMember {
@@ -309,23 +311,31 @@ export function describeTask(
     done ? task.completed_at : null,
   ) || task.updated_at || '';
 
-  if (done) return { group: 'done', reason: null, badge: { label: 'Done', tone: 'green' }, now: '', at, running: false };
+  if (done) return { group: 'done', reason: null, badge: { label: USER_STATE_LABELS.done, tone: 'green' }, now: '', at, running: false };
 
-  const badge: RowBadge = display === 'waiting' ? { label: 'Waiting', tone: 'red' }
+  // The one user state decides "needs you", never the phase alone: a snoozed NEED_ACTION task
+  // reads Waiting (src/core/user-status.ts). The phase is the fallback for a task not derived yet.
+  const needsYou = taskNeedsAction(task);
+  const userState = taskUserState(task);
+  // A live prompt for the user (a permission, a question) is Needs you, whatever the phase.
+  const badge: RowBadge = display === 'waiting' ? { label: USER_STATE_LABELS.needs, tone: 'red' }
     : display === 'error' ? { label: 'Error', tone: 'red' }
       : display === 'running' ? { label: 'Running', tone: 'green' }
         : task.phase === 'WAITING' ? { label: 'Waiting', tone: 'violet' }
           : display === 'idle' ? { label: 'Idle', tone: 'amber' }
             : display === 'stopped' ? { label: 'Stopped', tone: 'grey' }
-              : {
-                label: PHASE_LABELS[task.phase] ?? task.phase,
-                tone: task.phase === 'NEED_ACTION' ? 'red' : task.phase === 'IN_PROGRESS' ? 'amber' : 'grey',
-              };
+              // A handed-back phase that does not need the user says what it does read.
+              : task.phase === 'NEED_ACTION' && !needsYou
+                ? (userState === 'working' ? { label: 'Working', tone: 'amber' } : { label: 'Waiting', tone: 'violet' })
+                : {
+                  label: PHASE_LABELS[task.phase] ?? task.phase,
+                  tone: needsYou ? 'red' : userState === 'working' ? 'amber' : 'grey',
+                };
 
   let reason: NeedReason | null = null;
   if (display === 'waiting') reason = 'permission';
   else if (display === 'error') reason = 'error';
-  else if (!running && task.phase === 'NEED_ACTION') reason = 'need-action';
+  else if (!running && needsYou) reason = 'need-action';
   else if (!running && task.unread) reason = 'unread';
   else if (signals.length > 0) reason = 'board';
 
@@ -334,7 +344,7 @@ export function describeTask(
   let now = '';
   if (reason === 'permission') now = withBoard(permissionText(tool));
   else if (reason === 'error') now = withBoard(live?.errorMessage?.trim() || 'The session stopped on an error');
-  else if (reason === 'need-action') now = withBoard('Handed back to you');
+  else if (reason === 'need-action') now = withBoard('Needs you');
   else if (reason === 'unread') now = withBoard('New output you have not read');
   else if (reason === 'board') now = running ? `${board} · ${activityText(live?.activity)}` : board;
   else if (running) now = activityText(live?.activity);

@@ -18,6 +18,7 @@ import { StatusBadge } from '@/components/common/StatusBadge';
 import { TagEditor } from '@/components/tasks/TagEditor';
 import { dateTags } from '../../../src/core/tag-model';
 import { pageTaskId, taskGoneAction, taskHref, type TaskGone } from './task-gone';
+import { familyDotColor } from './task-family-dot';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 import { useEvent } from '@/hooks/useWebSocket';
 import { SessionChatHistory } from '@/components/sessions/SessionChatHistory';
@@ -131,6 +132,9 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
   const storeRow = useStoreTask(taskId);
   /** The store when it actually carries this row (otherwise: write via REST). */
   const sharedStore = store && storeRow ? store : null;
+  // The store's rows lend the parent and child dots their user status (familyDotColor).
+  const storeTasks = store?.tasks;
+  const liveTask = useCallback((id: string) => storeTasks?.find((t) => t.id === id) ?? null, [storeTasks]);
 
   /**
    * The rendered task: store fields over the private detail copy.
@@ -538,10 +542,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
             >
               <span style={{
                 width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                background: parent.status === 'done' ? '#34c759'
-                  : parent.phase === 'IN_PROGRESS' ? '#007aff'
-                  : parent.phase === 'NEED_ACTION' ? 'var(--error)'
-                  : 'var(--text-secondary)',
+                background: familyDotColor(parent, liveTask(parent.id)),
               }} />
               <span style={{ fontSize: '0.9rem' }}>{parent.title}</span>
             </div>
@@ -573,10 +574,7 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
               >
                 <span style={{
                   width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                  background: child.status === 'done' ? '#34c759'
-                    : child.phase === 'IN_PROGRESS' ? '#007aff'
-                    : child.phase === 'NEED_ACTION' ? 'var(--error)'
-                    : 'var(--text-secondary)',
+                  background: familyDotColor(child, liveTask(child.id)),
                   opacity: child.status === 'done' ? 0.6 : 1,
                 }} />
                 <span style={{

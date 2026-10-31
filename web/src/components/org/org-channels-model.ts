@@ -7,7 +7,7 @@
  *                   or approval or failed, or its status (src/core/user-status.ts) says so
  *           working a task in the project is Working
  *           quiet   open work, nothing running (Waiting)
- *           parked  every open task is parked (WAITING)
+ *           parked  every open task is parked (WAITING) or snoozed
  *   order   alert, working, quiet, parked; inside one state the newest first
  *
  * Built from the task store and the org tree (@open-walnut/org-tree), so it
@@ -18,7 +18,7 @@
 import type { Task } from '@open-walnut/core';
 import type { OrgCounts, OrgProjectNode, OrgTaskNode, OrgTree } from '@open-walnut/org-tree';
 import { CEO_LABEL, VP_LABEL, newsItem, newsLine, newsSubject, orgDisplayTitle, projectKey, teamNews, userStateOf, type TeamNewsTask } from '@open-walnut/org-tree';
-import { USER_STATE_LABELS, checkedLine, type UserState, type UserStatus } from '@open-walnut/user-status';
+import { USER_STATE_LABELS, checkedLine, stateCountLabel, type UserState, type UserStatus } from '@open-walnut/user-status';
 
 export type ChannelState = 'alert' | 'working' | 'quiet' | 'parked';
 
@@ -122,12 +122,18 @@ function collectAlerts(ids: readonly string[], byId: ReadonlyMap<string, Task>, 
   return out;
 }
 
-/** `phases`: the row's open tasks. The counts are by the user's status now (src/core/user-status.ts),
- *  whose Waiting also holds a turn that ended and work not started, so "parked" reads the phases. */
-export function channelState(counts: OrgCounts, alerts: readonly OrgAlertView[], phases?: readonly string[]): ChannelState {
+/** A task put away on purpose: parked (WAITING) or snoozed (its start date still to come, which
+ *  the server marks on its status, src/core/user-status.ts). Not every Waiting: the user's status
+ *  Waiting also holds a turn that ended and work not started, which read as quiet. */
+export function isParkedTask(t: Pick<Task, 'phase' | 'user_status'>): boolean {
+  return t.phase === 'WAITING' || !!t.user_status?.snoozed;
+}
+
+/** `parked`: for each of the row's open tasks, whether it is parked (isParkedTask). */
+export function channelState(counts: OrgCounts, alerts: readonly OrgAlertView[], parked?: readonly boolean[]): ChannelState {
   if (alerts.length) return 'alert';
   if (counts.running > 0) return 'working';
-  if (phases ? phases.length > 0 && phases.every((ph) => ph === 'WAITING') : counts.open > 0 && counts.waiting === counts.open) return 'parked';
+  if (parked ? parked.length > 0 && parked.every(Boolean) : counts.open > 0 && counts.waiting === counts.open) return 'parked';
   return 'quiet';
 }
 
@@ -172,7 +178,7 @@ function projectRow(p: OrgProjectNode, byId: ReadonlyMap<string, Task>, probe: A
     contactTitle: lead ? orgDisplayTitle(lead) : p.lead ? orgDisplayTitle({ title: p.lead.title, org_role: 'lead' }) : contact?.title ?? (p.needsLead ? `${name} ${VP_LABEL}` : name),
     isLead: !!p.lead,
     counts: p.counts,
-    state: channelState(p.counts, alerts, nodes.map((n) => n.phase)),
+    state: channelState(p.counts, alerts, nodes.map((n) => isParkedTask(byId.get(n.id) ?? n))),
     alerts,
     needs: alerts.length,
     latest: latest.text,
@@ -242,8 +248,8 @@ export function buildChannels(tree: OrgTree, tasks: readonly Task[], probe: Aler
   const needYou = rows.reduce((n, r) => n + r.needs, 0);
   const working = tree.counts.running;
   const summary = [`${rows.length} ${rows.length === 1 ? VP_LABEL : `${VP_LABEL}s`}`];
-  if (working) summary.push(`${working} working`);
-  if (needYou) summary.push(`${needYou} ${needYou === 1 ? 'needs' : 'need'} you`);
+  if (working) summary.push(stateCountLabel('working', working));
+  if (needYou) summary.push(stateCountLabel('needs', needYou));
   const main: ChannelRow = {
     key: MAIN_KEY,
     kind: 'main',

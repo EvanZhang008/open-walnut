@@ -98,11 +98,16 @@ describe('the words say why', () => {
     expect(deriveUserStatus({ ...base, report: report({ state: 'needs', ask: 'Pick A or B?' }) }, NOW)).toMatchObject({ state: 'needs', ask: 'Pick A or B?' })
     expect(deriveUserStatus({ ...base, openLetter: 'Approve the quota raise' }, NOW)).toMatchObject({ state: 'needs', source: 'letter' })
     expect(deriveUserStatus({ ...base, processStatus: 'error' }, NOW)).toMatchObject({ state: 'needs', source: 'error' })
-    // No lead, or the lead itself: the user, as before.
+    // No lead: the user, as before.
     expect(deriveUserStatus({ ...base, hasLeader: false }, NOW)).toMatchObject({ state: 'needs' })
-    expect(deriveUserStatus({ ...base, isLead: true }, NOW)).toMatchObject({ state: 'needs' })
-    // A turn that only ended (its process alive between turns) is not this.
-    expect(deriveUserStatus({ ...base, processStatus: 'idle' }, NOW)).toMatchObject({ state: 'needs' })
+    // A lead (or Main) with no ask of its own is never a bare Needs you (2026-10-31, the user: "u can
+    // show VP sure, but u need to show what are actually waiting"): it waits on the user's next message.
+    expect(deriveUserStatus({ ...base, isLead: true }, NOW)).toMatchObject({ state: 'waiting', kind: 'you' })
+    expect(deriveUserStatus({ ...base, hasLeader: false, isMain: true, processStatus: 'idle' }, NOW)).toMatchObject({ state: 'waiting', kind: 'you' })
+    // A turn that only ended (its process alive between turns), with no ask: its lead's, too.
+    expect(deriveUserStatus({ ...base, processStatus: 'idle' }, NOW)).toMatchObject({ state: 'waiting', kind: 'lead', waitingOn: expect.stringContaining('without asking you') })
+    // A lead with a real ask still needs the user.
+    expect(deriveUserStatus({ ...base, isLead: true, report: report({ state: 'needs', ask: 'Pick A or B?' }) }, NOW)).toMatchObject({ state: 'needs', ask: 'Pick A or B?' })
   })
 
   it('a report from before the latest phase move lends its words, never its ask', () => {
@@ -185,8 +190,8 @@ describe('counts', () => {
   it('one line, the same everywhere', () => {
     const c = countUserStates([{ state: 'needs' }, { state: 'needs' }, { state: 'working' }, { state: 'waiting' }, { state: 'done' }])
     expect(c).toEqual({ needs: 2, working: 1, waiting: 1, done: 1 })
-    expect(userStatusLine(c)).toBe('2 need you · 1 working · 1 waiting · 1 done')
-    expect(userStatusLine({ needs: 1, working: 0, waiting: 0, done: 0 }, { withDone: false })).toBe('1 needs you · 0 working · 0 waiting')
+    expect(userStatusLine(c)).toBe('2 Needs you · 1 Working · 1 Waiting / snoozed · 1 Completed')
+    expect(userStatusLine({ needs: 1, working: 0, waiting: 0, done: 0 }, { withDone: false })).toBe('1 Needs you · 0 Working · 0 Waiting / snoozed')
   })
 })
 

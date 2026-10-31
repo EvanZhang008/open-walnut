@@ -16,6 +16,7 @@ import { avatarColor, initials, type ChannelRow, type ChannelState, type MovedRo
 import { holdOrder } from './hold-order';
 import { OrgEditableName } from './OrgEditableName';
 import { useOrgSettings } from './useOrgSettings';
+import { stateCountLabel } from '@open-walnut/user-status';
 
 const STATE_LABEL: Record<ChannelState, string> = {
   alert: 'Needs you', working: 'Working', quiet: 'Waiting', parked: 'Waiting',
@@ -54,9 +55,9 @@ function Row({ row, selected, now, onSelect, onMenu }: { row: ChannelRow; select
   // What opening this row lets the user answer: on Main its own asks, not every team's again.
   const own = row.alerts.length;
   const badge = own > 0
-    ? <span className="org-badge is-alert" data-testid="org-channel-badge" title={`${own} ${own === 1 ? 'needs' : 'need'} you`}>{own}</span>
+    ? <span className="org-badge is-alert" data-testid="org-channel-badge" title={stateCountLabel('needs', own)}>{own}</span>
     : row.kind === 'project' && row.counts.running > 0
-      ? <span className="org-badge is-working" data-testid="org-channel-badge" title={`${row.counts.running} working`}>{row.counts.running}</span>
+      ? <span className="org-badge is-working" data-testid="org-channel-badge" title={stateCountLabel('working', row.counts.running)}>{row.counts.running}</span>
       : null;
   return (
     <button

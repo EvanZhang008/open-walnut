@@ -571,7 +571,7 @@ describe('what is left of the team (2026-10-28: count what is open, wake an idle
     await queueSubtaskNotice(completed('a'));
     await flushNow();
     const { text } = delivered();
-    expect(text).toContain('Still open: 3 of your subtasks: "C" (Needs you: Approve the TestFlight build), "B" (Working), "D" (Waiting: A set time: 6 PM).');
+    expect(text).toContain('Still open: 3 of your subtasks: "C" (c, Needs you: Approve the TestFlight build), "B" (b, Working), "D" (d, Waiting: A set time: 6 PM).');
     // Before the closing Next: list, inside the one envelope.
     expect(text.indexOf('Still open:')).toBeLessThan(text.lastIndexOf('\n\nNext:\n'));
     expect(parseSessionEnvelopes(text)).toHaveLength(1);
@@ -604,7 +604,7 @@ describe('what is left of the team (2026-10-28: count what is open, wake an idle
     getChildTasks.mockResolvedValue(Array.from({ length: 11 }, (_, i) => child(`w${i}`, 'IN_PROGRESS', { state: 'working' })));
     await queueSubtaskNotice(completed('a'));
     await flushNow();
-    expect(delivered().text).toMatch(/Still open: 11 of your subtasks: .*"W7" \(Working\), and 3 more\./);
+    expect(delivered().text).toMatch(/Still open: 11 of your subtasks: .*"W7" \(w7, Working\), and 3 more\./);
   });
 
   it('an idle parent is woken once, when the last working subtask completes, with every completion', async () => {
@@ -639,7 +639,7 @@ describe('what is left of the team (2026-10-28: count what is open, wake an idle
     const { text } = delivered();
     expect(text).toContain('(a) completed its task');
     expect(text).not.toContain('(b) stopped');
-    expect(text).toContain('Still open: 1 of your subtasks: "B" (Waiting: Its lead, to read the latest turn).');
+    expect(text).toContain('Still open: 1 of your subtasks: "B" (b, Waiting: Its lead, to read the latest turn).');
   });
 
   it('a subtask parked for good (a standing routine) never keeps its leader from hearing', async () => {
@@ -661,7 +661,7 @@ describe('what is left of the team (2026-10-28: count what is open, wake an idle
     const { text } = delivered();
     expect(text).toContain('(a) completed its task');
     expect(text).toContain('ERROR: boom');
-    expect(text).toContain('"B" (Working)');
+    expect(text).toContain('"B" (b, Working)');
   });
 
   it('held completions ride the parent\'s next turn, whatever starts it', async () => {
@@ -675,7 +675,7 @@ describe('what is left of the team (2026-10-28: count what is open, wake an idle
     bus.emit(EventNames.SESSION_STATUS_CHANGED, { sessionId: PARENT_SID, taskId: 'parent-1', process_status: 'running' }, ['*']);
     await vi.waitFor(() => expect(sendMessageToSession).toHaveBeenCalledTimes(1));
     expect(delivered().text).toContain('(a) completed its task');
-    expect(delivered().text).toContain('"B" (Working)');
+    expect(delivered().text).toContain('"B" (b, Working)');
     expect(await heldParents()).toEqual([]);
   });
 

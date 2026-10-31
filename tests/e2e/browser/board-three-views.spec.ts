@@ -140,7 +140,7 @@ test('Status is the default; its states and counts are the stored status, the Or
   // A turn that ended with nothing asked is waiting, never needs you: the idle cards are not in the count.
   for (const id of team.idle) expect(shown[id]).not.toBe('needs')
   expect(await chipCount(pane, 'needs')).toBe(3)
-  await expect(pane.getByTestId('board-status-brief')).toContainText('3 need you:')
+  await expect(pane.getByTestId('board-status-brief')).toContainText('3 Needs you:')
 
   // The Org page counts the same project the same way.
   const reports = await call<{ rows: Array<{ project?: string; needs_you: number; running: number }> }>(api, 'GET', '/api/v1/org/reports')

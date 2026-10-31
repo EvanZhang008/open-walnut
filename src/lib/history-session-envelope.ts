@@ -471,6 +471,11 @@ function parseAttrs(list: string): Record<string, string> {
  * suffix IS a session-id prefix; Claude Code's `name [ref]` is NOT one, so that
  * shape deliberately does not come through here.
  */
+/** The name people read for a sender: Walnut itself ("Walnut", "Walnut: re-check") is "System". */
+export function systemSender(from: string | undefined): string | undefined {
+  return from && /^Walnut(?=$|:)/.test(from) ? from.replace(/^Walnut/, 'System') : from;
+}
+
 function splitHandle(handle: string | undefined): { title?: string; shortId?: string } {
   if (!handle) return {};
   const m = HANDLE.exec(handle);
@@ -534,7 +539,9 @@ function parseWalnutTag(text: string, at: number): ParseAt | 'broken' {
   // App state comes from a plugin App (`from` is its name) and is ABOUT a task;
   // `title` is its one-line summary and the whole body is what the model read.
   const appState = kind === 'app-state';
-  const handle = notify ? attrs.about : attrs.from;
+  // Walnut's own notices and checks are the program, not a person or a task: people read them as
+  // "System" (2026-10-30, the user: "just call it system?"). The wire keeps from="Walnut".
+  const handle = notify ? attrs.about : trigger ? systemSender(attrs.from) : attrs.from;
   const sessionId = notify ? attrs['about-session'] : attrs['from-session'];
   const taskId = notify || appState ? attrs['about-task'] : attrs['from-task'];
   const peer: SessionEnvelopePeer = attrs.anonymous === 'true'
@@ -756,8 +763,8 @@ export function envelopeDirectionLabel(
   switch (kind) {
     case 'reply': return 'Reply from session';
     case 'peer-note': return 'Message from another session';
-    case 'notification': return 'Walnut notification';
-    case 'reply-request': return 'Walnut asked you to reply';
+    case 'notification': return 'System notification';
+    case 'reply-request': return 'System asked you to reply';
     case 'trigger': return 'Trigger fired';
     case 'app-state': return 'App state';
   }

@@ -7,7 +7,7 @@
 import { useState, type DragEvent, type ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
 import { teamNews, type OrgTaskNode, type TeamNewsItem, type TeamNewsTask } from '@open-walnut/org-tree';
-import { USER_STATE_LABELS } from '@open-walnut/user-status';
+import { USER_STATE_LABELS, stateCountLabel } from '@open-walnut/user-status';
 import type { VpProject } from './org-chart-model';
 
 /** Tasks shown before "Show all". */
@@ -39,7 +39,7 @@ export function projectTasks(project: VpProject, byId: ReadonlyMap<string, Task>
   return out;
 }
 
-const needsTitle = (n: number) => `${n} ${n === 1 ? 'needs' : 'need'} you`;
+const needsTitle = (n: number) => stateCountLabel('needs', n);
 
 interface Props {
   project: VpProject;

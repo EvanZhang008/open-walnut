@@ -51,6 +51,8 @@ defineOp({
     + 'A task answering another task\'s request (Main, a lead) sends its result in its reply to that task, '
     + 'which tells the user; a report letter (info, completion, review) about that work is refused (409, '
     + 'the request named) unless the user themself asked this task for a letter or report (user_asked:true). '
+    + 'A letter from or about a snoozed task (start date still to come) is refused (409 task_snoozed) unless '
+    + 'snooze_reason says why it cannot wait for that date. '
     + 'Writing standard: one phone screen, background in 1-2 sentences, then the point; '
     + 'self-contained (never "see the session"); link long artifacts by path instead of pasting them. '
     + 'Body is markdown (usual choice) or self-contained html with inline styles, exactly one of the two. '
@@ -84,6 +86,9 @@ defineOp({
     user_asked: z.boolean().optional().describe(
       'The user themself asked this task for this letter or report. Only then does a report letter go out '
       + 'while this task answers another task\'s request'),
+    snooze_reason: z.string().optional().describe(
+      'Required when this task, or one in task_refs, is snoozed (its start date is still to come): one line '
+      + 'the user reads saying why this cannot wait for that date. It leads the letter'),
   },
   bind: { method: 'POST', path: '/human-inbox' },
   mapResult: ({ body }) => ({

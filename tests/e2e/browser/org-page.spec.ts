@@ -117,8 +117,8 @@ test('the sidebar opens Main and the leads; a lead waiting on the user comes fir
   await expect(detail.getByTestId('org-detail-counts')).toContainText('2 open')
   // The one user status's words (src/core/user-status.ts), as on the Board: the question needs
   // the user, the task not started waits.
-  await expect(detail.getByTestId('org-detail-counts')).toContainText('1 needs you')
-  await expect(detail.getByTestId('org-detail-counts')).toContainText('1 waiting')
+  await expect(detail.getByTestId('org-detail-counts')).toContainText('1 Needs you')
+  await expect(detail.getByTestId('org-detail-counts')).toContainText('1 Waiting / snoozed')
   const askRow = detail.locator(`[data-testid="org-alert"][data-task-id="${ids.ask}"]`)
   await expect(askRow.getByTestId('org-alert-link')).toHaveText(`Alpha ask ${STAMP}`)
   await expect(askRow.locator('.org-alert-ask')).toHaveText('Asks you a question')
@@ -282,7 +282,7 @@ test('a task whose Board asks the user to choose needs them: its row, its line, 
   await expect(r.getByTestId('org-channel-latest')).toHaveText(/^Needs you: \S/)
   await expect(r.getByTestId('org-channel-latest')).toHaveAttribute('title', new RegExp(`^Renewal ${STAMP}: Needs you: `))
   await r.click()
-  await expect(page.getByTestId('org-detail-counts')).toContainText('1 needs you')
+  await expect(page.getByTestId('org-detail-counts')).toContainText('1 Needs you')
   // Listed on its own chat too: the chat does not show a Board's choice.
   await expect(page.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
   const alert = page.getByTestId('org-alert').filter({ hasText: `Renewal ${STAMP}` })

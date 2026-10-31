@@ -11,7 +11,10 @@ import type { Task } from '@open-walnut/core';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import * as ICONS from '../common/Icons';
 import { isHiddenFromTaskLists } from '@open-walnut/org-tree';
-import { projectRuns, sortSectionTasks, stateSectionOf } from '../tasks/status-sections';
+import { projectRuns, sortSectionTasks } from '../tasks/status-sections';
+import { isDeferredByStart } from '../tasks/task-date-filter';
+import { taskUserState } from '@/utils/session-status';
+import { stateCountLabel } from '@open-walnut/user-status';
 import '@/styles/status-sections.css';
 
 /** Lines before "N more projects": the ones that need the user sort first. */
@@ -21,12 +24,14 @@ interface ProjectLine { project: string; needs: Task[]; working: Task[]; waiting
 
 export function projectLines(tasks: readonly Task[]): ProjectLine[] {
   const now = Date.now();
-  const snoozed = (t: Task) => !!t.start_date && new Date(t.start_date).getTime() > now;
+  // The one user state (a snoozed task is never "needs"); the start date, inherited and read
+  // as local midnight (isDeferredByStart), only for a task the server has not derived yet.
+  const all = tasks as Task[];
   const open = tasks.filter((t) => t.status !== 'done' && t.phase !== 'COMPLETE' && !isHiddenFromTaskLists(t));
   const lines = projectRuns(sortSectionTasks('needs', open)).map(({ project, tasks: rows }) => {
     const line: ProjectLine = { project, needs: [], working: [], waiting: 0 };
     for (const t of rows) {
-      const s = stateSectionOf(t, snoozed);
+      const s = taskUserState(t, !t.user_status && isDeferredByStart(t, all, now));
       if (s === 'needs') line.needs.push(t);
       else if (s === 'working') line.working.push(t);
       else if (s === 'waiting') line.waiting += 1;
@@ -47,12 +52,12 @@ export function InboxProjectStrip() {
     <section className="inbox-project-strip" aria-label="Projects" data-testid="inbox-project-strip">
       <div className="inbox-project-strip-head">
         <span>Projects</span>
-        <span className="inbox-project-strip-sum">{pending} {pending === 1 ? 'needs' : 'need'} you</span>
+        <span className="inbox-project-strip-sum">{stateCountLabel('needs', pending)}</span>
       </div>
       {(all ? lines : lines.slice(0, STRIP_LINES)).map((l) => {
         const isOpen = openProject === l.project;
         const rows = l.needs.length ? l.needs : l.working;
-        const title = `${l.needs.length} need you, ${l.working.length} working, ${l.waiting} waiting or snoozed`;
+        const title = [stateCountLabel('needs', l.needs.length), stateCountLabel('working', l.working.length), stateCountLabel('waiting', l.waiting)].join(', ');
         return (
           <div key={l.project} className={`inbox-project-line${l.needs.length ? ' has-needs' : ''}`}>
             <button type="button" className="inbox-project-line-btn" aria-expanded={isOpen} title={title}

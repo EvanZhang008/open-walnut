@@ -47,6 +47,8 @@ let firstSweep: ReturnType<typeof setTimeout> | null = null;
 /** Ephemeral only: waits that began before this are copied, not this server's. */
 let bootedAt: number | null = null;
 
+// A snoozed worker (snooze.ts) still wakes its lead: a snooze keeps the user from being reminded, it does
+// not stop the team's own work (a lead's start date snoozes every worker under it that has none).
 const waitsOnItsLead = (t: Pick<Task, 'parent_task_id' | 'phase' | 'user_status'>) =>
   !!t.parent_task_id && t.phase !== 'COMPLETE' && t.user_status?.state === 'waiting' && t.user_status.kind === 'lead';
 

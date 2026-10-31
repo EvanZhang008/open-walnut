@@ -65,7 +65,7 @@ describe('status line (C15, C57)', () => {
     const handed = withSession({ phase: 'NEED_ACTION', last_session_update: ago(2 * HOUR) });
     const card: BoardCard = { handed_back_at: ago(HOUR) };
     const h = vm(handed, { process_status: 'idle', statusUpdatedAt: ago(50 * MIN) }, { card });
-    expect([h.status.text, h.status.tone, h.needsYou]).toEqual(['Needs you: handed back', 'red', true]);
+    expect([h.status.text, h.status.tone, h.needsYou]).toEqual(['Needs you', 'red', true]);
     // A message after the hand back: the next turn end is a plain one again.
     const again = vm({ ...handed, last_session_update: ago(30 * MIN) }, { process_status: 'idle' }, { card });
     expect(again.status.kind).toBe('turn-ended');
@@ -101,8 +101,8 @@ describe('status line (C15, C57)', () => {
     expect(vm(withSession(), { process_status: 'running' }).status.text).toBe('Working');
     expect(vm(mkTask({ phase: 'WAITING', wait_until: new Date(NOW + DAY).toISOString() })).status).toMatchObject({ text: 'Waiting until Fri 9:00', tone: 'violet' });
     expect(vm(mkTask({ phase: 'WAITING' })).status.text).toBe('Waiting');
-    expect(vm(mkTask({ phase: 'COMPLETE', completed_at: ago(2 * DAY) })).status).toMatchObject({ text: 'Done 2d ago', tone: 'green' });
-    expect(vm(mkTask({ phase: 'COMPLETE', completed_at: ago(5_000) })).status.text).toBe('Done just now');
+    expect(vm(mkTask({ phase: 'COMPLETE', completed_at: ago(2 * DAY) })).status).toMatchObject({ text: 'Completed 2d ago', tone: 'green' });
+    expect(vm(mkTask({ phase: 'COMPLETE', completed_at: ago(5_000) })).status.text).toBe('Completed just now');
     expect(vm(withSession(), { process_status: 'idle', statusUpdatedAt: ago(2 * HOUR) }).status).toMatchObject({ text: 'Idle 2h ago', tone: 'amber' });
     expect(vm(withSession(), { process_status: 'stopped' }).status).toMatchObject({ text: 'Stopped', tone: 'grey' });
     expect(vm(mkTask({ phase: 'TODO' })).status).toMatchObject({ text: 'No session', tone: 'grey', kind: 'no-session' });

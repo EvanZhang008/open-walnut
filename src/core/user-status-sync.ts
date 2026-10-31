@@ -24,6 +24,7 @@ import { bootPolicy } from './boot-policy.js';
 import { deriveUserStatus, HANDED_BACK_ASK, type UserStatus, type UserStatusInput } from './user-status.js';
 import { isReportPending, onReportPendingChange } from './sessions/report-pending.js';
 import type { Task } from './types.js';
+import { snoozedUntil } from './snooze.js';
 
 const SUBSCRIBER = 'user-status-sync';
 const OWN_SOURCE = 'user-status';
@@ -75,6 +76,8 @@ export interface StatusFacts {
   teamStopped?: Map<string, string>;
   /** Project keys (trimmed, lower case) that have an open lead (filled by syncUserStatuses). */
   projectLeads?: Set<string>;
+  /** Every task by id, for what a task takes from its ancestors (a snooze, snooze.ts). */
+  tasksById?: ReadonlyMap<string, Task>;
   /** Session id -> its newest parked message (never delivered): why, and when it was parked. */
   undelivered?: Map<string, { reason: string; at: string }>;
 }
@@ -297,7 +300,7 @@ export async function readStatusFacts(tasks: readonly Task[], allIds: readonly s
 const UNDELIVERED_SLACK_MS = 60_000;
 
 /** The input deriveUserStatus takes for one task, from the facts. Exported for tests. */
-export function statusInputOf(task: Task, facts: StatusFacts): UserStatusInput {
+export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()): UserStatusInput {
   const own = (facts.sessionsOf.get(task.id) ?? [])
     .map((sid) => [sid, facts.sessions.get(sid)] as const)
     .filter((e): e is readonly [string, NonNullable<ReturnType<typeof facts.sessions.get>>] => !!e[1] && !e[1].archived);
@@ -351,6 +354,7 @@ export function statusInputOf(task: Task, facts: StatusFacts): UserStatusInput {
     dueDate: task.due_date ?? null,
     checkRanAt: facts.checks?.get(task.id) ?? null,
     teamStoppedAt: facts.teamStopped?.get(task.id) ?? null,
+    snoozedUntil: snoozedUntil(task, facts.tasksById, nowMs),
   };
 }
 
@@ -392,20 +396,13 @@ function recheckAt(taskId: string, atMs: number): void {
   settleTimers.set(taskId, t);
 }
 
-/**
- * Derive and store the status of the given open tasks (all of them when `ids` is null).
- * Returns how many changed. A finished task is never written: every reader reads COMPLETE
- * as Done first, and a write to a COMPLETE row would announce it as completed again
- * (updateTaskRaw names the event by the phase), waking every completion listener.
- */
-export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = Date.now()): Promise<number> {
-  const { listTasks, updateTaskRaw } = await import('./task-manager.js');
-  const everything = await listTasks();
-  const targets = everything.filter((t) => (ids ? ids.has(t.id) : true) && t.phase !== 'COMPLETE' && t.status !== 'done');
-  if (!targets.length) return 0;
-  const facts = await readStatusFacts(targets, everything.map((t) => t.id));
+/** The facts a pass derives from the whole task list, beside the ones readStatusFacts reads:
+ *  the tasks by id, their open workers, team stops and project leads. Exported for the standing
+ *  check (status-consistency.ts), which derives exactly as a pass does. */
+export function completeStatusFacts(facts: StatusFacts, everything: readonly Task[]): void {
   // Name the task a reply is awaited from even when it is not in this pass.
   for (const t of everything) if (!facts.titles.has(t.id)) facts.titles.set(t.id, t.title);
+  facts.tasksById = new Map(everything.map((t) => [t.id, t] as const));
   facts.openWorkers = new Map();
   for (const t of everything) {
     if (!t.parent_task_id || t.phase === 'COMPLETE' || t.status === 'done') continue;
@@ -422,9 +419,24 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
       if (key) facts.projectLeads.add(key);
     }
   }
+}
+
+/**
+ * Derive and store the status of the given open tasks (all of them when `ids` is null).
+ * Returns how many changed. A finished task is never written: every reader reads COMPLETE
+ * as Done first, and a write to a COMPLETE row would announce it as completed again
+ * (updateTaskRaw names the event by the phase), waking every completion listener.
+ */
+export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = Date.now()): Promise<number> {
+  const { listTasks, updateTaskRaw } = await import('./task-manager.js');
+  const everything = await listTasks();
+  const targets = everything.filter((t) => (ids ? ids.has(t.id) : true) && t.phase !== 'COMPLETE' && t.status !== 'done');
+  if (!targets.length) return 0;
+  const facts = await readStatusFacts(targets, everything.map((t) => t.id));
+  completeStatusFacts(facts, everything);
   let changed = 0;
   for (const task of targets) {
-    const input = statusInputOf(task, facts);
+    const input = statusInputOf(task, facts, nowMs);
     const next = deriveUserStatus(input, nowMs);
     if (sameStatus(task.user_status, next)) continue;
     const settlesAt = handBackSettlesAt(task, next, nowMs, !!input.hasSession);

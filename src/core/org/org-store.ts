@@ -653,13 +653,16 @@ async function orgAlerts(tasks: readonly OrgTaskLike[], nowMs: number): Promise<
   for (const r of await listSessionsForTasks(new Set(), new Set(bySession.keys()))) {
     const task = bySession.get(r.claudeSessionId);
     if (!task || seen.has(task.id)) continue;
-    const base = { project: (task.project ?? '').trim(), title: task.title };
+    const base = { project: (task.project ?? '').trim(), taskId: task.id, title: task.title };
     const ask = r.pendingPermission;
     if (ask) {
       const question = ask.toolName === 'AskUserQuestion';
       alerts.push({ ...base, key: `ask:${task.id}:${ask.requestId}`, kind: question ? 'question' : 'permission', ...(!question && ask.toolName ? { tool: ask.toolName } : {}) });
       seen.add(task.id);
     } else if (r.process_status === 'error') {
+      // A snoozed task's failure waits for its date like any other ask (snooze.ts): the derived
+      // status reads it Waiting, so Main does not raise it either. A live prompt above still does.
+      if (task.user_status?.snoozed) { seen.add(task.id); continue; }
       // One key per failure: the transition into 'error' (newest first), so a failed session
       // written as failed again is no news and a second failure after a resume is.
       const entry = r.status_history?.[0]?.process_status === 'error' ? r.status_history[0] : undefined;

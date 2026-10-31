@@ -84,7 +84,7 @@ describe('describeTask', () => {
   it('a pending permission prompt is Needs you first, Waiting in red, the tool named', () => {
     const t = withSession('p', { phase: 'IN_PROGRESS' });
     const s = describeTask(t, live({ process_status: 'running', pendingPermissionTool: 'Bash' }), []);
-    expect(s).toMatchObject({ group: 'needs', reason: 'permission', badge: { label: 'Waiting', tone: 'red' }, now: 'Waiting for approval: Bash' });
+    expect(s).toMatchObject({ group: 'needs', reason: 'permission', badge: { label: 'Needs you', tone: 'red' }, now: 'Waiting for approval: Bash' });
     // The record can say idle while a question sits unanswered (deriveDisplayStatus).
     expect(describeTask(t, live({ process_status: 'idle', pendingPermissionTool: 'AskUserQuestion' }), []).now).toBe('Asked you a question');
     expect(describeTask(t, live({ process_status: 'running', pendingPermissionTool: 'ExitPlanMode' }), []).now).toBe('Plan waiting for your approval');
@@ -105,7 +105,7 @@ describe('describeTask', () => {
   it('NEED_ACTION and unread need you only while no turn runs', () => {
     const handed = withSession('n', { phase: 'NEED_ACTION', unread: true });
     expect(describeTask(handed, live({ process_status: 'idle' }), [])).toMatchObject({
-      group: 'needs', reason: 'need-action', badge: { label: 'Idle', tone: 'amber' }, now: 'Handed back to you',
+      group: 'needs', reason: 'need-action', badge: { label: 'Idle', tone: 'amber' }, now: 'Needs you',
     });
     const unread = withSession('u', { phase: 'IN_PROGRESS', unread: true });
     expect(describeTask(unread, live({ process_status: 'stopped' }), [])).toMatchObject({ reason: 'unread', now: 'New output you have not read' });
@@ -122,6 +122,21 @@ describe('describeTask', () => {
     expect(describeTask(task('t'), live({ process_status: 'running' }), []).group).toBe('open');
   });
 
+  it('reads the user status over the phase: a snoozed NEED_ACTION task is not Needs you', () => {
+    const snoozed = { state: 'waiting', kind: 'time', waitingOn: 'Snoozed until 2026-11-13', snoozed: { until: '2026-11-13' } } as Task['user_status'];
+    expect(describeTask(task('s', { phase: 'NEED_ACTION', user_status: snoozed }), null, [])).toMatchObject({
+      group: 'open', reason: null, badge: { label: 'Waiting', tone: 'violet' },
+    });
+    expect(describeTask(withSession('s', { phase: 'NEED_ACTION', user_status: snoozed }), live({ process_status: 'idle' }), [])).toMatchObject({
+      group: 'open', reason: null, badge: { label: 'Idle' },
+    });
+    // No status yet: the phase still decides.
+    expect(describeTask(withSession('n', { phase: 'NEED_ACTION' }), live({ process_status: 'idle' }), [])).toMatchObject({ group: 'needs', reason: 'need-action' });
+    // A status that needs the user does, whatever the phase.
+    const letter = { state: 'needs', source: 'letter', ask: 'Pick a date' } as Task['user_status'];
+    expect(describeTask(task('l', { phase: 'TODO', user_status: letter }), null, [])).toMatchObject({ group: 'needs', badge: { label: 'To Do', tone: 'red' } });
+  });
+
   it('WAITING is Open, violet, with its wait-until', () => {
     const w = withSession('w', { phase: 'WAITING', wait_until: '2026-10-05T09:00:00.000Z' });
     expect(describeTask(w, live({ process_status: 'idle' }), [], fmt)).toMatchObject({
@@ -130,9 +145,9 @@ describe('describeTask', () => {
     expect(describeTask(task('w2', { phase: 'WAITING' }), null, [], fmt).now).toBe('Until something happens');
   });
 
-  it('done is Done whatever the session says', () => {
+  it('done is Completed whatever the session says', () => {
     const d = withSession('d', { phase: 'COMPLETE', status: 'done', completed_at: ago(5) });
-    expect(describeTask(d, live({ process_status: 'running' }), [])).toMatchObject({ group: 'done', badge: { label: 'Done' }, now: '', at: ago(5) });
+    expect(describeTask(d, live({ process_status: 'running' }), [])).toMatchObject({ group: 'done', badge: { label: 'Completed' }, now: '', at: ago(5) });
   });
 
   it('a board signal puts any task in Needs you, after its own reasons', () => {
@@ -141,7 +156,7 @@ describe('describeTask', () => {
       group: 'needs', reason: 'board', badge: { label: 'Running' }, now: 'Choice on the page: When to purge · Planning',
     });
     expect(describeTask(withSession('r', { phase: 'NEED_ACTION' }), live({ process_status: 'idle' }), sig).now)
-      .toBe('Handed back to you · Choice on the page: When to purge');
+      .toBe('Needs you · Choice on the page: When to purge');
   });
 
   it('the latest status change is the newest of the session, the phase and the last session update', () => {

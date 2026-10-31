@@ -8,6 +8,7 @@
 import type { KanbanChipId, KanbanFilterKey } from './kanban-contract';
 import type { KanbanCardVM } from './kanban-card-model';
 import { clockText } from './kanban-time';
+import { USER_STATE_LABELS } from '@open-walnut/user-status';
 
 type ChipCard = Pick<KanbanCardVM, 'needsYou' | 'sev' | 'laneKind' | 'foot' | 'changed' | 'running' | 'isComplete' | 'loading'>;
 
@@ -56,7 +57,7 @@ export function sevChipShown(cards: readonly Pick<KanbanCardVM, 'sev' | 'laneKin
 }
 
 const CHIP_LABELS: Record<KanbanFilterKey, string> = {
-  needs: 'Needs you', sev1: 'Sev 1', stale: 'Stale', changed: 'Changed', running: 'Running', 'still-open': 'Task still open',
+  needs: USER_STATE_LABELS.needs, sev1: 'Sev 1', stale: 'Stale', changed: 'Changed', running: 'Running', 'still-open': 'Task still open',
 };
 
 /** N15: `1 card`, `N cards`. */

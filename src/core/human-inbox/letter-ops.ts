@@ -19,6 +19,7 @@ import { createHash } from 'node:crypto';
 import { log } from '../../logging/index.js';
 import { bus } from '../event-bus.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
+import { admitSnoozedLetter } from './snooze-letter.js';
 import {
   answerLetter,
   findLetterByOp,
@@ -176,6 +177,11 @@ export async function sendLetterAsCallerOnce(
       throw new LetterError(replyInsteadMessage(hit), 'reply_instead', 409);
     }
   }
+  // A snoozed task is not raised before its date unless the session says why or the user asked
+  // for the letter (snooze-letter.ts). A host's journal op is never refused on the way in, as a
+  // report above: it was written while the server was away and the host holds no snooze check.
+  if (!opts.opKey && input.userAsked !== true && input.user_asked !== true) input = await admitSnoozedLetter(input, sender);
+  else { const { snoozeReason: _a, snooze_reason: _b, ...rest } = input; input = rest; }
   const { guardTriageLetter } = await import('./triage-quota.js');
   const charge = await guardTriageLetter(input, sender);
   let out: { letter: LetterRecord; duplicate: boolean };

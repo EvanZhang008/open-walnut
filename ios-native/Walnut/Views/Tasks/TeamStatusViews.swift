@@ -114,7 +114,8 @@ struct UserStatePill: View {
         let tint = stuck ? Theme.warning : Self.color(state)
         HStack(spacing: 4) {
             if !stuck { Circle().fill(tint).frame(width: dot, height: dot) }
-            Text(stuck ? "Stuck" : state.label)
+            // Stuck keeps the state's own name, in the warning colour (its words say why).
+            Text(state.label)
                 .lineLimit(1)
         }
         .font(.caption.weight(.semibold))

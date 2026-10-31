@@ -31,8 +31,8 @@ describe('org chart cards', () => {
   it('one card per project, named after it, the Inbox last and no one\'s VP', () => {
     const cards = cardsOf([...garden, ...seeds, ...inbox, gardenLead, seedsLead])
     expect(cards.map((c) => [c.name, c.role, c.projects.length])).toEqual([['Garden', 'VP', 1], ['Seeds', 'VP', 1], ['Inbox', 'Inbox', 1]])
-    expect(cards.find((c) => c.name === 'Garden')!.line).toBe('1 working · 1 waiting')
-    expect(ceoLine(cards)).toBe('2 VPs · 2 working')
+    expect(cards.find((c) => c.name === 'Garden')!.line).toBe('1 Working · 1 Waiting / snoozed')
+    expect(ceoLine(cards)).toBe('2 VPs · 2 Working')
   })
 
   it('a project under another VP joins that VP\'s card and keeps its own line', () => {
@@ -40,10 +40,10 @@ describe('org chart cards', () => {
     const cards = cardsOf([...garden, ...seeds, ...inbox, vp, { ...seedsLead, phase: 'COMPLETE' as const }])
     const g = cards.find((c) => c.name === 'Garden')!
     // Seeds' task not started yet is Waiting (src/core/user-status.ts), as on the Board.
-    expect(g.projects.map((p) => [p.name, p.line])).toEqual([['Garden', '1 working · 1 waiting'], ['Seeds', '1 working · 1 waiting']])
-    expect(g.line).toBe('2 projects · 2 working · 2 waiting')
+    expect(g.projects.map((p) => [p.name, p.line])).toEqual([['Garden', '1 Working · 1 Waiting / snoozed'], ['Seeds', '1 Working · 1 Waiting / snoozed']])
+    expect(g.line).toBe('2 projects · 2 Working · 2 Waiting / snoozed')
     expect(cards.some((c) => c.name === 'Seeds')).toBe(false)
-    expect(ceoLine(cards)).toBe('1 VP · 1 working')
+    expect(ceoLine(cards)).toBe('1 VP · 1 Working')
   })
 
   it('a card says its team\'s news in the tasks\' own words with its time, the counts under it', () => {
@@ -53,7 +53,7 @@ describe('org chart cards', () => {
     const one = cardsOf([signed, busy, gardenLead]).find((c) => c.name === 'Garden')!
     expect([one.news, one.newsTask]).toEqual(['The check passed; only your signature is left.', 'Renew the permit'])
     expect(one.newsAt).toBe(Date.parse(at(30)))
-    expect(one.line).toBe('1 working · 1 waiting')
+    expect(one.line).toBe('1 Working · 1 Waiting / snoozed')
     // Several projects on one card: the one that needs the user leads, named.
     const ask = t('Seeds', { phase: 'NEED_ACTION', title: 'Pick a supplier', user_status: { state: 'needs', ask: 'Choose one of two quotes', at: at(5) } as never })
     const vp = { ...gardenLead, org_leads: ['Seeds'] }
@@ -77,7 +77,7 @@ describe('org chart cards', () => {
     cards = cardsOf([...garden, ...seeds, named, { ...seedsLead, phase: 'COMPLETE' as const }, { ...growth, org_leads: ['Seeds'], phase: 'NEED_ACTION' as const }])
     const g2 = cards.find((c) => c.project === 'Growth')!
     expect(g2.projects.map((p) => p.name)).toEqual(['Seeds'])
-    expect(g2.line).toBe('1 working · 1 waiting')
+    expect(g2.line).toBe('1 Working · 1 Waiting / snoozed')
     expect(g2.needsYou).toBe(1)
     // Its own project shows once it has open work.
     cards = cardsOf([...garden, ...seeds, named, seedsLead, growth, t('Growth', { phase: 'IN_PROGRESS' })])

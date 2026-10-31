@@ -24,6 +24,8 @@ const PRODUCERS: Record<string, { file: string; outcome: string | null }> = {
   appState: { file: 'src/core/sessions/app-state.ts', outcome: null },
   waitNote: { file: 'src/core/task-wait-resume.ts', outcome: 'waiting' },
   retiredNote: { file: 'src/core/org/retired-lead.ts', outcome: 'handed-over' },
+  // A request past its deadline, or its reminder, held for the next message (sessions/held-notices.ts).
+  heldNotes: { file: 'src/core/session-requests.ts', outcome: 'timeout' },
 };
 
 describe('the rider list names every note Walnut puts in front of a message', () => {

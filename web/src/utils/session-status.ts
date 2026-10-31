@@ -40,6 +40,23 @@ export function taskNeedsAction(task: Task): boolean {
   return task.phase === 'NEED_ACTION';
 }
 
+export type TaskUserState = 'needs' | 'working' | 'waiting' | 'done';
+
+/**
+ * The one user state of a task on the web: the server's `user_status` (src/core/user-status.ts,
+ * where a snooze, a park and a report are already weighed), else the phase as an older Walnut meant
+ * it (`fallbackUserState`). `snoozed`: the caller's own reading of the start date, used only for a
+ * task the server has not derived yet. Every web surface that says Needs you, Working or Waiting
+ * reads this (tests/core/task-state-ratchet.test.ts).
+ */
+export function taskUserState(task: Pick<Task, 'phase' | 'status' | 'user_status'>, snoozed = false): TaskUserState {
+  if (task.status === 'done' || task.phase === 'COMPLETE') return 'done';
+  if (task.user_status) return task.user_status.state;
+  if (task.phase === 'NEED_ACTION') return snoozed ? 'waiting' : 'needs';
+  // Working stays Working while snoozed, as on the server (user-status.ts snoozeOf).
+  return task.phase === 'IN_PROGRESS' ? 'working' : 'waiting';
+}
+
 /** Color class for the task circle (the clickable To Do ↔ Complete toggle).
  *
  *  THREE colors, deliberately (2026-08-14 user request — the short-lived

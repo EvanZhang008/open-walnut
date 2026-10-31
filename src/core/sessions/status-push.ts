@@ -8,13 +8,16 @@
  * or what it waits on), when. New words alone are no move: a session rewords its ask and its wait
  * at every turn end. Never a model-written report. Who hears it:
  *
- *   - a session holding an unanswered request to the task: always (mid-turn when it runs, else
- *     the line rides its next message, in memory like the place note, never a queue row of its
- *     own: a pending row is re-dispatched on a restart or a host reconnect, which would wake it);
- *   - its leader, its project's VP and Main: when their session is running a turn, mid-turn.
- *     An idle one is not woken: its next message carries the same news already (the lead's team
- *     note, org/team-note.ts; Main's org update; a leader's subtask notices), and the Brief and
- *     the "needs you" list read the live status.
+ *   - a session holding an unanswered request to the task: always;
+ *   - its leader, its project's VP and Main: when their session is running a turn. An idle one
+ *     gets nothing: its next message carries the same news already (the lead's team note,
+ *     org/team-note.ts; Main's org update; a leader's subtask notices), and the Brief and the
+ *     "needs you" list read the live status.
+ *   The line never goes into a session by itself: it rides the session's next message, in memory
+ *   like the place note, never a queue row of its own (a pending row is re-dispatched on a restart
+ *   or a host reconnect, which would wake it). A line written into a running turn landed, often
+ *   as that turn ended, as a turn of its own (2026-10-30: three of Main's turns were an agent-ack
+ *   to a status line that came 0.1 to 5 s after its last words).
  *
  * Settled means it held for SETTLE_MS: a turn that only re-checks a "needs you" and ends where it
  * began is no news, nor is a turn that only started. The first status seen after a start, and every
@@ -23,14 +26,14 @@
 import { log } from '../../logging/index.js';
 import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import type { SessionRecord, Task } from '../types.js';
-import { USER_STATE_LABELS, fallbackUserState, type UserState, type UserStatus } from '../user-status.js';
+import { fallbackUserState, stateWord, type UserState, type UserStatus } from '../user-status.js';
 import { buildWalnutMessage as buildMessage } from '../peers/walnut-message-tag.js';
 
 const SUBSCRIBER = 'status-push';
 export const SETTLE_MS = 90_000;
 const WORDS_MAX = 160;
 
-interface Seen { key: string; label: string; words: string; state: UserState }
+interface Seen { key: string; label: string; words: string; state: UserState; snoozed?: boolean }
 interface Change {
   taskId: string; title: string; from: Seen; to: Seen; at: number;
   /** A re-check turn of a "needs you" runs (sessions/needs-recheck.ts): its Working is not news
@@ -67,8 +70,8 @@ export function seenOf(task: Pick<Task, 'phase' | 'status' | 'user_status'>): Se
   const s: UserStatus | undefined = done ? undefined : task.user_status ?? undefined;
   const state: UserState = done ? 'done' : s?.state ?? fallbackUserState(task.phase, task.status);
   const words = state === 'needs' ? clip(s?.ask) : state === 'waiting' ? clip(s?.waitingOn) : '';
-  const label = USER_STATE_LABELS[state] + (state === 'waiting' && s?.kind && s.kind !== 'other' ? ` (${s.kind === 'you' ? 'on you' : s.kind === 'task' ? 'on another task' : s.kind === 'lead' ? 'on its lead' : s.kind})` : '');
-  return { key: `${state}|${state === 'waiting' ? s?.kind ?? '' : ''}|${words}`, label, words, state };
+  const label = stateWord(state, !!s?.snoozed) + (state === 'waiting' && s?.kind && s.kind !== 'other' ? ` (${s.kind === 'you' ? 'on you' : s.kind === 'task' ? 'on another task' : s.kind === 'lead' ? 'on its lead' : s.kind})` : '');
+  return { key: `${state}|${state === 'waiting' ? s?.kind ?? '' : ''}|${words}`, label, words, state, ...(s?.snoozed ? { snoozed: true } : {}) };
 }
 
 function hhmm(ms: number): string {
@@ -176,7 +179,11 @@ export async function flushStatusPush(now = Date.now()): Promise<number> {
       for (const r of await pendingRequestsForTarget({ taskId: task.id }).catch(() => [])) {
         if (!own.has(r.fromSessionId)) add(r.fromSessionId, null, task.id, line, true);
       }
-      const followers = [task.parent_task_id ? byId.get(task.parent_task_id) : undefined, vpOf(task), main];
+      // Snoozed (snooze.ts): its VP and Main, who bring news to the user, hear nothing of it until the
+      // snooze runs out, when the move out of it is the news. Its leader still hears (the team's own
+      // work goes on), and so does a session waiting on its reply.
+      const parent = task.parent_task_id ? byId.get(task.parent_task_id) : undefined;
+      const followers = c.to.snoozed ? [parent] : [parent, vpOf(task), main];
       for (const f of followers) {
         if (!openTask(f) || f.id === task.id) continue;
         const rec = await liveSession(f.id);
@@ -184,25 +191,15 @@ export async function flushStatusPush(now = Date.now()): Promise<number> {
       }
     }
     const { getSessionByClaudeId } = await import('../session-tracker.js');
-    const { deliverToSession } = await import('./session-send-core.js');
     let sent = 0;
     for (const [sid, slot] of out) {
       const rec = slot.rec ?? await getSessionByClaudeId(sid).catch(() => null);
       if (!rec?.taskId || !openTask(byId.get(rec.taskId))) continue;
       try {
-        if (rec.process_status === 'running') {
-          // Lines it already waits to read go with these, once.
-          const held = riding.get(sid);
-          riding.delete(sid);
-          const lines = new Map([...(held ? [...held].map(([id, v]) => [id, v.line] as const) : []), ...slot.lines]);
-          const text = statusText([...lines.values()]);
-          await deliverToSession(rec, { busText: text, enqueueText: text, source: 'walnut-notify', taskId: rec.taskId });
-        } else if (slot.asker) {
-          // Not running: the lines ride its next message (pendingStatusNote), never a wake.
-          const held = riding.get(sid) ?? new Map<string, { line: string; at: number }>();
-          for (const [id, line] of slot.lines) held.set(id, { line, at: now });
-          riding.set(sid, held);
-        } else continue;
+        // The lines ride its next message (pendingStatusNote), never a turn of their own.
+        const held = riding.get(sid) ?? new Map<string, { line: string; at: number }>();
+        for (const [id, line] of slot.lines) held.set(id, { line, at: now });
+        riding.set(sid, held);
         sent++;
       } catch (err) {
         log.session.warn('status push not delivered', { sessionId: sid, error: err instanceof Error ? err.message : String(err) });

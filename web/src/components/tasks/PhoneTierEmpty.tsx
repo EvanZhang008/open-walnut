@@ -7,14 +7,17 @@
  * callback threaded through the panel. Renders nothing on the desktop.
  */
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import type { Task } from '@open-walnut/core';
+import { taskUserState } from '@/utils/session-status';
 import { useHomeTasksById } from './phone-row-behavior';
 
 export const PHONE_SHOW_SECTION_EVENT = 'phone:show-section';
 
-/** How many open tasks wait on the user (NEED_ACTION). */
-export function countNeedingYou(tasks: Iterable<{ phase?: string; status?: string }>): number {
+/** How many open tasks need the user: their one user status (a snoozed task never does),
+ *  the phase only for a task the server has not derived yet. */
+export function countNeedingYou(tasks: Iterable<Pick<Task, 'phase' | 'status' | 'user_status'>>): number {
   let n = 0;
-  for (const t of tasks) if (t.phase === 'NEED_ACTION' && t.status !== 'done') n++;
+  for (const t of tasks) if (taskUserState(t) === 'needs') n++;
   return n;
 }
 

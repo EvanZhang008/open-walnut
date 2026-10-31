@@ -135,7 +135,10 @@ describe('user status sync', () => {
     const row = after.tasks.find((t) => t.id === choice.id)
     if (row) expect(row.phase).toBe('COMPLETE')
     const org = await v1<{ rows: { project?: string; needs_you: number }[] }>('/org/reports')
-    expect(org.rows.find((r) => (r.project ?? '').toLowerCase() === 'acme')?.needs_you).toBe(1)
+    // The answered letter's task has no ask of its own left: a worker, it waits on its lead (2026-10-31,
+    // the user: no Needs you without a concrete ask), so nothing in Acme needs the user now.
+    expect(org.rows.find((r) => (r.project ?? '').toLowerCase() === 'acme')?.needs_you).toBe(0)
+    expect((await getTask(asks.id)).user_status).toMatchObject({ state: 'waiting', kind: 'lead' })
     bus.unsubscribe('test-status-writes')
   }, 90_000)
 })

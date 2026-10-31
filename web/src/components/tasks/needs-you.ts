@@ -13,6 +13,7 @@
 import type { Task } from '@open-walnut/core';
 import { resolveParentRef } from './task-tree-index';
 import { taskNeedsAction } from '@/utils/session-status';
+import { stateCountLabel } from '@open-walnut/user-status';
 
 export interface NeedsYouOptions {
   /** A live "blocked on a prompt" reading (the session-status store). */
@@ -69,7 +70,7 @@ export function descendantsNeedingYou(task: Task, tasksById: TaskMap, opts?: Nee
 
 /** The parent pill's words: what it counts is in the text (spec: one count, one meaning). */
 export function needYouLabel(n: number): string {
-  return `${n} need you`;
+  return stateCountLabel('needs', n);
 }
 
 /** A map over a task list, for callers that hold an array. */

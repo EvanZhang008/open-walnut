@@ -413,7 +413,7 @@ export class SessionAutoRecover {
   private async giveUp(rec: SessionRecord, reason: string): Promise<void> {
     await this.deps.patchLoss(rec.claudeSessionId, (cur) => cur && { ...cur, state: 'gave_up', reason, revision: rec.statusRevision })
     log.session.warn('restart recovery: gave up', { sessionId: rec.claudeSessionId, taskId: rec.taskId, reason })
-    this.deps.emitNote(rec.claudeSessionId, rec.taskId, `Restart recovery gave up: ${reason}. The task is handed back to you.`)
+    this.deps.emitNote(rec.claudeSessionId, rec.taskId, `Restart recovery gave up: ${reason}. The task needs you now.`)
     if (rec.taskId) {
       const task = await this.deps.getTask(rec.taskId)
       if (task?.phase === 'IN_PROGRESS') await this.deps.handBack(rec.taskId, rec.claudeSessionId)

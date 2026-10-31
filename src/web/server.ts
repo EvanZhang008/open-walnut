@@ -1947,6 +1947,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // A "needs you" nobody checks by script is checked again every few hours (src/core/sessions/needs-recheck.ts).
     const { startNeedsRecheck } = await import('../core/sessions/needs-recheck.js')
     startNeedsRecheck({ ephemeral: IS_EPHEMERAL })
+    // Every open task's stored status against its facts, hourly (src/core/status-consistency.ts).
+    const { startStatusCheck } = await import('../core/status-consistency.js')
+    startStatusCheck({ ephemeral: IS_EPHEMERAL })
   }
 
   // ── The one status the user sees per task (src/core/user-status-sync.ts).
@@ -6538,6 +6541,7 @@ export async function stopServer(): Promise<void> {
   void import('../core/user-status-sync.js').then((m) => m.stopUserStatusSync()).catch(() => { /* never started */ })
   void import('../core/sessions/status-push.js').then((m) => m.stopStatusPush()).catch(() => { /* never started */ })
   void import('../core/sessions/needs-recheck.js').then((m) => m.stopNeedsRecheck()).catch(() => { /* never started */ })
+  void import('../core/status-consistency.js').then((m) => m.stopStatusCheck()).catch(() => { /* never started */ })
   void import('../core/human-inbox/complete-archive.js').then((m) => m.stopCompleteArchive()).catch(() => { /* never started */ })
   void import('../core/org/lead-waits.js').then((m) => m.stopLeadWaits()).catch(() => { /* never started */ })
   bus.unsubscribe('board-store') // BOARD_SUBSCRIBER, core/boards/board-store.ts

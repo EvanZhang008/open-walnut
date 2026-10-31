@@ -17,6 +17,7 @@ import { READ_ONLY_TITLE, type KanbanLaneHeadProps } from './kanban-contract';
 import { KanbanLaneMenu } from './KanbanLaneMenu';
 import { KANBAN_PANE_SELECTOR, emitKanbanToast } from './kanban-toasts';
 import { laneCountText } from './kanban-filter-model';
+import { stateCountLabel } from '@open-walnut/user-status';
 
 /** Why `name` cannot name lane `laneId` ('' = it can). */
 export function laneNameError(lanes: readonly BoardLane[], laneId: string | null, name: string): string {
@@ -99,7 +100,7 @@ export function KanbanLaneHead({ lane: vm, lanes, index, mode, folded, onToggleF
 
   const count = laneCountText(vm.total, shown, vm.openInDone);
   const needs = vm.needs > 0 && (
-    <span className="kanban-lane-needs" data-testid="kanban-lane-needs" aria-label={`${vm.needs} ${vm.needs === 1 ? 'needs' : 'need'} you`} title={`${vm.needs} ${vm.needs === 1 ? 'card needs' : 'cards need'} you`}>{vm.needs}</span>
+    <span className="kanban-lane-needs" data-testid="kanban-lane-needs" aria-label={stateCountLabel('needs', vm.needs)} title={`${vm.needs} ${vm.needs === 1 ? 'card needs' : 'cards need'} you`}>{vm.needs}</span>
   );
   const nameEl = renaming ? (
     <span className="kanban-lane-rename">

@@ -176,6 +176,13 @@ export async function readLastTurn(
 }
 
 /** Whether the asking session's task is COMPLETE. Unknown counts as not. */
+/** A request still unanswered (pending, or past its deadline and open): a held notice of it still holds. */
+async function requestStillOpen(id: string): Promise<boolean> {
+  const { getSessionRequest } = await import('../session-requests.js');
+  const row = await getSessionRequest(id).catch(() => null);
+  return !!row && (row.status === 'pending' || row.status === 'expired');
+}
+
 async function askerTaskIsComplete(fromSessionId: string): Promise<boolean> {
   try {
     const { getSessionByClaudeId } = await import('../session-tracker.js');
@@ -312,6 +319,20 @@ export async function notifyRequesterFallback(
       ...(handedOn?.length ? { handedOn } : {}),
     });
 
+    // Past its deadline the request stays open and nothing came back: background, riding the
+    // asker's next message, never a turn of its own nor a line into a running one (held-notices.ts),
+    // unless the asker parked on it (WAITING): the deadline is its cue.
+    // Every other outcome is the answer the asker waits for.
+    const askerParked = outcome === 'timeout' && !!origin.taskId
+      && (await (await import('../task-manager.js')).getTask(origin.taskId).catch(() => null))?.phase === 'WAITING';
+    if (outcome === 'timeout' && !askerParked) {
+      const { holdNotice } = await import('./held-notices.js');
+      holdNotice(origin.claudeSessionId, `request-timeout:${request.id}`, text, { validIf: () => requestStillOpen(request.id) });
+      log.session.info('request fallback notification held for the next message (deadline passed)', {
+        requestId: request.id, fromSessionId: request.fromSessionId, toSessionId: origin.claudeSessionId,
+      });
+      return true;
+    }
     const { deliverToSession } = await import('./session-send-core.js');
     const { delivery } = await deliverToSession(origin, {
       busText: text, enqueueText: text, source: 'walnut-notify', taskId: origin.taskId, endsWait: true,
@@ -406,10 +427,13 @@ export async function remindOverdue(now = Date.now()): Promise<number> {
     if (items.length === 0) continue;
     try {
       const text = buildOverdueReminder(items, now);
-      const { deliverToSession } = await import('./session-send-core.js');
-      const { delivery } = await deliverToSession(destination.session, {
-        busText: text, enqueueText: text, source: 'walnut-notify', taskId: destination.session.taskId,
+      // A reminder asks nothing new: it rides the asker's next message (held-notices.ts).
+      const { holdNotice } = await import('./held-notices.js');
+      const ids = items.map((i) => i.request.id);
+      holdNotice(destination.session.claudeSessionId, `overdue:${ids.join(',')}`, text, {
+        validIf: async () => (await Promise.all(ids.map(requestStillOpen))).some(Boolean),
       });
+      const delivery = 'held';
       sent++;
       log.session.info('overdue request reminder delivered', {
         fromSessionId: askerSid, requestIds: items.map((i) => i.request.id), delivery,

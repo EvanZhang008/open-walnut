@@ -74,7 +74,8 @@ export async function currentItemTaskStatus(id: string): Promise<InboxCurrentTas
         : record.process_status === 'running' || record.process_status === 'idle' ? await liveProcessStatus(record)
         : record.process_status === 'error' ? 'error'
         : record.process_status === 'stopped' ? 'stopped' : 'unavailable';
-      if (status === 'idle' && task.phase === 'NEED_ACTION') status = 'waiting_user';
+      // The one user state (user-status.ts): a snoozed task waits on its date, not on the user.
+      if (status === 'idle' && (task.user_status ? task.user_status.state === 'needs' : task.phase === 'NEED_ACTION')) status = 'waiting_user';
     } else if (task.last_start?.state === 'starting') status = 'starting';
     else if (task.last_start?.state === 'failed') status = 'error';
     else if (!task.last_start && sessions.length === 0) status = 'idle';

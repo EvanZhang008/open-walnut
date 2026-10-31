@@ -10,7 +10,7 @@
  */
 import type { Task } from '@open-walnut/core';
 import {
-  USER_STATES, countUserStates, dueAtMs, fallbackUserState,
+  USER_STATES, countUserStates, dueAtMs, fallbackUserState, stateCountLabel,
   type UserState, type UserStatus, type UserStatusCounts, type WaitKind,
 } from '@open-walnut/user-status';
 import { teamChildren, walkTeam } from './board-overview-model';
@@ -103,10 +103,10 @@ export function buildStatusBoard(input: {
   return { counts, groups, doneWindowDays: input.doneWindowDays };
 }
 
-/** A waiting row's one line: "Waiting on another task: …", "Stuck: …", "Not started yet". */
+/** A waiting row's one line: "Waiting on another task: …", "Nothing will wake it. …", "Not started yet". */
 export function waitingLine(status: UserStatus, formatUntil: (iso: string) => string): string {
   const on = (status.waitingOn ?? '').trim();
-  if (status.kind === 'stuck') return `Stuck. ${on || 'Nothing will wake it.'}`;
+  if (status.kind === 'stuck') return on ? `Nothing will wake it. ${on}` : 'Nothing will wake it.';
   if (status.kind === 'not-started') return on || 'Not started yet';
   if (status.kind === 'time' && status.until) return `Waiting until ${formatUntil(status.until)}`;
   const lower = on ? on.charAt(0).toLowerCase() + on.slice(1) : 'something';
@@ -132,11 +132,11 @@ export function statusBrief(board: StatusBoard): StatusBrief {
   };
 }
 
-/** "10 working, 16 waiting (1 stuck, 5 not started), 12 done in the last 7 days." */
+/** "10 Working, 16 Waiting / snoozed (1 with nothing to wake it, 5 not started), 12 Completed in the last 7 days." */
 export function briefCountsLine(b: StatusBrief): string {
-  const extra = [b.stuck ? `${b.stuck} stuck` : '', b.notStarted ? `${b.notStarted} not started` : ''].filter(Boolean).join(', ');
-  const waiting = `${b.counts.waiting} waiting${extra ? ` (${extra})` : ''}`;
-  return `${b.counts.working} working, ${waiting}, ${b.counts.done} done in the last ${b.doneWindowDays} days.`;
+  const extra = [b.stuck ? `${b.stuck} with nothing to wake it` : '', b.notStarted ? `${b.notStarted} not started` : ''].filter(Boolean).join(', ');
+  const waiting = `${stateCountLabel('waiting', b.counts.waiting)}${extra ? ` (${extra})` : ''}`;
+  return `${stateCountLabel('working', b.counts.working)}, ${waiting}, ${stateCountLabel('done', b.counts.done)} in the last ${b.doneWindowDays} days.`;
 }
 
 export type StatusFilter = 'open' | UserState;

@@ -61,6 +61,9 @@ beforeEach(async () => {
 });
 
 const emit = (t: Task) => bus.emit(EventNames.TASK_UPDATED, { task: t }, ['*']);
+/** The followers whose next message carries a status line (it never goes in by itself). */
+const followers = () => ['s-lead', 's-main', 's-vp'].filter((sid) => pendingStatusNote(sid))
+const ride = (sid = 's-lead') => pendingStatusNote(sid)?.text ?? ''
 
 describe('the line', () => {
   it('says who, from what to what, when, and what the user was asked', () => {
@@ -81,17 +84,27 @@ describe('who hears it', () => {
     expect(await flushStatusPush(now + 1000)).toBe(0);
     const sent = await flushStatusPush(Date.now() + SETTLE_MS + 1);
     expect(sent).toBe(3);
-    expect(delivered.map((d) => d.sid).sort()).toEqual(['s-lead', 's-main']);
-    // Never a queue row: a pending row is re-sent on a restart or reconnect, which would wake it.
+    expect(followers()).toEqual(['s-lead', 's-main']);
+    // Never into a session by itself, never a queue row (a pending row is re-sent on a restart or
+    // reconnect): a line written into a running turn often landed as a turn of its own.
+    expect(delivered).toEqual([]);
     expect(queued).toEqual([]);
     const note = pendingStatusNote('s-asker')!;
     expect(note.text).toContain('Needs you → Working');
     note.markTold();
     expect(pendingStatusNote('s-asker')).toBeNull();
-    expect(delivered[0].text).toContain('Needs you → Working');
-    expect(delivered[0].text).toContain('Walnut\'s record, not a report');
+    expect(ride()).toContain('Needs you → Working');
+    expect(ride()).toContain('Walnut\'s record, not a report');
     // The task's own session never hears about itself.
-    expect([...delivered, ...queued].some((d) => d.sid === 's-w')).toBe(false);
+    expect(pendingStatusNote('s-w')).toBeNull();
+  });
+
+  it('a snoozed task: its leader still hears (team work goes on); its VP and Main, who tell the user, do not', async () => {
+    sessions.find((s) => s.claudeSessionId === 's-vp')!.process_status = 'running';
+    emit(task('w', { parent_task_id: 'lead', phase: 'WAITING', user_status: { state: 'waiting', kind: 'time', waitingOn: 'Snoozed until 2026-11-13', snoozed: { until: '2026-11-13' } } }));
+    expect(await flushStatusPush(Date.now() + SETTLE_MS + 1)).toBe(1);
+    expect(followers()).toEqual(['s-lead']);
+    expect(ride()).toContain('Snoozed');
   });
 
   it('a running VP hears it too; a change that settles where it began is no news', async () => {
@@ -102,8 +115,8 @@ describe('who hears it', () => {
     expect(await flushStatusPush(Date.now() + SETTLE_MS + 1)).toBe(0);
     emit(task('w', { parent_task_id: 'lead', phase: 'WAITING', user_status: { state: 'waiting', kind: 'task', waitingOn: 'The review' } }));
     expect(await flushStatusPush(Date.now() + SETTLE_MS + 1)).toBe(3);
-    expect(delivered.map((d) => d.sid).sort()).toEqual(['s-lead', 's-main', 's-vp']);
-    expect(delivered[0].text).toContain('Waiting (on another task)');
+    expect(followers()).toEqual(['s-lead', 's-main', 's-vp']);
+    expect(ride()).toContain('Waiting (on another task)');
   });
 
   it("a re-check turn's Working is held until the turn ends, and a re-check that ends asking again is no news", async () => {
@@ -118,7 +131,7 @@ describe('who hears it', () => {
     emit(task('w', { parent_task_id: 'lead', phase: 'IN_PROGRESS', user_status: { state: 'working' }, needs_recheck: recheck }));
     emit(task('w', { parent_task_id: 'lead', phase: 'WAITING', user_status: { state: 'waiting', kind: 'task', waitingOn: 'The review' }, needs_recheck: recheck }));
     expect(await flushStatusPush(Date.now() + SETTLE_MS + 1)).toBe(2);
-    expect(delivered[0].text).toContain('Needs you → Waiting (on another task)');
+    expect(ride()).toContain('Needs you → Waiting (on another task)');
   });
 
   it("the moment between a turn's end and its report is no news, and a plugin's own task is followed by no one", async () => {
@@ -145,7 +158,7 @@ describe('who hears it', () => {
     expect(await flushStatusPush(Date.now() + SETTLE_MS + 1)).toBe(0);
     emit(task('q', { parent_task_id: 'lead', phase: 'COMPLETE', status: 'done' }));
     expect(await flushStatusPush(Date.now() + 2 * SETTLE_MS + 2)).toBe(2);
-    expect(delivered[0].text).toContain('Working → Done');
+    expect(ride()).toContain('Working → Completed');
   });
 
   it('right after a start the baseline follows silently (a restart catching up)', async () => {
@@ -162,7 +175,7 @@ describe('who hears it', () => {
     emit(task('w', { parent_task_id: 'lead', phase: 'COMPLETE', status: 'done' }));
     await flushStatusPush(Date.now() + 2 * SETTLE_MS + 2);
     const text = pendingStatusNote('s-asker')!.text;
-    expect(text).toContain('Working → Done');
+    expect(text).toContain('Working → Completed');
     expect(text).not.toContain('Needs you → Working');
   });
 
@@ -173,6 +186,6 @@ describe('who hears it', () => {
     tasks.set('new', fresh);
     emit({ ...fresh, phase: 'COMPLETE', status: 'done' } as Task);
     expect(await flushStatusPush(Date.now() + SETTLE_MS + 1)).toBe(2);
-    expect(delivered[0].text).toContain('Needs you → Done');
+    expect(ride()).toContain('Needs you → Completed');
   });
 });

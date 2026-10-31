@@ -12,6 +12,7 @@ import {
 } from '../../../../../src/core/boards/board-lanes';
 import { deriveDisplayStatus, resolveTaskSessionId } from '@/utils/session-status';
 import type { ProcessStatus } from '@/types/session';
+import { USER_STATE_LABELS } from '@open-walnut/user-status';
 import type { BoardSignal, LiveStatus } from '../board-overview-model';
 import type { KanbanPromptRequest } from './kanban-contract';
 import { STALE_AFTER_MS } from './kanban-contract';
@@ -228,7 +229,7 @@ export function redReasonOf(
   const handedBack = card?.handed_back_at;
   // Without a derived status (an older server) a hand back still reads as needing the user.
   if (!us && task.phase === 'NEED_ACTION' && handedBack && (!task.last_session_update || Date.parse(handedBack) > Date.parse(task.last_session_update))) {
-    return { text: 'Needs you: handed back', tone: 'red', kind: 'handed-back', tooltip: 'The worker handed this task back to you' };
+    return { text: 'Needs you', tone: 'red', kind: 'handed-back', tooltip: 'The worker handed this task back to you' };
   }
   if (signals.length > 0) {
     const first = signals[0];
@@ -294,7 +295,7 @@ function quietStatus(
     }
     return { text: 'Waiting', tone: 'violet', kind: 'waiting', tooltip: 'Waiting until something happens' };
   }
-  if (task.phase === 'COMPLETE') return at('Done', task.completed_at, 'green', 'done');
+  if (task.phase === 'COMPLETE') return at(USER_STATE_LABELS.done, task.completed_at, 'green', 'done');
   if (display === 'idle') return at('Idle', live?.statusUpdatedAt, 'amber', 'idle');
   if (hasSession) return { text: 'Stopped', tone: 'grey', kind: 'stopped', tooltip: 'The session is not running' };
   return { text: 'No session', tone: 'grey', kind: 'no-session', tooltip: 'No session yet' };

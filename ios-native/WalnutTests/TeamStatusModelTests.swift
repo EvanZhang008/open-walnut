@@ -36,7 +36,7 @@ final class TeamStatusModelTests: XCTestCase {
         XCTAssertEqual(b.waiting.map(\.id), ["c", "a", "d"])
         XCTAssertEqual(b.stuck, 1)
         XCTAssertEqual(b.notStarted, 1)
-        XCTAssertEqual(TeamStatusModel.countsLine(b), "1 working, 3 waiting (1 stuck, 1 not started), 1 done in the last 7 days.")
+        XCTAssertEqual(TeamStatusModel.countsLine(b), "1 Working, 3 Waiting / snoozed (1 with nothing to wake it, 1 not started), 1 Completed in the last 7 days.")
         XCTAssertTrue(b.hasTeam)
     }
 
@@ -51,7 +51,7 @@ final class TeamStatusModelTests: XCTestCase {
 
     func testWaitingLines() {
         XCTAssertEqual(TeamStatusModel.waitingLine(.init(state: "waiting", kind: "task", waitingOn: "A reply from Bun lead")), "Waiting on a reply from Bun lead")
-        XCTAssertEqual(TeamStatusModel.waitingLine(.init(state: "waiting", kind: "stuck", waitingOn: "")), "Stuck. Nothing will wake it.")
+        XCTAssertEqual(TeamStatusModel.waitingLine(.init(state: "waiting", kind: "stuck", waitingOn: "")), "Nothing will wake it.")
         XCTAssertEqual(TeamStatusModel.waitingLine(.init(state: "waiting", kind: "not-started", waitingOn: "Not started yet")), "Not started yet")
         // A time wait with no end keeps its words instead of a bare "Waiting".
         XCTAssertEqual(TeamStatusModel.waitingLine(.init(state: "waiting", kind: "time", waitingOn: "Its next scheduled run")), "Waiting on its next scheduled run")

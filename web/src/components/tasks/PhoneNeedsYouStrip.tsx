@@ -22,6 +22,7 @@ import { taskNeedsYou } from './needs-you';
 import { taskWaitsOnPrompt } from './PhoneRowExtras';
 import { homeListScroller } from './phone-row-behavior';
 import { useStableOrder } from './useStableOrder';
+import { stateCountLabel } from '@open-walnut/user-status';
 
 const FIRST_ROWS = 3;
 const taskKey = (t: Task) => t.id;
@@ -56,7 +57,7 @@ export function PhoneNeedsYouStrip({ tasks, onOpen }: { tasks: readonly Task[]; 
     <section className="phone-needs-you" aria-labelledby="phone-needs-you-heading" data-testid="phone-needs-you">
       <h2 id="phone-needs-you-heading" className="phone-needs-you-heading">
         {/* The count says what it counts: tasks, not notifications (N2-05). */}
-        {list.length === 1 ? '1 task needs you' : `${list.length} tasks need you`}
+        {stateCountLabel('needs', list.length)}
       </h2>
       <ul className="phone-needs-you-list">
         {shown.map((t) => (

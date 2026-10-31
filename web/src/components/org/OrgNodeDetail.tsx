@@ -38,6 +38,7 @@ import { log } from '@/utils/log';
 import { briefUnread, markBriefSeen, readBriefFolded, writeBriefFolded, type OrgTopView } from './org-brief-model';
 import { ORG_TASK_TABS, ORG_TASK_TAB_LABELS, orgTaskTabs, snoozeAhead, taskTabNote, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
+import { stateCountLabel } from '@open-walnut/user-status';
 import {
   mainTeamColumns, teamColumns, type ChannelRow, type OrgAlertView, type TeamColumn,
 } from './org-channels-model';
@@ -93,16 +94,16 @@ const TAB_DOT: Record<OrgTaskTab, string> = { ...COLUMN_DOT, done: 'var(--accent
 /** The user's status of the node's work, in the words the Board uses (src/core/user-status.ts),
  *  counted from the same lists as the Task view's tabs; each pill opens its tab. */
 function CountPills({ row, tabs, onOpen }: { row: ChannelRow; tabs: OrgTaskTabs; onOpen: (tab: OrgTaskTab) => void }) {
-  const pill = (tab: OrgTaskTab, n: number, words: string) => (
+  const pill = (tab: OrgTaskTab, n: number) => (
     <button type="button" className="org-pill is-button" data-testid={`org-pill-${tab}`} onClick={() => onOpen(tab)} title={`Show ${ORG_TASK_TAB_LABELS[tab]}`}>
-      <i style={{ background: TAB_DOT[tab] }} />{n} {words}
+      <i style={{ background: TAB_DOT[tab] }} />{stateCountLabel(tab, n)}
     </button>
   );
   return (
     <span className="org-pills" data-testid="org-detail-counts">
-      {tabs.needs.length > 0 && pill('needs', tabs.needs.length, tabs.needs.length === 1 ? 'needs you' : 'need you')}
-      {tabs.working.length > 0 && pill('working', tabs.working.length, 'working')}
-      {tabs.waiting.length > 0 && pill('waiting', tabs.waiting.length, 'waiting')}
+      {tabs.needs.length > 0 && pill('needs', tabs.needs.length)}
+      {tabs.working.length > 0 && pill('working', tabs.working.length)}
+      {tabs.waiting.length > 0 && pill('waiting', tabs.waiting.length)}
       <span className="org-pill">{row.counts.open} open</span>
     </span>
   );

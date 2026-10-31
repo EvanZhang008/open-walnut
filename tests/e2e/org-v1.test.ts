@@ -343,7 +343,7 @@ describe('/api/v1/org', () => {
       const racing = await Promise.all([pendingOrgDigest(sid, told + 100), pendingOrgDigest(sid, told + 100)])
       expect(racing.filter(Boolean)).toHaveLength(1)
       const alert = racing.find(Boolean)!
-      expect(alert.text).toContain('Org update:\nNeeds the user now:\n- Walnut: "asks a question" asks the user a question\n')
+      expect(alert.text).toContain(`Org update:\nNeeds the user now:\n- Walnut: "asks a question" (${asking.id}) asks the user a question\n`)
       expect(alert.text).toContain('Tell the user what is under "Needs the user now"')
       expect(alert.text).not.toContain('waiting on the user')
       await alert.markTold()
@@ -361,7 +361,7 @@ describe('/api/v1/org', () => {
       await updateTask(broken.id, { phase: 'NEED_ACTION' }, { source: 'api' })
       bus.emit(EventNames.SESSION_STATUS_CHANGED, { sessionId: brokenSid, process_status: 'error' }, ['web-ui'], { source: 'session-tracker' })
       const failed = await pendingOrgDigest(sid, told + 300)
-      expect(failed!.text).toContain('- Walnut: "fails" stopped on an error')
+      expect(failed!.text).toContain(`- Walnut: "fails" (${broken.id}) stopped on an error`)
       expect(failed!.text).not.toContain('asks a question')
       await failed!.markTold()
 
@@ -376,7 +376,7 @@ describe('/api/v1/org', () => {
       await updateSessionRecord(brokenSid, { process_status: 'running' })
       await updateSessionRecord(brokenSid, { process_status: 'error' })
       const twice = await pendingOrgDigest(sid, told + 450)
-      expect(twice!.text).toContain('- Walnut: "fails" stopped on an error')
+      expect(twice!.text).toContain(`- Walnut: "fails" (${broken.id}) stopped on an error`)
       expect(twice!.text).not.toContain('loses its host')
       await twice!.markTold()
       // The host stays lost for 20 minutes: still not the user's (2026-10-28, an SSH drop listed
@@ -392,7 +392,7 @@ describe('/api/v1/org', () => {
       await updateSessionRecord(loneSid, { process_status: 'error', status_reason: 'remote_unreachable' })
       const stuck = await pendingOrgDigest(sid, told + 470)
       expect(stuck!.text).toContain('Stopped by the machine, not for the user')
-      expect(stuck!.text).toContain('- Leadless: "lone host loss" stopped because its host went away')
+      expect(stuck!.text).toContain(`- Leadless: "lone host loss" (${lone.id}) stopped because its host went away`)
       expect(stuck!.text).not.toContain('Needs the user now')
       expect(stuck!.text).not.toContain('loses its host')
       await stuck!.markTold()
@@ -403,7 +403,7 @@ describe('/api/v1/org', () => {
       await updateTaskRaw(walnutLead.id, { session_id: leadOwnSid })
       await updateSessionRecord(leadOwnSid, { process_status: 'error', status_reason: 'remote_unreachable' })
       const leadDown = await pendingOrgDigest(sid, told + 480)
-      expect(leadDown!.text).toContain(`- Walnut: "${walnutLead.title}" stopped because its host went away`)
+      expect(leadDown!.text).toContain(`- Walnut: "${walnutLead.title}" (${walnutLead.id}) stopped because its host went away`)
       expect(leadDown!.text).not.toContain('Needs the user now')
       await leadDown!.markTold()
       await updateSessionRecord(leadOwnSid, { process_status: 'stopped', status_reason: 'user_stopped' })
@@ -420,7 +420,7 @@ describe('/api/v1/org', () => {
       // A new prompt on the same task is a new alert.
       await updateSessionRecord(askSid, { pendingPermission: { requestId: 'rq-q2', toolName: 'Bash', receivedAt: new Date().toISOString() } })
       const again = await pendingOrgDigest(sid, told + FOLD + 600)
-      expect(again!.text).toContain('- Walnut: "asks a question" waits for the user to approve Bash')
+      expect(again!.text).toContain(`- Walnut: "asks a question" (${asking.id}) waits for the user to approve Bash`)
       await again!.markTold()
     } finally {
       _setDigestFoldMsForTesting(null)

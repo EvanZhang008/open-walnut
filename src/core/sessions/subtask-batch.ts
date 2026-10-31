@@ -22,7 +22,7 @@ import path from 'node:path';
 import fsp from 'node:fs/promises';
 import { WALNUT_HOME } from '../../constants.js';
 import { log } from '../../logging/index.js';
-import { USER_STATE_LABELS, fallbackUserState, type UserStatus } from '../user-status.js';
+import { fallbackUserState, stateWord, type UserStatus } from '../user-status.js';
 import type { Task } from '../types.js';
 
 /** One open subtask as a notice names it. */
@@ -32,6 +32,8 @@ export interface OpenSibling {
   state: 'needs' | 'working' | 'waiting';
   /** The status's words: what the user must do, on what it waits. */
   why?: string;
+  /** Its start date is still to come. */
+  snoozed?: boolean;
 }
 
 /** Names shown in one notice; the rest are counted. */
@@ -77,21 +79,21 @@ export async function openSiblings(parentTaskId: string, exclude: ReadonlySet<st
     .map((t) => {
       const state = stateOf(t);
       const why = whyOf(t, state);
-      return { id: t.id, title: t.title || 'untitled', state, ...(why ? { why } : {}) };
+      return { id: t.id, title: t.title || 'untitled', state, ...(why ? { why } : {}), ...(t.user_status?.snoozed ? { snoozed: true } : {}) };
     });
 }
 
 const ORDER: Record<OpenSibling['state'], number> = { needs: 0, working: 1, waiting: 2 };
 
 /**
- * "Still open: 2 of your subtasks: "Bench Mac" (Working), "Bench iOS" (Needs you: approve the
+ * "Still open: 2 of your subtasks: "Bench Mac" (id, Working), "Bench iOS" (id, Needs you: approve the
  * TestFlight build)." or the line saying this was the last one.
  */
 export function remainingLine(open: readonly OpenSibling[] | null): string | undefined {
   if (!open) return undefined;
   if (open.length === 0) return 'None of your subtasks is still open: this was the last one.';
   const sorted = [...open].sort((a, b) => ORDER[a.state] - ORDER[b.state]);
-  const shown = sorted.slice(0, NAMES_MAX).map((s) => `"${s.title}" (${USER_STATE_LABELS[s.state]}${s.why ? `: ${s.why}` : ''})`);
+  const shown = sorted.slice(0, NAMES_MAX).map((s) => `"${s.title}" (${s.id}, ${stateWord(s.state, s.snoozed)}${s.why ? `: ${s.why}` : ''})`);
   const more = sorted.length - shown.length;
   const count = open.length === 1 ? '1 of your subtasks' : `${open.length} of your subtasks`;
   return `Still open: ${count}: ${shown.join(', ')}${more > 0 ? `, and ${more} more` : ''}.`;

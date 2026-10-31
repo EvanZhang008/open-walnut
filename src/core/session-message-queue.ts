@@ -243,9 +243,12 @@ export async function sendMessageToSession(
   // A lead that handed its project over hears so on every message that still reaches it (org/retired-lead.ts).
   const { pendingRetiredLeadNote } = await import('./org/retired-lead.js');
   const retiredNote = await pendingRetiredLeadNote(sessionId, rawBody);
+  // A background notice that waited for this message rides in front of it (sessions/held-notices.ts).
+  const { pendingHeldNotices } = await import('./sessions/held-notices.js');
+  const heldNotes = await pendingHeldNotices(sessionId);
   const outputMode = opts?.hinted ? null : await prepareQueuedHintedSend(sessionId, opts?.source, rawBody);
   const body = outputMode?.enqueueText ?? rawBody;
-  const notes = [place?.text, folderMoved?.text, restart?.text, digest?.text, statusNote?.text, appState?.text, waitNote, retiredNote].filter(Boolean).join('\n\n');
+  const notes = [place?.text, folderMoved?.text, restart?.text, digest?.text, statusNote?.text, heldNotes?.text, appState?.text, waitNote, retiredNote].filter(Boolean).join('\n\n');
   const enqueueText = notes ? `${notes}\n\n${body}` : body;
   let msg: QueuedMessage;
   try {
@@ -261,6 +264,7 @@ export async function sendMessageToSession(
     });
   } catch (err) {
     appState?.release();
+    heldNotes?.release();
     throw err;
   }
   const source = opts?.source ?? 'unknown';
@@ -278,6 +282,7 @@ export async function sendMessageToSession(
     if (msg.message.includes(appState.text)) appState.markTold();
     else appState.release();
   }
+  if (heldNotes && !msg.message.includes(heldNotes.text)) heldNotes.release();
 
   // Ask Walnut drift repair — AWAITED before SESSION_SEND is emitted, because
   // the record profile is consumed exactly when this send triggers a cold

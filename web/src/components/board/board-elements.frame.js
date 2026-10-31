@@ -20,7 +20,7 @@
 
   // The one user status (src/core/user-status.ts) names a chip; the phase is the fallback for a
   // task the server has not derived, read as fallbackUserState reads it (board-peek-model.ts twins it).
-  var USER = { needs: 'Needs you', working: 'Working', waiting: 'Waiting', done: 'Done' };
+  var USER = { needs: 'Needs you', working: 'Working', waiting: 'Waiting / snoozed', done: 'Completed' };
   var PHASE_USER = { TODO: 'waiting', IN_PROGRESS: 'working', NEED_ACTION: 'needs', WAITING: 'waiting', COMPLETE: 'done' };
   // The first click on a message's × arms it for this long; the second deletes.
   var DELETE_ARM_MS = 4000;

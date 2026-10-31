@@ -99,6 +99,8 @@ const ERROR_CODES: Record<string, string> = {
   reply_instead: 'conflict',
   // A task answering for the user without quoting the user's words.
   user_words: 'bad_request',
+  // A letter from or about a snoozed task without a stated `snooze_reason` (snooze-letter.ts).
+  task_snoozed: 'task_snoozed',
 }
 
 interface LetterErrorLike { code: string; status: number; message: string }

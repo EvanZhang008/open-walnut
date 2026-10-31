@@ -18,7 +18,7 @@ describe('descendantsNeedingYou', () => {
     const worker = task('w', { parent_task_id: 'p', phase: 'NEED_ACTION' });
     const map = tasksByIdOf([parent, worker, task('x', { parent_task_id: 'p' })]);
     expect(descendantsNeedingYou(parent, map).map((t) => t.id)).toEqual(['w']);
-    expect(needYouLabel(1)).toBe('1 need you');
+    expect(needYouLabel(1)).toBe('1 Needs you');
   });
 
   it('walks every level, in tree order, and through a finished child', () => {

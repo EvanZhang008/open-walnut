@@ -75,6 +75,8 @@ export interface TaskFamilyReference {
   phase: Task['phase'];
   status: Task['status'];
   priority?: Task['priority'];
+  /** The task's one user status, when the route sends it (the page reads the store's otherwise). */
+  user_status?: Task['user_status'];
 }
 
 export interface TaskDetail extends Task {

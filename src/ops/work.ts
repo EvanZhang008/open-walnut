@@ -283,6 +283,25 @@ defineOp({
 });
 
 defineOp({
+  name: 'status_check',
+  title: 'Check every task\'s status against its facts',
+  description:
+    'Read-only. Lists every open task whose stored status (what the board, the Org page, the Brief and the phone show) '
+    + 'is not what its facts say now: no status stored, a stored state the facts no longer give, a snoozed task stored '
+    + 'as Needs you, or a WAITING task with nothing outside Walnut and the user armed or named. Walnut runs the same '
+    + 'check every hour, re-derives the first three itself and tells a parked task its park waits on nothing.',
+  input: {},
+  bind: { method: 'GET', path: '/org/status-check' },
+  mapResult: ({ body }) => {
+    const out = (body ?? {}) as { mismatches?: unknown[] };
+    const n = Array.isArray(out.mismatches) ? out.mismatches.length : 0;
+    return withOutcome({ ...out }, n ? `${n} task status mismatch${n === 1 ? '' : 'es'} found.` : 'Every open task shows what its facts say.',
+      n ? 'Walnut fixes its own drift on its next pass; a parked task is told to check its park.' : 'Nothing else is required.');
+  },
+  tags: { readonly: true, remote: 'allow' },
+});
+
+defineOp({
   name: 'task_dir',
   title: 'Your task directory',
   // The whole rule rides this help, so a session spawned before it can still read it.

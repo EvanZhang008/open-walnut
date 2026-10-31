@@ -9,6 +9,7 @@ import { taskRefTag } from '../utils/entity-refs.js'
 import { dispatchHint, withOutcome } from './outcome.js'
 import { startTask, TASK_START_INPUT, taskView } from './task-execution.js'
 import { PHASE_ORDER } from '../core/phase.js'
+import { fallbackUserState } from '../core/user-status.js'
 import { laneById, normalizeLanes, placeCard } from '../core/boards/board-lanes.js'
 import { agentMemoryWriterNote, type AgentMemory } from '../core/sessions/agent-memory.js'
 import type { OpCall } from './core.js'
@@ -140,6 +141,11 @@ function leanTaskRow(row: unknown): unknown {
   const src = row as Record<string, unknown>
   const out: Record<string, unknown> = {}
   for (const key of TASK_LIST_ALWAYS) out[key] = key === 'project' ? (src.project ?? '') : src[key]
+  // What the user reads (src/core/user-status.ts), the one answer to "does it need them": a
+  // snoozed NEED_ACTION task reads waiting, so a list of asks never names it.
+  const us = src.user_status as { state?: string; snoozed?: { until?: string } } | undefined
+  out.user_state = us?.state ?? fallbackUserState(typeof src.phase === 'string' ? src.phase : undefined, typeof src.status === 'string' ? src.status : undefined)
+  if (us?.snoozed?.until) out.snoozed_until = us.snoozed.until
   // pinned is a flag, not a value: always answer it, as a real boolean.
   out.execution = taskView(src).execution
   out.pinned = Boolean(src.pinned)
@@ -200,7 +206,10 @@ defineOp({
     'with filters or raise limit (max 200) instead of paging by hand. ' +
     'State is `phase`: TODO | IN_PROGRESS | NEED_ACTION | COMPLETE. NEED_ACTION means the agent handed ' +
     'the work back and is waiting on the human (turn finished, permission prompt, or an error) — it is ' +
-    'NOT done. There is no `status` field. ' +
+    'NOT done. There is no `status` field. What the user reads is `user_state` (needs | working | waiting | ' +
+    'done, the one status every surface shows): say a task needs the user only when user_state is needs. ' +
+    'A snoozed task (snoozed_until: its start date is still to come) is never needs before that date: do ' +
+    'not raise it to the user unless you state why it cannot wait. ' +
     'Working set (the pinned board): pass working_set=true to get the WHOLE board (no default limit, ' +
     'however many pins there are) in board order, each row carrying focus_tier + pin_order — an absent ' +
     'focus_tier on a pinned row means the Satellite (default) tier. focus_tier filters match pinned rows ' +

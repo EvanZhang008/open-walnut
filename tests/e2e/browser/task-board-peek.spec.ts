@@ -42,9 +42,9 @@ const API = `http://localhost:${TEST_PORT}`
 const SHOT_DIR = '/tmp/board-b'
 // The Board's own chip words (board-elements.frame.js PHASES), which the peek header repeats.
 /** The header reads the one user status (src/core/user-status.ts), the phase for a task not derived yet. */
-const USER_LABELS: Record<string, string> = { needs: 'Needs you', working: 'Working', waiting: 'Waiting', done: 'Done' }
+const USER_LABELS: Record<string, string> = { needs: 'Needs you', working: 'Working', waiting: 'Waiting / snoozed', done: 'Completed' }
 const PHASE_LABELS: Record<string, string> = {
-  TODO: 'Waiting', WAITING: 'Waiting', IN_PROGRESS: 'Working', NEED_ACTION: 'Needs you', COMPLETE: 'Done',
+  TODO: 'Waiting / snoozed', WAITING: 'Waiting / snoozed', IN_PROGRESS: 'Working', NEED_ACTION: 'Needs you', COMPLETE: 'Completed',
 }
 
 let fixtureRoot = ''
@@ -83,7 +83,7 @@ async function createTask(title: string, opts: Record<string, unknown>): Promise
 
 const labelOf = async (id: string) => {
   const { task } = await api<{ task: { phase: string; user_status?: { state: string } } }>('GET', `/api/tasks/${id}`)
-  return task.phase === 'COMPLETE' ? 'Done' : task.user_status ? USER_LABELS[task.user_status.state] : PHASE_LABELS[task.phase]
+  return task.phase === 'COMPLETE' ? 'Completed' : task.user_status ? USER_LABELS[task.user_status.state] : PHASE_LABELS[task.phase]
 }
 const historyText = async (sid: string) => {
   const res = await fetch(`${API}/api/v1/sessions/${sid}/history?tail=50`)
@@ -314,7 +314,7 @@ test('a Board chip opens its task as a tab in place of the chat; the tabs switch
   await expect(tabs.button(docs)).toHaveAttribute('aria-selected', 'true')
   await expect(inset).toHaveCount(0)
   await expect(peek.getByTestId('board-peek-title')).toHaveText(docsTitle)
-  await expect(peek.getByTestId('board-peek-phase')).toHaveText('Waiting') // not started yet
+  await expect(peek.getByTestId('board-peek-phase')).toHaveText('Waiting / snoozed') // not started yet
   await expect(peek.getByTestId('board-peek-note')).toHaveCount(0)
   const card = peek.getByTestId('board-peek-card')
   await expect(card).toHaveAttribute('data-known', 'true')

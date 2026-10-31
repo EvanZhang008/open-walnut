@@ -241,8 +241,8 @@ test('Snooze opens the date picker; a pick snoozes the task and the row says unt
 test('a decision letter: its two actions side by side, one click answers it, the row goes at once', async ({ page, request }) => {
   await openTeam(page)
   const counts = page.getByTestId('org-detail-counts')
-  await expect(counts).toContainText(/\d+ needs? you/, { timeout: 60_000 })
-  const before = Number((await counts.textContent())!.match(/(\d+) needs? you/)![1])
+  await expect(counts).toContainText(/\d+ Needs you/, { timeout: 60_000 })
+  const before = Number((await counts.textContent())!.match(/(\d+) Needs you/)![1])
   const menu = await openAnswer(page, ids.letter, 'letter')
   const options = menu.getByTestId('org-answer-letter')
   await expect(options).toHaveClass(/is-pair/)
@@ -263,7 +263,7 @@ test('a decision letter: its two actions side by side, one click answers it, the
   await options.getByTestId('org-answer-option').filter({ hasText: 'Sign it' }).click()
   await expect(menu).toHaveCount(0)
   await expect.poll(async () => (await gone()).gone).toBe(true)
-  expect((await gone()).counts).not.toContain(`${before} need`)
+  expect((await gone()).counts).not.toContain(`${before} Needs you`)
   // The answer is on record.
   await expect.poll(async () => {
     const res = await request.get('/api/v1/human-inbox')

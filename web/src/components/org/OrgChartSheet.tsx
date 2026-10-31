@@ -22,6 +22,7 @@ import { setProjectVp } from '@/api/org';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { useDialogFocus } from '@/hooks/useDialogFocus';
 import { log } from '@/utils/log';
+import { stateCountLabel } from '@open-walnut/user-status';
 import { ContextMenu, type ContextMenuItem } from '@/components/common/ContextMenu';
 import { OrgAvatar, shortAgo } from './OrgChannelList';
 import { OrgChartProject } from './OrgChartProject';
@@ -67,7 +68,7 @@ function pressable(onPress: () => void) {
     },
   };
 }
-const needsTitle = (n: number) => `${n} ${n === 1 ? 'needs' : 'need'} you`;
+const needsTitle = (n: number) => stateCountLabel('needs', n);
 /** The drop zone that gives a project a dedicated VP again. */
 const OWN = '__own__';
 

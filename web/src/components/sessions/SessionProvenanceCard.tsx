@@ -196,7 +196,8 @@ function foldDirection(envelope: SessionEnvelope): string {
   if (envelope.peer.anonymous) return 'From';
   switch (envelope.kind) {
     case 'reply': return 'Reply from';
-    case 'notification': return 'Walnut, about';
+    // Walnut's own notice: the program, not a person or a task (history-session-envelope.ts systemSender).
+    case 'notification': return 'System, about';
     case 'trigger': return 'Trigger';
     case 'app-state': return 'App state from';
     default: return envelope.source === 'claude-code' ? 'Claude Code session' : 'From';

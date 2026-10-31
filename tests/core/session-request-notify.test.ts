@@ -83,6 +83,7 @@ import {
   getSessionRequest,
   settleNotified,
   settleReplied,
+  settleLateReply,
   type SessionRequest,
 } from '../../src/core/session-requests.js';
 import { sessionRequestWatchHook } from '../../src/core/session-hooks/builtins.js';
@@ -91,6 +92,7 @@ import type { HookContext, SessionHookContext } from '../../src/core/session-hoo
 import { parseWalnutMessage } from '../../src/core/peers/walnut-message-tag.js';
 import type { SessionRecord } from '../../src/core/types.js';
 import { flushSubtaskNotices } from '../../src/core/sessions/subtask-notices.js';
+import { _clearHeldNotices, pendingHeldNotices } from '../../src/core/sessions/held-notices.js';
 
 const ASKER = 'sess-asker-1';
 const TARGET = 'sess-target-1';
@@ -176,6 +178,7 @@ function deliveredText(n = 0): string {
 beforeEach(() => {
   fs.rmSync(REQUESTS_FILE, { force: true });
   sessions = [rec(ASKER, { title: 'Asker', taskId: 'task-asker' }), rec(TARGET, { title: 'Target' })];
+  _clearHeldNotices();
   getSessionByClaudeId.mockReset();
   getSessionsForTask.mockReset();
   listSessions.mockReset();
@@ -193,7 +196,12 @@ beforeEach(() => {
   sendMessageToSession.mockResolvedValue({ id: 'qm-notify' });
   enqueueMessage.mockResolvedValue({ id: 'qm-parked' });
   listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Run the migration' }]);
-  getTask.mockRejectedValue(new Error('no such task'));
+  // The asker parked on its reply (WAITING), so a deadline notice wakes it; any other asker gets
+  // it with its next message (held-notices.ts).
+  getTask.mockImplementation(async (id: string) => {
+    if (id === 'task-asker' || id === 'task-fork') return { id, phase: 'WAITING' };
+    throw new Error('no such task');
+  });
   getQueue.mockReset();
   getQueue.mockResolvedValue([]);
   buildSessionTranscript.mockReset();
@@ -384,6 +392,37 @@ describe('lastWordsOf — what a notice quotes from the target transcript', () =
     expect(lastWordsOf([user('go')])).toBeUndefined();
     expect(lastWordsOf([])).toBeUndefined();
     expect(lastWordsOf(undefined)).toBeUndefined();
+  });
+});
+
+describe('a deadline notice never starts a turn of its own (held-notices.ts)', () => {
+  const notParked = () => getTask.mockImplementation(async (id: string) => ({ id, phase: 'IN_PROGRESS' }));
+
+  it('an asker not parked on it gets it with its next message, idle or mid-turn', async () => {
+    notParked();
+    for (const status of ['idle', 'running'] as const) {
+      const rq = await arm();
+      sessions = sessions.map((s) => s.claudeSessionId === ASKER ? { ...s, process_status: status } : s);
+      expect(await notifyRequesterFallback(rq, 'timeout')).toBe(true);
+      expect(sendMessageToSession).not.toHaveBeenCalled();
+      expect((await pendingHeldNotices(ASKER))?.text).toContain('has not replied by your deadline');
+    }
+  });
+
+  it('a held notice is dropped once the reply came', async () => {
+    notParked();
+    const rq = await arm();
+    await notifyRequesterFallback(rq, 'timeout');
+    // The deadline left it open (expired); the late reply settles it.
+    expect((await getSessionRequest(rq.id))?.status).toBe('expired');
+    await settleLateReply(rq.id);
+    expect(await pendingHeldNotices(ASKER)).toBeNull();
+  });
+
+  it('an asker parked on the reply (WAITING) is woken: the deadline is its cue', async () => {
+    const rq = await arm();
+    expect(await notifyRequesterFallback(rq, 'timeout')).toBe(true);
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -50,7 +50,7 @@ export interface OrgTaskLike {
   session_id?: string;
   exec_session_id?: string;
   /** The one status the user sees (src/core/user-status.ts); the counts read it. */
-  user_status?: Pick<UserStatus, 'state'>;
+  user_status?: Pick<UserStatus, 'state' | 'snoozed'>;
 }
 
 /** By the user's status (src/core/user-status.ts), the same numbers every surface shows. */
@@ -180,10 +180,11 @@ function refOf(task: OrgTaskLike): OrgNodeRef {
   return { id: task.id, title: task.title, phase: task.phase, hasSession: hasSession(task), ...(name ? { name } : {}) };
 }
 
-const PHASE_RANK: Record<TaskPhase, number> = { NEED_ACTION: 0, IN_PROGRESS: 1, WAITING: 2, TODO: 3, COMPLETE: 4 };
+// The user's state orders the work, as it counts it (a snoozed NEED_ACTION task is not first).
+const STATE_RANK: Record<UserState, number> = { needs: 0, working: 1, waiting: 2, done: 3 };
 
 function compareWork(a: OrgTaskNode, b: OrgTaskNode, at: Map<string, string>): number {
-  const rank = PHASE_RANK[a.phase] - PHASE_RANK[b.phase];
+  const rank = STATE_RANK[a.userState] - STATE_RANK[b.userState];
   if (rank) return rank;
   const ta = at.get(a.id) ?? '';
   const tb = at.get(b.id) ?? '';
@@ -471,6 +472,8 @@ export interface OrgAlert {
   /** One per occurrence (a new prompt or a new failure is a new key), so each is told once. */
   key: string;
   project: string;
+  /** Named with every title, so a session can link the task (2026-10-30: an alert without it became a link to nothing). */
+  taskId: string;
   title: string;
   /** `machine`: stopped by the machine in a project with no lead; told to Main as background,
    *  never under "Needs the user now" (org-store.ts orgAlerts). */
@@ -527,10 +530,10 @@ export function planOrgNote(
 export function formatAlertLine(alert: OrgAlert): string {
   if (alert.kind === 'machine') {
     const by = alert.cause === 'host' ? 'its host went away' : alert.cause === 'restart' ? 'Walnut restarted' : 'its process stopped';
-    return `${alert.project || 'Inbox'}: "${alert.title}" stopped because ${by}; Walnut resumes it once that clears (restart it if it has not)`;
+    return `${alert.project || 'Inbox'}: "${alert.title}" (${alert.taskId}) stopped because ${by}; Walnut resumes it once that clears (restart it if it has not)`;
   }
   const what = alert.kind === 'question' ? 'asks the user a question'
     : alert.kind === 'permission' ? `waits for the user to approve ${alert.tool || 'a tool'}`
       : 'stopped on an error';
-  return `${alert.project || 'Inbox'}: "${alert.title}" ${what}`;
+  return `${alert.project || 'Inbox'}: "${alert.title}" (${alert.taskId}) ${what}`;
 }

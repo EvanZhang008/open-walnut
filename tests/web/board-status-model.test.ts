@@ -51,7 +51,7 @@ describe('buildStatusBoard', () => {
   it('the brief names what needs the user and counts the rest', () => {
     const brief = statusBrief(buildStatusBoard({ ownerId: 'lead', tasks: team(), now: NOW, doneWindowDays: 7 }));
     expect(brief.needs.map((n) => n.ask)).toEqual(['Revoke the old token?', 'Approve a real iPhone test?']);
-    expect(briefCountsLine(brief)).toBe('3 working, 3 waiting (1 stuck, 1 not started), 1 done in the last 7 days.');
+    expect(briefCountsLine(brief)).toBe('3 Working, 3 Waiting / snoozed (1 with nothing to wake it, 1 not started), 1 Completed in the last 7 days.');
   });
 
   it('filters: all open in the table order, or one state', () => {
@@ -85,7 +85,7 @@ describe('waitingLine', () => {
   const fmt = () => 'Mon 9:00';
   it('words each kind of wait', () => {
     expect(waitingLine({ state: 'waiting', kind: 'task', waitingOn: 'A reply from Bun lead' }, fmt)).toBe('Waiting on a reply from Bun lead');
-    expect(waitingLine({ state: 'waiting', kind: 'stuck', waitingOn: 'Nobody' }, fmt)).toBe('Stuck. Nobody');
+    expect(waitingLine({ state: 'waiting', kind: 'stuck', waitingOn: 'Nobody' }, fmt)).toBe('Nothing will wake it. Nobody');
     expect(waitingLine({ state: 'waiting', kind: 'time', waitingOn: 'Its next check', until: ago(-60) }, fmt)).toBe('Waiting until Mon 9:00');
     expect(waitingLine({ state: 'waiting', kind: 'not-started', waitingOn: 'Not started yet' }, fmt)).toBe('Not started yet');
   });

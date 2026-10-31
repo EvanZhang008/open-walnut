@@ -7,12 +7,13 @@ import Foundation
 enum UserState: String, CaseIterable {
     case needs, working, waiting, done
 
+    /// The four names a person reads on every surface (src/core/user-status.ts USER_STATE_LABELS).
     var label: String {
         switch self {
         case .needs: return "Needs you"
         case .working: return "Working"
-        case .waiting: return "Waiting"
-        case .done: return "Done"
+        case .waiting: return "Waiting / snoozed"
+        case .done: return "Completed"
         }
     }
 }
@@ -135,12 +136,12 @@ enum TeamStatusModel {
         return board
     }
 
-    /// "10 working, 16 waiting (1 stuck, 5 not started), 12 done in the last 7 days."
+    /// "10 Working, 16 Waiting / snoozed (1 with nothing to wake it, 5 not started), 12 Completed in the last 7 days."
     static func countsLine(_ b: TeamStatusBoard) -> String {
-        let extra = [b.stuck > 0 ? "\(b.stuck) stuck" : nil, b.notStarted > 0 ? "\(b.notStarted) not started" : nil]
+        let extra = [b.stuck > 0 ? "\(b.stuck) with nothing to wake it" : nil, b.notStarted > 0 ? "\(b.notStarted) not started" : nil]
             .compactMap { $0 }.joined(separator: ", ")
-        let waiting = "\(b.counts.waiting) waiting" + (extra.isEmpty ? "" : " (\(extra))")
-        return "\(b.counts.working) working, \(waiting), \(b.counts.done) done in the last \(doneWindowDays) days."
+        let waiting = "\(b.counts.waiting) \(UserState.waiting.label)" + (extra.isEmpty ? "" : " (\(extra))")
+        return "\(b.counts.working) \(UserState.working.label), \(waiting), \(b.counts.done) \(UserState.done.label) in the last \(doneWindowDays) days."
     }
 
     /// An agent's sentence (or a title) as a clause inside other words: no closing period,
@@ -192,11 +193,11 @@ enum TeamStatusModel {
         return ("Checked \(ago)\(watched)", false)
     }
 
-    /// A waiting row's line: "Waiting on another task: …", "Stuck. …", "Not started yet".
+    /// A waiting row's line: "Waiting on another task: …", "Nothing will wake it. …", "Not started yet".
     static func waitingLine(_ s: WalnutUserStatus?) -> String {
         let on = (s?.waitingOn ?? "").trimmingCharacters(in: .whitespaces)
         switch s?.kind {
-        case "stuck": return "Stuck. " + (on.isEmpty ? "Nothing will wake it." : on)
+        case "stuck": return on.isEmpty ? "Nothing will wake it." : "Nothing will wake it. " + on
         case "not-started": return on.isEmpty ? "Not started yet" : on
         case "time":
             if let until = WalnutTask.parseISO(s?.until) {

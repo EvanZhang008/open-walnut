@@ -33,7 +33,7 @@ export const BOARD_PHASE_USER: Record<string, UserState> = {
 
 export function boardPhaseLabel(task: Pick<Task, 'phase' | 'status' | 'user_status'> | null | undefined): string {
   if (!task) return '';
-  if (task.phase === 'COMPLETE' || task.status === 'done') return 'Done';
+  if (task.phase === 'COMPLETE' || task.status === 'done') return USER_STATE_LABELS.done;
   if (task.user_status) return USER_STATE_LABELS[task.user_status.state];
   const fallback = task.phase ? BOARD_PHASE_USER[task.phase] : undefined;
   return fallback ? USER_STATE_LABELS[fallback] : (task.phase ?? '');

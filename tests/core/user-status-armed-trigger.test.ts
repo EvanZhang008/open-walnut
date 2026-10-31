@@ -52,8 +52,10 @@ describe('an armed trigger of its own wakes the task', () => {
     expect(deriveUserStatus({ ...na, openLetter: 'Approve the send' }, NOW)).toMatchObject({ state: 'needs', source: 'letter' })
     expect(deriveUserStatus({ ...na, openChoice: 'Which host?' }, NOW)).toMatchObject({ state: 'needs', source: 'choice' })
     expect(deriveUserStatus({ ...na, processStatus: 'error', errorMessage: 'auth expired' }, NOW)).toMatchObject({ state: 'needs', source: 'error' })
-    // Set inside a running turn: that turn's report decides, until then it reads as set.
-    expect(deriveUserStatus({ ...na, processStatus: 'running' }, NOW).state).toBe('needs')
+    // Set inside a running turn: that turn's report decides, until then a worker with no ask of its
+    // own waits on its lead (never a bare Needs you), and a task with no lead reads as set.
+    expect(deriveUserStatus({ ...na, processStatus: 'running' }, NOW)).toMatchObject({ state: 'waiting', kind: 'lead' })
+    expect(deriveUserStatus({ ...na, hasLeader: false, processStatus: 'running' }, NOW).state).toBe('needs')
     // The report on the turn that just ended is still to come: it decides in a moment.
     expect(deriveUserStatus({ ...na, reportPending: true }, NOW)).toMatchObject({ state: 'waiting', transient: true })
   })

@@ -1,10 +1,12 @@
 import { defineConfig } from 'vitest/config';
 import { maxWorkers, workerExecArgv } from './tests/setup/worker-budget';
 import { runtimeAliases, runtimeDeps } from './tests/setup/runtime-deps';
+import baseConfig from './vitest.config';
 
 export default defineConfig({
-  // `#ws` on bun: see tests/setup/runtime-deps.ts.
-  resolve: { alias: runtimeAliases(import.meta.dirname) },
+  // `#ws` on bun: see tests/setup/runtime-deps.ts. The web aliases too, so a scenario that
+  // checks what a web surface shows (tests/e2e/task-status-scenarios.test.ts) reads web/src.
+  resolve: { alias: { ...(baseConfig.resolve?.alias as Record<string, string>), ...runtimeAliases(import.meta.dirname) } },
   test: {
     globals: true,
     environment: 'node',

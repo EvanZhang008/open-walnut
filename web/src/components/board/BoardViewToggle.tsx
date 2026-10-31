@@ -12,6 +12,7 @@
  */
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { DEFAULT_BOARD_VIEW, type BoardView } from './board-view-pref';
+import { stateCountLabel } from '@open-walnut/user-status';
 import '@/styles/board-overview.css';
 
 export interface BoardViewToggleProps {
@@ -49,7 +50,7 @@ export function BoardViewToggle({ view, hasPage, attention, onPick }: BoardViewT
   const titleOf = (v: BoardView) => {
     if (v === 'custom') return hasPage ? PAGE_TITLE : NO_PAGE_TITLE;
     const base = v === 'status' ? STATUS_TITLE : CARDS_TITLE;
-    return countOn === v ? `${base}: ${attention} ${attention === 1 ? 'needs' : 'need'} you` : base;
+    return countOn === v ? `${base}: ${stateCountLabel('needs', attention)}` : base;
   };
   return (
     <div className="board-view-toggle" role="group" aria-label="Board view" data-testid="board-view-toggle" onKeyDown={onKeyDown}>
@@ -67,7 +68,7 @@ export function BoardViewToggle({ view, hasPage, attention, onPick }: BoardViewT
         >
           <span>{LABELS[v]}</span>
           {countOn === v && (
-            <span className="board-view-count" data-testid="board-view-attention" aria-label={`${attention} need you`}>
+            <span className="board-view-count" data-testid="board-view-attention" aria-label={stateCountLabel('needs', attention)}>
               {attention > 99 ? '99+' : attention}
             </span>
           )}

@@ -21,6 +21,7 @@ import type { LetterRecord } from '../human-inbox/types.js';
 import type { Task } from '../types.js';
 import { agoWords, NEEDS_RECHECK_MS } from '../user-status.js';
 import { MAX_RECHECKS } from './needs-recheck.js';
+import { snoozeEndedMs, snoozedUntil } from '../snooze.js';
 
 export interface LetterRecheck {
   /** When the last note went in (ISO). */
@@ -78,6 +79,7 @@ export async function runLetterRecheck(
     // A count left from letters that are all answered or settled now starts over.
     const stillOpen = new Set(open.filter((l) => !gone.has(l.id)).map((l) => l.sender.taskId!));
     const all = await listTasks();
+    const allById = new Map(all.map((t) => [t.id, t] as const));
     // A team stopped or quieted in one step (team-stop.ts) is not woken by a timer until it is resumed.
     const quieted = new Set(all.flatMap((t) => (t.team_stop?.members ?? []).map((m) => m.id)));
     for (const t of all) {
@@ -95,7 +97,10 @@ export async function runLetterRecheck(
       if (gone.has(l.id)) continue;
       const owner = tasks.get(l.sender.taskId!);
       if (owner && watchedBy(owner, l.id, watching)) continue;
-      const at = letterActivityAt(l);
+      // Snoozed: not raised until its date; from then the letter counts as looked at (snooze.ts).
+      if (owner && snoozedUntil(owner, allById, nowMs)) continue;
+      const ended = owner ? snoozeEndedMs(owner, allById, nowMs) : NaN;
+      const at = Math.max(letterActivityAt(l), Number.isFinite(ended) ? ended : -Infinity);
       if (nowMs - at < NEEDS_RECHECK_MS || (opts.notBefore !== undefined && at < opts.notBefore)) continue;
       const tid = l.sender.taskId!;
       byTask.set(tid, [...(byTask.get(tid) ?? []), l]);

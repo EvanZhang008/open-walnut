@@ -82,6 +82,26 @@ orgV1Router.get('/org', async (_req: Request, res: Response, next: NextFunction)
   }
 })
 
+// GET /api/v1/org/status-check: every open task whose stored status is not what its facts say
+// (core/status-consistency.ts). Read-only; answers 503 rather than hang past its deadline, and
+// callers at once share one pass (it reads every task).
+let statusCheckFlight: Promise<Awaited<ReturnType<typeof import('../../core/status-consistency.js').checkStatuses>>> | null = null
+orgV1Router.get('/org/status-check', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { checkStatuses } = await import('../../core/status-consistency.js')
+    const checkedAt = new Date().toISOString()
+    const flight = statusCheckFlight ??= checkStatuses().finally(() => { statusCheckFlight = null })
+    const result = await Promise.race([
+      flight,
+      new Promise<null>((r) => { const t = setTimeout(() => r(null), 15_000); t.unref?.() }),
+    ])
+    if (!result) { res.status(503).json({ error: 'status check timed out', checkedAt }); return }
+    res.json({ checkedAt, mismatches: result })
+  } catch (err) {
+    sendError(res, next, err)
+  }
+})
+
 orgV1Router.get('/org/reports', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { getTask } = await import('../../core/task-manager.js')

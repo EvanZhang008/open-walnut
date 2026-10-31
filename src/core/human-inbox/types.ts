@@ -236,6 +236,12 @@ export interface NewLetter {
    */
   userAsked?: boolean;
   user_asked?: boolean;
+  /**
+   * Why this letter about a snoozed task cannot wait for the snooze's date (human-inbox/
+   * snooze-letter.ts): required then, and it leads the body. Either spelling; never stored apart.
+   */
+  snoozeReason?: string;
+  snooze_reason?: string;
   /** Stamped by the route from the caller's sid, not by the agent. */
   sender: LetterSender;
 }

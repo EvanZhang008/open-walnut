@@ -944,8 +944,8 @@ describe('labels', () => {
   it('names every direction', () => {
     expect(envelopeDirectionLabel('reply')).toBe('Reply from session');
     expect(envelopeDirectionLabel('peer-note')).toBe('Message from another session');
-    expect(envelopeDirectionLabel('notification')).toBe('Walnut notification');
-    expect(envelopeDirectionLabel('reply-request')).toBe('Walnut asked you to reply');
+    expect(envelopeDirectionLabel('notification')).toBe('System notification');
+    expect(envelopeDirectionLabel('reply-request')).toBe('System asked you to reply');
     expect(envelopeDirectionLabel('trigger')).toBe('Trigger fired');
   });
 

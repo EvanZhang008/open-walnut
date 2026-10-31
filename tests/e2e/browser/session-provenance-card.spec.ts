@@ -203,7 +203,7 @@ test('every envelope shape renders as a card, not as a wall of prose', async ({ 
 
   const notice = card(panel, 'notification').filter({ hasText: 'WITHOUT an explicit reply' })
   await expect(notice).toHaveCount(1)
-  await expect(notice.locator('.provenance-fold-dir')).toHaveText('Walnut, about')
+  await expect(notice.locator('.provenance-fold-dir')).toHaveText('System, about')
   // A notice folds to the first sentence of its outcome; open, the whole outcome reads.
   await expect(notice.locator('.provenance-fold-title'))
     .toHaveText('It marked its task COMPLETE WITHOUT an explicit reply to your request.')

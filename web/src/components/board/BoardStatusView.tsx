@@ -11,7 +11,7 @@
  */
 import { memo, useMemo, useState, type ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
-import { USER_STATE_LABELS, USER_STATES, checkedLine, dueAtMs, resultIsPartial, type UserState } from '@open-walnut/user-status';
+import { USER_STATE_LABELS, USER_STATES, stateCountLabel, checkedLine, dueAtMs, resultIsPartial, type UserState } from '@open-walnut/user-status';
 import { CEO_LABEL, VP_LABEL, orgDisplayTitle } from '@open-walnut/org-tree';
 import { RECENT_COMPLETED_DAYS } from '@/api/tasks';
 import { formatWaitUntil } from '@/components/tasks/TaskStatusControl';
@@ -52,8 +52,9 @@ const EMPTY_TEXT: Record<StatusFilter, string> = {
 
 function StatusPill({ row }: { row: StatusRow }) {
   const { state, kind } = row.status;
+  // Stuck is a wait nothing will wake: the state's own name, in the stuck colour (its words say why).
   if (state === 'waiting' && kind === 'stuck') {
-    return <span className="bs-pill bs-pill-stuck" data-state="stuck">Stuck</span>;
+    return <span className="bs-pill bs-pill-stuck" data-state="stuck">{USER_STATE_LABELS.waiting}</span>;
   }
   const main = <span className={`bs-pill bs-pill-${state}`} data-state={state}><span className="bs-dot" />{USER_STATE_LABELS[state]}</span>;
   // Its latest result left things not done (structured-reply.ts): "Done" alone would overstate it.
@@ -244,7 +245,7 @@ export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenTas
             <b className="bs-brief-none">Nothing needs you.</b>
           ) : (
             <>
-              <b className="bs-brief-needs">{brief.needs.length} {brief.needs.length === 1 ? 'needs' : 'need'} you:</b>{' '}
+              <b className="bs-brief-needs">{stateCountLabel('needs', brief.needs.length)}:</b>{' '}
               {brief.needs.map((n, i) => (
                 <span key={n.id}>
                   {i > 0 && '; '}

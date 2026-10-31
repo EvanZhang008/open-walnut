@@ -59,8 +59,8 @@ describe('boardPhaseLabel', () => {
   });
 
   it('the stored user status first, the phase for a task not derived yet, an unknown phase passed through', () => {
-    expect(boardPhaseLabel({ phase: 'NEED_ACTION', user_status: { state: 'waiting', kind: 'lead' } })).toBe('Waiting');
-    expect(boardPhaseLabel({ phase: 'COMPLETE', user_status: { state: 'needs' } })).toBe('Done');
+    expect(boardPhaseLabel({ phase: 'NEED_ACTION', user_status: { state: 'waiting', kind: 'lead' } })).toBe('Waiting / snoozed');
+    expect(boardPhaseLabel({ phase: 'COMPLETE', user_status: { state: 'needs' } })).toBe('Completed');
     expect(boardPhaseLabel({ phase: 'NEED_ACTION' })).toBe('Needs you');
     expect(boardPhaseLabel({ phase: 'SOMETHING_NEW' as never })).toBe('SOMETHING_NEW');
     expect(boardPhaseLabel(undefined)).toBe('');
