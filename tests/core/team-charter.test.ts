@@ -163,6 +163,7 @@ const PROMPT_SITES: Record<string, string> = {
     'new default once that host runs this build: the persona copy plus the session context its replica built',
   'src/core/sessions/spawn-prefix.ts': 'inherited: reads back the prompt a session was spawned with',
   'src/providers/daemon-cron-supervision.ts': 'not a prompt source: lists CLI flags that take a value',
+  'src/providers/cli-argv-files-core.ts': 'not a prompt source: moves the value of a prompt flag a caller built into a file and passes its path',
   'src/providers/inline-subagent.ts': 'not a session: one-shot helper with its own task prompt',
   'src/providers/micro-claude-warm.ts': 'not a session: warm helper process',
   'src/model/providers/adapter-claude-cli.ts': 'not a session: model adapter for helper calls',

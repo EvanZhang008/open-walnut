@@ -299,10 +299,11 @@ describe('cloneIdentityHooks', () => {
     }
     expect(cloneIdentityHooks({ WALNUT_CLONE_IDENTITY: '0' })).toBeNull()
     const all = sessionSettingsHooks({}) as Record<string, Groups>
-    expect(all.PreToolUse.map((g) => g.hooks[0].command === CLONE_IDENTITY_COMMAND)).toEqual([false, true, false])
+    // Beside it on PreToolUse: the temp-dir git guard, the shell-dollar guard and the pattern-kill guard.
+    expect(all.PreToolUse.map((g) => g.hooks[0].command === CLONE_IDENTITY_COMMAND)).toEqual([false, true, false, false])
     expect(all.PostToolUse.map((g) => g.matcher)).toEqual(['Write', 'Bash'])
     const off = sessionSettingsHooks({ WALNUT_CLONE_IDENTITY: '0' }) as Record<string, Groups>
-    expect(off.PreToolUse).toHaveLength(2)
+    expect(off.PreToolUse).toHaveLength(3)
     expect(off.PostToolUse.map((g) => g.matcher)).toEqual(['Write'])
   })
 })

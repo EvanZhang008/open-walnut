@@ -18,7 +18,12 @@ const { spawnMock, settingsArgRef } = vi.hoisted(() => ({
 }));
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-micro-claude-warm'));
-vi.mock('node:child_process', () => ({ spawn: spawnMock }));
+// The in-process one-shot core also runs `ps` once and moves content flags into files
+// (cli-argv-files-core.ts, tested on its own): here the argv the helper built is what is checked.
+vi.mock('node:child_process', () => ({ spawn: spawnMock, execFile: vi.fn() }));
+vi.mock('../../src/providers/cli-argv-files-core.js', () => ({
+  createCliArgvFiles: () => ({ toFiles: (a: string[]) => a, isClaude: () => false, sweep: () => 0, namesIn: () => [], dir: '' }),
+}));
 vi.mock('../../src/core/claude-cli-detect.js', () => ({
   resolveClaudeCliExecutable: () => '/usr/local/bin/claude',
 }));

@@ -540,7 +540,9 @@ describe.each(bunPath ? ['source', 'standalone'] as const : ['source'] as const)
       expect(call.sid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
       expect(fs.realpathSync(call.cwd)).toBe(fs.realpathSync(cwd))
       expect(call.argv[call.argv.indexOf('--permission-mode') + 1]).toBe('bypassPermissions')
-      const ctx = call.argv[call.argv.indexOf('--append-system-prompt') + 1]
+      // The context rides a file, never the command line (cli-argv-files-core.ts).
+      expect(call.argv).not.toContain('--append-system-prompt')
+      const ctx = fs.readFileSync(call.argv[call.argv.indexOf('--append-system-prompt-file') + 1], 'utf8')
       expect(ctx).not.toContain(START_TASK_TOKEN)
       const taskId = /\(id ([^,]+), project "Routines"\)/.exec(ctx)?.[1] ?? ''
       expect(taskId).toMatch(/^[a-z0-9]+-[0-9a-f]{8}$/)
