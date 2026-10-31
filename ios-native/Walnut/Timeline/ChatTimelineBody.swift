@@ -18,6 +18,9 @@ struct ChatTimelineBody: View {
     /// A tapped thinking / tool row — presented in the SAME sheet the session
     /// surface uses, so "tap to see it all" cannot behave differently here.
     @State private var activityDetail: TimelineActivityDetail?
+    /// A tapped task mention (`walnut-task://`): the task sheet a letter's task
+    /// reference opens, so a task reads the same wherever it was cited.
+    @State private var openedTask: InboxTaskDestination?
 
     var body: some View {
         // LAYER ORDER IS LOAD-BEARING (DOCK-c, 2026-08-29). The empty state used to be
@@ -68,6 +71,9 @@ struct ChatTimelineBody: View {
                         Task { await chat.loadOlder() }
                     case .openActivity(let detail):
                         activityDetail = detail
+                    case .openTask(let id):
+                        openedTask = InboxTaskDestination(
+                            id: id, title: TaskMentionResolver.shared.title(for: id))
                     case .previewFile(let ref):
                         // Personal AI chat always runs on the primary box.
                         // HTML keeps the rendered WKWebView preview (and its dock
@@ -127,6 +133,11 @@ struct ChatTimelineBody: View {
         }
         .sheet(item: $activityDetail) { detail in
             TimelineActivitySheet(detail: detail)
+        }
+        .sheet(item: $openedTask) { destination in
+            InboxTaskSheet(destination: destination)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
         }
     }
 }

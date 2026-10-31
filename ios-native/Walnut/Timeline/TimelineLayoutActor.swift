@@ -33,6 +33,10 @@ actor TimelineLayoutActor {
     /// Text size the memo was measured at. A live Dynamic Type change moves every
     /// height in it, exactly like a width change.
     private var cacheSizeCategory: UIContentSizeCategory = .unspecified
+    /// Task-mention table the memo was built against. A mention draws the task's
+    /// CURRENT title, so a rename (or the task list arriving after the transcript)
+    /// moves the text of rows whose message never changed.
+    private var cacheMentionsVersion = -1
     private static let rowCacheLimit = 600
 
     /// Live-head memo (see TimelineRowBuilder.liveRows).
@@ -96,12 +100,15 @@ actor TimelineLayoutActor {
         // access, so a live Dynamic Type change has to reach the styler before any
         // measurement in this build reads a font.
         TimelineTextStyler.adopt(input.sizeCategory)
-        if input.width != cacheWidth || input.sizeCategory != cacheSizeCategory {
+        let mentionsVersion = TaskMentionResolver.shared.version
+        if input.width != cacheWidth || input.sizeCategory != cacheSizeCategory
+            || mentionsVersion != cacheMentionsVersion {
             rowCache = [:]
             headCache = nil
             richEntryIdentities.removeAll(keepingCapacity: true)
             cacheWidth = input.width
             cacheSizeCategory = input.sizeCategory
+            cacheMentionsVersion = mentionsVersion
         }
         if input.scope != cacheScope {
             // The row cache SURVIVES a switch (its keys are scoped, so it can

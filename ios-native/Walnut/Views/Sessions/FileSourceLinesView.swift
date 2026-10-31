@@ -43,10 +43,18 @@ struct FilePathLinkHandling: ViewModifier {
     @State private var htmlTarget: FilePreviewTarget?
     @State private var textTarget: TextFileTarget?
     @State private var dirTarget: DirectoryTarget?
+    /// A task mention (`walnut-task://`, `TaskMentions`): the same task sheet the
+    /// timeline and a letter's task reference open.
+    @State private var taskTarget: InboxTaskDestination?
 
     func body(content: Content) -> some View {
         content
             .environment(\.openURL, OpenURLAction { url in
+                if let taskID = TaskMentionLink.taskID(from: url) {
+                    taskTarget = InboxTaskDestination(
+                        id: taskID, title: TaskMentionResolver.shared.title(for: taskID))
+                    return .handled
+                }
                 // Anything that is not one of ours keeps the system behaviour —
                 // an https:// link in a note must still open Safari.
                 guard let ref = FilePreviewLink.reference(from: url) else { return .systemAction }
@@ -66,6 +74,11 @@ struct FilePathLinkHandling: ViewModifier {
                                   cwd: target.cwd, sessionID: target.sessionID)
             }
             .sheet(item: $dirTarget) { DirectoryPreviewSheet(target: $0) }
+            .sheet(item: $taskTarget) { destination in
+                InboxTaskSheet(destination: destination)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+            }
     }
 }
 

@@ -129,6 +129,7 @@ struct TimelineHost: UIViewControllerRepresentable {
         var onAction: (TimelineRowAction) -> Void = { _ in }
         private let actor = TimelineLayoutActor()
         private var islandObserver: NSObjectProtocol?
+        private var mentionsObserver: NSObjectProtocol?
 
         init() {
             // An island's result strip is part of its row's height, and it comes and
@@ -143,10 +144,20 @@ struct TimelineHost: UIViewControllerRepresentable {
                     self?.resubmit()
                 }
             }
+            // A task the transcript mentions was renamed, created or removed (or the
+            // task list just arrived): the mention's text changes with no message
+            // changing, so nothing else would ask for a rebuild. The actor drops its
+            // memo on the new version.
+            mentionsObserver = NotificationCenter.default.addObserver(
+                forName: TaskMentionResolver.didChange, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.resubmit() }
+            }
         }
 
         deinit {
             if let islandObserver { NotificationCenter.default.removeObserver(islandObserver) }
+            if let mentionsObserver { NotificationCenter.default.removeObserver(mentionsObserver) }
         }
 
         /// Ship the latest input to the actor (latest-wins there) and apply

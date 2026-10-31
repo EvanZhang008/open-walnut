@@ -294,7 +294,11 @@ enum TimelineTextStyler {
             if let link = run.link {
                 attrs[.link] = link
                 attrs[.foregroundColor] = UIColor.tintColor
-                attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                // A task mention reads as a name (semibold, from its intent), not
+                // as an address: no underline.
+                if !TaskMentionLink.isTaskLink(link) {
+                    attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                }
             }
             if run.underlineStyle != nil {
                 attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
@@ -312,13 +316,17 @@ enum TimelineTextStyler {
     static func inlineText(_ text: String, font: UIFont = bodyFont,
                            color: UIColor = .label,
                            lineBreakTags: Bool = false) -> NSAttributedString {
-        var source = text
+        // Task mentions (`<task-ref/>`, `[id|label]`, a bare known id) read as the
+        // task's current title and open it, as in `MarkdownParser.inline`. Before this,
+        // a one-line reply carrying a `<task-ref/>` showed the raw tag on this path.
+        var source = TaskMentions.rewriteRefs(text)
         let breaks = lineBreakTags ? MarkdownParser.markLineBreakTags(&source) : nil
         if var attributed = try? AttributedString(
             markdown: source,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) {
             if let breaks { MarkdownParser.resolveLineBreakMarks(&attributed, spellings: breaks) }
+            TaskMentions.apply(&attributed)
             MarkdownParser.linkifyBareURLs(&attributed)
             MarkdownParser.linkifyPreviewableFilePaths(&attributed)
             let style = paragraphStyle(spacing: 0, lineSpacing: 3)

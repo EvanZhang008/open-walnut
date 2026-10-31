@@ -35,6 +35,9 @@ struct SessionTimelineBody: View {
     /// A tapped thinking / tool row — the SAME sheet the Personal AI chat
     /// presents, from the same action, so the two surfaces cannot drift.
     @State private var activityDetail: TimelineActivityDetail?
+    /// A tapped task mention (`walnut-task://`): the task sheet a letter's task
+    /// reference opens, so a task reads the same wherever it was cited.
+    @State private var openedTask: InboxTaskDestination?
 
     var body: some View {
         // LAYER ORDER IS LOAD-BEARING (DOCK-c, 2026-08-29) — same fix as
@@ -80,6 +83,9 @@ struct SessionTimelineBody: View {
                         Task { await store.loadEarlier() }
                     case .openActivity(let detail):
                         activityDetail = detail
+                    case .openTask(let id):
+                        openedTask = InboxTaskDestination(
+                            id: id, title: TaskMentionResolver.shared.title(for: id))
                     case .previewFile(let ref):
                         // HTML keeps the rendered WKWebView preview (and its dock
                         // seat); every other extension is text, where a line
@@ -130,6 +136,11 @@ struct SessionTimelineBody: View {
         }
         .sheet(item: $activityDetail) { detail in
             TimelineActivitySheet(detail: detail)
+        }
+        .sheet(item: $openedTask) { destination in
+            InboxTaskSheet(destination: destination)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
         }
         .task { await WalnutAdditionsSetting.shared.refreshIfStale() }
     }

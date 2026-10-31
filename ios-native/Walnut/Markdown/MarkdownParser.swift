@@ -39,7 +39,8 @@ enum MarkdownParser {
     // watchdog kill on long threads. Cache by exact content so a stable row
     // parses exactly once; NSCache bounds growth (live streaming feeds a fresh
     // string each tick) and purges under memory pressure. parse is a pure
-    // function of `content`, so caching can never go stale.
+    // function of `content` and the task-mention table's version (task titles),
+    // and the key carries both, so caching can never go stale.
     private final class Parsed { let blocks: [MarkdownBlock]; init(_ b: [MarkdownBlock]) { blocks = b } }
     private static let cache: NSCache<NSString, Parsed> = {
         let c = NSCache<NSString, Parsed>()
@@ -108,7 +109,11 @@ enum MarkdownParser {
             content = String(content[..<cut]) + "…"
         }
         guard mode == .shared else { return parseUncached(content) }
-        let key = content as NSString
+        // The task-mention table's version rides the key: a mention renders the task's
+        // CURRENT title, so a render made before a rename or before the list loaded must
+        // never be served after it. Read BEFORE the parse, so a parse that saw a newer
+        // table can only ever be filed under an older (dead) key, never the reverse.
+        let key = "\(TaskMentionResolver.shared.version)\u{1}\(content)" as NSString
         if let hit = cache.object(forKey: key) { return hit.blocks }
         let blocks = parseUncached(content)
         cache.setObject(Parsed(blocks), forKey: key, cost: key.length)
@@ -325,7 +330,9 @@ enum MarkdownParser {
     }
 
     static func inline(_ text: String) -> AttributedString {
-        var source = replaceEntityRefs(text)
+        // Task mentions read as the task's current title and open it (TaskMentions);
+        // `replaceEntityRefs` stays the plain-label normalization the stores compare by.
+        var source = TaskMentions.rewriteRefs(text)
         // [[Note|alias]] → alias, [[path/To/Note]] → Note (display text only)
         source = source.replacingOccurrences(
             of: #"\[\[([^\]|]+)\|([^\]]+)\]\]"#, with: "$2", options: .regularExpression
@@ -366,6 +373,9 @@ enum MarkdownParser {
         // After the underline pass: that one maps String indices taken BEFORE this
         // edit changes the length.
         if let breaks { resolveLineBreakMarks(&attributed, spellings: breaks) }
+        // Before the URL and path passes: a title that carries a URL or a path is
+        // already a link when they run, so they leave it alone.
+        TaskMentions.apply(&attributed)
         linkifyBareURLs(&attributed)
         linkifyPreviewableFilePaths(&attributed)
         return attributed

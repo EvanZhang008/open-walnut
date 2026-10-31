@@ -35,8 +35,20 @@ final class TasksStore {
     private var sessionLoadSeq = 0
 
     var tasks: [WalnutTask] = [] {
-        didSet { tasksGen &+= 1 }
+        didSet {
+            tasksGen &+= 1
+            scheduleTaskMentionSync()
+        }
     }
+    /// Feed the task-mention table chat text renders titles from
+    /// (`TaskMentionResolver`, see TasksStoreMentions.swift). Off in a hosted
+    /// unit-test process, where every test builds its own store with fixture
+    /// tasks: those must not rename ids in an unrelated test's rendering. A test
+    /// of the feed itself turns it on.
+    @ObservationIgnored var feedsTaskMentions =
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
+    /// One sync per main-actor turn, however many row writes land in it.
+    @ObservationIgnored var taskMentionSyncScheduled = false
     var syncedAt: Date?
     var loading = false
     var errorMessage: String?

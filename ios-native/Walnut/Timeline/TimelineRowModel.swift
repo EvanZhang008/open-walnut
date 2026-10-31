@@ -332,8 +332,10 @@ extension TimelineRowContent {
         switch self {
         case .text(let attributed):
             hasher.combine(attributed.string)
+            Self.combineLinks(of: attributed, into: &hasher)
         case .userBubble(let text, _, let failed, let pending, let added):
             hasher.combine(text.string)
+            Self.combineLinks(of: text, into: &hasher)
             hasher.combine(failed)
             hasher.combine(pending)
             // Drawn in the long-press menu (its title flips Show/Hide) under an
@@ -405,6 +407,7 @@ extension TimelineRowContent {
             hasher.combine(icon)
             hasher.combine(isError)
             hasher.combine(body.string)
+            Self.combineLinks(of: body, into: &hasher)
             hasher.combine(collapsedLine)
             hasher.combine(collapsedLimit)
             hasher.combine(collapsible)
@@ -423,6 +426,21 @@ extension TimelineRowContent {
             hasher.combine(label)
         }
         return hasher.finalize()
+    }
+
+    /// Where the text's links are and where they go. The one attributes-only change
+    /// text can make: a task mention whose `<task-ref/>` label already equals the
+    /// task's title becomes a link when the task list loads, with every character
+    /// unchanged (`TaskMentions`). Without this the cell kept the dead label.
+    private static func combineLinks(of text: NSAttributedString, into hasher: inout Hasher) {
+        guard text.length > 0 else { return }
+        var links: [String] = []
+        text.enumerateAttribute(.link, in: NSRange(location: 0, length: text.length)) { value, range, _ in
+            guard let value else { return }
+            let target = (value as? URL)?.absoluteString ?? (value as? String) ?? ""
+            links.append("\(range.location):\(range.length):\(target)")
+        }
+        hasher.combine(links)
     }
 
     /// Is this row a CHIP the reader taps (to open the activity drawer, or to open
@@ -740,6 +758,10 @@ enum TimelineRowAction {
     /// reference, not just the path: the position the writer named is the
     /// difference between opening the file and opening the LINE.
     case previewFile(ref: FilePathRef)
+    /// Open a task in the app's task sheet. Raised when a tapped link is a task
+    /// mention (`TaskMentionLink`, `walnut-task://`): the hosts present
+    /// `InboxTaskSheet`, the same sheet a letter's task reference opens.
+    case openTask(id: String)
     case toggleExpanded(rowID: String)
     /// A thinking or tool row was tapped: present the activity drawer. Carries
     /// its own content (see `TimelineActivityDetail`) — the coordinator forwards

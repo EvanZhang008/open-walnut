@@ -627,13 +627,15 @@ extension Text {
     /// URLs become tappable links here too — short plain messages take this
     /// fast path and never reach the block parser's linkifier.
     init(inline: String) {
-        // Entity-ref pills (<task-ref …/>) must render as their label on this
-        // fast path too, or a short "已创建: <task-ref …/>" reply shows raw XML.
-        let source = MarkdownParser.replaceEntityRefs(inline)
+        // Entity-ref pills (<task-ref …/>) must render on this fast path too, or a
+        // short "已创建: <task-ref …/>" reply shows raw XML. Task mentions read as the
+        // task's current title and link to it (TaskMentions).
+        let source = TaskMentions.rewriteRefs(inline)
         if var attributed = try? AttributedString(
             markdown: source,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         ) {
+            TaskMentions.apply(&attributed)
             MarkdownParser.linkifyBareURLs(&attributed)
             // Deliberately NOT linkifyPreviewableFilePaths. Its UIKit twin
             // (TimelineTextStyler.inlineText) does linkify paths, because the
