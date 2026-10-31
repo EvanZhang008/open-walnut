@@ -678,6 +678,19 @@ function leaderSentence(task: unknown, id: string, p: LeaderPlacement | undefine
 const WATCHED_AT_DESCRIPTION = 'ISO time to keep the task on the user\'s Watching list at the top of the task panel, "" to stop watching. '
   + 'Changes nothing else (phase, board tier, pin)'
 
+// A task's own line, set from outside its turn (src/core/sessions/report-set.ts; 2026-10-31, the user:
+// "each task shoud be giving the what is waiting next other like vp can chaneg it but each task mange it self").
+const REPORT_CHANGE = z.object({
+  state: z.enum(['needs', 'working', 'waiting']).describe('needs = the user must decide or do something (ask required); waiting = on whom or what (waiting_on required); working = it carries on'),
+  ask: z.string().max(300).optional().describe('With needs: the one concrete thing the user must decide or do'),
+  waiting_on: z.string().max(300).optional().describe('With waiting: on whom or what exactly ("its lead, to land commit abc", "the CI run on main")'),
+  waiting_kind: z.enum(['task', 'time', 'machine', 'outside', 'you', 'lead', 'other']).optional().describe('With waiting: what kind of thing it waits on'),
+  next: z.string().max(300).optional().describe('Who does what next, one sentence'),
+})
+const REPORT_SET_TEXT = 'Set what a task waits on next, as its own turn-end report would: its line on the Org page, the Board and the phone, '
+  + 'recorded as yours (by). For a task you lead, or as its VP or Main; the task\'s next own report replaces it. It moves the '
+  + 'phase as that report would (needs = NEED_ACTION; waiting on something outside = WAITING). Needs always names the ask.'
+
 defineOp({
   name: 'task_update',
   title: 'Update a Walnut task',
@@ -722,6 +735,7 @@ defineOp({
     reason: z.string().min(10).max(500).optional().describe('With force: who asked for the close and why it is right'),
     parent_task_id: z.string().optional().describe('Adopt or release: set to your own task id to make an existing task a worker of yours (it keeps its project and folder; its stops, completions, errors and waits then reach you), or "" to release it.'),
     watched_at: z.string().nullable().optional().describe(WATCHED_AT_DESCRIPTION),
+    report: REPORT_CHANGE.optional().describe(`What it waits on next (task_report_set): ${REPORT_SET_TEXT}`),
   },
   // The old park receipt's text (removed 2026-10-05). A session started before
   // then still sends it, and a host replays the writes it queued offline: a park
@@ -737,6 +751,16 @@ defineOp({
     }
     if (Object.keys(body).length === 0) {
       throw new Error('task_update needs at least one field to change besides `id`.')
+    }
+    // The line goes through its own route first (core/sessions/report-set.ts), so a phase in the same
+    // call is written after it and wins.
+    const report = body.report
+    delete body.report
+    const reported = report === undefined ? undefined
+      : await call('PUT', `/tasks/${encodeURIComponent(String(id))}/report`, report) as { task?: unknown } | undefined
+    if (Object.keys(body).length === 0) {
+      return withOutcome({ ...headline(reported?.task), ...(reported ?? {}) },
+        'Task line updated (report). No session was started or stopped by this.', 'No further action is required. Its own next report replaces this.')
     }
     const patched = await call('PATCH', `/tasks/${encodeURIComponent(String(id))}`, body) as
       { task?: unknown; title_shortened_from?: string; placement?: LeaderPlacement; phase_ignored?: { message?: string } } | undefined
@@ -810,6 +834,28 @@ defineOp({
       { ...headline(task), noteChars: note.length },
       append ? 'Entry added to the task note. Execution is unchanged.' : 'Task note replaced. Execution is unchanged.',
       'No further action is required.',
+    )
+  },
+  tags: { readonly: false, remote: 'allow' },
+})
+
+defineOp({
+  name: 'task_report_set',
+  title: 'Set what a task waits on next',
+  description: REPORT_SET_TEXT,
+  input: {
+    id: z.string().min(1).describe('Task id or a unique id prefix'),
+    report: REPORT_CHANGE,
+  },
+  routes: [{ method: 'PUT', path: '/tasks/:id/report' }],
+  handler: async (args, call) => {
+    const out = await call('PUT', `/tasks/${encodeURIComponent(String(args.id))}/report`, args.report) as
+      { task?: Record<string, unknown>; phase?: string | null } | undefined
+    const line = (out?.task?.user_status as { line?: { text?: string } } | undefined)?.line?.text
+    return withOutcome(
+      { ...headline(out?.task), ...(out?.phase ? { phase: out.phase } : {}) },
+      `Its line is set${out?.phase ? ` and its phase moved to ${out.phase}` : ''}${line ? `: "${line}"` : ' (its status shows it once the sync runs, about 2 s)'}. No session was started or stopped.`,
+      'No further action is required. Its own next report replaces this.',
     )
   },
   tags: { readonly: false, remote: 'allow' },

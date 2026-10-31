@@ -101,6 +101,28 @@ export interface StatusReport {
   at: string;
   /** When the turn it reports on ended (ISO); absent on a report an older Walnut stored. */
   turn_ended_at?: string;
+  /** Who wrote it when not the task's own session (sessions/report-set.ts): its lead, VP or Main
+   *  (`task:<id>`), or a person. The task's next own report replaces it. */
+  by?: StatusLineBy;
+  /** The setter task's title, for display. */
+  by_name?: string;
+}
+
+/** Who wrote a task's own line: the task itself, another task, or a person. */
+export type StatusLineBy = 'self' | 'human' | `task:${string}`;
+
+/**
+ * The task's own words for where it stands (2026-10-31, the user: "each task shoud be giving the what
+ * is waiting next ... vp can chaneg it but each task mange it self"): the concrete ask when it needs
+ * the user, on whom or what it waits when waiting, its next step when working. From its current report
+ * (its turn-end self-report, or a change its lead, VP, Main or a person made), only while that report
+ * says the state the facts give.
+ */
+export interface StatusLine {
+  text: string;
+  by: StatusLineBy;
+  byName?: string;
+  at: string;
 }
 
 /** The facts a status is derived from. Everything optional: a missing fact never invents a state. */
@@ -214,6 +236,8 @@ export interface UserStatus {
   /** Snoozed by its start date (snooze.ts): `until` as set, and the ask it would make of the user
    *  now, which no surface raises until then. Absent on a task that is not snoozed. */
   snoozed?: { until: string; ask?: string };
+  /** The task's own line (StatusLine); absent when no current report gives words for its state. */
+  line?: StatusLine;
 }
 
 /** "2 hours ago", "3 days ago". */
@@ -350,6 +374,8 @@ export function reportIsCurrent(input: Pick<UserStatusInput, 'report' | 'phaseCh
 
 export function deriveUserStatus(input: UserStatusInput, nowMs: number = Date.now()): UserStatus {
   const derived = derive(input, nowMs);
+  const line = lineOf(input, derived);
+  if (line) derived.line = line;
   const out = snoozeOf(input, derived, nowMs) ?? derived;
   if (out.state !== 'done' && !out.snoozed) {
     const due = dueStatus(input.dueDate, nowMs);
@@ -361,6 +387,18 @@ export function deriveUserStatus(input: UserStatusInput, nowMs: number = Date.no
   // handed it back" is no claim about the world.
   if (out.state === 'needs' && out.source === 'session' && out.ask && out.ask === reportAsk(input.report)) stampChecked(out, input, nowMs);
   return out;
+}
+
+/** The task's own line for the state it is in (StatusLine), from its current report. */
+function lineOf(input: UserStatusInput, s: UserStatus): StatusLine | undefined {
+  const r = reportIsCurrent(input) ? input.report : null;
+  if (!r || s.state === 'done') return undefined;
+  const text = s.state === 'needs'
+    ? (r.state === 'needs' ? r.ask : waitIsUsers(r) ? r.waiting_on : undefined)
+    : s.state === 'waiting' ? (r.state === 'waiting' && !waitIsUsers(r) ? r.waiting_on : undefined)
+      : r.state === 'working' ? (r.next ?? r.now) : undefined;
+  if (none(text)) return undefined;
+  return strip<StatusLine>({ text: clean(text).slice(0, 300), by: r.by ?? 'self', byName: r.by_name, at: r.at });
 }
 
 /**

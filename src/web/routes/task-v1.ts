@@ -7,6 +7,7 @@
  *   DELETE /tasks/:id?force=true     → 204 (409 conflict when sessions are active)
  *   POST   /tasks/:id/complete       → { task } (completeTask semantics, CLI parity)
  *   POST   /tasks/:id/start          → { action, taskId, title, sessionId? }
+ *   PUT    /tasks/:id/report         → { task, phase } (its own line, set by its lead, VP, Main or a person)
  *   POST   /tasks/:id/star           → { task, starred: false } (RETIRED no-op)
  *   POST   /tasks/:id/notes          → { task } (append timestamped note)
  *   PUT    /tasks/:id/note           → { task } (replace whole note)
@@ -398,6 +399,31 @@ taskV1Router.post('/tasks/:id/team-resume', async (req: Request, res: Response, 
     try {
       res.json(await resumeTeam(paramStr(req.params.id), { by: (await callerBy(req)).by }))
     } catch (err) {
+      if (sendTaskManagerError(res, err)) return
+      throw err
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// PUT /api/v1/tasks/:id/report { state, ask?, waiting_on?, waiting_kind?, next? } → { task, phase }: the
+// task's own line set from outside its turn, by its lead, VP, Main or a person (core/sessions/report-set.ts).
+taskV1Router.put('/tasks/:id/report', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (role() === 'replica') { sendError(res, 501, 'not_supported_cloud', 'A task report is set on the primary box'); return }
+    const { setTaskReport, ReportChangeError } = await import('../../core/sessions/report-set.js')
+    const { by } = await callerBy(req)
+    let setter: { taskId: string; title?: string } | null = null
+    if (by.startsWith('task:')) {
+      const callerTaskId = by.slice('task:'.length)
+      const { getTask } = await import('../../core/task-manager.js')
+      setter = { taskId: callerTaskId, title: (await getTask(callerTaskId).catch(() => null))?.title }
+    }
+    try {
+      res.json(await setTaskReport(paramStr(req.params.id), req.body, setter))
+    } catch (err) {
+      if (err instanceof ReportChangeError) { sendError(res, err.status, err.code, err.message); return }
       if (sendTaskManagerError(res, err)) return
       throw err
     }

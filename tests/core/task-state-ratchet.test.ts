@@ -237,7 +237,7 @@ describe('the stored state has one writer, and it applies the snooze', () => {
   it('every derived state passes the snooze: deriveUserStatus has one exit, through snoozeOf', () => {
     const src = fs.readFileSync(path.join(ROOT, 'src/core/user-status.ts'), 'utf8')
     const body = src.slice(src.indexOf('export function deriveUserStatus('), src.indexOf('\n}\n', src.indexOf('export function deriveUserStatus(')))
-    expect(body).toMatch(/const derived = derive\(input, nowMs\);\s*const out = snoozeOf\(input, derived, nowMs\) \?\? derived;/)
+    expect(body).toMatch(/const derived = derive\(input, nowMs\);[\s\S]*?const out = snoozeOf\(input, derived, nowMs\) \?\? derived;/)
     expect(body.match(/\breturn\b/g)).toHaveLength(1)
   })
 })

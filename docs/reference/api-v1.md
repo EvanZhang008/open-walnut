@@ -880,6 +880,12 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   answers what would wake the task (and every open task under it): `{ root, members: [{ id,
   title }], routines: [{ id, name?, target, enabled, kind: 'trigger' | 'routine' }], clocks:
   [{ taskId, kind: 'wait_until' | 'promise_alarm', at }], stopped? }`.
+  `PUT /tasks/:id/report` (added 2026-10-31) `{ state: 'needs' | 'working' | 'waiting', ask?,
+  waiting_on?, waiting_kind?, next? }` → `{ task, phase }` sets what the task waits on next from
+  outside its turn, recorded with who set it (the caller's task, or `human`); the phase moves as the
+  task's own report would (`phase` is the new one, or null). `needs` without an `ask`, or `waiting`
+  without `waiting_on`, is `400 bad_request`; a completed task is `409 conflict`. The task's next own
+  report replaces it. Op: `task_report_set` (and `task_update`'s `report`).
   `user_status` (added 2026-10) is the ONE status the user sees, present on open
   tasks: `{ state, kind?, ask?, source?, waitingOn?, until?, now?, next?, at?, stale? }`.
   `state` is `needs` (only what the user alone can decide, approve or do; `ask`
@@ -895,7 +901,15 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   `checkedAt` (when its session last confirmed the ask at a turn end, ISO; `checkedBy` is
   `session`), `watchedAt` (when a trigger of the task last ran: shown beside it, never a check,
   since it watches the task and maybe not this ask), and `unverified: true` once `checkedAt` is
-  more than 4.5 hours old: show it as not verified, never as fact (added 2026-10-28). The server derives it (src/core/user-status.ts) and
+  more than 4.5 hours old: show it as not verified, never as fact (added 2026-10-28). `snoozed`
+  `{ until, ask? }` (added 2026-10-31) marks a task whose start date (its own or its nearest
+  ancestor's) is still ahead: one that would ask the user reads `waiting` (`kind: 'time'`,
+  `waitingOn: 'Snoozed until <date>'`) and `ask` keeps what it will ask then. A `needs` always
+  carries a concrete ask: a worker whose turn ended with none reads `waiting` on its lead, a lead or
+  Main with none `waiting` on the user (added 2026-10-31). `line` `{ text, by, byName?, at }` (added
+  2026-10-31) is the task's own words for its state (the ask, what it waits on, or its next step),
+  from its current report: `by` is `self` (its turn-end report), `task:<id>` (its lead, VP or Main
+  set it with `PUT /tasks/:id/report`) or `human`. The server derives it (src/core/user-status.ts) and
   every surface shows it instead of the phase, so a `NEED_ACTION` phase alone is
   not "needs you". A client reading an older server sees no field and falls back
   to the phase. Additive and optional.

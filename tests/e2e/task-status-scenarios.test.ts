@@ -14,7 +14,8 @@
  *   check    status_check finds nothing wrong with it      (src/core/status-consistency.ts)
  *
  * Flows: ask -> answer, snooze -> the date passes, park on CI -> the trigger fires, a report that
- * waits on the user, a worker done -> its lead, a finished task reopened. Only the Claude CLI is
+ * waits on the user, a worker done -> its lead, a finished task reopened, the task's own line set by
+ * itself, its lead and a person. Only the Claude CLI is
  * mocked; session records are written directly, as the session runtime would.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
@@ -220,5 +221,40 @@ describe('every surface shows the same state after every step', () => {
     // A message from the user reopens it and runs a turn.
     await turnStarts(worker, sid, 'web', true)
     await expectEverywhere(worker.id, lead.id, 'working', 'reopened')
+  }, 120_000)
+
+  it('each task writes what it waits on next; its lead may change it; its own next report replaces that', async () => {
+    const { lead, worker, sid } = await team('Lineflow')
+    const leadSid = 'sess-lineflow-lead'
+    await createSessionRecord(leadSid, lead.id, 'Lineflow')
+    const line = async () => {
+      await syncUserStatuses(new Set([worker.id]))
+      return (await getTask(worker.id)).user_status
+    }
+    const put = (body: unknown, caller?: string) => fetch(`http://localhost:${port}/api/v1/tasks/${worker.id}/report`, {
+      method: 'PUT', headers: { 'content-type': 'application/json', ...(caller ? { 'x-walnut-caller-sid': caller } : {}) },
+      body: JSON.stringify(body),
+    })
+    // Its own turn-end report: the ask, by itself.
+    await turnEnds(worker, sid, { state: 'needs', ask: 'Pick A or B for the parser output' })
+    expect((await line())?.line).toMatchObject({ text: 'Pick A or B for the parser output', by: 'self' })
+    await expectEverywhere(worker.id, lead.id, 'needs', 'its own ask')
+    // Its lead changes it: waiting on the lead to land it. Recorded as the lead's, the phase follows.
+    const set = await put({ state: 'waiting', waiting_kind: 'lead', waiting_on: 'Its lead, to land commit abc123' }, leadSid)
+    expect(set.status, await set.clone().text()).toBe(200)
+    expect((await getTask(worker.id)).phase).toBe('WAITING')
+    expect(await line()).toMatchObject({ state: 'waiting', kind: 'lead', line: { text: 'Its lead, to land commit abc123', by: `task:${lead.id}`, byName: 'Lineflow lead' } })
+    await expectEverywhere(worker.id, lead.id, 'waiting', 'its lead changed it')
+    // Needs you always names the ask, whoever sets it.
+    expect((await put({ state: 'needs' }, leadSid)).status).toBe(400)
+    expect((await put({ state: 'waiting' }, leadSid)).status).toBe(400)
+    // A person sets it.
+    expect((await put({ state: 'needs', ask: 'Sign the release form' })).status).toBe(200)
+    const byPerson = await line()
+    expect(byPerson?.line, JSON.stringify({ phase: (await getTask(worker.id)).phase, byPerson, report: (await getTask(worker.id)).status_report })).toMatchObject({ text: 'Sign the release form', by: 'human' })
+    // Its own next report replaces the change.
+    await turnStarts(worker, sid, 'web')
+    await turnEnds(worker, sid, { state: 'needs', ask: 'Review the draft' })
+    expect((await line())?.line).toMatchObject({ text: 'Review the draft', by: 'self' })
   }, 120_000)
 })
