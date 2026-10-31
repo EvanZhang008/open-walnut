@@ -106,6 +106,9 @@ import type { ImageAttachment } from '@/api/chat';
 import { useSelectionScrollGuard, useSelectionFrozenWith, useSelectionAnchoredScroll } from '@/utils/selection-guard';
 import { runWhenVisible } from '@/utils/page-visibility';
 import { log } from '@/utils/log';
+import { isFolderGoneReason, goneFolderOf } from '@/utils/folder-gone';
+import { ContinueInNewFolderButton } from './FolderGoneBanner';
+import type { ContinueInNewFolderResult } from '@/api/sessions';
 import { historyErrorText, olderUnavailableText } from './history-notice-text';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 
@@ -253,6 +256,11 @@ interface SessionChatHistoryProps {
   onAgentQueued?: (msg: { queueId: string; text: string; enqueuedAt?: string; sentBy?: 'person' | 'agent'; queuedText?: string }) => void;
   onRetryFailed?: (queueId: string) => void;
   onDismissFailed?: (queueId: string) => void;
+  /** A row that failed because the session's folder is gone offers to continue in a new
+   *  folder (FolderGoneBanner.tsx); the panel reloads the record on its answer. */
+  onFolderMoved?: (result: ContinueInNewFolderResult) => void;
+  /** Whether the gone folder's session still has its history (the button's words follow it). */
+  folderGoneHistory?: 'found' | 'missing' | 'unknown';
   onTaskClick?: (taskId: string) => void;
   onSessionClick?: (sessionId: string) => void;
   onFileOpen?: (path: string, line?: number) => void;
@@ -513,7 +521,7 @@ function ownRowsOf(queuedSig: string, tree: ThreadTree): { sentKeys: Set<string>
   return { sentKeys, queuedKeys, unsentKeys };
 }
 
-export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession }: SessionChatHistoryProps) {
+export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, engine, phase, initialPrompt, sessionCwd, sessionHost, optimisticMessages, onMessagesDelivered, onBatchCompleted, onBatchFailed, onDeliveryWaiting, onEditQueued, onDeleteQueued, onAgentQueued, onRetryFailed, onDismissFailed, onFolderMoved, folderGoneHistory, onTaskClick, onSessionClick, onFileOpen, onStreamingChange, scrollToBottomNonce, onRequestComposerFocus, onQuoteInChat, chatLane, earlierSessionsTaskId, onOpenEarlierSession }: SessionChatHistoryProps) {
   // Dev-only render counter per session: lets a browser test prove a hot
   // interaction (the pointer over a question mark) never re-renders this tree.
   if (import.meta.env.DEV && typeof window !== 'undefined') {
@@ -4416,7 +4424,21 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         {m.status === 'delivered' && (
           <div className="session-msg-delivered-badge">Delivered ✓</div>
         )}
-        {m.status === 'failed' && (
+        {m.status === 'failed' && isFolderGoneReason(m.failedError) && (
+          // Its folder is gone: Retry would only fail again, so the way on is a new folder.
+          <>
+            <div className="session-msg-failed-badge">
+              {`Not delivered: this session's folder is gone${goneFolderOf(m.failedError) ? ` (${goneFolderOf(m.failedError)})` : ''}. The message is kept and goes out once the session continues in a new folder.`}
+            </div>
+            <div className="session-msg-queued-actions">
+              <ContinueInNewFolderButton sessionId={sessionId} history={folderGoneHistory} className="session-msg-retry-btn" onDone={onFolderMoved} />
+              {m.parked
+                ? <button onClick={() => onDeleteQueued?.(m.queueId)}>Discard</button>
+                : <button onClick={() => onDismissFailed?.(m.queueId)}>Dismiss</button>}
+            </div>
+          </>
+        )}
+        {m.status === 'failed' && !isFolderGoneReason(m.failedError) && (
           <>
             <div className="session-msg-failed-badge">
               {m.parked

@@ -359,7 +359,9 @@ function ProvenanceCard({ envelope, sessionCwd }: { envelope: SessionEnvelope; s
   // A session is named by its title, never by its id.
   const headline = peer.anonymous
     ? 'Unidentified process (no tracked session)'
-    : resolved.title || 'another session';
+    // A Walnut notice that names no other task or session is about this one (a restart,
+    // a move to a new folder, a changed place).
+    : resolved.title || (envelope.kind === 'notification' && !resolved.taskId && !resolved.fullId ? 'this session' : 'another session');
   // Who sent it, as the reader knows them: the task, then the session's own title.
   const sender = peer.anonymous ? 'an unidentified process' : taskLabel?.title || headline;
   // A notice's outcome IS its folded title; open, it is repeated only when the fold cut it.

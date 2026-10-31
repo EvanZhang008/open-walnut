@@ -1240,10 +1240,21 @@ export async function retrySession(sessionId: string): Promise<
   { status: 'reconnected'; sessionId: string } |
   { status: 'resumable'; sessionId: string } |
   { status: 'resuming'; sessionId: string } |
-  { status: 'pending'; taskId: string; oldSessionId: string }
+  { status: 'pending'; taskId: string; oldSessionId: string } |
+  { status: 'folder_gone'; sessionId: string; cwdGone: NonNullable<SessionRecord['cwdGone']> }
 > {
   // A remote session's retry first dials its host (up to 20s server-side), past the 15s default.
   return apiPost(`/api/sessions/${sessionId}/retry`, {}, { timeoutMs: 30_000 });
+}
+
+/** Mirrors ContinueResult in src/core/sessions/folder-gone.ts. */
+export type ContinueInNewFolderResult =
+  | { status: 'continued'; sessionId: string; cwd: string; from: string; history: 'kept'; sent: number }
+  | { status: 'started'; oldSessionId: string; taskId: string; cwd: string; from: string; history: 'fresh'; carried: number };
+
+/** The session's folder is gone: continue it in its task's own directory (the old folder is never recreated). */
+export async function continueInNewFolder(sessionId: string): Promise<ContinueInNewFolderResult> {
+  return apiPost(`/api/sessions/${sessionId}/continue-in-new-folder`, {}, { timeoutMs: 30_000 });
 }
 
 /** Mirrors RecheckResult in src/core/sessions/session-lifecycle.ts. */

@@ -24,11 +24,13 @@ interface SessionRetryButtonProps {
   sessionId: string;
   onRetried?: (taskId: string) => void;   // fallback path (new session created)
   onResuming?: () => void;                 // same-session path (nothing swapped)
+  /** Its folder is gone (nothing was sent): the panel reloads the record to show the way on. */
+  onFolderGone?: () => void;
   /** The execution host. Absent/empty = this machine, which changes the wording. */
   host?: string | null;
 }
 
-export function SessionRetryButton({ sessionId, onRetried, onResuming, host }: SessionRetryButtonProps) {
+export function SessionRetryButton({ sessionId, onRetried, onResuming, onFolderGone, host }: SessionRetryButtonProps) {
   const remote = !!host;
   const verb = remote ? 'Reconnect' : 'Recheck';
   const [state, setState] = useState<'idle' | 'retrying' | 'error'>('idle');
@@ -43,6 +45,8 @@ export function SessionRetryButton({ sessionId, onRetried, onResuming, host }: S
       if (result.status === 'pending') {
         // Only this path produces a DIFFERENT session on the same task.
         onRetried?.(result.taskId);
+      } else if (result.status === 'folder_gone') {
+        onFolderGone?.();
       } else {
         // Same session — the record's WS status event updates the UI.
         onResuming?.();
@@ -57,7 +61,7 @@ export function SessionRetryButton({ sessionId, onRetried, onResuming, host }: S
       setFailure(message);
       setState('error');
     }
-  }, [sessionId, onRetried, onResuming]);
+  }, [sessionId, onRetried, onResuming, onFolderGone]);
 
   if (state === 'retrying') {
     return (

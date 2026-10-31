@@ -387,7 +387,7 @@ const RULES: Rule[] = [
       if (cwd && (looksLikeMissingDir(err) || !err)) {
         return {
           title: "Couldn't start a session",
-          message: `The working folder no longer exists: ${cwd}`,
+          message: `The working folder no longer exists: ${cwd}. Open the session to continue it in a new folder.`,
         };
       }
       return { title: "Couldn't start a session", message: firstSentence(err) };

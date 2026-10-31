@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useLayoutEffect } from 'react';
+import { isFolderGoneReason } from '@/utils/folder-gone';
 import { useEvent } from './useWebSocket';
 import { wsClient, type ConnectionState } from '@/api/ws';
 import { isToolResultError } from '@/api/chat';
@@ -807,8 +808,9 @@ export function useSessionStream(sessionId: string | null): UseSessionStreamRetu
     sawFirstTextDelta.current = false;
     sawFirstTextFlush.current = false;
 
-    // Show the error inline in the session chat timeline
-    if (error) {
+    // Show the error inline in the session chat timeline. A gone folder is said once, by
+    // the panel's banner and the message's own row (FolderGoneBanner), with the way on.
+    if (error && !isFolderGoneReason(error)) {
       const detail = error.length > 500 ? error.slice(0, 500) + '…' : error;
       setBlocks((prev) => {
         const next = appendSystemBlock(prev, { variant: 'error', message: 'Session error', detail });

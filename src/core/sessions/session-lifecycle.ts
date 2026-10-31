@@ -700,6 +700,14 @@ export async function restartSession(sessionId: string): Promise<RestartResult> 
   if (!record) throw new SessionControlError('Session not found', 404);
   if (record.archived) throw new SessionControlError('Cannot restart an archived session', 400);
   if (record.stopRequest?.state === 'pending') throw new SessionControlError('Stop is awaiting host confirmation; retry after it is confirmed', 409);
+  // A respawn in a folder that is gone only fails: recorded, and answered with the way on.
+  if (record.cwd) {
+    const { noteFolderGone } = await import('./folder-gone.js');
+    const cwdGone = await noteFolderGone(sessionId);
+    if (cwdGone) {
+      throw new SessionControlError(`The working folder ${cwdGone.cwd} no longer exists. Continue this session in a new folder instead.`, 409, { code: 'folder_gone', cwdGone });
+    }
+  }
 
   // Revert any in-flight 'processing' messages back to 'pending' — if the old
   // CLI was mid-send when we respawn, those messages must survive and re-deliver.
@@ -737,7 +745,19 @@ export type RetryResult =
    *  `--resume`. Retry deliberately runs NO turn on this path. */
   | { status: 'resumable'; sessionId: string }
   | { status: 'resuming'; sessionId: string; restoredMessages?: number }
-  | { status: 'pending'; taskId: string; oldSessionId: string };
+  | { status: 'pending'; taskId: string; oldSessionId: string }
+  /** Its folder is gone: nothing was spawned. The panel offers to continue it in a new
+   *  folder (POST /api/sessions/:id/continue-in-new-folder, folder-gone.ts). */
+  | { status: 'folder_gone'; sessionId: string; cwdGone: NonNullable<SessionRecord['cwdGone']> };
+
+async function folderGoneForRetry(sessionId: string, record: SessionRecord): Promise<RetryResult | null> {
+  if (!record.cwd) return null;
+  const { noteFolderGone } = await import('./folder-gone.js');
+  const cwdGone = await noteFolderGone(sessionId);
+  if (!cwdGone) return null;
+  log.session.info('session retry: its folder is gone; offering a new folder', { sessionId, cwd: record.cwd, history: cwdGone.history });
+  return { status: 'folder_gone', sessionId, cwdGone };
+}
 
 /**
  * Pre-flight for the --resume path: does the CLI's canonical conversation
@@ -849,6 +869,11 @@ export async function retrySession(sessionId: string): Promise<RetryResult> {
       return { status: 'reconnected', sessionId };
     }
 
+    // Process dead and its folder gone: a resume or a fresh start there only fails
+    // again. Recorded, so the panel offers to continue it in a new folder (folder-gone.ts).
+    const gone = await folderGoneForRetry(sessionId, record);
+    if (gone) return gone;
+
     // Process dead. --resume only works if the CLI persisted a conversation;
     // otherwise fall through to the fresh-start path below (same handling as
     // "failed before init" — because that's what it effectively is).
@@ -906,6 +931,11 @@ export async function retrySession(sessionId: string): Promise<RetryResult> {
 
   // Fresh start: no claudeSessionId (failed before init) or the conversation
   // JSONL never made it to disk (killed during first spawn) → archive + new.
+  // Never into a folder that is gone (folder-gone.ts).
+  if (!record.claudeSessionId) {
+    const gone = await folderGoneForRetry(sessionId, record);
+    if (gone) return gone;
+  }
   const conversationLost = !!record.claudeSessionId;
   const { getTask } = await import('../task-manager.js');
   let task;

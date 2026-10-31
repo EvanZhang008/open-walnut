@@ -17,6 +17,7 @@ const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 /** Each note the queue prepends: where it is built and the outcome it carries. */
 const PRODUCERS: Record<string, { file: string; outcome: string | null }> = {
   place: { file: 'src/core/sessions/place-notice.ts', outcome: 'moved' },
+  folderMoved: { file: 'src/core/sessions/folder-gone.ts', outcome: 'folder-moved' },
   restart: { file: 'src/core/sessions/restart-notice.ts', outcome: 'restarted' },
   digest: { file: 'src/core/org/org-store.ts', outcome: 'org-update' },
   statusNote: { file: 'src/core/sessions/status-push.ts', outcome: 'status' },

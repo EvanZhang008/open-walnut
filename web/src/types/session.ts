@@ -172,6 +172,12 @@ export interface SessionRecord {
   resumedBySwitch?: { fromSessionId: string; fromEngine?: string; at: string; carriedTurns: number };
   /** Error message when process_status is 'error' — for clear error display. */
   errorMessage?: string;
+  /** Its working folder was gone at its last start or resume (server sessions/folder-gone.ts).
+   *  `history` 'found' = it can continue in `newCwd` with its conversation; 'missing' = only a
+   *  new conversation can carry the work on. */
+  cwdGone?: { cwd: string; at: string; history: 'found' | 'missing' | 'unknown'; newCwd?: string };
+  /** Walnut moved it out of a folder that was gone. */
+  folderMoved?: { from: string; to: string; at: string; by: string; told?: boolean };
   /** Pending permission prompt (control_request) the CLI is PAUSED on. The CLI's
    *  session state is 'requires_action' — process_status stays 'running', so the
    *  badge derives an amber "Waiting" from this field (incident 7e26389d: a plan

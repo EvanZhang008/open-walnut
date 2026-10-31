@@ -87,6 +87,8 @@ export interface AutoRecoverDeps {
   taskDir: (taskId: string, host: string | null | undefined) => Promise<string | null>
   /** Does the session's cwd exist? null = cannot tell (remote host). */
   cwdExists: (record: SessionRecord) => Promise<boolean | null>
+  /** Record that its folder is gone, so the panel offers to continue in a new one (folder-gone.ts). Optional in tests. */
+  noteFolderGone?: (sessionId: string) => Promise<unknown>
   /** Boot time of this machine (ms). */
   bootTimeMs: () => number
   /** 1-minute load average per CPU of this machine. */
@@ -197,6 +199,10 @@ export function defaultDeps(): AutoRecoverDeps {
       } catch {
         return false
       }
+    },
+    noteFolderGone: async (sessionId) => {
+      const { noteFolderGone } = await import('./folder-gone.js')
+      return noteFolderGone(sessionId)
     },
     bootTimeMs: () => Date.now() - os.uptime() * 1000,
     loadPerCpu: () => os.loadavg()[0] / Math.max(1, os.cpus().length),

@@ -62,7 +62,9 @@ import { useSlashCommands } from '@/hooks/useSlashCommands';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
-import { fetchSession, executePlanContinue, executePlanSession, updateSession, restartSession, recheckSession, investigateSession } from '@/api/sessions';
+import { fetchSession, executePlanContinue, executePlanSession, updateSession, restartSession, recheckSession, investigateSession, type ContinueInNewFolderResult } from '@/api/sessions';
+import { FolderGoneBanner } from './FolderGoneBanner';
+import { isFolderGoneReason } from '@/utils/folder-gone';
 import { terminalPrewarm } from '@/api/terminal';
 import { log } from '@/utils/log';
 import { traceInteraction } from '@/utils/interaction-timer';
@@ -1479,6 +1481,15 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   const handleRetried = useCallback((taskId: string) => {
     retryTaskIdRef.current = taskId;
   }, []);
+  const reloadRecord = useCallback(() => {
+    fetchSession(sessionId).then((s) => { if (s) setSession(s); }).catch(() => {});
+  }, [sessionId]);
+  // Its folder was gone and it moved (FolderGoneBanner): the same session reads its new
+  // record; a new conversation for the task takes over the way a retry's fresh start does.
+  const handleFolderMoved = useCallback((result: ContinueInNewFolderResult) => {
+    if (result.status === 'started') handleRetried(result.taskId);
+    fetchSession(sessionId).then((s) => { if (s) setSession(s); }).catch(() => {});
+  }, [sessionId, handleRetried]);
 
   // Opening a session that sits in 'error' re-checks its host immediately.
   // A record can stay frozen on a stale "unable to reach remote host" for hours
@@ -2536,7 +2547,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             />
           </div>
         )}
-        {ps === 'error' && (() => {
+        {session?.cwdGone && !session.archived && (
+          <FolderGoneBanner sessionId={sessionId} cwdGone={session.cwdGone} onDone={handleFolderMoved} />
+        )}
+        {ps === 'error' && !session?.cwdGone && (() => {
           // Render even with NO errorMessage. An error the backend couldn't label
           // used to render nothing at all \u2014 the user got a red "Error" pill and
           // zero explanation, with the Retry button (which lives in this banner)
@@ -2590,7 +2604,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   return sug ? <ErrorSuggestionLink {...sug} /> : null;
                 })()}
               </div>
-              <SessionRetryButton sessionId={sessionId} host={session?.host} onRetried={handleRetried} onResuming={handleResuming} />
+              <SessionRetryButton sessionId={sessionId} host={session?.host} onRetried={handleRetried} onResuming={handleResuming} onFolderGone={reloadRecord} />
             </div>
           );
         })()}
@@ -2613,7 +2627,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   return sug ? <ErrorSuggestionLink {...sug} /> : null;
                 })()}
               </div>
-              <SessionRetryButton sessionId={sessionId} host={session?.host} onRetried={handleRetried} onResuming={handleResuming} />
+              <SessionRetryButton sessionId={sessionId} host={session?.host} onRetried={handleRetried} onResuming={handleResuming} onFolderGone={reloadRecord} />
             </div>
           );
         })()}
@@ -2832,6 +2846,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             onDeleteQueued={handleDelete}
             onAgentQueued={addExternalQueued}
             onRetryFailed={handleRetry}
+            onFolderMoved={handleFolderMoved}
+            folderGoneHistory={session?.cwdGone?.history}
             onDismissFailed={dismissFailed}
             onTaskClick={chatTaskClick}
             onSessionClick={onSessionClick}
@@ -2861,7 +2877,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             onToggleExpanded={() => setNotesOpen(o => !o)}
             onCollapse={() => setNotesOpen(false)}
           />
-          {sendError && (
+          {sendError && !isFolderGoneReason(sendError) && (
             <div className="text-xs" style={{ color: 'var(--error)', padding: '4px 12px' }}>
               {sendError}
             </div>

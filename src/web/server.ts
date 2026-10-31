@@ -16,6 +16,7 @@ import compression from 'compression'
 import { bus, EventNames, eventData } from '../core/event-bus.js'
 import { attachWss, broadcastEvent, sendStreamEvent, closeWss } from './ws/handler.js'
 import { sessionStreamBuffer } from './session-stream-buffer.js'
+import { isFolderGoneReason } from '../core/sessions/folder-gone-words.js'
 import { isStaticAssetPath, staticCacheControl } from './static-asset-path.js'
 import { refreshStaticMirror, bundleIdInHtml, mirrorHoldsBuild } from './static-mirror.js'
 import { createStaticRootWatch } from './static-root-watch.js'
@@ -5178,7 +5179,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       const errorTaskRef = taskId ? await resolveTaskRef(taskId) : null
       if (shouldPublish) {
         const body = isDeliveryFailure
-          ? `${errorTaskRef ? `${errorTaskRef}: ` : ''}${error}\n\n${parked
+          ? `${errorTaskRef ? `${errorTaskRef}: ` : ''}${error}\n\n${parked && isFolderGoneReason(error)
+            ? 'Your message was not lost. It is kept in its session and goes out when you continue the session in a new folder (the button is in the session).'
+            : parked
             ? 'Your message was not lost. It is kept in its session and goes out when you press Retry.'
             : 'Your message was not lost. It stays queued and will be re-sent when you press Retry, send another message, or the connection recovers.'}`
           : `${errorTaskRef ? `${errorTaskRef}: ` : ''}${error}`

@@ -2929,6 +2929,25 @@ sessionsRouter.post('/:sessionId/retry', async (req: Request, res: Response, nex
   }
 })
 
+// POST /api/sessions/:sessionId/continue-in-new-folder: the session's working folder
+// is gone: continue it in its task's own directory, its history moved along, and send
+// what waited (core/sessions/folder-gone.ts). The old folder is never recreated. With
+// the history gone too, a new conversation for the task starts there instead.
+sessionsRouter.post('/:sessionId/continue-in-new-folder', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const sessionId = req.params.sessionId as string
+    const { continueInNewFolder } = await import('../../core/sessions/folder-gone.js')
+    const callerSid = req.get('x-walnut-caller-sid')
+    res.json(await continueInNewFolder(sessionId, { by: callerSid ? `session:${callerSid}` : 'human' }))
+  } catch (err) {
+    if (err instanceof SessionControlError) {
+      res.status(err.statusCode).json({ error: err.message, ...(err.extra ?? {}) })
+      return
+    }
+    next(err)
+  }
+})
+
 // POST /api/sessions/:sessionId/recheck — ask the session's host, right now,
 // whether it is reachable and whether the CLI is alive, and reconcile the record
 // from the daemon's own snapshot. Sends nothing, spawns nothing, never dials a
@@ -2977,7 +2996,7 @@ sessionsRouter.post('/:sessionId/restart', async (req: Request, res: Response, n
     res.json(result)
   } catch (err) {
     if (err instanceof SessionControlError) {
-      res.status(err.statusCode).json({ error: err.message })
+      res.status(err.statusCode).json({ error: err.message, ...(err.extra ?? {}) })
       return
     }
     log.web.error('session restart: failed', {

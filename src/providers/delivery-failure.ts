@@ -40,7 +40,7 @@ const HELD_REASON_MAX = 600;
  * never set. Both come from providers/cwd-check.ts, which soft-fails on every
  * transient condition — so if it says no, the answer will not change on retry.
  */
-const CWD_MISSING = /working directory (no longer exists|not set|not available)/i;
+const CWD_MISSING = /working directory (no longer exists|not set|not available)|cwd does not exist on this host/i;
 
 /**
  * The session record is gone and could not be recovered from its JSONL, so

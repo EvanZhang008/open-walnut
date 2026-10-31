@@ -3070,7 +3070,9 @@ function cmdBridgeResume(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
   // cwd: the spawn record → caller's projection hint. --resume only finds the
   // conversation when the cwd matches the original, so a wrong hint just
   // yields a "No conversation found" turn error, not a security problem.
-  const cwd = spawn ? spawn.cwd : cwdHint
+  // The folder it last ran in, unless that is gone and the server names another
+  // (Walnut moved the session out of a deleted folder). Keep in sync with daemon-source.ts.
+  const cwd = spawn && (fs.existsSync(spawn.cwd) || !cwdHint) ? spawn.cwd : cwdHint
   if (!cwd) {
     return sendError(ws, id, 'bridgeResume: no cwd known for session (record lost, no hint)')
   }

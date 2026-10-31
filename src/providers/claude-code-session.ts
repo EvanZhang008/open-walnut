@@ -70,6 +70,7 @@ import { createSessionManager, registerSessionManager, unregisterSessionManager 
 import type { SessionManager } from './session-manager.js'
 import type { DaemonTaskState } from './daemon-connection.js'
 import { checkCwdExists, CwdMissingError } from './cwd-check.js'
+import { isFolderGoneReason } from '../core/sessions/folder-gone-words.js'
 import { isWakeupArmed } from './daemon-fold.js'
 import { noteSuppressedErrorReason } from '../core/session-snapshot-gate.js'
 import { BudgetCheckingError, BudgetPausedError, classifyDeliveryFailure, isDaemonCommandOutcomeUnknown, isSlowHostFailure, SendHeldError, SendOutcomeUnknownError, SessionHeldElsewhereError } from './delivery-failure.js'
@@ -2257,6 +2258,11 @@ export class ClaudeCodeSession {
     return this._cwd
   }
 
+  /** Its folder was gone and Walnut moved it (core/sessions/folder-gone.ts): the next spawn runs here. */
+  adoptCwd(cwd: string): void {
+    this._cwd = cwd
+  }
+
   /** Session manager for all session I/O. Null before first send(). */
   get transport(): SessionManager | null {
     return this._transport
@@ -2911,12 +2917,20 @@ export class ClaudeCodeSession {
 
       // Spawn confirmed by the daemon (pid returned). Only now is it safe to
       // consider the message delivered — see onSpawnSettled doc on send().
+      // A folder that was gone and is back (or a session that moved): no banner left behind.
+      if (this.claudeSessionId) void import('../core/sessions/folder-gone.js').then((m) => m.clearFolderGone(this.claudeSessionId)).catch(() => {})
       const line: SpawnLineOutcome | undefined = result.cut || result.fate
         ? { ...(result.cut ? { cut: true } : {}), ...(result.fate ? { fate: result.fate } : {}) }
         : undefined
       try { onSpawnSettled?.(true, undefined, line) } catch { /* callback must never break spawn */ }
     }).catch((err) => {
-      log.session.error('transport start failed', {
+      // A queued resume refused on a gone folder is the delivery card's to tell (one card, with
+      // the way on: server.ts, folder-gone.ts); a warning here keeps it from making a second one.
+      // The server's pre-flight throws CwdMissingError; a host's daemon says it in its own
+      // words when the pre-flight could not ask it (folder-gone-words.ts).
+      const folderGone = err instanceof CwdMissingError || isFolderGoneReason(err instanceof Error ? err.message : String(err))
+      const quiet = folderGone && !!onSpawnSettled
+      log.session[quiet ? 'warn' : 'error']('transport start failed', {
         taskId: this.taskId, host: host ?? 'local', cwd, isRemote: !!sshTarget,
         error: err instanceof Error ? err.message : String(err),
       })
@@ -2971,16 +2985,19 @@ export class ClaudeCodeSession {
           // (The second SESSION_ERROR was what fed the session-runner's own handler
           // and re-triggered processNext — the infinite redeliver loop of 2026-06-10,
           // 104 cycles/min against a dead SSH host.)
+          if (folderGone) void noteFolderGoneOnce(this.claudeSessionId, resolvedCwd, host ?? null)
           bus.emit(EventNames.SESSION_ERROR, {
             sessionId: this.claudeSessionId,
             taskId: this.taskId,
             error: err instanceof Error ? err.message : String(err),
           }, ['main-ai', 'session-runner'], { source: 'session-runner' })
-        } else if (err instanceof SessionHeldElsewhereError && this._transport === transport) {
-          // The host refused the spawn: another process runs this session there.
-          // Nothing started, so the session is stopped again (not the 'running'
-          // this spawn claimed, which a later sweep reads as a death) and the task
-          // waits on the user, with the cause. settleResumeFailure parked the batch.
+        } else if ((err instanceof SessionHeldElsewhereError || folderGone) && this._transport === transport) {
+          // The host refused the spawn: another process runs this session there, or
+          // its folder is gone (the panel then offers to continue in a new folder,
+          // core/sessions/folder-gone.ts). Nothing started, so the session is stopped
+          // again (not the 'running' this spawn claimed, which a later sweep reads as a
+          // death) and the task waits on the user, with the cause. settleResumeFailure
+          // parked the batch.
           this._processStatus = 'stopped'
           this._activity = undefined
           this.clearStallDiagTimer()
@@ -2994,7 +3011,8 @@ export class ClaudeCodeSession {
           // holder: a task whose session the user has open in a terminal is in use, so
           // a handoff leaves it open, core/transfer/source-in-use.ts). The hooks on
           // that edge read the record, never a "turn ended".
-          const heldElsewhere = err.kind === 'session_live'
+          if (folderGone) void noteFolderGoneOnce(this.claudeSessionId, resolvedCwd, host ?? null)
+          const heldElsewhere = err instanceof SessionHeldElsewhereError && err.kind === 'session_live'
             ? { at: new Date().toISOString(), host: err.host, holder: err.holder, ...(err.holderPid ? { pid: err.holderPid } : {}) }
             : undefined
           void this._statusCommit
@@ -9435,6 +9453,23 @@ export function slowHostReason(why: 'start' | 'send'): string {
  *  (setActiveProcessing). Past it the entry is cleared as a stuck one. */
 export const ACTIVE_PROCESSING_MAX_HOLD_MS = 30 * 60_000
 
+/** The ACP session's folder, when a failed delivery found it gone; null otherwise or when unknown. */
+async function acpFolderGone(session: AcpSession): Promise<string | null> {
+  try {
+    const { folderState } = await import('../core/sessions/folder-gone.js')
+    return (await folderState(session.cwd, session.host ?? null)) === 'gone' ? session.cwd : null
+  } catch { return null }
+}
+
+/** Record a gone folder for a refused start or resume (core/sessions/folder-gone.ts); never throws. */
+async function noteFolderGoneOnce(sessionId: string | null | undefined, cwd?: string | null, host?: string | null): Promise<void> {
+  if (!sessionId) return
+  try {
+    const { noteFolderGone } = await import('../core/sessions/folder-gone.js')
+    await noteFolderGone(sessionId, { ...(cwd ? { cwd } : {}), ...(host !== undefined ? { host } : {}) })
+  } catch { /* the refusal itself still stands and is reported */ }
+}
+
 export class SessionRunner {
   private sessions = new Map<string, ClaudeCodeSession>()
   /** ACP-backed sessions (any ACP engine), keyed by trackingId (providerSessionId or runtimeId). */
@@ -10226,6 +10261,15 @@ export class SessionRunner {
    */
   getByTaskId(taskId: string): ClaudeCodeSession | undefined {
     return this.sessions.get(taskId)
+  }
+
+  /**
+   * The session's folder was gone and Walnut moved it to `cwd` (core/sessions/folder-gone.ts):
+   * an in-memory session object spawns there next, the way a cold resume reads the record.
+   */
+  adoptNewCwd(claudeSessionId: string, cwd: string): void {
+    this.findByClaudeId(claudeSessionId)?.adoptCwd(cwd)
+    this.findAcpSession(claudeSessionId)?.adoptCwd(cwd)
   }
 
   /**
@@ -11174,10 +11218,22 @@ export class SessionRunner {
       const rows = msgs.map((queued) => ({ ...queued, sessionId: deliverySessionId }))
       // A paused budget parks the turn for the user (raise or remove the limit, then Retry);
       // one the host is still checking goes back to pending and is sent again shortly.
+      // A worker that could not start because its folder is gone parks the turn too: no
+      // retry can bring the folder back, and the panel offers to continue in a new one
+      // (core/sessions/folder-gone.ts). Asked only on a failure, never on a send.
+      const goneCwd = err instanceof BudgetPausedError || err instanceof BudgetCheckingError ? null : await acpFolderGone(session)
       if (err instanceof BudgetPausedError) {
         this.cancelBudgetRetry(deliverySessionId)
         await parkMessages(rows, classifyDeliveryFailure(err).reason).catch(() => {})
         reportBatchFailed(deliverySessionId, rows.map((m) => m.id), classifyDeliveryFailure(err).reason)
+      } else if (goneCwd) {
+        const reason = `Working directory no longer exists: ${goneCwd}`
+        await parkMessages(rows, reason).catch(() => {})
+        await noteFolderGoneOnce(deliverySessionId, goneCwd)
+        reportBatchFailed(deliverySessionId, rows.map((m) => m.id), reason)
+        bus.emit(EventNames.SESSION_ERROR, {
+          sessionId: deliverySessionId, error: reason, errorKind: 'delivery_failed' as const, parked: true,
+        }, ['main-ai'], { source: 'session-runner' })
       } else {
         await revertToPending(rows)
         if (err instanceof BudgetCheckingError) {
@@ -12512,6 +12568,8 @@ export class SessionRunner {
     const settled = verdict.kind === 'permanent' ? parkMessages(msgs, verdict.reason)
       : unanswered ? revertIfQueued(msgs) : revertToPending(msgs)
     void settled.catch(() => {}).then(async () => {
+      // Recorded before the error goes out, as in processNextNow's catch.
+      if (verdict.code === 'cwd_missing') await noteFolderGoneOnce(sessionId)
       const ids = new Set(msgs.map((m) => m.id))
       const failed = unanswered
         ? (await getQueue(sessionId)).filter((m) => ids.has(m.id)).map((m) => m.id)
@@ -13805,6 +13863,9 @@ export class SessionRunner {
       const verdict = classifyDeliveryFailure(err)
       if (verdict.kind === 'permanent') await parkMessages(msgs, verdict.reason).catch(() => {})
       else await revertToPending(msgs).catch(() => {})
+      // A gone folder is recorded before the error goes out: the panel reads it on that
+      // error and offers to continue in a new folder (core/sessions/folder-gone.ts).
+      if (verdict.code === 'cwd_missing') await noteFolderGoneOnce(sessionId)
 
       reportBatchFailed(sessionId, msgs.map((m) => m.id), errorMsg)
 

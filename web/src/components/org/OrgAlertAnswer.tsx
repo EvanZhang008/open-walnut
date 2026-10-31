@@ -233,9 +233,11 @@ function WordsAnswer({ alert, failure, onSend, sessionId }: FormProps & { sessio
   };
   const retry = () => {
     const settle = onSend();
-    retrySession(sessionId).then(() => {
-      log.info('org-page', 'org alert answered', { taskId: alert.taskId, shape: 'retry', sessionId });
-      settle();
+    retrySession(sessionId).then((result) => {
+      log.info('org-page', 'org alert answered', { taskId: alert.taskId, shape: 'retry', sessionId, status: result.status });
+      // Its folder is gone: a retry sent nothing. The session's own panel has the way on.
+      if (result.status === 'folder_gone') settle({ message: `Its folder ${result.cwdGone.cwd} is gone. Open the session to continue it in a new folder.` });
+      else settle();
     }, (err: unknown) => {
       log.warn('org-page', 'org alert retry failed', { taskId: alert.taskId, sessionId, error: String(err) });
       settle({ message: 'Retry failed.' });

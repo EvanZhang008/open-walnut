@@ -62,7 +62,7 @@ export function parkMeansNeverRan(reason: string | undefined): boolean {
   return /^Not delivered( yet)?:/.test(reason)
     || /^Not sent: the session budget is paused/.test(reason)
     || /dropped this message without running it/.test(reason)
-    || /working directory (no longer exists|not set|not available)/i.test(reason)
+    || /working directory (no longer exists|not set|not available)|cwd does not exist on this host/i.test(reason)
     || /no active session found for session id/i.test(reason);
 }
 

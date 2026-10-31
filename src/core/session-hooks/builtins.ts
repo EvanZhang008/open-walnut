@@ -2213,7 +2213,7 @@ export const cwdRenameDetectorHook: SessionHookDefinition = {
       if (!wasMissing) {
         bus.emit('notification', {
           taskId,
-          message: `Working directory no longer exists: ${cwd}. Update the task's working directory to resume.`,
+          message: `Working directory no longer exists: ${cwd}. Open the session to continue it in a new folder.`,
           severity: 'warning',
         }, ['web-ui'], { source: 'cwd-rename-detector' });
       }

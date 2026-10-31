@@ -473,7 +473,7 @@ describe('humanized copy on the way into the feed', () => {
 
     const feed = await feedAfterFlush();
     expect(feed[0].title).toBe("Couldn't start a session");
-    expect(feed[0].body).toBe('The working folder no longer exists: /data/notes/Gone');
+    expect(feed[0].body).toBe('The working folder no longer exists: /data/notes/Gone. Open the session to continue it in a new folder.');
     expect(feed[0].category).toBe('Sessions');
     // The old body — every byte a developer used to read off the card — survives
     // behind the Details toggle instead of being the primary message.

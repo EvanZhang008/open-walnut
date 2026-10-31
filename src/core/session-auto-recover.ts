@@ -316,7 +316,8 @@ export class SessionAutoRecover {
       return
     }
     if (verdict === 'cwd_missing') {
-      this.deps.emitNote(sid, taskId, `Restart recovery: not resumed, because the working directory ${record.cwd ?? ''} no longer exists (the reboot cleared it).`)
+      void Promise.resolve(this.deps.noteFolderGone?.(sid)).catch(() => {})
+      this.deps.emitNote(sid, taskId, `Restart recovery: not resumed, because the working directory ${record.cwd ?? ''} no longer exists (the reboot cleared it). The session can continue in a new folder from its panel.`)
     }
     // Not resumed: the task gets the hand-back the guard held off, unless it
     // sits where a hand-back does not apply (WAITING, Main between turns).

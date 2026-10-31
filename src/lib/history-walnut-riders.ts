@@ -47,14 +47,14 @@ const TAG_HEAD = '<walnut-message ';
 const TAG_CLOSE = '\n</walnut-message>';
 /**
  * The outcomes of Walnut's notes that ride in front of a message, one per note
- * session-message-queue.ts prepends: place (`moved`), restart (`restarted`), org
- * digest (`org-update`), status push (`status`), wait note (`waiting`), retired
- * lead (`handed-over`), plus the changed default instructions the queue's drain
+ * session-message-queue.ts prepends: place (`moved`), folder move (`folder-moved`),
+ * restart (`restarted`), org digest (`org-update`), status push (`status`), wait
+ * note (`waiting`), retired lead (`handed-over`), plus the changed default instructions the queue's drain
  * puts first (`task-routing-policy`). iOS keeps the same list
  * (TimelineInboundMessage.riderOutcomes).
  */
 export const RIDER_NOTICE_OUTCOMES: readonly string[] = [
-  'moved', 'restarted', 'org-update', 'status', 'waiting', 'handed-over', 'task-routing-policy',
+  'moved', 'folder-moved', 'restarted', 'org-update', 'status', 'waiting', 'handed-over', 'task-routing-policy',
 ];
 const RIDER_OUTCOMES = new Set(RIDER_NOTICE_OUTCOMES);
 /** `name="value"`, first occurrence wins (same rule as the envelope parser). */

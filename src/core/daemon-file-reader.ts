@@ -389,6 +389,16 @@ export class DaemonFileReader implements SessionFileReader {
     }
   }
 
+  /** Make a directory and its parents; an existing one is fine. */
+  async ensureDir(remotePath: string): Promise<void> {
+    await this.resolve()
+    const conn = await getDaemonConnection(this.host, this.sshTarget!)
+    const result = await conn.send('fs.mkdir', { path: remotePath })
+    if (!result.ok) {
+      throw new Error('fs.mkdir failed: ' + (typeof result.error === 'string' ? result.error : 'unknown'))
+    }
+  }
+
   /** Create ONE directory; an existing one is an EEXIST, not a silent no-op. */
   async mkdirExclusive(remotePath: string): Promise<void> {
     const conn = await this.mutateConnection()

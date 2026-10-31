@@ -3007,6 +3007,14 @@ export interface SessionRecord {
   /** The last time the host refused to start this session because another process
    *  had it open (a terminal's `claude -r`, most often the user's; or another Walnut). */
   heldElsewhere?: { at: string; host: string; pid?: number; holder: 'terminal' | 'walnut' };
+  /** The session's working folder was gone when Walnut last tried to start or resume it
+   *  (sessions/folder-gone.ts). `history`: whether its conversation history is still on the
+   *  host ('found' = it can continue in a new folder with its history, 'missing' = only a new
+   *  conversation can carry the work on). `newCwd`: the task's own directory it would move to. */
+  cwdGone?: { cwd: string; at: string; history: 'found' | 'missing' | 'unknown'; newCwd?: string };
+  /** Walnut moved this session out of a folder that was gone (sessions/folder-gone.ts). `told`
+   *  once a message into the session has carried the notice saying so. */
+  folderMoved?: { from: string; to: string; at: string; by: string; told?: boolean };
   stopRequest?: { id: string; requestedAt: string; state: 'pending' | 'confirmed'; error?: string };
   /** Why the last process_status change happened (K8s condition style). */
   status_reason?: StatusReason;

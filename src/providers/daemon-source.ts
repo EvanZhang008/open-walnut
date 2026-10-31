@@ -4101,7 +4101,9 @@ function cmdBridgeResume(ws, id, cmd) {
   }
 
   var spawn = spawnRecordOf(sid);
-  var cwd = spawn ? spawn.cwd : cwdHint;
+  // The folder it last ran in, unless that is gone and the server names another
+  // (Walnut moved the session out of a deleted folder). Keep in sync with daemon-standalone.ts.
+  var cwd = spawn && (fs.existsSync(spawn.cwd) || !cwdHint) ? spawn.cwd : cwdHint;
   if (!cwd) {
     return sendError(ws, id, 'bridgeResume: no cwd known for session (record lost, no hint)');
   }
@@ -6226,6 +6228,13 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
   await requireBudgetAllowance(sid);
   if (canStart && !canStart()) throw Object.assign(new Error('start: stop request superseded this start'), { code: 'SESSION_STOP_SUPERSEDED' });
   if (isCurrent && !isCurrent()) throw new Error('start: supervision request was superseded');
+
+  // A working directory that is gone fails here, in words the server reads as a gone
+  // folder (it then offers to continue the session in a new one), instead of a spawn
+  // ENOENT that names the binary. Keep in sync with daemon-standalone.ts.
+  if (!fs.existsSync(cwd)) {
+    throw new Error('start: cwd does not exist on this host (' + os.hostname() + '): ' + cwd);
+  }
 
   // Replace-existing cleanup: prevents stale orphanPollTimer from the old
   // session mis-firing pid-recycled against the newborn pid.

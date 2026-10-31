@@ -3568,6 +3568,13 @@ select {
 .session-error-banner--reconnecting .session-error-banner-text {
   color: var(--warning, #f59e0b);
 }
+/* A session whose working folder is gone (FolderGoneBanner.tsx): a fact with one way on. */
+.session-folder-gone-banner { align-items: center; }
+.session-folder-gone-banner code { font-family: var(--font-mono, 'SF Mono', 'Menlo', monospace); word-break: break-all; }
+.session-folder-gone-banner .folder-gone-detail { margin-top: 2px; }
+.folder-gone-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; max-width: 45%; }
+.folder-gone-failure { color: var(--danger, #ff3b30); font-size: 11px; white-space: normal; }
+.session-msg-queued-actions .folder-gone-failure { flex-basis: 100%; }
 /* Idle-timeout auto-stop: routine housekeeping, not a failure — neutral, not red. */
 .session-error-banner--idle {
   background: color-mix(in srgb, var(--fg-muted, #8e8e93) 7%, var(--bg-secondary));

@@ -777,6 +777,8 @@ export class AcpSession {
   get active(): boolean { return this._active }
   get mode(): SessionMode { return this._mode }
   get cwd(): string { return this.cfg.cwd }
+  /** Its folder was gone and Walnut moved it (core/sessions/folder-gone.ts): the next worker starts here. */
+  adoptCwd(cwd: string): void { this.cfg = { ...this.cfg, cwd } }
   get host(): string { return this.cfg.host && this.cfg.host !== '__local__' ? this.cfg.host : '__local__' }
   /** The session runs on another host's daemon (AcpSessionConfig.host). */
   private get remote(): boolean { return this.host !== '__local__' }

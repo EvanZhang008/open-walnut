@@ -84,7 +84,7 @@ describe('session families', () => {
     expect(out).toEqual({
       category: 'Sessions',
       title: "Couldn't start a session",
-      message: 'The working folder no longer exists: /data/notes/Projects/Gone',
+      message: 'The working folder no longer exists: /data/notes/Projects/Gone. Open the session to continue it in a new folder.',
     });
   });
 

@@ -216,6 +216,9 @@ export async function sendMessageToSession(
   // whichever message reaches it first (sessions/restart-notice.ts).
   const { pendingRestartNotice } = await import('./sessions/restart-notice.js');
   const restart = await pendingRestartNotice(sessionId);
+  // A session Walnut moved out of a folder that was gone hears so the same way (sessions/folder-gone.ts).
+  const { pendingFolderMovedNotice } = await import('./sessions/folder-gone.js');
+  const folderMoved = await pendingFolderMovedNotice(sessionId);
   // The main agent's org update rides the same way: one folded note, never a turn (org/org-store.ts).
   const { pendingOrgDigest } = await import('./org/org-store.js');
   const digest = await pendingOrgDigest(sessionId);
@@ -238,7 +241,7 @@ export async function sendMessageToSession(
   const retiredNote = await pendingRetiredLeadNote(sessionId, rawBody);
   const outputMode = opts?.hinted ? null : await prepareQueuedHintedSend(sessionId, opts?.source, rawBody);
   const body = outputMode?.enqueueText ?? rawBody;
-  const notes = [place?.text, restart?.text, digest?.text, statusNote?.text, appState?.text, waitNote, retiredNote].filter(Boolean).join('\n\n');
+  const notes = [place?.text, folderMoved?.text, restart?.text, digest?.text, statusNote?.text, appState?.text, waitNote, retiredNote].filter(Boolean).join('\n\n');
   const enqueueText = notes ? `${notes}\n\n${body}` : body;
   let msg: QueuedMessage;
   try {
@@ -263,6 +266,7 @@ export async function sendMessageToSession(
   if (place && msg.message.startsWith(place.text)) await place.markTold();
   if (digest && msg.message.includes(digest.text)) await digest.markTold();
   if (restart && msg.message.includes(restart.text)) await restart.markTold();
+  if (folderMoved && msg.message.includes(folderMoved.text)) await folderMoved.markTold();
   if (statusNote && msg.message.includes(statusNote.text)) statusNote.markTold();
   if (outputMode && msg.message.includes(outputMode.enqueueText)) await outputMode.commit();
   if (appState) {
