@@ -47,6 +47,16 @@ happens on request.
 
 No company-internal names, personal info, internal URLs, credentials, or internal processes. Generic descriptions only. Internal plugins go in `~/.open-walnut/plugins/` (never committed). **When in doubt, leave it out.**
 
+## Every feature works for anyone who installs it
+
+Walnut and its plugins ship to the public, so nothing may work only on the maintainer's machine
+(2026-11-01: a Focus block's macOS Do Not Disturb, the network relay). Set it up for the user in
+one click where the platform allows it; where it needs a step only they can take (a permission,
+an OS setting, a port on their own server), walk them through it in place, showing the exact
+screen, and check that it worked. Where the maintainer picked one way for himself (his own relay,
+say), the other reasonable ways stay options for everyone else. Never depend on a file, shortcut or
+setting that exists on one machine only.
+
 ## Existing users keep working and keep upgrading
 
 Every change reaches people who already run an older Walnut. Before it lands, make sure:
