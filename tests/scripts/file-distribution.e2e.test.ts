@@ -180,8 +180,14 @@ describe.skipIf(!NODE)('the compiled file, from every way it arrives', () => {
       const running = path.join(share, 'running')
       expect(fs.readdirSync(running).map((pid) => fs.readFileSync(path.join(running, pid), 'utf8').trim())).toEqual([NEW])
       expect(registry.hits).toContain(`/@open-walnut/${HOST}/${NEW}`)
-      // Once it listened, it told the parent that restarted it (startup-update.ts READY_FILE_ENV).
-      const ready = fs.readdirSync(w.env.TMPDIR!).filter((n) => n.startsWith(`walnut-ready-${w.server!.pid}-`))
+      // Once it started, it told the parent that restarted it (startup-update.ts READY_FILE_ENV).
+      // The file is written when startServer returns, which is after it answers HTTP (it still
+      // migrates and refreshes hosts), so on a slow runner it comes a few seconds after the
+      // status read above (2026-11-01, run 41300322271): wait for it.
+      const readyOf = () => fs.readdirSync(w.env.TMPDIR!).filter((n) => n.startsWith(`walnut-ready-${w.server!.pid}-`))
+      const until = Date.now() + 60_000
+      while (readyOf().length === 0 && Date.now() < until) await new Promise((r) => setTimeout(r, 200))
+      const ready = readyOf()
       expect(ready).toHaveLength(1)
       expect(fs.readFileSync(path.join(w.env.TMPDIR!, ready[0]!), 'utf8').trim()).toBe(fs.readdirSync(running)[0])
     } finally {
