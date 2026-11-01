@@ -43,6 +43,8 @@ defineOp({
     cwd: z.string().optional().describe('A project folder on that host, to include its own servers'),
   },
   bind: { method: 'GET', path: '/hosts/:host/mcp' },
+  // The route dials the host and answers within the relayed caller's hold (about 14 s).
+  timeoutMs: 60_000,
   mapResult: ({ body }) => withOutcome(body as Record<string, unknown>, `${((body as { servers?: unknown[] })?.servers ?? []).length} MCP server(s).`, 'host_mcp_tools lists one server\'s tools.'),
   tags: { readonly: true, remote: 'allow', primaryOnly: true },
 });

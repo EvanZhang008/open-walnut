@@ -74,6 +74,8 @@ defineOp({
     job_id: z.string().min(1).describe('The jobId host_exec returned'),
   },
   bind: { method: 'POST', path: '/hosts/:host/exec/:job_id/stop' },
+  // The route dials the host and answers within the relayed caller's hold (about 14 s).
+  timeoutMs: 60_000,
   mapResult: ({ body }) => withOutcome(body as Record<string, unknown>, 'Stopping.', 'host_exec_read shows when it ended.'),
   tags: { readonly: false, remote: 'allow', primaryOnly: true },
 });
