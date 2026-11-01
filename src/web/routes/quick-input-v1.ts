@@ -38,7 +38,7 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { CLOUD_MODE } from '../../constants.js'
+import { role } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import type { SessionRecord, Task } from '../../core/types.js'
 import { withImagePaths, type SessionImage } from '../../core/sessions/cloud-images.js'
@@ -67,9 +67,10 @@ export const QUICK_SYSTEM = [
   "You have no tools: you cannot browse, run anything, or see the user's tasks and files. When a request needs that, say so in one line and suggest Tell Main (Cmd+Enter), Walnut's main agent, which can.",
 ].join('\n')
 
+/** Only the leader (the Mac) answers: a replica, the companion or a host server, holds a copy. */
 function primaryOnly(res: Response): boolean {
-  if (!CLOUD_MODE) return true
-  res.status(501).json({ error: 'Quick Input answers on your Mac, not on this companion', code: 'not_supported_cloud' })
+  if (role() === 'leader') return true
+  res.status(501).json({ error: 'Quick Input answers on your Mac, not on this replica', code: 'not_supported_cloud' })
   return false
 }
 
@@ -141,7 +142,7 @@ quickInputV1Router.post('/quick/ask', async (req: Request, res: Response) => {
 
 quickInputV1Router.post('/quick/warm', async (_req: Request, res: Response) => {
   res.status(204).end()
-  if (CLOUD_MODE) return
+  if (role() !== 'leader') return
   try {
     const [{ getConfig }, { resolveMainProviderName, CLAUDE_CLI_PROVIDER }, { aiDirectOverridden }] = await Promise.all([
       import('../../core/config-manager.js'),
