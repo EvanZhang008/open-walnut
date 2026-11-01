@@ -30,7 +30,7 @@ import {
   isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, mergeThinkingOnly, trailingThinkingOnlyStart,
   MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember,
 } from './SessionMessage';
-import { StreamingBlockView, WorkingIndicator, countStreamChars } from './StreamingBlockView';
+import { StreamingBlockView, StreamingReplyMeta, WorkingIndicator, countStreamChars } from './StreamingBlockView';
 
 interface LaneHandlers {
   sessionId: string;
@@ -110,6 +110,7 @@ export function StreamingLane(props: StreamingLaneProps) {
             <div key={`text-${i}`} className="session-msg session-msg-assistant">
               <div className="session-msg-content">
                 <StreamingBlockView block={b} live={isTail} {...handlers} />
+                <StreamingReplyMeta block={b} alwaysVisible={false} />
               </div>
             </div>
           );

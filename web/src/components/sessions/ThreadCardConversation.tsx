@@ -17,7 +17,7 @@ import type { StreamingBlock } from '@/hooks/useSessionStream';
 import type { CardTurn } from '@/utils/thread-card';
 import { questionBodyOf } from '@/utils/thread-card';
 import { SessionMessage, StableMarkdownBody } from './SessionMessage';
-import { StreamingBlockView } from './StreamingBlockView';
+import { StreamingBlockView, StreamingReplyMeta } from './StreamingBlockView';
 
 interface RowHandlers {
   sessionId: string;
@@ -54,6 +54,8 @@ function LiveAnswer({ live, streaming, h }: { live: LiveText; streaming: boolean
           block={live.block} sessionId={h.sessionId} sessionCwd={h.sessionCwd} sessionHost={h.sessionHost}
           live={streaming} onTaskClick={h.onTaskClick} onSessionClick={h.onSessionClick} onFileOpen={h.onFileOpen}
         />
+        {/* The persisted reply's strip, so the handover adds nothing under it. */}
+        {live.block.type === 'text' && <StreamingReplyMeta block={live.block} alwaysVisible={false} />}
       </div>
     </div>
   );

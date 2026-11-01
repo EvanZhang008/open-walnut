@@ -1739,6 +1739,64 @@ if (outputFormat === 'stream-json') {
         return;
       }
 
+      // A reply streamed the way a real one is, for the streamed-vs-finished
+      // parity check (tests/e2e/browser/stream-final-render-parity.spec.ts): a
+      // line of narration and a Bash call that runs, then a long rich Markdown
+      // answer (headings, lists, a fenced code block, a table, a quote, an HTML
+      // card) in 40-character deltas. Honours chunk-delay: between deltas.
+      if (mode === 'markdown-reply') {
+        (async () => {
+          const gap = chunkDelayMs > 0 ? chunkDelayMs : 20;
+          const pause = (ms = gap) => new Promise((r) => setTimeout(r, ms));
+          const model = modelFlag || 'mock-model';
+          const lead = `${msgId}_m1`;
+          const reply = `${msgId}_m2`;
+          const tool = { id: 'toolu_mock_md_1', name: 'Bash', input: { command: 'echo checked' } };
+          emitStream(wrap({ type: 'message_start', message: { id: lead, role: 'assistant', content: [], model, usage: { input_tokens: 10, output_tokens: 1 } } }));
+          emitStream(wrap({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }));
+          emitStream(wrap({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Let me check.' } }));
+          emitStream(wrap({ type: 'content_block_stop', index: 0 }));
+          emitStream({ type: 'assistant', message: { id: lead, role: 'assistant', model, content: [{ type: 'text', text: 'Let me check.' }], stop_reason: null, usage: { input_tokens: 10, output_tokens: 4 } }, session_id: outputSessionId });
+          emitStream(wrap({ type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: tool.id, name: tool.name, input: {} } }));
+          emitStream(wrap({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: JSON.stringify(tool.input) } }));
+          emitStream(wrap({ type: 'content_block_stop', index: 1 }));
+          emitStream({ type: 'assistant', message: { id: lead, role: 'assistant', model, content: [{ type: 'tool_use', ...tool }], stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 20 } }, session_id: outputSessionId });
+          emitStream(wrap({ type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 20 } }));
+          emitStream(wrap({ type: 'message_stop' }));
+          await pause(gap * 5);
+          emitStream({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: tool.id, content: 'checked' }] }, session_id: outputSessionId });
+          const filler = Array.from({ length: 16 }, (_, i) => `Paragraph ${i + 1} of the answer, long enough to wrap in a narrow session column of the console.`);
+          const answer = [
+            '## Findings PARITYREAL', '',
+            'The **check** ran `bun run build` and wrote [the report](https://example.com/r).', '',
+            ...filler.flatMap((p) => [p, '']),
+            '- first point with `inline code`', '- second point', '  - nested point', '',
+            '1. step one', '2. step two', '',
+            '```ts', "const marker = 'PARITYREAL';", 'export function add(a: number, b: number): number {', '  return a + b;', '}', '```', '',
+            '| Name | Count |', '| --- | ---: |', '| alpha | 1 |', '| beta | 22 |', '',
+            '> A quoted line.', '', '---', '',
+            '<div style="border:1px solid #888;padding:8px;border-radius:6px"><b>Card</b> body text</div>', '',
+            'Closing sentence PARITYREAL.',
+          ].join('\n');
+          emitStream(wrap({ type: 'message_start', message: { id: reply, role: 'assistant', content: [], model, usage: { input_tokens: 10, output_tokens: 1 } } }));
+          emitStream(wrap({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }));
+          for (const piece of answer.match(/[\s\S]{1,40}/g)) {
+            emitStream(wrap({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: piece } }));
+            await pause();
+          }
+          emitStream(wrap({ type: 'content_block_stop', index: 0 }));
+          emitStream({ type: 'assistant', message: { id: reply, role: 'assistant', model, content: [{ type: 'text', text: answer }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 400 } }, session_id: outputSessionId });
+          emitStream(wrap({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 400 } }));
+          emitStream(wrap({ type: 'message_stop' }));
+          process.stdout.write(JSON.stringify({
+            type: 'result', subtype: 'success', is_error: false,
+            duration_ms: gap * 60, num_turns: 2, result: answer, session_id: outputSessionId,
+            total_cost_usd: 0.002, usage: { input_tokens: 20, output_tokens: 420 },
+          }) + '\n', () => process.exit(0));
+        })();
+        return;
+      }
+
       if (mode === 'speed' || mode === 'speed-agent') {
         (async () => {
           const gap = chunkDelayMs > 0 ? chunkDelayMs : 150;

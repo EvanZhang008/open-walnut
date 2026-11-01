@@ -39,7 +39,8 @@
  *    sandboxed iframe island (`allow-scripts` and nothing else, so it has no
  *    same-origin access, no cookies, no DOM of ours), never to innerHTML.
  */
-import { memo, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type RefObject } from 'react';
+import { memo, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { holdImageBoxesIn } from '@/utils/image-size-hold';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { useStableHtml } from '@/hooks/useStableHtml';
@@ -109,12 +110,23 @@ export function RichMarkdown({ text, cwd, scope, onClick, hostRef }: {
     [split, body, cwd, labelsVersion],
   );
   const plainProp = useStableHtml(plainHtml);
+  // The host for the image hold (utils/image-size-hold.ts) and the caller's
+  // selection-freeze ref, one element.
+  const ownHost = useRef<HTMLDivElement | null>(null);
+  const setHost = useCallback((el: HTMLDivElement | null) => {
+    ownHost.current = el;
+    if (hostRef) hostRef.current = el;
+  }, [hostRef]);
+  // A reply drawn again (its persisted row replacing the stream) keeps each
+  // image's box while it decodes; this runs before the conversation's own
+  // layout effect measures the column.
+  useLayoutEffect(() => { holdImageBoxesIn(ownHost.current); });
 
   if (!split) {
     return (
       <div
         key="plain"
-        ref={hostRef}
+        ref={setHost}
         className="markdown-body"
         onClick={onClick}
         // Stable prop identity, NOT an inline literal: React 19 rewrites
@@ -128,7 +140,7 @@ export function RichMarkdown({ text, cwd, scope, onClick, hostRef }: {
 
   const chunks = split.tail ? [...split.stable, split.tail] : split.stable;
   return (
-    <div key="rich" ref={hostRef} className="rich-blocks" data-rblk={scopeId} onClick={onClick}>
+    <div key="rich" ref={setHost} className="rich-blocks" data-rblk={scopeId} onClick={onClick}>
       {chunks.map((chunk, i) => {
         const key = richChunkKey(scopeId, i);
         if (chunk.kind === 'app') return <AppChunk key={key} chunk={chunk} messageScope={scope} />;

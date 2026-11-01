@@ -21,7 +21,7 @@ import { isPhoneLayout } from '@/hooks/usePhoneLayout';
 import { JumpPillLabel, PromptWaitingPill } from './PhoneTimelinePills';
 import { SessionMessage, SessionThinking, StableMarkdownBody, ToolRunShell, StreamRunMembers, streamRunSummary, streamRunHasCallingTool, runRowKey, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, mergeThinkingOnly, trailingThinkingOnlyStart, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember, type StreamRunMember } from './SessionMessage';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
-import { StreamingBlockView, WorkingIndicator, countStreamChars } from './StreamingBlockView';
+import { StreamingBlockView, StreamingReplyMeta, WorkingIndicator, countStreamChars, streamReplyText } from './StreamingBlockView';
 import { SessionWorkingIndicator } from './SessionWorkingIndicator';
 import { useForegroundActive } from '@/stores/background-agents-store';
 import { StreamingLane, streamAgentSettled, knownAgentFromStream } from './LaneTimeline';
@@ -693,6 +693,17 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   };
   const historyUnavailableRaw = parseHistoryUnavailable(error);
   const { blocks, isStreaming, completedLen, resetIfAbsorbed } = useSessionStream(sessionId);
+  // Replies this view watched arrive as stream blocks (their msgIds). The turn
+  // that ends in one keeps the shape it streamed in until a later turn starts,
+  // so its persisted rows take over without folding the steps the reader just
+  // watched (turnShapes below; 2026-11-01, the user: streaming and finished must
+  // look exactly the same, "no flash, no change"). A reload, which watched
+  // nothing, shows the turn folded as before.
+  const watchedReplies = useRef<{ sessionId: string; ids: Set<string> }>({ sessionId, ids: new Set() });
+  if (watchedReplies.current.sessionId !== sessionId) watchedReplies.current = { sessionId, ids: new Set() };
+  // Only while this view sees the turn live: the server keeps a finished turn's
+  // blocks for a while, and a reload adopts them, but nobody watched those.
+  if (isStreaming) for (const b of blocks) if (b.type === 'text' && b.msgId && !b.parentToolUseId) watchedReplies.current.ids.add(b.msgId);
   const foregroundActive = useForegroundActive(sessionId);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -3157,6 +3168,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     });
     if (!isStreaming) {
       settledShapes.current = new Map(shapes.map((t) => [keyOf(t), t.kind]));
+      const last = shapes[shapes.length - 1];
+      const answerId = last && last.kind === 'answered' ? messages[last.answer]?.msgId : undefined;
+      if (answerId && watchedReplies.current.ids.has(answerId)) shapes[shapes.length - 1] = { ...last, kind: 'open', answer: -1 };
       return shapes;
     }
     const last = shapes[shapes.length - 1];
@@ -3276,6 +3290,20 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     lastVisibleTimelineIdx = i;
     break;
   }
+  // The reply still on screen as a stream block is the last reply: it wears the
+  // always-visible strip (once its turn is over) and the persisted row before it
+  // drops its own, so the handover to its persisted twin, which is then the last
+  // assistant row, changes nothing on screen.
+  let lastStreamTextIdx = -1;
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    const item = timeline[i];
+    if (item.kind !== 'block' || item.block.type !== 'text' || item.block.parentToolUseId) continue;
+    if (boundaryStreamIndices.has(i) || consumedBlockIndices.has(item.index)) continue;
+    if (!streamReplyText(item.block.content).trim()) continue;
+    lastStreamTextIdx = i;
+    break;
+  }
+  if (lastStreamTextIdx >= 0) lastAssistantTextIndex = -1;
   // Is a run's tail (`tailIdx`, its own last member) the reasoning still
   // streaming? Only then does the run's row pulse: a finished tool at the tail
   // is settled, and the working indicator already says the turn is live.
@@ -5438,10 +5466,11 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                     const g = t.kind === 'block' ? groupedByIndex.get(t.index) : undefined;
                     if (g && g.kind === 'task-group') agents.push(knownAgentFromStream(g.taskBlock));
                   }
-                  const isFirst = i === 0 || timeline[i - 1].kind !== 'block';
+                  // The wrapper its persisted row wears (an assistant row's body), so
+                  // the chip sits in the same place before and after the handover.
                   return (
-                    <div key={`tg-${item.index}`} className={isFirst ? 'session-msg session-msg-assistant' : ''}>
-                      <div className={isFirst ? 'session-msg-content' : ''}>
+                    <div key={`tg-${item.index}`} className="session-msg session-msg-assistant">
+                      <div className="session-msg-content">
                         <BackgroundTasksChip sessionId={sessionId} agents={agents} />
                       </div>
                     </div>
@@ -5451,22 +5480,25 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                 // Skip subagent-lane blocks (rendered inside their Agent box or not at all)
                 if (consumedBlockIndices.has(item.index)) return null;
 
-                // Regular block rendering
-                // Group consecutive blocks under one assistant header.
-                // Show header on first block in each consecutive run.
-                // (The old "Streaming" pill badge was retired — the tail
-                // WorkingIndicator is now the only turn-is-live signal.)
-                //
-                // Only text/system blocks get the assistant "bubble" (padding +
-                // rounded background). Tool-call and thinking blocks render flush
-                // to the panel — the bubble padding on the first tool_call
-                // produced a visible indent-jump against the following tool_calls.
-                const isFirst = i === 0 || timeline[i - 1].kind !== 'block';
+                // Regular block rendering.
+                // Only text/system blocks get the assistant row (the classes a
+                // persisted assistant row wears). Tool-call and thinking blocks
+                // render flush to the panel: the bubble padding on the first
+                // tool_call produced a visible indent-jump against the following
+                // tool_calls. EVERY text block wears the row classes, not only the
+                // first of a run: message styles hang off them (the dark code block
+                // is `.session-msg-assistant .markdown-body pre`, the font and list
+                // indents `.session-msg …`), and a reply after a tool run that
+                // lacked them streamed with a grey code block, then turned dark
+                // when its persisted row replaced it (2026-11-01).
                 const blockWantsBubble = item.block.type === 'text' || item.block.type === 'system';
                 // `live` marks the block still receiving tokens: streaming AND
                 // it is the last visible timeline item (crude but the only
                 // per-block signal available — deltas always append at the tail).
                 const isLiveTail = isStreaming && i === lastVisibleTimelineIdx;
+                // A text block that is only a reply tag or the turn-end marker
+                // draws nothing, as its persisted row does: no row, no gap.
+                if (item.block.type === 'text' && !streamReplyText(item.block.content).trim()) return null;
                 if (blockWantsBubble) {
                   // A reply that is still arriving is selectable prose like any
                   // other, so the streaming bubble wears the SAME identity a
@@ -5493,15 +5525,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
                   return (
                     <div
                       key={`b-${item.index}`}
-                      className={isFirst ? 'session-msg session-msg-assistant' : ''}
+                      className="session-msg session-msg-assistant"
                       {...(streamMsgId ? { 'data-message-id': streamMsgId, 'data-msg-role': 'assistant' } : {})}
                     >
-                      {/* Always the body class: it is `word-break` only (no bubble
-                          padding), and a text block that follows a tool call is
-                          deliberately NOT `isFirst`, yet its prose is just as
-                          quotable as the first block's. */}
+                      {/* The body class, as on a persisted row: quote pins and
+                          passage selection find the message body by it. */}
                       <div className="session-msg-content">
                         <StreamingBlockView block={item.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={isLiveTail} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+                        {item.block.type === 'text' && (
+                          <StreamingReplyMeta block={item.block} alwaysVisible={!isStreaming && i === lastStreamTextIdx} />
+                        )}
                       </div>
                     </div>
                   );

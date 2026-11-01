@@ -23,6 +23,7 @@ import { initRecapTipStore } from './stores/recap-tip-store';
 import { initTurnSpeedStore } from './stores/turn-speed-store';
 import { installGlobalAutofillSuppression } from './utils/no-autofill';
 import { installEscapeBeepGuard } from './utils/escape-beep-guard';
+import { installImageSizeHold } from './utils/image-size-hold';
 import { initStaleAssetRecovery, initStaleBuildUpgrade } from './utils/stale-assets';
 import { installDesktopBridge } from './utils/desktop-bridge';
 import { initWebPlugins } from './plugins/loader';
@@ -132,6 +133,9 @@ function bootApp(): void {
   // editors skip their own Escape bindings when it is set). Installed here, before
   // the app mounts, so its window-bubble listener runs ahead of every app handler's.
   installEscapeBeepGuard();
+  // A chat image drawn again (a reply's persisted row replacing its stream blocks)
+  // keeps its box while it decodes, so nothing around it moves for a frame.
+  installImageSizeHold();
 
   // Clear text selection instantly on mousedown to avoid macOS inactive-selection pink flash.
   // Scoped (was unconditional, which broke copy entirely): never on right/middle click —

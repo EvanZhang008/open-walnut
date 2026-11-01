@@ -3349,9 +3349,21 @@ select {
   padding-left: 2px;
 }
 
-/* Session streaming */
+/* Session streaming. The live rows sit in this panel, the persisted rows that
+   replace them sit directly in .session-history, so the panel lays its rows out
+   exactly as the history does (a flex column with the same gap). As a block, the
+   rows' margins collapsed and lost the gap, and a reply moved 12px at the moment
+   its persisted row took over (2026-11-01). A row whose block draws nothing is
+   :empty and takes no gap, as nothing renders for it in the history.
+   Pinned by tests/e2e/browser/stream-final-render-parity.spec.ts. */
 .session-streaming-panel {
   padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.session-streaming-panel > :empty {
+  display: none;
 }
 
 .session-streaming-indicator {

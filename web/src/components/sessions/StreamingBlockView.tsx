@@ -14,9 +14,11 @@ import { stripQuestionTag } from '@/utils/question-tag';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
 import type { StreamingBlock } from '@/hooks/useSessionStream';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
-import { SessionThinking, PlanCard, CollapsedPlanWrite, GenericToolCall, SystemLineCollapsible } from './SessionMessage';
+import { SessionThinking, PlanCard, CollapsedPlanWrite, GenericToolCall, SystemLineCollapsible, ReplyImageStrip } from './SessionMessage';
 import { PermissionRequestCard } from './PromptCards';
-import { findImagePaths, resolveImagePath } from '@/utils/markdown';
+import { MessageMetaRow } from './MessageMetaRow';
+import { usePhoneLayout } from '@/hooks/usePhoneLayout';
+import { findImagePaths } from '@/utils/markdown';
 import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSegments';
 import { RichMarkdown } from '@/components/chat/RichBlocks';
 import { useSelectionFrozen } from '@/utils/selection-guard';
@@ -57,27 +59,36 @@ function StreamingTextBlock({ content, msgId, sessionCwd, sessionHost, sessionId
           onClick={handleClick}
         />
       )}
-      {imagePaths.length > 0 && (() => {
-        const resolved = imagePaths
-          .map((p) => ({ p, abs: resolveImagePath(p, sessionCwd) }))
-          .filter((x): x is { p: string; abs: string } => x.abs !== null);
-        if (resolved.length === 0) return null;
-        return (
-          <div className="tool-result-images">
-            {resolved.map(({ p, abs }, i) => {
-              const src = `/api/local-image?path=${encodeURIComponent(abs)}`;
-              return (
-                <div key={i} className="tool-result-image-item">
-                  <img src={src} className="inline-image" data-lightbox-src={src} loading="lazy" />
-                  <span className="inline-image-path">{p}</span>
-                </div>
-              );
-            })}
-          </div>
-        );
-      })()}
+      <ReplyImageStrip paths={imagePaths} cwd={sessionCwd} />
     </>
   );
+}
+
+/** A streaming text block's prose: the reply tag (`[Q<n>]`, question-tag.ts)
+ *  files the turn and is not prose, and neither is the turn-end marker,
+ *  half-written or whole (turn-end-marker.ts). */
+export function streamReplyText(content: string): string {
+  return stripTurnMarker(stripQuestionTag(content), true);
+}
+
+/**
+ * The strip a persisted reply carries under its text (copy, pin, time), worn by
+ * the reply while it streams too. Without it the reply grew by the strip's
+ * height the moment its persisted row replaced it, and a column following the
+ * bottom moved the whole reply up (2026-11-01: "no flash, no change of format").
+ * The CSS keeps it invisible until hover, as on a persisted row; the last reply
+ * shows it once its turn is over (`alwaysVisible`, the persisted row's
+ * showCopyActions). A phone draws its message button out of the flow, so it
+ * reserves nothing and gets nothing here.
+ */
+export function StreamingReplyMeta({ block, alwaysVisible }: { block: Extract<StreamingBlock, { type: 'text' }>; alwaysVisible: boolean }) {
+  const phone = usePhoneLayout();
+  // The persisted row shows its own timestamp; a reply arriving now reads the
+  // same age ("just now") from the moment it first rendered.
+  const [seenAt] = useState(() => new Date().toISOString());
+  const text = streamReplyText(block.content);
+  if (phone || !text.trim()) return null;
+  return <MessageMetaRow msgId={block.msgId} role="assistant" text={text} timestamp={seenAt} alwaysVisible={alwaysVisible} />;
 }
 
 // The prompt cards (permission, AskUserQuestion) live in PromptCards.tsx.
@@ -85,9 +96,7 @@ function StreamingTextBlock({ content, msgId, sessionCwd, sessionHost, sessionId
 /** Render a single streaming block */
 export const StreamingBlockView = memo(function StreamingBlockView({ block, sessionId, sessionCwd, sessionHost, live, onTaskClick, onSessionClick, onFileOpen }: { block: StreamingBlock; sessionId: string; sessionCwd?: string; sessionHost?: string; live?: boolean; onTaskClick?: (taskId: string) => void; onSessionClick?: (sessionId: string) => void; onFileOpen?: (path: string, line?: number) => void }) {
   if (block.type === 'text') {
-    // The reply tag (`[Q<n>]`, question-tag.ts) files the turn; it is not prose,
-    // and neither is the turn-end marker, half-written or whole (turn-end-marker.ts).
-    const content = stripTurnMarker(stripQuestionTag(block.content), true);
+    const content = streamReplyText(block.content);
     if (!content.trim()) return null;
     return <StreamingTextBlock content={content} msgId={block.msgId} sessionCwd={sessionCwd} sessionHost={sessionHost} sessionId={sessionId} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />;
   }

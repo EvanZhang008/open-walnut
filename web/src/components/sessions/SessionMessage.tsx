@@ -1,4 +1,5 @@
-import { useState, useCallback, useContext, useMemo, memo, type ReactNode } from 'react';
+import { useState, useCallback, useContext, useLayoutEffect, useMemo, useRef, memo, type ReactNode } from 'react';
+import { holdImageBoxesIn } from '@/utils/image-size-hold';
 import type { SessionHistoryMessage, SessionHistoryTool } from '@/types/session';
 import type { StreamingBlock } from '@/stream/stream-reducer';
 import {
@@ -181,6 +182,35 @@ const hideOnImgError = (e: React.SyntheticEvent<HTMLImageElement>) => {
   const container = img.closest('.tool-result-image-item') ?? img.parentElement;
   if (container instanceof HTMLElement) container.style.display = 'none';
 };
+
+/**
+ * The previews under a reply for the image paths its text names. One component
+ * for the persisted row and the streaming reply, so the strip is the same
+ * before and after the handover (a broken image hides itself in both).
+ */
+export function ReplyImageStrip({ paths, cwd }: { paths: readonly string[]; cwd?: string }) {
+  const host = useRef<HTMLDivElement | null>(null);
+  // Each image keeps its box while it decodes (utils/image-size-hold.ts).
+  useLayoutEffect(() => { holdImageBoxesIn(host.current); });
+  if (paths.length === 0) return null;
+  const resolved = paths
+    .map((p) => ({ p, abs: resolveImagePath(p, cwd) }))
+    .filter((x): x is { p: string; abs: string } => x.abs !== null);
+  if (resolved.length === 0) return null;
+  return (
+    <div ref={host} className="tool-result-images">
+      {resolved.map(({ p, abs }, i) => {
+        const src = `/api/local-image?path=${encodeURIComponent(abs)}`;
+        return (
+          <div key={i} className="tool-result-image-item">
+            <img src={src} className="inline-image" data-lightbox-src={src} loading="lazy" onError={hideOnImgError} />
+            <span className="inline-image-path">{p}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 /**
  * Plain markdown prose: a person's own words, and a subagent group's result.
@@ -1325,25 +1355,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
           flush();
           return out;
         })()}
-        {textImagePaths.length > 0 && (() => {
-          const resolved = textImagePaths
-            .map((p) => ({ p, abs: resolveImagePath(p, sessionCwd) }))
-            .filter((x): x is { p: string; abs: string } => x.abs !== null);
-          if (resolved.length === 0) return null;
-          return (
-            <div className="tool-result-images">
-              {resolved.map(({ p, abs }, i) => {
-                const src = `/api/local-image?path=${encodeURIComponent(abs)}`;
-                return (
-                  <div key={i} className="tool-result-image-item">
-                    <img src={src} className="inline-image" data-lightbox-src={src} loading="lazy" onError={hideOnImgError} />
-                    <span className="inline-image-path">{p}</span>
-                  </div>
-                );
-              })}
-            </div>
-          );
-        })()}
+        <ReplyImageStrip paths={textImagePaths} cwd={sessionCwd} />
         {/* Hover strip: copy / pin / rewind / time. Every message gets one (the
             CSS keeps it invisible until the row is hovered); the live tail's last
             reply keeps its actions on screen, which is what showCopyActions has

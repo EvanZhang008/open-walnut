@@ -322,7 +322,11 @@ export function escapeHtmlText(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-/** Build an inline image tag from an image path */
+/**
+ * Build an inline image tag from an image path. Lazy, like every chat image;
+ * one this page already drew is made eager again before its first paint
+ * (utils/image-size-hold.ts), so a redrawn reply never shows it blank.
+ */
 export function renderImageTag(imgPath: string): string {
   const isApiUrl = imgPath.startsWith('/api/');
   const src = isApiUrl ? imgPath : `/api/local-image?path=${encodeURIComponent(imgPath)}`;
