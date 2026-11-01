@@ -85,6 +85,9 @@ async function stubTaskWrites(page: Page): Promise<Request[]> {
   return writes
 }
 
+/** The recorded writes as `METHOD path body`, so a failure names the write. */
+const described = (writes: Request[]) => writes.map((r) => `${r.method()} ${new URL(r.url()).pathname} ${r.postData() ?? ''}`)
+
 const markerId = (page: Page) => page.evaluate(() => (history.state as { walnutOverlay?: { id: string } } | null)?.walnutOverlay?.id ?? null)
 
 async function scan(page: Page, root: string, label: string): Promise<void> {
@@ -146,6 +149,8 @@ test('N25: opening an unread row and typing in its session marks it read once', 
 })
 
 test('C58: completing a task whose session runs asks first; Cancel sends nothing', async ({ page }) => {
+  // A boot, the walk to the task and three trips through the sheet: 23 s on a CI runner.
+  test.setTimeout(60_000)
   await sessionRunning(page)
   const writes = await stubTaskWrites(page)
   const errors = await boot(page)
@@ -156,6 +161,12 @@ test('C58: completing a task whose session runs asks first; Cancel sends nothing
   // Whatever phase the shared fixture task is in now; it must not move.
   const phaseBefore = (await phaseRow.textContent()) ?? ''
   expect(phaseBefore).not.toMatch(/Complete/)
+  // The sheet's writes: every one but a read mark. Opening the task marks it
+  // read when it is unread, and the shared fixture's reconciler hands this task
+  // back (unread) about ten minutes after the server starts, so a later run
+  // opened it unread (2026-11-01: C58 on 4 of 7 CI runs, PATCH {"unread":false}).
+  const sheetRequests = () => writes.filter((r) => r.postData() !== '{"unread":false}')
+  const sheetWrites = () => described(sheetRequests())
   await phaseRow.tap()
   const options = page.getByTestId('phone-phase-sheet').getByRole('option')
   await expect(options.first()).toBeVisible()
@@ -175,7 +186,7 @@ test('C58: completing a task whose session runs asks first; Cancel sends nothing
   await cancel.tap()
   await expect(sheet).toHaveCount(0)
   await expect(phaseRow).toHaveText(phaseBefore)
-  expect(writes.length).toBe(0)
+  expect(sheetWrites()).toEqual([])
 
   // C23: back from the sheet closes the sheet only, then the detail.
   await phaseRow.tap()
@@ -184,13 +195,13 @@ test('C58: completing a task whose session runs asks first; Cancel sends nothing
   await page.goBack()
   await expect(sheet).toHaveCount(0)
   await expect(page.locator('.task-detail-modal-overlay')).toBeVisible()
-  expect(writes.length).toBe(0)
+  expect(sheetWrites()).toEqual([])
 
   await phaseRow.tap()
   await page.getByTestId('phone-phase-sheet').getByRole('option', { name: 'Complete' }).tap()
   await complete.tap()
-  await expect.poll(() => writes.length).toBe(1)
-  expect(JSON.parse(writes[0].postData() || '{}')).toMatchObject({ phase: 'COMPLETE' })
+  await expect.poll(() => sheetRequests().length).toBe(1)
+  expect(JSON.parse(sheetRequests()[0].postData() || '{}')).toMatchObject({ phase: 'COMPLETE' })
   expect(errors).toEqual([])
 })
 

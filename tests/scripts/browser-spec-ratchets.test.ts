@@ -40,6 +40,97 @@ describe('calendar time grid positions', () => {
   })
 })
 
+describe('a measured turn read live', () => {
+  // The speed readout's live row lasts as long as the mock turn (`stream-partial-speed`, about
+  // 9 s). Started with the session, before the page that reads it had loaded, the turn was over
+  // before the picker opened on CI (2026-11-01: session-speed-readout on 7 of 7 runs). A test
+  // that reads the live row starts its session with a quick turn, shows the panel, then sends
+  // the measured turn (session:send).
+  const READS_LIVE = /\blive\b[^\n]*\.toBe\('true'\)|speed-lane-status'\)\)\.toHaveText\('running'\)/
+  const STARTS_MEASURED = /(?:startRealSession\(|'session:start')[^\n]*(?:SPEED_MESSAGE|stream-partial-speed)/
+  const offendersOf = (text: string): string[] => text.split(/\n(?=test\()/)
+    .filter((body) => READS_LIVE.test(body) && STARTS_MEASURED.test(body))
+    .map((body) => body.split('\n')[0]!.slice(0, 90))
+
+  it('no test starts the turn it reads live together with its session', () => {
+    const readers = sources.filter(({ text }) => text.includes('stream-partial-speed'))
+    expect(readers.map(({ file }) => file)).toContain('session-speed-readout.spec.ts')
+    expect(readers.flatMap(({ file, text }) => offendersOf(text).map((t) => `${file}: ${t}`))).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const spec = [
+      "test('two panels', async ({ page }) => {",
+      "  await startRealSession(page, SPEED_MESSAGE, TASK_A, 'claude-opus-5-5')",
+      "  await expect.poll(async () => (await liveIn(col)).live, { timeout: 8_000 }).toBe('true')",
+      '})',
+    ].join('\n')
+    expect(offendersOf(spec)).toHaveLength(1)
+    expect(offendersOf(spec.replace('SPEED_MESSAGE', 'WARM_UP'))).toEqual([])
+  })
+})
+
+describe('a stream a spec plays inside the page', () => {
+  // Socket frames dispatched in the page on a fixed timer arrive as fast as a loaded runner can
+  // render them, so the page's main thread never idles and the spec's own reads (a bounding box,
+  // a scroll offset) wait out the test (2026-11-01: phone-touch-scroll-while-streaming on 6 of 7
+  // CI runs). Each frame waits for the one before it to be drawn (requestAnimationFrame, then
+  // the delay).
+  const timerSends = (text: string): number[] => {
+    const lines = text.split('\n')
+    return lines.flatMap((line, i) => (/\bsetInterval\(/.test(line) && lines.slice(i, i + 3).some((one) => /\bsend\(|dispatchEvent\(/.test(one)) ? [i + 1] : []))
+  }
+
+  it('no spec dispatches frames in the page from a setInterval', () => {
+    const offenders = sources
+      .filter(({ text }) => text.includes('dispatchEvent(new MessageEvent'))
+      .flatMap(({ file, text }) => timerSends(text).map((line) => `${file}:${line}`))
+    expect(offenders).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    expect(timerSends("    w.__stream = setInterval(() => { n += 1; send(`Streamed sentence ${n}. `) }, 120)")).toEqual([1])
+    expect(timerSends("    const next = () => requestAnimationFrame(() => setTimeout(() => { send('x'); next() }, 120))")).toEqual([])
+  })
+})
+
+describe('a no-write check on a fixture task', () => {
+  // Opening an unread task marks it read (PATCH {"unread":false}), and the shared fixture's
+  // reconciler hands its tasks back, unread, minutes after the server starts. phone-pages C58
+  // counted every write since its boot and read that mark as its sheet's (2026-11-01: 4 of 7 CI
+  // runs). A spec that records a fixture task's writes and expects none leaves the mark out.
+  const RECORDS = /page\.route\(`\*\*\/api\/tasks\/\$\{\w+\}\*\*`/
+  // A check on every recorded write, the read mark included.
+  const EXPECTS_NONE = /writes\.length\)\.toBe\(0\)|(?:expect|described)\(writes\)\)?\.(?:toEqual\(\[\]\)|toHaveLength\(0\))/
+
+  it('every one leaves the read mark out', () => {
+    const recorders = sources.filter(({ text }) => RECORDS.test(text) && text.includes('writes.push('))
+    expect(recorders.map(({ file }) => file)).toContain('phone-pages.spec.ts')
+    expect(recorders.filter(({ text }) => EXPECTS_NONE.test(text)).map(({ file }) => file)).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    expect(EXPECTS_NONE.test('  expect(writes.length).toBe(0)')).toBe(true)
+    expect(EXPECTS_NONE.test('  expect(described(writes)).toEqual([])')).toBe(true)
+    expect(EXPECTS_NONE.test('  expect(sheetWrites()).toEqual([])')).toBe(false)
+  })
+})
+
+describe('a phone reload after the walk down the home list', () => {
+  // Two cold loads of the dense phone home, the walk down it and the restore take about 20 s on
+  // an idle machine; at the default 30 s the C80 tests ran out mid-poll on CI (2026-11-01: 4 of 7
+  // runs). A test that walks the list and reloads sets its own timeout.
+  const offendersOf = (text: string): string[] => text.split(/\n(?=test\()/)
+    .filter((body) => body.includes('openFromMidHome(') && /\breload\(/.test(body) && !/test\.setTimeout\(|test\.slow\(/.test(body))
+    .map((body) => body.split('\n')[0]!.slice(0, 90))
+
+  it('every such test gives itself the room', () => {
+    const walkers = sources.filter(({ text }) => text.includes('openFromMidHome('))
+    expect(walkers.map(({ file }) => file)).toContain('phone-session.spec.ts')
+    expect(walkers.flatMap(({ file, text }) => offendersOf(text).map((t) => `${file}: ${t}`))).toEqual([])
+  })
+})
+
 describe('a context menu heading', () => {
   // A menu's `info` rows are its title lines AND the name of a group further down (the
   // mail menu's "Walnut" group, 28df4326c). Specs that read every info row as the heading

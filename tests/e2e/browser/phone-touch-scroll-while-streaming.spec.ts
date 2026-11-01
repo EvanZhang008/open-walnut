@@ -24,6 +24,10 @@ import { test, expect, devices, type Page } from '@playwright/test'
 const PHONE = devices['iPhone 15']
 test.use({ viewport: PHONE.viewport, deviceScaleFactor: PHONE.deviceScaleFactor, isMobile: true, hasTouch: true, userAgent: PHONE.userAgent })
 
+// A cold load of a 240-row transcript waits up to 30 s by itself on a loaded CI
+// runner; the streaming and the pans come after it.
+test.setTimeout(60_000)
+
 const SESSION_ID = 'pw-phone-touch-scroll-session'
 const TASK_ID = 'pw-phone-touch-scroll-task'
 const TOTAL = 240
@@ -58,8 +62,14 @@ async function mockSession(page: Page) {
 
 /**
  * A streamed reply, the way the server sends one: `session:text-delta` events on
- * the console's WebSocket, every 120 ms, until the test ends. The socket is
+ * the console's WebSocket, about every 120 ms, until the test ends. The socket is
  * captured at creation (init script below), as turn-end-tail-visible.spec.ts does.
+ *
+ * Each delta waits for the frame that drew the one before it. A fixed 120 ms
+ * interval sent them as fast as a loaded CI runner could render them (one costs
+ * ~25 ms of script in the dev build on an idle machine), so the page's main
+ * thread never went idle and the test's own reads of the page (a bounding box,
+ * a scroll offset) waited out the whole test (2026-11-01: 6 of 7 CI runs).
  */
 async function startStreaming(page: Page) {
   await page.waitForFunction(() => {
@@ -67,13 +77,14 @@ async function startStreaming(page: Page) {
     return ws && ws.readyState === WebSocket.OPEN
   }, null, { timeout: 15_000 })
   await page.evaluate((args) => {
-    const w = window as unknown as { __capturedWs: WebSocket; __stream?: ReturnType<typeof setInterval> }
+    const w = window as unknown as { __capturedWs: WebSocket }
     const send = (delta: string) => w.__capturedWs.dispatchEvent(new MessageEvent('message', {
       data: JSON.stringify({ type: 'event', name: 'session:text-delta', data: { sessionId: args.sid, taskId: args.task, delta, msgId: 'live-a' }, seq: Date.now() }),
     }))
     send('')
     let n = 0
-    w.__stream = setInterval(() => { n += 1; send(`Streamed sentence ${n} of the running turn. `) }, 120)
+    const next = () => requestAnimationFrame(() => setTimeout(() => { n += 1; send(`Streamed sentence ${n} of the running turn. `); next() }, 120))
+    next()
   }, { sid: SESSION_ID, task: TASK_ID })
 }
 

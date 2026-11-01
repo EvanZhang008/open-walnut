@@ -32,22 +32,19 @@ const COLUMNS_KEY = 'open-walnut-home-session-columns'
 
 let rpcSeq = 0
 
-/** Start a real session via the session:start WS RPC from inside the page.
- *  Same as single-timeline-real-pipeline.spec.ts, plus an optional `model`. */
-async function startRealSession(page: Page, message: string, taskId: string, model?: string): Promise<void> {
-  const reqId = `pw-speed-start-${++rpcSeq}`
+/** One WS RPC from inside the page (session:start, session:send), as
+ *  single-timeline-real-pipeline.spec.ts does: resolves on its answer. */
+async function rpc(page: Page, method: string, payload: Record<string, unknown>): Promise<void> {
+  const reqId = `pw-speed-${method}-${++rpcSeq}`
   await page.evaluate(
-    async ({ message, taskId, model, reqId }) => {
+    async ({ method, payload, reqId }) => {
       const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
       const ws = new WebSocket(`${proto}://${window.location.host}/ws`)
       await new Promise<void>((resolve, reject) => {
         ws.onopen = () => resolve()
         ws.onerror = () => reject(new Error('ws failed'))
       })
-      ws.send(JSON.stringify({
-        type: 'req', id: reqId, method: 'session:start',
-        payload: { taskId, message, project: 'Walnut', ...(model ? { model } : {}) },
-      }))
+      ws.send(JSON.stringify({ type: 'req', id: reqId, method, payload }))
       await new Promise<void>((resolve) => {
         ws.onmessage = (ev) => {
           try {
@@ -59,8 +56,36 @@ async function startRealSession(page: Page, message: string, taskId: string, mod
       })
       ws.close()
     },
-    { message, taskId, model, reqId },
+    { method, payload, reqId },
   )
+}
+
+/** Start a real session, plus an optional `model`. */
+async function startRealSession(page: Page, message: string, taskId: string, model?: string): Promise<void> {
+  await rpc(page, 'session:start', { taskId, message, project: 'Walnut', ...(model ? { model } : {}) })
+}
+
+/** A quick first turn: the session exists (and has an id to seed a column with)
+ *  before the measured turn starts. */
+const WARM_UP = 'Speed readout warm-up'
+
+/** Wait until the session's turn has ended (its CLI no longer runs), so the next
+ *  send starts a turn of its own rather than landing inside this one. */
+async function waitTurnEnded(request: APIRequestContext, sid: string): Promise<void> {
+  await expect.poll(async () => {
+    const res = await request.get(`/api/sessions/${sid}`)
+    if (!res.ok()) return null
+    return ((await res.json()) as { session?: { process_status?: string } }).session?.process_status ?? null
+  }, { timeout: 60_000, intervals: [250, 500, 1000] }).not.toBe('running')
+}
+
+/** Start the measured turn on a session the page already shows. The live window
+ *  is the turn's ~9s, so it opens only once the panel is on screen: a turn begun
+ *  before the page loaded was over on a loaded CI runner before the picker opened
+ *  (2026-11-01: 7 of 7 CI runs read `data-live="false"` at the first look). */
+async function sendSpeedTurn(page: Page, request: APIRequestContext, sid: string, message: string): Promise<void> {
+  await waitTurnEnded(request, sid)
+  await rpc(page, 'session:send', { sessionId: sid, message })
 }
 
 /** Session ids already on a task. Snapshot before a start so the wait below
@@ -270,8 +295,8 @@ test('two panels side by side show a live readout each, then final numbers', asy
   const TASK_B = await newTask(request, 'Speed readout B')
   const beforeA = await sessionIdsFor(request, TASK_A)
   const beforeB = await sessionIdsFor(request, TASK_B)
-  await startRealSession(page, SPEED_MESSAGE, TASK_A, 'claude-opus-5-5')
-  await startRealSession(page, SPEED_MESSAGE, TASK_B, 'claude-sonnet-5-5')
+  await startRealSession(page, WARM_UP, TASK_A, 'claude-opus-5-5')
+  await startRealSession(page, WARM_UP, TASK_B, 'claude-sonnet-5-5')
   const [sidA, sidB] = await Promise.all([
     waitForNewSessionId(request, TASK_A, beforeA),
     waitForNewSessionId(request, TASK_B, beforeB),
@@ -288,13 +313,14 @@ test('two panels side by side show a live readout each, then final numbers', asy
   await expect(columns(page).first().locator('.session-panel').first()).toHaveAttribute('data-session-id', sidA)
 
   // Mid-stream: each panel's picker shows ITS OWN live row (the model it runs,
-  // a first-token slot once the first delta landed). The two turns run for
-  // ~9s, so both pickers can be opened in turn while both are live.
+  // a first-token slot once the first delta landed). Each measured turn starts
+  // right before its picker is read, so neither ~9s window is spent on loading.
   const liveIn = async (col: Locator) => {
     await openPicker(page, col)
     return readoutState(page)
   }
   for (const [col, sid, model, label] of [[colA, sidA, 'Opus 5.5', 'A'], [colB, sidB, 'Sonnet 5.5', 'B']] as const) {
+    await sendSpeedTurn(page, request, sid, SPEED_MESSAGE)
     try {
       await expect.poll(async () => (await liveIn(col)).live, { timeout: 8_000, intervals: [100] }).toBe('true')
     } catch (err) {
@@ -381,13 +407,16 @@ test('a subagent on another model gets its own row under the main one, live then
   // The agent variant of the speed turn: the tool is an Agent whose lane
   // answers as haiku (mock-claude.mjs `speed-agent`), with 300ms pauses so the
   // lane is still running when the picker opens.
-  await startRealSession(page, 'chunk-delay:300 stream-partial-speed-agent', TASK, 'claude-opus-5-5')
+  await startRealSession(page, WARM_UP, TASK, 'claude-opus-5-5')
   const sid = await waitForNewSessionId(request, TASK, before)
 
   await seedColumns(page, [sid])
   await page.goto('/')
   const col = columnFor(page, sid)
   await expect(col).toHaveCount(1, { timeout: 30_000 })
+  await expect(col.locator('.composer-model-pill').first()).toBeVisible({ timeout: 30_000 })
+  // The lane runs ~6s: its turn starts once the panel is on screen.
+  await sendSpeedTurn(page, request, sid, 'chunk-delay:300 stream-partial-speed-agent')
   await openPicker(page, col)
   const lane = picker(page).getByTestId('speed-lane')
   // The lane row appears with the Agent call, under the main row, named by its model.

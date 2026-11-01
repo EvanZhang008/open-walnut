@@ -514,7 +514,15 @@ test('nested: session, then its task detail; back twice peels them in order (C24
   expect(new URL(page.url()).pathname).toBe('/')
 })
 
+/**
+ * Two cold loads of the dense phone home, the walk down it and the restore:
+ * about 20 s on an idle machine, so the default 30 s ran out on CI's loaded
+ * runners (2026-11-01: 4 of 7 runs, mid-poll). Each C80 test gets 90 s.
+ */
+const RELOAD_TEST_MS = 90_000
+
 test('a reload puts the session, its message and the home scroll back, then forgets (C80)', async ({ page }) => {
+  test.setTimeout(RELOAD_TEST_MS)
   await stubSession(page, { history: longTurnHistory(8) })
   await denseHome(page)
   await boot(page)
@@ -541,6 +549,7 @@ test('a reload puts the session, its message and the home scroll back, then forg
 })
 
 test('a reload while hidden (the deploy path) restores the same way (C80)', async ({ page }) => {
+  test.setTimeout(RELOAD_TEST_MS)
   await stubSession(page, { history: longTurnHistory(8) })
   await denseHome(page)
   await boot(page)
