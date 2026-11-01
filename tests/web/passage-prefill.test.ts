@@ -1,7 +1,7 @@
 /**
- * The transcript pill's "Ask in chat": the selected passage becomes a Markdown
- * quote that leads the main conversation's next message, with a blank line left
- * for the user's own words.
+ * The transcript pill's "Quote" / "Comment": the selected passage becomes a
+ * Markdown quote for the main conversation's next message, the user's comment
+ * under it, with a blank line left for what comes next.
  */
 import { describe, it, expect } from 'vitest';
 import { buildPassagePrefill } from '@/components/sessions/diffPrefill';
@@ -18,6 +18,14 @@ describe('buildPassagePrefill', () => {
 
   it('trims the edges, trailing spaces and CRLF line ends of a selection', () => {
     expect(buildPassagePrefill('\n  Lead in.  \r\nNext.\t\n\n')).toBe('> Lead in.\n> Next.\n\n');
+  });
+
+  it('puts a comment under the quote, trimmed, with a blank line after it', () => {
+    expect(buildPassagePrefill('A passage.', '  Is this right?\r\nAsk.  ')).toBe('> A passage.\n\nIs this right?\nAsk.\n\n');
+  });
+
+  it('an empty comment is a plain quote', () => {
+    expect(buildPassagePrefill('A passage.', '  \n ')).toBe('> A passage.\n\n');
   });
 
   it('keeps non-ASCII text as it is', () => {

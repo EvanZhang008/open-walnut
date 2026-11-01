@@ -89,12 +89,15 @@ export function buildReviewMessage(comments: ReviewComment[]): string {
 }
 
 /**
- * The transcript's "Quote" (the selection pill): the passage as a Markdown
- * quote that leads the main conversation's next message, then a blank line for
- * the user's own words. Each line quoted, so a multi-paragraph passage stays one
- * quote; trailing spaces go, since they would only end up inside the quote.
+ * The transcript's "Quote" / "Comment" (the selection pill): the passage as a
+ * Markdown quote for the main conversation's next message, then the user's comment
+ * under it when there is one, then a blank line for what comes next. Each line
+ * quoted, so a multi-paragraph passage stays one quote; trailing spaces go, since
+ * they would only end up inside the quote.
  */
-export function buildPassagePrefill(passage: string): string {
+export function buildPassagePrefill(passage: string, comment?: string): string {
   const lines = passage.replace(/\r\n?/g, '\n').trim().split('\n').map((l) => l.trimEnd());
-  return `${lines.map((l) => (l ? `> ${l}` : '>')).join('\n')}\n\n`;
+  const quote = `${lines.map((l) => (l ? `> ${l}` : '>')).join('\n')}\n\n`;
+  const note = comment?.replace(/\r\n?/g, '\n').trim();
+  return note ? `${quote}${note}\n\n` : quote;
 }

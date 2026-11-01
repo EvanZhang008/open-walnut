@@ -305,9 +305,10 @@ interface SessionChatHistoryProps {
    * pill: the passage is already on screen and the user is about to type.
    */
   onRequestComposerFocus?: (opts?: { keepTimelinePosition?: boolean }) => void;
-  /** The selection pill's "Quote": the passage goes into the panel's
-   *  composer as a quote for the main conversation. Omitted = no such button. */
-  onQuoteInChat?: (passage: string) => void;
+  /** The selection pill's "Quote" and "Comment": the passage (with the user's
+   *  comment) goes into the panel's composer as a quote for the main conversation.
+   *  Omitted = no such buttons. */
+  onQuoteInChat?: (passage: string, comment?: string) => void;
   /** The session runs a chat (a lane session): what the chat said before it is
    *  shown above its first message (ChatEarlierBlock). */
   chatLane?: boolean;

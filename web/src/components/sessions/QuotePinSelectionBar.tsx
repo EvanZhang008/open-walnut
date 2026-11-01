@@ -30,15 +30,25 @@
  * document selection — and used to take the pill with it. The composer now asks the
  * pill to HOLD first (`requestSelectionHold`, selection-hold.ts): the captured
  * passage stays, `useHeldPassage` keeps painting the words the selection covered
- * and keeps the pill on them through re-renders and scrolls, and Pin / Ask here / Quote / Copy
+ * and keeps the pill on them through re-renders and scrolls, and Pin / Ask here / Quote / Comment / Copy
  * keep working from the capture. The hold ends when the user acts on the pill,
  * sends a message (the panel releases it), presses Escape, presses anywhere that is
  * not this panel's composer or mic, or makes a new selection. Nothing about a held
  * passage is INFERRED: from 2026-09-10 to 09-16 the landing turned the selection
  * into the composer's thread anchor instead, and a word dragged over while reading
  * became an "asking about" chip nobody asked for. The chip is Ask's to create.
+ *
+ * COMMENT. Quote and Comment both put the passage into the main conversation's
+ * composer and send nothing; Comment first opens a small box in the pill for the
+ * user's note, which goes under the quote. The box takes focus, so the press on
+ * Comment HOLDS the passage (pointerdown, before main.tsx's mousedown guard clears
+ * the selection): its paint stays while the user writes, and a reply streaming in
+ * meanwhile cannot take the pill down. The composer stacks what is added in order
+ * (prefill-place.ts 'stack'), so a reader collects several quotes and comments and
+ * sends them as one message (2026-11-01, the user: "the comments pile up below, and
+ * only when I send, they all go together").
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import {
@@ -61,6 +71,14 @@ const ICON_ASK = (
     <path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" />
     <path d="M6.6 5.6a1.5 1.5 0 1 1 2 1.4c-.4.2-.6.5-.6.9" />
     <path d="M8 9.3v.01" />
+  </svg>
+);
+
+/** A speech bubble with lines: Comment writes a note under the quote. */
+const ICON_COMMENT = (
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    <path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z" />
+    <path d="M5.5 6h5M5.5 8h3" />
   </svg>
 );
 
@@ -87,7 +105,7 @@ interface QuotePinSelectionBarProps {
    * (the Files tab's "Quote in chat"); nothing is sent. Omitted = no button, which is how a
    * timeline with no composer of its own keeps the pill honest.
    */
-  onQuoteInChat?: (passage: string) => void;
+  onQuoteInChat?: (passage: string, comment?: string) => void;
 }
 
 /** The captured passage (shared with the dictation path — see selection-quote.ts)
@@ -174,6 +192,10 @@ function readLiveSelection(
 
 export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, onQuoteInChat }: QuotePinSelectionBarProps) {
   const [state, setState] = useState<PillState | null>(null);
+  /** The Comment box is open: its words, null while the pill shows its buttons. */
+  const [comment, setComment] = useState<string | null>(null);
+  const commentRef = useRef<string | null>(null);
+  commentRef.current = comment;
   const pillRef = useRef<HTMLDivElement | null>(null);
   const noTrigger = useRef<HTMLElement | null>(null);
   /**
@@ -184,6 +206,8 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
    * did nothing at all (measured). Self-clearing: any press elsewhere sets it back.
    */
   const pressedPill = useRef(false);
+  /** The last Esc keydown ended an IME composition (its keyup must not dismiss). */
+  const escComposing = useRef(false);
   /** The primary button is down on something other than the pill: a selection
    *  may be being dragged, so no pill until it is released. */
   const selectingRef = useRef(false);
@@ -207,13 +231,20 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
       ? { ...prev, anchor: point }
       : prev));
   }, []);
-  const pillDown = useCallback(() => setState(null), []);
+  // A passage lost while the Comment box is open (a streamed re-render rewrote it, it
+  // scrolled away) only loses its paint: the box and the words typed in it stay, and
+  // Add still has the captured text.
+  const pillDown = useCallback(() => {
+    if (commentRef.current !== null) return;
+    setState(null);
+  }, []);
   const held = useHeldPassage({ containerRef, captureRef: stateRef, reanchor, onLost: pillDown });
 
   /** Pill down, and with it any held passage and its paint. The ONE exit. */
   const dismiss = useCallback(() => {
     held.clearHold();
     setState(null);
+    setComment(null);
   }, [held]);
 
   /**
@@ -236,6 +267,11 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
 
   const evaluate = useCallback(() => {
     if (pressedPill.current) return; // pressing the pill is not a selection change
+    // Writing in the Comment box: the selection sits in its textarea.
+    if (commentRef.current !== null && pillRef.current?.contains(document.activeElement)) {
+      held.repair();
+      return;
+    }
     const container = containerRef.current;
     const selection = typeof window !== 'undefined' ? window.getSelection() : null;
     if (!container || !selection) { dismiss(); return; }
@@ -252,14 +288,15 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
         || sameBoundaries(selection.getRangeAt(selection.rangeCount - 1), holding.range);
       if (stillHeld) { held.repair(); return; }
       held.clearHold();
+      setComment(null);
     }
     // A drag in progress is not a selection yet. A pill shown now sits under the
     // moving pointer, and WebKit then extends the selection ONTO the pill (a node
     // outside the transcript), so the drag ends selecting to the end of the page
     // with no pill at all. An earlier pill goes; the new one comes at the release.
-    if (selectingRef.current) { setState(null); return; }
+    if (selectingRef.current) { setState(null); setComment(null); return; }
     const live = readLiveSelection(container, selection);
-    if (!live) { setState(null); return; }
+    if (!live) { setState(null); setComment(null); return; }
     setState((prev) => {
       const sameAnchor = !!prev && prev.anchor.x === live.anchor.x && prev.anchor.y === live.anchor.y;
       if (prev && sameAnchor && prev.msgId === live.captured.msgId && sameQuote(prev.quote, live.captured.quote)) return prev;
@@ -282,7 +319,11 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
       // An evaluate still queued from before the Esc (a late selectionchange or
       // scroll) would read the selection that is still there and put the pill
       // straight back: cancel it with the dismissal.
-      if (e.key === 'Escape') { cancelAnimationFrame(raf); dismiss(); return; }
+      if (e.key === 'Escape') {
+        // An Esc that cancelled an IME composition is the input method's, not ours.
+        if (escComposing.current) { escComposing.current = false; return; }
+        cancelAnimationFrame(raf); dismiss(); return;
+      }
       schedule();
     };
     // A scroll used to DISMISS the pill outright, which made it unusable for the
@@ -317,9 +358,12 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
         // Measured on this machine the clamp lands ~700ms AFTER mouseup, so no
         // press observed here actually raced it; this is a one-line floor for the
         // slower machine (or the longer press) where it would.
-        if (pressedPill.current) return;
+        // The Comment box keeps the pill up after a press on it, so it still follows.
+        if (pressedPill.current && commentRef.current === null) return;
         // A held passage has no selection to read: its own Range says where it is.
         if (held.heldRef.current) { held.repair(); return; }
+        // An open Comment box whose passage was lost stays where it is.
+        if (commentRef.current !== null) return;
         const selection = typeof window !== 'undefined' ? window.getSelection() : null;
         if (container && selection && !selectionVisibleIn(container, selection)) {
           setState(null);
@@ -406,7 +450,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
     const container = containerRef.current;
     if (!pillUp || !container || typeof MutationObserver === 'undefined') return;
     const mo = new MutationObserver(() => {
-      if (pressedPill.current || held.heldRef.current) return;
+      if (pressedPill.current || held.heldRef.current || commentRef.current !== null) return;
       const sel = window.getSelection();
       if (sel && !sel.isCollapsed && sel.rangeCount) return;
       setState(null);
@@ -460,6 +504,24 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
     dismiss();
   }, [onQuoteInChat, sessionId, state, dismiss]);
 
+  const addComment = useCallback(() => {
+    const note = comment?.trim();
+    if (!state?.text.trim() || !onQuoteInChat || !note) return;
+    log.info('session', 'commenting on a passage in the chat', {
+      sessionId, msgId: state.msgId, chars: state.text.length, commentChars: note.length,
+    });
+    onQuoteInChat(state.text, note);
+    window.getSelection()?.removeAllRanges();
+    dismiss();
+  }, [comment, onQuoteInChat, sessionId, state, dismiss]);
+
+  const onCommentKey = useCallback((e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    // Enter adds, Shift+Enter is a new line; an IME's Enter only commits its text.
+    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing || e.keyCode === 229) return;
+    e.preventDefault();
+    addComment();
+  }, [addComment]);
+
   const copy = useCallback(() => {
     if (state?.text.trim()) void copyTextRobust(state.text);
     dismiss();
@@ -474,7 +536,9 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
   useEffect(() => {
     if (!shown) return;
     const onDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.isComposing && e.keyCode !== 229) e.preventDefault();
+      if (e.key !== 'Escape') return;
+      escComposing.current = e.isComposing || e.keyCode === 229;
+      if (!escComposing.current) e.preventDefault();
     };
     document.addEventListener('keydown', onDown, true);
     return () => document.removeEventListener('keydown', onDown, true);
@@ -505,6 +569,42 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
       // and would unmount this pill before `click` fires.
       onMouseUp={(e) => e.stopPropagation()}
     >
+      {comment !== null ? (
+        <div className="quote-pin-comment" data-testid="quote-comment-box">
+          <textarea
+            className="quote-pin-comment-input"
+            data-testid="quote-comment-input"
+            autoFocus
+            rows={2}
+            value={comment}
+            placeholder="Comment on this passage"
+            aria-label="Comment on this passage"
+            onChange={(e) => setComment(e.target.value)}
+            onKeyDown={onCommentKey}
+          />
+          <div className="quote-pin-comment-actions">
+            <span className="quote-pin-comment-hint">Goes into the message box, nothing is sent</span>
+            <button
+              type="button"
+              className="quote-pin-pill-btn"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={dismiss}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="quote-pin-pill-btn quote-pin-comment-add"
+              data-testid="quote-comment-add"
+              disabled={!comment.trim()}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={addComment}
+            >
+              Add
+            </button>
+          </div>
+        </div>
+      ) : (<>
       {canPin && (
         <button
           type="button"
@@ -542,6 +642,23 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
           <span>Quote</span>
         </button>
       )}
+      {onQuoteInChat && !!state.text.trim() && (
+        <button
+          type="button"
+          className="quote-pin-pill-btn"
+          data-testid="quote-comment-btn"
+          // Hold now: the box about to take focus collapses the selection, and the
+          // mousedown guard clears it before any click handler could hold it.
+          onPointerDown={(e) => { if (e.button === 0) hold(); }}
+          onMouseDown={(e) => e.preventDefault()}
+          // The keyboard path has no pointerdown, and its selection is still live here.
+          onClick={() => { hold(); setComment(''); }}
+          title="Comment on this passage: the quote and your comment go into the message box, nothing is sent"
+        >
+          {ICON_COMMENT}
+          <span>Comment</span>
+        </button>
+      )}
       <button
         type="button"
         className="quote-pin-pill-btn"
@@ -551,6 +668,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
       >
         Copy
       </button>
+      </>)}
     </div>,
     document.body,
   );

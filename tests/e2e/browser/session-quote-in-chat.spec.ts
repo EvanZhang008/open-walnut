@@ -69,7 +69,7 @@ test.describe('Selection pill: Ask here and Quote', () => {
     await selectPassage(page, panel, phrase)
     await expect(pill(page)).toBeVisible()
     const labels = (await pill(page).locator('button').allInnerTexts()).map((t) => t.trim())
-    expect(labels).toEqual(['Pin', 'Ask here', 'Quote', 'Copy'])
+    expect(labels).toEqual(['Pin', 'Ask here', 'Quote', 'Comment', 'Copy'])
     await shot(page, 'pill')
 
     const before = (await readRecord(request, AI_SESSION)).threadAnchors?.length ?? 0

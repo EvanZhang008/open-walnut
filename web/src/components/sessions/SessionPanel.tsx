@@ -55,6 +55,7 @@ import { typedUserText } from '@open-walnut/history-injected-banner';
 // PlanPreviewSection replaced by inline plan popover in meta bar
 import { ChatInput } from '@/components/chat/ChatInput';
 import { keepCommandFirst } from '@/components/chat/leading-command';
+import type { PrefillMode } from '@/components/chat/prefill-place';
 import { SideQuestionDrawer } from '@/components/sessions/SideQuestionDrawer';
 import { useRenderedMarkdown } from '@/hooks/useEntityLabels';
 import { stripSendPrefixes, useSessionSend } from '@/hooks/useSessionSend';
@@ -946,7 +947,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // existing input (no new chat, no fork; goes to the main agent via normal send).
   const [prefillText, setPrefillText] = useState<string | undefined>(undefined);
   const [prefillNonce, setPrefillNonce] = useState(0);
-  const [prefillMode, setPrefillMode] = useState<'replace' | 'keep-draft' | 'append'>('replace');
+  const [prefillMode, setPrefillMode] = useState<PrefillMode>('replace');
   const handleSelectCode = useCallback((filePath: string, line: number | undefined, code: string) => {
     // The Changed tab already hands a repo-relative path; the Files tab browses the
     // whole filesystem and hands an absolute one. Shorten against the session cwd so
@@ -1023,11 +1024,13 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     window.addEventListener(COMPOSER_INSERT_EVENT, onInsert);
     return () => window.removeEventListener(COMPOSER_INSERT_EVENT, onInsert);
   }, [sessionId]);
-  // The transcript pill's "Quote" (beside "Ask here"): the
-  // passage leads the MAIN conversation's next message as a quote. On a question
+  // The transcript pill's "Quote" and "Comment" (beside "Ask here"): the passage,
+  // with the user's comment under it, goes into the MAIN conversation's composer as
+  // a quote. Nothing is sent: the user collects as many as they like and sends them
+  // as one message, in the order added ('stack', prefill-place.ts). On a question
   // (its page, or the composer's target in Conversation Mode) the panel goes back
   // to the main conversation first; that question keeps its own draft.
-  const quoteInChat = useCallback((passage: string) => {
+  const quoteInChat = useCallback((passage: string, comment?: string) => {
     const t = threadsForInsert.current;
     if (t.draftKey !== sessionDraftKey(sessionId)) {
       // Conversation Mode: let go of the quoted question; Tree Mode: back to Main.
@@ -1037,8 +1040,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
         t.stack.api.popTo(ROOT_THREAD_KEY, 'quote-in-chat');
       }
     }
-    setPrefillText(buildPassagePrefill(passage));
-    setPrefillMode('keep-draft');
+    setPrefillText(buildPassagePrefill(passage, comment));
+    setPrefillMode('stack');
     setPrefillNonce((n) => n + 1);
     autoCollapsed.current = false;
     setChatCollapsed(false);

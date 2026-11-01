@@ -28,6 +28,7 @@ import { discardedSince, draftSaveMark, isSentDraftCopy, markDraftSent, subscrib
 import { PlusMenuActionRows } from './PlusMenuActionRows';
 import { plusButtonLabel, selectPlusMenuAction, type PlusMenuAction } from './plus-menu-actions';
 import { keepCommandFirst } from './leading-command';
+import { placePrefill, type PrefillMode } from './prefill-place';
 import type { ComposerControlsBarHandle } from './ComposerControlsBar';
 
 const ALLOWED_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
@@ -157,8 +158,10 @@ interface ChatInputProps {
    *  model turn): they are invited to keep typing meanwhile, and replacing would eat
    *  both the text and its saved draft. 'append' puts it AFTER the typed text
    *  (separated by one space) with the caret at the end: a reference pill quoted
-   *  in from elsewhere joins the sentence in progress. Default 'replace'. */
-  prefillMode?: 'replace' | 'keep-draft' | 'append';
+   *  in from elsewhere joins the sentence in progress. 'stack' (the transcript's
+   *  Quote / Comment) leads like 'keep-draft' until the box holds a quote, then
+   *  appends, so collected quotes keep their order (prefill-place.ts). Default 'replace'. */
+  prefillMode?: PrefillMode;
   /** Bump this (monotonic, >0) to focus the box and LEAVE THE DRAFT ALONE. The
    *  thread-anchor path needs this: "Ask about this passage" moves the user to the
    *  composer without writing the quote into it (the quote rides the chip and is
@@ -406,17 +409,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // parent can re-apply the same text; nonce 0/undefined = no-op (initial mount).
   useEffect(() => {
     if (!prefillNonce || !prefillText) return;
-    // 'keep-draft': the injected block goes FIRST and the user's own sentence keeps
-    // its place after it (which is what the injected text's trailing blank line is
-    // for). Read through the ref, not `value` — this effect is keyed on the nonce.
-    let next: string;
-    if (prefillMode === 'append') {
-      const typed = valueRef.current.replace(/\s+$/, '');
-      next = typed ? `${typed} ${prefillText}` : prefillText;
-    } else {
-      const typed = prefillMode === 'keep-draft' ? valueRef.current.trimStart() : '';
-      next = typed ? `${prefillText}${typed}` : prefillText;
-    }
+    // Where the block lands is placePrefill's rule (prefill-place.ts). Read through
+    // the ref, not `value` — this effect is keyed on the nonce.
+    const placed = placePrefill(prefillMode, valueRef.current, prefillText);
+    const next = placed.text;
     // A prefill often IS a reference ("Quote in session" appends a `<task-ref/>`),
     // so it lands as an inline `@[label]` token. 'replace' throws the typed text
     // away, and its reference table with it.
@@ -441,10 +437,10 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       if (!el) return;
       if (el.offsetParent === null && frames++ < 20) { raf = requestAnimationFrame(tryFocus); return; }
       el.focus();
-      // End of the prose for an append (the token landed at the end of the
-      // sentence in progress); end of the injected block otherwise, measured in
+      // End of the text for an append or a stacked quote (the block landed at the
+      // end); end of the injected block otherwise, measured in
       // its inline form because a tag shrinks to its token.
-      const caret = prefillMode === 'append'
+      const caret = placed.caret === 'end'
         ? split.body.length
         : Math.min(inlineRefs(prefillText, split.table).body.length, split.body.length);
       el.setSelectionRange(caret, caret);

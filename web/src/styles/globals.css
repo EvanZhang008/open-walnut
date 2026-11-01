@@ -32141,6 +32141,48 @@ button.nfc-cat-drill:hover { color: var(--fg); text-decoration: underline; }
   white-space: nowrap;
 }
 .quote-pin-pill-btn:hover { background: var(--bg-hover); }
+.quote-pin-pill-btn:disabled { opacity: 0.45; cursor: default; background: none; }
+
+/* The pill's Comment box: the note that goes under the quote in the composer. */
+.quote-pin-comment {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: min(340px, 80vw);
+  padding: 2px;
+}
+.quote-pin-comment-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  max-height: 160px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  resize: vertical;
+}
+.quote-pin-comment-input:focus { outline: none; border-color: var(--accent); }
+.quote-pin-comment-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.quote-pin-comment-hint {
+  flex: 1;
+  min-width: 0;
+  padding: 0 4px;
+  color: var(--fg-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quote-pin-comment-add:not(:disabled) { color: var(--accent); font-weight: 600; }
 
 .quote-pin-popover { max-width: min(360px, 70vw); }
 
