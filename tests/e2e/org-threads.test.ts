@@ -35,7 +35,7 @@ import { CLAUDE_HOME, WALNUT_HOME } from '../../src/constants.js'
 import { encodeProjectPath } from '../../src/core/session-history.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { startServer, stopServer } from '../../src/web/server.js'
-import { addTask } from '../../src/core/task-manager.js'
+import { addTask, linkSession, listTasksByIds } from '../../src/core/task-manager.js'
 import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { ensureProjectLead } from '../../src/core/org/org-store.js'
 import { getQueue, sendMessageToSession } from '../../src/core/session-message-queue.js'
@@ -224,6 +224,30 @@ describe('Org Threads', () => {
     await typeIntoChat(LEAD_SID, 'ok, thanks', t.id)
     const closed = await patch(t.id, { close: 'acked' }, LEAD_SID)
     expect(closed.status, await closed.clone().text()).toBe(200)
+  })
+
+  it('a message filed before Walnut kept its session still gets its answer, from the lead\'s own chat, when Threads are read', async () => {
+    const ask = 'which port does the preview use?'
+    // The lead's task names its session, as every running lead's does.
+    await linkSession(leadId, LEAD_SID)
+    expect((await listTasksByIds([leadId]))[0].session_id).toBe(LEAD_SID)
+    await typeIntoChat(LEAD_SID, ask)
+    // The shape the threads filed before this build have: no session on the message.
+    const file = path.join(WALNUT_HOME, 'org', 'threads', `${leadId}.json`)
+    const raw = JSON.parse(await fs.readFile(file, 'utf8')) as { threads: OrgThread[] }
+    const t = raw.threads.find((x) => x.messages[0]?.text === ask)!
+    delete (t.messages[0] as { sid?: string }).sid
+    await fs.writeFile(file, JSON.stringify(raw))
+    const base0 = Date.parse(t.messages[0].at)
+    const ts = (s: number) => new Date(base0 + s * 1000).toISOString()
+    const dir = path.join(CLAUDE_HOME, 'projects', encodeProjectPath(WALNUT_HOME))
+    await fs.appendFile(path.join(dir, `${LEAD_SID}.jsonl`), [
+      { type: 'user', uuid: 'u-p1', timestamp: ts(0.05), message: { role: 'user', content: [{ type: 'text', text: ask }] } },
+      { type: 'assistant', uuid: 'a-p1', timestamp: ts(0.1), message: { id: 'msg-p1', role: 'assistant', content: [{ type: 'text', text: 'Port 5174, the dev proxy.' }] } },
+    ].map((l) => JSON.stringify(l)).join('\n') + '\n')
+    // No turn end: reading the Threads page reads the answer (at most every 15 s).
+    await expect.poll(async () => (await threads()).find((x) => x.id === t.id)?.messages[0].answer?.text, { timeout: 40_000, interval: 2_000 })
+      .toBe('Port 5174, the dev proxy.')
   })
 
   it('a thread the lead opens itself takes his reply through its Follow up; closed ones leave the open list', async () => {
