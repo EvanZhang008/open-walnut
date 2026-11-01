@@ -168,15 +168,19 @@ test('C45: a drag held on a folded head opens it after 600ms; reduced motion tur
       .observe(document.body, { subtree: true, attributes: true, attributeFilter: ['data-flash'] })
   })
   await expect(lane(pane, 'resolved')).toHaveAttribute('data-folded', 'true')
-  // The parked card sits two sections above Resolved: both in view at once.
+  // The parked card sits two sections above Resolved: its grab point and the head in view at once.
   // Scrolled to the end, so the auto scroll near the bottom edge has nowhere to go while the drag
-  // rests; the grab point (the status line) is clear of the top edge's auto scroll band.
+  // rests; the grab point (the card's Parked line) is clear of the top edge's auto scroll band.
+  // Not the title or the status line: a card with no session has a Start row (2026-10-31), which
+  // made this card taller than the 800px window holds above the head, and its top half scrolled
+  // out of view. Any part of the card that is not a control starts the drag.
   const src = card(pane, team.waiting)
   await pane.getByTestId('kanban-lanes').evaluate((e) => { e.scrollTop = e.scrollHeight })
   await page.waitForTimeout(150)
   await expect(head(pane, 'resolved')).toBeInViewport()
-  await expect(src.getByTestId('kanban-card-title')).toBeInViewport()
-  const g = (await src.getByTestId('kanban-card-status').boundingBox())!
+  const grab = src.getByTestId('kanban-card-parked')
+  await expect(grab).toBeInViewport({ ratio: 1 })
+  const g = (await grab.boundingBox())!
   await page.mouse.move(g.x + 30, g.y + g.height / 2)
   await page.mouse.down()
   await page.mouse.move(g.x + 40, g.y + g.height / 2 + 10, { steps: 3 })
