@@ -23492,7 +23492,7 @@ a.tag-chip:focus-visible,
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Origin-folder context: muted prefix in the trigger ("Areas/Records / vialto"),
+/* Origin-folder context: muted prefix in the trigger ("Areas/Records / acme"),
    second line in menu rows. */
 .notes-chat-switcher-folder {
   font-weight: 400;

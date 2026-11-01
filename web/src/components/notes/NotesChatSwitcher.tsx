@@ -65,8 +65,8 @@ export function NotesChatSwitcher({ sessions, agentChats = [], active, onSelect,
   const currentSession = sessions.find((s) => s.key === active);
   const currentAgentChat = agentChats.find((c) => c.key === active);
   const title = currentSession?.label ?? currentAgentChat?.label ?? 'Note Agent';
-  // Folder context in the trigger: "Areas/Records / vialto" reads as
-  // "session in Areas/Records, started from vialto". Skip when it would just
+  // Folder context in the trigger: "Areas/Records / acme" reads as
+  // "session in Areas/Records, started from acme". Skip when it would just
   // repeat the label (folder target: label === last folder segment).
   const currentFolder = currentSession?.folder && !currentSession.folder.endsWith(currentSession.label)
     ? currentSession.folder : undefined;
