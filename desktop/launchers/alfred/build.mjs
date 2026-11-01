@@ -46,6 +46,7 @@ const ID = {
   selection: '2B4E7C1A-0D3F-4A61-9E52-7A1F6C0B9D0E',
   fallback: '2B4E7C1A-0D3F-4A61-9E52-7A1F6C0B9D0F',
   fallbackEntry: '2B4E7C1A-0D3F-4A61-9E52-7A1F6C0B9D10',
+  handOff: '2B4E7C1A-0D3F-4A61-9E52-7A1F6C0B9D11',
 }
 const MOD = { none: 0, shift: 131072, control: 262144, option: 524288, command: 1048576 }
 
@@ -78,6 +79,15 @@ const objects = {
       runningsubtext: 'Looking in Walnut…', script: script(read('filter.js')), scriptargtype: 1, scriptfile: '',
       skipuniversalaction: true, subtext: 'Quick answer, Tell Main, or find a task', title: 'Ask Walnut', type: 7, withspace: true,
     },
+  },
+  // The Script Filter hands its row to a script before the Conditional: with the Conditional
+  // right after the Script Filter, Alfred (5.6) runs the Text View's script but never shows the
+  // view or reads its output, so the answer streamed into a hidden window (2026-11-01, every
+  // keyword ask). A Run Script in between is what the hotkey and the fallback paths already have.
+  [ID.handOff]: {
+    type: 'alfred.workflow.action.script',
+    version: 2,
+    config: { concurrently: false, escaping: 102, script: 'printf "%s" "$1"', scriptargtype: 1, scriptfile: '', type: 0 },
   },
   [ID.route]: {
     type: 'alfred.workflow.utility.conditional',
@@ -132,7 +142,8 @@ const objects = {
 
 const link = (to, modifiers = MOD.none, subtext = '', vitoclose = false) => ({ destinationuid: to, modifiers, modifiersubtext: subtext, vitoclose })
 const connections = {
-  [ID.filter]: [link(ID.route)],
+  [ID.filter]: [link(ID.handOff)],
+  [ID.handOff]: [link(ID.route)],
   [ID.route]: [
     { ...link(ID.openTask), sourceoutputuid: '2B4E7C1A-0D3F-4A61-9E52-7A1F6C0B9D20' },
     link(ID.view),
@@ -157,7 +168,7 @@ const connections = {
 const uidata = {}
 Object.keys(objects).forEach((uid, i) => { uidata[uid] = { xpos: 60 + (i % 4) * 230, ypos: 40 + Math.floor(i / 4) * 150 } })
 
-const workflow = {
+export const workflow = {
   bundleid: 'dev.openwalnut.alfred',
   category: 'Productivity',
   createdby: 'Open Walnut',
@@ -208,17 +219,20 @@ function plistValue(v, indent) {
 }
 const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n${plistValue(workflow, 0)}\n</plist>\n`
 
-const folder = path.join(outDir, 'Walnut')
-fs.rmSync(folder, { recursive: true, force: true })
-fs.mkdirSync(folder, { recursive: true })
-fs.writeFileSync(path.join(folder, 'info.plist'), xml)
-const chatFile = path.join(folder, 'walnut-chat')
-fs.writeFileSync(chatFile, `#!/usr/bin/osascript -l JavaScript\n${script(read('chat.js'))}`)
-fs.chmodSync(chatFile, 0o755)
-fs.copyFileSync(path.join(repo, 'web/public/walnut-icon.png'), path.join(folder, 'icon.png'))
-fs.copyFileSync(path.join(repo, 'web/public/walnut-icon.png'), path.join(folder, 'task.png'))
-execFileSync('/usr/bin/plutil', ['-lint', path.join(folder, 'info.plist')], { stdio: 'pipe' })
-const archive = path.join(outDir, 'Walnut.alfredworkflow')
-fs.rmSync(archive, { force: true })
-execFileSync('/usr/bin/zip', ['-qr', archive, '.'], { cwd: folder })
-console.log(archive)
+// Imported (the workflow graph test reads `workflow`), it writes nothing.
+if (process.argv[1] && path.resolve(process.argv[1]) === new URL(import.meta.url).pathname) {
+  const folder = path.join(outDir, 'Walnut')
+  fs.rmSync(folder, { recursive: true, force: true })
+  fs.mkdirSync(folder, { recursive: true })
+  fs.writeFileSync(path.join(folder, 'info.plist'), xml)
+  const chatFile = path.join(folder, 'walnut-chat')
+  fs.writeFileSync(chatFile, `#!/usr/bin/osascript -l JavaScript\n${script(read('chat.js'))}`)
+  fs.chmodSync(chatFile, 0o755)
+  fs.copyFileSync(path.join(repo, 'web/public/walnut-icon.png'), path.join(folder, 'icon.png'))
+  fs.copyFileSync(path.join(repo, 'web/public/walnut-icon.png'), path.join(folder, 'task.png'))
+  execFileSync('/usr/bin/plutil', ['-lint', path.join(folder, 'info.plist')], { stdio: 'pipe' })
+  const archive = path.join(outDir, 'Walnut.alfredworkflow')
+  fs.rmSync(archive, { force: true })
+  execFileSync('/usr/bin/zip', ['-qr', archive, '.'], { cwd: folder })
+  console.log(archive)
+}
