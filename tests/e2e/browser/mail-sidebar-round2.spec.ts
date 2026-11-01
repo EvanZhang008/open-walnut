@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises'
+import type { Page } from '@playwright/test'
 import { expect, test } from './shortcut-test-fixture'
 import {
   HARBOUR,
@@ -11,6 +12,7 @@ import {
   openMail,
   paneGeometry,
   shoot,
+  showAllMail,
   smartRow,
   tailShape,
   tailToggle,
@@ -212,7 +214,17 @@ test('F11: the filter box sits in the folder text column and weighs no more than
   console.log(`shot: ${await shoot(page.locator(PANE), SHOT_DIR, 'chromium-filter-box')}`)
 })
 
-test('F7: one cold open of Mail issues one /messages request', async ({ page }) => {
+/**
+ * Every `/messages` request of the page, and every folder fetch, with the frames that re-read a list on
+ * screen held at the socket.
+ *
+ * The fixture's FIRST sync of two accounts lands during the boot, and a sync that really added rows is a
+ * reason to re-read the page on screen (pinned by the promotion test); so is the model moving mail
+ * between groups (`groups-changed`) or finishing a sort (`sorted`) while the list is grouped. These cases
+ * are about the boot sequence alone, so those frames are held: what is graded is the number of pages the
+ * console asks for by itself.
+ */
+async function recordPageReads(page: Page): Promise<{ pages: Array<{ at: number, search: string }>, fetches: string[] }> {
   const pages: Array<{ at: number, search: string }> = []
   const fetches: string[] = []
   const started = Date.now()
@@ -221,19 +233,24 @@ test('F7: one cold open of Mail issues one /messages request', async ({ page }) 
     if (url.pathname.endsWith('/mail/messages')) pages.push({ at: Date.now() - started, search: url.search })
     if (url.pathname.endsWith('/mailboxes/fetch')) fetches.push(url.search)
   })
-  // The fixture's FIRST sync of two accounts lands during the boot, and a sync that really added rows is
-  // a reason to re-read the page on screen (pinned by the promotion test). This case is about the boot
-  // sequence alone, so those frames are held at the socket: what is graded is the number of pages the
-  // console asks for by itself.
+  const held = ['sync-completed', 'messages-received', 'groups-changed', 'sorted'].map((name) => `plugin:mail:${name}`)
   await page.routeWebSocket(/\/ws/, (ws) => {
     const server = ws.connectToServer()
     ws.onMessage((message) => server.send(message))
     server.onMessage((message) => {
       const text = String(message)
-      if (text.includes('plugin:mail:sync-completed') || text.includes('plugin:mail:messages-received')) return
+      if (held.some((name) => text.includes(name))) return
       ws.send(message)
     })
   })
+  return { pages, fetches }
+}
+
+test('F7: one cold open of Mail issues one /messages request', async ({ page }) => {
+  // The All mail view, whose page IS the list on screen. The grouped view (the default) draws its list
+  // from one page per section; the case below grades that one.
+  await showAllMail(page)
+  const { pages, fetches } = await recordPageReads(page)
 
   await openMail(page, port)
   await expect(smartRow(page, 'inbox')).toBeVisible({ timeout: 90_000 })
@@ -263,6 +280,51 @@ test('F7: one cold open of Mail issues one /messages request', async ({ page }) 
   expect(pages.slice(before).map((one) => one.search), `one page on return: ${JSON.stringify(pages.slice(before))}`)
     .toHaveLength(1)
   console.log(`F7 requests: ${JSON.stringify(pages)}`)
+})
+
+/**
+ * What one grouped open may ask for: Important's first page and the first page of every group it draws
+ * open, ONCE each, and the selection's own merged page (the store's, which the All mail switch reads
+ * again on the way out) at most once. No account page, and no page twice: the list's mount reads used to
+ * force a second pass behind the one in flight, so a cold open in development (React mounts twice) read
+ * Important and every open group twice, and `/groups` three times.
+ */
+function expectOneReadPerSection(searches: string[], drawn: string[], when: string): void {
+  expect(new Set(searches).size, `${when}, no page asked for twice: ${JSON.stringify(searches)}`).toBe(searches.length)
+  for (const search of searches) {
+    expect(search, `${when}, the merged scope`).toContain('scope=role%3Ainbox')
+    expect(search, `${when}, and no account filter`).not.toContain('account=')
+  }
+  const sections = searches.map((one) => new URLSearchParams(one).get('group')).filter((one): one is string => !!one)
+  expect(sections.sort(), `${when}, Important and each open group once`).toEqual(['important', ...drawn].sort())
+  expect(searches.length - sections.length, `${when}, the merged page at most once`).toBeLessThanOrEqual(1)
+}
+
+test('F7 grouped: one cold open of the grouped inbox reads each section it draws once', async ({ page }) => {
+  const { pages, fetches } = await recordPageReads(page)
+  await openMail(page, port)
+  await expect(smartRow(page, 'inbox')).toBeVisible({ timeout: 90_000 })
+  await expect(page.getByTestId('mail-grouped')).toBeVisible({ timeout: 90_000 })
+  await expect(page.getByTestId('mail-row').first()).toBeVisible({ timeout: 90_000 })
+  // A moment for anything the boot sequence still had in flight to arrive and be counted.
+  await page.waitForTimeout(3_000)
+  const drawnGroups = () => page.getByTestId('mail-group-row')
+    .evaluateAll((rows) => rows.map((row) => row.getAttribute('data-group-id') ?? ''))
+  const drawn = await drawnGroups()
+  expect(drawn.length, 'the fixture has a group to draw, so a group page is graded too').toBeGreaterThan(0)
+  expectOneReadPerSection(pages.map((one) => one.search), drawn, 'cold open')
+  expect(fetches, 'no folder fetch').toEqual([])
+
+  // Away and back: the list mounts again over what it already holds, and reads each section once more.
+  await page.getByTestId('sidebar-core-app-settings').click()
+  await expect(page.locator(PANE)).toHaveCount(0)
+  const before = pages.length
+  await page.getByTestId('sidebar-core-app-mail').click()
+  await expect(page.getByTestId('mail-grouped')).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('mail-row').first()).toBeVisible({ timeout: 60_000 })
+  await page.waitForTimeout(3_000)
+  expectOneReadPerSection(pages.slice(before).map((one) => one.search), await drawnGroups(), 'on return')
+  console.log(`F7 grouped requests: ${JSON.stringify(pages)}`)
 })
 
 test('F9: one mailbox, one current row', async ({ page }) => {
@@ -300,6 +362,9 @@ test('F9: one mailbox, one current row', async ({ page }) => {
 })
 
 test('F10: the roles nobody triages carry a quiet badge, the inboxes a loud one', async ({ page }) => {
+  // The smart badge below is the All mail view's, the mailbox rows' own sum. Grouped (the default)
+  // badges an inbox with its Important unread instead (15 here), which mail-grouping.spec.ts grades.
+  await showAllMail(page)
   await openMail(page, port)
   await expect(folderRow(page, MARINA, 'inbox')).toBeVisible({ timeout: 90_000 })
   const badges = await page.evaluate(() => {

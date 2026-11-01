@@ -203,7 +203,7 @@ export function MailMessageList({ snapshot, narrow, onShowMailboxes }: Props) {
       </div>
 
       {grouped ? (
-        <MailGroupedList snapshot={snapshot} scope={grouped.scope} menu={menu} name={section?.name ?? ''} />
+        <MailGroupedList snapshot={snapshot} scope={grouped.scope} menu={menu} name={section?.name ?? ''} degraded={degraded} />
       ) : <>
       {search.active && (
         <p className="mail-search-meta" data-testid="mail-search-meta">

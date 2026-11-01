@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import net from 'node:net'
 import { expect, test } from './shortcut-test-fixture'
 import { type Locator, type Page } from '@playwright/test'
+import { showAllMail } from './mail-review-helpers'
 
 /**
  * The mail sidebar at production density: the smart mailbox group, the collapsed long tail, and the
@@ -248,6 +249,10 @@ test.describe('the dense pane', () => {
   test('collapsed, honest, and measured in both themes at both column widths', async ({ page }) => {
     const pageErrors: string[] = []
     page.on('pageerror', (error) => pageErrors.push(error.message))
+    // The badge numbers below are the All mail view's: the provider's own unread, summed. Grouped (the
+    // default since 2026-09-30) badges an inbox with its Important unread instead, which
+    // mail-grouping.spec.ts grades; the pane's shape and geometry are the same in both views.
+    await showAllMail(page)
     await openMail(page, port)
     await expect(page.locator(PANE)).toBeVisible({ timeout: 90_000 })
     await expect(folderRow(page, MARINA, 'inbox')).toBeVisible({ timeout: 90_000 })
@@ -694,23 +699,28 @@ test.describe('the dense pane', () => {
     const context = await browser.newContext({ viewport: NARROW_COLUMN })
     // Only the sidebar's own key throws, which is what a full quota or a locked-down window does to
     // it: the rest of the app keeps its storage so the failure under test is the one being measured.
+    // On Storage.prototype, so `window.localStorage` stays a real Storage: a plain object standing in
+    // for it threw "Illegal invocation" out of ui-prefs-sync.ts, which calls the prototype's own methods
+    // with `localStorage` as `this` (no browser hands a page a localStorage that is not a Storage).
     await context.addInitScript(() => {
-      const real = window.localStorage
-      const guard = {
-        getItem(key: string) {
-          if (key.startsWith('walnut.mail.sidebar')) throw new Error('storage denied')
-          return real.getItem(key)
-        },
-        setItem(key: string, value: string) {
-          if (key.startsWith('walnut.mail.sidebar')) throw new Error('storage denied')
-          real.setItem(key, value)
-        },
-        removeItem: (key: string) => real.removeItem(key),
-        clear: () => real.clear(),
-        key: (index: number) => real.key(index),
-        get length() { return real.length },
+      const proto = Storage.prototype
+      const get = proto.getItem
+      const set = proto.setItem
+      const counter = window as unknown as { __sidebarRefusals: number }
+      counter.__sidebarRefusals = 0
+      const refused = (store: Storage, key: string) => {
+        const hit = store === window.localStorage && String(key).startsWith('walnut.mail.sidebar')
+        if (hit) counter.__sidebarRefusals += 1
+        return hit
       }
-      Object.defineProperty(window, 'localStorage', { configurable: true, get: () => guard })
+      proto.getItem = function getItem(this: Storage, key: string) {
+        if (refused(this, key)) throw new DOMException('storage denied', 'SecurityError')
+        return get.call(this, key)
+      }
+      proto.setItem = function setItem(this: Storage, key: string, value: string) {
+        if (refused(this, key)) throw new DOMException('storage denied', 'QuotaExceededError')
+        set.call(this, key, value)
+      }
     })
     const page = await context.newPage()
     const pageErrors: string[] = []
@@ -723,6 +733,9 @@ test.describe('the dense pane', () => {
       await tailToggle(page, HARBOUR).click()
       await expect(page.getByTestId('mail-tail-filter')).toHaveCount(1)
       await expect(tailToggle(page, HARBOUR)).toHaveText('Show fewer folders')
+      // The refusal really happened: the pane read and wrote its key and was told no every time.
+      expect(await page.evaluate(() => (window as unknown as { __sidebarRefusals: number }).__sidebarRefusals))
+        .toBeGreaterThan(0)
       expect(pageErrors, 'a refused preference is not an exception').toEqual([])
     } finally {
       await context.close()
@@ -899,14 +912,24 @@ test.describe('an account that stopped syncing', () => {
     // The account section keeps its own badge and its repair sentence, untouched by this slice.
     await expect(section(page, MARINA).getByTestId('mail-account-state')).toHaveText('Sign-in needed')
     await smartRow(page, 'inbox').click()
-    await expect(page.getByTestId('mail-row').first()).toBeVisible({ timeout: 60_000 })
-    // And the LINE under the list header, on screen (C35). A dot with a title attribute is not a
-    // sentence: the title never renders, so the merged list said nothing at all about being out of date.
-    await expect(page.getByTestId('mail-degraded-line')).toHaveText('1 account is not syncing.')
-    // The cached mail of the account that stopped is still in the list under it.
-    await expect(page.locator(`[data-testid="mail-row"][data-account-id="${MARINA}"]`).first())
-      .toBeVisible({ timeout: 60_000 })
-    console.log(`degraded list screenshot: ${await shoot(page.locator('.mail-list-pane'), 'light', 'degraded-line')}`)
+    // In BOTH list views, Grouped (the default) first and then All mail: the grouped list used to draw
+    // none of the flat list's state lines, so the default view of All Inboxes lost this one.
+    for (const view of ['Grouped', 'All mail'] as const) {
+      await expect(page.getByTestId('mail-view-menu').first()).toHaveAttribute('data-grouped', String(view === 'Grouped'))
+      await expect(page.getByTestId('mail-row').first()).toBeVisible({ timeout: 60_000 })
+      // And the LINE under the list header, on screen (C35). A dot with a title attribute is not a
+      // sentence: the title never renders, so the merged list said nothing at all about being out of date.
+      await expect(page.getByTestId('mail-degraded-line'), view).toHaveText('1 account is not syncing.')
+      // The cached mail of the account that stopped is still in the list under it.
+      await expect(page.locator(`[data-testid="mail-row"][data-account-id="${MARINA}"]`).first(), view)
+        .toBeVisible({ timeout: 60_000 })
+      const step = view === 'Grouped' ? 'degraded-line-grouped' : 'degraded-line'
+      console.log(`degraded list screenshot: ${await shoot(page.locator('.mail-list-pane'), 'light', step)}`)
+      if (view === 'Grouped') {
+        await page.getByTestId('mail-view-menu').first().click()
+        await page.getByTestId('mail-view-menu-list').locator('[role^="menuitem"]').filter({ hasText: 'All mail' }).click()
+      }
+    }
     console.log(`degraded pane screenshot: ${await shoot(page.locator(PANE), 'light', 'auth-required')}`)
   })
 

@@ -483,6 +483,13 @@ export function loadGroupPage(
   unread = false,
   /** An open group's list: a refresh ADDS rows and never drops one already shown (a mail just read stays). */
   keepShown = false,
+  /**
+   * A list arriving on screen: JOIN a read of this page already in flight instead of queueing one more
+   * pass behind it. Only a refresh (new mail, a changed group) needs the answer after the one on its
+   * way; a mount needs an answer, and React mounts twice in development, so a forced mount read asked
+   * for every page of a cold open twice (F7, mail-sidebar-round2.spec.ts).
+   */
+  join = false,
 ): Promise<void> {
   const key = pageKey(groupsViewKey(scope), group, sender);
   return coalesce(`page:${key}:${mode}`, async () => {
@@ -527,7 +534,7 @@ export function loadGroupPage(
       log.warn('mail', 'grouped page read failed', { key, mode, error: failure.message });
       setPage(key, { loading: false, olderLoading: false, error: failure.message });
     }
-  }, mode !== 'older');
+  }, mode !== 'older' && !join);
 }
 
 /** Forget a list's pages (the unread filter changed what it holds). */

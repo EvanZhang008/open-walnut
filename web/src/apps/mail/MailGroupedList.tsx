@@ -124,12 +124,18 @@ function Skeleton() {
 
 interface PlanState { groupId: string; busy: boolean; error: string | null; plan: MailUnsubscribePlan | null; anchor: HTMLElement | null }
 
-export function MailGroupedList({ snapshot, scope: scopeProp, menu, name }: {
+export function MailGroupedList({ snapshot, scope: scopeProp, menu, name, degraded = null }: {
   snapshot: MailSnapshot;
   scope: MailGroupsScope;
   menu: MailRowMenuHandle;
   /** The header's name (`Inbox`, `All Inboxes`), from the ordinary section rules. */
   name: string;
+  /**
+   * `degradedLine()` for a merged view with an account that stopped syncing. The same line the All mail
+   * list draws under its header (C35): the smart row's dot is a title nobody sees, and this list is the
+   * default view of All Inboxes, so without it the merged inbox said nothing about being out of date.
+   */
+  degraded?: string | null;
 }) {
   // One scope object per view, so effects keyed on it do not run on every render.
   const propKey = 'role' in scopeProp ? 'smart' : JSON.stringify([scopeProp.accountId, scopeProp.mailboxId]);
@@ -145,12 +151,14 @@ export function MailGroupedList({ snapshot, scope: scopeProp, menu, name }: {
   const requested = useRef<Set<string>>(new Set());
 
   useEffect(() => { wireGroupsBus(); }, []);
-  // Stale-while-revalidate: whatever this view last held draws at once, and both reads refresh it.
+  // Stale-while-revalidate: whatever this view last held draws at once, and both reads refresh it. They
+  // JOIN a read already in flight (the sidebar badge's, or this list's own first mount in development)
+  // rather than queueing another pass behind it: one cold open, one read of each page (F7).
   useEffect(() => {
     // An open group left at zero last time is not drawn again.
     releaseSpentGroups(scope);
-    void loadGroups(scope, true);
-    void loadGroupPage(scope, IMPORTANT_ID, '', 'first', readUnreadOnly(selection.accountId, selection.mailboxId));
+    void loadGroups(scope);
+    void loadGroupPage(scope, IMPORTANT_ID, '', 'first', readUnreadOnly(selection.accountId, selection.mailboxId), false, true);
     requested.current = new Set();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewKey]);
@@ -194,7 +202,7 @@ export function MailGroupedList({ snapshot, scope: scopeProp, menu, name }: {
     for (const id of openIds) {
       if (requested.current.has(id)) continue;
       requested.current.add(id);
-      void loadGroupPage(scope, id, '', 'first', true, true);
+      void loadGroupPage(scope, id, '', 'first', true, true, true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openKey, viewKey]);
@@ -256,6 +264,11 @@ export function MailGroupedList({ snapshot, scope: scopeProp, menu, name }: {
         unreadOnly={unreadOnly}
         onUnreadOnly={(next) => { writeUnreadOnly(selection.accountId, selection.mailboxId, next); }}
       />
+      {degraded && (
+        <p className="mail-list-note" data-testid="mail-list-state-note">
+          <span data-testid="mail-degraded-line">{degraded}</span>
+        </p>
+      )}
       <MailListStatus viewKey={viewKey} />
       <GroupsStateLines view={view} onOpenRules={() => navigateTo('/settings#mail-rules')} />
       {plan?.error && (
