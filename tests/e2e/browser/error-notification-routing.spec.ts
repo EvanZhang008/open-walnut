@@ -27,6 +27,10 @@ test.beforeAll(async () => {
   await fs.mkdir(SCREENSHOT_DIR, { recursive: true })
 })
 
+// The card's title as the feed shows it: the server publishes 'Session Error' and the
+// notification humanizer words it (src/core/notifications/humanize.ts, rule session-error).
+const SESSION_ERROR_CARD = 'A session hit an error'
+
 async function startFailingQuickSession(page: Page): Promise<void> {
   // The main chat is open (the shared fixture boots with it closed), so "never in
   // main chat" is a claim about a mounted chat.
@@ -56,24 +60,27 @@ test('session errors appear only in Notifications, never in main chat', async ({
       feed: Array<{ title: string; body?: string; sessionId?: string; taskId?: string }>
     }
     return data.feed.some((item) =>
-      item.title === 'Session Error' && !!(item.sessionId || item.taskId))
+      item.title === SESSION_ERROR_CARD && !!(item.sessionId || item.taskId))
   }, { timeout: 15_000 }).toBe(true)
 
   const mainChat = page.locator('.main-page-chat')
   await expect(mainChat.locator('.chat-message-notification-error')).toHaveCount(0)
   await expect(mainChat).not.toContainText('Session Error')
+  await expect(mainChat).not.toContainText(SESSION_ERROR_CARD)
   await expect(mainChat).not.toContainText('Session Delivery Failed')
 
-  // Error context and recovery controls remain where they are actionable.
-  const pendingSession = page.locator('.pending-session-panel')
-  await expect(pendingSession).toBeVisible()
-  await expect(pendingSession.locator('.pending-session-label')).toContainText('Process exited')
-  await expect(pendingSession.getByRole('button', { name: 'Retry' })).toBeVisible()
+  // Error context stays where it is actionable: the failed start opens the session's own
+  // panel (no longer a pending placeholder), which shows the error and keeps its composer,
+  // so the user can send again from there.
+  const sessionPanel = page.locator('.main-page-session-column .session-panel')
+    .filter({ has: page.locator('.session-error-banner') }).first()
+  await expect(sessionPanel.locator('.session-error-banner')).toContainText('Claude Code could not start')
+  await expect(sessionPanel.locator('.chat-input-textarea')).toBeEditable()
 
   await page.getByRole('button', { name: 'Notifications' }).click()
   const panel = page.locator('.notification-panel')
   await expect(panel).toBeVisible()
-  await expect(panel.locator('.notification-feed-item-title', { hasText: 'Session Error' }).first()).toBeVisible()
+  await expect(panel.locator('.notification-feed-item-title', { hasText: SESSION_ERROR_CARD }).first()).toBeVisible()
 
   // A refresh reloads persisted chat history and the durable notification feed.
   // The error must stay out of chat and remain available in Notifications.
@@ -82,11 +89,12 @@ test('session errors appear only in Notifications, never in main chat', async ({
   const reloadedMainChat = page.locator('.main-page-chat')
   await expect(reloadedMainChat.locator('.chat-message-notification-error')).toHaveCount(0)
   await expect(reloadedMainChat).not.toContainText('Session Error')
+  await expect(reloadedMainChat).not.toContainText(SESSION_ERROR_CARD)
   await expect(reloadedMainChat).not.toContainText('Session Delivery Failed')
 
   await page.getByRole('button', { name: 'Notifications' }).click()
   await expect(panel).toBeVisible()
-  await expect(panel.locator('.notification-feed-item-title', { hasText: 'Session Error' }).first()).toBeVisible()
+  await expect(panel.locator('.notification-feed-item-title', { hasText: SESSION_ERROR_CARD }).first()).toBeVisible()
 
   await page.screenshot({
     path: `${SCREENSHOT_DIR}/session-error-notification-only.png`,
