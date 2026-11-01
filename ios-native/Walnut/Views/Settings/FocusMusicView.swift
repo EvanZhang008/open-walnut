@@ -10,6 +10,8 @@ struct FocusMusicView: View {
     @State private var focusMinutes = 25
     @State private var breakMinutes = 5
     @State private var lengthsTouched = false
+    /// The block's phase when the message was written: the message stays until the phase moves on.
+    @State private var messagePhase: String?
     @State private var retrying = false
     @State private var retryFailed = false
 
@@ -40,8 +42,9 @@ struct FocusMusicView: View {
                 Button {
                     player.toggle()
                 } label: {
+                    // A fixed size: the glyph must stay inside its fixed circle at every text size.
                     Image(systemName: player.isOn ? "stop.fill" : "play.fill")
-                        .font(.title2)
+                        .font(.system(size: 22, weight: .regular))
                         .frame(width: 52, height: 52)
                         .background(Circle().fill(player.isOn ? Color(uiColor: .secondarySystemFill) : Color.accentColor))
                         .foregroundStyle(player.isOn ? Color.accentColor : Color.white)
@@ -99,7 +102,7 @@ struct FocusMusicView: View {
                     .accessibilityIdentifier("focusMusic.focusStop")
             } else if player.focus == nil {
                 // Until the status (and its remembered lengths) arrives, Start would send 25 and 5.
-                Text("Rhythm's status has not loaded yet. Start shows once your Walnut answers.")
+                Text("No answer from your Walnut yet. Start shows once it answers.")
                     .foregroundStyle(.secondary)
                     .accessibilityIdentifier("focusMusic.focusLoading")
                 Button(retrying ? "Trying…" : "Try again") {
@@ -156,7 +159,7 @@ struct FocusMusicView: View {
         .onAppear { seedLengths(player.focus?.config) }
         .onChange(of: player.focus?.config) { _, config in seedLengths(config) }
         // A block or break that ended (here or elsewhere) takes the last action's words with it.
-        .onChange(of: player.focus?.focus.phase) { _, _ in if !busy { message = nil } }
+        .onChange(of: player.focus?.focus.phase) { _, phase in if !busy, phase != messagePhase { message = nil } }
     }
 
     private func seedLengths(_ config: RhythmFocusStatus.Config?) {
@@ -261,6 +264,7 @@ struct FocusMusicView: View {
         busy = true
         Task {
             message = await action()
+            messagePhase = player.focus?.focus.phase
             busy = false
         }
     }
