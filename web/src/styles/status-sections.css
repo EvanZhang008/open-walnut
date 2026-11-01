@@ -74,8 +74,7 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
 .status-section-more:hover:not(:disabled) { background: var(--bg-hover); color: var(--fg); }
 .status-section-more:disabled { cursor: default; opacity: .7; }
 
-/* Status counts (glyph + number, muted, the Needs you one red): the Inbox's project
-   strip and the By project folds. */
+/* Status counts (glyph + number, muted, the Needs you one red): the By project folds. */
 .project-status-counts { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; font-size: 10px; font-weight: 500; color: var(--fg-muted, #8a8f98); white-space: nowrap; }
 .project-status-count { display: inline-flex; align-items: center; gap: 2px; }
 .project-status-count-icon { display: inline-flex; }
@@ -95,32 +94,12 @@ html .home-navigation-scroll .status-card-meta .task-team-pill.task-row-pill:hov
    C18, C19): the counts and fold lines above are 10 and 11.5 px, and a fold is 22 px tall. */
 @media (max-width: 768px), (pointer: coarse) and (max-height: 500px) {
   html .app-shell-navigation .project-status-counts,
-  html .app-shell-navigation .inbox-project-line .project-status-counts,
   html .app-shell-navigation .project-status-fold { font-size: 12px; }
   html .app-shell-navigation .project-status-count-icon svg { width: 12px; height: 12px; }
   html .app-shell-navigation .project-status-fold { min-height: 44px; padding: 0 10px; }
-  html .app-shell-navigation .status-section-more,
-  html .app-shell-navigation .inbox-project-line-btn,
-  html .app-shell-navigation .inbox-project-task { min-height: 44px; font-size: 13px; }
-  html .app-shell-navigation .inbox-project-strip-head { font-size: 12px; }
+  html .app-shell-navigation .status-section-more { min-height: 44px; font-size: 13px; }
 }
 
-/* The Inbox's per-project strip (InboxProjectStrip.tsx). */
-.inbox-project-strip { margin: 4px 8px 8px; padding: 6px 4px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
-.inbox-project-strip-head { display: flex; justify-content: space-between; padding: 0 6px 4px; color: var(--fg-muted); font-size: 11px; font-weight: 600; }
-.inbox-project-strip-sum { font-weight: 500; }
-.inbox-project-line-btn { display: flex; align-items: center; width: 100%; gap: 6px; padding: 3px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-secondary); font: inherit; cursor: pointer; text-align: left; }
-.inbox-project-line-btn:hover { background: var(--bg-hover); }
-.inbox-project-line.has-needs .inbox-project-name { color: var(--fg); font-weight: 600; }
-.inbox-project-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.inbox-project-line .project-status-counts { margin-left: 0; font-size: 11px; }
-.inbox-project-tasks { list-style: none; margin: 0 0 4px; padding: 0 0 0 12px; }
-.inbox-project-task { display: flex; align-items: center; gap: 6px; width: 100%; padding: 2px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--fg); font: inherit; cursor: pointer; text-align: left; }
-.inbox-project-task:hover { background: var(--bg-hover); }
-.inbox-project-task-title { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.inbox-project-more { padding: 2px 6px; color: var(--fg-muted); font-size: 11px; }
-.inbox-project-more-btn { margin: 2px 0 0 6px; padding: 2px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted); font: inherit; font-size: 11px; cursor: pointer; }
-.inbox-project-more-btn:hover { background: var(--bg-hover); color: var(--fg); }
 /* The open-session chevron sits at the right edge: the time yields room for it. */
 .status-section-card.todo-pinned-card-session-open .todo-recent-ago { margin-right: 8px; }
 /* A single tier among status sections keeps its natural height (TodoPanel): the panel's

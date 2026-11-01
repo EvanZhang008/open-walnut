@@ -221,6 +221,10 @@ test('an action_required letter arrives, reads in the reader, and one click answ
 
   await openInbox(panel)
   expect(await railBadge(panel, 'Inbox')).toBeGreaterThanOrEqual(1)
+  // The Inbox holds the inbox alone: no per-project strip above the letters (2026-11-01,
+  // the user: "inbox shoudol only has inbox").
+  await expect(panel.locator('.inbox-project-strip, [data-testid="inbox-project-strip"]')).toHaveCount(0)
+  await expect(panel.getByRole('region', { name: 'Projects' })).toHaveCount(0)
 
   // The envelope is entirely system-stamped: type, sender session, task, host.
   const row = envelope(panel, DECISION_SUBJECT)
