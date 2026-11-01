@@ -505,14 +505,20 @@ test.describe('Questions about a file passage (Files tab)', () => {
     await rail.locator('.thread-map-overlay .thread-map-row').click()
     await expect.poll(onScreen, { timeout: 5_000 }).toBe(true)
 
-    // ⤢ grows the card where it is: the same top under the passage, wider,
-    // inside the view; Esc brings it back to its size.
+    // ⤢ grows the card where it is: the same top under the passage, as wide as
+    // the view allows (placeFileCard: up to 960px, a gap of 8px each side),
+    // inside the view; Esc brings it back to its size. The view's width is the
+    // layout's: fullscreen keeps side margins and the chat pane sits beside the
+    // files, so the grown width is read from the layer, never a fixed gain.
     await expect(card).toBeVisible()
     await page.waitForTimeout(300)
     const small = (await card.boundingBox())!
+    const layer = (await view.locator('.fv-thread-layer').boundingBox())!
+    const wide = Math.round(Math.min(960, layer.width - 16))
+    expect(wide, 'the view leaves room to grow').toBeGreaterThan(small.width + 24)
     await card.locator('.thread-card-expand').click()
     await expect(card).toHaveAttribute('data-expanded', 'true')
-    await expect.poll(async () => (await card.boundingBox())!.width).toBeGreaterThan(small.width + 100)
+    await expect.poll(async () => Math.abs((await card.boundingBox())!.width - wide)).toBeLessThanOrEqual(1)
     await page.waitForTimeout(300)
     const big = (await card.boundingBox())!
     expect(Math.abs(big.y - small.y)).toBeLessThan(2)
