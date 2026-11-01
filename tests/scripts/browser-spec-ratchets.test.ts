@@ -668,3 +668,24 @@ describe('a kanban worker that errs', () => {
     expect(ERRS.test(line) && !line.includes('withLeaderCarryingOn(')).toBe(true)
   })
 })
+
+describe('a main-thread CPU budget', () => {
+  // A budget in ms of the page's main-thread CPU holds only on the machine it was set on: the
+  // kanban open measured 290 to 360 on the Mac, about 700 in an 8 CPU container and up to 1,058 on
+  // a loaded CI runner, for the same code (2026-11-01: C50 on 3 of 11 CI runs). A spec that reads
+  // that clock (CDP TaskDuration) scales its budget by a reference draw on the same clock
+  // (cpu-reference.ts).
+  const READS_CPU = /\bTaskDuration\b/
+  const SCALES = /\breferenceDrawMs\(/
+
+  it('scales with a reference draw on the same clock', () => {
+    const readers = sources.filter(({ file, text }) => file !== 'cpu-reference.ts' && READS_CPU.test(text))
+    expect(readers.map(({ file }) => file)).toContain('board-kanban-layout.spec.ts')
+    expect(readers.filter(({ text }) => !SCALES.test(text)).map(({ file }) => file)).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const spec = "const t = metrics.find((m) => m.name === 'TaskDuration')\nexpect(openCpu).toBeLessThan(500)"
+    expect(READS_CPU.test(spec) && !SCALES.test(spec)).toBe(true)
+  })
+})
