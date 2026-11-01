@@ -190,6 +190,27 @@ describe('WalnutTests waits', () => {
     expect(fixedPumpDraws('pump(0.3)\n        let image = snapshotOnceDrawn(window)\n        XCTAssertGreaterThan(warmPixelCount(image), 200)')).toHaveLength(0)
     expect(fixedPumpDraws('pump(3.6)\n        let warm = warmPixelCount(snapshot(window))\n        XCTAssertLessThan(warm, 50)')).toHaveLength(0)
   })
+
+  // A scroll edge test scrolls a list under the bar and reads the bar's pixels, and the bar
+  // draws what covers the rows as it collapses. 2026-11-01 (run 41272965191):
+  // InboxSettingsScrollEdgeTests read a red row in the Settings bar after a fixed 0.3 s on a
+  // loaded runner, and passed on the next three runs. Such a file reads its pixels again
+  // until they pass or a deadline does (`while ... Date() < deadline`).
+  const scrollsThenRenders = (text: string) => /\bsetContentOffset\(/.test(text) && /\bdrawHierarchy\(/.test(text)
+  const pollsPixels = (text: string) => /\bwhile\b[^\n]*Date\(\) < deadline/.test(text)
+
+  it('every scroll edge pixel test reads the bar again until a deadline', () => {
+    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.swift'))
+    const scrolling = files.filter((f) => scrollsThenRenders(fs.readFileSync(path.join(dir, f), 'utf8')))
+    expect(scrolling).toEqual(expect.arrayContaining(['BoardRailScrollEdgeTests.swift', 'InboxSettingsScrollEdgeTests.swift']))
+    expect(scrolling.filter((f) => !pollsPixels(fs.readFileSync(path.join(dir, f), 'utf8')))).toEqual([])
+  })
+
+  it('tells a polled scroll edge read from a single one', () => {
+    const once = 'list.setContentOffset(p, animated: false)\nsettle(v, 0.3)\nhost.view.drawHierarchy(in: r, afterScreenUpdates: true)'
+    expect(scrollsThenRenders(once) && !pollsPixels(once)).toBe(true)
+    expect(pollsPixels(`${once}\nwhile got.red > 12 && Date() < deadline {`)).toBe(true)
+  })
 })
 
 describe('WalnutUITests menu taps', () => {

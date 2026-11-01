@@ -110,8 +110,10 @@ final class InboxSettingsScrollEdgeTests: XCTestCase {
     }
 
     /// The reddest pixel behind the navigation and status bar after scrolling 600 pt: how much of a row
-    /// reads through (0 = none).
-    private func redThroughBar<V: View>(_ root: V, dark: Bool) throws -> (red: Int, sample: String) {
+    /// reads through (0 = none). With `clean`, the band is read again until it shows no row or 3 s
+    /// pass: the bar's strip comes in as the bar collapses, and on a loaded CI runner it was not
+    /// drawn yet after a fixed 0.3 s (2026-11-01, run 41272965191: 255 red at the Settings bar).
+    private func redThroughBar<V: View>(_ root: V, dark: Bool, clean: Bool = false) throws -> (red: Int, sample: String) {
         let host = UIHostingController(rootView: root)
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
@@ -127,8 +129,16 @@ final class InboxSettingsScrollEdgeTests: XCTestCase {
             scrollViews(in: host.view).first { $0.contentSize.height > 1_000 }, "no scroller")
         list.setContentOffset(CGPoint(x: 0, y: 600), animated: false)
         settle(host.view, 0.3)
-        let barTop = list.safeAreaInsets.top
+        let deadline = Date().addingTimeInterval(3)
+        var got = try reddest(host, window, barTop: list.safeAreaInsets.top)
+        while clean && got.red > 12 && Date() < deadline {
+            settle(host.view)
+            got = try reddest(host, window, barTop: list.safeAreaInsets.top)
+        }
+        return got
+    }
 
+    private func reddest(_ host: UIViewController, _ window: UIWindow, barTop: CGFloat) throws -> (red: Int, sample: String) {
         let size = window.bounds.size
         let format = UIGraphicsImageRendererFormat.default()
         format.scale = 3
@@ -162,7 +172,7 @@ final class InboxSettingsScrollEdgeTests: XCTestCase {
 
     func testNoLetterReadsThroughTheInboxBar() throws {
         for dark in [false, true] {
-            let got = try redThroughBar(InboxHarness(page: true), dark: dark)
+            let got = try redThroughBar(InboxHarness(page: true), dark: dark, clean: true)
             XCTAssertLessThanOrEqual(got.red, 12, "dark=\(dark): a row reads through the Inbox bar at \(got.sample)")
             // What the screen showed without the page, for the record.
             let before = try redThroughBar(InboxHarness(page: false), dark: dark)
@@ -174,7 +184,7 @@ final class InboxSettingsScrollEdgeTests: XCTestCase {
         for dark in [false, true] {
             for ax5 in [false, true] {
                 let size: DynamicTypeSize = ax5 ? .accessibility5 : .large
-                let got = try redThroughBar(SettingsHarness(page: true).dynamicTypeSize(size), dark: dark)
+                let got = try redThroughBar(SettingsHarness(page: true).dynamicTypeSize(size), dark: dark, clean: true)
                 XCTAssertLessThanOrEqual(got.red, 12, "dark=\(dark) ax5=\(ax5): a row reads through the Settings bar at \(got.sample)")
                 let before = try redThroughBar(SettingsHarness(page: false).dynamicTypeSize(size), dark: dark)
                 print("SCROLLEDGE settings dark=\(dark) ax5=\(ax5) page=\(got.red) \(got.sample) none=\(before.red) \(before.sample)")
@@ -184,7 +194,7 @@ final class InboxSettingsScrollEdgeTests: XCTestCase {
 
     func testNoLineReadsThroughTheLetterReadersBar() throws {
         for dark in [false, true] {
-            let got = try redThroughBar(LetterHarness(page: true), dark: dark)
+            let got = try redThroughBar(LetterHarness(page: true), dark: dark, clean: true)
             XCTAssertLessThanOrEqual(got.red, 12, "dark=\(dark): the letter reads through its bar at \(got.sample)")
             let before = try redThroughBar(LetterHarness(page: false), dark: dark)
             print("SCROLLEDGE letter dark=\(dark) page=\(got.red) \(got.sample) none=\(before.red) \(before.sample)")

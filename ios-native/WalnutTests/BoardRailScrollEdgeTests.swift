@@ -140,49 +140,56 @@ final class BoardRailScrollEdgeTests: XCTestCase {
         defer { window.isHidden = true }
         let list = try XCTUnwrap(scrollViews(in: host.view).first { $0 is UICollectionView })
         list.setContentOffset(CGPoint(x: 0, y: 600), animated: false)
+        // The page behind the bar is drawn as the bar collapses: read the samples again until
+        // they all show the page or 3 s pass, never once after a fixed wait (2026-11-01: the
+        // same check in InboxSettingsScrollEdgeTests read a row before a loaded runner drew it).
+        func offPage(barTop: CGFloat) throws -> [String] {
+            let size = window.bounds.size
+            let format = UIGraphicsImageRendererFormat.default()
+            format.scale = 3
+            format.opaque = true
+            let image = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+                host.view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true)
+            }
+            let cg = try XCTUnwrap(image.cgImage)
+            let (w, h) = (cg.width, cg.height)
+            var bytes = [UInt8](repeating: 0, count: w * h * 4)
+            let ctx = try XCTUnwrap(CGContext(
+                data: &bytes, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+            func pixel(_ x: CGFloat, _ y: CGFloat) -> (Int, Int, Int) {
+                let px = Int(x * 3), py = Int(y * 3)
+                let i = (py * w + px) * 4
+                return (Int(bytes[i]), Int(bytes[i + 1]), Int(bytes[i + 2]))
+            }
+            var page = (r: CGFloat(0), g: CGFloat(0), b: CGFloat(0), a: CGFloat(0))
+            BoardBandCard.pageColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
+                .getRed(&page.r, green: &page.g, blue: &page.b, alpha: &page.a)
+            let expected = (Int(page.r * 255), Int(page.g * 255), Int(page.b * 255))
+
+            // Rows are red and the List is scrolled well under the bar, so any sample that is
+            // not the page colour is a row reading through. Under the bar: between the inline
+            // title and the pinned card, where the List's own top edge effect stops short of
+            // the bar's bottom. Beside the card: its side margins, level with the chips.
+            var samples: [(x: CGFloat, y: CGFloat)] = [(8, barTop + 26), (394, barTop + 26)]
+            for y in [barTop - 8, barTop - 2] {
+                for x: CGFloat in [8, 100, 300, 394] { samples.append((x, y)) }
+            }
+            return samples.compactMap { at -> String? in
+                let got = pixel(at.x, at.y)
+                let same = abs(got.0 - expected.0) <= 3 && abs(got.1 - expected.1) <= 3 && abs(got.2 - expected.2) <= 3
+                return same ? nil : "pixel at (\(at.x), \(at.y)) is \(got), expected the page \(expected)"
+            }
+        }
         settle(host.view, 0.3)
-        let barTop = list.safeAreaInsets.top
-
-        let size = window.bounds.size
-        let format = UIGraphicsImageRendererFormat.default()
-        format.scale = 3
-        format.opaque = true
-        let image = UIGraphicsImageRenderer(size: size, format: format).image { _ in
-            host.view.drawHierarchy(in: CGRect(origin: .zero, size: size), afterScreenUpdates: true)
+        let deadline = Date().addingTimeInterval(3)
+        var wrong = try offPage(barTop: list.safeAreaInsets.top)
+        while !wrong.isEmpty && Date() < deadline {
+            settle(host.view)
+            wrong = try offPage(barTop: list.safeAreaInsets.top)
         }
-        let cg = try XCTUnwrap(image.cgImage)
-        let (w, h) = (cg.width, cg.height)
-        var bytes = [UInt8](repeating: 0, count: w * h * 4)
-        let ctx = try XCTUnwrap(CGContext(
-            data: &bytes, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
-        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
-        func pixel(_ x: CGFloat, _ y: CGFloat) -> (Int, Int, Int) {
-            let px = Int(x * 3), py = Int(y * 3)
-            let i = (py * w + px) * 4
-            return (Int(bytes[i]), Int(bytes[i + 1]), Int(bytes[i + 2]))
-        }
-
-        var page = (r: CGFloat(0), g: CGFloat(0), b: CGFloat(0), a: CGFloat(0))
-        BoardBandCard.pageColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
-            .getRed(&page.r, green: &page.g, blue: &page.b, alpha: &page.a)
-        let expected = (Int(page.r * 255), Int(page.g * 255), Int(page.b * 255))
-
-        // Rows are red and the List is scrolled well under the bar, so any sample that is
-        // not the page colour is a row reading through. Under the bar: between the inline
-        // title and the pinned card, where the List's own top edge effect stops short of
-        // the bar's bottom. Beside the card: its side margins, level with the chips.
-        var samples: [(x: CGFloat, y: CGFloat)] = [(8, barTop + 26), (394, barTop + 26)]
-        for y in [barTop - 8, barTop - 2] {
-            for x: CGFloat in [8, 100, 300, 394] { samples.append((x, y)) }
-        }
-        for (x, y) in samples {
-            let got = pixel(x, y)
-            XCTAssert(
-                abs(got.0 - expected.0) <= 3 && abs(got.1 - expected.1) <= 3
-                    && abs(got.2 - expected.2) <= 3,
-                "pixel at (\(x), \(y)) is \(got), expected the page \(expected)")
-        }
+        XCTAssertEqual(wrong, [], "a row reads through the navigation bar")
     }
 }
