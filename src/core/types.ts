@@ -1240,7 +1240,14 @@ export interface PrivateTasksConfig {
   words?: string[];
   /** Judge a new task with the fast model before its first push (default true). */
   model_check?: boolean;
+  /** Who reads each sync service, by plugin id (src/core/private-tasks/audience.ts): `self`
+   *  (only the user: no privacy check, words or model) or `shared` (others read it: the check
+   *  runs). Unset = the plugin's manifest `syncAudience`, else `shared`. */
+  audience?: Record<string, SyncAudience>;
 }
+
+/** Who reads a sync service: only the user, or others too (src/core/private-tasks/audience.ts). */
+export type SyncAudience = 'self' | 'shared';
 
 export interface Config {
   version: 1;

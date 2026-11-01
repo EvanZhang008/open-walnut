@@ -47,6 +47,7 @@ import { isDerivedTag, namesDerivedTag, normalizeTags } from './tag-model.js';
 import { linkTargetOfTag, newLinkTags, relabelLinkTags, mergeLinkNames, MAX_AUTO_LINKS } from './link-tags.js';
 import { recordRemoteLink, findLiveClaimants, isRemoteIdBlocked } from './task-remote-links.js';
 import { decideBirth } from './private-tasks/birth.js';
+import { privacyChecksApply } from './private-tasks/audience.js';
 import { isPrivateTaskBlocked } from './private-tasks/sync-guard.js';
 import { privacyJudgeAvailable, startSyncGate } from './private-tasks/sync-gate.js';
 import { MERGE_EVENT_SOURCE } from './task-deleted-id.js';
@@ -2935,7 +2936,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
         : explicitLocal ? (registrySource ?? (await registry.getForProject(project)).id) : 'local';
       const decided = decideBirth(target, { title: input.title, description: input.description }, config.private_tasks, {
         explicitLocal: explicitLocal || parentHold?.state === 'private' || parentHold?.state === 'chosen' || parentHold?.state === 'unjudged',
-        canJudge: privacyJudgeAvailable(config), now,
+        canJudge: privacyJudgeAvailable(config), shared: await privacyChecksApply(config, target), now,
       });
       source = decided.source;
       syncHold = decided.hold && !explicitLocal && parentHold && decided.hold.state === 'chosen'
@@ -8974,6 +8975,11 @@ export async function bulkMigrateTasks(
 }
 
 // ── Private tasks: a task kept local in a project that syncs (src/core/private-tasks/) ──
+
+/** The outside source `project` syncs to now, or null (Inbox, a local project). */
+export async function projectSyncSourceOf(project: string | undefined): Promise<TaskSource | null> {
+  return projectSyncSource(await readStore(), project);
+}
 
 /** The outside source a task's project syncs to, or null (Inbox, a local project). */
 function projectSyncSource(store: TaskStore, project: string | undefined): TaskSource | null {

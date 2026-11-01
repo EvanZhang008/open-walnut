@@ -16,6 +16,7 @@ import { backgroundAiDisabled } from '../cheap-model.js';
 import type { Config, SyncHold, Task } from '../types.js';
 import { modelCheckOn, privateWordIn, wordsReason } from './birth.js';
 import { hasTestPrivacyJudge, judgeTaskPrivacy, privacyModelReady } from './privacy-judge.js';
+import { privacyChecksApply } from './audience.js';
 
 /** A text that changed while it was judged is judged again, at most this many times. */
 const MAX_TRIES = 3;
@@ -34,6 +35,7 @@ const inflight = new Map<string, Promise<void>>();
 /** Wait for every running judgement (tests, shutdown). */
 export async function settleSyncGates(): Promise<void> {
   while (inflight.size) await Promise.allSettled([...inflight.values()]);
+  await flushKeptLocalLetters();
 }
 
 /** After a create (or a cloud outbox create): judge a `checking` task, tell the user about a
@@ -87,6 +89,13 @@ async function judgeAndApply(taskId: string): Promise<void> {
       await tm.setTaskSyncHold(taskId, { ...hold, state: 'chosen', reason: 'Its parent task is kept local', at: now() }, stillChecking);
       return;
     }
+    // A service only the user reads (audience.ts): nothing is checked, the task goes out. The
+    // service is the one it would go to now (its project's), which is where a release sends it.
+    const goesTo = (await tm.projectSyncSourceOf(task.project)) ?? hold.target;
+    if (!(await privacyChecksApply(config, goesTo))) {
+      await tm.releaseSyncHold(taskId, stillChecking);
+      return;
+    }
     // The words first: they may have been added (to the task or the list) since its create.
     const entry = privateWordIn(config.private_tasks, task);
     if (entry) {
@@ -138,9 +147,19 @@ async function judgeAndApply(taskId: string): Promise<void> {
 /** Judge again every task a restart left `checking` (the primary, at boot). */
 export async function resumeSyncGates(): Promise<number> {
   const { listTasks } = await import('../task-manager.js');
-  const held = (await listTasks()).filter((t) => t.source === 'local' && t.sync_hold?.state === 'checking');
+  const all = await listTasks();
+  const held = all.filter((t) => t.source === 'local' && t.sync_hold?.state === 'checking');
   for (const t of held) await runSyncGate(t.id);
   if (held.length) log.task.info('private tasks: judged the tasks a restart left waiting', { count: held.length });
+  // A letter still waiting in the batch when the server stopped: told now (a day back at most).
+  const dayAgo = Date.now() - 24 * 3600_000;
+  for (const t of all) {
+    const h = t.sync_hold;
+    if (t.source !== 'local' || !h || h.letter_id || (h.state !== 'private' && h.state !== 'unjudged')) continue;
+    if ((h.by !== 'model' && h.by !== 'words') || !(Date.parse(h.at ?? '') > dayAgo)) continue;
+    const edited = h.outside?.state === 'kept';
+    void tellKeptLocal(t.id, h.state === 'unjudged' ? (edited ? 'edit-unjudged' : 'unjudged') : (edited ? 'edited' : 'created'));
+  }
   return held.length;
 }
 
@@ -163,64 +182,146 @@ type TellKind = 'created' | 'unjudged' | 'edited' | 'edit-unjudged';
 
 const md = (s: string) => s.replace(/([\\`*_[\]<>])/g, '\\$1');
 
+/** A burst of kept-local tasks is one letter: the batch goes out once no new one came for
+ *  BATCH_QUIET_MS, or BATCH_MAX_MS after its first (2026-11-01: a model verdict per edited task
+ *  mailed the user nine decision letters in an hour). */
+export const BATCH_QUIET_MS = 90_000;
+export const BATCH_MAX_MS = 10 * 60_000;
+const pendingTells = new Map<string, TellKind>();
+let batchTimer: ReturnType<typeof setTimeout> | null = null;
+let batchStartedAt = 0;
+let flushing: Promise<void> | null = null;
+
 /**
- * One decision letter for a task kept local, and one line to Main. `edited` = a synced task a
- * push check stopped (its outside copy keeps the text it had before), `edit-unjudged` = one the
- * model could not check. Never throws.
+ * Tell the user about a task kept local, in one decision letter per burst (a lone task gets its
+ * own letter, several get one letter listing them, per service), and Main in one line. `edited` =
+ * a synced task a push check stopped (its outside copy keeps the text it had before),
+ * `edit-unjudged` = one the model could not check. Never throws.
  */
-export async function tellKeptLocal(taskId: string, kind: TellKind): Promise<void> {
-  try {
-    const tm = await import('../task-manager.js');
-    const task = await tm.getTask(taskId).catch(() => null);
-    const hold = task?.sync_hold;
-    if (!task || !hold || task.source !== 'local') return;
-    const service = await serviceName(hold.target);
-    const title = task.title.replace(/\s+/g, ' ').slice(0, 120);
-    const reason = hold.reason ?? 'It looks private';
-    const outside = hold.outside?.state === 'kept';
-    const where = task.project ? ` in ${md(task.project)}` : '';
-    const edit = kind === 'edited' || kind === 'edit-unjudged';
-    const lines = kind === 'edit-unjudged'
-      ? [
-        `Walnut could not check a change to **${md(title)}**${where} before it went to ${md(service)} (${md(reason)}), so it stopped syncing the task and sent nothing. It is a local task now, with all of its content.`,
-        '',
-        outside ? `Its copy in ${md(service)} still has the text it had before this change.` : '',
-      ]
-      : kind === 'edited'
-      ? [
-        `An edit to **${md(title)}**${where} made it private (${md(reason)}), so Walnut stopped syncing it to ${md(service)} before the change went out. It is a local task now, with all of its content.`,
-        '',
-        outside ? `Its copy in ${md(service)} still has the text it had before this edit.` : '',
-      ]
-      : [
-        `Walnut kept the new task **${md(title)}**${where} out of ${md(service)}: ${md(reason)}. It lives only in Walnut.`,
-        '',
-        kind === 'unjudged' ? 'Nothing was sent: a task is only sent once it is checked.' : '',
-      ];
-    lines.push('', `**Sync to ${md(service)}** sends it there now. **Keep local** keeps it out for good.`
-      + (outside ? ' **Archive there** closes its copy there; **Neutralize there** also removes its title and text from it.' : ''));
-    const { sendLetter } = await import('../human-inbox/store.js');
-    const letter = await sendLetter({
-      subject: edit ? `"${title}" stopped syncing to ${service}` : `"${title}" kept out of ${service}`,
-      type: 'action_required',
-      markdown: lines.filter((l, i, all) => l || (all[i - 1] ?? '') !== '').join('\n'),
-      actions: [
-        { id: LETTER_ACTIONS.keep, label: 'Keep local', description: `It stays in Walnut only, never sent to ${service}` },
-        { id: LETTER_ACTIONS.sync, label: `Sync to ${service}`, description: `Send it to ${service} now` },
-        ...(outside ? [
-          { id: LETTER_ACTIONS.archive, label: 'Archive there', description: `Keep it local and close its copy in ${service}` },
-          { id: LETTER_ACTIONS.neutralize, label: 'Neutralize there', description: `Keep it local, replace its copy's title and text in ${service} and close it` },
-        ] : []),
-      ],
-      taskRefs: [task.id],
-      sender: { sessionId: 'external', host: 'local' },
-    });
-    await tm.setTaskSyncHold(taskId, (t) => t.sync_hold ? { ...t.sync_hold, letter_id: letter.id } : null);
-    await tellMain(`Walnut kept the task "${title}" (${task.id}) out of ${service}: ${reason}. The user has a letter to decide.`, task.id);
-    log.task.info('private tasks: the user was told', { taskId, kind, letterId: letter.id });
-  } catch (err) {
-    log.task.warn('private tasks: the user was not told', { taskId, kind, error: err instanceof Error ? err.message : String(err) });
+export function tellKeptLocal(taskId: string, kind: TellKind): Promise<void> {
+  pendingTells.set(taskId, kind);
+  const now = Date.now();
+  if (!batchTimer) batchStartedAt = now;
+  if (batchTimer) clearTimeout(batchTimer);
+  const wait = Math.max(0, Math.min(BATCH_QUIET_MS, batchStartedAt + BATCH_MAX_MS - now));
+  batchTimer = setTimeout(() => { void flushKeptLocalLetters(); }, wait);
+  batchTimer.unref?.();
+  return Promise.resolve();
+}
+
+/** Send the letters of the batch now (the timer, settleSyncGates, tests). */
+export async function flushKeptLocalLetters(): Promise<void> {
+  // Until nothing waits: a tell that came while a batch went out goes out too.
+  for (;;) {
+    while (flushing) await flushing;
+    if (batchTimer) { clearTimeout(batchTimer); batchTimer = null; }
+    if (!pendingTells.size) return;
+    const batch = [...pendingTells];
+    pendingTells.clear();
+    flushing = sendBatch(batch).finally(() => { flushing = null; });
+    await flushing;
   }
+}
+
+interface KeptItem { task: Task; kind: TellKind; service: string; title: string; reason: string; outside: boolean }
+
+async function sendBatch(batch: Array<[string, TellKind]>): Promise<void> {
+  const tm = await import('../task-manager.js');
+  const byService = new Map<string, KeptItem[]>();
+  for (const [taskId, kind] of batch) {
+    try {
+      const task = await tm.getTask(taskId).catch(() => null);
+      const hold = task?.sync_hold;
+      // Already decided while it waited (released, the user chose, a letter of its own): nothing to ask.
+      if (!task || !hold || task.source !== 'local' || hold.letter_id || hold.by === 'user' || hold.state === 'chosen' || hold.state === 'checking') continue;
+      const service = await serviceName(hold.target);
+      const item: KeptItem = {
+        task, kind, service,
+        title: task.title.replace(/\s+/g, ' ').slice(0, 120),
+        reason: hold.reason ?? 'It looks private',
+        outside: hold.outside?.state === 'kept',
+      };
+      const list = byService.get(hold.target) ?? [];
+      list.push(item);
+      byService.set(hold.target, list);
+    } catch (err) {
+      log.task.warn('private tasks: the user was not told', { taskId, kind, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  for (const items of byService.values()) {
+    try {
+      await sendKeptLetter(items);
+    } catch (err) {
+      log.task.warn('private tasks: the user was not told', { taskIds: items.map((i) => i.task.id), error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+}
+
+function oneTaskLines(item: KeptItem): string[] {
+  const { kind, service, title, reason, outside, task } = item;
+  const where = task.project ? ` in ${md(task.project)}` : '';
+  return kind === 'edit-unjudged'
+    ? [
+      `Walnut could not check a change to **${md(title)}**${where} before it went to ${md(service)} (${md(reason)}), so it stopped syncing the task and sent nothing. It is a local task now, with all of its content.`,
+      '',
+      outside ? `Its copy in ${md(service)} still has the text it had before this change.` : '',
+    ]
+    : kind === 'edited'
+    ? [
+      `An edit to **${md(title)}**${where} made it private (${md(reason)}), so Walnut stopped syncing it to ${md(service)} before the change went out. It is a local task now, with all of its content.`,
+      '',
+      outside ? `Its copy in ${md(service)} still has the text it had before this edit.` : '',
+    ]
+    : [
+      `Walnut kept the new task **${md(title)}**${where} out of ${md(service)}: ${md(reason)}. It lives only in Walnut.`,
+      '',
+      kind === 'unjudged' ? 'Nothing was sent: a task is only sent once it is checked.' : '',
+    ];
+}
+
+async function sendKeptLetter(items: KeptItem[]): Promise<void> {
+  const tm = await import('../task-manager.js');
+  const service = items[0].service;
+  const many = items.length > 1;
+  const outside = items.some((i) => i.outside);
+  const edit = items.every((i) => i.kind === 'edited' || i.kind === 'edit-unjudged');
+  const lines = many
+    ? [
+      `Walnut kept ${items.length} tasks out of ${md(service)}. Each one is a local task now, with all of its content:`,
+      '',
+      ...items.map((i) => `- **${md(i.title)}**${i.task.project ? ` in ${md(i.task.project)}` : ''}: ${md(i.reason)}`
+        + (i.outside ? ` (its copy in ${md(service)} keeps the text it had before)` : '')),
+    ]
+    : oneTaskLines(items[0]);
+  lines.push('', many
+    ? `**Sync all to ${md(service)}** sends them there now. **Keep all local** keeps them out for good.`
+      + (outside ? ' **Archive there** closes their copies there; **Neutralize there** also removes their titles and text from them.' : '')
+      + ' To decide one by one, use Sync in each task\'s menu.'
+    : `**Sync to ${md(service)}** sends it there now. **Keep local** keeps it out for good.`
+      + (outside ? ' **Archive there** closes its copy there; **Neutralize there** also removes its title and text from it.' : ''));
+  const { sendLetter } = await import('../human-inbox/store.js');
+  const first = items[0].title;
+  const letter = await sendLetter({
+    subject: many ? `${items.length} tasks kept out of ${service}`
+      : edit ? `"${first}" stopped syncing to ${service}` : `"${first}" kept out of ${service}`,
+    type: 'action_required',
+    markdown: lines.filter((l, i, all) => l || (all[i - 1] ?? '') !== '').join('\n'),
+    actions: [
+      { id: LETTER_ACTIONS.keep, label: many ? 'Keep all local' : 'Keep local', description: `${many ? 'They stay' : 'It stays'} in Walnut only, never sent to ${service}` },
+      { id: LETTER_ACTIONS.sync, label: many ? `Sync all to ${service}` : `Sync to ${service}`, description: `Send ${many ? 'them' : 'it'} to ${service} now` },
+      ...(outside ? [
+        { id: LETTER_ACTIONS.archive, label: 'Archive there', description: `Keep ${many ? 'them' : 'it'} local and close ${many ? 'their copies' : 'its copy'} in ${service}` },
+        { id: LETTER_ACTIONS.neutralize, label: 'Neutralize there', description: `Keep ${many ? 'them' : 'it'} local, replace ${many ? 'their copies\'' : 'its copy\'s'} title and text in ${service} and close ${many ? 'them' : 'it'}` },
+      ] : []),
+    ],
+    taskRefs: items.map((i) => i.task.id),
+    sender: { sessionId: 'external', host: 'local' },
+  });
+  for (const i of items) await tm.setTaskSyncHold(i.task.id, (t) => t.sync_hold ? { ...t.sync_hold, letter_id: letter.id } : null);
+  await tellMain(many
+    ? `Walnut kept ${items.length} tasks out of ${service} (${items.map((i) => `"${i.title}" (${i.task.id})`).join(', ')}). The user has one letter to decide.`
+    : `Walnut kept the task "${first}" (${items[0].task.id}) out of ${service}: ${items[0].reason}. The user has a letter to decide.`, items[0].task.id);
+  log.task.info('private tasks: the user was told', { taskIds: items.map((i) => i.task.id), kinds: items.map((i) => i.kind), letterId: letter.id });
 }
 
 /** One line riding Main's next message (never a wake). */
@@ -237,10 +338,20 @@ async function tellMain(line: string, taskId: string): Promise<void> {
   }
 }
 
-/** Settle the open letter of a hold a person resolved elsewhere (the task menu, an op). */
-export async function settleHoldLetter(hold: SyncHold | undefined, reason: string): Promise<void> {
+/** Settle the open letter of a hold a person resolved elsewhere (the task menu, an op). A letter
+ *  that still asks about other tasks (a batch) stays open for them: only this task leaves it. */
+export async function settleHoldLetter(hold: SyncHold | undefined, reason: string, taskId?: string): Promise<void> {
   if (!hold?.letter_id) return;
+  const letterId = hold.letter_id;
   try {
+    if (taskId) {
+      const tm = await import('../task-manager.js');
+      const others = (await tm.listTasks()).filter((t) => t.id !== taskId && t.source === 'local' && t.sync_hold?.letter_id === letterId);
+      if (others.length) {
+        await tm.setTaskSyncHold(taskId, (t) => t.sync_hold?.letter_id === letterId ? { ...t.sync_hold, letter_id: undefined } : t.sync_hold ?? null);
+        return;
+      }
+    }
     const { getLetter, settleLetter } = await import('../human-inbox/store.js');
     const letter = await getLetter(hold.letter_id).catch(() => null);
     if (!letter || letter.answered || letter.archived) return;
@@ -256,29 +367,40 @@ export async function onKeptLocalAnswer(event: { letterId?: unknown; actionId?: 
   if (typeof event.letterId !== 'string' || typeof event.actionId !== 'string') return;
   const letterId = event.letterId;
   const tm = await import('../task-manager.js');
-  const task = (await tm.listTasks()).find((t) => t.sync_hold?.letter_id === letterId);
-  if (!task) return;
+  // One letter may ask about several tasks (a batch): the answer is for each of them.
+  const tasks = (await tm.listTasks()).filter((t) => t.sync_hold?.letter_id === letterId);
+  if (!tasks.length) return;
   const { getLetter } = await import('../human-inbox/store.js');
   const answered = (await getLetter(letterId).catch(() => null))?.answered;
   const byUser = !!answered && !answered.by;
   const action = event.actionId;
   const at = new Date().toISOString();
-  if (action === LETTER_ACTIONS.sync) {
-    if (!byUser) {
-      log.task.warn('private tasks: a task answered "sync" in the user\'s place; kept local', { taskId: task.id, letterId });
+  for (const task of tasks) {
+    try {
+      await answerFor(task);
+    } catch (err) {
+      log.task.warn('private tasks: answer not applied to a task', { taskId: task.id, letterId, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  async function answerFor(task: Task): Promise<void> {
+    if (action === LETTER_ACTIONS.sync) {
+      if (!byUser) {
+        log.task.warn('private tasks: a task answered "sync" in the user\'s place; kept local', { taskId: task.id, letterId });
+        return;
+      }
+      const r = await tm.releaseSyncHold(task.id, undefined, 'user');
+      log.task.info('private tasks: the user sent a kept task out', { taskId: task.id, released: r.released, why: r.reason });
       return;
     }
-    const r = await tm.releaseSyncHold(task.id, undefined, 'user');
-    log.task.info('private tasks: the user sent a kept task out', { taskId: task.id, released: r.released, why: r.reason });
-    return;
-  }
-  if (action === LETTER_ACTIONS.archive || action === LETTER_ACTIONS.neutralize) {
-    await tm.actOnOutsideCopy(task.id, action === LETTER_ACTIONS.archive ? 'archive' : 'neutralize');
-  }
-  if (action === LETTER_ACTIONS.keep || action === LETTER_ACTIONS.archive || action === LETTER_ACTIONS.neutralize) {
-    await tm.setTaskSyncHold(task.id, (t) => t.sync_hold
-      ? { ...t.sync_hold, state: 'chosen', by: 'user', reason: 'You chose to keep it local', at, letter_id: undefined }
-      : null);
+    if ((action === LETTER_ACTIONS.archive || action === LETTER_ACTIONS.neutralize) && task.sync_hold?.outside?.state === 'kept') {
+      await tm.actOnOutsideCopy(task.id, action === LETTER_ACTIONS.archive ? 'archive' : 'neutralize');
+    }
+    if (action === LETTER_ACTIONS.keep || action === LETTER_ACTIONS.archive || action === LETTER_ACTIONS.neutralize) {
+      await tm.setTaskSyncHold(task.id, (t) => t.sync_hold
+        ? { ...t.sync_hold, state: 'chosen', by: 'user', reason: 'You chose to keep it local', at, letter_id: undefined }
+        : null);
+    }
   }
 }
 
@@ -293,4 +415,22 @@ export async function wireSyncGate(): Promise<void> {
     void onKeptLocalAnswer(event.data as Record<string, unknown>).catch((err) =>
       log.task.warn('private tasks: answer not applied', { error: err instanceof Error ? err.message : String(err) }));
   }, { global: true, interest: ['human-inbox:answered'] });
+  // Who reads a service may have changed (Settings): give back what no longer needs keeping out.
+  let pending: ReturnType<typeof setTimeout> | null = null;
+  const { onConfigWritten } = await import('../config-manager.js');
+  onConfigWritten(() => {
+    if (pending) clearTimeout(pending);
+    pending = setTimeout(() => { pending = null; void releaseUnshared('setting'); }, 2_000);
+    pending.unref?.();
+  });
+  void releaseUnshared('boot');
+}
+
+async function releaseUnshared(why: string): Promise<void> {
+  try {
+    const { releaseHoldsOfUnsharedServices } = await import('./audience.js');
+    await releaseHoldsOfUnsharedServices();
+  } catch (err) {
+    log.task.warn('private tasks: releasing holds of unshared services failed', { why, error: err instanceof Error ? err.message : String(err) });
+  }
 }

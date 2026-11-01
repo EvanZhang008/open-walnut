@@ -4,8 +4,8 @@
  * plugin a task Walnut keeps local.
  *
  *   - A task argument that is local, or held (`sync_hold`), is refused: nothing of it is sent.
- *   - Text about to go out (a create or full push: title, description, note, summary; a field
- *     update: that field) that matches one of the user's private words, or that the fast model
+ *   - Text about to go out to a service others read (audience.ts; a create or full push: title,
+ *     description, note, summary; a field update: that field) that matches one of the user's private words, or that the fast model
  *     judges private or cannot judge (push-check.ts), is refused, and the task is turned local
  *     (edit-stop.ts; sync-gate.ts tells the user and Main): the edit never leaves Walnut.
  *
@@ -121,6 +121,12 @@ async function check(pluginId: string, method: string, args: unknown[]): Promise
   // The text that goes out: the whole task, or the one field (an emptied or neutral field
   // carries nothing of the task).
   if (!full && isNeutralText(fieldText!)) return;
+  // A service only the user reads (audience.ts): his private matters belong there, nothing is
+  // checked. A task Walnut keeps local is still refused above, whatever the service.
+  const { getConfig } = await import('../config-manager.js');
+  const config = await getConfig();
+  const { privacyChecksApply } = await import('./audience.js');
+  if (!(await privacyChecksApply(config, pluginId))) return;
   const field = FIELD_OF[m];
   const outgoing: PushText = { title: task.title, description: task.description, note: task.note, summary: task.summary };
   if (field) (outgoing as unknown as Record<string, string>)[field] = fieldText!;
@@ -137,9 +143,8 @@ async function check(pluginId: string, method: string, args: unknown[]): Promise
   }
 
   if (!modelCheck) return;
-  const { getConfig } = await import('../config-manager.js');
   const { privacyJudgeAvailable, serviceName } = await import('./sync-gate.js');
-  if (!privacyJudgeAvailable(await getConfig())) return;
+  if (!privacyJudgeAvailable(config)) return;
   const verdict = await checkPushText(task, outgoing, {
     service: await serviceName(pluginId),
     ...(m === 'updateConversationLog' ? { log: fieldText! } : {}),

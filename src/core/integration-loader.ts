@@ -1413,7 +1413,8 @@ function parseUiApp(uiCap: Record<string, unknown>, filePath: string): Registere
   return { title, entry: `app/${entry}`, ...(icon ? { icon } : {}) };
 }
 
-function validateManifest(raw: unknown, filePath: string): PluginManifest | null {
+/** Parse and check a manifest.json (exported for tests). */
+export function validateManifest(raw: unknown, filePath: string): PluginManifest | null {
   if (!raw || typeof raw !== 'object') {
     log.warn('Invalid manifest: not an object', { filePath });
     return null;
@@ -1602,6 +1603,8 @@ function validateManifest(raw: unknown, filePath: string): PluginManifest | null
     ...(Array.isArray(obj.phases) && obj.phases.some((p) => typeof p === 'string')
       ? { phases: (obj.phases as unknown[]).filter((p): p is string => typeof p === 'string') }
       : {}),
+    // Who reads what it syncs (private-tasks/audience.ts); junk reads as the default, shared.
+    ...(obj.syncAudience === 'self' || obj.syncAudience === 'shared' ? { syncAudience: obj.syncAudience } : {}),
     ...(catalog ? { catalog } : {}),
     ...(icon ? { icon } : {}),
     ...(storageParsed.storage ? { storage: storageParsed.storage } : {}),
@@ -2110,6 +2113,7 @@ async function loadPlugin(
     uiHints: manifest.uiHints,
     ...(manifest.settingsIn ? { settingsIn: manifest.settingsIn } : {}),
     ...(manifest.category ? { category: manifest.category } : {}),
+    ...(manifest.syncAudience === 'self' || manifest.syncAudience === 'shared' ? { syncAudience: manifest.syncAudience } : {}),
     taskFields: manifest.taskFields,
     tools: unified || effectiveCapabilities.includes('tools') ? tools : undefined,
     uiApp,

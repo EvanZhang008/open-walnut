@@ -1152,8 +1152,15 @@ the user's private words (`config.private_tasks.words`) and the fast model
 new task bound for a service is born local and held `checking` until both pass; a private
 verdict, a matching word or a model with no answer keeps it local, and the user gets one decision
 letter (Keep local / Sync to the service, plus Archive there / Neutralize there for an outside
-copy) while Main hears one line.
+copy) while Main hears one line. Several tasks kept out in one burst share ONE letter, and its
+answer is for each of them. The check runs only for a service others read: each service's
+audience is `config.private_tasks.audience[<plugin id>]` (`self` = only the user reads it, nothing
+is checked and no task is kept out of it but by the user's own Local choice; `shared` = the check
+runs), else the plugin manifest's `syncAudience`, else `shared`. Turning a service to `self` gives
+back every task Walnut kept out of it (linked to its old copy) and settles its letter.
 
+- `GET /api/v1/private-tasks/services` → `{ "services": [{ "id", "name", "audience":
+  "self"|"shared", "default", "set" }] }`: every loaded sync service and who reads it (Settings).
 - `POST /api/v1/tasks` takes `"local": true` (a boolean, else `400 bad_request`): the task is
   created local in its project. The `task_create` op has the same field.
 - ProjectedTask gains `source` (only when not local) and `sync_hold: { state:

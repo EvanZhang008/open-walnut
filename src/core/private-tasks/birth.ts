@@ -10,7 +10,8 @@
  *   - else, with the model check on: `checking`, and sync-gate.ts asks the small model; only a
  *     task it judges to be work gets its project's source and is pushed;
  *   - with the check off (the user turned it off, or a test server with no model): the project's
- *     source at once, after the words found nothing.
+ *     source at once, after the words found nothing;
+ *   - a service only the user reads (audience.ts): the project's source at once, no check.
  *
  * Pure: the caller (addTask, the cloud outbox's create) writes what this decides.
  */
@@ -47,13 +48,17 @@ export function decideBirth(
   target: TaskSource,
   text: BirthText,
   cfg: PrivateTasksConfig | undefined,
-  opts: { explicitLocal?: boolean; canJudge: boolean; now?: string },
+  /** `shared`: others read the target service, so the words and the model check it (default
+   *  true; false for a service only the user reads, audience.ts). */
+  opts: { explicitLocal?: boolean; canJudge: boolean; shared?: boolean; now?: string },
 ): BirthDecision {
   const at = opts.now ?? new Date().toISOString();
   if (!target || target === 'local') return { source: 'local' };
   if (opts.explicitLocal) {
     return { source: 'local', hold: { target, state: 'chosen', by: 'user', reason: 'Kept local when it was created', at } };
   }
+  // A service only the user reads: nothing to keep from it but what the user chose.
+  if (opts.shared === false) return { source: target };
   const entry = privateWordIn(cfg, text);
   if (entry) return { source: 'local', hold: { target, state: 'private', by: 'words', reason: wordsReason(entry), at } };
   if (opts.canJudge) return { source: 'local', hold: { target, state: 'checking', reason: 'Walnut is checking whether it is private', at } };

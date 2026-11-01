@@ -193,28 +193,61 @@ test('the calendar quick add creates a task Local when asked', async ({ page }) 
   expect(await getTask(id)).toMatchObject({ source: 'local', project: PROJECT, sync_hold: { state: 'chosen' } })
 })
 
-test('Settings: private words are saved and Try a title says which one matches', async ({ page }) => {
-  const word = `zq${stamp().toLowerCase()}`
-  type Cfg = { config: { private_tasks?: { words?: string[] } } }
-  const before = (await api<Cfg>('GET', '/api/config')).config.private_tasks
-  try {
-    await openHome(page)
-    await page.locator('.sidebar-nav a[href^="/settings"]').click()
-    await page.getByTestId('settings-nav-tasks').click()
-    const group = page.getByTestId('tasks-private')
-    await expect(group).toBeVisible()
-    const box = page.getByTestId('settings-private-words')
-    await box.fill(`${word}\n/(broken/`)
-    await page.getByTestId('settings-private-try').fill(`my ${word} packet`)
-    await expect(group).toContainText(`Stays local: it matches "${word}".`)
-    await expect(group).toContainText('These lines are not used (not a valid pattern, or one that could be slow): /(broken/')
-    await box.blur()
-    await expect.poll(async () => (await api<Cfg>('GET', '/api/config')).config.private_tasks?.words)
-      .toEqual([word, '/(broken/'])
-    await group.screenshot({ path: `${SHOTS}/${engine()}-5-settings.png` })
-    await page.getByTestId('settings-private-try').fill('fix the login page')
-    await expect(group).toContainText('No private word matches it')
-  } finally {
-    await api('PUT', '/api/config', { private_tasks: before ?? { words: [] } }).catch(() => undefined)
-  }
+// Both write `private_tasks` in the one config the fixture shares: one at a time.
+test.describe.serial('Settings', () => {
+  test('Settings: private words are saved and Try a title says which one matches', async ({ page }) => {
+    const word = `zq${stamp().toLowerCase()}`
+    type Cfg = { config: { private_tasks?: { words?: string[] } } }
+    const before = (await api<Cfg>('GET', '/api/config')).config.private_tasks
+    try {
+      await openHome(page)
+      await page.locator('.sidebar-nav a[href^="/settings"]').click()
+      await page.getByTestId('settings-nav-tasks').click()
+      const group = page.getByTestId('tasks-private')
+      await expect(group).toBeVisible()
+      const box = page.getByTestId('settings-private-words')
+      await box.fill(`${word}\n/(broken/`)
+      await page.getByTestId('settings-private-try').fill(`my ${word} packet`)
+      await expect(group).toContainText(`Stays local: it matches "${word}".`)
+      await expect(group).toContainText('These lines are not used (not a valid pattern, or one that could be slow): /(broken/')
+      await box.blur()
+      await expect.poll(async () => (await api<Cfg>('GET', '/api/config')).config.private_tasks?.words)
+        .toEqual([word, '/(broken/'])
+      await group.screenshot({ path: `${SHOTS}/${engine()}-5-settings.png` })
+      await page.getByTestId('settings-private-try').fill('fix the login page')
+      await expect(group).toContainText('No private word matches it')
+    } finally {
+      await api('PUT', '/api/config', { private_tasks: before ?? { words: [] } }).catch(() => undefined)
+    }
+  })
+
+  test('Settings: who reads each sync service is chosen per service and saved', async ({ page }) => {
+    type Cfg = { config: { private_tasks?: { words?: string[]; audience?: Record<string, string> } } }
+    const before = (await api<Cfg>('GET', '/api/config')).config.private_tasks
+    // The fixture's source has no live plugin, so the list of loaded services is answered here,
+    // from the real config, the way the server answers it (audience.ts: setting, else default).
+    await page.route('**/api/v1/private-tasks/services', async (route) => {
+      const set = (await api<Cfg>('GET', '/api/config')).config.private_tasks?.audience?.[SERVICE]
+      await route.fulfill({ json: { services: [{ id: SERVICE, name: 'Plugin A', audience: set ?? 'shared', default: 'shared', set: !!set }] } })
+    })
+    try {
+      await openHome(page)
+      await page.locator('.sidebar-nav a[href^="/settings"]').click()
+      await page.getByTestId('settings-nav-tasks').click()
+      const row = page.getByTestId(`settings-private-audience-${SERVICE}`)
+      await expect(row).toContainText('Who reads Plugin A')
+      await expect(row).toContainText('Others read Plugin A, so Walnut keeps private tasks out of it')
+      await page.getByTestId(`settings-private-audience-${SERVICE}-self`).click()
+      await expect(row).toContainText('Only you read Plugin A, so private tasks may go there')
+      await expect.poll(async () => (await api<Cfg>('GET', '/api/config')).config.private_tasks?.audience?.[SERVICE]).toBe('self')
+      // The words and the AI switch are left as they were.
+      expect((await api<Cfg>('GET', '/api/config')).config.private_tasks?.words ?? []).toEqual(before?.words ?? [])
+      await row.screenshot({ path: `${SHOTS}/${engine()}-6-audience.png` })
+      await page.getByTestId(`settings-private-audience-${SERVICE}-shared`).click()
+      await expect.poll(async () => (await api<Cfg>('GET', '/api/config')).config.private_tasks?.audience?.[SERVICE]).toBe('shared')
+      await expect(row).toContainText('Others read Plugin A')
+    } finally {
+      await api('PUT', '/api/config', { private_tasks: before ?? { words: [] } }).catch(() => undefined)
+    }
+  })
 })

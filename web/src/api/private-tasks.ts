@@ -1,6 +1,6 @@
 /** Private tasks: make a synced task local, send a local one to its project's service
  *  (src/web/routes/private-tasks-v1.ts). */
-import { apiPost } from './client';
+import { apiGet, apiPost } from './client';
 
 export type OutsideCopyAction = 'keep' | 'archive' | 'neutralize';
 
@@ -27,4 +27,21 @@ export function changeOutsideCopy(id: string, action: Exclude<OutsideCopyAction,
 
 export function testPrivateWords(text: string, words?: string[]): Promise<{ match: string | null; invalid: string[] }> {
   return apiPost('/api/v1/private-tasks/test', { text, ...(words ? { words } : {}) });
+}
+
+/** Who reads a sync service (src/core/private-tasks/audience.ts). */
+export type SyncAudience = 'self' | 'shared';
+
+export interface SyncServiceAudience {
+  id: string;
+  name: string;
+  audience: SyncAudience;
+  /** The plugin's own default (its manifest), `shared` when it says nothing. */
+  default: SyncAudience;
+  /** The user chose it in Settings. */
+  set: boolean;
+}
+
+export function listSyncServices(): Promise<{ services: SyncServiceAudience[] }> {
+  return apiGet('/api/v1/private-tasks/services');
 }

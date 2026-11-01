@@ -85,7 +85,9 @@ describe('private tasks over HTTP', () => {
   });
 
   it('the letter\'s Sync answer by the user sends it; Keep local keeps it', async () => {
+    // One at a time: tasks kept in one burst share one letter (private-tasks-audience-e2e).
     const a = await api('/api/v1/tasks', { body: { title: 'Zephyr onboarding plan', project: 'Work' } });
+    await settle();
     const b = await api('/api/v1/tasks', { body: { title: 'Zephyr marigold notes', project: 'Work' } });
     await settle();
     const la = (await getTask(a.json.task.id)).sync_hold!.letter_id!;

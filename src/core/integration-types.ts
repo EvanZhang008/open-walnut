@@ -505,6 +505,8 @@ export interface RegisteredPlugin {
   settingsIn?: PluginSettingsHome;
   /** Manifest category: the Apps page group (absent = derived from what it does). */
   category?: PluginCategory;
+  /** Manifest syncAudience, when valid: who reads what this plugin syncs. */
+  syncAudience?: 'self' | 'shared';
   /** Manifest taskFields — plugin-declared per-task fields the console renders generically. */
   taskFields?: TaskFieldSpec[];
   /** Tools contributed via registerTool (capability `tools`), names already
@@ -596,6 +598,11 @@ export interface PluginManifest {
    *  phase folded onto the legacy bucket (WAITING reads as TODO), so a plugin compiled
    *  against the older closed set keeps working (see plugins/legacy-phase-sync.ts). */
   phases?: string[];
+  /** Who reads what this plugin syncs (src/core/private-tasks/audience.ts): `"self"` for a
+   *  service only the user reads (a personal list), where Walnut runs no privacy check, or
+   *  `"shared"` for one others read too (a team tracker), where private tasks are kept out.
+   *  Absent or junk = `"shared"`. The user can change it per service in Settings. */
+  syncAudience?: 'self' | 'shared';
   /** How the Settings store describes a plugin that ships in the bundled `plugin-store/`
    *  folder: what installing it adds, and where to read about it. Descriptive only;
    *  junk values are dropped (src/core/plugins/bundled-store.ts parseManifestCatalog). */

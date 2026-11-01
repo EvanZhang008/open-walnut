@@ -6,7 +6,7 @@
  * or send it anyway.
  */
 import { log } from '../../logging/index.js';
-import { tellKeptLocal } from './sync-gate.js';
+import { flushKeptLocalLetters, tellKeptLocal } from './sync-gate.js';
 import { startingStops, type PushStop } from './sync-guard.js';
 
 const stopping = new Map<string, Promise<void>>();
@@ -32,4 +32,5 @@ export function stopSyncedTask(taskId: string, stop: PushStop): Promise<void> {
 /** Wait for every running stop (tests). */
 export async function settleEditStops(): Promise<void> {
   while (stopping.size || startingStops.size) await Promise.allSettled([...stopping.values(), ...startingStops]);
+  await flushKeptLocalLetters();
 }

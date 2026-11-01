@@ -8,14 +8,19 @@
  *   - Check with AI: the fast model judges every text of a task before it is pushed (a new task,
  *     an edit, a summary); a private one stays local and the user gets a letter. On by default.
  *   - Try it: which word a title would match, against the list as typed.
+ *   - Who reads each sync service: Only me (a personal list: nothing is checked, private matters
+ *     belong there) or Shared with others (a team tracker: the check runs). Defaults to the
+ *     plugin's own choice, else Shared (`private_tasks.audience`).
  */
 import { useEffect, useState } from 'react';
+import { log } from '@/utils/log';
 import type { Config } from '@open-walnut/core';
 import { SettingsGroup, SettingsRow } from '../SettingsSection';
 import { ToggleSwitch } from '../inputs/ToggleSwitch';
 import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
 import { useCommitField } from '../inputs/useCommitField';
-import { testPrivateWords } from '@/api/private-tasks';
+import { SegmentedControl } from '../inputs/SegmentedControl';
+import { listSyncServices, testPrivateWords, type SyncAudience, type SyncServiceAudience } from '@/api/private-tasks';
 import type { BuildPatch } from './GeneralSection';
 
 /** The textarea's lines as the stored list: trimmed, no empty lines, no repeats. */
@@ -59,6 +64,16 @@ export function PrivateTasksGroup({ config, save }: {
     }, 250);
     return () => { alive = false; clearTimeout(t); };
   }, [sample, typed]);
+
+  const [services, setServices] = useState<SyncServiceAudience[] | null>(null);
+  const audienceKey = JSON.stringify(config.private_tasks?.audience ?? {});
+  useEffect(() => {
+    let alive = true;
+    listSyncServices()
+      .then((r) => { if (alive) setServices(r.services); })
+      .catch((err) => { log.warn('settings', 'sync services not read', { error: String(err) }); if (alive) setServices([]); });
+    return () => { alive = false; };
+  }, [audienceKey]);
 
   return (
     <SettingsGroup heading="Private tasks" data-testid="tasks-private">
@@ -107,7 +122,7 @@ export function PrivateTasksGroup({ config, save }: {
       />
       <SettingsRow
         label="Check with AI before sending"
-        help="Before any text of a task goes to an outside service (a new task, an edit, a summary), the fast model reads it. A private one (your own promotion or performance, feedback on a colleague, pay, health, immigration, money, family, a job search, a side project) stays local and you get a letter; so does one it cannot check. With no model set up, only your words are checked."
+        help="Before any text of a task goes to an outside service others read (a new task, an edit, a summary), the fast model reads it. A private one (your own promotion or performance, feedback on a colleague, pay, health, immigration, money, family, a job search, a side project) stays local and you get a letter; so does one it cannot check. With no model set up, only your words are checked."
         htmlFor="settings-private-model-check"
         error={modelCheck.error}
         control={(
@@ -119,7 +134,51 @@ export function PrivateTasksGroup({ config, save }: {
           />
         )}
       />
+      {/* Last, so rows that arrive after the first paint never move the rows above (a moved
+          row remounts and loses what was typed in it). */}
+      {services?.map((svc) => (
+        <AudienceRow
+          key={svc.id}
+          service={svc}
+          save={(v) => save((c) => ({
+            private_tasks: { ...(c.private_tasks ?? {}), audience: { ...(c.private_tasks?.audience ?? {}), [svc.id]: v } },
+          }), { rowKey: `tasks.private-audience.${svc.id}` })}
+        />
+      ))}
     </SettingsGroup>
   );
 }
 
+
+const AUDIENCE_OPTIONS = [
+  { value: 'self' as const, label: 'Only me' },
+  { value: 'shared' as const, label: 'Shared with others' },
+];
+
+/** Who reads one sync service. Only me: nothing is kept out of it. */
+function AudienceRow({ service, save }: { service: SyncServiceAudience; save: (v: SyncAudience) => Promise<void> }) {
+  const rowKey = `tasks.private-audience.${service.id}`;
+  const audience = useOptimisticSetting<SyncAudience>(service.audience, save, { rowKey });
+  const id = `settings-private-audience-${service.id}`;
+  return (
+    <SettingsRow
+      label={`Who reads ${service.name}`}
+      help={audience.value === 'self'
+        ? `Only you read ${service.name}, so private tasks may go there: Walnut checks nothing before it syncs a task to it.`
+        : `Others read ${service.name}, so Walnut keeps private tasks out of it (your words, and the AI check below).`}
+      htmlFor={id}
+      error={audience.error}
+      data-testid={`settings-private-audience-${service.id}`}
+      control={(
+        <SegmentedControl
+          id={id}
+          aria-label={`Who reads ${service.name}`}
+          value={audience.value}
+          options={AUDIENCE_OPTIONS.map((o) => ({ ...o, testId: `settings-private-audience-${service.id}-${o.value}` }))}
+          onChange={audience.set}
+          disabled={audience.busy}
+        />
+      )}
+    />
+  );
+}

@@ -4,6 +4,7 @@
   "category": "tasks",
   "apiVersion": 1,
   "phases": ["WAITING"],
+  "syncAudience": "self",
   "engines": {
     "walnut": ">=0.3.2"
   },

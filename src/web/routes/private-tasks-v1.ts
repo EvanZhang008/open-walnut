@@ -13,6 +13,9 @@
  *        Change the outside copy a task turned local left behind.
  *   POST /api/v1/private-tasks/test        { text, words? } -> { match, invalid }
  *        Which of the user's private words (or the given list) a text matches (Settings).
+ *   GET  /api/v1/private-tasks/services    -> { services: [{ id, name, audience, default, set }] }
+ *        Every loaded sync service and who reads it (audience.ts): `self` or `shared`, the
+ *        manifest's default, and whether the user set it (Settings).
  *
  * Writes answer 501 on the cloud companion: the primary owns task sources.
  */
@@ -56,7 +59,7 @@ privateTasksV1Router.post('/tasks/:id/make-local', route(async (req, res) => {
   const { makeTaskLocal } = await import('../../core/task-manager.js')
   const { serviceName, settleHoldLetter } = await import('../../core/private-tasks/sync-gate.js')
   const sid = header(req, 'x-walnut-caller-sid')
-  await settleHoldLetter(task.sync_hold, 'It was made local from the task menu')
+  await settleHoldLetter(task.sync_hold, 'It was made local from the task menu', task.id)
   const made = await makeTaskLocal(task.id, {
     state: 'chosen', by: 'user', at: new Date().toISOString(),
     reason: sid ? 'An agent made it local' : 'You made it local',
@@ -100,7 +103,7 @@ privateTasksV1Router.post('/tasks/:id/sync-to-project', route(async (req, res) =
     throw new RouteError(409, out.reason ?? 'not_released', msg)
   }
   // Its letter is settled only once it went out: a refused release leaves the user's decision open.
-  await settleHoldLetter(task.sync_hold, sid ? 'An agent sent it, at the user\'s words' : 'You sent it from the task menu')
+  await settleHoldLetter(task.sync_hold, sid ? 'An agent sent it, at the user\'s words' : 'You sent it from the task menu', task.id)
   log.web.info('private tasks: sent to its project\'s service', { taskId: task.id, source: out.task?.source, bySession: !!sid })
   res.json({
     task: await viewOf(task.id),
@@ -130,4 +133,24 @@ privateTasksV1Router.post('/private-tasks/test', route(async (req, res) => {
   const { matchPrivateWords, invalidPrivateWords } = await import('../../core/private-tasks/private-words.js')
   const words = (b.words as string[] | undefined) ?? (await (await import('../../core/config-manager.js')).getConfig()).private_tasks?.words ?? []
   res.json({ match: matchPrivateWords(words, [b.text]), invalid: invalidPrivateWords(words) })
+}))
+
+privateTasksV1Router.get('/private-tasks/services', route(async (_req, res) => {
+  const { registry } = await import('../../core/integration-registry.js')
+  const { getConfig } = await import('../../core/config-manager.js')
+  const { resolveAudience } = await import('../../core/private-tasks/audience.js')
+  const config = await getConfig()
+  const services = registry.getAll()
+    .filter((p) => p.id !== 'local' && p.hasSync !== false)
+    .map((p) => {
+      const set = config.private_tasks?.audience?.[p.id]
+      return {
+        id: p.id, name: p.name,
+        audience: resolveAudience(config, p.id, p.syncAudience),
+        default: p.syncAudience ?? 'shared',
+        set: set === 'self' || set === 'shared',
+      }
+    })
+    .sort((a, b) => a.name.localeCompare(b.name))
+  res.json({ services })
 }))
