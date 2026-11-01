@@ -235,10 +235,10 @@ Walnut can run with no cloud model and no Claude Code. You need three things: a 
 
 | Model | Download | Free memory | Engines it passed on |
 |---|---|---|---|
-| `gpt-oss:20b` | 13 GB | about 16 GB | OpenCode 1 and 2, Goose, custom (Qwen Code) |
+| `gpt-oss:20b` | 13 GB | about 16 GB | OpenCode 1 and 2, Goose |
 | `qwen3-coder:30b` | 19 GB | about 20 GB | OpenCode 1 and 2, Goose, Codex, custom (Qwen Code) |
 
-Codex needs `qwen3-coder:30b`: with `gpt-oss:20b` its commands come back as tool calls Ollama cannot read, and it gives up. A 7B or 8B model is too small on every engine: `qwen3:8b` broke an edit and then reported success. Start Ollama with room for Walnut's instructions and tools, then pull the model:
+Codex and Qwen Code need `qwen3-coder:30b`: with `gpt-oss:20b`, Codex's commands come back as tool calls Ollama cannot read and it gives up, and Qwen Code finished only one of two runs. A 7B or 8B model is too small on every engine: `qwen3:8b` broke an edit and then reported success. Start Ollama with room for Walnut's instructions and tools, then pull the model:
 
 ```bash
 OLLAMA_CONTEXT_LENGTH=32768 ollama serve    # the Ollama app has the same setting (Context length)
@@ -293,7 +293,7 @@ GOOSE_MODEL: gpt-oss:20b
 OLLAMA_HOST: localhost
 ```
 
-**Codex.** `npm install -g @openai/codex` (or `brew install --cask codex`). Put this in `~/.codex/config.toml`, then check it with `codex exec --skip-git-repo-check "say hi"`; no OpenAI sign-in is needed:
+**Codex.** `npm install -g @openai/codex` (or `brew install --cask codex`). Put this in `~/.codex/config.toml`, then check it with `codex exec --skip-git-repo-check "say hi"`. It needs no OpenAI sign-in, but it still connects to OpenAI's servers, which a work laptop's security software may flag:
 
 ```toml
 model = "qwen3-coder:30b"
@@ -307,12 +307,12 @@ defaults:
   engine: custom
 engines:
   custom:
-    adapter_cmd: [qwen, --acp, --auth-type, openai, --openai-base-url, "http://localhost:11434/v1", --openai-api-key, ollama, -m, gpt-oss:20b]
+    adapter_cmd: [qwen, --acp, --auth-type, openai, --openai-base-url, "http://localhost:11434/v1", --openai-api-key, ollama, -m, qwen3-coder:30b]
 ```
 
 Qwen Code asks before it runs a command; answer in the session panel, or add `--yolo` to let it run them.
 
-Tested with OpenCode 1.19.5 and 2.2.5, Goose 1.57.0, Codex 0.166.0 and Qwen Code 0.26.5 on Ollama 0.40.13. Check an engine's version with its `--version`.
+Tested with OpenCode 1.19.5 and 2.2.5, Goose 1.57.0, Codex 0.166.0 and Qwen Code 0.26.5, on Ollama 0.32.14 (an M4 Pro Mac with 48 GB) and 0.40.13 (Linux). Check an engine's version with its `--version`.
 
 Walnut gives every engine its session instructions (role, team rules, task directory): Codex as developer instructions, the others on the first message of each conversation. On every engine but Codex it lists only its most used tools, plus `tool_help` and `tool_call`, which reach every other one (`session.acp_walnut_tools: all` lists them all).
 
