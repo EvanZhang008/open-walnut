@@ -2,7 +2,9 @@
  * The quotes and comments waiting for the next send, right above the composer
  * (2026-11-01, the user's sketch: one row each, at most three in view, scroll for
  * more, each saying where it was left; the composer itself holds only what he
- * types). A row's click shows its passage in the timeline; × takes it out.
+ * types). A row's click shows its passage in the timeline, or opens the doc a
+ * doc comment is on; × takes it out (a doc comment stays in its doc, it just does
+ * not go to the AI).
  */
 import type { SessionPassageComment } from '@/types/session';
 import { countLabel, snippetOf } from '@/utils/passage-comments';
@@ -31,6 +33,11 @@ export function PendingCommentsTray({ pending, onJump, onRemove }: Props) {
               onClick={() => onJump(c.id)}
               title="Show where it was left"
             >
+              {c.doc && (
+                <span className="pending-comments-doc" title={c.doc.path}>
+                  {c.doc.path.slice(c.doc.path.lastIndexOf('/') + 1)}{c.doc.reply ? ' · reply' : ''}
+                </span>
+              )}
               <span className="pending-comments-where" title={c.text}>❝ {snippetOf(c.text, 60)}</span>
               {c.comment
                 ? <span className="pending-comments-text" title={c.comment}>{snippetOf(c.comment, 120)}</span>
@@ -39,8 +46,8 @@ export function PendingCommentsTray({ pending, onJump, onRemove }: Props) {
             <button
               type="button"
               className="pending-comments-remove"
-              aria-label="Remove"
-              title="Remove"
+              aria-label={c.doc ? 'Do not send' : 'Remove'}
+              title={c.doc ? 'Do not send it (it stays in the doc)' : 'Remove'}
               data-testid="pending-comment-remove"
               onClick={() => onRemove(c.id)}
             >

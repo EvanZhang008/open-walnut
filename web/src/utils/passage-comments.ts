@@ -11,11 +11,25 @@
  */
 import type { SessionPassageComment } from '@/types/session';
 import { buildPassagePrefill } from '@/components/sessions/diffPrefill';
+import { sidecarPathOf } from '@/utils/doc-comments';
 
 /** Still waiting for a send: neither sent nor taken out. */
 export const isPending = (c: SessionPassageComment): boolean => !c.sentAt && !c.removedAt;
-/** Shown as a mark on its words. */
-export const isMarked = (c: SessionPassageComment): boolean => !c.removedAt && (!c.sentAt || !!c.comment.trim());
+/** Shown as a mark on its words in the transcript (a doc comment's mark is in its doc). */
+export const isMarked = (c: SessionPassageComment): boolean =>
+  !c.doc && !c.removedAt && (!c.sentAt || !!c.comment.trim());
+
+/** Said once after the doc comments of a message: where the AI answers them. */
+export const DOC_COMMENTS_HOW = 'Each doc comment\'s thread is in the `.comments.md` file named with it: reply there under '
+  + 'its `## c-…` heading as a list item `- **AI** · <ISO time> · <your words>` (later lines indented two spaces), and '
+  + 'once the doc is changed so the comment is settled, write `resolved · AI · <ISO time>` in place of `open` in that heading.\n\n';
+
+function docHead(c: SessionPassageComment): string {
+  const d = c.doc!;
+  const where = `\`${d.path}\`${d.host ? ` on ${d.host}` : ''}`;
+  const what = d.reply ? `My reply in comment ${d.commentId}` : `Comment ${d.commentId}`;
+  return `${what} on ${where} (thread in \`${sidecarPathOf(d.path)}\`):\n`;
+}
 
 /** The server's caps (session-lifecycle.ts): past them a passage keeps the text path. */
 export const MAX_COMMENTS = 100;
@@ -26,12 +40,17 @@ const TOMBSTONE_MS = 24 * 3600_000;
 
 /**
  * The message the model receives: every pending item in the order it was added,
- * each as its quote with the comment under it, then what the user typed. Nothing
- * pending = the typed words untouched.
+ * each as its quote with the comment under it (the transcript's first, then the
+ * doc ones, each headed by its doc and comment id, then once how to answer them
+ * in their sidecar), then what the user typed. Nothing pending = the typed words
+ * untouched.
  */
 export function composeWithComments(pending: readonly SessionPassageComment[], typed: string): string {
   if (pending.length === 0) return typed;
-  const head = pending.map((c) => buildPassagePrefill(c.text, c.comment)).join('');
+  const chat = pending.filter((c) => !c.doc).map((c) => buildPassagePrefill(c.text, c.comment)).join('');
+  const docs = pending.filter((c) => c.doc);
+  const doc = docs.length ? `${docs.map((c) => docHead(c) + buildPassagePrefill(c.text, c.comment)).join('')}${DOC_COMMENTS_HOW}` : '';
+  const head = chat + doc;
   const tail = typed.trim();
   return tail ? `${head}${tail}` : head.replace(/\s+$/, '');
 }
@@ -44,7 +63,8 @@ export function composeWithComments(pending: readonly SessionPassageComment[], t
 export function markSent(list: readonly SessionPassageComment[], ids: ReadonlySet<string>, at: string): SessionPassageComment[] {
   return list.map((c) => {
     if (!ids.has(c.id) || c.sentAt || c.removedAt) return c;
-    return c.comment.trim() ? { ...c, sentAt: at } : { ...c, sentAt: at, removedAt: at };
+    // A doc comment's mark stays in its doc; here it was only the way to the model.
+    return c.comment.trim() && !c.doc ? { ...c, sentAt: at } : { ...c, sentAt: at, removedAt: at };
   });
 }
 

@@ -65,10 +65,12 @@ interface FileMarkdownEditorProps {
   onAskSelection?: (text: string) => void;
   /** `Ask here` on the bubble menu: a question answered beside the passage. */
   onAskHere?: (range: Range) => void;
+  /** `Comment`: a doc comment on the selection (its range and its text). */
+  onComment?: (range: Range, text: string) => void;
 }
 
 export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdownEditorProps>(
-  function FileMarkdownEditor({ initialValue, baseValue, path, host, imageVersion, onDirtyChange, onDocChange, onSave, onAskSelection, onAskHere }, ref) {
+  function FileMarkdownEditor({ initialValue, baseValue, path, host, imageVersion, onDirtyChange, onDocChange, onSave, onAskSelection, onAskHere, onComment }, ref) {
     // Mount-scoped split: the parent remounts (key) to reseed, mirroring
     // FileSourceEditor. The frontmatter half never enters the editor.
     const seedRef = useRef(splitFrontmatter(initialValue));
@@ -201,6 +203,7 @@ export const FileMarkdownEditor = forwardRef<FileSourceEditorHandle, FileMarkdow
           enableBlockTools
           onAskSelection={onAskSelection}
           onAskHere={onAskHere}
+          onComment={onComment}
           imageBaseDir={imageBaseDir}
           imageHost={host}
           imageVersion={imageVersion}

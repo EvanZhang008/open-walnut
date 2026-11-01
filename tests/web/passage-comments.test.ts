@@ -5,7 +5,8 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  composeWithComments, countLabel, fitsAsComment, isPending, markRemoved, markSent, MAX_COMMENTS, mergeComments, pruneComments, snippetOf,
+  composeWithComments, countLabel, DOC_COMMENTS_HOW, fitsAsComment, isMarked, isPending, markRemoved, markSent, MAX_COMMENTS,
+  mergeComments, pruneComments, snippetOf,
 } from '@/utils/passage-comments';
 import type { SessionPassageComment } from '@/types/session';
 
@@ -52,6 +53,39 @@ describe('composeWithComments', () => {
 
   it('sends the comments alone when nothing was typed, with no trailing blank lines', () => {
     expect(composeWithComments([item('a', 'One line.', 'A note.')], '   ')).toBe('> One line.\n\nA note.');
+  });
+});
+
+describe('doc comments on the way to the model', () => {
+  const doc = (id: string, text: string, comment: string, reply = false) => item(id, text, comment, {
+    msgId: `doc:c-${id}`, role: 'user', doc: { path: '/notes/design.md', commentId: `c-${id}`, ...(reply ? { reply } : {}) },
+  });
+
+  it('puts the transcript ones first, then each doc one under its doc and id, then once how to answer, then the typed words', () => {
+    const message = composeWithComments([doc('1', 'The cache is rebuilt.', 'Still true?'), item('a', 'Quoted.'), doc('2', 'Step two.', 'Done now', true)], 'Go.');
+    expect(message).toBe([
+      '> Quoted.',
+      '',
+      'Comment c-1 on `/notes/design.md` (thread in `/notes/design.md.comments.md`):',
+      '> The cache is rebuilt.',
+      '',
+      'Still true?',
+      '',
+      'My reply in comment c-2 on `/notes/design.md` (thread in `/notes/design.md.comments.md`):',
+      '> Step two.',
+      '',
+      'Done now',
+      '',
+      DOC_COMMENTS_HOW.trimEnd(),
+      '',
+      'Go.',
+    ].join('\n'));
+  });
+
+  it('a sent doc comment leaves the tray and paints no transcript mark', () => {
+    const list = [doc('1', 'The cache is rebuilt.', 'Still true?')];
+    expect(isMarked(list[0]!)).toBe(false);
+    expect(markSent(list, new Set(['1']), T1)[0]).toMatchObject({ sentAt: T1, removedAt: T1 });
   });
 });
 

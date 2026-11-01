@@ -1,0 +1,218 @@
+/* Comments on a document (DocCommentsLayer): the paint on the commented words,
+   the column of cards on the right, the chip that lists them all. */
+
+::highlight(walnut-doc-comment) {
+  background-color: hsl(38 95% 55% / 0.22);
+  text-decoration: underline 2px hsl(28 90% 48% / 0.85);
+  text-underline-offset: 3px;
+}
+::highlight(walnut-doc-comment-current) {
+  background-color: hsl(38 95% 52% / 0.42);
+  text-decoration: underline 2px hsl(24 92% 44%);
+  text-underline-offset: 3px;
+}
+
+/* A wide view keeps the column's room beside the text: padding, so the doc's
+   scroller (and its scrollbar) still spans the whole view. */
+.file-content-view.fv-doc-comments-wide > .fv-wysiwyg-editor,
+.file-content-view.fv-doc-comments-wide > .fv-md-preview,
+.file-content-view.fv-doc-comments-wide > .file-viewer-code,
+.file-content-view.fv-doc-comments-wide > .fv-source-editor {
+  padding-right: 296px;
+}
+.file-content-view:has(> .fv-doc-comments) {
+  position: relative;
+}
+
+.fv-doc-comments {
+  position: absolute;
+  inset: 0;
+  /* Over the questions layer's inline Ask (7); its own cards open from an Ask. */
+  z-index: 8;
+  pointer-events: none;
+  overflow: hidden;
+  --dc-top: 4px;
+}
+.fv-doc-comments > * {
+  pointer-events: auto;
+}
+
+.doc-comments-chip {
+  position: absolute;
+  top: var(--dc-top);
+  right: 12px;
+  z-index: 3;
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+.doc-comments-chip:hover { background: var(--bg-secondary); }
+.doc-comments-chip-sub { color: var(--fg-muted); }
+.doc-comments-chip-sub.is-outdated { color: hsl(28 80% 42%); }
+
+.doc-comments-error {
+  position: absolute;
+  top: calc(var(--dc-top) + 28px);
+  right: 12px;
+  z-index: 3;
+  max-width: 260px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--danger, #c0392b);
+  font-size: 12px;
+}
+
+.doc-comments-list {
+  position: absolute;
+  top: calc(var(--dc-top) + 28px);
+  right: 12px;
+  z-index: 4;
+  width: 300px;
+  max-height: calc(100% - var(--dc-top) - 40px);
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 0.16);
+}
+.doc-comments-list-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.doc-comments-list-row:last-child { border-bottom: 0; }
+.doc-comments-list-open {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.doc-comments-list-open:disabled { cursor: default; }
+.doc-comments-list-where,
+.doc-comments-list-text,
+.doc-comments-list-state {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.doc-comments-list-where { color: var(--fg-muted); }
+.doc-comments-list-state { color: var(--fg-muted); font-size: 11px; }
+.doc-comments-list-row.is-resolved .doc-comments-list-text { color: var(--fg-muted); }
+.doc-comments-list-row.is-outdated .doc-comments-list-state { color: hsl(28 80% 42%); }
+
+.doc-comments-column {
+  position: absolute;
+  top: var(--dc-top);
+  right: 8px;
+  bottom: 0;
+  width: 268px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.doc-comment-slot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  visibility: hidden;
+  pointer-events: auto;
+}
+
+.doc-comment-card {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.45;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.08);
+  cursor: pointer;
+}
+.doc-comment-card.is-current {
+  border-color: hsl(28 85% 52%);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.14);
+  cursor: default;
+}
+.doc-comment-card.is-resolved { opacity: 0.8; }
+.doc-comment-state {
+  margin-bottom: 4px;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+.doc-comment-state.is-outdated { color: hsl(28 80% 42%); }
+.doc-comment-post + .doc-comment-post {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.doc-comment-post-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.doc-comment-author { font-weight: 600; font-size: 12px; }
+.doc-comment-post.is-ai .doc-comment-author { color: hsl(210 70% 45%); }
+.doc-comment-time { color: var(--fg-muted); font-size: 11px; }
+.doc-comment-post-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.doc-comment-card:not(.is-current) .doc-comment-post-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.doc-comment-more,
+.doc-comment-queued {
+  margin-top: 4px;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+.doc-comment-queued { color: hsl(28 80% 40%); }
+.doc-comment-actions { margin-top: 8px; }
+.doc-comment-answer { margin-top: 2px; }
+.doc-comment-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.doc-comment-btn {
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+.doc-comment-btn:disabled { opacity: 0.5; cursor: default; }
+.doc-comment-btn.is-primary {
+  border-color: hsl(28 85% 48%);
+  background: hsl(28 85% 48%);
+  color: #fff;
+}
+.doc-comment-btn.is-quiet {
+  margin-left: auto;
+  border-color: transparent;
+  background: none;
+  color: var(--fg-muted);
+}

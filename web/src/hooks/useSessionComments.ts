@@ -49,7 +49,7 @@ export function useSessionComments(
   const listRef = useRef<SessionPassageComment[]>(serverList ?? []);
   const [sending, setSending] = useState<ReadonlySet<string>>(new Set());
   const sendingRef = useRef<Set<string>>(new Set());
-  const [jump, setJump] = useState<{ id: string; seq: number } | null>(null);
+  const [jump, setJump] = useState<{ id: string; seq: number; at: number } | null>(null);
   // One write at a time; `dirty` = local changes the record does not have yet.
   const writing = useRef(false);
   const dirty = useRef(false);
@@ -126,13 +126,14 @@ export function useSessionComments(
     flushRef.current();
   }, [serverList, loaded, adopt]);
 
-  const add = useCallback<SessionCommentsApi['add']>(({ msgId, role, quote, text, comment }) => {
+  const add = useCallback<SessionCommentsApi['add']>(({ msgId, role, quote, text, comment, doc }) => {
     if (!msgId || !quote.exact.trim() || !text.trim()) return;
     const entry: SessionPassageComment = {
       id: newId(), msgId, role, quote, text, comment: comment.trim(), createdAt: new Date().toISOString(),
+      ...(doc ? { doc } : {}),
     };
     log.info('session', entry.comment ? 'passage comment added' : 'passage quote added', {
-      sessionId, msgId, id: entry.id, chars: text.length, commentChars: entry.comment.length,
+      sessionId, msgId, id: entry.id, chars: text.length, commentChars: entry.comment.length, docPath: doc?.path ?? null,
     });
     persist([...listRef.current, entry]);
   }, [persist, sessionId]);
@@ -159,7 +160,7 @@ export function useSessionComments(
   }, [persist]);
 
   const requestJump = useCallback((id: string) => {
-    setJump((prev) => ({ id, seq: (prev?.seq ?? 0) + 1 }));
+    setJump((prev) => ({ id, seq: (prev?.seq ?? 0) + 1, at: Date.now() }));
   }, []);
 
   const pending = useMemo(() => comments.filter((c) => isPending(c) && !sending.has(c.id)), [comments, sending]);

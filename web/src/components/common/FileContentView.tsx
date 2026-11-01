@@ -37,6 +37,9 @@ import {
   fileDocKey, noteDocKey, subscribeDocSaved, wasSavedHere, type DocSavedSignal,
 } from '@/stores/file-save-signal';
 import { useEvent } from '@/hooks/useWebSocket';
+import { useSessionCommentsApi } from '@/contexts/SessionCommentsContext';
+import { DocCommentsLayer, type DocCommentsHandle } from '@/components/common/DocCommentsLayer';
+import { isSidecarPath } from '@/utils/doc-comments';
 import { rawKind, isPlayable, isMarkdownExt } from '@/utils/file-kind';
 import { formatSize } from '@/utils/format';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
@@ -1277,6 +1280,9 @@ export function FileContentView({
   //  - the WYSIWYG editor → the bubble menu's "Ask" button (commits directly);
   //  - the HTML preview iframe → mouseup inside its own document (below).
   const [selection, setSelection] = useState<{ x: number; y: number; text: string; line?: number; inHtml?: boolean } | null>(null);
+  // The selection as the pill rose for it (its Comment): by the pill's click the
+  // editor may have dropped the DOM selection (CodeMirror does), so it is kept from then.
+  const pillRangeRef = useRef<Range | null>(null);
 
   // The anchor is the POINTER at release: the pill hugs the cursor (below the
   // selection after a downward drag, above after an upward one) — the side is
@@ -1307,6 +1313,7 @@ export function FileContentView({
       node = node.parentNode;
     }
 
+    pillRangeRef.current = range.cloneRange();
     setSelection({ x: e.clientX, y: e.clientY, text, line });
   }, [onSelectCode]);
 
@@ -1349,6 +1356,32 @@ export function FileContentView({
   const askHereFromBubble = useCallback((range: Range) => {
     threadLayerRef.current?.askSelection({ inFrame: false, range });
   }, []);
+
+  // "Comment": a Google Docs style comment kept in the doc's sidecar file, its card
+  // in a column beside the doc (DocCommentsLayer); it also waits above the
+  // composer for the next message. Not in the HTML preview (an iframe) or a sidecar.
+  const commentsApi = useSessionCommentsApi();
+  const canDocComment = commentsApi.canComment && !!sessionId && !isSidecarPath(filePath)
+    && threadSurface !== 'html' && threadSurface !== 'none';
+  const docCommentsRef = useRef<DocCommentsHandle>(null);
+  // The comment column wants its room beside the text (a wide view with comments in it).
+  const [docCommentsRoom, setDocCommentsRoom] = useState(false);
+  const commentFromBubble = useCallback((range: Range, text: string) => {
+    docCommentsRef.current?.commentOn({ range, text });
+  }, []);
+  const keepPillRange = useCallback(() => {
+    const sel = window.getSelection();
+    pillRangeRef.current = sel && !sel.isCollapsed && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+  }, []);
+  const onSourceSelect = useCallback((sel: Parameters<typeof setSelection>[0]) => {
+    if (sel) keepPillRange();
+    setSelection(sel);
+  }, [keepPillRange]);
+  const commentFromSelection = useCallback(() => {
+    const range = pillRangeRef.current;
+    docCommentsRef.current?.commentOn({ ...(range ? { range } : {}), ...(selection?.text ? { text: selection.text } : {}) });
+    setSelection(null);
+  }, [selection]);
 
   // HTML preview: the rendered page lives in a same-origin IFRAME, so the
   // outer mouseup handler never sees selections made inside it. Listen inside
@@ -2099,7 +2132,7 @@ export function FileContentView({
 
   return (
     <div
-      className={`file-content-view${fullscreen ? ' fv-fullscreen' : ''}`}
+      className={`file-content-view${fullscreen ? ' fv-fullscreen' : ''}${docCommentsRoom && canDocComment ? ' fv-doc-comments-wide' : ''}`}
       ref={contentRef}
       // Quote-to-ask for the READ-ONLY views (md preview of MDX, truncated
       // <pre>): DOM selection → pill. The editors report selections through
@@ -2429,6 +2462,7 @@ export function FileContentView({
             onSave={() => { void handleSave(); }}
             onAskSelection={onSelectCode ? handleAskSelection : undefined}
             onAskHere={canAskHere ? askHereFromBubble : undefined}
+            onComment={canDocComment ? commentFromBubble : undefined}
           />
         ) : (
           <FileSourceEditor
@@ -2443,7 +2477,7 @@ export function FileContentView({
             initialLine={line}
             initialEndLine={lineEnd}
             initialFlashTerm={lineTerm}
-            onSelectText={onSelectCode ? setSelection : undefined}
+            onSelectText={onSelectCode ? onSourceSelect : undefined}
             onSymbolClick={onSymbolLookup ? handleCmSymbolClick : undefined}
           />
         )
@@ -2491,11 +2525,24 @@ export function FileContentView({
           surfaceNonce={`${filePath}:${baseHash ?? ''}:${seedNonce}:${reloadToken}:${threadSurface}:${data.content?.length ?? 0}`}
         />
       )}
+      {canDocComment && !loading && data && !data.error && !data.binary && !raw && (
+        <DocCommentsLayer
+          ref={docCommentsRef}
+          filePath={filePath}
+          host={host}
+          sessionId={sessionId!}
+          rootRef={contentRef}
+          surfaceNonce={`${filePath}:${baseHash ?? ''}:${seedNonce}:${reloadToken}:${threadSurface}:${data.content?.length ?? 0}`}
+          virtualized={threadSurface === 'source'}
+          onRoom={setDocCommentsRoom}
+        />
+      )}
       {selection && (
         <SelectionAskPill
           anchor={selection}
           onCommit={commitSelection}
           onAskHere={canAskHere ? askHereFromSelection : undefined}
+          onComment={canDocComment && !selection.inHtml ? commentFromSelection : undefined}
           onDismiss={() => setSelection(null)}
           resolveRect={resolveSelectionRect}
           listenTo={selection.inHtml ? htmlFrameRef.current?.contentDocument : undefined}

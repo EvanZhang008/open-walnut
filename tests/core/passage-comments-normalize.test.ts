@@ -42,8 +42,23 @@ describe('normalizePassageComments', () => {
     [[entry({ removedAt: 'x'.repeat(41) })], /passage_comments\[\]\.removedAt/],
     [[entry({ text: 'x'.repeat(4001) })], /passage_comments\[\]\.text/],
     [[entry({ quote: { exact: 'x'.repeat(2001) } })], /passage_comments\[\]\.quote\.exact/],
+    [[entry({ doc: 'design.md' })], /passage_comments\[\]\.doc must be an object/],
+    [[entry({ doc: { path: 'design.md', commentId: 'c-1' } })], /doc\.path must be an absolute path/],
+    [[entry({ doc: { path: '/d.md', commentId: '' } })], /doc\.commentId/],
+    [[entry({ doc: { path: '/d.md', commentId: 'c-1', host: 3 } })], /doc\.host/],
   ])('refuses %j', (value, message) => {
     expect(() => normalizePassageComments(value)).toThrow(message);
+  });
+
+  it('keeps a doc pointer, dropping an empty host and a reply flag that is not true', () => {
+    const out = normalizePassageComments([
+      entry({ doc: { path: '/notes/d.md', commentId: 'c-0a1b2c3d', host: '', reply: 'yes', extra: 1 } }),
+      entry({ id: 'c-2', doc: { path: '/notes/d.md', commentId: 'c-0a1b2c3d', host: 'devbox', reply: true } }),
+    ]);
+    expect(out.map((c) => c.doc)).toEqual([
+      { path: '/notes/d.md', commentId: 'c-0a1b2c3d' },
+      { path: '/notes/d.md', commentId: 'c-0a1b2c3d', host: 'devbox', reply: true },
+    ]);
   });
 
   it('caps the list', () => {

@@ -2606,6 +2606,21 @@ export interface SessionPassageComment {
   /** Taken out (by the user, or a plain Quote once sent). Kept as a mark of its own
    *  for a day so a stale copy of the list cannot bring it back. */
   removedAt?: string;
+  /** Set when it is about a passage of a document, not of this transcript: the
+   *  comment itself lives in the document's sidecar file (`<name>.comments.md`),
+   *  and this entry only carries it to the model with the next message. */
+  doc?: SessionPassageCommentDoc;
+}
+
+export interface SessionPassageCommentDoc {
+  /** The document's absolute path. */
+  path: string;
+  /** The host it is on; absent = this machine. */
+  host?: string;
+  /** The comment's id in the sidecar (`c-…`). */
+  commentId: string;
+  /** A reply of the user's in that comment's thread, not the comment itself. */
+  reply?: boolean;
 }
 
 /**

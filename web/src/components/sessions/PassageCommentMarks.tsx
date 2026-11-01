@@ -48,8 +48,9 @@ function timeOf(iso: string): string {
 
 export function PassageCommentMarks({ containerRef, comments, panelKey, renderNonce, onRemove, resetKey }: Props) {
   // A plain Quote leaves no mark once sent; a comment does.
-  const pending = useMemo(() => comments.filter((c) => !c.sentAt && !c.removedAt), [comments]);
-  const sent = useMemo(() => comments.filter((c) => c.sentAt && !c.removedAt && c.comment.trim()), [comments]);
+  // A doc comment's words are in its doc (DocCommentsLayer), not in this transcript.
+  const pending = useMemo(() => comments.filter((c) => !c.doc && !c.sentAt && !c.removedAt), [comments]);
+  const sent = useMemo(() => comments.filter((c) => !c.doc && c.sentAt && !c.removedAt && c.comment.trim()), [comments]);
   const byId = useMemo(() => new Map(comments.map((c) => [c.id, c])), [comments]);
 
   const [tick, setTick] = useState(0);

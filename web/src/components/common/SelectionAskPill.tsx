@@ -47,6 +47,8 @@ interface SelectionAskPillProps {
   /** `Ask here`: the selection becomes a question whose card opens beside it
    *  (the Files tab). With it the pill has two actions; without, one. */
   onAskHere?: () => void;
+  /** `Comment`: a comment kept beside the doc (the Files tab, DocCommentsLayer). */
+  onComment?: () => void;
   /** Called when the tracked selection disappears (pill should unmount). */
   onDismiss: () => void;
   /**
@@ -65,7 +67,7 @@ interface SelectionAskPillProps {
 
 const GAP = 8;
 
-export function SelectionAskPill({ anchor, onCommit, onAskHere, onDismiss, resolveRect, listenTo }: SelectionAskPillProps) {
+export function SelectionAskPill({ anchor, onCommit, onAskHere, onComment, onDismiss, resolveRect, listenTo }: SelectionAskPillProps) {
   const btnRef = useRef<HTMLElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number; below: boolean } | null>(null);
 
@@ -146,6 +148,7 @@ export function SelectionAskPill({ anchor, onCommit, onAskHere, onDismiss, resol
         {...keepSelection}
         data-testid="file-ask-pill"
       >
+        {onComment && <button type="button" onClick={onComment} data-testid="file-comment" title="Comment on this passage, beside the doc">Comment</button>}
         <button type="button" onClick={onAskHere} data-testid="file-ask-here" title="A question about this passage, answered beside it">Ask here</button>
         <button type="button" onClick={onCommit} data-testid="file-ask-quote" title="Quote this passage in the chat">Quote in chat</button>
       </div>,

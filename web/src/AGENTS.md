@@ -588,6 +588,27 @@ show inline after the open ones, other completed hits that show the query fold i
   (Conversation Mode), so the question keeps its own draft. Only a
   timeline with a composer passes `onQuoteInChat`. Ratchet:
   `tests/e2e/browser/session-quote-in-chat.spec.ts`.
+  **A document gets Google Docs style comments** (2026-11-01, the user: "I comment in it, the AI
+  replies in it and resolves it, shown beside it"). `Comment` in the WYSIWYG bubble menu and in
+  `SelectionAskPill` (the Files tab inside a session; not the HTML preview, not a sidecar) opens a
+  draft card in `DocCommentsLayer` (`components/common/`). The comments live in a SIDECAR beside
+  the doc under its whole name, `design.md.comments.md` (`utils/doc-comments.ts`: one `## c-<8 hex> · open|resolved · who ·
+  when` section each, an anchor comment, the passage as a `>` quote, the thread as `- **You** /
+  **AI** · <iso> · words` items; parsed leniently, unknown lines kept), so the AI replies and
+  resolves with its own Edit tool; a file of that name that is not a comments file is never written over. `stores/doc-comments-store.ts` keeps it per sidecar for the page (an edit is written even after the doc closes; a read older than a write is dropped), `useDocComments` reads it conditionally (after the session's
+  write tools settle, on focus, every 12 s while on show) and writes the viewer's EDITS (functions
+  of the list on disk) under the file's hash lock; a 409 re-reads and replays them, so the AI's
+  words written meanwhile are never lost. Each new comment or reply of the user's is also a
+  `passage_comments` entry with `doc {path, host, commentId, reply}`: a row above the composer
+  (a click opens the doc on that card), sent with the next message headed by its doc, id and
+  sidecar plus once how to answer there (`DOC_COMMENTS_HOW`), then taken out; it paints no
+  transcript mark. The layer paints `walnut-doc-comment` (the current one
+  `walnut-doc-comment-current`) and puts open cards in a right column level with their words
+  (a view of 700px or more takes the column's room with padding; a narrower one shows only the
+  current card, under its words); the chip lists every comment with resolved and "changed"
+  (words gone) ones. CodeMirror draws only lines near the screen, so the source view never calls
+  an undrawn passage changed. Positions are plain `top` (no transition: a measured box must be
+  the final one). Ratchet: `tests/e2e/browser/session-doc-comments.spec.ts` (long runbook fixture).
   **A passage of a FILE in the Files tab is asked about the same way (2026-10-01).** The anchor's
   parent is `file:<absolute path>` (`FILE_PARENT_PREFIX`, `fileParentOf` / `fileOfParent` in
   `utils/thread-tree.ts`; the server takes a `file:` parent up to 1024 chars and an optional

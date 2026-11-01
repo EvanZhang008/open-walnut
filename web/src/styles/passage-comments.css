@@ -123,6 +123,18 @@
   cursor: pointer;
   font-size: 13px;
 }
+.pending-comments-doc {
+  flex: 0 0 auto;
+  max-width: 30%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-size: 11px;
+}
 .pending-comments-where {
   flex: 0 1 auto;
   max-width: 45%;

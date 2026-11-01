@@ -1989,6 +1989,24 @@ pre.codeblk{background:#16181d;color:#c9d1d9;padding:12px 0;white-space:pre}pre 
 ${handbookSections}
 </main></body></html>
 `)
+// A LONG markdown runbook (session-doc-comments.spec.ts): 36 sections of prose,
+// lists, tables and code, about 5,000 words, so the comments column is tested on a
+// doc that scrolls a long way, with passages near the top, the middle and the end.
+const runbookTopics = ['flush', 'compaction', 'snapshot', 'reader', 'ledger', 'index', 'batch', 'checksum', 'warm-up']
+const runbookSections = Array.from({ length: 36 }, (_, i) => {
+  const t = runbookTopics[i % runbookTopics.length]
+  const para = (k: number) => `Step ${i + 1}.${k} of the ${t} procedure keeps the cache consistent while it runs. `
+    + `The operator first checks the ${t} dashboard, then confirms that no other ${t} is in progress on the same shard, `
+    + `and only then starts the next stage. Each stage writes one line to the run log with its start and end time, `
+    + `so a stage that stopped halfway is easy to find and to restart from the same point.`
+  const special = i === 2 ? '\n\nThe warm-up reads the newest snapshot before it opens the port.'
+    : i === 17 ? '\n\nA compaction never starts while the ledger is being copied.'
+    : i === 33 ? '\n\nThe final check compares the row count with the snapshot header.' : ''
+  const table = i % 4 === 1 ? `\n\n| Stage | Limit | Owner |\n| --- | --- | --- |\n| ${t} start | ${10 + i} min | on call |\n| ${t} verify | ${5 + i} min | on call |` : ''
+  const code = i % 5 === 3 ? `\n\n\`\`\`sh\nrunbook ${t} --shard ${i} --dry-run\nrunbook ${t} --shard ${i}\n\`\`\`` : ''
+  return `## ${i + 1}. ${t[0].toUpperCase()}${t.slice(1)} stage ${i + 1}\n\n${para(1)}${special}\n\n${para(2)}\n\n- Check the ${t} queue depth.\n- Pause the writers on shard ${i}.\n- Resume them after the stage ends.${table}${code}`
+}).join('\n\n')
+await fs.writeFile(path.join(vscodeFixtureRoot, 'cache-runbook.md'), `# Cache runbook\n\nThis runbook lists every stage an operator runs on the cache, in order.\n\n${runbookSections}\n`)
 // In-file search + reference-lookup fixtures (file-search-and-references.spec.ts):
 // a definition in one file, calls in another, so cmd+click has something to find.
 await fs.writeFile(

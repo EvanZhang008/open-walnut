@@ -1866,7 +1866,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     if (!commentJump || commentJump.seq === commentJumpLanded.current) return;
     commentJumpLanded.current = commentJump.seq;
     const c = commentsApi.comments.find((x) => x.id === commentJump.id);
-    if (c) jumpToPlace(c.msgId, c.quote, 'comment-tray');
+    if (c && !c.doc) jumpToPlace(c.msgId, c.quote, 'comment-tray'); // a doc's row opens its doc (DocCommentsLayer)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per request
   }, [commentJump?.seq]);
 

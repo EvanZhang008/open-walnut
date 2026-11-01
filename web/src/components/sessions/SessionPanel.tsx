@@ -1058,13 +1058,21 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // to the main conversation as above, since that is the composer that sends it;
   // the timeline stays where the user is reading.
   const addPassageComment = commentsStore.add;
+  // A doc comment's row opens its doc (the Files tab); set once handleFileOpen exists below.
+  const openDocRef = useRef<(path: string) => void>(() => {});
   const commentsApi = useMemo<SessionCommentsApi>(() => ({
     comments: commentsStore.comments,
     remove: commentsStore.remove,
-    requestJump: commentsStore.requestJump,
+    requestJump: (id) => {
+      const c = commentsStore.comments.find((x) => x.id === id);
+      if (c?.doc) openDocRef.current(c.doc.path);
+      commentsStore.requestJump(id);
+    },
     jump: commentsStore.jump,
     canComment: commentsStore.canComment,
     add: (input) => {
+      // A doc comment is written beside its passage: the reader stays in the doc.
+      if (input.doc) { addPassageComment(input); return; }
       const t = threadsForInsert.current;
       if (t.draftKey !== sessionDraftKey(sessionId)) {
         if (t.api.viewMode === 'linear') t.api.clearQuote('quote-in-chat', { keepDraft: true });
@@ -1253,6 +1261,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     setActiveView('files');
     enterFullscreen();
   }, [enterFullscreen, inset, session?.host]);
+  openDocRef.current = (path) => handleFileOpen(path);
 
   // A host:port service the session started (a dev server, a report page) opens
   // in the Web split view instead of a browser tab: remote ports come through an

@@ -398,6 +398,32 @@ const MAX_ISO_CHARS = 40;
  * entry is a 400 for the whole patch, never a silent drop, and an entry is
  * addressed by its `id`, so a repeated id keeps the first copy.
  */
+const MAX_DOC_PATH_CHARS = 4096;
+const MAX_DOC_HOST_CHARS = 200;
+
+/** A doc comment's pointer to its document (absent = a comment on the transcript). */
+function normalizeCommentDoc(value: unknown): import('../types.js').SessionPassageCommentDoc | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new SessionControlError('passage_comments[].doc must be an object', 400);
+  }
+  const d = value as Record<string, unknown>;
+  if (typeof d.path !== 'string' || !d.path.startsWith('/') || d.path.length > MAX_DOC_PATH_CHARS) {
+    throw new SessionControlError('passage_comments[].doc.path must be an absolute path', 400);
+  }
+  if (typeof d.commentId !== 'string' || !d.commentId.trim() || d.commentId.length > MAX_PIN_ENTRY_ID_CHARS) {
+    throw new SessionControlError('passage_comments[].doc.commentId must be a non-empty string', 400);
+  }
+  if (d.host !== undefined && (typeof d.host !== 'string' || d.host.length > MAX_DOC_HOST_CHARS)) {
+    throw new SessionControlError('passage_comments[].doc.host must be a string', 400);
+  }
+  return {
+    path: d.path, commentId: d.commentId,
+    ...(typeof d.host === 'string' && d.host ? { host: d.host } : {}),
+    ...(d.reply === true ? { reply: true } : {}),
+  };
+}
+
 export function normalizePassageComments(value: unknown): import('../types.js').SessionPassageComment[] {
   if (!Array.isArray(value)) {
     throw new SessionControlError('passage_comments must be an array', 400);
@@ -451,9 +477,11 @@ export function normalizePassageComments(value: unknown): import('../types.js').
     const updatedAt = iso(entry.updatedAt, 'updatedAt');
     const sentAt = iso(entry.sentAt, 'sentAt');
     const removedAt = iso(entry.removedAt, 'removedAt');
+    const doc = normalizeCommentDoc(entry.doc);
     out.push({
       id, msgId, role, quote, text, comment, createdAt,
       ...(updatedAt ? { updatedAt } : {}), ...(sentAt ? { sentAt } : {}), ...(removedAt ? { removedAt } : {}),
+      ...(doc ? { doc } : {}),
     });
   }
   return out;

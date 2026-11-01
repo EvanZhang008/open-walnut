@@ -95,6 +95,16 @@ export interface SessionPassageComment {
   sentAt?: string;
   /** Taken out; kept a day as a tombstone so a stale copy cannot bring it back. */
   removedAt?: string;
+  /** About a passage of a document: the comment lives in its sidecar file. */
+  doc?: SessionPassageCommentDoc;
+}
+
+/** Mirrors SessionPassageCommentDoc in src/core/types.ts. */
+export interface SessionPassageCommentDoc {
+  path: string;
+  host?: string;
+  commentId: string;
+  reply?: boolean;
 }
 
 /** One pin. Mirrors SessionPinnedMessage in src/core/types.ts. */

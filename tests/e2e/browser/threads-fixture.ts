@@ -35,6 +35,8 @@ export const AI_SESSION = 'pw-threads-ai-session';
 /** The AI session's twin for the passage comment spec, which writes the record's
  *  comments while other specs reset AI_SESSION's in parallel. */
 export const COMMENTS_SESSION = 'pw-threads-ai-comments-session';
+/** Its own copy for the doc comments (session-doc-comments.spec.ts), which writes its composer's list. */
+export const DOC_COMMENTS_SESSION = 'pw-threads-doc-comments-session';
 export const FAILED_SESSION = 'pw-threads-failed-session';
 export const REWRITTEN_SESSION = 'pw-threads-rewritten-session';
 /** Sends, and its mock CLI turns are written into its transcript (the only
@@ -270,6 +272,14 @@ export function buildCommentsSession(): ThreadsFixtureSession {
   return {
     ...ai, sessionId: COMMENTS_SESSION, taskId: 'pw-task-threads-comments', title: 'Threads comments fixture session',
     rows: ai.rows.map((r) => ({ ...r, uuid: r.uuid.replace(/^0199f2/, '0199fc') })),
+  };
+}
+
+export function buildDocCommentsSession(): ThreadsFixtureSession {
+  const ai = buildAiSession();
+  return {
+    ...ai, sessionId: DOC_COMMENTS_SESSION, taskId: 'pw-task-threads-doc-comments', title: 'Threads doc comments fixture session',
+    rows: ai.rows.map((r) => ({ ...r, uuid: r.uuid.replace(/^0199f2/, '0199fd') })),
   };
 }
 
@@ -671,7 +681,7 @@ export function buildMergedSession(): ThreadsFixtureSession & { ids: Record<stri
 
 export function allThreadsFixtures(nowMs: number): ThreadsFixtureSession[] {
   return [
-    buildDenseSession(nowMs), buildAiSession(), buildCommentsSession(), buildFailedSession(nowMs), buildRewrittenSession(nowMs), buildReloadSession(),
+    buildDenseSession(nowMs), buildAiSession(), buildCommentsSession(), buildDocCommentsSession(), buildFailedSession(nowMs), buildRewrittenSession(nowMs), buildReloadSession(),
     buildMapSession(nowMs), buildPinsOnlySession(nowMs), buildTaggedSession(nowMs), buildQueuedSession(), buildMergedSession(),
     buildReviewSession(nowMs), buildReviewOldSession(nowMs),
   ];

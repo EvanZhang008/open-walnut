@@ -28,9 +28,24 @@ interface NotesBubbleMenuProps {
    *  range comes from the editor's own state: the DOM selection is not to be
    *  trusted from a menu button (ProseMirror may have collapsed it already). */
   onAskHere?: (range: Range) => void;
+  /** `Comment`: a comment kept beside the doc (its range and its text), Google Docs style. */
+  onComment?: (range: Range, text: string) => void;
 }
 
-export function NotesBubbleMenu({ editor, onAsk, onAskHere }: NotesBubbleMenuProps) {
+/** The editor's selection as a DOM range (the DOM selection is not to be trusted
+ *  from a menu button: ProseMirror may have collapsed it already). */
+function selectionRange(editor: Editor): Range | null {
+  const { from, to } = editor.state.selection;
+  if (from === to) return null;
+  const start = editor.view.domAtPos(from);
+  const end = editor.view.domAtPos(to);
+  const range = editor.view.dom.ownerDocument.createRange();
+  range.setStart(start.node, start.offset);
+  range.setEnd(end.node, end.offset);
+  return range;
+}
+
+export function NotesBubbleMenu({ editor, onAsk, onAskHere, onComment }: NotesBubbleMenuProps) {
   const prompt = usePrompt();
   // Only show for a non-empty text selection that is NOT inside a table cell or
   // code block (those have their own editing model / no inline marks).
@@ -104,7 +119,24 @@ export function NotesBubbleMenu({ editor, onAsk, onAskHere }: NotesBubbleMenuPro
         title="Heading 3"
       >H3</button>
 
-      {(onAsk || onAskHere) && <span className="notes-bubble-sep" />}
+      {(onAsk || onAskHere || onComment) && <span className="notes-bubble-sep" />}
+      {onComment && (
+        <button
+          type="button"
+          className="notes-bubble-btn notes-bubble-ask"
+          data-testid="bubble-comment"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            const range = selectionRange(editor);
+            if (!range) return;
+            const { from, to } = editor.state.selection;
+            onComment(range, editor.state.doc.textBetween(from, to, '\n'));
+            // The comment's box takes the keyboard; the menu goes with the selection.
+            editor.commands.setTextSelection(to);
+          }}
+          title="Comment on this passage, beside the doc"
+        >Comment</button>
+      )}
       {onAskHere && (
         <button
           type="button"
@@ -112,13 +144,9 @@ export function NotesBubbleMenu({ editor, onAsk, onAskHere }: NotesBubbleMenuPro
           data-testid="bubble-ask-here"
           onMouseDown={(e) => {
             e.preventDefault();
-            const { from, to } = editor.state.selection;
-            if (from === to) return;
-            const start = editor.view.domAtPos(from);
-            const end = editor.view.domAtPos(to);
-            const range = editor.view.dom.ownerDocument.createRange();
-            range.setStart(start.node, start.offset);
-            range.setEnd(end.node, end.offset);
+            const range = selectionRange(editor);
+            if (!range) return;
+            const { to } = editor.state.selection;
             onAskHere(range);
             // The question's card takes the keyboard; the editor keeps the caret
             // at the end of the passage and the menu goes with the selection.
