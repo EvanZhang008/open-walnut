@@ -1,0 +1,87 @@
+/* The composer's references drawn as pills (ComposerRefLayer, composer-ref-pills.ts).
+
+   The layer sits behind the textarea and draws the same characters with the same font,
+   so a pill may change only paint, never width: background, colour and radius, no
+   padding, border, weight or font change. The `@[` (or `@`) under a pill's icon and
+   its closing `]` are drawn transparent and serve as its padding. */
+
+.chat-input-ref-layer {
+  position: absolute;
+  z-index: 0;
+  margin: 0;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--fg);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+/* Only while a pill is drawn: the textarea keeps its caret and selection, the layer
+   shows the text. */
+.chat-input-textarea.has-ref-pills {
+  position: relative;
+  z-index: 1;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--fg);
+}
+.chat-input-textarea.has-ref-pills::selection {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.composer-ref-pill {
+  --pill-fg: var(--accent);
+  border-radius: 4px;
+  background: var(--accent-subtle, rgba(0, 122, 255, 0.08));
+  color: var(--pill-fg);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.composer-ref-pill-open,
+.composer-ref-pill-close {
+  color: transparent;
+}
+.composer-ref-pill-open {
+  position: relative;
+}
+.composer-ref-pill-open::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0.8em;
+  height: 0.8em;
+  transform: translate(-50%, -50%);
+  background: var(--pill-fg);
+  -webkit-mask: var(--pill-icon) center / contain no-repeat;
+  mask: var(--pill-icon) center / contain no-repeat;
+}
+.composer-ref-pill-lead {
+  color: color-mix(in srgb, var(--pill-fg) 62%, var(--fg-muted, #888));
+}
+
+/* One rule per kind (tests/web/composer-ref-pills.test.ts checks every kind has one). */
+.composer-ref-pill[data-kind="task"] {
+  --pill-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='9'/><path d='m8 12.5 2.8 2.8L16.5 9.5'/></svg>");
+}
+.composer-ref-pill[data-kind="session"] {
+  --pill-fg: var(--session-ref);
+  --pill-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'><path d='M20 12a8 8 0 0 1-11.6 7.1L4 20l1-4.2A8 8 0 1 1 20 12z'/></svg>");
+  background: var(--session-ref-subtle);
+}
+.composer-ref-pill[data-kind="project"] {
+  --pill-fg: var(--fg);
+  --pill-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'><path d='M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z'/></svg>");
+  background: var(--bg-tertiary, var(--bg-secondary));
+}
+.composer-ref-pill[data-kind="source"] {
+  --pill-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'><path d='M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1'/><path d='M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1'/></svg>");
+}
+.composer-ref-pill[data-kind="source"][data-source="notes"] {
+  --pill-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'><path d='M6 3h9l4 4v14H6z'/><path d='M9 12h7M9 16h5'/></svg>");
+}
+.composer-ref-pill[data-kind="file"] {
+  --pill-icon: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'><path d='M14 3H6v18h12V7z'/><path d='M14 3v4h4'/></svg>");
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}

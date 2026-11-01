@@ -13,7 +13,8 @@
  * this file is the ratchet for it.
  */
 import { describe, it, expect } from 'vitest';
-import { composeRefs, cutSpan, inlineRefs, listInlineRefs, mirrorPieces, refToken, tokenAround, tokenEndingAt, tokenStartingAt } from '@/components/chat/composer-refs';
+import { composeRefs, cutSpan, inlineRefs, listInlineRefs, refToken } from '@/components/chat/composer-refs';
+import { composerSegments, pillAt } from '@/components/chat/composer-ref-pills';
 
 const TASK = '<task-ref id="t1" label="Fix the thing"/>';
 const TASK2 = '<task-ref id="t2" label="Other thing"/>';
@@ -154,7 +155,7 @@ describe('the ChatInput paths, expressed as the calls ChatInput makes', () => {
   it('Backspace right after a token removes the whole token', () => {
     const { body, table } = inlineRefs(`look at ${TASK} now`);
     const caret = 'look at @[Fix the thing]'.length;
-    expect(tokenEndingAt(body, caret, table)).toEqual({ start: 8, end: caret });
+    expect(pillAt(composerSegments(body, table), caret, 'before')).toMatchObject({ start: 8, end: caret });
     const cut = cutSpan(body, 8, caret);
     expect(cut.text).toBe('look at now');
     expect(cut.caret).toBe(8);
@@ -162,10 +163,11 @@ describe('the ChatInput paths, expressed as the calls ChatInput makes', () => {
 
   it('Backspace elsewhere, or after an unknown token, is the browser\'s', () => {
     const { body, table } = inlineRefs(`look at ${TASK} now`);
-    expect(tokenEndingAt(body, body.length, table)).toBeNull();
-    expect(tokenEndingAt(body, 8, table)).toBeNull();
-    expect(tokenEndingAt('see @[nobody]', 'see @[nobody]'.length, table)).toBeNull();
-    expect(tokenEndingAt('', 0, table)).toBeNull();
+    const at = (text: string, caret: number) => pillAt(composerSegments(text, table), caret, 'before');
+    expect(at(body, body.length)).toBeNull();
+    expect(at(body, 8)).toBeNull();
+    expect(at('see @[nobody]', 'see @[nobody]'.length)).toBeNull();
+    expect(at('', 0)).toBeNull();
   });
 
   it('a failed send restores from the composed message', () => {
@@ -213,60 +215,5 @@ describe('cutSpan', () => {
 
   it('inserts one space rather than gluing two words', () => {
     expect(cutSpan('a@fix.b', 1, 5)).toEqual({ text: 'a .b', caret: 2 });
-  });
-});
-
-describe('tokens as objects (the pill overlay and the caret)', () => {
-  const { body, table } = inlineRefs(`see ${TASK} then ${SESSION}!`);
-  // "see @[Fix the thing] then @[Plan: auth]!"
-  const first = { start: 4, end: 4 + refToken('Fix the thing').length };
-  const second = { start: body.indexOf('@[Plan'), end: body.indexOf('@[Plan') + refToken('Plan: auth').length };
-
-  it('mirrorPieces gives the box text back character for character', () => {
-    const pieces = mirrorPieces(body, table);
-    expect(pieces.map((p) => p.text).join('')).toBe(body);
-    expect(pieces.filter((p) => p.ref).map((p) => p.ref)).toEqual([
-      { label: 'Fix the thing', kind: 'task', id: 't1' },
-      { label: 'Plan: auth', kind: 'session', id: 's1' },
-    ]);
-    expect(pieces.map((p) => p.text)).toEqual(['see ', '@[Fix the thing]', ' then ', '@[Plan: auth]', '!']);
-  });
-
-  it('text with no known token is one plain piece, and an unknown token stays plain', () => {
-    expect(mirrorPieces('just words', table)).toEqual([{ text: 'just words' }]);
-    expect(mirrorPieces('', table)).toEqual([{ text: '' }]);
-    expect(mirrorPieces('mail me @[nobody] now', table)).toEqual([{ text: 'mail me @[nobody] now' }]);
-    expect(mirrorPieces('@[Fix the thing]', new Map())).toEqual([{ text: '@[Fix the thing]' }]);
-  });
-
-  it('a token at the very start or end leaves no empty piece', () => {
-    const t = inlineRefs(`${TASK}`);
-    expect(mirrorPieces(t.body, t.table).map((p) => p.text)).toEqual(['@[Fix the thing]']);
-  });
-
-  it('tokenStartingAt finds the token a caret sits in front of', () => {
-    expect(tokenStartingAt(body, first.start, table)).toEqual(first);
-    expect(tokenStartingAt(body, second.start, table)).toEqual(second);
-    expect(tokenStartingAt(body, first.start + 1, table)).toBeNull();
-    expect(tokenStartingAt(body, 0, table)).toBeNull();
-    expect(tokenStartingAt('@[nobody] x', 0, table)).toBeNull();
-    expect(tokenStartingAt(body, body.length, table)).toBeNull();
-  });
-
-  it('tokenAround is true only strictly inside a known token', () => {
-    expect(tokenAround(body, first.start, table)).toBeNull();
-    expect(tokenAround(body, first.end, table)).toBeNull();
-    expect(tokenAround(body, first.start + 1, table)).toEqual(first);
-    expect(tokenAround(body, first.end - 1, table)).toEqual(first);
-    expect(tokenAround(body, second.start + 5, table)).toEqual(second);
-    expect(tokenAround(body, 2, table)).toBeNull();
-    expect(tokenAround('@[nobody] x', 3, table)).toBeNull();
-    expect(tokenAround('plain', 2, table)).toBeNull();
-  });
-
-  it('a label with a dot-separator and digits is one token like any other', () => {
-    const t = inlineRefs('<task-ref id="abc1" label="CRON - Monitor team-channel with agent loop · Review Queues"/> x');
-    expect(mirrorPieces(t.body, t.table)[0].ref?.label).toBe('CRON - Monitor team-channel with agent loop · Review Queues');
-    expect(tokenEndingAt(t.body, t.body.indexOf(']') + 1, t.table)).toEqual({ start: 0, end: t.body.indexOf(']') + 1 });
   });
 });

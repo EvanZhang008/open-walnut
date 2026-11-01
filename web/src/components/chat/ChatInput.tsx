@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useMemo, type KeyboardEvent, type DragEvent, type ClipboardEvent, type RefObject, useLayoutEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, type KeyboardEvent, type DragEvent, type ClipboardEvent, type RefObject, useLayoutEffect } from 'react';
 import { returnInsertsNewline } from './touch-return';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { searchCommands, getCommand } from '@/commands/index';
@@ -10,12 +10,14 @@ import { CommandPalette, type PaletteItem } from './CommandPalette';
 import { detectSlashCommand } from './slash-trigger';
 import { FileMentionPopup, type FileMentionHandle } from './FileMentionPopup';
 import { MentionPalette, type MentionPaletteHandle } from './MentionPalette';
-import { composeRefs, cutSpan, inlineRefs, mirrorPieces, tokenAround, tokenEndingAt, tokenStartingAt, type InlineRefSplit, type RefTable } from './composer-refs';
-import { ComposerRefMirror } from './ComposerRefMirror';
+import { composeRefs, inlineRefs, type InlineRefSplit, type RefTable } from './composer-refs';
+import { fileRefsIn } from './composer-ref-pills';
+import { useComposerPills } from './useComposerPills';
+import { ComposerRefLayer } from './ComposerRefLayer';
 import { relativeTo } from './mention-path';
 import { routeMention } from './session-mention';
-import { arrowSwitchesTab } from './mention-sources-model';
 import { detectMention } from './mention-trigger';
+import { arrowSwitchesTab } from './mention-sources-model';
 import type { Task } from '@open-walnut/core';
 import { StatusBadge } from '../common/StatusBadge';
 import { MicButton } from '../common/MicButton';
@@ -243,17 +245,13 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
    * which changes whenever the table does.
    */
   const tableRef = useRef<RefTable>(initialDraft.table);
+  // The file references the picker wrote (drawn as pills; a path typed by hand stays
+  // text). A draft that comes back whole (mount, restore, prefill) brings its paths.
+  const pickedFilesRef = useRef<Set<string>>(new Set(fileRefsIn(initialDraft.body)));
   // Mirror for effects keyed on something else (the prefill effect is keyed on
   // its nonce, so reading state there would read a stale render's values).
   const valueRef = useRef(value);
   valueRef.current = value;
-  // The box's text cut into prose and reference tokens. A token is drawn as a
-  // task pill by ComposerRefMirror, which lies over the textarea only while one
-  // is present; the table is replaced together with the text it belongs to.
-  const [tableEpoch, setTableEpoch] = useState(0);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- the table is a ref; tableEpoch says it was replaced
-  const refPieces = useMemo(() => mirrorPieces(value, tableRef.current), [value, tableEpoch]);
-  const hasRefTokens = refPieces.some((p) => p.ref);
 
   /**
    * The ONE normalizer every text-mutating path goes through: any ref tag in the
@@ -265,11 +263,11 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   const applyText = useCallback((candidate: string, opts?: { keepRefs?: boolean }): InlineRefSplit => {
     const split = inlineRefs(candidate, opts?.keepRefs === false ? new Map() : tableRef.current);
     tableRef.current = split.table;
+    if (opts?.keepRefs === false) pickedFilesRef.current = new Set(fileRefsIn(split.body));
     valueRef.current = split.body;
     const el = textareaRef.current;
     if (el && el.value !== split.body) el.value = split.body;
     setValue(split.body);
-    setTableEpoch((n) => n + 1);
     return split;
   }, []);
 
@@ -758,6 +756,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     valueRef.current = '';
     if (textareaRef.current) textareaRef.current.value = '';
     tableRef.current = new Map();
+    pickedFilesRef.current = new Set();
     setImages([]);
     closePalette();
     closeMention();
@@ -929,6 +928,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     const end = mentionEndRef.current;
     if (at < 0 || end < at) { closeMention(); return; }
     const ref = formatMentionPath(absPath) + ' ';
+    pickedFilesRef.current.add(ref.trimEnd());
     const newValue = value.slice(0, at) + ref + value.slice(end);
     applyText(newValue);
     saveComposed(newValue);
@@ -1008,68 +1008,25 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     }
   }, [value, applyText, saveComposed, closeMention]);
 
-  // Backspace right after a `@[label]` token removes the whole token (what the
-  // old chip's × did), never a stranded `@[Fix the thin`. Anywhere else the key
-  // is the browser's.
-  const handleBackspaceOverRef = useCallback((e: KeyboardEvent): boolean => {
-    const el = textareaRef.current;
-    if (!el || el.selectionStart !== el.selectionEnd) return false;
-    const span = tokenEndingAt(valueRef.current, el.selectionStart, tableRef.current);
-    if (!span) return false;
-    e.preventDefault();
-    const cut = cutSpan(valueRef.current, span.start, span.end);
-    applyText(cut.text);
-    saveComposed(cut.text);
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, getMaxHeight(el)) + 'px';
-    el.setSelectionRange(cut.caret, cut.caret);
-    return true;
-  }, [applyText, saveComposed]);
-
-  // Delete right in front of a token removes the whole token, like Backspace after it.
-  const handleDeleteOverRef = useCallback((e: KeyboardEvent): boolean => {
-    const el = textareaRef.current;
-    if (!el || el.selectionStart !== el.selectionEnd) return false;
-    const span = tokenStartingAt(valueRef.current, el.selectionStart, tableRef.current);
-    if (!span) return false;
-    e.preventDefault();
-    const cut = cutSpan(valueRef.current, span.start, span.end);
-    applyText(cut.text);
-    saveComposed(cut.text);
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, getMaxHeight(el)) + 'px';
-    el.setSelectionRange(cut.caret, cut.caret);
-    return true;
-  }, [applyText, saveComposed]);
-
-  // A token reads as one object, so the caret steps over it in one arrow press
-  // instead of walking through the characters of its title.
-  const handleArrowOverRef = useCallback((e: KeyboardEvent): boolean => {
-    const el = textareaRef.current;
-    if (!el || el.selectionStart !== el.selectionEnd) return false;
-    if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return false;
-    const caret = el.selectionStart;
-    const span = e.key === 'ArrowLeft'
-      ? tokenEndingAt(valueRef.current, caret, tableRef.current)
-      : tokenStartingAt(valueRef.current, caret, tableRef.current);
-    if (!span) return false;
-    e.preventDefault();
-    const to = e.key === 'ArrowLeft' ? span.start : span.end;
-    el.setSelectionRange(to, to);
-    return true;
-  }, []);
-
-  // A caret that lands inside a token (a click, or ArrowUp/Down through its
-  // line) moves to the nearer edge: the title is not text to edit in place.
-  const snapCaretOutOfRef = useCallback(() => {
-    const el = textareaRef.current;
-    if (!el || el.selectionStart !== el.selectionEnd) return;
-    const caret = el.selectionStart;
-    const span = tokenAround(valueRef.current, caret, tableRef.current);
-    if (!span) return;
-    const to = caret - span.start <= span.end - caret ? span.start : span.end;
-    el.setSelectionRange(to, to);
-  }, []);
+  // The references the box draws as pills, one unit each for the keys and the
+  // caret (useComposerPills). `value` changes whenever the table does, so this
+  // render reads the table that goes with it.
+  const pills = useComposerPills({
+    textareaRef,
+    value,
+    table: tableRef.current,
+    active: mentionOpen ? { start: mentionAtIndexRef.current, end: mentionEndRef.current } : null,
+    pickedFiles: pickedFilesRef.current,
+    writeCut: (cut) => {
+      applyText(cut.text);
+      saveComposed(cut.text);
+      const el = textareaRef.current;
+      if (!el) return;
+      el.style.height = 'auto';
+      el.style.height = Math.min(el.scrollHeight, getMaxHeight(el)) + 'px';
+      el.setSelectionRange(cut.caret, cut.caret);
+    },
+  });
 
   const handleKeyDown = (e: KeyboardEvent) => {
     // Shift+Tab: caller-defined mode cycle (sessions: permission mode), except
@@ -1085,9 +1042,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       return;
     }
 
-    if (e.key === 'Backspace' && !mentionOpenRef.current && !e.nativeEvent.isComposing && handleBackspaceOverRef(e)) return;
-    if (e.key === 'Delete' && !mentionOpenRef.current && !e.nativeEvent.isComposing && handleDeleteOverRef(e)) return;
-    if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && !mentionOpenRef.current && !e.nativeEvent.isComposing && handleArrowOverRef(e)) return;
+    if (!mentionOpenRef.current && !e.nativeEvent.isComposing && pills.onKey(e)) return;
 
     // "@" mention keyboard nav (takes priority over the "/" palette; mutually
     // exclusive by trigger character). Unified palette: ↑/↓ move · ⇥ jump group ·
@@ -1669,25 +1624,20 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
               ))}
             </div>
           )}
-          {/* The field: the textarea, plus (only while the text holds a reference
-              token) the overlay that draws each token as a task pill. */}
-          <div className="chat-input-field">
-            <textarea
-              ref={textareaRef}
-              className={`chat-input-textarea${hasRefTokens ? ' has-ref-tokens' : ''}`}
-              data-draft-key={draftKey}
-              defaultValue={initialDraft.body}
-              onChange={(e) => handleChange(e.target.value)}
-              onKeyDown={handleKeyDown}
-              onSelect={snapCaretOutOfRef}
-              onPaste={handlePaste}
-              placeholder={placeholder ?? (focusedTaskTitle ? `Ask about '${focusedTaskTitle}'...` : 'Type a message... (/ for commands)')}
-              disabled={disabled}
-              rows={1}
-              {...NO_AUTOFILL_PROPS}
-            />
-            {hasRefTokens && <ComposerRefMirror pieces={refPieces} textareaRef={textareaRef} disabled={disabled} />}
-          </div>
+          {pills.on && <ComposerRefLayer textareaRef={textareaRef} segments={pills.segments} />}
+          <textarea
+            ref={textareaRef}
+            className={`chat-input-textarea${pills.on ? ' has-ref-pills' : ''}`}
+            data-draft-key={draftKey}
+            defaultValue={initialDraft.body}
+            onChange={(e) => handleChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            placeholder={placeholder ?? (focusedTaskTitle ? `Ask about '${focusedTaskTitle}'...` : 'Type a message... (/ for commands)')}
+            disabled={disabled}
+            rows={1}
+            {...NO_AUTOFILL_PROPS}
+          />
           {/* Compact: the send button sits IN the text row — no controls row at all. */}
           {compact && !sendBlocked && <div className="chat-input-compact-actions">{primaryButton}</div>}
           {/* Controls row inside the card */}
