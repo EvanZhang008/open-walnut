@@ -11237,7 +11237,20 @@ export class SessionRunner {
     // The human's words, never the wire message, with a reference read as its
     // label — see core/sessions/launch-naming.ts.
     const naming = launchNamingPlainText(data.message, data.namingMessage)
-    const title = data.title ?? naming.slice(0, 120)
+    // Named as a native launch names it (handleStart's pendingTitle): a task that already
+    // has its title gives it to the session, so the session list never shows only the
+    // prompt's first 120 characters (2026-11-01: an OpenCode session on a titled task).
+    let taskTitle = ''
+    if (!data.title && data.taskId) {
+      try {
+        const { getTask } = await import('../core/task-manager.js')
+        const { matchPlaceholderTitle } = await import('../core/sessions/quick-start.js')
+        const task = await getTask(data.taskId)
+        if (!matchPlaceholderTitle(task, [cwd, task.cwd])) taskTitle = (task.title ?? '').trim()
+      } catch { /* the prompt names it */ }
+    }
+    const title = data.title
+      ?? (taskTitle && naming.trim() ? `${taskTitle} — ${naming.slice(0, 80)}` : taskTitle || naming.slice(0, 120))
     // Persist the draft's model choice ONLY when the adapter's `model` config
     // option actually advertises the base id — that is the exact gate
     // replayPersistedConfig applied a moment ago, so persisting past it would

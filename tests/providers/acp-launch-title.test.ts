@@ -36,7 +36,7 @@ vi.mock('../../src/providers/acp-session.js', async (importOriginal) => {
 import { WALNUT_HOME } from '../../src/constants.js'
 import { sessionRunner } from '../../src/providers/claude-code-session.js'
 import { addTask } from '../../src/core/task-manager.js'
-import { createSessionRecord } from '../../src/core/session-tracker.js'
+import { createSessionRecord, getSessionByClaudeId } from '../../src/core/session-tracker.js'
 
 beforeAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
@@ -56,5 +56,15 @@ describe('ACP launch title', () => {
     })
     await vi.waitFor(() => expect(titleKick).toHaveBeenCalledTimes(1))
     expect(titleKick).toHaveBeenCalledWith(claudeSessionId, task.id, 'count.py counts words wrong, fix it')
+  })
+
+  it('a task that already has its title names the session as a native launch does', async () => {
+    titleKick.mockClear()
+    const { task } = await addTask({ title: 'Fix the word count' })
+    await createSessionRecord(`acp-launch-sid-${nextSid + 1}`, task.id, '', '/tmp/demo', { engine: 'opencode' } as never)
+    const { claudeSessionId } = await (sessionRunner as unknown as {
+      handleAcpStart(data: Record<string, unknown>): Promise<{ claudeSessionId: string }>
+    }).handleAcpStart.call(sessionRunner, { taskId: task.id, message: 'count.py counts words wrong, fix it', engine: 'opencode', cwd: '/tmp/demo' })
+    expect((await getSessionByClaudeId(claudeSessionId))?.title).toBe('Fix the word count — count.py counts words wrong, fix it')
   })
 })
