@@ -28,6 +28,7 @@ import {
   type AccountSetupPreset,
   type MailProviderSummary,
 } from '@/api/mail';
+import { focusUnlessTyping } from '@/utils/focus-unless-typing';
 import { log } from '@/utils/log';
 import { addMailAccount } from './mail-actions';
 import {
@@ -123,10 +124,11 @@ export function AddAccountDialog({ providers, onClose, onAdded }: Props) {
   const [failure, setFailure] = useState<{ status: number; message: string } | null>(null);
 
   // Focus the first field, ConfirmDialog's convention (a tick, because the portal has to mount
-  // first). Re-runs when a provider is picked, since that is when the form appears.
+  // first). Re-runs when a provider is picked, since that is when the form appears. Never over a
+  // field the person already went to: a late tick put the password into the address box.
   const firstFieldRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
-    const timer = setTimeout(() => firstFieldRef.current?.focus(), 10);
+    const timer = setTimeout(() => focusUnlessTyping(firstFieldRef.current), 10);
     return () => clearTimeout(timer);
   }, [providerId]);
 
