@@ -13,6 +13,7 @@ import { cpus, loadavg } from 'node:os'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
+import { openSessionBoard } from './board-view-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { call, getTask, kanbanApi, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
 
@@ -57,9 +58,9 @@ async function openBoard(page: Page, beforeBoard?: () => Promise<void>): Promise
   await row.locator('.todo-item-title').click()
   const panel = page.locator(`${REAL_PANEL}[data-session-id="${team.leaderSid}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
-  if (beforeBoard) await beforeBoard()
-  await panel.getByTestId('session-board-chip').click()
-  const pane = page.getByTestId('task-board-pane')
+  // The chip, or the layout's other way when a narrow window folds or hides it; a timed
+  // spec starts its clock right before the click.
+  const pane = await openSessionBoard(page, panel, beforeBoard)
   // The Board opens on Status (the default since 2026-10-25): the kanban is one click away.
   await pane.getByTestId('board-view-cards').click()
   await expect(pane.getByTestId('board-kanban')).toBeVisible({ timeout: 30_000 })
@@ -135,7 +136,9 @@ test('C37 C51: layout A (Home, chat open) and B (full screen) are wide, C (520px
   await page.waitForTimeout(300)
   measured.B = await rootWidth(pane)
   await expect(pane.getByTestId('board-kanban')).toHaveAttribute('data-mode', 'wide')
-  expect(measured.B).toBeGreaterThanOrEqual(900)
+  // Full screen keeps side margins since 2026-10-31 (fullscreen-tab.css), so B is ~770px at
+  // 1440, not the old ~900: still well clear of the 624px a narrow board needs to turn wide.
+  expect(measured.B).toBeGreaterThanOrEqual(700)
   await checkCards(pane)
   const files = await shots(page, pane, 'layout-b', engine)
 

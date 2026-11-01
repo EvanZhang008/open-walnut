@@ -16,7 +16,7 @@ export async function showCustomBoard(pane: Locator): Promise<void> {
 }
 
 /** The phone layout's query (web/src/hooks/usePhoneLayout.ts PHONE_LAYOUT_QUERY). */
-const PHONE_QUERY = '(max-width: 768px), (pointer: coarse) and (max-height: 500px)'
+export const PHONE_QUERY = '(max-width: 768px), (pointer: coarse) and (max-height: 500px)'
 
 /**
  * Opens the Board of the session in `panel` the way its layout offers it, and returns the
@@ -25,10 +25,18 @@ const PHONE_QUERY = '(max-width: 768px), (pointer: coarse) and (max-height: 500p
  * folds it into its "..." menu (2026-10-31: the 520px kanban specs waited up to 240 s on the
  * desktop chip, which a phone keeps hidden).
  */
-export async function openSessionBoard(page: Page, panel: Locator): Promise<Locator> {
+export async function openSessionBoard(page: Page, panel: Locator, beforeClick?: () => Promise<void>): Promise<Locator> {
   const chip = panel.getByTestId('session-board-chip')
   await expect(chip).toHaveCount(1, { timeout: 30_000 })
-  if (await page.evaluate((q) => window.matchMedia(q).matches, PHONE_QUERY)) {
+  // A chip on the row that turns live (the record loaded) is the one click, whatever the
+  // width, as a plain click waits for it: the specs measure the Board as it opens from
+  // there. Only a chip that stays folded or hidden takes the layout's other way.
+  const onRow = await expect.poll(async () => await chip.isEnabled() && (await chip.getAttribute('data-hidden')) !== 'true' && await chip.isVisible(),
+    { timeout: 30_000 }).toBe(true).then(() => true, () => false)
+  if (beforeClick) await beforeClick()
+  if (onRow) {
+    await chip.click()
+  } else if (await page.evaluate((q) => window.matchMedia(q).matches, PHONE_QUERY)) {
     await page.locator('.phone-topbar').getByRole('button', { name: 'More actions' }).click()
     const row = page.getByTestId('phone-row-board')
     await expect(row).toBeEnabled({ timeout: 30_000 })

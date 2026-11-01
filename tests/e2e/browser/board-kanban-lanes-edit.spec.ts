@@ -11,7 +11,7 @@
  *   C65  Two moves into Resolved inside 8s: two toasts, each completing its own
  *        card, both held while the pointer is over them.
  *   C89  A stored Page pick from before the kanban opens on Cards once, then Page.
- *   C52  Layout C (520px): the Board opens with the chat collapsed and a
+ *   C52  Layout C (780px desktop): the Board opens with the chat collapsed and a
  *        `Show chat` button; once the user shows it, it stays.
  *
  * Both engines share one fixture server, so every run seeds its own team.
@@ -20,6 +20,7 @@ import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL } from './draft-helpers'
+import { PHONE_QUERY, openSessionBoard } from './board-view-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import {
   call, kanbanApi, pollUntil, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
@@ -191,6 +192,8 @@ test('C20: Delete lane says where its cards go and puts them there', async ({ pa
 })
 
 test('C65: two moves into Resolved inside 8s keep two toasts, each completing its own card, held while hovered', async ({ page }) => {
+  // It waits out the 8 s toast hold on purpose (9 s below), so 30 s leaves too little for the rest.
+  test.setTimeout(60_000)
   const pane = await openBoard(page)
   // The first move's toast sits at the pane's bottom right, over the lane's last card since
   // fullscreen keeps side margins (2026-10-31, narrower lanes). Move the lower of the two
@@ -264,14 +267,29 @@ async function openBoard2(page: Page): Promise<Locator> {
   await row.locator('.todo-item-title').click()
   const panel = page.locator(`${REAL_PANEL}[data-session-id="${team.leaderSid}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
-  await panel.getByTestId('session-board-chip').click()
-  const pane = page.getByTestId('task-board-pane')
-  await expect(pane).toBeVisible({ timeout: 30_000 })
-  return pane
+  // The way the layout offers it: a narrow window folds the chip into "..." (or the
+  // phone's More actions), where a direct click waits on a hidden chip.
+  return openSessionBoard(page, panel)
 }
 
-test.describe('layout C, a 520px window', () => {
-  test.use({ viewport: { width: 520, height: 800 } })
+/** Close the open Board where this layout offers it: on a phone the Board is its own view,
+ *  left by the top bar's Back; on a desktop the Board control toggles it (the chip, or its
+ *  row in the header's "..." menu when the chip is folded). */
+async function closeBoard(page: Page, panel: Locator): Promise<void> {
+  if (await page.evaluate((q) => window.matchMedia(q).matches, PHONE_QUERY)) {
+    return page.locator('.phone-topbar').getByRole('button', { name: 'Back' }).click()
+  }
+  const chip = panel.getByTestId('session-board-chip')
+  if ((await chip.getAttribute('data-hidden')) !== 'true') return chip.click()
+  await panel.getByTestId('session-header-more-btn').click()
+  await page.getByTestId('session-header-more-item-board').click()
+}
+
+// A desktop window narrow enough that the chat would leave the board under the kanban's
+// 480px floor. Not 520px: since 2026-10-15 a window 768px wide or less is the phone layout,
+// which shows the Board OR the chat on every open by design (SessionPanel applyOpenCollapse).
+test.describe('layout C, a narrow desktop window (780px)', () => {
+  test.use({ viewport: { width: 780, height: 800 } })
 
   test('C52: the Board opens with the chat collapsed and a Show chat button; once shown, the chat stays', async ({ page }, info) => {
     await isolateUiPrefs(page)
@@ -279,16 +297,17 @@ test.describe('layout C, a 520px window', () => {
     const pane = await openBoard2(page)
     const root = pane.getByTestId('kanban-root')
     await expect(root).toBeVisible({ timeout: 30_000 })
-    await expect(pane.getByTestId('board-kanban')).toHaveAttribute('data-mode', 'narrow')
     const chat = page.locator('.session-panel-split.is-changed-open .session-panel-chat-col')
     await expect(page.locator('.session-panel-split.is-chat-collapsed')).toHaveCount(1)
     await expect.poll(() => root.evaluate((e) => e.clientWidth)).toBeGreaterThanOrEqual(480)
-    // Narrow mode never scrolls sideways.
+    // The board alone never scrolls sideways.
     expect(await root.evaluate((e) => e.scrollWidth <= e.clientWidth + 1)).toBe(true)
     expect(await page.evaluate(() => document.scrollingElement!.scrollWidth <= document.scrollingElement!.clientWidth + 1)).toBe(true)
     const show = page.getByTestId('kanban-show-chat')
     await expect(show).toBeVisible()
-    await expect(show).toHaveText('Show chat')
+    // 520px is the phone layout, whose bar says just "Chat" (SessionPanel's chatBarSlot).
+    const phone = await page.evaluate((q) => window.matchMedia(q).matches, PHONE_QUERY)
+    await expect(show).toHaveText(phone ? 'Chat' : 'Show chat')
     await shot(page, 'narrow-light', info)
     await page.emulateMedia({ colorScheme: 'dark' })
     // Let the lane background transitions settle before the shot.
@@ -301,10 +320,9 @@ test.describe('layout C, a 520px window', () => {
     await expect(page.getByTestId('kanban-show-chat')).toHaveCount(0)
     // Close the Board and open it again: the user's pick wins, no second collapse.
     const panel = page.locator(`${REAL_PANEL}[data-session-id="${team.leaderSid}"]`)
-    await panel.getByTestId('session-board-chip').click()
+    await closeBoard(page, panel)
     await expect(pane).toHaveCount(0)
-    await panel.getByTestId('session-board-chip').click()
-    await expect(page.getByTestId('task-board-pane')).toBeVisible()
+    await openSessionBoard(page, panel)
     await page.waitForTimeout(500)
     await expect(page.locator('.session-panel-split.is-chat-collapsed')).toHaveCount(0)
     await expect(chat).toBeVisible()
