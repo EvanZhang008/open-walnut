@@ -10,6 +10,8 @@
  *    questions without meta, and one answer that opens with a preamble.
  *  - pw-threads-ai-session: plain root conversation that can SEND (the server's
  *    AI naming stub is keyed on the `pw-threads-ai-` prefix).
+ *  - pw-threads-ai-comments-session: the same conversation, for the passage
+ *    comment spec alone.
  *  - pw-threads-failed-session: one question whose turn ended in an API error,
  *    and one parked follow-up (queue row), no answer text after either.
  *  - pw-threads-rewritten-session: a question whose parent answer no longer
@@ -30,6 +32,9 @@ import { buildReviewOldSession, buildReviewSession } from './threads-review-fixt
 
 export const DENSE_SESSION = 'pw-threads-dense-session';
 export const AI_SESSION = 'pw-threads-ai-session';
+/** The AI session's twin for the passage comment spec, which writes the record's
+ *  comments while other specs reset AI_SESSION's in parallel. */
+export const COMMENTS_SESSION = 'pw-threads-ai-comments-session';
 export const FAILED_SESSION = 'pw-threads-failed-session';
 export const REWRITTEN_SESSION = 'pw-threads-rewritten-session';
 /** Sends, and its mock CLI turns are written into its transcript (the only
@@ -257,6 +262,14 @@ export function buildAiSession(): ThreadsFixtureSession {
   return {
     sessionId: AI_SESSION, taskId: 'pw-task-threads-ai', title: 'Threads AI fixture session',
     rows, threadAnchors: [], threadMeta: [], pinnedMessages: [], parked: [],
+  };
+}
+
+export function buildCommentsSession(): ThreadsFixtureSession {
+  const ai = buildAiSession();
+  return {
+    ...ai, sessionId: COMMENTS_SESSION, taskId: 'pw-task-threads-comments', title: 'Threads comments fixture session',
+    rows: ai.rows.map((r) => ({ ...r, uuid: r.uuid.replace(/^0199f2/, '0199fc') })),
   };
 }
 
@@ -658,7 +671,7 @@ export function buildMergedSession(): ThreadsFixtureSession & { ids: Record<stri
 
 export function allThreadsFixtures(nowMs: number): ThreadsFixtureSession[] {
   return [
-    buildDenseSession(nowMs), buildAiSession(), buildFailedSession(nowMs), buildRewrittenSession(nowMs), buildReloadSession(),
+    buildDenseSession(nowMs), buildAiSession(), buildCommentsSession(), buildFailedSession(nowMs), buildRewrittenSession(nowMs), buildReloadSession(),
     buildMapSession(nowMs), buildPinsOnlySession(nowMs), buildTaggedSession(nowMs), buildQueuedSession(), buildMergedSession(),
     buildReviewSession(nowMs), buildReviewOldSession(nowMs),
   ];

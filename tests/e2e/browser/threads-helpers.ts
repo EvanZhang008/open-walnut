@@ -258,7 +258,7 @@ export async function resetThreadsFixture(request: APIRequestContext, sessionId:
     meta.push(entry)
   }
   const res = await request.patch(`/api/sessions/${sessionId}`, {
-    data: { thread_anchors: seed!.threadAnchors, thread_meta: meta, pinned_messages: seed!.pinnedMessages },
+    data: { thread_anchors: seed!.threadAnchors, thread_meta: meta, pinned_messages: seed!.pinnedMessages, passage_comments: [] },
   })
   expect(res.ok(), `reset ${sessionId}: ${res.status()} ${await res.text()}`).toBe(true)
 }

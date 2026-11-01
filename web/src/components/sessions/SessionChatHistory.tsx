@@ -45,6 +45,8 @@ import type { MapArchiveApi } from './ThreadMapArchive';
 import { placePins } from './outline-order';
 import { QuotePinSelectionBar, type QuotePinTarget } from './QuotePinSelectionBar';
 import { QuotePinPopover } from './QuotePinPopover';
+import { PassageCommentMarks } from './PassageCommentMarks';
+import { useSessionCommentsApi } from '@/contexts/SessionCommentsContext';
 import { useSessionPinsApi } from '@/contexts/SessionPinsContext';
 import { EMPTY_DERIVED, useSessionThreadsApi } from '@/contexts/SessionThreadsContext';
 import {
@@ -627,6 +629,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Pins live on the session record; the panel provides them through context so
   // the memoized message rows can host the pin button without prop drilling.
   const pinsApi = useSessionPinsApi();
+  const commentsApi = useSessionCommentsApi();
   // ── Conversation threads ──
   // The anchors live on the session record (the panel owns them); the ROWS they
   // point at live in this component's history hook. So the tree is derived here
@@ -1855,6 +1858,17 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       });
     }
   }, [messages, phase2Pending, olderWindowed, loadFullHistory, jumpToPlace, sessionId]);
+
+  // A row of the composer's comment list: show where it was left. Each request lands once.
+  const commentJump = commentsApi.jump;
+  const commentJumpLanded = useRef(commentJump?.seq ?? 0); // a remount never replays an old jump
+  useEffect(() => {
+    if (!commentJump || commentJump.seq === commentJumpLanded.current) return;
+    commentJumpLanded.current = commentJump.seq;
+    const c = commentsApi.comments.find((x) => x.id === commentJump.id);
+    if (c) jumpToPlace(c.msgId, c.quote, 'comment-tray');
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per request
+  }, [commentJump?.seq]);
 
   /** An outline row's jump: the pin's passage. */
   const jumpToPin = useCallback((pinKey: string, opts?: { armBack?: boolean }) => {
@@ -5110,6 +5124,16 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
               resetKey={currentKey}
             />
           </>
+        )}
+        {commentsApi.canComment && (
+          <PassageCommentMarks
+            containerRef={containerRef}
+            comments={commentsApi.comments}
+            panelKey={quotePanelKey}
+            renderNonce={messages.length + truncationOffset}
+            onRemove={commentsApi.remove}
+            resetKey={currentKey}
+          />
         )}
         {/* Loading / empty / error states rendered INSIDE the scroll container */}
         {/* Not over a launch prompt: a fresh session has nothing to load, and the

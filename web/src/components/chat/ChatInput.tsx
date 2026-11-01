@@ -1463,7 +1463,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // Claude-style primary action swap: while a turn is streaming and the composer is
   // EMPTY, the primary button is a square STOP (there is nothing to send anyway).
   // The moment the user types, it flips back to send (which queues mid-turn).
-  const showStopPrimary = !!isStreaming && !hasInput && !!onStop;
+  const showStopPrimary = !!isStreaming && !hasInput && !allowEmptySend && !!onStop;
 
   // The primary send action always sends the composed message. Its title reflects
   // whether a live turn is running (queue / interrupt) so the icon-only button

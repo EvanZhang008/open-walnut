@@ -64,6 +64,8 @@ import { copyTextRobust } from '@/utils/clipboard';
 import { draftHash, draftKey } from '@/utils/drafts';
 import { useDraft } from '@/hooks/useDraft';
 import { AnswerBox } from '@/components/common/AnswerBox';
+import { useSessionCommentsApi } from '@/contexts/SessionCommentsContext';
+import { fitsAsComment } from '@/utils/passage-comments';
 import { ICON_PIN } from './MessageActionIcons';
 import { rangePoint, sameBoundaries, useHeldPassage, type HeldPoint } from './useHeldPassage';
 import { log } from '@/utils/log';
@@ -104,8 +106,10 @@ interface QuotePinSelectionBarProps {
    */
   onAsk?: (target: QuotePinTarget) => void;
   /**
-   * "Quote": put the passage into the main conversation's composer as a quote
-   * (the Files tab's "Quote in chat"); nothing is sent. Omitted = no button, which is how a
+   * The text fallback of "Quote" / "Comment": the passage as a Markdown quote in the
+   * main conversation's composer. Used only where the passage cannot be kept as a
+   * comment (no session record behind the timeline, or a row with no message id
+   * yet). Omitted, with no comment store either = no buttons, which is how a
    * timeline with no composer of its own keeps the pill honest.
    */
   onQuoteInChat?: (passage: string, comment?: string) => void;
@@ -503,27 +507,37 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
     dismiss();
   }, [onAsk, sessionId, state, dismiss]);
 
+  // Quote and Comment keep the passage as a comment on its words (listed above the
+  // composer, sent with the next message); the text fallback is for a passage that
+  // cannot be kept that way.
+  const comments = useSessionCommentsApi();
+  const canQuote = comments.canComment || !!onQuoteInChat;
+  const keepPassage = useCallback((note: string): boolean => {
+    if (!state?.text.trim()) return false;
+    // Past the record's caps (a very long passage or comment) the text path keeps it.
+    if (comments.canComment && state.msgId && state.quote.exact.trim() && fitsAsComment(state.text, note, comments.comments)) {
+      comments.add({ msgId: state.msgId, role: state.role, quote: state.quote, text: state.text, comment: note });
+      return true;
+    }
+    if (!onQuoteInChat) return false;
+    log.info('session', 'quoting a passage in the chat as text', { sessionId, msgId: state.msgId, chars: state.text.length });
+    onQuoteInChat(state.text, note || undefined);
+    return true;
+  }, [comments, onQuoteInChat, sessionId, state]);
+
   const quoteInChat = useCallback(() => {
-    if (!state?.text.trim() || !onQuoteInChat) return;
-    log.info('session', 'quoting a passage in the chat', {
-      sessionId, msgId: state.msgId, chars: state.text.length,
-    });
-    onQuoteInChat(state.text);
+    if (!keepPassage('')) return;
     window.getSelection()?.removeAllRanges();
     dismiss();
-  }, [onQuoteInChat, sessionId, state, dismiss]);
+  }, [keepPassage, dismiss]);
 
   const addComment = useCallback(() => {
     const note = commentDraft.text.trim();
-    if (!state?.text.trim() || !onQuoteInChat || !note) return;
-    log.info('session', 'commenting on a passage in the chat', {
-      sessionId, msgId: state.msgId, chars: state.text.length, commentChars: note.length,
-    });
-    onQuoteInChat(state.text, note);
+    if (!note || !keepPassage(note)) return;
     commentDraft.clear(commentDraft.key);
     window.getSelection()?.removeAllRanges();
     dismiss();
-  }, [commentDraft, onQuoteInChat, sessionId, state, dismiss]);
+  }, [commentDraft, keepPassage, dismiss]);
 
   const copy = useCallback(() => {
     if (state?.text.trim()) void copyTextRobust(state.text);
@@ -588,7 +602,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
             ariaLabel="Comment on this passage"
           />
           <div className="quote-pin-comment-actions">
-            <span className="quote-pin-comment-hint">Goes into the message box, nothing is sent</span>
+            <span className="quote-pin-comment-hint">Sent with your next message, not now</span>
             <button
               type="button"
               className="quote-pin-pill-btn"
@@ -626,19 +640,19 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
           <span>Ask here</span>
         </button>
       )}
-      {onQuoteInChat && !!state.text.trim() && (
+      {canQuote && !!state.text.trim() && (
         <button
           type="button"
           className="quote-pin-pill-btn"
           data-testid="quote-in-chat-btn"
           onMouseDown={(e) => e.preventDefault()}
           onClick={quoteInChat}
-          title="Quote this passage in the message box (for the main conversation)"
+          title="Quote this passage: it is listed above the message box and sent with your next message"
         >
           <span>Quote</span>
         </button>
       )}
-      {onQuoteInChat && !!state.text.trim() && (
+      {canQuote && !!state.text.trim() && (
         <button
           type="button"
           className="quote-pin-pill-btn"
@@ -649,7 +663,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
           onMouseDown={(e) => e.preventDefault()}
           // The keyboard path has no pointerdown, and its selection is still live here.
           onClick={() => { hold(); setCommentOpen(true); }}
-          title="Comment on this passage: the quote and your comment go into the message box, nothing is sent"
+          title="Comment on this passage: the words stay marked, and the comment is sent with your next message"
         >
           {ICON_COMMENT}
           <span>Comment</span>

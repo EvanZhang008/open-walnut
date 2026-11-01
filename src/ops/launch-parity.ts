@@ -64,6 +64,7 @@ export const SESSION_SETTING_PARITY: Readonly<Record<string, ParityEntry>> = {
   pinned_messages: { none: 'The person\'s pinned messages in the panel.' },
   thread_anchors: { none: 'Side-thread navigation state of the panel.' },
   thread_meta: { none: 'Side-thread navigation state of the panel.' },
+  passage_comments: { none: 'The person\'s quotes and comments on passages, sent with their next message.' },
 }
 
 /** /api/sessions/:id/<action> endpoints the web client calls (anywhere under web/src). */

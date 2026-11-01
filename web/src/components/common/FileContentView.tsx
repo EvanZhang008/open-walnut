@@ -22,6 +22,7 @@
  *    editor the same action lives in the selection bubble menu ("Ask").
  */
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useSelectionMatches } from '@/hooks/useSelectionMatches';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -62,8 +63,8 @@ import { useSessionThreadsApi } from '@/contexts/SessionThreadsContext';
 import { FileSearchBar } from '@/components/common/FileSearchBar';
 import { pointerOwnedElsewhere } from '@/utils/find-scope';
 import {
-  DomSearchController, applyHighlights, collectTextMatches,
-  ensureHighlightStyles, wordAtPoint, claimSearchOwner, onSearchOwnerLost, HL_SELMATCH, SYMBOL_RE,
+  DomSearchController, collectTextMatches,
+  ensureHighlightStyles, wordAtPoint, claimSearchOwner, onSearchOwnerLost, SYMBOL_RE,
 } from '@/utils/dom-text-search';
 import { CodeContextMenu, buildCodeContextTarget, type CodeContextTarget } from '@/components/common/CodeContextMenu';
 import { copyTextRobust } from '@/utils/clipboard';
@@ -1733,36 +1734,11 @@ export function FileContentView({
 
   // ── Select → highlight every exact match ───────────────────────────────────
   // DOM surfaces only: CodeMirror already does this via highlightSelectionMatches.
-  // Painted with the Highlight API under the browser's own selection paint.
-  const clearSelectionMatchesRef = useRef<(() => void) | null>(null);
-  const refreshSelectionMatches = useCallback(() => {
-    clearSelectionMatchesRef.current?.();
-    clearSelectionMatchesRef.current = null;
-    const body = contentRef.current?.querySelector<HTMLElement>('.fv-wysiwyg-editor, .fv-md-preview, .file-viewer-code');
-    const sel = window.getSelection();
-    const text = sel && !sel.isCollapsed && sel.rangeCount ? sel.toString() : '';
-    const t = text.trim();
-    if (!body || !t || t.length < 3 || t.length > 200 || t.includes('\n')
-      || !sel || !body.contains(sel.getRangeAt(0).commonAncestorContainer)) return;
-    clearSelectionMatchesRef.current = applyHighlights(window, HL_SELMATCH, collectTextMatches(body, t, true, 2000));
-  }, []);
-  useEffect(() => {
-    let timer = 0;
-    const onSelectionChange = () => {
-      clearSelectionMatchesRef.current?.();
-      clearSelectionMatchesRef.current = null;
-      window.clearTimeout(timer);
-      // 拖选期间延后全文扫描，但选区消失时立即去掉旧颜色。
-      timer = window.setTimeout(refreshSelectionMatches, 120);
-    };
-    document.addEventListener('selectionchange', onSelectionChange);
-    return () => {
-      document.removeEventListener('selectionchange', onSelectionChange);
-      window.clearTimeout(timer);
-      clearSelectionMatchesRef.current?.();
-      clearSelectionMatchesRef.current = null;
-    };
-  }, [refreshSelectionMatches, filePath, showSource]);
+  useSelectionMatches(
+    () => contentRef.current?.querySelector<HTMLElement>('.fv-wysiwyg-editor, .fv-md-preview, .file-viewer-code') ?? null,
+    (body, text) => collectTextMatches(body, text, true, 2000),
+    [filePath, showSource],
+  );
 
   // ── Cmd/Ctrl+click → reference lookup (DOM surfaces) ───────────────────────
   // CodeMirror detects its own (virtualized DOM — see FileSourceEditor); this

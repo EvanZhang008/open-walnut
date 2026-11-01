@@ -78,6 +78,25 @@ type NullableFields<T> = { [K in keyof T]?: T[K] | null };
 /** One upsert entry: listed fields overwrite, `null` clears, unlisted stay. */
 export type SessionThreadMetaPatch = { headId: string } & NullableFields<Omit<SessionThreadMeta, 'headId'>>;
 
+/** A quote or comment on a passage. Mirrors SessionPassageComment in src/core/types.ts. */
+export interface SessionPassageComment {
+  id: string;
+  msgId: string;
+  role: 'user' | 'assistant' | 'system';
+  /** The anchor (plain text, no block breaks). */
+  quote: SessionPinnedQuote;
+  /** The passage as selected, line breaks kept: what the model reads. */
+  text: string;
+  /** '' for a plain Quote. */
+  comment: string;
+  createdAt: string;
+  updatedAt?: string;
+  /** Set once the message carrying it was accepted; it then stays as a mark. */
+  sentAt?: string;
+  /** Taken out; kept a day as a tombstone so a stale copy cannot bring it back. */
+  removedAt?: string;
+}
+
 /** One pin. Mirrors SessionPinnedMessage in src/core/types.ts. */
 export interface SessionPinnedMessage {
   /** Stable message id (SessionHistoryMessage.msgId) — identity, not position. */
@@ -136,6 +155,8 @@ export interface SessionRecord {
   pinnedMessages?: SessionPinnedMessage[];
   /** Question→reply anchors — the navigation tree over this linear transcript. */
   threadAnchors?: SessionThreadAnchor[];
+  /** Quotes and comments on passages: pending ones go with the next message. */
+  passageComments?: SessionPassageComment[];
   /** Per-question metadata keyed by head msgId (merged by headId on write). */
   threadMeta?: SessionThreadMeta[];
   /** Set on a session born from a rewind: the parent message uuid its spawn

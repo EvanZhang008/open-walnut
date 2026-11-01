@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, useCallback, type ReactNode, type ReactElement, type MouseEvent as ReactMouseEvent } from 'react';
+import { useSelectionMatches } from '@/hooks/useSelectionMatches';
 import { isBoolean, usePageView } from '@/utils/view-memory';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { useDraft } from '@/hooks/useDraft';
@@ -32,8 +33,8 @@ import { ReferencePanel } from '@/components/common/ReferencePanel';
 import { CodeContextMenu, buildCodeContextTarget, type CodeContextTarget } from '@/components/common/CodeContextMenu';
 import { fetchReferences, type ReferencesResponse } from '@/api/files';
 import {
-  DomSearchController, applyHighlights, collectTextMatches,
-  wordAtPoint, claimSearchOwner, onSearchOwnerLost, HL_SELMATCH, SYMBOL_RE,
+  DomSearchController, collectTextMatches,
+  wordAtPoint, claimSearchOwner, onSearchOwnerLost, SYMBOL_RE,
 } from '@/utils/dom-text-search';
 import { ICON_REFRESH, ICON_WARNING, ICON_PANEL_LEFT, ICON_PANEL_LEFT_FILLED } from '@/components/common/Icons';
 import { log } from '@/utils/log';
@@ -2009,35 +2010,12 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
     return () => window.removeEventListener('keydown', handler, true);
   }, [openSearch, hasSearchableDiff]);
 
-  const clearSelectionMatchesRef = useRef<(() => void) | null>(null);
-  const refreshDiffSelectionMatches = useCallback(() => {
-    clearSelectionMatchesRef.current?.();
-    clearSelectionMatchesRef.current = null;
-    // 嵌套的文件预览自行管理选区，只扫描真正的 diff。
-    const root = containerRef.current?.querySelector<HTMLElement>('.session-diff-filepane');
-    const sel = window.getSelection();
-    const text = sel && !sel.isCollapsed && sel.rangeCount ? sel.toString() : '';
-    const t = text.trim();
-    if (!root || !t || t.length < 3 || t.length > 200 || t.includes('\n')
-      || !sel || !root.contains(sel.getRangeAt(0).commonAncestorContainer)) return;
-    clearSelectionMatchesRef.current = applyHighlights(window, HL_SELMATCH, collectTextMatches(root, t, true, 2000, DIFF_SEARCH_SKIP));
-  }, []);
-  useEffect(() => {
-    let timer = 0;
-    const onSelectionChange = () => {
-      clearSelectionMatchesRef.current?.();
-      clearSelectionMatchesRef.current = null;
-      window.clearTimeout(timer);
-      timer = window.setTimeout(refreshDiffSelectionMatches, 120);
-    };
-    document.addEventListener('selectionchange', onSelectionChange);
-    return () => {
-      document.removeEventListener('selectionchange', onSelectionChange);
-      window.clearTimeout(timer);
-      clearSelectionMatchesRef.current?.();
-      clearSelectionMatchesRef.current = null;
-    };
-  }, [refreshDiffSelectionMatches, selectedId, ghost?.file]);
+  // 嵌套的文件预览自行管理选区，只扫描真正的 diff。
+  const refreshDiffSelectionMatches = useSelectionMatches(
+    () => containerRef.current?.querySelector<HTMLElement>('.session-diff-filepane') ?? null,
+    (root, text) => collectTextMatches(root, text, true, 2000, DIFF_SEARCH_SKIP),
+    [selectedId, ghost?.file],
+  );
 
   // ── Cmd/Ctrl+click identifier → reference search (right-docked panel) ──────
   const [refState, setRefState] = useState<{

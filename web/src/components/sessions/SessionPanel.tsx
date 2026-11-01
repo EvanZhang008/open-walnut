@@ -16,6 +16,10 @@ import { SessionNotesPill, SessionNotesBar, useSessionNote } from './SessionNote
 import { OutputModePill } from './OutputModePill';
 import { useSessionPins } from '@/hooks/useSessionPins';
 import { SessionPinsContext } from '@/contexts/SessionPinsContext';
+import { SessionCommentsContext, type SessionCommentsApi } from '@/contexts/SessionCommentsContext';
+import { useSessionComments } from '@/hooks/useSessionComments';
+import { composeWithComments } from '@/utils/passage-comments';
+import { PendingCommentsTray } from './PendingCommentsTray';
 import { usePanelThreads } from '@/hooks/useSessionThreads';
 import { SessionThreadsContext } from '@/contexts/SessionThreadsContext';
 import { releaseSelectionHold, requestSelectionHold } from '@/utils/selection-hold';
@@ -787,6 +791,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // Pinned messages (the timeline outline) + the rewind entry point. Both reach
   // the memoized transcript rows through context, never props.
   const pinsApi = useSessionPins(sessionId, session?.pinnedMessages);
+  // Quotes and comments on passages: marked in the timeline, listed above the
+  // composer, and sent with its next message (utils/passage-comments.ts).
+  const commentsStore = useSessionComments(sessionId, session?.passageComments, !!session);
   // ── Questions (conversation threads): wired by usePanelThreads below. The
   // composer's text and focus feed the stack's Esc rule and its draft flush.
   const composerTextRef = useRef('');
@@ -1046,6 +1053,33 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     autoCollapsed.current = false;
     setChatCollapsed(false);
   }, [sessionId]);
+  // The pill's Quote / Comment on a passage with a message id: kept as a comment on
+  // its words (listed above the composer), never as text in the box. Same trip back
+  // to the main conversation as above, since that is the composer that sends it;
+  // the timeline stays where the user is reading.
+  const addPassageComment = commentsStore.add;
+  const commentsApi = useMemo<SessionCommentsApi>(() => ({
+    comments: commentsStore.comments,
+    remove: commentsStore.remove,
+    requestJump: commentsStore.requestJump,
+    jump: commentsStore.jump,
+    canComment: commentsStore.canComment,
+    add: (input) => {
+      const t = threadsForInsert.current;
+      if (t.draftKey !== sessionDraftKey(sessionId)) {
+        if (t.api.viewMode === 'linear') t.api.clearQuote('quote-in-chat', { keepDraft: true });
+        else {
+          t.api.requestCard(null, 'quote-in-chat');
+          t.stack.api.popTo(ROOT_THREAD_KEY, 'quote-in-chat');
+        }
+      }
+      addPassageComment(input);
+      autoCollapsed.current = false;
+      setChatCollapsed(false);
+      // A phone keeps its keyboard down while the user marks more passages.
+      if (!phoneLayer) setComposerFocusNonce((n) => n + 1);
+    },
+  }), [commentsStore.comments, commentsStore.remove, commentsStore.requestJump, commentsStore.jump, commentsStore.canComment, addPassageComment, sessionId, phoneLayer]);
   // Messages the CLI had queued behind the turn that a Stop dropped: like Esc in
   // Claude Code, their text goes back into the input (ahead of anything typed since)
   // and the "Delivered" bubbles go, since the model never saw them.
@@ -1710,9 +1744,36 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     sendResult: (text: string) => send(sessionId, text),
   }), [sessionId, send]);
 
-  const handleInterruptSend = useCallback((message: string, images?: ImageAttachment[]) => {
+  const handleInterruptSendRaw = useCallback((message: string, images?: ImageAttachment[]) => {
     return sendAnchored(message, images, true);
   }, [sendAnchored]);
+
+  // The main composer's sends carry the pending quotes and comments: each quote with
+  // its comment, in the order added, ahead of the typed words. Only an ACCEPTED send
+  // turns them into marks; a refused one leaves them pending for the next try.
+  // The send CLAIMS them at once, so a second send before this one is accepted
+  // cannot carry them again. A slash command is a command, not a message: it goes
+  // as typed and the comments wait.
+  const claimComments = commentsStore.claim;
+  const settleComments = commentsStore.settle;
+  const withComments = useCallback((
+    sendFn: (message: string, images?: ImageAttachment[]) => Promise<boolean>,
+  ) => async (message: string, images?: ImageAttachment[]): Promise<boolean> => {
+    if (message.trimStart().startsWith('/')) return sendFn(message, images);
+    const carried = claimComments();
+    if (carried.length === 0) return sendFn(message, images);
+    const ids = carried.map((c) => c.id);
+    log.info('session-panel', 'sending with passage comments', { sessionId, count: carried.length });
+    let ok = false;
+    try {
+      ok = await sendFn(composeWithComments(carried, message), images);
+    } finally {
+      settleComments(ids, ok);
+    }
+    return ok;
+  }, [sessionId, claimComments, settleComments]);
+  const handleComposerSend = useMemo(() => withComments(handleSend), [withComments, handleSend]);
+  const handleInterruptSend = useMemo(() => withComments(handleInterruptSendRaw), [withComments, handleInterruptSendRaw]);
 
   const handleStopTurn = useCallback(() => {
     void stopTurn(sessionId);
@@ -2045,6 +2106,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     <SessionUsageOpenContext.Provider value={openUsageFor}>
     <PlanContentContext.Provider value={planContentValue}>
     <SessionPinsContext.Provider value={pinsApi}>
+    <SessionCommentsContext.Provider value={commentsApi}>
     <SessionThreadsContext.Provider value={threadsApi}>
     <SessionRewindContext.Provider value={rewindApi}>
     <SessionPanelErrorBoundary sessionId={sessionId} clearsColumnLayout={!embedded} {...(onClose ? { onClose: closePanel } : {})}>
@@ -2302,7 +2364,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               <ComposerControlsBar className="session-mode-bar" controls={composerControls()} handleRef={planComposerControlsRef} />
             ) : undefined}
                           onSend={handleSend}
-                          onInterruptSend={handleInterruptSend}
+                          onInterruptSend={handleInterruptSendRaw}
                           onStop={handleStopTurn}
                           isStreaming={isStreaming}
                           placeholder="Send a message while viewing plan..."
@@ -2925,6 +2987,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
               the line, and its composer stays mounted with the send controls hidden,
               so a presence flip never takes what is being typed. */}
           {macSessionAway && <MacAwayComposer />}
+          <PendingCommentsTray
+            pending={commentsStore.pending}
+            onJump={commentsStore.requestJump}
+            onRemove={commentsStore.remove}
+          />
           <ChatInput
             sendBlocked={macSessionAway}
             focusNonce={composerFocusNonce}
@@ -2938,8 +3005,10 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
             contextPill={threads.composerTarget ? (
               <ComposerThreadPill target={threads.composerTarget} onOpen={openComposerTarget} onClear={clearComposerTarget} />
             ) : undefined}
-            onSend={handleSend}
+            onSend={handleComposerSend}
             onInterruptSend={handleInterruptSend}
+            // Pending quotes and comments are a message by themselves.
+            allowEmptySend={commentsStore.pending.length > 0}
             onStop={handleStopTurn}
             isStreaming={isStreaming}
             // Phone: the Waiting line folds away with the keyboard up (N2-06), so its words ride here.
@@ -3051,6 +3120,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     </SessionPanelErrorBoundary>
     </SessionRewindContext.Provider>
     </SessionThreadsContext.Provider>
+    </SessionCommentsContext.Provider>
     </SessionPinsContext.Provider>
     </PlanContentContext.Provider>
     </SessionUsageOpenContext.Provider>

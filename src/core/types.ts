@@ -2540,6 +2540,35 @@ export interface SessionPinnedQuote {
 }
 
 /**
+ * A passage the human quoted or commented on from the transcript's selection pill
+ * (2026-11-01, the user: the comment stays marked on the words it was left on, and
+ * the composer lists the pending ones above it, never as text). Anchored like a
+ * quote pin; `sentAt` is set once the message carrying it was accepted, after
+ * which it stays as a mark on the passage.
+ */
+export interface SessionPassageComment {
+  /** Client-minted identity (a uuid). */
+  id: string;
+  /** The message holding the passage. */
+  msgId: string;
+  role: 'user' | 'assistant' | 'system';
+  /** Where it is: the anchor over the message's plain text (no block breaks). */
+  quote: SessionPinnedQuote;
+  /** The passage as the human selected it, line breaks kept: what the model reads. */
+  text: string;
+  /** The human's words about the passage; '' for a plain Quote. */
+  comment: string;
+  createdAt: string;
+  /** Last edit (a later one wins when two copies of the list meet). */
+  updatedAt?: string;
+  /** When the message that carried it to the model was accepted. */
+  sentAt?: string;
+  /** Taken out (by the user, or a plain Quote once sent). Kept as a mark of its own
+   *  for a day so a stale copy of the list cannot bring it back. */
+  removedAt?: string;
+}
+
+/**
  * One "ask about this" link: a user message hangs off a passage of an earlier
  * reply, so the UI can draw a navigation tree over ONE linear transcript.
  *
@@ -2968,6 +2997,9 @@ export interface SessionRecord {
    *  order they were recorded. Pure navigation metadata: the client builds the
    *  tree, the server only validates and stores (see SessionThreadAnchor). */
   threadAnchors?: SessionThreadAnchor[];
+  /** Quotes and comments left on passages of this transcript, in the order they
+   *  were added (see SessionPassageComment). */
+  passageComments?: SessionPassageComment[];
   /** Per-question metadata (status, title, takeaway, hidden), keyed by head
    *  msgId and merged by headId on write (see SessionThreadMeta). */
   threadMeta?: SessionThreadMeta[];

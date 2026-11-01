@@ -1,0 +1,156 @@
+/* Quotes and comments on passages (PassageCommentMarks, PendingCommentsTray).
+   Orange, so a comment never reads as a pin's yellow. */
+
+::highlight(walnut-comment) {
+  background-color: rgba(255, 149, 0, 0.16);
+  text-decoration: underline 2px rgba(240, 90, 20, 0.9);
+  text-underline-offset: 3px;
+}
+::highlight(walnut-comment-sent) {
+  background-color: rgba(255, 149, 0, 0.08);
+  text-decoration: underline 1px rgba(240, 90, 20, 0.55);
+  text-underline-offset: 3px;
+}
+[data-theme="dark"] ::highlight(walnut-comment) { background-color: rgba(255, 159, 10, 0.2); }
+[data-theme="dark"] ::highlight(walnut-comment-sent) { background-color: rgba(255, 159, 10, 0.1); }
+
+/* The chip at a passage's end. Fixed in a <body> portal, re-placed from the live
+   Range; under every menu and dialog. */
+.passage-comment-marker {
+  position: fixed;
+  z-index: 30;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 7px 7px 7px 2px;
+  background: rgb(240, 100, 20);
+  color: #fff;
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+.passage-comment-marker.is-sent { background: rgba(240, 100, 20, 0.6); }
+.passage-comment-marker:hover { transform: scale(1.12); }
+
+.passage-comment-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(320px, 80vw);
+  padding: 10px 12px;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  font-size: 13px;
+  z-index: 1000;
+}
+.passage-comment-card-head { display: flex; gap: 8px; align-items: baseline; font-weight: 600; }
+.passage-comment-card-state { font-weight: 400; font-size: 11px; color: var(--fg-muted); }
+.passage-comment-card-quote {
+  color: var(--fg-muted);
+  font-size: 12px;
+  border-left: 2px solid rgba(240, 90, 20, 0.7);
+  padding-left: 8px;
+}
+.passage-comment-card-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow-y: auto; }
+.passage-comment-card-actions { display: flex; justify-content: flex-end; }
+.passage-comment-card-remove {
+  padding: 4px 8px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 12px;
+}
+.passage-comment-card-remove:hover { background: var(--bg-hover); }
+
+/* The pending list right above the composer: one row each, three in view. */
+.pending-comments {
+  margin: 0 0 6px;
+  border: 1px solid rgba(240, 90, 20, 0.35);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  overflow: hidden;
+}
+.pending-comments-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 10px 3px;
+  font-size: 12px;
+}
+.pending-comments-count { font-weight: 600; color: rgb(220, 85, 15); }
+[data-theme="dark"] .pending-comments-count { color: rgb(255, 150, 80); }
+.pending-comments-hint { color: var(--fg-muted); font-size: 11px; }
+.pending-comments-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 4px 4px;
+  /* Three rows in view, scroll for the rest. */
+  max-height: calc(3 * 34px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.pending-comments-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 34px;
+  border-radius: 7px;
+}
+.pending-comments-row:hover { background: var(--bg-hover); }
+.pending-comments-jump {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  padding: 0 6px;
+  border: none;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+}
+.pending-comments-where {
+  flex: 0 1 auto;
+  max-width: 45%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.pending-comments-text {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pending-comments-text.is-quote { color: var(--fg-muted); font-style: italic; }
+.pending-comments-remove {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+.pending-comments-remove:hover { background: var(--bg-hover); color: var(--fg); }

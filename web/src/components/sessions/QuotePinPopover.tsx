@@ -47,7 +47,7 @@ const INTERACTIVE = 'a, button, input, textarea, select, [contenteditable="true"
  *  hit test: those rects ARE the yellow the user aimed at, and unlike a caret
  *  lookup they don't depend on which of the two caret APIs the engine implements
  *  or on where in a glyph the pointer landed. */
-function pointInRangeRects(range: Range, x: number, y: number): boolean {
+export function pointInRangeRects(range: Range, x: number, y: number): boolean {
   const rects = range.getClientRects();
   for (const r of rects) {
     if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return true;
@@ -58,7 +58,7 @@ function pointInRangeRects(range: Range, x: number, y: number): boolean {
 /** The line box the popover hangs under: the passage's FIRST line, so a passage
  *  that wraps is labelled at its beginning. `null` = the range no longer has a
  *  box (its text was re-rendered away), which is the signal to close. */
-function anchorRectOf(range: Range): DOMRect | null {
+export function anchorRectOf(range: Range): DOMRect | null {
   let rect: DOMRect | null = null;
   try {
     const rects = range.getClientRects();
@@ -72,7 +72,7 @@ function anchorRectOf(range: Range): DOMRect | null {
 
 /** Caret position under a viewport point. WebKit only has caretRangeFromPoint;
  *  Chrome has both (and is deprecating the old one). */
-function caretAtPoint(x: number, y: number): { node: Node; offset: number } | null {
+export function caretAtPoint(x: number, y: number): { node: Node; offset: number } | null {
   const doc = document as Document & {
     caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
     caretRangeFromPoint?: (x: number, y: number) => Range | null;

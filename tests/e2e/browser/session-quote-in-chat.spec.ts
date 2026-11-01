@@ -3,9 +3,9 @@
  * beside the Files tab's "Ask here / Quote in chat"; named "Quote" on 2026-10-22:
  * "quote goes straight into the input box"). "Ask here" asks about the passage in
  * Conversation Mode (2026-10-23: from Tree Mode the column switches and the card
- * opens beside the passage); "Quote" puts the passage, quoted, at the head of the MAIN
- * conversation's composer, keeps whatever was typed after it, and leaves a
- * question's own draft where it was.
+ * opens beside the passage); "Quote" keeps the passage for the MAIN conversation's
+ * next message (2026-11-01: a row above its composer, never text in the box, see
+ * session-quote-comment-stack.spec.ts), and leaves a question's own draft where it was.
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
@@ -46,6 +46,18 @@ async function plainPhrase(panel: Locator, msgId: string): Promise<string> {
   return text.split(/\s+/).slice(0, 6).join(' ')
 }
 
+/** The Quote is one row above the composer (the passage, as selected), not text in
+ *  it. Taken out again at once: the row is on the shared fixture session's record,
+ *  and a spec sending there in parallel would carry it. */
+async function expectQuoteRow(panel: Locator, phrase: string): Promise<void> {
+  const rows = panel.getByTestId('pending-comment-row')
+  await expect(rows).toHaveCount(1)
+  await expect(rows.first().locator('.pending-comments-where')).toHaveAttribute('title', phrase)
+  await expect(rows.first().locator('.pending-comments-text')).toHaveText('Quote')
+  await rows.first().getByTestId('pending-comment-remove').click()
+  await expect(rows).toHaveCount(0)
+}
+
 test.describe('Selection pill: Ask here and Quote', () => {
   test.setTimeout(180_000)
   test.beforeEach(async ({ request }) => {
@@ -76,10 +88,9 @@ test.describe('Selection pill: Ask here and Quote', () => {
     await pill(page).getByRole('button', { name: 'Quote' }).click()
     await expect(pill(page)).toHaveCount(0)
     await expect(composer).toBeFocused()
-    await expect(composer).toHaveValue(`> ${phrase}\n\nwhat does this mean`)
-    // The caret waits right after the quote, ready for the question.
-    const caret = await composer.evaluate((el: HTMLTextAreaElement) => el.selectionStart)
-    expect(caret).toBe(`> ${phrase}\n\n`.length)
+    // The quote waits above the box for the next send; the typed words stay as they are.
+    await expect(composer).toHaveValue('what does this mean')
+    await expectQuoteRow(panel, phrase)
     // No question page, no anchor: the passage is for the main conversation.
     await expect(panel.locator('.thread-stack-header')).toHaveCount(0)
     await expect(panel.locator('[data-testid="composer-thread-target"]')).toHaveCount(0)
@@ -118,8 +129,9 @@ test.describe('Selection pill: Ask here and Quote', () => {
     await selectPassage(page, panel, phrase)
     await pill(page).getByRole('button', { name: 'Quote' }).click()
     await expect(panel.locator('.thread-stack')).toHaveAttribute('data-thread-depth', '0')
-    await expect(composer).toHaveValue(`> ${phrase}\n\n`)
+    await expect(composer).toHaveValue('')
     await expect(composer).toBeFocused()
+    await expectQuoteRow(panel, phrase)
     await shot(page, 'tree-back-to-main')
     // The question's own words wait on its page.
     await mapRow(panel, MAP_TITLES.Q4).click()
@@ -145,8 +157,9 @@ test.describe('Selection pill: Ask here and Quote', () => {
     await selectPassage(page, panel, phrase)
     await pill(page).getByRole('button', { name: 'Quote' }).click()
     await expect(target).toHaveCount(0)
-    await expect(composer).toHaveValue(`> ${phrase}\n\n`)
+    await expect(composer).toHaveValue('')
     await expect(composer).toBeFocused()
+    await expectQuoteRow(panel, phrase)
     await shot(page, 'linear-main')
     // Quoted again, the question's own words are still there.
     await quoteQ4()

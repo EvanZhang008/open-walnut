@@ -60,6 +60,22 @@ for (const sample of [
   })
 }
 
+// 2026-11-01, the user: "after I deselect, the highlight stays". A click on blank
+// space beside the doc takes focus from its editor and leaves the selection in the
+// page, unpainted (WebKit and Chromium both); its matches must go with it.
+test('a click on blank space beside the editor clears the matches the editor left behind', async ({ page }, testInfo) => {
+  await openFile(page, 'incident-report.md')
+  await selectPassage(page, 'timeline entry', 160)
+  const view = page.locator(`${PANEL} .file-content-view`).first()
+  const box = (await view.boundingBox())!
+  await page.mouse.click(box.x + box.width * 0.6, box.y + 14)
+  await expect.poll(() => page.evaluate(() => document.activeElement?.closest('.ProseMirror') ? 'editor' : 'elsewhere')).toBe('elsewhere')
+  await expect.poll(() => paintedPassages(page)).toEqual([])
+  await page.locator(PANEL).screenshot({ path: `/tmp/walnut-file-selection/${testInfo.project.name}-blank-click-cleared.png`, scale: 'css' })
+  // Back in the editor with a new selection, the matches paint again.
+  await selectPassage(page, 'watching')
+})
+
 test('keyboard selection changes clear matches and switching files drops old paint', async ({ page }) => {
   await openFile(page, 'incident-report.md')
   await selectPassage(page, 'timeline entry', 160)
@@ -110,7 +126,7 @@ test('copying and formatting still act on the selected passage', async ({ page }
   await expect.poll(() => paintedPassages(page)).toEqual(['watching'])
   await page.locator('.notes-bubble-menu:visible').getByTitle('Italic (Cmd+I)', { exact: true }).click()
   await expect(italic).toHaveCount(wasItalic ? 1 : 0)
-  await page.locator('.notes-bubble-menu:visible').getByTitle('Ask the session about this selection', { exact: true }).click()
+  await page.locator('.notes-bubble-menu:visible').getByTitle('Quote this passage in the chat', { exact: true }).click()
   await expect.poll(() => page.evaluate(() => window.getSelection()?.toString())).toBe('')
   await expect.poll(() => paintedPassages(page)).toEqual([])
 })

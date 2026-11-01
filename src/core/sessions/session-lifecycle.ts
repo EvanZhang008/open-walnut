@@ -249,6 +249,9 @@ export interface SessionPatchInput {
   /** Per-question metadata UPSERT entries keyed by headId (thread-meta.ts):
    *  listed fields overwrite, `null` clears, unlisted entries stay. */
   thread_meta?: unknown;
+  /** Full replacement list of passage quotes and comments (the client owns the
+   *  order). Same handling as `pinned_messages`. */
+  passage_comments?: unknown;
 }
 
 /** Hard caps for the pin list. A pin is a navigation aid, not storage: the whole
@@ -382,6 +385,80 @@ export function normalizePinnedMessages(value: unknown): import('../types.js').S
   return out;
 }
 
+/** A comment is a note on a passage, not a document; the cap only stops a runaway
+ *  client from growing every record read. */
+const MAX_PASSAGE_COMMENTS = 100;
+const MAX_PASSAGE_COMMENT_CHARS = 4000;
+/** The passage as selected; its anchor alone is capped at MAX_PIN_QUOTE_CHARS. */
+const MAX_PASSAGE_TEXT_CHARS = 4000;
+const MAX_ISO_CHARS = 40;
+
+/**
+ * Validate + normalize a `passage_comments` patch. Same posture as pins: a bad
+ * entry is a 400 for the whole patch, never a silent drop, and an entry is
+ * addressed by its `id`, so a repeated id keeps the first copy.
+ */
+export function normalizePassageComments(value: unknown): import('../types.js').SessionPassageComment[] {
+  if (!Array.isArray(value)) {
+    throw new SessionControlError('passage_comments must be an array', 400);
+  }
+  if (value.length > MAX_PASSAGE_COMMENTS) {
+    throw new SessionControlError(`passage_comments holds at most ${MAX_PASSAGE_COMMENTS} entries`, 400);
+  }
+  const out: import('../types.js').SessionPassageComment[] = [];
+  const seen = new Set<string>();
+  const iso = (v: unknown, name: string): string | undefined => {
+    if (v === undefined || v === null) return undefined;
+    if (typeof v !== 'string' || !v || v.length > MAX_ISO_CHARS) {
+      throw new SessionControlError(`passage_comments[].${name} must be an ISO time`, 400);
+    }
+    return v;
+  };
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new SessionControlError('each passage_comments entry must be an object', 400);
+    }
+    const entry = raw as Record<string, unknown>;
+    const id = entry.id;
+    if (typeof id !== 'string' || !id.trim() || id.length > MAX_PIN_ENTRY_ID_CHARS) {
+      throw new SessionControlError(
+        `passage_comments[].id must be a non-empty string (max ${MAX_PIN_ENTRY_ID_CHARS} chars)`, 400,
+      );
+    }
+    const msgId = entry.msgId;
+    if (typeof msgId !== 'string' || !msgId.trim() || msgId.length > MAX_PIN_ID_CHARS) {
+      throw new SessionControlError('passage_comments[].msgId must be a non-empty string', 400);
+    }
+    const comment = entry.comment ?? '';
+    if (typeof comment !== 'string' || comment.length > MAX_PASSAGE_COMMENT_CHARS) {
+      throw new SessionControlError(
+        `passage_comments[].comment must be a string (max ${MAX_PASSAGE_COMMENT_CHARS} chars)`, 400,
+      );
+    }
+    const quote = normalizePinQuote(entry.quote, 'passage_comments');
+    const text = entry.text;
+    if (typeof text !== 'string' || !text.trim() || text.length > MAX_PASSAGE_TEXT_CHARS) {
+      throw new SessionControlError(
+        `passage_comments[].text must be a non-empty string (max ${MAX_PASSAGE_TEXT_CHARS} chars)`, 400,
+      );
+    }
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const role = entry.role === 'user' || entry.role === 'assistant' || entry.role === 'system'
+      ? entry.role
+      : 'assistant';
+    const createdAt = iso(entry.createdAt, 'createdAt') ?? new Date().toISOString();
+    const updatedAt = iso(entry.updatedAt, 'updatedAt');
+    const sentAt = iso(entry.sentAt, 'sentAt');
+    const removedAt = iso(entry.removedAt, 'removedAt');
+    out.push({
+      id, msgId, role, quote, text, comment, createdAt,
+      ...(updatedAt ? { updatedAt } : {}), ...(sentAt ? { sentAt } : {}), ...(removedAt ? { removedAt } : {}),
+    });
+  }
+  return out;
+}
+
 /** Hard cap on the anchor list. One anchor per anchored turn, so the ceiling is
  *  "a very long session" rather than a storage budget — but the whole list rides
  *  every session record read and is diffed in the browser on every refetch, so it
@@ -470,7 +547,7 @@ export function normalizeThreadAnchors(value: unknown): import('../types.js').Se
 export async function patchSession(sessionId: string, input: SessionPatchInput): Promise<SessionRecord> {
   const {
     title, activity, human_note, archived, archive_reason, mode, output_mode,
-    pinned_messages, thread_anchors, thread_meta,
+    pinned_messages, thread_anchors, thread_meta, passage_comments,
   } = input;
 
   if (title !== undefined && (typeof title !== 'string' || title.length > 500)) {
@@ -523,6 +600,7 @@ export async function patchSession(sessionId: string, input: SessionPatchInput):
   if (output_mode !== undefined) updates.output_mode = output_mode as SessionOutputMode;
   if (pinned_messages !== undefined) updates.pinnedMessages = normalizePinnedMessages(pinned_messages);
   if (thread_anchors !== undefined) updates.threadAnchors = normalizeThreadAnchors(thread_anchors);
+  if (passage_comments !== undefined) updates.passageComments = normalizePassageComments(passage_comments);
   if (archived !== undefined) {
     updates.archived = archived as boolean;
     if (archived && archive_reason) updates.archive_reason = archive_reason as string;

@@ -114,6 +114,42 @@ export function heldQuoteRange(): Range | null {
   return heldRange;
 }
 
+/** A passage with a comment still to be sent (utils/passage-comments.ts). */
+export const HL_COMMENT = 'walnut-comment';
+/** A passage whose comment went with a sent message: the same mark, quieter. */
+export const HL_COMMENT_SENT = 'walnut-comment-sent';
+
+/** Per-panel slices of any other shared highlight name (the same rule as pins). */
+const layerRanges = new Map<string, Map<string, Range[]>>();
+
+export interface PanelPaintLayer {
+  set: (panelKey: string, ranges: Range[]) => void;
+  clear: (panelKey: string) => void;
+}
+
+/** The paint layer of one highlight name, sliced per panel like the pin paint. */
+export function panelLayer(name: string): PanelPaintLayer {
+  const repaintLayer = () => {
+    const all: Range[] = [];
+    for (const ranges of layerRanges.get(name)?.values() ?? []) all.push(...ranges);
+    repaint(name, all);
+  };
+  return {
+    set: (panelKey, ranges) => {
+      let slices = layerRanges.get(name);
+      if (!ranges.length && !slices?.has(panelKey)) return;
+      if (!slices) { slices = new Map(); layerRanges.set(name, slices); }
+      if (ranges.length) slices.set(panelKey, ranges);
+      else slices.delete(panelKey);
+      repaintLayer();
+    },
+    clear: (panelKey) => {
+      if (!layerRanges.get(name)?.delete(panelKey)) return;
+      repaintLayer();
+    },
+  };
+}
+
 /** Test-only / diagnostics: how many passages are painted right now. */
 export function paintedPinCount(): number {
   let n = 0;

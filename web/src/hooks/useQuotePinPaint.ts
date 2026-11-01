@@ -13,7 +13,7 @@
  * several passages.
  */
 import { useCallback, useEffect, useMemo, useRef, type RefObject } from 'react';
-import { clearPanelPinRanges, setPanelPinRanges } from '@/utils/pin-highlights';
+import { clearPanelPinRanges, setPanelPinRanges, type PanelPaintLayer } from '@/utils/pin-highlights';
 import { buildTextIndex, locateQuote, rangeFromOffsets, rangeIsLive } from '@/utils/text-quote-anchor';
 import { bodyForMsgId } from '@/utils/selection-quote';
 import { pinKeyOf } from '@/hooks/useSessionPins';
@@ -64,16 +64,33 @@ export interface QuotePinPaint {
   paintedRanges: () => Array<{ pinKey: string; range: Range }>;
 }
 
+/** Anything anchored on a passage: a quote pin, or a passage comment. */
+type PaintItem = { id?: string; msgId: string; quote?: SessionPinnedQuote };
+
+const PIN_LAYER: PanelPaintLayer = { set: setPanelPinRanges, clear: clearPanelPinRanges };
+
+export interface QuotePaintOptions {
+  /** Where the ranges are painted. Default: the pin paint. */
+  layer?: PanelPaintLayer;
+  /** Told after every relocate (a marker layer re-positions from paintedRanges). */
+  onPainted?: () => void;
+}
+
 export function useQuotePinPaint(
   containerRef: RefObject<HTMLElement | null>,
-  pins: SessionPinnedMessage[],
+  pins: PaintItem[],
   panelKey: string,
   /** Bumped by the owner when the rendered message set changes (window expansion,
    *  output-mode toggle). The MutationObserver below is the backstop; this makes
    *  the common cases immediate instead of one debounce late. */
   renderNonce: number,
+  options?: QuotePaintOptions,
 ): QuotePinPaint {
   const quotePins = useMemo(() => pins.filter((p) => p.quote?.exact), [pins]);
+  const layer = options?.layer ?? PIN_LAYER;
+  const onPaintedRef = useRef(options?.onPainted);
+  onPaintedRef.current = options?.onPainted;
+  const { set: setLayer, clear: clearLayer } = layer;
   const rangesRef = useRef(new Map<string, Range>());
 
   const locatePin = useCallback((pin: { msgId: string; quote?: SessionPinnedQuote }): Range | null => {
@@ -92,7 +109,8 @@ export function useQuotePinPaint(
     const next = new Map<string, Range>();
     if (!container || quotePins.length === 0) {
       rangesRef.current = next;
-      clearPanelPinRanges(panelKey);
+      clearLayer(panelKey);
+      onPaintedRef.current?.();
       return;
     }
     // Index each rendered body ONCE even when it holds several pins.
@@ -106,11 +124,12 @@ export function useQuotePinPaint(
       const at = locateQuote(index.text, pin.quote!);
       if (!at) { missing++; continue; }
       const range = rangeFromOffsets(index, at.start, at.end);
-      if (range) next.set(pinKeyOf(pin), range);
+      if (range) next.set(pin.id ?? pinKeyOf(pin as SessionPinnedMessage), range);
       else missing++;
     }
     rangesRef.current = next;
-    setPanelPinRanges(panelKey, [...next.values()]);
+    setLayer(panelKey, [...next.values()]);
+    onPaintedRef.current?.();
     if (missing > 0) {
       // Not an error: the passage may have been edited away or /compact rewrote
       // the message. Worth a line, because a pin that never paints looks broken.
@@ -118,7 +137,7 @@ export function useQuotePinPaint(
         panelKey, missing, total: quotePins.length,
       });
     }
-  }, [containerRef, quotePins, panelKey]);
+  }, [containerRef, quotePins, panelKey, setLayer, clearLayer]);
 
   // Latest relocate, reachable from the stable callbacks below without making
   // their identity change (the popover's listener effect depends on it).
@@ -135,7 +154,7 @@ export function useQuotePinPaint(
     // Early return BEFORE observing: a session with no quote pins costs nothing.
     if (!container || quotePins.length === 0) {
       rangesRef.current = new Map();
-      clearPanelPinRanges(panelKey);
+      clearLayer(panelKey);
       return;
     }
     relocate();
@@ -171,10 +190,10 @@ export function useQuotePinPaint(
       clearTimeout(timer);
       cancelAnimationFrame(raf);
       observer?.disconnect();
-      clearPanelPinRanges(panelKey);
+      clearLayer(panelKey);
     };
     // renderNonce is a deliberate trigger, not a value this effect reads.
-  }, [containerRef, quotePins, panelKey, relocate, hasStaleRange, renderNonce]);
+  }, [containerRef, quotePins, panelKey, relocate, hasStaleRange, renderNonce, clearLayer]);
 
   const paintedRanges = useCallback(() => {
     // Repair before answering: the caller is hit-testing a click against what the

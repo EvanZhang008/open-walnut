@@ -573,9 +573,16 @@ show inline after the open ones, other completed hits that show the query fold i
   switches first (`keepCardOnSwitch`, so the mode change does not close the new card, and
   `askHold`, which keeps the passage's row where it was selected for `ASK_HOLD_MS` while the
   folds and turn labels settle) and the card opens beside the passage; the pending question is
-  still the stack's page, so the pill back to Tree Mode shows it. `Quote` puts the passage as
-  a Markdown quote at the head of the MAIN conversation's composer (`buildPassagePrefill`,
-  prefill mode `keep-draft`, so typed words follow it). On a question page, or with a question as
+  still the stack's page, so the pill back to Tree Mode shows it. `Quote` and `Comment` keep
+  the passage for the MAIN conversation's next message, never as text in its box (2026-11-01,
+  the user's sketch): a `passage_comments` entry on the session record (`useSessionComments`,
+  `utils/passage-comments.ts`) that `PassageCommentMarks` paints on the words (orange
+  `walnut-comment`, a chip at the passage's end, a card on press) and `PendingCommentsTray`
+  lists above the composer (three rows in view, a row's click jumps there). The composer's
+  accepted send carries each one (`composeWithComments`: quote, its comment, in order, then
+  the typed words); a sent comment stays as a quieter `walnut-comment-sent` mark, a sent plain
+  Quote leaves none. A row with no message id yet, or a timeline with no record behind it,
+  falls back to the text quote (`buildPassagePrefill`, prefill mode `stack`). On a question page, or with a question as
   Conversation Mode's composer target, `SessionPanel.quoteInChat` goes back to the main
   conversation first with `popTo` (Tree Mode) or `clearQuote(..., { keepDraft: true })`
   (Conversation Mode), so the question keeps its own draft. Only a
