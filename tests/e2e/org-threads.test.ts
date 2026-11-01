@@ -35,7 +35,7 @@ import { CLAUDE_HOME, WALNUT_HOME } from '../../src/constants.js'
 import { encodeProjectPath } from '../../src/core/session-history.js'
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { startServer, stopServer } from '../../src/web/server.js'
-import { addTask, linkSession, listTasksByIds } from '../../src/core/task-manager.js'
+import { addTask, listTasksByIds } from '../../src/core/task-manager.js'
 import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { ensureProjectLead } from '../../src/core/org/org-store.js'
 import { getQueue, sendMessageToSession } from '../../src/core/session-message-queue.js'
@@ -226,11 +226,11 @@ describe('Org Threads', () => {
     expect(closed.status, await closed.clone().text()).toBe(200)
   })
 
-  it('a message filed before Walnut kept its session still gets its answer, from the lead\'s own chat, when Threads are read', async () => {
+  it('a message filed before Walnut kept its session gets its answer from the lead\'s own chat, even with the lead\'s session slot empty', async () => {
     const ask = 'which port does the preview use?'
-    // The lead's task names its session, as every running lead's does.
-    await linkSession(leadId, LEAD_SID)
-    expect((await listTasksByIds([leadId]))[0].session_id).toBe(LEAD_SID)
+    // The lead's session slot is empty, as a long-lived lead's can be (a link that failed); its
+    // session record still names the task (prod 2026-11-01: none of 60 older messages got an answer).
+    expect((await listTasksByIds([leadId]))[0].session_id).toBeUndefined()
     await typeIntoChat(LEAD_SID, ask)
     // The shape the threads filed before this build have: no session on the message.
     const file = path.join(WALNUT_HOME, 'org', 'threads', `${leadId}.json`)

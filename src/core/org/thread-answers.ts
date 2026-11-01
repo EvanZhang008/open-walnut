@@ -218,17 +218,16 @@ async function resolveOnce(taskId: string, endedAt: string | null): Promise<numb
   const store = await import('./threads-store.js');
   const file = await store.readThreads(taskId);
   if (!file.threads.length) return 0;
-  const { listTasksByIds } = await import('../task-manager.js');
-  const task = (await listTasksByIds([taskId]))[0];
-  const pending = pendingBySession(file.threads, task?.session_id, Date.now());
+  const nodeSid = await nodeSessionId(taskId);
+  const pending = pendingBySession(file.threads, nodeSid, Date.now());
   if (!pending.size) return 0;
   const found = new Map<string, ThreadAnswer>();
   for (const [sid, messages] of pending) {
     for (const [id, a] of await answersIn(sid, messages, endedAt)) found.set(id, a);
     // A session renamed on a resume, or a message sent before a switch: look in the node's own chat too.
     const left = messages.filter((m) => !m.answer && !found.has(m.id));
-    if (left.length && task?.session_id && task.session_id !== sid) {
-      for (const [id, a] of await answersIn(task.session_id, messages.filter((m) => m.answer || left.includes(m)), endedAt)) found.set(id, a);
+    if (left.length && nodeSid && nodeSid !== sid) {
+      for (const [id, a] of await answersIn(nodeSid, messages.filter((m) => m.answer || left.includes(m)), endedAt)) found.set(id, a);
     }
     for (const m of messages) if (!m.answer && !found.has(m.id)) tries.set(m.id, (tries.get(m.id) ?? 0) + 1);
   }
@@ -236,6 +235,23 @@ async function resolveOnce(taskId: string, endedAt: string | null): Promise<numb
   const kept = await store.setThreadAnswers(taskId, found);
   if (kept) log.task.info('org threads: answers kept', { taskId, kept });
   return kept;
+}
+
+/**
+ * The node's own chat now: its session slot, else its newest session not archived. The slot of a
+ * long-lived Main or lead can be empty while its chat runs (a link that failed; the tasks route
+ * heals it the same way when it serves the task), and every message filed before Walnut kept each
+ * message's session reads its answer here (2026-11-01: none of a lead's 60 older messages got one).
+ */
+export async function nodeSessionId(taskId: string): Promise<string | undefined> {
+  const { listTasksByIds } = await import('../task-manager.js');
+  const task = (await listTasksByIds([taskId]))[0];
+  const { getSessionsForTask } = await import('../session-tracker.js');
+  const records = await getSessionsForTask(taskId).catch(() => []);
+  const archived = new Set(records.filter((r) => r.archived).map((r) => r.claudeSessionId));
+  if (task?.session_id && !archived.has(task.session_id)) return task.session_id;
+  const live = records.filter((r) => !r.archived).sort((a, b) => (a.startedAt ?? '').localeCompare(b.startedAt ?? ''));
+  return live[live.length - 1]?.claudeSessionId;
 }
 
 /** The answers one session's chat holds for these messages. */
