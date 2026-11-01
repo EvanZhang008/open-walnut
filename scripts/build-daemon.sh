@@ -60,6 +60,8 @@ SOURCES=(
   src/providers/tool-args-source.ts
   src/ops/op-help.ts
   src/providers/mcp-cli-args.ts
+  src/providers/walnut-mcp-stdio.ts
+  src/mcp/instructions.ts
   src/providers/acp-daemon.ts
   src/providers/acp-thread-restore.ts
   src/providers/acp-host-artifacts.ts

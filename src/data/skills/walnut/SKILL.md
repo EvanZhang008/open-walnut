@@ -81,9 +81,15 @@ and **`next`** (the exact next call). Read those two fields instead of assuming.
 
 ## Calling it
 
-The `walnut` CLI is on PATH in every session, on every host. Where a Walnut MCP
-server is mounted the same operations exist as tools; prefer those when present
-(structured results, no shell quoting). Every question about the user's tasks,
+The `walnut` CLI is on PATH in every session, on every host. A Claude Code task
+session also has the same operations as MCP tools named `mcp__walnut__<op>`
+(`mcp__walnut__task_get` with `{"id":"..."}`), taking the same arguments as
+`walnut tools call <op>`. Prefer the tools when they are listed: the arguments are
+typed, so quotes, backticks and `$( )` in a text arrive exactly as written, and a
+call takes tens of milliseconds instead of about a second. They are deferred:
+load the ones you need with ToolSearch first (`select:mcp__walnut__task_get,mcp__walnut__task_send`).
+Another engine may name them `walnut_<op>`. Use the CLI where no such tool is
+listed, for a payload in a file (`@file`), and for `walnut wait`. Every question about the user's tasks,
 their work, or commits is an operation call: never a guess, and never a `git`
 command, because the commit-to-task mapping lives in Walnut's index, not in the
 repo. The catalog below is generated from the live registry, so every op named

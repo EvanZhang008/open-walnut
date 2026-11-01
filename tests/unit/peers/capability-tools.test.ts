@@ -28,6 +28,34 @@ function deps(throttle = new PeerThrottle()): CapabilityRouterDeps {
   return { throttle, cloudMode: false };
 }
 
+describe('gateway tools.list with schemas (walnut mcp-server)', () => {
+  it('lists every op the host may run, each with its JSON schema', async () => {
+    const { listOps } = await import('../../../src/ops/index.js');
+    const r = await handleGatewayCapability('tools.list', CALLER, { schemas: true }, 'devbox', deps());
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const ops = r.result.ops as Array<{ name: string; inputSchema?: { type?: string }; signature?: string }>;
+    // Exactly the ops tools.call would run from this host: no tool the model is refused.
+    const runnable = listOps().filter((o) => o.tags.remote !== 'deny').map((o) => o.name).sort();
+    expect(ops.map((o) => o.name).sort()).toEqual(runnable);
+    expect(ops.map((o) => o.name)).not.toContain('task_delete');
+    for (const op of ops) expect(op.inputSchema?.type, op.name).toBe('object');
+    const get = ops.find((o) => o.name === 'task_get') as { inputSchema: { required?: string[] } } | undefined;
+    expect(get?.inputSchema.required).toEqual(['id']);
+  });
+
+  it('a session on this Mac also sees the host-local ops its gateway runs there', async () => {
+    const { listOps } = await import('../../../src/ops/index.js');
+    const local = listOps().filter((o) => o.tags.remote === 'deny' && o.tags.localHostGateway).map((o) => o.name);
+    const r = await handleGatewayCapability('tools.list', CALLER, { schemas: true }, '__local__', deps());
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const names = (r.result.ops as Array<{ name: string }>).map((o) => o.name);
+    for (const name of local) expect(names, name).toContain(name);
+    expect(names).not.toContain('task_delete');
+  });
+});
+
 describe('gateway tools.list', () => {
   it('returns the registry catalog with names and remote policy', async () => {
     const r = await handleGatewayCapability('tools.list', CALLER, {}, 'devbox', deps());

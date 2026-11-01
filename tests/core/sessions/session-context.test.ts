@@ -328,7 +328,9 @@ describe('buildSessionContext (identity note)', () => {
     // came back the same day, each checked on another build and fixed for one case.
     // 7400 → 7450 (2026-10-31) for when a trigger parks: only with wait:true, never in
     // the turn that answers the user; an answer he had asked for left his list unread.
-    expect(systemPrompt.length).toBeLessThan(7450)
+    // 7450 → 7550 (2026-11-01) for the Walnut MCP tools every new Claude Code session
+    // now has: prefer them to the CLI, so a quote or a `$( )` in a text arrives exact.
+    expect(systemPrompt.length).toBeLessThan(7550)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {

@@ -215,6 +215,7 @@ USAGE
   walnut guide                              print the full Walnut manual (recipes + safety rules)
   walnut tools list|help|call ...           call Walnut operations (see \`walnut tools --help\`)
   walnut mcp list | <server> tools ...      MCP servers Walnut runs (see \`walnut mcp --help\`)
+  walnut mcp-server                         serve these same operations as an MCP stdio server
   walnut wait <id> [<id>...] [--any] [--timeout secs] [--json]   block until tasks settle or reply requests resolve
   walnut --help | walnut tools --help
 
@@ -411,7 +412,11 @@ function requestOverSocket(
 ): Promise<GatewayResponse> {
   return new Promise((resolve, reject) => {
     const sock = net.connect(socketPath)
+    // One decoder for the whole reply: a multi-byte character split across two
+    // chunks decodes whole, never as two U+FFFD.
+    sock.setEncoding('utf-8')
     let buf = ''
+    let scanFrom = 0
     let done = false
     const finish = (fn: () => void) => {
       if (done) return
@@ -425,9 +430,10 @@ function requestOverSocket(
       timeoutMs,
     )
     sock.on('connect', () => sock.write(JSON.stringify(req) + '\n'))
-    sock.on('data', (chunk) => {
-      buf += chunk.toString('utf-8')
-      const nl = buf.indexOf('\n')
+    sock.on('data', (chunk: string) => {
+      buf += chunk
+      const nl = buf.indexOf('\n', scanFrom)
+      scanFrom = buf.length
       if (nl === -1) return
       const line = buf.slice(0, nl)
       finish(() => {
@@ -618,6 +624,7 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
   // saying "enough", not an error — without this Node prints an uncaught stack.
   process.stdout.on('error', (e: NodeJS.ErrnoException) => { if (e?.code === 'EPIPE') process.exit(0) })
   if (argv[0] === 'mcp') return runMcpCli(argv.slice(1))
+  if (argv[0] === 'mcp-server') return runMcpServer(argv.slice(1))
   const parsed = parseWalnutCliArgs(argv)
   if (parsed.kind === 'help') {
     await writeStdout(helpText(parsed.topic))
@@ -788,6 +795,27 @@ export async function runWalnutCli(argv: string[]): Promise<number> {
     await writeStdout(JSON.stringify(resp.result, null, 2) + '\n')
   }
   return 0
+}
+
+// ── walnut mcp-server — Walnut's ops as an MCP stdio server (walnut-mcp-stdio.ts) ──
+
+async function runMcpServer(argv: string[]): Promise<number> {
+  if (argv.length > 0) {
+    process.stderr.write('walnut: mcp-server takes no arguments (it serves MCP on stdin/stdout)\n')
+    return 2
+  }
+  const uid = typeof process.getuid === 'function' ? process.getuid() : -1
+  const endpoint = resolveWalnutCliEndpoint(process.env, probeSocket, uid)
+  if (!endpoint.ok) {
+    process.stderr.write(endpoint.message + '\n')
+    return 6
+  }
+  const { socketPath, sid } = endpoint
+  const { runWalnutMcpStdio } = await import('./walnut-mcp-stdio.js')
+  return runWalnutMcpStdio({
+    request: (op, args, timeoutMs) => requestOverSocket(socketPath, { v: 1, op, sid, args }, timeoutMs),
+    formatError: formatErrorLines,
+  })
 }
 
 // ── walnut mcp — sugar over the mcp_* ops (mcp-cli-args.ts) ──

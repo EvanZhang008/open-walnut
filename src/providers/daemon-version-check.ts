@@ -67,6 +67,10 @@ const DAEMON_SOURCE_FILES = [
   'src/ops/op-help.ts',
   // `walnut mcp …` parsing and rendering, bundled into the CLI above.
   'src/providers/mcp-cli-args.ts',
+  // `walnut mcp-server` (the Walnut ops as an MCP stdio server over this gateway) and
+  // the instructions it hands its client; both bundled into the CLI above.
+  'src/providers/walnut-mcp-stdio.ts',
+  'src/mcp/instructions.ts',
   // ACP worker stack — compiled into the daemon deploy unit (worker artifact
   // ships with the daemon; version skew impossible by construction).
   'src/providers/acp-daemon.ts',

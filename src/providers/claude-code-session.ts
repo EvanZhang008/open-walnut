@@ -11842,15 +11842,25 @@ export class SessionRunner {
     // Carry the HTTP request ts onto the session instance so the init handler can
     // compute the full route→init latency breakdown (instrumentation only).
     session._requestTs = data.requestTs ?? 0
-    // Profile: the caller's bundle, with the config-driven Walnut MCP pre-mount
-    // merged ON TOP (`session.premount_walnut_mcp`, default off) so an install
-    // that wants every coding session to reach the user's tasks gets it without
-    // each caller opting in. mergeProfiles unions mcpServers per key, so a
-    // caller's own mounts survive.
-    const { mergeProfiles, walnutMcpProfile } = await import('../core/sessions/profiles.js')
-    const resolvedProfile = config.session?.premount_walnut_mcp
-      ? mergeProfiles(data.profile, walnutMcpProfile())
-      : data.profile
+    // Profile: the caller's bundle, plus the Walnut MCP tools served by the host
+    // daemon's own `walnut mcp-server` (`session.premount_walnut_mcp`, default on;
+    // src/core/sessions/walnut-mcp-mount.ts). A caller's own mounts survive, and its
+    // own walnut mount is never doubled. Decided here, at the first spawn only: the
+    // record keeps it, so a resumed session keeps the tools it started with. A fork
+    // takes its parent's profile as it is (its tools are part of the cache prefix it
+    // reuses), so a fork of a session that started without the tools stays without.
+    const { walnutMcpProfile } = await import('../core/sessions/profiles.js')
+    const { withWalnutMcpMount, WALNUT_MCP_CAPABILITY } = await import('../core/sessions/walnut-mcp-mount.js')
+    const mountHost = data.host && data.host !== '__local__' ? data.host : '__local__'
+    const { getConnectedDaemonConnection } = await import('./daemon-connection.js')
+    const resolvedProfile = isFork ? data.profile : withWalnutMcpMount({
+      setting: config.session?.premount_walnut_mcp,
+      profile: data.profile,
+      cloud: CLOUD_MODE,
+      hostServesMcp: getConnectedDaemonConnection(mountHost)?.hasCapability(WALNUT_MCP_CAPABILITY) ?? false,
+      local: mountHost === '__local__',
+      hubMount: walnutMcpProfile,
+    })
     const sendOpts = {
       ...(data.preassignedSessionId ? { preassignedSessionId: data.preassignedSessionId } : {}),
       ...(resolvedProfile ? { profile: resolvedProfile } : {}),

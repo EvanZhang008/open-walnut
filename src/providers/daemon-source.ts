@@ -221,7 +221,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'task-dir-prune-v1', 'host-exec-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'budget-v2'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'task-dir-prune-v1', 'host-exec-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'budget-v2', 'walnut-mcp-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -1216,8 +1216,9 @@ function runWnMinimal(argv, stdinText) {
       wsock.on('connect', function () { wsock.write(JSON.stringify({ v: 1, op: op, sid: sid, args: args }) + '\\n'); });
       wsock.on('error', function () { wfinish(retryOrTimeout); });
       wsock.on('close', function () { wfinish(retryOrTimeout); });
+      wsock.setEncoding('utf-8');
       wsock.on('data', function (chunk) {
-        wbuf += chunk.toString('utf-8');
+        wbuf += chunk;
         var wnl = wbuf.indexOf('\\n');
         if (wnl === -1) return;
         var wline = wbuf.slice(0, wnl);
@@ -1262,8 +1263,10 @@ function runWnMinimal(argv, stdinText) {
   sock.on('close', function () {
     finish(function () { errOut('walnut: agent socket closed without a response'); exitWn(6); });
   });
+  // One decoder for the whole reply, so a character split across chunks decodes whole.
+  sock.setEncoding('utf-8');
   sock.on('data', function (chunk) {
-    buf += chunk.toString('utf-8');
+    buf += chunk;
     var nl = buf.indexOf('\\n');
     if (nl === -1) return;
     var line = buf.slice(0, nl);

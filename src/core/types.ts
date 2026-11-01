@@ -1547,11 +1547,13 @@ export interface Config {
      *  appearing all at once when the message completes.
      *  Default: true. Set to false to fall back to per-message delivery. */
     stream_partial_messages?: boolean;
-    /** Mount the `open-walnut mcp` stdio server into every spawned coding
-     *  session (`--mcp-config`), so the CLI can read/write the user's tasks,
-     *  projects and search directly instead of being told about them.
-     *  Default: false — mounting an MCP server costs CLI startup time and
-     *  tool-list context in every session, so it stays opt-in. */
+    /** Mount the Walnut MCP tools into every new Claude Code session
+     *  (`--mcp-config`): the host daemon's own `walnut mcp-server`, which relays
+     *  each call through the same gateway as the `walnut` CLI, on any host.
+     *  Default: true. Claude Code defers the tools, so they cost about 2K tokens
+     *  at session start (src/core/sessions/walnut-mcp-mount.ts). false turns it off.
+     *  With a daemon too old to serve it, only an explicit true mounts the hub's
+     *  `open-walnut mcp`, and only for a session on this machine. */
     premount_walnut_mcp?: boolean;
   };
   /** Inbox Triage — batched mail/Slack triage. Opt-in; every default lives at

@@ -844,6 +844,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // leader.configure named `home` only; not bridge-reachable, not for followers. Both twins
   // (the cores are text-injected). Optional: without it the Mac sends no jobs to that machine.
   'plugin-jobs-v1',
+  // 'walnut-mcp-v1' (walnut-mcp-stdio.ts): this daemon's `walnut` serves `walnut mcp-server`,
+  // Walnut's ops as an MCP stdio server relayed through this gateway socket, and the server
+  // mounts it into a new Claude Code session on this host (core/sessions/walnut-mcp-mount.ts).
+  // The binary twin only: the source twin's `walnut` has no MCP server, so it is never
+  // advertised there. Optional: without it a session has the `walnut` CLI alone.
+  'walnut-mcp-v1',
 ] as const
 
 export type DaemonCapability = typeof REQUIRED_DAEMON_CAPABILITIES[number]

@@ -88,7 +88,7 @@ export async function handleGatewayCapability(
   }
   switch (capability) {
     case 'tools.list':
-      return handleToolsList(payload ?? {});
+      return handleToolsList(payload ?? {}, host);
     case 'tools.call':
       return handleToolsCall(callerSid, payload ?? {}, host, d);
     // Old daemons / old shims still speak these — answer with the replacement
@@ -119,10 +119,31 @@ export async function handleGatewayCapability(
  * and `walnut tools call <op> --help` get a schema without shipping every op's
  * parameter descriptions over the socket.
  */
-async function handleToolsList(payload: Record<string, unknown>): Promise<CapabilityOutcome> {
-  const { listOps } = await import('../../ops/index.js');
+async function handleToolsList(payload: Record<string, unknown>, host: string): Promise<CapabilityOutcome> {
+  const { listOps, getOpOwner } = await import('../../ops/index.js');
   const { opParams, formatParamSignature } = await import('../../ops/op-help.js');
   const wanted = typeof payload.name === 'string' ? payload.name.trim() : '';
+  // `schemas: true` is the Walnut MCP server on a host (`walnut mcp-server`,
+  // src/providers/walnut-mcp-stdio.ts): every op with its JSON schema, and only
+  // the ops this host's gateway would run, so the model never sees a tool it is
+  // refused. An older hub ignores the flag; that server then lists permissive schemas.
+  if (payload.schemas === true) {
+    const { opInputJsonSchema } = await import('../../ops/registry.js');
+    const ops = listOps().filter((o) => !gatewayRefusal(o, host, getOpOwner(o.name)));
+    return {
+      ok: true,
+      result: {
+        ops: ops.map((o) => ({
+          name: o.name,
+          title: o.title,
+          description: o.description,
+          readonly: o.tags.readonly,
+          ...(o.tags.destructive !== undefined ? { destructive: o.tags.destructive } : {}),
+          inputSchema: cachedInputSchema(o, opInputJsonSchema),
+        })),
+      },
+    };
+  }
   const ops = wanted ? listOps({ includeDeprecated: true }).filter((o) => o.name === wanted) : listOps();
   return {
     ok: true,
@@ -141,6 +162,36 @@ async function handleToolsList(payload: Record<string, unknown>): Promise<Capabi
       }),
     },
   };
+}
+
+// Every new session's `walnut mcp-server` asks for every schema once; building them
+// all costs 10 to 20 ms of the event loop, so each op's is built once.
+const inputSchemaCache = new WeakMap<object, Record<string, unknown>>();
+function cachedInputSchema<T extends object>(op: T, build: (op: T) => Record<string, unknown>): Record<string, unknown> {
+  let schema = inputSchemaCache.get(op);
+  if (!schema) { schema = build(op); inputSchemaCache.set(op, schema); }
+  return schema;
+}
+
+type GatewayOpTags = { name: string; tags: { remote?: string; localHostGateway?: boolean }; localOnlyMessage?: string };
+
+/**
+ * Why the gateway refuses `op` for a caller on `host`, or null when it runs it.
+ * A PLUGIN op lives only in this server process, so a session on this Mac has
+ * no other way to it: the installed `walnut` it runs knows core ops alone and
+ * hands a plugin op to its host daemon, which lands here as `__local__`. A core
+ * `deny` op stays refused on every host, because that CLI reaches it directly
+ * (2026-10-06: an Inbox Triage run could not call mail_mark_read at all).
+ */
+function gatewayRefusal(op: GatewayOpTags, host: string, owner: string | undefined): string | null {
+  const localPluginOp = host === '__local__' && (owner ?? 'core') !== 'core';
+  if (op.tags.remote !== 'deny' || localPluginOp || (op.tags.localHostGateway && host === '__local__')) return null;
+  // A host-local read (Apple Health) is refused for what it is, not as "destructive",
+  // and without pointing at a way around the rule.
+  if (op.tags.localHostGateway) {
+    return `${op.name} refused: ${op.localOnlyMessage ?? 'this data is only available to sessions on this Mac'}`;
+  }
+  return `${op.name} is local-only because it is destructive. Run it from a session on the Walnut host with \`walnut tools call\`.`;
 }
 
 /** Writes ride a per-sender rate budget so a runaway agent can't hammer the hub. */
@@ -178,20 +229,8 @@ async function handleToolsCall(
   if (!op) {
     return err('bad_request', `unknown op: ${name} — run \`walnut tools list\``);
   }
-  // A PLUGIN op lives only in this server process, so a session on this Mac has
-  // no other way to it: the installed `walnut` it runs knows core ops alone and
-  // hands a plugin op to its host daemon, which lands here as `__local__`. A core
-  // `deny` op stays refused on every host, because that CLI reaches it directly
-  // (2026-10-06: an Inbox Triage run could not call mail_mark_read at all).
-  const localPluginOp = host === '__local__' && (getOpOwner(name) ?? 'core') !== 'core';
-  if (op.tags.remote === 'deny' && !localPluginOp && !(op.tags.localHostGateway && host === '__local__')) {
-    // A host-local read (Apple Health) is refused for what it is, not as "destructive",
-    // and without pointing at a way around the rule.
-    if (op.tags.localHostGateway) {
-      return err('bad_request', `${name} refused: ${op.localOnlyMessage ?? 'this data is only available to sessions on this Mac'}`);
-    }
-    return err('bad_request', `${name} is local-only because it is destructive. Run it from a session on the Walnut host with \`walnut tools call\`.`);
-  }
+  const refusal = gatewayRefusal(op, host, getOpOwner(name));
+  if (refusal) return err('bad_request', refusal);
   // Writes ride a per-sender rate budget; reads are free.
   if (!op.tags.readonly) {
     const decision = deps.throttle.admitWrite(throttleKey(callerSid, host));
