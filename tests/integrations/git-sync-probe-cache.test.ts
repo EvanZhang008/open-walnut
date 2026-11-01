@@ -24,6 +24,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
+import path from 'node:path';
 import { createMockConstants } from '../helpers/mock-constants.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-probe-cache-test'));
@@ -174,6 +175,8 @@ beforeEach(() => {
   // initSync writes .gitignore into WALNUT_HOME; the mock constants point at a
   // temp dir that does not exist yet.
   fs.mkdirSync(WALNUT_HOME, { recursive: true });
+  // The data home's own repo (getCloudRemoteCredentialsAsync looks for it before any git read).
+  fs.mkdirSync(path.join(WALNUT_HOME, '.git'), { recursive: true });
 });
 
 afterEach(() => {
@@ -198,6 +201,13 @@ describe('cloud pairing reads', () => {
     expect(count('remote get-url')).toBe(0);
     h.isRepo = false;
     await expect(getCloudRemoteCredentialsAsync({ strict: true })).rejects.toThrow('git exited');
+  });
+
+  it('a data home with no .git of its own is unpaired, never a failed read', async () => {
+    h.isRepo = false;
+    fs.rmSync(path.join(WALNUT_HOME, '.git'), { recursive: true, force: true });
+    expect(await getCloudRemoteCredentialsAsync({ strict: true })).toBeNull();
+    expect(count('git remote')).toBe(0);
   });
 
   it('a non-companion remote is not a pairing', async () => {

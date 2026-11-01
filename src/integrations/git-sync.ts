@@ -3326,8 +3326,14 @@ export function parseCloudRemoteUrl(url: string | null | undefined): { domain: s
  * Async twin of getCloudRemoteCredentials for callers on the server's event
  * loop (the cloud box host probe runs at boot and every few minutes; the sync
  * version would block every route for the length of two git spawns).
+ *
+ * A data home with no `.git` of its own has no remote, so it is unpaired, in strict
+ * mode too: a fresh install has none until its first sync, and strict mode turned
+ * that into `fatal: not a git repository` on every bridge config push (2026-11-01).
+ * A failed git read in a repo that exists still rejects.
  */
 export async function getCloudRemoteCredentialsAsync(options?: { strict?: boolean }): Promise<{ domain: string; token: string; secure: boolean } | null> {
+  if (options?.strict && !(await fs.promises.stat(path.join(WALNUT_HOME, '.git')).then(() => true, () => false))) return null;
   const read = options?.strict ? gitAsync : gitSafeAsync;
   const names = await read('remote');
   const remotes = new Set(names?.split('\n'));
