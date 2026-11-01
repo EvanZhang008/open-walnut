@@ -302,6 +302,29 @@ const SECTION_LABEL_VARIANTS: Partial<Record<NoteSection, string>> = {
 const MAIN_NOTE_CONTRACT = `
 This is the MAIN AGENT's task: its NOTE is the user's tracking note for everything it handed off, and these rules override the generic ones below where they differ. PROGRESS is the ledger, one bullet per item the user asked for: "- [STATUS] <what the user wants> — owner: <task title> (<task id>); waits on: <the user's decision | that task's reply | nothing>; decided: <what the user already decided, or none>". An item the user has the result of, or whose task is COMPLETE, becomes one short [DONE] line (a COMPLETE task is verified by the user: never "waits on: the user's check"); fold old [DONE] lines into EXEC_SUMMARY. Request and message ids (rq-…, qm-…) are NOT external ids here: never write them in any section, and remove the ones already there. WORK_LOG keeps only the user's decisions and their reasons, one compressed line each; no play-by-play. The user's lasting rules and preferences belong in memory, not here.`
 
+/** The report of an ACP session whose task is COMPLETE had to start its worker again
+ *  (completing the task stopped it): stop it once the report is in. 2026-11-01: a
+ *  completed OpenCode task's worker stayed up idle after its summary. A session that
+ *  completed its own task is stopped by its own wait (sessions/self-complete-stop.ts). */
+async function stopAcpWorkerOfCompletedTask(sessionId: string, taskId: string): Promise<void> {
+  try {
+    if (isAwaitingTurnEnd(sessionId)) return;
+    const { getSessionByClaudeId, completeTaskSessions } = await import('../session-tracker.js');
+    if (!isAcpEngine((await getSessionByClaudeId(sessionId))?.engine)) return;
+    const { getTask } = await import('../task-manager.js');
+    if ((await getTask(taskId)).phase !== 'COMPLETE') return;
+    // Marks the record stopped and stops the worker; a record still reading stopped is skipped there.
+    if (await completeTaskSessions([sessionId]) > 0) return;
+    const { sessionRunner } = await import('../../providers/claude-code-session.js');
+    const live = sessionRunner.findAcpSession(sessionId);
+    if (live?.workerLive) await live.gracefulStop();
+  } catch (err) {
+    log.session.warn('turn-complete-summary: stopping a completed task\'s ACP worker failed', {
+      sessionId, taskId, error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 /** Build the self-report prompt. `existingNote` is injected so the session works
  *  DELTA-FIRST against the task's living NOTE — this is what survives multi-day
  *  sessions and compactions: the prior note is re-fed every time, so the session
@@ -964,6 +987,7 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
       return;
     } finally {
       selfReportInFlight.delete(p.sessionId);
+      void stopAcpWorkerOfCompletedTask(p.sessionId, taskId);
     }
     if (!selfReport) return;
     // Its own MEMORY.md is the last field and free text: cut it off before any other field is
