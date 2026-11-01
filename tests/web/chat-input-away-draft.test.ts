@@ -196,7 +196,9 @@ describe('sendBlocked: the editor stays, the send controls go', () => {
     const src = readFileSync(new URL('../../web/src/components/sessions/SessionPanel.tsx', import.meta.url), 'utf8')
     expect(src).not.toMatch(/macSessionAway\s*\?\s*<MacAwayComposer/)
     // sendBlocked starts with the Mac being away (another reason may follow it, after `||`).
-    expect(src).toMatch(/\{macSessionAway && <MacAwayComposer \/>\}\s*<ChatInput\s+(?:\/\/[^\n]*\n\s*)*sendBlocked=\{macSessionAway(?:\}| \|\|)/)
+    // Self-closed siblings may sit between the notice and the composer (the pending comments
+    // tray does, 2026-11-01); a swap or a wrapper that unmounts the composer may not.
+    expect(src).toMatch(/\{macSessionAway && <MacAwayComposer \/>\}\s*(?:<[A-Z]\w*\s(?:[^/]|\/(?!>))*?\/>\s*)*<ChatInput\s+(?:\/\/[^\n]*\n\s*)*sendBlocked=\{macSessionAway(?:\}| \|\|)/)
   })
 })
 
