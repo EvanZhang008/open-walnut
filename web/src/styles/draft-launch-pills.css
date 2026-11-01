@@ -172,3 +172,16 @@
 .draft-task-menu-project .qtc-confirm-new {
   margin-left: 4px;
 }
+
+/* The draft's source choice (SyncChoiceChip): only in a project that syncs to an outside service. */
+.draft-launch-pills .session-action-chip.draft-sync-chip {
+  flex: 0 0 auto;
+  gap: 4px;
+}
+.draft-launch-pills .session-action-chip.draft-sync-chip-local {
+  color: var(--fg);
+}
+.draft-sync-lock {
+  display: inline-flex;
+  color: var(--fg-muted);
+}

@@ -4,6 +4,7 @@
  */
 
 import type { RegisteredPlugin, ProjectClaimFn, IntegrationSync } from './integration-types.js';
+import { guardSync } from './private-tasks/sync-guard.js';
 
 export type PluginTombstoneReason = 'disabled' | 'unloaded' | 'failed' | 'stale-code';
 
@@ -14,6 +15,39 @@ export interface PluginTombstone {
   capabilities?: string[];
   reason: PluginTombstoneReason;
   at: string;
+}
+
+/**
+ * Every sync plugin's methods check their task arguments first (private-tasks/sync-guard.ts): a
+ * local or held task, or text matching the user's private words, never reaches a plugin. The
+ * local fallback is exempt: it is where local tasks are meant to go, and it sends nothing.
+ */
+const GUARDED_PLUGIN = Symbol('private-task-guarded-plugin');
+function guarded(id: string, plugin: RegisteredPlugin): RegisteredPlugin {
+  if (id === 'local' || (plugin as unknown as Record<symbol, unknown>)[GUARDED_PLUGIN]) return plugin;
+  // The record keeps its identity (the loader unregisters a generation by `===`) and its `sync`
+  // stays live (a loaded plugin's is a getter over what it registered so far): the property is
+  // redefined as a getter that returns the guarded view of whatever the original gives.
+  const desc = Object.getOwnPropertyDescriptor(plugin, 'sync');
+  if (desc && !desc.configurable) {
+    // A frozen record (tests): a copy is the only way to guard it.
+    return plugin.sync ? { ...plugin, sync: guardSync(id, plugin.sync) } : plugin;
+  }
+  let raw: IntegrationSync | undefined = desc && !desc.get ? desc.value : undefined;
+  Object.defineProperty(plugin, 'sync', {
+    configurable: true,
+    enumerable: desc?.enumerable ?? true,
+    get() {
+      const value = desc?.get ? desc.get.call(plugin) : raw;
+      return value ? guardSync(id, value) : value;
+    },
+    set(value: IntegrationSync) {
+      if (desc?.set) desc.set.call(plugin, value);
+      else if (!desc?.get) raw = value;
+    },
+  });
+  Object.defineProperty(plugin, GUARDED_PLUGIN, { value: true });
+  return plugin;
 }
 
 /** No-op sync used by the local fallback plugin. */
@@ -103,13 +137,13 @@ class IntegrationRegistry {
     if (this.plugins.has(id)) {
       throw new Error(`Plugin "${id}" is already registered.`);
     }
-    this.plugins.set(id, plugin);
+    this.plugins.set(id, guarded(id, plugin));
     this.tombstones.delete(id);
   }
 
   /** Replace an active plugin or revive a tombstoned one without changing order. */
   replace(id: string, plugin: RegisteredPlugin): void {
-    this.plugins.set(id, plugin);
+    this.plugins.set(id, guarded(id, plugin));
     this.tombstones.delete(id);
   }
 

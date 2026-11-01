@@ -77,6 +77,10 @@ export interface QuickStartTaskMeta {
   dueDate?: string;
   startDate?: string;
   endDate?: string;
+  /** Where the new task syncs, in a project that syncs to an outside service: absent or 'local'
+   *  keeps it in Walnut (the draft's default), 'project' sends it to the project's service once
+   *  Walnut checked it is not private (core/private-tasks/). */
+  sync?: 'local' | 'project';
 }
 
 interface Props {

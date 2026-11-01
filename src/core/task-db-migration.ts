@@ -273,7 +273,9 @@ export async function runMigrationIfNeeded(): Promise<MigrationResult> {
       const registryRow = project ? projectRows.get(project.toLowerCase()) : undefined;
       const authoritativeSource = project ? (registryRow?.source ?? task.source) : 'local';
       const normalized: Partial<Task> = {};
-      if (task.source !== authoritativeSource) {
+      // A local task stays local wherever it is filed (the v4→v5 path's exemption): local means
+      // never synced, and promoting one would push it to the service on the next tick.
+      if (task.source !== authoritativeSource && !(task.source === 'local' || !task.source)) {
         normalized.source = authoritativeSource as Task['source'];
         normalized.ext = undefined;
         normalized.external_url = undefined;

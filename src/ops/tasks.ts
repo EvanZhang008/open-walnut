@@ -579,6 +579,7 @@ defineOp({
     end_date: z.string().optional().describe('When the work ends: YYYY-MM-DD or a full ISO-8601 datetime'),
     description: z.string().optional().describe('Longer body text (write-only)'),
     tags: z.array(z.string()).optional().describe('Initial task tags'),
+    local: z.boolean().optional().describe('true keeps the task out of the outside service its project syncs to (a private matter: the user\'s own promotion or performance, feedback on a colleague, pay, health, immigration, money, family, a job search, a personal side project). Default: the project\'s service, after Walnut checks it is not private'),
     pinned: z.boolean().optional().describe('Join the pinned board. Default: your task\'s (from inside a task), otherwise true. false keeps the task off the board'),
     // Exact ids only — this rides straight to the server, which validates
     // against the registry. Label tolerance lives in the agent tool.

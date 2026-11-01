@@ -13,6 +13,7 @@ import { useFavorites } from '@/hooks/useFavorites';
 import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useOrdering } from '@/hooks/useOrdering';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
+import { projectService } from '@/components/tasks/private-task-model';
 import { isPhoneLayout, usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { isPhoneOverlayOpen } from '@/hooks/usePhoneOverlayHistory';
 import { deepLinkBaseUrl, usePhoneRestore } from '@/hooks/usePhoneRestore';
@@ -2160,7 +2161,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // `pinnedTier: null` = explicitly NOT pinned (a draft whose tier the user
   // unpinned): sent as `pinned: false`, because a create that says nothing is
   // pinned to Satellite by the server (newTaskPinDefault).
-  const handleCreate = useCallback(async (input: { title: string; priority: string; project?: string; description?: string; due_date?: string; start_date?: string; end_date?: string; pinnedTier?: string | null; capture?: boolean }) => {
+  const handleCreate = useCallback(async (input: { title: string; priority: string; project?: string; description?: string; due_date?: string; start_date?: string; end_date?: string; pinnedTier?: string | null; capture?: boolean; local?: boolean }) => {
     const tier = input.pinnedTier;
     // Quick-capture ("Add to <tier>…" inline rows, Focus Dock) routes to the user's
     // configured Default Platform + Project instead of the active tab's project — so a
@@ -2197,6 +2198,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         start_date: input.start_date,
         end_date: input.end_date,
         ...(input.capture ? { source: captureSource } : {}),
+        // Local by the creator's choice (the draft's Sync chip): never sent to the project's service.
+        ...(input.local ? { source: 'local' } : {}),
         ...(tier ? { pinned: true, ...(tierKnown ? { focus_tier: tier } : {}) } : tier === null ? { pinned: false } : {}),
       },
       tier
@@ -2565,6 +2568,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         ...(metaSnapshot.dueDate ? { due_date: metaSnapshot.dueDate } : {}),
         ...(metaSnapshot.startDate ? { start_date: metaSnapshot.startDate } : {}),
         ...(metaSnapshot.endDate ? { end_date: metaSnapshot.endDate } : {}),
+        ...(metaSnapshot.sync ? { sync: metaSnapshot.sync } : {}),
       } : undefined;
       // ACP engines are local-only: if the user picked one and then confirmed a
       // remote-host path (the toggle disables but meta keeps the stale value),
@@ -2869,6 +2873,8 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         ...(meta?.dueDate ? { due_date: meta.dueDate } : {}),
         ...(meta?.startDate ? { start_date: meta.startDate } : {}),
         ...(meta?.endDate ? { end_date: meta.endDate } : {}),
+        // The draft's Sync chip: in a project that syncs, Local unless the user picked its service.
+        local: meta?.sync !== 'project' && !!projectService(draft?.project, projectRegistry.sourceByName),
       });
     } catch {
       // The create rejected (useTasks already showed the operation-error banner and
@@ -2907,7 +2913,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
         });
       });
     }
-  }, [closeDraftColumn, handleQuickTaskCreate]);
+  }, [closeDraftColumn, handleQuickTaskCreate, projectRegistry.sourceByName]);
 
   /**
    * "▶ Start" on a task row — one click from a task to a working session.

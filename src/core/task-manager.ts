@@ -8,7 +8,7 @@ import { generateId, isLegacyInboxGroup, isRetiredQuickStartGroup } from '../uti
 import { initDirectories } from './init.js';
 import { getConfig, updateConfig } from './config-manager.js';
 import { bus, EventNames } from './event-bus.js';
-import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, PIN_TIER_POLICY, RETIRED_PIN_TIERS, migrateFocusTier, defaultWaitUntil, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord } from './types.js';
+import { VALID_PRIORITIES as VALID_PRIORITIES_ARRAY, READ_MARKER_KEYS, PIN_TIER_POLICY, RETIRED_PIN_TIERS, migrateFocusTier, defaultWaitUntil, type Task, type TaskStore, type TaskStatus, type TaskPhase, type TaskPriority, type TaskSource, type DashboardData, type ProjectRecord, type TaskGroupRecord, type CustomTierRecord, type SyncHold } from './types.js';
 import { applyPhase, deriveStatusFromPhase, phaseFromStatus, VALID_PHASES, TERMINAL_PHASES, HELD_PHASES } from './phase.js';
 import { isMainAgentTask } from './org/main-stays-active.js';
 import { TaskSyncError, TASK_SYNC_PUSH_FAILED_LOG, taskSyncPushRecoveryKey } from './task-sync-error.js';
@@ -28,7 +28,7 @@ import {
 import { registry } from './integration-registry.js';
 import { getDb, inCopyApply, rowToTask, taskToRow, TASK_COLUMNS, transaction as dbTransaction, TASK_DB_PATH } from './task-db.js';
 import { runMigrationIfNeeded } from './task-db-migration.js';
-import { isFollower, isHostReplica } from './server-role.js';
+import { isFollower, isHostReplica, placement } from './server-role.js';
 import { stampedFieldTimes as stampFieldTimesPure, type FieldStamp } from './task-field-times.js';
 
 /**
@@ -45,7 +45,10 @@ import { isAwaitingTurnEnd } from './sessions/self-complete-stop.js';
 import { getExtIndexSpec } from './ext-index-registry.js';
 import { isDerivedTag, namesDerivedTag, normalizeTags } from './tag-model.js';
 import { linkTargetOfTag, newLinkTags, relabelLinkTags, mergeLinkNames, MAX_AUTO_LINKS } from './link-tags.js';
-import { recordRemoteLink, findLiveClaimants } from './task-remote-links.js';
+import { recordRemoteLink, findLiveClaimants, isRemoteIdBlocked } from './task-remote-links.js';
+import { decideBirth } from './private-tasks/birth.js';
+import { isPrivateTaskBlocked } from './private-tasks/sync-guard.js';
+import { privacyJudgeAvailable, startSyncGate } from './private-tasks/sync-gate.js';
 import { MERGE_EVENT_SOURCE } from './task-deleted-id.js';
 import type { TaskMergedInto } from './event-types.js';
 import {
@@ -2130,8 +2133,10 @@ export async function deleteProjectCascade(project: string): Promise<{
   // Snapshot the project's tasks WITH ext intact — the plugin tombstones their
   // remote ids so a mid-flight pull can't re-import them.
   const lower = record.name.toLowerCase();
+  // Only the project's synced tasks: a local task in it (one kept out of the service, a
+  // private one) never crosses the plugin boundary, not even to be tombstoned.
   const snapshot = (await listTasks({})).filter(
-    (t) => (t.project || '').toLowerCase() === lower,
+    (t) => (t.project || '').toLowerCase() === lower && t.source === record.source,
   );
 
   const remoteList = typeof record.metadata?.remote_list === 'string'
@@ -2373,6 +2378,7 @@ async function pushToPlugin(
     if (!NO_REMOTE_SYNC_METHODS.has(method)) notePushSucceeded(task.source);
     return { success: true };
   } catch (err) {
+    if (isPrivateTaskBlocked(err)) return { success: true };
     const message = err instanceof Error ? err.message : String(err);
     // ERROR with the plugin named: the ONE card for this failure, wherever the
     // write came from (a v1 route, the console's /api/tasks, an op, a background
@@ -2613,6 +2619,9 @@ async function autoPushIfConfiguredImpl(task: Task): Promise<SyncResult> {
     notePushSucceeded(task.source);
     return { success: true };
   } catch (err) {
+    // Kept local by the private-task guard (sync-guard.ts): nothing was sent, which is the
+    // outcome, not a failed push. The guard already turned the task local.
+    if (isPrivateTaskBlocked(err)) return { success: true };
     const message = err instanceof Error ? err.message : String(err);
     notePushFailed(task.source);
     log.task.error(TASK_SYNC_PUSH_FAILED_LOG, { pluginId: task.source, taskId: task.id, method: 'pushTask', error: message, recoveryKey: taskSyncPushRecoveryKey(task.source) });
@@ -2874,7 +2883,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
         );
       }
       source = 'local';
-    } else if ((input.source === 'local' && !parentHere) || keptBy) {
+    } else if (input.source === 'local' || keptBy) {
       // An EXPLICIT 'local' outranks the registry claim: the caller (quick-start,
       // external-session import) is saying "this task must never sync". The
       // project is then just a folder — a local task parked in a provider-claimed
@@ -2906,6 +2915,32 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       if (!validation.ok) {
         throw new ProjectSourceConflictError(validation.error, project, source, validation.existingSource);
       }
+    }
+
+    // Private tasks (src/core/private-tasks/birth.ts): a task bound for an outside service is
+    // born local and held until the user's words and the small model pass it; one created Local
+    // in a project that syncs says so. A plugin's own task, a test's and a pull's are not judged.
+    let syncHold: SyncHold | undefined;
+    const onCompanion = placement() === 'cloud';
+    if (project && !keptBy && !input._skipPluginOps && onCompanion && input.source === 'local') {
+      // The cloud companion syncs nothing itself: it records the creator's Local choice, which
+      // the primary honours when the create reaches it (task-outbox.ts).
+      syncHold = { target: registrySource ?? 'local', state: 'chosen', by: 'user', reason: 'Kept local when it was created', at: now };
+    } else if (project && !keptBy && !input._skipPluginOps && !onCompanion) {
+      const explicitLocal = input.source === 'local';
+      // A subtask of a held parent is held the same way: a private parent's work is private.
+      const parentHold = parentHere?.source === 'local' && parentHere.org_role !== 'lead' ? parentHere.sync_hold : undefined;
+      const target = source !== 'local' ? source
+        : parentHold ? parentHold.target
+        : explicitLocal ? (registrySource ?? (await registry.getForProject(project)).id) : 'local';
+      const decided = decideBirth(target, { title: input.title, description: input.description }, config.private_tasks, {
+        explicitLocal: explicitLocal || parentHold?.state === 'private' || parentHold?.state === 'chosen' || parentHold?.state === 'unjudged',
+        canJudge: privacyJudgeAvailable(config), now,
+      });
+      source = decided.source;
+      syncHold = decided.hold && !explicitLocal && parentHold && decided.hold.state === 'chosen'
+        ? { ...decided.hold, reason: 'Its parent task is kept local' }
+        : decided.hold;
     }
 
     // Pin + tier, resolved BEFORE the row is built so an unknown tier fails the
@@ -2959,6 +2994,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       ...(input.walnut_agent && input.agent_id ? { agent_id: input.agent_id } : {}),
       ...(input.org_role ? { org_role: input.org_role } : {}),
       ...(keptBy ? { plugin_only: keptBy } : {}),
+      ...(syncHold ? { sync_hold: syncHold } : {}),
       // Born pinned (interactive/AI creates — newTaskPinDefault), in the tier
       // the caller named, in ONE store write. An absent focus_tier IS Satellite
       // (see resolveNewTaskTier, which normalizes an explicit 'satellite' away
@@ -3008,6 +3044,10 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
   });
 
   if (createdProject) emitProjectCreated(createdProject.name, createdProject.source);
+
+  // A held task (private-tasks/sync-gate.ts): the model judges it in the background and only a
+  // task it passes gets its project's source and its first push; a private one tells the user.
+  if (task.sync_hold) startSyncGate(task);
 
   // Local-source tasks never push, so async vs sync is moot — skip the branch.
   if (input._skipPluginOps || task.source === 'local') {
@@ -4409,6 +4449,13 @@ export async function updateTask(
     }
 
     if (!assigned) task.project = newProject;
+    // A held local task (private-tasks/) follows its project: it would now sync to the new
+    // project's service, or, in a project that does not sync, there is nothing to hold.
+    if (projectChanged && task.source === 'local' && task.sync_hold) {
+      const target = projectSyncSource(store, task.project);
+      if (target) task.sync_hold = { ...task.sync_hold, target };
+      else delete task.sync_hold;
+    }
     // A folder is the project's private structure — it never follows a task
     // across projects. Any project move drops the membership. The ONE exception
     // is a FOLDER move (moveFolderToProject): there the folder itself is what
@@ -8078,6 +8125,16 @@ export async function addTaskFull(taskData: Omit<Task, 'id'>): Promise<Task> {
     }
   }
 
+  // A remote item whose id a task here released (turned local, moved to another service) or
+  // deleted is never imported again, whichever pull path asks (the reconciler checks the same;
+  // a plugin's own delta pull reaches here through ctx.addTask).
+  if (taskData.source && taskData.source !== 'local') {
+    const blocked = remoteIdsFromExt(taskData.source, taskData.ext).ids.find((rid) => isRemoteIdBlocked(taskData.source, rid));
+    if (blocked) {
+      throw new Error(`addTaskFull: refusing to import ${taskData.source} item ${blocked}: a task here released or deleted it`);
+    }
+  }
+
   // Pull-guard, re-keyed to the project registry: a sync pull must not create a
   // task inside a project another provider owns (e.g. ms-todo rows landing in a
   // project reserved for a different plugin). Inbox is local-only by rule.
@@ -8150,6 +8207,11 @@ export async function addTaskFull(taskData: Omit<Task, 'id'>): Promise<Task> {
   store.tasks.push(task);
   await writeStore(store);
   if (createdProject) emitProjectCreated(createdProject.name, createdProject.source);
+  // Its text came from the service: pushing it back sends nothing new (private-tasks/push-check.ts).
+  if (task.source && task.source !== 'local') {
+    const { approveOutsideText } = await import('./private-tasks/push-check.js');
+    await approveOutsideText(task.id, { title: task.title, description: task.description, note: task.note, summary: task.summary });
+  }
   return task;
   });
 }
@@ -8909,4 +8971,235 @@ export async function bulkMigrateTasks(
     await writeStore(store);
     return true;
   });
+}
+
+// ── Private tasks: a task kept local in a project that syncs (src/core/private-tasks/) ──
+
+/** The outside source a task's project syncs to, or null (Inbox, a local project). */
+function projectSyncSource(store: TaskStore, project: string | undefined): TaskSource | null {
+  const name = (project ?? '').trim();
+  if (!name) return null;
+  const projects = store.projects ?? {};
+  const key = Object.keys(projects).find((k) => k.toLowerCase() === name.toLowerCase());
+  const source = key ? projects[key].source : undefined;
+  return source && source !== 'local' ? source : null;
+}
+
+/**
+ * Set, replace or clear (null) the hold of a LOCAL task. `when` is a compare-and-set on the
+ * current hold (the gate writes its verdict only while the task is still `checking`). Returns the
+ * task after the write, or null when nothing was written (gone, synced, or `when` refused).
+ */
+export async function setTaskSyncHold(
+  id: string,
+  hold: SyncHold | null | ((current: Readonly<Task>) => SyncHold | null),
+  when?: (current: Readonly<Task>) => boolean,
+): Promise<Task | null> {
+  const written = await withWriteLock(async () => {
+    const store = await readStore();
+    const task = store.tasks.find((t) => t.id === id);
+    if (!task || task.source !== 'local') return null;
+    if (when && !when(task)) return null;
+    const next = typeof hold === 'function' ? hold(task) : hold;
+    if (next) task.sync_hold = next;
+    else delete task.sync_hold;
+    await writeStore(store);
+    return task;
+  });
+  if (written) bus.emit(EventNames.TASK_UPDATED, { task: written, fields: ['sync_hold'] }, ['web-ui'], { source: 'private-tasks' });
+  return written;
+}
+
+/**
+ * Give a held (or plain local) task its project's outside source and push it: the gate passed it,
+ * or a person chose "Sync to …". `when` as in setTaskSyncHold. The plugin's defaults ride the
+ * first push as for a fresh create. Returns the task and whether it was released.
+ */
+export async function releaseSyncHold(
+  id: string,
+  when?: (current: Readonly<Task>) => boolean,
+  /** Who let its current text out: `model` after a work verdict, `user` when the user sent it
+   *  (which also accepts the private words it matches). The push check then lets that text pass. */
+  approvedBy?: 'user' | 'model',
+  /** The text the model judged (a work verdict covers that text only; an edit made while it
+   *  judged is judged again by the push check). Default: the task as released. */
+  approvedText?: Pick<Task, 'title' | 'description' | 'note' | 'summary'>,
+): Promise<{ task: Task | null; released: boolean; reason?: string; syncResult?: SyncResult }> {
+  const out = await withWriteLock(async () => {
+    const store = await readStore();
+    const task = store.tasks.find((t) => t.id === id);
+    if (!task) return { task: null, released: false, reason: 'not_found' };
+    if (task.source !== 'local') return { task, released: false, reason: 'already_synced' };
+    if (when && !when(task)) return { task, released: false, reason: 'hold_moved' };
+    const target = projectSyncSource(store, task.project);
+    if (!target) {
+      // Its project no longer syncs (moved, or the project went local): nothing to hold.
+      if (!task.sync_hold) return { task, released: false, reason: 'project_local' };
+      delete task.sync_hold;
+      await writeStore(store);
+      return { task, released: false, reason: 'project_local', wrote: true };
+    }
+    const validation = validateProjectSource(task.project ?? '', target, await getConfig(), store.projects);
+    if (!validation.ok) return { task, released: false, reason: 'project_conflict' };
+    // A task turned local whose outside copy is still known links to that copy again (no second
+    // item there); its remote id goes back to owned in the ledger.
+    const outside = task.sync_hold?.outside;
+    const relink = outside && outside.source === target ? outside.ext : undefined;
+    task.source = target;
+    delete task.sync_hold;
+    if (relink) {
+      task.ext = structuredClone(relink);
+      const url = registry.get(target)?.display?.getExternalUrl?.(task);
+      if (url) task.external_url = url;
+    }
+    task.updated_at = new Date().toISOString();
+    await writeStore(store);
+    if (relink) {
+      const { ids, remoteList } = remoteIdsFromExt(target, task.ext);
+      for (const remoteId of ids) recordRemoteLink({ source: target, remoteId, taskId: task.id, remoteList, state: 'owned' });
+    }
+    return { task, released: true };
+  });
+  if (!out.task) return out;
+  if (out.released || ('wrote' in out && out.wrote)) {
+    bus.emit(EventNames.TASK_UPDATED, { task: out.task, fields: ['source', 'sync_hold'] }, ['web-ui'], { source: 'private-tasks' });
+  }
+  if (!out.released) return { task: out.task, released: false, reason: out.reason };
+  log.task.info('private tasks: task released to its project\'s service', { taskId: out.task.id, source: out.task.source, approvedBy });
+  if (approvedBy) {
+    const { approveTaskText } = await import('./private-tasks/push-check.js');
+    await approveTaskText({ id: out.task.id, ...(approvedText ?? out.task) }, approvedBy, (await getConfig()).private_tasks?.words);
+  }
+  await applyPluginTaskDefaults(out.task, 'created');
+  const syncResult = await autoPushIfConfigured(out.task);
+  const fresh = await getTask(out.task.id).catch(() => out.task);
+  return { task: fresh, released: true, syncResult };
+}
+
+/** What happens to the outside copy of a task turned local. */
+export type OutsideCopyAction = 'keep' | 'archive' | 'neutralize';
+
+/** The title a neutralized outside copy carries: nothing of the task, and the moved marker
+ *  (`[Moved] … [open-walnut:<id>]`) every pull already reads as "never import". */
+export function neutralTitle(taskId: string): string {
+  return `[Moved] (title removed) [open-walnut:${taskId}]`;
+}
+
+export interface MadeLocal {
+  task: Task;
+  /** False when it was local already (only its hold was set). */
+  unlinked: boolean;
+  /** The source it was synced to. */
+  from?: TaskSource;
+  /** Same-source subtasks turned local with it. */
+  children: string[];
+  /** What happened to the outside copies: done, or why not. */
+  outside: { action: OutsideCopyAction; done: boolean; error?: string };
+}
+
+/**
+ * Turn a task local in the same project (2026-11-01, the user: "we can turn a task from [the
+ * tracker] to local, of the same project"): it stops syncing and keeps every bit of its content.
+ * Its remote identity is released in the ledger, so no pull imports the outside copy again, and
+ * the outside copy is kept as it is, archived (completed there), or neutralized (its title,
+ * description and notes replaced, then completed). Its subtasks synced to the same service go
+ * with it. A task already local only gets the hold (a person chose Local).
+ */
+export async function makeTaskLocal(
+  idPrefix: string,
+  hold: Omit<SyncHold, 'target'>,
+  action: OutsideCopyAction = 'keep',
+): Promise<MadeLocal> {
+  const locked = await withWriteLock(async () => {
+    const store = await readStore();
+    const matches = store.tasks.filter((t) => t.id.startsWith(idPrefix));
+    if (matches.length !== 1) throw new Error(matches.length ? `Ambiguous task id "${idPrefix}"` : `No task found matching ID prefix "${idPrefix}"`);
+    const task = matches[0];
+    if (task.source === 'local') {
+      const target = task.sync_hold?.target ?? projectSyncSource(store, task.project);
+      if (target) task.sync_hold = { ...hold, target };
+      await writeStore(store);
+      return { task, migrated: [] as MigratedTask[] };
+    }
+    const now = new Date().toISOString();
+    const oldSource = task.source;
+    const family = [task, ...store.tasks.filter((t) => t.parent_task_id === task.id && t.source === oldSource)];
+    const migrated: MigratedTask[] = [];
+    for (const t of family) {
+      const oldExt = t.ext ? structuredClone(t.ext) : undefined;
+      migrated.push({ task: t, oldSource, oldExt, oldTitle: t.title });
+      t.source = 'local';
+      t.ext = undefined;
+      t.external_url = undefined;
+      t.sync_error = undefined;
+      t.sync_hold = {
+        ...hold, target: oldSource,
+        ...(t === task ? {} : { reason: 'Its parent task was made local' }),
+        ...(oldExt ? { outside: { source: oldSource, ext: oldExt, state: 'kept' as const } } : {}),
+      };
+      t.updated_at = now;
+      // Ledgered inside the lock, before any network I/O: a pull never imports the copy again.
+      recordReleasedRemoteId(t.id, oldSource, oldExt);
+    }
+    await writeStore(store);
+    return { task, migrated };
+  });
+  for (const m of locked.migrated) bus.emit(EventNames.TASK_UPDATED, { task: m.task, fields: ['source', 'sync_hold'] }, ['web-ui'], { source: 'private-tasks' });
+  if (!locked.migrated.length) {
+    bus.emit(EventNames.TASK_UPDATED, { task: locked.task, fields: ['sync_hold'] }, ['web-ui'], { source: 'private-tasks' });
+    return { task: locked.task, unlinked: false, children: [], outside: { action: 'keep', done: true } };
+  }
+  const from = locked.migrated[0].oldSource;
+  log.task.info('private tasks: task made local', { taskId: locked.task.id, from, action, children: locked.migrated.length - 1 });
+  let outside: MadeLocal['outside'] = { action, done: true };
+  if (action !== 'keep') {
+    for (const m of locked.migrated) {
+      const r = await actOnOutsideCopy(m.task.id, action);
+      if (!r.done) outside = { action, done: false, error: r.error };
+    }
+  }
+  return {
+    task: locked.task, unlinked: true, from,
+    children: locked.migrated.slice(1).map((m) => m.task.id), outside,
+  };
+}
+
+/**
+ * Archive or neutralize the outside copy a task turned local left behind (its hold keeps the
+ * copy's remote identity). The plugin gets a snapshot as it knew the task, never the local row:
+ * for `neutralize` its title, description and notes are replaced first, then it is completed.
+ */
+export async function actOnOutsideCopy(
+  id: string,
+  action: Exclude<OutsideCopyAction, 'keep'>,
+): Promise<{ done: boolean; error?: string; task?: Task }> {
+  const task = await getTask(id);
+  const outside = task.sync_hold?.outside;
+  if (task.source !== 'local' || !outside) return { done: false, error: 'This task has no outside copy Walnut knows of' };
+  if (outside.state === 'neutralized' || (outside.state === 'archived' && action === 'archive')) return { done: true, task };
+  const plugin = registry.get(outside.source);
+  if (!plugin) return { done: false, error: `${outside.source} is not loaded, so its copy was not changed` };
+  const neutral = action === 'neutralize';
+  const snapshot = {
+    ...task, source: outside.source, ext: outside.ext, sync_hold: undefined,
+    ...(neutral ? { title: neutralTitle(task.id), description: '', note: '', summary: '' } : {}),
+  } as Task;
+  try {
+    if (neutral) {
+      await plugin.sync.updateTitle(snapshot, snapshot.title);
+      await plugin.sync.updateDescription(snapshot, '');
+      await plugin.sync.updateNote(snapshot, '');
+    }
+    await plugin.sync.updatePhase(snapshot, 'COMPLETE');
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    log.task.warn('private tasks: the outside copy was not changed', { taskId: id, from: outside.source, action, error });
+    return { done: false, error };
+  }
+  const state = neutral ? 'neutralized' as const : 'archived' as const;
+  const saved = await setTaskSyncHold(id, (current) => current.sync_hold?.outside
+    ? { ...current.sync_hold, outside: { ...current.sync_hold.outside, state } }
+    : current.sync_hold ?? null);
+  log.task.info('private tasks: outside copy changed', { taskId: id, from: outside.source, action });
+  return { done: true, task: saved ?? task };
 }

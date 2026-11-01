@@ -115,6 +115,8 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
       { word: 'notify', rowLabel: 'Tell Ask Walnut', anchor: 'triage-notify-mode' },
       'summary', 'debounce',
       { word: 'jev model', rowLabel: 'Jev model', anchor: 'jev-model' },
+      { word: 'private', rowLabel: 'Private words', anchor: 'settings-private-words' },
+      'sensitive', 'local only', 'keep local',
     ],
     render: ({ config, saveSection, reload }) => <TasksSection config={config} onSave={saveSection} onReload={reload} />,
   },

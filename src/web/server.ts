@@ -185,6 +185,7 @@ import { initLetterPush } from '../core/push/letter-push.js'
 import { takeQosClampRequest } from '../lib/background-qos.js'
 import { enqueueMainAgentTurn, getQueueStatus, recordLastTurnTokens } from './agent-turn-queue.js'
 import { activeRelayedTurnCount } from './routes/chat-turn-relay.js'
+import { setPrivacyModelReady } from '../core/private-tasks/privacy-judge.js'
 
 /**
  * Who a job turned off by the boot policy is off for, in its skip line: the
@@ -941,6 +942,7 @@ export async function refreshSystemHealth(): Promise<SystemHealthState> {
  *  the banner never saw `mainProvider`). */
 function applyCredentialHealth(cred: Awaited<ReturnType<typeof resolveCredentialHealth>>): void {
   systemHealth.hasReadyProvider = cred.hasReadyProvider
+  setPrivacyModelReady(cred.hasReadyProvider)
   systemHealth.credentialSource = cred.source
   systemHealth.credentialDetail = cred.detail
   systemHealth.mainProvider = cred.mainProvider
@@ -1966,6 +1968,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       .catch((err) => log.web.warn('fleet secrets: not started', { error: String(err) }))
   }
 
+  // ── Private tasks: the letters' answers, and the tasks a restart left waiting for their check
+  // (src/core/private-tasks/sync-gate.ts).
+  if (bootPolicy('private-task-gate')) {
+    void import('../core/private-tasks/sync-gate.js').then(async (m) => { await m.wireSyncGate(); await m.resumeSyncGates() })
+      .catch((err) => log.web.warn('private tasks: gate not started', { error: String(err) }))
+  }
+
   if (bootPolicy('host-exec-grants')) {
     void import('../core/hosts/exec-grants.js').then((m) => m.startExecGrantAnswers())
       .catch((err) => log.web.warn('host exec grants: answers not wired', { error: String(err) }))
@@ -2360,6 +2369,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', (await import('./routes/task-watch-v1.js')).taskWatchV1Router)
   app.use('/api/v1', (await import('./routes/brief-v1.js')).briefV1Router)
   app.use('/api/v1', (await import('./routes/org-threads-v1.js')).orgThreadsV1Router)
+  // Private tasks: make a synced task local, send a local one to its project's service (core/private-tasks/).
+  app.use('/api/v1', (await import('./routes/private-tasks-v1.js')).privateTasksV1Router)
   // The message-hint registry: list, change, reset (reads anywhere, writes primary-only).
   app.use('/api/v1', (await import('./routes/hints-v1.js')).hintsV1Router)
   // When this home first ran the hint registry: only older rows can carry the old bracket lines.
@@ -6193,7 +6204,12 @@ function startPluginSyncPolling(): void {
         // and ctx.updateTask uses the array as a per-tick cache that it mutates
         // in-place so subsequent getTasks() calls in the same tick see the
         // just-applied change.
-        const localTasks = await listTasks()
+        // A task kept local in a project that syncs is not the plugin's to read or write
+        // (private-tasks/visibility.ts): its pull context never holds one.
+        const { providerTaskFilter, redactedForProvider } = await import('../core/private-tasks/visibility.js')
+        const { approveOutsideText } = await import('../core/private-tasks/push-check.js')
+        const providerVisible = await providerTaskFilter()
+        const localTasks = (await listTasks()).filter(providerVisible)
         // Links a plugin carries as id prefixes (the To Do body's `Parent:`) resolve to full ids:
         // rows an older pull wrote with a prefix are repaired here, every pulled patch below.
         const { idIndex, keepLocalText, prefixLinkRepairs, resolvePulledLinks } = await import('../core/pulled-patch.js')
@@ -6228,16 +6244,31 @@ function startPluginSyncPolling(): void {
             if (isPushInflight(id)) {
               log.web.debug(`${plugin.id} sync: skipping pull update — push inflight`, { taskId: id })
               const existingTask = localTasks.find(t => t.id === id)
-              return existingTask ?? await (await import('../core/task-manager.js')).getTask(id)
+              const read = existingTask ?? await (await import('../core/task-manager.js')).getTask(id)
+              return providerVisible(read) ? read : redactedForProvider(read)
             }
             // Clear stale sync_error when a remote pull successfully updates the task
             const existingTask = localTasks.find(t => t.id === id)
+            if (!existingTask) {
+              const { getTask: readTask } = await import('../core/task-manager.js')
+              const current = await readTask(id).catch(() => null)
+              if (current && !providerVisible(current)) {
+                log.web.warn(`${plugin.id} sync: a pull update to a task kept local was refused`, { taskId: id })
+                return redactedForProvider(current)
+              }
+            }
             const linked = keepLocalText(resolvePulledLinks(updates, existingTask, linkIndex), existingTask)
             const effectiveUpdates = (existingTask?.sync_error && !('sync_error' in linked))
               ? { ...linked, sync_error: undefined }
               : linked
             const { changed, task: savedTask } = await updateTaskRaw(id, effectiveUpdates, { pulledTags: true })
             const updatedTask = savedTask ?? await (await import('../core/task-manager.js')).getTask(id)
+            // Text a pull wrote is outside already: pushing it back is not new (push-check.ts).
+            const pulledText: Record<string, string> = {}
+            for (const f of ['title', 'description', 'note', 'summary'] as const) {
+              if (f in effectiveUpdates && typeof updatedTask[f] === 'string') pulledText[f] = updatedTask[f] as string
+            }
+            if (Object.keys(pulledText).length) await approveOutsideText(id, pulledText)
             const index = localTasks.findIndex(t => t.id === id)
             if (index >= 0) localTasks[index] = updatedTask
             if (changed) {
@@ -6257,6 +6288,12 @@ function startPluginSyncPolling(): void {
           },
           deleteTask: async (id) => {
             await breathe()
+            const { getTask: readTask } = await import('../core/task-manager.js')
+            const current = await readTask(id).catch(() => null)
+            if (current && !providerVisible(current)) {
+              log.web.warn(`${plugin.id} sync: a pull delete of a task kept local was refused`, { taskId: id })
+              return
+            }
             const { task } = await deleteTask(id)
             bus.emit(EventNames.TASK_DELETED, { task }, [], { source: `${plugin.id}-sync` })
             changeCount++

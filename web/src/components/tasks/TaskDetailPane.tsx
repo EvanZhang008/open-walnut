@@ -28,6 +28,8 @@ import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
+import { useProjectRegistry } from '@/hooks/useProjectRegistry';
+import { keptLine, syncStanding } from './private-task-model';
 import { PluginSlotFact, PluginSlots } from '@/plugins/PluginSlots';
 import { resolveSessionRecordStatus, sessionStatusStore } from '@/stores/session-status-store';
 import { renderNoteMarkdown } from '@/utils/markdown';
@@ -158,6 +160,11 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
   }, [task.id]);
 
   const source = getIntegrationMeta(integrations, task.source);
+  const { sourceByName } = useProjectRegistry();
+  const keptText = keptLine(
+    syncStanding(task, sourceByName.get((task.project ?? '').trim().toLowerCase())),
+    (s) => getIntegrationMeta(integrations, s)?.name ?? s,
+  );
   // A session the server no longer has is not a row (it would read "Loading…" forever).
   const showPrimary = !!primarySessionId && (loadingRows || !!primaryRecord);
   const hasSessions = showPrimary || earlierSessionIds.length > 0;
@@ -277,6 +284,8 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
             ) : (
               <span className="tdp-muted">{task.source && task.source !== 'local' ? (source?.name ?? task.source) : 'Local'}</span>
             )}
+            {/* A task kept local in a project that syncs says why, in one line (core/private-tasks/). */}
+            {keptText && <div className="tdp-row-sub tdp-kept-local" data-testid="task-detail-kept-local">{keptText}</div>}
           </Fact>
           {task.created_at && <Fact label="Created" title={fullDate(task.created_at)}>{timeAgo(task.created_at)}</Fact>}
           {task.updated_at && <Fact label="Updated" title={fullDate(task.updated_at)}>{timeAgo(task.updated_at)}</Fact>}

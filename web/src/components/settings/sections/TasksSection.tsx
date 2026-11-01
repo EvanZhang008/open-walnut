@@ -9,6 +9,7 @@ import { useIntegrations } from '@/hooks/useIntegrations';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { SmartTaskCreation } from './SmartTaskCreation';
+import { PrivateTasksGroup } from './PrivateTasksGroup';
 import { useSerialSave, type OnSave } from './GeneralSection';
 
 interface Props {
@@ -172,6 +173,8 @@ export function TasksSection({ config, onSave, onReload }: Props) {
       </SettingsGroup>
 
       <SmartTaskCreation config={config} onSave={onSave} onReload={onReload} />
+
+      <PrivateTasksGroup config={config} save={save} />
 
       {/* A TASK concern (the task's note/phase and its notifications), merely
           triggered by a session turn; no summarizer agent runs. */}

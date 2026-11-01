@@ -46,6 +46,8 @@ interface Props {
     start_date?: string;
     end_date?: string;
     pinnedTier?: PinTier;
+    /** Keep it out of the outside service its project syncs to (the Sync field). */
+    local?: boolean;
   }) => Promise<unknown>;
 }
 
@@ -274,6 +276,7 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
       ...(source.end && source.start ? { end_date: source.end } : {}),
       ...(source.pin ? { pinnedTier: source.pin } : {}),
       ...(project ? { project } : {}),
+      ...(project && source.local ? { local: true } : {}),
     }))
       .then(() => reset())
       .catch(() => {})

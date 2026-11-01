@@ -43,7 +43,7 @@ export type DraftParseKind = 'eager' | 'trailing' | 'clear';
 /** A More edit of task fields. A key PRESENT means edited; an undefined
  *  value means cleared (date) or unpinned (tier). `endDate` has no owner slot
  *  of its own: an edit of it is owned as the start's (applyDraftTaskFieldEdit). */
-export type DraftTaskFieldPatch = Partial<Pick<QuickStartTaskMeta, 'pinTier' | 'priority' | 'startDate' | 'endDate' | 'dueDate' | 'unread'>>;
+export type DraftTaskFieldPatch = Partial<Pick<QuickStartTaskMeta, 'pinTier' | 'priority' | 'startDate' | 'endDate' | 'dueDate' | 'unread' | 'sync'>>;
 
 /** What applyDraftParse accepts: a quick-parse response with the title optional
  *  (the draft never uses it) and every field optional (`{}` = nothing proposed). */

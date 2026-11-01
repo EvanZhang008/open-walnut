@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { DatePicker, formatDateTimeDisplay } from '@/components/common/DatePicker';
 import { PinTierPicker } from '@/components/common/PinTierPicker';
 import { useShowPriority } from '@/hooks/useShowPriority';
+import { SyncChoiceField } from './SyncChoice';
 import {
   PRIORITY_CYCLE,
   PRIORITY_OPTIONS,
@@ -23,6 +24,8 @@ export interface ConfirmDraft {
   project?: string;
   /** The AI invented this project name — it doesn't exist yet. Drives the "new" badge. */
   projectIsNew?: boolean;
+  /** In a project that syncs to an outside service: true keeps the task local (the Sync field). */
+  local?: boolean;
   aiFields: Set<ConfirmField>;
 }
 
@@ -197,6 +200,13 @@ export function QuickTaskConfirm({
           </datalist>
         </label>
       </div>
+
+      <SyncChoiceField
+        project={draft.project}
+        local={!!draft.local}
+        disabled={submitting}
+        onChange={(local) => onChange({ local })}
+      />
 
       <div className="qtc-confirm-footer">
         <button type="button" className="qtc-confirm-primary" disabled={submitting || !draft.title.trim()} onClick={onCreate}>

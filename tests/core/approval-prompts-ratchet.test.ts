@@ -23,6 +23,7 @@ const LETTER_ASKS: Record<string, string> = {
   'src/integrations/mail/approvals.ts': 'outward send: an email leaves the user\'s machines',
   'src/integrations/mail/unsubscribe.ts': 'outward send: contacts an outside sender',
   'src/core/plugins/server-api.ts': 'plugin pass-through: the plugin owns its own asks',
+  'src/core/private-tasks/sync-gate.ts': 'outward send: a task Walnut kept out of an outside service as private goes there only when the user says so',
 }
 // Not a Walnut ask: a task's own letter (human_inbox_send, any actions it names) is the
 // task's words, held to the inbox rule (only the user's decisions) in its prompt and op help.

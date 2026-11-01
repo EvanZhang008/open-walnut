@@ -36,6 +36,10 @@ export interface QuickStartTaskMeta {
   due_date?: string;
   start_date?: string;
   end_date?: string;
+  /** Where the new task syncs in a project that syncs to an outside service: absent or 'local'
+   *  keeps it local (a launch's default), 'project' gives it the project's source once Walnut's
+   *  private-task check passed it (core/private-tasks/). */
+  sync?: 'local' | 'project';
 }
 
 export interface QuickStartParams {
@@ -483,7 +487,8 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
       ({ task } = await addTask({
         title,
         project,
-        source: 'local',
+        // A launch is local unless its creator picked the project's service (the draft's Sync chip).
+        ...(taskMeta?.sync === 'project' ? {} : { source: 'local' as const }),
         cwd,
         // 'none' is a sentinel meaning "don't write priority" — lets a caller
         // omit the field without clearing an existing value.

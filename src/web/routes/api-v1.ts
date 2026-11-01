@@ -2680,7 +2680,8 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
     const { title, project, priority, due_date: dueDate, start_date: startDate,
       end_date: endDate, description, pinned, focus_tier: focusTier, group_id: groupId,
       launch_cwd: launchCwd, launch_host: launchHost, user_words: userWords, idempotency_key: idempotencyKey, tags,
-      confirm_new: confirmNew, new_reason: newReason } = (req.body ?? {}) as {
+      confirm_new: confirmNew, new_reason: newReason, local } = (req.body ?? {}) as {
+      local?: unknown
       title?: unknown
       project?: unknown
       user_words?: unknown
@@ -2701,6 +2702,11 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
     }
     if (tags !== undefined && (!Array.isArray(tags) || tags.some(value => typeof value !== 'string'))) {
       sendError(res, 400, 'bad_request', 'tags must be an array of strings'); return
+    }
+    // local (additive, 2026-11-01): true keeps the task out of the outside service its project
+    // syncs to (core/private-tasks/); false or absent = the project's source, after its check.
+    if (local !== undefined && typeof local !== 'boolean') {
+      sendError(res, 400, 'bad_request', 'local must be a boolean'); return
     }
     const { addTaskIdempotently, validateIdempotencyKey, TaskCreateConflict } = await import('../../core/task-create-idempotency.js')
     if (idempotencyKey !== undefined) {
@@ -2882,6 +2888,7 @@ apiV1Router.post('/tasks', async (req: Request, res: Response, next: NextFunctio
         ...(endDate !== undefined ? { end_date: normalizeDateField(endDate) } : {}),
         ...(finalDescription !== undefined ? { description: finalDescription } : {}),
         ...(pluginOnly ? { plugin_only: pluginOnly } : {}),
+        ...(local === true ? { source: 'local' as const } : {}),
         asyncPush: true,
       }
       // Human/AI create surface (phone Quick Add, `walnut add`, the task_create

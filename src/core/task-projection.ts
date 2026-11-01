@@ -109,6 +109,10 @@ export interface ProjectedTask {
   /** A team stop is in force under it (core/sessions/team-stop.ts; additive, 2026-10): the phone
    *  offers Resume the team. Omitted otherwise. */
   team_stop?: { at: string; by: string }
+  /** The outside service the task syncs to; absent for a local task. Additive. */
+  source?: string
+  /** Why a task in a project that syncs is kept local (Task.sync_hold). Additive. */
+  sync_hold?: { state: string; target: string; reason?: string; outside?: string }
   /** Kept to a plugin's own view (Task.plugin_only; additive, 2026-10): the v1 lists and the
    *  events feed leave such rows out, so a phone never shows them. */
   plugin_only?: string
@@ -215,6 +219,14 @@ export function projectTask(t: Task): ProjectedTask {
       ...(t.result_report!.result ? { result: t.result_report!.result } : {}),
     } } : {}),
     ...(t.team_stop ? { team_stop: { at: t.team_stop.at, by: t.team_stop.by } } : {}),
+    // Additive (2026-11-01): the outside service a task syncs to, and why one in a project that
+    // syncs is kept local (core/private-tasks/), so a client can offer Make local / Sync to.
+    ...(t.source && t.source !== 'local' ? { source: t.source } : {}),
+    ...(t.sync_hold ? { sync_hold: {
+      state: t.sync_hold.state, target: t.sync_hold.target,
+      ...(t.sync_hold.reason ? { reason: t.sync_hold.reason } : {}),
+      ...(t.sync_hold.outside ? { outside: t.sync_hold.outside.state } : {}),
+    } } : {}),
   }
 }
 

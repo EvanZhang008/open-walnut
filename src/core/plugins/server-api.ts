@@ -510,6 +510,37 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
   // Its tasks stay in its own view while this generation lives (plugin-task-visibility.ts).
   const keepsTasks = options.taskVisibility === 'plugin'
   const visibleToThisPlugin = (task: { plugin_only?: string }) => !task.plugin_only || task.plugin_only === pluginId
+  // For a plugin that syncs: the tasks kept local in projects that sync are left out of every
+  // read (private-tasks/visibility.ts). Every other plugin reads them as before.
+  const providerVisible = async (): Promise<(task: Pick<Task, 'source' | 'project'> & { sync_hold?: unknown }) => boolean> => {
+    const { pluginSyncs, providerTaskFilter } = await import('../private-tasks/visibility.js')
+    return await pluginSyncs(pluginId) ? providerTaskFilter() : () => true
+  }
+  /** A sync plugin never changes a task kept local (it may still hold its id from before). */
+  const assertProviderMayWrite = async (id: string, op: string): Promise<void> => {
+    const { pluginSyncs, providerTaskFilter } = await import('../private-tasks/visibility.js')
+    if (!(await pluginSyncs(pluginId))) return
+    const { getTask } = await import('../task-manager.js')
+    const task = await getTask(id).catch(() => null)
+    if (task && !(await providerTaskFilter())(task)) {
+      throw new Error(`${op}: task ${id} is kept local; a sync plugin cannot change it`)
+    }
+  }
+  /** For a sync plugin: the filing items that name a task kept local, refused as `rejected`. */
+  const withoutKept = async (items: FilingItemInput[]): Promise<{ items: FilingItemInput[]; refused: Array<{ id: string; reason: 'rejected' }> }> => {
+    const { pluginSyncs, providerTaskFilter } = await import('../private-tasks/visibility.js')
+    if (!(await pluginSyncs(pluginId))) return { items, refused: [] }
+    const { getTask } = await import('../task-manager.js')
+    const visible = await providerTaskFilter()
+    const keep: FilingItemInput[] = []
+    const refused: Array<{ id: string; reason: 'rejected' }> = []
+    for (const item of items) {
+      const task = item?.id ? await getTask(item.id).catch(() => null) : null
+      if (task && !visible(task)) refused.push({ id: item.id, reason: 'rejected' })
+      else keep.push(item)
+    }
+    return { items: keep, refused }
+  }
   if (keepsTasks) context.own(toDisposable(registerPluginKeepsTasks(pluginId)))
   const contextSnippets: string[] = contributions.agentContext ? [contributions.agentContext] : []
   let unsafeWarned = false
@@ -578,8 +609,13 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
     tasks: {
       async get(id: string) {
         const { getTask } = await import('../task-manager.js')
-        try { return publicTask(await getTask(id)) }
-        catch (error) {
+        try {
+          const task = await getTask(id)
+          // A task kept local in a project that syncs is not there for a sync plugin
+          // (private-tasks/visibility.ts), and another plugin's own task is not this one's.
+          if (!visibleToThisPlugin(task) || !(await providerVisible())(task)) return null
+          return publicTask(task)
+        } catch (error) {
           if (error instanceof Error && /not found|No task found matching/i.test(error.message)) return null
           throw error
         }
@@ -593,17 +629,17 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         }
         if (filter.parentTaskId !== undefined) tasks = tasks.filter((task) => task.parent_task_id === filter.parentTaskId)
         // Another plugin's own tasks (Task.plugin_only) are its business; this plugin's are listed.
-        tasks = tasks.filter(visibleToThisPlugin)
+        tasks = tasks.filter(visibleToThisPlugin).filter(await providerVisible())
         if (filter.limit !== undefined) tasks = tasks.slice(0, Math.max(0, filter.limit))
         return tasks.map(publicTaskSummary)
       },
       async query(query: Record<string, unknown>) {
         const { queryTasksSlim } = await import('../task-manager.js')
-        return (await queryTasksSlim(query as unknown as TaskQuery, { minimal: true })).filter(visibleToThisPlugin).map(publicTaskSummary)
+        return (await queryTasksSlim(query as unknown as TaskQuery, { minimal: true })).filter(visibleToThisPlugin).filter(await providerVisible()).map(publicTaskSummary)
       },
       async children(id: string) {
         const { getChildTasks } = await import('../task-manager.js')
-        return (await getChildTasks(id)).filter(visibleToThisPlugin).map(publicTaskSummary)
+        return (await getChildTasks(id)).filter(visibleToThisPlugin).filter(await providerVisible()).map(publicTaskSummary)
       },
       async create(input: {
         title: string; description?: string; priority?: TaskPriority; phase?: TaskPhase; project?: string;
@@ -637,6 +673,7 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         return publicTask(created)
       },
       async update(id: string, patch: Record<string, unknown>) {
+        await assertProviderMayWrite(id, 'tasks.update')
         const { updateTask, updateDescription, updateNote, getTask } = await import('../task-manager.js')
         if (typeof patch.description === 'string') await updateDescription(id, patch.description)
         if (typeof patch.note === 'string') await updateNote(id, patch.note)
@@ -673,18 +710,22 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         return { changed: done.changed.map((task) => task.id), skipped: done.skipped }
       },
       async appendNote(id: string, markdown: string) {
+        await assertProviderMayWrite(id, 'tasks.appendNote')
         const { addNote } = await import('../task-manager.js')
         await addNote(id, markdown)
       },
       async appendLog(id: string, entry: string) {
+        await assertProviderMayWrite(id, 'tasks.appendLog')
         const { appendConversationLog } = await import('../task-manager.js')
         await appendConversationLog(id, entry)
       },
       async complete(id: string) {
+        await assertProviderMayWrite(id, 'tasks.complete')
         const { completeTask } = await import('../task-manager.js')
         return publicTask((await completeTask(id, { source: 'plugin' })).task)
       },
       async delete(id: string) {
+        await assertProviderMayWrite(id, 'tasks.delete')
         const { deleteTask } = await import('../task-manager.js')
         await deleteTask(id)
       },
@@ -711,6 +752,10 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         assertPrimaryWrite('tasks.fileIntoFolder')
         const result: { filed: string[]; skipped: Array<{ id: string; reason: 'missing' | 'synced' | 'rejected' | 'changed' }> } = { filed: [], skipped: [] }
         if (!Array.isArray(items) || items.length === 0) return result
+        // A sync plugin never files a task kept local (private-tasks/visibility.ts).
+        const screened = await withoutKept(items)
+        result.skipped.push(...screened.refused)
+        items = screened.items
         const { fileTasksIntoFolder } = await import('../task-manager.js')
         let folder: { group_id: string; label: string } | undefined
         try {
@@ -737,6 +782,10 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         if (typeof project !== 'string' || !project.trim()) throw new Error('Project name cannot be empty.')
         const result: { filed: string[]; skipped: Array<{ id: string; reason: 'missing' | 'synced' | 'rejected' | 'changed' }> } = { filed: [], skipped: [] }
         if (!Array.isArray(items) || items.length === 0) return result
+        // A sync plugin never files a task kept local (private-tasks/visibility.ts).
+        const screened = await withoutKept(items)
+        result.skipped.push(...screened.refused)
+        items = screened.items
         const { fileTasksIntoProject } = await import('../task-manager.js')
         // Same chunking and event shape as fileIntoFolder.
         for (let i = 0; i < items.length; i += FILE_INTO_FOLDER_CHUNK) {
@@ -1053,6 +1102,13 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
         }
         const subscriber = `plugin:${pluginId}:event:${++subscriberSequence}`
         bus.subscribe(subscriber, async (event) => {
+          // A task event about a task kept local never reaches a sync plugin (visibility.ts).
+          // Only a held task or a local one filed in a project can be kept: every other event goes
+          // to the handler at once, with no lookup in between.
+          const evTask = (event.data as { task?: Task } | undefined)?.task
+          const maybeKept = !!evTask && typeof evTask === 'object' && event.name.startsWith('task:')
+            && (!!evTask.sync_hold || ((!evTask.source || evTask.source === 'local') && !!evTask.project))
+          if (maybeKept && !(await providerVisible())(evTask)) return
           try { await handler(event) }
           catch (error) {
             context.logger.error('Plugin event handler failed', {

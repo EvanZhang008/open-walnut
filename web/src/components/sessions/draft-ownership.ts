@@ -93,8 +93,14 @@ function commit(
 export function applyDraftTaskFieldEdit(draft: DraftColumn, patch: DraftTaskFieldPatch): DraftColumn {
   const keys = (Object.keys(patch) as DraftOwnedField[]).filter((k) => OWNED_FIELDS.includes(k));
   const endEdit = 'endDate' in patch && !!(draft.meta.startDate || patch.startDate);
-  if (!keys.length && !endEdit) return draft;
+  // The source choice (Local / the project's service) is the user's alone: no parse proposes it.
+  const syncEdit = 'sync' in patch;
+  if (!keys.length && !endEdit && !syncEdit) return draft;
   const meta = { ...draft.meta };
+  if (syncEdit) {
+    if (patch.sync) meta.sync = patch.sync;
+    else delete meta.sync;
+  }
   const owners: Owners = { ...draft.fieldOwner };
   const ai = new Set(draft.aiFields ?? []);
   for (const k of keys) {

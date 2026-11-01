@@ -39,6 +39,14 @@ describe('buildSessionContext (identity note)', () => {
     expect(systemPrompt).toMatch(/memory, notes/i)
   })
 
+  it('tells every session that private matters are created local (2026-11-01)', async () => {
+    // A task about the user's private matters must never reach a project's outside service.
+    const { PRIVATE_TASK_RULE } = await import('../../../src/core/private-tasks/rule.js')
+    const { systemPrompt } = await buildSessionContext(await seedTask('marina'))
+    expect(systemPrompt).toContain(PRIVATE_TASK_RULE)
+    expect(PRIVATE_TASK_RULE).toMatch(/local:true/)
+  })
+
   it('names the task and project when the task resolves', async () => {
     const id = await seedTask('marina')
     const { systemPrompt } = await buildSessionContext(id)
@@ -330,7 +338,9 @@ describe('buildSessionContext (identity note)', () => {
     // the turn that answers the user; an answer he had asked for left his list unread.
     // 7450 → 7550 (2026-11-01) for the Walnut MCP tools every new Claude Code session
     // now has: prefer them to the CLI, so a quote or a `$( )` in a text arrives exact.
-    expect(systemPrompt.length).toBeLessThan(7550)
+    // 7550 → 7800 (2026-11-01) for private tasks: a task about the user's private matters is
+    // created local, so a project's outside service never receives it.
+    expect(systemPrompt.length).toBeLessThan(7800)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {

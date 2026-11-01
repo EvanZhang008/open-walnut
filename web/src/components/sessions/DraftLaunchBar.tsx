@@ -82,6 +82,7 @@ import { DraftFolderPill, DraftPillsBreak, DraftProjectChip } from './DraftLaunc
 import { DraftWorkspaceRow } from '@/components/workspaces/DraftWorkspaceRow';
 import { DraftWorkspaceMenuItem } from '@/components/workspaces/DraftWorkspaceMenuItem';
 import { draftProjectChip, draftProjectIsNew, draftProjectProvenance } from './draft-project-chip';
+import { SyncChoiceChip } from '@/components/tasks/SyncChoice';
 
 /** `host::cwd`: one directory's identity (same as draft-column's dirKey). */
 function chipKey(d: { cwd: string; host: string | null }): string {
@@ -321,6 +322,15 @@ export function DraftLaunchBar({
               menu={projectMenu ? menu : undefined}
               project={draft.project ?? ''}
               onPick={pickProject}
+            />
+          )}
+          {/* Local or the project's service: only in a project that syncs, never for a draft
+              bound to an existing task (its source is already decided). */}
+          {decisionsOn && !isFork && !draft.taskId && (
+            <SyncChoiceChip
+              project={draft.project}
+              local={draft.meta.sync !== 'project'}
+              onChange={(local) => handleTaskFieldChange({ sync: local ? 'local' : 'project' })}
             />
           )}
           {/* LAST element child of the row, unwrapped (the specs assert it). */}

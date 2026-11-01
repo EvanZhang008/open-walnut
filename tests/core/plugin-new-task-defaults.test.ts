@@ -34,6 +34,7 @@ import {
 } from '../../src/core/task-manager.js';
 import { closeDb } from '../../src/core/task-db.js';
 import { createMockPlugin, createNoopSync } from './plugin-test-utils.js';
+import { settleBackgroundPushes } from '../../src/core/task-manager.js';
 import type { IntegrationSync, RegisteredPlugin } from '../../src/core/integration-types.js';
 import type { Task } from '../../src/core/types.js';
 
@@ -89,7 +90,9 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // An asyncPush test's push lands after it returns: let it finish before the next test's reset.
+  await settleBackgroundPushes();
   bus.unsubscribe('web-ui');
   for (const id of [PLUGIN_ID, OTHER_ID]) if (registry.has(id)) registry.unregister(id);
   closeDb();

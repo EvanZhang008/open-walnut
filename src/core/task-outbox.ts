@@ -411,12 +411,36 @@ export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
         snapshotProject = '';
       }
     }
-    const { id, ...rest } = snapshot;
+    const { id, sync_hold: replicaHold, ...rest } = snapshot;
+    // Private tasks (private-tasks/birth.ts), the same hook as addTask: a task bound for an
+    // outside service is born local and judged first; the creator's Local choice on the
+    // companion holds.
+    let bornSource = primarySource;
+    let bornHold: Task['sync_hold'];
+    if (primarySource !== 'local') {
+      const { getConfig } = await import('./config-manager.js');
+      const { decideBirth } = await import('./private-tasks/birth.js');
+      const { privacyJudgeAvailable } = await import('./private-tasks/sync-gate.js');
+      const config = await getConfig();
+      // A subtask of a parent kept local is kept local too, as addTask does.
+      const parent = rest.parent_task_id ? await tm.getTask(rest.parent_task_id).catch(() => null) : null;
+      const parentKept = parent?.source === 'local' && parent.org_role !== 'lead'
+        && ['private', 'chosen', 'unjudged'].includes(parent.sync_hold?.state ?? '');
+      const decided = decideBirth(primarySource, { title: rest.title ?? '', description: rest.description, note: rest.note }, config.private_tasks, {
+        explicitLocal: replicaHold?.state === 'chosen' || parentKept, canJudge: privacyJudgeAvailable(config),
+      });
+      if (parentKept && decided.hold?.state === 'chosen' && replicaHold?.state !== 'chosen') decided.hold.reason = 'Its parent task is kept local';
+      bornSource = decided.source;
+      bornHold = decided.hold;
+    }
     // created_by_op and the op key: the companion's journal record of the same create
     // (slice 3d, a live send that landed after its deadline) is then skipped by the
     // drain, neither re-minted nor merged again over the row (apply-fields.ts opKeyOf).
     const [created] = await tm.addTasksBulk([
-      { ...rest, id, project: snapshotProject, source: primarySource, created_by_op: op.opId, applied_ops: [`companion|${op.opId}|1`] },
+      {
+        ...rest, id, project: snapshotProject, source: bornSource, ...(bornHold ? { sync_hold: bornHold } : {}),
+        created_by_op: op.opId, applied_ops: [`companion|${op.opId}|1`],
+      },
     ]);
     rememberOpId(op.opId);
     // Read back once filed, so the event carries the folder (placing may emit nothing itself).
@@ -426,6 +450,10 @@ export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
     if (created) {
       const { bus, EventNames } = await import('./event-bus.js');
       bus.emit(EventNames.TASK_CREATED, { task: placed }, ['web-ui'], { source: 'cloud-outbox' });
+      if (created.sync_hold) {
+        const { startSyncGate } = await import('./private-tasks/sync-gate.js');
+        startSyncGate(created);
+      }
       if (created.source !== 'local') {
         // Same order as addTask: the plugin's defaults (a tracker's current sprint)
         // go on the row first so the create that follows carries them.

@@ -17641,6 +17641,12 @@ a.task-kebab-info:hover {
   background: var(--bg-secondary, transparent);
   color: var(--fg);
 }
+/* A picked option of a two-way choice (the Sync field: Local / the project's service). */
+.qtc-chip-on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--fg);
+}
 .qtc-date-picker {
   padding: 0 10px 10px;
 }

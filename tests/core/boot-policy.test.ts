@@ -98,6 +98,7 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'stt-auto-setup': always, // new: installs the voice model on the Mac and on the companion
   'host-exec-grants': leaderOnly, // new: grants for commands on other hosts are kept on the Mac
   'fleet-secrets': leaderOnly, // new: the Mac holds the secrets and sends each host its copies
+  'private-task-gate': leaderOnly, // new: the Mac pushes tasks to outside services, so it judges them first
 }
 
 /**

@@ -1140,6 +1140,42 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   moves no phase, tier, pin or read marker. The web route `PATCH /api/tasks/:id`
   takes the same field (`""` stops), and agents set it with `task_update`.
 
+### Private tasks (additive, 2026-11-01): local tasks in a project that syncs
+
+A task can be local inside a project that syncs to an outside service (a tracker plugin). Its
+`source` is `local`, so an older Walnut never pushes it either, and it carries a `sync_hold`
+saying why. Core enforces it in front of every plugin: a sync plugin is never handed a local or
+held task, never reads one through its API, and every text it is about to post (a create, an
+edit of the title, description, note or summary, the conversation log) is checked first against
+the user's private words (`config.private_tasks.words`) and the fast model
+(`config.private_tasks.model_check`, on by default; only the words when no model is set up). A
+new task bound for a service is born local and held `checking` until both pass; a private
+verdict, a matching word or a model with no answer keeps it local, and the user gets one decision
+letter (Keep local / Sync to the service, plus Archive there / Neutralize there for an outside
+copy) while Main hears one line.
+
+- `POST /api/v1/tasks` takes `"local": true` (a boolean, else `400 bad_request`): the task is
+  created local in its project. The `task_create` op has the same field.
+- ProjectedTask gains `source` (only when not local) and `sync_hold: { state:
+  'checking'|'private'|'unjudged'|'chosen', target, reason?, outside?: { source, state:
+  'kept'|'archived'|'neutralized' } }`.
+- `POST /api/v1/tasks/:id/make-local { "outside"?: "keep"|"archive"|"neutralize" }` → `200 {
+  "task", "unlinked", "from"?, "service"?, "children", "outside": { "action", "done", "error"? },
+  "outcome" }`: a synced task stops syncing and keeps all of its content in the same project
+  (and its subtasks of the same source with it); its outside copy is kept, archived, or
+  neutralized (title replaced by a moved marker, text emptied, then archived); its remote id is
+  released, so no pull imports it again. Op `task_make_local`.
+- `POST /api/v1/tasks/:id/sync-to-project { "user_words"? }` → `200 { "task", "released",
+  "service" }`: the task gets its project's source and is pushed (a task turned local and kept
+  links to its old copy again). Sending a kept task out is the user's decision: a session caller
+  without `user_words` (10+ characters) gets `403 user_decision`. `409 already_synced`,
+  `project_local`, `project_conflict`. Op `task_sync_to_project`.
+- `POST /api/v1/tasks/:id/outside-copy { "action": "archive"|"neutralize" }` changes the copy a
+  task turned local left behind.
+- `POST /api/v1/private-tasks/test { "text", "words"? }` → `{ "match": string|null, "invalid":
+  string[] }`: which private word a text matches (Settings' Try a title).
+- Writes answer `501 not_supported_cloud` on the cloud companion.
+
 ### A task's own MEMORY.md (additive, 2026-10-27): `/tasks/:id/agent-memory`
 
 The working memory Main, a lead or a leader keeps for itself (`src/core/sessions/agent-memory.ts`):

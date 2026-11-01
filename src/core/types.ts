@@ -921,6 +921,12 @@ export interface Task {
    *  blob, local-only, never pushed to sync backends; an older Walnut ignores it and shows
    *  the task as before. */
   plugin_only?: string;
+  /** Why a task in a project that syncs to an outside service is kept local
+   *  (src/core/private-tasks/): the Walnut-side gate holds it while the small model judges it
+   *  (`checking`), after it or the user's private words found it private (`private`), when the
+   *  model could not answer (`unjudged`), or because someone chose Local (`chosen`). The task's `source` is 'local' meanwhile, so an older
+   *  Walnut never pushes it either. Payload blob, local-only, never pushed. */
+  sync_hold?: SyncHold;
   /** WAITING only: when the wait ends by itself (ISO datetime). At that time the
    *  task's session is woken like a trigger fire (src/core/task-wait-until.ts);
    *  with no session the task comes back as NEED_ACTION. A task entering WAITING
@@ -1204,6 +1210,38 @@ export interface ReplicaCopiesConfig {
   conversation_bodies?: boolean;
 }
 
+/** See Task.sync_hold. */
+export interface SyncHold {
+  /** The outside service the task would sync to (its project's source). */
+  target: TaskSource;
+  /** `checking` = the model is judging it; `private` = the user's words or the model found it
+   *  private; `unjudged` = the model could not answer; `chosen` = a person or an agent made it
+   *  local (at its create, or by turning a synced task local). */
+  state: 'checking' | 'private' | 'unjudged' | 'chosen';
+  /** What decided: the user's words, the model, a person or an agent. */
+  by?: 'words' | 'model' | 'user';
+  /** One line the user reads on the task. */
+  reason?: string;
+  /** ISO time of the last change. */
+  at: string;
+  /** The decision letter that asks the user, while it is open. */
+  letter_id?: string;
+  /** How many times the gate judged it (a text that changed while it was judged is judged again). */
+  tries?: number;
+  /** A synced task turned local: its copy in the outside service, so a later "archive" or
+   *  "neutralize" still reaches it and "Sync to …" links it again instead of making a second one.
+   *  `ext` is the remote identity it had; `state` what was done to the copy since. */
+  outside?: { source: TaskSource; ext: Record<string, unknown>; state: 'kept' | 'archived' | 'neutralized' };
+}
+
+/** Private tasks (Settings › Tasks): what keeps a task out of an outside service. */
+export interface PrivateTasksConfig {
+  /** Words or `/patterns/`, one per entry (src/core/private-tasks/private-words.ts). */
+  words?: string[];
+  /** Judge a new task with the fast model before its first push (default true). */
+  model_check?: boolean;
+}
+
 export interface Config {
   version: 1;
   user: { name?: string };
@@ -1244,6 +1282,8 @@ export interface Config {
     prices?: Record<string, import('./usage/price-book.js').UserPriceRates>;
   };
   agent?: AgentConfig;
+  /** Private tasks: kept local in projects that sync to an outside service (PrivateTasksConfig). */
+  private_tasks?: PrivateTasksConfig;
   /** Plugin configurations. Keys are plugin IDs (e.g. 'ms-todo'). Each plugin defines its own config schema. */
   plugins?: Record<string, Record<string, unknown> & { enabled?: boolean }>;
   /** Per-plugin AI switch and monthly budget for `walnut.ai.run` (src/core/ai/ai-policy.ts). Kept

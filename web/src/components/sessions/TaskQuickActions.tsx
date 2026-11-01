@@ -21,6 +21,7 @@ import { keepNativeContextMenu } from '@/utils/context-menu';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { MoveToProjectSection, TaskActionMenuItems } from '@/components/tasks/TaskKebabMenu';
 import { TeamMenuItems } from '@/components/tasks/TeamMenuItems';
+import { TaskSyncMenuRows } from '@/components/tasks/TaskSyncMenuRows';
 import { TransferMenuItem } from '@/components/transfer/TransferMenuItem';
 import { MoveHostMenuItems } from '@/components/transfer/MoveHostMenuItems';
 import { WorkspaceMenuSection } from '@/components/workspaces/WorkspaceMenuSection';
@@ -462,6 +463,8 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
           {/* A sync that failed or has not happened yet needs to be seen, so it stays out
               of the group. A local task, or one in sync, says nothing here. */}
           <TaskSyncWarning task={task} integrations={integrations} />
+          {/* Sync: make a synced task local, or send a local one to its project's service. */}
+          <TaskSyncMenuRows task={task} afterAction={closeKebab} />
           </>)}
           </>)}
 

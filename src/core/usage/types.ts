@@ -29,7 +29,8 @@ export type UsageSource =
   | 'memory'       // working-memory file upkeep
   | 'transfer'     // handoff brief when a session moves engine or host
   | 'routine-draft' // routine drafted from a plain-text request
-  | 'host-learning'; // what a host is used for, learned from its sessions
+  | 'host-learning' // what a host is used for, learned from its sessions
+  | 'privacy-check'; // whether a new task is private before its first push to an outside service
 
 export interface UsageRecord {
   id: string;

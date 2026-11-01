@@ -21,6 +21,7 @@ import { PluginFieldsSection } from './PluginFieldPicker';
 import { WorkspaceMenuSection } from '@/components/workspaces/WorkspaceMenuSection';
 import { QuoteInSessionItem } from './QuoteInSessionItem';
 import { TeamMenuItems } from './TeamMenuItems';
+import { TaskSyncMenuRows } from './TaskSyncMenuRows';
 import { WatchMenuItem } from './WatchToggle';
 import { TransferMenuItem } from '@/components/transfer/TransferMenuItem';
 import { MoveHostMenuItems } from '@/components/transfer/MoveHostMenuItems';
@@ -682,6 +683,9 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
 
           {/* Team: adopt a worker (any task can lead), or leave this task's leader */}
           <TeamMenuItems task={task} afterAction={closeMenu} />
+
+          {/* Sync: make a synced task local, or send a local one to its project's service */}
+          <TaskSyncMenuRows task={task} afterAction={closeMenu} />
 
           {/* Move actions — hierarchy + order shortcuts (precise alternative to drag) */}
           {((onUnparent && task.parent_task_id) || onMoveUp || onMoveDown) && (

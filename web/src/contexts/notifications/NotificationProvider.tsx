@@ -21,7 +21,7 @@
  */
 
 import {
-  createContext, useContext, useState, useRef, useCallback, useEffect, useMemo,
+  useContext, useState, useRef, useCallback, useEffect, useMemo,
   type ReactNode,
 } from 'react';
 import { useEvent } from '@/hooks/useWebSocket';
@@ -39,8 +39,10 @@ import { wireActionsOf } from './notification-actions';
 import { useQuietState } from './quiet';
 import { quietAllowsToast, reminderSoundMuted, type QuietState } from './quiet-model';
 import { armChime, playChime } from '@/utils/chime';
+// The context lives in a module of its own, so a component can read it without this provider.
+import { NotificationContext } from './notification-context';
 
-interface NotificationContextValue {
+export interface NotificationContextValue {
   /** Current top-right toast stack. */
   toasts: Notification[];
   /** Durable feed (persistent notifications), newest-last. */
@@ -96,7 +98,6 @@ interface NotificationContextValue {
   quiet: QuietState;
 }
 
-const NotificationContext = createContext<NotificationContextValue | null>(null);
 
 /** Min gap between toasts for the SAME agent-error message. Wider than the cron
  *  interval (30min) so a persistent failure toasts about twice an hour, not 36x. */

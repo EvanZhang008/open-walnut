@@ -159,6 +159,7 @@ export function QuickCreatePopover({ seed, onClose, onCreateTask, onCreateEvent 
                 due_date: input.due_date,
                 start_date: input.start_date,
                 end_date: input.end_date,
+                ...(input.local ? { source: 'local' } : {}),
               });
               onClose();
             }}

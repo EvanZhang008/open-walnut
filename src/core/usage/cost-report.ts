@@ -80,6 +80,7 @@ const FEATURE: Record<string, string> = {
   'image-tool': 'Image reading', perplexity: 'Web search', glm: 'GLM calls', title: 'Titles', 'quick-parse': 'Quick add',
   summary: 'Summaries', organize: 'Organizing sessions', 'commit-message': 'Commit messages', memory: 'Memory upkeep',
   transfer: 'Session transfer', 'routine-draft': 'Routine drafts', 'host-learning': 'Host learning',
+  'privacy-check': 'Private task checks',
 };
 const ENGINE: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', goose: 'Goose' };
 /** An engine name as a query may carry it (the rollup's own values are lowercase words). */

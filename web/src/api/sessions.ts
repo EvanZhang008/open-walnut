@@ -1090,6 +1090,9 @@ export interface QuickStartTaskMeta {
   due_date?: string;
   start_date?: string;
   end_date?: string;
+  /** 'project' sends the new task to its project's outside service (after Walnut's check);
+   *  absent or 'local' keeps it local. */
+  sync?: 'local' | 'project';
 }
 
 export async function quickStartSession(opts: {

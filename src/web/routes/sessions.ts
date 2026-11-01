@@ -363,6 +363,8 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         due_date?: string
         start_date?: string
         end_date?: string
+        /** 'project' gives the task its project's outside source (after the private-task check). */
+        sync?: 'local' | 'project'
       }
       /** Optional launch intent — 'fix-walnut' wraps the message in a repair briefing. */
       intent?: string
@@ -544,6 +546,10 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         res.status(400).json({ error: `Invalid taskMeta.pinTier: ${taskMeta.pinTier}. Must be one of: ${validTiers.join(', ')}` })
         return
       }
+    }
+    if (taskMeta?.sync !== undefined && taskMeta.sync !== 'local' && taskMeta.sync !== 'project') {
+      res.status(400).json({ error: 'Invalid taskMeta.sync: must be local or project' })
+      return
     }
     // Task dates must at least parse — they flow into updateTask verbatim and an
     // unparseable string would render as "Invalid Date" on every task surface.

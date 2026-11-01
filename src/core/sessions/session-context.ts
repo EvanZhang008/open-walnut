@@ -96,6 +96,7 @@
 import { THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../org/thread-rules.js'
 import { TEAM_CHARTER } from '../team-charter.js'
 import { WORK_PLACE_RULE, taskDirLine } from '../work-place.js'
+import { PRIVATE_TASK_RULE } from '../private-tasks/rule.js'
 import { taskDirForHost } from './task-dir-place.js'
 import { isAskTask } from './caller-placement.js'
 import { createHash } from 'node:crypto'
@@ -587,6 +588,9 @@ function composePrompt(task: InstructionTask | undefined, state: { taskLine: str
     + 'park or an FYI: your task and this session already show those. Answering another task\'s '
     + 'request (Main, a lead): your result goes only to it, in your reply, and it tells the user; '
     + 'letter the user about that work only if the user themself asked this task for a letter or report.\n\n'
+    // Private tasks (src/core/private-tasks/): a task about the user's private matters is
+    // created local, so a project's outside service never receives it.
+    + PRIVATE_TASK_RULE + '\n\n'
     // The agent acknowledgement line (see 6c above), for every session, Main and
     // the asks included: the panel never hides a turn the user started. 2026-10-25:
     // the old wording ("a turn that only reports work") put the line under answers
