@@ -61,8 +61,17 @@ export async function startPluginFixture(): Promise<PluginFixture> {
   return { port, home, stop }
 }
 
+/**
+ * How long the app may take to show on a fixture server this spec booted itself. Its first load
+ * is a cold Vite boot: about 1,700 module requests transformed for the first time, 12 to 15 s on an idle
+ * 8 core container, and past 30 s on a 4 core CI runner with 4 workers (2026-11-01:
+ * plugin-hot-reload on 4 of 5 runs, the sidebar never came). The main fixture's first waits
+ * allow 90 s for the same reason. Every spec that boots its own server waits through this.
+ */
+export const COLD_SHELL_MS = 90_000
+
 export async function expandSidebar(page: Page): Promise<void> {
-  await expect(page.locator('.sidebar')).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('.sidebar')).toBeVisible({ timeout: COLD_SHELL_MS })
   if (await page.locator('.sidebar.collapsed').count()) {
     await page.locator('.sidebar-collapse-btn').click()
     await expect(page.locator('.sidebar.collapsed')).toHaveCount(0)

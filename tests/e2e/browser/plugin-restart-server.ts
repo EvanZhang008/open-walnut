@@ -138,6 +138,8 @@ if (role === 'api') {
   const { restateOwnOrigin } = await import('../../../web/dev-proxy-origin.js')
   const viteServer = await createViteServer({
     root: path.join(repoRoot, 'web'),
+    // Its own dependency cache, as test-server.ts: a shared one is re-optimized under it.
+    cacheDir: path.join(home, 'vite-cache'),
     // Scan every source file for dependencies at startup. Vite's on-demand discovery FULL-PAGE-
     // RELOADS when a lazily loaded module brings a new one mid-session, and a reload during the
     // restart erases exactly what the spec watches (the open window's state).

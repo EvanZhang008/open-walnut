@@ -516,6 +516,8 @@ const { createServer: createViteServer } = await import('vite')
 const { restateOwnOrigin } = await import('../../../web/dev-proxy-origin.js')
 const viteServer = await createViteServer({
   root: path.join(repoRoot, 'web'),
+  // Its own dependency cache, as test-server.ts: a shared one is re-optimized under it.
+  cacheDir: path.join(tmpBase, 'vite-cache'),
   server: {
     host: '127.0.0.1',
     port,

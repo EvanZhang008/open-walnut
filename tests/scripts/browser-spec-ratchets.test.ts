@@ -645,6 +645,45 @@ describe('the test ceiling on CI', () => {
   })
 })
 
+describe('specs on a fixture server of their own', () => {
+  // A server a spec boots itself (startPluginFixture, or test-server.ts spawned directly) answers
+  // its first page with a cold Vite boot: 12 to 15 s on an idle container, past 30 s on a 4 core
+  // CI runner (2026-11-01: plugin-hot-reload on 4 of 5 runs, the sidebar never came). The first
+  // wait for the app goes through expandSidebar in plugin-update-fixture.ts, which allows
+  // COLD_SHELL_MS; a spec keeps no shorter copy of it.
+  const OWN_SERVER = /startPluginFixture\(|['"]tests\/e2e\/browser\/test-server\.ts['"]/
+  const SHORT_SIDEBAR_WAIT = /locator\('\.sidebar'\)\)\.toBeVisible\(\{ timeout: ([\d_]+) \}\)/
+  const offendersOf = (file: string, text: string): string[] => {
+    const out: string[] = []
+    if (/^\s*(?:export )?async function expandSidebar\(/m.test(text)) out.push(`${file}: its own expandSidebar`)
+    text.split('\n').forEach((line, i) => {
+      const m = SHORT_SIDEBAR_WAIT.exec(line)
+      if (m && Number(m[1]!.replace(/_/g, '')) < 90_000) out.push(`${file}:${i + 1}: ${line.trim()}`)
+    })
+    return out
+  }
+
+  it('wait for the app through the cold boot budget', () => {
+    const fixture = sources.find(({ file }) => file === 'plugin-update-fixture.ts')!.text
+    const budget = fixture.match(/^export const COLD_SHELL_MS = ([\d_]+)$/m)
+    expect(budget, 'plugin-update-fixture.ts exports COLD_SHELL_MS').not.toBeNull()
+    expect(Number(budget![1]!.replace(/_/g, ''))).toBeGreaterThanOrEqual(90_000)
+    expect(fixture).toContain("await expect(page.locator('.sidebar')).toBeVisible({ timeout: COLD_SHELL_MS })")
+    const own = sources.filter(({ file, text }) => file.endsWith('.spec.ts') && OWN_SERVER.test(text))
+    expect(own.map(({ file }) => file)).toEqual(expect.arrayContaining(['native-plugin.spec.ts', 'plugin-hot-reload.spec.ts']))
+    expect(own.flatMap(({ file, text }) => offendersOf(file, text))).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const spec = [
+      'async function expandSidebar(page: Page): Promise<void> {',
+      "  await expect(page.locator('.sidebar')).toBeVisible({ timeout: 30_000 })",
+      '}',
+    ].join('\n')
+    expect(offendersOf('x.spec.ts', spec)).toHaveLength(2)
+  })
+})
+
 describe('a kanban worker that errs', () => {
   // A worker's error wakes its idle leader, and the leader's woken turn ends handed back: 20 s
   // later it reads Needs you and every Needs you count of the team is one more than its cards
@@ -687,5 +726,36 @@ describe('a main-thread CPU budget', () => {
   it('catches the shape it was written for', () => {
     const spec = "const t = metrics.find((m) => m.name === 'TaskDuration')\nexpect(openCpu).toBeLessThan(500)"
     expect(READS_CPU.test(spec) && !SCALES.test(spec)).toBe(true)
+  })
+})
+
+describe('a fixture Vite server', () => {
+  // Every fixture server with a dev mode Vite keeps its own dependency cache (cacheDir in its temp
+  // dir). Two Vite servers on the one web/node_modules/.vite re-optimize into each other's cache:
+  // the page of the one that did not gets 504 Outdated Optimize Dep for its dependencies and never
+  // mounts (2026-11-01: plugin-hot-reload's own fixture showed the boot splash for 90 s on 4 of 5
+  // CI runs), or loads two copies of React.
+  const offendersOf = (file: string, text: string): string[] => {
+    const out: string[] = []
+    let at = text.indexOf('createViteServer({')
+    while (at >= 0) {
+      const call = text.slice(at, text.indexOf('\n})', at) >= 0 ? text.indexOf('\n})', at) : undefined)
+      const end = call.search(/\n\s*server: \{/)
+      if (!/\bcacheDir: /.test(end >= 0 ? call.slice(0, end) : call)) out.push(`${file}:${text.slice(0, at).split('\n').length}`)
+      at = text.indexOf('createViteServer({', at + 1)
+    }
+    return out
+  }
+
+  it('has a dependency cache of its own', () => {
+    const servers = sources.filter(({ text }) => text.includes('createViteServer({'))
+    expect(servers.map(({ file }) => file)).toEqual(expect.arrayContaining(['test-server.ts', 'mail-app-server.ts']))
+    expect(servers.flatMap(({ file, text }) => offendersOf(file, text))).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const server = "const viteServer = await createViteServer({\n  root: path.join(repoRoot, 'web'),\n  server: {\n    port,\n  },\n})"
+    expect(offendersOf('x-server.ts', server)).toHaveLength(1)
+    expect(offendersOf('x-server.ts', server.replace("'web'),", "'web'),\n  cacheDir: path.join(tmpBase, 'vite-cache'),"))).toEqual([])
   })
 })

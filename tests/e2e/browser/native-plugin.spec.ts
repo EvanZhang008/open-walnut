@@ -11,6 +11,8 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { openChatOnLoad } from './draft-helpers'
 import { backToApps, openPluginDetail } from './apps-store-helpers'
 import { withCssColor } from './css-color'
+// The first wait on this spec's own server allows for its cold Vite boot (COLD_SHELL_MS).
+import { expandSidebar } from './plugin-update-fixture'
 
 const SCREENSHOT_DIR = '/tmp/walnut-plugin-demo'
 /** Where the update-status design shots land (light, dark, narrow); read by the reviewers. */
@@ -197,14 +199,6 @@ async function stopChild(): Promise<void> {
     stopped,
     new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Plugin App fixture did not stop')), 5_000)),
   ])
-}
-
-async function expandSidebar(page: Page): Promise<void> {
-  await expect(page.locator('.sidebar')).toBeVisible({ timeout: 30_000 })
-  if (await page.locator('.sidebar.collapsed').count()) {
-    await page.locator('.sidebar-collapse-btn').click()
-    await expect(page.locator('.sidebar.collapsed')).toHaveCount(0)
-  }
 }
 
 async function openSettings(page: Page): Promise<void> {

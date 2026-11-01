@@ -4964,6 +4964,10 @@ if (!builtSpa) {
   const { restateOwnOrigin } = await import('../../../web/dev-proxy-origin.js')
   viteServer = await createViteServer({
     root: path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../../web'),
+    // Its own dependency cache: a Vite that re-optimizes into a cache another server is serving
+    // from answers that server's page 504 Outdated Optimize Dep, and the app never mounts
+    // (2026-11-01: plugin-hot-reload's own fixture, 4 of 5 CI runs). Every fixture Vite has one.
+    cacheDir: path.join(tmpBase, 'vite-cache'),
     server: {
       host: '127.0.0.1',
       port: testPort,

@@ -144,6 +144,8 @@ if (!built) {
   const { createServer: createViteServer } = await import('vite')
   const server = await createViteServer({
     root: path.resolve(import.meta.dirname, '../../../web'),
+    // Its own dependency cache, as test-server.ts: a shared one is re-optimized under it.
+    cacheDir: path.join(cluster!.base, 'vite-cache'),
     server: {
       host: '127.0.0.1', port: pagePort, strictPort: true, hmr: { clientPort: port },
       // web/vite.config.ts proxies /api and /ws to :3456. The tunnel sends both to
