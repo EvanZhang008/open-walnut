@@ -147,3 +147,23 @@ describe('specs that import Vite\'s optimized deps', () => {
     expect(readsHashFromSource("performance.getEntriesByType('resource')\n.startsWith('/node_modules/.vite/deps/' + file)")).toBe(false)
   })
 })
+
+describe('calendar columns of another day', () => {
+  // The week grid draws only the shown week, so a fixed offset from today (tomorrow, two
+  // days on) has no column near a week's end: 2026-11-01 was a Sunday, and the quick-create
+  // test's tomorrow was next week's on all five CI runs that day. Pick a day the grid shows
+  // (its `.cal-day-col` data-day values), as the late-night slot test does.
+  const fixedDayColumn = /localDay\(\s*-?[1-9]\d*\s*\)[\s\S]{0,300}?\b(?:columnPoint|calendarSlotPoint)\(/g
+
+  it('no spec aims a time-grid point at a fixed offset from today', () => {
+    const offenders = sources.flatMap(({ file, text }) =>
+      [...text.matchAll(fixedDayColumn)].map((m) => `${file}:${text.slice(0, m.index).split('\n').length}`))
+    expect(offenders).toEqual([])
+  })
+
+  it('catches the shape it was written for, and lets today and a shown day through', () => {
+    expect('const day = localDay(1)\n    const point = await columnPoint(page, day, 11)'.match(fixedDayColumn)).toHaveLength(1)
+    expect('const point = await columnPoint(page, localDay(0), 22)'.match(fixedDayColumn)).toBeNull()
+    expect("const day = days.find((d) => d !== localDay(0))\nconst point = await columnPoint(page, day, 11)".match(fixedDayColumn)).toBeNull()
+  })
+})

@@ -765,10 +765,12 @@ test.describe('Calendar view', () => {
     // Regression (customer-journey MAJOR): the form had no end-time control —
     // every new event was silently forced to slot+1h.
     await openCalendar(page)
-    // Tomorrow 11:00 — today 15:00 belongs to the parallel Event-tab spec,
-    // whose freshly created chip would swallow this click (item popover
-    // instead of the create form).
-    const day = localDay(1)
+    // Another day the grid shows, 11:00: today 15:00 belongs to the parallel Event-tab
+    // spec, whose freshly created chip would swallow this click (item popover instead of
+    // the create form). Not tomorrow: on a Sunday that is next week's, and its column is
+    // not drawn (2026-11-01, all five CI runs of the day).
+    const days = await page.locator('.cal-day-col').evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.day ?? ''))
+    const day = days.find((d) => d && d !== localDay(0)) ?? days[0]!
     const point = await columnPoint(page, day, 11)
     await page.mouse.click(point.x, point.y)
 

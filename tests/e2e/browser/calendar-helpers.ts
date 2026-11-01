@@ -33,7 +33,13 @@ export async function calendarSlotPoint(
   const startMinute = Number(await scope.locator('.cal-grid').first().getAttribute('data-start-minute')) || 0
   const offset = ((hour * 60 + minute - startMinute) / 60) * hourPx
   await scope.locator('.cal-grid-scroll').first().evaluate((el, y) => { el.scrollTop = y - el.clientHeight / 2 }, offset)
-  const box = await scope.locator(`.cal-day-col[data-day="${day}"]`).first().boundingBox()
+  const col = scope.locator(`.cal-day-col[data-day="${day}"]`).first()
+  // A day outside the shown range has no column, and boundingBox() would wait out the test.
+  if (!(await col.count())) {
+    const shown = await scope.locator('.cal-day-col').evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.day))
+    throw new Error(`day column ${day} is not on the grid (it shows ${shown.join(', ')})`)
+  }
+  const box = await col.boundingBox()
   if (!box) throw new Error(`day column ${day} not visible`)
   return { x: box.x + box.width / 2, y: box.y + offset + 1 }
 }
