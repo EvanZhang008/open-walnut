@@ -22,10 +22,13 @@
  *     a fresh spawn does: a new inode, so a new streamEpoch, which every
  *     consumer already reads as "offsets restarted" (the same path as a stream
  *     retention removed or a reboot wiped). So no stream file grows across
- *     resumes past the cap, and the next resume has a small file to read. A
- *     file whose fold holds an armed cron or a pending ScheduleWakeup is kept:
- *     the resumed CLI revives those from its transcript without a line in the
- *     new file, and the idle reapers read them from the fold.
+ *     resumes past the cap, and the next resume has a small file to read. An
+ *     armed cron or a pending ScheduleWakeup is carried: the resumed CLI revives
+ *     those from its transcript without a line in the new file, and the idle
+ *     reapers read them from the fold, so the fresh file starts with one
+ *     `walnut_fold_carry` system line naming them (daemon-fold.ts folds it).
+ *     2026-10-31: the old rule kept such a file instead, and a session with two
+ *     loops armed had a 2.6 GB stream file that grew from August on.
  *
  * How each twin gets it: daemon-standalone.ts imports createStreamFold;
  * daemon-source.ts inlines `createStreamFold.toString()` through
@@ -202,20 +205,13 @@ export function createStreamFold<F extends SpanningFold, T>(deps: StreamFoldDeps
    * or null to keep it. Call only once no process can write the file.
    */
   async function rotateReason(
-    jsonlPath: string, transcriptId: string | null, projectsDirs: readonly string[], fold: F,
+    jsonlPath: string, transcriptId: string | null, projectsDirs: readonly string[], _fold: F,
   ): Promise<{ size: number } | null> {
     if (!ROTATE_BYTES || !transcriptId) return null
     let size: number
     try { size = (await fsp.stat(jsonlPath)).size } catch { return null }
     if (size < ROTATE_BYTES) return null
-    // An armed cron or wakeup is known only from this file's lines (the resumed
-    // CLI revives it silently from its transcript), and the reapers read it from
-    // the fold: a fresh file would forget it. Such a file waits for a later resume.
-    const crons = fold.cronIds ? Object.keys(fold.cronIds).length : 0
-    if (crons > 0 || (typeof fold.wakeupAt === 'number' && fold.wakeupAt > deps.now())) {
-      log('info', 'stream rotation skipped', { jsonlPath, size, reason: 'cron-armed', crons })
-      return null
-    }
+    // An armed cron or wakeup is not a reason to keep the file: rotate() carries it.
     if (!await transcriptExists(projectsDirs, transcriptId)) {
       log('info', 'stream rotation skipped', { jsonlPath, size, reason: 'no-transcript' })
       return null
@@ -224,10 +220,25 @@ export function createStreamFold<F extends SpanningFold, T>(deps: StreamFoldDeps
   }
 
   /**
-   * Leave the old file and start an empty one under the same name (a new
-   * inode). `sidecars` are removed with it (checkpoints, compaction mark).
+   * The line a fresh file starts with, so its fold knows what the old one had
+   * armed: the cron jobs and a wakeup still to fire. Null when nothing is armed.
+   * No uuid and no session_id: history readers and the session's init handling
+   * pass it by.
    */
-  function rotate(jsonlPath: string, sidecars: readonly string[]): boolean {
+  function carryLine(fold: F | null | undefined): string | null {
+    if (!fold) return null
+    const cronIds = fold.cronIds ? Object.keys(fold.cronIds) : []
+    const wakeupAt = typeof fold.wakeupAt === 'number' && fold.wakeupAt > deps.now() ? fold.wakeupAt : 0
+    if (cronIds.length === 0 && wakeupAt === 0) return null
+    return JSON.stringify({ type: 'system', subtype: 'walnut_fold_carry', cron_ids: cronIds, ...(wakeupAt ? { wakeup_at: wakeupAt } : {}) })
+  }
+
+  /**
+   * Leave the old file and start a new one under the same name (a new inode),
+   * holding only the carry line of `fold` when it armed anything. `sidecars`
+   * are removed with it (checkpoints, compaction mark).
+   */
+  function rotate(jsonlPath: string, sidecars: readonly string[], fold?: F | null): boolean {
     try { fs.unlinkSync(jsonlPath) } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
         log('warn', 'stream rotation failed', { jsonlPath, error: (err as Error).message })
@@ -235,9 +246,11 @@ export function createStreamFold<F extends SpanningFold, T>(deps: StreamFoldDeps
       }
     }
     for (const f of sidecars) { try { fs.unlinkSync(f) } catch { /* none */ } }
-    try { fs.writeFileSync(jsonlPath, '', { mode: 0o600 }) } catch { /* the spawn's open creates it */ }
+    const carry = carryLine(fold)
+    try { fs.writeFileSync(jsonlPath, carry ? carry + '\n' : '', { mode: 0o600 }) } catch { /* the spawn's open creates it */ }
+    if (carry) log('info', 'stream rotation carried armed work', { jsonlPath, carry })
     return true
   }
 
-  return { foldFile, transcriptExists, rotateReason, rotate, rotateBytes: ROTATE_BYTES }
+  return { foldFile, transcriptExists, rotateReason, rotate, carryLine, rotateBytes: ROTATE_BYTES }
 }

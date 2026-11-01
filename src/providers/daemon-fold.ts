@@ -322,6 +322,19 @@ export function foldLine(state: FoldState, rawLine: string, lineEndV: number): F
     const differentInvocation = !!(taskId && toolUseId && next.bgTasks[taskId]?.toolUseId
       && next.bgTasks[taskId].toolUseId !== toolUseId)
     if (differentInvocation && (subtype === 'task_progress' || subtype === 'task_updated' || subtype === 'task_notification')) return next
+    if (subtype === 'walnut_fold_carry') {
+      // A rotated stream file starts with the cron jobs and the wakeup its old
+      // file had armed (stream-fold-core.ts rotate): the resumed CLI revives them
+      // from its transcript and writes no line of its own about them.
+      const ids = Array.isArray(parsed.cron_ids) ? parsed.cron_ids : []
+      if (ids.length > 0) {
+        next.cronIds = { ...next.cronIds }
+        for (const id of ids) if (typeof id === 'string' && id) next.cronIds[id] = 1
+      }
+      const at = parsed.wakeup_at
+      if (typeof at === 'number' && at > next.wakeupAt) next.wakeupAt = at
+      return next
+    }
     if (subtype === 'init') {
       // Anchor-equivalent: a new turn (or auto-continuation) began after that
       // result — it cannot be the current turn's verdict (inc-1783644415695).

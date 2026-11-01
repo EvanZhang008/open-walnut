@@ -5718,7 +5718,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
     stopIfSuperseded()
     const rotation = streamWriterGone(sid) ? await streamFold.rotateReason(jsonlPath, ownedSid, CLAUDE_PROJECTS_DIRS, resumeFold.fold) : null
     stopIfSuperseded()
-    if (rotation && streamFold.rotate(jsonlPath, [foldCheckpoint.pathFor(jsonlPath), foldCheckpoint.nextPathFor(jsonlPath), streamCompact.markPathFor(jsonlPath)])) {
+    if (rotation && streamFold.rotate(jsonlPath, [foldCheckpoint.pathFor(jsonlPath), foldCheckpoint.nextPathFor(jsonlPath), streamCompact.markPathFor(jsonlPath)], resumeFold ? resumeFold.fold : null)) {
       logMsg('info', 'stream rotated', { sid, bytes: rotation.size })
       // The dead process's turn and background tasks went with it.
       resumeFold = null

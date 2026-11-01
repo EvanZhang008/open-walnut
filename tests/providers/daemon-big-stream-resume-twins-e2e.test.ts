@@ -10,8 +10,8 @@
  * the next resume is cheap, that a stop during the fold ends it, and that a
  * resume of a file over the rotation cap then starts a fresh file (the
  * conversation lives in the Claude transcript, which must exist for that; a
- * file whose fold holds an armed cron or wakeup is kept, since the fresh file
- * would forget them).
+ * file whose fold holds an armed cron or wakeup rotates too, and the fresh
+ * file opens with a carry line naming them).
  *
  * The file is 128 MB by default with a background task every turn (the
  * quadratic case); WALNUT_TEST_BIG_STREAM_MB and WALNUT_TEST_BIG_STREAM_TASK_EVERY
@@ -370,7 +370,7 @@ describe.each(TWINS)('big stream resume: $name', (twin) => {
     }
   }, 900_000)
 
-  it('a big file is kept while its fold holds an armed cron', async () => {
+  it('a big file whose fold holds an armed cron rotates, and the new file carries the cron and the wakeup', async () => {
     const dirs = makeDirs()
     await boot(twin, dirs, { WALNUT_STREAM_ROTATE_BYTES: String(4 * 1024 * 1024) })
     fs.mkdirSync(dirs.streams, { recursive: true })
@@ -385,9 +385,16 @@ describe.each(TWINS)('big stream resume: $name', (twin) => {
       args: ['/bin/sh', '-c', 'sleep 30', 'sh', '--resume', 'cron-1'],
     })
     expect(resumed.ok).toBe(true)
-    expect(resumed.offset).toBe(size)
-    expect(fs.statSync(jsonl).ino).toBe(ino)
-    expect(daemonLog(dirs)).toMatch(/"stream rotation skipped"[^\n]*"reason":"cron-armed"/)
+    expect(resumed.offset).toBe(0)
+    expect(fs.statSync(jsonl).ino).not.toBe(ino)
+    expect(fs.statSync(jsonl).size).toBeLessThan(size / 1000)
+    expect(daemonLog(dirs)).toMatch(/"stream rotation carried armed work"/)
+    expect(daemonLog(dirs)).not.toMatch(/"stream rotation skipped"/)
+    // The fold reads the carry line from the fresh file: the reapers still see both.
+    for (let i = 0; i < 100; i++) {
+      if (((await rpc({ cmd: 'getState', sid: 'cron-1' })).snapshot as { cronActive?: boolean } | undefined)?.cronActive === true) break
+      await new Promise((r) => setTimeout(r, 200))
+    }
     const state = await rpc({ cmd: 'getState', sid: 'cron-1' })
     const snap = state.snapshot as { cronActive: boolean; wakeupAt?: number | null }
     expect(snap.cronActive).toBe(true)

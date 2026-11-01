@@ -5639,6 +5639,16 @@ export class ClaudeCodeSession {
       case 'system': {
         const sys = event as unknown as Record<string, unknown>
 
+        // A rotated stream file opens with what its old file had armed (stream-fold-core.ts
+        // rotate): the resumed CLI revives those crons and that wakeup without a line of its own.
+        if (sys.subtype === 'walnut_fold_carry') {
+          const ids = Array.isArray(sys.cron_ids) ? sys.cron_ids.filter((x): x is string => typeof x === 'string' && x.length > 0) : []
+          for (const id of ids) this._cronJobIds.add(id)
+          if (ids.length > 0) this._cronArmed = true
+          if (typeof sys.wakeup_at === 'number' && sys.wakeup_at > this._wakeupAt) this._wakeupAt = sys.wakeup_at
+          break
+        }
+
         // ── Init handling ──
         // compact_boundary also carries session_id — guard with subtype check
         if (sys.session_id && (sys.subtype === 'init' || !this.claudeSessionId)) {

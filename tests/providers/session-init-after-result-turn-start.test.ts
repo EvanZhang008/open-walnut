@@ -337,7 +337,8 @@ describe('QUEUED-SEND shape: the writeMessage delivery is itself a turn-start ed
     expect((await getTask(taskId)).phase).toBe('NEED_ACTION')
   })
 
-  it.each(['detached', 'wakeup'] as const)('a send after a settled %s turn emits a fresh result without init', async (work) => {
+  // 'carry': the wakeup arrives as the carry line a rotated stream file opens with (stream-fold-core.ts rotate).
+  it.each(['detached', 'wakeup', 'carry'] as const)('a send after a settled %s turn emits a fresh result without init', async (work) => {
     const sid = `sess-followup-${work}`
     const taskId = await taskInPhase('IN_PROGRESS')
     const session = makeRunningSession(taskId, sid)
@@ -350,6 +351,10 @@ describe('QUEUED-SEND shape: the writeMessage delivery is itself a turn-start ed
     if (work === 'detached') {
       session.handleStreamLine(JSON.stringify({
         type: 'system', subtype: 'task_started', task_id: 'bg', is_backgrounded: true,
+      }), 900)
+    } else if (work === 'carry') {
+      session.handleStreamLine(JSON.stringify({
+        type: 'system', subtype: 'walnut_fold_carry', cron_ids: [], wakeup_at: Date.now() + 60_000,
       }), 900)
     } else {
       session.handleStreamLine(JSON.stringify({

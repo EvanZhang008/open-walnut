@@ -2,7 +2,7 @@
  * stream-fold-core.ts on its own: the async one-pass fold equals a plain
  * line-by-line fold (chunk edges, a torn tail, an oversized line, a checkpoint
  * to resume from), it leaves checkpoints, and a rotation is offered only for a
- * big file whose transcript exists. The daemon twins run it in
+ * big file whose transcript exists, carrying the crons and wakeup it armed. The daemon twins run it in
  * daemon-big-stream-resume-twins-e2e.test.ts.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
@@ -229,18 +229,53 @@ describe('stream-fold-core', () => {
       }
     })
 
-    it('is not offered while the fold holds an armed cron or a pending wakeup', async () => {
+    it('is offered while the fold holds an armed cron or a pending wakeup, and the new file carries them', async () => {
+      // 2026-10-31: the old rule kept such a file, and a session with two loops armed grew a 2.6 GB file from August on.
       const file = path.join(dir, 's3.jsonl')
       fs.writeFileSync(file, 'y'.repeat(2000))
       transcript('s3')
       const { sf, logs } = make({ rotateBytes: 1000 })
       const plain = initialFoldState(0)
-      expect(await sf.rotateReason(file, 's3', [projects()], plain)).toEqual({ size: 2000 })
-      expect(await sf.rotateReason(file, 's3', [projects()], { ...plain, cronIds: { 'job-1': 1 } })).toBeNull()
-      expect(logs.some((l) => l.msg === 'stream rotation skipped' && l.meta.reason === 'cron-armed')).toBe(true)
-      expect(await sf.rotateReason(file, 's3', [projects()], { ...plain, wakeupAt: Date.now() + 60_000 })).toBeNull()
-      // A wakeup in the past is disarmed.
-      expect(await sf.rotateReason(file, 's3', [projects()], { ...plain, wakeupAt: Date.now() - 60_000 })).toEqual({ size: 2000 })
+      const wakeupAt = Date.now() + 60_000
+      const armed = { ...plain, cronIds: { 'job-1': 1 as const, 'job-2': 1 as const }, wakeupAt }
+      expect(await sf.rotateReason(file, 's3', [projects()], armed)).toEqual({ size: 2000 })
+      expect(sf.rotate(file, [], armed)).toBe(true)
+      const text = fs.readFileSync(file, 'utf8')
+      expect(text.split('\n').filter(Boolean)).toHaveLength(1)
+      // The fold of the fresh file knows what the old one had armed.
+      const folded = text.split('\n').filter(Boolean).reduce((st, line, i) => foldLine(st, line, i + 1), initialFoldState(0))
+      expect(folded.cronIds).toEqual({ 'job-1': 1, 'job-2': 1 })
+      expect(folded.wakeupAt).toBe(wakeupAt)
+      expect(logs.some((l) => l.msg === 'stream rotation carried armed work')).toBe(true)
+      // A wakeup in the past is not carried; nothing armed leaves the file empty.
+      fs.writeFileSync(file, 'y'.repeat(2000))
+      expect(sf.rotate(file, [], { ...plain, wakeupAt: Date.now() - 60_000 })).toBe(true)
+      expect(fs.readFileSync(file, 'utf8')).toBe('')
+      expect(sf.carryLine(null)).toBeNull()
+    })
+
+    it('carries every fold field that spans a process, and each other field is listed as left behind', () => {
+      // A new FoldState field must be classified here: carried across a rotation (the resumed CLI
+      // writes no line for it) or left behind with the dead process.
+      const CARRIED = ['cronIds', 'wakeupAt']
+      const LEFT_BEHIND: Record<string, string> = {
+        v: 'the line counter restarts with the new file',
+        turnActive: 'the dead process\'s turn ended with it',
+        sawAnchor: 'per turn', lastResult: 'per turn', sawNormalResult: 'per turn', followupResult: 'per turn',
+        trailingIdle: 'per turn', failedLocalCommand: 'per turn', commandFailureHeld: 'per turn', settledCommandFailure: 'per turn',
+        bgTasks: 'background tasks die with the process', seenInLevel: 'with bgTasks', teamActive: 'a team dies with the process',
+        pendingCronCreates: 'a create still waiting for its result died with the process',
+      }
+      // Every field of the FoldState interface, read from its source.
+      const src = fs.readFileSync(path.join(__dirname, '../../src/providers/daemon-fold.ts'), 'utf8')
+      const body = src.slice(src.indexOf('export interface FoldState {'), src.indexOf('\n}\n', src.indexOf('export interface FoldState {')))
+      const fields = new Set([...body.matchAll(/^  ([A-Za-z]+)\??:/gm)].map((m) => m[1]))
+      expect(fields.size).toBeGreaterThan(10)
+      for (const f of fields) expect(CARRIED.includes(f) || f in LEFT_BEHIND, `classify FoldState.${f}`).toBe(true)
+      const { sf } = make()
+      const line = sf.carryLine({ ...initialFoldState(0), cronIds: { a: 1 }, wakeupAt: Date.now() + 1000 })!
+      const back = foldLine(initialFoldState(0), line, 1)
+      for (const f of CARRIED) expect(back[f as keyof FoldState]).toEqual({ ...initialFoldState(0), cronIds: { a: 1 }, wakeupAt: JSON.parse(line).wakeup_at }[f as keyof FoldState])
     })
   })
 })
