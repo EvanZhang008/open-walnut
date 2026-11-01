@@ -6,6 +6,71 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.22] - 2026-11-01
+
+### Added
+
+- The lines the CLI put into a conversation show on the phone, one closed row each
+- An html-app block draws its layout while it streams and becomes the running block in place
+- An engine switch stays on the task's host, which runs ACP engines itself
+- An html-app block shows its layout while it streams, runs its script only once complete
+- What Walnut added to a message is hidden by default, shown from the bubble's long press
+- Home task panel status sections, Watch, per-project counts and an Inbox project strip, with three layouts on trial
+- Switch a task's engine inside the task, and resume the earlier session on the way back
+- What Walnut added to a message is hidden by default, one click away, and each hint has its switch
+- Plugins first in two groups, built-in apps last with their own switch
+- A leak scan hit stops the release before npm and the GitHub Release
+
+### Fixed
+
+- No job runs on the retired macos-14 image; the port hold releases after the lane stops
+- A finished reply waits for its question however slow history is
+- A reply never shows without its question while a session opens
+- The server holds its port before its daemon starts, so the daemon never takes it
+- Main is green again: a request on its way is never settled, the new twin test runs on Node
+- Drop the second copy of claudeCodeNotNeeded in local-daemon.ts
+- Instruction notices send only what changed, and one session gets one notice once
+- Test connection works for Ollama, no Claude Code warnings or seeded Claude defaults on a local setup
+- A resumed CLI that fails at startup reads as exit 1 with its own message
+- A fork's compaction no longer marks rules, place and hints told to the main conversation
+- Two quick-tier tests red on macOS read what bun and SQLite actually do
+- News reaches the user once: a lead that passed a result to Main says one line
+- A session is titled from the person's words, never from the blocks Walnut put around them
+- The send-boot-wait twins test gives its daemons a guarded PATH
+- A start still spawning past the response budget says starting
+- The AI title replaces a session title the launch made from the first message
+- Background model calls wait for a busy local model server, and a timeout is named as one
+- An ACP turn's result carries its answer; a worker leaves with its adapter; a loaded session follows the engine default model
+- A data home inside another git repository gets a repository of its own
+- The browser suite is green on a clean checkout, and three product errors it hid are fixed
+- A second user on one machine gets their own runtime dir instead of a crash at start
+- Test connection works for Ollama, no Claude Code warnings or seeded Claude defaults on a local setup
+- The send-boot-wait twins test runs its JS twin on Node with the others
+- Test connection works for Ollama, no Claude Code warnings or seeded Claude defaults on a local setup
+- A remote host gets the real ACP worker, never the compiled file's placeholder
+- A single tier keeps its rows when a status section under it opens
+- A host chip click hands focus back to the search box, so typing and Escape still work in WebKit
+- Status sections stay on when the Status pick adds Waiting or Complete to Open, and older completed tasks stay reachable under a chip
+- The staged plugin source carries package.json and packages/
+- A CLI still booting is not reaped for reading its first line late
+- A second user on one machine gets their own runtime dir instead of a crash at start
+- The quick and e2e reds the last bulk push left, and a draft scan that a comment blinded
+- External plugins bundle against the deployed commit's own source
+- Host chips wrap instead of scrolling so every chip takes a click; the picker picks folder and host only
+- An open question over its review row never scrolls the timeline
+- A worker lands in its lead's project unless the user named another
+- Answered requests, overdue hand-ons, wake sources, re-checks, and the bug-fix rule
+- A Mac that slept is not five minutes into an outage; agents' refused offline writes stop lettering the user
+- An open question over its review row is most of the box tall
+- Ask here review cards are one row until opened, open readable, and go full screen in place
+- A status note's card reads "Status changed"
+- Rendered bodies keep their DOM across re-renders; the Org chat stops flashing
+- A person's words behind a status note keep their bubble, on the web and iOS
+- One report per result, settled decision letters, reply language for leads, quoted approval
+- A reconnect to the same daemon sends what it lacks, after the link's first seconds
+- A session whose result saw its CLI gone stays stopped; two flaky tests made deterministic
+- A publish that fails outside Walnut is tried again before the release stops
+
 ## [0.6.21] - 2026-10-31
 
 ### Added
