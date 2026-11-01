@@ -117,8 +117,9 @@ final class AskQuestionCardUITests: XCTestCase {
         // The box shrinks when the keyboard comes up; the field being typed in
         // must still sit wholly inside it, not cut at its bottom edge. Waited
         // for first: the box resizes and scrolls after the keyboard lands.
+        // A block predicate reads several snapshots per check: 15 s, as below.
         let settled = expectation(for: NSPredicate { _, _ in self.onScreen(lastOther, in: app) }, evaluatedWith: nil)
-        wait(for: [settled], timeout: 5)
+        wait(for: [settled], timeout: 15)
         XCTAssertTrue(lastOther.isHittable, "the focused field stays visible above the keyboard")
         XCTAssertLessThanOrEqual(
             lastOther.frame.maxY, app.keyboards.firstMatch.frame.minY + 1,
@@ -158,13 +159,22 @@ final class AskQuestionCardUITests: XCTestCase {
         ]
         for (index, line) in lines.enumerated() {
             firstOther.typeText(line)
-            let rowInside = expectation(for: NSPredicate { _, _ in
+            // Each read is three accessibility snapshots, which take seconds on a loaded CI
+            // runner: a 5 s expectation timed out there once (2026-11-01, run 41287770979)
+            // with no word on which line or where the row stood. Read until the row is
+            // inside or 15 s pass, and say what the last read saw.
+            let deadline = Date().addingTimeInterval(15)
+            var inside = false
+            var seen = ""
+            repeat {
                 let box = stack.frame
                 let field = firstOther.frame
                 let mic = firstMic.frame
-                return field.maxY + outline <= box.maxY + 1 && mic.isInside(box)
-            }, evaluatedWith: nil)
-            wait(for: [rowInside], timeout: 5)
+                inside = field.maxY + outline <= box.maxY + 1 && mic.isInside(box)
+                seen = "box \(box), field \(field), mic \(mic)"
+                if !inside { RunLoop.current.run(until: Date().addingTimeInterval(0.2)) }
+            } while !inside && Date() < deadline
+            XCTAssertTrue(inside, "after line \(index + 1) the field and its mic stay inside the box: \(seen)")
             XCTAssertTrue(firstMic.isHittable, "after line \(index + 1) the mic seat is inside the box")
         }
         XCTAssertGreaterThan(firstOther.frame.height, startHeight * 2, "the answer grew to several lines")

@@ -213,6 +213,28 @@ describe('WalnutTests waits', () => {
   })
 })
 
+describe('WalnutUITests settle waits', () => {
+  // A block predicate (NSPredicate { ... }) reads the element tree on every check, a few
+  // seconds each on a loaded CI runner: a 5 s wait on one ran out once there with the row
+  // already in place by the next read (2026-11-01, run 41287770979, AskQuestionCardUITests).
+  const dir = path.join(ROOT, 'ios-native/WalnutUITests')
+  const SHORT_BLOCK_WAIT = /expectation\(for: NSPredicate \{[\s\S]{0,400}?wait\(for: \[\w+\], timeout: ([\d.]+)\)/g
+  const shortWaits = (text: string) => [...text.matchAll(SHORT_BLOCK_WAIT)].filter((m) => Number(m[1]) < 15)
+
+  it('no block predicate wait in the UI tests is shorter than 15 s', () => {
+    const offenders = fs.readdirSync(dir).filter((f) => f.endsWith('.swift')).flatMap((f) => {
+      const text = fs.readFileSync(path.join(dir, f), 'utf8')
+      return shortWaits(text).map((m) => `${f}:${text.slice(0, m.index).split('\n').length}: timeout ${m[1]}`)
+    })
+    expect(offenders).toEqual([])
+  })
+
+  it('catches a short wait and lets a long one through', () => {
+    expect(shortWaits('let e = expectation(for: NSPredicate { _, _ in self.onScreen(x, in: app) }, evaluatedWith: nil)\n        wait(for: [e], timeout: 5)')).toHaveLength(1)
+    expect(shortWaits('let e = expectation(for: NSPredicate { _, _ in ok() }, evaluatedWith: nil)\n        wait(for: [e], timeout: 15)')).toHaveLength(0)
+  })
+})
+
 describe('WalnutUITests menu taps', () => {
   // A menu entry tapped on the line after the tap that opens its menu is looked up
   // before the menu is drawn, and on a CI runner it was not there yet (2026-10-31:
