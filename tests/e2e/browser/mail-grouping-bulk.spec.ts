@@ -239,15 +239,17 @@ test.describe('the dense fixture', () => {
   })
 
   test('Stop halts within two changes; Undo reverts only what ran and counts its failures', async ({ page }) => {
-    await setFerryReadDelay(fixture, 60)
     await openGrouped(page, fixture, FERRY)
     const target = await biggestMarkable(FERRY_INBOX, 40)
     await resetLogs(fixture)
+    // The press's first 24 changes at 60 ms, every one after at 2 s: the job is still running when
+    // Stop is clicked, however slowly the poll below sees it pass 20.
+    await setFerryReadDelay(fixture, 60, { after: 24, ms: 2_000 })
     await press(page, target.id)
     const line = groupLine(page, target.id)
     await expect(line.getByTestId('mail-bulk-progress')).toContainText('Marking', { timeout: 30_000 })
     await expect.poll(async () => (await markReadLog(fixture)).calls, { timeout: 30_000 }).toBeGreaterThan(20)
-    await line.getByTestId('mail-bulk-stop').click()
+    await line.getByTestId('mail-bulk-stop').click({ timeout: 30_000 })
     const atClick = (await markReadLog(fixture)).calls
     const note = statusLine(page, /^Stopped\. Marked [\d,]+ read\./)
     await expect(note).toBeVisible({ timeout: 60_000 })

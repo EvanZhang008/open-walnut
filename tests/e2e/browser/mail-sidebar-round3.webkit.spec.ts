@@ -13,6 +13,7 @@ import {
   tailToggle,
   twist,
 } from './mail-review-helpers'
+import { expectTooWideOnMac } from './mac-fonts'
 
 /**
  * Round three in the engine the Mac app is (WKWebView), where the findings that only exist here live.
@@ -194,7 +195,8 @@ test('N1 N6: the sentence fits WebKit metrics, and one row looks clicked', async
     .toBe(true)
   // THIS is the slot that decided the row's type size, and this engine is the only place it can be
   // measured: 11px fits the same column in Chromium and does not fit here, because a WebKit scrollbar takes
-  // layout width. One step up from 10px would ellipsise the sentence in the Mac app and nowhere else.
+  // layout width. One step up from 10px would ellipsise the sentence in the Mac app and nowhere else;
+  // only the Mac has the fonts that decide it (mac-fonts.ts), so the "too wide" half is graded there.
   const need = await tail.evaluate((el) => {
     const style = getComputedStyle(el)
     const pen = document.createElement('canvas').getContext('2d')!
@@ -211,7 +213,7 @@ test('N1 N6: the sentence fits WebKit metrics, and one row looks clicked', async
   })
   expect(need.size, 'the size this slot forced').toBe('10px')
   expect(need.at10, `10px needs ${need.at10}px of a ${need.slot}px slot`).toBeLessThanOrEqual(need.slot)
-  expect(need.at11, `11px needs ${need.at11}px of a ${need.slot}px slot`).toBeGreaterThan(need.slot)
+  expectTooWideOnMac(need.at11, need.slot, `11px needs ${need.at11}px of a ${need.slot}px slot`)
   console.log(`N1 webkit scrolled: ${JSON.stringify({ ...scrolled, tight, ...need })}`)
 
   // N6: the child of an open group can show that its mailbox is the list on screen without becoming a

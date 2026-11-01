@@ -137,6 +137,10 @@ async function pointOffText(row: Locator): Promise<{ x: number, y: number }> {
 }
 
 test('a Mac Control-click is the same gesture', async ({ page }) => {
+  // Control plus the left button becomes `contextmenu` in macOS WebKit only. Playwright's Linux WebKit
+  // dispatches no `contextmenu` for it, so no menu opens there whatever the page does (it failed on
+  // every CI run). The Mac runs it (`walnut-dev webkit`).
+  test.skip(process.platform !== 'darwin', 'Control-click opens a context menu in macOS WebKit only')
   await openMail(page, port)
   const row = folderRow(page, HARBOUR, 'Archive')
   await expect(row).toHaveCount(1, { timeout: 120_000 })

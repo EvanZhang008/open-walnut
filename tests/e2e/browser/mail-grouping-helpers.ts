@@ -149,9 +149,15 @@ export function labelCalls(fixture: MailFixture): Promise<{ calls: number; log: 
   return fixtureCall(fixture, 'label-calls')
 }
 
-/** ferry's per-message read latency (default 40 ms): raise it to make a Stop test deterministic. */
-export function setFerryReadDelay(fixture: MailFixture, ms: number): Promise<{ ms: number }> {
-  return fixtureCall(fixture, `read-delay?ms=${ms}`, 'POST')
+/**
+ * ferry's per-message read latency (default 40 ms). `slowTail` makes every change after the next
+ * `after` take `ms`: a Stop test needs a job that cannot finish before its Stop is clicked, and a
+ * uniformly slow one still did on a loaded runner (2026-11-01: 7 of 11 CI runs waited out the test
+ * for a Stop that had gone with the job). Any later call without `slowTail` clears it.
+ */
+export function setFerryReadDelay(fixture: MailFixture, ms: number, slowTail?: { after: number; ms: number }): Promise<{ ms: number }> {
+  const tail = slowTail ? `&after=${slowTail.after}&then=${slowTail.ms}` : ''
+  return fixtureCall(fixture, `read-delay?ms=${ms}${tail}`, 'POST')
 }
 
 export function resetLogs(fixture: MailFixture): Promise<{ ok: boolean }> {

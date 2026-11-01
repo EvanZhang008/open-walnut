@@ -494,6 +494,106 @@ describe('specs on their own mail fixture server', () => {
   })
 })
 
+describe('a paused page clock', () => {
+  // `clock.pauseAt` only moves forward, and the page's clock runs on between the moment a spec reads
+  // a time and the moment the pause lands. A target of a time read elsewhere plus one second was in
+  // the past on a loaded runner (2026-11-01: both mail-sync-line specs, "Cannot fast-forward to the
+  // past", in most CI runs). pausePageClock (page-clock.ts) reads the page's own clock instead.
+  const PAUSE = /\bclock\.pauseAt\(/
+
+  it('every spec pauses through pausePageClock', () => {
+    const offenders: string[] = []
+    for (const { file, text } of sources) {
+      if (file === 'page-clock.ts') continue
+      text.split('\n').forEach((line, i) => {
+        if (PAUSE.test(line) && !line.trim().startsWith('//') && !line.trim().startsWith('*')) offenders.push(`${file}:${i + 1}: ${line.trim()}`)
+      })
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    expect(PAUSE.test('  await page.clock.pauseAt(new Date(at + 1_000))')).toBe(true)
+  })
+})
+
+describe('a text measured too wide for its slot', () => {
+  // The system font stack is Apple's font only on a Mac; a Linux runner draws the same sentence in a
+  // narrower fallback, so "one size up would not fit" failed there on every CI run (2026-11-01:
+  // mail-sidebar-round3, both engines). That half is graded through expectTooWideOnMac (mac-fonts.ts).
+  const TOO_WIDE = /toBeGreaterThan\([^)\n]*\bslot\b/
+
+  it('no spec that measures text asserts it is too wide directly', () => {
+    const offenders: string[] = []
+    for (const { file, text } of sources) {
+      if (!text.includes('measureText(')) continue
+      text.split('\n').forEach((line, i) => { if (TOO_WIDE.test(line)) offenders.push(`${file}:${i + 1}: ${line.trim()}`) })
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    expect(TOO_WIDE.test("  expect(need.at11, `11px needs ${need.at11}px`).toBeGreaterThan(need.slot)")).toBe(true)
+    expect(TOO_WIDE.test('      .toBeGreaterThan(tightWidths.slot)')).toBe(true)
+  })
+})
+
+describe('a Control-click that opens a context menu', () => {
+  // Control plus the left button becomes `contextmenu` in macOS WebKit only; Playwright's Linux WebKit
+  // sends a click with ctrlKey and no menu (2026-11-01: mail-context-folder.webkit, every CI run).
+  // A test of that gesture skips off a Mac.
+  const CONTROL = /keyboard\.down\('Control'\)|modifiers: \['Control'\]/
+  const MENU = /ctx-menu|context-?menu/i
+  const offendersOf = (text: string): string[] => text.split(/\n(?=\s*test\()/)
+    .filter((body) => /^\s*test\(/.test(body) && CONTROL.test(body) && MENU.test(body) && !body.includes("process.platform !== 'darwin'"))
+    .map((body) => body.trim().split('\n')[0]!.slice(0, 90))
+
+  it('every one skips off a Mac', () => {
+    expect(sources.flatMap(({ file, text }) => offendersOf(text).map((t) => `${file}: ${t}`))).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const spec = [
+      "test('a Mac Control-click is the same gesture', async ({ page }) => {",
+      "  await page.keyboard.down('Control')",
+      '  await row.click()',
+      "  await expect(page.getByTestId('mail-folder-ctx-menu')).toHaveCount(1)",
+      '})',
+    ].join('\n')
+    expect(offendersOf(spec)).toHaveLength(1)
+  })
+})
+
+describe('a Stop clicked on a running job', () => {
+  // A job that can finish by itself raced its own Stop: on a loaded runner the poll saw it pass 20
+  // changes late, the job ended, and the click waited out the test for a button that had gone with it
+  // (2026-11-01: mail-grouping-bulk on 7 of 11 CI runs). Such a test arms a slow tail on the fixture
+  // (setFerryReadDelay with slowTail) so the job is still running when Stop lands. Any spec on the
+  // groups fixture, whose read jobs last only as long as their delay.
+  const STOP_CLICK = /getByTestId\('[\w-]*-stop'\)\.click\(/
+  const onGroupsFixture = sources.filter(({ text }) => text.includes('startGroupsFixture('))
+  const offendersOf = (text: string): string[] => text.split(/\n(?=\s*test\()/)
+    .filter((body) => /^\s*test\(/.test(body) && STOP_CLICK.test(body) && !/setFerryReadDelay\([^)\n]*\{ after:/.test(body))
+    .map((body) => body.trim().split('\n')[0]!.slice(0, 90))
+
+  it('every one holds the job running until Stop lands', () => {
+    const clickers = onGroupsFixture.filter(({ text }) => STOP_CLICK.test(text)).map(({ file }) => file)
+    expect(clickers).toContain('mail-grouping-bulk.spec.ts')
+    expect(onGroupsFixture.flatMap(({ file, text }) => offendersOf(text).map((t) => `${file}: ${t}`))).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const spec = [
+      "  test('Stop halts within two changes', async ({ page }) => {",
+      '    await setFerryReadDelay(fixture, 60)',
+      "    await line.getByTestId('mail-bulk-stop').click()",
+      '  })',
+    ].join('\n')
+    expect(offendersOf(spec)).toHaveLength(1)
+    expect(offendersOf(spec.replace('(fixture, 60)', '(fixture, 60, { after: 24, ms: 2_000 })'))).toEqual([])
+  })
+})
+
 describe('specs that write the global notes', () => {
   // The fixture server has ONE global notes file. notes-editor-stress.spec.ts cleared it before
   // every test while its other tests typed into it on other workers: their next save answered

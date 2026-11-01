@@ -425,6 +425,14 @@ export function readDelayMs() {
   return state.ferryReadMs;
 }
 
+/** ferry's delay for its NEXT read change: the slow tail's once `read-delay?then=` armed one and it began, else the plain one. */
+function ferryReadDelayNow() {
+  const state = groupsState();
+  const tail = state.ferrySlowTail;
+  if (tail && state.ordinal >= tail.from) return tail.ms;
+  return readDelayMs();
+}
+
 /** Watch hints: `deliver` pokes these so the base polls at once instead of on its timer. */
 function watchers() {
   const state = groupsState();
@@ -472,7 +480,7 @@ function baseSpec(id, label, accountId, address, send, archive = false) {
     async markRead(_accountId, messageId, read) {
       // The Outlook shape is SLOW per message (a real one downloads the conversation): 40 ms by
       // default, `PW_MAIL_FERRY_READ_MS` or `POST /__fixture/read-delay?ms=` to change it.
-      const delay = accountId === FERRY ? readDelayMs() : 0;
+      const delay = accountId === FERRY ? ferryReadDelayNow() : 0;
       if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
       const outcome = applyRead(accountId, messageId, read, 'markRead');
       if (!outcome.ok) throw new Error(outcome.reason);

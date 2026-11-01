@@ -12,6 +12,7 @@
  *   GET  /__fixture/unsub-log                        every request that reached an unsubscribe target
  *   GET  /__fixture/model-calls                      every call to the faked rule model
  *   POST /__fixture/read-delay?ms=N                  ferry's per-message read latency (default 40 ms)
+ *   POST /__fixture/read-delay?ms=N&after=K&then=T   the same for the next K changes, then T ms for each one after
  *   POST /__fixture/unsub-delay?ms=N                 how long each unsubscribe target takes to answer (default 0)
  *   POST /__fixture/reset-logs                       empty the four logs (flags stay)
  *   POST /__fixture/label-model?mode=ok|down|invalid|partial|slow   the labeling model's behaviour
@@ -157,7 +158,11 @@ export function handleGroupsFixture(req, res) {
     case 'POST /__fixture/read-delay':
       readDelayMs();
       state.ferryReadMs = intParam(url.searchParams, 'ms', 40);
-      send(res, 200, { ok: true, ms: state.ferryReadMs });
+      // A slow tail: a job that cannot end on its own while a spec reaches for its Stop.
+      state.ferrySlowTail = url.searchParams.has('then')
+        ? { from: state.ordinal + intParam(url.searchParams, 'after', 0), ms: intParam(url.searchParams, 'then', 0) }
+        : null;
+      send(res, 200, { ok: true, ms: state.ferryReadMs, slowTail: state.ferrySlowTail });
       return true;
     case 'POST /__fixture/unsub-delay':
       state.unsubDelayMs = intParam(url.searchParams, 'ms', 0);

@@ -17,6 +17,7 @@ import {
   twist,
 } from './mail-review-helpers'
 import { cssColorToRgba } from './css-color'
+import { expectTooWideOnMac } from './mac-fonts'
 
 /**
  * The third review round, one test per finding, at the dense fixture's density.
@@ -146,10 +147,9 @@ test('N1 N12: the collapse clause names its unit, and both clauses fit at both p
   // 13px, and the alternatives are a wrapped 46px row or an ellipsis through the number the row exists to
   // admit. 11px fits HERE and not in WebKit, whose scrollbar takes layout width out of the same column
   // (measured in the WebKit twin), which is why the row is 10px rather than 11px. Recorded so a future pass
-  // re-measures instead of re-arguing.
+  // re-measures instead of re-arguing. In the Mac's own fonts: a Linux fallback is narrower (mac-fonts.ts).
   for (const [size, need] of [[12, tightWidths.at12], [13, tightWidths.at13]] as const) {
-    expect(need, `${size}px needs ${need}px of a ${tightWidths.slot}px slot`)
-      .toBeGreaterThan(tightWidths.slot)
+    expectTooWideOnMac(need, tightWidths.slot, `${size}px needs ${need}px of a ${tightWidths.slot}px slot`)
   }
   measured.push(`scrolled: ${JSON.stringify({ tight, ...tightWidths })}`)
   console.log(`N1 N12 collapse row\n${measured.join('\n')}`)

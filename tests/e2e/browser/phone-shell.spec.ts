@@ -7,6 +7,7 @@
  */
 import { expect, test, type Page, type WebSocketRoute } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { pausePageClock } from './page-clock'
 import {
   PHONE, expectNoHorizontalOverflow, findSmallTargets, findSmallText, injectSafeArea,
   menuButton, openDrawer, setKeyboardInset,
@@ -162,7 +163,7 @@ test('toasts stay inside the screen under the bar, one at a time, with a 44 px c
   // Freeze the page's timers: these toasts expire after 6 s, and a loaded
   // machine takes longer than that to measure them.
   await page.clock.install()
-  await page.clock.pauseAt(Date.now() + 1_000)
+  await pausePageClock(page)
   sock()!.send(agentErrorEvent('agent-one', '401 unauthorized (first test notice)'))
   sock()!.send(agentErrorEvent('agent-two', '401 unauthorized (second test notice)'))
   const toasts = page.locator('.notification-toaster .notification-toast')

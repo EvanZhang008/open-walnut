@@ -12,6 +12,7 @@ import {
   tailToggle,
   showAllMail,
 } from './mail-review-helpers'
+import { pausePageClock } from './page-clock'
 
 // Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
 test.beforeEach(async ({ page }) => { await showAllMail(page) })
@@ -264,9 +265,24 @@ test('90 seconds of page time moves the words and asks the server for nothing', 
   // The clock is installed BEFORE the first navigation, which is the only point at which the page's
   // timers can be faked: the pane's 30 s interval is created when it mounts.
   await page.clock.install({ time: new Date() })
-  // Pinned to the driver's clock at response time so the words are the ones this case is about rather
-  // than however long the dense console took to boot.
-  await stubMailboxes(page, (row) => { row.lastSyncAt = Date.now() })
+  // Pinned to the driver's clock at the first response, so the words are the ones this case is about
+  // rather than however long the dense console took to boot. Pinned ONCE: the server's own sync news
+  // and the boot chain below read the mailboxes again, and a later stamp would move the time the line
+  // counts from.
+  let stamp: number | undefined
+  await stubMailboxes(page, (row) => { stamp ??= Date.now(); row.lastSyncAt = stamp })
+  // What the SERVER pushes is news, not the clock: the fixture's two-minute poll tick sends the console
+  // to read the mailboxes again whenever it lands. A request counts against the clock unless a mail
+  // event reached the page in the 10 s before it.
+  const pushes: number[] = []
+  page.on('websocket', (socket) => socket.on('framereceived', ({ payload }) => {
+    if (String(payload).includes('plugin:mail:')) pushes.push(Date.now())
+  }))
+  // The console's boot reads come in a chain (mailboxes, accounts, the list, the mailboxes again), and
+  // its later links wait on page timers: paused mid-chain, the rest went out inside the fast-forward and
+  // read as the clock's requests (1 run in 3 here). The pause waits until the console has gone quiet.
+  let lastRead = Date.now()
+  page.on('request', (request) => { if (request.url().includes('/api/plugins/mail/')) lastRead = Date.now() })
   await openMail(page, port)
   await expect(folderRow(page, HARBOUR, 'INBOX')).toBeVisible({ timeout: 90_000 })
   await folderRow(page, HARBOUR, 'INBOX').click()
@@ -274,15 +290,21 @@ test('90 seconds of page time moves the words and asks the server for nothing', 
   const line = page.getByTestId(LINE)
   await expect(line).toHaveAttribute('data-at', /^\d+$/, { timeout: 60_000 })
   const at = Number(await line.getAttribute('data-at'))
-  // Freeze one second after that check, so everything below is arithmetic and not a race with the boot.
-  await page.clock.pauseAt(new Date(at + 1_000))
+  await expect.poll(() => Date.now() - lastRead, { timeout: 60_000, intervals: [250] }).toBeGreaterThan(2_000)
+  // Freeze the page's clock just ahead of where it is now (never behind it: the page kept running while
+  // the line drew), so everything below is arithmetic and not a race with the boot.
+  const stopped = await pausePageClock(page, { notBefore: at })
+  expect(stopped - at, 'the clock stopped within a minute of the check').toBeLessThan(60_000)
   await expect(line).toHaveText('Checked just now', { timeout: 30_000 })
 
   const calls: string[] = []
   page.on('request', (request) => {
-    if (request.url().includes('/api/plugins/mail/')) calls.push(request.url())
+    if (!request.url().includes('/api/plugins/mail/')) return
+    const now = Date.now()
+    if (!pushes.some((at) => now - at <= 10_000)) calls.push(request.url())
   })
-  await page.clock.fastForward(90_000)
+  // To 90 s after the check itself, however long the pause took to land.
+  await page.clock.fastForward(at + 90_000 - stopped)
   await expect(line).toHaveText('Checked 1 min ago', { timeout: 30_000 })
   expect(calls, 'a relative time is arithmetic, not a request').toEqual([])
 

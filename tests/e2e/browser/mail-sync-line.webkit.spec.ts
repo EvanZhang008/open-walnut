@@ -11,6 +11,7 @@ import {
   smartRow,
   showAllMail,
 } from './mail-review-helpers'
+import { pausePageClock } from './page-clock'
 
 // Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
 test.beforeEach(async ({ page }) => { await showAllMail(page) })
@@ -101,9 +102,11 @@ test('the 30 s tick fires in WKWebView', async ({ page }) => {
   const line = page.getByTestId(LINE)
   await expect(line).toHaveAttribute('data-at', /^\d+$/, { timeout: 60_000 })
   const at = Number(await line.getAttribute('data-at'))
-  await page.clock.pauseAt(new Date(at + 1_000))
+  // Ahead of the page's own clock, which kept running while the line drew (page-clock.ts).
+  const stopped = await pausePageClock(page, { notBefore: at })
+  expect(stopped - at, 'the clock stopped within a minute of the check').toBeLessThan(60_000)
   await expect(line).toHaveText('Checked just now', { timeout: 30_000 })
-  await page.clock.fastForward(90_000)
+  await page.clock.fastForward(at + 90_000 - stopped)
   await expect(line).toHaveText('Checked 1 min ago', { timeout: 30_000 })
 })
 
