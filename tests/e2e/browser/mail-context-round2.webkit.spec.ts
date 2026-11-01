@@ -76,7 +76,9 @@ test('R2-05, R2-17: the clamped box follows the highlight, and a wheel outside c
 
   await page.keyboard.press('End')
   const last = await highlightBox(page)
-  expect(last.label).toBe('Copy Walnut link')
+  // The last row since the Walnut group and Unsubscribe were added (28df4326c, 432deed2f), as in the
+  // Chromium twin (mail-context-round2.spec.ts).
+  expect(last.label).toBe('Unsubscribe')
   expect(last.inside, 'the last item is visible when it is highlighted').toBe(true)
   expect(last.scrollTop, 'the box scrolled, and the page behind it did not').toBeGreaterThan(0)
   expect(await page.evaluate(() => window.scrollY)).toBe(0)
@@ -87,7 +89,13 @@ test('R2-05, R2-17: the clamped box follows the highlight, and a wheel outside c
   await page.setViewportSize({ width: 1280, height: 800 })
   await openRowMenu(page, WRITER, KEEPER)
   const box = (await page.locator('.mail-rows').boundingBox())!
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+  // Over the list and clear of the menu, as in the Chromium twin: the menu grew (the Walnut group,
+  // Unsubscribe) and now covers the list's middle, where a wheel scrolls the menu itself.
+  const over = (await menu(page).boundingBox())!
+  const clear = [0.15, 0.5, 0.85].flatMap((fy) => [0.15, 0.5, 0.85].map((fx) => ({ x: box.x + box.width * fx, y: box.y + box.height * fy })))
+    .find((p) => p.x < over.x - 8 || p.x > over.x + over.width + 8 || p.y < over.y - 8 || p.y > over.y + over.height + 8)
+  expect(clear, 'a point of the list the menu does not cover').toBeTruthy()
+  await page.mouse.move(clear!.x, clear!.y)
   await page.mouse.wheel(0, 300)
   await expect(menu(page)).toHaveCount(0, { timeout: 10_000 })
   expect(await page.locator('[data-testid="mail-reader"][data-message-id]').count()).toBe(0)

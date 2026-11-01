@@ -11,6 +11,7 @@ import {
   openMail,
   pickTheme,
   shoot,
+  showAllMail,
   smartRow,
   tailToggle,
   twist,
@@ -250,6 +251,11 @@ async function senderShape(page: Page): Promise<Record<string, number>> {
 }
 
 test('N2: the account mark costs the sender column almost nothing and can never truncate', async ({ page }) => {
+  // The mark is the full list row's (MailMessageRow), and both lists measured here are inboxes: in
+  // Grouped (the default) their first rows are a group's compact one-line rows, which name the account
+  // in their title and carry neither a sender column nor a mark, so the measure read 0 against 0.
+  // All mail lists every row as a full row, in both the per-account inbox and the merged one.
+  await showAllMail(page)
   await openMail(page, port)
   await expect(smartRow(page, 'inbox')).toBeVisible({ timeout: 90_000 })
 
@@ -285,6 +291,10 @@ test('N3 N14: All Sent names the recipient, prints no duplicate, and explains no
     for (const row of body.mailboxes ?? []) if (row.role === 'sent') row.unread = 2
     await route.fulfill({ status: answer.status(), contentType: 'application/json', body: JSON.stringify(body) })
   })
+  // The gap sentence graded on the merged inbox at the end is the All mail list's. Grouped (the default)
+  // says the same disagreement in the title of its header's count (`unreadExplain`); a sent list is
+  // never grouped, so the first half reads the same in both views.
+  await showAllMail(page)
   await openMail(page, port)
   await expect(smartRow(page, 'sent')).toBeVisible({ timeout: 90_000 })
   await smartRow(page, 'sent').click()

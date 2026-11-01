@@ -129,6 +129,11 @@ test('S4-W2: the ✦ indents nothing and grows no row', async ({ page }) => {
 })
 
 test('S4-W3: one full round trip in the engine the Mac app is', async ({ page }) => {
+  const launches: string[] = []
+  page.on('request', (request) => {
+    if (request.method() !== 'POST' || new URL(request.url()).pathname !== '/api/sessions/quick-start') return
+    try { launches.push(String((request.postDataJSON() as { message?: unknown }).message ?? '')) } catch { launches.push('') }
+  })
   await openWriterInbox(page)
   // Something in the reader, so the pane hand-over and the hand-back are both visible.
   await row(page, LUNCH).click()
@@ -140,13 +145,20 @@ test('S4-W3: one full round trip in the engine the Mac app is', async ({ page })
   await expect(drawer(page)).toBeVisible({ timeout: 60_000 })
   await expect(page.getByTestId('mail-reader')).toHaveCount(0)
 
-  // The question went out as the session's first message, context block and all: the mock CLI echoes
-  // what it is sent, so its answer is the proof.
+  // The question went out as the session's first message, context block and all. The block is read off
+  // the launch itself: the mock CLI peels a leading `[Name]…[/Name]` block off its echo the way a model
+  // reads one and never repeats it (`stripBanners` in tests/providers/mock-claude.mjs, since 2026-09-30),
+  // so its answer opens on the question, which is the proof the CLI got the question after that block.
   const session = drawer(page).getByTestId('ask-object-session')
   await expect(session).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
+  expect(launches, 'one launch').toHaveLength(1)
+  const [block, question] = launches[0]!.split('\n[/Mail you are asking about]\n\n')
+  expect(block!.startsWith('[Mail you are asking about]\n'), 'the block leads the first message').toBe(true)
+  expect(block).toContain('Subject: Quarterly keeper report')
+  expect(question).toMatch(/^Summarize this mail/)
   const answer = drawer(page).locator('.session-msg-assistant').filter({ hasText: /summarize this mail/i })
   await expect(answer).toHaveCount(1, { timeout: 90_000 })
-  await expect(answer).toContainText('Subject: Quarterly keeper report')
+  await expect(answer).toContainText(/processed your message: Summarize this mail/)
   console.log(`shot: ${await shoot(page.locator('.mail-console'), SHOT_DIR, 'drawer-open')}`)
 
   // The drawer fills the reader's column and nothing else moved.

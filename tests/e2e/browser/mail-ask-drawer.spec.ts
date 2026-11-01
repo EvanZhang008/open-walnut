@@ -197,6 +197,13 @@ function answers(page: Page, question: RegExp): Locator {
   return drawer(page).locator('.session-msg-assistant').filter({ hasText: question })
 }
 
+/**
+ * A launch's answer, which opens on the canned question itself: the mock peels a WELL-FORMED leading
+ * `[Mail you are asking about]` block off the echo (see S4-4), so nothing but that block rode in front
+ * of the question. Where the block sits in the launch is pinned on the request body.
+ */
+const PEELED_ECHO = { summarize: /processed your message: Summarize this mail/ }
+
 // ───────────────────────────────── the small mailbox ─────────────────────────────────
 
 test.describe('the Walnut group, on a mailbox whose second account cannot send', () => {
@@ -344,7 +351,10 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     // On screen: the regular session panel, and the session answered the question it was started with.
     await expect(sessionBody(page)).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
     await expect(sessionBody(page).locator('.session-panel')).toBeVisible()
-    await expect(answers(page, /processed your message: \[Mail you are asking about\]/)).toHaveCount(1, { timeout: 90_000 })
+    // The echo opens on the QUESTION: the mock peels a leading `[Name]…[/Name]` block the way a model
+    // reads one and never repeats it (`stripBanners` in tests/providers/mock-claude.mjs, since
+    // 2026-09-30), so the context block above rode in front of it as one such block.
+    await expect(answers(page, PEELED_ECHO.summarize)).toHaveCount(1, { timeout: 90_000 })
     await expect(answers(page, /summarize this mail/i)).toHaveCount(1)
     console.log(`shot: ${await shoot(page.locator('.mail-console'), SHOT_DIR, 'summarize-session')}`)
   })
@@ -443,7 +453,8 @@ test.describe('the Walnut group, on a mailbox whose second account cannot send',
     release()
 
     await expect(sessionBody(page)).toHaveAttribute('data-session-id', /.+/, { timeout: 60_000 })
-    await expect(answers(page, /processed your message: \[Mail you are asking about\]/)).toHaveCount(1, { timeout: 90_000 })
+    // The first question's answer (its context block peeled off the echo, as in S4-4).
+    await expect(answers(page, PEELED_ECHO.summarize)).toHaveCount(1, { timeout: 90_000 })
     // Matched anywhere in the session, not only on a settled answer row: the follow-up lands mid-turn,
     // and the mock's echo of it can still be the live streaming block when the assertion runs.
     await expect(sessionBody(page).getByText(/Hello! I processed your message: Draft a reply to this mail/))
