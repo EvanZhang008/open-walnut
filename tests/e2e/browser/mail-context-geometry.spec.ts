@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import {
   HARBOUR,
   MailFixtureServer,
@@ -67,6 +67,37 @@ async function openRowMenu(page: Page, row = 0): Promise<void> {
   const target = page.locator(ROW).nth(row)
   await target.click({ button: 'right', position: { x: 40, y: 12 } })
   await expect(page.locator(MENU)).toHaveCount(1)
+}
+
+/**
+ * Right-click a surface that keeps the browser's menu, and prove it was the browser's: the gesture
+ * REACHED the page (its `contextmenu` arrived on that element), nothing prevented it, and no Walnut
+ * menu opened. Without the first half a gesture that never arrived passes as a kept native menu.
+ * In WebKit this leaves the native menu open, so it is the last pointer gesture on its page.
+ */
+async function expectBrowserMenuKept(page: Page, target: Locator, className: string): Promise<void> {
+  type Seen = { className: string, prevented: boolean | null }
+  await page.evaluate(() => {
+    const seen: Seen[] = []
+    ;(window as unknown as { __ctxSeen: Seen[] }).__ctxSeen = seen
+    // Capture on the window runs before every other handler, so nothing can stop it from seeing the
+    // event; whether anything prevented it is read once the dispatch is over.
+    window.addEventListener('contextmenu', (event) => {
+      const el = event.target instanceof Element ? event.target : null
+      const one: Seen = { className: String(el?.className ?? ''), prevented: null }
+      seen.push(one)
+      setTimeout(() => { one.prevented = event.defaultPrevented }, 0)
+    }, { capture: true })
+  })
+  await target.click({ button: 'right' })
+  const read = () => page.evaluate(() => (window as unknown as { __ctxSeen: Seen[] }).__ctxSeen)
+  await expect.poll(async () => {
+    const seen = await read()
+    return seen.length > 0 && seen.every((one) => one.prevented !== null)
+  }, { message: 'the right-click reached the page' }).toBe(true)
+  expect(await read(), 'the right-click reached that element, and nothing took it from the browser')
+    .toEqual([{ className: expect.stringContaining(className), prevented: false }])
+  await expect(page.locator(MENU)).toHaveCount(0)
 }
 
 test.describe('dense: geometry, density, the sweep', () => {
@@ -279,20 +310,29 @@ test.describe('dense: geometry, density, the sweep', () => {
   })
 
   test('C28 the search box and the folder filter keep the browser menu', async ({ page }) => {
+    // ONE native menu per page, and it is the last pointer gesture there. Playwright's WebKit holds the
+    // browser's own menu open after the right-click, and no later pointer event reaches that page
+    // (Escape does not close it; link-capture.spec.ts hit the same). Measured 2026-11-01: after the
+    // search box's menu the collapse row's click delivered no pointerdown, no mousedown and no click, so
+    // the tail never opened and the filter was never drawn, while the same click with no menu before it
+    // opened the tail. Keys still arrive, which is why the typing check can follow the filter's menu.
+    // Chromium shows no menu here at all, so both engines run this order.
     await page.setViewportSize({ width: 1280, height: 800 })
     await openDenseList(page, port)
     // Paste, Undo, spelling and dictation are things only the browser can offer, and rule 6 keeps that
     // decision in `keepNativeContextMenu` rather than in a mail-side exception.
     const search = page.getByTestId('mail-search-input')
     await expect(search).toBeVisible()
-    await search.click({ button: 'right' })
-    await expect(page.locator(MENU)).toHaveCount(0)
+    await expectBrowserMenuKept(page, search, 'mail-search-input')
 
-    await tailToggle(page, HARBOUR).click()
-    const filter = page.locator('.mail-tail-filter').first()
+    const second = await page.context().newPage()
+    await showAllMail(second)
+    await second.setViewportSize({ width: 1280, height: 800 })
+    await openDenseList(second, port)
+    await tailToggle(second, HARBOUR).click()
+    const filter = second.locator('.mail-tail-filter').first()
     await expect(filter).toBeVisible()
-    await filter.click({ button: 'right' })
-    await expect(page.locator(MENU)).toHaveCount(0)
+    await expectBrowserMenuKept(second, filter, 'mail-tail-filter')
     // And typing into it still works, which is the point of leaving the native menu there.
     await filter.fill('berth')
     await expect(filter).toHaveValue('berth')
