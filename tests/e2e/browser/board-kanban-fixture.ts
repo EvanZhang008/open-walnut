@@ -132,7 +132,7 @@ export async function getTask(api: KanbanApi, id: string): Promise<TaskView | nu
   return body.task ?? (body.id ? body : null)
 }
 
-interface SessionView { process_status?: string; mode?: string; pendingPermission?: { toolName?: string } | null }
+interface SessionView { process_status?: string; mode?: string; pendingPermission?: { toolName?: string } | null; lastTurnSpeed?: { startedAt?: number } }
 
 export async function getSession(api: KanbanApi, sid: string): Promise<SessionView> {
   const res = await fetch(`${api.base}/api/sessions/${encodeURIComponent(sid)}`)
@@ -314,7 +314,7 @@ async function finishTeam(api: KanbanApi, team: KanbanTeam, roles: Map<string, R
   // src/core/user-status.ts), and every Needs you count of a team adds a leader that needs the
   // user. This leader carries on, collecting its workers' reports: the line a person sets through
   // the task's report (2026-10-31: its hand back made every such count one more than the cards).
-  await call(api, 'PUT', `/api/v1/tasks/${team.leader}/report`, { state: 'working', next: "Collect the workers' reports" })
+  await leaderCarriesOn(api, team)
   // The worker itself hands its task back (its own sid as the caller): handed_back_at, red (G2).
   await patchTask(api, team.handedBack, { phase: 'IN_PROGRESS' })
   await call(api, 'PATCH', `/api/v1/tasks/${team.handedBack}`, { phase: 'NEED_ACTION' }, { 'x-walnut-caller-sid': team.handedBackSid })
@@ -355,6 +355,40 @@ async function keepSummaries(api: KanbanApi, team: KanbanTeam, ids: readonly str
 }
 
 type StatusRow = { id: string; phase: string; user_status?: { state: string } }
+
+/** The leader's own line: it carries on, collecting its workers' reports (finishTeam). */
+const leaderCarriesOn = (api: KanbanApi, team: Pick<KanbanTeam, 'leader'>) =>
+  call(api, 'PUT', `/api/v1/tasks/${team.leader}/report`, { state: 'working', next: "Collect the workers' reports" })
+
+/**
+ * Run `act`, which makes a worker err, and keep the leader carrying on. A worker's error wakes its
+ * idle leader (src/core/sessions/subtask-notices.ts), and the leader's woken turn ends with its task
+ * handed back: a turn end newer than its line, so once the hand back settles (HANDBACK_SETTLE_MS,
+ * 20 s) the leader reads Needs you and every Needs you count of the team is one more than its cards
+ * (2026-11-01: C33 waited for 0 and read 1 on 4 of 11 CI runs, the runs slow enough to outlast
+ * those 20 s). The mock CLI also ends its process after a turn it has no mode for, the notice's
+ * among them, and a line that carries on needs a live process (report-set.ts). So: wait for the
+ * woken turn's end, give the leader a live process again with one clean turn, and set its line
+ * once that turn has settled.
+ */
+export async function withLeaderCarryingOn<T>(api: KanbanApi, team: Pick<KanbanTeam, 'leader'>, act: () => Promise<T>): Promise<T> {
+  const leaderTask = async () => (await call<{ task: StatusRow }>(api, 'GET', `/api/tasks/${team.leader}`)).task
+  // Carrying on first, so the leader's next NEED_ACTION is the end of the turn `act` wakes.
+  await leaderCarriesOn(api, team)
+  await waitPhase(api, team.leader, 'IN_PROGRESS', 15_000)
+  const out = await act()
+  await waitPhase(api, team.leader, 'NEED_ACTION')
+  const restartAt = Date.now()
+  const sid = await startSession(api, team.leader, 'snapshot-clean-turn:Kanban leader carries on', 'default')
+  await pollUntil('leader turn settled', () => getSession(api, sid),
+    (s) => (s.lastTurnSpeed?.startedAt ?? 0) >= restartAt && s.process_status === 'idle', 60_000)
+  await waitPhase(api, team.leader, 'NEED_ACTION')
+  await pollUntil('leader carries on', async () => {
+    if ((await leaderTask()).phase !== 'IN_PROGRESS') await leaderCarriesOn(api, team)
+    return leaderTask()
+  }, (t) => t.phase === 'IN_PROGRESS' && t.user_status?.state !== 'needs', 30_000)
+  return out
+}
 
 /**
  * The server derives each task's user status a moment after its facts move (a debounced pass,

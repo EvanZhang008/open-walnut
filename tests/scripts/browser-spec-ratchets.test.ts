@@ -644,3 +644,27 @@ describe('the test ceiling on CI', () => {
     expect(Number(m![1]!.replace(/_/g, ''))).toBeGreaterThanOrEqual(60_000)
   })
 })
+
+describe('a kanban worker that errs', () => {
+  // A worker's error wakes its idle leader, and the leader's woken turn ends handed back: 20 s
+  // later it reads Needs you and every Needs you count of the team is one more than its cards
+  // (2026-11-01: C33 read 1 for 0 on 4 of 11 CI runs). The error goes through
+  // withLeaderCarryingOn (board-kanban-fixture.ts), which sets the leader's line again after it.
+  const ERRS = /startSession\([^\n]*'error'\)/
+
+  it('keeps the leader carrying on', () => {
+    const offenders: string[] = []
+    for (const { file, text } of sources) {
+      if (!/seedKanbanTeam\(/.test(text)) continue
+      text.split('\n').forEach((line, i) => {
+        if (ERRS.test(line) && !line.includes('withLeaderCarryingOn(')) offenders.push(`${file}:${i + 1}: ${line.trim()}`)
+      })
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const line = "  await startSession(api, ERROR_CARD(), 'error')"
+    expect(ERRS.test(line) && !line.includes('withLeaderCarryingOn(')).toBe(true)
+  })
+})

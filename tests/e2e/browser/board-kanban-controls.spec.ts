@@ -24,7 +24,7 @@ import { REAL_PANEL } from './draft-helpers'
 import { stateCountLabel } from '../../../src/core/user-status'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import {
-  call, getSession, kanbanApi, pollUntil, seedKanbanTeam, startSession, ticketOf, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
+  call, getSession, kanbanApi, pollUntil, seedKanbanTeam, startSession, ticketOf, type KanbanApi, type KanbanTeam, pickCardsView, withLeaderCarryingOn } from './board-kanban-fixture'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const BASE = `http://localhost:${TEST_PORT}`
@@ -290,7 +290,8 @@ test('C14 C71: Needs you counts only what the user must do, once, and the Page v
   litter.push(failing.id)
   errorCard = failing.id
   await call(api, 'PATCH', `/api/tasks/${failing.id}`, { set_tags: [`ticket:${ticketOf(210)}`, 'sev:2'] })
-  await startSession(api, ERROR_CARD(), 'error')
+  // The error wakes the leader; its turn's hand back would count in this chip from C33 on.
+  await withLeaderCarryingOn(api, team, () => startSession(api, ERROR_CARD(), 'error'))
   await expect(card(pane, ERROR_CARD()).getByTestId('kanban-card-status')).toContainText('Error:', { timeout: 60_000 })
   await expect.poll(() => chipCount(needs), { timeout: 15_000 }).toBe(4)
   await expect(pane.getByTestId('kanban-workers-error')).toHaveText('1 error')
