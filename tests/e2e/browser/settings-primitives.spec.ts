@@ -15,12 +15,14 @@ import { test, expect, type Page } from '@playwright/test'
 test.setTimeout(120_000)
 
 const HARNESS = String.raw`
-const src = await (await fetch('/src/main.tsx')).text()
-const m = src.match(/\/node_modules\/\.vite\/deps\/react-dom_client\.js\?v=(\w+)/)
-if (!m) { window.__harnessError = 'not a Vite dev server'; throw new Error('not vite') }
-const v = m[1]
-const React = (await import('/node_modules/.vite/deps/react.js?v=' + v)).default
-const { createRoot } = (await import('/node_modules/.vite/deps/react-dom_client.js?v=' + v)).default
+// The same React the page runs: the dep URLs it loaded. A hash read from a source file can
+// be older than the one the page uses, when Vite optimized its deps again after it.
+const loaded = (file) => performance.getEntriesByType('resource').map((e) => new URL(e.name).pathname + new URL(e.name).search)
+  .find((u) => u.startsWith('/node_modules/.vite/deps/' + file + '?v='))
+const reactUrl = loaded('react.js'), clientUrl = loaded('react-dom_client.js')
+if (!reactUrl || !clientUrl) { window.__harnessError = 'not a Vite dev server'; throw new Error('not vite') }
+const React = (await import(reactUrl)).default
+const { createRoot } = (await import(clientUrl)).default
 const ctx = await import('/src/components/settings/settings-pane-context.tsx')
 const sec = await import('/src/components/settings/SettingsSection.tsx')
 const { ToggleSwitch } = await import('/src/components/settings/inputs/ToggleSwitch.tsx')
@@ -134,15 +136,24 @@ createRoot(host).render(h(App))
 window.__harnessReady = true
 `
 
+// The harness reports its own failure, so a mount that throws ends the wait with its
+// reason instead of a blind 30 s timeout (2026-11-01: every test here timed out that way in
+// CI on five runs; the reason was a React import Vite answered 504 Outdated Optimize Dep).
+const MOUNT = `try {\n${HARNESS}${HARNESS_2}\n} catch (e) { window.__harnessError ??= 'mount: ' + String(e && e.message || e) }`
+const NOT_VITE = 'not a Vite dev server'
+
+type HarnessWindow = { __harnessReady?: boolean; __harnessError?: string }
+
 async function mountHarness(page: Page, opts: { reducedMotion?: boolean } = {}) {
   if (opts.reducedMotion) await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.goto('/settings')
   await page.waitForLoadState('domcontentloaded')
-  await page.addScriptTag({ type: 'module', content: HARNESS + HARNESS_2 })
-  await page.waitForFunction(() => (window as unknown as { __harnessReady?: boolean; __harnessError?: string }).__harnessReady
-    || (window as unknown as { __harnessError?: string }).__harnessError, null, { timeout: 30_000 })
-  const err = await page.evaluate(() => (window as unknown as { __harnessError?: string }).__harnessError)
-  test.skip(!!err, `harness needs the Vite dev fixture: ${err}`)
+  await page.addScriptTag({ type: 'module', content: MOUNT })
+  await page.waitForFunction(() => (window as unknown as HarnessWindow).__harnessReady
+    || (window as unknown as HarnessWindow).__harnessError, null, { timeout: 30_000 })
+  const err = await page.evaluate(() => (window as unknown as HarnessWindow).__harnessError)
+  test.skip(err === NOT_VITE, `harness needs the Vite dev fixture: ${err}`)
+  expect(err, 'the settings harness did not mount').toBeUndefined()
   await expect(page.getByTestId('harness-pane')).toBeVisible()
 }
 

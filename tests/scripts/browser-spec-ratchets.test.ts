@@ -129,3 +129,21 @@ describe('specs that pin WebKit', () => {
     expect(pins.filter((p) => !p.body.includes("userAgent: devices['Desktop Safari'].userAgent")).map((p) => p.file)).toEqual([])
   })
 })
+
+describe('specs that import Vite\'s optimized deps', () => {
+  // A dep URL carries Vite's browser hash (`?v=`), and Vite optimizes its deps again when
+  // the app's first load finds one it had not bundled: a hash read from a source file
+  // (`fetch('/src/main.tsx')`) is then older than the page's, and Vite answers it with
+  // 504 Outdated Optimize Dep (2026-11-01: all 17 settings-primitives tests failed that
+  // way in CI, on five runs). Take the URL the page loaded (performance resource entries).
+  const readsHashFromSource = (text: string) => /\.vite\/deps\//.test(text) && /fetch\(\s*['"`]\/src\//.test(text)
+
+  it('no spec builds a dep URL from a hash it read out of a source file', () => {
+    expect(sources.filter(({ text }) => readsHashFromSource(text)).map(({ file }) => file)).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    expect(readsHashFromSource("const src = await (await fetch('/src/main.tsx')).text()\nimport('/node_modules/.vite/deps/react.js?v=' + v)")).toBe(true)
+    expect(readsHashFromSource("performance.getEntriesByType('resource')\n.startsWith('/node_modules/.vite/deps/' + file)")).toBe(false)
+  })
+})
