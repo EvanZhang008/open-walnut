@@ -210,10 +210,10 @@ test('Chat with a project with two tasks makes its hidden lead and opens a plain
   // The project's own tasks stay on the board.
   await expect(page.locator(`.todo-panel [data-task-id="${made[0]}"]`).first()).toBeVisible({ timeout: 15_000 })
 
-  // The chat opens where the project's tasks start (its memory folder here), so it never asks
-  // for one, and nothing is written to the lead.
+  // The chat opens where the lead would start (a project with no folder: the lead's own task
+  // directory, never the memory tree), so it never asks for one, and nothing is written to the lead.
   const leadFolder = async () => (await draft.locator('.draft-folder-pill').getAttribute('aria-label')) ?? ''
-  await expect.poll(leadFolder).toContain(`/${PROJECT.toLowerCase()} on `)
+  await expect.poll(leadFolder).toContain(`/task-dirs/${lead.id} on `)
   expect((await (await request.get(`/api/tasks/${lead.id}`)).json()).task.cwd).toBeFalsy()
 
   // A tier "+" while this chat is untouched reuses the column for a plain draft: the
@@ -230,7 +230,7 @@ test('Chat with a project with two tasks makes its hidden lead and opens a plain
   await startProjectChat(page)
   await expect(draft).toBeVisible({ timeout: 15_000 })
   await expect(drafts).toHaveCount(1)
-  await expect.poll(leadFolder).toContain(`/${PROJECT.toLowerCase()} on `)
+  await expect.poll(leadFolder).toContain(`/task-dirs/${lead.id} on `)
 
   // An empty send says nothing (it would hand the lead its own title as a request).
   let launches = 0
