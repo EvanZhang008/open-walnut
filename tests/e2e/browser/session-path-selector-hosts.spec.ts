@@ -14,6 +14,10 @@ import { test, expect, type Page, type Route } from '@playwright/test'
 import { openDraft } from './draft-helpers'
 import { resetServerHostFixture } from './host-problems-helpers'
 
+// /usr as a path segment. The root's listing is the machine's own: Ubuntu 24.04 also has
+// /bin.usr-is-merged and its twins, which a plain 'usr' matched too (2026-11-01, CI).
+const USR_DIR = /(?:^|\/)usr(?:\/|$)/
+
 const HOST = 'devbox'
 const HOST_LABEL = 'Big dev box'
 
@@ -106,7 +110,7 @@ test('a bare "/" lists the filesystem root live', async ({ page }) => {
   await openPicker(page)
   await input(page).fill('/')
   // /usr exists as a real directory on every Unix the fixture runs on.
-  await expect(list(page).locator('.sps-path-item.sps-live', { hasText: 'usr' })).toBeVisible()
+  await expect(list(page).locator('.sps-path-item.sps-live', { hasText: USR_DIR })).toBeVisible()
   await expect(list(page).locator('.sps-empty', { hasText: 'No matches' })).toHaveCount(0)
   // And typing on from there keeps working (the next segment lists too).
   await input(page).fill('/usr/')
@@ -184,7 +188,7 @@ test('All tab: local folders show at once while the remote host is still connect
   await input(page).fill('/')
 
   // Local answers land and render while the remote host keeps connecting.
-  await expect(list(page).locator('.sps-path-item.sps-live', { hasText: 'usr' })).toBeVisible()
+  await expect(list(page).locator('.sps-path-item.sps-live', { hasText: USR_DIR })).toBeVisible()
   await expect(list(page).locator('.sps-host-connecting')).toContainText('Opening an SSH connection to Big dev box')
 })
 

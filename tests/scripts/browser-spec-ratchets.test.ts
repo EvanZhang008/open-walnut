@@ -217,3 +217,22 @@ describe('specs that open a gated Settings pane', () => {
     expect(offenders).toEqual([])
   })
 })
+
+describe('path list rows of a real system directory', () => {
+  // The root's listing is the machine's own, so a row matched by a plain substring of a
+  // system directory's name also matches its siblings there: on Ubuntu 24.04 'usr' matched
+  // /bin.usr-is-merged and two more, and two path selector tests failed in strict mode on
+  // every CI run (2026-11-01). Match the name as a path segment (a regex).
+  const SYSTEM_DIR_ROW = /\.sps-path-item[^)]*hasText: '(?:usr|bin|sbin|lib|etc|var|tmp|opt|home)'/g
+
+  it('no spec matches one by a plain substring', () => {
+    const offenders = sources.flatMap(({ file, text }) =>
+      [...text.matchAll(SYSTEM_DIR_ROW)].map((m) => `${file}:${text.slice(0, m.index).split('\n').length}`))
+    expect(offenders).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    expect("list(page).locator('.sps-path-item.sps-live', { hasText: 'usr' })".match(SYSTEM_DIR_ROW)).toHaveLength(1)
+    expect("list(page).locator('.sps-path-item.sps-live', { hasText: USR_DIR })".match(SYSTEM_DIR_ROW)).toBeNull()
+  })
+})
