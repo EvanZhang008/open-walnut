@@ -99,6 +99,8 @@ const PHASE_READERS: Record<string, number> = {
   'src/core/routines/trigger-api.ts': 2,
   'src/core/session-health-monitor.ts': 1,
   'src/core/session-hooks/builtins.ts': 2,
+  // a precondition beside user_status (which decides) and a write guard that the phase did not move
+  'src/core/sessions/last-words.ts': 2,
   'src/core/sessions/letter-recheck.ts': 1,
   'src/core/sessions/machine-wake.ts': 2,
   'src/core/sessions/outside-wait.ts': 4,

@@ -31,7 +31,8 @@ export const UNCOMPARED_TASK_FIELDS: Readonly<Record<string, string>> = {
   created_by_op: 'not drawn', applied_ops: 'not drawn', ledger_desc: 'not drawn', walnut_agent: 'set at create',
   agent_id: 'set at create', status_report: 'drawn through user_status', promise_alarm: 'not drawn',
   needs_recheck: 'not drawn', letter_recheck: 'not drawn', recheck_watch: 'not drawn', agent_memory: 'read on its own panel',
-  cwd_missing: 'not drawn',
+  cwd_missing: 'not drawn', watch: 'not drawn (the server keeps who hears a task)',
+  last_words: 'drawn through user_status (its ask words)',
 };
 
 export function tasksShallowEqual(a: Task, b: Task): boolean {
