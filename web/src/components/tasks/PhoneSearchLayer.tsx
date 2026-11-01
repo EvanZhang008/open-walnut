@@ -14,6 +14,7 @@ import { useNavigate } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { apiGet } from '@/api/client';
 import { searchNotesHybrid, type SearchResult as NoteHit } from '@/api/notes-v2';
+import { noteHitLabel } from '../../../../src/core/note-hit-label';
 import { usePhoneOverlay } from '@/hooks/usePhoneOverlayHistory';
 import { log } from '@/utils/log';
 import { useHomeTasksById } from './phone-row-behavior';
@@ -33,7 +34,8 @@ export interface ServerHit {
 export interface SearchGroups {
   tasks: { taskId: string; title: string; snippet?: string }[];
   sessions: { sessionId: string; taskId?: string; title: string; snippet?: string }[];
-  notes: { path: string; title: string; snippet?: string }[];
+  /** `title` is the note's file name; `meta` its folder and, when it differs, its own title. */
+  notes: { path: string; title: string; meta?: string; snippet?: string }[];
 }
 
 /** Server rows to the three groups: one row per task, one per session. */
@@ -57,8 +59,9 @@ export function groupSearchHits(server: readonly ServerHit[], notes: readonly No
   for (const n of notes) {
     if (!n.path || seenNotes.has(n.path)) continue;
     seenNotes.add(n.path);
-    const base = n.path.split('/').pop()?.replace(/\.md$/i, '') ?? n.path;
-    noteRows.push({ path: n.path, title: (n as { title?: string }).title || n.name || base, snippet: n.snippet });
+    const label = noteHitLabel(n);
+    const meta = [label.folder, label.title].filter(Boolean).join(' · ');
+    noteRows.push({ path: n.path, title: label.name, ...(meta ? { meta } : {}), snippet: n.snippet });
   }
   return { tasks, sessions, notes: noteRows };
 }
@@ -221,7 +224,7 @@ export function PhoneSearchLayer({ open, onClose, onOpenTask }: PhoneSearchLayer
         {phase === 'done' && groups.notes.length > 0 && (
           <SearchGroup label="Notes">
             {groups.notes.map((r) => (
-              <ResultRow key={r.path} title={r.title} snippet={r.snippet} onOpen={() => openNote(r.path)} />
+              <ResultRow key={r.path} title={r.title} meta={r.meta} snippet={r.snippet} onOpen={() => openNote(r.path)} />
             ))}
           </SearchGroup>
         )}
@@ -240,11 +243,12 @@ function SearchGroup({ label, children }: { label: string; children: React.React
   );
 }
 
-function ResultRow({ title, snippet, onOpen }: { title: string; snippet?: string; onOpen: () => void }) {
+function ResultRow({ title, meta, snippet, onOpen }: { title: string; meta?: string; snippet?: string; onOpen: () => void }) {
   const words = plainSnippet(snippet);
   return (
     <button type="button" className="phone-search-row" onClick={onOpen}>
       <span className="phone-search-row-title">{plainSnippet(title) || 'Untitled'}</span>
+      {meta ? <span className="phone-search-row-meta">{meta}</span> : null}
       {words ? <span className="phone-search-row-snippet">{words}</span> : null}
     </button>
   );

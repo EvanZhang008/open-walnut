@@ -27,6 +27,7 @@ import type { NoteListItem, SearchResult, MatchType } from '@/api/notes-v2';
 import { renderNoteSnippet } from './notes-markdown';
 import { HighlightedTitle } from './HighlightedText';
 import { jumpNeedles } from './jump-target';
+import { noteHitLabel, type NoteHitLabel } from '../../../../src/core/note-hit-label';
 import { log } from '@/utils/log';
 
 interface CommandPaletteProps {
@@ -52,7 +53,10 @@ interface CommandPaletteProps {
 interface PaletteRow {
   kind: 'note' | 'search' | 'create' | 'create-blank';
   path?: string;
+  /** Create rows: the query to capture. Note rows: what noteHitLabel says (file name first). */
   title: string;
+  /** Note rows: the label every notes search surface shares (src/core/note-hit-label.ts). */
+  label?: NoteHitLabel;
   snippetHtml?: string;
   /** Raw BE snippet (with literal <mark> tags) — source of the jump-to-match text. */
   snippetRaw?: string;
@@ -64,6 +68,11 @@ interface PaletteRow {
 const SEARCH_DEBOUNCE_MS = 120;
 const RECENTS_KEY = 'open-walnut-notes-recents';
 const MAX_RECENTS = 8;
+
+/** A jump row for one note of the vault list. */
+function noteRow(n: NoteListItem): PaletteRow {
+  return { kind: 'note', path: n.path, title: n.title || n.name, label: noteHitLabel({ path: n.path, title: n.title || n.name }) };
+}
 
 /** Vault-relative path → display basename without the .md extension. */
 function basenameNoExt(p: string): string {
@@ -211,12 +220,12 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
       const recentRows: PaletteRow[] = recents
         .map((p) => byPath.get(p))
         .filter((n): n is NoteListItem => !!n)
-        .map((n) => ({ kind: 'note' as const, path: n.path, title: n.title || n.name }));
+        .map((n) => noteRow(n));
       const recentPaths = new Set(recentRows.map((r) => r.path));
       const rest: PaletteRow[] = notes
         .filter((n) => !recentPaths.has(n.path))
         .slice(0, 12)
-        .map((n) => ({ kind: 'note' as const, path: n.path, title: n.title || n.name }));
+        .map((n) => noteRow(n));
       return [...recentRows, ...rest];
     }
 
@@ -227,8 +236,8 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
     const searchRows: PaletteRow[] = results.map((r) => ({
       kind: 'search' as const,
       path: r.path,
-      // Hybrid search rows carry `title` (not `name`); fall back to the path basename.
       title: r.title || r.name || basenameNoExt(r.path),
+      label: noteHitLabel(r),
       snippetHtml: r.snippet ? renderNoteSnippet(r.snippet) : undefined,
       snippetRaw: r.snippet,
       headingMatch: r.headingMatch,
@@ -385,11 +394,18 @@ export function CommandPalette({ onNavigate, onCreate, onPreviewAttachment }: Co
                         </span>
                       )}
                       <span className="notes-cmdk-item-title">
-                        {/* Server highlights snippets only — titles get a client-side token-wise mark. */}
-                        <HighlightedTitle text={row.title} query={q} tokens={resultTokens} />
+                        {/* The file name leads, then its folder; the note's own title follows
+                            when it says something else. Server highlights snippets only —
+                            names and titles get a client-side token-wise mark. */}
+                        <HighlightedTitle text={row.label?.name ?? row.title} query={q} tokens={resultTokens} />
                       </span>
-                      {row.path && <span className="notes-cmdk-item-path">{row.path.replace(/\.md$/, '')}</span>}
+                      {row.label?.folder && <span className="notes-cmdk-item-path">{row.label.folder}</span>}
                     </div>
+                    {row.label?.title && (
+                      <div className="notes-cmdk-item-note-title">
+                        <HighlightedTitle text={row.label.title} query={q} tokens={resultTokens} />
+                      </div>
+                    )}
                     {row.snippetHtml && (
                       <div
                         className="notes-cmdk-item-snippet"

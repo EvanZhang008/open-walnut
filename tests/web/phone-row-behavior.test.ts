@@ -63,7 +63,9 @@ describe('phone search groups', () => {
     ]);
     expect(g.tasks.map((t) => t.taskId)).toEqual(['t1']);
     expect(g.sessions.map((s) => s.sessionId)).toEqual(['s1']);
+    // A note row leads with its file name; its folder rides the meta line.
     expect(g.notes.map((n) => n.title)).toEqual(['plan', 'Idea']);
+    expect(g.notes.map((n) => n.meta)).toEqual(['Areas', 'Inbox']);
     expect(isEmptyGroups(g)).toBe(false);
     expect(isEmptyGroups(groupSearchHits([], []))).toBe(true);
   });

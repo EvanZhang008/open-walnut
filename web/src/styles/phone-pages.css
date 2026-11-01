@@ -597,6 +597,13 @@
     overflow-wrap: anywhere;
   }
 
+  /* A note's folder and its own title, under its file name. */
+  .phone-search-row-meta {
+    font-size: 13px;
+    color: var(--fg-muted);
+    overflow-wrap: anywhere;
+  }
+
   .phone-search-row-snippet {
     font-size: 13px;
     color: var(--fg-secondary);

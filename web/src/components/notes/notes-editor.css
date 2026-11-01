@@ -545,6 +545,14 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* The note's own title, under its file name, only when the two differ. */
+.notes-cmdk-item-note-title {
+  font-size: 12px;
+  color: var(--fg-secondary, #c4c7cc);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .notes-cmdk-item-snippet {
   font-size: 12px;
   color: var(--fg-secondary, #c4c7cc);

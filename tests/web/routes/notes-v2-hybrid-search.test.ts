@@ -400,6 +400,22 @@ describe('search: short-query substring noise stays below real matches', () => {
     }
   });
 
+  it('a camelCase file name names its note by each of its words', async () => {
+    // `LaunchHook.md` titled by an unrelated first heading: "hook" and
+    // "launch hook" must find it by its FILE NAME's words, above body mentions.
+    await writeNote('ideas/LaunchHook.md', '# How I doubled my output in a week\n\nScreenshots to post.');
+    await writeNote('Fishing.md', '# Fishing\n\nBring a hook, a line and a launch permit.');
+    await syncIndex();
+
+    const app = createApp();
+    for (const q of ['hook', 'launch hook', 'launch']) {
+      const res = await request(app).get(`/api/notes-v2/search?q=${encodeURIComponent(q)}&mode=string`);
+      expect(res.status).toBe(200);
+      expect(res.body.results[0]?.path, q).toBe('ideas/LaunchHook.md');
+      expect(res.body.results[0].stringScore, q).toBeGreaterThanOrEqual(0.9);
+    }
+  });
+
   it('a SECTION HEADING match outranks body-only mentions and substring noise', async () => {
     // Grab-bag note: title says nothing, but an author-written `## SIN` section
     // holds the payload (the Gov document.md shape).

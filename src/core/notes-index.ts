@@ -855,12 +855,45 @@ function titleScore(title: string, q: string): number | null {
  * signal away.
  */
 function nameScore(title: string, relPath: string, q: string): number | null {
-  const fromTitle = titleScore(title, q)
   const base = relPath.split('/').pop()?.replace(/\.md$/i, '') ?? ''
-  const fromBase = base && base !== title ? titleScore(base, q) : null
-  if (fromTitle == null) return fromBase
-  if (fromBase == null) return fromTitle
-  return Math.max(fromTitle, fromBase)
+  const forms = [title]
+  if (base && base !== title) forms.push(base)
+  // A file name's own words: `LaunchHook` is "Launch Hook" and
+  // `garden-spring_plan` is "garden spring plan", so "hook" and
+  // "launch hook" name the note the way the user wrote its name.
+  const spaced = fileNameWords(base)
+  if (spaced && !forms.includes(spaced)) forms.push(spaced)
+  let best: number | null = null
+  for (const f of forms) {
+    const s = titleScore(f, q)
+    if (s != null && (best == null || s > best)) best = s
+  }
+  return best
+}
+
+/** A file name with its camelCase humps and `-`/`_` separators read as spaces
+ *  ("LaunchHook" → "Launch Hook"). A hump splits only after a word of 3+
+ *  letters, before an Upper+lower pair, so "MacOS", "iPhone" and the surname
+ *  "McLean" stay whole. Known edges: a brand like "MacBook" still splits ("book"
+ *  then names it), and an acronym start ("APIDocs"), a digit hump ("Q3Plan") or a
+ *  dot do not split. Exported for tests. */
+export function fileNameWords(base: string): string {
+  const chars = [...base]
+  let out = ''
+  let run = 0 // letters in the word being read
+  for (let i = 0; i < chars.length; i++) {
+    const c = chars[i]
+    out += c
+    run = /\p{L}/u.test(c) ? run + 1 : 0
+    if (run >= 3 && /\p{Ll}/u.test(c) && /\p{Lu}/u.test(chars[i + 1] ?? '') && /\p{Ll}/u.test(chars[i + 2] ?? '')) {
+      out += ' '
+      run = 0
+    }
+  }
+  return out
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 /**

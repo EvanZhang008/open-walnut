@@ -10,6 +10,7 @@
  */
 
 import { registerMentionSource, type MentionSourceItem } from './registry.js'
+import { noteHitLabel } from '../note-hit-label.js'
 
 const EXCERPT_CHARS = 700
 
@@ -17,9 +18,10 @@ function plain(snippet: string): string {
   return snippet.replace(/<\/?mark>/g, '').replace(/\s+/g, ' ').trim()
 }
 
-function folderOf(relPath: string): string {
-  const i = relPath.lastIndexOf('/')
-  return i > 0 ? relPath.slice(0, i) : ''
+/** A row leads with the note's file name; its folder and (when it differs) its own title follow. */
+function labelled(relPath: string, title: string | undefined, ...rest: string[]): Pick<MentionSourceItem, 'title' | 'subtitle'> {
+  const label = noteHitLabel({ path: relPath, title })
+  return { title: label.name || relPath, subtitle: [label.folder, label.title, ...rest].filter(Boolean).join(' · ') }
 }
 
 function day(iso: string | undefined | null): string {
@@ -34,8 +36,7 @@ async function recentNotes(limit: number): Promise<MentionSourceItem[]> {
     .all(limit) as Array<{ title: string; path: string; modified: string }>
   return rows.map((r) => ({
     ref: r.path,
-    title: r.title || r.path,
-    subtitle: [folderOf(r.path), day(r.modified) && `edited ${day(r.modified)}`].filter(Boolean).join(' · '),
+    ...labelled(r.path, r.title, day(r.modified) && `edited ${day(r.modified)}`),
     kind: 'note',
   }))
 }
@@ -62,10 +63,10 @@ export function ensureCoreMentionSources(): void {
       const payload = await performNotesSearch({ q, limit, mode: 'string' })
       return payload.results.map((r) => ({
         ref: r.path,
-        title: r.title || r.path,
-        subtitle: [folderOf(r.path), plain(r.snippet)].filter(Boolean).join(' · '),
+        ...labelled(r.path, r.title, plain(r.snippet)),
         kind: 'note',
-        keys: [r.path.replace(/\.md$/, '').split('/').pop() ?? ''].filter(Boolean),
+        // The file name and the note's own title both pick it precisely.
+        keys: [r.path.replace(/\.md$/, '').split('/').pop() ?? '', r.title ?? ''].filter(Boolean),
       }))
     },
     async resolve(ref) {

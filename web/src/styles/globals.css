@@ -23863,6 +23863,17 @@ a.tag-chip:focus-visible,
   max-width: 100%;
 }
 
+/* A search hit's own title, under its file name, only when the two differ
+   (src/core/note-hit-label.ts). Between the name and the snippet in weight. */
+.notes-search-note-title {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
 /* Folder path of a search hit ("trips/2025-kyoto") — the disambiguator between
    same-named notes. Slightly dimmer than the snippet so title > path > snippet. */
 .notes-search-path {

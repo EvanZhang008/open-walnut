@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo, memo } from 'react';
 import { searchNotesHybrid, saveNoteContent, revealNote } from '@/api/notes-v2';
 import type { NoteTreeNode, SearchResult, SearchFolderGroup } from '@/api/notes-v2';
+import { noteHitLabel } from '../../../../src/core/note-hit-label';
 import { NotesBookmarksGroup } from './NotesBookmarksGroup';
 import { NotesRecentGroup, RECENT_GROUP_KEY } from './NotesRecentGroup';
 import { HighlightedText, HighlightedTitle } from './HighlightedText';
@@ -931,7 +932,8 @@ export const NotesTreePanel = memo(function NotesTreePanel({
                     // title (a body that opens with its own H1 — makeSnippet
                     // windows from the start when the match sits there), the
                     // highlighted title already carries the information.
-                    const rowTitle = r.title || r.name || r.path.split('/').pop()?.replace(/\.md$/, '') || '';
+                    const label = noteHitLabel(r);
+                    const rowTitle = label.title ?? label.name;
                     const snippetPlain = (r.snippet || '').replace(/<\/?mark>/g, '').replace(/^[#\s.]+/, '').trim();
                     const snippetIsTitleEcho = !!snippetPlain
                       && snippetPlain.toLowerCase().startsWith(rowTitle.toLowerCase().slice(0, 60));
@@ -962,14 +964,17 @@ export const NotesTreePanel = memo(function NotesTreePanel({
                     >
                       <FileIcon />
                       <div className="notes-search-result-content">
-                        <span className="notes-tree-name">
-                          {/* Server highlights snippets only — titles get a client-side token-wise mark. */}
-                          <HighlightedTitle
-                            text={r.title || r.name || r.path.split('/').pop()?.replace(/\.md$/, '') || ''}
-                            query={searchQuery}
-                            tokens={searchTokens}
-                          />
+                        {/* The file name leads, as in the tree and the tabs; the folder is
+                            the group header above. Server highlights snippets only — names
+                            and titles get a client-side token-wise mark. */}
+                        <span className="notes-tree-name notes-search-file-name" title={r.path}>
+                          <HighlightedTitle text={label.name} query={searchQuery} tokens={searchTokens} />
                         </span>
+                        {label.title && (
+                          <span className="notes-search-note-title">
+                            <HighlightedTitle text={label.title} query={searchQuery} tokens={searchTokens} />
+                          </span>
+                        )}
                         {!snippetIsTitleEcho && (
                           <span className="notes-search-snippet">
                             {/* Snippet carries literal <mark> tags from the server — render real marks, never raw HTML. */}
