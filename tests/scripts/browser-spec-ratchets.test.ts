@@ -759,3 +759,16 @@ describe('a fixture Vite server', () => {
     expect(offendersOf('x-server.ts', server.replace("'web'),", "'web'),\n  cacheDir: path.join(tmpBase, 'vite-cache'),"))).toEqual([])
   })
 })
+
+describe('a long task budget', () => {
+  // A long task's length scales with the machine like any CPU work: C96's 50 ms read 60 in an 8 CPU
+  // container on a build that holds it on a desktop core (2026-11-01). A spec that judges long tasks
+  // grows the budget by a reference draw read on the same clock (cpu-reference.ts longTaskBudget).
+  const JUDGES_LONG_TASKS = /'longtask'|watchLongTasks\(/
+
+  it('every spec that judges long tasks scales its budget by the reference draw', () => {
+    const judges = sources.filter(({ file, text }) => file.endsWith('.spec.ts') && JUDGES_LONG_TASKS.test(text))
+    expect(judges.map(({ file }) => file)).toEqual(expect.arrayContaining(['board-kanban-layout.spec.ts', 'session-thread-perf.spec.ts']))
+    expect(judges.filter(({ text }) => !/\blongTaskBudget\(/.test(text)).map(({ file }) => file)).toEqual([])
+  })
+})

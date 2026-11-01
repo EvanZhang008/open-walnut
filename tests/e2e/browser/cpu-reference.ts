@@ -45,3 +45,27 @@ export async function referenceDrawMs(page: Page, cpuMs: () => Promise<number>):
 export function cpuBudget(asWrittenMs: number, refs: number, referenceMs: number): number {
   return Math.max(asWrittenMs, Math.round(refs * referenceMs))
 }
+
+/**
+ * What the reference draw costs on a fast desktop core, the kind of machine the long task budgets
+ * below were set on. Taken as 165 ms, so a 50 ms task is 0.3 references: in an 8 CPU container
+ * C96's worst task read 60 ms beside a 241 to 263 ms reference (0.24), and failed its plain 50 ms
+ * (2026-11-01).
+ */
+export const FAST_CORE_REFERENCE_MS = 165
+
+/**
+ * A long task budget (the length of one main-thread task) as it holds on this machine: the budget
+ * as written, grown by how much slower than a fast desktop core this machine draws the reference,
+ * never below what is written. A task that grew by half its budget still fails anywhere.
+ */
+export function longTaskBudget(asWrittenMs: number, referenceMs: number): number {
+  return Math.max(asWrittenMs, Math.round(asWrittenMs * referenceMs / FAST_CORE_REFERENCE_MS))
+}
+
+/** The page's main-thread CPU so far, in ms (CDP Performance TaskDuration); Chromium only. */
+export async function chromiumCpuClock(page: Page): Promise<() => Promise<number>> {
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Performance.enable', { timeDomain: 'threadTicks' })
+  return async () => ((await cdp.send('Performance.getMetrics')).metrics.find((m) => m.name === 'TaskDuration')?.value ?? 0) * 1000
+}

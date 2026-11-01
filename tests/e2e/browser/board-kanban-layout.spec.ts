@@ -16,7 +16,7 @@ import { REAL_PANEL } from './draft-helpers'
 import { openSessionBoard } from './board-view-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { call, getTask, kanbanApi, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
-import { cpuBudget, referenceDrawMs } from './cpu-reference'
+import { cpuBudget, longTaskBudget, referenceDrawMs } from './cpu-reference'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -392,7 +392,7 @@ test('C50: 37 cards are on screen and live within 1s of the Board click; a drag 
   info.annotations.push({ type: 'drag long tasks ms', description: supported ? JSON.stringify({ long, dragCpu, load: Math.round(loadavg()[0]) }) : 'longtask not supported in this engine' })
   console.log(`[kanban-layout] ${info.project.name} drag ${JSON.stringify({ long, dragCpu, load: Math.round(loadavg()[0]) })}`)
   if (dragCpu !== null) expect(dragCpu).toBeLessThan(dragBudget)
-  if (supported && quiet()) expect(Math.max(0, ...(long ?? []))).toBeLessThanOrEqual(100)
+  if (supported && quiet()) expect(Math.max(0, ...(long ?? []))).toBeLessThanOrEqual(reference === null ? 100 : longTaskBudget(100, reference))
 })
 
 const renders = (page: Page) => page.evaluate(() => ({ ...((window as unknown as { __kanbanCardRenders?: Record<string, number> }).__kanbanCardRenders ?? {}) }))
@@ -454,7 +454,12 @@ test('C96: 30s of status pushes: no long task over 50ms, the hovered card holds 
   console.log('[kanban-layout] C96 long tasks', info.project.name, JSON.stringify(longAt))
   expect(changes.length).toBeGreaterThanOrEqual(5)
   for (const g of gaps) expect(g).toBeGreaterThanOrEqual(1900)
-  if (supported) expect(Math.max(0, ...(long ?? []))).toBeLessThanOrEqual(50)
+  // Measured after the window it judges; a slower machine's tasks are longer in proportion.
+  const read = await cpuClock(page, info.project.name)
+  const reference = read ? await referenceDrawMs(page, read) : null
+  const longBudget = reference === null ? 50 : longTaskBudget(50, reference)
+  info.annotations.push({ type: 'C96 long task budget', description: JSON.stringify({ reference, longBudget }) })
+  if (supported) expect(Math.max(0, ...(long ?? []))).toBeLessThanOrEqual(longBudget)
 
   // One status update re-renders one card (clear of a minute tick, which may touch every foot).
   await page.mouse.move(2, 2)

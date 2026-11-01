@@ -11,6 +11,7 @@ import {
   startGroupsFixture, waitLabeled,
 } from './mail-grouping-helpers'
 import { openMail, smartRow, type MailFixture, type MailFixtureServer } from './mail-review-helpers'
+import { referenceDrawMs } from './cpu-reference'
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(300_000)
@@ -37,29 +38,6 @@ async function pointerOnList(page: Page): Promise<void> {
  * any machine, and a machine faster than this keeps the plain 1.5 s.
  */
 const REFERENCE_DRAW_MS = 180
-
-/**
- * Main-thread CPU of a fixed draw in this page: 3,000 two-line rows built, laid out and taken
- * away, five times; the median, in ms. It does the same kind of work as the grouped list's
- * first draw (markup, style, layout), so it scales with the machine the way that draw does.
- */
-async function referenceDrawMs(page: Page, taskSeconds: () => Promise<number>): Promise<number> {
-  const runs: number[] = []
-  for (let i = 0; i < 5; i++) {
-    const before = await taskSeconds()
-    await page.evaluate(() => {
-      const host = document.createElement('div')
-      host.style.cssText = 'position:fixed;left:0;top:0;width:600px;visibility:hidden;pointer-events:none'
-      host.innerHTML = Array.from({ length: 3_000 }, (_, n) =>
-        `<div class="ref-row"><b>Sender ${n}</b> <span>Subject line number ${n} of the reference draw</span><p>A preview of the message body, ${n}</p></div>`).join('')
-      document.body.append(host)
-      void host.getBoundingClientRect().height
-      host.remove()
-    })
-    runs.push((await taskSeconds() - before) * 1000)
-  }
-  return Math.round(runs.sort((a, b) => a - b)[2]!)
-}
 
 test.describe('the ordinary fixture', () => {
   let server: MailFixtureServer
@@ -133,7 +111,7 @@ test.describe('the dense fixture', () => {
     // The budget is for a fast desktop core. A slower or busier one (a CI runner's: 1,502 and
     // 1,909 ms of CPU on 2026-11-01 for a draw that takes 700 to 870 here) gets it scaled by how
     // long a fixed reference draw takes there, read with the same clock (REFERENCE_DRAW_MS).
-    const reference = await referenceDrawMs(page, taskSeconds)
+    const reference = await referenceDrawMs(page, async () => (await taskSeconds()) * 1000)
     const scale = cdp ? Math.max(1, reference / REFERENCE_DRAW_MS) : 1
     const budget = Math.round(1_500 * scale)
     const cpuBefore = await taskSeconds()

@@ -6,6 +6,7 @@
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { centreInHistory, DENSE_SESSION, openThreadsSession, resetThreadsFixture } from './threads-helpers'
+import { chromiumCpuClock, longTaskBudget, referenceDrawMs } from './cpu-reference'
 
 const TASK = 'pw-task-threads-dense'
 const READY = 'Walk me through part 6 of the storage notes.'
@@ -67,6 +68,9 @@ test.describe('Question stack push / pop cost', () => {
     }
     const worst = Math.max(0, ...steps.flatMap((s) => s.long))
     console.log('push/pop long tasks', JSON.stringify(steps))
-    expect(worst, `long tasks per step: ${JSON.stringify(steps)}`).toBeLessThanOrEqual(50)
+    // Measured after the steps it judges; a slower machine's tasks are longer in proportion.
+    const reference = await referenceDrawMs(page, await chromiumCpuClock(page))
+    const budget = longTaskBudget(50, reference)
+    expect(worst, `long tasks per step: ${JSON.stringify(steps)} (budget ${budget} ms, reference ${reference} ms)`).toBeLessThanOrEqual(budget)
   })
 })
