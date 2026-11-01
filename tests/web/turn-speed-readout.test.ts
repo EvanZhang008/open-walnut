@@ -8,12 +8,12 @@
  *   record fills in on a cold load, a late live frame cannot undo a final.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { SessionTurnSpeed } from '../../src/core/types.js';
+import type { SessionTurnSpeed, SessionTurnSpeedLane } from '../../src/core/types.js';
 
 const onEvent = vi.fn();
 vi.mock('../../web/src/api/ws', () => ({ wsClient: { onEvent: (...args: unknown[]) => onEvent(...args) } }));
 
-const { computeReadout, formatSeconds, formatCost, formatTokens } = await import('../../web/src/components/sessions/turn-speed-format');
+const { computeReadout, computeLaneRows, formatSeconds, formatCost, formatTokens } = await import('../../web/src/components/sessions/turn-speed-format');
 const { turnSpeedStore, initTurnSpeedStore } = await import('../../web/src/stores/turn-speed-store');
 
 const T0 = 1_700_000_000_000;
@@ -228,5 +228,56 @@ describe('turnSpeedStore', () => {
     turnSpeedStore.ingestEvent({ sessionId: 's1' });
     turnSpeedStore.ingestEvent({ sessionId: 's1', speed: { outputTokens: 3 } });
     expect(turnSpeedStore.resolve('s1', undefined)).toBeUndefined();
+  });
+});
+
+describe('computeLaneRows (subagents, one row per model)', () => {
+  function lane(over: Partial<SessionTurnSpeedLane> = {}): SessionTurnSpeedLane {
+    return { id: 'a', model: 'claude-haiku-5-5', startedAt: T0, firstReplyMs: 2000, generationMs: 4000, messages: 2, estimatedTokens: 36, status: 'running', ...over };
+  }
+
+  it('returns nothing for a turn without agents', () => {
+    expect(computeLaneRows(undefined, T0)).toEqual([]);
+    expect(computeLaneRows([], T0)).toEqual([]);
+  });
+
+  it('a running agent reads an estimate, its first message, an estimated rate and a ticking time', () => {
+    const [row] = computeLaneRows([lane()], T0 + 9700);
+    expect(row).toMatchObject({ model: 'claude-haiku-5-5', count: 1, status: 'running', tokens: '~36 tok', tokensEstimated: true, first: '2.0s', firstPending: false, tps: '~9 tok/s', tpsEstimated: true, duration: '9.7s' });
+  });
+
+  it("a finished agent keeps its ~ (the CLI counts no agent) and freezes the time at its end", () => {
+    const [row] = computeLaneRows([lane({ status: 'done', estimatedTokens: 150, endedAt: T0 + 9650 })], T0 + 60_000);
+    expect(row).toMatchObject({ status: 'done', tokens: '~150 tok', tokensEstimated: true, tps: '~38 tok/s', tpsEstimated: true, duration: '9.7s' });
+  });
+
+  it('agents on the same model share one row (summed tokens and windows, earliest first, whole span); other models get their own, in start order', () => {
+    const rows = computeLaneRows([
+      lane({ id: 'a', status: 'done', estimatedTokens: 100, generationMs: 2000, firstReplyMs: 3000, endedAt: T0 + 8000 }),
+      lane({ id: 'b', model: 'claude-sonnet-5-5', startedAt: T0 + 500, status: 'done', estimatedTokens: 50, generationMs: 1000, firstReplyMs: 1000, endedAt: T0 + 3000 }),
+      lane({ id: 'c', startedAt: T0 + 1000, status: 'done', estimatedTokens: 60, generationMs: 2000, firstReplyMs: 1500, endedAt: T0 + 12_000 }),
+    ], T0 + 20_000);
+    expect(rows.map((r) => [r.model, r.count, r.tokens, r.first, r.tps, r.duration, r.status])).toEqual([
+      ['claude-haiku-5-5', 2, '~160 tok', '1.5s', '~40 tok/s', '12s', 'done'],
+      ['claude-sonnet-5-5', 1, '~50 tok', '1.0s', '~50 tok/s', '2.5s', 'done'],
+    ]);
+  });
+
+  it('a finished and a still-running agent on one model read as one running row', () => {
+    const [row] = computeLaneRows([
+      lane({ id: 'a', status: 'done', estimatedTokens: 100, endedAt: T0 + 8000 }),
+      lane({ id: 'b', startedAt: T0 + 1000, estimatedTokens: 20 }),
+    ], T0 + 9000);
+    expect(row).toMatchObject({ count: 2, status: 'running', tokens: '~120 tok', tokensEstimated: true });
+  });
+
+  it('a lane with no message yet shows its label, a pending first clock and no rate', () => {
+    const [row] = computeLaneRows([lane({ model: undefined, label: 'Explore', firstReplyMs: null, generationMs: 0, messages: 0, estimatedTokens: 0 })], T0 + 3300);
+    expect(row).toMatchObject({ model: undefined, label: 'Explore', tokens: '~0 tok', first: '3.3s…', firstPending: true, tps: null, duration: '3.3s', status: 'running' });
+  });
+
+  it('a stopped turn reads its unfinished agent as stopped, a failed result as failed', () => {
+    expect(computeLaneRows([lane({ status: 'stopped', endedAt: T0 + 5000 })], T0 + 9000)[0]!.status).toBe('stopped');
+    expect(computeLaneRows([lane({ status: 'failed', endedAt: T0 + 5000 }), lane({ id: 'b', status: 'done', endedAt: T0 + 6000 })], T0 + 9000)[0]!.status).toBe('failed');
   });
 });

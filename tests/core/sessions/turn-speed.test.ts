@@ -557,6 +557,153 @@ describe('TurnSpeedMeter', () => {
   });
 });
 
+describe('subagent lanes', () => {
+  const HAIKU = 'claude-haiku-5-5';
+  /** A main turn with one Agent call whose lane answers in two messages with a
+   *  tool run between them (the real stream's shape: whole lines, no deltas). */
+  function runAgentTurn(): TurnSpeedMeter {
+    const m = new TurnSpeedMeter();
+    m.startTurn(1000);
+    m.messageStart(1500, MODEL, { input_tokens: 2 });
+    m.delta(1800, 20);
+    m.messageUsage({ output_tokens: 30 });
+    m.messageStop(2500);
+    m.laneStart(2600, 'toolu_agent', { label: 'general-purpose' });
+    // First model call: 2600 → 4600 (its first message lands whole, in two block lines).
+    m.laneAssistant(4600, 'toolu_agent', 'lane_m1', HAIKU, 40);
+    m.laneAssistant(4620, 'toolu_agent', 'lane_m1', HAIKU, 24);
+    // Its tool runs until the result at 7600; second call 7600 → 9600.
+    m.laneInput(7600, 'toolu_agent');
+    m.laneAssistant(9600, 'toolu_agent', 'lane_m2', HAIKU, 80);
+    return m;
+  }
+
+  it('clocks each model call from the lane input to the message, estimates tokens, and groups the agent under its model', () => {
+    const m = runAgentTurn();
+    const snap = m.snapshot(9700);
+    expect(snap.lanes).toHaveLength(1);
+    const lane = snap.lanes![0]!;
+    expect(lane).toMatchObject({
+      id: 'toolu_agent', model: HAIKU, label: 'general-purpose', startedAt: 2600, status: 'running',
+      firstReplyMs: 2000, messages: 2, generationMs: 4000, estimatedTokens: 36,
+    });
+    // A second block line of the same message adds characters, not a message or a window.
+    expect(lane.callStartedAt).toBeUndefined();
+  });
+
+  it("the Agent's own result closes the lane: its content is the agent's final answer, one more message whose call opened at the last input", () => {
+    const m = runAgentTurn();
+    m.laneInput(10_000, 'toolu_agent');
+    m.laneEnd(12_000, 'toolu_agent', { status: 'done', answerChars: 400, durationMs: 9400, model: 'global.anthropic.claude-haiku-5-5' });
+    const lane = m.snapshot(12_100).lanes![0]!;
+    expect(lane).toMatchObject({ status: 'done', endedAt: 12_000, durationMs: 9400, model: HAIKU, messages: 3, generationMs: 6000, estimatedTokens: 136 });
+    // The model the lane's own messages named wins over the result's resolved id;
+    // a second result line adds nothing more.
+    expect(m.laneEnd(12_500, 'toolu_agent', { status: 'done', answerChars: 400 })).toBe(true);
+    expect(m.snapshot(12_600).lanes![0]).toMatchObject({ messages: 3, estimatedTokens: 136, endedAt: 12_000 });
+  });
+
+  it('an agent whose only output is its answer (no lane line) still gets a first reply and a window from its start', () => {
+    const m = new TurnSpeedMeter();
+    m.startTurn(1000);
+    m.laneStart(2000, 'a', { label: 'Explore' });
+    m.laneEnd(5000, 'a', { status: 'done', answerChars: 80, model: 'global.anthropic.claude-haiku-5-5[1m]' });
+    expect(m.snapshot(5100).lanes![0]).toMatchObject({ model: 'global.anthropic.claude-haiku-5-5[1m]', messages: 1, firstReplyMs: 3000, generationMs: 3000, estimatedTokens: 20, status: 'done' });
+  });
+
+  it('a lane input re-arms the call window and a repeated input moves the mark instead of adding a window', () => {
+    const m = runAgentTurn();
+    m.laneInput(10_000, 'toolu_agent');
+    m.laneInput(10_500, 'toolu_agent');
+    m.laneAssistant(11_500, 'toolu_agent', 'lane_m3', HAIKU, 8);
+    expect(m.snapshot(11_600).lanes![0]!.generationMs).toBe(5000);
+  });
+
+  it('the turn final carries the lanes, and a lane that outlives the result keeps updating the frozen final', () => {
+    const m = runAgentTurn();
+    const fin = m.finish(9700, { turnOutputTokens: 30, durationMs: 8700, costUsd: 0.02 });
+    expect(fin.final).toBe(true);
+    expect(fin.lanes![0]!.status).toBe('running');
+    expect(m.laneEnd(12_000, 'toolu_agent', { status: 'done', answerChars: 40 })).toBe(true);
+    const after = m.snapshot(12_100);
+    expect(after.final).toBe(true);
+    expect(after.lanes![0]).toMatchObject({ status: 'done', estimatedTokens: 46, endedAt: 12_000 });
+    // Main-lane numbers of the final are untouched by the lane update.
+    expect(after.outputTokens).toBe(30);
+    expect(after.turnOutputTokens).toBe(30);
+  });
+
+  it('an interrupted turn marks its running agents stopped; a finished one stays done', () => {
+    const m = new TurnSpeedMeter();
+    m.startTurn(1000);
+    m.laneStart(1100, 'a1');
+    m.laneStart(1200, 'a2');
+    m.laneAssistant(2000, 'a2', 'x', HAIKU, 10);
+    m.laneEnd(2100, 'a2', { status: 'done', answerChars: 20 });
+    const fin = m.finish(3000, { interrupted: true });
+    expect(fin.lanes!.map((l) => l.status)).toEqual(['stopped', 'done']);
+    expect(fin.lanes![0]!.endedAt).toBe(3000);
+  });
+
+  it('a lane whose start was missed (attach mid-turn) begins at its first message and marks the turn partial', () => {
+    const m = new TurnSpeedMeter();
+    m.startTurn(1000);
+    m.laneAssistant(5000, 'unseen', 'm', HAIKU, 400);
+    const snap = m.snapshot(5100);
+    expect(snap.partial).toBe(true);
+    expect(snap.lanes![0]).toMatchObject({ startedAt: 5000, firstReplyMs: 0, generationMs: 0, messages: 1, estimatedTokens: 100 });
+  });
+
+  it('laneStart is idempotent (tool_use and task_started both open it), a lane start alone makes the meter active, and the next turn forgets the lanes', () => {
+    const m = new TurnSpeedMeter();
+    expect(m.active).toBe(false);
+    expect(m.laneStart(100, 'a', {})).toBe(true);
+    expect(m.active).toBe(true);
+    expect(m.laneStart(200, 'a', { label: 'Explore' })).toBe(true); // the label fills in once
+    expect(m.laneStart(300, 'a', { label: 'other' })).toBe(false);
+    expect(m.snapshot(400).lanes![0]).toMatchObject({ startedAt: 100, label: 'Explore' });
+    expect(m.hasLane('a')).toBe(true);
+    m.startTurn(1000);
+    expect(m.snapshot(1100).lanes).toBeUndefined();
+    expect(m.hasLane('a')).toBe(false);
+  });
+
+  it('stopRunningLanes closes the agents a dead process left running in the final, and nothing else', () => {
+    const m = runAgentTurn();
+    m.laneStart(9000, 'done-one');
+    m.laneEnd(9100, 'done-one', { status: 'done', answerChars: 4 });
+    m.finish(9700, {});
+    expect(m.stopRunningLanes(20_000)).toBe(true);
+    const lanes = m.snapshot(20_100).lanes!;
+    expect(lanes.map((l) => [l.status, l.endedAt])).toEqual([['stopped', 20_000], ['done', 9100]]);
+    expect(m.stopRunningLanes(20_200)).toBe(false);
+  });
+
+  it("the terminal notification comes before the Agent's result: the answer's call window still closes at the result", () => {
+    const m = new TurnSpeedMeter();
+    m.startTurn(1000);
+    m.laneStart(2000, 'a');
+    m.laneAssistant(4000, 'a', 'm1', HAIKU, 40);
+    m.laneInput(5000, 'a');
+    expect(m.laneEnd(8000, 'a', { status: 'done' })).toBe(true);           // task_notification
+    expect(m.laneEnd(8100, 'a', { status: 'done', answerChars: 200 })).toBe(true); // tool_result
+    expect(m.snapshot(8200).lanes![0]).toMatchObject({ status: 'done', messages: 2, generationMs: 2000 + 3100, estimatedTokens: 60, endedAt: 8000 });
+  });
+
+  it('a lane end for an unknown id, or a second end without counts, changes nothing', () => {
+    const m = new TurnSpeedMeter();
+    m.startTurn(1000);
+    expect(m.laneEnd(2000, 'nope', { status: 'done' })).toBe(false);
+    m.laneStart(1100, 'a');
+    expect(m.laneEnd(2000, 'a', { status: 'failed' })).toBe(true);
+    expect(m.laneEnd(2500, 'a', { status: 'done' })).toBe(false);
+    expect(m.snapshot(2600).lanes![0]!.status).toBe('failed');
+    // A late result WITH the answer still counts it (the notification came first).
+    expect(m.laneEnd(2700, 'a', { status: 'done', answerChars: 36 })).toBe(true);
+    expect(m.snapshot(2800).lanes![0]).toMatchObject({ status: 'done', estimatedTokens: 9, messages: 1, endedAt: 2000 });
+  });
+});
+
 describe('tokensPerSecond', () => {
   it('is null for a zero generation window', () => {
     expect(tokensPerSecond({ outputTokens: 10, generationMs: 0 })).toBeNull();

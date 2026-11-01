@@ -171,6 +171,52 @@ describe('turn speed pipeline (two messages with a tool gap)', () => {
     }, { timeout: 3000, interval: 50 });
   });
 
+  it("a subagent on another model gets its own lane: an estimate throughout, its answer counted at the Agent's result", async () => {
+    const c = makeCollector();
+    const session = newSession('task-speed-agent');
+    // The same turn with an Agent as the tool: its lane answers as haiku in two
+    // model calls of ~5 pauses around a ~10-pause tool run (mock-claude.mjs).
+    session.send('chunk-delay:120 stream-partial-speed-agent');
+
+    await waitForResult(c);
+    const finals = c.speeds.filter((f) => f.speed.final);
+    expect(finals).toHaveLength(1);
+    const final = finals[0].speed;
+    // The main lane is unchanged by the agent: its own two messages, its own model.
+    expect(final.model).toBe('mock-model');
+    expect(final.outputTokens).toBe(50);
+    expect(final.messages).toBe(2);
+    // The lane: one agent, named by its own messages; its two lane messages plus
+    // its answer (the Agent result's content, 75 chars) make three messages.
+    expect(final.lanes).toHaveLength(1);
+    const lane = final.lanes![0];
+    expect(lane).toMatchObject({ id: 'toolu_mock_agent', model: 'claude-haiku-5-5', label: 'general-purpose', status: 'done', messages: 3, durationMs: 120 * 20 });
+    expect(lane.firstReplyMs).toBeGreaterThan(0);
+    // The estimate: the two lane messages' text and tool input, then the answer.
+    expect(lane.estimatedTokens).toBeGreaterThanOrEqual(40);
+    // Two model calls of ~600ms each (the answer follows the lane's last message
+    // at once, so its own window is nil here); never the ~1.2s tool run.
+    // Windows are arrival-clocked on the server: a stalled event loop can hand a
+    // lane input and the message that follows it to the meter almost together
+    // (measured 538ms for the pair at load 236), so the floor is half a window.
+    expect(lane.generationMs).toBeGreaterThanOrEqual(300);
+    expect(lane.generationMs).toBeLessThan(120 * 20);
+    expect(lane.endedAt).toBeGreaterThanOrEqual(lane.startedAt);
+
+    // While the agent ran, a live frame showed the lane with an estimate.
+    const running = c.speeds.map((f) => f.speed).find((sp) => !sp.final && sp.lanes?.[0]?.messages === 1);
+    expect(running, 'a live frame with the lane after its first message').toBeDefined();
+    expect(running!.lanes![0].estimatedTokens).toBeGreaterThan(0);
+    expect(running!.lanes![0].status).toBe('running');
+
+    // The record carries the lanes for a cold load.
+    const { getSessionsForTask } = await import('../../src/core/session-tracker.js');
+    await vi.waitFor(async () => {
+      const [record] = await getSessionsForTask('task-speed-agent');
+      expect(record?.lastTurnSpeed?.lanes?.[0]?.status).toBe('done');
+    }, { timeout: 3000, interval: 50 });
+  });
+
   it('a turn without partial messages still closes with the CLI usage and no rate', async () => {
     const c = makeCollector();
     const session = newSession('task-plain');

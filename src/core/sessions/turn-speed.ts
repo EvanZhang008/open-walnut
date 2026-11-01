@@ -37,7 +37,7 @@
  * events are positional replays and must not feed them here.
  */
 
-import type { SessionTurnSpeed } from '../types.js';
+import type { SessionTurnSpeed, SessionTurnSpeedLane } from '../types.js';
 import { computeCost } from '../usage/pricing.js';
 
 /** Same heuristic as the client's interim estimate and the streaming block's count. */
@@ -67,6 +67,26 @@ interface OpenMessage {
   outputTokens?: number;
 }
 
+/** A lane's bookkeeping beyond its public snapshot: message ids seen (one
+ *  `assistant` line per content block, all carrying the same id) and the
+ *  message the latest line belonged to. */
+interface LaneState extends SessionTurnSpeedLane {
+  seenMessageIds: Set<string>;
+  lastMessageId?: string;
+  /** The final answer (Agent result) was counted; a second result line adds nothing. */
+  answerCounted?: boolean;
+}
+
+/** What the Agent call's own result says about the agent (main-lane tool_result). */
+export interface LaneEnd {
+  status: 'done' | 'failed' | 'stopped';
+  /** Characters of the agent's final answer (the tool_result content): its last
+   *  message, which never appears as a lane line. */
+  answerChars?: number;
+  durationMs?: number;
+  model?: string;
+}
+
 export interface TurnSpeedFinal {
   /** result.usage.output_tokens for the whole turn. */
   turnOutputTokens?: number;
@@ -93,6 +113,8 @@ export class TurnSpeedMeter {
    *  was still open (a stream we did not see from its start). */
   private partial = false;
   private finalSnapshot: SessionTurnSpeed | undefined;
+  /** Subagent lanes of this turn, keyed by the Agent tool_use id, in start order. */
+  private lanes = new Map<string, LaneState>();
 
   /** The turn-start edge. Resets every counter. */
   startTurn(now: number): void {
@@ -113,6 +135,7 @@ export class TurnSpeedMeter {
     this.costUsd = 0;
     this.partial = false;
     this.finalSnapshot = undefined;
+    this.lanes.clear();
   }
 
   /** Put a previous turn's final back after a startTurn that has to be undone
@@ -124,7 +147,8 @@ export class TurnSpeedMeter {
 
   /** True between startTurn/first message and finish. */
   get active(): boolean {
-    return this.finalSnapshot === undefined && (this.startedAt !== undefined || this.open !== undefined || this.messages > 0);
+    return this.finalSnapshot === undefined
+      && (this.startedAt !== undefined || this.open !== undefined || this.messages > 0 || this.lanes.size > 0);
   }
 
   messageStart(now: number, model: string | undefined, usage: MessageUsage | undefined): void {
@@ -228,7 +252,128 @@ export class TurnSpeedMeter {
       ...(this.messages > 0 && Number.isFinite(this.costUsd) ? { costUsd: this.costUsd, costEstimated: true } : {}),
       final: false,
       ...(this.partial ? { partial: true } : {}),
+      ...this.lanesField(),
     };
+  }
+
+  /** `{ lanes }` when the turn ran a subagent, else nothing (older readers see no field). */
+  private lanesField(): { lanes?: SessionTurnSpeedLane[] } {
+    if (this.lanes.size === 0) return {};
+    return { lanes: [...this.lanes.values()].map(({ seenMessageIds: _ids, lastMessageId: _last, answerCounted: _a, ...lane }) => ({ ...lane })) };
+  }
+
+  // ── Subagent lanes ─────────────────────────────────────────────────────────
+  // The CLI emits no partial events for a subagent; its lane is whole messages,
+  // so these edges are message arrivals, not deltas (see SessionTurnSpeedLane).
+  // Every lane method returns true when it changed something worth a frame.
+  // After the turn's result a backgrounded agent may still be working: its
+  // lane keeps updating inside the frozen final snapshot, which the caller
+  // re-emits, so the row never shows a running agent frozen at the result.
+
+  /** An Agent call began (its tool_use in the main lane, or task_started). */
+  laneStart(now: number, id: string, meta: { label?: string } = {}): boolean {
+    if (!id) return false;
+    const existing = this.lanes.get(id);
+    if (existing) {
+      if (meta.label && !existing.label) { existing.label = meta.label; this.syncFinalLanes(); return true; }
+      return false;
+    }
+    this.lanes.set(id, {
+      id, ...(meta.label ? { label: meta.label } : {}),
+      startedAt: now, firstReplyMs: null, generationMs: 0, messages: 0, estimatedTokens: 0,
+      callStartedAt: now, status: 'running', seenMessageIds: new Set(),
+    });
+    this.syncFinalLanes();
+    return true;
+  }
+
+  /** One `assistant` line of the lane: a content block of message `messageId`
+   *  (the CLI writes one line per block). The first line of a new message
+   *  closes the model-call window that opened at the lane's last input. */
+  laneAssistant(now: number, id: string, messageId: string | undefined, model: string | undefined, chars: number): boolean {
+    if (!id) return false;
+    let lane = this.lanes.get(id);
+    if (!lane) {
+      // A lane whose start was not observed (attach mid-turn): it begins here.
+      this.laneStart(now, id);
+      lane = this.lanes.get(id)!;
+      lane.callStartedAt = undefined;
+      this.partial = true;
+    }
+    const name = typeof model === 'string' && model ? model : undefined;
+    if (!lane.model && name) lane.model = name;
+    const mid = messageId || `anon-${lane.messages + 1}`;
+    if (!lane.seenMessageIds.has(mid)) {
+      lane.seenMessageIds.add(mid);
+      lane.messages += 1;
+      lane.lastMessageId = mid;
+      if (lane.firstReplyMs === null) lane.firstReplyMs = Math.max(0, now - lane.startedAt);
+      if (lane.callStartedAt !== undefined) {
+        lane.generationMs += Math.max(0, now - lane.callStartedAt);
+        lane.callStartedAt = undefined;
+      }
+    }
+    if (chars > 0) lane.estimatedTokens += Math.round(chars / CHARS_PER_TOKEN);
+    this.syncFinalLanes();
+    return true;
+  }
+
+  /** A `user` line of the lane (a tool result handed to the agent): the next
+   *  model call starts now. A second one before any message moves the mark. */
+  laneInput(now: number, id: string): boolean {
+    const lane = this.lanes.get(id);
+    if (!lane || lane.status !== 'running') return false;
+    lane.callStartedAt = now;
+    this.syncFinalLanes();
+    return true;
+  }
+
+  /** The Agent call ended: its main-lane tool_result (carrying the agent's
+   *  final answer, which closes the call window its last input opened) or a
+   *  terminal task_notification (no answer). */
+  laneEnd(now: number, id: string, end: LaneEnd): boolean {
+    const lane = this.lanes.get(id);
+    if (!lane) return false;
+    if (lane.status !== 'running' && end.answerChars === undefined) return false;
+    lane.status = end.status;
+    lane.endedAt = lane.endedAt ?? now;
+    if (end.answerChars !== undefined && end.answerChars > 0 && !lane.answerCounted) {
+      // The answer is the lane's last model call: it opened at the last input.
+      lane.answerCounted = true;
+      lane.messages += 1;
+      if (lane.firstReplyMs === null) lane.firstReplyMs = Math.max(0, now - lane.startedAt);
+      if (lane.callStartedAt !== undefined) lane.generationMs += Math.max(0, now - lane.callStartedAt);
+      lane.estimatedTokens += Math.round(end.answerChars / CHARS_PER_TOKEN);
+      lane.callStartedAt = undefined;
+    }
+    // A terminal notification arrives BEFORE the Agent's tool_result (verified
+    // on real streams), so an open call window stays until that result closes it.
+    if (typeof end.durationMs === 'number' && Number.isFinite(end.durationMs) && end.durationMs >= 0) lane.durationMs = end.durationMs;
+    if (!lane.model && typeof end.model === 'string' && end.model) lane.model = end.model;
+    this.syncFinalLanes();
+    return true;
+  }
+
+  /** The process is gone after the turn's result: an agent still marked running
+   *  in the frozen final will never report. Returns true when one was closed. */
+  stopRunningLanes(now: number): boolean {
+    let changed = false;
+    for (const lane of this.lanes.values()) {
+      if (lane.status !== 'running') continue;
+      lane.status = 'stopped'; lane.endedAt = now; lane.callStartedAt = undefined; changed = true;
+    }
+    if (changed) this.syncFinalLanes();
+    return changed;
+  }
+
+  /** The lane's known ids (the caller tells a lane's tool_result from any other). */
+  hasLane(id: string): boolean {
+    return this.lanes.has(id);
+  }
+
+  /** A frozen final keeps its lanes current (a backgrounded agent outlives the result). */
+  private syncFinalLanes(): void {
+    if (this.finalSnapshot) this.finalSnapshot = { ...this.finalSnapshot, ...this.lanesField() };
   }
 
   /**
@@ -242,6 +387,12 @@ export class TurnSpeedMeter {
       // Its token count only arrives with message_delta; an interrupted message
       // never gets one, so the window closes token-less and marks partial.
       this.closeOpen(now);
+    }
+    if (result.interrupted) {
+      // The turn died or was stopped: an agent still mid-call went with it.
+      for (const lane of this.lanes.values()) {
+        if (lane.status === 'running') { lane.status = 'stopped'; lane.endedAt = now; lane.callStartedAt = undefined; }
+      }
     }
     // Strip the live cost pair: the CLI's own increment below is not an estimate,
     // and spreading `live` first would carry its costEstimated flag along.

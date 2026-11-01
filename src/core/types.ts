@@ -2722,6 +2722,52 @@ export interface SessionTurnSpeed {
   partial?: boolean;
   /** Epoch ms when the final snapshot was taken. */
   endedAt?: number;
+  /** The subagents (Claude Code's Agent tool) that worked in this turn, one
+   *  entry per Agent call, in start order. See SessionTurnSpeedLane for what
+   *  can and cannot be measured for one. Absent when the turn ran none. */
+  lanes?: SessionTurnSpeedLane[];
+}
+
+/**
+ * One subagent's part of a turn. The CLI streams no partial events for a
+ * subagent: its lane (`parent_tool_use_id`) carries whole `assistant` messages
+ * as they finish and the `user` tool results it is given, so what Walnut can
+ * clock is each model call from the moment its input was complete (the lane's
+ * previous tool result, or the Agent call itself) to the moment its message
+ * arrived. That window includes the model's thinking, like the main lane's
+ * message_start → message_stop, and excludes the subagent's own tool runs.
+ * The CLI reports no output count for an agent: the lane's lines carry the
+ * API's opening placeholder (an 8,000-character message reads "7 tokens"), and
+ * the Agent result's `usage` is its last call's, placeholder included (a real
+ * agent read "3 tokens" there, 2026-11-01). So an agent's tokens are always a
+ * character estimate ("~"): its lane messages plus its final answer, which
+ * arrives only as the Agent call's result, never as a lane line.
+ */
+export interface SessionTurnSpeedLane {
+  /** The Agent tool_use id (the lane key in the stream). */
+  id: string;
+  /** The model that answered in this lane, from its first message. */
+  model?: string;
+  /** The Agent's subagent_type (or description) for a row before its first message. */
+  label?: string;
+  /** Epoch ms when the Agent call started (its tool_use, or task_started). */
+  startedAt: number;
+  /** Agent start → its first message, ms. null until seen. */
+  firstReplyMs: number | null;
+  /** Summed model-call windows of finished messages, ms. */
+  generationMs: number;
+  /** Messages the lane produced, its final answer (the Agent result) included. */
+  messages: number;
+  /** Characters ÷ 4 of the lane's messages (text, thinking, tool input) and
+   *  of its final answer. The only token figure an agent has (see above). */
+  estimatedTokens: number;
+  /** A model call is in flight: its input was complete at `callStartedAt`. */
+  callStartedAt?: number;
+  status: 'running' | 'done' | 'failed' | 'stopped';
+  /** Epoch ms when the agent ended (its result or terminal notification). */
+  endedAt?: number;
+  /** The CLI's own wall time for the agent, when its result reported one. */
+  durationMs?: number;
 }
 
 /** Task.engine_switch: one switch of the task's engine, as the user (or an agent) asked for it. */

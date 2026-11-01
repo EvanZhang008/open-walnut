@@ -1632,6 +1632,11 @@ if (outputFormat === 'stream-json') {
     //     "stream-partial-signature"      → signature_delta (must NOT reach UI)
     //     "stream-partial-speed"          → two messages with per-message usage and a
     //                                       tool gap between them (speed readout)
+    //     "stream-partial-speed-agent"    → the same turn, but the tool is an Agent whose
+    //                                       lane (parent_tool_use_id) answers on another
+    //                                       model, as the real CLI writes it: whole
+    //                                       assistant/user lines, no stream_event, and
+    //                                       the Agent's tool_use_result with its counts
     //     "stream-partial-work"           → reasoning + a Bash call that runs, reasoning
     //                                       + a Read that runs, reasoning + the answer
     //
@@ -1729,11 +1734,16 @@ if (outputFormat === 'stream-json') {
         return;
       }
 
-      if (mode === 'speed') {
+      if (mode === 'speed' || mode === 'speed-agent') {
         (async () => {
           const gap = chunkDelayMs > 0 ? chunkDelayMs : 150;
           const pause = (ms = gap) => new Promise((r) => setTimeout(r, ms));
           const model = modelFlag || 'mock-model';
+          const withAgent = mode === 'speed-agent';
+          const toolId = withAgent ? 'toolu_mock_agent' : 'toolu_mock_speed';
+          const toolCall = withAgent
+            ? { type: 'tool_use', id: toolId, name: 'Agent', input: { subagent_type: 'general-purpose', description: 'Count the files', prompt: 'Count the files in cwd.', model: 'haiku' } }
+            : { type: 'tool_use', id: toolId, name: 'Bash', input: { command: 'true' } };
           const first = ['Measuring ', 'the first ', 'message of ', 'this turn. '];
           const second = ['Then a ', 'second message ', 'after the tool ', 'ran.'];
           const msg1 = `${msgId}_1`;
@@ -1749,7 +1759,7 @@ if (outputFormat === 'stream-json') {
           emitStream(wrap({ type: 'content_block_stop', index: 0 }));
           emitStream({
             type: 'assistant',
-            message: { id: msg1, role: 'assistant', model, content: [{ type: 'text', text: first.join('') }, { type: 'tool_use', id: 'toolu_mock_speed', name: 'Bash', input: { command: 'true' } }], stop_reason: 'tool_use', usage: { input_tokens: 12, output_tokens: 30 } },
+            message: { id: msg1, role: 'assistant', model, content: [{ type: 'text', text: first.join('') }, toolCall], stop_reason: 'tool_use', usage: { input_tokens: 12, output_tokens: 30 } },
             session_id: outputSessionId,
           });
           emitStream(wrap({ type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { input_tokens: 12, cache_read_input_tokens: 800, output_tokens: 30 } }));
@@ -1757,8 +1767,38 @@ if (outputFormat === 'stream-json') {
           // The tool runs: no model output for a while. Much longer than the two
           // generation windows (~10 pauses), so the gap's exclusion shows even
           // when a loaded machine stretches every timer.
-          await pause(gap * 20);
-          emitStream({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_mock_speed', content: 'ok' }] }, session_id: outputSessionId });
+          if (withAgent) {
+            // The subagent's lane, shaped as the real CLI writes it (2026-10-31
+            // corpus): task_started, then whole assistant lines (one per content
+            // block, the message_start placeholder usage on each), the tool result
+            // it gets, its answer, then the Agent's own tool_result in the main
+            // lane carrying the CLI's counts. Two model calls of ~5 gaps each with
+            // a ~10-gap tool run between them.
+            const lane = { parent_tool_use_id: toolId, session_id: outputSessionId };
+            const laneModel = 'claude-haiku-5-5';
+            emitStream({ type: 'system', subtype: 'task_started', task_id: 'mock-agent-task', tool_use_id: toolId, description: 'Count the files', subagent_type: 'general-purpose', task_type: 'local_agent', session_id: outputSessionId });
+            await pause(gap * 5);
+            const laneText1 = 'I will count the files with one command.';
+            emitStream({ type: 'assistant', ...lane, message: { id: 'msg_lane_1', role: 'assistant', model: laneModel, content: [{ type: 'text', text: laneText1 }], usage: { input_tokens: 400, output_tokens: 3 } } });
+            emitStream({ type: 'assistant', ...lane, message: { id: 'msg_lane_1', role: 'assistant', model: laneModel, content: [{ type: 'tool_use', id: 'toolu_lane_ls', name: 'Bash', input: { command: 'ls | wc -l' } }], usage: { input_tokens: 400, output_tokens: 3 } } });
+            await pause(gap * 10);
+            emitStream({ type: 'user', ...lane, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_lane_ls', content: '42' }] } });
+            await pause(gap * 5);
+            const laneText2 = 'There are 42 files in the working directory, counted with ls piped into wc.';
+            emitStream({ type: 'assistant', ...lane, message: { id: 'msg_lane_2', role: 'assistant', model: laneModel, content: [{ type: 'text', text: laneText2 }], usage: { input_tokens: 450, output_tokens: 2 } } });
+            // The real order: the terminal notification lands BEFORE the Agent's
+            // tool_result, whose `usage` is the agent's last call (a placeholder
+            // output count, not a total) and whose content is the agent's answer.
+            emitStream({ type: 'system', subtype: 'task_notification', task_id: 'mock-agent-task', tool_use_id: toolId, status: 'completed', summary: 'Count the files', session_id: outputSessionId });
+            emitStream({
+              type: 'user', session_id: outputSessionId,
+              message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolId, content: laneText2 }] },
+              tool_use_result: { agentId: 'mock-agent', status: 'completed', resolvedModel: 'global.anthropic.claude-haiku-5-5', totalDurationMs: gap * 20, totalToolUseCount: 1, totalTokens: 900, usage: { input_tokens: 850, output_tokens: 3 } },
+            });
+          } else {
+            await pause(gap * 20);
+            emitStream({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolId, content: 'ok' }] }, session_id: outputSessionId });
+          }
           // Message 2: the answer.
           emitStream(wrap({ type: 'message_start', message: { id: msg2, role: 'assistant', content: [], model, usage: { input_tokens: 14, cache_read_input_tokens: 812, cache_creation_input_tokens: 0, output_tokens: 1 } } }));
           await pause();

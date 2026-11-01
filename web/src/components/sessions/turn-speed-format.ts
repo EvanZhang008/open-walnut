@@ -16,7 +16,7 @@
  *   - the total is the CLI's turn wall time once final; before that it is the
  *     time since the turn's start on this browser's clock.
  */
-import type { SessionTurnSpeed } from '@open-walnut/core';
+import type { SessionTurnSpeed, SessionTurnSpeedLane } from '@open-walnut/core';
 
 /** Same heuristic the streaming block's progress number uses. */
 const CHARS_PER_TOKEN = 4;
@@ -126,4 +126,86 @@ export function computeReadout(speed: SessionTurnSpeed, now: number): SpeedReado
     interrupted: !!speed.interrupted,
     partial: !!speed.partial,
   };
+}
+
+/**
+ * One row of the readout for the subagents of a turn that ran on one model
+ * (the user compares models, so agents on the same model share a row). The
+ * slots mirror the main row's, and mean the same thing where they can:
+ *   - tokens: always an estimate ("~"), characters ÷ 4 of the agent's
+ *     messages and its final answer: the CLI reports no output count for an
+ *     agent (its lane lines and its result carry placeholders);
+ *   - first: the Agent call to its first message (not its first token: a
+ *     subagent does not stream), the earliest of the row's agents;
+ *   - tok/s: tokens over the summed model-call windows (the lane's last input
+ *     to its message's arrival; thinking included, the agent's tool runs
+ *     excluded), "~" while the tokens are;
+ *   - time: the first start to the last end (or now while one runs).
+ */
+export interface LaneReadout {
+  /** Row key: the model id, or the lane id when the model is not known yet. */
+  key: string;
+  model: string | undefined;
+  /** Agent subagent_type / description of a row whose model is not known yet. */
+  label: string | undefined;
+  /** Agents on this row. */
+  count: number;
+  tokens: string;
+  tokensEstimated: boolean;
+  first: string | null;
+  firstPending: boolean;
+  tps: string | null;
+  tpsEstimated: boolean;
+  duration: string | null;
+  /** 'running' while any agent of the row still works. */
+  status: 'running' | 'done' | 'failed' | 'stopped';
+}
+
+export function computeLaneRows(lanes: SessionTurnSpeedLane[] | undefined, now: number): LaneReadout[] {
+  if (!lanes || lanes.length === 0) return [];
+  const groups = new Map<string, SessionTurnSpeedLane[]>();
+  for (const lane of lanes) {
+    const key = lane.model ?? `lane:${lane.id}`;
+    const g = groups.get(key);
+    if (g) g.push(lane); else groups.set(key, [lane]);
+  }
+  const rows: LaneReadout[] = [];
+  for (const [key, group] of groups) {
+    const running = group.some((l) => l.status === 'running');
+    const total = group.reduce((n, l) => n + l.estimatedTokens, 0);
+    const tokensEstimated = true;
+    const tokens = `~${formatTokens(total)} tok`;
+
+    const firsts = group.map((l) => l.firstReplyMs).filter((v): v is number => v !== null);
+    let first: string | null = null;
+    let firstPending = false;
+    if (firsts.length > 0) first = formatSeconds(Math.min(...firsts));
+    else if (running) {
+      const earliest = Math.min(...group.map((l) => l.startedAt));
+      first = `${formatSeconds(now - earliest)}…`;
+      firstPending = true;
+    }
+
+    const generationMs = group.reduce((n, l) => n + l.generationMs, 0);
+    let tps: string | null = null;
+    let tpsEstimated = false;
+    if (total >= MIN_ESTIMATE_TOKENS && generationMs >= MIN_RATE_WINDOW_MS) {
+      tps = `${tokensEstimated ? '~' : ''}${Math.round(total / (generationMs / 1000))} tok/s`;
+      tpsEstimated = tokensEstimated;
+    }
+
+    const start = Math.min(...group.map((l) => l.startedAt));
+    const end = running ? now : Math.max(...group.map((l) => l.endedAt ?? l.startedAt));
+    const duration = end > start ? formatSeconds(end - start) : null;
+
+    const status: LaneReadout['status'] = running ? 'running'
+      : group.some((l) => l.status === 'failed') ? 'failed'
+      : group.some((l) => l.status === 'stopped') ? 'stopped'
+      : 'done';
+    rows.push({
+      key, model: group[0]!.model, label: group.find((l) => l.label)?.label, count: group.length,
+      tokens, tokensEstimated, first, firstPending, tps, tpsEstimated, duration, status,
+    });
+  }
+  return rows;
 }

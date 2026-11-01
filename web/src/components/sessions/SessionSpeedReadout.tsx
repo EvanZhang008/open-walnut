@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { SessionTurnSpeed } from '@open-walnut/core';
 import { turnSpeedStore, useTurnSpeed } from '@/stores/turn-speed-store';
 import { formatModelName } from '@/utils/model-name';
-import { computeReadout } from './turn-speed-format';
+import { computeReadout, computeLaneRows } from './turn-speed-format';
 import '@/styles/session-speed.css';
 
 /**
@@ -21,6 +21,12 @@ import '@/styles/session-speed.css';
  *
  * Every number is Walnut's own measurement or the CLI's own count; see
  * turn-speed-format.ts for what the "~" marks.
+ *
+ * Under the main row, one row per model the turn's subagents ran on (the
+ * user ran a Haiku agent to see whether it is faster; the row shows it next
+ * to the main model, 2026-11-01). A subagent does not stream, so its row's
+ * "first" is its first whole message and its tokens are always an estimate
+ * (the CLI reports none for an agent); see SessionTurnSpeedLane in core.
  */
 
 interface SessionSpeedReadoutProps {
@@ -73,10 +79,16 @@ export function SessionSpeedReadout({ sessionId, session, placement = 'picker', 
   const receivedAt = turnSpeedStore.receivedAt(sessionId);
   const stale = liveFrame && GONE_STATUSES.has(session?.process_status ?? '')
     && receivedAt > 0 && Date.now() - receivedAt > STALE_LIVE_MS;
-  const now = useTicker(liveFrame && !stale);
+  // A subagent may still run after the turn's final (a backgrounded Agent): its
+  // row keeps ticking as long as the server keeps sending the final with it.
+  const laneRunning = !!resolved?.lanes?.some((l) => l.status === 'running') && !stale
+    && !GONE_STATUSES.has(session?.process_status ?? '');
+  const now = useTicker((liveFrame && !stale) || laneRunning);
   if (!resolved) return null;
   const speed: SessionTurnSpeed = stale ? { ...resolved, final: true, interrupted: true, endedAt: receivedAt } : resolved;
-  const r = computeReadout(speed, now || Date.now());
+  const clock = now || Date.now();
+  const r = computeReadout(speed, clock);
+  const lanes = computeLaneRows(speed.lanes, clock);
   const model = modelLabel?.(speed.model) || formatModelName(speed.model ?? session?.model) || 'Model';
   const title = [
     'Measured by Walnut from the CLI stream.',
@@ -93,9 +105,13 @@ export function SessionSpeedReadout({ sessionId, session, placement = 'picker', 
       : '',
   ].filter(Boolean).join(' ');
 
-  return (
+  const laneTitle = 'Subagents of this turn, one row per model. A subagent does not stream: first is its first whole message, '
+    + 'tok/s is its tokens over the time each of its model calls took (its own tool runs excluded). Its tokens are always '
+    + 'an estimate (characters ÷ 4 of its messages and final answer): the CLI reports no output count for an agent.';
+
+  return (<>
     <div
-      className={`session-speed-readout session-speed-readout-${placement}${r.live ? ' is-live' : ''}${r.interrupted ? ' is-interrupted' : ''}`}
+      className={`session-speed-readout session-speed-readout-${placement}${r.live ? ' is-live' : ''}${r.interrupted ? ' is-interrupted' : ''}${lanes.length ? ' has-lanes' : ''}`}
       data-testid="session-speed-readout"
       data-live={r.live ? 'true' : 'false'}
       title={title}
@@ -120,5 +136,34 @@ export function SessionSpeedReadout({ sessionId, session, placement = 'picker', 
       {r.interrupted && <span className="session-speed-stat session-speed-flag" data-testid="speed-flag">stopped</span>}
       {r.partial && !r.interrupted && <span className="session-speed-stat session-speed-flag" data-testid="speed-flag">partial</span>}
     </div>
-  );
+    {lanes.map((lane, i) => {
+      const name = (lane.model && (modelLabel?.(lane.model) || formatModelName(lane.model))) || lane.label || 'Agent';
+      const live = lane.status === 'running';
+      return (
+        <div
+          key={lane.key}
+          className={`session-speed-readout session-speed-readout-${placement} session-speed-lane${live ? ' is-live' : ''}${i === lanes.length - 1 ? ' is-last' : ''}`}
+          data-testid="speed-lane"
+          data-model={lane.model ?? ''}
+          data-live={live ? 'true' : 'false'}
+          title={laneTitle}
+          aria-label={`Subagent${lane.count > 1 ? 's' : ''} on ${name}: ${lane.tokens}${lane.first ? `, first message ${lane.first}` : ''}${lane.tps ? `, ${lane.tps}` : ''}${lane.duration ? `, ${lane.duration}` : ''}, ${lane.status}`}
+        >
+          <span className="session-speed-kicker">{lane.count > 1 ? `Agents ×${lane.count}` : 'Agent'}</span>
+          <span className="session-speed-model" data-testid="speed-lane-model">{name}</span>
+          <span className={`session-speed-stat${lane.tokensEstimated ? ' is-estimate' : ''}`} data-testid="speed-lane-tokens">{lane.tokens}</span>
+          {lane.first && (
+            <span className={`session-speed-stat${lane.firstPending ? ' is-pending' : ''}`} data-testid="speed-lane-first">
+              <span className="session-speed-label">first</span> {lane.first}
+            </span>
+          )}
+          {lane.tps && <span className={`session-speed-stat${lane.tpsEstimated ? ' is-estimate' : ''}`} data-testid="speed-lane-tps">{lane.tps}</span>}
+          {lane.duration && <span className="session-speed-stat" data-testid="speed-lane-duration">{lane.duration}</span>}
+          {lane.status !== 'done' && (
+            <span className={`session-speed-stat${live ? ' session-speed-label' : ' session-speed-flag'}`} data-testid="speed-lane-status">{lane.status}</span>
+          )}
+        </div>
+      );
+    })}
+  </>);
 }

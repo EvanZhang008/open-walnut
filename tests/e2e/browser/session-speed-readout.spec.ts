@@ -373,6 +373,54 @@ test('reload keeps the last turn\'s readout', async ({ page, request }) => {
   await clipShot(page, 'after-reload')
 })
 
+test('a subagent on another model gets its own row under the main one, live then final', async ({ page, request }) => {
+  const TASK = await newTask(request, 'Speed readout agent lane')
+  await page.goto('/')
+  await page.waitForLoadState('domcontentloaded')
+  const before = await sessionIdsFor(request, TASK)
+  // The agent variant of the speed turn: the tool is an Agent whose lane
+  // answers as haiku (mock-claude.mjs `speed-agent`), with 300ms pauses so the
+  // lane is still running when the picker opens.
+  await startRealSession(page, 'chunk-delay:300 stream-partial-speed-agent', TASK, 'claude-opus-5-5')
+  const sid = await waitForNewSessionId(request, TASK, before)
+
+  await seedColumns(page, [sid])
+  await page.goto('/')
+  const col = columnFor(page, sid)
+  await expect(col).toHaveCount(1, { timeout: 30_000 })
+  await openPicker(page, col)
+  const lane = picker(page).getByTestId('speed-lane')
+  // The lane row appears with the Agent call, under the main row, named by its model.
+  await expect(lane).toHaveCount(1, { timeout: 30_000 })
+  await expect(lane.getByTestId('speed-lane-model')).toHaveText('Haiku 5.5', { timeout: 30_000 })
+  const mainBox = await readoutIn(page).boundingBox()
+  const laneBox = await lane.boundingBox()
+  expect(laneBox!.y).toBeGreaterThan(mainBox!.y)
+  // Live: an estimate (~) and "running"; the main row still names the main model.
+  await expect(lane.getByTestId('speed-lane-tokens')).toHaveText(/^~/)
+  await expect(lane.getByTestId('speed-lane-status')).toHaveText('running')
+  await expect(readoutIn(page).getByTestId('speed-model')).toHaveText('Opus 5.5')
+  await clipShot(page, 'agent-lane-live')
+
+  // Final: still an estimate (the CLI counts no agent), no status flag (done), a rate.
+  await expect(readoutIn(page)).toHaveAttribute('data-live', 'false', { timeout: 60_000 })
+  await expect(lane.getByTestId('speed-lane-tokens')).toHaveText(/^~\d+ tok$/)
+  await expect(lane.getByTestId('speed-lane-status')).toHaveCount(0)
+  await expect(lane.getByTestId('speed-lane-tps')).toHaveText(/^~\d+ tok\/s$/)
+  await expect(lane.getByTestId('speed-lane-first')).toContainText('first')
+  await expect(readoutIn(page).getByTestId('speed-tokens')).toHaveText('50 tok')
+  await clipShot(page, 'agent-lane-final')
+  await closePicker(page)
+
+  // Cold load: the record carries the lane.
+  await page.reload()
+  const colAfter = columnFor(page, sid)
+  await expect(colAfter.locator('.composer-model-pill').first()).toBeVisible({ timeout: 30_000 })
+  await openPicker(page, colAfter)
+  await expect(picker(page).getByTestId('speed-lane').getByTestId('speed-lane-tokens')).toHaveText(/^~\d+ tok$/, { timeout: 30_000 })
+  await expect(picker(page).getByTestId('speed-lane').getByTestId('speed-lane-model')).toHaveText('Haiku 5.5')
+})
+
 test('a session with no measured turn shows no readout', async ({ page, request }) => {
   const SID = 'pw-normal-session'
   // The premise: this seeded session has never run a turn this server measured.

@@ -964,6 +964,122 @@ export class ClaudeCodeSession {
     })
   }
 
+  /**
+   * Route a subagent lane's edges into the speed meter. The CLI streams no
+   * partial events for a subagent (verified across the local stream corpus,
+   * 2026-10-31: 0 lane stream_events against thousands of lane `assistant`
+   * lines), so the readout clocks each of its model calls from the lane's last
+   * input (a tool result, or the Agent call) to the arrival of its message.
+   * Edges, all on this process's clock like the main meter:
+   *   - system task_started (task_type local_agent): the lane opens;
+   *   - main-lane assistant tool_use named Agent/Task: the lane opens (the
+   *     earlier of the two wins; both are idempotent);
+   *   - assistant with parent_tool_use_id: a message (or one block of it) landed;
+   *   - user with parent_tool_use_id: the agent got a tool result, next call starts;
+   *   - main-lane user tool_result for a lane id: the agent ended; its content is
+   *     the agent's final answer (its last model call, never a lane line), and
+   *     `tool_use_result` names its wall time and resolved model;
+   *   - system task_notification for a lane's tool_use_id: a backgrounded agent
+   *     ended (no counts; the estimate stays).
+   * Replays are excluded like the main meter's; a lane the meter already holds
+   * keeps updating after the turn's result (a backgrounded agent outlives it).
+   */
+  private feedTurnSpeedLanes(event: Record<string, unknown>): void {
+    const type = event.type
+    if (type !== 'assistant' && type !== 'user' && type !== 'system') return
+    const replayed = this._isReplayedByOffset()
+    if (replayed === true) return
+    const now = Date.now()
+    const parent = typeof event.parent_tool_use_id === 'string' && event.parent_tool_use_id ? event.parent_tool_use_id : undefined
+    // After the result, only a lane already under way is still this turn's.
+    const lateTurn = replayed === undefined && this.resultEmitted && !this._speed.active
+    let changed = false
+    let ended = false
+    if (type === 'system') {
+      const sys = event as { subtype?: unknown; tool_use_id?: unknown; task_type?: unknown; subagent_type?: unknown; description?: unknown; status?: unknown }
+      const id = typeof sys.tool_use_id === 'string' && sys.tool_use_id ? sys.tool_use_id : undefined
+      if (!id) return
+      const isAgent = sys.task_type === 'local_agent' || typeof sys.subagent_type === 'string'
+      if (sys.subtype === 'task_started' && isAgent) {
+        if (lateTurn && !this._speed.hasLane(id)) return
+        const label = typeof sys.subagent_type === 'string' && sys.subagent_type ? sys.subagent_type
+          : (typeof sys.description === 'string' ? sys.description : undefined)
+        changed = this._speed.laneStart(now, id, { label })
+      } else if (sys.subtype === 'task_notification' && this._speed.hasLane(id)) {
+        const status = typeof sys.status === 'string' ? sys.status : 'completed'
+        if (ClaudeCodeSession._BG_TERMINAL_STATUSES.has(status)) {
+          changed = this._speed.laneEnd(now, id, { status: status === 'completed' ? 'done' : status === 'failed' ? 'failed' : 'stopped' })
+          ended = changed
+        }
+      }
+    } else {
+      const msg = event as unknown as StreamMessageEvent & { tool_use_result?: Record<string, unknown> }
+      const content = Array.isArray(msg.message?.content) ? msg.message.content : []
+      if (parent) {
+        if (lateTurn && !this._speed.hasLane(parent)) return
+        if (type === 'assistant') {
+          let chars = 0
+          for (const block of content) {
+            const b = block as { type?: string; text?: string; thinking?: string; input?: unknown }
+            if (b.type === 'text') chars += (b.text ?? '').length
+            else if (b.type === 'thinking') chars += (b.thinking ?? '').length
+            else if (b.type === 'tool_use') { try { chars += JSON.stringify(b.input ?? {}).length } catch { /* unserializable input: no estimate */ } }
+          }
+          changed = this._speed.laneAssistant(now, parent, msg.message?.id, msg.message?.model, chars)
+        } else if (content.some((b) => (b as { type?: string }).type === 'tool_result')) {
+          changed = this._speed.laneInput(now, parent)
+        }
+      } else if (type === 'assistant') {
+        if (lateTurn) return
+        for (const block of content) {
+          const b = block as { type?: string; id?: string; name?: string; input?: { subagent_type?: unknown; description?: unknown } }
+          if (b.type === 'tool_use' && b.id && (b.name === 'Agent' || b.name === 'Task')) {
+            const label = typeof b.input?.subagent_type === 'string' ? b.input.subagent_type
+              : (typeof b.input?.description === 'string' ? b.input.description : undefined)
+            if (this._speed.laneStart(now, b.id, { label })) changed = true
+          }
+        }
+      } else {
+        for (const block of content) {
+          const b = block as { type?: string; tool_use_id?: string; is_error?: boolean }
+          if (b.type !== 'tool_result' || !b.tool_use_id || !this._speed.hasLane(b.tool_use_id)) continue
+          const tur = msg.tool_use_result ?? {}
+          const status = tur.status === 'failed' || b.is_error === true ? 'failed'
+            : tur.status === 'stopped' || tur.status === 'cancelled' || tur.status === 'killed' ? 'stopped' : 'done'
+          // The agent's final answer rides only here (never as a lane line); its
+          // characters are the estimate's last part. The result's `usage` is the
+          // agent's LAST call with a placeholder output count, so it is not read.
+          const c = (b as { content?: unknown }).content
+          const answerChars = typeof c === 'string' ? c.length
+            : Array.isArray(c) ? c.reduce((n: number, part) => n + (typeof (part as { text?: unknown })?.text === 'string' ? ((part as { text: string }).text).length : 0), 0) : 0
+          const durationMs = typeof tur.totalDurationMs === 'number' ? tur.totalDurationMs : undefined
+          const model = typeof tur.resolvedModel === 'string' ? tur.resolvedModel : undefined
+          if (this._speed.laneEnd(now, b.tool_use_id, { status, answerChars: status === 'done' ? answerChars : 0, durationMs, model })) { changed = true; ended = true }
+        }
+      }
+    }
+    if (!changed) return
+    // A lane edge is rarer than a delta: emit at once, except a lane's message
+    // lines, which arrive in bursts (one per content block) and share the
+    // 400ms throttle with the main lane's deltas.
+    const burst = type === 'assistant' && !!parent
+    if (!burst || now - this._speedEmitAt >= 400) this.emitTurnSpeed(!this._speed.active)
+    if (ended && !this._speed.active) this.persistTurnSpeedFinal()
+  }
+
+  /** Write the frozen final (with its lanes as they stand now) onto the record. */
+  private persistTurnSpeedFinal(): void {
+    const sid = this.claudeSessionId
+    if (!sid) return
+    const speed = this._speed.snapshot(Date.now())
+    if (!speed.final) return
+    void import('../core/session-tracker.js').then(({ updateSessionRecord }) =>
+      updateSessionRecord(sid, { lastTurnSpeed: speed }),
+    ).catch((err) => log.session.warn('turn speed lane final not persisted', {
+      sessionId: sid, taskId: this.taskId, error: err instanceof Error ? err.message : String(err),
+    }))
+  }
+
   /** Route one stream_event into the speed meter and emit live readouts:
    *  at every message boundary, and at most every 400ms between them while a
    *  message streams (each delta bumps the interim character estimate). */
@@ -1049,7 +1165,15 @@ export class ClaudeCodeSession {
    *  to the caller for the SESSION_RESULT payload / usage ledger. Undefined when
    *  no turn was under way (a stray result on an idle meter). */
   private finalizeTurnSpeed(final: TurnSpeedFinal): SessionTurnSpeed | undefined {
-    if (!this._speed.active) return undefined
+    if (!this._speed.active) {
+      // The turn is already final; a death after it still ends any backgrounded
+      // agent the final shows as running, or the row would say so forever.
+      if (final.interrupted && this._speed.stopRunningLanes(Date.now())) {
+        this.emitTurnSpeed(true)
+        this.persistTurnSpeedFinal()
+      }
+      return undefined
+    }
     const speed = this._speed.finish(Date.now(), final)
     this.emitTurnSpeed(true)
     const sid = this.claudeSessionId
@@ -5633,6 +5757,16 @@ export class ClaudeCodeSession {
     if ((event.type === 'assistant' || event.type === 'stream_event')
       && !(event as { parent_tool_use_id?: string }).parent_tool_use_id
       && this._isReplayedByOffset() !== true) this.setForegroundActive(true)
+
+    // Subagent lanes of the speed readout (see feedTurnSpeedLanes). An
+    // observer like the main meter's tap in the stream_event case: whatever it
+    // throws must not cost the line its handling.
+    try { this.feedTurnSpeedLanes(event as unknown as Record<string, unknown>) } catch (err) {
+      log.session.warn('turn speed lane meter threw; line still handled', {
+        sessionId: this.claudeSessionId, taskId: this.taskId, type: event.type,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
 
     try {
       switch (event.type) {

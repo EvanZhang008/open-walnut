@@ -97,3 +97,23 @@
     animation: none;
   }
 }
+
+/* A subagent row sits right under the main row, a little inset, so the eye
+   reads it as part of the same turn: the main model first, then each model
+   its agents ran on. */
+.session-speed-readout.has-lanes {
+  margin-bottom: 2px;
+}
+
+.session-speed-lane {
+  margin-left: 12px;
+}
+
+.session-speed-readout-picker.session-speed-lane {
+  margin: 0 0 2px 12px;
+}
+
+/* The last agent row keeps the strip's spacing before whatever follows. */
+.session-speed-readout-picker.session-speed-lane.is-last {
+  margin-bottom: 8px;
+}
