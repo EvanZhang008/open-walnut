@@ -4,8 +4,8 @@
  * it into the app you came from, Cmd+C copies it.
  *
  * Three ways to answer, the first two switched with Cmd+T at any turn:
- *   - Quick: the model alone, about two seconds (POST /quick/ask).
- *   - Session: a normal Claude Code session in Walnut, an Ask Walnut chat with everything the
+ *   - Quick Answer: the model alone, about two seconds (POST /quick/ask).
+ *   - Claude Code: a normal Claude Code session in Walnut, an Ask Walnut chat with everything the
  *     user's Claude Code has (POST /quick/session); Cmd+O opens it in Walnut.
  *   - Main: Walnut's main agent (Ask Walnut's "Tell Main and wait").
  * A switch carries over the turns the other side has not seen, so the thread is never lost.
@@ -34,7 +34,7 @@ function failure(error: unknown): string {
   return /fetch failed|ECONNREFUSED|connect/i.test(message) ? NOT_RUNNING : message;
 }
 
-const TITLE: Record<Mode, string> = { quick: "Walnut AI · Quick", session: "Walnut AI · Session", main: "Main" };
+const TITLE: Record<Mode, string> = { quick: "Quick Answer", session: "Claude Code", main: "Main" };
 
 export function Conversation(props: { mode: Mode; first?: string; selection?: string; app?: string }) {
   const [mode, setMode] = useState<Mode>(props.mode);
@@ -137,7 +137,7 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
   const placeholder = turns.length === 0
     ? props.selection
       ? "What should Walnut do with the selected text?"
-      : mode === "main" ? "Tell Main…" : mode === "session" ? "Ask anything, in a Claude Code session…" : "Ask anything…"
+      : mode === "main" ? "Tell Main…" : mode === "session" ? "Ask Claude Code anything…" : "Ask anything…"
     : "Ask a follow-up, then Enter…";
 
   const detailFor = (t: Turn) => {
@@ -153,7 +153,7 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
 
   const switchMode = mode !== "main" ? (
     <Action
-      title={mode === "quick" ? "Switch to Session (Claude Code)" : "Switch to Quick (Model Only)"}
+      title={mode === "quick" ? "Hand to Claude Code" : "Switch to Quick Answer"}
       icon={mode === "quick" ? Icon.Terminal : Icon.Bolt}
       shortcut={{ modifiers: ["cmd"], key: "t" }}
       onAction={() => setMode((m) => (m === "quick" ? "session" : "quick"))}
@@ -161,7 +161,7 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
   ) : null;
   const openInWalnut = taskId ? (
     <Action.Open
-      title={mode === "main" ? "Open Main in Walnut" : "Open the Session in Walnut"}
+      title={mode === "main" ? "Open Main in Walnut" : "Open This Chat in Walnut"}
       target={openTaskLink(taskId)}
       icon={Icon.AppWindow}
       shortcut={{ modifiers: ["cmd"], key: "o" }}

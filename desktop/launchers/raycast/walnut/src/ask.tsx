@@ -113,7 +113,7 @@ export default function Command() {
                   target={<Conversation mode="quick" first={q} />}
                 />
                 <Action.Push
-                  title="Ask in a Session"
+                  title="Ask Claude Code"
                   icon={Icon.Terminal}
                   shortcut={{ modifiers: ["cmd", "opt"], key: "return" }}
                   target={<Conversation mode="session" first={q} />}
@@ -143,11 +143,11 @@ export default function Command() {
             id="session"
             icon={Icon.Terminal}
             title={q}
-            subtitle="Session: a Claude Code session in Walnut"
+            subtitle="A Claude Code session in Walnut"
             accessories={[{ text: "⌘⌥↵" }]}
             actions={
               <ActionPanel>
-                <Action.Push title="Ask in a Session" icon={Icon.Terminal} target={<Conversation mode="session" first={q} />} />
+                <Action.Push title="Ask Claude Code" icon={Icon.Terminal} target={<Conversation mode="session" first={q} />} />
               </ActionPanel>
             }
           />

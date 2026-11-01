@@ -46,9 +46,10 @@ npm run dev     # loads it into Raycast
 Raycast is the main launcher; Alfred and Spotlight are the alternatives. Commands: **Ask Walnut**
 (type, ↵ to tell Main and close, ⌘↵ for a quick answer, ⌘⇧↵ to tell Main and wait for its reply,
 ⌥↵ to tell Main with the copied screenshot; tasks and notes listed below, ↵ opens one, ⌘↵ on a task
-messages it, ⌘⌥↵ asks in a session), **Ask Walnut About Selection**, and **Walnut AI** and
-**Walnut AI Session**, a chat with follow-ups that starts quick or as a session. To type anything in
-Raycast's root search and send it to Walnut AI, add the two as fallback commands (Raycast Settings,
+messages it, ⌘⌥↵ asks Claude Code), **Ask Walnut About Selection**, **Quick Answer** (the model
+alone, a couple of seconds) and **Ask Claude Code** (a normal Claude Code session in Walnut with your
+skills and tools), one chat with follow-ups where ⌘T moves between the two. To type anything in
+Raycast's root search and send it to Walnut, add the two as fallback commands (Raycast Settings,
 Extensions, Walnut, or "Manage Fallback Commands" in the root search's action panel). The port is a
 preference of the extension.
 

@@ -26,16 +26,16 @@
     },
     {
       "name": "walnut-ai",
-      "title": "Walnut AI",
+      "title": "Quick Answer",
       "subtitle": "Walnut",
-      "description": "A quick answer from Walnut's AI with follow-ups; Cmd+T switches to a Claude Code session in Walnut. Works as a fallback command: type anything in Raycast, then pick Walnut AI.",
+      "description": "A fast answer from the model alone, in a couple of seconds, with follow-ups; Cmd+T hands the chat to Claude Code. Works as a fallback command: type anything in Raycast, then pick Quick Answer.",
       "mode": "view"
     },
     {
       "name": "walnut-ai-session",
-      "title": "Walnut AI Session",
+      "title": "Ask Claude Code",
       "subtitle": "Walnut",
-      "description": "A normal Claude Code session in Walnut (an Ask Walnut chat) with follow-ups, its reply shown here. Works as a fallback command.",
+      "description": "A normal Claude Code session in Walnut with your skills and tools (web search, files, your tasks), filed as an Ask Walnut chat; its reply shows here, with follow-ups. Works as a fallback command.",
       "mode": "view"
     }
   ],
