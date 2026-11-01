@@ -15,6 +15,7 @@ import { useMemo, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { userStateOf } from '@open-walnut/org-tree';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
+import { AnswerBox } from '@/components/common/AnswerBox';
 import { timeAgo } from '@/utils/time';
 import type { OrgThread, OrgThreadMessage, OrgThreadState } from '@/api/org-threads';
 import type { OrgThreadsState } from './useOrgThreads';
@@ -88,13 +89,14 @@ function FollowUp({ onSend, onDone }: { onSend: (text: string) => Promise<boolea
   };
   return (
     <div className="org-thread-follow" data-testid="org-thread-follow">
-      <textarea
+      {/* Walnut's answer box (common/AnswerBox.tsx): grows with the words, no grip, the mic inside. */}
+      <AnswerBox
         autoFocus
         value={text}
-        rows={2}
+        minRows={2}
         placeholder="Follow up on this request"
-        data-testid="org-thread-follow-input"
-        onChange={(e) => setText(e.target.value)}
+        testId="org-thread-follow-input"
+        onChange={setText}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void go(); }
           if (e.key === 'Escape') onDone();

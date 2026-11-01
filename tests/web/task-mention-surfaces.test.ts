@@ -49,6 +49,7 @@ const CHAT: Record<string, string> = {
   'web/src/components/context/ContextInspectorPanel.tsx': 'the context inspector (data: ids keep their text, still linked)',
   'web/src/components/inbox/LetterBody.tsx': 'a letter in the inbox',
   'web/src/components/org/OrgBrief.tsx': 'the Brief of Main or a lead',
+  'web/src/components/org/OrgThreads.tsx': "the user's own requests to Main or a lead, and their answers",
   'web/src/components/sessions/InjectedBannerRow.tsx': 'an injected banner in a session',
   'web/src/components/sessions/SessionMessage.tsx': 'the session timeline: the session columns, Ask here, the Org chat',
   'web/src/components/sessions/SessionOutboundCard.tsx': 'a message a session sent to another task',

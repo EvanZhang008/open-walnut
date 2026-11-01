@@ -57,6 +57,9 @@ describe('the fallback', () => {
     expect(sentToTasks({ name: 'org_send', input: { to: 'mvp0vp33-3a1b', text: 'hi' } })).toEqual(['mvp0vp33-3a1b'])
     expect(sentToTasks({ name: 'org_send', input: { to: 'Inbox', text: 'hi' } })).toEqual([])
     expect(sentToTasks({ name: 'Bash', input: { command: `walnut tools call org_send '{"to":"Garden Team","text":"hi"}'` } })).toEqual([])
+    // A task the turn made: its id from task_create's answer.
+    expect(sentToTasks({ name: 'Bash', input: { command: `walnut tools call task_create '{"title":"Water the beds"}'` }, result: '{\n  "task": {\n    "id": "mvq1abcd-12ef",\n    "title": "Water the beds"' })).toEqual(['mvq1abcd-12ef'])
+    expect(sentToTasks({ name: 'Bash', input: { command: `walnut tools call task_create '{"title":"x"}'` }, result: 'error: 409' })).toEqual([])
     const rows = [
       { role: 'user' as const, text: ask },
       { role: 'assistant' as const, text: '', tools: [send] },

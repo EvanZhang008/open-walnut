@@ -92,7 +92,7 @@ export interface AboutRow {
   role: 'user' | 'assistant' | 'system';
   text: string;
   injected?: boolean;
-  tools?: { name: string; input?: Record<string, unknown> }[];
+  tools?: { name: string; input?: Record<string, unknown>; result?: string }[];
 }
 
 /** The task a delivered message came from: its envelope's `from-task`. */
@@ -102,12 +102,19 @@ export function envelopeFromTask(text: string): string | null {
 }
 
 const SENDS = /\b(task_send|org_send)\b/;
+const CREATES = /\btask_create\b/;
 /** A task id's shape (`mvm0n3bu-6910`, or a synced task's UUID): org_send's `to` is usually a project or VP name. */
 const TASK_ID_SHAPE = /^(?:[0-9a-z]{6,12}-[0-9a-z]{3,8}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
-/** The tasks a tool call sent to: a `walnut tools call task_send '{"task":"…"}'`, or org_send's `to` when it is a task id. */
-export function sentToTasks(tool: { name: string; input?: Record<string, unknown> }): string[] {
+/** The tasks a tool call sent to: a `walnut tools call task_send '{"task":"…"}'`, or org_send's `to` when it is a task id;
+ *  and the task a `task_create` made, read off its answer (its first `"id"`). */
+export function sentToTasks(tool: { name: string; input?: Record<string, unknown>; result?: string }): string[] {
   const input = tool.input ?? {};
+  const command0 = typeof input.command === 'string' ? input.command : '';
+  if (CREATES.test(tool.name) || CREATES.test(command0)) {
+    const made = /"id"\s*:\s*"([^"]+)"/.exec(tool.result ?? '')?.[1];
+    return made && TASK_ID_SHAPE.test(made) ? [made] : [];
+  }
   const pick = (key: string, value: unknown): string[] => {
     if (typeof value !== 'string') return [];
     const v = value.trim();
