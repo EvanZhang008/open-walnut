@@ -64,6 +64,10 @@ export function tasksShallowEqual(a: Task, b: Task): boolean {
   const sw = (t: Task) => (t.engine_switch
     ? `${t.engine_switch.id}|${t.engine_switch.state}|${t.engine_switch.session_id ?? ''}|${t.engine_switch.error ?? ''}|${t.engine_switch.message ? 1 : 0}` : '');
   if (sw(a) !== sw(b)) return false;
+  // Why a task in a project that syncs is kept local (Task.sync_hold): the gate's verdict lands
+  // after the create, and the row and its Sync menu draw it.
+  if ((a.sync_hold?.state ?? null) !== (b.sync_hold?.state ?? null) || a.sync_hold?.at !== b.sync_hold?.at
+    || a.sync_hold?.outside?.state !== b.sync_hold?.outside?.state) return false;
   // Main's or a lead's Brief (Org page): its rewrite leaves updated_at alone.
   if (a.brief?.at !== b.brief?.at || a.brief?.text !== b.brief?.text) return false;
   // Its refresh turn asked (sessions/brief-refresh.ts): the Brief reads "Updating" until it lands.

@@ -47,6 +47,7 @@ export const TASK_META_PARITY: Readonly<Record<string, ParityEntry>> = {
   due_date: { op: 'task_create.due_date' },
   start_date: { op: 'task_create.start_date' },
   end_date: { op: 'task_create.end_date' },
+  sync: { op: 'task_create.local', note: 'the draft\'s Local / <service> chip; local:true is its Local' },
   unread: { none: 'A person can only clear an unread flag the draft\'s AI set; a new task an agent files is read.' },
 }
 

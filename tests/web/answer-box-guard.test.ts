@@ -57,6 +57,7 @@ const BOXES: Record<string, Kind> = {
   'components/settings/CopyDiagnostics.tsx': form('diagnostics text to copy'),
   'components/settings/sections/MessageHintsGroup.tsx': form("a hint's text"),
   'components/settings/sections/PluginConfigCards.tsx': form("a plugin's settings"),
+  'components/settings/sections/PrivateTasksGroup.tsx': form('the private words list, one per line'),
   'components/settings/sections/RemoteHostsSection.tsx': form("a host's setup script"),
   'components/settings/sections/cloud/CloudManualPaste.tsx': form('a setup script to paste'),
   'components/tasks/PhoneTaskDetailHead.tsx': form("a task's title"),

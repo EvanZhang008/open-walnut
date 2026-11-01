@@ -110,6 +110,7 @@ export const CONFIG_COPY_DROPPED: Readonly<Record<string, string>> = Object.free
   expose: 'the tunnel settings of the Mac',
   cloud: 'companion credentials',
   sync: 'git sync remote and credentials',
+  private_tasks: 'the user\'s private words; the gate that reads them runs on the Mac, beside the sync plugins, and a replica\'s new tasks pass it there',
 })
 
 /**
