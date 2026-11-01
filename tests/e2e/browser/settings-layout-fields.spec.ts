@@ -102,7 +102,10 @@ test('F27 N03 F31 F33 F36: number fields end on the content edge, no-op bulk lin
           const edge = row.getBoundingClientRect().right - pad
           return { inset: Math.round(edge - wrap.getBoundingClientRect().right), a: getComputedStyle(i).appearance }
         }))
-    expect(rights.length, id).toBeGreaterThan(1)
+    // At least one field per pane, so the audit is never vacuous. No fixed count:
+    // Advanced holds only the SDK Port where Keep Awake is unsupported (any
+    // non-Mac server) since Git versioning's two fields were removed.
+    expect(rights.length, id).toBeGreaterThan(0)
     expect(new Set(rights.map((x) => x.inset)), `${id} ${JSON.stringify(rights)}`).toEqual(new Set([0]))
     for (const x of rights) expect(x.a).toBe('textfield')
   }
