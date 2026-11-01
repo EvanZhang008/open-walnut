@@ -223,7 +223,10 @@ function onWrite(key: string, value: string | null): void {
   if (value !== null && value.length > MAX_SYNCED_DRAFT_LEN) return;
   if (value !== null && hasCredential(value)) { foldPending(pending, key, { v: null, ts }); schedule(FLUSH_DEBOUNCE_MS); return; }
   foldPending(pending, key, { v: value, ts });
-  schedule(FLUSH_DEBOUNCE_MS);
+  // A clear (sent, or the box emptied) is one event, not a run of keystrokes: it goes
+  // up at once, so a window closed right after it (no pagehide under automation, a
+  // crash) leaves no stale words on the server for the next browser to bring back.
+  schedule(value === null ? 0 : FLUSH_DEBOUNCE_MS);
 }
 
 function flushKeepalive(): void {

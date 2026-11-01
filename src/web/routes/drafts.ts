@@ -26,6 +26,7 @@ import { WALNUT_HOME } from '../../constants.js'
 import { readJsonFile, writeJsonFile } from '../../utils/fs.js'
 import { withFileLock } from '../../utils/file-lock.js'
 import { log } from '../../logging/index.js'
+import { testRunPrefsRead, testRunPrefsWrite } from '../../core/test-run-prefs.js'
 
 export const draftsRouter = Router()
 
@@ -133,11 +134,21 @@ export function mirrorServes(req: Pick<Request, 'headers'>, mode = process.env.W
   return mode !== 'opt-in' || req.headers[DRAFTS_MIRROR_HEADER] === '1'
 }
 
+/** A test run's own writes (test-run-prefs.ts), over the user's drafts it reads: the newer
+ *  write of a key wins, so the user's later words are not hidden by the run's older ones. */
+function withTestRunWrites(drafts: DraftMap): DraftMap {
+  const own = testRunPrefsRead<DraftMap>('drafts')
+  if (!own) return drafts
+  const out = { ...drafts }
+  for (const [key, e] of Object.entries(own)) if (!out[key] || e.ts >= out[key].ts) out[key] = e
+  return out
+}
+
 // GET /api/drafts → { drafts: Record<key, { v: string|null, ts }> }
 draftsRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!mirrorServes(req)) { res.json({ drafts: {} }); return }
-    res.json({ drafts: await loadDrafts() })
+    res.json({ drafts: withTestRunWrites(await loadDrafts()) })
   } catch (err) {
     next(err)
   }
@@ -152,6 +163,18 @@ draftsRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
       return
     }
     if (!mirrorServes(req)) { res.json({ ok: true }); return }
+    // A test run (an automated browser on the user's Walnut) types into its own copy,
+    // never the user's file: its words would show in the user's boxes (test-run-prefs.ts).
+    const own = testRunPrefsWrite<DraftMap>('drafts', () => ({}))
+    if (own) {
+      const view = withTestRunWrites(await loadDrafts())
+      const merged = mergeDrafts(view, patch as Record<string, unknown>)
+      for (const key of Object.keys(patch)) if (merged[key] && merged[key] !== view[key]) own[key] = merged[key]
+      const kept = pruneDrafts(own)
+      for (const key of Object.keys(own)) if (!(key in kept)) delete own[key]
+      res.json({ ok: true })
+      return
+    }
     await withFileLock(DRAFTS_FILE(), async () => {
       await writeJsonFile(DRAFTS_FILE(), mergeDrafts(await loadDrafts(), patch as Record<string, unknown>))
     })

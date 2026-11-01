@@ -713,7 +713,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     typedMarkRef.current = mark;
     pendingDraftRef.current = key ? { key, text, mark } : null;
     if (!key) return;
-    draftTimerRef.current = setTimeout(flushDraft, 300);
+    // An emptied box is written at once: its draft is gone before the window can close.
+    draftTimerRef.current = setTimeout(flushDraft, text ? 300 : 0);
   }, [flushDraft]);
 
   /** Persist the draft in its composed form (tags in place of the tokens): ONE

@@ -5,7 +5,8 @@
  *
  * Covers, through the real UI: the Ask here card's follow-up reply survives
  * closing the card, a reload, and a fresh browser (the server's copy, how the Mac
- * app and Chrome share a draft); a send clears the draft everywhere. A new Ask with words
+ * app and Chrome share a draft); a send clears the draft everywhere. A box emptied
+ * and closed within a second leaves no draft for the next browser. A new Ask with words
  * comes back after a reload as a draft row. The inbox letter's reply and the note
  * with a choice survive a reload, and the reply clears once it is sent. A
  * new-session draft column comes back after a reload with its words, also beside
@@ -147,6 +148,32 @@ test.describe('Every input box keeps its unsent draft', () => {
     await q1Row(panel).click()
     await expect(card(panel).locator('.thread-card-input')).toHaveValue('')
     expect(errors).toEqual([])
+  })
+
+  test('a box emptied and closed within a second leaves no draft for the next browser', async ({ request, browser }) => {
+    // 2026-11-01, a live check: the text was selected and deleted, the page closed 800 ms
+    // later, and the server still held the words (the clear waited behind the mirror's
+    // debounce, and a closed automated page fires no pagehide to flush it).
+    await resetThreadsFixture(request, TAGGED_SESSION)
+    const key = `draft:session:${TAGGED_SESSION}`
+    await forgetDrafts(request, (k) => k === key)
+    const words = `typed then cleared ${NONCE}`
+    const first = await freshBrowser(browser)
+    const panel = await openTagged(first)
+    const box = panel.locator('.session-panel-input .chat-input-textarea').first()
+    await box.fill(words)
+    await expectServerDraft(request, (k) => k === key, words)
+    await box.press('ControlOrMeta+a')
+    await box.press('Delete')
+    await expect(box).toHaveValue('')
+    await first.waitForTimeout(200)
+    await first.context().close()
+    await expect.poll(async () => (await serverDrafts(request))[key]?.v ?? null, { timeout: 5_000 }).toBeNull()
+
+    const next = await freshBrowser(browser)
+    const nextPanel = await openTagged(next)
+    await expect(nextPanel.locator('.session-panel-input .chat-input-textarea').first()).toHaveValue('')
+    await next.context().close()
   })
 
   test('a new Ask with words comes back after a reload as a draft question', async ({ page, request }) => {

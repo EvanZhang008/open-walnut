@@ -7,7 +7,7 @@
  * The routes are read from the source: every express `<router>.put/post/patch/delete` and every
  * plugin `walnut.http.route(...)`, with the path its router is mounted at in server.ts (a router
  * by name, imported or made by a factory). A write whose full path names a preference (pref,
- * favorite, ordering, layout, separator) must be in GATED below, and its handler must call the
+ * favorite, ordering, layout, separator, the drafts) must be in GATED below, and its handler must call the
  * named gate, which must reach testRunPrefsWrite. Not preferences, so not here: Settings
  * (`PUT /api/config` and the other settings saves are the user's configuration, and a whole
  * config round trip carries the favorites and order as they are stored), and a favorite that
@@ -20,11 +20,15 @@ import path from 'node:path'
 
 const ROOT = path.resolve(__dirname, '../..')
 const SRC = path.join(ROOT, 'src')
-const PREF_PATH = /pref|favorit|ordering|layout|separator/i
+const PREF_PATH = /pref|favorit|ordering|layout|separator|^\/api\/drafts\b/i
+const WEB = path.join(ROOT, 'web/src')
 
 /** "METHOD /full/path" -> the call in its handler that keeps a test run's write apart. */
 const GATED: Record<string, { file: string; gate: string }> = {
   'PUT /api/ui-prefs/': { file: 'src/web/routes/ui-prefs.ts', gate: 'testRunPrefsWrite' },
+  // The words typed and not sent are the user's too (2026-11-01: a live check's composer text
+  // reached the user's drafts and would have shown in their own composer).
+  'PUT /api/drafts/': { file: 'src/web/routes/drafts.ts', gate: 'testRunPrefsWrite' },
   'POST /api/favorites/projects/:name': { file: 'src/web/routes/favorites.ts', gate: 'editFavorites' },
   'DELETE /api/favorites/projects/:name': { file: 'src/web/routes/favorites.ts', gate: 'editFavorites' },
   'POST /api/favorites/notes': { file: 'src/web/routes/favorites.ts', gate: 'editFavorites' },
@@ -139,6 +143,33 @@ describe('test-run prefs gate', () => {
   it('every listed handler goes through its gate', () => {
     const ungated = prefWrites.filter((r) => GATED[r.key] && !r.body.includes(GATED[r.key].gate)).map((r) => `${r.key} lacks ${GATED[r.key].gate}`)
     expect(ungated).toEqual([])
+  })
+
+  // The browser's own storage mirrored to the server (web/src modules that define or take
+  // `onLocalStorageWrite`): whatever a test window writes there it would write to the user's
+  // store, so every route such a mirror writes is a gated one, whatever its name.
+  it('every route a browser-storage mirror writes is gated', () => {
+    const mirrors = sourceFiles(WEB).filter((f) => /onLocalStorageWrite\s*\(/.test(fs.readFileSync(f, 'utf8')))
+    expect(mirrors.map((f) => path.relative(ROOT, f))).toEqual(expect.arrayContaining(['web/src/utils/ui-prefs-sync.ts', 'web/src/utils/drafts.ts']))
+    const written = new Set<string>()
+    const unreadable: string[] = []
+    for (const f of mirrors) {
+      const text = fs.readFileSync(f, 'utf8')
+      for (const m of text.matchAll(/\b(apiPut|apiPost|apiPatch|apiDelete|fetch)\(\s*([^,)]*)/g)) {
+        const call = text.slice(m.index!, m.index! + 400)
+        const method = m[1] === 'fetch'
+          ? (/method:\s*['"`](\w+)['"`]/.exec(call)?.[1] ?? 'GET').toUpperCase()
+          : m[1].slice(3).toUpperCase()
+        if (method === 'GET') continue
+        const literal = /^['"`](\/api\/[^'"`?$]+)['"`]$/.exec(m[2].trim())
+        if (!literal) { unreadable.push(`${path.relative(ROOT, f)}: ${m[0]}`); continue }
+        written.add(`${method} ${literal[1].replace(/\/?$/, '/')}`)
+      }
+    }
+    expect(unreadable, 'a mirror writes to a path this test cannot read: write it as a literal').toEqual([])
+    expect(written.size).toBeGreaterThan(1)
+    const ungated = [...written].filter((k) => !GATED[k] && !GATED[k.replace(/\/$/, '')])
+    expect(ungated, 'a browser-storage mirror writes a route that keeps no test run apart').toEqual([])
   })
 
   it('every gate keeps a test run\'s write in the run\'s copy', () => {

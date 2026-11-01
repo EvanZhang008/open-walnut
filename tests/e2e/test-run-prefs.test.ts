@@ -157,4 +157,35 @@ describe('a test run writes its own prefs copy', () => {
     expect(own['open-walnut-home-todo-visible']).toEqual({ v: 'false', ts: 2000 })
     expect(own['open-walnut-real-key']).toEqual({ v: 'y', ts: 4000 })
   })
+
+  it('drafts: a run\'s typed words stay in its copy; the user\'s drafts and file keep theirs', async () => {
+    // 2026-11-01: a live check's composer text reached the user's drafts.
+    const draftsOf = async (headers: Record<string, string> = {}) =>
+      (await api('GET', '/api/drafts', undefined, headers)).data.drafts as Record<string, { v: string | null; ts: number }>
+    const file = () => readFile(`${WALNUT_HOME}/local/drafts.json`)
+    // Real clock times: the store drops a removal older than its 30-day keep.
+    const t = Date.now() - 60_000
+    expect((await api('PUT', '/api/drafts', { drafts: { 'draft:session:s1': { v: 'the user\'s words', ts: t + 1000 } } })).status).toBe(200)
+    const before = await file()
+    expect(before).toContain('the user')
+
+    // The run types over the user's draft and starts one of its own, then clears the second.
+    expect((await api('PUT', '/api/drafts', { drafts: {
+      'draft:session:s1': { v: 'a check typed this', ts: t + 2000 },
+      'draft:session:s2': { v: 'probe', ts: t + 2000 },
+    } }, RUN)).status).toBe(200)
+    expect((await api('PUT', '/api/drafts', { drafts: { 'draft:session:s2': { v: null, ts: t + 2500 } } }, RUN)).status).toBe(200)
+    const own = await draftsOf(RUN)
+    expect(own['draft:session:s1']).toEqual({ v: 'a check typed this', ts: t + 2000 })
+    expect(own['draft:session:s2']).toEqual({ v: null, ts: t + 2500 })
+    // An older write of the run never wins over what it reads.
+    expect((await api('PUT', '/api/drafts', { drafts: { 'draft:session:s1': { v: 'stale', ts: t + 10 } } }, RUN)).status).toBe(200)
+    expect((await draftsOf(RUN))['draft:session:s1']?.v).toBe('a check typed this')
+
+    const user = await draftsOf()
+    expect(user['draft:session:s1']).toEqual({ v: 'the user\'s words', ts: t + 1000 })
+    expect(user['draft:session:s2']).toBeUndefined()
+    expect(await file()).toBe(before)
+    expect((await draftsOf(OTHER))['draft:session:s1']?.v).toBe('the user\'s words')
+  })
 })

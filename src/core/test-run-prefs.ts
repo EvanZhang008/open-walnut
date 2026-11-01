@@ -24,7 +24,7 @@
 import { ambientTestRun } from './test-run.js';
 
 /** One family per preference store a route writes. */
-export type TestRunPrefsFamily = 'ui-prefs' | 'favorites' | 'ordering' | 'mail-grouped' | 'push-preferences';
+export type TestRunPrefsFamily = 'ui-prefs' | 'favorites' | 'ordering' | 'mail-grouped' | 'push-preferences' | 'drafts';
 
 export const TEST_RUN_PREFS_IDLE_MS = 30 * 60 * 1000;
 export const TEST_RUN_PREFS_MAX_RUNS = 32;

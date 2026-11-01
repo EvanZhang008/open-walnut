@@ -102,7 +102,9 @@ export function useDraft(key: string | null | undefined, opts: { baseline?: stri
     typedMark.current = draftSaveMark();
     pending.current = { key: kk, text: value, mark: typedMark.current };
     clearTimeout(timer.current);
-    timer.current = setTimeout(flush, DEBOUNCE_MS);
+    // An emptied box (or one back at its saved value) is written at once: no draft is left
+    // for a window that closes right after.
+    timer.current = setTimeout(flush, value === baselineRef.current || value === '' ? 0 : DEBOUNCE_MS);
   }, [flush]);
 
   const clear = useCallback((sentKey?: string | null, sentText?: string) => {
