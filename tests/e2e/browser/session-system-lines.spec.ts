@@ -9,6 +9,9 @@
  * mode writes real stream lines (words, then two Bash steps with system lines
  * between and after, then a hold mid-turn: the words keep the steps out of the
  * turn's fold, so they are rows of their own, as in the report) → ClaudeCodeSession → the WS → the live rows.
+ * The hold lasts until the spec writes its release file (`holdUntil`): a fixed 9 s
+ * hold ended before a slow CI page load showed the mid-turn rows (5 of 7 runs). Text
+ * is read in the chat only: the header names the session after this turn's JSON.
  */
 import { test, expect, type Page, type APIRequestContext, type Locator } from '@playwright/test'
 import fs from 'node:fs'
@@ -29,7 +32,8 @@ const TURN = {
   after: [
     { subtype: 'model_fallback', content: 'SL_WORDS Switched to a backup model.', level: 'warning', originalModel: 'a', fallbackModel: 'b' },
   ],
-  holdMs: 9000,
+  // A cap only: the turn ends when the spec writes `holdUntil` (set per test below).
+  holdMs: 120_000,
   text: 'SL_DONE pushed.',
 }
 
@@ -77,8 +81,8 @@ const columnFor = (page: Page, sid: string): Locator =>
   page.locator('.main-page-sessions-area > .main-page-session-column').filter({ has: page.locator(`.session-panel[data-session-id="${sid}"]`) })
 
 /** Every raw-looking thing a leaked system line would put on screen. */
-async function rawLeaks(col: Locator): Promise<string[]> {
-  const text = await col.innerText()
+async function rawLeaks(chat: Locator): Promise<string[]> {
+  const text = await chat.innerText()
   return ['vcs_state_changed', 'plugin_install', 'some_new_2027_subtype', 'model_fallback', '"kind"', '"cwd"', 'sample-plugin']
     .filter((needle) => text.includes(needle))
 }
@@ -88,9 +92,13 @@ test.setTimeout(180_000)
 test('system lines with no handler: none raw, the git echo never splits the step row', async ({ page, request }) => {
   await page.setViewportSize({ width: 1280, height: 800 })
   const TASK = await newTask(request, 'System lines')
+  // The mock CLI runs on this machine: it ends the turn once this file exists.
+  const release = test.info().outputPath('release-turn')
+  fs.mkdirSync(path.dirname(release), { recursive: true })
+  fs.rmSync(release, { force: true })
   await page.goto('/')
   await page.waitForLoadState('domcontentloaded')
-  await rpc(page, 'session:start', { taskId: TASK, message: `system-lines-turn:${JSON.stringify(TURN)}`, project: 'Walnut' })
+  await rpc(page, 'session:start', { taskId: TASK, message: `system-lines-turn:${JSON.stringify({ ...TURN, holdUntil: release })}`, project: 'Walnut' })
   const sid = await waitForSessionId(request, TASK)
 
   await page.addInitScript(({ key, id }) => {
@@ -99,14 +107,17 @@ test('system lines with no handler: none raw, the git echo never splits the step
   await page.goto('/')
   const col = columnFor(page, sid)
   await expect(col).toHaveCount(1, { timeout: 30_000 })
+  // The chat, not the header: until its title is refined the session is named after its first
+  // message, this turn's JSON, which holds every SL_ marker and subtype name too.
+  const chat = col.locator('.session-history')
 
   // Mid-turn (the hold): the readable line shows as its words, the steps are one row.
-  await expect(col.getByText('SL_WORDS Switched to a backup model.')).toBeVisible({ timeout: 30_000 })
-  await expect(col.getByText('SL_BEFORE Tests fail as expected.')).toBeVisible()
-  await expect(col.getByText('SL_DONE pushed.')).toHaveCount(0)
-  const labels = await col.locator('.tool-run-label').allTextContents()
+  await expect(chat.getByText('SL_WORDS Switched to a backup model.')).toBeVisible({ timeout: 30_000 })
+  await expect(chat.getByText('SL_BEFORE Tests fail as expected.')).toBeVisible()
+  await expect(chat.getByText('SL_DONE pushed.')).toHaveCount(0)
+  const labels = await chat.locator('.tool-run-label').allTextContents()
   expect(labels.filter((t) => /^Ran (2 commands|a command)/.test(t))).toEqual([expect.stringMatching(/^Ran 2 commands/)])
-  expect(await rawLeaks(col)).toEqual([])
+  expect(await rawLeaks(chat)).toEqual([])
   // The server's own stream buffer (what every client renders from): the readable
   // line is its only system row, with no name or JSON. A mid-turn history read can
   // hide stream rows in the page, so this is the proof that nothing raw was kept.
@@ -118,8 +129,9 @@ test('system lines with no handler: none raw, the git echo never splits the step
   await page.waitForTimeout(800)
 
   // The turn ends: still nothing raw.
-  await expect(col.getByText('SL_DONE pushed.')).toBeVisible({ timeout: 30_000 })
-  expect(await rawLeaks(col)).toEqual([])
+  fs.writeFileSync(release, '')
+  await expect(chat.getByText('SL_DONE pushed.')).toBeVisible({ timeout: 30_000 })
+  expect(await rawLeaks(chat)).toEqual([])
   await page.screenshot({ path: path.join(SHOTS, `${test.info().project.name}-after.png`), clip: (await col.boundingBox())! })
   await page.waitForTimeout(800)
 })

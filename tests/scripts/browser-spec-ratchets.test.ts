@@ -324,3 +324,14 @@ describe('a window a spec opens', () => {
     expect(firstWaits(spec.replace("'draft')", "'draft', { timeout: 30_000 })"))).toEqual([{ line: 4, timed: true }])
   })
 })
+
+describe('a mock turn a spec reads mid-turn', () => {
+  // `system-lines-turn` holds its turn so a spec can read the live rows. A fixed 9 s hold ended
+  // before a slow CI page load showed them (2026-11-01, session-system-lines on 5 of 7 runs): the
+  // spec releases the turn itself with a file (`holdUntil`), and holdMs only caps it.
+  it('every spec that runs one releases it with holdUntil', () => {
+    const users = sources.filter(({ text }) => text.includes('system-lines-turn:'))
+    expect(users.map(({ file }) => file)).toContain('session-system-lines.spec.ts')
+    expect(users.filter(({ text }) => !text.includes('holdUntil')).map(({ file }) => file)).toEqual([])
+  })
+})

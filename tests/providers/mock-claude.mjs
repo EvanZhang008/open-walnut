@@ -886,10 +886,12 @@ if (outputFormat === 'stream-json') {
     //          CLI `system` lines between and after them, and holds mid-turn
     //          for holdMs before answering, so a spec can look at the LIVE rows.
     //          <json> (first line only) is { words?, between: [line], after: [line],
-    //          holdMs?, text? }; `words` is assistant text before the steps (words
+    //          holdMs?, holdUntil?, text? }; `words` is assistant text before the steps (words
     //          end the live turn's fold, so the steps after them are rows of their
     //          own, as in a real long turn); each line is a system line's own fields
-    //          ({ subtype, ... }). Stays alive for the next FIFO turn.
+    //          ({ subtype, ... }). With `holdUntil` (a file path) the hold lasts until
+    //          that file exists, holdMs then only caps it, so a slow page load never
+    //          outlives the hold. Stays alive for the next FIFO turn.
     if (effectiveMessage.startsWith('system-lines-turn:')) {
       const sid = outputSessionId;
       const emit = (line) => process.stdout.write(JSON.stringify(line) + '\n');
@@ -927,7 +929,10 @@ if (outputFormat === 'stream-json') {
         (spec.between || []).forEach((l, i) => sys(l, i));
         bash(1, 'git push');
         (spec.after || []).forEach((l, i) => sys(l, 100 + i));
-        setTimeout(finish, Number(spec.holdMs ?? 0));
+        if (!spec.holdUntil) { setTimeout(finish, Number(spec.holdMs ?? 0)); return; }
+        const capAt = Date.now() + Number(spec.holdMs ?? 120_000);
+        const poll = () => (fs.existsSync(spec.holdUntil) || Date.now() >= capAt ? finish() : setTimeout(poll, 100));
+        poll();
       };
       const THINK_MS = Number(process.env.MOCK_SNAPSHOT_TURN_DELAY_MS ?? 300);
       if (THINK_MS > 0) setTimeout(body, THINK_MS);
