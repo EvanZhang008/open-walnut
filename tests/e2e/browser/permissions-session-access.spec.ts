@@ -70,6 +70,19 @@ const REPORT = {
   ],
 }
 
+// The pane is listed only where the server says it has macOS permissions to show
+// (`macAccess` on /api/config, true only on a Mac console), so on a Linux runner its nav
+// entry is not drawn and every test here waited out its click (2026-11-01, CI). The report
+// below is a Mac's, so the fact says Mac too.
+test.beforeEach(async ({ page }) => {
+  await page.route((url) => url.pathname === '/api/config', async (route) => {
+    if (route.request().method() !== 'GET') return route.continue()
+    const res = await route.fetch()
+    const body = await res.json()
+    await route.fulfill({ response: res, json: { ...body, macAccess: true } })
+  })
+})
+
 test('a user can set up session file access from Settings, without a terminal', async ({ page }) => {
   // Match by PATHNAME, never a `**/api/permissions**` glob: the fixture serves the
   // SPA through Vite in dev mode, where the client source lives at

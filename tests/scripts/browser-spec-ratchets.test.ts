@@ -195,3 +195,25 @@ describe('clipboard permissions', () => {
     expect(grant.test("await context.grantPermissions(['clipboard-read', 'clipboard-write'])")).toBe(true)
   })
 })
+describe('specs that open a gated Settings pane', () => {
+  // A core Settings pane with `requires` (core-settings-registry.tsx) has no nav entry
+  // while its server fact is false, and the macOS Access pane's (`macAccess`) is false
+  // on every Linux runner: permissions-session-access clicked an entry that was never
+  // drawn and timed out on all of CI's runs (2026-11-01). A spec that opens such a pane
+  // sets the fact itself, as that spec stubs the rest of a Mac.
+  const FACT_OF_GATE: Record<string, string> = { 'mac-access': 'macAccess' }
+  const registry = fs.readFileSync(path.resolve(__dirname, '../../web/src/components/settings/core-settings-registry.tsx'), 'utf8')
+  const gated = [...registry.matchAll(/\bid: '([\w-]+)'[^{}]*?\brequires: '([\w-]+)'/g)].map((m) => ({ id: m[1]!, gate: m[2]! }))
+
+  it('knows every gate a pane names', () => {
+    expect(gated.map((g) => g.id)).toContain('permissions')
+    for (const g of gated) expect(FACT_OF_GATE[g.gate], `gate ${g.gate} of pane ${g.id}: add its server fact here`).toBeDefined()
+  })
+
+  it('every spec that clicks a gated pane\'s nav entry sets its fact', () => {
+    const offenders = gated.flatMap((g) => sources
+      .filter(({ text }) => text.includes(`settings-nav-${g.id}'`) && !new RegExp(`\\b${FACT_OF_GATE[g.gate]}: true`).test(text))
+      .map(({ file }) => `${file}: opens ${g.id} without ${FACT_OF_GATE[g.gate]}: true`))
+    expect(offenders).toEqual([])
+  })
+})
