@@ -285,6 +285,19 @@ describe('WalnutUITests harness streams', () => {
     expect(longestSleep(island), 'startIslandStream pauses on the clock').toBeLessThanOrEqual(1000)
   })
 
+  // The harness's ids are a contract checked by TimelineHarnessIdentifierTests, which only
+  // a Mac runs: a new hold button without its manifest line failed the unit leg after it
+  // landed (2026-11-01, run 41321892059). The same read here fails before a land.
+  it('every harness identifier is in the Swift manifest, and every manifest line is a harness identifier', () => {
+    const ids = new Set([...harness.matchAll(/accessibilityIdentifier\("(harness\.[\w.]+)"\)/g)].map((m) => m[1]!))
+    const manifestTest = fs.readFileSync(path.join(ROOT, 'ios-native/WalnutTests/TimelineHarnessIdentifierTests.swift'), 'utf8')
+    const block = manifestTest.split('private let expected: Set<String> = [')[1]!.split(']')[0]!
+    const manifest = new Set([...block.matchAll(/"(harness\.[\w.]+)"/g)].map((m) => m[1]!))
+    expect(ids.size).toBeGreaterThan(10)
+    expect([...ids].filter((id) => !manifest.has(id)), 'add these to TimelineHarnessIdentifierTests.expected').toEqual([])
+    expect([...manifest].filter((id) => !ids.has(id)), 'no harness control carries these').toEqual([])
+  })
+
   it('reads a clocked pause where there is one', () => {
     expect(longestSleep('try? await Task.sleep(for: .milliseconds(index == 10 ? 3000 : 600))')).toBe(3000)
     expect(longestSleep('try? await Task.sleep(for: .seconds(4))')).toBe(4000)
