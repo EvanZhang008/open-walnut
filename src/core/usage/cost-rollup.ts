@@ -182,8 +182,9 @@ export class CostRollup {
 
   /** Each host's first and last stored day. */
   hostBounds(): { host: string; from: string; to: string }[] {
-    return this.db.prepare('SELECT host, MIN(date) "from", MAX(date) "to" FROM usage_rollup GROUP BY host ORDER BY host').all() as
-      { host: string; from: string; to: string }[];
+    // Plain aliases: `from` and `to` in double quotes are an error in the macOS build's SQLite.
+    return (this.db.prepare('SELECT host, MIN(date) first_day, MAX(date) last_day FROM usage_rollup GROUP BY host ORDER BY host').all() as
+      { host: string; first_day: string; last_day: string }[]).map(r => ({ host: r.host, from: r.first_day, to: r.last_day }));
   }
 
   bounds(): { min: string | null; max: string | null } {
