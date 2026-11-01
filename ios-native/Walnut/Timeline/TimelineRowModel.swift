@@ -547,6 +547,9 @@ struct TimelineInput {
     /// message shows on every message, with no long-press step
     /// (`TimelineTurnFold.Additions`). Defaulted off, the server's own default.
     var showWalnutAdditions: Bool = false
+    /// The chat of Main or a lead: every reply shows the tasks it is about under it
+    /// (`MessageAboutTag`, the web's MessageAboutContext). Off everywhere else.
+    var showMessageAbout: Bool = false
 }
 
 /// The actor's output: a complete row array (never a delta — latest wins).

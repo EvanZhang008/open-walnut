@@ -103,3 +103,37 @@ describe('a send row names its targets', () => {
     }
   })
 })
+
+/**
+ * The tasks a reply is about (core/org/message-about.ts) ride the phone's read too: the
+ * history parse takes the `<walnut-about>` line off the text and the projection carries
+ * the ids, so the phone draws its pills (2026-10-31, the iOS port of the web's pills).
+ */
+describe('a reply says which tasks it is about', () => {
+  it('carries the tagged ids and the turn fallback, never the line', async () => {
+    const sid = 'sess-about'
+    const ask = '<walnut-message kind="request" from="Walnut lead" from-task="mt-lead-1" request="rq-1">Status?</walnut-message>'
+    const said = (text: string) => ({ type: 'assistant', uuid: `a-${++seq}`, timestamp: at(),
+      message: { id: `msg_${seq}`, role: 'assistant', content: [{ type: 'text', text }] } })
+    const lines = [
+      { type: 'user', uuid: `u-${++seq}`, timestamp: at(), message: { role: 'user', content: [{ type: 'text', text: 'How is the move going?' }] } },
+      said('The movers are booked.\n\n<walnut-about tasks="mt-move-1,mt-vp-2"/>'),
+      { type: 'user', uuid: `u-${++seq}`, timestamp: at(), message: { role: 'user', content: [{ type: 'text', text: ask }] } },
+      said('On track.'),
+    ]
+    await createSessionRecord(sid, '', '', CWD, { title: 'About', initialProcessStatus: 'idle' })
+    const dir = path.join(CLAUDE_HOME, 'projects', encodeProjectPath(CWD))
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(path.join(dir, `${sid}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
+    for (const qs of ['?fresh=1&rich=1', '?fresh=1']) {
+      const res = await fetch(`http://localhost:${port}/api/v1/sessions/${sid}/transcript${qs}`)
+      expect(res.status).toBe(200)
+      const body = await res.json() as { messages: (Row & { about?: string[]; aboutTagged?: boolean })[] }
+      const replies = body.messages.filter((r) => r.role === 'assistant' && !r.kind)
+      expect(replies.map((r) => r.text), qs).toEqual(['The movers are booked.', 'On track.'])
+      expect(replies.map((r) => [r.about, r.aboutTagged]), qs).toEqual([[['mt-move-1', 'mt-vp-2'], true], [['mt-lead-1'], undefined]])
+      expect(body.messages.filter((r) => r.role === 'user').every((r) => r.about === undefined), qs).toBe(true)
+      expect(JSON.stringify(body), qs).not.toContain('walnut-about')
+    }
+  })
+})

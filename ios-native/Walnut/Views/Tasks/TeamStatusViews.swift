@@ -87,7 +87,8 @@ struct UserStatePill: View {
     let state: UserState
     var stuck = false
 
-    static func color(_ s: UserState) -> Color {
+    /// Nonisolated: the timeline's layout actor colors a pill's dot with it.
+    nonisolated static func color(_ s: UserState) -> Color {
         switch s {
         case .needs: return Color(red: 0.88, green: 0.38, blue: 0.10)
         case .working: return Color(red: 0.18, green: 0.44, blue: 0.94)

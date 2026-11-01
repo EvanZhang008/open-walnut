@@ -599,6 +599,8 @@ struct SessionConversationView: View {
             previewHost: session.host,
             previewCwd: session.cwd,
             previewSessionID: session.id,
+            // Main's and a lead's replies show the tasks they are about (MessageAboutTag).
+            showMessageAbout: linkedTask?.orgRole == "main" || linkedTask?.orgRole == "lead",
             repinSignal: repinSignal,
             keyboardGeometryFrozen: { keyboardGeometryFrozen || programmaticGeometryFrozen },
             onRefresh: { await pageOperations.refresh() }

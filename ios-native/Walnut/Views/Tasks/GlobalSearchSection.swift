@@ -371,8 +371,11 @@ struct GlobalSearchSection: View {
     /// A snippet without the Markdown it was cut from: the server windows a task's
     /// description or a transcript as written, so a row read "…**User:** the search…".
     /// Only the paired markers go (`**`, `__`, backticks); a lone `*` or `_` can be content.
+    /// An Org chat's hidden tasks line (`MessageAboutTag`) goes too: a window of a
+    /// transcript may hold it, and a reply never shows it.
     static func plainSnippet(_ text: String) -> String {
-        text.replacingOccurrences(of: "**", with: "")
+        text.replacingOccurrences(of: #"<walnut-about\s+tasks="[^"]*"\s*/>"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: "**", with: "")
             .replacingOccurrences(of: "__", with: "")
             .replacingOccurrences(of: "`", with: "")
     }

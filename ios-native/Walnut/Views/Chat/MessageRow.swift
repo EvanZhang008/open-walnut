@@ -269,10 +269,11 @@ struct MessageRow: View {
     /// unbounded text in the app must not re-parse wholesale per delta flush.
     private var assistantText: some View {
         HStack {
+            // The agent-ack line and an Org chat's tasks line never print (TimelineTurnMarker).
             if message.id == "__live__" {
-                LiveMarkdownBody(text: message.text, storeTruncated: liveTextTruncated)
+                LiveMarkdownBody(text: TimelineTurnMarker.stripLive(message.text), storeTruncated: liveTextTruncated)
             } else {
-                ChatMarkdownBody(text: message.text)
+                ChatMarkdownBody(text: TimelineTurnMarker.strip(message.text))
                     .equatable()
             }
             Spacer(minLength: 32)

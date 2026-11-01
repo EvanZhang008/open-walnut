@@ -3,6 +3,9 @@ import UIKit
 /// Shared layout metrics — the ONE place cell padding lives, so the actor's
 /// measurement and the cells' rendering can never drift apart.
 enum TimelineMetrics {
+    /// One line of a reply's task pills (`aboutRow`): its height is each pill's tap
+    /// target, so it never drops below this at small type sizes.
+    static let aboutLineHeight: CGFloat = 30
     /// Horizontal page margin (mirrors the SwiftUI rows' 16pt).
     static let hMargin: CGFloat = 16
     /// Vertical padding around a text row (SwiftUI rows used 2).
@@ -174,7 +177,8 @@ final class TimelineRowBuilder {
     func rows(for message: ChatMessage, width: CGFloat,
               expandedRowIDs: Set<String>,
               scope: String = TimelineScope.unscoped,
-              queued: QueuedSend.Status? = nil) -> [TimelineRow] {
+              queued: QueuedSend.Status? = nil,
+              showAbout: Bool = false) -> [TimelineRow] {
         let namespace = TimelineScope.namespace(scope, message.id)
         switch message.kind {
         case .tool:
@@ -194,6 +198,12 @@ final class TimelineRowBuilder {
             let shown = TimelineTurnMarker.strip(message.text)
             var rows = assistantRows(shown == message.text ? message : message.replacingText(shown),
                                      width: width, idPrefix: namespace)
+            // In Main's or a lead's chat, the tasks a reply is about, under it
+            // (MessageAboutTag): the server's, else the row's own line while fresh.
+            if showAbout, !rows.isEmpty {
+                let ids = MessageAboutTag.rowAbout(message.about, text: message.text)
+                if !ids.isEmpty { rows.append(aboutRow(id: "\(namespace)#about", ids: ids, width: width)) }
+            }
             // The reply the cloud companion computed while the Mac was out of
             // reach says so, under the reply, live and after a reload alike (both
             // arrive here as `answeredBy`, see ChatStore.finalizeTurn and
@@ -206,6 +216,68 @@ final class TimelineRowBuilder {
             }
             return rows
         }
+    }
+
+    /// The tasks a reply is about, as the timeline's task links: each a status dot
+    /// in its task's live color and its live title, one tap opening the task (the
+    /// `walnut-task://` link every mention uses). One text row, so it wraps and is
+    /// measured like any prose; it re-renders when a title or a shown state moves
+    /// (`TaskMentionResolver.version`).
+    func aboutRow(id: String, ids: [String], width: CGFloat) -> TimelineRow {
+        let resolver = TaskMentionResolver.shared
+        let caption = TimelineTextStyler.captionFont
+        let label = UIFont.systemFont(ofSize: TimelineTextStyler.caption2Font.pointSize, weight: .semibold)
+        let pill = UIFont.systemFont(ofSize: TimelineTextStyler.footnoteFont.pointSize, weight: .semibold)
+        let lead = Self.aboutLabel + "   "
+        // Each line is a tap target of its own height (the link's hit area is its line),
+        // and a wrapped line starts under the first pill, not under "About".
+        let line = max(TimelineMetrics.aboutLineHeight, ceil(pill.lineHeight * 1.5))
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.minimumLineHeight = line
+        paragraph.maximumLineHeight = line
+        paragraph.headIndent = ceil((lead as NSString).size(withAttributes: [.font: label]).width)
+        let lift = (line - pill.lineHeight) / 3
+        let text = NSMutableAttributedString(string: lead, attributes: [
+            .font: label, .foregroundColor: ReadableText.secondaryUIColor, .baselineOffset: lift,
+        ])
+        var drawnStates: [String] = []
+        var spoken: [String] = []
+        for (index, taskID) in ids.enumerated() {
+            let state = resolver.state(for: taskID).flatMap(UserState.init(rawValue:))
+            drawnStates.append(state?.rawValue ?? "")
+            let title = resolver.title(for: taskID) ?? taskID
+            spoken.append(state.map { "\(title), \($0.label)" } ?? title)
+            if index > 0 { text.append(NSAttributedString(string: "    ", attributes: [.font: caption])) }
+            // The dot and the title are one link, so a tap on either opens the task;
+            // the no-break space keeps the dot on its title's line.
+            let link = TaskMentionLink.url(for: taskID)
+            var dot: [NSAttributedString.Key: Any] = [
+                .font: caption, .foregroundColor: Self.aboutDotColor(state), .baselineOffset: lift,
+            ]
+            var name: [NSAttributedString.Key: Any] = [
+                .font: pill, .foregroundColor: UIColor.tintColor, .baselineOffset: lift,
+            ]
+            if let link { dot[.link] = link; name[.link] = link }
+            text.append(NSAttributedString(string: "\u{25CF}\u{00A0}", attributes: dot))
+            text.append(NSAttributedString(string: title, attributes: name))
+        }
+        let whole = NSRange(location: 0, length: text.length)
+        text.addAttribute(.paragraphStyle, value: paragraph, range: whole)
+        // VoiceOver reads the states as words: a dot alone says "black circle".
+        text.addAttribute(.timelineSpoken, value: "\(Self.aboutLabel): " + spoken.joined(separator: ". "), range: whole)
+        // A dot's color is the one thing here the row's plain text (its contentKey)
+        // does not carry: the states ride the revision, so a moved task reloads the cell.
+        return textRow(id: id, revision: drawnStates.joined(separator: ",").hashValue,
+                       attributed: text, width: width)
+    }
+
+    /// The word in front of a reply's task pills (the web's "About").
+    static let aboutLabel = "About"
+
+    /// A pill's dot: its task's user state, grey while the phone does not know it.
+    static func aboutDotColor(_ state: UserState?) -> UIColor {
+        guard let state else { return .systemGray3 }
+        return state == .waiting ? .systemGray : UIColor(UserStatePill.color(state))
     }
 
     /// Caption under a reply the cloud companion answered on its own.

@@ -461,6 +461,8 @@ extension ChatMessage {
         copy.injectedAfter = injectedAfter
         copy.injectedBefore = injectedBefore
         copy.sentTo = sentTo
+        copy.about = about
+        copy.aboutTagged = aboutTagged
         copy.walnutAddedToggle = walnutAddedToggle
         return copy
     }

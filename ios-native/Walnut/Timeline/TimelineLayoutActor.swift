@@ -37,6 +37,12 @@ actor TimelineLayoutActor {
     /// CURRENT title, so a rename (or the task list arriving after the transcript)
     /// moves the text of rows whose message never changed.
     private var cacheMentionsVersion = -1
+    /// Rows of a reply carry its task pills only in an Org node's chat.
+    private var cacheShowAbout = false
+    /// The pills' status dots (`TaskMentionResolver.statesVersion`): a move drops only
+    /// the memo entries that drew a pill (`aboutKeys`), never the whole cache.
+    private var cacheStatesVersion = -1
+    private var aboutKeys: Set<String> = []
     private static let rowCacheLimit = 600
 
     /// Live-head memo (see TimelineRowBuilder.liveRows).
@@ -102,13 +108,21 @@ actor TimelineLayoutActor {
         TimelineTextStyler.adopt(input.sizeCategory)
         let mentionsVersion = TaskMentionResolver.shared.version
         if input.width != cacheWidth || input.sizeCategory != cacheSizeCategory
-            || mentionsVersion != cacheMentionsVersion {
+            || mentionsVersion != cacheMentionsVersion || input.showMessageAbout != cacheShowAbout {
             rowCache = [:]
             headCache = nil
             richEntryIdentities.removeAll(keepingCapacity: true)
             cacheWidth = input.width
             cacheSizeCategory = input.sizeCategory
             cacheMentionsVersion = mentionsVersion
+            cacheShowAbout = input.showMessageAbout
+            aboutKeys = []
+        }
+        let statesVersion = TaskMentionResolver.shared.statesVersion
+        if statesVersion != cacheStatesVersion {
+            for key in aboutKeys { rowCache[key] = nil }
+            aboutKeys = []
+            cacheStatesVersion = statesVersion
         }
         if input.scope != cacheScope {
             // The row cache SURVIVES a switch (its keys are scoped, so it can
@@ -134,8 +148,10 @@ actor TimelineLayoutActor {
             if let cached = rowCache[key], cached.message == message { return cached.rows }
             let built = builder.rows(for: message, width: input.width,
                                      expandedRowIDs: input.expandedRowIDs,
-                                     scope: input.scope, queued: queued)
+                                     scope: input.scope, queued: queued,
+                                     showAbout: input.showMessageAbout)
             rowCache[key] = (message, built)
+            if built.contains(where: { $0.id.hasSuffix("#about") }) { aboutKeys.insert(key) }
             let identities = TimelineRowBuilder.richIdentities(in: built)
             if !identities.isEmpty { richEntryIdentities[key] = identities }
             return built
@@ -347,6 +363,7 @@ actor TimelineLayoutActor {
             // Simple pressure valve: drop everything and let the next build
             // repopulate from the visible window (bounded at ≤400 messages).
             rowCache = [:]
+            aboutKeys = []
             richEntryIdentities.removeAll(keepingCapacity: true)
         }
         if input.streaming {

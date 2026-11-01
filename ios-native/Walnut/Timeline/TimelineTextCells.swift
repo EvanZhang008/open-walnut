@@ -3,8 +3,21 @@ import UIKit
 /// Non-editable, non-scrolling TextKit 2 text view used by the text cells.
 /// Configuration MUST stay in lockstep with TimelineTextMeasurer (padding 0,
 /// zero insets, TextKit 2) — that pair is the height-parity contract.
+extension NSAttributedString.Key {
+    /// What VoiceOver reads for a row whose drawing carries meaning its characters do
+    /// not (a pill's status dot): set over the whole string, read by the text cell.
+    static let timelineSpoken = NSAttributedString.Key("walnut.timelineSpoken")
+}
+
 final class TimelineTextView: UITextView {
     weak var actionDelegate: TimelineCellActionDelegate?
+    /// Replaces the text VoiceOver reads (`NSAttributedString.Key.timelineSpoken`).
+    var spokenText: String?
+
+    override var accessibilityValue: String? {
+        get { spokenText ?? super.accessibilityValue }
+        set { super.accessibilityValue = newValue }
+    }
 
     init() {
         // usingTextLayoutManager: true → TextKit 2, same stack the measurer runs.
@@ -55,6 +68,8 @@ final class TimelineTextCell: UICollectionViewCell {
     func configure(text: NSAttributedString, delegate: TimelineCellActionDelegate?) {
         textView.attributedText = text
         textView.actionDelegate = delegate
+        textView.spokenText = text.length > 0
+            ? text.attribute(.timelineSpoken, at: 0, effectiveRange: nil) as? String : nil
     }
 
     override func layoutSubviews() {

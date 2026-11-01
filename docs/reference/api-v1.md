@@ -2107,7 +2107,11 @@ directory on that host.
   (additive, 2026-10-30) rides a send's tool row (`task_send` by MCP or the CLI):
   `[ { ref, taskId?, title? } ]`, its targets in order, `ref` as the call or its answer
   printed it (an id or id prefix) and `taskId`/`title` when it resolved to one task; a
-  loop over several tasks is one row with several. Rows of one message come as thinking,
+  loop over several tasks is one row with several. `about` (additive, 2026-10-31) rides
+  an assistant text row: the task ids the message is about, at most 6, as on the history
+  route's rows, with `aboutTagged: true` when the message named them itself (its
+  `<walnut-about>` line, already off `text`); a client draws them as live task pills under
+  the replies of Main's and a lead's session. Rows of one message come as thinking,
   then the text, then the tool calls (see the `/conversations/:id/messages`
   notes on row order). The primary
   box exports tails for every session it can reach — local from disk, remote

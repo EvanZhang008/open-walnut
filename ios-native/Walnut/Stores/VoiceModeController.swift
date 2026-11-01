@@ -327,7 +327,8 @@ final class VoiceModeController {
     }
 
     private func speak(_ row: ChatMessage) async {
-        guard let prepared = SpokenText.prepare(row.text) else { return }
+        // What the screen shows: never the agent-ack line or an Org chat's tasks line.
+        guard let prepared = SpokenText.prepare(TimelineTurnMarker.strip(row.text)) else { return }
         await speaker.speak(prepared.text, language: prepared.language, id: row.id)
     }
 

@@ -20,6 +20,8 @@ struct SessionTimelineBody: View {
     /// is the common case, not the exotic one.
     var previewCwd: String? = nil
     var previewSessionID: String? = nil
+    /// Main's or a lead's chat: replies show the tasks they are about (`TimelineInput`).
+    var showMessageAbout: Bool = false
     /// Extra scroll-to-bottom pulses from the page (keyboard repin).
     var repinSignal: Int = 0
     /// Keyboard transition freeze from KeyboardBottomRepin.
@@ -65,6 +67,7 @@ struct SessionTimelineBody: View {
                 // The server's "always show what Walnut added"; off, each bubble's
                 // long-press item shows it for that message (TimelineTurnFold).
                 showWalnutAdditions: WalnutAdditionsSetting.shared.showAll,
+                showMessageAbout: showMessageAbout,
                 scrollToBottomSignal: store.scrollToBottomSignal + repinSignal,
                 isPinned: { store.bottomPinned },
                 setPinned: { store.bottomPinned = $0 },

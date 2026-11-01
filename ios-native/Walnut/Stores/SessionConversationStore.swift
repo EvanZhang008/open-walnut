@@ -998,6 +998,7 @@ final class SessionConversationStore {
             digest.combine(m.isError)
             digest.combine(m.sentBy)
             digest.combine(m.sentTo)
+            digest.combine(m.about)
             let base = "\(m.role)|\(m.createdAt)|\(m.kind?.rawValue ?? "")|\(digest.finalize())"
             let n = counts[base, default: 0]
             counts[base] = n + 1
@@ -1012,6 +1013,8 @@ final class SessionConversationStore {
             row.injectedAfter = m.injectedAfter
             row.injectedBefore = m.injectedBefore
             row.sentTo = m.sentTo
+            row.about = m.about
+            row.aboutTagged = m.aboutTagged
             return row
         }
     }
@@ -1122,6 +1125,8 @@ final class SessionConversationStore {
         row.injectedAfter = m.injectedAfter
         row.injectedBefore = m.injectedBefore
         row.sentTo = m.sentTo
+        row.about = m.about
+        row.aboutTagged = m.aboutTagged
         return row
     }
 
@@ -1138,6 +1143,16 @@ final class SessionConversationStore {
     /// The server's pushed-tail budget (TRANSCRIPT_TEXT_MAX): it only ever clips
     /// a text longer than this.
     static let slimTextMax = 4_000
+
+    /// The finished turn's provisional reply: its text, and the tasks an Org chat's
+    /// line named. The line leaves the text and rides as `about` before the clip, as
+    /// the server's history parse does, so the provisional row matches the canonical
+    /// one and the turn-end duplicate check compares like with like.
+    static func provisionalReply(_ liveText: String, truncated: Bool) -> (text: String, about: [String]?) {
+        guard !truncated else { return ("", nil) }
+        let reading = MessageAboutTag.read(liveText)
+        return (clipProvisional(reading.text), reading.ids.isEmpty ? nil : reading.ids)
+    }
 
     static func clipProvisional(_ text: String) -> String {
         guard text.utf16.count > liveTextMax else { return text }
@@ -2295,7 +2310,7 @@ final class SessionConversationStore {
         // mismatched bubble. Skip the provisional row and let the refetch
         // below paint the canonical one (a brief gap on multi-100KB replies
         // is acceptable; a wrong-text flash is not).
-        let finished = liveTextTruncated ? "" : Self.clipProvisional(liveText)
+        let (finished, finishedAbout) = Self.provisionalReply(liveText, truncated: liveTextTruncated)
         liveText = ""
         liveTextTruncated = false
         FreezeContext.shared.setLiveText(chars: 0, truncated: false)
@@ -2305,17 +2320,20 @@ final class SessionConversationStore {
             // of its own, below that message, until the refetch below replaces it.
             tailSeq += 1
             let shown = historyMessages.last.map { $0.role == "assistant" && $0.text == finished } ?? false
-            let tail = finished.isEmpty || shown ? [] : [ChatMessage(
+            var tailRow = ChatMessage(
                 id: "provisional-tail-\(tailSeq)", role: "assistant", text: finished,
-                createdAt: ISO8601DateFormatter().string(from: AppClock.now()), kind: nil)]
+                createdAt: ISO8601DateFormatter().string(from: AppClock.now()), kind: nil)
+            tailRow.about = finishedAbout
+            let tail = finished.isEmpty || shown ? [] : [tailRow]
             sentRuns.endTurn(rows: (tail, [:]), tailID: "sent-run-tail-\(tailSeq)")
         } else if !finished.isEmpty {
             let dup = historyMessages.last.map { $0.role == "assistant" && $0.text == finished } ?? false
             if !dup {
-                let provisional = ChatMessage(
+                var provisional = ChatMessage(
                     id: "provisional-\(finished.hashValue)", role: "assistant",
                     text: finished, createdAt: ISO8601DateFormatter().string(from: AppClock.now()), kind: nil
                 )
+                provisional.about = finishedAbout
                 historyMessages.append(provisional)
             }
         }

@@ -30,6 +30,8 @@ enum TimelineTurnMarker {
     }
 
     static func read(_ text: String) -> Reading {
+        // The tasks line of an Org chat (MessageAboutTag) may follow the marker: it goes first.
+        let text = MessageAboutTag.read(text).text
         guard tags.contains(where: { text.contains($0) }) else { return Reading(text: text, ack: false) }
         // Foundation splits on "\n" alone (a Swift `split` would keep "\r\n" whole,
         // a single Character), which is how the web's `split('\n')` cuts.
@@ -56,8 +58,10 @@ enum TimelineTurnMarker {
         return Reading(text: String(kept.reversed().drop(while: \.isWhitespace).reversed()), ack: true)
     }
 
-    /// The text as the screen shows it: the marker line never prints.
+    /// The text as the screen shows it: the marker line never prints, nor the
+    /// tasks line of an Org chat (`MessageAboutTag`).
     static func strip(_ text: String) -> String {
+        let text = MessageAboutTag.strip(text)
         let reading = read(text)
         return reading.ack ? reading.text : text
     }
@@ -66,6 +70,7 @@ enum TimelineTurnMarker {
     /// START of the marker is held back too, so the tag never flashes up character
     /// by character (`stripTurnMarker(text, true)` on the web).
     static func stripLive(_ text: String) -> String {
+        let text = MessageAboutTag.strip(text, streaming: true)
         let reading = read(text)
         if reading.ack { return reading.text }
         let cut = text.lastIndex(of: "\n")

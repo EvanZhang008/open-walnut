@@ -311,12 +311,21 @@ final class TaskMentionResolver: @unchecked Sendable {
 
     private let lock = NSLock()
     private var titles: [String: String] = [:]
+    /// id -> its user state (`UserState.rawValue`), for the status dot of a pill that
+    /// shows it (`MessageAboutTag`). A looked-up id's change moves `statesVersion`, never
+    /// `version`: a state moves every turn, and only the pill rows draw it, so it must
+    /// not throw away every parsed and measured row the way a rename does.
+    private var states: [String: String] = [:]
+    private var stateObserved: Set<String> = []
+    private var currentStatesVersion = 0
     private var sortedIDs: [String] = []
     private var observed: Set<String> = []
     private var observedOverflow = false
     private var currentVersion = 0
 
     var version: Int { lock.withLock { currentVersion } }
+    /// Moves when a state some pill drew changed (see `states`).
+    var statesVersion: Int { lock.withLock { currentStatesVersion } }
     var isEmpty: Bool { lock.withLock { titles.isEmpty } }
 
     /// Shown title of a known id (exact match only). Records the id as looked up.
@@ -324,6 +333,16 @@ final class TaskMentionResolver: @unchecked Sendable {
         lock.withLock { () -> String? in
             noteObserved(id)
             return titles[id]
+        }
+    }
+
+    /// The user state (`UserState.rawValue`) of a known id. Records the id, so a later
+    /// change of its state re-renders what drew it; a mention that only shows a title
+    /// never asks, so a phase move re-renders nothing there.
+    func state(for id: String) -> String? {
+        lock.withLock { () -> String? in
+            if stateObserved.count < Self.observedLimit { stateObserved.insert(id) }
+            return states[id]
         }
     }
 
@@ -342,14 +361,20 @@ final class TaskMentionResolver: @unchecked Sendable {
     /// Replace the whole table. Returns true when the version moved (and posts
     /// `didChange`, on the calling thread: `TasksStore` calls this on the main actor).
     @discardableResult
-    func update(_ next: [String: String]) -> Bool {
+    func update(_ next: [String: String], states nextStates: [String: String]? = nil) -> Bool {
         let moved = lock.withLock { () -> Bool in
-            guard next != titles else { return false }
+            var statesMoved = false
+            if let nextStates, nextStates != states {
+                statesMoved = stateObserved.contains { states[$0] != nextStates[$0] }
+            }
+            if let nextStates { states = nextStates }
+            if statesMoved { currentStatesVersion &+= 1 }
+            guard next != titles else { return statesMoved }
             let relevant = titles.isEmpty || observedOverflow || touchesObserved(old: titles, new: next)
             titles = next
             sortedIDs = next.keys.sorted()
             if relevant { currentVersion &+= 1 }
-            return relevant
+            return relevant || statesMoved
         }
         if moved { NotificationCenter.default.post(name: Self.didChange, object: self) }
         return moved
@@ -360,6 +385,9 @@ final class TaskMentionResolver: @unchecked Sendable {
     func resetForTesting() {
         lock.withLock {
             titles = [:]
+            states = [:]
+            stateObserved = []
+            currentStatesVersion &+= 1
             sortedIDs = []
             observed = []
             observedOverflow = false

@@ -204,6 +204,12 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     /// whom it went to, in order, each with its task's title when the server
     /// resolved it. A loop over several tasks is one row with several.
     var sentTo: [SentTarget]? = nil
+    /// Assistant text rows (additive 2026-10-31, server `src/core/org/message-about.ts`):
+    /// the tasks the reply is about, at most 6, drawn under it as live pills in Main's
+    /// and a lead's chat (`MessageAboutTag`). `aboutTagged` says the reply named them
+    /// itself with its `<walnut-about>` line (taken off `text`), not the turn's fallback.
+    var about: [String]? = nil
+    var aboutTagged: Bool? = nil
 
     /// The bubble's long-press item that shows or hides what Walnut added to this
     /// message (set by `TimelineTurnFold` on the copy it draws; never on the wire).
@@ -242,6 +248,7 @@ struct ChatMessage: Codable, Identifiable, Equatable {
         case id, role, text, createdAt, kind, source, detail, resultPreview, agent
         case thinkingText, inputPreview, detailRef, inFlight, answeredBy, isError
         case messageId, sentBy, added, textWithoutContext, injectedAfter, injectedBefore, sentTo
+        case about, aboutTagged
     }
 
     init(id: String, role: String, text: String, createdAt: String, kind: Kind?, source: String? = nil,
@@ -901,6 +908,10 @@ struct SessionTranscript: Codable {
         /// A send's tool row: the tasks it went to (additive 2026-10-30). See
         /// `ChatMessage.sentTo`.
         var sentTo: [SentTarget]? = nil
+        /// An assistant text row: the tasks it is about (additive 2026-10-31). See
+        /// `ChatMessage.about`.
+        var about: [String]? = nil
+        var aboutTagged: Bool? = nil
         /// Rich reads only: the drawer's handle on the full text the previews cut
         /// (additive). See `ChatMessage.detailRef`.
         var detailRef: String? = nil
@@ -910,7 +921,8 @@ struct SessionTranscript: Codable {
              thinkingText: String? = nil, inputPreview: String? = nil, isError: Bool? = nil,
              sentBy: String? = nil, added: [WalnutAddedItem]? = nil, textWithoutContext: String? = nil,
              injectedAfter: [CliInjectedItem]? = nil, injectedBefore: [CliInjectedItem]? = nil,
-             sentTo: [SentTarget]? = nil, detailRef: String? = nil) {
+             sentTo: [SentTarget]? = nil, detailRef: String? = nil,
+             about: [String]? = nil, aboutTagged: Bool? = nil) {
             self.role = role
             self.text = text
             self.timestamp = timestamp
@@ -928,6 +940,8 @@ struct SessionTranscript: Codable {
             self.injectedBefore = injectedBefore
             self.sentTo = sentTo
             self.detailRef = detailRef
+            self.about = about
+            self.aboutTagged = aboutTagged
         }
     }
 

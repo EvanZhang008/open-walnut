@@ -526,6 +526,12 @@ export interface ProjectedTranscriptMessage {
   /** With `added` context blocks: `text` without them (its notes in front kept), the
    *  person's words to draw. `text` stays whole for an older client. */
   textWithoutContext?: string
+  /** Assistant text rows (additive, 2026-10-31): the tasks the message is about, at most 6
+   *  (the history parse's `about`, core/org/message-about.ts), and `aboutTagged` when the
+   *  message named them itself with its `<walnut-about>` line. A client draws them as live
+   *  task pills under the replies of Main's and a lead's session. Absent when none. */
+  about?: string[]
+  aboutTagged?: true
   /** Any row (additive, 2026-10-30): the lines the CLI put in right after it, a
    *  loaded skill's text or a hook's added context (transcript-injected.ts). */
   injectedAfter?: CliAddedItem[]
@@ -811,6 +817,8 @@ export async function buildSessionTranscript(
         // An injected line that got here is a Walnut message the CLI delivered: read as one.
         ...(m.role === 'user' ? { sentBy: transcriptSentBy(m.injected ? { ...m, injected: false } : m) } : {}),
         ...(m.role === 'user' ? projectWalnutAdded(text, m.hints, opts?.full ? null : (opts?.live || wantRich ? 'live' : 'tail')) : {}),
+        // The tasks the reply is about (history parse, core/org/message-about.ts), for the phone's pills.
+        ...(m.role === 'assistant' && m.about?.length ? { about: m.about, ...(m.aboutTagged ? { aboutTagged: true as const } : {}) } : {}),
       })
     }
     // Indexed: the tool's position in ITS OWN message is what makes a row
