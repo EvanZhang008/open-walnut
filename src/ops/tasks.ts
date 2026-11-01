@@ -290,10 +290,25 @@ defineOp({
     const defaulted = askedScope === undefined && scope !== undefined
     let appliedScope = scope
     let you: Record<string, unknown> | undefined
+    let scopeNote: string | undefined
     if (scope && scope !== 'all') {
       me ??= await call('GET', '/me') as CallerMe
       const place = me?.task
-      if (!place?.id) throw new Error('Cannot locate the caller. Use scope=all or omit scope.')
+      // A caller with no task of its own (the Personal AI, a person) has no folder or project
+      // to measure from. A call that also names where to look already says what it wants
+      // (2026-11-01: an 8B model asked task_list {scope:"project", project:"Side projects"}
+      // and gave up on the refusal); one that names nothing is still refused, never widened.
+      if (!place?.id && TASK_LIST_PLACEMENT_FILTERS.some((k) => args[k] !== undefined)) {
+        scope = undefined
+        appliedScope = undefined
+        scopeNote = `scope "${askedScope}" needs a calling task, so it was left out and the filters you gave decide.`
+      } else if (!place?.id) {
+        throw new Error('Cannot locate the caller: scope folder or project needs a calling task. '
+          + 'To list one project, pass project:"<its name>" with no scope; for the whole board, omit scope.')
+      }
+    }
+    if (scope && scope !== 'all') {
+      const place = me!.task!
       // A caller in no folder has nothing narrower than its project.
       appliedScope = scope === 'folder' && !place.group_id ? 'project' : scope
       you = {
@@ -349,6 +364,7 @@ defineOp({
       ? tasks.map((t) => t && typeof t === 'object' && !Array.isArray(t) ? taskView(t as Record<string, unknown>) : t)
       : tasks.map(leanTaskRow)
     const hints = [
+      scopeNote ?? '',
       widenedFrom
         ? `Nothing in your ${widenedFrom} matched ${lookupLabel(args)}, so this searched ${appliedScope === 'all' ? 'the whole board' : 'your whole project'}.`
         : defaulted ? scopeDefaultHint(appliedScope as string | undefined, you) : '',

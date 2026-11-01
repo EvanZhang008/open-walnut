@@ -676,6 +676,20 @@ describe('task_list scope', () => {
     expect(r.paths()).toEqual(['GET /me'])
   })
 
+  it('an unplaceable caller that names the project gets that project, scope left out with a note', async () => {
+    // 2026-11-01: an 8B model asked {scope:"project", project:"Side projects"} from Ask Walnut.
+    const r = scoped({ kind: 'human' }, { tasks: [{ id: 'a', title: 'Plan the bike trip' }], total: 1 })
+    const listed = rec(await r.invoke({ scope: 'project', project: 'Side projects' }))
+    expect(r.paths()[1]).toContain('project=Side')
+    expect(listed.count).toBe(1)
+    expect(String(listed.hint)).toContain('needs a calling task')
+  })
+
+  it('the refusal says how to list one project', async () => {
+    const r = scoped({ kind: 'human' })
+    await expect(r.invoke({ scope: 'project' })).rejects.toThrow(/pass project:"<its name>" with no scope/)
+  })
+
   it('a caller in no folder asking for its folder is measured by its project', async () => {
     const r = scoped(WORKER)
     const listed = rec(await r.invoke({ scope: 'folder' }))
