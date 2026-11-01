@@ -22,10 +22,10 @@
  *  4. a thread the lead opens itself (thread_create, from mail) shows its post as the lead's, with
  *     where it came from; his Follow up lands under it;
  *  5. five asks with three answers (two pairs answered at once), the last answer long, Markdown,
- *     with its tasks line: the two exchanges he wrote after fold into one Earlier line (1, 2, 3),
- *     the last reads in full, numbered 4 and 5, its answer marked as not yet known, folded to a
- *     few lines with Show all, no raw markup, its task as a live pill; opening the card shows all
- *     five with every answer; a real CJK title keeps one line per word.
+ *     with its tasks line: the card holds the summary and only the last answer (what it answers
+ *     in one line, not yet known, folded with Expand on it, no raw markup, its task as a live
+ *     pill), nothing of the two exchanges he wrote after; the Conversation toggle in the body
+ *     shows all five with every answer; a real CJK title keeps one line per word.
  * The fixture is shared, so this file makes its own project and removes what it made.
  */
 import fs from 'node:fs'
@@ -163,7 +163,9 @@ test('a request becomes a thread the lead keeps; asks about one subject are one 
   await leadUpdates(request, t2.id, { merge_into: t1.id })
   await expect(card(page, t2.id)).toHaveCount(0)
   await expect(c1.getByTestId('org-thread-count')).toHaveText(/^2 messages/)
-  await c1.getByTestId('org-thread-head').click()
+  // The whole conversation opens from the toggle in the card body.
+  await c1.getByTestId('org-thread-history').click()
+  await expect(c1.getByTestId('org-thread-history')).toHaveAttribute('aria-expanded', 'true')
   await expect(c1.getByTestId('org-thread-message')).toHaveCount(2)
   await expect(c1.getByTestId('org-thread-message').nth(0)).toContainText(first)
   await expect(c1.getByTestId('org-thread-message').nth(1)).toContainText(second)
@@ -232,9 +234,11 @@ test('a long Unicode request reads in full; an Acknowledge the server refuses pu
   await openThreads(page)
   const c = card(page, thread.id)
   await expect(c.getByTestId('org-thread-title')).toHaveText(`微信的 org 非常乱 ${STAMP}`)
-  // A long voice note folds to a few lines; Show all reads it in full.
+  // Not answered yet: one line on the card; the conversation holds it, folded to a few lines.
+  await expect(c.getByTestId('org-thread-unanswered')).toContainText(`微信的 org 非常乱 ${STAMP}`)
+  await c.getByTestId('org-thread-history').click()
   await c.getByTestId('org-thread-words-more').click()
-  await expect(c.getByTestId('org-thread-words-more')).toHaveText('Show less')
+  await expect(c.getByTestId('org-thread-words-more')).toContainText('Collapse')
   await expect(c.getByTestId('org-thread-message')).toContainText('Paragraph 12:')
   // No horizontal overflow from the long words.
   const overflow = await page.getByTestId('org-threads').evaluate((el) => el.scrollWidth - el.clientWidth)
@@ -272,13 +276,16 @@ test('a thread the lead opens itself shows its post as the lead\'s, and his Foll
   await c.getByTestId('org-thread-follow-open').click()
   await c.getByTestId('org-thread-follow-input').fill(`yes, confirm it ${STAMP}`)
   await c.getByTestId('org-thread-follow-send').click()
-  await expect(c.getByTestId('org-thread-message')).toContainText(`yes, confirm it ${STAMP}`, { timeout: 30_000 })
+  // He wrote after the post: it leaves the card; his message waits on it in one line.
+  await expect(c.getByTestId('org-thread-unanswered')).toContainText(`yes, confirm it ${STAMP}`, { timeout: 30_000 })
+  await expect(c.getByTestId('org-thread-opener')).toHaveCount(0)
   await shot(page, 'opened')
   expect((await threads(request)).find((t) => t.id === opened.id)?.messages.map((m) => m.via)).toEqual(['follow-up'])
 })
 
-test('a long thread reads as its conversation: what he knows folds to one line, the rest in full', async ({ page, request }) => {
-  const project = `Threads talk ${STAMP}`
+test('a long thread\'s card is its summary and the answer he has not seen; the conversation opens from the card body', async ({ page, request }) => {
+  // Its own per browser: two browser projects in one run share STAMP and would share the node.
+  const project = `Threads talk ${STAMP} ${test.info().project.name}`
   const work = await createTask(request, `Small model task ${STAMP}`, project)
   // Two tasks: a project of one has no lead of its own yet.
   await createTask(request, `Second task ${STAMP}`, project)
@@ -319,38 +326,50 @@ test('a long thread reads as its conversation: what he knows folds to one line, 
   await detail.getByTestId('org-top-threads').click()
   const c = card(page, 'th-0297973b5725')
   await expect(c).toBeVisible()
-  // Context: the asks he wrote after an answer to, as one line.
-  await expect(c.getByTestId('org-thread-earlier')).toContainText('1 what is the small model?')
-  await expect(c.getByTestId('org-thread-earlier')).toContainText('3 do not do this')
-  // In full: the last exchange, numbered 4 and 5, the answer not yet known to him.
-  await expect(c.getByTestId('org-thread-message')).toHaveCount(2)
-  await expect(c.locator('.org-thread-n')).toHaveText(['4', '5'])
+  // The card: the title, the lead's summary and only the answer he has not seen (2026-11-01, the
+  // user: "I replied from the first to the ninth, so why still show the first to the eighth?").
+  await expect(c.getByTestId('org-thread-reply')).toHaveText('Explained, and every part of it stopped')
+  await expect(c.getByTestId('org-thread-earlier')).toHaveCount(0)
+  await expect(c.getByTestId('org-thread-message')).toHaveCount(0)
+  await expect(c).not.toContainText('what is the small model?')
+  await expect(c).not.toContainText('Nobody did.')
   const answer = c.getByTestId('org-thread-answer')
   await expect(answer).toHaveCount(1)
   await expect(answer).toHaveAttribute('data-known', 'false')
   await expect(answer).toHaveClass(/is-news/)
+  await expect(answer.getByTestId('org-thread-re')).toContainText('which part of Walnut, the titles? / this is the same thread')
   await expect(answer.locator('strong')).toHaveText('Where the small model runs')
   await expect(answer.getByTestId('msg-about').locator(`a[data-task-id="${work}"]`)).toContainText(`Small model task ${STAMP}`)
   await expect(c).not.toContainText('<walnut-')
-  // Long: folded to a few lines, Show all opens the rest.
+  // Its detail folded to a few lines; Expand sits on the answer itself, and a click on the text opens it too.
   const body = answer.getByTestId('org-thread-answer-body')
   const folded = await body.evaluate((el) => el.clientHeight)
-  expect(folded).toBeLessThanOrEqual(170)
+  expect(folded).toBeLessThanOrEqual(96)
   await shot(page, 'conversation')
-  await answer.getByTestId('org-thread-answer-body-more').click()
-  await expect(answer.getByTestId('org-thread-answer-body-more')).toHaveText('Show less')
+  const toggle = answer.getByTestId('org-thread-answer-body-more')
+  await expect(toggle).toContainText('Expand')
+  const near = await toggle.evaluate((el) => el.getBoundingClientRect().left - (el.closest('.org-thread-answer')!.getBoundingClientRect().left))
+  expect(near).toBeLessThanOrEqual(24)
+  await body.click()
+  await expect(toggle).toContainText('Collapse')
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
   expect(await body.evaluate((el) => el.clientHeight)).toBeGreaterThan(folded)
   await expect(body).toContainText('Background job 10')
-  // The whole conversation: five messages, three answers, the first two known.
-  await c.getByTestId('org-thread-earlier').click()
+  await toggle.click()
+  await expect(toggle).toContainText('Expand')
+  // The whole conversation, from the toggle in the card body: five messages, three answers, the first two known.
+  await expect(c.getByTestId('org-thread-count')).toHaveText('5 messages')
+  await c.getByTestId('org-thread-history').click()
   await expect(c.getByTestId('org-thread-message')).toHaveCount(5)
+  await expect(c.locator('.org-thread-n')).toHaveText(['1', '2', '3', '4', '5'])
   await expect(c.getByTestId('org-thread-answer')).toHaveCount(3)
   await expect(c.getByTestId('org-thread-answer').nth(1)).toContainText('Nobody did.')
   await expect(c.getByTestId('org-thread-answer').nth(1)).toHaveAttribute('data-known', 'true')
-  await expect(c.getByTestId('org-thread-earlier')).toHaveCount(0)
+  await shot(page, 'conversation-open')
+  await c.getByTestId('org-thread-history').click()
+  await expect(c.getByTestId('org-thread-message')).toHaveCount(0)
   // The CJK title keeps whole lines, and nothing runs past the card.
   const title = await c.getByTestId('org-thread-title').evaluate((el) => ({ h: el.getBoundingClientRect().height, lh: parseFloat(getComputedStyle(el).lineHeight) }))
   expect(title.h).toBeLessThanOrEqual(title.lh * 1.5)
   expect(await page.getByTestId('org-threads').evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1)
-  await shot(page, 'conversation-open')
 })

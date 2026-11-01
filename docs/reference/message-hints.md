@@ -138,11 +138,14 @@ the same subject under one of them (`thread_update` `merge_into`), and the threa
 the node was last told (2026-11-01, the user: "if my multiple ask is about the same thread, add it
 below that thread"). It also carries the cleanup rule (`src/core/org/thread-rules.ts`): an answer
 counts as known only once he reacted to it after it was given, silence is not knowing, and the node
-may open a thread itself (`thread_create`) only for what he must act on or asked to follow.
+may open a thread itself (`thread_create`) only for what he must act on or asked to follow; and what
+a card says: its title, a summary written latest first with a sentence or two of background, and only
+the answers he has not seen, with news about a thread going into its summary, never into new rows.
 `threads-tidy` (Main and the leads only; every 3 messages, at session start and after a compaction,
 only when there is one): the open threads that need the node's decision now (he wrote after an
 answer in another thread: did he react to it? a stand-in title; a state still `new` though it was
-answered), with the same rule, so the node folds what he knows (`thread_update` `known`) and closes
+answered), with the same rules, so the node takes what he knows off the card (`thread_update` `known`), keeps
+the summary latest first, and closes
 what he reacted to as finished (2026-11-01, the user: "you should proactively clean the thread ...
 make sure this is a Walnut feature, not just your memory").
 

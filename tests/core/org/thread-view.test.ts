@@ -1,11 +1,10 @@
 /**
- * How a thread reads (src/core/org/thread-view.ts): its conversation, numbered, what the user
- * already knows folded to one line of context. The shape of the user's own case (2026-11-01, a
- * lead's thread of five messages, two pairs of them answered at once): it reads as the last
- * exchange with one line of context, not five blocks.
+ * How a thread reads (src/core/org/thread-view.ts): its conversation, numbered, and its card, which
+ * keeps only the answers the user has not reacted to (2026-11-01, the user: "I replied from the
+ * first one to the ninth, so why still show the first to the eighth?").
  */
 import { describe, it, expect } from 'vitest'
-import { exchangesOf, threadView, unreactedAnswers, type ViewMessage, type ViewThread } from '../../../src/core/org/thread-view.js'
+import { cardView, exchangesOf, unreactedAnswers, type ViewMessage, type ViewThread } from '../../../src/core/org/thread-view.js'
 
 const at = (min: number, sec = 0) => new Date(Date.UTC(2026, 10, 1, 4, min, sec)).toISOString()
 const msg = (id: string, min: number, text: string, answer?: { min: number; text: string }): ViewMessage => ({
@@ -32,49 +31,50 @@ describe('a thread as its conversation', () => {
     expect(xs.map((x) => x.answer?.text)).toEqual(['It is the fast model in the local config.', 'Nobody. I stopped it all.', 'Every small background job.'])
   })
 
-  it('he wrote after the first two answers, not after the last: two fold to context, the last reads in full', () => {
-    const v = threadView(fiveAsks())
-    expect(v.exchanges.map((x) => x.known)).toEqual([true, true, false])
-    expect(v.folded).toBe(2)
+  it('he wrote after the first two answers, not after the last: the card keeps only the last', () => {
+    const xs = exchangesOf(fiveAsks())
+    expect(xs.map((x) => x.known)).toEqual([true, true, false])
+    expect(cardView(fiveAsks()).unread.map((x) => x.n)).toEqual([4])
     expect(unreactedAnswers(fiveAsks())).toBe(1)
   })
 
-  it('an answer that came after his next message was news when he wrote it: it does not fold', () => {
-    const t: ViewThread = { messages: [msg('tm-1', 1, 'a', { min: 5, text: 'A' }), msg('tm-2', 2, 'b', { min: 6, text: 'B' })] }
-    const v = threadView(t)
-    expect(v.exchanges.map((x) => x.known)).toEqual([false, false])
-    expect(v.folded).toBe(0)
+  it('nine asks, each answered, he asked again after the first eight: the card holds the ninth answer alone', () => {
+    const t: ViewThread = { messages: Array.from({ length: 9 }, (_, i) => msg(`tm-${i + 1}`, i * 10, `ask ${i + 1}`, { min: i * 10 + 2, text: `answer ${i + 1}` })) }
+    const card = cardView(t)
+    expect(card.unread.map((x) => x.answer?.text)).toEqual(['answer 9'])
+    expect(card.waiting).toEqual([])
   })
 
-  it('messages still waiting read together at the end, never as known', () => {
+  it('an answer that came after his next message was news when he wrote it: both stay on the card', () => {
+    const t: ViewThread = { messages: [msg('tm-1', 1, 'a', { min: 5, text: 'A' }), msg('tm-2', 2, 'b', { min: 6, text: 'B' })] }
+    expect(exchangesOf(t).map((x) => x.known)).toEqual([false, false])
+    expect(cardView(t).unread.map((x) => x.answer?.text)).toEqual(['A', 'B'])
+  })
+
+  it('messages still waiting read together at the end, never as known, and wait on the card', () => {
     const t: ViewThread = { messages: [msg('tm-1', 1, 'a', { min: 2, text: 'A' }), msg('tm-2', 3, 'b'), msg('tm-3', 4, 'c')] }
     const xs = exchangesOf(t)
     expect(xs.map((x) => [x.n, x.messages.length, !!x.answer, x.known])).toEqual([[1, 1, true, true], [2, 2, false, false]])
-    expect(threadView(t).folded).toBe(1)
+    const card = cardView(t)
+    expect(card.unread).toEqual([])
+    expect(card.waiting.map((x) => x.messages.map((m) => m.id))).toEqual([['tm-2', 'tm-3']])
   })
 
-  it('the node\'s known mark, or his Acknowledge, folds the rest; the last exchange still reads in full', () => {
-    const marked = threadView({ ...fiveAsks(), known: { through: 'tm-5' } })
-    expect(marked.exchanges.every((x) => x.known)).toBe(true)
-    expect(marked.folded).toBe(2)
-    const acked = threadView({ ...fiveAsks(), closed: { by: 'human' } })
-    expect(acked.exchanges.every((x) => x.known)).toBe(true)
-    // A close by the node is not his Acknowledge.
-    expect(threadView({ ...fiveAsks(), closed: { by: 'task:lead-1' } }).exchanges[2].known).toBe(false)
+  it('the node\'s known mark, or his Acknowledge, empties the card of answers; a close by the node does not', () => {
+    expect(cardView({ ...fiveAsks(), known: { through: 'tm-5' } }).unread).toEqual([])
+    expect(cardView({ ...fiveAsks(), closed: { by: 'human' } }).unread).toEqual([])
+    expect(cardView({ ...fiveAsks(), closed: { by: 'task:lead-1' } }).unread.map((x) => x.n)).toEqual([4])
   })
 
-  it('one message, or none answered: nothing folds', () => {
-    expect(threadView({ messages: [msg('tm-1', 1, 'a')] }).folded).toBe(0)
-    expect(threadView({ messages: [msg('tm-1', 1, 'a', { min: 2, text: 'A' })] }).folded).toBe(0)
-    expect(threadView({ messages: [] }).exchanges).toEqual([])
+  it('no messages: nothing on the card', () => {
+    expect(cardView({ messages: [] })).toEqual({ unread: [], waiting: [] })
   })
 
-  it('a thread the node opened starts with its post (number 0), known once he wrote after it', () => {
+  it('a thread the node opened: its post is on the card until he writes after it', () => {
     const opener = { text: 'A mail he must answer', at: at(0), from: 'mail' }
-    const fresh = threadView({ messages: [], opener })
-    expect(fresh.exchanges).toEqual([{ n: 0, messages: [], opener, known: false }])
-    const replied = threadView({ messages: [msg('tm-1', 3, 'confirm it', { min: 4, text: 'Done' })], opener })
-    expect(replied.exchanges.map((x) => [x.n, x.known])).toEqual([[0, true], [1, false]])
-    expect(replied.folded).toBe(1)
+    expect(cardView({ messages: [], opener }).unread).toEqual([{ n: 0, messages: [], opener, known: false }])
+    const replied = { messages: [msg('tm-1', 3, 'confirm it', { min: 4, text: 'Done' })], opener }
+    expect(exchangesOf(replied).map((x) => [x.n, x.known])).toEqual([[0, true], [1, false]])
+    expect(cardView(replied).unread.map((x) => x.n)).toEqual([1])
   })
 })

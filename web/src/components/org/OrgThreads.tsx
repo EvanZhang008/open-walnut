@@ -5,17 +5,17 @@
  * it below that thread"). Walnut files every message he sends the node and puts the node's chat
  * reply under it (src/core/org/thread-answers.ts); the node keeps each thread's title and state.
  *
- * A thread reads as its conversation, like a Slack thread ("make it clear what is the
- * conversation in this thread"): each of his messages, numbered, with the node's answer under
- * it. What he already knows (he reacted after it) folds to one line of context, and the rest
- * shows in full (src/core/org/thread-view.ts): "only show the last one and some kind of context
- * for before, unless the user doesn't know".
+ * A card is kept short (2026-11-01, the user: "the purpose is to keep the thread extremely
+ * concise ... I replied from the first one to the ninth, so why still show the first to the
+ * eighth?"): its title, the node's summary (latest first, a sentence or two of background), and
+ * only the node's answers he has not reacted to, each folded to a few lines with an Expand /
+ * Collapse toggle on the answer itself ("I have to click the corner text ... outrageous"). What he
+ * already knew (src/core/org/thread-view.ts) is gone from the card; the whole conversation opens
+ * from a toggle in the card body, numbered, with Split out on each message.
  *
- *   a card     state, title, where it stands; Earlier (his asks he already had answered, one
- *              line); then the exchanges still news, his words and the answer folded to a few
- *              lines; Acknowledge closes it, Follow up sends a message filed under it
- *   opened     every exchange, Split out on each message when it holds more than one (a merge
- *              the node got wrong)
+ *   a card     state, title, time; the summary; its tasks; the answers still news; one line per
+ *              message still waiting for an answer; Conversation (N messages); Acknowledge,
+ *              Follow up (a message filed under it)
  *   Closed     only open threads show; the ones closed this week (kept a week, then deleted)
  *              open from one quiet line at the bottom, Reopen on each
  */
@@ -23,7 +23,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { userStateOf } from '@open-walnut/org-tree';
 import { USER_STATE_LABELS } from '@open-walnut/user-status';
-import { threadView, type ThreadExchange } from '@open-walnut/thread-view';
+import { cardView, exchangesOf, type ThreadExchange } from '@open-walnut/thread-view';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { AnswerBox } from '@/components/common/AnswerBox';
 import { RichMarkdown } from '@/components/chat/RichBlocks';
@@ -48,8 +48,8 @@ const STATE_LABEL: Record<OrgThreadState, string> = {
 const STATE_DOT: Record<OrgThreadState, string> = {
   new: 'var(--accent, #0A84FF)', working: 'var(--success, #34C759)', needs: 'var(--error, #FF3B30)', answered: 'var(--fg-muted, #86868B)',
 };
-/** How much of his words the Earlier line quotes per message. */
-const EARLIER_WORDS = 48;
+/** How much of his words the line above an answer quotes. */
+const QUOTE_WORDS = 72;
 /** Where a thread the node opened itself came from (src/core/org/threads-model.ts THREAD_SOURCES). */
 const FROM_LABEL: Record<string, string> = { mail: 'Mail', task: 'A task', letter: 'A letter', trigger: 'A trigger', node: 'Its own finding' };
 
@@ -143,7 +143,10 @@ function FollowUp({ onSend, onDone }: { onSend: (text: string) => Promise<boolea
   );
 }
 
-/** Long words fold to a few lines, the rest one click away (his voice notes, the node's long replies). */
+/**
+ * Long words fold to a few lines. The toggle sits on the text itself, at its left, and a click on
+ * the folded text opens it too (a link or a pill inside still does its own thing).
+ */
 function Fold({ children, className, testId }: { children: React.ReactNode; className: string; testId: string }) {
   const box = useRef<HTMLDivElement>(null);
   const [long, setLong] = useState(false);
@@ -157,14 +160,20 @@ function Fold({ children, className, testId }: { children: React.ReactNode; clas
     ro?.observe(el);
     return () => ro?.disconnect();
   }, [whole]);
+  const folded = long && !whole;
   return (
     <>
-      <div ref={box} className={`org-thread-fold ${className}${whole ? ' is-whole' : ''}${long && !whole ? ' is-folded' : ''}`} data-testid={testId}>
+      <div
+        ref={box}
+        className={`org-thread-fold ${className}${whole ? ' is-whole' : ''}${folded ? ' is-folded' : ''}`}
+        data-testid={testId}
+        onClick={folded ? (e) => { if (!(e.target as HTMLElement).closest('a, button')) setWhole(true); } : undefined}
+      >
         {children}
       </div>
       {(long || whole) && (
-        <button type="button" className="org-thread-link org-thread-more" data-testid={`${testId}-more`} onClick={() => setWhole(!whole)}>
-          {whole ? 'Show less' : 'Show all'}
+        <button type="button" className="org-thread-toggle" data-testid={`${testId}-more`} aria-expanded={whole} onClick={() => setWhole(!whole)}>
+          <span aria-hidden="true">{whole ? '▴' : '▾'}</span>{whole ? 'Collapse' : 'Expand'}
         </button>
       )}
     </>
@@ -172,14 +181,17 @@ function Fold({ children, className, testId }: { children: React.ReactNode; clas
 }
 
 /** The node's answer as its chat shows it, folded to a few lines with the rest one click away. */
-function Answer({ text, about, at, by, known, now, testId = 'org-thread-answer' }: {
+function Answer({ text, about, at, by, known, now, testId = 'org-thread-answer', re }: {
   text: string; about?: string[]; at: string; by: string; known: boolean; now: number; testId?: string;
+  /** His words it answers, one line, on a card (the conversation shows them in full instead). */
+  re?: string;
 }) {
   const body = useMemo(() => stripTurnMarker(stripQuestionTag(text)), [text]);
   const ids = useMemo(() => rowAbout(about, text), [about, text]);
   return (
     <div className={`org-thread-answer${known ? '' : ' is-news'}`} data-testid={testId} data-known={known ? 'true' : 'false'}>
       <div className="org-thread-answer-by">{by} · {clock(at, now)}</div>
+      {re && <div className="org-thread-re" data-testid="org-thread-re">{re}</div>}
       <Fold className="org-thread-answer-body" testId="org-thread-answer-body"><RichMarkdown text={body} /></Fold>
       {ids.length > 0 && <MessageAbout ids={ids} />}
     </div>
@@ -235,17 +247,17 @@ function ThreadCard({ t, all, tasks, onOpenTask, state, onFollowUp, name, now }:
   t: OrgThread; all: readonly OrgThread[]; tasks: readonly Task[]; onOpenTask: (id: string) => void;
   state: OrgThreadsState; onFollowUp: Props['onFollowUp']; name: string; now: number;
 }) {
+  /** The whole conversation shown, in place of what the card keeps. */
   const [open, setOpen] = useState(false);
   const [following, setFollowing] = useState(false);
   const closed = !!t.closed;
-  const view = useMemo(() => threadView(t), [t]);
+  const card = useMemo(() => cardView(t), [t]);
+  const exchanges = useMemo(() => exchangesOf(t), [t]);
   const follows = t.follows ? all.find((x) => x.id === t.follows) : undefined;
   const last = t.messages[t.messages.length - 1] ?? t.opener;
-  const earlier = view.exchanges.slice(0, view.folded);
-  const shown = open ? view.exchanges : view.exchanges.slice(view.folded);
-  const earlierWords = earlier.flatMap((x) => (x.opener
-    ? [`Opened: ${oneLine(x.opener.text, EARLIER_WORDS)}`]
-    : x.messages.map((m, i) => `${x.n + i} ${oneLine(m.text || 'A picture', EARLIER_WORDS)}`))).join('  ·  ');
+  const count = t.messages.length + (t.opener ? 1 : 0);
+  const quote = (x: ThreadExchange<OrgThreadMessage>) => `\u201c${oneLine(x.messages.map((m) => m.text || 'A picture').join(' / '), QUOTE_WORDS)}\u201d`;
+  const from = (o: { from: string; ref?: string }) => `${FROM_LABEL[o.from] ?? FROM_LABEL.node}${o.ref ? `: ${o.ref}` : ''}`;
   return (
     <li className={`org-thread${closed ? ' is-closed' : ''}${open ? ' is-open' : ''}`} data-testid="org-thread" data-thread-id={t.id} data-state={closed ? 'closed' : t.state}>
       <button type="button" className="org-thread-head" aria-expanded={open} data-testid="org-thread-head" onClick={() => setOpen(!open)}>
@@ -255,24 +267,38 @@ function ThreadCard({ t, all, tasks, onOpenTask, state, onFollowUp, name, now }:
         </span>
         <span className="org-thread-meta">
           {t.opener && <span data-testid="org-thread-from">Opened by {name} · </span>}
-          {t.messages.length > 1 && <span data-testid="org-thread-count">{t.messages.length} messages · </span>}
           {timeAgo(last?.at ?? t.updatedAt, { now })}
-          <span className="org-thread-chevron" aria-hidden="true">{open ? ' ▾' : ' ▸'}</span>
         </span>
         <span className="org-thread-title" data-testid="org-thread-title">{t.title}</span>
       </button>
       {follows && <p className="org-thread-follows">Asks again about “{follows.title}”</p>}
-      {t.reply && <Markdown text={t.reply} className="org-thread-reply" testId="org-thread-reply" />}
+      {t.reply && <Markdown text={t.reply} className="org-thread-summary" testId="org-thread-reply" />}
       {!!t.tasks?.length && <TaskChips ids={t.tasks} tasks={tasks} onOpenTask={onOpenTask} />}
-      {!open && earlier.length > 0 && (
-        <button type="button" className="org-thread-earlier" data-testid="org-thread-earlier" title="Show the whole conversation" onClick={() => setOpen(true)}>
-          <span className="org-thread-earlier-label">Earlier</span>
-          <span className="org-thread-earlier-words">{earlierWords}</span>
+      {!open && card.unread.length > 0 && (
+        <ol className="org-thread-unread" data-testid="org-thread-unread">
+          {card.unread.map((x) => (
+            <li key={x.messages[0]?.id ?? 'opener'} className="org-thread-exchange" data-testid="org-thread-exchange" data-n={x.n} data-known="false">
+              {x.opener
+                ? <Answer text={x.opener.text} at={x.opener.at} by={`${name} opened this \u00b7 ${from(x.opener)}`} known={false} now={now} testId="org-thread-opener" />
+                : <Answer text={x.answer!.text} about={x.answer!.about} at={x.answer!.at} by={name} known={false} now={now} re={quote(x)} />}
+            </li>
+          ))}
+        </ol>
+      )}
+      {!open && !closed && card.waiting.map((x) => (
+        <p key={x.messages[0].id} className="org-thread-waiting" data-testid="org-thread-unanswered">Not answered yet: {quote(x)}</p>
+      ))}
+      {count > 0 && (
+        <button type="button" className="org-thread-toggle org-thread-history" data-testid="org-thread-history" aria-expanded={open} onClick={() => setOpen(!open)}>
+          <span aria-hidden="true">{open ? '\u25b4' : '\u25be'}</span>
+          {open ? 'Hide the conversation' : 'Conversation'} · <span data-testid="org-thread-count">{count} {count === 1 ? 'message' : 'messages'}</span>
         </button>
       )}
-      <ol className="org-thread-conversation" data-testid="org-thread-messages">
-        {shown.map((x) => <Exchange key={x.messages[0]?.id ?? 'opener'} x={x} t={t} name={name} state={state} now={now} />)}
-      </ol>
+      {open && (
+        <ol className="org-thread-conversation" data-testid="org-thread-messages">
+          {exchanges.map((x) => <Exchange key={x.messages[0]?.id ?? 'opener'} x={x} t={t} name={name} state={state} now={now} />)}
+        </ol>
+      )}
       {following && onFollowUp ? (
         <FollowUp onSend={(text) => onFollowUp(t.id, text)} onDone={() => setFollowing(false)} />
       ) : (

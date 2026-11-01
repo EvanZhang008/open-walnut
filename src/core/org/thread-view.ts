@@ -3,9 +3,10 @@
  * user's messages with the node's answer under it, numbered (2026-11-01, the user: "do it like
  * slack thread ... 1. what is small mode, then your explanation, 2. why, who asked you to do it").
  *
- * What he already knows folds to one line of context; what he does not is shown in full
- * (2026-11-01, the user: "only show the last one and some kind of context for before, unless the
- * user doesn't know about a thread"). He knows an answer once he reacted after it: wrote again in
+ * The card shows only what he has not seen: the node's answers he has not reacted to, under the
+ * node's summary; what he already knew is gone from it (2026-11-01, the user: "I replied from the
+ * first one to the ninth, so why still show the first to the eighth?"). The whole conversation
+ * stays one click away. He knows an answer once he reacted after it: wrote again in
  * the thread, the node marked it known after he reacted elsewhere (`known`, checked by the
  * model), or he acknowledged the thread. Silence is not knowing ("I had not replied ... so clearly
  * I had not acknowledged it").
@@ -42,12 +43,6 @@ export interface ThreadExchange<M extends ViewMessage = ViewMessage> {
   known: boolean;
 }
 
-export interface ThreadView<M extends ViewMessage = ViewMessage> {
-  exchanges: ThreadExchange<M>[];
-  /** The first exchanges that fold into the context line (he knows them); the rest show in full. */
-  folded: number;
-}
-
 /** Group the messages by the answer that covers them, in order. Messages after the last answer wait together. */
 export function exchangesOf<M extends ViewMessage>(t: ViewThread<M>): ThreadExchange<M>[] {
   const out: ThreadExchange<M>[] = [];
@@ -79,16 +74,21 @@ function sameAnswer(a: ViewMessage['answer'], b: ViewMessage['answer']): boolean
   return a.at === b.at && a.text === b.text;
 }
 
-/** The thread as it reads: exchanges he knows fold to context, the latest stays in full. */
-export function threadView<M extends ViewMessage>(t: ViewThread<M>): ThreadView<M> {
-  const exchanges = exchangesOf(t);
-  const firstNews = exchanges.findIndex((x) => !x.known);
-  // All known: the last exchange still reads in full, the rest is context.
-  const folded = firstNews < 0 ? Math.max(0, exchanges.length - 1) : firstNews;
-  return { exchanges, folded };
-}
-
 /** The node's words that wait on his reaction: answered (or posted), and he has not written since. */
 export function unreactedAnswers(t: ViewThread): number {
   return exchangesOf(t).filter((x) => (x.answer || x.opener) && !x.known).length;
+}
+
+/** What a card shows: the answers he has not reacted to, and his messages still waiting for one. */
+export interface CardView<M extends ViewMessage = ViewMessage> {
+  unread: ThreadExchange<M>[];
+  waiting: ThreadExchange<M>[];
+}
+
+export function cardView<M extends ViewMessage>(t: ViewThread<M>): CardView<M> {
+  const exchanges = exchangesOf(t);
+  return {
+    unread: exchanges.filter((x) => (x.answer || x.opener) && !x.known),
+    waiting: exchanges.filter((x) => !x.answer && !x.opener),
+  };
 }

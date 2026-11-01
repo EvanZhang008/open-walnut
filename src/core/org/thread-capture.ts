@@ -17,7 +17,7 @@ import {
   fileMessage, isOpen, lastUserAt, newThreadId, newThreadMessageId, reactedSince, sortedThreads,
   type FileMessageInput, type ThreadCloseHow, type ThreadsFile, type ThreadState, type ThreadVia, type ThreadWriter,
 } from './threads-model.js';
-import { THREADS_KNOWN_RULE, THREADS_OPEN_RULE } from './thread-rules.js';
+import { THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_SUMMARY_RULE } from './thread-rules.js';
 import { exchangesOf } from './thread-view.js';
 
 /** Open threads named to the node with each message (the newest). */
@@ -187,8 +187,8 @@ export function threadHintText(s: ThreadHintState): string {
   if (s.created && !s.duplicate) {
     parts.push('Then give the thread a short title of a few words, in the language you write to him, with thread_update (title, and ask: one line of what he wants).');
   }
-  parts.push('As the work moves, keep it current with thread_update: state (working, needs: waiting on him, answered: you answered and he may close it), reply (one line of where it stands), add_tasks (the tasks you hand it to). Walnut puts your chat reply under his message by itself.');
-  parts.push(THREADS_KNOWN_RULE, THREADS_OPEN_RULE);
+  parts.push('As the work moves, keep it current with thread_update: state (working, needs: waiting on him, answered: you answered and he may close it), reply (the summary the card shows), title as the subject moves, add_tasks (the tasks you hand it to). Walnut puts your chat reply under his message by itself.');
+  parts.push(THREADS_SUMMARY_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE);
   if (s.closed.length) {
     parts.push(`Closed since you were last told: ${s.closed.map((t) => `${t.id} ${q(t.title)} (${t.by === 'human' ? 'he acknowledged it' : t.how === 'dropped' ? 'dropped' : 'closed'})`).join('; ')}.`);
   }
@@ -242,5 +242,5 @@ const TIDY_WHY: Record<TidyItem['why'], string> = {
 /** What the `threads-tidy` reminder says. */
 export function threadsTidyText(s: ThreadsTidyState): string {
   return `your Threads need cleaning: ${s.items.map((i) => `${i.id} ${q(i.title)} (${i.state}; ${TIDY_WHY[i.why]})`).join('; ')}. `
-    + `${THREADS_KNOWN_RULE} thread_list shows each with your answers.`;
+    + `${THREADS_KNOWN_RULE} ${THREADS_SUMMARY_RULE} thread_list shows each with your answers.`;
 }

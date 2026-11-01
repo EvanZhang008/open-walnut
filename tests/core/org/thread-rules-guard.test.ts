@@ -8,10 +8,12 @@
  * Fails when the prompt line, the `threads` hint, the `threads-tidy` reminder or a thread op loses
  * the rule, when the hint again tells the node it may close on its own say, when Walnut lets a
  * node close or fold an answer the user has not reacted to, or when a thread the node opened stops
- * taking his reply.
+ * taking his reply; or when a place stops saying what a card holds (title, summary latest first,
+ * only the answers he has not seen) and that news about a thread updates its summary, never adds
+ * to it ("the purpose is to keep the thread extremely concise").
  */
 import { describe, it, expect } from 'vitest'
-import { THREADS_KNOWN_RULE, THREADS_OPEN_RULE } from '../../../src/core/org/thread-rules.js'
+import { THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_SUMMARY_RULE } from '../../../src/core/org/thread-rules.js'
 import { THREADS_LINE } from '../../../src/core/sessions/session-context.js'
 import { threadHintText, threadsTidyOf, threadsTidyText, type ThreadHintState } from '../../../src/core/org/thread-capture.js'
 import { emptyThreads, fileMessage, openThread, setAnswers, ThreadError, updateThread } from '../../../src/core/org/threads-model.js'
@@ -37,12 +39,22 @@ describe('the rule says what the user said', () => {
     expect(THREADS_OPEN_RULE).toContain('Never as a progress feed')
     expect(THREADS_OPEN_RULE).toContain('inbox as a letter')
   })
+
+  it('a card is its title, a summary latest first and only what he has not seen; news updates the summary', () => {
+    expect(THREADS_SUMMARY_RULE).toContain('nothing he already knew')
+    expect(THREADS_SUMMARY_RULE).toContain('summary latest first')
+    expect(THREADS_SUMMARY_RULE).toContain('at most one or two sentences of background')
+    expect(THREADS_SUMMARY_RULE).toContain('title following the subject')
+    expect(THREADS_SUMMARY_RULE).toMatch(/update that thread's summary and title .*never open another thread or add messages/)
+    expect(THREADS_KNOWN_RULE).not.toContain('folds to one line of context')
+  })
 })
 
 describe('every place a node reads it carries it', () => {
   it('the prompt line of Main and every lead', () => {
     expect(THREADS_LINE).toContain(THREADS_KNOWN_RULE)
     expect(THREADS_LINE).toContain(THREADS_OPEN_RULE)
+    expect(THREADS_LINE).toContain(THREADS_SUMMARY_RULE)
   })
 
   it('the threads hint on each of his messages, and never the old "close it yourself when he says so"', () => {
@@ -50,6 +62,7 @@ describe('every place a node reads it carries it', () => {
       const text = threadHintText(s)
       expect(text).toContain(THREADS_KNOWN_RULE)
       expect(text).toContain(THREADS_OPEN_RULE)
+      expect(text).toContain(THREADS_SUMMARY_RULE)
       expect(text).not.toMatch(/close it yourself only when he says/i)
     }
   })
@@ -61,6 +74,7 @@ describe('every place a node reads it carries it', () => {
     const tidy = threadsTidyOf(f, Date.parse(at(3)))
     expect(tidy?.items.map((i) => i.why)).toContain('reacted')
     expect(threadsTidyText(tidy!)).toContain(THREADS_KNOWN_RULE)
+    expect(threadsTidyText(tidy!)).toContain(THREADS_SUMMARY_RULE)
     const spec = findHint(null, 'threads-tidy')
     expect(spec?.enabled).toBe(true)
     expect(spec?.triggers).toContain('every_n_turns')
@@ -69,6 +83,7 @@ describe('every place a node reads it carries it', () => {
   it('the thread ops', () => {
     for (const name of ['thread_list', 'thread_update', 'thread_create', 'thread_split', 'thread_file']) {
       expect(getOp(name)?.description, name).toContain(THREADS_KNOWN_RULE)
+      expect(getOp(name)?.description, name).toContain(THREADS_SUMMARY_RULE)
     }
     expect(getOp('thread_update')?.description).toMatch(/known/)
   })
