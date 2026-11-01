@@ -16,11 +16,11 @@
 
 /** Flags followed by a value (`--flag value` or `--flag=value`). */
 export const VALUE_FLAGS = new Set([
-  '--agent', '--agents', '--allowedTools', '--append-system-prompt', '--debug-file',
+  '--agent', '--agents', '--allowedTools', '--append-system-prompt', '--append-system-prompt-file', '--debug-file',
   '--disallowedTools', '--effort', '--fallback-model', '--input-format', '--mcp-config',
   '--model', '--output-format', '--permission-mode', '--permission-prompt-tool',
   '--resume-session-at', '--session-id', '--setting-sources', '--settings',
-  '--system-prompt', '--tools',
+  '--system-prompt', '--system-prompt-file', '--tools',
 ])
 
 /** Flags whose value is optional: taken only when the next argument is no flag. */

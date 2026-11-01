@@ -154,6 +154,8 @@ for (let i = 0; i < args.length; i++) {
     if (value === undefined) continue;
     if (name === '--permission-mode') permissionMode = value;
     else if (name === '--append-system-prompt') appendSystemPrompt = value;
+    // A daemon passes the prompt as a file (src/providers/cli-argv-files-core.ts).
+    else if (name === '--append-system-prompt-file') { try { appendSystemPrompt = fs.readFileSync(value, 'utf8'); } catch { appendSystemPrompt = value; } }
     else if (name === '--output-format') outputFormat = value;
     else if (name === '--input-format') inputFormat = value;
     else if (name === '--model') modelFlag = value;
