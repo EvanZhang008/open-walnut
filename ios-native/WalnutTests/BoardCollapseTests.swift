@@ -150,7 +150,7 @@ final class BoardCollapseTests: XCTestCase {
 
     func testTheStorageKeySitsBesideTheBoardsOtherViewChoices() {
         XCTAssertEqual(BoardCollapse.storageKey, "tasks.board.collapsedGroups")
-        XCTAssertTrue(BoardFilterPrefs.showDoneKey.hasPrefix("tasks.board."))
+        XCTAssertTrue(BoardStatusSectionPrefs.openKey.hasPrefix("tasks.board."))
     }
 
     // MARK: - A row just made

@@ -301,6 +301,96 @@ final class TasksDrawerUITests: XCTestCase {
                       "a drag on the chip rail closed the drawer (rail at \(railFrame))")
     }
 
+    func testTheInlineChipRailStaysVisibleAcrossThePinHandoff() throws {
+        let app = try launchPaired()
+        _ = try openBoard(app)
+        let window = app.windows.firstMatch
+        let filters = app.buttons["board.filters"]
+        let all = app.buttons["board.chip.all"]
+        XCTAssertTrue(filters.waitForExistence(timeout: 5))
+        for round in 0..<3 {
+            let inlineY = filters.frame.midY
+            let up = window.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.7))
+            up.press(forDuration: 0.05, thenDragTo: up.withOffset(CGVector(dx: 0, dy: -240)))
+            XCTAssertLessThan(filters.frame.midY, inlineY - 20, "the board never crossed into its pinned layout")
+            for dy: CGFloat in [-140, 140] {
+                let start = window.coordinate(withNormalizedOffset: .zero)
+                    .withOffset(CGVector(dx: 100, dy: filters.frame.midY))
+                start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: dy)))
+                XCTAssertTrue(board(app).exists)
+                XCTAssertTrue(all.isHittable, "round \(round): the inline/pinned handoff lost All")
+                XCTAssertEqual(all.frame.midY, filters.frame.midY, accuracy: 2)
+                attach(app, "rail-handoff-\(round)-\(Int(dy))")
+            }
+            let down = window.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.3))
+            for _ in 0..<2 {
+                down.press(forDuration: 0.05, thenDragTo: down.withOffset(CGVector(dx: 0, dy: 400)))
+            }
+            XCTAssertGreaterThan(filters.frame.midY, inlineY - 10, "the board never returned to its inline layout")
+        }
+    }
+
+    func testThePinnedChipRailStaysVisibleAfterVerticalAndDiagonalDrags() throws {
+        let app = try launchPaired()
+        _ = try openBoard(app)
+        let window = app.windows.firstMatch
+        let filters = app.buttons["board.filters"]
+        let all = app.buttons["board.chip.all"]
+        XCTAssertTrue(filters.waitForExistence(timeout: 5))
+        XCTAssertTrue(all.waitForExistence(timeout: 5))
+        for id in ["focus", "satellite", "wait"] {
+            XCTAssertTrue(app.buttons["board.chip.\(id)"].exists, "the fixture must include \(id) tasks")
+        }
+        let inlineY = filters.frame.midY
+        let listStart = window.coordinate(withNormalizedOffset: CGVector(dx: 0.35, dy: 0.7))
+        listStart.press(forDuration: 0.05, thenDragTo: listStart.withOffset(CGVector(dx: 0, dy: -300)))
+        let y = filters.frame.midY
+        XCTAssertLessThan(y, inlineY - 20, "the board never reached its pinned layout")
+        let satelliteBefore = app.buttons["board.chip.satellite"].frame.minX
+        for round in 0..<3 {
+            for dy: CGFloat in [-180, 180] {
+                let start = window.coordinate(withNormalizedOffset: .zero)
+                    .withOffset(CGVector(dx: 100, dy: y))
+                start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: 0, dy: dy)))
+                XCTAssertTrue(board(app).exists)
+                XCTAssertTrue(all.isHittable, "round \(round): vertical drag hid All")
+                XCTAssertEqual(all.frame.midY, y, accuracy: 2, "vertical drag moved the chips")
+                attach(app, "rail-vertical-\(round)-\(Int(dy))")
+            }
+        }
+        let sideways = window.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: 230, dy: y))
+        sideways.press(forDuration: 0.05, thenDragTo: sideways.withOffset(CGVector(dx: -180, dy: -12)))
+        XCTAssertTrue(board(app).exists, "a diagonal rail drag closed the drawer")
+        let wait = app.buttons["board.chip.wait"]
+        XCTAssertTrue(wait.isHittable, "the rail no longer scrolls horizontally")
+        XCTAssertLessThan(app.buttons["board.chip.satellite"].frame.minX, satelliteBefore - 30)
+        XCTAssertEqual(wait.frame.midY, y, accuracy: 2)
+        attach(app, "rail-diagonal")
+        let reverse = window.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: 65, dy: y))
+        reverse.press(forDuration: 0.05, thenDragTo: reverse.withOffset(CGVector(dx: 180, dy: 0)))
+        let focus = app.buttons["board.chip.focus"]
+        XCTAssertTrue(focus.isHittable)
+        focus.tap()
+        XCTAssertTrue(focus.isSelected, "Focus did not select")
+        let satellite = app.buttons["board.chip.satellite"]
+        XCTAssertTrue(satellite.isHittable)
+        satellite.tap()
+        XCTAssertTrue(satellite.isSelected, "Satellite did not select")
+        closeWithScrim(app)
+        app.buttons["tasks.menu"].tap()
+        XCTAssertTrue(board(app).waitForExistence(timeout: 5))
+        XCTAssertTrue(satellite.isHittable, "reopening the drawer lost its selected chip")
+        XCTAssertTrue(satellite.isSelected, "reopening the drawer reset its tier")
+        attach(app, "rail-reopened")
+        let back = window.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: 65, dy: filters.frame.midY))
+        back.press(forDuration: 0.05, thenDragTo: back.withOffset(CGVector(dx: 180, dy: 0)))
+        XCTAssertTrue(all.isHittable)
+        all.tap()
+    }
+
     /// Pushing the drawer shut from a board row closes it, and neither opens nor swipes
     /// the row: a row's leading swipe COMPLETES its task, so a close drag that also
     /// swiped it would complete a task nobody meant to touch.

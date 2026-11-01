@@ -384,6 +384,9 @@ struct TaskDetail: Codable {
     var planSessionId: String? = nil
     /// The latest result as stored (additive, 2026-10; may carry `settled`).
     var resultReport: WalnutResultReport? = nil
+    /// The WAITING clock and the watch (additive; see `WalnutTask.waitUntil` / `watchedAt`).
+    var waitUntil: String? = nil
+    var watchedAt: String? = nil
 
     /// The session the web opens for this task: its own slot first, else the newest linked one.
     var currentSessionId: String? {
@@ -415,6 +418,8 @@ struct TaskDetail: Codable {
         case execSessionId = "exec_session_id"
         case planSessionId = "plan_session_id"
         case resultReport = "result_report"
+        case waitUntil = "wait_until"
+        case watchedAt = "watched_at"
     }
 }
 

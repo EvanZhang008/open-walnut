@@ -65,8 +65,8 @@ struct TaskBoardList: View {
     /// The bands as drawn: a folded group is its first band, marked collapsed.
     let entries: [BoardCollapse.Entry]
     let tierChoices: [(id: String, label: String)]
-    // No done toggle on a heading: completed rows fold everywhere by default, and the
-    // one switch that shows them is `Show done` in the band bar's filters menu.
+    // No done toggle on a heading: completed rows are the Completed status section
+    // (`BoardStatusSections`), never a band's.
     /// Just-created row id — its whole row takes a green tint so its landing place is
     /// visible ("where did it land?" is answered by a place on screen, not a toast).
     let newRowId: String?
@@ -86,6 +86,8 @@ struct TaskBoardList: View {
     let onPickTier: (BoardRow, BoardModel.TierToken) -> Void
     let onOpenSession: (BoardRow) -> Void
     let onOpenDetail: (BoardRow) -> Void
+    /// Watch or stop watching a row's task (the long-press menu). nil = no Watch item.
+    var onToggleWatch: ((BoardRow) -> Void)? = nil
 
     /// The heading dot's diameter, SCALED with the heading's own text style.
     ///
@@ -197,7 +199,8 @@ struct TaskBoardList: View {
                         onToggleDone: { onToggleDone(row) },
                         onPickTier: { onPickTier(row, $0) },
                         onOpenSession: { onOpenSession(row) },
-                        onOpenDetail: { onOpenDetail(row) }
+                        onOpenDetail: { onOpenDetail(row) },
+                        onToggleWatch: onToggleWatch.map { toggle in { toggle(row) } }
                     ))
                 }
             } header: {
@@ -715,7 +718,7 @@ private struct BoardHeadingFold: ViewModifier {
 /// It is a ViewModifier rather than lines inside `TaskBoardRow` because
 /// `swipeActions` only works on a direct child of a `List` row — applied inside
 /// the row's own body it silently does nothing.
-private struct BoardRowGestures: ViewModifier {
+struct BoardRowGestures: ViewModifier {
     let row: BoardRow
     let tierChoices: [(id: String, label: String)]
     let currentTier: String?
@@ -723,6 +726,8 @@ private struct BoardRowGestures: ViewModifier {
     let onPickTier: (BoardModel.TierToken) -> Void
     let onOpenSession: () -> Void
     let onOpenDetail: () -> Void
+    /// Watch or stop watching (the board's Watching section). nil = no item.
+    var onToggleWatch: (() -> Void)? = nil
 
     func body(content: Content) -> some View {
         content
@@ -751,6 +756,15 @@ private struct BoardRowGestures: ViewModifier {
                 Button(action: onToggleDone) {
                     Label(row.isDone ? "Mark as To Do" : "Mark as Done",
                           systemImage: row.isDone ? "circle" : "checkmark.circle.fill")
+                }
+                // Watch keeps the task in the Watching section on top, whatever its state.
+                // Only a row with a task: a session-only row has nothing to watch.
+                if let onToggleWatch, row.task != nil {
+                    let watched = BoardStatusSectionModel.isWatched(row.task)
+                    Button(action: onToggleWatch) {
+                        Label(BoardWatchItem.label(watched: watched),
+                              systemImage: BoardWatchItem.systemImage(watched: watched))
+                    }
                 }
                 // Tier move — this is where the wrapping token row went. A menu
                 // shows the same closed set without spending any row height, and

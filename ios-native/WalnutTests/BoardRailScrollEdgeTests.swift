@@ -21,6 +21,7 @@ final class BoardRailScrollEdgeTests: XCTestCase {
 
     private struct Harness: View {
         let latch: BoardChipsPinLatch
+        var typeSize: DynamicTypeSize = .large
         @State private var text = ""
         var body: some View {
             NavigationStack {
@@ -49,6 +50,9 @@ final class BoardRailScrollEdgeTests: XCTestCase {
                 .toolbarBackground(.visible, for: .navigationBar)
                 .searchable(text: $text, placement: .navigationBarDrawer(displayMode: .automatic))
             }
+            .environment(\.dynamicTypeSize, typeSize)
+            // A parent's vertical bounce policy must not give the chip rail a vertical axis.
+            .scrollBounceBehavior(.always, axes: .vertical)
         }
     }
 
@@ -67,10 +71,10 @@ final class BoardRailScrollEdgeTests: XCTestCase {
 
     /// The harness in a light window, pinned: iPhone 16 Pro width by default, 440 for the
     /// Pro Max.
-    private func host(width: CGFloat = 402) throws -> (UIWindow, UIHostingController<Harness>) {
+    private func host(width: CGFloat = 402, typeSize: DynamicTypeSize = .large) throws -> (UIWindow, UIHostingController<Harness>) {
         let latch = BoardChipsPinLatch()
         latch.isPinned = true
-        let host = UIHostingController(rootView: Harness(latch: latch))
+        let host = UIHostingController(rootView: Harness(latch: latch, typeSize: typeSize))
         let scene = try XCTUnwrap(
             UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
@@ -127,6 +131,35 @@ final class BoardRailScrollEdgeTests: XCTestCase {
                         frame.intersection(railInWindow).height, 0.5,
                         "w\(Int(width)) offset \(offset): a scroll edge pocket \(frame) covers the chips \(railInWindow)")
                 }
+            }
+        }
+    }
+
+    func testTheHorizontalRailHasNoVerticalBounceOrScrollRange() throws {
+        let sizes: [DynamicTypeSize] = [.large, .xxLarge, .accessibility5]
+        for (width, typeSize) in [CGFloat(320), 402, 440].flatMap({ width in
+            sizes.map { (width, $0) }
+        }) {
+            let (window, host) = try host(width: width, typeSize: typeSize)
+            defer { window.isHidden = true }
+            let rail = try XCTUnwrap(scrollViews(in: host.view).first {
+                !($0 is UICollectionView) && $0.contentSize.height > 0
+                    && $0.contentSize.height < 80
+            })
+            let list = try XCTUnwrap(scrollViews(in: host.view).first { $0 is UICollectionView })
+            for offset in [-list.adjustedContentInset.top, 0, 120, 600] {
+                list.setContentOffset(CGPoint(x: 0, y: offset), animated: false)
+                settle(host.view)
+                print("[rail] width=\(width) type=\(typeSize) listY=\(offset) bounds=\(rail.bounds) content=\(rail.contentSize) insets=\(rail.adjustedContentInset) offset=\(rail.contentOffset) bounceY=\(rail.alwaysBounceVertical)")
+                XCTAssertFalse(rail.alwaysBounceVertical, "a horizontal chip rail must not bounce vertically")
+                XCTAssertLessThanOrEqual(
+                    rail.contentSize.height + rail.adjustedContentInset.top
+                        + rail.adjustedContentInset.bottom,
+                    rail.bounds.height + 0.5,
+                    "a horizontal chip rail must not have vertical travel"
+                )
+                XCTAssertEqual(rail.contentOffset.y, -rail.adjustedContentInset.top, accuracy: 0.5)
+                XCTAssertGreaterThan(rail.contentSize.width, rail.bounds.width)
             }
         }
     }

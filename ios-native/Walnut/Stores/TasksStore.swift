@@ -801,10 +801,13 @@ final class TasksStore {
         var title: String? = nil
         /// The read marker. Only `false` is ever sent from the phone (`markRead`).
         var unread: Bool? = nil
+        /// Watch: an ISO time starts watching, "" stops (`setWatched`).
+        var watchedAt: String? = nil
 
         var isEmpty: Bool {
             status == nil && priority == nil && dueDate == nil && startDate == nil
                 && endDate == nil && project == nil && title == nil && unread == nil
+                && watchedAt == nil
         }
     }
 
@@ -846,7 +849,10 @@ final class TasksStore {
             orgRole: task.orgRole,
             liveActivity: task.liveActivity,
             resultReport: task.resultReport,
-            teamStop: task.teamStop
+            teamStop: task.teamStop,
+            waitUntil: task.waitUntil,
+            // "" = stop watching, the same clear convention as the dates.
+            watchedAt: edit.watchedAt.map { $0.isEmpty ? nil : $0 } ?? task.watchedAt
         )
     }
 
@@ -919,7 +925,7 @@ final class TasksStore {
             id: id, status: edit.status, priority: edit.priority,
             dueDate: edit.dueDate, startDate: edit.startDate, endDate: edit.endDate,
             project: edit.project, title: edit.title,
-            description: nil, unread: edit.unread
+            description: nil, unread: edit.unread, watchedAt: edit.watchedAt
         )
     }
 
@@ -939,7 +945,9 @@ final class TasksStore {
             orgRole: t.orgRole,
             liveActivity: t.liveActivity,
             resultReport: t.resultReport,
-            teamStop: t.teamStop
+            teamStop: t.teamStop,
+            waitUntil: t.waitUntil,
+            watchedAt: t.watchedAt
         )
     }
 
@@ -1065,6 +1073,19 @@ final class TasksStore {
             return "\(result.deleted.count) deleted, \(result.failed.count) failed: \(reason)"
         } catch {
             restore(Set(taskIds))
+            return error.localizedDescription
+        }
+    }
+
+    /// Watch or stop watching (PATCH `watched_at`): an ISO time starts, "" stops. Optimistic
+    /// through `updateTask`, so the row moves into (or out of) the board's Watching section at
+    /// once and goes back where it was when the write fails. Returns the failure's words.
+    func setWatched(_ task: WalnutTask, watched: Bool, now: Date = AppClock.now()) async -> String? {
+        let at = watched ? ISO8601DateFormatter().string(from: now) : ""
+        do {
+            _ = try await updateTask(id: task.id, edit: TaskEdit(watchedAt: at))
+            return nil
+        } catch {
             return error.localizedDescription
         }
     }

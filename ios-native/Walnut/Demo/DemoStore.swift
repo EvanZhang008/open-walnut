@@ -34,6 +34,8 @@ struct DemoTask {
     /// max + 1 (the foot), an unpin drops it and closes the gap, a tier move
     /// keeps it. nil while unpinned.
     var pinOrder: Int? = nil
+    /// When the visitor started watching it (PATCH `watched_at`); nil = not watched.
+    var watchedAt: String? = nil
 
     /// The coarse status the projection derives from the phase.
     var status: String {
@@ -49,7 +51,8 @@ struct DemoTask {
             id: id, title: title, status: status, phase: phase, priority: priority,
             project: project, dueDate: dueDate, createdAt: createdAt, updatedAt: updatedAt,
             completedAt: completedAt, starred: starred, pinned: pinned, tags: tags,
-            summary: summary, startDate: startDate, endDate: endDate
+            summary: summary, startDate: startDate, endDate: endDate,
+            watchedAt: watchedAt
         )
     }
 }

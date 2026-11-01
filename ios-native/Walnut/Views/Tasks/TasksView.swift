@@ -74,16 +74,12 @@ struct TasksView: View {
     // (There is no expanded-row state: a row's tap opens its session — the row itself
     // never grows.)
 
-    /// The filters menu's `Show done`: every band shows its completed rows.
-    ///
-    /// Off is the default, so the board opens on open work and the counts on the headings
-    /// and the chips are open counts. It is ONE switch in the filters menu, not a control
-    /// on every heading: showing finished work is rare, and a `show done (N)` capsule on
-    /// each band was noise on the screen whose job is the open rows.
-    @AppStorage(BoardFilterPrefs.showDoneKey, store: AppPrefs.defaults) private var showDone = false
-    /// `Show waiting`, beside it: off by default, so a WAITING task leaves the board until
-    /// it wakes, as on the console.
-    @AppStorage(BoardFilterPrefs.showWaitingKey, store: AppPrefs.defaults) private var showWaiting = false
+    /// Which status sections are open (Watching, Needs you, Working open by default; Waiting
+    /// / snoozed and Completed folded), persisted. They replaced the filters menu's `Show
+    /// done` / `Show waiting` switches (2026-10-29). See `BoardStatusSections`.
+    @AppStorage(BoardStatusSectionPrefs.openKey, store: AppPrefs.defaults) private var sectionsOpenRaw = ""
+    /// Rows each status section draws before its "Show N more" row; a tap adds a batch.
+    @State private var sectionShown: [BoardStatusSection: Int] = [:]
     // The board's three view decisions — WHICH TIER (the chip rail), how its rows are
     // headed (grouping), and which dates are admitted — all persisted through @AppStorage,
     // which is how this app already keeps a view preference (SettingsView's mic route,
@@ -470,7 +466,11 @@ struct TasksView: View {
                 }
                 .listSectionSpacing(2)
 
-                boardSections(entries, isEmpty: bands.isEmpty, hidden: assembly.hidden)
+                if assembly.sections.active {
+                    statusBoard(assembly.sections, entries: entries, isEmpty: bands.isEmpty)
+                } else {
+                    boardSections(entries, isEmpty: bands.isEmpty, drawsRows: false)
+                }
                 // Matching open tasks below the bands while a query is live (dogfood R17).
                 // Its HEADING is what marks it as a different list.
                 if !query.isEmpty {
@@ -497,22 +497,6 @@ struct TasksView: View {
                         taskRow: { task, snippet in AnyView(taskRowButton(task, matchSnippet: snippet)) }
                     ) { hit in
                         openSearchHit(hit)
-                    }
-                }
-
-                // What the filters took out, under the rows they took it from: the
-                // console's footer, so a count that differs from what the user expected
-                // (or a new task that starts later) always has a visible reason.
-                if query.isEmpty, let hiddenText = assembly.hidden.footerText {
-                    Section {
-                        Text(hiddenText)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .listRowSeparator(.hidden)
-                            .listRowBackground(Color.clear)
-                            .accessibilityIdentifier("board.hiddenCounts")
                     }
                 }
 
@@ -619,6 +603,10 @@ struct TasksView: View {
                 if tierScope != nil, !BoardCollapse.contains(taskId: newId, in: bands) {
                     tierScopeRaw = BoardFilterPrefs.rawScope(nil)
                 }
+                // A new todo lands under Working: open it if it was folded.
+                if !BoardStatusSectionPrefs.isOpen(.working, raw: sectionsOpenRaw) {
+                    sectionsOpenRaw = BoardStatusSectionPrefs.setting(.working, open: true, raw: sectionsOpenRaw)
+                }
                 flashHighlight(newId)
                 DispatchQueue.main.async {
                     let folds = BoardCollapse.decode(collapsedRaw)
@@ -718,6 +706,13 @@ struct TasksView: View {
                 Label(task.pinned == true ? "Unpin" : "Pin",
                       systemImage: task.pinned == true ? "pin.slash" : "pin")
             }
+            Button {
+                toggleWatch(task)
+            } label: {
+                let watched = BoardStatusSectionModel.isWatched(task)
+                Label(BoardWatchItem.label(watched: watched),
+                      systemImage: BoardWatchItem.systemImage(watched: watched))
+            }
             // Tier mover (pinned rows only): mirrors the desktop focus bar's tier set —
             // built-ins + custom tiers, optimistic.
             if task.pinned == true {
@@ -761,6 +756,22 @@ struct TasksView: View {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         Task {
             if let error = await tasks.setPinned(task, pinned: !(task.pinned == true)) {
+                toggleError = error
+            }
+        }
+    }
+
+    /// Watch / Stop watching from a row's menu. Optimistic via the store: the row moves into
+    /// (or out of) Watching at once, and goes back with an alert when the write fails.
+    private func toggleWatch(_ task: WalnutTask) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        let watched = BoardStatusSectionModel.isWatched(task)
+        // A new watch shows where it went: Watching opens if it was folded.
+        if !watched, !BoardStatusSectionPrefs.isOpen(.watching, raw: sectionsOpenRaw) {
+            sectionsOpenRaw = BoardStatusSectionPrefs.setting(.watching, open: true, raw: sectionsOpenRaw)
+        }
+        Task {
+            if let error = await tasks.setWatched(task, watched: !watched) {
                 toggleError = error
             }
         }
@@ -864,8 +875,10 @@ struct TasksView: View {
             // chip tap changes which rows exist, and a key without it would leave the
             // previous tier on screen until some unrelated input moved the key.
             scope: scope,
-            showDone: showDone,
-            showWaiting: showWaiting,
+            // Completed work is the Completed section, never a band's (see `statusSections`).
+            showDone: false,
+            // WAITING rows are the Waiting section; a live query searches them in the bands.
+            showWaiting: !trimmedQuery.isEmpty,
             // `.all` admits every row regardless of the clock, so its bands are
             // time-independent and the bucket is a constant. Under `.now` a start date
             // that passes has to show up, and a minute is the granularity that costs one
@@ -882,9 +895,8 @@ struct TasksView: View {
                 query: trimmedQuery,
                 grouping: activeGrouping,
                 dateFilter: filter,
-                // The filters menu's one switch; off = every band folds its done rows.
-                showDone: showDone,
-                showWaiting: showWaiting,
+                showDone: false,
+                showWaiting: !trimmedQuery.isEmpty,
                 // Used by project grouping only. Empty (a server without the endpoint,
                 // a failed fetch, an offline cold start) = the flat project bands.
                 folders: folders,
@@ -896,7 +908,9 @@ struct TasksView: View {
                 // branch, so both band builders inherit it (`BoardModel.assemble`).
                 scope: scope,
                 // Places the project groups exactly as the console does (`PinnedTierOrder`).
-                projectOrder: projectOrder
+                projectOrder: projectOrder,
+                // Watching, Needs you, Waiting / snoozed and Completed (off while searching).
+                statusSections: true
             )
         }
     }
@@ -938,8 +952,6 @@ struct TasksView: View {
             selected: selected,
             grouping: grouping,
             dateFilter: dateFilter,
-            showDone: $showDone,
-            showWaiting: $showWaiting,
             onSelect: { bandId in
                 tierScopeRaw = BoardFilterPrefs.rawScope(bandId)
                 // Land at the top of what you just asked for. Without this, narrowing from
@@ -970,23 +982,98 @@ struct TasksView: View {
         )
     }
 
+    /// The board under its status sections: Watching and Needs you, the Working heading over
+    /// the bands, then Waiting / snoozed and Completed (`BoardStatusSections`).
+    @ViewBuilder
+    private func statusBoard(
+        _ sections: BoardStatusSections, entries: [BoardCollapse.Entry], isEmpty: Bool
+    ) -> some View {
+        let open = BoardStatusSectionPrefs.decode(sectionsOpenRaw)
+        ForEach([BoardStatusSection.watching, .needs].filter { sections.isShown($0) }) { key in
+            statusSection(key, sections: sections, open: open[key] ?? key.defaultOpen)
+        }
+        BoardWorkingHeading(
+            count: sections.workingCount, open: open[.working] ?? true,
+            onToggle: { toggleSection(.working) }
+        )
+        if open[.working] ?? true {
+            boardSections(entries, isEmpty: isEmpty, drawsRows: sections.drawsRows)
+        }
+        ForEach([BoardStatusSection.waiting, .done].filter { sections.isShown($0) }) { key in
+            statusSection(key, sections: sections, open: open[key] ?? key.defaultOpen)
+        }
+    }
+
+    private func statusSection(
+        _ key: BoardStatusSection, sections: BoardStatusSections, open: Bool
+    ) -> some View {
+        BoardStatusSectionList(
+            section: key,
+            rows: sections.rows(key),
+            open: open,
+            shown: sectionShown[key] ?? BoardStatusSectionModel.batch,
+            onToggle: { toggleSection(key) },
+            onShowMore: {
+                sectionShown[key] = (sectionShown[key] ?? BoardStatusSectionModel.batch)
+                    + BoardStatusSectionModel.batch
+            },
+            actions: rowActions,
+            tierChoices: tasks.allTierChoices,
+            tierOf: tasks.taskTiers,
+            newRowId: highlightedTaskId,
+            resolvingRowId: router.resolvingRowId
+        )
+    }
+
+    private func toggleSection(_ key: BoardStatusSection) {
+        withAnimation(.snappy(duration: 0.25)) {
+            sectionsOpenRaw = BoardStatusSectionPrefs.toggling(key, raw: sectionsOpenRaw)
+        }
+    }
+
+    /// What a board row does on a tap, a swipe and in its long-press menu, the same in a band
+    /// and in a status section.
+    private var rowActions: BoardRowActions {
+        BoardRowActions(
+            onToggleDone: { row in
+                if let task = row.task { toggleDone(task) }
+            },
+            onPickTier: { row, token in pickTier(row, token) },
+            onOpenSession: { row in
+                guard drawer?.suppressTaps != true else { return }
+                router.open(row, tasks: tasks, show: onShowSession)
+            },
+            onOpenDetail: { row in
+                if let task = row.task {
+                    tasks.markRead(taskId: task.id)
+                    selected = task
+                }
+            },
+            onToggleWatch: { row in
+                if let task = row.task { toggleWatch(task) }
+            }
+        )
+    }
+
+    /// The bands. `drawsRows`: a status section shows rows of this view, so an empty band
+    /// list is no empty board and says nothing.
     @ViewBuilder
     private func boardSections(
-        _ entries: [BoardCollapse.Entry], isEmpty: Bool, hidden: BoardHiddenCounts
+        _ entries: [BoardCollapse.Entry], isEmpty: Bool, drawsRows: Bool
     ) -> some View {
         if isEmpty {
-            Section {
-                Text(Self.boardEmptyText(
-                    query: trimmedQuery, dateFilter: dateFilter.wrappedValue,
-                    hidden: hidden
-                ))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 24)
-                    .listRowSeparator(.hidden)
-                    .listRowBackground(Color.clear)
+            if !drawsRows {
+                Section {
+                    Text(Self.boardEmptyText(query: trimmedQuery))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, 24)
+                        .listRowSeparator(.hidden)
+                        .listRowBackground(Color.clear)
+                }
             }
         } else {
+            let actions = rowActions
             TaskBoardList(
                 entries: entries,
                 tierChoices: tasks.allTierChoices,
@@ -1005,46 +1092,19 @@ struct TasksView: View {
                         )
                     }
                 } : nil,
-                onToggleDone: { row in
-                    if let task = row.task { toggleDone(task) }
-                },
-                onPickTier: { row, token in pickTier(row, token) },
-                onOpenSession: { row in
-                    guard drawer?.suppressTaps != true else { return }
-                    router.open(row, tasks: tasks, show: onShowSession)
-                },
-                onOpenDetail: { row in
-                    if let task = row.task {
-                        tasks.markRead(taskId: task.id)
-                        selected = task
-                    }
-                }
+                onToggleDone: actions.onToggleDone,
+                onPickTier: actions.onPickTier,
+                onOpenSession: actions.onOpenSession,
+                onOpenDetail: actions.onOpenDetail,
+                onToggleWatch: actions.onToggleWatch
             )
         }
     }
 
-    /// What an empty board says, and why the date filter gets a sentence of its
-    /// own: `Now` HIDES rows, so "Nothing pinned yet" over a board full of
-    /// deferred work is a lie that sends the user looking for a bug. Name the
-    /// filter that did it AND where the control lives.
-    ///
-    /// `hidden` says what the filters took out. When it is waiting or done work, "every
-    /// task starts later" would be the same kind of lie, so the sentence points at the
-    /// filters menu and the footer line under it lists what is there.
-    static func boardEmptyText(
-        query: String, dateFilter: BoardDateFilter, hidden: BoardHiddenCounts = .zero
-    ) -> String {
+    /// What an empty board says. Work that waits, starts later or is done is in its own
+    /// status section, so an empty board is one with nothing pinned (or no match).
+    static func boardEmptyText(query: String) -> String {
         if !query.isEmpty { return "No matches in Pins." }
-        // Blame the dates only when they are what emptied it: rows are hidden as not
-        // available yet, and nothing else is. A fresh install opens on Now, so an empty
-        // board that hides nothing must say "Nothing pinned yet", not "pick All".
-        let onlyLater = hidden.notAvailable > 0 && hidden.waiting == 0 && hidden.done == 0
-        if dateFilter == .now, onlyLater {
-            return "Nothing to do right now: every task starts later. Pick All in the filter menu to see them."
-        }
-        if !hidden.isEmpty {
-            return "Nothing open here. The filter menu can show what is hidden."
-        }
         return "Nothing pinned yet. Pin a task to keep it here."
     }
 

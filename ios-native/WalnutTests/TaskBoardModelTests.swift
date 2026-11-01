@@ -1473,7 +1473,6 @@ final class TaskBoardModelTests: XCTestCase {
     func testTheBoardOpensOnTierAndNow() {
         XCTAssertEqual(BoardFilterPrefs.defaultGrouping, .tier)
         XCTAssertEqual(BoardFilterPrefs.defaultDateFilter, .now)
-        XCTAssertFalse(BoardFilterPrefs.showWaitingKey.isEmpty)
     }
 
     /// Only a MISSING key reads as the new default. A user who picked `All` on an older
@@ -1501,12 +1500,13 @@ final class TaskBoardModelTests: XCTestCase {
         XCTAssertEqual(read(), .now)
     }
 
-    // MARK: - Show waiting, and what the filters hide
+    // MARK: - Waiting rows, and where hidden work goes (the status sections)
 
-    /// A WAITING task leaves its tier while `Show waiting` is off, in every tier (the
-    /// Parked shelf too) and both groupings, and the chips stop counting it: the
-    /// console's default Status is TODO / IN_PROGRESS / NEED_ACTION.
-    func testWaitingRowsLeaveEveryTierUntilShowWaiting() {
+    /// A WAITING task leaves its tier's bands in every tier (the Parked shelf too) and both
+    /// groupings, and the chips stop counting it, as on the console (its default Status is
+    /// TODO / IN_PROGRESS / NEED_ACTION). `showWaiting` (on while a query is live) brings it
+    /// back into the bands.
+    func testWaitingRowsLeaveEveryTierUnlessShown() {
         let tasks = [
             task("o", project: "acme"), task("w", project: "acme", phase: "WAITING"),
             task("p", project: "marina"), task("pw", project: "marina", phase: "WAITING"),
@@ -1523,20 +1523,16 @@ final class TaskBoardModelTests: XCTestCase {
             let off = board(grouping, showWaiting: false)
             XCTAssertEqual(Set(off.bands.flatMap { $0.rows.map(\.id) }), ["o", "p"], "\(grouping)")
             XCTAssertEqual(off.rail.map(\.count), [2, 1, 1], "\(grouping)")
-            XCTAssertEqual(off.hidden, BoardHiddenCounts(waiting: 2), "\(grouping)")
-            XCTAssertEqual(board(grouping, showWaiting: false, scope: "focus").hidden.waiting, 1,
-                "the footer counts the tier in view")
+            XCTAssertFalse(off.sections.active, "no sections unless asked for")
 
             let on = board(grouping, showWaiting: true)
             XCTAssertEqual(Set(on.bands.flatMap { $0.rows.map(\.id) }), ["o", "w", "p", "pw"])
             XCTAssertEqual(on.rail.map(\.count), [4, 2, 2])
-            XCTAssertEqual(on.hidden, .zero)
         }
     }
 
-    /// A tier whose every row is WAITING (the Parked shelf, typically) keeps its band and
-    /// its chip while Show waiting is off, like a tier of folded completions: a reader
-    /// scoped to it keeps the scope, and the footer says how many are waiting there.
+    /// A tier whose every row is WAITING (the Parked shelf, typically) keeps its chip, so a
+    /// reader scoped to it keeps the scope, and its rows are drawn under Waiting / snoozed.
     func testATierOfOnlyWaitingRowsKeepsItsChipAndScope() {
         let tasks = [task("o", project: "acme"), task("pw", project: "marina", phase: "WAITING")]
         let tierOf = ["o": "focus", "pw": "wait"]
@@ -1544,69 +1540,62 @@ final class TaskBoardModelTests: XCTestCase {
         for grouping in [BoardGrouping.tier, .project] {
             let scoped = BoardModel.assemble(
                 tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: order,
-                customTiers: [], grouping: grouping, scope: "wait"
+                customTiers: [], grouping: grouping, scope: "wait", statusSections: true
             )
             XCTAssertTrue(scoped.rail.contains { $0.bandId == "wait" && $0.count == 0 }, "\(grouping)")
             XCTAssertEqual(scoped.scope, "wait", "the stored scope survives \(grouping)")
-            XCTAssertEqual(scoped.hidden, BoardHiddenCounts(waiting: 1), "\(grouping)")
-            XCTAssertTrue(scoped.bands.allSatisfy { $0.rows.isEmpty }, "\(grouping)")
-            // Scoped to another tier, the waiting tier adds no band of its own.
+            XCTAssertEqual(scoped.sections.waiting.map(\.id), ["pw"], "\(grouping)")
+            XCTAssertTrue(scoped.bands.isEmpty, "Working holds nothing here (\(grouping))")
+            // Scoped to another tier, the waiting tier adds no band and no waiting row.
             let focus = BoardModel.assemble(
                 tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: order,
-                customTiers: [], grouping: grouping, scope: "focus"
+                customTiers: [], grouping: grouping, scope: "focus", statusSections: true
             )
             XCTAssertEqual(focus.bands.flatMap { $0.rows.map(\.id) }, ["o"], "\(grouping)")
             XCTAssertFalse(focus.bands.contains { $0.bandId == "wait" }, "\(grouping)")
+            XCTAssertTrue(focus.sections.waiting.isEmpty, "\(grouping)")
         }
     }
 
-    /// The footer's counts follow the console's footer: each lets go of ONE filter and
-    /// keeps the rest, so a waiting task that also starts later is hidden by both and
-    /// counted by neither under Now, and a query narrows every count.
-    func testHiddenCountsFollowTheConsoleFooterRules() {
+    /// Every row the old footer counted as hidden is now in a section: done in Completed,
+    /// WAITING and (under Now) a start date still to come in Waiting / snoozed. Under All a
+    /// later start is ordinary open work, as on the web, where only the default Date rule
+    /// makes a snooze.
+    func testHiddenWorkLandsInItsSection() {
         let tasks = [
             task("open", title: "alpha"),
             task("done", title: "alpha", status: "done", phase: "COMPLETE"),
             task("wait", title: "alpha", phase: "WAITING"),
             task("later", title: "alpha", start: "2026-08-30"),
             task("waitLater", title: "alpha", phase: "WAITING", start: "2026-08-30"),
-            task("other", title: "beta", phase: "WAITING"),
         ]
         let ids = tasks.map(\.id)
         let tierOf = Dictionary(uniqueKeysWithValues: ids.map { ($0, "focus") })
-        func board(_ date: BoardDateFilter, query: String = "") -> BoardAssembly {
+        func board(_ date: BoardDateFilter) -> BoardAssembly {
             BoardModel.assemble(
                 tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: ["focus": ids],
-                customTiers: [], query: query, dateFilter: date, now: Self.now
+                customTiers: [], dateFilter: date, statusSections: true, now: Self.now
             )
         }
         let now = board(.now)
-        XCTAssertEqual(now.rail.first?.count, 1, "only `open` is drawn")
-        XCTAssertEqual(now.hidden, BoardHiddenCounts(waiting: 2, done: 1, notAvailable: 1))
+        XCTAssertEqual(now.bands.flatMap { $0.rows.map(\.id) }, ["open"])
+        XCTAssertEqual(now.sections.workingCount, 1)
+        XCTAssertEqual(Set(now.sections.waiting.map(\.id)), ["wait", "later", "waitLater"])
+        XCTAssertEqual(now.sections.done.map(\.id), ["done"])
+        XCTAssertEqual(now.rail.first?.count, 1, "the chip counts the tier's open work")
         let all = board(.all)
-        XCTAssertEqual(all.rail.first?.count, 2, "`open` and `later`")
-        XCTAssertEqual(all.hidden, BoardHiddenCounts(waiting: 3, done: 1, notAvailable: 0))
-        XCTAssertEqual(board(.now, query: "alpha").hidden,
-            BoardHiddenCounts(waiting: 1, done: 1, notAvailable: 1), "`other` fails the query")
-        let shown = BoardModel.assemble(
-            tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: ["focus": ids],
-            customTiers: [], dateFilter: .now, showWaiting: true, now: Self.now
-        )
-        XCTAssertEqual(shown.hidden.notAvailable, 1,
-            "with waiting rows shown, `waitLater` is still not counted as not available")
-    }
-
-    func testTheHiddenFooterNamesTheSwitchForEachPart() {
-        XCTAssertNil(BoardHiddenCounts.zero.footerText)
-        XCTAssertEqual(
-            BoardHiddenCounts(waiting: 6, done: 14, notAvailable: 1).footerText,
-            "Hidden: 1 not available yet (Dates: All), 14 done (Show done), 6 waiting (Show waiting)"
-        )
-        XCTAssertEqual(BoardHiddenCounts(waiting: 2).footerText, "Hidden: 2 waiting (Show waiting)")
+        XCTAssertEqual(Set(all.bands.flatMap { $0.rows.map(\.id) }), ["open", "later"])
+        XCTAssertEqual(Set(all.sections.waiting.map(\.id)), ["wait", "waitLater"])
+        // Every row is drawn exactly once, whatever the date filter.
+        for b in [now, all] {
+            let drawn = b.bands.flatMap { $0.rows.map(\.id) } + b.sections.waiting.map(\.id)
+                + b.sections.done.map(\.id) + b.sections.needs.map(\.id)
+            XCTAssertEqual(drawn.sorted(), ids.sorted())
+        }
     }
 
     /// A subtask with no start date of its own inherits its nearest ancestor's, as the
-    /// console's Now does (`getEffectiveDateField`), and the footer counts it the same way.
+    /// console's Now does (`getEffectiveDateField`), and lands under Waiting / snoozed.
     func testNowInheritsTheNearestAncestorsStartDate() {
         let tasks = [
             // parents are unpinned: off the board, still in the projection
@@ -1624,11 +1613,12 @@ final class TaskBoardModelTests: XCTestCase {
         ]
         let onBoard = tasks.filter { $0.pinned == true }.map(\.id)
         let tierOf = Dictionary(uniqueKeysWithValues: onBoard.map { ($0, "focus") })
-        func board(_ date: BoardDateFilter, showDone: Bool = false, showWaiting: Bool = false) -> BoardAssembly {
+        func board(_ date: BoardDateFilter, showDone: Bool = false, showWaiting: Bool = false,
+                   sections: Bool = false) -> BoardAssembly {
             BoardModel.assemble(
                 tasks: tasks, sessions: [], tierOf: tierOf, tierOrder: ["focus": onBoard],
                 customTiers: [], dateFilter: date, showDone: showDone, showWaiting: showWaiting,
-                now: Self.now
+                statusSections: sections, now: Self.now
             )
         }
         func ids(_ b: BoardAssembly) -> Set<String> { Set(b.bands.flatMap { $0.rows.map(\.id) }) }
@@ -1636,14 +1626,13 @@ final class TaskBoardModelTests: XCTestCase {
         XCTAssertEqual(ids(now), ["underPast", "ownPast", "orphan", "doneChild"],
             "a future parent or grandparent hides the subtask; its own start, a past "
             + "parent, a missing parent and a done row keep it")
-        XCTAssertEqual(now.hidden.notAvailable, 3,
-            "underFuture, grandchild, ownEmpty; a waiting row is never counted here, as on the console")
-        // Default switches: the waiting child is hidden by both filters and counted by neither.
-        let byDefault = board(.now)
-        XCTAssertEqual(byDefault.hidden, BoardHiddenCounts(waiting: 0, done: 1, notAvailable: 3))
+        let sectioned = board(.now, sections: true)
+        XCTAssertEqual(ids(sectioned), ["underPast", "ownPast", "orphan"])
+        XCTAssertEqual(Set(sectioned.sections.waiting.map(\.id)),
+            ["underFuture", "grandchild", "ownEmpty", "waitChild"])
+        XCTAssertEqual(sectioned.sections.done.map(\.id), ["doneChild"])
         XCTAssertEqual(ids(board(.all, showDone: true, showWaiting: true)), Set(onBoard),
             "All shows every subtask again")
-        XCTAssertEqual(board(.all).hidden, BoardHiddenCounts(waiting: 1, done: 1, notAvailable: 0))
     }
 
     /// A short parent reference resolves to the first task whose id starts with it
@@ -1684,51 +1673,19 @@ final class TaskBoardModelTests: XCTestCase {
             tierOrder: ["focus": ["child"]], customTiers: [], dateFilter: .now, now: Self.now
         )
         XCTAssertTrue(linked.bands.flatMap(\.rows).isEmpty)
-        XCTAssertEqual(linked.hidden.notAvailable, 1)
+        let sectioned = BoardModel.assemble(
+            tasks: [parent, child], sessions: [], tierOf: ["child": "focus"],
+            tierOrder: ["focus": ["child"]], customTiers: [], dateFilter: .now,
+            statusSections: true, now: Self.now
+        )
+        XCTAssertEqual(sectioned.sections.waiting.map(\.id), ["child"], "snoozed by its parent")
     }
 
-    /// An empty board must say WHY it is empty. "Nothing pinned yet" over a board
-    /// full of deferred work is a lie that sends the user hunting for a bug, so
-    /// the `Now` case names the filter: the control to undo it is one row above.
-    func testTheEmptyBoardBlamesTheFilterThatEmptiedIt() {
-        XCTAssertTrue(
-            TasksView.boardEmptyText(
-                query: "", dateFilter: .now, hidden: BoardHiddenCounts(notAvailable: 1)
-            ).contains("All"),
-            "a Now-emptied board must point at the control that undoes it"
-        )
-        // Now is the default on a fresh install, so an empty board that hides nothing
-        // must not blame the dates: there is simply nothing pinned.
-        XCTAssertEqual(
-            TasksView.boardEmptyText(query: "", dateFilter: .now),
-            "Nothing pinned yet. Pin a task to keep it here."
-        )
-        XCTAssertEqual(
-            TasksView.boardEmptyText(query: "", dateFilter: .all),
-            "Nothing pinned yet. Pin a task to keep it here."
-        )
-        // A live query outranks both: the user typed something, that is the reason.
-        for filter in BoardDateFilter.allCases {
-            XCTAssertEqual(
-                TasksView.boardEmptyText(query: "alpha", dateFilter: filter),
-                "No matches in Pins."
-            )
-        }
-    }
-
-    /// An empty board emptied by WAITING or done rows must not claim "every task starts
-    /// later": it points at the filters menu, and the footer under it lists the parts.
-    func testTheEmptyBoardDoesNotBlameDatesForWaitingOrDoneRows() {
-        XCTAssertTrue(TasksView.boardEmptyText(
-            query: "", dateFilter: .now, hidden: BoardHiddenCounts(notAvailable: 2)
-        ).contains("starts later"))
-        for hidden in [BoardHiddenCounts(waiting: 3), BoardHiddenCounts(done: 1, notAvailable: 1)] {
-            for filter in BoardDateFilter.allCases {
-                let text = TasksView.boardEmptyText(query: "", dateFilter: filter, hidden: hidden)
-                XCTAssertFalse(text.contains("starts later"), "\(hidden) \(filter)")
-                XCTAssertTrue(text.contains("filter menu"), "\(hidden) \(filter)")
-            }
-        }
+    /// An empty board says why: a live query, or nothing pinned. Work that waits, starts
+    /// later or is done is in its own section, so no filter is blamed any more.
+    func testTheEmptyBoardText() {
+        XCTAssertEqual(TasksView.boardEmptyText(query: ""), "Nothing pinned yet. Pin a task to keep it here.")
+        XCTAssertEqual(TasksView.boardEmptyText(query: "alpha"), "No matches in Pins.")
     }
 
     // MARK: - One task, one row (the search-on-the-board dedup)

@@ -66,12 +66,9 @@ enum BoardFilterPrefs {
     /// an ordinary view preference, so it survives a grouping switch, a tab switch and a
     /// relaunch like the two above it.
     static let tierScopeKey = "tasks.board.tierScope"
-    /// `Show done` in the band bar's filters menu: every band shows its completed rows.
-    /// Off by default, so the board opens on open work.
-    static let showDoneKey = "tasks.board.showDone"
-    /// `Show waiting` beside it: WAITING tasks join their tiers. Off by default, as on
-    /// the console, where a parked task leaves the default list until it wakes.
-    static let showWaitingKey = "tasks.board.showWaiting"
+    // `Show done` / `Show waiting` (`tasks.board.showDone`, `tasks.board.showWaiting`) are
+    // gone: completed and waiting work are status sections now (`BoardStatusSections`), whose
+    // open state is `BoardStatusSectionPrefs.openKey`.
 
     /// The map key the `All` scope stores its grouping under. Underscored so it cannot
     /// collide with a tier id (`focus`, `ct_*`).
@@ -89,8 +86,8 @@ enum BoardFilterPrefs {
     /// Now, like the desktop, so the same tier shows the same rows and the same count on
     /// both (2026-10-23: Focus said 15 on the phone and 8 on the Mac). This used to be
     /// All, because `now` HIDES rows and a task that started later looked lost ("I
-    /// created a task in Pinned and it just disappeared"); the board's footer now says
-    /// what the filters hide (`BoardHiddenCounts`), and an empty board names the filter.
+    /// created a task in Pinned and it just disappeared"); a task that starts later now
+    /// waits in the board's Waiting / snoozed section, so nothing the filter takes is lost.
     /// Only a MISSING key reads as the default: a choice the user stored, `all`
     /// included, is read back as it was.
     static let defaultGrouping = BoardGrouping.tier

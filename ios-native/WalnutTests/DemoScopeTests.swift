@@ -55,7 +55,7 @@ final class DemoScopeTests: XCTestCase {
     private static let watchedKeys = [
         HealthSync.enabledKey, PlacesSettings.enabledKey, PlacesSettings.askedAlwaysKey,
         InboxFilter.storageKey, CalendarViewPreference.key, VoiceRecorder.micRouteKey,
-        PushRegistration.modeKey, BoardFilterPrefs.showDoneKey, "walnut.sessionStreamResumeIDs",
+        PushRegistration.modeKey, BoardStatusSectionPrefs.openKey, "walnut.sessionStreamResumeIDs",
     ]
 
     func testTheScopeIsTheDemosOnlyWhileTheDemoRuns() {
@@ -109,7 +109,7 @@ final class DemoScopeTests: XCTestCase {
     func testALaunchInTheDemoStartsFromNothing() throws {
         let (realName, real) = scratchSuite("real")
         let (demoName, demo) = scratchSuite("demo")
-        real.set(true, forKey: BoardFilterPrefs.showDoneKey)
+        real.set("{\"done\":true}", forKey: BoardStatusSectionPrefs.openKey)
         real.set(false, forKey: HealthSync.enabledKey)
         demo.set(true, forKey: HealthSync.enabledKey)
         demo.set("unread", forKey: InboxFilter.storageKey)
@@ -129,7 +129,7 @@ final class DemoScopeTests: XCTestCase {
         XCTAssertNil(demo.object(forKey: InboxFilter.storageKey))
         XCTAssertTrue(removed.contains("demo-take.m4a"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: leftover.path))
-        XCTAssertEqual(real.object(forKey: BoardFilterPrefs.showDoneKey) as? Bool, true)
+        XCTAssertEqual(real.string(forKey: BoardStatusSectionPrefs.openKey), "{\"done\":true}")
         XCTAssertEqual(real.object(forKey: HealthSync.enabledKey) as? Bool, false)
     }
 
@@ -140,7 +140,7 @@ final class DemoScopeTests: XCTestCase {
     func testLeavingTheDemoLeavesTheRealAppAsItWas() throws {
         let (realName, real) = scratchSuite("real")
         let (demoName, demo) = scratchSuite("demo")
-        real.set(true, forKey: BoardFilterPrefs.showDoneKey)
+        real.set("{\"done\":true}", forKey: BoardStatusSectionPrefs.openKey)
         real.set("review", forKey: InboxFilter.storageKey)
         demo.set(true, forKey: HealthSync.enabledKey)
         let scratch = try LocalDataResetTests.scratchLocations()
@@ -157,13 +157,13 @@ final class DemoScopeTests: XCTestCase {
         leaveDemo()
 
         XCTAssertNil(demo.object(forKey: HealthSync.enabledKey), "the demo's switch is gone")
-        XCTAssertEqual(real.object(forKey: BoardFilterPrefs.showDoneKey) as? Bool, true, "the real app's board filter stays")
+        XCTAssertEqual(real.string(forKey: BoardStatusSectionPrefs.openKey), "{\"done\":true}", "the real app's board filter stays")
         XCTAssertEqual(real.string(forKey: InboxFilter.storageKey), "review")
         XCTAssertEqual(realValues(Self.watchedKeys), before, "no reset wrote into the real app's preferences")
 
         // A real disconnect erases both.
         LocalDataReset.eraseAll(reason: "test-disconnect", scope: .real, locations: locations)
-        XCTAssertNil(real.object(forKey: BoardFilterPrefs.showDoneKey))
+        XCTAssertNil(real.object(forKey: BoardStatusSectionPrefs.openKey))
         XCTAssertNil(demo.object(forKey: HealthSync.enabledKey))
     }
 

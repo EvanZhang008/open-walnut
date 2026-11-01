@@ -95,15 +95,19 @@ final class MockTaskTransport: WalnutTaskTransport, @unchecked Sendable {
     func updateTask(
         id: String, status: String?, priority: String?, dueDate: String?,
         startDate: String?, endDate: String?,
-        project: String?, title: String?, description: String?, unread: Bool?
+        project: String?, title: String?, description: String?, unread: Bool?,
+        watchedAt: String?
     ) async throws -> WalnutTask {
         // The calendar dates join the recorded args so a test can assert WHAT a
-        // reschedule sent, not just that a PATCH happened. Same for the read marker.
-        try await checkpoint("updateTask", [
+        // reschedule sent, not just that a PATCH happened. Same for the read marker
+        // and the watch.
+        var args: [String] = [
             id, status ?? "-", priority ?? "-", title ?? "-",
             startDate ?? "-", endDate ?? "-",
-            unread.map { "unread=\($0)" } ?? "-",
-        ])
+        ]
+        args.append(unread.map { "unread=\($0)" } ?? "-")
+        if let watchedAt { args.append("watched_at=\(watchedAt)") }
+        try await checkpoint("updateTask", args)
         if let updateTaskResult { return updateTaskResult(id) }
         return WalnutTask(
             id: id, title: title ?? "t", status: status ?? "todo", phase: "TODO",
@@ -112,7 +116,8 @@ final class MockTaskTransport: WalnutTaskTransport, @unchecked Sendable {
             completedAt: status == "done" ? "2026-08-16T00:00:01Z" : nil,
             starred: nil, pinned: nil, tags: nil, summary: nil,
             startDate: (startDate?.isEmpty ?? true) ? nil : startDate,
-            endDate: (endDate?.isEmpty ?? true) ? nil : endDate
+            endDate: (endDate?.isEmpty ?? true) ? nil : endDate,
+            watchedAt: (watchedAt?.isEmpty ?? true) ? nil : watchedAt
         )
     }
 

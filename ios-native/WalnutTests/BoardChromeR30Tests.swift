@@ -327,28 +327,31 @@ final class BoardChromeR30Tests: XCTestCase {
         )
     }
 
-    // MARK: - Done rows: one switch in the filters menu, nothing on a heading
+    // MARK: - Done and waiting rows: status sections, no switch and no heading toggle
 
-    /// The user's call (2026-10-04): "show done" is rare, so it is not on every heading. A
-    /// heading carries the band's name and count; the one switch is `Show done` in the
-    /// band bar's filters menu. Source-scanned because what must not come back is a line
-    /// of code: a per-heading toggle, or the view's per-band expanded set.
-    func testNoHeadingCarriesADoneToggleAndTheFiltersMenuDoes() throws {
+    /// The user's calls: "show done" is rare, so it is not on every heading (2026-10-04), and
+    /// hidden work is a collapsed section, not a filter switch (2026-10-29). Source-scanned
+    /// because what must not come back is a line of code: a per-heading toggle, the view's
+    /// per-band expanded set, or the menu's Show done / Show waiting switches.
+    func testDoneAndWaitingAreSectionsNotSwitches() throws {
         let list = code(in: try source("Walnut/Views/Tasks/TaskBoardList.swift"))
         for phrase in ["hideDoneButton", "onToggleHideDone", "board.hideDone", "doneToggle"] {
             XCTAssertFalse(list.contains(phrase), "a heading offers a done toggle again (`\(phrase)`)")
         }
         let view = code(in: try source("Walnut/Views/Tasks/TasksView.swift"))
         XCTAssertFalse(view.contains("shownDoneBands"), "the view keeps a per-band expanded set again")
-        XCTAssertTrue(view.contains("showDone: showDone"), "the board stopped reading the one switch")
+        XCTAssertTrue(view.contains("statusSections: true"), "the board stopped asking for its sections")
+        XCTAssertFalse(view.contains("board.hiddenCounts"), "the hidden-counts footer is back")
         let bar = code(in: try source("Walnut/Views/Tasks/BoardBandBar.swift"))
-        XCTAssertTrue(bar.contains("\"Show done\""), "the filters menu lost its Show done item")
-        XCTAssertTrue(bar.contains("board.showDone"))
+        for phrase in ["\"Show done\"", "\"Show waiting\"", "board.showDone", "board.showWaiting"] {
+            XCTAssertFalse(bar.contains(phrase), "the filters menu offers `\(phrase)` again")
+        }
     }
 
-    /// The switch is persisted under its own key, beside the board's other view choices.
-    func testShowDoneIsAPersistedBoardPreference() {
-        XCTAssertEqual(BoardFilterPrefs.showDoneKey, "tasks.board.showDone")
+    /// The sections' open state is persisted under its own key, beside the board's other
+    /// view choices.
+    func testSectionOpenStateIsAPersistedBoardPreference() {
+        XCTAssertEqual(BoardStatusSectionPrefs.openKey, "tasks.board.statusSections")
     }
 
     // MARK: - Helpers

@@ -187,7 +187,9 @@ extension TasksStore {
             startDate: t.startDate, endDate: t.endDate, unread: t.unread,
             parentTaskId: t.parentTaskId,
             userStatus: t.userStatus,
-            orgRole: t.orgRole
+            orgRole: t.orgRole,
+            waitUntil: t.waitUntil,
+            watchedAt: t.watchedAt
         )
     }
 

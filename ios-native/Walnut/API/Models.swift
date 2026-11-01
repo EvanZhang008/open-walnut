@@ -473,6 +473,13 @@ struct WalnutTask: Codable, Identifiable, Equatable {
     /// A team stop is in force under it (additive, 2026-10; server `src/core/sessions/team-stop.ts`):
     /// the Team section offers Resume. nil otherwise and from an older server.
     var teamStop: WalnutTeamStop? = nil
+    /// The clock on a WAITING task (additive; the projection sends it only with phase WAITING):
+    /// the board's Waiting / snoozed section puts the soonest wake first.
+    var waitUntil: String? = nil
+    /// When the user started watching the task (additive, 2026-10): a watched task stays in
+    /// the board's Watching section, on top, whatever its state. nil = not watched, and from
+    /// a server that predates it. Every copy of a row (`applyEdit`, `withPinned`) carries it.
+    var watchedAt: String? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, title, status, phase, priority, project
@@ -490,6 +497,8 @@ struct WalnutTask: Codable, Identifiable, Equatable {
         case liveActivity = "live_activity"
         case resultReport = "result_report"
         case teamStop = "team_stop"
+        case waitUntil = "wait_until"
+        case watchedAt = "watched_at"
     }
 }
 

@@ -276,7 +276,28 @@ struct TaskDetailSheet: View {
             .accessibilityIdentifier("task.statusToggle")
             titleView
             if saving { ProgressView().controlSize(.small) }
+            watchToggle
         }
+    }
+
+    /// The eye: Watch keeps the task in the board's Watching section, on top, whatever its
+    /// state. Optimistic like every field here (`apply`), rolled back on a failed write.
+    private var watchToggle: some View {
+        let watched = BoardStatusSectionModel.isWatched(current)
+        return Button {
+            apply(.init(watchedAt: watched ? "" : ISO8601DateFormatter().string(from: AppClock.now())))
+        } label: {
+            Image(systemName: watched ? "eye.fill" : "eye")
+                .font(.title3)
+                .foregroundStyle(watched ? Theme.tint : .secondary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.top, -6)
+        .accessibilityLabel(BoardWatchItem.label(watched: watched))
+        .accessibilityValue(watched ? "Watching" : "Not watched")
+        .accessibilityIdentifier("task.watchToggle")
     }
 
     /// Tap the title to rename it in place. Multi-line because task titles are

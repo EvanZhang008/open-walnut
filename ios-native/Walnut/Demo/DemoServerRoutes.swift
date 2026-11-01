@@ -290,6 +290,7 @@ extension DemoServer {
                 if start == nil { state.tasks[i].endDate = nil }
             }
             if let end = optional("end_date") { state.tasks[i].endDate = end }
+            if let watched = optional("watched_at") { state.tasks[i].watchedAt = watched }
             state.tasks[i].updatedAt = nowISO
             return state.tasks[i].wire
         }
