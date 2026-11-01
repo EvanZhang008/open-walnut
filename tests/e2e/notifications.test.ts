@@ -166,7 +166,9 @@ describe('Notification feed API', () => {
     expect(perm?.body).toBe('ls -la /tmp');
     expect(body.unreadCount).toBeGreaterThanOrEqual(1);
 
-    // The insert is pushed live so the bell updates without a refresh.
+    // The insert is pushed live so the bell updates without a refresh. The frame can land a
+    // moment after the feed write the poll saw, so wait for it with a bound (as below).
+    for (const deadline = Date.now() + 3000; !notifFrames.some((f) => f.data?.dedupKey === 'perm:req-e2e-1') && Date.now() < deadline;) await delay(20);
     const news = notifFrames.filter((f) => f.data?.dedupKey === 'perm:req-e2e-1');
     expect(news).toHaveLength(1);
     expect(news[0].name).toBe('notification:new');
