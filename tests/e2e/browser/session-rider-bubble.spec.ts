@@ -190,12 +190,13 @@ test('the words after a status change of a followed task are a user bubble; the 
   expect(shown).toContain('RIDER_TYPED_STATUS yes, go for it.')
   expect(shown).not.toContain('RIDER_STATUS_MARKER')
   expect(shown).not.toContain('changed its status')
-  // Hidden with the setting off: neither the note nor the hint is drawn, the words are.
+  // Hidden with the setting off: the note is not drawn, the words are.
   await expect(riderAbove(b)).toHaveCount(0)
   await expect(b.getByTestId('message-hints')).toHaveCount(0)
   await showAdded(page, panel, b)
-  // The message hint stays the bubble's own row, as on any message, in plain words.
-  await expect(b.getByTestId('message-hints')).toContainText('Walnut added a reminder that rich output is on (your Output mode setting).')
+  // The message hint is never drawn (2026-11-01), opened or not.
+  await expect(b.getByTestId('message-hints')).toHaveCount(0)
+  await expect(b).not.toContainText('rich output mode')
   // No card row holds the words.
   await expect(panel.locator('.session-history .session-msg-envelope', { hasText: 'RIDER_TYPED_STATUS' })).toHaveCount(0)
   const rider = riderAbove(b)

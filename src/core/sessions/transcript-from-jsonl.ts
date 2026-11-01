@@ -172,9 +172,9 @@ function clip(text: string): string {
  *  the human's words, and name the sender from the whole text (an envelope cut
  *  short reads as prose), by the primary's rule (transcript-sent-by.ts). */
 function userRow(text: string, timestamp: string): TranscriptRow {
-  const { text: shown, hints } = projectUserText(text, timestamp)
+  const { text: shown } = projectUserText(text, timestamp)
   // What Walnut added besides its notes in front, as the primary's projection says it.
-  const { items, textWithoutContext } = walnutAddedOf(shown, hints)
+  const { items, textWithoutContext } = walnutAddedOf(shown)
   return {
     role: 'user', text: clipTranscriptText(shown, 'live'), timestamp, sentBy: transcriptSentBy({ role: 'user', text: shown }),
     ...(items.length ? { added: items.map((i) => ({ ...i, text: clipTranscriptText(i.text, 'live') })) } : {}),

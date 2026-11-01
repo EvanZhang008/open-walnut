@@ -517,11 +517,10 @@ export interface ProjectedTranscriptMessage {
    *  clipped preview. Absent on an older server. */
   sentBy?: TranscriptSentBy
   /** User text rows only (additive, 2026-10-29): what Walnut added to the row besides
-   *  its notes in front (which a client splits from `text` itself): the message hints
-   *  taken off the text, and the context blocks Walnut put first. A client shows them
-   *  on every message (`ui.show_walnut_additions`, default on) or on request. A hint's
-   *  `label` is a plain phrase of what it asked and why ("a request to write to you in
-   *  Chinese (your Reply language setting)"), read after "Walnut added". Absent when none. */
+   *  its notes in front (which a client splits from `text` itself): the context blocks
+   *  Walnut put first. A client shows them on every message (`ui.show_walnut_additions`,
+   *  default on) or on request. Message hints are never among them since 2026-11-01 (the
+   *  user: "just remove this"): they are for the model. Absent when none. */
   added?: WalnutAddedItem[]
   /** With `added` context blocks: `text` without them (its notes in front kept), the
    *  person's words to draw. `text` stays whole for an older client. */
@@ -542,10 +541,9 @@ export interface ProjectedTranscriptMessage {
 /** A user row's `added` / `textWithoutContext`, clipped like `text` unless the read is `full`. */
 function projectWalnutAdded(
   text: string,
-  hints: import('./session-history.js').SessionHistoryMessage['hints'],
   clip: 'live' | 'tail' | null,
 ): Pick<ProjectedTranscriptMessage, 'added' | 'textWithoutContext'> {
-  const { items, textWithoutContext } = walnutAddedOf(text, hints)
+  const { items, textWithoutContext } = walnutAddedOf(text)
   const cut = (t: string) => (clip ? clipTranscriptText(t, clip) : t)
   return {
     ...(items.length ? { added: items.map((i) => ({ ...i, text: cut(i.text) })) } : {}),
@@ -816,7 +814,7 @@ export async function buildSessionTranscript(
         // From the whole text, before the clip: an envelope cut short reads as prose.
         // An injected line that got here is a Walnut message the CLI delivered: read as one.
         ...(m.role === 'user' ? { sentBy: transcriptSentBy(m.injected ? { ...m, injected: false } : m) } : {}),
-        ...(m.role === 'user' ? projectWalnutAdded(text, m.hints, opts?.full ? null : (opts?.live || wantRich ? 'live' : 'tail')) : {}),
+        ...(m.role === 'user' ? projectWalnutAdded(text, opts?.full ? null : (opts?.live || wantRich ? 'live' : 'tail')) : {}),
         // The tasks the reply is about (history parse, core/org/message-about.ts), for the phone's pills.
         ...(m.role === 'assistant' && m.about?.length ? { about: m.about, ...(m.aboutTagged ? { aboutTagged: true as const } : {}) } : {}),
       })

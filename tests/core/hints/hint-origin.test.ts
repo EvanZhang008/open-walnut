@@ -32,13 +32,6 @@ describe('hint origin', () => {
     expect(effectiveHints(null).filter((h) => h.builtIn).map((h) => h.kind)).toEqual([...BUILT_IN_HINT_KINDS])
   })
 
-  it("every built-in has its own plain words, never a custom hint's \"your hint\"", async () => {
-    const { hintSummary } = await import('../../../src/lib/walnut-added.js')
-    for (const kind of [...BUILT_IN_HINT_KINDS, 'session-context', 'engine-switch']) {
-      expect(hintSummary({ kind, text: 'x' }), kind).not.toMatch(/^your hint /)
-    }
-  })
-
   it("a user's setting in a built-in's text is always marked as theirs, Walnut's words never", () => {
     const inputs = [
       { config: markedConfig, record: null },

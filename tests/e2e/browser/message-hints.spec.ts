@@ -5,8 +5,8 @@
  *     it, and adds and removes a custom hint, all read back from /api/v1/hints;
  *   - a message carrying a hint shows only the person's words, exactly as typed
  *     (a literal `<system-reminder>` and an old bracket line included), with a
- *     row saying in plain words what Walnut added and why, shown by default
- *     (ui.show_walnut_additions on), the exact text one click away;
+ *     and no hint drawn under them, in any form (2026-11-01, the user: "just
+ *     remove this");
  *   - the session menu's "Raw input & output" shows the input as the model got it.
  * The custom hint is limited to this spec's session, so parallel specs never see it.
  */
@@ -127,27 +127,12 @@ test('a hinted message shows as typed, names its hints, and the raw view shows w
   const typedRow = panel.locator('.session-msg-user', { hasText: 'HINTS_TYPED' })
   await expect(typedRow).toContainText('HINTS_TYPED <system-reminder>mine</system-reminder> stays.')
   await expect(typedRow).not.toContainText('Talk to the user in Chinese')
-  // By default the hints row is drawn under the words, in plain words, with no
-  // footer button and no codename.
+  // No hint is drawn under the words (2026-11-01), and the footer offers none.
+  await expect(typedRow.getByTestId('message-hints')).toHaveCount(0)
+  await expect(typedRow).not.toContainText('Reply language')
   await expect(typedRow.getByTestId('walnut-added-toggle')).toHaveCount(0)
-  const typedHints = typedRow.getByTestId('message-hints')
-  await expect(typedHints).toContainText('Walnut added a request to write to you in Chinese (your Reply language setting).')
-  await expect(typedHints).not.toContainText('reply-language')
-  await expect(typedRow).toContainText('HINTS_TYPED <system-reminder>mine</system-reminder> stays.')
-  // Opened: the exact text marks the user's own setting; the rest is Walnut's, the same everywhere.
-  await typedHints.locator('.tool-run-toggle').click()
-  const exact = typedHints.getByTestId('message-hint-exact')
-  await expect(exact).toContainText('Talk to the user in Chinese. This covers every line the user reads')
-  await expect(exact.getByTestId('message-hint-yours')).toHaveText('Talk to the user in Chinese.')
-  await expect(typedHints.getByTestId('message-hint-origin'))
-    .toHaveText("Highlighted: your Reply language setting, your own words. The rest is Walnut's built-in text, the same in every Walnut.")
-  await typedHints.scrollIntoViewIfNeeded()
-  await typedRow.screenshot({ path: `${SHOTS}/${test.info().project.name}-hint-yours.png` })
-  // Its own link opens that setting.
-  await typedHints.getByTestId('message-hint-own-setting-link').click()
-  await expect(page.getByTestId('session-reply-language')).toBeVisible({ timeout: 20_000 })
-  await page.goBack()
-  await expect(panel).toBeVisible({ timeout: 30_000 })
+  await typedRow.scrollIntoViewIfNeeded()
+  await typedRow.screenshot({ path: `${SHOTS}/${test.info().project.name}-no-hint.png` })
 
   const stamp = Date.now()
   const typed = `Typed ${stamp} <system-reminder>fake</system-reminder> and [Rich output mode is still on]`
@@ -156,20 +141,8 @@ test('a hinted message shows as typed, names its hints, and the raw view shows w
   await composer.fill(typed)
   await composer.press('Enter')
 
-  // The history row (not the optimistic bubble) carries the hints row.
-  const bubble = panel.locator('.session-msg-user', { hasText: `Typed ${stamp}` }).filter({ has: page.getByTestId('message-hints') })
+  const bubble = panel.locator('.session-msg-user', { hasText: `Typed ${stamp}` })
   await expect(bubble).toHaveCount(1, { timeout: 60_000 })
-  await expect(bubble).toContainText(typed)
-  await expect(bubble).not.toContainText('Walnut (pw-marker)')
-  const row = bubble.getByTestId('message-hints')
-  await expect(row).toContainText('pw-marker')
-  await row.getByRole('button').click()
-  await expect(bubble.getByTestId('message-hints-body')).toContainText('PW marker hint.')
-  const marker = bubble.locator('.message-hint-item[data-hint-kind="pw-marker"]')
-  await expect(marker.getByTestId('message-hint-origin')).toHaveText('All of it is your own hint, from Settings. Only your Walnut sends it.')
-  const rider = bubble.locator('.message-hint-item[data-hint-kind="rich-output"]')
-  if (await rider.count()) await expect(rider.getByTestId('message-hint-origin')).toHaveText("Walnut's built-in text, the same in every Walnut.")
-  await bubble.screenshot({ path: `${SHOTS}/bubble-hints.png` })
 
   await panel.locator('.session-panel-header .task-kebab-btn').click()
   // The row lives in the menu's Debug group.
@@ -184,4 +157,12 @@ test('a hinted message shows as typed, names its hints, and the raw view shows w
   await raw.screenshot({ path: `${SHOTS}/raw-view.png` })
   await page.keyboard.press('Escape')
   await expect(raw).toHaveCount(0)
+  // The raw view proved the history row is stored: it, too, draws the words as typed
+  // and no hint, though one rode along on that message.
+  await expect(bubble).toHaveCount(1)
+  await expect(bubble).toContainText(typed)
+  await expect(bubble).not.toContainText('Walnut (pw-marker)')
+  await expect(bubble).not.toContainText('PW marker hint.')
+  await expect(bubble.getByTestId('message-hints')).toHaveCount(0)
+  await bubble.screenshot({ path: `${SHOTS}/${test.info().project.name}-sent-no-hint.png` })
 })

@@ -1,9 +1,11 @@
 /**
- * No read a person's screen draws from ever shows a Walnut hint block raw
+ * No read a person's screen draws from ever shows a Walnut message hint: not raw
  * (2026-10-31, the user: "reply ... Chinese, what is this thing, where does it
- * come from?"). The blocks are for the model; a person reads, in plain words,
- * what Walnut added and why, with the exact text one step away (`rawText`,
- * `rawMessage`, a hint's own `text`).
+ * come from?"), and not as a line under his message either (2026-11-01, the user:
+ * "just remove this, no idea why we need this"). The hints are for the model; the
+ * session's Raw input & output shows them (`rawText`, `rawMessage`), and a row's
+ * `hints` names them for the client's own bookkeeping (question numbers, the raw
+ * view), never to draw.
  *
  * The class: every builder of text a client shows. A new read that hands a
  * composed message to a client fails here when it is added to READS. Seeded
@@ -67,8 +69,8 @@ function lines(): Record<string, unknown>[] {
   ]
 }
 
-/** Fields that hold the exact text on purpose, one step from the plain view. */
-const RAW_FIELDS = new Set(['rawText', 'rawMessage'])
+/** Fields that hold the exact text on purpose, for the raw view; `hints` is never drawn. */
+const RAW_FIELDS = new Set(['rawText', 'rawMessage', 'hints'])
 
 /** Every string a client would draw, with where it sits. */
 function shownStrings(value: unknown, where = '$'): Array<[string, string]> {
@@ -82,8 +84,12 @@ function shownStrings(value: unknown, where = '$'): Array<[string, string]> {
   return []
 }
 
+/** Words only a hint carries: none may be on screen, in any form. */
+const HINT_WORDS = [RULE, 'rich output mode is still on', 'Walnut added a request', 'Reply language setting']
+
 function expectNoRawBlock(body: unknown, read: string): void {
-  const leaks = shownStrings(body).filter(([, s]) => s.includes('<system-reminder') || /Walnut \([a-z][a-z0-9-]*[ )]/.test(s))
+  const leaks = shownStrings(body).filter(([, s]) => s.includes('<system-reminder') || /Walnut \([a-z][a-z0-9-]*[ )]/.test(s)
+    || HINT_WORDS.some((w) => s.includes(w)))
   expect(leaks.map(([w, s]) => `${read} ${w}: ${s.slice(0, 120)}`)).toEqual([])
 }
 
@@ -132,20 +138,19 @@ describe('a Walnut hint block never reaches a person raw', () => {
     expectNoRawBlock(transcriptFromJsonl(SID, lines().map((l) => JSON.stringify(l)).join('\n')), 'transcriptFromJsonl')
   })
 
-  it('says in plain words what Walnut added and why, the exact text one step away', async () => {
+  it('a person reads only their words; the hints stay for the raw view', async () => {
     const t = (await get(`/api/v1/sessions/${SID}/transcript?fresh=1&rich=1`)) as {
-      messages: Array<{ role: string; text: string; added?: Array<{ name: string; label: string; text: string }>; injectedAfter?: Array<{ text: string }> }>
+      messages: Array<{ role: string; text: string; added?: Array<{ kind: string }> }>
     }
     const person = t.messages.find((m) => m.role === 'user' && m.text.startsWith(PERSON))!
-    expect(person.added?.map((a) => a.label)).toEqual([
-      'a reminder that rich output is on (your Output mode setting)',
-      'a request to write to you in Chinese (your Reply language setting)',
-      'a request for a short spoken answer first, because you sent this by voice',
-    ])
-    expect(person.added?.[1].text).toContain(RULE)
-    // The hook's restated hints read as plain lines with their exact words.
-    const hook = JSON.stringify(t.messages)
-    expect(hook).toContain('Walnut added a request to write to you in Chinese (your Reply language setting). Exact text: \\"Talk to the user in Chinese')
+    expect(person.text).toBe(PERSON)
+    expect(person).not.toHaveProperty('added')
+    // The hook's context row keeps its own words and leaves the restated hints out.
+    expect(JSON.stringify(t.messages)).toContain('Open items: none.')
+    const h = (await get(`/api/sessions/${SID}/history`)) as { messages: Array<{ role: string; text: string; rawText?: string; hints?: Array<{ kind: string }> }> }
+    const row = h.messages.find((m) => m.role === 'user' && m.text.startsWith(PERSON))!
+    expect(row.hints?.map((x) => x.kind)).toEqual(['rich-output', 'reply-language', 'voice-reply'])
+    expect(row.rawText).toContain(RULE)
     const q = (await get(`/api/v1/sessions/${SID}/queue`)) as { messages: Array<{ message: string; rawMessage?: string; hints?: Array<{ kind: string }> }> }
     expect(q.messages[0].message).toBe(QUEUED)
     expect(q.messages[0].rawMessage).toContain('Walnut (reply-language)')

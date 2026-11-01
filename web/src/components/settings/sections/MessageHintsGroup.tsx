@@ -240,13 +240,13 @@ export function MessageHintsGroup({ replyLanguage }: { replyLanguage?: string } 
       heading="Message hints"
       id="message-hints"
       data-testid="message-hints"
-      footer="Short text sent with a message to the AI. Built in: Walnut's own, the same in every Walnut (Reply language sends your own setting with it). Yours: a hint you added. Under each message, a line says in plain words what Walnut added and why; a click shows the exact text, your own words marked. Agents can change these too (hint_set)."
+      footer="Short text sent with a message to the AI. Built in: Walnut's own, the same in every Walnut (Reply language sends your own setting with it). Yours: a hint you added. They are for the AI and are not shown in the chat; a session's menu, Raw input & output, shows exactly what it received. Agents can change these too (hint_set)."
     >
       <SettingsRow
         anchor="settings-show-walnut-additions"
         label="Always show what Walnut added to a message"
         htmlFor="show-walnut-additions"
-        help="Its hints, its notes in front of a message, the context it put first, each said in plain words. On by default. Off: each message's Walnut added button shows them."
+        help="Its notes in front of a message and the context it put first. On by default. Off: each message's Walnut added button shows them."
         control={(
           <ToggleSwitch
             id="show-walnut-additions"

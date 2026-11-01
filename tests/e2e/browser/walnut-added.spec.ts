@@ -1,20 +1,19 @@
 /**
- * What Walnut added to a person's message shows by default, in plain words, with
- * the exact text one click away (2026-10-31, the user: "the user can see these is
- * better"; before, 2026-10-29: hidden behind a "more"). A person who turns
- * "Always show what Walnut added" off gets the footer's "Walnut added N" instead.
+ * What Walnut added to a person's message (its notes in front, the context it put
+ * first) shows by default (2026-10-31); a person who turns "Always show what
+ * Walnut added" off gets the footer's "Walnut added N" instead. Its message hints
+ * are never drawn (2026-11-01, the user, of the line under his message: "just
+ * remove this, no idea why we need this"); the raw view shows them.
  *
  * Drives the real panel against the rider fixture (`pw-rider-session`,
  * test-server.ts): turn 10 is a status note in front of the person's words,
  * with a rich-output hint after them. It checks:
- *  · by default the note row and the hints line show with no click, the line
- *    saying in plain words what Walnut added and why (no codename), and the
- *    footer has no "Walnut added" button;
- *  · the line opens to the exact text and a "Change in Settings" link to that
- *    hint's switch;
+ *  · by default the note row shows with no click, no hint line or hint words are
+ *    drawn, and the footer has no "Walnut added" button;
  *  · with the setting off (the config read is answered by the test, so the
  *    shared fixture server's setting never changes under other specs), the bubble
- *    holds only the words and "Walnut added 2" shows and hides them.
+ *    holds only the words and "Walnut added 1" (the note, not the hint) shows and
+ *    hides it, and opened it still draws no hint.
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { REAL_PANEL } from './draft-helpers'
@@ -71,60 +70,44 @@ async function shot(page: Page, target: Locator, name: string): Promise<void> {
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-${name}.png`, clip }).catch(() => {})
 }
 
-test('by default what Walnut added shows in plain words, with no click', async ({ page }) => {
+/** No hint is drawn in the bubble, in any form. */
+async function expectNoHint(b: Locator): Promise<void> {
+  await expect(b.getByTestId('message-hints')).toHaveCount(0)
+  await expect(b).not.toContainText('rich output mode')
+  await expect(b).not.toContainText('Output mode setting')
+}
+
+test('by default the note shows with no click, and no hint is drawn', async ({ page }) => {
   test.setTimeout(90_000)
   const panel = await openSession(page)
   const b = bubbleOf(panel)
   await expect(b).toHaveCount(1)
   await expect(b).toContainText(`${MARK} yes, go for it.`)
-  const line = b.getByTestId('message-hints')
-  await expect(line).toContainText('Walnut added a reminder that rich output is on (your Output mode setting).')
-  await expect(line).not.toContainText('rich-output')
   await expect(riderAbove(b).locator('[data-testid="rider-fold"]')).toHaveCount(1)
+  await expectNoHint(b)
   await b.hover()
   await expect(b.getByTestId('walnut-added-toggle')).toHaveCount(0)
   await reveal(page, panel, b)
-  await shot(page, b, 'default-shown')
+  await shot(page, b.locator('xpath=..'), 'default-no-hint')
 })
 
-test('with the setting off, the bubble is only the words; its footer shows what Walnut added, and hides it again', async ({ page }) => {
+test('with the setting off, the bubble is only the words; its footer shows the note, and hides it again', async ({ page }) => {
   test.setTimeout(90_000)
   await pinWalnutAdditions(page, false)
   const panel = await openSession(page)
   const b = bubbleOf(panel)
   await expect(b).toHaveCount(1)
-  await expect(b.getByTestId('message-hints')).toHaveCount(0)
+  await expectNoHint(b)
   await expect(riderAbove(b)).toHaveCount(0)
   const toggle = b.getByTestId('walnut-added-toggle')
   await b.hover()
-  await expect(toggle).toHaveText(/^Walnut added 2›?$/)
+  await expect(toggle).toHaveText(/^Walnut added 1›?$/)
   await toggle.click()
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
-  await expect(b.getByTestId('message-hints')).toContainText('Walnut added a reminder that rich output is on')
   await expect(riderAbove(b).locator('[data-testid="rider-fold"] .tool-run-toggle')).toHaveText(/^Received 1 message(?: from [^·›]+?)?›?$/)
+  await expectNoHint(b)
   await b.hover()
   await toggle.click()
   await expect(toggle).toHaveAttribute('aria-expanded', 'false')
-  await expect(b.getByTestId('message-hints')).toHaveCount(0)
   await expect(riderAbove(b)).toHaveCount(0)
-})
-
-test('a hint leads to its switch in Settings', async ({ page }) => {
-  test.setTimeout(90_000)
-  const panel = await openSession(page)
-  const b = bubbleOf(panel)
-  await reveal(page, panel, b)
-  await b.getByTestId('message-hints').locator('.tool-run-toggle').click()
-  // The exact text the AI received is one click from the plain line.
-  await expect(b.getByTestId('message-hint-exact')).toContainText('rich output mode is still on')
-  const link = b.getByTestId('message-hint-settings-link')
-  await expect(link).toHaveText('Change in Settings')
-  await shot(page, b, 'hint-open')
-  await link.click()
-  await expect(page).toHaveURL(/\/settings#message-hint-rich-output$/)
-  const row = page.locator('#message-hint-rich-output')
-  await expect(row).toBeVisible({ timeout: 20_000 })
-  await expect(row.locator('#hint-enabled-rich-output')).toBeVisible()
-  await expect(page.locator('#show-walnut-additions')).toHaveCount(1)
-  await shot(page, row, 'settings-row')
 })

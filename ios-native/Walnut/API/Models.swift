@@ -185,7 +185,8 @@ struct ChatMessage: Codable, Identifiable, Equatable {
     var sentBy: String? = nil
     /// Session transcript user rows only: what Walnut added to the row besides its
     /// notes in front (additive 2026-10-29, server `src/lib/walnut-added.ts`): the
-    /// message hints taken off the text and the context blocks it put first. The
+    /// context blocks it put first (its message hints too until 2026-11-01; a current
+    /// server sends no hint item, since no chat shows a hint). The
     /// chat hides them by default and shows them on request
     /// (`TimelineTurnFold.Additions`). nil on a row with none and on an older server.
     var added: [WalnutAddedItem]? = nil
@@ -279,7 +280,8 @@ struct ChatMessage: Codable, Identifiable, Equatable {
 }
 
 /// One thing Walnut added to a person's message (`added` on a transcript user row):
-/// a message hint (`kind` "hint", `name` its kind, e.g. "rich-output") or a context
+/// a message hint (`kind` "hint", `name` its kind, e.g. "rich-output"; only an older
+/// server, before 2026-11-01, sends one) or a context
 /// block it put first (`kind` "context", `name` the block's name). `label` is how
 /// it is named to the person ("Rich output", "Context"). Every field
 /// decodes leniently, so a row a newer server shapes differently still reads.

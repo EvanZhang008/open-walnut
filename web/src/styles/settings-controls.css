@@ -608,7 +608,7 @@ textarea.settings-input {
 .message-hint-sends { margin: 4px 0 8px; }
 .message-hint-sends-part { margin: 2px 0; font-size: 13px; overflow-wrap: anywhere; }
 .message-hint-sends-part .message-hint-origin-badge { margin-left: 0; }
-/* The user's own words in a hint (also in injected-banner.css for the chat). */
+/* The user's own words in a hint's "What it sends". */
 .message-hint-sends .message-hint-yours {
   background: color-mix(in srgb, var(--accent, #0a84ff) 22%, transparent);
   color: inherit;

@@ -2090,8 +2090,9 @@ directory on that host.
   received message out of the user's bubble. Absent on an older server, where a
   client draws user rows as it always did. Only this route carries it (`/conversations/:id/messages`
   rows do not). `added` (additive, 2026-10-29) rides a user row Walnut added to besides
-  its notes in front: `[ { kind: "hint" | "context", name, label, text } ]`, the message
-  hints taken off the text and the context blocks Walnut put first, with
+  its notes in front: `[ { kind: "hint" | "context", name, label, text } ]`, the context
+  blocks Walnut put first (`hint` items, its message hints, were sent until
+  2026-11-01 and are no longer: no chat shows a hint), with
   `textWithoutContext` (the text without those blocks, its notes in front kept) when
   blocks came off. A client hides them unless `GET /api/v1/config` says
   `config.ui.show_walnut_additions: true` or the person asks for that one message.

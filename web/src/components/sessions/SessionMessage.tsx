@@ -33,7 +33,6 @@ import '@/styles/session-riders.css';
 import { ProcessFoldRow } from './TurnFolds';
 import { envelopeSteps, foldStepsPhrase } from './fold-steps';
 import { QUESTION_BANNER_RE, stripQuestionTag } from '@/utils/question-tag';
-import { MessageHintsRow } from './MessageHintsRow';
 import { useShowWalnutAdditions } from '@/hooks/useShowWalnutAdditions';
 import { showHintTagsAsTyped } from '@/utils/hint-display';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
@@ -1162,18 +1161,19 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
   );
 
   // What Walnut added to a person's message (its notes in front, the context it
-  // prepended, its message hints) stays out of the chat unless the person asked
-  // to always see it (ui.show_walnut_additions); the footer's "Walnut added N"
-  // shows it for this one message (2026-10-29, the user: hidden by default behind
-  // a "more", always visible for me). A row that is only Walnut's (no words of
-  // the person) is drawn as it always was: it IS the message there.
+  // prepended) stays out of the chat unless the person asked to always see it
+  // (ui.show_walnut_additions); the footer's "Walnut added N" shows it for this one
+  // message (2026-10-29, the user: hidden by default behind a "more", always visible
+  // for me). Its message hints are never drawn (2026-11-01, the user: "just remove
+  // this, no idea why we need this"): they are for the model, and the session's
+  // "Raw input & output" shows them. A row that is only Walnut's (no words of the
+  // person) is drawn as it always was: it IS the message there.
   const personWords = !(envelopeSegments || (bannerSplit && !bodyText));
   const alwaysShowAdded = useShowWalnutAdditions();
   const [addedOpen, setAddedOpen] = useState(false);
   const showAdded = alwaysShowAdded || addedOpen;
   const addedCount = !isUser ? 0
-    : (personWords ? (riderSplit?.riders.length ?? 0) + (bannerSplit && bodyText ? bannerSplit.banners.length : 0) : 0)
-      + (message.hints?.length ?? 0);
+    : (personWords ? (riderSplit?.riders.length ?? 0) + (bannerSplit && bodyText ? bannerSplit.banners.length : 0) : 0);
   const toggleAdded = useCallback(() => setAddedOpen((o) => !o), []);
   const walnutAdded = useMemo(
     () => (!alwaysShowAdded && addedCount > 0 ? { count: addedCount, open: addedOpen, onToggle: toggleAdded } : undefined),
@@ -1290,7 +1290,6 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
           <RichMarkdown text={bodyText} cwd={sessionCwd} scope={message.msgId} />
         ))}
         {bodyText && aboutIds.length > 0 && <MessageAbout ids={aboutIds} />}
-        {isUser && showAdded && message.hints && message.hints.length > 0 && <MessageHintsRow hints={message.hints} />}
         {tools && tools.length > 0 && (() => {
           // CLI content order is prose first, tool_use blocks after — render
           // in that order. Merge consecutive generic tools into one "Ran 3

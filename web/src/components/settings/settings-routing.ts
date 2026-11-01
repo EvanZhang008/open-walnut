@@ -13,7 +13,7 @@ import type { FilterEntry } from './settings-filter'
 export const DEFAULT_PANE_ID = 'general'
 /** Mirrors HOST_ROW_ID_PREFIX in utils/host-settings-nav.ts (kept local: this file stays import-light). */
 const HOST_ROW_PREFIX = 'rh-host-'
-/** One message hint's row in Sessions, Message hints (MessageHintsGroup), linked from a chat's hint chip. */
+/** One message hint's row in Sessions, Message hints (MessageHintsGroup). */
 const HINT_ROW_PREFIX = 'message-hint-'
 
 /** Section id -> the visible entry it renders under (itself when visible). */
@@ -60,7 +60,7 @@ export interface ResolvedPane {
  */
 export const ROW_TARGETS: Readonly<Record<string, { paneId: string; elementId: string }>> = {
   'session-panels': { paneId: 'general', elementId: 'settings-session-panels' },
-  // The Reply language hint's own words, reached from a message's "what Walnut added" (hint-origin.ts).
+  // The Reply language setting, reached from its hint's "What it sends" in Message hints.
   'session-reply-language': { paneId: 'sessions', elementId: 'settings-reply-language' },
 }
 

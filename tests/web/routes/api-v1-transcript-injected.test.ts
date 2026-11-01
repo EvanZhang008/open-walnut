@@ -8,7 +8,8 @@
  * person's bubble. Checked on both builders:
  *  - the primary's projection, over HTTP on the fresh rich read and the slim one;
  *  - the companion's / host server's JSONL reader (transcriptFromJsonl), which
- *    also says what Walnut added to a person's message (`added`) as the primary does.
+ *    also says what Walnut added to a person's message (`added`) as the primary does
+ *    (its context blocks; never its hints).
  * A SessionStart hook's context before every row, a loaded skill's text after the
  * Skill call, a Walnut message the CLI delivered as an injected line (drawn as
  * that message), and the CLI's injected interrupt marker (dropped).
@@ -107,10 +108,11 @@ function expectInjected(rows: Row[], label: string): void {
   // The Walnut message the CLI delivered is drawn as that message.
   const peer = rows.find((r) => r.role === 'user' && r.text.startsWith('<walnut-message kind="peer-note"'))
   expect(peer?.sentBy, label).toBe('agent')
-  // The person's words are theirs, with what Walnut added named.
+  // The person's words are theirs; the hint that rode along is not shown (2026-11-01).
   const person = rows.find((r) => r.role === 'user' && r.text.startsWith(PERSON))
   expect(person?.sentBy, label).toBe('person')
-  expect(person?.added?.map((i) => i.label), label).toEqual(['a note that rich output is on, so answers may use tables, diagrams and layout (your Output mode setting)'])
+  expect(person?.text, label).toBe(PERSON)
+  expect(person?.added, label).toBeUndefined()
   // Only the first row carries the lines from before it.
   expect(rows.slice(1).every((r) => r.injectedBefore === undefined), label).toBe(true)
 }

@@ -54,8 +54,8 @@ enum TimelineTurnFold {
         /// An answer that was the ack line alone, inside an opened fold.
         case ack(ChatMessage)
         case fold(Fold)
-        /// What Walnut added to the person's message just above (hints, context
-        /// blocks), shown: one "Walnut added: …" row that opens to each item.
+        /// What Walnut added to the person's message just above (context blocks;
+        /// hints only from an older server), shown: one "Walnut added: …" row that opens to each item.
         /// `key` names the message's place (`addedKey`), never its payload.
         case added(key: String, items: [WalnutAddedItem])
     }

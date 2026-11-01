@@ -3,7 +3,7 @@ import Observation
 
 /// The paired server's `ui.show_walnut_additions` (`GET /api/v1/config`): whether the
 /// session chat shows what Walnut added to a person's message (its notes in front,
-/// the context blocks it put first, its message hints) on every message. Off, the
+/// the context blocks it put first; no message hints since 2026-11-01) on every message. Off, the
 /// chat hides them and each bubble's long-press item shows them for that message
 /// (`TimelineTurnFold.Additions`), as the web chat does.
 ///

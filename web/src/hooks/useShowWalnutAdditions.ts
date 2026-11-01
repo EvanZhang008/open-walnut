@@ -4,8 +4,8 @@ import { wsClient } from '@/api/ws';
 
 /**
  * `ui.show_walnut_additions`: whether the session chat always shows what Walnut
- * added to a message (its notes in front of the words, its message hints, the
- * context it prepended). Default ON (2026-10-31, the user: "the user can see these
+ * added to a message (its notes in front of the words, the context it prepended;
+ * never its message hints, which no chat draws since 2026-11-01). Default ON (2026-10-31, the user: "the user can see these
  * is better"); turned off, each message's footer has a "Walnut added" control that
  * shows them for that one message.
  *
