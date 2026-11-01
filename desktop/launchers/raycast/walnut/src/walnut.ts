@@ -144,3 +144,19 @@ export async function tellMain(
   }
   return { text: reply, taskId, unfinished: true };
 }
+
+/**
+ * Tell Main and go: one POST, answered once the message is in Main's queue (the reply is read in
+ * Main's chat). `held`: Main waits on the user's answer to its own question, so nothing was sent.
+ */
+export async function sendToMain(text: string, signal?: AbortSignal): Promise<{ taskId: string; held?: boolean }> {
+  const res = await fetch(`${walnutBase()}/api/v1/quick/main`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text }),
+    signal,
+  });
+  const body = (await res.json().catch(() => ({}))) as { taskId?: string; held?: boolean; error?: string };
+  if (!res.ok) throw new Error(body.error || `Main did not get it (HTTP ${res.status})`);
+  return { taskId: body.taskId ?? "", held: body.held };
+}

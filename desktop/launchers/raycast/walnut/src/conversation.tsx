@@ -34,7 +34,6 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
   const conversation = useRef(newConversation());
   const abort = useRef<AbortController | null>(null);
   const nextId = useRef(1);
-  const started = useRef(false);
 
   const update = (id: number, patch: Partial<Turn>) =>
     setTurns((all) => all.map((t) => (t.id === id ? { ...t, ...patch } : t)));
@@ -81,18 +80,32 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
           }
         }
       } catch (error) {
-        if (controller.signal.aborted) return;
+        // A turn replaced by the next question keeps what it had, never a spinner forever.
+        if (controller.signal.aborted) {
+          setTurns((all) => all.map((t) => (t.id === id && t.status === "streaming" ? { ...t, status: t.answer ? "done" : "error", answer: t.answer || "Stopped." } : t)));
+          return;
+        }
         update(id, { status: "error", answer: failure(error) });
       }
     },
     [mode, props.app, props.selection, turns.length],
   );
 
+  // The first question is asked from a timer the effect's cleanup cancels: React may mount, unmount
+  // and mount again (development mode, which `ray develop` runs), and an ask started in the first
+  // mount was aborted by the second's cleanup and never asked again (2026-10-31: stuck on "…").
+  const first = useRef(props.first);
+  const askRef = useRef(ask);
+  askRef.current = ask;
   useEffect(() => {
-    if (started.current || !props.first) return;
-    started.current = true;
-    void ask(props.first);
-  }, [ask, props.first]);
+    const text = first.current;
+    if (!text) return;
+    const timer = setTimeout(() => {
+      first.current = undefined;
+      void askRef.current(text);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, []);
 
   useEffect(() => () => abort.current?.abort(), []);
 

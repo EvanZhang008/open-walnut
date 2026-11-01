@@ -6,7 +6,9 @@ in `src/web/routes/quick-input-v1.ts`, documented under "Quick input" in
 
 - **Quick answer**: a question, a text to revise or translate, a short search. A light model with
   no tools answers in about two seconds, and the answer can be pasted back into the app you were in.
-- **Tell Main**: the text goes into Main's chat as your message; Main's reply shows as it is written.
+- **Tell Main**: the text goes into Main's chat as your message. In Raycast this is the first row and
+  fire and forget: ↵ sends it and Raycast closes (⌘⇧↵ stays to watch the reply); Alfred and Spotlight
+  show Main's reply as it is written.
 - **Find a task**: tasks matching the words, opened in Walnut with `open-walnut://open?to=/tasks/<id>`.
 
 | | Spotlight (macOS 26) | Raycast | Alfred 5 (Powerpack) |
@@ -33,7 +35,9 @@ npm install
 npm run dev     # loads it into Raycast
 ```
 
-Commands: **Ask Walnut** (type, ↵ for a quick answer, ⌘↵ to tell Main, tasks listed below) and
+Raycast is the main launcher; Alfred and Spotlight are the alternatives. Commands: **Ask Walnut**
+(type, ↵ to tell Main and close, ⌘↵ for a quick answer, ⌘⇧↵ to tell Main and wait for its reply,
+tasks listed below) and
 **Ask Walnut About Selection**. The port is a preference of the extension.
 
 ## Alfred

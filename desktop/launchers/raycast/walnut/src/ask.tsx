@@ -1,11 +1,33 @@
 /**
- * Ask Walnut: type, then Enter for a quick answer or Cmd+Enter to tell Main; the tasks matching
- * the words list below, and Enter on one opens it in Walnut.
+ * Ask Walnut: type, then Enter to tell Main (sent, and Raycast closes: the reply is in Main's chat)
+ * or Cmd+Enter for a quick answer here; the tasks matching the words list below, and Enter on one
+ * opens it in Walnut.
  */
-import { Action, ActionPanel, Icon, List } from "@raycast/api";
+import { Action, ActionPanel, Icon, List, open, showHUD, showToast, Toast } from "@raycast/api";
 import { useEffect, useState } from "react";
 import { Conversation } from "./conversation";
-import { findTasks, openTaskLink, QuickTask } from "./walnut";
+import { findTasks, NOT_RUNNING, openTaskLink, QuickTask, sendToMain } from "./walnut";
+
+/** Fire and forget: the message goes into Main's chat and the window closes. */
+async function tellMainAndGo(text: string): Promise<void> {
+  const toast = await showToast({ style: Toast.Style.Animated, title: "Sending to Main…" });
+  try {
+    const got = await sendToMain(text);
+    if (got.held) {
+      toast.style = Toast.Style.Failure;
+      toast.title = "Not sent: Main is waiting for your answer";
+      toast.message = "Answer its question in Walnut first.";
+      if (got.taskId) toast.primaryAction = { title: "Open Main", onAction: () => void open(openTaskLink(got.taskId)) };
+      return;
+    }
+    await showHUD("Sent to Main");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    toast.style = Toast.Style.Failure;
+    toast.title = "Main did not get it";
+    toast.message = /fetch failed|ECONNREFUSED|connect/i.test(message) ? NOT_RUNNING : message;
+  }
+}
 
 const STATE_COLOR: Record<string, string> = { needs: "#FF9F0A", working: "#0A84FF", waiting: "#8E8E93", done: "#34C759" };
 
@@ -45,32 +67,38 @@ export default function Command() {
       {q ? (
         <List.Section title="Ask">
           <List.Item
-            id="quick"
-            icon={Icon.Bolt}
+            id="main"
+            icon={Icon.Person}
             title={q}
-            subtitle="Quick answer"
+            subtitle="Tell Main: sends it to Main's chat"
             accessories={[{ text: "↵" }]}
             actions={
               <ActionPanel>
-                <Action.Push title="Quick Answer" icon={Icon.Bolt} target={<Conversation mode="quick" first={q} />} />
+                <Action title="Tell Main" icon={Icon.Person} onAction={() => void tellMainAndGo(q)} />
                 <Action.Push
-                  title="Tell Main"
-                  icon={Icon.Person}
+                  title="Quick Answer"
+                  icon={Icon.Bolt}
                   shortcut={{ modifiers: ["cmd"], key: "return" }}
+                  target={<Conversation mode="quick" first={q} />}
+                />
+                <Action.Push
+                  title="Tell Main and Wait for the Reply"
+                  icon={Icon.Message}
+                  shortcut={{ modifiers: ["cmd", "shift"], key: "return" }}
                   target={<Conversation mode="main" first={q} />}
                 />
               </ActionPanel>
             }
           />
           <List.Item
-            id="main"
-            icon={Icon.Person}
+            id="quick"
+            icon={Icon.Bolt}
             title={q}
-            subtitle="Tell Main: goes to Main's chat, its reply shows here"
+            subtitle="Quick answer"
             accessories={[{ text: "⌘↵" }]}
             actions={
               <ActionPanel>
-                <Action.Push title="Tell Main" icon={Icon.Person} target={<Conversation mode="main" first={q} />} />
+                <Action.Push title="Quick Answer" icon={Icon.Bolt} target={<Conversation mode="quick" first={q} />} />
               </ActionPanel>
             }
           />
