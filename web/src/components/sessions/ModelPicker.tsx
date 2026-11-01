@@ -4,7 +4,6 @@ import {
   SESSION_EFFORTS,
   DEFAULT_SESSION_EFFORT,
   sessionModelsAsCatalog,
-  resolveModelSwitchValue,
   modelSupportsEffort,
   modelSupportsXhighEffort,
   modelSupportsMaxEffort,
@@ -25,8 +24,6 @@ import { sortByModelStrength } from '@/utils/model-strength-order';
 import { parseAcpModelId, acpProviderGroupId, shortAcpModelName, groupAcpModels, acpFilterMatch, acpEffortLadder, acpEffortLabel } from './acp-model-id';
 import type { AcpModelFamily } from './acp-model-id';
 import { SessionCostBlock } from './SessionCostBlock';
-import { useDraft } from '@/hooks/useDraft';
-import { draftKey } from '@/utils/drafts';
 
 const EFFORTS = SESSION_EFFORTS;
 
@@ -566,25 +563,6 @@ export function ModelPicker({
   const configuredEffort = liveSettings?.effective?.effortLevel ?? DEFAULT_SESSION_EFFORT;
   const activeEffort: SessionEffort = appliedEffort ?? requestedEffort;
   const effortMismatch = applied !== null && appliedEffort !== null && appliedEffort !== requestedEffort;
-
-  // ── Custom model ID input — parity with the terminal's `/model <id>`.
-  // The catalog only lists rows the CLI's picker GENERATES; the switch
-  // validator accepts more (e.g. an allowlisted model whose menu row the
-  // upstream registry forgot — fable-5[1m] on Bedrock). Any string that
-  // passes the same shape check the server uses is sent verbatim; the CLI
-  // remains the authority (explicit ack error / read-back on the way back).
-  // WHAT TO TYPE: the FINAL provider-ready ID — the modelOverrides VALUE if
-  // the host configures overrides ("global.anthropic.claude-fable-5[1m]"),
-  // else the native provider ID ("us.anthropic.claude-opus-4-8"). NEVER the
-  // canonical short ID ("claude-fable-5[1m]"): it acks success but 400s at
-  // the wire and silently falls back — full pipeline in the doc comment on
-  // resolveModelSwitchValue (src/core/types.ts).
-  // A typed id is kept per session (a draft picker shares one 'new' key) until it is applied.
-  const customDraft = useDraft(draftKey('custom-model', sessionId ?? 'new'));
-  const customValue = customDraft.text;
-  const setCustomValue = customDraft.setText;
-  const customResolved = customValue.trim() ? resolveModelSwitchValue(customValue) : null;
-  const submitCustom = () => { if (customResolved) { onSwitch(customResolved); customDraft.clear(); } };
 
   // Close on Escape key
   React.useEffect(() => {
@@ -1265,30 +1243,6 @@ export function ModelPicker({
         )}
       </div>
 
-      {/* Custom model ID — same escape hatch as the terminal's `/model <id>`.
-          Works for allowlisted models missing a catalog row (upstream registry
-          gaps), org-specific inference profiles, brand-new model IDs. */}
-      <div className="model-picker-custom" data-testid="picker-custom-model">
-        <input
-          data-draft-key={customDraft.key ?? undefined}
-          className="model-picker-custom-input"
-          type="text"
-          placeholder="Custom model ID… (e.g. global.anthropic.claude-fable-5[1m])"
-          value={customValue}
-          onChange={(e) => setCustomValue(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') submitCustom(); e.stopPropagation(); }}
-          spellCheck={false}
-        />
-        <button
-          className="btn btn-sm model-picker-btn"
-          type="button"
-          disabled={!customResolved}
-          onClick={submitCustom}
-          title="Sent verbatim to the CLI — it validates against your settings (allowlist / overrides) and reports back the true applied model"
-        >
-          Switch
-        </button>
-      </div>
       </>)}
       </div>{/* .model-picker-pane */}
     </div>

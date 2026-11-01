@@ -427,36 +427,6 @@ test.describe('ModelPicker CLI catalog', () => {
     expect(req.postDataJSON()).toEqual({ effort: 'low' })
   })
 
-  test('custom model input sends an out-of-catalog ID verbatim (terminal /model parity)', async ({ page }) => {
-    await answerSwitch(page, 'model')
-    await interceptCatalog(page, CLI_CATALOG)
-    await interceptLiveSettings(page, 'global.anthropic.claude-fable-5')
-
-    const input = await openSessionPanel(page)
-    const picker = await openModelPicker(page, input)
-
-    const custom = picker.locator('[data-testid="picker-custom-model"]')
-    await expect(custom).toBeVisible()
-    const customInput = custom.locator('.model-picker-custom-input')
-    const customBtn = custom.locator('.model-picker-btn')
-
-    // Garbage (quotes/space) → shape check fails → button disabled.
-    await customInput.fill('bad "model"')
-    await expect(customBtn).toBeDisabled()
-
-    // A valid provider-ID-shaped string NOT in the catalog (the fable-1m
-    // Bedrock registry gap) → enabled → POSTs verbatim.
-    await customInput.fill('global.anthropic.claude-fable-5[1m]')
-    await expect(customBtn).toBeEnabled()
-    const [req] = await Promise.all([
-      page.waitForRequest((r) => r.url().includes(`/api/sessions/${SESSION_ID}/model`) && r.method() === 'POST'),
-      customBtn.click(),
-    ])
-    expect(req.postDataJSON()).toEqual({ model: 'global.anthropic.claude-fable-5[1m]' })
-
-    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'model-picker-custom-input.png') })
-  })
-
   // Not live, the picker shows the SAVED settings (its header says so). A pick
   // on a stopped session lives only in the record, and the picker used to read
   // the model from the pill alone, so it checked nothing, or the old model.
@@ -464,14 +434,10 @@ test.describe('ModelPicker CLI catalog', () => {
     await interceptCatalog(page, CLI_CATALOG)
     let input = await openSessionPanel(page)
     let picker = await openModelPicker(page, input)
-    const custom = picker.locator('[data-testid="picker-custom-model"]')
-    await custom.locator('.model-picker-custom-input').fill('global.anthropic.claude-mythos-1')
-    const [req] = await Promise.all([
-      page.waitForRequest((r) => r.url().includes(`/api/sessions/${SESSION_ID}/model`) && r.method() === 'POST'),
-      custom.locator('.model-picker-btn').click(),
-    ])
-    // The reload must not cancel the save (WebKit aborts a request in flight).
-    expect((await req.response())?.ok()).toBe(true)
+    // An out-of-catalog id is saved the way the terminal's `/model <id>` or an
+    // agent's op does it (the picker's own custom-id box was removed 2026-11-01).
+    const res = await page.request.post(`/api/sessions/${SESSION_ID}/model`, { data: { model: 'global.anthropic.claude-mythos-1' } })
+    expect(res.ok()).toBe(true)
 
     input = await openSessionPanel(page)
     picker = await openModelPicker(page, input)
