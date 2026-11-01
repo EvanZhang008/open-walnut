@@ -381,7 +381,7 @@ ${withStatus ? FOR_USER_PROMPT : ''}${opts?.memory ? agentMemoryPrompt(opts.memo
  *  them on the Board, the Org page and the phone, so the plain-words rule is the point. */
 export const FOR_USER_PROMPT = `Then these lines on how this task stands FOR THE USER, who reads them on their board without opening the session. Plain words a non-engineer understands: no codenames, abbreviations, ticket or test-run labels, commit hashes, file names or internal ids; one short sentence each.
 FOR_USER_STATE: one of needs-you | working | waiting | done. First: when this turn answered the user's message or showed them something to read (an answer, a walkthrough, a result they asked for) and the task is not finished, it is needs-you, whatever the task waits on next; say that wait in FOR_USER_NEXT. needs-you also when the next move is the user's: something only they can give (input, a file or text to paste, a review, a decision, an approval, a login, an action on their device), even with no rush; a wait on the user is ALWAYS needs-you, never waiting (waiting takes the task off their list). A question for your lead or another task is waiting, not needs-you; so is a failure of the machine (a full disk, a Walnut restart, a lost connection to a host): that is waiting on machine, which Walnut and your lead retry once it clears. working when you will carry on by yourself right now (a background job you started will wake you). waiting ONLY when nothing of this turn is for the user to read and the next move belongs to something outside Walnut and the user (a pipeline or CI run, a build, a deploy, a CR or PR review, a Slack or mail reply) or to another task or your lead; arm a trigger on an outside wait. done when what the task asked for is finished.
-FOR_USER_ASK: needs-you only: the one thing the user must decide or do, as a question or an instruction ("Approve testing on your real iPhone?"). Otherwise none. Check first that it is still needed: the user may have done it outside Walnut (a sign-in in a terminal, a tap on the phone), and a stale ask is read to them as fact. When a script can tell it is done (a login works, a file appears, a review lands), arm a trigger on it (trigger_create, wait:false) so the ask clears the moment it is; Walnut also asks you to check it again every few hours. Write it so the user gets the whole issue at a glance (at most 120 characters), and so they can answer with one click whenever that can work.
+FOR_USER_ASK: needs-you only: the one thing the user must decide or do, as a question or an instruction ("Approve testing on your real iPhone?"). Never a step for your lead or another task (merge, land, deploy, review it): that is waiting, with FOR_USER_WAITING_ON lead: or task:. Otherwise none. Check first that it is still needed: the user may have done it outside Walnut (a sign-in in a terminal, a tap on the phone), and a stale ask is read to them as fact. When a script can tell it is done (a login works, a file appears, a review lands), arm a trigger on it (trigger_create, wait:false) so the ask clears the moment it is; Walnut also asks you to check it again every few hours. Write it so the user gets the whole issue at a glance (at most 120 characters), and so they can answer with one click whenever that can work.
 FOR_USER_ASK_KIND: needs-you only: how the user answers: yes-no | single | multi | text. Prefer yes-no, then a choice (single: pick one; multi: pick several), over text; text only when no short list of answers fits. Otherwise none.
 FOR_USER_ASK_OPTIONS: single or multi only: 2 to 5 options worth choosing, separated by " | ", each a few words; put "(recommended)" after the one you recommend. No filler options (no "Other", no "Something else": the user can always write their own words). Otherwise none.
 FOR_USER_ASK_MORE: needs-you only, optional: the detail behind the ask that the summary leaves out (why it matters, what each option does), a few short sentences. Otherwise none.
@@ -478,6 +478,15 @@ const FOR_USER_FIELD_MAX = 240;
 
 /** The FOR_USER_* lines as the task's status report, or null when the session did not
  *  answer FOR_USER_STATE (an older prompt, a malformed report): no state is ever guessed. */
+/**
+ * The kind word that starts a wait ("lead: the merge"). The colon may be full-width when the words
+ * are CJK (2026-11-01: "lead\uff1a..." read as other, then its "waits for your call" words made a
+ * wait on its lead Needs you).
+ */
+const WAIT_KIND_PREFIX_RE = /^(outside|task|time|machine|you|user|lead|other)\s*[:\uff1a]\s*(.+)$/i;
+/** The kinds whose next move is another's than the user's: an "ask" naming one is a wait on it. */
+const OTHERS_KINDS = new Set(['lead', 'task', 'outside', 'machine']);
+
 export function readStatusReport(report: string, now: Date = new Date()): StatusReport | null {
   const read = (label: string): string | undefined => {
     const text = extractField(report, label).replace(/\s+/g, ' ').trim();
@@ -490,17 +499,29 @@ export function readStatusReport(report: string, now: Date = new Date()): Status
     : stateWord.startsWith('waiting') ? 'waiting'
     : stateWord.startsWith('done') ? 'done' : null;
   if (!state) return null;
-  const out: StatusReport = { state, at: now.toISOString() };
   const ask = read('FOR_USER_ASK');
+  // An "ask" addressed to its lead or another task ("lead: merge and deploy it") is no ask of the
+  // user: it is a wait on that task (2026-11-01: two workers' land asks to their lead read Needs you).
+  const addressed = state === 'needs' && ask ? WAIT_KIND_PREFIX_RE.exec(ask) : null;
+  if (addressed && OTHERS_KINDS.has(addressed[1].toLowerCase())) {
+    const waitingOn = read('FOR_USER_WAITING_ON');
+    const named = waitingOn ? WAIT_KIND_PREFIX_RE.exec(waitingOn) : null;
+    return {
+      state: 'waiting', at: now.toISOString(),
+      waiting_kind: addressed[1].toLowerCase() as WaitKind,
+      waiting_on: named && OTHERS_KINDS.has(named[1].toLowerCase()) ? named[2].trim() : addressed[2].trim(),
+      ...(read('FOR_USER_NOW') ? { now: read('FOR_USER_NOW')! } : {}),
+      ...(read('FOR_USER_NEXT') ? { next: read('FOR_USER_NEXT')! } : {}),
+    };
+  }
+  const out: StatusReport = { state, at: now.toISOString() };
   if (state === 'needs' && ask) {
     out.ask = ask;
     Object.assign(out, readAskShape(report, read));
   }
   const waiting = read('FOR_USER_WAITING_ON');
   if (state === 'waiting' && waiting) {
-    // The colon may be full-width when the words are CJK (2026-11-01: "lead\uff1a..." read as other,
-    // then its "waits for your call" words made a wait on its lead Needs you).
-    const m = /^(outside|task|time|machine|you|user|lead|other)\s*[:\uff1a]\s*(.+)$/i.exec(waiting);
+    const m = WAIT_KIND_PREFIX_RE.exec(waiting);
     const kind = m ? m[1].toLowerCase() : 'other';
     out.waiting_kind = (kind === 'user' ? 'you' : kind) as WaitKind;
     out.waiting_on = m ? m[2].trim() : waiting;

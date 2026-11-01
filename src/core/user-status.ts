@@ -49,10 +49,12 @@ export function waitWordsNameUser(words: string | null | undefined, strict = fal
   return (strict ? ON_USER_PREFIX_RE : ON_USER_RE).test(words ?? '');
 }
 
-/** A waiting report whose wait is the user's to end: on them, or on nothing it names outside. */
-function waitIsUsers(report: StatusReport | null | undefined): boolean {
+/** A waiting report whose wait is the user's to end: on them, or on nothing it names outside. A
+ *  wait on its lead by a task with none is the user's too (they are the one above it). */
+function waitIsUsers(report: StatusReport | null | undefined, hasLeader: boolean): boolean {
   if (report?.state !== 'waiting') return false;
   const kind = report.waiting_kind;
+  if (kind === 'lead' && !hasLeader) return true;
   if (kind && OUTSIDE_WAIT_KINDS.has(kind)) return waitWordsNameUser(report.waiting_on, true);
   return true;
 }
@@ -481,7 +483,7 @@ export function deriveUserStatus(input: UserStatusInput, nowMs: number = Date.no
   if (out.state === 'waiting' && !out.until && input.waitUntil && Date.parse(input.waitUntil) > nowMs) out.until = input.waitUntil;
   // Only an ask the session itself wrote can be checked again; Walnut's own "its turn ended and
   // handed it back" is no claim about the world.
-  if (out.state === 'needs' && out.source === 'session' && out.ask && out.ask === reportAsk(input.report)) stampChecked(out, input, nowMs);
+  if (out.state === 'needs' && out.source === 'session' && out.ask && out.ask === reportAsk(input.report, !!input.hasLeader)) stampChecked(out, input, nowMs);
   if (out.state === 'needs' && out.source === 'choice') stampChoiceChecked(out, input, nowMs);
   return out;
 }
@@ -550,8 +552,8 @@ function lineOf(input: UserStatusInput, s: UserStatus): StatusLine | undefined {
   const r = reportIsCurrent(input) ? input.report : null;
   if (!r || s.state === 'done') return undefined;
   const text = s.state === 'needs'
-    ? (r.state === 'needs' ? r.ask : waitIsUsers(r) ? r.waiting_on : undefined)
-    : s.state === 'waiting' ? (r.state === 'waiting' && !waitIsUsers(r) ? r.waiting_on : undefined)
+    ? (r.state === 'needs' ? r.ask : waitIsUsers(r, !!input.hasLeader) ? r.waiting_on : undefined)
+    : s.state === 'waiting' ? (r.state === 'waiting' && !waitIsUsers(r, !!input.hasLeader) ? r.waiting_on : undefined)
       : r.state === 'working' ? (r.next ?? r.now) : undefined;
   if (none(text)) return undefined;
   return strip<StatusLine>({ text: clean(text).slice(0, 300), by: r.by ?? 'self', byName: r.by_name, at: r.at });
@@ -588,9 +590,9 @@ function snoozeOf(input: UserStatusInput, s: UserStatus, nowMs: number): UserSta
 }
 
 /** The ask a report makes of the user, in the words derive() shows. */
-function reportAsk(report: StatusReport | null | undefined): string | undefined {
+function reportAsk(report: StatusReport | null | undefined, hasLeader: boolean): string | undefined {
   if (report?.state === 'needs' && !none(report.ask)) return clean(report.ask);
-  if (waitIsUsers(report) && !none(report!.waiting_on)) return clean(report!.waiting_on);
+  if (waitIsUsers(report, hasLeader) && !none(report!.waiting_on)) return clean(report!.waiting_on);
   return undefined;
 }
 
@@ -724,7 +726,7 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     }
     if (report?.state === 'needs' && !none(report.ask)) return strip({ state: 'needs', source: 'session', ask: clean(report.ask), ...w });
     // A wait that is the user's (2026-10-30: "other: the meeting notes") is their ask, in its words.
-    if (waitIsUsers(report) && !none(report!.waiting_on)) {
+    if (waitIsUsers(report, !!input.hasLeader) && !none(report!.waiting_on)) {
       return strip({ state: 'needs', source: 'session', ask: clean(report!.waiting_on), ...w });
     }
     // It answered the user's message and then waits on something outside (2026-10-31, the user: "I

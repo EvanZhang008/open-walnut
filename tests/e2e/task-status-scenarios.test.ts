@@ -216,9 +216,13 @@ describe('every surface shows the same state after every step', () => {
     for (const [name, line, kind] of [
       ['Leadwaitflow', 'lead\uff1a the lead brings you four open questions; it waits for your call', 'lead'],
       ['Taskwaitflow', 'task: the review task asks you to pick a date, then I go on', 'task'],
+      // The same wait written as an ask (2026-11-01: a worker's land ask to its lead read Needs you).
+      ['Leadaskflow', 'ASK lead\uff1a merge these fixes and rerun the new-user flow on the Mac', 'lead'],
     ] as const) {
       const { lead, worker, sid } = await team(name)
-      const r = readStatusReport(`FOR_USER_STATE: waiting\nFOR_USER_WAITING_ON: ${line}`)!
+      const r = readStatusReport(line.startsWith('ASK ')
+        ? `FOR_USER_STATE: needs-you\nFOR_USER_ASK: ${line.slice(4)}`
+        : `FOR_USER_STATE: waiting\nFOR_USER_WAITING_ON: ${line}`)!
       expect(r.waiting_kind).toBe(kind)
       await turnEnds(worker, sid, r)
       expect((await getTask(worker.id)).phase, name).toBe('WAITING')

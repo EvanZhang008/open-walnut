@@ -6,6 +6,8 @@
  */
 import { describe, it, expect } from 'vitest'
 import { FOR_USER_PROMPT, readStatusReport } from '../../src/core/session-hooks/builtins.js'
+import { deriveUserStatus } from '../../src/core/user-status.js'
+import { phaseForReport } from '../../src/core/sessions/report-phase.js'
 
 const AT = new Date('2026-10-26T05:35:00Z')
 
@@ -45,6 +47,32 @@ describe('readStatusReport', () => {
     const r = readStatusReport('FOR_USER_STATE: waiting\nFOR_USER_WAITING_ON: lead\uff1a\u4e0a\u7ea7\u4efb\u52a1\u4f1a\u628a\u95ee\u9898\u8f6c\u7ed9\u4f60\uff0c\u7b49\u4f60\u62cd\u677f', AT)
     expect(r).toMatchObject({ waiting_kind: 'lead', waiting_on: '\u4e0a\u7ea7\u4efb\u52a1\u4f1a\u628a\u95ee\u9898\u8f6c\u7ed9\u4f60\uff0c\u7b49\u4f60\u62cd\u677f' })
     expect(readStatusReport('FOR_USER_STATE: waiting\nFOR_USER_WAITING_ON: task\uff1a the review', AT)).toMatchObject({ waiting_kind: 'task', waiting_on: 'the review' })
+  })
+
+  // 2026-11-01: two workers answered needs-you with an "ask" only their lead could do ("lead: merge
+  // and deploy it on the Mac"), and it read Needs you. Any ask that names another's kind is a wait on it.
+  it('an ask addressed to its lead or another task is a wait on it, never an ask of the user', () => {
+    for (const kind of ['lead', 'task', 'outside', 'machine']) {
+      for (const colon of [':', '\uff1a']) {
+        const r = readStatusReport(`FOR_USER_STATE: needs-you\nFOR_USER_ASK: ${kind}${colon} merge and deploy it on the Mac\nFOR_USER_NOW: Fixed and tested.\nFOR_USER_NEXT: The lead lands it.`, AT)
+        expect(r, `${kind}${colon}`).toEqual({
+          state: 'waiting', waiting_kind: kind, waiting_on: 'merge and deploy it on the Mac',
+          now: 'Fixed and tested.', next: 'The lead lands it.', at: AT.toISOString(),
+        })
+      }
+    }
+    // Its own wait line, when it names one, says on what.
+    expect(readStatusReport('FOR_USER_STATE: needs-you\nFOR_USER_ASK: lead: land it\nFOR_USER_WAITING_ON: lead: the land and the rerun on the Mac', AT))
+      .toMatchObject({ state: 'waiting', waiting_kind: 'lead', waiting_on: 'the land and the rerun on the Mac' })
+    // An ask of the user stays one, also "you:".
+    expect(readStatusReport('FOR_USER_STATE: needs-you\nFOR_USER_ASK: you: approve the merge?', AT)).toMatchObject({ state: 'needs', ask: 'you: approve the merge?' })
+    expect(FOR_USER_PROMPT).toMatch(/Never a step for your lead or another task/)
+    // A task with no lead: the one above it is the user, so the same words still ask them.
+    const r = readStatusReport('FOR_USER_STATE: needs-you\nFOR_USER_ASK: lead: merge it', AT)!
+    expect(phaseForReport(r, {}, true)).toBe('NEED_ACTION')
+    expect(deriveUserStatus({ phase: 'NEED_ACTION', report: r, hasSession: true, processStatus: 'idle', phaseChangedAt: new Date(AT.getTime() - 60_000).toISOString() }, AT.getTime() + 1_000))
+      .toMatchObject({ state: 'needs', ask: 'merge it' })
+    expect(phaseForReport(r, { parent_task_id: 'p' }, true)).toBe('WAITING')
   })
 
   it('the ask says a wait on the user is needs-you, and waiting is only for an outside wait', () => {
