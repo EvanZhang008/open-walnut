@@ -256,3 +256,38 @@ describe('WalnutUITests menu taps', () => {
     expect(offenders).toEqual([])
   })
 })
+
+describe('WalnutUITests harness streams', () => {
+  // A harness stream that moves on by the clock races the test reading it: on a loaded
+  // runner one XCUI query took seconds, and IslandStreamUITests looked for the half
+  // written script 11.5 s after the tap, when a 3 s pause had ended and the script had
+  // run (2026-11-01, run 41315324674). A stream a UI test reads stage by stage holds at
+  // each stage until the test taps its Next button.
+  const uiDir = path.join(ROOT, 'ios-native/WalnutUITests')
+  const harness = fs.readFileSync(path.join(ROOT, 'ios-native/Walnut/Timeline/TimelineHarnessView.swift'), 'utf8')
+  const STREAM_TAP = /app\.buttons\["(harness\.\w*[sS]tream)"\]/
+  /** The body of one harness store function, up to the next `func` at its indent. */
+  const body = (name: string) => harness.split(new RegExp(`\\n    func ${name}\\(`))[1]?.split(/\n    (?:private )?func /)[0] ?? ''
+  /** The longest sleep a body takes, in ms. */
+  const longestSleep = (text: string) => Math.max(0, ...[...text.matchAll(/Task\.sleep\(for: \.(milliseconds|seconds)\(([^)]*)\)\)/g)]
+    .flatMap((m) => (m[2]!.match(/\d+(?:\.\d+)?/g) ?? []).map((n) => Number(n) * (m[1] === 'seconds' ? 1000 : 1))))
+
+  it('every UI test that reads a harness stream holds it at each stage, and the stream sleeps only its cadence', () => {
+    const readers = fs.readdirSync(uiDir).filter((f) => f.endsWith('.swift'))
+      .map((f) => ({ f, text: fs.readFileSync(path.join(uiDir, f), 'utf8') }))
+      .filter(({ text }) => STREAM_TAP.test(text))
+    expect(readers.map((r) => r.f)).toContain('IslandStreamUITests.swift')
+    for (const { f, text } of readers) {
+      expect(text, `${f} reads a harness stream without its hold`).toContain('harness.islandNext')
+    }
+    const island = body('startIslandStream')
+    expect(island).toMatch(/holdIsland\(\)[\s\S]*holdIsland\(\)[\s\S]*stopStream\(\)/)
+    expect(longestSleep(island), 'startIslandStream pauses on the clock').toBeLessThanOrEqual(1000)
+  })
+
+  it('reads a clocked pause where there is one', () => {
+    expect(longestSleep('try? await Task.sleep(for: .milliseconds(index == 10 ? 3000 : 600))')).toBe(3000)
+    expect(longestSleep('try? await Task.sleep(for: .seconds(4))')).toBe(4000)
+    expect(longestSleep('try? await Task.sleep(for: .milliseconds(600))')).toBe(600)
+  })
+})

@@ -131,6 +131,11 @@ struct TimelineHarnessView: View {
                 // An island streaming in: its layout draws first, its script runs at the end.
                 Button("Island stream") { store.startIslandStream() }
                     .accessibilityIdentifier("harness.islandStream")
+                // The stream holds mid-script and again before the turn ends, until a
+                // test taps this, so a slow runner reads each stage before it moves on.
+                Button("Next") { store.islandHeld = false }
+                    .accessibilityIdentifier("harness.islandNext")
+                    .accessibilityValue(store.islandHeld ? "held" : "running")
                 Text("Sent \(store.islandSends.count)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -167,6 +172,8 @@ final class TimelineHarnessStore {
         .contains { $0.contains("timeline-harness-additions-shown") }
     @ObservationIgnored var bottomPinned = true
     @ObservationIgnored var streamOn = false
+    /// The island stream waits while this is true (see `startIslandStream`).
+    var islandHeld = false
     @ObservationIgnored private var streamTask: Task<Void, Never>?
     @ObservationIgnored private var counter = 0
 
@@ -421,9 +428,11 @@ final class TimelineHarnessStore {
         }
     }
 
-    /// Stream `TimelineRichFixtures.islandStreamChunks` (one every 600 ms, a longer
-    /// pause in the middle of the script), keep the finished reply live for 4 s, then
-    /// end the turn so the saved message replaces the live one.
+    /// Stream `TimelineRichFixtures.islandStreamChunks` (one every 600 ms), hold in the
+    /// middle of the script, keep the finished reply live until it is let go again, then
+    /// end the turn so the saved message replaces the live one. Each hold lasts until
+    /// `harness.islandNext` is tapped: on a loaded CI runner one XCUI query took seconds,
+    /// and a clocked 3 s pause was over before the test looked (2026-11-01, run 41315324674).
     func startIslandStream() {
         guard !streamOn else { return }
         IslandStateStore.shared.removeAll(scope: "harness")
@@ -436,14 +445,24 @@ final class TimelineHarnessStore {
         let chunks = TimelineRichFixtures.islandStreamChunks()
         streamTask = Task { @MainActor [weak self] in
             for (index, chunk) in chunks.enumerated() {
-                try? await Task.sleep(for: .milliseconds(index == 10 ? 3000 : 600))
+                if index == 10, await self?.holdIsland() != true { return }
+                try? await Task.sleep(for: .milliseconds(600))
                 guard let self, self.streamOn else { return }
                 self.liveText += chunk
             }
-            try? await Task.sleep(for: .seconds(4))
-            guard let self, self.streamOn else { return }
+            guard await self?.holdIsland() == true, let self else { return }
             self.stopStream()
         }
+    }
+
+    /// Wait until the island stream is let go; false when the stream stopped meanwhile.
+    private func holdIsland() async -> Bool {
+        islandHeld = true
+        while islandHeld, streamOn, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        islandHeld = false
+        return streamOn && !Task.isCancelled
     }
 
     func startStream() {
