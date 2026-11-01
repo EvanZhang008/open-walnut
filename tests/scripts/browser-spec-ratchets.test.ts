@@ -259,3 +259,31 @@ describe('the fake microphone', () => {
     expect(sources.filter(({ file, text }) => file !== 'fake-mic.ts' && text.includes('--use-fake-device-for-media-stream')).map(({ file }) => file)).toEqual([])
   })
 })
+
+describe('a worker that needs the user', () => {
+  // A worker's bare NEED_ACTION (a task with a parent_task_id, no ask of its own) reads Waiting on
+  // its lead, never Needs you (src/core/user-status.ts). Specs that moved a worker there with a
+  // phase write and expected Needs you failed on every CI run (2026-11-01: the Board chip in
+  // task-board, the leader's "1 need you" in phone-home C68). Its own line names an ask instead:
+  // PUT /api/v1/tasks/:id/report { state: 'needs', ask }, which moves the phase too.
+  const bareNeeds = (text: string): number[] => {
+    const workers = new Set<string>()
+    for (const m of text.matchAll(/(?:const|let)\s+(\w+)\s*=\s*await\s+\w+\([^\n]*parent_task_id\s*:/g)) workers.add(m[1])
+    for (const m of text.matchAll(/\/api\/tasks\/\$\{(\w+)\}`[^\n]*parent_task_id\s*:/g)) workers.add(m[1])
+    return [...workers].flatMap((w) => [...text.matchAll(new RegExp(`/api/tasks/\\$\\{${w}\\}\`[^\\n]*phase:\\s*'NEED_ACTION'`, 'g'))]
+      .map((m) => text.slice(0, m.index).split('\n').length))
+  }
+
+  it('no spec moves one to Needs you with a bare phase write', () => {
+    expect(sources.flatMap(({ file, text }) => bareNeeds(text).map((line) => `${file}:${line}`))).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const spec = [
+      "const worker = await createTask(title, { project, pinned: false, parent_task_id: leader })",
+      "await api('PATCH', `/api/tasks/${worker}`, { phase: 'NEED_ACTION' })",
+    ].join('\n')
+    expect(bareNeeds(spec)).toEqual([2])
+    expect(bareNeeds(spec.replace('parent_task_id: leader', 'pinned: true'))).toEqual([])
+  })
+})

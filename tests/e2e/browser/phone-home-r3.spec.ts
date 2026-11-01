@@ -139,7 +139,10 @@ test.describe('task rows', () => {
     const project = `Phone pills ${tag}`
     const leader = await createTask(page, { title: `Weekly garden inventory review for the north beds ${tag}`, project, tags: ['ticket-48201937', 'north-beds'], due_date: '2030-01-15' })
     const worker = await createTask(page, { title: `Water the north beds before noon ${tag}`, project, parent_task_id: leader })
-    await page.request.patch(`/api/tasks/${worker}`, { data: { phase: 'NEED_ACTION' } })
+    // A worker's bare NEED_ACTION reads Waiting on its lead (src/core/user-status.ts): its own line
+    // names an ask, which moves it to NEED_ACTION and reads Needs you.
+    const asked = await page.request.put(`/api/v1/tasks/${worker}/report`, { data: { state: 'needs', ask: 'Pick the watering time' } })
+    expect(asked.ok(), await asked.text()).toBe(true)
     await page.goto('/')
     await expect(page.locator('.todo-search-input')).toBeVisible({ timeout: 30_000 })
     const header = page.locator('.todo-panel .todo-group-project-header', { has: page.locator('.todo-group-project-name', { hasText: project }) }).first()

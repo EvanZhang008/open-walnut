@@ -214,10 +214,11 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
   await expect(page.locator('.task-board-frame')).toHaveAttribute('sandbox', 'allow-scripts')
   await frame.locator('body').evaluate(() => { (window as unknown as { __sameDoc?: number }).__sameDoc = 1 })
 
-  // The chip follows the store: a phase change lands without re-rendering the frame.
-  // NEED_ACTION, whose label differs from the not-started one: IN_PROGRESS with no session
-  // reads Waiting too, since Working is a running turn only (src/core/user-status.ts).
-  await api('PATCH', `/api/tasks/${worker}`, { phase: 'NEED_ACTION' })
+  // The chip follows the store: a status change lands without re-rendering the frame.
+  // Needs you, whose label differs from the not-started one. A worker's bare NEED_ACTION reads
+  // Waiting on its lead (no ask of its own), and IN_PROGRESS with no session reads Waiting too
+  // (src/core/user-status.ts), so the worker's own line names an ask, which moves it to NEED_ACTION.
+  await api('PUT', `/api/v1/tasks/${worker}/report`, { state: 'needs', ask: 'Pick the host the probe runs on' })
   await expect(workerChip.locator('.wn-phase')).toHaveText(USER_STATE_LABELS.needs, { timeout: 15_000 })
   await expect(workerChip).toHaveAttribute('data-phase', 'NEED_ACTION')
   expect(await frame.locator('body').evaluate(() => (window as unknown as { __sameDoc?: number }).__sameDoc)).toBe(1)

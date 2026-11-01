@@ -319,7 +319,10 @@ test('C68: a collapsed leader says 1 need you, and the tap shows the worker', as
   const worker = await createTask(page, { title: `Worker probe ${tag}`, project: 'Phone probe' })
   const linked = await page.request.patch(`/api/tasks/${worker}`, { data: { parent_task_id: leader } })
   expect(linked.ok(), await linked.text()).toBe(true)
-  await page.request.patch(`/api/tasks/${worker}`, { data: { phase: 'NEED_ACTION' } })
+  // A worker's bare NEED_ACTION reads Waiting on its lead (src/core/user-status.ts): its own line
+  // names an ask, which moves it to NEED_ACTION and reads Needs you.
+  const asked = await page.request.put(`/api/v1/tasks/${worker}/report`, { data: { state: 'needs', ask: 'Pick the probe host' } })
+  expect(asked.ok(), await asked.text()).toBe(true)
   await expandProject(page, 'Phone probe')
   const parent = page.locator(`.todo-panel .todo-panel-item[data-task-id="${leader}"]`)
   await expect(parent).toBeVisible({ timeout: 15_000 })
