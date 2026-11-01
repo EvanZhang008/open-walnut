@@ -3,7 +3,8 @@
  * src/core/hosts/exec-grants.ts): each task the user let run commands on another host,
  * with where, since when and what it ran, and a Revoke that sends the DELETE and drops
  * the row; a task the user declined, with an Allow that grants it after all; with
- * none, one line says how a task asks. Navigation is by clicks.
+ * none, one line says so. A grant a task on a registered host made by itself says so.
+ * Each host has a switch, the hard stop, that sends the PUT. Navigation is by clicks.
  * WebKit: `PW_WEBKIT=1 ... --project=webkit`.
  */
 import { mkdirSync } from 'node:fs'
@@ -15,7 +16,7 @@ const SHOTS = process.env.PW_SHOTS_DIR || '/tmp/host-exec-grants'
 const NOW = Date.now()
 
 const GRANTS = [
-  { id: 'xg-aaaa', taskId: 't-ios', taskTitle: 'Run the iOS tests', host: '__local__', grantedAt: NOW - 3_600_000, via: 'letter', runs: 4, lastRunAt: NOW - 60_000, lastCommand: 'xcodebuild test -scheme Walnut -destination "platform=iOS Simulator,name=iPhone 17"' },
+  { id: 'xg-aaaa', taskId: 't-ios', taskTitle: 'Run the iOS tests', host: '__local__', grantedAt: NOW - 3_600_000, via: 'own-host', runs: 4, lastRunAt: NOW - 60_000, lastCommand: 'xcodebuild test -scheme Walnut -destination "platform=iOS Simulator,name=iPhone 17"' },
   { id: 'xg-bbbb', taskId: 't-gpu', taskTitle: 'Train the small model on the box with the GPU and report the loss curve every hour', host: 'devbox', grantedAt: NOW - 86_400_000, via: 'settings', runs: 0 },
 ]
 
@@ -59,7 +60,7 @@ test('grants read in words and Revoke drops one', async ({ page }) => {
   const rows = group.locator('[data-grant-id]')
   await expect(rows).toHaveCount(2)
   await expect(rows.nth(0)).toContainText('Run the iOS tests')
-  await expect(rows.nth(0)).toContainText('On this Mac, allowed')
+  await expect(rows.nth(0)).toContainText('On this Mac, allowed (your own host)')
   await expect(rows.nth(0)).toContainText('4 uses, last')
   await expect(rows.nth(0)).toContainText('xcodebuild test -scheme Walnut')
   await expect(rows.nth(1)).toContainText('not used yet')
@@ -88,7 +89,60 @@ test('grants read in words and Revoke drops one', async ({ page }) => {
   await rows.nth(0).getByRole('button', { name: /^Revoke/ }).click()
   await expect(rows).toHaveCount(1)
   await rows.nth(0).getByRole('button', { name: /^Revoke/ }).click()
-  await expect(group).toContainText('No task may use another host')
+  await expect(group).toContainText('No task has used another host yet')
   await group.screenshot({ path: `${SHOTS}/${engine}-2-empty.png`, scale: 'css' })
+  expect(errors).toEqual([])
+})
+
+test('each host has a hard stop switch that sends the PUT and sticks', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(e.message))
+  let closed: string[] = []
+  const puts: Array<{ host: string; body: unknown }> = []
+  await page.route('**/api/v1/host-exec/grants', (route) => route.fulfill({ json: { grants: [], denied: [], closedHosts: closed } }))
+  let slowFirst = false
+  await page.route('**/api/v1/host-exec/hosts/*', async (route) => {
+    const host = decodeURIComponent(route.request().url().split('/').pop()!)
+    const body = route.request().postDataJSON() as { closed: boolean }
+    puts.push({ host, body })
+    closed = body.closed ? [...new Set([...closed, host])].sort() : closed.filter((h) => h !== host)
+    const answer = { closedHosts: closed }
+    // The first of a quick pair answers last (its answer is the older state).
+    if (slowFirst) { slowFirst = false; await new Promise((r) => setTimeout(r, 800)) }
+    return route.fulfill({ json: answer })
+  })
+  await openRemoteHosts(page)
+  const group = page.getByTestId('host-exec-grants')
+  await expect(group).toBeVisible({ timeout: 30_000 })
+  await expect(group).toContainText('without asking you')
+  const mac = group.locator('[data-exec-host="__local__"]')
+  const sw = mac.getByRole('switch', { name: 'Tasks on other hosts may use this Mac' })
+  await expect(sw).toHaveAttribute('aria-checked', 'true')
+  await sw.click()
+  await expect(sw).toHaveAttribute('aria-checked', 'false')
+  await expect(mac).toContainText('Off: nothing new starts there')
+  expect(puts).toEqual([{ host: '__local__', body: { closed: true } }])
+  await group.scrollIntoViewIfNeeded()
+  mkdirSync(SHOTS, { recursive: true })
+  const engine = page.context().browser()?.browserType().name() ?? 'browser'
+  await group.screenshot({ path: `${SHOTS}/${engine}-3-switch-off.png`, scale: 'css' })
+  // Settings opened again reads the stop back from the server.
+  await page.getByTestId('settings-nav-general').click()
+  await page.getByTestId('settings-nav-remote-hosts').click()
+  await expect(page.getByTestId('host-exec-grants').locator('[data-exec-host="__local__"]').getByRole('switch')).toHaveAttribute('aria-checked', 'false')
+  await page.getByTestId('host-exec-grants').locator('[data-exec-host="__local__"]').getByRole('switch').click()
+  await expect.poll(() => puts.length).toBe(2)
+  expect(puts[1]).toEqual({ host: '__local__', body: { closed: false } })
+  // Two quick flips whose answers come back in the wrong order: the switch ends on the server's word.
+  slowFirst = true
+  const sw2 = page.getByTestId('host-exec-grants').locator('[data-exec-host="__local__"]').getByRole('switch')
+  await sw2.click()
+  await sw2.click()
+  await expect.poll(() => puts.length).toBe(4)
+  await expect.poll(() => closed.includes('__local__')).toBe(false)
+  await expect(sw2).toHaveAttribute('aria-checked', 'true')
+  await page.waitForTimeout(1_500)
+  await expect(sw2).toHaveAttribute('aria-checked', 'true')
   expect(errors).toEqual([])
 })

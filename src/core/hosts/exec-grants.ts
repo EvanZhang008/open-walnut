@@ -12,6 +12,14 @@
  * Only a person grants or revokes: the routes refuse a session (`human_only`), and
  * an answer a task records in the user's place counts as none.
  *
+ * A task on a host the user registered (this Mac, a host in Settings > Remote
+ * Hosts) asks no one (the user, 2026-11-01: "why must you ask me, can't it just use it,
+ * stop asking me"): its first call makes the grant (`via: 'own-host'`), logged and
+ * counted like any other, and a grant the user revokes stays revoked, so that task asks
+ * by letter from then on. Each host also has a hard stop (the closed hosts, in their own file
+ * beside this one so an older Walnut's writes never drop them): while it is on,
+ * no task from any other host may start anything there, grant or not.
+ *
  * Stored at WALNUT_HOME/host-exec-grants.json on the primary. Never on a
  * replica: the boot job is leader only and the routes need the leader.
  */
@@ -26,9 +34,11 @@ export interface ExecGrant {
   taskId: string
   host: string
   grantedAt: number
-  /** Where the user said yes: the letter or Settings. */
-  via: 'letter' | 'settings'
+  /** Where the yes came from: the user's letter or Settings, or a task on a host he registered (no one asked). */
+  via: 'letter' | 'settings' | 'own-host'
   revokedAt?: number
+  /** An own-host grant made from a letter still asking: the user's Deny on it still wins. */
+  letterId?: string
   /** Commands run under it, and the last one (its first 200 characters). */
   runs: number
   lastRunAt?: number
@@ -42,6 +52,8 @@ export interface ExecAsk {
   askedAt: number
   /** The session that asked: it hears the answer. */
   sid: string
+  /** The host that session runs on (asks written before 2026-11-01 lack it). */
+  fromHost?: string
   state: 'pending' | 'denied'
   answeredAt?: number
 }
@@ -91,6 +103,49 @@ function mutate<T>(fn: (s: Store) => T): Promise<T> {
 /** The live grant for this task on this host, if any. */
 export function findGrant(taskId: string, host: string): ExecGrant | undefined {
   return read().grants.find((g) => g.taskId === taskId && g.host === host && !g.revokedAt)
+}
+
+/** Whether the user ever revoked a grant of this task on this host: then it asks by letter again. */
+export function wasRevoked(taskId: string, host: string): boolean {
+  return read().grants.some((g) => g.taskId === taskId && g.host === host && !!g.revokedAt)
+}
+
+// The hard stop lives in its own file: an older Walnut rewrites the grants file whole, keeping
+// only the fields it knows, and would silently reopen every host.
+function closedFile(): string {
+  return file().replace(/\.json$/, '') + '-closed.json'
+}
+
+/** The hosts the user closed: no task from another host starts anything there. */
+export function closedHosts(): string[] {
+  try {
+    const raw = JSON.parse(fs.readFileSync(closedFile(), 'utf8')) as { closed?: unknown }
+    return Array.isArray(raw.closed) ? raw.closed.filter((h): h is string => typeof h === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+export function isHostClosed(host: string): boolean {
+  return closedHosts().includes(host)
+}
+
+/** Close or open a host to tasks from other hosts (the user, in Settings). */
+export async function setHostClosed(host: string, closed: boolean): Promise<string[]> {
+  const next = chain.then(async () => {
+    const set = new Set(closedHosts())
+    if (closed) set.add(host)
+    else set.delete(host)
+    const out = [...set].sort()
+    const target = closedFile()
+    const tmp = `${target}.${process.pid}.tmp`
+    await fs.promises.mkdir(path.dirname(target), { recursive: true })
+    await fs.promises.writeFile(tmp, JSON.stringify({ closed: out }, null, 2) + '\n', { mode: 0o600 })
+    await fs.promises.rename(tmp, target)
+    return out
+  })
+  chain = next.catch(() => {})
+  return next
 }
 
 export function findAsk(taskId: string, host: string): ExecAsk | undefined {
@@ -205,7 +260,10 @@ export async function onLetterAnswered(event: { letterId?: unknown; actionId?: u
   if (typeof event.letterId !== 'string') return
   const letterId = event.letterId
   const pending = read().asks.find((a) => a.letterId === letterId && a.state === 'pending')
-  if (!pending) return
+  if (!pending) {
+    if (event.actionId === DENY_ACTION) await denyOwnHostGrant(letterId)
+    return
+  }
   if (event.actionId === 'withdrawn') {
     await mutate((s) => { s.asks = s.asks.filter((a) => a.letterId !== letterId) })
     return
@@ -221,18 +279,99 @@ export async function onLetterAnswered(event: { letterId?: unknown; actionId?: u
   if (!ask) return
   log.session.info('host exec: the user answered a grant letter', { taskId: ask.taskId, host: ask.host, allowed })
   if (!allowed) return
+  await tellGranted(ask, `The user allowed this task to use host "${ask.host}" (host_exec, host_mcp_*, host_http), any folder, until they revoke it.`)
+}
+
+/** Tell the asking session it may make its call again. */
+async function tellGranted(ask: ExecAsk, why: string): Promise<void> {
   try {
     const { getSessionByClaudeId } = await import('../session-tracker.js')
     const record = await getSessionByClaudeId(ask.sid)
     if (!record) return
     const { deliverToSession } = await import('../sessions/session-send-core.js')
-    const text = `<walnut-message kind="notification" from="Walnut" outcome="host-exec-granted">\n`
-      + `The user allowed this task to use host "${ask.host}" (host_exec, host_mcp_*, host_http), any folder, until they revoke it. `
-      + `Make the call again.\n</walnut-message>`
+    const text = `<walnut-message kind="notification" from="Walnut" outcome="host-exec-granted">\n${why} Make the call again.\n</walnut-message>`
     await deliverToSession(record, { busText: text, enqueueText: text, source: 'walnut-notify', taskId: ask.taskId, endsWait: true })
   } catch (err) {
     log.session.warn('host exec: the asking session was not told of the grant', { taskId: ask.taskId, host: ask.host, error: String(err) })
   }
+}
+
+/** The host an ask came from: recorded on it, else its session's. */
+async function askFromHost(ask: ExecAsk): Promise<string | null> {
+  if (ask.fromHost) return ask.fromHost
+  try {
+    const { getSessionByClaudeId } = await import('../session-tracker.js')
+    const record = await getSessionByClaudeId(ask.sid)
+    if (!record) return null
+    const h = (record as { host?: string | null }).host
+    return !h || h === 'local' ? '__local__' : h
+  } catch { return null }
+}
+
+
+/**
+ * The user's Deny on a letter whose ask had already become an own-host grant (the grant was
+ * made while their answer was on its way): the grant is revoked and the Deny kept.
+ */
+async function denyOwnHostGrant(letterId: string): Promise<void> {
+  if (usersAnswer(await letterOf(letterId)) !== DENY_ACTION) return
+  const g = await mutate((s) => {
+    const live = s.grants.find((x) => x.letterId === letterId && x.via === 'own-host' && !x.revokedAt)
+    if (!live) return null
+    live.revokedAt = Date.now()
+    s.asks = s.asks.filter((a) => !(a.taskId === live.taskId && a.host === live.host))
+    s.asks.push({ taskId: live.taskId, host: live.host, letterId, askedAt: live.grantedAt, sid: '', state: 'denied', answeredAt: Date.now() })
+    return { ...live }
+  })
+  if (g) log.session.info('host exec: the user denied a letter after its own-host grant; revoked', { taskId: g.taskId, host: g.host, letterId })
+}
+
+/** Turn a still-pending ask into an own-host grant, in one write; null when it is no longer pending (someone else settled it). */
+async function grantFromAsk(letterId: string): Promise<ExecGrant | null> {
+  return mutate((s) => {
+    const a = s.asks.find((x) => x.letterId === letterId && x.state === 'pending')
+    if (!a) return null
+    s.asks = s.asks.filter((x) => x !== a)
+    const live = s.grants.find((g) => g.taskId === a.taskId && g.host === a.host && !g.revokedAt)
+    if (live) return live
+    const g: ExecGrant = { id: `xg-${randomUUID().slice(0, 12)}`, taskId: a.taskId, host: a.host, grantedAt: Date.now(), via: 'own-host', letterId, runs: 0 }
+    s.grants.push(g)
+    return g
+  })
+}
+
+const OWN_HOST_REASON = 'Walnut allowed it: tasks on your own hosts use your other hosts without asking you (Settings › Remote Hosts revokes one).'
+
+/**
+ * A pending letter that asks about a task on one of the user's own hosts needs no answer:
+ * the grant is made, the letter settled, the asking session told. `isOwnHost` says which
+ * hosts the user registered. Runs at boot (the asks written before 2026-11-01) and when
+ * such a task calls again (`only`, with the caller's host). The user's own answer on the
+ * letter, already given, wins over all of it.
+ */
+export async function settleOwnHostAsks(isOwnHost: (host: string) => Promise<boolean>, only?: { taskId: string; host: string; fromHost: string }): Promise<number> {
+  const pending = read().asks.filter((a) => a.state === 'pending' && (!only || (a.taskId === only.taskId && a.host === only.host)))
+  let n = 0
+  for (const ask of pending) {
+    const from = only?.fromHost ?? await askFromHost(ask)
+    if (!from || !(await isOwnHost(from)) || isHostClosed(ask.host) || wasRevoked(ask.taskId, ask.host)) continue
+    const letter = await letterOf(ask.letterId)
+    const answer = usersAnswer(letter)
+    if (answer) { await onLetterAnswered({ letterId: ask.letterId, actionId: answer }); continue }
+    if (!(await grantFromAsk(ask.letterId))) continue
+    try {
+      // One someone already closed keeps its own record.
+      const { settleLetter } = await import('../human-inbox/store.js')
+      if (letter && !letter.settled && !letter.answered) await settleLetter(ask.letterId, { reason: OWN_HOST_REASON })
+    } catch (err) {
+      log.session.warn('host exec: an own-host grant letter was not settled', { letterId: ask.letterId, error: String(err) })
+    }
+    log.session.info('host exec: an own-host ask granted without the user', { taskId: ask.taskId, host: ask.host, fromHost: from, letterId: ask.letterId })
+    // A task settling its own ask is mid-call and gets its answer there; only a waiting one is told.
+    if (!only) await tellGranted(ask, `Walnut allowed this task to use host "${ask.host}" (host_exec, host_mcp_*, host_http): it runs on one of the user's own hosts, so it needs no letter.`)
+    n++
+  }
+  return n
 }
 
 /** Every ask the user declined, newest first (Settings lists them with an Allow). */
@@ -245,6 +384,10 @@ let wired = false
 export async function startExecGrantAnswers(): Promise<void> {
   if (wired) return
   wired = true
+  // The letters still waiting for tasks on the user's own hosts are settled now (2026-11-01).
+  void import('./host-exec.js').then((m) => settleOwnHostAsks(m.isOwnHost)).then((n) => {
+    if (n) log.session.info('host exec: own-host asks settled at boot', { count: n })
+  }).catch((err) => log.session.warn('host exec: own-host asks not settled at boot', { error: String(err) }))
   const { bus } = await import('../event-bus.js')
   bus.subscribe('host-exec-grants', (event) => {
     if (event.name !== 'human-inbox:answered') return

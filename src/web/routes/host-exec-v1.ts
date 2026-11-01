@@ -8,6 +8,7 @@
  *   GET    /api/v1/host-exec/grants                  → { grants, denied } (live grants, ?all=1 adds revoked; the user's Denies)
  *   POST   /api/v1/host-exec/grants                  { task_id, host } → a grant (a person only)
  *   DELETE /api/v1/host-exec/grants/:id              → revoked (a person only)
+ *   PUT    /api/v1/host-exec/hosts/:host             { closed } → the hard stop for that host (a person only)
  *
  * The caller is the session in `x-walnut-caller-sid`; a grant is the user's
  * word, so only the person at this computer makes or revokes one
@@ -87,7 +88,7 @@ hostExecV1Router.post('/hosts/:host/exec/:jobId/stop', (req: Request, res: Respo
 hostExecV1Router.get('/host-exec/grants', async (req: Request, res: Response, next: NextFunction) => {
   if (leaderOnly(res)) return
   try {
-    const { listGrants, listDenied } = await import('../../core/hosts/exec-grants.js')
+    const { listGrants, listDenied, closedHosts } = await import('../../core/hosts/exec-grants.js')
     const { getTask } = await import('../../core/task-manager.js')
     const grants = listGrants({ all: req.query.all === '1' })
     const denied = listDenied()
@@ -98,6 +99,7 @@ hostExecV1Router.get('/host-exec/grants', async (req: Request, res: Response, ne
     res.json({
       grants: grants.map((g) => ({ ...g, taskTitle: titles.get(g.taskId) || null })),
       denied: denied.map((a) => ({ taskId: a.taskId, host: a.host, askedAt: a.askedAt, answeredAt: a.answeredAt ?? null, taskTitle: titles.get(a.taskId) || null })),
+      closedHosts: closedHosts(),
     })
   } catch (err) { next(err) }
 })
@@ -128,6 +130,19 @@ hostExecV1Router.delete('/host-exec/grants/:id', async (req: Request, res: Respo
     const g = await revokeGrant(param(req.params.id))
     if (!g) { res.status(404).json({ error: 'No live grant with that id', code: 'not_found' }); return }
     res.json({ grant: g })
+  } catch (err) { next(err) }
+})
+
+hostExecV1Router.put('/host-exec/hosts/:host', async (req: Request, res: Response, next: NextFunction) => {
+  if (leaderOnly(res) || humanOnly(req, res)) return
+  try {
+    const host = param(req.params.host)
+    const closed = (req.body as { closed?: unknown } | undefined)?.closed
+    if (typeof closed !== 'boolean') { res.status(400).json({ error: 'closed (true or false) is required', code: 'bad_request' }); return }
+    const { isOwnHost } = await import('../../core/hosts/host-exec.js')
+    if (!(await isOwnHost(host))) { res.status(404).json({ error: `Unknown host: ${host}`, code: 'unknown_host' }); return }
+    const { setHostClosed } = await import('../../core/hosts/exec-grants.js')
+    res.json({ closedHosts: await setHostClosed(host, closed) })
   } catch (err) { next(err) }
 })
 

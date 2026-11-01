@@ -134,14 +134,41 @@ export async function grantFor(caller: Caller, host: string, preview: string | n
   return mine
 }
 
+/**
+ * A host the user registered: this Mac, or a host in Settings > Remote Hosts (the
+ * cloud companion is one). A task there uses the user's other hosts without a letter.
+ */
+export async function isOwnHost(host: string): Promise<boolean> {
+  if (host === LOCAL) return true
+  const { getConfig } = await import('../config-manager.js')
+  return Object.hasOwn((await getConfig()).hosts ?? {}, host)
+}
+
 async function grantOrAsk(caller: Caller, host: string, preview: string | null): Promise<string> {
   const grants = await import('./exec-grants.js')
+  const name = await hostName(host)
+  // The user's hard stop for this host: nothing new starts there, whatever the grant.
+  if (preview !== null && grants.isHostClosed(host)) {
+    throw new HostExecError(`The user closed ${name} to tasks on other hosts (Settings › Remote Hosts). Do the step another way.`, 403, 'exec_host_closed')
+  }
   const g = grants.findGrant(caller.taskId, host)
   if (g) return g.id
-  const name = await hostName(host)
   // Reading or stopping a job needs the grant the run had; it never asks for one.
   if (preview === null) throw new HostExecError(`This task has no grant to use ${name} (it was revoked).`, 403, 'exec_grant_required')
   let ask = grants.findAsk(caller.taskId, host)
+  // A task on one of the user's own hosts asks no one; a grant he revoked, or his Deny, still stands.
+  if (ask?.state !== 'denied' && !grants.wasRevoked(caller.taskId, host) && await isOwnHost(caller.host)) {
+    if (ask?.state === 'pending') {
+      // Its letter is settled for the user, unless the user already answered it: then that answer stands.
+      await grants.settleOwnHostAsks(isOwnHost, { taskId: caller.taskId, host, fromHost: caller.host })
+      ask = grants.findAsk(caller.taskId, host)
+    }
+    if (ask?.state !== 'denied') {
+      const own = grants.findGrant(caller.taskId, host) ?? await grants.grant(caller.taskId, host, 'own-host')
+      log.session.info('host exec: a task on an own host uses another, no letter', { taskId: caller.taskId, fromHost: caller.host, host, grantId: own.id })
+      return own.id
+    }
+  }
   if (ask?.state === 'pending') {
     const now = await grants.refreshAsk(ask)
     if (now === 'granted') {
@@ -179,7 +206,7 @@ async function grantOrAsk(caller: Caller, host: string, preview: string | null):
     taskRefs: [caller.taskId],
     sender: { sessionId: 'external', host: 'local' },
   })
-  await grants.recordAsk({ taskId: caller.taskId, host, letterId: letter.id, askedAt: Date.now(), sid: caller.sid, state: 'pending' })
+  await grants.recordAsk({ taskId: caller.taskId, host, letterId: letter.id, askedAt: Date.now(), sid: caller.sid, fromHost: caller.host, state: 'pending' })
   log.session.info('host exec: asked the user for a grant', { taskId: caller.taskId, host, letterId: letter.id })
   throw new HostExecError(`This task may not use ${name} yet: a letter asks the user (${letter.id}). You will get a notice when they allow it; do other work meanwhile.`, 403, 'exec_grant_required', { letterId: letter.id })
 }

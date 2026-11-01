@@ -4,8 +4,12 @@
  * a command on another only under the user's grant, asked for by ONE letter;
  * the answer makes the grant and tells the session; the run comes back with
  * its exit code and output, a credential-looking line hidden; the user revokes
- * it and the next call asks again. Also: no session, the caller's own host, an
- * unknown host, a session trying to grant or revoke, the per-task cap.
+ * it and the next call asks again. That letter goes only to a task on a host the user did
+ * not register (strangerbox); a task on a registered host (devbox) uses another with no
+ * letter, under a grant that is counted and revoked the same way, and a letter written for
+ * one before this rule is settled for the user. Each host's hard stop refuses every task.
+ * Also: no session, the caller's own host, an unknown host, a session trying to grant or
+ * revoke, the per-task cap.
  *
  * Real: the server, the inbox and its answer route, the grants file, the op
  * executor, and the host side (host-exec-core.ts with a real /bin/sh). Fake:
@@ -31,16 +35,23 @@ import { createHostExec } from '../../src/providers/host-exec-core.js'
 import { createSessionRecord } from '../../src/core/session-tracker.js'
 import { updateConfig } from '../../src/core/config-manager.js'
 import { resetHostExecForTest } from '../../src/core/hosts/host-exec.js'
-import { onLetterAnswered } from '../../src/core/hosts/exec-grants.js'
-import { answerLetter } from '../../src/core/human-inbox/store.js'
+import { onLetterAnswered, recordAsk, settleOwnHostAsks } from '../../src/core/hosts/exec-grants.js'
+import { isOwnHost } from '../../src/core/hosts/host-exec.js'
+import { answerLetter, getLetter, sendLetter, settleLetter } from '../../src/core/human-inbox/store.js'
+import * as sendCore from '../../src/core/sessions/session-send-core.js'
 
 let server: HttpServer
 let port: number
 let hostRoot: string
 const SID = 'host-exec-e2e-session'
 const OTHER_SID = 'host-exec-e2e-other'
+const OWN_SID = 'host-exec-e2e-own'
+const OLD_SID = 'host-exec-e2e-old-ask'
 let taskId = ''
 let otherTaskId = ''
+let ownTaskId = ''
+let oldTaskId = ''
+const told: Array<{ taskId?: string; text: string }> = []
 const sent: Array<{ cmd: string; params: Record<string, unknown> }> = []
 
 async function api(method: string, p: string, body?: unknown, sid?: string): Promise<{ status: number; body: any }> {
@@ -93,12 +104,18 @@ beforeAll(async () => {
       }
     },
   }
-  // The caller's own host answers nothing (the server reads its session's cost there on its own).
+  // The callers' own hosts answer nothing (the server reads a session's cost there on its own).
+  // strangerbox is not in Settings (a host the user removed, or never added).
   const devbox = { connected: true, hostKey: 'devbox', connect: async () => {}, hasCapability: () => false, send: async () => ({ ok: false, error: 'unknown command' }) }
   const real = daemonConnections.getDaemonConnection
   vi.spyOn(daemonConnections, 'getDaemonConnection').mockImplementation(async (key, target) =>
     key === 'macbox' ? macbox as unknown as daemonConnections.DaemonConnection
-      : key === 'devbox' ? devbox as unknown as daemonConnections.DaemonConnection : real(key, target))
+      : key === 'devbox' || key === 'strangerbox' ? devbox as unknown as daemonConnections.DaemonConnection : real(key, target))
+  // What a session is told; never a real delivery into a CLI.
+  vi.spyOn(sendCore, 'deliverToSession').mockImplementation((async (_record: unknown, opts: { taskId?: string; enqueueText: string }) => {
+    told.push({ taskId: opts.taskId, text: opts.enqueueText })
+    return { ok: true }
+  }) as never)
   server = await startServer({ port: 0, dev: true })
   const addr = server.address()
   if (!addr || typeof addr === 'string') throw new Error('no port')
@@ -106,10 +123,16 @@ beforeAll(async () => {
   await updateConfig({ hosts: { devbox: { hostname: 'devbox.example' }, macbox: { hostname: 'macbox.example', label: 'Mac box' } } })
   const created = await api('POST', '/api/v1/tasks', { title: 'Run the iOS tests' })
   taskId = created.body.task?.id ?? created.body.id
-  await createSessionRecord(SID, taskId, '', '/home/me/repo', { host: 'devbox', title: 'iOS tests', initialProcessStatus: 'stopped' } as never)
+  await createSessionRecord(SID, taskId, '', '/home/me/repo', { host: 'strangerbox', title: 'iOS tests', initialProcessStatus: 'stopped' } as never)
   const other = await api('POST', '/api/v1/tasks', { title: 'Another task' })
   otherTaskId = other.body.task?.id ?? other.body.id
-  await createSessionRecord(OTHER_SID, otherTaskId, '', '/home/me/other', { host: 'devbox', title: 'other', initialProcessStatus: 'stopped' } as never)
+  await createSessionRecord(OTHER_SID, otherTaskId, '', '/home/me/other', { host: 'strangerbox', title: 'other', initialProcessStatus: 'stopped' } as never)
+  const own = await api('POST', '/api/v1/tasks', { title: 'Build on the devbox' })
+  ownTaskId = own.body.task?.id ?? own.body.id
+  await createSessionRecord(OWN_SID, ownTaskId, '', '/home/me/build', { host: 'devbox', title: 'build', initialProcessStatus: 'stopped' } as never)
+  const old = await api('POST', '/api/v1/tasks', { title: 'Asked before the rule' })
+  oldTaskId = old.body.task?.id ?? old.body.id
+  await createSessionRecord(OLD_SID, oldTaskId, '', '/home/me/old', { host: 'devbox', title: 'old', initialProcessStatus: 'stopped' } as never)
 }, 120_000)
 
 afterAll(async () => {
@@ -123,7 +146,7 @@ afterAll(async () => {
 describe('host_exec', () => {
   it('refuses a caller that is not a task session, its own host, and an unknown host', async () => {
     expect(await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' })).toMatchObject({ status: 403, body: { code: 'session_only' } })
-    expect(await api('POST', '/api/v1/hosts/devbox/exec', { command: 'true' }, SID)).toMatchObject({ status: 400, body: { code: 'same_host' } })
+    expect(await api('POST', '/api/v1/hosts/strangerbox/exec', { command: 'true' }, SID)).toMatchObject({ status: 400, body: { code: 'same_host' } })
     expect(await api('POST', '/api/v1/hosts/nosuch/exec', { command: 'true' }, SID)).toMatchObject({ status: 404, body: { code: 'unknown_host' } })
     expect(await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true', argv: ['true'] }, SID)).toMatchObject({ status: 400, body: { code: 'bad_request' } })
     expect(sent).toEqual([])
@@ -164,12 +187,13 @@ describe('host_exec', () => {
     await until(async () => ((await api('GET', '/api/v1/host-exec/grants')).body.grants ?? []).length === 1, 'the grant')
     const [g] = (await api('GET', '/api/v1/host-exec/grants')).body.grants
     expect(g).toMatchObject({ taskId, host: 'macbox', via: 'letter', taskTitle: 'Run the iOS tests' })
+    await until(async () => told.some((t) => t.taskId === taskId && t.text.includes('outcome="host-exec-granted"')), 'the session told')
 
     const ran = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'pwd; echo out; exit 4', cwd: '~/work' }, SID)
     expect(ran.status).toBe(200)
     expect(ran.body).toMatchObject({ host: 'macbox', running: false, exitCode: 4, cwd: path.join(hostRoot, 'home', 'work') })
     expect(ran.body.output).toBe(`${path.join(hostRoot, 'home', 'work')}\nout\n`)
-    expect(sent.filter((m) => m.cmd === 'exec.run').at(-1)!.params).toMatchObject({ taskId, caller: { task: taskId, host: 'devbox' }, command: 'pwd; echo out; exit 4', background: true })
+    expect(sent.filter((m) => m.cmd === 'exec.run').at(-1)!.params).toMatchObject({ taskId, caller: { task: taskId, host: 'strangerbox' }, command: 'pwd; echo out; exit 4', background: true })
 
     const secret = await api('POST', '/api/v1/hosts/macbox/exec', { command: "printf '%s%s\\n' 'before' ''; printf '%s%s\\n' '-----BEGIN RSA ' 'PRIVATE KEY-----'; echo after" }, SID)
     // A key with no END line hides everything after its BEGIN.
@@ -249,5 +273,144 @@ describe('host_exec', () => {
     expect((await api('POST', '/api/v1/host-exec/grants', { task_id: taskId, host: 'macbox' })).status).toBe(200)
     expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, SID)).status).toBe(200)
     expect((await api('GET', '/api/v1/host-exec/grants')).body.denied).toEqual([])
+  }, 30_000)
+
+  async function oldStyleAsk(task: string, sid: string, title: string): Promise<string> {
+    const letter = await sendLetter({
+      subject: `Let "${title}" use Mac box?`, type: 'action_required', markdown: 'asked before the rule',
+      actions: [{ id: 'allow', label: 'Allow' }, { id: 'deny', label: 'Deny' }],
+      taskRefs: [task], sender: { sessionId: 'external', host: 'local' },
+    } as never)
+    // The shape an older Walnut wrote: no fromHost, so the session's host decides.
+    await recordAsk({ taskId: task, host: 'macbox', letterId: letter.id, askedAt: Date.now(), sid, state: 'pending' })
+    return letter.id
+  }
+
+  it('a task on a registered host uses another with no letter; its grant is counted, and a revoke or a Deny still stands', async () => {
+    const asksBefore = (await letters()).filter((l) => l.subject.includes('" use ')).length
+    const ran = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo own' }, OWN_SID)
+    expect(ran).toMatchObject({ status: 200, body: { exitCode: 0, output: 'own\n' } })
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'echo twice' }, OWN_SID)).status).toBe(200)
+    expect((await letters()).filter((l) => l.subject.includes('" use ')).length).toBe(asksBefore)
+    await until(async () => ((await api('GET', '/api/v1/host-exec/grants')).body.grants as any[])
+      .some((g) => g.taskId === ownTaskId && g.via === 'own-host' && g.runs >= 2 && g.lastCommand === 'echo twice'), 'the counted own-host grant')
+    const own = ((await api('GET', '/api/v1/host-exec/grants')).body.grants as any[]).find((g) => g.taskId === ownTaskId)
+    // The user revokes it in Settings: that task asks by letter from then on.
+    expect((await api('DELETE', `/api/v1/host-exec/grants/${own.id}`)).status).toBe(200)
+    const asked = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, OWN_SID)
+    expect(asked).toMatchObject({ status: 403, body: { code: 'exec_grant_required' } })
+    expect((await letters()).find((l) => l.id === asked.body.letterId)).toMatchObject({ subject: 'Let "Build on the devbox" use Mac box?' })
+    expect((await api('POST', `/api/v1/human-inbox/${asked.body.letterId}/answer`, { actionId: 'deny' })).status).toBeLessThan(300)
+    await until(async () => (await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, OWN_SID)).body.code === 'exec_grant_denied', 'the Deny kept')
+    expect((await api('POST', '/api/v1/host-exec/grants', { task_id: ownTaskId, host: 'macbox' })).status).toBe(200)
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, OWN_SID)).status).toBe(200)
+  }, 30_000)
+
+  it('the hard stop closes a host to every task, granted or not, and only a person sets it', async () => {
+    expect(await api('PUT', '/api/v1/host-exec/hosts/macbox', { closed: true }, OWN_SID)).toMatchObject({ status: 403, body: { code: 'human_only' } })
+    expect(await api('PUT', '/api/v1/host-exec/hosts/nosuch', { closed: true })).toMatchObject({ status: 404, body: { code: 'unknown_host' } })
+    expect(await api('PUT', '/api/v1/host-exec/hosts/macbox', { closed: 'yes' })).toMatchObject({ status: 400, body: { code: 'bad_request' } })
+    expect(await api('PUT', '/api/v1/host-exec/hosts/macbox', { closed: true })).toMatchObject({ status: 200, body: { closedHosts: ['macbox'] } })
+    expect(await api('PUT', '/api/v1/host-exec/hosts/__local__', { closed: true })).toMatchObject({ status: 200, body: { closedHosts: ['__local__', 'macbox'] } })
+    const runsBefore = sent.filter((m) => m.cmd === 'exec.run').length
+    for (const sid of [OWN_SID, SID]) {
+      expect(await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, sid)).toMatchObject({ status: 403, body: { code: 'exec_host_closed' } })
+    }
+    expect(sent.filter((m) => m.cmd === 'exec.run').length).toBe(runsBefore)
+    expect((await api('GET', '/api/v1/host-exec/grants')).body.closedHosts).toEqual(['__local__', 'macbox'])
+    await api('PUT', '/api/v1/host-exec/hosts/__local__', { closed: false })
+    expect(await api('PUT', '/api/v1/host-exec/hosts/macbox', { closed: false })).toMatchObject({ status: 200, body: { closedHosts: [] } })
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, OWN_SID)).status).toBe(200)
+  }, 30_000)
+
+  it('a letter written for a task on a registered host before the rule is settled for the user and the task told; others still ask', async () => {
+    // A task on a host the user did not register still waits on its letter.
+    const stranger = await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, OTHER_SID)
+    expect(stranger).toMatchObject({ status: 403, body: { code: 'exec_grant_required' } })
+    const oldLetter = await oldStyleAsk(oldTaskId, OLD_SID, 'Asked before the rule')
+    // One a lead already settled for the user: still granted and its task told; its record stays the lead's.
+    const led = await api('POST', '/api/v1/tasks', { title: 'Settled by its lead' })
+    const ledTask = led.body.task?.id ?? led.body.id
+    await createSessionRecord('host-exec-e2e-led', ledTask, '', '/home/me/led', { host: 'devbox', title: 'led', initialProcessStatus: 'stopped' } as never)
+    const ledLetter = await oldStyleAsk(ledTask, 'host-exec-e2e-led', 'Settled by its lead')
+    await settleLetter(ledLetter, { reason: 'the lead closed it for the user' })
+    told.length = 0
+    expect(await settleOwnHostAsks(isOwnHost)).toBe(2)
+    expect((await getLetter(ledLetter))?.settled).toMatchObject({ reason: 'the lead closed it for the user' })
+    expect(told.map((t) => t.taskId).sort()).toEqual([ledTask, oldTaskId].sort())
+    told.splice(0, told.length, ...told.filter((t) => t.taskId === oldTaskId))
+    expect((await getLetter(oldLetter))?.settled).toMatchObject({ reason: expect.stringContaining('your own hosts') })
+    expect((await getLetter(stranger.body.letterId))?.settled).toBeUndefined()
+    expect(((await api('GET', '/api/v1/host-exec/grants')).body.grants as any[]).find((g) => g.taskId === oldTaskId)).toMatchObject({ host: 'macbox', via: 'own-host' })
+    expect(told).toEqual([{ taskId: oldTaskId, text: expect.stringContaining('outcome="host-exec-granted"') }])
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, OLD_SID)).status).toBe(200)
+    expect(await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, OTHER_SID)).toMatchObject({ status: 403, body: { code: 'exec_grant_required', letterId: stranger.body.letterId } })
+
+    // One that calls again before the boot pass: its own call settles the letter, and it is not told (it has its answer).
+    const late = await api('POST', '/api/v1/tasks', { title: 'Calls again first' })
+    const lateTask = late.body.task?.id ?? late.body.id
+    await createSessionRecord('host-exec-e2e-late', lateTask, '', '/home/me/late', { host: 'devbox', title: 'late', initialProcessStatus: 'stopped' } as never)
+    const lateLetter = await oldStyleAsk(lateTask, 'host-exec-e2e-late', 'Calls again first')
+    told.length = 0
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, 'host-exec-e2e-late')).status).toBe(200)
+    expect((await getLetter(lateLetter))?.settled).toBeTruthy()
+    // The boot pass coming after it finds nothing pending: no second notice into a session mid-call.
+    expect(await settleOwnHostAsks(isOwnHost)).toBe(0)
+    expect(told).toEqual([])
+  }, 30_000)
+
+  async function taskOnDevbox(title: string): Promise<{ task: string; sid: string }> {
+    const r = await api('POST', '/api/v1/tasks', { title })
+    const task = r.body.task?.id ?? r.body.id
+    const sid = `host-exec-e2e-${task}`
+    await createSessionRecord(sid, task, '', '/home/me/x', { host: 'devbox', title, initialProcessStatus: 'stopped' } as never)
+    return { task, sid }
+  }
+
+  it('the user\'s own answer on an old letter wins, however it reaches Walnut', async () => {
+    // A Deny Walnut missed (the ask was recorded after the answer's event): the Deny stands, no grant.
+    const a = await taskOnDevbox('Denied while away')
+    const aLetter = await oldStyleAsk(a.task, a.sid, 'Denied while away')
+    await answerLetter(aLetter, { actionId: 'deny' })
+    await recordAsk({ taskId: a.task, host: 'macbox', letterId: aLetter, askedAt: Date.now(), sid: a.sid, state: 'pending' })
+    told.length = 0
+    expect(await settleOwnHostAsks(isOwnHost)).toBe(0)
+    expect(await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, a.sid)).toMatchObject({ status: 403, body: { code: 'exec_grant_denied' } })
+    expect(((await api('GET', '/api/v1/host-exec/grants')).body.grants as any[]).some((g) => g.taskId === a.task)).toBe(false)
+
+    // The same, met first by the task's own call.
+    const b = await taskOnDevbox('Denied, then called')
+    const bLetter = await oldStyleAsk(b.task, b.sid, 'Denied, then called')
+    await answerLetter(bLetter, { actionId: 'deny' })
+    await recordAsk({ taskId: b.task, host: 'macbox', letterId: bLetter, askedAt: Date.now(), sid: b.sid, state: 'pending' })
+    expect(await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, b.sid)).toMatchObject({ status: 403, body: { code: 'exec_grant_denied' } })
+
+    // An old ask whose session is gone, met by the task's new session: settled, granted, no letter left open.
+    const c = await taskOnDevbox('Session replaced')
+    const cLetter = await oldStyleAsk(c.task, 'a-session-long-gone', 'Session replaced')
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, c.sid)).status).toBe(200)
+    expect((await getLetter(cLetter))?.settled).toBeTruthy()
+
+    // A Deny that lands after its ask became an own-host grant revokes that grant.
+    const d = await taskOnDevbox('Denied after the grant')
+    const dLetter = await oldStyleAsk(d.task, d.sid, 'Denied after the grant')
+    expect(await settleOwnHostAsks(isOwnHost)).toBe(1)
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, d.sid)).status).toBe(200)
+    // (A settled letter still takes the user's answer.)
+    await answerLetter(dLetter, { actionId: 'deny' })
+    await onLetterAnswered({ letterId: dLetter, actionId: 'deny' })
+    expect(await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, d.sid)).toMatchObject({ status: 403, body: { code: 'exec_grant_denied' } })
+  }, 30_000)
+
+  it('the hard stop survives an older Walnut rewriting the grants file', async () => {
+    expect((await api('PUT', '/api/v1/host-exec/hosts/macbox', { closed: true })).status).toBe(200)
+    const file = path.join(WALNUT_HOME, 'host-exec-grants.json')
+    const raw = JSON.parse(await fs.readFile(file, 'utf8'))
+    expect(raw.closedHosts).toBeUndefined()
+    // What an older version writes back: only the fields it knows.
+    await fs.writeFile(file, JSON.stringify({ grants: raw.grants, asks: raw.asks }))
+    expect(await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, OWN_SID)).toMatchObject({ status: 403, body: { code: 'exec_host_closed' } })
+    expect((await api('PUT', '/api/v1/host-exec/hosts/macbox', { closed: false })).status).toBe(200)
+    expect((await api('POST', '/api/v1/hosts/macbox/exec', { command: 'true' }, OWN_SID)).status).toBe(200)
   }, 30_000)
 })

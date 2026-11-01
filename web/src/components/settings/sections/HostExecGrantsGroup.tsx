@@ -1,14 +1,16 @@
 /**
- * "Tasks using other hosts" in Remote Hosts: every task the user let use another
- * host (its commands, MCP servers and web services: src/core/hosts/host-exec.ts), with what
- * it ran, and a Revoke for each. A grant comes from the user's Allow on the
- * letter the task's first command sent; it lasts until revoked here.
+ * "Tasks using other hosts" in Remote Hosts: every task that uses another host (its
+ * commands, MCP servers and web services: src/core/hosts/host-exec.ts), with what it ran,
+ * and a Revoke for each. A task on a host the user registered gets its grant by itself
+ * (no letter); a revoked one stays revoked and asks by letter. Each host has a switch, the
+ * hard stop: off, no task from another host starts anything there.
  */
-import { useCallback, useEffect, useState } from 'react';
-import { allowExecGrant, fetchExecGrants, revokeExecGrant, type ExecDenied, type ExecGrant } from '@/api/host-exec';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { allowExecGrant, fetchExecGrants, revokeExecGrant, setExecHostClosed, type ExecDenied, type ExecGrant } from '@/api/host-exec';
 import { log } from '@/utils/log';
 import { SettingsGroup, SettingsRow } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
+import { ToggleSwitch } from '../inputs/ToggleSwitch';
 
 const REFRESH_MS = 30_000;
 
@@ -18,7 +20,7 @@ function when(ms: number): string {
 
 /** The row's second line: where, since when, and what it ran. */
 export function grantSummary(g: ExecGrant, hostLabel: string): string {
-  const parts = [`On ${hostLabel}, allowed ${when(g.grantedAt)}`];
+  const parts = [`On ${hostLabel}, ${g.via === 'own-host' ? 'allowed (your own host)' : 'allowed'} ${when(g.grantedAt)}`];
   parts.push(g.runs ? `${g.runs} use${g.runs === 1 ? '' : 's'}, last ${when(g.lastRunAt ?? g.grantedAt)}: ${g.lastCommand ?? ''}` : 'not used yet');
   return parts.join(' · ');
 }
@@ -26,14 +28,21 @@ export function grantSummary(g: ExecGrant, hostLabel: string): string {
 export function HostExecGrantsGroup({ hostLabels }: { hostLabels: Record<string, string> }) {
   const [grants, setGrants] = useState<ExecGrant[] | null>(null);
   const [denied, setDenied] = useState<ExecDenied[]>([]);
+  const [closed, setClosed] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Switch writes in order: only the newest answer is shown, and a read that began before a
+  // write (or while one is in flight) never puts an older stop back on screen.
+  const switchSeq = useRef(0);
+  const switchesInFlight = useRef(0);
 
   const load = useCallback(async () => {
+    const seq = switchSeq.current;
     try {
       const r = await fetchExecGrants();
       setGrants(r.grants);
       setDenied(r.denied ?? []);
+      if (seq === switchSeq.current && switchesInFlight.current === 0) setClosed(r.closedHosts ?? []);
     } catch (err) {
       log.warn('settings', 'host exec grants read failed', { error: String(err) });
     }
@@ -74,17 +83,53 @@ export function HostExecGrantsGroup({ hostLabels }: { hostLabels: Record<string,
     }
   };
 
+  const toggleHost = async (host: string, open: boolean) => {
+    const seq = ++switchSeq.current;
+    switchesInFlight.current += 1;
+    setError(null);
+    setClosed((prev) => (open ? prev.filter((h) => h !== host) : [...new Set([...prev, host])]));
+    try {
+      const r = await setExecHostClosed(host, !open);
+      if (seq === switchSeq.current) setClosed(r.closedHosts);
+      log.info('settings', 'host exec host switch', { host, open });
+    } catch (err) {
+      setError(`Could not change ${host}: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      switchesInFlight.current -= 1;
+      // The last write settled: read the server's word once, whatever order the answers came in.
+      if (switchesInFlight.current === 0) void load();
+    }
+  };
+
   if (grants === null) return null;
   const label = (host: string) => (host === '__local__' ? 'this Mac' : hostLabels[host] || host);
   return (
     <SettingsGroup
       heading="Tasks using other hosts"
       data-testid="host-exec-grants"
-      footer="A task on one host asks you by letter before it first uses another: runs a command, calls an MCP server or reaches a web service there. Allow lasts until you revoke it here; a command there can read anything your account can."
+      footer="A task on one of your hosts uses your other hosts without asking you: runs a command, calls an MCP server or reaches a web service there, each use counted here. Revoke stops that task (it asks by letter from then on); a switch off closes that host to every task on another host. A command there can read anything your account can."
     >
       {error && <p className="hf-error" role="status">{error}</p>}
+      {['__local__', ...Object.keys(hostLabels).filter((h) => h !== '__local__')].map((host) => {
+        const open = !closed.includes(host);
+        return (
+          <SettingsRow
+            key={`host-${host}`}
+            data-exec-host={host}
+            label={`Tasks on other hosts may use ${label(host)}`}
+            help={open ? 'On: they start commands, MCP servers and web requests there.' : 'Off: nothing new starts there from another host.'}
+            control={
+              <ToggleSwitch
+                checked={open}
+                aria-label={`Tasks on other hosts may use ${label(host)}`}
+                onChange={(v) => void toggleHost(host, v)}
+              />
+            }
+          />
+        );
+      })}
       {grants.length === 0 && denied.length === 0 && (
-        <SettingsRow label="No task may use another host" help="The first time one asks, a letter in your inbox lets you allow it." />
+        <SettingsRow label="No task has used another host yet" help="Each one shows here with what it ran, and a Revoke." />
       )}
       {grants.map((g) => (
         <SettingsRow

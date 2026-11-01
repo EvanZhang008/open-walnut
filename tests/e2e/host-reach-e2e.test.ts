@@ -2,7 +2,8 @@
  * host_mcp_* and host_http through a REAL server (core/hosts/host-mcp.ts, host-http.ts,
  * routes/host-exec-v1.ts, ops/host-reach.ts): a task's session on one host calls an MCP
  * server configured on another, and makes a web request from it, under the SAME grant as
- * host_exec, asked for by one letter. Listing server names needs no grant; tools, calls
+ * host_exec, asked for by one letter when the caller's host is not one the user registered
+ * (strangerbox; a task on a registered host, devbox, needs none). Listing server names needs no grant; tools, calls
  * and requests do; a call past the caller's gateway budget comes back running and is read
  * with host_mcp_result; credential-looking text is hidden; a daemon too old is named; a
  * revoked grant stops it all.
@@ -43,6 +44,7 @@ let port: number
 let hostRoot: string
 let mcp: HostMcp
 const SID = 'host-reach-e2e-session'
+const OWN_SID = 'host-reach-e2e-own'
 let taskId = ''
 const sent: Array<{ cmd: string; params: Record<string, unknown> }> = []
 const FAKE = path.resolve(__dirname, '../fixtures/mcp/host-mcp-fake.cjs')
@@ -102,7 +104,7 @@ beforeAll(async () => {
   vi.spyOn(daemonConnections, 'getDaemonConnection').mockImplementation(async (key, target) =>
     key === 'macbox' ? macbox as unknown as daemonConnections.DaemonConnection
       : key === 'oldbox' ? oldbox as unknown as daemonConnections.DaemonConnection
-        : key === 'devbox' ? devbox as unknown as daemonConnections.DaemonConnection : real(key, target))
+        : key === 'devbox' || key === 'strangerbox' ? devbox as unknown as daemonConnections.DaemonConnection : real(key, target))
   // A web service only "macbox" runs (here: on this machine's loopback).
   service = http.createServer((req, res) => {
     if (req.url === '/leak') { res.writeHead(200, { 'content-type': 'text/plain' }); res.end(`ok\ntoken=${FAKE_TOKEN}\nend\n`); return }
@@ -118,7 +120,9 @@ beforeAll(async () => {
   await updateConfig({ hosts: { devbox: { hostname: 'devbox.example' }, macbox: { hostname: 'macbox.example', label: 'Mac box' }, oldbox: { hostname: 'oldbox.example' } } })
   const created = await api('POST', '/api/v1/tasks', { title: 'Search the docs' })
   taskId = created.body.task?.id ?? created.body.id
-  await createSessionRecord(SID, taskId, '', '/home/me/repo', { host: 'devbox', title: 'docs', initialProcessStatus: 'stopped' } as never)
+  await createSessionRecord(SID, taskId, '', '/home/me/repo', { host: 'strangerbox', title: 'docs', initialProcessStatus: 'stopped' } as never)
+  const own = await api('POST', '/api/v1/tasks', { title: 'Read the dashboard' })
+  await createSessionRecord(OWN_SID, own.body.task?.id ?? own.body.id, '', '/home/me/dash', { host: 'devbox', title: 'dash', initialProcessStatus: 'stopped' } as never)
 }, 120_000)
 
 afterAll(async () => {
@@ -136,7 +140,7 @@ afterAll(async () => {
 describe('host_mcp and host_http', () => {
   it('lists names without a grant, and refuses a non-session, its own host, an unknown host, an old daemon', async () => {
     expect(await api('GET', '/api/v1/hosts/macbox/mcp')).toMatchObject({ status: 403, body: { code: 'session_only' } })
-    expect(await api('GET', '/api/v1/hosts/devbox/mcp', undefined, SID)).toMatchObject({ status: 400, body: { code: 'same_host', error: expect.stringContaining('your own tools') } })
+    expect(await api('GET', '/api/v1/hosts/strangerbox/mcp', undefined, SID)).toMatchObject({ status: 400, body: { code: 'same_host', error: expect.stringContaining('your own tools') } })
     expect(await api('GET', '/api/v1/hosts/nosuch/mcp', undefined, SID)).toMatchObject({ status: 404, body: { code: 'unknown_host' } })
     expect(await api('GET', '/api/v1/hosts/oldbox/mcp', undefined, SID)).toMatchObject({ status: 409, body: { code: 'daemon_upgrade', error: expect.stringContaining('call its MCP servers') } })
     expect(await api('POST', '/api/v1/hosts/oldbox/http', { url: 'http://localhost/' }, SID)).toMatchObject({ status: 403, body: { code: 'exec_grant_required' } })
@@ -173,13 +177,13 @@ describe('host_mcp and host_http', () => {
     expect(JSON.stringify(sent.map((m) => m.params))).not.toContain('only-on-macbox')
 
     // An image the tool returns becomes a file in the calling session's task directory on ITS
-    // host (devbox), written there through devbox's daemon; no base64 reaches the agent.
+    // host (strangerbox), written there through its daemon; no base64 reaches the agent.
     const devboxTasks = path.join(hostRoot, 'devbox-tasks')
     const writes: Array<Record<string, unknown>> = []
     const realConnected = daemonConnections.getConnectedDaemonConnection
     const connectedSpy = vi.spyOn(daemonConnections, 'getConnectedDaemonConnection').mockImplementation((key: string) =>
-      key === 'devbox' ? { taskDirRoot: devboxTasks } as unknown as daemonConnections.DaemonConnection : realConnected(key))
-    __setTransferConnectionResolverForTesting(async (h) => h !== 'devbox' ? [] : [{
+      key === 'strangerbox' ? { taskDirRoot: devboxTasks } as unknown as daemonConnections.DaemonConnection : realConnected(key))
+    __setTransferConnectionResolverForTesting(async (h) => h !== 'strangerbox' ? [] : [{
       hasCapability: (c: string) => c === 'fs-write-part-v1',
       send: async (cmd: string, p: Record<string, unknown>) => {
         writes.push({ cmd, path: p.path, final: p.final })
@@ -246,5 +250,16 @@ describe('host_mcp and host_http', () => {
     expect(await call('fake', { tool: 'echo' })).toMatchObject({ status: 403, body: { code: 'exec_grant_required' } })
     expect((await api('GET', `/api/v1/hosts/macbox/mcp-calls/mc-anything-1234`, undefined, SID))).toMatchObject({ status: 403, body: { code: 'exec_grant_required' } })
     expect((await api('GET', '/api/v1/hosts/macbox/mcp', undefined, SID)).status).toBe(200)
+  }, 30_000)
+
+  it('a task on a registered host calls MCP servers and web services there with no letter', async () => {
+    const inboxBefore = (await api('GET', '/api/v1/human-inbox?limit=50')).body
+    const before = ((inboxBefore.letters ?? inboxBefore.items) as unknown[]).length
+    const web = await api('POST', '/api/v1/hosts/macbox/http', { url: `http://127.0.0.1:${servicePort}/own` }, OWN_SID)
+    expect(web).toMatchObject({ status: 200, body: { status: 200 } })
+    const tools = await api('GET', '/api/v1/hosts/macbox/mcp/fake/tools', undefined, OWN_SID)
+    expect(tools.status).toBe(200)
+    const inbox = (await api('GET', '/api/v1/human-inbox?limit=50')).body
+    expect(((inbox.letters ?? inbox.items) as unknown[]).length).toBe(before)
   }, 30_000)
 })
