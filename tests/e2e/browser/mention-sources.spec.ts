@@ -218,6 +218,10 @@ test('picked rows land as tokens naming their source, and the model receives car
   await page.keyboard.press('Enter')
   await expect(panel.locator('.session-msg-user').filter({ hasText: 'turn-two' }).locator('span.source-link[data-source="team-chat"]'))
     .toHaveText('#deploy-alerts', { timeout: 30_000 })
+  // The Raw view reads the turns once when it opens: wait for turn two's answer first,
+  // or a slow reply leaves the view showing turn one only.
+  await expect(panel.locator('.session-msg-assistant').filter({ hasText: 'turn-two echo-input' }).first())
+    .toBeVisible({ timeout: 60_000 })
 
   // What the model got, in the Raw input view (the mock CLI echoes each input it read).
   await panel.locator('.session-panel-header .task-kebab-btn').click()
