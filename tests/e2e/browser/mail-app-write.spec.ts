@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import net from 'node:net'
 import { expect, test } from './shortcut-test-fixture'
 import { type Locator, type Page } from '@playwright/test'
+import { showAllMail } from './mail-review-helpers'
 
 /**
  * The Mail console's WRITE path, end to end, against a real server with a canned provider plugin.
@@ -217,6 +218,9 @@ test('compose, approve from the web inbox, reply, and re-ask after an edit', asy
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
 
+  // The flat All mail list this story replies from: Grouped (the default since 2026-09-30) folds
+  // the read message into its group, so the inbox showed two rows of its three.
+  await showAllMail(page)
   await page.goto(`http://127.0.0.1:${fixture!.port}/`)
   await page.waitForLoadState('domcontentloaded')
   await expandSidebar(page)

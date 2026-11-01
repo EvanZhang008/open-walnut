@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import net from 'node:net'
 import { expect, test } from './shortcut-test-fixture'
 import { type Locator, type Page } from '@playwright/test'
+import { showAllMail } from './mail-review-helpers'
 
 /**
  * Three things the Mail console asked a human to put up with, against the dense fixture, in both
@@ -271,6 +272,9 @@ test('one Drafts row for both kinds, and an unread filter that sees the whole ma
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
 
+  // The unread chip and the fifty-row page it filters are the All mail list's: Grouped (the default
+  // since 2026-09-30) draws the inbox as Important plus groups, with neither (53 rows, no chip).
+  await showAllMail(page)
   await page.goto(`http://127.0.0.1:${fixture!.port}/`)
   await page.waitForLoadState('domcontentloaded')
   await expandSidebar(page)

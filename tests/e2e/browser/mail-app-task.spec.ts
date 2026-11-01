@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import net from 'node:net'
 import { expect, test } from './shortcut-test-fixture'
 import { type Locator, type Page } from '@playwright/test'
+import { showAllMail } from './mail-review-helpers'
 
 /**
  * Mail leaving the console: one message becoming a task, and the day's unread becoming one letter.
@@ -158,6 +159,9 @@ test('make a task from a message, follow its pill, then send the digest and read
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
 
+  // The flat All mail list this story walks row by row: Grouped (the default since 2026-09-30)
+  // folds the read message into its group, so the inbox showed two rows of its three.
+  await showAllMail(page)
   await page.goto(`http://127.0.0.1:${fixture!.port}/`)
   await page.waitForLoadState('domcontentloaded')
   await expandSidebar(page)
@@ -218,7 +222,13 @@ test('make a task from a message, follow its pill, then send the digest and read
   // The All section, because a mail task is not pinned to anything: Focus (the tab a fresh home
   // opens on) is the pinned shelf and shows "Drag tasks here" whatever else exists.
   await page.locator('.todo-section-tab-all').click()
-  const todoRow = page.locator(`.todo-panel-item[data-task-id="${taskId}"]`)
+  // Nobody started it, so it reads Waiting ("not started"), and since 2026-10-31 the panel draws
+  // each status as its own section of cards with Waiting folded (status-sections.ts): unfold it.
+  const waiting = page.getByTestId('status-section-waiting').locator('.navigation-heading-open')
+  await expect(waiting).toBeVisible({ timeout: 30_000 })
+  if ((await waiting.getAttribute('aria-expanded')) !== 'true') await waiting.click()
+  await expect(waiting).toHaveAttribute('aria-expanded', 'true')
+  const todoRow = page.locator(`.status-section-card[data-task-id="${taskId}"]`)
   await expect(todoRow).toBeVisible({ timeout: 30_000 })
   await expect(todoRow).toContainText('Lunch tomorrow')
 

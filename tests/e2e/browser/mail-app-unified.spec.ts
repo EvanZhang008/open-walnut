@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import net from 'node:net'
 import { expect, test } from './shortcut-test-fixture'
 import { type Locator, type Page } from '@playwright/test'
+import { showAllMail } from './mail-review-helpers'
 
 /**
  * The merged lists, against the dense fixture: two accounts, 70 folders, the same roles under
@@ -149,6 +150,10 @@ async function stopFixture(): Promise<void> {
  * can open on.
  */
 async function openMail(page: Page): Promise<void> {
+  // The flat All mail list, whose promise is one query and one set of numbers: Grouped (the default
+  // since 2026-09-30) reads Important and each group as pages of their own, and its badge counts
+  // Important plus groups (15 against the 7 the inbox rows declare).
+  await showAllMail(page)
   await page.addInitScript(([accountId, mailboxId]) => {
     window.localStorage.setItem('walnut.mail.sidebar.v1', JSON.stringify({
       smart: {}, tail: {}, recent: {}, selected: { accountId, mailboxId },
@@ -458,8 +463,10 @@ test.describe('the merged lists at production density', () => {
     console.log(`refresh polled first: ${fetched.join(', ')}`)
     expect(fetched.length, 'one poll per inbox on screen, before the full refresh').toBe(new Set(fetched).size)
     shots.push(await shoot(page.locator('.mail-list-pane'), 'smart-empty-unfetched'))
-    await page.unroute('**/api/plugins/mail/mailboxes?*')
-    await page.unroute('**/api/plugins/mail/messages?*')
+    // Both stubs at once, WAITING for a mailboxes read still inside its handler. A plain `unroute`
+    // while one sits in `route.fetch()` hands that request on as a fallback, and the handler's late
+    // `fulfill` then threw "Route is already handled" and failed a run that had passed every assertion.
+    await page.unrouteAll({ behavior: 'wait' })
 
     expect(pageErrors, 'the mail console must not throw in the browser').toEqual([])
     console.log(`merged inbox screenshots:\n${shots.join('\n')}`)

@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import net from 'node:net'
 import { expect, test } from './shortcut-test-fixture'
 import { type Page } from '@playwright/test'
+import { showAllMail } from './mail-review-helpers'
 
 /**
  * The Mail console's read path, end to end, against a real server with a canned provider plugin.
@@ -113,6 +114,10 @@ test.beforeAll(async () => {
   fixture = await waitForReady()
 })
 
+// The flat All mail list, which this story reads row by row: Grouped (the default since 2026-09-30)
+// folds the read message into its group, so the inbox showed two rows of its three.
+test.beforeEach(async ({ page }) => { await showAllMail(page) })
+
 test.afterAll(async () => {
   if (child) {
     child.kill('SIGTERM')
@@ -155,6 +160,35 @@ test('add an account, read the mailbox, open a hostile HTML body, search the cac
   // the caret: a credential dialog that needs a click before you can type is a dialog that made
   // the human do its work.
   await expect(page.getByTestId('mail-setup-address')).toBeFocused({ timeout: 15_000 })
+
+  // ── (a0) …and never takes the caret back from a field the person already went to ──
+  // The first field is focused a tick after the form mounts. When that tick ran late, a person (or a
+  // password manager) already in the password field kept typing into the address: the run that found
+  // it read `alice@example.invalidok` beside a disabled Add button, and the address box is kept in the
+  // draft store, which a password never is. Here the password field takes focus in the very microtask
+  // the form appears in, so the tick always comes after it, whatever the machine's load.
+  await dialog.locator('.mail-provider-back').click()
+  await expect(page.getByTestId('mail-provider-option')).toHaveCount(2)
+  const kept = await page.evaluate(async () => {
+    document.querySelector<HTMLButtonElement>('[data-testid="mail-provider-option"][data-provider-id="fixture"]')!.click()
+    const find = () => document.querySelector<HTMLInputElement>('[data-testid="mail-setup-token"]')
+    const token = find() ?? await new Promise<HTMLInputElement>((resolve) => {
+      const watch = new MutationObserver(() => {
+        const one = find()
+        if (one) { watch.disconnect(); resolve(one) }
+      })
+      watch.observe(document.body, { childList: true, subtree: true })
+    })
+    token.focus()
+    await new Promise((resolve) => { setTimeout(resolve, 300) })
+    return document.activeElement?.getAttribute('data-testid')
+  })
+  expect(kept, 'the caret stays in the field the person went to').toBe('mail-setup-token')
+  // And what they type lands there, not on the end of the address.
+  await page.keyboard.type('ok')
+  await expect(page.getByTestId('mail-setup-token')).toHaveValue('ok')
+  await expect(page.getByTestId('mail-setup-address')).toHaveValue('')
+  await page.getByTestId('mail-setup-token').fill('')
 
   // ── (a1) a known service fills the servers from the address, and hand typing wins ──
   // The fixture declares one preset (its server.mjs), so this is the console's own arithmetic in
@@ -352,18 +386,17 @@ test('add an account, read the mailbox, open a hostile HTML body, search the cac
   await expect(rows).toHaveCount(3, { timeout: 30_000 })
 
   // ── narrow viewport: one pane at a time, and a way back ──
-  // Three panes cannot all be readable under 900px, so the console drills to whichever one the
-  // human is in: a message is still open here, so that is the reader. The panes stay MOUNTED and
-  // are hidden with display, which is why coming back does not refetch the page and the reader
-  // still knows this body's images were allowed.
-  await page.setViewportSize({ width: 700, height: 900 })
+  // Three panes cannot all be readable under 1100px (MailApp's NARROW_QUERY), so the console drills
+  // to whichever one the human is in: a message is still open here, so that is the reader. The panes
+  // stay MOUNTED and are hidden with display, which is why coming back does not refetch the page and
+  // the reader still knows this body's images were allowed. 900 rather than the 700 this was written
+  // at: since 2026-10-15 a window under 769px is the PHONE layout, which opens a message as a layer of
+  // its own with the top bar's Back (phone-mail-r4.spec.ts), and at 900 the shell keeps its sidebar,
+  // so there is no drawer sliding out to wait for before the screenshots.
+  await page.setViewportSize({ width: 900, height: 900 })
   const accountsPaneNarrow = page.getByTestId('mail-accounts-pane')
   const listPane = page.getByTestId('mail-message-list')
   const readerPane = page.getByTestId('mail-reader')
-  // The shell turns its sidebar into a drawer at this width and SLIDES it out. Waiting for that
-  // to land is not cosmetic: a screenshot taken during the transition shows the nav painted over
-  // the console, which is not what the user is looking at.
-  await expect(page.locator('.sidebar')).not.toBeInViewport()
 
   await expect(readerPane).toBeVisible()
   await expect(listPane).toBeHidden()

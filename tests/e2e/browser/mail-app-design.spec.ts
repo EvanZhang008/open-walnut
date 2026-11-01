@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import net from 'node:net'
 import { expect, test } from './shortcut-test-fixture'
 import { type FrameLocator, type Locator, type Page } from '@playwright/test'
+import { showAllMail } from './mail-review-helpers'
 
 /**
  * The Mail console's DESIGN, against a dense inbox, in both themes and both engines.
@@ -190,6 +191,9 @@ test('a dense inbox keeps its shape, on paper, in both themes', async ({ page })
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
 
+  // The flat All mail list, which this spec measures row by row: Grouped (the default since
+  // 2026-09-30) folds every read row into its group, so only 8 of the 43 were rows at all.
+  await showAllMail(page)
   await page.goto(`http://127.0.0.1:${fixture!.port}/`)
   await page.waitForLoadState('domcontentloaded')
   await expandSidebar(page)

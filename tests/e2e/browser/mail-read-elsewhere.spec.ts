@@ -18,7 +18,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { MailFixtureServer, openMail, shoot, smartRow } from './mail-review-helpers'
+import { MailFixtureServer, openMail, shoot, showAllMail, smartRow } from './mail-review-helpers'
 
 const SHOT_DIR = '/tmp/mail-read-elsewhere'
 const WRITER = 'fixture:ctx-writer@example.invalid'
@@ -54,6 +54,9 @@ async function readOnAnotherDevice(messageIds: string[], delayMs = 2_500): Promi
 }
 
 async function openAllInboxesUnread(page: Page): Promise<void> {
+  // The unread chip both cases filter with belongs to the flat All mail list: Grouped (the default
+  // since 2026-09-30) draws All Inboxes as Important plus groups, which has no such chip.
+  await showAllMail(page)
   await openMail(page, port)
   await expect(smartRow(page, 'inbox')).toHaveCount(1, { timeout: 90_000 })
   await smartRow(page, 'inbox').click()
