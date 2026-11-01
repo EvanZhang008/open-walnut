@@ -24,7 +24,7 @@
  *
  * PURE MODULE: no React, no DOM. It has to load in a bare node test.
  */
-import { extractEntityRefs, sourceDisplayName, sourceOfRefId } from '@/utils/entity-ref-tags';
+import { extractEntityRefs, sourceDisplayName, sourceOfRefId, type EntityRefKind } from '@/utils/entity-ref-tags';
 
 /** label → tag, in insertion order. */
 export type RefTable = ReadonlyMap<string, string>;
@@ -146,6 +146,54 @@ export function listInlineRefs(body: string, table: RefTable): Array<{ label: st
     if (!tag) continue;
     out.push({ label: m[1], tag, start: m.index ?? 0, end: (m.index ?? 0) + m[0].length });
   }
+  return out;
+}
+
+/** The known token that starts exactly at `caret`, if any (Delete in front of it). */
+export function tokenStartingAt(body: string, caret: number, table: RefTable): { start: number; end: number } | null {
+  if (body[caret] !== '@' || body[caret + 1] !== '[') return null;
+  const close = body.indexOf(']', caret + 2);
+  if (close === -1) return null;
+  const label = body.slice(caret + 2, close);
+  if (!label || /[\[\n\r]/.test(label) || !table.has(label)) return null;
+  return { start: caret, end: close + 1 };
+}
+
+/** The known token `caret` sits strictly inside of (not on either edge), if any. */
+export function tokenAround(body: string, caret: number, table: RefTable): { start: number; end: number } | null {
+  if (!body.includes('@[')) return null;
+  for (const t of listInlineRefs(body, table)) {
+    if (t.start >= caret) return null;
+    if (caret < t.end) return { start: t.start, end: t.end };
+  }
+  return null;
+}
+
+/** One run of the box's text: plain prose, or a known reference token. */
+export interface MirrorPiece {
+  text: string;
+  /** Set on a token piece: what it stands for. */
+  ref?: { label: string; kind: EntityRefKind; id: string };
+}
+
+/**
+ * The box's text cut into runs for the overlay that draws tokens as pills.
+ * Concatenating every piece's `text` gives `body` back, character for character:
+ * the overlay sits on the textarea's own glyphs, so it must never add, drop or
+ * reorder one.
+ */
+export function mirrorPieces(body: string, table: RefTable): MirrorPiece[] {
+  const tokens = table.size === 0 || !body.includes('@[') ? [] : listInlineRefs(body, table);
+  if (tokens.length === 0) return [{ text: body }];
+  const out: MirrorPiece[] = [];
+  let last = 0;
+  for (const t of tokens) {
+    if (t.start > last) out.push({ text: body.slice(last, t.start) });
+    const m = extractEntityRefs(t.tag)[0];
+    out.push({ text: body.slice(t.start, t.end), ref: { label: t.label, kind: m?.kind ?? 'task', id: m?.id ?? '' } });
+    last = t.end;
+  }
+  if (last < body.length) out.push({ text: body.slice(last) });
   return out;
 }
 
