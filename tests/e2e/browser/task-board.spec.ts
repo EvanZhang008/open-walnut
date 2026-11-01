@@ -215,9 +215,11 @@ test('the Board tab: ask, live components, threads, re-render, marks and locate'
   await frame.locator('body').evaluate(() => { (window as unknown as { __sameDoc?: number }).__sameDoc = 1 })
 
   // The chip follows the store: a phase change lands without re-rendering the frame.
-  await api('PATCH', `/api/tasks/${worker}`, { phase: 'IN_PROGRESS' })
-  await expect(workerChip.locator('.wn-phase')).toHaveText(USER_STATE_LABELS.working, { timeout: 15_000 })
-  await expect(workerChip).toHaveAttribute('data-phase', 'IN_PROGRESS')
+  // NEED_ACTION, whose label differs from the not-started one: IN_PROGRESS with no session
+  // reads Waiting too, since Working is a running turn only (src/core/user-status.ts).
+  await api('PATCH', `/api/tasks/${worker}`, { phase: 'NEED_ACTION' })
+  await expect(workerChip.locator('.wn-phase')).toHaveText(USER_STATE_LABELS.needs, { timeout: 15_000 })
+  await expect(workerChip).toHaveAttribute('data-phase', 'NEED_ACTION')
   expect(await frame.locator('body').evaluate(() => (window as unknown as { __sameDoc?: number }).__sameDoc)).toBe(1)
 
   // An external link opens a tab; a `#` link scrolls inside the frame without navigating it.
