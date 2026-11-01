@@ -77,7 +77,7 @@ describe('the inlined factory behaves like the imported one', () => {
   // A host with none of the tools: each command fails at once. A stub that never called back
   // left every GPU read (nvidia-smi, ioreg) to its 8 s timeout, four of them a test, and the
   // test ran 32 s, past the quick tier's 30 s (2026-11-01, runs 41283845821 and 41287770979:
-  // the timeout reads "STACK_TRACE_ERROR" under bun).
+  // the timeout reads "STACK_TRACE_ERROR" in the report).
   const noTool: HostVitalsDeps['execFile'] = (_file, _args, _opts, cb) => {
     cb(Object.assign(new Error('not installed'), { code: 'ENOENT' }), '', '')
     return null

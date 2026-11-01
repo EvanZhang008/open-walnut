@@ -1,6 +1,6 @@
 /**
  * scripts/lib/test-timeout-message.mjs: the baseline gate names a vitest timeout,
- * which bun leaves reading "Error: STACK_TRACE_ERROR".
+ * which the JSON report leaves reading "Error: STACK_TRACE_ERROR".
  */
 import { describe, expect, it } from 'vitest'
 import fs from 'node:fs'

@@ -184,14 +184,14 @@ final class MediaFileUITests: XCTestCase {
         let advanced = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             self.elapsedSeconds(position) >= 9
         }, object: position)
-        XCTAssertEqual(XCTWaiter.wait(for: [advanced], timeout: 10), .completed)
+        XCTAssertEqual(XCTWaiter.wait(for: [advanced], timeout: 15), .completed)
         let backward = app.buttons["Skip Backward"].firstMatch
         revealControls(app, backward); backward.tap()
         let rewound = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             let elapsed = self.elapsedSeconds(position)
             return position.exists && elapsed >= 0 && elapsed <= 1
         }, object: position)
-        XCTAssertEqual(XCTWaiter.wait(for: [rewound], timeout: 10), .completed)
+        XCTAssertEqual(XCTWaiter.wait(for: [rewound], timeout: 15), .completed)
         let play = app.buttons["Play/Pause"].firstMatch
         XCTAssertTrue(play.waitForExistence(timeout: 10)); play.tap()
         let progressed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
@@ -200,7 +200,7 @@ final class MediaFileUITests: XCTestCase {
             }
             return position.exists && self.elapsedSeconds(position) >= 3
         }, object: position)
-        XCTAssertEqual(XCTWaiter.wait(for: [progressed], timeout: 10), .completed)
+        XCTAssertEqual(XCTWaiter.wait(for: [progressed], timeout: 15), .completed)
         revealControls(app, play)
         if play.label == "Pause" { play.tap() }
         let paused = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == 'Play'"), object: play)

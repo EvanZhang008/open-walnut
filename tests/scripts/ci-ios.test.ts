@@ -195,7 +195,8 @@ describe('WalnutTests waits', () => {
   // draws what covers the rows as it collapses. 2026-11-01 (run 41272965191):
   // InboxSettingsScrollEdgeTests read a red row in the Settings bar after a fixed 0.3 s on a
   // loaded runner, and passed on the next three runs. Such a file reads its pixels again
-  // until they pass or a deadline does (`while ... Date() < deadline`).
+  // until they pass or a deadline does (`while ... Date() < deadline`). Judged per file: a
+  // second single read in a file that polls once (titleInk's scroll back) is not caught.
   const scrollsThenRenders = (text: string) => /\bsetContentOffset\(/.test(text) && /\bdrawHierarchy\(/.test(text)
   const pollsPixels = (text: string) => /\bwhile\b[^\n]*Date\(\) < deadline/.test(text)
 
@@ -218,8 +219,10 @@ describe('WalnutUITests settle waits', () => {
   // seconds each on a loaded CI runner: a 5 s wait on one ran out once there with the row
   // already in place by the next read (2026-11-01, run 41287770979, AskQuestionCardUITests).
   const dir = path.join(ROOT, 'ios-native/WalnutUITests')
-  const SHORT_BLOCK_WAIT = /expectation\(for: NSPredicate \{[\s\S]{0,400}?wait\(for: \[\w+\], timeout: ([\d.]+)\)/g
-  const shortWaits = (text: string) => [...text.matchAll(SHORT_BLOCK_WAIT)].filter((m) => Number(m[1]) < 15)
+  // Both spellings: expectation(for:) with wait(for:), and XCTNSPredicateExpectation with XCTWaiter.
+  const SHORT_BLOCK_WAIT = /(?:expectation\(for:|XCTNSPredicateExpectation\(predicate:) NSPredicate \{[\s\S]{0,400}?wait\(for: \[\w+\], timeout: ([\d.]+)\)/g
+  // An inverted one (nothing may change for its time) is meant to be short.
+  const shortWaits = (text: string) => [...text.matchAll(SHORT_BLOCK_WAIT)].filter((m) => Number(m[1]) < 15 && !/\.isInverted = true/.test(m[0]))
 
   it('no block predicate wait in the UI tests is shorter than 15 s', () => {
     const offenders = fs.readdirSync(dir).filter((f) => f.endsWith('.swift')).flatMap((f) => {
@@ -232,6 +235,8 @@ describe('WalnutUITests settle waits', () => {
   it('catches a short wait and lets a long one through', () => {
     expect(shortWaits('let e = expectation(for: NSPredicate { _, _ in self.onScreen(x, in: app) }, evaluatedWith: nil)\n        wait(for: [e], timeout: 5)')).toHaveLength(1)
     expect(shortWaits('let e = expectation(for: NSPredicate { _, _ in ok() }, evaluatedWith: nil)\n        wait(for: [e], timeout: 15)')).toHaveLength(0)
+    expect(shortWaits('let e = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in ok() }, object: x)\n        XCTAssertEqual(XCTWaiter.wait(for: [e], timeout: 10), .completed)')).toHaveLength(1)
+    expect(shortWaits('let e = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in moved() }, object: x)\n        e.isInverted = true\n        XCTAssertEqual(XCTWaiter.wait(for: [e], timeout: 2), .completed)')).toHaveLength(0)
   })
 })
 
