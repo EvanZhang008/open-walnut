@@ -32,7 +32,8 @@ const FIND_PRIORITY = 10;
 
 /** Most matches counted for one query; past it the count reads "10000+". */
 export const FIND_CAP = 10000;
-const SELMATCH_CAP = 2000;
+/** Most copies the selected-word echo paints (utils/selection-echo.ts). */
+export const SELMATCH_CAP = 2000;
 /** Up to this many matches every one is painted; past it, a window of
  *  2 x PAINT_HALF around the reader (see PageFindController.paint). */
 const PAINT_ALL = 1500;
@@ -487,7 +488,3 @@ export function selectionNeedle(sel: Selection | null): string {
   return t;
 }
 
-/** Tint every exact (case-sensitive) visible copy of `needle` under `root`. */
-export function paintSelectionMatches(index: FindIndex, needle: string): () => void {
-  return paintRanges(HL_PAGE_SELMATCH, rangesForQuery(index, needle, true, SELMATCH_CAP).ranges, 0);
-}

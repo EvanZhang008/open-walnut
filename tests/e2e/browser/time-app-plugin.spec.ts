@@ -6,6 +6,7 @@ import { expect, test } from './shortcut-test-fixture'
 import { type Page } from '@playwright/test'
 import { openChatOnLoad } from './draft-helpers'
 import { openPluginDetail } from './apps-store-helpers'
+import { expectEchoEndsOffSelection, repeatedWord } from './selection-echo-helpers'
 
 /**
  * The Time plugin App — the ONLY Time UI. It began as a port of the console's Time
@@ -723,6 +724,16 @@ test('all three timeline views hold up on the dense day', async ({ page }) => {
   await expect(page.getByTestId('time-app-lanes')).toBeVisible({ timeout: 60_000 })
 
   expect(pageErrors, 'the plugin App must not throw in the browser').toEqual([])
+})
+
+// Reported 2026-11-01 on a plugin's page: a selected word's echo "never removes the
+// highlight". The page echo runs on a plugin's App page as on any page; it ends
+// when the user leaves the selection (web/src/utils/selection-echo.ts).
+test('a selected word on the App page echoes, and the echo ends when the user leaves it', async ({ page }) => {
+  await openTimeApp(page)
+  const app = page.getByTestId('time-app')
+  await expect.poll(async () => (await app.innerText()).length, { timeout: 30_000 }).toBeGreaterThan(200)
+  await expectEchoEndsOffSelection(page, app, await repeatedWord(app))
 })
 
 test('the user can move the row to the Sidebar and back, live and across a reload', async ({ page }) => {

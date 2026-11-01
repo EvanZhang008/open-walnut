@@ -8,6 +8,7 @@ import {
   label, maxScrollDrift, openSession, paint, readerScrollUp, scrollTop, settledLabel, shot,
 } from './page-find-helpers';
 import type { Page } from '@playwright/test';
+import { expectEchoEndsOffSelection } from './selection-echo-helpers';
 
 /** Click the middle of the chat (a message on screen), so Playwright never
  *  scrolls to reach the click target. */
@@ -190,6 +191,15 @@ export function definePageFindCases(engine: string): void {
     // A click elsewhere clears the selection, and the tint with it.
     await page.locator(historySelector).getByText('Answer 239.').click();
     await expect.poll(async () => (await paint(page)).sel).toBe(0);
+  });
+
+  // Reported 2026-11-01, on a plugin's page: "it never removes the highlight". The
+  // page's echo had a painter of its own that ended only when the selection
+  // collapsed; a press into a frame leaves the selection in place, unpainted.
+  test(`${engine}: the echo ends when the user leaves the selection, a press into a frame too`, async ({ page }) => {
+    await openSession(page);
+    await readerScrollUp(page, 600);
+    await expectEchoEndsOffSelection(page, page.locator(historySelector), WORD);
   });
 
   // Reported 2026-10-29: "I select a word, it lights up; I deselect it, and the

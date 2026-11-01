@@ -17,8 +17,9 @@ import { createPortal } from 'react-dom';
 import { FileSearchBar } from '@/components/common/FileSearchBar';
 import { READER_SCROLL_EVENT } from '@/components/sessions/phone-session-layer';
 import { installFindPointerTracking, isFindChord, lastPointerTarget } from '@/utils/find-scope';
+import { echoVisible, paintSelectionMatches, subscribeEcho } from '@/utils/selection-echo';
 import {
-  PageFindController, buildFindIndex, makeRepaintScheduler, paintSelectionMatches, selectionNeedle,
+  PageFindController, buildFindIndex, makeRepaintScheduler, selectionNeedle,
   type FindIndex, type FindStatus,
 } from '@/utils/page-find';
 import { log } from '@/utils/log';
@@ -203,7 +204,7 @@ export function PageFind() {
     setStatus(ctrl.nav(dir));
   }, []);
 
-  useSelectionMatches();
+  usePageSelectionEcho();
 
   if (!open) return null;
   return createPortal(
@@ -243,8 +244,11 @@ export function PageFind() {
  * with no event at all, and an echo painted from the remembered word then stayed
  * on screen with nothing selected (reported 2026-10-29). That rewrite is itself a
  * mutation under the scope, so the observer re-reads the selection first.
+ *
+ * When the echo may show at all is not decided here: utils/selection-echo.ts owns
+ * that rule and the paint, for this echo and the doc views' alike.
  */
-function useSelectionMatches(): void {
+function usePageSelectionEcho(): void {
   useEffect(() => {
     let index: FindIndex | null = null;
     let root: Element | null = null;
@@ -284,7 +288,7 @@ function useSelectionMatches(): void {
       // runs on every mutation batch of a streaming reply.
       if (!full && sel && !sel.isCollapsed && sel.anchorNode === held.an && sel.anchorOffset === held.ao
         && sel.focusNode === held.fn && sel.focusOffset === held.fo && held.an?.isConnected && held.fn?.isConnected) return false;
-      const live = selectionNeedle(sel);
+      const live = echoVisible(sel, document.activeElement) ? selectionNeedle(sel) : '';
       if (live === needle) { remember(sel); return false; }
       clear();
       if (!live) { needle = ''; setRoot(null); }
@@ -305,7 +309,7 @@ function useSelectionMatches(): void {
       timer = window.setTimeout(() => {
         timer = 0;
         const sel = window.getSelection();
-        needle = selectionNeedle(sel);
+        needle = echoVisible(sel, document.activeElement) ? selectionNeedle(sel) : '';
         remember(sel);
         const anchor = sel?.anchorNode;
         const at = anchor instanceof Element ? anchor : anchor?.parentElement;
@@ -313,9 +317,11 @@ function useSelectionMatches(): void {
         paint();
       }, 120);
     }
-    document.addEventListener('selectionchange', onSelectionChange);
+    // Every change that can show or hide the echo (utils/selection-echo.ts): the
+    // selection, focus moving to an editor, a press outside it.
+    const unsubscribe = subscribeEcho(onSelectionChange);
     return () => {
-      document.removeEventListener('selectionchange', onSelectionChange);
+      unsubscribe();
       obs.disconnect();
       window.clearTimeout(timer);
       repaint.cancel();

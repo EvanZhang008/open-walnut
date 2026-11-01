@@ -3,16 +3,14 @@
  * preview, its WYSIWYG editor, read-only code, the diff. CodeMirror does its own
  * (highlightSelectionMatches, hidden while it is not focused).
  *
- * The ONE painter of `walnut-selmatch`; tests/web/selection-match-ratchet.test.ts
- * fails on another. The paint lives exactly as long as a selection the user can
- * see: it goes the moment the selection collapses, and also when an EDITOR holding
- * the selection loses focus (2026-11-01, the user: "after I deselect, the highlight
- * stays"). A click on blank space outside an editor leaves its selection in the
- * document, unpainted, in WebKit and Chromium alike, so every match stayed tinted
- * around nothing the user had selected.
+ * This hook only says WHERE to look and WHAT matches; when the echo may show, and
+ * the paint itself, belong to utils/selection-echo.ts, the one painter of the
+ * selected-word echo for these surfaces and the page alike (2026-11-01: a second
+ * painter of its own kept the page's echo on after the selection went).
  */
 import { useCallback, useEffect, useRef, type DependencyList } from 'react';
-import { applyHighlights, HL_SELMATCH } from '@/utils/dom-text-search';
+import { HL_SELMATCH } from '@/utils/dom-text-search';
+import { echoVisible, paintEcho, subscribeEcho } from '@/utils/selection-echo';
 
 const MIN_CHARS = 3;
 const MAX_CHARS = 200;
@@ -21,19 +19,13 @@ const SETTLE_MS = 120;
 
 /**
  * The selected text the matches are painted for, or null: none, too short or long,
- * more than one line, outside `root`, or in an editor that does not have focus.
+ * more than one line, outside `root`, or one the user cannot see (selection-echo).
  */
 export function liveSelectionText(root: HTMLElement | null, sel: Selection | null, active: Element | null): string | null {
-  if (!root || !sel || sel.isCollapsed || !sel.rangeCount) return null;
+  if (!root || !sel || !echoVisible(sel, active)) return null;
   const t = sel.toString().trim();
   if (t.length < MIN_CHARS || t.length > MAX_CHARS || t.includes('\n')) return null;
-  const node = sel.getRangeAt(0).commonAncestorContainer;
-  if (!root.contains(node)) return null;
-  const el = (node instanceof Element ? node : node.parentElement) as HTMLElement | null;
-  if (el?.isContentEditable) {
-    const editor = el.closest('[contenteditable]:not([contenteditable="false"])');
-    if (!editor || !active || !editor.contains(active)) return null;
-  }
+  if (!root.contains(sel.getRangeAt(0).commonAncestorContainer)) return null;
   return t;
 }
 
@@ -57,7 +49,7 @@ export function useSelectionMatches(
     const root = findRef.current();
     const text = liveSelectionText(root, window.getSelection(), document.activeElement);
     if (!root || !text) return;
-    clearRef.current = applyHighlights(window, HL_SELMATCH, collectRef.current(root, text));
+    clearRef.current = paintEcho(window, HL_SELMATCH, collectRef.current(root, text));
   }, [clear]);
 
   useEffect(() => {
@@ -68,15 +60,9 @@ export function useSelectionMatches(
       window.clearTimeout(timer);
       timer = window.setTimeout(refresh, SETTLE_MS);
     };
-    document.addEventListener('selectionchange', onChange);
-    // Focus leaving (or coming back to) an editor changes whether its selection is
-    // the user's, and fires no selectionchange.
-    document.addEventListener('focusin', onChange);
-    document.addEventListener('focusout', onChange);
+    const unsubscribe = subscribeEcho(onChange);
     return () => {
-      document.removeEventListener('selectionchange', onChange);
-      document.removeEventListener('focusin', onChange);
-      document.removeEventListener('focusout', onChange);
+      unsubscribe();
       window.clearTimeout(timer);
       clear();
     };
