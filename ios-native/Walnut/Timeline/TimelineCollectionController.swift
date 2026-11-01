@@ -216,6 +216,7 @@ final class TimelineCollectionController: UIViewController {
                 }
                 if slice.startIndex == 0 && slice.isEmpty { self.rows = [] }
                 self.layout.rowHeights = self.rows.map(\.height)
+                TimelineRichHTMLCell.offerDocuments(of: self.collectionView.visibleCells)
                 self.collectionView.reloadData()
                 self.layout.invalidateLayout()
                 self.followOrRestore(anchor: anchor, holdsRow: holdsRow)
@@ -246,7 +247,11 @@ final class TimelineCollectionController: UIViewController {
                     // reconciliation is a whole class of hard crashes when
                     // applies outpace layout passes (storm conditions).
                     // reloadData costs O(visible) here — prepare() is prefix
-                    // sums; only visible cells re-attach.
+                    // sums; only visible cells re-attach. A rich document
+                    // follows its row into whichever cell UIKit hands it
+                    // (TimelineRichHTMLCell.offerDocuments): a reply's rows
+                    // change ids when it settles, and its card must not reload.
+                    TimelineRichHTMLCell.offerDocuments(of: collectionView.visibleCells)
                     collectionView.reloadData()
                     layout.invalidateLayout()
                 }

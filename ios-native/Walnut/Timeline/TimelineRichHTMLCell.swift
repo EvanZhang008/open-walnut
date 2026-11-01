@@ -264,6 +264,11 @@ final class TimelineRichHTMLCell: UICollectionViewCell {
             islandStoreKey = ""
         }
 
+        // Another cell the collection view just let go of may hold this very
+        // document, loaded and drawn: take it over instead of loading it again.
+        takeOverDocument(identity: Self.identity(kind: kind, key: key, width: contentWidth,
+                                                 style: traitCollection.userInterfaceStyle))
+
         // Is this cell holding some OTHER row's pixels? Read once, before
         // `showWebView` un-hides anything, because BOTH of the exits below can be
         // reached by a recycle and each has to blank in its own way.
@@ -1389,7 +1394,92 @@ extension TimelineRichHTMLCell {
         }
     }
 
+    // MARK: - Handing a document over
+
+    /// Cells whose document another cell may take over: the ones the collection
+    /// view let go of in a `reloadData` and has not configured again yet.
+    private static let offered = NSHashTable<TimelineRichHTMLCell>.weakObjects()
+
+    /// The collection view is about to bind every visible cell again
+    /// (`reloadData`), and UIKit promises no cell its old row back.
+    ///
+    /// When a reply finishes, the rows that drew it as it streamed are replaced by
+    /// the rows of its saved message (other ids, the same documents), and that is
+    /// such a reload. A card or an island landing in another cell instance then
+    /// loaded again, blank until it painted, its script started over: a flash
+    /// at the very moment the reply settled (2026-11-01, the user: streaming and
+    /// finished must look exactly the same, "no flash, no change of format").
+    /// Until each of these cells is configured again, its document goes to the
+    /// cell that is asked for the same document (`takeOverDocument`).
+    static func offerDocuments(of cells: [UICollectionViewCell]) {
+        for case let cell as TimelineRichHTMLCell in cells { offered.add(cell) }
+    }
+
+    /// Take over the document `identity` from an offered cell that shows it,
+    /// loaded and drawn, giving that cell this one's in exchange. A UIKit view
+    /// moves between superviews without reloading, so the web view keeps its
+    /// page, its script's state, its scroll position and its height.
+    private func takeOverDocument(identity: String) {
+        Self.offered.remove(self)
+        guard identity != displayedIdentity else { return }
+        guard let donor = Self.offered.allObjects.first(where: {
+            $0 !== self && $0.reuseIdentifier == reuseIdentifier && $0.webView != nil
+                && $0.displayedIdentity == identity && $0.documentReady && $0.pendingIdentity == nil
+        }) else { return }
+        swapDocument(with: donor)
+    }
+
+    /// Exchange documents with `other`: each web view with everything that
+    /// describes the page it holds. What belongs to the ROW (its id, key, width,
+    /// delegate, island record, result strip, building label) stays: the next
+    /// configure of each cell sets it.
+    private func swapDocument(with other: TimelineRichHTMLCell) {
+        cancelPendingLoad()
+        other.cancelPendingLoad()
+        removeCover()
+        other.removeCover()
+        swap(&webView, &other.webView)
+        swap(&loadedKind, &other.loadedKind)
+        swap(&keyBanked, &other.keyBanked)
+        swap(&previewRowID, &other.previewRowID)
+        swap(&loadedBody, &other.loadedBody)
+        swap(&displayedIdentity, &other.displayedIdentity)
+        swap(&lastLoadAt, &other.lastLoadAt)
+        #if DEBUG
+        swap(&loadedDocument, &other.loadedDocument)
+        #endif
+        swap(&displayedRowID, &other.displayedRowID)
+        swap(&heightRelay, &other.heightRelay)
+        swap(&lastMeasureSource, &other.lastMeasureSource)
+        swap(&reportedHeight, &other.reportedHeight)
+        swap(&heightRevisions, &other.heightRevisions)
+        swap(&processRecoveriesLeft, &other.processRecoveriesLeft)
+        swap(&awaitingOwnNavigation, &other.awaitingOwnNavigation)
+        swap(&documentReady, &other.documentReady)
+        swap(&islandRelay, &other.islandRelay)
+        swap(&islandTokens, &other.islandTokens)
+        let mine = (stamp.rowID, stamp.key, stamp.width)
+        (stamp.rowID, stamp.key, stamp.width) = (other.stamp.rowID, other.stamp.key, other.stamp.width)
+        (other.stamp.rowID, other.stamp.key, other.stamp.width) = mine
+        adoptWebView()
+        other.adoptWebView()
+    }
+
+    /// Point the web view this cell now holds, and its relays, at this cell.
+    private func adoptWebView() {
+        heightRelay?.cell = self
+        islandRelay?.cell = self
+        if let webView {
+            webView.navigationDelegate = self
+            if webView.superview !== contentView { contentView.insertSubview(webView, at: 0) }
+        }
+        setNeedsLayout()
+    }
+
     #if DEBUG
+    /// Whether this cell's document is up for another cell to take over.
+    var offeredForTesting: Bool { Self.offered.contains(self) }
+
     /// The strip, for tests (nil until an island with a result was shown).
     var resultStripForTesting: IslandResultStripView? { resultStrip }
     var islandStoreKeyForTesting: String { islandStoreKey }
