@@ -93,10 +93,22 @@ struct FocusMusicView: View {
             }
             .accessibilityIdentifier("focusMusic.focusPhase")
             if phase == "focus" {
+                Button("Rest now") { run { await player.rest() } }
+                    .disabled(busy)
+                    .accessibilityIdentifier("focusMusic.restNow")
+                Button("+5 min") { run { await player.extend(minutes: 5) } }
+                    .disabled(busy)
+                    .accessibilityIdentifier("focusMusic.extend")
                 Button("Stop block", role: .destructive) { run { await player.stopFocusBlock() } }
                     .disabled(busy)
                     .accessibilityIdentifier("focusMusic.focusStop")
             } else if phase == "break" || phase == "break_due" {
+                Button("Focus now") { run { await player.focusNow() } }
+                    .disabled(busy)
+                    .accessibilityIdentifier("focusMusic.focusNow")
+                Button("+5 min break") { run { await player.extend(minutes: 5) } }
+                    .disabled(busy)
+                    .accessibilityIdentifier("focusMusic.moreBreak")
                 Button("End break") { run { await player.endBreak() } }
                     .disabled(busy)
                     .accessibilityIdentifier("focusMusic.focusStop")
@@ -150,6 +162,12 @@ struct FocusMusicView: View {
                 }
                 .disabled(busy)
                 .accessibilityIdentifier("focusMusic.focusStart")
+                Button("Rest \(breakMinutes) min") {
+                    let pause = breakMinutes
+                    run { await player.rest(minutes: pause) }
+                }
+                .disabled(busy)
+                .accessibilityIdentifier("focusMusic.restStart")
             }
             if let message { Text(message).font(.footnote).foregroundStyle(.secondary) }
         } footer: {

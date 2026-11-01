@@ -141,6 +141,22 @@ final class FocusMusicTests: XCTestCase {
         XCTAssertEqual(object["breakMinutes"] as? Int, 10)
         XCTAssertEqual(object["spotify"] as? String, "spotify:playlist:37i9dQZF1DWZeKCadgRdKQ")
         XCTAssertEqual(object["remember"] as? Bool, true)
+        XCTAssertNil(object["taskId"])
+        // Focus now during a break keeps the run's task.
+        let next = try JSONEncoder().encode(RhythmStartArgs(minutes: 25, breakMinutes: 5, spotify: nil, remember: false, taskId: "task-7"))
+        let nextObject = try XCTUnwrap(JSONSerialization.jsonObject(with: next) as? [String: Any])
+        XCTAssertEqual(nextObject["taskId"] as? String, "task-7")
+    }
+
+    func testABreakReadsTheRunsLengthsForFocusNow() throws {
+        let json = #"{"now":1,"focus":{"phase":"break","endsAt":2,"title":"Spec","minutes":40,"breakMinutes":8,"taskId":"task-7"},"config":{"focusMinutes":25,"breakMinutes":5,"musicWithFocus":true}}"#
+        let status = try JSONDecoder().decode(RhythmFocusStatus.self, from: Data(json.utf8))
+        XCTAssertEqual(status.focus.minutes, 40)
+        XCTAssertEqual(status.focus.breakMinutes, 8)
+        XCTAssertEqual(status.focus.taskId, "task-7")
+        // An older Rhythm sends none of them, and still decodes.
+        let older = try JSONDecoder().decode(RhythmFocusStatus.self, from: Data(#"{"now":1,"focus":{"phase":"idle","endsAt":0,"title":null}}"#.utf8))
+        XCTAssertNil(older.focus.minutes)
     }
 
     func testAnOlderRhythmWithoutSpotifyStillDecodes() throws {

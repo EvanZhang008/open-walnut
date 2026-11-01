@@ -8,14 +8,17 @@
  *
  * While Rhythm is off, the ring's popover shows the Start form (lengths and music) in
  * place of its one Start button, through the `status-item.panel` slot; while a block
- * runs, what plays and a way to switch it, with Stop block. A host older than
- * that slot refuses it, and the popover keeps the plain Start button.
+ * runs, what plays and a way to switch it, with Rest now, +5 min and Stop block; while a
+ * break runs, Focus now, +5 min break and End break. A host older than that slot refuses
+ * it, and the popover keeps the item's own buttons, which offer the same.
  */
 import { useState, useSyncExternalStore } from 'react'
 import type { AppProps, StatusItemPanelSlotProps, WalnutWebApi } from '@open-walnut/plugin-api/web'
 import { STATUS_ITEM_ID } from './server/status-item'
 import { RhythmApp } from './web/app'
 import { createMusicPlayer } from './web/music'
+import { DndBlockRow } from './web/dnd-row'
+import { BreakActions, FocusActions } from './web/phase-controls'
 import { NowPlaying } from './web/now-playing'
 import { StartForm } from './web/start-form'
 import { createRhythmStore } from './web/store'
@@ -58,8 +61,6 @@ export async function activate(walnut: WalnutWebApi) {
     const state = useSyncExternalStore(store.subscribe, store.get, store.get)
     // The block started but Spotify did not play: said here until read, then the item's buttons return.
     const [spotifyError, setSpotifyError] = useState<string | null>(null)
-    const [stopping, setStopping] = useState(false)
-    const [stopError, setStopError] = useState<string | null>(null)
     if (itemId !== STATUS_ITEM_ID || !state || state.replica) return null
     if (spotifyError) {
       return (
@@ -69,45 +70,37 @@ export async function activate(walnut: WalnutWebApi) {
         </div>
       )
     }
-    // While a block runs: what plays and a way to switch it, then Stop block (the item's own buttons are hidden while this draws).
+    // While a block runs: what plays and a way to switch it, Do Not Disturb, then Rest now,
+    // +5 min and Stop block (the item's own buttons are hidden while this draws).
     if (state.focus.phase === 'focus') {
       return (
         <div className="rhythm-start" data-testid="rhythm-running-panel">
           <NowPlaying store={store} music={music} state={state} compact />
-          {stopError && <p className="rhythm-error" role="status">{stopError}</p>}
-          <div className="rhythm-panel-actions">
-            <button
-              type="button"
-              className="rhythm-button"
-              disabled={stopping}
-              aria-busy={stopping || undefined}
-              data-testid="rhythm-panel-stop"
-              onClick={() => {
-                setStopping(true)
-                setStopError(null)
-                void store.call('focus_stop').then((outcome) => {
-                  setStopping(false)
-                  if (outcome.ok) close()
-                  else setStopError(outcome.message)
-                })
-              }}
-            >
-              {stopping ? 'Stopping…' : 'Stop block'}
-            </button>
-          </div>
+          <DndBlockRow store={store} state={state} />
+          <FocusActions store={store} onDone={(op) => { if (op !== 'extend') close() }} />
         </div>
       )
     }
-    // A break keeps the item's own End break button.
+    if (state.focus.phase === 'break') {
+      return (
+        <div className="rhythm-start" data-testid="rhythm-break-panel">
+          <DndBlockRow store={store} state={state} />
+          <BreakActions store={store} music={music} state={state} onDone={(op) => { if (op !== 'more-break') close() }} />
+        </div>
+      )
+    }
     if (state.focus.phase !== 'idle') return null
     return (
-      <StartForm
-        store={store}
-        music={music}
-        state={state}
-        compact
-        onStarted={(result) => { if (result.spotifyError) setSpotifyError(result.spotifyError); else close() }}
-      />
+      <>
+        <DndBlockRow store={store} state={state} />
+        <StartForm
+          store={store}
+          music={music}
+          state={state}
+          compact
+          onStarted={(result) => { if (result.spotifyError) setSpotifyError(result.spotifyError); else close() }}
+        />
+      </>
     )
   }
   try {

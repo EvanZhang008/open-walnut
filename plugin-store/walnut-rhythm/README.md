@@ -11,7 +11,7 @@ It adds one App (Rhythm), eight ops, one read-only tool for routine watchers, an
 
 ## What it reads
 
-Nothing about you. Rhythm does not read keyboard or app time, attention, or agent turns. What moves it is your own Start, Stop and End break, Walnut quiet mode, its settings, and the clock (a 30 second tick and one timer at the exact end of the running block or break). The clock only ever moves a run toward off: a restart, a reload, waking the Mac from sleep or opening another window never starts one. A run that ended while Walnut was down is closed quietly; a notice that would arrive more than 10 minutes late is not shown.
+Nothing about you. Rhythm does not read keyboard or app time, attention, or agent turns. What moves it is your own Start, Rest, Extend, Stop and End break, Walnut quiet mode, its settings, and the clock (a 30 second tick and one timer at the exact end of the running block or break). The clock only ever moves a run toward off: a restart, a reload, waking the Mac from sleep or opening another window never starts one. A run that ended while Walnut was down is closed quietly; a notice that would arrive more than 10 minutes late is not shown.
 
 ## What happens when
 
@@ -19,8 +19,8 @@ Nothing about you. Rhythm does not read keyboard or app time, attention, or agen
 |---|---|
 | Off (the start, and after every run) | The sidebar ring shows **Rhythm is off** with a pause glyph. No countdown, because nothing counts. After a run it names the last run ("Last run 10:05 to 10:35"). Its popover holds the Start form (below). |
 | You pick and press Start | The Start form, the same in the ring's popover and the Rhythm App (the phone has its own): **Focus** (15, 25, 45, 60, or type 5 to 180 minutes), **Break** (5, 10, 15, or type 1 to 60), **Music** (No music, a track from the folder, or a Spotify playlist), and one line saying plainly what Start plays ("Start plays Brown Noise on this device, until the block ends"). The lengths you start with become the next defaults (they are the `focus_minutes` and `break_minutes` settings); the music pick is kept per device. |
-| The block runs | Walnut quiet mode on until the block ends (and macOS Do Not Disturb, if you turned that on). The ring turns blue, counts the block down and says when it started and ends. **Stop block** ends it; Rhythm is off after it. |
-| The block ends | Quiet off, the minutes logged on the task, and the break starts by itself (the break picked at Start, or `long_break_minutes` every `long_break_every` blocks). One notice says so, with **End break** and **Another block**. The ring turns green and counts the break down. |
+| The block runs | Walnut quiet mode on until the block ends: no toast, sound, phone push, or count or dot on the sidebar (and macOS Do Not Disturb until the block ends, if you turned that on). The ring turns blue, counts the block down and says when it started and ends. **Rest now** ends it early and starts its break at once (the time it ran is logged; it does not count toward the long break), **+5 min** adds time (quiet and Do Not Disturb run to the new end), **Stop block** ends it; Rhythm is off after it. |
+| The block ends | Quiet off, the minutes logged on the task, and the break starts by itself (the break picked at Start, or `long_break_minutes` every `long_break_every` blocks). One notice says so, with **End break** and **Another block**. The ring turns green and counts the break down; its popover offers **Focus now** (the next block, at once), **+5 min break** and **End break**. |
 | The break ends | One notice, "Break over. Start the next block?", with **Start next block** and **Not now**. Either way, or with no answer at all, Rhythm is off until the next Start. |
 
 ## Focus music
@@ -59,7 +59,7 @@ All keys live under `plugins.walnut-rhythm` and show up in the Rhythm App's sett
 | `long_break_every` | 4 | Every Nth block is followed by the long break. |
 | `focus_quiets_walnut` | true | Walnut quiet mode for the length of each block. |
 | `mirror_macos_focus` | true | Walnut goes quiet while a macOS Focus is on. |
-| `macos_focus_shortcuts` | false | Each block turns macOS Do Not Disturb on and off through two Shortcuts. |
+| `macos_focus_shortcuts` | false | Mac Do Not Disturb during focus blocks: each block turns it on until it ends, through two Shortcuts you add once. A Focus you turned on yourself is left alone. The Start form and the running block's popover can change it for one block. |
 | `music_folder` | empty | Folder on this Mac whose m4a, mp3 and wav files are the focus music. `~/` works. Empty uses the plugin's own `focus-music` folder. |
 | `music_with_focus` | true | Until a device picks its Start music, Start plays the current track there (off: no music). Music started with a block stops when the block ends. |
 
@@ -72,7 +72,9 @@ Ops are named `walnut_rhythm_<name>`. The everyday ones can be called from any W
 | Op | Arguments | Does |
 |---|---|---|
 | `status` | `refresh?` | Read-only. Off or running, the run's start and end, the last run, quiet holds, macOS state, today's scorecard. |
-| `focus_start` | `taskId?`, `minutes?`, `breakMinutes?`, `spotify?`, `remember?` | Start a block, with its break length and, on the Mac, a Spotify playlist (link or URI) that plays until it ends. `remember` keeps the lengths as the defaults (the Start forms send it). Refused while one is running. The only thing that starts a run. |
+| `focus_start` | `taskId?`, `minutes?`, `breakMinutes?`, `spotify?`, `remember?`, `dnd?`, `mode?` | Start a block, with its break length and, on the Mac, a Spotify playlist (link or URI) that plays until it ends. `remember` keeps the lengths as the defaults (the Start forms send it). Refused while one is running; during a break it starts the next block now. With `focus_rest`, the only things that start a run. |
+| `focus_rest` | `minutes?` | Rest now: during a block it ends there and its break starts; while off, a rest of its own (no quiet, no Do Not Disturb). `focus_start` with `mode: "rest"` does the same. Refused during a break. |
+| `focus_extend` | `minutes?` | Add time (default 5) to the block or break running now. Refused while off. |
 | `focus_stop` | | Stop the block or break and end the cycle; Rhythm is off after it. |
 | `break_skip` | | End the running break early; Rhythm is off after it. |
 | `music_tracks` | | Read-only. The tracks in the focus music folder, in play order, with their paths on the Mac, and the Spotify playlists (with whether Spotify is installed). |
@@ -82,6 +84,8 @@ Ops are named `walnut_rhythm_<name>`. The everyday ones can be called from any W
 | `spotify_playlist_remove` | `uri` | Take one off Rhythm's list (it stays in Spotify). |
 | `music_folder_open` | | Show the focus music folder in Finder (Mac only, in-process only). |
 | `macos_shortcuts_install` | | Prepare and open the two shortcuts (Mac only, in-process only). |
+| `focus_dnd` | `on` | Turn Mac Do Not Disturb on (until the block ends) or off for the running block. |
+| `dnd_setting` | `on` | The `macos_focus_shortcuts` setting, from the App's switch. |
 | `macos_privacy_open` | | Open System Settings at Full Disk Access (Mac only, in-process only). |
 
 Only `status` is also registered as a tool, for routine watchers: a routine runs on a schedule, and a run never starts without you. The App updates live from the plugin event `plugin:walnut-rhythm:state`.
@@ -92,14 +96,14 @@ Only `status` is also registered as a tool, for routine watchers: a routine runs
 
 Rhythm owns one quiet hold. When a focus block and a macOS Focus overlap, the hold names both and lasts until both are over. Rhythm never removes a quiet hold you set yourself.
 
-**Driving Do Not Disturb.** A plugin cannot switch the Mac's Focus directly, but Shortcuts can. The Rhythm App's **Install shortcuts** button prepares two shortcuts, `Walnut Focus On` and `Walnut Focus Off`, each one "Set Focus: Do Not Disturb" action. It converts each to a binary plist, signs it with `shortcuts sign --mode anyone`, and opens it, so Shortcuts shows its Add Shortcut dialog: one click for each. With `macos_focus_shortcuts` on, each block runs `shortcuts run "Walnut Focus On"` at the start and `Walnut Focus Off` at the end, with a 10 second limit. A failed run is shown in the App and logged once; it never stops the block.
+**Driving Do Not Disturb.** A plugin cannot switch the Mac's Focus directly, but Shortcuts can. The Rhythm App's **Add shortcuts** button prepares two shortcuts: `Walnut Do Not Disturb Until` (Get Dates from Input, then "Set Focus: Do Not Disturb on until" that date) and `Walnut Focus Off` ("Set Focus: Do Not Disturb off"). It converts each to a binary plist, signs it with `shortcuts sign --mode anyone`, and opens it, so Shortcuts shows its Add Shortcut dialog: one click for each, once. At Start Rhythm first reads the Mac's Focus state: when any Focus is already on, it leaves it alone and says so. Otherwise it runs `shortcuts run "Walnut Do Not Disturb Until" --input-path <file>` with the block's end time, then reads macOS again and keeps the id of the Do Not Disturb that started. macOS holds the end time itself, so Do Not Disturb ends on time even if Walnut or the Mac restarted in between. A Stop runs `Walnut Focus Off`, but only while that same Do Not Disturb is still on: one you turned off and on again yourself has another id and stays. The record lives in `state.json`, so a restart of Walnut mid-block still knows which one is Rhythm's. Every failure (the shortcuts not added, macOS keeping the Focus state private, a run that fails, a run that starts nothing) is said in the block's popover and the App; it never stops the block. The older `Walnut Focus On` shortcut (on until turned off) is no longer run, and the App says you can delete it.
 
 ## What it deliberately does not do
 
 - It does not start, count or record anything you did not start. Nothing counts in the background, and there is no keyboard or app tracking.
 - It does not remind you on a cloud replica: the primary Walnut owns the timers, so you are never reminded twice.
-- It does not add shortcuts behind your back. Nothing is added to Shortcuts without your click, and nothing under Shortcuts runs unless `macos_focus_shortcuts` is on.
-- It does not turn Do Not Disturb back off when the plugin is disabled in the middle of a block.
+- It does not add shortcuts behind your back. Nothing is added to Shortcuts without your click, and no shortcut runs unless you turned Mac Do Not Disturb on (the setting, or the switch for one block).
+- It does not turn Do Not Disturb back off when the plugin is disabled in the middle of a block; macOS still ends it when the block would have.
 - It does not send letters or phone pushes of its own. Reminders are Walnut notices, which Walnut keeps quiet during quiet mode.
 - It ships, downloads and uploads no audio. It plays only the files you put in the folder, from where they are.
 - It keeps no history beyond one small file per day (`days/<date>.json` in the plugin's data directory).

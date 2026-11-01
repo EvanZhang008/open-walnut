@@ -234,7 +234,7 @@ final class FocusMusicPlayer {
 
     /// Start a block on the Mac with this phone's music pick: a folder track plays here,
     /// a Spotify playlist in the Mac's Spotify app. The lengths become the next defaults.
-    func startFocusBlock(minutes: Int, breakMinutes: Int, remember: Bool = true) async -> String {
+    func startFocusBlock(minutes: Int, breakMinutes: Int, remember: Bool = true, taskId: String? = nil) async -> String {
         let choice = startChoice
         var withMusic = false
         var spotify: String?
@@ -248,7 +248,7 @@ final class FocusMusicPlayer {
         let played = generation
         defer { focusStartPending = false }
         do {
-            let result = try await api.rhythmFocusStart(minutes: minutes, breakMinutes: breakMinutes, spotify: spotify, remember: remember)
+            let result = try await api.rhythmFocusStart(minutes: minutes, breakMinutes: breakMinutes, spotify: spotify, remember: remember, taskId: taskId)
             focusStartPending = false
             if let state = result.state { applyFocus(state) }
             return result.message
@@ -266,6 +266,25 @@ final class FocusMusicPlayer {
     /// End the break: off, keeping the cycle count so the long break still comes.
     func endBreak() async -> String {
         await focusAction { try await $0.rhythmBreakSkip() }
+    }
+
+    /// Rest now (a block ends here and its break starts), or a rest from off.
+    func rest(minutes: Int? = nil) async -> String {
+        await focusAction { try await $0.rhythmFocusRest(minutes: minutes) }
+    }
+
+    /// Extend: more time on the block or break running now.
+    func extend(minutes: Int = 5) async -> String {
+        await focusAction { try await $0.rhythmFocusExtend(minutes: minutes) }
+    }
+
+    /// Focus now, during a break: the next block as this run's was set, with this phone's music pick.
+    func focusNow() async -> String {
+        let focus = self.focus?.focus
+        let config = self.focus?.config
+        let minutes = focus?.minutes.flatMap { $0 > 0 ? $0 : nil } ?? config?.focusMinutes ?? 25
+        let pause = focus?.breakMinutes.flatMap { $0 > 0 ? $0 : nil } ?? config?.breakMinutes ?? 5
+        return await startFocusBlock(minutes: minutes, breakMinutes: pause, remember: false, taskId: focus?.taskId)
     }
 
     private func focusAction(_ call: (WalnutAPI) async throws -> RhythmActionResult) async -> String {

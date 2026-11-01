@@ -2,9 +2,9 @@
  * Rhythm's ring in the console rail, as plain data. PURE: the public state in, the
  * status item out (or null to hide it).
  *
- *   off          grey, pause, no timer   Start focus block
- *   focus block  blue, drains            Stop block
- *   break        green, drains           End break
+ *   off          grey, pause, no timer   Start focus block, Rest
+ *   focus block  blue, drains            Rest now, +5 min, Stop block
+ *   break        green, drains           Focus now, +5 min, End break
  *   replica: hidden
  *
  * Off is the state until the person presses Start, and after every run: the ring then
@@ -14,6 +14,8 @@
  */
 import type { StatusItemState } from '@open-walnut/plugin-api/server'
 import { clockTime } from './clock'
+import { EXTEND_DEFAULT_MINUTES } from './focus'
+import { nextBlockArgs } from './notices'
 import type { RhythmPublicState } from './public-state'
 
 export const STATUS_ITEM_ID = 'rhythm'
@@ -32,18 +34,28 @@ export function rhythmStatusItem(state: RhythmPublicState): StatusItemState | nu
       detail: `${what}Started ${started ?? clockTime(focus.startedAt)}, ends ${clockTime(focus.endsAt)}.${quiet}`,
       tone: 'accent',
       timer: { startedAt: focus.startedAt, endsAt: focus.endsAt, mode: 'drain' },
-      actions: [{ label: 'Stop block', op: 'focus_stop' }],
+      actions: [
+        { label: 'Rest now', op: 'focus_rest' },
+        { label: `+${EXTEND_DEFAULT_MINUTES} min`, op: 'focus_extend' },
+        { label: 'Stop block', op: 'focus_stop' },
+      ],
       app: APP,
     }
   }
   if (focus.phase === 'break' && focus.startedAt !== null && focus.endsAt !== null && focus.endsAt > focus.startedAt) {
-    const block = started ? `Block ${started} to ${clockTime(focus.startedAt)}. ` : ''
+    // A rest started from off had no block before it.
+    const afterBlock = focus.runStartedAt !== null && focus.runStartedAt < focus.startedAt
+    const block = started && afterBlock ? `Block ${started} to ${clockTime(focus.startedAt)}. ` : ''
     return {
       title: `${focus.breakKind === 'long' ? 'Long break' : 'Break'} · {remaining} left`,
       detail: `${block}Break ends ${clockTime(focus.endsAt)}, then Rhythm asks before the next block.`,
       tone: 'success',
       timer: { startedAt: focus.startedAt, endsAt: focus.endsAt, mode: 'drain' },
-      actions: [{ label: 'End break', op: 'break_skip' }],
+      actions: [
+        { label: 'Focus now', op: 'focus_start', args: nextBlockArgs(focus), primary: true },
+        { label: `+${EXTEND_DEFAULT_MINUTES} min break`, op: 'focus_extend' },
+        { label: 'End break', op: 'break_skip' },
+      ],
       app: APP,
     }
   }
@@ -57,7 +69,10 @@ export function rhythmStatusItem(state: RhythmPublicState): StatusItemState | nu
     tone: 'neutral',
     glyph: 'pause',
     // A plain block of the configured length; the break-over notice is the one that continues a task.
-    actions: [{ label: `Start focus block (${config.focusMinutes} min)`, op: 'focus_start', primary: true }],
+    actions: [
+      { label: `Start focus block (${config.focusMinutes} min)`, op: 'focus_start', primary: true },
+      { label: `Rest (${config.breakMinutes} min)`, op: 'focus_rest' },
+    ],
     app: APP,
   }
 }

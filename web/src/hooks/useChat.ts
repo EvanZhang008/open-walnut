@@ -15,7 +15,7 @@ import {
 } from '@/api/chat';
 import type { StreamingBlock } from './useSessionStream';
 import { mergeAdjacentErrors, type WithErrorCount } from './mergeAdjacentErrors';
-import { useNotifications } from '@/contexts/notifications';
+import { currentQuiet, quietAllowsToast, useNotifications } from '@/contexts/notifications';
 
 const PAGE_SIZE = 100;
 
@@ -640,7 +640,8 @@ export function useChat(agentId: string = 'general', conversationId: string | nu
     });
 
     // Desktop notification when agent asks a question
-    if (toolName === 'user_ask' && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+    // Quiet holds it back like any ask (quiet-model.ts); the session shows the question as usual.
+    if (toolName === 'user_ask' && typeof Notification !== 'undefined' && Notification.permission === 'granted' && quietAllowsToast(currentQuiet(), 'permission')) {
       const questions = input?.questions as Array<{ question?: string }> | undefined
       const firstQ = questions?.[0]?.question ?? 'The agent has a question for you'
       new Notification('Agent has a question', {

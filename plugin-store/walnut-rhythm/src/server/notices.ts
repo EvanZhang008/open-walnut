@@ -20,7 +20,7 @@ export const KEY_FOCUS_DONE = 'focus-done'
 export const KEY_BREAK_OVER = 'break-over'
 
 /** The next block as this one was started: same task, same length, same break. */
-function nextBlockArgs(focus: { taskId?: string; minutes: number; breakMinutes: number; spotifyUri?: string }): Record<string, unknown> {
+export function nextBlockArgs(focus: { taskId?: string; minutes: number; breakMinutes: number; spotifyUri?: string }): Record<string, unknown> {
   return {
     ...(focus.spotifyUri ? { spotify: focus.spotifyUri } : {}),
     ...(focus.taskId ? { taskId: focus.taskId } : {}),

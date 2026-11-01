@@ -9,8 +9,9 @@
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import { BREAK_RANGE, clampMinutes, FOCUS_RANGE } from './config'
+import { clockTime, MINUTE_MS as MIN } from './clock'
 import { runProcess } from './exec'
-import { startFocus, stopFocus, skipBreak, advanceFocus } from './focus'
+import { startFocus, stopFocus, skipBreak, advanceFocus, startRest, extendPhase, EXTEND_DEFAULT_MINUTES, EXTEND_RANGE } from './focus'
 import { listMusic, resolveMusicFolder, type MusicFs, type MusicListing } from './music'
 import { spotifyUriOf, spotifyWebUrl, type SpotifyView } from './spotify'
 import { KEY_BREAK_OVER, KEY_FOCUS_DONE } from './notices'
@@ -43,6 +44,8 @@ async function settle(runtime: RhythmRuntime): Promise<void> {
 
 /** The ONLY way a run starts: an op the person (or an agent they asked) called. */
 export async function focusStart(runtime: RhythmRuntime, args: Record<string, unknown>): Promise<ActionResult> {
+  if (args.mode !== undefined && args.mode !== 'focus' && args.mode !== 'rest') throw new Error('mode is "focus" or "rest".')
+  if (args.mode === 'rest') return focusRest(runtime, args)
   const spotifyUri = args.spotify === undefined || args.spotify === null || args.spotify === '' ? null : spotifyUriOf(args.spotify)
   if (args.spotify !== undefined && args.spotify !== null && args.spotify !== '' && !spotifyUri) {
     throw new Error('That is not a Spotify link. Paste a playlist link from Spotify (Share, Copy link).')
@@ -199,7 +202,10 @@ function startBlock(runtime: RhythmRuntime, args: Record<string, unknown>, spoti
     if (args.remember === true) await rememberLengths(runtime, minutes, breakMinutes || runtime.config.breakMinutes)
     await runtime.dismiss(KEY_FOCUS_DONE)
     await runtime.dismiss(KEY_BREAK_OVER)
-    if (runtime.config.macosFocusShortcuts) runtime.macos.setDoNotDisturb(true, runtime.now)
+    // The person's pick for this block, else the setting. Never awaited: macOS takes seconds,
+    // and the popover shows how it went from the state event.
+    const dnd = typeof args.dnd === 'boolean' ? args.dnd : runtime.config.macosFocusShortcuts
+    if (dnd && runtime.dnd.available) void runtime.dnd.turnOn({ startedAt: runtime.focus.startedAt, endsAt: runtime.focus.endsAt })
     const d = runtime.durations()
     const long = d.longBreakEvery > 0 && (runtime.focus.completedInCycle + 1) % d.longBreakEvery === 0
     const then = long ? `then the ${d.longBreakMinutes} min long break` : `then a ${breakMinutes || d.breakMinutes} min break`
@@ -221,6 +227,52 @@ async function rememberLengths(runtime: RhythmRuntime, focusMinutes: number, bre
   }
 }
 
+/**
+ * Rest now: during a block, the block ends here and its break starts at once; while off,
+ * a rest of its own. Quiet and Do Not Disturb follow the block, so both go off with it.
+ */
+export function focusRest(runtime: RhythmRuntime, args: Record<string, unknown>): Promise<ActionResult> {
+  return runtime.serial(async () => {
+    await settle(runtime)
+    const before = runtime.focus
+    const minutes = clampMinutes(args.minutes, before.breakMinutes || runtime.config.breakMinutes, BREAK_RANGE.min, BREAK_RANGE.max)
+    const now = runtime.now()
+    runtime.focus = startRest(before, { now, minutes })
+    runtime.markDirty()
+    if (before.phase === 'focus') {
+      const ran = Math.floor((now - before.startedAt) / MIN)
+      if (ran >= 1) {
+        runtime.recordDay({ type: 'block', entry: { at: now, minutes: ran, ...(before.taskId ? { taskId: before.taskId } : {}), ...(before.title ? { title: before.title } : {}) } })
+        if (before.taskId) {
+          await runtime.walnut.tasks.appendLog(before.taskId, `Focus block: ${ran} min (rested early)`).catch((error: unknown) => {
+            runtime.walnut.log.warn('Could not log the focus block on its task', { taskId: before.taskId, error: String(error) })
+          })
+        }
+      }
+      runtime.recordDay({ type: 'focus-break' })
+      if (before.spotifyUri) void runtime.spotify.pause()
+    }
+    await runtime.dismiss(KEY_FOCUS_DONE)
+    await runtime.dismiss(KEY_BREAK_OVER)
+    const ends = clockTime(runtime.focus.endsAt)
+    return finish(runtime, before.phase === 'focus'
+      ? `Block ended early. Rest for ${minutes} min, until ${ends}.`
+      : `Rest started: ${minutes} min, until ${ends}. Then Rhythm asks about the next block.`)
+  })
+}
+
+/** More time on the block or the break running now. Do Not Disturb follows a longer block. */
+export function focusExtend(runtime: RhythmRuntime, args: Record<string, unknown>): Promise<ActionResult> {
+  return runtime.serial(async () => {
+    await settle(runtime)
+    const minutes = clampMinutes(args.minutes, EXTEND_DEFAULT_MINUTES, EXTEND_RANGE.min, EXTEND_RANGE.max)
+    runtime.focus = extendPhase(runtime.focus, { now: runtime.now(), minutes })
+    runtime.markDirty()
+    const what = runtime.focus.phase === 'focus' ? 'The block' : 'The break'
+    return finish(runtime, `${what} runs ${minutes} min more, until ${clockTime(runtime.focus.endsAt)}.`)
+  })
+}
+
 export function focusStop(runtime: RhythmRuntime): Promise<ActionResult> {
   return runtime.serial(async () => {
     await settle(runtime)
@@ -230,10 +282,7 @@ export function focusStop(runtime: RhythmRuntime): Promise<ActionResult> {
     runtime.markDirty()
     if (stopped.stoppedMinutes !== null) runtime.recordDay({ type: 'stopped' })
     if (was === 'focus' && runtime.focus.spotifyUri) void runtime.spotify.pause()
-    if (was === 'focus' && runtime.config.macosFocusShortcuts) {
-      runtime.macos.setDoNotDisturb(false, runtime.now)
-      runtime.macos.assumeDoNotDisturbOff(runtime.now())
-    }
+    // Rhythm's own Do Not Disturb goes off in the step below (the block is no longer running).
     await runtime.dismiss(KEY_FOCUS_DONE)
     await runtime.dismiss(KEY_BREAK_OVER)
     const message = was === 'idle'
@@ -241,6 +290,52 @@ export function focusStop(runtime: RhythmRuntime): Promise<ActionResult> {
       : was === 'focus' ? `Focus block stopped after ${stopped.stoppedMinutes ?? 0} min. Rhythm is off.` : 'Stopped. Rhythm is off.'
     return finish(runtime, message)
   })
+}
+
+/** Turn macOS Do Not Disturb on or off for the block running now (the popover's switch). */
+export async function focusDnd(runtime: RhythmRuntime, args: Record<string, unknown>): Promise<ActionResult> {
+  if (typeof args.on !== 'boolean') throw new Error('Say on: true or on: false.')
+  if (!runtime.dnd.available) throw new Error('Do Not Disturb is turned on by the Mac that hosts your primary Walnut.')
+  const block = await runtime.serial(async () => {
+    await settle(runtime)
+    // Never a way to start a block: only Start does that. Off needs no block: it only ends Rhythm's own.
+    const running = runtime.runningBlock()
+    if (!running && args.on) throw new Error('No focus block is running. Do Not Disturb follows a block; start one first.')
+    return running
+  })
+  if (args.on && block) await runtime.dnd.turnOn(block)
+  else await runtime.dnd.turnOff()
+  const state = await runtime.serial(async () => { await runtime.step(); return buildPublicState(runtime, runtime.now()) })
+  return { message: dndMessage(state.dnd.record), state }
+}
+
+/** The "Mac Do Not Disturb during focus blocks" setting, from the App's switch. */
+export async function dndSetting(runtime: RhythmRuntime, args: Record<string, unknown>): Promise<ActionResult> {
+  if (typeof args.on !== 'boolean') throw new Error('Say on: true or on: false.')
+  const on = args.on
+  await runtime.walnut.config.patch({ macos_focus_shortcuts: on })
+  return runtime.serial(async () => {
+    // Applied now, not when the change event comes back, so the answer already shows it.
+    runtime.applyConfig({ ...runtime.rawConfig(), macos_focus_shortcuts: on })
+    if (on) await runtime.macos.checkShortcuts(runtime.now(), true)
+    const missing = runtime.macos.shortcuts.missing.length > 0
+    return finish(runtime, on
+      ? missing ? 'On. One time: click Add shortcuts (if the Shortcuts app asks, click Add Shortcut for each).' : 'On. Each focus block turns Mac Do Not Disturb on until it ends.'
+      : 'Off. Focus blocks leave Mac Do Not Disturb alone.')
+  })
+}
+
+/** One sentence for where Do Not Disturb stands. PURE. */
+export function dndMessage(record: RhythmPublicState['dnd']['record']): string {
+  if (!record) return 'Do Not Disturb is off.'
+  switch (record.status) {
+    case 'on': return `Do Not Disturb is on until ${new Date(record.until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}, then macOS turns it off.`
+    case 'left-alone': return `${record.focusName ?? 'A Focus'} is already on, so Rhythm left it as it is.`
+    case 'failed': return record.stillOn ? record.error ?? 'Do Not Disturb may still be on.' : `Do Not Disturb did not turn on. ${record.error ?? ''}`.trim()
+    case 'turning-on': return 'Turning Do Not Disturb on…'
+    case 'turning-off': return 'Turning Do Not Disturb off…'
+    default: return 'Do Not Disturb is off.'
+  }
 }
 
 export function breakSkip(runtime: RhythmRuntime): Promise<ActionResult> {
@@ -266,7 +361,7 @@ export function status(runtime: RhythmRuntime, args: Record<string, unknown>): P
       // Check again after granting Full Disk Access must not wait out the 10 minute backoff.
       await runtime.macos.pollMirror(now, runtime.config.mirrorMacosFocus, true)
       await runtime.syncHold()
-    } else if (runtime.config.macosFocusShortcuts) await runtime.macos.checkShortcuts(now)
+    } else if (runtime.config.macosFocusShortcuts || runtime.focus.phase === 'focus') await runtime.macos.checkShortcuts(now)
     return buildPublicState(runtime, runtime.now())
   })
 }
@@ -284,7 +379,7 @@ export async function shortcutsInstall(runtime: RhythmRuntime): Promise<{ messag
   const message = result.alreadyInstalled
     ? 'Both Rhythm shortcuts are already in Shortcuts.'
     : failed.length === 0
-      ? `Shortcuts opened ${opened} Add Shortcut ${opened === 1 ? 'dialog' : 'dialogs'}. Click Add Shortcut in each.`
+      ? `Sent ${opened} ${opened === 1 ? 'shortcut' : 'shortcuts'} to the Shortcuts app. If it asks, click Add Shortcut for each; Rhythm checks by itself.`
       : `${failed.map((step) => `${step.name}: ${step.step} failed (${step.error ?? 'unknown error'})`).join('; ')}`
   if (!result.alreadyInstalled && opened === 0) throw new Error(message)
   return { message, steps: result.steps, state: await status(runtime, {}) }

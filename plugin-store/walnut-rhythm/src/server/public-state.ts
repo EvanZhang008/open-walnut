@@ -10,6 +10,7 @@ import type { RhythmConfig } from './config'
 import type { DayLog } from './day-log'
 import type { BreakKind, FocusPhase, HoldSpec } from './focus'
 import type { MirrorView, ShortcutsView } from './macos-bridge'
+import type { DndRecord } from './macos-dnd'
 import type { RhythmRuntime } from './runtime'
 
 export interface RhythmPublicState {
@@ -23,6 +24,8 @@ export interface RhythmPublicState {
     taskId?: string
     title?: string
     minutes: number
+    /** The break this run's block picked (0 = the setting), for Rest now and Focus now. */
+    breakMinutes: number
     /** The current phase's window (the block, or its break). */
     startedAt: number | null
     endsAt: number | null
@@ -47,6 +50,11 @@ export interface RhythmPublicState {
     mirror: MirrorView & { enabled: boolean }
     shortcuts: ShortcutsView & { enabled: boolean }
   }
+  /** macOS Do Not Disturb for the block: the record of the running block (or the last one), or null. */
+  dnd: {
+    available: boolean
+    record: DndRecord | null
+  }
   today: DayLog
 }
 
@@ -63,6 +71,7 @@ export function buildPublicState(runtime: RhythmRuntime, now: number): RhythmPub
       ...(focus.taskId ? { taskId: focus.taskId } : {}),
       ...(focus.title ? { title: focus.title } : {}),
       minutes: focus.minutes,
+      breakMinutes: focus.breakMinutes,
       startedAt: running ? focus.startedAt : null,
       endsAt: running ? focus.endsAt : null,
       remainingMs: running ? Math.max(0, focus.endsAt - now) : 0,
@@ -85,6 +94,7 @@ export function buildPublicState(runtime: RhythmRuntime, now: number): RhythmPub
       mirror: { ...runtime.macos.mirror, enabled: config.mirrorMacosFocus },
       shortcuts: { ...runtime.macos.shortcuts, enabled: config.macosFocusShortcuts },
     },
+    dnd: { available: runtime.dnd.available, record: runtime.dnd.record },
     today: runtime.day,
   }
 }

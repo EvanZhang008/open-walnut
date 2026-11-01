@@ -242,7 +242,10 @@ export const RHYTHM_CSS = `
 .rhythm-now-playing .rhythm-start-label { width: auto; }
 .rhythm-now-playing .rhythm-picker { max-height: 196px; }
 .rhythm-now-compact .rhythm-picker { max-height: 150px; }
-.rhythm-panel-actions { display: flex; justify-content: flex-start; margin-top: 10px; }
+.rhythm-dnd-toggle { display: flex; align-items: center; gap: 8px; font-size: 12.5px; line-height: 17px; color: var(--fg); cursor: pointer; }
+.rhythm-dnd-toggle input { margin: 0; }
+.rhythm-dnd-row { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.rhythm-panel-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-start; margin-top: 10px; }
 .rhythm-subhead { margin: 0; font-size: 12.5px; line-height: 17px; font-weight: 600; color: var(--fg-secondary); }
 .rhythm-spotify { display: grid; gap: 6px; }
 .rhythm-option-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: default; }

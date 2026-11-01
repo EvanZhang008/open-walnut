@@ -1,17 +1,21 @@
 /**
- * The macOS block: whether Walnut follows the Mac's Focus, and whether the two
- * shortcuts that drive Do Not Disturb are installed, with the one-click install.
+ * The macOS block: whether Walnut follows the Mac's Focus, and the "Mac Do Not Disturb
+ * during focus blocks" setting with its one-time setup (the two shortcuts, one click
+ * each, and Full Disk Access when Rhythm cannot see the Focus state).
  *
  * Install opens the Shortcuts app's Add dialogs; the server then re-lists Shortcuts
  * every few seconds (`watching`), so the row flips to "installed" on its own once the
  * person has clicked Add. Check again stays as the manual path.
  */
+import { dndSetupText } from './dnd-model'
 import type { RhythmPublicState } from './store'
 
 export interface MacCardProps {
   state: RhythmPublicState
   onInstall(): void
   onOpenPrivacy(): void
+  /** Turn the "Mac Do Not Disturb during focus blocks" setting on or off. */
+  onDndSetting(on: boolean): void
   refresh(): void
   busy: boolean
 }
@@ -41,24 +45,7 @@ function grantName(target: string | undefined): string {
   return /\/Walnut\.app\/?$/.test(target) ? `Walnut (${target})` : target
 }
 
-function shortcutsText(shortcuts: RhythmPublicState['macos']['shortcuts']): { text: string; tone: Tone } {
-  if (!shortcuts.checked) return { text: 'Not checked yet.', tone: undefined }
-  if (shortcuts.installed === null) return { text: shortcuts.error ?? 'Could not list your Shortcuts.', tone: 'error' }
-  if (shortcuts.missing.length === 0) {
-    return {
-      text: shortcuts.enabled
-        ? 'Both shortcuts are installed. Each focus block turns Do Not Disturb on and off.'
-        : 'Both shortcuts are installed. Turn on "Drive macOS Do Not Disturb" below to use them.',
-      tone: undefined,
-    }
-  }
-  if (shortcuts.watching) {
-    return { text: `Waiting for you to click Add Shortcut in the Shortcuts app (${shortcuts.missing.length} to go).`, tone: undefined }
-  }
-  return { text: `Missing: ${shortcuts.missing.join(', ')}. Install opens each one in Shortcuts, which asks you to add it.`, tone: 'warn' }
-}
-
-export function MacCard({ state, onInstall, onOpenPrivacy, refresh, busy }: MacCardProps) {
+export function MacCard({ state, onInstall, onOpenPrivacy, onDndSetting, refresh, busy }: MacCardProps) {
   const { macos } = state
   if (!macos.available) {
     return (
@@ -77,13 +64,40 @@ export function MacCard({ state, onInstall, onOpenPrivacy, refresh, busy }: MacC
   }
   const { mirror, shortcuts } = macos
   const mirrorLine = mirrorText(mirror)
-  const shortcutsLine = shortcutsText(shortcuts)
-  const lastRun = shortcuts.lastRun
+  const setup = dndSetupText(state)
+  const dndOn = state.config.macosFocusShortcuts
   const installFailed = shortcuts.lastInstall?.steps.filter((step) => !step.ok) ?? []
   return (
     <section className="rhythm-block" data-testid="rhythm-mac-card">
       <div className="rhythm-block-head"><h2>macOS</h2></div>
       <div className="rhythm-group">
+        <div className="rhythm-row">
+          <div className="rhythm-row-copy">
+            <span>Mac Do Not Disturb during focus blocks</span>
+            <span className="rhythm-row-help" data-tone={setup.tone} data-testid="rhythm-mac-shortcuts" data-watching={shortcuts.watching ? 'true' : undefined}>
+              {setup.text}
+            </span>
+            {shortcuts.legacy && (
+              <span className="rhythm-row-help" data-testid="rhythm-mac-legacy">The older "Walnut Focus On" shortcut is no longer used; you can delete it in Shortcuts.</span>
+            )}
+          </div>
+          <div className="rhythm-row-actions">
+            <label className="rhythm-dnd-toggle">
+              <input type="checkbox" checked={dndOn} disabled={busy} data-testid="rhythm-dnd-setting" onChange={(event) => onDndSetting(event.currentTarget.checked)} />
+              <span>{dndOn ? 'On' : 'Off'}</span>
+            </label>
+            {setup.step === 'add' && (
+              // Stays clickable while watching: a dialog closed by mistake opens again at once.
+              <button type="button" className="rhythm-button rhythm-primary" disabled={busy} data-testid="rhythm-shortcuts-install" onClick={onInstall}>
+                {shortcuts.watching ? 'Open again' : 'Add shortcuts'}
+              </button>
+            )}
+            {setup.step === 'access' && (
+              <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-dnd-privacy-open" onClick={onOpenPrivacy}>Open Privacy settings</button>
+            )}
+            <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-shortcuts-check" onClick={refresh}>Check again</button>
+          </div>
+        </div>
         <div className="rhythm-row">
           <div className="rhythm-row-copy">
             <span>Follow macOS Focus</span>
@@ -96,31 +110,6 @@ export function MacCard({ state, onInstall, onOpenPrivacy, refresh, busy }: MacC
             </div>
           )}
         </div>
-        <div className="rhythm-row">
-          <div className="rhythm-row-copy">
-            <span>Do Not Disturb shortcuts</span>
-            <span className="rhythm-row-help" data-tone={shortcutsLine.tone} data-testid="rhythm-mac-shortcuts" data-watching={shortcuts.watching ? 'true' : undefined}>
-              {shortcutsLine.text}
-            </span>
-          </div>
-          <div className="rhythm-row-actions">
-            {shortcuts.missing.length > 0 && (
-              // Stays clickable while watching: a dialog closed by mistake opens again at once.
-              <button type="button" className="rhythm-button rhythm-primary" disabled={busy} data-testid="rhythm-shortcuts-install" onClick={onInstall}>
-                {shortcuts.watching ? 'Open again' : 'Install shortcuts'}
-              </button>
-            )}
-            <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-shortcuts-check" onClick={refresh}>Check again</button>
-          </div>
-        </div>
-        {lastRun && !lastRun.ok && (
-          <div className="rhythm-row">
-            <div className="rhythm-row-copy">
-              <span>Last run</span>
-              <span className="rhythm-row-help" data-tone="error">{lastRun.name} failed: {lastRun.error ?? 'unknown error'}</span>
-            </div>
-          </div>
-        )}
         {installFailed.length > 0 && (
           <div className="rhythm-row">
             <div className="rhythm-row-copy">

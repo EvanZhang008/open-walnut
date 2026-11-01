@@ -60,17 +60,22 @@ describe('bell dot reason and presentation (C60 full table)', () => {
       expect(reason).toBe(host && local ? 'both' : host ? 'hosts' : local ? 'local' : null)
       const p = bellPresentation({ reason, attentionCount: count, hasIssues, quiet, quietLabel: 'Quiet until 9:00', collapsed })
       const cell = JSON.stringify({ host, local, count, hasIssues, quiet, collapsed })
+      // Quiet (Do Not Disturb): no dot and no count, in the marks or the name, whatever waits.
+      if (quiet) {
+        expect(p, cell).toEqual({ ariaLabel: 'Notifications. Quiet until 9:00', title: 'Quiet until 9:00', dot: false, cornerDot: false, dotKind: null })
+        continue
+      }
       expect(p.dot, cell).toBe(count === 0 && (reason !== null || hasIssues))
       expect(p.cornerDot, cell).toBe(count > 0 && reason !== null)
       if (reason === null) {
         expect(p.ariaLabel, cell).toBe('Notifications')
-        expect(p.title, cell).toBe(quiet ? 'Quiet until 9:00' : collapsed ? 'Notifications' : undefined)
+        expect(p.title, cell).toBe(collapsed ? 'Notifications' : undefined)
         continue
       }
       const name = count > 0 ? `Notifications, ${count} waiting; ${SENTENCE[reason]}` : `Notifications: ${SENTENCE[reason]}`
       expect(p.ariaLabel, cell).toBe(name)
-      // Non-quiet: the tooltip is the name, collapsed or not. Quiet: the quiet label first.
-      expect(p.title, cell).toBe(quiet ? `Quiet until 9:00; ${name}` : name)
+      // The tooltip is the name, collapsed or not.
+      expect(p.title, cell).toBe(name)
     }
   })
 

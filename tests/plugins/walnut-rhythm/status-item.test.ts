@@ -42,7 +42,7 @@ describe('the ring', () => {
       detail: 'Nothing runs or counts until you start a block.',
       tone: 'neutral',
       glyph: 'pause',
-      actions: [{ label: 'Start focus block (25 min)', op: 'focus_start', primary: true }],
+      actions: [{ label: 'Start focus block (25 min)', op: 'focus_start', primary: true }, { label: 'Rest (5 min)', op: 'focus_rest' }],
       app: 'main',
     })
   })
@@ -58,7 +58,11 @@ describe('the ring', () => {
       tone: 'accent',
       timer: { startedAt: NINE + 5 * MIN, endsAt: NINE + 30 * MIN, mode: 'drain' },
     })
-    expect(focus.actions).toEqual([{ label: 'Stop block', op: 'focus_stop' }])
+    expect(focus.actions).toEqual([
+      { label: 'Rest now', op: 'focus_rest' },
+      { label: '+5 min', op: 'focus_extend' },
+      { label: 'Stop block', op: 'focus_stop' },
+    ])
 
     await h.tick(runtime, 25 * MIN + 1)
     const rest = ring(runtime)!
@@ -68,14 +72,19 @@ describe('the ring', () => {
       tone: 'success',
       timer: { startedAt: NINE + 30 * MIN, endsAt: NINE + 35 * MIN, mode: 'drain' },
     })
-    expect(rest.actions).toEqual([{ label: 'End break', op: 'break_skip' }])
+    // Focus now starts the next block as this one was set.
+    expect(rest.actions).toEqual([
+      { label: 'Focus now', op: 'focus_start', args: { taskId: 'task-7', minutes: 25 }, primary: true },
+      { label: '+5 min break', op: 'focus_extend' },
+      { label: 'End break', op: 'break_skip' },
+    ])
 
     await h.tick(runtime, 5 * MIN)
     expect(ring(runtime)).toMatchObject({
       title: 'Rhythm is off',
       detail: 'Last run 09:05 to 09:35. Nothing runs until you start a block.',
       glyph: 'pause',
-      actions: [{ label: 'Start focus block (25 min)', op: 'focus_start', primary: true }],
+      actions: [{ label: 'Start focus block (25 min)', op: 'focus_start', primary: true }, { label: 'Rest (5 min)', op: 'focus_rest' }],
     })
     expect(ring(runtime)!.timer).toBeUndefined()
   })

@@ -422,7 +422,7 @@ describe('quiet mode and the macOS Focus mirror', () => {
     expect(runtime.macos.mirror.phase).toBe('off')
   })
 
-  it('a macOS Focus starts nothing, and the drive shortcuts follow the block', async () => {
+  it('a macOS Focus starts nothing, and a block leaves the person\'s own Focus alone', async () => {
     const { h, runtime } = await boot({
       darwin: true,
       config: { macos_focus_shortcuts: true },
@@ -433,35 +433,38 @@ describe('quiet mode and the macOS Focus mirror', () => {
     expect(h.notices()).toHaveLength(0)
 
     await actions.focusStart(runtime, {})
+    await runtime.dnd.settled()
+    expect(runtime.dnd.record).toMatchObject({ status: 'left-alone', focusName: 'Work' })
     await h.tick(runtime, 25 * MIN + 1)
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    const shortcutRuns = h.runs.filter((run) => run.command === 'shortcuts' && run.args[0] === 'run').map((run) => run.args[1])
-    expect(shortcutRuns).toEqual(['Walnut Focus On', 'Walnut Focus Off'])
+    await runtime.dnd.settled()
+    const shortcutRuns = h.runs.filter((run) => run.command === 'shortcuts' && run.args[0] === 'run')
+    expect(shortcutRuns).toEqual([])
   })
 
   it('the Do Not Disturb that a block turned on never silences the block\'s own notice', async () => {
-    // The mirror keeps reading "on": the real file lags the shortcut by seconds and the
-    // poll by up to 25s. That hold used to outlive the block and swallow its toast.
-    let macosSaysOn = false
-    const { h, runtime } = await boot({
-      darwin: true,
-      config: { macos_focus_shortcuts: true },
-      macosFocus: () => (macosSaysOn ? { ok: true, focus: { active: true, name: 'Do Not Disturb' } } : { ok: true, focus: { active: false } }),
-    })
+    // The mirror reads macOS's own state: Rhythm's Do Not Disturb holds quiet while the
+    // block runs. That hold used to outlive the block and swallow its toast.
+    const { h, runtime } = await boot({ darwin: true, config: { macos_focus_shortcuts: true } })
     await actions.focusStart(runtime, {})
-    macosSaysOn = true
+    await runtime.dnd.settled()
+    expect(runtime.dnd.record).toMatchObject({ status: 'on' })
     await h.tick(runtime, 30_000)
     expect(h.ourHold()).toMatchObject({ reason: 'Focus block, macOS Focus: Do Not Disturb' })
 
+    // macOS really stays on past the block (its turn-off shortcut fails, say).
+    h.mac.live = h.mac.live.map(({ endsAt: _gone, ...one }) => one)
+    h.mac.failOff = true
     await h.tick(runtime, 25 * MIN)
+    await runtime.dnd.settled()
     const prompt = h.calls.findIndex((call) => call.type === 'notify' && call.notice.dedupKey === 'focus-done')
     const released = h.calls.findIndex((call) => call.type === 'quiet.clear')
     expect(prompt).toBeGreaterThan(-1)
     expect(released).toBeGreaterThan(-1)
     expect(released).toBeLessThan(prompt)
     expect(h.ourHold()).toBeNull()
+    expect(runtime.dnd.record).toMatchObject({ status: 'failed', error: expect.stringMatching(/may still be on/) })
 
-    // macOS really did stay on (the shortcut failed, say): after the grace the mirror wins again.
+    // After the grace the mirror wins again: macOS is still on.
     await h.tick(runtime, 2 * MIN)
     expect(h.ourHold()).toMatchObject({ reason: 'macOS Focus: Do Not Disturb' })
   })

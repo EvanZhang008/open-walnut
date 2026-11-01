@@ -174,7 +174,7 @@ export function RhythmApp({ walnut, store, music, navigate }: RhythmAppProps) {
   useEffect(() => {
     if (!awaitingInstall.current || !listed || missingCount !== 0) return
     awaitingInstall.current = false
-    setMessage({ ok: true, text: 'Both shortcuts are in Shortcuts now. Focus blocks can drive Do Not Disturb.' })
+    setMessage({ ok: true, text: 'Both shortcuts are in Shortcuts now. Focus blocks can turn Mac Do Not Disturb on.' })
   }, [listed, missingCount])
 
   if (!state) {
@@ -202,11 +202,11 @@ export function RhythmApp({ walnut, store, music, navigate }: RhythmAppProps) {
       </header>
       <NowBlock state={state} />
       <div className="rhythm-two">
-        <FocusCard walnut={walnut} store={store} state={state} run={run} busy={busy} music={music} />
+        <FocusCard walnut={walnut} store={store} state={state} music={music} />
         <ScoreCard state={state} />
       </div>
       <MusicCard player={music} store={store} state={state} busy={busy} onOpenFolder={() => { void run('music_folder_open') }} />
-      <MacCard state={state} onInstall={install} onOpenPrivacy={() => { void run('macos_privacy_open') }} refresh={refresh} busy={busy} />
+      <MacCard state={state} onInstall={install} onOpenPrivacy={() => { void run('macos_privacy_open') }} onDndSetting={(on) => { void run('dnd_setting', { on }) }} refresh={refresh} busy={busy} />
       <SettingsBlock walnut={walnut} navigate={navigate} />
       <footer className="rhythm-links">
         <a href={TIME_TIMELINE_PATH} data-testid="rhythm-link-timeline" onClick={(event) => { event.preventDefault(); navigate(TIME_TIMELINE_PATH) }}>

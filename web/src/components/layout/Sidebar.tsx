@@ -14,7 +14,7 @@ import {
   updateAppDisposition,
 } from '@/apps/store';
 import type { RegisteredApp } from '@/apps/registry';
-import { useNotifications, effectiveQuiet, quietLabel } from '@/contexts/notifications';
+import { useNotifications, attentionHeld, quietLabel, railBadge, railCount, railDot } from '@/contexts/notifications';
 import '@/styles/notification-quiet.css';
 import { NotificationPanel } from '@/components/common/NotificationPanel';
 import { PluginBoundary } from '@/components/common/PluginBoundary';
@@ -89,7 +89,9 @@ export function Sidebar({
   const audio = useAudioCapture();
   const { notify, attentionCount, quiet, feed } = useNotifications();
   useLendAppUpdateToasts(notify);
-  const quietNow = effectiveQuiet(quiet).active;
+  // Quiet (Do Not Disturb): nothing on the rail asks for attention (quiet-model.ts).
+  const quietNow = attentionHeld(quiet);
+  const railAttention = railCount(attentionCount, quietNow);
   const [notifOpen, setNotifOpen] = useState(false);
   const bell = bellPresentation({ reason: bellReason, attentionCount, hasIssues, quiet: quietNow, quietLabel: quietNow ? quietLabel(quiet) : '', collapsed });
   const [statusOpen, setStatusOpen] = useState(false);
@@ -347,7 +349,8 @@ export function Sidebar({
           // ON the app the link points at the current URL, so clicking the active
           // icon is a no-op instead of a reset to an older remembered state.
           const onThisApp = app.path !== '/' && appPathMatches(app, location.pathname);
-          const hostDot = hostAttention && app.kind === 'core' && app.path === '/settings';
+          const hostDot = railDot(hostAttention, quietNow) && app.kind === 'core' && app.path === '/settings';
+          const badge = railBadge(app.badge, quietNow);
           const target = app.path === '/' ? '/'
             : onThisApp ? `${location.pathname}${location.search}${location.hash}`
             : hostDot ? hostSettingsHref()
@@ -371,13 +374,13 @@ export function Sidebar({
               {hostDot && (
                 <HostStatusDot dot={{ kind: 'warn', title: `${app.title}: remote hosts need attention` }} className="sidebar-host-dot" decorative />
               )}
-              {app.badge === 'dot' ? (
+              {badge === 'dot' ? (
                 <span className="notification-badge-dot" />
-              ) : typeof app.badge === 'number' && app.badge > 0 ? (
-                <span className="notification-badge-count">{app.badge > 99 ? '99+' : app.badge}</span>
-              ) : app.badge && typeof app.badge === 'object' ? (
+              ) : typeof badge === 'number' && badge > 0 ? (
+                <span className="notification-badge-count">{badge > 99 ? '99+' : badge}</span>
+              ) : badge && typeof badge === 'object' ? (
                 // A status, not a count: muted so it never reads as things to deal with.
-                <span className="notification-badge-count notification-badge-muted" data-testid={`sidebar-app-badge-${app.key}`}>{app.badge.text}</span>
+                <span className="notification-badge-count notification-badge-muted" data-testid={`sidebar-app-badge-${app.key}`}>{badge.text}</span>
               ) : null}
             </NavLink>
           );
@@ -412,8 +415,8 @@ export function Sidebar({
         <button
           className="sidebar-link sidebar-notification-btn"
           onClick={() => setNotifOpen(!notifOpen)}
-          // Quiet mode: the one visible trace is a moon on the bell and a
-          // tooltip naming who holds quiet; the badge keeps counting as usual.
+          // Quiet mode: the one visible trace is a moon on the bell and a tooltip
+          // naming who holds quiet; no count or dot until it ends (quiet-model.ts).
           title={bell.title}
           aria-label={bell.ariaLabel}
           {...(quietNow ? { 'data-quiet': 'true' } : {})}
@@ -424,8 +427,8 @@ export function Sidebar({
           {/* Amber count = things waiting on the human (asks + unread letters).
               Errors never badge a number: they read as a diagnosis inside the
               panel, not a permanent red counter on the bell. */}
-          {attentionCount > 0 && (
-            <span className="notification-badge-count notification-badge-attention">{attentionCount > 99 ? '99+' : attentionCount}</span>
+          {railAttention > 0 && (
+            <span className="notification-badge-count notification-badge-attention">{railAttention > 99 ? '99+' : railAttention}</span>
           )}
           {/* A host or Claude Code reason wears the rail Settings entry's warn look; the older system dot keeps its own. */}
           {(bell.dot || bell.cornerDot) && (
@@ -446,7 +449,7 @@ export function Sidebar({
 
       {/* Phone: the bell lives in the top bar (portalled), the drawer keeps its own. */}
       {/* One count rule (C55, N2-05): the bar's bell says the drawer row's number. */}
-      <PhoneNotificationBell count={attentionCount} open={notifOpen} onOpen={() => setNotifOpen(true)} />
+      <PhoneNotificationBell count={railAttention} open={notifOpen} onOpen={() => setNotifOpen(true)} />
       <NotificationPanel
         open={notifOpen}
         onClose={() => setNotifOpen(false)}

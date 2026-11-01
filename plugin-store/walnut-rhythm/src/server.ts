@@ -14,7 +14,8 @@ import { fileURLToPath } from 'node:url'
 import type { Disposable, WalnutServerApi } from '@open-walnut/plugin-api/server'
 import { runProcess } from './server/exec'
 import { MacosBridge } from './server/macos-bridge'
-import { focusDbDir, readMacosFocus } from './server/macos-focus'
+import { DndController } from './server/macos-dnd'
+import { focusDbDir, readFocusDetail, readMacosFocus, type ReadText } from './server/macos-focus'
 import { registerOps } from './server/ops'
 import { buildPublicState, stateFingerprint } from './server/public-state'
 import { RhythmRuntime } from './server/runtime'
@@ -46,17 +47,19 @@ export async function activate(walnut: WalnutServerApi): Promise<void> {
   // them directly, as Rhythm always did.
   const protectedReads = typeof walnut.macos?.readProtectedFile === 'function' ? walnut.macos : null
   const focusDir = focusDbDir()
+  const readText: ReadText | undefined = protectedReads
+    ? (file) => protectedReads.readProtectedFile(file).catch((error: unknown) => {
+        // No reader on this host (a test server's temporary data dir): read it directly.
+        if ((error as { code?: string }).code === 'ENOTSUP') return fsp.readFile(file, 'utf8')
+        throw error
+      })
+    : undefined
+  const shortcutsDir = path.join(walnut.storage.dataDir, 'shortcuts')
   const macos = new MacosBridge({
     enabled: process.platform === 'darwin',
     log: walnut.log.child('macos'),
     run: runProcess,
-    readFocus: () => protectedReads
-      ? readMacosFocus(focusDir, (file) => protectedReads.readProtectedFile(file).catch((error: unknown) => {
-          // No reader on this host (a test server's temporary data dir): read it directly.
-          if ((error as { code?: string }).code === 'ENOTSUP') return fsp.readFile(file, 'utf8')
-          throw error
-        }))
-      : readMacosFocus(focusDir),
+    readFocus: () => readMacosFocus(focusDir, readText),
     ...(protectedReads
       ? {
           useAccess: () => protectedReads.useFullDiskAccess({
@@ -66,13 +69,33 @@ export async function activate(walnut: WalnutServerApi): Promise<void> {
           grantTarget: () => protectedReads.fullDiskAccessTarget(),
         }
       : {}),
-    shortcutsDir: path.join(walnut.storage.dataDir, 'shortcuts'),
+    shortcutsDir,
     onChange: () => { emitState() },
     // Host-owned, so the install watch's sleep ends with the plugin (see deactivate).
     wait: (ms) => new Promise<void>((resolve) => { walnut.timers.timeout(resolve, ms) }),
   })
   const spotify = new SpotifyControl({ enabled: process.platform === 'darwin', run: runProcess, storage: walnut.storage })
-  const runtime = new RhythmRuntime({ walnut, macos, spotify })
+  const runtime = new RhythmRuntime({
+    walnut, macos, spotify,
+    dnd: (rt) => new DndController({
+      enabled: process.platform === 'darwin',
+      log: walnut.log.child('dnd'),
+      run: runProcess,
+      readDetail: () => readFocusDetail(focusDir, readText),
+      checkShortcuts: (now) => macos.checkShortcuts(now),
+      writeInput: async (text) => {
+        await fsp.mkdir(shortcutsDir, { recursive: true })
+        const file = path.join(shortcutsDir, 'until.txt')
+        await fsp.writeFile(file, text, 'utf8')
+        return file
+      },
+      assumeOff: (now) => macos.assumeDoNotDisturbOff(now),
+      now: () => rt.now(),
+      running: () => rt.runningBlock(),
+      onChange: () => rt.dndChanged(),
+      wait: (ms) => new Promise<void>((resolve) => { walnut.timers.timeout(resolve, ms) }),
+    }),
+  })
   await runtime.load()
   active = runtime
 

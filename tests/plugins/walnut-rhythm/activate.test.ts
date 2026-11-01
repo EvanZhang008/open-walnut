@@ -17,7 +17,7 @@ function op(fake: ReturnType<typeof createFakeWalnut>, name: string) {
 }
 
 describe('activate', () => {
-  it('declares the twelve ops with the intended reach', async () => {
+  it('declares the fourteen ops with the intended reach', async () => {
     const fake = createFakeWalnut({ pluginId: 'walnut-rhythm', config: SAFE_CONFIG })
     await activate(fake.api)
     try {
@@ -26,6 +26,10 @@ describe('activate', () => {
         status: 'read:allow',
         focus_start: 'write:allow',
         focus_stop: 'write:allow',
+        focus_rest: 'write:allow',
+        focus_extend: 'write:allow',
+        focus_dnd: 'write:allow',
+        dnd_setting: 'write:allow',
         break_skip: 'write:allow',
         music_tracks: 'read:allow',
         focus_music: 'write:allow',
@@ -55,7 +59,7 @@ describe('activate', () => {
       // The rail's ring, published through the real host seam.
       expect(fake.statusItems.get('rhythm')).toMatchObject({
         title: 'Focus · {remaining} left', tone: 'accent', timer: { mode: 'drain' },
-        actions: [{ label: 'Stop block', op: 'focus_stop' }],
+        actions: [{ label: 'Rest now', op: 'focus_rest' }, { label: '+5 min', op: 'focus_extend' }, { label: 'Stop block', op: 'focus_stop' }],
       })
 
       await expect(op(fake, 'focus_start')({})).rejects.toThrow(/already running/)

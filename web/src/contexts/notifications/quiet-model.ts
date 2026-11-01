@@ -3,9 +3,18 @@
  *
  * The server owns the state (src/core/quiet/quiet-state.ts): several sources may
  * hold quiet at once (the human's toggle, a plugin's focus timer). While any hold
- * is live the console stops toasting, chiming and raising browser notifications,
- * but the feed keeps collecting and the badge keeps counting. Permission asks
- * still toast while `allowPermissions` holds, because an agent is blocked on them.
+ * is live, NOTHING OUTSIDE A PAGE asks for attention (2026-11-01, the user during a
+ * focus block: "the notification should also not show any number", "all plugin
+ * notification in the side bar should follow this", "but inside the app it is fine"):
+ * no toast, chime or system notification, and no count or dot on the rail (the bell,
+ * every app's and plugin's badge, the Settings warn dot, a plugin ring's warning look)
+ * or on the phone's bell. The feed keeps collecting and every badge keeps its value,
+ * so all of it is back, with what arrived meanwhile, the moment quiet ends; inside a
+ * page (the mail page, a plugin's App, the open notification panel) everything shows
+ * as usual. Permission asks still toast while `allowPermissions` holds, because an
+ * agent is blocked on them. The rail's gates are `railCount` / `railBadge` /
+ * `railDot` / `railTone` below; tests/web/quiet-attention-ratchet.test.ts fails on a
+ * new attention renderer outside a page that does not go through them.
  */
 import { IS_PERSISTENT, type NotificationKind } from './types';
 
@@ -96,4 +105,35 @@ export function reminderSoundMuted(): boolean {
   } catch {
     return false;
   }
+}
+
+// ── Outside a page: the rail, the phone bell, system notifications ──
+
+/** Is attention outside a page held back right now? */
+export function attentionHeld(q: QuietState, now = Date.now()): boolean {
+  return effectiveQuiet(q, now).active;
+}
+
+/** A count shown outside a page: none while quiet. */
+export function railCount(count: number, held: boolean): number {
+  return held ? 0 : count;
+}
+
+/**
+ * An app's rail badge: no number and no dot while quiet. A `{ text }` badge is a
+ * status, not something waiting, so it stays. The stored badge is untouched.
+ */
+export function railBadge<B>(badge: B, held: boolean): B | null {
+  if (!held) return badge;
+  return badge === 'dot' || typeof badge === 'number' ? null : badge;
+}
+
+/** A dot outside a page: none while quiet. */
+export function railDot(on: boolean, held: boolean): boolean {
+  return on && !held;
+}
+
+/** A plugin ring's look: "this needs you now" reads as the quiet default while quiet. */
+export function railTone<T extends string>(tone: T | undefined, held: boolean): T | 'neutral' | undefined {
+  return held && tone === 'warning' ? 'neutral' : tone;
 }

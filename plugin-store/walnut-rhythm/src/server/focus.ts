@@ -3,12 +3,17 @@
  * owns. PURE.
  *
  *   off ──Start──▶ focus ──time up──▶ break ──time up──▶ off (asks once: start the next one?)
- *                    │                  └──End break──▶ off
- *                    └──Stop──▶ off
+ *    │               │ ▲                │ └──End break──▶ off
+ *    │               │ └───Focus now────┘
+ *    │               ├──Rest now──▶ break
+ *    │               └──Stop──▶ off
+ *    └──Rest──▶ break
  *
- * Rhythm is off until the person presses Start, and only a Start (`startFocus`) leaves
- * off: no clock, restart, attention or reload ever does. A run is the block the person
- * started and the break that follows it; when the break runs out, Rhythm asks once
+ * Extend adds time to the block or the break running now.
+ *
+ * Rhythm is off until the person presses Start, and only a Start (`startFocus`, or
+ * `startRest` for a rest) leaves off: no clock, restart, attention or reload ever
+ * does. A run is the block the person started and the break that follows it; when the break runs out, Rhythm asks once
  * whether to start the next one and stays off if nobody does. Every Nth completed block
  * is followed by the long break, and the cycle count starts over after the long break
  * or after a long idle spell.
@@ -131,6 +136,43 @@ export function stopFocus(state: FocusState, now: number): { state: FocusState; 
   return { state: { ...off(state, now), completedInCycle: 0 }, stoppedMinutes }
 }
 
+/**
+ * A break the person chose: Rest now during a block (the block ends here, short of its
+ * time, and does not count toward the long break), or Rest from off. Either way it runs
+ * `minutes`, then Rhythm asks once about the next block, as after any break.
+ */
+export function startRest(state: FocusState, input: { now: number; minutes: number }): FocusState {
+  if (state.phase === 'break' || state.phase === 'break_due') throw new Error('A break is already running. Add time to it with focus_extend, or end it with break_skip.')
+  const fromBlock = state.phase === 'focus'
+  const freshCycle = !fromBlock && state.lastEndedAt > 0 && input.now - state.lastEndedAt > CYCLE_RESET_MS
+  return {
+    ...state,
+    phase: 'break',
+    breakKind: 'short',
+    startedAt: input.now,
+    endsAt: input.now + input.minutes * MIN,
+    runStartedAt: fromBlock ? state.runStartedAt || state.startedAt : input.now,
+    completedInCycle: freshCycle ? 0 : state.completedInCycle,
+    lastEndedAt: fromBlock ? input.now : state.lastEndedAt,
+  }
+}
+
+/** Extend's step, and what one Extend may add. */
+export const EXTEND_DEFAULT_MINUTES = 5
+export const EXTEND_RANGE = { min: 1, max: 60 }
+
+/** Longest a block or a break may run after Extend, counted from its start. */
+export const MAX_PHASE_MINUTES = 240
+
+/** More time on the block or break running now (Extend, More break). The run keeps its place. */
+export function extendPhase(state: FocusState, input: { now: number; minutes: number }): FocusState {
+  if (state.phase !== 'focus' && state.phase !== 'break') throw new Error('Nothing is running to extend. Start a focus block or a rest first.')
+  const endsAt = Math.max(state.endsAt, input.now) + input.minutes * MIN
+  if (endsAt - state.startedAt > MAX_PHASE_MINUTES * MIN) throw new Error(`A ${state.phase === 'focus' ? 'block' : 'break'} runs at most ${MAX_PHASE_MINUTES} minutes.`)
+  // `minutes` stays the person's pick, so the next block runs it again; the log counts the time it ran.
+  return { ...state, endsAt }
+}
+
 /** The long break is always the configured one; a short break is the block's own pick, else the configured one. */
 export function breakLengthMs(kind: BreakKind, d: FocusDurations, picked = 0): number {
   return (kind === 'long' ? d.longBreakMinutes : picked > 0 ? picked : d.breakMinutes) * MIN
@@ -167,7 +209,8 @@ export function advanceFocus(state: FocusState, now: number, d: FocusDurations):
         block: {
           startedAt: current.startedAt,
           endedAt,
-          minutes: current.minutes,
+          // An extended block logs the time it ran.
+          minutes: Math.max(current.minutes, Math.round((endedAt - current.startedAt) / MIN)),
           breakMinutes: current.breakMinutes,
           ...(current.spotifyUri ? { spotifyUri: current.spotifyUri } : {}),
           ...(current.taskId ? { taskId: current.taskId } : {}),

@@ -19,7 +19,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObje
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useAppCatalog } from '@/apps/hooks';
-import { useNotifications } from '@/contexts/notifications';
+import { attentionHeld, railTone, useNotifications } from '@/contexts/notifications';
 import { runOpAction } from '@/contexts/notifications/notification-actions';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { PluginSlots, type SlotEntry } from '@/plugins/PluginSlots';
@@ -76,7 +76,9 @@ export function SidebarStatusItems({ onOpenChange }: { onOpenChange?: (open: boo
   const items = useStatusItems();
   useTicker(items.some((item) => item.timer), TICK_MS);
   const now = Date.now();
-  const { notify } = useNotifications();
+  const { notify, quiet } = useNotifications();
+  // Quiet (Do Not Disturb): a ring's "needs you now" look waits until it ends (quiet-model.ts).
+  const held = attentionHeld(quiet, now);
   const [openKey, setOpenKey] = useState<string | null>(null);
   // Set when a failed op reopens its popover; cleared by the next open or run.
   const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
@@ -138,7 +140,7 @@ export function SidebarStatusItems({ onOpenChange }: { onOpenChange?: (open: boo
             key={item.key}
             ref={(el) => { if (el) triggers.current.set(item.key, el); else triggers.current.delete(item.key); }}
             className={`sidebar-link sidebar-status-item${isOpen ? ' is-open' : ''}${busy ? ' is-pending' : ''}`}
-            data-tone={item.tone}
+            data-tone={railTone(item.tone, held)}
             data-status-key={item.key}
             onClick={(e) => {
               openTrigger.current = e.currentTarget;

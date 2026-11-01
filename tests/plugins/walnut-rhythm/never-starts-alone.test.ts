@@ -139,7 +139,7 @@ describe('the plugin as the host runs it', () => {
         const ring = fake.statusItems.get('rhythm')
         expect(ring).toMatchObject({ title: 'Rhythm is off', glyph: 'pause' })
         expect(ring?.timer).toBeUndefined()
-        expect(ring?.actions).toEqual([{ label: 'Start focus block (25 min)', op: 'focus_start', primary: true }])
+        expect(ring?.actions).toEqual([{ label: 'Start focus block (25 min)', op: 'focus_start', primary: true }, { label: 'Rest (5 min)', op: 'focus_rest' }])
         expect(fake.notices).toHaveLength(0)
       } finally {
         await deactivate()
@@ -163,11 +163,27 @@ function filesContaining(root: string, ext: RegExp, needle: RegExp): string[] {
 }
 
 describe('the source: who can start a run', () => {
-  it('only the Start op moves a run out of off', () => {
-    // startFocus is the one function that leaves idle; it is defined in focus.ts and called by the op.
-    expect(filesContaining(path.join(PLUGIN, 'src'), /\.tsx?$/, /\bstartFocus\(/)).toEqual(['server/actions.ts', 'server/focus.ts'])
-    const calls = fs.readFileSync(path.join(PLUGIN, 'src/server/actions.ts'), 'utf8').match(/\bstartFocus\(/g) ?? []
-    expect(calls).toHaveLength(1)
+  it('only the Start and Rest ops move a run out of off', () => {
+    // startFocus and startRest are the two functions that leave idle; defined in focus.ts, each called by its op.
+    for (const fn of ['startFocus', 'startRest']) {
+      expect(filesContaining(path.join(PLUGIN, 'src'), /\.tsx?$/, new RegExp(`\\b${fn}\\(`))).toEqual(['server/actions.ts', 'server/focus.ts'])
+      const calls = fs.readFileSync(path.join(PLUGIN, 'src/server/actions.ts'), 'utf8').match(new RegExp(`\\b${fn}\\(`, 'g')) ?? []
+      expect(calls).toHaveLength(1)
+    }
+  })
+
+  it('the Rest op is named only by its registration and by buttons the person clicks', () => {
+    // ops.ts registers it; status-item.ts is a button; the Start form's Rest and the running block's Rest now.
+    expect(filesContaining(path.join(PLUGIN, 'src'), /\.tsx?$/, /['"]focus_rest['"]/)).toEqual([
+      'server/ops.ts', 'server/status-item.ts', 'web/phase-controls.tsx', 'web/start-form.tsx',
+    ])
+    const form = fs.readFileSync(path.join(PLUGIN, 'src/web/start-form.tsx'), 'utf8')
+    expect(form.match(/['"]focus_rest['"]/g)).toHaveLength(1)
+    expect(form).toMatch(/const rest = \(\) => \{[^]*?store\.call<[^>]*>\('focus_rest'/)
+    expect(form.split('\n').filter((line) => !/^\s*(\*|\/\/)/.test(line)).filter((line) => /[^.\w]rest[^\w]/.test(line.replace(/(['"`])(?:\\.|(?!\1).)*\1/g, '""')) && !/const rest = /.test(line)).map((line) => line.trim())).toEqual(['onClick={rest}'])
+    const controls = fs.readFileSync(path.join(PLUGIN, 'src/web/phase-controls.tsx'), 'utf8')
+    expect(controls).toMatch(/onClick=\{\(\) => act\('rest-now', \(\) => store\.call\('focus_rest'\)\)\}/)
+    expect(controls.match(/['"]focus_rest['"]/g)).toHaveLength(1)
   })
 
   it('the Start op is named only by its registration and by buttons the person clicks', () => {
@@ -181,8 +197,13 @@ describe('the source: who can start a run', () => {
     expect(form.match(/['"]focus_start['"]/g)).toHaveLength(1)
     expect(form.match(/\bstartWithMusic\(/g)).toHaveLength(2) // the definition and the one call
     expect(form).toMatch(/const start = \(\) => \{[^]*?void startWithMusic\(/)
-    // Exported, so any file could call it: only the form does.
-    expect(filesContaining(path.join(PLUGIN, 'src'), /\.tsx?$/, /\bstartWithMusic\(/)).toEqual(['web/start-form.tsx'])
+    // Exported, so any file could call it: the form, and Focus now during a break, whose one call sits in that button's onClick.
+    expect(filesContaining(path.join(PLUGIN, 'src'), /\.tsx?$/, /\bstartWithMusic\(/)).toEqual(['web/phase-controls.tsx', 'web/start-form.tsx'])
+    const controls = fs.readFileSync(path.join(PLUGIN, 'src/web/phase-controls.tsx'), 'utf8')
+    expect(controls.match(/\bstartWithMusic\(/g)).toHaveLength(1)
+    expect(controls).toMatch(/const focusNow = \(\) => act\('focus-now', \(\) => startWithMusic\(/)
+    expect(controls.match(/\bfocusNow\b/g)).toHaveLength(2) // the definition and the Focus now button's onClick
+    expect(controls).toMatch(/op="focus-now"[^\n]*onClick=\{focusNow\}/)
     // Every other use of `start`, string literals blanked out (a test id is not a call).
     const startUses = form.split('\n')
       .filter((line) => !/^\s*(\*|\/\/)/.test(line) && !/const start = /.test(line))
@@ -209,5 +230,20 @@ describe('the source: who can start a run', () => {
     const view = fs.readFileSync(path.join(IOS, 'Views/Settings/FocusMusicView.swift'), 'utf8')
     expect(view.match(/startFocusBlock\(/g)).toHaveLength(1)
     expect(view).toMatch(/Button\("Start [^"\n]*"\) \{\n\s*let minutes = [^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*run \{ await player\.startFocusBlock\(/)
+    // The player calls it from Start and from Focus now, and each of those only from a button.
+    const player = fs.readFileSync(path.join(IOS, 'Stores/FocusMusicPlayer.swift'), 'utf8')
+    expect(player.match(/startFocusBlock\(/g)).toHaveLength(2)
+    expect(player).toMatch(/func focusNow\(\)[^]*?return await startFocusBlock\(/)
+    expect(filesContaining(IOS, /\.swift$/, /\bfocusNow\(\)/)).toEqual(['Stores/FocusMusicPlayer.swift', 'Views/Settings/FocusMusicView.swift'])
+    expect(view).toMatch(/Button\("Focus now"\) \{ run \{ await player\.focusNow\(\) \} \}/)
+  })
+
+  it('on the phone, only a Rest button starts a rest', () => {
+    expect(filesContaining(IOS, /\.swift$/, /focus_rest/)).toEqual(['API/WalnutAPIRhythm.swift'])
+    expect(filesContaining(IOS, /\.swift$/, /rhythmFocusRest\(/)).toEqual(['API/WalnutAPIRhythm.swift', 'Stores/FocusMusicPlayer.swift'])
+    const view = fs.readFileSync(path.join(IOS, 'Views/Settings/FocusMusicView.swift'), 'utf8')
+    const calls = view.split('\n').filter((line) => /player\.rest\(/.test(line)).map((line) => line.trim())
+    expect(calls).toEqual(['Button("Rest now") { run { await player.rest() } }', 'run { await player.rest(minutes: pause) }'])
+    expect(view).toMatch(/Button\("Rest \\\(breakMinutes\) min"\) \{\n\s*let pause = breakMinutes\n\s*run \{ await player\.rest\(minutes: pause\) \}/)
   })
 })

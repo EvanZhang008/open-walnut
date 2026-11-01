@@ -15,9 +15,10 @@ export {
 export type { OpActionResult } from './notification-actions';
 export {
   NOT_QUIET, effectiveQuiet, quietAllowsToast, quietLabel, REMINDER_SOUND_KEY,
+  attentionHeld, railCount, railBadge, railDot, railTone,
 } from './quiet-model';
 export type { QuietState, QuietHold } from './quiet-model';
-export { setUserQuiet } from './quiet';
+export { setUserQuiet, currentQuiet } from './quiet';
 export type {
   NotificationSection, PresentedError, ErrorCategoryGroup, ErrorCauseGroup, SectionCounts, LetterCountable,
 } from './notification-model';

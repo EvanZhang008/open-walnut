@@ -100,3 +100,59 @@ export async function readMacosFocus(dir = focusDbDir(), readText: ReadText = re
   try { modes = JSON.parse(await readText(path.join(dir, 'ModeConfigurations.json'))) } catch { modes = undefined }
   return { ok: true, focus: { ...focus, name: modeName(focus.modeId, modes) } }
 }
+
+/** Seconds between the Unix epoch and Apple's (2001-01-01), which Assertions.json counts from. */
+const APPLE_EPOCH_S = 978_307_200
+
+/** One Focus that is on now, as macOS records it. Times are epoch ms. */
+export interface LiveAssertion {
+  id: string
+  modeId?: string
+  startedAt: number
+  /** When macOS ends it by itself (a Focus turned on "until a time"); absent = until turned off. */
+  endsAt?: number
+}
+
+/** Every live Focus in Assertions.json, oldest first. PURE. */
+export function parseLiveAssertions(assertions: unknown): LiveAssertion[] {
+  const records = firstData(assertions)?.storeAssertionRecords
+  if (!Array.isArray(records)) return []
+  const out: LiveAssertion[] = []
+  for (const record of records) {
+    if (!record || typeof record !== 'object') continue
+    const r = record as Record<string, unknown>
+    const id = typeof r.assertionUUID === 'string' ? r.assertionUUID : ''
+    const at = Number(r.assertionStartDateTimestamp)
+    const details = r.assertionDetails && typeof r.assertionDetails === 'object' ? r.assertionDetails as Record<string, unknown> : {}
+    const lifetime = details.assertionDetailsLifetime && typeof details.assertionDetailsLifetime === 'object'
+      ? details.assertionDetailsLifetime as Record<string, unknown>
+      : {}
+    const end = Number(lifetime.assertionDetailsDateIntervalLifetimeEndDateTimestamp)
+    const modeId = typeof details.assertionDetailsModeIdentifier === 'string' ? details.assertionDetailsModeIdentifier : undefined
+    out.push({
+      id,
+      ...(modeId ? { modeId } : {}),
+      startedAt: Number.isFinite(at) ? Math.round((at + APPLE_EPOCH_S) * 1000) : 0,
+      ...(Number.isFinite(end) && end > 0 ? { endsAt: Math.round((end + APPLE_EPOCH_S) * 1000) } : {}),
+    })
+  }
+  return out.sort((a, b) => a.startedAt - b.startedAt)
+}
+
+export type FocusDetailRead =
+  | { ok: true; focus: MacosFocus; live: LiveAssertion[] }
+  | { ok: false; reason: 'permission' | 'unreadable'; message: string }
+
+/** The live Focus (named) and every live assertion, from one read of each file. */
+export async function readFocusDetail(dir = focusDbDir(), readText: ReadText = readUtf8): Promise<FocusDetailRead> {
+  let assertionsText: string | null = null
+  const focus = await readMacosFocus(dir, async (file) => {
+    const text = await readText(file)
+    if (file.endsWith('Assertions.json')) assertionsText = text
+    return text
+  })
+  if (!focus.ok) return focus
+  let live: LiveAssertion[] = []
+  try { live = assertionsText ? parseLiveAssertions(JSON.parse(assertionsText)) : [] } catch { live = [] }
+  return { ok: true, focus: focus.focus, live }
+}

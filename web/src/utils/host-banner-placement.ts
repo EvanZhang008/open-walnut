@@ -152,6 +152,9 @@ export interface BellPresentation {
  * tell a leftover dot is about something else.
  */
 export function bellPresentation(i: BellPresentationInput): BellPresentation {
+  // Quiet (Do Not Disturb): no count, no dot and no count in the name until it ends;
+  // the panel still lists everything once opened (quiet-model.ts).
+  if (i.quiet) return { ariaLabel: `Notifications. ${i.quietLabel}`, title: i.quietLabel, dot: false, cornerDot: false, dotKind: null };
   const counted = i.attentionCount > 0;
   const dot = !counted && (i.reason !== null || i.hasIssues);
   const cornerDot = counted && i.reason !== null;

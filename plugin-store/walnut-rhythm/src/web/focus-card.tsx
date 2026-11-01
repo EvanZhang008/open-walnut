@@ -1,12 +1,15 @@
 /**
  * The focus block card: a task picker and the Start form (lengths, music) while Rhythm is off, and a
- * live countdown with the run's start and end while a block or its break runs. Start is
- * the only way in; the break follows the block by itself and Rhythm is off after it.
+ * live countdown with the run's start and end while a block or its break runs, with the
+ * same choices as the ring's popover (Rest now, +5 min, Focus now). Start or Rest is the
+ * only way in; the break follows the block by itself and Rhythm is off after it.
  */
 import { useEffect, useState } from 'react'
 import type { WalnutWebApi } from '@open-walnut/plugin-api/web'
 import { countdownText, focusPhaseText, runText } from './format'
+import { DndBlockRow } from './dnd-row'
 import { NowPlaying } from './now-playing'
+import { BreakActions, FocusActions } from './phase-controls'
 import type { MusicPlayer } from './music'
 import { StartForm } from './start-form'
 import type { RhythmPublicState, RhythmStore } from './store'
@@ -60,12 +63,10 @@ export interface FocusCardProps {
   walnut: WalnutWebApi
   store: RhythmStore
   state: RhythmPublicState
-  run(localOp: string, args?: Record<string, unknown>): Promise<boolean>
-  busy: boolean
   music: MusicPlayer
 }
 
-export function FocusCard({ walnut, store, state, run, busy, music }: FocusCardProps) {
+export function FocusCard({ walnut, store, state, music }: FocusCardProps) {
   const { focus, config } = state
   const running = focus.phase === 'focus' || focus.phase === 'break'
   const now = useServerNow(store, running)
@@ -85,6 +86,7 @@ export function FocusCard({ walnut, store, state, run, busy, music }: FocusCardP
       </div>
       <div className="rhythm-group"><div className="rhythm-body">
 
+      <DndBlockRow store={store} state={state} />
       {focus.phase === 'idle' && (
         <>
           <p className="rhythm-muted" data-testid="rhythm-focus-off">
@@ -141,11 +143,9 @@ export function FocusCard({ walnut, store, state, run, busy, music }: FocusCardP
             <p className="rhythm-muted">Block {blockNumber} of {focus.longBreakEvery} before the long break.</p>
           )}
           {focus.phase === 'focus' && <NowPlaying store={store} music={music} state={state} />}
-          <div className="rhythm-actions">
-            {focus.phase === 'break'
-              ? <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-break-skip" onClick={() => { void run('break_skip') }}>End break</button>
-              : <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-focus-stop" onClick={() => { void run('focus_stop') }}>Stop</button>}
-          </div>
+          {focus.phase === 'break'
+            ? <BreakActions store={store} music={music} state={state} />
+            : <FocusActions store={store} />}
         </div>
       )}
 

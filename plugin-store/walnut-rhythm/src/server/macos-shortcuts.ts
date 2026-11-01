@@ -8,52 +8,98 @@
  * what makes Shortcuts show its Add Shortcut dialog. One click per shortcut, and the
  * person sees exactly what is being added.
  *
+ * "On" turns Do Not Disturb on UNTIL A TIME, the block's end, read from the shortcut's
+ * input. macOS keeps that end time itself, so Do Not Disturb ends on time even when
+ * Walnut is not running then, and a restart of Walnut or the Mac never leaves it on.
+ * An older Rhythm shipped "Walnut Focus On", which stayed on until turned off; it is
+ * no longer run.
+ *
  * Every process runs through the injected Runner (async, deadline, no shell).
  */
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import type { Runner } from './exec'
+import { LEGACY_SHORTCUT_ON, SHORTCUT_OFF, SHORTCUT_ON } from './dnd-words'
 
-export const SHORTCUT_ON = 'Walnut Focus On'
-export const SHORTCUT_OFF = 'Walnut Focus Off'
+export { LEGACY_SHORTCUT_ON, SHORTCUT_OFF, SHORTCUT_ON }
+
 export const SHORTCUT_NAMES = [SHORTCUT_ON, SHORTCUT_OFF] as const
 
 const LIST_TIMEOUT_MS = 10_000
-const RUN_TIMEOUT_MS = 10_000
+/** The first run after a login can take 20 s while Shortcuts starts. */
+const RUN_TIMEOUT_MS = 45_000
 const CONVERT_TIMEOUT_MS = 10_000
 const SIGN_TIMEOUT_MS = 60_000
 const OPEN_TIMEOUT_MS = 10_000
 
+const DND_MODE = `<key>FocusModes</key>
+        <dict>
+          <key>Identifier</key>
+          <string>com.apple.donotdisturb.mode.default</string>
+          <key>DisplayString</key>
+          <string>Do Not Disturb</string>
+        </dict>`
+
 /**
- * The workflow plist for one shortcut: a single "Set Focus" action on Do Not
- * Disturb, on (until turned off) or off. PURE. Every value is a constant, so nothing
- * here needs escaping.
+ * Turn Do Not Disturb on until the date in the shortcut's input. The time goes in as a
+ * text token holding the Shortcut Input: macOS parses the text as a date and starts a
+ * Do Not Disturb that ends at it ("date-interval"). A plain variable attachment there
+ * (the shape Shortcuts uses for most parameters) is dropped on import, and the action
+ * then falls back to a fixed 7 PM that macOS treats as until-turned-off (verified on
+ * macOS 26, 2026-11-01).
  */
-export function buildShortcutPlistXml(enabled: boolean): string {
+const ON_UNTIL_ACTIONS = `<dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.dnd.set</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>Enabled</key>
+        <integer>1</integer>
+        <key>AssertionType</key>
+        <string>Time</string>
+        <key>Time</key>
+        <dict>
+          <key>Value</key>
+          <dict>
+            <key>string</key>
+            <string>\uFFFC</string>
+            <key>attachmentsByRange</key>
+            <dict>
+              <key>{0, 1}</key>
+              <dict><key>Type</key><string>ExtensionInput</string></dict>
+            </dict>
+          </dict>
+          <key>WFSerializationType</key>
+          <string>WFTextTokenString</string>
+        </dict>
+        ${DND_MODE}
+      </dict>
+    </dict>`
+
+const OFF_ACTIONS = `<dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.dnd.set</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict>
+        <key>Enabled</key>
+        <integer>0</integer>
+        ${DND_MODE}
+      </dict>
+    </dict>`
+
+/**
+ * The workflow plist for one of Rhythm's shortcuts. PURE. Every value is a constant,
+ * so nothing here needs escaping.
+ */
+export function buildShortcutPlistXml(name: string): string {
+  const on = name === SHORTCUT_ON
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>WFWorkflowActions</key>
   <array>
-    <dict>
-      <key>WFWorkflowActionIdentifier</key>
-      <string>is.workflow.actions.dnd.set</string>
-      <key>WFWorkflowActionParameters</key>
-      <dict>
-        <key>Enabled</key>
-        <integer>${enabled ? 1 : 0}</integer>
-        <key>AssertionType</key>
-        <string>AssertionTypeTurnedOnUntilOff</string>
-        <key>FocusModes</key>
-        <dict>
-          <key>Identifier</key>
-          <string>com.apple.donotdisturb.mode.default</string>
-          <key>DisplayString</key>
-          <string>Do Not Disturb</string>
-        </dict>
-      </dict>
-    </dict>
+    ${on ? ON_UNTIL_ACTIONS : OFF_ACTIONS}
   </array>
   <key>WFWorkflowClientVersion</key>
   <string>1146.14</string>
@@ -66,12 +112,12 @@ export function buildShortcutPlistXml(enabled: boolean): string {
     <key>WFWorkflowIconGlyphNumber</key>
     <integer>59446</integer>
     <key>WFWorkflowIconStartColor</key>
-    <integer>${enabled ? 463140863 : 3031607807}</integer>
+    <integer>${on ? 463140863 : 3031607807}</integer>
   </dict>
   <key>WFWorkflowImportQuestions</key>
   <array/>
   <key>WFWorkflowInputContentItemClasses</key>
-  <array/>
+  ${on ? '<array><string>WFStringContentItem</string><string>WFDateContentItem</string><string>WFGenericFileContentItem</string></array>' : '<array/>'}
   <key>WFWorkflowOutputContentItemClasses</key>
   <array/>
   <key>WFWorkflowTypes</key>
@@ -79,7 +125,7 @@ export function buildShortcutPlistXml(enabled: boolean): string {
   <key>WFQuickActionSurfaces</key>
   <array/>
   <key>WFWorkflowHasShortcutInputVariables</key>
-  <false/>
+  ${on ? '<true/>' : '<false/>'}
 </dict>
 </plist>
 `
@@ -94,6 +140,8 @@ export interface ShortcutsStatus {
   checked: boolean
   installed: { on: boolean; off: boolean } | null
   missing: string[]
+  /** The older "Walnut Focus On" is still in Shortcuts (unused now). */
+  legacy?: boolean
   error?: string
 }
 
@@ -103,7 +151,10 @@ export async function ensureShortcuts(run: Runner): Promise<ShortcutsStatus> {
   if (!result.ok) return { checked: true, installed: null, missing: [...SHORTCUT_NAMES], error: result.error ?? 'shortcuts list failed' }
   const names = new Set(parseShortcutsList(result.stdout))
   const installed = { on: names.has(SHORTCUT_ON), off: names.has(SHORTCUT_OFF) }
-  return { checked: true, installed, missing: SHORTCUT_NAMES.filter((name) => !names.has(name)) }
+  return {
+    checked: true, installed, missing: SHORTCUT_NAMES.filter((name) => !names.has(name)),
+    ...(names.has(LEGACY_SHORTCUT_ON) ? { legacy: true } : {}),
+  }
 }
 
 export interface InstallStep {
@@ -143,7 +194,7 @@ export async function installShortcuts(
     const binary = path.join(dir, `${name}.wflow`)
     const signed = path.join(dir, `${name}.shortcut`)
     try {
-      await fs.writeText(xml, buildShortcutPlistXml(name === SHORTCUT_ON))
+      await fs.writeText(xml, buildShortcutPlistXml(name))
     } catch (error) {
       steps.push({ name, ok: false, step: 'write', error: String((error as Error).message ?? error) })
       continue
@@ -159,8 +210,12 @@ export async function installShortcuts(
   return steps
 }
 
-/** Run one shortcut by name. Never throws; the caller logs and reports a failure. */
-export async function runShortcut(run: Runner, name: string): Promise<{ ok: boolean; error?: string }> {
-  const result = await run('shortcuts', ['run', name], { timeoutMs: RUN_TIMEOUT_MS })
+/**
+ * Run one shortcut by name, optionally with a file as its input. Never throws; the
+ * caller logs and reports a failure.
+ */
+export async function runShortcut(run: Runner, name: string, inputPath?: string): Promise<{ ok: boolean; error?: string }> {
+  const args = inputPath ? ['run', name, '--input-path', inputPath] : ['run', name]
+  const result = await run('shortcuts', args, { timeoutMs: RUN_TIMEOUT_MS })
   return result.ok ? { ok: true } : { ok: false, error: result.error ?? `shortcuts run "${name}" failed` }
 }

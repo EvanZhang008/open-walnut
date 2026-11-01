@@ -1,22 +1,18 @@
 /**
  * The macOS half of Rhythm, as I/O glue around the pure parsers: the Focus mirror
- * poll, the Shortcuts status, and turning Do Not Disturb on and off.
+ * poll and the Shortcuts status and install. Turning Do Not Disturb on and off for a
+ * block is macos-dnd.ts.
  *
  * Nothing here runs on another platform or on a cloud replica. The mirror reads two
  * named files every 30s; a refused read backs off to every 10 minutes and is logged
- * once. Shortcut runs go through their own chain, so "on" and "off" can never cross,
- * and they run OUTSIDE the runtime's state queue: a 10 second `shortcuts run` must not
- * hold up a status read.
+ * once.
  */
 import type { Disposable, PluginLogger } from '@open-walnut/plugin-api/server'
 import type { Runner } from './exec'
 import type { MacosFocusRead } from './macos-focus'
 import {
-  SHORTCUT_OFF,
-  SHORTCUT_ON,
   ensureShortcuts,
   installShortcuts,
-  runShortcut,
   type InstallStep,
   type ShortcutsStatus,
 } from './macos-shortcuts'
@@ -40,7 +36,6 @@ export const FULL_DISK_ACCESS_URL = 'x-apple.systempreferences:com.apple.prefere
 
 export interface ShortcutsView extends ShortcutsStatus {
   checkedAt: number
-  lastRun?: { name: string; ok: boolean; at: number; error?: string }
   lastInstall?: { at: number; steps: InstallStep[] }
   /** True while Rhythm re-lists Shortcuts every few seconds after opening the Add dialogs. */
   watching?: boolean
@@ -91,7 +86,6 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
 export class MacosBridge {
   mirror: MirrorView = { phase: 'off', checkedAt: 0 }
   shortcuts: ShortcutsView = { checked: false, installed: null, missing: [], checkedAt: 0 }
-  private shortcutChain: Promise<unknown> = Promise.resolve()
   private warned = new Set<string>()
   private assumeOffUntil = 0
   private watchGeneration = 0
@@ -160,21 +154,6 @@ export class MacosBridge {
     this.shortcuts = { ...this.shortcuts, ...status, checkedAt: now }
     if (!status.error) delete this.shortcuts.error
     return this.shortcuts
-  }
-
-  /** Turn Do Not Disturb on or off. Queued, never awaited by the caller, never throws. */
-  setDoNotDisturb(on: boolean, now: () => number): void {
-    if (!this.deps.enabled) return
-    const name = on ? SHORTCUT_ON : SHORTCUT_OFF
-    this.shortcutChain = this.shortcutChain.then(async () => {
-      const result = await runShortcut(this.deps.run, name)
-      if (!result.ok) this.warnOnce(`shortcuts:run:${name}`, 'A Rhythm shortcut failed to run', { name, error: result.error })
-      this.shortcuts = {
-        ...this.shortcuts,
-        lastRun: { name, ok: result.ok, at: now(), ...(result.error ? { error: result.error } : {}) },
-      }
-      this.deps.onChange()
-    }).catch(() => undefined)
   }
 
   /** Build, sign and open the missing shortcuts. Throws only for a plain-words refusal. */

@@ -99,14 +99,14 @@ describe('readMacosFocus', () => {
 })
 
 describe('the shortcut plist', () => {
-  it('is one Set Focus action on Do Not Disturb, on until turned off, or off', () => {
-    const on = buildShortcutPlistXml(true)
+  it('is Set Focus on Do Not Disturb: on until a time for "on", off for "off"', () => {
+    const on = buildShortcutPlistXml(SHORTCUT_ON)
     expect(on).toContain('<string>is.workflow.actions.dnd.set</string>')
     expect(on).toMatch(/<key>Enabled<\/key>\s*<integer>1<\/integer>/)
-    expect(on).toContain('<string>AssertionTypeTurnedOnUntilOff</string>')
+    expect(on).toMatch(/<key>AssertionType<\/key>\s*<string>Time<\/string>/)
     expect(on).toContain('<string>com.apple.donotdisturb.mode.default</string>')
     expect(on).toContain('<string>Do Not Disturb</string>')
-    expect(buildShortcutPlistXml(false)).toMatch(/<key>Enabled<\/key>\s*<integer>0<\/integer>/)
+    expect(buildShortcutPlistXml(SHORTCUT_OFF)).toMatch(/<key>Enabled<\/key>\s*<integer>0<\/integer>/)
     expect(on.startsWith('<?xml')).toBe(true)
   })
 })
@@ -165,7 +165,7 @@ describe('Shortcuts status and install', () => {
   it('runShortcut runs by name with a deadline and never throws', async () => {
     const { run, calls } = scripted({ 'shortcuts run': { ok: false, error: 'not found' } })
     expect(await runShortcut(run, SHORTCUT_ON)).toEqual({ ok: false, error: 'not found' })
-    expect(calls[0]).toEqual({ command: 'shortcuts', args: ['run', SHORTCUT_ON], timeoutMs: 10_000 })
+    expect(calls[0]).toEqual({ command: 'shortcuts', args: ['run', SHORTCUT_ON], timeoutMs: 45_000 })
   })
 })
 

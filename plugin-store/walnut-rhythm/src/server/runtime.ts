@@ -20,6 +20,7 @@ import {
   type FocusDurations, type FocusEvent, type FocusState, type HoldSpec,
 } from './focus'
 import type { MacosBridge } from './macos-bridge'
+import { DndController } from './macos-dnd'
 import { SpotifyControl } from './spotify'
 import { breakOverNotice, focusDoneNotice, KEY_BREAK_OVER, KEY_FOCUS_DONE, KEY_STAND_UP } from './notices'
 
@@ -30,6 +31,8 @@ export const LATE_NOTIFY_MS = 10 * MINUTE_MS
 interface StoredState {
   version: 1
   focus: FocusState
+  /** The Do Not Disturb a block turned on, so a restart still knows which one is Rhythm's. */
+  dnd?: unknown
 }
 
 export interface RuntimeDeps {
@@ -37,6 +40,8 @@ export interface RuntimeDeps {
   macos: MacosBridge
   /** Absent: a control that never runs anything (tests, a host without macOS). */
   spotify?: SpotifyControl
+  /** Builds the Do Not Disturb control over this runtime; absent: one that never runs anything. */
+  dnd?: (runtime: RhythmRuntime) => DndController
   now?: () => number
 }
 
@@ -44,6 +49,7 @@ export class RhythmRuntime {
   readonly walnut: WalnutServerApi
   readonly macos: MacosBridge
   readonly spotify: SpotifyControl
+  readonly dnd: DndController
   readonly now: () => number
   config: RhythmConfig = normalizeConfig({})
   focus: FocusState = { ...IDLE_FOCUS }
@@ -71,6 +77,23 @@ export class RhythmRuntime {
     })
     this.now = deps.now ?? Date.now
     this.day = emptyDay(localDayKey(this.now()))
+    this.dnd = deps.dnd ? deps.dnd(this) : new DndController({
+      enabled: false, log: deps.walnut.log, run: async () => ({ ok: false, code: null, stdout: '', stderr: '', error: 'not on a Mac' }),
+      readDetail: async () => ({ ok: false, reason: 'unreadable', message: 'not on a Mac' }),
+      checkShortcuts: async () => this.macos.shortcuts, writeInput: async () => '', assumeOff: () => undefined,
+      now: this.now, running: () => this.runningBlock(), onChange: () => this.dndChanged(),
+    })
+  }
+
+  /** The focus block running now, for the Do Not Disturb control. */
+  runningBlock(): { startedAt: number; endsAt: number } | null {
+    return this.focus.phase === 'focus' && this.focus.endsAt > 0 ? { startedAt: this.focus.startedAt, endsAt: this.focus.endsAt } : null
+  }
+
+  /** The Do Not Disturb record moved (outside the queue): store it and tell the App. */
+  dndChanged(): void {
+    this.dirty = true
+    void this.kick()
   }
 
   // ── lifecycle ─────────────────────────────────────────────────────────────
@@ -80,6 +103,7 @@ export class RhythmRuntime {
     const now = this.now()
     const stored = await this.walnut.storage.readJson<Partial<StoredState>>(STATE_FILE, {})
     this.focus = focusOnBoot(stored.focus)
+    this.dnd.load(stored.dnd)
     this.day = parseDay(await this.walnut.storage.readJson(this.dayFile(localDayKey(now)), null), localDayKey(now))
     // An older version kept a sitting streak and a stand-up reminder; neither exists now.
     if ('presence' in stored || 'reminder' in stored) {
@@ -137,13 +161,13 @@ export class RhythmRuntime {
       this.focus = advanced.state
       this.dirty = true
     }
-    // A block that drove macOS Do Not Disturb turns it off here, and the mirror is told
-    // to read it as off at once: otherwise the hold it kept alive would outlive the
-    // block by a poll and silence the block's own prompt below.
-    if (this.config.macosFocusShortcuts && advanced.events.some((event) => event.type === 'focus-completed')) {
-      this.macos.setDoNotDisturb(false, this.now)
-      this.macos.assumeDoNotDisturbOff(now)
-    }
+    // The block that turned macOS Do Not Disturb on is over (ended, stopped, or ended
+    // while Walnut was down): Rhythm's own Do Not Disturb goes off, nothing else.
+    const dndEnding = this.dnd.record?.status === 'on' && this.runningBlock()?.startedAt !== this.dnd.record.block
+    this.dnd.reconcile()
+    // Read it as off at once, so a hold the mirror kept for it does not outlive the block
+    // by a poll and silence the block's own prompt below.
+    if (dndEnding) this.macos.assumeDoNotDisturbOff(now)
     await this.macos.pollMirror(now, this.config.mirrorMacosFocus)
     // Release the block's quiet hold BEFORE announcing that the block ended: Walnut never
     // shows a reminder while quiet is on, so "Focus block done" would be silenced by our
@@ -234,7 +258,8 @@ export class RhythmRuntime {
   async persist(): Promise<void> {
     if (this.dirty) {
       this.dirty = false
-      const state: StoredState = { version: 1, focus: this.focus }
+      const dnd = this.dnd.toJSON()
+      const state: StoredState = { version: 1, focus: this.focus, ...(dnd ? { dnd } : {}) }
       await this.walnut.storage.writeJson(STATE_FILE, state).catch((error: unknown) => {
         this.dirty = true
         this.warnOnce('persist:state', 'Rhythm could not save its state', { error: String(error) })

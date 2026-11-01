@@ -50,8 +50,18 @@ extension WalnutAPI {
 
     /// `remember`: the lengths become the next block's defaults (Rhythm's settings).
     /// `spotify`: a playlist URI Rhythm plays in the Spotify app on the Mac.
-    func rhythmFocusStart(minutes: Int, breakMinutes: Int, spotify: String? = nil, remember: Bool = true) async throws -> RhythmActionResult {
-        try await rhythmOp("focus_start", body: RhythmStartArgs(minutes: minutes, breakMinutes: breakMinutes, spotify: spotify, remember: remember))
+    func rhythmFocusStart(minutes: Int, breakMinutes: Int, spotify: String? = nil, remember: Bool = true, taskId: String? = nil) async throws -> RhythmActionResult {
+        try await rhythmOp("focus_start", body: RhythmStartArgs(minutes: minutes, breakMinutes: breakMinutes, spotify: spotify, remember: remember, taskId: taskId))
+    }
+
+    /// Rest now: during a block it ends there and its break starts; while off, a rest of its own.
+    func rhythmFocusRest(minutes: Int? = nil) async throws -> RhythmActionResult {
+        try await rhythmOp("focus_rest", args: minutes.map { ["minutes": $0] } ?? [:])
+    }
+
+    /// More time on the block or the break running now.
+    func rhythmFocusExtend(minutes: Int) async throws -> RhythmActionResult {
+        try await rhythmOp("focus_extend", args: ["minutes": minutes])
     }
 
     func rhythmFocusStop() async throws -> RhythmActionResult {
@@ -68,6 +78,8 @@ struct RhythmStartArgs: Encodable, Equatable {
     let breakMinutes: Int
     let spotify: String?
     let remember: Bool
+    /// Focus now during a break keeps the run's task.
+    var taskId: String? = nil
 }
 
 /// `music_tracks`: the audio files in the focus music folder on the Mac, and the
@@ -110,6 +122,10 @@ struct RhythmFocusStatus: Decodable, Equatable {
         /// Epoch ms; 0 while idle.
         let endsAt: Double?
         let title: String?
+        /// The run's block length and its picked break, for Focus now and Rest now (absent from an older Rhythm).
+        var minutes: Int? = nil
+        var breakMinutes: Int? = nil
+        var taskId: String? = nil
         /// Blocks done since the last long break (absent from an older Rhythm).
         var completedInCycle: Int? = nil
         var lastRun: LastRun? = nil

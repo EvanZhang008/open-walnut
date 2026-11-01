@@ -16,7 +16,9 @@ Every op below is called with `walnut tools call <op> '<json args>'`. Read `waln
 | "start a pomodoro", "focus on this for 25 minutes", "start a focus block on this task" | `walnut_rhythm_focus_start` with `taskId` (the task you are working in, if any) and optional `minutes` / `breakMinutes` |
 | "start a block with Deep Focus", "play my Spotify focus playlist with it" | `walnut_rhythm_focus_start` with `spotify` (a playlist link or URI from `music_tracks`' `spotify.playlists`) |
 | "stop the timer", "cancel the pomodoro", "I'm done focusing" | `walnut_rhythm_focus_stop` |
-| "end the break", "I'm back" during a break | `walnut_rhythm_break_skip`, then `walnut_rhythm_focus_start` if they want another block |
+| "end the break", "I'm back" during a break | `walnut_rhythm_break_skip`, or `walnut_rhythm_focus_start` if they want the next block now |
+| "I need a break now", "rest early", "start with a rest" | `walnut_rhythm_focus_rest` with optional `minutes` |
+| "give me 10 more minutes", "longer break" | `walnut_rhythm_focus_extend` with `minutes` |
 | "how much did I focus today", "is a block running", "when does it end" | `walnut_rhythm_status` |
 | "what focus music do I have", "is my brown noise there" | `walnut_rhythm_music_tracks` |
 | "switch to Deep Focus", "stop the Spotify music" (a block is running) | `walnut_rhythm_focus_music` with `spotify` (or empty) |
@@ -27,6 +29,8 @@ Every op below is called with `walnut tools call <op> '<json args>'`. Read `waln
 - `walnut_rhythm_focus_start` `{ taskId?: string, minutes?: integer, breakMinutes?: integer, spotify?: string, remember?: boolean }`: starts a block, then its break of `breakMinutes`. `spotify` plays that playlist in Spotify on the Mac until the block ends; the answer says when Spotify did not play (`spotifyError`), and the block runs anyway. Pass `remember: true` only when the person asked to change their default lengths. Refused while one is already running; stop it first only if the person asked for a new one.
 - `walnut_rhythm_focus_stop` `{}`: stops the block or break and ends the cycle. Rhythm is off after it. A stopped block does not count as completed.
 - `walnut_rhythm_break_skip` `{}`: ends the running break early. Rhythm is off after it.
+- `walnut_rhythm_focus_rest` `{ minutes?: integer }`: rest now. During a block it ends there and its break starts; while off, a rest of its own. Refused during a break. Only when the person asked.
+- `walnut_rhythm_focus_extend` `{ minutes?: integer }`: adds time (default 5) to the block or break running now. Refused while off; it never starts a run.
 - `walnut_rhythm_music_tracks` `{}`: read-only. The audio files in the focus music folder (`folder`, `tracks[].title`, `tracks[].file`), in play order, and `spotify` (`available`, `reason`, `playlists[].uri`, `playlists[].name`).
 - `walnut_rhythm_focus_music` `{ spotify?: string }`: during a running block, switch its Spotify music to that playlist, or pass an empty `spotify` to pause the Spotify the block was playing. The block keeps running. Refused when no block runs (it never starts one).
 - `walnut_rhythm_spotify_preview` `{ uri?: string, stop?: boolean }`: 15 seconds of a playlist in Spotify on the Mac so the person hears it, then the block's own playlist comes back (or Spotify pauses). Only when the person asks to hear one.
@@ -40,5 +44,6 @@ Each mutating op answers `{ message, state }`; relay `message` in one sentence.
 - Tie a block to a task only with a real task id (the task you are in, or one the person named). Never invent one.
 - Do not add your own break or stand-up reminders on top of Rhythm. It asks once after each break; that is all the person wants.
 - Folder music plays in the person's browser or phone, never from an op: you cannot start or stop that sound. Tell them to pick it in the Start form (the sidebar ring's popover or the Rhythm app; on the phone, Settings, Focus music). To add music, they put m4a, mp3 or wav files in the folder `music_tracks` names. A Spotify playlist is the one music an op can start, with `focus_start`, on the Mac. Never download music from Spotify or other services.
+- "turn on do not disturb for this block" / "turn it off": `walnut_rhythm_focus_dnd` with `on`. It never replaces a Focus the person turned on, and it answers why when it could not turn on. `walnut_rhythm_focus_start` takes `dnd` for the block it starts.
 - `macos_shortcuts_install` is not for you: it opens dialogs on the Mac's screen, so it only runs from the Install shortcuts button in the Rhythm app.
 - Settings (block and break lengths, quiet, music) live under `plugins.walnut-rhythm` and are edited in the Rhythm app. Point the person there rather than changing config yourself.

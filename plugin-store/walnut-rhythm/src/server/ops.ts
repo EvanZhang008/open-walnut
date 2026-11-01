@@ -35,18 +35,40 @@ export const OP_SPECS: OpSpec[] = [
   },
   {
     name: 'focus_start', title: 'Start a focus block', readonly: false, remote: 'allow',
-    description: 'Start a focus block (a pomodoro), optionally for one task. Only when the person asked for one: Rhythm is off until they start it. Walnut goes quiet until it ends, then its break counts down, then Rhythm asks once whether to start the next block and stays off if nobody does. Refused while a block is already running.',
+    description: 'Start a focus block (a pomodoro), optionally for one task. Only when the person asked for one: Rhythm is off until they start it. Walnut goes quiet until it ends, then its break counts down, then Rhythm asks once whether to start the next block and stays off if nobody does. Refused while a block is already running; during a break it starts the next block now (Focus now). mode "rest" starts a rest instead (as focus_rest).',
     properties: {
+      mode: { type: 'string', enum: ['focus', 'rest'], description: 'focus (default): a focus block; rest: a rest of `minutes` (default the break length), with no quiet and no Do Not Disturb' },
       taskId: TASK_ID,
       minutes: { ...MINUTES, description: 'Block length in minutes (default from settings, 1 to 180)' },
       breakMinutes: { ...MINUTES, description: 'Length of the break after this block in minutes (default from settings, 1 to 60); the long break keeps its own length' },
       spotify: { type: 'string', description: 'A Spotify playlist link or URI to play in the Spotify app on this Mac while the block runs; it pauses when the block ends. Omit for no Spotify.' },
       remember: { type: 'boolean', description: 'Keep minutes and breakMinutes as the defaults for the next block (the settings). Only when the person picked them.' },
+      dnd: { type: 'boolean', description: 'Turn macOS Do Not Disturb on for this block (default: the "Mac Do Not Disturb during focus blocks" setting). Rhythm leaves a Focus the person turned on alone, and macOS turns its own Do Not Disturb off when the block ends.' },
     },
+  },
+  {
+    name: 'focus_dnd', title: 'Do Not Disturb for this block', readonly: false, remote: 'allow',
+    description: 'Turn macOS Do Not Disturb on (until the running focus block ends) or off for the block running now. Rhythm never replaces a Focus the person turned on, and turns off only the Do Not Disturb it turned on itself. On is refused when no block runs (it never starts one); off works any time and ends only Rhythm\'s own. Answers where Do Not Disturb stands, including why it could not turn on.',
+    properties: { on: { type: 'boolean', description: 'true: on until the block ends; false: off now' } },
+  },
+  {
+    name: 'focus_rest', title: 'Rest now', readonly: false, remote: 'allow',
+    description: 'Rest now, only when the person asked: during a focus block, the block ends here (logged for the time it ran, not counted toward the long break) and its break starts at once; while Rhythm is off, a rest of its own. Quiet and Do Not Disturb end with the block. When the rest runs out, Rhythm asks once about the next block. Refused during a break.',
+    properties: { minutes: { ...MINUTES, description: 'Rest length in minutes (default the block\'s break, else the setting; 1 to 60)' } },
+  },
+  {
+    name: 'focus_extend', title: 'Extend', readonly: false, remote: 'allow',
+    description: 'Add time to the focus block or the break running now (Extend, More break). A longer block keeps Walnut quiet and Do Not Disturb on until its new end. Refused while Rhythm is off; it never starts a run.',
+    properties: { minutes: { ...MINUTES, description: 'Minutes to add (default 5, 1 to 60)' } },
   },
   {
     name: 'focus_stop', title: 'Stop the focus block', readonly: false, remote: 'allow',
     description: 'Stop the running focus block or break and end the cycle; Rhythm is off after it. A stopped block is not counted as completed.',
+  },
+  {
+    name: 'dnd_setting', title: 'Mac Do Not Disturb setting', readonly: false, remote: 'allow',
+    description: 'Turn the "Mac Do Not Disturb during focus blocks" setting on or off. On: every focus block started without its own pick turns macOS Do Not Disturb on until it ends (needs the two Rhythm shortcuts, added once from the Rhythm App). Changes only this setting.',
+    properties: { on: { type: 'boolean', description: 'true: on; false: off' } },
   },
   {
     name: 'break_skip', title: 'End the break', readonly: false, remote: 'allow',
@@ -82,7 +104,7 @@ export const OP_SPECS: OpSpec[] = [
   },
   {
     name: 'macos_shortcuts_install', title: 'Install the Rhythm shortcuts', readonly: false, remote: 'deny',
-    description: 'Prepare the "Walnut Focus On" and "Walnut Focus Off" shortcuts and open each in Shortcuts, which asks the person to add it with one click. Mac only.',
+    description: 'Prepare the "Walnut Do Not Disturb Until" and "Walnut Focus Off" shortcuts and open each missing one in Shortcuts, which asks the person to add it with one click. Mac only.',
   },
   {
     name: 'macos_privacy_open', title: 'Open Full Disk Access settings', readonly: false, remote: 'deny',
@@ -95,6 +117,10 @@ function handlers(runtime: RhythmRuntime): Record<string, Handler> {
     status: (args) => actions.status(runtime, args),
     focus_start: (args) => actions.focusStart(runtime, args),
     focus_stop: () => actions.focusStop(runtime),
+    focus_rest: (args) => actions.focusRest(runtime, args),
+    focus_extend: (args) => actions.focusExtend(runtime, args),
+    focus_dnd: (args) => actions.focusDnd(runtime, args),
+    dnd_setting: (args) => actions.dndSetting(runtime, args),
     break_skip: () => actions.breakSkip(runtime),
     music_tracks: () => actions.musicTracks(runtime),
     music_folder_open: () => actions.musicFolderOpen(runtime),

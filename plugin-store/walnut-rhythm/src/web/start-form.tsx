@@ -1,6 +1,6 @@
 /**
- * The Start form: how long the block and its break run, what music Start plays, and the
- * Start button. One component for the sidebar popover (the `status-item.panel` slot) and
+ * The Start form: how long the block and its break run, what music Start plays, the
+ * Start button, and Rest (a break of the Break length, with nothing else). One component for the sidebar popover (the `status-item.panel` slot) and
  * the App's focus card, so both say the same thing and remember the same pick.
  *
  * It says plainly what Start will play before the click ("Start plays Brown Noise on this
@@ -15,6 +15,7 @@ import { resolveStartChoice } from './music'
 import { useMusic } from './music-card'
 import { choiceKey, MusicPicker } from './music-picker'
 import { CYCLE_RESET_MS } from '../server/focus'
+import { DndStartToggle } from './dnd-row'
 import type { OpOutcome, RhythmPublicState, RhythmStore } from './store'
 
 export { choiceKey }
@@ -71,6 +72,8 @@ export function startWithMusic(input: {
   minutes: number
   breakMinutes: number
   taskId?: string | null
+  /** Mac Do Not Disturb for this block; absent = the setting. */
+  dnd?: boolean
 }): Promise<OpOutcome<{ message: string; spotifyError?: string }>> {
   const { store, music, choice } = input
   // focus_start ends a Spotify preview on the server itself.
@@ -85,6 +88,7 @@ export function startWithMusic(input: {
     remember: true,
     ...(input.taskId ? { taskId: input.taskId } : {}),
     ...(choice.kind === 'spotify' ? { spotify: choice.uri } : {}),
+    ...(typeof input.dnd === 'boolean' ? { dnd: input.dnd } : {}),
   }
   return store.call<{ message: string; spotifyError?: string }>('focus_start', args).then((outcome) => {
     if (!outcome.ok && played !== undefined) music.stop(played)
@@ -155,6 +159,8 @@ export function StartForm({ store, music, state, taskId, compact, onStarted }: {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
+  // Starts from the setting each time the form opens; a pick here is for this block only.
+  const [dnd, setDnd] = useState(() => config.macosFocusShortcuts)
   useMusicList(music)
 
   const listing = view.listing
@@ -170,7 +176,21 @@ export function StartForm({ store, music, state, taskId, compact, onStarted }: {
     setBusy(true)
     setMessage(null)
     setFailed(false)
-    void startWithMusic({ store, music, choice, minutes, breakMinutes, taskId }).then((outcome) => {
+    void startWithMusic({ store, music, choice, minutes, breakMinutes, taskId, ...(state.dnd.available ? { dnd } : {}) }).then((outcome) => {
+      setBusy(false)
+      if (!outcome.ok) { setFailed(true); setMessage(outcome.message); return }
+      onStarted?.(outcome.result)
+    })
+  }
+
+  // A rest instead of a block: the Break length, no music, no quiet, no Do Not Disturb.
+  const rest = () => {
+    if (breakMinutes === null || busy) return
+    setBusy(true)
+    setMessage(null)
+    setFailed(false)
+    music.stopPreview(undefined, true)
+    void store.call<{ message: string }>('focus_rest', { minutes: breakMinutes }).then((outcome) => {
       setBusy(false)
       if (!outcome.ok) { setFailed(true); setMessage(outcome.message); return }
       onStarted?.(outcome.result)
@@ -186,6 +206,7 @@ export function StartForm({ store, music, state, taskId, compact, onStarted }: {
         <MusicPicker music={music} value={choice} onPick={(next) => { music.stopPreview(); music.setStartChoice(next) }} testId="rhythm-start-music" />
       </div>
       <p className="rhythm-start-plays" data-testid="rhythm-start-plays">{musicLine(choice, listing)}</p>
+      <DndStartToggle state={state} value={dnd} onChange={setDnd} />
       {invalid && <p className="rhythm-error" role="status" data-testid="rhythm-start-invalid">{invalid}</p>}
       {message && <p className={failed ? 'rhythm-error' : 'rhythm-status'} role="status" data-testid="rhythm-start-message">{message}</p>}
       <div className="rhythm-actions">
@@ -198,6 +219,15 @@ export function StartForm({ store, music, state, taskId, compact, onStarted }: {
           onClick={start}
         >
           {busy ? 'Starting…' : `Start ${minutes ?? '?'} min focus`}
+        </button>
+        <button
+          type="button"
+          className="rhythm-button"
+          disabled={busy || breakMinutes === null}
+          data-testid="rhythm-start-rest"
+          onClick={rest}
+        >
+          {`Rest ${breakMinutes ?? '?'} min`}
         </button>
         <span className="rhythm-muted" data-testid="rhythm-start-then">{thenText(state, breakMinutes)}</span>
       </div>

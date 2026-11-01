@@ -10,6 +10,12 @@ import { NOT_QUIET, normalizeQuiet, type QuietState } from './quiet-model';
 
 export * from './quiet-model';
 
+/** The state the console last heard, for a gate outside React (a system notification). */
+let lastQuiet: QuietState = NOT_QUIET;
+export function currentQuiet(): QuietState {
+  return lastQuiet;
+}
+
 /** Load once, then follow `quiet:changed`. */
 export function useQuietState(): QuietState {
   const [quiet, setQuiet] = useState<QuietState>(NOT_QUIET);
@@ -27,6 +33,7 @@ export function useQuietState(): QuietState {
     return () => ac.abort();
   }, []);
   useEvent('quiet:changed', (data) => { sawEvent.current = true; setQuiet(normalizeQuiet(data)); });
+  lastQuiet = quiet;
   return quiet;
 }
 
