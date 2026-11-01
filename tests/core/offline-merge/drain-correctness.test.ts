@@ -19,7 +19,7 @@ vi.mock('../../../src/core/sessions/session-send-core.js', async (importOriginal
 import { runOfflineHandover, _resetOfflineHandoverForTesting, _setHandoverBackoffForTesting } from '../../../src/core/offline-handover.js'
 import { addTask, getTask, listTasks, updateTaskRaw, updateTasksBulk, ensureProject, deleteProject } from '../../../src/core/task-manager.js'
 import { closeDb } from '../../../src/core/task-db.js'
-import { _resetHostClocksForTesting } from '../../../src/core/offline-merge/host-clock.js'
+import { _resetHostClocksForTesting, _setHostClockForTesting } from '../../../src/core/offline-merge/host-clock.js'
 import { ConflictLog, conflictDir, readConflictLog, type ConflictEntry } from '../../../src/core/offline-merge/conflict-log.js'
 import { recordApplied, lookupApplied } from '../../../src/core/offline-merge/ledger.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
@@ -137,6 +137,10 @@ describe('the conflict log is on disk before the ledger row and the ack', () => 
 describe('a queued write gets the checks the online PATCH makes', () => {
   it('a park with wait_until "6h" stores the time six hours after the write, not the text', async () => {
     const id = (await addTask({ title: 'Park me', project: 'Acme' } as never)).task.id
+    // The fake daemon shares this clock, so a drain measures only the rounding of rtt/2
+    // (0 or 1 ms) and the stored time came out 1 ms late (CI run 41315324674). Pin the link
+    // at offset 0 with a zero round trip, which no measurement replaces: this is about "6h".
+    _setHostClockForTesting('marina', 0)
     const at = Date.now() - 60_000
     const d = daemon('marina', [fieldsRec(id, { phase: { base: 'TODO', value: 'WAITING' }, wait_until: { base: '', value: '6h' } }, { at })])
     await drainUntilEmpty(d)
