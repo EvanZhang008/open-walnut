@@ -25,6 +25,9 @@ interface SttStatusState {
 
 // Module-level cache — shared by all hook consumers
 let cachedStatus: SttStatus | null = null;
+// The last status that named a working engine. Survives invalidation, so a fetch
+// that fails right after a settings refresh still answers with what worked.
+let lastGoodStatus: SttStatus | null = null;
 let cacheTimestamp = 0;
 let cacheIsError = false;
 let fetchPromise: Promise<SttStatus> | null = null;
@@ -37,7 +40,8 @@ function isStale(): boolean {
   return Date.now() - cacheTimestamp > ttl;
 }
 
-async function getStatus(): Promise<SttStatus> {
+/** The cached status read every mic shares (exported for tests). */
+export async function getStatus(): Promise<SttStatus> {
   if (!isStale() && cachedStatus) return cachedStatus;
 
   // Deduplicate in-flight requests
@@ -46,6 +50,10 @@ async function getStatus(): Promise<SttStatus> {
   fetchPromise = fetchSttStatus()
     .then((s) => {
       cachedStatus = s;
+      // A read that names no engine is the user's own "voice off": forget the
+      // working one, so a later failed read cannot bring it back.
+      if (s.engine && s.available) lastGoodStatus = s;
+      else if (!s.engine) lastGoodStatus = null;
       cacheTimestamp = Date.now();
       cacheIsError = false;
       fetchPromise = null;
@@ -60,12 +68,26 @@ async function getStatus(): Promise<SttStatus> {
       // to disable the mic mid-recording. Keep the last good status; the short
       // error TTL retries soon.
       if (cachedStatus?.engine) return cachedStatus;
+      if (lastGoodStatus) {
+        cachedStatus = lastGoodStatus;
+        return lastGoodStatus;
+      }
       const fallback: SttStatus = { engine: null, available: false, error: String(err) };
       cachedStatus = fallback;
       return fallback;
     });
 
   return fetchPromise;
+}
+
+/**
+ * Whether a mic control should treat voice as unavailable. Every mic button
+ * decides through here (tests/web/stt-unavailable-ratchet.test.ts): while it is
+ * recording or transcribing, nothing the status read says can block it.
+ */
+export function sttBlocksMic(status: Pick<SttStatusState, 'isLoading' | 'isConfigured' | 'isAvailable'>, busy: boolean): boolean {
+  if (busy || status.isLoading) return false;
+  return !status.isConfigured || !status.isAvailable;
 }
 
 /** Invalidate the cache (e.g. after saving settings). */

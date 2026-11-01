@@ -40,6 +40,7 @@ export interface MlxEngineConfig {
   model?: string;       // HF model id or local path (default: Qwen3-ASR 8-bit)
   port?: number;        // daemon port (default: auto-pick)
   idleTtlMs?: number;   // kill daemon after inactivity (default: 10 min)
+  importProbeTimeoutMs?: number; // `import mlx_audio` check (default: 30s; tests shorten it)
 }
 
 export const DEFAULT_MLX_MODEL = 'mlx-community/Qwen3-ASR-1.7B-8bit';
@@ -417,11 +418,22 @@ export function createMlxEngine(cfg: MlxEngineConfig): SttEngine {
       if (!(await fileExists(cfg.pythonPath))) {
         return { available: false, error: `Python interpreter not found: ${cfg.pythonPath}` };
       }
+      // A daemon that finished starting (or was adopted) imported mlx_audio: no
+      // probe needed. Not while one is still starting: it may yet die on the import.
+      if (serverPort !== null && !startingPromise) mlxImportOk = true;
       if (!mlxImportOk) {
         try {
-          await execFileAsync(cfg.pythonPath, ['-c', 'import mlx_audio'], { timeout: 30_000, env: sttSpawnEnv() });
+          await execFileAsync(cfg.pythonPath, ['-c', 'import mlx_audio'], { timeout: cfg.importProbeTimeoutMs ?? 30_000, env: sttSpawnEnv() });
           mlxImportOk = true;
-        } catch {
+        } catch (err) {
+          // A probe the clock killed proves nothing about the install: at load
+          // 400 a Python start can outlast it, and "not installed" would grey the
+          // mic out for a minute. Say available; a real missing module still
+          // fails the daemon start with its own error.
+          if ((err as { killed?: boolean }).killed) {
+            log.stt.warn(`mlx-audio import check timed out in ${cfg.pythonPath} (machine busy?) — not treating it as missing`);
+            return { available: true };
+          }
           return { available: false, error: `mlx-audio not installed in ${cfg.pythonPath} (pip install mlx-audio)` };
         }
       }

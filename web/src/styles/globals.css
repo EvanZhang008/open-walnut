@@ -7906,7 +7906,10 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   display: flex;
   align-items: center;
   gap: 6px;
-  max-width: 260px;
+  /* Size to the message: anchored inside the mic's narrow wrapper, a
+     shrink-to-fit box wraps every word onto its own line (2026-10-31). */
+  width: max-content;
+  max-width: 300px;
   padding: 6px 9px;
   font-size: 11.5px;
   line-height: 1.35;
@@ -7927,9 +7930,6 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
 /* Transcription-failure bubble — same anchor as the silence warning, red accents + Retry */
 .mic-error-bubble {
   border-color: var(--danger, #d9534f);
-  /* Size to the message: anchored inside the mic's narrow wrapper, a
-     shrink-to-fit box wraps every word onto its own line. */
-  width: max-content;
   max-width: 320px;
 }
 .mic-error-bubble svg {

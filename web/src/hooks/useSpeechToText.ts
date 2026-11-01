@@ -15,6 +15,7 @@ import { decideStopAction } from '@/utils/stt-stop';
 import { joinSegments } from '@/utils/stt-segments';
 import { decideDraftTick } from '@/utils/stt-draft-window';
 import { PcmCapture } from '@/utils/pcm-stream';
+import { initialMicHealth, micHealthTick, micHealthTrackEnded, byteFrameRms, SAMPLE_INTERVAL_MS, type MicHealthState } from '@/utils/mic-health';
 import { log } from '@/utils/log';
 
 export interface UseSpeechToTextOptions {
@@ -84,20 +85,9 @@ export interface UseSpeechToTextReturn {
   discardRecording: () => void;
 }
 
-// Mic-silence detection tunables.
-// We never auto-stop the recording — that would destroy what the user is saying on a
-// false positive and helps nothing on a true one. Instead we surface a non-destructive
-// WARNING while recording when the mic looks dead, and clear it the moment sound returns.
-// "Dead" = a wedged browser capture (esp. Firefox) emitting pure zero samples (~ -91 dB).
-// A real mic always has a noise floor (~ -50..-60 dB) even during a pause, so the
-// dead-stream floor below (~ -62 dB) sits cleanly between the two and never trips on a
-// user who simply hasn't spoken yet.
-const DEAD_STREAM_RMS = 0.0008;      // RMS at/below this = dead-stream territory
-// Counted in *sampled ticks*, not wall-clock: a backgrounded/blurred tab can pause our
-// sampler, and wall-clock would expire while we captured nothing. Ticks only advance
-// while we are actually sampling audio, so backgrounding never false-trips the warning.
-const SAMPLE_INTERVAL_MS = 100;      // how often we sample RMS
-const SILENCE_WARN_TICKS = 30;       // ~3s of actual sampling with no sound → show warning
+// Mic-silence detection lives in mic-health.ts (the rules and why). We never
+// auto-stop the recording: the warning is non-destructive and clears itself the
+// moment sound returns.
 
 // Live-draft tunables. The draft normally works on a raw-PCM side capture
 // (pcm-stream.ts) so each tick only transcribes the CURRENT segment: audio up
@@ -198,6 +188,10 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
   // floor). Distinguishes a truly dead stream from a quiet/short real recording so the
   // onstop guard never drops genuine audio. Reset on each start.
   const sawAnyNonDeadRef = useRef(false);
+  // The mic warning's state for this recording (mic-health.ts), and when the
+  // recorder started, to tell at stop how much audio the capture delivered.
+  const micHealthRef = useRef<MicHealthState>(initialMicHealth());
+  const recordStartedAtRef = useRef(0);
   // True when the analyser successfully attached this recording (so the dead-stream
   // guard in onstop only applies when we actually had working level data).
   const analyserAttachedRef = useRef(false);
@@ -325,7 +319,23 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       // Best-effort: if AudioContext is unavailable, recording still works (just no meter).
       sawAnyNonDeadRef.current = false;
       analyserAttachedRef.current = false;
+      micHealthRef.current = initialMicHealth();
       setSilenceWarning(null);
+      // What the capture track says about itself, for the log: a stall that
+      // comes with a mute is the browser's, one without is the pipeline's.
+      // `ended` is final (device unplugged, permission revoked), so it warns.
+      const track = stream.getAudioTracks()[0];
+      if (track) {
+        track.addEventListener('mute', () => log.warn('stt', 'microphone track muted mid-recording'));
+        track.addEventListener('unmute', () => log.info('stt', 'microphone track unmuted'));
+        track.addEventListener('ended', () => {
+          if (streamRef.current !== stream) return;
+          log.warn('stt', 'microphone track ended mid-recording');
+          const tick = micHealthTrackEnded(micHealthRef.current);
+          micHealthRef.current = tick.state;
+          setSilenceWarning(tick.warning);
+        });
+      }
       pcmRef.current = null;
       confirmedRef.current = '';
       windowStartRef.current = 0;
@@ -353,7 +363,6 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
           pcmRef.current = PcmCapture.attach(ctx, stream);
 
           const buf = new Uint8Array(analyser.fftSize);
-          let consecutiveDeadTicks = 0;  // ticks in a row below the dead floor (background-tab safe)
 
           // setInterval, not rAF: rAF pauses when the tab is backgrounded/blurred, which
           // would freeze sampling. Counting ticks ties detection to real sampling progress.
@@ -362,13 +371,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
             const a = analyserRef.current;
             if (!a) return;
             a.getByteTimeDomainData(buf);
-            // RMS around the 128 center (silence == flat 128)
-            let sumSq = 0;
-            for (let i = 0; i < buf.length; i++) {
-              const v = (buf[i] - 128) / 128;
-              sumSq += v * v;
-            }
-            const rms = Math.sqrt(sumSq / buf.length);
+            const rms = byteFrameRms(buf);
             // Smooth + amplify a bit for a lively meter display
             setLevel((prev) => prev * 0.6 + Math.min(1, rms * 3) * 0.4);
 
@@ -380,20 +383,16 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
               lastVoiceChunkRef.current = chunksRef.current.length + 1;
             }
 
-            if (rms > DEAD_STREAM_RMS) {
-              // Mic is alive (even just noise floor) → reset counter and clear any warning.
-              sawAnyNonDeadRef.current = true;
-              consecutiveDeadTicks = 0;
-              setSilenceWarning((w) => (w ? null : w));
-            } else {
-              // Pure-zero territory: warn after a sustained run, but keep recording so the
-              // user decides. The warning auto-clears the instant sound returns (above).
-              consecutiveDeadTicks++;
-              if (consecutiveDeadTicks >= SILENCE_WARN_TICKS) {
-                setSilenceWarning((w) => w ??
-                  'No sound from the mic — check your device or restart the browser. Still recording.');
-              }
+            const tick = micHealthTick(micHealthRef.current, rms);
+            micHealthRef.current = tick.state;
+            if (tick.state.alive) sawAnyNonDeadRef.current = true;
+            if (tick.stallEndedTicks !== undefined) {
+              log.warn('stt', `audio input went silent for ${tick.stallEndedTicks * SAMPLE_INTERVAL_MS}ms mid-recording, then came back (no warning shown)`, {
+                contextState: ctx.state,
+                trackMuted: stream.getAudioTracks()[0]?.muted ?? null,
+              });
             }
+            setSilenceWarning((w) => (w === tick.warning ? w : tick.warning));
           }, SAMPLE_INTERVAL_MS);
         }
       } catch {
@@ -422,6 +421,18 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
         setIsRecording(false);
 
         const totalChunks = chunksRef.current.length;
+        // The capture can hold less audio than the time it ran: on a heavily
+        // loaded Mac (2026-10-31) recordings lost seconds of samples. Log it, so
+        // a "my words are missing" report can be traced; which layer fell behind
+        // (the capture, or the main-thread side capture) the line cannot tell.
+        const capturedPcm = pcmRef.current;
+        if (capturedPcm && recordStartedAtRef.current > 0) {
+          const ranMs = Date.now() - recordStartedAtRef.current;
+          const capturedMs = Math.round(capturedPcm.totalSamples / (capturedPcm.sampleRate / 1000));
+          if (ranMs - capturedMs > 1500) {
+            log.warn('stt', `audio fell behind: the side capture holds ${capturedMs}ms for ${ranMs}ms of recording (${ranMs - capturedMs}ms short)`);
+          }
+        }
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType });
         chunksRef.current = [];
 
@@ -707,6 +718,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       // Timeslice so chunks accumulate during recording — the live draft below
       // needs decodable audio-so-far (a from-the-start concat of webm chunks).
       recorder.start(CHUNK_MS);
+      recordStartedAtRef.current = Date.now();
       setIsRecording(true);
       setIsDrafting(false);
       lastDraftRef.current = null;

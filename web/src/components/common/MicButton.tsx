@@ -10,7 +10,7 @@ import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react
 import { useNavigate } from 'react-router-dom';
 import { useSpeechToText } from '@/hooks/useSpeechToText';
 import { SttDiffModal } from '@/components/common/SttDiffModal';
-import { useSttStatus } from '@/hooks/useSttStatus';
+import { useSttStatus, sttBlocksMic } from '@/hooks/useSttStatus';
 import { fetchSttDetection, fetchVocab, addVocabWord, fetchRecordings, retranscribeRecording, MODEL_CATALOG, type GgmlModel, type VoiceRecording } from '@/api/stt';
 import { registerVoiceInsertTarget } from '@/utils/voice-status';
 import { log } from '@/utils/log';
@@ -402,7 +402,10 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
 
   if (!isSupported) return null;
 
-  const sttUnavailable = !sttStatus.isLoading && (!sttStatus.isConfigured || !sttStatus.isAvailable);
+  // A live recording (or its transcription) is never "unavailable": the status is
+  // a periodic server read, and a blip in it while the user talks must not dim the
+  // button, swap its title, or turn the stop click into a jump to Settings.
+  const sttUnavailable = sttBlocksMic(sttStatus, isRecording || isTranscribing);
   // Never grey out for "not configured" — a disabled button with a hover-only tooltip is
   // undiscoverable (first-run users think voice input doesn't exist). Keep it clickable
   // and route the click to Settings → Voice instead.
