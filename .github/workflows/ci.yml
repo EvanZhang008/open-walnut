@@ -799,7 +799,10 @@ jobs:
           n=$(find "$RUNNER_TEMP/browser-reports" -name '*.json' | wc -l)
           echo "browser reports: $n of 16"
           [ "$n" -gt 0 ] || { echo "::warning::no browser shard wrote a report: nothing to judge" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; }
-          [ "$n" = 16 ] || echo "::warning::only $n of 16 browser shards wrote a report; the tests of the others are not judged"
+          # Name the shards: "15 of 16" alone sent a reader through 16 job logs (2026-11-01: shard 5,
+          # whose report outgrew the longest string the JSON reporter can write).
+          missing=$(for i in $(seq 1 16); do [ -f "$RUNNER_TEMP/browser-reports/browser-$i.json" ] || printf ' %s' "$i"; done)
+          [ -z "$missing" ] || echo "::warning::only $n of 16 browser shards wrote a report (no report from shard$missing); the tests of those shards are not judged" | tee -a "$GITHUB_STEP_SUMMARY"
           bun scripts/browser-baseline.mjs check "$RUNNER_TEMP/browser-reports" | tee -a "$GITHUB_STEP_SUMMARY"
 
   # ── The iOS app's tests on a simulator: informational, not in CI OK ───────

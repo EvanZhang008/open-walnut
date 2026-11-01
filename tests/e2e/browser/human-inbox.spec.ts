@@ -20,7 +20,7 @@
  * opening the panel already does by design.
  */
 import fs from 'node:fs/promises'
-import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
+import { test, expect, type APIRequestContext, type FrameLocator, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { TINY_MP3_BASE64 } from './fixtures/tiny-audio'
 import { TINY_MP4_BASE64 } from './fixtures/tiny-video'
@@ -161,6 +161,20 @@ async function readerDocument(
 
 async function shot(page: Page, name: string): Promise<void> {
   await page.screenshot({ path: `${SCREENSHOT_DIR}/${name}.png` })
+}
+
+/**
+ * The reader's document holds `marker`, read in the page so a miss reports the length and the
+ * last words, never the body itself. A web-first text matcher prints the whole received text,
+ * once per poll in its call log and again in each copy of the error: a 31MB letter that missed
+ * its tail made a JSON report past V8's longest string, so its shard wrote no report at all and
+ * none of its 216 tests were judged (2026-11-01, two CI runs).
+ */
+async function expectBodyHolds(frame: FrameLocator, marker: string, timeout: number): Promise<void> {
+  await expect.poll(() => frame.locator('body').evaluate((body, m) => {
+    const text = body.textContent ?? ''
+    return text.includes(m) ? 'holds it' : `${text.length} chars, ending ${JSON.stringify(text.slice(-80))}`
+  }, marker), { timeout, message: `the reader's body holds ${marker}` }).toBe('holds it')
 }
 
 // ── 1. The whole loop: arrive → read → decide → deliver → reply ──
@@ -650,7 +664,7 @@ test('a multi-MB letter with embedded base64 audio arrives whole and plays', asy
   const audio = page.frameLocator('.hib-html-frame').locator('audio')
   await expect(audio).toHaveCount(1, { timeout: 15_000 })
   expect(await audio.getAttribute('src')).toBe(`data:audio/mpeg;base64,${TINY_MP3_BASE64}`)
-  await expect(page.frameLocator('.hib-html-frame').locator('body')).toContainText(AUDIO_TAIL_MARKER)
+  await expectBodyHolds(page.frameLocator('.hib-html-frame'), AUDIO_TAIL_MARKER, 5_000)
   await shot(page, 'e2e-09-audio-letter-reader')
 
   // The security floor is unchanged, and media is allowed from data:/blob: ONLY.
@@ -739,7 +753,7 @@ test('a >10MB letter with embedded base64 video arrives whole and plays', async 
   // rule out truncation anywhere in the body.
   expect(await video.getAttribute('src')).toBe(`data:video/mp4;base64,${TINY_MP4_BASE64}`)
   expect(await inner.locator('audio').getAttribute('src')).toBe(`data:audio/mpeg;base64,${TINY_MP3_BASE64}`)
-  await expect(inner.locator('body')).toContainText(VIDEO_TAIL_MARKER, { timeout: 30_000 })
+  await expectBodyHolds(inner, VIDEO_TAIL_MARKER, 30_000)
   await shot(page, 'e2e-10-video-letter-reader')
 
   const { document: readerDoc, lane } = await readerDocument(request, frame)
@@ -848,7 +862,7 @@ test('a 30MB letter (past every inline limit) is staged, read, and plays', async
   expect(await inner.locator('audio').getAttribute('src')).toBe(`data:audio/mpeg;base64,${TINY_MP3_BASE64}`)
   // The marker sits after 30MB of prose: it can only render if nothing anywhere
   // in the chain truncated the document.
-  await expect(inner.locator('body')).toContainText(tail, { timeout: 60_000 })
+  await expectBodyHolds(inner, tail, 60_000)
   await shot(page, 'e2e-11-staged-30mb-letter')
 
   const { document: readerDoc, lane } = await readerDocument(request, frame)

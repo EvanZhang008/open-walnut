@@ -379,3 +379,28 @@ describe('specs that write the global notes', () => {
     expect(writers.filter(({ text }) => !ONE_WORKER.test(text)).map(({ file }) => file)).toEqual([])
   })
 })
+
+describe('a document of megabytes', () => {
+  // A web-first text matcher prints the whole received text, once per poll in its call log and
+  // again in each copy of the error. When the 31MB letter in human-inbox.spec.ts missed its tail,
+  // the JSON report grew past V8's longest string, the reporter could not write it, and shard 5
+  // judged none of its 216 tests (2026-11-01, two of seven CI runs). A spec that builds such a
+  // document reads it in the page (human-inbox.spec.ts `expectBodyHolds`).
+  const MEGA_BUILD = /\.repeat\([^\n]*(?:1024 \* 1024|\b\d{2,3}_000\b)/
+  const WHOLE_BODY_TEXT = /locator\('body'\)\)\.(?:toContainText|toHaveText)\(/
+
+  it('no spec that builds one runs a text matcher on a whole body', () => {
+    const offenders = sources
+      .filter(({ text }) => MEGA_BUILD.test(text))
+      .flatMap(({ file, text }) => text.split('\n')
+        .map((line, i) => (WHOLE_BODY_TEXT.test(line) ? `${file}:${i + 1}: ${line.trim()}` : ''))
+        .filter(Boolean))
+    expect(offenders).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    expect(MEGA_BUILD.test("const filler = `<p>${SENTENCE.repeat(Math.ceil((31 * 1024 * 1024) / SENTENCE.length))}</p>`")).toBe(true)
+    expect(MEGA_BUILD.test("const filler = `<p>${'Yesterday the sync queue drained cleanly. '.repeat(30_000)}</p>`")).toBe(true)
+    expect(WHOLE_BODY_TEXT.test("await expect(inner.locator('body')).toContainText(tail, { timeout: 60_000 })")).toBe(true)
+  })
+})

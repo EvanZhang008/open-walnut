@@ -219,4 +219,18 @@ describe('the committed list and CI', () => {
     expect(judgeStep.run).toContain('| tee')
     expect(judgeStep.shell).toBe('bash')
   })
+
+  it('CI names each browser shard that wrote no report, by the file its upload names', () => {
+    const doc = parseYaml(fs.readFileSync(path.join(ROOT, '.github/workflows/ci.yml'), 'utf8')) as {
+      jobs: Record<string, { strategy?: { matrix?: { shard?: number[] } }; steps: { uses?: string; with?: Record<string, unknown>; run?: string }[] }>
+    }
+    const shards = doc.jobs.browser!.strategy!.matrix!.shard!
+    const upload = doc.jobs.browser!.steps.find((s) => s.uses?.startsWith('actions/upload-artifact'))!
+    expect(String(upload.with?.path)).toMatch(/\/browser-\$\{\{ matrix\.shard \}\}\.json$/)
+    const judge = doc.jobs['browser-baseline']!.steps.find((s) => s.run?.includes('bun scripts/browser-baseline.mjs check'))!.run!
+    // 2026-11-01: "only 15 of 16" with no number; the missing one was found by reading 16 logs.
+    expect(judge).toContain(`$(seq 1 ${shards.length})`)
+    expect(judge).toContain('"$RUNNER_TEMP/browser-reports/browser-$i.json"')
+    expect(judge).toMatch(/no report from shard\$missing/)
+  })
 })
