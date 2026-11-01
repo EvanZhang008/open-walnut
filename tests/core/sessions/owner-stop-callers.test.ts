@@ -13,8 +13,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import fsp from 'node:fs/promises'
 import { createMockConstants } from '../../helpers/mock-constants.js'
 
-const { ownerStops, marks, outcomes, undos } = vi.hoisted(() => ({
+const { ownerStops, acpStops, liveAcp, marks, outcomes, undos } = vi.hoisted(() => ({
   ownerStops: [] as Array<{ sid: string; host?: string; reason: string; why: string }>,
+  acpStops: [] as Array<{ sid: string; runtimeId?: string; how: 'live' | 'owner' }>,
+  /** ACP sessions this server holds in memory, by session id. */
+  liveAcp: new Set<string>(),
   marks: [] as Array<{ sid: string; reason: string }>,
   /** What the owning daemon answers per sid; 'stopped' when unset. */
   outcomes: new Map<string, string>(),
@@ -27,10 +30,17 @@ vi.mock('../../../src/core/sessions/owner-stop.js', () => ({
     ownerStops.push({ sid: row.claudeSessionId, host: row.host, reason, why })
     return outcomes.get(row.claudeSessionId) ?? 'stopped'
   },
+  stopAcpThroughOwner: async (row: { claudeSessionId: string; acpRuntimeId?: string }) => {
+    acpStops.push({ sid: row.claudeSessionId, runtimeId: row.acpRuntimeId, how: 'owner' })
+    return 'stopped'
+  },
 }))
 vi.mock('../../../src/providers/claude-code-session.js', () => ({
   sessionRunner: {
     markExpectedTeardown: (sid: string, reason: string) => { marks.push({ sid, reason }); return () => { undos.push(sid) } },
+    findAcpSession: (sid: string) => liveAcp.has(sid)
+      ? { gracefulStop: async () => { acpStops.push({ sid, how: 'live' }) } }
+      : undefined,
   },
 }))
 vi.mock('../../../src/utils/session-liveness.js', () => ({
@@ -54,6 +64,7 @@ import {
   _resetSessionTrackerForTesting,
 } from '../../../src/core/session-tracker.js'
 import { closeDb } from '../../../src/core/session-db.js'
+import { ENGINE_REGISTRY, isAcpEngine } from '../../../src/core/agents/engine-registry.js'
 import { WALNUT_HOME } from '../../../src/constants.js'
 
 const BASE = 2 ** 22
@@ -66,6 +77,8 @@ beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true })
   await fsp.mkdir(WALNUT_HOME, { recursive: true })
   ownerStops.length = 0
+  acpStops.length = 0
+  liveAcp.clear()
   marks.length = 0
   outcomes.clear()
   undos.length = 0
@@ -109,6 +122,53 @@ describe('completeTaskSessions', () => {
       expect(rec).toMatchObject({ process_status: 'stopped', status_reason: 'expected_teardown' })
       expect(rec?.pid).toBeUndefined()
     }
+  })
+})
+
+describe('completeTaskSessions: ACP engines', () => {
+  // 2026-11-01: an OpenCode session of a completed task kept generating on the
+  // only Ollama slot, so the next session waited minutes behind it. An ACP
+  // record has no pid; its worker is stopped by runtime id.
+  const acpEngines = [...ENGINE_REGISTRY.keys()].filter((id) => isAcpEngine(id))
+
+  it('stops every ACP engine\'s worker: the live session here, else through its daemon', async () => {
+    expect(acpEngines.length).toBeGreaterThan(3)
+    const ids: string[] = []
+    for (const [i, engine] of acpEngines.entries()) {
+      const sid = `acp-${engine}`
+      ids.push(sid)
+      await createSessionRecord(sid, `acp-task-${i}`, 'proj', undefined, { engine, acpRuntimeId: `rt-${engine}` } as never)
+      await updateSessionRecord(sid, { process_status: i % 2 ? 'idle' : 'running' })
+      if (i % 2) liveAcp.add(sid)
+    }
+
+    expect(await completeTaskSessions(ids)).toBe(acpEngines.length)
+
+    await vi.waitFor(() => expect(acpStops).toHaveLength(acpEngines.length))
+    expect(acpStops).toEqual(acpEngines.map((engine, i) => (i % 2
+      ? { sid: `acp-${engine}`, how: 'live' }
+      : { sid: `acp-${engine}`, runtimeId: `rt-${engine}`, how: 'owner' })))
+    expect(ownerStops).toEqual([])
+    for (const sid of ids) expect(await getSessionByClaudeId(sid)).toMatchObject({ process_status: 'stopped', status_reason: 'expected_teardown' })
+  })
+
+  it('a stopped ACP session and one with no runtime are left alone', async () => {
+    await createSessionRecord('acp-stopped', 'acp-t1', 'proj', undefined, { engine: 'opencode', acpRuntimeId: 'rt-1' } as never)
+    await updateSessionRecord('acp-stopped', { process_status: 'stopped' })
+    await createSessionRecord('acp-no-runtime', 'acp-t2', 'proj', undefined, { engine: 'goose' } as never)
+    await completeTaskSessions(['acp-stopped', 'acp-no-runtime'])
+    await new Promise((r) => setTimeout(r, 20))
+    expect(acpStops).toEqual([])
+  })
+
+  it('the ACP session that completed its own task mid-turn stops when that turn ends, not now', async () => {
+    await createSessionRecord('acp-actor', 'acp-t3', 'proj', undefined, { engine: 'opencode', acpRuntimeId: 'rt-a' } as never)
+    await updateSessionRecord('acp-actor', { process_status: 'running' })
+    // It calls the API under its worker's runtime id (x-walnut-caller-sid), not the record's id.
+    expect(await completeTaskSessions(['acp-actor'], { actorSid: 'rt-a' })).toBe(0)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(acpStops).toEqual([])
+    expect((await getSessionByClaudeId('acp-actor'))?.process_status).toBe('running')
   })
 })
 

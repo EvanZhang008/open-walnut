@@ -30,6 +30,7 @@ interface RunnerInternals {
   activeProcessingTimers: Map<string, ReturnType<typeof setTimeout>>
   batchMessageIds: Map<string, string[]>
   sessions: Map<string, unknown>
+  acpSessions: Map<string, unknown>
 }
 
 let daemon: MockDaemon
@@ -167,6 +168,28 @@ describe('activeProcessing safety timer and a turn still running', () => {
       expect(await settled).toBe('rejected')
     } finally {
       vi.useRealTimers()
+      runner.destroyAndKill()
+    }
+  })
+
+  // 2026-11-01: a local model's ACP turn waiting on a permission prompt was
+  // force-cleared as 'no-session' after its 10-minute budget.
+  it('an ACP turn still processing waits on, and clears once it ended', async () => {
+    const sid = 'acp-live-turn'
+    const { runner, internal } = setup(sid)
+    const acp = { sessionId: sid, runtimeId: `rt-${sid}`, activity: 'processing', workerLive: true }
+    internal.acpSessions.set(sid, acp)
+    try {
+      vi.useFakeTimers()
+      internal.setActiveProcessing(sid, 1, ['qm-acp'])
+      await vi.advanceTimersByTimeAsync(15 * 60_000)
+      expect(internal.activeProcessing.has(sid)).toBe(true)
+      acp.activity = 'idle'
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(internal.activeProcessing.has(sid)).toBe(false)
+    } finally {
+      vi.useRealTimers()
+      internal.acpSessions.delete(sid)
       runner.destroyAndKill()
     }
   })

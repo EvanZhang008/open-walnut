@@ -2792,6 +2792,10 @@ export async function completeTaskSessions(
     // or its liveness monitor reports the exit as "session init failed" (a red
     // toast on every task you mark done, 2026-08-10). host picks the owning daemon.
     const pidsToKill: { sid: string; host?: string }[] = [];
+    // An ACP session has no pid: its worker is a daemon child keyed by its runtime
+    // id (2026-11-01: completing a task left its OpenCode worker generating on the
+    // only Ollama slot, so the next session waited behind it).
+    const acpToStop: Pick<SessionRecord, 'claudeSessionId' | 'host' | 'acpRuntimeId'>[] = [];
     const toReap: { claudeSessionId: string; host?: string }[] = [];
     let stopAtTurnEnd: string | undefined;
 
@@ -2817,12 +2821,18 @@ export async function completeTaskSessions(
         // listen, queueing the browser's first requests behind it).
         if (session.process_status === 'stopped' && session.pid == null) continue;
         const hasCli = session.pid != null && session.provider !== 'embedded' && session.provider !== 'sdk';
-        if (hasCli && sid === opts?.actorSid && session.process_status === 'running') {
+        const hasAcpWorker = session.pid == null && isAcpEngine(session.engine) && !!session.acpRuntimeId;
+        // An ACP session calls the API under its worker's runtime id, not the record's id.
+        const isActor = !!opts?.actorSid && (sid === opts.actorSid || session.acpRuntimeId === opts.actorSid);
+        if ((hasCli || hasAcpWorker) && isActor && session.process_status === 'running') {
           stopAtTurnEnd = sid;
           continue;
         }
         if (hasCli) {
           pidsToKill.push({ sid: session.claudeSessionId, host: session.host });
+        }
+        if (hasAcpWorker) {
+          acpToStop.push({ claudeSessionId: session.claudeSessionId, host: session.host, acpRuntimeId: session.acpRuntimeId });
         }
         toReap.push({ claudeSessionId: session.claudeSessionId, host: session.host });
         session.process_status = 'stopped';
@@ -2885,6 +2895,7 @@ export async function completeTaskSessions(
           void stopThroughOwner({ claudeSessionId: target.sid, host: target.host }, 'maintenance', 'task_completed');
         }
       }
+      if (acpToStop.length > 0) void stopAcpWorkers(acpToStop);
       // Conditionally reap each session's persistent terminal (dtach): a session
       // still running a foreground build/test is kept; an idle shell is killed.
       // Best-effort, fire-and-forget — terminal feature may be disabled.
@@ -2896,6 +2907,23 @@ export async function completeTaskSessions(
     }
     return updated;
   });
+}
+
+/** Stop each ACP worker of a completed task: the live session in this server, else through its host's daemon. */
+async function stopAcpWorkers(rows: Pick<SessionRecord, 'claudeSessionId' | 'host' | 'acpRuntimeId'>[]): Promise<void> {
+  const { sessionRunner } = await import('../providers/claude-code-session.js');
+  const { stopAcpThroughOwner } = await import('./sessions/owner-stop.js');
+  for (const row of rows) {
+    try {
+      const live = sessionRunner.findAcpSession(row.claudeSessionId);
+      if (live) await live.gracefulStop();
+      else await stopAcpThroughOwner(row, 'task_completed');
+    } catch (err) {
+      log.session.warn('stopping an ACP worker on task completion failed', {
+        sessionId: row.claudeSessionId, error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 }
 
 /**

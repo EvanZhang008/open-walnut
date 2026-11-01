@@ -9837,7 +9837,12 @@ export class SessionRunner {
     const fire = (): void => {
       if (!this.activeProcessing.has(sessionId)) return
       const live = this.findSessionByClaudeId(sessionId)
-      if (live?.inTurn && Date.now() - startedAt < ACTIVE_PROCESSING_MAX_HOLD_MS) {
+      // An ACP turn has no CLI session here: its own activity says it still runs
+      // (2026-11-01: a local model's turn held on a permission prompt for 10 minutes
+      // was force-cleared as 'no-session').
+      const acp = live ? undefined : this.findAcpSession(sessionId)
+      const acpRunning = acp?.activity === 'processing' && acp.workerLive
+      if ((live?.inTurn || acpRunning) && Date.now() - startedAt < ACTIVE_PROCESSING_MAX_HOLD_MS) {
         const next = setTimeout(fire, safetyTimeoutMs)
         next.unref()
         this.activeProcessingTimers.set(sessionId, next)
@@ -9845,7 +9850,7 @@ export class SessionRunner {
       }
       log.session.warn(`activeProcessing safety timeout (${Math.round(safetyTimeoutMs / 1000)}s): force-clearing stuck entry (batch ids retained)`, {
         sessionId, heldMs: Date.now() - startedAt,
-        why: !live ? 'no-session' : live.processStatus !== 'running' ? `status-${live.processStatus}`
+        why: acpRunning ? 'held-too-long' : !live ? 'no-session' : live.processStatus !== 'running' ? `status-${live.processStatus}`
           : live.inTurn ? 'held-too-long' : 'turn-ended',
       })
       this.activeProcessing.delete(sessionId)
