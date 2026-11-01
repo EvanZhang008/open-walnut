@@ -31,6 +31,10 @@ import {
 
 // Written for the flat list: open it as All mail (showAllMail, mail-review-helpers.ts).
 test.beforeEach(async ({ page }) => { await showAllMail(page) })
+// The first test on each fixture server pays its cold Vite boot inside the test (shellUp waits up
+// to 35 s, then 55 s), so the default 30 s ran out before R3-07 had looked at a row (2026-11-01:
+// 5 of 7 CI runs). Every spec on a MailFixtureServer runs with this room.
+test.setTimeout(240_000)
 
 const SHOTS = '/tmp/mail-ctx-r3'
 const READ_ROW = 'INBOX:2:11'

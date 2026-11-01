@@ -73,6 +73,12 @@ function trackConsoleErrors(page: Page): string[] {
 
 // ── Tests ──
 
+// Every test here types into the ONE global notes file of the shared fixture server, and each
+// starts by clearing it. Run in parallel, one test's clear landed while another typed: its next
+// save answered 409 (two console errors) and its own text was gone (2026-11-01: four of these
+// tests on CI). One worker, in order, and a failure does not skip the rest.
+test.describe.configure({ mode: 'default' })
+
 test.beforeEach(async () => {
   await clearNotes()
 })

@@ -335,3 +335,47 @@ describe('a mock turn a spec reads mid-turn', () => {
     expect(users.filter(({ text }) => !text.includes('holdUntil')).map(({ file }) => file)).toEqual([])
   })
 })
+
+describe('specs on their own mail fixture server', () => {
+  // The first test on a MailFixtureServer pays the server's cold Vite boot inside the test:
+  // shellUp (mail-review-helpers.ts) waits up to 35 s and then 55 s for the shell. Left at the
+  // 30 s default, mail-ctx-r3.spec.ts R3-07 ran out of time before it reached a row (2026-11-01:
+  // 5 of 7 CI runs). Such a spec sets a timeout for the file, or for every one of its tests.
+  const OWN_SERVER = /new MailFixtureServer\(|startGroupsFixture\(/
+  const FILE_TIMEOUT = /^test\.setTimeout\(/m
+  const TEST_START = /^\s*test\((['`"]).*\basync\b.*\{\s*$/
+
+  it('every one gives its tests more than the default', () => {
+    const offenders: string[] = []
+    for (const { file, text } of sources) {
+      if (!file.endsWith('.spec.ts') || !OWN_SERVER.test(text) || FILE_TIMEOUT.test(text)) continue
+      const lines = text.split('\n')
+      lines.forEach((line, i) => {
+        if (!TEST_START.test(line)) return
+        const first = lines.slice(i + 1).find((one) => one.trim() && !one.trim().startsWith('//')) ?? ''
+        if (!/test\.setTimeout\(|test\.slow\(/.test(first)) offenders.push(`${file}:${i + 1}: ${line.trim()}`)
+      })
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    expect(TEST_START.test("  test('R3-07 the refused row says so in words, and the sentence leads back to it', async ({ page }) => {")).toBe(true)
+  })
+})
+
+describe('specs that write the global notes', () => {
+  // The fixture server has ONE global notes file. notes-editor-stress.spec.ts cleared it before
+  // every test while its other tests typed into it on other workers: their next save answered
+  // 409 and their text was gone (2026-11-01, four of its tests on CI). A spec that writes it
+  // through the API runs its tests in one worker.
+  const WRITES = (text: string) => text.split('\n').some((line, i, lines) =>
+    line.includes('/api/notes/global') && (/\.put\(/.test(line) || lines.slice(i, i + 3).some((one) => /method: 'PUT'/.test(one))))
+  const ONE_WORKER = /test\.describe\.configure\(\{ mode: '(?:default|serial)' \}\)/
+
+  it('every one runs its tests in one worker', () => {
+    const writers = sources.filter(({ file, text }) => file.endsWith('.spec.ts') && WRITES(text))
+    expect(writers.map(({ file }) => file)).toContain('notes-editor-stress.spec.ts')
+    expect(writers.filter(({ text }) => !ONE_WORKER.test(text)).map(({ file }) => file)).toEqual([])
+  })
+})
