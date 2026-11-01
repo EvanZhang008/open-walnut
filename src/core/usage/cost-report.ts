@@ -22,6 +22,8 @@ import { DEFAULT_PRICING } from './pricing.js';
 import { priceBucket } from './session-cost-pricing.js';
 import type { SessionCostBucket } from '../../providers/session-cost-core.js';
 import type { CostRollup } from './cost-rollup.js';
+import { addPriced, emptyLine, GroupAcc, partsOf, REPORTED_KIND, sorted, TokenAcc, WORK_KINDS, workKindOf,
+  type Priced, type Sums, type WorkKind } from './cost-report-parts.js';
 import type { Database as DatabaseType } from '../../lib/sqlite.js';
 
 export type CostView = 'walnut' | 'agents' | 'all';
@@ -56,6 +58,8 @@ export interface CostReport {
   prices: { source: string; asOf?: string };
   /** False while the per-day sums are still being built from past usage. */
   ready: boolean;
+  /** Each host's first and last day Walnut holds usage for: what is stored, whatever the transcripts still have. */
+  stored?: { host: string; from: string; to: string }[];
 }
 
 export interface CostReportDeps {
@@ -64,9 +68,9 @@ export interface CostReportDeps {
   timeZone: string;
   overrides?: Record<string, UserPriceRates>;
   /** taskId -> title/project as they are now. */
-  tasks: (ids: string[]) => Promise<Map<string, { title: string; project: string }>>;
+  tasks: (ids: string[]) => Promise<Map<string, { title: string; project: string; routine?: boolean }>>;
   /** Coding session id -> its record, for engine and title when a session has no task. */
-  sessions: () => Promise<Map<string, { title?: string; taskId?: string; project?: string; engine?: string }>>;
+  sessions: () => Promise<Map<string, { title?: string; taskId?: string; project?: string; engine?: string; type?: string }>>;
 }
 
 const FEATURE: Record<string, string> = {
@@ -90,23 +94,6 @@ export function featureLabel(source: string, agent?: string | null): string {
 }
 
 export function engineLabel(engine: string): string { return ENGINE[engine] ?? engine; }
-
-interface Sums { requests: number; input: number; output: number; cacheRead: number; cacheWrite5m: number; cacheWrite1h: number }
-interface Priced extends Sums { costUsd: number; unpriced: number }
-
-function emptyLine(key: string, label: string): CostLine {
-  return { key, label, costUsd: 0, requests: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, unpriced: 0 };
-}
-
-function addPriced(line: CostLine, p: Priced): void {
-  line.costUsd += p.costUsd; line.requests += p.requests; line.unpriced += p.unpriced;
-  line.tokens.input += p.input; line.tokens.output += p.output; line.tokens.cacheRead += p.cacheRead;
-  line.tokens.cacheWrite += p.cacheWrite5m + p.cacheWrite1h;
-}
-
-function sorted(lines: Iterable<CostLine>): CostLine[] {
-  return [...lines].sort((a, b) => b.costUsd - a.costUsd || b.requests - a.requests);
-}
 
 /** Version of a `claude-<family>-<n>[-<n>...]` name, or null for anything else (a dated id included). */
 function familyVersion(name: string, family: string): number[] | null {
@@ -167,7 +154,7 @@ export class CostPricer {
   /** `fallback`: the caller has a reported cost to use instead, so the model is not named as unpriced. */
   price(rawModel: string, band: number, s: Sums, fallback = false): Priced {
     // A request that used no tokens costs nothing whatever its model; there is nothing to price.
-    if (!s.input && !s.output && !s.cacheRead && !s.cacheWrite5m && !s.cacheWrite1h) return { ...s, costUsd: 0, unpriced: 0 };
+    if (!s.input && !s.output && !s.cacheRead && !s.cacheWrite5m && !s.cacheWrite1h) return { ...s, costUsd: 0, unpriced: 0, parts: {} };
     // A 1M-context variant id prices as its base model (its long rate comes from the band).
     const model = this.resolve(rawModel).replace(/-1m$/i, '');
     const speed = /-fast$/.test(model) ? 'fast' : 'standard';
@@ -182,7 +169,7 @@ export class CostPricer {
       if (!fallback) this.unpricedModels.add(rawModel);
       return { ...s, costUsd: 0, unpriced: s.requests };
     }
-    return { ...s, costUsd: priced.costUsd, unpriced: 0 };
+    return { ...s, costUsd: priced.costUsd, unpriced: 0, parts: partsOf(priced.lines) };
   }
 }
 
@@ -246,9 +233,12 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
     const g = groups.get(id) ?? new GroupAcc(id, heading);
     groups.set(id, g); return g;
   };
+  const all = view === 'all';
+  const tokens = new TokenAcc();
   /** One priced row: into the total, its day, and each group it names. */
   const count = (date: string, p: Priced, into: [GroupAcc, string, string][]) => {
     addPriced(totals, p);
+    if (all) tokens.add(date, p);
     const d = daily.get(date) ?? { date, costUsd: 0, requests: 0 };
     d.costUsd += p.costUsd; d.requests += p.requests; daily.set(date, d);
     for (const [g, key, label] of into) g.add(key, label, date, p);
@@ -264,7 +254,6 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
   const engine = view === 'agents' && range.engine && ENGINE_KEY.test(range.engine) ? range.engine : null;
   const report: CostReport = { view, range: { start: range.start ?? null, end: range.end ?? null }, engine, engines: [], totals, daily: [],
     groups: [], unpricedModels: [], unpriced: [], prices: priceBookInfo(), ready };
-  const all = view === 'all';
   // The whole picture names each model once, as it is priced: an alias row joins its model.
   const modelLine = (raw: string): [string, string] => {
     if (!all) return [raw, pricer.label(raw)];
@@ -275,10 +264,12 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
   if (view === 'walnut' || all) {
     const byFeature = group('feature', 'By feature'), byModel = group('model', 'By model');
     const byAgent = group('agent', 'By agent'), byProject = group('project', 'By project'), byHost = group('host', 'By host');
+    const byKind = group('kind', 'By kind of work');
     const walnutInto = (model: string, feature: string, featureName: string, host: string): [GroupAcc, string, string][] => {
       const [mk, ml] = modelLine(model);
       return all
-        ? [[byAgent, WALNUT_KEY, 'Walnut'], [byModel, mk, ml], [byProject, WALNUT_PROJECT_KEY, WALNUT_PROJECT], [byHost, host, host], [byFeature, feature, featureName]]
+        ? [[byAgent, WALNUT_KEY, 'Walnut'], [byModel, mk, ml], [byProject, WALNUT_PROJECT_KEY, WALNUT_PROJECT], [byHost, host, host],
+          [byKind, 'walnut', WORK_KINDS.walnut], [byFeature, feature, featureName]]
         : [[byFeature, feature, featureName], [byModel, mk, ml]];
     };
     for (const r of deps.rollup.query({ start: range.start, end: range.end, sources: ['chat'], by: ['date', 'host'] })) {
@@ -291,8 +282,8 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
       // No list price (an internal model), or only an alias whose model then may be older than
       // today's: the cost the call itself reported, when it reported one.
       const aliased = pricer.resolve(r.model) !== r.model;
-      if ((p.unpriced || aliased) && r.recorded > 0) p = { ...p, costUsd: r.recorded, unpriced: 0 };
-      else if (r.costOnly > 0) p = { ...p, costUsd: p.costUsd + r.costOnly, unpriced: 0 };
+      if ((p.unpriced || aliased) && r.recorded > 0) p = { ...p, costUsd: r.recorded, unpriced: 0, parts: { [REPORTED_KIND]: r.recorded } };
+      else if (r.costOnly > 0) p = { ...p, costUsd: p.costUsd + r.costOnly, unpriced: 0, parts: { ...p.parts, [REPORTED_KIND]: (p.parts?.[REPORTED_KIND] ?? 0) + r.costOnly } };
       noteUnpriced(r.model, featureLabel(r.source, r.agent), p);
       const feature = r.source === 'plugin' && r.agent?.startsWith('plugin:') ? `plugin:${r.agent}` : r.source;
       // Walnut's own helper calls run in this server, on the machine it serves from.
@@ -300,7 +291,7 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
     }
   }
   if (view === 'agents' || all) {
-    const rows0 = deps.rollup.query({ start: range.start, end: range.end, sources: ['session'], by: ['date', 'engine', 'host', 'session', 'task'] });
+    const rows0 = deps.rollup.query({ start: range.start, end: range.end, sources: ['session'], by: ['date', 'engine', 'host', 'session', 'task', 'agent'] });
     // The engines offered are the period's, so picking one never hides the others from the choice.
     const seen = new Map<string, number>();
     for (const r of rows0) seen.set(r.engine, (seen.get(r.engine) ?? 0) + r.calls);
@@ -308,9 +299,9 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
     const rows = engine ? rows0.filter(r => r.engine === engine) : rows0;
     const sessions = await deps.sessions();
     const perTask = new Map<string, { taskId?: string; sessionId: string; lineKey: string; hosts: Set<string>; engines: Set<string>;
-      priced: CostLine; days: Map<string, Priced[]> }>();
+      priced: CostLine; days: Map<string, { p: Priced; subagent: boolean; sessionId: string }[]> }>();
     const byEngine = group(all ? 'agent' : 'engine', all ? 'By agent' : 'By engine'), byModel = group('model', 'By model');
-    const byHost = group('host', 'By host');
+    const byHost = group('host', 'By host'), byKind = group('kind', 'By kind of work');
     for (const r of rows) {
       const p = pricer.price(r.model, r.band, { ...r, requests: r.calls });
       noteUnpriced(r.model, engineLabel(r.engine), p);
@@ -321,10 +312,10 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
       const lineKey = taskId ? `task:${taskId}` : `session:${r.sessionId}`;
       // The line opens the first session seen for it (a task may have several).
       const t = perTask.get(lineKey) ?? { taskId, sessionId: r.sessionId as string, lineKey,
-        hosts: new Set<string>(), engines: new Set<string>(), priced: emptyLine(lineKey, ''), days: new Map<string, Priced[]>() };
+        hosts: new Set<string>(), engines: new Set<string>(), priced: emptyLine(lineKey, ''), days: new Map() };
       t.hosts.add(r.host); t.engines.add(r.engine); addPriced(t.priced, p);
       const day = t.days.get(r.date) ?? [];
-      day.push(p); t.days.set(r.date, day);
+      day.push({ p, subagent: r.agent === 'subagent', sessionId: r.sessionId as string }); t.days.set(r.date, day);
       perTask.set(lineKey, t);
     }
     const tasks = await deps.tasks([...perTask.values()].flatMap(t => t.taskId ? [t.taskId] : []));
@@ -334,8 +325,14 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
       const session = !task && t.sessionId ? sessions.get(t.sessionId) : undefined;
       const project = task?.project ?? session?.project ?? '';
       const title = oneLine(task?.title || session?.title || (t.taskId ? 'Removed task' : 'Session without a task'));
-      // A project is known only once its task is read, so its days come from the task's.
-      for (const [date, priced] of t.days) for (const p of priced) byProject.add(project, project || 'Inbox', date, p);
+      // A project and a routine are known only once the task is read, so their days come from the task's.
+      for (const [date, rows] of t.days) {
+        for (const { p, subagent, sessionId } of rows) {
+          byProject.add(project, project || 'Inbox', date, p);
+          const kind: WorkKind = workKindOf({ subagent, routineTask: task?.routine, sessionType: sessions.get(sessionId)?.type });
+          byKind.add(kind, WORK_KINDS[kind], date, p);
+        }
+      }
       return { ...t.priced, key: t.lineKey, label: title, project, hosts: [...t.hosts], engines: [...t.engines].map(engineLabel),
         ...(t.taskId ? { taskId: t.taskId } : {}), ...(t.sessionId ? { sessionId: t.sessionId } : {}) };
     });
@@ -347,11 +344,13 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
     if (rest.length) report.moreTasks = fold(rest);
     if (short.length) report.shortSessions = { ...fold(short), lines: short.slice(0, 50) };
   }
-  const order = all ? ['agent', 'model', 'project', 'host', 'feature']
+  const order = all ? ['agent', 'model', 'project', 'host', 'kind', 'feature']
     : view === 'walnut' ? ['feature', 'model']
     // One engine picked: its "By engine" would be one row saying the total again.
     : [...(engine ? [] : ['engine']), 'model', 'host', 'project'];
   report.groups = order.flatMap(id => groups.get(id) ? [groups.get(id)!.result()] : []);
+  if (all) report.groups.splice(report.groups.findIndex(g => g.id === 'feature'), 0, tokens.result());
+  report.stored = deps.rollup.hostBounds();
   report.daily = [...daily.values()].sort((a, b) => a.date.localeCompare(b.date));
   report.unpricedModels = [...pricer.unpricedModels].sort();
   report.unpriced = [...unpriced.values()].sort((a, b) => b.requests - a.requests);
@@ -368,26 +367,6 @@ const LOCAL_HOST = '__local__';
 export function shortModel(model: string): string {
   return model.replace(/^(?:[a-z]{2,6}\.)?(?:anthropic|openai|meta|amazon|mistral|deepseek|qwen|google)\./i, '');
 }
-
-/** One breakdown: its lines and, per day, each line's cost. */
-class GroupAcc {
-  private lines = new Map<string, CostLine>();
-  private days = new Map<string, Map<string, number>>();
-  constructor(readonly id: string, readonly heading: string) {}
-  add(key: string, label: string, date: string, p: Priced): void {
-    const line = this.lines.get(key) ?? emptyLine(key, label);
-    addPriced(line, p); this.lines.set(key, line);
-    const day = this.days.get(date) ?? new Map<string, number>();
-    day.set(key, (day.get(key) ?? 0) + p.costUsd); this.days.set(date, day);
-  }
-  result(): CostGroup {
-    const daily = [...this.days].sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([date, costs]) => ({ date, costs: Object.fromEntries([...costs].filter(([, v]) => v > 0).map(([k, v]) => [k, round6(v)])) }));
-    return { id: this.id, heading: this.heading, lines: sorted(this.lines.values()), daily };
-  }
-}
-
-function round6(v: number): number { return Math.round(v * 1e6) / 1e6; }
 
 function fold(rows: CostLine[]): CostFold {
   return { count: rows.length, costUsd: rows.reduce((n, r) => n + r.costUsd, 0), requests: rows.reduce((n, r) => n + r.requests, 0),

@@ -31,12 +31,14 @@ const rowNames = (page: Page, id: string) => page.getByTestId(`usage-group-${id}
 
 test('one picture: dollars first, and every Break down by choice shows its lines per day', async ({ page }) => {
   const errors: string[] = []
-  page.on('pageerror', (e) => errors.push(e.message))
+  // WebKit reports a request the reload cuts off ("... due to access control checks") as a page error.
+  page.on('pageerror', (e) => { if (!/due to access control checks|Load failed/.test(e.message)) errors.push(e.message) })
   await page.goto('about:blank')
   // Start from no remembered choice, once: the reload below must keep what was picked.
   await page.addInitScript(() => {
     if (sessionStorage.getItem('usage-spec-fresh')) return
     localStorage.removeItem('walnut-usage-breakdown')
+    localStorage.removeItem('walnut-usage-grain')
     sessionStorage.setItem('usage-spec-fresh', '1')
   })
   const asked = await routeCosts(page)
@@ -63,7 +65,7 @@ test('one picture: dollars first, and every Break down by choice shows its lines
 
   // Model: the five biggest are drawn and the rest are one Other layer; the table keeps every line.
   await page.getByTestId('usage-breakdown-model').click()
-  await expect(page.getByTestId('usage-costs')).toHaveAttribute('data-breakdown', 'model')
+  await expect(page.getByTestId('usage-breakdown').locator('.usage-bd-body')).toHaveAttribute('data-breakdown', 'model')
   await expect(chart.locator('path.usage-bd-area')).toHaveCount(6)
   await expect(chart.locator('path[data-series="__other__"] title')).toHaveText('Other (6)')
   await expect(rowNames(page, 'model')).toHaveCount(8)
@@ -143,6 +145,77 @@ test('one picture: dollars first, and every Break down by choice shows its lines
   expect(errors).toEqual([])
 })
 
+test('token types show their share of tokens and of cost, kinds of work split, and the grain and what is stored are plain', async ({ page }) => {
+  const errors: string[] = []
+  // WebKit reports a request the reload cuts off ("... due to access control checks") as a page error.
+  page.on('pageerror', (e) => { if (!/due to access control checks|Load failed/.test(e.message)) errors.push(e.message) })
+  await page.goto('about:blank')
+  await page.addInitScript(() => {
+    if (sessionStorage.getItem('usage-spec-fresh')) return
+    for (const k of ['walnut-usage-breakdown', 'walnut-usage-grain']) localStorage.removeItem(k)
+    sessionStorage.setItem('usage-spec-fresh', '1')
+  })
+  // A fresh install: usage is stored from ten days ago, and the last read is old.
+  const tenAgo = new Date(); tenAgo.setDate(tenAgo.getDate() - 10)
+  await routeCosts(page, undefined, { storedFrom: localDay(tenAgo) })
+  await openUsage(page)
+  const chart = page.getByTestId('usage-breakdown-chart')
+  await expect(chart).toHaveAttribute('data-buckets', '30')
+
+  const coverage = page.getByTestId('usage-coverage')
+  await expect(coverage).toContainText('Stored from ')
+  await expect(coverage).toContainText('Nothing earlier: those transcripts were gone before Walnut kept usage.')
+  await expect(coverage).toContainText('The latest hours are still being read.')
+  await expect(page.getByTestId('usage-breakdown-unrecorded')).toBeVisible()
+  // Hovering an unrecorded day says so, instead of "no model calls".
+  const box = (await chart.boundingBox())!
+  await page.mouse.move(box.x + 70, box.y + 100)
+  await expect(page.getByTestId('usage-breakdown-tip').locator('[data-coverage="none"]')).toContainText('Not recorded')
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height + 200)
+
+  // Token type: tokens and cost are two different shares.
+  await page.getByTestId('usage-breakdown-token').click()
+  const table = page.getByTestId('usage-group-token')
+  await expect(table.locator('thead th')).toHaveText(['Token type', 'Tokens', 'Share of tokens', 'Cost', 'Share of cost', 'By day'])
+  await expect(rowNames(page, 'token')).toHaveText(['Cache read', 'Cache write, 1 hour', 'Output', 'Cache write, 5 minutes', 'Input'])
+  const cacheRead = table.locator('tbody tr').first().locator('td')
+  await expect(cacheRead.nth(1)).toHaveText('95.0B')
+  await expect(cacheRead.nth(2)).toHaveText('98%')
+  await expect(cacheRead.nth(4)).toHaveText('48%')
+  await expect(chart.locator('path.usage-bd-area')).toHaveCount(5)
+
+  // Kind of work, in cost order, with Walnut's own calls as one kind.
+  await page.getByTestId('usage-breakdown-kind').click()
+  await expect(rowNames(page, 'kind')).toHaveText(['Interactive', 'Subagents', 'Routines', 'Walnut itself'])
+  await expect(page.getByTestId('usage-group-kind').locator('thead th').first()).toHaveText('Kind of work')
+
+  // Day, week, month: the heading, the points and the trend column follow the grain.
+  await page.getByTestId('usage-grain-week').click()
+  await expect(page.getByTestId('usage-breakdown').locator('.settings-group-title')).toHaveText('Cost per week')
+  const weeks = Number(await chart.getAttribute('data-buckets'))
+  expect(weeks).toBeGreaterThanOrEqual(5)
+  expect(weeks).toBeLessThanOrEqual(6)
+  await expect(page.getByTestId('usage-group-kind').locator('thead th').last()).toHaveText('By week')
+  await page.getByTestId('usage-period-all').click()
+  await page.getByTestId('usage-grain-month').click()
+  await expect(chart).toHaveAttribute('data-buckets', '1')
+  await expect(page.getByTestId('usage-breakdown').locator('.settings-group-title')).toHaveText('Cost per month')
+  // The picked grain is remembered.
+  await openUsage(page)
+  await expect(page.getByTestId('usage-grain-month')).toHaveAttribute('aria-checked', 'true')
+  await page.getByTestId('usage-grain-day').click()
+  await expect(chart).toHaveAttribute('data-buckets', '30')
+  expect(errors).toEqual([])
+})
+
+test('a period that is all stored and freshly read says so, with nothing shaded', async ({ page }) => {
+  await page.goto('about:blank')
+  await routeCosts(page, undefined, { storedFrom: '2026-01-01', fresh: true })
+  await openUsage(page)
+  await expect(page.getByTestId('usage-coverage')).toHaveText('Every day of this period is stored.')
+  await expect(page.getByTestId('usage-breakdown-unrecorded')).toHaveCount(0)
+})
+
 test('a task row opens its session on the home page', async ({ page }) => {
   await page.goto('about:blank')
   await routeCosts(page)
@@ -154,7 +227,8 @@ test('a task row opens its session on the home page', async ({ page }) => {
 
 test('the chart axis text is readable, and a click on a day opens that day', async ({ page }) => {
   const errors: string[] = []
-  page.on('pageerror', (e) => errors.push(e.message))
+  // WebKit reports a request the reload cuts off ("... due to access control checks") as a page error.
+  page.on('pageerror', (e) => { if (!/due to access control checks|Load failed/.test(e.message)) errors.push(e.message) })
   await page.goto('about:blank')
   const asked = await routeCosts(page)
   await openUsage(page)
@@ -187,7 +261,8 @@ test('the chart axis text is readable, and a click on a day opens that day', asy
 
 test('a slow reply for a period the user left is not shown for the new one', async ({ page }) => {
   const errors: string[] = []
-  page.on('pageerror', (e) => errors.push(e.message))
+  // WebKit reports a request the reload cuts off ("... due to access control checks") as a page error.
+  page.on('pageerror', (e) => { if (!/due to access control checks|Load failed/.test(e.message)) errors.push(e.message) })
   await page.goto('about:blank')
   let release: (() => void) | undefined
   let holdToday = false

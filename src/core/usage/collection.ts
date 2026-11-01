@@ -168,7 +168,7 @@ async function collectEngineSessions(sessions: Awaited<ReturnType<typeof listSes
           cacheWrite: b.cacheWrite }] : [];
       });
       await rollup.replaceSession({ sessionId: session.claudeSessionId, host, engine: session.engine,
-        taskId: session.taskId || null, source: 'session' }, buckets);
+        taskId: session.taskId || null, source: 'session' }, buckets, { byDay: split });
       read++;
     } catch {
       down.add(host);

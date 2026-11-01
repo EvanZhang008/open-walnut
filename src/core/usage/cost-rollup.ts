@@ -139,9 +139,9 @@ export class CostRollup {
     });
   }
 
-  /** Replaces one non-Claude session's rows with its day-split scan. */
+  /** Replaces one non-Claude session's rows for the days its day-split scan covers. */
   replaceSession(owner: { sessionId: string; host: string; engine: string; taskId: string | null; source: string },
-    buckets: DayBucket[]): Promise<void> {
+    buckets: DayBucket[], opts: { byDay?: boolean } = {}): Promise<void> {
     return this.exclusive(async () => {
       const sums = new Map<string, RollupRow>();
       for (const b of buckets) {
@@ -152,8 +152,16 @@ export class CostRollup {
         const prev = sums.get(key);
         if (prev) addInto(prev, row); else sums.set(key, row);
       }
+      // A scan split by day replaces only the days it covers: a day it no longer reads (its
+      // files were removed, a host cleaned old sessions up) keeps what was stored, which is
+      // the history. A scan dated by its last response moves the whole session to one day,
+      // so it replaces every day, as before.
+      const days = [...new Set([...sums.values()].map(r => r.date))];
+      const dropDay = this.db.prepare('DELETE FROM usage_rollup WHERE session_id=? AND engine=? AND date=?');
+      const dropAll = this.db.prepare('DELETE FROM usage_rollup WHERE session_id=? AND engine=?');
       this.db.transaction(() => {
-        this.db.prepare('DELETE FROM usage_rollup WHERE session_id=? AND engine=?').run(owner.sessionId, owner.engine);
+        if (opts.byDay) for (const day of days) dropDay.run(owner.sessionId, owner.engine, day);
+        else dropAll.run(owner.sessionId, owner.engine);
         this.insertAll([...sums.values()]);
       })();
     });
@@ -170,6 +178,12 @@ export class CostRollup {
       SUM(calls) calls, SUM(input) input, SUM(output) output, SUM(cache_read) cacheRead,
       SUM(cache_w5m) cacheWrite5m, SUM(cache_w1h) cacheWrite1h, SUM(unknown) unknown
       FROM usage_rollup WHERE ${clauses.join(' AND ')} GROUP BY ${cols.map(c => c.sql).join(', ')}`).all(...args)) as (RollupRow & Record<string, unknown>)[];
+  }
+
+  /** Each host's first and last stored day. */
+  hostBounds(): { host: string; from: string; to: string }[] {
+    return this.db.prepare('SELECT host, MIN(date) "from", MAX(date) "to" FROM usage_rollup GROUP BY host ORDER BY host').all() as
+      { host: string; from: string; to: string }[];
   }
 
   bounds(): { min: string | null; max: string | null } {

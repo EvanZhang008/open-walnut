@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import { monotonePath, niceTicks, type Breakdown, type Bucket } from './breakdown-model';
+import { monotonePath, niceTicks, type Breakdown, type Bucket, type Coverage } from './breakdown-model';
 
 const HEIGHT = 240;
 const PAD = { top: 12, right: 12, bottom: 26, left: 52 };
@@ -29,7 +29,18 @@ function labelIndexes(n: number, plotW: number): Set<number> {
  * the bottom), with a crosshair that lists the hovered day's split. A click picks
  * that day (or week) as the period.
  */
-export function UsageBreakdownChart({ data, loading, onPick }: { data: Breakdown; loading?: boolean; onPick?: (bucket: Bucket) => void }) {
+const COVERAGE_NOTE: Record<Coverage, string | null> = {
+  none: 'Not recorded: these transcripts were gone before Walnut kept usage',
+  partial: 'Partly recorded: only the days Walnut holds',
+  reading: 'Still being read: the latest hours come in with the next update',
+  full: null,
+};
+
+export function UsageBreakdownChart({ data, loading, onPick, coverage }: {
+  data: Breakdown; loading?: boolean; onPick?: (bucket: Bucket) => void;
+  /** Per bucket, how much of it Walnut holds; buckets with nothing recorded are shaded. */
+  coverage?: Coverage[];
+}) {
   const box = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   const [hovered, setHover] = useState<number | null>(null);
@@ -90,13 +101,27 @@ export function UsageBreakdownChart({ data, loading, onPick }: { data: Breakdown
               <text className="usage-bd-tick" x={PAD.left - 8} y={y(v) + 4} textAnchor="end">{axisMoney(v)}</text>
             </g>
           ))}
+          {(() => {
+            // One band over the buckets nothing was recorded for (they run from the start).
+            const none = coverage ? coverage.findIndex((c) => c !== 'none') : 0;
+            const upto = none < 0 ? n : none;
+            if (!upto) return null;
+            const half = n > 1 ? plotW / (n - 1) / 2 : plotW / 2;
+            const x0 = PAD.left, x1 = upto >= n ? PAD.left + plotW : Math.max(x0, xOf(upto) - half);
+            return (
+              <g className="usage-bd-unrecorded" data-testid="usage-breakdown-unrecorded">
+                <rect x={x0} y={PAD.top} width={x1 - x0} height={plotH} />
+                {x1 - x0 > 90 && <text x={(x0 + x1) / 2} y={PAD.top + plotH / 2} textAnchor="middle">Not recorded</text>}
+              </g>
+            );
+          })()}
           {layers.map((l) => (
             <path key={l.key} d={l.d} fill={l.color} className="usage-bd-area" data-series={l.key}><title>{l.label}</title></path>
           ))}
           {[...labels].map((i) => (
             <text key={buckets[i].start} className="usage-bd-tick" x={xOf(i)} y={HEIGHT - 8}
               textAnchor={n === 1 ? 'middle' : i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle'}>
-              {buckets[i].label.replace('Week of ', '')}
+              {buckets[i].short}
             </text>
           ))}
           {hover !== null && (
@@ -118,7 +143,8 @@ export function UsageBreakdownChart({ data, loading, onPick }: { data: Breakdown
           {series.filter((s) => s.values[hover] > 0).sort((a, b) => b.values[hover] - a.values[hover]).map((s) => (
             <div key={s.key} className="usage-bd-tip-row"><i style={{ background: s.color }} /><span>{s.label}</span><b>{money(s.values[hover])}</b></div>
           ))}
-          {totals[hover] === 0 && <div className="usage-bd-tip-row muted">No model calls</div>}
+          {totals[hover] === 0 && coverage?.[hover] !== 'none' && <div className="usage-bd-tip-row muted">No model calls</div>}
+          {coverage && COVERAGE_NOTE[coverage[hover]] && <div className="usage-bd-tip-note" data-coverage={coverage[hover]}>{COVERAGE_NOTE[coverage[hover]]}</div>}
         </div>
       )}
     </div>

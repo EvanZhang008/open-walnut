@@ -41,7 +41,19 @@ function perDay(lines: { key: string; costUsd: number }[], start: string | null,
   return out
 }
 
-function wholePicture(start: string | null, end: string | null) {
+/** A token type's line: only its own tokens, so its share of tokens reads from them. */
+const tokenLine = (key: string, label: string, costUsd: number, count: number) => ({ key, label, costUsd, requests: 0, unpriced: 0,
+  tokens: { input: key === 'input' ? count : 0, output: key === 'output' ? count : 0, cacheRead: key === 'cacheRead' ? count : 0,
+    cacheWrite: key.startsWith('cacheWrite') ? count : 0 } })
+
+export interface FixtureOptions {
+  /** First stored day of every host (default the fixture's first day). */
+  storedFrom?: string
+  /** The last collection just finished (default: it is days old, so the latest hours read as still coming in). */
+  fresh?: boolean
+}
+
+function wholePicture(start: string | null, end: string | null, opts: FixtureOptions = {}) {
   const agents = agentsReport('agents', start, end)
   const walnutCost = 68.37
   const total = agents.totals.costUsd + walnutCost
@@ -55,14 +67,24 @@ function wholePicture(start: string | null, end: string | null) {
     { id: 'project', heading: 'By project', lines: [line('Walnut', 'Walnut', (total - walnutCost - 2.4) * 0.7, 40_000), line('Notes', 'Notes', (total - walnutCost - 2.4) * 0.3, 20_000),
       line('__walnut__', 'Walnut itself', walnutCost, 3270), line('', 'Inbox', 2.4, 24)] },
     { id: 'host', heading: 'By host', lines: [line('__local__', '__local__', total * 0.6, 36_000), line('devbox', 'devbox', total * 0.4, 25_000)] },
+    { id: 'kind', heading: 'By kind of work', lines: [line('interactive', 'Interactive', (total - walnutCost) * 0.7, 40_000),
+      line('subagent', 'Subagents', (total - walnutCost) * 0.2, 15_000), line('routine', 'Routines', (total - walnutCost) * 0.1, 6_000),
+      line('walnut', 'Walnut itself', walnutCost, 3270)] },
+    // The shares Opus showed over a summer: cache reads most of the tokens, under half the cost.
+    { id: 'token', heading: 'By token type', lines: [tokenLine('cacheRead', 'Cache read', total * 0.48, 95_000_000_000),
+      tokenLine('cacheWrite1h', 'Cache write, 1 hour', total * 0.38, 1_900_000_000), tokenLine('output', 'Output', total * 0.13, 280_000_000),
+      tokenLine('cacheWrite5m', 'Cache write, 5 minutes', total * 0.007, 52_000_000), tokenLine('input', 'Input', total * 0.003, 3_000_000)] },
     { id: 'feature', heading: "By Walnut feature", lines: scale([line('chat', 'Personal AI chat', 61.2, 412), line('title', 'Titles', 3.41, 2210)], walnutCost) },
   ].map((g) => ({ ...g, lines: [...g.lines].sort((a, b) => b.costUsd - a.costUsd), daily: perDay(g.lines, start, end) }))
   const daily = groups[0].daily.map((d) => ({ date: d.date, costUsd: Object.values(d.costs).reduce((a, b) => a + b, 0), requests: 1000 }))
-  return { ...agents, view: 'all', engine: null, totals: line('total', 'Total', total, 64_270, 14), daily, groups }
+  const from = opts.storedFrom ?? '2026-09-01'
+  return { ...agents, view: 'all', engine: null, totals: line('total', 'Total', total, 64_270, 14), daily, groups,
+    stored: [{ host: '__local__', from, to: end ?? '2026-09-23' }, { host: 'devbox', from, to: end ?? '2026-09-23' }],
+    ...(opts.fresh ? { countedUntil: [{ host: '__local__', until: new Date().toISOString() }, { host: 'devbox', until: new Date().toISOString() }] } : {}) }
 }
 
-export function costReport(view: string, start: string | null, end: string | null, engine: string | null = null) {
-  if (view === 'all') return wholePicture(start, end)
+export function costReport(view: string, start: string | null, end: string | null, engine: string | null = null, opts: FixtureOptions = {}) {
+  if (view === 'all') return wholePicture(start, end, opts)
   return agentsReport(view, start, end, engine)
 }
 
@@ -110,14 +132,15 @@ function agentsReport(view: string, start: string | null, end: string | null, en
  * Answers every /api/usage/costs read from the fixture; returns the URLs asked for.
  * `hold` may delay one answer (a slow reply that lands after the user moved on).
  */
-export async function routeCosts(page: import('@playwright/test').Page, hold?: (url: URL) => Promise<void> | undefined): Promise<URL[]> {
+export async function routeCosts(page: import('@playwright/test').Page, hold?: (url: URL) => Promise<void> | undefined,
+  opts: FixtureOptions = {}): Promise<URL[]> {
   const asked: URL[] = []
   await page.route('**/api/usage/costs**', async (route) => {
     const url = new URL(route.request().url())
     asked.push(url)
     await hold?.(url)
     return route.fulfill({ json: costReport(url.searchParams.get('view') ?? 'walnut', url.searchParams.get('start'), url.searchParams.get('end'),
-      url.searchParams.get('engine')) })
+      url.searchParams.get('engine'), opts) })
   })
   return asked
 }

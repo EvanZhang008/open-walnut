@@ -6,9 +6,8 @@ import { SegmentedControl } from '../inputs/SegmentedControl';
 import { useUsageCosts } from '@/hooks/useUsageCosts';
 import type { TimeSelection } from '@/hooks/useUsageOverview';
 import { formatTokens as formatTokenCount } from '@/utils/format';
-import { UsageBreakdownChart, UsageSparkline } from '@/components/usage/UsageBreakdownChart';
-import { buildBreakdown, dayLabel, periodDays, type BreakdownId, type Bucket } from '@/components/usage/breakdown-model';
-import { usePersistentState } from '@/hooks/usePersistentState';
+import { UsageBreakdownCard } from '@/components/usage/UsageBreakdownCard';
+import { dayLabel, periodDays } from '@/components/usage/breakdown-model';
 import { UsageDateRange } from '@/components/usage/UsageDateRange';
 import { collectUsage, type CostLine, type CostReport, type CostTaskLine, type Period } from '@/api/usage';
 import { openSessionOnHome } from '@/utils/open-session';
@@ -22,17 +21,6 @@ const PRESETS: { value: Period; label: string }[] = [
   { value: '30d', label: '30 days' },
   { value: 'all', label: 'All time' },
 ];
-
-const BREAKDOWNS: { value: BreakdownId; label: string; noun: string }[] = [
-  { value: 'agent', label: 'Agent', noun: 'Agent' },
-  { value: 'model', label: 'Model', noun: 'Model' },
-  { value: 'project', label: 'Project', noun: 'Project' },
-  { value: 'host', label: 'Host', noun: 'Host' },
-];
-const isBreakdown = (v: unknown): v is BreakdownId => BREAKDOWNS.some((b) => b.value === v);
-
-/** Rows shown before a group folds the rest into "N more". */
-const VISIBLE = 8;
 
 export function money(usd: number): string {
   if (usd > 0 && usd < 0.01) return '<$0.01';
@@ -59,7 +47,6 @@ function volume(requests: number, tokens?: number): string {
 
 export function UsageSection() {
   const [time, setTime] = useState<TimeSelection>({ preset: '30d' });
-  const [breakdown, setBreakdown] = usePersistentState<BreakdownId>('walnut-usage-breakdown', 'agent', isBreakdown);
   const { report, current, loading, error, refresh, range } = useUsageCosts('all', time);
   const [updating, setUpdating] = useState(false);
   const [updateError, setUpdateError] = useState('');
@@ -108,13 +95,13 @@ export function UsageSection() {
       {!shown ? (
         <SettingsGroup><SettingsLoadingRow>Loading usage...</SettingsLoadingRow></SettingsGroup>
       ) : (
-        <div aria-busy={loading || undefined} data-testid="usage-costs" data-view={shown.view} data-breakdown={breakdown}>
+        <div aria-busy={loading || undefined} data-testid="usage-costs" data-view={shown.view}>
           <Headline report={shown} days={days} />
           {shown.totals.requests === 0 ? (
             <SettingsGroup><SettingsEmpty>No model calls in this period.</SettingsEmpty></SettingsGroup>
           ) : (
             <>
-              <BreakdownCard report={shown} days={days} breakdown={breakdown} onBreakdown={setBreakdown} loading={loading}
+              <UsageBreakdownCard report={shown} days={days} loading={loading}
                 onPick={(b) => setTime(time.preset === 'custom' && time.start === b.start && time.end === b.end
                   ? { preset: '30d' } : { preset: 'custom', start: b.start, end: b.end })} />
               <TaskList report={shown} heading="Most expensive tasks" />
@@ -124,64 +111,6 @@ export function UsageSection() {
         </div>
       )}
     </SettingsSection>
-  );
-}
-
-function BreakdownCard({ report, days, breakdown, onBreakdown, loading, onPick }: {
-  report: CostReport; days: string[]; breakdown: BreakdownId;
-  onBreakdown: (b: BreakdownId) => void; loading: boolean; onPick: (b: Bucket) => void;
-}) {
-  const hostName = useHostDisplayLabels();
-  const [open, setOpen] = useState(false);
-  const data = useMemo(() => buildBreakdown(report.groups.find((g) => g.id === breakdown), days,
-    (line) => breakdown === 'host' ? hostName(line.key) : line.label), [report, breakdown, days, hostName]);
-  const noun = BREAKDOWNS.find((b) => b.value === breakdown)!.noun;
-  const rows = open ? data.rows : data.rows.slice(0, VISIBLE);
-  const hidden = data.rows.length - rows.length;
-  // One day (Today) has no trend to draw.
-  const trend = data.buckets.length > 1;
-  return (
-    <SettingsGroup className="usage-bd" data-testid="usage-breakdown"
-      heading={data.byWeek ? 'Cost per week' : 'Cost per day'}
-      headingTrailing={(
-        <span className="usage-bd-switch">
-          <span className="usage-bd-switch-label">Break down by</span>
-          <SegmentedControl aria-label="Break down by" value={breakdown} onChange={(v) => { onBreakdown(v); setOpen(false); }}
-            options={BREAKDOWNS.map((b) => ({ value: b.value, label: b.label, testId: `usage-breakdown-${b.value}` }))} />
-        </span>
-      )}>
-      <div className="settings-row settings-row-stacked usage-bd-body" data-wide="true">
-        <UsageBreakdownChart data={data} loading={loading} onPick={onPick} />
-        <table className="usage-bd-table" data-testid={`usage-group-${breakdown}`}>
-          <thead>
-            <tr>
-              <th>{noun}</th>
-              <th className="num usage-bd-col-cost">Cost</th>
-              <th className="num usage-bd-col-share">Share</th>
-              <th className="num usage-bd-col-req usage-bd-req">Requests</th>
-              {trend && <th className="usage-bd-col-trend">{data.byWeek ? 'By week' : 'By day'}</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.line.key} className="usage-line" data-key={r.line.key}
-                title={`${volume(r.line.requests, totalTokens(r.line))}${r.line.unpriced ? ` · ${r.line.unpriced.toLocaleString('en-US')} without a price` : ''}`}>
-                <td><span className="usage-bd-name"><i className="usage-bd-swatch" style={{ background: r.color }} /><span>{r.label}</span></span></td>
-                <td className="num usage-line-cost">{money(r.line.costUsd)}</td>
-                <td className="num muted">{`${r.share.toFixed(r.share < 10 ? 1 : 0)}%`}</td>
-                <td className="num muted usage-bd-req">{r.line.requests.toLocaleString('en-US')}</td>
-                {trend && <td><UsageSparkline values={r.values} color={r.color} /></td>}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {hidden > 0 && (
-          <button type="button" className="usage-bd-more" onClick={() => setOpen(true)} data-testid="usage-breakdown-more">
-            {`${hidden} more · ${money(data.rows.slice(VISIBLE).reduce((n, r) => n + r.line.costUsd, 0))}`}
-          </button>
-        )}
-      </div>
-    </SettingsGroup>
   );
 }
 

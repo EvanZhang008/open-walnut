@@ -114,7 +114,7 @@ describe('cost report', () => {
     expect(report.view).toBe('all');
     expect(report.totals.costUsd).toBeCloseTo(30.2, 9);
     const lines = (id: string) => report.groups.find(g => g.id === id)!.lines.map(l => [l.label, Number(l.costUsd.toFixed(2))]);
-    expect(report.groups.map(g => g.id)).toEqual(['agent', 'model', 'project', 'host', 'feature']);
+    expect(report.groups.map(g => g.id)).toEqual(['agent', 'model', 'project', 'host', 'kind', 'token', 'feature']);
     expect(lines('agent')).toEqual([['Claude Code', 24.2], ['Walnut', 6]]);
     // The routing prefix is not part of the name: Walnut's title call joins its model's line.
     expect(lines('model')).toEqual([['claude-opus-5-5', 30], ['gpt-6.1-sol', 0.2]]);
@@ -144,6 +144,52 @@ describe('cost report', () => {
     expect(walnut.groups.map(g => g.id)).toEqual(['feature', 'model']);
     expect(walnut.totals.costUsd).toBeCloseTo(6, 9);
     expect(walnut.groups[0].daily).toEqual([{ date: '2026-10-20', costs: { chat: 4, title: 2 } }]);
+  });
+
+  it('splits the whole picture by token type (its tokens and its cost) and by kind of work, and says what is stored', async () => {
+    response({ input_tokens: 1 * M, output_tokens: 100_000, cache_read_tokens: 10 * M, cache_write_5m: 200_000, cache_write_1h: 500_000,
+      cache_creation_tokens: 700_000 });                                                            // $4 + $2 + $2 + $1 + $4 = $13
+    response({ agent_id: 'subagent', input_tokens: 500_000 });                                      // a subagent of t1, $2
+    response({ session_id: 's3', task_id: 'tr', input_tokens: 250_000 });                           // a routine's run, $1
+    trackerTable();
+    call({ source: 'title', input_tokens: 250_000 });                                               // Walnut itself, $1
+    call({ source: 'summary', model: 'internal-x', input_tokens: 10, cost_usd: 0.5 });               // no list price: its reported $0.50
+    await ready();
+    const report = await buildCostReport('all', {}, deps({
+      tasks: async (ids) => new Map(ids.map(id => [id, { title: `Task ${id}`, project: 'Walnut', routine: id === 'tr' }])),
+    }));
+    expect(report.totals.costUsd).toBeCloseTo(17.5, 9);
+    const token = report.groups.find(g => g.id === 'token')!;
+    expect(token.lines.map(l => [l.label, Number(l.costUsd.toFixed(2))])).toEqual([
+      ['Input', 8], ['Cache write, 1 hour', 4], ['Output', 2], ['Cache read', 2], ['Cache write, 5 minutes', 1], ['Reported cost, not split', 0.5]]);
+    // Each line carries its own kind's tokens only, so its share of tokens reads from them.
+    const tokensOf = (key: string) => { const t = token.lines.find(l => l.key === key)!.tokens; return t.input + t.output + t.cacheRead + t.cacheWrite; };
+    expect(tokensOf('cacheRead')).toBe(10 * M);
+    expect(tokensOf('input')).toBe(2 * M + 10);
+    expect(tokensOf('cacheWrite1h')).toBe(500_000);
+    expect(token.lines.reduce((n, l) => n + l.costUsd, 0)).toBeCloseTo(report.totals.costUsd, 9);
+    expect(token.daily).toEqual([{ date: '2026-10-20', costs: { input: 8, output: 2, cacheRead: 2, cacheWrite5m: 1, cacheWrite1h: 4, reported: 0.5 } }]);
+    const kind = report.groups.find(g => g.id === 'kind')!;
+    expect(kind.lines.map(l => [l.label, Number(l.costUsd.toFixed(2))])).toEqual([
+      ['Interactive', 13], ['Subagents', 2], ['Walnut itself', 1.5], ['Routines', 1]]);
+    expect(report.stored).toEqual([{ host: '__local__', from: '2026-10-20', to: '2026-10-20' }]);
+  });
+
+  it("keeps the days a later day-split scan no longer reads, and moves a session's undated scan whole", async () => {
+    await ready();
+    const owner = { sessionId: 'x1', host: '__local__', engine: 'codex', taskId: 't2', source: 'session' };
+    const day = (d: string, input: number) => ({ day: d, model: 'gpt-6.1-sol', band: 0, responses: 1, input, output: 0, cacheRead: 0,
+      cacheWrite5m: 0, cacheWrite1h: 0, cacheWrite: 0 });
+    await store.rollup.replaceSession(owner, [day('2026-10-19', 1 * M), day('2026-10-20', 1 * M)], { byDay: true });
+    // The files behind Oct 19 are gone: the next scan reads only Oct 20. Oct 19 stays history.
+    await store.rollup.replaceSession(owner, [day('2026-10-20', 2 * M)], { byDay: true });
+    expect((await buildCostReport('agents', {}, deps())).daily.map(d => [d.date, d.costUsd])).toEqual([['2026-10-19', 2], ['2026-10-20', 4]]);
+    // A scan with nothing at all keeps everything.
+    await store.rollup.replaceSession(owner, [], { byDay: true });
+    expect((await buildCostReport('agents', {}, deps())).totals.costUsd).toBeCloseTo(6, 9);
+    // An undated scan (an older daemon) dates the whole session by its last response: it replaces every day.
+    await store.rollup.replaceSession(owner, [day('2026-10-21', 1 * M)]);
+    expect((await buildCostReport('agents', {}, deps())).daily.map(d => [d.date, d.costUsd])).toEqual([['2026-10-21', 2]]);
   });
 
   it('keeps a filtered engine out of the whole picture and an empty period empty', async () => {

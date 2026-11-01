@@ -69,12 +69,18 @@ describe('reconciled usage through the real server', () => {
     const whole = await get('/api/usage/costs?view=all');
     expect(whole.view).toBe('all');
     expect(whole.totals.costUsd).toBeCloseTo(0.0024, 8);
-    expect(whole.groups.map((g: { id: string }) => g.id)).toEqual(['agent', 'model', 'project', 'host', 'feature']);
-    for (const id of ['agent', 'model', 'project', 'host']) {
+    expect(whole.groups.map((g: { id: string }) => g.id)).toEqual(['agent', 'model', 'project', 'host', 'kind', 'token', 'feature']);
+    for (const id of ['agent', 'model', 'project', 'host', 'kind', 'token']) {
       const g = whole.groups.find((x: { id: string }) => x.id === id);
       const days = g.daily.reduce((n: number, d: { costs: Record<string, number> }) => n + Object.values(d.costs).reduce((a, b) => a + b, 0), 0);
       expect(days).toBeCloseTo(0.0024, 6);
     }
+    // Input and output cost the same here; each line holds its own kind's tokens.
+    const token = whole.groups.find((x: { id: string }) => x.id === 'token');
+    expect(token.lines.map((l: { key: string }) => l.key)).toEqual(['input', 'output']);
+    expect(token.lines.map((l: { tokens: { input: number; output: number } }) => l.tokens.input + l.tokens.output)).toEqual([300, 60]);
+    expect(whole.groups.find((x: { id: string }) => x.id === 'kind').lines.map((l: { label: string }) => l.label).sort()).toEqual(['Interactive', 'Subagents']);
+    expect(whole.stored.map((s: { host: string }) => s.host)).toContain('local');
     expect((await get('/api/usage/costs?view=all&engine=codex')).totals.requests).toBe(3);
   });
   it('counts one coding engine when the page asks for it', async () => {

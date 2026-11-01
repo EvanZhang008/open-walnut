@@ -42,9 +42,10 @@ usageRouter.get('/costs', async (req: Request, res: Response, next: NextFunction
     const engine = typeof req.query.engine === 'string' && req.query.engine !== 'all' ? req.query.engine : undefined
     const report = await buildCostReport(view, { start: parseDate(req.query.start), end: parseDate(req.query.end), engine }, {
       rollup: store.rollup, db: store.database, timeZone: store.timezone, overrides: (await getConfig()).usage?.prices,
-      tasks: async (ids) => new Map((ids.length ? await listTasksByIds(ids) : []).map(t => [t.id, { title: t.title, project: t.project ?? '' }])),
+      tasks: async (ids) => new Map((ids.length ? await listTasksByIds(ids) : []).map(t => [t.id,
+        { title: t.title, project: t.project ?? '', routine: !!t.routine_start }])),
       sessions: async () => new Map((await listSessions()).map(s => [s.claudeSessionId, {
-        title: s.title, taskId: s.taskId || undefined, project: s.project, engine: s.engine }])),
+        title: s.title, taskId: s.taskId || undefined, project: s.project, engine: s.engine, type: s.type }])),
     })
     res.json({ ...report, timeZone: store.timezone, bounds: store.rollup.bounds(), countedUntil: store.countedUntil(),
       checks: store.sourceChecks(), collection: collectionState() })

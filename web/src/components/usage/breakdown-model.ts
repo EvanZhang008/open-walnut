@@ -5,17 +5,20 @@
  */
 import type { CostGroup, CostLine } from '@/api/usage';
 
-export type BreakdownId = 'agent' | 'model' | 'project' | 'host';
+export type BreakdownId = 'agent' | 'model' | 'project' | 'host' | 'kind' | 'token';
+export type Granularity = 'day' | 'week' | 'month';
 
-export interface Bucket { start: string; end: string; label: string }
+export interface Bucket { start: string; end: string; label: string; short: string }
 export interface BreakdownSeries { key: string; label: string; color: string; values: number[]; costUsd: number }
 export interface BreakdownRow { line: CostLine; label: string; color: string; values: number[]; share: number }
-export interface Breakdown { buckets: Bucket[]; series: BreakdownSeries[]; rows: BreakdownRow[]; byWeek: boolean }
+export interface Breakdown { buckets: Bucket[]; series: BreakdownSeries[]; rows: BreakdownRow[]; granularity: Granularity }
 
 /** Series drawn before the rest fold into "Other"; the table still lists every line. */
 export const MAX_SERIES = 5;
-/** Longer than this, the chart goes by week. */
+/** Longer than this, the chart opens by week. */
 export const WEEKLY_AFTER_DAYS = 92;
+/** Longer than this (two years), it opens by month. */
+export const MONTHLY_AFTER_DAYS = 730;
 export const OTHER_KEY = '__other__';
 
 /** Categorical slots in their validated order (blue, orange, aqua, yellow, magenta, violet). */
@@ -23,6 +26,12 @@ const SLOTS = ['var(--usage-s1)', 'var(--usage-s2)', 'var(--usage-s3)', 'var(--u
 const OTHER_COLOR = 'var(--usage-other)';
 /** An agent keeps its color whatever the period, so switching periods never repaints one. */
 const AGENT_SLOT: Record<string, number> = { claude: 0, codex: 1, opencode: 2, goose: 3, walnut: 5 };
+/** Token kinds and kinds of work keep theirs too, so the table reads the same on every visit. */
+const FIXED_SLOT: Partial<Record<BreakdownId, Record<string, number>>> = {
+  agent: AGENT_SLOT,
+  kind: { interactive: 0, subagent: 1, routine: 2, walnut: 5 },
+  token: { cacheRead: 0, cacheWrite1h: 1, output: 2, cacheWrite5m: 3, input: 4, reported: 5 },
+};
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 export function dayLabel(date: string): string {
@@ -41,24 +50,38 @@ export function periodDays(start: string | undefined, end: string | undefined): 
   return out;
 }
 
-/** Days, or weeks starting on Monday when the period is long. */
-export function bucketsFor(days: string[]): { buckets: Bucket[]; byWeek: boolean } {
-  if (days.length <= WEEKLY_AFTER_DAYS) return { buckets: days.map(d => ({ start: d, end: d, label: dayLabel(d) })), byWeek: false };
+/** The grain a period opens with: days, weeks past three months, months past two years. */
+export function autoGranularity(days: number): Granularity {
+  return days > MONTHLY_AFTER_DAYS ? 'month' : days > WEEKLY_AFTER_DAYS ? 'week' : 'day';
+}
+
+export function monthLabel(date: string): string {
+  return `${MONTHS[Number(date.slice(5, 7)) - 1]} ${date.slice(0, 4)}`;
+}
+
+/** Days, weeks starting on Monday, or calendar months. The first bucket starts on the period's first day. */
+export function bucketsFor(days: string[], granularity: Granularity = autoGranularity(days.length)): Bucket[] {
+  if (granularity === 'day') return days.map(d => ({ start: d, end: d, label: dayLabel(d), short: dayLabel(d) }));
   const buckets: Bucket[] = [];
   for (const d of days) {
     const t = Date.parse(`${d}T00:00:00Z`);
-    const monday = iso(t - ((new Date(t).getUTCDay() + 6) % 7) * DAY);
+    const head = granularity === 'week' ? iso(t - ((new Date(t).getUTCDay() + 6) % 7) * DAY) : `${d.slice(0, 7)}-01`;
     const last = buckets[buckets.length - 1];
-    // The first week starts on the period's first day, not on a Monday before it.
-    if (last && monday <= last.start) last.end = d;
-    else buckets.push({ start: d, end: d, label: `Week of ${dayLabel(d)}` });
+    if (last && head <= last.start) last.end = d;
+    else if (granularity === 'week') buckets.push({ start: d, end: d, label: `Week of ${dayLabel(d)}`, short: dayLabel(d) });
+    else buckets.push({ start: d, end: d, label: monthLabel(d), short: MONTHS[Number(d.slice(5, 7)) - 1] });
   }
-  return { buckets, byWeek: true };
+  // A month axis that spans years names the year on each January (and on the first month).
+  if (granularity === 'month' && new Set(buckets.map(b => b.start.slice(0, 4))).size > 1) {
+    buckets.forEach((b, i) => { if (i === 0 || b.start.slice(5, 7) === '01') b.short = `${b.short} '${b.start.slice(2, 4)}`; });
+  }
+  return buckets;
 }
 
-export function buildBreakdown(group: CostGroup | undefined, days: string[], labelOf: (line: CostLine) => string = l => l.label): Breakdown {
+export function buildBreakdown(group: CostGroup | undefined, days: string[], labelOf: (line: CostLine) => string = l => l.label,
+  granularity: Granularity = autoGranularity(days.length)): Breakdown {
   const lines = group?.lines ?? [];
-  const { buckets, byWeek } = bucketsFor(days);
+  const buckets = bucketsFor(days, granularity);
   const index = new Map<string, number>();
   buckets.forEach((b, i) => { for (const d of days) if (d >= b.start && d <= b.end) index.set(d, i); });
   const perKey = new Map<string, number[]>();
@@ -73,10 +96,11 @@ export function buildBreakdown(group: CostGroup | undefined, days: string[], lab
   const total = lines.reduce((n, l) => n + l.costUsd, 0);
   let next = 0;
   const used = new Set<number>();
-  if (group?.id === 'agent') for (const l of lines) if (AGENT_SLOT[l.key] !== undefined) used.add(AGENT_SLOT[l.key]);
+  const fixed = group ? FIXED_SLOT[group.id as BreakdownId] : undefined;
+  if (fixed) for (const l of lines) if (fixed[l.key] !== undefined) used.add(fixed[l.key]);
   const colorOf = (line: CostLine, rank: number): string => {
     if (rank >= MAX_SERIES) return OTHER_COLOR;
-    if (group?.id === 'agent' && AGENT_SLOT[line.key] !== undefined) return SLOTS[AGENT_SLOT[line.key]];
+    if (fixed?.[line.key] !== undefined) return SLOTS[fixed[line.key]];
     while (used.has(next) && next < SLOTS.length) next++;
     const slot = next < SLOTS.length ? next++ : -1;
     return slot < 0 ? OTHER_COLOR : SLOTS[slot];
@@ -94,7 +118,7 @@ export function buildBreakdown(group: CostGroup | undefined, days: string[], lab
     series.push({ key: OTHER_KEY, label: `Other (${rest.length})`, color: OTHER_COLOR, costUsd: rest.reduce((n, r) => n + r.line.costUsd, 0),
       values: buckets.map((_, i) => rest.reduce((n, r) => n + r.values[i], 0)) });
   }
-  return { buckets, series, rows, byWeek };
+  return { buckets, series, rows, granularity };
 }
 
 /** Axis ticks from zero to a round top a little above `v`, each step 1, 2 or 5 times a power of ten. */
@@ -131,3 +155,19 @@ export function monotonePath(pts: [number, number][], moveTo = true): string {
 }
 
 function f(v: number): string { return (Math.round(v * 10) / 10).toString(); }
+
+export type Coverage = 'none' | 'partial' | 'full' | 'reading';
+
+/**
+ * How much of a bucket Walnut holds: nothing before the first stored day (those
+ * transcripts were gone before usage was kept), part of the bucket that holds it,
+ * and "reading" for the newest one while the latest hours are not read yet.
+ */
+export function coverageOf(b: Bucket, storedFrom: string | undefined, stillReading = false): Coverage {
+  if (!storedFrom || b.end < storedFrom) return 'none';
+  if (b.start < storedFrom) return 'partial';
+  return stillReading ? 'reading' : 'full';
+}
+
+/** The latest collection is this old or more, so the newest hours may still be missing. */
+export const STALE_AFTER_MS = 45 * 60_000;

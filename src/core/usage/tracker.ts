@@ -26,7 +26,9 @@ const AGENT_NAME_EXPR = `COALESCE(agent_id, CASE source
     WHEN 'subagent' THEN 'subagent-legacy'
     ELSE source END)`;
 
-const DEFAULT_PRUNE_DAYS = 180;
+// Usage & Costs reads Walnut's own calls from this table, so its rows are the history:
+// kept for ten years (a year of calls is about 170k rows), not the old 180 days.
+const DEFAULT_PRUNE_DAYS = 3650;
 
 export class UsageTracker {
   private db: DatabaseType | null = null;

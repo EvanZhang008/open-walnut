@@ -177,6 +177,8 @@ export interface CostReport {
   countedUntil: { host: string; until: string }[];
   checks: CostSourceCheck[];
   collection?: { running: boolean; startedAt?: string; finishedAt?: string; error?: string };
+  /** Each host's first and last stored day (older servers leave it out). */
+  stored?: { host: string; from: string; to: string }[];
 }
 
 /** `engine`: one coding engine's key, agents view only; absent or 'all' counts every engine. */
