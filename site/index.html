@@ -1,362 +1,793 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Open Walnut: AI agents that run your work like a small company</title>
-<meta name="description" content="Replace Notion and your Claude Code terminals with one open-source app. You talk to a CEO agent (Main), and each project gets a lead that runs its own Claude Code sessions. Tasks, notes, calendar and every coding session in one self-hosted app. MIT." />
-<link rel="icon" type="image/png" href="assets/walnut-icon.png" />
-
-<!-- Open Graph / social -->
-<meta property="og:type" content="website" />
-<meta property="og:url" content="https://openwalnut.dev/" />
-<meta property="og:title" content="Open Walnut: AI agents that run your work like a small company" />
-<meta property="og:description" content="Replace Notion and your Claude Code terminals with one open-source app. You talk to a CEO agent (Main), and each project gets a lead that runs its own Claude Code sessions. Tasks, notes, calendar and every coding session in one self-hosted app. MIT." />
-<meta property="og:image" content="https://openwalnut.dev/assets/lead-team.png" />
-<meta name="twitter:card" content="summary_large_image" />
-<meta name="twitter:title" content="Open Walnut: AI agents that run your work like a small company" />
-<meta name="twitter:description" content="Replace Notion and your Claude Code terminals with one open-source app. You talk to a CEO agent (Main), and each project gets a lead that runs its own Claude Code sessions. Tasks, notes, calendar and every coding session in one self-hosted app. MIT." />
-<meta name="twitter:image" content="https://openwalnut.dev/assets/lead-team.png" />
-
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open Walnut: your work, run by your agents</title>
+<meta name="description" content="Talk to one CEO agent. Its VPs run your projects, each with its own Claude Code sessions. Open source, MIT licensed, self-hosted.">
+<link rel="icon" type="image/png" href="assets/walnut-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://openwalnut.dev/">
+<meta property="og:title" content="Open Walnut: your work, run by your agents">
+<meta property="og:description" content="Talk to one CEO agent. Its VPs run your projects, each with its own Claude Code sessions. Open source, MIT licensed, self-hosted.">
+<meta property="og:image" content="https://openwalnut.dev/assets/og-image.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Open Walnut: your work, run by your agents">
+<meta name="twitter:description" content="Talk to one CEO agent. Its VPs run your projects, each with its own Claude Code sessions. Open source, MIT licensed, self-hosted.">
+<meta name="twitter:image" content="https://openwalnut.dev/assets/og-image.jpg">
+<meta property="og:site_name" content="Open Walnut">
+<meta property="og:image:alt" content="Open Walnut: your work, run by your agents">
+<link rel="canonical" href="https://openwalnut.dev/">
+<meta name="theme-color" content="#070605">
+<script>document.documentElement.classList.add('js')</script>
+<link rel="preload" href="assets/fonts/geist-mono-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/geist-latin.woff2" as="font" type="font/woff2" crossorigin>
 <style>
-  :root{
-    --bg:#0b0f1a; --bg2:#241445; --violet:#a78bfa; --violet2:#7c5cff;
-    --ink:#eef1f8; --muted:#9aa6c4; --card:#141a2b; --line:rgba(160,175,255,.16);
-    --green:#22c55e;
-  }
-  *{margin:0;padding:0;box-sizing:border-box}
-  html{scroll-behavior:smooth}
-  body{
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,system-ui,sans-serif;
-    color:var(--ink);
-    background:radial-gradient(120% 90% at 75% 0%, #2a1850 0%, var(--bg) 55%) , var(--bg);
-    line-height:1.55; -webkit-font-smoothing:antialiased;
-  }
-  a{color:var(--violet);text-decoration:none}
-  .wrap{max-width:1060px;margin:0 auto;padding:0 22px}
-  .btn{
-    display:inline-flex;align-items:center;gap:9px;font-weight:700;font-size:16px;
-    padding:13px 22px;border-radius:12px;border:1px solid transparent;transition:.18s;
-  }
-  .btn-primary{background:linear-gradient(135deg,var(--violet2),#4f7cff);color:#fff;box-shadow:0 10px 30px rgba(90,90,255,.35)}
-  .btn-primary:hover{transform:translateY(-1px);box-shadow:0 14px 38px rgba(90,90,255,.5)}
-  .btn-ghost{background:rgba(120,130,255,.08);border-color:var(--line);color:var(--ink)}
-  .btn-ghost:hover{background:rgba(120,130,255,.16)}
+/* Geist and Geist Mono, latin, variable weight; SIL Open Font License 1.1 (assets/fonts/OFL.txt) */
+@font-face{font-family:"Geist";src:url("assets/fonts/geist-latin.woff2") format("woff2");font-weight:100 900;font-style:normal;font-display:swap}
+@font-face{font-family:"Geist Mono";src:url("assets/fonts/geist-mono-latin.woff2") format("woff2");font-weight:100 900;font-style:normal;font-display:swap}
+:root{
+  --bg:#070605;
+  --ink:#f5efe8;
+  --ink-2:rgba(245,239,232,.66);
+  --ink-3:rgba(245,239,232,.56);
+  --ink-4:rgba(245,239,232,.32);
+  --line:rgba(255,236,214,.08);
+  --line-2:rgba(255,236,214,.14);
+  --panel:linear-gradient(180deg,rgba(255,236,214,.04),rgba(255,236,214,.012));
+  --amber:#f0a75a;
+  --amber-soft:rgba(240,167,90,.12);
+  --green:#6fd59a;
+  --green-soft:rgba(111,213,154,.12);
+  --red:#ff7b6b;
+  --sans:"Geist",ui-sans-serif,sans-serif;
+  --mono:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{background:var(--bg);overflow-x:clip;-webkit-text-size-adjust:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.5;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:inherit;text-decoration:none}
+img{display:block;max-width:100%}
+button{font:inherit;color:inherit}
+.wrap{width:min(1120px,calc(100% - 48px));margin:0 auto}
+h1,h2,.sub,.s-line{text-wrap:balance}
 
-  /* nav */
-  nav{display:flex;align-items:center;justify-content:space-between;padding:20px 0}
-  .brand{display:flex;align-items:center;gap:11px;font-weight:800;font-size:19px;color:#fff}
-  .brand img{width:34px;height:34px;border-radius:9px}
-  .nav-links{display:flex;gap:22px;align-items:center}
-  .nav-links a{color:var(--muted);font-weight:600;font-size:15px}
-  .nav-links a:hover{color:#fff}
-  @media(max-width:640px){.nav-links a:not(.btn){display:none}}
+/* ---------- nav ---------- */
+.nav{position:fixed;top:16px;left:0;right:0;z-index:50}
+.nav-in{width:min(1120px,calc(100% - 32px));margin:0 auto;height:58px;display:flex;align-items:center;padding:0 10px 0 18px;
+  border:1px solid var(--line);border-radius:16px;background:rgba(12,10,8,.6);backdrop-filter:blur(18px) saturate(140%);-webkit-backdrop-filter:blur(18px) saturate(140%)}
+.brand{display:flex;align-items:center;gap:10px;font-weight:600;font-size:15px;letter-spacing:-.01em}
+.brand img{width:24px;height:24px;border-radius:6px}
+.nav-links{margin-left:auto;display:flex;gap:4px;align-items:center}
+.nav-links a{font-size:14px;color:var(--ink-2);padding:8px 14px;border-radius:9px;transition:color .2s,background .2s}
+.nav-links a:hover{color:var(--ink);background:rgba(255,255,255,.04)}
+.nav-links a.pill-sm{display:inline-flex;align-items:center;gap:7px;height:34px;padding:0 14px;border-radius:9px;margin-left:8px;
+  background:linear-gradient(#f7f3ee,#e4ddd4);color:#17120d;font-size:13.5px;font-weight:600;box-shadow:0 0 0 1px rgba(255,255,255,.25) inset,0 1px 0 rgba(0,0,0,.4)}
+.pill-sm svg{width:13px;height:13px}
 
-  /* hero */
-  header{text-align:center;padding:46px 0 26px}
-  .pill{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:700;letter-spacing:.4px;
-    color:#b7f7cf;background:rgba(34,197,94,.12);border:1px solid rgba(34,197,94,.35);padding:6px 14px;border-radius:999px;margin-bottom:22px}
-  h1{font-size:clamp(34px,6vw,62px);line-height:1.04;font-weight:900;letter-spacing:-1.5px;color:#fff}
-  h1 .hl{color:var(--violet)}
-  .sub{font-size:clamp(16px,2.4vw,21px);color:var(--muted);max-width:680px;margin:18px auto 0}
-  .cta{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:30px}
+/* ---------- hero ---------- */
+.hero{position:relative;min-height:max(100svh,780px);max-height:980px;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  text-align:center;overflow:hidden;padding:120px 24px 64px;isolation:isolate}
+.streaks{position:absolute;left:50%;top:44%;width:1900px;height:1250px;transform:translate(-50%,-50%) rotate(48deg);z-index:-2;pointer-events:none}
+.band{position:absolute;left:var(--x);top:var(--y);width:var(--w);height:var(--h);
+  background:linear-gradient(180deg,transparent 0%,rgba(90,26,6,.75) 6%,#a8471b 17%,#d9733a 32%,#f39c57 47%,#f8b276 53%,#d9733a 68%,#a8471b 83%,rgba(90,26,6,.75) 94%,transparent 100%);
+  -webkit-mask-image:linear-gradient(90deg,transparent 0%,#000 var(--a,22%),#000 var(--b,72%),transparent 100%);mask-image:linear-gradient(90deg,transparent 0%,#000 var(--a,22%),#000 var(--b,72%),transparent 100%);
+  filter:blur(var(--bl,4px));opacity:var(--o,1);animation:drift var(--d,18s) ease-in-out infinite alternate;animation-delay:var(--dl,0s)}
+.band.deep{background:linear-gradient(180deg,transparent,rgba(90,26,6,.9) 22%,#9a3f16 50%,rgba(90,26,6,.9) 78%,transparent)}
+.band.hot{background:linear-gradient(180deg,transparent 0%,#5e1c06 6%,#bb5520 18%,#ee8e48 34%,#ffc993 48%,#ffd8ac 52%,#ee8e48 66%,#bb5520 82%,#5e1c06 94%,transparent 100%)}
+.band.shadow{background:linear-gradient(180deg,transparent,rgba(5,3,2,.85) 30%,rgba(5,3,2,.85) 70%,transparent)}
+@keyframes drift{from{transform:translateX(-46px)}to{transform:translateX(46px)}}
+.grain{position:absolute;inset:0;z-index:-1;pointer-events:none;opacity:.3;mix-blend-mode:soft-light;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1.1 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+.hero::after{content:"";position:absolute;inset:auto 0 0 0;height:42%;z-index:-1;pointer-events:none;background:linear-gradient(180deg,rgba(7,6,5,0),rgba(7,6,5,.86) 55%,var(--bg))}
+.hero::before{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;
+  background:radial-gradient(46% 30% at 50% 44%,rgba(7,6,5,.3),transparent 70%),radial-gradient(120% 80% at 50% 40%,transparent 50%,rgba(7,6,5,.9) 100%)}
+h1{font-size:clamp(44px,6.4vw,84px);line-height:1;letter-spacing:-.045em;font-weight:700;text-shadow:0 2px 30px rgba(20,8,2,.55),0 1px 2px rgba(20,8,2,.35)}
+.sub{margin-top:24px;font-size:19px;line-height:1.45;color:rgba(255,246,236,.86);max-width:540px;text-shadow:0 1px 18px rgba(10,5,2,.8)}
+.cta-block{margin-top:44px;display:flex;flex-direction:column;align-items:center}
+.btn{display:inline-flex;align-items:center;gap:10px;height:48px;padding:0 24px;border-radius:999px;background:linear-gradient(180deg,#fbf8f4,#e6dfd6);color:#15100b;
+  font-size:16px;font-weight:600;letter-spacing:-.01em;transition:transform .2s ease,box-shadow .2s ease;
+  box-shadow:0 0 0 1px rgba(255,255,255,.35) inset,0 -1px 0 rgba(0,0,0,.12) inset,0 10px 30px -8px rgba(240,167,90,.45),0 2px 4px rgba(0,0,0,.4)}
+.btn:hover{transform:translateY(-1px);box-shadow:0 0 0 1px rgba(255,255,255,.45) inset,0 14px 40px -8px rgba(240,167,90,.6),0 2px 4px rgba(0,0,0,.4)}
+.btn svg{width:17px;height:17px;margin-top:-2px}
+.caps{margin-top:18px;display:flex;flex-direction:column;align-items:center;gap:9px;font-family:var(--mono);font-size:12px;color:var(--ink-3)}
+.caps a.u{color:var(--ink-2);text-decoration:underline;text-decoration-color:rgba(245,239,232,.25);text-underline-offset:3px}
+.caps a.u:hover{color:var(--ink)}
+.caps .row{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:6px 10px}
+.chip{display:inline-flex;align-items:center;max-width:100%;border:1px solid var(--line-2);border-radius:8px;background:rgba(14,12,10,.72);overflow:hidden}
+.chip code{font-family:var(--mono);font-size:12px;color:var(--ink-2);padding:6px 10px;white-space:nowrap;overflow-x:auto;scrollbar-width:none;min-width:0}
+.chip code::-webkit-scrollbar{display:none}
+.chip code b{color:var(--amber);font-weight:500}
+.copy{flex:none;font-family:var(--mono);font-size:11.5px;color:var(--ink-2);background:rgba(255,255,255,.04);border:0;border-left:1px solid var(--line-2);
+  padding:6px 11px;cursor:pointer;align-self:stretch;min-width:64px;transition:color .2s,background .2s}
+.copy:hover{color:var(--ink);background:rgba(255,255,255,.08)}
+.copy.ok{color:var(--amber)}
+.proof{margin-top:56px;display:flex;align-items:center;gap:26px;font-family:var(--mono);font-size:11.5px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.12em}
+.proof .logos{display:flex;gap:26px;align-items:center}
+.proof img{height:24px;width:auto;filter:brightness(0) invert(1);opacity:.55}
+.proof .dd{height:22px}
 
-  /* trusted-by logo strip */
-  .trusted{margin-top:34px}
-  .trusted .label{font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#6f7b9c;margin-bottom:18px}
-  .logos{display:flex;gap:56px;align-items:center;justify-content:center;flex-wrap:wrap}
-  .logos img{height:30px;width:auto;display:block;opacity:.78;filter:grayscale(100%);transition:.25s}
-  .logos img:hover{opacity:1;filter:grayscale(0%)}
-  @keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
-  .logos img{animation:floaty 4s ease-in-out infinite}
-  .logos img:nth-child(2){animation-delay:.8s}
+/* ---------- section shell ---------- */
+section.s{padding:150px 0 0;text-align:center}
+section.s.first{padding-top:40px}
+#features{scroll-margin-top:40px}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber)}
+.eyebrow::before{content:"";width:6px;height:6px;border-radius:2px;background:var(--amber);box-shadow:0 0 12px var(--amber)}
+.s-title{margin-top:14px;font-size:clamp(26px,3vw,36px);font-weight:600;letter-spacing:-.03em;line-height:1.12}
+.s-line{margin:12px auto 0;font-size:17px;color:var(--ink-3);max-width:540px;line-height:1.5}
+.stage{position:relative;margin-top:56px;border:1px solid var(--line);border-radius:24px;overflow:hidden;isolation:isolate;text-align:left;
+  background:radial-gradient(80% 60% at 50% 0%,rgba(255,236,214,.05),transparent 60%),linear-gradient(180deg,#100d0a,#090706)}
+.stage::before{content:"";position:absolute;inset:0;z-index:-1;opacity:.6;pointer-events:none;
+  background-image:radial-gradient(rgba(255,236,214,.09) 1px,transparent 1.2px);background-size:22px 22px;
+  -webkit-mask-image:radial-gradient(70% 70% at 50% 40%,#000,transparent);mask-image:radial-gradient(70% 70% at 50% 40%,#000,transparent)}
+.glowline{position:absolute;left:10%;right:10%;top:0;height:1px;background:linear-gradient(90deg,transparent,rgba(240,167,90,.6),transparent)}
 
-  /* video */
-  .video-wrap{max-width:880px;margin:42px auto 0;border-radius:16px;overflow:hidden;
-    border:1px solid var(--line);box-shadow:0 30px 80px rgba(0,0,0,.5);position:relative;aspect-ratio:16/9;background:#000}
-  .video-wrap iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
-  .hero-media{display:block;max-width:960px;margin:42px auto 0;border-radius:16px;overflow:hidden;
-    border:1px solid var(--line);box-shadow:0 30px 80px rgba(0,0,0,.5);background:#fff}
-  .hero-media img{display:block;width:100%;height:auto}
-  .hero-install{max-width:760px;margin:28px auto 0;text-align:left}
-  .hero-install .code{margin:0;max-width:none;font-size:13.5px;white-space:nowrap}
-  .hero-install .alt{color:var(--muted);font-size:14.5px;margin-top:12px;text-align:center}
-  .opts{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:34px}
-  @media(max-width:760px){.opts{grid-template-columns:1fr}}
-  .opts>*{min-width:0}
-  .opts .code{margin:10px 0 0;max-width:none;font-size:13px;padding:14px 16px 50px;white-space:normal;word-break:break-all}
-  .opts .code.copyable{padding-right:16px}
-  .opts .copy{top:auto;bottom:10px;transform:none}
-  .hero-install,.hero-install .code{min-width:0;width:100%}
-  .hero-install{max-width:560px}
-  .code.copyable{position:relative;padding-right:84px}
-  .copy{position:absolute;top:50%;right:12px;transform:translateY(-50%);font:600 13px/1 -apple-system,system-ui,sans-serif;
-    color:var(--ink);background:rgba(120,130,255,.14);border:1px solid var(--line);border-radius:8px;padding:8px 12px;cursor:pointer;
-    user-select:none;-webkit-user-select:none}
-  .copy:hover{background:rgba(120,130,255,.26)}
-  @media(max-width:640px){
-    .hero-install .code.copyable{white-space:normal;word-break:break-all;padding-right:22px;padding-bottom:54px}
-    .hero-install .copy{top:auto;bottom:10px;transform:none}
-  }
+/* status dots */
+.dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--ink-4)}
+.dot.w{background:var(--green);box-shadow:0 0 0 3px var(--green-soft)}
+.dot.n{background:var(--amber);box-shadow:0 0 0 3px var(--amber-soft)}
+.js .dot.w{animation:pulse 2.4s ease-in-out infinite}
+.js .dot.n{animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{50%{box-shadow:0 0 0 6px transparent}}
 
-  /* sections */
-  section{padding:60px 0}
-  h2{font-size:clamp(26px,4vw,38px);font-weight:800;letter-spacing:-.6px;color:#fff;text-align:center}
-  .lead{text-align:center;color:var(--muted);max-width:620px;margin:14px auto 0;font-size:17px}
+/* ---------- 1. org ---------- */
+.org{padding:54px 48px 56px;position:relative}
+.org svg.links{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+.org svg.links path{fill:none;stroke:rgba(255,236,214,.14);stroke-width:1}
+.org svg.links path.hot{stroke:rgba(240,167,90,.45)}
+.org svg.links circle{fill:var(--green);filter:drop-shadow(0 0 4px var(--green))}
+.org svg.links circle.up{fill:var(--amber);filter:drop-shadow(0 0 5px var(--amber))}
+.tier{display:flex;justify-content:center;position:relative;z-index:1}
+.you{font-family:var(--mono);font-size:11.5px;color:var(--ink-2);border:1px solid var(--line-2);border-radius:999px;padding:5px 12px;background:#0d0b09;display:flex;gap:8px;align-items:center}
+.you i{width:16px;height:16px;border-radius:50%;background:linear-gradient(135deg,#cfc6bb,#8d8378);display:block}
+.ceo{margin-top:40px;display:flex;align-items:center;gap:14px;padding:14px 18px 14px 14px;border-radius:16px;min-width:330px;
+  background:linear-gradient(180deg,#1b1510,#120e0b);border:1px solid rgba(240,167,90,.32);
+  box-shadow:0 0 0 6px rgba(240,167,90,.04),0 20px 60px -20px rgba(240,167,90,.35)}
+.ceo img{width:40px;height:40px;border-radius:10px}
+.ceo b{display:block;font-size:16px;font-weight:600;letter-spacing:-.01em}
+.ceo span{font-size:13px;color:var(--ink-3)}
+.ceo .tally{margin-left:auto;display:flex;flex-direction:column;gap:5px;font-family:var(--mono);font-size:11px;color:var(--ink-2)}
+.ceo .tally em{font-style:normal;display:flex;align-items:center;gap:7px}
+.vps{margin-top:46px;display:grid;grid-template-columns:repeat(3,1fr);gap:18px;position:relative;z-index:1}
+.vp{min-width:0;border:1px solid var(--line-2);border-radius:16px;background:linear-gradient(180deg,#14100d,#0e0b09);padding:14px;box-shadow:0 24px 50px -30px rgba(0,0,0,.9)}
+.vp-head{display:flex;align-items:center;gap:10px;padding:2px 4px 12px;border-bottom:1px solid var(--line)}
+.av{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;font-size:11px;font-weight:700;color:#0c0a08}
+.av.a{background:#7fd0a6}.av.b{background:#b7a3ff}.av.c{background:#83b8ff}
+.vp-head b{font-size:14px;font-weight:600}
+.vp-head small{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--ink-3)}
+.task{display:flex;align-items:center;gap:10px;padding:10px 6px 10px 8px;border-radius:10px;margin-top:6px;font-size:13px;color:var(--ink-2)}
+.task span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.task small{font-family:var(--mono);font-size:10px;color:var(--ink-3);border:1px solid var(--line);border-radius:5px;padding:1px 6px;white-space:nowrap}
+.task.need{background:rgba(240,167,90,.07);box-shadow:inset 0 0 0 1px rgba(240,167,90,.28);color:var(--ink)}
+.task.need small{color:var(--amber);border-color:rgba(240,167,90,.35)}
+.legend{margin-top:30px;display:flex;justify-content:center;gap:22px;font-family:var(--mono);font-size:11px;color:var(--ink-3);position:relative;z-index:1}
+.legend em{font-style:normal;display:flex;align-items:center;gap:7px}
 
-  .feature{display:grid;grid-template-columns:1fr 1fr;gap:34px;align-items:center;margin-top:54px}
-  .feature:nth-child(even) .ftext{order:2}
-  .feature img{width:100%;border-radius:14px;border:1px solid var(--line);box-shadow:0 18px 50px rgba(0,0,0,.45)}
-  .plugin-demo-media{display:block;max-width:960px;margin:38px auto 0;border-radius:16px;overflow:hidden;border:1px solid var(--line);box-shadow:0 24px 64px rgba(0,0,0,.45)}
-  .plugin-demo-media img{display:block;width:100%;height:auto}
-  .feature h3{font-size:23px;font-weight:800;color:#fff;margin-bottom:10px}
-  .feature p{color:var(--muted);font-size:16px}
-  @media(max-width:760px){.feature{grid-template-columns:1fr;gap:18px}.feature:nth-child(even) .ftext{order:0}}
+/* ---------- 2. needs you ---------- */
+.ask-stage{padding:70px 24px 74px;display:grid;place-items:center}
+.ask-stack{position:relative;width:min(540px,100%)}
+.ghost{position:absolute;left:6%;right:6%;height:64px;border:1px solid var(--line);border-radius:16px;background:#0f0c0a;display:flex;align-items:flex-start;gap:10px;padding:9px 18px 0;
+  font-size:13px;color:var(--ink-2)}
+.ghost .dot{margin-top:5px}
+.ghost.g1{top:-32px;opacity:.6;transform:scale(.95);transform-origin:top}
+.ghost.g2{top:-60px;opacity:.32;transform:scale(.9);transform-origin:top}
+.ask{position:relative;border-radius:18px;border:1px solid rgba(240,167,90,.34);background:linear-gradient(180deg,#1a140f,#110d0a);padding:20px 20px 18px;
+  box-shadow:0 0 0 6px rgba(240,167,90,.035),0 40px 80px -30px rgba(0,0,0,.95),0 20px 60px -30px rgba(240,167,90,.35)}
+.ask-top{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--ink-3)}
+.ask-top b{color:var(--ink);font-weight:600}
+.badge{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--amber);border:1px solid rgba(240,167,90,.38);background:var(--amber-soft);border-radius:999px;padding:3px 9px;display:flex;gap:6px;align-items:center}
+.ask p.q{margin-top:16px;font-size:18px;line-height:1.4;letter-spacing:-.01em}
+.opts{margin-top:18px;display:flex;flex-wrap:wrap;gap:8px}
+.opt{border:1px solid var(--line-2);background:rgba(255,236,214,.03);border-radius:10px;padding:9px 14px;font-size:14px;color:var(--ink-2);cursor:pointer;transition:.2s}
+.opt:hover{border-color:rgba(240,167,90,.5);color:var(--ink)}
+.opt.other{border-style:dashed;color:var(--ink-3)}
+.opt.pick{border-color:rgba(240,167,90,.6);background:rgba(240,167,90,.12);color:var(--ink)}
 
-  /* grid of small features */
-  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:48px}
-  @media(max-width:760px){.grid{grid-template-columns:1fr}}
-  .gcard{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px}
-  .gcard h4{color:#fff;font-size:17px;margin-bottom:7px}
-  .gcard p{color:var(--muted);font-size:14.5px}
+/* ---------- 3. sessions that draw ---------- */
+.draw-stage{padding:40px 48px 48px;display:grid;grid-template-columns:300px 1fr;gap:34px;align-items:center}
+.prompt{font-size:14px;color:var(--ink-2);display:flex;flex-direction:column;gap:14px}
+.bubble{align-self:flex-start;border:1px solid var(--line-2);background:rgba(255,236,214,.04);border-radius:14px 14px 14px 4px;padding:12px 14px;color:var(--ink);line-height:1.45}
+.who{font-family:var(--mono);font-size:10.5px;color:var(--ink-3);letter-spacing:.08em;text-transform:uppercase}
+.stream{color:var(--ink-3);line-height:1.6}
+.caret{display:inline-block;width:7px;height:15px;background:var(--amber);vertical-align:-2px;margin-left:2px}
+.js .caret{animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.canvas{border:1px solid var(--line);border-radius:16px;background:#0b0907;padding:22px 18px}
+.canvas svg{display:block;width:100%;height:auto}
+.canvas svg.tall{display:none}
+.canvas .nd rect{fill:#15110d;stroke:rgba(255,236,214,.2)}
+.canvas .nd.hi rect{stroke:rgba(240,167,90,.6);fill:#1d150e}
+.canvas .nd text{fill:#f5efe8;font:500 13px var(--sans)}
+.canvas .nd text.s{fill:rgba(245,239,232,.45);font:400 10.5px var(--mono)}
+.canvas .ed{fill:none;stroke:rgba(240,167,90,.7);stroke-width:1.4}
+.canvas .ed.back{stroke:rgba(111,213,154,.65);stroke-dasharray:4 4}
+.canvas .lbl{fill:rgba(245,239,232,.5);font:400 10.5px var(--mono)}
+.js .drawing .ed{stroke-dasharray:var(--len);stroke-dashoffset:var(--len)}
+.js .drawing .ed.back{stroke-dasharray:4 4}
+.js .drawing .nd,.js .drawing .lbl,.js .drawing .ed.back{opacity:0}
+.js .drawing.go .nd{animation:fade .5s ease forwards;animation-delay:var(--t)}
+.js .drawing.go .lbl{animation:fade .5s ease forwards;animation-delay:var(--t)}
+.js .drawing.go .ed{animation:stroke .7s ease forwards;animation-delay:var(--t)}
+.js .drawing.go .ed.back{animation:fade .6s ease forwards;animation-delay:var(--t);opacity:0}
+@keyframes stroke{to{stroke-dashoffset:0}}
+@keyframes fade{to{opacity:1}}
 
-  /* install */
-  .code{background:#0a0d17;border:1px solid var(--line);border-radius:12px;padding:20px 22px;max-width:640px;margin:30px auto 0;
-    font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14.5px;color:#cfe;overflow:auto}
-  .code .c{color:#6b7aa0}
+/* ---------- 4. diff ---------- */
+.diff-stage{position:relative;margin-top:56px;isolation:isolate;text-align:left}
+.halo{position:absolute;left:12%;right:12%;top:18%;bottom:-6%;z-index:-1;border-radius:60px;background:linear-gradient(100deg,#7a3010,#e07d3c 35%,#f6b06b 50%,#e07d3c 65%,#7a3010);filter:blur(80px);opacity:.38}
+.diff{max-width:860px;margin:0 auto;border:1px solid var(--line-2);border-radius:16px;overflow:hidden;background:#0b0907;box-shadow:0 40px 80px -40px rgba(0,0,0,.95)}
+.diff-head{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);font-size:13px;color:var(--ink-2);background:rgba(255,236,214,.02)}
+.diff-head b{color:var(--ink);font-weight:600;font-family:var(--mono);font-size:12.5px}
+.diff-head .tabs{display:flex;gap:6px}
+.diff-head .tabs span{font-family:var(--mono);font-size:11.5px;padding:4px 9px;border-radius:7px;color:var(--ink-3)}
+.diff-head .tabs span.on{color:var(--ink);background:rgba(255,236,214,.06);box-shadow:inset 0 0 0 1px var(--line-2)}
+.diff-head .stat{margin-left:auto;font-family:var(--mono);font-size:11.5px}
+.add{color:var(--green)}.del{color:var(--red)}
+.code{font-family:var(--mono);font-size:12.8px;line-height:1.75;padding:10px 0;overflow-x:auto}
+.ln{display:grid;grid-template-columns:44px 22px 1fr;white-space:pre;color:rgba(245,239,232,.72);min-width:560px}
+.ln i{font-style:normal;text-align:right;padding-right:10px;color:var(--ink-4);user-select:none}
+.ln u{text-decoration:none;color:var(--ink-4);text-align:center}
+.ln.a{background:linear-gradient(90deg,rgba(111,213,154,.13),rgba(111,213,154,.04))}
+.ln.a u{color:var(--green)}
+.ln.d{background:linear-gradient(90deg,rgba(255,123,107,.12),rgba(255,123,107,.03))}
+.ln.d u{color:var(--red)}
+.ln.d span{color:rgba(245,239,232,.5)}
+.k{color:#e9a87c}.f{color:#f5efe8}.st{color:#a9d8a6}.c{color:var(--ink-4)}
+.thread{margin:6px 16px 8px 66px;border:1px solid var(--line-2);border-radius:12px;background:#120f0c;padding:12px 14px;font-family:var(--sans);white-space:normal;min-width:0}
+.thread .t-top{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-3)}
+.thread .t-top i{width:18px;height:18px;border-radius:50%;background:linear-gradient(135deg,#cfc6bb,#8d8378)}
+.thread .t-top b{color:var(--ink);font-weight:600}
+.thread .t-x{margin-left:auto;color:var(--ink-3);font-size:11px}
+.rb-act{display:flex;gap:8px}
+.thread p{margin-top:6px;font-size:14px;color:var(--ink)}
+.thread .t-act{margin-top:12px;display:flex;gap:8px;justify-content:flex-end}
+.mini-btn{font-size:12.5px;border-radius:8px;padding:6px 12px;border:1px solid var(--line-2);color:var(--ink-2)}
+.reviewbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 16px;border-top:1px solid var(--line);font-size:12.5px;color:var(--ink-3);background:rgba(255,236,214,.02)}
+.mini-btn.go{background:linear-gradient(180deg,#fbf8f4,#e6dfd6);color:#15100b;border-color:transparent;font-weight:600}
 
-  footer{border-top:1px solid var(--line);padding:34px 0;text-align:center;color:var(--muted);font-size:14px}
-  .footlinks{display:flex;gap:20px;justify-content:center;margin-bottom:14px}
+/* ---------- 5. machines web ---------- */
+.web-stage{padding:0;height:540px;border:0;background:radial-gradient(40% 50% at 50% 50%,rgba(240,167,90,.08),transparent 70%)}
+.web-stage::before{-webkit-mask-image:radial-gradient(60% 60% at 50% 50%,#000,transparent);mask-image:radial-gradient(60% 60% at 50% 50%,#000,transparent)}
+.web-stage svg .mesh{-webkit-mask-image:radial-gradient(55% 60% at 50% 50%,#000,transparent);mask-image:radial-gradient(55% 60% at 50% 50%,#000,transparent)}
+.web-stage svg{position:absolute;inset:0;width:100%;height:100%}
+.web-stage .mesh line{stroke:rgba(255,236,214,.05)}
+.web-stage .link{stroke:rgba(240,167,90,.35);stroke-width:1.2;fill:none}
+.web-stage .link.drop{stroke:rgba(255,236,214,.22);stroke-dasharray:3 6}
+.web-stage .pk{fill:var(--amber);filter:drop-shadow(0 0 6px var(--amber))}
+.host{position:absolute;transform:translate(-50%,-50%);display:flex;align-items:center;gap:10px;padding:10px 14px 10px 12px;border:1px solid var(--line-2);border-radius:14px;
+  background:linear-gradient(180deg,#15110d,#0e0b09);box-shadow:0 20px 40px -20px rgba(0,0,0,.9);white-space:nowrap;z-index:2}
+.host svg{position:static;width:18px;height:18px;color:var(--ink-2)}
+.host b{display:block;font-size:13.5px;font-weight:600}
+.host small{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10.5px;color:var(--ink-3)}
+.hub{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:3;display:flex;flex-direction:column;align-items:center;gap:10px}
+.hub .ic{width:76px;height:76px;border-radius:20px;overflow:hidden;box-shadow:0 0 0 1px rgba(240,167,90,.45),0 0 0 10px rgba(240,167,90,.05),0 0 80px rgba(240,167,90,.45)}
+.hub .ic img{width:100%;height:100%}
+.hub b{font-family:var(--mono);font-size:11.5px;color:var(--ink-2);letter-spacing:.06em}
+.drop-note{position:absolute;z-index:2;font-family:var(--mono);font-size:10.5px;color:var(--ink-2);border:1px dashed rgba(255,236,214,.22);border-radius:8px;padding:4px 9px;background:#0c0a08;transform:translate(-50%,-50%);white-space:nowrap}
+.drop-note em{font-style:normal;color:var(--green)}
+
+/* ---------- 6. bento ---------- */
+.bento{margin-top:56px;display:grid;grid-template-columns:repeat(6,1fr);gap:14px;text-align:left}
+.card{position:relative;border:1px solid var(--line);border-radius:20px;padding:24px;min-height:240px;display:flex;flex-direction:column;justify-content:flex-end;
+  overflow:hidden;isolation:isolate;background:var(--panel);transition:border-color .3s,transform .3s}
+.card:hover{border-color:var(--line-2)}
+.card.s2{grid-column:span 2}.card.s3{grid-column:span 3}.card.s4{grid-column:span 4}
+.card h3{font-size:15px;font-weight:600;letter-spacing:-.01em}
+.card p{margin-top:5px;font-size:14px;color:var(--ink-3);line-height:1.45;max-width:380px}
+.art{flex:1;display:flex;align-items:center;justify-content:center;margin-bottom:22px;min-height:110px}
+.search{width:min(420px,100%);border:1px solid var(--line-2);border-radius:12px;background:rgba(0,0,0,.35);overflow:hidden;box-shadow:0 20px 40px -20px rgba(0,0,0,.8)}
+.search .q{display:flex;align-items:center;gap:10px;padding:11px 14px;font-family:var(--mono);font-size:12.5px;color:var(--ink);border-bottom:1px solid var(--line)}
+.search .q svg{width:14px;height:14px;color:var(--amber);flex:none}
+.search .r{display:flex;align-items:center;gap:10px;padding:8px 14px;font-family:var(--mono);font-size:11.5px;color:var(--ink-3)}
+.search .r.on{background:rgba(240,167,90,.06);color:var(--ink)}
+.tag{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ink-2);border:1px solid var(--line-2);border-radius:5px;padding:1px 6px}
+.tag.hl{color:var(--amber);border-color:rgba(240,167,90,.35);background:rgba(240,167,90,.06)}
+.agents{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;max-width:300px}
+.agents span{font-family:var(--mono);font-size:11.5px;border:1px solid var(--line-2);border-radius:999px;padding:5px 11px;color:var(--ink-2);display:flex;align-items:center;gap:7px}
+.agents span.on{color:var(--ink);border-color:rgba(240,167,90,.45);background:rgba(240,167,90,.07)}
+.sync{display:flex;align-items:center;gap:12px;font-family:var(--mono);font-size:11px;color:var(--ink-2)}
+.node{border:1px solid var(--line-2);border-radius:10px;padding:8px 11px;background:rgba(0,0,0,.3);white-space:nowrap}
+.node.w{display:grid;place-items:center;padding:6px;border-color:rgba(240,167,90,.4)}
+.node.w img{width:24px;height:24px;border-radius:6px}
+.arr{color:var(--amber)}
+.tree{font-family:var(--mono);font-size:12px;line-height:1.9;color:var(--ink-3)}
+.tree b{color:var(--ink);font-weight:500}.tree em{font-style:normal;color:var(--amber)}
+.appbar{display:flex;width:min(360px,100%);border:1px solid var(--line-2);border-radius:12px;overflow:hidden;background:rgba(0,0,0,.3);height:126px}
+.appbar .side{width:112px;border-right:1px solid var(--line);padding:10px 8px;display:flex;flex-direction:column;gap:5px}
+.appbar .side span{font-size:11px;color:var(--ink-3);padding:4px 7px;border-radius:6px;display:flex;align-items:center;gap:6px}
+.appbar .side span::before{content:"";width:8px;height:8px;border-radius:3px;background:rgba(255,236,214,.14)}
+.appbar .side span.on{color:var(--ink);background:rgba(240,167,90,.1)}
+.appbar .side span.on::before{background:var(--amber)}
+.appbar .main{flex:1;padding:12px;display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.appbar .main i{border-radius:6px;background:rgba(255,236,214,.05);border:1px solid var(--line)}
+.appbar .main i:first-child{grid-column:span 2;background:rgba(240,167,90,.08);border-color:rgba(240,167,90,.22)}
+.big{font-family:var(--mono);font-size:56px;font-weight:500;letter-spacing:-.04em;color:transparent;-webkit-text-stroke:1px rgba(240,167,90,.75)}
+
+/* ---------- closing ---------- */
+.closing{position:relative;margin-top:170px;padding:150px 24px 140px;text-align:center;overflow:hidden;isolation:isolate}
+.closing .streaks{width:1500px;height:620px;top:40%;opacity:.75}
+.closing::after{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;
+  background:linear-gradient(180deg,var(--bg) 0%,rgba(7,6,5,.2) 30%,rgba(7,6,5,.35) 55%,var(--bg) 92%),radial-gradient(50% 50% at 50% 50%,transparent,rgba(7,6,5,.85))}
+.closing h2{font-size:clamp(34px,4.4vw,56px);line-height:1.05;letter-spacing:-.04em;font-weight:700;text-shadow:0 2px 30px rgba(20,8,2,.6)}
+.closing .sub{margin:14px auto 0;font-size:18px}
+.star{margin-top:26px;display:inline-flex;align-items:center;gap:8px;font-size:14px;color:var(--ink-2);border:1px solid var(--line-2);padding:8px 14px;border-radius:999px;transition:color .2s,border-color .2s}
+.star:hover{color:var(--ink);border-color:rgba(255,236,214,.3)}
+.star svg{width:15px;height:15px}
+footer{border-top:1px solid var(--line);padding:40px 0 52px}
+.foot{display:flex;align-items:center;justify-content:space-between;gap:24px;flex-wrap:wrap}
+.foot p{font-size:13.5px;color:var(--ink-3);display:flex;align-items:center;gap:12px}
+.foot p img{width:22px;height:22px;border-radius:5px}
+.foot nav{display:flex;gap:26px;flex-wrap:wrap}
+.foot nav a{font-size:13.5px;color:var(--ink-2)}
+.foot nav a:hover{color:var(--ink)}
+
+/* ---------- motion ---------- */
+.js .rv{opacity:0;transform:translateY(22px);transition:opacity .9s cubic-bezier(.2,.7,.2,1),transform .9s cubic-bezier(.2,.7,.2,1)}
+.js .rv.in{opacity:1;transform:none}
+.load{animation:rise 1s cubic-bezier(.2,.7,.2,1) both;animation-delay:var(--t,0s)}
+@keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+
+/* ---------- responsive ---------- */
+@media (max-width:980px){
+  .bento{grid-template-columns:repeat(2,1fr)}
+  .card.s2,.card.s3,.card.s4{grid-column:span 1}
+  .card.wide-m{grid-column:span 2}
+  .draw-stage{grid-template-columns:1fr;padding:32px 24px 32px}
+  .org{padding:44px 24px 46px}
+  .vps{gap:12px}
+  .task small{display:none}
+  .task.need small{display:inline}
+}
+@media (max-width:860px){
+  /* org: a vertical tree */
+  .org{padding:30px 16px 30px}
+  .org svg.links{display:none}
+  .ceo{margin-top:22px;min-width:0;width:100%}
+  .vps{grid-template-columns:minmax(0,1fr);gap:12px;margin:22px 0 0 18px;position:relative}
+  .vps::before{content:"";position:absolute;left:-12px;top:-22px;bottom:30px;width:1px;background:rgba(255,236,214,.14)}
+  .vp{position:relative}
+  .vp::before{content:"";position:absolute;left:-12px;top:26px;width:12px;height:1px;background:rgba(255,236,214,.14)}
+  .tier.top{justify-content:flex-start}
+}
+@media (max-width:720px){
+  .ceo .tally{display:none}
+
+  .wrap{width:calc(100% - 32px)}
+  .nav{top:10px}
+  .nav-in{height:52px;padding:0 8px 0 14px;border-radius:14px}
+  .nav-links a{display:none}
+  .nav-links a.pill-sm{display:inline-flex;margin-left:0;height:32px;font-size:13px}
+  .hero{min-height:0;padding:150px 20px 40px;max-height:none}
+  .streaks{width:1200px;height:900px;top:38%}
+  h1{font-size:42px;letter-spacing:-.05em}
+  .sub{font-size:16.5px;margin-top:18px;max-width:330px}
+  .cta-block{margin-top:34px}
+  .caps{width:100%;color:rgba(245,239,232,.62);text-shadow:0 1px 10px rgba(8,4,2,.9)}
+  .caps .row.curl{flex-direction:column;gap:8px;width:100%}
+  .chip{width:min(340px,calc(100vw - 40px))}
+  .chip code{flex:1;text-align:left;-webkit-mask-image:linear-gradient(90deg,#000 82%,transparent);mask-image:linear-gradient(90deg,#000 82%,transparent)}
+  .proof{margin-top:40px;flex-direction:column;gap:14px}
+  section.s{padding-top:110px}
+  .s-title{font-size:26px}
+  .s-line{font-size:15.5px;max-width:330px}
+  .stage{margin-top:36px;border-radius:18px}
+  .legend{gap:14px;flex-wrap:wrap}
+  .canvas svg.wide{display:none}
+  .canvas svg.tall{display:block;max-width:300px;margin:0 auto}
+  .ask-stage{padding:70px 14px 30px}
+  .ask p.q{font-size:16.5px}
+  .diff-stage{padding:0;border:0}
+  .diff{border-radius:16px}
+  .diff-head .tabs span:not(.on){display:none}
+  .code{font-size:11.5px}
+  .ln{grid-template-columns:34px 18px 1fr}
+  .thread{margin:6px 10px 8px 10px}
+  .web-stage{height:600px}
+  .bento{grid-template-columns:1fr;gap:12px}
+  .card.wide-m{grid-column:span 1}
+  .card{min-height:0;padding:22px}
+  .closing{margin-top:120px;padding:110px 20px 100px}
+  .closing .streaks{width:1000px;height:520px}
+  .foot{flex-direction:column;align-items:flex-start}
+  .foot nav{gap:18px}
+}
+@media (prefers-reduced-motion:reduce){
+  .band,.load,.dot,.caret{animation:none !important}
+  .js .rv{opacity:1;transform:none;transition:none}
+  .js .drawing .ed{stroke-dashoffset:0}
+  .js .drawing .nd,.js .drawing .lbl,.js .drawing .ed.back,.js .drawing.go .nd,.js .drawing.go .lbl,.js .drawing.go .ed,.js .drawing.go .ed.back{opacity:1;animation:none}
+  .pk,.org svg.links circle{display:none}
+}
 </style>
 </head>
 <body>
-<div class="wrap">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="apple" viewBox="0 0 384 512"><path fill="currentColor" d="M318.7 268.7c-.2-36.7 16.4-64.4 50-84.8-18.8-26.9-47.2-41.7-84.7-44.6-35.5-2.8-74.3 20.7-88.5 20.7-15 0-49.4-19.7-76.4-19.7C63.3 141.2 4 184.8 4 273.5q0 39.3 14.4 81.2c12.8 36.7 59 126.7 107.2 125.2 25.2-.6 43-17.9 75.8-17.9 31.8 0 48.3 17.9 76.4 17.9 48.6-.7 90.4-82.5 102.6-119.3-65.2-30.7-61.7-90-61.7-91.9zm-56.6-164.2c27.3-32.4 24.8-61.9 24-72.5-24.1 1.4-52 16.4-67.9 34.9-17.5 19.8-27.8 44.3-25.6 71.9 26.1 2 49.9-11.4 69.5-34.3z"/></symbol>
+  <symbol id="laptop" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.5" d="M4 6.5A1.5 1.5 0 0 1 5.5 5h13A1.5 1.5 0 0 1 20 6.5V16H4zM2 19h20"/></symbol>
+  <symbol id="server" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.5"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="13" width="16" height="7" rx="1.5"/><path d="M8 7.5h.01M8 16.5h.01"/></g></symbol>
+  <symbol id="cloud" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.5" d="M7 18h10a4 4 0 0 0 .5-7.97A6 6 0 0 0 6.1 9.5 4.25 4.25 0 0 0 7 18z"/></symbol>
+  <symbol id="gh" viewBox="0 0 16 16"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></symbol>
+</svg>
 
-  <nav>
-    <div class="brand"><img src="assets/walnut-icon.png" alt="Walnut logo"/> Walnut</div>
-    <div class="nav-links">
+<header class="nav">
+  <div class="nav-in">
+    <a class="brand" href="#top"><img src="assets/walnut-icon.png" alt="">Walnut</a>
+    <nav class="nav-links" aria-label="Main">
       <a href="#features">Features</a>
-      <a href="#plugins">Plugins</a>
-      <a href="#install">Install</a>
-      <a href="https://youtu.be/uN4WCZ-n2mw">Video tour</a>
-      <a class="btn btn-ghost" href="https://github.com/EvanZhang008/open-walnut">★ GitHub</a>
+      <a href="https://github.com/EvanZhang008/open-walnut">GitHub</a>
+      <a href="https://github.com/EvanZhang008/open-walnut/blob/main/GETTING_STARTED.md">Docs</a>
+      <a class="pill-sm" href="https://github.com/EvanZhang008/open-walnut/releases/latest/download/Walnut-arm64.dmg"><svg aria-hidden="true"><use href="#apple"/></svg>Download</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+  <section class="hero">
+    <div class="streaks" aria-hidden="true">
+      <div class="band deep" style="--x:520px;--y:250px;--w:1100px;--h:90px;--a:30%;--b:60%;--bl:10px;--o:.7;--d:22s"></div>
+      <div class="band" style="--x:380px;--y:330px;--w:1150px;--h:150px;--a:32%;--b:64%;--bl:5px;--d:19s;--dl:-4s"></div>
+      <div class="band hot" style="--x:300px;--y:480px;--w:1300px;--h:190px;--a:28%;--b:66%;--bl:5px;--d:24s;--dl:-8s"></div>
+      <div class="band shadow" style="--x:500px;--y:640px;--w:900px;--h:40px;--a:20%;--b:70%;--bl:6px;--d:16s"></div>
+      <div class="band" style="--x:560px;--y:670px;--w:1100px;--h:150px;--a:24%;--b:62%;--bl:4px;--o:.95;--d:17s;--dl:-2s"></div>
+      <div class="band hot" style="--x:240px;--y:830px;--w:1150px;--h:140px;--a:34%;--b:70%;--bl:6px;--o:.85;--d:21s;--dl:-11s"></div>
+      <div class="band deep" style="--x:600px;--y:980px;--w:1000px;--h:90px;--a:26%;--b:60%;--bl:10px;--o:.7;--d:20s;--dl:-6s"></div>
     </div>
-  </nav>
-
-  <header>
-    <span class="pill">● OPEN SOURCE · SELF-HOSTED · MIT</span>
-    <h1>AI agents that run your work<br/>like a <span class="hl">small company</span></h1>
-    <p class="sub">Replace Notion and your Claude Code terminals with one open-source app. You talk to one CEO agent (Main, in the app), and each project gets a lead that runs its own Claude Code sessions and workers. Tasks, notes, calendar and every coding session, on your machine.</p>
-    <div class="hero-install">
-      <div class="code copyable" data-copy="curl -fsSL https://openwalnut.dev/install.sh | sh &amp;&amp; ~/.local/bin/walnut web"><button type="button" class="copy">Copy</button>curl -fsSL https://openwalnut.dev/install.sh | sh<br/>~/.local/bin/walnut web</div>
-      <p class="alt">macOS or Linux. It needs only Claude Code, signed in once. Then open <code>http://localhost:3456</code>. Or <a href="#install">Homebrew and the Mac app</a>.</p>
-    </div>
-    <div class="cta">
-      <a class="btn btn-primary" href="#install">Install</a>
-      <a class="btn btn-ghost" href="https://github.com/EvanZhang008/open-walnut">★ Star on GitHub</a>
-    </div>
-    <div class="trusted">
-      <div class="label">Used by engineers at</div>
-      <div class="logos">
-        <img src="assets/logo-amazon.svg" alt="Amazon" />
-        <img src="assets/logo-doordash.svg" alt="DoorDash" />
-      </div>
-    </div>
-
-    <a class="hero-media" href="assets/org.gif">
-      <img src="assets/org.gif" width="960" height="600" alt="The org chart, a lead per area, and the one question that needs you, answered in the session where it waits" />
-    </a>
-  </header>
-
-  <section id="features">
-    <h2>One app for your work and your agents</h2>
-    <p class="lead">Stop losing work in terminal tabs and note pages. Walnut gives your agents an org, gives Claude Code a real UI, and ties every session to the work it's for.</p>
-
-    <div class="feature">
-      <div class="ftext">
-        <h3>Main, and a lead for each project</h3>
-        <p>The Org page is where you run the company. <b>Main</b>, your CEO agent, sees every project. Each project has a <b>lead</b> that plans the work and hands it to workers, each one its own Claude Code session.</p>
-        <p>Every lead's row says what it is working on or what it <b>asks you</b>, and you answer right where the question waits. The org chart shows the whole team; drag a task onto another to make it that task's worker.</p>
-      </div>
-      <img src="assets/org-chart.png" alt="The org chart: Main on top, a lead per project, and the workers under each task" loading="lazy"/>
-    </div>
-
-    <div class="feature">
-      <div class="ftext">
-        <h3>Sessions that draw</h3>
-        <p><b>Rich mode</b> is on by default: a session can answer with a diagram, a table, or a laid-out page instead of a wall of text, and it draws in as the answer streams.</p>
-      </div>
-      <img src="assets/rich-mode-draw.gif" alt="A Claude Code session drawing how a web request reaches a server, live" loading="lazy"/>
-    </div>
-
-    <div class="feature">
-      <div class="ftext">
-        <h3>Natural language → task → live session</h3>
-        <p>Tell the main agent what you want. It creates the task and spawns a Claude Code session for it in one shot, then streams every tool call and output live in your browser.</p>
-      </div>
-      <img loading="lazy" src="assets/01-task-to-session.gif" alt="Create a task and a Claude Code session from natural language"/>
-    </div>
-
-    <div class="feature">
-      <div class="ftext">
-        <h3>A real session panel</h3>
-        <p>Chat with the session and switch modes like the CLI, open a real terminal, browse files, recap past messages, or fork into a sub-session, each in one click.</p>
-      </div>
-      <img loading="lazy" src="assets/02-session-panel.gif" alt="Claude Code session panel: chat, terminal, files, fork"/>
-    </div>
-
-    <div class="feature">
-      <div class="ftext">
-        <h3>Focus, Satellite, Parked</h3>
-        <p>Drag what you're actively working on into <b>Focus</b>, keep secondary work in <b>Satellite</b>, and shelve what waits in <b>Parked</b>. Status is color-coded and updates as the AI works.</p>
-      </div>
-      <img loading="lazy" src="assets/03-focus-tiers.gif" alt="Drag tasks between Focus, Satellite, and Parked tiers"/>
-    </div>
-
-    <div class="feature">
-      <div class="ftext">
-        <h3>Tasks, agent chat &amp; Claude Code on one screen</h3>
-        <p>Tasks on the left, the main agent chat in the middle, your live Claude Code session on the right. The agent manages it all with full context from your memory and notes.</p>
-      </div>
-      <img loading="lazy" src="assets/04-home-three-pane.gif" alt="Home page: tasks, agent chat, and Claude Code side by side"/>
-    </div>
-
-    <div class="feature">
-      <div class="ftext">
-        <h3>Notes &amp; memory the AI can search</h3>
-        <p>An Obsidian-style notes vault stored locally and indexed in a local vector database. Ask <i>"what is my health routine?"</i> and the agent finds it across your notes. Nothing leaves your disk.</p>
-      </div>
-      <img loading="lazy" src="assets/05-notes-memory.gif" alt="Ask the AI to find information across your local notes"/>
-    </div>
-
-    <div class="feature">
-      <div class="ftext">
-        <h3>One console, every machine</h3>
-        <p>One Walnut console drives Claude Code on your laptop <b>and</b> any number of SSH hosts, and your agents can start work on either. Point at a host and Walnut deploys its own small daemon there over SSH; no manual copy step.</p>
-        <p>Sessions keep running when the SSH connection drops, and terminal, files, diff, and the command palette all work over SSH.</p>
-      </div>
-      <img loading="lazy" src="assets/remote-topology.svg" alt="One Walnut console driving local and multiple remote hosts over SSH"/>
-    </div>
-
-    <div class="feature">
-      <div class="ftext">
-        <h3>Review what the agent changed</h3>
-        <p>A <b>GitHub-style, per-session diff</b>: see exactly what each session touched, split or unified, grouped by repo. Rebuilt from the session's <b>own history</b>, so edits stay attributed per session even when several agents share a repo.</p>
-        <p><b>Select code → "Ask about this"</b> drops it into the same agent's chat, and <b>click a line</b> for a PR-style comment box that batches into one review.</p>
-      </div>
-      <img loading="lazy" src="assets/06-changed-review.gif" alt="A GitHub-style per-session diff in Walnut showing exactly what one Claude Code session changed"/>
-    </div>
-
-    <div class="feature">
-      <div class="ftext">
-        <h3>See dynamic workflows as a live flow-graph</h3>
-        <p>Claude Code can fan out into a <b>dynamic multi-agent workflow</b>, and Walnut is where you actually <i>watch</i> it run. Each phase becomes a column, each subagent a node with its live status, model, token spend, and duration.</p>
-        <p><b>Full Claude Code dynamic-workflow support</b>: parallel fan-out and sequential stages are parsed straight from the session stream. <b>Click any node</b> for that subagent's full transcript; it even <b>survives a reload</b>, rebuilt from the on-disk manifest.</p>
-      </div>
-      <img loading="lazy" src="assets/workflow-viz.png" alt="Walnut visualizing a Claude Code dynamic workflow as a phase flow-graph: a FAN OUT stage of 4 parallel subagents feeding a SYNTHESIZE stage, each node showing model, tokens, and duration"/>
-    </div>
-
-    <div class="grid">
-      <div class="gcard"><h4>🖥️ Multi-session dashboard</h4><p>Run and monitor dozens of Claude Code sessions side by side, with live status, mid-session model switching, and plan → execute.</p></div>
-      <div class="gcard"><h4>✅ Tasks that drive sessions</h4><p>A Project → Folder → Task → Subtask hierarchy with priorities, due dates, dependencies, and tags, each task wired to its Claude Code session.</p></div>
-      <div class="gcard"><h4>🔌 Sync with any task platform</h4><p>Two-way sync to Microsoft To-Do and Jira ships built in, and they're just plugins. One generic sync contract means any platform (Asana, Linear, GitHub Issues, an internal tracker) is onboarded by dropping a plugin into <code>~/.open-walnut/plugins/</code>. Internal plugins never leave your machine.</p></div>
-      <div class="gcard"><h4>🧠 Self-organizing memory</h4><p>Working memory updates as you go, and a background agent distills daily logs into searchable topic pages, with recency-weighted, hybrid BM25 + vector search.</p></div>
-      <div class="gcard"><h4>📓 Notes the AI can search</h4><p>Obsidian-style markdown with [[wiki-links]], backlinks, a folder tree, and hybrid search your agents and sessions can use.</p></div>
-      <div class="gcard"><h4>💬 Multi-conversation agents</h4><p>Create on-demand agents, each with independent fresh-context conversations; what you discuss is auto-distilled into that agent's memory.</p></div>
-      <div class="gcard"><h4>⚙️ Cron &amp; automation</h4><p>One-time, interval, and cron-expression jobs with timezones, heartbeat checklists, and automated session triage on a dedicated page.</p></div>
-      <div class="gcard"><h4>⌨️ Command &amp; skill palettes</h4><p>Browse and run slash commands and skills from one place, including the ones discovered on your remote hosts.</p></div>
-      <div class="gcard"><h4>🤖 Every coding agent</h4><p>Claude Code by default, and Codex, Gemini, OpenCode, and Goose sessions in the same columns, each tied to its task (install their CLIs first).</p></div>
-      <div class="gcard"><h4>📅 Calendar</h4><p>Your calendar beside your tasks: drag a task onto the calendar to schedule it.</p></div>
-      <div class="gcard"><h4>🔒 Local-first &amp; private</h4><p>Plain JSON / Markdown / SQLite in a local folder. No telemetry, no cloud database: your data stays on your machine.</p></div>
-    </div>
-  </section>
-
-  <section id="plugins">
-    <h2>Write your own app inside Walnut</h2>
-    <p class="lead">Walnut is a plugin host. One command scaffolds a plugin, links it into the running console, and reloads it on every save.</p>
-
-    <div class="code">
-<span class="c"># scaffold, link, load, and watch</span><br/>
-npx @open-walnut/plugin-cli new my-plugin --dev<br/><br/>
-<span class="c"># every loop after that</span><br/>
-npm run dev
-    </div>
-
-    <p class="lead" style="max-width:720px">That single run installs dependencies, validates the manifest, builds both entries, links the project into <code>~/.open-walnut/plugins/</code>, tells the running Walnut to load it with no restart, prints your App's URL, then rebuilds and reloads while you edit.</p>
-    <p class="lead" style="max-width:720px;font-size:15px">The author packages ship from the repository today, so until the first registry release you run the same flow from a checkout. The plugin guide has the exact commands.</p>
-
-    <a class="plugin-demo-media" href="assets/plugin-demo.png">
-      <img src="assets/plugin-demo.png" alt="Walnut Plugin Demo running as a first-class native App" loading="lazy" />
-    </a>
-
-    <div class="grid">
-      <div class="gcard"><h4>A real app, not an iframe</h4><p>One <code>walnut.ui.app()</code> call and the host gives you a route, a sidebar entry, deep links, a badge, and a command-palette entry. Your React components run inside Walnut's own React tree and theme, so a plugin app looks and feels like a built-in screen. An optional webview stays available for external pages that need a separate document context, but it is not a security boundary for trusted Plugin code.</p></div>
-      <div class="gcard"><h4>Full Node on the server side</h4><p>The server entry runs in the Walnut process: tools the AI can call, hooks on sessions and tasks, cron actions, HTTP routes, WebSocket methods, custom agents and model providers, plus private storage, SQLite, and secrets. Task sync to any tracker is the same contract the built-in integrations use.</p></div>
-      <div class="gcard"><h4>Full trust, stated plainly</h4><p>Installing a plugin means trusting its code, confirmed once at install. There is no fake permission prompt around code that already has full access. What Walnut does guarantee: pinned sources, no install scripts, no silent updates, owner-scoped cleanup, and one release check that refuses to ship secrets or missing build output.</p></div>
-    </div>
-
-    <div class="cta" style="margin-top:34px">
-      <a class="btn btn-primary" href="https://github.com/EvanZhang008/open-walnut/blob/main/docs/reference/plugin-development.md">Plugin guide</a>
-      <a class="btn btn-ghost" href="https://github.com/EvanZhang008/open-walnut/tree/main/examples/plugins/walnut-demo">Walnut Plugin Demo</a>
-    </div>
-    <p class="lead" style="margin-top:16px">The Demo App is runnable: one native app that exercises every public plugin capability, so you can read a working shape before writing your own.</p>
-  </section>
-
-  <section id="install">
-    <h2>Install in one line</h2>
-    <p class="lead">macOS or Linux. Walnut brings everything it runs on, so there is nothing else to install first. Its agents run on <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a>, signed in once.</p>
-    <div class="opts">
-      <div class="gcard"><h4>One-line script</h4><p>macOS 12+ or Linux (glibc 2.28+), arm64 or x64.</p>
-        <div class="code copyable" data-copy="curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh &amp;&amp; ~/.local/bin/walnut web"><button type="button" class="copy">Copy</button>curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh<br/>~/.local/bin/walnut web</div>
-        <p style="margin-top:10px;font-size:13.5px">It installs into <code>~/.local</code> and puts <code>~/.local/bin</code> on your PATH, so a new terminal runs plain <code>walnut web</code>.</p></div>
-      <div class="gcard"><h4>Homebrew</h4><p>macOS or Linux.</p>
-        <div class="code copyable" data-copy="brew install evanzhang008/tap/open-walnut &amp;&amp; walnut web"><button type="button" class="copy">Copy</button>brew install evanzhang008/tap/open-walnut<br/>walnut web</div></div>
-      <div class="gcard"><h4>Mac app</h4><p>Walnut inside, and it keeps itself up to date.</p>
-        <div class="cta" style="margin-top:12px;justify-content:flex-start">
-          <a class="btn btn-ghost" style="font-size:14px;padding:9px 14px" href="https://github.com/EvanZhang008/open-walnut/releases/latest/download/Walnut-arm64.dmg">Apple silicon</a>
-          <a class="btn btn-ghost" style="font-size:14px;padding:9px 14px" href="https://github.com/EvanZhang008/open-walnut/releases/latest/download/Walnut-x64.dmg">Intel</a>
+    <div class="grain" aria-hidden="true"></div>
+    <h1 class="load">Your work,<br>run by your agents.</h1>
+    <p class="sub load" style="--t:.12s">Talk to one CEO agent. Its VPs run your projects, each with its own Claude Code sessions.</p>
+    <div class="cta-block load" style="--t:.24s">
+      <a class="btn" href="https://github.com/EvanZhang008/open-walnut/releases/latest/download/Walnut-arm64.dmg"><svg aria-hidden="true"><use href="#apple"/></svg>Download for Mac</a>
+      <div class="caps">
+        <div class="row"><span>macOS 12 or later · Apple silicon</span><span aria-hidden="true">·</span><a class="u" href="https://github.com/EvanZhang008/open-walnut/releases/latest/download/Walnut-x64.dmg">Intel Mac</a></div>
+        <div class="row curl"><span>Or one line on macOS or Linux</span>
+          <span class="chip"><code><b>curl</b> -fsSL https://openwalnut.dev/install.sh | sh</code><button class="copy" type="button" data-copy="curl -fsSL https://openwalnut.dev/install.sh | sh">Copy</button></span>
         </div>
-        <p style="margin-top:10px;font-size:13.5px">Or <code>brew install --cask evanzhang008/tap/walnut</code>.</p></div>
+      </div>
     </div>
-    <p class="lead" style="margin-top:22px">Then open <code>http://localhost:3456</code>. The first start downloads a local search model (about 640 MB) and, on Apple silicon and Linux, a local voice model (1 to 2.5 GB), in the background.</p>
-    <div class="cta" style="margin-top:30px">
-      <a class="btn btn-primary" href="https://github.com/EvanZhang008/open-walnut">★ Star on GitHub</a>
-      <a class="btn btn-ghost" href="https://github.com/EvanZhang008/open-walnut/blob/main/GETTING_STARTED.md">📖 Getting started</a>
+    <div class="proof load" style="--t:.36s">
+      <span>Used by engineers at</span>
+      <span class="logos"><img src="assets/logo-amazon.svg" alt="Amazon"><img class="dd" src="assets/logo-doordash.svg" alt="DoorDash"></span>
     </div>
   </section>
 
-  <section id="star-history" style="padding-top:20px">
-    <h2>Built in the open</h2>
-    <p class="lead">A solo-maintained, MIT-licensed project. If it helps you run your work, a star helps others find it.</p>
-    <a href="https://star-history.com/#EvanZhang008/open-walnut&Date" style="display:block;max-width:680px;margin:34px auto 0;border-radius:14px;overflow:hidden;border:1px solid var(--line)">
-      <img src="https://api.star-history.com/svg?repos=EvanZhang008/open-walnut&type=Date" alt="Open Walnut GitHub star history" style="width:100%;display:block"/>
-    </a>
+  <!-- 1. the org, drawn -->
+  <section class="s first" id="features">
+    <div class="wrap">
+      <div class="rv">
+        <span class="eyebrow">Your company</span>
+        <h2 class="s-title">Talk to the CEO.<br>Its VPs run the rest.</h2>
+        <p class="s-line">The CEO sees every project. Each VP plans its projects and hands the work to workers, each one its own Claude Code session.</p>
+      </div>
+      <div class="stage org rv" id="org">
+        <span class="glowline"></span>
+        <svg class="links" aria-hidden="true"></svg>
+        <div class="tier top"><span class="you" data-node="you"><i></i>You</span></div>
+        <div class="tier"><div class="ceo" data-node="ceo"><img src="assets/walnut-icon.png" alt=""><div><b>CEO</b><span>Sees every project</span></div>
+          <div class="tally"><em><i class="dot w"></i>5 working</em><em><i class="dot n"></i>1 needs you</em></div></div></div>
+        <div class="vps">
+          <div class="vp" data-node="vp1"><div class="vp-head"><span class="av a">P</span><b>Personal VP</b><small>2 tasks</small></div>
+            <div class="task need" data-node="t-need"><i class="dot n"></i><span>Plan the coast weekend</span><small>Needs you</small></div>
+            <div class="task"><i class="dot w"></i><span>Renew the car registration</span><small>Claude Code</small></div></div>
+          <div class="vp" data-node="vp2"><div class="vp-head"><span class="av b">S</span><b>Side projects VP</b><small>2 tasks</small></div>
+            <div class="task"><i class="dot w"></i><span>Fix the login bug in the recipe app</span><small>Claude Code</small></div>
+            <div class="task"><i class="dot w"></i><span>Blog post: what I learned building it</span><small>Claude Code</small></div></div>
+          <div class="vp" data-node="vp3"><div class="vp-head"><span class="av c">W</span><b>Work VP</b><small>2 tasks</small></div>
+            <div class="task"><i class="dot w"></i><span>Review the onboarding redesign</span><small>Claude Code</small></div>
+            <div class="task"><i class="dot w"></i><span>Prepare the Thursday team demo</span><small>Codex</small></div></div>
+        </div>
+        <div class="legend"><em><i class="dot w"></i>Working</em><em><i class="dot n"></i>Needs you</em></div>
+      </div>
+    </div>
   </section>
 
-</div>
+  <!-- 2. only what needs you -->
+  <section class="s">
+    <div class="wrap">
+      <div class="rv">
+        <span class="eyebrow">Needs you</span>
+        <h2 class="s-title">Only what needs you.</h2>
+        <p class="s-line">Every task says what it is working on or what it asks you, and you answer right where the question waits.</p>
+      </div>
+      <div class="stage ask-stage rv">
+        <div class="ask-stack">
+          <div class="ghost g2"><i class="dot w"></i>Prepare the Thursday team demo · working</div>
+          <div class="ghost g1"><i class="dot w"></i>Fix the login bug in the recipe app · working</div>
+          <div class="ask">
+            <div class="ask-top"><span class="av a">P</span><span><b>Plan the coast weekend</b> · Personal VP</span><span class="badge"><i class="dot n"></i>Needs you</span></div>
+            <p class="q">Two cabins are free that weekend. Which one should I book?</p>
+            <div class="opts"><button class="opt pick" type="button" aria-pressed="true">The cabin by the cove</button><button class="opt" type="button" aria-pressed="false">The one on the ridge</button><button class="opt other" type="button" aria-pressed="false">Other…</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. sessions that draw -->
+  <section class="s">
+    <div class="wrap">
+      <div class="rv">
+        <span class="eyebrow">Rich answers</span>
+        <h2 class="s-title">Sessions that draw.</h2>
+        <p class="s-line">A session can answer with a diagram, a table or a laid-out page, drawn as the answer streams.</p>
+      </div>
+      <div class="stage draw-stage rv">
+        <div class="prompt">
+          <span class="who">You</span>
+          <div class="bubble">How does a web request reach our server?</div>
+          <span class="who">Claude Code</span>
+          <div class="stream">It goes through four stops, and the response comes back the same way<span class="caret"></span></div>
+        </div>
+        <div class="canvas">
+          <svg class="drawing wide" viewBox="0 0 640 250" role="img" aria-label="A diagram drawn by a session: browser, load balancer, app server, database, and the response path back">
+            <g class="nd" style="--t:.1s"><rect x="10" y="80" width="118" height="58" rx="11"/><text x="69" y="106" text-anchor="middle">Browser</text><text class="s" x="69" y="124" text-anchor="middle">GET /orders</text></g>
+            <path class="ed" style="--t:.45s;--len:56" d="M128 109 H184"/>
+            <g class="nd" style="--t:.7s"><rect x="184" y="80" width="118" height="58" rx="11"/><text x="243" y="106" text-anchor="middle">Load balancer</text><text class="s" x="243" y="124" text-anchor="middle">:443</text></g>
+            <path class="ed" style="--t:1.05s;--len:56" d="M302 109 H358"/>
+            <g class="nd hi" style="--t:1.3s"><rect x="358" y="80" width="118" height="58" rx="11"/><text x="417" y="106" text-anchor="middle">App server</text><text class="s" x="417" y="124" text-anchor="middle">orders.list()</text></g>
+            <path class="ed" style="--t:1.65s;--len:56" d="M476 109 H532"/>
+            <g class="nd" style="--t:1.9s"><rect x="532" y="80" width="98" height="58" rx="11"/><text x="581" y="106" text-anchor="middle">Database</text><text class="s" x="581" y="124" text-anchor="middle">SELECT</text></g>
+            <path class="ed back" style="--t:2.3s" d="M581 138 V190 Q581 200 571 200 H79 Q69 200 69 190 V138"/>
+            <text class="lbl" style="--t:2.5s" x="325" y="222" text-anchor="middle">200 OK · JSON, back along the same chain</text>
+            <text class="lbl" style="--t:.3s" x="10" y="60">request</text>
+          </svg>
+          <svg class="drawing tall" viewBox="0 0 300 400" role="img" aria-label="The same diagram, top to bottom: browser, load balancer, app server, database, and the response path back">
+            <g class="nd" style="--t:.1s"><rect x="40" y="10" width="170" height="56" rx="11"/><text x="125" y="35" text-anchor="middle">Browser</text><text class="s" x="125" y="53" text-anchor="middle">GET /orders</text></g>
+            <path class="ed" style="--t:.45s;--len:34" d="M125 66 V100"/>
+            <g class="nd" style="--t:.7s"><rect x="40" y="100" width="170" height="56" rx="11"/><text x="125" y="125" text-anchor="middle">Load balancer</text><text class="s" x="125" y="143" text-anchor="middle">:443</text></g>
+            <path class="ed" style="--t:1.05s;--len:34" d="M125 156 V190"/>
+            <g class="nd hi" style="--t:1.3s"><rect x="40" y="190" width="170" height="56" rx="11"/><text x="125" y="215" text-anchor="middle">App server</text><text class="s" x="125" y="233" text-anchor="middle">orders.list()</text></g>
+            <path class="ed" style="--t:1.65s;--len:34" d="M125 246 V280"/>
+            <g class="nd" style="--t:1.9s"><rect x="40" y="280" width="170" height="56" rx="11"/><text x="125" y="305" text-anchor="middle">Database</text><text class="s" x="125" y="323" text-anchor="middle">SELECT</text></g>
+            <path class="ed back" style="--t:2.3s" d="M210 308 H258 Q268 308 268 298 V48 Q268 38 258 38 H210"/>
+            <text class="lbl" style="--t:2.5s" x="125" y="370" text-anchor="middle">200 OK · JSON, back the same way</text>
+          </svg>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. per-session diff -->
+  <section class="s">
+    <div class="wrap">
+      <div class="rv">
+        <span class="eyebrow">Review</span>
+        <h2 class="s-title">See what each session changed.</h2>
+        <p class="s-line">A per-session diff of every file it touched. Comment on a line, send the review back to the session.</p>
+      </div>
+      <div class="diff-stage rv"><div class="halo" aria-hidden="true"></div>
+        <div class="diff">
+          <div class="diff-head"><div class="tabs"><span class="on">server.js</span><span>README.md</span></div><span class="stat"><span class="add">+6</span> <span class="del">−2</span></span></div>
+          <div class="code">
+            <div class="ln"><i>14</i><u> </u><span><span class="k">function</span> <span class="f">readBody</span>(req, callback) {</span></div>
+            <div class="ln d"><i>15</i><u>−</u><span>  <span class="k">let</span> data = <span class="st">''</span>;</span></div>
+            <div class="ln a"><i>15</i><u>+</u><span>  <span class="k">const</span> parts = [];</span></div>
+            <div class="ln d"><i>16</i><u>−</u><span>  req.on(<span class="st">'data'</span>, (chunk) =&gt; { data += chunk; });</span></div>
+            <div class="ln a"><i>16</i><u>+</u><span>  req.on(<span class="st">'data'</span>, (chunk) =&gt; parts.push(chunk));</span></div>
+            <div class="ln a"><i>17</i><u>+</u><span>  req.on(<span class="st">'end'</span>, () =&gt; {</span></div>
+            <div class="ln a"><i>18</i><u>+</u><span>    <span class="k">const</span> text = Buffer.concat(parts).toString();</span></div>
+            <div class="thread"><div class="t-top"><i></i><b>You</b> · line 18<span class="t-x" aria-hidden="true">✕</span></div><p>Handle an empty body here, so a bare POST does not throw.</p></div>
+            <div class="ln a"><i>19</i><u>+</u><span>    callback(<span class="k">null</span>, JSON.parse(text));</span></div>
+            <div class="ln a"><i>20</i><u>+</u><span>  });</span></div>
+            <div class="ln"><i>21</i><u> </u><span>}</span></div>
+          </div>
+          <div class="reviewbar"><span>1 comment pending</span><span class="rb-act"><span class="mini-btn">Discard</span><span class="mini-btn go">Submit review (1)</span></span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5. every machine -->
+  <section class="s">
+    <div class="wrap">
+      <div class="rv">
+        <span class="eyebrow">Remote hosts</span>
+        <h2 class="s-title">One console, every machine.</h2>
+        <p class="s-line">Drive Claude Code on your laptop and any SSH host. Walnut sets up its own daemon there, and sessions keep running when the connection drops.</p>
+      </div>
+      <div class="stage web-stage rv" id="web">
+        <svg aria-hidden="true"><g class="mesh"></g><g class="links"></g><g class="pks"></g></svg>
+        <div class="hub"><div class="ic"><img src="assets/walnut-icon.png" alt=""></div><b>WALNUT</b></div>
+        <div class="host" style="left:18%;top:24%" data-x="18" data-y="24"><svg><use href="#laptop"/></svg><div><b>Your Mac</b><small><i class="dot w"></i>local · 3 sessions</small></div></div>
+        <div class="host" style="left:82%;top:22%" data-x="82" data-y="22"><svg><use href="#server"/></svg><div><b>Dev box</b><small><i class="dot w"></i>SSH · 4 sessions</small></div></div>
+        <div class="host" style="left:85%;top:76%" data-x="85" data-y="76"><svg><use href="#cloud"/></svg><div><b>Cloud VM</b><small><i class="dot w"></i>SSH · 2 sessions</small></div></div>
+        <div class="host" style="left:16%;top:78%" data-x="16" data-y="78" data-drop="1"><svg><use href="#server"/></svg><div><b>Build box</b><small><i class="dot w"></i>SSH · 1 session</small></div></div>
+        <div class="drop-note" style="left:31%;top:66%">connection dropped · <em>session still running</em></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6. the rest, small -->
+  <section class="s">
+    <div class="wrap">
+      <div class="rv">
+        <span class="eyebrow">And</span>
+        <h2 class="s-title">Open source. On your machine.</h2>
+        <p class="s-line">MIT licensed and self-hosted. It needs only Claude Code, signed in once.</p>
+      </div>
+      <div class="bento">
+        <div class="card s3 wide-m rv"><div class="art"><div class="search">
+          <div class="q"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>what did we decide about the cabin?</div>
+          <div class="r on">trips/coast-weekend.md<span class="tag hl">vector</span></div>
+          <div class="r">notes/budget.md<span class="tag">keyword</span></div></div></div>
+          <h3>Notes the AI can search</h3><p>Markdown notes with keyword plus vector search, on your machine.</p></div>
+        <div class="card s2 rv" style="order:2"><div class="art"><div class="agents">
+          <span class="on"><i class="dot w"></i>Claude Code</span><span>Codex</span><span>Gemini</span><span>OpenCode</span><span>Goose</span></div></div>
+          <h3>Codex, Gemini, OpenCode and Goose</h3><p>In the same columns as Claude Code. Install their CLIs first.</p></div>
+        <div class="card s2 rv" style="order:2"><div class="art"><div class="sync"><span class="node">To Do</span><span class="arr">⇄</span><span class="node w"><img src="assets/walnut-icon.png" alt=""></span><span class="arr">⇄</span><span class="node">Jira</span></div></div>
+          <h3>Microsoft To Do and Jira</h3><p>Two-way sync ships built in, as plugins.</p></div>
+        <div class="card s2 wide-m rv" style="order:2"><div class="art"><div class="tree"><b>~/.open-walnut/</b><br>├─ <em>*.json</em><br>├─ <em>*.md</em><br>└─ <em>*.sqlite</em></div></div>
+          <h3>Your data, on your disk</h3><p>Plain JSON, Markdown and SQLite. No telemetry.</p></div>
+        <div class="card s3 wide-m rv" style="order:1"><div class="art"><div class="appbar"><div class="side"><span>Tasks</span><span>Notes</span><span class="on">Your app</span><span>Settings</span></div><div class="main"><i></i><i></i><i></i></div></div></div>
+          <h3>Build your own app inside Walnut</h3><p>A plugin can add a full-page app to the sidebar, tools the AI can call, and task sync.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="closing">
+    <div class="streaks" aria-hidden="true">
+      <div class="band" style="--x:380px;--y:150px;--w:1000px;--h:120px;--a:30%;--b:64%;--bl:6px;--d:19s"></div>
+      <div class="band hot" style="--x:300px;--y:280px;--w:1100px;--h:150px;--a:28%;--b:66%;--bl:6px;--d:24s;--dl:-8s"></div>
+      <div class="band deep" style="--x:500px;--y:440px;--w:900px;--h:80px;--a:26%;--b:60%;--bl:10px;--o:.7;--d:20s"></div>
+    </div>
+    <div class="grain" aria-hidden="true"></div>
+    <h2 class="rv">Run your work<br>like a small company.</h2>
+    <p class="sub rv">It needs only Claude Code, signed in once. The Mac app keeps itself up to date.</p>
+    <div class="cta-block rv">
+      <a class="btn" href="https://github.com/EvanZhang008/open-walnut/releases/latest/download/Walnut-arm64.dmg"><svg aria-hidden="true"><use href="#apple"/></svg>Download for Mac</a>
+      <div class="caps">
+        <div class="row"><span>macOS 12 or later · Apple silicon</span><span aria-hidden="true">·</span><a class="u" href="https://github.com/EvanZhang008/open-walnut/releases/latest/download/Walnut-x64.dmg">Intel Mac</a></div>
+        <div class="row curl"><span>Or one line on macOS or Linux</span>
+          <span class="chip"><code><b>curl</b> -fsSL https://openwalnut.dev/install.sh | sh</code><button class="copy" type="button" data-copy="curl -fsSL https://openwalnut.dev/install.sh | sh">Copy</button></span>
+        </div>
+      </div>
+      <a class="star" href="https://github.com/EvanZhang008/open-walnut"><svg aria-hidden="true"><use href="#gh"/></svg>Star on GitHub</a>
+    </div>
+  </section>
+</main>
 
 <footer>
-  <div class="footlinks">
-    <a href="https://github.com/EvanZhang008/open-walnut">GitHub</a>
-    <a href="https://youtu.be/uN4WCZ-n2mw">Demo video</a>
-    <a href="https://github.com/EvanZhang008/open-walnut/blob/main/LICENSE">MIT License</a>
+  <div class="wrap foot">
+    <p><img src="assets/walnut-icon.png" alt="">Open Walnut. Open source and self-hosted. Built with Claude Code.</p>
+    <nav aria-label="Footer">
+      <a href="https://github.com/EvanZhang008/open-walnut">GitHub</a>
+      <a href="https://youtu.be/uN4WCZ-n2mw">Video tour</a>
+      <a href="https://github.com/EvanZhang008/open-walnut/blob/main/GETTING_STARTED.md">Getting started</a>
+      <a href="https://github.com/EvanZhang008/open-walnut/blob/main/LICENSE">MIT License</a>
+    </nav>
   </div>
-  Open Walnut: your work, run by your agents. Open source &amp; self-hosted. Built with Claude Code.
 </footer>
+
 <script>
-document.querySelectorAll('.copyable').forEach(function (box) {
-  var btn = box.querySelector('.copy');
-  if (!navigator.clipboard) { btn.style.display = 'none'; return; }
-  btn.addEventListener('click', function () {
-    navigator.clipboard.writeText(box.getAttribute('data-copy')).then(function () {
-      btn.textContent = 'Copied';
-      setTimeout(function () { btn.textContent = 'Copy'; }, 1600);
-    }, function () {
-      btn.textContent = 'Select and copy';
-      setTimeout(function () { btn.textContent = 'Copy'; }, 2400);
+(function () {
+  var still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var NS = 'http://www.w3.org/2000/svg';
+
+  // copy buttons
+  document.querySelectorAll('.copy').forEach(function (btn) {
+    if (!navigator.clipboard) { btn.style.display = 'none'; return; }
+    btn.addEventListener('click', function () {
+      navigator.clipboard.writeText(btn.getAttribute('data-copy')).then(function () {
+        btn.textContent = 'Copied'; btn.classList.add('ok');
+        setTimeout(function () { btn.textContent = 'Copy'; btn.classList.remove('ok'); }, 1600);
+      }, function () {
+        // the browser refused: select the command so a keyboard copy works
+        var code = btn.parentNode.querySelector('code'), r = document.createRange();
+        r.selectNodeContents(code); var sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+        btn.textContent = 'Press ⌘C';
+        setTimeout(function () { btn.textContent = 'Copy'; }, 2400);
+      });
     });
   });
-});
+
+  // answer chips are a toy: picking one moves the highlight
+  document.querySelectorAll('.opt').forEach(function (o) {
+    o.addEventListener('click', function () {
+      document.querySelectorAll('.opt').forEach(function (x) { x.classList.remove('pick'); x.setAttribute('aria-pressed', 'false'); });
+      o.classList.add('pick'); o.setAttribute('aria-pressed', 'true');
+    });
+  });
+
+  // reveal on scroll; the diagram draws when it shows. A sweep, not an IntersectionObserver:
+  // WebKit skips the observer's callback for blocks a fast scroll passes over, and those stayed hidden.
+  var pending = [].slice.call(document.querySelectorAll('.rv'));
+  function sweep() {
+    var line = window.innerHeight * .92;
+    pending = pending.filter(function (el) {
+      if (el.getBoundingClientRect().top > line) return true;
+      el.classList.add('in');
+      el.querySelectorAll('.drawing').forEach(function (d) { d.classList.add('go'); });
+      return false;
+    });
+    if (!pending.length) { window.removeEventListener('scroll', onScroll); window.removeEventListener('resize', onScroll); }
+  }
+  function onScroll() { sweep(); }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  window.addEventListener('resize', onScroll);
+  sweep();
+
+  function el(tag, attrs, parent) {
+    var n = document.createElementNS(NS, tag);
+    for (var k in attrs) n.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+  function travel(parent, d, cls, dur, delay) {
+    if (still) return;
+    var c = el('circle', { r: 2.6, class: cls || '' }, parent);
+    var m = el('animateMotion', { dur: dur + 's', repeatCount: 'indefinite', path: d, begin: delay + 's' }, c);
+    return m;
+  }
+
+  // org chart connectors, measured from the cards
+  var org = document.getElementById('org');
+  function drawOrg() {
+    var svg = org.querySelector('svg.links');
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    if (getComputedStyle(svg).display === 'none') return;
+    var box = org.getBoundingClientRect();
+    function at(name) {
+      var r = org.querySelector('[data-node="' + name + '"]').getBoundingClientRect();
+      return { cx: r.left - box.left + r.width / 2, top: r.top - box.top, bottom: r.bottom - box.top, left: r.left - box.left, right: r.right - box.left, cy: r.top - box.top + r.height / 2 };
+    }
+    var you = at('you'), ceo = at('ceo');
+    var d0 = 'M' + you.cx + ' ' + you.bottom + ' V' + ceo.top;
+    el('path', { d: d0, class: 'hot' }, svg);
+    ['vp1', 'vp2', 'vp3'].forEach(function (k, i) {
+      var v = at(k), midY = (ceo.bottom + v.top) / 2;
+      var d = 'M' + ceo.cx + ' ' + ceo.bottom + ' V' + midY + ' H' + v.cx + ' V' + v.top;
+      if (Math.abs(v.cx - ceo.cx) < 2) d = 'M' + ceo.cx + ' ' + ceo.bottom + ' V' + v.top;
+      el('path', { d: d, class: i === 0 ? 'hot' : '' }, svg);
+      travel(svg, d, '', 2.6 + i * .4, i * .7);
+    });
+    // the one question travels back up to you
+    var v1 = at('vp1');
+    var up = 'M' + v1.cx + ' ' + v1.top + ' V' + ((ceo.bottom + v1.top) / 2) + ' H' + ceo.cx + ' V' + ceo.bottom + ' M' + ceo.cx + ' ' + ceo.top + ' V' + you.bottom;
+    travel(svg, up, 'up', 3.2, 1.2);
+  }
+
+  // machines: a faint mesh, host positions, links and packets
+  var web = document.getElementById('web');
+  function drawWeb() {
+    var svg = web.querySelector('svg'), mesh = svg.querySelector('.mesh'), links = svg.querySelector('.links'), pks = svg.querySelector('.pks');
+    [mesh, links, pks].forEach(function (g) { while (g.firstChild) g.removeChild(g.firstChild); });
+    var W = web.clientWidth, H = web.clientHeight, narrow = W < 640;
+    var pos = narrow ? [[30, 14], [70, 30], [70, 86], [30, 70]] : null;
+    var cx = W / 2, cy = H / 2;
+    // a sparse web of random points behind everything
+    var seed = 7; function rnd() { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; }
+    var pts = []; for (var i = 0; i < 26; i++) pts.push([rnd() * W, rnd() * H]);
+    pts.forEach(function (p, i) { pts.forEach(function (q, j) {
+      if (j <= i) return; var dx = p[0] - q[0], dy = p[1] - q[1];
+      if (dx * dx + dy * dy < (narrow ? 9000 : 26000)) el('line', { x1: p[0], y1: p[1], x2: q[0], y2: q[1] }, mesh);
+    }); });
+    web.querySelectorAll('.host').forEach(function (h, i) {
+      var x = (pos ? pos[i][0] : +h.dataset.x) / 100 * W, y = (pos ? pos[i][1] : +h.dataset.y) / 100 * H;
+      h.style.left = x + 'px'; h.style.top = y + 'px';
+      var mx = (x + cx) / 2 + (y - cy) * .18, my = (y + cy) / 2 - (x - cx) * .18;
+      var d = 'M' + cx + ' ' + cy + ' Q' + mx + ' ' + my + ' ' + x + ' ' + y;
+      var drop = h.dataset.drop === '1';
+      el('path', { d: d, class: 'link' + (drop ? ' drop' : '') }, links);
+      if (!drop) { travel(pks, d, 'pk', 2.2 + i * .5, i * .4); }
+    });
+    var note = web.querySelector('.drop-note');
+    if (narrow) { note.style.left = '50%'; note.style.top = '96%'; } else { note.style.left = '31%'; note.style.top = '66%'; }
+  }
+
+  // each drawing on its own, so one failing never leaves the other unplaced
+  function safe(fn) { try { fn(); } catch (e) { /* the static layout stays */ } }
+  function drawAll() { safe(drawOrg); safe(drawWeb); }
+  // redraw only when a width changes: a phone's address bar resizing the height would restart every pulse
+  var widths = { org: 0, web: 0 }, t;
+  function onResize() {
+    if (org.clientWidth === widths.org && web.clientWidth === widths.web) return;
+    widths.org = org.clientWidth; widths.web = web.clientWidth;
+    drawAll();
+  }
+  window.addEventListener('resize', function () { clearTimeout(t); t = setTimeout(onResize, 120); });
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(drawAll);
+  window.addEventListener('load', drawAll);
+  drawAll();
+})();
 </script>
 </body>
 </html>
