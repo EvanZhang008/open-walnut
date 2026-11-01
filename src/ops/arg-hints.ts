@@ -10,8 +10,13 @@
  *   - a stand-in: the object has exactly one unknown key, it is no near miss of
  *     any declared key, and exactly one required key is missing (`search`
  *     called with `query` where `q` is required).
+ *   - a common other name: the unknown key is a usual word for a declared key
+ *     the call did not set (`query` or `search` for `q`, `max` for `limit`).
+ *     2026-11-01: a small local model called task_list with `query` and, told
+ *     only that the key was unknown, gave up and blamed the user.
  * Anything else (several candidates, several unknown keys with no typo, an
- * unrelated name) keeps the plain message.
+ * unrelated name) gets no "did you mean"; every unknown-key refusal then names
+ * the keys the object takes (declaredKeysNote), so the next call can be right.
  */
 
 import type { z } from 'zod'
@@ -79,6 +84,13 @@ export function editDistance(a: string, b: string): number {
   return d[a.length][b.length]
 }
 
+/** Usual other names for a declared key, the way models and people reach for them. */
+const OTHER_NAMES: Record<string, readonly string[]> = {
+  q: ['query', 'search', 'keyword', 'keywords', 'term', 'terms', 'filter', 'text'],
+  limit: ['max', 'max_results', 'count', 'top', 'n', 'size', 'page_size'],
+  project: ['project_name', 'projectName'],
+}
+
 /**
  * The declared key `key` is a typo of: `near` when any declared key is within
  * reach (case-only differences included), `target` only when exactly one is
@@ -122,12 +134,36 @@ export function unknownKeyHint(root: Shape, data: unknown, path: PropertyKey[], 
     if (targets.indexOf(target) !== targets.lastIndexOf(target)) picks.delete(key)
   }
 
+  for (const key of keys) {
+    if (picks.has(key)) continue
+    const target = Object.keys(OTHER_NAMES).find((k) => OTHER_NAMES[k].includes(key))
+    if (target && declared.includes(target) && given[target] === undefined) picks.set(key, target)
+  }
+  const aimed = [...picks.values()]
+  for (const [key, target] of [...picks]) {
+    if (aimed.indexOf(target) !== aimed.lastIndexOf(target)) picks.delete(key)
+  }
+
   // A key that looks like a typo of some declared key is never read as a stand-in for another.
-  if (!near && keys.length === 1) {
+  if (!near && keys.length === 1 && !picks.has(keys[0])) {
     const missing = declared.filter((k) => given[k] === undefined && !shape[k].safeParse(undefined).success)
     if (missing.length === 1) picks.set(keys[0], missing[0])
   }
   if (picks.size === 0) return ''
   if (keys.length === 1) return `; did you mean "${picks.get(keys[0])}"?`
   return `; did you mean ${[...picks].map(([key, target]) => `"${target}" for "${key}"`).join(', ')}?`
+}
+
+/**
+ * The keys the object at `path` takes, for an unknown-key refusal that names no
+ * intended key: `; task_list takes: completion, phases, project, q, …`. '' when
+ * the schema cannot be walked there.
+ */
+export function declaredKeysNote(root: Shape, path: PropertyKey[], what: string): string {
+  const shape = shapeAt(root, path)
+  if (!shape) return ''
+  const keys = Object.keys(shape)
+  if (keys.length === 0) return ''
+  const shown = keys.slice(0, 40)
+  return `; ${what} takes: ${shown.join(', ')}${keys.length > shown.length ? ', …' : ''}`
 }

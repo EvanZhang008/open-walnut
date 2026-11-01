@@ -154,3 +154,41 @@ describe('editDistance', () => {
     expect(editDistance('same', 'same')).toBe(0)
   })
 })
+
+// 2026-11-01: a small local model on OpenCode called task_list with `query`; told
+// only `Unrecognized key: "query"`, it gave up and told the user they had used a
+// wrong parameter.
+describe('a usual other name for a declared key', () => {
+  it('task_list called with query, search or keyword', () => {
+    for (const key of ['query', 'search', 'keyword']) {
+      expect(refusal(op('task_list'), { [key]: 'garden', project: 'Side projects' }))
+        .toBe(`Invalid arguments for task_list: (root): Unrecognized key: "${key}"; did you mean "q"?`)
+    }
+  })
+
+  it('limit under another name', () => {
+    expect(refusal(op('task_list'), { max: 5 })).toContain('did you mean "limit"?')
+  })
+
+  it('not when the call already set the declared key', () => {
+    expect(refusal(op('task_list'), { q: 'a', query: 'b' })).not.toContain('did you mean')
+  })
+})
+
+describe('an unknown key with no clear intended key names the keys the op takes', () => {
+  it('lists the declared keys', () => {
+    const msg = refusal(op('task_list'), { banana: 1 })
+    expect(msg).toContain('Unrecognized key: "banana"; task_list takes: ')
+    expect(msg).toContain(' q,')
+    expect(msg).toContain('project')
+  })
+
+  it('names a nested object by its path', () => {
+    const msg = refusal(fakeOp({ opts: z.strictObject({ deep: z.string().optional() }).optional() }), { opts: { banana: 1 } })
+    expect(msg).toContain('fake_op opts takes: deep')
+  })
+
+  it('a refusal with a "did you mean" does not add the list', () => {
+    expect(refusal(op('task_update'), { id: 't1', titel: 'x' })).not.toContain('takes:')
+  })
+})

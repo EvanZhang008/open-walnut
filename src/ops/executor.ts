@@ -28,7 +28,7 @@ import {
   ORIGIN_HEADER, UNKNOWN_ORIGIN, ambientCallerOrigin, isLocalOrigin, isRemoteHostOrigin, lowerOrigin, withCallerOrigin,
 } from '../lib/caller-origin.js'
 import { selfCallRefusal } from './origin-policy.js'
-import { unknownKeyHint } from './arg-hints.js'
+import { declaredKeysNote, unknownKeyHint } from './arg-hints.js'
 
 const DEFAULT_API_ROOT = 'http://127.0.0.1:3456'
 const REQUEST_TIMEOUT_MS = 10_000
@@ -313,7 +313,9 @@ export function parseOpArgs(
   const parsed = z.object(op.input).strict().safeParse(input)
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => {
-      const hint = i.code === 'unrecognized_keys' ? unknownKeyHint(op.input, input, i.path, i.keys) : ''
+      const hint = i.code !== 'unrecognized_keys' ? ''
+        : unknownKeyHint(op.input, input, i.path, i.keys)
+          || declaredKeysNote(op.input, i.path, i.path.length ? `${op.name} ${i.path.join('.')}` : op.name)
       return `${i.path.join('.') || '(root)'}: ${i.message}${hint}`
     }).join('; ')
     return { ok: false, message: `Invalid arguments for ${op.name}: ${issues}` }
