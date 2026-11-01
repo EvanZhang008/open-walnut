@@ -60,7 +60,7 @@ function coverageLine(report: CostReport, days: string[], stillReading: boolean,
   const parts: string[] = [];
   if (imported.length && ownFrom && days[0] && days[0] < ownFrom) {
     // Days before Walnut recorded usage, brought in from a bill: whole-account totals.
-    parts.push(`Before ${fullDay(ownFrom)}: imported from ${imported[0].host}, counted for the whole account, with no sessions or projects.`);
+    parts.push(`Before ${fullDay(ownFrom)}: imported from ${hostName(imported[0].host)}, counted for the whole account, with no sessions or projects.`);
     if (days[0] < imported[0].from) parts.push('Nothing earlier in it.');
     parts.push(`Recorded by Walnut${own.length > 1 && ownFrom !== latest ? ':' : ''} ${each}.`);
   } else if (days[0] && days[0] < latest) {
