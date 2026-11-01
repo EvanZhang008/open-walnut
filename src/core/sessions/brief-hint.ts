@@ -36,7 +36,7 @@ export function briefHintText(state: BriefHintState, nowMs = Date.now()): string
   const age = agoWords(Math.max(0, nowMs - Date.parse(state.at)));
   if (state.stale) {
     return `your Brief was written ${age} and is behind (${state.words}). Update it now with brief_write (edits for the lines that `
-      + 'changed); brief_read shows what moved and your team\'s live lists.';
+      + 'changed); brief_read compact:true shows only what moved, with the lines to edit.';
   }
   return `your Brief was written ${age}. When anything you or your teams did changes what the user should know, update it with brief_write.`;
 }

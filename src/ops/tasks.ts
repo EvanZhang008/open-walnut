@@ -951,17 +951,30 @@ const BRIEF_SCOPE = 'Your Brief is the short Markdown letter the user reads at t
 defineOp({
   name: 'brief_read',
   title: 'Read a Brief',
-  description: `${BRIEF_SCOPE} Returns its text, when it was written, what moved since (fresh) and the team's open work by section from the live statuses (sections). task defaults to your own task.`,
+  description: `${BRIEF_SCOPE} Returns its text, when it was written, what moved since (fresh) and the team's open work by section from the live statuses (sections), with the rules for writing it. `
+    + 'compact:true is the refresh read: only what moved since it was written (each move with the letter\'s own line, the exact text an edit replaces), '
+    + 'the live lists of the sections those moves touch, and the rules on your first read only; with nothing moved it is a few lines. '
+    + 'A node with no Brief yet always gets the full read. task defaults to your own task.',
   input: {
     task: z.string().min(1).optional().describe('Task id or unique prefix of Main or a lead; default: your own task'),
+    compact: z.boolean().optional().describe('Only what moved since the Brief was written (the refresh read); the full letter is left out'),
   },
   handler: async (args, call) => {
     const id = typeof args.task === 'string' && args.task.trim()
       ? args.task.trim()
       : ((await call('GET', '/me')) as { task?: { id?: string } } | undefined)?.task?.id
     if (!id) throw new Error('No task of your own: pass task.')
-    const body = await call('GET', `/tasks/${encodeURIComponent(id)}/brief`) as
-      { title?: string; brief?: { text: string; at: string } | null; fresh?: { stale?: boolean; words?: string } | null }
+    const body = await call('GET', `/tasks/${encodeURIComponent(id)}/brief${args.compact === true ? '?compact=1' : ''}`) as
+      { title?: string; compact?: boolean; brief?: { text?: string; at: string } | null; fresh?: { stale?: boolean; words?: string } | null; issues?: string[] }
+    if (body.compact) {
+      const fix = body.issues?.length ? ` and fix the ${body.issues.length} line(s) in issues` : ''
+      return withOutcome(
+        body,
+        `Brief of "${body.title}", written ${body.brief?.at}: ${body.fresh?.stale ? body.fresh.words : 'nothing moved since'}.`,
+        body.fresh?.stale ? `Update the lines that moved with brief_write edits (old: the line given with each move)${fix}.`
+          : fix ? `Fix the ${body.issues!.length} line(s) in issues with brief_write.` : 'No further action is required.',
+      )
+    }
     return withOutcome(
       body,
       body.brief ? `Brief of "${body.title}", written ${body.brief.at}${body.fresh?.words ? `: ${body.fresh.words}` : ''}.` : `"${body.title}" has no Brief yet.`,
@@ -975,7 +988,10 @@ defineOp({
   name: 'brief_write',
   title: 'Write a Brief',
   description: `${BRIEF_SCOPE} Pass \`edits\` (exact-string [{old,new}], each old once, all or none) to change a few lines, or \`content\` for the whole letter. `
-    + 'The answer carries the stored letter and the lines that break its rules (issues): fix those with another write. task defaults to your own task.',
+    + 'The answer carries the stored letter and the lines that break its rules (issues): fix those with another write. '
+    + 'One thing per line: a line holding three or more of "；", ";" or "、" outside its task pills reads as a list and comes back '
+    + 'in issues as "holds several things"; write each thing as its own line with its own task instead of joining them. '
+    + 'task defaults to your own task.',
   input: {
     content: z.string().max(8000).optional().describe('The whole letter (Markdown, the three sections)'),
     edits: z.array(z.object({ old: z.string().min(1), new: z.string() })).max(40).optional().describe('Exact-string edits on the stored letter'),
