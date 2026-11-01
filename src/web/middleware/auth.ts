@@ -39,8 +39,12 @@ import { cookieCredential } from './device-cookie.js'
 // Paths (relative to the /api mount) that stay public in cloud mode:
 // - /v1/setup/*: first-boot claim flow — must work before any token exists.
 // - /system/health: monitoring / load-balancer health checks.
+// - /v1/net/join: a new machine trades its invite code for a place on the host
+//   network (routes/net-v1.ts); the code is its credential, wrong ones rate limited.
+// - /v1/net/relay-access: this box's own relay asks whether a key is a member; the
+//   route takes only loopback with the relay's token file.
 const CLOUD_EXEMPT_PREFIXES = ['/v1/setup/']
-const CLOUD_EXEMPT_PATHS = new Set(['/system/health'])
+const CLOUD_EXEMPT_PATHS = new Set(['/system/health', '/v1/net/join', '/v1/net/relay-access'])
 
 function isCloudExemptPath(mountRelativePath: string): boolean {
   if (CLOUD_EXEMPT_PATHS.has(mountRelativePath)) return true

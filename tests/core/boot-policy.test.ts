@@ -99,6 +99,8 @@ const OLD_TRUTH: Record<BootJob, (cloud: boolean) => boolean> = {
   'host-exec-grants': leaderOnly, // new: grants for commands on other hosts are kept on the Mac
   'fleet-secrets': leaderOnly, // new: the Mac holds the secrets and sends each host its copies
   'private-task-gate': leaderOnly, // new: the Mac pushes tasks to outside services, so it judges them first
+  'host-network-door': cloudOnly, // new: the companion keeps the machine list and checks every join
+  'host-network': leaderOnly, // new: the Mac reads the list and dials the machines
 }
 
 /**
@@ -174,7 +176,7 @@ describe('boot policy', () => {
 
 /** The rows each capability turns on: the design's table, plus expose (a door to the public too). */
 const CAPABILITY_JOBS: Record<Capability, BootJob[]> = {
-  'public-door': ['setup-token-banner', 'revoke-queue', 'expose-runtime', 'stt-auto-setup'],
+  'public-door': ['host-network-door', 'setup-token-banner', 'revoke-queue', 'expose-runtime', 'stt-auto-setup'],
   'bridge-door': ['companion-ingest-routes', 'git-maintenance'],
   'cloud-exec': ['cloud-exec', 'local-daemon', 'stream-file-cleanup', 'send-path-canary'],
   'backup-leader': ['backup-leader', 'project-summary', 'routine-wake', 'cron'],

@@ -444,6 +444,10 @@ export interface SshTarget {
   port?: number
   /** Optional shell snippet run before claude (e.g. nvm/fnm/volta setup). */
   shell_setup?: string
+  /** How the daemon is reached: SSH (absent), or the host network (`net`: no SSH at all). */
+  via?: 'net'
+  /** The machine's host network id (its public key), with `via: 'net'`. */
+  endpoint?: string
 }
 
 /**

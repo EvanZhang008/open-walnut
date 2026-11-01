@@ -54,6 +54,10 @@ export const BOOT_POLICY = [
   { job: 'companion-ingest-routes', leader: false, replica: false, capability: 'bridge-door', why: '/git/data and /bridge/* live only on the leader door' },
   { job: 'backup-routes', leader: true, replica: false, why: OFF_HOST_DATA },
   { job: 'plugin-apps', leader: true, replica: false, why: 'plugins never load on a host replica' },
+  // The host network (docs/reference/host-network.md): the companion keeps the machine
+  // list and checks every join; the Mac reads the list and dials the machines.
+  { job: 'host-network-door', leader: false, replica: false, capability: 'public-door', why: 'invites are made and checked on the public door' },
+  { job: 'host-network', leader: true, replica: false, why: 'the Mac dials the machines; a replica reaches none of its own' },
   { job: 'plugin-jobs', leader: true, replica: false, why: 'only the Mac says which plugin jobs run on which machine' },
   { job: 'v1-forward', leader: false, replica: false, companionUntil: '5b', why: 'the host replica front (WP2) forwards instead' },
   { job: 'backup-leader', leader: false, replica: false, capability: 'backup-leader', why: 'only the companion may stand in' },

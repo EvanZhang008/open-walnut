@@ -163,4 +163,31 @@ describe('daemon version hash: the two source lists agree', () => {
     const missing = [...bundled].filter((rel) => !shell.includes(rel) || !ts.includes(rel))
     expect(missing, `bundled into daemon-service-cli.cjs but not hashed: ${missing.join(', ')}`).toEqual([])
   })
+
+  // The whole class: every bundle build-daemon.sh writes beside the binary (each
+  // `--outfile "$OUTDIR/<name>"` with its entry on the next line) ships its whole import
+  // tree. 2026-11-01: net-core.cjs bundled net-binary.ts (the connector download), which
+  // neither list had, so a change to the download would not have moved the version.
+  it('every module bundled into any daemon bundle is in BOTH lists', () => {
+    const script = fs.readFileSync(BUILD_SCRIPT, 'utf-8')
+    const entries = [...script.matchAll(/--outfile "\$OUTDIR\/[^"]+" \\\n\s+(src\/[^\s]+\.ts)/g)].map((m) => m[1]!)
+    expect(entries).toContain('src/providers/net-core.ts')
+    expect(entries.length).toBeGreaterThan(15)
+    const bundled = new Set<string>()
+    const todo = [...entries]
+    while (todo.length > 0) {
+      const rel = todo.pop()!
+      if (bundled.has(rel)) continue
+      bundled.add(rel)
+      const src = fs.readFileSync(path.join(ROOT, rel), 'utf-8')
+      for (const m of src.matchAll(/^(?:import|export)\s+(?!type\b)[\s\S]*?\s+from\s+'(\.{1,2}\/[^']+)\.js'/gm)) {
+        todo.push(path.posix.normalize(path.posix.join(path.posix.dirname(rel), m[1]!)) + '.ts')
+      }
+    }
+    expect(bundled).toContain('src/providers/net-binary.ts')
+    const shell = shellSourceList()
+    const ts = tsSourceList()
+    const missing = [...bundled].filter((rel) => !shell.includes(rel) || !ts.includes(rel))
+    expect(missing, `bundled into a daemon bundle but not hashed: ${missing.join(', ')}`).toEqual([])
+  })
 })

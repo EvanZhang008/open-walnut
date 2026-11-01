@@ -55,8 +55,10 @@ export function fullConfigFixture(): Record<string, unknown> {
     session_server: { port: 4123 },
     hosts: {
       devbox: { hostname: 'devbox.example.com', user: 'marina', port: 22, label: 'Dev box', enabled: true, capabilities: ['gpu'], server: { enabled: true, build_env: { NPM_TOKEN: npmToken }, expose: { options: { auth_token: exposeAuth } } } },
+      'gpu-box': { hostname: 'gpu-box.walnut-net.invalid', label: 'gpu-box', enabled: true, transport: 'net', endpoint: 'e'.repeat(64) },
     },
     hosts_warmup: { enabled: true },
+    net: { enabled: true },
     local_capabilities: ['gpu'],
     ssh_login_files: ['/Users/marina/.ssh/id_planted'],
     ssh_login_hint: 'run the planted login command on this Mac',

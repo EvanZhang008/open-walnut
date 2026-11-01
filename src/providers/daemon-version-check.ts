@@ -123,6 +123,10 @@ const DAEMON_SOURCE_FILES = [
   // Commands for tasks on other hosts (exec.*) — bundled into the binary AND
   // shipped as the host-exec-core.cjs sidecar.
   'src/providers/host-exec-core.ts',
+  // The host network (net.*): bundled into the binary AND shipped as net-core.cjs,
+  // with the connector download it imports.
+  'src/providers/net-core.ts',
+  'src/providers/net-binary.ts',
   // A task on another host calling the MCP servers and web services of this host
   // (mcp.*, http.request): bundled into the binary AND shipped as host-reach-core.cjs.
   'src/providers/host-mcp-core.ts',
@@ -269,6 +273,13 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/stream-fold-core.ts',
   // One-shot claude runs (oneshot-v1): same import-or-inline rule.
   'src/providers/oneshot-core.ts',
+  // Modules the bundles above import (daemon-version-hash-parity.test.ts walks the
+  // imports of every bundle): a change to one changes what a host runs.
+  'src/providers/user-line-images-core.ts',
+  'src/core/types.ts',
+  'src/lib/git-env.ts',
+  'src/providers/path-ref-parse.ts',
+  'src/providers/host-runtime-types.ts',
 ] as const
 
 /**

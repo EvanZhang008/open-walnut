@@ -159,10 +159,10 @@ describe('every step of Walnut\'s release workflows that publishes runs the gate
       .filter((f) => /\.ya?ml$/.test(f))
       .filter((f) => Object.values(workflow(f).jobs).some((j) => (j.steps ?? []).some((s) => PUBLISHES.test(s.run ?? ''))))
       .sort()
-    expect(publishing).toEqual(['mac-app.yml', 'release-archives.yml', 'release.yml', ...Object.keys(LEFT_OUT)].sort())
+    expect(publishing).toEqual(['mac-app.yml', 'release-archives.yml', 'release.yml', 'walnut-net.yml', ...Object.keys(LEFT_OUT)].sort())
   })
 
-  for (const file of ['release.yml', 'release-archives.yml', 'mac-app.yml']) {
+  for (const file of ['release.yml', 'release-archives.yml', 'mac-app.yml', 'walnut-net.yml']) {
     it(file, () => {
       const jobs = workflow(file).jobs
       let checked = 0

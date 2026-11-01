@@ -18,6 +18,7 @@ import { HostServersGroup } from './HostServersGroup';
 import { HostExecGrantsGroup } from './HostExecGrantsGroup';
 import { SecretsGroup } from './SecretsGroup';
 import { HostFleetGroup } from './HostFleetGroup';
+import { HostNetworkGroup } from './HostNetworkGroup';
 import { HostProfileDisclosure } from './HostProfileDisclosure';
 import { ReplicaRemovalGroup } from './ReplicaRemovalGroup';
 import { ReplicaKeepRows, normalizeKeep, splitKeepEntries, type ReplicaKeep } from './ReplicaKeepRows';
@@ -85,6 +86,7 @@ function entriesToHosts(hosts: HostEntry[]): NonNullable<Config['hosts']> {
 function normalizeHosts(h: Config['hosts']): NonNullable<Config['hosts']> {
   const out: NonNullable<Config['hosts']> = {};
   for (const [alias, v] of Object.entries(h ?? {})) {
+    if (v.transport === 'net') continue;
     const keep = normalizeKeep(v.keep);
     out[alias] = {
       hostname: v.hostname,
@@ -107,8 +109,9 @@ function emptyHost(): HostEntry {
   return { _key: nextHostKey++, alias: '', hostname: '', user: '', port: undefined, label: '', shell_setup: '', enabled: true, discovered: false };
 }
 
+/** The SSH hosts this editor writes; a machine on the host network has its own group (HostNetworkGroup). */
 function hostsFromConfig(config: Config): HostEntry[] {
-  return Object.entries(config.hosts ?? {}).map(([alias, h]) => ({
+  return Object.entries(config.hosts ?? {}).filter(([, h]) => h.transport !== 'net').map(([alias, h]) => ({
     _key: nextHostKey++,
     alias,
     hostname: h.hostname,
@@ -405,6 +408,7 @@ export function RemoteHostsSection({ config, onSave }: Props) {
         })}
       </SettingsGroup>
 
+      <HostNetworkGroup />
       <HostServersGroup hosts={config.hosts} />
       <HostExecGrantsGroup hostLabels={hostLabels} />
       <SecretsGroup hostLabels={hostLabels} />

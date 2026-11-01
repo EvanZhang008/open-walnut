@@ -1,0 +1,144 @@
+name: Host network connector
+
+# walnut-net (native/walnut-net, Rust) for every system a daemon runs on, attached to
+# the prerelease `walnut-net-v<version>` (the version in native/walnut-net/Cargo.toml).
+# A daemon whose install has no walnut-net downloads its platform's file from there and
+# checks it (src/providers/net-binary.ts: the SHA-256 pinned there, else this release's
+# SHA256SUMS). Linux builds are static (musl), so one file runs on any Linux.
+#
+# A version is published once: a release that already has its files is never changed
+# (a daemon may have pinned them). A new connector is a new version in Cargo.toml.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: walnut-net-release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - id: v
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' native/walnut-net/Cargo.toml | head -n 1)"
+          pinned="$(sed -n "s/^export const NET_BIN_VERSION = '\(.*\)'$/\1/p" src/providers/net-binary.ts)"
+          if [ -z "$version" ] || [ "$version" != "$pinned" ]; then
+            echo "::error::Cargo.toml says '$version', net-binary.ts pins '$pinned'"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: walnut-net ${{ needs.version.outputs.version }} (${{ matrix.target }})
+    needs: version
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { target: darwin-arm64, os: macos-26, triple: aarch64-apple-darwin }
+          - { target: darwin-x64, os: macos-26, triple: x86_64-apple-darwin }
+          - { target: linux-arm64, os: ubuntu-24.04, triple: aarch64-unknown-linux-musl }
+          - { target: linux-x64, os: ubuntu-24.04, triple: x86_64-unknown-linux-musl }
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - run: rustup target add ${{ matrix.triple }}
+      - name: zig + cargo-zigbuild (Linux, static musl)
+        if: runner.os == 'Linux'
+        run: |
+          # zig from its pip package (the way this was built and tested by hand), in a venv:
+          # the runner's system Python refuses user installs (PEP 668).
+          python3 -m venv "$HOME/zigenv"
+          "$HOME/zigenv/bin/pip" install ziglang==0.17.0
+          cargo install cargo-zigbuild --version 0.24.0 --locked
+          mkdir -p "$HOME/zig-bin"
+          printf '#!/bin/sh\nexec "%s/zigenv/bin/python" -m ziglang "$@"\n' "$HOME" > "$HOME/zig-bin/zig"
+          chmod 755 "$HOME/zig-bin/zig"
+          echo "$HOME/zig-bin" >> "$GITHUB_PATH"
+      - name: Build
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            cargo zigbuild --release --locked --manifest-path native/walnut-net/Cargo.toml --target ${{ matrix.triple }}
+          else
+            cargo build --release --locked --manifest-path native/walnut-net/Cargo.toml --target ${{ matrix.triple }}
+          fi
+          mkdir -p out
+          cp native/walnut-net/target/${{ matrix.triple }}/release/walnut-net "out/walnut-net-$VERSION-${{ matrix.target }}"
+      - name: It runs and reports its version
+        if: matrix.target == 'linux-x64' || matrix.target == 'darwin-arm64'
+        run: |
+          got="$("out/walnut-net-$VERSION-${{ matrix.target }}" --version)"
+          echo "$got"
+          case "$got" in "walnut-net $VERSION "*) ;; *) echo "::error::it says '$got'"; exit 1 ;; esac
+      - name: It starts on old and new Linux
+        if: matrix.target == 'linux-x64'
+        run: |
+          for img in debian:11 ubuntu:24.04 amazonlinux:2023 alpine:3.20; do
+            docker run --rm -v "$PWD/out:/o:ro" "$img" "/o/walnut-net-$VERSION-${{ matrix.target }}" --version || exit 1
+          done
+      - run: gzip -9 "out/walnut-net-$VERSION-${{ matrix.target }}"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: walnut-net-${{ matrix.target }}
+          path: out/
+          compression-level: 0
+
+  release:
+    name: Publish walnut-net-v${{ needs.version.outputs.version }}
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: walnut-net-v${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/download-artifact@v5
+        with:
+          path: out
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd out
+          sha256sum walnut-net-*.gz > SHA256SUMS
+          cat SHA256SUMS
+          [ "$(wc -l < SHA256SUMS)" = 4 ]
+      - name: Publish (never over a release that has its files)
+        env:
+          LEAK_SCAN_RULES: ${{ secrets.LEAK_SCAN_RULES }}
+        run: |
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx SHA256SUMS; then
+            echo "::error::$TAG is published already; a new connector needs a new version in native/walnut-net/Cargo.toml"
+            exit 1
+          fi
+          # The release gate (scripts/release-leak-gate.sh): nothing goes up while it finds a hit.
+          sh scripts/release-leak-gate.sh out
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --prerelease --latest=false \
+              --target "$GITHUB_SHA" --title "Host network connector: walnut-net $TAG" \
+              --notes "walnut-net for macOS (arm64, x64) and Linux (arm64, x64; static). Downloaded by Walnut daemons, which check it against src/providers/net-binary.ts or this SHA256SUMS."
+          # SHA256SUMS last: a release is complete only once it has one. A run that stopped
+          # between the two puts its files up again (nothing has pinned them yet).
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" out/walnut-net-*.gz --clobber
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" out/SHA256SUMS

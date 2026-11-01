@@ -65,6 +65,8 @@ const COMPANION_ROUTES: readonly CompanionRoute[] = [
   // Who the phone is talking to, and who the phone is: the companion speaks for itself.
   { re: /^\/(devices|setup)(\/|$)/, why: 'identity' },
   { re: /^\/(status|canary|me|instance|routes|client-logs)(\/|$)/, why: 'identity' },
+  // The host network's machine list and invites are the companion's own (routes/net-v1.ts).
+  { re: /^\/net(\/|$)/, why: 'identity' },
   // File and media bytes do not ride the bridge. The speech vocabulary is a word
   // list, not bytes: the Mac answers it and takes its words (the box reads its copy
   // only while away, and a word added there needs the Mac: routes/stt.ts).

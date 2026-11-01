@@ -59,7 +59,7 @@ describe('leak-audit.yml', () => {
   it('scans release assets after the release workflows, since their GITHUB_TOKEN publish starts no release event', () => {
     const cond = audit.jobs['release-assets']!.if ?? ''
     const names = fs.readdirSync(DIR).filter((f) => f.endsWith('.yml')).map((f) => read(f).name)
-    for (const n of ['Release', 'Release archives', 'Mac app', 'Components', 'Speech runtime']) {
+    for (const n of ['Release', 'Release archives', 'Mac app', 'Components', 'Speech runtime', 'Host network connector']) {
       expect(cond).toContain(`"${n}"`)
       expect(names).toContain(n)
     }

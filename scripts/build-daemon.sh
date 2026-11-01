@@ -93,6 +93,8 @@ SOURCES=(
   src/providers/task-dir-core.ts
   src/lib/task-dir.ts
   src/providers/host-exec-core.ts
+  src/providers/net-core.ts
+  src/providers/net-binary.ts
   src/providers/host-mcp-core.ts
   src/providers/host-http-core.ts
   src/providers/host-reach-core.ts
@@ -181,6 +183,11 @@ SOURCES=(
   src/providers/stream-compact-core.ts
   src/providers/stream-fold-core.ts
   src/providers/oneshot-core.ts
+  src/providers/user-line-images-core.ts
+  src/core/types.ts
+  src/lib/git-env.ts
+  src/providers/path-ref-parse.ts
+  src/providers/host-runtime-types.ts
 )
 
 # sha256 of daemon source files, per-file path + NUL + content + NUL, then
@@ -304,6 +311,11 @@ cp node_modules/@agentclientprotocol/codex-acp/LICENSE "$OUTDIR/codex-acp.LICENS
   --outfile "$OUTDIR/host-exec-core.cjs" \
   src/providers/host-exec-core.ts
 
+# The host network sidecar: 'net-v1' is advertised only when it loads.
+"$BUN" build --minify --target=node --format=cjs \
+  --outfile "$OUTDIR/net-core.cjs" \
+  src/providers/net-core.ts
+
 # A task on another host calling this host's MCP servers and web services:
 # 'host-mcp-v1' and 'host-http-v1' are advertised only when it loads.
 "$BUN" build --minify --target=node --format=cjs \
@@ -362,6 +374,14 @@ fi
 bash scripts/build-dtach.sh "$OUTDIR" \
   || echo "build-daemon.sh: the prebuilt dtach step failed; continuing (the terminal compiles dtach on demand)." >&2
 
+# walnut-net, the host network connector the daemon runs (net-core.ts), for this
+# machine, only on request (WALNUT_BUILD_NET=1, needs cargo): a daemon without one
+# downloads the pinned release build the first time it is asked (net-binary.ts).
+if [ "${WALNUT_BUILD_NET:-0}" = 1 ]; then
+  bash scripts/build-walnut-net.sh \
+    || echo "build-daemon.sh: the walnut-net step failed; continuing (the daemon downloads its release build)." >&2
+fi
+
 # Invalidate stale .gz caches — DaemonConnection.deployBinary reuses them
 # if present, which would ship an old binary under a new version label.
 rm -f "$OUTDIR"/daemon-linux-*.gz
@@ -369,3 +389,4 @@ rm -f "$OUTDIR"/daemon-linux-*.gz
 echo "Done. Binaries:"
 ls -lh "$OUTDIR"/daemon-*
 ls -lh "$OUTDIR"/dtach-* 2>/dev/null || true
+ls -lh "$OUTDIR"/walnut-net-* 2>/dev/null || true

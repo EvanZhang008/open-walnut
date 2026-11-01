@@ -635,6 +635,8 @@ export class DaemonConnection {
   private static PROGRESS_MIN_BYTES = 4_096
   /** The companion answers the tunnel upgrade only after its daemon is up (a cold start is ~10s). */
   private static CLOUD_TUNNEL_UPGRADE_TIMEOUT_MS = 30_000
+  /** A host network link: the dial (direct, or through the relay) happens inside the upgrade. */
+  private static NET_UPGRADE_TIMEOUT_MS = 30_000
   /**
    * Commands whose responses can be MB-scale frames (1MB JSONL chunks,
    * base64 images, git diffs up to 64MB) — routed to the bulk channel when
@@ -742,6 +744,9 @@ export class DaemonConnection {
    * (connect, deploy, tunnel) — never from connectDirect.
    */
   private get ssh(): SshTarget {
+    // Every ssh spawn reads its target here: a machine on the host network has no SSH,
+    // and its name must never be handed to ssh (it may resolve to some other machine).
+    if (this.sshTarget?.via === 'net') throw new Error(`${this.hostKey} is reached over the host network, not SSH`)
     if (!this.sshTarget) {
       throw new Error(
         `DaemonConnection(${this.hostKey}): SSH path taken but sshTarget is null. ` +
@@ -808,6 +813,21 @@ export class DaemonConnection {
     return this.hostKey === CLOUD_BOX_HOST_ALIAS
   }
 
+  /**
+   * A machine on the host network (`transport: net`, core/hosts/link.ts): this Mac's own
+   * daemon runs walnut-net, which gives a 127.0.0.1 forward to that machine's daemon,
+   * direct or through the user's relay (providers/net-core.ts). No SSH and no deploy:
+   * its daemon is a service there and updates itself.
+   */
+  private get isNetHost(): boolean {
+    return this.sshTarget?.via === 'net'
+  }
+
+  /** No SSH to this host at all: the cloud box, or a machine on the host network. */
+  private get noSsh(): boolean {
+    return this.isCloudTunnel || this.isNetHost
+  }
+
   // ── Binary deployment helpers ──
 
   /**
@@ -868,7 +888,7 @@ export class DaemonConnection {
   checkBootStart(): Promise<void> { return this._bootStart?.check() ?? Promise.resolve() }
   private _bootStartKeeper: BootStartKeeper | null = null
   private get _bootStart(): BootStartKeeper | null {
-    if (this.hostKey === '__local__' || this.isCloudTunnel || this.isReadOnlyRemote || IS_EPHEMERAL || bootStartOff()) return null
+    if (this.hostKey === '__local__' || this.noSsh || this.isReadOnlyRemote || IS_EPHEMERAL || bootStartOff()) return null
     this._bootStartKeeper ??= new BootStartKeeper({
       hostKey: this.hostKey,
       run: (command, timeout) => this.sshExec(command, timeout),
@@ -963,6 +983,7 @@ export class DaemonConnection {
     const b = sshTarget
     if (!a || !b) return a === b
     return a.hostname === b.hostname && (a.user ?? '') === (b.user ?? '') && (a.port ?? 22) === (b.port ?? 22)
+      && (a.via ?? 'ssh') === (b.via ?? 'ssh') && (a.endpoint ?? '') === (b.endpoint ?? '')
   }
 
   /**
@@ -1696,6 +1717,19 @@ export class DaemonConnection {
         return
       }
 
+      // A machine on the host network: no SSH, no deploy (its daemon is a service there).
+      if (this.isNetHost) {
+        await this.dialNetHost()
+        this.setConnected(true)
+        this.startPing()
+        this._connecting = false
+        log.session.info('DaemonConnection: host network machine connected', {
+          host: this.hostKey, instanceId: this._daemonInstanceId,
+        })
+        this.recoverDisconnectedSessions().catch(() => {})
+        return
+      }
+
       // Step 0: Establish SSH ControlMaster (one connection for all subsequent commands)
       this.setPhase('ssh')
       await this.ensureControlMaster()
@@ -1793,7 +1827,7 @@ export class DaemonConnection {
       // Ask the local agent why an auth failure happened (expired certificate,
       // no agent) before anyone reads the error. Still inside _connecting, so a
       // second caller keeps waiting on this attempt.
-      const annotated = this.sshTarget && !this.isCloudTunnel ? await annotateCredentialFailure(err, this.sshHostString) : err
+      const annotated = this.sshTarget && !this.noSsh ? await annotateCredentialFailure(err, this.sshHostString) : err
       // The annotation yields, even for an error it leaves alone: check again.
       if (this.localDialAbandoned()) {
         this._connecting = false
@@ -2356,8 +2390,10 @@ export class DaemonConnection {
   ensurePortForward(remotePort: number, target = '127.0.0.1', opts: { evictable?: boolean } = {}): Promise<number> {
     // A forward is an `ssh -L`; the cloud box is reached over the daemon
     // tunnel only, so there is nothing to forward through. Say so plainly.
-    if (this.isCloudTunnel) {
-      return Promise.reject(new Error('Port forwarding is not available on Cloud: this Mac reaches it through the cloud companion, not SSH'))
+    if (this.noSsh) {
+      return Promise.reject(new Error(this.isCloudTunnel
+        ? 'Port forwarding is not available on Cloud: this Mac reaches it through the cloud companion, not SSH'
+        : `Port forwarding is not available on ${this.hostKey}: this Mac reaches it over the host network, not SSH`))
     }
     const key = `${target}:${remotePort}`
     const dialing = this.portForwardDials.get(key)
@@ -2372,7 +2408,7 @@ export class DaemonConnection {
 
   /** Run a POSIX sh script on the host (see sshExec): the host server's install and port checks. */
   runRemoteScript(script: string, timeoutMs = 30_000): Promise<string> {
-    if (this.isCloudTunnel) return Promise.reject(new Error('Cloud is reached through the cloud companion, not SSH'))
+    if (this.noSsh) return Promise.reject(new Error(this.noSshSentence))
     return this.sshExec(script, timeoutMs)
   }
 
@@ -2388,7 +2424,7 @@ export class DaemonConnection {
     remotePath: string, data: Buffer,
     opts: { sha256?: string; onProgress?: (sent: number, total: number) => void } = {},
   ): Promise<{ skipped: boolean }> {
-    if (this.isCloudTunnel) throw new Error('Cloud is reached through the cloud companion, not SSH')
+    if (this.noSsh) throw new Error(this.noSshSentence)
     const sha = (opts.sha256 ?? await sha256Hex(data)).toLowerCase()
     if (!/^[0-9a-f]{64}$/.test(sha)) throw new Error('uploadFile: sha256 must be 64 hex characters')
     const there = parseUploadPrecheck(await this.sshExec(uploadPrecheckScript(remotePath, sha), 60_000))
@@ -2441,7 +2477,7 @@ export class DaemonConnection {
     if (!this.hasCapability('stream-lane-v1')) return
     const testForward = laneForwardForTesting()
     const remotePort = this.remotePort
-    if (!testForward && (this.isCloudTunnel || !this.sshTarget || this._dialledDirect || !remotePort)) return
+    if (!testForward && (this.noSsh || !this.sshTarget || this._dialledDirect || !remotePort)) return
     const sshArgs = testForward ? [] : this.buildSshArgs({ useControlMaster: false })
     const sshHost = testForward ? '' : this.sshHostString
     // eslint-disable-next-line @typescript-eslint/no-this-alias
@@ -4120,7 +4156,7 @@ export class DaemonConnection {
    * slot holds that file (deployWalnutFile put it there): nothing is sent again.
    */
   async seedHostFileFromDaemon(sha256: string, gz: string): Promise<boolean> {
-    if (this.isCloudTunnel) return false
+    if (this.noSsh) return false
     const slot = await this.getRemoteDaemonPath()
     const seeded = parseSeedAnswer(await this.sshExec(seedFromSlotScript(slot, sha256, gz), 120_000).catch(() => ''))
     if (seeded) log.session.info('DaemonConnection: host server file taken from the daemon slot', { host: this.hostKey, gz })
@@ -4425,7 +4461,7 @@ export class DaemonConnection {
       // The ACP files (acp-host-artifacts.ts ACP_HOST_FILES) let this host run Codex,
       // OpenCode, Goose and Pi itself; the daemon says 'acp-host-v1' once they are there.
       const sidecars: Array<[string, string]> = [
-        ...['changes-core.cjs', 'usage-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs', 'task-dir-core.cjs', 'host-exec-core.cjs', 'host-reach-core.cjs', 'secrets-core.cjs', 'vscode-server-core.cjs', 'transcript-rewind-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs', 'trigger-check-core.cjs', 'acp-daemon-core.cjs']
+        ...['changes-core.cjs', 'usage-core.cjs', 'external-scan-core.cjs', 'path-resolve-core.cjs', 'task-dir-core.cjs', 'host-exec-core.cjs', 'host-reach-core.cjs', 'net-core.cjs', 'secrets-core.cjs', 'vscode-server-core.cjs', 'transcript-rewind-core.cjs', 'daemon-cron-runtime.cjs', 'daemon-instance-lock.cjs', 'daemon-service-cli.cjs', 'trigger-check-core.cjs', 'acp-daemon-core.cjs']
           .map((f): [string, string] => [f, f]),
         ...Object.entries(ACP_HOST_FILES),
       ]
@@ -4783,6 +4819,31 @@ export class DaemonConnection {
     probe.noteCloudBoxCapability('ready')
   }
 
+  private get noSshSentence(): string {
+    return this.isCloudTunnel ? 'Cloud is reached through the cloud companion, not SSH' : `${this.hostKey} is reached over the host network, not SSH`
+  }
+
+  /**
+   * Open a host network machine's socket: this Mac's walnut-net forwards a 127.0.0.1
+   * port to that machine's daemon (core/hosts/net-link.ts), then hello as on any link.
+   */
+  private async dialNetHost(): Promise<void> {
+    const endpoint = this.sshTarget?.endpoint
+    if (!endpoint) throw new Error(`${this.hostKey} has no host network id; add it again from Settings > Remote Hosts`)
+    this.setPhase('tunnel')
+    const { netForwardPort } = await import('../core/hosts/net-link.js')
+    const port = await netForwardPort(endpoint, this.hostKey)
+    await this.connectWebSocket(port, { timeoutMs: DaemonConnection.NET_UPGRADE_TIMEOUT_MS })
+    this.setPhase('handshake')
+    this._capabilities = null // so "no hello at all" is told apart from "hello, missing caps"
+    const ok = await this.verifyCapabilities()
+    if (!ok && this._capabilities === null) {
+      this.closeTransport()
+      throw new Error(`Host network: the Walnut daemon on ${this.hostKey} did not answer (is Walnut running there?)`)
+    }
+    if (!ok) log.session.warn('DaemonConnection: host network machine lacks capabilities this Mac expects; using it as is', { host: this.hostKey })
+  }
+
   /**
    * Connect WebSocket through the SSH tunnel (or directly via URL).
    */
@@ -4870,7 +4931,7 @@ export class DaemonConnection {
             localDaemonPidAlive,
           })
           this.handleConnectionLost()
-        } else if (this.isCloudTunnel && this.ws === ws) {
+        } else if (this.noSsh && this.ws === ws) {
           // The companion dropped the tunnel mid-handshake (its daemon died,
           // or it restarted): fail the hello now rather than after 30s.
           for (const [, pending] of this.pendingCommands) {
@@ -5409,7 +5470,7 @@ export class DaemonConnection {
   private async handleReconnectFailure(rawErr: unknown, chainDelayMs: number, annotated = false): Promise<unknown> {
     // Same local evidence as a first connect: an expired certificate on a
     // host that WAS connected must read as cert_expired, not plain auth.
-    const err = annotated || !this.sshTarget || this.isCloudTunnel ? rawErr : await annotateCredentialFailure(rawErr, this.sshHostString)
+    const err = annotated || !this.sshTarget || this.noSsh ? rawErr : await annotateCredentialFailure(rawErr, this.sshHostString)
     if (this._destroyed || this._connected) return err
     const msg = err instanceof Error ? err.message : String(err)
     // Standing failures: retrying every 30s can't fix an expired SSH cert
@@ -5477,6 +5538,19 @@ export class DaemonConnection {
       this.setConnected(true)
       this.startPing()
       log.session.info('DaemonConnection: cloud box reconnected (tunnel)', {
+        host: this.hostKey, instanceId: this._daemonInstanceId,
+      })
+      this.recoverDisconnectedSessions().catch(() => {})
+      return
+    }
+
+    // A machine on the host network: ask this Mac's walnut-net for the link again.
+    if (this.isNetHost) {
+      this.closeBulkChannel()
+      await this.dialNetHost()
+      this.setConnected(true)
+      this.startPing()
+      log.session.info('DaemonConnection: host network machine reconnected', {
         host: this.hostKey, instanceId: this._daemonInstanceId,
       })
       this.recoverDisconnectedSessions().catch(() => {})
@@ -6144,10 +6218,10 @@ export class DaemonConnection {
           return
         }
         log.session.warn('DaemonConnection: no answer to a liveness probe', {
-          host: this.hostKey, deadlineMs, roundTripMs: this.roundTripMs, closing: this.isCloudTunnel,
+          host: this.hostKey, deadlineMs, roundTripMs: this.roundTripMs, closing: this.noSsh,
         })
         this._silentVerdict = { at: Date.now(), heard: this._heardBytes, mainBytes: socketBytesRead(ws) }
-        if (this.isCloudTunnel) this.dropSilentLink(ws)
+        if (this.noSsh) this.dropSilentLink(ws)
         else this._missedPongs += 1
         finish(false)
       }, deadlineMs)
@@ -6333,7 +6407,7 @@ export class DaemonConnection {
           // waits on this link fails now (its replies can never arrive), not at
           // each command's own 30s timeout, and the socket goes without a close
           // handshake a silent peer would never answer.
-          if (this.isCloudTunnel && this.ws) { this.dropSilentLink(this.ws); return }
+          if (this.noSsh && this.ws) { this.dropSilentLink(this.ws); return }
           this.handleConnectionLost()
           return
         }
@@ -6761,6 +6835,11 @@ export async function getDirectDaemonConnection(hostKey: string, wsUrl: string):
 
   connectingPromises.set(poolKey, promise)
   return promise
+}
+
+/** The pooled connection to `hostKey` when there is one; never dials. */
+export function peekDaemonConnection(hostKey: string): DaemonConnection | null {
+  return connectionPool.get(hostKey) ?? null
 }
 
 /**

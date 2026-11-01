@@ -65,6 +65,7 @@ must live under one of these top-level categories instead of directly under
 - [Cloud sync](reference/cloud-sync.md) - one-click cloud-companion setup, the
   git-over-HTTPS data plane, the live-session bridge, and what the box installs
   to run sessions itself.
+- [Host network](reference/host-network.md): reach a Walnut machine with no SSH door. One invite link joins it; the Mac then reaches its daemon directly or through the relay on the user's own cloud companion, and only listed machines get in.
 - [Phone connection routes](reference/phone-connection-routes.md): the three ways the
   iOS app reaches a Walnut (Wi-Fi, Tailscale, cloud companion), how one pairing works on
   every box, and how the app picks and switches routes.

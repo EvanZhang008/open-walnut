@@ -2303,6 +2303,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/system', systemRouter)
   // Remote-host connect status (hydrate + deliberate retry); live updates ride
   // the `host:status` WS event, so nothing polls this.
+  // The host network's Settings routes (core/net/net-mac.ts), ahead of /:host routes.
+  if (bootPolicy('host-network')) app.use('/api/hosts/net', (await import('./routes/hosts-net.js')).hostsNetRouter)
   app.use('/api/hosts', hostsRouter)
   app.use('/api/workspaces', (await import('./routes/workspaces.js')).workspacesRouter) // per-task isolated workspaces
   // Test-only remote-host fixture: mounted solely by the Playwright fixture
@@ -2328,6 +2330,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   // First-boot claim flow (cloud mode) — publicly reachable by design; the
   // auth middleware exempts /api/v1/setup/* (see CLOUD_EXEMPT_PREFIXES).
   app.use('/api/v1/setup', setupRouter)
+  // The host network's machine list and invites (routes/net-v1.ts): the companion's own,
+  // so v1-forward keeps /net here (policy.ts); /join/<code> is the invite link's script.
+  if (bootPolicy('host-network-door')) {
+    const net = await import('./routes/net-v1.js')
+    app.use('/api/v1', net.netV1Router)
+    app.use(net.netJoinPageRouter)
+  }
   // The companion is this server plus a public address: while the Mac answers,
   // a phone's call is carried to it and answered there (web/v1-forward/).
   if (bootPolicy('v1-forward')) {
@@ -4104,6 +4113,13 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       if (hostKey === '__local__') return
       void publishRecovery([hostCauseKey(hostKey)])
     })
+    // The host network: this Mac reads the machine list and dials the machines (net-mac.ts).
+    // Not on a test or throwaway server, whose copied config would put its own key in the
+    // Mac's place (netActive).
+    if (bootPolicy('host-network')) {
+      const net = await import('../core/net/net-mac.js')
+      if (await net.netActive()) void net.startNet().catch((err) => log.session.warn('net: start failed', { error: String(err) }))
+    }
     unsubscribeSendPathAnnounce?.()
     const { startSendPathAnnouncements } = await import('../core/send-path-announce.js')
     unsubscribeSendPathAnnounce = startSendPathAnnouncements(addOnDaemonHostConnected)
@@ -6490,6 +6506,7 @@ export async function stopServer(): Promise<void> {
   // never hands it the lead. Bounded: never holds the shutdown up.
   leaderLoopHandle?.stop()
   leaderLoopHandle = null
+  ;(await import('../core/net/net-mac.js')).stopNet()
   // Visits still in memory (at most FLUSH_MS of them); bounded like every write here.
   await (await import('../core/page-visits.js')).flushVisitsNow().catch(() => {})
   await searchCopyHandle?.stop().catch(() => {})

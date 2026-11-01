@@ -1389,11 +1389,18 @@ export interface Config {
   /** The user's own capability tags for THIS machine (`__local__`), as `hosts.<alias>.capabilities`
    *  is for another host (core/hosts/capabilities.ts). */
   local_capabilities?: string[];
+  /** The host network (core/net/net-mac.ts): on once the user made the first invite. */
+  net?: { enabled?: boolean };
   hosts?: Record<string, {
     hostname: string;
     user?: string;
     port?: number;
     label?: string;
+    /** How this Mac reaches the host's daemon: SSH (absent or 'ssh'), or the host network
+     *  ('net': walnut-net, direct or through the user's relay; no SSH at all, docs/reference/host-network.md). */
+    transport?: 'ssh' | 'net';
+    /** With `transport: net`: the machine's host network id (its public key, 64 hex). */
+    endpoint?: string;
     /** Shell snippet run before claude on remote sessions (e.g. 'source $HOME/.nvm/nvm.sh').
      *  Use to set up PATH for node managers (nvm, fnm, volta, asdf) or other env. */
     shell_setup?: string;

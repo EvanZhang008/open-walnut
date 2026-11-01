@@ -406,6 +406,7 @@ describe.each([
     const stop = compile<() => void>(`let shutdown = null; const stopDaemon = ${extract(source, 'stopDaemon')}; return stopDaemon;`, {
       daemonCommands,
       cronRuntime: { close: vi.fn(() => cron.promise) },
+      netSupervisor: { stop: vi.fn(async () => {}) },
       persistRegistry: () => { order.push('persist') },
       cleanup: () => { order.push('cleanup') },
       server: { stop: () => { order.push('server') } },

@@ -47,6 +47,10 @@ export function linkTarget(host: string, config: Pick<Config, 'hosts'>): SshTarg
   // `ssh` is an older spelling of hostname some configs still carry; with neither,
   // the alias itself (an ~/.ssh/config Host entry resolves it), as most callers did.
   const hostname = def.hostname || (typeof def.ssh === 'string' && def.ssh ? def.ssh : host)
+  // A machine on the host network: no SSH target at all, only its network id.
+  if (def.transport === 'net') {
+    return { hostname, via: 'net', ...(typeof def.endpoint === 'string' ? { endpoint: def.endpoint.toLowerCase() } : {}) }
+  }
   return {
     hostname,
     ...(def.user ? { user: def.user } : {}),

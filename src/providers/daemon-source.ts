@@ -222,7 +222,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'task-dir-prune-v1', 'host-exec-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'budget-v2', 'walnut-mcp-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'task-dir-prune-v1', 'host-exec-v1', 'net-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'budget-v2', 'walnut-mcp-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -3818,6 +3818,15 @@ function dispatchCommand(ws, id, cmd) {
       if (!hostMcp) return sendError(ws, id, cmd.cmd + ' unsupported: host-reach-core sidecar not loaded');
       const op = cmd.cmd.slice(4);
       return replyTransfer(ws, id, cmd.cmd, function () { return hostMcp[op](cmd); }, false);
+    }
+    // The host network (net-v1); not bridge- or follower-reachable: it decides who may
+    // reach this daemon. Mirrors daemon-standalone.ts.
+    case 'net.status': case 'net.identity': case 'net.configure': case 'net.forward': case 'net.probe': {
+      if (!netSupervisor) return sendError(ws, id, cmd.cmd + ' unsupported: net-core sidecar not loaded');
+      const nop = cmd.cmd.slice(4);
+      if (nop === 'status') return replyTransfer(ws, id, cmd.cmd, function () { return netSupervisor.status(); }, false);
+      if (nop === 'identity') return replyTransfer(ws, id, cmd.cmd, async function () { return { endpointId: await netSupervisor.identity() }; }, false);
+      return replyTransfer(ws, id, cmd.cmd, function () { return netSupervisor[nop](cmd); }, false);
     }
     case 'http.request': {
       if (!hostHttp) return sendError(ws, id, cmd.cmd + ' unsupported: host-reach-core sidecar not loaded');
@@ -12172,6 +12181,20 @@ try {
   });
   hostHttp = hostReachCore.createHostHttp();
 } catch (err) { hostMcp = null; hostHttp = null; }
+// The host network sidecar (net-core.cjs): 'net-v1' is advertised only when it loads.
+// Mirrors daemon-standalone.ts.
+let netSupervisor = null;
+try {
+  const netCore = require(path.join(__dirname, 'net-core.cjs'));
+  const NET_STATE_DIR = netCore.netStateDir({ serviceStateDir: SERVICE_MODE ? DAEMON_STATE_DIR : null, prodDaemon: IS_PROD_DAEMON_DIR, daemonDir: DAEMON_DIR, home: HOME_DIR });
+  netSupervisor = netCore.createNetSupervisor({
+    spawn: function (command, args, opts) { return spawn(command, args, opts); },
+    stateDir: NET_STATE_DIR,
+    portFile: PORT_FILE,
+    bin: function () { return netCore.resolveNetBinary({ dirs: [__dirname, DAEMON_DIR, path.join(NET_STATE_DIR, 'bin')] }); },
+    log: function (level, msg, data) { logMsg(level, msg, data); },
+  });
+} catch (err) { netSupervisor = null; }
 function ensureTaskDirFor(taskId, home) {
   if (!taskDirCore || !TASK_DIR_ROOT) return null;
   try { return taskDirCore.ensureTaskDir(TASK_DIR_ROOT, taskId, home); } catch (err) { return null; }
@@ -12281,6 +12304,7 @@ function daemonCapabilities() {
   if (taskDirCore) caps.push('task-dir-v1');
   if (taskDirCore && typeof taskDirCore.pruneTaskDirs === 'function') caps.push('task-dir-prune-v1');
   if (hostExec) caps.push('host-exec-v1');
+  if (netSupervisor) caps.push('net-v1');
   if (hostMcp) caps.push('host-mcp-v1');
   if (hostHttp) caps.push('host-http-v1');
   if (secretStore) caps.push('secrets-v1');
@@ -14442,6 +14466,8 @@ async function startDaemon() {
     if (daemonInstanceLock) daemonInstanceLock.publish(port);
     fs.writeFileSync(PORT_FILE, String(port));
     fs.writeFileSync(PID_FILE, String(process.pid));
+    // The host network runs once this daemon answers on its port (net-v1).
+    if (netSupervisor) netSupervisor.start();
     // daemon.pid names us now: the journal writes are ours (journal v2 migration).
     migrateJournals();
     // Agent gateway: second (unix-socket) listener + on-PATH walnut shim. Both
@@ -14560,7 +14586,7 @@ async function startDaemon() {
   const stopDaemon = function () {
     if (shutdown) return;
     shutdown = (async function () {
-      const drained = await Promise.allSettled([daemonCommands.close(), cronRuntime && cronRuntime.close()]);
+      const drained = await Promise.allSettled([daemonCommands.close(), cronRuntime && cronRuntime.close(), netSupervisor && netSupervisor.stop()]);
       const failed = drained.find(function (result) { return result.status === 'rejected'; });
       if (failed) logMsg('error', 'daemon shutdown drain failed', { error: String(failed.reason) });
       persistRegistry();

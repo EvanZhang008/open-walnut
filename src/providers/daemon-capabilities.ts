@@ -481,6 +481,15 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // server checks the user's grant first (src/core/hosts/host-exec.ts); not bridge-
   // or follower-reachable. Sidecar-gated in the source twin (host-exec-core.cjs).
   'host-exec-v1',
+  // 'net-v1' — the host network (net-core.ts): the daemon runs walnut-net (iroh) while
+  // the server configured it: `net.configure {relays, relayRoots, members, enabled}`
+  // writes its config (members with `accept: true` may open streams to this daemon;
+  // every other endpoint is closed before any stream), `net.status`, `net.identity`
+  // (this host's id, its key made on first use), `net.forward {to}`
+  // (a 127.0.0.1 port whose connections are streams to that member's daemon) and
+  // `net.probe {to}`. Not bridge- or follower-reachable. Sidecar-gated in the source
+  // twin (net-core.cjs).
+  'net-v1',
   // 'host-mcp-v1' — a task on another host calling an MCP server configured here
   // (host-mcp-core.ts): `mcp.list {cwd}` names the servers Claude Code would see,
   // `mcp.tools {callId, taskId, server, cwd, wait}` and `mcp.call {..., tool,

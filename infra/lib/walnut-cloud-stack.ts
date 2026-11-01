@@ -101,7 +101,7 @@ export class WalnutCloudStack extends cdk.Stack {
       natGateways: 0,
     })
 
-    // ── Security group: 443 + 80 only ───────────────────────────────────
+    // ── Security group: 443 + 80, and UDP 7842 for address discovery ───────
     const sg = new ec2.SecurityGroup(this, 'WebSg', {
       vpc,
       description: 'Walnut cloud companion: HTTPS (443) + ACME HTTP-01 (80) only',
@@ -115,6 +115,11 @@ export class WalnutCloudStack extends cdk.Stack {
     // everything else to HTTPS. Do not remove.
     sg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(80), 'ACME HTTP-01 + HTTPS redirect (IPv4)')
     sg.addIngressRule(ec2.Peer.anyIpv6(), ec2.Port.tcp(80), 'ACME HTTP-01 + HTTPS redirect (IPv6)')
+    // The host network's address discovery (scripts/cloud/net-relay.sh): it tells the
+    // user's machines their public address so they can connect directly, carries no
+    // data and accepts no stream. Without it they still connect, through the relay on 443.
+    sg.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.udp(7842), 'Walnut relay address discovery (QUIC, no data) (IPv4)')
+    sg.addIngressRule(ec2.Peer.anyIpv6(), ec2.Port.udp(7842), 'Walnut relay address discovery (QUIC, no data) (IPv6)')
 
     // ── IAM instance role ───────────────────────────────────────────────
     const role = new iam.Role(this, 'InstanceRole', {

@@ -179,7 +179,7 @@ export async function resolveSshTarget(host: string): Promise<SshTarget> {
   // tunnel), so a terminal there would dial the companion's web address and
   // hang. The session panel hides the tab from the same capability; this is the
   // server's own guard.
-  if (!hostOffersTerminal(def)) throw new Error(`A terminal is not available on ${def.label ?? host}: this Mac reaches it through the cloud companion, not SSH`)
+  if (!hostOffersTerminal(def)) throw new Error(`A terminal is not available on ${def.label ?? host}: this Mac reaches it through ${def.transport === 'net' ? 'the host network' : 'the cloud companion'}, not SSH`)
   return linkTarget(host, config)
 }
 

@@ -92,6 +92,7 @@ export const CONFIG_COPY_DROPPED: Readonly<Record<string, string>> = Object.free
   favorites: 'copied by the prefs kind',
   session_server: 'the Mac server process settings',
   hosts_warmup: 'ssh warmup on the Mac',
+  net: 'the Mac\'s own host network switch; the companion keeps the member list itself',
   local_capabilities: 'the Mac\'s own capability tags, read where its fleet card is built, on the Mac',
   ssh_login_files: 'ssh files on the Mac',
   ssh_login_hint: 'the ssh sign-in letter is sent on the Mac',
@@ -140,6 +141,8 @@ export const CONFIG_COPY_DROPPED_FIELDS: Readonly<Record<string, Readonly<Record
     server: 'that host server settings and build env',
     server_program: 'which program the Mac starts there',
     place: 'placement by load decides on the Mac',
+    transport: 'how the Mac reaches that host: only the Mac dials the host network',
+    endpoint: 'the host network id the Mac dials; the companion keeps its own member list',
   },
   stt: {
     sherpa_model_dir: 'a model path on the Mac', sherpa_model_type: 'a model of the Mac',

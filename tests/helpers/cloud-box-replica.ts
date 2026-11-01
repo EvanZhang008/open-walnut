@@ -70,6 +70,8 @@ export interface ReplicaOptions {
    * Macs and the phone, no machine credential, no owner. `machineOwner` is ignored.
    */
   fresh?: boolean
+  /** More env for the companion's server (a feature's settings, as setup.sh writes them). */
+  env?: Record<string, string>
 }
 
 export interface CloudBoxReplica {
@@ -219,6 +221,7 @@ armGracefulSignalExit()
     WALNUT_DISABLE_BACKGROUND_AI: '1',
     WALNUT_DISABLE_SEARCH: '1',
     VITEST: '', VITEST_WORKER_ID: '', VITEST_POOL_ID: '', NODE_ENV: 'production',
+    ...(opts.env ?? {}),
   })
 
   async function boot(rel: DaemonRelease | undefined): Promise<{ proc: ChildProcess; port: number }> {

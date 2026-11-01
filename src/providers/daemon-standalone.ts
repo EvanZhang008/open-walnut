@@ -177,6 +177,7 @@ import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
 import { ensureTaskDir, isTaskDirId, listTaskDirs, pruneTaskDirs, removeTaskDirs, taskDirPath, taskDirRoot } from './task-dir-core.js'
 import { createHostExec } from './host-exec-core.js'
+import { createNetSupervisor, netStateDir, resolveNetBinary } from './net-core.js'
 import { createHostMcp } from './host-mcp-core.js'
 import { createHostHttp } from './host-http-core.js'
 import { createSecretStore, secretsRoot } from './secrets-core.js'
@@ -2426,6 +2427,14 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // host-http-v1). The same rule as exec.*: only the trusted walnut socket asks, after the
     // server checked the user's grant. Keep in sync with daemon-source.ts.
     case 'mcp.list': return replyTransfer(ws, id as number, 'mcp.list', () => hostMcp.list(cmd), false)
+    // The host network (net-v1, net-core.ts). NOT in BRIDGE_ALLOWED_COMMANDS or
+    // FOLLOWER_ALLOWED_COMMANDS: it decides who may reach this daemon, so only the
+    // trusted walnut socket asks. Keep in sync with daemon-source.ts.
+    case 'net.status': return replyTransfer(ws, id as number, 'net.status', () => netSupervisor.status(), false)
+    case 'net.identity': return replyTransfer(ws, id as number, 'net.identity', async () => ({ endpointId: await netSupervisor.identity() }), false)
+    case 'net.configure': return replyTransfer(ws, id as number, 'net.configure', () => netSupervisor.configure(cmd), false)
+    case 'net.forward': return replyTransfer(ws, id as number, 'net.forward', () => netSupervisor.forward(cmd), false)
+    case 'net.probe': return replyTransfer(ws, id as number, 'net.probe', () => netSupervisor.probe(cmd), false)
     case 'mcp.tools': return replyTransfer(ws, id as number, 'mcp.tools', () => hostMcp.tools(cmd), false)
     case 'mcp.call': return replyTransfer(ws, id as number, 'mcp.call', () => hostMcp.call(cmd), false)
     case 'mcp.result': return replyTransfer(ws, id as number, 'mcp.result', () => hostMcp.result(cmd), false)
@@ -10446,6 +10455,20 @@ const hostMcp = createHostMcp({
 })
 const hostHttp = createHostHttp()
 
+// ── The host network (capability 'net-v1') ──
+// PARITY: keep in sync with daemon-source.ts. The logic is net-core.ts: this twin hands it
+// spawn, the net state dir (never under the synced data dir) and where walnut-net lives:
+// $WALNUT_NET_BIN (the server sets it for its local daemon), beside this executable, or
+// beside the daemon.
+const NET_STATE_DIR = netStateDir({ serviceStateDir: SERVICE_MODE ? DAEMON_STATE_DIR : null, prodDaemon: IS_PROD_DAEMON_DIR, daemonDir: DAEMON_DIR, home: HOME_DIR })
+const netSupervisor = createNetSupervisor({
+  spawn: (command, args, opts) => spawn(command, args, opts),
+  stateDir: NET_STATE_DIR,
+  portFile: PORT_FILE,
+  bin: () => resolveNetBinary({ dirs: [path.dirname(process.execPath), DAEMON_DIR, path.join(NET_STATE_DIR, 'bin')] }),
+  log: (level, msg, data) => logMsg(level, msg, data),
+})
+
 // ── The secrets the user shared with this host (capability 'secrets-v1') ──
 // PARITY: keep in sync with daemon-source.ts. The logic is secrets-core.ts.
 const SECRETS_ROOT = secretsRoot(process.env, HOME_DIR)
@@ -12140,6 +12163,8 @@ if (action === '--start' || SERVICE_MODE) {
   const port = server.port
   daemonInstanceLock?.publish(port)
   fs.writeFileSync(PORT_FILE, String(port))
+  // The host network runs once this daemon answers on its port (net-v1).
+  netSupervisor.start()
   fs.writeFileSync(PID_FILE, String(process.pid))
   // daemon.pid names us now: the journal writes are ours (journal v2 migration).
   migrateJournals()
@@ -12271,7 +12296,7 @@ if (action === '--start' || SERVICE_MODE) {
   let shutdown: Promise<void> | null = null
   const stopDaemon = () => {
     shutdown ??= (async () => {
-      const drained = await Promise.allSettled([daemonCommands.close(), cronRuntime?.close()])
+      const drained = await Promise.allSettled([daemonCommands.close(), cronRuntime?.close(), netSupervisor.stop()])
       const failed = drained.find((result) => result.status === 'rejected')
       if (failed?.status === 'rejected') logMsg('error', 'daemon shutdown drain failed', { error: String(failed.reason) })
       persistRegistry()

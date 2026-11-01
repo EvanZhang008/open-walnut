@@ -378,6 +378,26 @@ export function registerCommands(program: Command): void {
       process.exitCode = await runDaemonServiceArgs(args ?? []);
     });
 
+  // The host network on this machine (src/commands/net.ts).
+  const netCmd = program
+    .command('net')
+    .description('This machine on your Walnut host network (join | status)')
+  netCmd
+    .command('join <companion> <code>')
+    .description('Join this machine to your Walnut machines with an invite (the invite link runs this)')
+    .option('--steps', 'Continue the numbered steps of the invite script')
+    .action(async (companion: string, code: string, options: { steps?: boolean }) => {
+      const { runNetJoin } = await import('./net.js');
+      process.exitCode = await runNetJoin(companion, code, { steps: !!options.steps });
+    });
+  netCmd
+    .command('status')
+    .description("This machine's host network, as its daemon says")
+    .action(async () => {
+      const { runNetStatus } = await import('./net.js');
+      process.exitCode = await runNetStatus();
+    });
+
   program
     .command('session-server')
     .description('Start the session server (WebSocket wrapping Claude Agent SDK)')

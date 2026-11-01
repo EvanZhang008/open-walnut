@@ -1162,7 +1162,7 @@ describe('src/providers/daemon-connection.ts keeps the guards where they act', (
   })
 
   it('connect()\'s catch asks for the owner before and after the annotation, both before the failed phase', () => {
-    const annotate = src.indexOf('const annotated = this.sshTarget && !this.isCloudTunnel ? await annotateCredentialFailure(')
+    const annotate = src.indexOf('const annotated = this.sshTarget && !this.noSsh ? await annotateCredentialFailure(')
     expect(annotate).toBeGreaterThan(0)
     const before = src.lastIndexOf('if (this.localDialAbandoned()) {', annotate)
     const after = src.indexOf('if (this.localDialAbandoned()) {', annotate)

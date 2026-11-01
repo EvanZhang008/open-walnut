@@ -375,6 +375,9 @@ CADDY_GLOBAL_BLOCK=$'{\n\tadmin unix//run/caddy/admin.sock\n'"$CADDY_SSLIP_EMAIL
 printf '%s' "$CADDY_GLOBAL_BLOCK" > /etc/caddy/Caddyfile
 cat >> /etc/caddy/Caddyfile <<'EOF'
 {$WALNUT_DOMAIN} {
+	# The host network's relay (scripts/cloud/net-relay.sh): its two paths.
+	reverse_proxy /relay 127.0.0.1:3340
+	reverse_proxy /ping 127.0.0.1:3340
 	reverse_proxy 127.0.0.1:3456 {
 		flush_interval -1
 		transport http {
@@ -658,6 +661,13 @@ LimitNOFILE=65536
 WantedBy=multi-user.target
 EOF
 # <<< walnut unit
+
+# The host network's relay and address discovery (UDP 7842). Never fatal: without it
+# machines on the host network still connect directly when they can, and the next
+# run of this script retries.
+if ! bash "$REPO_DIR/scripts/cloud/net-relay.sh" "$DOMAIN"; then
+  echo "WARNING: the host network relay is not set up (see above); machines connect directly only"
+fi
 
 echo "==> [9/10] Agent harness (Claude Code, default engine CLI, cloud exec)"
 # Makes the box a real exec host: see the header of ensure-harness.sh. It never

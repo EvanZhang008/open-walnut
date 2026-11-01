@@ -46,6 +46,8 @@ export interface HostDef {
   discovered?: boolean
   /** The paired cloud box (core/hosts/cloud-box-host.ts): reached over the companion's tunnel, not SSH. */
   cloud_box?: boolean
+  /** 'net': a machine on the host network (core/net/net-mac.ts), reached through walnut-net, not SSH. */
+  transport?: 'ssh' | 'net'
   /** The user's capability tags for it (core/hosts/capabilities.ts). */
   capabilities?: string[]
 }
@@ -222,6 +224,15 @@ export function buildHostStatus(
     status.steps = status.steps.filter((s) => s.phase === 'tunnel' || s.phase === 'handshake')
     if (status.phase === 'tunnel') status.phaseLabel = `Reaching ${label} through the cloud companion`
   }
+  // A machine on the host network: the same two steps, through this Mac's walnut-net. An SSH
+  // hint would send the user to a door this machine does not have.
+  if (hostDef.transport === 'net') {
+    status.steps = status.steps.filter((s) => s.phase === 'tunnel' || s.phase === 'handshake')
+    if (status.phase === 'tunnel') status.phaseLabel = `Reaching ${label} through the host network`
+    const hint = `Is ${label} on, with Walnut running? On it, \`walnut net status\` says whether it is on the host network.`
+    if (status.hint) status.hint = hint
+    if (status.lastHint) status.lastHint = hint
+  }
   if (!hostOffersTerminal(hostDef)) status.terminal = false
   // A readiness answer describes the daemon we are talking to now; while the
   // host is down the connect error is the thing to show.
@@ -261,7 +272,8 @@ function offHostStatus(hostKey: string, def: HostDef, now: number): HostStatus {
  * other way (the cloud box, through the companion's daemon tunnel) cannot.
  */
 export function hostOffersTerminal(def: HostDef): boolean {
-  return def.cloud_box !== true
+  // The cloud box and a machine on the host network have no SSH door (the terminal is ssh + dtach).
+  return def.cloud_box !== true && def.transport !== 'net'
 }
 
 /**

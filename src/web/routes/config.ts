@@ -652,6 +652,17 @@ configRouter.put('/', async (req: Request, res: Response, next: NextFunction) =>
         const kept = (current as Record<string, { server?: unknown }>)[key]?.server
         if (host && typeof host === 'object' && host.server === undefined && kept !== undefined) sent[key] = { ...host, server: kept }
       }
+      // A machine on the host network is written by the network only (core/net/net-mac.ts):
+      // the editor has no field for it, and one it leaves out is removed with Remove,
+      // which also takes it off the companion's list.
+      const { keepNetHosts, NetHostAliasTaken } = await import('../../core/net/net-hosts.js')
+      try {
+        body.hosts = keepNetHosts(sent, current) as typeof body.hosts
+      } catch (err) {
+        if (!(err instanceof NetHostAliasTaken)) throw err
+        res.status(409).json({ error: err.message, code: 'host_alias_taken', field: `hosts.${err.alias}` })
+        return
+      }
     }
     // And only the person at this machine changes one: it installs and runs a program
     // there and can put a tunnel in front of it (core/host-server/).
