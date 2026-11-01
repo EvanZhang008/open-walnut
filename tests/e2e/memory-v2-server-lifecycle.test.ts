@@ -145,8 +145,8 @@ describe('Category 6: Server Lifecycle', () => {
     // the old layout and must not be regrown by server start. (TOPICS_DIR
     // exists here only because this suite seeds topic files for index tests.)
     expect(fs.existsSync(MEMORY_INDEX_FILE)).toBe(false);
-    // compaction/ is still a live directory (background compaction output).
-    expect(fs.existsSync(COMPACTION_DIR)).toBe(true);
+    // compaction/ is made by the compaction that writes into it (src/core/working-memory.ts),
+    // not at start: since 2026-10-31 a start pre-creates no empty memory folders.
   });
 
   // ── 6.8 Working Memory Updater Reset on Startup ──
