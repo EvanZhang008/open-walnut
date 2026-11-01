@@ -387,14 +387,16 @@ describe.each(TWINS)('big stream resume: $name', (twin) => {
     fs.writeFileSync(path.join(projects, 'cron-1.jsonl'), L({ type: 'user', message: { content: 'hi' } }))
     const jsonl = path.join(dirs.streams, 'cron-1.jsonl')
     const size = writeBigStream(jsonl, 8, { cron: true })
-    const ino = fs.statSync(jsonl).ino
+    const oldEpoch = epochOf(jsonl)
     const resumed = await rpc({
       cmd: 'start', sid: 'cron-1', cwd: root, message: '', mode: 'default', resume: true,
       args: ['/bin/sh', '-c', 'sleep 30', 'sh', '--resume', 'cron-1'],
     })
     expect(resumed.ok).toBe(true)
     expect(resumed.offset).toBe(0)
-    expect(fs.statSync(jsonl).ino).not.toBe(ino)
+    // A new file, told by the epoch the daemon itself uses: Linux reuses a freed
+    // inode number at once, so the inode alone may repeat (ext4, XFS).
+    expect(epochOf(jsonl)).not.toBe(oldEpoch)
     expect(fs.statSync(jsonl).size).toBeLessThan(size / 1000)
     expect(daemonLog(dirs)).toMatch(/"stream rotation carried armed work"/)
     expect(daemonLog(dirs)).not.toMatch(/"stream rotation skipped"/)
