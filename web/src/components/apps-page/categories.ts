@@ -18,6 +18,10 @@ export const PLUGIN_CATEGORY_LABELS: Readonly<Record<PluginCategoryId, string>> 
 /** What the page shows: everything, one section, or one plugin group. */
 export type AppsFilter = 'all' | 'builtin' | 'get' | PluginCategoryId
 
+export function isAppsFilter(v: unknown): v is AppsFilter {
+  return v === 'all' || v === 'builtin' || v === 'get' || (PLUGIN_CATEGORY_ORDER as readonly unknown[]).includes(v)
+}
+
 export function categoryOf(row: { category?: string }): PluginCategoryId {
   return (PLUGIN_CATEGORY_ORDER as readonly string[]).includes(row.category ?? '')
     ? row.category as PluginCategoryId

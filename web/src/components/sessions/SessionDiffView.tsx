@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, useCallback, type ReactNode, type ReactElement, type MouseEvent as ReactMouseEvent } from 'react';
+import { isBoolean, usePageView } from '@/utils/view-memory';
 import { stableHtml } from '@/hooks/useStableHtml';
 import { useDraft } from '@/hooks/useDraft';
 import { draftHash, draftKey } from '@/utils/drafts';
@@ -1503,7 +1504,8 @@ export function SessionDiffView({ sessionId, sessionCwd, sessionHost, onSelectCo
   // nulls selectedId — the ref survives that so the restore still happens.
   const pendingRestoreRef = useRef<string | null>(loadDiffMemory(sessionId).selectedId ?? null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [treeCollapsed, setTreeCollapsed] = useState(false);
+  // The file tree hidden or shown stays as it was left, in every diff (utils/view-memory.ts).
+  const [treeCollapsed, setTreeCollapsed] = usePageView('diff', 'treeCollapsed', false, isBoolean);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Resizable tree rail (left of the diff). Stored as % of viewport.

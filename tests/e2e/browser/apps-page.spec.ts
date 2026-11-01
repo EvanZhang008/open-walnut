@@ -3,6 +3,7 @@ import net from 'node:net'
 import { expect, test, type Page } from '@playwright/test'
 import { bunRuntime } from '../../helpers/bun-runtime.js'
 import { backToApps, openBuiltinDetail, openPluginDetail } from './apps-store-helpers'
+import { isolateUiPrefs } from './todo-panel-helpers'
 
 /**
  * The Apps page (/apps): every built-in app, every plugin and its Apps, and where to
@@ -280,7 +281,9 @@ test('the page opens on the plugins: with a screen, then in the background, and 
   await expect(ui.getByTestId('plugin-card-sigma')).toBeVisible()
 })
 
-test('a category chip narrows the plugins; a search with no match says so and Clear restores', async ({ page }) => {
+test('a category chip narrows the plugins and stays picked; a search with no match says so and Clear restores', async ({ page }) => {
+  // The chip it keeps stays in this page's storage, never on the shared server's prefs.
+  await isolateUiPrefs(page)
   await home(page)
   await openApps(page)
   const kinds = page.locator('[data-testid^="apps-kind-"]')
@@ -304,6 +307,15 @@ test('a category chip narrows the plugins; a search with no match says so and Cl
   await page.getByTestId('apps-chip-builtin').click()
   await expect(page.getByTestId('apps-builtin')).toBeVisible()
   await expect(kinds).toHaveCount(0)
+  // The chip stays picked: another page and back, then a reload (utils/view-memory.ts).
+  await page.getByTestId('sidebar-core-app-settings').click()
+  await expect(page.getByTestId('apps-page')).toHaveCount(0)
+  await page.getByTestId('sidebar-core-app-apps').click()
+  await expect(page.getByTestId('apps-builtin')).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByTestId('apps-chip-builtin')).toHaveAttribute('aria-pressed', 'true')
+  await page.reload()
+  await expect(page.getByTestId('apps-chip-builtin')).toHaveAttribute('aria-pressed', 'true', { timeout: 30_000 })
+  await expect(page.getByTestId('apps-builtin')).toBeVisible()
   await page.getByTestId('apps-chip-all').click()
   await expect(page.getByTestId('apps-chip-all')).toHaveAttribute('aria-pressed', 'true')
   await expect.poll(() => cards.count()).toBe(total)

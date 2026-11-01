@@ -12,6 +12,8 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { readOrgPlace, writeOrgPlace } from './org-place';
+import { usePageViewOf } from '@/utils/view-memory';
+import { oneOf } from '@/hooks/usePersistentState';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import type { Task } from '@open-walnut/core';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
@@ -31,10 +33,10 @@ import { OrgAvatar } from './OrgChannelList';
 import { useHasBoard } from './useBoardOwner';
 import { flashProbeEnabled } from '@/utils/flash-probe';
 import { log } from '@/utils/log';
-import { briefUnread, markBriefSeen, readBriefFolded, type OrgTopView } from './org-brief-model';
+import { ORG_TOP_VIEWS, briefUnread, markBriefSeen, readBriefFolded, type OrgTopView } from './org-brief-model';
 import { briefUpdating } from '@open-walnut/brief-fresh';
 import { useBriefRefresh } from './useBriefRefresh';
-import { ORG_TASK_TAB_LABELS, orgTaskTabs, ownAskFirst, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
+import { ORG_RAIL_TABS, ORG_TASK_TAB_LABELS, orgTaskTabs, ownAskFirst, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
 import { stateCountLabel } from '@open-walnut/user-status';
 import {
   mainTeamColumns, teamColumns, type ChannelRow, type OrgAlertView, type TeamColumn,
@@ -163,15 +165,16 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   /** The chat's Inbox tab, asked for by Answer on a letter (SessionPanel inboxRequest), for the
    *  session it was asked of: a replaced session's new panel does not reopen it. */
   const [chatInbox, setChatInbox] = useState<{ sid: string; n: number } | null>(null);
-  /** Above the chat: Task (Latest and the tasks by status) or the Brief its lead or Main keeps
-   *  (OrgBrief). A node always opens on Task (2026-10-30, the user, translated: "by default it shows this status";
-   *  2026-10-31: "this status should probably just be called task"). */
-  const [topPick, setTopPick] = useState<OrgTopView>('task');
+  /** Above the chat: Task (Latest and the tasks by status), the Brief its lead or Main keeps
+   *  (OrgBrief), or Threads. Task first (2026-10-30, the user, translated: "by default it shows this status");
+   *  after that each node opens on the view it was left on (2026-11-01: "If I was in Threads it puts me back
+   *  in Task"), kept per node (utils/view-memory.ts). */
+  const [topPick, setTopPick] = usePageViewOf<OrgTopView>('org', 'node.top', row.key, 'task', oneOf(ORG_TOP_VIEWS));
   const [briefFolded, setBriefFolded] = useState(readBriefFolded);
   const keepsBrief = contact?.org_role === 'main' || contact?.org_role === 'lead';
   const topView: OrgTopView = keepsBrief ? topPick : 'task';
-  /** The Task view's tab: Needs you unless the user picked another (a node opens on it). */
-  const [taskTab, setTaskTab] = useState<OrgRailTab>('needs');
+  /** The Task view's tab: Needs you until the user picks another, then the one he left it on. */
+  const [taskTab, setTaskTab] = usePageViewOf<OrgRailTab>('org', 'node.taskTab', row.key, 'needs', oneOf(ORG_RAIL_TABS));
   const tabs = useMemo(() => orgTaskTabs(row, rows, tasks, now), [row, rows, tasks, now]);
   const openTab = (t: OrgTaskTab) => { setTopPick('task'); setTaskTab(t); };
   const brief = keepsBrief ? contact?.brief : undefined;

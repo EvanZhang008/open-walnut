@@ -140,6 +140,7 @@ export function briefCountsLine(b: StatusBrief): string {
 }
 
 export type StatusFilter = 'open' | UserState;
+export const isStatusFilter = (v: unknown): v is StatusFilter => v === 'open' || (USER_STATES as readonly unknown[]).includes(v);
 
 /** The rows a filter shows, in the table's order: Needs you, Working, Waiting (open), or one state. */
 export function filteredRows(board: StatusBoard, filter: StatusFilter): StatusRow[] {

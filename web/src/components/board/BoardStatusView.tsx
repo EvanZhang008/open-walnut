@@ -16,12 +16,13 @@ import { CEO_LABEL, VP_LABEL, orgDisplayTitle } from '@open-walnut/org-tree';
 import { RECENT_COMPLETED_DAYS } from '@/api/tasks';
 import { formatWaitUntil } from '@/components/tasks/TaskStatusControl';
 import { timeAgo } from '@/utils/time';
+import { usePageViewOf } from '@/utils/view-memory';
 import { log } from '@/utils/log';
 import { apiPost } from '@/api/client';
 import { LiveActivityLine } from './LiveActivityLine';
 import { useLiveActivity } from '@/stores/live-activity-store';
 import {
-  briefCountsLine, buildStatusBoard, filteredRows, rowTime, statusBrief, waitingLine,
+  briefCountsLine, buildStatusBoard, filteredRows, isStatusFilter, rowTime, statusBrief, waitingLine,
   type StatusFilter, type StatusRow,
 } from './board-status-model';
 import '@/styles/board-overview.css';
@@ -218,7 +219,8 @@ function TeamStopControl({ owner, ownerId, working }: { owner: Task | undefined;
 }
 
 export function BoardStatusView({ ownerId, ownerTitle, tasks, loading, onOpenTask, onOpenPage, soloExtra }: BoardStatusViewProps) {
-  const [filter, setFilter] = useState<StatusFilter>('open');
+  // Each board's filter stays as it was left (utils/view-memory.ts).
+  const [filter, setFilter] = usePageViewOf<StatusFilter>('board', 'statusFilter', ownerId, 'open', isStatusFilter);
   // A minute clock is not needed: the server rewrites a status when it moves, and the
   // "updated" column is read again on every render the task list causes.
   const board = useMemo(() => buildStatusBoard({ ownerId, tasks, now: Date.now(), doneWindowDays: RECENT_COMPLETED_DAYS }), [ownerId, tasks]);

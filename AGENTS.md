@@ -716,6 +716,10 @@ Plans: architecture diagrams first → UX scenarios → pseudocode. No detailed 
 
 **Before touching any dropdown/menu/flyout in `web/src/`, read ["Menus & overlays — hard rules"](./web/src/AGENTS.md#menus--overlays--hard-rules).** Every rule there is a shipped incident. The one-line version: menus never overflow the viewport (always place via `useMenuPlacement`); unbounded content becomes its own portalled flyout, never inline growth; no native `<select>` inside styled menus; menu portals need `onPointerDown` stopPropagation or dnd-kit drags the row; outside-click closers must exempt child portals.
 
+### A page's view choice is kept: `usePageView` (web/src/utils/view-memory.ts)
+
+Every route but Home unmounts on navigation, so a tab, filter, sort or show-this toggle held in `useState` comes back reset (2026-11-01, the user: "Walnut needs to remember what was open last time, permanently, on every page"). Keep it with `usePageView(page, name, initial, accept)`, or `usePageViewOf(..., id, ...)` for one per node or board; it is mirrored to ui-prefs like the layout. A dialog, a menu, a typed search or one search's results start empty. `tests/web/view-memory-guard.test.ts` fails on a new view-named `useState` started from a literal until it is kept or listed as passing, with why.
+
 ### Frontend logging: `import { log } from '@/utils/log'`
 
 Use the structured logger (`log.info('subsystem', 'message', { sessionId, taskId })`) — never raw `console.log`. IDs must be **full, never truncated** so `grep <sessionId>` traces across browser + server. The logger routes through `console.log`/`warn`/`error` which the browser-logger monkey-patch forwards to `/tmp/open-walnut/`. Never use `console.debug` (invisible to forwarder).

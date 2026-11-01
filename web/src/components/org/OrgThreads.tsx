@@ -32,6 +32,7 @@ import { stripTurnMarker } from '@/utils/turn-end-marker';
 import { stripQuestionTag } from '@/utils/question-tag';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { timeAgo } from '@/utils/time';
+import { isBoolean, usePageView } from '@/utils/view-memory';
 import type { OrgThread, OrgThreadMessage, OrgThreadState } from '@/api/org-threads';
 import type { OrgThreadsState } from './useOrgThreads';
 import '@/styles/org-threads.css';
@@ -290,7 +291,8 @@ function ThreadCard({ t, all, tasks, onOpenTask, state, onFollowUp, name, now }:
 }
 
 export function OrgThreads({ name, state, tasks, onOpenTask, onFollowUp, now }: Props) {
-  const [showClosed, setShowClosed] = useState(false);
+  // Whether the week's closed threads are open stays as it was left (utils/view-memory.ts).
+  const [showClosed, setShowClosed] = usePageView('org', 'threads.showClosed', false, isBoolean);
   const all = state.threads;
   const open = useMemo(() => (all ?? []).filter((t) => !t.closed), [all]);
   const closed = useMemo(() => (all ?? []).filter((t) => !!t.closed), [all]);

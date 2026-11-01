@@ -20,6 +20,7 @@
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 import { usePhoneLayerWithBar } from './phone-session-layer';
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, type ReactNode } from 'react';
+import { isBoolean, usePageView } from '@/utils/view-memory';
 import { useNavigate } from 'react-router-dom';
 import { useDragGesture } from '@/hooks/useDragGesture';
 import { fetchDirList, fetchDirListMany, downloadFileUrl, fetchReferences, isHostReconnectingListing, HOST_RECONNECTING_CODE, type DirEntry, type DirListResponse, type ReferencesResponse } from '@/api/files';
@@ -172,7 +173,8 @@ function lastSegment(p: string): string {
 
 export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initialEndLine, initialTerm, openNonce, memoryScope, onSelectCode, barRightSlot }: SessionFileExplorerProps) {
   const [root, setRoot] = useState<string>(cwd || '~');
-  const [showHidden, setShowHidden] = useState(false);
+  // Hidden files shown or not stays as it was left, in every session's explorer (utils/view-memory.ts).
+  const [showHidden, setShowHidden] = usePageView('files', 'showHidden', false, isBoolean);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [childrenMap, setChildrenMap] = useState<Map<string, DirEntry[]>>(new Map());
   const [loadingPaths, setLoadingPaths] = useState<Set<string>>(new Set());

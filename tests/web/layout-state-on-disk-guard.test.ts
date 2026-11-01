@@ -74,7 +74,6 @@ const HOME_ORG = (rel: string): boolean =>
 /** localStorage keys in Home/Org files that are deliberately this device's own (they survive a restart here). */
 const DEVICE_LOCAL_KEYS: Record<string, string> = {
   'walnut.org.place': "the Org page's place; a phone's place is not the Mac's (org-place.ts)",
-  'walnut.org.topView': 'Status or Brief above the chat, per device',
   'walnut.org.briefFolded': 'the Brief folded, per device',
   'walnut.org.briefSeen': 'when this device last read each Brief',
 };

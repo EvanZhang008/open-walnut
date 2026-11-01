@@ -16,7 +16,7 @@
  *     wrong merge;
  *  2. Follow up sends a message filed under that thread (stored as a follow-up), the card counts it;
  *     Acknowledge takes it out of the open list into "N closed this week" (who and when stored),
- *     Reopen brings it back; a reload opens on Task and the same threads come back;
+ *     Reopen brings it back; another page and back, and a reload, open on Threads again;
  *  3. a long Unicode request reads in full when opened; an Acknowledge the server refuses puts the
  *     card back and says it did not save;
  *  4. a thread the lead opens itself (thread_create, from mail) shows its post as the lead's, with
@@ -213,11 +213,16 @@ test('Follow up files under the thread; Acknowledge closes it, Reopen brings it 
   await expect(page.getByTestId('org-thread-list').locator(`[data-thread-id="${t1.id}"]`)).toBeVisible()
   await expect.poll(async () => (await threads(request)).find((t) => t.id === t1.id)?.closed, { timeout: 15_000 }).toBeUndefined()
 
-  // A reload opens the node on Task; Threads shows the same threads.
-  await page.reload()
+  // Threads stays open: another page and back, then a reload (2026-11-01, the user: "If I was in
+  // Threads it puts me back in Task").
+  await page.getByTestId('sidebar-core-app-settings').click()
+  await expect(page.getByTestId('org-page')).toHaveCount(0)
+  await page.getByTestId('sidebar-org').click()
   const detail = page.getByTestId('org-detail')
-  await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'task', { timeout: 30_000 })
-  await detail.getByTestId('org-top-threads').click()
+  await expect(detail).toHaveAttribute('data-key', rowKey(LED), { timeout: 30_000 })
+  await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads', { timeout: 30_000 })
+  await page.reload()
+  await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads', { timeout: 30_000 })
   await expect(card(page, t1.id).getByTestId('org-thread-count')).toHaveText(/^3 messages/)
 })
 

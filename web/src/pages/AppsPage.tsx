@@ -21,7 +21,8 @@ import { peekPendingInstall, subscribeOpenLinks } from '@/utils/open-link'
 import { BuiltinAppsGrid, BuiltinDetail } from '@/components/apps-page/BuiltinAppsGrid'
 import { MakeAppCard } from '@/components/apps-page/MakeAppCard'
 import { builtinEntries, builtinMatches } from '@/components/apps-page/builtin-apps'
-import { PLUGIN_CATEGORY_LABELS, type AppsFilter } from '@/components/apps-page/categories'
+import { PLUGIN_CATEGORY_LABELS, isAppsFilter, type AppsFilter } from '@/components/apps-page/categories'
+import { usePageView } from '@/utils/view-memory'
 import { PluginStoreGrid, type PluginStoreSummary } from '@/components/apps-page/PluginStoreGrid'
 import { PluginDetail } from '@/components/apps-page/PluginDetail'
 import { usePluginStore } from '@/components/apps-page/usePluginStore'
@@ -63,9 +64,13 @@ function AppsPageBody() {
   }, [saveSection, notifySaved, notifySaveFailed])
   const apps = useAppCatalog()
   const preferences = useSyncExternalStore(subscribeAppPreferences, getAppPreferences, getAppPreferences)
-  const [filter, setFilter] = useState<AppsFilter>('all')
+  // The category picked stays picked when the page is left and opened again (utils/view-memory.ts).
+  const [kept, setFilter] = usePageView<AppsFilter>('apps', 'filter', 'all', isAppsFilter)
   const [query, setQuery] = useState('')
   const [summary, setSummary] = useState<PluginStoreSummary>({ loaded: false, categories: [], matches: 0 })
+  // A kept category with no plugins now (a list still loading, another device's plugins) has no
+  // chip: the page shows All, and the kept choice stays for when it is back.
+  const filter: AppsFilter = summary.loaded && kept !== 'all' && kept !== 'get' && kept !== 'builtin' && !summary.categories.includes(kept) ? 'all' : kept
   const onSummary = useCallback((next: PluginStoreSummary) => setSummary(next), [])
   // An install link lands here (App.tsx); its card lives in the plugin part, so a
   // filter or a search that hides that part gives way.

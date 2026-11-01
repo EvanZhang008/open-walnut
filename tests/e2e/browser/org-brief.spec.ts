@@ -218,22 +218,38 @@ test('a task the Brief names moves: its line shows it now, the head counts it, a
   expect(back.ok(), await back.text()).toBe(true)
 })
 
-test('Fold keeps the first lines and survives a reload; a reload opens on Task', async ({ page }) => {
+test('Fold keeps the first lines and survives a reload; each node opens on the view it was left on', async ({ page }) => {
   await isolateUiPrefs(page)
   await loadHome(page)
   await openNode(page, LED)
   const detail = page.getByTestId('org-detail')
+  // A node seen for the first time opens on Task.
+  await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'task')
   await detail.getByTestId('org-top-brief').click()
   await detail.getByTestId('org-brief-fold').click()
   await expect(detail.getByTestId('org-brief')).toHaveClass(/is-folded/)
+  // A reload comes back on the Brief, still folded (2026-11-01, the user: "Walnut needs to
+  // remember what was open last time, permanently, on every page").
   await page.reload()
   await expect(page.getByTestId('org-detail')).toHaveAttribute('data-key', rowKey(LED))
-  await expect(page.getByTestId('org-top')).toHaveAttribute('data-view', 'task')
-  await expect(page.getByTestId('org-task-view')).toBeVisible()
-  await page.getByTestId('org-top-brief').click()
+  await expect(page.getByTestId('org-top')).toHaveAttribute('data-view', 'brief')
   await expect(page.getByTestId('org-brief')).toHaveClass(/is-folded/)
   await page.getByTestId('org-brief-fold').click()
   await expect(page.getByTestId('org-brief')).not.toHaveClass(/is-folded/)
+  // The view is the node's own: Main opens on its own (Task), and the lead's Brief waits for it.
+  await page.getByTestId('org-channel-main').click()
+  await expect(page.getByTestId('org-detail')).toHaveAttribute('data-key', 'main')
+  await expect(page.getByTestId('org-top')).toHaveAttribute('data-view', 'task')
+  await openNode(page, LED)
+  await expect(page.getByTestId('org-top')).toHaveAttribute('data-view', 'brief')
+  // The Task view's tab too: Waiting picked, another page, back.
+  await page.getByTestId('org-top-task').click()
+  await page.locator('[data-testid="org-task-tab"][data-tab="waiting"]').click()
+  await page.getByTestId('sidebar-core-app-settings').click()
+  await expect(page.getByTestId('org-page')).toHaveCount(0)
+  await openNode(page, LED)
+  await expect(page.getByTestId('org-top')).toHaveAttribute('data-view', 'task')
+  await expect(page.locator('[data-testid="org-task-tab"][data-tab="waiting"]')).toHaveAttribute('aria-selected', 'true')
 })
 
 test('a rewrite reaches an open Brief at once, with no reload', async ({ page, request }) => {
