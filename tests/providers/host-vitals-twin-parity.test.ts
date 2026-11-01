@@ -74,10 +74,19 @@ describe('the inlined factory behaves like the imported one', () => {
   const strict = <T>(fn: T): T => new Function('"use strict"; return (' + String(fn) + ')')() as T
   const T0 = Date.UTC(2026, 9, 20, 6)
 
+  // A host with none of the tools: each command fails at once. A stub that never called back
+  // left every GPU read (nvidia-smi, ioreg) to its 8 s timeout, four of them a test, and the
+  // test ran 32 s, past the quick tier's 30 s (2026-11-01, runs 41283845821 and 41287770979:
+  // the timeout reads "STACK_TRACE_ERROR" under bun).
+  const noTool: HostVitalsDeps['execFile'] = (_file, _args, _opts, cb) => {
+    cb(Object.assign(new Error('not installed'), { code: 'ENOENT' }), '', '')
+    return null
+  }
+
   async function run(factory: typeof createHostVitals, name: string) {
     const clock = { t: T0 }
     const deps: HostVitalsDeps = {
-      fs, os, execFile: () => null, platform: process.platform === 'darwin' ? 'darwin' : 'linux',
+      fs, os, execFile: noTool, platform: process.platform === 'darwin' ? 'darwin' : 'linux',
       dir: path.join(tmp, name), startedAt: T0 - 60_000, linked: () => clock.t < T0 + 5 * 60_000, running: () => 4,
       now: () => clock.t,
     }
@@ -95,8 +104,11 @@ describe('the inlined factory behaves like the imported one', () => {
   }
 
   it('tick and vitals give the same answers', async () => {
+    const began = Date.now()
     const imported = await run(createHostVitals, 'imported')
     const inlined = await run(strict(createHostVitals), 'inlined')
+    // Nothing here waits on a real command: well inside the 30 s test timeout on any runner.
+    expect(Date.now() - began).toBeLessThan(10_000)
     expect(imported.lines).toHaveLength(10)
     expect(imported.windows[0]).toMatchObject({ days: 1, minutes: 10, up: 10, linked: 5, drops: 1 })
     expect(imported.memKnown).toBe(true)
