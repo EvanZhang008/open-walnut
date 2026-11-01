@@ -46,7 +46,8 @@ function send(): void {
   timer = null;
   const keys = pending.splice(0, pending.length);
   if (!keys.length) return;
-  apiPost('/api/page-visits', { keys }, { background: true, priority: 'low', timeoutMs: 10_000 })
+  // keepalive: a batch still in flight when the page reloads or closes is not cancelled.
+  apiPost('/api/page-visits', { keys }, { background: true, priority: 'low', timeoutMs: 10_000, keepalive: true })
     .catch((err) => log.info('page-visits', 'visit batch not recorded', { error: err instanceof Error ? err.message : String(err), count: keys.length }));
 }
 
@@ -58,13 +59,16 @@ export function recordVisit(key: string | null | undefined): void {
 }
 
 if (typeof document !== 'undefined') {
-  // A window going away sends what it holds now, not never.
+  // A window going away sends what it holds now, not never (pagehide too: a reload may not hide first).
+  const flush = () => {
+    if (!pending.length) return;
+    if (timer) clearTimeout(timer);
+    send();
+  };
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden' && pending.length) {
-      if (timer) clearTimeout(timer);
-      send();
-    }
+    if (document.visibilityState === 'hidden') flush();
   });
+  window.addEventListener('pagehide', flush);
 }
 
 export function fetchVisits(): Promise<VisitStore> {

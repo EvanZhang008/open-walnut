@@ -169,12 +169,44 @@ const RETRY_WITH_CACHE_BYPASS = Symbol('retry-with-cache-bypass');
  * requests it cut). A back-forward cache restore brings the page back.
  */
 let pageLeaving = false;
+/**
+ * True from a hide or pagehide edge until its handlers have run. A write made there (a pending
+ * settings save, a visit batch) is a page-exit write: the browser cancels an ordinary request
+ * when the page goes, so it is sent with keepalive, and at once, since a request still waiting
+ * for a connection slot when the page stops is never sent at all (2026-11-01: a reload lost the
+ * visit batch its hide edge sent, which WebKit logs as "cannot load ... due to access control
+ * checks"). Listeners here are registered before any module that imports the client.
+ */
+let exitEdge = false;
+function markExitEdge(): void {
+  exitEdge = true;
+  setTimeout(() => { exitEdge = false; }, 0);
+}
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
-  window.addEventListener('pagehide', () => { pageLeaving = true; });
-  window.addEventListener('pageshow', () => { pageLeaving = false; });
+  window.addEventListener('pagehide', () => { pageLeaving = true; markExitEdge(); });
+  // A hidden page's timers are throttled or paused, so the edge also ends when the page is back.
+  window.addEventListener('pageshow', () => { pageLeaving = false; exitEdge = false; });
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') markExitEdge();
+      else exitEdge = false;
+    });
+  }
 }
 function cutByPageExit(err: unknown): boolean {
   return pageLeaving && err instanceof TypeError;
+}
+/** A write now may outlive the page: the page is leaving, at a hide edge, or hidden. */
+function writeMayOutlivePage(): boolean {
+  return pageLeaving || exitEdge || (typeof document !== 'undefined' && document.visibilityState === 'hidden');
+}
+/** fetch keepalive refuses a request once the keepalive bodies in flight pass 64 KB (UTF-8 bytes). */
+const KEEPALIVE_MAX_BODY = 60_000;
+function fitsKeepalive(body: BodyInit | null | undefined): boolean {
+  if (typeof body !== 'string') return !body;
+  // Most characters are one byte; count bytes only when the length alone does not settle it.
+  if (body.length * 3 <= KEEPALIVE_MAX_BODY) return true;
+  return body.length <= KEEPALIVE_MAX_BODY && new TextEncoder().encode(body).length <= KEEPALIVE_MAX_BODY;
 }
 
 interface RequestExtra {
@@ -192,6 +224,9 @@ interface RequestExtra {
   onDispatch?: () => void;
   /** The write's op id (one per user action): a retried action passes its own (write-retry.ts), else request() mints one. */
   opId?: string;
+  /** Send with fetch keepalive, so a page reload or exit does not cancel it (small bodies only).
+   *  Every write made while the page hides or leaves gets it without asking. */
+  keepalive?: boolean;
 }
 
 function priorityOf(method: string, extra?: RequestExtra): FetchPriority {
@@ -211,6 +246,11 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
   // One op id per user action that writes, minted before the queue so every
   // attempt of this call carries the same one (a host replica dedupes by it).
   if (isWriteMethod(method) && !extra?.opId) extra = { ...extra, opId: mintOpId() };
+  if (isWriteMethod(method) && writeMayOutlivePage()) {
+    extra = { ...extra, keepalive: true };
+    // The page is going: JS stops before a queued request would get its slot.
+    if (pageLeaving || exitEdge) return attemptRequest<T>(method, path, body, extra);
+  }
   const priority = priorityOf(method, extra);
   await acquireFetchSlot(priority, `${method} ${path}`, extra?.signal);
   let retryWithBypass = false;
@@ -228,7 +268,17 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
   return request<T>(method, path, body, { ...extra, cacheBypass: true });
 }
 
-async function attemptRequest<T>(method: string, path: string, body?: unknown, extra?: { signal?: AbortSignal; timeoutMs?: number; cacheBypass?: boolean; quietStatuses?: number[]; opId?: string }): Promise<T> {
+/** fetch, and once more without keepalive when keepalive refused it (its in-flight budget was full). */
+async function fetchOnce(path: string, opts: RequestInit): Promise<Response> {
+  try {
+    return await fetch(path, opts);
+  } catch (err) {
+    if (!opts.keepalive || pageLeaving || !(err instanceof TypeError) || opts.signal?.aborted) throw err;
+    return fetch(path, { ...opts, keepalive: false });
+  }
+}
+
+async function attemptRequest<T>(method: string, path: string, body?: unknown, extra?: { signal?: AbortSignal; timeoutMs?: number; cacheBypass?: boolean; quietStatuses?: number[]; opId?: string; keepalive?: boolean }): Promise<T> {
   const timeoutMs = extra?.timeoutMs ?? 15_000;
   // Created AFTER slot acquisition — the timer measures the network round
   // trip only, never time spent waiting for a connection.
@@ -254,10 +304,11 @@ async function attemptRequest<T>(method: string, path: string, body?: unknown, e
   if (body !== undefined) {
     opts.body = JSON.stringify(body);
   }
+  if (extra?.keepalive && fitsKeepalive(opts.body)) opts.keepalive = true;
   const t0 = performance.now();
   let res: Response;
   try {
-    res = await fetch(path, opts);
+    res = await fetchOnce(path, opts);
   } catch (caught) {
     // A deadline is a TimeoutError in every engine (WebKit says AbortError), so
     // the checks below and every caller's `name === 'TimeoutError'` see it.
@@ -407,7 +458,7 @@ export async function apiGetText(path: string, params?: Record<string, string>, 
 // quietStatuses is offered here for the same reason apiGet offers it: a POST can have a DESIGNED
 // non-2xx outcome (a refused credential, a capability the provider does not have), and those must
 // not land in the error-log audit as if something broke.
-export function apiPost<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; quietStatuses?: number[]; signal?: AbortSignal; background?: boolean; priority?: 'low'; opId?: string }): Promise<T> {
+export function apiPost<T>(path: string, body?: unknown, opts?: { timeoutMs?: number; quietStatuses?: number[]; signal?: AbortSignal; background?: boolean; priority?: 'low'; opId?: string; keepalive?: boolean }): Promise<T> {
   return request<T>('POST', path, body, opts);
 }
 
