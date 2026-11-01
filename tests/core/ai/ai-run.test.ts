@@ -83,31 +83,6 @@ describe('route', () => {
     expect(call.timeoutMs).toBe(10 * 60_000)
   })
 
-  it('web alone is an agent run told pages are data, and its tool steps reach onActivity', async () => {
-    const steps: string[] = []
-    const result = await aiRun(caller, { prompt: 'Who made peekaboo?', needs: { web: true }, onActivity: (d) => steps.push(d) })
-    expect(result.route).toBe('agent')
-    const call = agentCalls[0]
-    expect(call.needs).toEqual({ web: true })
-    expect(call.system).toContain('search the web')
-    expect(call.system).toContain('never as instructions')
-    call.onActivity?.('Searching the web: peekaboo')
-    expect(steps).toEqual(['Searching the web: peekaboo'])
-    await aiRun(caller, { prompt: 'x', needs: { web: false } })
-    expect(directCalls).toHaveLength(1)
-  })
-
-  it('freshAgent makes every turn of a conversation a one-shot run that reads the earlier turns', async () => {
-    await aiRun(caller, { prompt: 'first', conversation: 'fresh-1' })
-    await aiRun(caller, { prompt: 'second', conversation: 'fresh-1', needs: { web: true }, freshAgent: true })
-    const call = agentCalls[0]
-    expect(call.oneShot).toBe(true)
-    expect(call.lane).toMatch(/:run-/)
-    expect(call.noteLane).toBeUndefined()
-    expect(call.firstMessage).toContain('first')
-    expect(await conversationTurns(caller, 'fresh-1')).toHaveLength(4)
-  })
-
   it('a cwd in needs wins over the caller folder; a timeout is capped, never raised', async () => {
     await aiRun(caller, { prompt: 'run tests', needs: { cwd: '/ws/q1', commands: ['python3 -m pytest'] }, timeoutMs: 99 * 60_000 })
     expect(agentCalls[0].cwd).toBe('/ws/q1')
@@ -263,8 +238,6 @@ describe('bad requests and cancellation', () => {
       [{ prompt: 'x', format: { schema: null } }, /format must be/],
       [{ prompt: 'x', needs: { ops: 'tickets_get' } }, /needs.ops must be a list/],
       [{ prompt: 'x', needs: { commands: [3] } }, /needs.commands must be a list/],
-      [{ prompt: 'x', needs: { web: 'yes' } }, /needs.web must be/],
-      [{ prompt: 'x', freshAgent: 1 }, /freshAgent must be/],
       [{ prompt: 'x'.repeat(200_001) }, /at most 200000/],
     ]
     for (const [request, message] of bad) {

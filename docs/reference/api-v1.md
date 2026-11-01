@@ -1495,15 +1495,8 @@ What a launcher on the Mac calls (the Alfred workflow and Raycast extension in
 `desktop/launchers/`, the app's Spotlight actions in `desktop/WalnutIntents.swift`).
 Every route answers `501 not_supported_cloud` on a cloud companion.
 
-- `POST /quick/ask {text, context?, conversation?, tools?}`: a fast answer from a light model with no
-  tools (`ai.run`, caller `walnut:quick-input`, effort `quick`). With `tools: true` (added
-  2026-11-01) it is a light agent session that may search the web and read pages and nothing else
-  (`needs: {web: true}`; none of the user's tasks, notes or files), answering within 3 minutes, and
-  each step it starts streams first as `{"type":"activity","detail":"Searching the web: …"}`. One
-  `conversation` may switch between the two at any turn: each turn with tools is a fresh one-shot
-  session that reads every earlier turn, so none stays running. Tools are refused
-  (`400 tools_with_selection`) with `context` or in a conversation that carried some, because a
-  page the agent reads could tell it to send that text out. `text` is 1 to 20000 characters;
+- `POST /quick/ask {text, context?, conversation?}`: a fast answer from a light model with no
+  tools (`ai.run`, caller `walnut:quick-input`, effort `quick`). `text` is 1 to 20000 characters;
   `context` (at most 60000) is text the user selected; the same `conversation` id lets a
   follow-up see the earlier turns. The answer streams as NDJSON lines:
   `{"type":"text","delta":"…"}`, then `{"type":"result","text":"…","durationMs":…}` or
@@ -1525,6 +1518,11 @@ Every route answers `501 not_supported_cloud` on a cloud companion.
   `{"type":"error","code","message"}`. The reply is the turn that took this message (matched by
   its delivery and turn generation), never a turn that was running before it; `unfinished` means
   the follow gave up after 15 minutes. Closing the request stops the follow, not Main's turn.
+- `POST /quick/session {text, taskId?, images?}` (added 2026-11-01): a normal Claude Code session
+  in Walnut, the kind the Ask Walnut chat runs. With no `taskId` a new ask starts with the text (the
+  phone's New chat); with the `taskId` the first answer named, the text goes into that ask's chat
+  (`404 task_not_found` for any other id). Answers the NDJSON stream of `/quick/main` with
+  `follow: true`: `{"type":"sent"|"held",taskId,sessionId,started}`, then the reply to this message.
 - `POST /quick/task-message {taskId, text, images?}`: the same send for one task found with
   `/quick/tasks`: the text (and `images`) go into that task's chat as the user's message, or start
   its session when it has none. `taskId` is the exact id (`404 task_not_found` for anything else,

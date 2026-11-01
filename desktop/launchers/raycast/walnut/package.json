@@ -28,14 +28,14 @@
       "name": "walnut-ai",
       "title": "Walnut AI",
       "subtitle": "Walnut",
-      "description": "A quick answer from Walnut's AI with follow-ups; Cmd+T switches to With tools (web search). Works as a fallback command: type anything in Raycast, then pick Walnut AI.",
+      "description": "A quick answer from Walnut's AI with follow-ups; Cmd+T switches to a Claude Code session in Walnut. Works as a fallback command: type anything in Raycast, then pick Walnut AI.",
       "mode": "view"
     },
     {
-      "name": "walnut-ai-tools",
-      "title": "Walnut AI with Tools",
+      "name": "walnut-ai-session",
+      "title": "Walnut AI Session",
       "subtitle": "Walnut",
-      "description": "Walnut's AI in a light agent session that searches the web and reads pages, with follow-ups. Works as a fallback command.",
+      "description": "A normal Claude Code session in Walnut (an Ask Walnut chat) with follow-ups, its reply shown here. Works as a fallback command.",
       "mode": "view"
     }
   ],

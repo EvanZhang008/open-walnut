@@ -15,8 +15,6 @@ export interface AiNeeds {
   commands?: string[]
   /** Absolute folder the agent works in. */
   cwd?: string
-  /** Web search and page fetch (WebSearch, WebFetch). */
-  web?: boolean
 }
 
 export interface AiRunRequest {
@@ -36,12 +34,6 @@ export interface AiRunRequest {
   /** A person waits for this answer (an App's button), so it goes ahead of background work. */
   interactive?: boolean
   onText?: (delta: string) => void
-  /** Agent route: every turn of the conversation is a fresh one-shot session that reads the
-   *  earlier turns replayed, never a session kept alive between turns (for a caller that never
-   *  ends its conversations, and one that switches routes within one). */
-  freshAgent?: boolean
-  /** Agent route: one short line per tool step as it starts ("Search the web: …"). */
-  onActivity?: (detail: string) => void
   signal?: AbortSignal
 }
 

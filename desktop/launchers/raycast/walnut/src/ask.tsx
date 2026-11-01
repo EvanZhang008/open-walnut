@@ -113,10 +113,10 @@ export default function Command() {
                   target={<Conversation mode="quick" first={q} />}
                 />
                 <Action.Push
-                  title="Ask with Tools"
-                  icon={Icon.Globe}
+                  title="Ask in a Session"
+                  icon={Icon.Terminal}
                   shortcut={{ modifiers: ["cmd", "opt"], key: "return" }}
-                  target={<Conversation mode="quick" tools first={q} />}
+                  target={<Conversation mode="session" first={q} />}
                 />
                 <Action.Push
                   title="Tell Main and Wait for the Reply"
@@ -140,14 +140,14 @@ export default function Command() {
             }
           />
           <List.Item
-            id="quick-tools"
-            icon={Icon.Globe}
+            id="session"
+            icon={Icon.Terminal}
             title={q}
-            subtitle="Walnut AI with tools: searches the web"
+            subtitle="Session: a Claude Code session in Walnut"
             accessories={[{ text: "⌘⌥↵" }]}
             actions={
               <ActionPanel>
-                <Action.Push title="Ask with Tools" icon={Icon.Globe} target={<Conversation mode="quick" tools first={q} />} />
+                <Action.Push title="Ask in a Session" icon={Icon.Terminal} target={<Conversation mode="session" first={q} />} />
               </ActionPanel>
             }
           />

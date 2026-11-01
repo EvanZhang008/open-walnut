@@ -13,7 +13,7 @@ export interface QuickTask {
   stateLabel: string;
 }
 
-export type Mode = "quick" | "main";
+export type Mode = "quick" | "session" | "main";
 
 /** A picture sent with a message: raw base64 and its type (clipboard-image.ts makes one). */
 export interface QuickImage {
@@ -81,25 +81,15 @@ async function* lines(body: ReadableStream<Uint8Array>): AsyncGenerator<string> 
   if (buffer) yield buffer;
 }
 
-/**
- * A quick answer; `onText` gets the whole text so far each time more arrives. With `tools` it is a
- * light agent session that may search the web and read pages, and `onActivity` names each step.
- */
+/** A quick answer; `onText` gets the whole text so far each time more arrives. */
 export async function askQuick(
   text: string,
-  opts: {
-    conversation: string; context?: string; tools?: boolean; signal?: AbortSignal
-    onText: (text: string) => void; onActivity?: (detail: string) => void
-  },
+  opts: { conversation: string; context?: string; signal?: AbortSignal; onText: (text: string) => void },
 ): Promise<{ text: string; durationMs?: number }> {
   const res = await fetch(`${walnutBase()}/api/v1/quick/ask`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      text, conversation: opts.conversation,
-      ...(opts.context ? { context: opts.context } : {}),
-      ...(opts.tools ? { tools: true } : {}),
-    }),
+    body: JSON.stringify({ text, conversation: opts.conversation, ...(opts.context ? { context: opts.context } : {}) }),
     signal: opts.signal,
   });
   if (!res.ok || !res.body) {
@@ -109,7 +99,7 @@ export async function askQuick(
   let sofar = "";
   for await (const line of lines(res.body)) {
     if (!line.trim()) continue;
-    let value: { type?: string; delta?: string; text?: string; message?: string; detail?: string; durationMs?: number };
+    let value: { type?: string; delta?: string; text?: string; message?: string; durationMs?: number };
     try {
       value = JSON.parse(line);
     } catch {
@@ -118,8 +108,6 @@ export async function askQuick(
     if (value.type === "text") {
       sofar += value.delta ?? "";
       opts.onText(sofar);
-    } else if (value.type === "activity" && value.detail) {
-      opts.onActivity?.(value.detail);
     } else if (value.type === "result") {
       return { text: value.text ?? sofar, durationMs: value.durationMs };
     } else if (value.type === "error") {
@@ -139,19 +127,42 @@ export interface MainProgress {
  * Main's words for THIS message as it writes them (the server matches the turn that took it).
  * Resolves when that turn ends, or `held` when Main waits on the user's answer first.
  */
-export async function tellMain(
-  text: string,
-  opts: { signal?: AbortSignal; onProgress: (p: MainProgress) => void; onSent?: (taskId: string) => void },
-): Promise<{ text: string; taskId: string; held?: boolean; unfinished?: boolean }> {
-  const res = await fetch(`${walnutBase()}/api/v1/quick/main`, {
+export function tellMain(text: string, opts: FollowOpts): Promise<FollowedReply> {
+  return followReply("/api/v1/quick/main", { text, follow: true }, "Main", opts);
+}
+
+/**
+ * A normal Claude Code session in Walnut (an Ask Walnut chat): with no `taskId` a new one starts
+ * with the text, with the `taskId` the first answer named the text goes into the same chat. The
+ * reply streams back the way Main's does.
+ */
+export function askSession(text: string, taskId: string | undefined, opts: FollowOpts): Promise<FollowedReply> {
+  return followReply("/api/v1/quick/session", { text, ...(taskId ? { taskId } : {}) }, "The session", opts);
+}
+
+interface FollowOpts {
+  signal?: AbortSignal;
+  onProgress: (p: MainProgress) => void;
+  onSent?: (taskId: string) => void;
+}
+
+interface FollowedReply {
+  text: string;
+  taskId: string;
+  held?: boolean;
+  unfinished?: boolean;
+}
+
+async function followReply(path: string, body: Record<string, unknown>, who: string, opts: FollowOpts): Promise<FollowedReply> {
+  const res = await fetch(`${walnutBase()}${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text, follow: true }),
+    body: JSON.stringify(body),
     signal: opts.signal,
   });
   if (!res.ok || !res.body) {
     const err = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(err.error || `Main did not get it (HTTP ${res.status})`);
+    throw new Error(err.error || `${who} did not get it (HTTP ${res.status})`);
   }
   let taskId = "";
   let reply = "";
@@ -182,7 +193,7 @@ export async function tellMain(
     } else if (value.type === "result") {
       return { text: value.text || reply, taskId, unfinished: value.unfinished };
     } else if (value.type === "error") {
-      throw new Error(value.message || "Main's turn failed");
+      throw new Error(value.message || `${who}'s turn failed`);
     }
   }
   return { text: reply, taskId, unfinished: true };

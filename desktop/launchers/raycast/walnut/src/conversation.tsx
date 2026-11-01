@@ -1,13 +1,18 @@
 /**
- * One conversation with Walnut, a quick answer or Main: the list shows each question, the detail
- * pane the answer as it streams, and the search bar takes the next question (Enter sends it).
- * On an answer: Enter pastes it into the app you came from, Cmd+C copies it. A quick answer runs
- * in one of two ways, switched with Cmd+T at any turn: Quick (the model alone, about two seconds)
- * or With tools (a light agent session that searches the web and reads pages).
+ * One conversation with Walnut: the list shows each question, the detail pane the answer as it
+ * streams, and the search bar takes the next question (Enter sends it). On an answer: Enter pastes
+ * it into the app you came from, Cmd+C copies it.
+ *
+ * Three ways to answer, the first two switched with Cmd+T at any turn:
+ *   - Quick: the model alone, about two seconds (POST /quick/ask).
+ *   - Session: a normal Claude Code session in Walnut, an Ask Walnut chat with everything the
+ *     user's Claude Code has (POST /quick/session); Cmd+O opens it in Walnut.
+ *   - Main: Walnut's main agent (Ask Walnut's "Tell Main and wait").
+ * A switch carries over the turns the other side has not seen, so the thread is never lost.
  */
 import { Action, ActionPanel, Icon, List } from "@raycast/api";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { askQuick, Mode, NOT_RUNNING, openTaskLink, tellMain } from "./walnut";
+import { askQuick, askSession, Mode, NOT_RUNNING, openTaskLink, tellMain } from "./walnut";
 
 interface Turn {
   id: number;
@@ -16,8 +21,8 @@ interface Turn {
   status: "streaming" | "done" | "error" | "held";
   activity?: string;
   seconds?: number;
-  /** Asked with tools (web search and page reading). */
-  tools?: boolean;
+  /** Which side answered it. */
+  via: Mode;
 }
 
 function newConversation(): string {
@@ -29,22 +34,26 @@ function failure(error: unknown): string {
   return /fetch failed|ECONNREFUSED|connect/i.test(message) ? NOT_RUNNING : message;
 }
 
-export function Conversation(props: { mode: Mode; first?: string; selection?: string; app?: string; tools?: boolean }) {
-  const [mode] = useState<Mode>(props.mode);
-  const [tools, setTools] = useState(props.tools === true);
+const TITLE: Record<Mode, string> = { quick: "Walnut AI · Quick", session: "Walnut AI · Session", main: "Main" };
+
+export function Conversation(props: { mode: Mode; first?: string; selection?: string; app?: string }) {
+  const [mode, setMode] = useState<Mode>(props.mode);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
   const [selected, setSelected] = useState<string | undefined>(undefined);
-  const [mainTaskId, setMainTaskId] = useState<string | undefined>(undefined);
+  /** The task of Main, or of the session this conversation started. */
+  const [taskId, setTaskId] = useState<string | undefined>(undefined);
   const conversation = useRef(newConversation());
   const abort = useRef<AbortController | null>(null);
   const nextId = useRef(1);
+  /** Turn ids each side has read (asked there, or carried over to it). */
+  const seen = useRef<Record<Mode, Set<number>>>({ quick: new Set(), session: new Set(), main: new Set() });
 
   const update = (id: number, patch: Partial<Turn>) =>
     setTurns((all) => all.map((t) => (t.id === id ? { ...t, ...patch } : t)));
 
   const ask = useCallback(
-    async (question: string, withTools: boolean = tools) => {
+    async (question: string, via: Mode = mode) => {
       const text = question.trim();
       if (!text) return;
       abort.current?.abort();
@@ -52,40 +61,49 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
       abort.current = controller;
       const id = nextId.current++;
       const firstTurn = turns.length === 0;
-      setTurns((all) => [{ id, question: text, answer: "", status: "streaming", tools: mode === "quick" && withTools }, ...all]);
+      // The finished turns the other side answered and this one has not read, oldest first.
+      const unseen = [...turns].reverse().filter((t) => t.status === "done" && t.via !== via && !seen.current[via].has(t.id));
+      setTurns((all) => [{ id, question: text, answer: "", status: "streaming", via }, ...all]);
       setSelected(String(id));
       setInput("");
-      const selectionNote = props.selection && firstTurn
-        ? `${props.app ? `Text selected in ${props.app}` : "Selected text"}:\n${props.selection}`
-        : undefined;
+      for (const t of [...unseen, { id }]) seen.current[via].add(t.id);
+      const notes = [
+        props.selection && firstTurn ? `${props.app ? `Text selected in ${props.app}` : "Selected text"}:\n${props.selection}` : "",
+        unseen.length ? `Earlier in this chat:\n${unseen.map((t) => `Q: ${t.question}\nA: ${t.answer}`).join("\n\n")}` : "",
+      ].filter(Boolean);
       const started = Date.now();
+      const done = (answer: string) =>
+        update(id, { answer, status: "done", activity: undefined, seconds: (Date.now() - started) / 1000 });
       try {
-        if (mode === "quick") {
+        if (via === "quick") {
           const got = await askQuick(text, {
             conversation: conversation.current,
-            context: selectionNote,
-            tools: withTools,
+            context: notes.length ? notes.join("\n\n") : undefined,
             signal: controller.signal,
             onText: (answer) => update(id, { answer }),
-            onActivity: (activity) => update(id, { activity }),
           });
-          update(id, { answer: got.text, status: "done", activity: undefined, seconds: (got.durationMs ?? Date.now() - started) / 1000 });
-        } else {
-          const got = await tellMain(selectionNote ? `${text}\n\n${selectionNote}` : text, {
-            signal: controller.signal,
-            onSent: (taskId) => setMainTaskId(taskId),
-            onProgress: (p) => update(id, { answer: p.text, activity: p.activity }),
-          });
-          setMainTaskId(got.taskId);
-          if (got.held) {
-            update(id, { status: "held", answer: "Main is waiting for your answer to its question first, so nothing was sent. Open Main to answer it." });
-          } else {
-            const answer = got.text || (got.unfinished
-              ? "Main is still working on it. Its reply will be in Main's chat."
-              : "Main finished without a written reply. Open Main to see what it did.");
-            update(id, { answer, status: "done", activity: undefined });
-          }
+          update(id, { answer: got.text, status: "done", seconds: (got.durationMs ?? Date.now() - started) / 1000 });
+          return;
         }
+        const message = notes.length ? `${text}\n\n${notes.join("\n\n")}` : text;
+        const follow = {
+          signal: controller.signal,
+          onSent: (sentTo: string) => setTaskId(sentTo),
+          onProgress: (p: { text: string; activity?: string }) => update(id, { answer: p.text, activity: p.activity }),
+        };
+        const got = via === "main"
+          ? await tellMain(message, follow)
+          : await askSession(message, taskId, follow);
+        setTaskId(got.taskId);
+        if (got.held) {
+          const who = via === "main" ? "Main is" : "The session is";
+          update(id, { status: "held", answer: `${who} waiting for your answer to its question first, so nothing was sent. Open it in Walnut to answer.` });
+          return;
+        }
+        const who = via === "main" ? "Main" : "The session";
+        done(got.text || (got.unfinished
+          ? `${who} is still working on it. Its reply will be in its chat in Walnut.`
+          : `${who} finished without a written reply. Open it in Walnut to see what it did.`));
       } catch (error) {
         // A turn replaced by the next question keeps what it had, never a spinner forever.
         if (controller.signal.aborted) {
@@ -95,7 +113,7 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
         update(id, { status: "error", answer: failure(error) });
       }
     },
-    [mode, tools, props.app, props.selection, turns.length],
+    [mode, taskId, props.app, props.selection, turns],
   );
 
   // The first question is asked from a timer the effect's cleanup cancels: React may mount, unmount
@@ -116,32 +134,39 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
 
   useEffect(() => () => abort.current?.abort(), []);
 
-  const title = mode === "main" ? "Main" : tools ? "Walnut AI · With tools" : "Walnut AI · Quick";
-  // Never in a conversation about selected text: a page the agent reads could send that text out
-  // (the server refuses it too).
-  const switchTools = mode === "quick" && !props.selection ? (
-    <Action
-      title={tools ? "Switch to Quick (No Tools)" : "Switch to With Tools (Web Search)"}
-      icon={tools ? Icon.Bolt : Icon.Globe}
-      shortcut={{ modifiers: ["cmd"], key: "t" }}
-      onAction={() => setTools((on) => !on)}
-    />
-  ) : null;
   const placeholder = turns.length === 0
     ? props.selection
       ? "What should Walnut do with the selected text?"
-      : mode === "quick" ? (tools ? "Ask anything, Walnut may search the web…" : "Ask anything…") : "Tell Main…"
+      : mode === "main" ? "Tell Main…" : mode === "session" ? "Ask anything, in a Claude Code session…" : "Ask anything…"
     : "Ask a follow-up, then Enter…";
 
   const detailFor = (t: Turn) => {
-    const head = t.status === "streaming"
-      ? (t.answer ? "" : mode === "main"
-        ? (t.activity ? `_Main is working: ${t.activity}…_` : "_Main is reading it…_")
-        : t.activity ? `_${t.activity}…_` : "_…_")
+    const who = t.via === "main" ? "Main" : "Walnut";
+    const head = t.status === "streaming" && !t.answer
+      ? t.via === "quick"
+        ? "_…_"
+        : t.activity ? `_${who} is working: ${t.activity}…_` : `_${who} is reading it…_`
       : "";
-    const status = t.status === "error" ? `⚠️ ${t.answer}` : t.answer;
-    return `**${t.question}**\n\n${head}${status}`;
+    const body = t.status === "error" ? `⚠️ ${t.answer}` : t.answer;
+    return `**${t.question}**\n\n${head}${body}`;
   };
+
+  const switchMode = mode !== "main" ? (
+    <Action
+      title={mode === "quick" ? "Switch to Session (Claude Code)" : "Switch to Quick (Model Only)"}
+      icon={mode === "quick" ? Icon.Terminal : Icon.Bolt}
+      shortcut={{ modifiers: ["cmd"], key: "t" }}
+      onAction={() => setMode((m) => (m === "quick" ? "session" : "quick"))}
+    />
+  ) : null;
+  const openInWalnut = taskId ? (
+    <Action.Open
+      title={mode === "main" ? "Open Main in Walnut" : "Open the Session in Walnut"}
+      target={openTaskLink(taskId)}
+      icon={Icon.AppWindow}
+      shortcut={{ modifiers: ["cmd"], key: "o" }}
+    />
+  ) : null;
 
   return (
     // Raycast filters a List by the search text unless told not to: a follow-up typed there hid
@@ -153,7 +178,7 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
       searchText={input}
       onSearchTextChange={setInput}
       searchBarPlaceholder={placeholder}
-      navigationTitle={`Walnut · ${title}`}
+      navigationTitle={`Walnut · ${TITLE[mode]}`}
       selectedItemId={selected}
       onSelectionChange={(id) => setSelected(id ?? undefined)}
       isLoading={turns.some((t) => t.status === "streaming")}
@@ -161,12 +186,12 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
       {turns.length === 0 ? (
         <List.EmptyView
           icon={{ source: "walnut-icon.png" }}
-          title={props.selection ? `Selected${props.app ? ` in ${props.app}` : ""}` : title}
+          title={props.selection ? `Selected${props.app ? ` in ${props.app}` : ""}` : TITLE[mode]}
           description={props.selection ? `“${props.selection.slice(0, 200)}${props.selection.length > 200 ? "…" : ""}”\n\nType what to do with it, then press Enter.` : "Type, then press Enter."}
           actions={
             <ActionPanel>
               <Action title="Send" icon={Icon.ArrowRight} onAction={() => void ask(input)} />
-              {switchTools}
+              {switchMode}
             </ActionPanel>
           }
         />
@@ -176,7 +201,7 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
             key={t.id}
             id={String(t.id)}
             title={t.question}
-            icon={t.status === "streaming" ? Icon.CircleProgress : t.status === "error" ? Icon.Warning : t.tools ? Icon.Globe : Icon.Message}
+            icon={t.status === "streaming" ? Icon.CircleProgress : t.status === "error" ? Icon.Warning : t.via === "session" ? Icon.Terminal : Icon.Message}
             accessories={t.seconds ? [{ text: `${t.seconds.toFixed(1)} s` }] : []}
             detail={<List.Item.Detail markdown={detailFor(t)} />}
             actions={
@@ -190,13 +215,14 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
                     <Action.CopyToClipboard title="Copy Answer" content={t.answer} shortcut={{ modifiers: ["cmd"], key: "c" }} />
                   </>
                 ) : null}
-                {mode === "main" && mainTaskId ? (
-                  <Action.Open title="Open Main in Walnut" target={openTaskLink(mainTaskId)} icon={Icon.AppWindow} shortcut={{ modifiers: ["cmd"], key: "o" }} />
+                {t.status === "streaming" ? (
+                  <Action title="Stop Waiting" icon={Icon.Stop} shortcut={{ modifiers: ["cmd"], key: "." }} onAction={() => abort.current?.abort()} />
                 ) : null}
+                {openInWalnut}
                 {t.status === "done" || t.status === "error" ? (
-                  <Action title="Ask Again" icon={Icon.RotateClockwise} shortcut={{ modifiers: ["cmd"], key: "r" }} onAction={() => void ask(t.question, t.tools === true)} />
+                  <Action title="Ask Again" icon={Icon.RotateClockwise} shortcut={{ modifiers: ["cmd"], key: "r" }} onAction={() => void ask(t.question, t.via)} />
                 ) : null}
-                {switchTools}
+                {switchMode}
               </ActionPanel>
             }
           />

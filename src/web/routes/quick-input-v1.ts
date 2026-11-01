@@ -3,9 +3,7 @@
  * the Raycast script command, the Spotlight action). One short request from anywhere on the Mac,
  * three ways to answer it:
  *
- *   POST /quick/ask   { text, context?, conversation?, tools? }  → NDJSON stream (tools: web search
- *                     and page reading in a light agent session; `activity` lines name each step;
- *                     never with selected text in the conversation)
+ *   POST /quick/ask   { text, context?, conversation? }  → NDJSON stream
  *        One fast model answer (ai.run's direct route: micro-Claude on the warm pool, or the
  *        main provider's fast model). No task, no session. `{"type":"text","delta"}` lines while
  *        it writes, then one `{"type":"result",text,model?,durationMs,conversation?}` or
@@ -25,6 +23,10 @@
  *        `images` (both sends): up to 5 `{ data: base64, mediaType }`, a screenshot from the
  *        clipboard; saved here and named by path in the message, the phone's way
  *        (session-send-v1.ts). With an image the text may be empty.
+ *   POST /quick/session { text, taskId?, images? }       → NDJSON stream, as /quick/main with follow
+ *        A normal Claude Code session in Walnut, the Ask Walnut chat's own kind: with no `taskId` a
+ *        new ask is started with the text (the phone's New chat, mobile-launch.ts), with the
+ *        `taskId` that answer named the text goes into that ask's chat. The reply streams back.
  *   GET  /quick/tasks?q=&limit=&recent=                  → { tasks: [{ id, title, project, state, stateLabel }] }
  *        Tasks matching the words, for the list under the box; with no words and `recent=1`, the
  *        open tasks, the ones needing the user first.
@@ -65,31 +67,6 @@ export const QUICK_SYSTEM = [
   "You have no tools: you cannot browse, run anything, or see the user's tasks and files. When a request needs that, say so in one line and suggest Tell Main (Cmd+Enter), Walnut's main agent, which can.",
 ].join('\n')
 
-/** The same box with tools: a light agent session that may search the web and read pages. It is
- *  given none of the user's tasks, notes, memory or files, and never text he selected (the route
- *  refuses tools in a conversation that carried some): a page it reads may tell it to fetch a URL
- *  with whatever it holds, and all it holds is what he typed. */
-export const QUICK_AGENT_SYSTEM = [
-  "You are Walnut's quick answer box on the user's Mac, with tools. The user pressed a hotkey in another app and typed a request.",
-  'Search the web or read a page when the answer needs current or outside facts; answer directly when it does not.',
-  // Claude Code offers no WebSearch on Bedrock (2026-11-01: only WebFetch), and DuckDuckGo shows
-  // a fetch a bot check while Brave answers 429; a short Bing query and GitHub's API answered.
-  'With no web search tool, search by reading https://www.bing.com/search?q=<two to five words> (short queries find more), then read the best result pages; for a software project, https://api.github.com/search/repositories?q=<words> also works.',
-  'Be brief: the answer first, in as few words as it needs, then the source links you used as a short list.',
-  'When asked to rewrite, fix, translate or reply to text, answer with only the new text.',
-  'Answer in the language of the request unless it asks for another one.',
-  "You cannot see the user's tasks, notes or files and cannot run commands. When a request needs that, say so in one line and suggest Tell Main, Walnut's main agent.",
-].join('\n')
-const QUICK_AGENT_TIMEOUT_MS = 3 * 60_000
-
-/** True when an earlier turn of this box's conversation carried selected text. */
-async function carriedSelection(conversation: string): Promise<boolean> {
-  const [{ conversationTurns }, { CONTEXT_OPEN }] = await Promise.all([
-    import('../../core/ai/ai-conversations.js'), import('../../core/ai/ai-prompt.js'),
-  ])
-  return (await conversationTurns(QUICK_CALLER, conversation)).some((t) => t.role === 'user' && t.text.includes(CONTEXT_OPEN))
-}
-
 function primaryOnly(res: Response): boolean {
   if (!CLOUD_MODE) return true
   res.status(501).json({ error: 'Quick Input answers on your Mac, not on this companion', code: 'not_supported_cloud' })
@@ -125,18 +102,6 @@ quickInputV1Router.post('/quick/ask', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'conversation must be 1-120 letters, digits or _ . : @ / -', code: 'ai_bad_request' })
     return
   }
-  if (body.tools !== undefined && typeof body.tools !== 'boolean') {
-    res.status(400).json({ error: 'tools must be true or false', code: 'ai_bad_request' })
-    return
-  }
-  const tools = body.tools === true
-  if (tools && (context || (conversation && await carriedSelection(conversation)))) {
-    res.status(400).json({
-      error: 'Tools are off in a conversation about selected text: a page the agent reads could send that text out.',
-      code: 'tools_with_selection',
-    })
-    return
-  }
   const controller = new AbortController()
   // `close` on the response fires when the box closed or a new question replaced this one. The
   // answer stops being waited for; a model child already writing may finish on its own.
@@ -151,11 +116,10 @@ quickInputV1Router.post('/quick/ask', async (req: Request, res: Response) => {
     const { aiRun } = await import('../../core/ai/ai-run.js')
     const result = await aiRun(QUICK_CALLER, {
       prompt: text,
-      system: tools ? QUICK_AGENT_SYSTEM : QUICK_SYSTEM,
+      system: QUICK_SYSTEM,
       effort: QUICK_EFFORT,
-      timeoutMs: tools ? QUICK_AGENT_TIMEOUT_MS : QUICK_TIMEOUT_MS,
+      timeoutMs: QUICK_TIMEOUT_MS,
       interactive: true,
-      ...(tools ? { needs: { web: true }, freshAgent: true, onActivity: (detail: string) => line({ type: 'activity', detail }) } : {}),
       ...(context ? { context } : {}),
       ...(conversation ? { conversation } : {}),
       onText: (delta) => line({ type: 'text', delta }),
@@ -237,7 +201,7 @@ quickInputV1Router.post('/quick/main', async (req: Request, res: Response, next:
       return
     }
     if (req.body?.follow === true) {
-      await sendAndFollow(text, images, res)
+      await sendAndFollow(() => sendToMain(text, images), res)
       return
     }
     const answer = await sendToMain(text, images)
@@ -252,7 +216,7 @@ quickInputV1Router.post('/quick/main', async (req: Request, res: Response, next:
  * `follow: true`: one NDJSON stream with the send's outcome, then Main's reply to this message as
  * it is written (quick-main-follow.ts). Closing the request stops the follow, never the turn.
  */
-async function sendAndFollow(text: string, images: SessionImage[], res: Response): Promise<void> {
+async function sendAndFollow(send: () => Promise<QuickMainResult>, res: Response): Promise<void> {
   res.status(200)
   res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8')
   res.setHeader('Cache-Control', 'no-store')
@@ -264,7 +228,7 @@ async function sendAndFollow(text: string, images: SessionImage[], res: Response
   res.on('close', () => follower.stop())
   let sent: QuickMainResult
   try {
-    sent = await sendToMain(text, images)
+    sent = await send()
   } catch (error) {
     line({ type: 'error', code: 'send_failed', message: error instanceof Error ? error.message : String(error) })
     follower.stop()
@@ -279,6 +243,41 @@ async function sendAndFollow(text: string, images: SessionImage[], res: Response
     return
   }
   follower.bind(sent.sessionId, { messageId: sent.messageId, fresh: sent.started, midTurn: sent.midTurn })
+}
+
+quickInputV1Router.post('/quick/session', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!primaryOnly(res)) return
+    const images = extractValidImages(req.body?.images)
+    const text = textOf(req.body?.text, MAX_TEXT_CHARS) ?? (images.length > 0 && blankText(req.body?.text) ? '' : null)
+    if (text === null) {
+      res.status(400).json({ error: `text must be 1-${MAX_TEXT_CHARS} characters`, code: 'bad_request' })
+      return
+    }
+    const taskId = typeof req.body?.taskId === 'string' ? req.body.taskId.trim() : ''
+    if (taskId) {
+      const { getTask } = await import('../../core/task-manager.js')
+      const task = await getTask(taskId).catch(() => null)
+      if (!task || task.id !== taskId) {
+        res.status(404).json({ error: `No task ${taskId}`, code: 'task_not_found' })
+        return
+      }
+      const cliText = await withSavedImages(text, images)
+      await sendAndFollow(async () => sendToTaskSession(task, await taskSessionRecord(task), text, cliText), res)
+      return
+    }
+    await sendAndFollow(() => startAsk(text, images), res)
+  } catch (err) {
+    next(err)
+  }
+})
+
+/** A new ask started with the text: the same task and session the phone's New chat makes. */
+async function startAsk(text: string, images: SessionImage[]): Promise<QuickMainResult> {
+  const { validateMobileLaunchBody, performMobileLaunch } = await import('../../core/sessions/mobile-launch.js')
+  const message = await withSavedImages(text, images)
+  const launched = await performMobileLaunch(validateMobileLaunchBody({ walnutAgent: true, message }), 'quick-input')
+  return { taskId: launched.taskId, sessionId: launched.sessionId ?? null, started: true }
 }
 
 quickInputV1Router.post('/quick/task-message', async (req: Request, res: Response, next: NextFunction) => {

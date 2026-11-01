@@ -4,7 +4,7 @@
  * pre-approved, and nothing a caller passes can widen a rule.
  */
 import { describe, expect, it } from 'vitest'
-import { agentPermissions, aiLaneKey, grantedLane, toolActivity } from '../../../src/core/ai/ai-agent.js'
+import { agentPermissions, aiLaneKey, grantedLane } from '../../../src/core/ai/ai-agent.js'
 
 const id = (name: string) => name
 
@@ -23,13 +23,6 @@ describe('agentPermissions', () => {
       'Read(//Users/a/ws/**)',
       'Edit(//Users/a/ws/**)', 'Write(//Users/a/ws/**)',
     ])
-  })
-
-  it('web means web search and page reading, both pre-approved, and nothing else', () => {
-    const perms = agentPermissions({ web: true }, '/w', id)
-    expect(perms.tools.sort()).toEqual(['WebFetch', 'WebSearch'])
-    expect(perms.allowedTools.sort()).toEqual(['WebFetch', 'WebSearch'])
-    expect(agentPermissions({ web: false }, '/w', id)).toEqual({ tools: [], allowedTools: [] })
   })
 
   it('a cwd alone means read access there', () => {
@@ -71,18 +64,5 @@ describe('aiLaneKey', () => {
     expect(a).toBe('ai:plugin%3Ainterview-practice:attempt:7')
     expect(a.startsWith('chat:')).toBe(false)
     expect(aiLaneKey({ kind: 'plugin', id: 'other' }, 'attempt:7')).not.toBe(a)
-  })
-})
-
-describe('toolActivity', () => {
-  it("names the step in plain words with what it searched or read, and skips a subagent's steps", () => {
-    expect(toolActivity({ toolName: 'WebSearch', input: { query: 'who made peekaboo' } })).toBe('Searching the web: who made peekaboo')
-    expect(toolActivity({ toolName: 'WebFetch', input: { url: 'https://example.com/a', prompt: 'x' } })).toBe('Reading: https://example.com/a')
-    expect(toolActivity({ toolName: 'WebSearch' })).toBe('Searching the web')
-    expect(toolActivity({ toolName: 'SomeNewTool', input: {} })).toBe('SomeNewTool')
-    expect(toolActivity({ toolName: 'WebSearch', input: { query: 'q' }, parentToolUseId: 'toolu_1' })).toBeNull()
-    expect(toolActivity({ input: { query: 'q' } })).toBeNull()
-    // A daemon reconnect replays earlier steps: they are not this turn's.
-    expect(toolActivity({ toolName: 'WebFetch', input: { url: 'https://example.com' }, replayed: true })).toBeNull()
   })
 })
