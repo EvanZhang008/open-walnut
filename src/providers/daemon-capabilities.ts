@@ -467,6 +467,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // twin (task-dir-core.cjs). Optional: without it a session gets no task
   // directory and the /tmp git guard stays inert.
   'task-dir-v1',
+  // 'task-dir-prune-v1' — `taskdir.prune {taskIds}`: a day after a task completed,
+  // the host removes the repos in its directory that hold nothing unique and the
+  // build output git does not track, keeping the rest for `taskdir.remove`
+  // (task-dir-core.ts pruneTaskDirs). Sidecar-gated in the source twin. Optional:
+  // without it a finished task's directory keeps its clones until it is removed.
+  'task-dir-prune-v1',
   // 'host-exec-v1' — a command for a task on another host (host-exec-core.ts):
   // `exec.run {jobId, taskId, command | argv, cwd, timeoutMs, background}` runs it
   // under the user's login shell (its process group killed at the deadline: 10 min,

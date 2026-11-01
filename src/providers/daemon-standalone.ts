@@ -175,7 +175,7 @@ import { buildScheduledMessage, buildTriggerMessage } from './trigger-envelope-c
 import { START_TASK_TOKEN, clockDueMs, clockFireOwed, clockStateOnArm, dropStaleClockFires, type ClockReport } from './trigger-clock-core.js'
 import { createClockSchedule } from './clock-schedule-core.js'
 import { resolvePathHostLocal } from './path-resolve-core.js'
-import { ensureTaskDir, isTaskDirId, listTaskDirs, removeTaskDirs, taskDirPath, taskDirRoot } from './task-dir-core.js'
+import { ensureTaskDir, isTaskDirId, listTaskDirs, pruneTaskDirs, removeTaskDirs, taskDirPath, taskDirRoot } from './task-dir-core.js'
 import { createHostExec } from './host-exec-core.js'
 import { createSecretStore, secretsRoot } from './secrets-core.js'
 import { scanHostUsage, scanCostState, scanSessionCost, createUsagePages } from './usage-host-core.js'
@@ -2402,6 +2402,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'taskdir.ensure': return cmdTaskDirEnsure(ws, id as number, cmd)
     case 'taskdir.list': return cmdTaskDirList(ws, id as number)
     case 'taskdir.remove': return cmdTaskDirRemove(ws, id as number, cmd)
+    case 'taskdir.prune': return cmdTaskDirPrune(ws, id as number, cmd)
     // A command for a task on another host (host-exec-v1, host-exec-core.ts). NOT in
     // BRIDGE_ALLOWED_COMMANDS or FOLLOWER_ALLOWED_COMMANDS: it runs anything the user
     // can, so only the trusted walnut socket asks, after the server checked the
@@ -5316,6 +5317,20 @@ async function cmdTaskDirRemove(ws: ServerWebSocket<WsData>, id: number, cmd: Re
     sendOk(ws, id, result)
   } catch (err) {
     sendError(ws, id, 'taskdir.remove failed: ' + (err as Error).message)
+  }
+}
+
+/** A finished task's clean clones and build output (task-dir-prune-v1). Keep in sync with daemon-source.ts. */
+async function cmdTaskDirPrune(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  const ids = Array.isArray(cmd.taskIds) ? cmd.taskIds : []
+  const busy = (dir: string, taskId: string) => [...sessions.values()].some((s) =>
+    !s.exitedAt && (s.spawnInfo?.task === taskId || (typeof s.cwd === 'string' && (s.cwd === dir || s.cwd.startsWith(dir + path.sep)))))
+  try {
+    const result = await pruneTaskDirs(TASK_DIR_ROOT, ids, { busy })
+    if (result.pruned.length > 0 || result.kept.length > 0) logMsg('info', 'task dirs pruned', { pruned: result.pruned, kept: result.kept })
+    sendOk(ws, id, result)
+  } catch (err) {
+    sendError(ws, id, 'taskdir.prune failed: ' + (err as Error).message)
   }
 }
 

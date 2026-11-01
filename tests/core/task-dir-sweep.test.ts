@@ -5,7 +5,7 @@
  * tests/providers/task-dir-core.test.ts.
  */
 import { describe, it, expect } from 'vitest'
-import { pickRemovable, sweepTaskDirsOnce, type TaskStateForSweep } from '../../src/core/task-dir-sweep.js'
+import { pickPrunable, pickRemovable, sweepTaskDirsOnce, type TaskStateForSweep } from '../../src/core/task-dir-sweep.js'
 import { WALNUT_HOME } from '../../src/constants.js'
 import type { TaskDirEntry } from '../../src/providers/task-dir-core.js'
 
@@ -41,6 +41,30 @@ describe('pickRemovable', () => {
   })
 })
 
+describe('pickPrunable', () => {
+  const opts = { now: NOW, pruneDays: 1, removed: new Set<string>() }
+  const pruned = (d: TaskDirEntry, daysAgo: number): TaskDirEntry => ({ ...d, prunedAt: iso(daysAgo) })
+
+  it.each([
+    ['an open task', [dir('a', 5)], [task('a', 'IN_PROGRESS')], []],
+    ['a task completed 2 days ago, dir unused since', [dir('a', 2)], [task('a', 'COMPLETE', 2)], ['a']],
+    ['a task completed 2 hours ago', [dir('a', 2)], [task('a', 'COMPLETE', 0.1)], []],
+    ['a task completed 3 days ago, dir used 2 hours ago', [dir('a', 0.1)], [task('a', 'COMPLETE', 3)], []],
+    ['already pruned since its last use', [pruned(dir('a', 3), 1)], [task('a', 'COMPLETE', 3)], []],
+    ['pruned before a later use', [pruned(dir('a', 2), 4)], [task('a', 'COMPLETE', 3)], ['a']],
+    ['a deleted task', [dir('a', 40, WALNUT_HOME)], [], []],
+  ])('%s', (_label, dirs, tasks, expected) => {
+    expect(pickPrunable(dirs, new Map(tasks.map((t) => [t.id, t])), opts)).toEqual(expected)
+  })
+
+  it('skips a directory removed whole this round, prunes one the removal kept, and is off at 0 days', () => {
+    const tasks = new Map([['a', task('a', 'COMPLETE', 9)]])
+    expect(pickPrunable([dir('a', 9)], tasks, { ...opts, removed: new Set(['a']) })).toEqual([])
+    expect(pickPrunable([dir('a', 9)], tasks, opts)).toEqual(['a'])
+    expect(pickPrunable([dir('a', 9)], tasks, { ...opts, pruneDays: 0 })).toEqual([])
+  })
+})
+
 describe('sweepTaskDirsOnce', () => {
   function fakeConn(host: string, caps: string[], dirs: TaskDirEntry[]) {
     const calls: Array<[string, Record<string, unknown> | undefined]> = []
@@ -53,6 +77,7 @@ describe('sweepTaskDirsOnce', () => {
           calls.push([cmd, p])
           if (cmd === 'taskdir.list') return { ok: true, dirs }
           if (cmd === 'taskdir.remove') return { ok: true, removed: (p!.taskIds as Array<{ taskId: string }>).slice(0, 1).map((i) => i.taskId), kept: [{ taskId: 'x', reasons: ['r'] }], missing: [] }
+          if (cmd === 'taskdir.prune') return { ok: true, pruned: (p!.taskIds as Array<{ taskId: string }>).map((i) => ({ taskId: i.taskId, repos: ['clone'], builds: [] })), kept: [], missing: [] }
           return { ok: false }
         },
       },
@@ -74,6 +99,17 @@ describe('sweepTaskDirsOnce', () => {
     ] })
     expect(old.calls).toEqual([])
     expect(res).toEqual([{ host: '__local__', removed: ['done'], kept: [{ taskId: 'x', reasons: ['r'] }], missing: [] }])
+  })
+
+  it('asks a host with task-dir-prune-v1 to prune a task done a day, and an older host nothing more', async () => {
+    const both = fakeConn('__local__', ['task-dir-v1', 'task-dir-prune-v1'], [dir('old', 30), dir('recent', 2), dir('fresh', 0.1)])
+    const older = fakeConn('old-host', ['task-dir-v1'], [dir('recent', 2)])
+    const loadTasks = async () => [task('old', 'COMPLETE', 20), task('recent', 'COMPLETE', 2), task('fresh', 'COMPLETE', 0.1)]
+    const res = await sweepTaskDirsOnce({ conns: [both.conn, older.conn], loadTasks, now: NOW })
+    expect(both.calls.map((c) => c[0])).toEqual(['taskdir.list', 'taskdir.remove', 'taskdir.prune'])
+    expect(both.calls[2][1]).toEqual({ taskIds: [{ taskId: 'recent', usedBefore: Date.parse(iso(2)) }] })
+    expect(older.calls.map((c) => c[0])).toEqual(['taskdir.list'])
+    expect(res).toEqual([{ host: '__local__', removed: ['old'], kept: [{ taskId: 'x', reasons: ['r'] }], missing: [], pruned: [{ taskId: 'recent', repos: ['clone'], builds: [] }] }])
   })
 
   it('sends no removal when nothing qualifies, and survives a host that errors', async () => {

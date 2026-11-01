@@ -141,7 +141,7 @@ describe('the program side', () => {
     expect(source).toMatch(/WALNUT_TASK_DIR: taskDir \|\| undefined,/)
     for (const twin of [standalone, source]) {
       expect(twin).toMatch(/taskDirRoot: TASK_DIR_ROOT/)
-      for (const cmd of ['taskdir.ensure', 'taskdir.list', 'taskdir.remove']) expect(twin).toContain(`case '${cmd}'`)
+      for (const cmd of ['taskdir.ensure', 'taskdir.list', 'taskdir.remove', 'taskdir.prune']) expect(twin).toContain(`case '${cmd}'`)
       // The ACP spawn (Codex and other ACP engines) gets it too.
       expect(twin).toMatch(/cmdAcpStart[\s\S]{0,2500}WALNUT_TASK_DIR/)
     }

@@ -13,13 +13,19 @@
  * (its marker names this data home) and nobody used it for 30 days. A reopened
  * task is not complete, so its directory stays.
  *
+ * Before that, a day after completion (WALNUT_TASK_DIR_PRUNE_DAYS, 0 = off),
+ * a host with task-dir-prune-v1 prunes it: its clean, pushed clones and its
+ * untracked build output go, the rest waits for the whole-directory rule
+ * (task-dir-core.ts pruneTaskDirs). Once per use: a directory pruned since its
+ * last use is not asked again.
+ *
  * Primary only: a replica (the cloud companion) holds a copy of the tasks and
  * must not decide over host files. An ephemeral server sweeps only its own
  * local daemon, whose root sits in its temp dir.
  */
 import { log } from '../logging/index.js'
-import { taskDirKeepDays } from '../lib/task-dir.js'
-import type { TaskDirEntry, RemoveResult } from '../providers/task-dir-core.js'
+import { taskDirKeepDays, taskDirPruneDays } from '../lib/task-dir.js'
+import type { TaskDirEntry, RemoveResult, PruneResult } from '../providers/task-dir-core.js'
 
 const DAY_MS = 86_400_000
 const FIRST_SWEEP_MS = 15 * 60_000
@@ -56,6 +62,28 @@ export function pickRemovable(
   return out
 }
 
+/** The task ids whose directories may be pruned now: done a day, unused a day, not pruned since that use, not removed this round (one the removal kept for its work is pruned). */
+export function pickPrunable(
+  dirs: TaskDirEntry[],
+  tasks: Map<string, TaskStateForSweep>,
+  opts: { now: number; pruneDays: number; removed: ReadonlySet<string> },
+): string[] {
+  if (!(opts.pruneDays > 0)) return []
+  const waitMs = opts.pruneDays * DAY_MS
+  const out: string[] = []
+  for (const d of dirs) {
+    if (opts.removed.has(d.taskId)) continue
+    const task = tasks.get(d.taskId)
+    if (!task || task.phase !== 'COMPLETE') continue
+    const doneAt = ms(task.completed_at) || ms(task.phase_changed_at) || ms(task.updated_at)
+    const lastUsed = Math.max(ms(d.lastUsedAt), ms(d.createdAt), d.mtimeMs || 0)
+    if (!doneAt || opts.now - doneAt < waitMs || opts.now - lastUsed < waitMs) continue
+    if (ms(d.prunedAt) >= lastUsed) continue
+    out.push(d.taskId)
+  }
+  return out
+}
+
 type SweepConn = { host: string; hasCapability?: (c: string) => boolean; send: (cmd: string, p?: Record<string, unknown>, t?: number) => Promise<unknown> }
 
 /** One round over every connected host. Returns per-host results (tests read them). */
@@ -63,7 +91,7 @@ export async function sweepTaskDirsOnce(deps?: {
   conns?: SweepConn[]
   loadTasks?: (ids: string[]) => Promise<TaskStateForSweep[]>
   now?: number
-}): Promise<Array<{ host: string } & Partial<RemoveResult>>> {
+}): Promise<Array<{ host: string } & Partial<RemoveResult> & { pruned?: PruneResult['pruned'] }>> {
   const { WALNUT_HOME, IS_EPHEMERAL } = await import('../constants.js')
   let conns = deps?.conns
   if (!conns) {
@@ -75,7 +103,7 @@ export async function sweepTaskDirsOnce(deps?: {
     return await listTasksByIds(ids) as TaskStateForSweep[]
   })
   const keepDays = taskDirKeepDays(process.env)
-  const results: Array<{ host: string } & Partial<RemoveResult>> = []
+  const results: Array<{ host: string } & Partial<RemoveResult> & { pruned?: PruneResult['pruned'] }> = []
   for (const conn of conns) {
     if (IS_EPHEMERAL && conn.host !== '__local__') continue
     if (!conn.hasCapability?.('task-dir-v1')) continue
@@ -85,17 +113,32 @@ export async function sweepTaskDirsOnce(deps?: {
       const dirs = Array.isArray(listed?.dirs) ? listed.dirs : []
       if (dirs.length === 0) continue
       const tasks = new Map((await loadTasks(dirs.map((d) => d.taskId))).map((t) => [t.id, t]))
-      const removable = pickRemovable(dirs, tasks, { now: deps?.now ?? Date.now(), keepDays, home: WALNUT_HOME })
-      if (removable.length === 0) continue
+      const now = deps?.now ?? Date.now()
+      const removable = pickRemovable(dirs, tasks, { now, keepDays, home: WALNUT_HOME })
       // Each with the last use this list saw: the host keeps one a session used since.
-      const items = removable.map((taskId) => {
+      const itemsFor = (ids: string[]) => ids.map((taskId) => {
         const d = dirs.find((x) => x.taskId === taskId)!
         return { taskId, usedBefore: Math.max(ms(d.lastUsedAt), ms(d.createdAt)) }
       })
-      const res = await conn.send('taskdir.remove', { taskIds: items }, 120_000) as RemoveResult & { ok?: boolean; error?: string }
-      if (res?.ok === false) throw new Error(res.error || 'taskdir.remove refused')
-      results.push({ host: conn.host, removed: res?.removed ?? [], kept: res?.kept ?? [], missing: res?.missing ?? [] })
-      log.session.info('task dirs swept', { host: conn.host, removed: res?.removed?.length ?? 0, kept: res?.kept ?? [] })
+      const row: { host: string } & Partial<RemoveResult> & { pruned?: PruneResult['pruned'] } = { host: conn.host }
+      const removed = new Set<string>()
+      if (removable.length > 0) {
+        const res = await conn.send('taskdir.remove', { taskIds: itemsFor(removable) }, 120_000) as RemoveResult & { ok?: boolean; error?: string }
+        if (res?.ok === false) throw new Error(res.error || 'taskdir.remove refused')
+        Object.assign(row, { removed: res?.removed ?? [], kept: res?.kept ?? [], missing: res?.missing ?? [] })
+        for (const id of [...(res?.removed ?? []), ...(res?.missing ?? [])]) removed.add(id)
+        log.session.info('task dirs swept', { host: conn.host, removed: res?.removed?.length ?? 0, kept: res?.kept ?? [] })
+      }
+      const prunable = conn.hasCapability?.('task-dir-prune-v1')
+        ? pickPrunable(dirs, tasks, { now, pruneDays: taskDirPruneDays(process.env), removed })
+        : []
+      if (prunable.length > 0) {
+        const res = await conn.send('taskdir.prune', { taskIds: itemsFor(prunable) }, 300_000) as PruneResult & { ok?: boolean; error?: string }
+        if (res?.ok === false) throw new Error(res.error || 'taskdir.prune refused')
+        row.pruned = res?.pruned ?? []
+        log.session.info('task dirs pruned', { host: conn.host, pruned: row.pruned, kept: res?.kept ?? [] })
+      }
+      if (removable.length > 0 || prunable.length > 0) results.push(row)
     } catch (err) {
       log.session.warn('task dir sweep failed', { host: conn.host, error: (err as Error).message })
     }

@@ -29,7 +29,7 @@ import { TASK_DIR_MARKER, isTaskDirId, taskDirPath } from '../lib/task-dir.js'
 export { taskDirRoot, taskDirPath, isTaskDirId, TASK_DIR_MARKER } from '../lib/task-dir.js'
 
 /** `home` is the data home of the Walnut that first made it: a host two Walnuts share keeps each one's dirs apart. */
-interface Marker { taskId: string; home?: string; createdAt?: string; lastUsedAt?: string }
+interface Marker { taskId: string; home?: string; createdAt?: string; lastUsedAt?: string; prunedAt?: string }
 
 function readMarker(dir: string): Marker | null {
   try {
@@ -61,7 +61,7 @@ export function ensureTaskDir(root: string, taskId: unknown, home?: unknown, now
   }
 }
 
-export interface TaskDirEntry { taskId: string; path: string; home?: string; createdAt?: string; lastUsedAt?: string; mtimeMs: number }
+export interface TaskDirEntry { taskId: string; path: string; home?: string; createdAt?: string; lastUsedAt?: string; prunedAt?: string; mtimeMs: number }
 
 export async function listTaskDirs(root: string): Promise<TaskDirEntry[]> {
   let names: string[]
@@ -74,7 +74,7 @@ export async function listTaskDirs(root: string): Promise<TaskDirEntry[]> {
     if (!marker || marker.taskId !== name) continue
     let mtimeMs = 0
     try { mtimeMs = (await fsp.stat(dir)).mtimeMs } catch { continue }
-    out.push({ taskId: name, path: dir, home: marker.home, createdAt: marker.createdAt, lastUsedAt: marker.lastUsedAt, mtimeMs })
+    out.push({ taskId: name, path: dir, home: marker.home, createdAt: marker.createdAt, lastUsedAt: marker.lastUsedAt, prunedAt: marker.prunedAt, mtimeMs })
   }
   return out
 }
@@ -300,6 +300,155 @@ export async function removeTaskDirs(
     } catch (err) {
       res.kept.push({ taskId: id, reasons: [`remove failed: ${(err as Error).message}`] })
     }
+  }
+  return res
+}
+
+// ── Pruning a finished task's directory (task-dir-prune-v1) ──
+// A day after its task completed, the bulk goes and the rest stays until the
+// whole directory may go: each repo that holds nothing unique (the rule above,
+// for that repo alone), and rebuildable build output git does not track. The
+// evidence, notes and any repo with work of its own stay. 2026-10-31: task
+// directories held 27 GB, most of it clean clones and node_modules of tasks
+// already done, and the Mac fell under 25 GB free.
+
+/** Rebuildable wherever it is, when git does not track it. */
+const BUILD_DIRS = new Set(['node_modules', 'DerivedData', '.build', '.next', '.turbo'])
+/** Rebuildable only when the repo holding it ignores it: outside one (or unignored) a `dist/` or a test report is usually kept as evidence. */
+const IGNORED_BUILD_DIRS = new Set(['dist', 'playwright-report', 'test-results'])
+/** Ignored files a clean clone may hold and still go whole: build output and OS litter. Any other ignored file (an .env, local notes) keeps it. */
+const isDisposableIgnored = (rel: string): boolean =>
+  rel.split('/').some((seg) => BUILD_DIRS.has(seg) || IGNORED_BUILD_DIRS.has(seg)) || /(^|\/)\.DS_Store$|\.tsbuildinfo$/.test(rel)
+
+export interface PruneResult {
+  pruned: Array<{ taskId: string; repos: string[]; builds: string[] }>
+  kept: Array<{ taskId: string; reasons: string[] }>
+  missing: string[]
+}
+
+/** Every objects directory a repo under the root borrows from (`clone --shared`): removing one breaks the borrower. Null when the walk could not see everything. */
+async function borrowedObjectDirs(root: string): Promise<Set<string> | null> {
+  const out = new Set<string>()
+  const budget = { dirs: 500_000 }
+  const readAlternates = async (objects: string) => {
+    let text = ''
+    try { text = await fsp.readFile(path.join(objects, 'info', 'alternates'), 'utf8') } catch { return }
+    for (const line of text.split('\n')) if (line.trim() && !line.startsWith('#')) out.add(real(path.resolve(objects, line.trim())))
+  }
+  // No depth limit: a borrower nested anywhere must be seen (the budget bounds the cost).
+  const walk = async (dir: string, depth: number): Promise<boolean> => {
+    if (--budget.dirs < 0) return false
+    let entries: fs.Dirent[]
+    try { entries = await fsp.readdir(dir, { withFileTypes: true }) } catch { return false }
+    // A git dir (a .git, a bare repo): read what it borrows, and skip its object store.
+    const gitDir = entries.some((e) => e.name === 'objects' && e.isDirectory()) && entries.some((e) => e.name === 'HEAD')
+    if (gitDir) await readAlternates(path.join(dir, 'objects'))
+    for (const e of entries) {
+      if (!e.isDirectory() || e.isSymbolicLink() || e.name === 'node_modules' || (gitDir && e.name === 'objects')) continue
+      if (!(await walk(path.join(dir, e.name), depth + 1))) return false
+    }
+    return true
+  }
+  let names: string[]
+  try { names = await fsp.readdir(root) } catch { return null }
+  for (const name of names) if (isTaskDirId(name) && !(await walk(path.join(root, name), 0))) return null
+  return out
+}
+
+/** Build output dirs under dir (not inside .git, not below another build dir, never through a symlink). */
+async function findBuildDirs(dir: string, depth: number, out: string[], budget: { dirs: number }): Promise<void> {
+  if (depth > MAX_DEPTH + 2 || --budget.dirs < 0) return
+  let entries: fs.Dirent[]
+  try { entries = await fsp.readdir(dir, { withFileTypes: true }) } catch { return }
+  for (const e of entries) {
+    if (!e.isDirectory() || e.isSymbolicLink() || e.name === '.git') continue
+    const p = path.join(dir, e.name)
+    if (BUILD_DIRS.has(e.name) || IGNORED_BUILD_DIRS.has(e.name)) out.push(p)
+    else await findBuildDirs(p, depth + 1, out, budget)
+  }
+}
+
+/**
+ * Prune the named task directories. Never the directory itself, never a repo
+ * the removal rule keeps, never a repo another repo under the root borrows
+ * objects from, never tracked files. The directory's mtime is put back, so
+ * pruning does not count as a use, and the marker records `prunedAt`.
+ */
+export async function pruneTaskDirs(
+  root: string,
+  items: unknown[],
+  opts: { busy?: (dir: string, taskId: string) => boolean; git?: GitRunner; volatile?: string[]; now?: Date; dryRun?: boolean } = {},
+): Promise<PruneResult> {
+  const res: PruneResult = { pruned: [], kept: [], missing: [] }
+  const realRoot = path.resolve(root)
+  if (realRoot.split(path.sep).filter(Boolean).length < 2) return res
+  const git = opts.git ?? defaultGitRunner
+  let borrowed: Set<string> | null | undefined
+  for (const raw of items.slice(0, 200)) {
+    const item = raw as RemoveItem
+    const id = typeof item === 'string' ? item : item && typeof item === 'object' ? item.taskId : undefined
+    if (!isTaskDirId(id)) continue
+    const usedBefore = typeof item === 'object' && typeof item.usedBefore === 'number' ? item.usedBefore : undefined
+    const dir = taskDirPath(realRoot, id)!
+    const marker = readMarker(dir)
+    if (!marker) { res.missing.push(id); continue }
+    if (marker.taskId !== id) { res.kept.push({ taskId: id, reasons: ['marker names another task'] }); continue }
+    const unused = (): boolean => {
+      if (opts.busy?.(dir, id)) return false
+      if (usedBefore === undefined) return true
+      const last = Date.parse(readMarker(dir)?.lastUsedAt ?? '')
+      return !Number.isFinite(last) || last <= usedBefore
+    }
+    if (!unused()) { res.kept.push({ taskId: id, reasons: ['a live session works in it'] }); continue }
+    if (borrowed === undefined) borrowed = await borrowedObjectDirs(realRoot)
+    if (borrowed === null) { res.kept.push({ taskId: id, reasons: ['could not check which repos borrow objects'] }); continue }
+    let before: fs.Stats | null = null
+    try { before = fs.statSync(dir) } catch { /* gone */ }
+    const done = { taskId: id, repos: [] as string[], builds: [] as string[] }
+    const repos: FoundRepo[] = []
+    // A repo the walk missed would make its build dirs look like loose output: no build pruning then.
+    const sawAll = await findRepos(dir, 0, repos, { dirs: MAX_DIRS }) && repos.length <= MAX_REPOS
+    const top = repos.filter((r) => r.dir !== dir && !repos.some((o) => o !== r && within(r.dir, o.dir) && o.dir !== r.dir))
+    for (const repo of top) {
+      const { reasons, worktreeOwners } = await inspectTaskDir(repo.dir, git, { root: realRoot, volatile: opts.volatile })
+      if (reasons.length > 0) continue
+      // Stricter than the whole-directory rule, which runs days later: an ignored file that is not build output keeps the repo.
+      try {
+        const ignored = (await git(repo.dir, ['status', '--porcelain', '-z', '--ignored=matching', '--untracked-files=normal'])).split('\0')
+          .filter((e) => e.startsWith('!! ')).map((e) => e.slice(3).replace(/\/$/, ''))
+        if (ignored.some((rel) => !isDisposableIgnored(rel))) continue
+      } catch { continue }
+      let objects = ''
+      try { objects = real(path.resolve(repo.dir, (await git(repo.dir, ['rev-parse', '--git-path', 'objects'])).trim())) } catch { continue }
+      if ([...borrowed].some((b) => within(b, real(repo.dir)) || b === objects)) continue
+      if (!unused()) break
+      try {
+        if (!opts.dryRun) await fsp.rm(repo.dir, { recursive: true, force: true })
+        done.repos.push(path.relative(dir, repo.dir))
+        for (const owner of worktreeOwners) await git(path.dirname(owner), ['--git-dir', owner, 'worktree', 'prune']).catch(() => {})
+      } catch { /* left for the whole-directory removal */ }
+    }
+    const builds: string[] = []
+    if (sawAll) await findBuildDirs(dir, 0, builds, { dirs: MAX_DIRS })
+    for (const b of builds) {
+      if (!fs.existsSync(b) || !unused()) continue
+      const holder = repos.filter((r) => fs.existsSync(r.dir) && within(b, r.dir)).sort((x, y) => y.dir.length - x.dir.length)[0]
+      if (holder) {
+        const rel = path.relative(holder.dir, b)
+        try { if ((await git(holder.dir, ['ls-files', '-z', '--', rel])).length > 0) continue } catch { continue }
+        if (IGNORED_BUILD_DIRS.has(path.basename(b))) {
+          try { await git(holder.dir, ['check-ignore', '-q', '--', rel]) } catch { continue }
+        }
+      } else if (!BUILD_DIRS.has(path.basename(b))) continue
+      if (opts.dryRun && done.repos.some((r) => within(b, path.join(dir, r)))) continue
+      try { if (!opts.dryRun) await fsp.rm(b, { recursive: true, force: true }); done.builds.push(path.relative(dir, b)) } catch { /* next round */ }
+    }
+    if (!opts.dryRun) try {
+      const m = readMarker(dir)
+      if (m) fs.writeFileSync(path.join(dir, TASK_DIR_MARKER), JSON.stringify({ ...m, prunedAt: (opts.now ?? new Date()).toISOString() }) + '\n', { mode: 0o600 })
+      if (before) fs.utimesSync(dir, before.atime, before.mtime)
+    } catch { /* the next sweep prunes again */ }
+    res.pruned.push(done)
   }
   return res
 }

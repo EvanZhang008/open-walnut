@@ -56,3 +56,12 @@ export function taskDirKeepDays(env: Env): number {
   const n = Number(env.WALNUT_TASK_DIR_KEEP_DAYS)
   return Number.isFinite(n) && n >= 1 ? n : TASK_DIR_KEEP_DAYS
 }
+
+/** Days after its task completed before a directory's clean clones and build output go (task-dir-core.ts pruneTaskDirs); 0 turns pruning off. */
+export const TASK_DIR_PRUNE_DAYS = 1
+
+export function taskDirPruneDays(env: Env): number {
+  if (env.WALNUT_TASK_DIR_PRUNE_DAYS === undefined || env.WALNUT_TASK_DIR_PRUNE_DAYS === '') return TASK_DIR_PRUNE_DAYS
+  const n = Number(env.WALNUT_TASK_DIR_PRUNE_DAYS)
+  return Number.isFinite(n) && n >= 0 ? n : TASK_DIR_PRUNE_DAYS
+}
