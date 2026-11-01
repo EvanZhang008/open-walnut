@@ -115,3 +115,30 @@ describe('one reply that covered messages of different threads', () => {
     expect(card.unread.map((x) => x.answer?.text)).toEqual(['Source.'])
   })
 })
+
+describe('a message whose reply was not found, between two the same reply covered', () => {
+  // 2026-11-01, real data: five quick messages, one reply; Walnut found no row for the fourth, so
+  // the card showed the one reply twice, before and after it.
+  const reply = { min: 30, text: 'All of these went to the focus task.' }
+  const t: ViewThread = {
+    messages: [
+      msg('tm-1', 20, 'all notifications should follow it', reply),
+      msg('tm-2', 21, 'but inside the app it is fine', reply),
+      msg('tm-3', 22, 'no number on the badge either'),
+      msg('tm-4', 23, 'so our do not disturb should be strong', reply),
+    ],
+  }
+
+  it('is one exchange with that reply, shown once', () => {
+    expect(exchangesOf(t).map((x) => x.messages.map((m) => m.id))).toEqual([['tm-1', 'tm-2', 'tm-3', 'tm-4']])
+    expect(cardView(t).unread).toHaveLength(1)
+    expect(cardView(t).waiting).toEqual([])
+  })
+
+  it('one sent after the reply still waits on its own, and one between two different replies stays alone', () => {
+    const later = { messages: [...t.messages, msg('tm-5', 31, 'and the phone?')] }
+    expect(cardView(later).waiting.map((x) => x.messages[0].id)).toEqual(['tm-5'])
+    const apart: ViewThread = { messages: [msg('tm-1', 20, 'a', { min: 21, text: 'A' }), msg('tm-2', 22, 'b'), msg('tm-3', 23, 'c', { min: 30, text: 'C' })] }
+    expect(exchangesOf(apart).map((x) => x.messages.map((m) => m.id))).toEqual([['tm-1'], ['tm-2'], ['tm-3']])
+  })
+})

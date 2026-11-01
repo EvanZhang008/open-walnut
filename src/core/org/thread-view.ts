@@ -64,6 +64,14 @@ export function exchangesOf<M extends ViewMessage>(t: ViewThread<M>): ThreadExch
     let j = i + 1;
     // The same answer (one reply to two messages sent in a row), or the unanswered tail.
     while (j < t.messages.length && sameAnswer(first.answer, t.messages[j].answer)) j++;
+    // A message of his whose reply Walnut did not find, sent before that same reply covered a later
+    // one, was covered by it too: one exchange, never the reply twice around it.
+    if (first.answer) {
+      for (let k = j; k < t.messages.length && !t.messages[k].answer && t.messages[k].at < first.answer.at; k++) {
+        if (sameAnswer(first.answer, t.messages[k + 1]?.answer)) j = k + 2;
+      }
+      while (j < t.messages.length && sameAnswer(first.answer, t.messages[j].answer)) j++;
+    }
     const messages = t.messages.slice(i, j);
     const answer = first.answer as NonNullable<M['answer']> | undefined;
     const later = t.messages.slice(j).some((m) => !!answer && m.at > answer.at);
