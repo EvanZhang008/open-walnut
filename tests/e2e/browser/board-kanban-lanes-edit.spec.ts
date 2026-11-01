@@ -192,7 +192,12 @@ test('C20: Delete lane says where its cards go and puts them there', async ({ pa
 
 test('C65: two moves into Resolved inside 8s keep two toasts, each completing its own card, held while hovered', async ({ page }) => {
   const pane = await openBoard(page)
-  const [a, b] = [team.all[8], team.all[12]]
+  // The first move's toast sits at the pane's bottom right, over the lane's last card since
+  // fullscreen keeps side margins (2026-10-31, narrower lanes). Move the lower of the two
+  // cards first, so the second one's More is never under that toast.
+  const pair = [team.all[8], team.all[12]]
+  const tops = await Promise.all(pair.map(async (id) => (await card(pane, id).boundingBox())!.y))
+  const [a, b] = tops[0]! > tops[1]! ? pair : [pair[1]!, pair[0]!]
   for (const id of [a, b]) {
     const c = card(pane, id)
     await c.hover()
