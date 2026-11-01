@@ -65,6 +65,26 @@ usageRouter.post('/collect', (req: Request, res: Response) => {
 })
 usageRouter.get('/collection', (_req: Request, res: Response) => res.json(collectionState()))
 
+// POST /api/usage/import { label, rows: [{ date, model, input, output, cacheRead, cacheWrite5m, cacheWrite1h, band? }] }
+// Per-day token sums from a source outside Walnut's own records (a provider's usage bill), for the
+// days before Walnut kept usage. Replaces what the same label brought before; days Walnut recorded
+// itself are skipped. The page shows them as imported, priced at the same list prices.
+const IMPORT_MAX_ROWS = 50_000
+usageRouter.post('/import', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { label, rows } = req.body ?? {}
+    const count = (v: unknown) => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0
+    if (typeof label !== 'string' || !label.trim() || label.length > 60 || !Array.isArray(rows) || rows.length > IMPORT_MAX_ROWS
+      || !rows.every((r: Record<string, unknown>) => r && typeof r.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.date) && typeof r.model === 'string'
+        && r.model.length > 0 && r.model.length < 120 && count(r.input) && count(r.output) && count(r.cacheRead) && count(r.cacheWrite5m) && count(r.cacheWrite1h)
+        && (r.band === undefined || (Number.isInteger(r.band) && (r.band as number) >= 0 && (r.band as number) < 8)))) {
+      res.status(400).json({ error: `Send a label (up to 60 characters) and up to ${IMPORT_MAX_ROWS} rows of { date YYYY-MM-DD, model, input, output, cacheRead, cacheWrite5m, cacheWrite1h } as whole numbers.` })
+      return
+    }
+    res.json(await responseUsageStore().rollup.replaceImport(label.trim(), rows))
+  } catch (err) { next(err) }
+})
+
 // NOT_FOUND is the owning daemon not knowing the session: a new one, a stored one
 // no daemon runs, and also one a host has not adopted yet after a restart, so the
 // web store keeps a budget it already showed when null comes back.

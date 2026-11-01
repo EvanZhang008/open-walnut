@@ -59,7 +59,7 @@ export interface CostReport {
   /** False while the per-day sums are still being built from past usage. */
   ready: boolean;
   /** Each host's first and last day Walnut holds usage for: what is stored, whatever the transcripts still have. */
-  stored?: { host: string; from: string; to: string }[];
+  stored?: { host: string; from: string; to: string; imported?: true }[];
 }
 
 export interface CostReportDeps {
@@ -344,6 +344,19 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
     if (rest.length) report.moreTasks = fold(rest);
     if (short.length) report.shortSessions = { ...fold(short), lines: short.slice(0, 50) };
   }
+  if (all) {
+    // Days before Walnut kept usage, brought in from outside (a provider's usage bill): no
+    // sessions, projects or kinds of work behind them, so they are one agent, one project, one kind.
+    const byAgent = group('agent', 'By agent'), byModel = group('model', 'By model'), byHost = group('host', 'By host');
+    const byProject = group('project', 'By project'), byKind = group('kind', 'By kind of work');
+    for (const r of deps.rollup.query({ start: range.start, end: range.end, sources: ['import'], by: ['date', 'host'] })) {
+      const p = pricer.price(r.model, r.band, { ...r, requests: r.calls });
+      noteUnpriced(r.model, IMPORTED_LABEL, p);
+      const [mk, ml] = modelLine(r.model);
+      count(r.date, p, [[byAgent, IMPORTED_KEY, IMPORTED_LABEL], [byModel, mk, ml], [byProject, IMPORTED_KEY, IMPORTED_LABEL],
+        [byHost, r.host as string, r.host as string], [byKind, 'imported', WORK_KINDS.imported]]);
+    }
+  }
   const order = all ? ['agent', 'model', 'project', 'host', 'kind', 'feature']
     : view === 'walnut' ? ['feature', 'model']
     // One engine picked: its "By engine" would be one row saying the total again.
@@ -358,6 +371,8 @@ export async function buildCostReport(view: CostView, range: { start?: string; e
 }
 
 const WALNUT_KEY = 'walnut';
+const IMPORTED_KEY = 'imported';
+const IMPORTED_LABEL = 'Imported';
 const WALNUT_PROJECT = 'Walnut itself';
 /** Not a name a project can have, so a project called "walnut" never joins Walnut's own calls. */
 const WALNUT_PROJECT_KEY = '__walnut__';

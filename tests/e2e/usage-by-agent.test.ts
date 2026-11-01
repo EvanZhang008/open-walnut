@@ -147,4 +147,23 @@ describe('reconciled usage through the real server', () => {
     expect(body.recent.find((row: { model: string }) => row.model === 'gpt-6-1-sol')).toMatchObject({ cost_usd: null });
     expect(body.sessions.find((row: { sessionId: string }) => row.sessionId === 'sol-session')).toMatchObject({ unverified: 1 });
   });
+  it('imports per-day sums from a bill, refuses malformed rows, and shows them in the whole picture without counting a day twice', async () => {
+    const post = (body: unknown) => fetch(`http://127.0.0.1:${port}/api/usage/import`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const row = { date: '2000-01-01', model: 'claude-opus-5-5', input: 1_000_000, output: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0 };
+    expect((await post({ label: '', rows: [row] })).status).toBe(400);
+    expect((await post({ label: 'Bill', rows: [{ ...row, input: -1 }] })).status).toBe(400);
+    expect((await post({ label: 'Bill', rows: [{ ...row, date: 'yesterday' }] })).status).toBe(400);
+    expect((await post({ label: 'Bill', rows: [{ ...row, input: 1.5 }] })).status).toBe(400);
+    const before = (await get('/api/usage/costs?view=all')).totals.costUsd;
+    for (let i = 0; i < 2; i++) { // the second send replaces the first, never adds to it
+      const done = await post({ label: 'Bill', rows: [row, { ...row, date: '2999-01-01' }] });
+      expect(done.status).toBe(200);
+      expect(await done.json()).toEqual({ stored: 1, skipped: 1, from: '2000-01-01', to: '2000-01-01' });
+    }
+    const whole = await get('/api/usage/costs?view=all');
+    expect(whole.totals.costUsd).toBeCloseTo(before + 4, 6);
+    expect(whole.groups.find((g: { id: string }) => g.id === 'agent').lines.map((l: { label: string }) => l.label)).toContain('Imported');
+    expect(whole.stored).toContainEqual({ host: 'Bill', from: '2000-01-01', to: '2000-01-01', imported: true });
+  });
 });

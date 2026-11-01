@@ -25,11 +25,11 @@ export const OTHER_KEY = '__other__';
 const SLOTS = ['var(--usage-s1)', 'var(--usage-s2)', 'var(--usage-s3)', 'var(--usage-s4)', 'var(--usage-s5)', 'var(--usage-s6)'];
 const OTHER_COLOR = 'var(--usage-other)';
 /** An agent keeps its color whatever the period, so switching periods never repaints one. */
-const AGENT_SLOT: Record<string, number> = { claude: 0, codex: 1, opencode: 2, goose: 3, walnut: 5 };
+const AGENT_SLOT: Record<string, number> = { claude: 0, codex: 1, opencode: 2, goose: 3, imported: 4, walnut: 5 };
 /** Token kinds and kinds of work keep theirs too, so the table reads the same on every visit. */
 const FIXED_SLOT: Partial<Record<BreakdownId, Record<string, number>>> = {
   agent: AGENT_SLOT,
-  kind: { interactive: 0, subagent: 1, routine: 2, walnut: 5 },
+  kind: { interactive: 0, subagent: 1, routine: 2, imported: 4, walnut: 5 },
   token: { cacheRead: 0, cacheWrite1h: 1, output: 2, cacheWrite5m: 3, input: 4, reported: 5 },
 };
 
@@ -156,15 +156,21 @@ export function monotonePath(pts: [number, number][], moveTo = true): string {
 
 function f(v: number): string { return (Math.round(v * 10) / 10).toString(); }
 
-export type Coverage = 'none' | 'partial' | 'full' | 'reading';
+export type Coverage = 'none' | 'partial' | 'imported' | 'mixed' | 'full' | 'reading';
 
 /**
  * How much of a bucket Walnut holds: nothing before the first stored day (those
  * transcripts were gone before usage was kept), part of the bucket that holds it,
- * and "reading" for the newest one while the latest hours are not read yet.
+ * and "reading" for the newest one while the latest hours are not read yet. Days
+ * before `ownFrom` (the first day Walnut recorded itself) that were imported from
+ * a bill read "imported", and the bucket holding both kinds "mixed".
  */
-export function coverageOf(b: Bucket, storedFrom: string | undefined, stillReading = false): Coverage {
+export function coverageOf(b: Bucket, storedFrom: string | undefined, stillReading = false, ownFrom?: string): Coverage {
   if (!storedFrom || b.end < storedFrom) return 'none';
+  if (ownFrom && ownFrom > storedFrom) {
+    if (b.end < ownFrom) return b.start < storedFrom ? 'partial' : 'imported';
+    if (b.start < ownFrom) return 'mixed';
+  }
   if (b.start < storedFrom) return 'partial';
   return stillReading ? 'reading' : 'full';
 }

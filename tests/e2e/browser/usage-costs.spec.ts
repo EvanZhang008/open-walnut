@@ -208,6 +208,27 @@ test('token types show their share of tokens and of cost, kinds of work split, a
   expect(errors).toEqual([])
 })
 
+test('days imported from a bill are named as such in the line above the chart and in the hover', async ({ page }) => {
+  await page.goto('about:blank')
+  const day = (back: number) => { const d = new Date(); d.setDate(d.getDate() - back); return localDay(d) }
+  // Walnut recorded itself from 10 days ago; the bill brought in the 10 days before that.
+  await routeCosts(page, undefined, { storedFrom: day(10), fresh: true, imported: { from: day(20), to: day(11) } })
+  await openUsage(page)
+  const coverage = page.getByTestId('usage-coverage')
+  await expect(coverage).toContainText('imported from Cloud usage bill, counted for the whole account, with no sessions or projects.')
+  await expect(coverage).toContainText('Nothing earlier in it.')
+  await expect(coverage).toContainText('Recorded by Walnut from ')
+  await expect(coverage).not.toContainText('transcripts were gone')
+  // Nine days before the bill: not recorded. Then the bill's days. Hover one of each.
+  const chart = page.getByTestId('usage-breakdown-chart')
+  const box = (await chart.boundingBox())!
+  await page.mouse.move(box.x + box.width * 0.5, box.y + 100)
+  await expect(page.getByTestId('usage-breakdown-tip').locator('[data-coverage="imported"]')).toContainText('Imported from the usage bill')
+  await page.mouse.move(box.x + 70, box.y + 100)
+  await expect(page.getByTestId('usage-breakdown-tip').locator('[data-coverage="none"]')).toContainText('Not recorded')
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height + 200)
+})
+
 test('a period that is all stored and freshly read says so, with nothing shaded', async ({ page }) => {
   await page.goto('about:blank')
   await routeCosts(page, undefined, { storedFrom: '2026-01-01', fresh: true })

@@ -50,16 +50,23 @@ const fullDay = (d: string) => `${dayLabel(d)}, ${d.slice(0, 4)}`;
 
 /** One line about how much of the period Walnut holds, host by host when they started on different days. */
 function coverageLine(report: CostReport, days: string[], stillReading: boolean, hostName: (h: string) => string): string {
-  const stored = [...(report.stored ?? [])].sort((a, b) => a.from.localeCompare(b.from));
-  if (!stored.length) return 'Nothing stored yet. Update now reads every host.';
-  const from = stored[0].from, latest = stored[stored.length - 1].from;
+  const byFrom = (x: { from: string }, y: { from: string }) => x.from.localeCompare(y.from);
+  const own = (report.stored ?? []).filter((s) => !s.imported).sort(byFrom);
+  const imported = (report.stored ?? []).filter((s) => s.imported).sort(byFrom);
+  if (!own.length && !imported.length) return 'Nothing stored yet. Update now reads every host.';
+  const ownFrom = own[0]?.from ?? '', latest = own[own.length - 1]?.from ?? '';
+  const each = own.length && ownFrom !== latest
+    ? own.map((s) => `${hostName(s.host)} from ${fullDay(s.from)}`).join(', ') : `from ${fullDay(ownFrom)}`;
   const parts: string[] = [];
-  // The period reaches back past a host's first stored day: say where each one starts.
-  if (days[0] && days[0] < latest) {
-    const each = from !== latest
-      ? stored.map((s) => `${hostName(s.host)} from ${fullDay(s.from)}`).join(', ') : `from ${fullDay(from)}`;
+  if (imported.length && ownFrom && days[0] && days[0] < ownFrom) {
+    // Days before Walnut recorded usage, brought in from a bill: whole-account totals.
+    parts.push(`Before ${fullDay(ownFrom)}: imported from ${imported[0].host}, counted for the whole account, with no sessions or projects.`);
+    if (days[0] < imported[0].from) parts.push('Nothing earlier in it.');
+    parts.push(`Recorded by Walnut${own.length > 1 && ownFrom !== latest ? ':' : ''} ${each}.`);
+  } else if (days[0] && days[0] < latest) {
+    // The period reaches back past a host's first stored day: say where each one starts.
     parts.push(`Stored ${each}.`);
-    if (days[0] < from) parts.push('Nothing earlier: those transcripts were gone before Walnut kept usage.');
+    if (days[0] < ownFrom) parts.push('Nothing earlier: those transcripts were gone before Walnut kept usage.');
   } else parts.push('Every day of this period is stored.');
   if (stillReading) parts.push('The latest hours are still being read.');
   return parts.join(' ');
@@ -79,8 +86,9 @@ export function UsageBreakdownCard({ report, days, loading, onPick }: {
   const oldest = (report.countedUntil ?? []).map((u) => Date.parse(u.until)).filter(Number.isFinite).sort((a, b) => a - b)[0];
   const stillReading = !!report.collection?.running || oldest === undefined || Date.now() - oldest > STALE_AFTER_MS;
   const storedFrom = (report.stored ?? []).map((s) => s.from).sort()[0];
+  const ownFrom = (report.stored ?? []).filter((s) => !s.imported).map((s) => s.from).sort()[0];
   const today = new Date().toLocaleDateString('en-CA');
-  const coverage = data.buckets.map((b) => coverageOf(b, storedFrom, stillReading && b.end >= today));
+  const coverage = data.buckets.map((b) => coverageOf(b, storedFrom, stillReading && b.end >= today, ownFrom));
   const noun = BREAKDOWNS.find((b) => b.value === breakdown)!.noun;
   const rows = open ? data.rows : data.rows.slice(0, VISIBLE);
   const hidden = data.rows.length - rows.length;

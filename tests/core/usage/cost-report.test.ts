@@ -299,6 +299,30 @@ describe('cost report', () => {
     expect(report.unpriced).toEqual([{ model: 'unknown', where: 'Task overview upkeep', requests: 1 }]);
   });
 
+  it('shows days imported from a bill as their own agent, project and kind, priced like the rest, and never counts a day twice', async () => {
+    response({ input_tokens: 1 * M, date: '2026-10-20' });                                   // $4, the first day Walnut recorded itself
+    await ready();
+    const row = (date: string) => ({ date, model: 'claude-opus-5-5', input: 1 * M, output: 0, cacheRead: 5 * M, cacheWrite5m: 0, cacheWrite1h: 1 * M });
+    // $4 input + $1 cache read + $8 one-hour write = $13 a day; the last row falls on a day Walnut holds itself.
+    const result = await store.rollup.replaceImport('Cloud usage bill', [row('2026-10-01'), row('2026-10-02'), row('2026-10-02'), row('2026-10-20')]);
+    expect(result).toEqual({ stored: 2, skipped: 1, from: '2026-10-01', to: '2026-10-02' });
+    const report = await buildCostReport('all', {}, deps());
+    expect(report.totals.costUsd).toBeCloseTo(4 + 13 + 26, 6);
+    expect(report.groups.find(g => g.id === 'agent')!.lines.map(l => [l.label, Math.round(l.costUsd)])).toEqual([['Imported', 39], ['Claude Code', 4]]);
+    expect(report.groups.find(g => g.id === 'project')!.lines.map(l => l.label)).toContain('Imported');
+    expect(report.groups.find(g => g.id === 'kind')!.lines.map(l => l.label)).toContain('Imported');
+    expect(report.groups.find(g => g.id === 'host')!.lines.map(l => l.label)).toContain('Cloud usage bill');
+    expect(report.groups.find(g => g.id === 'token')!.lines.map(l => [l.key, Math.round(l.costUsd)]))
+      .toEqual([['cacheWrite1h', 24], ['input', 16], ['cacheRead', 3]]);
+    expect(report.stored).toEqual([{ host: '__local__', from: '2026-10-20', to: '2026-10-20' },
+      { host: 'Cloud usage bill', from: '2026-10-01', to: '2026-10-02', imported: true }]);
+    // Sent again with fewer days: what the label brought before is replaced, not added to.
+    await store.rollup.replaceImport('Cloud usage bill', [row('2026-10-01')]);
+    expect((await buildCostReport('all', {}, deps())).totals.costUsd).toBeCloseTo(4 + 13, 6);
+    // The agents-only view never carries imported days.
+    expect((await buildCostReport('agents', {}, deps())).totals.costUsd).toBeCloseTo(4, 6);
+  });
+
   it('counts one engine when asked, and still offers every engine of the period', async () => {
     response({ input_tokens: 1 * M });                                                            // Claude Code, t1: $4
     await ready();

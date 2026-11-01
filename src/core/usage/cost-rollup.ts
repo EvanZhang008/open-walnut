@@ -22,6 +22,12 @@ export interface RollupRow {
   unknown: number;
 }
 
+/** One day of one model's tokens from a source outside Walnut's own records. */
+export interface ImportRow {
+  date: string; model: string; band?: number;
+  input: number; output: number; cacheRead: number; cacheWrite5m: number; cacheWrite1h: number;
+}
+
 export interface DayBucket {
   day: string; model: string; band: number; responses: number;
   input: number; output: number; cacheRead: number; cacheWrite5m: number; cacheWrite1h: number; cacheWrite: number;
@@ -180,11 +186,43 @@ export class CostRollup {
       FROM usage_rollup WHERE ${clauses.join(' AND ')} GROUP BY ${cols.map(c => c.sql).join(', ')}`).all(...args)) as (RollupRow & Record<string, unknown>)[];
   }
 
-  /** Each host's first and last stored day. */
-  hostBounds(): { host: string; from: string; to: string }[] {
+  /** Each host's first and last stored day; an import is listed as a host of its own, flagged. */
+  hostBounds(): { host: string; from: string; to: string; imported?: true }[] {
     // Plain aliases: `from` and `to` in double quotes are an error in the macOS build's SQLite.
-    return (this.db.prepare('SELECT host, MIN(date) first_day, MAX(date) last_day FROM usage_rollup GROUP BY host ORDER BY host').all() as
-      { host: string; first_day: string; last_day: string }[]).map(r => ({ host: r.host, from: r.first_day, to: r.last_day }));
+    const rows = this.db.prepare(`SELECT host, MIN(date) first_day, MAX(date) last_day, source='import' imported FROM usage_rollup
+      GROUP BY host, source='import' ORDER BY source='import', host`).all() as { host: string; first_day: string; last_day: string; imported: number }[];
+    return rows.map(r => ({ host: r.host, from: r.first_day, to: r.last_day, ...(r.imported ? { imported: true as const } : {}) }));
+  }
+
+  /** The first day usage Walnut recorded itself is stored (an import stops short of it, so no day is counted twice). */
+  firstOwnDay(): string | null {
+    return (this.db.prepare("SELECT MIN(date) d FROM usage_rollup WHERE source != 'import'").get() as { d: string | null }).d;
+  }
+
+  /**
+   * Replaces everything one import label brought with `rows`: per-day token sums of a
+   * source outside Walnut's own records (a provider's usage bill, say). Days on or after
+   * the first recorded day are skipped, so a day is never counted by both. Safe to run again.
+   */
+  replaceImport(label: string, rows: ImportRow[]): Promise<{ stored: number; skipped: number; from: string | null; to: string | null }> {
+    return this.exclusive(async () => {
+      const stop = this.firstOwnDay();
+      const sums = new Map<string, RollupRow>();
+      let skipped = 0;
+      for (const r of rows) {
+        if (stop && r.date >= stop) { skipped++; continue; }
+        const row: RollupRow = { date: r.date, host: label, source: 'import', engine: 'imported', sessionId: '', taskId: null,
+          model: r.model, agent: 'imported', band: r.band ?? 0, calls: 0, input: r.input, output: r.output, cacheRead: r.cacheRead,
+          cacheWrite5m: r.cacheWrite5m, cacheWrite1h: r.cacheWrite1h, unknown: 0 };
+        const key = rowKey(row), prev = sums.get(key);
+        if (prev) addInto(prev, row); else sums.set(key, row);
+      }
+      this.db.prepare("DELETE FROM usage_rollup WHERE source='import' AND host=?").run(label);
+      const all = [...sums.values()];
+      await this.writeRows(all);
+      const days = all.map(r => r.date).sort();
+      return { stored: all.length, skipped, from: days[0] ?? null, to: days[days.length - 1] ?? null };
+    });
   }
 
   bounds(): { min: string | null; max: string | null } {

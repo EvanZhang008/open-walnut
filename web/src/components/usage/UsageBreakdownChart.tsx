@@ -32,6 +32,8 @@ function labelIndexes(n: number, plotW: number): Set<number> {
 const COVERAGE_NOTE: Record<Coverage, string | null> = {
   none: 'Not recorded: these transcripts were gone before Walnut kept usage',
   partial: 'Partly recorded: only the days Walnut holds',
+  imported: 'Imported from the usage bill: the whole account, no sessions or projects',
+  mixed: 'Part imported from the usage bill, part recorded by Walnut',
   reading: 'Still being read: the latest hours come in with the next update',
   full: null,
 };

@@ -93,6 +93,16 @@ describe('usage breakdown model', () => {
     expect(coverageOf(weeks[0], undefined)).toBe('none');
   });
 
+  it('tells imported days from recorded ones, and the bucket holding both', () => {
+    // Imported from Oct 1, recorded by Walnut from Oct 20: Oct 20 is a Tuesday.
+    const weeks = bucketsFor(periodDays('2026-09-21', '2026-10-31'), 'week');
+    expect(weeks.map((b) => [b.start, coverageOf(b, '2026-10-01', false, '2026-10-20')])).toEqual([
+      ['2026-09-21', 'none'], ['2026-09-28', 'partial'], ['2026-10-05', 'imported'], ['2026-10-12', 'imported'],
+      ['2026-10-19', 'mixed'], ['2026-10-26', 'full']]);
+    // With no import the first recorded day is also the first stored one, as before.
+    expect(coverageOf(weeks[5], '2026-10-20', false, '2026-10-20')).toBe('full');
+  });
+
   it('keeps an empty period and a missing group empty', () => {
     expect(periodDays(undefined, '2026-10-31')).toEqual([]);
     expect(buildBreakdown(undefined, ['2026-10-31'])).toMatchObject({ series: [], rows: [] });

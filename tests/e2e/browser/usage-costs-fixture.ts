@@ -51,6 +51,8 @@ export interface FixtureOptions {
   storedFrom?: string
   /** The last collection just finished (default: it is days old, so the latest hours read as still coming in). */
   fresh?: boolean
+  /** Days brought in from a bill, before the first recorded day. */
+  imported?: { from: string; to: string }
 }
 
 function wholePicture(start: string | null, end: string | null, opts: FixtureOptions = {}) {
@@ -79,7 +81,8 @@ function wholePicture(start: string | null, end: string | null, opts: FixtureOpt
   const daily = groups[0].daily.map((d) => ({ date: d.date, costUsd: Object.values(d.costs).reduce((a, b) => a + b, 0), requests: 1000 }))
   const from = opts.storedFrom ?? '2026-09-01'
   return { ...agents, view: 'all', engine: null, totals: line('total', 'Total', total, 64_270, 14), daily, groups,
-    stored: [{ host: '__local__', from, to: end ?? '2026-09-23' }, { host: 'devbox', from, to: end ?? '2026-09-23' }],
+    stored: [{ host: '__local__', from, to: end ?? '2026-09-23' }, { host: 'devbox', from, to: end ?? '2026-09-23' },
+      ...(opts.imported ? [{ host: 'Cloud usage bill', ...opts.imported, imported: true }] : [])],
     ...(opts.fresh ? { countedUntil: [{ host: '__local__', until: new Date().toISOString() }, { host: 'devbox', until: new Date().toISOString() }] } : {}) }
 }
 

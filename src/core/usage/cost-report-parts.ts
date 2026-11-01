@@ -112,7 +112,8 @@ export function partsOf(lines: { kind: string; costUsd: number }[]): Partial<Rec
 }
 
 /** The kind of work a row was. A routine's run counts as a routine, its subagents too. */
-export const WORK_KINDS = { interactive: 'Interactive', subagent: 'Subagents', routine: 'Routines', walnut: 'Walnut itself' } as const;
+export const WORK_KINDS = { interactive: 'Interactive', subagent: 'Subagents', routine: 'Routines', walnut: 'Walnut itself',
+  imported: 'Imported' } as const;
 export type WorkKind = keyof typeof WORK_KINDS;
 
 /**
