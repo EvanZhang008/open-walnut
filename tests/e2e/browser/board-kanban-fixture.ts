@@ -357,19 +357,13 @@ async function keepSummaries(api: KanbanApi, team: KanbanTeam, ids: readonly str
 type StatusRow = { id: string; phase: string; user_status?: { state: string } }
 
 /** The leader's own line: it carries on, collecting its workers' reports (finishTeam). */
-const leaderCarriesOn = (api: KanbanApi, team: Pick<KanbanTeam, 'leader'>) =>
-  call(api, 'PUT', `/api/v1/tasks/${team.leader}/report`, { state: 'working', next: "Collect the workers' reports" })
+const leaderCarriesOn = (api: KanbanApi, team: Pick<KanbanTeam, 'leader'>) => call(api, 'PUT', `/api/v1/tasks/${team.leader}/report`, { state: 'working', next: "Collect the workers' reports" })
 
 /**
- * Run `act`, which makes a worker err, and keep the leader carrying on. A worker's error wakes its
- * idle leader (src/core/sessions/subtask-notices.ts), and the leader's woken turn ends with its task
- * handed back: a turn end newer than its line, so once the hand back settles (HANDBACK_SETTLE_MS,
- * 20 s) the leader reads Needs you and every Needs you count of the team is one more than its cards
- * (2026-11-01: C33 waited for 0 and read 1 on 4 of 11 CI runs, the runs slow enough to outlast
- * those 20 s). The mock CLI also ends its process after a turn it has no mode for, the notice's
- * among them, and a line that carries on needs a live process (report-set.ts). So: wait for the
- * woken turn's end, give the leader a live process again with one clean turn, and set its line
- * once that turn has settled.
+ * Run `act` (a worker errs) and keep the leader carrying on: the error wakes the idle leader, whose
+ * turn end hands it back, and 20 s later (HANDBACK_SETTLE_MS) it reads Needs you, one more than the
+ * cards (2026-11-01: C33 read 1 on 4 of 11 CI runs). The mock CLI ends its process after that turn,
+ * and carrying on needs a live one (report-set.ts): wait for the end, run one clean turn, set the line.
  */
 export async function withLeaderCarryingOn<T>(api: KanbanApi, team: Pick<KanbanTeam, 'leader'>, act: () => Promise<T>): Promise<T> {
   const leaderTask = async () => (await call<{ task: StatusRow }>(api, 'GET', `/api/tasks/${team.leader}`)).task
