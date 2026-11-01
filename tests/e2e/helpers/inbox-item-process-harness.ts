@@ -141,6 +141,8 @@ if(m.uuid)out({type:'command_lifecycle',command_uuid:m.uuid,state:'completed'});
       CLAUDE_CONFIG_DIR: path.join(lane.home, '.claude'), WALNUT_CLOUD_MODE: cloud ? '1' : '0',
       WALNUT_DAEMON_DIR: lane.runtime, WALNUT_STREAMS_DIR: path.join(lane.runtime, 'streams'),
       WALNUT_LEGACY_STREAMS_DIR: path.join(lane.runtime, 'legacy-streams'), WALNUT_SPAWN_JOURNAL: path.join(lane.runtime, 'spawn-journal.jsonl'),
+      // A first start on a task with no folder runs in its task directory: inside the lane's data.
+      WALNUT_TASK_DIR_ROOT: path.join(lane.data, 'task-dirs'),
       WALNUT_GIT_HUB_DIR: path.join(lane.dir, 'hub'), WALNUT_DISABLE_BACKGROUND_AI: '1', WALNUT_DISABLE_SEARCH: '1',
       WALNUT_STALL_RECORDER: '0', WALNUT_LOCAL_CLAUDE_PROBE: '0', WALNUT_BRIDGE_BLIP_GRACE_MS: '0',
       FIXTURE_DAEMON_URL: `ws://127.0.0.1:${this.daemonPort}`, FIXTURE_ROOT: lane.dir };

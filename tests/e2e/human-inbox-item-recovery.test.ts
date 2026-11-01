@@ -62,6 +62,10 @@ async function interruptedStart(name: string, state: 'starting' | 'unconfirmed' 
   await updateTaskRaw(task.id, { last_start: attempt });
   return { ...f, task, plan, saved, requestId, previousId, attempt };
 }
+// The fixture daemon offers the one capability these starts are about. Claiming every one
+// also took the task directory command (task-dir-v1) that a first start on a task with no
+// folder now sends (c2d9acece), so the host saw two calls where the test counts the cancel.
+const cancelOnly = (name: string) => name === 'cancel-pending-start-v1';
 function mockStartRunner() {
   return vi.spyOn(sessionRunner, 'startSession').mockImplementation(async launch => ({ claudeSessionId: launch.preassignedSessionId!, title: 'Recovered work' }));
 }
@@ -259,7 +263,7 @@ describe('Persisted execution recovery without resending', () => {
     vi.spyOn(tracker, 'updateSessionRecord').mockResolvedValue(row);
     const detach = vi.spyOn(conversation, 'detachTaskSession').mockResolvedValue(undefined);
     const spawn = mockStartRunner();
-    host.hasCapability.mockReturnValue(true);
+    host.hasCapability.mockImplementation(cancelOnly);
     host.send.mockImplementation(async () => {
       expect((await getTask(f.task.id)).last_start).toEqual(f.attempt);
       expect(spawn).not.toHaveBeenCalled();
@@ -317,7 +321,7 @@ describe('Persisted execution recovery without resending', () => {
     let release!: () => void;
     const entered = new Promise<void>(resolve => { enter = resolve; });
     const gate = new Promise<void>(resolve => { release = resolve; });
-    host.hasCapability.mockReturnValue(true);
+    host.hasCapability.mockImplementation(cancelOnly);
     host.send.mockImplementation(async () => {
       enter(); await gate;
       await updateTaskRaw(f.task.id, { last_start: { ...f.attempt, state: 'started' } });
@@ -343,7 +347,7 @@ describe('Persisted execution recovery without resending', () => {
     vi.spyOn(conversation, 'taskConversation').mockResolvedValue(undefined);
     vi.spyOn(tracker, 'getSessionsForTask').mockResolvedValue([]);
     const spawn = mockStartRunner();
-    host.hasCapability.mockReturnValue(failure !== 'old-host');
+    host.hasCapability.mockImplementation((name: string) => failure !== 'old-host' && cancelOnly(name));
     host.send.mockResolvedValue(failure === 'alive' ? { ok: true, cancelled: false, alive: true } : { ok: false, cancelled: false, alive: false, error: failure === 'long-refusal' ? 'Fixture host refusal '.repeat(100) : 'Fixture host refused cancellation' });
     const invoke = vi.spyOn(ops, 'executeOp').mockImplementation(async (tool, args) => {
       expect(tool).toBe('task_start');
