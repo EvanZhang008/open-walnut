@@ -14,8 +14,11 @@
   display: flex; flex-direction: column; gap: 5px; min-width: 0;
 }
 .org-thread.is-closed { opacity: 0.78; }
+/* Two rows: state and time, then the title across the whole card (a CJK title squeezed beside the
+   time broke after every character). */
 .org-thread-head {
-  display: flex; align-items: baseline; gap: 8px; width: 100%; min-width: 0; padding: 0; border: 0;
+  display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; column-gap: 8px; row-gap: 2px;
+  width: 100%; min-width: 0; padding: 0; border: 0;
   background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer;
 }
 .org-thread-state {
@@ -23,8 +26,8 @@
   text-transform: none; white-space: nowrap;
 }
 .org-thread-state i, .org-thread-task i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex: none; }
-.org-thread-title { flex: 1 1 auto; min-width: 0; font-weight: 600; font-size: 13px; overflow-wrap: anywhere; }
-.org-thread-meta { flex: none; font-size: 11px; white-space: nowrap; }
+.org-thread-title { grid-column: 1 / -1; grid-row: 2; min-width: 0; font-weight: 600; font-size: 13px; overflow-wrap: break-word; }
+.org-thread-meta { grid-column: 2; grid-row: 1; justify-self: end; min-width: 0; font-size: 11px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .org-thread-follows { margin: 0; font-size: 12px; }
 .org-thread-ask { margin: 0; font-size: 12.5px; color: var(--fg-secondary, var(--fg)); overflow-wrap: anywhere; }
 .org-thread-reply {

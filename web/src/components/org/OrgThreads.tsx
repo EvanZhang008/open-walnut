@@ -14,6 +14,7 @@
 import { useMemo, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { userStateOf } from '@open-walnut/org-tree';
+import { USER_STATE_LABELS } from '@open-walnut/user-status';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { AnswerBox } from '@/components/common/AnswerBox';
 import { timeAgo } from '@/utils/time';
@@ -25,7 +26,10 @@ import '@/styles/org-threads.css';
 const TASK_DOT: Record<string, string> = {
   needs: 'var(--error, #FF3B30)', working: 'var(--success, #34C759)', waiting: 'var(--fg-muted, #86868B)', done: 'var(--accent, #0A84FF)',
 };
-const STATE_LABEL: Record<OrgThreadState, string> = { new: 'New', working: 'Working', needs: 'Needs you', answered: 'Answered' };
+/** A thread's state in words: the task-state names where they mean the same (USER_STATE_LABELS). */
+const STATE_LABEL: Record<OrgThreadState, string> = {
+  new: 'New', working: USER_STATE_LABELS.working, needs: USER_STATE_LABELS.needs, answered: 'Answered',
+};
 const STATE_DOT: Record<OrgThreadState, string> = {
   new: 'var(--accent, #0A84FF)', working: 'var(--success, #34C759)', needs: 'var(--error, #FF3B30)', answered: 'var(--fg-muted, #86868B)',
 };
