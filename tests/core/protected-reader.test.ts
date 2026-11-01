@@ -23,6 +23,7 @@ import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { createMockConstants } from '../helpers/mock-constants.js';
+import { swiftCompiles } from '../helpers/swift-compiles.js';
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-protected-reader'));
 
@@ -320,10 +321,9 @@ describe('the Swift side agrees', () => {
     // A build script that forgets it produces an app without the flag, which the
     // server then silently routes around: correct, but the grant never moves.
     for (const script of ['desktop/build.sh', 'desktop/build-release.sh']) {
-      const compiles = read(script).split('swiftc ').slice(1);
+      const compiles = swiftCompiles(read(script));
       expect(compiles.length, script).toBeGreaterThan(0);
-      for (const cmd of compiles) {
-        const invocation = cmd.slice(0, cmd.indexOf('-framework Carbon'));
+      for (const invocation of compiles) {
         expect(invocation, script).toContain('ReaderBridge.swift');
         expect(invocation, script).toContain('src/data/walnut-reader.swift');
         expect(invocation, script).toContain('-D WALNUT_APP');

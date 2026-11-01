@@ -11,6 +11,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { swiftCompiles } from '../helpers/swift-compiles.js';
 
 const ROOT = path.resolve(__dirname, '../..');
 const SCRIPT = path.join(ROOT, 'desktop/apply-update.sh');
@@ -110,9 +111,9 @@ describe('the build scripts ship the updater', () => {
     it(`${script} compiles the updater and copies apply-update.sh`, () => {
       const text = fs.readFileSync(path.join(ROOT, script), 'utf8');
       for (const file of ['AppUpdateMachine.swift', 'AppUpdater.swift', 'AppUpdateBridge.swift']) {
-        const compiles = text.split('swiftc ').slice(1);
+        const compiles = swiftCompiles(text);
         expect(compiles.length).toBeGreaterThan(0);
-        for (const c of compiles) expect(c.slice(0, c.indexOf('-framework'))).toContain(file);
+        for (const c of compiles) expect(c).toContain(file);
       }
       expect(text).toContain('-framework Security');
       expect(text).toContain('cp "$SCRIPT_DIR/apply-update.sh" "$RESOURCES/apply-update.sh"');

@@ -27,6 +27,7 @@ import zlib from 'node:zlib'
 import { archiveVersion, carriedFileOf, serveReleases, systemPathWithoutNode } from '../../scripts/release-rehearsal/runtime.mjs'
 import { RUNTIME_MARKER as UPDATER_MARKER } from '../../src/core/self-update/install-kind.js'
 import { npmEnv, npmOnPath } from '../helpers/npm-on-path.js'
+import { swiftCompiles } from '../helpers/swift-compiles.js'
 
 const ROOT = path.resolve(__dirname, '../..')
 const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'release-archives-test-')))
@@ -428,15 +429,9 @@ describe('the Mac app', () => {
   it('both builds compile it and carry the same install.sh every release attaches', () => {
     for (const script of ['desktop/build.sh', 'desktop/build-release.sh']) {
       const body = read(script)
-      // Each compile names the file itself, or the SOURCES list that holds it (4fde6292b moved
-      // the files into one list both builds pass to swiftc and to the App Intents step).
-      const sources = /^SOURCES=\(([\s\S]*?)^\)/m.exec(body)?.[1] ?? ''
-      const compiles = body.split('\n').filter((l) => /^\s*swiftc\s/.test(l))
+      const compiles = swiftCompiles(body)
       expect(compiles.length, script).toBeGreaterThan(0)
-      for (const cmd of compiles) {
-        if (cmd.includes('"${SOURCES[@]}"')) expect(sources, `${script}: SOURCES`).toContain('BundledRuntime.swift')
-        else expect(cmd, script).toContain('BundledRuntime.swift')
-      }
+      for (const cmd of compiles) expect(cmd, script).toContain('BundledRuntime.swift')
       expect(body, script).toContain('cp "$SCRIPT_DIR/../scripts/install.sh" "$RESOURCES/install.sh"')
     }
     expect(read('scripts/test-desktop.sh')).toContain('tests/desktop/bundled-runtime-tests.swift')
