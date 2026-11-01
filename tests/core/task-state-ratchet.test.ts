@@ -95,7 +95,7 @@ const PHASE_READERS: Record<string, number> = {
   'src/core/offline-merge/patch-check.ts': 1,
   'src/core/org/org-store.ts': 1,
   'src/core/peers/envelope-kit.ts': 1,
-  'src/core/phase.ts': 4,
+  'src/core/phase.ts': 5,
   'src/core/routines/trigger-api.ts': 2,
   'src/core/session-health-monitor.ts': 1,
   'src/core/session-hooks/builtins.ts': 2,

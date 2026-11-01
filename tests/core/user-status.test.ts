@@ -70,10 +70,12 @@ describe('the words say why', () => {
   // 2026-10-27, the lead on the user's demo: the user answered a question, the turn only confirmed
   // the plan, and every surface still read Needs you, for the four minutes until the report and for
   // good once it said done.
-  it('a turn that only ended is not Needs you: its report of done, or its report still to come', () => {
+  it('a turn that only ended is not Needs you: its report still to come; a finished task is the user\'s to close', () => {
     const base = { phase: 'NEED_ACTION', hasSession: true, processStatus: 'idle', phaseChangedAt: ago(5 * 60_000) }
+    // Done with no lead to check it: the user reads it and closes it, and a wait on the user is
+    // Needs you, never Waiting (2026-11-01 org review; tests/core/wait-on-user-is-needs.test.ts).
     expect(deriveUserStatus({ ...base, report: report({ state: 'done', now: 'Plan: ship in 2.4.' }) }, NOW))
-      .toMatchObject({ state: 'waiting', kind: 'you', waitingOn: expect.stringContaining('close it'), now: 'Plan: ship in 2.4.' })
+      .toMatchObject({ state: 'needs', ask: expect.stringContaining('close it'), now: 'Plan: ship in 2.4.' })
     expect(deriveUserStatus({ ...base, hasLeader: true, report: report({ state: 'done' }) }, NOW)).toMatchObject({ state: 'waiting', kind: 'lead' })
     // Main and a lead are never closed: they wait on the user's next message.
     for (const who of [{ isMain: true }, { isLead: true }]) {

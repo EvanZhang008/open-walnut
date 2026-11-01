@@ -32,6 +32,7 @@ import { createSessionRecord, updateSessionRecord } from '../../src/core/session
 import { syncUserStatuses } from '../../src/core/user-status-sync.js'
 import { applyReportPhase } from '../../src/core/sessions/report-phase.js'
 import { applySessionPhase } from '../../src/core/phase.js'
+import { readStatusReport } from '../../src/core/session-hooks/builtins.js'
 import { briefSectionLines } from '../../src/core/sessions/brief.js'
 import { checkStatuses } from '../../src/core/status-consistency.js'
 import { recheckDue } from '../../src/core/sessions/needs-recheck.js'
@@ -206,6 +207,23 @@ describe('every surface shows the same state after every step', () => {
     await turnEnds(worker, sid, { state: 'waiting', waiting_kind: 'other', waiting_on: 'you: the meeting notes and the deadline' })
     expect((await getTask(worker.id)).phase).toBe('NEED_ACTION')
     await expectEverywhere(worker.id, lead.id, 'needs', 'waits on the user')
+  }, 120_000)
+
+  // 2026-11-01 org review: a worker whose own words said the next move was its lead's (written
+  // with a full-width colon, then "it waits for your call") read Needs you while its lead held the
+  // same questions. The next move belongs to its lead or another task: Waiting on it, everywhere.
+  it('a report that waits on its lead or another task is Waiting on it, whatever it says of the user', async () => {
+    for (const [name, line, kind] of [
+      ['Leadwaitflow', 'lead\uff1a the lead brings you four open questions; it waits for your call', 'lead'],
+      ['Taskwaitflow', 'task: the review task asks you to pick a date, then I go on', 'task'],
+    ] as const) {
+      const { lead, worker, sid } = await team(name)
+      const r = readStatusReport(`FOR_USER_STATE: waiting\nFOR_USER_WAITING_ON: ${line}`)!
+      expect(r.waiting_kind).toBe(kind)
+      await turnEnds(worker, sid, r)
+      expect((await getTask(worker.id)).phase, name).toBe('WAITING')
+      await expectEverywhere(worker.id, lead.id, 'waiting', `waits on its ${kind}`)
+    }
   }, 120_000)
 
   it('a worker done -> waits on its lead, not on the user', async () => {

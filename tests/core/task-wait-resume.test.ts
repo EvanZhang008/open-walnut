@@ -104,6 +104,13 @@ describe('a standing routine\'s fire turn', () => {
     dropFireTurn('r5')
     expect(takeFireTurn('r5')).toBeNull()
   })
+  it('a fire that finds the task on the user marks no routine turn', () => {
+    noteTurnSend('r7', true, false, null, true)
+    expect(takeFireTurn('r7')).toBeNull()
+    noteTurnSend('r8', true, false, null)
+    noteTurnSend('r8', true, false, null, true)
+    expect(takeFireTurn('r8')).toBeNull()
+  })
   it('a marker older than a fire turn can last is not trusted', () => {
     noteTurnSend('r6', true, false, null)
     expect(takeFireTurn('r6', Date.now() + 7 * HOUR)).toBeNull()

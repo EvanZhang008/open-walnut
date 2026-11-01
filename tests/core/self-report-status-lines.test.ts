@@ -39,9 +39,17 @@ describe('readStatusReport', () => {
       .toMatchObject({ waiting_kind: 'you', waiting_on: 'the meeting notes' })
   })
 
+  // 2026-11-01: a worker wrote its kind with a full-width colon (CJK words), it read as "other",
+  // and its "waits for your call" words made a wait on its lead Needs you.
+  it('a full-width colon after the kind splits it too, and that wait on the lead is no wait on the user', () => {
+    const r = readStatusReport('FOR_USER_STATE: waiting\nFOR_USER_WAITING_ON: lead\uff1a\u4e0a\u7ea7\u4efb\u52a1\u4f1a\u628a\u95ee\u9898\u8f6c\u7ed9\u4f60\uff0c\u7b49\u4f60\u62cd\u677f', AT)
+    expect(r).toMatchObject({ waiting_kind: 'lead', waiting_on: '\u4e0a\u7ea7\u4efb\u52a1\u4f1a\u628a\u95ee\u9898\u8f6c\u7ed9\u4f60\uff0c\u7b49\u4f60\u62cd\u677f' })
+    expect(readStatusReport('FOR_USER_STATE: waiting\nFOR_USER_WAITING_ON: task\uff1a the review', AT)).toMatchObject({ waiting_kind: 'task', waiting_on: 'the review' })
+  })
+
   it('the ask says a wait on the user is needs-you, and waiting is only for an outside wait', () => {
     expect(FOR_USER_PROMPT).toContain('a wait on the user is ALWAYS needs-you')
-    expect(FOR_USER_PROMPT).toMatch(/waiting ONLY when the next move belongs to something outside Walnut and the user/)
+    expect(FOR_USER_PROMPT).toMatch(/waiting ONLY when nothing of this turn is for the user to read and the next move belongs to something outside Walnut and the user/)
     expect(FOR_USER_PROMPT).toContain('<outside | task | lead | machine>')
   })
 

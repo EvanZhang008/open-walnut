@@ -376,9 +376,16 @@ const fireTurns = new Map<string, { waitUntil: string | null; at: number }>();
 /** A fire turn longer than this is not one the marker still describes (its end went unseen). */
 const FIRE_TURN_TTL_MS = 6 * 60 * 60_000;
 
-/** Every send into a task's session: a fire marks the turn as the routine's, a person's unmarks it. */
-export function noteTurnSend(taskId: string, fire: boolean, person: boolean, waitUntil?: string | null): void {
-  if (fire) {
+/**
+ * Every send into a task's session: a fire marks the turn as the routine's, a person's unmarks it.
+ * `onUser`: the task stood on the user when the fire came (NEED_ACTION, its ask open). That turn is
+ * no routine's between fires: it ends where the task stood, on the user, and its own report may
+ * park it (2026-11-01: a letter watch's scheduled fire took a task whose draft waited on the
+ * user's review off their list for two hours).
+ */
+export function noteTurnSend(taskId: string, fire: boolean, person: boolean, waitUntil?: string | null, onUser = false): void {
+  if (fire && onUser) fireTurns.delete(taskId);
+  else if (fire) {
     if (fireTurns.size > 1000) fireTurns.clear();
     fireTurns.set(taskId, { waitUntil: waitUntil ?? null, at: Date.now() });
   } else if (person) fireTurns.delete(taskId);

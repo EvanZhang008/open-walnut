@@ -328,7 +328,7 @@ export function buildSelfReportPrompt(
   // hand-off document for a fresh AI, and plugin content rules validate it.
   const uiLang = nonEnglishUiLanguage(opts?.uiLanguage);
   const tipLanguage = uiLang
-    ? `\n${withStatus ? 'OVERVIEW, RECAP, FOR_USER_ASK, FOR_USER_ASK_OPTIONS, FOR_USER_ASK_MORE, FOR_USER_WAITING_ON, FOR_USER_NOW and FOR_USER_NEXT are' : 'OVERVIEW and RECAP are'} shown to the user in the UI: write them in ${uiLanguageName(uiLang)} (the user's display language), keeping identifiers, file names, and technical terms in their original form. Every other field stays English.`
+    ? `\n${withStatus ? 'OVERVIEW, RECAP, FOR_USER_ASK, FOR_USER_ASK_OPTIONS, FOR_USER_ASK_MORE, FOR_USER_WAITING_ON, FOR_USER_NOW and FOR_USER_NEXT are' : 'OVERVIEW and RECAP are'} shown to the user in the UI: write them in ${uiLanguageName(uiLang)} (the user's display language), keeping identifiers, file names, and technical terms in their original form${withStatus ? '; the kind word that starts FOR_USER_WAITING_ON (outside, task, lead, machine) stays in English, followed by ":"' : ''}. Every other field stays English.`
     : '';
 
   let noteBlock: string;
@@ -498,7 +498,9 @@ export function readStatusReport(report: string, now: Date = new Date()): Status
   }
   const waiting = read('FOR_USER_WAITING_ON');
   if (state === 'waiting' && waiting) {
-    const m = /^(outside|task|time|machine|you|user|lead|other)\s*:\s*(.+)$/i.exec(waiting);
+    // The colon may be full-width when the words are CJK (2026-11-01: "lead\uff1a..." read as other,
+    // then its "waits for your call" words made a wait on its lead Needs you).
+    const m = /^(outside|task|time|machine|you|user|lead|other)\s*[:\uff1a]\s*(.+)$/i.exec(waiting);
     const kind = m ? m[1].toLowerCase() : 'other';
     out.waiting_kind = (kind === 'user' ? 'you' : kind) as WaitKind;
     out.waiting_on = m ? m[2].trim() : waiting;

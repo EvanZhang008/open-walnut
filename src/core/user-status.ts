@@ -227,6 +227,8 @@ export interface UserStatusInput {
  *  (user-status-sync.ts holds it a moment: the next turn often starts within seconds). */
 /** A turn that answered the user's message: read the answer (report.answered_person). */
 export const ANSWERED_ASK = 'It answered your message: read it and reply.';
+/** A finished task no lead checks: the user reads the result and closes it. */
+export const DONE_ASK = 'It finished: read the result and close it.';
 export const HANDED_BACK_ASK = 'Its turn ended and handed the task back to you: read it and reply.';
 export const COMPLETE_IS_VERIFIED = 'A COMPLETE task counts as verified by the user: write it as done, never as waiting on their check or test, and never remind them of it.';
 
@@ -733,18 +735,15 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
       const on = clean(report.waiting_on);
       return strip({ state: 'needs', source: 'session', ask: on ? `${ANSWERED_ASK} Then it waits on: ${on.slice(0, 160)}` : ANSWERED_ASK, ...w });
     }
-    // Handed back only because its turn ended (2026-10-27, the lead on the user's demo: a turn that
-    // answered the user's question and only confirmed the plan read Needs you everywhere). Its own
-    // report says done: nothing to answer, the user reads it and closes it when they like. A task
-    // with a leader moves to WAITING on that report instead (report-phase.ts).
+    // Its own report says done. A task with a leader moves to WAITING on that report
+    // (report-phase.ts) for its lead to check. One with none is the user's to read and close, and a
+    // wait on the user is Needs you, never Waiting (2026-11-01 org review, by the user's rule of
+    // 2026-10-30: "You, to read the result and close it" sat parked for three days).
     if (report?.state === 'done') {
       // Main and a lead are never closed: they wait on the user's next message.
       if (input.isMain || input.isLead) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
-      return strip({
-        state: 'waiting', kind: input.hasLeader ? 'lead' : 'you',
-        waitingOn: input.hasLeader ? 'Its lead, to check the result and close it' : 'You, to read the result and close it (no rush)',
-        ...w,
-      });
+      if (input.hasLeader) return strip({ state: 'waiting', kind: 'lead', waitingOn: 'Its lead, to check the result and close it', ...w });
+      return strip({ state: 'needs', source: 'session', ask: DONE_ASK, ...w });
     }
     // Its own armed trigger wakes it (a fire resumes a stopped session): with no ask of its own and no
     // turn running (a NEED_ACTION set inside a turn waits for that turn's report), it waits on the watch.
@@ -800,16 +799,16 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   const reportedKind = report?.state === 'waiting' ? report.waiting_kind : undefined;
   if (machine) return machine;
   if (tasks.length) return strip({ state: 'waiting', kind: 'task', waitingOn: reported || `A reply from ${tasks.join(', ')}`, ...w });
+  // Parked on the user (an older writer, a person's park): the user's ask, never a Waiting on them.
+  if (reported && reportedKind === 'you' && !input.isMain && !input.isLead) return strip({ state: 'needs', source: 'session', ask: reported, ...w });
   if (reported && reportedKind && reportedKind !== 'stuck') return strip({ state: 'waiting', kind: reportedKind, waitingOn: reported, ...(until ? { until } : {}), ...w });
   // A standing routine: between fires it waits on the next one.
   const wake = wakeSource(input, w, nowMs, true);
   if (wake) return wake;
   if (report?.state === 'done') {
-    return strip({
-      state: 'waiting', kind: input.hasLeader ? 'lead' : 'you',
-      waitingOn: input.hasLeader ? 'Its lead, to check the result and close it' : 'You, to read the result and close it (no rush)',
-      ...w,
-    });
+    if (input.isMain || input.isLead) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
+    if (input.hasLeader) return strip({ state: 'waiting', kind: 'lead', waitingOn: 'Its lead, to check the result and close it', ...w });
+    return strip({ state: 'needs', source: 'session', ask: DONE_ASK, ...w });
   }
   if (until) return strip({ state: 'waiting', kind: 'time', waitingOn: 'Its next check', until, ...w });
   if (input.phase === 'WAITING') return strip({ state: 'waiting', kind: 'other', waitingOn: 'A message (parked with no clock or watch)', ...w });

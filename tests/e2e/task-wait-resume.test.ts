@@ -670,4 +670,27 @@ describe('a prompt for the human, and the way back to work', () => {
     expect(done.status, JSON.stringify(done.json)).toBeLessThan(300)
     expect((await task(a.taskId)).phase).toBe('COMPLETE')
   })
+
+  // 2026-11-01: a letter watch's scheduled fire came while its task waited on the user's review of
+  // a draft; the fire's turn ended back in WAITING and took the ask off the user's list for 2 hours.
+  it('a fire of a standing routine while the task stands on the user ends where it stood: Need Action', async () => {
+    const b = await startWorker('keep the draft current')
+    const t = await createTrigger(b, 'review-letter-watch')
+    for (const seq of [1, 2]) {
+      await handleTriggerFired('__local__', {
+        type: 'trigger.fired', id: t, epoch: 'epoch-u', seq, atMs: Date.now(),
+        items: [{ id: `recheck-${seq}`, title: 'Scheduled re-check' }], durationMs: 3, nextRunAtMs: Date.now() + 300_000,
+      })
+      await until('fire turn over', () => sessionStatus(b.sid), (st) => st !== 'running')
+      await until('handed back', () => task(b.taskId), (x) => x.phase === 'NEED_ACTION' || x.phase === 'WAITING')
+    }
+    // It has fired twice: a standing routine. The task waits on the user's review.
+    await req('PATCH', `/api/v1/tasks/${b.taskId}`, { phase: 'NEED_ACTION' })
+    expect((await task(b.taskId)).phase).toBe('NEED_ACTION')
+    const fired = await phasesDuring(b.taskId, () => handleTriggerFired('__local__', {
+      type: 'trigger.fired', id: t, epoch: 'epoch-u', seq: 3, atMs: Date.now(),
+      items: [{ id: 'recheck-3', title: 'Scheduled re-check' }], durationMs: 3, nextRunAtMs: Date.now() + 300_000,
+    }), ended)
+    expect(fired).toEqual(['IN_PROGRESS', 'NEED_ACTION'])
+  }, 90_000)
 })

@@ -544,7 +544,7 @@ export async function applySessionPhase(
   // own edge may land after the turn it started already began. The clean end of
   // that turn brings it back while the task still has an armed trigger.
   if (trigger === 'session:input') {
-    noteTurnSend(taskId, opts?.sendSource === 'routine-trigger' || source === 'trigger-host-delivery', isPersonSendSource(opts?.sendSource), task.wait_until ?? null)
+    noteTurnSend(taskId, opts?.sendSource === 'routine-trigger' || source === 'trigger-host-delivery', isPersonSendSource(opts?.sendSource), task.wait_until ?? null, task.phase === 'NEED_ACTION')
     const cause = waitExitCause(trigger, opts?.sendSource, opts?.sendEndsWait === true)
     if (!cause) dropInterruptedWait(taskId, isPersonSendSource(opts?.sendSource) ? 'person-input' : `send:${opts?.sendSource ?? 'unknown'}`)
     else markInterruptedByMessage(taskId, opts?.sendSource ?? source)
