@@ -4340,10 +4340,24 @@ describe('handleRemoteProcessExit — daemon-reported exit is not always an erro
 
     expect(errors.map((e) => e.msg)).toContain('remote session process exited with error');
     expect(busErrors).toHaveLength(1);
+    // The session:error is carded by the server; the log line must not card the same failure again.
+    expect(errors.find((e) => e.msg === 'remote session process exited with error')?.meta?.skipNotify).toBe(true);
     // Exit 127 names the missing half with the spawn gate's own sentence.
     // The install command rides the readiness problem's `commands` (a Copy chip), not the sentence.
     expect(errorOf(busErrors[0])).toContain('Claude Code is not installed on this host.');
     expect(errorOf(busErrors[0])).toContain('[clouddev]');
+  });
+
+  it('a crash after the turn already reported keeps the log card, its only signal', () => {
+    const session = makeRemoteSession('remote-after-result');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any).resultEmitted = true;
+    exit(session, 1, 'segfault');
+
+    expect(busErrors).toHaveLength(0);
+    const line = errors.find((e) => e.msg === 'remote session process exited with error');
+    expect(line).toBeDefined();
+    expect(line?.meta?.skipNotify).toBeUndefined();
   });
 
   it('an npm claude whose shebang finds no node reports the Node.js cause, not "CLI not found"', () => {

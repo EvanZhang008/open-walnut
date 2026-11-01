@@ -5469,12 +5469,16 @@ export class ClaudeCodeSession {
     if (cleanStderr) parts.push(cleanStderr.slice(0, 500))
     const errMsg = parts.join(' — ')
 
+    // skipNotify while the session:error below is still to come: the server cards
+    // that one ("A session hit an error", same session recovery key), so the log
+    // bridge carding this developer line too made two cards for one failure.
     log.session.error('remote session process exited with error', {
       taskId: this.taskId,
       sessionId: this.claudeSessionId,
       exitCode: code,
       host: this._host,
       stderr: cleanStderr.slice(0, 200) || undefined,
+      ...(!this.resultEmitted ? { skipNotify: true } : {}),
     })
 
     // Before the session:error below, so the runner's next delivery already sees them.
