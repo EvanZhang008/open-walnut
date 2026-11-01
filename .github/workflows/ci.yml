@@ -6,12 +6,17 @@ on:
   pull_request:
     branches: [main]
 
-# A newer push to the same branch makes the older run obsolete. Cancelling keeps
-# the queue short and feedback fast (and costs nothing — this repo is public, so
-# GitHub-hosted runners are free with unlimited minutes).
+# A newer push to a pull request makes its older run obsolete: cancelling keeps
+# feedback fast. A run on main is never cancelled. A run takes about an hour and
+# main took a push every 13 minutes or so, so cancelling there left main with no
+# finished run at all (2026-10-31: 40 of 40 cancelled, none finished in 10 hours),
+# and a release publishes only a commit CI passed (scripts/ci-gate.mjs). GitHub
+# keeps one pending run per group, the newest, so main gets a verdict about every
+# hour, on the newest commit when the run before it ends. Runners cost nothing
+# here: the repo is public.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Runner images are pinned (ubuntu-24.04, macos-26), here and in release.yml and
 # flake-hunt.yml: a `-latest` label moves to a new OS on GitHub's date (ubuntu
@@ -676,21 +681,22 @@ jobs:
           path: ${{ runner.temp }}/rehearsal/*/log.txt
           if-no-files-found: ignore
 
-  # ── Informational: the browser suite ────────────────────────────────────────
+  # ── The browser suite ───────────────────────────────────────────────────────
   # The Playwright specs drive the real SPA against a fixture server with a mock
-  # CLI (tests/e2e/browser/). Eight shards, retries on (playwright.config.ts under
-  # CI). Reported, not judged, until a recorded baseline lets new failures block.
+  # CLI (tests/e2e/browser/). Sixteen shards, retries on (playwright.config.ts under
+  # CI). Each shard only reports; job `browser-baseline` judges the reports
+  # against tests/setup/known-failures-browser.json.
   # The runner is the one part of the pipeline on Node; every server it starts
   # runs on bun (tests/helpers/bun-runtime.ts).
   browser:
-    name: Report (browser ${{ matrix.shard }}/8)
+    name: Report (browser ${{ matrix.shard }}/16)
     runs-on: ubuntu-24.04
     needs: build
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
     steps:
       # The test run's budget is counted from here, not from its own start: on
       # 2026-10-23 installing the browsers took 14 min instead of 20 s, a run
@@ -724,8 +730,11 @@ jobs:
           PW_IGNORE_LOAD: '1'
           WALNUT_DAEMON_DIR: ${{ runner.temp }}/open-walnut-browser
           PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/browser-${{ matrix.shard }}.json
-        # Eight shards of ~280 tests fit the hour; four took 58+ min and two hit the
-        # job timeout with no report. One retry still tells flaky from failing, and
+        # Eight shards of ~430 tests did not fit: on 2026-10-30/31 six of eight hit the
+        # 45 min --global-timeout, and about 760 tests never ran in two runs in a row,
+        # so the baseline could not judge them; sixteen of ~215 each should fit. (Before that, four
+        # shards took 58+ min and two hit the job timeout with no report.)
+        # One retry still tells flaky from failing, and
         # --global-timeout ends the run itself, so the JSON report is always written:
         # 45 min at most, and never past 55 min into the job, which leaves the
         # teardown, the summary and the upload 5 min before the job timeout.
@@ -734,7 +743,7 @@ jobs:
           budget=$(( left < 2700 ? left : 2700 ))
           [ "$budget" -ge 60 ] || budget=60
           echo "test budget: ${budget}s"
-          bun x playwright test --project=chromium --project=chromium-host-fixture --shard=${{ matrix.shard }}/8 --retries=1 --global-timeout=$(( budget * 1000 )) --reporter=line,json
+          bun x playwright test --project=chromium --project=chromium-host-fixture --shard=${{ matrix.shard }}/16 --retries=1 --global-timeout=$(( budget * 1000 )) --reporter=line,json
       - name: Summarize
         if: always()
         run: |
@@ -749,6 +758,147 @@ jobs:
           path: ${{ runner.temp }}/browser-${{ matrix.shard }}.json
           if-no-files-found: ignore
 
+  # Fails on a browser failure the known list does not name (a flaky test, one
+  # that passed on its retry, passes; a test a shard's time ran out before is
+  # neutral), and on an error outside a test (a spec that does not load, a fixture
+  # server that does not start). Not in CI OK, so a release does not wait on it;
+  # a red here turns the run red and the release watch reads it. A new entry goes
+  # in with `bun scripts/browser-baseline.mjs record <the reports>`, a fixed one
+  # leaves with `record --prune` (docs/reference/testing-pipeline.md).
+  browser-baseline:
+    name: Browser baseline
+    runs-on: ubuntu-24.04
+    needs: browser
+    if: ${{ !cancelled() }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bash scripts/ci-remove-node.sh
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
+      - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: browser-report-*
+          path: ${{ runner.temp }}/browser-reports
+          merge-multiple: true
+      # shell: bash is `bash -eo pipefail`; the default (`bash -e`) took tee's exit
+      # code, so a new failure left the job green.
+      - name: Judge the browser reports
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/browser-reports"
+          n=$(find "$RUNNER_TEMP/browser-reports" -name '*.json' | wc -l)
+          echo "browser reports: $n of 16"
+          [ "$n" -gt 0 ] || { echo "::warning::no browser shard wrote a report: nothing to judge" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; }
+          [ "$n" = 16 ] || echo "::warning::only $n of 16 browser shards wrote a report; the tests of the others are not judged"
+          bun scripts/browser-baseline.mjs check "$RUNNER_TEMP/browser-reports" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # ── The iOS app's tests on a simulator: the unit leg is in CI OK ──────────
+  #
+  # GitHub's macOS runners are free for this public repo, so the phone app's tests
+  # run here instead of only on a developer's Mac. No secrets and no signing
+  # identity: a simulator build signs to run locally, which keeps the entitlements
+  # (CODE_SIGNING_ALLOWED=NO drops them, and the keychain tests then read
+  # errSecMissingEntitlement). The unit leg joined CI OK after six green runs in a
+  # row (2026-10-31); the UI leg may fail without failing the run (continue-on-error)
+  # until it has its own record on a hosted runner.
+  # WalnutUITests runs through ios-native/tests/ui/run-ui-tests.sh, the only way its
+  # pairing reaches the XCUITest runner (ios-native/README.md), at its offline
+  # default: a dead loopback port, no server and nobody's data.
+  ios:
+    name: iOS app (${{ matrix.layer }})
+    runs-on: macos-26
+    timeout-minutes: 60
+    continue-on-error: ${{ matrix.layer == 'ui' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        layer: [unit, ui]
+    # What this job leaves to the Mac (tests/scripts/ci-ios.test.ts keeps both lists whole):
+    # the wall-clock budgets of the perf gates (a whole class, or the timed methods of
+    # one whose other tests count work), which a shared runner misses by up to
+    # 2.7x (run 41198110591: a 150 ms tick took 193 ms), and the UI classes that need
+    # their own fixture server (run-media-ui.sh, run-inbox-items-ui.sh, the peer and
+    # stub servers, a real voice model) and fail, by design, on the offline pairing.
+    env:
+      IOS_CI_SKIP_UNIT: >-
+        -skip-testing:WalnutTests/MarkdownPerfTests
+        -skip-testing:WalnutTests/TasksDerivedPerfTests/testDerivedPassBudgetAtScale
+        -skip-testing:WalnutTests/TasksDerivedPerfTests/testSearchKeystrokeBudget
+        -skip-testing:WalnutTests/TasksDerivedPerfTests/testBoardSearchKeystrokeBudget
+        -skip-testing:WalnutTests/TasksDerivedPerfTests/testTheBoardPassScalesLinearlyWithTheSessionList
+        -skip-testing:WalnutTests/TasksDerivedPerfTests/testTheBoardPassScalesLinearlyWithTheTaskList
+        -skip-testing:WalnutTests/TasksDerivedPerfTests/testABoardSearchDoesNotPayToSortRowsItDiscards
+        -skip-testing:WalnutTests/TimelinePerfGateTests
+        -skip-testing:WalnutTests/WatchdogRegressionTests
+      IOS_CI_SKIP_UI: >-
+        -skip-testing:WalnutUITests/InboxItemActionsUITests
+        -skip-testing:WalnutUITests/InboxItemLayoutUITests
+        -skip-testing:WalnutUITests/InboxTaskNavigationUITests
+        -skip-testing:WalnutUITests/MediaFileUITests
+        -skip-testing:WalnutUITests/PeerMessageUITests
+        -skip-testing:WalnutUITests/VoiceHistoryUITests
+        -skip-testing:WalnutUITests/VoiceQuickActionUITests
+    steps:
+      - uses: actions/checkout@v5
+      - name: XcodeGen
+        run: command -v xcodegen >/dev/null || brew install xcodegen
+      - name: Boot an iPhone simulator
+        shell: bash
+        run: |
+          xcodebuild -version
+          # The newest iOS runtime's first available iPhone: a fixed name ("iPhone 16
+          # Pro") disappears when the image moves to a new Xcode.
+          udid=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          rt = json.load(sys.stdin)["devices"]
+          ios = sorted((k for k in rt if ".SimRuntime.iOS-" in k), key=lambda k: [int(x) for x in k.rsplit("iOS-", 1)[1].split("-")])
+          for k in reversed(ios):
+              for d in rt[k]:
+                  if d["name"].startswith("iPhone") and d.get("isAvailable", True):
+                      print(d["udid"]); sys.exit(0)
+          sys.exit("no available iPhone simulator")
+          ')
+          echo "simulator: $udid"
+          xcrun simctl boot "$udid"
+          xcrun simctl bootstatus "$udid" -b
+          echo "SIM_UDID=$udid" >> "$GITHUB_ENV"
+      - name: Unit tests (WalnutTests)
+        if: matrix.layer == 'unit'
+        shell: bash
+        working-directory: ios-native
+        run: |
+          xcodegen generate
+          xcodebuild test -project Walnut.xcodeproj -scheme Walnut \
+            -destination "platform=iOS Simulator,id=$SIM_UDID" \
+            -derivedDataPath "$RUNNER_TEMP/dd" -resultBundlePath "$RUNNER_TEMP/ios-unit.xcresult" \
+            -only-testing:WalnutTests $IOS_CI_SKIP_UNIT
+      - name: UI tests (WalnutUITests, offline pairing)
+        if: matrix.layer == 'ui'
+        shell: bash
+        run: |
+          WALNUT_UITEST_UDID="$SIM_UDID" WALNUT_UITEST_DD="$RUNNER_TEMP/dd" \
+            bash ios-native/tests/ui/run-ui-tests.sh -only-testing:WalnutUITests $IOS_CI_SKIP_UI
+      # The failures go into the log, never the result bundle as an artifact: a public
+      # repo's artifacts are anyone's to download, and the 130 MB bundle (build logs,
+      # the runner's environment) failed the leak audit on 2026-10-31.
+      - name: The failed tests
+        if: failure() && matrix.layer == 'unit'
+        shell: bash
+        run: |
+          xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/ios-unit.xcresult" --compact \
+            | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d.get("result"), d.get("totalTestCount"), "tests,", d.get("failedTests"), "failed"); [print(f.get("testIdentifierString"), ":", f.get("failureText")) for f in d.get("testFailures", [])]' \
+            || echo "no readable result bundle"
+
   # ── The single required check ───────────────────────────────────────────────
   #
   # Point branch protection at THIS job, never at individual matrix legs: leg
@@ -759,7 +909,10 @@ jobs:
   ci-ok:
     name: CI OK
     runs-on: ubuntu-24.04
-    needs: [build, node-side, test, test-heavy, test-e2e, onboarding, remote-host, rehearsal, field, old-node, archive-targets]
+    needs: [build, node-side, test, test-heavy, test-e2e, onboarding, remote-host, rehearsal, field, old-node, archive-targets, ios]
+    # read the iOS legs' own conclusions: the UI leg may fail (continue-on-error), the unit leg may not
+    permissions:
+      actions: read
     # Runs whatever the gates concluded, EXCEPT on a run a newer push cancelled:
     # there it judged cancelled legs and turned the superseded run red (6 of the
     # 9 red runs on main from 2026-10-02 to 10-04). A job that hits its timeout
@@ -767,6 +920,8 @@ jobs:
     if: ${{ !cancelled() }}
     steps:
       - name: Check gate results
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           echo "build:      ${{ needs.build.result }}"
           echo "node-side:  ${{ needs.node-side.result }}"
@@ -779,8 +934,9 @@ jobs:
           echo "archive-targets: ${{ needs.archive-targets.result }}"
           echo "onboarding: ${{ needs.onboarding.result }}"
           echo "remote-host: ${{ needs.remote-host.result }}"
+          echo "ios:        ${{ needs.ios.result }}"
           # A matrix job's result is 'success' only when EVERY leg succeeded.
-          # None of these jobs uses continue-on-error, so the values are unambiguous.
+          # Only ios uses continue-on-error (its UI leg), so its legs are read one by one.
           failed=0
           [ "${{ needs.build.result }}" = "success" ] || { echo "::error::build failed"; failed=1; }
           [ "${{ needs.node-side.result }}" = "success" ] || { echo "::error::a browser spec failed to load, or a Node check failed (plugin packages, npm channel, JS daemon on Node)"; failed=1; }
@@ -793,5 +949,10 @@ jobs:
           [ "${{ needs.archive-targets.result }}" = "success" ] || { echo "::error::an archive a release ships (darwin-x64 or linux-arm64) did not build or run"; failed=1; }
           [ "${{ needs.onboarding.result }}" = "success" ] || { echo "::error::the documented install broke on a fresh machine"; failed=1; }
           [ "${{ needs.remote-host.result }}" = "success" ] || { echo "::error::Walnut could not onboard a fresh remote host"; failed=1; }
+          if [ "${{ needs.ios.result }}" != "success" ]; then
+            unit=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --jq '.jobs[] | select(.name == "iOS app (unit)") | .conclusion')
+            echo "iOS unit leg: ${unit:-not found}"
+            [ "$unit" = "success" ] || { echo "::error::the iOS app's unit tests failed (WalnutTests on a simulator)"; failed=1; }
+          fi
           [ "$failed" = "0" ] || exit 1
           echo "All blocking checks passed."
