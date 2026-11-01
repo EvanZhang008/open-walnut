@@ -288,6 +288,9 @@ export function registerSessionChatRpc(): void {
     // this one. The switch answers once it is checked; the panel follows the task.
     const switchTo = data.switchEngine as { engine?: unknown; model?: unknown; effort?: unknown; permissionMode?: unknown } | undefined
     if (switchTo && typeof switchTo.engine === 'string' && record?.taskId) {
+      // The message starts the task's new session, but it is still the user's request to an Org
+      // node: filed as one of its Threads like any other (core/org/thread-capture.ts).
+      await fileSwitchedRequest(record.taskId, data.message as string)
       const { requestEngineSwitch } = await import('../../core/sessions/engine-switch.js')
       const out = await requestEngineSwitch({
         taskId: record.taskId, engine: switchTo.engine as SessionEngine, message: augmentedMessage, displayText: data.message as string,
@@ -302,6 +305,10 @@ export function registerSessionChatRpc(): void {
 
     const outputMode = await prepareHintedSend(data.sessionId, record, augmentedMessage, {
       requested: requestedHintsOf(data.hints), sentBy: 'person',
+      // Sent from a thread's Follow up on the Org page's Threads (core/org/thread-capture.ts).
+      ...(typeof data.threadId === 'string' && /^th-[a-f0-9]{6,32}$/.test(data.threadId) ? { threadId: data.threadId } : {}),
+      // A Retry that falls through to a fresh enqueue: its words were filed when first sent.
+      ...(typeof data.retryOf === 'string' && data.retryOf ? { threads: false } : {}),
     })
     augmentedMessage = outputMode.enqueueText
 
@@ -978,4 +985,17 @@ function startRemoteTeamAgentPolling(sessionId: string, agentName: string, opts:
   log.web.info('remote team agent polling started', {
     sessionId, agentName, host: opts.host, intervalMs: REMOTE_POLL_MS,
   })
+}
+
+/** A message that switches the engine skips the hinted send: an Org node still files it. Never throws. */
+async function fileSwitchedRequest(taskId: string, message: string): Promise<void> {
+  try {
+    const [{ getTask }, { prepareThreadCapture }] = await Promise.all([
+      import('../../core/task-manager.js'), import('../../core/org/thread-capture.js'),
+    ])
+    const capture = await prepareThreadCapture({ task: await getTask(taskId), message, inChat: true })
+    await capture?.commit({ told: false })
+  } catch (err) {
+    log.web.warn('org threads: switched request not filed', { taskId, error: err instanceof Error ? err.message : String(err) })
+  }
 }

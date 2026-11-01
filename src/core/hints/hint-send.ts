@@ -24,6 +24,7 @@ import { dueReasons } from './hint-schedule.js';
 import { hookStatementVoid } from '../sessions/hook-statement.js';
 import type { AwayState } from '../org/user-away.js';
 import type { BriefHintState } from '../sessions/brief-hint.js';
+import type { ThreadCapture, ThreadHintState } from '../org/thread-capture.js';
 
 type HintRecord = Pick<SessionRecord, 'output_mode' | 'output_mode_injected' | 'hintState' | 'lastCompactUuid' | 'lastCompactAt'>
   & Partial<Pick<SessionRecord, 'claudeSessionId' | 'taskId'>>;
@@ -106,6 +107,8 @@ export function planHints(input: {
   brief?: BriefHintState | null;
   /** A person typed this message into the chat (not a letter's answer): he is in it. */
   inChat?: boolean;
+  /** Main's or a lead's: the user's message was filed as this thread (org/thread-capture.ts). */
+  thread?: ThreadHintState | null;
 }): HintPlan {
   const state = seededState(input.record);
   const send = state.sends + 1;
@@ -119,6 +122,7 @@ export function planHints(input: {
     const content = {
       config: input.config, record: input.record ?? null, ...(request ? { request } : {}), ...(told ? { toldHash: told.hash } : {}),
       ...(away ? { away } : {}), ...(input.brief ? { brief: input.brief } : {}),
+      ...(input.thread ? { thread: input.thread } : {}),
     };
     const identity = hint.identity(content);
     if (identity === null) continue;
@@ -190,7 +194,7 @@ export async function writeHintState(
   }
 }
 
-async function targetFor(sessionId: string, record: HintRecord | null | undefined, hints: readonly EffectiveHint[]): Promise<{ target: HintTarget; away: AwayState | null; brief?: BriefHintState | null }> {
+async function targetFor(sessionId: string, record: HintRecord | null | undefined, hints: readonly EffectiveHint[]): Promise<{ target: HintTarget; away: AwayState | null; brief?: BriefHintState | null; task?: Task }> {
   if (!record?.taskId || !needsTaskForAudience(hints)) return { target: { sessionId }, away: null };
   try {
     const { listTasksByIds } = await import('../task-manager.js');
@@ -200,9 +204,30 @@ async function targetFor(sessionId: string, record: HintRecord | null | undefine
     const wantsAway = (target.role === 'main' || target.role === 'lead') && hints.some((h) => h.kind === 'user-away' && h.enabled);
     const away = wantsAway ? await import('../org/user-away.js').then((m) => m.userAwayFrom(task)).catch(() => null) : null;
     const brief = await briefFor(task, target, hints);
-    return { target, away, brief };
+    return { target, away, brief, ...(task ? { task } : {}) };
   } catch {
     return { target: { sessionId }, away: null };
+  }
+}
+
+/** The thread this person's message files under, when the session is an Org node's. Never throws. */
+async function captureThread(record: HintRecord | null | undefined, task: Task | undefined, message: string, opts: HintSendOptions): Promise<ThreadCapture | null> {
+  if (!record?.taskId) return null;
+  try {
+    let node: Task | undefined = task;
+    if (!node) {
+      const { listTasksByIds } = await import('../task-manager.js');
+      node = (await listTasksByIds([record.taskId]))[0];
+    }
+    const { prepareThreadCapture } = await import('../org/thread-capture.js');
+    return await prepareThreadCapture({
+      task: node, message, inChat: opts.inChat ?? opts.sentBy === 'person',
+      ...(opts.threadId ? { threadId: opts.threadId } : {}), ...(opts.threadKey ? { key: opts.threadKey } : {}),
+      ...(opts.now ? { now: opts.now() } : {}),
+    });
+  } catch (err) {
+    log.session.warn('org threads: message not planned', { sessionId: record.claudeSessionId, error: err instanceof Error ? err.message : String(err) });
+    return null;
   }
 }
 
@@ -249,6 +274,13 @@ export interface HintSendOptions {
   upstreamBlocks?: readonly string[];
   /** The plain line a message with no words of its own carries in front of its hints. */
   emptyBodyLine?: string;
+  /** The user sent it from this thread's Follow up (an Org node's Threads, org/thread-capture.ts). */
+  threadId?: string;
+  /** False: not one of the user's requests to file (a side question asked beside the chat, a
+   *  Retry of a message filed when it was first sent). */
+  threads?: boolean;
+  /** The send's own id when it has one before it is queued (the phone's qm- id): a retry of it is filed once. */
+  threadKey?: string;
   now?: () => number;
 }
 
@@ -285,15 +317,18 @@ export async function prepareHintedSend(
   try {
     const config = opts.config !== undefined ? opts.config : await import('../config-manager.js').then((m) => m.getConfig()).catch(() => null);
     const hints = effectiveHints(config);
-    const { target, away, brief } = await targetFor(sessionId, record, hints);
+    const { target, away, brief, task } = await targetFor(sessionId, record, hints);
     // A message composed upstream (the companion's voice hint) keeps those blocks.
     const upstream = opts.upstreamBlocks?.length ? splitHinted(message, opts.upstreamBlocks) : null;
     const words = upstream ? upstream.text : message;
+    // The user's words to an Org node become one of its Threads, whether or not its hint is on.
+    const thread = opts.sentBy === 'person' && opts.threads !== false ? await captureThread(record, task, words, opts) : null;
     const plan = planHints({
       hints, target, record, config, away, brief, inChat: opts.inChat ?? opts.sentBy === 'person',
       ...(opts.requested ? { requested: opts.requested } : {}),
       ...(upstream ? { skip: new Set(upstream.kinds) } : {}),
       ...(opts.sentBy ? { sentBy: opts.sentBy } : {}),
+      ...(thread ? { thread: thread.hint } : {}),
     });
     const carriesHints = plan.before.length + plan.after.length + (upstream ? upstream.before.length + upstream.after.length : 0) > 0;
     const body = carriesHints && !words.trim() ? (opts.emptyBodyLine ?? EMPTY_BODY_LINE) : words;
@@ -309,6 +344,7 @@ export async function prepareHintedSend(
       async commit(intoSessionId?: string): Promise<void> {
         const sid = intoSessionId ?? sessionId;
         const at = now();
+        if (thread) await thread.commit({ told: !!plan.told.threads });
         await writeHintState(sid, (cur) => ({
           hintState: advanceHintState(cur.hintState, cur, plan.told, { now: at, ...(opts.sentBy ? { sentBy: opts.sentBy } : {}) }),
           // Kept for a rollback: the release before the registry reads its rich edge here.

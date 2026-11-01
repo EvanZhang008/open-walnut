@@ -18,6 +18,7 @@ import { TaskBoardPane } from '@/components/board/TaskBoardPane';
 import { LiveActivityLine } from '@/components/board/LiveActivityLine';
 import { useFirstLiveTask } from '@/stores/live-activity-store';
 import { useSessionSend } from '@/hooks/useSessionSend';
+import { useOrgThreads } from './useOrgThreads';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { timeAgo } from '@/utils/time';
 import { OrgComposerBar } from './OrgComposerBar';
@@ -169,7 +170,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   const pickTop = (v: OrgTopView) => setTopPick(v);
   // Read while shown: the dot on the Brief tab is for a rewrite the user has not seen.
   useEffect(() => { if (topView === 'brief' && contact && brief?.at) markBriefSeen(contact.id, brief.at); }, [topView, contact, brief?.at]);
-  const briefNew = topView === 'task' && !!contact && briefUnread(contact.id, brief?.at);
+  const briefNew = topView !== 'brief' && !!contact && briefUnread(contact.id, brief?.at);
   // Opening a node whose Brief is stale asks it for one refresh turn (core/sessions/brief-refresh.ts).
   const briefFresh = useBriefRefresh(keepsBrief ? contact : undefined, tasks);
   const updating = keepsBrief && !!contact && briefUpdating(contact, now);
@@ -200,6 +201,9 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   useEffect(() => { if (initialTab) setTab(initialTab); }, [initialTab]);
   const pick = (t: OrgTab) => { setTab(t); setFocusChat(false); setChatInbox(null); onTabChange(row.key, t); };
   const { send } = useSessionSend(sessionId);
+  // The user's own requests to this node (core/org/threads-model.ts), read while its view is shown.
+  const threads = useOrgThreads(keepsBrief ? contact?.id : undefined, keepsBrief && topView === 'threads');
+  const followUp = sessionId ? (threadId: string, text: string) => send(sessionId, text, undefined, { threadId }) : null;
   // A send that answers after the user moved to another node must not pull them back.
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -285,6 +289,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
     <OrgTaskRail
       row={row} rows={rows} tasks={tasks} tabs={tabs} alerts={alertsShown} tab={taskTab} onTab={setTaskTab}
       view={topView} onView={pickTop} keepsBrief={keepsBrief} briefNew={briefNew} briefFolded={briefFolded} onBriefFolded={setBriefFolded} briefFresh={briefFresh} briefUpdating={updating}
+      threads={threads} onThreadFollowUp={followUp}
       contact={contact} title={title} onOpenAlert={openAlert} onQuote={quoteAlert} canQuote={!!sessionId} answers={answers}
       onOpenTask={openChip} now={now} placement={railSide ? 'side' : 'top'}
     />

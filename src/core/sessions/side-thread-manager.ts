@@ -248,7 +248,7 @@ class SideThreadManager {
         ]);
         const parent = await tracker.getSessionByClaudeId(parentSid).catch(() => null);
         const mode = outputMode ?? parent?.output_mode;
-        const prepared = await prepareHintedSend(threadId, mode ? { output_mode: mode } : {}, message, { sentBy: 'person' });
+        const prepared = await prepareHintedSend(threadId, mode ? { output_mode: mode } : {}, message, { sentBy: 'person', threads: false });
         const forked = await forkSideThreadSession(parentSid, threadId, {
           message: prepared.enqueueText,
           ...(title ? { title } : {}),
@@ -285,7 +285,7 @@ class SideThreadManager {
           if (desiredMode) await updateSessionRecord(threadSessionId, { output_mode: desiredMode });
           const record = await getSessionByClaudeId(threadSessionId).catch(() => null);
           const { prepareHintedSend } = await import('../hints/hint-send.js');
-          const prepared = await prepareHintedSend(threadSessionId, record, message, { sentBy: 'person' });
+          const prepared = await prepareHintedSend(threadSessionId, record, message, { sentBy: 'person', threads: false });
           const { sendMessageToSession } = await import('../session-message-queue.js');
           await sendMessageToSession(threadSessionId, prepared.enqueueText, { source: 'side-thread', hinted: true });
           await prepared.commit();

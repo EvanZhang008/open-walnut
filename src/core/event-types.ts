@@ -1308,6 +1308,13 @@ export interface HealthSleepReadyEvent {
  * version after the change (thread and mark changes leave it as it was; 0 once
  * the board is deleted). `taskId` is top-level so lightweight WS clients filter on it.
  */
+/** An Org node's Threads changed (core/org/threads-store.ts): re-read them. */
+export interface OrgThreadsChangedEvent {
+  taskId: string;
+  kind: 'filed' | 'updated' | 'merged' | 'split';
+  threadId?: string;
+}
+
 export interface BoardChangedEvent {
   taskId: string;
   kind: 'html' | 'thread' | 'mark' | 'project' | 'check' | 'choice' | 'reminder' | 'seen' | 'deleted' | 'lanes' | 'card';
@@ -1434,6 +1441,7 @@ export interface EventPayloadMap {
   'human-inbox:state': HumanInboxStateEvent;
 
   'board:changed': BoardChangedEvent;
+  'org-threads:changed': OrgThreadsChangedEvent;
 
   'plugin:lifecycle-changed': PluginLifecycleChangedEvent;
   'plugin:status-items': PluginStatusItemsEvent;

@@ -182,6 +182,14 @@ export const MAIN_DECISION_LINE =
 export const LEAD_DECISION_LINE =
   ' A report to the main agent that needs a decision from the user carries every one of these parts.\n\n'
 
+/** Main's and every lead's Threads (core/org/threads-model.ts): the user's own requests, one thread per subject. */
+export const THREADS_LINE =
+  'Your Threads (the Threads view beside your Brief on the Org page) are the user\'s own requests to you, one thread per '
+  + 'subject: Walnut files every message he sends you and says in it which thread it went to. Keep them current with '
+  + 'thread_update: a short title, what he wants, its state (working, needs: waiting on him, answered), one line of where it '
+  + 'stands and the tasks you handed it to. Several asks about the same thing are one thread: put a new one under the open thread '
+  + 'it belongs to (merge_into). He closes a thread with Acknowledge; a new ask about a closed subject is a new thread.\n\n'
+
 /** Main's and every lead's Brief (sessions/brief.ts): the user reads it instead of the chat. */
 export const BRIEF_LINE =
   'Your Brief is the short letter the user reads at the top of your chat (the Brief view on the Org page) '
@@ -274,6 +282,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + MAIN_NEWS_ONCE_LINE
       + AWAY_INBOX_LINE
       + BRIEF_LINE
+      + THREADS_LINE
       + MAIN_DELEGATES_LINE
       + MAIN_TRACKING_LINE
       + MAIN_STAYS_ACTIVE_LINE
@@ -315,6 +324,7 @@ export function orgRoleLine(task: { org_role?: string; project?: string; org_lea
       + LEAD_NEWS_ONCE_LINE
       + AWAY_INBOX_LINE
       + BRIEF_LINE
+      + THREADS_LINE
       + TASK_ROUTING_CONTRACT + '\n\n'
   }
   return ''

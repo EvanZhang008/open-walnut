@@ -32,6 +32,8 @@ export interface SessionSendOptions {
    * session on it (core/sessions/engine-switch.ts) instead of reaching this one.
    */
   switchEngine?: { engine: string; model?: string; effort?: string };
+  /** Sent from this thread's Follow up on an Org node's Threads: the message is filed under it. */
+  threadId?: string;
 }
 
 interface UseSessionSendReturn {
@@ -325,6 +327,7 @@ export function useSessionSend(activeSessionId: string | null): UseSessionSendRe
         ...(opts?.userUuid ? { userUuid: opts.userUuid } : {}),
         ...(opts?.hints ? { hints: opts.hints } : {}),
         ...(opts?.switchEngine ? { switchEngine: opts.switchEngine } : {}),
+        ...(opts?.threadId ? { threadId: opts.threadId } : {}),
       };
       const res = await wsClient.sendRpc<{ messageId: string; dedupText?: string; enqueuedAt?: string; engineSwitch?: { state?: string } }>('session:send', rpcPayload);
       if (res?.engineSwitch) {

@@ -1,0 +1,58 @@
+/* An Org node's Threads (OrgThreads.tsx): the user's own requests, one card per subject. */
+.org-threads { display: flex; flex-direction: column; gap: 8px; padding: 10px 14px 14px; }
+.org-threads-head { display: flex; align-items: center; gap: 8px; }
+.org-threads-pick { display: inline-flex; padding: 2px; border-radius: 7px; background: color-mix(in srgb, var(--fg) 6%, transparent); }
+.org-threads-pick button {
+  border: 0; border-radius: 5px; padding: 2px 9px; background: transparent; color: var(--fg-secondary, var(--fg));
+  font: inherit; font-size: 12px; cursor: pointer;
+}
+.org-threads-pick button.is-on { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+.org-threads-empty { margin: 6px 2px; font-size: 13px; }
+.org-thread-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.org-thread {
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--bg);
+  display: flex; flex-direction: column; gap: 5px; min-width: 0;
+}
+.org-thread.is-closed { opacity: 0.78; }
+.org-thread-head {
+  display: flex; align-items: baseline; gap: 8px; width: 100%; min-width: 0; padding: 0; border: 0;
+  background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer;
+}
+.org-thread-state {
+  flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--fg-secondary, var(--fg));
+  text-transform: none; white-space: nowrap;
+}
+.org-thread-state i, .org-thread-task i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.org-thread-title { flex: 1 1 auto; min-width: 0; font-weight: 600; font-size: 13px; overflow-wrap: anywhere; }
+.org-thread-meta { flex: none; font-size: 11px; white-space: nowrap; }
+.org-thread-follows { margin: 0; font-size: 12px; }
+.org-thread-ask { margin: 0; font-size: 12.5px; color: var(--fg-secondary, var(--fg)); overflow-wrap: anywhere; }
+.org-thread-reply {
+  font-size: 12.5px; padding: 4px 8px; border-left: 2px solid var(--border);
+  background: color-mix(in srgb, var(--bg-secondary) 60%, var(--bg)); border-radius: 0 5px 5px 0; overflow-wrap: anywhere;
+}
+.org-thread-reply > :first-child { margin-top: 0; }
+.org-thread-reply > :last-child { margin-bottom: 0; }
+.org-thread-tasks { display: flex; flex-wrap: wrap; gap: 5px; }
+.org-thread-task {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 1px 8px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--bg-secondary); color: var(--fg); font: inherit; font-size: 11.5px; cursor: pointer;
+}
+.org-thread-task span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-thread-messages { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.org-thread-message { border-top: 1px dashed var(--border); padding-top: 5px; min-width: 0; }
+.org-thread-message-head { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; }
+.org-thread-words { font-size: 12.5px; overflow-wrap: anywhere; }
+.org-thread-words img { max-width: 100%; max-height: 220px; border-radius: 5px; }
+.org-thread-link { border: 0; padding: 0; background: transparent; color: var(--accent, #0a84ff); font: inherit; font-size: 11px; cursor: pointer; }
+.org-thread-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.org-thread-closed { font-size: 11.5px; margin-right: auto; }
+.org-thread-follow { display: flex; flex-direction: column; gap: 5px; }
+.org-thread-follow textarea {
+  width: 100%; box-sizing: border-box; resize: vertical; min-height: 44px; padding: 6px 8px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--bg); color: var(--fg); font: inherit; font-size: 13px;
+}
+.org-thread-follow-row { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.org-thread-error { margin: 0 auto 0 0; font-size: 12px; color: var(--error, #ff3b30); }
+.org-thread-chevron { color: var(--fg-muted, #86868b); }
+.org-thread-head:focus-visible { outline: 2px solid var(--accent, #0a84ff); outline-offset: 2px; border-radius: 4px; }

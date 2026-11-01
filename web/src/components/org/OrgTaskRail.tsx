@@ -10,6 +10,7 @@
  *              detail, and the answer right in the row (OrgInlineAnswer); Quote and Snooze small
  *   others   one row per task: its own line (user_status.line, "set by <VP>" when its lead changed it)
  *   Brief    the letter its lead or Main keeps (OrgBrief)
+ *   Threads  the user's own requests to it, one per subject (OrgThreads)
  *
  * A row in Needs you always says what it asks (askSummary is never empty); a node is never a bare
  * row of its own (the user: "u need to show what are actually waiting").
@@ -20,6 +21,8 @@ import type { Task } from '@open-walnut/core';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { timeAgo } from '@/utils/time';
 import { OrgBrief } from './OrgBrief';
+import { OrgThreads } from './OrgThreads';
+import type { OrgThreadsState } from './useOrgThreads';
 import { OrgInlineAnswer, type AnswerFailure, type AnswerSettle } from './OrgInlineAnswer';
 import { OrgAlertSnooze } from './OrgAlertSnooze';
 import { holdOrder } from './hold-order';
@@ -200,7 +203,7 @@ function AskList({ alerts, tasks, vpOf, onOpen, onQuote, canQuote, answers }: {
   );
 }
 
-export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, onView, keepsBrief, briefNew, briefFolded, onBriefFolded, briefFresh, briefUpdating, contact, title, onOpenAlert, onQuote, canQuote, answers, onOpenTask, now, placement }: {
+export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, onView, keepsBrief, briefNew, briefFolded, onBriefFolded, briefFresh, briefUpdating, threads, onThreadFollowUp, contact, title, onOpenAlert, onQuote, canQuote, answers, onOpenTask, now, placement }: {
   row: ChannelRow;
   rows: readonly ChannelRow[];
   tasks: readonly Task[];
@@ -218,6 +221,9 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
   /** What moved since the Brief was written, and whether its refresh turn is on its way. */
   briefFresh: BriefFreshness | null;
   briefUpdating: boolean;
+  /** The node's Threads (useOrgThreads), and a send filed under one of them (null: no chat yet). */
+  threads: OrgThreadsState;
+  onThreadFollowUp: ((threadId: string, text: string) => Promise<boolean>) | null;
   contact: Task | undefined;
   title: string;
   onOpenAlert: (a: OrgAlertView) => void;
@@ -240,11 +246,12 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
     <aside className={`org-rail is-${placement}`} data-testid="org-rail" data-placement={placement}>
       <div className={`org-top${keepsBrief ? ' has-switch' : ''}`} data-testid="org-top" data-view={view}>
         {keepsBrief && (
-          <div className="org-top-switch" role="group" aria-label="Task or Brief">
+          <div className="org-top-switch" role="group" aria-label="Task, Brief or Threads">
             <button type="button" aria-pressed={view === 'task'} className={view === 'task' ? 'is-on' : ''} data-testid="org-top-task" onClick={() => onView('task')}>Task</button>
             <button type="button" aria-pressed={view === 'brief'} className={view === 'brief' ? 'is-on' : ''} data-testid="org-top-brief" onClick={() => onView('brief')}>
               Brief{briefNew && <i className="org-top-new" data-testid="org-top-brief-new"><span className="org-sr-only">, rewritten since you read it</span></i>}
             </button>
+            <button type="button" aria-pressed={view === 'threads'} className={view === 'threads' ? 'is-on' : ''} data-testid="org-top-threads" onClick={() => onView('threads')}>Threads</button>
           </div>
         )}
         {/* Its refresh turn is on its way (core/sessions/brief-refresh.ts): the chat and the Brief are being brought up to date. */}
@@ -258,6 +265,10 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
       {view === 'brief' ? (
         <div className="org-rail-body">
           <OrgBrief owner={contact} tasks={tasks} name={title} onOpenTask={onOpenTask} now={now} folded={briefFolded} fresh={briefFresh} updating={briefUpdating} />
+        </div>
+      ) : view === 'threads' ? (
+        <div className="org-rail-body">
+          <OrgThreads name={title} state={threads} tasks={tasks} onOpenTask={onOpenTask} onFollowUp={onThreadFollowUp} now={now} />
         </div>
       ) : (
         <div className="org-task-view" data-testid="org-task-view" data-tab={tab}>

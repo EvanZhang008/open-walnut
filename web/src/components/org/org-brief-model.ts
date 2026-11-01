@@ -41,8 +41,8 @@ export function applyBriefDecorations(
 }
 
 /** Above an Org node's chat: Task (Latest and its tasks by status, the Needs you cards first,
- *  always the view a node opens on) or the Brief. */
-export type OrgTopView = 'task' | 'brief';
+ *  always the view a node opens on), the Brief, or Threads (the user's own requests, OrgThreads). */
+export type OrgTopView = 'task' | 'brief' | 'threads';
 const FOLDED_KEY = 'walnut.org.briefFolded';
 const SEEN_KEY = 'walnut.org.briefSeen';
 

@@ -123,6 +123,13 @@ anywhere (`src/core/org/user-away.ts`: the last message a person typed into it,
 the web's and the phone's attention heartbeats on it, an open session stream on the
 phone; `WALNUT_AWAY_AFTER_MINUTES`), so an important update goes to his inbox, and
 once that he is back. A person's own message is presence (2026-10-31).
+`threads` (Main and the leads only) on each message the user sends there (typed into the chat, or
+the note answering one of its letters): Walnut files the message as one of the node's Threads (his
+own requests, one thread per subject; `src/core/org/thread-capture.ts`), whether or not the hint is
+on, and the hint names the thread it went to, his other open threads, how to put a message about
+the same subject under one of them (`thread_update` `merge_into`), and the threads he closed since
+the node was last told (2026-11-01, the user: "if my multiple ask is about the same thread, add it
+below that thread").
 
 After a compaction the CLI's SessionStart hook (`open_items`) states every hint
 with `after_compaction` right away and records it, so the rest of an interrupted

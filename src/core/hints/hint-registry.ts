@@ -31,6 +31,7 @@ import {
 import { VOICE_REPLY_TEXT } from '../sessions/voice-reply.js';
 import { languageDrift } from './hint-drift-detect.js';
 import { briefHintText, type BriefHintState } from '../sessions/brief-hint.js';
+import { threadHintText, type ThreadHintState } from '../org/thread-capture.js';
 
 export const HINT_TRIGGERS: readonly MessageHintTrigger[] = [
   'every_turn', 'every_n_turns', 'session_start', 'after_compaction', 'on_change', 'on_drift', 'on_request',
@@ -52,6 +53,8 @@ export interface HintContentInput {
   away?: { away: boolean; lastSeenAt: number | null } | null;
   /** Main's or a lead's Brief: how old, what moved since (sessions/brief-hint.ts). Absent elsewhere. */
   brief?: BriefHintState | null;
+  /** Main's or a lead's chat: the user's message was filed as this thread (org/thread-capture.ts). */
+  thread?: ThreadHintState | null;
 }
 
 export interface HintRender { text: string; arg?: string }
@@ -178,6 +181,17 @@ const BUILT_IN: readonly HintSpec[] = [
       if (!i.brief.stale && [...reasons].every((r) => r === 'on_change')) return null;
       return { text: briefHintText(i.brief) };
     },
+  },
+  {
+    kind: 'threads',
+    label: 'Threads',
+    description: 'Main and the leads: which of the user\'s Threads (his own requests, beside the Brief) his message was filed under, his other open threads, and how to keep them current with thread_update. On each message the user sends there.',
+    allowed: SCHEDULED,
+    // 2026-11-01, the user: every request of his becomes a thread the node keeps; "if my multiple
+    // ask is about the same thread, add it below that thread".
+    defaults: { enabled: true, triggers: ['every_turn'], placement: 'after' },
+    identity: (i) => (i.thread ? `${i.thread.threadId}|${i.thread.created ? 'new' : 'in'}` : null),
+    render: (i) => (i.thread ? { text: threadHintText(i.thread) } : null),
   },
 ];
 
@@ -327,7 +341,7 @@ export function hintApplies(hint: EffectiveHint, target: HintTarget): boolean {
 /** Does any enabled hint restrict by role or agent (so the send must read the task)? */
 export function needsTaskForAudience(hints: readonly EffectiveHint[]): boolean {
   // user-away reads the task to know it is Main or a lead (org/user-away.ts).
-  return hints.some((h) => h.enabled && (h.audience.roles.length > 0 || h.audience.agents.length > 0 || h.everyTurnRoles.length > 0 || h.kind === 'user-away' || h.kind === 'brief'));
+  return hints.some((h) => h.enabled && (h.audience.roles.length > 0 || h.audience.agents.length > 0 || h.everyTurnRoles.length > 0 || h.kind === 'user-away' || h.kind === 'brief' || h.kind === 'threads'));
 }
 
 export class HintSettingsError extends Error {

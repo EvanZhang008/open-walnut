@@ -180,6 +180,10 @@ export const EventNames = {
   // Envelope only: clients re-read GET /api/v1/tasks/:id/board.
   BOARD_CHANGED: 'board:changed',
 
+  // An Org node's Threads (the user's own requests to it) changed (core/org/threads-store.ts).
+  // Envelope only: clients re-read GET /api/v1/tasks/:id/threads.
+  ORG_THREADS_CHANGED: 'org-threads:changed',
+
   // A producer removed its own feed record (plugin notifications.dismiss).
   NOTIFICATION_REMOVED: 'notification:removed',
 

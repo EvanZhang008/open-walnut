@@ -2353,6 +2353,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   app.use('/api/v1', boardV1Router)
   app.use('/api/v1', (await import('./routes/agent-memory-v1.js')).agentMemoryV1Router)
   app.use('/api/v1', (await import('./routes/brief-v1.js')).briefV1Router)
+  app.use('/api/v1', (await import('./routes/org-threads-v1.js')).orgThreadsV1Router)
   // The message-hint registry: list, change, reset (reads anywhere, writes primary-only).
   app.use('/api/v1', (await import('./routes/hints-v1.js')).hintsV1Router)
   // When this home first ran the hint registry: only older rows can carry the old bracket lines.

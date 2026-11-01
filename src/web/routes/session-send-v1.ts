@@ -138,6 +138,8 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
     // (it overrides the output style for this one reply).
     const outputMode = await prepareHintedSend(sessionId, record, enqueueText ?? text, {
       sentBy: 'person', ...(voice ? { requested: { 'voice-reply': {} } } : {}),
+      // A retry reuses its qm- id: an Org node's Threads file it once (core/org/thread-capture.ts).
+      ...(clientMessageId ? { threadKey: clientMessageId } : {}),
     })
     const cliText = outputMode.enqueueText
     const { sendMessageToSession } = await import('../../core/session-message-queue.js')
