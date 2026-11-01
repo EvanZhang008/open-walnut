@@ -1068,7 +1068,7 @@ export function activate(walnut: WalnutWebApi) {
 
 ### Slots: one fact inside a Walnut screen
 
-`walnut.ui.slot` adds one labelled fact to a screen Walnut owns: Walnut prints your slot's `title` as the label, in the screen's own style, and your component renders the value. There are two places:
+`walnut.ui.slot` adds one labelled fact to a screen Walnut owns: Walnut prints your slot's `title` as the label, in the screen's own style, and your component renders the value. There are two places for a fact (and one for a panel, below):
 
 | `target` | Where it renders | Props |
 |---|---|---|
@@ -1107,6 +1107,26 @@ export function activate(walnut: WalnutWebApi) {
   // Optional: a host older than slots has no `slot`, and the plugin still loads.
   walnut.ui.slot?.({ id: 'task-notes', target: 'task.meta', title: 'Notes', component: TaskNotes })
   walnut.ui.slot?.({ id: 'session-notes', target: 'session.meta', title: 'Notes', component: SessionNotes })
+}
+```
+
+### A panel in your own status item's popover
+
+The third target, `status-item.panel`, is not a labelled fact. It draws inside the popover of one of your own status items (the rail ring from `walnut.ui.statusItem`), under its title and line, so a click on the ring can open a small form instead of one fixed button: Rhythm's Start form picks the block length and the music there. Walnut renders only your plugin's panels in your items' popovers.
+
+| Props | |
+|---|---|
+| `itemId` | The status item's id as your server registered it; one panel serves all of yours, so return `null` for the others. |
+| `close()` | Close the popover, once the panel did what it was opened for. |
+| `navigate` | As for the other slots; the popover closes first. |
+
+While the panel renders anything, Walnut leaves out the item's `actions`, so the panel's own buttons are the only ones. Return `null` (Rhythm does while a block runs) and the item's buttons are back. A Walnut older than this target refuses it, so wrap the call in `try`; that popover keeps the buttons, which therefore must still make sense on their own. A click inside the panel is the person's click, so a panel may start sound in it (Safari and the Mac app allow audio only then), which a status item button, an op run by Walnut, cannot.
+
+```tsx
+try {
+  walnut.ui.slot?.({ id: 'start', target: 'status-item.panel', title: 'Start a focus block', component: StartPanel })
+} catch {
+  // An older Walnut: the ring's popover shows the item's own buttons.
 }
 ```
 

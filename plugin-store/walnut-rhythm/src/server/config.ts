@@ -27,9 +27,13 @@ export interface RhythmConfig {
 
 interface IntField { key: string; field: keyof RhythmConfig; def: number; min: number; max: number }
 
+/** What a Start form offers, and what the settings keep. */
+export const FOCUS_RANGE = { min: 5, max: 180 }
+export const BREAK_RANGE = { min: 1, max: 60 }
+
 const INT_FIELDS: IntField[] = [
-  { key: 'focus_minutes', field: 'focusMinutes', def: 25, min: 5, max: 180 },
-  { key: 'break_minutes', field: 'breakMinutes', def: 5, min: 1, max: 60 },
+  { key: 'focus_minutes', field: 'focusMinutes', def: 25, ...FOCUS_RANGE },
+  { key: 'break_minutes', field: 'breakMinutes', def: 5, ...BREAK_RANGE },
   { key: 'long_break_minutes', field: 'longBreakMinutes', def: 15, min: 1, max: 120 },
   { key: 'long_break_every', field: 'longBreakEvery', def: 4, min: 1, max: 12 },
 ]

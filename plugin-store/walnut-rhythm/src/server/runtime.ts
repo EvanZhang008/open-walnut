@@ -20,6 +20,7 @@ import {
   type FocusDurations, type FocusEvent, type FocusState, type HoldSpec,
 } from './focus'
 import type { MacosBridge } from './macos-bridge'
+import { SpotifyControl } from './spotify'
 import { breakOverNotice, focusDoneNotice, KEY_BREAK_OVER, KEY_FOCUS_DONE, KEY_STAND_UP } from './notices'
 
 const STATE_FILE = 'state.json'
@@ -34,18 +35,22 @@ interface StoredState {
 export interface RuntimeDeps {
   walnut: WalnutServerApi
   macos: MacosBridge
+  /** Absent: a control that never runs anything (tests, a host without macOS). */
+  spotify?: SpotifyControl
   now?: () => number
 }
 
 export class RhythmRuntime {
   readonly walnut: WalnutServerApi
   readonly macos: MacosBridge
+  readonly spotify: SpotifyControl
   readonly now: () => number
   config: RhythmConfig = normalizeConfig({})
   focus: FocusState = { ...IDLE_FOCUS }
   day: DayLog
   quietState: QuietState = { active: false, allowPermissions: true, holds: [] }
   private hold: HoldSpec | null = null
+  private raw: Record<string, unknown> = {}
   private dirty = false
   private dayDirty = false
   private chain: Promise<unknown> = Promise.resolve()
@@ -58,6 +63,10 @@ export class RhythmRuntime {
   constructor(deps: RuntimeDeps) {
     this.walnut = deps.walnut
     this.macos = deps.macos
+    this.spotify = deps.spotify ?? new SpotifyControl({
+      enabled: false, storage: deps.walnut.storage,
+      run: async () => ({ ok: false, code: null, stdout: '', stderr: '', error: 'not on a Mac' }),
+    })
     this.now = deps.now ?? Date.now
     this.day = emptyDay(localDayKey(this.now()))
   }
@@ -86,7 +95,13 @@ export class RhythmRuntime {
   }
 
   applyConfig(raw: unknown): void {
-    this.config = normalizeConfig(raw)
+    this.raw = raw && typeof raw === 'object' && !Array.isArray(raw) ? { ...raw as Record<string, unknown> } : {}
+    this.config = normalizeConfig(this.raw)
+  }
+
+  /** The plugin's config as the host last handed it (keys Rhythm no longer reads included). */
+  rawConfig(): Record<string, unknown> {
+    return { ...this.raw }
   }
 
   durations(): FocusDurations {
@@ -142,6 +157,9 @@ export class RhythmRuntime {
   private async focusEvent(event: FocusEvent, now: number): Promise<void> {
     if (event.type === 'focus-completed') {
       const { block } = event
+      // The block owned the Spotify it started; its break is quiet. Caught up long after
+      // (the Mac slept), the music playing now is the person's own, not the block's.
+      if (block.spotifyUri && event.lateMs < LATE_NOTIFY_MS) void this.spotify.pause()
       this.recordDay({ type: 'block', entry: { at: block.endedAt, minutes: block.minutes, ...(block.taskId ? { taskId: block.taskId } : {}), ...(block.title ? { title: block.title } : {}) } })
       if (block.taskId) {
         await this.walnut.tasks.appendLog(block.taskId, `Focus block: ${block.minutes} min`).catch((error: unknown) => {
@@ -151,7 +169,7 @@ export class RhythmRuntime {
       this.recordDay({ type: 'focus-break' })
       // The break began on its own as part of the run; say so once, unless that was long ago.
       if (event.lateMs < LATE_NOTIFY_MS && event.breakEndsAt > now) {
-        const minutes = event.breakKind === 'long' ? this.config.longBreakMinutes : this.config.breakMinutes
+        const minutes = Math.round((event.breakEndsAt - block.endedAt) / MINUTE_MS)
         await this.raise(focusDoneNotice(block, event.breakKind, minutes, event.breakEndsAt))
       }
     } else {

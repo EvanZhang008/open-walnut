@@ -13,6 +13,7 @@ import type { RunResult, Runner } from '../../../plugin-store/walnut-rhythm/src/
 import { MacosBridge } from '../../../plugin-store/walnut-rhythm/src/server/macos-bridge'
 import type { MacosFocusRead } from '../../../plugin-store/walnut-rhythm/src/server/macos-focus'
 import { RhythmRuntime } from '../../../plugin-store/walnut-rhythm/src/server/runtime'
+import { SpotifyControl } from '../../../plugin-store/walnut-rhythm/src/server/spotify'
 
 export const MIN = 60_000
 
@@ -29,6 +30,8 @@ export interface HarnessOptions {
   tasks?: WalnutTask[]
   macosFocus?: () => MacosFocusRead
   runner?: Runner
+  /** Spotify.app is installed (on a `darwin` harness). Default true. */
+  spotifyInstalled?: boolean
 }
 
 export function makeHarness(options: HarnessOptions) {
@@ -65,7 +68,9 @@ export function makeHarness(options: HarnessOptions) {
   const runs: Array<{ command: string; args: readonly string[] }> = []
   const runner: Runner = options.runner ?? (async (command, args): Promise<RunResult> => {
     runs.push({ command, args })
-    return { ok: true, code: 0, stdout: '', stderr: '' }
+    // Spotify answers "playing" once asked to play; nothing here is a real process.
+    const stdout = command === 'osascript' && args.some((arg) => arg.includes('player state')) ? 'playing\n' : ''
+    return { ok: true, code: 0, stdout, stderr: '' }
   })
   const macosFocus = options.macosFocus ?? ((): MacosFocusRead => ({ ok: true, focus: { active: false } }))
 
@@ -78,7 +83,15 @@ export function makeHarness(options: HarnessOptions) {
       shortcutsDir: '/tmp/walnut-rhythm-test-shortcuts',
       onChange: () => undefined,
     })
-    return new RhythmRuntime({ walnut: fake.api, macos, now: () => clock.t })
+    const spotify = new SpotifyControl({
+      enabled: options.darwin ?? false,
+      run: runner,
+      storage: fake.api.storage,
+      appPaths: ['/Applications/Spotify.app'],
+      exists: async () => options.spotifyInstalled ?? true,
+      sleep: async () => undefined,
+    })
+    return new RhythmRuntime({ walnut: fake.api, macos, spotify, now: () => clock.t })
   }
 
   return {

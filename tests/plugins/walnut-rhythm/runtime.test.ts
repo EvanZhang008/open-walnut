@@ -138,6 +138,156 @@ describe('a run the person starts', () => {
   })
 })
 
+describe('the Start form: lengths and music', () => {
+  const DEEP = 'spotify:playlist:37i9dQZF1DWZeKCadgRdKQ'
+  const spotifyScripts = (h: ReturnType<typeof makeHarness>) => h.runs.filter((run) => run.command === 'osascript').map((run) => run.args[1])
+
+  it('remember keeps the picked lengths as the settings; a plain start (an agent) leaves them', async () => {
+    const { h, runtime } = await boot()
+    await actions.focusStart(runtime, { minutes: 10 })
+    expect(await h.fake.api.config.get()).toEqual({})
+    await actions.focusStop(runtime)
+    const started = await actions.focusStart(runtime, { minutes: 50, breakMinutes: 10, remember: true })
+    expect(started.message).toBe('Focus block started: 50 min, then a 10 min break.')
+    expect(await h.fake.api.config.get()).toEqual({ focus_minutes: 50, break_minutes: 10 })
+    // Applied at once: the off ring's Start and the next default already say 50.
+    expect(runtime.config).toMatchObject({ focusMinutes: 50, breakMinutes: 10 })
+    await h.tick(runtime, 50 * MIN + 1)
+    expect(runtime.focus).toMatchObject({ phase: 'break', endsAt: NINE + 60 * MIN })
+    expect(h.notices('focus-done')[0]!.notice.title).toBe('Focus block done, 10 min break')
+    // Out of the settings' range (a 3 min block) is still a block, but never the default.
+    await actions.focusStop(runtime)
+    await actions.focusStart(runtime, { minutes: 3, breakMinutes: 10, remember: true })
+    expect(await h.fake.api.config.get()).toEqual({ focus_minutes: 50, break_minutes: 10 })
+  })
+
+  it('the next-block buttons repeat the length, the break and the playlist', async () => {
+    const { h, runtime } = await boot({ darwin: true, tasks: [task('task-7', 'Draft the plan')] })
+    await actions.focusStart(runtime, { taskId: 'task-7', minutes: 30, breakMinutes: 8, spotify: DEEP })
+    await h.tick(runtime, 30 * MIN + 1)
+    expect(h.notices('focus-done')[0]!.notice.actions![1]).toEqual({ label: 'Another block', op: 'focus_start', args: { spotify: DEEP, taskId: 'task-7', minutes: 30, breakMinutes: 8 } })
+    await h.tick(runtime, 8 * MIN)
+    expect(h.notices('break-over')[0]!.notice.actions![0]).toEqual({ label: 'Start next block', op: 'focus_start', args: { spotify: DEEP, taskId: 'task-7', minutes: 30, breakMinutes: 8 } })
+  })
+
+  it('a Spotify playlist plays with the block and pauses at its end and on Stop', async () => {
+    const { h, runtime } = await boot({ darwin: true })
+    const started = await actions.focusStart(runtime, { spotify: 'https://open.spotify.com/playlist/37i9dQZF1DWZeKCadgRdKQ?si=abc123' })
+    expect(started.message).toBe('Focus block started: 25 min, then a 5 min break. Spotify is playing Deep Focus on this Mac.')
+    expect(started.spotifyError).toBeUndefined()
+    expect(spotifyScripts(h)).toEqual([`tell application "Spotify" to play track "${DEEP}"`, 'tell application "Spotify" to player state as string'])
+    await h.tick(runtime, 25 * MIN + 1)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(spotifyScripts(h).at(-1)).toBe('if application "Spotify" is running then tell application "Spotify" to pause')
+    // Stop during a block pauses too; a block without Spotify never touches it.
+    await actions.breakSkip(runtime)
+    await actions.focusStart(runtime, { spotify: DEEP })
+    const before = spotifyScripts(h).length
+    await actions.focusStop(runtime)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(spotifyScripts(h).slice(before)).toEqual(['if application "Spotify" is running then tell application "Spotify" to pause'])
+    await actions.focusStart(runtime, {})
+    await actions.focusStop(runtime)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(spotifyScripts(h).length).toBe(before + 1)
+  })
+
+  it('Spotify missing, refused or silent: the block still runs and the answer says why', async () => {
+    const missing = await boot({ darwin: true, spotifyInstalled: false })
+    const one = await actions.focusStart(missing.runtime, { spotify: DEEP })
+    expect(one.state.focus.phase).toBe('focus')
+    expect(one.spotifyError).toBe('Spotify is not installed on this Mac. Install it and sign in to play a playlist with a block.')
+    expect(missing.h.runs.filter((run) => run.command === 'osascript')).toEqual([])
+
+    const refused = await boot({ darwin: true, runner: async () => ({ ok: false, code: 1, stdout: '', stderr: '', error: 'execution error: Not authorized to send Apple events to Spotify. (-1743)' }) })
+    const two = await actions.focusStart(refused.runtime, { spotify: DEEP })
+    expect(two.spotifyError).toMatch(/^macOS has not allowed Walnut to control Spotify/)
+
+    const silent = await boot({ darwin: true, runner: async () => ({ ok: true, code: 0, stdout: 'paused\n', stderr: '' }) })
+    const three = await actions.focusStart(silent.runtime, { spotify: DEEP })
+    expect(three.spotifyError).toMatch(/^Spotify did not start playing/)
+
+    const notMac = await boot({ darwin: false })
+    expect((await actions.focusStart(notMac.runtime, { spotify: DEEP })).spotifyError).toBe('Spotify plays on a Mac only.')
+  })
+
+  it('Spotify follows the block it played for: a Stop while it opens, a play that failed, a block end caught up late', async () => {
+    // Stop lands while Spotify is still opening: its pause runs first, so the play is paused once it lands.
+    let release: () => void = () => undefined
+    const scripts: string[] = []
+    const slow = await boot({
+      darwin: true,
+      runner: async (command, args) => {
+        const script = String(args.at(-1))
+        scripts.push(script)
+        if (script.includes('play track')) await new Promise<void>((resolve) => { release = resolve })
+        return { ok: true, code: 0, stdout: script.includes('player state') ? 'playing\n' : '', stderr: '' }
+      },
+    })
+    const starting = actions.focusStart(slow.runtime, { spotify: DEEP })
+    while (!scripts.some((one) => one.includes('play track'))) await new Promise((resolve) => setTimeout(resolve, 0))
+    await actions.focusStop(slow.runtime)
+    release()
+    await starting
+    expect(slow.runtime.focus.phase).toBe('idle')
+    expect(scripts.at(-1)).toBe('if application "Spotify" is running then tell application "Spotify" to pause')
+
+    // A play that failed is not the block's: its end leaves Spotify alone.
+    const failed: string[] = []
+    const refused = await boot({
+      darwin: true,
+      runner: async (_command, args) => {
+        failed.push(String(args.at(-1)))
+        return { ok: false, code: 1, stdout: '', stderr: '', error: 'Not authorized to send Apple events to Spotify. (-1743)' }
+      },
+    })
+    await actions.focusStart(refused.runtime, { spotify: DEEP })
+    expect(refused.runtime.focus.spotifyUri).toBeUndefined()
+    await refused.h.tick(refused.runtime, 25 * MIN + 1)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(failed.filter((one) => one.includes('pause'))).toEqual([])
+
+    // The Mac slept through the block's end: hours later the music playing is the person's own.
+    const { h, runtime } = await boot({ darwin: true })
+    await actions.focusStart(runtime, { spotify: DEEP })
+    await h.tick(runtime, 3 * 60 * MIN)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(spotifyScripts(h).filter((one) => one.includes('pause'))).toEqual([])
+  })
+
+  it('the start message names the long break when this block earns it', async () => {
+    const { runtime } = await boot()
+    runtime.focus = { ...runtime.focus, completedInCycle: runtime.config.longBreakEvery - 1 }
+    const started = await actions.focusStart(runtime, { minutes: 30, breakMinutes: 7 })
+    expect(started.message).toBe(`Focus block started: 30 min, then the ${runtime.config.longBreakMinutes} min long break.`)
+  })
+
+  it('refuses a link that is not Spotify before anything starts, and never puts it in a script', async () => {
+    const { h, runtime } = await boot({ darwin: true })
+    for (const bad of ['https://evil.example/playlist/37i9dQZF1DWZeKCadgRdKQ', 'spotify:playlist:x" & do shell script "touch /tmp/p', 'not a link']) {
+      await expect(actions.focusStart(runtime, { spotify: bad })).rejects.toThrow(/not a Spotify link/)
+    }
+    expect(runtime.focus.phase).toBe('idle')
+    expect(h.runs).toEqual([])
+  })
+
+  it('keeps the playlists: Deep Focus first, add by link with its name from Spotify, remove', async () => {
+    const { h, runtime } = await boot({ darwin: true })
+    const fetch = vi.spyOn(h.fake.api.http, 'fetch').mockResolvedValue({ ok: true, status: 200, headers: {}, text: async () => '', json: async () => ({ title: 'Lofi Beats' }) } as never)
+    expect((await actions.musicTracks(runtime, { readdir: async () => [], stat: async () => ({ size: 0, isFile: false }) })).spotify)
+      .toEqual({ available: true, playlists: [{ uri: DEEP, name: 'Deep Focus' }] })
+    const added = await actions.spotifyPlaylistAdd(runtime, { link: 'https://open.spotify.com/intl-de/playlist/0vvXsWCC9xrXsKd4FyS8kM?si=1' })
+    expect(fetch).toHaveBeenCalledWith('https://open.spotify.com/oembed?url=https%3A%2F%2Fopen.spotify.com%2Fplaylist%2F0vvXsWCC9xrXsKd4FyS8kM', { timeoutMs: 5000 })
+    expect(added.spotify.playlists).toEqual([{ uri: DEEP, name: 'Deep Focus' }, { uri: 'spotify:playlist:0vvXsWCC9xrXsKd4FyS8kM', name: 'Lofi Beats' }])
+    fetch.mockRejectedValue(new Error('offline'))
+    const named = await actions.spotifyPlaylistAdd(runtime, { link: 'spotify:album:1A2GTWGtFfWp7KSQTwWOyo' })
+    expect(named.spotify.playlists.at(-1)).toEqual({ uri: 'spotify:album:1A2GTWGtFfWp7KSQTwWOyo', name: 'Spotify playlist' })
+    const removed = await actions.spotifyPlaylistRemove(runtime, { uri: DEEP })
+    expect(removed.spotify.playlists.map((one) => one.uri)).not.toContain(DEEP)
+    await expect(actions.spotifyPlaylistAdd(runtime, { link: 'https://example.com' })).rejects.toThrow(/not a Spotify link/)
+  })
+})
+
 describe('quiet mode and the macOS Focus mirror', () => {
   it('keeps one hold that is the union of a focus block and a macOS Focus', async () => {
     let focus: MacosFocusRead = { ok: true, focus: { active: true, modeId: 'x', name: 'Deep Work' } }

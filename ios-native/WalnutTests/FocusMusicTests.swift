@@ -48,7 +48,7 @@ final class FocusMusicTests: XCTestCase {
 
     func testBlockLine() {
         XCTAssertEqual(FocusMusicView.phaseText(status(phase: "focus", now: 0, endsAt: 18 * 60_000 - 1)), "18 min left")
-        XCTAssertEqual(FocusMusicView.phaseText(status(phase: "idle", now: 0, endsAt: 0)), "Not running")
+        XCTAssertEqual(FocusMusicView.phaseText(status(phase: "idle", now: 0, endsAt: 0)), "Off")
         XCTAssertEqual(FocusMusicView.phaseText(status(phase: "break", now: 0, endsAt: 1)), "On a break")
         XCTAssertEqual(FocusMusicView.phaseText(nil), "Unknown")
     }
@@ -73,6 +73,64 @@ final class FocusMusicTests: XCTestCase {
         XCTAssertFalse(envelope.ok)
         XCTAssertNil(envelope.result)
         XCTAssertEqual(envelope.message, "Rhythm runs on your primary Walnut; this is a cloud replica.")
+    }
+
+    // MARK: - Start: lengths and music
+
+    func testStartChoiceStoresAsOneStringAndReadsBack() {
+        for choice in [FocusStartChoice.none, .track("01 Brown Noise.m4a"), .spotify("spotify:playlist:37i9dQZF1DWZeKCadgRdKQ")] {
+            XCTAssertEqual(FocusStartChoice(stored: choice.stored), choice)
+        }
+        XCTAssertNil(FocusStartChoice(stored: nil))
+        XCTAssertNil(FocusStartChoice(stored: "track:"))
+        XCTAssertNil(FocusStartChoice(stored: "spotify:not-a-uri"))
+    }
+
+    func testStartChoiceFallsBackToWhatStartCanKeep() throws {
+        let listing = try decodeListing(spotifyAvailable: true)
+        // First time: the setting picks the current track, or nothing.
+        XCTAssertEqual(FocusStartChoice.resolve(stored: nil, listing: listing, trackID: nil, withFocus: true), .track("01 Brown Noise.m4a"))
+        XCTAssertEqual(FocusStartChoice.resolve(stored: nil, listing: listing, trackID: nil, withFocus: false), FocusStartChoice.none)
+        // A track that left the folder: the current one. A playlist removed, or Spotify gone: nothing.
+        XCTAssertEqual(FocusStartChoice.resolve(stored: .track("gone.m4a"), listing: listing, trackID: nil, withFocus: false), .track("01 Brown Noise.m4a"))
+        XCTAssertEqual(FocusStartChoice.resolve(stored: .spotify("spotify:playlist:AAAAAAAAAAAA"), listing: listing, trackID: nil, withFocus: true), FocusStartChoice.none)
+        let deep = FocusStartChoice.spotify("spotify:playlist:37i9dQZF1DWZeKCadgRdKQ")
+        XCTAssertEqual(FocusStartChoice.resolve(stored: deep, listing: listing, trackID: nil, withFocus: true), deep)
+        let noSpotify = try decodeListing(spotifyAvailable: false)
+        XCTAssertEqual(FocusStartChoice.resolve(stored: deep, listing: noSpotify, trackID: nil, withFocus: true), FocusStartChoice.none)
+        // Not loaded yet: the pick stands.
+        XCTAssertEqual(FocusStartChoice.resolve(stored: deep, listing: nil, trackID: nil, withFocus: true), deep)
+    }
+
+    func testThePlaysLineSaysWhatAndWhere() throws {
+        let listing = try decodeListing(spotifyAvailable: true)
+        XCTAssertEqual(FocusMusicView.playsText(.track("01 Brown Noise.m4a"), listing: listing), "Start plays Brown Noise on this phone, until the block ends.")
+        XCTAssertEqual(FocusMusicView.playsText(.spotify("spotify:playlist:37i9dQZF1DWZeKCadgRdKQ"), listing: listing), "Start plays Deep Focus in Spotify on your Mac, until the block ends.")
+        XCTAssertEqual(FocusMusicView.playsText(.none, listing: listing), "Start plays no music.")
+    }
+
+    func testStartArgsUseTheOpsNames() throws {
+        let data = try JSONEncoder().encode(RhythmStartArgs(minutes: 50, breakMinutes: 10, spotify: "spotify:playlist:37i9dQZF1DWZeKCadgRdKQ", remember: true))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(object["minutes"] as? Int, 50)
+        XCTAssertEqual(object["breakMinutes"] as? Int, 10)
+        XCTAssertEqual(object["spotify"] as? String, "spotify:playlist:37i9dQZF1DWZeKCadgRdKQ")
+        XCTAssertEqual(object["remember"] as? Bool, true)
+    }
+
+    func testAnOlderRhythmWithoutSpotifyStillDecodes() throws {
+        let json = #"{"folder":"/f","isDefault":true,"exists":true,"tracks":[],"skipped":[],"withFocus":true}"#
+        let listing = try JSONDecoder().decode(RhythmMusicListing.self, from: Data(json.utf8))
+        XCTAssertNil(listing.spotify)
+    }
+
+    private func decodeListing(spotifyAvailable: Bool) throws -> RhythmMusicListing {
+        let json = """
+        {"folder":"/f","isDefault":true,"exists":true,"skipped":[],"withFocus":true,
+         "tracks":[{"id":"01 Brown Noise.m4a","title":"Brown Noise","file":"/f/01 Brown Noise.m4a","bytes":10,"type":"audio/mp4"}],
+         "spotify":{"available":\(spotifyAvailable),"playlists":[{"uri":"spotify:playlist:37i9dQZF1DWZeKCadgRdKQ","name":"Deep Focus"}]}}
+        """
+        return try JSONDecoder().decode(RhythmMusicListing.self, from: Data(json.utf8))
     }
 
     private func status(phase: String, now: Double, endsAt: Double) -> RhythmFocusStatus {

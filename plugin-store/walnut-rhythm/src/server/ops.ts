@@ -36,7 +36,13 @@ export const OP_SPECS: OpSpec[] = [
   {
     name: 'focus_start', title: 'Start a focus block', readonly: false, remote: 'allow',
     description: 'Start a focus block (a pomodoro), optionally for one task. Only when the person asked for one: Rhythm is off until they start it. Walnut goes quiet until it ends, then its break counts down, then Rhythm asks once whether to start the next block and stays off if nobody does. Refused while a block is already running.',
-    properties: { taskId: TASK_ID, minutes: { ...MINUTES, description: 'Block length in minutes (default from settings, 1 to 180)' } },
+    properties: {
+      taskId: TASK_ID,
+      minutes: { ...MINUTES, description: 'Block length in minutes (default from settings, 1 to 180)' },
+      breakMinutes: { ...MINUTES, description: 'Length of the break after this block in minutes (default from settings, 1 to 60); the long break keeps its own length' },
+      spotify: { type: 'string', description: 'A Spotify playlist link or URI to play in the Spotify app on this Mac while the block runs; it pauses when the block ends. Omit for no Spotify.' },
+      remember: { type: 'boolean', description: 'Keep minutes and breakMinutes as the defaults for the next block (the settings). Only when the person picked them.' },
+    },
   },
   {
     name: 'focus_stop', title: 'Stop the focus block', readonly: false, remote: 'allow',
@@ -48,7 +54,17 @@ export const OP_SPECS: OpSpec[] = [
   },
   {
     name: 'music_tracks', title: 'List the focus music', readonly: true, remote: 'allow',
-    description: 'List the audio files (m4a, mp3, wav) in the focus music folder on this Mac, in play order, with their absolute paths. Read-only. The App and the phone play them; nothing here plays sound.',
+    description: 'List the audio files (m4a, mp3, wav) in the focus music folder on this Mac, in play order, with their absolute paths, and the Spotify playlists Rhythm offers (with whether Spotify is installed here). Read-only. The App and the phone play the files; nothing here plays sound.',
+  },
+  {
+    name: 'spotify_playlist_add', title: 'Add a Spotify playlist', readonly: false, remote: 'allow',
+    description: 'Keep a Spotify playlist (by its share link) in the list Rhythm offers as focus music. It plays in the Spotify app on this Mac when a block starts with it. Changes only Rhythm\'s own list.',
+    properties: { link: { type: 'string', description: 'The playlist link (https://open.spotify.com/playlist/...) or URI' }, name: { type: 'string', description: 'A name to show (default: the playlist\'s own)' } },
+  },
+  {
+    name: 'spotify_playlist_remove', title: 'Remove a Spotify playlist', readonly: false, remote: 'allow',
+    description: 'Take a playlist off Rhythm\'s focus music list. It stays in Spotify.',
+    properties: { uri: { type: 'string', description: 'The playlist link or URI' } },
   },
   {
     name: 'music_folder_open', title: 'Open the focus music folder', readonly: false, remote: 'deny',
@@ -72,6 +88,8 @@ function handlers(runtime: RhythmRuntime): Record<string, Handler> {
     break_skip: () => actions.breakSkip(runtime),
     music_tracks: () => actions.musicTracks(runtime),
     music_folder_open: () => actions.musicFolderOpen(runtime),
+    spotify_playlist_add: (args) => actions.spotifyPlaylistAdd(runtime, args),
+    spotify_playlist_remove: (args) => actions.spotifyPlaylistRemove(runtime, args),
     macos_shortcuts_install: () => actions.shortcutsInstall(runtime),
     macos_privacy_open: () => actions.privacyOpen(runtime),
   }

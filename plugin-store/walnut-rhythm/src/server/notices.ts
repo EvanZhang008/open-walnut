@@ -19,10 +19,13 @@ export const KEY_STAND_UP = 'stand-up'
 export const KEY_FOCUS_DONE = 'focus-done'
 export const KEY_BREAK_OVER = 'break-over'
 
-function nextBlockArgs(focus: { taskId?: string; minutes: number }): Record<string, unknown> {
+/** The next block as this one was started: same task, same length, same break. */
+function nextBlockArgs(focus: { taskId?: string; minutes: number; breakMinutes: number; spotifyUri?: string }): Record<string, unknown> {
   return {
+    ...(focus.spotifyUri ? { spotify: focus.spotifyUri } : {}),
     ...(focus.taskId ? { taskId: focus.taskId } : {}),
     ...(focus.minutes > 0 ? { minutes: focus.minutes } : {}),
+    ...(focus.breakMinutes > 0 ? { breakMinutes: focus.breakMinutes } : {}),
   }
 }
 
@@ -45,7 +48,7 @@ export function focusDoneNotice(block: CompletedBlock, breakKind: BreakKind, bre
 }
 
 /** The one question after a break: start the next block? Not answering leaves Rhythm off. */
-export function breakOverNotice(focus: Pick<FocusState, 'taskId' | 'title' | 'minutes'>): PluginNotifyInput {
+export function breakOverNotice(focus: Pick<FocusState, 'taskId' | 'title' | 'minutes' | 'breakMinutes' | 'spotifyUri'>): PluginNotifyInput {
   const what = focus.title ? ` on ${focus.title}` : ''
   return {
     kind: 'reminder',

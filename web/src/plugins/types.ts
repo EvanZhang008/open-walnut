@@ -101,8 +101,8 @@ export interface PluginSettingsContribution {
 }
 
 /** Mirrors `@open-walnut/plugin-api`'s SlotTarget: the host surfaces a plugin can draw inside. */
-export type PluginSlotTarget = 'task.meta' | 'session.meta'
-export const PLUGIN_SLOT_TARGETS: readonly PluginSlotTarget[] = ['task.meta', 'session.meta']
+export type PluginSlotTarget = 'task.meta' | 'session.meta' | 'status-item.panel'
+export const PLUGIN_SLOT_TARGETS: readonly PluginSlotTarget[] = ['task.meta', 'session.meta', 'status-item.panel']
 
 export interface PluginTaskMetaSlotProps {
   taskId: string
@@ -117,9 +117,17 @@ export interface PluginSessionMetaSlotProps {
   navigate(path: string): void
 }
 
+/** A panel a plugin draws in its own status item's popover; while it renders, the item's buttons step aside. */
+export interface PluginStatusItemPanelSlotProps {
+  itemId: string
+  close(): void
+  navigate(path: string): void
+}
+
 export interface PluginSlotPropsByTarget {
   'task.meta': PluginTaskMetaSlotProps
   'session.meta': PluginSessionMetaSlotProps
+  'status-item.panel': PluginStatusItemPanelSlotProps
 }
 
 /** Mirrors `@open-walnut/plugin-api`'s SlotContribution (see ChatViewProps for why it must). */

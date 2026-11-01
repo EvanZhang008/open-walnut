@@ -27,6 +27,10 @@ export interface FocusState {
   title?: string
   /** This block's focus length, kept for "Another block". */
   minutes: number
+  /** The short break this block's person picked at Start, in minutes. 0 = the configured one. */
+  breakMinutes: number
+  /** The Spotify playlist Start played on the Mac for this block, kept for "Another block". */
+  spotifyUri?: string
   /** The current phase's window, epoch ms. Both 0 while off. */
   startedAt: number
   endsAt: number
@@ -53,6 +57,9 @@ export interface CompletedBlock {
   startedAt: number
   endedAt: number
   minutes: number
+  /** The short break picked with it (0 = the configured one), so "Another block" keeps it. */
+  breakMinutes: number
+  spotifyUri?: string
   taskId?: string
   title?: string
 }
@@ -62,7 +69,7 @@ export type FocusEvent =
   | { type: 'break-ended'; breakKind: BreakKind; lateMs: number }
 
 export const IDLE_FOCUS: FocusState = {
-  phase: 'idle', minutes: 0, startedAt: 0, endsAt: 0, runStartedAt: 0, completedInCycle: 0,
+  phase: 'idle', minutes: 0, breakMinutes: 0, startedAt: 0, endsAt: 0, runStartedAt: 0, completedInCycle: 0,
   lastEndedAt: 0, lastRunStartedAt: 0, lastRunEndedAt: 0,
 }
 
@@ -82,8 +89,10 @@ function off(state: FocusState, endedAt: number): FocusState {
     ...IDLE_FOCUS,
     completedInCycle: state.completedInCycle,
     minutes: state.minutes,
+    breakMinutes: state.breakMinutes,
     ...(state.taskId ? { taskId: state.taskId } : {}),
     ...(state.title ? { title: state.title } : {}),
+    ...(state.spotifyUri ? { spotifyUri: state.spotifyUri } : {}),
     lastEndedAt: ran ? endedAt : state.lastEndedAt,
     lastRunStartedAt: ran ? state.runStartedAt || state.startedAt : state.lastRunStartedAt,
     lastRunEndedAt: ran ? endedAt : state.lastRunEndedAt,
@@ -92,7 +101,7 @@ function off(state: FocusState, endedAt: number): FocusState {
 
 export function startFocus(
   state: FocusState,
-  input: { now: number; minutes: number; taskId?: string; title?: string },
+  input: { now: number; minutes: number; breakMinutes?: number; spotifyUri?: string; taskId?: string; title?: string },
 ): FocusState {
   if (state.phase === 'focus') throw new Error('A focus block is already running. Stop it first with focus_stop.')
   // "Another block" during a break: the run being cut off is the last run now.
@@ -103,6 +112,8 @@ export function startFocus(
     ...(input.taskId ? { taskId: input.taskId } : {}),
     ...(input.title ? { title: input.title } : {}),
     minutes: input.minutes,
+    breakMinutes: input.breakMinutes ?? 0,
+    ...(input.spotifyUri ? { spotifyUri: input.spotifyUri } : {}),
     startedAt: input.now,
     endsAt: input.now + input.minutes * MIN,
     runStartedAt: input.now,
@@ -120,8 +131,9 @@ export function stopFocus(state: FocusState, now: number): { state: FocusState; 
   return { state: { ...off(state, now), completedInCycle: 0 }, stoppedMinutes }
 }
 
-export function breakLengthMs(kind: BreakKind, d: FocusDurations): number {
-  return (kind === 'long' ? d.longBreakMinutes : d.breakMinutes) * MIN
+/** The long break is always the configured one; a short break is the block's own pick, else the configured one. */
+export function breakLengthMs(kind: BreakKind, d: FocusDurations, picked = 0): number {
+  return (kind === 'long' ? d.longBreakMinutes : picked > 0 ? picked : d.breakMinutes) * MIN
 }
 
 /** End the break now (End break): off, keeping the cycle count so the long break still comes. */
@@ -141,7 +153,7 @@ export function advanceFocus(state: FocusState, now: number, d: FocusDurations):
   if (current.phase === 'break_due') {
     // A stored state from the version that waited for a click: the break began at the block's end.
     const kind: BreakKind = current.breakKind === 'long' ? 'long' : 'short'
-    current = { ...current, phase: 'break', breakKind: kind, endsAt: current.startedAt + breakLengthMs(kind, d), runStartedAt: legacyRunStart(current) }
+    current = { ...current, phase: 'break', breakKind: kind, endsAt: current.startedAt + breakLengthMs(kind, d, current.breakMinutes), runStartedAt: legacyRunStart(current) }
   }
   for (let guard = 0; guard < 3 && current.phase !== 'idle' && current.endsAt > 0 && current.endsAt <= now; guard++) {
     const endedAt = current.endsAt
@@ -149,13 +161,15 @@ export function advanceFocus(state: FocusState, now: number, d: FocusDurations):
       const completed = current.completedInCycle + 1
       const long = d.longBreakEvery > 0 && completed % d.longBreakEvery === 0
       const breakKind: BreakKind = long ? 'long' : 'short'
-      const breakEndsAt = endedAt + breakLengthMs(breakKind, d)
+      const breakEndsAt = endedAt + breakLengthMs(breakKind, d, current.breakMinutes)
       events.push({
         type: 'focus-completed',
         block: {
           startedAt: current.startedAt,
           endedAt,
           minutes: current.minutes,
+          breakMinutes: current.breakMinutes,
+          ...(current.spotifyUri ? { spotifyUri: current.spotifyUri } : {}),
           ...(current.taskId ? { taskId: current.taskId } : {}),
           ...(current.title ? { title: current.title } : {}),
         },
@@ -197,7 +211,9 @@ export function focusOnBoot(raw: unknown): FocusState {
     phase,
     ...(typeof value.taskId === 'string' && value.taskId ? { taskId: value.taskId } : {}),
     ...(typeof value.title === 'string' && value.title ? { title: value.title } : {}),
+    ...(typeof value.spotifyUri === 'string' && /^spotify:[a-z]+:[A-Za-z0-9]+$/.test(value.spotifyUri) ? { spotifyUri: value.spotifyUri } : {}),
     minutes: num(value.minutes),
+    breakMinutes: Math.floor(num(value.breakMinutes)),
     startedAt: num(value.startedAt),
     endsAt: num(value.endsAt),
     runStartedAt: num(value.runStartedAt),

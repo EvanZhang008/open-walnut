@@ -205,6 +205,9 @@ test('the popover opens beside the rail, and a button runs the op again and agai
   await expect(popover(page).locator('.status-item-popover-detail')).toHaveText('1h 02m at the keyboard. Walk for a couple of minutes.')
   await expect(popover(page).locator('.status-item-btn')).toHaveText(['Got it', 'Snooze 10 min'])
   await expect(popover(page).locator('.status-item-btn.is-primary')).toHaveText('Got it')
+  // A plugin with no panel of its own (status-item.panel) keeps exactly the buttons it published.
+  await expect(popover(page).locator('.status-item-popover-panel')).toBeHidden()
+  await expect(popover(page)).not.toHaveAttribute('data-panel', 'true')
   await expect(item(page)).toHaveAttribute('aria-expanded', 'true')
 
   // Beside the rail, bottom level with the item, fully on screen. Measured at rest: the
@@ -331,7 +334,7 @@ test('the footer opens the plugin App, and the item follows disable, reload and 
   await expect(item(page)).toHaveAttribute('aria-label', 'Survives a page reload', { timeout: 60_000 })
 })
 
-test('Rhythm: the off ring\'s Start begins a focus block, and Stop block turns it off again', async ({ page }) => {
+test('Rhythm: the off ring\'s panel picks the lengths and music, Start begins the block, Stop block turns it off', async ({ page }) => {
   await page.goto(`${base()}/`)
   await expect(page.locator('.sidebar')).toBeVisible({ timeout: 60_000 })
   await setCollapsed(page, true)
@@ -339,19 +342,43 @@ test('Rhythm: the off ring\'s Start begins a focus block, and Stop block turns i
   const rhythm = item(page, 'walnut-rhythm:rhythm')
   await expect(rhythm).toHaveAttribute('aria-label', 'Rhythm is off', { timeout: 30_000 })
   await rhythm.click()
-  await expect(popover(page).locator('.status-item-btn')).toHaveText(['Start focus block (25 min)'])
+  // Rhythm draws its own Start form in the popover (status-item.panel): the item's one button steps aside.
+  const form = popover(page).getByTestId('rhythm-start-form')
+  await expect(form).toBeVisible({ timeout: 20_000 })
+  await expect(popover(page)).toHaveAttribute('data-panel', 'true')
+  await expect(popover(page).locator('.status-item-btn')).toHaveCount(0)
+  await expect(form.getByTestId('rhythm-start-focus-input')).toHaveValue('25')
+  await expect(form.getByTestId('rhythm-start-break-input')).toHaveValue('5')
+  // The fixture's music folder is empty: Start says plainly it plays nothing.
+  await expect(form.getByTestId('rhythm-start-music-none')).toHaveAttribute('aria-checked', 'true')
+  await expect(form.getByTestId('rhythm-start-plays')).toHaveText('Start plays no music.')
+  await form.getByTestId('rhythm-start-focus-15').click()
+  await form.getByTestId('rhythm-start-break-input').fill('10')
+  await expect(form.getByTestId('rhythm-start-button')).toHaveText('Start 15 min focus')
+  await expect(form.getByTestId('rhythm-start-then')).toHaveText('then a 10 min break')
+  // A typed length out of range blocks Start and says the range.
+  await form.getByTestId('rhythm-start-focus-input').fill('2')
+  await expect(form.getByTestId('rhythm-start-invalid')).toHaveText('Focus is 5 to 180 minutes.')
+  await expect(form.getByTestId('rhythm-start-button')).toBeDisabled()
+  await form.getByTestId('rhythm-start-focus-input').fill('15')
   await shootRail(page, '05-rhythm-off')
 
-  await popover(page).getByRole('button', { name: 'Start focus block (25 min)' }).click()
-  await expect(popover(page)).toHaveCount(0)
+  await form.getByTestId('rhythm-start-button').click()
+  await expect(popover(page)).toHaveCount(0, { timeout: 20_000 })
   await expect(rhythm).toHaveAttribute('data-tone', 'accent', { timeout: 30_000 })
   const status = await page.request.post(`${base()}/api/plugin-runtime/walnut-rhythm/ops/walnut_rhythm_status`, { data: {} })
-  const endsAt = ((await status.json()) as { result: { focus: { endsAt: number } } }).result.focus.endsAt
+  const running = ((await status.json()) as { result: { focus: { endsAt: number; minutes: number }; config: { focusMinutes: number; breakMinutes: number } } }).result
+  const endsAt = running.focus.endsAt
+  expect(running.focus.minutes).toBe(15)
+  // The pick is the next default: Rhythm's settings now say 15 and 10.
+  expect(running.config).toMatchObject({ focusMinutes: 15, breakMinutes: 10 })
   await expect.poll(async () => (await rhythm.getAttribute('aria-label')) === `Focus · ${minutesLeft(endsAt)} min left`).toBe(true)
   await expect.poll(async () => (await rhythm.locator('svg text').textContent()) === String(minutesLeft(endsAt))).toBe(true)
   await rhythm.click()
   await expect(popover(page).locator('.status-item-popover-detail')).toHaveText(/^Started \d\d:\d\d, ends \d\d:\d\d\. Walnut is quiet until it ends\.$/)
+  // While a block runs the panel draws nothing, so the item's own button is back.
   await expect(popover(page).locator('.status-item-btn')).toHaveText(['Stop block'])
+  await expect(popover(page).getByTestId('rhythm-start-form')).toHaveCount(0)
   await expect(popover(page).getByRole('button', { name: 'Open Rhythm' })).toBeVisible()
   await shootRail(page, '06-rhythm-focus')
 
@@ -360,7 +387,8 @@ test('Rhythm: the off ring\'s Start begins a focus block, and Stop block turns i
   await expect(rhythm).toHaveAttribute('aria-label', 'Rhythm is off')
   await rhythm.click()
   await expect(popover(page).locator('.status-item-popover-detail')).toHaveText(/^Last run \d\d:\d\d to \d\d:\d\d\. Nothing runs until you start a block\.$/)
-  await expect(popover(page).locator('.status-item-btn')).toHaveText(['Start focus block (25 min)'])
+  await expect(popover(page).getByTestId('rhythm-start-focus-input')).toHaveValue('15')
+  await expect(popover(page).getByTestId('rhythm-start-break-input')).toHaveValue('10')
   await page.keyboard.press('Escape')
   const after = await page.request.post(`${base()}/api/plugin-runtime/walnut-rhythm/ops/walnut_rhythm_status`, { data: {} })
   expect(((await after.json()) as { result: { focus: { phase: string } } }).result.focus.phase).toBe('idle')
@@ -385,7 +413,8 @@ test('Rhythm never starts on its own: keyboard time and a reload leave it off, w
     // The pause glyph, never a number of minutes.
     await expect(rhythm.locator('svg text')).toHaveCount(0)
     await rhythm.click()
-    await expect(popover(page).locator('.status-item-btn')).toHaveText(['Start focus block (25 min)'])
+    await expect(popover(page).getByTestId('rhythm-start-form')).toBeVisible({ timeout: 20_000 })
+    await expect(popover(page).locator('.status-item-btn')).toHaveCount(0)
     if (round === 0) await shootRail(page, '07-rhythm-off-after-keyboard-time')
     await page.keyboard.press('Escape')
     const status = await page.request.post(`${base()}/api/plugin-runtime/walnut-rhythm/ops/walnut_rhythm_status`, { data: {} })

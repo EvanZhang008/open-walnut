@@ -7,6 +7,9 @@ struct FocusMusicView: View {
     @State private var player = FocusMusicPlayer.shared
     @State private var message: String?
     @State private var busy = false
+    @State private var focusMinutes = 25
+    @State private var breakMinutes = 5
+    @State private var lengthsTouched = false
 
     var body: some View {
         List {
@@ -73,20 +76,84 @@ struct FocusMusicView: View {
             let phase = player.focus?.focus.phase ?? "idle"
             LabeledContent("Focus block", value: Self.phaseText(player.focus))
                 .accessibilityIdentifier("focusMusic.focusPhase")
-            if phase == "focus" || phase == "break" {
+            if phase == "focus" {
                 Button("Stop block", role: .destructive) { run { await player.stopFocusBlock() } }
                     .disabled(busy)
                     .accessibilityIdentifier("focusMusic.focusStop")
-            } else {
-                Button("Start a \(player.focus?.config?.focusMinutes ?? 25) min focus block") { run { await player.startFocusBlock() } }
+            } else if phase == "break" || phase == "break_due" {
+                Button("End break") { run { await player.endBreak() } }
                     .disabled(busy)
-                    .accessibilityIdentifier("focusMusic.focusStart")
+                    .accessibilityIdentifier("focusMusic.focusStop")
+            } else if player.focus == nil {
+                // Until the status (and its remembered lengths) arrives, Start would send 25 and 5.
+                Text("Rhythm's status has not loaded yet. Start shows once your Walnut answers.")
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("focusMusic.focusLoading")
+                Button("Try again") { Task { await player.refreshFocus() } }
+                    .accessibilityIdentifier("focusMusic.focusRetry")
+            } else {
+                Stepper(value: focusMinutesBinding, in: 5...180, step: 5) {
+                    LabeledContent("Focus", value: "\(focusMinutes) min")
+                }
+                .accessibilityIdentifier("focusMusic.focusMinutes")
+                Stepper(value: breakMinutesBinding, in: 1...60) {
+                    LabeledContent("Break", value: "\(breakMinutes) min")
+                }
+                .accessibilityIdentifier("focusMusic.breakMinutes")
+                Picker("Music", selection: Binding(get: { player.startChoice }, set: { player.setStartChoice($0) })) {
+                    Text("No music").tag(FocusStartChoice.none)
+                    ForEach(player.tracks) { track in Text(track.title).tag(FocusStartChoice.track(track.id)) }
+                    if let spotify = player.listing?.spotify, spotify.available {
+                        ForEach(spotify.playlists) { one in Text("\(one.name) (Spotify on the Mac)").tag(FocusStartChoice.spotify(one.uri)) }
+                    }
+                }
+                .pickerStyle(.menu)
+                .accessibilityIdentifier("focusMusic.startMusic")
+                Text(Self.playsText(player.startChoice, listing: player.listing))
+                    .font(.subheadline)
+                    .accessibilityIdentifier("focusMusic.startPlays")
+                Button("Start \(focusMinutes) min focus, then a \(breakMinutes) min break") {
+                    let minutes = focusMinutes, pause = breakMinutes, picked = lengthsTouched
+                    // Only a pick made here becomes the next default; untouched, they are the defaults already.
+                    run { await player.startFocusBlock(minutes: minutes, breakMinutes: pause, remember: picked) }
+                }
+                .disabled(busy)
+                .accessibilityIdentifier("focusMusic.focusStart")
             }
             if let message { Text(message).font(.footnote).foregroundStyle(.secondary) }
         } footer: {
-            Text((player.focus?.config?.musicWithFocus ?? true)
-                 ? "Start also plays the music on this phone, and it stops when the block ends."
-                 : "Music plays only when you press Play. Rhythm's settings on the Mac can change that.")
+            Text("Your pick of lengths is kept for the next block on every device; the music pick is this phone's own.")
+        }
+        // The remembered lengths arrive with the status; a pick made here is not overwritten.
+        .onAppear { seedLengths(player.focus?.config) }
+        .onChange(of: player.focus?.config) { _, config in seedLengths(config) }
+    }
+
+    private func seedLengths(_ config: RhythmFocusStatus.Config?) {
+        guard !lengthsTouched, let config else { return }
+        if let focus = config.focusMinutes { focusMinutes = min(180, max(5, focus)) }
+        if let pause = config.breakMinutes { breakMinutes = min(60, max(1, pause)) }
+    }
+
+    private var focusMinutesBinding: Binding<Int> {
+        Binding(get: { focusMinutes }, set: { focusMinutes = $0; lengthsTouched = true })
+    }
+
+    private var breakMinutesBinding: Binding<Int> {
+        Binding(get: { breakMinutes }, set: { breakMinutes = $0; lengthsTouched = true })
+    }
+
+    /// Twin of the web Start form's line: say plainly what Start plays, and where.
+    static func playsText(_ choice: FocusStartChoice, listing: RhythmMusicListing?) -> String {
+        switch choice {
+        case .none:
+            return "Start plays no music."
+        case .track(let id):
+            let title = listing?.tracks.first { $0.id == id }?.title ?? "the focus music"
+            return "Start plays \(title) on this phone, until the block ends."
+        case .spotify(let uri):
+            let name = listing?.spotify?.playlists.first { $0.uri == uri }?.name ?? "the playlist"
+            return "Start plays \(name) in Spotify on your Mac, until the block ends."
         }
     }
 
@@ -142,7 +209,7 @@ struct FocusMusicView: View {
             return "\(Int(ceil((endsAt - now) / 60_000))) min left"
         case "break": return "On a break"
         case "break_due": return "Block done"
-        default: return "Not running"
+        default: return "Off"
         }
     }
 

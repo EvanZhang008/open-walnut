@@ -3,9 +3,9 @@
  * repeat, in order, shuffled), the tracks, and the folder they come from. The sound
  * itself lives in the console-wide player (music.ts), so leaving this page never stops it.
  */
-import { useEffect, useSyncExternalStore } from 'react'
-import type { MusicOrder, MusicPlayer, MusicView } from './music'
-import type { RhythmPublicState } from './store'
+import { useEffect, useState, useSyncExternalStore } from 'react'
+import type { MusicOrder, MusicPlayer, MusicView, SpotifyView } from './music'
+import type { RhythmPublicState, RhythmStore } from './store'
 
 const ORDERS: Array<[MusicOrder, string]> = [
   ['one', 'Repeat one'],
@@ -49,7 +49,57 @@ export function MusicToggle({ player }: { player: MusicPlayer }) {
   )
 }
 
-export function MusicCard({ player, state, onOpenFolder, busy }: { player: MusicPlayer; state: RhythmPublicState; onOpenFolder(): void; busy: boolean }) {
+/** The Spotify playlists Start can play in the Mac's Spotify app: add one by its link, remove one. */
+function SpotifyPlaylists({ player, store, spotify }: { player: MusicPlayer; store: RhythmStore; spotify: SpotifyView }) {
+  const [link, setLink] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null)
+  const call = (op: string, args: Record<string, unknown>, after?: () => void) => {
+    setBusy(true)
+    setMessage(null)
+    void store.call<{ message: string; spotify: SpotifyView }>(op, args).then((outcome) => {
+      setBusy(false)
+      if (!outcome.ok) { setMessage({ text: outcome.message, error: true }); return }
+      player.setSpotify(outcome.result.spotify)
+      setMessage({ text: outcome.result.message, error: false })
+      after?.()
+    })
+  }
+  return (
+    <div className="rhythm-spotify" data-testid="rhythm-spotify">
+      <div className="rhythm-block-head">
+        <h3 className="rhythm-subhead">Spotify playlists</h3>
+        <span className="rhythm-muted">{spotify.available ? 'Play in the Spotify app on this Mac' : spotify.reason}</span>
+      </div>
+      <div className="rhythm-picker" data-testid="rhythm-spotify-list">
+        {spotify.playlists.map((one) => (
+          <div key={one.uri} className="rhythm-option rhythm-option-row">
+            <span className="rhythm-option-title">{one.name}</span>
+            <button type="button" className="rhythm-link-button" disabled={busy} data-testid={`rhythm-spotify-remove-${one.uri}`} onClick={() => call('spotify_playlist_remove', { uri: one.uri })}>Remove</button>
+          </div>
+        ))}
+        {spotify.playlists.length === 0 && <p className="rhythm-muted rhythm-pad">No playlists. Paste a playlist link below.</p>}
+      </div>
+      <form
+        className="rhythm-spotify-add"
+        onSubmit={(event) => { event.preventDefault(); if (link.trim()) call('spotify_playlist_add', { link }, () => setLink('')) }}
+      >
+        <input
+          type="text"
+          value={link}
+          placeholder="https://open.spotify.com/playlist/…"
+          aria-label="Spotify playlist link"
+          data-testid="rhythm-spotify-link"
+          onChange={(event) => setLink(event.currentTarget.value)}
+        />
+        <button type="submit" className="rhythm-button" disabled={busy || !link.trim()} data-testid="rhythm-spotify-add">Add</button>
+      </form>
+      {message && <p className={message.error ? 'rhythm-error' : 'rhythm-status'} role="status" data-testid="rhythm-spotify-message">{message.text}</p>}
+    </div>
+  )
+}
+
+export function MusicCard({ player, store, state, onOpenFolder, busy }: { player: MusicPlayer; store: RhythmStore; state: RhythmPublicState; onOpenFolder(): void; busy: boolean }) {
   const music = useMusic(player)
   useEffect(() => { void player.refresh() }, [player])
   const listing = music.listing
@@ -61,7 +111,7 @@ export function MusicCard({ player, state, onOpenFolder, busy }: { player: Music
     <section className="rhythm-block rhythm-music" data-testid="rhythm-music-card" data-playing={on ? 'true' : 'false'}>
       <div className="rhythm-block-head">
         <h2>Focus music</h2>
-        <span className="rhythm-muted">{state.config.musicWithFocus ? 'Start also plays it on this device' : 'Plays only when you press Play'}</span>
+        <span className="rhythm-muted">Pick what Start plays in the focus block above</span>
       </div>
       <div className="rhythm-group"><div className="rhythm-body">
         <div className="rhythm-music-now">
@@ -146,6 +196,8 @@ export function MusicCard({ player, state, onOpenFolder, busy }: { player: Music
         {listing && listing.skipped.length > 0 && (
           <p className="rhythm-muted" data-testid="rhythm-music-skipped">Not listed: {listing.skipped.join(', ')}. Use m4a, mp3 or wav (Safari and the phone play only those), and no ".." in the name.</p>
         )}
+
+        {listing?.spotify && <SpotifyPlaylists player={player} store={store} spotify={listing.spotify} />}
 
         <div className="rhythm-music-folder">
           <span className="rhythm-muted rhythm-music-path" data-testid="rhythm-music-folder" title={listing?.folder}>{listing ? listing.folder : ''}</span>

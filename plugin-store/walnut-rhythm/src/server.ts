@@ -19,6 +19,7 @@ import { registerOps } from './server/ops'
 import { buildPublicState, stateFingerprint } from './server/public-state'
 import { RhythmRuntime } from './server/runtime'
 import { rhythmStatusItem, STATUS_ITEM_ID } from './server/status-item'
+import { SpotifyControl } from './server/spotify'
 
 const TICK_MS = 30_000
 /** Land the phase change just after the boundary, never a hair before it. */
@@ -70,7 +71,8 @@ export async function activate(walnut: WalnutServerApi): Promise<void> {
     // Host-owned, so the install watch's sleep ends with the plugin (see deactivate).
     wait: (ms) => new Promise<void>((resolve) => { walnut.timers.timeout(resolve, ms) }),
   })
-  const runtime = new RhythmRuntime({ walnut, macos })
+  const spotify = new SpotifyControl({ enabled: process.platform === 'darwin', run: runProcess, storage: walnut.storage })
+  const runtime = new RhythmRuntime({ walnut, macos, spotify })
   await runtime.load()
   active = runtime
 

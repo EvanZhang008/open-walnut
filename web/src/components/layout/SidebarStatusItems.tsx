@@ -10,14 +10,19 @@
  * op takes tens of milliseconds, but a server busy with other work once held one for 5s,
  * and a popover waiting on it read as a broken button. A failure reopens the popover with
  * the reason (or, when the item is gone, says so in an error toast).
+ *
+ * A plugin may draw a panel of its own under the title (`status-item.panel`, a slot of
+ * that plugin only). While the panel shows anything, the item's own buttons step aside;
+ * a plugin without one, or a panel that renders nothing, keeps the buttons.
  */
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useAppCatalog } from '@/apps/hooks';
 import { useNotifications } from '@/contexts/notifications';
 import { runOpAction } from '@/contexts/notifications/notification-actions';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
+import { PluginSlots, type SlotEntry } from '@/plugins/PluginSlots';
 import { log } from '@/utils/log';
 import {
   itemTitle, orderedActions, ringFraction, ringText,
@@ -228,12 +233,14 @@ function StatusItemPopover({ item, now, triggerRef, busyOp, error, takeFocus, on
     : catalog.all.find((one) => one.pluginId === item.pluginId);
 
   const title = itemTitle(item, now);
+  const panel = usePanelShown();
   return createPortal(
     <div
       ref={popRef}
       className="status-item-popover"
       data-tone={item.tone}
       data-status-key={item.key}
+      data-panel={panel.shown ? 'true' : undefined}
       role="dialog"
       aria-label={title}
       tabIndex={-1}
@@ -248,7 +255,15 @@ function StatusItemPopover({ item, now, triggerRef, busyOp, error, takeFocus, on
           {item.detail && <div className="status-item-popover-detail">{item.detail}</div>}
         </div>
       </div>
-      {item.actions.length > 0 && (
+      <div ref={panel.ref} className="status-item-popover-panel" hidden={!panel.shown}>
+        <PluginSlots
+          target="status-item.panel"
+          props={{ itemId: item.id, close: onClose }}
+          include={(entry: SlotEntry) => entry.pluginId === item.pluginId}
+          onNavigate={onClose}
+        />
+      </div>
+      {!panel.shown && item.actions.length > 0 && (
         <div className="status-item-popover-actions">
           {orderedActions(item).map((action) => (
             <button
@@ -276,4 +291,20 @@ function StatusItemPopover({ item, now, triggerRef, busyOp, error, takeFocus, on
     </div>,
     document.body,
   );
+}
+
+/** Whether the plugin's panel drew anything: a panel that renders null leaves the buttons in place. */
+function usePanelShown() {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [shown, setShown] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const check = () => setShown(el.childNodes.length > 0);
+    check();
+    const observer = new MutationObserver(check);
+    observer.observe(el, { childList: true });
+    return () => observer.disconnect();
+  }, []);
+  return { ref, shown };
 }

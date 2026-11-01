@@ -23,7 +23,7 @@ describe('the focus run', () => {
     const { state, events } = completeBlock(IDLE_FOCUS, T0)
     expect(events).toEqual([{
       type: 'focus-completed',
-      block: { startedAt: T0, endedAt: T0 + 25 * MIN, minutes: 25, taskId: 'task-1', title: 'Write the report' },
+      block: { startedAt: T0, endedAt: T0 + 25 * MIN, minutes: 25, breakMinutes: 0, taskId: 'task-1', title: 'Write the report' },
       breakKind: 'short', breakEndsAt: T0 + 30 * MIN, lateMs: 0,
     }])
     expect(state).toMatchObject({ phase: 'break', breakKind: 'short', startedAt: T0 + 25 * MIN, endsAt: T0 + 30 * MIN, runStartedAt: T0, completedInCycle: 1 })
@@ -31,6 +31,27 @@ describe('the focus run', () => {
     const over = advanceFocus(state, T0 + 30 * MIN, D)
     expect(over.events).toEqual([{ type: 'break-ended', breakKind: 'short', lateMs: 0 }])
     expect(over.state).toMatchObject({ phase: 'idle', startedAt: 0, endsAt: 0, runStartedAt: 0, completedInCycle: 1, lastRunStartedAt: T0, lastRunEndedAt: T0 + 30 * MIN, taskId: 'task-1', minutes: 25 })
+  })
+
+  it('a block keeps the break picked with it (the long break keeps its own), and its Spotify playlist', () => {
+    const uri = 'spotify:playlist:37i9dQZF1DWZeKCadgRdKQ'
+    const running = startFocus(IDLE_FOCUS, { now: T0, minutes: 50, breakMinutes: 12, spotifyUri: uri })
+    const ended = advanceFocus(running, T0 + 50 * MIN, D)
+    expect(ended.events[0]).toMatchObject({ type: 'focus-completed', block: { minutes: 50, breakMinutes: 12, spotifyUri: uri }, breakEndsAt: T0 + 62 * MIN })
+    expect(ended.state).toMatchObject({ phase: 'break', endsAt: T0 + 62 * MIN })
+    // Off after it, the run still knows its lengths and playlist, so "Start next block" repeats them.
+    const off = advanceFocus(ended.state, T0 + 62 * MIN, D).state
+    expect(off).toMatchObject({ phase: 'idle', minutes: 50, breakMinutes: 12, spotifyUri: uri })
+    // A restart reads all of it back; a malformed playlist is dropped.
+    expect(focusOnBoot(JSON.parse(JSON.stringify(running)))).toEqual(running)
+    expect(focusOnBoot({ ...running, spotifyUri: 'spotify:playlist:x"; do shell script "y' }).spotifyUri).toBeUndefined()
+    // The fourth block's long break is the configured one whatever was picked.
+    const fourth = startFocus({ ...IDLE_FOCUS, completedInCycle: 3, lastEndedAt: T0 }, { now: T0 + MIN, minutes: 25, breakMinutes: 12 })
+    expect(advanceFocus(fourth, T0 + 26 * MIN, D).state).toMatchObject({ breakKind: 'long', endsAt: T0 + 41 * MIN })
+    // A state an older version wrote has no break pick: the configured break.
+    const old = focusOnBoot({ phase: 'focus', minutes: 25, startedAt: T0, endsAt: T0 + 25 * MIN, completedInCycle: 0, lastEndedAt: 0 })
+    expect(old.breakMinutes).toBe(0)
+    expect(advanceFocus(old, T0 + 25 * MIN, D).state.endsAt).toBe(T0 + 30 * MIN)
   })
 
   it('off never moves by itself, however long the clock runs', () => {

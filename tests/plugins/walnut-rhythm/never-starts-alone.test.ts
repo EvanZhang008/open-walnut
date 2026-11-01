@@ -171,17 +171,25 @@ describe('the source: who can start a run', () => {
   })
 
   it('the Start op is named only by its registration and by buttons the person clicks', () => {
-    // ops.ts registers it; status-item.ts and notices.ts are buttons; focus-card.tsx is the App's Start buttons.
+    // ops.ts registers it; status-item.ts and notices.ts are buttons; start-form.tsx is the
+    // Start form (the App's focus card and the sidebar popover both draw it).
     expect(filesContaining(path.join(PLUGIN, 'src'), /\.tsx?$/, /['"]focus_start['"]/)).toEqual([
-      'server/notices.ts', 'server/ops.ts', 'server/status-item.ts', 'web/focus-card.tsx',
+      'server/notices.ts', 'server/ops.ts', 'server/status-item.ts', 'web/start-form.tsx',
     ])
-    const card = fs.readFileSync(path.join(PLUGIN, 'src/web/focus-card.tsx'), 'utf8')
-    // Its one call sits in startBlock; every caller of startBlock and of start is a Start button's onClick.
-    expect(card.match(/run\('focus_start'/g)).toHaveLength(1)
-    for (const fn of ['startBlock', 'start']) {
-      const lines = card.split('\n').filter((line) => new RegExp(`\\b${fn}\\(`).test(line) && !new RegExp(`const ${fn} =`).test(line))
-      for (const line of lines) expect(line).toMatch(/onClick=\{\(\) => start\(|const start = /)
-    }
+    const form = fs.readFileSync(path.join(PLUGIN, 'src/web/start-form.tsx'), 'utf8')
+    // Its one call sits in startWithMusic, whose one caller is the form's `start`, which only the Start button's onClick runs.
+    expect(form.match(/['"]focus_start['"]/g)).toHaveLength(1)
+    expect(form.match(/\bstartWithMusic\(/g)).toHaveLength(2) // the definition and the one call
+    expect(form).toMatch(/const start = \(\) => \{[^]*?void startWithMusic\(/)
+    // Exported, so any file could call it: only the form does.
+    expect(filesContaining(path.join(PLUGIN, 'src'), /\.tsx?$/, /\bstartWithMusic\(/)).toEqual(['web/start-form.tsx'])
+    // Every other use of `start`, string literals blanked out (a test id is not a call).
+    const startUses = form.split('\n')
+      .filter((line) => !/^\s*(\*|\/\/)/.test(line) && !/const start = /.test(line))
+      .filter((line) => /[^.\w]start[^\w]/.test(line.replace(/(['"`])(?:\\.|(?!\1).)*\1/g, '""')))
+    expect(startUses.map((line) => line.trim())).toEqual(['onClick={start}'])
+    // Every file that renders the form: the App's focus card and the popover panel, both a person's click away.
+    expect(filesContaining(path.join(PLUGIN, 'src'), /\.tsx?$/, /<StartForm\b/)).toEqual(['web.tsx', 'web/focus-card.tsx'])
   })
 
   it('nothing else in Walnut (server, console, phone, shipped skills) calls the Start op', () => {
@@ -200,6 +208,6 @@ describe('the source: who can start a run', () => {
     expect(filesContaining(IOS, /\.swift$/, /startFocusBlock\(/)).toEqual(['Stores/FocusMusicPlayer.swift', 'Views/Settings/FocusMusicView.swift'])
     const view = fs.readFileSync(path.join(IOS, 'Views/Settings/FocusMusicView.swift'), 'utf8')
     expect(view.match(/startFocusBlock\(/g)).toHaveLength(1)
-    expect(view).toMatch(/Button\("Start a .*\{ run \{ await player\.startFocusBlock\(\) \} \}/)
+    expect(view).toMatch(/Button\("Start [^"\n]*"\) \{\n\s*let minutes = [^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*run \{ await player\.startFocusBlock\(/)
   })
 })

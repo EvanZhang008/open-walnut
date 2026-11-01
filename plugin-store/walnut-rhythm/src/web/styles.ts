@@ -205,6 +205,31 @@ export const RHYTHM_CSS = `
 .rhythm-segment:hover { background: var(--bg-hover, var(--bg-secondary)); }
 .rhythm-segment-on { background: var(--accent-subtle, color-mix(in srgb, var(--accent) 12%, transparent)); color: var(--accent); font-weight: 600; }
 .rhythm-music .rhythm-picker { max-height: 196px; }
+
+/* ── Start form (the App's focus card and the sidebar popover) ── */
+.rhythm-start { display: grid; gap: 10px; color: var(--fg); font-size: 13px; }
+.rhythm-start p { margin: 0; }
+.rhythm-start-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rhythm-start-label { width: 44px; flex: none; color: var(--fg-secondary); font-size: 12.5px; font-weight: 500; }
+.rhythm-start-number { display: inline-flex; align-items: center; gap: 4px; }
+.rhythm-start-number input {
+  width: 46px; height: 26px; padding: 0 6px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); color: var(--fg); font: inherit; font-size: 13px; text-align: right;
+}
+.rhythm-start-number input[aria-invalid="true"] { border-color: var(--settings-error-text, #c4221a); }
+.rhythm-start-music { display: grid; gap: 4px; }
+.rhythm-start .rhythm-picker { max-height: 196px; }
+.rhythm-start-compact .rhythm-picker { max-height: 150px; }
+.rhythm-start-compact .rhythm-segment { padding: 0 9px; }
+.rhythm-start-plays { font-size: 12.5px; line-height: 17px; color: var(--fg); font-weight: 500; }
+.rhythm-start .rhythm-actions { align-items: center; }
+.rhythm-start .rhythm-muted { font-size: 12px; }
+.rhythm-subhead { margin: 0; font-size: 12.5px; line-height: 17px; font-weight: 600; color: var(--fg-secondary); }
+.rhythm-spotify { display: grid; gap: 6px; }
+.rhythm-option-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: default; }
+.rhythm-spotify-add { display: flex; gap: 8px; }
+.rhythm-spotify-add input { flex: 1; min-width: 0; height: 28px; padding: 0 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--bg); color: var(--fg); font: inherit; font-size: 13px; }
 .rhythm-music-folder { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
 .rhythm-music-folder .rhythm-actions { flex: none; flex-wrap: nowrap; }
 .rhythm-music-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

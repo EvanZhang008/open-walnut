@@ -26,6 +26,51 @@ enum FocusMusicOrder: String, CaseIterable, Identifiable {
     }
 }
 
+/// What Start plays: a folder track on this phone, a Spotify playlist in the Mac's Spotify
+/// app, or nothing. The twin of the Rhythm web player's `StartChoice`; stored as one string.
+enum FocusStartChoice: Equatable, Hashable {
+    case none
+    case track(String)
+    case spotify(String)
+
+    var stored: String {
+        switch self {
+        case .none: return "none"
+        case .track(let id): return "track:\(id)"
+        case .spotify(let uri): return "spotify:\(uri)"
+        }
+    }
+
+    init?(stored: String?) {
+        guard let stored else { return nil }
+        if stored == "none" { self = .none; return }
+        if stored.hasPrefix("track:"), stored.count > 6 { self = .track(String(stored.dropFirst(6))); return }
+        if stored.hasPrefix("spotify:spotify:") { self = .spotify(String(stored.dropFirst(8))); return }
+        return nil
+    }
+
+    /// Twin of the web's `resolveStartChoice`: the phone's own pick while it still exists;
+    /// the first time, the setting decides between the current track and nothing. A track
+    /// that left the folder falls back to the current one; a playlist that is gone (or a
+    /// Mac without Spotify) to nothing.
+    static func resolve(stored: FocusStartChoice?, listing: RhythmMusicListing?, trackID: String?, withFocus: Bool) -> FocusStartChoice {
+        let tracks = listing?.tracks ?? []
+        let current = tracks.first { $0.id == trackID } ?? tracks.first
+        switch stored {
+        case .none?: return .none
+        case .track(let id)?:
+            if listing == nil || tracks.contains(where: { $0.id == id }) { return .track(id) }
+            return current.map { .track($0.id) } ?? .none
+        case .spotify(let uri)?:
+            guard let listing else { return .spotify(uri) }
+            if let spotify = listing.spotify, spotify.available, spotify.playlists.contains(where: { $0.uri == uri }) { return .spotify(uri) }
+            return .none
+        case nil:
+            return withFocus ? (current.map { .track($0.id) } ?? .none) : .none
+        }
+    }
+}
+
 /// The phone's focus music: the tracks in the Rhythm folder on the Mac, streamed with
 /// byte ranges (an 8 hour file starts at once), looping, with lock screen controls.
 ///
@@ -57,6 +102,8 @@ final class FocusMusicPlayer {
     private(set) var error: String?
     private(set) var order: FocusMusicOrder
     private(set) var volume: Float
+    /// This phone's own pick for Start; read it through `startChoice`.
+    private(set) var storedStartChoice: FocusStartChoice?
 
     @ObservationIgnored private let api = WalnutAPI()
     @ObservationIgnored private var player: AVQueuePlayer?
@@ -80,6 +127,7 @@ final class FocusMusicPlayer {
     static let orderKey = "focusMusic.order"
     static let volumeKey = "focusMusic.volume"
     static let trackKey = "focusMusic.track"
+    static let startChoiceKey = "focusMusic.startChoice"
     static let watchSeconds: UInt64 = 20
 
     private init() {
@@ -88,6 +136,20 @@ final class FocusMusicPlayer {
         let stored = defaults.object(forKey: Self.volumeKey) as? Double
         volume = Float(stored.map { min(1, max(0, $0)) } ?? 0.6)
         trackID = defaults.string(forKey: Self.trackKey)
+        storedStartChoice = FocusStartChoice(stored: defaults.string(forKey: Self.startChoiceKey))
+    }
+
+    var startChoice: FocusStartChoice {
+        FocusStartChoice.resolve(
+            stored: storedStartChoice, listing: listing, trackID: trackID,
+            withFocus: focus?.config?.musicWithFocus ?? listing?.withFocus ?? true
+        )
+    }
+
+    func setStartChoice(_ choice: FocusStartChoice) {
+        storedStartChoice = choice
+        AppPrefs.defaults.set(choice.stored, forKey: Self.startChoiceKey)
+        if case .track(let id) = choice { trackID = id; AppPrefs.defaults.set(id, forKey: Self.trackKey) }
     }
 
     var tracks: [RhythmMusicListing.Track] { listing?.tracks ?? [] }
@@ -160,16 +222,23 @@ final class FocusMusicPlayer {
         AppPrefs.defaults.set(Double(volume), forKey: Self.volumeKey)
     }
 
-    /// Start a block on the Mac and, when the setting says so, the music with it.
-    func startFocusBlock() async -> String {
-        let minutes = focus?.config?.focusMinutes ?? 25
-        let withMusic = (focus?.config?.musicWithFocus ?? listing?.withFocus ?? true) && !tracks.isEmpty
+    /// Start a block on the Mac with this phone's music pick: a folder track plays here,
+    /// a Spotify playlist in the Mac's Spotify app. The lengths become the next defaults.
+    func startFocusBlock(minutes: Int, breakMinutes: Int, remember: Bool = true) async -> String {
+        let choice = startChoice
+        var withMusic = false
+        var spotify: String?
+        switch choice {
+        case .track(let id): withMusic = tracks.contains { $0.id == id }
+        case .spotify(let uri): spotify = uri; if isOn { stop() }
+        case .none: break
+        }
         focusStartPending = true
-        if withMusic { play(withFocus: true) }
+        if withMusic, case .track(let id) = choice { play(trackID: id, withFocus: true) }
         let played = generation
         defer { focusStartPending = false }
         do {
-            let result = try await api.rhythmFocusStart(minutes: minutes)
+            let result = try await api.rhythmFocusStart(minutes: minutes, breakMinutes: breakMinutes, spotify: spotify, remember: remember)
             focusStartPending = false
             if let state = result.state { applyFocus(state) }
             return result.message
@@ -181,8 +250,17 @@ final class FocusMusicPlayer {
     }
 
     func stopFocusBlock() async -> String {
+        await focusAction { try await $0.rhythmFocusStop() }
+    }
+
+    /// End the break: off, keeping the cycle count so the long break still comes.
+    func endBreak() async -> String {
+        await focusAction { try await $0.rhythmBreakSkip() }
+    }
+
+    private func focusAction(_ call: (WalnutAPI) async throws -> RhythmActionResult) async -> String {
         do {
-            let result = try await api.rhythmFocusStop()
+            let result = try await call(api)
             if let state = result.state { applyFocus(state) }
             return result.message
         } catch {

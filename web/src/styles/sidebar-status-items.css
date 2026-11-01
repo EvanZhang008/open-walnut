@@ -144,6 +144,11 @@
   color: var(--fg-muted);
 }
 
+/* A plugin's own panel (status-item.panel): a little wider, and its buttons replace the item's. */
+.status-item-popover[data-panel="true"] { width: 320px; }
+.status-item-popover-panel { margin-top: 12px; }
+.status-item-popover-panel[hidden] { display: none; }
+
 .status-item-popover-actions {
   display: flex;
   flex-wrap: wrap;

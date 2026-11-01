@@ -17,7 +17,7 @@ function op(fake: ReturnType<typeof createFakeWalnut>, name: string) {
 }
 
 describe('activate', () => {
-  it('declares the eight ops with the intended reach', async () => {
+  it('declares the ten ops with the intended reach', async () => {
     const fake = createFakeWalnut({ pluginId: 'walnut-rhythm', config: SAFE_CONFIG })
     await activate(fake.api)
     try {
@@ -28,6 +28,8 @@ describe('activate', () => {
         focus_stop: 'write:allow',
         break_skip: 'write:allow',
         music_tracks: 'read:allow',
+        spotify_playlist_add: 'write:allow',
+        spotify_playlist_remove: 'write:allow',
         music_folder_open: 'write:deny',
         macos_shortcuts_install: 'write:deny',
         macos_privacy_open: 'write:deny',
@@ -42,7 +44,7 @@ describe('activate', () => {
     await activate(fake.api)
     try {
       const started = await op(fake, 'focus_start')({ minutes: 25 }) as { message: string; state: { focus: { phase: string } } }
-      expect(started.message).toBe('Focus block started: 25 min.')
+      expect(started.message).toBe('Focus block started: 25 min, then a 5 min break.')
       expect(started.state.focus.phase).toBe('focus')
       const quiet = await fake.api.notifications.quiet.get()
       expect(quiet.active).toBe(true)

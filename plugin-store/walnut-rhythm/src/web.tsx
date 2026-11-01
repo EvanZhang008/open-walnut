@@ -5,10 +5,17 @@
  * draws it as a ring in the rail on every screen. The App entry carries no badge, since
  * a pinned App would repeat the ring's minutes right next to it. The focus music player
  * is made here rather than in the App, so leaving the App never stops the music.
+ *
+ * While Rhythm is off, the ring's popover shows the Start form (lengths and music) in
+ * place of its one Start button, through the `status-item.panel` slot. A host older than
+ * that slot refuses it, and the popover keeps the plain Start button.
  */
-import type { AppProps, WalnutWebApi } from '@open-walnut/plugin-api/web'
+import { useState, useSyncExternalStore } from 'react'
+import type { AppProps, StatusItemPanelSlotProps, WalnutWebApi } from '@open-walnut/plugin-api/web'
+import { STATUS_ITEM_ID } from './server/status-item'
 import { RhythmApp } from './web/app'
 import { createMusicPlayer } from './web/music'
+import { StartForm } from './web/start-form'
 import { createRhythmStore } from './web/store'
 import { RHYTHM_CSS } from './web/styles'
 
@@ -44,6 +51,37 @@ export async function activate(walnut: WalnutWebApi) {
     fullBleed: true,
   })
   walnut.ui.injectCss(RHYTHM_CSS)
+
+  function StartPanel({ itemId, close }: StatusItemPanelSlotProps) {
+    const state = useSyncExternalStore(store.subscribe, store.get, store.get)
+    // The block started but Spotify did not play: said here until read, then the item's buttons return.
+    const [spotifyError, setSpotifyError] = useState<string | null>(null)
+    if (itemId !== STATUS_ITEM_ID || !state || state.replica) return null
+    if (spotifyError) {
+      return (
+        <div className="rhythm-start-result" data-testid="rhythm-start-spotify-error">
+          <p className="rhythm-error" role="status">The block is running. {spotifyError}</p>
+          <button type="button" className="rhythm-button" onClick={() => setSpotifyError(null)}>OK</button>
+        </div>
+      )
+    }
+    // Only while off: a running block or break keeps its own Stop / End break buttons.
+    if (state.focus.phase !== 'idle') return null
+    return (
+      <StartForm
+        store={store}
+        music={music}
+        state={state}
+        compact
+        onStarted={(result) => { if (result.spotifyError) setSpotifyError(result.spotifyError); else close() }}
+      />
+    )
+  }
+  try {
+    walnut.ui.slot?.({ id: 'start', target: 'status-item.panel', title: 'Start a focus block', component: StartPanel })
+  } catch (error) {
+    walnut.log.info('This Walnut has no status item panels; the ring keeps its Start button', { error: String(error) })
+  }
 
   void store.refresh()
   walnut.log.info('Rhythm web activated', { appPath: app.path })

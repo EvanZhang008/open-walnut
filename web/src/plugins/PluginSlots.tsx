@@ -6,11 +6,13 @@
  * its own PluginBoundary, so a plugin that throws costs its own value and nothing of the
  * panel around it. With no contribution it renders nothing at all: no wrapper, no gap.
  *
- * Every target is a labelled fact (the task's metadata, the top of the session menu), so a
+ * Most targets are a labelled fact (the task's metadata, the top of the session menu), so a
  * surface wraps each slot in <PluginSlotFact>, which prints the slot's title in the
  * surface's own label style and hides the whole fact while the plugin renders nothing.
  * The one unlabelled place is the session header, and only for the session facts the
- * user pinned there (web/src/components/sessions/SessionMetaFacts.tsx).
+ * user pinned there (web/src/components/sessions/SessionMetaFacts.tsx). The other kind is a
+ * panel: `status-item.panel` draws inside the plugin's own status item popover
+ * (web/src/components/layout/SidebarStatusItems.tsx).
  */
 import { Fragment, useCallback, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'

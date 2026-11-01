@@ -21,6 +21,10 @@ extension WalnutAPI {
     }
 
     func rhythmOp<T: Decodable>(_ op: String, args: [String: Int] = [:]) async throws -> T {
+        try await rhythmOp(op, body: args)
+    }
+
+    func rhythmOp<T: Decodable, B: Encodable>(_ op: String, body args: B) async throws -> T {
         let path = "/api/plugin-runtime/\(Self.rhythmPluginID)/ops/walnut_rhythm_\(op)"
         let envelope: RhythmOpEnvelope<T>
         do {
@@ -44,17 +48,41 @@ extension WalnutAPI {
         try await rhythmOp("status")
     }
 
-    func rhythmFocusStart(minutes: Int) async throws -> RhythmActionResult {
-        try await rhythmOp("focus_start", args: ["minutes": minutes])
+    /// `remember`: the lengths become the next block's defaults (Rhythm's settings).
+    /// `spotify`: a playlist URI Rhythm plays in the Spotify app on the Mac.
+    func rhythmFocusStart(minutes: Int, breakMinutes: Int, spotify: String? = nil, remember: Bool = true) async throws -> RhythmActionResult {
+        try await rhythmOp("focus_start", body: RhythmStartArgs(minutes: minutes, breakMinutes: breakMinutes, spotify: spotify, remember: remember))
     }
 
     func rhythmFocusStop() async throws -> RhythmActionResult {
         try await rhythmOp("focus_stop")
     }
+
+    func rhythmBreakSkip() async throws -> RhythmActionResult {
+        try await rhythmOp("break_skip")
+    }
 }
 
-/// `music_tracks`: the audio files in the focus music folder on the Mac.
+struct RhythmStartArgs: Encodable, Equatable {
+    let minutes: Int
+    let breakMinutes: Int
+    let spotify: String?
+    let remember: Bool
+}
+
+/// `music_tracks`: the audio files in the focus music folder on the Mac, and the
+/// Spotify playlists Rhythm plays in the Mac's Spotify app.
 struct RhythmMusicListing: Decodable, Equatable {
+    struct Spotify: Decodable, Equatable {
+        struct Playlist: Decodable, Equatable, Identifiable {
+            let uri: String
+            let name: String
+            var id: String { uri }
+        }
+        let available: Bool
+        let reason: String?
+        let playlists: [Playlist]
+    }
     struct Track: Decodable, Equatable, Identifiable {
         let id: String
         let title: String
@@ -70,6 +98,8 @@ struct RhythmMusicListing: Decodable, Equatable {
     let skipped: [String]
     let error: String?
     let withFocus: Bool?
+    /// Absent from a Rhythm older than its Spotify playlists.
+    let spotify: Spotify?
 }
 
 /// The slice of Rhythm's `status` the player needs: the running block and its settings.
@@ -83,6 +113,7 @@ struct RhythmFocusStatus: Decodable, Equatable {
     }
     struct Config: Decodable, Equatable {
         let focusMinutes: Int?
+        let breakMinutes: Int?
         let musicWithFocus: Bool?
     }
     let now: Double?
@@ -93,4 +124,6 @@ struct RhythmFocusStatus: Decodable, Equatable {
 struct RhythmActionResult: Decodable {
     let message: String
     let state: RhythmFocusStatus?
+    /// The block started but Spotify did not play: why.
+    let spotifyError: String?
 }

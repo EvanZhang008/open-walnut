@@ -1,5 +1,5 @@
 /**
- * The focus block card: a task picker and two Start buttons while Rhythm is off, and a
+ * The focus block card: a task picker and the Start form (lengths, music) while Rhythm is off, and a
  * live countdown with the run's start and end while a block or its break runs. Start is
  * the only way in; the break follows the block by itself and Rhythm is off after it.
  */
@@ -8,6 +8,7 @@ import type { WalnutWebApi } from '@open-walnut/plugin-api/web'
 import { countdownText, focusPhaseText, runText } from './format'
 import { MusicToggle } from './music-card'
 import type { MusicPlayer } from './music'
+import { StartForm } from './start-form'
 import type { RhythmPublicState, RhythmStore } from './store'
 
 interface TaskOption {
@@ -69,17 +70,11 @@ export function FocusCard({ walnut, store, state, run, busy, music }: FocusCardP
   const running = focus.phase === 'focus' || focus.phase === 'break'
   const now = useServerNow(store, running)
   const [taskId, setTaskId] = useState<string | null>(null)
+  // A started block whose Spotify did not play says why while it runs (the form is gone by then).
+  const [spotifyError, setSpotifyError] = useState<string | null>(null)
+  useEffect(() => { if (focus.phase === 'idle') setSpotifyError(null) }, [focus.phase])
   const picker = useOpenTasks(walnut, focus.phase === 'idle')
   const remaining = focus.endsAt ? Math.max(0, focus.endsAt - now) : 0
-  const short = config.focusMinutes
-  const long = Math.min(180, config.focusMinutes * 2)
-  // The music starts inside the click (a browser allows sound only then); a refused start stops it again.
-  const startBlock = (args: Record<string, unknown>) => {
-    const withMusic = config.musicWithFocus && (music.get().listing?.tracks.length ?? 0) > 0
-    const played = withMusic ? music.play({ withFocus: true }) : undefined
-    void run('focus_start', args).then((ok) => { if (!ok && played !== undefined) music.stop(played) })
-  }
-  const start = (minutes: number) => startBlock({ minutes, ...(taskId ? { taskId } : {}) })
   const blockNumber = focus.phase === 'focus' ? focus.completedInCycle + 1 : focus.completedInCycle
 
   return (
@@ -93,7 +88,7 @@ export function FocusCard({ walnut, store, state, run, busy, music }: FocusCardP
       {focus.phase === 'idle' && (
         <>
           <p className="rhythm-muted" data-testid="rhythm-focus-off">
-            Off. {focus.lastRun ? `${runText(focus)}. ` : ''}Pick what the block is for, then start. Walnut stays quiet until it ends, then a {config.breakMinutes} min break counts down.
+            Off. {focus.lastRun ? `${runText(focus)}. ` : ''}Pick what the block is for, how long it runs and what plays, then start.{config.focusQuietsWalnut ? ' Walnut stays quiet until it ends.' : ''}
           </p>
           <div className="rhythm-picker" role="radiogroup" aria-label="Task for this focus block" data-testid="rhythm-task-picker">
             <button
@@ -130,16 +125,7 @@ export function FocusCard({ walnut, store, state, run, busy, music }: FocusCardP
               </p>
             )}
           </div>
-          <div className="rhythm-actions">
-            <button type="button" className="rhythm-button rhythm-primary" disabled={busy} data-testid="rhythm-focus-start-short" onClick={() => start(short)}>
-              Start ({short})
-            </button>
-            {long !== short && (
-              <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-focus-start-long" onClick={() => start(long)}>
-                Start ({long})
-              </button>
-            )}
-          </div>
+          <StartForm store={store} music={music} state={state} taskId={taskId} onStarted={(result) => setSpotifyError(result.spotifyError ?? null)} />
         </>
       )}
 
@@ -149,6 +135,7 @@ export function FocusCard({ walnut, store, state, run, busy, music }: FocusCardP
           <p className="rhythm-focus-title" data-testid="rhythm-focus-title">
             {focus.phase === 'focus' ? (focus.title ?? 'No task') : 'Stand up and move.'}
           </p>
+          {focus.phase === 'focus' && spotifyError && <p className="rhythm-error" role="status" data-testid="rhythm-focus-spotify-error">{spotifyError}</p>}
           <p className="rhythm-muted" data-testid="rhythm-focus-run">{runText(focus)}.{focus.phase === 'break' ? ' Then Rhythm asks before the next block.' : ''}</p>
           {focus.phase === 'focus' && (
             <p className="rhythm-muted">Block {blockNumber} of {focus.longBreakEvery} before the long break.</p>

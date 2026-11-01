@@ -5,7 +5,7 @@ Focus blocks you start yourself, for Walnut. Rhythm is **off until you press Sta
 - **A run starts only when you start it.** Press Start (in the sidebar ring, the Rhythm App, the phone, or by asking Ask Walnut) and a focus block runs, optionally tied to a task. Its minutes are logged on that task when it ends.
 - **The break follows by itself, then Rhythm asks once.** When the block ends its break counts down (a long break every fourth block). When the break ends, Rhythm asks once whether to start the next block. If you do not, it stays off.
 - **Quiet while you focus.** Walnut quiet mode stays on for the length of a block, and it can follow the Mac's own Focus as well.
-- **Focus music from your own folder.** One click plays the tracks in a folder on your Mac (brown noise, rain, whatever you put there), looping, in the console, the Mac app and the phone. Music started with a block stops when the block ends.
+- **Focus music from your own folder.** One click plays the tracks in a folder on your Mac (brown noise, rain, whatever you put there), looping, in the console, the Mac app and the phone, or a Spotify playlist in your own Spotify app on the Mac. You pick it, with the block and break lengths, right before Start, and the Start form says what will play. Music started with a block stops when the block ends.
 
 It adds one App (Rhythm), eight ops, one read-only tool for routine watchers, and one skill that tells Ask Walnut when to use them.
 
@@ -17,9 +17,10 @@ Nothing about you. Rhythm does not read keyboard or app time, attention, or agen
 
 | Moment | What Rhythm does |
 |---|---|
-| Off (the start, and after every run) | The sidebar ring shows **Rhythm is off** with a pause glyph and one button, **Start focus block**. No countdown, because nothing counts. After a run it names the last run ("Last run 10:05 to 10:35"). |
-| You press Start | Walnut quiet mode on until the block ends (and macOS Do Not Disturb, if you turned that on). The ring turns blue, counts the block down and says when it started and ends. **Stop block** ends it; Rhythm is off after it. |
-| The block ends | Quiet off, the minutes logged on the task, and the break starts by itself (`break_minutes`, or `long_break_minutes` every `long_break_every` blocks). One notice says so, with **End break** and **Another block**. The ring turns green and counts the break down. |
+| Off (the start, and after every run) | The sidebar ring shows **Rhythm is off** with a pause glyph. No countdown, because nothing counts. After a run it names the last run ("Last run 10:05 to 10:35"). Its popover holds the Start form (below). |
+| You pick and press Start | The Start form, the same in the ring's popover and the Rhythm App (the phone has its own): **Focus** (15, 25, 45, 60, or type 5 to 180 minutes), **Break** (5, 10, 15, or type 1 to 60), **Music** (No music, a track from the folder, or a Spotify playlist), and one line saying plainly what Start plays ("Start plays Brown Noise on this device, until the block ends"). The lengths you start with become the next defaults (they are the `focus_minutes` and `break_minutes` settings); the music pick is kept per device. |
+| The block runs | Walnut quiet mode on until the block ends (and macOS Do Not Disturb, if you turned that on). The ring turns blue, counts the block down and says when it started and ends. **Stop block** ends it; Rhythm is off after it. |
+| The block ends | Quiet off, the minutes logged on the task, and the break starts by itself (the break picked at Start, or `long_break_minutes` every `long_break_every` blocks). One notice says so, with **End break** and **Another block**. The ring turns green and counts the break down. |
 | The break ends | One notice, "Break over. Start the next block?", with **Start next block** and **Not now**. Either way, or with no answer at all, Rhythm is off until the next Start. |
 
 ## Focus music
@@ -30,8 +31,9 @@ Rhythm ships no audio. It plays the files in one folder on the Mac: by default `
 |---|---|
 | Rhythm App, Focus music | **Play** / **Stop** (one click each), the volume, Repeat one, In order or Shuffle, the track list, the folder with **Open folder** (Finder) and **Refresh**. |
 | Rhythm App, a running block | **Play <track>** / **Stop <track>** beside the countdown. |
-| A Start button | With `music_with_focus` on (the default), starts the music on the device you clicked. |
-| iPhone, Settings, Focus music | The same Play / Stop, volume, order and tracks, plus starting and stopping a block. Keeps playing with the screen locked and in other apps; Lock Screen controls stop it. |
+| The Start form | Its **Music** pick plays when you press Start: a track starts on the device you clicked, a Spotify playlist in Spotify on the Mac. Until you pick, `music_with_focus` decides (on: the current track; off: no music). |
+| Rhythm App, Spotify playlists | The playlists the Start form offers, **Deep Focus** to begin with. Paste a playlist's share link to add one (its name comes from Spotify), **Remove** to take it off. |
+| iPhone, Settings, Focus music | The same Play / Stop, volume, order and tracks, plus the Start form's lengths and music (a track plays on the phone, a Spotify playlist on the Mac) and stopping a block. Keeps playing with the screen locked and in other apps; Lock Screen controls stop it. |
 
 How it plays:
 
@@ -40,6 +42,10 @@ How it plays:
 - The tracks stream through Walnut's raw file route, which answers byte ranges, so an 8 hour file starts at once and is never copied. On a cloud companion the phone reads them from the Mac through the bridge.
 - One track on repeat loops on its own (the phone uses a gapless looper). The console's player is one audio element for the whole page, so moving to another screen never stops it. Track, order and volume are kept per device.
 - On the phone, a call or an alarm pauses the music and it comes back when iOS allows.
+
+### Spotify
+
+Rhythm never downloads or streams Spotify audio. A Spotify pick plays in your own Spotify app on the Mac, through its supported AppleScript commands (`play track "spotify:playlist:..."`, `pause`): Start plays the playlist, and the block's end or Stop pauses it (only when Spotify is running; it never opens Spotify to pause). The first time, macOS asks whether Walnut may control Spotify (System Settings, Privacy & Security, Automation). If Spotify is not installed, the form says so and offers no playlists; if it is closed, Start opens it; if it does not start playing (not signed in, say), the block still runs and the form says why. Only links that look like a Spotify playlist, album, artist, show or track reach the script.
 
 ## Settings
 
@@ -55,7 +61,7 @@ All keys live under `plugins.walnut-rhythm` and show up in the Rhythm App's sett
 | `mirror_macos_focus` | true | Walnut goes quiet while a macOS Focus is on. |
 | `macos_focus_shortcuts` | false | Each block turns macOS Do Not Disturb on and off through two Shortcuts. |
 | `music_folder` | empty | Folder on this Mac whose m4a, mp3 and wav files are the focus music. `~/` works. Empty uses the plugin's own `focus-music` folder. |
-| `music_with_focus` | true | A Start button also starts the focus music on that device; it stops when the block ends. |
+| `music_with_focus` | true | Until a device picks its Start music, Start plays the current track there (off: no music). Music started with a block stops when the block ends. |
 
 The stand-up reminder an older version had (it counted keyboard time on its own) is gone, and so are its settings (`reminder_every_minutes`, `away_reset_minutes`, `snooze_minutes`, `stand_break_minutes`, `quiet_hours`, `defer_for_natural_pause_minutes`). Left in config.yaml they are ignored.
 
@@ -66,10 +72,12 @@ Ops are named `walnut_rhythm_<name>`. The everyday ones can be called from any W
 | Op | Arguments | Does |
 |---|---|---|
 | `status` | `refresh?` | Read-only. Off or running, the run's start and end, the last run, quiet holds, macOS state, today's scorecard. |
-| `focus_start` | `taskId?`, `minutes?` | Start a block. Refused while one is running. The only thing that starts a run. |
+| `focus_start` | `taskId?`, `minutes?`, `breakMinutes?`, `spotify?`, `remember?` | Start a block, with its break length and, on the Mac, a Spotify playlist (link or URI) that plays until it ends. `remember` keeps the lengths as the defaults (the Start forms send it). Refused while one is running. The only thing that starts a run. |
 | `focus_stop` | | Stop the block or break and end the cycle; Rhythm is off after it. |
 | `break_skip` | | End the running break early; Rhythm is off after it. |
-| `music_tracks` | | Read-only. The tracks in the focus music folder, in play order, with their paths on the Mac. |
+| `music_tracks` | | Read-only. The tracks in the focus music folder, in play order, with their paths on the Mac, and the Spotify playlists (with whether Spotify is installed). |
+| `spotify_playlist_add` | `link`, `name?` | Keep a Spotify playlist for the Start form. |
+| `spotify_playlist_remove` | `uri` | Take one off Rhythm's list (it stays in Spotify). |
 | `music_folder_open` | | Show the focus music folder in Finder (Mac only, in-process only). |
 | `macos_shortcuts_install` | | Prepare and open the two shortcuts (Mac only, in-process only). |
 | `macos_privacy_open` | | Open System Settings at Full Disk Access (Mac only, in-process only). |

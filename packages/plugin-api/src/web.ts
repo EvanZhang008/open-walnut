@@ -73,10 +73,19 @@ export interface SettingsContribution {
  *   menu closes when your value navigates. The user may pin the fact from that row to
  *   the session's header (off by default); there it renders with `placement: 'header'`.
  *
+ * - `'status-item.panel'`: inside the popover of one of YOUR status items (the server's
+ *   `walnut.ui.statusItem`), under its title. Not a labelled fact: your component draws a
+ *   small panel of its own (a picker, a form with its own Start). While it renders
+ *   something, the host leaves out the item's `actions`, so the panel's buttons are the
+ *   only ones; render `null` and the item's buttons come back. A host older than this
+ *   target refuses it (`slot` throws), and the popover then shows the buttons as before,
+ *   so keep the actions meaningful on their own. Call `close()` once the panel has done
+ *   what it was opened for.
+ *
  * There is no slot a plugin puts on a session's header row by itself: its width belongs
  * to the host's own tools, and only the user decides to spend it.
  */
-export type SlotTarget = 'task.meta' | 'session.meta'
+export type SlotTarget = 'task.meta' | 'session.meta' | 'status-item.panel'
 
 export interface TaskMetaSlotProps {
   taskId: string
@@ -98,9 +107,18 @@ export interface SessionMetaSlotProps {
   navigate(path: string): void
 }
 
+export interface StatusItemPanelSlotProps {
+  /** The status item's id as your server registered it ('rhythm'); one panel serves all of yours. */
+  itemId: string
+  /** Close the popover. */
+  close(): void
+  navigate(path: string): void
+}
+
 export interface SlotPropsByTarget {
   'task.meta': TaskMetaSlotProps
   'session.meta': SessionMetaSlotProps
+  'status-item.panel': StatusItemPanelSlotProps
 }
 
 export interface SlotContribution<T extends SlotTarget = SlotTarget> {

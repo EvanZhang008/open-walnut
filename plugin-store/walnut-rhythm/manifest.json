@@ -2,7 +2,7 @@
   "id": "walnut-rhythm",
   "name": "Rhythm",
   "category": "time",
-  "description": "Focus blocks you start yourself: a pomodoro tied to a task, a break after it, quiet mode while you focus, and focus music from your own folder. Off until you press Start.",
+  "description": "Focus blocks you start yourself: a pomodoro tied to a task, a break after it, quiet mode while you focus, and focus music from your own folder or a Spotify playlist on the Mac. Off until you press Start.",
   "version": "0.1.0",
   "icon": "icon.svg",
   "apiVersion": 1,
@@ -23,15 +23,15 @@
   "configSchema": {
     "type": "object",
     "properties": {
-      "focus_minutes": { "type": "integer", "default": 25, "minimum": 5, "maximum": 180, "description": "Length of a focus block" },
-      "break_minutes": { "type": "integer", "default": 5, "minimum": 1, "maximum": 60, "description": "Length of the break after a focus block" },
+      "focus_minutes": { "type": "integer", "default": 25, "minimum": 5, "maximum": 180, "description": "Length of a focus block; the Start form keeps the last length you started with here" },
+      "break_minutes": { "type": "integer", "default": 5, "minimum": 1, "maximum": 60, "description": "Length of the break after a focus block; the Start form keeps the last break you started with here" },
       "long_break_minutes": { "type": "integer", "default": 15, "minimum": 1, "maximum": 120, "description": "Length of the long break" },
       "long_break_every": { "type": "integer", "default": 4, "minimum": 1, "maximum": 12, "description": "Every Nth focus block is followed by the long break" },
       "focus_quiets_walnut": { "type": "boolean", "default": true, "description": "Turn on Walnut quiet mode while a focus block runs" },
       "mirror_macos_focus": { "type": "boolean", "default": true, "description": "Turn on Walnut quiet mode while a macOS Focus is on" },
       "macos_focus_shortcuts": { "type": "boolean", "default": false, "description": "Turn macOS Do Not Disturb on and off with each focus block, through two Shortcuts" },
       "music_folder": { "type": "string", "default": "", "description": "Folder on this Mac whose m4a, mp3 and wav files are the focus music; empty uses Rhythm's own focus-music folder" },
-      "music_with_focus": { "type": "boolean", "default": true, "description": "Starting a focus block with a Start button also starts the focus music on that device, and it stops when the block ends" }
+      "music_with_focus": { "type": "boolean", "default": true, "description": "Until a device picks the music its Start form plays, Start plays the current track there; music started with a block stops when the block ends" }
     }
   },
   "uiHints": {
@@ -43,6 +43,6 @@
     "mirror_macos_focus": { "label": "Follow macOS Focus", "help": "Optional. Walnut goes quiet while a macOS Focus is on." },
     "macos_focus_shortcuts": { "label": "Drive macOS Do Not Disturb", "help": "Optional. Each focus block turns Do Not Disturb on and off through two Shortcuts you add from the Rhythm app." },
     "music_folder": { "label": "Focus music folder", "help": "Optional. A folder on this Mac, like ~/Music/Focus. Empty uses Rhythm's own folder (Open folder under Focus music)." },
-    "music_with_focus": { "label": "Play music with focus blocks", "help": "Optional. Start plays the focus music on the device you pressed it on, and the music stops when the block ends." }
+    "music_with_focus": { "label": "Play music with focus blocks", "help": "Optional. Until you pick music in the Start form, Start plays the current track on the device you pressed it on. It stops when the block ends." }
   }
 }

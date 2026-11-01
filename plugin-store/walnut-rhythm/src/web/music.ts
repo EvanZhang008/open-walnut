@@ -10,17 +10,60 @@
  *
  * Tracks are the person's own files on the Mac (`music_tracks`), streamed through
  * Walnut's raw file route, which answers byte ranges, so an 8 hour file starts at once.
- * Track, order and volume are this device's choice, kept in localStorage.
+ * Track, order and volume are this device's choice, kept in localStorage, and so is what
+ * Start plays (`startChoice`): a track here, a Spotify playlist on the Mac, or nothing.
  */
 import type { WalnutWebApi } from '@open-walnut/plugin-api/web'
+import type { MusicTracksResult } from '../server/actions'
 import type { MusicListing, MusicTrack } from '../server/music'
+import type { SpotifyPlaylist, SpotifyView } from '../server/spotify'
 import type { RhythmStore } from './store'
 
-export type { MusicListing, MusicTrack }
+export type { MusicListing, MusicTrack, MusicTracksResult, SpotifyPlaylist, SpotifyView }
 export type MusicOrder = 'one' | 'in_order' | 'shuffle'
 
+/** What Start plays on this device: a folder track here, a Spotify playlist in the Mac's Spotify, or nothing. */
+export type StartChoice = { kind: 'none' } | { kind: 'track'; id: string } | { kind: 'spotify'; uri: string }
+
+function choiceOf(raw: unknown): StartChoice | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const value = raw as Record<string, unknown>
+  if (value.kind === 'none') return { kind: 'none' }
+  if (value.kind === 'track' && typeof value.id === 'string' && value.id) return { kind: 'track', id: value.id }
+  if (value.kind === 'spotify' && typeof value.uri === 'string' && value.uri.startsWith('spotify:')) return { kind: 'spotify', uri: value.uri }
+  return undefined
+}
+
+/**
+ * What Start plays now. PURE. The device's own pick when it still exists; else, the first
+ * time, the setting (`music_with_focus`) decides between the current track and nothing.
+ * A track that left the folder falls back to the current one, a playlist that is gone (or
+ * a Mac without Spotify) to nothing: never a choice the Start button cannot keep.
+ */
+export function resolveStartChoice(input: {
+  stored: StartChoice | undefined
+  listing: MusicTracksResult | null
+  trackId: string | null
+  withFocus: boolean
+}): StartChoice {
+  const tracks = input.listing?.tracks ?? []
+  const current = tracks.find((track) => track.id === input.trackId) ?? tracks[0]
+  const stored = input.stored
+  if (stored?.kind === 'none') return stored
+  if (stored?.kind === 'track') {
+    if (!input.listing || tracks.some((track) => track.id === stored.id)) return stored
+    return current ? { kind: 'track', id: current.id } : { kind: 'none' }
+  }
+  if (stored?.kind === 'spotify') {
+    const spotify = input.listing?.spotify
+    if (!input.listing) return stored
+    return spotify?.available && spotify.playlists.some((one) => one.uri === stored.uri) ? stored : { kind: 'none' }
+  }
+  return input.withFocus && current ? { kind: 'track', id: current.id } : { kind: 'none' }
+}
+
 export interface MusicView {
-  listing: (MusicListing & { withFocus: boolean }) | null
+  listing: MusicTracksResult | null
   loading: boolean
   loadError: string | null
   /** The track playing, or the one Play would start. */
@@ -34,6 +77,8 @@ export interface MusicView {
   /** Stops when the focus block ends. */
   tiedToFocus: boolean
   error: string | null
+  /** This device's own pick for Start; resolve it with `resolveStartChoice`. Absent until one is made. */
+  startChoice?: StartChoice
 }
 
 export interface MusicPlayer {
@@ -52,6 +97,10 @@ export interface MusicPlayer {
   select(trackId: string): void
   setOrder(order: MusicOrder): void
   setVolume(volume: number): void
+  /** What Start plays on this device from now on. */
+  setStartChoice(choice: StartChoice): void
+  /** The Spotify list changed (a playlist added or removed). */
+  setSpotify(spotify: SpotifyView): void
 }
 
 const PREFS_KEY = 'walnut-rhythm:music'
@@ -73,7 +122,7 @@ export function trackUrl(file: string): string {
   return `/api/file-raw/local/${segments.map(encodeURIComponent).join('/')}`
 }
 
-function readPrefs(): { trackId?: string; order?: MusicOrder; volume?: number } {
+function readPrefs(): { trackId?: string; order?: MusicOrder; volume?: number; startChoice?: StartChoice } {
   try {
     const raw = window.localStorage.getItem(PREFS_KEY)
     const parsed = raw ? JSON.parse(raw) as Record<string, unknown> : {}
@@ -81,6 +130,7 @@ function readPrefs(): { trackId?: string; order?: MusicOrder; volume?: number } 
       ...(typeof parsed.trackId === 'string' ? { trackId: parsed.trackId } : {}),
       ...(parsed.order === 'one' || parsed.order === 'in_order' || parsed.order === 'shuffle' ? { order: parsed.order } : {}),
       ...(typeof parsed.volume === 'number' && parsed.volume >= 0 && parsed.volume <= 1 ? { volume: parsed.volume } : {}),
+      ...(choiceOf(parsed.startChoice) ? { startChoice: choiceOf(parsed.startChoice) } : {}),
     }
   } catch {
     return {}
@@ -109,6 +159,7 @@ export function createMusicPlayer(walnut: WalnutWebApi, store: RhythmStore): Mus
     volume: prefs.volume ?? DEFAULT_VOLUME,
     tiedToFocus: false,
     error: null,
+    ...(prefs.startChoice ? { startChoice: prefs.startChoice } : {}),
   }
   // 'pending': a Start click asked for the block; the next state that shows it running confirms the tie.
   let tie: 'none' | 'pending' | 'focus' = 'none'
@@ -128,7 +179,7 @@ export function createMusicPlayer(walnut: WalnutWebApi, store: RhythmStore): Mus
   }
   const savePrefs = () => {
     try {
-      window.localStorage.setItem(PREFS_KEY, JSON.stringify({ trackId: view.trackId, order: view.order, volume: view.volume }))
+      window.localStorage.setItem(PREFS_KEY, JSON.stringify({ trackId: view.trackId, order: view.order, volume: view.volume, ...(view.startChoice ? { startChoice: view.startChoice } : {}) }))
     } catch {
       // Private mode or a full quota: the choice lasts for this window only.
     }
@@ -209,7 +260,7 @@ export function createMusicPlayer(walnut: WalnutWebApi, store: RhythmStore): Mus
 
   async function load(): Promise<void> {
     publish({ loading: true })
-    const outcome = await store.call<MusicListing & { withFocus: boolean }>('music_tracks')
+    const outcome = await store.call<MusicTracksResult>('music_tracks')
     if (!outcome.ok) {
       publish({ loading: false, loadError: outcome.message })
       return
@@ -297,8 +348,17 @@ export function createMusicPlayer(walnut: WalnutWebApi, store: RhythmStore): Mus
     play,
     stop,
     select(trackId) {
+      // Picking a track while Start plays a track makes it the one Start plays too.
+      if (view.startChoice?.kind === 'track') { publish({ startChoice: { kind: 'track', id: trackId } }); savePrefs() }
       if (view.playing || view.starting) play({ trackId })
       else { publish({ trackId, error: null }); savePrefs() }
+    },
+    setStartChoice(choice) {
+      publish({ startChoice: choice, ...(choice.kind === 'track' ? { trackId: choice.id } : {}), error: null })
+      savePrefs()
+    },
+    setSpotify(spotify) {
+      if (view.listing) publish({ listing: { ...view.listing, spotify } })
     },
     setOrder(order) {
       publish({ order })

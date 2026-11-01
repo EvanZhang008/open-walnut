@@ -205,7 +205,7 @@ export function RhythmApp({ walnut, store, music, navigate }: RhythmAppProps) {
         <FocusCard walnut={walnut} store={store} state={state} run={run} busy={busy} music={music} />
         <ScoreCard state={state} />
       </div>
-      <MusicCard player={music} state={state} busy={busy} onOpenFolder={() => { void run('music_folder_open') }} />
+      <MusicCard player={music} store={store} state={state} busy={busy} onOpenFolder={() => { void run('music_folder_open') }} />
       <MacCard state={state} onInstall={install} onOpenPrivacy={() => { void run('macos_privacy_open') }} refresh={refresh} busy={busy} />
       <SettingsBlock walnut={walnut} navigate={navigate} />
       <footer className="rhythm-links">
