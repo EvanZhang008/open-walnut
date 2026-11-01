@@ -66,6 +66,13 @@ describe('a thread as its conversation', () => {
     expect(cardView({ ...fiveAsks(), closed: { by: 'task:lead-1' } }).unread.map((x) => x.n)).toEqual([4])
   })
 
+  it('an older message no reply was found for is not left waiting on the card once a later one was answered', () => {
+    const t: ViewThread = { messages: [msg('tm-1', 1, 'filed from elsewhere'), msg('tm-2', 3, 'b', { min: 4, text: 'B' })] }
+    const card = cardView(t)
+    expect(card.waiting).toEqual([])
+    expect(card.unread.map((x) => x.answer?.text)).toEqual(['B'])
+  })
+
   it('no messages: nothing on the card', () => {
     expect(cardView({ messages: [] })).toEqual({ unread: [], waiting: [] })
   })

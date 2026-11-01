@@ -276,8 +276,9 @@ test('a thread the lead opens itself shows its post as the lead\'s, and his Foll
   await c.getByTestId('org-thread-follow-open').click()
   await c.getByTestId('org-thread-follow-input').fill(`yes, confirm it ${STAMP}`)
   await c.getByTestId('org-thread-follow-send').click()
-  // He wrote after the post: it leaves the card; his message waits on it in one line.
-  await expect(c.getByTestId('org-thread-unanswered')).toContainText(`yes, confirm it ${STAMP}`, { timeout: 30_000 })
+  // He wrote after the post: it leaves the card; his message shows in one line, waiting or above
+  // the lead's answer to it (the fixture's chat may answer at once).
+  await expect(c.locator('[data-testid="org-thread-unanswered"], [data-testid="org-thread-re"]')).toContainText(`yes, confirm it ${STAMP}`, { timeout: 30_000 })
   await expect(c.getByTestId('org-thread-opener')).toHaveCount(0)
   await shot(page, 'opened')
   expect((await threads(request)).find((t) => t.id === opened.id)?.messages.map((m) => m.via)).toEqual(['follow-up'])
@@ -323,7 +324,10 @@ test('a long thread\'s card is its summary and the answer he has not seen; the c
   await page.getByTestId('sidebar-org').click()
   await page.locator(`[data-testid="org-channel"][data-key="${rowKey(project)}"]`).click()
   const detail = page.getByTestId('org-detail')
+  // The node just picked, not the one shown before it (a click there would land on the old node).
+  await expect(detail).toHaveAttribute('data-key', rowKey(project))
   await detail.getByTestId('org-top-threads').click()
+  await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
   const c = card(page, 'th-0297973b5725')
   await expect(c).toBeVisible()
   // The card: the title, the lead's summary and only the answer he has not seen (2026-11-01, the

@@ -79,7 +79,10 @@ export function unreactedAnswers(t: ViewThread): number {
   return exchangesOf(t).filter((x) => (x.answer || x.opener) && !x.known).length;
 }
 
-/** What a card shows: the answers he has not reacted to, and his messages still waiting for one. */
+/**
+ * What a card shows: the answers he has not reacted to, and his messages after the last answer
+ * still waiting for one (an older message no reply was ever found for is history, not news).
+ */
 export interface CardView<M extends ViewMessage = ViewMessage> {
   unread: ThreadExchange<M>[];
   waiting: ThreadExchange<M>[];
@@ -87,8 +90,10 @@ export interface CardView<M extends ViewMessage = ViewMessage> {
 
 export function cardView<M extends ViewMessage>(t: ViewThread<M>): CardView<M> {
   const exchanges = exchangesOf(t);
+  let lastSaid = -1;
+  exchanges.forEach((x, i) => { if (x.answer || x.opener) lastSaid = i; });
   return {
     unread: exchanges.filter((x) => (x.answer || x.opener) && !x.known),
-    waiting: exchanges.filter((x) => !x.answer && !x.opener),
+    waiting: exchanges.slice(lastSaid + 1).filter((x) => !x.answer && !x.opener),
   };
 }

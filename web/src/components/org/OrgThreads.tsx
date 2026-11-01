@@ -167,7 +167,12 @@ function Fold({ children, className, testId }: { children: React.ReactNode; clas
         ref={box}
         className={`org-thread-fold ${className}${whole ? ' is-whole' : ''}${folded ? ' is-folded' : ''}`}
         data-testid={testId}
-        onClick={folded ? (e) => { if (!(e.target as HTMLElement).closest('a, button')) setWhole(true); } : undefined}
+        onClick={folded ? (e) => {
+          // A link, a picture, a pill, a disclosure or a selection keeps its own click.
+          if ((e.target as HTMLElement).closest('a, button, img, summary, details, input, [data-source], [data-lightbox-src]')) return;
+          if (window.getSelection()?.isCollapsed === false) return;
+          setWhole(true);
+        } : undefined}
       >
         {children}
       </div>
@@ -260,7 +265,7 @@ function ThreadCard({ t, all, tasks, onOpenTask, state, onFollowUp, name, now }:
   const from = (o: { from: string; ref?: string }) => `${FROM_LABEL[o.from] ?? FROM_LABEL.node}${o.ref ? `: ${o.ref}` : ''}`;
   return (
     <li className={`org-thread${closed ? ' is-closed' : ''}${open ? ' is-open' : ''}`} data-testid="org-thread" data-thread-id={t.id} data-state={closed ? 'closed' : t.state}>
-      <button type="button" className="org-thread-head" aria-expanded={open} data-testid="org-thread-head" onClick={() => setOpen(!open)}>
+      <button type="button" className="org-thread-head" aria-expanded={open} aria-controls={`${t.id}-conversation`} data-testid="org-thread-head" onClick={() => setOpen(!open)}>
         <span className="org-thread-state" data-testid="org-thread-state">
           <i style={{ background: closed ? 'var(--fg-muted, #86868B)' : STATE_DOT[t.state] }} />
           {closed ? (t.closed!.how === 'acked' ? 'Done' : 'Dropped') : STATE_LABEL[t.state]}
@@ -289,13 +294,13 @@ function ThreadCard({ t, all, tasks, onOpenTask, state, onFollowUp, name, now }:
         <p key={x.messages[0].id} className="org-thread-waiting" data-testid="org-thread-unanswered">Not answered yet: {quote(x)}</p>
       ))}
       {count > 0 && (
-        <button type="button" className="org-thread-toggle org-thread-history" data-testid="org-thread-history" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <button type="button" className="org-thread-toggle org-thread-history" data-testid="org-thread-history" aria-expanded={open} aria-controls={`${t.id}-conversation`} onClick={() => setOpen(!open)}>
           <span aria-hidden="true">{open ? '\u25b4' : '\u25be'}</span>
           {open ? 'Hide the conversation' : 'Conversation'} · <span data-testid="org-thread-count">{count} {count === 1 ? 'message' : 'messages'}</span>
         </button>
       )}
       {open && (
-        <ol className="org-thread-conversation" data-testid="org-thread-messages">
+        <ol id={`${t.id}-conversation`} className="org-thread-conversation" data-testid="org-thread-messages">
           {exchanges.map((x) => <Exchange key={x.messages[0]?.id ?? 'opener'} x={x} t={t} name={name} state={state} now={now} />)}
         </ol>
       )}

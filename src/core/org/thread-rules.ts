@@ -16,7 +16,7 @@ export const THREADS_KNOWN_RULE =
   'Clean your threads yourself, on every turn that touches one: what he already knows leaves the card, what is still news '
   + 'stays. An answer counts as known only once he reacted to it after you gave it (a reply about it, an ok '
   + 'or thanks, a follow-up that builds on it, his Acknowledge). Silence after your answer is NOT knowing, however clear the '
-  + 'answer: the thread stays open in answered with your answer in full, and you never mark it known or close it then (Walnut '
+  + 'answer: the thread stays open in answered with your answer on its card, and you never mark it known or close it then (Walnut '
   + 'refuses). Once he reacted, mark what he reacted to known (thread_update known: the last message of his you answered and he '
   + 'reacted to, or "all"), and close a thread he reacted to as finished (close: acked).';
 
