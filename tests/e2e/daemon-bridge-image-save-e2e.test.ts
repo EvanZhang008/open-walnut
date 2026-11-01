@@ -17,6 +17,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const HOST_ALIAS = 'bridge-image-e2e-host'
 
@@ -52,7 +53,7 @@ async function spawnDaemon(): Promise<DaemonProc> {
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
     })
     proc.on('error', (err) => { clearTimeout(timer); reject(err) })
-    proc.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(proc, { daemonDir: daemonDir }, (err) => { clearTimeout(timer); reject(err) })
   })
   return { proc, port }
 }

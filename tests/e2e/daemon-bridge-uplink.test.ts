@@ -28,6 +28,7 @@ import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { bunBuildEnv } from '../helpers/cloud-box-daemon-build.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const HOST_ALIAS = 'uplink-e2e-host'
 const HWM = 1024 * 1024
@@ -81,7 +82,7 @@ async function spawnDaemon(cmd: string, args: string[]): Promise<{ proc: ChildPr
       const m = chunk.toString().trim().match(/^\d+$/m)
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
     })
-    proc.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(proc, { daemonDir: daemonDir }, (err) => { clearTimeout(timer); reject(err) })
   })
   return { proc, port }
 }

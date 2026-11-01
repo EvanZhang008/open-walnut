@@ -23,6 +23,7 @@ import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { testBun } from '../helpers/bun-runtime.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 let scriptPath = ''
 let root = ''
@@ -59,7 +60,7 @@ async function boot(twin: Twin): Promise<void> {
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
     })
     proc!.on('error', (err) => { clearTimeout(timer); reject(err) })
-    proc!.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(proc!, { daemonDir: env.WALNUT_DAEMON_DIR }, (err) => { clearTimeout(timer); reject(err) })
   })
   ws = await new Promise<WebSocket>((resolve, reject) => {
     const s = new WebSocket(`ws://127.0.0.1:${port}`)

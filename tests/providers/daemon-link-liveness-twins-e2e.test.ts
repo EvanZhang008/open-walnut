@@ -31,6 +31,7 @@ import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { BRIDGE_WATCHDOG, bridgeSilenceTeardownMs } from '../../src/providers/daemon-core.js'
 import { testBun } from '../helpers/bun-runtime.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
@@ -91,7 +92,7 @@ async function boot(twin: Twin, extraEnv: Record<string, string>): Promise<void>
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
     })
     proc!.on('error', (err) => { clearTimeout(timer); reject(err) })
-    proc!.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(proc!, { daemonDir: env.WALNUT_DAEMON_DIR }, (err) => { clearTimeout(timer); reject(err) })
   })
 }
 

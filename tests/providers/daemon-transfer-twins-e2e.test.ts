@@ -21,6 +21,7 @@ import { gitChildEnv } from '../../src/lib/git-env.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from '../helpers/bun-runtime.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-transfer-twins-')))
 afterAll(() => { if (root.includes('walnut-transfer-twins-')) fs.rmSync(root, { recursive: true, force: true }) })
@@ -72,7 +73,7 @@ async function boot(twin: (typeof TWINS)[number], dir: string): Promise<string> 
       const m = chunk.toString().trim().match(/^\d+$/m)
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
     })
-    proc!.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(proc!, { daemonDir: env.WALNUT_DAEMON_DIR }, (err) => { clearTimeout(timer); reject(err) })
   })
   ws = await new Promise<WebSocket>((resolve, reject) => {
     const s = new WebSocket(`ws://127.0.0.1:${port}`)

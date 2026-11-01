@@ -11,6 +11,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 let proc: ChildProcess
 let port: number
@@ -32,7 +33,7 @@ beforeAll(async () => {
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
     })
     proc.on('error', (err) => { clearTimeout(timer); reject(err) })
-    proc.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(proc, { daemonDir: path.join(tmpDir, 'daemon') }, (err) => { clearTimeout(timer); reject(err) })
   })
 }, 20_000)
 

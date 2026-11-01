@@ -19,6 +19,7 @@ import {
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { assertNotProductionPath } from '../../src/constants.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const THIS_FILE = 'tests/setup/exec-guard.test.ts'
 
@@ -255,7 +256,7 @@ async function boot(twin: Twin): Promise<{ runDir: string; cwd: string }> {
       const m = chunk.toString().trim().match(/^\d+$/m)
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
     })
-    proc!.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(proc!, { daemonDir: runDir }, (err) => { clearTimeout(timer); reject(err) })
   })
   ws = await new Promise<WebSocket>((resolve, reject) => {
     const s = new WebSocket(`ws://127.0.0.1:${port}`)

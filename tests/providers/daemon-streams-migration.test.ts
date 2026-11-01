@@ -25,6 +25,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from 'ws'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const PROD_DAEMON_DIR = '/tmp/open-walnut'
 const PROD_LEGACY_DIR = '/tmp/open-walnut-streams'
@@ -81,7 +82,7 @@ async function spawnDaemon(opts: {
       if (m) { clearTimeout(t); resolve(parseInt(m[0], 10)) }
     })
     proc.on('error', (err) => { clearTimeout(t); reject(err) })
-    proc.on('exit', (code) => { clearTimeout(t); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(proc, { daemonDir: daemonDir }, (err) => { clearTimeout(t); reject(err) })
   })
 
   const handle: DaemonHandle = { proc, port, daemonDir, streamsDir, legacyDir }

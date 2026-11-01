@@ -36,6 +36,7 @@ import { startServer, stopServer } from '../../src/web/server.js'
 import { createDevice, _resetDeviceAuthForTesting } from '../../src/core/device-auth.js'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const HOST_ALIAS = 'relaybox'
 const HTML = '<!doctype html>\n<html><body><h1>works from anywhere</h1></body></html>\n'
@@ -76,7 +77,7 @@ async function spawnDaemon(): Promise<void> {
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
     })
     proc.on('error', (err) => { clearTimeout(timer); reject(err) })
-    proc.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(proc, { daemonDir: daemonDir }, (err) => { clearTimeout(timer); reject(err) })
   })
 }
 

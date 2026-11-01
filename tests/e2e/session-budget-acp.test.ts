@@ -25,6 +25,7 @@ import { getDaemonSource } from '../../src/providers/daemon-source.js';
 import { SOURCE_TWIN } from '../helpers/source-twin.js';
 import { budgetDaemonEnv, stderrTail } from './fixtures/budget-daemon-env.js';
 import { checkBudgetArtifacts, HOST_DAEMON_BINARY, sameBytes } from './fixtures/budget-artifacts.js';
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const BIN_DIR = path.join(REPO_ROOT, 'dist/daemon-binaries');
@@ -100,7 +101,7 @@ for (const twin of TWINS) describe(`ACP session budget (${twin.name})`, () => {
       const timer = setTimeout(() => reject(new Error('daemon spawn timeout: ' + stderr.text)), 30_000);
       p.stdout!.on('data', (chunk: Buffer) => { const m = chunk.toString().match(/^\d+$/m); if (m) { clearTimeout(timer); resolve(Number(m[0])); } });
       p.once('error', error => { clearTimeout(timer); reject(error); });
-      p.once('exit', code => { clearTimeout(timer); reject(new Error(`daemon exited early (${code}): ${stderr.text}`)); });
+      onDaemonEarlyExit(p, { daemonDir: env.WALNUT_DAEMON_DIR }, (err) => { clearTimeout(timer); reject(err) });
     });
     ws = new WebSocket(`ws://127.0.0.1:${port}`);
     await new Promise<void>((resolve, reject) => {

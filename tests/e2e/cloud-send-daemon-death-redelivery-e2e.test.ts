@@ -47,6 +47,7 @@ import {
   resetCache,
 } from '../../src/core/session-message-queue.js'
 import { WALNUT_HOME } from '../../src/constants.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const SID = 'phone-kill-redeliver-1'
 const MESSAGE = 'phone message that must survive the daemon death'
@@ -72,7 +73,7 @@ async function spawnDaemon(): Promise<{ proc: ChildProcess; port: number }> {
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
     })
     proc.on('error', (err) => { clearTimeout(timer); reject(err) })
-    proc.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(proc, { daemonDir: daemonDir }, (err) => { clearTimeout(timer); reject(err) })
   })
   return { proc, port }
 }

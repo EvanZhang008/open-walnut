@@ -26,6 +26,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { WebSocket } from 'ws'
+import { onDaemonEarlyExit } from '../../helpers/daemon-early-exit.js'
 
 export const PROD_DAEMON_DIR = '/tmp/open-walnut'
 export const REPO_ROOT = path.resolve(import.meta.dirname, '../../..')
@@ -222,7 +223,7 @@ export async function spawnIsolatedDaemon(opts: {
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
     })
     p.on('error', (err) => { clearTimeout(timer); reject(err) })
-    p.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(p, { daemonDir: opts.daemonDir }, (err) => { clearTimeout(timer); reject(err) })
   })
   return { proc: proc as unknown as ChildProcess, port }
 }

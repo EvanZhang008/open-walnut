@@ -26,6 +26,7 @@ import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { withImagePaths } from '../../src/core/sessions/cloud-images.js'
 import { withFilePaths } from '../../src/core/sessions/session-uploads.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 let scriptPath = ''
 let cliPath = ''
@@ -121,7 +122,7 @@ async function boot(twin: Twin, dirs: Dirs): Promise<void> {
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
     })
     proc!.on('error', (err) => { clearTimeout(timer); reject(err) })
-    proc!.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(proc!, { daemonDir: dirs.daemon }, (err) => { clearTimeout(timer); reject(err) })
   })
   ws = await new Promise<WebSocket>((resolve, reject) => {
     const s = new WebSocket(`ws://127.0.0.1:${port}`)

@@ -45,6 +45,7 @@ import { getTask, _resetForTesting } from '../../src/core/task-manager.js'
 import { closeDb } from '../../src/core/task-db.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { voiceArchive } from '../../src/core/stt/voice-archive.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 interface Daemon { proc: ChildProcess; port: number; dir: string }
 
@@ -73,7 +74,7 @@ async function spawnDaemon(name: string): Promise<Daemon> {
       const m = chunk.toString().trim().match(/^\d+$/m)
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
     })
-    proc.on('exit', (code) => { clearTimeout(timer); reject(new Error(`daemon exited early: ${code}`)) })
+    onDaemonEarlyExit(proc, { daemonDir: path.join(dir, 'd') }, (err) => { clearTimeout(timer); reject(err) })
   })
   const d = { proc, port, dir: path.join(dir, 'd') }
   daemons.push(d)

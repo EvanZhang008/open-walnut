@@ -18,6 +18,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const procs: ChildProcess[] = []
 const tmpDirs: string[] = []
@@ -49,7 +50,7 @@ async function spawnDaemon(scriptPath: string, extraEnv: Record<string, string>)
       if (/^\d+$/m.test(chunk.toString().trim())) { clearTimeout(timer); resolve() }
     })
     proc.on('error', (err) => { clearTimeout(timer); reject(err) })
-    proc.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(proc, { daemonDir: daemonDir }, (err) => { clearTimeout(timer); reject(err) })
   })
   return proc
 }

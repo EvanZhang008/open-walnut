@@ -29,6 +29,7 @@ import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { sessionSettingsHooks } from '../../src/providers/session-settings-hooks.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 let scriptPath = ''
 let cliPath = ''
@@ -86,7 +87,7 @@ async function boot(twin: Twin): Promise<Daemon> {
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
     })
     proc.on('error', (err) => { clearTimeout(timer); reject(err) })
-    proc.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(proc, { daemonDir: daemonDir }, (err) => { clearTimeout(timer); reject(err) })
   })
   const ws = await new Promise<WebSocket>((resolve, reject) => {
     const s = new WebSocket(`ws://127.0.0.1:${port}`)

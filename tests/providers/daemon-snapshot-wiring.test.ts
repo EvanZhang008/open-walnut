@@ -49,6 +49,7 @@ import { getDaemonSource, validateFoldInjection, undefinedInjectedHelpers, INJEC
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { createDaemonCore } from '../../src/providers/daemon-core.js'
 import { foldLine, initialFoldState, assembleSnapshot, snapshotDiffers, type SessionSnapshot } from '../../src/providers/daemon-fold.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const PROD_DAEMON_DIR = '/tmp/open-walnut'
 const DAEMON_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-snapwire-'))
@@ -153,7 +154,7 @@ beforeAll(async () => {
       if (m) { clearTimeout(t); resolve(parseInt(m[0], 10)) }
     })
     daemonProc!.on('error', (err) => { clearTimeout(t); reject(err) })
-    daemonProc!.on('exit', (code) => { clearTimeout(t); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(daemonProc!, { daemonDir: DAEMON_DIR }, (err) => { clearTimeout(t); reject(err) })
   })
 }, 30_000)
 
@@ -686,7 +687,7 @@ describe('C1 snapshot wiring — daemon restart (SIGKILL) rebuilds foldState on 
         if (m) { clearTimeout(t); resolve({ proc, port: parseInt(m[0], 10) }) }
       })
       proc.on('error', (err) => { clearTimeout(t); reject(err) })
-      proc.on('exit', (code) => { clearTimeout(t); reject(new Error('daemon exited early: ' + code)) })
+      onDaemonEarlyExit(proc, { daemonDir: daemonDir }, (err) => { clearTimeout(t); reject(err) })
     })
   }
 

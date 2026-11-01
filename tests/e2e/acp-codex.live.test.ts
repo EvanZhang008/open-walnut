@@ -21,6 +21,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { resolveSystemCodexPath } from '../../src/providers/acp-session.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const LIVE = process.env.WALNUT_LIVE_CODEX === '1'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -56,7 +57,7 @@ async function spawnDaemon(): Promise<number> {
       const m = chunk.toString().match(/^\d+$/m)
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
     })
-    p.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(p, { daemonDir: daemonDir }, (err) => { clearTimeout(timer); reject(err) })
   })
 }
 

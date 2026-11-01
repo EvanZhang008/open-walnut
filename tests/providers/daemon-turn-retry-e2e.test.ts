@@ -24,6 +24,7 @@ import path from 'node:path'
 import WebSocket from 'ws'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 let rpcId = 1
 const cleanups: Array<() => Promise<void> | void> = []
@@ -76,7 +77,7 @@ async function spawnDaemon(extraEnv: Record<string, string>): Promise<{
       if (m) { clearTimeout(t); resolve(parseInt(m[0], 10)) }
     })
     proc.on('error', (err) => { clearTimeout(t); reject(err) })
-    proc.on('exit', (code) => { clearTimeout(t); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(proc, { daemonDir: daemonDir }, (err) => { clearTimeout(t); reject(err) })
   })
 
   cleanups.push(async () => {

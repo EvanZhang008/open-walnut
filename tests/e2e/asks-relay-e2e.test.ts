@@ -49,6 +49,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { listTasksSlim, _resetForTesting } from '../../src/core/task-manager.js'
 import { closeDb, getDb, taskToRow } from '../../src/core/task-db.js'
 import type { Task } from '../../src/core/types.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const PRIMARY_ALIAS = '__local__'
 
@@ -89,7 +90,7 @@ async function spawnDaemon(): Promise<void> {
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
     })
     proc.on('error', (err) => { clearTimeout(timer); reject(err) })
-    proc.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(proc, { daemonDir: path.join(tmpRoot, 'daemon') }, (err) => { clearTimeout(timer); reject(err) })
   })
 }
 

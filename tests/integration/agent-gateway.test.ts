@@ -31,6 +31,7 @@ import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import type { GatewayResponse } from '../../src/providers/gateway-core.js'
 import { pullArgsFile } from '../../src/core/peers/gateway-args-file.js'
 import { HUMAN_INBOX_CHUNK_BYTES } from '../../src/core/human-inbox/types.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 // Short hub timeout so the ② timeout scenario doesn't wait the real 20s.
 const TEST_HUB_TIMEOUT_MS = 2000
@@ -69,7 +70,7 @@ async function spawnDaemon(scriptPath: string, daemonDir: string): Promise<Daemo
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
     })
     proc.on('error', (err) => { clearTimeout(timer); reject(err) })
-    proc.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(proc, { daemonDir: daemonDir }, (err) => { clearTimeout(timer); reject(err) })
   })
   const sockPath = path.join(daemonDir, 'agent-gateway.sock')
   // The gateway listener starts alongside the HTTP listener — wait for the file.

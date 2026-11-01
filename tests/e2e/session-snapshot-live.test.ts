@@ -79,6 +79,7 @@ import {
 } from '../../src/core/session-snapshot-apply.js'
 import { log } from '../../src/logging/index.js'
 import type { SessionRecord } from '../../src/core/types.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
 const DAEMON_BIN = path.join(REPO_ROOT, 'dist/daemon-binaries/daemon-darwin-arm64')
@@ -256,7 +257,7 @@ beforeAll(async () => {
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
     })
     p.on('error', (err) => { clearTimeout(timer); reject(err) })
-    p.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(p, { daemonDir: isolatedDaemon.dir }, (err) => { clearTimeout(timer); reject(err) })
   })
 
   sessionRunner.setTestDaemonUrl(`ws://127.0.0.1:${daemonPort}`)

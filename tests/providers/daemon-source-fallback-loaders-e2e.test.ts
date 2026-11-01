@@ -25,6 +25,7 @@ import os from 'node:os'
 import path from 'node:path'
 import * as esbuild from 'esbuild'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const run = promisify(execFile)
 const REPO = path.resolve(__dirname, '../..')
@@ -103,7 +104,7 @@ async function startAndHello(script: string): Promise<Record<string, unknown>> {
       const m = chunk.toString().trim().match(/^\d+$/m)
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
     })
-    proc!.on('exit', (code) => { clearTimeout(timer); reject(new Error(`daemon exited early (${code}): ${stderr.slice(-500)}`)) })
+    onDaemonEarlyExit(proc!, { daemonDir: path.join(root, 'daemon') }, (err) => { clearTimeout(timer); reject(err) })
   })
   const ws = new WebSocket(`ws://127.0.0.1:${port}`)
   try {

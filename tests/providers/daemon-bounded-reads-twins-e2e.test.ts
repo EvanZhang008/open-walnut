@@ -29,6 +29,7 @@ import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { testBun } from '../helpers/bun-runtime.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const MB = 1024 * 1024
 let scriptPath = ''
@@ -76,7 +77,7 @@ async function boot(twin: Twin, dirs: Dirs): Promise<void> {
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
     })
     proc!.on('error', (err) => { clearTimeout(timer); reject(err) })
-    proc!.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(proc!, { daemonDir: dirs.daemon }, (err) => { clearTimeout(timer); reject(err) })
   })
 }
 

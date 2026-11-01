@@ -24,6 +24,7 @@ import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { guardedPath } from '../setup/exec-guard.js'
 import { testBun } from './bun-runtime.js'
 import { SOURCE_TWIN } from './source-twin.js'
+import { onDaemonEarlyExit } from './daemon-early-exit.js'
 
 let scriptPath = ''
 const BUN: string | undefined = testBun()
@@ -56,7 +57,7 @@ async function boot(twin: Twin): Promise<{ streams: string }> {
   const port = await new Promise<number>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('daemon spawn timeout')), 30_000)
     proc!.stdout?.on('data', (chunk) => { const m = chunk.toString().trim().match(/^\d+$/m); if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) } })
-    proc!.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(proc!, { daemonDir: env.WALNUT_DAEMON_DIR }, (err) => { clearTimeout(timer); reject(err) })
   })
   ws = await new Promise<WebSocket>((resolve, reject) => { const s = new WebSocket(`ws://127.0.0.1:${port}`); s.on('open', () => resolve(s)); s.on('error', reject) })
   ws.on('message', (data: Buffer) => { try { events.push(JSON.parse(data.toString())) } catch { /* not json */ } })

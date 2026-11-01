@@ -40,6 +40,7 @@ import os from 'node:os'
 import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { readSpawnJournal } from '../../src/providers/external-session-scan-core.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const ENABLED = process.env.WALNUT_REAL_SIGNAL_TEST === '1' && process.platform !== 'win32'
 const SID_A = 'orphan-real-a-0000-4000-8000-000000000001'
@@ -132,7 +133,7 @@ async function bootDaemon(scriptPath: string): Promise<void> {
       if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
     })
     daemon!.on('error', (err) => { clearTimeout(timer); reject(err) })
-    daemon!.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
+    onDaemonEarlyExit(daemon!, { daemonDir: env.WALNUT_DAEMON_DIR }, (err) => { clearTimeout(timer); reject(err) })
   })
   ws = await new Promise<WebSocket>((resolve, reject) => {
     const s = new WebSocket(`ws://127.0.0.1:${port}`)

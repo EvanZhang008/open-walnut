@@ -23,6 +23,7 @@ import { ACP_HOST_FILES } from '../../src/providers/acp-host-artifacts.js'
 import { hostAdapterSpec } from '../../src/core/agents/host-adapter-spec.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { guardedPath } from '../setup/exec-guard.js'
+import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.resolve(__dirname, '../..')
@@ -92,7 +93,7 @@ describe.runIf(HAVE)('ACP on a host other than the primary (source twin, deploye
         const m = chunk.toString().match(/^\d+$/m)
         if (m) { clearTimeout(timer); resolve(parseInt(m[0], 10)) }
       })
-      p.on('exit', (code) => { clearTimeout(timer); reject(new Error('daemon exited early: ' + code)) })
+      onDaemonEarlyExit(p, { daemonDir: daemonDir }, (err) => { clearTimeout(timer); reject(err) })
     })
     ws = new WebSocket(`ws://127.0.0.1:${port}`)
     await new Promise<void>((resolve, reject) => { ws!.once('open', () => resolve()); ws!.once('error', reject) })
