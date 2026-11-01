@@ -40,6 +40,7 @@ Files (all under `src/core/hints/`):
 | `hint-schedule.ts` | When a hint is due (`dueReasons`), pure |
 | `hint-send.ts` | The pipeline: plan, compose, record; post-compaction hook; host tail |
 | `hint-drift.ts` / `hint-drift-detect.ts` | The `on_drift` sensor (a turn-end session hook) |
+| `hint-drift-live.ts` | The same check inside a person's turn: one mid-turn correction at the first wrong-language progress line |
 | `hint-request.ts` | The `hints` a sender asks for on one message |
 
 ## Wire format
@@ -110,7 +111,13 @@ the same reminder on every message did not hold a lead whose context was mostly 
 traffic (2026-10-31, 12 of 45 replies). The server's next message tells it once; a host's own
 deliveries carry it until then or until a later turn is in the language again, which clears the
 mark. A turn the chat hides (something else started it and it ended on the no-action line) is
-not judged.
+not judged. Every message a person sends carries the reply language, in any session (`everyPersonTurn`,
+2026-11-01: the user's English "what the hack?" in a worker's chat carried no reminder, and the long turn
+after it was English throughout). Inside a turn a person started, the first progress line in the wrong
+language is corrected at once (`src/core/hints/hint-drift-live.ts`): when the tool call after it starts,
+one `outcome="reply-language"` notice goes mid-turn, so a native Claude Code session reads it with that
+tool's result; the turn end then judges only what came after it. ACP engines take one prompt per turn,
+so they keep the correction on the next message.
 `brief` (Main and the leads only) at session start, after a compaction, every 3 messages and
 when the node's team moved since its Brief was written (`src/core/sessions/brief-hint.ts`): how
 old the Brief is, what moved, and to update it with `brief_write`; a node with no Brief hears to

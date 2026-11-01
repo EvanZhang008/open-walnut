@@ -69,7 +69,8 @@ afterEach(async () => {
 })
 
 describe('session:send through the hint pipeline', () => {
-  it('first send: full rich and language; next four: nothing; fifth after: the reminder', async () => {
+  // A person's message carries the reply language every time (hint-registry.ts everyPersonTurn).
+  it('first send: full rich and language; then the language each time; fifth after: the reminder too', async () => {
     const sid = await newSession()
     const got: string[][] = []
     for (let i = 0; i < 6; i++) {
@@ -78,7 +79,7 @@ describe('session:send through the hint pipeline', () => {
       expect(parseHinted(text).text).toBe(`msg ${i}`)
       got.push(kinds(text))
     }
-    expect(got).toEqual([['rich-output', 'reply-language'], [], [], [], [], ['rich-output']])
+    expect(got).toEqual([['rich-output', 'reply-language'], ['reply-language'], ['reply-language'], ['reply-language'], ['reply-language'], ['rich-output', 'reply-language']])
     const rec = await getSessionByClaudeId(sid)
     expect(rec?.hintState?.sends).toBe(6)
     expect(rec?.output_mode_injected).toBe('rich')

@@ -134,14 +134,16 @@ describe('replyLanguageText', () => {
 })
 
 describe('session:send', () => {
-  it('on: the first send carries it, later sends do not; off: the text is byte-identical', async () => {
+  // A person's own message carries the rule every time (hint-registry.ts everyPersonTurn, 2026-11-01);
+  // the once-only schedule below is for messages nobody typed (turns nobody typed, further down).
+  it('on: every message he sends carries it; off: the text is byte-identical', async () => {
     await setSession({ output_mode: 'markdown', reply_language: RULE })
     const sid = await newSession()
     await callSend({ sessionId: sid, message: TEXT })
     expect(await drain(sid)).toBe(after(TEXT, LANG))
     for (let n = 0; n < 6; n++) {
       await callSend({ sessionId: sid, message: `again ${n}` })
-      expect(await drain(sid)).toBe(`again ${n}`)
+      expect(await drain(sid)).toBe(after(`again ${n}`, LANG))
     }
 
     // The config is read live: clearing it says nothing on the very next send.
@@ -151,7 +153,7 @@ describe('session:send', () => {
     expect(res.dedupText).toBeUndefined()
   })
 
-  it('a changed setting is said again, once', async () => {
+  it('a changed setting is said in its new words', async () => {
     await setSession({ output_mode: 'markdown', reply_language: RULE })
     const sid = await newSession()
     await callSend({ sessionId: sid, message: 'one' })
@@ -160,10 +162,10 @@ describe('session:send', () => {
     await callSend({ sessionId: sid, message: 'two' })
     expect(await drain(sid)).toBe(after('two', renderHintBlock('reply-language', `Answer in French. ${REPLY_LANGUAGE_SCOPE}`)))
     await callSend({ sessionId: sid, message: 'three' })
-    expect(await drain(sid)).toBe('three')
+    expect(await drain(sid)).toBe(after('three', renderHintBlock('reply-language', `Answer in French. ${REPLY_LANGUAGE_SCOPE}`)))
   })
 
-  it('after a compaction it is said again, once', async () => {
+  it('after a compaction it is said again', async () => {
     await setSession({ output_mode: 'markdown', reply_language: RULE })
     const sid = await newSession()
     await callSend({ sessionId: sid, message: 'one' })
@@ -172,10 +174,10 @@ describe('session:send', () => {
     await callSend({ sessionId: sid, message: 'two' })
     expect(await drain(sid)).toBe(after('two', LANG))
     await callSend({ sessionId: sid, message: 'three' })
-    expect(await drain(sid)).toBe('three')
+    expect(await drain(sid)).toBe(after('three', LANG))
   })
 
-  it('a reply that drifted owes it on the next send', async () => {
+  it('a reply that drifted is named on the next send, once', async () => {
     await setSession({ output_mode: 'markdown', reply_language: RULE })
     const sid = await newSession()
     await callSend({ sessionId: sid, message: 'one' })
@@ -191,7 +193,7 @@ describe('session:send', () => {
     expect(await drain(sid)).toBe(after('two', renderHintBlock('reply-language', `${replyLanguageCorrection(driftAt)} ${RULE} ${REPLY_LANGUAGE_SCOPE}`)))
     expect((await getSessionByClaudeId(sid))?.hintState?.drift).toBeUndefined()
     await callSend({ sessionId: sid, message: 'three' })
-    expect(await drain(sid)).toBe('three')
+    expect(await drain(sid)).toBe(after('three', LANG))
   })
 
   it('rich: it rides after the instruction; the reminder later comes alone', async () => {
@@ -201,10 +203,10 @@ describe('session:send', () => {
     expect(await drain(sid)).toBe(after('one', ON, LANG))
     for (const n of [2, 3, 4, 5]) {
       await callSend({ sessionId: sid, message: `msg ${n}` })
-      expect(await drain(sid)).toBe(`msg ${n}`)
+      expect(await drain(sid)).toBe(after(`msg ${n}`, LANG))
     }
     await callSend({ sessionId: sid, message: 'msg 6' })
-    expect(await drain(sid)).toBe(after('msg 6', REMIND))
+    expect(await drain(sid)).toBe(after('msg 6', REMIND, LANG))
   })
 
   it('a slash command stays byte-exact', async () => {

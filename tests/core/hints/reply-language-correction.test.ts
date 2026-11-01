@@ -136,3 +136,31 @@ describe('the next message leads with a correction, once', () => {
     expect(send(rec, 'person')[0]).toMatch(/^Correction: /);
   });
 });
+
+describe('a person\'s own message carries the rule in any session', () => {
+  // 2026-11-01: in a worker's chat the user typed "what the hack?"; the message carried no
+  // reminder (a worker hears it only at its start and after a drift) and the turn after it was English.
+  type Rec = { claudeSessionId: string; output_mode: 'markdown'; hintState?: never };
+  const config = { session: { reply_language: RULE } } as never;
+  const send = (rec: Rec, sentBy: 'agent' | 'person') => {
+    const p = planHints({ hints: effectiveHints(config), target: { sessionId: rec.claudeSessionId, role: 'worker' }, record: rec as never, config, sentBy });
+    rec.hintState = advanceHintState(rec.hintState, rec as never, p.told, { now: Date.now(), sentBy }) as never;
+    return p.carried.some((h) => h.kind === 'reply-language');
+  };
+  it('a worker: every message he types, whatever its language; never a peer\'s once told', () => {
+    const rec: Rec = { claudeSessionId: 'worker-p', output_mode: 'markdown' };
+    expect(send(rec, 'agent')).toBe(true);
+    expect(send(rec, 'agent')).toBe(false);
+    expect(send(rec, 'person')).toBe(true);
+    expect(send(rec, 'person')).toBe(true);
+    expect(send(rec, 'agent')).toBe(false);
+  });
+  it('triggers set by hand decide alone', () => {
+    const own = { session: { reply_language: RULE, hints: { 'reply-language': { triggers: ['session_start'] } } } } as never;
+    const rec: Rec = { claudeSessionId: 'worker-o', output_mode: 'markdown' };
+    const plan = () => planHints({ hints: effectiveHints(own), target: { sessionId: rec.claudeSessionId, role: 'worker' }, record: rec as never, config: own, sentBy: 'person' });
+    const first = plan();
+    rec.hintState = advanceHintState(undefined, rec as never, first.told, { now: Date.now(), sentBy: 'person' }) as never;
+    expect(plan().carried.some((h) => h.kind === 'reply-language')).toBe(false);
+  });
+});

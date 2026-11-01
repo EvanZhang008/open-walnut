@@ -138,6 +138,9 @@ export function planHints(input: {
     // A role whose chat the user reads gets it on every turn, the user's own included (hint-registry.ts everyTurnRoles).
     if (!input.afterCompaction && input.target.role && hint.everyTurnRoles.includes(input.target.role)
       && !reasons.includes('every_turn')) reasons = [...reasons, 'every_turn'];
+    // A person's own message carries it in any session (hint-registry.ts everyPersonTurn).
+    if (!input.afterCompaction && input.sentBy === 'person' && hint.everyPersonTurn
+      && !reasons.includes('every_turn')) reasons = [...reasons, 'every_turn'];
     if (input.only) reasons = reasons.filter((r) => input.only!.has(r));
     if (!reasons.length) continue;
     const rendered = hint.render(content, new Set(reasons));

@@ -14,7 +14,8 @@ vi.mock('../../src/constants.js', () => createMockConstants('reply-language-corr
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
 import { addTask } from '../../src/core/task-manager.js';
-import { createSessionRecord, getSessionByClaudeId } from '../../src/core/session-tracker.js';
+import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js';
+import { getQueue, markProcessing, removeProcessed, sendMessageToSession } from '../../src/core/session-message-queue.js';
 import { updateConfig } from '../../src/core/config-manager.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
 import { prepareHintedSend } from '../../src/core/hints/hint-send.js';
@@ -72,5 +73,36 @@ describe('a lead\'s English progress line', () => {
     const after = await prepareHintedSend(SID, await getSessionByClaudeId(SID), 'Team update: nothing new.', { sentBy: 'agent' });
     expect(after.enqueueText).toContain(`Walnut (reply-language): ${RULE}`);
     expect(after.enqueueText).not.toContain('Correction:');
+  });
+});
+
+describe('a person\'s turn in a worker\'s session (2026-11-01, the user\'s "what the hack?")', () => {
+  const WSID = 'correction-worker-session';
+  it('his message carries the rule; the first English progress line is corrected mid-turn, once', async () => {
+    const worker = (await addTask({ title: 'A worker', project: 'Walnut', source: 'local', parent_task_id: leadId } as never)).task;
+    await createSessionRecord(WSID, worker.id, 'Walnut');
+    // His messages, typed in the web app the way session:send sends them (web/routes/session-chat.ts):
+    // hinted as a person's, queued with source ui. Each carries the rule.
+    for (const text of ['Look into it.', 'what the hack?']) {
+      const hinted = await prepareHintedSend(WSID, await getSessionByClaudeId(WSID), text, { sentBy: 'person' });
+      await sendMessageToSession(WSID, text, { source: 'ui', enqueueMessage: hinted.enqueueText, hinted: true });
+      await hinted.commit();
+      const batch = await markProcessing(WSID);
+      expect(batch.map((q) => q.message).join('\n')).toContain(`Walnut (reply-language): ${RULE}`);
+      await removeProcessed(WSID, batch.map((q) => q.id));
+    }
+    await updateSessionRecord(WSID, { process_status: 'running' } as never);
+    const w = (name: string, data: Record<string, unknown>) =>
+      bus.emit(name as never, { sessionId: WSID, taskId: worker.id, ...data } as never, ['main-ai'], { source: 'session-runner' });
+    w(EventNames.SESSION_TEXT_DELTA, { delta: '是慢得离谱。我直接拆开看那 1 秒花在哪：', msgId: 'w1' });
+    w(EventNames.SESSION_TOOL_USE, { toolName: 'Bash', toolUseId: 'b1', input: {} });
+    w(EventNames.SESSION_TEXT_DELTA, { delta: "The machine load just dropped from about 90 to 26, so I'm re-measuring old vs new back to back:", msgId: 'w2' });
+    w(EventNames.SESSION_TOOL_USE, { toolName: 'Bash', toolUseId: 'b2', input: {} });
+    const row = await until(async () => (await getQueue(WSID)).find((q) => q.message.includes('outcome="reply-language"')));
+    expect(row.message).toContain('Correction: your progress line just now was not in the user\'s language');
+    w(EventNames.SESSION_TEXT_DELTA, { delta: 'Under the same load the old version takes about half a second per click, the new one more than one.', msgId: 'w3' });
+    w(EventNames.SESSION_TOOL_USE, { toolName: 'Bash', toolUseId: 'b3', input: {} });
+    await new Promise((r) => setTimeout(r, 500));
+    expect((await getQueue(WSID)).filter((q) => q.message.includes('outcome="reply-language"'))).toHaveLength(1);
   });
 });

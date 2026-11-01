@@ -84,6 +84,13 @@ interface HintSpec {
    * answered in English though his reply language is Chinese).
    */
   everyTurnRoles?: readonly MessageHintRole[];
+  /**
+   * Every message a person sends carries it, in any session, while its triggers are the default:
+   * he reads the answer to his own message, whatever language he typed it in (2026-11-01: a
+   * worker's chat, the user's English "what the hack?" carried no reminder, and the long turn after
+   * it was English throughout).
+   */
+  everyPersonTurn?: boolean;
 }
 
 const SCHEDULED: readonly MessageHintTrigger[] = HINT_TRIGGERS.filter((t) => t !== 'on_request');
@@ -131,6 +138,7 @@ const BUILT_IN: readonly HintSpec[] = [
     defaults: { enabled: true, triggers: ['session_start', 'after_compaction', 'on_change', 'on_drift'], placement: 'after' },
     // 2026-10-29: leads answered Walnut notices in English in the chats the user reads on the Org page.
     everyTurnRoles: ['main', 'lead'],
+    everyPersonTurn: true,
     identity: (i) => replyLanguageText(i.config),
     // 2026-10-29: after the user wrote Chinese, a worker's progress lines between its tool calls
     // stayed English; the rule covers every line the user reads, not only the final reply.
@@ -251,6 +259,7 @@ export interface EffectiveHint {
   drifted?(config: Pick<Config, 'session'> | null, reply: string): boolean | null;
   /** Roles that get it on every message, the user's own included (empty once its triggers are overridden). */
   everyTurnRoles: MessageHintRole[];
+  everyPersonTurn: boolean;
 }
 
 /** The strings of a list from config.yaml, which a person may have hand-edited into any shape. */
@@ -320,6 +329,7 @@ export function effectiveHints(config: Pick<Config, 'session'> | null | undefine
       ...(spec.drifted ? { drifted: spec.drifted } : {}),
       // A person who set the triggers decides when it goes out.
       everyTurnRoles: o?.triggers === undefined && spec.allowed.includes('every_turn') ? [...(spec.everyTurnRoles ?? [])] : [],
+      everyPersonTurn: o?.triggers === undefined && spec.allowed.includes('every_turn') && spec.everyPersonTurn === true,
     };
   });
 }

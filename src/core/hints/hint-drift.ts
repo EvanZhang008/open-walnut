@@ -33,9 +33,13 @@ export const hintDriftHook: SessionHookDefinition = {
 
   handler: async (payload) => {
     const p = payload as OnTurnCompletePayload;
+    if (!p.sessionId) return;
+    // Corrected inside the turn (hint-drift-live.ts): read once, whatever happens below.
+    const { takeLiveCorrection } = await import('./hint-drift-live.js');
+    const live = await takeLiveCorrection(p.sessionId);
     // The tasks line (org/message-about.ts) is Walnut's, never the user's to read: judged without it.
     const replies = [...(p.replies ?? []), ...(p.result ? [p.result] : [])].map((r) => stripAboutTag(r));
-    if (!p.sessionId || !replies.length) return;
+    if (!replies.length) return;
     // A turn that ended on the no-action line is hidden whole in the chat unless a person
     // started it (web/src/utils/turn-shape.ts): nothing of it was read.
     const hiddenUnlessPerson = NO_ACTION_END.test(replies[replies.length - 1]);
@@ -51,6 +55,8 @@ export const hintDriftHook: SessionHookDefinition = {
       if (v.includes(true)) verdicts.set(h.kind, true);
       else if (v.includes(false)) verdicts.set(h.kind, false);
     }
+    // After a live correction only what came after it counts.
+    if (live && verdicts.has('reply-language')) verdicts.set('reply-language', live.driftAfter);
     if (!verdicts.size) return;
     const at = new Date().toISOString();
     // Main, a lead and an ask talk to the user whoever started the turn; anyone else only answers a person.
@@ -59,7 +65,9 @@ export const hintDriftHook: SessionHookDefinition = {
     await writeHintState(p.sessionId, (cur) => {
       const state = cur.hintState;
       const byPerson = state?.lastSendBy === 'person';
-      if (!state || (!userFacing && !byPerson) || (hiddenUnlessPerson && !byPerson)) return null;
+      // A live correction proves a person started the turn (his message may be followed by notices).
+      const personTurn = byPerson || !!live;
+      if (!state || (!userFacing && !personTurn) || (hiddenUnlessPerson && !personTurn)) return null;
       const drift = { ...(state.drift ?? {}) };
       for (const [kind, broke] of verdicts) {
         if (broke) drift[kind] = at;
