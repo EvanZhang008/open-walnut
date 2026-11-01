@@ -158,13 +158,17 @@ describe('an unfinished last word', () => {
     expect(hit?.coverage).toBeLessThan(1);
   });
 
-  it('only the last word is treated as unfinished', () => {
+  it('a word before the last is unfinished only when an ending occurs beside the rest', () => {
+    // 2026-10-31: only the last word used to be read as cut off, so a shortened
+    // first word ("mar picnic") found nothing; see hybrid-search-word-prefix.test.ts.
     const index = newIndex((i) => `spending report ${i}`);
     index.upsert({ kind: 'task', ref: 'target', title: 'spend card', updatedAt: DAY });
-    const hit = covered(index, 'spe card', 'target');
-    expect(hit?.bm25Strict).toBe(0);
-    expect(hit?.coverage).toBeLessThan(1);
+    expect(covered(index, 'spe card', 'target')?.coverage).toBe(1);
     expect(covered(index, 'card spe', 'target')?.coverage).toBe(1);
+    // No "spe…" word sits beside "pallet": the first word stays as typed, so
+    // the spending reports do not join the results.
+    index.upsert({ kind: 'task', ref: 'pallet', title: 'pallet crate', updatedAt: DAY });
+    expect(covered(index, 'spe pallet', 'pad-0')).toBeUndefined();
   });
 });
 

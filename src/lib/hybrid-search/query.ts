@@ -365,6 +365,7 @@ function splitPhrases(token: string, exists: (token: string) => boolean): string
  *   typo        "failled", "notifcation": a word the index has (almost) never
  *               seen, one edit away from a word it holds hundreds of times
  *   unfinished  "sync fai": the last word cut off where the typing paused
+ *   shortened   "mar picnic": any word typed as its head (longerReadings)
  * Each becomes an extra OR form of the term, kept only when the index holds
  * it and guarded so a doc that has the typed word earns nothing extra. Unlike a
  * compound spelling it never competes with the typed word in lane A: a doc
@@ -547,32 +548,41 @@ function wordForms(
     const inflected = (candidates.get(word) ?? []).map((f) => [f, df(f)] as [string, number])
       .filter(([, n]) => n > 0 && (rare || n <= dfCap || n < INFLECTION_COMMON_RATIO * own))
       .sort(byDf).slice(0, INFLECTION_MAX).map(([f]) => f);
+    const context = words.filter((w) => w !== word && df(w) > 0);
+    // Any word may be cut short, not only the last one: "mar picnic" is a
+    // shortened name, typed in full nowhere. Before the last word, the rest of
+    // the query is the only evidence, so a reading must occur beside it.
+    const cutOff = word === last || context.length > 0;
     if (!rare) {
-      if (inflected.length > 0) out.inflected.set(word, inflected.map(ftsQuote));
-      // A last word a few docs hold is also read as cut off where the typing
-      // paused, when far commoner words begin with it: "todo sync fai" meant
-      // "failed", and the 9 docs holding a stray "fai" took the top of the
-      // list on the rarity weight alone.
-      if (word === last && own <= COMPLETION_MAX_DF) {
-        try {
-          const context = words.filter((w) => w !== word && df(w) > 0);
+      const longer: string[] = [];
+      try {
+        if (word === last && own <= COMPLETION_MAX_DF) {
+          // A last word a few docs hold is also read as cut off where the typing
+          // paused, when far commoner words begin with it: "todo sync fai" meant
+          // "failed", and the 9 docs holding a stray "fai" took the top of the
+          // list on the rarity weight alone.
           const ends = completions(db, word, own, context).filter((f) => !inflected.includes(f));
           if (ends.length > 0) out.spelling.set(word, ends.map(ftsQuote));
-        } catch {
-          // The term keeps its inflections.
+        } else if (context.length > 0 && own <= dfCap) {
+          // Any other word the index holds, in any position: a title must
+          // name the longer reading (see longerReadings).
+          longer.push(...longerReadings(db, word, context, dfCap).filter((f) => !inflected.includes(f)));
         }
+      } catch {
+        // The term keeps its inflections.
       }
+      const forms = [...inflected, ...longer];
+      if (forms.length > 0) out.inflected.set(word, forms.map(ftsQuote));
       continue;
     }
     const spelling: string[] = [...inflected];
     const split: string[] = [];
-    const context = words.filter((w) => w !== word && df(w) > 0);
     try {
       if (word.length >= TYPO_MIN_WORD) spelling.push(...spellingFixes(db, word, own, context));
       // A form is written apart in the index too, as the typed word would be:
       // "dockhuub" → "dockhub" → "dock hub" (camelCase sub parts).
       for (const form of spelling) split.push(...splitPhrases(form, exists));
-      if (word === last) spelling.push(...completions(db, word, own, context));
+      if (cutOff) spelling.push(...completions(db, word, own, context, word !== last));
     } catch {
       // A vocabulary hiccup costs this term the rest of its forms, never the query.
     }
@@ -635,19 +645,90 @@ function alongside(
  *  "doc" stays as typed. They score in lane A', below the docs holding the
  *  word itself: in lane A, "quest" (in 3 docs) completed to "question" and
  *  buried the task about the quest. */
-function completions(db: SearchDb, prefix: string, own: number, others: readonly string[]): string[] {
-  const rows = (db.prepare(
+function completions(
+  db: SearchDb,
+  prefix: string,
+  own: number,
+  others: readonly string[],
+  /** Only endings that occur beside `others` (a word before the last one). */
+  besideOnly = false,
+): string[] {
+  const counted = endings(db, prefix);
+  if (counted.length === 0 || counted[0][1] < TYPO_MIN_GAIN * (own + 1)) return [];
+  const head = counted.slice(0, COMPLETION_CANDIDATES);
+  if (others.length === 0) return besideOnly ? [] : head.slice(0, COMPLETION_MAX).map(([w]) => w);
+  let together = alongside(db, head, others);
+  if (together.length === 0) together = alongside(db, counted.slice(COMPLETION_CANDIDATES), others);
+  if (together.length === 0 && besideOnly) return [];
+  return (together.length > 0 ? together : head.map(([w]) => w)).slice(0, COMPLETION_MAX);
+}
+
+/** The commonest vocabulary words `prefix` begins (itself excluded), with doc counts. */
+function endings(db: SearchDb, prefix: string): Array<readonly [string, number]> {
+  return (db.prepare(
     `SELECT term, doc FROM (SELECT term, doc FROM ${VOCAB_TABLE} WHERE term > ? AND term < ? LIMIT ${COMPLETION_SCAN})
      ORDER BY doc DESC LIMIT ${COMPLETION_CANDIDATES_WIDE}`,
   ).all(prefix, `${prefix}\uffff`) as Array<{ term: string; doc: number }>)
-    .filter((r) => WORD_RE.test(r.term));
-  if (rows.length === 0 || rows[0].doc < TYPO_MIN_GAIN * (own + 1)) return [];
-  const counted = rows.map((r) => [r.term, r.doc] as const);
-  const head = counted.slice(0, COMPLETION_CANDIDATES);
-  if (others.length === 0) return head.slice(0, COMPLETION_MAX).map(([w]) => w);
-  let together = alongside(db, head, others);
-  if (together.length === 0) together = alongside(db, counted.slice(COMPLETION_CANDIDATES), others);
-  return (together.length > 0 ? together : head.map(([w]) => w)).slice(0, COMPLETION_MAX);
+    .filter((r) => WORD_RE.test(r.term))
+    .map((r) => [r.term, r.doc] as const);
+}
+
+/**
+ * Longer words a query word may stand for ("mar picnic" → "marina"), read
+ * only when some doc's TITLE holds the longer word beside the rest of the query.
+ * The reported case (2026-10-31): a first name typed as its first three letters
+ * beside another word. The short form is a word of its own in 136 docs, so
+ * completions() kept it as typed, and the task titled with the full name and
+ * that word matched no lane at all. Co-occurrence ANYWHERE is weak evidence
+ * for a short word: by count it picks the commonest endings ("market" and
+ * "march" for "mar"), by share it picks
+ * rare noise, and for "engine switch ins" neither picked the "inside" of the
+ * task titled "Engine switch inside one task". On the perturbation eval's
+ * shortened-word classes those found 33-35 docs a top 8 had missed and lost
+ * 5-9 it had; asked of titles, 42 and none. A title is a doc's name, so a
+ * title holding the ending and the rest says the shortened query names
+ * something. It must hold every other word (at most two), else one of them:
+ * in "mar lopez pic" the "pic" is cut short too, and no title holds it.
+ * Gated:
+ *   - the word as typed beside the rest is rare (under COMPLETION_CONTEXT_CAP
+ *     docs): with many exact matches there is nothing to rescue, and the
+ *     as-typed reading stands ("doc search" stays "doc");
+ *   - an ending as common as the df gate rejects is another word in practice
+ *     (as for inflections), and the typed word itself must pass that gate;
+ *   - the titles come from one bounded query per pass (at most two), never a
+ *     query per ending.
+ * The readings score in lane A' at the widened discount and count for coverage,
+ * never in the relaxed lane: the word as typed keeps its own place there.
+ */
+const LONGER_MAX = 3;
+/** Titles read to tell which endings they hold: one bounded query per pass. */
+const LONGER_TITLE_ROWS = 64;
+const TITLE_COLUMNS = '{title tsub}';
+function longerReadings(db: SearchDb, word: string, context: readonly string[], dfCap: number): string[] {
+  const others = context.slice(0, 2).map(ftsQuote);
+  const typed = db.prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM doc_fts WHERE doc_fts MATCH ? LIMIT ${COMPLETION_CONTEXT_CAP})`)
+    .get(`${ftsQuote(word)} AND ${others.join(' AND ')}`) as { n: number };
+  if (typed.n >= COMPLETION_CONTEXT_CAP) return [];
+  const candidates = endings(db, word).filter(([, n]) => n <= dfCap).map(([term]) => term);
+  if (candidates.length === 0) return [];
+  const anyEnding = `(${candidates.map(ftsQuote).join(' OR ')})`;
+  const titleRows = db.prepare(
+    `SELECT title FROM doc WHERE id IN (SELECT rowid FROM doc_fts WHERE doc_fts MATCH ? LIMIT ${LONGER_TITLE_ROWS})`,
+  );
+  // One query finds the titles holding any ending beside the rest; reading
+  // those titles tells which endings they hold (a title is a few words).
+  const titled = (rest: string): string[] => {
+    const hits = new Map<string, number>();
+    for (const { title } of titleRows.all(`${TITLE_COLUMNS} : (${anyEnding} AND ${rest})`) as Array<{ title: string }>) {
+      const words = tokenize(foldWidth(title));
+      const present = new Set([...words.orig, ...words.sub]);
+      for (const term of candidates) if (present.has(term)) hits.set(term, (hits.get(term) ?? 0) + 1);
+    }
+    return candidates.filter((t) => hits.has(t)).sort((a, b) => hits.get(b)! - hits.get(a)!);
+  };
+  let kept = titled(others.join(' AND '));
+  if (kept.length === 0 && others.length > 1) kept = titled(`(${others.join(' OR ')})`);
+  return kept.slice(0, LONGER_MAX);
 }
 
 function compileTerm(

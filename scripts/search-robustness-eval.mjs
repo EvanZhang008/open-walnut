@@ -238,6 +238,15 @@ function rewrites(doc) {
     const w = ctlQ[lastIdx];
     out.push(['prefix', q(replaceAt(lastIdx, w.slice(0, Math.max(3, Math.ceil(w.length / 2)))))]);
   }
+  // A word before the last one shortened the same way: a name or a long word
+  // typed as its head ("mar picnic" for "Marina Lopez picnic planning").
+  // No rand() here, so every other class samples exactly what it did before.
+  for (const [cls, idx] of [['prefix-first', 0], ['prefix-mid', 1]]) {
+    if (idx >= lastIdx || (cls === 'prefix-mid' && ctlQ.length < 3)) continue;
+    const w = ctlQ[idx];
+    if (!isLatin(w) || w.length < 5) continue;
+    out.push([cls, q(replaceAt(idx, w.slice(0, Math.max(3, Math.ceil(w.length / 2)))))]);
+  }
   const inflectable = latinIdx.filter((i) => /^[a-z]+$/i.test(ctlQ[i]) && ctlQ[i].length >= 4);
   if (inflectable.length) {
     const i = pick(inflectable);
