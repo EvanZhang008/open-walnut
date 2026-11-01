@@ -9,7 +9,7 @@
  *   - the catalog has no entry for them (the models are whatever the user
  *     installed), so a tier word like "sonnet" must never be sent as a model id.
  */
-import type { ProviderConfig } from './types.js';
+import type { ApiProtocol, ProviderConfig } from './types.js';
 import { DEFAULT_BASE_URLS } from './defaults.js';
 
 /**
@@ -91,4 +91,56 @@ export async function probeLocalProvider(
   } catch (err) {
     return { ok: false, url, error: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/** Two names of one model on this server: Ollama's are case-insensitive, and no tag means `:latest`. */
+export function sameLocalModel(api: ApiProtocol, a: string, b: string): boolean {
+  if (a === b) return true;
+  if (api !== 'ollama') return false;
+  const norm = (s: string) => (s.includes(':') ? s : `${s}:latest`).toLowerCase();
+  return norm(a) === norm(b);
+}
+
+const SERVED_TTL_MS = 60_000;
+const served = new Map<string, { at: number; ids: Promise<string[] | null> }>();
+const toldMissing = new Set<string>();
+
+/**
+ * The model to send a local server: `wanted` when it serves it, else `main` when it
+ * serves that. A model Walnut's own helpers name (agent.fast_model, a title or
+ * summary model) that the user never pulled answered every helper call with a 404
+ * (2026-11-01: Path D's snippet set fast_model qwen3:8b next to a pull of only
+ * qwen3-coder:30b, and host-learning failed). The list is read at most once a
+ * minute per server; with no list, or neither model on it, `wanted` goes as asked
+ * so the server's own error names it. `onFallback` runs once per server and model.
+ */
+export async function localModelOrMain(
+  prov: Pick<ProviderConfig, 'api' | 'base_url' | 'api_key'>,
+  wanted: string,
+  main: string,
+  onFallback?: (info: { wanted: string; main: string; base: string }) => void,
+): Promise<string> {
+  if (sameLocalModel(prov.api, wanted, main)) return wanted;
+  const base = localProviderProbeUrl(prov);
+  let entry = served.get(base);
+  if (!entry || Date.now() - entry.at > SERVED_TTL_MS) {
+    entry = { at: Date.now(), ids: listLocalModelIds(prov) };
+    served.set(base, entry);
+  }
+  const ids = await entry.ids;
+  if (!ids || ids.length === 0) return wanted;
+  if (ids.some((id) => sameLocalModel(prov.api, id, wanted))) return wanted;
+  if (!ids.some((id) => sameLocalModel(prov.api, id, main))) return wanted;
+  const key = `${base}\n${wanted}`;
+  if (!toldMissing.has(key)) {
+    toldMissing.add(key);
+    onFallback?.({ wanted, main, base: localProviderBaseUrl(prov) });
+  }
+  return main;
+}
+
+/** Tests only: forget the cached model lists and the fallbacks already logged. */
+export function resetLocalModelCache(): void {
+  served.clear();
+  toldMissing.clear();
 }

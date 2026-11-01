@@ -11,6 +11,7 @@ import type { MessageParam, ContentBlock, Tool, TextBlockParam } from '@anthropi
 import { getConfig } from '../core/config-manager.js';
 import { resolveProvider, buildProviderMap, synthesizeFromLegacy, resetAllAdapters } from './providers/registry.js';
 import { resolveMainProviderName } from './providers/default-provider.js';
+import { isLocalModelProvider, localModelOrMain } from './providers/local-provider.js';
 import {
   DEFAULT_MODEL,
   DEFAULT_MAX_TOKENS,
@@ -117,7 +118,14 @@ async function resolveForCall(config?: ModelConfig) {
     resolved.config = { ...resolved.config, region: config.region };
   }
 
-  const model = config?.model ?? fullConfig.agent?.main_model ?? DEFAULT_MODEL;
+  let model = config?.model ?? fullConfig.agent?.main_model ?? DEFAULT_MODEL;
+  const mainModel = fullConfig.agent?.main_model;
+  if (mainModel && model !== mainModel && isLocalModelProvider(resolved.config)) {
+    model = await localModelOrMain(resolved.config, model, mainModel, ({ wanted, main, base }) => {
+      log.agent.warn(`model: ${base} has no model "${wanted}", so Walnut's calls for it use the main model "${main}"`
+        + (resolved.config.api === 'ollama' && !/claude/i.test(wanted) ? ` until you run \`ollama pull ${wanted}\`` : ''), { provider: providerName });
+    });
+  }
   const catalogEntry = lookupCatalogEntry(model, providerName);
 
   // Build betas array from catalog capabilities

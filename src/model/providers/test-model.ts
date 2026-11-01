@@ -20,6 +20,7 @@ import {
   listLocalModelIds,
   localProviderBaseUrl,
   probeLocalProvider,
+  sameLocalModel,
 } from './local-provider.js';
 
 /** A cheap model per protocol (and per provider where one protocol serves several). */
@@ -47,15 +48,6 @@ export interface PickTestModelInput {
   agent?: { main_provider?: string; main_model?: string; fast_model?: string };
   /** A model the caller asked to test explicitly. */
   requested?: string;
-}
-
-/** Ollama treats a name without a tag as `:latest`. */
-function sameLocalModel(api: ApiProtocol, a: string, b: string): boolean {
-  if (a === b) return true;
-  if (api !== 'ollama') return false;
-  // Ollama names are case-insensitive, and a name without a tag means :latest.
-  const norm = (s: string) => (s.includes(':') ? s : `${s}:latest`).toLowerCase();
-  return norm(a) === norm(b);
 }
 
 /**
