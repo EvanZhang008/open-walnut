@@ -25,7 +25,7 @@
  */
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { MailFixtureServer, PANE, folderRow, openMail, shoot, showAllMail } from './mail-review-helpers'
+import { MailFixtureServer, PANE, clipboardReader, folderRow, openMail, shoot, showAllMail } from './mail-review-helpers'
 
 const SHOT_DIR = '/tmp/mail-context-row/chromium'
 
@@ -551,13 +551,13 @@ test('C33, C57: the task lands on the row with no reload, and a double click is 
   await page.unroute(TASK_URL)
 })
 
-test('C49: Copy Walnut link writes the deep link and says so', async ({ page }) => {
-  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+test('C49: Copy Walnut link writes the deep link and says so', async ({ page, browserName }) => {
+  const readClipboard = await clipboardReader(page, browserName)
   await openWriterInbox(page)
   await openRowMenu(page, WRITER, LEASE)
   await clickItem(page, 'Copy Walnut link')
   await expect(page.getByTestId('mail-row-note')).toHaveText('Link copied.', { timeout: 30_000 })
-  const copied = await page.evaluate(() => navigator.clipboard.readText())
+  const copied = await readClipboard()
   const query = new URLSearchParams(new URL(copied).search)
   expect(query.get('account')).toBe(WRITER)
   expect(query.get('message')).toBe(LEASE)

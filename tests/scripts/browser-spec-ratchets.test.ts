@@ -167,3 +167,31 @@ describe('calendar columns of another day', () => {
     expect("const day = days.find((d) => d !== localDay(0))\nconst point = await columnPoint(page, day, 11)".match(fixedDayColumn)).toBeNull()
   })
 })
+
+describe('clipboard permissions', () => {
+  // WebKit knows neither `clipboard-read` nor `clipboard-write`: `grantPermissions` throws
+  // "Unknown permission: clipboard-write" and the case fails before it tests anything (2026-11-01:
+  // two mail specs and the task id chip, in every PW_WEBKIT=1 run). A grant is made for Chromium
+  // only (`browserName === 'chromium'`, or the project's name, within the three lines above it),
+  // or swallows the refusal; mail-review-helpers.ts `clipboardReader` does the first and records
+  // the write on WebKit.
+  const grant = /grantPermissions\([^)]*clipboard-/
+
+  it('every clipboard grant is made for Chromium only', () => {
+    const offenders: string[] = []
+    for (const { file, text } of sources) {
+      const lines = text.split('\n')
+      lines.forEach((line, i) => {
+        if (!grant.test(line) || line.trim().startsWith('//') || line.trim().startsWith('*')) return
+        if (line.includes('.catch(')) return
+        if (lines.slice(Math.max(0, i - 3), i + 1).some((one) => one.includes("=== 'chromium'"))) return
+        offenders.push(`${file}:${i + 1}: ${line.trim()}`)
+      })
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    expect(grant.test("await context.grantPermissions(['clipboard-read', 'clipboard-write'])")).toBe(true)
+  })
+})

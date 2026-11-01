@@ -199,13 +199,24 @@ export function MailUnsubscribePlanDialog({ scope, groupId, groupLabel, plan, ac
   };
 
   const running = !!batch && !over;
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Escape') {
+  const runningRef = useRef(running);
+  runningRef.current = running;
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  // Escape is heard on the DOCUMENT (capture, the way the group card and the correct popover hear it),
+  // not on the dialog: WebKit, the Mac app's engine, focuses nothing a click lands on, so after one click
+  // on a tick box or a button focus sat on <body> and the dialog's own handler never saw the key.
+  useEffect(() => {
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
       event.preventDefault();
       event.stopPropagation();
-      if (!running) onClose();
-      return;
-    }
+      if (!runningRef.current) closeRef.current();
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => { document.removeEventListener('keydown', onKey, true); };
+  }, []);
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     // Enter never submits from a checkbox (it would be a slip, not a decision).
     if (event.key === 'Enter' && (event.target as HTMLElement).tagName !== 'BUTTON' && (event.target as HTMLElement).tagName !== 'A') {
       event.preventDefault();

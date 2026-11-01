@@ -143,6 +143,35 @@ export async function showAllMail(page: Page): Promise<void> {
   })
 }
 
+/**
+ * The text the page last handed to the clipboard, in either engine. Call before the page loads.
+ *
+ * Chromium grants the two clipboard permissions and reads the real clipboard back. WebKit knows neither
+ * permission name (`grantPermissions` throws "Unknown permission: clipboard-write") and only reads the
+ * clipboard behind a paste gesture a test cannot make, so there `navigator.clipboard.writeText` is
+ * replaced, before any page script runs, by one that records what it was given.
+ */
+export async function clipboardReader(page: Page, browserName: string): Promise<() => Promise<string>> {
+  if (browserName === 'chromium') {
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+    return () => page.evaluate(() => navigator.clipboard.readText())
+  }
+  await page.addInitScript(() => {
+    const written: string[] = []
+    ;(window as unknown as { __clipboardWritten: string[] }).__clipboardWritten = written
+    const writeText = async (text: string): Promise<void> => { written.push(String(text)) }
+    if (typeof Clipboard !== 'undefined') {
+      Object.defineProperty(Clipboard.prototype, 'writeText', { configurable: true, writable: true, value: writeText })
+    } else {
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    }
+  })
+  return () => page.evaluate(() => {
+    const written = (window as unknown as { __clipboardWritten?: string[] }).__clipboardWritten ?? []
+    return written[written.length - 1] ?? ''
+  })
+}
+
 /** Into the Mail console through the real UI: the sidebar app row, never a deep link. */
 export async function openMail(page: Page, port: number): Promise<void> {
   await shellUp(page, port)

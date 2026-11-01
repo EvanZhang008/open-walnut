@@ -77,10 +77,12 @@ function resultRows(page: Page) {
   return page.locator('.todo-search-results .todo-panel-item');
 }
 
-test('the detail view shows the task id, copyable by click and selectable as text', async ({ page, context, request }) => {
+test('the detail view shows the task id, copyable by click and selectable as text', async ({ page, context, request, browserName }) => {
   const title = `Id chip task ${Date.now()}`;
   const taskId = await createTask(request, title);
-  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  // Chromium only: WebKit knows neither permission name ("Unknown permission: clipboard-write") and
+  // reads the clipboard only behind a paste gesture, so there the Copied status is what is graded.
+  if (browserName === 'chromium') await context.grantPermissions(['clipboard-read', 'clipboard-write']);
 
   await openHome(page);
   await openDetail(page, title);
@@ -95,7 +97,7 @@ test('the detail view shows the task id, copyable by click and selectable as tex
   await value.click();
   await expect(chip.locator('.copyable-id-status')).toHaveText('Copied');
   await shot(page, '02-copied-confirmation');
-  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(taskId);
+  if (browserName === 'chromium') expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(taskId);
 
   // Selectable text, not only a button: the click also selects the whole id
   // (user-select: all), so Cmd+C works for a terminal paste.

@@ -10,7 +10,7 @@ import {
   ALL_INBOXES, FERRY, MARINA_ADDRESS, api, deliver, getGroups, openGroupLine, openGroupMenu, openGrouped, setUnsubDelay,
   startGroupsFixture, unsubLog, waitLabeled,
 } from './mail-grouping-helpers'
-import { shoot, type MailFixture, type MailFixtureServer } from './mail-review-helpers'
+import { clipboardReader, shoot, type MailFixture, type MailFixtureServer } from './mail-review-helpers'
 
 const SHOTS = '/tmp/mail-grouping/shots/v2/chromium'
 test.describe.configure({ mode: 'serial' })
@@ -106,8 +106,8 @@ test('the open group\'s footer opens the same checklist, and Esc closes it', asy
   expect((await unsubLog(fixture)).calls).toBe(0)
 })
 
-test('the ferry account cannot send: its mailto offers Copy address and the mail app', async ({ page, context }) => {
-  await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+test('the ferry account cannot send: its mailto offers Copy address and the mail app', async ({ page, browserName }) => {
+  const readClipboard = await clipboardReader(page, browserName)
   // A newsletter whose only way out is a mailto:, on the account that cannot send.
   await deliver(fixture, 1, { account: 'ferry', kind: 'list' })
   await expect.poll(async () => (await getGroups(fixture, { accountId: FERRY, mailboxId: 'INBOX' })).groups
@@ -121,7 +121,8 @@ test('the ferry account cannot send: its mailto offers Copy address and the mail
   await expect(dead.getByTestId('mail-unsub-method')).toContainText("can't send from this account")
   await expect(dead.getByTestId('mail-unsub-open-app')).toHaveAttribute('href', /^mailto:/)
   await dead.getByTestId('mail-unsub-copy').click()
-  const copied = await page.evaluate(() => navigator.clipboard.readText())
+  await expect(dead.getByTestId('mail-unsub-copy')).toHaveText('Copied')
+  const copied = await readClipboard()
   expect(copied).toMatch(/^[^:?\s]+@[^?\s]+$/)
   expect((await unsubLog(fixture)).calls).toBe(0)
   await dialog.getByTestId('mail-unsub-cancel').click()
@@ -165,6 +166,10 @@ test('the batch walks each ticked list in turn, Stop after this one leaves the r
     await expect(finish).toHaveAttribute('target', '_blank')
   }
   await shoot(dialog, SHOTS, 'unsub-plan-ran')
+  // With focus on <body>, which is where the clicks above leave it in WebKit (the Mac app): a click on a
+  // tick box or a button focuses nothing there, and the dialog used to hear Escape only from inside
+  // itself. Blurred here too, so Chromium (which focuses the Close button) grades the same case.
+  await page.evaluate(() => { (document.activeElement as HTMLElement | null)?.blur() })
   await page.keyboard.press('Escape')
   await expect(dialog).toHaveCount(0)
 })
