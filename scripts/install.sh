@@ -174,11 +174,13 @@ pick_version() {
     if [ "$code" -eq 0 ]; then
       version="$(tr ',' '\n' < "$staging/releases.json" | sed -n \
         -e 's/^[[:space:]{]*"tag_name":[[:space:]]*"v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/T \1/p' \
+        -e 's/^[[:space:]{]*"tag_name":.*/X/p' \
         -e 's/^[[:space:]{]*"name":[[:space:]]*"\(\(open-\)\{0,1\}walnut-[^"]*\)".*/A \1/p' \
         -e 's/^[[:space:]{]*"name":[[:space:]]*"SHA256SUMS".*/S/p' |
         awk -v target="$target" -v legacy="$legacy_target" '
           function settle() { if (t == "" || !sums) return; if (gz) { print t; found = 1; exit } if (arc && old == "") old = t }
           $1 == "T" { settle(); t = $2; gz = 0; arc = 0; sums = 0; next }
+          $1 == "X" { settle(); t = ""; next }
           $1 == "S" && t != "" { sums = 1; next }
           $1 == "A" && t != "" && $2 == ("walnut-" t "-" target ".gz") { gz = 1; next }
           $1 == "A" && t != "" && legacy != "" && $2 == ("open-walnut-" t "-" legacy ".tar.gz") { arc = 1 }

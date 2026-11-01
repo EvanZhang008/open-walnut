@@ -51,8 +51,13 @@ async function daemonRpc(cmd: string, params: Record<string, unknown> = {}, time
   })
 }
 
-async function daemonUp(): Promise<boolean> {
-  try { return (await daemonRpc('hello', {}, 5_000)).ok === true } catch { return false }
+/** The daemon answering here: `service` when it is the login service (it says where it runs from). */
+async function daemonUp(): Promise<'service' | 'running' | null> {
+  try {
+    const hello = await daemonRpc('hello', {}, 5_000)
+    if (hello.ok !== true) return null
+    return typeof hello.serviceExecutable === 'string' ? 'service' : 'running'
+  } catch { return null }
 }
 
 async function waitDaemon(ms: number): Promise<boolean> {
@@ -79,8 +84,11 @@ export async function runNetJoin(origin: string, code: string, opts: { steps?: b
   try { base = new URL(origin) } catch { step(3, 'Join', `${origin} is not an address`); return 1 }
   if (base.protocol !== 'https:' && process.env.WALNUT_NET_ALLOW_HTTP_JOIN !== '1') { step(3, 'Join', `${origin} is not https; refusing to join over plain HTTP`); return 1 }
 
-  // 2/3: the daemon, as a service that starts at login (or the one already running here).
-  if (await daemonUp()) {
+  // 2/3: the daemon, as a service that starts at login. One already running that is not
+  // the service (a server or an SSH connect started it) would be gone after a reboot: the
+  // install hands it over to the service.
+  const up = await daemonUp()
+  if (up === 'service' || (up && process.env.WALNUT_JOIN_DAEMON_DIR)) {
     step(2, 'Keep it running', 'on (already running)')
   } else if (process.env.WALNUT_JOIN_DAEMON_DIR) {
     step(2, 'Keep it running', `no daemon answers in ${process.env.WALNUT_JOIN_DAEMON_DIR}`)

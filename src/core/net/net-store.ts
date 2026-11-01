@@ -19,6 +19,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { isEd25519Point } from './ed25519-point.js'
 
 export const INVITE_TTL_MS = 10 * 60_000
 const MAX_OPEN_INVITES = 8
@@ -52,6 +53,11 @@ export function validNetId(id: unknown): id is string {
   return typeof id === 'string' && ID_RE.test(id)
 }
 
+/** A member's id as the network uses it: the format, and a point on the curve (walnut-net's check). */
+export function validNetKey(id: unknown): id is string {
+  return validNetId(id) && isEd25519Point(id)
+}
+
 export function validMemberName(name: unknown): name is string {
   return typeof name === 'string' && NAME_RE.test(name) && !RESERVED.has(name.toLowerCase())
 }
@@ -73,13 +79,15 @@ export function netStoreFile(env: NodeJS.ProcessEnv = process.env): string {
 /**
  * No file is an empty list; a file that cannot be read is an error, never an empty list:
  * the Mac would read that as every machine removed, and a write would make it so.
+ * `other` holds the entries this version does not know (a newer one's): every write
+ * keeps them as they are, so going back a version loses nothing.
  */
-function readMembers(file: string): NetMember[] {
+function readStore(file: string): { members: NetMember[]; other: unknown[] } {
   let text: string
   try {
     text = fs.readFileSync(file, 'utf8')
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { members: [], other: [] }
     throw new NetStoreError(500, 'store_unreadable', `The machine list cannot be read: ${(err as Error).message}`)
   }
   let raw: { version?: number; members?: unknown }
@@ -87,14 +95,25 @@ function readMembers(file: string): NetMember[] {
     throw new NetStoreError(500, 'store_unreadable', `The machine list (${file}) is not valid JSON`)
   }
   if (!raw || !Array.isArray(raw.members)) throw new NetStoreError(500, 'store_unreadable', `The machine list (${file}) has no members array`)
-  return raw.members.filter((m): m is NetMember => !!m && typeof m === 'object' && validNetId((m as NetMember).id)
-    && typeof (m as NetMember).name === 'string' && ((m as NetMember).role === 'mac' || (m as NetMember).role === 'host'))
+  const members: NetMember[] = []
+  const other: unknown[] = []
+  for (const m of raw.members) {
+    const known = !!m && typeof m === 'object' && validNetId((m as NetMember).id)
+      && typeof (m as NetMember).name === 'string' && ((m as NetMember).role === 'mac' || (m as NetMember).role === 'host')
+    if (known) members.push(m as NetMember)
+    else other.push(m)
+  }
+  return { members, other }
 }
 
-function writeMembers(file: string, members: NetMember[]): void {
+function readMembers(file: string): NetMember[] {
+  return readStore(file).members
+}
+
+function writeMembers(file: string, members: NetMember[], other: unknown[]): void {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`
-  fs.writeFileSync(tmp, JSON.stringify({ version: 1, members }, null, 2) + '\n', { mode: 0o600 })
+  fs.writeFileSync(tmp, JSON.stringify({ version: 1, members: [...members, ...other] }, null, 2) + '\n', { mode: 0o600 })
   fs.renameSync(tmp, file)
 }
 
@@ -108,11 +127,12 @@ export function isMember(id: string, file = netStoreFile()): boolean {
 
 /** The Mac says its id (one `mac` member: a new id replaces the old one). */
 export function setMacMember(input: { id: unknown; name?: unknown }, now = Date.now(), file = netStoreFile()): NetMember {
-  if (!validNetId(input.id)) throw new NetStoreError(400, 'bad_id', 'endpointId must be 64 hex characters')
-  const members = readMembers(file).filter((m) => m.role !== 'mac' && m.id !== input.id)
+  if (!validNetKey(input.id)) throw new NetStoreError(400, 'bad_id', 'endpointId must be a network key (64 hex characters)')
+  const st = readStore(file)
+  const members = st.members.filter((m) => m.role !== 'mac' && m.id !== input.id)
   const name = typeof input.name === 'string' && input.name.trim() ? input.name.trim().slice(0, 60) : 'Mac'
   const mac: NetMember = { id: input.id, name, role: 'mac', addedAt: now }
-  writeMembers(file, [mac, ...members])
+  writeMembers(file, [mac, ...members], st.other)
   return mac
 }
 
@@ -121,8 +141,9 @@ export function setMacMember(input: { id: unknown; name?: unknown }, now = Date.
  * forgets the list; the Mac's host rows are the copy). A member already there stays as it is.
  */
 export function restoreHostMember(input: { id: unknown; name?: unknown; platform?: unknown }, now = Date.now(), file = netStoreFile()): { member: NetMember; restored: boolean } {
-  if (!validNetId(input.id)) throw new NetStoreError(400, 'bad_id', 'endpointId must be 64 hex characters')
-  const members = readMembers(file)
+  if (!validNetKey(input.id)) throw new NetStoreError(400, 'bad_id', 'endpointId must be a network key (64 hex characters)')
+  const st = readStore(file)
+  const members = st.members
   const existing = members.find((m) => m.id === input.id)
   if (existing?.role === 'mac') throw new NetStoreError(409, 'is_mac', 'That id is the Mac')
   if (existing) return { member: existing, restored: false }
@@ -130,15 +151,15 @@ export function restoreHostMember(input: { id: unknown; name?: unknown; platform
   const name = freeName(validMemberName(input.name) ? input.name : 'machine', members, input.id)
   const platform = typeof input.platform === 'string' ? input.platform.slice(0, 40) : undefined
   const member: NetMember = { id: input.id, name, role: 'host', ...(platform ? { platform } : {}), addedAt: now }
-  writeMembers(file, [...members, member])
+  writeMembers(file, [...members, member], st.other)
   return { member, restored: true }
 }
 
 export function removeMember(id: string, file = netStoreFile()): boolean {
-  const members = readMembers(file)
-  const next = members.filter((m) => m.id !== id || m.role === 'mac')
-  if (next.length === members.length) return false
-  writeMembers(file, next)
+  const st = readStore(file)
+  const next = st.members.filter((m) => m.id !== id || m.role === 'mac')
+  if (next.length === st.members.length) return false
+  writeMembers(file, next, st.other)
   return true
 }
 
@@ -215,20 +236,21 @@ export function peekInvite(code: unknown, now = Date.now()): { id: string; name?
  * joins with one code cannot both get in.
  */
 export function redeemInvite(input: { code: unknown; endpointId: unknown; hostname?: unknown; platform?: unknown }, now = Date.now(), file = netStoreFile()): NetMember {
-  if (!validNetId(input.endpointId)) throw new NetStoreError(400, 'bad_id', 'endpointId must be 64 hex characters')
+  if (!validNetKey(input.endpointId)) throw new NetStoreError(400, 'bad_id', 'endpointId must be a network key (64 hex characters)')
   const peek = peekInvite(input.code, now)
   if (!peek) throw new NetStoreError(400, 'invalid_code', 'This invite is not valid any more (used, or older than 10 minutes). Make a new one on your Mac.')
   const inv = invites.get(peek.id)!
   inv.used = { at: now, memberId: input.endpointId, name: '' }
   try {
-    const members = readMembers(file)
+    const st = readStore(file)
+    const members = st.members
     const existing = members.find((m) => m.id === input.endpointId)
     if (existing?.role === 'mac') throw new NetStoreError(409, 'is_mac', 'That machine is this Mac; it is a member already.')
     if (members.length >= MAX_MEMBERS && !existing) throw new NetStoreError(409, 'too_many_members', `At most ${MAX_MEMBERS} machines`)
     const name = freeName(inv.name ?? memberNameFrom(input.hostname), members, input.endpointId)
     const platform = typeof input.platform === 'string' ? input.platform.slice(0, 40) : undefined
     const member: NetMember = { id: input.endpointId, name, role: 'host', ...(platform ? { platform } : {}), addedAt: now }
-    writeMembers(file, [...members.filter((m) => m.id !== input.endpointId), member])
+    writeMembers(file, [...members.filter((m) => m.id !== input.endpointId), member], st.other)
     inv.used = { at: now, memberId: member.id, name, ...(platform ? { platform } : {}) }
     return member
   } catch (err) {

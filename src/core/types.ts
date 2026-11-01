@@ -1389,8 +1389,9 @@ export interface Config {
   /** The user's own capability tags for THIS machine (`__local__`), as `hosts.<alias>.capabilities`
    *  is for another host (core/hosts/capabilities.ts). */
   local_capabilities?: string[];
-  /** The host network (core/net/net-mac.ts): on once the user made the first invite. */
-  net?: { enabled?: boolean };
+  /** The host network (core/net/net-mac.ts): on once the user made the first invite;
+   *  `removing` lists machines whose Remove has started (finished by the next sync). */
+  net?: { enabled?: boolean; removing?: string[] };
   hosts?: Record<string, {
     hostname: string;
     user?: string;

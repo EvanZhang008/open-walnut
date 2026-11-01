@@ -570,6 +570,8 @@ describe.each(SHELLS)('install.sh under %s', (sh) => {
       { tag_name: 'v0.9.0', name: 'Open Walnut 0.9.0', body: 'Fixes "tag_name": "v9.9.9", and more', assets: [] },
       // Half way through its upload: this target's file is up, its SHA256SUMS (uploaded last) is not.
       { tag_name: 'v0.8.5', name: 'Open Walnut 0.8.5', assets: [asset(`walnut-0.8.5-${HOST}.gz`)] },
+      // Another kind of release (the host network connector): its SHA256SUMS is not 0.8.5's.
+      { tag_name: 'walnut-net-v0.1.0', name: 'Host network connector', assets: [asset(`walnut-net-0.1.0-${HOST}.gz`), asset('SHA256SUMS')] },
       { tag_name: 'v0.8.0', name: 'Open Walnut 0.8.0', assets: [asset('walnut-0.8.0-linux-arm64-musl.gz'), asset('SHA256SUMS')] },
       { tag_name: 'v0.7.0', name: 'Open Walnut 0.7.0', assets: [asset(`walnut-0.7.0-${HOST}.gz`), asset(`open-walnut-0.7.0-${HOST}.tar.gz`), asset('SHA256SUMS')] },
     ], null, 2))

@@ -33,6 +33,8 @@ use node::Node;
 const PROTOCOL: u32 = 1;
 /// Exit code asking the supervisor to start this again (the config changed what the endpoint is).
 const EXIT_RESTART: i32 = 75;
+/// Exit code saying the config cannot be read (EX_CONFIG): the supervisor puts back the last one that worked.
+const EXIT_CONFIG: i32 = 78;
 
 fn usage() -> ! {
     eprintln!("usage: walnut-net id --key FILE | run --config FILE [--exit-on-stdin-eof] | --version");
@@ -72,7 +74,13 @@ fn main() -> Result<()> {
 }
 
 async fn run(cfg_path: PathBuf, stdin_eof: bool) -> Result<i32> {
-    let mut cfg = Config::read(&cfg_path)?;
+    let mut cfg = match Config::read(&cfg_path) {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn("config refused", json!({"error": format!("{e:#}")}));
+            return Ok(EXIT_CONFIG);
+        }
+    };
     let listener = control::bind(&cfg.control).await.context("control socket")?;
     let node = Node::bind(&cfg).await?;
     let (tx, mut rx) = mpsc::channel::<Event>(8);

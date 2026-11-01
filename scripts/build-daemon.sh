@@ -95,6 +95,7 @@ SOURCES=(
   src/providers/host-exec-core.ts
   src/providers/net-core.ts
   src/providers/net-binary.ts
+  src/providers/net-config-core.ts
   src/providers/host-mcp-core.ts
   src/providers/host-http-core.ts
   src/providers/host-reach-core.ts

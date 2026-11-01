@@ -10458,8 +10458,8 @@ const hostHttp = createHostHttp()
 // ── The host network (capability 'net-v1') ──
 // PARITY: keep in sync with daemon-source.ts. The logic is net-core.ts: this twin hands it
 // spawn, the net state dir (never under the synced data dir) and where walnut-net lives:
-// $WALNUT_NET_BIN (the server sets it for its local daemon), beside this executable, or
-// beside the daemon.
+// $WALNUT_NET_BIN (tests and a hand-built one), beside this executable, beside the daemon,
+// or the release build net-core.ts downloads into the net state.
 const NET_STATE_DIR = netStateDir({ serviceStateDir: SERVICE_MODE ? DAEMON_STATE_DIR : null, prodDaemon: IS_PROD_DAEMON_DIR, daemonDir: DAEMON_DIR, home: HOME_DIR })
 const netSupervisor = createNetSupervisor({
   spawn: (command, args, opts) => spawn(command, args, opts),

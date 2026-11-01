@@ -18,9 +18,11 @@
  *     and the relay lets both machines in (the relay asks the companion for each);
  *  3. the Mac reaches that machine's daemon through the host network and runs a command
  *     there (its HOME is the machine's, not this one's), and Settings shows its path;
- *  4. a Settings save of the SSH hosts keeps the machine's row;
- *  5. Remove takes it out everywhere: its walnut-net stops, the companion and the relay
- *     refuse it, the Mac's row is gone.
+ *  4. a Settings save of the SSH hosts keeps the machine's row, and a row an older
+ *     Walnut saved without its transport and endpoint (a label renamed too) is taken back;
+ *  5. a Remove the companion cannot answer changes nothing;
+ *  6. Remove takes it out everywhere, also with a sync running: its walnut-net stops (and
+ *     stays stopped), the companion and the relay refuse it, the Mac's row is gone.
  *
  * Needs walnut-net (WALNUT_NET_TEST_BIN, else dist/daemon-binaries/walnut-net-<platform>-<arch>),
  * the iroh-relay 1.4.1 binary (WALNUT_NET_TEST_RELAY) and bun; skipped without them.
@@ -44,6 +46,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 import { seedPrimaryPairing, startCloudBoxReplica, type CloudBoxReplica } from '../helpers/cloud-box-replica.js'
 import { isolateFromRealSsh, type SshIsolation } from '../helpers/isolate-ssh.js'
 import { testBun } from '../helpers/bun-runtime.js'
+import { netKey } from '../helpers/net-keys.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-host-net'))
 
@@ -205,7 +208,7 @@ suite('host network: one link joins a machine, the Mac reaches it, Remove takes 
   it('a stranger gets nothing: a wrong code, a wrong link, the relay check without its token', async () => {
     const join = await fetch(`http://${companion}/api/v1/net/join`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ code: 'AAAA-BBBB-CCCC', endpointId: 'a'.repeat(64), hostname: 'x' }),
+      body: JSON.stringify({ code: 'AAAA-BBBB-CCCC', endpointId: netKey('stranger'), hostname: 'x' }),
     })
     expect(join.status).toBe(400)
     expect(((await join.json()) as { error: { code: string } }).error.code).toBe('invalid_code')
@@ -333,8 +336,48 @@ suite('host network: one link joins a machine, the Mac reaches it, Remove takes 
     expect(fs.readFileSync(path.join(WALNUT_HOME, 'config.yaml'), 'utf8')).toContain(`endpoint: ${machineId}`)
   })
 
-  it('Remove takes the machine out everywhere', async () => {
+  it('a row an older Walnut saved without transport and endpoint is taken back, under a label renamed too', async () => {
+    const { modifyConfigDoc } = await import('../../src/core/config-store.js')
+    await modifyConfigDoc((doc) => {
+      const hosts = { ...(doc.hosts as Record<string, Record<string, unknown>>) }
+      const { transport: _t, endpoint: _e, ...rest } = hosts[machine]
+      hosts[machine] = { ...rest, label: 'GPU box' }
+      doc.hosts = hosts
+      return { write: true, result: undefined }
+    })
+    const r = await (await api('/api/hosts/net/sync', { method: 'POST', body: '{}' })).json() as { error: string | null }
+    expect(r.error).toBeNull()
+    const { getConfig } = await import('../../src/core/config-manager.js')
+    const hosts = (await getConfig()).hosts as Record<string, { transport?: string; endpoint?: string; label?: string }>
+    expect(hosts[machine]).toMatchObject({ transport: 'net', endpoint: machineId, label: 'GPU box' })
+    expect(Object.keys(hosts).filter((k) => hosts[k].endpoint === machineId || k.startsWith(`${machine}-net`))).toEqual([machine])
+  })
+
+  it('a Remove the companion cannot answer changes nothing', async () => {
+    const real = globalThis.fetch
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (String(input instanceof Request ? input.url : input).includes('/api/v1/net/members/') && init?.method === 'DELETE') return Promise.reject(new TypeError('fetch failed'))
+      return real(input, init)
+    })
+    try {
+      const r = await api(`/api/hosts/net/machines/${machine}`, { method: 'DELETE' })
+      expect(r.status).toBeGreaterThanOrEqual(400)
+    } finally {
+      spy.mockRestore()
+    }
+    const { getConfig } = await import('../../src/core/config-manager.js')
+    const cfg = await getConfig() as { net?: { removing?: string[] }; hosts?: Record<string, { endpoint?: string }> }
+    expect(cfg.net?.removing ?? []).toEqual([])
+    expect(cfg.hosts?.[machine]?.endpoint).toBe(machineId)
+    expect(await relayAllows(machineId)).toEqual({ status: 200, body: 'true' })
+    expect((await hostRpc('net.status') as { running?: boolean }).running).toBe(true)
+  })
+
+  it('Remove takes the machine out everywhere, also while a sync runs', async () => {
+    // A sync that hands every machine its list must not hand it to the one Remove stops.
+    const sync = api('/api/hosts/net/sync', { method: 'POST', body: '{}' })
     const r = await api(`/api/hosts/net/machines/${machine}`, { method: 'DELETE' })
+    await sync
     expect(r.status, await r.clone().text()).toBe(200)
     const info = await (await box('/api/v1/net/info')).json() as { members: Array<{ id: string }> }
     expect(info.members.map((m) => m.id)).not.toContain(machineId)
@@ -345,6 +388,9 @@ suite('host network: one link joins a machine, the Mac reaches it, Remove takes 
       return s.enabled === false && s.running === false ? s : null
     }, 15_000, 'the machine to stop its walnut-net')
     expect(st.endpointId).toBe(machineId)
+    // And it stays stopped once every push of that sync is out.
+    await new Promise((res) => setTimeout(res, 3_000))
+    expect(await hostRpc('net.status')).toMatchObject({ enabled: false, running: false })
     const cfg = fs.readFileSync(path.join(WALNUT_HOME, 'config.yaml'), 'utf8')
     expect(cfg).not.toContain(machineId)
     expect(cfg).toContain('devbox.example')

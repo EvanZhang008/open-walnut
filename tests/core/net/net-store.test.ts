@@ -10,10 +10,12 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   INVITE_TTL_MS, NetStoreError, inviteStatus, isMember, listMembers, makeInvite, memberNameFrom, normalInviteCode,
-  peekInvite, redeemInvite, removeMember, resetInvitesForTest, restoreHostMember, setMacMember, validMemberName, validNetId,
+  peekInvite, redeemInvite, removeMember, resetInvitesForTest, restoreHostMember, setMacMember, validMemberName, validNetId, validNetKey,
 } from '../../../src/core/net/net-store.js'
+import { netKey } from '../../helpers/net-keys.js'
 
-const id = (c: string) => c.repeat(64)
+// Real keys: the companion refuses an id that is not a point on the curve.
+const id = (c: string) => netKey(c)
 let dir = ''
 let file = ''
 beforeEach(() => {
@@ -26,7 +28,9 @@ afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }) })
 describe('ids, names and codes', () => {
   it('accepts only 64 lowercase hex ids', () => {
     expect(validNetId(id('a'))).toBe(true)
-    expect(validNetId(id('A'))).toBe(false)
+    expect(validNetId('A'.repeat(64))).toBe(false)
+    expect(validNetKey(id('a'))).toBe(true)
+    expect(validNetKey('02'.repeat(32))).toBe(false)
     expect(validNetId('ab')).toBe(false)
     expect(validNetId(42)).toBe(false)
   })
@@ -57,6 +61,8 @@ describe('invites', () => {
     const inv = makeInvite({}, t0)
     expect(inv.code).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/)
     expect(peekInvite(inv.code.toLowerCase(), t0 + 1)).toMatchObject({ id: inv.id })
+    // An id that is not a key (walnut-net would leave it out) is refused, and the code stays good.
+    expect(() => redeemInvite({ code: inv.code, endpointId: '02'.repeat(32) }, t0 + 1, file)).toThrow(/network key/)
     const m = redeemInvite({ code: inv.code, endpointId: id('b'), hostname: 'gpu-box.lan', platform: 'linux-x64' }, t0 + 2, file)
     expect(m).toMatchObject({ id: id('b'), name: 'gpu-box', role: 'host', platform: 'linux-x64' })
     expect(() => redeemInvite({ code: inv.code, endpointId: id('c') }, t0 + 3, file)).toThrow(NetStoreError)
@@ -147,5 +153,22 @@ describe('members', () => {
     expect(restoreHostMember({ id: id('d'), name: 'bad name!' }, 6, file).member.name).toBe('machine')
     expect(() => restoreHostMember({ id: 'nope' }, 7, file)).toThrow(NetStoreError)
     expect(listMembers(file).map((m) => m.role)).toEqual(['mac', 'host', 'host', 'host'])
+  })
+
+  it('an entry this version does not know (a newer one wrote it) is kept by every write', () => {
+    const newer = { id: id('z'), name: 'box', role: 'companion', addedAt: 1, extra: { a: 1 } }
+    const odd = { id: 'x', name: 'y', role: 'host' }
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, JSON.stringify({ version: 1, members: [newer, odd] }))
+    setMacMember({ id: id('a'), name: 'mac' }, 2, file)
+    redeemInvite({ code: makeInvite({}, 3).code, endpointId: id('b') }, 4, file)
+    restoreHostMember({ id: id('c'), name: 'c' }, 5, file)
+    removeMember(id('b'), file)
+    // Read as members: only what this version knows.
+    expect(listMembers(file).map((m) => m.id)).toEqual([id('a'), id('c')])
+    expect(isMember(id('z'), file)).toBe(false)
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as { members: unknown[] }
+    expect(raw.members).toContainEqual(newer)
+    expect(raw.members).toContainEqual(odd)
   })
 })

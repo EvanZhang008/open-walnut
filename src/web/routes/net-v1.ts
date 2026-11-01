@@ -60,20 +60,31 @@ export function relayInfo(origin: string, env: NodeJS.ProcessEnv = process.env):
   return { relays, relayRoots: roots }
 }
 
-/** Only the Mac this companion belongs to. */
+const OWNER_ONLY = 'Only the Mac this cloud companion belongs to can manage its machines.'
+
+/**
+ * Only the Mac this companion belongs to: the recorded owner; on a companion from before
+ * owners were recorded, the device that holds its machine credentials, or the one that
+ * proves the bridge-local. Never "the first paired device to ask" (the rule a mint has
+ * there): a key it put in the Mac's place would be let in by every machine that joins.
+ */
 async function owner(req: Request): Promise<{ ok: true } | { ok: false; status: number; code: string; error: string }> {
   const header = req.headers.authorization
   const r = req as Request & { deviceName?: string }
-  if (!r.deviceName || !header?.startsWith('Bearer ')) return { ok: false, status: 403, code: 'owner_only', error: 'Only the Mac this cloud companion belongs to can manage its machines.' }
-  const [{ readRegistry }, { machineCredentialDecision, MACHINE_PROOF_HEADER }] = await Promise.all([
-    import('../../core/device-store.js'), import('../../core/machine-credentials.js'),
+  const refused = { ok: false as const, status: 403, code: 'owner_only', error: OWNER_ONLY }
+  if (!r.deviceName || !header?.startsWith('Bearer ')) return refused
+  const [{ readRegistry, isPhoneRecord }, actor, { MACHINE_PROOF_HEADER }] = await Promise.all([
+    import('../../core/device-store.js'), import('../../core/device-actor.js'), import('../../core/machine-credentials.js'),
   ])
+  const reg = await readRegistry()
+  const me = actor.recordForToken(reg.devices, header.slice(7))
+  if (!me || me.kind === 'machine' || !me.id || isPhoneRecord(me)) return refused
+  const recorded = actor.ownerRecord(reg)
+  if (recorded) return recorded === me ? { ok: true } : refused
+  if (reg.devices.some((d) => d.kind === 'machine' && actor.liveOwnerOf(d, reg.devices) === me)) return { ok: true }
   const proof = req.get(MACHINE_PROOF_HEADER)
-  // `revoke` records nothing and mints nothing: it only asks "is this the owner".
-  const d = machineCredentialDecision(await readRegistry(), {
-    by: { token: header.slice(7) }, name: 'net-members', action: 'revoke', ...(proof && proof.length <= 128 ? { proof } : {}),
-  })
-  return d.ok ? { ok: true } : { ok: false, status: d.status, code: d.code, error: d.error }
+  const bridgeLocal = reg.devices.some((d) => d.kind === 'machine' && d.name === actor.PRIMARY_MACHINE_CREDENTIAL && !actor.liveOwnerOf(d, reg.devices))
+  return bridgeLocal && proof && proof.length <= 128 && actor.proofClaim(reg, me, proof) ? { ok: true } : refused
 }
 
 function guard(fn: (req: Request, res: Response) => Promise<void>, opts: { ownerOnly: boolean }) {

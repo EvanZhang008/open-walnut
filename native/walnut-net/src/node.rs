@@ -65,7 +65,7 @@ impl Node {
             ep,
             relays,
             daemon_port_file: cfg.daemon_port_file.clone(),
-            members: RwLock::new(cfg.member_map()?),
+            members: RwLock::new(cfg.member_map()),
             incoming: Mutex::new(HashMap::new()),
             outgoing: Mutex::new(HashMap::new()),
             dialing: Mutex::new(HashMap::new()),
@@ -75,7 +75,7 @@ impl Node {
 
     /// New members: the ones no longer allowed in are cut, forwards to non-members stop.
     pub async fn set_members(&self, cfg: &Config) -> Result<()> {
-        let next = cfg.member_map()?;
+        let next = cfg.member_map();
         *self.members.write().await = next.clone();
         let mut incoming = self.incoming.lock().await;
         incoming.retain(|id, conns| {

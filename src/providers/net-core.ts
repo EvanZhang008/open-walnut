@@ -6,7 +6,8 @@
  *
  * The daemon owns its lifecycle: it runs walnut-net while `<state>/config.json` exists,
  * restarts it when it exits (exit 75 = "the config changed what I am": at once; else
- * with a backoff), and walnut-net exits when the daemon's pipe to it closes, so a dead
+ * with a backoff; exit 78 = "I cannot read this config": back to the last one it came
+ * up on), and walnut-net exits when the daemon's pipe to it closes, so a dead
  * daemon never leaves one behind. The server only writes the config (`net.configure`)
  * and asks for links (`net.forward`): a 127.0.0.1 port whose every connection is a
  * stream to another member's daemon.
@@ -21,16 +22,19 @@
  * it ends its own child with SIGTERM, then SIGKILL.
  */
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import net from 'node:net'
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
-import { fetchNetBinary, netInstallName } from './net-binary.js'
+import { fetchNetBinary } from './net-binary.js'
+import { ID_RE, NET_CONFIG_VERSION, parseNetConfig, previousNetBinary, pruneNetBinaries, type NetConfigureRequest } from './net-config-core.js'
 
-export const NET_CONFIG_VERSION = 1
+export { NET_CONFIG_VERSION, netStateDir, parseNetConfig, resolveNetBinary, type NetConfigureRequest, type NetMember } from './net-config-core.js'
+
 /** walnut-net's "start me again" exit code. */
 const EXIT_RESTART = 75
+/** walnut-net's "this config cannot be read" exit code (EX_CONFIG). */
+const EXIT_CONFIG = 78
 const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000]
 /** A run this long counts as healthy: the next failure starts the backoff over. */
 const HEALTHY_MS = 60_000
@@ -38,23 +42,6 @@ const CONTROL_TIMEOUT_MS = 30_000
 const LOG_MAX_BYTES = 1024 * 1024
 /** A unix socket path must fit sockaddr_un (104 bytes on macOS, 108 on Linux). */
 const SOCKET_PATH_MAX = 100
-const ID_RE = /^[0-9a-f]{64}$/
-const NAME_MAX = 80
-const MEMBERS_MAX = 256
-
-export interface NetMember {
-  id: string
-  name: string
-  accept: boolean
-  addrs?: string[]
-}
-
-export interface NetConfigureRequest {
-  enabled?: unknown
-  relays?: unknown
-  relayRoots?: unknown
-  members?: unknown
-}
 
 export interface NetDeps {
   spawn: (cmd: string, args: string[], opts: SpawnOptions) => ChildProcess
@@ -66,6 +53,8 @@ export interface NetDeps {
   bin: () => string | null
   /** Get one when `bin` has none (default: the pinned release build, net-binary.ts; off with WALNUT_NET_NO_DOWNLOAD=1). */
   fetchBin?: () => Promise<string>
+  /** An older walnut-net to run while `fetchBin` gets this version (default: an older download in `<state>/bin`). */
+  previousBin?: () => string | null
   log?: (level: 'info' | 'warn', msg: string, fields?: Record<string, unknown>) => void
   now?: () => number
 }
@@ -105,50 +94,6 @@ function ensurePrivateDir(dir: string): void {
   if ((st.mode & 0o077) !== 0) fs.chmodSync(dir, 0o700)
 }
 
-function str(v: unknown, max: number): string | null {
-  return typeof v === 'string' && v.length > 0 && v.length <= max ? v : null
-}
-
-/** Validate a configure request into walnut-net's config fields. Throws on anything off. */
-/** `1.2.3.4:5` or `[::1]:5`, as Rust's SocketAddr reads it. */
-function socketAddr(a: unknown): boolean {
-  if (typeof a !== 'string' || a.length > 64) return false
-  const m = /^(?:\[([0-9a-fA-F:.]+)\]|(\d{1,3}(?:\.\d{1,3}){3})):(\d{1,5})$/.exec(a)
-  if (!m) return false
-  const port = Number(m[3])
-  if (port < 1 || port > 65535) return false
-  return m[1] ? net.isIPv6(m[1]) : net.isIPv4(m[2])
-}
-
-export function parseNetConfig(req: NetConfigureRequest): { relays: string[]; relayRoots: string[]; members: NetMember[] } {
-  // The same rules walnut-net applies when it reads the file (config.rs): a config it would
-  // refuse is refused here, before it replaces one that works.
-  const httpOk = process.env.WALNUT_NET_ALLOW_HTTP_RELAY === '1'
-  const relays = Array.isArray(req.relays) ? req.relays : []
-  for (const r of relays) {
-    if (typeof r !== 'string' || !/^https?:\/\/[^\s]+$/.test(r) || r.length > 512) throw new Error(`bad relay URL ${String(r).slice(0, 80)}`)
-    if (!r.startsWith('https://') && !httpOk) throw new Error(`relay ${r.slice(0, 80)} is not https`)
-  }
-  const roots = Array.isArray(req.relayRoots) ? req.relayRoots : []
-  for (const c of roots) {
-    if (typeof c !== 'string' || !c.includes('-----BEGIN CERTIFICATE-----') || c.length > 16_384) throw new Error('relayRoots: PEM certificates only')
-  }
-  const raw = Array.isArray(req.members) ? req.members : []
-  if (raw.length > MEMBERS_MAX) throw new Error(`at most ${MEMBERS_MAX} members`)
-  const seen = new Set<string>()
-  const members: NetMember[] = raw.map((m) => {
-    const o = (m && typeof m === 'object' ? m : {}) as Record<string, unknown>
-    const id = typeof o.id === 'string' ? o.id.toLowerCase() : ''
-    if (!ID_RE.test(id)) throw new Error(`bad member id ${String(o.id).slice(0, 80)}`)
-    if (seen.has(id)) throw new Error(`member ${id} listed twice`)
-    seen.add(id)
-    const addrs = Array.isArray(o.addrs) ? o.addrs.slice(0, 16) : []
-    for (const a of addrs) if (!socketAddr(a)) throw new Error(`member ${id}: bad address ${String(a).slice(0, 64)}`)
-    return { id, name: str(o.name, NAME_MAX) ?? '', accept: o.accept === true, ...(addrs.length ? { addrs } : {}) }
-  })
-  return { relays: relays as string[], relayRoots: roots as string[], members }
-}
-
 function writeFileAtomic(file: string, data: string): void {
   const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`
   fs.writeFileSync(tmp, data, { mode: 0o600 })
@@ -156,6 +101,9 @@ function writeFileAtomic(file: string, data: string): void {
 }
 
 /** One JSON request on the control socket, one JSON answer. */
+/** walnut-net read a config and refused it (it keeps the one it runs). */
+class NetConfigRefused extends Error {}
+
 export function netControlCall(socketPath: string, req: Record<string, unknown>, timeoutMs = CONTROL_TIMEOUT_MS): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const sock = net.createConnection(socketPath)
@@ -195,7 +143,24 @@ export function createNetSupervisor(deps: NetDeps) {
   let timer: ReturnType<typeof setTimeout> | null = null
   let stopping = false
   let readyWaiters: Array<(ok: boolean) => void> = []
-  const fetchBin = deps.fetchBin ?? (() => fetchNetBinary({ dir: path.join(stateDir, 'bin'), log }))
+  // The config text the current child was started on, and the one it is known to run
+  // (it said ready on it, or took it in a reload). The file is what the server asked for.
+  let spawnedWith: string | null = null
+  let applied: string | null = null
+  // The last config a child came up on: put back when a new one never comes up.
+  const goodFile = path.join(stateDir, 'config.last-good.json')
+  let rolledBack = false
+  let fetching = false
+  let fetchFailures = 0
+  let fetchTimer: ReturnType<typeof setTimeout> | null = null
+  // The child runs an older walnut-net while this version downloads.
+  let onPrevious = false
+  // The reload in flight, and the text it asks for: one at a time.
+  let catching: { want: string; run: Promise<void> } | null = null
+  let configChain: Promise<unknown> = Promise.resolve()
+  const binDir = path.join(stateDir, 'bin')
+  const fetchBin = deps.fetchBin ?? (() => fetchNetBinary({ dir: binDir, log }))
+  const previousBin = deps.previousBin ?? (() => previousNetBinary(binDir))
 
   /** The executable, downloaded the first time this host needs one. */
   async function haveBin(): Promise<string> {
@@ -232,13 +197,100 @@ export function createNetSupervisor(deps: NetDeps) {
     for (const f of w) f(ok)
   }
 
+  function readText(file: string): string | null {
+    try { return fs.readFileSync(file, 'utf8') } catch { return null }
+  }
+
+  /**
+   * No walnut-net of this version here (a new install, or a daemon that moved to a newer
+   * version): download it, then start on it. A machine that joined has a config and no
+   * one else to ask, so this never waits for the server; a failed download is tried
+   * again, at most every 30 minutes. An older download keeps running meanwhile.
+   */
+  function fetchThenSpawn(): void {
+    if (fetching || stopping || fetchTimer) return
+    fetching = true
+    haveBin().then(() => {
+      fetching = false
+      fetchFailures = 0
+      if (!child) { spawnChild(); return }
+      if (onPrevious) {
+        log('info', 'walnut-net: this version downloaded; moving to it')
+        void stopChild().then(() => spawnChild())
+      }
+    }, (err: Error) => {
+      fetching = false
+      if (!child) { lastError = err.message; settleReady(false) }
+      log('warn', 'walnut-net: download failed', { error: err.message })
+      const wait = Math.min(60_000 * 2 ** fetchFailures++, 30 * 60_000)
+      if (stopping) return
+      fetchTimer = setTimeout(() => { fetchTimer = null; if (child) fetchThenSpawn(); else spawnChild() }, wait)
+      fetchTimer.unref?.()
+    })
+  }
+
+  /** A child that never came up on a new config: the last one that did goes back in place. */
+  function rollBack(): void {
+    const good = readText(goodFile)
+    const cur = readText(configFile)
+    if (!good || !cur || good === cur || spawnedWith !== cur) return
+    writeFileAtomic(configFile, good)
+    rolledBack = true
+    lastError = `walnut-net did not start on its new config, so it runs the previous one (${lastError ?? 'it exited'})`
+    log('warn', 'walnut-net: back to the last config that worked', { error: lastError })
+  }
+
+  /**
+   * The file holds a config the running child does not: have it read it. Throws when it
+   * refuses. One reload at a time: a caller asking for the same text shares the one in
+   * flight (and its answer); another waits for it, then looks again.
+   */
+  function catchUp(): Promise<void> {
+    const want = readText(configFile)
+    if (!child || !ready || !want || want === applied) return Promise.resolve()
+    if (catching) {
+      if (catching.want === want) return catching.run
+      return catching.run.then(() => catchUp(), () => catchUp())
+    }
+    const run = reload(want).finally(() => { if (catching?.run === run) catching = null })
+    catching = { want, run }
+    return run
+  }
+
+  async function reload(want: string): Promise<void> {
+    const res = await netControlCall(control, { op: 'reload' }, 10_000)
+    if (res.ok !== true) {
+      // Going away already (a restart it asked for): the next child reads the file.
+      if (res.error === 'shutting down') { ready = false; return }
+      // Refused: the one it runs stays, on disk too, so a restart does not crash on it
+      // (unless a newer config was written meanwhile: that one is the next to try).
+      if (applied && readText(configFile) === want) writeFileAtomic(configFile, applied)
+      throw new NetConfigRefused(typeof res.error === 'string' ? res.error : 'invalid')
+    }
+    // A new key, relay or root: it exits 75 and the next one starts on the file.
+    if (res.restart === true) { ready = false; return }
+    applied = want
+    try { writeFileAtomic(goodFile, want) } catch { /* best effort */ }
+  }
+
   function spawnChild(): void {
     timer = null
     if (stopping || child || !fs.existsSync(configFile)) return
-    const bin = deps.bin()
-    if (!bin) { lastError = 'walnut-net is not installed on this host'; settleReady(false); return }
+    let bin = deps.bin()
+    onPrevious = false
+    if (!bin) {
+      fetchThenSpawn()
+      bin = previousBin()
+      if (!bin) { lastError = 'walnut-net is not installed on this host yet'; return }
+      onPrevious = true
+      log('info', 'walnut-net: running an older version while this one downloads', { bin })
+    }
+    const runsPrevious = onPrevious
     ensureState()
     ready = false
+    applied = null
+    spawnedWith = readText(configFile)
+    let cameUp = false
     childStartedAt = now()
     let proc: ChildProcess
     try {
@@ -261,10 +313,16 @@ export function createNetSupervisor(deps: NetDeps) {
           const ev = JSON.parse(line) as { event?: string; id?: string }
           if (ev.event === 'ready' && typeof ev.id === 'string') {
             ready = true
+            cameUp = true
             id = ev.id
             lastError = null
-            log('info', 'walnut-net ready', { id: ev.id, pid: proc.pid })
+            applied = spawnedWith
+            if (spawnedWith) { try { writeFileAtomic(goodFile, spawnedWith) } catch { /* best effort */ } }
+            if (!runsPrevious && bin && path.dirname(bin) === binDir) pruneNetBinaries(binDir)
+            log('info', 'walnut-net ready', { id: ev.id, pid: proc.pid, previous: runsPrevious })
             settleReady(true)
+            // The config may have changed while it was starting (it reads it once, before ready).
+            catchUp().catch((err: Error) => { lastError = err.message; log('warn', 'walnut-net did not take its new config', { error: err.message }) })
           }
         } catch { /* not ours */ }
       }
@@ -277,13 +335,17 @@ export function createNetSupervisor(deps: NetDeps) {
     proc.on('exit', (code, signal) => {
       if (child === proc) child = null
       ready = false
+      applied = null
       lastExit = { code, signal, at: now() }
-      settleReady(false)
-      if (stopping) return
+      if (stopping) { settleReady(false); return }
+      // A restart for a new config: whoever waits for it waits for the next child.
       if (code === EXIT_RESTART) { restarts++; log('info', 'walnut-net restarts for a new config'); spawnChild(); return }
+      settleReady(false)
       const tail = errTail.trim().split('\n').slice(-3).join(' | ')
       lastError = `walnut-net exited (${signal ?? code})${tail ? `: ${tail.slice(-400)}` : ''}`
       log('warn', 'walnut-net exited', { code, signal, tail: tail.slice(-400) })
+      // Only a config it cannot read goes back (an older version may not read a newer one).
+      if (!cameUp && code === EXIT_CONFIG && !runsPrevious) rollBack()
       if (now() - childStartedAt > HEALTHY_MS) failures = 0
       scheduleRestart()
     })
@@ -317,7 +379,7 @@ export function createNetSupervisor(deps: NetDeps) {
   /** This host's endpoint id, making the key on first use (no network needed). */
   async function identity(): Promise<string> {
     if (id) return id
-    const bin = await haveBin()
+    const bin = deps.bin() ?? previousBin() ?? await haveBin()
     ensureState()
     const out = await new Promise<string>((resolve, reject) => {
       const p = deps.spawn(bin, ['id', '--key', keyFile], { stdio: ['ignore', 'pipe', 'pipe'] })
@@ -349,6 +411,46 @@ export function createNetSupervisor(deps: NetDeps) {
     stopping = was
   }
 
+  async function applyConfig(req: NetConfigureRequest): Promise<{ endpointId: string; running: boolean }> {
+    if (req.enabled === false) {
+      // The config first: the server's link to this daemon may ride the child it stops.
+      try { fs.rmSync(configFile, { force: true }) } catch { /* gone */ }
+      try { fs.rmSync(goodFile, { force: true }) } catch { /* gone */ }
+      await stopChild()
+      return { endpointId: await identity(), running: false }
+    }
+    const parsed = parseNetConfig(req)
+    ensureState()
+    const me = await identity()
+    const cfg = {
+      version: NET_CONFIG_VERSION, key: keyFile, ...parsed,
+      // A member never lists this host itself.
+      members: parsed.members.filter((m) => m.id !== me),
+      daemonPortFile: deps.portFile, control,
+    }
+    const text = JSON.stringify(cfg, null, 2) + '\n'
+    if (readText(configFile) !== text) writeFileAtomic(configFile, text)
+    rolledBack = false
+    if (!child) {
+      failures = 0
+      if (timer) { clearTimeout(timer); timer = null }
+      spawnChild()
+    } else if (await waitReady(15_000)) {
+      // Running: it reads the new text now. A child still starting reads it once ready.
+      try {
+        await catchUp()
+      } catch (err) {
+        if (err instanceof NetConfigRefused) throw new Error(`walnut-net refused the config: ${err.message}`)
+        // No answer: the file holds the new text and the next configure, or the next
+        // start, applies it (applied still names the old one).
+        throw new Error(`walnut-net did not take the new config yet: ${(err as Error).message}`)
+      }
+    }
+    const ok = await waitReady(15_000)
+    if (!ok && rolledBack) throw new Error(lastError ?? 'walnut-net did not start on this config')
+    return { endpointId: me, running: ok }
+  }
+
   return {
     controlPath: control,
     /** At daemon start: run it when this host has a config. */
@@ -358,67 +460,25 @@ export function createNetSupervisor(deps: NetDeps) {
 
     async status(): Promise<NetStatus> {
       const enabled = fs.existsSync(configFile)
+      if (!id && (deps.bin() ?? previousBin()) && fs.existsSync(keyFile)) { try { await identity() } catch { /* reported below */ } }
+      // Read after the awaits above: `running` and `node` describe the same moment.
       let node: Record<string, unknown> | null = null
       if (ready) {
         try { node = await netControlCall(control, { op: 'status' }, 5_000) } catch (err) { lastError = (err as Error).message }
       }
-      if (!id && deps.bin() && fs.existsSync(keyFile)) { try { await identity() } catch { /* reported below */ } }
       return {
-        available: !!deps.bin(), enabled, running: !!child && ready, pid: child?.pid ?? null, endpointId: id, restarts,
+        available: !!(deps.bin() ?? previousBin()), enabled, running: !!child && ready, pid: child?.pid ?? null, endpointId: id, restarts,
         lastExit, lastError, node,
       }
     },
 
     identity,
 
-    /** Write the config the server sent and (re)start walnut-net; `enabled: false` stops and removes it. */
-    async configure(req: NetConfigureRequest): Promise<{ endpointId: string; running: boolean }> {
-      if (req.enabled === false) {
-        // The config first: the server's link to this daemon may ride the child it stops.
-        try { fs.rmSync(configFile, { force: true }) } catch { /* gone */ }
-        await stopChild()
-        return { endpointId: await identity(), running: false }
-      }
-      const parsed = parseNetConfig(req)
-      ensureState()
-      const me = await identity()
-      const cfg = {
-        version: NET_CONFIG_VERSION, key: keyFile, ...parsed,
-        // A member never lists this host itself.
-        members: parsed.members.filter((m) => m.id !== me),
-        daemonPortFile: deps.portFile, control,
-      }
-      const text = JSON.stringify(cfg, null, 2) + '\n'
-      let before = ''
-      try { before = fs.readFileSync(configFile, 'utf8') } catch { /* first */ }
-      const changed = before !== text
-      if (changed) writeFileAtomic(configFile, text)
-      // A child already running read its config before this write (it reads it once,
-      // before it says ready): it is told to read it again, once it is ready.
-      const running = !!child
-      if (!running) {
-        failures = 0
-        if (timer) { clearTimeout(timer); timer = null }
-        spawnChild()
-      }
-      const ok = await waitReady(15_000)
-      if (ok && running && changed) {
-        let res: Record<string, unknown>
-        try {
-          res = await netControlCall(control, { op: 'reload' }, 10_000)
-        } catch (err) {
-          log('warn', 'walnut-net reload failed', { error: (err as Error).message })
-          return { endpointId: me, running: ok }
-        }
-        if (res.ok !== true) {
-          // It refused the new config: the one it runs on stays, on disk too.
-          if (before) writeFileAtomic(configFile, before)
-          throw new Error(`walnut-net refused the config: ${typeof res.error === 'string' ? res.error : 'invalid'}`)
-        }
-        // A new key, relay or root: it exits 75 and comes back; until then it is not ready.
-        if (res.restart === true) ready = false
-      }
-      return { endpointId: me, running: ok }
+    /** Write the config the server sent and (re)start walnut-net; `enabled: false` stops and removes it. One at a time. */
+    configure(req: NetConfigureRequest): Promise<{ endpointId: string; running: boolean }> {
+      const run = configChain.then(() => applyConfig(req), () => applyConfig(req))
+      configChain = run.catch(() => {})
+      return run
     },
 
     async forward(req: { to?: unknown }): Promise<{ port: number }> {
@@ -441,6 +501,7 @@ export function createNetSupervisor(deps: NetDeps) {
     async stop(): Promise<void> {
       stopping = true
       if (timer) { clearTimeout(timer); timer = null }
+      if (fetchTimer) { clearTimeout(fetchTimer); fetchTimer = null }
       const proc = child
       if (!proc) return
       await new Promise<void>((resolve) => {
@@ -453,31 +514,3 @@ export function createNetSupervisor(deps: NetDeps) {
 }
 
 export type NetSupervisor = ReturnType<typeof createNetSupervisor>
-
-/**
- * This host's net state dir. ONE per account for the account's own daemon, whichever
- * way it runs (the login service, or the daemon a server or an SSH connect started):
- * the key is the machine's identity on the network, and a second key would cut the
- * machine off from every member that knows the first. A daemon in any other dir (a
- * test's, the companion's tunnel daemon) keeps its own beside it.
- */
-export function netStateDir(opts: { serviceStateDir?: string | null; prodDaemon: boolean; daemonDir: string; env?: NodeJS.ProcessEnv; home?: string }): string {
-  if (opts.serviceStateDir || opts.prodDaemon) {
-    const env = opts.env ?? process.env
-    const state = env.XDG_STATE_HOME && path.isAbsolute(env.XDG_STATE_HOME) ? env.XDG_STATE_HOME : path.join(opts.home ?? os.homedir(), '.local', 'state')
-    return path.join(state, 'open-walnut', 'net')
-  }
-  return path.join(opts.daemonDir, 'net')
-}
-
-/** The walnut-net executable for this install: $WALNUT_NET_BIN, else beside the daemon, else none. */
-export function resolveNetBinary(opts: { env?: NodeJS.ProcessEnv; dirs: string[] }): string | null {
-  const env = opts.env ?? process.env
-  const runs = (f: string) => { try { fs.accessSync(f, fs.constants.X_OK); return fs.statSync(f).isFile() } catch { return false } }
-  if (env.WALNUT_NET_BIN) return path.isAbsolute(env.WALNUT_NET_BIN) && runs(env.WALNUT_NET_BIN) ? env.WALNUT_NET_BIN : null
-  const name = `walnut-net-${process.platform}-${process.arch}`
-  for (const d of opts.dirs) {
-    for (const f of [path.join(d, 'walnut-net'), path.join(d, name), path.join(d, netInstallName())]) if (runs(f)) return f
-  }
-  return null
-}

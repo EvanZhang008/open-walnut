@@ -127,6 +127,7 @@ const DAEMON_SOURCE_FILES = [
   // with the connector download it imports.
   'src/providers/net-core.ts',
   'src/providers/net-binary.ts',
+  'src/providers/net-config-core.ts',
   // A task on another host calling the MCP servers and web services of this host
   // (mcp.*, http.request): bundled into the binary AND shipped as host-reach-core.cjs.
   'src/providers/host-mcp-core.ts',

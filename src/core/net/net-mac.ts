@@ -141,8 +141,25 @@ async function reconcileHosts(members: NetMember[], opts: { drop?: string } = {}
       // A row an earlier version wrote with a plain hostname gets the one that never resolves.
       if (h.hostname !== netHostname(alias)) { hosts[alias] = { ...h, hostname: netHostname(alias) }; changed = true }
     }
+    // A row an older Remote Hosts editor saved without its transport and endpoint: its
+    // never-resolving hostname still marks it, and the member of its name (the row's
+    // label, else its alias: the user may have renamed the label) takes it back.
+    const lost: Array<{ alias: string; label: string | null }> = []
+    for (const [alias, h] of Object.entries(hosts)) {
+      if (h && h.transport === undefined && h.hostname === netHostname(alias)) lost.push({ alias, label: typeof h.label === 'string' && h.label ? h.label : null })
+    }
     for (const m of members) {
       if (m.role !== 'host' || m.id === opts.drop || byEndpoint.has(m.id)) continue
+      let at = lost.findIndex((l) => l.label === m.name)
+      if (at < 0) at = lost.findIndex((l) => l.alias === m.name)
+      if (at >= 0) {
+        const back = lost[at].alias
+        hosts[back] = { ...hosts[back], transport: 'net', endpoint: m.id }
+        byEndpoint.set(m.id, back)
+        lost.splice(at, 1)
+        changed = true
+        continue
+      }
       const alias = freeAlias(m.name, hosts)
       hosts[alias] = { hostname: netHostname(alias), label: m.name, transport: 'net', endpoint: m.id, enabled: true }
       byEndpoint.set(m.id, alias)
@@ -154,8 +171,45 @@ async function reconcileHosts(members: NetMember[], opts: { drop?: string } = {}
   })
 }
 
-/** Endpoints Remove is taking out right now: never put back on the list. */
+/** Endpoints Remove is taking out right now (this process): never put back on the list. */
 const removing = new Set<string>()
+
+/**
+ * `net.removing` in config: machines Remove has started to take out. Kept across a
+ * restart, so a removal cut short is finished by the next sync instead of the machine
+ * being put back on the list.
+ */
+async function removalsPending(): Promise<string[]> {
+  const { getConfig } = await import('../config-manager.js')
+  const r = ((await getConfig()) as { net?: { removing?: unknown } }).net?.removing
+  return Array.isArray(r) ? r.filter((x): x is string => typeof x === 'string') : []
+}
+
+async function markRemoving(endpoint: string, on: boolean): Promise<void> {
+  const { modifyConfigDoc } = await import('../config-store.js')
+  await modifyConfigDoc((doc) => {
+    const net = doc.net && typeof doc.net === 'object' && !Array.isArray(doc.net) ? { ...(doc.net as Record<string, unknown>) } : {}
+    const was = Array.isArray(net.removing) ? (net.removing as unknown[]).filter((x): x is string => typeof x === 'string') : []
+    const next = on ? [...new Set([...was, endpoint])] : was.filter((x) => x !== endpoint)
+    if (next.length === was.length && next.every((x, i) => x === was[i])) return { write: false, result: undefined }
+    if (next.length) net.removing = next
+    else delete net.removing
+    doc.net = net
+    return { write: true, result: undefined }
+  })
+}
+
+/** Finish removals a restart cut short: the companion forgets the machine, its row goes. */
+async function finishRemovals(): Promise<void> {
+  for (const endpoint of await removalsPending()) {
+    if (removing.has(endpoint)) continue
+    const r = await companionCall(`/net/members/${endpoint}`, { method: 'DELETE' })
+    if (r.status !== 200 && r.status !== 404) continue
+    await reconcileHosts([], { drop: endpoint })
+    await markRemoving(endpoint, false)
+    log.session.info('net: finished a removal cut short', { endpoint })
+  }
+}
 
 /**
  * Machines this Mac has that the companion's list lacks (a companion rebuilt without its
@@ -164,7 +218,8 @@ const removing = new Set<string>()
 async function restoreMissing(members: NetMember[]): Promise<boolean> {
   const { getConfig } = await import('../config-manager.js')
   const listed = new Set(members.map((m) => m.id))
-  const missing = netRows(((await getConfig()).hosts ?? {}) as HostRows).filter(([, h]) => !listed.has(h.endpoint) && !removing.has(h.endpoint))
+  const pending = new Set(await removalsPending())
+  const missing = netRows(((await getConfig()).hosts ?? {}) as HostRows).filter(([, h]) => !listed.has(h.endpoint) && !removing.has(h.endpoint) && !pending.has(h.endpoint))
   let any = false
   for (const [alias, h] of missing) {
     const name = typeof h.label === 'string' && h.label ? h.label : alias
@@ -179,22 +234,30 @@ async function restoreMissing(members: NetMember[]): Promise<boolean> {
   return any
 }
 
-/** Hand one machine the current list, when it is connected (nothing is dialled for this). */
-async function pushToHost(name: string, s: NetState): Promise<void> {
+/**
+ * Hand one machine the current list, when it is connected (nothing is dialled for this).
+ * Never one Remove is taking out: its `enabled: false` would be undone. The check sits
+ * right before the send, so a push that passed it went out before Remove's message.
+ */
+async function pushToHost(name: string, endpoint: string, s: NetState): Promise<void> {
   const { peekDaemonConnection } = await import('../../providers/daemon-connection.js')
   const conn = peekDaemonConnection(name)
-  if (!conn?.connected || !conn.hasCapability('net-v1')) return
+  if (!conn?.connected || !conn.hasCapability('net-v1') || removing.has(endpoint)) return
   try { await conn.send('net.configure', hostConfig(s), 20_000) } catch (err) { log.session.warn('net: could not hand a machine its member list', { host: name, error: (err as Error).message }) }
 }
 
-async function netHostNames(): Promise<string[]> {
+/** The machines to hand the list to: every net host row but those a Remove is taking out. */
+async function pushTargets(): Promise<Array<[string, string]>> {
   const { getConfig } = await import('../config-manager.js')
-  return Object.entries((await getConfig()).hosts ?? {}).filter(([, h]) => h.transport === 'net').map(([name]) => name)
+  const pending = new Set(await removalsPending())
+  return Object.entries((await getConfig()).hosts ?? {})
+    .filter(([, h]) => h.transport === 'net' && typeof h.endpoint === 'string' && !pending.has(h.endpoint))
+    .map(([name, h]) => [name, h.endpoint as string])
 }
 
 /** Every connected machine at once; a slow one holds up nothing (an invite never waits on it). */
 async function pushToHosts(s: NetState): Promise<void> {
-  await Promise.allSettled((await netHostNames()).map((name) => pushToHost(name, s)))
+  await Promise.allSettled((await pushTargets()).map(([name, endpoint]) => pushToHost(name, endpoint, s)))
 }
 
 /**
@@ -221,6 +284,7 @@ function runSync(opts: { enable?: boolean }): Promise<NetState> {
       const ident = await local.send('net.identity', {}, 20_000) as { ok?: boolean; endpointId?: string; error?: string }
       if (!ident.ok || !ident.endpointId) throw new NetError(500, 'no_identity', `This Mac's network key: ${ident.error ?? 'none'}`)
       state.macId = ident.endpointId
+      await finishRemovals()
       let info = await companionCall('/net/info', { method: 'GET' })
       if (info.status !== 200) { const e = errorOf(info.body); throw new NetError(info.status, e.code, e.message) }
       const listed = (info.body.members as NetMember[] | undefined) ?? []
@@ -228,6 +292,7 @@ function runSync(opts: { enable?: boolean }): Promise<NetState> {
         const put = await companionCall('/net/self', { method: 'PUT', body: { endpointId: state.macId, name: os.hostname().split('.')[0] || 'Mac' } })
         if (put.status !== 200) { const e = errorOf(put.body); throw new NetError(put.status, e.code, e.message) }
         info = await companionCall('/net/info', { method: 'GET' })
+        if (info.status !== 200) { const e = errorOf(info.body); throw new NetError(info.status, e.code, e.message) }
       }
       if (await restoreMissing((info.body.members as NetMember[] | undefined) ?? [])) info = await companionCall('/net/info', { method: 'GET' })
       if (info.status !== 200) { const e = errorOf(info.body); throw new NetError(info.status, e.code, e.message) }
@@ -293,7 +358,7 @@ export async function startNet(): Promise<void> {
   const { addOnDaemonHostConnected } = await import('../../providers/daemon-connection.js')
   offConnected = addOnDaemonHostConnected((host) => {
     if (!state.syncedAt) return
-    void netHostNames().then((names) => { if (names.includes(host)) void pushToHost(host, state) }).catch(() => {})
+    void pushTargets().then((rows) => { const row = rows.find(([name]) => name === host); if (row) void pushToHost(host, row[1], state) }).catch(() => {})
   })
   void syncNet()
 }
@@ -375,30 +440,48 @@ export async function removeMachine(host: string): Promise<{ removed: string }> 
   const { getConfig } = await import('../config-manager.js')
   const def = (await getConfig()).hosts?.[host] as { transport?: string; endpoint?: string } | undefined
   if (!def || def.transport !== 'net' || !def.endpoint) throw new NetError(404, 'not_net_host', `${host} is not a machine on the host network`)
-  // Told first, while this Mac still reaches it: its walnut-net stops, which also ends the
-  // link this very command rides, so the reply may never come. Away, it is not told; it
-  // can reach nobody anyway once the list below drops it (the Mac stops dialling it, the
-  // relay refuses it).
+  const endpoint = def.endpoint
+  removing.add(endpoint)
   try {
-    const { peekDaemonConnection } = await import('../../providers/daemon-connection.js')
-    const conn = peekDaemonConnection(host)
-    if (conn?.connected && conn.hasCapability('net-v1')) {
-      const told = await conn.send('net.configure', { enabled: false }, 10_000).catch((err: Error) => ({ ok: false, error: err.message }))
-      log.session.info('net: told a machine it is out', { host, ok: (told as { ok?: boolean }).ok, error: (told as { error?: string }).error })
-    } else {
-      log.session.info('net: a machine is taken out while away; it is not told', { host })
+    // Kept in config first, so a restart halfway finishes the removal, never undoes it.
+    await markRemoving(endpoint, true)
+    // The companion forgets it first: if that fails, nothing else has changed, and the
+    // machine keeps running (a machine told first would be cut off with its row still here).
+    let res: Awaited<ReturnType<typeof companionCall>>
+    try {
+      res = await companionCall(`/net/members/${endpoint}`, { method: 'DELETE' })
+    } catch (err) {
+      // Not reached (or no answer): Remove failed, so nothing changes. Had the companion
+      // dropped it after all, the next sync puts the machine back on its list.
+      await markRemoving(endpoint, false)
+      throw err
     }
-  } catch (err) {
-    log.session.warn('net: could not tell a machine it is out', { host, error: (err as Error).message })
-  }
-  removing.add(def.endpoint)
-  try {
-    const { status, body } = await companionCall(`/net/members/${def.endpoint}`, { method: 'DELETE' })
-    if (status !== 200 && status !== 404) { const e = errorOf(body); throw new NetError(status, e.code, e.message) }
+    if (res.status !== 200 && res.status !== 404) {
+      await markRemoving(endpoint, false)
+      const e = errorOf(res.body)
+      throw new NetError(res.status, e.code, e.message)
+    }
+    // Then the machine, while this Mac still reaches it (its own walnut-net still lists it):
+    // it stops its walnut-net, which ends the link this very command rides, so the reply
+    // may never come. Away, it is not told; it reaches nobody anyway (the relay refuses it,
+    // and this Mac stops dialling it below).
+    try {
+      const { peekDaemonConnection } = await import('../../providers/daemon-connection.js')
+      const conn = peekDaemonConnection(host)
+      if (conn?.connected && conn.hasCapability('net-v1')) {
+        const told = await conn.send('net.configure', { enabled: false }, 10_000).catch((err: Error) => ({ ok: false, error: err.message }))
+        log.session.info('net: told a machine it is out', { host, ok: (told as { ok?: boolean }).ok, error: (told as { error?: string }).error })
+      } else {
+        log.session.info('net: a machine is taken out while away; it is not told', { host })
+      }
+    } catch (err) {
+      log.session.warn('net: could not tell a machine it is out', { host, error: (err as Error).message })
+    }
     if (syncing) await syncing.catch(() => {})
-    await reconcileHosts([], { drop: def.endpoint })
+    await reconcileHosts([], { drop: endpoint })
+    await markRemoving(endpoint, false)
   } finally {
-    removing.delete(def.endpoint)
+    removing.delete(endpoint)
   }
   await syncNet()
   return { removed: host }

@@ -63,7 +63,9 @@ impl Config {
             bail!("config version {} is not {CONFIG_VERSION}: this walnut-net is older or newer than the daemon that wrote it", cfg.version);
         }
         cfg.relay_urls()?;
-        cfg.member_map()?;
+        // Checked here, not first in Node::bind: a reload that would rebuild the endpoint on
+        // roots it cannot read is refused while the running one keeps going.
+        cfg.root_certs()?;
         Ok(cfg)
     }
 
@@ -80,16 +82,26 @@ impl Config {
             .collect()
     }
 
-    pub fn member_map(&self) -> Result<HashMap<EndpointId, Member>> {
+    /// The members this build can use. One it cannot (an id that is not a key, an address
+    /// that is not a socket address) is left out and logged, never the whole list: a bad
+    /// entry from one join must not cut every other machine off.
+    pub fn member_map(&self) -> HashMap<EndpointId, Member> {
         let mut out = HashMap::new();
         for m in &self.members {
-            let id: EndpointId = m.id.parse().map_err(|e| anyhow!("member {:?}: bad id {}: {e}", m.name, m.id))?;
-            for a in &m.addrs {
-                a.parse::<std::net::SocketAddr>().with_context(|| format!("member {:?}: address {a}", m.name))?;
+            let id: EndpointId = match m.id.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    crate::log::warn("member left out: its id is not a key", serde_json::json!({"name": m.name, "id": m.id, "error": e.to_string()}));
+                    continue;
+                }
+            };
+            if let Some(a) = m.addrs.iter().find(|a| a.parse::<std::net::SocketAddr>().is_err()) {
+                crate::log::warn("member left out: an address is not ip:port", serde_json::json!({"name": m.name, "address": a}));
+                continue;
             }
             out.insert(id, m.clone());
         }
-        Ok(out)
+        out
     }
 
     pub fn root_certs(&self) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
@@ -182,18 +194,41 @@ mod tests {
     }
 
     #[test]
-    fn config_rejects_bad_member_ids_and_other_versions() {
+    fn a_bad_member_is_left_out_not_the_list_and_other_versions_are_refused() {
         let d = dir();
         let p = d.join("c.json");
         let base = |members: &str, v: u32| format!(r#"{{"version":{v},"key":"k","daemonPortFile":"p","control":"c","members":{members}}}"#);
-        std::fs::write(&p, base(r#"[{"id":"nothex","accept":true}]"#, 1)).unwrap();
-        assert!(Config::read(&p).is_err());
         std::fs::write(&p, base("[]", 2)).unwrap();
         assert!(Config::read(&p).is_err());
         let id = SecretKey::from_bytes(&[3u8; 32]).public().to_string();
-        std::fs::write(&p, base(&format!(r#"[{{"id":"{id}","name":"mac","accept":true}}]"#), 1)).unwrap();
+        // 64 hex characters that are not a point on the curve: the shape a server checks, not a key.
+        let not_a_key = (0u8..=255)
+            .map(|b| hex_of(&[b; 32]))
+            .find(|h| h.parse::<EndpointId>().is_err())
+            .expect("some 32-byte pattern is not a key");
+        let members = format!(
+            r#"[{{"id":"nothex","accept":true}},{{"id":"{not_a_key}","name":"bad"}},{{"id":"{id}","name":"mac","accept":true}},{{"id":"{id}","name":"addr","addrs":["nope"]}}]"#
+        );
+        std::fs::write(&p, base(&members, 1)).unwrap();
         let c = Config::read(&p).unwrap();
-        assert!(c.member_map().unwrap().values().next().unwrap().accept);
+        let m = c.member_map();
+        assert_eq!(m.len(), 1);
+        assert_eq!(m.values().next().unwrap().name, "mac");
+        assert!(m.values().next().unwrap().accept);
         std::fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn unreadable_relay_roots_are_refused_at_read() {
+        let d = dir();
+        let p = d.join("c.json");
+        let bad = "-----BEGIN CERTIFICATE-----\\nnot base64 !!\\n-----END CERTIFICATE-----\\n";
+        std::fs::write(&p, format!(r#"{{"version":1,"key":"k","daemonPortFile":"p","control":"c","relayRoots":["{bad}"]}}"#)).unwrap();
+        assert!(Config::read(&p).is_err());
+        std::fs::remove_dir_all(d).unwrap();
+    }
+
+    fn hex_of(b: &[u8]) -> String {
+        b.iter().map(|x| format!("{x:02x}")).collect()
     }
 }

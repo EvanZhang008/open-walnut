@@ -14,7 +14,7 @@ secrets and the host's MCP servers all work. Hosts reached over SSH keep working
 | Part | Where | What it does |
 |---|---|---|
 | walnut-net | `native/walnut-net` (Rust, iroh 1.4.1) | Holds the machine's key (its network id), lets in only listed members, carries each daemon connection |
-| Supervisor | `src/providers/net-core.ts` (both daemon twins, capability `net-v1`) | Runs walnut-net while `<net state>/config.json` exists, restarts it, downloads it when the install has none (`net-binary.ts`) |
+| Supervisor | `src/providers/net-core.ts` (both daemon twins, capability `net-v1`) | Runs walnut-net while `<net state>/config.json` exists, restarts it, downloads it when the install has none (`net-binary.ts`), and keeps it on a config it can run (below) |
 | Member list and invites | `src/core/net/net-store.ts`, `src/web/routes/net-v1.ts` (cloud companion) | Keeps the user's machines, makes and checks invites, answers the relay's access question |
 | The Mac | `src/core/net/net-mac.ts`, `src/web/routes/hosts-net.ts` | Reads the list, makes each machine a `transport: net` host, hands each daemon its config |
 | The link | `src/core/hosts/net-link.ts`, `DaemonConnection.dialNetHost` | Asks the Mac's walnut-net for a loopback port that reaches the machine's daemon |
@@ -50,27 +50,56 @@ secrets and the host's MCP servers all work. Hosts reached over SSH keep working
   it relays nothing and accepts no stream. It has its own certificate, made on the
   companion; machines trust that certificate alone (the pin rides their config).
 
+## A config walnut-net cannot run
+
+The supervisor knows which config the running walnut-net took. A new one goes in by a
+reload, one at a time; a change of relay or key restarts walnut-net (exit 75), and the
+configure answers once the new process is up.
+
+- A reload walnut-net refuses leaves the config it runs in place, on disk too, and the
+  configure says why.
+- A config it cannot read at start (exit 78) is replaced by the last one it came up on or
+  took in a reload (`config.last-good.json`), and the configure says so. A start that
+  fails for another reason (an unreadable key, a port) keeps the new config and retries.
+- A member whose id is not a key, or whose address is bad, is left out of the list with a
+  warning in its log; the other members stay.
+- A daemon that moved to a new walnut-net version runs the newest older download while it
+  downloads the new one, then moves to it. It keeps that version and one older one.
+
 ## When the companion is down or loses its list
 
 The relay and the member list live on the companion. While it is down, no machine joins,
 a link already up directly stays up, and a new link waits for the relay. A companion that
 comes back without its list (a rebuilt box) gets every machine back from the Mac, which
 keeps each one as a host row; a list file it cannot read is an error, never an empty list,
-so the Mac never takes that for every machine removed.
+so the Mac never takes that for every machine removed. An entry in the list that this
+version does not know (a newer version wrote it) is kept as it is by every write.
 
 ## Removing a machine
 
-Settings > the machine > Remove. The Mac tells the machine to stop its walnut-net (the
-machine keeps its key), the companion drops it from the list (so the relay refuses it),
-and the Mac drops its host row. A machine that is away when it is removed is not told,
-but it can no longer reach anything.
+Settings > the machine > Remove. The Mac notes the removal in `net.removing` (a restart
+halfway finishes it), the companion drops the machine from the list (so the relay refuses
+it), the Mac tells the machine to stop its walnut-net (it keeps its key), and drops its
+host row. No sync hands the machine its list again while it is being removed. When the
+companion cannot be reached, nothing changes and Remove says why. A machine that is away
+when it is removed is not told, but it can no longer reach anything.
+
+## Limits
+
+- A joined machine learns the Mac's id and the relay from the Mac, over the link itself.
+  A new Mac (a new key) or a companion at a new address cannot reach the machines that
+  joined before: run a new invite on each.
+- An older Walnut reads a machine's row as an SSH host whose name never resolves (it fails
+  at once). Its Remote Hosts editor may save the row without `transport` and `endpoint`;
+  this version takes such a row back by its hostname and the machine's name (the row's
+  label, else its name).
 
 ## Where things live
 
 | What | Path |
 |---|---|
-| A machine's key, config and log | `${XDG_STATE_HOME:-~/.local/state}/open-walnut/net/` for the user's own daemon, `<service state>/net` for the login service, else `<daemon dir>/net` |
-| The downloaded walnut-net | `<net state>/bin/walnut-net-<version>` |
+| A machine's key, config and log | `~/.local/state/open-walnut/net/` for the user's own daemon (the login service or not; never moved by `XDG_STATE_HOME`, so one machine has one key), else `<daemon dir>/net` |
+| The downloaded walnut-net | `<net state>/bin/walnut-net-<version>` (this version and one older) |
 | The member list | the companion's `${XDG_STATE_HOME}/open-walnut/net-members.json` (outside its synced data) |
 | The Mac's setting | `net.enabled` in `config.yaml` |
 
