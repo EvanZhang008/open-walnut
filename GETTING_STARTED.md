@@ -229,62 +229,94 @@ providers:
 
 ### Path D: Models on your own machine (Ollama, LM Studio, vLLM)
 
-Walnut can run with no cloud model and no Claude Code. Two settings decide it.
+Walnut can run with no cloud model and no Claude Code. You need three things: a model that can code, Walnut's own calls pointed at it, and a coding engine that talks to it.
 
-**Pick a model that can code.** Sessions edit files and run commands through tool calls, and a 7B or 8B model is too small for that: in our test `qwen3:8b` failed an edit and then reported success. A 30B-class coding model works: `qwen3-coder:30b` finished 2 of 2 coding tasks with passing tests (1.5 to 3 minutes each on an Apple M4 Pro with 48 GB). It needs about 20 GB of free memory.
+**1. Pick a model that can code.** Sessions edit files and run commands through tool calls. Each pair below passed our test (fix a bug in a small Python project, run its tests, report back, write the task note):
+
+| Model | Download | Free memory | Engines it passed on |
+|---|---|---|---|
+| `gpt-oss:20b` | 13 GB | about 16 GB | OpenCode 1 and 2, Goose, custom (Qwen Code) |
+| `qwen3-coder:30b` | 19 GB | about 20 GB | OpenCode 1 and 2, Goose, Codex, custom (Qwen Code) |
+
+Codex needs `qwen3-coder:30b`: with `gpt-oss:20b` its commands come back as tool calls Ollama cannot read, and it gives up. A 7B or 8B model is too small on every engine: `qwen3:8b` broke an edit and then reported success. Start Ollama with room for Walnut's instructions and tools, then pull the model:
 
 ```bash
-ollama pull qwen3-coder:30b
+OLLAMA_CONTEXT_LENGTH=32768 ollama serve    # the Ollama app has the same setting (Context length)
+ollama pull gpt-oss:20b
 ```
 
-1. **Walnut's own model calls** (titles, summaries, routine watchers, AI task search) go to the main provider. For Ollama, in `~/.open-walnut/config.yaml`:
+**2. Walnut's own model calls** (titles, summaries, routine watchers, AI task search) go to the main provider. In `~/.open-walnut/config.yaml`:
 
-   ```yaml
-   agent:
-     main_provider: ollama
-     main_model: qwen3-coder:30b     # any model you pulled with `ollama pull`
-     # fast_model: qwen3:8b          # optional: a smaller model you also pulled, for quick background calls
-   providers:
-     ollama:
-       api: ollama
-       base_url: http://localhost:11434   # the default; set it for another machine
-   ```
+```yaml
+agent:
+  main_provider: ollama
+  main_model: gpt-oss:20b     # a model you pulled
+providers:
+  ollama:
+    api: ollama
+    base_url: http://localhost:11434   # the default; set it for another machine
+```
 
-   With no `fast_model`, quick background calls use `main_model`. A `fast_model` the server does not have falls back to `main_model` too, and the server log says so once, with the `ollama pull` line that adds it.
+Leave `fast_model` out: quick background calls then use `main_model`. Do not set it to a smaller model to save time; an 8B model gets those calls wrong too. A `fast_model` the server does not have falls back to `main_model`, and the server log says so once.
 
-   An OpenAI-compatible server (LM Studio, vLLM, llama.cpp) works the same way as `api: openai-chat` with its `base_url` (for example `http://localhost:1234/v1`) and no key.
+An OpenAI-compatible server (LM Studio, vLLM, llama.cpp) works the same way as `api: openai-chat` with its `base_url` (for example `http://localhost:1234/v1`) and no key.
 
-2. **Coding sessions, Main and leads** run on the default engine. Pick one that talks to your model server in Settings › Engines, or in `config.yaml`:
+**3. A coding engine.** Coding sessions, Main and leads run on the default engine. Install one, point it at your model, check it once on its own, then make it the default:
 
-   ```yaml
-   defaults:
-     engine: opencode   # or goose, codex, or custom (engines.custom.adapter_cmd)
-   ```
+```yaml
+defaults:
+  engine: opencode   # or goose, codex, custom
+```
 
-   Install OpenCode first. `curl -fsSL https://opencode.ai/install | bash` (or `npm install -g opencode-ai`) installs OpenCode 1; `curl -fsSL https://opencode.ai/v2/install | bash` (or `brew install opencode`) installs OpenCode 2. Walnut is tested with OpenCode 1.4.0, 1.19.5, 2.2.0 and 2.2.3, and the config below works for both. Check the version with `opencode --version`.
+**OpenCode.** `curl -fsSL https://opencode.ai/install | bash` (or `npm install -g opencode-ai`) installs OpenCode 1; `curl -fsSL https://opencode.ai/v2/install | bash` (or `brew install opencode`) installs OpenCode 2. Put this in `~/.config/opencode/opencode.json` (the model id after `ollama/` is the name `ollama list` shows), then check it with `opencode run "say hi"`:
 
-   The engine's own config names the model. For OpenCode, put this in `~/.config/opencode/opencode.json` (the model id after `ollama/` is the name `ollama list` shows):
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama",
+      "options": { "baseURL": "http://localhost:11434/v1" },
+      "models": { "gpt-oss:20b": { "name": "gpt-oss 20B" } }
+    }
+  },
+  "model": "ollama/gpt-oss:20b"
+}
+```
 
-   ```json
-   {
-     "$schema": "https://opencode.ai/config.json",
-     "provider": {
-       "ollama": {
-         "npm": "@ai-sdk/openai-compatible",
-         "name": "Ollama",
-         "options": { "baseURL": "http://localhost:11434/v1" },
-         "models": {
-           "qwen3-coder:30b": { "name": "Qwen3 Coder 30B" }
-         }
-       }
-     },
-     "model": "ollama/qwen3-coder:30b"
-   }
-   ```
+**Goose.** `curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash` (or `brew install block-goose-cli`). Put this in `~/.config/goose/config.yaml`, then check it with `goose run -t "say hi"`:
 
-   Check it once with `opencode run "say hi"` before you start Walnut. A session sends the model a long system prompt and tool list, so give it room (on every engine but Codex, Walnut lists only its most used tools, plus `tool_help` and `tool_call`, which reach every other one; `session.acp_walnut_tools: all` lists them all): if replies stop short or ignore the tools, start Ollama with a larger context (`OLLAMA_CONTEXT_LENGTH=32768 ollama serve`). Walnut gives every engine its session instructions (role, team rules, task directory): Codex as developer instructions, the others on the first message of each conversation.
+```yaml
+GOOSE_PROVIDER: ollama
+GOOSE_MODEL: gpt-oss:20b
+OLLAMA_HOST: localhost
+```
 
-With both set, nothing asks you to install Claude Code: not the installer, not the home page, not the server log. If your model server stops answering, the home page says so instead and clears by itself once the server is back. Search and voice input already run on your machine by default.
+**Codex.** `npm install -g @openai/codex` (or `brew install --cask codex`). Put this in `~/.codex/config.toml`, then check it with `codex exec --skip-git-repo-check "say hi"`; no OpenAI sign-in is needed:
+
+```toml
+model = "qwen3-coder:30b"
+model_provider = "ollama"
+```
+
+**Any other ACP agent** runs as the `custom` engine: give Walnut the command that starts it in ACP mode. For example [Qwen Code](https://github.com/QwenLM/qwen-code) (`npm install -g @qwen-code/qwen-code`):
+
+```yaml
+defaults:
+  engine: custom
+engines:
+  custom:
+    adapter_cmd: [qwen, --acp, --auth-type, openai, --openai-base-url, "http://localhost:11434/v1", --openai-api-key, ollama, -m, gpt-oss:20b]
+```
+
+Qwen Code asks before it runs a command; answer in the session panel, or add `--yolo` to let it run them.
+
+Tested with OpenCode 1.19.5 and 2.2.5, Goose 1.57.0, Codex 0.166.0 and Qwen Code 0.26.5 on Ollama 0.40.13. Check an engine's version with its `--version`.
+
+Walnut gives every engine its session instructions (role, team rules, task directory): Codex as developer instructions, the others on the first message of each conversation. On every engine but Codex it lists only its most used tools, plus `tool_help` and `tool_call`, which reach every other one (`session.acp_walnut_tools: all` lists them all).
+
+With these set, nothing asks you to install Claude Code: not the installer, not the home page, not the server log. If your model server stops answering, the home page says so instead and clears by itself once the server is back. Search and voice input already run on your machine by default.
 
 ### Verify Your Setup
 

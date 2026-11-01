@@ -61,7 +61,7 @@ const SESSION_ITEMS: readonly EngineSettingItem[] = [
   {
     key: 'model_provider', label: 'Model provider', type: 'text', default: '', placeholder: 'openai',
     file: CONFIG, path: 'model_provider', scope: 'sessions',
-    help: 'Key of a [model_providers.*] table in config.toml to route requests through. Empty uses the built-in OpenAI provider.',
+    help: 'Key of a [model_providers.*] table in config.toml to route requests through. Empty uses the built-in OpenAI provider; ollama and lmstudio are built in too, for a model on your own machine.',
   },
 ]
 
