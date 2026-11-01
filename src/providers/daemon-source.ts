@@ -1379,6 +1379,15 @@ const hostFix = (__CREATE_HOST_FIX__)({
 // ephemeral demo — which decides CLI-reap-on-exit. Mirror daemon-standalone.ts.
 const PROD_DAEMON_DIR = '/tmp/open-walnut';
 const DAEMON_DIR = process.env.WALNUT_DAEMON_DIR || PROD_DAEMON_DIR;
+// Where Walnut saves a session's pictures on this host (twin of daemon-standalone.ts
+// PICTURE_ROOTS): here, not in the send section, which tests run on its own.
+const PICTURE_ROOTS = (function () {
+  const dirs = [DAEMON_DIR];
+  try { const real = fs.realpathSync(DAEMON_DIR); if (real !== DAEMON_DIR) dirs.push(real); } catch (e) { /* not made yet */ }
+  const out = [];
+  for (const d of dirs) { out.push(d + '/images/'); out.push(d + '-images/'); }
+  return out;
+})();
 // Managed service (--service): state that must survive a reboot lives in
 // WALNUT_DAEMON_STATE_DIR, never in the /tmp runtime dir. Mirror daemon-standalone.ts.
 const DAEMON_STATE_DIR = process.env.WALNUT_DAEMON_STATE_DIR;
@@ -9522,15 +9531,8 @@ async function sendSessionMessage(ws, id, cmd) {
 // One instruction notice into one CLI process once (daemon-core.ts createNoticeOnce, injected as text).
 const noticeOnce = (__CREATE_NOTICE_ONCE__)();
 // A user line's pictures as image blocks (user-line-images-core.ts, injected as text),
-// read only from Walnut's picture folders on this host (twin of daemon-standalone.ts).
+// read only from Walnut's picture folders on this host (PICTURE_ROOTS, set beside DAEMON_DIR).
 const userLineContent = (__USER_LINE_CONTENT__);
-const PICTURE_ROOTS = (function () {
-  const dirs = [DAEMON_DIR];
-  try { const real = fs.realpathSync(DAEMON_DIR); if (real !== DAEMON_DIR) dirs.push(real); } catch (e) { /* not made yet */ }
-  const out = [];
-  for (const d of dirs) { out.push(d + '/images/'); out.push(d + '-images/'); }
-  return out;
-})();
 async function handleSendCommand(sid, rawMessage, uuid, inputMarkers, opts) {
   if (!sid || !rawMessage) return { error: 'send: missing sid or message' };
   const markers = normalizeMarkers(inputMarkers);
