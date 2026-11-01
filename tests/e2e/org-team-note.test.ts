@@ -242,6 +242,42 @@ describe('what reaches the lead without a message from anyone', () => {
     _setLeadWaitClocksForTesting()
   })
 
+  it('a wait the worker told the lead in its own message is no news; one after the lead wrote back is', async () => {
+    _setLeadWaitClocksForTesting(10 * 60_000, 0)
+    const gate = (await addTask({ title: 'Paint the gate', project: 'Garden', parent_task_id: leadId })).task.id
+    const gateSid = '99999999-aaaa-4bbb-8ccc-dddddddddddd'
+    await createSessionRecord(gateSid, gate, 'Garden', WALNUT_HOME)
+    // The worker sends its lead the land line, then its turn ends waiting on the lead.
+    const up = `<walnut-message kind="peer-note" from="Paint the gate [99999999]" from-task="${gate}" title="Land the gate fix">\nwalnut-cloud land ${gate}\n</walnut-message>`
+    await sendMessageToSession(LEAD_SID, 'walnut-cloud land', { source: 'peer', enqueueMessage: up })
+    const waitOnLead = async (atMs: number) => {
+      // Its turn is over: no process runs (a queued send may have tried to start one).
+      await updateSessionRecord(gateSid, { process_status: 'stopped', last_status_change: new Date().toISOString() })
+      await updateTask(gate, { phase: 'WAITING' }, { source: 'api' })
+      await updateTaskRaw(gate, { status_report: { state: 'done', now: 'Painted; land it please.', at: new Date(atMs).toISOString() } }, { emitEvent: true, source: 'status-report' })
+      await until('the worker waits on its lead', async () => (await getTask(gate)).user_status?.kind === 'lead')
+    }
+    await waitOnLead(Date.now() + 1_000)
+    _resetTeamNoteClaimsForTesting()
+    expect(await tellLead(leadId)).toBe(false)
+    const quiet = await pendingOrgDigest(LEAD_SID)
+    expect(quiet?.text ?? '').not.toContain('"Paint the gate"')
+    await quiet?.markTold()
+    // The lead answers it; the worker's next wait, with nothing new from it, is news and wakes the lead.
+    await updateTask(gate, { phase: 'IN_PROGRESS' }, { source: 'api' })
+    const down = `<walnut-message kind="peer-note" from="Garden lead [33333333]" from-task="${leadId}" title="Landed">\nLanded; check prod.\n</walnut-message>`
+    await sendMessageToSession(gateSid, 'Landed; check prod.', { source: 'peer', enqueueMessage: down })
+    await new Promise((r) => setTimeout(r, 20))
+    await waitOnLead(Date.now() + 2_000)
+    _resetTeamNoteClaimsForTesting()
+    expect(await tellLead(leadId)).toBe(true)
+    const row = (await getQueue(LEAD_SID)).find((m) => m.message.includes('Waiting on you:') && m.message.includes('"Paint the gate"'))
+    expect(row).toBeDefined()
+    await completeTask(gate)
+    for (const sid of [LEAD_SID, gateSid]) for (const m of await getQueue(sid)) await deleteMessage(sid, m.id)
+    _setLeadWaitClocksForTesting()
+  })
+
   it('an ask into a team task from outside the team is the lead\'s to know; the team\'s own is not', async () => {
     const sid = '55555555-6666-4777-8888-999999999999'
     const roses = (await addTask({ title: 'Water the roses', project: 'Garden' })).task.id

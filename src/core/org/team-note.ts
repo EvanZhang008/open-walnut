@@ -25,7 +25,9 @@
  * longer news: the lead reads those on the Org page or with task_get when it needs them. And a
  * later note goes out at most once per TEAM_NOTE_GAP_MS, except when it carries something the lead
  * must act on now (a task waiting on it, or stuck): that one goes at once and takes everything else
- * held with it. A task the machine stopped waits for the hour too: Walnut resumes it by itself, and
+ * held with it; a wait the worker told the lead in its own message is no news (lead-traffic.ts:
+ * 2026-11-01, 23 notes in 4 hours, each for a worker that had just sent its land request). A task the
+ * machine stopped waits for the hour too: Walnut resumes it by itself, and
  * the lead's part is only a stop that lasts, which the next note still lists (2026-10-31, the first
  * six hours after the change: 13 of 24 notes went out at once for stops Walnut was resuming after
  * deploys, three of them in one minute).
@@ -206,6 +208,9 @@ export interface TeamNoteContext {
   led?: readonly string[];
   /** Asks into its teams from outside them, not told yet. */
   asks?: readonly TeamAsk[];
+  /** The task told the lead itself, in a message newer than the lead's last to it (lead-traffic.ts):
+   *  its wait on the lead is no news. */
+  toldLead?: (taskId: string) => boolean;
 }
 
 /** The task's own status says it waits on its leader, and its leader is this lead. */
@@ -329,8 +334,9 @@ export function planTeamNote(
     const t = byId.get(item.taskId)!;
     // What needs the user is said first, a new task's ask included.
     if (item.state === 'needs') { if (was !== is) needs.push(item); }
-    // Then what now waits on this lead: its to act on. A wait that ended is no news by itself.
-    else if (isWaiting !== undefined && isWaiting !== wasWaiting) waits.push(waitOf(item));
+    // Then what now waits on this lead: its to act on, unless the worker said so to the lead itself.
+    // A wait that ended is no news by itself.
+    else if (isWaiting !== undefined && isWaiting !== wasWaiting) { if (!ctx.toldLead?.(item.taskId)) waits.push(waitOf(item)); }
     // Then what the machine stopped: Walnut's to resume, the lead's when Walnut cannot.
     else if (isMachineStop(t)) { if (was !== is) machine.push(waitOf(item)); }
     // Then a task newly stuck: it meant to carry on and nothing will wake it. Progress is no news,
@@ -525,7 +531,10 @@ export async function pendingTeamNote(lead: Task, sessionId: string, nowMs = Dat
       ? tasks.filter((t) => t.phase === 'COMPLETE' && !t.plugin_only && prev.seen[t.id] !== undefined && ledKeys.has(projectKey(t.project)))
       : [];
     const now = new Date(nowMs).toISOString();
-    const plan = planTeamNote(prev, open, completed, now, { leadId: lead.id, led: led.map((p) => p.project || 'Inbox'), asks });
+    const { workerToldLead } = await import('./lead-traffic.js');
+    const plan = planTeamNote(prev, open, completed, now, {
+      leadId: lead.id, led: led.map((p) => p.project || 'Inbox'), asks, toldLead: (id) => workerToldLead(id, lead.id),
+    });
     // Held: the next message after the gap carries it, with whatever moved meanwhile. Nothing is
     // recorded, so the next plan still starts from what the lead was last told.
     if (plan.kind !== 'none' && !noteDue(plan, prev?.at, nowMs, gapMs)) return null;

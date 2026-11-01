@@ -223,6 +223,10 @@ export async function sendMessageToSession(
   // A session Walnut moved out of a folder that was gone hears so the same way (sessions/folder-gone.ts).
   const { pendingFolderMovedNotice } = await import('./sessions/folder-gone.js');
   const folderMoved = await pendingFolderMovedNotice(sessionId);
+  // One task's message to another is stamped first, so a lead's team note never repeats what this
+  // message tells it (org/lead-traffic.ts).
+  const { noteQueuedMessage } = await import('./org/lead-traffic.js');
+  await noteQueuedMessage(sessionId, opts?.enqueueMessage ?? message);
   // The main agent's org update rides the same way: one folded note, never a turn (org/org-store.ts).
   const { pendingOrgDigest } = await import('./org/org-store.js');
   const digest = await pendingOrgDigest(sessionId);

@@ -135,6 +135,10 @@ describe('what waits on the lead, what it leads, what others asked', () => {
     // in between (the lead answered it with a plain message, which carries none).
     const again = [...base.slice(0, 2), waiting('c', { phase_changed_at: at(58), user_status: { state: 'waiting', kind: 'lead', waitingOn: 'Its lead, to check the result and close it', now: 'Fixed the parser', at: at(50) } })]
     expect(planTeamNote(plan.next, again, [], NOW, ctx).waits.map((w) => w.taskId)).toEqual(['c'])
+    // A worker that said so to the lead in its own message: the lead has it, no news, and no wait to tell later.
+    const toldItself = planTeamNote(plan.next, again, [], NOW, { ...ctx, toldLead: (id) => id === 'c' })
+    expect([toldItself.kind, toldItself.waits]).toEqual(['none', []])
+    expect(planTeamNote(toldItself.next, again, [], NOW, ctx).kind).toBe('none')
     // Waiting on another leader is that leader's: not this lead's to act on.
     const other = planTeamNote(prev, [...base.slice(0, 2), waiting('c', { parent_task_id: 'someone-else' })], [], NOW, ctx)
     expect(other.waits).toEqual([])
