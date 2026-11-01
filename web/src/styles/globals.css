@@ -12273,7 +12273,7 @@ body.walnut-dragging {
 }
 /* Squeezed, the prefix goes all at once: the chip wraps it onto a second line its
    one-line height hides, instead of clipping it to a fragment glued to the value
-   ("tD5453394"). The value is ordered first in a reversed row, so the prefix still reads
+   ("tV1234567890"). The value is ordered first in a reversed row, so the prefix still reads
    before it while it fits. */
 .task-tag-pills .tag-chip-inline:not(.tag-chip-whole) {
   flex-direction: row-reverse;
@@ -18805,37 +18805,6 @@ a.task-kebab-info:hover {
   white-space: nowrap;
 }
 
-/* Custom model ID row — terminal `/model <id>` parity */
-.model-picker-custom {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--border);
-}
-
-.model-picker-custom-input {
-  flex: 1;
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 12px;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--card-bg);
-  color: var(--fg-primary);
-}
-
-.model-picker-custom-input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-.model-picker-custom-input::placeholder {
-  color: var(--fg-muted);
-  font-size: 11.5px;
-}
-
 .model-picker .model-picker-btn {
   font-size: 11px;
   padding: 3px 8px;
@@ -23888,7 +23857,7 @@ a.tag-chip:focus-visible,
   max-width: 100%;
 }
 
-/* Folder path of a search hit ("housing/6383-mckay") — the disambiguator between
+/* Folder path of a search hit ("trips/2025-kyoto") — the disambiguator between
    same-named notes. Slightly dimmer than the snippet so title > path > snippet. */
 .notes-search-path {
   font-size: 10px;

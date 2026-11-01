@@ -109,11 +109,11 @@ describe('resolveAttachmentPath — duplicate filenames (the 2026-08 bug)', () =
 
   it('proximity beats the _attachment preference when the note lives deeper', async () => {
     await writeFile('_attachment/photo.png', 'ROOT-ATTACHMENT');
-    await writeFile('housing/mckay/photo.png', 'NOTE-SIBLING');
+    await writeFile('housing/lakeside/photo.png', 'NOTE-SIBLING');
 
     // The note's own folder wins even though the other hit is in `_attachment/`:
     // being beside the note is the stronger signal about which picture is meant.
-    expect(await resolve('photo.png', 'housing/mckay/House.md')).toBe('housing/mckay/photo.png');
+    expect(await resolve('photo.png', 'housing/lakeside/House.md')).toBe('housing/lakeside/photo.png');
   });
 
   it('prefers an _attachment/ hit when no note path narrows it down', async () => {
