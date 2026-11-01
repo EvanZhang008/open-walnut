@@ -32,6 +32,8 @@ export interface RhythmPublicState {
     completedInCycle: number
     longBreakEvery: number
     breakKind?: BreakKind
+    /** The Spotify playlist this block plays on the Mac, while the block runs. */
+    spotifyUri?: string
     /** The last finished run (Start to the end of its break, or to Stop). */
     lastRun: { startedAt: number; endedAt: number } | null
   }
@@ -68,6 +70,7 @@ export function buildPublicState(runtime: RhythmRuntime, now: number): RhythmPub
       completedInCycle: focus.completedInCycle,
       longBreakEvery: config.longBreakEvery,
       ...(focus.breakKind && focus.phase !== 'idle' && focus.phase !== 'focus' ? { breakKind: focus.breakKind } : {}),
+      ...(focus.phase === 'focus' && focus.spotifyUri ? { spotifyUri: focus.spotifyUri } : {}),
       lastRun: focus.lastRunStartedAt > 0 && focus.lastRunEndedAt >= focus.lastRunStartedAt
         ? { startedAt: focus.lastRunStartedAt, endedAt: focus.lastRunEndedAt }
         : null,

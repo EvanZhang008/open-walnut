@@ -49,6 +49,8 @@ export class RhythmRuntime {
   focus: FocusState = { ...IDLE_FOCUS }
   day: DayLog
   quietState: QuietState = { active: false, allowPermissions: true, holds: [] }
+  /** A Spotify preview playing now (`active`), and the number that tells a stale timer from the current one. */
+  readonly spotifyPreview: { token: number; active: boolean; timer?: ReturnType<typeof setTimeout> } = { token: 0, active: false }
   private hold: HoldSpec | null = null
   private raw: Record<string, unknown> = {}
   private dirty = false

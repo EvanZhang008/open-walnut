@@ -30,25 +30,6 @@ function nowText(music: MusicView, title: string | undefined, state: RhythmPubli
   return `Playing ${title}`
 }
 
-/** The small toggle the running focus block shows, so music is one click from the countdown. */
-export function MusicToggle({ player }: { player: MusicPlayer }) {
-  const music = useMusic(player)
-  const title = music.listing?.tracks.find((track) => track.id === music.trackId)?.title
-  const on = music.playing || music.starting
-  if (!title && !on) return null
-  return (
-    <button
-      type="button"
-      className={`rhythm-button${on ? ' rhythm-music-on' : ''}`}
-      aria-pressed={on}
-      data-testid="rhythm-focus-music-toggle"
-      onClick={() => player.toggle()}
-    >
-      {on ? `Stop ${title ?? 'music'}` : `Play ${title}`}
-    </button>
-  )
-}
-
 /** The Spotify playlists Start can play in the Mac's Spotify app: add one by its link, remove one. */
 function SpotifyPlaylists({ player, store, spotify }: { player: MusicPlayer; store: RhythmStore; spotify: SpotifyView }) {
   const [link, setLink] = useState('')

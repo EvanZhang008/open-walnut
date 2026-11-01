@@ -172,8 +172,18 @@ final class FocusMusicPlayer {
         await refreshFocus()
     }
 
-    func refreshFocus() async {
-        if let status = try? await api.rhythmStatus() { applyFocus(status) }
+    /// False when the Mac did not answer.
+    @discardableResult
+    func refreshFocus() async -> Bool {
+        guard let status = try? await api.rhythmStatus() else { return false }
+        applyFocus(status)
+        return true
+    }
+
+    /// The server's clock now, from its last answer plus the time since.
+    func serverNow(at date: Date = Date()) -> Double? {
+        guard let now = focus?.now else { return nil }
+        return now + date.timeIntervalSince(focusReadAt) * 1000
     }
 
     // MARK: - Playback
@@ -525,10 +535,10 @@ final class FocusMusicPlayer {
         }
     }
 
-    /// Check again at the block's end (by the server's clock) or in 20 s, whichever is sooner.
+    /// Check again at the block's (or break's) end by the server's clock, or in 20 s, whichever is sooner.
     static func nextCheckSeconds(_ status: RhythmFocusStatus?) -> Double {
         let cap = Double(watchSeconds)
-        guard let status, status.focus.phase == "focus", let endsAt = status.focus.endsAt, endsAt > 0, let now = status.now else { return cap }
+        guard let status, status.focus.phase == "focus" || status.focus.phase == "break", let endsAt = status.focus.endsAt, endsAt > 0, let now = status.now else { return cap }
         return min(cap, max(1, (endsAt - now) / 1000 + 1))
     }
 }

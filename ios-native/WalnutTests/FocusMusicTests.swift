@@ -53,6 +53,31 @@ final class FocusMusicTests: XCTestCase {
         XCTAssertEqual(FocusMusicView.phaseText(nil), "Unknown")
     }
 
+    /// The screen follows the block between reads: its own clock counts the minutes down, and it reads again at a break's end too.
+    func testFollowsTheBlockBetweenReads() {
+        let running = status(phase: "focus", now: 0, endsAt: 30 * 60_000)
+        XCTAssertEqual(FocusMusicView.phaseText(running, now: 16 * 60_000), "14 min left")
+        XCTAssertEqual(FocusMusicView.phaseText(running, now: 31 * 60_000), "Running")
+        XCTAssertEqual(FocusMusicPlayer.nextCheckSeconds(status(phase: "break", now: 0, endsAt: 4_000)), 5, accuracy: 0.001)
+    }
+
+    /// The Start button names the long break when this block earns it, as the server will.
+    func testStartButtonNamesTheLongBreak() throws {
+        func read(_ completed: Int, endedAgoMs: Double) throws -> RhythmFocusStatus {
+            let json = """
+            {"now":10000000,"focus":{"phase":"idle","endsAt":null,"completedInCycle":\(completed),"lastRun":{"startedAt":1,"endedAt":\(10_000_000 - endedAgoMs)}},
+             "config":{"focusMinutes":25,"breakMinutes":5,"longBreakMinutes":15,"longBreakEvery":4}}
+            """
+            return try JSONDecoder().decode(RhythmFocusStatus.self, from: Data(json.utf8))
+        }
+        XCTAssertEqual(FocusMusicView.thenText(try read(3, endedAgoMs: 60_000), breakMinutes: 5, now: 10_000_000), "then the 15 min long break")
+        XCTAssertEqual(FocusMusicView.thenText(try read(1, endedAgoMs: 60_000), breakMinutes: 7, now: 10_000_000), "then a 7 min break")
+        // Idle over two hours: a fresh cycle, so block 1 of 4.
+        XCTAssertEqual(FocusMusicView.thenText(try read(3, endedAgoMs: 3 * 3_600_000), breakMinutes: 5, now: 10_000_000), "then a 5 min break")
+        // An older Rhythm without these fields: the plain break.
+        XCTAssertEqual(FocusMusicView.thenText(status(phase: "idle", now: 0, endsAt: 0), breakMinutes: 5, now: 0), "then a 5 min break")
+    }
+
     func testDecodesTheMusicTracksAnswer() throws {
         let json = """
         {"ok":true,"result":{"folder":"/Users/me/.open-walnut/plugin-data/walnut-rhythm/focus-music","isDefault":true,"exists":true,

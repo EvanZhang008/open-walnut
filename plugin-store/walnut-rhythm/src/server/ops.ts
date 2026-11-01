@@ -57,6 +57,16 @@ export const OP_SPECS: OpSpec[] = [
     description: 'List the audio files (m4a, mp3, wav) in the focus music folder on this Mac, in play order, with their absolute paths, and the Spotify playlists Rhythm offers (with whether Spotify is installed here). Read-only. The App and the phone play the files; nothing here plays sound.',
   },
   {
+    name: 'focus_music', title: 'Switch the block\'s music', readonly: false, remote: 'allow',
+    description: 'Switch the music of the focus block running now, without stopping it: a Spotify playlist that plays in the Spotify app on this Mac, or none (spotify empty) to pause the Spotify the block was playing. A folder track plays in the browser that picked it, so the console plays that itself. Refused when no block runs; it never starts one.',
+    properties: { spotify: { type: 'string', description: 'A Spotify playlist link or URI; empty for no Spotify' } },
+  },
+  {
+    name: 'spotify_preview', title: 'Preview a Spotify playlist', readonly: false, remote: 'allow',
+    description: 'Play 15 seconds of a Spotify playlist in the Spotify app on this Mac, so the person hears it before picking it; then the block\'s own playlist comes back, or Spotify pauses. stop: true ends a preview early.',
+    properties: { uri: { type: 'string', description: 'The playlist link or URI' }, stop: { type: 'boolean', description: 'End the preview playing now' } },
+  },
+  {
     name: 'spotify_playlist_add', title: 'Add a Spotify playlist', readonly: false, remote: 'allow',
     description: 'Keep a Spotify playlist (by its share link) in the list Rhythm offers as focus music. It plays in the Spotify app on this Mac when a block starts with it. Changes only Rhythm\'s own list.',
     properties: { link: { type: 'string', description: 'The playlist link (https://open.spotify.com/playlist/...) or URI' }, name: { type: 'string', description: 'A name to show (default: the playlist\'s own)' } },
@@ -88,6 +98,8 @@ function handlers(runtime: RhythmRuntime): Record<string, Handler> {
     break_skip: () => actions.breakSkip(runtime),
     music_tracks: () => actions.musicTracks(runtime),
     music_folder_open: () => actions.musicFolderOpen(runtime),
+    focus_music: (args) => actions.focusMusic(runtime, args),
+    spotify_preview: (args) => actions.spotifyPreview(runtime, args),
     spotify_playlist_add: (args) => actions.spotifyPlaylistAdd(runtime, args),
     spotify_playlist_remove: (args) => actions.spotifyPlaylistRemove(runtime, args),
     macos_shortcuts_install: () => actions.shortcutsInstall(runtime),

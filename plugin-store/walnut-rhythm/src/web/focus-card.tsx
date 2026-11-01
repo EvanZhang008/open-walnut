@@ -6,7 +6,7 @@
 import { useEffect, useState } from 'react'
 import type { WalnutWebApi } from '@open-walnut/plugin-api/web'
 import { countdownText, focusPhaseText, runText } from './format'
-import { MusicToggle } from './music-card'
+import { NowPlaying } from './now-playing'
 import type { MusicPlayer } from './music'
 import { StartForm } from './start-form'
 import type { RhythmPublicState, RhythmStore } from './store'
@@ -140,11 +140,11 @@ export function FocusCard({ walnut, store, state, run, busy, music }: FocusCardP
           {focus.phase === 'focus' && (
             <p className="rhythm-muted">Block {blockNumber} of {focus.longBreakEvery} before the long break.</p>
           )}
+          {focus.phase === 'focus' && <NowPlaying store={store} music={music} state={state} />}
           <div className="rhythm-actions">
             {focus.phase === 'break'
               ? <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-break-skip" onClick={() => { void run('break_skip') }}>End break</button>
               : <button type="button" className="rhythm-button" disabled={busy} data-testid="rhythm-focus-stop" onClick={() => { void run('focus_stop') }}>Stop</button>}
-            {focus.phase === 'focus' && <MusicToggle player={music} />}
           </div>
         </div>
       )}

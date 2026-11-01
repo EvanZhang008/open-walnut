@@ -110,11 +110,19 @@ struct RhythmFocusStatus: Decodable, Equatable {
         /// Epoch ms; 0 while idle.
         let endsAt: Double?
         let title: String?
+        /// Blocks done since the last long break (absent from an older Rhythm).
+        var completedInCycle: Int? = nil
+        var lastRun: LastRun? = nil
+    }
+    struct LastRun: Decodable, Equatable {
+        let endedAt: Double
     }
     struct Config: Decodable, Equatable {
         let focusMinutes: Int?
         let breakMinutes: Int?
         let musicWithFocus: Bool?
+        var longBreakMinutes: Int? = nil
+        var longBreakEvery: Int? = nil
     }
     let now: Double?
     let focus: Focus

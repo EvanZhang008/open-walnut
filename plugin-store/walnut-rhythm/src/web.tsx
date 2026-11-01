@@ -7,7 +7,8 @@
  * is made here rather than in the App, so leaving the App never stops the music.
  *
  * While Rhythm is off, the ring's popover shows the Start form (lengths and music) in
- * place of its one Start button, through the `status-item.panel` slot. A host older than
+ * place of its one Start button, through the `status-item.panel` slot; while a block
+ * runs, what plays and a way to switch it, with Stop block. A host older than
  * that slot refuses it, and the popover keeps the plain Start button.
  */
 import { useState, useSyncExternalStore } from 'react'
@@ -15,6 +16,7 @@ import type { AppProps, StatusItemPanelSlotProps, WalnutWebApi } from '@open-wal
 import { STATUS_ITEM_ID } from './server/status-item'
 import { RhythmApp } from './web/app'
 import { createMusicPlayer } from './web/music'
+import { NowPlaying } from './web/now-playing'
 import { StartForm } from './web/start-form'
 import { createRhythmStore } from './web/store'
 import { RHYTHM_CSS } from './web/styles'
@@ -56,6 +58,8 @@ export async function activate(walnut: WalnutWebApi) {
     const state = useSyncExternalStore(store.subscribe, store.get, store.get)
     // The block started but Spotify did not play: said here until read, then the item's buttons return.
     const [spotifyError, setSpotifyError] = useState<string | null>(null)
+    const [stopping, setStopping] = useState(false)
+    const [stopError, setStopError] = useState<string | null>(null)
     if (itemId !== STATUS_ITEM_ID || !state || state.replica) return null
     if (spotifyError) {
       return (
@@ -65,7 +69,36 @@ export async function activate(walnut: WalnutWebApi) {
         </div>
       )
     }
-    // Only while off: a running block or break keeps its own Stop / End break buttons.
+    // While a block runs: what plays and a way to switch it, then Stop block (the item's own buttons are hidden while this draws).
+    if (state.focus.phase === 'focus') {
+      return (
+        <div className="rhythm-start" data-testid="rhythm-running-panel">
+          <NowPlaying store={store} music={music} state={state} compact />
+          {stopError && <p className="rhythm-error" role="status">{stopError}</p>}
+          <div className="rhythm-panel-actions">
+            <button
+              type="button"
+              className="rhythm-button"
+              disabled={stopping}
+              aria-busy={stopping || undefined}
+              data-testid="rhythm-panel-stop"
+              onClick={() => {
+                setStopping(true)
+                setStopError(null)
+                void store.call('focus_stop').then((outcome) => {
+                  setStopping(false)
+                  if (outcome.ok) close()
+                  else setStopError(outcome.message)
+                })
+              }}
+            >
+              {stopping ? 'Stopping…' : 'Stop block'}
+            </button>
+          </div>
+        </div>
+      )
+    }
+    // A break keeps the item's own End break button.
     if (state.focus.phase !== 'idle') return null
     return (
       <StartForm

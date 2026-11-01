@@ -13,8 +13,17 @@ import { useEffect, useState } from 'react'
 import type { MusicPlayer, MusicTracksResult, StartChoice } from './music'
 import { resolveStartChoice } from './music'
 import { useMusic } from './music-card'
+import { choiceKey, MusicPicker } from './music-picker'
 import { CYCLE_RESET_MS } from '../server/focus'
 import type { OpOutcome, RhythmPublicState, RhythmStore } from './store'
+
+export { choiceKey }
+
+/** Load the music list once; a failed load waits for the App's Refresh rather than retrying in a loop. */
+export function useMusicList(music: MusicPlayer): void {
+  const view = useMusic(music)
+  useEffect(() => { if (!view.listing && !view.loading && !view.loadError) void music.refresh() }, [music, view.listing, view.loading, view.loadError])
+}
 
 export const FOCUS_PRESETS = [15, 25, 45, 60]
 export const BREAK_PRESETS = [5, 10, 15]
@@ -51,10 +60,6 @@ export function thenText(state: Pick<RhythmPublicState, 'focus' | 'config' | 'no
   return `then a ${breakMinutes ?? '?'} min break`
 }
 
-export function choiceKey(choice: StartChoice): string {
-  return choice.kind === 'none' ? 'none' : choice.kind === 'track' ? `track:${choice.id}` : `spotify:${choice.uri}`
-}
-
 /**
  * Start a block with this device's music. Call it from the click itself. A refused
  * Start stops the music this click began, and only that play.
@@ -68,6 +73,8 @@ export function startWithMusic(input: {
   taskId?: string | null
 }): Promise<OpOutcome<{ message: string; spotifyError?: string }>> {
   const { store, music, choice } = input
+  // focus_start ends a Spotify preview on the server itself.
+  music.stopPreview(undefined, true)
   let played: number | undefined
   if (choice.kind === 'track') played = music.play({ trackId: choice.id, withFocus: true })
   // Spotify plays on the Mac: a track still playing here would play over it.
@@ -148,8 +155,7 @@ export function StartForm({ store, music, state, taskId, compact, onStarted }: {
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
-  // Load the list once; a failed load waits for the App's Refresh rather than retrying in a loop.
-  useEffect(() => { if (!view.listing && !view.loading && !view.loadError) void music.refresh() }, [music, view.listing, view.loading, view.loadError])
+  useMusicList(music)
 
   const listing = view.listing
   const choice = resolveStartChoice({ stored: view.startChoice, listing, trackId: view.trackId, withFocus: config.musicWithFocus })
@@ -158,12 +164,6 @@ export function StartForm({ store, music, state, taskId, compact, onStarted }: {
   const invalid = minutes === null
     ? `Focus is ${FOCUS_LIMITS.min} to ${FOCUS_LIMITS.max} minutes.`
     : breakMinutes === null ? `The break is ${BREAK_LIMITS.min} to ${BREAK_LIMITS.max} minutes.` : null
-  const spotify = listing?.spotify
-  const options: Array<{ choice: StartChoice; title: string; meta: string }> = [
-    { choice: { kind: 'none' }, title: 'No music', meta: 'Start stays silent' },
-    ...(listing?.tracks ?? []).map((track) => ({ choice: { kind: 'track', id: track.id } as StartChoice, title: track.title, meta: 'Plays on this device' })),
-    ...(spotify?.available ? spotify.playlists.map((one) => ({ choice: { kind: 'spotify', uri: one.uri } as StartChoice, title: one.name, meta: 'Spotify, plays on your Mac' })) : []),
-  ]
 
   const start = () => {
     if (minutes === null || breakMinutes === null || busy) return
@@ -183,31 +183,7 @@ export function StartForm({ store, music, state, taskId, compact, onStarted }: {
       <MinutesRow label="Break" presets={BREAK_PRESETS} limits={BREAK_LIMITS} value={breakText} onChange={setBreakText} testId="rhythm-start-break" />
       <div className="rhythm-start-music">
         <span className="rhythm-start-label" id="rhythm-start-music-label">Music</span>
-        <div className="rhythm-picker" role="radiogroup" aria-labelledby="rhythm-start-music-label" data-testid="rhythm-start-music">
-          {options.map((option) => {
-            const on = choiceKey(option.choice) === choiceKey(choice)
-            return (
-              <button
-                key={choiceKey(option.choice)}
-                type="button"
-                role="radio"
-                aria-checked={on}
-                className={`rhythm-option${on ? ' rhythm-option-on' : ''}`}
-                data-testid={`rhythm-start-music-${choiceKey(option.choice)}`}
-                onClick={() => music.setStartChoice(option.choice)}
-              >
-                <span className="rhythm-option-title">{option.title}</span>
-                <span className="rhythm-option-meta">{option.meta}</span>
-              </button>
-            )
-          })}
-          {view.loading && !listing && <p className="rhythm-muted rhythm-pad">Loading music…</p>}
-          {view.loadError && !listing && <p className="rhythm-error rhythm-pad">{view.loadError}</p>}
-          {listing && listing.tracks.length === 0 && (
-            <p className="rhythm-muted rhythm-pad">No files in the focus music folder yet. Add m4a, mp3 or wav files to it in the Rhythm App.</p>
-          )}
-          {spotify && !spotify.available && spotify.reason && <p className="rhythm-muted rhythm-pad" data-testid="rhythm-start-spotify-off">{spotify.reason}</p>}
-        </div>
+        <MusicPicker music={music} value={choice} onPick={(next) => { music.stopPreview(); music.setStartChoice(next) }} testId="rhythm-start-music" />
       </div>
       <p className="rhythm-start-plays" data-testid="rhythm-start-plays">{musicLine(choice, listing)}</p>
       {invalid && <p className="rhythm-error" role="status" data-testid="rhythm-start-invalid">{invalid}</p>}

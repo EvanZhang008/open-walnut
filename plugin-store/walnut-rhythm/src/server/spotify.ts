@@ -76,6 +76,9 @@ export interface SpotifyDeps {
 
 export class SpotifyControl {
   private readonly deps: SpotifyDeps
+  // Every play and pause lands in the order it was asked for: a preview's play still opening
+  // Spotify never lands after the pick or the stop that came after it.
+  private queue: Promise<unknown> = Promise.resolve()
   private readonly appPaths: string[]
   private readonly exists: (file: string) => Promise<boolean>
   private readonly sleep: (ms: number) => Promise<void>
@@ -118,8 +121,18 @@ export class SpotifyControl {
     return next
   }
 
+  private inOrder<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(fn)
+    this.queue = run.then(() => undefined, () => undefined)
+    return run
+  }
+
   /** Play `uri` and wait until Spotify says it plays. Opens Spotify when it is closed. */
-  async play(uri: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  play(uri: string): Promise<{ ok: true } | { ok: false; error: string }> {
+    return this.inOrder(() => this.playNow(uri))
+  }
+
+  private async playNow(uri: string): Promise<{ ok: true } | { ok: false; error: string }> {
     if (!URI.test(uri)) return { ok: false, error: 'That is not a Spotify playlist link.' }
     const view = await this.view()
     if (!view.available) return { ok: false, error: view.reason ?? 'Spotify is not available.' }
@@ -134,9 +147,9 @@ export class SpotifyControl {
   }
 
   /** Pause, but never open Spotify just to pause it. */
-  async pause(): Promise<void> {
-    if (!this.deps.enabled) return
-    await this.osascript('if application "Spotify" is running then tell application "Spotify" to pause')
+  pause(): Promise<void> {
+    if (!this.deps.enabled) return Promise.resolve()
+    return this.inOrder(async () => { await this.osascript('if application "Spotify" is running then tell application "Spotify" to pause') })
   }
 
   private osascript(script: string) {

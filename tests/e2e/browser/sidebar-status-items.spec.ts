@@ -145,9 +145,10 @@ test('an item shows up above the bell, ticks from its timer, and leaves no gap w
   await expect(item(page)).toHaveAttribute('aria-label', 'Probe ready')
   // Above the bell, inside the notification area.
   const order = await page.locator('.sidebar-notification-area > .sidebar-link').evaluateAll((els) => els.map((el) => el.className))
-  const at = order.findIndex((name) => name.includes('sidebar-status-item'))
-  expect(at).toBeGreaterThanOrEqual(0)
-  expect(order[at + 1]).toContain('sidebar-notification-btn')
+  // Every item (the probe, and Rhythm's ring, which the fixture also loads) sits right above the bell.
+  const last = order.map((name) => name.includes('sidebar-status-item')).lastIndexOf(true)
+  expect(last).toBeGreaterThanOrEqual(0)
+  expect(order[last + 1]).toContain('sidebar-notification-btn')
   const railBox = await page.locator('.sidebar-notification-btn').boundingBox()
   const itemBox = await item(page).boundingBox()
   expect(Math.round(itemBox!.height)).toBe(Math.round(railBox!.height))
@@ -179,10 +180,13 @@ test('an item shows up above the bell, ticks from its timer, and leaves no gap w
   await shootRail(page, '02-expanded-focus')
 
   await probe(page, 'hide')
-  await expect(page.locator('.sidebar-status-item')).toHaveCount(0)
-  // No leftover wrapper or spacer where it was (the update notice's empty slot takes no room).
-  const first = await page.locator('.sidebar-notification-area > *:visible').first().getAttribute('class')
-  expect(first).toContain('sidebar-notification-btn')
+  await expect(item(page)).toHaveCount(0)
+  // No leftover wrapper or spacer where it was (the update notice's empty slot takes no room):
+  // only the items still shown (Rhythm's ring) come before the bell.
+  const visible = await page.locator('.sidebar-notification-area > *:visible').evaluateAll((els) => els.map((el) => el.className))
+  const bell = visible.findIndex((name) => name.includes('sidebar-notification-btn'))
+  expect(bell).toBeGreaterThanOrEqual(0)
+  expect(visible.slice(0, bell).every((name) => name.includes('sidebar-status-item'))).toBe(true)
   expect(errors).toEqual([])
 })
 
@@ -334,7 +338,7 @@ test('the footer opens the plugin App, and the item follows disable, reload and 
   await expect(item(page)).toHaveAttribute('aria-label', 'Survives a page reload', { timeout: 60_000 })
 })
 
-test('Rhythm: the off ring\'s panel picks the lengths and music, Start begins the block, Stop block turns it off', async ({ page }) => {
+test('Rhythm: the off ring\'s panel picks the lengths and music, Start begins the block, its running panel stops it', async ({ page }) => {
   await page.goto(`${base()}/`)
   await expect(page.locator('.sidebar')).toBeVisible({ timeout: 60_000 })
   await setCollapsed(page, true)
@@ -376,13 +380,16 @@ test('Rhythm: the off ring\'s panel picks the lengths and music, Start begins th
   await expect.poll(async () => (await rhythm.locator('svg text').textContent()) === String(minutesLeft(endsAt))).toBe(true)
   await rhythm.click()
   await expect(popover(page).locator('.status-item-popover-detail')).toHaveText(/^Started \d\d:\d\d, ends \d\d:\d\d\. Walnut is quiet until it ends\.$/)
-  // While a block runs the panel draws nothing, so the item's own button is back.
-  await expect(popover(page).locator('.status-item-btn')).toHaveText(['Stop block'])
+  // While a block runs the panel says what plays and offers the music to switch, with its own Stop block.
+  const runningPanel = popover(page).getByTestId('rhythm-running-panel')
+  await expect(runningPanel).toBeVisible()
   await expect(popover(page).getByTestId('rhythm-start-form')).toHaveCount(0)
+  await expect(runningPanel.getByTestId('rhythm-now-playing-line')).toHaveText('No music is playing.')
+  await expect(runningPanel.getByTestId('rhythm-now-music-none')).toHaveAttribute('aria-checked', 'true')
   await expect(popover(page).getByRole('button', { name: 'Open Rhythm' })).toBeVisible()
   await shootRail(page, '06-rhythm-focus')
 
-  await popover(page).getByRole('button', { name: 'Stop block' }).click()
+  await runningPanel.getByTestId('rhythm-panel-stop').click()
   await expect(popover(page)).toHaveCount(0)
   await expect(rhythm).toHaveAttribute('aria-label', 'Rhythm is off')
   await rhythm.click()

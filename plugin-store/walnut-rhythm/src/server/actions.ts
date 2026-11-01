@@ -48,14 +48,35 @@ export async function focusStart(runtime: RhythmRuntime, args: Record<string, un
     throw new Error('That is not a Spotify link. Paste a playlist link from Spotify (Share, Copy link).')
   }
   const started = await startBlock(runtime, args, spotifyUri)
-  if (!spotifyUri) return started
-  // After the block is on: Spotify can take a few seconds to open, and the block must not wait for it.
+  // A preview playing gives way to the block (a refused Start leaves it playing out).
+  const previewed = cancelSpotifyPreview(runtime)
+  if (!spotifyUri) {
+    if (previewed) await runtime.spotify.pause()
+    return started
+  }
+  const played = await playForBlock(runtime, spotifyUri)
+  return {
+    message: played.ok ? `${started.message} Spotify is playing ${played.name} on this Mac.` : `${started.message} ${played.error}`,
+    state: buildPublicState(runtime, runtime.now()),
+    ...(played.ok ? {} : { spotifyError: played.error }),
+  }
+}
+
+/**
+ * Play `uri` for the block running now. Runs after the block is on: Spotify can take a
+ * few seconds to open, and the block must not wait for it.
+ */
+async function playForBlock(runtime: RhythmRuntime, uri: string): Promise<{ ok: true; name: string } | { ok: false; error: string }> {
   const startedAt = runtime.focus.startedAt
-  const played = await runtime.spotify.play(spotifyUri)
+  const played = await runtime.spotify.play(uri)
   await runtime.serial(async () => {
-    const same = runtime.focus.phase === 'focus' && runtime.focus.startedAt === startedAt
-    // Stopped (or ended) while Spotify was opening: its pause ran before this play landed.
-    if (!same && played.ok) await runtime.spotify.pause()
+    const same = runtime.focus.phase === 'focus' && runtime.focus.startedAt === startedAt && runtime.focus.spotifyUri === uri
+    // Stopped, ended or switched while Spotify was opening: that pause ran before this play landed.
+    if (!same && played.ok) {
+      const now = runtime.focus.phase === 'focus' ? runtime.focus.spotifyUri : undefined
+      if (now && now !== uri) await runtime.spotify.play(now)
+      else if (!now) await runtime.spotify.pause()
+    }
     // A playlist that never played is not the block's to pause at its end.
     if (same && !played.ok) {
       const { spotifyUri: _unplayed, ...rest } = runtime.focus
@@ -64,12 +85,95 @@ export async function focusStart(runtime: RhythmRuntime, args: Record<string, un
       await runtime.step()
     }
   })
-  const name = (await runtime.spotify.playlists()).find((one) => one.uri === spotifyUri)?.name ?? 'the playlist'
+  if (!played.ok) return played
+  return { ok: true, name: await playlistName(runtime, uri) }
+}
+
+async function playlistName(runtime: RhythmRuntime, uri: string): Promise<string> {
+  return (await runtime.spotify.playlists()).find((one) => one.uri === uri)?.name ?? 'the playlist'
+}
+
+/** Switch the running block's music: a Spotify playlist on the Mac, or none (a track plays in the browser). */
+export async function focusMusic(runtime: RhythmRuntime, args: Record<string, unknown>): Promise<ActionResult> {
+  const given = args.spotify !== undefined && args.spotify !== null && args.spotify !== ''
+  const uri = given ? spotifyUriOf(args.spotify) : null
+  if (given && !uri) throw new Error('That is not a Spotify link. Paste a playlist link from Spotify (Share, Copy link).')
+  const had = await runtime.serial(async () => {
+    await settle(runtime)
+    // Never a way to start a block: only Start does that.
+    if (runtime.focus.phase !== 'focus') throw new Error('No focus block is running. Pick the music in the Start form instead.')
+    const before = runtime.focus.spotifyUri
+    const { spotifyUri: _old, ...rest } = runtime.focus
+    runtime.focus = uri ? { ...rest, spotifyUri: uri } : rest
+    runtime.markDirty()
+    await runtime.step()
+    return before
+  })
+  const previewed = cancelSpotifyPreview(runtime)
+  // Picking the playlist that already plays keeps its place (a preview played over it, though, it comes back).
+  if (uri && uri === had && !previewed) {
+    return { message: `Spotify is playing ${await playlistName(runtime, uri)} on this Mac until the block ends.`, state: buildPublicState(runtime, runtime.now()) }
+  }
+  if (!uri) {
+    if (had || previewed) await runtime.spotify.pause()
+    return { message: had ? 'Spotify paused. The block runs on.' : 'No Spotify music was playing for this block.', state: buildPublicState(runtime, runtime.now()) }
+  }
+  const played = await playForBlock(runtime, uri)
   return {
-    message: played.ok ? `${started.message} Spotify is playing ${name} on this Mac.` : `${started.message} ${played.error}`,
+    message: played.ok ? `Spotify is playing ${played.name} on this Mac until the block ends.` : played.error,
     state: buildPublicState(runtime, runtime.now()),
     ...(played.ok ? {} : { spotifyError: played.error }),
   }
+}
+
+export const SPOTIFY_PREVIEW_MS = 15_000
+
+/** End a Spotify preview's timer. True when one was playing. */
+function cancelSpotifyPreview(runtime: RhythmRuntime): boolean {
+  const preview = runtime.spotifyPreview
+  if (preview.timer) clearTimeout(preview.timer)
+  preview.timer = undefined
+  preview.token += 1
+  const was = preview.active
+  preview.active = false
+  return was
+}
+
+/** After a preview: the block's own playlist comes back, else Spotify goes quiet again. */
+async function afterPreview(runtime: RhythmRuntime): Promise<void> {
+  if (runtime.focus.phase === 'focus' && runtime.focus.spotifyUri) await runtime.spotify.play(runtime.focus.spotifyUri)
+  else await runtime.spotify.pause()
+}
+
+/** A few seconds of a playlist in the Mac's Spotify, so the person hears it before picking it. */
+export async function spotifyPreview(runtime: RhythmRuntime, args: Record<string, unknown>): Promise<ActionResult> {
+  if (args.stop === true) {
+    const was = cancelSpotifyPreview(runtime)
+    if (was) await afterPreview(runtime)
+    return { message: was ? 'Preview stopped.' : 'No preview was playing.', state: buildPublicState(runtime, runtime.now()) }
+  }
+  const uri = spotifyUriOf(args.uri)
+  if (!uri) throw new Error('That is not a Spotify link. Paste a playlist link from Spotify (Share, Copy link).')
+  cancelSpotifyPreview(runtime)
+  const preview = runtime.spotifyPreview
+  const token = preview.token
+  // Active from the moment it is asked for: a stop, a pick or a Start while Spotify is still
+  // opening sees it and sends its own pause or play, which lands after this play (in order).
+  preview.active = true
+  const played = await runtime.spotify.play(uri)
+  const state = buildPublicState(runtime, runtime.now())
+  if (preview.token !== token) return { message: 'Preview replaced.', state }
+  if (!played.ok) {
+    preview.active = false
+    return { message: played.error, state, spotifyError: played.error }
+  }
+  preview.timer = setTimeout(() => {
+    if (preview.token !== token) return
+    cancelSpotifyPreview(runtime)
+    void afterPreview(runtime)
+  }, SPOTIFY_PREVIEW_MS)
+  preview.timer.unref?.()
+  return { message: `Previewing ${await playlistName(runtime, uri)} in Spotify on this Mac for ${SPOTIFY_PREVIEW_MS / 1000} seconds.`, state }
 }
 
 function startBlock(runtime: RhythmRuntime, args: Record<string, unknown>, spotifyUri: string | null): Promise<ActionResult> {

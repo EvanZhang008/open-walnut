@@ -225,6 +225,24 @@ export const RHYTHM_CSS = `
 .rhythm-start-plays { font-size: 12.5px; line-height: 17px; color: var(--fg); font-weight: 500; }
 .rhythm-start .rhythm-actions { align-items: center; }
 .rhythm-start .rhythm-muted { font-size: 12px; }
+.rhythm-pick-row { display: flex; align-items: center; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+.rhythm-pick-row:last-child { border-bottom: 0; }
+.rhythm-pick-row .rhythm-option { flex: 1; min-width: 0; border-bottom: 0; }
+.rhythm-pick-row-on { background: var(--accent-subtle, color-mix(in srgb, var(--accent) 12%, transparent)); }
+.rhythm-pick-row .rhythm-option-on { background: none; }
+.rhythm-preview {
+  flex: none; height: 24px; margin-right: 8px; padding: 0 8px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg); color: var(--fg-secondary); font: inherit; font-size: 11.5px; white-space: nowrap; cursor: pointer;
+}
+.rhythm-preview:hover { color: var(--fg); background: var(--bg-hover, var(--bg-secondary)); }
+.rhythm-preview-on { color: var(--accent); border-color: var(--accent); }
+.rhythm-now-playing { display: grid; gap: 6px; justify-self: stretch; width: 100%; font-size: 13px; color: var(--fg); }
+.rhythm-now-playing p { margin: 0; }
+.rhythm-now-playing .rhythm-start-label { width: auto; }
+.rhythm-now-playing .rhythm-picker { max-height: 196px; }
+.rhythm-now-compact .rhythm-picker { max-height: 150px; }
+.rhythm-panel-actions { display: flex; justify-content: flex-start; margin-top: 10px; }
 .rhythm-subhead { margin: 0; font-size: 12.5px; line-height: 17px; font-weight: 600; color: var(--fg-secondary); }
 .rhythm-spotify { display: grid; gap: 6px; }
 .rhythm-option-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; cursor: default; }

@@ -255,6 +255,96 @@ describe('the Start form: lengths and music', () => {
     expect(spotifyScripts(h).filter((one) => one.includes('pause'))).toEqual([])
   })
 
+  it('switches the running block\'s music without stopping it, and never starts a block', async () => {
+    const { h, runtime } = await boot({ darwin: true })
+    await expect(actions.focusMusic(runtime, { spotify: DEEP })).rejects.toThrow(/No focus block is running/)
+    expect(runtime.focus.phase).toBe('idle')
+    expect(spotifyScripts(h)).toEqual([])
+
+    await actions.focusStart(runtime, { minutes: 25 })
+    const on = await actions.focusMusic(runtime, { spotify: DEEP })
+    expect(on.message).toBe('Spotify is playing Deep Focus on this Mac until the block ends.')
+    expect(on.state.focus).toMatchObject({ phase: 'focus', minutes: 25, spotifyUri: DEEP })
+    expect(spotifyScripts(h).at(0)).toBe(`tell application "Spotify" to play track "${DEEP}"`)
+    const off = await actions.focusMusic(runtime, { spotify: '' })
+    expect(off.message).toBe('Spotify paused. The block runs on.')
+    expect(off.state.focus.phase).toBe('focus')
+    expect(off.state.focus.spotifyUri).toBeUndefined()
+    expect(spotifyScripts(h).at(-1)).toBe('if application "Spotify" is running then tell application "Spotify" to pause')
+    // Switched off, the block's end leaves Spotify alone.
+    const before = spotifyScripts(h).length
+    await h.tick(runtime, 25 * MIN + 1)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(spotifyScripts(h).length).toBe(before)
+    await expect(actions.focusMusic(runtime, { spotify: 'https://evil.example/x' })).rejects.toThrow(/not a Spotify link/)
+  })
+
+  it('a Spotify preview plays 15 seconds, then gives the music back: paused when idle, the block\'s own playlist in a block', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const { h, runtime } = await boot({ darwin: true })
+      const LOFI = 'spotify:playlist:0vvXsWCC9xrXsKd4FyS8kM'
+      const pause = 'if application "Spotify" is running then tell application "Spotify" to pause'
+      const previewed = await actions.spotifyPreview(runtime, { uri: DEEP })
+      expect(previewed.message).toBe('Previewing Deep Focus in Spotify on this Mac for 15 seconds.')
+      expect(spotifyScripts(h).at(0)).toBe(`tell application "Spotify" to play track "${DEEP}"`)
+      await vi.advanceTimersByTimeAsync(14_000)
+      expect(spotifyScripts(h)).not.toContain(pause)
+      await vi.advanceTimersByTimeAsync(1_500)
+      expect(spotifyScripts(h).at(-1)).toBe(pause)
+
+      // In a block that plays Deep Focus, a preview of another playlist ends with Deep Focus again.
+      await actions.focusStart(runtime, { spotify: DEEP })
+      await actions.spotifyPreview(runtime, { uri: LOFI })
+      expect(spotifyScripts(h).filter((one) => one.includes('play track')).at(-1)).toBe(`tell application "Spotify" to play track "${LOFI}"`)
+      const stopped = await actions.spotifyPreview(runtime, { stop: true })
+      expect(stopped.message).toBe('Preview stopped.')
+      expect(spotifyScripts(h).filter((one) => one.includes('play track')).at(-1)).toBe(`tell application "Spotify" to play track "${DEEP}"`)
+      expect((await actions.spotifyPreview(runtime, { stop: true })).message).toBe('No preview was playing.')
+
+      // Picking the previewed playlist ends the preview's timer: it keeps playing.
+      await actions.spotifyPreview(runtime, { uri: LOFI })
+      await actions.focusMusic(runtime, { spotify: LOFI })
+      const count = spotifyScripts(h).length
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(spotifyScripts(h).length).toBe(count)
+      expect(runtime.focus.spotifyUri).toBe(LOFI)
+      await expect(actions.spotifyPreview(runtime, { uri: 'nope' })).rejects.toThrow(/not a Spotify link/)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a preview still opening Spotify gives way to a stop that came after it, in order', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      let release: () => void = () => undefined
+      const scripts: string[] = []
+      const { runtime } = await boot({
+        darwin: true,
+        runner: async (_command, args) => {
+          const script = String(args.at(-1))
+          scripts.push(script)
+          if (script.includes('play track')) await new Promise<void>((resolve) => { release = resolve })
+          return { ok: true, code: 0, stdout: script.includes('player state') ? 'playing\n' : '', stderr: '' }
+        },
+      })
+      const previewing = actions.spotifyPreview(runtime, { uri: DEEP })
+      while (!scripts.some((one) => one.includes('play track'))) await vi.advanceTimersByTimeAsync(0)
+      const stopping = actions.spotifyPreview(runtime, { stop: true })
+      release()
+      expect((await previewing).message).toBe('Preview replaced.')
+      expect((await stopping).message).toBe('Preview stopped.')
+      // The pause lands after the play it followed, and no timer is left to act later.
+      expect(scripts.at(-1)).toBe('if application "Spotify" is running then tell application "Spotify" to pause')
+      const count = scripts.length
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(scripts.length).toBe(count)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('the start message names the long break when this block earns it', async () => {
     const { runtime } = await boot()
     runtime.focus = { ...runtime.focus, completedInCycle: runtime.config.longBreakEvery - 1 }

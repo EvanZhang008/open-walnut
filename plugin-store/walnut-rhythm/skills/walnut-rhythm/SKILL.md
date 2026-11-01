@@ -19,6 +19,7 @@ Every op below is called with `walnut tools call <op> '<json args>'`. Read `waln
 | "end the break", "I'm back" during a break | `walnut_rhythm_break_skip`, then `walnut_rhythm_focus_start` if they want another block |
 | "how much did I focus today", "is a block running", "when does it end" | `walnut_rhythm_status` |
 | "what focus music do I have", "is my brown noise there" | `walnut_rhythm_music_tracks` |
+| "switch to Deep Focus", "stop the Spotify music" (a block is running) | `walnut_rhythm_focus_music` with `spotify` (or empty) |
 
 ## Ops
 
@@ -27,6 +28,8 @@ Every op below is called with `walnut tools call <op> '<json args>'`. Read `waln
 - `walnut_rhythm_focus_stop` `{}`: stops the block or break and ends the cycle. Rhythm is off after it. A stopped block does not count as completed.
 - `walnut_rhythm_break_skip` `{}`: ends the running break early. Rhythm is off after it.
 - `walnut_rhythm_music_tracks` `{}`: read-only. The audio files in the focus music folder (`folder`, `tracks[].title`, `tracks[].file`), in play order, and `spotify` (`available`, `reason`, `playlists[].uri`, `playlists[].name`).
+- `walnut_rhythm_focus_music` `{ spotify?: string }`: during a running block, switch its Spotify music to that playlist, or pass an empty `spotify` to pause the Spotify the block was playing. The block keeps running. Refused when no block runs (it never starts one).
+- `walnut_rhythm_spotify_preview` `{ uri?: string, stop?: boolean }`: 15 seconds of a playlist in Spotify on the Mac so the person hears it, then the block's own playlist comes back (or Spotify pauses). Only when the person asks to hear one.
 - `walnut_rhythm_spotify_playlist_add` `{ link, name? }` / `walnut_rhythm_spotify_playlist_remove` `{ uri }`: keep or drop a playlist in the Start form's list, when the person asks.
 
 Each mutating op answers `{ message, state }`; relay `message` in one sentence.

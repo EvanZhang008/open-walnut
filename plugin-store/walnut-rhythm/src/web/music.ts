@@ -79,6 +79,8 @@ export interface MusicView {
   error: string | null
   /** This device's own pick for Start; resolve it with `resolveStartChoice`. Absent until one is made. */
   startChoice?: StartChoice
+  /** A few seconds of a choice playing so the person hears it before picking it. */
+  previewing: Exclude<StartChoice, { kind: 'none' }> | null
 }
 
 export interface MusicPlayer {
@@ -101,10 +103,25 @@ export interface MusicPlayer {
   setStartChoice(choice: StartChoice): void
   /** The Spotify list changed (a playlist added or removed). */
   setSpotify(spotify: SpotifyView): void
+  /**
+   * Play a few seconds of a track here (the block's music goes quiet meanwhile) or of a
+   * Spotify playlist on the Mac. Call it from the click. `owner` names the picker, so one
+   * picker closing never ends another's preview.
+   */
+  preview(choice: Exclude<StartChoice, { kind: 'none' }>, owner?: object): void
+  /**
+   * End the preview; with `owner`, only that picker's. `handOver`: the op sent next (a
+   * Start, a switch) ends a Spotify preview on the server itself, so no stop is sent that
+   * could land after it.
+   */
+  stopPreview(owner?: object, handOver?: boolean): void
 }
 
 const PREFS_KEY = 'walnut-rhythm:music'
 const DEFAULT_VOLUME = 0.6
+export const TRACK_PREVIEW_MS = 10_000
+/** The server's own preview length (SPOTIFY_PREVIEW_MS), after which it pauses Spotify itself. */
+export const SPOTIFY_PREVIEW_MS = 15_000
 
 /** Where the next track starts once one ends. PURE. `random` is in [0, 1). */
 export function nextTrackIndex(order: MusicOrder, current: number, count: number, random: number): number {
@@ -160,6 +177,7 @@ export function createMusicPlayer(walnut: WalnutWebApi, store: RhythmStore): Mus
     tiedToFocus: false,
     error: null,
     ...(prefs.startChoice ? { startChoice: prefs.startChoice } : {}),
+    previewing: null,
   }
   // 'pending': a Start click asked for the block; the next state that shows it running confirms the tie.
   let tie: 'none' | 'pending' | 'focus' = 'none'
@@ -172,6 +190,12 @@ export function createMusicPlayer(walnut: WalnutWebApi, store: RhythmStore): Mus
   const audio = new Audio()
   audio.preload = 'none'
   audio.volume = view.volume
+  // Previews play on their own element, so the block's track keeps its place while it is quiet.
+  const previewAudio = new Audio()
+  previewAudio.preload = 'none'
+  let previewOwner: object | undefined
+  let previewTimer: ReturnType<typeof setTimeout> | undefined
+  let previewNumber = 0
 
   const publish = (patch: Partial<MusicView>) => {
     view = { ...view, ...patch, tiedToFocus: tie !== 'none' }
@@ -184,6 +208,8 @@ export function createMusicPlayer(walnut: WalnutWebApi, store: RhythmStore): Mus
       // Private mode or a full quota: the choice lasts for this window only.
     }
   }
+  // The block's track is quiet while a preview plays, whoever touches its volume meanwhile.
+  const effectiveVolume = () => (view.previewing ? 0 : view.volume)
   const tracks = (): MusicTrack[] => view.listing?.tracks ?? []
   const currentIndex = () => Math.max(0, tracks().findIndex((track) => track.id === view.trackId))
   const applyLoop = () => { audio.loop = view.order === 'one' || tracks().length === 1 }
@@ -208,7 +234,7 @@ export function createMusicPlayer(walnut: WalnutWebApi, store: RhythmStore): Mus
       audio.src = url
     }
     applyLoop()
-    audio.volume = view.volume
+    audio.volume = effectiveVolume()
     publish({ trackId: track.id, starting: true, error: null })
     savePrefs()
     // Called inside the click: Safari and the Mac app only allow sound a person asked for.
@@ -256,6 +282,49 @@ export function createMusicPlayer(walnut: WalnutWebApi, store: RhythmStore): Mus
     }
     startTrack(track)
     return playNumber
+  }
+
+  const endPreview = (tellServer: boolean) => {
+    if (previewTimer) clearTimeout(previewTimer)
+    previewTimer = undefined
+    const was = view.previewing
+    if (!was) return
+    previewNumber += 1
+    previewOwner = undefined
+    if (was.kind === 'track') previewAudio.pause()
+    else if (tellServer) void store.call('spotify_preview', { stop: true })
+    publish({ previewing: null })
+    audio.volume = effectiveVolume()
+  }
+
+  const preview = (choice: Exclude<StartChoice, { kind: 'none' }>, owner?: object) => {
+    // A new Spotify preview replaces the old one on the server; a stop sent now could land after it.
+    endPreview(choice.kind !== 'spotify')
+    const number = ++previewNumber
+    previewOwner = owner
+    if (choice.kind === 'track') {
+      const track = tracks().find((one) => one.id === choice.id)
+      if (!track) return
+      previewAudio.src = trackUrl(track.file)
+      previewAudio.volume = view.volume > 0 ? view.volume : DEFAULT_VOLUME
+      // Called inside the click: Safari and the Mac app only allow sound a person asked for.
+      previewAudio.play().catch((failure: unknown) => {
+        if (number !== previewNumber || (failure as { name?: string }).name === 'AbortError') return
+        endPreview(false)
+        publish({ error: `Could not preview ${track.title}: ${failure instanceof Error ? failure.message : String(failure)}` })
+      })
+      previewTimer = setTimeout(() => { if (number === previewNumber) endPreview(false) }, TRACK_PREVIEW_MS)
+    } else {
+      void store.call<{ spotifyError?: string }>('spotify_preview', { uri: choice.uri }).then((outcome) => {
+        if (number !== previewNumber) return
+        const error = outcome.ok ? outcome.result.spotifyError : outcome.message
+        if (error) { endPreview(false); publish({ error }); return }
+        // The server's 15 seconds start once Spotify plays (it may take a moment to open); it pauses Spotify itself.
+        previewTimer = setTimeout(() => { if (number === previewNumber) endPreview(false) }, SPOTIFY_PREVIEW_MS)
+      })
+    }
+    publish({ previewing: choice, error: null })
+    audio.volume = effectiveVolume()
   }
 
   async function load(): Promise<void> {
@@ -331,6 +400,7 @@ export function createMusicPlayer(walnut: WalnutWebApi, store: RhythmStore): Mus
   walnut.signal.addEventListener('abort', () => {
     offStore()
     mediaActions(false)
+    endPreview(false)
     audio.pause()
     audio.removeAttribute('src')
     audio.load()
@@ -360,6 +430,11 @@ export function createMusicPlayer(walnut: WalnutWebApi, store: RhythmStore): Mus
     setSpotify(spotify) {
       if (view.listing) publish({ listing: { ...view.listing, spotify } })
     },
+    preview,
+    stopPreview(owner, handOver) {
+      if (owner !== undefined && owner !== previewOwner) return
+      endPreview(!handOver)
+    },
     setOrder(order) {
       publish({ order })
       applyLoop()
@@ -367,8 +442,9 @@ export function createMusicPlayer(walnut: WalnutWebApi, store: RhythmStore): Mus
     },
     setVolume(volume) {
       const clamped = Math.min(1, Math.max(0, volume))
-      audio.volume = clamped
       publish({ volume: clamped })
+      audio.volume = effectiveVolume()
+      if (view.previewing?.kind === 'track') previewAudio.volume = clamped
       savePrefs()
     },
   }
