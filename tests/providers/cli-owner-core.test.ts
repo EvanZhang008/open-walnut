@@ -10,7 +10,7 @@ import path from 'node:path'
 import { createCliOwner, type CliOwnerDeps, type CliOwnerHolder } from '../../src/providers/cli-owner-core.js'
 import { heldByAnotherProcess, holderKindOf, holderPidOf } from '../../src/providers/delivery-failure.js'
 
-interface Proc { startTime: string; args: string; home?: string | null; configDir?: string; pgid?: number }
+interface Proc { startTime: string; args: string; home?: string | null; configDir?: string; pgid?: number; stat?: string }
 
 let root = ''
 let procs: Map<number, Proc>
@@ -39,6 +39,7 @@ function owner(instance: string, pid: number, extra: Partial<CliOwnerDeps> = {})
       const p = Number(args[args.length - 1])
       const x = procs.get(p)
       if (!x) return ''
+      if (args[0] === '-o' && args[1] === 'stat=') return `${x.stat ?? 'S'}\n`
       if (args[0] === '-ww') return x.args + '\n'
       if (x.home === null) return x.args + '\n'
       return `${x.args} PATH=/usr/bin HOME=${x.home ?? HOME}${x.configDir ? ` CLAUDE_CONFIG_DIR=${x.configDir}` : ''}\n`
@@ -116,6 +117,17 @@ describe('claim', () => {
     procs.delete(301)
     procs.set(301, { startTime: 'someone-else', args: 'vim notes.txt' }) // the kernel reused the pid
     await expect(a.claim(SID)).resolves.toBeTruthy()
+  })
+
+  it('a CLI that exited and is not reaped yet (a zombie) holds nothing', async () => {
+    const a = owner('a', 100)
+    const b = owner('b', 200)
+    ;(await a.claim(SID)).commit(300, 'cli-1')
+    procs.set(300, { startTime: 'cli-1', args: cliArgs(SID) })
+    await refusal(b.claim(SID))
+    // It ended on its own; daemon a's loop has not reaped it: kill(pid, 0) still answers.
+    procs.set(300, { startTime: 'cli-1', args: '[sh] <defunct>', stat: 'Z' })
+    await expect(b.claim(SID)).resolves.toBeTruthy()
   })
 
   it('a record with no start time is told apart from a reused pid by what the pid runs', async () => {

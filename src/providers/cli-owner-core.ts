@@ -174,9 +174,22 @@ export function createCliOwner(deps: CliOwnerDeps): CliOwner {
   async function sameProcess(pid: number, startTime: string | null | undefined): Promise<boolean> {
     if (!Number.isSafeInteger(pid) || pid <= 1) return false
     if (!deps.isAlive(pid)) return false
+    if (await exited(pid)) return false
     if (!startTime) return true
     const now = await deps.startTimeOf(pid)
     return !now || now === startTime
+  }
+
+  /**
+   * A process that exited and its parent has not reaped yet (a zombie) still answers
+   * kill(pid, 0). A CLI that ended on its own is one until its daemon's loop runs the exit,
+   * and a second daemon starting the session then was refused as if it still ran
+   * (2026-11-01, CI: "a CLI that exits on its own frees the session", session_live).
+   */
+  async function exited(pid: number): Promise<boolean> {
+    if (deps.platform === 'win32') return false
+    const stat = await deps.exec('ps', ['-o', 'stat=', '-p', String(pid)], PS_TIMEOUT_MS)
+    return stat !== null && /^\s*Z/.test(stat)
   }
 
   /** What a record proves: a live holder, or nothing (stale). */
