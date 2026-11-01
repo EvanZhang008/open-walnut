@@ -235,10 +235,14 @@ describe('POST /api/v1/quick/main', () => {
     // follow: the send's outcome, then the reply of the turn that took this message. The test's
     // mock CLI answers it for real (`echo-input` quotes the message back); the earlier sends'
     // turns end first, so none of their words may show up as this reply.
+    // "Not running" also holds before the earlier send's turn has started, and a send then joins
+    // that turn (run 41264857883: the reply echoed both): wait for the queue to give that message
+    // to a turn, then for the turn to end.
     const quietBy = Date.now() + 20_000
     const { getSessionByClaudeId: readRecord } = await import('../../src/core/session-tracker.js')
     while (Date.now() < quietBy) {
-      if ((await readRecord(sid))?.process_status !== 'running') break
+      const taken = !(await getQueue(sid)).some((m) => m.id === sent.messageId)
+      if (taken && (await readRecord(sid))?.process_status !== 'running') break
       await new Promise((r) => setTimeout(r, 200))
     }
     const res = await post('/quick/main', { text: 'echo-input MANGO-7', follow: true })
