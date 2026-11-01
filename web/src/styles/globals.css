@@ -7371,6 +7371,74 @@ a.task-link[data-user-state='done']::before { background: var(--accent, #0a84ff)
   box-shadow: none;
 }
 
+/* The field wraps the textarea so a reference overlay can lie exactly on it.
+   It stands where the textarea stood in its flex parent (column card: a fixed
+   row whose height the textarea's JS auto-resize sets; one-line composer: the
+   growing cell), so nothing about the box's size or layout moves. */
+.chat-input-field {
+  position: relative;
+  display: block;
+  flex: none;
+  min-width: 0;
+}
+.chat-input-field > .chat-input-textarea {
+  display: block;
+  width: 100%;
+}
+.chat-input-container.is-compact .chat-input-field {
+  flex: 1 1 0%;
+}
+
+/* ── Reference tokens drawn as task pills (ComposerRefMirror) ─────────────────
+   The textarea keeps the caret and the selection highlight and hides only its
+   text; the overlay repeats that text glyph for glyph (font, padding and wrap are
+   copied off the textarea in JS) and paints the tokens. A token is NEVER a
+   different width from its characters, so nothing here may touch font-size,
+   font-weight, letter-spacing or padding on these spans: the caret would drift
+   off the glyphs it belongs to. The `@[` becomes a status dot, the `]` is blank. */
+.chat-input-textarea.has-ref-tokens {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: var(--fg);
+}
+.chat-input-mirror {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  border: 0;
+  overflow: hidden;
+  pointer-events: none;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  color: var(--fg);
+}
+.chat-input-mirror.is-disabled { opacity: 0.6; }
+.chat-ref-token {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  border-radius: 5px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.chat-ref-edge { color: transparent; }
+/* The dot is the `@[` span's own background: no positioned child, so the token's
+   glyphs stay in the same paint layer (and on the same pixels) as the textarea's. */
+.chat-ref-token {
+  --ref-dot: color-mix(in srgb, var(--fg-muted) 55%, transparent);
+  --ref-halo: transparent;
+}
+.chat-ref-token.is-running {
+  --ref-dot: var(--success);
+  --ref-halo: color-mix(in srgb, var(--success) 18%, transparent);
+}
+.chat-ref-token.is-waiting {
+  --ref-dot: var(--warning);
+  --ref-halo: color-mix(in srgb, var(--warning) 18%, transparent);
+}
+.chat-ref-open {
+  background: radial-gradient(circle at 50% 50%, var(--ref-dot) 0 3.5px, var(--ref-halo) 3.5px 6px, transparent 6.5px);
+}
+
 .chat-send-btn {
   white-space: nowrap;
 }
