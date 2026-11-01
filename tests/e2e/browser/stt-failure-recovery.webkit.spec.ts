@@ -5,12 +5,18 @@
  * stt-failure-helpers.ts.
  */
 import { devices, expect, test } from '@playwright/test'
+import { ENGINE_CHECK, NO_RECORDER, hasMediaRecorder } from './webkit-recorder'
 import { registerSttFailureScenarios } from './stt-failure-helpers'
 
 test.use({ browserName: 'webkit', userAgent: devices['Desktop Safari'].userAgent })
 
-test('really runs in WebKit', async ({ browserName }) => {
+test(ENGINE_CHECK, async ({ browserName }) => {
   expect(browserName).toBe('webkit')
+})
+
+// Each scenario records the mic, which needs MediaRecorder.
+test.beforeEach(async ({ page }, info) => {
+  if (info.title !== ENGINE_CHECK) test.skip(!(await hasMediaRecorder(page)), NO_RECORDER)
 })
 
 registerSttFailureScenarios()

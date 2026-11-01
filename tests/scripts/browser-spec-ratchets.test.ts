@@ -236,3 +236,16 @@ describe('path list rows of a real system directory', () => {
     expect("list(page).locator('.sps-path-item.sps-live', { hasText: USR_DIR })".match(SYSTEM_DIR_ROW)).toBeNull()
   })
 })
+
+describe('WebKit specs that record the mic', () => {
+  // Playwright's Linux WebKit has no MediaRecorder: a recording scenario there waited out
+  // its 90 s on every CI run (2026-11-01, mic-stall and stt-failure-recovery). Each such
+  // spec skips where the engine cannot record (webkit-recorder.ts); the Mac runs it.
+  const RECORDS = /mic-stall-helpers|stt-failure-helpers|registerMicStallScenarios|registerSttFailureScenarios/
+
+  it('every one skips on an engine without MediaRecorder', () => {
+    const recording = sources.filter(({ file, text }) => file.endsWith('.webkit.spec.ts') && RECORDS.test(text))
+    expect(recording.map(({ file }) => file)).toEqual(expect.arrayContaining(['mic-stall.webkit.spec.ts', 'stt-failure-recovery.webkit.spec.ts']))
+    expect(recording.filter(({ text }) => !text.includes('hasMediaRecorder(')).map(({ file }) => file)).toEqual([])
+  })
+})

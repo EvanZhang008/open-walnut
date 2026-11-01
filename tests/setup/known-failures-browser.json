@@ -1,6 +1,6 @@
 {
   "suite": "playwright: chromium, chromium-host-fixture",
-  "count": 250,
+  "count": 245,
   "failures": [
     "action-cards-and-time.spec.ts :: suggest action cards › card renders, its button runs the real op, and the receipt survives a reload",
     "action-cards-and-time.spec.ts :: time tracking › real interaction earns human time banked against the right task and kind",
@@ -205,11 +205,6 @@
     "streaming-dedup.spec.ts :: Agent streaming text deduplication › multi-round tool call does not duplicate text in rendered chat",
     "streaming-dedup.spec.ts :: Agent streaming text deduplication › single-round response without tool calls renders correctly",
     "streaming-dedup.spec.ts :: Agent streaming text deduplication › three rounds with two tool calls have no text duplication",
-    "stt-failure-recovery.webkit.spec.ts :: Retry after the partial words were typed over adds the complete words instead of dropping them",
-    "stt-failure-recovery.webkit.spec.ts :: Retry swaps the partial words in place and keeps what the user typed after them",
-    "stt-failure-recovery.webkit.spec.ts :: a failure with no draft shown keeps the clip in history, and Retry recovers the words",
-    "stt-failure-recovery.webkit.spec.ts :: a final pass that fails after the draft landed says so, keeps the clip, and Retry swaps in the complete words",
-    "stt-failure-recovery.webkit.spec.ts :: a retry that fails again keeps the bubble and Retry, and the next Retry still lands the words",
     "stt-install.spec.ts :: Whisper Set up installs whisper-cpp and the model, then shows the model rows",
     "subtask-pill.spec.ts :: a parent's session header carries the Leader pill, and its list leads to each subtask",
     "t29-campaign.spec.ts :: demo: session finder then quick add (continuous recording)",
