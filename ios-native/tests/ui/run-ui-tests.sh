@@ -88,7 +88,7 @@ if [ -z "$UDID" ]; then
          | sed -n 's/.*(\([0-9A-F-]\{36\}\)) (Booted).*/\1/p' | head -1)
 fi
 [ -n "$UDID" ] || die "no booted simulator; boot one or set WALNUT_UITEST_UDID"
-if [ "${WALNUT_UITEST_INBOX_ITEMS:-}" = 1 ]; then
+if [ "${WALNUT_UITEST_INBOX_ITEMS:-}" = 1 ] || [ "${WALNUT_UITEST_PRIVATE_TASKS:-}" = 1 ]; then
   [ "$UDID" = "${WALNUT_UITEST_GATE_UDID:-}" ] || die "simulator must match explicit WALNUT_UITEST_GATE_UDID"
   [ "${WALNUT_UITEST_ISOLATED:-}" = 1 ] || die "only an isolated fixture server is allowed"
   [ -z "$ALLOW_SPRINGBOARD" ] || die "SpringBoard launch is not allowed on the gate runner"
@@ -194,6 +194,7 @@ say "xctestrun $XCTESTRUN"
 # injector must run even if the server variables did arrive on their own.
 if [ -n "$ALLOW_SPRINGBOARD" ] || [ -n "$ROW_ID" ] || [ -n "$ROW_QUERY" ] \
   || [ "${WALNUT_UITEST_INBOX_ITEMS:-}" = 1 ] \
+  || [ "${WALNUT_UITEST_PRIVATE_TASKS:-}" = 1 ] \
   || ! /usr/bin/plutil -p "$XCTESTRUN" | grep -q WALNUT_UITEST_SERVER; then
   say "injecting runner environment into the .xctestrun directly"
   python3 - "$XCTESTRUN" "$SERVER" "$TOKEN" "$ALLOW_SPRINGBOARD" "$ROW_ID" "$ROW_QUERY" <<'PY' || die "xctestrun injection failed"
@@ -207,6 +208,10 @@ def inject(target):
         env['WALNUT_UITEST_TOKEN'] = token
         if os.environ.get('WALNUT_UITEST_INBOX_ITEMS') == '1':
             env['WALNUT_UITEST_INBOX_ITEMS'] = '1'
+        # The private tasks walk: its opt-in and the fixture's two task ids.
+        for name in ('WALNUT_UITEST_PRIVATE_TASKS', 'WALNUT_UITEST_SYNCED_TASK', 'WALNUT_UITEST_KEPT_TASK'):
+            if os.environ.get(name):
+                env[name] = os.environ[name]
         # Absent, not empty: the test reads presence, and an empty string would
         # opt a caller in who never asked.
         for name, value in (
