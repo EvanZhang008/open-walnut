@@ -10,6 +10,10 @@ in `src/web/routes/quick-input-v1.ts`, documented under "Quick input" in
   fire and forget: ↵ sends it and Raycast closes (⌘⇧↵ stays to watch the reply); Alfred and Spotlight
   show Main's reply as it is written.
 - **Find a task**: tasks matching the words, opened in Walnut with `open-walnut://open?to=/tasks/<id>`.
+  In Raycast ⌘↵ on a task writes a message straight into its chat instead (and starts it when it
+  has no session), and notes matching the words list below the tasks.
+- **Send a screenshot** (Raycast): copy one (⌃⇧⌘4), then ⌥↵ tells Main with it, and the task
+  message form attaches it (a ticked checkbox). It is sent as a JPEG of at most 2000 px.
 
 | | Spotlight (macOS 26) | Raycast | Alfred 5 (Powerpack) |
 |---|---|---|---|
@@ -37,7 +41,8 @@ npm run dev     # loads it into Raycast
 
 Raycast is the main launcher; Alfred and Spotlight are the alternatives. Commands: **Ask Walnut**
 (type, ↵ to tell Main and close, ⌘↵ for a quick answer, ⌘⇧↵ to tell Main and wait for its reply,
-tasks listed below) and
+⌥↵ to tell Main with the copied screenshot; tasks and notes listed below, ↵ opens one, ⌘↵ on a task
+messages it) and
 **Ask Walnut About Selection**. The port is a preference of the extension.
 
 ## Alfred

@@ -16,11 +16,15 @@ const OPEN_LINK_ACTION = 'open'
 const MAX_TARGET = 500
 
 /**
- * The only query a target may carry: a session's (`/sessions?id=…`, its inbox tab and letter).
- * Any other query is a switch on the page itself (`?walnut-test-run=` turns the window into a
- * test window), which a link from outside must never set.
+ * The only queries a target may carry, each with the key it needs: a session's
+ * (`/sessions?id=…`, its inbox tab and letter) and a note's (`/notes?path=…`, the vault path the
+ * notes page opens). Any other query is a switch on the page itself (`?walnut-test-run=` turns
+ * the window into a test window), which a link from outside must never set.
  */
-const SESSION_QUERY_KEYS = new Set(['id', 'tab', 'letter'])
+const TARGET_QUERIES: Record<string, { keys: ReadonlySet<string>; required: string }> = {
+  '/sessions': { keys: new Set(['id', 'tab', 'letter']), required: 'id' },
+  '/notes': { keys: new Set(['path']), required: 'path' },
+}
 
 /** A path inside the console: one leading slash, no scheme, no backslash, nothing odd. */
 function cleanTarget(value: string | null): string | null {
@@ -30,10 +34,11 @@ function cleanTarget(value: string | null): string | null {
   if (/[\\\s<>"'`#]/.test(to) || /^\/[a-z][a-z0-9+.-]*:/i.test(to)) return null
   const cut = to.indexOf('?')
   if (cut < 0) return to
-  if (to.slice(0, cut) !== '/sessions') return null
+  const allowed = TARGET_QUERIES[to.slice(0, cut)]
+  if (!allowed) return null
   const params = new URLSearchParams(to.slice(cut + 1))
-  for (const key of params.keys()) if (!SESSION_QUERY_KEYS.has(key)) return null
-  return params.get('id') ? to : null
+  for (const key of params.keys()) if (!allowed.keys.has(key)) return null
+  return params.get(allowed.required) ? to : null
 }
 
 /** Where an open link goes, or null for anything else (another action, an outside target). */

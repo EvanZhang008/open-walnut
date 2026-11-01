@@ -28,7 +28,7 @@ const MAX_SESSION_IMAGES = 5
 const MAX_IMAGE_BASE64_LENGTH = 14_000_000 // ~10MB binary
 
 /** Extract valid image payloads from a request body (silently drops junk). */
-function extractValidImages(raw: unknown): SessionImage[] {
+export function extractValidImages(raw: unknown): SessionImage[] {
   if (!Array.isArray(raw)) return []
   return (raw as Array<{ data?: unknown; mediaType?: unknown }>)
     .filter((img) =>

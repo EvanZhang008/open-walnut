@@ -235,3 +235,55 @@ describe('GET /api/v1/quick/tasks', () => {
     if (main) expect(recent.map((r) => r.id)).not.toContain(main.id)
   })
 })
+
+describe('POST /api/v1/quick/task-message', () => {
+  it("drops the text into the task's chat as the user's message, or starts the task with it", async () => {
+    const made = (await (await post('/tasks', { title: 'Draft the venue contract', project: 'Life' })).json()) as { task: { id: string } }
+    const taskId = made.task.id
+    starts.length = 0
+
+    // No session yet: the task is started with the text as its first message.
+    const fresh = await (await post('/quick/task-message', { taskId, text: 'Use the March dates' })).json() as Record<string, unknown>
+    expect(fresh).toMatchObject({ taskId, started: true })
+    expect(starts).toEqual([expect.objectContaining({ taskIdPrefix: taskId, message: 'Use the March dates' })])
+
+    // A live session: the text is queued there as the person's message, nothing is started.
+    const sid = '22222222-3333-4444-8555-666666666666'
+    await createSessionRecord(sid, taskId, 'Life', WALNUT_HOME)
+    await updateTaskRaw(taskId, { session_id: sid } as never)
+    await updateSessionRecord(sid, { process_status: 'idle' } as never)
+    starts.length = 0
+    const sent = await (await post('/quick/task-message', { taskId, text: 'Also ask about parking' })).json() as Record<string, unknown>
+    expect(sent).toMatchObject({ taskId, sessionId: sid, started: false })
+    expect(sent).not.toHaveProperty('midTurn')
+    expect(starts).toHaveLength(0)
+    const queued = (await getQueue(sid)).find((m) => m.id === sent.messageId)
+    expect(queued?.message.startsWith('Also ask about parking')).toBe(true)
+    expect(queued?.sentBy).toBe('person')
+
+    // A screenshot from the clipboard: saved, and the session reads its path before the words;
+    // a screenshot alone needs no words. A junk image is dropped, and then empty text is refused.
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    const shot = await (await post('/quick/task-message', { taskId, text: 'See this error', images: [{ data: png, mediaType: 'image/png' }] })).json() as Record<string, unknown>
+    const shotRow = (await getQueue(sid)).find((m) => m.id === shot.messageId)
+    const shotPath = /^- (\S+\.png)$/m.exec(shotRow?.message ?? '')?.[1]
+    expect(shotPath).toBeTruthy()
+    expect(await fs.stat(shotPath!).then((st) => st.size > 0)).toBe(true)
+    expect(shotRow!.message.indexOf(shotPath!)).toBeLessThan(shotRow!.message.indexOf('See this error'))
+    expect((await post('/quick/task-message', { taskId, images: [{ data: png, mediaType: 'image/png' }] })).status).toBe(200)
+    expect((await post('/quick/task-message', { taskId, text: ' ', images: [{ data: png, mediaType: 'text/html' }] })).status).toBe(400)
+
+    // A task waiting on the user's answer to a prompt: held, nothing queued.
+    await updateSessionRecord(sid, { pendingPermission: { toolName: 'AskUserQuestion' } } as never)
+    const held = await (await post('/quick/task-message', { taskId, text: 'Never mind' })).json() as Record<string, unknown>
+    expect(held).toMatchObject({ taskId, held: true })
+    expect((await getQueue(sid)).some((m) => m.message.startsWith('Never mind'))).toBe(false)
+    await updateSessionRecord(sid, { pendingPermission: null } as never)
+
+    // Only the exact id the launcher listed: a prefix or an unknown id reaches no task.
+    expect((await post('/quick/task-message', { taskId: taskId.slice(0, 6), text: 'x' })).status).toBe(404)
+    expect((await post('/quick/task-message', { taskId: 'nope-0000', text: 'x' })).status).toBe(404)
+    expect((await post('/quick/task-message', { taskId, text: '' })).status).toBe(400)
+    expect((await post('/quick/task-message', { text: 'x' })).status).toBe(400)
+  })
+})

@@ -10,13 +10,19 @@
  *        `{"type":"error",code,message}` line. The same `conversation` key continues it.
  *   GET  /quick/main                                     → { taskId, sessionId }
  *        Main's task and the session its chat runs on, read only (both null before Main exists).
- *   POST /quick/main  { text }                           → { taskId, sessionId, started, held? }
+ *   POST /quick/main  { text, images? }                  → { taskId, sessionId, started, held? }
  *        The text goes into Main's chat as the user's own message (Main is made on first use and
  *        started with it when it has no session). `held`: Main waits on the user's answer to a
  *        prompt, so nothing was sent (a new message would refuse that prompt).
  *        With `follow: true` the answer is an NDJSON stream instead: `{"type":"sent"|"held",
  *        taskId, sessionId, started}`, then Main's reply to THIS message as it is written
  *        (`text` deltas, `activity` lines, one `result` or `error`; quick-main-follow.ts).
+ *   POST /quick/task-message { taskId, text, images? }   → { taskId, sessionId, started, held? }
+ *        The same for one task found in the list: the text goes into that task's chat as the
+ *        user's own message, or starts its session with it when it has none. Fire and forget.
+ *        `images` (both sends): up to 5 `{ data: base64, mediaType }`, a screenshot from the
+ *        clipboard; saved here and named by path in the message, the phone's way
+ *        (session-send-v1.ts). With an image the text may be empty.
  *   GET  /quick/tasks?q=&limit=&recent=                  → { tasks: [{ id, title, project, state, stateLabel }] }
  *        Tasks matching the words, for the list under the box; with no words and `recent=1`, the
  *        open tasks, the ones needing the user first.
@@ -31,6 +37,8 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import type { SessionRecord, Task } from '../../core/types.js'
+import { withImagePaths, type SessionImage } from '../../core/sessions/cloud-images.js'
+import { extractValidImages } from './session-send-v1.js'
 
 export const quickInputV1Router = Router()
 
@@ -59,6 +67,11 @@ function primaryOnly(res: Response): boolean {
   if (!CLOUD_MODE) return true
   res.status(501).json({ error: 'Quick Input answers on your Mac, not on this companion', code: 'not_supported_cloud' })
   return false
+}
+
+/** No words: a send of a screenshot alone may carry none. */
+function blankText(value: unknown): boolean {
+  return value === undefined || value === null || (typeof value === 'string' && !value.trim())
 }
 
 function textOf(value: unknown, max: number): string | null {
@@ -151,15 +164,15 @@ export function mainSessionId(main: Pick<Task, 'session_id' | 'exec_session_id' 
  * task picks (core/routines/session-target.ts), so a task row that lost its pointer still reaches
  * the conversation it has instead of starting it again through the start path's Walnut send.
  */
-async function mainSessionRecord(main: Task): Promise<SessionRecord | null> {
+async function taskSessionRecord(task: Task): Promise<SessionRecord | null> {
   const { getSessionByClaudeId, getSessionsForTask } = await import('../../core/session-tracker.js')
-  const named = mainSessionId(main)
+  const named = mainSessionId(task)
   if (named) {
     const record = await getSessionByClaudeId(named)
     if (record && !record.archived) return record
   }
   const { pickDeliverySession } = await import('../../core/routines/session-target.js')
-  return pickDeliverySession(await getSessionsForTask(main.id).catch(() => []))
+  return pickDeliverySession(await getSessionsForTask(task.id).catch(() => []))
 }
 
 quickInputV1Router.get('/quick/main', async (_req: Request, res: Response, next: NextFunction) => {
@@ -167,7 +180,7 @@ quickInputV1Router.get('/quick/main', async (_req: Request, res: Response, next:
     if (!primaryOnly(res)) return
     const [{ listTasks }] = await Promise.all([import('../../core/task-manager.js')])
     const main = (await listTasks()).find((t) => t.org_role === 'main')
-    const record = main ? await mainSessionRecord(main) : null
+    const record = main ? await taskSessionRecord(main) : null
     res.json({ taskId: main?.id ?? null, sessionId: record?.claudeSessionId ?? null })
   } catch (err) {
     next(err)
@@ -177,16 +190,17 @@ quickInputV1Router.get('/quick/main', async (_req: Request, res: Response, next:
 quickInputV1Router.post('/quick/main', async (req: Request, res: Response, next: NextFunction) => {
   try {
     if (!primaryOnly(res)) return
-    const text = textOf(req.body?.text, MAX_TEXT_CHARS)
-    if (!text) {
+    const images = extractValidImages(req.body?.images)
+    const text = textOf(req.body?.text, MAX_TEXT_CHARS) ?? (images.length > 0 && blankText(req.body?.text) ? '' : null)
+    if (text === null) {
       res.status(400).json({ error: `text must be 1-${MAX_TEXT_CHARS} characters`, code: 'bad_request' })
       return
     }
     if (req.body?.follow === true) {
-      await sendAndFollow(text, res)
+      await sendAndFollow(text, images, res)
       return
     }
-    const answer = await sendToMain(text)
+    const answer = await sendToMain(text, images)
     delete answer.midTurn
     res.json(answer)
   } catch (err) {
@@ -198,7 +212,7 @@ quickInputV1Router.post('/quick/main', async (req: Request, res: Response, next:
  * `follow: true`: one NDJSON stream with the send's outcome, then Main's reply to this message as
  * it is written (quick-main-follow.ts). Closing the request stops the follow, never the turn.
  */
-async function sendAndFollow(text: string, res: Response): Promise<void> {
+async function sendAndFollow(text: string, images: SessionImage[], res: Response): Promise<void> {
   res.status(200)
   res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8')
   res.setHeader('Cache-Control', 'no-store')
@@ -210,7 +224,7 @@ async function sendAndFollow(text: string, res: Response): Promise<void> {
   res.on('close', () => follower.stop())
   let sent: QuickMainResult
   try {
-    sent = await sendToMain(text)
+    sent = await sendToMain(text, images)
   } catch (error) {
     line({ type: 'error', code: 'send_failed', message: error instanceof Error ? error.message : String(error) })
     follower.stop()
@@ -227,6 +241,31 @@ async function sendAndFollow(text: string, res: Response): Promise<void> {
   follower.bind(sent.sessionId, { messageId: sent.messageId, fresh: sent.started, midTurn: sent.midTurn })
 }
 
+quickInputV1Router.post('/quick/task-message', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!primaryOnly(res)) return
+    const images = extractValidImages(req.body?.images)
+    const text = textOf(req.body?.text, MAX_TEXT_CHARS) ?? (images.length > 0 && blankText(req.body?.text) ? '' : null)
+    const taskId = typeof req.body?.taskId === 'string' ? req.body.taskId.trim() : ''
+    if (text === null || !taskId) {
+      res.status(400).json({ error: `taskId and text (1-${MAX_TEXT_CHARS} characters) are required`, code: 'bad_request' })
+      return
+    }
+    const { getTask } = await import('../../core/task-manager.js')
+    // An exact id only: the launcher sends the id it listed, and a prefix could reach another task.
+    const task = await getTask(taskId).catch(() => null)
+    if (!task || task.id !== taskId) {
+      res.status(404).json({ error: `No task ${taskId}`, code: 'task_not_found' })
+      return
+    }
+    const answer = await sendToTaskSession(task, await taskSessionRecord(task), text, await withSavedImages(text, images))
+    delete answer.midTurn
+    res.json(answer)
+  } catch (err) {
+    next(err)
+  }
+})
+
 export interface QuickMainResult {
   taskId: string
   sessionId: string | null
@@ -240,54 +279,74 @@ export interface QuickMainResult {
 }
 
 /**
- * The user's message into Main's chat, the way the Org page's Ask Main sends it
+ * The user's message into Main's chat (or any task's: sendToTaskSession), the way the Org
+ * page's Ask Main sends it
  * (web/src/components/org/ask-main.ts): Main's live session gets it as a person's chat message,
  * with the same message hints a composer send carries; a Main with none is started with it.
  */
-export async function sendToMain(text: string): Promise<QuickMainResult> {
+export async function sendToMain(text: string, images: SessionImage[] = []): Promise<QuickMainResult> {
   const { ensureMainTask } = await import('../../core/org/org-store.js')
   const main: Task = await ensureMainTask()
-  return sendToMainSession(main, await mainSessionRecord(main), text)
+  return sendToTaskSession(main, await taskSessionRecord(main), text, await withSavedImages(text, images))
 }
 
-async function sendToMainSession(main: Task, record: SessionRecord | null, text: string, startedOnce = false): Promise<QuickMainResult> {
+/**
+ * The text the session reads: the saved images' paths first, then the words (its stdin takes
+ * text only, so it opens the files with its Read tool). A session on another host gets the files
+ * uploaded on the way (RemoteSessionManager.prepareOutbound), for a send and a start alike.
+ */
+async function withSavedImages(text: string, images: SessionImage[]): Promise<string> {
+  if (images.length === 0) return text
+  const { saveImageToDisk } = await import('./images.js')
+  const paths: string[] = []
+  for (const img of images) {
+    try {
+      paths.push((await saveImageToDisk(img.data, img.mediaType)).filePath)
+    } catch (error) {
+      log.web.warn('quick input image not saved', { error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+  return paths.length > 0 ? withImagePaths(text, paths) : text
+}
+
+async function sendToTaskSession(task: Task, record: SessionRecord | null, text: string, cliText: string, startedOnce = false): Promise<QuickMainResult> {
   if (record) {
     const sessionId = record.claudeSessionId
     if (record.pendingPermission && (record.process_status === 'running' || record.process_status === 'idle')) {
-      return { taskId: main.id, sessionId, started: false, held: true }
+      return { taskId: task.id, sessionId, started: false, held: true }
     }
     const [{ prepareHintedSend }, { sendMessageToSession }] = await Promise.all([
       import('../../core/hints/hint-send.js'),
       import('../../core/session-message-queue.js'),
     ])
-    const hinted = await prepareHintedSend(sessionId, record, text, { sentBy: 'person' })
+    const hinted = await prepareHintedSend(sessionId, record, cliText, { sentBy: 'person' })
     const msg = await sendMessageToSession(sessionId, text, {
       source: 'ui',
-      taskId: main.id,
+      taskId: task.id,
       ...(hinted.enqueueText !== text ? { enqueueMessage: hinted.enqueueText } : {}),
       hinted: true,
     })
     await hinted.commit()
-    log.web.info('quick input sent to main', { taskId: main.id, sessionId, messageId: msg.id })
-    return { taskId: main.id, sessionId, started: false, messageId: msg.id, midTurn: record.process_status === 'running' }
+    log.web.info('quick input sent to task', { taskId: task.id, sessionId, messageId: msg.id })
+    return { taskId: task.id, sessionId, started: false, messageId: msg.id, midTurn: record.process_status === 'running' }
   }
   const { startSessionForTask, SessionExistsError } = await import('../../core/sessions/task-start.js')
   let started
   try {
-    started = await startSessionForTask({ taskIdPrefix: main.id, message: text, source: 'api-v1' })
+    started = await startSessionForTask({ taskIdPrefix: task.id, message: cliText, source: 'api-v1' })
   } catch (err) {
     // A session the task row did not name (a start that won the race): the message goes to it.
     if (err instanceof SessionExistsError && err.existingSessionId && !startedOnce) {
       const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
       const existing = await getSessionByClaudeId(err.existingSessionId)
-      if (existing) return sendToMainSession(main, existing, text, true)
+      if (existing) return sendToTaskSession(task, existing, text, cliText, true)
     }
     throw err
   }
   const startedSid = started.sessionId ?? null
-  log.web.info('quick input started main', { taskId: main.id, sessionId: startedSid })
+  log.web.info('quick input started task', { taskId: task.id, sessionId: startedSid })
   // `continued`: the task's conversation took it (one-session-per-task.ts), not a new session.
-  return { taskId: main.id, sessionId: startedSid, started: !started.continued }
+  return { taskId: task.id, sessionId: startedSid, started: !started.continued }
 }
 
 quickInputV1Router.get('/quick/tasks', async (req: Request, res: Response, next: NextFunction) => {

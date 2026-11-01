@@ -1134,6 +1134,11 @@ reconcile, `NOTES_UPDATED` events) with the web UI's `/api/notes-v2`.
   `409 project_elsewhere` and nothing is written. The same rule holds on
   `PATCH /api/tasks/:id` and a folder add with `move: true`. Humans, other
   sessions and workers of a Personal AI conversation are never asked.
+- Watch (additive, 2026-10): `PATCH /api/v1/tasks/:id` also accepts `watched_at`:
+  an ISO-8601 datetime (when the user started watching) starts watching, `""` or
+  `null` stops (the field is then absent). Anything else is `400 bad_request`. It
+  moves no phase, tier, pin or read marker. The web route `PATCH /api/tasks/:id`
+  takes the same field (`""` stops), and agents set it with `task_update`.
 
 ### A task's own MEMORY.md (additive, 2026-10-27): `/tasks/:id/agent-memory`
 
@@ -1476,8 +1481,7 @@ team is talked to through that task; the Inbox never gets a lead.
   in every answer carries `org_instructions` (additive).
 - Every POST and PUT answers `501` on a replica.
 
-### Task actions (additive, Wave 1 2026-08) — detail / delete / field setters / batch / focus
-### Quick input (additive, 2026-10-31): `/quick/ask`, `/quick/warm`, `/quick/main`, `/quick/tasks`
+### Quick input (additive, 2026-10-31): `/quick/ask`, `/quick/warm`, `/quick/main`, `/quick/task-message`, `/quick/tasks`
 
 What a launcher on the Mac calls (the Alfred workflow and Raycast extension in
 `desktop/launchers/`, the app's Spotlight actions in `desktop/WalnutIntents.swift`).
@@ -1492,9 +1496,13 @@ Every route answers `501 not_supported_cloud` on a cloud companion.
 - `POST /quick/warm`: `204` at once; starts a warm model process so the next ask answers sooner.
 - `GET /quick/main`: `{taskId, sessionId}` of Main and the session its chat runs on (`null` when
   there is none yet).
-- `POST /quick/main {text, follow?}`: puts the text into Main's chat as the user's message, or
+- `POST /quick/main {text, images?, follow?}`: puts the text into Main's chat as the user's message, or
   starts Main's session with it. Answers `{taskId, sessionId, started, held?, messageId?}`;
   `held: true` means Main waits on the user's answer to a prompt first and nothing was sent.
+  `images` (additive): up to 5 `{data: <raw base64>, mediaType}` (`image/png`, `image/jpeg`,
+  `image/gif`, `image/webp`; others are dropped), a screenshot from the clipboard. They are saved
+  on the Mac and named by path in the message the session reads, as
+  `POST /sessions/:id/messages` does; with one the text may be empty.
   With `follow: true` the answer is NDJSON instead: `{"type":"sent"|"held",taskId,sessionId,started,messageId?}`,
   then Main's reply to this message as it is written (`{"type":"text","delta"}`,
   `{"type":"activity","detail"}`; `{"type":"reset"}` drops the words shown so far: a message sent
@@ -1502,12 +1510,19 @@ Every route answers `501 not_supported_cloud` on a cloud companion.
   `{"type":"error","code","message"}`. The reply is the turn that took this message (matched by
   its delivery and turn generation), never a turn that was running before it; `unfinished` means
   the follow gave up after 15 minutes. Closing the request stops the follow, not Main's turn.
+- `POST /quick/task-message {taskId, text, images?}`: the same send for one task found with
+  `/quick/tasks`: the text (and `images`) go into that task's chat as the user's message, or start
+  its session when it has none. `taskId` is the exact id (`404 task_not_found` for anything else,
+  a prefix included). Answers `{taskId, sessionId, started, held?, messageId?}`.
 - `GET /quick/tasks?q=&limit=6&recent=`: `{tasks: [{id, title, project, state, stateLabel}]}`, open
   tasks first; `state` is the user status (`needs`, `working`, `waiting`, `done`). With no `q`,
   nothing, unless `recent=1`: then the open board tasks, the ones needing the user first. Open one with the
   link `open-walnut://open?to=/tasks/<id>`, which the Mac app sends to that page (a target is a
-  console path; the only query it may carry is a session's `id`, `tab` and `letter`).
+  console path; the only queries it may carry are a session's `id`, `tab` and `letter`, and a
+  note's `path`: `open-walnut://open?to=` + the encoded `/notes?path=<encoded vault path>`).
+  Launchers find notes with `GET /notes/search`.
 
+### Task actions (additive, Wave 1 2026-08) — detail / delete / field setters / batch / focus
 
 All Class A: same task-manager core as the web console; on a cloud REPLICA
 each mutation writes the local store and a task-outbox op rides git-sync back
