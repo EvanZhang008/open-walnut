@@ -11307,6 +11307,17 @@ export class SessionRunner {
         source: 'session-start',
       }, ['main-ai'], { source: 'session-start' })
       await this.drainAcpQueue(session, sid)
+      // The launch's own title kick: quick-start fires it only for a native launch, whose id
+      // it knows before the spawn, so an ACP task kept its placeholder until a second message
+      // (2026-11-01: no OpenCode session on a local model ever got an AI title). After the
+      // first prompt went out, so it never races it for the worker: a busy session leaves the
+      // title to Walnut's own model. Fire and forget; the placeholder gate and the cap live inside.
+      if (data.taskId && naming.trim()) {
+        const taskId = data.taskId
+        import('../core/session-hooks/builtins.js')
+          .then(({ autoTitleFromObservedMessage }) => autoTitleFromObservedMessage(sid, taskId, naming))
+          .catch(() => { /* titling is best-effort */ })
+      }
     }
     return { claudeSessionId: sid, title }
   }

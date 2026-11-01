@@ -156,6 +156,17 @@ export function withCoreWalnutTools(server: AcpMcpServer): AcpMcpServer {
   return { ...server, args: [...server.args], env: [...env, { name: WALNUT_MCP_CORE_ENV, value: '1' }] }
 }
 
+/**
+ * Leads every status question an ACP session is asked (the turn-end report, a title, a
+ * diff caption, the status lines). The question rides the session's own thread, where the
+ * model has its tools, and a small model read "update this task's NOTE" as a job: it wrote
+ * notes.md into the user's repo and started a subagent (2026-11-01, an 8B model on
+ * OpenCode). The worker also ends the question at the first tool call (refuseControlTool).
+ */
+export const CONTROL_PROMPT_GUARD = '[Walnut status question] This is not a task and not a message from the user. '
+  + 'Answer in this reply only, as plain text in the format asked below. Do not call any tool: do not read, write or edit '
+  + 'files, run commands, or start agents. Walnut stores your answer itself; nothing goes in a file.'
+
 /** `mcpServers` absent = no MCP servers, i.e. exactly the pre-mount behavior. */
 export interface NewSessionParams { cwd: string; mcpServers?: AcpMcpServer[] }
 export interface LoadSessionParams {
@@ -463,6 +474,8 @@ export type JournalMetaEvent =
   /** A mid-turn steer joined the LIVE turn (owner commandId = the running prompt's). */
   | { type: 'steer-accepted'; commandId: string; walnutMessageId: string; text: string }
   | { type: 'control-prompt-accepted'; commandId: string; purpose: 'self-report' }
+  /** The model started a tool during a status question; the worker cancelled it (worker.ts refuseControlTool). */
+  | { type: 'control-tool-refused'; commandId: string; title?: string }
   | {
       type: 'control-ended'
       commandId: string

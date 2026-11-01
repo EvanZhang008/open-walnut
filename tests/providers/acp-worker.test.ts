@@ -614,6 +614,35 @@ describe('AcpWorker lifecycle', () => {
   })
 })
 
+// 2026-11-01: an 8B model on OpenCode took the turn-end "update this task's NOTE" as a job,
+// wrote notes.md into the user's repo and started a subagent. A status question is answered
+// in text only: the worker ends it at the first tool call, before the tool runs.
+describe('a status question never runs a tool', () => {
+  it('a tool call in a control prompt ends it as tool-refused, keeps the text so far, and the tool never runs', async () => {
+    const toolFile = path.join(tmpDir, 'notes.md')
+    worker = await initWorker({ MOCK_ACP_TOOL_FILE: toolFile })
+    await op(worker, 'newSession', { cwd: tmpDir })
+    const accepted = await op(worker, 'prompt', { commandId: 'acp-self-report:acts', control: 'self-report', text: 'acts-with-tool' })
+    expect(accepted.ok).toBe(true)
+    const recs = await waitForJournal((records) =>
+      metas(records).some((event) => event.type === 'control-ended' && event.commandId === 'acp-self-report:acts'))
+    const ended = metas(recs).find((event) => event.type === 'control-ended' && event.commandId === 'acp-self-report:acts')
+    expect(ended).toMatchObject({ stopReason: 'tool-refused' })
+    expect(metas(recs).some((event) => event.type === 'control-tool-refused' && event.commandId === 'acp-self-report:acts')).toBe(true)
+    await new Promise((r) => setTimeout(r, 500))
+    expect(fs.existsSync(toolFile)).toBe(false)
+  })
+
+  it('the same tool call in a user turn still runs (only status questions are text-only)', async () => {
+    const toolFile = path.join(tmpDir, 'user-notes.md')
+    worker = await initWorker({ MOCK_ACP_TOOL_FILE: toolFile })
+    await op(worker, 'newSession', { cwd: tmpDir })
+    await op(worker, 'prompt', { commandId: 'user-acts', walnutMessageId: 'qm-acts', text: 'acts-with-tool' })
+    await waitForJournal((records) => metas(records).some((event) => event.type === 'turn-ended'))
+    expect(fs.readFileSync(toolFile, 'utf-8')).toBe('written by the tool')
+  })
+})
+
 describe('MCP server mounts', () => {
   /** What the CLIENT actually put on the wire, as recorded by the mock agent. */
   function sessionRequests(logPath: string): Array<{

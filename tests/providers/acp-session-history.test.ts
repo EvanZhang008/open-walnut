@@ -21,7 +21,7 @@ import {
   readAcpSessionHistoryState,
   _resetAcpHistoryCacheForTesting,
 } from '../../src/providers/acp-session-history.js'
-import { AcpSession } from '../../src/providers/acp-session.js'
+import { CONTROL_PROMPT_GUARD, ControlToolRefusedError, AcpSession } from '../../src/providers/acp-session.js'
 
 let tmpDir: string
 
@@ -780,6 +780,10 @@ describe('ACP session record primitives', () => {
     await vi.waitFor(() => expect(sent?.commandId).toEqual(expect.any(String)))
     const commandId = sent!.commandId as string
     internals.handleDaemonEvent({
+      ev: 'jsonl', sid: 'runtime-report', v: 5,
+      line: JSON.stringify({ kind: 'meta', ts: 0, event: { type: 'control-prompt-accepted', commandId, purpose: 'self-report' } }),
+    })
+    internals.handleDaemonEvent({
       ev: 'jsonl',
       sid: 'runtime-report',
       v: 10,
@@ -829,6 +833,127 @@ describe('ACP session record primitives', () => {
     })
 
     expect(await reportPromise).toBe('first second')
+  })
+
+  // 2026-11-01: a small model on OpenCode answered the turn-end report with tools, and a
+  // title asked meanwhile received the report's text. Each status question is text only,
+  // gets its own answer, and keeps what came before a refused tool.
+  describe('status questions', () => {
+    function rig(runtimeId: string) {
+      const session = new AcpSession({ taskId: 't-' + runtimeId, project: 'Project', cwd: tmpDir, mode: 'default', providerSessionId: 'p-' + runtimeId, runtimeId })
+      const sent: Array<Record<string, unknown>> = []
+      const internals = session as unknown as {
+        establish(): Promise<string>
+        ensureConn(): Promise<{ send(command: string, params: Record<string, unknown>): Promise<{ ok: boolean }> }>
+        handleDaemonEvent(event: Record<string, unknown>): void
+      }
+      internals.establish = async () => 'p-' + runtimeId
+      internals.ensureConn = async () => ({ send: async (_command, params) => { sent.push(params); return { ok: true } } })
+      let v = 0
+      const frame = (text: string) => internals.handleDaemonEvent({ ev: 'jsonl', sid: runtimeId, v: v += 10, line: JSON.stringify({
+        kind: 'acp', ts: v, source: 'control',
+        frame: { method: 'session/update', params: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } } } },
+      }) })
+      const meta = (event: Record<string, unknown>) => internals.handleDaemonEvent({ ev: 'jsonl', sid: runtimeId, v: v += 10, line: JSON.stringify({ kind: 'meta', ts: v, event }) })
+      const accept = (i: number) => meta({ type: 'control-prompt-accepted', commandId: sent[i].commandId, purpose: 'self-report' })
+      return { session, sent, frame, meta, accept }
+    }
+
+    it('every question leads with the text-only guard', async () => {
+      const { session, sent, frame, meta, accept } = rig('rt-guard')
+      const answer = session.requestTurnCompleteSelfReport('TITLE question', 2_000)
+      await vi.waitFor(() => expect(sent).toHaveLength(1))
+      accept(0)
+      expect(String(sent[0].text).startsWith(CONTROL_PROMPT_GUARD)).toBe(true)
+      expect(String(sent[0].text)).toContain('TITLE question')
+      expect(CONTROL_PROMPT_GUARD).toContain('Do not call any tool')
+      frame('A title')
+      meta({ type: 'control-ended', commandId: sent[0].commandId, stopReason: 'end_turn' })
+      expect(await answer).toBe('A title')
+    })
+
+    it('a second question waits for the first and gets its own answer', async () => {
+      const { session, sent, frame, meta, accept } = rig('rt-queue')
+      const note = session.requestTurnCompleteSelfReport('NOTE question', 2_000)
+      const title = session.requestTurnCompleteSelfReport('TITLE question', 2_000)
+      await vi.waitFor(() => expect(sent).toHaveLength(1))
+      accept(0)
+      frame('EXEC_SUMMARY: the note')
+      meta({ type: 'control-ended', commandId: sent[0].commandId, stopReason: 'end_turn' })
+      expect(await note).toBe('EXEC_SUMMARY: the note')
+      await vi.waitFor(() => expect(sent).toHaveLength(2))
+      expect(String(sent[1].text)).toContain('TITLE question')
+      // The report's last chunk, flushed after its prompt call returned: not the title's.
+      frame(' and a straggler')
+      accept(1)
+      frame('Word count fix')
+      meta({ type: 'control-ended', commandId: sent[1].commandId, stopReason: 'end_turn' })
+      expect(await title).toBe('Word count fix')
+    })
+
+    it('the guarded request is the only way a status question reaches an ACP worker', async () => {
+      // A new sender of control prompts would skip CONTROL_PROMPT_GUARD and the queue.
+      const nodeFs = await import('node:fs')
+      const root = path.resolve(__dirname, '../..')
+      const hits = (nodeFs.readdirSync(path.join(root, 'src'), { recursive: true }) as string[])
+        .filter((file) => file.endsWith('.ts') && nodeFs.readFileSync(path.join(root, 'src', file), 'utf-8').includes("control: 'self-report'"))
+        .map((file) => `src/${file.split(path.sep).join('/')}`).sort()
+      expect(hits).toEqual(['src/providers/acp-session.ts', 'src/providers/acp-worker/protocol.ts', 'src/providers/acp-worker/worker.ts'])
+    })
+
+    it('a refused tool ends the question as an error that carries the text written before it', async () => {
+      const { session, sent, frame, meta, accept } = rig('rt-refused')
+      const answer = session.requestTurnCompleteSelfReport('NOTE question', 2_000)
+      await vi.waitFor(() => expect(sent).toHaveLength(1))
+      accept(0)
+      frame('RECAP: fixed the count')
+      meta({ type: 'control-tool-refused', commandId: sent[0].commandId, title: 'write notes.md' })
+      meta({ type: 'control-ended', commandId: sent[0].commandId, stopReason: 'tool-refused' })
+      const err = await answer.then(() => null, (e: unknown) => e)
+      expect(err).toBeInstanceOf(ControlToolRefusedError)
+      expect((err as ControlToolRefusedError).partialText).toBe('RECAP: fixed the count')
+    })
+
+    it('a question that cannot start before its deadline leaves the queue, and the next one still runs', async () => {
+      const { session, sent, frame, meta, accept } = rig('rt-deadline')
+      const note = session.requestTurnCompleteSelfReport('NOTE question', 5_000)
+      await vi.waitFor(() => expect(sent).toHaveLength(1))
+      const t0 = Date.now()
+      await expect(session.requestTurnCompleteSelfReport('CAPTION question', 150)).rejects.toThrow(/waiting for an earlier one/)
+      expect(Date.now() - t0).toBeLessThan(1_500)
+      const title = session.requestTurnCompleteSelfReport('TITLE question', 5_000)
+      accept(0)
+      meta({ type: 'control-ended', commandId: sent[0].commandId, stopReason: 'end_turn' })
+      await note
+      await vi.waitFor(() => expect(sent).toHaveLength(2))
+      expect(String(sent[1].text)).toContain('TITLE question')
+      accept(1)
+      frame('Title')
+      meta({ type: 'control-ended', commandId: sent[1].commandId, stopReason: 'end_turn' })
+      expect(await title).toBe('Title')
+    })
+
+    it('a user prompt waits while a timed-out question is still stopping the worker', async () => {
+      const { session, sent } = rig('rt-cancel-wait')
+      let finishCancel!: () => void
+      ;(session as unknown as { _controlCancel: Promise<void> })._controlCancel = new Promise<void>((r) => { finishCancel = r })
+      const sending = session.sendAccepted('hello', 'qm-wait').catch(() => {})
+      await new Promise((r) => setTimeout(r, 100))
+      expect(sent).toHaveLength(0)
+      finishCancel()
+      await vi.waitFor(() => expect(sent.length).toBeGreaterThan(0))
+      await sending
+    })
+
+    it('a stop drops the questions still queued; they are never sent', async () => {
+      const { session, sent } = rig('rt-stop')
+      void session.requestTurnCompleteSelfReport('NOTE question', 5_000).catch(() => {})
+      await vi.waitFor(() => expect(sent).toHaveLength(1))
+      const queued = session.requestTurnCompleteSelfReport('TITLE question', 5_000)
+      await session.gracefulStop()
+      await expect(queued).rejects.toThrow(/superseded/)
+      expect(sent.filter((p) => String(p.text ?? '').includes('TITLE question'))).toHaveLength(0)
+    })
   })
 
   it('serializes fast terminal persistence behind prompt acceptance without reopening running', async () => {

@@ -81,7 +81,7 @@ export class AcpWorker {
    *  still the USER's reply; a control prompt's stragglers stay control. */
   private lastEnded: 'turn' | 'control' | null = null
   private turnCommandId: string | null = null
-  private controlPrompt: { commandId: string; purpose: 'self-report' } | null = null
+  private controlPrompt: { commandId: string; purpose: 'self-report'; toolRefused?: boolean } | null = null
   private loadingSession = false
   /** True while a resume's replay burst must be dropped instead of journaled
    * (set in opLoadSession when the journal already holds the conversation). */
@@ -527,8 +527,13 @@ export class AcpWorker {
       sessionId: this.providerSessionId,
       prompt: [{ type: 'text', text: params.text }],
     }).then((resp) => {
-      this.finishControlPrompt(params.commandId, resp.stopReason)
+      const refused = this.controlPrompt?.commandId === params.commandId && this.controlPrompt.toolRefused
+      this.finishControlPrompt(params.commandId, refused ? 'tool-refused' : resp.stopReason)
     }).catch((error) => {
+      if (this.controlPrompt?.commandId === params.commandId && this.controlPrompt.toolRefused) {
+        this.finishControlPrompt(params.commandId, 'tool-refused')
+        return
+      }
       this.reportProviderError('prompt', 'protocol', error)
       this.finishControlPrompt(
         params.commandId,
@@ -537,6 +542,27 @@ export class AcpWorker {
       )
     })
     return acceptedResult
+  }
+
+  /**
+   * A status question (the turn-end report, a title, a diff caption) is answered in text,
+   * never by acting: a model that starts a tool there ends the question at once. Many
+   * adapters run tools with no permission request (OpenCode by default), so the cancelled
+   * permission below is not enough. 2026-11-01: an 8B model on OpenCode took the turn-end
+   * "update this task's NOTE" as a job, wrote notes.md into the user's repo and started a
+   * subagent that created source files. The text before the tool call is kept.
+   */
+  private refuseControlTool(title: string | undefined): void {
+    const control = this.controlPrompt
+    if (!control || control.toolRefused) return
+    control.toolRefused = true
+    this.journal.appendMeta({ type: 'control-tool-refused', commandId: control.commandId, ...(title ? { title } : {}) })
+    this.notifyJournal()
+    const conn = this.conn
+    if (conn && this.providerSessionId) {
+      void conn.cancel({ sessionId: this.providerSessionId }).catch(() => {})
+      this.failAllPendingPermissions()
+    }
   }
 
   private finishControlPrompt(commandId: string, stopReason: string, error?: string): void {
@@ -697,6 +723,7 @@ export class AcpWorker {
         // conversation isn't unrecoverable.
         if (this.loadingSession && this.skipReplayFrames) return
         const update = params.update
+        if (update.sessionUpdate === 'tool_call' && this.controlPrompt) this.refuseControlTool(update.title)
         if (update.sessionUpdate === 'tool_call') {
           this.toolCalls.set(update.toolCallId, { toolCallId: update.toolCallId, title: update.title, kind: update.kind, rawInput: update.rawInput })
         } else if (update.sessionUpdate === 'tool_call_update') {

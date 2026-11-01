@@ -69,6 +69,7 @@ import {
   mergeAcpSpawnEnv,
   resolveWalnutMcpServers,
   snapshotAcpConfigOptions,
+  CONTROL_PROMPT_GUARD,
   walnutMcpToolSet,
   withCoreWalnutTools,
   snapshotAcpModels,
@@ -655,8 +656,21 @@ export function splitAcpModelId(modelId: string): { base: string; effort?: strin
   return match ? { base: match[1], effort: match[2] } : { base: modelId }
 }
 
+export { CONTROL_PROMPT_GUARD }
+
+/** A status question ended because the model reached for a tool; `partialText` is what it wrote first. */
+export class ControlToolRefusedError extends Error {
+  constructor(readonly partialText: string) {
+    super('the model started a tool during a status question, so the question was ended')
+    this.name = 'ControlToolRefusedError'
+  }
+}
+
 interface PendingSelfReport {
   commandId: string
+  /** Its own control-prompt-accepted was read: frames before it are an earlier question's stragglers. */
+  started: boolean
+  toolRefused: boolean
   chunks: string[]
   promise: Promise<string>
   resolve: (text: string) => void
@@ -715,6 +729,13 @@ export class AcpSession {
   private readonly _emittedPermissionRequestIds = new Set<string>()
   private _pendingPermissionCommit: Promise<void> = Promise.resolve()
   private _selfReport: PendingSelfReport | null = null
+  /** Status questions run one at a time, each for its own answer (requestTurnCompleteSelfReport). */
+  private _controlTail: Promise<void> = Promise.resolve()
+  /** Bumped by a user prompt, an abort, a stop or a detach: a status question still queued
+   *  then is dropped, never sent after them. */
+  private _controlEpoch = 0
+  /** The cancel of a status question that ran out of time, while it is still in flight. */
+  private _controlCancel: Promise<void> | null = null
   private readonly normalizer: AcpStreamNormalizer
   /** establish loaded an existing thread into a new worker (followEngineDefaultModel). */
   private _coldLoaded = false
@@ -1596,7 +1617,11 @@ export class AcpSession {
   ): Promise<void> {
     // A user prompt always wins over a hidden report. Hard-abort the control
     // turn, lazily reload the same provider thread, then accept this queue item.
+    this._controlEpoch++
     await this.cancelSelfReport('self-report superseded by user prompt')
+    // A status question that ran out of time may still be stopping the worker: a prompt sent
+    // into it now would be accepted and then lost with the process group.
+    if (this._controlCancel) await this._controlCancel.catch(() => {})
     await this.establish()
     const conn = await this.ensureConn()
 
@@ -2056,6 +2081,7 @@ export class AcpSession {
    * the durable provider thread in a replacement worker.
    */
   async abortTurn(): Promise<void> {
+    this._controlEpoch++
     if (this._selfReport) {
       await this.cancelSelfReport('self-report aborted')
       return
@@ -2086,11 +2112,41 @@ export class AcpSession {
    * privately and ignored by the canonical live/history projector.
    */
   async requestTurnCompleteSelfReport(prompt: string, timeoutMs: number): Promise<string> {
+    // One at a time, each for its own answer: joining the question already in flight
+    // handed a title request the turn-end report's text (and a diff caption the title's).
+    // The deadline counts the wait: a question that cannot start in time leaves the queue.
+    const deadline = Date.now() + Math.max(1, timeoutMs)
+    const epoch = this._controlEpoch
+    const before = this._controlTail
+    let release!: () => void
+    const mine = new Promise<void>((resolve) => { release = resolve })
+    this._controlTail = before.then(() => mine)
+    let waitTimer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const reached = await Promise.race([
+        before.then(() => true),
+        new Promise<boolean>((resolve) => { waitTimer = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now())) }),
+      ])
+      if (!reached) throw new Error(`self-report timed out after ${timeoutMs}ms waiting for an earlier one`)
+      if (epoch !== this._controlEpoch) throw new Error('self-report superseded')
+      const left = deadline - Date.now()
+      if (left <= 0) throw new Error(`self-report timed out after ${timeoutMs}ms waiting for an earlier one`)
+      return await this.runControlPrompt(prompt, left, epoch)
+    } finally {
+      clearTimeout(waitTimer)
+      // A question that timed out is still being cancelled: the next one waits for that.
+      if (this._controlCancel) await this._controlCancel.catch(() => {})
+      release()
+    }
+  }
+
+  private async runControlPrompt(prompt: string, timeoutMs: number, epoch: number): Promise<string> {
     await this.establish()
     if (this._turnActive) throw new Error('cannot request ACP self-report during an active user turn')
-    if (this._selfReport) return this._selfReport.promise
 
     const conn = await this.ensureConn()
+    // A user prompt, a stop or an abort while this one was starting: never send it after them.
+    if (epoch !== this._controlEpoch) throw new Error('self-report superseded')
     const commandId = `acp-self-report:${crypto.randomBytes(8).toString('hex')}`
     let resolveReport!: (text: string) => void
     let rejectReport!: (error: Error) => void
@@ -2101,7 +2157,8 @@ export class AcpSession {
     // The daemon event can arrive before the accepted RPC response.
     void promise.catch(() => {})
     const timer = setTimeout(() => {
-      void this.cancelSelfReport(`self-report timed out after ${timeoutMs}ms`).catch((error) => {
+      this._controlCancel = this.cancelSelfReport(`self-report timed out after ${timeoutMs}ms`)
+      void this._controlCancel.catch((error) => {
         log.session.warn('acp: timed-out self-report abort failed', {
           sessionId: this.trackingId(),
           runtimeId: this.runtimeId,
@@ -2111,6 +2168,8 @@ export class AcpSession {
     }, Math.max(1, timeoutMs))
     this._selfReport = {
       commandId,
+      started: false,
+      toolRefused: false,
       chunks: [],
       promise,
       resolve: resolveReport,
@@ -2123,7 +2182,7 @@ export class AcpSession {
         sid: this.runtimeId,
         commandId,
         control: 'self-report',
-        text: prompt,
+        text: `${CONTROL_PROMPT_GUARD}\n\n${prompt}`,
         ...this.budgetTarget(),
       })
       if (!resp.ok) {
@@ -2148,6 +2207,7 @@ export class AcpSession {
 
   /** Graceful stop: shut the worker down (journal meta → adapter teardown). */
   async gracefulStop(): Promise<void> {
+    this._controlEpoch++
     if (this._selfReport) {
       await this.cancelSelfReport('session stopped')
       return
@@ -2165,6 +2225,7 @@ export class AcpSession {
 
   /** Detach event handling without touching the worker (server shutdown path). */
   detach(): void {
+    this._controlEpoch++
     if (this._selfReport) {
       this.settleSelfReport(this._selfReport.commandId, new Error('ACP session detached'))
     }
@@ -2267,8 +2328,23 @@ export class AcpSession {
     const pending = this._selfReport
     if (!pending) return
     if (record.kind === 'acp' && record.source === 'control') {
+      // Before its own acceptance a control frame is an earlier question's straggler
+      // (OpenCode flushes the last chunks after the prompt call returns).
+      if (!pending.started) return
       const text = controlFrameText(record.frame)
       if (text) pending.chunks.push(text)
+      return
+    }
+    if (record.kind === 'meta' && record.event.type === 'control-prompt-accepted' && record.event.commandId === pending.commandId) {
+      pending.started = true
+      return
+    }
+    if (record.kind === 'meta' && record.event.type === 'control-tool-refused' && record.event.commandId === pending.commandId) {
+      pending.toolRefused = true
+      log.session.warn('acp: the model started a tool during a status question; the question was ended', {
+        sessionId: this.trackingId(), runtimeId: this.runtimeId, tool: record.event.title,
+        textSoFar: pending.chunks.join('').length,
+      })
       return
     }
     if (record.kind !== 'meta'
@@ -2284,6 +2360,10 @@ export class AcpSession {
         pending.commandId,
         new Error(`ACP self-report ended: ${record.event.stopReason}`),
       )
+    } else if (pending.toolRefused || record.event.stopReason === 'tool-refused') {
+      // What came before the tool may be an opener ("I'll write it to a file"), never a
+      // title or a caption: only a caller that parses the text may take it (partialText).
+      this.settleSelfReport(pending.commandId, new ControlToolRefusedError(pending.chunks.join('')))
     } else {
       this.settleSelfReport(pending.commandId, undefined, pending.chunks.join(''))
     }

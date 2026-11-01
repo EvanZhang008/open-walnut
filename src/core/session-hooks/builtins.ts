@@ -333,7 +333,7 @@ export function buildSelfReportPrompt(
 
   let noteBlock: string;
   if (!existing) {
-    noteBlock = `The task NOTE is EMPTY. Write ALL sections now (label + content each; REFERENCES may be \`unchanged\` when the task has no external references yet).`;
+    noteBlock = `The task NOTE is EMPTY. Answer ALL sections now (label + content each; REFERENCES may be \`unchanged\` when the task has no external references yet).`;
   } else {
     noteBlock = `<existing_note>\n${existing}\n</existing_note>
 For EACH of the labels answer \`unchanged\` OR the new content. If the note above is NOT yet in this sectioned structure, this is a MIGRATION: answer every section with content (REFERENCES only if the note carries references), preserving EVERY fact from the note above (facts may move between sections; none may be dropped).
@@ -341,7 +341,7 @@ NOTE BUDGET: ${existing.length}/${NOTE_REORG_CAP} chars used.${reorg ? `
 The note is ${existing.length} chars — OVER the ${NOTE_REORG_CAP}-char budget. This fire is a MANDATORY REORGANIZE: answer WORK_LOG with \`rewrite: <full section>\` that merges the OLDEST entries into consolidated ones (several old entries → one), and rewrite any other section that carries superseded or duplicated detail. Target: bring the FULL note back under ${NOTE_REORG_CAP} chars — the note must come back SHORTER than it went in. HARD RULE: keep every external ID (tickets, request/approval ids, hosts, URLs) and every decision+reason; commit hashes may be dropped; only drop process narration, dead-end play-by-play, and detail already superseded.` : ''}`;
   }
 
-  return `You just finished a turn. Update this task's NOTE — the single living document that lets a human (or a fresh AI with zero context) pick the task up. You have the full context — be the authoritative source. ${noteBlock}${opts?.mainAgent ? MAIN_NOTE_CONTRACT : ''}${opts?.complete ? `
+  return `You just finished a turn. Answer, in this reply and as plain text with the labels below, how this task's NOTE changes: the single living document that lets a human (or a fresh AI with zero context) pick the task up. Walnut stores the note from your answer; never write it to a file and never use a tool for it. You have the full context: be the authoritative source. ${noteBlock}${opts?.mainAgent ? MAIN_NOTE_CONTRACT : ''}${opts?.complete ? `
 This task is COMPLETE: the user closed it, so it is verified. Mark every PROGRESS item done, and never list a check, test or install by the user as pending or ask them to verify it.` : ''}
 
 Section contract (plain text under each label, English, self-contained — never "this bug"/"the feature"). Style rules for ALL sections: any name a zero-context reader wouldn't know (project codenames, internal tools, niche libraries, team jargon) gets a FEW-WORDS parenthetical on first use — "walnut (a personal task manager)" — not a sentence of background; well-known public things (React, S3, GitHub) need none. Reference code by file path only, NEVER line numbers (they drift). Terse beats thorough-sounding.
@@ -947,7 +947,13 @@ export async function runTriage(p: OnTurnCompletePayload, opts: { final?: boolea
       selfReport = (await sessionRunner.requestTurnCompleteSelfReport(
         p.sessionId,
         buildSelfReportPrompt(existingNote, promptedTitle, { uiLanguage, mainAgent, complete: taskPhase === 'COMPLETE', status: !statusOwned, ...(memory ? { memory } : {}) }), SELF_REPORT_TIMEOUT_MS,
-      )).trim();
+      ).catch((err: unknown) => {
+        // The model reached for a tool and the question was ended (an ACP engine): the labels
+        // it wrote first still parse below, and a text with none is skipped there.
+        const partial = (err as { partialText?: unknown })?.partialText;
+        if (typeof partial === 'string' && partial.trim()) return partial;
+        throw err;
+      })).trim();
     } catch (err) {
       log.session.warn('turn-complete-summary: provider self-report failed — skipped (next turn will merge)', {
         sessionId: p.sessionId, taskId: p.taskId,
@@ -1592,6 +1598,19 @@ async function titleViaCliTitler(
  *    background pass must spend a bounded 15s fast-model call, not minutes of
  *    main-model side_questions per stuck task.
  */
+/** Walnut's own model calls go to a model server the user hosts (Ollama, LM Studio, vLLM). */
+async function localMainModel(): Promise<boolean> {
+  try {
+    const { getConfig } = await import('../config-manager.js');
+    const { resolveMainProviderName } = await import('../../model/providers/default-provider.js');
+    const { isLocalModelProvider } = await import('../../model/providers/local-provider.js');
+    const config = await getConfig();
+    return isLocalModelProvider(config.providers?.[resolveMainProviderName(config)] as Parameters<typeof isLocalModelProvider>[0]);
+  } catch {
+    return false;
+  }
+}
+
 async function askAndApplyTitle(
   sessionId: string, taskId: string, message: string, placeholder: string,
   opts: { maxAttempts?: number; noColdAttach?: boolean; preferBackend?: boolean } = {},
@@ -1697,8 +1716,13 @@ async function askAndApplyTitle(
 
     let title: string | null = null;
     let channel = '';
+    // An ACP session on a model the user hosts: Walnut's own model call (the first message
+    // only) goes first. Asking the session evaluates its whole thread again on the same
+    // server, after the turn-end report in the queue, and a small model there answered with
+    // tools instead of a title (2026-11-01, an 8B model on OpenCode: no title at all).
+    const preferBackend = opts.preferBackend || (!!acp && await localMainModel());
     // preferBackend (the sweep): bounded fast-model call first.
-    if (opts.preferBackend) {
+    if (preferBackend) {
       title = await titleViaBackendModel(message, placeholder, requirement);
       channel = 'backend_model';
     }
@@ -1716,7 +1740,7 @@ async function askAndApplyTitle(
     // Backend fallback: Walnut's own fast model. Fires when the session
     // channels failed (wedged daemon control pipe) or no live session exists
     // (dead wrapper). Result goes through the same plugin validation below.
-    if (!title && !opts.preferBackend) {
+    if (!title && !preferBackend) {
       title = await titleViaBackendModel(message, placeholder, requirement);
       channel = 'backend_model';
     }

@@ -359,6 +359,23 @@ describe('turn-complete self-report (skip paths)', () => {
     expect(t.note).toBe(BASE_NOTE);
   });
 
+  it('a report the model broke off to reach for a tool still persists the labels it wrote first', async () => {
+    // An ACP engine ends a status question at the first tool call (ControlToolRefusedError).
+    const { ControlToolRefusedError } = await import('../../src/providers/acp-session.js');
+    await updateNote(taskId, BASE_NOTE);
+    registerFakeSession(SID_FAIL, async () => { throw new ControlToolRefusedError(SAMPLE_REPORT); });
+    await runTriage(makePayload(SID_FAIL));
+    expect((await getTask(taskId)).note).toContain('- Ran the unit suite (green)');
+  });
+
+  it('a broken-off report with no text is a no-op, like any failed ask', async () => {
+    const { ControlToolRefusedError } = await import('../../src/providers/acp-session.js');
+    await updateNote(taskId, BASE_NOTE);
+    registerFakeSession(SID_FAIL, async () => { throw new ControlToolRefusedError('  '); });
+    await runTriage(makePayload(SID_FAIL));
+    expect((await getTask(taskId)).note).toBe(BASE_NOTE);
+  });
+
   it('extractField pulls the one-line RECAP out of the report (session tip source)', async () => {
     const { extractField } = await import('../../src/core/session-hooks/builtins.js');
     expect(extractField(SAMPLE_REPORT, 'RECAP'))

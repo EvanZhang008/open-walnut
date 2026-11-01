@@ -1,4 +1,4 @@
-import type { JournalRecord } from './acp-worker/protocol.js'
+import { CONTROL_PROMPT_GUARD, type JournalRecord } from './acp-worker/protocol.js'
 import { projectUserText } from '../core/sessions/reference-cards.js'
 import type {
   SessionHistoryMessage,
@@ -752,9 +752,10 @@ function replayUserText(record: Extract<JournalRecord, { kind: 'acp' }>): string
   return text
 }
 
-/** Anchor on the fixed opening of buildSelfReportPrompt() (src/core/session-hooks). */
+/** A status question: the guard every one leads with now, or the report's own opening
+ *  (buildSelfReportPrompt in src/core/session-hooks) in a journal written before it. */
 function isSelfReportPrompt(text: string): boolean {
-  return text.startsWith('You just finished a turn. Update this task')
+  return text.startsWith(CONTROL_PROMPT_GUARD) || text.startsWith('You just finished a turn. Update this task')
 }
 
 function contentText(content: unknown): string {

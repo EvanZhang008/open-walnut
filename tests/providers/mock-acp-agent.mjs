@@ -214,6 +214,22 @@ async function handlePrompt(id, params) {
     return;
   }
 
+  // A model that answers part of a status question, then reaches for a tool: the tool
+  // "runs" (writes MOCK_ACP_TOOL_FILE) unless the turn is cancelled first.
+  if (text.includes('acts-with-tool')) {
+    chunk(sessionId, 'RECAP: partial ');
+    notify('session/update', { sessionId, update: {
+      sessionUpdate: 'tool_call', toolCallId: `tc-write-${Date.now()}`, title: 'write notes.md', kind: 'edit', status: 'pending',
+      rawInput: { filePath: process.env.MOCK_ACP_TOOL_FILE },
+    } });
+    await sleep(300);
+    if (cancelled) { reply(id, { stopReason: 'cancelled' }); return; }
+    if (process.env.MOCK_ACP_TOOL_FILE) fs.writeFileSync(process.env.MOCK_ACP_TOOL_FILE, 'written by the tool');
+    chunk(sessionId, 'wrote the file');
+    reply(id, { stopReason: 'end_turn' });
+    return;
+  }
+
   if (text.includes('self-report-test')) {
     chunk(sessionId, 'RECAP: deterministic ');
     chunk(sessionId, 'self report');
