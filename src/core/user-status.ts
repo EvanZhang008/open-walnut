@@ -210,6 +210,8 @@ export interface UserStatusInput {
   openWorkers?: number;
   /** Main (org_role 'main'): the user's next message or a team's news wakes it, never a timer. */
   isMain?: boolean;
+  /** Its last message since its latest hand-back (sessions/last-words.ts), for a turn that left no report. */
+  lastWords?: string | null;
   /** A lead (org_role 'lead'): like Main, never closed. */
   isLead?: boolean;
   /** When the phase last moved (a turn's end, a park). A report older than this was written
@@ -237,6 +239,8 @@ export const ANSWERED_ASK = 'It answered your message: read it and reply.';
 /** A finished task no lead checks: the user reads the result and closes it. */
 export const DONE_ASK = 'It finished: read the result and close it.';
 export const HANDED_BACK_ASK = 'Its turn ended and handed the task back to you: read it and reply.';
+/** The same hand-back, with the words its turn ended with (sessions/last-words.ts) after it. */
+export const LAST_WORDS_ASK = 'Its turn ended with no report; its last words:';
 export const COMPLETE_IS_VERIFIED = 'A COMPLETE task counts as verified by the user: write it as done, never as waiting on their check or test, and never remind them of it.';
 
 export interface UserStatus {
@@ -773,7 +777,8 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     // next message (or their teams' news), and their node lists its tasks' asks, not itself.
     if (input.isMain || input.isLead) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
     if (input.hasLeader) return strip({ state: 'waiting', kind: 'lead', waitingOn: 'Its lead, to look at it: its turn ended without asking you anything', ...w });
-    return strip({ state: 'needs', source: 'session', ask: HANDED_BACK_ASK, ...w });
+    // Never an empty sentence: the words its turn ended with, once Walnut has read them.
+    return strip({ state: 'needs', source: 'session', ask: input.lastWords ? `${LAST_WORDS_ASK} "${input.lastWords}"` : HANDED_BACK_ASK, ...w });
   }
 
   if (input.phase === 'IN_PROGRESS') {

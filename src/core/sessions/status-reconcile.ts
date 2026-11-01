@@ -93,6 +93,9 @@ let watchRunning = false;
 /** One tick: the missed statuses, then the watches that ran out (task-watch.ts). */
 async function reconcileTick(): Promise<void> {
   await runStatusReconcile();
+  // What the loop cannot ask (a stopped session, an ACP engine): the words its turn ended with.
+  const { runLastWordsPass } = await import('./last-words.js');
+  await runLastWordsPass();
   if (watchRunning) return;
   watchRunning = true;
   try {

@@ -18,6 +18,7 @@
  * The Mac derives (boot-policy row 'user-status'); a replica reads the rows it copies, so
  * while the Mac is away the stored statuses stay as it left them until it is back.
  */
+import { currentLastWords } from './sessions/last-words.js';
 import { bus, EventNames } from './event-bus.js';
 import { log } from '../logging/index.js';
 import { bootPolicy } from './boot-policy.js';
@@ -369,6 +370,7 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
     isMain: task.org_role === 'main',
     phaseChangedAt: task.phase_changed_at ?? null,
     report: task.status_report ?? null,
+    lastWords: currentLastWords(task),
     // The task's own session when it has one: an older session's pending report says nothing of this turn.
     reportPending: task.session_id ? isReportPending(task.session_id) : own.some(([sid]) => isReportPending(sid)),
     isLead: task.org_role === 'lead',

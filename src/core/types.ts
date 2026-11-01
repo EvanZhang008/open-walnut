@@ -979,6 +979,9 @@ export interface Task {
   /** A watch on this task (task_watch): who hears where it stands, and how often at least
    *  (src/core/sessions/task-watch.ts). Every status it gives restarts the clock; a completion ends it. */
   watch?: import('./sessions/task-watch.js').TaskWatch | null;
+  /** Walnut's read of where its last turn stopped, for a hand-back with no report of its own
+   *  (src/core/sessions/last-words.ts): the status shows these words as its ask. Local-only. */
+  last_words?: import('./sessions/last-words.js').LastWords | null;
   /** Task-level working directory override. Takes precedence over project default_cwd in session resolution. */
   cwd?: string;
   /** Set by the cwd rename detector / turn-end check when task.cwd no longer exists on disk.
