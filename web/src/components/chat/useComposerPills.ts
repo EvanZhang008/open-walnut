@@ -32,12 +32,18 @@ export function useComposerPills(a: {
   /** When the browser refuses the edit: write the cut text the composer's own way. */
   writeCut: (cut: { text: string; caret: number }) => void;
 }): ComposerPills {
-  const { textareaRef, value, table, active, pickedFiles } = a;
+  const { textareaRef, value, table, pickedFiles } = a;
+  // The `@query` span by its numbers: the caller makes a new object every render.
+  const activeStart = a.active?.start;
+  const activeEnd = a.active?.end;
   const segments = useMemo(
-    () => composerSegments(value, table, { active, files: pickedFiles }),
+    () => composerSegments(value, table, {
+      active: activeStart !== undefined && activeEnd !== undefined ? { start: activeStart, end: activeEnd } : null,
+      files: pickedFiles,
+    }),
     // The picked set changes only together with the text.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [value, table, active?.start, active?.end],
+    [value, table, activeStart, activeEnd],
   );
   const segRef = useRef(segments);
   segRef.current = segments;

@@ -48,7 +48,7 @@
  * sends them as one message (2026-11-01, the user: "the comments pile up below, and
  * only when I send, they all go together").
  */
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import {
@@ -61,6 +61,9 @@ import {
   SELECTION_HOLD_EVENT, SELECTION_RELEASE_EVENT, type SelectionHoldDetail,
 } from '@/utils/selection-hold';
 import { copyTextRobust } from '@/utils/clipboard';
+import { draftHash, draftKey } from '@/utils/drafts';
+import { useDraft } from '@/hooks/useDraft';
+import { AnswerBox } from '@/components/common/AnswerBox';
 import { ICON_PIN } from './MessageActionIcons';
 import { rangePoint, sameBoundaries, useHeldPassage, type HeldPoint } from './useHeldPassage';
 import { log } from '@/utils/log';
@@ -192,10 +195,16 @@ function readLiveSelection(
 
 export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, onQuoteInChat }: QuotePinSelectionBarProps) {
   const [state, setState] = useState<PillState | null>(null);
-  /** The Comment box is open: its words, null while the pill shows its buttons. */
-  const [comment, setComment] = useState<string | null>(null);
+  /** The Comment box is open (the pill shows it instead of its buttons). */
+  const [commentOpen, setCommentOpen] = useState(false);
+  // Its words are a draft of this passage: a reload, or an Esc, keeps them, and the
+  // same passage commented on again opens with them.
+  const commentDraft = useDraft(commentOpen && state
+    ? draftKey('quote-comment', sessionId, state.msgId || 'live', draftHash(state.text))
+    : null);
+  /** The box's words while it is open, null while the pill shows its buttons. */
   const commentRef = useRef<string | null>(null);
-  commentRef.current = comment;
+  commentRef.current = commentOpen ? commentDraft.text : null;
   const pillRef = useRef<HTMLDivElement | null>(null);
   const noTrigger = useRef<HTMLElement | null>(null);
   /**
@@ -244,7 +253,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
   const dismiss = useCallback(() => {
     held.clearHold();
     setState(null);
-    setComment(null);
+    setCommentOpen(false);
   }, [held]);
 
   /**
@@ -288,15 +297,15 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
         || sameBoundaries(selection.getRangeAt(selection.rangeCount - 1), holding.range);
       if (stillHeld) { held.repair(); return; }
       held.clearHold();
-      setComment(null);
+      setCommentOpen(false);
     }
     // A drag in progress is not a selection yet. A pill shown now sits under the
     // moving pointer, and WebKit then extends the selection ONTO the pill (a node
     // outside the transcript), so the drag ends selecting to the end of the page
     // with no pill at all. An earlier pill goes; the new one comes at the release.
-    if (selectingRef.current) { setState(null); setComment(null); return; }
+    if (selectingRef.current) { setState(null); setCommentOpen(false); return; }
     const live = readLiveSelection(container, selection);
-    if (!live) { setState(null); setComment(null); return; }
+    if (!live) { setState(null); setCommentOpen(false); return; }
     setState((prev) => {
       const sameAnchor = !!prev && prev.anchor.x === live.anchor.x && prev.anchor.y === live.anchor.y;
       if (prev && sameAnchor && prev.msgId === live.captured.msgId && sameQuote(prev.quote, live.captured.quote)) return prev;
@@ -505,22 +514,16 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
   }, [onQuoteInChat, sessionId, state, dismiss]);
 
   const addComment = useCallback(() => {
-    const note = comment?.trim();
+    const note = commentDraft.text.trim();
     if (!state?.text.trim() || !onQuoteInChat || !note) return;
     log.info('session', 'commenting on a passage in the chat', {
       sessionId, msgId: state.msgId, chars: state.text.length, commentChars: note.length,
     });
     onQuoteInChat(state.text, note);
+    commentDraft.clear(commentDraft.key);
     window.getSelection()?.removeAllRanges();
     dismiss();
-  }, [comment, onQuoteInChat, sessionId, state, dismiss]);
-
-  const onCommentKey = useCallback((e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-    // Enter adds, Shift+Enter is a new line; an IME's Enter only commits its text.
-    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing || e.keyCode === 229) return;
-    e.preventDefault();
-    addComment();
-  }, [addComment]);
+  }, [commentDraft, onQuoteInChat, sessionId, state, dismiss]);
 
   const copy = useCallback(() => {
     if (state?.text.trim()) void copyTextRobust(state.text);
@@ -569,18 +572,20 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
       // and would unmount this pill before `click` fires.
       onMouseUp={(e) => e.stopPropagation()}
     >
-      {comment !== null ? (
+      {commentOpen ? (
         <div className="quote-pin-comment" data-testid="quote-comment-box">
-          <textarea
-            className="quote-pin-comment-input"
-            data-testid="quote-comment-input"
+          <AnswerBox
+            value={commentDraft.text}
+            onChange={commentDraft.setText}
+            onSubmit={addComment}
+            sendLabel="Add"
+            sendTestId="quote-comment-add"
+            testId="quote-comment-input"
+            draftKey={commentDraft.key}
             autoFocus
-            rows={2}
-            value={comment}
+            minRows={2}
             placeholder="Comment on this passage"
-            aria-label="Comment on this passage"
-            onChange={(e) => setComment(e.target.value)}
-            onKeyDown={onCommentKey}
+            ariaLabel="Comment on this passage"
           />
           <div className="quote-pin-comment-actions">
             <span className="quote-pin-comment-hint">Goes into the message box, nothing is sent</span>
@@ -588,19 +593,10 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
               type="button"
               className="quote-pin-pill-btn"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={dismiss}
+              // Cancel throws the words away; an Esc keeps them as the passage's draft.
+              onClick={() => { commentDraft.clear(commentDraft.key); dismiss(); }}
             >
               Cancel
-            </button>
-            <button
-              type="button"
-              className="quote-pin-pill-btn quote-pin-comment-add"
-              data-testid="quote-comment-add"
-              disabled={!comment.trim()}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={addComment}
-            >
-              Add
             </button>
           </div>
         </div>
@@ -652,7 +648,7 @@ export function QuotePinSelectionBar({ containerRef, sessionId, onPin, onAsk, on
           onPointerDown={(e) => { if (e.button === 0) hold(); }}
           onMouseDown={(e) => e.preventDefault()}
           // The keyboard path has no pointerdown, and its selection is still live here.
-          onClick={() => { hold(); setComment(''); }}
+          onClick={() => { hold(); setCommentOpen(true); }}
           title="Comment on this passage: the quote and your comment go into the message box, nothing is sent"
         >
           {ICON_COMMENT}

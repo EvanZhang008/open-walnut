@@ -81,8 +81,9 @@ async function comment(page: Page, panel: Locator, phrase: string, words: string
   await pill(page).getByRole('button', { name: 'Comment', exact: true }).click()
   const input = page.getByTestId('quote-comment-input')
   await expect(input).toBeFocused()
-  // The box takes the pill's place: only Cancel and Add are left.
-  expect((await pill(page).locator('button').allInnerTexts()).map((t) => t.trim())).toEqual(['Cancel', 'Add'])
+  // The box takes the pill's place: Pin and the rest go, Cancel and Add come.
+  await expect(pill(page).getByRole('button', { name: 'Pin' })).toHaveCount(0)
+  await expect(pill(page).getByRole('button', { name: 'Cancel', exact: true })).toBeVisible()
   // Empty: Add waits for words.
   await expect(page.getByTestId('quote-comment-add')).toBeDisabled()
   await page.keyboard.type(words)
@@ -132,13 +133,29 @@ test.describe('Selection pill: Comment, and quotes that stack until one send', (
     // (A press on a live selection would drag the text, not select it again.)
     await page.evaluate(() => window.getSelection()?.removeAllRanges())
 
-    // Esc in the Comment box adds nothing.
+    // Esc in the Comment box adds nothing, and keeps the words as that passage's draft.
+    const input = page.getByTestId('quote-comment-input')
+    const reopen = async () => {
+      await page.evaluate(() => window.getSelection()?.removeAllRanges())
+      await select(page, panel, p1)
+      await pill(page).getByRole('button', { name: 'Comment', exact: true }).click()
+      await expect(input).toBeFocused()
+    }
     await select(page, panel, p1)
     await pill(page).getByRole('button', { name: 'Comment', exact: true }).click()
     await page.keyboard.type('never added')
     await page.keyboard.press('Escape')
     await expect(pill(page)).toHaveCount(0)
     await expect(composer()).toHaveValue('')
+    await reopen()
+    await expect(input).toHaveValue('never added')
+    // Cancel throws them away.
+    await pill(page).getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(pill(page)).toHaveCount(0)
+    await expect(composer()).toHaveValue('')
+    await reopen()
+    await expect(input).toHaveValue('')
+    await page.keyboard.press('Escape')
     await page.evaluate(() => window.getSelection()?.removeAllRanges())
 
     // 1 Quote: the first quote leads, as a single Quote always did.

@@ -34,6 +34,7 @@ const BOXES: Record<string, Kind> = {
   'components/chat/ChatInput.tsx': COMPOSER,
   'components/org/OrgComposerBar.tsx': COMPOSER,
   'components/sessions/ThreadCommentCard.tsx': COMPOSER,
+  'components/sessions/QuotePinSelectionBar.tsx': ANSWER,
   'components/board/kanban/KanbanCardComposer.tsx': COMPOSER,
   'apps/mail/compose/ComposerPanel.tsx': COMPOSER,
   'components/sessions/SessionChatHistory.tsx': COMPOSER,
