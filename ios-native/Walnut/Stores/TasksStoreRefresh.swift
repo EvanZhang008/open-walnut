@@ -177,7 +177,8 @@ extension TasksStore {
             async let tiersReq: Void = self.loadFocusTiers()
             async let foldersReq: Void = self.loadTaskFolders()
             async let orderReq: Void = self.loadProjectOrder()
-            _ = await (tasksReq, sessionsReq, tiersReq, foldersReq, orderReq)
+            async let sourcesReq: Void = self.loadProjectSources()
+            _ = await (tasksReq, sessionsReq, tiersReq, foldersReq, orderReq, sourcesReq)
         }
         boardRefreshTask = task
         await task.value

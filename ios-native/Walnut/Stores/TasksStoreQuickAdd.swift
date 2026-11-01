@@ -178,19 +178,8 @@ extension TasksStore {
     /// Same row with pinned=true (WalnutTask is immutable; updatedAt is kept
     /// so the backfill freshness check still matches the created row).
     private static func withPinned(_ t: WalnutTask) -> WalnutTask {
-        WalnutTask(
-            id: t.id, title: t.title, status: t.status, phase: t.phase,
-            priority: t.priority, project: t.project, dueDate: t.dueDate,
-            createdAt: t.createdAt, updatedAt: t.updatedAt,
-            completedAt: t.completedAt, starred: t.starred,
-            pinned: true, tags: t.tags, summary: t.summary,
-            startDate: t.startDate, endDate: t.endDate, unread: t.unread,
-            parentTaskId: t.parentTaskId,
-            userStatus: t.userStatus,
-            orgRole: t.orgRole,
-            waitUntil: t.waitUntil,
-            watchedAt: t.watchedAt
-        )
+        // The store's one copy, so every field of the row (a new one included) is carried.
+        withPinned(t, true)
     }
 
     /// Pin (idempotent) + optional tier move. Optimistic: the tier map is

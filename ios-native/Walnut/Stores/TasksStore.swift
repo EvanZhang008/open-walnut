@@ -233,6 +233,10 @@ final class TasksStore {
     /// launch, so the disk cache must not overwrite them (see `initialize`).
     @ObservationIgnored var taskFoldersAnswered = false
     @ObservationIgnored var projectOrderAnswered = false
+    /// Which projects sync to an outside service (`GET /v1/projects`), keyed by lowercased name:
+    /// the task menu's Sync section and the create pages' Local / <service> choice read it
+    /// (TasksStorePrivateTasks.swift). Empty = none known, so nothing offers a choice.
+    var projectSources: [String: WalnutProjectSource] = [:]
     /// Debounce handle for scheduleTierRefresh (extension file).
     @ObservationIgnored var tierRefreshTask: Task<Void, Never>?
     /// Transient failure line for fire-and-forget mutations — TasksView shows
@@ -566,6 +570,12 @@ final class TasksStore {
            isActive, projectOrder.isEmpty, !projectOrderAnswered {
             projectOrder = cachedOrder
         }
+        // Which projects sync, so a cold start's task menu and create pages offer the choice
+        // before the board request lands.
+        if let cachedSources = await DiskCache.loadAsync([WalnutProjectSource].self, key: Self.projectSourcesCacheKey),
+           isActive, projectSources.isEmpty {
+            projectSources = Self.indexSources(cachedSources)
+        }
     }
 
     /// Fetch the console's project order. Best-effort, exactly like `loadTaskFolders`:
@@ -685,14 +695,15 @@ final class TasksStore {
     func createTask(
         title: String, project: String? = nil, priority: String? = nil,
         dueDate: String? = nil, startDate: String? = nil, endDate: String? = nil,
-        description: String? = nil, pin: TaskPinChoice = .unspecified
+        description: String? = nil, pin: TaskPinChoice = .unspecified, local: Bool? = nil
     ) async throws -> WalnutTask {
         // Through the transport seam (not `api`): WalnutTests drive the REAL
         // optimistic placement + rollback against a scripted create.
+        // `local` true: the Local choice in a project that syncs (only sent when true).
         let created = try await transport.createTask(
             title: title, project: project, priority: priority,
             dueDate: dueDate, startDate: startDate, endDate: endDate,
-            description: description, pin: pin
+            description: description, pin: pin, local: local
         )
 
         if isActive {
@@ -852,7 +863,9 @@ final class TasksStore {
             teamStop: task.teamStop,
             waitUntil: task.waitUntil,
             // "" = stop watching, the same clear convention as the dates.
-            watchedAt: edit.watchedAt.map { $0.isEmpty ? nil : $0 } ?? task.watchedAt
+            watchedAt: edit.watchedAt.map { $0.isEmpty ? nil : $0 } ?? task.watchedAt,
+            source: task.source,
+            syncHold: task.syncHold
         )
     }
 
@@ -947,7 +960,9 @@ final class TasksStore {
             resultReport: t.resultReport,
             teamStop: t.teamStop,
             waitUntil: t.waitUntil,
-            watchedAt: t.watchedAt
+            watchedAt: t.watchedAt,
+            source: t.source,
+            syncHold: t.syncHold
         )
     }
 
@@ -1505,6 +1520,7 @@ extension TasksStore {
         customTiers = []
         taskFolders = []
         projectOrder = []
+        projectSources = [:]
         taskFoldersAnswered = false
         projectOrderAnswered = false
         lastCreatedTaskId = nil

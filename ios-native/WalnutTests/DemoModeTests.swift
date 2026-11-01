@@ -97,6 +97,9 @@ final class DemoModeTests: XCTestCase {
         XCTAssertTrue(landed.satelliteTasks?.contains(created.id) ?? false,
                       "as on a real server, a new task with no pin choice lands in Satellite")
         _ = try await api.updateTask(id: created.id, priority: "important")
+        let sources = try await api.projectSources()
+        XCTAssertTrue(sources.contains(WalnutProjectSource(name: "Home", source: "local")),
+                      "every demo project is local, so nothing offers Local or a service")
         _ = try await api.backfillTask(id: created.id, title: "Route check task, renamed")
         _ = try await api.taskDetail(id: "t-crash")
         _ = try await api.toggleTaskStar(id: created.id)

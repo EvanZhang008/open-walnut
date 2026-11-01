@@ -480,6 +480,12 @@ struct WalnutTask: Codable, Identifiable, Equatable {
     /// the board's Watching section, on top, whatever its state. nil = not watched, and from
     /// a server that predates it. Every copy of a row (`applyEdit`, `withPinned`) carries it.
     var watchedAt: String? = nil
+    /// The outside service it syncs to (a plugin id), sent only when it is not local (additive,
+    /// 2026-11-01; server `src/core/private-tasks/`). Every copy of a row carries it.
+    var source: String? = nil
+    /// Why a task in a project that syncs is kept local (additive, 2026-11-01). Every copy of a
+    /// row carries it.
+    var syncHold: WalnutSyncHold? = nil
 
     private enum CodingKeys: String, CodingKey {
         case id, title, status, phase, priority, project
@@ -499,7 +505,19 @@ struct WalnutTask: Codable, Identifiable, Equatable {
         case teamStop = "team_stop"
         case waitUntil = "wait_until"
         case watchedAt = "watched_at"
+        case source
+        case syncHold = "sync_hold"
     }
+}
+
+/// `sync_hold` on a task row: a task kept local in a project that syncs to `target`.
+/// state: checking (being checked before its first push) | private | unjudged | chosen;
+/// `outside`: kept | archived | neutralized, the copy a task turned local left in the service.
+struct WalnutSyncHold: Codable, Equatable {
+    let state: String
+    let target: String
+    var reason: String? = nil
+    var outside: String? = nil
 }
 
 /// `team_stop` on a task row: when its team was stopped, and by whom ("human" or "task:<id>").

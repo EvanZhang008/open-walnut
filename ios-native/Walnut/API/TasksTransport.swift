@@ -19,7 +19,7 @@ protocol WalnutTaskTransport {
     func createTask(
         title: String, project: String?, priority: String?,
         dueDate: String?, startDate: String?, endDate: String?,
-        description: String?, pin: TaskPinChoice
+        description: String?, pin: TaskPinChoice, local: Bool?
     ) async throws -> WalnutTask
     func updateTask(
         id: String, status: String?, priority: String?, dueDate: String?,
@@ -51,6 +51,13 @@ protocol WalnutTaskTransport {
 
     // Session metadata (rename / archive)
     func patchSession(id: String, title: String?, archived: Bool?, mode: String?) async throws -> SessionPatched
+
+    // Private tasks: which projects sync to an outside service, and moving a task between Local
+    // and that service (server `src/web/routes/private-tasks-v1.ts`).
+    func projectSources() async throws -> [WalnutProjectSource]
+    func makeTaskLocal(id: String, outside: OutsideCopyChoice) async throws -> SyncChangeAnswer
+    func syncTaskToProject(id: String) async throws -> SyncChangeAnswer
+    func changeOutsideCopy(id: String, action: OutsideCopyChoice) async throws -> SyncChangeAnswer
 }
 
 extension WalnutTaskTransport {
@@ -67,6 +74,22 @@ extension WalnutTaskTransport {
     /// the order the console itself draws when `ordering.projects` is empty. Same
     /// reasoning as `taskFolders`: it is the answer the live path degrades to.
     func projectOrder() async throws -> [String] { [] }
+
+    /// Default: no project syncs, so no task offers Local or a service.
+    func projectSources() async throws -> [WalnutProjectSource] { [] }
+
+    /// A create without the Local choice: the server's own rule.
+    func createTask(
+        title: String, project: String?, priority: String?,
+        dueDate: String?, startDate: String?, endDate: String?,
+        description: String?, pin: TaskPinChoice
+    ) async throws -> WalnutTask {
+        try await createTask(
+            title: title, project: project, priority: priority,
+            dueDate: dueDate, startDate: startDate, endDate: endDate,
+            description: description, pin: pin, local: nil
+        )
+    }
 }
 
 /// One custom tier from `GET /v1/focus/tiers` → `{ "tiers": [ { id, label } ] }`.

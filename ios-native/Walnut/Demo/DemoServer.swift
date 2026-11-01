@@ -250,6 +250,11 @@ final class DemoServer: @unchecked Sendable {
         if match(r, "GET", s, "instance") != nil { return .object(["instance": "walnut-demo", "mode": "LIVE"]) }
         if match(r, "GET", s, "routes") != nil { return .object(["routes": [Any](), "device": DemoMode.deviceName]) }
         if match(r, "GET", s, "ordering") != nil { return .object(["projects": DemoFixtures.projectOrder]) }
+        // Every demo project is local: no outside service, so no task offers Local or a service.
+        if match(r, "GET", s, "projects") != nil {
+            let names = withState { state in Set(state.tasks.map(\.project).filter { !$0.isEmpty }) }
+            return .encoded(DemoProjects(projects: names.sorted().map { WalnutProjectSource(name: $0, source: "local") }))
+        }
         if match(r, "GET", s, "events") != nil { return DemoReply(status: 200, body: .stream(.events, lastEventID: r.lastEventID)) }
         if match(r, "GET", s, "agents") != nil { return .encoded(DemoFixtures.agents) }
         if match(r, "GET", s, "config") != nil { return .object(DemoFixtures.serverConfig) }
@@ -407,3 +412,6 @@ final class DemoServer: @unchecked Sendable {
 
     var clockNow: DemoClock { withState { _ in clock } }
 }
+
+/// `GET /v1/projects` in the demo: only the fields the app reads.
+private struct DemoProjects: Encodable { let projects: [WalnutProjectSource] }

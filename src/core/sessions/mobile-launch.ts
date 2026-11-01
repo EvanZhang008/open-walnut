@@ -74,6 +74,10 @@ export interface MobileLaunchInput {
   /** The first message was spoken (the phone's voice mode): the CLI also gets the
    *  voice-reply line after it (voice-reply.ts). */
   voice?: true;
+  /** A task-less launch into a project that syncs to an outside service: 'project' sends its new
+   *  task there (once Walnut checked it is not private); absent or 'local' keeps it local, the
+   *  web draft's Sync chip (private-tasks, 2026-11-01). */
+  sync?: 'local' | 'project';
 }
 
 /** HTTP status → frozen v1 error code (also the relay errorKind vocabulary). */
@@ -93,7 +97,7 @@ export function launchErrorCode(status: number): string {
 function validateLaunchBody(body: unknown): MobileLaunchInput {
   const {
     cwd, host: rawHost, message, taskId, taskTitle, project, model: rawModel, mode, overrideReadiness,
-    walnutAgent, agentId, voice,
+    walnutAgent, agentId, voice, sync,
   } = (body ?? {}) as {
     cwd?: unknown;
     host?: unknown;
@@ -107,6 +111,7 @@ function validateLaunchBody(body: unknown): MobileLaunchInput {
     walnutAgent?: unknown;
     agentId?: unknown;
     voice?: unknown;
+    sync?: unknown;
   };
 
   // An ask: the same rule as the web quick-start (agentId only with walnutAgent;
@@ -117,6 +122,9 @@ function validateLaunchBody(body: unknown): MobileLaunchInput {
   }
   if (voice !== undefined && typeof voice !== 'boolean') {
     throw new QuickStartError('voice must be a boolean', 400);
+  }
+  if (sync !== undefined && sync !== 'local' && sync !== 'project') {
+    throw new QuickStartError('sync must be local or project', 400);
   }
   const isAsk = walnutAgent === true;
   if (agentId !== undefined && (typeof agentId !== 'string' || !agentId.trim() || agentId.length > 128 || !isAsk)) {
@@ -195,6 +203,7 @@ function validateLaunchBody(body: unknown): MobileLaunchInput {
     ...(isAsk && typeof agentId === 'string' ? { agentId: agentId.trim() } : {}),
     ...(isAsk && typeof rawModel === 'string' ? { rawModel } : {}),
     ...(voice === true ? { voice: true as const } : {}),
+    ...(sync === 'project' ? { sync: 'project' as const } : {}),
   };
 }
 
@@ -332,7 +341,7 @@ export async function performMobileLaunch(
       // default (Satellite) put every phone session out of sight (2026-10-03).
       // A launch FROM a task keeps that task's tier (taskMeta is ignored on
       // retry anyway).
-      taskMeta: { pinTier: MOBILE_DRAFT_TIER },
+      taskMeta: { pinTier: MOBILE_DRAFT_TIER, ...(input.sync ? { sync: input.sync } : {}) },
     }),
     source,
     requestTs: Date.now(),

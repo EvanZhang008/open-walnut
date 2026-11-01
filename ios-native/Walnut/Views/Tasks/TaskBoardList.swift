@@ -788,6 +788,10 @@ struct BoardRowGestures: ViewModifier {
                         Label("Move to Tier", systemImage: "square.stack.3d.up")
                     }
                 }
+                // Local or the project's outside service (only in a project that syncs).
+                if let task = row.task {
+                    TaskSyncMenu(task: task)
+                }
                 Button(action: onOpenDetail) {
                     Label("Details, dates & priority", systemImage: "slider.horizontal.3")
                 }

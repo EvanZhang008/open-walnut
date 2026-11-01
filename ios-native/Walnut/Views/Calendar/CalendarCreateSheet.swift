@@ -27,6 +27,9 @@ struct CalendarCreateSheet: View {
     @State private var isAllDay: Bool
     @State private var creating = false
     @State private var createError: String?
+    /// The Local / <service> choice, for a project that syncs: the service by default, the web
+    /// calendar quick add's default.
+    @State private var syncLocal = false
     @FocusState private var titleFocused: Bool
 
     init(
@@ -52,6 +55,11 @@ struct CalendarCreateSheet: View {
         // in dogfood R18 verification). The suggestion is offered as a tappable
         // row instead, so the field starts empty and typing means what it says.
         _project = State(initialValue: "")
+    }
+
+    /// The outside service the typed project syncs to, or nil.
+    private var syncService: String? {
+        tasks.projectService(project)
     }
 
     private var canCreate: Bool {
@@ -112,6 +120,11 @@ struct CalendarCreateSheet: View {
                     Text("Project")
                 } footer: {
                     Text("A new name creates the project.")
+                }
+
+                // Only in a project that syncs to an outside service.
+                if let service = syncService {
+                    SyncChoiceSection(service: tasks.serviceName(service), local: $syncLocal)
                 }
 
                 if let createError {
@@ -200,7 +213,8 @@ struct CalendarCreateSheet: View {
                 project: project.trimmingCharacters(in: .whitespaces),
                 dueDate: wire.dueDate,
                 startDate: wire.startDate,
-                endDate: wire.endDate
+                endDate: wire.endDate,
+                local: syncService != nil && syncLocal ? true : nil
             )
             AppLog.info("tasks", "created task from calendar", [
                 "taskId": created.id,

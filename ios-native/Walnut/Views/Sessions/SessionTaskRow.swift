@@ -202,12 +202,15 @@ extension WalnutTask {
     }
 
     /// The detail row, keeping what only the list projection carries (what its session does now,
-    /// a stopped team), so opening a task never drops them.
+    /// a stopped team, its outside source and why it is kept local), so opening a task never
+    /// drops them.
     func keepingListFields(of row: WalnutTask?) -> WalnutTask {
         guard let row else { return self }
         var t = self
         if t.liveActivity == nil { t.liveActivity = row.liveActivity }
         if t.teamStop == nil { t.teamStop = row.teamStop }
+        if t.source == nil { t.source = row.source }
+        if t.syncHold == nil { t.syncHold = row.syncHold }
         return t
     }
 }

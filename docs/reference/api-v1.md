@@ -1157,8 +1157,11 @@ copy) while Main hears one line.
 - `POST /api/v1/tasks` takes `"local": true` (a boolean, else `400 bad_request`): the task is
   created local in its project. The `task_create` op has the same field.
 - ProjectedTask gains `source` (only when not local) and `sync_hold: { state:
-  'checking'|'private'|'unjudged'|'chosen', target, reason?, outside?: { source, state:
-  'kept'|'archived'|'neutralized' } }`.
+  'checking'|'private'|'unjudged'|'chosen', target, reason?, outside?: 'kept'|'archived'|'neutralized' }`
+  (`outside` is the state of the copy a task turned local left in the service).
+- `GET /api/v1/projects` rows gain `source_name` (the service's name) when `source` is not `local`.
+- `POST /api/v1/sessions` (the phone's launch) takes `"sync": "local"|"project"` for a task-less
+  launch: a launch's new task is local unless `project` (the web draft's Sync chip).
 - `POST /api/v1/tasks/:id/make-local { "outside"?: "keep"|"archive"|"neutralize" }` → `200 {
   "task", "unlinked", "from"?, "service"?, "children", "outside": { "action", "done", "error"? },
   "outcome" }`: a synced task stops syncing and keeps all of its content in the same project

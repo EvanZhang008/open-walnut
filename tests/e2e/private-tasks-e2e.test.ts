@@ -149,4 +149,14 @@ describe('private tasks over HTTP', () => {
     const saved = await api('/api/v1/private-tasks/test', { body: { text: 'nothing here' } });
     expect(saved.json).toEqual({ match: null, invalid: [] });
   });
+
+  it('the phone reads which projects sync, with the service name, and a launch takes sync', async () => {
+    const r = await api('/api/v1/projects');
+    const work = (r.json.projects as Array<Record<string, unknown>>).find((p) => p.name === 'Work');
+    expect(work).toMatchObject({ source: PLUGIN, source_name: PLUGIN });
+    const { validateMobileLaunchBody } = await import('../../src/core/sessions/mobile-launch.js');
+    expect(validateMobileLaunchBody({ cwd: '/w', project: 'Work', sync: 'project' })).toMatchObject({ sync: 'project' });
+    expect(validateMobileLaunchBody({ cwd: '/w', project: 'Work', sync: 'local' })).not.toHaveProperty('sync');
+    expect(() => validateMobileLaunchBody({ cwd: '/w', sync: 'yes' })).toThrow(/sync must be local or project/);
+  });
 });

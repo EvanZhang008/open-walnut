@@ -75,6 +75,9 @@ struct NewSessionChatView: View {
     /// keeps that task's project.
     @State private var project = ""
     @State private var showProjectPicker = false
+    /// The Sync pill in a project that syncs to an outside service: Local by default, the web
+    /// draft's Sync chip (a launch's task is local unless its creator picks the service).
+    @State private var syncLocal = true
 
     /// Same key the sheet uses, so a cached launch-options payload is shared
     /// rather than fetched twice.
@@ -378,6 +381,22 @@ struct NewSessionChatView: View {
                     .disabled(creating)
                     .accessibilityIdentifier("newSessionChat.projectPill")
                     .accessibilityLabel("Project: \(project.isEmpty ? NewTaskSeed.inboxHeader : project)")
+                    // Local or the project's outside service, only in a project that syncs.
+                    if let service = syncService {
+                        let name = tasks?.serviceName(service) ?? service
+                        Button {
+                            syncLocal.toggle()
+                        } label: {
+                            pill(syncLocal ? "Sync: Local" : "Sync: \(name)",
+                                 icon: syncLocal ? "lock" : "arrow.triangle.2.circlepath",
+                                 active: !syncLocal)
+                        }
+                        .disabled(creating)
+                        .accessibilityIdentifier("newSessionChat.syncPill")
+                        .accessibilityLabel(syncLocal
+                            ? "Sync: Local. Stays in Walnut, never sent to \(name)"
+                            : "Sync: \(name). Sent there once Walnut checked it is not private")
+                    }
                 }
                 if launchPillsInPillRow {
                     launchPills
@@ -687,7 +706,8 @@ struct NewSessionChatView: View {
                 model: model,
                 // Only for a task-less draft, and only when picked: absent keeps the
                 // server's own Inbox + organize behaviour.
-                project: isTaskless && !project.isEmpty ? project : nil
+                project: isTaskless && !project.isEmpty ? project : nil,
+                syncToProject: isTaskless && syncService != nil && !syncLocal
             )
             // ORDER MATTERS (same as NewSessionSheet): stash BEFORE onCreated,
             // because the presenter's push mounts the conversation view whose
@@ -749,7 +769,9 @@ struct NewSessionChatView: View {
         createError = nil
         defer { creating = false }
         do {
-            guard let created = try await Self.createTodo(from: text, project: project, in: tasks) else {
+            guard let created = try await Self.createTodo(
+                from: text, project: project, local: syncService != nil && syncLocal, in: tasks
+            ) else {
                 return false
             }
             AppLog.info("session", "saved a draft as a todo", [
@@ -770,15 +792,25 @@ struct NewSessionChatView: View {
     /// The create itself, apart from the page so a test can drive it: one task, no
     /// session, filed in `project` ("" = Inbox) and pinned to `todoTier`. nil when the
     /// words hold no title; throws what the create threw.
-    static func createTodo(from text: String, project: String, in tasks: TasksStore) async throws -> WalnutTask? {
+    /// `local`: the Sync pill reads Local in a project that syncs.
+    static func createTodo(
+        from text: String, project: String, local: Bool = false, in tasks: TasksStore
+    ) async throws -> WalnutTask? {
         let (title, description) = todoParts(text)
         guard !title.isEmpty else { return nil }
         return try await tasks.createTask(
             title: title,
             project: project.isEmpty ? nil : project,
             description: description,
-            pin: .tier(todoTier)
+            pin: .tier(todoTier),
+            local: local ? true : nil
         )
+    }
+
+    /// The outside service the picked project syncs to, or nil (no Sync pill).
+    private var syncService: String? {
+        guard isTaskless else { return nil }
+        return tasks?.projectService(project)
     }
 
     /// Where a saved todo is pinned: Focus, the tier a phone draft's session task is

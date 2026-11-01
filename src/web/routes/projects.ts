@@ -119,6 +119,9 @@ export async function buildProjectsPayload(): Promise<{
     return {
       name,
       source: record.source,
+      // The outside service's name, for a client that shows it without the plugin list (the phone's
+      // Local / <service> choice). Additive.
+      ...(record.source !== 'local' ? { source_name: registry.get(record.source)?.name ?? registry.getTombstone(record.source)?.name ?? record.source } : {}),
       ...(record.order_index !== undefined ? { order_index: record.order_index } : {}),
       ...(record.metadata ? { metadata: record.metadata } : {}),
       favorite: favorites.has(name.toLowerCase()),

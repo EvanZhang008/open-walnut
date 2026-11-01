@@ -130,7 +130,7 @@ struct WalnutAPI {
     func createTask(
         title: String, project: String? = nil, priority: String? = nil,
         dueDate: String? = nil, startDate: String? = nil, endDate: String? = nil,
-        description: String? = nil, pin: TaskPinChoice = .unspecified
+        description: String? = nil, pin: TaskPinChoice = .unspecified, local: Bool? = nil
     ) async throws -> WalnutTask {
         struct Body: Encodable {
             let title: String
@@ -142,6 +142,9 @@ struct WalnutAPI {
             let description: String?
             let pinned: Bool?
             let focus_tier: String?
+            /// true: created local in a project that syncs (the Local choice). Only `true` is sent;
+            /// absent keeps the server's own rule (checked, then sent to the project's service).
+            let local: Bool?
         }
         let created: TaskCreated = try await send(
             "POST", "/tasks",
@@ -154,7 +157,8 @@ struct WalnutAPI {
                 end_date: endDate,
                 description: (description?.isEmpty ?? true) ? nil : description,
                 pinned: pin.wirePinned,
-                focus_tier: pin.wireFocusTier
+                focus_tier: pin.wireFocusTier,
+                local: local == true ? true : nil
             )
         )
         return created.task
@@ -258,13 +262,14 @@ struct WalnutAPI {
     func createSession(
         cwd: String, host: String? = nil, message: String = "",
         taskId: String? = nil, mode: String? = nil, model: String? = nil,
-        project: String? = nil
+        project: String? = nil, syncToProject: Bool = false
     ) async throws -> SessionCreated {
         try await send(
             "POST", "/sessions",
             body: Self.createSessionBody(
                 cwd: cwd, host: host, message: message,
-                taskId: taskId, mode: mode, model: model, project: project
+                taskId: taskId, mode: mode, model: model, project: project,
+                syncToProject: syncToProject
             ),
             timeout: 60
         )
@@ -282,13 +287,19 @@ struct WalnutAPI {
         let mode: String?
         let model: String?
         var project: String? = nil
+        /// "project": the launch's new task goes to its project's outside service (once Walnut
+        /// checked it is not private). Absent keeps it local, the server's rule for a launch.
+        var sync: String? = nil
     }
 
     static func createSessionBody(
         cwd: String, host: String?, message: String,
-        taskId: String?, mode: String?, model: String?, project: String? = nil
+        taskId: String?, mode: String?, model: String?, project: String? = nil,
+        syncToProject: Bool = false
     ) -> CreateSessionBody {
-        CreateSessionBody(
+        let filed = taskId != nil || (project?.trimmingCharacters(in: .whitespaces).isEmpty ?? true)
+            ? nil : project
+        return CreateSessionBody(
             cwd: cwd,
             // "" = the primary box on the wire, but the server reads ABSENT the
             // same way, and omitting keeps one spelling of "the Mac".
@@ -301,8 +312,9 @@ struct WalnutAPI {
             model: (model?.isEmpty ?? true) || model == "default" ? nil : model,
             // "" is the Inbox, which absent already means; a task-linked launch keeps
             // its task's project, so the field would only be noise there.
-            project: taskId != nil || (project?.trimmingCharacters(in: .whitespaces).isEmpty ?? true)
-                ? nil : project
+            project: filed,
+            // Only for a task the launch creates in a project: an existing task's source is decided.
+            sync: syncToProject && filed != nil ? "project" : nil
         )
     }
 

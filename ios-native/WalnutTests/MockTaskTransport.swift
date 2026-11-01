@@ -44,6 +44,13 @@ final class MockTaskTransport: WalnutTaskTransport, @unchecked Sendable {
         lock.lock(); calls.append(Call(name: name, args: args)); lock.unlock()
     }
 
+    /// The last call of an endpoint, read under the lock: a store's background reload may be
+    /// recording a call at the same moment.
+    func lastCall(_ name: String) -> Call? {
+        lock.lock(); defer { lock.unlock() }
+        return calls.last { $0.name == name }
+    }
+
     func callCount(_ name: String) -> Int {
         lock.lock(); defer { lock.unlock() }
         return calls.filter { $0.name == name }.count
@@ -66,17 +73,18 @@ final class MockTaskTransport: WalnutTaskTransport, @unchecked Sendable {
     func createTask(
         title: String, project: String?, priority: String?,
         dueDate: String?, startDate: String?, endDate: String?,
-        description: String?, pin: TaskPinChoice
+        description: String?, pin: TaskPinChoice, local: Bool?
     ) async throws -> WalnutTask {
         // The pin pair joins the recorded args so a test can assert exactly what
         // a header `+` put on the wire: "-" is an OMITTED key, which is a
         // different thing from `false`/`""` (see TaskPinChoice's wire rules).
-        try await checkpoint("createTask", [
-            title, project ?? "-", priority ?? "-", dueDate ?? "-",
-            pin.wirePinned.map(String.init) ?? "-",
-            pin.wireFocusTier ?? "-",
-            description ?? "-",
-        ])
+        var args: [String] = [title, project ?? "-", priority ?? "-", dueDate ?? "-"]
+        args.append(pin.wirePinned.map(String.init) ?? "-")
+        args.append(pin.wireFocusTier ?? "-")
+        args.append(description ?? "-")
+        // Only a create that made the Local choice records it, so older assertions keep their shape.
+        if let local { args.append("local=\(local)") }
+        try await checkpoint("createTask", args)
         if let createTaskResult { return createTaskResult(title, pin) }
         // Default answer mirrors the server's storage convention: a tier IMPLIES
         // pinned, and an explicit 'satellite' comes back with NO focus_tier
@@ -88,7 +96,8 @@ final class MockTaskTransport: WalnutTaskTransport, @unchecked Sendable {
             completedAt: nil, starred: nil,
             pinned: pin.wireFocusTier != nil ? true : pin.wirePinned,
             tags: nil, summary: nil,
-            startDate: startDate, endDate: endDate
+            startDate: startDate, endDate: endDate,
+            syncHold: local == true ? WalnutSyncHold(state: "chosen", target: "plugin-a", reason: "You made it local") : nil
         )
     }
 
@@ -180,6 +189,40 @@ final class MockTaskTransport: WalnutTaskTransport, @unchecked Sendable {
         return SessionPatched(session: SessionDetail.Record(
             claudeSessionId: id, processStatus: "idle", title: title,
             mode: mode, archived: archived
+        ))
+    }
+
+    // Private tasks
+    var projectSourcesResult: [WalnutProjectSource] = []
+    /// The row make-local / sync-to-project / outside-copy answer with; nil echoes a minimal row.
+    var syncChangeResult: ((String, String) -> SyncChangeAnswer)?
+
+    func projectSources() async throws -> [WalnutProjectSource] {
+        try await checkpoint("projectSources", [])
+        return projectSourcesResult
+    }
+
+    func makeTaskLocal(id: String, outside: OutsideCopyChoice) async throws -> SyncChangeAnswer {
+        try await checkpoint("makeTaskLocal", [id, outside.rawValue])
+        return syncChange(id, "make-local")
+    }
+
+    func syncTaskToProject(id: String) async throws -> SyncChangeAnswer {
+        try await checkpoint("syncTaskToProject", [id])
+        return syncChange(id, "sync-to-project")
+    }
+
+    func changeOutsideCopy(id: String, action: OutsideCopyChoice) async throws -> SyncChangeAnswer {
+        try await checkpoint("changeOutsideCopy", [id, action.rawValue])
+        return syncChange(id, "outside-copy")
+    }
+
+    private func syncChange(_ id: String, _ action: String) -> SyncChangeAnswer {
+        if let syncChangeResult { return syncChangeResult(id, action) }
+        return SyncChangeAnswer(task: WalnutTask(
+            id: id, title: id, status: "todo", phase: "TODO", priority: "none", project: "",
+            dueDate: nil, createdAt: nil, updatedAt: nil, completedAt: nil, starred: nil,
+            pinned: nil, tags: nil, summary: nil
         ))
     }
 }

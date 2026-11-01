@@ -733,6 +733,8 @@ struct TasksView: View {
                     Label("Move to Tier", systemImage: "square.stack.3d.up")
                 }
             }
+            // Local or the project's outside service (only in a project that syncs).
+            TaskSyncMenu(task: task)
             Button {
                 selected = task
             } label: {
