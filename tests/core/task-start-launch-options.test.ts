@@ -131,7 +131,7 @@ describe('workspace', () => {
     await expect(startSessionForTask({ ...params, workspace: ws })).rejects.toMatchObject({ statusCode: 409 });
     mocks.getTask.mockResolvedValueOnce({ ...task, cwd: undefined });
     await expect(startSessionForTask({ ...params, workspace: ws })).rejects.toMatchObject({
-      statusCode: 400, message: expect.stringContaining('no folder for a workspace'),
+      statusCode: 400, message: expect.stringContaining('no folder of its own for a workspace to copy'),
     });
     await expect(startSessionForTask({ ...params, workspace: ws, createCwd: true })).rejects.toMatchObject({ statusCode: 400 });
     expect(mocks.requestWorkspace).not.toHaveBeenCalled();
