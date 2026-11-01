@@ -136,7 +136,9 @@ test('dense history, view tools, fork recovery and reopen retain a usable compos
   const opened = page.context().waitForEvent('page')
   await page.locator('.main-page-session-column .session-panel-popout').click()
   const reopened = await opened
-  await expect(reopened.locator('.session-panel-input textarea')).toHaveValue('Keep this draft across views')
+  // The reopened window is a cold load of the whole app, as the first one was: it gets the same
+  // 30 s (a slow CI runner took longer than the default 5 s; 8x CPU throttling here took 13 s).
+  await expect(reopened.locator('.session-panel-input textarea')).toHaveValue('Keep this draft across views', { timeout: 30_000 })
   expect(errors).toEqual([])
   await reopened.close()
 })

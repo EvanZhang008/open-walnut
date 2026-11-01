@@ -287,3 +287,40 @@ describe('a worker that needs the user', () => {
     expect(bareNeeds(spec.replace('parent_task_id: leader', 'pinned: true'))).toEqual([])
   })
 })
+
+describe('a window a spec opens', () => {
+  // A popout is a cold load of the whole app in a new window. A spec that waited for it with the
+  // default 5 s expect timeout failed on slow CI runners (2026-11-01, session-popout-interactive's
+  // reopen on 3 of 7 runs; 8x CPU throttling took 13 s). The first locator wait on a page from
+  // waitForEvent('page') names its own timeout, as the first open in every popout spec does.
+  const firstWaits = (text: string): Array<{ line: number; timed: boolean }> => {
+    const lines = text.split('\n')
+    const out: Array<{ line: number; timed: boolean }> = []
+    for (const m of text.matchAll(/(?:const|let)\s+(\w+)\s*=\s*[\w.()]*waitForEvent\('page'\)/g)) {
+      const start = text.slice(0, m.index).split('\n').length
+      const assigned = lines.slice(start).findIndex((l) => new RegExp(`(?:const|let)\\s+(\\w+)\\s*=\\s*await\\s+${m[1]}\\b`).test(l))
+      if (assigned < 0) continue
+      const page = new RegExp(`(?:const|let)\\s+(\\w+)\\s*=\\s*await\\s+${m[1]}\\b`).exec(lines[start + assigned])![1]
+      const from = start + assigned + 1
+      const at = lines.slice(from).findIndex((l) => new RegExp(`expect\\(\\s*${page}\\.(?:locator|getBy)`).test(l))
+      if (at >= 0) out.push({ line: from + at + 1, timed: /timeout:/.test(lines[from + at]) })
+    }
+    return out
+  }
+
+  it('waits for it with its own timeout', () => {
+    const offenders = sources.flatMap(({ file, text }) => firstWaits(text).filter((w) => !w.timed).map((w) => `${file}:${w.line}`))
+    expect(offenders).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const spec = [
+      "const opened = page.context().waitForEvent('page')",
+      "await page.locator('.session-panel-popout').click()",
+      'const reopened = await opened',
+      "await expect(reopened.locator('.session-panel-input textarea')).toHaveValue('draft')",
+    ].join('\n')
+    expect(firstWaits(spec)).toEqual([{ line: 4, timed: false }])
+    expect(firstWaits(spec.replace("'draft')", "'draft', { timeout: 30_000 })"))).toEqual([{ line: 4, timed: true }])
+  })
+})
