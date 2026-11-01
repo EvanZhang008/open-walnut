@@ -64,7 +64,19 @@ export interface NotesTreeSnapshot {
   dirs: Map<string, number>
   builtAt: number
   buildMs: number
+  /** When the walk began (ms): a directory changed this close to it is not trusted (RACY_MS). */
+  startedAt: number
 }
+
+/**
+ * A directory whose mtime is within this of the walk's start may have changed again in the same
+ * clock step, so its mtime proves nothing and the next read rebuilds (git's "racily clean"). A
+ * filesystem's timestamps advance in steps: 10 ms on a Linux host with a 100 Hz tick (measured
+ * 2026-11-01: a note added 5 ms after a scan left the directory's mtime as it was, and the tree
+ * missed it until the next change). A short window keeps a freshly changed vault rebuilding only
+ * that long.
+ */
+export const RACY_MS = 100
 
 /** How long after the last invalidation the cache re-warms itself. Coalesces bursts. */
 export const REWARM_DEBOUNCE_MS = 500
@@ -148,13 +160,15 @@ export async function scanTree(dirPath: string, relBase: string): Promise<TreeNo
 
 /**
  * True when no directory the snapshot saw has changed its listing since. One
- * parallel `stat` per directory; a vanished directory counts as changed. A
- * snapshot that saw no directory at all (the vault root was missing) is never
- * current: the root may exist now.
+ * parallel `stat` per directory; a vanished directory counts as changed, and so
+ * does one changed within RACY_MS of the walk. A snapshot that saw no directory at
+ * all (the vault root was missing) is never current: the root may exist now.
  */
 async function isCurrent(snap: NotesTreeSnapshot): Promise<boolean> {
   if (snap.dirs.size === 0) return false
   const checks = await Promise.all([...snap.dirs].map(async ([dir, mtimeMs]) => {
+    // Changed in the clock step the walk began in: a later change in that step keeps this mtime.
+    if (mtimeMs > snap.startedAt - RACY_MS) return false
     try {
       return (await fsp.stat(dir)).mtimeMs === mtimeMs
     } catch {
@@ -176,6 +190,7 @@ function build(reason: string): Promise<NotesTreeSnapshot> {
       dirs,
       builtAt: Date.now(),
       buildMs: Date.now() - startedAt,
+      startedAt,
     }
     snapshot = snap
     if (announcedJson == null) announcedJson = snap.json

@@ -37,6 +37,19 @@ async function write(rel: string, content = '# x'): Promise<void> {
   await fs.writeFile(full, content, 'utf-8');
 }
 
+/**
+ * Date every directory of the vault 10 s back, as a vault nobody touched lately is: a directory
+ * changed within RACY_MS of a scan is rebuilt on the next read, so a snapshot of a just written
+ * fixture is never reused.
+ */
+async function settle(dir = NOTES_DIR): Promise<void> {
+  const at = new Date(Date.now() - 10_000);
+  for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) await settle(path.join(dir, entry.name));
+  }
+  await fs.utimes(dir, at, at);
+}
+
 /** Directory mtimes carry sub-ms precision on APFS/ext4, but give the clock a nudge anyway. */
 async function tick(): Promise<void> {
   await new Promise((r) => setTimeout(r, 5));
@@ -134,6 +147,7 @@ describe('snapshot reuse', () => {
   it('a second read is served from the snapshot: no readdir at all', async () => {
     await write('a/b/c.md');
     await write('a/d.md');
+    await settle();
     const first = await getNotesTree();
     const readdir = vi.spyOn(fsp, 'readdir');
     const second = await getNotesTree();
@@ -143,6 +157,7 @@ describe('snapshot reuse', () => {
 
   it('rewriting a note\'s bytes does not rebuild the tree', async () => {
     await write('a/b/c.md', 'v1');
+    await settle();
     const first = await getNotesTree();
     await tick();
     await write('a/b/c.md', 'v2 — typing into the editor autosaves every 500ms');
@@ -163,6 +178,21 @@ describe('snapshot reuse', () => {
 });
 
 describe('staleness without any explicit invalidation', () => {
+  it('a note added in the clock step the scan began in is on the next read', async () => {
+    // A filesystem with a coarse clock (10 ms steps on a 100 Hz Linux host) gives the directory
+    // the same mtime before and after the add; the snapshot must not trust an mtime that new.
+    await write('a/b/c.md');
+    const dir = path.join(NOTES_DIR, 'a', 'b');
+    // A whole millisecond, so putting it back reads the same mtime the scan saw.
+    const step = new Date(Date.now());
+    await fs.utimes(dir, step, step);
+    await getNotesTree();
+    await write('a/b/new.md');
+    await fs.utimes(dir, step, step);
+    const { tree } = await getNotesTree();
+    expect(names(tree[0].children![0].children!)).toEqual(['c.md', 'new.md']);
+  });
+
   it('a new note deep in the tree is on the next read', async () => {
     await write('a/b/c.md');
     await getNotesTree();
