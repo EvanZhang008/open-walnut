@@ -7,6 +7,7 @@
  * transcript read the same labels.
  */
 import { parseHinted, replaceHintBlocks, type CarriedHint } from '../core/hints/hint-format.js';
+import { hintTextParts, isBuiltInHintKind, type HintTextPart } from '../core/hints/hint-origin.js';
 import { splitLeadingBanners } from './history-injected-banner.js';
 import { isEnvelopeOnly, parseSessionEnvelopes } from './history-session-envelope.js';
 import { splitLeadingRiders } from './history-walnut-riders.js';
@@ -75,6 +76,14 @@ export function hintSummary(h: Pick<CarriedHint, 'kind' | 'arg' | 'text'>): stri
         : 'a request to tag the answer with its question number';
     case 'voice-reply':
       return 'a request for a short spoken answer first, because you sent this by voice';
+    case 'user-away':
+      return /^the user is back/i.test(text)
+        ? 'a note that you are back in this chat, so updates go here again'
+        : 'a note that you are away from this chat, so an update that needs you goes to your inbox';
+    case 'brief':
+      return 'a reminder to keep the Brief above this chat current';
+    case 'threads':
+      return 'a note on which of your Threads this message was filed under';
     case 'session-context':
       return "Walnut's session instructions, because this engine has no system prompt of its own";
     case 'engine-switch':
@@ -103,6 +112,10 @@ export interface WalnutAddedItem {
   name: string;
   label: string;
   text: string;
+  /** A hint's: `yours` for a hint the user added, `built-in` for Walnut's own (hint-origin.ts). */
+  origin?: 'built-in' | 'yours';
+  /** A built-in hint whose text holds the user's own words: the text cut into Walnut's and theirs. */
+  parts?: HintTextPart[];
 }
 
 export interface WalnutAdded {
@@ -126,7 +139,14 @@ export function walnutAddedOf(text: string, hints?: readonly CarriedHint[]): Wal
     textWithoutContext = text.slice(0, text.length - own.length) + banners.body;
   }
   // A hint's label is its plain summary: the phone reads it after "Walnut added:".
-  for (const h of hints ?? []) items.push({ kind: 'hint', name: h.kind, label: hintSummary(h), text: h.text });
+  for (const h of hints ?? []) {
+    const builtIn = isBuiltInHintKind(h.kind);
+    const parts = builtIn ? hintTextParts(h) : [];
+    items.push({
+      kind: 'hint', name: h.kind, label: hintSummary(h), text: h.text, origin: builtIn ? 'built-in' : 'yours',
+      ...(parts.some((p) => p.from === 'user') ? { parts } : {}),
+    });
+  }
   return { items, ...(textWithoutContext !== undefined ? { textWithoutContext } : {}) };
 }
 

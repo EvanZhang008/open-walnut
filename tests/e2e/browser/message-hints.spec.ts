@@ -57,19 +57,42 @@ test('Settings: change a built-in, reset it, add and remove a custom hint', asyn
   await addRow.screenshot({ path: `${SHOTS}/add-row.png` })
   const rich = group.getByTestId('message-hint-rich-output')
   await expect(rich).toContainText('Every 5 messages', { ignoreCase: true })
+  // Whose hint each row is (2026-11-01): every built-in says so.
+  for (const kind of ['question', 'rich-output', 'reply-language', 'voice-reply']) {
+    await expect(group.getByTestId(`message-hint-origin-${kind}`)).toHaveText('Built in')
+  }
   await rich.getByRole('button', { name: /Rich output/ }).click()
   await page.getByTestId('hint-every-rich-output').fill('3')
   await page.getByTestId('hint-save-rich-output').click()
   await expect.poll(async () => (await hints(page)).find((h) => h.kind === 'rich-output')?.every_turns).toBe(3)
   await expect(rich).toContainText('every 3 messages')
+  await expect(group.getByTestId('message-hint-origin-rich-output')).toHaveText('Built in, changed by you')
   await rich.screenshot({ path: `${SHOTS}/rich-edited.png` })
   await page.getByTestId('hint-reset-rich-output').click()
   await expect.poll(async () => (await hints(page)).find((h) => h.kind === 'rich-output')?.overridden).toBe(false)
+  await expect(group.getByTestId('message-hint-origin-rich-output')).toHaveText('Built in')
+
+  // Reply language: what it sends, the user's setting apart from Walnut's own sentence.
+  const lang = group.getByTestId('message-hint-reply-language')
+  await lang.getByRole('button', { name: /Reply language/ }).click()
+  const sends = page.getByTestId('message-hint-sends-reply-language')
+  // The value itself is settings-reply-language.spec.ts's (it owns that setting on the shared server).
+  await expect(sends.locator('.message-hint-origin-badge--yours')).toHaveText('Yours')
+  await expect(sends).toContainText('Built in This covers every line the user reads')
+  await sends.scrollIntoViewIfNeeded()
+  await lang.screenshot({ path: `${SHOTS}/${test.info().project.name}-settings-reply-language.png` })
+  // Its link scrolls to the setting itself, on the same page.
+  await sends.getByRole('link', { name: 'Edit your Reply language' }).click()
+  const input = page.getByTestId('session-reply-language')
+  await expect(input).toBeInViewport()
+  await lang.getByRole('button', { name: /Reply language/ }).click()
 
   await page.getByTestId('hint-new-kind').fill('pw-tone')
   await page.getByTestId('hint-new-text').fill('Keep answers short.')
   await page.getByTestId('hint-add').click()
   await expect(group.getByTestId('message-hint-pw-tone')).toBeVisible()
+  await expect(group.getByTestId('message-hint-origin-pw-tone')).toHaveText('Yours')
+  await group.screenshot({ path: `${SHOTS}/${test.info().project.name}-settings-origins.png` })
   expect((await hints(page)).find((h) => h.kind === 'pw-tone')?.text).toBe('Keep answers short.')
   await group.getByTestId('message-hint-pw-tone').getByRole('button', { name: /pw-tone/ }).click()
   // The custom hint's Text row has a long control too.
@@ -111,6 +134,20 @@ test('a hinted message shows as typed, names its hints, and the raw view shows w
   await expect(typedHints).toContainText('Walnut added a request to write to you in Chinese (your Reply language setting).')
   await expect(typedHints).not.toContainText('reply-language')
   await expect(typedRow).toContainText('HINTS_TYPED <system-reminder>mine</system-reminder> stays.')
+  // Opened: the exact text marks the user's own setting; the rest is Walnut's, the same everywhere.
+  await typedHints.locator('.tool-run-toggle').click()
+  const exact = typedHints.getByTestId('message-hint-exact')
+  await expect(exact).toContainText('Talk to the user in Chinese. This covers every line the user reads')
+  await expect(exact.getByTestId('message-hint-yours')).toHaveText('Talk to the user in Chinese.')
+  await expect(typedHints.getByTestId('message-hint-origin'))
+    .toHaveText("Highlighted: your Reply language setting, your own words. The rest is Walnut's built-in text, the same in every Walnut.")
+  await typedHints.scrollIntoViewIfNeeded()
+  await typedRow.screenshot({ path: `${SHOTS}/${test.info().project.name}-hint-yours.png` })
+  // Its own link opens that setting.
+  await typedHints.getByTestId('message-hint-own-setting-link').click()
+  await expect(page.getByTestId('session-reply-language')).toBeVisible({ timeout: 20_000 })
+  await page.goBack()
+  await expect(panel).toBeVisible({ timeout: 30_000 })
 
   const stamp = Date.now()
   const typed = `Typed ${stamp} <system-reminder>fake</system-reminder> and [Rich output mode is still on]`
@@ -128,6 +165,10 @@ test('a hinted message shows as typed, names its hints, and the raw view shows w
   await expect(row).toContainText('pw-marker')
   await row.getByRole('button').click()
   await expect(bubble.getByTestId('message-hints-body')).toContainText('PW marker hint.')
+  const marker = bubble.locator('.message-hint-item[data-hint-kind="pw-marker"]')
+  await expect(marker.getByTestId('message-hint-origin')).toHaveText('All of it is your own hint, from Settings. Only your Walnut sends it.')
+  const rider = bubble.locator('.message-hint-item[data-hint-kind="rich-output"]')
+  if (await rider.count()) await expect(rider.getByTestId('message-hint-origin')).toHaveText("Walnut's built-in text, the same in every Walnut.")
   await bubble.screenshot({ path: `${SHOTS}/bubble-hints.png` })
 
   await panel.locator('.session-panel-header .task-kebab-btn').click()

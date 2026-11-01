@@ -51,11 +51,14 @@ afterAll(async () => {
 })
 
 describe('message hints through a real server', () => {
-  it('lists the five built-ins with their default schedule', async () => {
+  it('lists every built-in with its default schedule', async () => {
     const r = await json('GET', '/hints')
     expect(r.status).toBe(200)
     const kinds = r.body.hints.map((h: { kind: string }) => h.kind)
-    expect(kinds).toEqual(['question', 'rich-output', 'reply-language', 'voice-reply', 'user-away'])
+    expect(kinds).toEqual(['question', 'rich-output', 'reply-language', 'voice-reply', 'user-away', 'brief', 'threads'])
+    // Whose words: every built-in reads as Walnut's, Reply language names the setting it sends.
+    expect(r.body.hints.every((h: { built_in: boolean }) => h.built_in)).toBe(true)
+    expect(r.body.hints.find((h: { kind: string }) => h.kind === 'reply-language').user_setting).toMatchObject({ label: 'Reply language', anchor: 'session-reply-language' })
     const rich = r.body.hints.find((h: { kind: string }) => h.kind === 'rich-output')
     expect(rich).toMatchObject({ enabled: true, every_turns: 5, placement: 'after', overridden: false })
     expect(rich.triggers).toEqual(['session_start', 'after_compaction', 'on_change', 'every_n_turns'])

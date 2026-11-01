@@ -59,7 +59,7 @@ hintsV1Router.get('/hints', async (req: Request, res: Response, next: NextFuncti
     const session = sid ? await sessionView(sid) : undefined
     if (sid && !session) return sendError(res, 404, 'session_not_found', `No session ${sid}`)
     res.json({
-      hints: effectiveHints(config).map(describeHint),
+      hints: effectiveHints(config).map((h) => describeHint(h, config)),
       triggers: HINT_TRIGGERS,
       roles: HINT_ROLES,
       ...(session ? { session } : {}),
@@ -103,8 +103,9 @@ hintsV1Router.put('/hints/:kind', async (req: Request, res: Response, next: Next
       if (patch.audience) merged.audience = patch.audience
       return merged
     })
-    const hint = findHint(await getConfig(), kind)
-    res.json({ hint: hint ? describeHint(hint) : null })
+    const after = await getConfig()
+    const hint = findHint(after, kind)
+    res.json({ hint: hint ? describeHint(hint, after) : null })
   } catch (err) {
     next(err)
   }
@@ -117,8 +118,9 @@ hintsV1Router.delete('/hints/:kind', async (req: Request, res: Response, next: N
     const before = findHint(await getConfig().catch(() => null), kind)
     if (!before) return sendError(res, 404, 'hint_not_found', `No message hint "${kind}"`)
     await writeOverride(kind, () => undefined)
-    const hint = findHint(await getConfig(), kind)
-    res.json({ hint: hint ? describeHint(hint) : null })
+    const after = await getConfig()
+    const hint = findHint(after, kind)
+    res.json({ hint: hint ? describeHint(hint, after) : null })
   } catch (err) {
     next(err)
   }

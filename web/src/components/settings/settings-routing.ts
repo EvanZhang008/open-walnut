@@ -60,6 +60,8 @@ export interface ResolvedPane {
  */
 export const ROW_TARGETS: Readonly<Record<string, { paneId: string; elementId: string }>> = {
   'session-panels': { paneId: 'general', elementId: 'settings-session-panels' },
+  // The Reply language hint's own words, reached from a message's "what Walnut added" (hint-origin.ts).
+  'session-reply-language': { paneId: 'sessions', elementId: 'settings-reply-language' },
 }
 
 /**

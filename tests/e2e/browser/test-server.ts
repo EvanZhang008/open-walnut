@@ -3224,7 +3224,8 @@ const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectme
   // person's own escaped `<system-reminder>` (hint hidden, their words as typed).
   {
     const hinted = 'HINTS_TYPED &lt;system-reminder>mine&lt;/system-reminder> stays.\n\n'
-      + '<system-reminder>\nWalnut (reply-language): Talk to the user in Chinese.\n</system-reminder>'
+      // The user's setting, then Walnut's own sentence (REPLY_LANGUAGE_SCOPE), as sent today.
+      + '<system-reminder>\nWalnut (reply-language): Talk to the user in Chinese. This covers every line the user reads, the short progress lines between your tool calls included.\n</system-reminder>'
     const legacy = 'HINTS_LEGACY words.\n\n[Rich output mode is still on: markdown first.]\n\n[Reply language: Chinese.]'
     await fs.writeFile(
       path.join(jsonlDir, 'pw-hints-session.jsonl'),

@@ -32,6 +32,12 @@ test('the reply language saves on blur, reloads, keeps other session settings, a
   await input.fill(RULE)
   await input.blur()
   await expect.poll(async () => (await readSession(page)).reply_language, { timeout: 10_000 }).toBe(RULE)
+  // Message hints, Reply language, "What it sends" follows the edit: the sentence is the user's, the rest Walnut's.
+  const langHint = page.getByTestId('message-hint-reply-language')
+  await langHint.getByRole('button', { name: /Reply language/ }).click()
+  const sends = page.getByTestId('message-hint-sends-reply-language')
+  await expect(sends.locator('mark.message-hint-yours')).toHaveText(RULE, { timeout: 10_000 })
+  await expect(sends).toContainText('Built in This covers every line the user reads')
   const after = await readSession(page)
   // Saving this row must not drop any other session setting. Presence, not
   // values: parallel specs flip some of them on the same fixture server.
@@ -46,6 +52,8 @@ test('the reply language saves on blur, reloads, keeps other session settings, a
   await page.getByTestId('session-reply-language').fill('')
   await page.getByTestId('session-reply-language').press('Enter')
   await expect.poll(async () => 'reply_language' in (await readSession(page)), { timeout: 10_000 }).toBe(false)
+  await page.getByTestId('message-hint-reply-language').getByRole('button', { name: /Reply language/ }).click()
+  await expect(page.getByTestId('message-hint-sends-reply-language')).toContainText('this hint is not sent', { timeout: 10_000 })
 
   // And a fresh load shows it empty.
   await openSessions(page)

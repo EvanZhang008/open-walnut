@@ -31,6 +31,8 @@ interface HintRow {
   allowed_triggers: Trigger[];
   text?: string;
   overridden: boolean;
+  /** A built-in whose text holds a setting of the user's (hint-origin.ts). */
+  user_setting?: { label: string; anchor: string; value: string | null; walnut_text: string };
 }
 
 const TRIGGER_LABEL: Record<Trigger, string> = {
@@ -44,6 +46,13 @@ const TRIGGER_LABEL: Record<Trigger, string> = {
 };
 const ROLE_LABEL: Record<Role, string> = { main: 'Main', lead: 'Leads', worker: 'Workers', ask: 'Asks', other: 'Other tasks' };
 const ROLES: Role[] = ['main', 'lead', 'worker', 'ask', 'other'];
+
+/** Whose hint a row is: Walnut's own (the same in every Walnut) or the user's. */
+export function hintOrigin(h: Pick<HintRow, 'built_in' | 'overridden'>): { label: string; title: string; kind: 'built-in' | 'changed' | 'yours' } {
+  if (!h.built_in) return { kind: 'yours', label: 'Yours', title: 'A hint you added. Only your Walnut sends it.' };
+  if (h.overridden) return { kind: 'changed', label: 'Built in, changed by you', title: "Walnut's built-in hint and its text, with your own settings for it (on or off, when, to whom, where). Reset to default undoes them." };
+  return { kind: 'built-in', label: 'Built in', title: "Walnut's built-in hint, the same in every Walnut." };
+}
 
 export function hintWhen(h: Pick<HintRow, 'enabled' | 'triggers' | 'every_turns'>): string {
   if (!h.enabled) return 'Off.';
@@ -84,6 +93,22 @@ function HintEditor({ hint, onSave, onReset }: {
   return (
     <div className="message-hint-editor" data-testid={`message-hint-editor-${hint.kind}`}>
       <p className="settings-row-help">{hint.description}</p>
+      {hint.user_setting && (
+        // Whose words it sends: the user's setting first, then Walnut's own sentence (2026-11-01).
+        <div className="message-hint-sends" data-testid={`message-hint-sends-${hint.kind}`}>
+          <p className="settings-row-help">What it sends:</p>
+          <p className="message-hint-sends-part">
+            <span className="message-hint-origin-badge message-hint-origin-badge--yours">Yours</span>{' '}
+            {hint.user_setting.value
+              ? <mark className="message-hint-yours">{hint.user_setting.value}</mark>
+              : <em>Your {hint.user_setting.label} setting is empty, so this hint is not sent.</em>}{' '}
+            <a className="message-hint-settings-link" href={`#${hint.user_setting.anchor}`}>Edit your {hint.user_setting.label}</a>
+          </p>
+          <p className="message-hint-sends-part">
+            <span className="message-hint-origin-badge">Built in</span> {hint.user_setting.walnut_text}
+          </p>
+        </div>
+      )}
       {!hint.built_in && (
         <SettingsRow
           indent
@@ -166,7 +191,8 @@ function HintEditor({ hint, onSave, onReset }: {
   );
 }
 
-export function MessageHintsGroup() {
+/** `replyLanguage`: the Reply language row's value on this page, so "What it sends" follows an edit there. */
+export function MessageHintsGroup({ replyLanguage }: { replyLanguage?: string } = {}) {
   const alwaysShowAdded = useShowWalnutAdditions();
   const [hints, setHints] = useState<HintRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -185,7 +211,7 @@ export function MessageHintsGroup() {
       setError(err instanceof Error ? err.message : String(err));
     }
   }, []);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); }, [load, replyLanguage]);
 
   /** True once stored; a refusal keeps the words in the box (and its draft). */
   const put = async (kind: string, patch: Record<string, unknown>): Promise<boolean> => {
@@ -214,7 +240,7 @@ export function MessageHintsGroup() {
       heading="Message hints"
       id="message-hints"
       data-testid="message-hints"
-      footer="Short Walnut text sent with a message to the AI. Under each message, a line says in plain words what Walnut added and why; a click shows the exact text. Agents can change these too (hint_set)."
+      footer="Short text sent with a message to the AI. Built in: Walnut's own, the same in every Walnut (Reply language sends your own setting with it). Yours: a hint you added. Under each message, a line says in plain words what Walnut added and why; a click shows the exact text, your own words marked. Agents can change these too (hint_set)."
     >
       <SettingsRow
         anchor="settings-show-walnut-additions"
@@ -237,6 +263,14 @@ export function MessageHintsGroup() {
             label={(
               <button type="button" className="message-hint-name" onClick={() => setOpen((o) => (o === h.kind ? null : h.kind))} aria-expanded={open === h.kind}>
                 {h.label} <span aria-hidden="true">{open === h.kind ? '▾' : '▸'}</span>
+                {' '}
+                <span
+                  className={`message-hint-origin-badge message-hint-origin-badge--${hintOrigin(h).kind}`}
+                  data-testid={`message-hint-origin-${h.kind}`}
+                  title={hintOrigin(h).title}
+                >
+                  {hintOrigin(h).label}
+                </span>
               </button>
             )}
             help={hintWhen(h)}

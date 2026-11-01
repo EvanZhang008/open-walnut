@@ -583,3 +583,35 @@ textarea.settings-input {
   flex: 0 0 140px;
   width: 140px;
 }
+
+/* Settings, Message hints: whose hint a row is. */
+.message-hint-origin-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+  vertical-align: middle;
+  color: var(--fg-muted);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+}
+.message-hint-origin-badge--yours,
+.message-hint-origin-badge--changed {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--accent, #0a84ff) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent, #0a84ff) 40%, transparent);
+}
+.message-hint-sends { margin: 4px 0 8px; }
+.message-hint-sends-part { margin: 2px 0; font-size: 13px; overflow-wrap: anywhere; }
+.message-hint-sends-part .message-hint-origin-badge { margin-left: 0; }
+/* The user's own words in a hint (also in injected-banner.css for the chat). */
+.message-hint-sends .message-hint-yours {
+  background: color-mix(in srgb, var(--accent, #0a84ff) 22%, transparent);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 2px;
+}

@@ -32,6 +32,9 @@ import { VOICE_REPLY_TEXT } from '../sessions/voice-reply.js';
 import { languageDrift } from './hint-drift-detect.js';
 import { briefHintText, type BriefHintState } from '../sessions/brief-hint.js';
 import { threadHintText, type ThreadHintState } from '../org/thread-capture.js';
+import { HINT_USER_SETTINGS, REPLY_LANGUAGE_SCOPE, WALNUT_ONLY_KINDS, replyLanguageCorrection } from './hint-origin.js';
+
+export { REPLY_LANGUAGE_SCOPE, replyLanguageCorrection };
 
 export const HINT_TRIGGERS: readonly MessageHintTrigger[] = [
   'every_turn', 'every_n_turns', 'session_start', 'after_compaction', 'on_change', 'on_drift', 'on_request',
@@ -206,17 +209,6 @@ export function userAwayText(lastSeenAt: number | null): string {
 
 export const USER_BACK_TEXT = 'the user is back in this chat: updates go here again, not to his inbox.';
 
-/** The line that leads the reply-language hint after a reply the user read broke it. */
-export function replyLanguageCorrection(driftAt: string): string {
-  const t = Date.parse(driftAt);
-  const when = Number.isFinite(t) ? ` (the turn that ended ${new Date(t).toISOString().slice(11, 16)} UTC)` : '';
-  return `Correction: your last reply the user read${when} was not in his language. Write every line he reads in it from now on, `
-    + 'also when the message you answer, a tool result or your own notes are in English.';
-}
-
-/** Walnut's own clause after the user's reply-language sentence. */
-export const REPLY_LANGUAGE_SCOPE = 'This covers every line the user reads, the short progress lines between your tool calls included.';
-
 const BUILT_IN_BY_KIND = new Map(BUILT_IN.map((s) => [s.kind, s]));
 
 export function isBuiltInHint(kind: string): boolean {
@@ -288,7 +280,7 @@ export function effectiveHints(config: Pick<Config, 'session'> | null | undefine
     spec, o: overrides[spec.kind], builtIn: true,
   }));
   for (const kind of Object.keys(overrides).sort()) {
-    if (BUILT_IN_BY_KIND.has(kind) || !HINT_KIND_RE.test(kind)) continue;
+    if (BUILT_IN_BY_KIND.has(kind) || !HINT_KIND_RE.test(kind) || (WALNUT_ONLY_KINDS as readonly string[]).includes(kind)) continue;
     const spec = customSpec(kind, overrides[kind]);
     if (spec) specs.push({ spec, o: overrides[kind], builtIn: false });
   }
@@ -354,6 +346,8 @@ export class HintSettingsError extends Error {
  */
 export function validateHintSettings(kind: string, input: unknown): MessageHintSettings {
   if (!HINT_KIND_RE.test(kind)) throw new HintSettingsError('kind must be 2 to 41 lowercase letters, digits or dashes, starting with a letter');
+  // Walnut's own text outside the registry: a custom hint by that name would read as Walnut's.
+  if ((WALNUT_ONLY_KINDS as readonly string[]).includes(kind)) throw new HintSettingsError(`"${kind}" is the name of Walnut's own text; pick another name`);
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new HintSettingsError('settings must be an object');
   const i = input as Record<string, unknown>;
   const spec = BUILT_IN_BY_KIND.get(kind);
@@ -410,7 +404,10 @@ export function validateHintSettings(kind: string, input: unknown): MessageHintS
 }
 
 /** A hint as the API and the ops show it (no functions). */
-export function describeHint(h: EffectiveHint) {
+export function describeHint(h: EffectiveHint, config?: Pick<Config, 'session'> | null) {
+  const setting = h.builtIn ? HINT_USER_SETTINGS[h.kind] : undefined;
+  // As it is sent: whitespace collapsed, a long one cut (output-mode.ts).
+  const value = setting?.key === 'reply_language' ? replyLanguageText(config) : null;
   return {
     kind: h.kind,
     label: h.label,
@@ -424,5 +421,13 @@ export function describeHint(h: EffectiveHint) {
     allowed_triggers: h.allowedTriggers,
     ...(h.text !== undefined ? { text: h.text } : {}),
     overridden: h.overridden,
+    // Whose words it sends: a built-in's are Walnut's, but for a setting of the user's it fills in.
+    ...(setting ? {
+      user_setting: {
+        label: setting.label, anchor: setting.anchor,
+        value,
+        walnut_text: setting.walnutText,
+      },
+    } : {}),
   };
 }

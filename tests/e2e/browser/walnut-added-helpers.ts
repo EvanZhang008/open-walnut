@@ -17,7 +17,9 @@ export async function revealWalnutAdded(bubble: Locator): Promise<void> {
   if (await toggle.getAttribute('aria-expanded').catch(() => null) === 'true') return
   await bubble.hover()
   await expect(toggle).toBeVisible()
-  await toggle.click()
+  // The timeline can snap its scroll back to the bottom between Playwright's scroll and its
+  // click, so the point lands on another row's content; the keyboard is a reader's way too.
+  await toggle.click({ timeout: 5_000 }).catch(() => toggle.press('Enter'))
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
 }
 
@@ -27,6 +29,9 @@ export async function revealWalnutAdded(bubble: Locator): Promise<void> {
  * fixture server's setting never changes under another spec.
  */
 export async function pinWalnutAdditions(page: Page, on: boolean): Promise<void> {
+  // The last value this browser read (useShowWalnutAdditions.ts), so the first render
+  // already matches and no row flips from shown to hidden under a click.
+  await page.addInitScript((v) => { try { localStorage.setItem('walnut:show-walnut-additions', v) } catch { /* none */ } }, on ? '1' : '0')
   await page.route('**/api/config', async (route) => {
     if (route.request().method() !== 'GET') {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })

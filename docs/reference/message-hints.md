@@ -158,15 +158,36 @@ People: Settings, Sessions, Message hints. Agents: `hint_list`, `hint_set`,
 ## Seeing what a message carried
 
 Everything Walnut added to a person's message (its notes in front of the words,
-the context blocks it put first, its hints) is hidden in the chat by default.
-The message footer's "Walnut added N" button (on a phone, the message menu)
-shows it for that message: the notes as one folded line above the bubble, each
-context block as a folded row, and a folded "Walnut hints: …" row whose items
-open to their text with a "Turn off in Settings" link to that hint's switch
-(`/settings#message-hint-<kind>`). Settings, Sessions, Message hints, "Always
-show what Walnut added to a message" (`ui.show_walnut_additions`) shows them on
-every message. A row that holds no words of the person (a notice, a trigger, a
-context-only turn) is drawn as it always was.
+the context blocks it put first, its hints) shows in the chat by default
+(`ui.show_walnut_additions`, Settings, Sessions, Message hints, "Always show
+what Walnut added to a message"). Each hint reads in plain words under the
+words, saying what it asked and where it comes from: "Walnut added a request to
+write to you in Chinese (your Reply language setting)." (`hintSummary` in
+`src/lib/walnut-added.ts`; never a kind name). A click opens the exact text the
+AI received and a "Change in Settings" link to that hint's switch
+(`/settings#message-hint-<kind>`). With the setting off, the message footer's
+"Walnut added N" button (on a phone, the message menu) shows them for that
+message. A row that holds no words of the person (a notice, a trigger, a
+context-only turn) is drawn as it always was. No read a client draws from hands
+it a hint block raw (`tests/web/routes/hints-never-raw.test.ts`).
+
+## Whose words a hint is
+
+A built-in hint's text is Walnut's, the same in every Walnut, except the part a
+setting of the user's fills in; a custom hint (Add a hint) is all the user's
+own (`src/core/hints/hint-origin.ts`, shared with the web app). Settings marks
+each row "Built in", "Built in, changed by you" (an override of its triggers,
+audience or place) or "Yours", and a built-in that sends a setting says what it
+sends, the setting apart from Walnut's sentence (`user_setting` on its
+`/api/v1/hints` row). Today that is Reply language: the user's
+`session.reply_language` sentence, then `REPLY_LANGUAGE_SCOPE`, after a
+correction line when a reply drifted. In a message's exact text the user's own
+words are highlighted, with a line saying whose the rest is and a link to the
+setting. The cut is read from the text the AI received (`hintTextParts`), so an
+old message shows the setting as it was then. A new built-in that sends a setting
+of the user's adds it to `HINT_USER_SETTINGS`; `tests/core/hints/hint-origin.test.ts`
+renders every built-in from a config whose settings are all markers and fails
+when a marker lands in a part marked as Walnut's.
 
 A hook's added context (a Claude Code `hook_additional_context` line: Walnut's
 post-compaction open items, its temp-write and clone-identity notes, the user's
@@ -175,5 +196,6 @@ own hooks) is an injected context row at its place, "Added by the <event> hook".
 The session menu's "Raw input & output" shows every turn's input exactly as the
 model received it and its output as it came back. History rows carry `hints` and
 `rawText`; the phone's transcript rows carry `added` (each hint and context block
-with its label and text) and `textWithoutContext`, and `/api/v1/config` carries
+with its label and text; a hint's `origin`, `built-in` or `yours`, and `parts` when
+its text holds the user's own words) and `textWithoutContext`, and `/api/v1/config` carries
 `ui.show_walnut_additions`.

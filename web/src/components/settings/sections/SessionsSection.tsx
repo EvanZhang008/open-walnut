@@ -203,6 +203,7 @@ export function SessionsSection({ config, onSave }: Props) {
           }
         />
         <SettingsRow
+          anchor="settings-reply-language"
           label="Reply language"
           help="One sentence a session hears at its start, after a compaction, when you change it, and when a reply drifts; empty sends nothing."
           htmlFor="session-reply-language"
@@ -222,7 +223,7 @@ export function SessionsSection({ config, onSave }: Props) {
         />
       </SettingsGroup>
 
-      <MessageHintsGroup />
+      <MessageHintsGroup replyLanguage={config.session?.reply_language ?? ''} />
 
       <SettingsGroup heading="Files">
         <SettingsRow
