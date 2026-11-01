@@ -1,7 +1,7 @@
 /**
  * The composer draws its references as pills (web/src/components/chat/composer-ref-pills.ts,
  * ComposerRefLayer.tsx). 2026-11-01, the user: a picked task showed as raw
- * `@[Agent Orchestrator: ...]` text in the input bar; "it should render ... notes and
+ * `@[Garden planner: ...]` text in the input bar; "it should render ... notes and
  * everything else the same".
  *
  * GUARD (the whole class): every reference kind entity-ref-tags.ts can carry, plus a
@@ -21,7 +21,7 @@ const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 
 /** One tag per kind, as the "@" picker writes it. */
 const SAMPLE_TAG: Record<string, string> = {
-  task: taskRefTag('t-1', 'Agent Orchestrator: remove Type 2, add AI disclaimer'),
+  task: taskRefTag('t-1', 'Garden planner: water the east beds, add a frost note'),
   session: sessionRefTag('s-1', 'Plan: auth'),
   project: projectRefTag('Walnut'),
   source: sourceRefTag('notes', 'vault-note.md', 'Vault note'),
@@ -34,7 +34,7 @@ describe('composerSegments', () => {
     expect(segs.map((s) => s.text).join('')).toBe(body);
     const pills = segs.filter((s) => s.pill);
     expect(pills.map((s) => s.pill!.kind)).toEqual(['task', 'source', 'file']);
-    expect(pills[0].pill).toMatchObject({ open: '@[', lead: '', label: 'Agent Orchestrator: remove Type 2, add AI disclaimer', close: ']' });
+    expect(pills[0].pill).toMatchObject({ open: '@[', lead: '', label: 'Garden planner: water the east beds, add a frost note', close: ']' });
     // A source's name is drawn quieter, ahead of its words.
     expect(pills[1].pill).toMatchObject({ lead: 'Notes \u00b7 ', label: 'Vault note', sourceId: 'notes' });
     // A file: its folder quieter, its name as the words; the "@" holds the icon.
