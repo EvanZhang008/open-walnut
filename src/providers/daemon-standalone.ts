@@ -7391,6 +7391,10 @@ function ensureWatcher(sid: string) {
       const signal = AbortSignal.timeout(process.attributeByTime ? 120_000 : 10_000)
       for (;;) {
         const end = session.watcher?.offset ?? session.offset
+        // The watcher starts before this process's first byte (a rotated file's
+        // carry line, a dead CLI's cut last line): nothing of it was read yet,
+        // and the watcher observes its lines live once loading ends.
+        if (end < start) break
         await readCronMetadataStream(session.jsonlPath, start, end, signal, (line, offset) => {
           if (sessions.get(sid) === session) cronMetadata.observe(sid, process, line, true, offset)
         }, {

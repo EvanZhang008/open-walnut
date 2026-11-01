@@ -22,7 +22,7 @@
  */
 import { describe, it, expect, beforeAll, afterEach } from 'vitest'
 import { WebSocket } from 'ws'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -32,6 +32,8 @@ import { testBun } from '../helpers/bun-runtime.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
 
 let scriptPath = ''
+/** The source twin loads its cron reader from a sidecar beside it; built here when bun is on hand. */
+let cronSidecar = false
 let root = ''
 const BUN: string | undefined = testBun()
 const STANDALONE = path.resolve(__dirname, '../../src/providers/daemon-standalone.ts')
@@ -216,6 +218,12 @@ beforeAll(() => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'walnut-bigstream-src-'))
   scriptPath = path.join(dir, 'daemon.cjs')
   fs.writeFileSync(scriptPath, getDaemonSource(), { mode: 0o755 })
+  if (BUN) {
+    const built = spawnSync(BUN, ['build', '--target=node', '--format=cjs', '--outfile', path.join(dir, 'daemon-cron-runtime.cjs'),
+      path.resolve('src/providers/daemon-cron-runtime.ts')], { encoding: 'utf8' })
+    if (built.status !== 0) throw new Error('cron sidecar build failed: ' + built.stderr)
+    cronSidecar = true
+  }
 })
 
 afterEach(async () => {
@@ -399,7 +407,38 @@ describe.each(TWINS)('big stream resume: $name', (twin) => {
     const snap = state.snapshot as { cronActive: boolean; wakeupAt?: number | null }
     expect(snap.cronActive).toBe(true)
     expect(snap.wakeupAt).toBe(WAKEUP_AT)
+    // The carry line sits before the new process's first byte, so the watcher
+    // starts behind it: the cron replay must not read that as a cut stream
+    // (2026-11-01 prod: "Cron metadata stream was truncated" on every such rotation).
+    await new Promise((r) => setTimeout(r, 1500))
+    const failed = daemonLog(dirs).split('\n').filter((l) => l.includes('"cron metadata replay failed"'))
+      .filter((l) => cronSidecar || !l.includes('reader unavailable'))
+    expect(failed).toEqual([])
     await rpc({ cmd: 'stop', sid: 'cron-1' })
+  }, 120_000)
+
+  it('a resume of a file a dead CLI cut mid-line replays the cron metadata without calling it truncated', async () => {
+    const dirs = makeDirs()
+    await boot(twin, dirs)
+    fs.mkdirSync(dirs.streams, { recursive: true })
+    const jsonl = path.join(dirs.streams, 'cut-1.jsonl')
+    // The fold's boundary stops before the cut line; the new process writes after it.
+    fs.writeFileSync(jsonl, L({ type: 'system', subtype: 'init', session_id: 'cut-1' })
+      + L({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tu-cron', name: 'CronCreate', input: { cron: '7 9 * * *' } }] } })
+      + L({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu-cron', content: 'ok' }] }, tool_use_result: { id: 'job-1' } })
+      + '{"type":"assistant","message":{"content":[{"type":"text","text":"cut her')
+    const size = fs.statSync(jsonl).size
+    const resumed = await rpc({
+      cmd: 'start', sid: 'cut-1', cwd: root, message: '', mode: 'default', resume: true,
+      args: ['/bin/sh', '-c', 'sleep 30', 'sh', '--resume', 'cut-1'],
+    })
+    expect(resumed.ok).toBe(true)
+    expect(resumed.offset as number).toBeLessThan(size)
+    await new Promise((r) => setTimeout(r, 1500))
+    const failed = daemonLog(dirs).split('\n').filter((l) => l.includes('"cron metadata replay failed"'))
+      .filter((l) => cronSidecar || !l.includes('reader unavailable'))
+    expect(failed).toEqual([])
+    await rpc({ cmd: 'stop', sid: 'cut-1' })
   }, 120_000)
 
   it('a big file is kept when its transcript is missing or the cap is not reached', async () => {
