@@ -1148,6 +1148,32 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
    *  everything the model wrote between the two was written before it saw the
    *  message, and drawn under it read as its answer (2026-10-31). */
   const enqueueOfAttachment = new Map<number, number>();
+  /** A text-less enqueue to the text its remove gave it. A line whose content is
+   *  blocks (a send with pictures, providers/user-line-images-core.ts) is enqueued
+   *  with no text; its `remove` and its `queued_command` attachment carry the text.
+   *  Walk the CLI's queue (FIFO for a dequeue) to learn which enqueue a remove took. */
+  const textOfBlocksEnqueue = new Map<number, string>();
+  {
+    const queue: number[] = [];
+    for (let i = 0; i < rawMessages.length; i++) {
+      const raw = rawMessages[i];
+      if (raw.type !== 'queue-operation') continue;
+      if (raw.operation === 'enqueue') queue.push(i);
+      else if (raw.operation === 'dequeue') queue.shift();
+      else if (raw.operation === 'remove' && raw.content) {
+        let at = queue.findIndex(j => rawMessages[j].content === raw.content);
+        // The walk's FIFO is a guess (the CLI takes a `next` before a `later`), so a
+        // remove whose text an earlier enqueue carries is that one's, never a text-less one's.
+        const named = at < 0 && rawMessages.some((e, k) => k < i && e.type === 'queue-operation'
+          && e.operation === 'enqueue' && e.content === raw.content);
+        if (at < 0 && !named) {
+          at = queue.findIndex(j => !rawMessages[j].content);
+          if (at >= 0) textOfBlocksEnqueue.set(queue[at], raw.content);
+        }
+        if (at >= 0) queue.splice(at, 1);
+      }
+    }
+  }
   for (let i = 0; i < rawMessages.length; i++) {
     const raw = rawMessages[i];
     if (raw.type !== 'queue-operation' || raw.operation !== 'remove' || !raw.content) continue;
@@ -1157,7 +1183,15 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
       if (e.type === 'queue-operation' && e.operation === 'enqueue' && e.content === raw.content
         && !pairedEnqueues.has(j)) break;
     }
-    if (j < 0) continue;
+    // A line of blocks: its text-less enqueue, which the queue walk above gave this text.
+    let blocksText: string | undefined;
+    if (j < 0) {
+      for (let k = i - 1; k >= 0; k--) {
+        if (textOfBlocksEnqueue.get(k) === raw.content && !pairedEnqueues.has(k)) { j = k; break; }
+      }
+      if (j < 0) continue;
+      blocksText = raw.content;
+    }
     pairedEnqueues.add(j);
     // The attachment usually precedes the remove, but the two writes race (15 of
     // 1084 land after it), so look a window past it too, never past a later enqueue
@@ -1167,7 +1201,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     let ran = false;
     for (let k = j + 1; k < end; k++) {
       const e = rawMessages[k];
-      if (k > i && e.type === 'queue-operation' && e.operation === 'enqueue' && e.content === raw.content) break;
+      if (k > i && e.type === 'queue-operation' && e.operation === 'enqueue' && blocksText === undefined && e.content === raw.content) break;
       if (claimedAttachments.has(k) || e.type !== 'attachment' || e.attachment?.type !== 'queued_command') continue;
       if (queuedCommandText(e.attachment.prompt)?.trim() === wanted) {
         claimedAttachments.add(k);
@@ -1254,7 +1288,9 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
         const at = queue.shift();
         if (at !== undefined) taken.push({ at, by: i });
       } else if (raw.operation === 'remove') {
-        const at = raw.content ? queue.findIndex(j => rawMessages[j].content === raw.content) : -1;
+        let at = raw.content ? queue.findIndex(j => rawMessages[j].content === raw.content) : -1;
+        // A line of blocks was enqueued with no text (see textOfBlocksEnqueue).
+        if (at < 0 && raw.content) at = queue.findIndex(j => textOfBlocksEnqueue.get(j) === raw.content);
         queue.splice(at >= 0 ? at : 0, 1);
       }
     }
@@ -1273,8 +1309,11 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
   let logsTakes = logsMidTurnTakes;
   if (!logsTakes && stillQueued.size > 0 && rawMessages.some((r) => r.type === 'queue-operation' && r.operation === 'dequeue')) {
     const firstWaiting = Math.min(...stillQueued);
-    logsTakes = !rawMessages.some((r, i) => i > firstWaiting && r.type === 'user'
-      && typeof r.message?.content === 'string' && !isInjectedLine(r));
+    // A typed prompt: text, or blocks that are not tool results (a send with pictures).
+    logsTakes = !rawMessages.some((r, i) => i > firstWaiting && r.type === 'user' && !isInjectedLine(r)
+      && (typeof r.message?.content === 'string'
+        || (Array.isArray(r.message?.content) && r.message.content.some((b) => b?.type !== 'tool_result')
+          && !r.message.content.some((b) => b?.type === 'text' && b.text?.startsWith('[Request interrupted')))));
   }
 
   // ── Batched-twin pass (inc-1784349380504) ──
@@ -1354,7 +1393,8 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
    *  millisecond, and the synthetic `queue-<timestamp>` id collapses that pair. */
   const emitQueueRow = (j: number): void => {
     const raw = rawMessages[j];
-    if (!raw.content || skipEnqueueIndices.has(j)) return;
+    const text = raw.content || textOfBlocksEnqueue.get(j);
+    if (!text || skipEnqueueIndices.has(j)) return;
     if (queueDeadKeys.size > 0 && queueDeadKeys.has(queueEnqueueKey(raw))) return;
     const syntheticId = `queue-${raw.timestamp ?? j}`;
     const sourceUuid = sourceUuidOf.get(j);
@@ -1363,7 +1403,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
       timestamp: raw.timestamp ?? new Date().toISOString(),
       ...(sourceUuid ? { sourceUuid } : {}),
       ...(stillQueued.has(j) ? { unsettled: true, ...(logsTakes ? { queued: true } : {}) } : {}),
-      contentBlocks: [{ type: 'text' as const, text: raw.content }],
+      contentBlocks: [{ type: 'text' as const, text }],
     });
   };
 

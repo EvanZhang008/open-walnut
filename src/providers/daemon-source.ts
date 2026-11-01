@@ -66,6 +66,7 @@ import { createHostResume } from './host-resume-core.js'
 import { createCliOwner } from './cli-owner-core.js'
 import { createCliArgvFiles } from './cli-argv-files-core.js'
 import { argvNamesSession, boundedExecFile, createNoticeOnce } from './daemon-core.js'
+import { userLineContent } from './user-line-images-core.js'
 import { createStreamCompact } from './stream-compact-core.js'
 import { createStreamFold } from './stream-fold-core.js'
 import { createHostStart } from './host-start-core.js'
@@ -319,6 +320,7 @@ export function getDaemonSource(): string {
     ['__BOUNDED_EXEC_FILE__', boundedExecFile.toString()],
     ['__ARGV_NAMES_SESSION__', argvNamesSession.toString()],
     ['__CREATE_NOTICE_ONCE__', createNoticeOnce.toString()],
+    ['__USER_LINE_CONTENT__', userLineContent.toString()],
   ]
   // The tracker is constructed before the cron sidecar loads, so its prompt
   // limit is stamped as a literal (like the version), not read from the sidecar.
@@ -693,6 +695,19 @@ export function validateFoldInjection(injections: Array<[string, string]>): void
         || cutOf(null, q, null, null) || cutOf({ fate: 'waiting' }, q, null, begunAt) || cutOf(null, { ...q, uuid: '' }, null, begunAt)) {
         throw new Error('line fate did not judge a write that died part way by the rule')
       }
+    }
+    // User line pictures smoke: a reconstructed copy must turn a listed png into an
+    // image block in front of one text block, and leave a line with no pictures as text.
+    const lineContentOf = reconstructed['__USER_LINE_CONTENT__'] as typeof userLineContent | undefined
+    if (lineContentOf) {
+      const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0])
+      const fakeFs = { statSync: () => ({ isFile: () => true, size: png.length }), readFileSync: () => png }
+      const got = lineContentOf('[Images attached \u2014 use the Read tool to view them]\n- /p/images/a.png\n\nlook', fakeFs, ['/p/images/'])
+      const blocks = Array.isArray(got.content) ? got.content : []
+      if (blocks.length !== 2 || blocks[0].type !== 'image' || blocks[1].type !== 'text' || got.attached.length !== 1) {
+        throw new Error('user line pictures did not become an image block')
+      }
+      if (lineContentOf('just text', fakeFs, ['/p/images/']).content !== 'just text') throw new Error('user line pictures changed a line with none')
     }
     const createDrift = reconstructed['__CREATE_LOOP_DRIFT_PROBE__'] as typeof createLoopDriftProbe | undefined
     if (createDrift) {
@@ -9506,6 +9521,16 @@ async function sendSessionMessage(ws, id, cmd) {
 
 // One instruction notice into one CLI process once (daemon-core.ts createNoticeOnce, injected as text).
 const noticeOnce = (__CREATE_NOTICE_ONCE__)();
+// A user line's pictures as image blocks (user-line-images-core.ts, injected as text),
+// read only from Walnut's picture folders on this host (twin of daemon-standalone.ts).
+const userLineContent = (__USER_LINE_CONTENT__);
+const PICTURE_ROOTS = (function () {
+  const dirs = [DAEMON_DIR];
+  try { const real = fs.realpathSync(DAEMON_DIR); if (real !== DAEMON_DIR) dirs.push(real); } catch (e) { /* not made yet */ }
+  const out = [];
+  for (const d of dirs) { out.push(d + '/images/'); out.push(d + '-images/'); }
+  return out;
+})();
 async function handleSendCommand(sid, rawMessage, uuid, inputMarkers, opts) {
   if (!sid || !rawMessage) return { error: 'send: missing sid or message' };
   const markers = normalizeMarkers(inputMarkers);
@@ -9526,12 +9551,19 @@ async function handleSendCommand(sid, rawMessage, uuid, inputMarkers, opts) {
   const message = once.message;
   markers.list = once.markers;
   if (once.stripped) logMsg('info', 'send: left out an instruction notice this process was just given', { sid: sid, pid: session.pid || null, messageIds: markers.list.map(function (m) { return m.messageId; }) });
-  const envelope = { type: 'user', message: { role: 'user', content: message } };
-  if (typeof uuid === 'string' && uuid) envelope.uuid = uuid;
   // How far the write got, for a failure's answer (twin of daemon-core.ts).
   const progress = { sent: 0, length: 0, lead: 0 };
   const written = function () { return lineWrittenPart(progress.sent, progress.length, progress.lead); };
   try {
+    // The pictures the message names go as image blocks (user-line-images-core.ts, twin of daemon-core.ts).
+    const lineContent = userLineContent(message, fs, PICTURE_ROOTS);
+    if (lineContent.attached.length > 0 || lineContent.skipped.length > 0) {
+      logMsg('info', lineContent.attached.length > 0 ? 'send: pictures went as image blocks' : 'send: pictures went as paths to Read', {
+        sid: sid, messageIds: markers.list.map(function (m) { return m.messageId; }), attached: lineContent.attached, skipped: lineContent.skipped,
+      });
+    }
+    const envelope = { type: 'user', message: { role: 'user', content: lineContent.content } };
+    if (typeof uuid === 'string' && uuid) envelope.uuid = uuid;
     // send-lost-line-v1: into the process that read past this line, a lone
     // newline first, so a fragment it holds is ended on its own (daemon-core.ts).
     const rewrite = lostPid !== null && lostPid === session.pid;

@@ -48,6 +48,13 @@ const NEGATIVE_TTL_MS = 60_000
  * GET /api/sessions/:id maxed at 29.9 s on the live server, exactly that timeout.
  */
 const HEAD_BYTES = 256 * 1024
+/**
+ * A first user line that carries pictures (image blocks, about 0.2 to 1 MB each
+ * after Claude Code downsizes them) is longer than the head: read on to this many
+ * bytes once, only when the head held no user line whole (a line carries at
+ * most 6 MB of pictures, 8 MB as base64: user-line-images-core.ts).
+ */
+const LONG_HEAD_BYTES = 8 * 1024 * 1024
 const TAIL_BYTES = 64 * 1024
 const FIND_TIMEOUT_MS = 5_000
 
@@ -144,13 +151,26 @@ export async function recoverSessionRecordFromJsonl(
         return null
       }
       const head = await reader.readRangeBytes(jsonlPath, 0, Math.min(size, HEAD_BYTES))
+      // Read on in 1 MB windows (the reader's frame size) to the end of a long first line.
+      if (head && size > HEAD_BYTES && extractRecoveryEvidence(head.buf.toString('utf-8')).cwd === undefined) {
+        const parts = [head.buf]
+        let at = head.buf.length
+        while (at < Math.min(size, LONG_HEAD_BYTES)) {
+          const more = await reader.readRangeBytes(jsonlPath, at, Math.min(1024 * 1024, Math.min(size, LONG_HEAD_BYTES) - at))
+          if (!more || more.buf.length === 0) break
+          parts.push(more.buf)
+          at += more.buf.length
+          if (more.buf.includes(10)) break
+        }
+        head.buf = Buffer.concat(parts)
+      }
       if (!head) {
         negativeCache.set(sessionId, Date.now())
         return null
       }
       let tail: string | undefined
-      if (size > HEAD_BYTES) {
-        const tailStart = Math.max(HEAD_BYTES, size - TAIL_BYTES)
+      if (size > head.buf.length) {
+        const tailStart = Math.max(head.buf.length, size - TAIL_BYTES)
         tail = (await reader.readRangeBytes(jsonlPath, tailStart, size - tailStart))?.buf.toString('utf-8')
       }
       const found = { path: jsonlPath, bytesRead: head.buf.length + (tail?.length ?? 0), size }

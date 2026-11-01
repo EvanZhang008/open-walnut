@@ -292,9 +292,11 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     const fifo = vi.fn(async (_sid: string, _session: unknown, _buf: Buffer) => outcome)
     const { lineWrittenPart } = await import('../../src/providers/line-fate-core.js')
     const { createNoticeOnce } = await import('../../src/providers/daemon-core.js')
-    const run = new Function('sessions', 'process', 'normalizeMarkers', 'reapSession', 'chainFifoWrite', 'Buffer', 'lineWrittenPart', 'logMsg', 'noticeOnce',
+    const { userLineContent } = await import('../../src/providers/user-line-images-core.js')
+    const run = new Function('sessions', 'process', 'normalizeMarkers', 'reapSession', 'chainFifoWrite', 'Buffer', 'lineWrittenPart', 'logMsg', 'noticeOnce', 'userLineContent', 'fs', 'PICTURE_ROOTS',
       source.slice(start, end) + '\nreturn handleSendCommand')(
       new Map([['sid', session]]), { kill: vi.fn() }, () => ({ list: [] }), reap, fifo, Buffer, lineWrittenPart, vi.fn(), createNoticeOnce(),
+      userLineContent, fs, [],
     )
     const result = await run('sid', 'message', 'user-uuid')
     expect(result.ok).toBe(outcome === 'ok')
@@ -316,9 +318,11 @@ describe('L1.6 daemon-core vs daemon-source template parity', () => {
     const fifo = vi.fn(async (_sid: string, _session: unknown, _buf: Buffer) => 'ok')
     const { lineWrittenPart } = await import('../../src/providers/line-fate-core.js')
     const { createNoticeOnce } = await import('../../src/providers/daemon-core.js')
-    const run = new Function('sessions', 'process', 'normalizeMarkers', 'reapSession', 'chainFifoWrite', 'Buffer', 'lineWrittenPart', 'logMsg', 'noticeOnce',
+    const { userLineContent } = await import('../../src/providers/user-line-images-core.js')
+    const run = new Function('sessions', 'process', 'normalizeMarkers', 'reapSession', 'chainFifoWrite', 'Buffer', 'lineWrittenPart', 'logMsg', 'noticeOnce', 'userLineContent', 'fs', 'PICTURE_ROOTS',
       source.slice(start, end) + '\nreturn handleSendCommand')(
       new Map([['sid', session]]), { kill: vi.fn() }, () => ({ list: [] }), vi.fn(), fifo, Buffer, lineWrittenPart, vi.fn(), createNoticeOnce(),
+      userLineContent, fs, [],
     )
     const notice = '<walnut-message kind="notification" from="Walnut" outcome="task-routing-policy" note="x">\nRule.\n</walnut-message>'
     expect(await run('sid', `${notice}\n\nServer`)).toEqual({ ok: true })

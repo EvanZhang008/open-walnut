@@ -285,6 +285,14 @@ const IS_PROD_DAEMON_DIR = path.resolve(DAEMON_DIR) === path.resolve(PROD_DAEMON
   || path.resolve(DAEMON_DIR) === path.resolve(FALLBACK_DAEMON_DIR)
 const STREAMS_DIR = process.env.WALNUT_STREAMS_DIR
   || (IS_PROD_DAEMON_DIR ? PROD_STREAMS_DIR : `${DAEMON_DIR}-streams`)
+// Where Walnut saves a session's pictures on this host (user-line-images-core.ts):
+// the server's images dir (it names this dir to its daemon), an upload from another
+// machine, and image.save. Both spellings of a symlinked /tmp.
+const PICTURE_ROOTS: string[] = (() => {
+  const dirs = [DAEMON_DIR]
+  try { const real = fs.realpathSync(DAEMON_DIR); if (real !== DAEMON_DIR) dirs.push(real) } catch { /* not made yet */ }
+  return dirs.flatMap((d) => [`${d}/images/`, `${d}-images/`])
+})()
 
 // ── Spawn journal ───────────────────────────────────────────────────────────
 // Append-only record of every CLI session ANY Walnut daemon on this host
@@ -2133,6 +2141,7 @@ const core = createDaemonCore<SessionData>({
   }),
   killProcessGroupFn: killProcessGroup,
   streamsDir: STREAMS_DIR,
+  pictureRoots: PICTURE_ROOTS,
   registryFile: REGISTRY_FILE,
   orphanPollIntervalMs: 1000,
   orphanStartTimeCheckMs: 30_000,

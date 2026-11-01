@@ -170,6 +170,27 @@ describe('recoverSessionRecordFromJsonl', () => {
     expect(record!.lastActiveAt).toBe('2026-07-14T19:30:00.000Z');
   });
 
+  it('reads on to the end of a first user line that pictures made longer than the head', async () => {
+    // A send with pictures goes as image blocks (providers/user-line-images-core.ts):
+    // its line holds the base64, and its cwd and text come after it.
+    const sid = '7a1b2c3d-0000-4000-8000-00000000abce';
+    const picture = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'A'.repeat(1_500_000) } };
+    const content = jsonlLine({
+      type: 'user', uuid: 'u-1', timestamp: '2026-11-01T05:00:00.000Z',
+      message: { role: 'user', content: [picture, { type: 'text', text: 'What does this screenshot say?' }] },
+      cwd: CWD, sessionId: sid,
+    }) + jsonlLine({
+      type: 'assistant', uuid: 'a-1', timestamp: '2026-11-01T05:00:09.000Z',
+      message: { role: 'assistant', id: 'msg_1', content: [{ type: 'text', text: 'A build error.' }] },
+    });
+    await writeCanonicalJsonl(sid, content);
+    const record = await recoverSessionRecordFromJsonl(sid);
+    expect(record).not.toBeNull();
+    expect(record!.cwd).toBe(CWD);
+    expect(record!.title).toContain('What does this screenshot say');
+    expect(record!.lastActiveAt).toBe('2026-11-01T05:00:09.000Z');
+  });
+
   it('returns null (and negative-caches) when no JSONL exists', async () => {
     const first = await recoverSessionRecordFromJsonl('11111111-2222-3333-4444-555555555555');
     expect(first).toBeNull();

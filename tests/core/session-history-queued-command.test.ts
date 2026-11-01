@@ -117,6 +117,80 @@ describe('mid-turn sends the CLI consumed as queued_command attachments', () => 
     expect(rows).toContain(`user:${withImage}`);
   });
 
+  // CLI 2.1.312 shapes, measured 2026-11-01: a line whose content is blocks (the daemon
+  // sends a picture as an image block, providers/user-line-images-core.ts) is ENQUEUED
+  // WITH NO TEXT; its remove carries the text blocks joined and its attachment the blocks.
+  const picLine = '[Images attached \u2014 use the Read tool to view them]\n- /tmp/shot.png\n\nWhy is this cut off?';
+  const picHinted = `${picLine}\n\n<system-reminder>\nWalnut (images): The picture listed is in this message.\n</system-reminder>`;
+  const picBlocks = [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AA==' } }, { type: 'text', text: picHinted }];
+  const textless = (s: number) => ({ type: 'queue-operation', operation: 'enqueue', timestamp: T(s), sessionId: 's' });
+
+  it('a picture line sent mid-turn (enqueued with no text) shows once at its attachment, hint off', () => {
+    const lines = [
+      user('u1', null, A, 1),
+      assistant('a1', 'u1', 'msg_1', [toolUse('toolu_1')], 2),
+      textless(3),
+      user('tr1', 'a1', toolResult('toolu_1'), 5),
+      queuedCommand('q1', 'tr1', picBlocks, 5),
+      remove(picHinted, 5),
+      assistant('a2', 'q1', 'msg_2', [{ type: 'text', text: 'The right edge is clipped.' }], 6),
+    ];
+    expect(timeline(lines)).toEqual([`user:${A}`, 'assistant:[tool]', `user:${picLine}`, 'assistant:The right edge is clipped.']);
+    const row = parse(lines).find((m) => m.text === picLine)!;
+    expect(row.hints?.map((h) => h.kind)).toEqual(['images']);
+    expect(row.unsettled).toBeFalsy();
+  });
+
+  it('a picture line taken at a turn start (enqueue, dequeue, user line of blocks) shows once', () => {
+    const lines = [
+      user('u1', null, A, 1),
+      assistant('a1', 'u1', 'msg_1', [{ type: 'text', text: 'ok' }], 2),
+      textless(3), dequeue(3),
+      user('u2', 'a1', picBlocks, 4),
+      assistant('a2', 'u2', 'msg_2', [{ type: 'text', text: 'Clipped on the right.' }], 5),
+      // A later mid-turn picture line is not paired with the one the turn start took.
+      assistant('a3', 'a2', 'msg_3', [toolUse('toolu_3')], 6),
+      textless(7),
+      user('tr3', 'a3', toolResult('toolu_3'), 8),
+      queuedCommand('q3', 'tr3', picBlocks, 8),
+      remove(picHinted, 8),
+    ];
+    const rows = timeline(lines);
+    expect(rows.filter((r) => r === `user:${picLine}`)).toHaveLength(2);
+    expect(rows).toEqual([`user:${A}`, 'assistant:ok', `user:${picLine}`, 'assistant:Clipped on the right.', 'assistant:[tool]', `user:${picLine}`]);
+  });
+
+  it('a remove whose text an earlier enqueue carries is never given to a text-less picture line', () => {
+    // The walk takes FIFO; the CLI may take the picture line first and the notice after.
+    const notice = '<task-notification>\n<task-id>b1</task-id>\n</task-notification>';
+    const lines = [
+      user('u1', null, A, 1),
+      assistant('a1', 'u1', 'msg_1', [toolUse('toolu_1')], 2),
+      enqueue(notice, 3),
+      textless(4),
+      dequeue(5),
+      user('u2', 'a1', picBlocks, 5),
+      assistant('a2', 'u2', 'msg_2', [toolUse('toolu_2')], 6),
+      user('tr2', 'a2', toolResult('toolu_2'), 7),
+      queuedCommand('q2', 'tr2', notice, 7),
+      remove(notice, 7),
+    ];
+    const rows = parse(lines).map((m) => m.text);
+    expect(rows.filter((t) => t === picLine)).toHaveLength(1);
+    expect(rows.filter((t) => t?.includes('task-notification'))).toHaveLength(0);
+  });
+
+  it('a picture line dropped unrun (remove, no attachment) stays hidden', () => {
+    const rows = timeline([
+      user('u1', null, A, 1),
+      assistant('a1', 'u1', 'msg_1', [toolUse('toolu_1')], 2),
+      textless(3),
+      remove(picHinted, 4),
+      user('tr1', 'a1', toolResult('toolu_1'), 5),
+    ]);
+    expect(rows.some((r) => r.includes('Why is this cut off?'))).toBe(false);
+  });
+
   it('shows the same text twice when it was queued twice and both ran', () => {
     const rows = timeline([
       user('u1', null, A, 1),

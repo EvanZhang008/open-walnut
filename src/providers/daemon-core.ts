@@ -17,6 +17,7 @@
 
 import { execFileSync, execSync } from 'node:child_process'
 import { dirname, join as pathJoin } from 'node:path'
+import { userLineContent } from './user-line-images-core.js'
 import { lineFateScan, lineFateVerdict, lineTornEnd, lineWriteBegun, lineWriteCut, lineWrittenPart, type LineFate, type LineFateKind, type LineFateScan, type LineWritten } from './line-fate-core.js'
 
 // ── Shared types ──
@@ -171,6 +172,9 @@ export interface DaemonCoreDeps<S extends CoreSessionData = CoreSessionData> {
   clearIntervalFn?: typeof clearInterval
   setTimeoutFn?: typeof setTimeout
   streamsDir: string
+  /** Walnut's picture folders on this host (`<daemon dir>/images/`, `<daemon dir>-images/`):
+   *  a user line's pictures there go as image blocks (user-line-images-core.ts). */
+  pictureRoots?: readonly string[]
   registryFile: string
   orphanPollIntervalMs?: number
   /** Total budget for one FIFO send (chain wait + write), ms. Must stay under
@@ -456,6 +460,7 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
     readStartTimeFn,
     killProcessGroupFn,
     streamsDir,
+    pictureRoots = [],
     registryFile,
     logger,
     broadcastSessionStateFn,
@@ -1031,9 +1036,16 @@ export function createDaemonCore<S extends CoreSessionData = CoreSessionData>(
       // `uuid` is spread, never written as an explicit `undefined`: JSON.stringify
       // would drop it either way, but keeping the key conditional makes the
       // "absent ⇒ identical bytes" contract visible at the write site.
+      // The pictures the message names go as image blocks (user-line-images-core.ts).
+      const lineContent = userLineContent(message, fs, pictureRoots)
+      if (lineContent.attached.length > 0 || lineContent.skipped.length > 0) {
+        logger('info', lineContent.attached.length > 0 ? 'send: pictures went as image blocks' : 'send: pictures went as paths to Read', {
+          sid, messageIds: pending.map((m) => m.messageId), attached: lineContent.attached, skipped: lineContent.skipped,
+        })
+      }
       const payload = JSON.stringify({
         type: 'user',
-        message: { role: 'user', content: message },
+        message: { role: 'user', content: lineContent.content },
         ...(uuid ? { uuid } : {}),
       })
       // send-lost-line-v1: into the process that read past this line, a lone
