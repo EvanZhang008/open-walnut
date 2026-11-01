@@ -243,12 +243,14 @@ ollama pull qwen3-coder:30b
    agent:
      main_provider: ollama
      main_model: qwen3-coder:30b     # any model you pulled with `ollama pull`
-     fast_model: qwen3:8b            # optional: a smaller one for quick background calls
+     # fast_model: qwen3:8b          # optional: a smaller model you also pulled, for quick background calls
    providers:
      ollama:
        api: ollama
        base_url: http://localhost:11434   # the default; set it for another machine
    ```
+
+   With no `fast_model`, quick background calls use `main_model`. A `fast_model` the server does not have falls back to `main_model` too, and the server log says so once, with the `ollama pull` line that adds it.
 
    An OpenAI-compatible server (LM Studio, vLLM, llama.cpp) works the same way as `api: openai-chat` with its `base_url` (for example `http://localhost:1234/v1`) and no key.
 
@@ -258,6 +260,8 @@ ollama pull qwen3-coder:30b
    defaults:
      engine: opencode   # or goose, codex, or custom (engines.custom.adapter_cmd)
    ```
+
+   Install OpenCode first. `curl -fsSL https://opencode.ai/install | bash` (or `npm install -g opencode-ai`) installs OpenCode 1; `curl -fsSL https://opencode.ai/v2/install | bash` (or `brew install opencode`) installs OpenCode 2. Walnut is tested with OpenCode 1.4.0, 1.19.5, 2.2.0 and 2.2.3, and the config below works for both. Check the version with `opencode --version`.
 
    The engine's own config names the model. For OpenCode, put this in `~/.config/opencode/opencode.json` (the model id after `ollama/` is the name `ollama list` shows):
 
@@ -278,7 +282,7 @@ ollama pull qwen3-coder:30b
    }
    ```
 
-   Check it once with `opencode run "say hi"` before you start Walnut. A session sends the model a long system prompt and tool list, so give it room: if replies stop short or ignore the tools, start Ollama with a larger context (`OLLAMA_CONTEXT_LENGTH=32768 ollama serve`). Walnut gives every engine its session instructions (role, team rules, task directory): Codex as developer instructions, the others on the first message of each conversation.
+   Check it once with `opencode run "say hi"` before you start Walnut. A session sends the model a long system prompt and tool list, so give it room (on every engine but Codex, Walnut lists only its most used tools, plus `tool_help` and `tool_call`, which reach every other one; `session.acp_walnut_tools: all` lists them all): if replies stop short or ignore the tools, start Ollama with a larger context (`OLLAMA_CONTEXT_LENGTH=32768 ollama serve`). Walnut gives every engine its session instructions (role, team rules, task directory): Codex as developer instructions, the others on the first message of each conversation.
 
 With both set, nothing asks you to install Claude Code: not the installer, not the home page, not the server log. If your model server stops answering, the home page says so instead and clears by itself once the server is back. Search and voice input already run on your machine by default.
 
