@@ -101,7 +101,7 @@ import type { TaskPhase, TaskStatus, Task } from './types.js';
 import { isMainAgentTask } from './org/main-stays-active.js'
 import {
   consumeInterruptedWait, dropInterruptedWait, hasInterruptedWait, interruptedWaitLeftAt, markInterruptedByMessage,
-  dropFireTurn, noteInterruptedWait, noteTurnSend, resumableWait, takeFireTurn, triggersStanding, waitExitCause,
+  dropFireTurn, leftNeedsRecently, noteInterruptedWait, noteLeftNeeds, noteTurnSend, resumableWait, takeFireTurn, triggersStanding, waitExitCause,
   type InjectedLineClass,
 } from './task-wait-resume.js'
 
@@ -544,7 +544,7 @@ export async function applySessionPhase(
   // own edge may land after the turn it started already began. The clean end of
   // that turn brings it back while the task still has an armed trigger.
   if (trigger === 'session:input') {
-    noteTurnSend(taskId, opts?.sendSource === 'routine-trigger' || source === 'trigger-host-delivery', isPersonSendSource(opts?.sendSource), task.wait_until ?? null, task.phase === 'NEED_ACTION')
+    noteTurnSend(taskId, opts?.sendSource === 'routine-trigger' || source === 'trigger-host-delivery', isPersonSendSource(opts?.sendSource), task.wait_until ?? null, task.phase === 'NEED_ACTION' || (task.phase === 'IN_PROGRESS' && leftNeedsRecently(taskId)))
     const cause = waitExitCause(trigger, opts?.sendSource, opts?.sendEndsWait === true)
     if (!cause) dropInterruptedWait(taskId, isPersonSendSource(opts?.sendSource) ? 'person-input' : `send:${opts?.sendSource ?? 'unknown'}`)
     else markInterruptedByMessage(taskId, opts?.sendSource ?? source)
@@ -677,6 +677,9 @@ export async function applySessionPhase(
         return { changed: false, oldPhase }
       }
 
+      // A turn that took the task off the user (NEED_ACTION -> IN_PROGRESS): a fire whose send edge
+      // lands after this one still finds the task on the user (noteTurnSend's onUser).
+      if (oldPhase === 'NEED_ACTION' && newPhase === 'IN_PROGRESS') noteLeftNeeds(taskId)
       if (resume) consumeInterruptedWait(taskId, updated.task?.phase_changed_at)
       else if (leftWait && newPhase === 'IN_PROGRESS') {
         const cause = waitExitCause(trigger, opts?.sendSource, opts?.sendEndsWait === true, opts?.lineSource)

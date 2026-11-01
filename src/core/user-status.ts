@@ -49,6 +49,11 @@ export function waitWordsNameUser(words: string | null | undefined, strict = fal
   return (strict ? ON_USER_PREFIX_RE : ON_USER_RE).test(words ?? '');
 }
 
+/** Someone other than the user is above it: its leader, or for Main and a lead their teams' side. */
+function hasAbove(input: Pick<UserStatusInput, 'hasLeader' | 'isMain' | 'isLead'>): boolean {
+  return !!(input.hasLeader || input.isMain || input.isLead);
+}
+
 /** A waiting report whose wait is the user's to end: on them, or on nothing it names outside. A
  *  wait on its lead by a task with none is the user's too (they are the one above it). */
 function waitIsUsers(report: StatusReport | null | undefined, hasLeader: boolean): boolean {
@@ -483,7 +488,7 @@ export function deriveUserStatus(input: UserStatusInput, nowMs: number = Date.no
   if (out.state === 'waiting' && !out.until && input.waitUntil && Date.parse(input.waitUntil) > nowMs) out.until = input.waitUntil;
   // Only an ask the session itself wrote can be checked again; Walnut's own "its turn ended and
   // handed it back" is no claim about the world.
-  if (out.state === 'needs' && out.source === 'session' && out.ask && out.ask === reportAsk(input.report, !!input.hasLeader)) stampChecked(out, input, nowMs);
+  if (out.state === 'needs' && out.source === 'session' && out.ask && out.ask === reportAsk(input.report, hasAbove(input))) stampChecked(out, input, nowMs);
   if (out.state === 'needs' && out.source === 'choice') stampChoiceChecked(out, input, nowMs);
   return out;
 }
@@ -552,8 +557,8 @@ function lineOf(input: UserStatusInput, s: UserStatus): StatusLine | undefined {
   const r = reportIsCurrent(input) ? input.report : null;
   if (!r || s.state === 'done') return undefined;
   const text = s.state === 'needs'
-    ? (r.state === 'needs' ? r.ask : waitIsUsers(r, !!input.hasLeader) ? r.waiting_on : undefined)
-    : s.state === 'waiting' ? (r.state === 'waiting' && !waitIsUsers(r, !!input.hasLeader) ? r.waiting_on : undefined)
+    ? (r.state === 'needs' ? r.ask : waitIsUsers(r, hasAbove(input)) ? r.waiting_on : undefined)
+    : s.state === 'waiting' ? (r.state === 'waiting' && !waitIsUsers(r, hasAbove(input)) ? r.waiting_on : undefined)
       : r.state === 'working' ? (r.next ?? r.now) : undefined;
   if (none(text)) return undefined;
   return strip<StatusLine>({ text: clean(text).slice(0, 300), by: r.by ?? 'self', byName: r.by_name, at: r.at });
@@ -726,7 +731,7 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     }
     if (report?.state === 'needs' && !none(report.ask)) return strip({ state: 'needs', source: 'session', ask: clean(report.ask), ...w });
     // A wait that is the user's (2026-10-30: "other: the meeting notes") is their ask, in its words.
-    if (waitIsUsers(report, !!input.hasLeader) && !none(report!.waiting_on)) {
+    if (waitIsUsers(report, hasAbove(input)) && !none(report!.waiting_on)) {
       return strip({ state: 'needs', source: 'session', ask: clean(report!.waiting_on), ...w });
     }
     // It answered the user's message and then waits on something outside (2026-10-31, the user: "I
@@ -802,7 +807,7 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   if (machine) return machine;
   if (tasks.length) return strip({ state: 'waiting', kind: 'task', waitingOn: reported || `A reply from ${tasks.join(', ')}`, ...w });
   // Parked on the user (an older writer, a person's park): the user's ask, never a Waiting on them.
-  if (reported && reportedKind === 'you' && !input.isMain && !input.isLead) return strip({ state: 'needs', source: 'session', ask: reported, ...w });
+  if (reported && (reportedKind === 'you' || (reportedKind === 'lead' && !hasAbove(input)))) return strip({ state: 'needs', source: 'session', ask: reported, ...w });
   if (reported && reportedKind && reportedKind !== 'stuck') return strip({ state: 'waiting', kind: reportedKind, waitingOn: reported, ...(until ? { until } : {}), ...w });
   // A standing routine: between fires it waits on the next one.
   const wake = wakeSource(input, w, nowMs, true);

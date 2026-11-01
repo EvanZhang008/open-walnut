@@ -64,6 +64,9 @@ describe('readStatusReport', () => {
     // Its own wait line, when it names one, says on what.
     expect(readStatusReport('FOR_USER_STATE: needs-you\nFOR_USER_ASK: lead: land it\nFOR_USER_WAITING_ON: lead: the land and the rerun on the Mac', AT))
       .toMatchObject({ state: 'waiting', waiting_kind: 'lead', waiting_on: 'the land and the rerun on the Mac' })
+    // A wait line of another kind does not lend its words to this one.
+    expect(readStatusReport('FOR_USER_STATE: needs-you\nFOR_USER_ASK: lead: land it\nFOR_USER_WAITING_ON: outside: the CI run', AT))
+      .toMatchObject({ state: 'waiting', waiting_kind: 'lead', waiting_on: 'land it' })
     // An ask of the user stays one, also "you:".
     expect(readStatusReport('FOR_USER_STATE: needs-you\nFOR_USER_ASK: you: approve the merge?', AT)).toMatchObject({ state: 'needs', ask: 'you: approve the merge?' })
     expect(FOR_USER_PROMPT).toMatch(/Never a step for your lead or another task/)
@@ -73,6 +76,13 @@ describe('readStatusReport', () => {
     expect(deriveUserStatus({ phase: 'NEED_ACTION', report: r, hasSession: true, processStatus: 'idle', phaseChangedAt: new Date(AT.getTime() - 60_000).toISOString() }, AT.getTime() + 1_000))
       .toMatchObject({ state: 'needs', ask: 'merge it' })
     expect(phaseForReport(r, { parent_task_id: 'p' }, true)).toBe('WAITING')
+    // Parked anyway (an unrelated armed trigger): still the user's ask, never Waiting on a lead it lacks.
+    expect(phaseForReport(r, {}, true, true)).toBe('WAITING')
+    expect(deriveUserStatus({ phase: 'WAITING', report: r, hasSession: true, processStatus: 'idle', phaseChangedAt: new Date(AT.getTime() - 60_000).toISOString() }, AT.getTime() + 1_000))
+      .toMatchObject({ state: 'needs', ask: 'merge it' })
+    // A lead's own "lead:" wait is no question to the user in its chat.
+    expect(deriveUserStatus({ phase: 'NEED_ACTION', isLead: true, report: r, hasSession: true, processStatus: 'idle', phaseChangedAt: new Date(AT.getTime() - 60_000).toISOString() }, AT.getTime() + 1_000))
+      .toMatchObject({ state: 'waiting', waitingOn: 'Your next message, or news from its teams' })
   })
 
   it('the ask says a wait on the user is needs-you, and waiting is only for an outside wait', () => {

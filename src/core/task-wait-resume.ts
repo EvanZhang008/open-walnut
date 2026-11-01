@@ -391,6 +391,22 @@ export function noteTurnSend(taskId: string, fire: boolean, person: boolean, wai
   } else if (person) fireTurns.delete(taskId);
 }
 
+/** Tasks a turn just moved off the user (NEED_ACTION -> IN_PROGRESS), by when: the send edge of
+ *  the fire that started that turn may land after its turn-start edge (phase.ts). */
+const leftNeeds = new Map<string, number>();
+const LEFT_NEEDS_MS = 60_000;
+
+export function noteLeftNeeds(taskId: string, nowMs: number = Date.now()): void {
+  if (leftNeeds.size > 1000) leftNeeds.clear();
+  leftNeeds.set(taskId, nowMs);
+}
+
+/** Whether a turn moved the task off the user within the last minute (the turn now starting). */
+export function leftNeedsRecently(taskId: string, nowMs: number = Date.now()): boolean {
+  const at = leftNeeds.get(taskId);
+  return at !== undefined && nowMs - at <= LEFT_NEEDS_MS;
+}
+
 /** The fire turn ended another way (an error, a prompt for the user): it is no routine's end. */
 export function dropFireTurn(taskId: string): void {
   fireTurns.delete(taskId);

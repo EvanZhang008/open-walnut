@@ -509,7 +509,7 @@ export function readStatusReport(report: string, now: Date = new Date()): Status
     return {
       state: 'waiting', at: now.toISOString(),
       waiting_kind: addressed[1].toLowerCase() as WaitKind,
-      waiting_on: named && OTHERS_KINDS.has(named[1].toLowerCase()) ? named[2].trim() : addressed[2].trim(),
+      waiting_on: named && named[1].toLowerCase() === addressed[1].toLowerCase() ? named[2].trim() : addressed[2].trim(),
       ...(read('FOR_USER_NOW') ? { now: read('FOR_USER_NOW')! } : {}),
       ...(read('FOR_USER_NEXT') ? { next: read('FOR_USER_NEXT')! } : {}),
     };

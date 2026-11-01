@@ -35,7 +35,7 @@ import { MAX_CONSECUTIVE_CHECK_ERRORS } from '../../src/providers/trigger-check-
 import { getOp } from '../../src/ops/index.js'
 import { applySessionPhase, handBackTaskOnSessionEnd } from '../../src/core/phase.js'
 import { sweepWaitUntil, trackedWaitUntil } from '../../src/core/task-wait-until.js'
-import { interruptedWaits, noteInterruptedWait } from '../../src/core/task-wait-resume.js'
+import { interruptedWaits, leftNeedsRecently, noteInterruptedWait, takeFireTurn } from '../../src/core/task-wait-resume.js'
 import { sendMessageToSession } from '../../src/core/session-message-queue.js'
 import { settleUserStatusSync } from '../../src/core/user-status-sync.js'
 import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
@@ -692,5 +692,13 @@ describe('a prompt for the human, and the way back to work', () => {
       items: [{ id: 'recheck-3', title: 'Scheduled re-check' }], durationMs: 3, nextRunAtMs: Date.now() + 300_000,
     }), ended)
     expect(fired).toEqual(['IN_PROGRESS', 'NEED_ACTION'])
+    // The fire's send edge can land after its turn's start moved the task off the user (the send
+    // edge is not awaited): the move is remembered, so that fire is no routine turn either.
+    await req('PATCH', `/api/v1/tasks/${b.taskId}`, { phase: 'NEED_ACTION' })
+    await applySessionPhase(b.taskId, 'session:input', 'test', { sessionId: b.sid })
+    expect((await task(b.taskId)).phase).toBe('IN_PROGRESS')
+    expect(leftNeedsRecently(b.taskId)).toBe(true)
+    await applySessionPhase(b.taskId, 'session:input', 'trigger-host-delivery', { sessionId: b.sid, sendSource: 'routine-trigger' })
+    expect(takeFireTurn(b.taskId)).toBeNull()
   }, 90_000)
 })
