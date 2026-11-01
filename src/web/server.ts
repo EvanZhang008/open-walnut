@@ -5,6 +5,7 @@
  * and serves static files in production mode.
  */
 
+import { serverBindAddress } from './bind-address.js'
 import { createServer, type Server as HttpServer } from 'node:http'
 import { attachClientErrorAnswer } from './client-error-answer.js'
 import fs from 'node:fs'
@@ -1465,7 +1466,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   serverPortHold = null
   try {
     const { holdPort } = await import('./port-hold.js')
-    serverPortHold = await holdPort(port, isHostReplica() ? '127.0.0.1' : options.bindAddress)
+    serverPortHold = await holdPort(port, serverBindAddress({ replica: isHostReplica(), requested: options.bindAddress }))
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code !== 'EADDRINUSE') throw err
     throw await portInUseError(port)
@@ -2729,8 +2730,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   try {
     await new Promise<void>((resolve, reject) => {
       httpServer!.once('error', reject)
-      // A host replica listens on loopback only: its tunnel is the one way in.
-      const bindAddress = isHostReplica() ? '127.0.0.1' : options.bindAddress
+      // A host replica listens on loopback only; the companion's unit asks for loopback too (bind-address.ts).
+      const bindAddress = serverBindAddress({ replica: isHostReplica(), requested: options.bindAddress })
       if (bindAddress) httpServer!.listen(port, bindAddress, () => resolve())
       else httpServer!.listen(port, () => resolve())
     })

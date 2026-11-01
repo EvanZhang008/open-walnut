@@ -310,8 +310,8 @@ cat > /etc/caddy/env <<EOF
 WALNUT_DOMAIN=$DOMAIN
 EOF
 # ── Global options: issuer failover for sslip.io hostnames ──────────────────
-# Only emitted for *.sslip.io names; an operator's own domain keeps the exact
-# Caddyfile it had before (no global block at all).
+# The email is only emitted for *.sslip.io names; an operator's own domain gets
+# the admin line alone.
 #
 # Why sslip.io needs this: it is a wildcard-DNS service (<dashed-ip>.sslip.io
 # resolves to that IP with no registrar involved) and it is NOT on the Public
@@ -348,13 +348,23 @@ EOF
 #   2. LE issued for <dashed-ip>.sslip.io ~4s after account creation succeeded.
 #   3. journalctl named the issuer (acme-v02.api.letsencrypt.org).
 #   4. Still unverified live: the LE→ZeroSSL failover under a real LE rate-limit.
-CADDY_GLOBAL_BLOCK=""
+# ── Global options: the admin API on a socket only caddy and root reach ─────
+# Caddy's admin API listens on 127.0.0.1:2019 by default and takes a whole new
+# config from ANY local user, so any process on the box could reroute the site
+# (2026-11-01). It moves to a unix socket in /run/caddy, a directory only the
+# caddy user (and root) may enter (RuntimeDirectoryMode=0700 in the unit below).
+# `caddy reload` (the unit's ExecReload, run as caddy) reads this address from
+# the Caddyfile it loads, so reloads keep working.
+# >>> caddy global (tests/scripts/cloud-ensure-harness.test.ts runs this block)
+CADDY_SSLIP_EMAIL=""
 case "$DOMAIN" in
   *.sslip.io)
     echo "    (sslip.io hostname — enabling Caddy's Let's Encrypt → ZeroSSL issuer failover)"
-    CADDY_GLOBAL_BLOCK=$'{\n\t# Turns on Caddy\'s redundant LE→ZeroSSL issuer chain (see setup.sh).\n\temail certs@openwalnut.dev\n}\n\n'
+    CADDY_SSLIP_EMAIL=$'\t# Turns on Caddy\'s redundant LE→ZeroSSL issuer chain (see setup.sh).\n\temail certs@openwalnut.dev\n'
     ;;
 esac
+CADDY_GLOBAL_BLOCK=$'{\n\tadmin unix//run/caddy/admin.sock\n'"$CADDY_SSLIP_EMAIL"$'}\n\n'
+# <<< caddy global
 
 # reverse_proxy tuned for SSE/WebSocket long-lived streams:
 #   flush_interval -1              → flush immediately, never buffer responses
@@ -390,6 +400,9 @@ Group=caddy
 EnvironmentFile=/etc/caddy/env
 ExecStart=$CADDY_BIN run --environ --config /etc/caddy/Caddyfile
 ExecReload=$CADDY_BIN reload --config /etc/caddy/Caddyfile --force
+# The admin socket's home: only caddy (and root) may enter it.
+RuntimeDirectory=caddy
+RuntimeDirectoryMode=0700
 TimeoutStopSec=5s
 LimitNOFILE=1048576
 PrivateTmp=true
@@ -625,6 +638,8 @@ User=$WALNUT_USER
 Group=$WALNUT_USER
 WorkingDirectory=$REPO_DIR
 Environment=WALNUT_CLOUD_MODE=1
+# Loopback only: Caddy on this box is the one way in (src/web/bind-address.ts).
+Environment=WALNUT_BIND_ADDRESS=127.0.0.1
 Environment=NODE_ENV=production
 Environment=OPEN_WALNUT_HOME=$DATA_HOME
 Environment=WALNUT_GIT_HUB_DIR=$WALNUT_LIB/git

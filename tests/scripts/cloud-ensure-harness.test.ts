@@ -1595,6 +1595,22 @@ describe('setup.sh root-side blocks, run for real', () => {
     })
   })
 
+  describe('caddy global', () => {
+    const globalFor = (domain: string): string => {
+      const { bin } = scratch()
+      const res = runBlock(bin, { DOMAIN: domain }, block('caddy global') + '\nprintf %s "$CADDY_GLOBAL_BLOCK"')
+      expect(res.status, res.stderr).toBe(0)
+      return res.stdout.split('\n').filter((l) => !l.startsWith('    (')).join('\n')
+    }
+    it('moves the admin API to a unix socket for every domain, and adds the issuer email for sslip.io only', () => {
+      // 127.0.0.1:2019 took a whole new config from any local user (2026-11-01).
+      expect(globalFor('wn.example.com')).toBe('{\n\tadmin unix//run/caddy/admin.sock\n}\n\n')
+      const sslip = globalFor('1-2-3-4.sslip.io')
+      expect(sslip.startsWith('{\n\tadmin unix//run/caddy/admin.sock\n')).toBe(true)
+      expect(sslip).toContain('\temail certs@openwalnut.dev\n}\n\n')
+    })
+  })
+
   describe('walnut unit', () => {
     it('runs dist/cli.js on the bun from step 3, and the harness gives the launcher that same bun', async () => {
       const { dir, bin } = scratch()
@@ -1611,6 +1627,8 @@ describe('setup.sh root-side blocks, run for real', () => {
         'User=walnut', 'WorkingDirectory=/opt/walnut', 'Environment=WALNUT_CLOUD_MODE=1',
         // The server's error handler reads it: no stack traces in production answers.
         'Environment=NODE_ENV=production',
+        // Caddy is the one way in: the server listens on loopback only.
+        'Environment=WALNUT_BIND_ADDRESS=127.0.0.1',
       ]))
 
       // ensure-harness.sh, reading this very unit, starts the launcher on that bun.
