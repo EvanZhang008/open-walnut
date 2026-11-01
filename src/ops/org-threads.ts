@@ -93,7 +93,7 @@ defineOp({
     text: z.string().min(1).max(16000).describe('The first post: what reached you and what he needs to know or decide, Markdown'),
     from: z.enum(['mail', 'task', 'letter', 'trigger', 'node']).describe('Where it came from: mail, task (a team\'s work), letter (your letter to him), trigger, node (your own finding)'),
     ref: z.string().max(120).optional().describe('What it points at: a task id, a letter id (lt-...), a mail subject'),
-    state: z.enum(THREAD_STATES).optional().describe('Default needs (it waits on him)'),
+    state: z.enum(THREAD_STATES).exclude(['pending']).optional().describe('Default needs (it waits on him); never pending'),
     tasks: z.array(z.string().min(1)).max(12).optional().describe('Tasks it is about'),
     task: TASK_ARG,
   },

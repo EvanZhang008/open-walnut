@@ -444,7 +444,8 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
     if (!ownUnseen) checkClose(file, cur, by);
     next.closed = { how: patch.close, at, by };
   }
-  if (patch.reopen) delete next.closed;
+  // Reopened: in his sight again, so not pending.
+  if (patch.reopen) { delete next.closed; if (next.state === 'pending' && patch.state === undefined) next.state = 'working'; }
   return { file: replace(file, next, at), thread: next };
 }
 
@@ -509,6 +510,8 @@ export function openThread(file: ThreadsFile, input: OpenThreadInput, by: Thread
   if (typeof input.text !== 'string' || !input.text.trim()) throw new ThreadError('bad_input', 400, 'text (what reached you, for him) is required.');
   if (!THREAD_SOURCES.includes(input.from)) throw new ThreadError('bad_input', 400, `from must be one of ${THREAD_SOURCES.join(', ')}.`);
   if (input.state !== undefined && !THREAD_STATES.includes(input.state)) throw new ThreadError('bad_input', 400, `state must be one of ${THREAD_STATES.join(', ')}.`);
+  // A thread the node opens is for him to act on or follow: never hidden from the start.
+  if (input.state === 'pending') throw new ThreadError('bad_input', 400, 'A thread you open is for him to see: open it as needs, working or answered, never pending.');
   const tasks = taskList(input.tasks ?? []);
   const thread: OrgThread = {
     id: input.id && THREAD_ID_RE.test(input.id) ? input.id : newThreadId(),

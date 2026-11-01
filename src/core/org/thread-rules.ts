@@ -16,7 +16,8 @@ export const THREADS_KNOWN_RULE =
   'Clean your threads yourself, on every turn that touches one: what he already knows leaves the card, what is still news '
   + 'stays. An answer counts as known only once he reacted to it after you gave it (a reply about it, an ok '
   + 'or thanks, a follow-up that builds on it, his Acknowledge). Silence after your answer is NOT knowing, however clear the '
-  + 'answer: the thread stays open in answered with your answer on its card, and you never mark it known or close it then (Walnut '
+  + 'answer: the thread stays open in answered with your answer on its card (an answer that only says who took it is no news: '
+  + 'that thread is pending, below), and you never mark it known or close it then (Walnut '
   + 'refuses). Once he reacted, mark what he reacted to known (thread_update known: the last message of his you answered and he '
   + 'reacted to, or "all"), and close a thread he reacted to as finished (close: acked).';
 
@@ -34,8 +35,8 @@ export const THREADS_OPEN_RULE =
 export const THREADS_PENDING_RULE =
   'A thread you only handed to a task, or that is being worked on with nothing new for him, is pending: set state pending '
   + '(thread_update) and his Threads view hides it like a closed one. Never write a summary that only says who took it or that '
-  + 'it is being done (its task chip says that). It comes back by itself when he writes in it or you write a new summary; set '
-  + 'needs when he must decide, answered when you have his result.';
+  + 'it is being done (its task chip says that); set it pending in the same turn as such an answer. It comes back by itself when '
+  + 'he writes in it or you write a new summary; set needs when he must decide, answered when the result he asked for is in.';
 
 /**
  * What a card says (2026-11-01, the user: "the purpose is to keep the thread extremely concise";

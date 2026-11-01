@@ -32,6 +32,7 @@ import { userStateOf } from '@open-walnut/org-tree';
 import { USER_STATE_LABELS } from '@open-walnut/user-status';
 import { cardView, exchangesOf, sharedAnswers, type ThreadExchange } from '@open-walnut/thread-view';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
+import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { AnswerBox } from '@/components/common/AnswerBox';
 import { RichMarkdown } from '@/components/chat/RichBlocks';
 import { MessageAbout, rowAbout } from '@/components/sessions/message-about';
@@ -72,7 +73,10 @@ interface Props {
 }
 
 function Markdown({ text, className, testId }: { text: string; className?: string; testId?: string }) {
-  const html = useMemo(() => ({ __html: renderMarkdownWithRefs(text) }), [text]);
+  // Read again when a task's label arrives (a bare id becomes its pill), as the chips below are.
+  const labels = useEntityLabelsVersion();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `labels` is the renderer's own input
+  const html = useMemo(() => ({ __html: renderMarkdownWithRefs(text) }), [text, labels]);
   return <div className={`markdown-body ${className ?? ''}`} data-testid={testId} dangerouslySetInnerHTML={html} />;
 }
 
@@ -266,12 +270,14 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
   const closed = !!t.closed;
   const card = useMemo(() => cardView(t, shared), [t, shared]);
   // The tasks the summary already shows as pills get no second chip (the renderer resolves them
-  // from the task list, so it is read again once the tasks load).
+  // from the task labels, so it is read again when one arrives, with the summary itself).
+  const labels = useEntityLabelsVersion();
   const chips = useMemo(() => {
     if (!t.tasks?.length) return [];
     const named = new Set([...renderMarkdownWithRefs(t.reply ?? '').matchAll(/data-task-id="([^"]+)"/g)].map((m) => m[1]));
     return t.tasks.filter((id) => !named.has(id));
-  }, [t.tasks, t.reply, tasks]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `labels` is the renderer's own input
+  }, [t.tasks, t.reply, labels]);
   const exchanges = useMemo(() => exchangesOf(t), [t]);
   const follows = t.follows ? all.find((x) => x.id === t.follows) : undefined;
   const last = t.messages[t.messages.length - 1] ?? t.opener;

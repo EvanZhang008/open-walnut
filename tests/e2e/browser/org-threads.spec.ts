@@ -468,7 +468,7 @@ test('a thread with nothing new for him is out of sight until there is news; one
   await post(request, `/api/v1/tasks/${node}/threads`, { text: `pick the open view ${STAMP}`, thread: 'th-0000000000a1' })
   await expect(open.locator('[data-thread-id="th-0000000000a1"]')).toBeVisible()
   await expect(card(page, 'th-0000000000a1').getByTestId('org-thread-unanswered')).toContainText(`pick the open view ${STAMP}`)
-  // A reload keeps all of it (the state is the file's, the view's line the page's memory).
+  // A reload reads the same: the state is the file's.
   await page.reload()
   await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
   await expect(page.getByTestId('org-thread-list').getByTestId('org-thread')).toHaveCount(4)
