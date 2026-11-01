@@ -51,9 +51,11 @@ interface LiveTurn {
 }
 
 const turns = new Map<string, LiveTurn>();
-/** The last send per session (its source, when), and when its last turn ended. */
+/** The last send per session (its source, when), and when its last turn ended (`seq`). */
 const lastSend = new Map<string, { source: string; at: number }>();
 const turnEnded = new Map<string, number>();
+/** Event order (sends and turn ends in one millisecond still compare). */
+let seq = 0;
 /** A finished turn's outcome (a promise: its last lines may still be judged), until the sensor reads it. */
 const finished = new Map<string, Promise<{ driftAfter: boolean }>>();
 
@@ -79,7 +81,7 @@ function bounded<V>(map: Map<string, V>, key: string, value: V): void {
 
 function startTurn(sid: string): LiveTurn {
   const send = lastSend.get(sid);
-  const personTurn = !!send && send.at >= (turnEnded.get(sid) ?? 0) && queueSentBy(send.source) === 'person';
+  const personTurn = !!send && send.at > (turnEnded.get(sid) ?? 0) && queueSentBy(send.source) === 'person';
   const t: LiveTurn = { personTurn, texts: new Map(), judged: new Set(), sending: false, corrected: false, driftAfter: false };
   bounded(turns, sid, t);
   finished.delete(sid);
@@ -89,7 +91,7 @@ function startTurn(sid: string): LiveTurn {
 function endTurn(sid: string): LiveTurn | undefined {
   const t = turns.get(sid);
   turns.delete(sid);
-  bounded(turnEnded, sid, Date.now());
+  bounded(turnEnded, sid, ++seq);
   return t;
 }
 
@@ -177,6 +179,13 @@ function finishTurn(sid: string): void {
   })());
 }
 
+/** Judgements still running (a test waits for them: `_settledForTest`). */
+const inflight = new Set<Promise<void>>();
+function track(p: Promise<void>): void {
+  inflight.add(p);
+  void p.finally(() => inflight.delete(p));
+}
+
 function onEvent(event: BusEvent): void {
   const data = (event.data ?? {}) as Record<string, unknown>;
   const sid = typeof data.sessionId === 'string' ? data.sessionId : '';
@@ -184,7 +193,7 @@ function onEvent(event: BusEvent): void {
   switch (event.name) {
     case EventNames.SESSION_SEND:
       // A redelivery trigger carries no message of its own.
-      if (typeof data.message === 'string' && data.message && event.source) bounded(lastSend, sid, { source: event.source, at: Date.now() });
+      if (typeof data.message === 'string' && data.message && event.source) bounded(lastSend, sid, { source: event.source, at: ++seq });
       return;
     case EventNames.SESSION_TEXT_DELTA:
       noteText(sid, data);
@@ -192,7 +201,7 @@ function onEvent(event: BusEvent): void {
     case EventNames.SESSION_TOOL_USE: {
       const t = turns.get(sid);
       if (data.parentToolUseId || !t) return;
-      void judgeAtToolUse(sid, t);
+      track(judgeAtToolUse(sid, t));
       return;
     }
     case EventNames.SESSION_RESULT:
@@ -233,4 +242,9 @@ export function stopLiveDrift(): void {
   lastSend.clear();
   turnEnded.clear();
   ruleCache = null;
+}
+
+/** Test seam: every judgement and delivery started so far has finished. */
+export async function _settledForTest(): Promise<void> {
+  while (inflight.size) await Promise.allSettled([...inflight]);
 }

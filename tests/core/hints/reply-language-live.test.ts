@@ -30,7 +30,7 @@ vi.mock('../../../src/core/sessions/session-send-core.js', () => ({
 }));
 
 import { bus, EventNames } from '../../../src/core/event-bus.js';
-import { LIVE_CORRECTION_TEXT, startLiveDrift, stopLiveDrift, takeLiveCorrection } from '../../../src/core/hints/hint-drift-live.js';
+import { LIVE_CORRECTION_TEXT, _settledForTest, startLiveDrift, stopLiveDrift, takeLiveCorrection } from '../../../src/core/hints/hint-drift-live.js';
 import { hintDriftHook } from '../../../src/core/hints/hint-drift.js';
 
 // The real turn's lines, in order; '' = a message that was only a tool call.
@@ -45,7 +45,7 @@ const TURN = [
 ];
 
 const emit = (name: string, sid: string, data: Record<string, unknown>) => bus.emit(name as never, { sessionId: sid, ...data } as never, ['main-ai'], { source: 'session-runner' });
-const settle = (ms = 20) => new Promise((r) => setTimeout(r, ms));
+const settle = () => _settledForTest();
 
 /** One turn: the send that starts it (none = the CLI's own turn), its lines, each followed by a Bash call. */
 async function replay(sid: string, lines: readonly string[], end = true, source: string | null = 'ui') {
@@ -57,8 +57,6 @@ async function replay(sid: string, lines: readonly string[], end = true, source:
     emit(EventNames.SESSION_TOOL_USE, sid, { toolName: 'Bash', toolUseId: `tu_${n}` });
     await settle();
   }
-  // The first correction loads its modules: give the async judge time to finish.
-  await settle(300);
   if (end) { emit(EventNames.SESSION_RESULT, sid, { result: '', isError: false }); await settle(); }
 }
 
