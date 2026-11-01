@@ -11,7 +11,7 @@
  * has been measured, then released while every frame and DOM commit is sampled.
  */
 import { test, expect, type Page, type APIRequestContext, type Locator } from '@playwright/test';
-import { diffSnaps, disableTransitions, snapReply, startFrameSampler, stopFrameSampler } from './render-parity-helpers';
+import { diffSnaps, disableTransitions, dumpRows, snapReply, startFrameSampler, stopFrameSampler } from './render-parity-helpers';
 
 const MARKER = 'PARITYREAL';
 let rpcSeq = 0;
@@ -97,11 +97,14 @@ test('a real streamed reply looks exactly like its persisted row, in every frame
   await expect(history).toContainText('Closing sentence PARITYREAL.', { timeout: 30_000 });
   // The turn is over (no working indicator) and still on screen as stream blocks.
   await expect(page.locator(`.session-panel[data-session-id="${sid}"] .session-working-indicator`)).toHaveCount(0, { timeout: 15_000 });
+  // The turn's last text and its end often land in one commit: the column must
+  // still follow it to the bottom here, not at the handover.
   await page.waitForTimeout(500);
   const persistedRow = history.locator('[data-msg-ts]', { hasText: 'Findings PARITYREAL' });
   expect(await persistedRow.count(), 'the history read is held: no persisted row yet').toBe(0);
 
   const streamed = await snapReply(page, MARKER);
+  if (process.env.PARITY_DUMP) await dumpRows(page, 'streamed');
   await startFrameSampler(page, MARKER);
   holding = false;
   release();
@@ -111,6 +114,7 @@ test('a real streamed reply looks exactly like its persisted row, in every frame
   await page.waitForTimeout(800);
   const { samples } = await stopFrameSampler(page);
   const finished = await snapReply(page, MARKER);
+  if (process.env.PARITY_DUMP) await dumpRows(page, 'finished');
 
   expect(streamed.elems.some((e) => e.tag === 'PRE')).toBe(true);
   const diffs = diffSnaps(streamed, finished);

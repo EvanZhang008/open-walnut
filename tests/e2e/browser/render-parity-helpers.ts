@@ -194,6 +194,7 @@ export async function dumpRows(page: Page, label: string) {
       }
     };
     walk(h, 0);
+    out.unshift(`scroll st=${Math.round(h.scrollTop)} sh=${h.scrollHeight} ch=${h.clientHeight} gap=${Math.round(h.scrollHeight - h.scrollTop - h.clientHeight)}`);
     return out;
   });
   console.log(`--- ${label}\n${rows.join('\n')}`);

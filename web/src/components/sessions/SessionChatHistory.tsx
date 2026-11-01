@@ -2242,12 +2242,21 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
    *  apart — a click that grows the transcript lands a frame or two after the
    *  click, far inside the window.
    */
+  // The follower's last look outlives its effect: the effect re-subscribes when
+  // a turn starts or ends, and the turn's last text often lands in the very
+  // commit that ends it. Read fresh there, that growth was the baseline and was
+  // never followed, so the reply sat 20-30px short of the bottom until its
+  // persisted row's own scroll jumped it into place (2026-11-01, measured in
+  // stream-final-render-parity-real.spec.ts).
+  const followLook = useRef<{ el: HTMLElement | null; sh: number; top: number; owed: boolean }>({ el: null, sh: 0, top: 0, owed: false });
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    let prevSh = el.scrollHeight;
-    let prevTop = el.scrollTop;
-    let owed = false;
+    const look = followLook.current;
+    if (look.el !== el) { look.el = el; look.sh = el.scrollHeight; look.top = el.scrollTop; look.owed = false; }
+    let prevSh = look.sh;
+    let prevTop = look.top;
+    let owed = look.owed;
     // Aggregate log (one line per 2s at most): a per-frame line during streaming
     // would be its own main-thread problem, and the useful signal is "how much
     // did the follower have to close, how often".
@@ -2261,6 +2270,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
       const readerMoved = top < prevTop - 0.5;
       prevSh = sh;
       prevTop = top;
+      look.sh = sh;
+      look.top = top;
       if (readerMoved) owed = false;
       if (grew && isAtBottom.current) {
         // Who grew it: the reader's own click/key (leave it, the arrow answers) or
@@ -2290,12 +2301,13 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     };
     // 2Hz always: the post-turn shapes (scrollbar track, font swap, decoded
     // image) each open the gap once, and one tick closes it.
-    const timer = setInterval(step, 500);
+    const tick = () => { step(); look.owed = owed; look.top = el.scrollTop; };
+    const timer = setInterval(tick, 500);
     // Per-frame while streaming: text arrives every ~150ms, and half a second of
     // lag behind live output is visible as the view trailing the words.
     let raf = 0;
     if (isStreaming) {
-      const loop = () => { step(); raf = requestAnimationFrame(loop); };
+      const loop = () => { tick(); raf = requestAnimationFrame(loop); };
       raf = requestAnimationFrame(loop);
     }
     return () => {
