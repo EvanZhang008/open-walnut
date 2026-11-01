@@ -1,7 +1,7 @@
 import { apiGet, apiPatch, apiPost } from './client';
 
 /** An Org node's Threads: the user's own requests to it (src/core/org/threads-model.ts, the shape the route returns). */
-export type OrgThreadState = 'new' | 'working' | 'needs' | 'answered';
+export type OrgThreadState = 'new' | 'working' | 'needs' | 'answered' | 'pending';
 
 export interface OrgThreadMessage {
   id: string;

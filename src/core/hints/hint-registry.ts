@@ -209,7 +209,7 @@ const BUILT_IN: readonly HintSpec[] = [
   {
     kind: 'threads-tidy',
     label: 'Threads cleanup',
-    description: 'Main and the leads: the user\'s Threads that need the node\'s decision (he wrote after an answer: did he react to it? a stand-in title, a stale state), so it folds what he knows and closes what he reacted to as finished. Every 3 messages, when there is one.',
+    description: 'Main and the leads: the user\'s Threads that need the node\'s decision (he wrote after an answer: did he react to it? a stand-in title, a stale state, a thread in working with nothing new for him), so it folds what he knows, closes what he reacted to as finished and sets pending what is only being worked on. Every 3 messages, when there is one.',
     allowed: SCHEDULED,
     // 2026-11-01, the user: "you should proactively clean the thread ... make sure this is a Walnut
     // feature, not just your memory".

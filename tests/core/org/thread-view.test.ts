@@ -4,7 +4,7 @@
  * first one to the ninth, so why still show the first to the eighth?").
  */
 import { describe, it, expect } from 'vitest'
-import { cardView, exchangesOf, unreactedAnswers, type ViewMessage, type ViewThread } from '../../../src/core/org/thread-view.js'
+import { sharedAnswers, cardView, exchangesOf, unreactedAnswers, type ViewMessage, type ViewThread } from '../../../src/core/org/thread-view.js'
 
 const at = (min: number, sec = 0) => new Date(Date.UTC(2026, 10, 1, 4, min, sec)).toISOString()
 const msg = (id: string, min: number, text: string, answer?: { min: number; text: string }): ViewMessage => ({
@@ -83,5 +83,35 @@ describe('a thread as its conversation', () => {
     const replied = { messages: [msg('tm-1', 3, 'confirm it', { min: 4, text: 'Done' })], opener }
     expect(exchangesOf(replied).map((x) => [x.n, x.known])).toEqual([[0, true], [1, false]])
     expect(cardView(replied).unread.map((x) => x.n)).toEqual([1])
+  })
+})
+
+describe('one reply that covered messages of different threads', () => {
+  // 2026-11-01: one turn's reply was put under each message the user sent during it, so an
+  // unrelated long answer sat under his "also in create new task UI" message in another thread.
+  const reply = { min: 30, text: 'Found who pushed it: the tracker sync. And the local-only hook is in progress.' }
+  const tracker = { id: 'th-a', messages: [msg('tm-1', 20, 'who pushed this to the tracker?', reply)] }
+  const local = { id: 'th-b', messages: [msg('tm-2', 22, 'also in create new task UI, a source button', reply)] }
+
+  it('is found across threads, never within one (two asks in one thread answered at once are one exchange)', () => {
+    expect([...sharedAnswers([tracker, local])].sort()).toEqual(['tm-1', 'tm-2'])
+    expect(sharedAnswers([fiveAsks() as ViewThread & { id: string }].map((t) => ({ ...t, id: 'th-c' }))).size).toBe(0)
+    expect(sharedAnswers([tracker, { id: 'th-b', messages: [msg('tm-2', 22, 'x', { min: 31, text: reply.text })] }]).size).toBe(0)
+  })
+
+  it('stays off both cards (Walnut cannot tell which part answers which) and his message is not left waiting', () => {
+    const shared = sharedAnswers([tracker, local])
+    for (const t of [tracker, local]) {
+      expect(cardView(t, shared).unread).toEqual([])
+      expect(cardView(t, shared).waiting).toEqual([])
+      // Without the other thread it is that thread's own answer again.
+      expect(cardView(t).unread).toHaveLength(1)
+    }
+  })
+
+  it('a later answer of its own in the thread still shows', () => {
+    const t = { id: 'th-b', messages: [...local.messages, msg('tm-3', 40, 'and the button label?', { min: 41, text: 'Source.' })] }
+    const card = cardView(t, sharedAnswers([tracker, t]))
+    expect(card.unread.map((x) => x.answer?.text)).toEqual(['Source.'])
   })
 })

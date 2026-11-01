@@ -377,3 +377,100 @@ test('a long thread\'s card is its summary and the answer he has not seen; the c
   expect(title.h).toBeLessThanOrEqual(title.lh * 1.5)
   expect(await page.getByTestId('org-threads').evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1)
 })
+
+test('a thread with nothing new for him is out of sight until there is news; one reply to two threads stays off both cards', async ({ page, request }) => {
+  // 2026-11-01, the user: "if it is just assigned no need to tell me, or doing, unless there are
+  // some update ... there can be thread pending, which is auto hide like closed".
+  const project = `Threads quiet ${STAMP} ${test.info().project.name}`
+  const build = await createTask(request, `Build the view ${STAMP}`, project)
+  const review = await createTask(request, `Review the view ${STAMP}`, project)
+  const node = (await post<{ task: { id: string } }>(request, '/api/v1/org/contact', { to: project })).task.id
+  made.push(node)
+  const { walnutHome } = await discoverBrowserFixture(TEST_PORT)
+  const t0 = Date.now() - 30 * 60_000
+  const at = (min: number) => new Date(t0 + min * 60_000).toISOString()
+  const one = { at: at(12), text: 'Found who pushed it: **the tracker sync**. The source button is in progress too.' }
+  const thread = (id: string, title: string, state: string, more: Record<string, unknown>, messages: unknown[]) => ({
+    id, title, titled: true, state, createdAt: at(0), updatedAt: at(14), messages, ...more,
+  })
+  const file = {
+    version: 1, taskId: node, threads: [
+      thread('th-0000000000a1', 'Handed off only', 'pending', { reply: 'Handed to the build task', tasks: [build] },
+        [{ id: 'tm-0000000000a1', at: at(1), text: 'build the Threads view', via: 'chat', answer: { at: at(2), text: 'Handed it to the build task.' } }]),
+      thread('th-0000000000a2', 'Summary names its task', 'working', { reply: `${build} is building it; review comes after.`, tasks: [build, review] },
+        [{ id: 'tm-0000000000a2', at: at(3), text: 'and who reviews it?', via: 'chat' }]),
+      thread('th-0000000000a3', 'Who pushed it to the tracker', 'answered', { reply: 'The tracker sync pushed it' },
+        [{ id: 'tm-0000000000a3', at: at(10), text: 'who pushed this to the tracker?', via: 'chat', answer: one }]),
+      thread('th-0000000000a4', 'A source button in the new task form', 'working', { reply: 'In progress' },
+        [{ id: 'tm-0000000000a4', at: at(11), text: 'also in the new task form, a button to pick the source', via: 'chat', answer: one }]),
+    ],
+  }
+  const dir = `${walnutHome}/org/threads`
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(`${dir}/${node}.json`, JSON.stringify(file))
+
+  await isolateUiPrefs(page)
+  await loadHome(page)
+  await page.getByTestId('sidebar-org').click()
+  await page.locator(`[data-testid="org-channel"][data-key="${rowKey(project)}"]`).click()
+  const detail = page.getByTestId('org-detail')
+  await expect(detail).toHaveAttribute('data-key', rowKey(project))
+  await detail.getByTestId('org-top-threads').click()
+  await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
+  const open = page.getByTestId('org-thread-list')
+
+  // Pending: not in the list; one quiet line says it is there.
+  await expect(open.getByTestId('org-thread')).toHaveCount(3)
+  await expect(card(page, 'th-0000000000a1')).toHaveCount(0)
+  await expect(page.getByTestId('org-threads-pending')).toHaveText(/^1 pending, nothing new/)
+  await expect(page.getByTestId('org-threads-pending')).toHaveAttribute('aria-expanded', 'false')
+
+  // A summary that already shows its task as a pill keeps no second chip for it.
+  const named = card(page, 'th-0000000000a2')
+  await expect(named.getByTestId('org-thread-reply').locator(`a[data-task-id="${build}"]`)).toHaveCount(1)
+  await expect(named.getByTestId('org-thread-task')).toHaveCount(1)
+  await expect(named.locator(`[data-testid="org-thread-task"][data-task-id="${review}"]`)).toHaveCount(1)
+
+  // One reply covered both of his messages in two threads: on neither card, and neither waits.
+  for (const id of ['th-0000000000a3', 'th-0000000000a4']) {
+    await expect(card(page, id).getByTestId('org-thread-unread')).toHaveCount(0)
+    await expect(card(page, id).getByTestId('org-thread-unanswered')).toHaveCount(0)
+    await expect(card(page, id).getByTestId('org-thread-reply')).toBeVisible()
+  }
+  // The whole conversation still has it, saying what it is.
+  const both = card(page, 'th-0000000000a4')
+  await both.getByTestId('org-thread-history').click()
+  await expect(both.getByTestId('org-thread-answer')).toContainText('Found who pushed it')
+  await expect(both.getByTestId('org-thread-answer')).toContainText('one reply to this and another thread')
+  await both.getByTestId('org-thread-history').click()
+  await shot(page, 'quiet')
+
+  // The line opens the pending ones, as the closed ones open.
+  await page.getByTestId('org-threads-pending').click()
+  const quiet = page.getByTestId('org-thread-list-pending')
+  await expect(quiet.getByTestId('org-thread')).toHaveCount(1)
+  await expect(card(page, 'th-0000000000a1').getByTestId('org-thread-state')).toHaveText('Pending')
+  await page.getByTestId('org-threads-pending').click()
+  await expect(quiet).toHaveCount(0)
+
+  // The node writes a new summary: news, so it is back in the list at once.
+  const patch = async (id: string, data: unknown) => {
+    const res = await request.patch(`/api/v1/tasks/${node}/threads/${id}`, { data })
+    expect(res.ok(), await res.text()).toBe(true)
+  }
+  await patch('th-0000000000a1', { reply: 'Built; it needs your call on the default view' })
+  await expect(open.locator('[data-thread-id="th-0000000000a1"]')).toBeVisible()
+  await expect(card(page, 'th-0000000000a1').getByTestId('org-thread-state')).toHaveText('Working')
+  await expect(page.getByTestId('org-threads-pending')).toHaveCount(0)
+  // Pending again; then he writes in it: back again, the node's turn.
+  await patch('th-0000000000a1', { state: 'pending' })
+  await expect(card(page, 'th-0000000000a1')).toHaveCount(0)
+  await post(request, `/api/v1/tasks/${node}/threads`, { text: `pick the open view ${STAMP}`, thread: 'th-0000000000a1' })
+  await expect(open.locator('[data-thread-id="th-0000000000a1"]')).toBeVisible()
+  await expect(card(page, 'th-0000000000a1').getByTestId('org-thread-unanswered')).toContainText(`pick the open view ${STAMP}`)
+  // A reload keeps all of it (the state is the file's, the view's line the page's memory).
+  await page.reload()
+  await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
+  await expect(page.getByTestId('org-thread-list').getByTestId('org-thread')).toHaveCount(4)
+  await expect(page.getByTestId('org-threads-pending')).toHaveCount(0)
+})

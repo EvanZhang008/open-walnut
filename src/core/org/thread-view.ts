@@ -11,6 +11,11 @@
  * model), or he acknowledged the thread. Silence is not knowing ("I had not replied ... so clearly
  * I had not acknowledged it").
  *
+ * One reply of the node's can cover messages he sent to different threads in one turn (a message
+ * that came in while it was working). Walnut cannot tell which part answers which, so that reply
+ * stays out of every card and only reads in the whole conversation (2026-11-01: an unrelated long
+ * answer sat under his "also in create new task UI" message); the node's summary carries the news.
+ *
  * Pure, shared by the web view (@open-walnut/thread-view) and the node's cleanup reminder.
  */
 
@@ -88,12 +93,32 @@ export interface CardView<M extends ViewMessage = ViewMessage> {
   waiting: ThreadExchange<M>[];
 }
 
-export function cardView<M extends ViewMessage>(t: ViewThread<M>): CardView<M> {
+export function cardView<M extends ViewMessage>(t: ViewThread<M>, shared: ReadonlySet<string> = NONE): CardView<M> {
   const exchanges = exchangesOf(t);
   let lastSaid = -1;
   exchanges.forEach((x, i) => { if (x.answer || x.opener) lastSaid = i; });
   return {
-    unread: exchanges.filter((x) => (x.answer || x.opener) && !x.known),
+    unread: exchanges.filter((x) => (x.answer || x.opener) && !x.known && !x.messages.some((m) => shared.has(m.id))),
     waiting: exchanges.slice(lastSaid + 1).filter((x) => !x.answer && !x.opener),
   };
+}
+
+const NONE: ReadonlySet<string> = new Set();
+
+/** The messages whose answer is one reply that also sits under a message of another thread. */
+export function sharedAnswers(threads: ReadonlyArray<{ id: string; messages: readonly ViewMessage[] }>): Set<string> {
+  const byReply = new Map<string, { threads: Set<string>; messages: string[] }>();
+  for (const t of threads) {
+    for (const m of t.messages) {
+      if (!m.answer) continue;
+      const key = `${m.answer.at}\n${m.answer.text}`;
+      let g = byReply.get(key);
+      if (!g) byReply.set(key, (g = { threads: new Set(), messages: [] }));
+      g.threads.add(t.id);
+      g.messages.push(m.id);
+    }
+  }
+  const out = new Set<string>();
+  for (const g of byReply.values()) if (g.threads.size > 1) for (const id of g.messages) out.add(id);
+  return out;
 }

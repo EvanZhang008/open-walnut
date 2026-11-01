@@ -93,7 +93,7 @@
  * in the manual, which sessions pull live with `walnut guide`.
  */
 
-import { THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_SUMMARY_RULE } from '../org/thread-rules.js'
+import { THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../org/thread-rules.js'
 import { TEAM_CHARTER } from '../team-charter.js'
 import { WORK_PLACE_RULE, taskDirLine } from '../work-place.js'
 import { taskDirForHost } from './task-dir-place.js'
@@ -207,10 +207,10 @@ export const LEAD_DECISION_LINE =
 export const THREADS_LINE =
   'Your Threads (the Threads view beside your Brief on the Org page) are the user\'s own requests to you, one thread per '
   + 'subject: Walnut files every message he sends you and says in it which thread it went to. Keep them current with '
-  + 'thread_update: a short title, what he wants, its state (working, needs: waiting on him, answered), the summary (reply) '
+  + 'thread_update: a short title, what he wants, its state (working, needs: waiting on him, answered, pending: nothing new for him, hidden), the summary (reply) '
   + 'and the tasks you handed it to. Several asks about the same thing are one thread: put a new one under the open thread '
   + 'it belongs to (merge_into). Walnut puts your chat reply under each of his messages by itself. He closes a thread with Acknowledge; a new ask about a closed subject is a new thread. '
-  + THREADS_SUMMARY_RULE + ' ' + THREADS_KNOWN_RULE + ' ' + THREADS_OPEN_RULE + '\n\n'
+  + THREADS_SUMMARY_RULE + ' ' + THREADS_PENDING_RULE + ' ' + THREADS_KNOWN_RULE + ' ' + THREADS_OPEN_RULE + '\n\n'
 /** The tasks a reply is about, as live pills under it (core/org/message-about.ts; 2026-10-31, the user). */
 export const MESSAGE_ABOUT_LINE =
   'End each reply the user reads with one line of its own naming the tasks it is about: '

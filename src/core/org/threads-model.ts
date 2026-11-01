@@ -18,6 +18,12 @@
  * reacted after it (2026-11-01, the user: "I had not replied ... so clearly I had not acknowledged
  * it"): a node may mark exchanges known (`known`) or close a thread only then (`reactedSince`).
  *
+ * A thread only handed to a task or being worked on, with nothing new for him, is `pending`: the node
+ * sets it, and the Threads view hides it like a closed one (2026-11-01, the user: "if it is just
+ * assigned no need to tell me, or doing, unless there are some update ... there can be thread
+ * pending, which is auto hide like closed"). It comes back by itself: he writes in it (filed or
+ * merged), or the node writes a new summary without naming a state.
+ *
  * A node may also open a thread itself for something that reached it the user must act on or asked
  * to follow (2026-11-01, the user: "you can also create a new thread even if it is not from me ...
  * some new message, from somewhere like mail"): its first post is the node's (`opener`), his reply
@@ -28,7 +34,7 @@
  */
 import crypto from 'node:crypto';
 
-export const THREAD_STATES = ['new', 'working', 'needs', 'answered'] as const;
+export const THREAD_STATES = ['new', 'working', 'needs', 'answered', 'pending'] as const;
 export type ThreadState = typeof THREAD_STATES[number];
 export const THREAD_CLOSE_HOWS = ['acked', 'dropped'] as const;
 export type ThreadCloseHow = typeof THREAD_CLOSE_HOWS[number];
@@ -300,8 +306,8 @@ export function fileMessage(file: ThreadsFile, input: FileMessageInput): FileMes
   if (target && isOpen(target)) {
     const next: OrgThread = {
       ...target, messages: [...target.messages, message], updatedAt: input.at, by: 'human',
-      // He spoke again: a thread answered or waiting on him is the node's turn again.
-      ...(target.state === 'answered' || target.state === 'needs' ? { state: 'working' as ThreadState } : {}),
+      // He spoke again: a thread answered, waiting on him or pending is the node's turn again.
+      ...(target.state === 'answered' || target.state === 'needs' || target.state === 'pending' ? { state: 'working' as ThreadState } : {}),
     };
     return { file: replace(file, next, input.at), thread: next, message, created: false, duplicate: false };
   }
@@ -421,6 +427,8 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   if (patch.ask !== undefined) { if (patch.ask.trim()) next.ask = clip(patch.ask, THREAD_ASK_MAX); else delete next.ask; }
   if (patch.reply !== undefined) { if (patch.reply.trim()) next.reply = clip(patch.reply, THREAD_REPLY_MAX); else delete next.reply; }
   if (patch.state !== undefined) next.state = patch.state;
+  // A new summary on a pending thread is news: it shows again, unless the same write keeps it pending.
+  else if (cur.state === 'pending' && next.reply !== undefined && next.reply !== cur.reply) next.state = 'working';
   if (patch.tasks !== undefined) { const l = taskList(patch.tasks); if (l.length) next.tasks = l; else delete next.tasks; }
   if (patch.add_tasks?.length) next.tasks = taskList([...(next.tasks ?? []), ...patch.add_tasks]);
   // Closing a closed thread again changes nothing (the node is not told twice).
@@ -458,7 +466,7 @@ export function mergeThreads(file: ThreadsFile, fromId: string, intoId: string, 
   const next: OrgThread = {
     ...into, messages, updatedAt: at, by,
     ...(from.tasks?.length || into.tasks?.length ? { tasks: taskList([...(into.tasks ?? []), ...(from.tasks ?? [])]) } : {}),
-    ...(into.state === 'answered' ? { state: 'working' as ThreadState } : {}),
+    ...(into.state === 'answered' || into.state === 'pending' ? { state: 'working' as ThreadState } : {}),
   };
   return { file: { ...file, threads: file.threads.filter((t) => t.id !== fromId).map((t) => (t.id === intoId ? next : t)) }, thread: next };
 }

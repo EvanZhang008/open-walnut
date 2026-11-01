@@ -13,17 +13,24 @@
  * already knew (src/core/org/thread-view.ts) is gone from the card; the whole conversation opens
  * from a toggle in the card body, numbered, with Split out on each message.
  *
- *   a card     state, title, time; the summary; its tasks; the answers still news; one line per
- *              message still waiting for an answer; Conversation (N messages); Acknowledge,
- *              Follow up (a message filed under it)
- *   Closed     only open threads show; the ones closed this week (kept a week, then deleted)
- *              open from one quiet line at the bottom, Reopen on each
+ * A thread with nothing new for him is out of sight (2026-11-01, the user: "if it is just assigned
+ * no need to tell me, or doing, unless there are some update ... thread pending, which is auto
+ * hide like closed"): the node sets it pending, and it comes back when he writes in it or the node
+ * writes a new summary (src/core/org/threads-model.ts). A summary already naming a task keeps no
+ * second chip for it, and one reply that covered several threads stays off every card.
+ *
+ *   a card     state, title, time; the summary; its tasks the summary does not name; the answers
+ *              still news; one line per message still waiting for an answer; Conversation
+ *              (N messages); Acknowledge, Follow up (a message filed under it)
+ *   Pending    open but nothing new for him: one quiet line at the bottom opens them
+ *   Closed     the ones closed this week (kept a week, then deleted) open from one quiet line at
+ *              the bottom, Reopen on each
  */
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { userStateOf } from '@open-walnut/org-tree';
 import { USER_STATE_LABELS } from '@open-walnut/user-status';
-import { cardView, exchangesOf, type ThreadExchange } from '@open-walnut/thread-view';
+import { cardView, exchangesOf, sharedAnswers, type ThreadExchange } from '@open-walnut/thread-view';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { AnswerBox } from '@/components/common/AnswerBox';
 import { RichMarkdown } from '@/components/chat/RichBlocks';
@@ -43,10 +50,11 @@ const TASK_DOT: Record<string, string> = {
 };
 /** A thread's state in words: the task-state names where they mean the same (USER_STATE_LABELS). */
 const STATE_LABEL: Record<OrgThreadState, string> = {
-  new: 'New', working: USER_STATE_LABELS.working, needs: USER_STATE_LABELS.needs, answered: 'Answered',
+  new: 'New', working: USER_STATE_LABELS.working, needs: USER_STATE_LABELS.needs, answered: 'Answered', pending: 'Pending',
 };
 const STATE_DOT: Record<OrgThreadState, string> = {
   new: 'var(--accent, #0A84FF)', working: 'var(--success, #34C759)', needs: 'var(--error, #FF3B30)', answered: 'var(--fg-muted, #86868B)',
+  pending: 'var(--fg-muted, #86868B)',
 };
 /** How much of his words the line above an answer quotes. */
 const QUOTE_WORDS = 72;
@@ -209,7 +217,7 @@ function Words({ m }: { m: OrgThreadMessage }) {
   return <Fold className="org-thread-words-fold" testId="org-thread-words"><Markdown text={text} className="org-thread-words" /></Fold>;
 }
 
-function Exchange({ x, t, name, state, now }: { x: ThreadExchange<OrgThreadMessage>; t: OrgThread; name: string; state: OrgThreadsState; now: number }) {
+function Exchange({ x, t, name, state, now, shared }: { x: ThreadExchange<OrgThreadMessage>; t: OrgThread; name: string; state: OrgThreadsState; now: number; shared: boolean }) {
   const closed = !!t.closed;
   if (x.opener) {
     const from = `${FROM_LABEL[x.opener.from] ?? FROM_LABEL.node}${x.opener.ref ? `: ${x.opener.ref}` : ''}`;
@@ -238,7 +246,7 @@ function Exchange({ x, t, name, state, now }: { x: ThreadExchange<OrgThreadMessa
         </div>
       ))}
       {x.answer ? (
-        <Answer text={x.answer.text} about={x.answer.about} at={x.answer.at} by={name} known={x.known} now={now} />
+        <Answer text={x.answer.text} about={x.answer.about} at={x.answer.at} by={shared ? `${name} \u00b7 one reply to this and another thread` : name} known={x.known} now={now} />
       ) : (
         <div className="org-thread-answer is-waiting" data-testid="org-thread-unanswered">
           {closed ? 'No answer' : `${name} has not answered yet`}
@@ -248,15 +256,22 @@ function Exchange({ x, t, name, state, now }: { x: ThreadExchange<OrgThreadMessa
   );
 }
 
-function ThreadCard({ t, all, tasks, onOpenTask, state, onFollowUp, name, now }: {
-  t: OrgThread; all: readonly OrgThread[]; tasks: readonly Task[]; onOpenTask: (id: string) => void;
+function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name, now }: {
+  t: OrgThread; all: readonly OrgThread[]; shared: ReadonlySet<string>; tasks: readonly Task[]; onOpenTask: (id: string) => void;
   state: OrgThreadsState; onFollowUp: Props['onFollowUp']; name: string; now: number;
 }) {
   /** The whole conversation shown, in place of what the card keeps. */
   const [open, setOpen] = useState(false);
   const [following, setFollowing] = useState(false);
   const closed = !!t.closed;
-  const card = useMemo(() => cardView(t), [t]);
+  const card = useMemo(() => cardView(t, shared), [t, shared]);
+  // The tasks the summary already shows as pills get no second chip (the renderer resolves them
+  // from the task list, so it is read again once the tasks load).
+  const chips = useMemo(() => {
+    if (!t.tasks?.length) return [];
+    const named = new Set([...renderMarkdownWithRefs(t.reply ?? '').matchAll(/data-task-id="([^"]+)"/g)].map((m) => m[1]));
+    return t.tasks.filter((id) => !named.has(id));
+  }, [t.tasks, t.reply, tasks]);
   const exchanges = useMemo(() => exchangesOf(t), [t]);
   const follows = t.follows ? all.find((x) => x.id === t.follows) : undefined;
   const last = t.messages[t.messages.length - 1] ?? t.opener;
@@ -278,7 +293,7 @@ function ThreadCard({ t, all, tasks, onOpenTask, state, onFollowUp, name, now }:
       </button>
       {follows && <p className="org-thread-follows">Asks again about “{follows.title}”</p>}
       {t.reply && <Markdown text={t.reply} className="org-thread-summary" testId="org-thread-reply" />}
-      {!!t.tasks?.length && <TaskChips ids={t.tasks} tasks={tasks} onOpenTask={onOpenTask} />}
+      {chips.length > 0 && <TaskChips ids={chips} tasks={tasks} onOpenTask={onOpenTask} />}
       {!open && card.unread.length > 0 && (
         <ol className="org-thread-unread" data-testid="org-thread-unread">
           {card.unread.map((x) => (
@@ -301,7 +316,7 @@ function ThreadCard({ t, all, tasks, onOpenTask, state, onFollowUp, name, now }:
       )}
       {open && (
         <ol id={`${t.id}-conversation`} className="org-thread-conversation" data-testid="org-thread-messages">
-          {exchanges.map((x) => <Exchange key={x.messages[0]?.id ?? 'opener'} x={x} t={t} name={name} state={state} now={now} />)}
+          {exchanges.map((x) => <Exchange key={x.messages[0]?.id ?? 'opener'} x={x} t={t} name={name} state={state} now={now} shared={x.messages.some((m) => shared.has(m.id))} />)}
         </ol>
       )}
       {following && onFollowUp ? (
@@ -324,22 +339,33 @@ function ThreadCard({ t, all, tasks, onOpenTask, state, onFollowUp, name, now }:
 export function OrgThreads({ name, state, tasks, onOpenTask, onFollowUp, now }: Props) {
   // Whether the week's closed threads are open stays as it was left (utils/view-memory.ts).
   const [showClosed, setShowClosed] = usePageView('org', 'threads.showClosed', false, isBoolean);
+  const [showPending, setShowPending] = usePageView('org', 'threads.showPending', false, isBoolean);
   const all = state.threads;
-  const open = useMemo(() => (all ?? []).filter((t) => !t.closed), [all]);
+  const open = useMemo(() => (all ?? []).filter((t) => !t.closed && t.state !== 'pending'), [all]);
+  const pending = useMemo(() => (all ?? []).filter((t) => !t.closed && t.state === 'pending'), [all]);
   const closed = useMemo(() => (all ?? []).filter((t) => !!t.closed), [all]);
+  const shared = useMemo(() => sharedAnswers(all ?? []), [all]);
   // Task pills in an answer open the task, as they do in the chat.
   const onEntityClick = useEntityClickHandler(onOpenTask);
-  const card = (t: OrgThread) => <ThreadCard key={t.id} t={t} all={all ?? []} tasks={tasks} onOpenTask={onOpenTask} state={state} onFollowUp={onFollowUp} name={name} now={now} />;
+  const card = (t: OrgThread) => <ThreadCard key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} onOpenTask={onOpenTask} state={state} onFollowUp={onFollowUp} name={name} now={now} />;
   return (
     <div className="org-threads" data-testid="org-threads" onClick={onEntityClick}>
       {state.error && <p className="org-thread-error" data-testid="org-threads-error">{state.error}</p>}
       {all === null && !state.error && <p className="org-threads-empty" aria-busy="true">Loading…</p>}
       {all !== null && !open.length && (
         <p className="org-threads-empty" data-testid="org-threads-empty">
-          {`Nothing open. Each request you send ${name} becomes a thread here; asks about the same thing stay in one thread.`}
+          {pending.length
+            ? `Nothing new. ${name} is working on the pending ones below; each comes back here when there is news.`
+            : `Nothing open. Each request you send ${name} becomes a thread here; asks about the same thing stay in one thread.`}
         </p>
       )}
       {!!open.length && <ul className="org-thread-list" data-testid="org-thread-list" data-show="open">{open.map(card)}</ul>}
+      {pending.length > 0 && (
+        <button type="button" className="org-threads-closed-toggle" data-testid="org-threads-pending" aria-expanded={showPending} onClick={() => setShowPending(!showPending)}>
+          {pending.length} pending, nothing new{showPending ? ' ▾' : ' ▸'}
+        </button>
+      )}
+      {showPending && pending.length > 0 && <ul className="org-thread-list" data-testid="org-thread-list-pending" data-show="pending">{pending.map(card)}</ul>}
       {closed.length > 0 && (
         <button type="button" className="org-threads-closed-toggle" data-testid="org-threads-closed" aria-expanded={showClosed} onClick={() => setShowClosed(!showClosed)}>
           {closed.length} closed this week{showClosed ? ' ▾' : ' ▸'}

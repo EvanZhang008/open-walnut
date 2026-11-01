@@ -13,7 +13,7 @@
  * to it ("the purpose is to keep the thread extremely concise").
  */
 import { describe, it, expect } from 'vitest'
-import { THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_SUMMARY_RULE } from '../../../src/core/org/thread-rules.js'
+import { THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../../../src/core/org/thread-rules.js'
 import { THREADS_LINE } from '../../../src/core/sessions/session-context.js'
 import { threadHintText, threadsTidyOf, threadsTidyText, type ThreadHintState } from '../../../src/core/org/thread-capture.js'
 import { emptyThreads, fileMessage, openThread, setAnswers, ThreadError, updateThread } from '../../../src/core/org/threads-model.js'
@@ -55,6 +55,7 @@ describe('every place a node reads it carries it', () => {
     expect(THREADS_LINE).toContain(THREADS_KNOWN_RULE)
     expect(THREADS_LINE).toContain(THREADS_OPEN_RULE)
     expect(THREADS_LINE).toContain(THREADS_SUMMARY_RULE)
+    expect(THREADS_LINE).toContain(THREADS_PENDING_RULE)
   })
 
   it('the threads hint on each of his messages, and never the old "close it yourself when he says so"', () => {
@@ -63,6 +64,8 @@ describe('every place a node reads it carries it', () => {
       expect(text).toContain(THREADS_KNOWN_RULE)
       expect(text).toContain(THREADS_OPEN_RULE)
       expect(text).toContain(THREADS_SUMMARY_RULE)
+      expect(text).toContain(THREADS_PENDING_RULE)
+      expect(text).toMatch(/pending: nothing new for him/)
       expect(text).not.toMatch(/close it yourself only when he says/i)
     }
   })
@@ -75,6 +78,7 @@ describe('every place a node reads it carries it', () => {
     expect(tidy?.items.map((i) => i.why)).toContain('reacted')
     expect(threadsTidyText(tidy!)).toContain(THREADS_KNOWN_RULE)
     expect(threadsTidyText(tidy!)).toContain(THREADS_SUMMARY_RULE)
+    expect(threadsTidyText(tidy!)).toContain(THREADS_PENDING_RULE)
     const spec = findHint(null, 'threads-tidy')
     expect(spec?.enabled).toBe(true)
     expect(spec?.triggers).toContain('every_n_turns')
@@ -84,8 +88,35 @@ describe('every place a node reads it carries it', () => {
     for (const name of ['thread_list', 'thread_update', 'thread_create', 'thread_split', 'thread_file']) {
       expect(getOp(name)?.description, name).toContain(THREADS_KNOWN_RULE)
       expect(getOp(name)?.description, name).toContain(THREADS_SUMMARY_RULE)
+      expect(getOp(name)?.description, name).toContain(THREADS_PENDING_RULE)
     }
     expect(getOp('thread_update')?.description).toMatch(/known/)
+  })
+})
+
+describe('a thread with nothing new for him goes pending', () => {
+  it('says what pending is for and what brings it back', () => {
+    expect(THREADS_PENDING_RULE).toMatch(/only handed to a task, or that is being worked on with nothing new for him, is pending/)
+    expect(THREADS_PENDING_RULE).toContain('hides it like a closed one')
+    expect(THREADS_PENDING_RULE).toContain('Never write a summary that only says who took it')
+    expect(THREADS_PENDING_RULE).toContain('comes back by itself when he writes in it or you write a new summary')
+  })
+
+  it('the cleanup reminder names a working thread with nothing new on its card, once; not one with news or one already pending', () => {
+    let f = fileMessage(emptyThreads('lead-1'), { text: 'build the Threads view', via: 'chat', at: at(0) }).file
+    const id = f.threads[0].id
+    f = setAnswers(f, new Map([[f.threads[0].messages[0].id, { text: 'Handed to the Threads task.', at: at(1) }]])).file
+    f = updateThread(f, id, { state: 'working', reply: 'Handed to the Threads task', add_tasks: ['t-1'] }, 'task:lead-1', at(2)).file
+    // His answer is still news on the card: not quiet yet.
+    expect(threadsTidyOf(f, Date.parse(at(3)))?.items.find((i) => i.id === id)?.why).not.toBe('quiet')
+    // He wrote after it (in another thread): nothing new is left on this card.
+    f = fileMessage(f, { text: 'ok. Another thing: the phone', via: 'chat', at: at(4) }).file
+    f = updateThread(f, id, { known: 'all' }, 'task:lead-1', at(5)).file
+    const tidy = threadsTidyOf(f, Date.parse(at(6)))
+    expect(tidy?.items.find((i) => i.id === id)?.why).toBe('quiet')
+    expect(threadsTidyText(tidy!)).toMatch(/set state pending/)
+    f = updateThread(f, id, { state: 'pending' }, 'task:lead-1', at(7)).file
+    expect(threadsTidyOf(f, Date.parse(at(8)))?.items.find((i) => i.id === id)).toBeUndefined()
   })
 })
 

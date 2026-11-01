@@ -146,6 +146,44 @@ describe('the node keeps a thread current', () => {
   })
 })
 
+describe('a pending thread: only handed off or being worked on, out of his sight until there is news', () => {
+  // 2026-11-01, the user: "if it is just assigned no need to tell me, or doing, unless there are
+  // some update ... there can be thread pending, which is auto hide like closed".
+  const pending = () => {
+    const f0 = file('build the Threads view')
+    const id = f0.threads[0].id
+    return { id, f: updateThread(f0, id, { state: 'pending', reply: 'Handed to the Threads task', add_tasks: ['t-1'] }, 'task:lead-1', at(2)).file }
+  }
+
+  it('the node sets it, with its summary in the same write, and it stays pending', () => {
+    const { id, f } = pending()
+    expect(f.threads.find((t) => t.id === id)).toMatchObject({ state: 'pending', reply: 'Handed to the Threads task', tasks: ['t-1'] })
+  })
+
+  it('a new summary brings it back; the same summary, a title, tasks or an explicit state do not', () => {
+    const { id, f } = pending()
+    const same = (patch: Parameters<typeof updateThread>[2]) => updateThread(f, id, patch, 'task:lead-1', at(5)).thread.state
+    expect(same({ reply: 'Handed to the Threads task' })).toBe('pending')
+    expect(same({ title: 'Threads: build it' })).toBe('pending')
+    expect(same({ add_tasks: ['t-2'] })).toBe('pending')
+    expect(same({ reply: 'Done; live on prod, check the card', state: 'pending' })).toBe('pending')
+    expect(same({ reply: 'Built; it needs your call on the default view' })).toBe('working')
+    expect(same({ reply: 'Built; which default?', state: 'needs' })).toBe('needs')
+  })
+
+  it('he writes in it (a follow-up, or the node merges his new ask under it): it is the node\'s turn again', () => {
+    const { id, f } = pending()
+    expect(fileMessage(f, { text: 'and keep it short', via: 'follow-up', threadId: id, at: at(6) }).thread.state).toBe('working')
+    const asked = fileMessage(f, { text: 'also the empty state', via: 'chat', at: at(7) })
+    expect(mergeThreads(asked.file, asked.thread.id, id, 'task:lead-1', at(8)).thread.state).toBe('working')
+  })
+
+  it('is a state the file keeps (a reload reads it back)', () => {
+    const { f } = pending()
+    expect(normalizeThreads(JSON.parse(JSON.stringify(f)), 'lead-1').threads[0].state).toBe('pending')
+  })
+})
+
 describe('several asks about one subject are one thread', () => {
   it('merge puts the messages under the target in time order, with its tasks, and the source is gone', () => {
     let f = file('Hints: show which are built in', 'Rich output should not be built in')

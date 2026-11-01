@@ -27,6 +27,17 @@ export const THREADS_OPEN_RULE =
   + 'decision still goes to his inbox as a letter: the thread names the letter (ref), never repeats it.';
 
 /**
+ * A thread with nothing new for him is out of his sight until there is (2026-11-01, the user: "if a
+ * task is just hand over, let's not show it in the thread, unless there are some update"; "u can
+ * manage the thread yourself, there can be thread pending, which is auto hide like closed").
+ */
+export const THREADS_PENDING_RULE =
+  'A thread you only handed to a task, or that is being worked on with nothing new for him, is pending: set state pending '
+  + '(thread_update) and his Threads view hides it like a closed one. Never write a summary that only says who took it or that '
+  + 'it is being done (its task chip says that). It comes back by itself when he writes in it or you write a new summary; set '
+  + 'needs when he must decide, answered when you have his result.';
+
+/**
  * What a card says (2026-11-01, the user: "the purpose is to keep the thread extremely concise";
  * "the summary must be written well, not too verbose but not too short, the latest first"; "if a
  * notification about a thread I have not read reaches you, update that thread's summary").
