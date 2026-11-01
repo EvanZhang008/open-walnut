@@ -13,7 +13,7 @@
 import type { InboxLetterItem } from '../../../packages/plugin-api/src/inbox-items.js';
 export type * from '../../../packages/plugin-api/src/inbox-items.js';
 
-/** WHY the letter exists. Drives how the UI treats it (badges, Needs Action). */
+/** WHY the letter exists. Drives how the UI treats it (badges, the Action needed chip). */
 export type LetterType = 'completion' | 'action_required' | 'review' | 'info';
 
 /**

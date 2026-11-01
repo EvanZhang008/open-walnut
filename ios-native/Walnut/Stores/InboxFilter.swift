@@ -13,7 +13,8 @@ import Foundation
 ///    web/src/components/inbox/inbox-filter.ts): unread letters, plus the ones
 ///    read WHILE the filter was on (`keep`), so opening a letter does not pull
 ///    its row out from under the reader's thumb;
-///  - Action needed is the console's Needs Action rail for letters: the COUNT is
+///  - Action needed is a filter INSIDE the Inbox (a letter is never Needs
+///    Action, which is only what a session asks live): the COUNT is
 ///    unseen decisions (`isUnseenDecision`), the LIST is open decisions
 ///    (`isOpenDecision`), i.e. the unseen ones plus the ones read in the last five
 ///    minutes. Reading a decision is the human taking it on (the console's own
@@ -114,8 +115,7 @@ enum InboxListing {
     }
 
     /// The next moment a read decision leaves Action needed, or nil when none is
-    /// inside its grace window. The view arms ONE timer for it instead of polling
-    /// (the console's `nextDecisionGraceExpiry`).
+    /// inside its grace window. The view arms ONE timer for it instead of polling.
     static func nextGraceExpiry(_ letters: [Letter], nowMs: Double) -> Double? {
         var next: Double?
         for letter in letters {

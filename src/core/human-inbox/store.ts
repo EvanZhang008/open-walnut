@@ -731,8 +731,9 @@ function find(store: LetterStoreFile, id: string): LetterRecord {
  * Move the read flag and stamp WHEN it moved. The ONE place `read` is assigned,
  * so the stamp cannot drift from the flag.
  *
- * `readAt` is the clock behind the web console's Needs Action grace window (a
- * read but unanswered decision stays listed five minutes from this stamp), so
+ * `readAt` is the clock behind a read decision's grace window (a read but
+ * unanswered decision stays open five minutes from this stamp: the task's own
+ * status, the Org answer cards, the phone Inbox's Action needed chip), so
  * it has to be right on every flip, not only on the first read. The merge
  * between two copies of this file is still decided by the index's top-level
  * `lastUpdated`, never by this field. No stamp when the value is unchanged:

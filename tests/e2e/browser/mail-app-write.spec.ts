@@ -265,7 +265,8 @@ test('compose, approve from the web inbox, reply, and re-ask after an edit', asy
   await composer.screenshot({ path: `${SCREENSHOT_DIR}/mail-waiting-approval.png` })
 
   const letter = page.locator('.hib-row', { hasText: 'Approve this message' })
-  await openLettersUntil(page, 'Needs Action', letter)
+  // A decision letter is Inbox mail: Needs Action holds only live session asks.
+  await openLettersUntil(page, 'Inbox', letter)
   await letter.click()
 
   // The letter is the approval object: what it shows IS what will be sent.
@@ -366,11 +367,14 @@ test('compose, approve from the web inbox, reply, and re-ask after an edit', asy
   // Both asks are on the shelf, and exactly one of them was taken back.
   await expect(page.locator('.hib-row', { hasText: 'Second look' })).toHaveCount(2)
 
-  await page.locator('.nfc-rail-btn', { hasText: 'Needs Action' }).first().click()
-  // One live ask, and it is not the withdrawn one: a withdrawn letter is answered, so it drops out.
-  const live = page.locator('.hib-row', { hasText: 'Approve this message' })
+  // One live ask, and it is not the withdrawn one: a withdrawn letter is answered.
+  const live = page.locator('.hib-row', { hasText: 'Second look' }).filter({ hasNotText: 'Withdrawn' })
   await expect(live).toHaveCount(1, { timeout: 30_000 })
   await expect(live.locator('.hib-answered-chip')).toHaveCount(0)
+  // Neither letter is in Needs Action, which holds only live session asks.
+  await page.locator('.nfc-rail-btn', { hasText: 'Needs Action' }).first().click()
+  await expect(page.locator('.hib-row', { hasText: 'Approve this message' })).toHaveCount(0)
+  await expect(page.locator('.hib-row', { hasText: 'Second look' })).toHaveCount(0)
   await closeLetters(page)
 
   // Nothing was sent by any of that.

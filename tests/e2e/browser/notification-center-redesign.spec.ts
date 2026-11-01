@@ -511,11 +511,78 @@ test('with no pending ask the center lands on All, and Needs Action reads empty'
   // No SEEDED pending ask; another spec's real permission could add one, so this
   // asserts the seeded half is empty rather than the whole section.
   await expect(seededPermCards(panel)).toHaveCount(0)
-  await expect(panel.locator('.notification-feed-empty')).toHaveText('Nothing waiting on you')
+  await expect(panel.locator('.notification-feed-empty')).toHaveText('No session is asking you anything')
   await page.screenshot({ path: `${SCREENSHOT_DIR}/landing-all-empty-action.png`, fullPage: true })
 })
 
 // ── 3. AskUserQuestion is answered in the card, not in the session ──
+
+/**
+ * 2026-11-01, the user: Needs Action and Inbox are two separate things. Needs
+ * Action is only what a session asks live (a permission prompt, AskUserQuestion);
+ * a decision letter is Inbox mail. Two live asks and one unread decision letter:
+ * the Needs Action badge reads 2 and lists the two cards and no letter, the Inbox
+ * lists the letter with its buttons, and the bell counts all three once each.
+ */
+test('Needs Action lists and counts only live session asks; a decision letter stays in the Inbox', async ({ page }) => {
+  const t = Date.now()
+  const decision = {
+    id: 'lt-pw-nfc-decision', subject: 'PW NFC pick the rollout', type: 'action_required', bodyFormat: 'markdown',
+    textPreview: 'Ship tonight or hold for review.', createdAt: t - 30_000, read: false, pinned: false, archived: false,
+    sender: { sessionId: SESSION_ID, sessionTitle: 'PW NFC fixture session', host: 'nfc-host' },
+    actions: [{ id: 'ship', label: 'Ship tonight' }, { id: 'hold', label: 'Hold' }],
+  }
+  const letterEnvelope: FeedRecord = {
+    id: 'nfc-letter-decision', kind: 'letter', severity: 'warning', title: decision.subject,
+    timestamp: t - 30_000, read: false, dedupKey: `letter:${decision.id}`, letterId: decision.id,
+    sessionId: SESSION_ID,
+  }
+  await page.route('**/api/v1/human-inbox**', (route) => {
+    const url = new URL(route.request().url())
+    if (route.request().method() !== 'GET') return route.fulfill({ json: { ok: true } })
+    if (url.pathname.endsWith(`/${decision.id}`)) {
+      return route.fulfill({ json: { ...decision, body: '## Rollout\n\nShip tonight or hold for review.' } })
+    }
+    return route.fulfill({ json: url.searchParams.get('archived') === '1' ? [] : [decision] })
+  })
+  await captureWs(page)
+  // The question comes from a second session: two asks of ONE session fold into a group.
+  const question = { ...askUserQuestionFeed(t)[0]!, sessionId: 'pw-nfc-session-2' }
+  await stubNotifications(page, [pendingBashRecord(t), question, letterEnvelope])
+  await loadHome(page)
+  await waitForWs(page)
+
+  // The bell: two live asks + one unread letter, each counted once.
+  await expect(page.locator('.notification-badge-count')).toHaveText('3', { timeout: 15_000 })
+
+  const panel = await openCenter(page)
+  await expect(rail(panel, 'Needs Action')).toHaveAttribute('aria-current', 'true')
+  await expect(rail(panel, 'Needs Action').locator('.nfc-rail-badge')).toHaveText('2')
+  await expect(seededPermCards(panel)).toHaveCount(2)
+  await expect(panel.locator('.hib-row')).toHaveCount(0)
+  await expect(panel.getByText(decision.subject)).toHaveCount(0)
+  await expect(rail(panel, 'Inbox').locator('.nfc-rail-badge')).toHaveText('1')
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/needs-action-live-asks-only.png` })
+
+  await showSection(panel, 'Inbox')
+  const row = panel.locator('.hib-row').filter({ hasText: decision.subject })
+  await expect(row).toHaveCount(1, { timeout: 15_000 })
+  await expect(row.locator('.hib-type')).toHaveText('Action needed')
+  await expect(seededPermCards(panel)).toHaveCount(0)
+  await row.click()
+  const reader = page.locator('.hib-reader')
+  await expect(reader).toBeVisible({ timeout: 15_000 })
+  await expect(reader.locator('.hib-action-btn').filter({ hasText: 'Ship tonight' })).toBeVisible()
+  await expect(reader.locator('.hib-action-btn').filter({ hasText: 'Hold' })).toBeVisible()
+  await page.screenshot({ path: `${SCREENSHOT_DIR}/inbox-decision-letter-buttons.png` })
+  await reader.getByRole('button', { name: 'Close letter' }).click()
+
+  // Read now; Needs Action still holds the two asks and nothing else.
+  await showSection(panel, 'Needs Action')
+  await expect(rail(panel, 'Needs Action').locator('.nfc-rail-badge')).toHaveText('2')
+  await expect(seededPermCards(panel)).toHaveCount(2)
+  await expect(panel.locator('.hib-row')).toHaveCount(0)
+})
 
 test('AskUserQuestion card submits the real answers map to the permission route', async ({ page }) => {
   let submitted: Record<string, unknown> | undefined

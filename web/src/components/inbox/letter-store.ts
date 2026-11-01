@@ -171,7 +171,7 @@ export function patchLetter(id: string, patch: Partial<LetterEnvelope>): void {
 /**
  * Apply a patch to one envelope, keeping `readAt` honest.
  *
- * `readAt` is the clock behind a read decision's Needs Action grace window
+ * `readAt` is the clock behind a read decision's grace window
  * (api/human-inbox.ts isOpenDecision), so it follows the same rule the server's
  * setReadFlag applies on disk: it MOVES whenever `read` flips, and only forward.
  *   - A patch that flips `read` without a stamp (every optimistic read/unread

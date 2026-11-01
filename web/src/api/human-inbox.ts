@@ -87,8 +87,8 @@ export interface LetterEnvelope {
   read: boolean;
   /**
    * When `read` last changed (server-stamped, epoch ms). The clock behind
-   * DECISION_SEEN_GRACE_MS: a decision the human has looked at keeps its Needs
-   * Action seat for a short while measured from here. Absent on a letter whose
+   * DECISION_SEEN_GRACE_MS: a decision the human has looked at stays an open
+   * decision for a short while measured from here. Absent on a letter whose
    * read flag never moved, or one read before the stamp existed.
    */
   readAt?: number;
@@ -313,32 +313,31 @@ export function isAwaitingDecision(l: LetterEnvelope): boolean {
 }
 
 /**
- * How long a decision the human has READ but not answered stays listed in Needs
- * Action. Five minutes: long enough that the card does not vanish from under the
- * cursor while the human is still dealing with it (in Slack, in a terminal),
- * short enough that a glance at the section the next day shows only new asks.
+ * How long a decision the human has READ but not answered stays an open decision
+ * (the Org page's answer cards, the phone Inbox's Action needed chip, the task's
+ * own status on the server). Never Needs Action: letters are Inbox mail. Five
+ * minutes: long enough that the card does not vanish from under the cursor while
+ * the human is still dealing with it (in Slack, in a terminal), short enough
+ * that a glance the next day shows only new asks.
  */
 export const DECISION_SEEN_GRACE_MS = 5 * 60 * 1000;
 
 /**
- * A decision the human has NOT looked at yet — the Needs Action BADGE rule.
+ * A decision the human has NOT looked at yet: the rule the phone Inbox's Action
+ * needed count ports to Swift (ModelsInbox.swift), kept here as its reference.
  *
  * Reading a decision letter is the human taking it on, exactly as reading a
  * letter clears it from the Inbox badge: a Slack ask the human read and then
  * handled in Slack never gets a button click here, and a badge that kept
  * counting it (the rail once read 15 with nothing new in it) stopped meaning
  * anything. "Mark unread" puts it back.
- *
- * The badge itself is computed by sectionCounts (notification-model.ts), which
- * cannot import this module and so inlines the same three conditions; a parity
- * test in tests/web/inbox-filter.test.ts keeps the two from drifting.
  */
 export function isUnseenDecision(l: LetterEnvelope): boolean {
   return isAwaitingDecision(l) && !l.read;
 }
 
 /**
- * When a read-but-unanswered decision leaves the Needs Action LIST, or null when
+ * When a read-but-unanswered decision stops being open, or null when
  * it has no such deadline (unread, answered, archived, or read before the server
  * stamped `readAt`, which counts as "seen long ago").
  */
@@ -348,10 +347,9 @@ export function decisionGraceEndsAt(l: LetterEnvelope): number | null {
 }
 
 /**
- * Whether a decision is still LISTED in Needs Action at `now`: unread, or read
- * within the grace window. The badge (isUnseenDecision's rule) drops the moment
- * the letter is read; the row lingers so the human can still find what they just
- * opened. A letter read before `readAt` existed is treated as seen long ago.
+ * Whether a decision is still open at `now`: unread, or read within the grace
+ * window. The count (isUnseenDecision's rule) drops the moment the letter is
+ * read; the row lingers so the human can still find what they just opened. A letter read before `readAt` existed is treated as seen long ago.
  *
  * `readAt` is a wall clock: the browser's until the next list refresh (the
  * store stamps the flip), the server's after. A skew between the two shifts the

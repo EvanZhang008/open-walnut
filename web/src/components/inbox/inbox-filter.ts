@@ -1,9 +1,10 @@
 /**
- * Pure list derivations for the notification panel's Inbox and Needs Action
- * sections — the Unread filter and the decision grace clock. Kept out of the
- * component so both rules are pinned by unit tests rather than read off JSX.
+ * Pure list derivations for the notification panel's Inbox section: the Unread
+ * filter. Kept out of the component so the rule is pinned by unit tests rather
+ * than read off JSX. (Letters never list in Needs Action: that section is only
+ * what a session asks live.)
  */
-import { decisionGraceEndsAt, type LetterEnvelope } from '@/api/human-inbox';
+import type { LetterEnvelope } from '@/api/human-inbox';
 
 /**
  * The Inbox "Unread" toggle, remembered per browser. Deliberately NOT an
@@ -45,22 +46,4 @@ export function filterInboxLetters(
 ): LetterEnvelope[] {
   if (!unreadOnly) return [...letters];
   return letters.filter(l => !l.read || keep.has(l.id));
-}
-
-/**
- * The next moment a read-but-unanswered decision leaves Needs Action, or null
- * when nothing is in its grace window. The panel arms ONE timer for it, instead
- * of polling, so the row disappears on time even with the panel left open.
- */
-export function nextDecisionGraceExpiry(
-  letters: readonly LetterEnvelope[],
-  now: number,
-): number | null {
-  let next: number | null = null;
-  for (const l of letters) {
-    const endsAt = decisionGraceEndsAt(l);
-    if (endsAt === null || endsAt <= now) continue;
-    if (next === null || endsAt < next) next = endsAt;
-  }
-  return next;
 }

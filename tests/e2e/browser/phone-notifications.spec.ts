@@ -327,7 +327,7 @@ test('N2-12: a question in the center has full-width 48 px rows, a 44 px Other a
 })
 
 test('C19: a decision letter in the center takes a finger (Pin, Mark read, Archive) and reads 12 px', async ({ page }) => {
-  // What the live center leads with: a letter that waits on a decision.
+  // A letter that waits on a decision, in the Inbox (never Needs Action).
   const letterRow = {
     id: 'pwn-decision-1', subject: 'Pick the bed order', type: 'action_required', bodyFormat: 'markdown',
     textPreview: 'Two options for the spring beds.', createdAt: Date.now() - 30 * 60_000, read: false, pinned: false, archived: false,
@@ -339,8 +339,12 @@ test('C19: a decision letter in the center takes a finger (Pin, Mark read, Archi
     : route.fulfill({ json: { ok: true } }))
   const { errors } = await bootWithFeed(page, [])
   await openCenter(page)
-  // A decision letter sits in Needs Action (the center opens on All with no feed).
+  // Needs Action holds only live session asks: the decision letter is not there…
   await center(page).getByRole('button', { name: /^Needs Action/ }).tap()
+  await expect(center(page).locator('.notification-feed-empty').first()).toBeVisible({ timeout: 15_000 })
+  await expect(center(page).locator('.hib-row')).toHaveCount(0)
+  // …it sits in the Inbox.
+  await center(page).getByRole('button', { name: /^Inbox/ }).tap()
   const row = center(page).locator('.hib-list').first()
   await expect(row).toBeVisible({ timeout: 15_000 })
   await expect(row.getByText('Pick the bed order')).toBeVisible()

@@ -6,8 +6,8 @@ import XCTest
 /// `tests/fixtures/inbox-parity/letters.json` is 40 invented letters plus eight
 /// scenarios (patches over the list). `expected.json` next to it is NOT hand
 /// written: `tests/web/inbox-ios-parity.test.ts` produces it by running the
-/// console's own functions (`sectionCounts`, `filterInboxLetters`,
-/// `isOpenDecision`, `nextDecisionGraceExpiry`, `compareLetters`). This suite runs
+/// console's own functions (`isUnseenDecision`, `filterInboxLetters`,
+/// `isOpenDecision`, `decisionGraceEndsAt`, `compareLetters`). This suite runs
 /// the phone's `InboxListing` over the same scenarios and must answer the same
 /// thing, field for field. A rule ported by reading instead of running is exactly
 /// how a past badge disagreed with the web, so the referee is the web itself.

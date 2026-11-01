@@ -41,8 +41,6 @@ const GRACE_SUBJECT = `PW LTR seen ${NONCE}`
 const FILTER_READ_SUBJECT = `PW LTR filter-read ${NONCE}`
 const FILTER_UNREAD_SUBJECT = `PW LTR filter-unread ${NONCE}`
 const BY_TASK_SUBJECT = `PW LTR by-task ${NONCE}`
-/** DECISION_SEEN_GRACE_MS in web/src/api/human-inbox.ts (the spec cannot import the aliased module). */
-const DECISION_GRACE_MS = 5 * 60 * 1000
 
 /** Markers that must survive (or must NOT appear) inside the sandboxed body. */
 const HTML_BODY_MARKER = `LETTER-HTML-BODY-${NONCE}`
@@ -200,11 +198,12 @@ test('an action_required letter arrives, reads in the reader, and one click answ
 
   const panel = await openCenter(page)
 
-  // An unanswered action_required letter blocks work like a permission ask, so it
-  // is LISTED in Needs Action too (a badge whose section shows nothing loses it).
+  // A decision letter is Inbox mail, never Needs Action: that section is only what
+  // a session asks live (2026-11-01, the user: "two separate things").
   await rail(panel, 'Needs Action').click()
-  await expect(envelope(panel, DECISION_SUBJECT)).toBeVisible({ timeout: 15_000 })
-  expect(await railBadge(panel, 'Needs Action')).toBeGreaterThanOrEqual(1)
+  await expect(rail(panel, 'Needs Action')).toHaveAttribute('aria-current', 'true')
+  await expect(panel.locator('.hib-row')).toHaveCount(0)
+  await expect(envelope(panel, DECISION_SUBJECT)).toHaveCount(0)
 
   await openInbox(panel)
   expect(await railBadge(panel, 'Inbox')).toBeGreaterThanOrEqual(1)
@@ -286,10 +285,7 @@ test('an action_required letter arrives, reads in the reader, and one click answ
   await expect(envelope(panel, DECISION_SUBJECT).locator('.hib-answered-chip'))
     .toContainText('Ship it now')
 
-  // …and an answered letter is no longer a to-do: it leaves Needs Action but
-  // stays in the Inbox as the record of the decision.
-  await rail(panel, 'Needs Action').click()
-  await expect(envelope(panel, DECISION_SUBJECT)).toHaveCount(0, { timeout: 15_000 })
+  // …and the answered letter stays in the Inbox as the record of the decision.
   await openInbox(panel)
   await expect(envelope(panel, DECISION_SUBJECT)).toBeVisible()
 
@@ -452,32 +448,20 @@ test('opening the notification panel does not mark a letter read', async ({ page
   await expect(envelope(reopened, UNREAD_SUBJECT)).toHaveClass(/hib-unread/, { timeout: 15_000 })
 })
 
-// ── 3b. Reading a decision is taking it on: badge drops now, row leaves later ──
+// ── 3b. A decision letter is Inbox mail through its whole life, never Needs Action ──
 
 /**
- * The 15-with-nothing-new-in-it bug. A Slack ask the human read and then handled
- * in Slack never gets a button click here, so an unanswered decision used to sit
- * in Needs Action (and inflate its badge) until archived. Now reading it drops
- * the badge at once — the same relation the Inbox badge has to its list — and
- * the row lingers for a five-minute grace so it does not vanish from under the
- * cursor, then lives only in the Inbox. Mark unread puts it back.
- *
- * The five minutes are REAL product time: the page runs under Playwright's clock
- * (real code, real timers, time advanced), never a shortened constant.
+ * 2026-11-01, the user: Needs Action and Inbox are two separate things. Needs
+ * Action is only what a session asks live (a permission prompt, AskUserQuestion);
+ * a letter, a decision letter included, lives in the Inbox with its buttons.
+ * Before, an unread decision was counted and listed in Needs Action, and a read
+ * one lingered there for a five-minute grace. Walked here unread, read, and
+ * marked unread again: the Needs Action badge and list never move.
  */
-test('reading a decision drops it from the Needs Action badge at once and from the list after the grace', async ({ page, request }) => {
+test('a decision letter stays in the Inbox, read or unread, and never counts or lists in Needs Action', async ({ page, request }) => {
   test.setTimeout(150_000)
   const pageErrors: string[] = []
-  page.on('pageerror', (err) => {
-    // WebKit reports a fetch that `page.reload()` below cuts off mid-flight (the
-    // low-priority Notes prefetch) as a page error "…due to access control
-    // checks", although the app catches the rejection. Chromium reports nothing
-    // for the same reload. Not a defect of this flow.
-    if (/access control checks/.test(err.message)) return
-    pageErrors.push(err.message)
-  })
-  // Before the first load, so every timer the app arms is under this clock.
-  await page.clock.install({ time: new Date() })
+  page.on('pageerror', (err) => pageErrors.push(err.message))
 
   await sendLetter(request, {
     subject: GRACE_SUBJECT,
@@ -492,61 +476,46 @@ test('reading a decision drops it from the Needs Action badge at once and from t
 
   await loadHome(page)
   const panel = await openCenter(page)
-  await rail(panel, 'Needs Action').click()
+
+  // Unread: Inbox has it, with its badge and type; Needs Action has no letter row.
+  await openInbox(panel)
   const row = envelope(panel, GRACE_SUBJECT)
   await expect(row).toBeVisible({ timeout: 15_000 })
   await expect(row).toHaveClass(/hib-unread/)
-  const before = await railBadge(panel, 'Needs Action')
-  expect(before).toBeGreaterThanOrEqual(1)
+  await expect(row.locator('.hib-type')).toHaveText('Action needed')
+  // Whatever live asks the shared fixture server holds, the letter adds no row,
+  // and reading or unreading it never moves the badge.
+  await rail(panel, 'Needs Action').click()
+  await expect(rail(panel, 'Needs Action')).toHaveAttribute('aria-current', 'true')
+  await expect(panel.locator('.hib-row')).toHaveCount(0)
+  const asks = await railBadge(panel, 'Needs Action')
+  await shot(page, 'e2e-09-needs-action-holds-no-letter')
 
-  // Open it (reading IS the human taking it on), then close WITHOUT answering.
+  // Read it in the Inbox: its buttons are there; closing without answering
+  // leaves it in the Inbox, read.
+  await openInbox(panel)
   await row.click()
   const reader = page.locator('.hib-reader')
   await expect(reader).toBeVisible({ timeout: 15_000 })
-  await expect(reader.locator('.hib-action-btn').first()).toBeVisible()
+  await expect(reader.locator('.hib-action-btn').filter({ hasText: 'Approve' })).toBeVisible()
+  await expect(reader.locator('.hib-action-btn').filter({ hasText: 'Hold' })).toBeVisible()
   await reader.getByRole('button', { name: 'Close letter' }).click()
   await expect(reader).toHaveCount(0)
-
-  // The badge is down by one at once (a DELTA — the fixture feed is shared)…
-  await expect.poll(() => railBadge(panel, 'Needs Action'), { timeout: 10_000 })
-    .toBeLessThanOrEqual(before - 1)
-  // …while the row is still listed, now read, with its buttons intact.
   await expect(row).toBeVisible()
   await expect(row).not.toHaveClass(/hib-unread/)
   await expect(row.locator('.hib-answered-chip')).toHaveCount(0)
-  await shot(page, 'e2e-09-read-decision-lingers')
+  await rail(panel, 'Needs Action').click()
+  await expect(panel.locator('.hib-row')).toHaveCount(0)
+  expect(await railBadge(panel, 'Needs Action')).toBe(asks)
 
-  // A fresh page has none of the optimistic state: it judges by the SERVER's
-  // readAt (the phone reads letters too). Still inside the window, so the row is
-  // still listed — which is what proves the server stamp is carried and honoured
-  // (a missing stamp would read as "seen long ago" and drop the row here).
-  await page.reload()
-  await expect(page.locator('.main-page')).toBeVisible({ timeout: 30_000 })
-  const reopened = await openCenter(page)
-  await rail(reopened, 'Needs Action').click()
-  const rowAfterReload = envelope(reopened, GRACE_SUBJECT)
-  await expect(rowAfterReload).toBeVisible({ timeout: 15_000 })
-  await expect(rowAfterReload).not.toHaveClass(/hib-unread/)
-
-  // Five minutes on: the ONE armed timer moves the row out of Needs Action (no
-  // list refresh is involved), and it stays in the Inbox.
-  await page.clock.fastForward(DECISION_GRACE_MS + 2_000)
-  await expect(rowAfterReload).toHaveCount(0, { timeout: 15_000 })
-  await expect(rail(reopened, 'Needs Action')).toHaveAttribute('aria-current', 'true')
-  await openInbox(reopened)
-  await expect(envelope(reopened, GRACE_SUBJECT)).toBeVisible()
-  await expect(envelope(reopened, GRACE_SUBJECT)).not.toHaveClass(/hib-unread/)
-  await shot(page, 'e2e-10-read-decision-left-needs-action')
-
-  // Mark unread puts the decision back: listed again, and counted again.
-  const after = await railBadge(reopened, 'Needs Action')
-  await rowButton(envelope(reopened, GRACE_SUBJECT), 'Mark unread').click()
-  await expect(envelope(reopened, GRACE_SUBJECT)).toHaveClass(/hib-unread/)
-  await rail(reopened, 'Needs Action').click()
-  await expect(envelope(reopened, GRACE_SUBJECT)).toBeVisible({ timeout: 15_000 })
-  await expect.poll(() => railBadge(reopened, 'Needs Action'), { timeout: 10_000 })
-    .toBeGreaterThanOrEqual(after + 1)
-  await shot(page, 'e2e-11-mark-unread-restores-decision')
+  // Mark unread from the Inbox: back to unread there, still nothing in Needs Action.
+  await openInbox(panel)
+  await rowButton(row, 'Mark unread').click()
+  await expect(row).toHaveClass(/hib-unread/)
+  await rail(panel, 'Needs Action').click()
+  await expect(panel.locator('.hib-row')).toHaveCount(0)
+  expect(await railBadge(panel, 'Needs Action')).toBe(asks)
+  await shot(page, 'e2e-10-decision-only-in-inbox')
 
   expect(pageErrors, `uncaught page errors: ${pageErrors.join(' | ')}`).toEqual([])
 })

@@ -3,8 +3,10 @@
  * rail + detail pair (same shape as ViewDropdown's receipt body).
  *
  * The rail sorts the feed by WHAT THE USER HAS TO DO:
- *   Needs Action — pending permission asks, answerable right here
- *   Inbox        — letters agents wrote to the human (read in the LetterReader)
+ *   Needs Action — what a session is asking live (a pending permission or
+ *                  question), answerable right here. Never a letter.
+ *   Inbox        — letters agents wrote to the human (read in the LetterReader),
+ *                  decision letters included, with their buttons
  *   Errors       — operation errors (with the server's ×N occurrence folding),
  *                  led by what is broken right now (NotificationProblems)
  *   Automation   — cron / skill / hook receipts
@@ -54,14 +56,13 @@ import { log } from '@/utils/log';
 import { ICON_CHEVRON_DOWN, ICON_CHEVRON_RIGHT } from './Icons';
 import { useHumanInbox } from '@/hooks/useHumanInbox';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
-import { LetterEnvelopeRow } from '@/components/inbox/LetterEnvelopeRow';
 import { InboxPane } from '@/components/inbox/InboxPane';
 import { LetterReader } from '@/components/inbox/LetterReader';
 import {
-  filterInboxLetters, nextDecisionGraceExpiry, readUnreadOnlyPref, writeUnreadOnlyPref,
+  filterInboxLetters, readUnreadOnlyPref, writeUnreadOnlyPref,
 } from '@/components/inbox/inbox-filter';
 import {
-  isOpenDecision, setLetterArchived, setLetterPinned, setLetterRead,
+  setLetterArchived, setLetterPinned, setLetterRead,
   type LetterEnvelope,
 } from '@/api/human-inbox';
 
@@ -209,8 +210,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   readerOpenRef.current = !!openLetterId;
 
   // Counts read the LIVE letters, never the current view: with Archived open the
-  // view holds only archived rows, which badged the Inbox 0 and made Needs Action
-  // forget the decisions it is there to surface.
+  // view holds only archived rows, which badged the Inbox 0.
   const counts = useMemo(() => sectionCounts(feed, inbox.liveLetters), [feed, inbox.liveLetters]);
 
   // Letter mutations: patch locally (the panel must feel instant), call the
@@ -224,7 +224,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
       setKeptReadIds(prev => (prev.has(id) ? prev : new Set(prev).add(id)));
     }
     // The store stamps `readAt` on the flip (letter-store.ts mergeLetterPatch):
-    // that is the clock behind a read decision's Needs Action grace window.
+    // that is the clock behind a read decision's grace window (isOpenDecision).
     void inboxRef.current.applyChange(id, { read }, () => setLetterRead(id, read), 'read');
   }, [markLocalRead]);
 
@@ -296,33 +296,6 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
     return [...pool].sort((a, b) => effectiveTs(b) - effectiveTs(a));
   }, [feed, section, hostCardIds]);
 
-  // An unanswered action_required letter blocks work exactly like a permission
-  // ask, so it is counted into Needs Action — and therefore has to be LISTED
-  // there too: a badge whose section shows nothing is how a decision gets lost.
-  //
-  // A decision the human has READ stays listed for DECISION_SEEN_GRACE_MS after
-  // the read (the badge already dropped it), then leaves for the Inbox. `graceNow`
-  // is the clock those rows are judged against: re-taken on every open, and
-  // advanced by ONE timer armed for the next expiry, so a row leaves on time with
-  // the panel left open and nothing polls when no row is in its window.
-  const [graceNow, setGraceNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (open) setGraceNow(Date.now());
-  }, [open]);
-  useEffect(() => {
-    const next = nextDecisionGraceExpiry(inbox.liveLetters, graceNow);
-    if (next === null) return;
-    const timer = setTimeout(() => setGraceNow(Date.now()), Math.max(0, next - Date.now()) + 50);
-    return () => clearTimeout(timer);
-  }, [inbox.liveLetters, graceNow]);
-  // Judged against `graceNow` ONLY (never a fresh Date.now() in render): the
-  // armed timer is the one thing that moves a row out, so a timer that failed
-  // to fire shows up as a row that stays, instead of being papered over by the
-  // next unrelated list refresh.
-  const decisionLetters = useMemo(
-    () => inbox.liveLetters.filter(l => isOpenDecision(l, graceNow)),
-    [inbox.liveLetters, graceNow],
-  );
   const inboxRows = useMemo(
     () => filterInboxLetters(inbox.letters, unreadOnly, keptReadIds),
     [inbox.letters, unreadOnly, keptReadIds],
@@ -634,7 +607,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
                 onToggleArchive={toggleLetterArchive}
                 onToggleRead={(l) => markLetterRead(l.id, !l.read)}
               />
-            ) : groups.length === 0 && !problems && !(section === 'action' && decisionLetters.length > 0) ? (
+            ) : groups.length === 0 && !problems ? (
               <div className="notification-feed-empty">{EMPTY_TEXT[section]}</div>
             ) : errorBlocks ? (
               /* Errors: one block per ROOT CAUSE, then one per CATEGORY. The
@@ -715,23 +688,6 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
             ) : (
               <div className="notification-feed">
                 {problems}
-                {/* Letters awaiting a decision sit ABOVE the permission cards in
-                    Needs Action: they are the asks that survived the session
-                    going idle, so they are the oldest debt in the section. */}
-                {section === 'action' && decisionLetters.length > 0 && (
-                  <div className="hib-list">
-                    {decisionLetters.map(letter => (
-                      <LetterEnvelopeRow
-                        key={letter.id}
-                        letter={letter}
-                        onOpen={() => openLetter(letter.id)}
-                        onTogglePin={() => toggleLetterPin(letter)}
-                        onToggleArchive={() => toggleLetterArchive(letter)}
-                        onToggleRead={() => markLetterRead(letter.id, !letter.read)}
-                      />
-                    ))}
-                  </div>
-                )}
                 <FeedGroups
                   groups={groups}
                   expandedGroups={expandedGroups}
@@ -772,7 +728,7 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
 const PHONE_TOOL_TITLES: Record<string, string> = { AskUserQuestion: 'Question', ExitPlanMode: 'Plan review' };
 
 const EMPTY_TEXT: Record<NotificationSection, string> = {
-  action: 'Nothing waiting on you',
+  action: 'No session is asking you anything',
   inbox: 'No letters yet',
   errors: 'No errors',
   automation: 'No automation activity',

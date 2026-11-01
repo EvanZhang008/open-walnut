@@ -190,7 +190,7 @@ describe('sectionCounts', () => {
     expect(counts.inboxTotal).toBe(2);
   });
 
-  it('prefers the letter store list, skips archived, and adds unanswered decisions to Needs Action', () => {
+  it('prefers the letter store list, skips archived, and never counts a letter in Needs Action', () => {
     const counts = sectionCounts(feed, [
       { type: 'action_required', read: false },
       { type: 'action_required', read: true, answered: { actionId: 'a' } },
@@ -199,18 +199,9 @@ describe('sectionCounts', () => {
     ]);
     expect(counts.inboxTotal).toBe(3);   // the archived one is not in the feed
     expect(counts.inbox).toBe(2);        // two unread, non-archived
-    expect(counts.action).toBe(3);       // 2 pending permissions + the 1 open decision
-  });
-
-  it('a READ but unanswered decision has left the Needs Action badge (the human took it on)', () => {
-    // A Slack ask the human read and handled in Slack never gets a button click
-    // here; counting it kept the rail at 15 with nothing new in it. The panel
-    // still LISTS it for a grace window (tests/web/inbox-filter.test.ts).
-    const counts = sectionCounts(feed, [
-      { type: 'action_required', read: true },
-      { type: 'action_required', read: false, archived: true },
-    ]);
-    expect(counts.action).toBe(2);       // just the 2 pending permissions
+    // Just the 2 pending permissions: an unread decision letter is Inbox mail,
+    // never a live ask (2026-11-01, the user: Needs Action and Inbox are two things).
+    expect(counts.action).toBe(2);
   });
 
   it('an EXPIRED permission stops inflating the Needs Action badge', () => {

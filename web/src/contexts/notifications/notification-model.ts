@@ -129,9 +129,13 @@ export interface LetterCountable {
  * `letters` (the letter store's own list) is optional and AUTHORITATIVE when
  * given: read/pin/archive live there, and the 200-entry feed can have dropped a
  * durable letter's envelope entirely. Without it the feed's letter envelopes are
- * used as a stand-in so the Inbox badge is right before the list loads. An
- * UNREAD, unanswered action_required letter also counts into Needs Action — it
- * blocks work like a permission ask does, until the human has looked at it.
+ * used as a stand-in so the Inbox badge is right before the list loads.
+ *
+ * Needs Action is ONLY what a session is asking live: a pending permission or
+ * question (AskUserQuestion rides the permission kind). A letter, a decision
+ * letter (action_required) included, never counts there: it is Inbox mail, with
+ * its buttons in the Inbox (2026-11-01, the user: Needs Action and Inbox are two
+ * separate things). tests/web/needs-action-live-asks-only.test.ts guards this.
  */
 export function sectionCounts(feed: Notification[], letters?: LetterCountable[]): SectionCounts {
   const counts: SectionCounts = {
@@ -154,11 +158,6 @@ export function sectionCounts(feed: Notification[], letters?: LetterCountable[])
       if (l.archived) continue;
       counts.inboxTotal++;
       if (!l.read) counts.inbox++;
-      // A decision counts while it is UNSEEN: reading it is the human taking it
-      // on (isUnseenDecision in api/human-inbox.ts has the reasoning). The panel
-      // still LISTS a just-read one for a grace window, but the number drops at
-      // once — the same relation the Inbox badge has to the Inbox list.
-      if (l.type === 'action_required' && !l.answered && !l.read) counts.action++;
     }
   }
   return counts;
@@ -176,10 +175,8 @@ export function sectionCounts(feed: Notification[], letters?: LetterCountable[])
  * state). Feed-only derivation — the sidebar has no letter store; envelope
  * read state follows the store via markLocalRead.
  *
- * The panel's Needs Action rail agrees on letters: a READ but UNANSWERED
- * action_required letter counts in neither (sectionCounts drops it once read,
- * the same moment its envelope leaves this badge). It used to keep counting in
- * the rail, which left the rail at 15 with nothing new in it.
+ * A letter counts here once, as unread Inbox mail (a decision letter too):
+ * Needs Action never counts a letter, so nothing is counted twice.
  */
 export function attentionBadgeCount(feed: Notification[]): number {
   const c = sectionCounts(feed);

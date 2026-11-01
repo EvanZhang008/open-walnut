@@ -187,7 +187,7 @@ struct Letter: Codable, Identifiable, Equatable {
     static let decisionSeenGraceMs: Double = 5 * 60 * 1000
 
     /// A decision the human has not looked at yet: what the Action needed COUNT
-    /// holds (the console's `isUnseenDecision`, the Needs Action badge rule).
+    /// holds (the console's `isUnseenDecision`).
     /// Reading a decision is taking it on, so the count drops the moment it is read.
     var isUnseenDecision: Bool { isAwaitingDecision && !isRead }
 

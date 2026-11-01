@@ -1,11 +1,11 @@
 /**
- * Needs Action for letters, and the Inbox Unread filter.
+ * Open decision letters, and the Inbox Unread filter.
  *
- * Two rules the notification panel renders from pure functions:
- *   1. A decision letter the human has READ leaves the Needs Action badge at once
- *      and the Needs Action list after DECISION_SEEN_GRACE_MS (isUnseenDecision /
- *      isOpenDecision). Before this, a Slack ask the human read and handled in
- *      Slack sat in the rail forever: it never gets a button click here.
+ * Two rules rendered from pure functions:
+ *   1. A decision letter the human has READ stops being unseen at once and stops
+ *      being open after DECISION_SEEN_GRACE_MS (isUnseenDecision / isOpenDecision;
+ *      the phone Inbox's Action needed chip and the Org answer cards read them).
+ *      A letter never counts in Needs Action at all (needs-action-live-asks-only.test.ts).
  *   2. The Inbox "Unread" filter keeps the letter the human just opened on the
  *      list until the filter flips (filterInboxLetters), so a row never vanishes
  *      from under the cursor.
@@ -16,7 +16,7 @@ import {
   isUnseenDecision, type LetterEnvelope,
 } from '../../web/src/api/human-inbox';
 import {
-  INBOX_UNREAD_ONLY_KEY, filterInboxLetters, nextDecisionGraceExpiry, readUnreadOnlyPref,
+  INBOX_UNREAD_ONLY_KEY, filterInboxLetters, readUnreadOnlyPref,
   writeUnreadOnlyPref,
 } from '../../web/src/components/inbox/inbox-filter';
 import { sectionCounts } from '../../web/src/contexts/notifications/notification-model';
@@ -100,57 +100,12 @@ describe('a decision the human has read', () => {
     expect(DECISION_SEEN_GRACE_MS).toBe(5 * 60 * 1000);
   });
 
-  it('the rail count and isUnseenDecision agree on EVERY combination', () => {
-    // sectionCounts cannot import api/human-inbox (it must stay free of the API
-    // client), so it inlines the rule; this matrix is what keeps the two copies
-    // one rule. Every axis that appears in either implementation is enumerated.
-    const answeredAt = { actionId: 'ok', label: 'OK', at: NOW };
-    let combos = 0;
-    for (const type of ['action_required', 'info', 'review', 'completion'] as const) {
-      for (const read of [false, true]) {
-        for (const answered of [undefined, answeredAt]) {
-          for (const archived of [false, true]) {
-            for (const readAt of [undefined, NOW - 1, NOW - DECISION_SEEN_GRACE_MS - 1]) {
-              const l = letter({
-                id: `m-${combos++}`, type, read, archived,
-                ...(answered ? { answered } : {}),
-                ...(readAt !== undefined ? { readAt } : {}),
-              });
-              expect(sectionCounts([], [l]).action, JSON.stringify(l)).toBe(isUnseenDecision(l) ? 1 : 0);
-            }
-          }
-        }
-      }
-    }
-    expect(combos).toBe(4 * 2 * 2 * 2 * 3);
-  });
-
-  it('drops off the Needs Action rail count with the same rule', () => {
+  it('never counts in Needs Action; the Inbox count is plain unread', () => {
     const counts = sectionCounts([], [unread, justRead, readLongAgo, answered, archived, info]);
-    expect(counts.action).toBe(1);
-    // …while the Inbox count is plain unread, as before (archived excluded).
+    expect(counts.action).toBe(0);
+    // The Inbox count is plain unread, as before (archived excluded).
     expect(counts.inbox).toBe(2);
     expect(counts.inboxTotal).toBe(6 - 1);
-  });
-});
-
-describe('the one timer behind the grace window', () => {
-  it('picks the EARLIEST deadline still ahead', () => {
-    const a = letter({ id: 'a', read: true, readAt: NOW - 60_000 });
-    const b = letter({ id: 'b', read: true, readAt: NOW - 10_000 });
-    expect(nextDecisionGraceExpiry([b, a], NOW)).toBe(NOW - 60_000 + DECISION_SEEN_GRACE_MS);
-  });
-
-  it('skips deadlines already passed and letters with none', () => {
-    const past = letter({ id: 'past', read: true, readAt: NOW - DECISION_SEEN_GRACE_MS - 5 });
-    const unread = letter({ id: 'unread' });
-    expect(nextDecisionGraceExpiry([past, unread], NOW)).toBeNull();
-    expect(nextDecisionGraceExpiry([], NOW)).toBeNull();
-  });
-
-  it('a deadline exactly now is not ahead (the row is already closed)', () => {
-    const edge = letter({ id: 'edge', read: true, readAt: NOW - DECISION_SEEN_GRACE_MS });
-    expect(nextDecisionGraceExpiry([edge], NOW)).toBeNull();
   });
 });
 

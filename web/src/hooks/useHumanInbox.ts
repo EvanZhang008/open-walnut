@@ -96,7 +96,7 @@ export interface HumanInboxState {
   letters: LetterEnvelope[];
   /**
    * The live (non-archived) letters, whichever view is on screen — what the rail
-   * badge and Needs Action must count. Same array as `letters` in the live view.
+   * badges must count. Same array as `letters` in the live view.
    */
   liveLetters: LetterEnvelope[];
   /** Every letter this browser knows about, live shelf and archive alike: the

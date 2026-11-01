@@ -83,8 +83,8 @@ async function broadcast(name: string, data: unknown): Promise<void> {
 }
 
 /** The envelope record for a letter. Severity is always 'info': a letter is
- *  correspondence, and its urgency is carried by its TYPE (the Needs Action rail
- *  reads `action_required`), not by dressing the card up as an error. */
+ *  correspondence, and its urgency is carried by its TYPE (the Inbox's Action
+ *  needed badge reads `action_required`), not by dressing the card up as an error. */
 function envelopeFor(data: HumanInboxLetterEvent): NewNotification {
   const sessionId = data.senderSessionId && data.senderSessionId !== EXTERNAL_SENDER_SID
     ? data.senderSessionId

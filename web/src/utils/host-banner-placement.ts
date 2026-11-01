@@ -221,8 +221,8 @@ export function useHostAttentionNeeded(): boolean {
 }
 
 /**
- * The section the notification panel opens on: Needs Action while a human
- * decision waits, else All, which leads with what is broken right now (this
+ * The section the notification panel opens on: Needs Action while a session
+ * asks something live, else All, which leads with what is broken right now (this
  * machine's Claude Code, a host that cannot connect), so opening the bell for
  * its host reason shows the reason without a second click.
  */
