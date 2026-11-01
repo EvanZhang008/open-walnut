@@ -26,6 +26,8 @@ export interface McpOptions {
   readonly?: boolean
   /** Override the API base; defaults to OPEN_WALNUT_API_URL or 127.0.0.1:3456. */
   apiBase?: string
+  /** List only the core tools, and tool_help / tool_call for every other one (CORE_TOOL_NAMES). */
+  core?: boolean
 }
 
 /** Build a configured (but unconnected) MCP server — also the test entry point. */
@@ -54,7 +56,11 @@ export function createWalnutMcpServer(options: McpOptions = {}): McpServer {
         'COMPLETE means the whole task is finished. ' +
         'Never delete tasks unless the user explicitly asked. ' +
         'These tools were read when your session started: after a Walnut update, a field or tool that Walnut\'s ' +
-        'words name may be missing here, and `walnut tools call <tool> \'<json>\'` always runs the current one.',
+        'words name may be missing here, and `walnut tools call <tool> \'<json>\'` always runs the current one.' +
+        (options.core
+          ? ' Only the most used tools are listed. Every other Walnut tool (boards, triggers, folders, notes, hosts, ' +
+            'time and more) runs through tool_call; tool_help lists them all and shows one\'s arguments.'
+          : ''),
     },
   )
   registerWalnutTools(server, options)

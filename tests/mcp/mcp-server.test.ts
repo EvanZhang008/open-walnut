@@ -28,6 +28,7 @@ import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { createWalnutMcpServer, type McpOptions } from '../../src/mcp/server.js'
 import { opNames } from '../../src/ops/index.js'
+import { CORE_TOOL_NAMES } from '../../src/mcp/tools.js'
 
 let server: HttpServer
 let port: number
@@ -149,6 +150,85 @@ describe('walnut mcp — tool surface', () => {
     } finally {
       await close()
     }
+  })
+})
+
+// 2026-11-01: an engine with no on-demand tool loading (OpenCode on a local model) read
+// every op's schema, about 223 KB, on every model call. `--core` lists a few.
+describe('walnut mcp --core', () => {
+  it('lists only the core tools plus tool_help and tool_call, and every core name is a real op', async () => {
+    const { client, close } = await connect({ core: true })
+    try {
+      const names = (await client.listTools()).tools.map((t) => t.name).sort()
+      expect(names).toEqual([...CORE_TOOL_NAMES, 'tool_call', 'tool_help'].sort())
+      for (const n of CORE_TOOL_NAMES) expect(opNames(), `${n} is not an op`).toContain(n)
+    } finally { await close() }
+  })
+
+  it('the full list is far larger than the core one', async () => {
+    const full = await connect()
+    const core = await connect({ core: true })
+    try {
+      const size = async (c: Client) => JSON.stringify((await c.listTools()).tools).length
+      const [all, few] = [await size(full.client), await size(core.client)]
+      expect(few * 4).toBeLessThan(all)
+    } finally { await full.close(); await core.close() }
+  })
+
+  it('tool_help lists every op and shows one op\'s arguments', async () => {
+    const { client, close } = await connect({ core: true })
+    try {
+      const list = textOf(await client.callTool({ name: 'tool_help', arguments: {} }))
+      for (const n of opNames()) expect(list).toContain(`${n}: `)
+      const boards = textOf(await client.callTool({ name: 'tool_help', arguments: { filter: 'board' } }))
+      expect(boards).toContain('board_get: ')
+      expect(boards).not.toContain('task_list: ')
+      const one = jsonOf(await client.callTool({ name: 'tool_help', arguments: { name: 'project_list' } }))
+      expect(one.name).toBe('project_list')
+      expect((one.arguments as { type?: string }).type).toBe('object')
+      const none = await client.callTool({ name: 'tool_help', arguments: { name: 'no_such_tool' } })
+      expect(none.isError).toBe(true)
+    } finally { await close() }
+  })
+
+  it('tool_call runs an op the list leaves out, with args as an object or a JSON string', async () => {
+    const { client, close } = await connect({ core: true })
+    try {
+      const listed = (await client.listTools()).tools.map((t) => t.name)
+      expect(listed).not.toContain('walnut_status')
+      const a = await client.callTool({ name: 'tool_call', arguments: { name: 'walnut_status', args: {} } })
+      expect(a.isError).toBeFalsy()
+      const b = await client.callTool({ name: 'tool_call', arguments: { name: 'task_list', args: '{"limit":1}' } })
+      expect(b.isError).toBeFalsy()
+      expect(Array.isArray(jsonOf(b).tasks)).toBe(true)
+      // The engine-prefixed name a model may copy from its own tool list.
+      const c = await client.callTool({ name: 'tool_call', arguments: { name: 'walnut_task_list', args: { limit: 1 } } })
+      expect(c.isError).toBeFalsy()
+      // A client that calls an unlisted op by its own name still reaches it.
+      const direct = await client.callTool({ name: 'walnut_status', arguments: {} })
+      expect(direct.isError).toBeFalsy()
+      const bad = await client.callTool({ name: 'tool_call', arguments: { name: 'task_list', args: { query: 'x' } } })
+      expect(bad.isError).toBe(true)
+      expect(textOf(bad)).toContain('did you mean "q"?')
+    } finally { await close() }
+  })
+
+  it('with --readonly, tool_call refuses a write and tool_help does not list it', async () => {
+    const { client, close } = await connect({ core: true, readonly: true })
+    try {
+      const names = (await client.listTools()).tools.map((t) => t.name)
+      expect(names).toContain('tool_call')
+      expect(names).not.toContain('task_create')
+      const list = textOf(await client.callTool({ name: 'tool_help', arguments: {} }))
+      expect(list).not.toContain('task_create: ')
+      const refused = await client.callTool({ name: 'tool_call', arguments: { name: 'task_create', args: { record_only: true, title: 'core readonly' } } })
+      expect(refused.isError).toBe(true)
+      const directWrite = await client.callTool({ name: 'task_create', arguments: { record_only: true, title: 'core readonly' } })
+      expect(directWrite.isError).toBe(true)
+      const res = await fetch(`http://127.0.0.1:${port}/api/v1/tasks`)
+      const { tasks } = await res.json() as { tasks: Array<{ title: string }> }
+      expect(tasks.some((t) => t.title === 'core readonly')).toBe(false)
+    } finally { await close() }
   })
 })
 

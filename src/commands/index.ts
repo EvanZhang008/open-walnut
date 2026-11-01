@@ -289,6 +289,7 @@ export function registerCommands(program: Command): void {
     .command('mcp [args...]')
     .description('Start a stdio MCP server exposing Walnut tools; or `mcp list` / `mcp <server> tools list|help|call` for the MCP servers Walnut runs')
     .option('--readonly', 'Expose read-only tools only')
+    .option('--core', 'List only the most used tools, plus tool_help and tool_call that reach every other one')
     .option('--api-url <url>', 'Walnut server base URL (default: OPEN_WALNUT_API_URL or http://127.0.0.1:3456)')
     .allowUnknownOption(true)
     .action(async (args: string[] | undefined, options: Record<string, unknown>) => {
@@ -298,7 +299,7 @@ export function registerCommands(program: Command): void {
         return;
       }
       const { runMcp } = await import('./mcp.js');
-      await runMcp(options as { readonly?: boolean; apiUrl?: string });
+      await runMcp(options as { readonly?: boolean; apiUrl?: string; core?: boolean });
     });
 
   // The Plugin Store from a terminal (src/commands/plugins.ts).

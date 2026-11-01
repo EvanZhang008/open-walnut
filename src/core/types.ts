@@ -1508,6 +1508,11 @@ export interface Config {
      *  so they can call walnut task tools. Default false: the provider spawns
      *  the mount on the EXECUTION host, where `open-walnut` may not be on PATH. */
     acp_walnut_mcp?: boolean;
+    /** Which Walnut tools that mount lists: 'core' (the most used ones, plus tool_help and
+     *  tool_call for the rest) or 'all'. Default 'core' on every engine but Codex: the full
+     *  list is about 220 KB of schemas sent on every model call, which a local model on
+     *  OpenCode reads in full each turn (src/providers/acp-worker/protocol.ts walnutMcpToolSet). */
+    acp_walnut_tools?: 'core' | 'all';
     /** How many minutes an idle FIFO session stays alive before being auto-killed.
      *  Set to 0 to disable idle timeout entirely. Default: 30. */
     idle_timeout_minutes?: number;

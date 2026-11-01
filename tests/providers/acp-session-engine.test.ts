@@ -18,6 +18,7 @@ import {
   updateSessionRecord,
 } from '../../src/core/session-tracker.js';
 import { _resetForTesting } from '../../src/core/task-manager.js';
+import { updateConfig } from '../../src/core/config-manager.js';
 import { AcpSession, acpStartEnv, splitAcpModelId, engineEnvOverlayFromConfig } from '../../src/providers/acp-session.js';
 import { mergeAcpSpawnEnv } from '../../src/providers/acp-worker/protocol.js';
 import type { AcpCapabilitySnapshot } from '../../src/providers/acp-worker/protocol.js';
@@ -77,6 +78,31 @@ beforeEach(async () => {
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+describe('AcpSession walnut mount tool list', () => {
+  const mount = { name: 'walnut', command: '/x/walnut', args: ['/x/cli.js', 'mcp'], env: [] }
+  const coreOf = async (engine: string, walnutMcpServer?: typeof mount) => {
+    const session = new AcpSession({ taskId: '', project: '', cwd: '/tmp', mode: 'default', engine: engine as never, ...(walnutMcpServer ? { walnutMcpServer } : {}) })
+    const servers = await (session as unknown as { resolveMcpServerSet(): Promise<Array<{ env: Array<{ name: string; value: string }> }>> }).resolveMcpServerSet()
+    return servers.map((server) => server.env.some((entry) => entry.name === 'WALNUT_MCP_CORE' && entry.value === '1'))
+  }
+
+  it('an OpenCode lane or ask gets the core list, a Codex one the full list', async () => {
+    expect(await coreOf('opencode', mount)).toEqual([true])
+    expect(await coreOf('goose', mount)).toEqual([true])
+    expect(await coreOf('codex', mount)).toEqual([false])
+  })
+
+  it('the opt-in mount follows the same rule, and config acp_walnut_tools wins', async () => {
+    await updateConfig({ session: { acp_walnut_mcp: true } } as never)
+    expect(await coreOf('opencode')).toEqual([true])
+    expect(await coreOf('codex')).toEqual([false])
+    await updateConfig({ session: { acp_walnut_mcp: true, acp_walnut_tools: 'all' } } as never)
+    expect(await coreOf('opencode', mount)).toEqual([false])
+    await updateConfig({ session: { acp_walnut_mcp: true, acp_walnut_tools: 'core' } } as never)
+    expect(await coreOf('codex', mount)).toEqual([true])
+  })
+})
 
 describe('AcpSession executable configuration', () => {
   it('uses the configured executable override on cold establish and restart', async () => {

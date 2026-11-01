@@ -54,7 +54,7 @@ const ALLOW: Record<string, AllowSpec> = {
   hosts: { '*': { label: true, hostname: true, user: true, port: true, enabled: true, discovered: true } },
   session_limits: { '*': true },
   session: {
-    cron_policy: true, output_mode: true, acp_walnut_mcp: true, idle_timeout_minutes: true, max_idle: true,
+    cron_policy: true, output_mode: true, acp_walnut_mcp: true, acp_walnut_tools: true, idle_timeout_minutes: true, max_idle: true,
     permission_prompt: true, auto_approve_bypass: true, enabled_modes: true, stream_partial_messages: true, premount_walnut_mcp: true,
     turn_snapshots: { enabled: true, keep: true },
     turn_retry: { enabled: true, budget_hours: true, max_attempts: true, backoff_seconds: true, backoff_max_seconds: true },

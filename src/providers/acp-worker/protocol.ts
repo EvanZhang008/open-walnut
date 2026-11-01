@@ -124,6 +124,38 @@ export function resolveWalnutMcpServers(
   return [{ ...WALNUT_MCP_SERVER, args: [...WALNUT_MCP_SERVER.args], env: [] }]
 }
 
+/**
+ * Which Walnut tools an ACP engine's mount lists. Every tool's schema rides every model
+ * call: 131 tools measured 223,563 characters (about 56k tokens) on OpenCode, which a
+ * local model evaluates in full on each turn (2026-11-01: an Ask took 95 to 172 s on a
+ * 30B model). 'core' lists the most used ones plus tool_help and tool_call, which reach
+ * every other (src/mcp/tools.ts CORE_TOOL_NAMES), on every ACP engine but Codex (OpenCode,
+ * Goose, Gemini, a custom adapter). Codex keeps the full list: it runs a
+ * hosted model with a cached prompt, and its Main and lead lanes use the org tools most.
+ */
+export function walnutMcpToolSet(
+  engineId: string,
+  session?: { acp_walnut_tools?: unknown } | null,
+): 'core' | 'all' {
+  const set = session?.acp_walnut_tools
+  if (set === 'core' || set === 'all') return set
+  return engineId === 'codex' ? 'all' : 'core'
+}
+
+/** The env switch `walnut mcp` reads as `--core` (src/commands/mcp.ts). */
+export const WALNUT_MCP_CORE_ENV = 'WALNUT_MCP_CORE'
+
+/**
+ * The walnut mount asking for the core tool list. Through env, never argv: the opt-in
+ * mount runs whatever `open-walnut` the PATH holds, and an older one reads an unknown
+ * `--core` as an MCP client argument and exits, while it ignores an env var and lists
+ * every tool as before.
+ */
+export function withCoreWalnutTools(server: AcpMcpServer): AcpMcpServer {
+  const env = server.env.filter((entry) => entry.name !== WALNUT_MCP_CORE_ENV).map((entry) => ({ ...entry }))
+  return { ...server, args: [...server.args], env: [...env, { name: WALNUT_MCP_CORE_ENV, value: '1' }] }
+}
+
 /** `mcpServers` absent = no MCP servers, i.e. exactly the pre-mount behavior. */
 export interface NewSessionParams { cwd: string; mcpServers?: AcpMcpServer[] }
 export interface LoadSessionParams {

@@ -13,6 +13,8 @@ import { readJournal } from '../../src/providers/acp-worker/journal.js'
 import {
   WALNUT_MCP_SERVER,
   resolveWalnutMcpServers,
+  walnutMcpToolSet,
+  withCoreWalnutTools,
   snapshotAcpModels,
   snapshotAcpConfigOptions,
 } from '../../src/providers/acp-worker/protocol.js'
@@ -633,6 +635,26 @@ describe('MCP server mounts', () => {
     expect(resolveWalnutMcpServers({ acp_walnut_mcp: true })).toEqual([
       { name: 'walnut', command: 'open-walnut', args: ['mcp'], env: [] },
     ])
+  })
+
+  it('walnutMcpToolSet: core on every engine but Codex, and config wins', () => {
+    expect(walnutMcpToolSet('opencode', undefined)).toBe('core')
+    expect(walnutMcpToolSet('goose', {})).toBe('core')
+    expect(walnutMcpToolSet('codex', undefined)).toBe('all')
+    expect(walnutMcpToolSet('opencode', { acp_walnut_tools: 'all' })).toBe('all')
+    expect(walnutMcpToolSet('codex', { acp_walnut_tools: 'core' })).toBe('core')
+    expect(walnutMcpToolSet('opencode', { acp_walnut_tools: 'bogus' })).toBe('core')
+  })
+
+  it('withCoreWalnutTools asks through env, never argv (an older open-walnut exits on an unknown flag), once, on a copy', () => {
+    const bin = { name: 'walnut', command: '/x/walnut', args: ['/x/cli.js', 'mcp'], env: [{ name: 'A', value: '1' }] }
+    const core = withCoreWalnutTools(bin)
+    expect(core.args).toEqual(['/x/cli.js', 'mcp'])
+    expect(core.env).toEqual([{ name: 'A', value: '1' }, { name: 'WALNUT_MCP_CORE', value: '1' }])
+    expect(bin.env).toEqual([{ name: 'A', value: '1' }])
+    expect(withCoreWalnutTools(core).env).toEqual(core.env)
+    expect(withCoreWalnutTools(WALNUT_MCP_SERVER).args).toEqual(['mcp'])
+    expect(WALNUT_MCP_SERVER.env).toEqual([])
   })
 
   it('default (no mcpServers param): newSession sends an empty mcpServers list', async () => {

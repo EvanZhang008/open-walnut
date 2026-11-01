@@ -69,6 +69,8 @@ import {
   mergeAcpSpawnEnv,
   resolveWalnutMcpServers,
   snapshotAcpConfigOptions,
+  walnutMcpToolSet,
+  withCoreWalnutTools,
   snapshotAcpModels,
 } from './acp-worker/protocol.js'
 import {
@@ -1140,33 +1142,34 @@ export class AcpSession {
   }
 
   private async resolveMcpServerSet(): Promise<AcpMcpServer[]> {
-    if (this.cfg.walnutMcpServer) {
-      if (this.engineId === 'pi') throw new Error('Pi does not support MCP mounts; use the walnut CLI instead.')
-      return [{
-        ...this.cfg.walnutMcpServer,
-        args: [...this.cfg.walnutMcpServer.args],
-        env: this.cfg.walnutMcpServer.env.map((entry) => ({ ...entry })),
-      }]
-    }
+    let session: { acp_walnut_mcp?: boolean; acp_walnut_tools?: unknown } | undefined
     try {
       const { getConfig } = await import('../core/config-manager.js')
-      const config = await getConfig()
-      // Read structurally: the field is optional and additive in Config.
-      const servers = resolveWalnutMcpServers(
-        config.session as { acp_walnut_mcp?: boolean } | undefined,
-      )
-      if (this.engineId === 'pi' && servers.length > 0) {
-        log.session.warn('Pi does not support MCP mounts; the walnut CLI remains available', { runtimeId: this.runtimeId })
-        return []
-      }
-      return servers
+      // Read structurally: both fields are optional and additive in Config.
+      session = (await getConfig()).session as typeof session
     } catch (error) {
-      log.session.debug('acp: MCP mount config unreadable — mounting none', {
+      log.session.debug('acp: MCP mount config unreadable', {
         runtimeId: this.runtimeId,
         error: error instanceof Error ? error.message : String(error),
       })
+    }
+    const toolSet = (servers: AcpMcpServer[]): AcpMcpServer[] =>
+      walnutMcpToolSet(this.engineId, session) === 'core' ? servers.map(withCoreWalnutTools) : servers
+    if (this.cfg.walnutMcpServer) {
+      if (this.engineId === 'pi') throw new Error('Pi does not support MCP mounts; use the walnut CLI instead.')
+      return toolSet([{
+        ...this.cfg.walnutMcpServer,
+        args: [...this.cfg.walnutMcpServer.args],
+        env: this.cfg.walnutMcpServer.env.map((entry) => ({ ...entry })),
+      }])
+    }
+    // An unreadable config means no mounts, never a failed start.
+    const servers = resolveWalnutMcpServers(session)
+    if (this.engineId === 'pi' && servers.length > 0) {
+      log.session.warn('Pi does not support MCP mounts; the walnut CLI remains available', { runtimeId: this.runtimeId })
       return []
     }
+    return toolSet(servers)
   }
 
   /**
