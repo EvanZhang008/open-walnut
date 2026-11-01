@@ -72,6 +72,20 @@ final class FileSourceLinesViewTests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(seconds))
     }
 
+    /// The window once the anchor highlight has drawn, or as it is after `seconds`.
+    /// The flash lights about 0.41 s after the view appears (60 + 250 + 100 ms of
+    /// task sleeps) and holds 2.2 s; one fixed wait read it before it lit on a slow
+    /// runner (run 41250878827: 0 warm pixels at 0.8 s), so this looks every 0.1 s.
+    private func snapshotOnceDrawn(_ window: UIWindow, within seconds: TimeInterval = 2.5) -> CGImage {
+        let deadline = Date().addingTimeInterval(seconds)
+        var image = snapshot(window)
+        while warmPixelCount(image) <= 200, Date() < deadline {
+            pump(0.1)
+            image = snapshot(window)
+        }
+        return image
+    }
+
     private func snapshot(_ window: UIWindow) -> CGImage {
         let renderer = UIGraphicsImageRenderer(size: window.bounds.size)
         let image = renderer.image { _ in
@@ -129,8 +143,7 @@ final class FileSourceLinesViewTests: XCTestCase {
         }
         let (window, _) = host(Control())
         defer { release(window) }
-        pump(0.3)
-        let warm = warmPixelCount(snapshot(window))
+        let warm = warmPixelCount(snapshotOnceDrawn(window))
         XCTAssertGreaterThan(warm, 500_000,
                              "the harness is blind — every other assertion in this file is meaningless (warm pixels: \(warm))")
     }
@@ -140,9 +153,8 @@ final class FileSourceLinesViewTests: XCTestCase {
     func testAnchoredLineHighlightDrawsDuringTheFlashWindow() {
         let (window, _) = host(FileSourceLinesView(content: fixture(lines: 40), anchorLine: 5))
         defer { release(window) }
-        // Past the 60ms pre-scroll delay, far short of the 2.2s fade.
-        pump(0.8)
-        let image = snapshot(window)
+        // Inside the flash window: after the pre-scroll delays, before the 2.2s fade.
+        let image = snapshotOnceDrawn(window)
         save(image, as: "flash-short-anchor5")
         let warm = warmPixelCount(image)
         XCTAssertGreaterThan(warm, 200,
@@ -157,8 +169,7 @@ final class FileSourceLinesViewTests: XCTestCase {
     func testAnchoredLineHighlightSurvivesTheLazyScrollDownALongFile() {
         let (window, _) = host(FileSourceLinesView(content: fixture(lines: 400), anchorLine: 349))
         defer { release(window) }
-        pump(1.0)
-        let image = snapshot(window)
+        let image = snapshotOnceDrawn(window)
         save(image, as: "flash-long-anchor349")
         let warm = warmPixelCount(image)
         XCTAssertGreaterThan(warm, 200,
@@ -176,8 +187,7 @@ final class FileSourceLinesViewTests: XCTestCase {
     func testHighlightFadesAfterTheFlashWindow() {
         let (window, _) = host(FileSourceLinesView(content: fixture(lines: 40), anchorLine: 5))
         defer { release(window) }
-        pump(0.8)
-        XCTAssertGreaterThan(warmPixelCount(snapshot(window)), 200, "precondition: it drew")
+        XCTAssertGreaterThan(warmPixelCount(snapshotOnceDrawn(window)), 200, "precondition: it drew")
         // 60ms + 250ms + 2.2s flash + 0.5s fade, plus slack.
         pump(3.6)
         let image = snapshot(window)
@@ -188,15 +198,13 @@ final class FileSourceLinesViewTests: XCTestCase {
 
     func testAnchorRangeHighlightsEveryLineInTheRange() {
         let (single, _) = host(FileSourceLinesView(content: fixture(lines: 40), anchorLine: 5))
-        pump(0.8)
-        let oneLine = warmPixelCount(snapshot(single))
+        let oneLine = warmPixelCount(snapshotOnceDrawn(single))
         release(single)
 
         let (range, _) = host(FileSourceLinesView(content: fixture(lines: 40),
                                                   anchorLine: 5, anchorEndLine: 9))
         defer { release(range) }
-        pump(0.8)
-        let image = snapshot(range)
+        let image = snapshotOnceDrawn(range)
         save(image, as: "flash-range-5-9")
         let fiveLines = warmPixelCount(image)
         XCTAssertGreaterThan(fiveLines, oneLine * 3,
@@ -297,8 +305,7 @@ final class FileSourceLinesViewTests: XCTestCase {
         let (window, _) = host(FileSourceLinesView(content: fixture(lines: 147), anchorLine: 146),
                                typeSize: .accessibility5)
         defer { release(window) }
-        pump(1.0)
-        let image = snapshot(window)
+        let image = snapshotOnceDrawn(window)
         save(image, as: "gutter-xxxl-147-lines")
         // The highlight lands on line 146, which also proves the anchor works at
         // this type size (row heights are ~3x, so the scroll distance differs).
@@ -312,8 +319,7 @@ final class FileSourceLinesViewTests: XCTestCase {
         let (window, _) = host(FileSourceLinesView(content: fixture(lines: 1_500), anchorLine: 1_421),
                                typeSize: .accessibility5)
         defer { release(window) }
-        pump(1.4)
-        let image = snapshot(window)
+        let image = snapshotOnceDrawn(window)
         save(image, as: "gutter-xxxl-1500-lines")
         XCTAssertGreaterThan(warmPixelCount(image), 200,
                              "line 1421 of a 1500-line file never highlighted at XXXL")

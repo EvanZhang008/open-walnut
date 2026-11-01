@@ -441,9 +441,15 @@ final class SessionPageOperationsTests: XCTestCase {
             DemoServer.shared.streams.subscriberCount(.session(session.id)) == 0
         }
         let beforeRequests = streamRequests(session.id)
+        let backgroundReads = transport.transcriptReads.count
         owner.setActive(true)
         await assertOneStream(session.id, afterRequests: beforeRequests)
-        await waitUntil("foreground transcript refresh to finish") { !store.transcriptRefreshPending }
+        // resume() starts its fresh read in a task of its own, so "no refresh pending" holds
+        // before that read begins: wait for the read itself, then for it to finish (run
+        // 41250878827 counted it after the capture, 3 reads for 2).
+        await waitUntil("foreground transcript refresh to finish") {
+            transport.transcriptReads.count > backgroundReads && !store.transcriptRefreshPending
+        }
         let currentReads = transport.transcriptReads.count
         gate.open()
         await operation.value

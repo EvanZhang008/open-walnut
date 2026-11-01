@@ -166,6 +166,29 @@ describe('WalnutTests waits', () => {
     expect('for _ in 0..<20 where x == nil {\n    await Task.yield()\n}'.match(BARE_YIELD_WAIT)).toHaveLength(1)
     expect('for _ in 0..<500 where x == nil { try? await Task.sleep(for: .milliseconds(10)) }'.match(BARE_YIELD_WAIT)).toBeNull()
   })
+
+  // A pixel test that pumps the run loop for a fixed time and then asserts that something
+  // DREW reads the screen at one moment the machine chooses. 2026-10-31 (run 41250878827):
+  // FileSourceLinesViewTests read 0 highlighted pixels at 0.8 s on a slow runner, where the
+  // highlight lights about 0.41 s in. Poll until it drew (snapshotOnceDrawn); a fixed pump
+  // stays fine before a check that nothing drew, or that it faded.
+  const FIXED_PUMP_THEN_DREW = /\bpump\([\d.]+\)\s*\n(?:[^\n]*\n){0,4}?[^\n]*XCTAssertGreaterThan\(/g
+  const fixedPumpDraws = (text: string) => [...text.matchAll(FIXED_PUMP_THEN_DREW)].filter((m) => !/snapshotOnceDrawn|XCTAssert(Equal|LessThan)/.test(m[0]))
+
+  it('no pixel test asserts a drawing after a fixed run loop pump', () => {
+    const offenders = fs.readdirSync(dir).filter((f) => f.endsWith('.swift')).flatMap((f) => {
+      const text = fs.readFileSync(path.join(dir, f), 'utf8')
+      return fixedPumpDraws(text).map((m) => `${f}:${text.slice(0, m.index).split('\n').length}`)
+    })
+    expect(offenders).toEqual([])
+  })
+
+  it('catches a fixed pump before a drew check, and lets a poll or a faded check through', () => {
+    expect(fixedPumpDraws('pump(0.8)\n        let image = snapshot(window)\n        let warm = warmPixelCount(image)\n        XCTAssertGreaterThan(warm, 200,')).toHaveLength(1)
+    expect(fixedPumpDraws('pump(0.8)\n        XCTAssertGreaterThan(warmPixelCount(snapshot(window)), 200)')).toHaveLength(1)
+    expect(fixedPumpDraws('pump(0.3)\n        let image = snapshotOnceDrawn(window)\n        XCTAssertGreaterThan(warmPixelCount(image), 200)')).toHaveLength(0)
+    expect(fixedPumpDraws('pump(3.6)\n        let warm = warmPixelCount(snapshot(window))\n        XCTAssertLessThan(warm, 50)')).toHaveLength(0)
+  })
 })
 
 describe('WalnutUITests menu taps', () => {
