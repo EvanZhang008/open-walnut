@@ -2001,7 +2001,10 @@ const runbookSections = Array.from({ length: 36 }, (_, i) => {
     + `so a stage that stopped halfway is easy to find and to restart from the same point.`
   const special = i === 2 ? '\n\nThe warm-up reads the newest snapshot before it opens the port.'
     : i === 17 ? '\n\nA compaction never starts while the ledger is being copied.'
-    : i === 33 ? '\n\nThe final check compares the row count with the snapshot header.' : ''
+    : i === 33 ? '\n\nThe final check compares the row count with the snapshot header.'
+    // Markup the rendered view hides (doc comments shown in both views).
+    : i === 9 ? '\n\nA **ledger copy** holds a [lock](./locks.md) until done.'
+    : i === 12 ? '\n\nRun `rb verify`, read **every** warning.' : ''
   const table = i % 4 === 1 ? `\n\n| Stage | Limit | Owner |\n| --- | --- | --- |\n| ${t} start | ${10 + i} min | on call |\n| ${t} verify | ${5 + i} min | on call |` : ''
   const code = i % 5 === 3 ? `\n\n\`\`\`sh\nrunbook ${t} --shard ${i} --dry-run\nrunbook ${t} --shard ${i}\n\`\`\`` : ''
   return `## ${i + 1}. ${t[0].toUpperCase()}${t.slice(1)} stage ${i + 1}\n\n${para(1)}${special}\n\n${para(2)}\n\n- Check the ${t} queue depth.\n- Pause the writers on shard ${i}.\n- Resume them after the stage ends.${table}${code}`

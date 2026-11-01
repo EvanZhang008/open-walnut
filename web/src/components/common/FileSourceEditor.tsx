@@ -79,6 +79,13 @@ export interface FileSourceEditorHandle {
    *  Optional: the WYSIWYG editor shares this handle type and has no lines. */
   /** `endLine`: flash `line`..`endLine` (a range reference) instead of one line. */
   scrollToLine?: (line: number, term?: string, endLine?: number) => void;
+  /** The main selection as document offsets, null when empty (CM surface only). */
+  selectionOffsets?: () => { from: number; to: number } | null;
+  /** A DOM Range over [from, to) of the document, clipped to the lines drawn now;
+   *  null when none of it is drawn (CodeMirror draws only the lines near the screen). */
+  rangeAt?: (from: number, to: number) => Range | null;
+  /** Scroll a document offset to the middle of the view. */
+  scrollToPos?: (pos: number) => void;
   /** In-file search (the shared FileSearchBar drives these; CM surface only). */
   searchUpdate?: (query: string, caseSensitive: boolean) => CmSearchStatus;
   searchNav?: (dir: 1 | -1) => CmSearchStatus;
@@ -233,6 +240,32 @@ export const FileSourceEditor = forwardRef<FileSourceEditorHandle, FileSourceEdi
           effects: EditorView.scrollIntoView(view.state.doc.line(line).from, { y: 'center' }),
         });
         cmFlashTerm(view, line, term, endLine);
+      },
+      selectionOffsets: () => {
+        const r = viewRef.current?.state.selection.main;
+        return r && !r.empty ? { from: r.from, to: r.to } : null;
+      },
+      rangeAt: (from: number, to: number) => {
+        const view = viewRef.current;
+        if (!view) return null;
+        const a = Math.max(from, view.viewport.from);
+        const b = Math.min(to, view.viewport.to);
+        if (b <= a) return null;
+        try {
+          const start = view.domAtPos(a);
+          const end = view.domAtPos(b);
+          const range = view.dom.ownerDocument.createRange();
+          range.setStart(start.node, start.offset);
+          range.setEnd(end.node, end.offset);
+          return range.collapsed ? null : range;
+        } catch {
+          return null;
+        }
+      },
+      scrollToPos: (pos: number) => {
+        const view = viewRef.current;
+        if (!view) return;
+        view.dispatch({ effects: EditorView.scrollIntoView(Math.min(pos, view.state.doc.length), { y: 'center' }) });
       },
       searchUpdate: (query, caseSensitive) =>
         viewRef.current ? cmUpdateSearch(viewRef.current, query, caseSensitive) : { count: 0, index: 0 },

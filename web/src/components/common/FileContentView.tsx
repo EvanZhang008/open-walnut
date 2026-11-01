@@ -1359,10 +1359,10 @@ export function FileContentView({
 
   // "Comment": a Google Docs style comment kept in the doc's sidecar file, its card
   // in a column beside the doc (DocCommentsLayer); it also waits above the
-  // composer for the next message. Not in the HTML preview (an iframe) or a sidecar.
+  // composer for the next message. Every view of a doc shows its comments, the HTML
+  // preview's same-origin frame included; never on a sidecar itself.
   const commentsApi = useSessionCommentsApi();
-  const canDocComment = commentsApi.canComment && !!sessionId && !isSidecarPath(filePath)
-    && threadSurface !== 'html' && threadSurface !== 'none';
+  const canDocComment = commentsApi.canComment && !!sessionId && !isSidecarPath(filePath) && threadSurface !== 'none';
   const docCommentsRef = useRef<DocCommentsHandle>(null);
   // The comment column wants its room beside the text (a wide view with comments in it).
   const [docCommentsRoom, setDocCommentsRoom] = useState(false);
@@ -1373,15 +1373,21 @@ export function FileContentView({
     const sel = window.getSelection();
     pillRangeRef.current = sel && !sel.isCollapsed && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
   }, []);
+  // The source editor's selection as document offsets, kept the same way.
+  const pillOffsetsRef = useRef<{ from: number; to: number } | null>(null);
   const onSourceSelect = useCallback((sel: Parameters<typeof setSelection>[0]) => {
     if (sel) keepPillRange();
+    pillOffsetsRef.current = sel ? editorRef.current?.selectionOffsets?.() ?? null : null;
     setSelection(sel);
   }, [keepPillRange]);
   const commentFromSelection = useCallback(() => {
     const range = pillRangeRef.current;
-    docCommentsRef.current?.commentOn({ ...(range ? { range } : {}), ...(selection?.text ? { text: selection.text } : {}) });
+    docCommentsRef.current?.commentOn({
+      ...(range ? { range } : {}), ...(selection?.text ? { text: selection.text } : {}), offsets: pillOffsetsRef.current,
+    });
     setSelection(null);
   }, [selection]);
+  const docTextNow = useCallback(() => editorRef.current?.getValue() ?? data?.content ?? null, [data?.content]);
 
   // HTML preview: the rendered page lives in a same-origin IFRAME, so the
   // outer mouseup handler never sees selections made inside it. Listen inside
@@ -1400,6 +1406,7 @@ export function FileContentView({
       const sel = doc.getSelection();
       const text = sel && !sel.isCollapsed && sel.rangeCount ? sel.toString().trim() : '';
       if (!text) { setSelection((prev) => (prev?.inHtml ? null : prev)); return; }
+      pillRangeRef.current = sel!.getRangeAt(0).cloneRange();
       // Anchor = the pointer at release, translated from iframe to top-viewport
       // coords — the pill hugs the cursor (side decided by SelectionAskPill).
       const box = frame.getBoundingClientRect();
@@ -2533,7 +2540,10 @@ export function FileContentView({
           sessionId={sessionId!}
           rootRef={contentRef}
           surfaceNonce={`${filePath}:${baseHash ?? ''}:${seedNonce}:${reloadToken}:${threadSurface}:${data.content?.length ?? 0}`}
-          virtualized={threadSurface === 'source'}
+          surface={threadSurface}
+          frameRef={htmlFrameRef}
+          editor={editorRef}
+          getDocText={docTextNow}
           onRoom={setDocCommentsRoom}
         />
       )}
@@ -2542,7 +2552,7 @@ export function FileContentView({
           anchor={selection}
           onCommit={commitSelection}
           onAskHere={canAskHere ? askHereFromSelection : undefined}
-          onComment={canDocComment && !selection.inHtml ? commentFromSelection : undefined}
+          onComment={canDocComment ? commentFromSelection : undefined}
           onDismiss={() => setSelection(null)}
           resolveRect={resolveSelectionRect}
           listenTo={selection.inHtml ? htmlFrameRef.current?.contentDocument : undefined}

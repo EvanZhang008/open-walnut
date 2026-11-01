@@ -16,6 +16,9 @@
  *                    listed as resolved by the AI
  *   edits            text added above a passage moves its card with it; words
  *                    taken out make the comment "changed"
+ *   both views       a comment made in the preview shows in the source on the
+ *                    same words (markup and all), and the other way round
+ *   the HTML preview Comment on a selection inside its frame, painted there
  *
  * Real pipeline on a long markdown runbook (test-server.ts: cache-runbook.md):
  * the file API, the session record, a send that reaches the mock CLI. The AI's
@@ -35,6 +38,8 @@ const SIDECAR = 'cache-runbook.md.comments.md'
 const TOP = 'The warm-up reads the newest snapshot before it opens the port.'
 const MIDDLE = 'A compaction never starts while the ledger is being copied.'
 const END = 'The final check compares the row count with the snapshot header.'
+const HTML_DOC = 'cache-report.html'
+const HTML_SIDECAR = 'cache-report.html.comments.md'
 
 async function shot(scope: Page | Locator, name: string): Promise<void> {
   const dir = `${process.env.WALNUT_TASK_DIR ?? '/tmp'}/shots/doc-comments/${test.info().project.name}`
@@ -66,6 +71,11 @@ async function openDoc(page: Page, name = DOC): Promise<{ panel: Locator; view: 
   await row.click()
   const view = explorer.locator('.file-content-view')
   await expect(view).toBeVisible({ timeout: 10_000 })
+  // The view remembers Preview or Source per file: a test that ended in Source must
+  // not open the next one there.
+  const preview = view.getByRole('button', { name: 'Preview', exact: true })
+  await expect(preview).toBeVisible()
+  if (!/\bactive\b/.test((await preview.getAttribute('class')) ?? '')) await preview.click()
   return { panel, view }
 }
 
@@ -117,6 +127,44 @@ async function dragSelect(page: Page, root: Locator, needle: string): Promise<vo
   await page.mouse.up()
 }
 
+/** Drag from the start of `from` to the end of `to` (two text nodes: across markup). */
+async function dragBetween(page: Page, root: Locator, from: string, to: string, offset = { x: 0, y: 0 }): Promise<void> {
+  const a = (await textRects(root, from))[0]
+  const bs = await textRects(root, to)
+  const b = bs[bs.length - 1]
+  await page.mouse.move(a.left + offset.x + 1, a.top + offset.y + a.height / 2)
+  await page.mouse.down()
+  await page.mouse.move((a.left + b.right) / 2 + offset.x, (a.top + b.top) / 2 + offset.y + a.height / 2, { steps: 4 })
+  await page.mouse.move(b.right + offset.x - 1, b.top + offset.y + b.height / 2, { steps: 4 })
+  await page.mouse.up()
+}
+
+/** Scroll the source editor until it has drawn `needle` (it draws only the lines near the screen). */
+async function scrollSourceTo(view: Locator, needle: string): Promise<void> {
+  const scroller = view.locator('.cm-scroller')
+  for (let k = 0; k < 80; k++) {
+    if (await view.locator('.cm-content').evaluate((el, p) => (el.textContent ?? '').includes(p), needle)) {
+      await centre(view.locator('.cm-content'), needle)
+      return
+    }
+    await scroller.evaluate((el) => { el.scrollTop += 500 })
+    await view.page().waitForTimeout(60)
+  }
+  throw new Error(`the source never drew "${needle}"`)
+}
+
+/** The words each range of a highlight covers, in the page or in the document of `scope` (a frame's). */
+const paintedText = (scope: Page | Locator, name: string): Promise<string[]> => {
+  const read = (n: string) => {
+    const h = (CSS as unknown as { highlights?: Map<string, Iterable<Range>> }).highlights?.get(n)
+    return h ? [...h].map((r) => r.toString()) : []
+  }
+  return 'mouse' in scope ? scope.evaluate(read, name) : scope.evaluate((_el, n) => {
+    const h = (CSS as unknown as { highlights?: Map<string, Iterable<Range>> }).highlights?.get(n)
+    return h ? [...h].map((r) => r.toString()) : []
+  }, name)
+}
+
 const cards = (view: Locator) => view.getByTestId('doc-comment-card')
 const chip = (view: Locator) => view.getByTestId('doc-comments-chip')
 const trayRows = (panel: Locator) => panel.getByTestId('pending-comment-row')
@@ -147,7 +195,8 @@ async function expectBeside(view: Locator, card: Locator, root: Locator, needle:
   expect(cb.x).toBeGreaterThan(passage.left)
   expect(cb.x + cb.width).toBeLessThanOrEqual(vb.x + vb.width + 1)
   // The text keeps clear of the column (the wide view reserves its room).
-  const textRight = await root.evaluate((el) => el.getBoundingClientRect().right)
+  // (A source editor's lines run on to the side inside its scroller: the scroller's edge.)
+  const textRight = await root.evaluate((el) => (el.closest('.cm-scroller') ?? el).getBoundingClientRect().right)
   expect(textRight).toBeLessThanOrEqual(cb.x + 1)
 }
 
@@ -190,6 +239,7 @@ test.describe('Doc comments: beside the doc, in its sidecar, to the AI with the 
     if (docPath) {
       await fs.writeFile(docPath, original)
       await fs.rm(path.join(path.dirname(docPath), SIDECAR), { force: true })
+      await fs.rm(path.join(path.dirname(docPath), HTML_SIDECAR), { force: true })
     }
   })
 
@@ -425,5 +475,112 @@ test.describe('Doc comments: beside the doc, in its sidecar, to the AI with the 
     await expect(chip(view)).toHaveText('2 comments')
     await expect.poll(async () => fs.readFile(sidecarPath, 'utf8')).toContain('From the source view.')
     await shot(view, '06-source')
+  })
+
+  test('every comment shows in both views on the same words: made in the preview, seen in the source, and the other way round', async ({ page }) => {
+    await page.setViewportSize({ width: 1720, height: 960 })
+    const { view } = await openDoc(page)
+    const editor = view.locator('.fv-wysiwyg-editor .ProseMirror')
+    await expect(editor).toContainText('A ledger copy holds a lock until done.')
+    const sidecarPath = path.join(path.dirname(docPath), SIDECAR)
+
+    // In the preview, on words that carry markup in the source (bold, a link).
+    await centre(editor, 'until done')
+    await dragBetween(page, editor, 'ledger copy', 'until done')
+    await page.getByTestId('bubble-comment').dispatchEvent('mousedown')
+    await view.getByTestId('doc-comment-draft-input').fill('Who removes the lock?')
+    await view.getByTestId('doc-comment-draft-input').press('Enter')
+    await expect(cards(view)).toHaveCount(1)
+    await expect.poll(() => paintedText(page, 'walnut-doc-comment-current')).toEqual(['ledger copy holds a lock until done'])
+    await expect.poll(async () => fs.readFile(sidecarPath, 'utf8').catch(() => '')).toContain('Who removes the lock?')
+
+    // The source: the comment is there although its lines are not drawn yet (not "changed").
+    await view.getByRole('button', { name: 'Source', exact: true }).click()
+    const source = view.locator('.cm-content')
+    await expect(source).toBeVisible()
+    await expect(chip(view)).toHaveText('1 comment')
+    await chip(view).click()
+    await view.getByTestId('doc-comments-list-row').getByRole('button').first().click()
+    // Scrolled to it, its words painted with their markup, the card beside them.
+    await expect.poll(() => paintedText(page, 'walnut-doc-comment-current'))
+      .toEqual(['ledger copy** holds a [lock](./locks.md) until done'])
+    const card = cards(view).first()
+    await expect(card).toHaveClass(/is-current/)
+    await expect(card.getByTestId('doc-comment-post')).toHaveText(/Who removes the lock\?/)
+    await expectBeside(view, card, source, 'until done')
+    await shot(view, '07-preview-comment-in-source')
+
+    // A comment made in the source, on markup: seen in the preview on the rendered words.
+    await scrollSourceTo(view, 'warning.')
+    await dragBetween(page, source, 'rb verify', 'warning.')
+    await page.getByTestId('file-comment').click()
+    await view.getByTestId('doc-comment-draft-input').fill('Does verify stop on a warning?')
+    await view.getByTestId('doc-comment-draft-input').press('Enter')
+    await expect(chip(view)).toHaveText('2 comments')
+    await expect.poll(() => paintedText(page, 'walnut-doc-comment-current'))
+      .toEqual(['rb verify`, read **every** warning.'])
+    await expect.poll(async () => fs.readFile(sidecarPath, 'utf8')).toContain('Does verify stop on a warning?')
+
+    await view.getByRole('button', { name: 'Preview', exact: true }).click()
+    await expect(editor).toBeVisible()
+    await expect(chip(view)).toHaveText('2 comments')
+    await expect.poll(async () => [...await paintedText(page, 'walnut-doc-comment'), ...await paintedText(page, 'walnut-doc-comment-current')].sort())
+      .toEqual(['ledger copy holds a lock until done', 'rb verify, read every warning'])
+    await clickWords(page, editor, 'warning.')
+    const fromSource = view.locator('[data-testid="doc-comment-card"].is-current')
+    await expect(fromSource.getByTestId('doc-comment-post')).toHaveText(/Does verify stop on a warning\?/)
+    await expectBeside(view, fromSource, editor, 'rb verify')
+    await shot(view, '08-source-comment-in-preview')
+    // Neither is listed as changed or as kept in one view.
+    await chip(view).click()
+    await expect(view.getByTestId('doc-comments-list-row')).toHaveCount(2)
+    await expect(view.getByTestId('doc-comments-list-row')).not.toContainText(['Words changed'])
+  })
+
+  test('the HTML preview: Comment on a selection in its frame, painted there beside its card, and seen in its source', async ({ page }) => {
+    await page.setViewportSize({ width: 1720, height: 960 })
+    const { view } = await openDoc(page, HTML_DOC)
+    const frameEl = view.locator('.fv-html-preview')
+    const frame = view.frameLocator('.fv-html-preview')
+    const body = frame.locator('body')
+    await expect(body).toContainText('412 million', { timeout: 15_000 })
+    const at = async () => { const b = (await frameEl.boundingBox())!; return { x: b.x, y: b.y } }
+
+    // Across the page's own markup (<strong>), the pill's Comment.
+    await dragBetween(page, body, '412 million', 'reads this week', await at())
+    await page.getByTestId('file-comment').click()
+    const input = view.getByTestId('doc-comment-draft-input')
+    await expect(input).toBeFocused()
+    await input.fill('Is that a weekly record?')
+    await input.press('Enter')
+    await expect(cards(view)).toHaveCount(1)
+    const sidecarPath = path.join(path.dirname(docPath), HTML_SIDECAR)
+    await expect.poll(async () => fs.readFile(sidecarPath, 'utf8').catch(() => '')).toContain('Is that a weekly record?')
+    // Painted in the frame's own document; the card beside, the frame giving up the room.
+    await expect.poll(() => paintedText(body, 'walnut-doc-comment-current')).toEqual(['412 million reads this week'])
+    await expect(view).toHaveClass(/fv-doc-comments-wide/)
+    const card = cards(view).first()
+    const passage = (await textRects(body, '412 million'))[0]
+    const fb = await at()
+    const cb = (await card.boundingBox())!
+    expect(Math.abs(cb.y - (passage.top + fb.y)), `card at ${cb.y}, passage at ${passage.top + fb.y}`).toBeLessThan(14)
+    const frameRight = (await frameEl.boundingBox())!
+    expect(frameRight.x + frameRight.width).toBeLessThanOrEqual(cb.x + 1)
+    await shot(view, '09-html-preview')
+
+    // A click elsewhere in the page lets the card go; a click on its words brings it back.
+    const other = (await textRects(body, 'Median flush latency'))[0]
+    await page.mouse.click(fb.x + other.left + 20, fb.y + other.top + other.height / 2)
+    await expect(view.locator('[data-testid="doc-comment-card"].is-current')).toHaveCount(0)
+    await expect.poll(() => paintedText(body, 'walnut-doc-comment')).toEqual(['412 million reads this week'])
+    await page.mouse.click(fb.x + passage.left + 20, fb.y + passage.top + passage.height / 2)
+    await expect(view.locator('[data-testid="doc-comment-card"].is-current')).toHaveCount(1)
+
+    // Its source shows the same comment on the same words, tags and all.
+    await view.getByRole('button', { name: 'Source', exact: true }).click()
+    await expect(view.locator('.cm-content')).toBeVisible()
+    await expect(chip(view)).toHaveText('1 comment')
+    await expect.poll(async () => [...await paintedText(page, 'walnut-doc-comment'), ...await paintedText(page, 'walnut-doc-comment-current')])
+      .toEqual(['412 million</strong> reads this week'])
   })
 })

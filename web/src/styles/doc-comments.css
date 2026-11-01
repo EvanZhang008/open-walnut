@@ -20,6 +20,10 @@
 .file-content-view.fv-doc-comments-wide > .fv-source-editor {
   padding-right: 296px;
 }
+/* The HTML preview's page lays itself out in the frame: the frame gives up the room. */
+.file-content-view.fv-doc-comments-wide > .fv-html-preview {
+  width: calc(100% - 296px);
+}
 .file-content-view:has(> .fv-doc-comments) {
   position: relative;
 }

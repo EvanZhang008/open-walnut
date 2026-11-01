@@ -155,3 +155,62 @@ export function DocCommentDraft({ docPath, passage, onSubmit, onCancel }: {
     </div>
   );
 }
+
+/**
+ * The layer's head: the "N comments" chip, a save or read error, and the list the
+ * chip opens (every comment: open, resolved with Reopen, changed with Resolve).
+ */
+export function DocCommentsHead({ comments, openCount, changed, sourceOnly, error, listOpen, onToggle, onShow, onResolve }: {
+  comments: readonly DocComment[];
+  openCount: number;
+  /** Open comments whose words are gone from the doc. */
+  changed: ReadonlySet<string>;
+  /** Words only the source view shows: no card in this view. */
+  sourceOnly: (c: DocComment) => boolean;
+  error: string | null;
+  listOpen: boolean;
+  onToggle: () => void;
+  onShow: (id: string) => void;
+  /** Resolve an open one, reopen a resolved one. */
+  onResolve: (c: DocComment) => void;
+}) {
+  const resolvedCount = comments.length - openCount;
+  return (
+    <>
+      {comments.length > 0 && (
+        <button type="button" className="doc-comments-chip" data-testid="doc-comments-chip" aria-expanded={listOpen} onClick={onToggle}>
+          {openCount === 1 ? '1 comment' : `${openCount} comments`}
+          {resolvedCount > 0 && <span className="doc-comments-chip-sub"> · {resolvedCount} resolved</span>}
+          {changed.size > 0 && <span className="doc-comments-chip-sub is-outdated"> · {changed.size} changed</span>}
+        </button>
+      )}
+      {error && <div className="doc-comments-error" role="status">{error}</div>}
+      {listOpen && (
+        <div className="doc-comments-list" data-testid="doc-comments-list" onPointerDown={(e) => e.stopPropagation()}>
+          {comments.map((c) => {
+            const gone = changed.has(c.id);
+            const elsewhere = sourceOnly(c);
+            const state = gone ? 'Words changed'
+              : elsewhere ? 'Shown in the source view'
+                : c.status === 'resolved' ? `Resolved${c.resolvedBy ? ` by ${c.resolvedBy === USER_AUTHOR ? 'you' : c.resolvedBy}` : ''}`
+                  : `${c.thread.length} post${c.thread.length === 1 ? '' : 's'}`;
+            return (
+              <div key={c.id} className={`doc-comments-list-row is-${gone ? 'outdated' : c.status}`} data-testid="doc-comments-list-row" data-comment-id={c.id}>
+                <button type="button" className="doc-comments-list-open" onClick={() => onShow(c.id)} disabled={gone || elsewhere}>
+                  <span className="doc-comments-list-where">❝ {snippetOf(c.text, 50)}</span>
+                  <span className="doc-comments-list-text">{snippetOf(c.thread[0]?.text ?? '', 80)}</span>
+                  <span className="doc-comments-list-state">{state}</span>
+                </button>
+                {(c.status === 'resolved' || gone) && (
+                  <button type="button" className="doc-comment-btn" onClick={() => onResolve(c)}>
+                    {c.status === 'resolved' ? 'Reopen' : 'Resolve'}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
+}

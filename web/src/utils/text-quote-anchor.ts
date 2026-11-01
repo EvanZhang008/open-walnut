@@ -90,9 +90,17 @@ function boundaryOffset(index: QuoteTextIndex, container: Node, offset: number):
  */
 export function quoteFromRange(index: QuoteTextIndex, range: Range): TextQuote | null {
   if (!index.nodes.length) return null;
-  let start = boundaryOffset(index, range.startContainer, range.startOffset);
-  let end = boundaryOffset(index, range.endContainer, range.endOffset);
+  return quoteFromText(
+    index.text,
+    boundaryOffset(index, range.startContainer, range.startOffset),
+    boundaryOffset(index, range.endContainer, range.endOffset),
+  );
+}
+
+/** A quote selector over [start, end) of a plain text (a code editor's document). PURE. */
+export function quoteFromText(text: string, start: number, end: number): TextQuote | null {
   if (end < start) [start, end] = [end, start];
+  const index = { text };
   // A drag routinely over-selects the whitespace at either edge; trimming it here
   // keeps both the paint and the outline label tight.
   while (start < end && /\s/.test(index.text[start]!)) start++;

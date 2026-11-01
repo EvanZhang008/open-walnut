@@ -606,9 +606,14 @@ show inline after the open ones, other completed hits that show the query fold i
   `walnut-doc-comment-current`) and puts open cards in a right column level with their words
   (a view of 700px or more takes the column's room with padding; a narrower one shows only the
   current card, under its words); the chip lists every comment with resolved and "changed"
-  (words gone) ones. CodeMirror draws only lines near the screen, so the source view never calls
-  an undrawn passage changed. Positions are plain `top` (no transition: a measured box must be
-  the final one). Ratchet: `tests/e2e/browser/session-doc-comments.spec.ts` (long runbook fixture).
+  (words gone) ones. Every comment shows in every view on the same words (2026-11-01: a comment
+  made in Preview was missing in Source): after an exact match fails, `utils/doc-comment-anchor.ts`
+  compares letters and digits only, with the markup one view hides masked (link targets, images,
+  tags, entities, list markers, fence lines), so `bold text` finds `**bold** text` and back. The
+  source view locates through the editor's DOCUMENT (`rangeAt`, `scrollToPos` on
+  `FileSourceEditorHandle`), so an undrawn passage is scrolled to, never "changed"; the HTML
+  preview (same-origin frame) is painted in the frame's own `CSS.highlights` and hit-tested in its
+  document. Positions are plain `top` (no transition: a measured box must be the final one). Ratchet: `tests/e2e/browser/session-doc-comments.spec.ts` (long runbook fixture).
   **A passage of a FILE in the Files tab is asked about the same way (2026-10-01).** The anchor's
   parent is `file:<absolute path>` (`FILE_PARENT_PREFIX`, `fileParentOf` / `fileOfParent` in
   `utils/thread-tree.ts`; the server takes a `file:` parent up to 1024 chars and an optional
