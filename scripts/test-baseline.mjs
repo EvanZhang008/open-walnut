@@ -26,6 +26,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { vitestCommand } from './bun-vitest.mjs';
+import { nameTestTimeout } from './lib/test-timeout-message.mjs';
 
 const CONFIG = process.env.WALNUT_BASELINE_CONFIG ?? 'vitest.quick.config.ts';
 const BASELINE = process.env.WALNUT_BASELINE_FILE ?? 'tests/setup/known-failures.json';
@@ -134,7 +135,7 @@ const ownFrame = (line) => {
   return loc.startsWith(REPO) && !loc.includes('/node_modules/') ? loc.slice(REPO.length) : '';
 };
 const firstLine = (msgs) => {
-  const m = (Array.isArray(msgs) ? msgs : [msgs]).find((x) => typeof x === 'string' && x.trim());
+  const m = nameTestTimeout((Array.isArray(msgs) ? msgs : [msgs]).find((x) => typeof x === 'string' && x.trim()));
   if (!m) return '';
   const lines = m.split('\n').map((l) => l.trim()).filter(Boolean);
   const isFrame = (l) => l.startsWith('at ');
@@ -151,6 +152,7 @@ const fullMessages = new Map();
 const wholeMessage = (msgs) => {
   const text = (Array.isArray(msgs) ? msgs : [msgs])
     .filter((x) => typeof x === 'string' && x.trim())
+    .map(nameTestTimeout)
     // The matcher's and the runner's own frames say nothing about the failure.
     .map((m) => m.split('\n').filter((l) => !(l.trim().startsWith('at ') && l.includes('/node_modules/'))).join('\n'))
     .join('\n\n');
