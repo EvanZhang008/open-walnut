@@ -44,7 +44,6 @@
 .org-thread-unread .org-thread-answer { margin-left: 0; }
 .org-thread-unread .org-thread-answer-body { max-height: 88px; }
 .org-thread-re { font-size: 12px; color: var(--fg-muted, #86868b); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.org-thread-waiting { margin: 0; font-size: 12px; color: var(--fg-muted, #86868b); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Expand / Collapse, on the text it opens (left, under it), and the card's Conversation toggle. */
 .org-thread-toggle {

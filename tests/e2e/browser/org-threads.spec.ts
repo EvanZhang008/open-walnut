@@ -142,8 +142,9 @@ test('a request becomes a thread the lead keeps; asks about one subject are one 
   // Shown at once, in Walnut's words until the lead titles it.
   await expect(card(page, t1.id)).toHaveAttribute('data-state', 'new')
   await expect(card(page, t1.id).getByTestId('org-thread-title')).toHaveText(first)
-  // Nothing answered yet: his message reads alone, waiting.
-  await expect(card(page, t1.id).getByTestId('org-thread-unanswered')).toBeVisible()
+  // Nothing answered yet: his own words are not echoed back on the card; the conversation has them.
+  await expect(card(page, t1.id)).not.toContainText('Not answered yet')
+  await expect(card(page, t1.id).getByTestId('org-thread-count')).toHaveText(/^1 message/)
 
   await leadUpdates(request, t1.id, { title: `Org: Threads view ${STAMP}`, ask: 'One thread per request, with Acknowledge', state: 'working', reply: 'Handed to **Build Threads**', add_tasks: [ids.work] })
   const c1 = card(page, t1.id)
@@ -234,8 +235,8 @@ test('a long Unicode request reads in full; an Acknowledge the server refuses pu
   await openThreads(page)
   const c = card(page, thread.id)
   await expect(c.getByTestId('org-thread-title')).toHaveText(`微信的 org 非常乱 ${STAMP}`)
-  // Not answered yet: one line on the card; the conversation holds it, folded to a few lines.
-  await expect(c.getByTestId('org-thread-unanswered')).toContainText(`微信的 org 非常乱 ${STAMP}`)
+  // Not answered yet: nothing of it on the card but its title; the conversation holds it, folded to a few lines.
+  await expect(c).not.toContainText('Paragraph 1:')
   await c.getByTestId('org-thread-history').click()
   await c.getByTestId('org-thread-words-more').click()
   await expect(c.getByTestId('org-thread-words-more')).toContainText('Collapse')
@@ -276,9 +277,10 @@ test('a thread the lead opens itself shows its post as the lead\'s, and his Foll
   await c.getByTestId('org-thread-follow-open').click()
   await c.getByTestId('org-thread-follow-input').fill(`yes, confirm it ${STAMP}`)
   await c.getByTestId('org-thread-follow-send').click()
-  // He wrote after the post: it leaves the card; his message shows in one line, waiting or above
-  // the lead's answer to it (the fixture's chat may answer at once).
-  await expect(c.locator('[data-testid="org-thread-unanswered"], [data-testid="org-thread-re"]')).toContainText(`yes, confirm it ${STAMP}`, { timeout: 30_000 })
+  // He wrote after the post: it leaves the card, his message counts in the conversation and is
+  // never echoed back as waiting (only quoted above the lead's answer, if the fixture's chat answers).
+  await expect(c.getByTestId('org-thread-count')).toHaveText(/^2 messages/, { timeout: 30_000 })
+  await expect(c).not.toContainText('Not answered yet')
   await expect(c.getByTestId('org-thread-opener')).toHaveCount(0)
   await shot(page, 'opened')
   expect((await threads(request)).find((t) => t.id === opened.id)?.messages.map((m) => m.via)).toEqual(['follow-up'])
@@ -467,7 +469,8 @@ test('a thread with nothing new for him is out of sight until there is news; one
   await expect(card(page, 'th-0000000000a1')).toHaveCount(0)
   await post(request, `/api/v1/tasks/${node}/threads`, { text: `pick the open view ${STAMP}`, thread: 'th-0000000000a1' })
   await expect(open.locator('[data-thread-id="th-0000000000a1"]')).toBeVisible()
-  await expect(card(page, 'th-0000000000a1').getByTestId('org-thread-unanswered')).toContainText(`pick the open view ${STAMP}`)
+  await expect(card(page, 'th-0000000000a1').getByTestId('org-thread-count')).toHaveText(/^2 messages/)
+  await expect(card(page, 'th-0000000000a1')).not.toContainText('Not answered yet')
   // A reload reads the same: the state is the file's.
   await page.reload()
   await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')

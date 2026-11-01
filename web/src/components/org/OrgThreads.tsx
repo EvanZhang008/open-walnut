@@ -20,8 +20,11 @@
  * second chip for it, and one reply that covered several threads stays off every card.
  *
  *   a card     state, title, time; the summary; its tasks the summary does not name; the answers
- *              still news; one line per message still waiting for an answer; Conversation
- *              (N messages); Acknowledge, Follow up (a message filed under it)
+ *              still news; Conversation (N messages); Acknowledge, Follow up (a message filed
+ *              under it). His own messages still waiting for an answer are not echoed back on the
+ *              card (2026-11-01, the user, after a Follow up showed "Not answered yet: <his words>":
+ *              "you definitely haven't answered ... you don't need to put it in this thread");
+ *              they read in the conversation.
  *   Pending    open but nothing new for him: one quiet line at the bottom opens them
  *   Closed     the ones closed this week (kept a week, then deleted) open from one quiet line at
  *              the bottom, Reopen on each
@@ -311,9 +314,6 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
           ))}
         </ol>
       )}
-      {!open && !closed && card.waiting.map((x) => (
-        <p key={x.messages[0].id} className="org-thread-waiting" data-testid="org-thread-unanswered">Not answered yet: {quote(x)}</p>
-      ))}
       {count > 0 && (
         <button type="button" className="org-thread-toggle org-thread-history" data-testid="org-thread-history" aria-expanded={open} aria-controls={`${t.id}-conversation`} onClick={() => setOpen(!open)}>
           <span aria-hidden="true">{open ? '\u25b4' : '\u25be'}</span>
