@@ -11853,10 +11853,11 @@ export class SessionRunner {
     const { withWalnutMcpMount, WALNUT_MCP_CAPABILITY } = await import('../core/sessions/walnut-mcp-mount.js')
     const mountHost = data.host && data.host !== '__local__' ? data.host : '__local__'
     const { getConnectedDaemonConnection } = await import('./daemon-connection.js')
+    const { isCompanion } = await import('../core/server-role.js')
     const resolvedProfile = isFork ? data.profile : withWalnutMcpMount({
       setting: config.session?.premount_walnut_mcp,
       profile: data.profile,
-      cloud: CLOUD_MODE,
+      cloud: isCompanion(),
       hostServesMcp: getConnectedDaemonConnection(mountHost)?.hasCapability(WALNUT_MCP_CAPABILITY) ?? false,
       local: mountHost === '__local__',
       hubMount: walnutMcpProfile,
