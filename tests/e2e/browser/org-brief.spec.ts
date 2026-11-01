@@ -230,9 +230,23 @@ test('Fold keeps the first lines and survives a reload; each node opens on the v
   await expect(detail.getByTestId('org-brief')).toHaveClass(/is-folded/)
   // A reload comes back on the Brief, still folded (2026-11-01, the user: "Walnut needs to
   // remember what was open last time, permanently, on every page").
+  // Every view the top shows from the first frame on, with the task list answering late: never
+  // Task for a moment before the Brief.
+  await page.addInitScript(() => {
+    const seen: string[] = []
+    ;(window as unknown as { __topViews: string[] }).__topViews = seen
+    new MutationObserver(() => {
+      const v = document.querySelector('[data-testid="org-top"]')?.getAttribute('data-view')
+      if (v && seen[seen.length - 1] !== v) seen.push(v)
+    }).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-view'] })
+  })
+  await page.route('**/api/tasks?*', async (route) => { await new Promise((r) => setTimeout(r, 1500)); await route.continue() })
   await page.reload()
   await expect(page.getByTestId('org-detail')).toHaveAttribute('data-key', rowKey(LED))
   await expect(page.getByTestId('org-top')).toHaveAttribute('data-view', 'brief')
+  await page.waitForTimeout(2_000)
+  expect(await page.evaluate(() => (window as unknown as { __topViews: string[] }).__topViews)).toEqual(['brief'])
+  await page.unroute('**/api/tasks?*')
   await expect(page.getByTestId('org-brief')).toHaveClass(/is-folded/)
   await page.getByTestId('org-brief-fold').click()
   await expect(page.getByTestId('org-brief')).not.toHaveClass(/is-folded/)

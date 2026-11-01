@@ -84,7 +84,7 @@ function useMinuteNow(): number {
 }
 
 export function OrgPage() {
-  const { tasks, showOperationError, patchTasksLocal } = useTasksContext();
+  const { tasks, loading: tasksLoading, showOperationError, patchTasksLocal } = useTasksContext();
   const navigate = useNavigate();
   const phone = usePhoneLayout();
   const now = useMinuteNow();
@@ -238,6 +238,9 @@ export function OrgPage() {
   const tabParam = params.get('tab') ?? pendingPlace?.tab ?? null;
   const urlTab = TABS.includes(tabParam as OrgTab) ? (tabParam as OrgTab) : null;
   const selected = pickChannel(channels, nodeParam);
+  // The node it names has no row until the tasks arrive: show none rather than Main for a moment
+  // (a reload drew Main's Task view, then the lead's Threads).
+  const nodeArriving = tasksLoading && !!nodeParam && !rowOf(channels, nodeParam);
   // On a phone the list shows until a row is picked (and again when the picked one is gone).
   const picked = !!rowOf(channels, nodeParam);
   const showDetail = !phone || picked;
@@ -434,8 +437,8 @@ export function OrgPage() {
         />
       )}
       {showDetail && (!phone || phoneView === 'detail') && (
-        <section className="org-detail-pane" aria-label={selected.name}>
-          <OrgNodeDetail
+        <section className="org-detail-pane" aria-label={selected.name} aria-busy={nodeArriving || undefined}>
+          {!nodeArriving && <OrgNodeDetail
             key={selected.key}
             row={selected}
             rows={channels.rows}
@@ -450,7 +453,7 @@ export function OrgPage() {
             {...(phone ? { onBack: back } : {})}
             onPin={pin}
             now={now}
-          />
+          />}
         </section>
       )}
       {phone && side && (

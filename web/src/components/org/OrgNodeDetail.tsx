@@ -171,7 +171,11 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
    *  in Task"), kept per node (utils/view-memory.ts). */
   const [topPick, setTopPick] = usePageViewOf<OrgTopView>('org', 'node.top', row.key, 'task', oneOf(ORG_TOP_VIEWS));
   const [briefFolded, setBriefFolded] = useState(readBriefFolded);
-  const keepsBrief = contact?.org_role === 'main' || contact?.org_role === 'lead';
+  // Main and a lead keep a Brief and Threads. The row says so too, before the node's own task has
+  // loaded (a reload paints from the cache first), so a reload does not show Task for a moment
+  // before the view it was left on.
+  const keepsBrief = contact?.org_role === 'main' || contact?.org_role === 'lead'
+    || (!!row.contactId && (row.kind === 'main' || row.isLead));
   const topView: OrgTopView = keepsBrief ? topPick : 'task';
   /** The Task view's tab: Needs you until the user picks another, then the one he left it on. */
   const [taskTab, setTaskTab] = usePageViewOf<OrgRailTab>('org', 'node.taskTab', row.key, 'needs', oneOf(ORG_RAIL_TABS));
@@ -213,7 +217,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   const pick = (t: OrgTab) => { setTab(t); setFocusChat(false); setChatInbox(null); onTabChange(row.key, t); };
   const { send } = useSessionSend(sessionId);
   // The user's own requests to this node (core/org/threads-model.ts), read while its view is shown.
-  const threads = useOrgThreads(keepsBrief ? contact?.id : undefined, keepsBrief && topView === 'threads');
+  const threads = useOrgThreads(keepsBrief ? contact?.id ?? row.contactId : undefined, keepsBrief && topView === 'threads');
   const followUp = sessionId ? (threadId: string, text: string) => send(sessionId, text, undefined, { threadId }) : null;
   // A send that answers after the user moved to another node must not pull them back.
   const mounted = useRef(true);
