@@ -41,7 +41,11 @@ export default defineConfig({
   // Overrides: PW_WORKERS (per run), PW_NO_GATE=1 (skip the port lease).
   workers: perRunWorkers(),
   reporter: 'list',
-  timeout: 30_000,
+  // A CI runner has 4 cores and runs 4 workers: one cold load of the dev mode fixture
+  // (about 1,700 module requests) took 12 to 14 s there, so a test that loads the app
+  // twice ran out of 30 s with nothing wrong (2026-11-01: about 9 of 21 failures of one
+  // shard). Assertions keep their own timeouts; this is only the test's ceiling.
+  timeout: process.env.CI ? 60_000 : 30_000,
 
   use: {
     baseURL: `http://localhost:${testPort}`,

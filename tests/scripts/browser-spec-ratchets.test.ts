@@ -534,3 +534,13 @@ describe('a document of megabytes', () => {
     expect(WHOLE_BODY_TEXT.test("await expect(inner.locator('body')).toContainText(tail, { timeout: 60_000 })")).toBe(true)
   })
 })
+
+describe('the test ceiling on CI', () => {
+  // Two cold loads of the dev mode fixture on a 4 core runner take 25 to 30 s (2026-11-01).
+  it('gives a CI test room for two cold loads', () => {
+    const config = fs.readFileSync(path.resolve(__dirname, '../../playwright.config.ts'), 'utf8')
+    const m = config.match(/^  timeout: process\.env\.CI \? ([\d_]+) : ([\d_]+),$/m)
+    expect(m, 'playwright.config.ts sets its test timeout by CI').not.toBeNull()
+    expect(Number(m![1]!.replace(/_/g, ''))).toBeGreaterThanOrEqual(60_000)
+  })
+})
