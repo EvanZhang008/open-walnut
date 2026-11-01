@@ -1487,8 +1487,15 @@ What a launcher on the Mac calls (the Alfred workflow and Raycast extension in
 `desktop/launchers/`, the app's Spotlight actions in `desktop/WalnutIntents.swift`).
 Every route answers `501 not_supported_cloud` on a cloud companion.
 
-- `POST /quick/ask {text, context?, conversation?}`: a fast answer from a light model with no
-  tools (`ai.run`, caller `walnut:quick-input`, effort `quick`). `text` is 1 to 20000 characters;
+- `POST /quick/ask {text, context?, conversation?, tools?}`: a fast answer from a light model with no
+  tools (`ai.run`, caller `walnut:quick-input`, effort `quick`). With `tools: true` (added
+  2026-11-01) it is a light agent session that may search the web and read pages and nothing else
+  (`needs: {web: true}`; none of the user's tasks, notes or files), answering within 3 minutes, and
+  each step it starts streams first as `{"type":"activity","detail":"Searching the web: …"}`. One
+  `conversation` may switch between the two at any turn: each turn with tools is a fresh one-shot
+  session that reads every earlier turn, so none stays running. Tools are refused
+  (`400 tools_with_selection`) with `context` or in a conversation that carried some, because a
+  page the agent reads could tell it to send that text out. `text` is 1 to 20000 characters;
   `context` (at most 60000) is text the user selected; the same `conversation` id lets a
   follow-up see the earlier turns. The answer streams as NDJSON lines:
   `{"type":"text","delta":"…"}`, then `{"type":"result","text":"…","durationMs":…}` or

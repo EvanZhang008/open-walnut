@@ -37,7 +37,8 @@ import { updateTaskRaw } from '../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { getQueue } from '../../src/core/session-message-queue.js'
 import { setAiDirectOverride, type DirectCall } from '../../src/core/ai/ai-direct.js'
-import { QUICK_SYSTEM } from '../../src/web/routes/quick-input-v1.js'
+import { setAiAgentOverride, type AgentCall } from '../../src/core/ai/ai-agent.js'
+import { QUICK_AGENT_SYSTEM, QUICK_SYSTEM } from '../../src/web/routes/quick-input-v1.js'
 
 let server: HttpServer
 let port: number
@@ -66,7 +67,7 @@ afterAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true }).catch(() => {})
 })
 
-afterEach(() => { setAiDirectOverride(null); calls = [] })
+afterEach(() => { setAiDirectOverride(null); setAiAgentOverride(null); calls = [] })
 
 describe('POST /api/v1/quick/ask', () => {
   it('streams a fast answer with the box prompt, the selected text as data, and continues a conversation', async () => {
@@ -125,6 +126,61 @@ describe('POST /api/v1/quick/ask', () => {
     const until = Date.now() + 5_000
     while (!aborted && Date.now() < until) await new Promise((r) => setTimeout(r, 25))
     expect(aborted).toBe(true)
+  })
+
+  it('with tools: a light agent run with web search and page reading only, its steps streamed as activity lines', async () => {
+    const agentCalls: AgentCall[] = []
+    setAiDirectOverride(async (call) => { calls.push(call); return { text: 'A quick one', engine: 'claude', model: 'haiku' } })
+    setAiAgentOverride(async (call) => {
+      agentCalls.push(call)
+      call.onActivity?.('Searching the web: who made peekaboo')
+      call.onText?.('Peter made it.')
+      return { text: 'Peter made it.', engine: 'claude', model: 'haiku', sessionId: 'sid-agent', costUsd: 0.01 }
+    })
+    // The conversation starts in the quick mode and goes on with tools: the agent reads the first turn.
+    await (await post('/quick/ask', { text: 'what is peekaboo', conversation: 'quick-tools-1' })).text()
+    const res = await post('/quick/ask', { text: 'who made it', conversation: 'quick-tools-1', tools: true })
+    const out = lines(await res.text())
+    expect(out).toEqual([
+      { type: 'activity', detail: 'Searching the web: who made peekaboo' },
+      { type: 'text', delta: 'Peter made it.' },
+      expect.objectContaining({ type: 'result', text: 'Peter made it.', conversation: 'quick-tools-1' }),
+    ])
+    expect(agentCalls).toHaveLength(1)
+    const call = agentCalls[0]
+    expect(call.needs).toEqual({ web: true })
+    expect(call.effort).toBe('quick')
+    expect(call.timeoutMs).toBe(3 * 60_000)
+    expect(call.system.startsWith(QUICK_AGENT_SYSTEM)).toBe(true)
+    expect(call.firstMessage).toContain('A quick one')
+    expect(call.message).toContain('who made it')
+    // Every turn with tools is a fresh one-shot session, so nothing is left running between turns.
+    expect(call.oneShot).toBe(true)
+    expect(call.lane).toMatch(/:run-/)
+
+    // Back to quick and to tools again: the second tools turn still reads every turn before it.
+    await (await post('/quick/ask', { text: 'and in one word', conversation: 'quick-tools-1' })).text()
+    await (await post('/quick/ask', { text: 'check that', conversation: 'quick-tools-1', tools: true })).text()
+    expect(agentCalls).toHaveLength(2)
+    expect(agentCalls[1].firstMessage).toContain('and in one word')
+    expect(agentCalls[1].firstMessage).toContain('Peter made it.')
+    expect(agentCalls[1].lane).not.toBe(call.lane)
+    expect((await post('/quick/ask', { text: 'x', tools: 'yes' })).status).toBe(400)
+  })
+
+  it('refuses tools in a conversation about selected text, which a fetched page could send out', async () => {
+    const agentCalls: AgentCall[] = []
+    setAiDirectOverride(async () => ({ text: 'Polished.', engine: 'claude', model: 'haiku' }))
+    setAiAgentOverride(async (call) => { agentCalls.push(call); return { text: 'x', engine: 'claude', sessionId: 's' } })
+    const same = await post('/quick/ask', { text: 'fact-check this', context: 'Selected in Mail:\nthe launch moves to May', tools: true })
+    expect(same.status).toBe(400)
+    expect(await same.json()).toMatchObject({ code: 'tools_with_selection' })
+    await (await post('/quick/ask', { text: 'polish it', context: 'Selected in Mail:\nthe launch moves to May', conversation: 'quick-sel-1' })).text()
+    const later = await post('/quick/ask', { text: 'now search the web for it', conversation: 'quick-sel-1', tools: true })
+    expect(later.status).toBe(400)
+    expect(agentCalls).toHaveLength(0)
+    // The quick mode stays open to it.
+    expect(lines(await (await post('/quick/ask', { text: 'shorter', conversation: 'quick-sel-1' })).text()).at(-1)).toMatchObject({ type: 'result' })
   })
 
   it('warm answers at once and never fails the box', async () => {
@@ -193,8 +249,11 @@ describe('POST /api/v1/quick/main', () => {
     expect(starts).toHaveLength(0)
     const last = streamed[streamed.length - 1]
     expect(last.type).toBe('result')
-    expect(String(last.text)).toContain('MANGO-7')
-    expect(String(last.text)).not.toContain('What needs me today?')
+    // The mock echoes the whole message, Walnut's hints after the user's words included (the
+    // Threads hint names his earlier asks), so only the echoed words before them are this reply's.
+    const echoed = String(last.text).split('<system-reminder>')[0]
+    expect(echoed).toContain('MANGO-7')
+    expect(echoed).not.toContain('What needs me today?')
   })
 
   it('refuses an empty message', async () => {

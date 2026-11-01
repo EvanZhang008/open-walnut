@@ -14,6 +14,7 @@ import crypto from 'node:crypto'
 import { log } from '../../logging/index.js'
 import { AiError, type AiCaller, type AiNeeds } from './ai-types.js'
 import { callerKey } from './ai-policy.js'
+import { toolDetail } from '../tool-summary.js'
 
 export const AI_LANE_PREFIX = 'ai:'
 
@@ -62,6 +63,11 @@ export function agentPermissions(needs: AiNeeds, cwd: string, resolveOp: (name: 
       allowed.push(`Edit(${under})`, `Write(${under})`)
     }
   }
+  if (needs.web) {
+    tools.add('WebSearch')
+    tools.add('WebFetch')
+    allowed.push('WebSearch', 'WebFetch')
+  }
   return { tools: [...tools], allowedTools: allowed }
 }
 
@@ -79,6 +85,8 @@ export interface AgentCall {
   effort: 'quick' | 'normal' | 'deep'
   timeoutMs: number
   onText?: (delta: string) => void
+  /** One line per tool step of the turn (subagent steps left out). */
+  onActivity?: (detail: string) => void
   signal?: AbortSignal
   /** Told the lane this run uses, before it starts (ai.end retires every lane a conversation used). */
   noteLane?: (lane: string) => Promise<void>
@@ -99,6 +107,21 @@ let override: AgentRunner | null = null
 /** Tests that do not run a daemon swap the whole route out. */
 export function setAiAgentOverride(fn: AgentRunner | null): void {
   override = fn
+}
+
+const TOOL_VERB: Record<string, string> = {
+  WebSearch: 'Searching the web', WebFetch: 'Reading', Read: 'Reading', Grep: 'Searching files', Glob: 'Listing files',
+  Bash: 'Running', Edit: 'Editing', Write: 'Writing',
+}
+
+/** The line a tool step shows the caller ("Searching the web: …"); none for a subagent's own steps. */
+export function toolActivity(data: { toolName?: unknown; input?: unknown; parentToolUseId?: unknown; replayed?: unknown }): string | null {
+  // A daemon reconnect replays earlier events (`replayed`): that step is not this turn's.
+  if (typeof data.toolName !== 'string' || !data.toolName || data.parentToolUseId || data.replayed) return null
+  const input = data.input && typeof data.input === 'object' ? data.input as Record<string, unknown> : undefined
+  const verb = TOOL_VERB[data.toolName] ?? data.toolName
+  const detail = toolDetail(data.toolName, input)
+  return detail ? `${verb}: ${detail}` : verb
 }
 
 const CLI_MODEL: Partial<Record<AgentCall['effort'], string>> = { quick: 'haiku', deep: 'opus' }
@@ -230,14 +253,21 @@ async function runTurn(call: AgentCall, permissions: AgentPermissions): Promise<
     laneSessionId = sessionId
     const name = `ai-run-${crypto.randomUUID()}`
     bus.subscribe(name, (event) => {
-      const data = event.data as { sessionId?: string; delta?: string; costDelta?: number; model?: string }
+      const data = event.data as {
+        sessionId?: string; delta?: string; costDelta?: number; model?: string
+        toolName?: string; input?: unknown; parentToolUseId?: string; replayed?: boolean
+      }
       if (data?.sessionId !== sessionId) return
       if (event.name === EventNames.SESSION_TEXT_DELTA && typeof data.delta === 'string') call.onText?.(data.delta)
+      if (event.name === EventNames.SESSION_TOOL_USE && call.onActivity) {
+        const detail = toolActivity(data)
+        if (detail) call.onActivity(detail)
+      }
       if (event.name === EventNames.SESSION_RESULT) {
         if (typeof data.costDelta === 'number') costUsd += data.costDelta
         if (data.model) model = data.model
       }
-    }, { global: true, interest: [EventNames.SESSION_TEXT_DELTA, EventNames.SESSION_RESULT] })
+    }, { global: true, interest: [EventNames.SESSION_TEXT_DELTA, EventNames.SESSION_RESULT, EventNames.SESSION_TOOL_USE] })
     subscription.name = name
     // Cancelled while the lane was being made: nothing was listening for the session id yet.
     if (call.signal?.aborted) stop()

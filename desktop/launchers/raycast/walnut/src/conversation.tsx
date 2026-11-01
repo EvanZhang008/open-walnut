@@ -1,7 +1,9 @@
 /**
  * One conversation with Walnut, a quick answer or Main: the list shows each question, the detail
  * pane the answer as it streams, and the search bar takes the next question (Enter sends it).
- * On an answer: Enter pastes it into the app you came from, Cmd+C copies it.
+ * On an answer: Enter pastes it into the app you came from, Cmd+C copies it. A quick answer runs
+ * in one of two ways, switched with Cmd+T at any turn: Quick (the model alone, about two seconds)
+ * or With tools (a light agent session that searches the web and reads pages).
  */
 import { Action, ActionPanel, Icon, List } from "@raycast/api";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -14,6 +16,8 @@ interface Turn {
   status: "streaming" | "done" | "error" | "held";
   activity?: string;
   seconds?: number;
+  /** Asked with tools (web search and page reading). */
+  tools?: boolean;
 }
 
 function newConversation(): string {
@@ -25,8 +29,9 @@ function failure(error: unknown): string {
   return /fetch failed|ECONNREFUSED|connect/i.test(message) ? NOT_RUNNING : message;
 }
 
-export function Conversation(props: { mode: Mode; first?: string; selection?: string; app?: string }) {
+export function Conversation(props: { mode: Mode; first?: string; selection?: string; app?: string; tools?: boolean }) {
   const [mode] = useState<Mode>(props.mode);
+  const [tools, setTools] = useState(props.tools === true);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
   const [selected, setSelected] = useState<string | undefined>(undefined);
@@ -39,7 +44,7 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
     setTurns((all) => all.map((t) => (t.id === id ? { ...t, ...patch } : t)));
 
   const ask = useCallback(
-    async (question: string) => {
+    async (question: string, withTools: boolean = tools) => {
       const text = question.trim();
       if (!text) return;
       abort.current?.abort();
@@ -47,7 +52,7 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
       abort.current = controller;
       const id = nextId.current++;
       const firstTurn = turns.length === 0;
-      setTurns((all) => [{ id, question: text, answer: "", status: "streaming" }, ...all]);
+      setTurns((all) => [{ id, question: text, answer: "", status: "streaming", tools: mode === "quick" && withTools }, ...all]);
       setSelected(String(id));
       setInput("");
       const selectionNote = props.selection && firstTurn
@@ -59,10 +64,12 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
           const got = await askQuick(text, {
             conversation: conversation.current,
             context: selectionNote,
+            tools: withTools,
             signal: controller.signal,
             onText: (answer) => update(id, { answer }),
+            onActivity: (activity) => update(id, { activity }),
           });
-          update(id, { answer: got.text, status: "done", seconds: (got.durationMs ?? Date.now() - started) / 1000 });
+          update(id, { answer: got.text, status: "done", activity: undefined, seconds: (got.durationMs ?? Date.now() - started) / 1000 });
         } else {
           const got = await tellMain(selectionNote ? `${text}\n\n${selectionNote}` : text, {
             signal: controller.signal,
@@ -88,7 +95,7 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
         update(id, { status: "error", answer: failure(error) });
       }
     },
-    [mode, props.app, props.selection, turns.length],
+    [mode, tools, props.app, props.selection, turns.length],
   );
 
   // The first question is asked from a timer the effect's cleanup cancels: React may mount, unmount
@@ -109,23 +116,39 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
 
   useEffect(() => () => abort.current?.abort(), []);
 
-  const title = mode === "quick" ? "Quick answer" : "Main";
+  const title = mode === "main" ? "Main" : tools ? "Walnut AI · With tools" : "Walnut AI · Quick";
+  // Never in a conversation about selected text: a page the agent reads could send that text out
+  // (the server refuses it too).
+  const switchTools = mode === "quick" && !props.selection ? (
+    <Action
+      title={tools ? "Switch to Quick (No Tools)" : "Switch to With Tools (Web Search)"}
+      icon={tools ? Icon.Bolt : Icon.Globe}
+      shortcut={{ modifiers: ["cmd"], key: "t" }}
+      onAction={() => setTools((on) => !on)}
+    />
+  ) : null;
   const placeholder = turns.length === 0
     ? props.selection
       ? "What should Walnut do with the selected text?"
-      : mode === "quick" ? "Ask anything…" : "Tell Main…"
-    : "Ask a follow-up…";
+      : mode === "quick" ? (tools ? "Ask anything, Walnut may search the web…" : "Ask anything…") : "Tell Main…"
+    : "Ask a follow-up, then Enter…";
 
   const detailFor = (t: Turn) => {
     const head = t.status === "streaming"
-      ? (t.answer ? "" : mode === "main" ? (t.activity ? `_Main is working: ${t.activity}…_` : "_Main is reading it…_") : "_…_")
+      ? (t.answer ? "" : mode === "main"
+        ? (t.activity ? `_Main is working: ${t.activity}…_` : "_Main is reading it…_")
+        : t.activity ? `_${t.activity}…_` : "_…_")
       : "";
     const status = t.status === "error" ? `⚠️ ${t.answer}` : t.answer;
     return `**${t.question}**\n\n${head}${status}`;
   };
 
   return (
+    // Raycast filters a List by the search text unless told not to: a follow-up typed there hid
+    // every earlier turn that did not contain its words (2026-10-31, "why can't it ask the follow
+    // up"). The search bar here is only the next question.
     <List
+      filtering={false}
       isShowingDetail={turns.length > 0}
       searchText={input}
       onSearchTextChange={setInput}
@@ -143,6 +166,7 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
           actions={
             <ActionPanel>
               <Action title="Send" icon={Icon.ArrowRight} onAction={() => void ask(input)} />
+              {switchTools}
             </ActionPanel>
           }
         />
@@ -152,7 +176,7 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
             key={t.id}
             id={String(t.id)}
             title={t.question}
-            icon={t.status === "streaming" ? Icon.CircleProgress : t.status === "error" ? Icon.Warning : Icon.Message}
+            icon={t.status === "streaming" ? Icon.CircleProgress : t.status === "error" ? Icon.Warning : t.tools ? Icon.Globe : Icon.Message}
             accessories={t.seconds ? [{ text: `${t.seconds.toFixed(1)} s` }] : []}
             detail={<List.Item.Detail markdown={detailFor(t)} />}
             actions={
@@ -170,8 +194,9 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
                   <Action.Open title="Open Main in Walnut" target={openTaskLink(mainTaskId)} icon={Icon.AppWindow} shortcut={{ modifiers: ["cmd"], key: "o" }} />
                 ) : null}
                 {t.status === "done" || t.status === "error" ? (
-                  <Action title="Ask Again" icon={Icon.RotateClockwise} shortcut={{ modifiers: ["cmd"], key: "r" }} onAction={() => void ask(t.question)} />
+                  <Action title="Ask Again" icon={Icon.RotateClockwise} shortcut={{ modifiers: ["cmd"], key: "r" }} onAction={() => void ask(t.question, t.tools === true)} />
                 ) : null}
+                {switchTools}
               </ActionPanel>
             }
           />

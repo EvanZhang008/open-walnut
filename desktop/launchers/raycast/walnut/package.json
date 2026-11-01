@@ -23,6 +23,20 @@
       "subtitle": "Walnut",
       "description": "Bring the selected text from the app you are in, then say what to do with it.",
       "mode": "view"
+    },
+    {
+      "name": "walnut-ai",
+      "title": "Walnut AI",
+      "subtitle": "Walnut",
+      "description": "A quick answer from Walnut's AI with follow-ups; Cmd+T switches to With tools (web search). Works as a fallback command: type anything in Raycast, then pick Walnut AI.",
+      "mode": "view"
+    },
+    {
+      "name": "walnut-ai-tools",
+      "title": "Walnut AI with Tools",
+      "subtitle": "Walnut",
+      "description": "Walnut's AI in a light agent session that searches the web and reads pages, with follow-ups. Works as a fallback command.",
+      "mode": "view"
     }
   ],
   "preferences": [

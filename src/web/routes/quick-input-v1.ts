@@ -3,7 +3,9 @@
  * the Raycast script command, the Spotlight action). One short request from anywhere on the Mac,
  * three ways to answer it:
  *
- *   POST /quick/ask   { text, context?, conversation? }  → NDJSON stream
+ *   POST /quick/ask   { text, context?, conversation?, tools? }  → NDJSON stream (tools: web search
+ *                     and page reading in a light agent session; `activity` lines name each step;
+ *                     never with selected text in the conversation)
  *        One fast model answer (ai.run's direct route: micro-Claude on the warm pool, or the
  *        main provider's fast model). No task, no session. `{"type":"text","delta"}` lines while
  *        it writes, then one `{"type":"result",text,model?,durationMs,conversation?}` or
@@ -63,6 +65,31 @@ export const QUICK_SYSTEM = [
   "You have no tools: you cannot browse, run anything, or see the user's tasks and files. When a request needs that, say so in one line and suggest Tell Main (Cmd+Enter), Walnut's main agent, which can.",
 ].join('\n')
 
+/** The same box with tools: a light agent session that may search the web and read pages. It is
+ *  given none of the user's tasks, notes, memory or files, and never text he selected (the route
+ *  refuses tools in a conversation that carried some): a page it reads may tell it to fetch a URL
+ *  with whatever it holds, and all it holds is what he typed. */
+export const QUICK_AGENT_SYSTEM = [
+  "You are Walnut's quick answer box on the user's Mac, with tools. The user pressed a hotkey in another app and typed a request.",
+  'Search the web or read a page when the answer needs current or outside facts; answer directly when it does not.',
+  // Claude Code offers no WebSearch on Bedrock (2026-11-01: only WebFetch), and DuckDuckGo shows
+  // a fetch a bot check while Brave answers 429; a short Bing query and GitHub's API answered.
+  'With no web search tool, search by reading https://www.bing.com/search?q=<two to five words> (short queries find more), then read the best result pages; for a software project, https://api.github.com/search/repositories?q=<words> also works.',
+  'Be brief: the answer first, in as few words as it needs, then the source links you used as a short list.',
+  'When asked to rewrite, fix, translate or reply to text, answer with only the new text.',
+  'Answer in the language of the request unless it asks for another one.',
+  "You cannot see the user's tasks, notes or files and cannot run commands. When a request needs that, say so in one line and suggest Tell Main, Walnut's main agent.",
+].join('\n')
+const QUICK_AGENT_TIMEOUT_MS = 3 * 60_000
+
+/** True when an earlier turn of this box's conversation carried selected text. */
+async function carriedSelection(conversation: string): Promise<boolean> {
+  const [{ conversationTurns }, { CONTEXT_OPEN }] = await Promise.all([
+    import('../../core/ai/ai-conversations.js'), import('../../core/ai/ai-prompt.js'),
+  ])
+  return (await conversationTurns(QUICK_CALLER, conversation)).some((t) => t.role === 'user' && t.text.includes(CONTEXT_OPEN))
+}
+
 function primaryOnly(res: Response): boolean {
   if (!CLOUD_MODE) return true
   res.status(501).json({ error: 'Quick Input answers on your Mac, not on this companion', code: 'not_supported_cloud' })
@@ -98,6 +125,18 @@ quickInputV1Router.post('/quick/ask', async (req: Request, res: Response) => {
     res.status(400).json({ error: 'conversation must be 1-120 letters, digits or _ . : @ / -', code: 'ai_bad_request' })
     return
   }
+  if (body.tools !== undefined && typeof body.tools !== 'boolean') {
+    res.status(400).json({ error: 'tools must be true or false', code: 'ai_bad_request' })
+    return
+  }
+  const tools = body.tools === true
+  if (tools && (context || (conversation && await carriedSelection(conversation)))) {
+    res.status(400).json({
+      error: 'Tools are off in a conversation about selected text: a page the agent reads could send that text out.',
+      code: 'tools_with_selection',
+    })
+    return
+  }
   const controller = new AbortController()
   // `close` on the response fires when the box closed or a new question replaced this one. The
   // answer stops being waited for; a model child already writing may finish on its own.
@@ -112,10 +151,11 @@ quickInputV1Router.post('/quick/ask', async (req: Request, res: Response) => {
     const { aiRun } = await import('../../core/ai/ai-run.js')
     const result = await aiRun(QUICK_CALLER, {
       prompt: text,
-      system: QUICK_SYSTEM,
+      system: tools ? QUICK_AGENT_SYSTEM : QUICK_SYSTEM,
       effort: QUICK_EFFORT,
-      timeoutMs: QUICK_TIMEOUT_MS,
+      timeoutMs: tools ? QUICK_AGENT_TIMEOUT_MS : QUICK_TIMEOUT_MS,
       interactive: true,
+      ...(tools ? { needs: { web: true }, freshAgent: true, onActivity: (detail: string) => line({ type: 'activity', detail }) } : {}),
       ...(context ? { context } : {}),
       ...(conversation ? { conversation } : {}),
       onText: (delta) => line({ type: 'text', delta }),

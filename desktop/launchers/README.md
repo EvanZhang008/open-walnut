@@ -6,6 +6,9 @@ in `src/web/routes/quick-input-v1.ts`, documented under "Quick input" in
 
 - **Quick answer**: a question, a text to revise or translate, a short search. A light model with
   no tools answers in about two seconds, and the answer can be pasted back into the app you were in.
+  In Raycast it can also run **with tools**: a light agent session that searches the web and reads
+  pages (it sees none of your tasks, notes or files), showing each step as it goes. ⌘T switches
+  between the two at any turn of a conversation.
 - **Tell Main**: the text goes into Main's chat as your message. In Raycast this is the first row and
   fire and forget: ↵ sends it and Raycast closes (⌘⇧↵ stays to watch the reply); Alfred and Spotlight
   show Main's reply as it is written.
@@ -42,8 +45,11 @@ npm run dev     # loads it into Raycast
 Raycast is the main launcher; Alfred and Spotlight are the alternatives. Commands: **Ask Walnut**
 (type, ↵ to tell Main and close, ⌘↵ for a quick answer, ⌘⇧↵ to tell Main and wait for its reply,
 ⌥↵ to tell Main with the copied screenshot; tasks and notes listed below, ↵ opens one, ⌘↵ on a task
-messages it) and
-**Ask Walnut About Selection**. The port is a preference of the extension.
+messages it, ⌘⌥↵ asks with tools), **Ask Walnut About Selection**, and **Walnut AI** and
+**Walnut AI with Tools**, a chat with follow-ups that starts quick or with tools. To type anything in
+Raycast's root search and send it to Walnut AI, add the two as fallback commands (Raycast Settings,
+Extensions, Walnut, or "Manage Fallback Commands" in the root search's action panel). The port is a
+preference of the extension.
 
 ## Alfred
 

@@ -81,15 +81,25 @@ async function* lines(body: ReadableStream<Uint8Array>): AsyncGenerator<string> 
   if (buffer) yield buffer;
 }
 
-/** A quick answer; `onText` gets the whole text so far each time more arrives. */
+/**
+ * A quick answer; `onText` gets the whole text so far each time more arrives. With `tools` it is a
+ * light agent session that may search the web and read pages, and `onActivity` names each step.
+ */
 export async function askQuick(
   text: string,
-  opts: { conversation: string; context?: string; signal?: AbortSignal; onText: (text: string) => void },
+  opts: {
+    conversation: string; context?: string; tools?: boolean; signal?: AbortSignal
+    onText: (text: string) => void; onActivity?: (detail: string) => void
+  },
 ): Promise<{ text: string; durationMs?: number }> {
   const res = await fetch(`${walnutBase()}/api/v1/quick/ask`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text, conversation: opts.conversation, ...(opts.context ? { context: opts.context } : {}) }),
+    body: JSON.stringify({
+      text, conversation: opts.conversation,
+      ...(opts.context ? { context: opts.context } : {}),
+      ...(opts.tools ? { tools: true } : {}),
+    }),
     signal: opts.signal,
   });
   if (!res.ok || !res.body) {
@@ -99,7 +109,7 @@ export async function askQuick(
   let sofar = "";
   for await (const line of lines(res.body)) {
     if (!line.trim()) continue;
-    let value: { type?: string; delta?: string; text?: string; message?: string; durationMs?: number };
+    let value: { type?: string; delta?: string; text?: string; message?: string; detail?: string; durationMs?: number };
     try {
       value = JSON.parse(line);
     } catch {
@@ -108,6 +118,8 @@ export async function askQuick(
     if (value.type === "text") {
       sofar += value.delta ?? "";
       opts.onText(sofar);
+    } else if (value.type === "activity" && value.detail) {
+      opts.onActivity?.(value.detail);
     } else if (value.type === "result") {
       return { text: value.text ?? sofar, durationMs: value.durationMs };
     } else if (value.type === "error") {
