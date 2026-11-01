@@ -3,9 +3,10 @@
  *
  * Reported 2026-10-31 on the Mac app: "while I talk it suddenly says not
  * available, and two seconds later it is available again". The warning was
- * "No sound from the mic — check your device or restart the browser": under
- * heavy machine load WebKit's audio pipeline stopped delivering samples for a
- * few seconds (the user's recordings lost 4 to 6 s of audio), the analyser read
+ * "No sound from the mic — check your device or restart the browser": WebKit's
+ * capture stopped delivering samples for a few seconds (the user's recordings
+ * lost 4 to 6 s of audio; the cause, echo cancellation, is pinned by
+ * mic-constraints-ratchet.test.ts), the analyser read
  * digital zeros, and the old rule warned after 3 s of zeros whatever came
  * before. A real dead device delivers zeros from the start; a pipeline hiccup
  * comes after sound and recovers.

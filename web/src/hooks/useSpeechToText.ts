@@ -15,7 +15,9 @@ import { decideStopAction } from '@/utils/stt-stop';
 import { joinSegments } from '@/utils/stt-segments';
 import { decideDraftTick } from '@/utils/stt-draft-window';
 import { PcmCapture } from '@/utils/pcm-stream';
-import { initialMicHealth, micHealthTick, micHealthTrackEnded, byteFrameRms, SAMPLE_INTERVAL_MS, type MicHealthState } from '@/utils/mic-health';
+import { captureSeconds, describeShortSeconds, type CaptureSample } from '@/utils/capture-timeline';
+import { DICTATION_AUDIO_CONSTRAINTS } from '@/utils/mic-constraints';
+import { initialMicHealth, micHealthTick, micHealthTrackEnded, byteFrameRms, DEAD_STREAM_RMS, SAMPLE_INTERVAL_MS, type MicHealthState } from '@/utils/mic-health';
 import { log } from '@/utils/log';
 
 export interface UseSpeechToTextOptions {
@@ -192,6 +194,9 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
   // recorder started, to tell at stop how much audio the capture delivered.
   const micHealthRef = useRef<MicHealthState>(initialMicHealth());
   const recordStartedAtRef = useRef(0);
+  // One sample per level tick, for the stop-time "where did the audio go" line.
+  const timelineRef = useRef<CaptureSample[]>([]);
+  const recBytesRef = useRef(0);
   // True when the analyser successfully attached this recording (so the dead-stream
   // guard in onstop only applies when we actually had working level data).
   const analyserAttachedRef = useRef(false);
@@ -310,9 +315,9 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
     try {
       // Load the engine while the user talks, not in front of the first draft.
       warmupStt();
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: { ideal: 1 }, sampleRate: { ideal: 16000 } },
-      });
+      const clickAt = performance.now();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: DICTATION_AUDIO_CONSTRAINTS });
+      const openedMs = Math.round(performance.now() - clickAt);
       streamRef.current = stream;
 
       // Set up Web Audio analyser for the live level meter + dead-mic warning.
@@ -320,6 +325,8 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
       sawAnyNonDeadRef.current = false;
       analyserAttachedRef.current = false;
       micHealthRef.current = initialMicHealth();
+      timelineRef.current = [];
+      recBytesRef.current = 0;
       setSilenceWarning(null);
       // What the capture track says about itself, for the log: a stall that
       // comes with a mute is the browser's, one without is the pipeline's.
@@ -363,6 +370,15 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
           pcmRef.current = PcmCapture.attach(ctx, stream);
 
           const buf = new Uint8Array(analyser.fftSize);
+          const timelineT0 = performance.now();
+          const ctxT0 = ctx.currentTime;
+          // The first `running` is the start, and `closed` after stop is ours.
+          let ctxRan = ctx.state === 'running';
+          ctx.addEventListener('statechange', () => {
+            if (streamRef.current !== stream) return;
+            if (ctx.state === 'running' && !ctxRan) { ctxRan = true; return; }
+            log.warn('stt', `audio context ${ctx.state} mid-recording`);
+          });
 
           // setInterval, not rAF: rAF pauses when the tab is backgrounded/blurred, which
           // would freeze sampling. Counting ticks ties detection to real sampling progress.
@@ -383,7 +399,25 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
               lastVoiceChunkRef.current = chunksRef.current.length + 1;
             }
 
+            const pcmNow = pcmRef.current;
+            if (timelineRef.current.length < 36_000) timelineRef.current.push({
+              wallMs: performance.now() - timelineT0,
+              pcmMs: pcmNow ? pcmNow.totalSamples / (pcmNow.sampleRate / 1000) : 0,
+              ctxMs: (ctx.currentTime - ctxT0) * 1000,
+              zero: rms <= DEAD_STREAM_RMS,
+              recBytes: recBytesRef.current,
+            });
             const tick = micHealthTick(micHealthRef.current, rms);
+            if (tick.state.alive && !micHealthRef.current.alive) {
+              // How long the user talked into nothing: the words said before
+              // the first sample are not in the recording.
+              const settings = stream.getAudioTracks()[0]?.getSettings();
+              log.info('stt', `mic delivered sound ${Math.round(performance.now() - clickAt)}ms after the click (opened in ${openedMs}ms)`, {
+                device: stream.getAudioTracks()[0]?.label ?? null,
+                echoCancellation: settings?.echoCancellation ?? null,
+                sampleRate: settings?.sampleRate ?? null,
+              });
+            }
             micHealthRef.current = tick.state;
             if (tick.state.alive) sawAnyNonDeadRef.current = true;
             if (tick.stallEndedTicks !== undefined) {
@@ -392,7 +426,11 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
                 trackMuted: stream.getAudioTracks()[0]?.muted ?? null,
               });
             }
-            setSilenceWarning((w) => (w === tick.warning ? w : tick.warning));
+            setSilenceWarning((w) => {
+              if (w === tick.warning) return w;
+              if (tick.warning) log.warn('stt', `mic warning shown: ${tick.warning}`, { deadTicks: tick.state.deadTicks, alive: tick.state.alive });
+              return tick.warning;
+            });
           }, SAMPLE_INTERVAL_MS);
         }
       } catch {
@@ -412,6 +450,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
 
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunksRef.current.push(e.data);
+        recBytesRef.current += e.data.size;
       };
 
       recorder.onstop = async () => {
@@ -421,10 +460,10 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
         setIsRecording(false);
 
         const totalChunks = chunksRef.current.length;
-        // The capture can hold less audio than the time it ran: on a heavily
-        // loaded Mac (2026-10-31) recordings lost seconds of samples. Log it, so
-        // a "my words are missing" report can be traced; which layer fell behind
-        // (the capture, or the main-thread side capture) the line cannot tell.
+        // The capture can hold less audio than the time it ran (2026-10-31 in
+        // the Mac app: seconds of samples lost). Log it, so a "my words are
+        // missing" report can be traced; the capture timeline below says which
+        // clock fell behind.
         const capturedPcm = pcmRef.current;
         if (capturedPcm && recordStartedAtRef.current > 0) {
           const ranMs = Date.now() - recordStartedAtRef.current;
@@ -433,6 +472,8 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
             log.warn('stt', `audio fell behind: the side capture holds ${capturedMs}ms for ${ranMs}ms of recording (${ranMs - capturedMs}ms short)`);
           }
         }
+        const shortSeconds = describeShortSeconds(captureSeconds(timelineRef.current));
+        if (shortSeconds) log.warn('stt', `capture timeline (per second: sampler ticks, zero ticks, side-capture ms, audio-clock ms, recorder bytes): ${shortSeconds}`);
         const blob = new Blob(chunksRef.current, { type: recorder.mimeType });
         chunksRef.current = [];
 

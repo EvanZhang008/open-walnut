@@ -4,10 +4,12 @@
  * The warning exists for a capture that delivers nothing but digital zeros: a
  * wedged browser capture, a muted or wrong input device. A real mic always
  * carries a noise floor, so a zero run after the stream has carried any signal
- * is something else. On the Mac app (WebKit) under heavy machine load the audio
- * pipeline stops delivering samples for a few seconds and then recovers
- * (2026-10-31: recordings lost 4 to 6 s of audio, and the old "3 s of zeros"
- * rule told the user to check the device while they were talking). So:
+ * is something else. In the Mac app (WebKit) the capture stopped delivering
+ * samples for a few seconds and then recovered (2026-10-31: recordings lost 4
+ * to 6 s of audio, and the old "3 s of zeros" rule told the user to check the
+ * device while they were talking). The cause was WebKit's echo cancellation
+ * rebuilding its audio device (see mic-constraints.ts), now off; a gap after
+ * sound is still no proof of a dead device. So:
  *
  *  - never alive since the start, zeros for DEAD_FROM_START_TICKS: warn;
  *  - alive before, zeros for STALL_WARN_TICKS (far past any hiccup seen): warn;
