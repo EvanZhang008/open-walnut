@@ -1,5 +1,5 @@
 /**
- * A message straight into one task's chat, from the task found in Ask Walnut: type it, Cmd+Enter
+ * A message straight into one task's chat, from the task found in Tell Main: type it, Cmd+Enter
  * sends it and Raycast closes (the task's reply is in Walnut). A task with no session is started
  * with it. A screenshot on the clipboard is offered as a checkbox, ticked, and goes with it.
  */

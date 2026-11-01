@@ -5,9 +5,9 @@
  *
  * Three ways to answer, the first two switched with Cmd+T at any turn:
  *   - Quick Answer: the model alone, about two seconds (POST /quick/ask).
- *   - Claude Code: a normal Claude Code session in Walnut, an Ask Walnut chat with everything the
+ *   - Ask Walnut: a normal Claude Code session in Walnut, an Ask Walnut chat with everything the
  *     user's Claude Code has (POST /quick/session); Cmd+O opens it in Walnut.
- *   - Main: Walnut's main agent (Ask Walnut's "Tell Main and wait").
+ *   - Main: Walnut's main agent (Tell Main's "Tell Main and wait").
  * A switch carries over the turns the other side has not seen, so the thread is never lost.
  */
 import { Action, ActionPanel, Icon, List } from "@raycast/api";
@@ -34,7 +34,7 @@ function failure(error: unknown): string {
   return /fetch failed|ECONNREFUSED|connect/i.test(message) ? NOT_RUNNING : message;
 }
 
-const TITLE: Record<Mode, string> = { quick: "Quick Answer", session: "Claude Code", main: "Main" };
+const TITLE: Record<Mode, string> = { quick: "Quick Answer", session: "Ask Walnut", main: "Main" };
 
 export function Conversation(props: { mode: Mode; first?: string; selection?: string; app?: string }) {
   const [mode, setMode] = useState<Mode>(props.mode);
@@ -137,7 +137,7 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
   const placeholder = turns.length === 0
     ? props.selection
       ? "What should Walnut do with the selected text?"
-      : mode === "main" ? "Tell Main…" : mode === "session" ? "Ask Claude Code anything…" : "Ask anything…"
+      : mode === "main" ? "Tell Main…" : mode === "session" ? "Ask Walnut anything…" : "Ask anything…"
     : "Ask a follow-up, then Enter…";
 
   const detailFor = (t: Turn) => {
@@ -153,7 +153,7 @@ export function Conversation(props: { mode: Mode; first?: string; selection?: st
 
   const switchMode = mode !== "main" ? (
     <Action
-      title={mode === "quick" ? "Hand to Claude Code" : "Switch to Quick Answer"}
+      title={mode === "quick" ? "Hand to Ask Walnut" : "Switch to Quick Answer"}
       icon={mode === "quick" ? Icon.Terminal : Icon.Bolt}
       shortcut={{ modifiers: ["cmd"], key: "t" }}
       onAction={() => setMode((m) => (m === "quick" ? "session" : "quick"))}

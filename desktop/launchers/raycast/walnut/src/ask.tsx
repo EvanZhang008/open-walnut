@@ -1,5 +1,5 @@
 /**
- * Ask Walnut: type, then Enter to tell Main (sent, and Raycast closes: the reply is in Main's chat)
+ * Tell Main: type, then Enter to tell Main (sent, and Raycast closes: the reply is in Main's chat)
  * or Cmd+Enter for a quick answer here. The tasks and notes matching the words list below: Enter
  * opens one in Walnut, Cmd+Enter on a task writes a message straight into its chat.
  */
@@ -113,7 +113,7 @@ export default function Command() {
                   target={<Conversation mode="quick" first={q} />}
                 />
                 <Action.Push
-                  title="Ask Claude Code"
+                  title="Ask Walnut"
                   icon={Icon.Terminal}
                   shortcut={{ modifiers: ["cmd", "opt"], key: "return" }}
                   target={<Conversation mode="session" first={q} />}
@@ -143,11 +143,11 @@ export default function Command() {
             id="session"
             icon={Icon.Terminal}
             title={q}
-            subtitle="A Claude Code session in Walnut"
+            subtitle="Walnut does it, in a session with your skills and tools"
             accessories={[{ text: "⌘⌥↵" }]}
             actions={
               <ActionPanel>
-                <Action.Push title="Ask Claude Code" icon={Icon.Terminal} target={<Conversation mode="session" first={q} />} />
+                <Action.Push title="Ask Walnut" icon={Icon.Terminal} target={<Conversation mode="session" first={q} />} />
               </ActionPanel>
             }
           />
@@ -169,7 +169,7 @@ export default function Command() {
           ) : null}
         </List.Section>
       ) : (
-        <List.EmptyView icon={{ source: "walnut-icon.png" }} title="Ask Walnut" description="Type a question, a text to revise, or words of a task or note to find." />
+        <List.EmptyView icon={{ source: "walnut-icon.png" }} title="Tell Main" description="Type a question, a text to revise, or words of a task or note to find." />
       )}
       {tasks.length > 0 ? (
         <List.Section title="Tasks">

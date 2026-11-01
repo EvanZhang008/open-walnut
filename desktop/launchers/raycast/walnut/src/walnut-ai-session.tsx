@@ -1,4 +1,4 @@
-/** Ask Claude Code: a normal Claude Code session in Walnut from the start (see walnut-ai.tsx). */
+/** Ask Walnut: a normal Claude Code session in Walnut from the start (see walnut-ai.tsx). */
 import { LaunchProps } from "@raycast/api";
 import { Conversation } from "./conversation";
 
