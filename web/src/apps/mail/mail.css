@@ -308,6 +308,9 @@
   min-height: 0;
   overflow-y: auto;
   padding: 8px 0;
+  /* Anchored by hand (`useScrollAnchor` in MailAccountsPane): WebKit has no CSS scroll anchoring, so
+     the native one is off to keep the engines alike and never to correct the same move twice. */
+  overflow-anchor: none;
 }
 
 .mail-refresh-note {

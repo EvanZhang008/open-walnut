@@ -18,6 +18,7 @@ import {
 } from 'react';
 import type { MailAccountDto, MailDraftDto, MailProviderSummary, MailboxDto } from '@/api/mail';
 import { ContextMenu } from '@/components/common/ContextMenu';
+import { useScrollAnchor } from '@/hooks/useScrollAnchor';
 import {
   ANSWER_MS,
   clearMailPaneNote,
@@ -71,6 +72,16 @@ interface Props {
 
 /** How long a still pointer inside the pane counts as aiming at something. */
 const IDLE_MS = 2_500;
+
+/**
+ * The lines of the scrolling list a person reads by, which `useScrollAnchor` holds in place when
+ * something lands above them: the smart group arrives only once every account's folders are in, and
+ * by then the person may have scrolled. `useHeldRows` keeps a row still under the POINTER; this
+ * keeps the row at the top of the view still for the eye, in WebKit too (see mail.css). A smart
+ * row's LINE is listed as well as its `<li>`, which also holds the accounts it opens onto, so a row
+ * cut by the top edge holds its line and opens its accounts in view.
+ */
+const PANE_ROWS = 'li, .mail-mailbox-line, .mail-smart-head, .mail-account-head, .mail-account-hint';
 
 /**
  * How often the footer's relative time is recomputed. Zero requests: it is arithmetic on a number the
@@ -283,6 +294,8 @@ export function MailAccountsPane({
   const arrivals = snapshot.arrivals;
   const identities = snapshot.identities;
   const held = useHeldRows(mailboxes, arrivals, aim.busy, snapshot.picks);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  useScrollAnchor(scrollRef, PANE_ROWS);
 
   const accountIds = accounts.map((one) => one.accountId);
   const idsKey = accountIds.join(' ');
@@ -460,7 +473,7 @@ export function MailAccountsPane({
         <p className="mail-refresh-note" data-testid="mail-refresh-note">{refreshNote}</p>
       )}
 
-      <div className="mail-accounts-scroll">
+      <div className="mail-accounts-scroll" ref={scrollRef}>
         <MailSmartRows
           /* Only accounts whose folder list has LANDED. A smart row stands for a set of folders, and
              during the first paint that set is not known yet: drawn from the account list alone, the
