@@ -249,3 +249,13 @@ describe('WebKit specs that record the mic', () => {
     expect(recording.filter(({ text }) => !text.includes('hasMediaRecorder(')).map(({ file }) => file)).toEqual([])
   })
 })
+
+describe('the fake microphone', () => {
+  // Chromium's own fake capture is exact zeros with a 20 ms beep every 500 ms, and since
+  // dictation turned echo cancellation off it reaches the recorder as it is: a short
+  // recording read as a dead mic and transcribed nothing (2026-11-01, the voice specs on
+  // 4 of 5 CI runs). fake-mic.ts plays a steady tone; every spec takes its flags.
+  it('only fake-mic.ts names the fake capture device', () => {
+    expect(sources.filter(({ file, text }) => file !== 'fake-mic.ts' && text.includes('--use-fake-device-for-media-stream')).map(({ file }) => file)).toEqual([])
+  })
+})

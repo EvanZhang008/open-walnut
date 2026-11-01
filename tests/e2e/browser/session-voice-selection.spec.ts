@@ -58,6 +58,8 @@ import {
   selectPassage, selectedText, shot, stubSttStatus, threadAnchorsOf, wheel,
 } from './voice-selection-helpers'
 import { dragPhrase, selectionAnchorNodeType } from './selection-helpers'
+import { FAKE_MIC_ARGS } from './fake-mic'
+import { NO_RECORDER, hasMediaRecorder } from './webkit-recorder'
 
 /** Ask here asks in Conversation Mode (2026-10-23): the column switches, the
  *  question's card opens beside the passage with its own box focused; the
@@ -101,14 +103,17 @@ const STRAY_TASK_ID = 'pw-task-voicesel5'
  *  after a branch is created, so it is what a selection there can be made of. */
 const REPLY_PHRASE = 'processed your message'
 
-/** A fake capture device for the dictation tests below. File-level because
+/** A fake capture device for the dictation tests below (a steady tone, never
+ *  digital silence: fake-mic.ts says why). File-level because
  *  Playwright refuses `launchOptions` inside a describe (it would force a second
- *  worker), and harmless for the WebKit project, which skips that describe and
- *  ignores Chromium args. The microphone PERMISSION is deliberately not here:
+ *  worker). Chromium only: Linux WebKit refuses to launch with these flags, and
+ *  the WebKit project skips the dictation describe anyway. The microphone PERMISSION is deliberately not here:
  *  WebKit rejects that name outright ("Unknown permission: microphone") and would
  *  fail every test in the file, so it is granted per test where it is needed. */
 test.use({
-  launchOptions: { args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] },
+  launchOptions: async ({ browserName }, use) => {
+    await use(browserName === 'chromium' ? { args: FAKE_MIC_ARGS } : {})
+  },
 })
 
 /** Canned words for both engine lanes, answered at once. The draft lane says DRAFTED
@@ -153,6 +158,8 @@ test.describe('Voice input keeps the selected passage', () => {
     // only so that if it does, nothing it posts can write into the composer.
     await stubDictation(page)
     await page.goto('/')
+    // No MediaRecorder (Linux WebKit) means no mic button to press.
+    test.skip(!(await hasMediaRecorder(page)), NO_RECORDER)
     const panel = await openSession(page)
     const pill = await selectPassage(page, panel)
     await shot(page, '01-passage-selected')

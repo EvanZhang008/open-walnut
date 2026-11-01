@@ -27,6 +27,7 @@ import { REAL_PANEL } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { stubSttStatus } from './voice-selection-helpers'
 import { calendarEmptySlotPoint } from './calendar-helpers'
+import { FAKE_MIC_ARGS } from './fake-mic'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 /** Shots land here; VOICE_MIC_SHOTS moves them (a remote run keeps them under test-results). */
@@ -40,14 +41,15 @@ const DRAFTED = 'why does phase'
 /** The stop's tail pass rides the draft route, so the landed text may be either. */
 const ANY_WORDS = /why does phase/
 
-/** A fake capture device for the dictation tests. File level, because Playwright
+/** A fake capture device for the dictation tests (a steady tone, never digital
+ *  silence: fake-mic.ts says why). File level, because Playwright
  *  refuses launchOptions inside a describe; Chromium only, because Linux WebKit refuses to
  *  launch with them (macOS WebKit ignores them). The microphone PERMISSION is granted per
  *  test: WebKit rejects that name outright. */
 test.use({
   viewport: { width: 1280, height: 800 },
   launchOptions: async ({ browserName }, use) => {
-    await use(browserName === 'chromium' ? { args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'] } : {})
+    await use(browserName === 'chromium' ? { args: FAKE_MIC_ARGS } : {})
   },
 })
 
