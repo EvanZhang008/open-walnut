@@ -265,6 +265,9 @@ test('read-only and all-day events can be hidden without deleting them', async (
 });
 
 test('hide one overlapping event, restore it, and recover after a rejected write', async ({ page }) => {
+  // Two cold loads of the dev-mode app (the reload proves the hide was stored), each 12 to 14 s on
+  // a 4-core CI runner with four workers: past the 30 s default on 2 of 7 runs (2026-11-01).
+  test.slow();
   const unique = `Calendar controls ${Date.now()}`;
   const one = await event(`${unique} hidden`, '11:00', '12:00');
   const two = await event(`${unique} sibling`, '11:00', '12:00');

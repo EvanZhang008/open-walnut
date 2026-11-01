@@ -962,6 +962,9 @@ test.describe('Calendar view', () => {
   })
 
   test('homepage all-day area grows to ten rows, scrolls, resizes, and persists', async ({ page }) => {
+    // Two cold loads of the dev-mode app (the second is the persistence check), each 12 to 14 s on
+    // a 4-core CI runner with four workers: past the 30 s default on 3 of 7 runs (2026-11-01).
+    test.slow()
     const dayOffset = 10
     const targetDay = localDay(dayOffset)
     const heightKey = 'open-walnut-home-calendar-all-day-height'
@@ -979,10 +982,15 @@ test.describe('Calendar view', () => {
       const failed = results.find((result) => result.status === 'rejected')
       if (failed?.status === 'rejected') throw failed.reason
 
+      // No stored height before the first load (an init script, once: the reload below must keep it).
+      await page.addInitScript((key) => {
+        try {
+          if (location.protocol !== 'http:' || sessionStorage.getItem('cal-allday-height-cleared')) return
+          localStorage.removeItem(key)
+          sessionStorage.setItem('cal-allday-height-cleared', '1')
+        } catch { /* a page without storage */ }
+      }, heightKey)
       await page.goto('/')
-      await expect(page.locator('[data-testid="sidebar-toggle-calendar"]')).toBeVisible()
-      await page.evaluate((key) => localStorage.removeItem(key), heightKey)
-      await page.reload()
       await expect(page.locator('[data-testid="sidebar-toggle-calendar"]')).toBeVisible()
       await page.click('[data-testid="sidebar-toggle-calendar"]')
 
