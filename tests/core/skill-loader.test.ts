@@ -12,6 +12,7 @@ import {
   isEligible,
   escapeXml,
   formatSkillsPrompt,
+  formatCompactSkillsPrompt,
   buildSkillsPrompt,
   clearSkillsCache,
   listAvailableSkills,
@@ -212,6 +213,32 @@ describe('formatSkillsPrompt', () => {
     expect(result).toContain('test &amp; dev');
     expect(result).toContain('A &lt;special&gt; skill');
     expect(result).toContain('&quot;SKILL&quot;');
+  });
+});
+
+// 2026-11-01: an ACP engine reads the persona, skills index included, on the first message
+// of every conversation; the XML form was 19.5 KB for 27 skills, half of it tags and paths.
+describe('formatCompactSkillsPrompt', () => {
+  const skills: SkillMeta[] = [
+    { name: 'walnut-board', description: 'Keep a team Board.\n  Use when  leading workers.', location: '/opt/w/dist/data/skills/walnut-board/SKILL.md', category: 'walnut', type: 'action' },
+    { name: 'walnut-time', description: 'Time review', location: '/opt/w/dist/data/skills/walnut-time/SKILL.md', category: 'walnut', type: 'knowledge' },
+    { name: 'mine', description: 'My own', location: '/home/u/.open-walnut/skills/mine/SKILL.md', category: 'general', type: 'action' },
+  ];
+
+  it('is empty with no skills', () => {
+    expect(formatCompactSkillsPrompt([])).toBe('');
+  });
+
+  it('one line per skill, its file relative to the folder it shares, whole description on one line', () => {
+    const out = formatCompactSkillsPrompt(skills);
+    expect(out).toContain('## Walnut skills\n');
+    expect(out).toContain('In /opt/w/dist/data/skills:\n- walnut-board/SKILL.md (action): Keep a team Board. Use when leading workers.\n- walnut-time/SKILL.md (knowledge): Time review');
+    expect(out).toContain('In /home/u/.open-walnut/skills:\n- mine/SKILL.md (action): My own');
+    expect(out).not.toContain('<skill>');
+  });
+
+  it('is far shorter than the XML form for the same skills', () => {
+    expect(formatCompactSkillsPrompt(skills).length * 2).toBeLessThan(formatSkillsPrompt(skills).length + 1200);
   });
 });
 

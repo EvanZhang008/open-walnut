@@ -750,6 +750,8 @@ describe('an ACP lane', () => {
     expect(message).toContain('[/Conversation context]')
     expect(message).toContain('EARLIER-ANSWER')
     expect(message.endsWith('hello acp')).toBe(true)
+    // The skills index rides this message on every new conversation: its short form.
+    expect(message).not.toContain('<available_skills>')
 
     // Nothing is latched until the worker establishes: an ACP session id is minted
     // by the provider, so the mint waits for the record before it can name the lane

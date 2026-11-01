@@ -274,7 +274,10 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     const { getConfig } = await import('../config-manager.js');
     const { buildLaneProfile } = await import('./personal-ai-lane.js');
     // USER.md rides the session context where the engine takes one; elsewhere the prefix carries it.
-    const built = await buildLaneProfile(await getConfig(), askAgent.id, { userInSessionContext: engineCaps(engine).walnutSessionContext });
+    const built = await buildLaneProfile(await getConfig(), askAgent.id, {
+      userInSessionContext: engineCaps(engine).walnutSessionContext,
+      compactSkills: isAcpEngine(engine),
+    });
     if (isAcpEngine(engine)) {
       // One builder, two carriers. The spawn cannot take the bundle here, so it
       // becomes the launch message's prefix instead — an ACP ask that launched

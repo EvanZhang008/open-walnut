@@ -34,7 +34,7 @@ import { CONVERSATION_SEED_HEADER, clipRenderedSeed } from '../chat-history.js';
 import { personalAiProfile, consoleAgentProfile, mergeProfiles, walnutMcpProfile } from './profiles.js';
 
 const LANE_EFFORTS: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
-import { buildSessionSkillsPrompt } from '../skill-loader.js';
+import { buildCompactSessionSkillsPrompt, buildSessionSkillsPrompt } from '../skill-loader.js';
 import type { SessionEngine } from '../types.js';
 import { engineCaps, isAcpEngine, resolveEngine } from '../agents/engine-registry.js';
 import { resolveDefaultEngine } from '../agents/default-engine.js';
@@ -431,6 +431,8 @@ export async function buildLaneProfile(
      * persona leaves it out rather than carry a second copy frozen at spawn.
      */
     userInSessionContext?: boolean;
+    /** The engine reads the persona on its first message (ACP): the short skills index. */
+    compactSkills?: boolean;
   },
 ): Promise<{
   profile: import('../types.js').SessionProfile;
@@ -443,7 +445,8 @@ export async function buildLaneProfile(
   // ~/.claude/skills is excluded (Claude Code loads it natively). Failure is
   // non-fatal: a lane without the index still answers.
   const persona = opts?.persona;
-  const skillsIndex = persona ? '' : opts?.skillsIndex ?? await buildSessionSkillsPrompt().catch(() => '');
+  const skillsIndex = persona ? '' : opts?.skillsIndex
+    ?? await (opts?.compactSkills ? buildCompactSessionSkillsPrompt() : buildSessionSkillsPrompt()).catch(() => '');
   // Standing memory — Walnut-owned injection, engine-neutral (see
   // buildLaneMemoryContext). Rides the SAME profile as the persona.
   const memoryContext = persona ? '' : opts?.memoryContext
@@ -856,7 +859,7 @@ async function resolveLane(
       ? await recapOntoFirstMessage(agentId, conversationId, firstMessage, lane)
       : null;
     const personaPrefix = firstMessage
-      ? buildAskProfilePrefix((await buildLaneProfile(config, agentId)).profile)
+      ? buildAskProfilePrefix((await buildLaneProfile(config, agentId, { compactSkills: true })).profile)
       : '';
     bus.emit(EventNames.SESSION_START, {
       taskId: askTaskId,

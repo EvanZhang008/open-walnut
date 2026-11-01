@@ -472,10 +472,35 @@ function formatSkillsPrompt(skills: SkillMeta[], preamble: string = LOOP_SKILLS_
   return `${preamble}\n\n<available_skills>\n${groups}\n</available_skills>`;
 }
 
+/**
+ * The same index in a short form, for an engine that reads it on the first message of
+ * every conversation (every ACP engine: the persona rides that message, ask-profile-prefix.ts).
+ * Each skill is one line, its file named relative to the folder it shares with the others,
+ * and the rules are three sentences: the XML form measured 19.5 KB for 27 skills, of which
+ * tags, absolute paths and the preamble were half (2026-11-01: an Ask on a local model read
+ * all of it before its first word). The descriptions stay whole, since they hold the words
+ * that say when a skill applies.
+ */
+const COMPACT_SKILLS_PREAMBLE = `## Walnut skills
+Walnut's own skills, which no engine finds by itself. When a skill below fits the request, read its SKILL.md with your file-read tool before you act, and follow it; skills hold the user's conventions. If one is wrong or out of date, fix its SKILL.md.`;
+
+function formatCompactSkillsPrompt(skills: SkillMeta[]): string {
+  if (skills.length === 0) return '';
+  const byRoot = new Map<string, string[]>();
+  for (const s of skills.map(screenIndexEntry)) {
+    const root = path.dirname(path.dirname(s.location));
+    const line = `- ${path.relative(root, s.location)} (${s.type}): ${s.description.replace(/\s+/g, ' ').trim()}`;
+    byRoot.set(root, [...(byRoot.get(root) ?? []), line]);
+  }
+  const groups = [...byRoot.entries()].map(([root, lines]) => `In ${root}:\n${lines.join('\n')}`)
+  return `${COMPACT_SKILLS_PREAMBLE}\n\n${groups.join('\n\n')}`;
+}
+
 // ─── cache + public API ─────────────────────────────────────────────
 
 let cachedPrompt: string | undefined;
 let cachedSessionPrompt: string | undefined;
+let cachedCompactPrompt: string | undefined;
 /** All sources (incl. ~/.claude/skills) — management UI + skill_view resolution. */
 let cachedSkills: (SkillMeta & { dirName: string })[] | undefined;
 /** Prompt scope only (no ~/.claude/skills) — what the Personal AI's index is built from. */
@@ -486,6 +511,7 @@ let skillsCacheGeneration = 0;
 export function clearSkillsCache(): void {
   cachedPrompt = undefined;
   cachedSessionPrompt = undefined;
+  cachedCompactPrompt = undefined;
   cachedSkills = undefined;
   cachedPromptSkills = undefined;
   skillsCacheGeneration++;
@@ -563,6 +589,13 @@ export async function buildSessionSkillsPrompt(): Promise<string> {
   return cachedSessionPrompt;
 }
 
+/** buildSessionSkillsPrompt in the short form an ACP engine reads (formatCompactSkillsPrompt). */
+export async function buildCompactSessionSkillsPrompt(): Promise<string> {
+  if (cachedCompactPrompt !== undefined) return cachedCompactPrompt;
+  cachedCompactPrompt = formatCompactSkillsPrompt(await getPromptSkills());
+  return cachedCompactPrompt;
+}
+
 /**
  * The same index for skills read elsewhere: the cloud companion's chat lane builds it from
  * its copy of the Mac's skills (stage 4d), never from the skill files git sync wrote there.
@@ -589,4 +622,4 @@ export async function buildFilteredSkillsPrompt(skillDirNames: string[]): Promis
 }
 
 // Exported for testing
-export { parseFrontmatter, isEligible, escapeXml, formatSkillsPrompt, discoverSkills, getSearchDirs, getPromptSearchDirs };
+export { parseFrontmatter, isEligible, escapeXml, formatSkillsPrompt, formatCompactSkillsPrompt, discoverSkills, getSearchDirs, getPromptSearchDirs };
