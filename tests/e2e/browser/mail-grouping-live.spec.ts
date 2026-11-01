@@ -29,6 +29,38 @@ async function pointerOnList(page: Page): Promise<void> {
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
 }
 
+/**
+ * What the reference draw below may cost before the 1.5 s budget grows with it. Measured
+ * 2026-11-01 on an 8-CPU dev container at load 10 to 30: reference 250 to 330 ms, the grouped
+ * draw 3 to 6.4 times that (the ratio spreads as the load rises: 1,926 ms beside 300). So the
+ * scaled budget is about 8 references: a draw at two and a half times its usual cost fails on
+ * any machine, and a machine faster than this keeps the plain 1.5 s.
+ */
+const REFERENCE_DRAW_MS = 180
+
+/**
+ * Main-thread CPU of a fixed draw in this page: 3,000 two-line rows built, laid out and taken
+ * away, five times; the median, in ms. It does the same kind of work as the grouped list's
+ * first draw (markup, style, layout), so it scales with the machine the way that draw does.
+ */
+async function referenceDrawMs(page: Page, taskSeconds: () => Promise<number>): Promise<number> {
+  const runs: number[] = []
+  for (let i = 0; i < 5; i++) {
+    const before = await taskSeconds()
+    await page.evaluate(() => {
+      const host = document.createElement('div')
+      host.style.cssText = 'position:fixed;left:0;top:0;width:600px;visibility:hidden;pointer-events:none'
+      host.innerHTML = Array.from({ length: 3_000 }, (_, n) =>
+        `<div class="ref-row"><b>Sender ${n}</b> <span>Subject line number ${n} of the reference draw</span><p>A preview of the message body, ${n}</p></div>`).join('')
+      document.body.append(host)
+      void host.getBoundingClientRect().height
+      host.remove()
+    })
+    runs.push((await taskSeconds() - before) * 1000)
+  }
+  return Math.round(runs.sort((a, b) => a - b)[2]!)
+}
+
 test.describe('the ordinary fixture', () => {
   let server: MailFixtureServer
   let fixture: MailFixture
@@ -98,6 +130,12 @@ test.describe('the dense fixture', () => {
     await cdp?.send('Performance.enable', { timeDomain: 'threadTicks' })
     const taskSeconds = async () => cdp ? (await cdp.send('Performance.getMetrics')).metrics.find((one) => one.name === 'TaskDuration')?.value ?? 0 : 0
     await openMail(page, fixture.port)
+    // The budget is for a fast desktop core. A slower or busier one (a CI runner's: 1,502 and
+    // 1,909 ms of CPU on 2026-11-01 for a draw that takes 700 to 870 here) gets it scaled by how
+    // long a fixed reference draw takes there, read with the same clock (REFERENCE_DRAW_MS).
+    const reference = await referenceDrawMs(page, taskSeconds)
+    const scale = cdp ? Math.max(1, reference / REFERENCE_DRAW_MS) : 1
+    const budget = Math.round(1_500 * scale)
     const cpuBefore = await taskSeconds()
     const started = Date.now()
     await smartRow(page, 'inbox').click()
@@ -107,9 +145,9 @@ test.describe('the dense fixture', () => {
     const cpu = Math.round((await taskSeconds() - cpuBefore) * 1000)
     const load = os.loadavg()[0]
     const saturated = load >= os.cpus().length
-    test.info().annotations.push({ type: 'groups-first-paint-ms', description: `wall ${took}, main-thread cpu ${cdp ? cpu : 'n/a'}, load ${load.toFixed(0)}${saturated ? ' (wall not judged)' : ''}` })
-    if (cdp) expect(cpu).toBeLessThan(1_500)
-    if (!saturated) expect(took).toBeLessThan(1_500)
+    test.info().annotations.push({ type: 'groups-first-paint-ms', description: `wall ${took}, main-thread cpu ${cdp ? cpu : 'n/a'}, reference draw ${cdp ? reference : 'n/a'}, budget ${budget}, load ${load.toFixed(0)}${saturated ? ' (wall not judged)' : ''}` })
+    if (cdp) expect(cpu).toBeLessThan(budget)
+    if (!saturated) expect(took).toBeLessThan(budget)
     const groups = await getGroups(fixture, ALL_INBOXES)
     expect(groups.cachedTotal).toBeGreaterThanOrEqual(3_000)
     expect(await page.getByTestId('mail-group-row').count()).toBe(groups.groups.length)
