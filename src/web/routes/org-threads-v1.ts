@@ -4,9 +4,11 @@
  * the node and the user both change them here, the same way (2026-10-27, the user: "all human
  * action can be done by agent also").
  *
- *   GET   /api/v1/tasks/:id/threads                        { task_id, threads }  (open first)
+ *   GET   /api/v1/tasks/:id/threads[?open=1]               { task_id, threads, closed_count }  (open first; each message with
+ *                                                          the node's answer, read from its chat in the background)
  *   POST  /api/v1/tasks/:id/threads                        { text, images?, thread? } -> file one of his messages
- *   PATCH /api/v1/tasks/:id/threads/:thread                { title?, ask?, state?, reply?, tasks?, add_tasks?, close?, reopen?, merge_into? }
+ *   PATCH /api/v1/tasks/:id/threads/:thread                { title?, ask?, state?, reply?, tasks?, add_tasks?, known?, close?, reopen?, merge_into? }
+ *   POST  /api/v1/tasks/:id/threads/open                   { title, text, from, ref?, state?, tasks? } -> the node opens one itself
  *   POST  /api/v1/tasks/:id/threads/:thread/split          { message } -> that message becomes its own thread
  *
  * The caller comes from `x-walnut-caller-sid`: none = the user. Writes answer 501 on the companion.
@@ -15,8 +17,9 @@ import { Router, type Request, type Response } from 'express'
 import type { Task } from '../../core/types.js'
 import { log } from '../../logging/index.js'
 import { resolveBoardCaller, boardWriter } from '../../core/boards/board-team.js'
-import { ThreadError, THREAD_ID_RE, THREAD_MESSAGE_ID_RE, sortedThreads, type ThreadPatch, type ThreadWriter } from '../../core/org/threads-model.js'
-import { fileThreadMessage, mergeThread, patchThread, readThreads, splitThread } from '../../core/org/threads-store.js'
+import { ThreadError, THREAD_ID_RE, THREAD_MESSAGE_ID_RE, sortedThreads, type ThreadPatch, type ThreadSource, type ThreadState, type ThreadWriter } from '../../core/org/threads-model.js'
+import { fileThreadMessage, mergeThread, openNodeThread, patchThread, readThreads, splitThread } from '../../core/org/threads-store.js'
+import { resolveThreadAnswers } from '../../core/org/thread-answers.js'
 import { body, header, param, resolveTask, RouteError } from './board-v1.js'
 import { sendV1Error as sendError } from './v1-control-relay.js'
 
@@ -69,7 +72,9 @@ orgThreadsV1Router.get('/tasks/:id/threads', route(async (req, res) => {
   const file = await readThreads(task.id)
   const open = req.query.open === '1' || req.query.open === 'true'
   const threads = sortedThreads(file.threads).filter((t) => !open || !t.closed)
-  res.json({ task_id: task.id, title: task.title, threads })
+  // Answers still missing are read from the node's chat meanwhile; a kept one says so (org-threads:changed).
+  void resolveThreadAnswers(task.id)
+  res.json({ task_id: task.id, title: task.title, threads, closed_count: file.threads.filter((t) => !!t.closed).length })
 }))
 
 orgThreadsV1Router.post('/tasks/:id/threads', route(async (req, res) => {
@@ -89,6 +94,20 @@ orgThreadsV1Router.post('/tasks/:id/threads', route(async (req, res) => {
   res.status(out.created ? 201 : 200).json({ task_id: task.id, thread: out.thread, message: out.message, created: out.created, duplicate: out.duplicate })
 }))
 
+orgThreadsV1Router.post('/tasks/:id/threads/open', route(async (req, res) => {
+  const task = await nodeTask(req)
+  const b = body(req)
+  const by = await writerOf(req)
+  const thread = await openNodeThread(task.id, {
+    title: str(b, 'title') ?? '', text: str(b, 'text') ?? '', from: (str(b, 'from') ?? 'node') as ThreadSource,
+    ...(str(b, 'ref') ? { ref: str(b, 'ref') } : {}),
+    ...(str(b, 'state') ? { state: str(b, 'state') as ThreadState } : {}),
+    ...(ids(b, 'tasks') ? { tasks: ids(b, 'tasks') } : {}),
+  }, by)
+  log.task.info('org thread opened by the node', { taskId: task.id, threadId: thread.id, by, from: thread.opener?.from })
+  res.status(201).json({ task_id: task.id, thread })
+}))
+
 orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) => {
   const task = await nodeTask(req)
   const id = threadIdOf(req)
@@ -96,7 +115,7 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
   const by = await writerOf(req)
   const mergeInto = str(b, 'merge_into')
   const patch: ThreadPatch = {}
-  for (const k of ['title', 'ask', 'reply', 'state', 'close'] as const) {
+  for (const k of ['title', 'ask', 'reply', 'state', 'close', 'known'] as const) {
     const v = str(b, k)
     if (v !== undefined) (patch as Record<string, unknown>)[k] = v
   }
@@ -115,7 +134,7 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
     if (!THREAD_ID_RE.test(mergeInto)) throw new RouteError(400, 'bad_request', `Not a thread id: ${mergeInto}`)
     thread = await mergeThread(task.id, id, mergeInto, by)
   }
-  if (!thread) throw new RouteError(400, 'bad_request', 'Nothing to change: pass title, ask, state, reply, tasks, add_tasks, close, reopen or merge_into.')
+  if (!thread) throw new RouteError(400, 'bad_request', 'Nothing to change: pass title, ask, state, reply, tasks, add_tasks, known, close, reopen or merge_into.')
   log.task.info('org thread updated', { taskId: task.id, threadId: id, by, fields: Object.keys(patch), mergeInto })
   res.json({ task_id: task.id, thread, ...(mergeInto ? { merged: id } : {}) })
 }))

@@ -6,13 +6,15 @@ import { z } from 'zod'
 import { defineOp } from './registry.js'
 import { withOutcome } from './outcome.js'
 import type { OpCall } from './core.js'
+import { THREADS_KNOWN_RULE, THREADS_OPEN_RULE } from '../core/org/thread-rules.js'
 
 const THREADS_SCOPE = 'Your Threads are the user\'s own requests to you, one thread per subject, on the Org page beside your Brief '
   + '(Main and every lead keep them; a VP is a lead). Walnut files every message he sends you, and tells you in that message which '
   + 'thread it went to. You keep each thread current: a short title in the language you write to him, one line of what he wants (ask), '
   + 'its state (working; needs: waiting on him; answered: you answered and he may close it), one line of where it stands (reply) and '
   + 'the tasks you handed it to. Several asks about one subject are ONE thread: put a new one under the open thread it belongs to '
-  + '(merge_into). He closes a thread with Acknowledge; a new ask about a closed subject is a new thread.'
+  + '(merge_into). Walnut puts your chat reply under each of his messages by itself (answer). He closes a thread with Acknowledge; a '
+  + 'closed one is kept a week, then deleted; a new ask about a closed subject is a new thread. ' + THREADS_KNOWN_RULE + ' ' + THREADS_OPEN_RULE
 
 async function ownTask(args: { task?: unknown }, call: OpCall): Promise<string> {
   const id = typeof args.task === 'string' && args.task.trim()
@@ -29,16 +31,16 @@ interface ThreadView { id: string; title: string; state: string; closed?: { how:
 defineOp({
   name: 'thread_list',
   title: 'List Threads',
-  description: `${THREADS_SCOPE} Lists them, open first (newest change first), each with its messages (the user's words), state, reply and tasks. task defaults to your own task.`,
+  description: `${THREADS_SCOPE} Lists the open ones (newest change first), each with its messages (the user's words, each with your answer and whether he knows it), state, reply and tasks; closed: true lists the closed ones of the past week too (to reopen one). task defaults to your own task.`,
   input: {
     task: TASK_ARG,
-    open: z.boolean().optional().describe('Only the open threads'),
+    closed: z.boolean().optional().describe('Also the closed ones of the past week'),
   },
   handler: async (args, call) => {
     const id = await ownTask(args, call)
-    const body = await call('GET', `/tasks/${encodeURIComponent(id)}/threads${args.open ? '?open=1' : ''}`) as { title?: string; threads: ThreadView[] }
+    const body = await call('GET', `/tasks/${encodeURIComponent(id)}/threads${args.closed ? '' : '?open=1'}`) as { title?: string; threads: ThreadView[]; closed_count?: number }
     const open = body.threads.filter((t) => !t.closed).length
-    return withOutcome(body, `"${body.title}" has ${open} open thread(s) and ${body.threads.length - open} closed.`, 'No further action is required.')
+    return withOutcome(body, `"${body.title}" has ${open} open thread(s)${body.closed_count ? ` (${body.closed_count} closed this week)` : ''}.`, 'No further action is required.')
   },
   tags: { readonly: true, remote: 'allow' },
 })
@@ -46,8 +48,9 @@ defineOp({
 defineOp({
   name: 'thread_update',
   title: 'Update a Thread',
-  description: `${THREADS_SCOPE} Change one thread: title, ask, state, reply, tasks (replace the list) or add_tasks, close ("acked" when he is done with it, `
-    + '"dropped" when it is no longer wanted), reopen, or merge_into another open thread (alone in its call: its messages move there and it is gone). '
+  description: `${THREADS_SCOPE} Change one thread: title, ask, state, reply, tasks (replace the list) or add_tasks, known (he reacted to your answers through `
+    + 'this message: they fold to context), close ("acked" when he reacted to it as finished, "dropped" when he said it is no longer wanted), reopen, '
+    + 'or merge_into another open thread (alone in its call: its messages move there and it is gone). '
     + 'A wrong merge is undone with thread_split. task defaults to your own task.',
   input: {
     id: z.string().regex(/^th-[a-f0-9]{6,32}$/).describe('The thread (th-...)'),
@@ -57,7 +60,8 @@ defineOp({
     reply: z.string().max(2000).optional().describe('One or two lines of where it stands, Markdown ("" clears it)'),
     tasks: z.array(z.string().min(1)).max(12).optional().describe('Every task it went to (replaces the list)'),
     add_tasks: z.array(z.string().min(1)).max(12).optional().describe('Tasks to add to it'),
-    close: z.enum(['acked', 'dropped']).optional().describe('Close it: acked (he is done with it), dropped (no longer wanted)'),
+    known: z.string().regex(/^(tm-[a-f0-9]{6,32}|all)$/).optional().describe('He reacted to your answers through this message (tm-...), or "all": they fold to one line of context. Refused before he reacted'),
+    close: z.enum(['acked', 'dropped']).optional().describe('Close it: acked (he reacted to it as finished), dropped (he said it is no longer wanted). Refused before he reacted'),
     reopen: z.boolean().optional().describe('Open a closed thread again'),
     merge_into: z.string().regex(/^th-[a-f0-9]{6,32}$/).optional().describe('Put this thread under that open thread (same subject)'),
     task: TASK_ARG,
@@ -72,6 +76,31 @@ defineOp({
         : `Thread ${body.thread.id} "${body.thread.title}": ${body.thread.closed ? `closed (${body.thread.closed.how})` : body.thread.state}.`,
       'No further action is required.',
     )
+  },
+  tags: { readonly: false, remote: 'allow' },
+})
+
+defineOp({
+  name: 'thread_create',
+  title: 'Open a Thread yourself',
+  description: `${THREADS_SCOPE} Opens a thread of your own for something that reached you the user must act on or asked to follow `
+    + '(a mail he must answer, a team\'s question only he can settle, news he asked to hear about): its first post is yours, shown as '
+    + 'opened by you and where from, and his reply is filed under it. Never a progress feed. While he is away a decision still goes to '
+    + 'his inbox as a letter: the thread names the letter (ref), never repeats it. task defaults to your own task.',
+  input: {
+    title: z.string().min(1).max(120).describe('A few words, in the language you write to the user'),
+    text: z.string().min(1).max(16000).describe('The first post: what reached you and what he needs to know or decide, Markdown'),
+    from: z.enum(['mail', 'task', 'letter', 'trigger', 'node']).describe('Where it came from: mail, task (a team\'s work), letter (your letter to him), trigger, node (your own finding)'),
+    ref: z.string().max(120).optional().describe('What it points at: a task id, a letter id (lt-...), a mail subject'),
+    state: z.enum(['new', 'working', 'needs', 'answered']).optional().describe('Default needs (it waits on him)'),
+    tasks: z.array(z.string().min(1)).max(12).optional().describe('Tasks it is about'),
+    task: TASK_ARG,
+  },
+  handler: async (args, call) => {
+    const id = await ownTask(args, call)
+    const { task: _t, ...open } = args as Record<string, unknown>
+    const body = await call('POST', `/tasks/${encodeURIComponent(id)}/threads/open`, open) as { thread: ThreadView }
+    return withOutcome(body, `Opened thread ${body.thread.id} "${body.thread.title}".`, 'His reply to it is filed under it; keep it current with thread_update.')
   },
   tags: { readonly: false, remote: 'allow' },
 })

@@ -2,21 +2,35 @@
  * Threads: the user's own requests to an Org node (Main, a VP, a lead), one thread per subject,
  * beside the Task and Brief views (2026-11-01, the user: "every user request becomes a thread ...
  * I can acknowledge, or do follow up actions"; "if my multiple ask is about the same thread, add
- * it below that thread"). Walnut files every message he sends the node; the node keeps each
- * thread's title, state and one-line reply (src/core/org/threads-model.ts).
+ * it below that thread"). Walnut files every message he sends the node and puts the node's chat
+ * reply under it (src/core/org/thread-answers.ts); the node keeps each thread's title and state.
  *
- *   Open      one card per open subject: state, title, what he wants, where it stands, its tasks;
- *             Acknowledge closes it, Follow up sends a message filed under it
- *   a card    opened: every message of his (pictures too), Split out on each when it holds more
- *             than one (a merge the node got wrong)
- *   Closed    the acknowledged and dropped ones, Reopen on each
+ * A thread reads as its conversation, like a Slack thread ("make it clear what is the
+ * conversation in this thread"): each of his messages, numbered, with the node's answer under
+ * it. What he already knows (he reacted after it) folds to one line of context, and the rest
+ * shows in full (src/core/org/thread-view.ts): "only show the last one and some kind of context
+ * for before, unless the user doesn't know".
+ *
+ *   a card     state, title, where it stands; Earlier (his asks he already had answered, one
+ *              line); then the exchanges still news, his words and the answer folded to a few
+ *              lines; Acknowledge closes it, Follow up sends a message filed under it
+ *   opened     every exchange, Split out on each message when it holds more than one (a merge
+ *              the node got wrong)
+ *   Closed     only open threads show; the ones closed this week (kept a week, then deleted)
+ *              open from one quiet line at the bottom, Reopen on each
  */
-import { useMemo, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { userStateOf } from '@open-walnut/org-tree';
 import { USER_STATE_LABELS } from '@open-walnut/user-status';
+import { threadView, type ThreadExchange } from '@open-walnut/thread-view';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { AnswerBox } from '@/components/common/AnswerBox';
+import { RichMarkdown } from '@/components/chat/RichBlocks';
+import { MessageAbout, rowAbout } from '@/components/sessions/message-about';
+import { stripTurnMarker } from '@/utils/turn-end-marker';
+import { stripQuestionTag } from '@/utils/question-tag';
+import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { timeAgo } from '@/utils/time';
 import type { OrgThread, OrgThreadMessage, OrgThreadState } from '@/api/org-threads';
 import type { OrgThreadsState } from './useOrgThreads';
@@ -33,6 +47,10 @@ const STATE_LABEL: Record<OrgThreadState, string> = {
 const STATE_DOT: Record<OrgThreadState, string> = {
   new: 'var(--accent, #0A84FF)', working: 'var(--success, #34C759)', needs: 'var(--error, #FF3B30)', answered: 'var(--fg-muted, #86868B)',
 };
+/** How much of his words the Earlier line quotes per message. */
+const EARLIER_WORDS = 48;
+/** Where a thread the node opened itself came from (src/core/org/threads-model.ts THREAD_SOURCES). */
+const FROM_LABEL: Record<string, string> = { mail: 'Mail', task: 'A task', letter: 'A letter', trigger: 'A trigger', node: 'Its own finding' };
 
 interface Props {
   name: string;
@@ -55,9 +73,16 @@ function closedWords(t: OrgThread, now: number): string {
   return `${c.how === 'acked' ? 'Acknowledged' : 'Dropped'}${who} ${timeAgo(c.at, { now })}`;
 }
 
-function messageText(m: OrgThreadMessage): string {
-  // Pictures render as the chat renders them: a path on its own line becomes the image.
-  return [m.text, ...(m.images ?? [])].filter(Boolean).join('\n\n');
+/** A clock time today, a date and time before: when an answer came, the way a chat shows it. */
+function clock(at: string, now: number): string {
+  const d = new Date(at);
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return new Date(now).toDateString() === d.toDateString() ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`;
+}
+
+function oneLine(text: string, max: number): string {
+  const line = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  return line.length <= max ? line : `${line.slice(0, max - 1).trimEnd()}…`;
 }
 
 function TaskChips({ ids, tasks, onOpenTask }: { ids: readonly string[]; tasks: readonly Task[]; onOpenTask: (id: string) => void }) {
@@ -117,16 +142,109 @@ function FollowUp({ onSend, onDone }: { onSend: (text: string) => Promise<boolea
   );
 }
 
-function ThreadCard({ t, all, tasks, onOpenTask, state, onFollowUp, now }: {
+/** Long words fold to a few lines, the rest one click away (his voice notes, the node's long replies). */
+function Fold({ children, className, testId }: { children: React.ReactNode; className: string; testId: string }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [long, setLong] = useState(false);
+  const [whole, setWhole] = useState(false);
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el || whole) return;
+    const measure = () => setLong(el.scrollHeight > el.clientHeight + 4);
+    measure();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    ro?.observe(el);
+    return () => ro?.disconnect();
+  }, [whole]);
+  return (
+    <>
+      <div ref={box} className={`org-thread-fold ${className}${whole ? ' is-whole' : ''}${long && !whole ? ' is-folded' : ''}`} data-testid={testId}>
+        {children}
+      </div>
+      {(long || whole) && (
+        <button type="button" className="org-thread-link org-thread-more" data-testid={`${testId}-more`} onClick={() => setWhole(!whole)}>
+          {whole ? 'Show less' : 'Show all'}
+        </button>
+      )}
+    </>
+  );
+}
+
+/** The node's answer as its chat shows it, folded to a few lines with the rest one click away. */
+function Answer({ text, about, at, by, known, now, testId = 'org-thread-answer' }: {
+  text: string; about?: string[]; at: string; by: string; known: boolean; now: number; testId?: string;
+}) {
+  const body = useMemo(() => stripTurnMarker(stripQuestionTag(text)), [text]);
+  const ids = useMemo(() => rowAbout(about, text), [about, text]);
+  return (
+    <div className={`org-thread-answer${known ? '' : ' is-news'}`} data-testid={testId} data-known={known ? 'true' : 'false'}>
+      <div className="org-thread-answer-by">{by} · {clock(at, now)}</div>
+      <Fold className="org-thread-answer-body" testId="org-thread-answer-body"><RichMarkdown text={body} /></Fold>
+      {ids.length > 0 && <MessageAbout ids={ids} />}
+    </div>
+  );
+}
+
+function Words({ m }: { m: OrgThreadMessage }) {
+  // Pictures render as the chat renders them: a path on its own line becomes the image.
+  const text = [m.text, ...(m.images ?? [])].filter(Boolean).join('\n\n');
+  return <Fold className="org-thread-words-fold" testId="org-thread-words"><Markdown text={text} className="org-thread-words" /></Fold>;
+}
+
+function Exchange({ x, t, name, state, now }: { x: ThreadExchange<OrgThreadMessage>; t: OrgThread; name: string; state: OrgThreadsState; now: number }) {
+  const closed = !!t.closed;
+  if (x.opener) {
+    const from = `${FROM_LABEL[x.opener.from] ?? FROM_LABEL.node}${x.opener.ref ? `: ${x.opener.ref}` : ''}`;
+    return (
+      <li className="org-thread-exchange is-opener" data-testid="org-thread-exchange" data-n={0} data-known={x.known ? 'true' : 'false'}>
+        <Answer text={x.opener.text} at={x.opener.at} by={`${name} opened this · ${from}`} known={x.known} now={now} testId="org-thread-opener" />
+      </li>
+    );
+  }
+  return (
+    <li className="org-thread-exchange" data-testid="org-thread-exchange" data-n={x.n} data-known={x.known ? 'true' : 'false'}>
+      {x.messages.map((m, i) => (
+        <div key={m.id} className="org-thread-message" data-testid="org-thread-message" data-message-id={m.id}>
+          <span className="org-thread-n" aria-hidden="true">{x.n + i}</span>
+          <div className="org-thread-said">
+            {(m.via === 'follow-up' || m.via === 'letter') && (
+              <div className="org-thread-via">{m.via === 'follow-up' ? 'Follow up' : `Answering “${m.about ?? 'a letter'}”`}</div>
+            )}
+            <Words m={m} />
+          </div>
+          {(t.messages.length > 1 || !!t.opener) && !closed && (
+            <button type="button" className="org-thread-link org-thread-split" data-testid="org-thread-split" title="This message is about something else: make it its own thread" onClick={() => void state.split(t.id, m.id)}>
+              Split out
+            </button>
+          )}
+        </div>
+      ))}
+      {x.answer ? (
+        <Answer text={x.answer.text} about={x.answer.about} at={x.answer.at} by={name} known={x.known} now={now} />
+      ) : (
+        <div className="org-thread-answer is-waiting" data-testid="org-thread-unanswered">
+          {closed ? 'No answer' : `${name} has not answered yet`}
+        </div>
+      )}
+    </li>
+  );
+}
+
+function ThreadCard({ t, all, tasks, onOpenTask, state, onFollowUp, name, now }: {
   t: OrgThread; all: readonly OrgThread[]; tasks: readonly Task[]; onOpenTask: (id: string) => void;
-  state: OrgThreadsState; onFollowUp: Props['onFollowUp']; now: number;
+  state: OrgThreadsState; onFollowUp: Props['onFollowUp']; name: string; now: number;
 }) {
   const [open, setOpen] = useState(false);
   const [following, setFollowing] = useState(false);
   const closed = !!t.closed;
-  const pictures = t.messages.reduce((n, m) => n + (m.images?.length ?? 0), 0);
+  const view = useMemo(() => threadView(t), [t]);
   const follows = t.follows ? all.find((x) => x.id === t.follows) : undefined;
-  const last = t.messages[t.messages.length - 1];
+  const last = t.messages[t.messages.length - 1] ?? t.opener;
+  const earlier = view.exchanges.slice(0, view.folded);
+  const shown = open ? view.exchanges : view.exchanges.slice(view.folded);
+  const earlierWords = earlier.flatMap((x) => (x.opener
+    ? [`Opened: ${oneLine(x.opener.text, EARLIER_WORDS)}`]
+    : x.messages.map((m, i) => `${x.n + i} ${oneLine(m.text || 'A picture', EARLIER_WORDS)}`))).join('  ·  ');
   return (
     <li className={`org-thread${closed ? ' is-closed' : ''}${open ? ' is-open' : ''}`} data-testid="org-thread" data-thread-id={t.id} data-state={closed ? 'closed' : t.state}>
       <button type="button" className="org-thread-head" aria-expanded={open} data-testid="org-thread-head" onClick={() => setOpen(!open)}>
@@ -134,41 +252,32 @@ function ThreadCard({ t, all, tasks, onOpenTask, state, onFollowUp, now }: {
           <i style={{ background: closed ? 'var(--fg-muted, #86868B)' : STATE_DOT[t.state] }} />
           {closed ? (t.closed!.how === 'acked' ? 'Done' : 'Dropped') : STATE_LABEL[t.state]}
         </span>
-        <span className="org-thread-title" data-testid="org-thread-title">{t.title}</span>
-        <span className="org-thread-meta org-muted">
+        <span className="org-thread-meta">
+          {t.opener && <span data-testid="org-thread-from">Opened by {name} · </span>}
           {t.messages.length > 1 && <span data-testid="org-thread-count">{t.messages.length} messages · </span>}
-          {pictures > 0 && <span>{pictures} {pictures === 1 ? 'picture' : 'pictures'} · </span>}
           {timeAgo(last?.at ?? t.updatedAt, { now })}
           <span className="org-thread-chevron" aria-hidden="true">{open ? ' ▾' : ' ▸'}</span>
         </span>
+        <span className="org-thread-title" data-testid="org-thread-title">{t.title}</span>
       </button>
-      {follows && <p className="org-thread-follows org-muted">Asks again about “{follows.title}”</p>}
-      {t.ask && <p className="org-thread-ask" data-testid="org-thread-ask">{t.ask}</p>}
+      {follows && <p className="org-thread-follows">Asks again about “{follows.title}”</p>}
       {t.reply && <Markdown text={t.reply} className="org-thread-reply" testId="org-thread-reply" />}
       {!!t.tasks?.length && <TaskChips ids={t.tasks} tasks={tasks} onOpenTask={onOpenTask} />}
-      {open && (
-        <ol className="org-thread-messages" data-testid="org-thread-messages">
-          {t.messages.map((m) => (
-            <li key={m.id} className="org-thread-message" data-testid="org-thread-message" data-message-id={m.id}>
-              <div className="org-thread-message-head org-muted">
-                <span>{timeAgo(m.at, { now })}{m.via === 'follow-up' ? ' · follow-up' : m.via === 'letter' ? ` · answering “${m.about ?? 'a letter'}”` : ''}</span>
-                {t.messages.length > 1 && !closed && (
-                  <button type="button" className="org-thread-link" data-testid="org-thread-split" title="This message is about something else: make it its own thread" onClick={() => void state.split(t.id, m.id)}>
-                    Split out
-                  </button>
-                )}
-              </div>
-              <Markdown text={messageText(m)} className="org-thread-words" />
-            </li>
-          ))}
-        </ol>
+      {!open && earlier.length > 0 && (
+        <button type="button" className="org-thread-earlier" data-testid="org-thread-earlier" title="Show the whole conversation" onClick={() => setOpen(true)}>
+          <span className="org-thread-earlier-label">Earlier</span>
+          <span className="org-thread-earlier-words">{earlierWords}</span>
+        </button>
       )}
+      <ol className="org-thread-conversation" data-testid="org-thread-messages">
+        {shown.map((x) => <Exchange key={x.messages[0]?.id ?? 'opener'} x={x} t={t} name={name} state={state} now={now} />)}
+      </ol>
       {following && onFollowUp ? (
         <FollowUp onSend={(text) => onFollowUp(t.id, text)} onDone={() => setFollowing(false)} />
       ) : (
         <div className="org-thread-actions">
           {closed ? (<>
-            <span className="org-muted org-thread-closed" data-testid="org-thread-closed">{closedWords(t, now)}</span>
+            <span className="org-thread-closed" data-testid="org-thread-closed">{closedWords(t, now)}</span>
             <button type="button" className="btn btn-sm" data-testid="org-thread-reopen" onClick={() => void state.update(t.id, { reopen: true })}>Reopen</button>
           </>) : (<>
             <button type="button" className="btn btn-sm btn-primary" data-testid="org-thread-ack" onClick={() => void state.update(t.id, { close: 'acked' })}>Acknowledge</button>
@@ -181,37 +290,29 @@ function ThreadCard({ t, all, tasks, onOpenTask, state, onFollowUp, now }: {
 }
 
 export function OrgThreads({ name, state, tasks, onOpenTask, onFollowUp, now }: Props) {
-  const [show, setShow] = useState<'open' | 'closed'>('open');
+  const [showClosed, setShowClosed] = useState(false);
   const all = state.threads;
   const open = useMemo(() => (all ?? []).filter((t) => !t.closed), [all]);
   const closed = useMemo(() => (all ?? []).filter((t) => !!t.closed), [all]);
-  const list = show === 'open' ? open : closed;
+  // Task pills in an answer open the task, as they do in the chat.
+  const onEntityClick = useEntityClickHandler(onOpenTask);
+  const card = (t: OrgThread) => <ThreadCard key={t.id} t={t} all={all ?? []} tasks={tasks} onOpenTask={onOpenTask} state={state} onFollowUp={onFollowUp} name={name} now={now} />;
   return (
-    <div className="org-threads" data-testid="org-threads">
-      <div className="org-threads-head">
-        <div className="org-threads-pick" role="tablist" aria-label="Open or closed threads">
-          <button type="button" role="tab" aria-selected={show === 'open'} className={show === 'open' ? 'is-on' : ''} data-testid="org-threads-open" onClick={() => setShow('open')}>
-            Open <span className="org-task-tab-count">{open.length}</span>
-          </button>
-          <button type="button" role="tab" aria-selected={show === 'closed'} className={show === 'closed' ? 'is-on' : ''} data-testid="org-threads-closed" onClick={() => setShow('closed')}>
-            Closed <span className="org-task-tab-count">{closed.length}</span>
-          </button>
-        </div>
-      </div>
+    <div className="org-threads" data-testid="org-threads" onClick={onEntityClick}>
       {state.error && <p className="org-thread-error" data-testid="org-threads-error">{state.error}</p>}
-      {all === null && !state.error && <p className="org-muted org-threads-empty" aria-busy="true">Loading…</p>}
-      {all !== null && !list.length && (
-        <p className="org-muted org-threads-empty" data-testid="org-threads-empty">
-          {show === 'open' ? `Nothing open. Each request you send ${name} becomes a thread here; asks about the same thing stay in one thread.` : 'Nothing closed yet.'}
+      {all === null && !state.error && <p className="org-threads-empty" aria-busy="true">Loading…</p>}
+      {all !== null && !open.length && (
+        <p className="org-threads-empty" data-testid="org-threads-empty">
+          {`Nothing open. Each request you send ${name} becomes a thread here; asks about the same thing stay in one thread.`}
         </p>
       )}
-      {!!list.length && (
-        <ul className="org-thread-list" data-testid="org-thread-list" data-show={show}>
-          {list.map((t) => (
-            <ThreadCard key={t.id} t={t} all={all ?? []} tasks={tasks} onOpenTask={onOpenTask} state={state} onFollowUp={onFollowUp} now={now} />
-          ))}
-        </ul>
+      {!!open.length && <ul className="org-thread-list" data-testid="org-thread-list" data-show="open">{open.map(card)}</ul>}
+      {closed.length > 0 && (
+        <button type="button" className="org-threads-closed-toggle" data-testid="org-threads-closed" aria-expanded={showClosed} onClick={() => setShowClosed(!showClosed)}>
+          {closed.length} closed this week{showClosed ? ' ▾' : ' ▸'}
+        </button>
       )}
+      {showClosed && closed.length > 0 && <ul className="org-thread-list" data-testid="org-thread-list-closed" data-show="closed">{closed.map(card)}</ul>}
     </div>
   );
 }

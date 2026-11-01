@@ -93,6 +93,7 @@
  * in the manual, which sessions pull live with `walnut guide`.
  */
 
+import { THREADS_KNOWN_RULE, THREADS_OPEN_RULE } from '../org/thread-rules.js'
 import { TEAM_CHARTER } from '../team-charter.js'
 import { WORK_PLACE_RULE, taskDirLine } from '../work-place.js'
 import { taskDirForHost } from './task-dir-place.js'
@@ -208,7 +209,9 @@ export const THREADS_LINE =
   + 'subject: Walnut files every message he sends you and says in it which thread it went to. Keep them current with '
   + 'thread_update: a short title, what he wants, its state (working, needs: waiting on him, answered), one line of where it '
   + 'stands and the tasks you handed it to. Several asks about the same thing are one thread: put a new one under the open thread '
-  + 'it belongs to (merge_into). He closes a thread with Acknowledge; a new ask about a closed subject is a new thread.\n\n'
+  + 'it belongs to (merge_into). Walnut puts your chat reply under each of his messages by itself, so a thread reads as its '
+  + 'conversation. He closes a thread with Acknowledge; a new ask about a closed subject is a new thread. '
+  + THREADS_KNOWN_RULE + ' ' + THREADS_OPEN_RULE + '\n\n'
 /** The tasks a reply is about, as live pills under it (core/org/message-about.ts; 2026-10-31, the user). */
 export const MESSAGE_ABOUT_LINE =
   'End each reply the user reads with one line of its own naming the tasks it is about: '

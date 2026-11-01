@@ -666,6 +666,7 @@ let taskProjectionHandle: { stop: () => void } | null = null
 let laneAskSyncStop: (() => void) | null = null
 let foreignWriterWatchdog: { stop: () => void } | null = null
 let sessionProjectionHandle: { stop: () => void } | null = null
+let threadAnswersHandle: { stop: () => void } | null = null
 let projectionSelfHealHandle: { stop: () => void } | null = null
 /** Cloud box only: 60s drain of cache/task-queue/ (see core/task-queue.ts). */
 let taskQueueFlushHandle: { stop: () => void } | null = null
@@ -3385,6 +3386,10 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       // after a bridge outage (per-write pushes are fire-and-forget).
       const { startProjectionCacheSelfHeal } = await import('../core/projection-cache.js')
       projectionSelfHealHandle = startProjectionCacheSelfHeal()
+      // An Org node's Threads: its answer to each of the user's messages is read when its turn
+      // ends, and closed threads are deleted after their week (core/org/thread-answers.ts).
+      const { startThreadAnswers } = await import('../core/org/thread-answers.js')
+      threadAnswersHandle = startThreadAnswers()
 
       // Auto-continue: recover a turn that died to upstream retry exhaustion by
       // scheduling one delayed `continue` nudge (b12 retry hardening). Primary box
@@ -6726,6 +6731,10 @@ export async function stopServer(): Promise<void> {
   if (taskProjectionHandle) {
     taskProjectionHandle.stop()
     taskProjectionHandle = null
+  }
+  if (threadAnswersHandle) {
+    threadAnswersHandle.stop()
+    threadAnswersHandle = null
   }
   if (sessionProjectionHandle) {
     sessionProjectionHandle.stop()

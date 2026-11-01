@@ -14,9 +14,11 @@ import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import { stripReferenceCards } from '../sessions/reference-cards.js';
 import {
-  fileMessage, isOpen, newThreadId, newThreadMessageId, sortedThreads,
-  type FileMessageInput, type ThreadCloseHow, type ThreadState, type ThreadVia, type ThreadWriter,
+  fileMessage, isOpen, lastUserAt, newThreadId, newThreadMessageId, reactedSince, sortedThreads,
+  type FileMessageInput, type ThreadCloseHow, type ThreadsFile, type ThreadState, type ThreadVia, type ThreadWriter,
 } from './threads-model.js';
+import { THREADS_KNOWN_RULE, THREADS_OPEN_RULE } from './thread-rules.js';
+import { exchangesOf } from './thread-view.js';
 
 /** Open threads named to the node with each message (the newest). */
 export const HINT_OPEN_MAX = 12;
@@ -107,6 +109,8 @@ export async function prepareThreadCapture(input: {
   threadId?: string;
   /** The send's own id (the phone's qm- id), so a retry of it is filed once. */
   key?: string;
+  /** The node session it goes to: its answer is read there (thread-answers.ts). */
+  sid?: string;
   now?: number;
 }): Promise<ThreadCapture | null> {
   const task = input.task;
@@ -123,6 +127,7 @@ export async function prepareThreadCapture(input: {
     ...(words.about ? { about: words.about } : {}),
     ...(input.threadId ? { threadId: input.threadId } : {}),
     ...(input.key ? { key: input.key } : {}),
+    ...(input.sid ? { sid: input.sid } : {}),
     newThreadId: newThreadId(), messageId: newThreadMessageId(), at,
   };
   // The same pure step the store runs, on the copy read now: the node is told what will be.
@@ -182,9 +187,60 @@ export function threadHintText(s: ThreadHintState): string {
   if (s.created && !s.duplicate) {
     parts.push('Then give the thread a short title of a few words, in the language you write to him, with thread_update (title, and ask: one line of what he wants).');
   }
-  parts.push('As the work moves, keep it current with thread_update: state (working, needs: waiting on him, answered: you answered and he may close it), reply (one line of where it stands), add_tasks (the tasks you hand it to). He closes a thread with Acknowledge; close it yourself only when he says it is done.');
+  parts.push('As the work moves, keep it current with thread_update: state (working, needs: waiting on him, answered: you answered and he may close it), reply (one line of where it stands), add_tasks (the tasks you hand it to). Walnut puts your chat reply under his message by itself.');
+  parts.push(THREADS_KNOWN_RULE, THREADS_OPEN_RULE);
   if (s.closed.length) {
     parts.push(`Closed since you were last told: ${s.closed.map((t) => `${t.id} ${q(t.title)} (${t.by === 'human' ? 'he acknowledged it' : t.how === 'dropped' ? 'dropped' : 'closed'})`).join('; ')}.`);
   }
   return parts.join(' ');
+}
+
+/** A thread the node should look at again: why, in a few words. */
+export interface TidyItem { id: string; title: string; state: ThreadState; why: 'reacted' | 'untitled' | 'state' }
+
+export interface ThreadsTidyState {
+  items: TidyItem[];
+  /** What the list says, as one key: a new item is a new thing to say. */
+  key: string;
+}
+
+/** A thread Walnut titled is left to the node this long before it is reminded. */
+const UNTITLED_MS = 10 * 60_000;
+export const TIDY_MAX = 8;
+
+/**
+ * Pure: the open threads that need the node's decision now. He wrote to the node after an answer
+ * it gave in another thread (did he react to it? then mark it known, or close it if finished); a
+ * thread still under Walnut's stand-in title; a thread still "new" though the node answered it.
+ */
+export function threadsTidyOf(file: ThreadsFile, nowMs = Date.now()): ThreadsTidyState | null {
+  const items: TidyItem[] = [];
+  const lastHis = lastUserAt(file) ?? '';
+  for (const t of sortedThreads(file.threads)) {
+    if (!isOpen(t)) continue;
+    const xs = exchangesOf(t);
+    const waiting = xs.filter((x) => (x.answer || x.opener) && !x.known);
+    // The node looked at this thread since his last message (any update of its own): its call stands.
+    const reviewed = !!t.by?.startsWith('task:') && t.updatedAt > lastHis;
+    let why: TidyItem['why'] | null = null;
+    if (!reviewed && waiting.some((x) => reactedSince(file, (x.answer ?? x.opener)!.at))) why = 'reacted';
+    else if (!t.titled && nowMs - Date.parse(t.createdAt) > UNTITLED_MS) why = 'untitled';
+    else if (t.state === 'new' && xs.some((x) => x.answer)) why = 'state';
+    if (why) items.push({ id: t.id, title: t.title, state: t.state, why });
+    if (items.length >= TIDY_MAX) break;
+  }
+  if (!items.length) return null;
+  return { items, key: items.map((i) => `${i.id}:${i.why}`).join(',') };
+}
+
+const TIDY_WHY: Record<TidyItem['why'], string> = {
+  reacted: 'he wrote to you after your answer there: did he react to it? If not, say so with any thread_update (state answered) and it stays open',
+  untitled: 'still under Walnut\'s stand-in title',
+  state: 'you answered it, its state is still new',
+};
+
+/** What the `threads-tidy` reminder says. */
+export function threadsTidyText(s: ThreadsTidyState): string {
+  return `your Threads need cleaning: ${s.items.map((i) => `${i.id} ${q(i.title)} (${i.state}; ${TIDY_WHY[i.why]})`).join('; ')}. `
+    + `${THREADS_KNOWN_RULE} thread_list shows each with your answers.`;
 }

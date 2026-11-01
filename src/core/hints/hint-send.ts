@@ -24,7 +24,7 @@ import { dueReasons } from './hint-schedule.js';
 import { hookStatementVoid } from '../sessions/hook-statement.js';
 import type { AwayState } from '../org/user-away.js';
 import type { BriefHintState } from '../sessions/brief-hint.js';
-import type { ThreadCapture, ThreadHintState } from '../org/thread-capture.js';
+import type { ThreadCapture, ThreadHintState, ThreadsTidyState } from '../org/thread-capture.js';
 
 type HintRecord = Pick<SessionRecord, 'output_mode' | 'output_mode_injected' | 'hintState' | 'lastCompactUuid' | 'lastCompactAt'>
   & Partial<Pick<SessionRecord, 'claudeSessionId' | 'taskId'>>;
@@ -109,6 +109,8 @@ export function planHints(input: {
   inChat?: boolean;
   /** Main's or a lead's: the user's message was filed as this thread (org/thread-capture.ts). */
   thread?: ThreadHintState | null;
+  /** Main's or a lead's Threads that need its decision (org/thread-capture.ts threadsTidyOf). */
+  threadsTidy?: ThreadsTidyState | null;
 }): HintPlan {
   const state = seededState(input.record);
   const send = state.sends + 1;
@@ -123,6 +125,7 @@ export function planHints(input: {
       config: input.config, record: input.record ?? null, ...(request ? { request } : {}), ...(told ? { toldHash: told.hash } : {}),
       ...(away ? { away } : {}), ...(input.brief ? { brief: input.brief } : {}),
       ...(input.thread ? { thread: input.thread } : {}),
+      ...(input.threadsTidy ? { threadsTidy: input.threadsTidy } : {}),
     };
     const identity = hint.identity(content);
     if (identity === null) continue;
@@ -194,7 +197,7 @@ export async function writeHintState(
   }
 }
 
-async function targetFor(sessionId: string, record: HintRecord | null | undefined, hints: readonly EffectiveHint[]): Promise<{ target: HintTarget; away: AwayState | null; brief?: BriefHintState | null; task?: Task }> {
+async function targetFor(sessionId: string, record: HintRecord | null | undefined, hints: readonly EffectiveHint[]): Promise<{ target: HintTarget; away: AwayState | null; brief?: BriefHintState | null; threadsTidy?: ThreadsTidyState | null; task?: Task }> {
   if (!record?.taskId || !needsTaskForAudience(hints)) return { target: { sessionId }, away: null };
   try {
     const { listTasksByIds } = await import('../task-manager.js');
@@ -204,7 +207,8 @@ async function targetFor(sessionId: string, record: HintRecord | null | undefine
     const wantsAway = (target.role === 'main' || target.role === 'lead') && hints.some((h) => h.kind === 'user-away' && h.enabled);
     const away = wantsAway ? await import('../org/user-away.js').then((m) => m.userAwayFrom(task)).catch(() => null) : null;
     const brief = await briefFor(task, target, hints);
-    return { target, away, brief, ...(task ? { task } : {}) };
+    const threadsTidy = await threadsTidyFor(task, target, hints);
+    return { target, away, brief, threadsTidy, ...(task ? { task } : {}) };
   } catch {
     return { target: { sessionId }, away: null };
   }
@@ -223,6 +227,7 @@ async function captureThread(record: HintRecord | null | undefined, task: Task |
     return await prepareThreadCapture({
       task: node, message, inChat: opts.inChat ?? opts.sentBy === 'person',
       ...(opts.threadId ? { threadId: opts.threadId } : {}), ...(opts.threadKey ? { key: opts.threadKey } : {}),
+      ...(record.claudeSessionId ? { sid: record.claudeSessionId } : {}),
       ...(opts.now ? { now: opts.now() } : {}),
     });
   } catch (err) {
@@ -238,6 +243,18 @@ async function briefFor(task: Task | undefined | null, target: HintTarget, hints
     const { listTasks } = await import('../task-manager.js');
     const { briefHintStateOf } = await import('../sessions/brief-hint.js');
     return briefHintStateOf(task, await listTasks());
+  } catch {
+    return null;
+  }
+}
+
+/** Main's or a lead's Threads that need its decision, for the `threads-tidy` hint; null elsewhere. */
+async function threadsTidyFor(task: Task | undefined | null, target: HintTarget, hints: readonly EffectiveHint[]): Promise<ThreadsTidyState | null> {
+  if (!task || (target.role !== 'main' && target.role !== 'lead') || !hints.some((h) => h.kind === 'threads-tidy' && h.enabled)) return null;
+  try {
+    const { readThreads } = await import('../org/threads-store.js');
+    const { threadsTidyOf } = await import('../org/thread-capture.js');
+    return threadsTidyOf(await readThreads(task.id));
   } catch {
     return null;
   }
@@ -317,14 +334,14 @@ export async function prepareHintedSend(
   try {
     const config = opts.config !== undefined ? opts.config : await import('../config-manager.js').then((m) => m.getConfig()).catch(() => null);
     const hints = effectiveHints(config);
-    const { target, away, brief, task } = await targetFor(sessionId, record, hints);
+    const { target, away, brief, threadsTidy, task } = await targetFor(sessionId, record, hints);
     // A message composed upstream (the companion's voice hint) keeps those blocks.
     const upstream = opts.upstreamBlocks?.length ? splitHinted(message, opts.upstreamBlocks) : null;
     const words = upstream ? upstream.text : message;
     // The user's words to an Org node become one of its Threads, whether or not its hint is on.
     const thread = opts.sentBy === 'person' && opts.threads !== false ? await captureThread(record, task, words, opts) : null;
     const plan = planHints({
-      hints, target, record, config, away, brief, inChat: opts.inChat ?? opts.sentBy === 'person',
+      hints, target, record, config, away, brief, threadsTidy, inChat: opts.inChat ?? opts.sentBy === 'person',
       ...(opts.requested ? { requested: opts.requested } : {}),
       ...(upstream ? { skip: new Set(upstream.kinds) } : {}),
       ...(opts.sentBy ? { sentBy: opts.sentBy } : {}),
@@ -426,8 +443,9 @@ export async function stateHintsAfterCompaction(
       : null;
     const owner = record.taskId ? await import('../task-manager.js').then((m) => m.getTask(record.taskId!)).catch(() => null) : null;
     const brief = owner ? await briefFor(owner, target, hints) : null;
+    const threadsTidy = owner ? await threadsTidyFor(owner, target, hints) : null;
     const plan = planHints({
-      hints, target, record, config: cfg, afterCompaction: true, away, brief,
+      hints, target, record, config: cfg, afterCompaction: true, away, brief, threadsTidy,
     });
     if (!plan.carried.length) return '';
     await writeHintState(record.claudeSessionId, (cur) => ({

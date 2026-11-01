@@ -11,6 +11,18 @@
  * out (`splitThreadMessage`). The user closes a thread with Acknowledge; asking again about a
  * closed subject opens a new thread that `follows` the old one.
  *
+ * Each message carries the node's answer to it (`answer`), which Walnut reads from the node's own
+ * chat (thread-answers.ts), so a thread reads as its conversation (2026-11-01, the user: "do it
+ * like slack thread, make it clear what is the conversation in this thread"). What he already
+ * knows folds to one line of context (thread-view.ts). An answer counts as known only once he
+ * reacted after it (2026-11-01, the user: "I had not replied ... so clearly I had not acknowledged
+ * it"): a node may mark exchanges known (`known`) or close a thread only then (`reactedSince`).
+ *
+ * A node may also open a thread itself for something that reached it the user must act on or asked
+ * to follow (2026-11-01, the user: "you can also create a new thread even if it is not from me ...
+ * some new message, from somewhere like mail"): its first post is the node's (`opener`), his reply
+ * is filed under it like any follow-up.
+ *
  * Pure: every function takes the file and returns the next one, or throws ThreadError. The
  * store (threads-store.ts) runs them under the file lock.
  */
@@ -31,8 +43,16 @@ export const THREAD_REPLY_MAX = 2000;
 export const THREAD_MESSAGE_MAX = 8000;
 export const THREAD_TASKS_MAX = 12;
 export const THREAD_IMAGES_MAX = 12;
-/** Closed threads kept, newest first; open threads are never dropped. */
+/** An answer kept whole up to this; the view folds it to a few lines. */
+export const THREAD_ANSWER_MAX = 16_000;
+/** Closed threads kept at most, newest first; open threads are never dropped. */
 export const CLOSED_KEPT = 200;
+/**
+ * A closed thread is kept this long, then deleted for good: long enough to undo a mistaken
+ * Acknowledge, reopen it, or link a new ask back to it (2026-11-01, the user: "once I acknowledge
+ * it, just delete it ... for me Open is enough").
+ */
+export const CLOSED_KEEP_MS = 7 * 24 * 3600_000;
 
 export const THREAD_ID_RE = /^th-[a-f0-9]{6,32}$/;
 export const THREAD_MESSAGE_ID_RE = /^tm-[a-f0-9]{6,32}$/;
@@ -49,6 +69,40 @@ export interface ThreadMessage {
   about?: string;
   /** The send's own id (the phone's qm- id): the same send again is the same message. */
   key?: string;
+  /** The node session it was sent to, where its answer is read. */
+  sid?: string;
+  /** The node's answer, read from its chat by Walnut (thread-answers.ts). */
+  answer?: ThreadAnswer;
+}
+
+export interface ThreadAnswer {
+  /** The node's reply as its chat shows it (Markdown, its rich markup kept for the chat renderer). */
+  text: string;
+  at: string;
+  /** The tasks the reply is about (its `<walnut-about>` line, or the history parse). */
+  about?: string[];
+  clipped?: boolean;
+}
+
+/** Where a thread the node opened came from. */
+export const THREAD_SOURCES = ['mail', 'task', 'letter', 'trigger', 'node'] as const;
+export type ThreadSource = typeof THREAD_SOURCES[number];
+
+/** The first post of a thread the node opened itself: what reached it, in its words. */
+export interface ThreadOpener {
+  text: string;
+  at: string;
+  from: ThreadSource;
+  /** What it points at: a task id, a letter id (lt-...), a mail's subject. */
+  ref?: string;
+  by: ThreadWriter;
+}
+
+/** The node decided the user already knows every exchange through this message (thread-view.ts). */
+export interface ThreadKnown {
+  through: string;
+  by: ThreadWriter;
+  at: string;
 }
 
 export interface ThreadClosed {
@@ -80,6 +134,10 @@ export interface OrgThread {
   /** Who made the last change. */
   by?: ThreadWriter;
   closed?: ThreadClosed;
+  /** What he already knows, as the node judged it (he reacted after those answers). */
+  known?: ThreadKnown;
+  /** The node opened this thread itself (not one of his requests): its first post. */
+  opener?: ThreadOpener;
 }
 
 export interface ThreadsFile {
@@ -88,7 +146,7 @@ export interface ThreadsFile {
   threads: OrgThread[];
 }
 
-export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread';
+export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread' | 'not_reacted';
 
 export class ThreadError extends Error {
   constructor(public code: ThreadErrorCode, public status: number, message: string) {
@@ -121,7 +179,9 @@ function normalizeMessage(m: unknown): ThreadMessage | null {
   if (!m || typeof m !== 'object') return null;
   const x = m as Partial<ThreadMessage>;
   if (!isStr(x.id) || !isStr(x.at) || !isStr(x.text)) return null;
-  return { ...x, via: isStr(x.via) ? x.via : 'chat', ...(Array.isArray(x.images) ? { images: x.images.filter(isStr) } : {}) } as ThreadMessage;
+  const next = { ...x, via: isStr(x.via) ? x.via : 'chat', ...(Array.isArray(x.images) ? { images: x.images.filter(isStr) } : {}) } as ThreadMessage;
+  if (next.answer && !(typeof next.answer === 'object' && isStr(next.answer.text) && isStr(next.answer.at))) delete next.answer;
+  return next;
 }
 
 /** One thread read from disk: what every reader relies on is there, or the thread is left out. */
@@ -130,11 +190,14 @@ function normalizeThread(t: unknown): OrgThread | null {
   const x = t as Partial<OrgThread>;
   if (!isStr(x.id) || !Array.isArray(x.messages)) return null;
   const messages = x.messages.map(normalizeMessage).filter((m): m is ThreadMessage => !!m);
-  if (!messages.length) return null;
-  const updatedAt = isStr(x.updatedAt) ? x.updatedAt : messages[messages.length - 1].at;
+  const o = x.opener;
+  const opener = o && typeof o === 'object' && isStr(o.text) && isStr(o.at) ? { ...o, from: THREAD_SOURCES.includes(o.from) ? o.from : 'node' } as ThreadOpener : undefined;
+  if (!messages.length && !opener) return null;
+  const firstAt = opener?.at ?? messages[0].at;
+  const updatedAt = isStr(x.updatedAt) ? x.updatedAt : messages[messages.length - 1]?.at ?? firstAt;
   const next: OrgThread = {
-    ...x, id: x.id, messages, updatedAt, createdAt: isStr(x.createdAt) ? x.createdAt : messages[0].at,
-    title: isStr(x.title) && x.title.trim() ? x.title : fallbackTitle(messages[0].text),
+    ...x, id: x.id, messages, updatedAt, createdAt: isStr(x.createdAt) ? x.createdAt : firstAt,
+    title: isStr(x.title) && x.title.trim() ? x.title : fallbackTitle(opener?.text ?? messages[0].text),
     state: THREAD_STATES.includes(x.state as ThreadState) ? x.state as ThreadState : 'new',
   };
   if (x.closed) {
@@ -142,6 +205,8 @@ function normalizeThread(t: unknown): OrgThread | null {
       next.closed = { ...x.closed, at: isStr(x.closed.at) ? x.closed.at : updatedAt, by: isStr(x.closed.by) ? x.closed.by : 'human' };
     } else delete next.closed;
   }
+  if (opener) next.opener = opener; else delete next.opener;
+  if (next.known && !(typeof next.known === 'object' && isStr(next.known.through) && messages.some((m) => m.id === next.known!.through))) delete next.known;
   return next;
 }
 
@@ -161,11 +226,19 @@ export function sortedThreads(threads: readonly OrgThread[]): OrgThread[] {
   return [...open, ...closed];
 }
 
-function prune(threads: OrgThread[]): OrgThread[] {
+/** Drop the closed threads past their week (and past the cap), as of `at`. */
+function prune(threads: OrgThread[], at: string): OrgThread[] {
+  const now = Date.parse(at);
+  const expired = (t: OrgThread) => Number.isFinite(now) && now - Date.parse(t.closed!.at) > CLOSED_KEEP_MS;
   const closed = threads.filter((t) => !isOpen(t)).sort((a, b) => b.closed!.at.localeCompare(a.closed!.at));
-  if (closed.length <= CLOSED_KEPT) return threads;
-  const drop = new Set(closed.slice(CLOSED_KEPT).map((t) => t.id));
-  return threads.filter((t) => !drop.has(t.id));
+  const drop = new Set([...closed.filter(expired), ...closed.slice(CLOSED_KEPT)].map((t) => t.id));
+  return drop.size ? threads.filter((t) => !drop.has(t.id)) : threads;
+}
+
+/** The primary's sweep: closed threads past their week are deleted for good. */
+export function sweepClosed(file: ThreadsFile, at: string): { file: ThreadsFile; dropped: number } {
+  const threads = prune(file.threads, at);
+  return { file: threads === file.threads ? file : { ...file, threads }, dropped: file.threads.length - threads.length };
 }
 
 function find(file: ThreadsFile, id: string): OrgThread {
@@ -174,8 +247,8 @@ function find(file: ThreadsFile, id: string): OrgThread {
   return t;
 }
 
-function replace(file: ThreadsFile, next: OrgThread): ThreadsFile {
-  return { ...file, threads: prune(file.threads.map((t) => (t.id === next.id ? next : t))) };
+function replace(file: ThreadsFile, next: OrgThread, at: string): ThreadsFile {
+  return { ...file, threads: prune(file.threads.map((t) => (t.id === next.id ? next : t)), at) };
 }
 
 export interface FileMessageInput {
@@ -190,6 +263,8 @@ export interface FileMessageInput {
   messageId?: string;
   /** The send's own id: a message already filed under it is not filed again (a retry). */
   key?: string;
+  /** The node session it goes to (its answer is read there). */
+  sid?: string;
   at: string;
 }
 
@@ -219,15 +294,16 @@ export function fileMessage(file: ThreadsFile, input: FileMessageInput): FileMes
     ...(images.length ? { images } : {}),
     ...(input.about ? { about: clip(input.about, THREAD_TITLE_MAX) } : {}),
     ...(input.key ? { key: input.key.slice(0, 80) } : {}),
+    ...(input.sid ? { sid: input.sid.slice(0, 80) } : {}),
   };
   const target = input.threadId ? file.threads.find((t) => t.id === input.threadId) : undefined;
   if (target && isOpen(target)) {
     const next: OrgThread = {
       ...target, messages: [...target.messages, message], updatedAt: input.at, by: 'human',
-      // He spoke again: an answered thread is his turn no more, the node's again.
-      ...(target.state === 'answered' ? { state: 'working' as ThreadState } : {}),
+      // He spoke again: a thread answered or waiting on him is the node's turn again.
+      ...(target.state === 'answered' || target.state === 'needs' ? { state: 'working' as ThreadState } : {}),
     };
-    return { file: replace(file, next), thread: next, message, created: false, duplicate: false };
+    return { file: replace(file, next, input.at), thread: next, message, created: false, duplicate: false };
   }
   const thread: OrgThread = {
     id: input.newThreadId && THREAD_ID_RE.test(input.newThreadId) ? input.newThreadId : newThreadId(),
@@ -235,7 +311,7 @@ export function fileMessage(file: ThreadsFile, input: FileMessageInput): FileMes
     state: 'new', messages: [message], createdAt: input.at, updatedAt: input.at, by: 'human',
     ...(target ? { follows: target.id } : {}),
   };
-  return { file: { ...file, threads: prune([...file.threads, thread]) }, thread, message, created: true, duplicate: false };
+  return { file: { ...file, threads: prune([...file.threads, thread], input.at) }, thread, message, created: true, duplicate: false };
 }
 
 export interface ThreadPatch {
@@ -249,6 +325,8 @@ export interface ThreadPatch {
   add_tasks?: string[];
   close?: ThreadCloseHow;
   reopen?: boolean;
+  /** He already knows every exchange through this message (tm-...), or "all": they fold to context. */
+  known?: string;
 }
 
 function checkPatch(p: ThreadPatch): void {
@@ -256,6 +334,79 @@ function checkPatch(p: ThreadPatch): void {
   if (p.state !== undefined && !THREAD_STATES.includes(p.state)) throw new ThreadError('bad_input', 400, `state must be one of ${THREAD_STATES.join(', ')}.`);
   if (p.close !== undefined && !THREAD_CLOSE_HOWS.includes(p.close)) throw new ThreadError('bad_input', 400, `close must be one of ${THREAD_CLOSE_HOWS.join(', ')}.`);
   if (p.close && p.reopen) throw new ThreadError('bad_input', 400, 'close and reopen cannot go together.');
+  if (p.known !== undefined && p.known !== 'all' && !(typeof p.known === 'string' && THREAD_MESSAGE_ID_RE.test(p.known))) {
+    throw new ThreadError('bad_input', 400, 'known must be a message id of this thread (tm-...) or "all".');
+  }
+}
+
+/** The newest of the user's messages to this node, any thread (every one he sends is filed). */
+export function lastUserAt(file: ThreadsFile): string | null {
+  let last: string | null = null;
+  for (const t of file.threads) for (const m of t.messages) if (!last || m.at > last) last = m.at;
+  return last;
+}
+
+/** He wrote to the node after `at` (a reply, an ok, a follow-up): what was said before may be known. */
+export function reactedSince(file: ThreadsFile, at: string): boolean {
+  const last = lastUserAt(file);
+  return !!last && last > at;
+}
+
+/** When the node last spoke in the exchanges through `upTo` (its answers, its first post); '' = never. */
+function nodeWordAt(t: OrgThread, upTo: number): string {
+  let at = t.opener?.at ?? '';
+  for (const m of t.messages.slice(0, upTo + 1)) if (m.answer && m.answer.at > at) at = m.answer.at;
+  return at;
+}
+
+/** A plain acknowledgement ("ok, thanks", "got it", a short Chinese "ok"): no question in it, a few words. */
+export function isAcknowledgement(text: string): boolean {
+  const t = text.trim();
+  return !!t && t.length <= 40 && !/[?\uff1f]/.test(t);
+}
+
+/**
+ * A node may close his thread only once he reacted after its last answer: an answer he did not
+ * answer is not known, however clear it was (2026-11-01, the user: "I had not replied ... clearly
+ * I had not acknowledged it ... you cannot remove it"). His last message may be that reaction
+ * ("ok, thanks", the node replying to it is fine); a question of his the node is still answering,
+ * or answered and he has not reacted to, is not. His own Acknowledge needs no check.
+ */
+function checkClose(file: ThreadsFile, t: OrgThread, by: ThreadWriter): void {
+  if (by === 'human') return;
+  const lastIdx = t.messages.length - 1;
+  const last = t.messages[lastIdx];
+  if (!last) {
+    // Only the node's own post: closed once he wrote to it after it (anywhere, the node's judgment).
+    if (t.opener && reactedSince(file, t.opener.at)) return;
+    throw notReacted('closed', t.opener?.at ?? '');
+  }
+  if (last.answer && reactedSince(file, last.answer.at)) return;
+  // His last message is a plain reaction to what the node said before it.
+  const before = nodeWordAt(t, lastIdx - 1);
+  if (before && last.at > before && isAcknowledgement(last.text)) return;
+  throw notReacted('closed', last.answer?.at ?? nodeWordAt(t, lastIdx));
+}
+
+/**
+ * What he knows, as the node may mark it: the exchanges through the latest message of his whose
+ * answer Walnut has read and he wrote after. A later mark asked for is cut back to it; none at all
+ * is refused.
+ */
+function knownThrough(file: ThreadsFile, t: OrgThread, upTo: number, by: ThreadWriter): number {
+  if (by === 'human') return upTo;
+  for (let k = upTo; k >= 0; k--) {
+    const a = t.messages[k].answer;
+    if (a && reactedSince(file, a.at)) return k;
+  }
+  throw notReacted('marked known', nodeWordAt(t, upTo));
+}
+
+function notReacted(what: string, at: string): ThreadError {
+  return new ThreadError('not_reacted', 409,
+    `Not ${what}: ${at ? `the user has not written to you since your last word in it (${at})` : 'there is no answer of yours in it he could have reacted to yet'}. `
+    + 'An answer he has not reacted to is not known: the thread stays open (answered, your answer in full) until he replies, says ok or '
+    + 'thanks, follows up, or acknowledges it.');
 }
 
 function taskList(ids: readonly unknown[]): string[] {
@@ -273,9 +424,20 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   if (patch.tasks !== undefined) { const l = taskList(patch.tasks); if (l.length) next.tasks = l; else delete next.tasks; }
   if (patch.add_tasks?.length) next.tasks = taskList([...(next.tasks ?? []), ...patch.add_tasks]);
   // Closing a closed thread again changes nothing (the node is not told twice).
-  if (patch.close && !(cur.closed && cur.closed.how === patch.close)) next.closed = { how: patch.close, at, by };
+  if (patch.known !== undefined) {
+    const upTo = patch.known === 'all' ? cur.messages.length - 1 : cur.messages.findIndex((m) => m.id === patch.known);
+    if (upTo < 0 && patch.known === 'all') throw new ThreadError('no_message', 409, `Thread ${id} holds no message of his yet: there is nothing he knows.`);
+    if (upTo < 0) throw new ThreadError('no_message', 404, `No message ${patch.known} in thread ${id}.`);
+    next.known = { through: cur.messages[knownThrough(file, cur, upTo, by)].id, by, at };
+  }
+  if (patch.close && !(cur.closed && cur.closed.how === patch.close)) {
+    // A thread the node opened that he never answered may be dropped by it: he was never asked yet.
+    const ownUnseen = patch.close === 'dropped' && !!cur.opener && !cur.messages.length && by === cur.opener.by;
+    if (!ownUnseen) checkClose(file, cur, by);
+    next.closed = { how: patch.close, at, by };
+  }
   if (patch.reopen) delete next.closed;
-  return { file: replace(file, next), thread: next };
+  return { file: replace(file, next, at), thread: next };
 }
 
 /**
@@ -290,6 +452,8 @@ export function mergeThreads(file: ThreadsFile, fromId: string, intoId: string, 
   if (!isOpen(into)) throw new ThreadError('thread_closed', 409, `Thread ${intoId} is closed; a new ask about it stays its own thread (it follows ${intoId}).`);
   // A thread the user closed stays closed: merging it would open it again unasked.
   if (!isOpen(from)) throw new ThreadError('thread_closed', 409, `Thread ${fromId} is closed; reopen it first if it belongs under ${intoId}.`);
+  // A thread the node opened keeps its first post: his ask goes under it, never the other way.
+  if (from.opener) throw new ThreadError('bad_input', 409, `Thread ${fromId} was opened by you with its own first post; merge ${intoId} into it instead.`);
   const messages = [...into.messages, ...from.messages].sort((a, b) => a.at.localeCompare(b.at));
   const next: OrgThread = {
     ...into, messages, updatedAt: at, by,
@@ -304,15 +468,70 @@ export function splitThreadMessage(file: ThreadsFile, threadId: string, messageI
   const cur = find(file, threadId);
   const msg = cur.messages.find((m) => m.id === messageId);
   if (!msg) throw new ThreadError('no_message', 404, `No message ${messageId} in thread ${threadId}.`);
-  if (cur.messages.length < 2) throw new ThreadError('last_message', 409, 'A thread keeps at least one message; this one is already its own thread.');
+  if (cur.messages.length < 2 && !cur.opener) throw new ThreadError('last_message', 409, 'A thread keeps at least one message; this one is already its own thread.');
   const from: OrgThread = { ...cur, messages: cur.messages.filter((m) => m.id !== messageId), updatedAt: at, by };
+  // The mark stays on what is left: on the message before the one taken out, or gone with it.
+  if (from.known?.through === messageId) {
+    const i = cur.messages.findIndex((m) => m.id === messageId);
+    const prev = cur.messages.slice(0, i).reverse().find((m) => m.id !== messageId);
+    if (prev) from.known = { ...from.known, through: prev.id }; else delete from.known;
+  }
   // The first message names a thread Walnut titled: it follows the message that is now first.
-  if (!from.titled) from.title = fallbackTitle(from.messages[0].text);
+  if (!from.titled && from.messages.length) from.title = fallbackTitle(from.messages[0].text);
   const thread: OrgThread = {
     id: newId && THREAD_ID_RE.test(newId) ? newId : newThreadId(),
     title: fallbackTitle(msg.text), state: 'new', messages: [msg], createdAt: msg.at, updatedAt: at, by,
   };
   return { file: { ...file, threads: [...file.threads.map((t) => (t.id === threadId ? from : t)), thread] }, thread, from };
+}
+
+export interface OpenThreadInput {
+  title: string;
+  text: string;
+  from: ThreadSource;
+  ref?: string;
+  state?: ThreadState;
+  tasks?: string[];
+  id?: string;
+}
+
+/** The node opens a thread itself: its first post is what reached it (thread_create). */
+export function openThread(file: ThreadsFile, input: OpenThreadInput, by: ThreadWriter, at: string): { file: ThreadsFile; thread: OrgThread } {
+  if (typeof input.title !== 'string' || !input.title.trim()) throw new ThreadError('bad_input', 400, 'title must be a few words.');
+  if (typeof input.text !== 'string' || !input.text.trim()) throw new ThreadError('bad_input', 400, 'text (what reached you, for him) is required.');
+  if (!THREAD_SOURCES.includes(input.from)) throw new ThreadError('bad_input', 400, `from must be one of ${THREAD_SOURCES.join(', ')}.`);
+  if (input.state !== undefined && !THREAD_STATES.includes(input.state)) throw new ThreadError('bad_input', 400, `state must be one of ${THREAD_STATES.join(', ')}.`);
+  const tasks = taskList(input.tasks ?? []);
+  const thread: OrgThread = {
+    id: input.id && THREAD_ID_RE.test(input.id) ? input.id : newThreadId(),
+    title: clip(input.title, THREAD_TITLE_MAX), titled: true, state: input.state ?? 'needs', messages: [],
+    opener: { text: clip(input.text, THREAD_ANSWER_MAX), at, from: input.from, by, ...(input.ref?.trim() ? { ref: clip(input.ref, THREAD_TITLE_MAX) } : {}) },
+    createdAt: at, updatedAt: at, by, ...(tasks.length ? { tasks } : {}),
+  };
+  return { file: { ...file, threads: prune([...file.threads, thread], at) }, thread };
+}
+
+/**
+ * Walnut read these answers from the node's chat (thread-answers.ts): each lands on its message, by
+ * id, wherever the message is now (a merge or split moved it). An answer already kept stays.
+ */
+export function setAnswers(file: ThreadsFile, answers: ReadonlyMap<string, ThreadAnswer>): { file: ThreadsFile; changed: string[] } {
+  if (!answers.size) return { file, changed: [] };
+  const changed: string[] = [];
+  const threads = file.threads.map((t) => {
+    let hit = false;
+    const messages = t.messages.map((m) => {
+      const a = answers.get(m.id);
+      if (!a || m.answer) return m;
+      hit = true;
+      const clipped = a.text.length > THREAD_ANSWER_MAX;
+      return { ...m, answer: { ...a, text: clipped ? `${a.text.slice(0, THREAD_ANSWER_MAX - 1)}…` : a.text, ...(clipped ? { clipped: true } : {}) } };
+    });
+    if (!hit) return t;
+    changed.push(t.id);
+    return { ...t, messages };
+  });
+  return changed.length ? { file: { ...file, threads }, changed } : { file, changed };
 }
 
 /** The node was told these closes (the threads hint). */

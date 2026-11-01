@@ -10,6 +10,8 @@ export interface OrgThreadMessage {
   images?: string[];
   via: 'chat' | 'follow-up' | 'letter' | 'import' | 'split';
   about?: string;
+  /** The node's answer, read by Walnut from its chat (src/core/org/thread-answers.ts). */
+  answer?: { text: string; at: string; about?: string[]; clipped?: boolean };
 }
 
 export interface OrgThread {
@@ -26,6 +28,10 @@ export interface OrgThread {
   updatedAt: string;
   by?: string;
   closed?: { how: 'acked' | 'dropped'; at: string; by: string };
+  /** He reacted to the answers through this message, as the node judged it. */
+  known?: { through: string; by: string; at: string };
+  /** The node opened the thread itself: its first post and where it came from. */
+  opener?: { text: string; at: string; from: string; ref?: string; by: string };
 }
 
 const base = (taskId: string) => `/api/v1/tasks/${encodeURIComponent(taskId)}/threads`;

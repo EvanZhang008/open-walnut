@@ -1311,7 +1311,7 @@ export interface HealthSleepReadyEvent {
 /** An Org node's Threads changed (core/org/threads-store.ts): re-read them. */
 export interface OrgThreadsChangedEvent {
   taskId: string;
-  kind: 'filed' | 'updated' | 'merged' | 'split';
+  kind: 'filed' | 'opened' | 'updated' | 'merged' | 'split' | 'answered' | 'swept';
   threadId?: string;
 }
 

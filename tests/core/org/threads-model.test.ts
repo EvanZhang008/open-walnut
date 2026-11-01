@@ -4,8 +4,8 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
-  CLOSED_KEPT, emptyThreads, fallbackTitle, fileMessage, mergeThreads, normalizeThreads,
-  sortedThreads, splitThreadMessage, ThreadError, updateThread, type ThreadsFile,
+  CLOSED_KEEP_MS, CLOSED_KEPT, emptyThreads, fallbackTitle, fileMessage, mergeThreads, normalizeThreads, openThread,
+  setAnswers, sortedThreads, splitThreadMessage, sweepClosed, ThreadError, updateThread, type ThreadAnswer, type ThreadsFile,
 } from '../../../src/core/org/threads-model.js'
 
 const at = (min: number) => new Date(Date.UTC(2026, 10, 1, 0, min)).toISOString()
@@ -199,16 +199,31 @@ describe('reading and keeping', () => {
     expect(sortedThreads(f.threads).map((t) => t.id)).toEqual([c.id, b.id, a.id])
   })
 
-  it('keeps every open thread and the newest closed ones', () => {
+  it('a closed thread is kept a week, then deleted for good; open ones never are', () => {
+    const day = 24 * 3600_000
+    const t0 = Date.UTC(2026, 9, 1)
+    let f = file('done long ago', 'done yesterday', 'still open')
+    const [old, recent] = f.threads
+    f = updateThread(f, old.id, { close: 'acked' }, 'human', new Date(t0).toISOString()).file
+    f = updateThread(f, recent.id, { close: 'acked' }, 'human', new Date(t0 + 7 * day).toISOString()).file
+    const swept = sweepClosed(f, new Date(t0 + CLOSED_KEEP_MS + day).toISOString())
+    expect(swept.dropped).toBe(1)
+    expect(swept.file.threads.map((t) => t.messages[0].text)).toEqual(['done yesterday', 'still open'])
+    // Nothing past its week: the same file back, nothing written.
+    expect(sweepClosed(swept.file, new Date(t0 + 8 * day).toISOString()).file).toBe(swept.file)
+    // A write prunes too, so an old close never outlives the next change.
+    const next = fileMessage(f, { text: 'new ask', via: 'chat', at: new Date(t0 + CLOSED_KEEP_MS + day).toISOString() }).file
+    expect(next.threads.some((t) => t.id === old.id)).toBe(false)
+  })
+
+  it('and never more than the cap of closed ones within the week', () => {
     let f = emptyThreads('n')
     for (let i = 0; i < CLOSED_KEPT + 5; i++) {
       const r = fileMessage(f, { text: `ask ${i}`, via: 'chat', at: new Date(Date.UTC(2026, 9, 1) + i * 60_000).toISOString() })
-      f = updateThread(r.file, r.thread.id, { close: 'acked' }, 'human', new Date(Date.UTC(2026, 9, 2) + i * 60_000).toISOString()).file
+      f = updateThread(r.file, r.thread.id, { close: 'acked' }, 'human', new Date(Date.UTC(2026, 9, 1, 12) + i * 60_000).toISOString()).file
     }
-    f = fileMessage(f, { text: 'still open', via: 'chat', at: at(0) }).file
     expect(f.threads.filter((t) => t.closed)).toHaveLength(CLOSED_KEPT)
     expect(f.threads.some((t) => t.messages[0].text === 'ask 0')).toBe(false)
-    expect(f.threads.some((t) => !t.closed)).toBe(true)
   })
 
   it('a broken or hand-edited file reads as the threads it can, never a crash', () => {
@@ -226,5 +241,103 @@ describe('reading and keeping', () => {
     expect(f.threads[1]).toMatchObject({ title: 'second', state: 'new' })
     expect(f.threads[1].closed).toBeUndefined()
     expect(() => sortedThreads(f.threads)).not.toThrow()
+  })
+})
+
+const answer = (min: number, text = 'An answer'): ThreadAnswer => ({ text, at: at(min) })
+
+describe('the node\'s answers, and what he already knows', () => {
+  it('answers land on their messages by id, wherever a merge moved them; one already kept stays', () => {
+    let f = file('one', 'two')
+    const [a, b] = f.threads
+    f = mergeThreads(f, b.id, a.id, 'task:lead-1', at(15)).file
+    const [m1, m2] = f.threads[0].messages
+    const r = setAnswers(f, new Map([[m1.id, answer(5)], [m2.id, answer(16, 'x'.repeat(20_000))]]))
+    expect(r.changed).toEqual([a.id])
+    expect(r.file.threads[0].messages[0].answer?.text).toBe('An answer')
+    expect(r.file.threads[0].messages[1].answer).toMatchObject({ clipped: true })
+    // Read again (a second turn end): nothing changes.
+    expect(setAnswers(r.file, new Map([[m1.id, answer(30, 'other')]])).changed).toEqual([])
+  })
+
+  it('the user\'s case: the node answers, he says nothing, the node cannot close or fold it (silence is not knowing)', () => {
+    let f = file('what is the small model?')
+    const t = f.threads[0]
+    f = setAnswers(f, new Map([[t.messages[0].id, answer(3)]])).file
+    expect(() => updateThread(f, t.id, { close: 'acked' }, 'task:lead-1', at(4))).toThrow(/not written to you since/)
+    expect(() => updateThread(f, t.id, { close: 'dropped' }, 'task:lead-1', at(4))).toThrow(ThreadError)
+    expect(() => updateThread(f, t.id, { known: 'all' }, 'task:lead-1', at(4))).toThrow(/not reacted|not written/)
+    // It stays open, answered, for him.
+    const ok = updateThread(f, t.id, { state: 'answered' }, 'task:lead-1', at(4)).thread
+    expect(ok.closed).toBeUndefined()
+    expect(ok.known).toBeUndefined()
+    // His own Acknowledge needs no check.
+    expect(updateThread(f, t.id, { close: 'acked' }, 'human', at(4)).thread.closed?.by).toBe('human')
+  })
+
+  it('once he wrote after the answer, the node may mark it known and close it', () => {
+    let f = file('what is the small model?')
+    const t = f.threads[0]
+    f = setAnswers(f, new Map([[t.messages[0].id, answer(3)]])).file
+    // He writes again (here in another thread: the node judges it a reaction).
+    f = fileMessage(f, { text: 'ok, thanks', via: 'chat', at: at(5) }).file
+    const known = updateThread(f, t.id, { known: t.messages[0].id }, 'task:lead-1', at(6))
+    expect(known.thread.known).toEqual({ through: t.messages[0].id, by: 'task:lead-1', at: at(6) })
+    expect(updateThread(known.file, t.id, { close: 'acked' }, 'task:lead-1', at(7)).thread.closed).toMatchObject({ how: 'acked', by: 'task:lead-1' })
+    // A message id that is not in the thread is refused, never stored.
+    expect(() => updateThread(f, t.id, { known: 'tm-ffffffffffff' }, 'task:lead-1', at(6))).toThrow(/No message/)
+    expect(() => updateThread(f, t.id, { known: 'nope' }, 'task:lead-1', at(6))).toThrow(ThreadError)
+  })
+
+  it('an answer that came after his last message is not known even when an older one is', () => {
+    let f = file('first')
+    const t = f.threads[0]
+    f = fileMessage(f, { text: 'second', via: 'follow-up', threadId: t.id, at: at(10) }).file
+    const [m1, m2] = f.threads[0].messages
+    f = setAnswers(f, new Map([[m1.id, answer(5)], [m2.id, answer(12)]])).file
+    expect(updateThread(f, t.id, { known: m1.id }, 'task:lead-1', at(13)).thread.known?.through).toBe(m1.id)
+    // A mark past what he reacted to is cut back to it.
+    expect(updateThread(f, t.id, { known: m2.id }, 'task:lead-1', at(13)).thread.known?.through).toBe(m1.id)
+    expect(updateThread(f, t.id, { known: 'all' }, 'task:lead-1', at(13)).thread.known?.through).toBe(m1.id)
+  })
+})
+
+describe('a thread the node opens itself', () => {
+  it('opens with the node\'s first post and where it came from; his Follow up is filed under it', () => {
+    const o = openThread(emptyThreads('lead-1'), { title: 'Mail: the meetup asks about the talk', text: 'The organizer wrote: confirm the slot by Friday?', from: 'mail', ref: 'Talk slot' }, 'task:lead-1', at(0))
+    expect(o.thread).toMatchObject({ titled: true, state: 'needs', messages: [], opener: { from: 'mail', ref: 'Talk slot', by: 'task:lead-1', at: at(0) } })
+    const r = fileMessage(o.file, { text: 'yes, confirm it', via: 'follow-up', threadId: o.thread.id, at: at(5) })
+    expect(r.created).toBe(false)
+    expect(r.thread.id).toBe(o.thread.id)
+    expect(r.thread.messages.map((m) => m.text)).toEqual(['yes, confirm it'])
+    // He answered: the node's turn again.
+    expect(r.thread.state).toBe('working')
+    // It survives a read from disk with no message of his yet.
+    expect(normalizeThreads(JSON.parse(JSON.stringify(o.file)), 'lead-1').threads[0].opener?.text).toBe('The organizer wrote: confirm the slot by Friday?')
+  })
+
+  it('his chat message about it merges into it, never the other way; the react rule holds for its first post too', () => {
+    let f = openThread(emptyThreads('lead-1'), { title: 'A team needs your call', text: 'Ship on Monday or wait?', from: 'task' }, 'task:lead-1', at(0)).file
+    const opened = f.threads[0]
+    expect(() => updateThread(f, opened.id, { close: 'acked' }, 'task:lead-1', at(1))).toThrow(/not written/)
+    // Dropping its own post he never saw is the node's call.
+    expect(updateThread(f, opened.id, { close: 'dropped' }, 'task:lead-1', at(1)).thread.closed?.how).toBe('dropped')
+    f = fileMessage(f, { text: 'wait until Tuesday', via: 'chat', at: at(3) }).file
+    const mine = f.threads.find((t) => t.id !== opened.id)!
+    expect(() => mergeThreads(f, opened.id, mine.id, 'task:lead-1', at(4))).toThrow(/merge .* into it instead/)
+    f = mergeThreads(f, mine.id, opened.id, 'task:lead-1', at(4)).file
+    expect(f.threads).toHaveLength(1)
+    expect(f.threads[0].messages.map((m) => m.text)).toEqual(['wait until Tuesday'])
+    // A split of his only message leaves the node's post standing.
+    const out = splitThreadMessage(f, opened.id, f.threads[0].messages[0].id, 'human', at(5))
+    expect(out.from.messages).toEqual([])
+    expect(out.from.opener?.text).toBe('Ship on Monday or wait?')
+  })
+
+  it('refuses a blank title or post and an unknown source', () => {
+    const e = emptyThreads('n')
+    expect(() => openThread(e, { title: ' ', text: 'x', from: 'mail' }, 'task:x', at(0))).toThrow(ThreadError)
+    expect(() => openThread(e, { title: 'x', text: ' ', from: 'mail' }, 'task:x', at(0))).toThrow(ThreadError)
+    expect(() => openThread(e, { title: 'x', text: 'y', from: 'fax' as never }, 'task:x', at(0))).toThrow(/from must be/)
   })
 })

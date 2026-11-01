@@ -31,7 +31,7 @@ import {
 import { VOICE_REPLY_TEXT } from '../sessions/voice-reply.js';
 import { languageDrift } from './hint-drift-detect.js';
 import { briefHintText, type BriefHintState } from '../sessions/brief-hint.js';
-import { threadHintText, type ThreadHintState } from '../org/thread-capture.js';
+import { threadHintText, threadsTidyText, type ThreadHintState, type ThreadsTidyState } from '../org/thread-capture.js';
 import { HINT_USER_SETTINGS, REPLY_LANGUAGE_SCOPE, WALNUT_ONLY_KINDS, replyLanguageCorrection } from './hint-origin.js';
 
 export { REPLY_LANGUAGE_SCOPE, replyLanguageCorrection };
@@ -58,6 +58,8 @@ export interface HintContentInput {
   brief?: BriefHintState | null;
   /** Main's or a lead's chat: the user's message was filed as this thread (org/thread-capture.ts). */
   thread?: ThreadHintState | null;
+  /** Main's or a lead's Threads that need its decision now (org/thread-capture.ts threadsTidyOf). */
+  threadsTidy?: ThreadsTidyState | null;
 }
 
 export interface HintRender { text: string; arg?: string }
@@ -196,6 +198,17 @@ const BUILT_IN: readonly HintSpec[] = [
     identity: (i) => (i.thread ? `${i.thread.threadId}|${i.thread.created ? 'new' : 'in'}` : null),
     render: (i) => (i.thread ? { text: threadHintText(i.thread) } : null),
   },
+  {
+    kind: 'threads-tidy',
+    label: 'Threads cleanup',
+    description: 'Main and the leads: the user\'s Threads that need the node\'s decision (he wrote after an answer: did he react to it? a stand-in title, a stale state), so it folds what he knows and closes what he reacted to as finished. Every 3 messages, when there is one.',
+    allowed: SCHEDULED,
+    // 2026-11-01, the user: "you should proactively clean the thread ... make sure this is a Walnut
+    // feature, not just your memory".
+    defaults: { enabled: true, triggers: ['session_start', 'after_compaction', 'every_n_turns'], every_turns: 3, placement: 'after' },
+    identity: (i) => (i.threadsTidy ? i.threadsTidy.key : null),
+    render: (i) => (i.threadsTidy ? { text: threadsTidyText(i.threadsTidy) } : null),
+  },
 ];
 
 /** What a node hears while the user is away from its chat (org/user-away.ts). */
@@ -333,7 +346,7 @@ export function hintApplies(hint: EffectiveHint, target: HintTarget): boolean {
 /** Does any enabled hint restrict by role or agent (so the send must read the task)? */
 export function needsTaskForAudience(hints: readonly EffectiveHint[]): boolean {
   // user-away reads the task to know it is Main or a lead (org/user-away.ts).
-  return hints.some((h) => h.enabled && (h.audience.roles.length > 0 || h.audience.agents.length > 0 || h.everyTurnRoles.length > 0 || h.kind === 'user-away' || h.kind === 'brief' || h.kind === 'threads'));
+  return hints.some((h) => h.enabled && (h.audience.roles.length > 0 || h.audience.agents.length > 0 || h.everyTurnRoles.length > 0 || h.kind === 'user-away' || h.kind === 'brief' || h.kind === 'threads' || h.kind === 'threads-tidy'));
 }
 
 export class HintSettingsError extends Error {

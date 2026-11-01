@@ -1,57 +1,95 @@
-/* An Org node's Threads (OrgThreads.tsx): the user's own requests, one card per subject. */
-.org-threads { display: flex; flex-direction: column; gap: 8px; padding: 10px 14px 14px; }
-.org-threads-head { display: flex; align-items: center; gap: 8px; }
-.org-threads-pick { display: inline-flex; padding: 2px; border-radius: 7px; background: color-mix(in srgb, var(--fg) 6%, transparent); }
-.org-threads-pick button {
-  border: 0; border-radius: 5px; padding: 2px 9px; background: transparent; color: var(--fg-secondary, var(--fg));
-  font: inherit; font-size: 12px; cursor: pointer;
-}
-.org-threads-pick button.is-on { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
-.org-threads-empty { margin: 6px 2px; font-size: 13px; }
+/* An Org node's Threads (OrgThreads.tsx): the user's own requests, one card per subject, each read
+   as its conversation. One 4px grid, three text sizes (11, 12, 13), three text roles; the accent
+   marks only the answers he has not reacted to yet (the rule beside them). */
+.org-threads { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px 16px; }
+.org-threads-empty { margin: 4px 0; font-size: 13px; color: var(--fg-muted, #86868b); }
 .org-thread-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .org-thread {
-  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--bg);
-  display: flex; flex-direction: column; gap: 5px; min-width: 0;
+  border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: var(--bg);
+  display: flex; flex-direction: column; gap: 8px; min-width: 0;
 }
-.org-thread.is-closed { opacity: 0.78; }
+.org-thread.is-closed { background: var(--bg-secondary); }
 /* Two rows: state and time, then the title across the whole card (a CJK title squeezed beside the
    time broke after every character). */
 .org-thread-head {
-  display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; column-gap: 8px; row-gap: 2px;
+  display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; column-gap: 8px; row-gap: 4px;
   width: 100%; min-width: 0; padding: 0; border: 0;
   background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer;
 }
 .org-thread-state {
-  flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--fg-secondary, var(--fg));
-  text-transform: none; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--fg-secondary, var(--fg)); white-space: nowrap;
 }
-.org-thread-state i, .org-thread-task i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; flex: none; }
-.org-thread-title { grid-column: 1 / -1; grid-row: 2; min-width: 0; font-weight: 600; font-size: 13px; overflow-wrap: break-word; }
-.org-thread-meta { grid-column: 2; grid-row: 1; justify-self: end; min-width: 0; font-size: 11px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.org-thread-follows { margin: 0; font-size: 12px; }
-.org-thread-ask { margin: 0; font-size: 12.5px; color: var(--fg-secondary, var(--fg)); overflow-wrap: anywhere; }
-.org-thread-reply {
-  font-size: 12.5px; padding: 4px 8px; border-left: 2px solid var(--border);
-  background: color-mix(in srgb, var(--bg-secondary) 60%, var(--bg)); border-radius: 0 5px 5px 0; overflow-wrap: anywhere;
+.org-thread-state i, .org-thread-task i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.org-thread-title { grid-column: 1 / -1; grid-row: 2; min-width: 0; font-weight: 600; font-size: 13px; line-height: 1.4; overflow-wrap: break-word; }
+.org-thread-meta {
+  grid-column: 2; grid-row: 1; justify-self: end; min-width: 0; font-size: 11px; color: var(--fg-muted, #86868b);
+  font-variant-numeric: tabular-nums; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.org-thread-reply > :first-child { margin-top: 0; }
-.org-thread-reply > :last-child { margin-bottom: 0; }
-.org-thread-tasks { display: flex; flex-wrap: wrap; gap: 5px; }
-.org-thread-task {
-  display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 1px 8px; border: 1px solid var(--border);
-  border-radius: 10px; background: var(--bg-secondary); color: var(--fg); font: inherit; font-size: 11.5px; cursor: pointer;
-}
-.org-thread-task span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.org-thread-messages { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.org-thread-message { border-top: 1px dashed var(--border); padding-top: 5px; min-width: 0; }
-.org-thread-message-head { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; }
-.org-thread-words { font-size: 12.5px; overflow-wrap: anywhere; }
-.org-thread-words img { max-width: 100%; max-height: 220px; border-radius: 5px; }
-.org-thread-link { border: 0; padding: 0; background: transparent; color: var(--accent, #0a84ff); font: inherit; font-size: 11px; cursor: pointer; }
-.org-thread-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.org-thread-closed { font-size: 11.5px; margin-right: auto; }
-.org-thread-follow { display: flex; flex-direction: column; gap: 5px; }
-.org-thread-follow-row { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
-.org-thread-error { margin: 0 auto 0 0; font-size: 12px; color: var(--error, #ff3b30); }
 .org-thread-chevron { color: var(--fg-muted, #86868b); }
 .org-thread-head:focus-visible { outline: 2px solid var(--accent, #0a84ff); outline-offset: 2px; border-radius: 4px; }
+.org-thread-follows { margin: 0; font-size: 12px; color: var(--fg-muted, #86868b); }
+/* Where it stands, in the node's words: one quiet line under the title. */
+.org-thread-reply { font-size: 12px; line-height: 1.5; color: var(--fg-secondary, var(--fg)); overflow-wrap: anywhere; }
+.org-thread-reply > :first-child { margin-top: 0; }
+.org-thread-reply > :last-child { margin-bottom: 0; }
+.org-thread-tasks { display: flex; flex-wrap: wrap; gap: 4px; }
+.org-thread-task {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 2px 8px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--bg-secondary); color: var(--fg); font: inherit; font-size: 11px; cursor: pointer;
+}
+.org-thread-task span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Earlier: what he already knows, as one line of his own asks; a click opens the whole conversation. */
+.org-thread-earlier {
+  display: flex; align-items: baseline; gap: 8px; width: 100%; min-width: 0; padding: 4px 8px; border: 0; border-radius: 6px;
+  background: var(--bg-secondary); color: var(--fg-muted, #86868b); font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+  transition: background-color 120ms ease-out;
+}
+.org-thread-earlier:hover { background: color-mix(in srgb, var(--fg) 8%, var(--bg-secondary)); }
+.org-thread-earlier:focus-visible { outline: 2px solid var(--accent, #0a84ff); outline-offset: 2px; }
+.org-thread-earlier-label { flex: none; color: var(--fg-secondary, var(--fg)); font-weight: 500; }
+.org-thread-earlier-words { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The conversation: his words beside their number, the node's answer under them. */
+.org-thread-conversation { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.org-thread-exchange { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.org-thread-message { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; column-gap: 4px; align-items: baseline; min-width: 0; }
+.org-thread-n { font-family: var(--font-mono); font-size: 11px; color: var(--fg-muted, #86868b); font-variant-numeric: tabular-nums; text-align: right; padding-right: 4px; }
+.org-thread-said { min-width: 0; }
+.org-thread-via { font-size: 11px; color: var(--fg-muted, #86868b); }
+.org-thread-words { font-size: 13px; line-height: 1.5; color: var(--fg); overflow-wrap: anywhere; }
+.org-thread-words > :first-child { margin-top: 0; }
+.org-thread-words > :last-child { margin-bottom: 0; }
+.org-thread-words img { max-width: min(100%, 320px); max-height: 160px; border-radius: 6px; }
+.org-thread-split { opacity: 0; transition: opacity 120ms ease-out; }
+.org-thread-message:hover .org-thread-split, .org-thread-split:focus-visible { opacity: 1; }
+@media (hover: none) { .org-thread-split { opacity: 1; } }
+
+.org-thread-answer {
+  margin-left: 24px; padding: 4px 0 4px 12px; border-left: 2px solid var(--border); min-width: 0;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.org-thread-answer.is-news { border-left-color: var(--accent, #0a84ff); }
+.org-thread-answer.is-waiting { font-size: 12px; color: var(--fg-muted, #86868b); }
+.org-thread-answer-by { font-size: 11px; color: var(--fg-muted, #86868b); font-variant-numeric: tabular-nums; }
+.org-thread-fold { overflow: hidden; }
+.org-thread-fold.is-folded { -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 32px), transparent); }
+.org-thread-fold.is-whole { max-height: none; }
+.org-thread-words-fold { max-height: 120px; }
+.org-thread-answer-body { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; max-height: 160px; }
+.org-thread-more { align-self: flex-start; }
+.org-thread-answer-body .markdown-body > :first-child { margin-top: 0; }
+.org-thread-answer-body .markdown-body > :last-child { margin-bottom: 0; }
+.org-thread-answer .msg-about { margin-top: 0; }
+
+.org-thread-link { border: 0; padding: 0; background: transparent; color: var(--accent, #0a84ff); font: inherit; font-size: 11px; cursor: pointer; }
+.org-thread-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.org-thread-closed { font-size: 12px; color: var(--fg-muted, #86868b); margin-right: auto; }
+.org-thread-follow { display: flex; flex-direction: column; gap: 4px; }
+.org-thread-follow-row { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.org-thread-error { margin: 0 auto 0 0; font-size: 12px; color: var(--error, #ff3b30); }
+.org-threads-closed-toggle {
+  align-self: flex-start; border: 0; padding: 4px 0; background: transparent; color: var(--fg-muted, #86868b);
+  font: inherit; font-size: 12px; cursor: pointer;
+}
+.org-threads-closed-toggle:hover { color: var(--fg-secondary, var(--fg)); }

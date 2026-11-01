@@ -12,18 +12,28 @@
  *   4. the user's Acknowledge closes it, the lead is told once on his next message; asking again
  *      through the closed thread's Follow up opens a new thread that follows it;
  *   5. a letter he answers with a note is filed too, a choice alone is not;
- *   6. a worker keeps no Threads: its chat files nothing and its routes refuse.
- * Only the Claude CLI is mocked (no CLI runs: the messages wait in the queue).
+ *   6. a worker keeps no Threads: its chat files nothing and its routes refuse;
+ *   7. the lead's chat reply lands under his message by itself when its turn ends (the transcript
+ *      on disk), and the lead cannot close that thread until he reacts (2026-11-01, the user: "I
+ *      had not replied ... you cannot remove it"); then it can;
+ *   8. a thread the lead opens itself (thread_create) takes his reply typed through its Follow up;
+ *      a closed thread leaves the open list and is counted instead.
+ * Only the Claude CLI is mocked (no CLI runs: the messages wait in the queue), and the local
+ * daemon's file reader is served from the test's own Claude home.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { createMockConstants } from '../helpers/mock-constants.js'
+import { mockLocalDaemonReader } from '../helpers/mock-local-daemon-reader.js'
 
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-org-threads'))
+vi.mock('../../src/core/daemon-file-reader.js', () => mockLocalDaemonReader())
 
-import { WALNUT_HOME } from '../../src/constants.js'
+import { CLAUDE_HOME, WALNUT_HOME } from '../../src/constants.js'
+import { encodeProjectPath } from '../../src/core/session-history.js'
+import { bus, EventNames } from '../../src/core/event-bus.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { addTask } from '../../src/core/task-manager.js'
 import { createSessionRecord, getSessionByClaudeId, updateSessionRecord } from '../../src/core/session-tracker.js'
@@ -184,5 +194,58 @@ describe('Org Threads', () => {
     expect((await patch(first.id, {})).status).toBe(400)
     // A merge goes alone: anything else would be written onto a thread the merge removes.
     expect((await patch(first.id, { title: 'x', merge_into: 'th-ffffffffffff' })).status).toBe(400)
+  })
+
+  it('the lead\'s chat reply lands under his message when its turn ends; it cannot close it until he reacts', async () => {
+    const ask = 'what is the small model?'
+    await typeIntoChat(LEAD_SID, ask)
+    const t = (await threads()).find((x) => x.messages[0]?.text === ask)!
+    expect(t.messages[0].sid).toBe(LEAD_SID)
+    // The lead's chat on disk: his message, a notice, then its reply (Claude's JSONL).
+    const base0 = Date.parse(t.messages[0].at)
+    const ts = (s: number) => new Date(base0 + s * 1000).toISOString()
+    const lines = [
+      { type: 'user', uuid: 'u-1', timestamp: ts(0.05), message: { role: 'user', content: [{ type: 'text', text: ask }] } },
+      { type: 'assistant', uuid: 'a-1', timestamp: ts(0.1), message: { id: 'msg-1', role: 'assistant', content: [{ type: 'text', text: 'The fast model in the local config, for titles and summaries.' }] } },
+    ]
+    const dir = path.join(CLAUDE_HOME, 'projects', encodeProjectPath(WALNUT_HOME))
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(path.join(dir, `${LEAD_SID}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
+    bus.emit(EventNames.SESSION_RESULT, { sessionId: LEAD_SID, taskId: leadId, result: 'done' }, ['web-ui'], { source: 'test' })
+    await expect.poll(async () => (await threads()).find((x) => x.id === t.id)?.messages[0].answer?.text, { timeout: 15_000 })
+      .toBe('The fast model in the local config, for titles and summaries.')
+    // He said nothing since: the lead's close and known mark are refused, the thread stays open.
+    const refused = await patch(t.id, { close: 'acked' }, LEAD_SID)
+    expect(refused.status).toBe(409)
+    expect(((await refused.json()) as { error?: { code?: string } }).error?.code ?? '').toBe('not_reacted')
+    expect((await patch(t.id, { known: 'all' }, LEAD_SID)).status).toBe(409)
+    expect((await threads()).find((x) => x.id === t.id)?.closed).toBeUndefined()
+    // He reacts in the thread: now the lead may close it.
+    await typeIntoChat(LEAD_SID, 'ok, thanks', t.id)
+    const closed = await patch(t.id, { close: 'acked' }, LEAD_SID)
+    expect(closed.status, await closed.clone().text()).toBe(200)
+  })
+
+  it('a thread the lead opens itself takes his reply through its Follow up; closed ones leave the open list', async () => {
+    const res = await fetch(`${base}/api/v1/tasks/${leadId}/threads/open`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-walnut-caller-sid': LEAD_SID },
+      body: JSON.stringify({ title: 'Mail: the meetup asks about the talk', text: 'Confirm the slot by Friday?', from: 'mail', ref: 'Talk slot' }),
+    })
+    expect(res.status).toBe(201)
+    const opened = ((await res.json()) as { thread: OrgThread }).thread
+    expect(opened).toMatchObject({ state: 'needs', messages: [], opener: { from: 'mail', by: `task:${leadId}` } })
+    const sent = await typeIntoChat(LEAD_SID, 'yes, confirm it', opened.id)
+    expect(hintOf(sent)).toContain(`follow-up in his thread ${opened.id}`)
+    const now = (await threads()).find((x) => x.id === opened.id)!
+    expect(now.messages.map((m) => m.text)).toEqual(['yes, confirm it'])
+    expect(now.state).toBe('working')
+    // Bad input is refused.
+    const bad = await fetch(`${base}/api/v1/tasks/${leadId}/threads/open`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'x', text: 'y', from: 'fax' }) })
+    expect(bad.status).toBe(400)
+    // The open list leaves the closed ones out and counts them.
+    const open = await fetch(`${base}/api/v1/tasks/${leadId}/threads?open=1`)
+    const body = (await open.json()) as { threads: OrgThread[]; closed_count: number }
+    expect(body.threads.every((x) => !x.closed)).toBe(true)
+    expect(body.closed_count).toBeGreaterThan(0)
   })
 })

@@ -5,16 +5,27 @@
  * thread, add it below that thread").
  *
  * The lead's writes go through the route its thread_update op calls, as its session would
- * (x-walnut-caller-sid). Scenario matrix:
+ * (x-walnut-caller-sid). A thread reads as its conversation (2026-11-01, the user: "do it like
+ * slack thread"); the answers Walnut reads from the node's chat are proven against a real
+ * transcript in tests/e2e/org-threads.test.ts and tests/core/org/thread-answers.test.ts, so case 5
+ * seeds a node's threads file with answers in the shape of the user's own thread. Scenario matrix:
  *  1. a request the user types to the lead (the composer under the Team view) shows as a new thread
- *     at once; the lead titles it, sets it working with a reply and a task: the card shows each, the
- *     task's live status dot; a second ask about the same subject is merged by the lead and the card
- *     says 2 messages, its messages in order; Split out undoes a wrong merge;
+ *     at once, waiting for its answer; the lead titles it, sets it working with a reply and a task:
+ *     the card shows each, the task's live status dot; a second ask about the same subject is
+ *     merged by the lead and the card says 2 messages, its messages in order; Split out undoes a
+ *     wrong merge;
  *  2. Follow up sends a message filed under that thread (stored as a follow-up), the card counts it;
- *     Acknowledge moves it to Closed (who and when stored), Reopen brings it back; a reload opens on
- *     Task and the same threads come back;
+ *     Acknowledge takes it out of the open list into "N closed this week" (who and when stored),
+ *     Reopen brings it back; a reload opens on Task and the same threads come back;
  *  3. a long Unicode request reads in full when opened; an Acknowledge the server refuses puts the
- *     card back and says it did not save.
+ *     card back and says it did not save;
+ *  4. a thread the lead opens itself (thread_create, from mail) shows its post as the lead's, with
+ *     where it came from; his Follow up lands under it;
+ *  5. five asks with three answers (two pairs answered at once), the last answer long, Markdown,
+ *     with its tasks line: the two exchanges he wrote after fold into one Earlier line (1, 2, 3),
+ *     the last reads in full, numbered 4 and 5, its answer marked as not yet known, folded to a
+ *     few lines with Show all, no raw markup, its task as a live pill; opening the card shows all
+ *     five with every answer; a real CJK title keeps one line per word.
  * The fixture is shared, so this file makes its own project and removes what it made.
  */
 import fs from 'node:fs'
@@ -35,7 +46,7 @@ test.setTimeout(180_000)
 
 const rowKey = (project: string) => `project:${project.trim().toLowerCase()}`
 
-interface Thread { id: string; title: string; state: string; messages: Array<{ id: string; text: string; via: string }>; closed?: { how: string; by: string } }
+interface Thread { id: string; title: string; state: string; messages: Array<{ id: string; text: string; via: string; answer?: { text: string } }>; closed?: { how: string; by: string } }
 
 async function post<T>(request: APIRequestContext, url: string, data: unknown): Promise<T> {
   const res = await request.post(url, { data })
@@ -127,17 +138,18 @@ test('a request becomes a thread the lead keeps; asks about one subject are one 
   const first = `The Org page is a mess: add a Threads view ${STAMP}`
   await sendToLead(page, first)
   await expect.poll(async () => (await threads(request)).length, { timeout: 30_000 }).toBe(before + 1)
-  const t1 = (await threads(request)).find((t) => t.messages[0].text === first)!
+  const t1 = (await threads(request)).find((t) => t.messages[0]?.text === first)!
   // Shown at once, in Walnut's words until the lead titles it.
   await expect(card(page, t1.id)).toHaveAttribute('data-state', 'new')
   await expect(card(page, t1.id).getByTestId('org-thread-title')).toHaveText(first)
+  // Nothing answered yet: his message reads alone, waiting.
+  await expect(card(page, t1.id).getByTestId('org-thread-unanswered')).toBeVisible()
 
   await leadUpdates(request, t1.id, { title: `Org: Threads view ${STAMP}`, ask: 'One thread per request, with Acknowledge', state: 'working', reply: 'Handed to **Build Threads**', add_tasks: [ids.work] })
   const c1 = card(page, t1.id)
   await expect(c1.getByTestId('org-thread-title')).toHaveText(`Org: Threads view ${STAMP}`)
   await expect(c1).toHaveAttribute('data-state', 'working')
   await expect(c1.getByTestId('org-thread-state')).toHaveText('Working')
-  await expect(c1.getByTestId('org-thread-ask')).toHaveText('One thread per request, with Acknowledge')
   await expect(c1.getByTestId('org-thread-reply').locator('strong')).toHaveText('Build Threads')
   await expect(c1.locator(`[data-testid="org-thread-task"][data-task-id="${ids.work}"]`)).toContainText(`Build Threads ${STAMP}`)
   await expect(c1.locator(`[data-testid="org-thread-task"][data-task-id="${ids.work}"] i`)).toHaveCount(1)
@@ -146,7 +158,7 @@ test('a request becomes a thread the lead keeps; asks about one subject are one 
   const second = `and group my asks about one subject ${STAMP}`
   await sendToLead(page, second)
   await expect.poll(async () => (await threads(request)).length, { timeout: 30_000 }).toBe(before + 2)
-  const t2 = (await threads(request)).find((t) => t.messages[0].text === second)!
+  const t2 = (await threads(request)).find((t) => t.messages[0]?.text === second)!
   await expect(card(page, t2.id)).toBeVisible()
   await leadUpdates(request, t2.id, { merge_into: t1.id })
   await expect(card(page, t2.id)).toHaveCount(0)
@@ -161,7 +173,7 @@ test('a request becomes a thread the lead keeps; asks about one subject are one 
   await c1.getByTestId('org-thread-message').nth(1).getByTestId('org-thread-split').click()
   await expect.poll(async () => (await threads(request)).length, { timeout: 15_000 }).toBe(before + 2)
   await expect(c1.getByTestId('org-thread-message')).toHaveCount(1)
-  const split = (await threads(request)).find((t) => t.messages[0].text === second)!
+  const split = (await threads(request)).find((t) => t.messages[0]?.text === second)!
   await expect(card(page, split.id).getByTestId('org-thread-title')).toHaveText(second)
   // The lead merges it back (same subject after all).
   await leadUpdates(request, split.id, { merge_into: t1.id })
@@ -188,15 +200,17 @@ test('Follow up files under the thread; Acknowledge closes it, Reopen brings it 
   await expect(page.getByTestId('org-detail').locator('[data-testid="org-chat"]').getByText(follow).first()).toBeVisible({ timeout: 60_000 })
 
   await c1.getByTestId('org-thread-ack').click()
+  // Out of the open list at once; the closed ones of the week wait behind one quiet line.
   await expect(c1).toHaveCount(0)
   await expect.poll(async () => (await threads(request)).find((t) => t.id === t1.id)?.closed?.by, { timeout: 15_000 }).toBe('human')
+  await expect(page.getByTestId('org-threads-closed')).toHaveText(/^\d+ closed this week/)
   await page.getByTestId('org-threads-closed').click()
   await expect(c1.getByTestId('org-thread-closed')).toHaveText(/^Acknowledged /)
   await shot(page, 'closed')
   await c1.getByTestId('org-thread-reopen').click()
-  await expect(c1).toHaveCount(0)
-  await page.getByTestId('org-threads-open').click()
   await expect(c1).toBeVisible()
+  await expect(c1).not.toHaveAttribute('data-state', 'closed')
+  await expect(page.getByTestId('org-thread-list').locator(`[data-thread-id="${t1.id}"]`)).toBeVisible()
   await expect.poll(async () => (await threads(request)).find((t) => t.id === t1.id)?.closed, { timeout: 15_000 }).toBeUndefined()
 
   // A reload opens the node on Task; Threads shows the same threads.
@@ -213,7 +227,9 @@ test('a long Unicode request reads in full; an Acknowledge the server refuses pu
   await openThreads(page)
   const c = card(page, thread.id)
   await expect(c.getByTestId('org-thread-title')).toHaveText(`微信的 org 非常乱 ${STAMP}`)
-  await c.getByTestId('org-thread-head').click()
+  // A long voice note folds to a few lines; Show all reads it in full.
+  await c.getByTestId('org-thread-words-more').click()
+  await expect(c.getByTestId('org-thread-words-more')).toHaveText('Show less')
   await expect(c.getByTestId('org-thread-message')).toContainText('Paragraph 12:')
   // No horizontal overflow from the long words.
   const overflow = await page.getByTestId('org-threads').evaluate((el) => el.scrollWidth - el.clientWidth)
@@ -234,4 +250,102 @@ test('a long Unicode request reads in full; an Acknowledge the server refuses pu
   // The card leaves at once; the write lands a moment later.
   await expect.poll(async () => (await threads(request)).find((t) => t.id === thread.id)?.closed?.how, { timeout: 15_000 }).toBe('acked')
   await expect(page.getByTestId('org-threads-error')).toHaveCount(0)
+})
+
+test('a thread the lead opens itself shows its post as the lead\'s, and his Follow up lands under it', async ({ page, request }) => {
+  const res = await request.post(`/api/v1/tasks/${ids.lead}/threads/open`, {
+    data: { title: `Mail: the meetup asks about the talk ${STAMP}`, text: 'The organizer wrote: **confirm the slot by Friday?**', from: 'mail', ref: 'Talk slot' },
+    headers: { 'x-walnut-caller-sid': ids.leadSid },
+  })
+  expect(res.status(), await res.text()).toBe(201)
+  const opened = ((await res.json()) as { thread: Thread }).thread
+  await openThreads(page)
+  const c = card(page, opened.id)
+  await expect(c.getByTestId('org-thread-from')).toContainText('Opened by')
+  await expect(c.getByTestId('org-thread-opener')).toContainText('opened this · Mail: Talk slot')
+  await expect(c.getByTestId('org-thread-opener').locator('strong')).toHaveText('confirm the slot by Friday?')
+  await c.getByTestId('org-thread-follow-open').click()
+  await c.getByTestId('org-thread-follow-input').fill(`yes, confirm it ${STAMP}`)
+  await c.getByTestId('org-thread-follow-send').click()
+  await expect(c.getByTestId('org-thread-message')).toContainText(`yes, confirm it ${STAMP}`, { timeout: 30_000 })
+  await shot(page, 'opened')
+  expect((await threads(request)).find((t) => t.id === opened.id)?.messages.map((m) => m.via)).toEqual(['follow-up'])
+})
+
+test('a long thread reads as its conversation: what he knows folds to one line, the rest in full', async ({ page, request }) => {
+  const project = `Threads talk ${STAMP}`
+  const work = await createTask(request, `Small model task ${STAMP}`, project)
+  // Two tasks: a project of one has no lead of its own yet.
+  await createTask(request, `Second task ${STAMP}`, project)
+  const node = (await post<{ task: { id: string } }>(request, '/api/v1/org/contact', { to: project })).task.id
+  made.push(node)
+  const { walnutHome } = await discoverBrowserFixture(TEST_PORT)
+  const t0 = Date.now() - 10 * 60_000
+  const at = (s: number) => new Date(t0 + s * 1000).toISOString()
+  const long = [
+    'You are right, these are one subject and I split them wrongly. **Where the small model runs**:',
+    ...Array.from({ length: 10 }, (_, i) => `- Background job ${i + 1}: titles, summaries and other small work`),
+    '',
+    `<walnut-about tasks="${work}"/>`,
+  ].join('\n')
+  const msg = (id: string, s: number, text: string, answer?: [number, string]) => ({ id, at: at(s), text, via: 'chat', ...(answer ? { answer: { at: at(answer[0]), text: answer[1] } } : {}) })
+  const file = {
+    version: 1, taskId: node, threads: [{
+      id: 'th-0297973b5725', title: '\u672c\u5730\u6a21\u578b\uff1a\u5c0f\u6a21\u578b\u7528\u5728\u54ea\u3001\u8c01\u8981\u505a\u7684\u3001\u505c\u6389', titled: true, state: 'answered',
+      reply: 'Explained, and every part of it stopped', createdAt: at(0), updatedAt: at(400),
+      messages: [
+        msg('tm-000000000001', 0, 'what is the small model?', [40, 'The fast model in the local config.']),
+        msg('tm-000000000002', 60, 'who asked you to do this?', [180, 'Nobody did. I stopped all of it. <walnut-turn status="agent-ack"/>']),
+        msg('tm-000000000003', 80, 'do not do this, why do this?', [180, 'Nobody did. I stopped all of it. <walnut-turn status="agent-ack"/>']),
+        msg('tm-000000000004', 220, 'which part of Walnut, the titles?', [300, long]),
+        msg('tm-000000000005', 245, 'this is the same thread, why split it?', [300, long]),
+      ],
+    }],
+  }
+  const dir = `${walnutHome}/org/threads`
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(`${dir}/${node}.json`, JSON.stringify(file))
+
+  await isolateUiPrefs(page)
+  await loadHome(page)
+  await page.getByTestId('sidebar-org').click()
+  await page.locator(`[data-testid="org-channel"][data-key="${rowKey(project)}"]`).click()
+  const detail = page.getByTestId('org-detail')
+  await detail.getByTestId('org-top-threads').click()
+  const c = card(page, 'th-0297973b5725')
+  await expect(c).toBeVisible()
+  // Context: the asks he wrote after an answer to, as one line.
+  await expect(c.getByTestId('org-thread-earlier')).toContainText('1 what is the small model?')
+  await expect(c.getByTestId('org-thread-earlier')).toContainText('3 do not do this')
+  // In full: the last exchange, numbered 4 and 5, the answer not yet known to him.
+  await expect(c.getByTestId('org-thread-message')).toHaveCount(2)
+  await expect(c.locator('.org-thread-n')).toHaveText(['4', '5'])
+  const answer = c.getByTestId('org-thread-answer')
+  await expect(answer).toHaveCount(1)
+  await expect(answer).toHaveAttribute('data-known', 'false')
+  await expect(answer).toHaveClass(/is-news/)
+  await expect(answer.locator('strong')).toHaveText('Where the small model runs')
+  await expect(answer.getByTestId('msg-about').locator(`a[data-task-id="${work}"]`)).toContainText(`Small model task ${STAMP}`)
+  await expect(c).not.toContainText('<walnut-')
+  // Long: folded to a few lines, Show all opens the rest.
+  const body = answer.getByTestId('org-thread-answer-body')
+  const folded = await body.evaluate((el) => el.clientHeight)
+  expect(folded).toBeLessThanOrEqual(170)
+  await shot(page, 'conversation')
+  await answer.getByTestId('org-thread-answer-body-more').click()
+  await expect(answer.getByTestId('org-thread-answer-body-more')).toHaveText('Show less')
+  expect(await body.evaluate((el) => el.clientHeight)).toBeGreaterThan(folded)
+  await expect(body).toContainText('Background job 10')
+  // The whole conversation: five messages, three answers, the first two known.
+  await c.getByTestId('org-thread-earlier').click()
+  await expect(c.getByTestId('org-thread-message')).toHaveCount(5)
+  await expect(c.getByTestId('org-thread-answer')).toHaveCount(3)
+  await expect(c.getByTestId('org-thread-answer').nth(1)).toContainText('Nobody did.')
+  await expect(c.getByTestId('org-thread-answer').nth(1)).toHaveAttribute('data-known', 'true')
+  await expect(c.getByTestId('org-thread-earlier')).toHaveCount(0)
+  // The CJK title keeps whole lines, and nothing runs past the card.
+  const title = await c.getByTestId('org-thread-title').evaluate((el) => ({ h: el.getBoundingClientRect().height, lh: parseFloat(getComputedStyle(el).lineHeight) }))
+  expect(title.h).toBeLessThanOrEqual(title.lh * 1.5)
+  expect(await page.getByTestId('org-threads').evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1)
+  await shot(page, 'conversation-open')
 })

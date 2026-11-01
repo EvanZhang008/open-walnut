@@ -6,6 +6,7 @@
  * Only the leader keeps them: the companion has no copy, so its reads are empty and its writes
  * refused, the way Board writes are.
  */
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { WALNUT_HOME } from '../../constants.js';
 import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
@@ -13,15 +14,17 @@ import { bus, EventNames } from '../event-bus.js';
 import type { OrgThreadsChangedEvent } from '../event-types.js';
 import { isCompanion } from '../server-role.js';
 import {
-  emptyThreads, fileMessage, markClosesTold, mergeThreads, normalizeThreads, splitThreadMessage, ThreadError, updateThread,
-  type FileMessageInput, type FileMessageResult, type OrgThread, type ThreadPatch, type ThreadsFile, type ThreadWriter,
+  emptyThreads, fileMessage, markClosesTold, mergeThreads, normalizeThreads, openThread, setAnswers, splitThreadMessage, sweepClosed, ThreadError, updateThread,
+  type FileMessageInput, type FileMessageResult, type OpenThreadInput, type OrgThread, type ThreadAnswer, type ThreadPatch, type ThreadsFile, type ThreadWriter,
 } from './threads-model.js';
 
 const TASK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
+const threadsDir = () => path.join(WALNUT_HOME, 'org', 'threads');
+
 function threadsFile(taskId: string): string {
   if (!TASK_ID_RE.test(taskId)) throw new ThreadError('bad_input', 400, `Invalid task id: ${taskId}`);
-  return path.join(WALNUT_HOME, 'org', 'threads', `${taskId}.json`);
+  return path.join(threadsDir(), `${taskId}.json`);
 }
 
 function emit(event: OrgThreadsChangedEvent): void {
@@ -58,6 +61,17 @@ export async function fileThreadMessage(taskId: string, input: FileMessageInput)
   return res;
 }
 
+/** The node opens a thread itself (thread_create): its first post is what reached it. */
+export async function openNodeThread(taskId: string, input: OpenThreadInput, by: ThreadWriter): Promise<OrgThread> {
+  const at = new Date().toISOString();
+  const thread = await mutateThreads(taskId, (cur) => {
+    const r = openThread(cur, input, by, at);
+    return { file: r.file, out: r.thread };
+  });
+  emit({ taskId, kind: 'opened', threadId: thread.id });
+  return thread;
+}
+
 export async function patchThread(taskId: string, id: string, patch: ThreadPatch, by: ThreadWriter): Promise<OrgThread> {
   const at = new Date().toISOString();
   const thread = await mutateThreads(taskId, (cur) => {
@@ -92,4 +106,34 @@ export async function splitThread(taskId: string, threadId: string, messageId: s
 export async function noteClosesTold(taskId: string, ids: readonly string[]): Promise<void> {
   if (!ids.length || isCompanion()) return;
   await mutateThreads(taskId, (cur) => ({ file: markClosesTold(cur, ids), out: undefined }));
+}
+
+/** Answers Walnut read from the node's chat (thread-answers.ts), each onto its message. Returns how many landed. */
+export async function setThreadAnswers(taskId: string, answers: ReadonlyMap<string, ThreadAnswer>): Promise<number> {
+  if (!answers.size || isCompanion()) return 0;
+  const changed = await mutateThreads(taskId, (cur) => {
+    const r = setAnswers(cur, answers);
+    return { file: r.file, out: r.changed };
+  });
+  // One change for the whole read: a client reads the node's threads once, not once per thread.
+  if (changed.length) emit({ taskId, kind: 'answered', ...(changed.length === 1 ? { threadId: changed[0] } : {}) });
+  return changed.length;
+}
+
+/** The primary's sweep: every node's closed threads past their week are deleted for good. */
+export async function sweepClosedThreads(now = Date.now()): Promise<number> {
+  if (isCompanion()) return 0;
+  const names = await fs.readdir(threadsDir()).catch(() => [] as string[]);
+  let dropped = 0;
+  const at = new Date(now).toISOString();
+  for (const name of names) {
+    const taskId = name.endsWith('.json') ? name.slice(0, -5) : '';
+    if (!TASK_ID_RE.test(taskId)) continue;
+    const n = await mutateThreads(taskId, (cur) => {
+      const r = sweepClosed(cur, at);
+      return { file: r.file, out: r.dropped };
+    });
+    if (n) { dropped += n; emit({ taskId, kind: 'swept' }); }
+  }
+  return dropped;
 }
