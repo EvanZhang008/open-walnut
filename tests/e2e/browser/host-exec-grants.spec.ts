@@ -112,10 +112,19 @@ test('each host has a hard stop switch that sends the PUT and sticks', async ({ 
     if (slowFirst) { slowFirst = false; await new Promise((r) => setTimeout(r, 800)) }
     return route.fulfill({ json: answer })
   })
+  // The cloud companion is no Settings row; the host status push names it, and it gets a switch too.
+  await page.route('**/api/hosts/status*', async (route) => {
+    const r = await route.fetch()
+    const body = await r.json() as { hosts?: Array<Record<string, unknown>> }
+    body.hosts = [...(body.hosts ?? []).filter((h) => h.host !== '__cloudbox__'), { host: '__cloudbox__', label: 'Cloud', connected: true, phase: 'connected' }]
+    return route.fulfill({ response: r, json: body })
+  })
   await openRemoteHosts(page)
   const group = page.getByTestId('host-exec-grants')
   await expect(group).toBeVisible({ timeout: 30_000 })
   await expect(group).toContainText('without asking you')
+  await expect(group.locator('[data-exec-host="__cloudbox__"]')).toContainText('Tasks on other hosts may use Cloud')
+  await expect(group).not.toContainText('__cloudbox__')
   const mac = group.locator('[data-exec-host="__local__"]')
   const sw = mac.getByRole('switch', { name: 'Tasks on other hosts may use this Mac' })
   await expect(sw).toHaveAttribute('aria-checked', 'true')

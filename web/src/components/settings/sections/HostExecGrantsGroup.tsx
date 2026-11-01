@@ -5,8 +5,10 @@
  * (no letter); a revoked one stays revoked and asks by letter. Each host has a switch, the
  * hard stop: off, no task from another host starts anything there.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { allowExecGrant, fetchExecGrants, revokeExecGrant, setExecHostClosed, type ExecDenied, type ExecGrant } from '@/api/host-exec';
+import { getAllHostStatus, subscribeHostStatus } from '@/hooks/useHostStatus';
+import { hostDisplayLabel } from '@/utils/host-display-label';
 import { log } from '@/utils/log';
 import { SettingsGroup, SettingsRow } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
@@ -35,6 +37,7 @@ export function HostExecGrantsGroup({ hostLabels }: { hostLabels: Record<string,
   // write (or while one is in flight) never puts an older stop back on screen.
   const switchSeq = useRef(0);
   const switchesInFlight = useRef(0);
+  const liveHosts = useSyncExternalStore(subscribeHostStatus, getAllHostStatus, getAllHostStatus);
 
   const load = useCallback(async () => {
     const seq = switchSeq.current;
@@ -102,7 +105,10 @@ export function HostExecGrantsGroup({ hostLabels }: { hostLabels: Record<string,
   };
 
   if (grants === null) return null;
-  const label = (host: string) => (host === '__local__' ? 'this Mac' : hostLabels[host] || host);
+  const label = (host: string) => (host === '__local__' ? 'this Mac' : hostDisplayLabel(host, liveHosts.find((h) => h.host === host)?.label, hostLabels[host]));
+  // Every host the user has: Settings' own rows, plus the ones the status push knows (the
+  // cloud companion is not a Settings row), plus any a grant or a stop names.
+  const switchHosts = [...new Set(['__local__', ...Object.keys(hostLabels), ...liveHosts.map((h) => h.host), ...closed])];
   return (
     <SettingsGroup
       heading="Tasks using other hosts"
@@ -110,7 +116,7 @@ export function HostExecGrantsGroup({ hostLabels }: { hostLabels: Record<string,
       footer="A task on one of your hosts uses your other hosts without asking you: runs a command, calls an MCP server or reaches a web service there, each use counted here. Revoke stops that task (it asks by letter from then on); a switch off closes that host to every task on another host. A command there can read anything your account can."
     >
       {error && <p className="hf-error" role="status">{error}</p>}
-      {['__local__', ...Object.keys(hostLabels).filter((h) => h !== '__local__')].map((host) => {
+      {switchHosts.map((host) => {
         const open = !closed.includes(host);
         return (
           <SettingsRow
