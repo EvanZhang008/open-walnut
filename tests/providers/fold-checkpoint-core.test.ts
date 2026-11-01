@@ -285,7 +285,10 @@ describe('fold checkpoint', () => {
     // 2026-10-27: applyTaskEvent moves derivedRunning by the entry's own change
     // instead of a recount. Same state for every stream (pinned by
     // daemon-task-count-incremental.test.ts), so the format stays.
-    expect({ format: FOLD_CHECKPOINT_FORMAT, logicHash }).toEqual({ format: 4, logicHash: '15643ab087a1af7f' })
+    // 2026-11-01, format 5: foldLine reads the walnut_fold_carry line a rotation
+    // writes (the armed crons and wakeup). A daemon before it folds such a file
+    // without them, so its checkpoint must not load under the new logic.
+    expect({ format: FOLD_CHECKPOINT_FORMAT, logicHash }).toEqual({ format: 5, logicHash: '8bf05329dddc3175' })
 
     // The factory's own FORMAT is the one written.
     fs.writeFileSync(jsonl, content(20))
