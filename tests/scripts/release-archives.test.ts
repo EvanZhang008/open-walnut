@@ -428,7 +428,15 @@ describe('the Mac app', () => {
   it('both builds compile it and carry the same install.sh every release attaches', () => {
     for (const script of ['desktop/build.sh', 'desktop/build-release.sh']) {
       const body = read(script)
-      for (const cmd of body.split('swiftc ').slice(1)) expect(cmd.slice(0, cmd.indexOf('-framework Carbon')), script).toContain('BundledRuntime.swift')
+      // Each compile names the file itself, or the SOURCES list that holds it (4fde6292b moved
+      // the files into one list both builds pass to swiftc and to the App Intents step).
+      const sources = /^SOURCES=\(([\s\S]*?)^\)/m.exec(body)?.[1] ?? ''
+      const compiles = body.split('\n').filter((l) => /^\s*swiftc\s/.test(l))
+      expect(compiles.length, script).toBeGreaterThan(0)
+      for (const cmd of compiles) {
+        if (cmd.includes('"${SOURCES[@]}"')) expect(sources, `${script}: SOURCES`).toContain('BundledRuntime.swift')
+        else expect(cmd, script).toContain('BundledRuntime.swift')
+      }
       expect(body, script).toContain('cp "$SCRIPT_DIR/../scripts/install.sh" "$RESOURCES/install.sh"')
     }
     expect(read('scripts/test-desktop.sh')).toContain('tests/desktop/bundled-runtime-tests.swift')
