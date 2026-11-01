@@ -75,6 +75,45 @@ describe('the project detail pane', () => {
       .map(({ file }) => file)
     expect(offenders).toEqual([])
   })
+
+  // The pane needs one project header, not the whole list. Specs that loaded Home,
+  // walked every project and row (showEverything), seeded, then reloaded and walked
+  // again ran out of their 30 s on CI's dense shared fixture, and the reload could
+  // adopt panel prefs another spec had just written there (2026-11-01:
+  // project-tracking and project-summary-pane on most runs). Seed, keep the prefs
+  // off the fixture (isolateUiPrefs), preset the view, load once.
+  it('every spec that opens it keeps its prefs to itself and skips the whole-list walk', () => {
+    const opening = sources.filter(({ file, text }) => file !== 'todo-panel-helpers.ts' && text.includes('openProjectDetails('))
+    expect(opening.map(({ file }) => file)).toEqual(expect.arrayContaining(['project-summary-pane.spec.ts', 'project-tracking.spec.ts']))
+    expect(opening.filter(({ text }) => !/isolateUiPrefs(Context)?\(/.test(text)).map(({ file }) => file)).toEqual([])
+    expect(opening.filter(({ text }) => text.includes('showEverything(')).map(({ file }) => file)).toEqual([])
+  })
+})
+
+describe('a session column that resolves to nothing', () => {
+  // SessionPanel retries a 404 for its whole window before it says "Session not found"
+  // (data-session-missing). With Home's load and the clicks before it, a spec that waits
+  // for that state passed the default 30 s test timeout on CI and failed with the panel
+  // still retrying (2026-11-01: notification-fix-button on 6 of 7 runs). Each such spec
+  // gives its test the room: a test.setTimeout past 30 s plus the window.
+  const panel = fs.readFileSync(path.resolve(__dirname, '../../web/src/components/sessions/SessionPanel.tsx'), 'utf8')
+  const retries = Number(panel.match(/MISSING_SESSION_RETRIES = (\d+)/)?.[1])
+  const retryMs = Number(panel.match(/MISSING_SESSION_RETRY_MS = (\d+)/)?.[1])
+  const room = 30_000 + retries * retryMs
+
+  it('reads the retry window from SessionPanel', () => {
+    expect(room).toBeGreaterThan(30_000)
+  })
+
+  it('every spec that waits for it sets a test timeout that covers it', () => {
+    const waiting = sources.filter(({ text }) => /data-session-missing/.test(text))
+    expect(waiting.map(({ file }) => file)).toEqual(expect.arrayContaining(['notification-fix-button.spec.ts', 'session-missing-deep-link.spec.ts']))
+    const offenders = waiting.filter(({ text }) => {
+      const set = [...text.matchAll(/test\.setTimeout\((\d[\d_]*)\)/g)].map((m) => Number(m[1].replaceAll('_', '')))
+      return !set.some((ms) => ms >= room)
+    })
+    expect(offenders.map(({ file }) => file)).toEqual([])
+  })
 })
 
 describe('specs with their own config', () => {

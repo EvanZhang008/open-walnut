@@ -24,7 +24,7 @@
  * metadata.tracking_note → fetchNoteContent → renderNoteMarkdown → the pane.
  */
 import { devices, test, expect, type APIRequestContext } from '@playwright/test'
-import { openProjectDetails, showEverything } from './todo-panel-helpers'
+import { isolateUiPrefs, openProjectDetails, presetPanelView } from './todo-panel-helpers'
 
 const API = 'http://localhost:3457'
 
@@ -88,17 +88,22 @@ async function seedTrackedProject(
   return notePath
 }
 
+// Seed first, then load Home ONCE with the panel preset (the stacked view, no
+// project chip) and this tab's prefs kept off the shared fixture. Loading, showing
+// everything, seeding and reloading to show everything again spent the 30 s on a
+// fixture dense with other specs' projects, and a reload may adopt panel prefs
+// (layout, grouping, chips) a spec running beside it wrote there meanwhile: the
+// first boot stamps this tab's values, so a newer server write wins the second.
 test.beforeEach(async ({ page }) => {
-  await page.goto('/')
-  await showEverything(page)
+  await isolateUiPrefs(page)
+  await presetPanelView(page, { section: 'all', project: '' })
 })
 
 test('the tracking note renders in the pane, and its markup is inert', async ({ page, request }) => {
   const project = 'TrackedProj'
   await seedTrackedProject(request, project, HOSTILE_NOTE)
 
-  await page.reload()
-  await showEverything(page)
+  await page.goto('/')
   const pane = await openProjectDetails(page, project)
 
   const section = pane.locator('.project-tracking-section')
@@ -142,8 +147,7 @@ test('Open in Notes navigates to the note', async ({ page, request }) => {
   const project = 'TrackedNavProj'
   const notePath = await seedTrackedProject(request, project, HOSTILE_NOTE)
 
-  await page.reload()
-  await showEverything(page)
+  await page.goto('/')
   const pane = await openProjectDetails(page, project)
 
   // A real click, not a goto: this is the SPA route the human takes.
@@ -167,8 +171,7 @@ test('a project with no tracking_note has no Tracking section at all', async ({ 
   const task = await request.post(`${API}/api/tasks`, { data: { title: 'Untracked seed task', project, pinned: false } })
   expect(task.ok()).toBeTruthy()
 
-  await page.reload()
-  await showEverything(page)
+  await page.goto('/')
   const pane = await openProjectDetails(page, project)
 
   // The other sections are there, so this is a real pane — the Tracking one is
@@ -183,8 +186,7 @@ test('a key pointing at a deleted note says so and offers nothing broken', async
   const del = await request.delete(`${API}/api/notes-v2/content/${notePath}`)
   expect(del.ok()).toBeTruthy()
 
-  await page.reload()
-  await showEverything(page)
+  await page.goto('/')
   const pane = await openProjectDetails(page, project)
 
   const section = pane.locator('.project-tracking-section')

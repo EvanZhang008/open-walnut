@@ -22,6 +22,9 @@ import { test, expect } from '@playwright/test'
 const UNKNOWN_ID = 'deadbeefcafe1234'
 
 test('a deep link to an unknown session id shows an explicit not-found panel', async ({ page }) => {
+  // The not-found panel comes only after the whole retry window (15 s or more),
+  // then a 3 s quiet check and a reload: past the default 30 s test timeout on CI.
+  test.setTimeout(90_000)
   // A deep link IS the user action here — this is what an old notification or a
   // pasted link does. The /sessions route is a shim that reroutes to the home
   // session columns.

@@ -162,6 +162,11 @@ test('an error card offers Fix with agent, and the card body still expands inste
 // ── 2. Clicking it starts the session and opens it on the home page ──
 
 test('clicking Fix with agent posts the dedupKey and opens the repair session', async ({ page }) => {
+  // The column says "Session not found" only after SessionPanel's whole 404 retry
+  // window (30 tries, 500 ms apart: 15 s or more), on top of loading Home and the
+  // click. On a busy CI runner that came to 30 s and more, past the default test
+  // timeout, so the wait below ran out with the panel still retrying.
+  test.setTimeout(90_000)
   const repair = await selfRepairAvailable(page)
   test.skip(!repair.available, `no repair source here (reason=${repair.reason ?? 'none'})`)
 
