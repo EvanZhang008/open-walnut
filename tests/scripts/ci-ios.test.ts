@@ -1,10 +1,11 @@
 /**
  * The CI job that runs the iOS app's tests on GitHub's macOS runners. It must
  * need no secrets (no signing, no App Store key: those are the owner's to add),
- * block CI OK on the unit leg only (the UI leg has no record yet), and run WalnutUITests only through
+ * stay out of CI OK until it has a record, and run WalnutUITests only through
  * run-ui-tests.sh, the one way its pairing reaches the XCUITest runner.
  */
 import fs from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { parse as parseYaml } from 'yaml'
@@ -68,17 +69,17 @@ describe('the iOS job in ci.yml', () => {
     expect(text).not.toMatch(/DEVELOPMENT_TEAM|APP_STORE|altool|notarytool|archive/)
   })
 
-  it('blocks CI OK on the unit leg alone: the UI leg may fail without failing the run', () => {
-    const ok = doc.jobs['ci-ok']!
-    expect(ok.needs).toContain('ios')
+  it('stays out of CI OK, and only the UI leg may fail without failing the run', () => {
+    expect(doc.jobs['ci-ok']!.needs).not.toContain('ios')
     expect(job['continue-on-error']).toBe("${{ matrix.layer == 'ui' }}")
-    // ios's result says nothing about one leg once the UI leg may fail, so CI OK reads the
-    // unit leg's own conclusion by its job name, which must match the matrix name
-    const gate = ok.steps.find((s) => s.run?.includes('needs.ios.result'))!
-    expect(gate.run).toContain('select(.name == "iOS app (unit)")')
-    expect(gate.run).toMatch(/\[ "\$unit" = "success" \] \|\| \{[^}]*failed=1/)
-    expect((ok as { permissions?: Record<string, string> }).permissions).toEqual({ actions: 'read' })
-    expect((job as { name?: string }).name).toBe('iOS app (${{ matrix.layer }})')
+  })
+
+  it('names each failed unit test as an annotation, which the public API serves with no login', () => {
+    const step = job.steps.find((s) => s.name === 'The failed tests')!
+    expect(step.run).toContain('python3 ios-native/tests/failed-tests.py')
+    const summary = { result: 'Failed', totalTestCount: 2, failedTests: 1, testFailures: [{ testIdentifierString: 'FooTests/testBar(a:b)', failureText: 'x, 100%\ny' }] }
+    const out = execFileSync('python3', [path.join(ROOT, 'ios-native/tests/failed-tests.py')], { input: JSON.stringify(summary), encoding: 'utf8' })
+    expect(out.split('\n')).toContain('::error title=iOS unit FooTests/testBar(a%3Ab)::x, 100%25%0Ay')
   })
 
   it('runs WalnutTests with xcodebuild and WalnutUITests through run-ui-tests.sh', () => {

@@ -1,0 +1,28 @@
+"""Print the failed tests of an xcresult summary (xcresulttool get test-results summary --compact
+on stdin), each as a line and as a GitHub annotation, so CI shows them with no log access."""
+import json
+import sys
+
+
+def escape(text):
+    # GitHub's workflow command encoding for a message
+    return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def escape_property(text):
+    # a property value (title=) also may not hold a bare ":" or ","
+    return escape(text).replace(":", "%3A").replace(",", "%2C")
+
+
+def main():
+    d = json.load(sys.stdin)
+    print(d.get("result"), d.get("totalTestCount"), "tests,", d.get("failedTests"), "failed")
+    for f in d.get("testFailures", []):
+        name = f.get("testIdentifierString") or f.get("testName") or "unknown test"
+        text = f.get("failureText") or ""
+        print(name, ":", text)
+        print(f"::error title={escape_property('iOS unit ' + name)}::{escape(text[:1000])}")
+
+
+if __name__ == "__main__":
+    main()
