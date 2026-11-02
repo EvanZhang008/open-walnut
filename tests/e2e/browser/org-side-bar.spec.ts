@@ -15,7 +15,8 @@
  *     back to its own width; kept per node across a reload;
  *  5. close and back from the header's switch, which is dotted while closed with news;
  *  6. a narrow window stacks the side bar above the chat, with no widen;
- *  7. an old link naming a tab (?tab=team) opens the side bar on Team, then lets go of it.
+ *  7. an old link naming a tab (?tab=team) opens the side bar on Team, then lets go of it;
+ *  8. Quote on an ask in the side bar puts it into the chat beside it, focused.
  * The fixture is shared, so this file makes its own projects and removes what it made.
  */
 import fs from 'node:fs'
@@ -281,4 +282,32 @@ test('a narrow window stacks the side bar above the chat, with no widen; a link 
   await expect(detail.getByTestId('org-rail-wide')).toHaveCount(0)
   await expect(detail.locator('[data-testid="org-chat"] .session-panel')).toBeVisible()
   await shot(page, 'narrow')
+})
+
+test('Quote on an ask in the side bar puts it into the chat beside it', async ({ page, request }) => {
+  const { fixtureRoot } = await discoverBrowserFixture(TEST_PORT)
+  const id = await createTask(request, `Side lease ${STAMP}`, LED)
+  const { sessionId } = await post<{ sessionId: string }>(request, '/api/sessions/quick-start', { cwd: `${fixtureRoot}/projects/walnut`, message: 'snapshot-clean-turn:Ready.', taskId: id })
+  const sent = await request.post('/api/v1/human-inbox', {
+    headers: { 'x-walnut-caller-sid': sessionId },
+    data: { subject: `Sign the side lease ${STAMP}`, type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes', markdown: 'Pick one.', actions: [{ id: 'yes', label: 'Yes' }] },
+  })
+  expect(sent.status(), await sent.text()).toBe(201)
+  await expect.poll(async () => ((await (await request.get(`/api/tasks/${id}`)).json()).task?.user_status?.source ?? ''), { timeout: 60_000 }).toBe('letter')
+
+  await isolateUiPrefs(page)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await loadHome(page)
+  await openNode(page, LED)
+  const detail = page.getByTestId('org-detail')
+  await detail.getByTestId('org-top-task').click()
+  await detail.getByTestId('org-task-mode-status').click()
+  const row = detail.locator(`[data-testid="org-alert"][data-task-id="${id}"]`)
+  await expect(row).toBeVisible({ timeout: 60_000 })
+  const composer = detail.locator(`[data-testid="org-chat"] .session-panel[data-session-id="${ids.leadSid}"] .chat-input-textarea`)
+  await expect(composer).toBeVisible({ timeout: 30_000 })
+  await row.getByTestId('org-alert-quote').click()
+  await expect(composer).toHaveValue(new RegExp(`^> Side lease ${STAMP}: `), { timeout: 30_000 })
+  await expect(composer).toBeFocused()
+  await expect(detail.getByTestId('org-rail')).toBeVisible()
 })
