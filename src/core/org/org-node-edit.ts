@@ -25,7 +25,7 @@ import type { Task } from '../types.js';
 import { log } from '../../logging/index.js';
 import { bus, EventNames } from '../event-bus.js';
 import { OrgError, ensureLeadNow, leadDescription, orgTasks, withOrgLock } from './org-store.js';
-import { ORG_INSTRUCTIONS_MAX, isOrgMember, pickLead, pickOwnLead, projectKey } from './org-tree.js';
+import { ORG_INSTRUCTIONS_MAX, isOrgMember, pickLead, pickOwnLead, projectKey, vpTaskTitle } from './org-tree.js';
 import { defaultOrgInstructions, isDefaultOrgInstructions } from './core-instructions.js';
 import { orgInstructionsAuthor, type OrgInstructionsWriter } from './instructions-author.js';
 
@@ -225,7 +225,7 @@ export async function createOrgNode(input: NewOrgNodeInput, vpOnly: boolean, opt
       id = own.id;
     } else {
       const { task } = await tm.addTask({
-        title: `${made.name} lead`, project: made.name, source: 'local', org_role: 'lead', description: leadDescription([made.name]),
+        title: vpTaskTitle(made.name), project: made.name, source: 'local', org_role: 'lead', description: leadDescription([made.name]),
       });
       id = task.id;
     }

@@ -1990,6 +1990,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // What waits on a lead (its status says so) reaches that lead (src/core/org/lead-waits.ts).
     const { startLeadWaits } = await import('../core/org/lead-waits.js')
     startLeadWaits()
+    // An open VP an older build titled "<project> lead" now reads "<project> VP" (src/core/org/vp-title-migration.ts).
+    if (role() === 'leader') void import('../core/org/vp-title-migration.js').then((m) => m.renameLegacyVpTitles()).catch(() => {})
     // A settled status change, told to the askers, the leader, the VP and Main (src/core/sessions/status-push.ts).
     void import('../core/sessions/status-push.js').then((m) => m.startStatusPush()).catch(() => {})
     // Whether the user is in Main's or a lead's chat (src/core/org/user-away.ts), and the reports he asked for.

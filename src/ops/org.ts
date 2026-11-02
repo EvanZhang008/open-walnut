@@ -120,8 +120,8 @@ defineOp({
     const outcome = body?.unchanged
       ? `Nothing changed: ${name} was already so.`
       : body?.vp
-        ? `${name} is now led by ${body.lead?.title ?? `${body.vp}'s lead`}; ${body.moved?.length ?? 0} worker(s) moved to it.`
-        : `${name} has its own lead again; ${body?.moved?.length ?? 0} worker(s) went back to it.`;
+        ? `${name} is now led by ${body.lead?.title ?? `${body.vp}'s VP`}; ${body.moved?.length ?? 0} worker(s) moved to it.`
+        : `${name} has its own VP again; ${body?.moved?.length ?? 0} worker(s) went back to it.`;
     return withOutcome(body ?? {}, outcome, 'org_get shows the projects and who leads them.');
   },
   routes: [{ method: 'POST', path: '/org/vp' }],

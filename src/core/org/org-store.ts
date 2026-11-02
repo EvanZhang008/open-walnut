@@ -20,7 +20,7 @@ import { ASK_WALNUT_PROJECT } from '../sessions/ask-list.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import {
   DIGEST_FOLD_MS, DIGEST_MAX_LINES, buildOrgTree, findProjectNode, formatAlertLine, formatDigestLine, isOrgMember, leadsAlso, orgDigest, pickLead,
-  pickMain, pickOwnLead, planOrgNote, projectKey, successorOf, type OrgAlert, type OrgDigestState, type OrgTaskLike, type OrgTree,
+  pickMain, pickOwnLead, planOrgNote, projectKey, successorOf, vpTaskTitle, type OrgAlert, type OrgDigestState, type OrgTaskLike, type OrgTree,
 } from './org-tree.js';
 
 export const MAIN_TASK_TITLE = 'Main';
@@ -115,7 +115,7 @@ export async function ensureLeadNow(name: string): Promise<Task> {
   // No folder of its own: a lead runs where its project's tasks start (contactLaunch), and
   // a folder recorded here would freeze the project's default as it is today.
   const { task } = await addTask({
-    title: `${canonical} lead`,
+    title: vpTaskTitle(canonical),
     project: canonical,
     source: 'local',
     org_role: 'lead',

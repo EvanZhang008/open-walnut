@@ -39,7 +39,7 @@ async function sessionOf(taskId: string, project: string): Promise<string> {
 describe('making a VP or a project on the Org page', () => {
   it('a new project comes with its own VP, named as the user typed it; the title stays the session\'s', async () => {
     const lead = await createOrgNode({ name: 'Garden', vpName: 'Green Thumb VP', instructions: 'Water before nine.' }, false);
-    expect(lead).toMatchObject({ org_role: 'lead', project: 'Garden', title: 'Garden lead', org_name: 'Green Thumb' });
+    expect(lead).toMatchObject({ org_role: 'lead', project: 'Garden', title: 'Garden VP', org_name: 'Green Thumb' });
     expect(lead.org_vp_only).toBeUndefined();
     expect(lead.org_instructions?.text).toBe('Water before nine.');
     expect(orgDisplayTitle({ ...lead, title: 'Garden lead · weekly watering plan' })).toBe('Green Thumb VP');
@@ -51,7 +51,7 @@ describe('making a VP or a project on the Org page', () => {
 
   it('a new VP has no project of its own to show; taken, reserved and bad names are refused', async () => {
     const vp = await createOrgNode({ name: 'Growth VP' }, true);
-    expect(vp).toMatchObject({ org_role: 'lead', project: 'Growth', title: 'Growth lead', org_vp_only: true });
+    expect(vp).toMatchObject({ org_role: 'lead', project: 'Growth', title: 'Growth VP', org_vp_only: true });
     await expect(createOrgNode({ name: 'growth' }, true)).rejects.toMatchObject({ code: 'project_exists', status: 409 });
     await addTask({ title: 'Plant the beds', project: 'Seeds' });
     await expect(createOrgNode({ name: 'Seeds' }, false)).rejects.toMatchObject({ code: 'project_exists' });
@@ -181,7 +181,7 @@ describe('the user\'s own instructions for the CEO or a VP', () => {
 
     await editOrgNode(lead.id, { name: 'Moss Keeper', instructions: `Water before nine.\nAsk me before you buy seeds.\n${KEEP}` });
     const now = await getTask(lead.id);
-    expect(now).toMatchObject({ title: 'Orchard lead', org_name: 'Moss Keeper' });
+    expect(now).toMatchObject({ title: 'Orchard VP', org_name: 'Moss Keeper' });
     const prompt = defaultInstructions(now);
     const version = /instructions for your role \((v[0-9a-f]{8}),/.exec(prompt)?.[1];
     expect(version).toBeTruthy();

@@ -44,7 +44,7 @@ const TRIGGER_LABEL: Record<Trigger, string> = {
   every_turn: 'Every message',
   on_request: 'When the sender asks',
 };
-const ROLE_LABEL: Record<Role, string> = { main: 'Main', lead: 'Leads', worker: 'Workers', ask: 'Asks', other: 'Other tasks' };
+const ROLE_LABEL: Record<Role, string> = { main: 'CEO', lead: 'VPs', worker: 'Workers', ask: 'Asks', other: 'Other tasks' };
 const ROLES: Role[] = ['main', 'lead', 'worker', 'ask', 'other'];
 
 /** Whose hint a row is: Walnut's own (the same in every Walnut) or the user's. */

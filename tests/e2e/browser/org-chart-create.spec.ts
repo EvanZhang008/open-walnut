@@ -88,7 +88,7 @@ test('+ New VP makes a VP with no project, named and instructed as typed', async
   await expect(card.getByTestId('org-chart-vp-empty')).toHaveText('No projects yet: drag one here')
   await expect(card.getByTestId('org-chart-project')).toHaveCount(0)
   const lead = await leadOf(request, VP)
-  expect(lead).toMatchObject({ title: `${VP} lead`, org_vp_only: true, org_instructions: { text: 'Own the launch plan.\nAsk before spending money.' } })
+  expect(lead).toMatchObject({ title: `${VP} VP`, org_vp_only: true, org_instructions: { text: 'Own the launch plan.\nAsk before spending money.' } })
   made.push(lead!.id)
 
   // The same name again is refused in the server's words, and what was typed stays.
@@ -180,7 +180,7 @@ test('a VP card edits its name and instructions; a project dragged onto a new VP
   await expect(vp(page, VP)).toContainText(`${VP} team`)
   // The name is the user's own field; the title stays its session's.
   const lead = await leadOf(request, VP)
-  expect(lead).toMatchObject({ title: `${VP} lead`, org_name: `${VP} team`, org_instructions: { text: 'Own the launch plan.\nShip on Fridays only.' } })
+  expect(lead).toMatchObject({ title: `${VP} VP`, org_name: `${VP} team`, org_instructions: { text: 'Own the launch plan.\nShip on Fridays only.' } })
 
   // Saving with nothing changed writes nothing.
   await vp(page, VP).getByTestId('org-chart-vp-menu').click()

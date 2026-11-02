@@ -109,7 +109,7 @@ describe('/api/v1/org', () => {
     expect(leadIds.size).toBe(1)
     expect(contacts[0]!.json).toMatchObject({ kind: 'lead', started: false, task: { org_role: 'lead' } })
     const lead = await getTask([...leadIds][0]!)
-    expect(lead).toMatchObject({ title: 'Walnut lead', project: 'Walnut', source: 'local', org_role: 'lead' })
+    expect(lead).toMatchObject({ title: 'Walnut VP', project: 'Walnut', source: 'local', org_role: 'lead' })
     expect(lead.parent_task_id).toBeFalsy()
     // No folder of its own; the contact says where a chat with it would start: a project with
     // no folder runs in the lead's own task directory, as every task start does, never in
@@ -457,7 +457,7 @@ describe('/api/v1/org', () => {
       const res = await api<VpAnswer>('POST', '/org/vp', { project: 'seeds', vp: 'Garden' })
       expect(res.status).toBe(200)
       const gardenLead = await getTask(res.json.lead!.id)
-      expect(gardenLead).toMatchObject({ title: 'Garden lead', project: 'Garden', org_role: 'lead', org_leads: ['Seeds'] })
+      expect(gardenLead).toMatchObject({ title: 'Garden VP', project: 'Garden', org_role: 'lead', org_leads: ['Seeds'] })
       expect(gardenLead.description).toBe('Leads the work in projects "Garden" and "Seeds" and reports it to the main agent. Made by Walnut.')
       expect(res.json).toMatchObject({ project: 'Seeds', vp: 'Garden', moved: [worker.id], handover: [seedsLead], closed: [] })
       // Nothing changed project; the worker reports to the Garden lead now.
@@ -470,7 +470,7 @@ describe('/api/v1/org', () => {
       expect(contact.json.task.id).toBe(gardenLead.id)
       // The Seeds lead is asked to sum up its work for the Garden lead; Walnut closes it later.
       const queued = (await handoverRows()).map((m) => m.message).join('\n')
-      expect(queued).toContain(`under "Garden lead" (${gardenLead.id})`)
+      expect(queued).toContain(`under "Garden VP" (${gardenLead.id})`)
       expect(queued).toContain(`walnut tools call org_send '{"to":"${gardenLead.id}","title":"Handover: Seeds"`)
       expect(queued).not.toContain('task_complete')
       expect((await getTask(seedsLead)).phase).not.toBe('COMPLETE')

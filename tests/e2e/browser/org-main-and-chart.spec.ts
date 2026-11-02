@@ -199,7 +199,7 @@ test('Chat with a project with two tasks makes its hidden lead and opens a plain
   await expect(page).toHaveURL(/\/$/)
 
   await expect.poll(async () => (await orgTree(request)).projects.find((p) => p.project === PROJECT)?.lead?.title, { timeout: 15_000 })
-    .toBe(`${PROJECT} lead`)
+    .toBe(`${PROJECT} VP`)
   const lead = (await orgTree(request)).projects.find((p) => p.project === PROJECT)!.lead!
   const draft = page.locator('.main-page-session-column .draft-session-panel').filter({ hasText: `${PROJECT} VP` })
   await expect(draft).toBeVisible({ timeout: 15_000 })

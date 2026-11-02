@@ -118,17 +118,24 @@ export function isOrgNode(task: { org_role?: string }): boolean {
 }
 
 /** What the UI calls the main agent and a project's lead (2026-10-26, the user: "change main agent
- *  as CEO, and change name of Lead to VP"). Display only: the tasks, their ids, the prompts and
- *  the code keep "Main" and "lead". */
+ *  as CEO, and change name of Lead to VP"). The ids, the prompts and the code keep "Main" and
+ *  "lead"; a VP's task is titled with it (vpTaskTitle). */
 export const CEO_LABEL = 'CEO';
 export const VP_LABEL = 'VP';
+
+/** The title Walnut gives the task of a VP it makes: "<project> VP" (2026-11-02, the user: "after
+ *  we rename it from lead to vp, why the task name still walnut lead"). Older builds wrote
+ *  "<project> lead"; vp-title-migration.ts renames the open ones. */
+export function vpTaskTitle(project: string): string {
+  return `${project.trim()} ${VP_LABEL}`;
+}
 
 /** The most the user's own instructions for the CEO or a VP may hold (Task.org_instructions). */
 export const ORG_INSTRUCTIONS_MAX = 4000;
 
 /** A task's title as the UI shows it: Main is the CEO, a lead the name the user gave it on the
- *  Org page as "<name> VP", else its Walnut-made "<project> lead" as "<project> VP" (a title the
- *  user wrote stays as written). */
+ *  Org page as "<name> VP", else its title, an older build's "<project> lead" as "<project> VP"
+ *  (a title the user wrote stays as written). */
 export function orgDisplayTitle(task: { title: string; org_role?: string; org_name?: string }): string {
   if (task.org_role === 'main') return CEO_LABEL;
   if (task.org_role === 'lead' && task.org_name?.trim()) return `${task.org_name.trim()} ${VP_LABEL}`;
