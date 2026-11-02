@@ -216,6 +216,30 @@ class IntegrationRegistry {
   }
 
   /**
+   * The plugin the user set up to own this exact project name (a tracker's configured category,
+   * a Jira project), or undefined. A claim that also takes a name nobody could have configured
+   * claims every project (the personal list's catch-all) and is not a choice, so it never decides
+   * a new project: a new project is Local unless someone chose its service (2026-11-01, the user:
+   * "all project should be created local by default, unless user or ai explicitly choose").
+   */
+  async getNamedClaimFor(project: string): Promise<RegisteredPlugin | undefined> {
+    const probe = `\u0000walnut-unconfigured-${Math.random().toString(36).slice(2)}`;
+    const claimable = [...this.plugins.values()]
+      .filter(p => p.claim && p.id !== 'local' && p.hasSync !== false)
+      .sort((a, b) => (b.claim!.priority) - (a.claim!.priority));
+    for (const plugin of claimable) {
+      try {
+        if (!(await plugin.claim!.fn(project))) continue;
+        if (await plugin.claim!.fn(probe)) continue;
+        return plugin;
+      } catch {
+        continue;
+      }
+    }
+    return undefined;
+  }
+
+  /**
    * Find the plugin that claims ownership of a project.
    * Iterates claims by priority (highest first). First match wins.
    * Always returns something — 'local' plugin is the universal fallback (priority -1).

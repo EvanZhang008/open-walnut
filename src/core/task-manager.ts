@@ -2887,7 +2887,8 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       : ambientTestRun() ?? (isTestRunTask(parentTask) ? 'subtask' : undefined);
     const keptBy = pluginOnly ?? (testRun ? TEST_RUN_OWNER : undefined);
 
-    // Source chain: parent (same project) → registry row → caller override → plugin claim.
+    // Source chain: parent (same project) → registry row → caller override → a plugin set up
+    // for this exact name → local.
     // Inbox is structurally local-only: no registry row exists for '' and no
     // provider may claim it, so a provider-sourced task MUST name a project.
     let source: TaskSource;
@@ -2921,7 +2922,9 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       source = (parentHere?.org_role === 'lead' ? undefined : parentHere?.source)
         ?? registrySource
         ?? input.source
-        ?? (await registry.getForProject(project)).id;
+        // A brand-new name is Local unless the user set a service up to own it.
+        ?? (await registry.getNamedClaimFor(project))?.id
+        ?? 'local';
     }
 
     // Validate project-source consistency. Local tasks are exempt: 'local'
@@ -2950,7 +2953,7 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       const parentHold = parentHere?.source === 'local' && parentHere.org_role !== 'lead' ? parentHere.sync_hold : undefined;
       const target = source !== 'local' ? source
         : parentHold ? parentHold.target
-        : explicitLocal ? (registrySource ?? (await registry.getForProject(project)).id) : 'local';
+        : explicitLocal ? (registrySource ?? (await registry.getNamedClaimFor(project))?.id ?? 'local') : 'local';
       const rules = await syncRulesFor(config, target);
       const decided = decideBirth(target, { title: input.title, description: input.description }, rules, {
         explicitLocal: explicitLocal || parentHold?.state === 'private' || parentHold?.state === 'chosen' || parentHold?.state === 'unjudged',

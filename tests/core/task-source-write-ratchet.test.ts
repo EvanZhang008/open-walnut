@@ -140,6 +140,13 @@ describe('a task or a project gets an outside service only by someone\'s choice'
     expect(callers.map((f) => path.relative(ROOT, f))).toEqual([])
   })
 
+  it('no source file picks a new project\'s service from a catch-all claim', () => {
+    // getForProject answers for every name (the personal list claims them all); a new project
+    // takes a service only from a claim set up for its exact name (getNamedClaimFor).
+    const callers = walk(SRC).filter((f) => !f.endsWith('integration-registry.ts') && /\.getForProject\(/.test(code(fs.readFileSync(f, 'utf8'))))
+    expect(callers.map((f) => path.relative(ROOT, f))).toEqual([])
+  })
+
   it('the patterns see a write (so a renamed variable cannot hide one)', () => {
     const sample = "task.source = target;\nstore.projects = { ...projects, [name]: { source: task.source } };\n"
       + "store.projects = { ...projects, [name]: { source, order_index: 1 } };\nentry.source = 'x'"
