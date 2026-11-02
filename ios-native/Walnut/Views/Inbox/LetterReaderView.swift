@@ -38,6 +38,10 @@ struct LetterReaderView: View {
     @State private var committingSend = false
     /// Walnut's own speech-to-text, the one the chat composer uses.
     @State private var voice = VoiceRecorder()
+    /// The reply's Send waits for words still being spoken or transcribed into
+    /// the reply box (`DictationSendGate`). The decision note is not under it:
+    /// its choices are held while it records.
+    @State private var sendGate = DictationSendGate()
     /// The decision note's own recorder, a separate box from the reply: its
     /// takes are stamped with their own surface, so neither box's words ever
     /// land in the other.
@@ -894,7 +898,8 @@ struct LetterReaderView: View {
                     onCancel: { voice.cancel() },
                     onStop: {
                         Task { if let text = await voice.stopAndTranscribe() { insertTranscript(text) } }
-                    }
+                    },
+                    onSend: gatedSend
                 )
             } else {
                 HStack(alignment: .bottom, spacing: 4) {
@@ -935,7 +940,10 @@ struct LetterReaderView: View {
                     )
                     VoiceMicButton(voice: voice, identifier: "inbox.letter.mic")
                         .disabled(decisionVoice.state != .idle)
-                    LetterSendButton(enabled: canSend, action: sendTapped)
+                    LetterSendButton(
+                        enabled: canSend || sendGate.isDictating || sendGate.isWaiting,
+                        waiting: sendGate.isWaiting, action: gatedSend
+                    )
                 }
                 .padding(.leading, 12)
                 .padding(.trailing, 6)
@@ -944,6 +952,7 @@ struct LetterReaderView: View {
         }
         .frame(maxWidth: .infinity)
         .background(.bar)
+        .joinsSendGate(sendGate, voice: voice, key: letterId) { text in insertTranscript(text, focus: false) }
         // A group, so the children keep their own identifiers.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("inbox.letter.composer")
@@ -1052,6 +1061,15 @@ struct LetterReaderView: View {
     /// All of that happens in the tap's own run-loop turn unless dictation is
     /// running (only dictation can still change the words after Send), so the
     /// field never shows the sent words for a frame after the tap.
+    /// Send, or wait for the reply box's words first (`DictationSendGate`). After
+    /// a wait the field was redrawn under the recording row, so the store's draft
+    /// (which the transcript was just added to) is what is sent.
+    private func gatedSend() {
+        sendGate.send { waited in
+            if waited { handOver(replies.draft(for: letterId)) } else { sendTapped() }
+        }
+    }
+
     private func sendTapped() {
         guard !committingSend, canSend else { return }
         if let shown = replyField.readNow(fallback: replies.draft(for: letterId)) {
@@ -1158,10 +1176,11 @@ struct LetterReaderView: View {
 
     /// A transcript lands after what is already in the field, editable before
     /// sending (the chat composer's rule), and the keyboard comes back for it.
-    private func insertTranscript(_ text: String) {
+    private func insertTranscript(_ text: String, focus: Bool = true) {
         replyField.endEditing()
         replies.appendToDraft(text, for: letterId)
-        replyFocused = true
+        // A Send waiting for these words sends them next: no keyboard for that.
+        if focus { replyFocused = true }
         insertTick &+= 1
     }
 
@@ -1295,14 +1314,25 @@ private struct DecisionNoteReveal: ViewModifier {
 
 private struct LetterSendButton: View {
     let enabled: Bool
+    /// Waiting for dictated words (`DictationSendGate`): a spinner in the circle,
+    /// and a tap cancels the wait.
+    var waiting = false
     let action: () -> Void
     @ScaledMetric(relativeTo: .body) private var seat: CGFloat = 32
 
     var body: some View {
         let size = VoiceGlyphSeat(scaled: seat)
         Button(action: action) {
-            Image(systemName: "arrow.up")
-                .font(.system(size: size.glyphSize * 1.1, weight: .semibold))
+            Group {
+                if waiting {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(Theme.onTint)
+                } else {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: size.glyphSize * 1.1, weight: .semibold))
+                }
+            }
                 .frame(width: size.diameter, height: size.diameter)
                 // The colours change in the frame the field empties, never on
                 // an animation: a Send that also moves the reply box (the
@@ -1320,7 +1350,7 @@ private struct LetterSendButton: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
-        .accessibilityLabel("Send")
+        .accessibilityLabel(waiting ? DictationSendGate.waitingLabel : "Send")
         .accessibilityIdentifier("inbox.letter.send")
     }
 }

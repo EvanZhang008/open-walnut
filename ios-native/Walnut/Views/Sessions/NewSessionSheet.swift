@@ -58,6 +58,9 @@ struct NewSessionSheet: View {
     @State private var mode: PermissionMode = NewSessionChatView.draftStart(inDemo: DemoMode.isActive).mode
     @State private var creating = false
     @State private var createError: String?
+    /// Start waits for words still being spoken or transcribed into the first
+    /// message (`DictationSendGate`).
+    @State private var sendGate = DictationSendGate()
 
     /// Path suggestions for the selected host, best first (server pre-sorts).
     private var suggestions: [SessionLaunchOptions.Dir] {
@@ -106,24 +109,29 @@ struct NewSessionSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { dismiss() }.disabled(creating)
+                    Button("Cancel") { sendGate.cancelWait(); dismiss() }.disabled(creating)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if creating {
                         ProgressView()
                     } else {
-                        Button("Start") { Task { await create() } }
+                        Button {
+                            sendGate.send { _ in Task { await create() } }
+                        } label: {
+                            DictationSendLabel(gate: sendGate, title: "Start")
+                        }
                             .fontWeight(.semibold)
-                            .disabled(!canCreate)
+                            .disabled(!canCreate && !sendGate.isWaiting)
                             .accessibilityIdentifier("newSession.start")
                     }
                 }
             }
+            .dictationSendGate(sendGate)
             .task { await loadOptions() }
             // Mid-create dismissal would orphan the launch stash and skip the
             // conversation push (the created session would look "lost" until
             // the list refreshes) — hold the sheet for the ~1s the POST takes.
-            .interactiveDismissDisabled(creating)
+            .interactiveDismissDisabled(creating || sendGate.isWaiting)
         }
     }
 

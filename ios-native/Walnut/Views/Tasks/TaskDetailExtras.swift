@@ -22,6 +22,9 @@ struct TaskDetailExtras: View {
     @State private var descriptionDraft = ""
     @State private var editingNote = false
     @State private var noteDraft = ""
+    /// The editors' Save waits for words still being spoken or transcribed into
+    /// them (`DictationSendGate`). One sheet shows at a time, so one gate.
+    @State private var editorSendGate = DictationSendGate()
     @State private var confirmDelete = false
 
     var body: some View {
@@ -307,20 +310,26 @@ struct TaskDetailExtras: View {
                     .accessibilityIdentifier(identifier)
             }
             .padding(8)
+            .dictationSendGate(editorSendGate)
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Cancel") {
+                        editorSendGate.cancelWait()
                         editingDescription = false
                         editingNote = false
                     }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") {
-                        onSave(text.wrappedValue)
-                        editingDescription = false
-                        editingNote = false
+                    Button {
+                        editorSendGate.send { _ in
+                            onSave(text.wrappedValue)
+                            editingDescription = false
+                            editingNote = false
+                        }
+                    } label: {
+                        DictationSendLabel(gate: editorSendGate, title: "Save")
                     }
                     .fontWeight(.semibold)
                     .accessibilityIdentifier("\(identifier).save")

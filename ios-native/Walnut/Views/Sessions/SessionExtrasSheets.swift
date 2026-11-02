@@ -211,9 +211,11 @@ struct SideQuestionsSheet: View {
     /// still being transcribed: closed under it, the words had no box to land
     /// in and were never offered back (v6 gate).
     @State private var draftVoice = VoiceRecorder()
+    /// Ask waits for words still being spoken or transcribed (`DictationSendGate`).
+    @State private var sendGate = DictationSendGate()
 
     /// Asking, or a take's words still on their way into the box.
-    private var holdsOpen: Bool { asking || draftVoice.state == .transcribing }
+    private var holdsOpen: Bool { asking || draftVoice.state == .transcribing || sendGate.isWaiting }
 
     var body: some View {
         NavigationStack {
@@ -241,6 +243,7 @@ struct SideQuestionsSheet: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .dictationSendGate(sendGate)
             .navigationTitle("Side Questions")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -264,7 +267,7 @@ struct SideQuestionsSheet: View {
                     .accessibilityIdentifier("session.sideQuestion.field")
             }
             Button {
-                Task { await ask() }
+                sendGate.send { _ in Task { await ask() } }
             } label: {
                 HStack {
                     if asking {
@@ -272,11 +275,11 @@ struct SideQuestionsSheet: View {
                         Text("Waiting for the answer… this can take a minute.")
                             .font(.subheadline)
                     } else {
-                        Label("Ask", systemImage: "questionmark.bubble")
+                        DictationSendLabel(gate: sendGate, title: "Ask", systemImage: "questionmark.bubble")
                     }
                 }
             }
-            .disabled(asking || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(asking || (draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !sendGate.isDictating && !sendGate.isWaiting))
             .accessibilityIdentifier("session.sideQuestion.ask")
             if let askError {
                 Label(askError, systemImage: "exclamationmark.triangle.fill")

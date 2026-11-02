@@ -78,6 +78,9 @@ struct VoiceRecordingBar: View {
     let idPrefix: String
     let onCancel: () -> Void
     let onStop: () -> Void
+    /// Send beside Stop, for a box whose words leave through a Send: stops, waits
+    /// for the words, then sends the whole box (`DictationSendGate`).
+    var onSend: (() -> Void)?
     @ScaledMetric(relativeTo: .body) private var seat: CGFloat = 32
 
     var body: some View {
@@ -111,6 +114,21 @@ struct VoiceRecordingBar: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Stop and insert the text")
             .accessibilityIdentifier("\(idPrefix).voiceStop")
+
+            if let onSend {
+                Button(action: onSend) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: size.glyphSize * 1.1, weight: .semibold))
+                        .foregroundStyle(Theme.onTint)
+                        .frame(width: size.diameter, height: size.diameter)
+                        .background(Theme.tint, in: Circle())
+                        .frame(width: size.target, height: size.target)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Stop and send")
+                .accessibilityIdentifier("\(idPrefix).voiceSend")
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)

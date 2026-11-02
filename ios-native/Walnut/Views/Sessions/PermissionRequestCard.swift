@@ -359,6 +359,9 @@ struct AskUserQuestionCard: View {
     /// question text → free-text override ("Other…"), which beats the pills.
     @State private var otherText: [String: String] = [:]
     @FocusState private var focusedQuestion: String?
+    /// Submit waits for words still being spoken or transcribed into an answer
+    /// (`DictationSendGate`).
+    @State private var sendGate = DictationSendGate()
 
     private func fieldID(_ question: AskQuestion) -> String { "\(fieldScope)|\(question.question)" }
 
@@ -367,6 +370,10 @@ struct AskUserQuestionCard: View {
             questions: questions, selections: selections, otherText: otherText
         )
     }
+
+    /// Answered, or an answer is still being spoken (Submit waits for it), or a
+    /// Submit is waiting (a tap cancels).
+    private var submittable: Bool { complete || sendGate.isDictating || sendGate.isWaiting }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -396,6 +403,7 @@ struct AskUserQuestionCard: View {
         // otherwise OVERWRITES every descendant's identifier, so Submit/Dismiss
         // and the option rows all reported "session.askQuestionCard" and no test
         // (or VoiceOver user) could address them individually.
+        .dictationSendGate(sendGate)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("session.askQuestionCard")
         .onChange(of: focusedQuestion) { _, question in
@@ -521,24 +529,28 @@ struct AskUserQuestionCard: View {
     private var actions: some View {
         HStack(spacing: 10) {
             Button {
-                onSubmit(AskUserQuestion.buildAnswers(
-                    questions: questions, selections: selections, otherText: otherText
-                ))
+                sendGate.send { _ in
+                    // Read again after a wait: the spoken words are in the answers now.
+                    guard complete else { return }
+                    onSubmit(AskUserQuestion.buildAnswers(
+                        questions: questions, selections: selections, otherText: otherText
+                    ))
+                }
             } label: {
-                Text("Submit")
+                DictationSendLabel(gate: sendGate, title: "Submit")
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
                     .background(
-                        complete ? Theme.tint : Color(.tertiarySystemFill),
+                        submittable ? Theme.tint : Color(.tertiarySystemFill),
                         in: RoundedRectangle(cornerRadius: 10, style: .continuous)
                     )
-                    .foregroundStyle(complete ? .white : Color.secondary)
+                    .foregroundStyle(submittable ? .white : Color.secondary)
             }
             .buttonStyle(.plain)
-            .disabled(answering || !complete)
+            .disabled(answering || !submittable)
             .accessibilityIdentifier("session.askQuestion.submit")
             Button {
                 onDismiss()

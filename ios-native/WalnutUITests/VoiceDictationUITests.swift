@@ -59,12 +59,12 @@ final class VoiceDictationUITests: XCTestCase {
     /// OPT-IN like DemoModeUITests: "Try the demo" saves the demo pairing over
     /// this simulator's. The recording cases also need the simulator's
     /// microphone permission granted to the app (`simctl privacy grant microphone`).
-    private func launchDemo() throws -> XCUIApplication {
+    private func launchDemo(_ extra: [String] = []) throws -> XCUIApplication {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment[DemoModeUITests.optInVariable] == "1",
             "Try the demo replaces this simulator's pairing; set TEST_RUNNER_\(DemoModeUITests.optInVariable)=1"
         )
-        let app = UITestLaunch.launch([UITestLaunch.serverURLArgument, "https://demo.walnut.invalid"])
+        let app = UITestLaunch.launch([UITestLaunch.serverURLArgument, "https://demo.walnut.invalid"] + extra)
         let tryDemo = app.buttons["setup.tryDemo"]
         if tryDemo.waitForExistence(timeout: 15) { tryDemo.tap() }
         XCTAssertTrue(app.tabBars.firstMatch.waitForExistence(timeout: 60))
@@ -193,5 +193,107 @@ final class VoiceDictationUITests: XCTestCase {
         shot.name = "decision-note-voice"
         shot.lifetime = .keepAlways
         add(shot)
+    }
+
+    // MARK: - Send waits for the words (2026-11-01)
+
+    /// The demo slowed down, so the wait is long enough to see and to tap.
+    /// Each run starts from an empty draft.
+    private static let slowDemo = ["-walnut.demoLatencyScale", "20", "-walnut.composerDrafts", "{}"]
+
+    private func shoot(_ app: XCUIApplication, _ name: String) {
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = name
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
+    /// Open the demo's chat with "Typed first" in the box and a take running.
+    private func chatRecording(_ app: XCUIApplication) -> (composer: XCUIElement, send: XCUIElement) {
+        app.tabBars.buttons["Chat"].tap()
+        let composer = all("chat.composer", in: app).firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 30), "no chat composer")
+        composer.tap()
+        composer.typeText("Typed first")
+        let mic = app.buttons["chat.mic"]
+        XCTAssertTrue(mic.waitForExistence(timeout: 10))
+        mic.tap()
+        let voiceSend = app.buttons["chat.voiceSend"]
+        XCTAssertTrue(voiceSend.waitForExistence(timeout: 15), "no Send beside Stop while recording")
+        XCTAssertTrue(app.buttons["chat.voiceStop"].exists, "Stop stays beside Send")
+        XCTAssertEqual(voiceSend.label, "Stop and send")
+        shoot(app, "send-waits-1-recording")
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        return (composer, voiceSend)
+    }
+
+    /// The chat's message bubbles are text views whose label is the message.
+    private func bubbles(_ app: XCUIApplication, containing text: String) -> XCUIElementQuery {
+        app.textViews.matching(NSPredicate(format: "label CONTAINS %@", text))
+    }
+
+    /// Send while the mic records: the take stops, Send shows it is waiting, and
+    /// once the words land the typed text and the words go out as ONE message.
+    func testSendWhileRecordingWaitsForTheWordsThenSendsThemOnce() throws {
+        let app = try launchDemo(Self.slowDemo)
+        let (composer, voiceSend) = chatRecording(app)
+        voiceSend.tap()
+
+        let send = app.buttons["chat.send"]
+        let waiting = expectation(for: NSPredicate(format: "label == %@", "Waiting for your words, tap to cancel"),
+                                  evaluatedWith: send)
+        XCTAssertEqual(XCTWaiter().wait(for: [waiting], timeout: 10), .completed, "Send does not show it is waiting")
+        shoot(app, "send-waits-2-waiting")
+        XCTAssertEqual(bubbles(app, containing: Self.demoSentence).count, 0, "nothing is sent before the words")
+
+        let message = "Typed first " + Self.demoSentence
+        let sent = bubbles(app, containing: message).firstMatch
+        XCTAssertTrue(sent.waitForExistence(timeout: 60), "the typed text and the words were not sent together")
+        XCTAssertTrue(waitUntil(timeout: 10) { !self.value(composer).contains("Typed first") },
+                      "the box still holds the sent words: \(value(composer))")
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertEqual(bubbles(app, containing: message).count, 1, "sent once, not twice")
+        let stillWaiting = app.buttons.matching(NSPredicate(format: "label == %@", "Waiting for your words, tap to cancel"))
+        XCTAssertEqual(stillWaiting.count, 0, "no button still says it is waiting")
+        shoot(app, "send-waits-3-sent")
+    }
+
+    /// Stop first, then Send while the words are still on their way: the same
+    /// wait, and one message with the typed text and the words.
+    func testSendAfterStopWaitsForTheWordsStillComing() throws {
+        let app = try launchDemo(Self.slowDemo)
+        let (_, _) = chatRecording(app)
+        app.buttons["chat.voiceStop"].tap()
+        let send = app.buttons["chat.send"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5), "no Send while the words are on their way")
+        XCTAssertTrue(app.descendants(matching: .any)["chat.mic"].exists, "the mic seat shows the transcription")
+        send.tap()
+        let waiting = expectation(for: NSPredicate(format: "label == %@", "Waiting for your words, tap to cancel"),
+                                  evaluatedWith: send)
+        XCTAssertEqual(XCTWaiter().wait(for: [waiting], timeout: 10), .completed, "Send does not show it is waiting")
+        let message = "Typed first " + Self.demoSentence
+        XCTAssertTrue(bubbles(app, containing: message).firstMatch.waitForExistence(timeout: 60),
+                      "the typed text and the words were not sent together")
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertEqual(bubbles(app, containing: message).count, 1, "sent once, not twice")
+        shoot(app, "send-waits-5-after-stop")
+    }
+
+    /// A second tap while it waits cancels: the words still land in the box after
+    /// the typed text, and nothing is sent.
+    func testSecondTapCancelsTheWaitAndKeepsTheWordsInTheBox() throws {
+        let app = try launchDemo(Self.slowDemo)
+        let (composer, voiceSend) = chatRecording(app)
+        voiceSend.tap()
+        let send = app.buttons["chat.send"]
+        let waiting = expectation(for: NSPredicate(format: "label == %@", "Waiting for your words, tap to cancel"),
+                                  evaluatedWith: send)
+        XCTAssertEqual(XCTWaiter().wait(for: [waiting], timeout: 10), .completed, "Send does not show it is waiting")
+        send.tap()
+        XCTAssertTrue(waitUntil(timeout: 60) { self.value(composer).hasPrefix("Typed first " + Self.demoSentence) },
+                      "the words did not land in the box: \(value(composer))")
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        XCTAssertEqual(bubbles(app, containing: Self.demoSentence).count, 0, "a cancelled wait sent the message")
+        shoot(app, "send-waits-4-cancelled")
     }
 }

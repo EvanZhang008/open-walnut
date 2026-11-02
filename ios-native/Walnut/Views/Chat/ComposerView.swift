@@ -185,6 +185,8 @@ struct ComposerBar: View {
     @State private var measuredWidth: CGFloat = 0
 
     @State private var voice = VoiceRecorder()
+    /// Send waits for words still being spoken or transcribed (`DictationSendGate`).
+    @State private var sendGate = DictationSendGate()
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var imageNotice: String?
     @State private var quickAction = VoiceQuickAction.shared
@@ -274,6 +276,9 @@ struct ComposerBar: View {
 
     private var trimmed: String { draft.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var hasContent: Bool { !trimmed.isEmpty || !selectedImages.isEmpty || !selectedFiles.isEmpty }
+    /// Something to send now, or words still on their way into the box: Send is
+    /// offered for those too, and waits for them (`DictationSendGate`).
+    private var sendable: Bool { hasContent || sendGate.isDictating || sendGate.isWaiting }
     /// A turn is running AND this composer is not the field it is waiting on.
     /// Now read by ONE thing, the field's placeholder: it is the honest caption
     /// for an EMPTY composer mid-turn, and an empty composer is the only time a
@@ -287,7 +292,7 @@ struct ComposerBar: View {
     private var canSend: Bool {
         // A file still being copied in: send waits for it (greyed, not gone).
         importingFiles == 0
-            && Self.canSend(hasContent: hasContent, disabled: disabled,
+            && Self.canSend(hasContent: sendable, disabled: disabled,
                             waitingForReply: waitingForReply, busyAcceptsSend: busyAcceptsSend)
     }
 
@@ -302,7 +307,7 @@ struct ComposerBar: View {
     }
     private var primaryAction: ComposerPrimaryAction {
         ComposerPrimaryAction
-            .decide(busy: busy, hasContent: hasContent, pendingQuestion: pendingQuestion,
+            .decide(busy: busy, hasContent: sendable, pendingQuestion: pendingQuestion,
                     busyAcceptsSend: busyAcceptsSend)
             .availableWithStop(onStop != nil)
     }
@@ -543,6 +548,14 @@ struct ComposerBar: View {
                 onCancel: { showCamera = false }
             )
             .ignoresSafeArea()
+        }
+        // The Send gate stops a take itself when Send is tapped mid-recording; its
+        // words go to the draft (never `deliver`), and are then sent with it.
+        // Keyed by the draft: the chat's key moves (a new chat gets its id on the
+        // first send) without a new appear, and the words must go where Send reads.
+        .joinsSendGate(sendGate, voice: voice, key: draftKey) { text in
+            if quickAction.autoSendArmed { quickAction.clear(reason: "send-waited") }
+            appendToDraft(text, focus: false)
         }
         .onAppear {
             onScreen = true
@@ -1031,7 +1044,7 @@ struct ComposerBar: View {
             // ONE trailing seat: send, or stop while a turn runs. Never both, so
             // a turn starting cannot shuffle the row's buttons sideways. With
             // nothing to send, the seat offers voice mode where there is one.
-            if hasContent || primaryAction == .stop {
+            if sendable || primaryAction == .stop {
                 primaryButton
             } else if let voiceModeAction, voice.state == .idle {
                 voiceModeButton(voiceModeAction)
@@ -1088,7 +1101,8 @@ struct ComposerBar: View {
         }
     }
 
-    /// Recording in progress: cancel × — pulsing dot + elapsed — stop ✓.
+    /// Recording in progress: cancel × — pulsing dot + elapsed — stop ✓ — send ↑
+    /// (stop, wait for the words, send them with what is typed).
     /// A quick-action take swaps the label copy ("Send to Walnut") so the user
     /// knows stopping SENDS rather than dropping text into a field to review.
     private var recordingRow: some View {
@@ -1145,6 +1159,24 @@ struct ComposerBar: View {
             }
             .accessibilityLabel(quickAction.autoSendArmed ? "Send" : "Stop Recording")
             .accessibilityIdentifier("chat.voiceStop")
+
+            // Send beside Stop: stop, wait for the words, put them after what is
+            // typed, and send the whole message once. A quick-action take's Stop
+            // already sends, so it gets no second Send.
+            if !quickAction.autoSendArmed {
+                let live = Self.canSend(hasContent: true, disabled: disabled,
+                                        waitingForReply: waitingForReply, busyAcceptsSend: busyAcceptsSend)
+                Button(action: gatedSend) {
+                    Image(systemName: Symbol.send)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(live ? Theme.onTint : Color(.tertiaryLabel))
+                        .frame(width: 32, height: 32)
+                        .background(live ? Theme.tint : Color(.tertiarySystemFill), in: Circle())
+                }
+                .disabled(!live)
+                .accessibilityLabel("Stop and send")
+                .accessibilityIdentifier("chat.voiceSend")
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -1389,23 +1421,48 @@ struct ComposerBar: View {
     }
 
     private var sendButton: some View {
-        Button(action: send) {
-            Image(systemName: Symbol.send)
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(canSend ? Theme.onTint : Color(.tertiaryLabel))
-                .frame(width: 32, height: 32)
-                .background(canSend ? Theme.tint : Color(.tertiarySystemFill), in: Circle())
+        Button(action: gatedSend) {
+            if sendGate.isWaiting {
+                // Waiting for the words: a spinner in the send circle, and a tap
+                // cancels the wait (the words still land in the box).
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(Theme.onTint)
+                    .frame(width: 32, height: 32)
+                    .background(Theme.tint, in: Circle())
+            } else {
+                Image(systemName: Symbol.send)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(canSend ? Theme.onTint : Color(.tertiaryLabel))
+                    .frame(width: 32, height: 32)
+                    .background(canSend ? Theme.tint : Color(.tertiarySystemFill), in: Circle())
+            }
         }
-        .disabled(!canSend)
+        .disabled(!canSend && !sendGate.isWaiting)
         // VoiceOver read the arrow's symbol name, "Up".
-        .accessibilityLabel("Send")
+        .accessibilityLabel(sendGate.isWaiting ? DictationSendGate.waitingLabel : "Send")
         .accessibilityIdentifier("chat.send")
+    }
+
+    /// Send, or (while the mic records or a transcription is on its way) wait for
+    /// the words and then send; a second tap while it waits cancels the wait.
+    private func gatedSend() {
+        // A quick-action take whose Stop already started its transcription would
+        // send its words on its own (`deliver`); a Send tapped meanwhile takes them
+        // instead, into the draft and out as ONE message with what is typed.
+        if voice.state != .idle, quickAction.autoSendArmed {
+            quickAction.clear(reason: "send-waited")
+        }
+        sendGate.send { _ in send() }
     }
 
     /// Words to save, none of them images when the action takes text only, and no turn
     /// running.
     private func secondaryEnabled(_ action: ComposerSecondaryAction) -> Bool {
+        // Held while words are still on their way in (or a Send waits for them):
+        // saving now would leave them behind.
         !trimmed.isEmpty && !busy && (!action.textOnly || selectedImages.isEmpty)
+            && voice.state == .idle && !sendGate.isWaiting
     }
 
     /// The secondary exit: a soft tinted capsule, so it reads as the quieter of the two
@@ -1989,7 +2046,7 @@ struct ComposerBar: View {
         }
     }
 
-    private func appendToDraft(_ text: String) {
+    private func appendToDraft(_ text: String, focus: Bool = true) {
         let existing = draft.wrappedValue
         // Breadcrumb BEFORE the mutation: the append + focus pair is the
         // suspected trigger of the build-35 freeze, so the trail must show it
@@ -1999,6 +2056,7 @@ struct ComposerBar: View {
         // Focus whichever field the (now longer) draft renders in. Repeated
         // dictations are exactly how a draft crosses the threshold, so this
         // append may be the very mutation that swaps the field.
+        guard focus else { return }
         if useLongDraftEditor { longDraftFocused = true } else { focused = true }
     }
 

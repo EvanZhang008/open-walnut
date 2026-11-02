@@ -118,6 +118,8 @@ final class VoiceRecorder: NSObject {
     /// diagnostics can see it. Never cancelled by lifecycle anymore — a dying
     /// upload's catch path preserves the audio instead.
     @ObservationIgnored private var transcriptionTask: Task<VoiceTranscriptionResult, Error>?
+    /// Sends waiting for the transcription in flight (`finishForSend`).
+    @ObservationIgnored private var settleWaiters: [CheckedContinuation<SendFinish, Never>] = []
     /// Sends the take while it is recorded, so the server can transcribe as it
     /// goes (`VoiceLiveUploader`). Never touches the take itself.
     @ObservationIgnored private lazy var live = VoiceLiveUploader()
@@ -380,17 +382,62 @@ final class VoiceRecorder: NSObject {
         guard state == .recording, let url = fileURL, let id = recordingID else { return nil }
         stopCapture()
         state = .transcribing
+        var words: String?
         defer {
             state = .idle
             fileURL = nil
             recordingID = nil
             refreshPending()
             VoiceHistorySync.shared.kick()
+            settle(words == nil ? .failed : .landed)
         }
         if case .text(let text) = await transcribeOne(url: url, id: id) {
-            return text
+            words = text
         }
-        return nil
+        return words
+    }
+
+    // MARK: - Finishing for a Send
+
+    /// What `finishForSend` found, for the Send that is waiting on it
+    /// (`DictationSendGate`).
+    enum SendFinish: Equatable {
+        /// Nothing was recording or transcribing.
+        case idle
+        /// This call stopped the take: these are its words, and the CALLER puts
+        /// them in the box (no other path will).
+        case words(String)
+        /// The take's own transcription, started by a Stop tap, finished with
+        /// words, and the Stop path has put them in the box.
+        case landed
+        /// A retry of saved takes (an automatic drain, a Retry tap, the recovery of
+        /// a take a call cut off) finished with words the person has not read yet:
+        /// they are in the box, but must not leave it unread.
+        case drained
+        /// No words: the transcription failed or heard nothing. The take is kept
+        /// and the notice row says so.
+        case failed
+    }
+
+    /// Bring this box's dictation to an end for a Send: stop a running take and
+    /// wait for its words, or wait for a transcription already in flight.
+    func finishForSend() async -> SendFinish {
+        switch state {
+        case .idle:
+            return .idle
+        case .recording:
+            if let words = await stopAndTranscribe() { return .words(words) }
+            return .failed
+        case .transcribing:
+            return await withCheckedContinuation { settleWaiters.append($0) }
+        }
+    }
+
+    /// Every Send waiting on the transcription in flight hears how it ended.
+    private func settle(_ outcome: SendFinish) {
+        let waiters = settleWaiters
+        settleWaiters = []
+        for waiter in waiters { waiter.resume(returning: outcome) }
     }
 
     /// Discard the current recording without transcribing — the user's
@@ -537,12 +584,15 @@ final class VoiceRecorder: NSObject {
         // It clears only when it actually recovers something (below).
         if userInitiated { errorMessage = nil }
         state = .transcribing
+        var parts: [String] = []
         defer {
             VoiceRecordingStore.releaseDrain(owner: drainOwnerID)
             state = .idle
             refreshPending()
+            // Words from saved takes (a drain, a Retry tap, a take a call cut off)
+            // have not been read yet: a Send waiting on them holds them in the box.
+            settle(parts.isEmpty ? .failed : .drained)
         }
-        var parts: [String] = []
         var attempted = 0
         var failed = 0
         var retired = 0

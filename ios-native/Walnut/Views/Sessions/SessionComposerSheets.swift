@@ -14,6 +14,9 @@ struct SessionForkSheet: View {
     @State private var message = ""
     @State private var forking = false
     @State private var errorMessage: String?
+    /// Fork waits for words still being spoken or transcribed into the first
+    /// message (`DictationSendGate`).
+    @State private var sendGate = DictationSendGate()
 
     var body: some View {
         NavigationStack {
@@ -37,23 +40,28 @@ struct SessionForkSheet: View {
                     Text("Creates a sibling task with a copy of this conversation. The original keeps running untouched.")
                 }
             }
+            .dictationSendGate(sendGate)
             .navigationTitle("Fork Session")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { dismiss() }.disabled(forking)
+                    Button("Cancel") { sendGate.cancelWait(); dismiss() }.disabled(forking)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if forking {
                         ProgressView()
                     } else {
-                        Button("Fork") { Task { await fork() } }
+                        Button {
+                            sendGate.send { _ in Task { await fork() } }
+                        } label: {
+                            DictationSendLabel(gate: sendGate, title: "Fork")
+                        }
                             .fontWeight(.semibold)
                             .accessibilityIdentifier("session.fork")
                     }
                 }
             }
-            .interactiveDismissDisabled(forking)
+            .interactiveDismissDisabled(forking || sendGate.isWaiting)
         }
     }
 
@@ -115,6 +123,9 @@ struct SessionNoteSheet: View {
     @State private var loadFailed = false
     @State private var saving = false
     @State private var errorMessage: String?
+    /// Save waits for words still being spoken or transcribed into the note
+    /// (`DictationSendGate`).
+    @State private var sendGate = DictationSendGate()
 
     var body: some View {
         NavigationStack {
@@ -148,24 +159,29 @@ struct SessionNoteSheet: View {
                     Text("Only you see this note. The agent does not.")
                 }
             }
+            .dictationSendGate(sendGate)
             .navigationTitle("Note")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { dismiss() }.disabled(saving)
+                    Button("Cancel") { sendGate.cancelWait(); dismiss() }.disabled(saving)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if saving {
                         ProgressView()
                     } else {
-                        Button("Save") { Task { await save() } }
+                        Button {
+                            sendGate.send { _ in Task { await save() } }
+                        } label: {
+                            DictationSendLabel(gate: sendGate, title: "Save")
+                        }
                             .fontWeight(.semibold)
-                            .disabled(loading || loadFailed || note == saved)
+                            .disabled(loading || loadFailed || (note == saved && !sendGate.isDictating && !sendGate.isWaiting))
                             .accessibilityIdentifier("session.noteSave")
                     }
                 }
             }
-            .interactiveDismissDisabled(saving || note != saved)
+            .interactiveDismissDisabled(saving || note != saved || sendGate.isWaiting)
             .task { await load() }
         }
     }

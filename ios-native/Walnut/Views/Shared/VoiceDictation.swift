@@ -157,6 +157,8 @@ struct VoiceDictationField<Field: View>: View {
 
     @State private var ownRecorder = VoiceRecorder()
     @FocusState private var focused: Bool
+    /// The screen's Send gate, when its Send waits for words spoken here.
+    @Environment(\.dictationSendGate) private var sendGate
 
     private var voice: VoiceRecorder { recorder ?? ownRecorder }
     private var idPrefix: String { "voice.\(box)" }
@@ -213,6 +215,9 @@ struct VoiceDictationField<Field: View>: View {
         // A take recovered on appear (or ended by the recorder itself) lands
         // quietly: opening a screen never pulls the keyboard up.
         .voiceDictation(voice, surface: surface) { insert($0, focus: false) }
+        // A Send that waits for this box's words puts them in the same way, quietly:
+        // the box is about to be sent, so the keyboard stays where it is.
+        .joinsSendGate(sendGate, voice: voice) { insert($0, focus: false) }
         // A group, so the field, the mic and the notices keep their own identifiers.
         .accessibilityElement(children: .contain)
     }

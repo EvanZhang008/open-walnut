@@ -114,10 +114,13 @@ final class ReviewSurfaceTests: XCTestCase {
     func testTheSendButtonsAreNamedSend() throws {
         let composer = try source("Walnut/Views/Chat/ComposerView.swift")
         let send = try XCTUnwrap(composer.range(of: "private var sendButton: some View {"))
-        XCTAssertTrue(composer[send.upperBound...].prefix(700).contains(".accessibilityLabel(\"Send\")"),
+        // "Send", or while it waits for dictated words the sentence that says so.
+        XCTAssertTrue(composer[send.upperBound...].prefix(1_200).contains(
+            ".accessibilityLabel(sendGate.isWaiting ? DictationSendGate.waitingLabel : \"Send\")"),
                       "VoiceOver reads the chat send arrow as Up")
         XCTAssertTrue(composer.contains(".accessibilityLabel(quickAction.autoSendArmed ? \"Send\" : \"Stop Recording\")"))
-        XCTAssertTrue(try source("Walnut/Views/Inbox/LetterReaderView.swift").contains(".accessibilityLabel(\"Send\")"))
+        XCTAssertTrue(try source("Walnut/Views/Inbox/LetterReaderView.swift").contains(
+            ".accessibilityLabel(waiting ? DictationSendGate.waitingLabel : \"Send\")"))
     }
 
     // MARK: - Demo New Session
