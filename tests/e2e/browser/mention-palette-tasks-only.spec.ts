@@ -262,9 +262,11 @@ test('a draft with no folder yet shows the same two groups, Files rooted at home
   // showed Tasks alone, and the user read it as a different picker).
   await expect(palette.locator('[data-group="task"]')).toBeVisible()
   await expect(palette.locator('[data-group="files"]')).toBeVisible()
-  const groupNames = await palette.locator('.mention-group-name').allTextContents()
+  // Walnut's own groups: a plugin's mention source (a Notes group, say) may show beside them,
+  // and on the shared fixture whether one has rows depends on what other specs wrote
+  // (2026-11-02, CI: "groups: Tasks,Notes,Files").
+  const groupNames = await palette.locator('[data-group="task"] .mention-group-name, [data-group="files"] .mention-group-name').allTextContents()
   expect(groupNames, `groups: ${groupNames.join(',')}`).toEqual(['Tasks', 'Files'])
-  await expect(palette.locator('.mention-row-task').filter({ hasText: `${tag} target` })).toBeVisible({ timeout: 15_000 })
   // The fixture's HOME is its temp root, so `~` lists that root's folders.
   const fileRows = palette.locator('[data-group="files"] .mention-row')
   await expect(fileRows.first()).toBeVisible({ timeout: 15_000 })
@@ -293,6 +295,10 @@ test('a draft with no folder yet shows the same two groups, Files rooted at home
   await webRow.locator('.mention-pick-btn').click()
   await expect(palette).toHaveCount(0)
   await expect(input).toHaveValue(`@${fixtureRoot}/projects/walnut/web `)
+  // The Tasks group finds a task by its words. Not in the empty list: that shows the newest few,
+  // and on the shared fixture other workers' tasks were newer (2026-11-02, CI: the target missing).
+  await page.keyboard.type(`@${tag}`)
+  await expect(palette.locator('.mention-row-task').filter({ hasText: `${tag} target` })).toBeVisible({ timeout: 15_000 })
 })
 
 test('a bound draft never offers the task it will attach to', async ({ page, request }) => {
