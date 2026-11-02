@@ -23,7 +23,19 @@
 /* Above the chat: at most about half the node, the rest of it the chat's. */
 .org-rail.is-top { flex: none; max-height: 45%; border-bottom: 1px solid var(--border); }
 .org-rail > .org-top { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 34px; padding: 4px 10px; border-bottom: 1px solid var(--border); }
-.org-rail > .org-top:not(.has-switch) { display: none; }
+/* A node with no Brief: the bar holds only its close, at the right. */
+.org-rail > .org-top:not(.has-switch) { justify-content: flex-end; min-height: 28px; padding: 2px 6px; }
+/* Close the panel: the chat takes its room; the header's button brings it back (OrgNodeDetail). */
+.org-rail-close {
+  flex: none; margin-left: auto; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent;
+  color: var(--fg-muted, #86868b); font: inherit; font-size: 17px; line-height: 1; cursor: pointer;
+}
+.org-rail-close:hover, .org-rail-close:focus-visible { background: color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg); }
+.org-rail-open {
+  position: relative; flex: none; border: 1px solid var(--border); border-radius: 8px; padding: 4px 10px;
+  background: var(--bg); color: var(--fg-secondary, var(--fg)); font: inherit; font-size: 12px; cursor: pointer;
+}
+.org-rail-open:hover, .org-rail-open:focus-visible { color: var(--fg); background: var(--bg-secondary); }
 .org-rail > .org-top.has-switch { padding: 4px 10px; }
 .org-rail-body { flex: 1; min-height: 0; overflow-y: auto; }
 .org-rail .org-brief { padding: 8px 12px; border-bottom: 0; }

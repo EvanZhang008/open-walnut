@@ -4,7 +4,7 @@
  * first one to the ninth, so why still show the first to the eighth?").
  */
 import { describe, it, expect } from 'vitest'
-import { sharedAnswers, shownToHim, cardView, exchangesOf, unreactedAnswers, type ViewMessage, type ViewThread } from '../../../src/core/org/thread-view.js'
+import { newsAt, sharedAnswers, shownToHim, cardView, exchangesOf, unreactedAnswers, type ViewMessage, type ViewThread } from '../../../src/core/org/thread-view.js'
 
 const at = (min: number, sec = 0) => new Date(Date.UTC(2026, 10, 1, 4, min, sec)).toISOString()
 const msg = (id: string, min: number, text: string, answer?: { min: number; text: string }): ViewMessage => ({
@@ -170,5 +170,25 @@ describe('what his view shows', () => {
   it('a reply shared with another thread does not show it', () => {
     const t = th('working', [asked])
     expect(shownToHim(t, new Set(['tm-1']))).toBe(false)
+  })
+})
+
+describe('when the threads he sees last had news (the Threads tab dot)', () => {
+  const t = (id: string, state: string, updatedAt: number, messages: ViewMessage[]) => ({ id, state, updatedAt: at(updatedAt), messages })
+
+  it('is the newest change or answer among the threads his view shows; hidden ones never count', () => {
+    const shown = t('th-1', 'working', 10, [msg('tm-1', 9, 'a', { min: 15, text: 'A' })])
+    const needs = t('th-2', 'needs', 12, [msg('tm-2', 11, 'b')])
+    const quiet = t('th-3', 'working', 40, [msg('tm-3', 39, 'c')])
+    const pending = t('th-4', 'pending', 50, [msg('tm-4', 49, 'd', { min: 51, text: 'D' })])
+    expect(newsAt([shown, needs, quiet, pending])).toBe(at(15))
+    expect(newsAt([quiet, pending])).toBeNull()
+  })
+
+  it('a new summary on a shown thread moves it; he writes in it and it leaves (no news of his own)', () => {
+    const answered = t('th-1', 'answered', 20, [msg('tm-1', 9, 'a', { min: 15, text: 'A' })])
+    expect(newsAt([answered])).toBe(at(20))
+    const replied = t('th-1', 'working', 25, [...answered.messages, msg('tm-2', 25, 'thanks')])
+    expect(newsAt([replied])).toBeNull()
   })
 })

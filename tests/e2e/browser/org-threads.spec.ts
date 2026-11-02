@@ -493,3 +493,80 @@ test('his view shows only threads with something for him; his reply sends one ou
   await expect.poll(shown).toEqual(['th-0000000000a1', 'th-0000000000a2', 'th-0000000000a4', 'th-0000000000a6'])
   await expect(page.getByTestId('org-threads-hidden')).toHaveText(/^2 in progress/)
 })
+
+test('the panel closes and comes back, per node; the Threads tab shows a dot for news he has not looked at', async ({ page, request }) => {
+  // 2026-11-02, the user: "it is a panel too, you can at least let me close it ... And if this
+  // thread has something new, it should show."
+  const project = `Threads panel ${STAMP} ${test.info().project.name}`
+  await createTask(request, `Panel work ${STAMP}`, project)
+  await createTask(request, `Panel review ${STAMP}`, project)
+  const node = (await post<{ task: { id: string } }>(request, '/api/v1/org/contact', { to: project })).task.id
+  made.push(node)
+  const { walnutHome } = await discoverBrowserFixture(TEST_PORT)
+  const t0 = Date.now() - 20 * 60_000
+  const at = (min: number) => new Date(t0 + min * 60_000).toISOString()
+  const file = { version: 1, taskId: node, threads: [
+    { id: 'th-00000000b001', title: 'Phone view', titled: true, state: 'working', reply: 'Checking the phone', createdAt: at(0), updatedAt: at(2),
+      messages: [{ id: 'tm-00000000b001', at: at(1), text: 'does the phone get it?', via: 'chat', answer: { at: at(3), text: 'Yes, the same file.' } }] },
+  ] }
+  fs.mkdirSync(`${walnutHome}/org/threads`, { recursive: true })
+  fs.writeFileSync(`${walnutHome}/org/threads/${node}.json`, JSON.stringify(file))
+
+  await isolateUiPrefs(page)
+  await loadHome(page)
+  await page.getByTestId('sidebar-org').click()
+  const key = rowKey(project)
+  await page.locator(`[data-testid="org-channel"][data-key="${key}"]`).click()
+  const detail = page.getByTestId('org-detail')
+  await expect(detail).toHaveAttribute('data-key', key)
+  const top = detail.getByTestId('org-top')
+  await expect(top).toHaveAttribute('data-view', 'task')
+
+  // News he has not looked at: a dot on Threads while he is on Task; it clears once he looks.
+  await expect(detail.getByTestId('org-top-threads-new')).toBeVisible()
+  await detail.getByTestId('org-top-threads').click()
+  await expect(detail.getByTestId('org-top-threads-new')).toHaveCount(0)
+  await detail.getByTestId('org-top-task').click()
+  await expect(detail.getByTestId('org-top-threads-new')).toHaveCount(0)
+  // The node writes something new for him: the dot is back.
+  const res = await request.patch(`/api/v1/tasks/${node}/threads/th-00000000b001`, { data: { reply: 'Phone checked: same cards' } })
+  expect(res.ok(), await res.text()).toBe(true)
+  await expect(detail.getByTestId('org-top-threads-new')).toBeVisible()
+  await shot(page, 'panel-dot')
+
+  // Close: the panel is gone, the chat column takes the node's width, the header brings it back.
+  const width = async (id: string) => (await detail.locator(id).boundingBox())?.width ?? 0
+  const before = await width('.org-detail-col')
+  await detail.getByTestId('org-rail-close').click()
+  await expect(detail.getByTestId('org-rail')).toHaveCount(0)
+  await expect(detail.getByTestId('org-rail-handle')).toHaveCount(0)
+  expect(await width('.org-detail-col')).toBeGreaterThan(before + 200)
+  expect(Math.abs(await width('.org-detail-col') - await width('.org-detail-split'))).toBeLessThanOrEqual(2)
+  await expect(detail.getByTestId('org-rail-open')).toBeVisible()
+  // The way back says there is news.
+  await expect(detail.getByTestId('org-rail-open-new')).toBeVisible()
+
+  // Kept per node: a reload keeps it closed; another node keeps its own panel open.
+  await page.reload()
+  await expect(detail).toHaveAttribute('data-key', key)
+  await expect(detail.getByTestId('org-rail-open')).toBeVisible()
+  await expect(detail.getByTestId('org-rail')).toHaveCount(0)
+  await page.locator(`[data-testid="org-channel"][data-key="${rowKey(LED)}"]`).click()
+  await expect(detail).toHaveAttribute('data-key', rowKey(LED))
+  await expect(detail.getByTestId('org-rail')).toBeVisible()
+  await expect(detail.getByTestId('org-rail-open')).toHaveCount(0)
+  await page.locator(`[data-testid="org-channel"][data-key="${key}"]`).click()
+  await expect(detail).toHaveAttribute('data-key', key)
+  await expect(detail.getByTestId('org-rail')).toHaveCount(0)
+
+  // Back: the panel returns on the view it was left on; opening Threads clears both dots.
+  await detail.getByTestId('org-rail-open').click()
+  await expect(detail.getByTestId('org-rail')).toBeVisible()
+  await expect(top).toHaveAttribute('data-view', 'task')
+  await detail.getByTestId('org-top-threads').click()
+  await expect(detail.getByTestId('org-top-threads-new')).toHaveCount(0)
+  await detail.getByTestId('org-rail-close').click()
+  await expect(detail.getByTestId('org-rail-open-new')).toHaveCount(0)
+  await detail.getByTestId('org-rail-open').click()
+  await expect(top).toHaveAttribute('data-view', 'threads')
+})

@@ -12,7 +12,7 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { readOrgPlace, writeOrgPlace } from './org-place';
-import { usePageViewOf } from '@/utils/view-memory';
+import { isBoolean, usePageViewOf } from '@/utils/view-memory';
 import { oneOf } from '@/hooks/usePersistentState';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import type { Task } from '@open-walnut/core';
@@ -33,7 +33,8 @@ import { OrgAvatar } from './OrgChannelList';
 import { useHasBoard } from './useBoardOwner';
 import { flashProbeEnabled } from '@/utils/flash-probe';
 import { log } from '@/utils/log';
-import { ORG_TOP_VIEWS, briefUnread, markBriefSeen, readBriefFolded, type OrgTopView } from './org-brief-model';
+import { ORG_TOP_VIEWS, briefUnread, markBriefSeen, markThreadsSeen, readBriefFolded, threadsUnread, type OrgTopView } from './org-brief-model';
+import { newsAt, sharedAnswers } from '@open-walnut/thread-view';
 import { briefUpdating } from '@open-walnut/brief-fresh';
 import { useBriefRefresh } from './useBriefRefresh';
 import { ORG_RAIL_TABS, ORG_TASK_TAB_LABELS, orgTaskTabs, ownAskFirst, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
@@ -183,9 +184,12 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   const openTab = (t: OrgTaskTab) => { setTopPick('task'); setTaskTab(t); };
   const brief = keepsBrief ? contact?.brief : undefined;
   const pickTop = (v: OrgTopView) => setTopPick(v);
+  /** The panel above or beside the chat (Task, Brief, Threads) closed: the chat takes its room;
+   *  kept per node (2026-11-02, the user: "it is a panel too, you can at least let me close it"). */
+  const [railHidden, setRailHidden] = usePageViewOf<boolean>('org', 'node.railHidden', row.key, false, isBoolean);
   // Read while shown: the dot on the Brief tab is for a rewrite the user has not seen.
-  useEffect(() => { if (topView === 'brief' && contact && brief?.at) markBriefSeen(contact.id, brief.at); }, [topView, contact, brief?.at]);
-  const briefNew = topView !== 'brief' && !!contact && briefUnread(contact.id, brief?.at);
+  useEffect(() => { if (!railHidden && topView === 'brief' && contact && brief?.at) markBriefSeen(contact.id, brief.at); }, [railHidden, topView, contact, brief?.at]);
+  const briefNew = (railHidden || topView !== 'brief') && !!contact && briefUnread(contact.id, brief?.at);
   // Opening a node whose Brief is stale asks it for one refresh turn (core/sessions/brief-refresh.ts).
   const briefFresh = useBriefRefresh(keepsBrief ? contact : undefined, tasks);
   const updating = keepsBrief && !!contact && briefUpdating(contact, now);
@@ -217,7 +221,14 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   const pick = (t: OrgTab) => { setTab(t); setFocusChat(false); setChatInbox(null); onTabChange(row.key, t); };
   const { send } = useSessionSend(sessionId);
   // The user's own requests to this node (core/org/threads-model.ts), read while its view is shown.
-  const threads = useOrgThreads(keepsBrief ? contact?.id ?? row.contactId : undefined, keepsBrief && topView === 'threads');
+  // Read whenever the node keeps them, so the Threads tab can say it has news (2026-11-02, the user:
+  // "if this thread has something new, it should show").
+  const threadsId = keepsBrief ? contact?.id ?? row.contactId : undefined;
+  const threads = useOrgThreads(threadsId, keepsBrief);
+  const threadsNews = useMemo(() => (threads.threads ? newsAt(threads.threads, sharedAnswers(threads.threads)) : null), [threads.threads]);
+  const threadsShown = !railHidden && topView === 'threads';
+  useEffect(() => { if (threadsShown && threadsId && threadsNews) markThreadsSeen(threadsId, threadsNews); }, [threadsShown, threadsId, threadsNews]);
+  const threadsNew = !threadsShown && !!threadsId && threadsUnread(threadsId, threadsNews);
   const followUp = sessionId ? (threadId: string, text: string) => send(sessionId, text, undefined, { threadId }) : null;
   // A send that answers after the user moved to another node must not pull them back.
   const mounted = useRef(true);
@@ -323,7 +334,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   const rail = (
     <OrgTaskRail
       row={row} rows={rows} tasks={tasks} tabs={tabs} alerts={alertsShown} tab={taskTab} onTab={setTaskTab}
-      view={topView} onView={pickTop} keepsBrief={keepsBrief} briefNew={briefNew} briefFolded={briefFolded} onBriefFolded={setBriefFolded} briefFresh={briefFresh} briefUpdating={updating}
+      view={topView} onView={pickTop} keepsBrief={keepsBrief} briefNew={briefNew} threadsNew={threadsNew} onClose={() => setRailHidden(true)} briefFolded={briefFolded} onBriefFolded={setBriefFolded} briefFresh={briefFresh} briefUpdating={updating}
       threads={threads} onThreadFollowUp={followUp}
       contact={contact} title={title} onOpenAlert={openAlert} onQuote={quoteAlert} canQuote={!!sessionId} answers={answers}
       onOpenTask={openChip} now={now} placement={railSide ? 'side' : 'top'} onPin={onPin}
@@ -360,10 +371,17 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
             <button type="button" role="tab" id={tabId('board')} aria-controls="org-detail-panel" aria-selected={shown === 'board'} className={`org-tab${shown === 'board' ? ' is-on' : ''}`} data-testid="org-tab-board" onClick={() => pick('board')}>Board</button>
           )}
         </div>
+        {railHidden && (
+          <button type="button" className="org-rail-open" data-testid="org-rail-open" onClick={() => setRailHidden(false)}
+            title={keepsBrief ? 'Show Task, Brief and Threads' : 'Show the task panel'}>
+            {keepsBrief ? 'Task · Brief · Threads' : 'Tasks'}
+            {(briefNew || threadsNew) && <i className="org-top-new" data-testid="org-rail-open-new"><span className="org-sr-only">, something new</span></i>}
+          </button>
+        )}
       </header>
       {/* One parent for both places, so moving the rail never remounts it (a picked choice, an
           open More and the held order stay when a side panel narrows the page). */}
-      <div ref={(el) => { splitRef.current = el; railWidth.panelRef.current = el; }} className={`org-detail-split ${railSide ? 'has-rail' : 'is-stacked'}`}>
+      <div ref={(el) => { splitRef.current = el; railWidth.panelRef.current = el; }} className={`org-detail-split ${railHidden ? 'no-rail' : railSide ? 'has-rail' : 'is-stacked'}`}>
       <div className="org-detail-col">
       <div
         ref={bodyRef}
@@ -429,7 +447,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
         )
       )}
       </div>
-      {railSide && (
+      {railSide && !railHidden && (
         <div
           className="org-rail-handle"
           role="separator"
@@ -452,7 +470,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
           }}
         />
       )}
-      {rail}
+      {!railHidden && rail}
       </div>
     </div>
   );

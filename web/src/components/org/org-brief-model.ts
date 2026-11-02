@@ -46,6 +46,7 @@ export const ORG_TOP_VIEWS = ['task', 'brief', 'threads'] as const;
 export type OrgTopView = typeof ORG_TOP_VIEWS[number];
 const FOLDED_KEY = 'walnut.org.briefFolded';
 const SEEN_KEY = 'walnut.org.briefSeen';
+const THREADS_SEEN_KEY = 'walnut.org.threadsSeen';
 
 export function readBriefFolded(): boolean {
   try { return localStorage.getItem(FOLDED_KEY) === '1'; } catch { return false; }
@@ -54,24 +55,30 @@ export function writeBriefFolded(folded: boolean): void {
   try { localStorage.setItem(FOLDED_KEY, folded ? '1' : '0'); } catch { /* private mode: the pick lasts this page */ }
 }
 
-function seenMap(): Record<string, string> {
-  try { return JSON.parse(localStorage.getItem(SEEN_KEY) ?? '{}') as Record<string, string>; } catch { return {}; }
+function seenMap(key = SEEN_KEY): Record<string, string> {
+  try { return JSON.parse(localStorage.getItem(key) ?? '{}') as Record<string, string>; } catch { return {}; }
 }
-/** Whether this Brief was rewritten since the user last read it here. */
-export function briefUnread(taskId: string, at: string | undefined): boolean {
+function unreadSince(key: string, taskId: string, at: string | null | undefined): boolean {
   if (!at) return false;
-  const seen = seenMap()[taskId];
+  const seen = seenMap(key)[taskId];
   return !seen || Date.parse(at) > Date.parse(seen);
 }
-export function markBriefSeen(taskId: string, at: string): void {
+function markSeen(key: string, taskId: string, at: string): void {
   try {
-    const map = seenMap();
+    const map = seenMap(key);
+    if (map[taskId] && Date.parse(map[taskId]) >= Date.parse(at)) return;
     map[taskId] = at;
     // The newest 50 owners: there are a handful of leads, never thousands.
     const kept = Object.fromEntries(Object.entries(map).sort((a, b) => Date.parse(b[1]) - Date.parse(a[1])).slice(0, 50));
-    localStorage.setItem(SEEN_KEY, JSON.stringify(kept));
+    localStorage.setItem(key, JSON.stringify(kept));
   } catch { /* as above */ }
 }
+/** Whether this Brief was rewritten since the user last read it here. */
+export function briefUnread(taskId: string, at: string | undefined): boolean { return unreadSince(SEEN_KEY, taskId, at); }
+export function markBriefSeen(taskId: string, at: string): void { markSeen(SEEN_KEY, taskId, at); }
+/** Whether the threads he would see had news (thread-view.ts newsAt) since he last looked at Threads here. */
+export function threadsUnread(taskId: string, at: string | null): boolean { return unreadSince(THREADS_SEEN_KEY, taskId, at); }
+export function markThreadsSeen(taskId: string, at: string): void { markSeen(THREADS_SEEN_KEY, taskId, at); }
 
 /** A line's task whose status moved since the letter was written (brief-fresh.ts BriefLineMove). */
 export interface BriefMoveView { id: string; state: UserState; words: string }

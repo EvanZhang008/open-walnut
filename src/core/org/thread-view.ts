@@ -143,3 +143,19 @@ export function shownToHim<M extends ViewMessage>(t: ViewThread<M> & { state: st
   if (t.state === 'needs' || t.state === 'answered') return true;
   return cardView(t, shared).unread.length > 0;
 }
+
+/**
+ * When the threads his view shows last had news: the newest change, answer or first post among
+ * them (the Threads tab's dot is for news after he last looked). Null when none is shown.
+ */
+export function newsAt<M extends ViewMessage>(threads: ReadonlyArray<ViewThread<M> & { state: string; updatedAt: string }>, shared: ReadonlySet<string> = NONE): string | null {
+  let last: string | null = null;
+  for (const t of threads) {
+    if (!shownToHim(t, shared)) continue;
+    let at = t.updatedAt;
+    if (t.opener && t.opener.at > at) at = t.opener.at;
+    for (const m of t.messages) if (m.answer && m.answer.at > at) at = m.answer.at;
+    if (!last || at > last) last = at;
+  }
+  return last;
+}

@@ -242,7 +242,7 @@ function AskList({ alerts, tasks, vpOf, ownId, ownName, onOpen, onQuote, canQuot
   );
 }
 
-export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, onView, keepsBrief, briefNew, briefFolded, onBriefFolded, briefFresh, briefUpdating, threads, onThreadFollowUp, contact, title, onOpenAlert, onQuote, canQuote, answers, onOpenTask, now, placement, onPin, width }: {
+export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, onView, keepsBrief, briefNew, threadsNew, onClose, briefFolded, onBriefFolded, briefFresh, briefUpdating, threads, onThreadFollowUp, contact, title, onOpenAlert, onQuote, canQuote, answers, onOpenTask, now, placement, onPin, width }: {
   row: ChannelRow;
   rows: readonly ChannelRow[];
   tasks: readonly Task[];
@@ -255,6 +255,10 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
   onView: (view: OrgTopView) => void;
   keepsBrief: boolean;
   briefNew: boolean;
+  /** A thread he would see has news since he last looked at Threads. */
+  threadsNew: boolean;
+  /** Close this panel (the chat takes its room; the header brings it back). */
+  onClose: () => void;
   briefFolded: boolean;
   onBriefFolded: (folded: boolean) => void;
   /** What moved since the Brief was written, and whether its refresh turn is on its way. */
@@ -299,7 +303,9 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
             <button type="button" aria-pressed={view === 'brief'} className={view === 'brief' ? 'is-on' : ''} data-testid="org-top-brief" onClick={() => onView('brief')}>
               Brief{briefNew && <i className="org-top-new" data-testid="org-top-brief-new"><span className="org-sr-only">, rewritten since you read it</span></i>}
             </button>
-            <button type="button" aria-pressed={view === 'threads'} className={view === 'threads' ? 'is-on' : ''} data-testid="org-top-threads" onClick={() => onView('threads')}>Threads</button>
+            <button type="button" aria-pressed={view === 'threads'} className={view === 'threads' ? 'is-on' : ''} data-testid="org-top-threads" onClick={() => onView('threads')}>
+              Threads{threadsNew && <i className="org-top-new" data-testid="org-top-threads-new"><span className="org-sr-only">, news since you looked</span></i>}
+            </button>
           </div>
         )}
         {/* Its refresh turn is on its way (core/sessions/brief-refresh.ts): the chat and the Brief are being brought up to date. */}
@@ -309,6 +315,9 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
             {briefFolded ? 'Show all' : 'Fold'}
           </button>
         )}
+        <button type="button" className="org-rail-close" data-testid="org-rail-close" aria-label="Close this panel" title="Close this panel" onClick={onClose}>
+          <span aria-hidden="true">×</span>
+        </button>
       </div>
       {view === 'brief' ? (
         <div className="org-rail-body">
