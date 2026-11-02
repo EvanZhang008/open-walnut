@@ -217,7 +217,8 @@ describe('retrySession on a remote session dials its host like Connect now', () 
   async function erroredRemoteSession(sid: string, host = 'devbox'): Promise<void> {
     await tracker.createSessionRecord(sid, `task-${sid}`, 'proj', '/home/alice/repo', { initialProcessStatus: 'error', host })
     await tracker.updateSessionRecord(sid, { errorMessage: 'Connection lost — unable to reach remote host' } as never)
-    await sendMessageToSession(sid, 'the message I typed while it was down', { taskId: `task-${sid}` })
+    // Typed by the user in the console (`ui`): a line with no person source would be framed as Walnut's (send-frame.ts).
+    await sendMessageToSession(sid, 'the message I typed while it was down', { taskId: `task-${sid}`, source: 'ui' })
   }
   function captureSends() {
     const events: Array<{ name: string; data: unknown }> = []
