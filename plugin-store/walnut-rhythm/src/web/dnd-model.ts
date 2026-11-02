@@ -3,7 +3,7 @@
  * so node tests read it without the JSX runtime.
  */
 import { clockTime } from '../server/clock'
-import { NO_END } from '../server/dnd-words'
+import { NO_END, SHORTCUT_ON } from '../server/dnd-words'
 import type { RhythmPublicState } from '../server/public-state'
 
 export interface DndRowView {
@@ -48,7 +48,9 @@ export function dndSetupText(state: Pick<RhythmPublicState, 'config' | 'macos'> 
   const { shortcuts, mirror } = state.macos
   const on = state.config.macosFocusShortcuts
   // The last block found a copy of the shortcut that sets no end time; deleting it makes it "missing" below.
-  if (state.dnd?.record?.noEnd && shortcuts.missing.length === 0) return { text: NO_END, tone: 'warn', step: null }
+  // Only a record of the shortcut of today's name counts: an older name's record says nothing about it.
+  const record = state.dnd?.record
+  if (record?.noEnd && record.shortcut === SHORTCUT_ON && shortcuts.missing.length === 0) return { text: NO_END, tone: 'warn', step: null }
   if (!shortcuts.checked) return { text: on ? 'Checking your Shortcuts…' : 'Off. Each focus block can turn Mac Do Not Disturb on until it ends.', step: null }
   if (shortcuts.installed === null) return { text: shortcuts.error ?? 'Could not list your Shortcuts.', tone: 'error', step: null }
   if (shortcuts.missing.length > 0) {

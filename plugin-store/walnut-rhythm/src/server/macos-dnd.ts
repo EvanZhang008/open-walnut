@@ -52,6 +52,8 @@ export interface DndRecord {
   error?: string
   /** The shortcut set no end time (or another one): macOS will not end it by itself. */
   noEnd?: boolean
+  /** The "on" shortcut that ran, by name: a noEnd found on an older one says nothing of today's. */
+  shortcut?: string
   /** failed while turning off: Rhythm's Do Not Disturb may still be on, and Rhythm tries again. */
   stillOn?: boolean
   /** How many times turning off failed for this record. */
@@ -139,6 +141,7 @@ export class DndController {
       ...(typeof r.error === 'string' ? { error: r.error } : {}),
       ...(typeof r.moveTried === 'number' ? { moveTried: r.moveTried } : {}),
       ...(r.noEnd === true ? { noEnd: true } : {}),
+      ...(typeof r.shortcut === 'string' ? { shortcut: r.shortcut } : {}),
       ...(r.stillOn === true ? { stillOn: true } : {}),
       ...(typeof r.offTries === 'number' ? { offTries: r.offTries } : {}),
     }
@@ -263,7 +266,7 @@ export class DndController {
     // goes off at the block's end while Walnut runs, but not if Walnut is down then.
     const noEnd = ours.endsAt === undefined || Math.abs(ours.endsAt - until) > END_SLACK_MS
     this.set({
-      block: block.startedAt, until, status: 'on', assertionId: ours.id, ranAt, at: this.deps.now(),
+      block: block.startedAt, until, status: 'on', assertionId: ours.id, ranAt, at: this.deps.now(), shortcut: SHORTCUT_ON,
       ...(noEnd ? { noEnd: true, error: NO_END } : {}),
     })
   }

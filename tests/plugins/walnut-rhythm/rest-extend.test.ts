@@ -181,10 +181,27 @@ describe('an older copy of the shortcut', () => {
     await runtime.dnd.settled()
     expect(dndLive(h)).toEqual([])
     expect(runsOf(h)).toEqual([SHORTCUT_ON, SHORTCUT_OFF])
+    expect(runtime.dnd.record?.shortcut).toBe(SHORTCUT_ON)
     // Deleted in Shortcuts: the App's next step is Add shortcuts.
     h.mac.shortcuts = [SHORTCUT_OFF]
     await actions.status(runtime, { refresh: true })
     expect(dndSetupText(buildPublicState(runtime, h.clock.t)).step).toBe('add')
+  })
+})
+
+describe('a record an older Rhythm wrote', () => {
+  it('a block that ran the old no-end shortcut does not warn about today\'s shortcut', async () => {
+    const { h, runtime } = await boot()
+    await h.fake.api.storage.writeJson('state.json', {
+      version: 1, focus: runtime.focus,
+      dnd: { block: NINE - 60 * MIN, until: NINE - MIN, status: 'off', at: NINE - MIN, assertionId: 'old', ranAt: NINE - 60 * MIN, noEnd: true, error: NO_END },
+    })
+    const again = h.build()
+    await again.load()
+    await again.kick()
+    expect(again.dnd.record).toMatchObject({ noEnd: true })
+    expect(again.dnd.record?.shortcut).toBeUndefined()
+    expect(dndSetupText(buildPublicState(again, h.clock.t)).text).not.toBe(NO_END)
   })
 })
 
