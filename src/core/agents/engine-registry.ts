@@ -130,6 +130,13 @@ export interface EngineCapabilities {
    * (claude-code-import.ts: credentials, MCP servers, skills, commands, CLAUDE.md).
    */
   readonly claudeCodeImport?: boolean;
+  /**
+   * Whether Walnut asks the task's status lines in a hidden question once a turn ends
+   * (sessions/status-question.ts), as it does a native Claude Code session, instead of
+   * leaving them to the debounced summary (minutes later). An ACP engine answers it with a
+   * short hidden turn of its own; pi's is a few seconds on a cached prompt.
+   */
+  readonly statusQuestion?: boolean;
 }
 
 const CLAUDE: EngineCapabilities = {
@@ -222,6 +229,7 @@ const PI: EngineCapabilities = {
   skillSync: true,
   settings: PI_SETTINGS,
   claudeCodeImport: true,
+  statusQuestion: true,
 };
 
 const DSH: EngineCapabilities = {

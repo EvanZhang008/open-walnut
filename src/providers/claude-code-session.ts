@@ -11223,6 +11223,9 @@ export class SessionRunner {
     const draftAcpConfig: Record<string, string> | undefined = draftModelBase
       ? { model: draftModelBase, ...(draftModelEffort ? { reasoning_effort: draftModelEffort } : {}) }
       : undefined
+    const startAt = Date.now()
+    const extras = await buildAcpStartExtras(data)
+    const extrasMs = Date.now() - startAt
     const session = new AcpSession({
       runtimeId: data.runtimeId,
       taskId: data.taskId,
@@ -11232,7 +11235,7 @@ export class SessionRunner {
       engine,
       ...(remoteHost ? { host: remoteHost } : {}),
       ...(draftAcpConfig ? { acpConfig: draftAcpConfig } : {}),
-      ...(await buildAcpStartExtras(data)),
+      ...extras,
       directWsUrl: this._testDaemonUrl,
       artifacts: this._testAcpArtifacts,
       onWorkerDead: (s) => this.scheduleAcpDrainAfterDeath(s),
@@ -11242,6 +11245,7 @@ export class SessionRunner {
     this.acpSessions.set(session.runtimeId, session)
     const sid = await this.acpContract(session).establish()
     this.acpSessions.set(sid, session)
+    log.session.info('acp: start established', { sessionId: sid, taskId: data.taskId, engine, extrasMs, establishMs: Date.now() - startAt - extrasMs })
 
     // The human's words, never the wire message, with a reference read as its
     // label — see core/sessions/launch-naming.ts.

@@ -6,9 +6,11 @@
  * (task.status_report), moves the phase as the task's own report (report-phase.ts), and is the
  * status part of the turn's summary: the debounced summary self-report no longer asks it.
  *
- * Native Claude Code sessions only: a side question there is answered between turns from the
+ * Native Claude Code sessions: a side question there is answered between turns from the
  * session's own context, cheaply and invisibly. An ACP engine answers a hidden request with a turn
- * of its own, so its status still rides the debounced summary.
+ * of its own, so its status rides the debounced summary, except an engine whose registry entry
+ * asks for this question (statusQuestion: pi, 2026-11-02: a pi task read "its report on the turn
+ * that just ended" for four and a half minutes after every turn).
  *
  * A turn the CLI follows with another within STATUS_SETTLE_MS (a background command coming back)
  * is not the end: the ask waits for that turn's end. One ask per session at a time; its answer
@@ -85,10 +87,14 @@ export function statusAskInFlight(sessionId: string): boolean {
   return inFlight.has(sessionId);
 }
 
-/** A native Claude Code session Walnut can ask now. */
-async function nativeSession(sessionId: string): Promise<boolean> {
+/** A session Walnut can ask now: a native Claude Code one, or a live ACP one whose engine takes the question. */
+async function askableSession(sessionId: string): Promise<boolean> {
   const { sessionRunner } = await import('../../providers/claude-code-session.js');
-  return !!sessionRunner.findSessionByClaudeId(sessionId);
+  if (sessionRunner.findSessionByClaudeId(sessionId)) return true;
+  const acp = sessionRunner.findAcpSession(sessionId);
+  if (!acp) return false;
+  const { engineCaps } = await import('../agents/engine-registry.js');
+  return engineCaps(acp.engineId).statusQuestion === true;
 }
 
 /** Ask the status now. Never throws; answers whether a status was stored. */
@@ -139,7 +145,7 @@ export async function askStatus(taskId: string, sessionId: string, turnEndedMs: 
 
 /** A turn ended: ask once it stays quiet. Returns false when this session's status is not ours. */
 export async function armStatusQuestion(taskId: string, sessionId: string, turnEndedMs = Date.now()): Promise<boolean> {
-  if (!(await nativeSession(sessionId).catch(() => false))) {
+  if (!(await askableSession(sessionId).catch(() => false))) {
     // Not askable this turn (an ACP engine, or a runner that lost it): the summary asks.
     owned.delete(sessionId);
     return false;

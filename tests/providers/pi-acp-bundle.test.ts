@@ -77,6 +77,34 @@ it.each([
   } finally { await worker.handle({ id: 3, op: 'shutdown' }) }
 })
 
+// A packaged pi (the npm or Homebrew install: a bin link into the package) is versioned from its
+// package.json, so session setup starts no `pi --version` process first. The mock answers
+// --version with a failure or another version, which proves the package's version decided.
+it.each([
+  ['1.4.0', { MOCK_PI_VERSION_FAIL: '1' }, true],
+  ['0.80.3', { MOCK_PI_VERSION: '0.85.1' }, false],
+] as const)('reads a packaged Pi %s from its package.json', async (pkgVersion, env, ok) => {
+  const home = await fs.mkdtemp(path.join(root, 'packaged-'))
+  const pkg = path.join(home, 'lib', 'node_modules', '@earendil-works', 'pi-coding-agent')
+  await fs.mkdir(path.join(pkg, 'dist'), { recursive: true })
+  await fs.writeFile(path.join(pkg, 'package.json'), JSON.stringify({ name: '@earendil-works/pi-coding-agent', version: pkgVersion }))
+  await fs.copyFile(path.join(root, 'pi'), path.join(pkg, 'dist', 'cli.js'))
+  await fs.chmod(path.join(pkg, 'dist', 'cli.js'), 0o755)
+  await fs.mkdir(path.join(home, 'bin'))
+  await fs.symlink(path.join('..', 'lib', 'node_modules', '@earendil-works', 'pi-coding-agent', 'dist', 'cli.js'), path.join(home, 'bin', 'pi'))
+  const worker = new AcpWorker(path.join(home, 'journal.jsonl'))
+  try {
+    expect((await worker.handle({ id: 1, op: 'initialize', params: {
+      adapterCommand: [process.execPath, path.join(root, 'pi-acp.js')], cwd: home,
+      // Found on PATH, as a plain install is.
+      env: { HOME: home, PATH: path.join(home, 'bin'), ...env },
+    } })).ok).toBe(true)
+    const result = await worker.handle({ id: 2, op: 'newSession', params: { cwd: home } })
+    if (ok) expect(result.ok).toBe(true)
+    else expect(result).toMatchObject({ ok: false, error: { kind: 'provider_incompatible' } })
+  } finally { await worker.handle({ id: 3, op: 'shutdown' }) }
+})
+
 it('rejects an unrecognized upstream patch context', () => {
   expect(() => patchPiAcp('different upstream bundle')).toThrow('patch context changed')
 })

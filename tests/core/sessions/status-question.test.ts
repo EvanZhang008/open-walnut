@@ -2,7 +2,8 @@
  * The task's status words are asked right at its turn end (src/core/sessions/status-question.ts),
  * with only the CLI faked: one short side question with only the FOR_USER_* lines, its answer stored
  * as the task's status and moving its phase; a new turn within the settle window cancels it; the
- * debounced summary then asks no status and stores none of its own. An ACP session is not asked.
+ * debounced summary then asks no status and stores none of its own. An ACP session is asked only
+ * when its engine takes the question (pi).
  * Races: a turn running when the window ends is not asked mid-turn; a turn end while an ask is in
  * flight is asked again once it settles; an answer that does not read hands the turn back to the
  * summary.
@@ -140,6 +141,26 @@ describe('the status question', () => {
       expect(statusQuestionOwns(SID)).toBe(false)
     } finally { sessions.set(SID, held) }
   })
+
+  // 2026-11-02: a pi task read "its report on the turn that just ended" for 4.5 minutes after
+  // every turn. An ACP engine whose registry entry takes the question is asked like a native
+  // session, through its hidden control prompt; the others stay with the summary.
+  it.each([['pi', true], ['codex', false]] as const)('a live %s session is asked at its turn end: %s', async (engineId, asked) => {
+    const ACP_SID = `acp-status-${engineId}`
+    const request = vi.fn(async () => ANSWER)
+    const fake = { sessionId: ACP_SID, runtimeId: `acp-rt-${engineId}`, engineId, activity: 'idle',
+      establish: async () => ACP_SID, send: async () => {}, abortTurn: async () => {}, requestTurnCompleteSelfReport: request }
+    const acpSessions = (sessionRunner as unknown as { acpSessions: Map<string, unknown> }).acpSessions
+    acpSessions.set(ACP_SID, fake)
+    try {
+      expect(await armStatusQuestion(task.id, ACP_SID)).toBe(asked)
+      expect(statusQuestionOwns(ACP_SID)).toBe(asked)
+      if (!asked) return
+      await expect.poll(() => request.mock.calls.length, { timeout: STATUS_SETTLE_MS + 3000 }).toBe(1)
+      expect(String((request.mock.calls[0] as unknown[])[0])).toContain('Do not use any tool and do not continue the work.')
+      await expect.poll(async () => (await getTask(task.id)).status_report?.waiting_on).toBe('the CI run on main')
+    } finally { acpSessions.delete(ACP_SID) }
+  }, 20_000)
 
   it('the summary then asks no status and stores none of its own', async () => {
     expect(buildSelfReportPrompt('', 'Fix the parser', { status: false })).not.toContain('FOR_USER_STATE')

@@ -391,6 +391,8 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
 
     const journalPath = journalPathFor(sid)
     repairJournalMode(journalPath)
+    // Where a cold start's time goes, for the start log line and the caller's own (acp-session.ts).
+    const startedAt = Date.now()
     let proc: ChildProcess
     try {
       proc = spawn(workerCmd[0], [...workerCmd.slice(1), '--journal', journalPath], {
@@ -476,7 +478,9 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     replayTo(ws, entry, params.fromOffset ?? 0)
 
     // initialize → new/load session
+    const spawnedAt = Date.now()
     const init = await rpc(entry, 'initialize', { adapterCommand: adapterCmd, cwd, env })
+    const initializedAt = Date.now()
     if (!init.ok) {
       reapWorker(sid, 'initialize-failed')
       return { ok: false, error: 'acp initialize failed: ' + (init.error?.message ?? '?'), errorKind: init.error?.kind }
@@ -511,7 +515,11 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
       reapWorker(sid, 'session-setup-failed')
       return { ok: false, error: 'acp session setup failed: ' + (sessionResp.error?.message ?? '?'), errorKind: sessionResp.error?.kind }
     }
+    const sessionAt = Date.now()
     const state = await rpc(entry, 'getState')
+    // initializeMs holds the worker's own boot and the adapter's; sessionMs the provider's session setup.
+    const timings = { spawnMs: spawnedAt - startedAt, initializeMs: initializedAt - spawnedAt, sessionMs: sessionAt - initializedAt, stateMs: Date.now() - sessionAt }
+    log('info', 'acp: worker started', { sid, adapter: entry.adapter, load: !!providerSessionId, ...timings })
     return {
       ok: true,
       result: {
@@ -519,6 +527,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
         session: sessionResp.result,
         state: state.result,
         journalPath,
+        timings,
       },
     }
   }

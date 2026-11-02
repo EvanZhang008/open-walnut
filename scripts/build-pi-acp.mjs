@@ -13,8 +13,33 @@ export function patchPiAcp(source) {
   };
   replace('var pkg = readNearestPackageJson(import.meta.url);', 'var pkg = { name: "pi-acp", version: "0.0.33" };');
   replace('    const quietStartup = getQuietStartup(params.cwd);\n    const updateNotice = buildUpdateNotice();', '    const quietStartup = true;\n    const updateNotice = null;');
+  // The version comes from the installed package's package.json when the command resolves into
+  // one: \`pi --version\` is a whole Node start of the CLI (1 to 2 s on a busy Mac) before pi
+  // itself starts. A command that is not a packaged pi (a wrapper, a Windows shim) is asked.
   replace('    const args = ["--mode", "rpc", "--no-themes"];', `    const { execFile } = await import("node:child_process");
-    const version = await new Promise((resolve, reject) => {
+    const packaged = await (async () => {
+      const fs = await import("node:fs");
+      const nodePath = await import("node:path");
+      try {
+        let file = cmd;
+        if (!nodePath.isAbsolute(file)) {
+          file = (process.env.PATH || "").split(nodePath.delimiter).filter(Boolean)
+            .map((dir) => nodePath.join(dir, cmd)).find((candidate) => fs.existsSync(candidate));
+          if (!file) return null;
+        }
+        let dir = nodePath.dirname(fs.realpathSync(file));
+        for (let i = 0; i < 4; i++) {
+          const pkgFile = nodePath.join(dir, "package.json");
+          if (fs.existsSync(pkgFile)) {
+            const pkg = JSON.parse(fs.readFileSync(pkgFile, "utf8"));
+            return /(^|\\/)pi-coding-agent$/.test(String(pkg.name)) && typeof pkg.version === "string" ? pkg.version : null;
+          }
+          dir = nodePath.dirname(dir);
+        }
+      } catch {}
+      return null;
+    })();
+    const version = packaged ? packaged.match(/^(\\d+)\\.(\\d+)\\.(\\d+)/) : await new Promise((resolve, reject) => {
       execFile(cmd, ["--version"], { timeout: 5000, maxBuffer: 65536 }, (error, stdout) => {
         if (error) reject(RequestError2.internalError({ walnutError: "provider_missing" }, "Pi executable could not report its version."));
         else resolve(stdout.trim().match(/^(?:pi\\s+v?|v)?(\\d+)\\.(\\d+)\\.(\\d+)/i));

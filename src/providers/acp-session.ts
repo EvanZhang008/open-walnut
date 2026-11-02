@@ -1366,8 +1366,15 @@ export class AcpSession {
   private async establishProviderSession(): Promise<string> {
     const threadBefore = this._providerSessionId
     this._coldLoaded = false
+    // Where a start's time goes, logged once it is established (a start that fails says why elsewhere).
+    let last = Date.now()
+    const begun = last
+    const stages: Record<string, number> = {}
+    const stage = (name: string): void => { const now = Date.now(); stages[name] = now - last; last = now }
     await this.seedReplayCursor()
+    stage('cursorMs')
     const artifacts = await this.resolveArtifacts()
+    stage('artifactsMs')
     // Fail closed BEFORE touching the daemon: a missing provider executable is
     // a configuration error, not a transport one. 'cli' engines already got
     // this check inside resolveArtifacts; codex needs its own because the path
@@ -1380,6 +1387,7 @@ export class AcpSession {
     const providerExecutable = !this.cfg.artifacts && !this.remote && engineCaps(this.engineId).acpAdapter?.source === 'bundled'
       ? resolveEngineExecutable({ engine: this.engineId, cwd: this.cfg.cwd, env: mergeAcpSpawnEnv(process.env, overlay) })
       : undefined
+    stage('engineEnvMs')
 
     // Concurrent with ensureConn: the mount list is a small config read and must
     // not add serial latency to the cold-resume path, which is already the
@@ -1388,6 +1396,7 @@ export class AcpSession {
       this.resolveMcpServers(),
       this.ensureConn(),
     ])
+    stage('mountsMs')
     if ('hostAdapter' in artifacts && !conn.hasCapability('acp-host-v1')) {
       throw new Error(`${engineCaps(this.engineId).displayName} cannot run on ${this.host}: its daemon does not run ACP engines (it is older than this Walnut, or runs without bun)`)
     }
@@ -1398,6 +1407,7 @@ export class AcpSession {
       throw new Error(`${engineCaps(this.engineId).displayName} on ${this.host} is not started from a test server: that host's daemon is shared with the real Walnut`)
     }
     const adapterEnv = await this.buildAdapterEnv(providerExecutable, { overlay })
+    stage('adapterEnvMs')
     // Adapters that answer `loadSession: false` (gemini) can NEVER resume a
     // provider thread: acpStart would run session/load, get load_failed, and
     // fall back to a fresh session on EVERY worker respawn. Pre-empt that round
@@ -1426,6 +1436,7 @@ export class AcpSession {
       // WALNUT_TASK_DIR from it (task-dir-core.ts); an older daemon ignores it.
       ...(this.taskId ? { taskId: this.taskId, home: WALNUT_HOME } : {}),
     }, ACP_COLD_RESUME_TIMEOUT_MS)
+    stage('startMs')
     try {
       if (!startResp.ok) {
         if ((startResp as { errorKind?: string }).errorKind === 'load_failed') {
@@ -1481,6 +1492,12 @@ export class AcpSession {
       await this.followEngineDefaultModel(conn)
     }
     this.persistPendingPermission()
+    stage('afterMs')
+    log.session.info('acp: session established', {
+      sessionId: this._providerSessionId, runtimeId: this.runtimeId, engine: this.engineId, host: this.host,
+      warm: (startResp as { alive?: boolean }).alive === true, totalMs: Date.now() - begun, ...stages,
+      ...((startResp as { timings?: Record<string, number> }).timings ?? {}),
+    })
     // A new thread (the first one, or a fresh one after a load failure) has never
     // read the session context; a loaded or warm one has, once any prompt of it was
     // accepted. The record's count is the durable half: a server restart, or the
