@@ -19,13 +19,14 @@ import { getIntegrationMeta, useIntegrations } from '@/hooks/useIntegrations';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { keepNativeContextMenu } from '@/utils/context-menu';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
-import { MoveToProjectSection, TaskActionMenuItems } from '@/components/tasks/TaskKebabMenu';
+import { MoveToProjectSection, TaskActionMenuItems, TaskSnoozeRow } from '@/components/tasks/TaskKebabMenu';
 import { TeamMenuItems } from '@/components/tasks/TeamMenuItems';
 import { TaskSyncMenuRows } from '@/components/tasks/TaskSyncMenuRows';
 import { TransferMenuItem } from '@/components/transfer/TransferMenuItem';
 import { MoveHostMenuItems } from '@/components/transfer/MoveHostMenuItems';
 import { WorkspaceMenuSection } from '@/components/workspaces/WorkspaceMenuSection';
-import { SnoozeUntilEvent, TaskStatusMenuSection } from '@/components/tasks/TaskStatusControl';
+import { TaskStatusMenuSection } from '@/components/tasks/TaskStatusControl';
+import { WatchMenuItem } from '@/components/tasks/WatchToggle';
 import { AgentMemoryPanel, hasMemoryAndInstructions } from '@/components/org/AgentMemoryPanel';
 import { datesHint } from './kebab-dates-hint';
 import { KebabGroup } from './KebabGroup';
@@ -386,6 +387,11 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
             </>
           )}
           {task && (<>
+          {/* Snooze until: the task's first row, a time or something happening. */}
+          <TaskSnoozeRow task={task} onSetStartDate={handleSetStartDate} afterAction={closeKebab} />
+          {/* Watch: keep it at the top of the task panel, as the board's row menu does. */}
+          <WatchMenuItem task={task} afterAction={closeKebab} />
+
           {/* Task detail — opens the same full-screen modal as the home task panel */}
           {onOpenTaskDetail && (
             <>
@@ -445,7 +451,7 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
               onSetDate={handleSetDate}
               onSetStartDate={handleSetStartDate}
               afterAction={closeKebab}
-              snoozeEvent={{ body: <SnoozeUntilEvent task={task} afterAction={closeKebab} /> }}
+              startLabel="Start"
             />
           </KebabGroup>
 

@@ -4,7 +4,7 @@
  *
  *  1. The task menu has ONE collapsed Status row ("Status: To Do"); a click opens
  *     the five statuses, the lit one is the current status, a click sets another.
- *     The Start row reads "Start / Snooze until".
+ *     Its first row is "Snooze until" (a time or something happening); Dates keep Start.
  *  2. The detail pane's status badge is a button that opens the same five.
  *  3. Waiting IS a status (2026-09-30). Picking it keeps the menu open and shows an
  *     optional "Until" row (the date picker the date rows use); the collapsed row
@@ -111,7 +111,7 @@ const ROW_PARTS = {
 } as const
 type RowId = keyof typeof ROW_PARTS
 
-/** Open one of the menu's collapsed rows (Status, Start / Snooze until) and return it. */
+/** Open one of the menu's collapsed rows (Status, Snooze until) and return it. */
 async function expandRow(menu: Locator, testId: RowId): Promise<Locator> {
   const row = menu.getByTestId(testId)
   const toggle = row.locator(ROW_PARTS[testId].toggle)
@@ -134,18 +134,21 @@ async function expectInViewport(page: Page, box: Locator): Promise<void> {
   expect(b!.x + b!.width).toBeLessThanOrEqual(vp.width + 1)
 }
 
-test('the task menu shows and sets the status; Start reads "Start / Snooze until"', async ({ page, browserName }) => {
+test('the task menu shows and sets the status; Snooze until is its first row', async ({ page, browserName }) => {
   const task = await createTask('Status row')
   await page.goto('/')
   await page.waitForLoadState('networkidle')
 
   let menu = await openRowKebab(page, task)
   // Collapsed by default: one row that says the status, no options until clicked.
-  // It is not a date row: the menu still has exactly two (Start / Snooze until, Due).
-  await expect(menu.locator('.task-kebab-date-toggle')).toHaveCount(2)
+  // It is not a date row: the menu has exactly three (Snooze until, Start, Due).
+  await expect(menu.locator('.task-kebab-date-toggle')).toHaveCount(3)
   await expect(toggleOf(menu, 'task-status-row')).toHaveText(/^Status: To Do/)
   await expect(menu.getByTestId('task-status-row').getByRole('radio')).toHaveCount(0)
-  await expect(toggleOf(menu, 'task-snooze-row')).toHaveText(/^Start \/ Snooze until$/)
+  // Snooze until is the menu's first row (2026-11-02, the user: "snooze until should be top").
+  await expect(toggleOf(menu, 'task-snooze-row')).toHaveText(/^Snooze until$/)
+  await expect(menu.locator('> *').first()).toHaveAttribute('data-testid', 'task-snooze-row')
+  await expect(menu.getByTestId('task-start-row').locator('.task-kebab-date-label')).toHaveText(/^Start$/)
   await expect(menu.getByTestId('task-wait-until')).toHaveCount(0)
   await expect(menu.getByTestId('task-status-until')).toHaveCount(0)
   await shot(menu, 'menu-collapsed', browserName)
@@ -181,13 +184,22 @@ test('the task menu shows and sets the status; Start reads "Start / Snooze until
   await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
   expect((await taskOf(task.id)).phase).toBe('IN_PROGRESS')
 
-  // Complete from the menu, then back to To Do: a completed task cannot snooze on an event.
+  // Snooze from the first row: 8h writes the start date and the row says it.
+  menu = await openRowKebab(page, task)
+  await (await snoozeRow(menu)).getByRole('button', { name: '8h', exact: true }).click()
+  await expect(page.locator('.task-kebab-menu')).toHaveCount(0)
+  await expect.poll(async () => Date.parse((await taskOf(task.id)).start_date ?? '') > Date.now(), { timeout: 10_000 }).toBe(true)
+  menu = await openRowKebab(page, task)
+  await expect(toggleOf(menu, 'task-snooze-row')).toHaveText(/^Snoozed until: \S/)
+  await (await snoozeRow(menu)).getByRole('button', { name: 'Clear date' }).click()
+  await expect.poll(async () => (await taskOf(task.id)).start_date ?? '', { timeout: 10_000 }).toBe('')
+
+  // Complete from the menu, then back to To Do: a completed task has nothing to snooze.
   menu = await openRowKebab(page, task)
   await statusPill(await statusRow(menu), 'Complete').click()
   await expect.poll(async () => (await taskOf(task.id)).phase, { timeout: 10_000 }).toBe('COMPLETE')
   menu = await openRowKebab(page, task)
-  await snoozeRow(menu)
-  await expect(menu.getByTestId('task-wait-until')).toHaveCount(0)
+  await expect(menu.getByTestId('task-snooze-row')).toHaveCount(0)
   await statusPill(await statusRow(menu), 'To Do').click()
   await expect.poll(async () => (await taskOf(task.id)).phase, { timeout: 10_000 }).toBe('TODO')
 })

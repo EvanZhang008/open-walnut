@@ -7,6 +7,8 @@
  */
 import type { Task } from '@open-walnut/core';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
+import { updateTask } from '@/api/tasks';
+import { log } from '@/utils/log';
 import * as ICONS from '../common/Icons';
 import { isWatched } from './status-sections';
 import '@/styles/task-watch.css';
@@ -14,16 +16,21 @@ import '@/styles/task-watch.css';
 export function useWatchToggle(task: Pick<Task, 'id'> & { watched_at?: string | null }) {
   const store = useTasksContextSafe();
   const watched = isWatched(task);
-  const toggle = store
-    ? () => store.update(task.id, { watched_at: watched ? '' : new Date().toISOString() })
-    : undefined;
+  // Off the board's store (a session menu on the Org page), a plain PATCH; the
+  // task:updated it broadcasts refreshes whoever shows the task.
+  const toggle = () => {
+    const watched_at = watched ? '' : new Date().toISOString();
+    if (store) { store.update(task.id, { watched_at }); return; }
+    void updateTask(task.id, { watched_at }).catch((err) => {
+      log.warn('task-watch', 'watch write failed', { taskId: task.id, error: String(err) });
+    });
+  };
   return { watched, toggle };
 }
 
 /** The row menu's Watch / Stop watching item. */
 export function WatchMenuItem({ task, afterAction }: { task: Task; afterAction?: () => void }) {
   const { watched, toggle } = useWatchToggle(task);
-  if (!toggle) return null;
   return (
     <button
       type="button"
@@ -41,7 +48,6 @@ export function WatchMenuItem({ task, afterAction }: { task: Task; afterAction?:
 /** The eye in a task's header: lit while the task is watched. */
 export function WatchButton({ task, className = '' }: { task: Task; className?: string }) {
   const { watched, toggle } = useWatchToggle(task);
-  if (!toggle) return null;
   return (
     <button
       type="button"

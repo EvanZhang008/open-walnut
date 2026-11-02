@@ -23,9 +23,10 @@ vi.mock('@/components/tasks/PluginFieldPicker', () => ({ PluginFieldsSection: ()
 vi.mock('@/components/tasks/QuoteInSessionItem', () => ({ QuoteInSessionItem: () => null }));
 vi.mock('@/api/sessions', () => ({ peekWorkingDirs: () => null }));
 
-const { TaskActionMenuItems } = await import('../../web/src/components/tasks/TaskKebabMenu');
+const { TaskActionMenuItems, TaskSnoozeRow, snoozeDisplay } = await import('../../web/src/components/tasks/TaskKebabMenu');
 const { draftMoreTitle } = await import('../../web/src/components/sessions/DraftDecisionRow');
-const { formatDateDisplay } = await import('../../web/src/components/common/DatePicker');
+const { formatDateDisplay, formatStartDateDisplay } = await import('../../web/src/components/common/DatePicker');
+const { MemoryRouter } = await import('../../web/node_modules/react-router-dom');
 
 let doc: Document;
 let win: Window & typeof globalThis;
@@ -173,21 +174,47 @@ describe('TaskActionMenuItems with the draft props', () => {
     expect(formatDate).toHaveBeenCalledWith('2026-09-26', 'due');
   });
 
-  it('Start / Snooze until shows the event row only when open, and its label is the date alone', async () => {
+  it('a real task\'s menu passes startLabel: its Start row is a plain date, the snooze lives in TaskSnoozeRow', async () => {
     const formatDate = (iso: string, kind: string) => `${kind}:${iso}`;
-    const body = createElement('span', { className: 'snooze-event-body' }, 'Something happens…');
     const host = await mount({
       task: { priority: 'none', start_date: '2026-09-25', due_date: null },
-      isPinned: true, pinnedTier: 'focus', isDone: false, ...spies(), formatDate,
-      snoozeEvent: { body },
+      isPinned: true, pinnedTier: 'focus', isDone: false, ...spies(), formatDate, startLabel: 'Start',
     });
-    const snooze = host.querySelector('[data-testid="task-snooze-row"]')!;
-    // What a Waiting task waits for is its status now: the Status row says it.
-    expect(snooze.querySelector('.task-kebab-date-label')!.textContent)
-      .toBe('Start / Snooze until: start:2026-09-25');
-    expect(host.querySelectorAll('.snooze-event-body')).toHaveLength(0);
-    await click(snooze.querySelector('.task-kebab-date-toggle')!);
-    expect(host.querySelectorAll('.snooze-event-body')).toHaveLength(1);
+    expect(host.querySelector('[data-testid="task-snooze-row"]')).toBeNull();
+    expect(host.querySelector('[data-testid="task-start-row"] .task-kebab-date-label')!.textContent)
+      .toBe('Start: start:2026-09-25');
+  });
+
+  it('TaskSnoozeRow reads what is set now (a time, a watch, or nothing) and opens both kinds of snooze', async () => {
+    const future = new Date(Date.now() + 8 * 3_600_000).toISOString();
+    expect(snoozeDisplay({ start_date: future, phase: 'TODO' })).toBe(formatStartDateDisplay(future));
+    expect(snoozeDisplay({ start_date: '2020-01-01', phase: 'TODO' })).toBe('');
+    expect(snoozeDisplay({ phase: 'WAITING', user_status: { state: 'waiting', waitingOn: 'A watch: PR review' } } as never)).toBe('PR review');
+    expect(snoozeDisplay({ phase: 'TODO', user_status: { state: 'waiting', waitingOn: 'A watch: PR review' } } as never)).toBe('');
+    expect(snoozeDisplay({ phase: 'WAITING', user_status: { state: 'waiting', waitingOn: 'Its lead' } } as never)).toBe('');
+
+    const onSetStartDate = vi.fn();
+    const afterAction = vi.fn();
+    const host = doc.createElement('div');
+    doc.body.appendChild(host);
+    root = createRoot(host) as unknown as typeof root;
+    const task = { id: 't1', title: 'x', phase: 'TODO', start_date: null };
+    const render = (t: Record<string, unknown>) => act(async () => {
+      root!.render(createElement(MemoryRouter, null, createElement(TaskSnoozeRow, { task: t, onSetStartDate, afterAction })));
+    });
+    await render(task);
+    const row = host.querySelector('[data-testid="task-snooze-row"]')!;
+    expect(row.querySelector('.task-kebab-date-label')!.textContent).toBe('Snooze until');
+    expect(host.querySelector('[data-testid="task-wait-until"]')).toBeNull();
+    await click(row.querySelector('.task-kebab-date-toggle')!);
+    expect(host.querySelector('.dp-content')).not.toBeNull();
+    expect(host.querySelector('[data-testid="task-wait-until"]')!.textContent).toBe('Something happens…');
+
+    await render({ ...task, start_date: future });
+    expect(host.querySelector('[data-testid="task-snooze-row"] .task-kebab-date-label')!.textContent)
+      .toBe(`Snoozed until: ${formatStartDateDisplay(future)}`);
+    await render({ ...task, phase: 'COMPLETE' });
+    expect(host.querySelector('[data-testid="task-snooze-row"]')).toBeNull();
   });
 
   it('a tier heading replaces "Pin to" and nothing is lit (C65)', async () => {

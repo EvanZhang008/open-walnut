@@ -92,7 +92,7 @@ test('the first level holds the frequent rows and six groups; nothing else', asy
   const menu = await openMenu(page, panel)
   const rows = await firstLevel(menu)
   const at = (re: RegExp) => rows.findIndex((r) => re.test(r))
-  const order = [/^Panels/, /^Task detail$/, /^Status: /, /^(Pin to|Pinned)/, /^Dates/, /^Move & team/, /^Session$/i, /^Views/, /^Copy & open/, /^Debug/, /^Restart/, /^Terminate/, /^Details/]
+  const order = [/^Panels/, /^Snooze until/, /^Watch$/, /^Task detail$/, /^Status: /, /^(Pin to|Pinned)/, /^Dates/, /^Move & team/, /^Session$/i, /^Views/, /^Copy & open/, /^Debug/, /^Restart/, /^Terminate/, /^Details/]
   const seen = order.map(at)
   expect(seen.every((i) => i >= 0), `first level: ${rows.join(' | ')}`).toBe(true)
   expect([...seen].sort((a, b) => a - b), `order: ${rows.join(' | ')}`).toEqual(seen)
@@ -127,7 +127,7 @@ test('each group opens its rows in place, and the menu reopens with every group 
   const debug = await openGroup(menu, 'session-kebab-debug')
   await expect(debug.locator('.task-kebab-item')).toHaveText(['Raw input & output', 'Capture debug snapshot'])
   const dates = await openGroup(menu, 'kebab-group-dates')
-  await expect(dates.locator('.task-kebab-date-toggle')).toContainText(['Start / Snooze until', 'Due'])
+  await expect(dates.locator('.task-kebab-date-toggle')).toContainText(['Start', 'Due'])
   const move = await openGroup(menu, 'kebab-group-move')
   await expect(move.locator('.task-kebab-project-label')).toHaveText('Project')
   // Where the task comes from is back: a local task says Local, a synced one names its service.

@@ -25,7 +25,7 @@ import { TaskSyncMenuRows } from './TaskSyncMenuRows';
 import { WatchMenuItem } from './WatchToggle';
 import { TransferMenuItem } from '@/components/transfer/TransferMenuItem';
 import { MoveHostMenuItems } from '@/components/transfer/MoveHostMenuItems';
-import { SnoozeUntilEvent, TaskStatusMenuSection } from './TaskStatusControl';
+import { SnoozeUntilEvent, TaskStatusMenuSection, WAIT_UNTIL_ICON } from './TaskStatusControl';
 import type { DraftTaskField } from '@/components/sessions/draft-column';
 
 type TaskListProjection = Task & {
@@ -106,16 +106,18 @@ const PRIORITY_OPTIONS: { value: TaskPriority; icon: string; label: string }[] =
  * is opened, pinned or moved. The menu re-measures itself when the calendar
  * appears (useMenuPlacement observes children), so expanding never clips.
  */
-export function KebabDateRow({ label, date, display, onChange, extra, testId, className }: {
+export function KebabDateRow({ label, date, display, onChange, extra, testId, className, icon }: {
   label: string;
   date: string | undefined | null;
   /** Human form of `date` for the collapsed row; empty when no date is set. */
   display: string;
   onChange: (date: string | null) => void;
-  /** Shown under the calendar when open (Start / Snooze until's "Something happens…"). */
+  /** Shown under the calendar when open (Snooze until's "Something happens…"). */
   extra?: ReactNode;
   testId?: string;
   className?: string;
+  /** Leading icon; the calendar by default. */
+  icon?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -127,7 +129,7 @@ export function KebabDateRow({ label, date, display, onChange, extra, testId, cl
         title={display ? `${label}: ${display}` : undefined}
         onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
       >
-        <span className="task-kebab-icon">{ICONS.ICON_CALENDAR}</span>
+        <span className="task-kebab-icon">{icon ?? ICONS.ICON_CALENDAR}</span>
         <span className="task-kebab-date-label">
           {label}{display ? <>: <b>{display}</b></> : ''}
         </span>
@@ -136,6 +138,44 @@ export function KebabDateRow({ label, date, display, onChange, extra, testId, cl
       {open && <DatePicker date={date} onChange={onChange} inline />}
       {open && extra}
     </div>
+  );
+}
+
+/** What a task is snoozed until now: its start date while still to come, and the
+ *  watch (an armed trigger) a Waiting task waits on. Empty when neither. */
+export function snoozeDisplay(task: Pick<Task, 'start_date' | 'phase' | 'user_status'>): string {
+  const start = task.start_date ? formatStartDateDisplay(task.start_date) : '';
+  const time = start && start !== 'Started' ? start : '';
+  const on = task.phase === 'WAITING' ? task.user_status?.waitingOn ?? '' : '';
+  const watch = /^A watch:\s*/i.test(on) ? on.replace(/^A watch:\s*/i, '') : '';
+  return [time, watch].filter(Boolean).join(' · ');
+}
+
+/**
+ * The task menu's first action row (2026-11-02, the user: "snooze until should be
+ * top ... as it is so important", "can be time and action"): one click opens both
+ * kinds of snooze, until a time (the presets and the calendar, the task's start
+ * date) and until something happens (the task's session arms a trigger). The
+ * closed row reads what is set now. Dates keeps Start and Due as plain dates.
+ */
+export function TaskSnoozeRow({ task, onSetStartDate, afterAction }: {
+  task: Task;
+  onSetStartDate: (date: string | null) => void;
+  afterAction: () => void;
+}) {
+  if (task.phase === 'COMPLETE' || task.status === 'done') return null;
+  const display = snoozeDisplay(task);
+  return (
+    <KebabDateRow
+      label={display ? 'Snoozed until' : 'Snooze until'}
+      testId="task-snooze-row"
+      className="task-snooze-row"
+      icon={WAIT_UNTIL_ICON}
+      date={task.start_date}
+      display={display}
+      onChange={(date) => { onSetStartDate(date); afterAction(); }}
+      extra={<SnoozeUntilEvent task={task} afterAction={afterAction} />}
+    />
   );
 }
 
@@ -174,7 +214,7 @@ function WalnutPickRow({ pick, afterAction }: {
 export function TaskActionMenuItems({
   task, isPinned, pinnedTier, isDone, batchMode,
   onSetPriority, onPinTask, onPinWithTier, onUnpinTask, onSetTier, onSetDate, onSetStartDate, afterAction,
-  formatDate, showPriorityLabels, litClickAccepts, tierHeading, walnutPick, snoozeEvent, part,
+  formatDate, showPriorityLabels, litClickAccepts, tierHeading, walnutPick, startLabel, part,
 }: {
   /** Single task (kebab) — null in batch mode. Only the fields the rows READ are
    *  required, so a draft column can hand in its launch meta (the task that
@@ -213,10 +253,10 @@ export function TaskActionMenuItems({
   tierHeading?: string;
   /** Per field, a trailing "Use Walnut's pick: <label>" row. */
   walnutPick?: Partial<Record<DraftTaskField, { label: string; onPick: () => void }>>;
-  /** A single real task's second kind of snooze, inside Start / Snooze until:
-   *  `body` is the row under the times (TaskStatusControl.SnoozeUntilEvent).
-   *  What a Waiting task waits for is its status now, so the Status row says it. */
-  snoozeEvent?: { body: ReactNode };
+  /** The Start row's label. A real task's menu draws its snooze as its own first
+   *  row (TaskSnoozeRow), so its Start row is a plain "Start"; the draft and batch
+   *  menus keep the default, which also says what a future start does. */
+  startLabel?: string;
   /** One half only: the session ⋮ menu draws Pin (and Priority) on its first level
    *  and the dates inside its Dates group. Absent, both halves (the board kebab). */
   part?: 'pin' | 'dates';
@@ -316,15 +356,14 @@ export function TaskActionMenuItems({
       {(onSetStartDate || onSetDate) && <div className="task-kebab-divider" />}
       {onSetStartDate && (
         <KebabDateRow
-          // Also says what a future start DOES: it hides the task from Now until
-          // then. Snoozing until an event lives here too, under the times.
-          label="Start / Snooze until"
-          testId="task-snooze-row"
-          className="task-snooze-row"
+          // The default also says what a future start DOES: it hides the task from
+          // Now until then.
+          label={startLabel ?? 'Start / Snooze until'}
+          testId={startLabel ? 'task-start-row' : 'task-snooze-row'}
+          className={startLabel ? undefined : 'task-snooze-row'}
           date={task?.start_date}
           display={task?.start_date ? (formatDate ? formatDate(task.start_date, 'start') : formatStartDateDisplay(task.start_date)) : ''}
           onChange={(date) => { onSetStartDate(date); afterAction(); }}
-          extra={snoozeEvent?.body}
         />
       )}
       {onSetStartDate && <WalnutPickRow pick={walnutPick?.startDate} afterAction={afterAction} />}
@@ -621,6 +660,13 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
           // the task"). Kill pointerdown here so no menu interaction can arm dnd.
           onPointerDown={(e) => e.stopPropagation()}
         >
+          {/* Snooze until: the first row, a time or something happening (TaskSnoozeRow). */}
+          {onSetStartDate && (
+            <TaskSnoozeRow task={task} onSetStartDate={(d) => onSetStartDate(task.id, d)} afterAction={closeMenu} />
+          )}
+          {/* Watch — keep it on top of the task panel whatever its state (WatchToggle.tsx). */}
+          <WatchMenuItem task={task} afterAction={closeMenu} />
+
           {/* Start Session — the kebab twin of the row's ▶. Same gate: a task that
               already owns a session is opened by clicking its row, so a second
               launch on the same task is never one click away. */}
@@ -651,9 +697,6 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
             <span className="task-kebab-icon">{ICONS.ICON_INFO}</span>
             <span>{isDetailOpen ? 'Close details' : 'Details'}</span>
           </button>
-
-          {/* Watch — keep it on top of the task panel whatever its state (WatchToggle.tsx). */}
-          <WatchMenuItem task={task} afterAction={closeMenu} />
 
           {/* Quote in session — hand this task to the current session's composer as a
               reference pill (never sends). Sits next to Details: both are "look at
@@ -775,7 +818,7 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
             onSetDate={onSetDate ? (d) => onSetDate(task.id, d) : undefined}
             onSetStartDate={onSetStartDate ? (d) => onSetStartDate(task.id, d) : undefined}
             afterAction={closeMenu}
-            snoozeEvent={{ body: <SnoozeUntilEvent task={task} afterAction={closeMenu} /> }}
+            startLabel="Start"
           />
 
           {/* Move to project — precise alternative to dragging across group headers */}
