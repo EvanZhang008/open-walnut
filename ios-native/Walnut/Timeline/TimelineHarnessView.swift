@@ -131,6 +131,9 @@ struct TimelineHarnessView: View {
                 // An island streaming in: its layout draws first, its script runs at the end.
                 Button("Island stream") { store.startIslandStream() }
                     .accessibilityIdentifier("harness.islandStream")
+                // Two islands streaming in, held before the turn ends (see `startIslandPair`).
+                Button("Island pair") { store.startIslandPair() }
+                    .accessibilityIdentifier("harness.islandPair")
                 // The stream holds mid-script and again before the turn ends, until a
                 // test taps this, so a slow runner reads each stage before it moves on.
                 Button("Next") { store.islandHeld = false }
@@ -455,6 +458,35 @@ final class TimelineHarnessStore {
         }
     }
 
+    /// Stream `TimelineRichFixtures.islandPairChunks`, hold with the reply complete
+    /// and still live, then end the turn on `harness.islandNext`, so the saved
+    /// message's rows replace the live ones.
+    func startIslandPair() {
+        guard !streamOn else { return }
+        IslandStateStore.shared.removeAll(scope: "harness")
+        // A step above the reply that is gone once the turn ends, the way a
+        // finished turn folds its steps: every row of the reply moves up one, so
+        // UIKit hands the saved rows cells other than the ones that drew them.
+        messages = [ChatMessage(id: "h-pair-ask", role: "user", text: "Two blocks, please.",
+                                createdAt: "2026-08-08T07:00:00Z", kind: nil),
+                    ChatMessage(id: Self.pairStepID, role: "assistant", text: "Checking the two blocks first.",
+                                createdAt: "2026-08-08T07:00:01Z", kind: nil)]
+        streamOn = true
+        streaming = true
+        liveText = ""
+        activity = "Writing"
+        let chunks = TimelineRichFixtures.islandPairChunks()
+        streamTask = Task { @MainActor [weak self] in
+            for chunk in chunks {
+                try? await Task.sleep(for: .milliseconds(600))
+                guard let self, self.streamOn else { return }
+                self.liveText += chunk
+            }
+            guard await self?.holdIsland() == true, let self else { return }
+            self.stopStream()
+        }
+    }
+
     /// Wait until the island stream is let go; false when the stream stopped meanwhile.
     private func holdIsland() async -> Bool {
         islandHeld = true
@@ -484,10 +516,13 @@ final class TimelineHarnessStore {
         }
     }
 
+    private static let pairStepID = "h-pair-step"
+
     func stopStream() {
         streamOn = false
         streamTask?.cancel()
         streamTask = nil
+        messages.removeAll { $0.id == Self.pairStepID }
         if !liveText.isEmpty {
             counter += 1
             messages.append(ChatMessage(

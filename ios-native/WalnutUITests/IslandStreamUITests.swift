@@ -76,6 +76,41 @@ final class IslandStreamUITests: XCTestCase {
         attach(app, "4-saved-reply-reports")
     }
 
+    /// When the turn ends the saved reply's rows replace the live ones (other ids,
+    /// the same documents) and the timeline reloads its cells. Two islands share
+    /// a reuse pool, so UIKit hands each the other's cell: each must keep the page
+    /// it was running, never load again (2026-11-01, the user: streaming and
+    /// finished must look exactly the same, "no flash").
+    @MainActor
+    func testTwoIslandsKeepTheirRunningPagesWhenTheTurnEnds() throws {
+        let app = UITestLaunch.launch(["--timeline-harness-island-stream"])
+        let start = app.buttons["harness.islandPair"]
+        XCTAssertTrue(start.waitForExistence(timeout: 30))
+        start.tap()
+        try waitHeld(app)
+        let tokenA = try loadToken(app, "A")
+        let tokenB = try loadToken(app, "B")
+        attach(app, "pair-1-live")
+
+        try next(app)
+        Thread.sleep(forTimeInterval: 2.5)
+        XCTAssertEqual(try loadToken(app, "A"), tokenA, "island A loaded again when the turn ended")
+        XCTAssertEqual(try loadToken(app, "B"), tokenB, "island B loaded again when the turn ended")
+        attach(app, "pair-2-saved")
+    }
+
+    /// The token island `name` drew when its script ran ("Island A load k3j9x2").
+    @MainActor
+    private func loadToken(_ app: XCUIApplication, _ name: String) throws -> String {
+        let label = app.webViews.staticTexts
+            .matching(NSPredicate(format: "label BEGINSWITH %@", "Island \(name) load ")).firstMatch
+        guard label.waitForExistence(timeout: 20) else {
+            attach(app, "no-token-\(name)")
+            throw XCTSkip("island \(name) never ran")
+        }
+        return label.label
+    }
+
     /// At the largest text size the saved reply's island still holds all of its
     /// content (it used to be cut down to its heading at the turn end).
     @MainActor

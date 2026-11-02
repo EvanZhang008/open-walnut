@@ -222,6 +222,21 @@ enum TimelineRichFixtures {
         ]
     }
 
+    /// Two islands in one reply, each showing a token it draws when its script
+    /// runs. They share a cell reuse pool, which is what makes UIKit hand each of
+    /// them the other's cell when the saved reply replaces the live one: a token
+    /// that changes at the turn end means that island loaded again.
+    static func islandPairChunks() -> [String] {
+        let island = { (name: String) in
+            "```html-app\n<p id=\"t\" style=\"padding:12px;margin:0\">Island \(name) has not run</p>\n"
+                + "<script>document.getElementById('t').textContent = 'Island \(name) load '"
+                + " + Math.random().toString(36).slice(2, 8);</script>\n```\n"
+        }
+        return [
+            "Two blocks.\n\n", island("A"), "\nBetween the blocks.\n\n", island("B"), "\nAfter the blocks.",
+        ]
+    }
+
     /// Every fixture as a message list, oldest first.
     static func messages(startingAt index: Int) -> [(id: String, text: String)] {
         let bodies = [callout, styledCard, contrastPanels, unpairedBackgrounds,
