@@ -13,6 +13,7 @@
  *     changes nothing on the machine;
  *  3. the ticket joins the machine: the approved screen, the Mac lists it as a
  *     `transport: net` host with where it listens, and reaches its daemon with no relay;
+ *     the page hears it connected (its live frame goes out);
  *  4. the same command again says the link is spent and leaves the machine's network as it
  *     was (the Mac still reaches it);
  *  5. a restart of the machine keeps the port it listens on, so with no relay the Mac
@@ -46,6 +47,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-host-net-loc
 import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
 import { decodeTicket, encodeTicket, ticketCommand } from '../../src/core/net/join-ticket.js'
+import { bus, EventNames } from '../../src/core/event-bus.js'
 
 const REPO = path.resolve(__dirname, '../..')
 const NET_BIN = (() => {
@@ -64,6 +66,8 @@ let hostDaemon: ChildProcess | null = null
 let hostEnv: NodeJS.ProcessEnv = {}
 let primaryPort = 0
 const host = { home: '', daemonDir: '' }
+// The live frames every surface draws a host's status from (host:status).
+const frames: Array<{ host?: string; connected?: boolean }> = []
 
 const api = (p: string, init: RequestInit = {}) => fetch(`http://127.0.0.1:${primaryPort}${p}`, {
   ...init, headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
@@ -154,6 +158,7 @@ suite(`host network with no companion: a ticket joins a machine (relay: ${RELAY}
     const server = await startServer({ port: 0, dev: true })
     primaryPort = (server.address() as net.AddressInfo).port
     await (await import('../../src/core/net/net-mac.js')).startNet()
+    bus.subscribe('host-net-local-e2e-frames', (e) => { frames.push(e.data as { host?: string; connected?: boolean }) }, { global: true, interest: [EventNames.HOST_STATUS] })
 
     // The new machine: its own HOME and daemon (the bun twin), nothing shared with this one.
     host.home = path.join(base, 'host', 'home')
@@ -174,6 +179,7 @@ suite(`host network with no companion: a ticket joins a machine (relay: ${RELAY}
   }, 600_000)
 
   afterAll(async () => {
+    bus.unsubscribe('host-net-local-e2e-frames')
     try { await stopServer() } catch { /* best-effort */ }
     await stopChild(hostDaemon)
     isolation?.restore()
@@ -253,6 +259,9 @@ suite(`host network with no companion: a ticket joins a machine (relay: ${RELAY}
 
     const h = await connected(machine)
     expect(h.steps?.map((s) => s.phase)).toEqual(['tunnel', 'handshake'])
+    // Its row was written by the host network, not by Settings: its live frame still goes
+    // out, so the page says Connected (2026-11-02: it read "Retrying" until a reload).
+    await waitFor(async () => frames.some((f) => f.host === machine && f.connected === true), 10_000, 'the machine\'s connected frame')
     expect(isolation!.calls().join('\n')).not.toContain(machine)
     await fsp.writeFile(path.join(host.home, 'on-the-machine.txt'), 'hello\n')
     expect(await filesOnMachine(machine)).toContain('on-the-machine.txt')

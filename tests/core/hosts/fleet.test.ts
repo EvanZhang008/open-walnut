@@ -18,7 +18,8 @@ const config = {
   hosts: {
     devbox: { hostname: 'devbox.example.internal', label: 'Dev box' },
     slowbox: { hostname: 'slow.example.internal' },
-    oldbox: { hostname: 'old.example.internal' },
+    // A machine that joined with a link: the host network, never an SSH tunnel.
+    oldbox: { hostname: 'oldbox.walnut-net.invalid', transport: 'net', endpoint: 'e'.repeat(64) },
     offbox: { hostname: 'off.example.internal', enabled: false },
   },
 }
@@ -116,7 +117,7 @@ describe('listFleet', () => {
     expect(devbox.spend).toMatchObject({ last30dUsd: 1234.2, basis: 'list-price' })
     expect(mac.spend?.last30dUsd).toBe(2345.6)
     expect(slowbox).toMatchObject({ now: null, history: null, spend: { last30dUsd: 0 } })
-    expect(oldbox).toMatchObject({ now: null, history: null, daemon: { vitals: false } })
+    expect(oldbox).toMatchObject({ now: null, history: null, daemon: { vitals: false }, connection: { kind: 'host-network' } })
     expect(old.sends.filter((s) => s.cmd === 'host.vitals')).toHaveLength(0)
     expect(dev.sends.find((s) => s.cmd === 'host.vitals')?.params).toEqual({ days: 30 })
     expect(costCalls).toHaveLength(1)

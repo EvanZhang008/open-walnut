@@ -215,7 +215,7 @@ function entries(config: Config): HostEntry[] {
   // This machine has no hosts entry: its own tags are `local_capabilities`.
   const out: HostEntry[] = [{ host: LOCAL_HOST, def: null, label: 'This computer', local: true, kind: 'local', declared: config.local_capabilities }]
   for (const { key, def } of listStatusHosts(config)) {
-    out.push({ host: key, def, label: def.label?.trim() || key, local: false, kind: def.cloud_box ? 'bridge' : 'ssh-tunnel', declared: def.capabilities })
+    out.push({ host: key, def, label: def.label?.trim() || key, local: false, kind: def.cloud_box ? 'bridge' : def.transport === 'net' ? 'host-network' : 'ssh-tunnel', declared: def.capabilities })
   }
   return out
 }
@@ -325,7 +325,7 @@ export async function checkHostBootStart(host: string): Promise<FleetHost> {
   const config = await getConfig()
   const e = entries(config).find((x) => x.host === host)
   if (!e) throw new BootStartCheckError('Walnut has no such host', 'unknown_host')
-  if (e.local || e.kind === 'bridge') throw new BootStartCheckError('Only a host Walnut reaches over SSH has a boot start Walnut sets up', 'not_remote')
+  if (e.local || e.kind === 'bridge') throw new BootStartCheckError('Only a host Walnut reaches over SSH or the host network has a boot start Walnut sets up', 'not_remote')
   const { getConnectedDaemonConnection } = await import('../../providers/daemon-connection.js')
   const conn = getConnectedDaemonConnection(host)
   if (!conn) throw new BootStartCheckError(`Walnut is not connected to ${e.label} now`, 'not_connected')

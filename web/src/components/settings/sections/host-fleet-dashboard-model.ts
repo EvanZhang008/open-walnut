@@ -59,7 +59,7 @@ function rebootProblem(h: FleetHost): Problem | null {
   const text = 'Daemon does not come back after a reboot';
   // The host's keeper says what a press can do (BootStartNext); an older server says nothing, so no button.
   // Only an SSH host has a keeper; the cloud box runs its own service.
-  const next = h.connection.kind === 'ssh-tunnel' && h.connection.connected ? b?.next ?? null : null;
+  const next = (h.connection.kind === 'ssh-tunnel' || h.connection.kind === 'host-network') && h.connection.connected ? b?.next ?? null : null;
   if (!next) return { key: 'reboot', text, detail, tone: 'warn' };
   return { key: 'reboot', text, detail, tone: 'warn', action: { kind: 'boot-start', label: next === 'install' ? 'Set up' : 'Check again' } };
 }
@@ -283,7 +283,7 @@ export function capabilityChips(h: FleetHost): Chip[] {
 export function linkLabel(h: FleetHost): string {
   const c = h.connection;
   if (!c.connected) return c.kind === 'bridge' ? 'Not connected in' : 'Not connected';
-  const kind = c.kind === 'bridge' ? 'Bridge' : 'SSH tunnel';
+  const kind = c.kind === 'bridge' ? 'Bridge' : c.kind === 'host-network' ? 'Host network' : 'SSH tunnel';
   return c.rttMs ? `${kind} · ${c.rttMs} ms` : kind;
 }
 

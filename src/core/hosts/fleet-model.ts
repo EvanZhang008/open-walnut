@@ -12,7 +12,7 @@ import type { HostServerPhase } from '../host-server/manager.js'
 import { capabilityWords, hostCapabilities, type HostCapabilities } from './capabilities.js'
 import { bootStartWords } from '../../providers/remote-boot-start.js'
 
-export type FleetConnectionKind = 'local' | 'ssh-tunnel' | 'bridge'
+export type FleetConnectionKind = 'local' | 'ssh-tunnel' | 'host-network' | 'bridge'
 
 export interface FleetHost {
   host: string
@@ -126,7 +126,7 @@ export const SERVER_PHASE_WORDS: Record<HostServerPhase, string> = {
 }
 
 /** Words for how a host connects. */
-export const CONNECTION_KIND_WORDS: Record<FleetConnectionKind, string> = { local: 'this computer', 'ssh-tunnel': 'SSH tunnel', bridge: 'bridge' }
+export const CONNECTION_KIND_WORDS: Record<FleetConnectionKind, string> = { local: 'this computer', 'ssh-tunnel': 'SSH tunnel', 'host-network': 'the host network', bridge: 'bridge' }
 
 /** A span of recorded minutes in words: minutes under an hour, hours under a day, then days. */
 export function recordedSpan(minutes: number): string {

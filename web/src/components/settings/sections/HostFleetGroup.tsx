@@ -7,14 +7,16 @@
  * (HostFleetTopology.tsx), one card per live host (HostFleetCard.tsx), then the
  * hosts Walnut is not connected to, one compact row each with Connect. It sits
  * in the section beside the Hosts group, never inside one, so no card is nested
- * in a card. It refreshes every 30 s while the page is visible; a failed refresh
- * keeps the cards it had and says so.
+ * in a card. It refreshes every 30 s while the page is visible, and at once when a host
+ * connects, drops or is new (useHostLinkChange); a failed refresh keeps the cards it had
+ * and says so.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchFleet, setUpBootStart, type FleetHost } from '@/api/hosts-fleet';
 import { connectHost } from '@/api/hosts';
 import { ApiError } from '@/api/client';
 import { log } from '@/utils/log';
+import { useHostLinkChange } from '@/hooks/useHostLinkChange';
 import { fleetSummary, isLive } from './host-fleet-dashboard-model';
 import { usd } from './host-fleet-model';
 import { HostFleetCard, HostFleetOfflineRow, type ActionState } from './HostFleetCard';
@@ -43,8 +45,10 @@ export function HostFleetGroup() {
   const [now, setNow] = useState(() => Date.now());
   const [actions, setActions] = useState<Record<string, ActionState>>({});
   const inflight = useRef<AbortController | null>(null);
+  // A read asked for while one runs: done once that one ends (never cutting it off).
+  const readAgain = useRef(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<void> => {
     if (inflight.current) return;
     const ctrl = new AbortController();
     inflight.current = ctrl;
@@ -60,6 +64,7 @@ export function HostFleetGroup() {
       setError(msg);
     } finally {
       if (inflight.current === ctrl) inflight.current = null;
+      if (readAgain.current && !inflight.current && !ctrl.signal.aborted) { readAgain.current = false; void load(); }
     }
   }, []);
 
@@ -90,6 +95,14 @@ export function HostFleetGroup() {
       inflight.current = null;
     };
   }, [load]);
+
+  // A host that connects, drops or is new: read the fleet again now, not at the next refresh,
+  // after a read in flight (hosts reconnecting one by one never keep cutting it off).
+  const readSoon = useCallback(() => {
+    if (inflight.current) readAgain.current = true;
+    else void load();
+  }, [load]);
+  useHostLinkChange(readSoon);
 
   /**
    * One press per button at a time (keyed host and kind, so a card's Set up never shows on its

@@ -257,6 +257,9 @@ describe('diagram', () => {
   it('labels each link with its kind and latency', () => {
     expect(linkLabel(host())).toBe('SSH tunnel · 38 ms')
     expect(linkLabel(offline())).toBe('Not connected')
+    // A machine that joined with a link has no SSH at all.
+    const joined = host()
+    expect(linkLabel({ ...joined, connection: { ...joined.connection, kind: 'host-network' } })).toBe('Host network · 38 ms')
     expect(clip('Spare box with a rather long label', 17)).toBe('Spare box with a…')
   })
 })

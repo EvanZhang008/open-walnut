@@ -43,7 +43,7 @@ export function usd(v: number): string {
   return `$${Math.round(v).toLocaleString('en-US')}`;
 }
 
-const KIND_LABEL: Record<FleetHost['connection']['kind'], string> = { local: 'This computer', 'ssh-tunnel': 'SSH tunnel', bridge: 'Bridge (it connects in)' };
+const KIND_LABEL: Record<FleetHost['connection']['kind'], string> = { local: 'This computer', 'ssh-tunnel': 'SSH tunnel', 'host-network': 'Host network', bridge: 'Bridge (it connects in)' };
 
 /** One cell per day: how much of the minutes the ledger covered the host was up. */
 export function dayTone(b: FleetBucket): 'good' | 'warn' | 'bad' | 'none' {

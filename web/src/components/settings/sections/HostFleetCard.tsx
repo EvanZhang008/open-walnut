@@ -172,7 +172,7 @@ export function HostFleetOfflineRow({ host, now, action, onConnect }: {
   host: FleetHost; now: number; action?: ActionState; onConnect: (host: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const canConnect = host.connection.kind === 'ssh-tunnel';
+  const canConnect = host.connection.kind === 'ssh-tunnel' || host.connection.kind === 'host-network';
   return (
     <div className="hf-off" data-testid="host-fleet-offline" data-host={host.host} id={`hf-card-${host.host}`} tabIndex={-1}>
       <div className="hf-off-line">

@@ -4168,7 +4168,7 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const { addOnDaemonPhaseChange, addOnDaemonHostConnected, getDaemonConnectState, isDaemonConnected } =
       await import('../providers/daemon-connection.js')
     const { link, linkTarget } = await import('../core/hosts/link.js')
-    const { getConfig } = await import('../core/config-manager.js')
+    const { getConfig, isFallbackConfig } = await import('../core/config-manager.js')
     const { buildHostStatus } = await import('../core/hosts/host-status.js')
     const { getHostReadiness, wireHostReadiness } = await import('../core/hosts/host-readiness.js')
     const { CONNECT_IN_FLIGHT_PHASES } = await import('../core/sessions/host-connect-hint.js')
@@ -4184,17 +4184,45 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const { recomputeHostReadinessFloors } = await import('../core/hosts/host-readiness.js')
     const shown = (d: HostDefs): Set<string> =>
       new Set(Object.entries(d).filter(([k, v]) => k !== '__local__' && v.enabled !== false).map(([k]) => k))
-    const refreshHostDefs = async (announce = false): Promise<void> => {
+    const readHostDefs = async (announce: boolean): Promise<void> => {
       try {
+        const cfg = await getConfig()
+        // An unreadable config.yaml reads as the defaults: that takes no host away.
+        if (isFallbackConfig(cfg)) return
         const before = shown(hostDefs)
-        hostDefs = (await getConfig()).hosts ?? {}
+        hostDefs = cfg.hosts ?? {}
+        if (!announce) return
+        const after = shown(hostDefs)
         // A host that left Settings (removed or disabled) must leave every
         // surface live: one tombstone on the existing host:status event.
-        if (announce) for (const host of before) if (!shown(hostDefs).has(host)) pushHostRemoved(host)
+        for (const host of before) if (!after.has(host)) pushHostRemoved(host)
+        // One a read added gets its frame now: its last phase change may have found no row.
+        for (const host of after) if (!before.has(host)) pushHostFrame(host, hostDefs[host])
       } catch { /* config not ready yet */ }
     }
+    // One read at a time, each after the one before, so an older read never lands last; calls
+    // while one waits share it.
+    let readChain: Promise<void> = Promise.resolve()
+    let queuedRead: Promise<void> | null = null
+    let queuedAnnounce = false
+    const refreshHostDefs = (announce = false): Promise<void> => {
+      queuedAnnounce ||= announce
+      if (!queuedRead) {
+        queuedRead = readChain.then(() => {
+          const a = queuedAnnounce
+          queuedAnnounce = false
+          queuedRead = null
+          return readHostDefs(a)
+        })
+        readChain = queuedRead
+      }
+      return queuedRead
+    }
     await refreshHostDefs()
+    const { createHostFramePusher } = await import('../core/hosts/host-frame-pusher.js')
+    const framePusher = createHostFramePusher({ defs: () => hostDefs, refresh: () => refreshHostDefs(true), push: pushHostFrame })
     bus.subscribe('host-status-defs', () => {
+      framePusher.configChanged()
       void refreshHostDefs(true)
       // A new model can move the Claude Code floor: reword stored answers, no RPC (C90).
       void import('../core/hosts/host-fixture.js')
@@ -4204,11 +4232,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
 
     // No sessionId/taskId in the payload: this is about a HOST, so it must also
     // reach clients that filtered their interest down to one session. Unknown
-    // keys (a `direct:<url>` pool entry) and disabled hosts are never pushed.
-    const emitHostStatus = (host: string): void => {
-      if (!host || host === '__local__') return
-      pushHostFrame(host, hostDefs[host])
-    }
+    // keys (a `direct:<url>` pool entry) and disabled hosts are never pushed; a
+    // key the map lacks is read from the config first (host-frame-pusher.ts).
+    const emitHostStatus = (host: string): void => framePusher.emit(host)
 
     unsubscribeHostPhase?.()
     const offPhase = addOnDaemonPhaseChange((state) => emitHostStatus(state.host))

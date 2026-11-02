@@ -1793,7 +1793,7 @@ daemon predates the capability has `now` and `history` null.
   probe over SSH failed, with its words).
 
 `FleetHost`: `{ host, label, local, line, checkedAt, connection: { kind: "local" |
-"ssh-tunnel" | "bridge", connected, phase, phaseLabel, since, rttMs, error },
+"ssh-tunnel" | "host-network" | "bridge", connected, phase, phaseLabel, since, rttMs, error },
 system: { os, arch, cpus, memBytes, diskFreeBytes, kind, probedAt } | null, now: {
 cpus, cpuUtil (0..1 | null), load: [1m, 5m, 15m] | null, memTotalBytes,
 memAvailBytes, uptimeSec, bootedAt, linked, gpuUtil (0..1 | null), disk: {

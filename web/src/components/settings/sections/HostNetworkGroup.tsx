@@ -21,6 +21,7 @@ import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
 import { RemoteHostDetail, RemoteHostStatus } from './RemoteHostStatus';
 import { hostRowId } from '@/utils/host-settings-nav';
 import { useHostDisplayLabels } from '@/hooks/useHostDisplayLabel';
+import { useHostLinkChange } from '@/hooks/useHostLinkChange';
 
 const REFRESH_MS = 30_000;
 const INVITE_POLL_MS = 3_000;
@@ -83,6 +84,9 @@ export function HostNetworkGroup() {
     document.addEventListener('visibilitychange', tick);
     return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', tick); };
   }, [load]);
+
+  // A machine that connects or drops: read how this Mac reaches it now, not at the next refresh.
+  useHostLinkChange(load, net?.machines.map((m) => m.host) ?? []);
 
   // While an invite waits: watch it, and count down.
   const waitingId = invite?.state === 'waiting' ? invite.id : null;

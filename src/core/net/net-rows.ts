@@ -38,7 +38,9 @@ function freeAlias(name: string, hosts: HostRows): string {
  */
 export async function reconcileHosts(members: NetMember[], opts: { drop?: string } = {}): Promise<{ added: string[]; removed: string[] }> {
   const { modifyConfigDoc } = await import('../config-store.js')
-  return modifyConfigDoc((doc) => {
+  let wrote = false
+  const out = await modifyConfigDoc((doc) => {
+    wrote = false
     const hosts: HostRows = doc.hosts && typeof doc.hosts === 'object' && !Array.isArray(doc.hosts) ? { ...(doc.hosts as HostRows) } : {}
     const added: string[] = []
     const removed: string[] = []
@@ -76,8 +78,16 @@ export async function reconcileHosts(members: NetMember[], opts: { drop?: string
     }
     if (!changed && added.length === 0 && removed.length === 0) return { write: false, result: { added, removed } }
     doc.hosts = hosts
+    wrote = true
     return { write: true, result: { added, removed } }
   })
+  // The host list moved: the server's host map, the pickers and Settings follow it now,
+  // not at the next config change (a joined machine's status stayed stale).
+  if (wrote) {
+    const { bus, EventNames } = await import('../event-bus.js')
+    bus.emit(EventNames.CONFIG_CHANGED, { key: 'hosts' }, ['web-ui'], { source: 'host-network' })
+  }
+  return out
 }
 
 
