@@ -200,8 +200,9 @@ systemctl --user enable open-walnut-web.service > /dev/null 2>&1 || { echo 'Waln
 if [ "$changed" = 1 ]; then act=restart; else act=start; fi
 systemctl --user "$act" open-walnut-web.service || { echo 'Walnut could not start as a service (above).'; exit 1; }
 # Counted and timed: a server that takes connections and never answers costs 5 minutes, not 30.
+# Quiet while it waits (each refused try is the wait, not a fault); the service's own log says why at the end.
 i=0; end=$(($(date +%s) + 300))
-until curl -fsS -o /dev/null --max-time 5 http://127.0.0.1:3456/api/config; do
+until curl -fs -o /dev/null --max-time 5 http://127.0.0.1:3456/api/config; do
   i=$((i + 1))
   if [ "$i" -ge 300 ] || [ "$(date +%s)" -ge "$end" ]; then journalctl --user -u open-walnut-web.service -n 30 --no-pager; echo 'Walnut did not start (above).'; exit 1; fi
   sleep 1
