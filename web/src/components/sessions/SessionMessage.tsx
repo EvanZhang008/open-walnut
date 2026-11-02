@@ -418,19 +418,44 @@ function systemLineIcon(variant: string): string {
   return variant === 'error' ? '!' : '';
 }
 
+// A notice the user opened stays open when its streamed row gives way to its persisted one
+// (the same id, another element): the card snapped shut under the reader as history landed
+// (2026-11-02, codex-stream-retry on CI). Kept by notice id, a bounded set for the page's life.
+const openNotices = new Set<string>();
+const OPEN_NOTICES_MAX = 200;
+
+function useNoticeOpen(noticeId: string | undefined): [boolean, () => void] {
+  const [open, setOpen] = useState(() => !!noticeId && openNotices.has(noticeId));
+  const toggle = useCallback(() => {
+    setOpen((was) => {
+      const next = !was;
+      if (noticeId) {
+        if (next) {
+          openNotices.add(noticeId);
+          if (openNotices.size > OPEN_NOTICES_MAX) openNotices.delete(openNotices.values().next().value as string);
+        } else openNotices.delete(noticeId);
+      }
+      return next;
+    });
+  }, [noticeId]);
+  return [open, toggle];
+}
+
 /** System notice that keeps compact lines inline and collapses verbose payloads. */
-export function SystemLineCollapsible({ variant, message, detail, time }: {
+export function SystemLineCollapsible({ variant, message, detail, time, noticeId }: {
   variant: string;
   message: string;
   detail?: string;
   time?: string;
+  /** The notice's id (the history row's msgId, the streamed block's uuid): keeps it open across the swap. */
+  noticeId?: string;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, toggleOpen] = useNoticeOpen(noticeId);
   const icon = systemLineIcon(variant);
   if (detail && detail.length > 80) {
     return (
       <div className="tool-run-row">
-        <button className="tool-run-toggle" onClick={() => setOpen((p) => !p)}>
+        <button className="tool-run-toggle" onClick={toggleOpen}>
           <span className={`tool-run-label${variant === 'error' ? ' tool-run-label--error' : ''}`}>
             {icon ? `${icon} ${message}` : message}
           </span>
@@ -1062,7 +1087,7 @@ function specialSessionRow({ message }: SessionMessageProps): ReactNode | undefi
   if (role === 'system') {
     // The member's key is for a grouped list; spread into JSX it is a key React warns about.
     const { variant, message: line, detail, time: lineTime } = systemGroupMemberFromHistory(message);
-    return <SystemLineCollapsible variant={variant} message={line} detail={detail} time={lineTime} />;
+    return <SystemLineCollapsible variant={variant} message={line} detail={detail} time={lineTime} noticeId={message.msgId} />;
   }
 
   // Interrupt marker — render as muted system banner, not a "You" bubble.

@@ -135,6 +135,7 @@ export const StreamingBlockView = memo(function StreamingBlockView({ block, sess
         variant={block.variant}
         message={block.message}
         detail={block.detail}
+        noticeId={block.uuid ?? block.replacesMsgId}
       />
     );
   }

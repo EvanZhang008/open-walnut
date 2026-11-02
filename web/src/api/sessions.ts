@@ -269,6 +269,30 @@ interface InflightHistory {
 }
 const inflightHistory = new Map<string, InflightHistory>();
 
+// A read asked for because the session moved on (its turn ended, a notice rewrote a
+// row, it erred) never joins a read that started before that event: the older read
+// answers with the server's state from before it, and nothing asks again. The turn's
+// end read joined the read its stream end had started a moment earlier, so the final
+// row never reached history (2026-11-02, codex-stream-retry on 8 of 10 CI runs).
+// Each such event starts a new epoch for its session; only reads of one epoch join.
+// The bump runs as a wildcard listener, which the socket calls before every named
+// listener, so every caller reacting to the event already asks in the new epoch.
+const HISTORY_MOVING_EVENTS = new Set(['session:batch-completed', 'session:result', 'session:error', 'session:system-event']);
+const historyEpochs = new Map<string, number>();
+let historyEpochAll = 0;
+
+export function noteSessionHistoryMoved(sessionId?: string): void {
+  if (!sessionId) { historyEpochAll += 1; return; }
+  historyEpochs.set(sessionId, (historyEpochs.get(sessionId) ?? 0) + 1);
+}
+
+wsClient.subscribeAll((name, data) => {
+  if (name === '_ws:reconnected') { noteSessionHistoryMoved(); return; }
+  if (!HISTORY_MOVING_EVENTS.has(name)) return;
+  const sid = (data as { sessionId?: unknown } | null)?.sessionId;
+  if (typeof sid === 'string' && sid) noteSessionHistoryMoved(sid);
+});
+
 export async function fetchSessionHistory(
   sessionId: string,
   opts?: {
@@ -302,7 +326,8 @@ export async function fetchSessionHistory(
   }
   if (opts?.reviseIds && opts.reviseIds.length > 0) params.revise = opts.reviseIds.join(',');
 
-  const key = `${sessionId}?${new URLSearchParams(params).toString()}`;
+  const epoch = `${historyEpochAll}.${historyEpochs.get(sessionId) ?? 0}`;
+  const key = `${sessionId}#${epoch}?${new URLSearchParams(params).toString()}`;
   let entry = inflightHistory.get(key);
   if (!entry) {
     const controller = new AbortController();

@@ -27,7 +27,7 @@ vi.mock('@/api/client', async (importOriginal) => {
 // test never touches its module state.
 vi.mock('@/stream/flight-recorder', () => ({ recordFlight: vi.fn() }));
 
-import { fetchSessionHistory } from '@/api/sessions';
+import { fetchSessionHistory, noteSessionHistoryMoved } from '@/api/sessions';
 
 interface Deferred {
   promise: Promise<unknown>;
@@ -182,5 +182,43 @@ describe('fetchSessionHistory coalescing', () => {
     expect(mocks.apiGet).toHaveBeenCalledTimes(2);
     calls[1].resolve(RESPONSE);
     await expect(p3).resolves.toBeTruthy();
+  });
+  it('a read asked after the session moved on never joins one started before it', async () => {
+    // The turn's end read joined the read its stream end had started a moment earlier,
+    // and answered with the history from before the turn's last row (2026-11-02).
+    const calls = deferApiGet();
+    const before = fetchSessionHistory('sess-1', { since: 2, tail: 400 });
+    noteSessionHistoryMoved('sess-1');
+    const after = fetchSessionHistory('sess-1', { since: 2, tail: 400 });
+    expect(mocks.apiGet).toHaveBeenCalledTimes(2);
+    // The callers reacting to the same event still share one read.
+    const sameEvent = fetchSessionHistory('sess-1', { since: 2, tail: 400 });
+    expect(mocks.apiGet).toHaveBeenCalledTimes(2);
+    // Another session's event leaves this session's reads joinable.
+    noteSessionHistoryMoved('sess-2');
+    void fetchSessionHistory('sess-1', { since: 2, tail: 400 });
+    expect(mocks.apiGet).toHaveBeenCalledTimes(2);
+    // A reconnect moves every session on.
+    noteSessionHistoryMoved();
+    void fetchSessionHistory('sess-1', { since: 2, tail: 400 }).catch(() => {});
+    expect(mocks.apiGet).toHaveBeenCalledTimes(3);
+    calls.forEach((c) => c.resolve(RESPONSE));
+    await Promise.all([before, after, sameEvent]);
+  });
+
+  it('a turn boundary event on the socket starts the new epoch before any listener asks', async () => {
+    const { wsClient } = await import('@/api/ws');
+    const calls = deferApiGet();
+    void fetchSessionHistory('sess-ws', { since: 1, tail: 400 });
+    let joinedInListener = -1;
+    const listener = () => {
+      void fetchSessionHistory('sess-ws', { since: 1, tail: 400 });
+      joinedInListener = mocks.apiGet.mock.calls.length;
+    };
+    wsClient.onEvent('session:batch-completed', listener);
+    (wsClient as unknown as { dispatchEvent(f: unknown): void }).dispatchEvent({ type: 'event', name: 'session:batch-completed', data: { sessionId: 'sess-ws' }, seq: 1 });
+    wsClient.offEvent('session:batch-completed', listener);
+    expect(joinedInListener).toBe(2);
+    calls.forEach((c) => c.resolve(RESPONSE));
   });
 });
