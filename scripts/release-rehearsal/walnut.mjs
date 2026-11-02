@@ -6,23 +6,19 @@
  */
 import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
-import net from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { retryRegistryLag } from '../npm-registry-lag.mjs'
 import { stopOwnDaemon } from './own-daemon.mjs'
+import { freePort } from '../lib/free-port.mjs'
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 export const MOCK_CLAUDE = path.join(repo, 'tests/providers/mock-claude.mjs')
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-export function freePort() {
-  return new Promise((resolve, reject) => {
-    const s = net.createServer()
-    s.once('error', reject)
-    s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)) })
-  })
-}
+// The server's port comes from below the OS's ephemeral range: binary-restart stops and
+// starts it on the same port, and anything on the machine may be handed an ephemeral one.
+export { freePort } from '../lib/free-port.mjs'
 
 /** Run a command to completion with a deadline; output goes to `logFile`. Resolves the exit code. */
 export function runLogged(cmd, argv, { env, cwd, logFile, timeoutMs }) {

@@ -20,11 +20,11 @@
 import { spawn, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
-import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { accountInfo } from '../src/lib/account.ts'
 import { machineArch } from './desktop-smoke.mjs'
+import { freePort } from './lib/free-port.mjs'
 
 function parseArgs(argv) {
   const out = { old: null, next: null, source: null, work: null, keep: false, readOnly: false }
@@ -45,9 +45,6 @@ function parseArgs(argv) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-const freePort = () => new Promise((resolve, reject) => {
-  const s = net.createServer().listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)) }).on('error', reject)
-})
 async function until(what, ms, probe) {
   const deadline = Date.now() + ms
   for (;;) {

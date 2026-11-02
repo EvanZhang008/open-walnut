@@ -28,13 +28,13 @@
  */
 import { spawn, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
-import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { carryRelease } from './desktop-carry-release.mjs'
 import { stopOwnDaemon } from './release-rehearsal/own-daemon.mjs'
 import { serveReleases } from './release-rehearsal/runtime.mjs'
+import { freePort } from './lib/free-port.mjs'
 
 function parseArgs(argv) {
   const out = { app: null, version: null, release: null, work: null, keep: false }
@@ -51,9 +51,6 @@ function parseArgs(argv) {
   return out
 }
 
-const freePort = () => new Promise((resolve, reject) => {
-  const s = net.createServer().listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)) }).on('error', reject)
-})
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 async function until(what, ms, probe) {
