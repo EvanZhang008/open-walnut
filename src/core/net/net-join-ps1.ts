@@ -89,25 +89,157 @@ if ($Show) {
 `
 }
 
+/** Where the app's own Walnut comes from inside the Linux (what `curl … | sh` installs). */
+const INSTALL_URL = 'https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh'
+
+/** The port the app's own Walnut serves its console on: inside the Linux, and so on Windows' localhost. */
+export const APP_CONSOLE_PORT = 3456
+
+/**
+ * Walnut of its own on this PC (the app's "Use Walnut on this PC"): installed in the Linux, its
+ * server a systemd user service there (the hold keeps the Linux running, so it serves while the
+ * window is closed), its console in the app's window at http://localhost:<port>, which WSL
+ * forwards from Windows. Runs as the Linux user, with XDG_RUNTIME_DIR set for `systemctl --user`.
+ */
+export function ownWalnutLinuxScript(): string {
+  return [
+    'W="${OPEN_WALNUT_INSTALL_DIR:-$HOME/.local/share/open-walnut}/bin/walnut"',
+    'if [ ! -x "$W" ]; then',
+    "  printf '  Walnut ............ installing\\n'",
+    '  # Fetched first: `curl | sh` reads a failed download as an empty script and succeeds.',
+    '  f=$(mktemp)',
+    `  if ! curl -fsSL "\${WALNUT_JOIN_INSTALL_URL:-${INSTALL_URL}}" -o "$f"; then rm -f "$f"; echo "Could not download Walnut's installer (above). Check this PC is online, then try again."; exit 1; fi`,
+    '  if ! OPEN_WALNUT_MODIFY_PATH=0 sh "$f" > "$f.log" 2>&1 < /dev/null; then cat "$f.log"; rm -f "$f" "$f.log"; echo \'Walnut did not install (above).\'; exit 1; fi',
+    '  rm -f "$f" "$f.log"',
+    '  [ -x "$W" ] || { echo "Walnut installed, but not in $W."; exit 1; }',
+    'fi',
+    "printf '  Walnut ............ installed (%s)\\n' \"$(\"$W\" --version 2>/dev/null | head -n 1)\"",
+    'unit="$HOME/.config/systemd/user/open-walnut-web.service"',
+    'mkdir -p "$(dirname "$unit")"',
+    `printf '[Unit]\\nDescription=Walnut (its console shows in the Walnut app on Windows)\\n\\n[Service]\\nExecStart=%s web --port ${APP_CONSOLE_PORT}\\nRestart=always\\nRestartSec=5\\n\\n[Install]\\nWantedBy=default.target\\n' "$W" > "$unit.new"`,
+    'changed=0',
+    'if cmp -s "$unit.new" "$unit"; then rm -f "$unit.new"; else mv "$unit.new" "$unit"; changed=1; fi',
+    '# Right after the Linux started, its user manager may not answer yet.',
+    'i=0; while [ ! -S "$XDG_RUNTIME_DIR/bus" ] && [ "$i" -lt 30 ]; do i=$((i + 1)); sleep 1; done',
+    '[ "$changed" = 0 ] || systemctl --user daemon-reload',
+    "systemctl --user enable open-walnut-web.service > /dev/null 2>&1 || { echo 'Walnut could not be made a service (systemctl --user enable).'; exit 1; }",
+    '# A changed unit (a new place for Walnut) restarts a server that runs; otherwise start one that does not.',
+    'if [ "$changed" = 1 ]; then act=restart; else act=start; fi',
+    "systemctl --user \"$act\" open-walnut-web.service || { echo 'Walnut could not start as a service (above).'; exit 1; }",
+    '# Counted and timed: a server that takes connections and never answers costs 5 minutes, not 30.',
+    'i=0; end=$(($(date +%s) + 300))',
+    `until curl -fsS -o /dev/null --max-time 5 http://127.0.0.1:${APP_CONSOLE_PORT}/api/config; do`,
+    '  i=$((i + 1))',
+    "  if [ \"$i\" -ge 300 ] || [ \"$(date +%s)\" -ge \"$end\" ]; then journalctl --user -u open-walnut-web.service -n 30 --no-pager; echo 'Walnut did not start (above).'; exit 1; fi",
+    '  sleep 1',
+    'done',
+    '# Every WSL Linux shares one network: the answer may be another Walnut on the port (one in',
+    "# the PC's own Linux). It is this one only when the listener is in this unit; a process of",
+    '# another Linux shows no pid here.',
+    'if command -v ss > /dev/null 2>&1; then',
+    `  lp=$(ss -ltnpH "sport = :${APP_CONSOLE_PORT}" 2>/dev/null | sed -n 's/.*pid=\\([0-9]*\\),.*/\\1/p' | head -n 1)`,
+    '  if [ -z "$lp" ] || ! grep -qs open-walnut-web.service "${WALNUT_PROC_DIR:-/proc}/$lp/cgroup"; then',
+    '    systemctl --user disable --now open-walnut-web.service > /dev/null 2>&1',
+    `    echo 'Port ${APP_CONSOLE_PORT} is taken by another program on this PC (another Walnut, in a WSL Linux or on Windows). Stop it, then try again.'`,
+    '    exit 1',
+    '  fi',
+    'fi',
+    "printf '  Walnut ............ running\\n'",
+    '',
+  ].join('\n')
+}
+
 export function joinScriptWindows(input: { origin: string; code: string } | { ticket: true }): string {
-  const ticket = 'ticket' in input
-  const head = ticket
-    ? `# Walnut: add this Windows PC to your Walnut machines, with the ticket your Mac shows.
+  return windowsScript('ticket' in input ? { kind: 'ticket' } : { kind: 'link', ...input })
+}
+
+/**
+ * What the Walnut app for Windows (desktop-windows/) runs, hidden, to set Walnut up on the PC:
+ * the invite's steps, then WALNUT_APP_MODE `own` (Walnut of its own, its console in the app's
+ * window) or `join` (this PC joins a Walnut, with WALNUT_JOIN_LINK, the invite link a companion
+ * makes, or WALNUT_JOIN_TICKET). The app has its own Start menu entry, so this makes none and
+ * takes away the "Open Walnut" one an earlier PowerShell join made.
+ */
+export function appScriptWindows(): string {
+  return windowsScript({ kind: 'app' })
+}
+
+type Variant = { kind: 'link'; origin: string; code: string } | { kind: 'ticket' } | { kind: 'app' }
+
+function windowsScript(input: Variant): string {
+  const ticket = input.kind === 'ticket'
+  const app = input.kind === 'app'
+  const origin = input.kind === 'link' ? input.origin.replace(/[^\w.:/-]/g, '') : ''
+  const head = app
+    ? `# Walnut for Windows: what the Walnut app runs, hidden, to set Walnut up on this PC.
+# WALNUT_APP_MODE=own: Walnut of its own, its console in the app's window. WALNUT_APP_MODE=join:
+# this PC joins a Walnut, with WALNUT_JOIN_LINK (an invite link) or WALNUT_JOIN_TICKET.`
+    : ticket
+      ? `# Walnut: add this Windows PC to your Walnut machines, with the ticket your Mac shows.
 # Usage, in PowerShell: $env:WALNUT_JOIN_TICKET='wn1-...'; irm <this file> | iex`
-    : `# Walnut: add this Windows PC to your Walnut machines (an invite from ${input.origin.replace(/[^\w.:/-]/g, '')}).
-# Usage, in PowerShell: irm ${input.origin.replace(/[^\w.:/-]/g, '')}/join/<code>/windows | iex`
-  // The Linux join, as a Linux machine runs it, inside OpenWalnut.
-  // Fetched to a file first: \`curl | sh\` reads a failed download as an empty script and succeeds.
-  const check = ticket
-    ? `  $t = $env:WALNUT_JOIN_TICKET
+      : `# Walnut: add this Windows PC to your Walnut machines (an invite from ${origin}).
+# Usage, in PowerShell: irm ${origin}/join/<code>/windows | iex`
+  // What a stop asks of the person: the invite runs in their PowerShell, the app's in its window.
+  const again = app ? 'try again' : 'paste this command again'
+  const Again = app ? 'Try again' : 'Paste this command again'
+  const banner = app
+    ? `  if ($env:WALNUT_APP_MODE -eq 'own') { Write-Host 'Walnut: setting Walnut up on this PC' } else { Write-Host 'Walnut: adding this PC to your Walnut machines' }`
+    : `  Write-Host 'Walnut: adding this PC to your Walnut machines'`
+  const check = app
+    ? `  $mode = [string]$env:WALNUT_APP_MODE
+  $link = [string]$env:WALNUT_JOIN_LINK
+  $t = [string]$env:WALNUT_JOIN_TICKET
+  if ($mode -eq 'join') {
+    if ($link) { if ($link -notmatch '^https://[A-Za-z0-9.-]+(:[0-9]+)?/join/[A-Za-z0-9-]+$') { Say-Stop 'That is not a Walnut invite link. Paste the link your Mac shows under Settings > Remote Hosts > Add a machine.'; return 1 } }
+    elseif ($t -notmatch '^wn1-[A-Za-z0-9_-]+$') { Say-Stop 'Paste the link your Mac shows under Settings > Remote Hosts > Add a machine.'; return 1 }
+  } elseif ($mode -ne 'own') { Say-Stop 'WALNUT_APP_MODE is own or join.'; return 1 }
+`
+    : ticket
+      ? `  $t = $env:WALNUT_JOIN_TICKET
   if (-not ($t -match '^wn1-[A-Za-z0-9_-]+$')) { Write-Host 'Run the command your Mac shows under Settings > Remote Hosts > Add a machine.' -ForegroundColor Red; return 1 }
 `
-    : ''
-  const handover = ticket
-    ? `  $sh = $env:WALNUT_JOIN_SCRIPT_URL
+      : ''
+  // The Linux join, as a Linux machine runs it, inside OpenWalnut.
+  // Fetched to a file first: \`curl | sh\` reads a failed download as an empty script and succeeds.
+  const ticketInner = `  $sh = $env:WALNUT_JOIN_SCRIPT_URL
   if (-not $sh) { $sh = ${psq(JOIN_SCRIPT_URL)} }
   $inner = 'f=$(mktemp) && curl -fsSL ''' + $sh + ''' -o "$f" && sh "$f" ' + $t + '; c=$?; rm -f "$f"; exit $c'`
-    : `  $inner = 'f=$(mktemp) && curl -fsSL ''${safeLink(input.origin, input.code)}'' -o "$f" && sh "$f"; c=$?; rm -f "$f"; exit $c'`
+  const handover = app
+    ? `  if ($mode -eq 'own') {
+    $inner = @'
+${ownWalnutLinuxScript().trimEnd()}
+'@
+  } elseif ($link) {
+    $inner = 'f=$(mktemp) && curl -fsSL ''' + $link + ''' -o "$f" && sh "$f"; c=$?; rm -f "$f"; exit $c'
+  } else {
+${ticketInner.replace(/^/gm, '  ')}
+  }`
+    : ticket
+      ? ticketInner
+      : `  $inner = 'f=$(mktemp) && curl -fsSL ''${safeLink(input.origin, input.code)}'' -o "$f" && sh "$f"; c=$?; rm -f "$f"; exit $c'`
+  // The Start menu: the invite makes "Open Walnut" (start.ps1 -Show); the app is its own entry.
+  const startMenu = app
+    ? `    Remove-Item -LiteralPath $lnk -Force -ErrorAction SilentlyContinue
+    $lnk = ''`
+    : `    try {
+      $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
+      $s.TargetPath = $ps
+      $s.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $start + '" -Show'
+      $s.WorkingDirectory = $owDir
+      $s.IconLocation = (Join-Path $env:SystemRoot 'System32\\wsl.exe') + ',0'
+      $s.Description = 'Walnut on this PC'
+      $s.Save()
+    } catch { Step 'Start menu' ('not added: ' + $_.Exception.Message) }`
+  const startedWith = app ? 'on (a sign-in item)' : 'on (a sign-in item, and Open Walnut in the Start menu)'
+  const wslOn = app
+    ? 'WSL is on. Restart Windows, then open Walnut again.'
+    : 'WSL is on. Restart Windows, then make a new link on your Mac (Settings > Remote Hosts > Add a machine) and run its command here: this one works only once, for 10 minutes.'
+  const stopped = app
+    ? `if ($mode -eq 'own') { Say-Stop ('Walnut did not start in the ' + $Distro + ' Linux (above). Try again.') } else { Say-Stop ('The join in the ' + $Distro + ' Linux stopped (above). Try again, or make a new link on your Mac if it says the link is used or old.') }; if ($code -eq 3) { $code = 1 }`
+    : `Say-Stop ('The join in the ' + $Distro + ' Linux stopped (above). Run this again, or make a new link on your Mac if it says the link is used or old.')`
+  const done = app
+    ? `if ($mode -eq 'own') { Write-Host ('Walnut runs on this PC, in WSL (the ' + $Distro + ' Linux).') } else { Write-Host ('This PC is one of your Walnut machines now. It runs Walnut in WSL, in the ' + $Distro + ' Linux.') }`
+    : `Write-Host ('This PC runs Walnut in WSL, in the ' + $Distro + ' Linux. To take it off this PC: wsl --unregister ' + $Distro + '; Remove-ItemProperty HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run OpenWalnut; Remove-Item -Recurse "$env:LOCALAPPDATA\\OpenWalnut", "' + $lnk + '"')`
   return `${head}
 # Walnut runs inside WSL (Linux beside Windows), in its own Linux called ${WSL_DISTRO}; your
 # other WSL Linuxes are not touched. No administrator is needed, except to turn WSL on.
@@ -133,7 +265,7 @@ function In-Linux([string]$user, [string]$script) {
 }
 
 function Join-Walnut {
-  Write-Host 'Walnut: adding this PC to your Walnut machines'
+${banner}
 ${check}  # $IsWindows is unset in Windows PowerShell 5.1 and false only in PowerShell on Linux or
   # macOS, where the tests run this script against a stand-in wsl.exe.
   $onWindows = $IsWindows -ne $false
@@ -148,16 +280,16 @@ ${check}  # $IsWindows is unset in Windows PowerShell 5.1 and false only in Powe
     if ($LASTEXITCODE -eq 0) {
       Step 'WSL' 'too old for Walnut: Windows asks you next to let it update (an administrator prompt)'
       $p = $null
-      try { $p = Start-Process wsl.exe -ArgumentList '--update' -Verb RunAs -Wait -PassThru } catch { Say-Stop 'WSL was not updated (the prompt was declined). Run "wsl --update" yourself, then paste this command again.'; return 1 }
+      try { $p = Start-Process wsl.exe -ArgumentList '--update' -Verb RunAs -Wait -PassThru } catch { Say-Stop 'WSL was not updated (the prompt was declined). Run "wsl --update" yourself, then ${again}.'; return 1 }
       $ver = Lines (& wsl.exe --version 2>$null) | Select-Object -First 1
-      if ($LASTEXITCODE -ne 0 -or -not $ver) { Say-Stop 'WSL is still too old. Run "wsl --update" in PowerShell, then paste this command again.'; return 1 }
+      if ($LASTEXITCODE -ne 0 -or -not $ver) { Say-Stop 'WSL is still too old. Run "wsl --update" in PowerShell, then ${again}.'; return 1 }
     } else {
       Step 'WSL' 'not on this PC: Windows asks you next to turn it on (an administrator prompt)'
       $p = $null
-      try { $p = Start-Process wsl.exe -ArgumentList '--install', '--no-distribution' -Verb RunAs -Wait -PassThru } catch { Say-Stop 'WSL was not turned on (the prompt was declined). Paste this command again when you want to.'; return 1 }
+      try { $p = Start-Process wsl.exe -ArgumentList '--install', '--no-distribution' -Verb RunAs -Wait -PassThru } catch { Say-Stop 'WSL was not turned on (the prompt was declined). ${Again} when you want to.'; return 1 }
       # 3010: done, after a restart.
-      if ($p -and $p.ExitCode -notin 0, 3010) { Say-Stop ('Windows could not turn WSL on (wsl --install exited ' + $p.ExitCode + '). Turn on virtualization in the PC''s firmware settings if it is off, or run "wsl --install" yourself, then paste this command again.'); return 1 }
-      Say-Stop 'WSL is on. Restart Windows, then make a new link on your Mac (Settings > Remote Hosts > Add a machine) and run its command here: this one works only once, for 10 minutes.'
+      if ($p -and $p.ExitCode -notin 0, 3010) { Say-Stop ('Windows could not turn WSL on (wsl --install exited ' + $p.ExitCode + '). Turn on virtualization in the PC''s firmware settings if it is off, or run "wsl --install" yourself, then ${again}.'); return 1 }
+      Say-Stop '${wslOn}'
       return 3
     }
   }
@@ -173,12 +305,12 @@ ${check}  # $IsWindows is unset in Windows PowerShell 5.1 and false only in Powe
       Step 'Linux' 'downloading Ubuntu 24.04 for WSL (about 350 MB)'
       $dl = Join-Path $env:TEMP ('openwalnut-rootfs-' + $arch + '.tar.gz')
       [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072
-      try { Invoke-WebRequest -UseBasicParsing -Uri $img.url -OutFile $dl -ErrorAction Stop } catch { Say-Stop ('The Ubuntu download failed: ' + $_.Exception.Message + '. Paste this command again.'); return 1 }
+      try { Invoke-WebRequest -UseBasicParsing -Uri $img.url -OutFile $dl -ErrorAction Stop } catch { Say-Stop ('The Ubuntu download failed: ' + $_.Exception.Message + '. ${Again}.'); return 1 }
       # .NET, not Get-FileHash: that one is a script function of a module a Windows PowerShell
       # started from PowerShell 7 cannot load, and then it is missing (2026-11-02, CI).
       $sha = [Security.Cryptography.SHA256]::Create(); $fs = [IO.File]::OpenRead($dl)
       try { $got = -join ($sha.ComputeHash($fs) | ForEach-Object { $_.ToString('x2') }) } finally { $fs.Dispose(); $sha.Dispose() }
-      if ($got -ne $img.sha) { Remove-Item $dl -Force; Say-Stop 'The Ubuntu download did not match its checksum (a broken or tampered copy); nothing was changed. Paste this command again.'; return 1 }
+      if ($got -ne $img.sha) { Remove-Item $dl -Force; Say-Stop 'The Ubuntu download did not match its checksum (a broken or tampered copy); nothing was changed. ${Again}.'; return 1 }
       $rootfs = $dl
     }
     $dir = Join-Path $env:LOCALAPPDATA ('OpenWalnut\\wsl\\' + $Distro)
@@ -213,7 +345,7 @@ if ! cmp -s /etc/wsl.conf.new /etc/wsl.conf; then mv /etc/wsl.conf.new /etc/wsl.
   Step 'Linux' ($Distro + ' ready (Ubuntu 24.04, user ' + $user + ')')
 
   # 3. Start it with Windows: WSL stops a Linux nobody holds open, so start.ps1 holds it, run
-  # by a sign-in item and by "Open Walnut" in the Start menu (both per user, no administrator).
+  # by a sign-in item (and, from the invite, by "Open Walnut" in the Start menu; per user, no administrator).
   $lnk = ''
   if ($onWindows) {
     $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'Open Walnut.lnk'
@@ -226,21 +358,13 @@ ${startScriptWindows().trimEnd()}
     $ps = Join-Path $env:SystemRoot 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'
     $run = '"' + $ps + '" -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $start + '"'
     New-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'OpenWalnut' -Value $run -PropertyType String -Force | Out-Null
-    try {
-      $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
-      $s.TargetPath = $ps
-      $s.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $start + '" -Show'
-      $s.WorkingDirectory = $owDir
-      $s.IconLocation = (Join-Path $env:SystemRoot 'System32\\wsl.exe') + ',0'
-      $s.Description = 'Walnut on this PC'
-      $s.Save()
-    } catch { Step 'Start menu' ('not added: ' + $_.Exception.Message) }
+${startMenu}
     & $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $start
     $held = $false
     for ($i = 0; $i -lt 30 -and -not $held; $i++) {
       try { ([Threading.Mutex]::OpenExisting('${HOLD_MUTEX}')).Dispose(); $held = $true } catch { Start-Sleep -Milliseconds 500 }
     }
-    if ($held) { Step 'Start with Windows' 'on (a sign-in item, and Open Walnut in the Start menu)' }
+    if ($held) { Step 'Start with Windows' '${startedWith}' }
     else { Step 'Start with Windows' 'not started: a script policy on this PC kept start.ps1 from running, so WSL soon stops Walnut and it does not start with Windows.' }
   }
   Write-Host ''
@@ -251,9 +375,9 @@ ${handover}
   foreach ($k in 'WALNUT_JOIN_INSTALL_URL', 'OPEN_WALNUT_RELEASE_BASE_URL', 'OPEN_WALNUT_VERSION') { if ((Get-Item "env:$k" -ErrorAction SilentlyContinue)) { $pass += "$k/u" } }
   if ($pass.Count) { $env:WSLENV = (@($pass) + @($env:WSLENV | Where-Object { $_ })) -join ':' }
   $code = In-Linux $user ('export XDG_RUNTIME_DIR=/run/user/$(id -u)' + "\`n" + $inner + "\`n")
-  if ($code -ne 0) { Say-Stop ('The join in the ' + $Distro + ' Linux stopped (above). Run this again, or make a new link on your Mac if it says the link is used or old.'); return $code }
+  if ($code -ne 0) { ${stopped}; return $code }
   Write-Host ''
-  Write-Host ('This PC runs Walnut in WSL, in the ' + $Distro + ' Linux. To take it off this PC: wsl --unregister ' + $Distro + '; Remove-ItemProperty HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run OpenWalnut; Remove-Item -Recurse "$env:LOCALAPPDATA\\OpenWalnut", "' + $lnk + '"')
+  ${done}
   return 0
 }
 

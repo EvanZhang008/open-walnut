@@ -6,6 +6,7 @@ name: Release archives
 #   homebrew  the formula over the release's files (scripts/homebrew/formula.mjs),
 #             installed from GitHub with brew, tested, attached as open-walnut.rb
 #   mac-app   Walnut.app carrying the release's darwin file (mac-app.yml)
+#   windows-app  Walnut-Setup-x64.exe, the Windows app, and its latest.yml (windows-app.yml)
 #   archives  the old self-contained Node archives (jobs support, build, publish)
 #
 # By hand: rebuild any released version's formula, app or archives (each upload
@@ -278,6 +279,20 @@ jobs:
     needs: [files, publish]
     if: ${{ !cancelled() && needs.files.outputs.has_files == 'true' }}
     uses: ./.github/workflows/mac-app.yml
+    with:
+      version: ${{ inputs.version }}
+    secrets: inherit
+    permissions:
+      contents: write
+
+  # Walnut for Windows: the installer is the same for every release (Walnut itself comes from
+  # install.sh inside WSL); each release carries one, so releases/latest/download always has it
+  # and the app's updater reads that release's latest.yml.
+  windows-app:
+    name: Windows app for v${{ inputs.version }}
+    needs: [files, publish]
+    if: ${{ !cancelled() && needs.files.outputs.has_files == 'true' }}
+    uses: ./.github/workflows/windows-app.yml
     with:
       version: ${{ inputs.version }}
     secrets: inherit

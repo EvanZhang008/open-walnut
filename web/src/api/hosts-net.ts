@@ -38,6 +38,8 @@ export interface NetInvite {
   command: string;
   /** PowerShell on a Windows PC; absent from a companion older than the Windows join. */
   windowsCommand?: string;
+  /** Walnut for Windows to download (the app takes `link`), once the newest release carries it. */
+  windowsApp?: string;
   expiresAt: number;
   state: 'waiting' | 'joined' | 'expired' | 'failed';
   member?: { id: string; name: string; platform?: string };

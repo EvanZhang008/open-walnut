@@ -13,7 +13,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { joinScriptWindows, startScriptWindows, WSL_DISTRO } from '../../../src/core/net/net-join-ps1.js'
+import { appScriptWindows, joinScriptWindows, ownWalnutLinuxScript, startScriptWindows, WSL_DISTRO } from '../../../src/core/net/net-join-ps1.js'
 import { JOIN_PS1_URL, JOIN_SCRIPT_URL, PS_TLS12, ticketWindowsCommand } from '../../../src/core/net/join-ticket.js'
 import { guardedPath } from '../../setup/exec-guard.js'
 
@@ -88,6 +88,10 @@ describe('scripts/join.ps1', () => {
     expect(ticketWindowsCommand(TICKET)).toBe(`${PS_TLS12}$env:WALNUT_JOIN_TICKET='${TICKET}'; iex ((New-Object Net.WebClient).DownloadString('${JOIN_PS1_URL}'))`)
   })
 
+  it('the Windows app carries what the generator makes', () => {
+    expect(fs.readFileSync(path.join(ROOT, 'desktop-windows/resources/walnut-setup.ps1'), 'utf8')).toBe(appScriptWindows())
+  })
+
   it('never exits the window it runs in, and quotes no link it was given', () => {
     const s = joinScriptWindows({ origin: "https://wn.example.dev'; Remove-Item x; '", code: "ABCD-EFGH-JKLM'" })
     // Everything but URL characters is dropped, so no quote or `;` ever closes the string.
@@ -103,7 +107,7 @@ describe('scripts/join.ps1', () => {
     // 2026-11-02, CI: Get-FileHash was not recognized. These are defined in 5.1's Utility .psm1,
     // not compiled in, so a 5.1 that inherited PowerShell 7's module path never gets them.
     const SCRIPT_FUNCTIONS = /\b(Get-FileHash|New-TemporaryFile|New-Guid|Format-Hex|Import-PowerShellDataFile|ConvertFrom-SddlString)\b/i
-    for (const s of [joinScriptWindows({ ticket: true }), joinScriptWindows({ origin: 'https://wn.example.dev', code: 'ABCD-EFGH-JKLM' }), startScriptWindows()]) {
+    for (const s of [joinScriptWindows({ ticket: true }), joinScriptWindows({ origin: 'https://wn.example.dev', code: 'ABCD-EFGH-JKLM' }), startScriptWindows(), appScriptWindows()]) {
       expect(s.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')).not.toMatch(SCRIPT_FUNCTIONS)
     }
   })
@@ -245,5 +249,71 @@ withPwsh('the Windows invite, run by PowerShell against a stand-in WSL', () => {
     expect(r.status).toBe(1)
     expect(r.out).toContain('not on this PC: Windows asks you next to turn it on (an administrator prompt)')
     expect(r.out).toContain('WSL was not turned on (the prompt was declined).')
+  })
+})
+
+// What the Walnut app for Windows runs, hidden (desktop-windows/, windows-app.yml runs it on a
+// real PC): the invite's steps, then Walnut of its own or a join, with no Start menu entry of its own.
+withPwsh('the Windows app setup, run by PowerShell against a stand-in WSL', () => {
+  it('parses', () => {
+    const r = spawnSync(PWSH!, ['-NoProfile', '-Command', `$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('${path.join(ROOT, 'desktop-windows/resources/walnut-setup.ps1')}',[ref]$null,[ref]$e); $e.Count`], { encoding: 'utf8' })
+    expect(r.stdout.trim()).toBe('0')
+  })
+
+  it('own: readies WSL and the Linux, then installs Walnut there as a service whose console the window shows', () => {
+    standIn()
+    const r = run(appScriptWindows(), { WALNUT_APP_MODE: 'own' })
+    expect(r.status, r.out).toBe(0)
+    expect(r.out).toContain('Walnut: setting Walnut up on this PC')
+    expect(r.out).toContain('  WSL ............... ready (2.3.26.0)')
+    expect(r.out).toContain(`  Linux ............. ${WSL_DISTRO} ready (Ubuntu 24.04, user pc)`)
+    expect(r.out).toContain(`Walnut runs on this PC, in WSL (the ${WSL_DISTRO} Linux).`)
+    const own = r.linux.at(-1)!
+    expect(own.user).toBe('pc')
+    expect(own.script).toBe(`export XDG_RUNTIME_DIR=/run/user/$(id -u)\n${ownWalnutLinuxScript().trimEnd()}\n`)
+    expect(own.script).not.toContain('\r')
+  })
+
+  it.each([
+    ['an invite link', { WALNUT_JOIN_LINK: 'https://wn.example.dev/join/ABCD-EFGH-JKLM' }, `curl -fsSL 'https://wn.example.dev/join/ABCD-EFGH-JKLM' -o "$f" && sh "$f"; c=$?`],
+    ['a ticket', { WALNUT_JOIN_TICKET: TICKET }, `curl -fsSL '${JOIN_SCRIPT_URL}' -o "$f" && sh "$f" ${TICKET}; c=$?`],
+  ])('join with %s: the same Linux join the invite hands over to', (_what, env, inner) => {
+    standIn()
+    const r = run(appScriptWindows(), { WALNUT_APP_MODE: 'join', ...env })
+    expect(r.status, r.out).toBe(0)
+    expect(r.out).toContain('Walnut: adding this PC to your Walnut machines')
+    expect(r.linux.at(-1)!.script).toContain(inner)
+    expect(r.out).toContain('This PC is one of your Walnut machines now.')
+  })
+
+  it.each([
+    ['a link with a quote in it', { WALNUT_APP_MODE: 'join', WALNUT_JOIN_LINK: "https://wn.example.dev/join/ABCD'; Remove-Item x" }, 'That is not a Walnut invite link.'],
+    ['a link on another path', { WALNUT_APP_MODE: 'join', WALNUT_JOIN_LINK: 'https://wn.example.dev/install.sh' }, 'That is not a Walnut invite link.'],
+    ['no link or ticket', { WALNUT_APP_MODE: 'join' }, 'Paste the link your Mac shows'],
+    ['no mode', {}, 'WALNUT_APP_MODE is own or join.'],
+  ])('refuses %s before it changes anything', (_what, env, said) => {
+    standIn()
+    const r = run(appScriptWindows(), env as Record<string, string>)
+    expect(r.status).toBe(1)
+    expect(r.out).toContain(said)
+    expect(r.calls).toEqual([])
+  })
+
+  it('a stop asks to try again in the app, never to paste a command', () => {
+    standIn({ version: 'old' })
+    const r = run(appScriptWindows(), { WALNUT_APP_MODE: 'own' })
+    expect(r.status).toBe(1)
+    expect(r.out).toContain('WSL was not updated (the prompt was declined). Run "wsl --update" yourself, then try again.')
+    expect(appScriptWindows()).not.toMatch(/paste this command/i)
+  })
+
+  it('an own Walnut that does not start says so, and its code comes back', () => {
+    standIn()
+    const wsl = fs.readFileSync(path.join(dir, 'bin/wsl.exe'), 'utf8').replace('echo "the Linux join ran"; env | grep -E \'^WSLENV=\' ; exit 0', 'echo "Walnut did not start (above)."; exit 1')
+    fs.writeFileSync(path.join(dir, 'bin/wsl.exe'), wsl, { mode: 0o755 })
+    const r = run(appScriptWindows(), { WALNUT_APP_MODE: 'own' })
+    expect(r.status).toBe(1)
+    expect(r.out).toContain(`Walnut did not start in the ${WSL_DISTRO} Linux (above). Try again.`)
+    expect(r.out).not.toContain('Walnut runs on this PC')
   })
 })

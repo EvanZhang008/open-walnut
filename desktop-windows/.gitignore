@@ -1,0 +1,6 @@
+node_modules/
+out/
+dist/
+# The root ignores these; the app needs its lockfile (npm ci) and its icon.
+!package-lock.json
+!ui/walnut.png

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'">
+  <title>Walnut</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main>
+  <div class="brand"><img src="walnut.png" alt=""><span>Walnut</span></div>
+
+  <section id="choose">
+    <h1>Set up Walnut on this PC</h1>
+    <p class="lead">Walnut runs in WSL (Linux beside Windows), in a Linux of its own. Your other WSL Linuxes and the rest of this PC stay as they are.</p>
+
+    <div class="card">
+      <h2>Use Walnut on this PC</h2>
+      <p>Your own Walnut: tasks, notes and AI sessions, in this window.</p>
+      <button class="primary" id="own" autofocus>Set up Walnut</button>
+    </div>
+
+    <div class="card">
+      <h2>Add this PC to my Walnut</h2>
+      <p>For a Walnut you already use on a Mac: this PC runs its sessions too. On the Mac, open Settings &gt; Remote Hosts &gt; Add a machine and copy the link.</p>
+      <div class="row">
+        <input type="text" id="invite" placeholder="Paste the link from your Mac" spellcheck="false" autocomplete="off">
+        <button id="join">Add this PC</button>
+      </div>
+      <div class="hint" id="join-host" hidden></div>
+      <div class="error" id="join-error" hidden></div>
+    </div>
+    <p class="hint">Setup takes 5 to 10 minutes and downloads about 400 MB. If WSL is not on yet, Windows asks once for an administrator to turn it on, then for a restart.</p>
+  </section>
+
+  <section id="progress" hidden>
+    <h1 id="progress-title">Setting up Walnut on this PC</h1>
+    <p class="lead" id="progress-lead">This takes 5 to 10 minutes. You can keep using the PC.</p>
+    <div class="card">
+      <ol class="steps">
+        <li data-stage="wsl"><span class="mark"></span><div><div class="name">WSL</div><div class="now">Linux beside Windows</div></div></li>
+        <li data-stage="linux"><span class="mark"></span><div><div class="name">Walnut's own Linux</div><div class="now">Ubuntu 24.04, called OpenWalnut</div></div></li>
+        <li data-stage="start"><span class="mark"></span><div><div class="name">Starts with Windows</div><div class="now">A sign-in item keeps Walnut running</div></div></li>
+        <li data-stage="walnut"><span class="mark"></span><div><div class="name" id="walnut-step">Walnut</div><div class="now" id="walnut-now">Installed in that Linux</div></div></li>
+      </ol>
+      <div id="end" hidden>
+        <p id="end-text"></p>
+        <div class="row"><button class="primary" id="end-button"></button></div>
+      </div>
+      <details id="details">
+        <summary>Details</summary>
+        <pre class="log" id="log"></pre>
+      </details>
+    </div>
+  </section>
+</main>
+<script src="setup.js"></script>
+</body>
+</html>

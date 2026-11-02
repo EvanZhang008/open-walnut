@@ -1,21 +1,31 @@
 /**
- * Whether the newest release carries join.ps1 (JOIN_PS1_URL), the script a Mac with no
- * companion hands a Windows PC: a release from before the Windows join has none, and its line
- * would answer 404 until the next one. Asked at most once an hour (ten minutes after a no),
- * with a 4 s deadline; WALNUT_JOIN_PS1_PUBLISHED=1 or 0 answers for a test.
+ * Whether the newest release carries a file a new machine fetches from it: join.ps1
+ * (JOIN_PS1_URL), the script a Mac with no companion hands a Windows PC, and
+ * Walnut-Setup-x64.exe (WINDOWS_APP_URL), the Windows app. A release from before either has
+ * none, and its link would answer 404 until the next one. Each is asked at most once an hour
+ * (ten minutes after a no), with a 4 s deadline; WALNUT_JOIN_PS1_PUBLISHED and
+ * WALNUT_WINDOWS_APP_PUBLISHED (1 or 0) answer for a test.
  */
-import { JOIN_PS1_URL } from './join-ticket.js'
+import { JOIN_PS1_URL, WINDOWS_APP_URL } from './join-ticket.js'
 
-let known: { at: number; yes: boolean } | null = null
+const known = new Map<string, { at: number; yes: boolean }>()
 
-export async function joinPs1Published(): Promise<boolean> {
-  const forced = process.env.WALNUT_JOIN_PS1_PUBLISHED
+async function published(url: string, forced: string | undefined): Promise<boolean> {
   if (forced === '1' || forced === '0') return forced === '1'
-  if (known && Date.now() - known.at < (known.yes ? 60 : 10) * 60_000) return known.yes
+  const k = known.get(url)
+  if (k && Date.now() - k.at < (k.yes ? 60 : 10) * 60_000) return k.yes
   let yes = false
   try {
-    yes = (await fetch(JOIN_PS1_URL, { method: 'HEAD', redirect: 'follow', signal: AbortSignal.timeout(4000) })).ok
+    yes = (await fetch(url, { method: 'HEAD', redirect: 'follow', signal: AbortSignal.timeout(4000) })).ok
   } catch { /* offline, or GitHub slow: not now */ }
-  known = { at: Date.now(), yes }
+  known.set(url, { at: Date.now(), yes })
   return yes
+}
+
+export function joinPs1Published(): Promise<boolean> {
+  return published(JOIN_PS1_URL, process.env.WALNUT_JOIN_PS1_PUBLISHED)
+}
+
+export function windowsAppPublished(): Promise<boolean> {
+  return published(WINDOWS_APP_URL, process.env.WALNUT_WINDOWS_APP_PUBLISHED)
 }

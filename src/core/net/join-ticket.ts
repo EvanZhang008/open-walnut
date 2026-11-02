@@ -10,6 +10,8 @@ export const TICKET_PREFIX = 'wn1-'
 export const JOIN_SCRIPT_URL = 'https://github.com/EvanZhang008/open-walnut/releases/latest/download/join.sh'
 /** The Windows twin (net-join-ps1.ts), attached to every release beside join.sh. */
 export const JOIN_PS1_URL = 'https://github.com/EvanZhang008/open-walnut/releases/latest/download/join.ps1'
+/** Walnut for Windows (desktop-windows/), the app a PC joins with instead, on every release since it. */
+export const WINDOWS_APP_URL = 'https://github.com/EvanZhang008/open-walnut/releases/latest/download/Walnut-Setup-x64.exe'
 
 export interface JoinTicket {
   mac: string

@@ -139,3 +139,7 @@ if (process.env.WALNUT_DAEMON_BOOT_START === undefined) {
 if (process.env.WALNUT_JOIN_PS1_PUBLISHED === undefined) {
   process.env.WALNUT_JOIN_PS1_PUBLISHED = '0'
 }
+// The same for the Windows app's download (join-ps1-published.ts windowsAppPublished).
+if (process.env.WALNUT_WINDOWS_APP_PUBLISHED === undefined) {
+  process.env.WALNUT_WINDOWS_APP_PUBLISHED = '0'
+}

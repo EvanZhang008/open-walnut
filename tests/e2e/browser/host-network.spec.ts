@@ -262,3 +262,45 @@ test('the relay choice: what each one shares, a companion means its relay, and w
   await pickerShot(page, '8-relay-no-companion')
   expect(errors).toEqual([])
 })
+
+// Once the newest release carries Walnut for Windows, a PC joins with the app: the row says
+// where to get it, gives the link to paste in it, says what Windows asks first (the app is not
+// signed), and keeps the PowerShell line beside it.
+test('Add a machine on Windows: the app, the link to paste in it, and PowerShell beside it', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(e.message))
+  const APP = 'https://github.com/EvanZhang008/open-walnut/releases/latest/download/Walnut-Setup-x64.exe'
+  const WIN = `[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm ${LINK}/windows | iex`
+  const invite = { id: 'ni-4', link: LINK, command: COMMAND, windowsCommand: WIN, windowsApp: APP, state: 'waiting' }
+  await page.route('**/api/hosts/net', (route) => route.fulfill({ json: overview([], { companion: true, relay: 'own' }) }))
+  await page.route('**/api/hosts/net/invites', (route) => route.fulfill({ status: 201, json: { ...invite, expiresAt: Date.now() + 10 * 60_000 } }))
+  await page.route('**/api/hosts/net/invites/ni-4', (route) => route.fulfill({ json: { ...invite, expiresAt: Date.now() + 9 * 60_000 } }))
+
+  await openRemoteHosts(page)
+  await expect(page.getByTestId('host-network-group')).toBeVisible({ timeout: 30_000 })
+  await page.getByTestId('host-network-add').click()
+  const row = page.getByTestId('host-network-invite')
+  await expect(row).toContainText('On the new machine: run this in Terminal on macOS or Linux, or use the Walnut app on Windows:')
+  await expect(page.getByTestId('host-network-windows-app')).toContainText('Download Walnut for Windows on the PC, open it, choose Add this PC to my Walnut, and paste this link:')
+  await expect(page.getByTestId('host-network-windows-app').getByRole('link', { name: 'Walnut for Windows' })).toHaveAttribute('href', APP)
+  await expect(page.getByTestId('host-network-windows-link')).toHaveText(LINK)
+  await expect(row).toContainText('The Windows app is not signed yet: when Windows says “Windows protected your PC”, click More info, then Run anyway.')
+  await expect(row).toContainText('or PowerShell')
+  await expect(page.getByTestId('host-network-windows-command')).toHaveText(WIN)
+  if (page.context().browser()?.browserType().name() === 'chromium') {
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+    await page.getByTestId('host-network-windows-link-copy').click()
+    await expect(page.getByTestId('host-network-windows-link-copy')).toHaveText('Copied')
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(LINK)
+  }
+  // Every line stays inside the row.
+  const rowBox = (await row.boundingBox())!
+  for (const id of ['host-network-command', 'host-network-windows-app', 'host-network-windows-link', 'host-network-windows-command']) {
+    const b = (await page.getByTestId(id).boundingBox())!
+    expect(b.x + b.width, id).toBeLessThanOrEqual(rowBox.x + rowBox.width + 1)
+  }
+  await page.getByTestId('host-network-group').scrollIntoViewIfNeeded()
+  await shot(page, '9-windows-app')
+  expect(errors).toEqual([])
+})

@@ -23,6 +23,7 @@ secrets and the host's MCP servers all work. Hosts reached over SSH keep working
 | Relay | `scripts/cloud/net-relay.sh` | iroh-relay behind Caddy (`/relay`, `/ping`), and address discovery on UDP 7842 |
 | Join | `src/core/net/net-join-script.ts`, `scripts/join.sh`, `src/commands/net.ts` | The script an invite link serves (and the same script with a ticket, attached to every release), and `walnut net join` |
 | Join on Windows | `src/core/net/net-join-ps1.ts`, `scripts/join.ps1` | The PowerShell twin: readies WSL and its own Linux, then runs the join above inside it (below) |
+| Walnut for Windows | `desktop-windows/` | The app a PC downloads and double-clicks: the same steps run hidden, then its own Walnut's console or this PC's join |
 
 ## Joining a machine
 
@@ -95,6 +96,17 @@ TLS 1.0. A Mac with no companion shows its Windows line only once the newest rel
 `join.ps1` (`join-ps1-published.ts`). `.github/workflows/windows-join.yml` runs the line in a
 PowerShell window on a Windows runner, records it, and checks the hold, a WSL stop, and a
 sign-in start.
+
+**The Windows app.** Once the newest release carries Walnut for Windows
+(`desktop-windows/`, `Walnut-Setup-x64.exe`; `join-ps1-published.ts` asks), Add a machine
+also says: download the app on the PC, open it, choose Add this PC to my Walnut and paste the
+link (the companion's invite link, or the ticket). The app runs the same steps hidden
+(`appScriptWindows`, `WALNUT_APP_MODE=join`), shows them as four steps, and needs no
+PowerShell. It is not code signed yet, so Windows asks before its first run ("Windows
+protected your PC": More info, Run anyway); the row says so. The same app also sets up a
+Walnut of the PC's own (`WALNUT_APP_MODE=own`, its console in the app's window), and
+`.github/workflows/windows-app.yml` runs that path on a Windows runner from the download to
+the console, recorded.
 
 The machine then lists as a Linux machine with the PC's name. To take it off the PC:
 `wsl --unregister OpenWalnut`, remove the `OpenWalnut` sign-in item, and delete

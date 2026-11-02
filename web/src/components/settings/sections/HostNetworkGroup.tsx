@@ -167,14 +167,17 @@ export function HostNetworkGroup() {
             ? `${invite.member?.name ?? 'The machine'} joined.`
             : expired || invite.state === 'expired'
               ? 'This link expired.'
-              : invite.windowsCommand
-                ? 'Run this on the new machine, in Terminal on macOS or Linux, in PowerShell on Windows:'
-                : 'Run this in a terminal on the new machine (macOS or Linux):'}
+              : invite.windowsApp
+                ? 'On the new machine: run this in Terminal on macOS or Linux, or use the Walnut app on Windows:'
+                : invite.windowsCommand
+                  ? 'Run this on the new machine, in Terminal on macOS or Linux, in PowerShell on Windows:'
+                  : 'Run this in a terminal on the new machine (macOS or Linux):'}
           help={invite.state === 'waiting' && !expired
             ? <>
                 {`Works once, for 10 minutes (${left(invite.expiresAt - now)} left).  Waiting for the machine...`}
                 {net?.companion === false && <><br />Keep this Mac awake and online until the machine joins.</>}
                 {invite.windowsCommand && <><br />On Windows, Walnut runs in WSL (Linux inside Windows). A PC without WSL asks once for an administrator to turn it on, then a restart and a new link.</>}
+                {invite.windowsApp && <><br />The Windows app is not signed yet: when Windows says &ldquo;Windows protected your PC&rdquo;, click More info, then Run anyway.</>}
               </>
             : undefined}
           control={invite.state === 'waiting' && !expired ? (
@@ -184,9 +187,24 @@ export function HostNetworkGroup() {
                 <code className="settings-addons-mono settings-addons-ellipsis" data-testid="host-network-command" title={invite.command}>{invite.command}</code>
                 <CopyButton text={invite.command} data-testid="host-network-copy" />
               </span>
+              {invite.windowsApp && (
+                <>
+                  <span className="settings-addons-inline">
+                    <span className="settings-addons-muted host-network-os">Windows</span>
+                    <span data-testid="host-network-windows-app">
+                      Download <a href={invite.windowsApp} target="_blank" rel="noreferrer">Walnut for Windows</a> on the PC, open it, choose Add this PC to my Walnut, and paste this link:
+                    </span>
+                  </span>
+                  <span className="settings-addons-inline">
+                    <span className="host-network-os" />
+                    <code className="settings-addons-mono settings-addons-ellipsis" data-testid="host-network-windows-link" title={invite.link}>{invite.link}</code>
+                    <CopyButton text={invite.link} data-testid="host-network-windows-link-copy" />
+                  </span>
+                </>
+              )}
               {invite.windowsCommand && (
                 <span className="settings-addons-inline">
-                  <span className="settings-addons-muted host-network-os">Windows</span>
+                  <span className="settings-addons-muted host-network-os">{invite.windowsApp ? 'or PowerShell' : 'Windows'}</span>
                   <code className="settings-addons-mono settings-addons-ellipsis" data-testid="host-network-windows-command" title={invite.windowsCommand}>{invite.windowsCommand}</code>
                   <CopyButton text={invite.windowsCommand} data-testid="host-network-windows-copy" />
                 </span>

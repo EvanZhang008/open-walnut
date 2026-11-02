@@ -159,10 +159,10 @@ describe('every step of Walnut\'s release workflows that publishes runs the gate
       .filter((f) => /\.ya?ml$/.test(f))
       .filter((f) => Object.values(workflow(f).jobs).some((j) => (j.steps ?? []).some((s) => PUBLISHES.test(s.run ?? ''))))
       .sort()
-    expect(publishing).toEqual(['mac-app.yml', 'release-archives.yml', 'release.yml', 'walnut-net.yml', ...Object.keys(LEFT_OUT)].sort())
+    expect(publishing).toEqual(['mac-app.yml', 'release-archives.yml', 'release.yml', 'walnut-net.yml', 'windows-app.yml', ...Object.keys(LEFT_OUT)].sort())
   })
 
-  for (const file of ['release.yml', 'release-archives.yml', 'mac-app.yml', 'walnut-net.yml']) {
+  for (const file of ['release.yml', 'release-archives.yml', 'mac-app.yml', 'walnut-net.yml', 'windows-app.yml']) {
     it(file, () => {
       const jobs = workflow(file).jobs
       let checked = 0
@@ -189,7 +189,7 @@ describe('every step of Walnut\'s release workflows that publishes runs the gate
   }
 
   it('a job that checks out an older commit runs this commit\'s gate, from harness/', () => {
-    for (const file of ['release.yml', 'release-archives.yml', 'mac-app.yml']) {
+    for (const file of ['release.yml', 'release-archives.yml', 'mac-app.yml', 'windows-app.yml']) {
       for (const [name, job] of Object.entries(workflow(file).jobs)) {
         const steps = (job.steps ?? []) as Array<Step & { uses?: string; with?: Record<string, string> }>
         const gates = steps.filter((s) => (s.run ?? '').includes('release-leak-gate.sh'))

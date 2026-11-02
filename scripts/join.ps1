@@ -106,7 +106,7 @@ if ! cmp -s /etc/wsl.conf.new /etc/wsl.conf; then mv /etc/wsl.conf.new /etc/wsl.
   Step 'Linux' ($Distro + ' ready (Ubuntu 24.04, user ' + $user + ')')
 
   # 3. Start it with Windows: WSL stops a Linux nobody holds open, so start.ps1 holds it, run
-  # by a sign-in item and by "Open Walnut" in the Start menu (both per user, no administrator).
+  # by a sign-in item (and, from the invite, by "Open Walnut" in the Start menu; per user, no administrator).
   $lnk = ''
   if ($onWindows) {
     $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'Open Walnut.lnk'

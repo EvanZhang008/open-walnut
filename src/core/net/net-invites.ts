@@ -10,6 +10,8 @@ import { forgetLocalInvite, localInviteState, makeLocalInvite, resetLocalInvites
 import { validMemberName } from './net-store.js'
 import { noteWhere } from './net-where.js'
 import { companionCall, errorOf, localDaemon, syncNet } from './net-mac.js'
+import { windowsAppPublished } from './join-ps1-published.js'
+import { WINDOWS_APP_URL } from './join-ticket.js'
 
 const POLL_MS = 3_000
 
@@ -19,6 +21,8 @@ export interface InviteState {
   command: string
   /** PowerShell on Windows; absent from a companion older than the Windows join. */
   windowsCommand?: string
+  /** Walnut for Windows to download, once the newest release carries it (with a Windows line only). */
+  windowsApp?: string
   expiresAt: number
   state: 'waiting' | 'joined' | 'expired' | 'failed'
   member?: { id: string; name: string; platform?: string }
@@ -100,6 +104,8 @@ export async function makeInvite(input: { name?: unknown }): Promise<InviteState
       expiresAt: Number(body.expiresAt), state: 'waiting',
     }
   }
+  // A PC joins with the Windows app (it takes the link) once a release carries the app.
+  if (inv.windowsCommand && await windowsAppPublished()) inv.windowsApp = WINDOWS_APP_URL
   inv.timer = setInterval(() => { void pollInvite(inv.id) }, POLL_MS)
   inv.timer.unref?.()
   invites.set(inv.id, inv)

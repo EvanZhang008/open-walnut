@@ -1,0 +1,165 @@
+name: Windows app
+
+# Walnut for Windows (desktop-windows/): the one file a person downloads and double-clicks.
+# On a GitHub Windows runner this builds Walnut-Setup-x64.exe (electron-builder, one-click NSIS,
+# per user), then does on the runner's desktop what a person does, recorded
+# (desktop-windows/test/double-click.ps1): the download in Downloads with the mark of the web,
+# a double-click in Explorer, "Windows protected your PC" (More info, Run anyway) when
+# SmartScreen asks, the Walnut window, "Set up Walnut" (WSL, the OpenWalnut Linux, Walnut as a
+# service there), its console in the window, and a second open from the Start menu. The runner
+# has WSL on and a Linux of its own (as a developer's PC does), which the app must not touch.
+# release-archives.yml calls this with a stable version and `attach`: the installer, its
+# blockmap and latest.yml (what the app's updater reads) then go on that release.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'desktop-windows/**'
+      - 'src/core/net/net-join-ps1.ts'
+      - '.github/workflows/windows-app.yml'
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+      attach:
+        type: boolean
+        default: true
+    secrets:
+      LEAK_SCAN_RULES:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-app-${{ inputs.version || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    runs-on: windows-2025
+    timeout-minutes: 75
+    outputs:
+      app: ${{ steps.has.outputs.app }}
+    steps:
+      - shell: pwsh
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.version && format('v{0}', inputs.version) || '' }}
+      # A release from before the app (a rerun of release-archives for an old tag) has none.
+      - name: Has the app
+        id: has
+        shell: pwsh
+        run: |
+          $has = Test-Path desktop-windows/package.json
+          "app=$($has.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          if (-not $has) { Write-Output '::notice::This commit has no desktop-windows/: nothing to build.' }
+      - uses: actions/setup-node@v4
+        if: steps.has.outputs.app == 'true'
+        with:
+          node-version: 22
+
+      - name: Build Walnut-Setup-x64.exe
+        if: steps.has.outputs.app == 'true'
+        shell: pwsh
+        working-directory: desktop-windows
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          npm ci --no-audit --no-fund
+          # A build for a release carries its version (the updater compares it); a test build is
+          # 0.0.0, which never updates itself.
+          if ($env:VERSION) { npm version $env:VERSION --no-git-tag-version --allow-same-version }
+          npm run dist
+          Get-ChildItem dist -File | Format-Table Name, Length
+
+      # WSL on, with a Linux of the PC's own (not the one Walnut makes).
+      - uses: Vampire/setup-wsl@v7
+        if: steps.has.outputs.app == 'true'
+        with:
+          distribution: Ubuntu-24.04
+
+      - name: ffmpeg, to record the screen
+        if: steps.has.outputs.app == 'true'
+        shell: pwsh
+        run: choco install ffmpeg --no-progress -y | Select-Object -Last 3
+
+      - name: The PC before
+        if: steps.has.outputs.app == 'true'
+        shell: pwsh
+        run: |
+          $env:WSL_UTF8 = '1'
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\windows-app" | Out-Null
+          & { [Environment]::OSVersion.VersionString; wsl.exe --version; wsl.exe -l -v } *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\windows-app\before.txt"
+
+      - name: Download, double-click, set up, recorded
+        if: steps.has.outputs.app == 'true'
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\desktop-windows\test\double-click.ps1" -Installer "$env:GITHUB_WORKSPACE\desktop-windows\dist\Walnut-Setup-x64.exe" -Out "$env:RUNNER_TEMP\windows-app"
+
+      - name: The PC after
+        if: always() && steps.has.outputs.app == 'true'
+        shell: pwsh
+        run: |
+          $env:WSL_UTF8 = '1'
+          $o = "$env:RUNNER_TEMP\windows-app"
+          & {
+            wsl.exe -l -v
+            'sign-in item: ' + (Get-ItemPropertyValue 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name OpenWalnut -ErrorAction SilentlyContinue)
+            'Start menu: ' + (Test-Path (Join-Path ([Environment]::GetFolderPath('Programs')) 'Walnut.lnk'))
+            'old Open Walnut entry: ' + (Test-Path (Join-Path ([Environment]::GetFolderPath('Programs')) 'Open Walnut.lnk'))
+            wsl.exe -d OpenWalnut --cd '~' --exec sh -c 'systemctl --user is-active open-walnut-web.service; "$HOME/.local/share/open-walnut/bin/walnut" --version'
+          } *>&1 | Tee-Object -FilePath "$o\after.txt"
+          Get-Content "$o\result.json" -ErrorAction SilentlyContinue
+          # What a release gets, and what the release gate reads of the app (its asar and setup script).
+          New-Item -ItemType Directory -Force -Path "$o\dist\unpacked" | Out-Null
+          Copy-Item desktop-windows\dist\Walnut-Setup-x64.exe, desktop-windows\dist\Walnut-Setup-x64.exe.blockmap, desktop-windows\dist\latest.yml "$o\dist" -ErrorAction SilentlyContinue
+          Copy-Item desktop-windows\dist\win-unpacked\resources\* "$o\dist\unpacked" -Recurse -ErrorAction SilentlyContinue
+          # The runner's own Linux is still there, untouched.
+          if (-not ((wsl.exe -l -q) -replace "`0", '' -contains 'Ubuntu-24.04')) { throw "the PC's own Linux is gone" }
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.has.outputs.app == 'true'
+        with:
+          name: windows-app
+          path: ${{ runner.temp }}/windows-app
+          retention-days: 14
+
+  attach:
+    needs: app
+    if: ${{ inputs.attach && inputs.version != '' && needs.app.outputs.app == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      # This commit's release gate: the release's own checkout may predate it.
+      - uses: actions/checkout@v5
+        with:
+          path: harness
+          persist-credentials: false
+      # The gate's scanner runs on bun, which the runner image does not have.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-app
+          path: app
+      - name: Attach the installer and its update manifest to v${{ inputs.version }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          LEAK_SCAN_RULES: ${{ secrets.LEAK_SCAN_RULES }}
+        run: |
+          set -eu
+          ls -la app/dist
+          sh harness/scripts/release-leak-gate.sh app/dist
+          gh release upload "v$VERSION" --repo "$GITHUB_REPOSITORY" --clobber \
+            app/dist/Walnut-Setup-x64.exe app/dist/Walnut-Setup-x64.exe.blockmap app/dist/latest.yml

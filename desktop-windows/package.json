@@ -1,0 +1,26 @@
+{
+  "name": "walnut-windows",
+  "productName": "Walnut",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Walnut for Windows: the Walnut window, with Walnut running in WSL",
+  "author": "Open Walnut",
+  "license": "MIT",
+  "homepage": "https://github.com/EvanZhang008/open-walnut",
+  "main": "out/main.js",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "dist": "tsc -p tsconfig.json && node build.mjs && electron-builder --win --x64 --publish never"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.11"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "electron": "44.10.1",
+    "electron-builder": "26.18.0",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'">
+  <title>Walnut</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main>
+  <div class="brand"><img src="walnut.png" alt=""><span>Walnut</span></div>
+  <h1 id="title">This PC is one of your Walnut machines</h1>
+  <p class="lead" id="lead">Your Walnut runs its sessions here when you pick this PC for a task. Walnut keeps running in WSL when this window is closed, and starts when you sign in to Windows.</p>
+  <div class="card">
+    <h2>This PC</h2>
+    <pre class="log" id="status">Reading...</pre>
+    <div class="row spaced">
+      <button id="refresh">Refresh</button>
+      <button class="primary" id="open" hidden>Open your Walnut</button>
+      <button id="setup-again">Set up again</button>
+    </div>
+    <p class="hint" id="open-hint" hidden>Opens your Walnut's companion here. It asks once for a sign-in code from your Mac (Settings &gt; Devices).</p>
+  </div>
+</main>
+<script src="this-pc.js"></script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'">
+  <title>Walnut</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+<main class="center">
+  <section id="waiting">
+    <div class="spinner"></div>
+    <h1 id="waiting-title">Starting Walnut</h1>
+    <p class="lead" id="waiting-lead">Walnut is waking up in its Linux. This takes a few seconds, longer right after Windows starts.</p>
+  </section>
+  <section id="failed" hidden>
+    <h1>Walnut did not start</h1>
+    <p class="lead">Walnut did not answer in 3 minutes. Try again; if it still does not start, set it up again (what it has stays), or restart Windows.</p>
+    <div class="row centered"><button class="primary" id="retry" autofocus>Try again</button><button id="setup-again">Set up again</button></div>
+    <p class="hint" id="log-path"></p>
+  </section>
+</main>
+<script src="loading.js"></script>
+</body>
+</html>

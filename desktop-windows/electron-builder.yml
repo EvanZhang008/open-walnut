@@ -1,0 +1,36 @@
+# Walnut for Windows: one installer, Walnut-Setup-x64.exe. One click, per user, no
+# administrator: it installs into %LOCALAPPDATA%\Programs\Walnut, adds Walnut to the Start menu
+# and the desktop, and opens it. Updates come from the GitHub release (latest.yml beside it).
+appId: dev.openwalnut.walnut
+productName: Walnut
+copyright: Open Walnut contributors
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**
+  - ui/**
+  - package.json
+extraResources:
+  - from: resources/walnut-setup.ps1
+    to: walnut-setup.ps1
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.ico
+  artifactName: Walnut-Setup-${arch}.${ext}
+nsis:
+  oneClick: true
+  perMachine: false
+  runAfterFinish: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Walnut
+  deleteAppDataOnUninstall: false
+  differentialPackage: true
+publish:
+  - provider: github
+    owner: EvanZhang008
+    repo: open-walnut
+    releaseType: release
