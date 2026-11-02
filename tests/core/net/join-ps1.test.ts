@@ -125,6 +125,33 @@ withPwsh('the Windows invite, run by PowerShell against a stand-in WSL', () => {
     expect(joinScriptWindows({ ticket: true })).toContain(`-Value @'\n${startScriptWindows().trimEnd()}\n'@`)
   })
 
+  // 2026-11-02: over SSH, Windows ends every process of the session when it closes (home-pc:
+  // a Start-Process child was gone after the disconnect, a WMI one lived), so a join run over
+  // SSH left nothing holding the Linux, and WSL stopped Walnut until the next sign-in.
+  it.each([
+    ['in a window', undefined, 'Start-Process'],
+    ['over SSH', '192.0.2.5 51234 192.0.2.9 22', 'Invoke-CimMethod'],
+  ])('start.ps1 %s starts the hold so it outlives the session that ran it', (_how, ssh, by) => {
+    const f = path.join(dir, 'start.ps1')
+    fs.writeFileSync(f, startScriptWindows())
+    const log = path.join(dir, 'started')
+    // Functions win over cmdlets of the same name: each records how the hold was started.
+    const probe = [
+      `function Start-Process { param($FilePath, $WindowStyle, $WorkingDirectory, $ArgumentList) Add-Content '${log}' ('Start-Process ' + $FilePath + ' ' + ($ArgumentList -join ' ')) }`,
+      `function Invoke-CimMethod { param($ClassName, $MethodName, $Arguments) Add-Content '${log}' ('Invoke-CimMethod ' + $ClassName + ' ' + $MethodName + ' ' + $Arguments.CommandLine) }`,
+      `& '${f}'`,
+    ].join('; ')
+    const env: Record<string, string | undefined> = { ...process.env, PATH: guardedPath([], '/usr/bin:/bin'), SSH_CONNECTION: ssh, SystemRoot: 'C:\\Windows' }
+    if (!ssh) delete env.SSH_CONNECTION
+    const r = spawnSync(PWSH!, ['-NoProfile', '-NonInteractive', '-Command', probe], { encoding: 'utf8', env })
+    expect(r.status, r.stderr).toBe(0)
+    const started = fs.readFileSync(log, 'utf8').trim().split('\n')
+    expect(started).toHaveLength(1)
+    expect(started[0].startsWith(by + ' ')).toBe(true)
+    expect(started[0]).toContain('-Hold')
+    if (ssh) expect(started[0]).toContain('Win32_Process Create')
+  })
+
   it('a PC with WSL: makes its own Linux once, sets it up, and hands over to the Linux join', () => {
     standIn()
     const r = run(joinScriptWindows({ ticket: true }), { WALNUT_JOIN_TICKET: TICKET })

@@ -69,7 +69,15 @@ if ($Hold) {
   return
 }
 if (-not (Test-Hold)) {
-  Start-Process powershell.exe -WindowStyle Hidden -WorkingDirectory $env:SystemRoot -ArgumentList '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', ('"' + $PSCommandPath + '"'), '-Hold'
+  $holdArgs = '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', ('"' + $PSCommandPath + '"'), '-Hold'
+  if ($env:SSH_CONNECTION) {
+    # Over SSH, Windows ends every process of the session when it closes, and the hold with it.
+    # A process WMI starts is not the session's, so it outlives it (2026-11-02, a PC joined over SSH).
+    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ('"' + $ps + '" ' + ($holdArgs -join ' ')); CurrentDirectory = $env:SystemRoot } | Out-Null
+  } else {
+    Start-Process powershell.exe -WindowStyle Hidden -WorkingDirectory $env:SystemRoot -ArgumentList $holdArgs
+  }
 }
 if ($Show) {
   Write-Host ('Walnut runs on this PC (in WSL, the ' + $Distro + ' Linux) and starts by itself when you sign in to Windows.')
