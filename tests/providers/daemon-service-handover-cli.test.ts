@@ -1,9 +1,10 @@
 import fs from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { requestDaemonServiceHandover, requestRunningDaemonHandover } from '../../src/providers/daemon-service-cli.js'
+import { handoverBusy, requestDaemonServiceHandover, requestRunningDaemonHandover } from '../../src/providers/daemon-service-cli.js'
 import { DaemonServiceHandoverPendingError, DaemonServiceUpdateRefusedError } from '../../src/providers/daemon-service-manager.js'
 
 let runtime: string
@@ -198,6 +199,78 @@ describe('daemon service handover CLI transport', () => {
     expect(error).toBeInstanceOf(Error)
     expect(error).not.toBeInstanceOf(DaemonServiceHandoverPendingError)
     expect((error as Error).message).toBe('active operations')
+    expect(frames).toHaveLength(2)
+  })
+
+  // 2026-11-02: the existing-Mac join stopped at step 2 when the older Walnut's daemon was
+  // busy right after its server started; the install gave up on the first answer.
+  const BUSY = 'service.handover: active ACP workers or relay requests must finish first'
+  const ACTIVE = 'internal daemon error handling service.handover: Daemon has active operations; retry after they finish'
+  const DRAIN = 'Service preparation timed out; existing work is still running, retry after it finishes'
+  it.each([BUSY, ACTIVE])('asks a busy daemon again until it hands over: %s', async (busy) => {
+    let asked = 0
+    await setup((frame) => {
+      if (frame.cmd === 'hello') return hello()
+      if (++asked < 3) return { ok: false, error: busy }
+      alive = false
+      return { ok: true, prepared: true, instanceId: 'old-instance' }
+    })
+    const notes: string[] = []
+    expect(await requestDaemonServiceHandover(runtime, state, { pauseMs: 10, note: (text) => notes.push(text) })).toBe(true)
+    expect(frames.map((frame) => frame.cmd)).toEqual(['hello', 'service.handover', 'hello', 'service.handover', 'hello', 'service.handover'])
+    expect(notes).toHaveLength(1)
+    expect(notes[0]).toContain(busy)
+  })
+
+  it('does not ask again after the daemon held its commands for the drain and gave up', async () => {
+    await setup((frame) => frame.cmd === 'hello' ? hello() : { ok: false, error: DRAIN })
+    await expect(requestDaemonServiceHandover(runtime, state, { pauseMs: 10, note: () => {} })).rejects.toThrow(DRAIN)
+    expect(frames.map((frame) => frame.cmd)).toEqual(['hello', 'service.handover'])
+  })
+
+  it('waits for a starting daemon to write its instance', async () => {
+    await setup((frame) => {
+      if (frame.cmd === 'hello') return hello()
+      alive = false
+      return { ok: true, prepared: true, instanceId: 'old-instance' }
+    })
+    await fs.rm(path.join(runtime, 'daemon.instance'))
+    const later = setTimeout(() => void fs.writeFile(path.join(runtime, 'daemon.instance'), 'old-instance'), 50)
+    try {
+      expect(await requestDaemonServiceHandover(runtime, state, { pauseMs: 20, note: () => {} })).toBe(true)
+    } finally { clearTimeout(later) }
+    expect(frames.map((frame) => frame.cmd)).toEqual(['hello', 'service.handover'])
+  })
+
+  it('asks again when the connection drops before the handover was requested', async () => {
+    let hellos = 0
+    await setup((frame, socket) => {
+      if (frame.cmd === 'hello') {
+        if (++hellos === 1) { socket.close(); return }
+        return hello()
+      }
+      alive = false
+      return { ok: true, prepared: true, instanceId: 'old-instance' }
+    })
+    expect(await requestDaemonServiceHandover(runtime, state, { pauseMs: 10, note: () => {} })).toBe(true)
+    expect(frames.map((frame) => frame.cmd)).toEqual(['hello', 'hello', 'service.handover'])
+  })
+
+  it('gives up on a daemon that stays busy, with its reason and nothing pending', async () => {
+    await setup((frame) => frame.cmd === 'hello' ? hello() : { ok: false, error: BUSY })
+    const error = await requestDaemonServiceHandover(runtime, state, { busyMs: 100, pauseMs: 20, note: () => {} }).catch((reason: Error) => reason)
+    expect(error).not.toBeInstanceOf(DaemonServiceHandoverPendingError)
+    expect((error as Error).message).toBe(BUSY)
+    expect(frames.filter((frame) => frame.cmd === 'service.handover').length).toBeGreaterThan(1)
+  })
+
+  it('never asks again once the daemon may have started the handover', async () => {
+    await setup((frame, socket) => {
+      if (frame.cmd === 'hello') return hello()
+      socket.close()
+    })
+    await expect(requestDaemonServiceHandover(runtime, state, { pauseMs: 10, note: () => {} })).rejects.toBeInstanceOf(DaemonServiceHandoverPendingError)
+    expect(frames.map((frame) => frame.cmd)).toEqual(['hello', 'service.handover'])
   })
 
   it('rechecks disk after a failed RPC because preparation may have published before failing', async () => {
@@ -218,5 +291,45 @@ describe('daemon service handover CLI transport', () => {
     })
     await expect(requestDaemonServiceHandover(runtime, state)).rejects.toBeInstanceOf(DaemonServiceHandoverPendingError)
     expect(frames).toHaveLength(2)
+  })
+})
+
+describe('every refusal a daemon gives a handover is classified', () => {
+  // A daemon that refuses before it changed anything may be asked again (busy: true); any other
+  // refusal ends the install. A new refusal in either twin fails here until someone decides
+  // which it is (2026-11-02: "has active operations" ended the join's install on a busy daemon).
+  const KNOWN: Record<string, boolean> = {
+    'service.handover: daemon mode or instance does not match the requested operation': false,
+    'service.handover: active ACP workers or relay requests must finish first': true,
+    'service.handover: unsupported platform': false,
+    'Service preparation timed out; existing work is still running, retry after it finishes': false,
+    'Daemon is shutting down; retry after reconnecting': false,
+    'Daemon has active operations; retry after they finish': true,
+  }
+  const root = path.resolve(__dirname, '../..')
+  const body = (file: string, start: RegExp) => {
+    const text = readFileSync(path.join(root, file), 'utf8')
+    const from = text.search(start)
+    expect(from, `${file}: ${start}`).toBeGreaterThan(-1)
+    // To the next top-level function: the handover command and nothing after it.
+    const rest = text.slice(from + 1)
+    const end = rest.search(/\n(async )?function /)
+    return text.slice(from, end < 0 ? undefined : from + 1 + end)
+  }
+  const literals = (code: string) => [...code.matchAll(/(?:sendError\(ws, id, |new Error\()'([^']+)'/g)].map((m) => m[1])
+  it.each([
+    ['src/providers/daemon-standalone.ts', /async function cmdServiceHandover\(/],
+    ['src/providers/daemon-source.ts', /async function cmdServiceHandover\(/],
+    ['src/providers/daemon-command-drain.ts', /export function createDaemonCommandDrain\(/],
+  ])('%s', (file, start) => {
+    const found = literals(body(file, start))
+    expect(found.length).toBeGreaterThan(0)
+    for (const text of found) {
+      expect(Object.keys(KNOWN), `unclassified refusal in ${file}: ${text}`).toContain(text)
+      // As the client receives it: alone, or behind the daemon's own error prefix.
+      for (const sent of [text, `internal daemon error handling service.handover: ${text}`]) {
+        expect(handoverBusy(new Error(sent)), sent).toBe(KNOWN[text])
+      }
+    }
   })
 })

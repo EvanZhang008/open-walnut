@@ -94,17 +94,47 @@ export async function daemonReady(runtimeDir: string, expectedExecutable?: strin
   return false
 }
 
-export async function requestDaemonServiceHandover(runtimeDir: string, stateDir: string): Promise<boolean> {
+/** How long an install waits for a busy daemon (its relays, a slow answer) before giving up. */
+export const HANDOVER_BUSY_WAIT_MS = 90_000
+
+/**
+ * A handover the daemon refused before it changed anything, so asking again is safe: it
+ * had a command or a relay of its server still open (every daemon since 0.6.5 says so in
+ * these words, at once), or it did not answer the connection or the hello in time. A server
+ * that just started keeps its daemon busy, and the join's install gave up on the first such
+ * answer (2026-11-02, the existing-Mac CI job). Not the 15 s drain timeout: each try of that
+ * holds every command of the daemon for 15 s.
+ */
+export function handoverBusy(error: unknown): boolean {
+  if (error instanceof DaemonServiceHandoverPendingError) return false
+  const text = error instanceof Error ? error.message : String(error)
+  return /must finish first|has active operations; retry after they finish/.test(text)
+    || (error as { beforeRequest?: boolean })?.beforeRequest === true
+}
+
+export async function requestDaemonServiceHandover(
+  runtimeDir: string, stateDir: string,
+  wait: { busyMs?: number; pauseMs?: number; note?: (text: string) => void } = {},
+): Promise<boolean> {
   const hasPending = () => fs.lstat(path.join(stateDir, 'handover.json')).then(() => true, (error) => {
     if (error.code === 'ENOENT') return false
     throw new DaemonServiceHandoverPendingError(`Cannot inspect pending handover: ${String(error)}`)
   })
-  const pending = await hasPending()
-  try {
-    return await requestRunningDaemonHandover(runtimeDir, stateDir, pending)
-  } catch (error) {
-    if (pending || await hasPending()) throw new DaemonServiceHandoverPendingError(`Service handover is unresolved: ${String(error)}`)
-    throw error
+  const deadline = Date.now() + (wait.busyMs ?? HANDOVER_BUSY_WAIT_MS)
+  let noted = false
+  for (;;) {
+    const pending = await hasPending()
+    try {
+      return await requestRunningDaemonHandover(runtimeDir, stateDir, pending)
+    } catch (error) {
+      if (pending || await hasPending()) throw new DaemonServiceHandoverPendingError(`Service handover is unresolved: ${String(error)}`)
+      if (!handoverBusy(error) || Date.now() >= deadline) throw error
+      if (!noted) {
+        noted = true
+        ;(wait.note ?? ((text) => process.stderr.write(`walnut daemon: ${text}\n`)))(`the running daemon is busy (${error instanceof Error ? error.message : String(error)}); asking again`)
+      }
+      await delay(wait.pauseMs ?? 2000)
+    }
   }
 }
 
@@ -129,8 +159,11 @@ export async function requestRunningDaemonHandover(runtimeDir: string, stateDir:
       if (updating) throw new Error('The managed daemon is not running; update was not attempted')
       return pending
     }
+    // A daemon still starting has its pid and port written before its instance.
     const [portText, instanceId] = await Promise.all(['daemon.port', 'daemon.instance']
-      .map((name) => fs.readFile(path.join(runtimeDir, name), 'utf8').then((value) => value.trim())))
+      .map((name) => fs.readFile(path.join(runtimeDir, name), 'utf8').then((value) => value.trim(), (error: NodeJS.ErrnoException) => {
+        throw error.code === 'ENOENT' ? Object.assign(error, { beforeRequest: true }) : error
+      })))
     const port = Number(portText)
     if (!Number.isInteger(port) || port <= 0 || port > 65535 || !instanceId) throw new Error('Invalid daemon handover endpoint')
     const socket = connection = new WebSocket(`ws://127.0.0.1:${port}`, { maxPayload: 128 * 1024 })
@@ -143,11 +176,11 @@ export async function requestRunningDaemonHandover(runtimeDir: string, stateDir:
         else resolve()
       }
       const opened = () => finish()
-      const closed = () => finish(new Error('Daemon handover connection closed'))
-      const timer = setTimeout(() => finish(new Error('Daemon handover connection timed out')), 1500)
+      const closed = () => finish(Object.assign(new Error('Daemon handover connection closed'), { beforeRequest: true }))
+      const timer = setTimeout(() => finish(Object.assign(new Error('Daemon handover connection timed out'), { beforeRequest: true })), 5000)
       socket.once('open', opened)
       socket.once('close', closed)
-      socket.on('error', finish)
+      socket.on('error', (error) => finish(Object.assign(error, { beforeRequest: true })))
     })
     let nextId = 0
     const rpc = (command: Record<string, unknown>, timeout: number) => new Promise<Record<string, unknown>>((resolve, reject) => {
@@ -172,7 +205,7 @@ export async function requestRunningDaemonHandover(runtimeDir: string, stateDir:
       socket.once('error', failed)
       socket.send(JSON.stringify({ ...command, id }))
     })
-    const hello = await rpc({ cmd: 'hello' }, 1500)
+    const hello = await rpc({ cmd: 'hello' }, 5000).catch((error: Error) => { throw Object.assign(error, { beforeRequest: true }) })
     if (hello.ok !== true || hello.instanceId !== instanceId) throw new Error('Daemon instance changed before service handover')
     const managed = (hello.cronSupervision as { managed?: unknown })?.managed === true
     if (updating && !managed) throw new Error('Only a managed daemon can prepare a service update')

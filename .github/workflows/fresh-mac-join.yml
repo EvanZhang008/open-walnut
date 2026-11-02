@@ -43,6 +43,16 @@ on:
         type: choice
         options: [this-commit, published]
         default: this-commit
+      macs:
+        description: 'Which Macs'
+        type: choice
+        options: ['["fresh","existing","existing-swept"]', '["existing","existing-swept"]']
+        default: '["fresh","existing","existing-swept"]'
+      copies:
+        description: 'Copies of each Mac, to catch a join that fails only now and then'
+        type: choice
+        options: ['[1]', '[1,2,3]', '[1,2,3,4,5,6]']
+        default: '[1]'
 
 permissions:
   contents: read
@@ -56,13 +66,14 @@ env:
 
 jobs:
   join:
-    name: ${{ matrix.mac }} Mac
+    name: ${{ matrix.mac }} Mac${{ matrix.copy > 1 && format(' {0}', matrix.copy) || '' }}
     runs-on: macos-26
     timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
-        mac: [fresh, existing, existing-swept]
+        mac: ${{ fromJSON(inputs.macs || '["fresh","existing","existing-swept"]') }}
+        copy: ${{ fromJSON(inputs.copies || '[1]') }}
     env:
       WALNUT_FROM: ${{ inputs.walnut || 'this-commit' }}
       # An older Walnut close to what long-running Macs have (October 6).
@@ -115,11 +126,15 @@ jobs:
         run: |
           mkdir -p "$OUT"
           npm i -g "open-walnut@$OLD_WALNUT" > "$OUT/old-install.log" 2>&1 || { tail -n 40 "$OUT/old-install.log"; exit 1; }
-          nohup walnut web --port 39456 > "$OUT/old-server.log" 2>&1 &
+          # A server that has run for weeks updated itself only when it started, so it is still
+          # the older version. Started here, it would install today's nightly first, and the job
+          # would test that instead (2026-11-02: every existing-Mac job ran 0.6.24, not 0.6.5).
+          WALNUT_NO_AUTO_UPDATE=1 nohup walnut web --port 39456 > "$OUT/old-server.log" 2>&1 &
           echo $! > "$OUT/old-server.pid"
           for i in $(seq 1 90); do [ -s /tmp/open-walnut/daemon.port ] && curl -fsS -m 5 http://127.0.0.1:39456/api/config >/dev/null 2>&1 && break; sleep 2; done
           curl -fsS -m 5 http://127.0.0.1:39456/api/config | head -c 300; echo
           command -v walnut > "$OUT/old-walnut.path"
+          walnut --version | grep -F "$OLD_WALNUT" || { walnut --version; echo "::error::the older Walnut is not $OLD_WALNUT (it updated itself)"; exit 1; }
           shasum -a 256 "$(cat "$OUT/old-walnut.path")" | tee "$OUT/old-walnut-before.sha"
           echo "old daemon: $(cat /tmp/open-walnut/daemon.version 2>/dev/null) pid $(cat /tmp/open-walnut/daemon.pid 2>/dev/null)"
           [ -s /tmp/open-walnut/daemon.port ] || { tail -n 60 "$OUT/old-server.log"; echo "::error::the older Walnut started no daemon"; exit 1; }
@@ -281,6 +296,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: fresh-mac-join-${{ matrix.mac }}
+          name: fresh-mac-join-${{ matrix.mac }}${{ matrix.copy > 1 && format('-{0}', matrix.copy) || '' }}
           path: ${{ runner.temp }}/fresh-mac
           retention-days: 7
