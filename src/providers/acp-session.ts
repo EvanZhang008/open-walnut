@@ -90,6 +90,7 @@ import {
   rollbackSessionQueueMigration,
 } from '../core/session-message-queue.js'
 import { BudgetCheckingError, BudgetPausedError } from './delivery-failure.js'
+import { piNodeFor } from './pi-adapter-node.js'
 
 const BUNDLED_ADAPTER_ENTRIES: Partial<Record<SessionEngine, string>> = {
   codex: 'node_modules/@agentclientprotocol/codex-acp/dist/index.js',
@@ -1375,7 +1376,7 @@ export class AcpSession {
     const stage = (name: string): void => { const now = Date.now(); stages[name] = now - last; last = now }
     await this.seedReplayCursor()
     stage('cursorMs')
-    const artifacts = await this.resolveArtifacts()
+    let artifacts = await this.resolveArtifacts()
     stage('artifactsMs')
     // Fail closed BEFORE touching the daemon: a missing provider executable is
     // a configuration error, not a transport one. 'cli' engines already got
@@ -1389,6 +1390,11 @@ export class AcpSession {
     const providerExecutable = !this.cfg.artifacts && !this.remote && engineCaps(this.engineId).acpAdapter?.source === 'bundled'
       ? resolveEngineExecutable({ engine: this.engineId, cwd: this.cfg.cwd, env: mergeAcpSpawnEnv(process.env, overlay) })
       : undefined
+    // pi's adapter runs on the Node that runs pi, not on a second boot of this file (pi-adapter-node.ts).
+    if (this.engineId === 'pi' && providerExecutable && 'adapterCmd' in artifacts) {
+      const node = await piNodeFor(providerExecutable, mergeAcpSpawnEnv(process.env, overlay))
+      if (node) artifacts = { ...artifacts, adapterCmd: [node, ...artifacts.adapterCmd.slice(1)] }
+    }
     stage('engineEnvMs')
 
     // Concurrent with ensureConn: the mount list is a small config read and must
