@@ -61,7 +61,8 @@ quietRouter.put('/', async (req: Request, res: Response, next: NextFunction) => 
     const own = testRunPrefsWrite<RunQuiet>('quiet', () => ({}))
     if (own) {
       own.hold = {
-        since: own.hold ? own.hold.since : Date.now(),
+        // As setQuiet: replacing a live hold keeps when quiet began; a lapsed one starts over.
+        since: own.hold && (own.hold.until === undefined || own.hold.until > Date.now()) ? own.hold.since : Date.now(),
         allowPermissions: body.allowPermissions !== false,
         ...(typeof body.minutes === 'number' ? { until: Date.now() + Math.round(body.minutes * 60_000) } : {}),
       }
