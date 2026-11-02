@@ -28,7 +28,7 @@ interface NotesBubbleMenuProps {
    *  range comes from the editor's own state: the DOM selection is not to be
    *  trusted from a menu button (ProseMirror may have collapsed it already). */
   onAskHere?: (range: Range) => void;
-  /** `Comment`: a comment kept beside the doc (its range and its text), Google Docs style. */
+  /** `Comment`: a comment on the doc (its range and its text), its box opening at the words. */
   onComment?: (range: Range, text: string) => void;
 }
 
@@ -134,7 +134,7 @@ export function NotesBubbleMenu({ editor, onAsk, onAskHere, onComment }: NotesBu
             // The comment's box takes the keyboard; the menu goes with the selection.
             editor.commands.setTextSelection(to);
           }}
-          title="Comment on this passage, beside the doc"
+          title="Comment on this passage, right at its words"
         >Comment</button>
       )}
       {onAskHere && (

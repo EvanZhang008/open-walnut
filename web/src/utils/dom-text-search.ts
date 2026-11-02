@@ -14,6 +14,8 @@
  * still matches.
  */
 
+import { keepWindowHighlightRepaints } from './highlight-repaint';
+
 /** Highlight registry names. Static because ::highlight(<name>) CSS rules
  *  cannot be parameterized — one search surface owns them at a time, which
  *  `claimSearchOwner` below enforces. */
@@ -169,6 +171,7 @@ export function applyHighlights(win: Window, name: string, ranges: Range[], prio
   const HighlightCtor = (win as unknown as { Highlight?: new (...r: Range[]) => unknown }).Highlight;
   const registry = cssAny?.highlights;
   if (!registry || !HighlightCtor) return () => {};
+  keepWindowHighlightRepaints(win);
   if (!ranges.length) { registry.delete(name); return () => {}; }
   const highlight = new HighlightCtor(...ranges);
   // Find paints above question marks (2 and up), as in page-find.ts.
@@ -182,12 +185,14 @@ export function applyHighlights(win: Window, name: string, ranges: Range[], prio
 
 export function clearHighlights(win: Window, name: string): void {
   const cssAny = (win as unknown as { CSS?: { highlights?: Map<string, unknown> } }).CSS;
+  keepWindowHighlightRepaints(win);
   cssAny?.highlights?.delete(name);
 }
 
 /** Inject the ::highlight paint rules into a foreign document (the HTML
  *  preview iframe). The main document gets the same rules from globals.css. */
 export function ensureHighlightStyles(doc: Document): void {
+  keepWindowHighlightRepaints(doc.defaultView);
   if (doc.querySelector('style[data-walnut-search-style]')) return;
   const style = doc.createElement('style');
   style.setAttribute('data-walnut-search-style', '1');

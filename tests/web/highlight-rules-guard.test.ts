@@ -237,6 +237,8 @@ describe('ratchets', () => {
     'hooks/useQuotePinPaint.ts': [],
     'components/sessions/SessionDiffView.tsx': [],
     'utils/highlight-rules.ts': [],
+    // Patches registries so a removed highlight repaints in WebKit; paints nothing.
+    'utils/highlight-repaint.ts': [],
   };
 
   it('every file that reaches a highlight registry is listed', () => {

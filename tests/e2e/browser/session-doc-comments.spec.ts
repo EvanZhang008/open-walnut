@@ -219,7 +219,11 @@ async function expectInPlace(view: Locator, card: Locator, root: Locator, needle
   expect(cb.x).toBeLessThanOrEqual(Math.max(lineLeft, vb.x + 8) + 1)
   await expect(view).not.toHaveClass(/fv-doc-comments-wide/)
   // The doc keeps its width: its scroller runs to the view's right edge.
-  const textRight = offset.x + await root.evaluate((el) => (el.closest('.cm-scroller, .fv-wysiwyg-editor, .fv-md-preview') ?? el).getBoundingClientRect().right)
+  // (In the HTML preview, the frame: the page's own body may keep a max width.)
+  const inFrame = offset.x !== 0 || offset.y !== 0
+  const textRight = inFrame
+    ? (await view.locator('iframe').first().evaluate((el) => el.getBoundingClientRect().right))
+    : await root.evaluate((el) => (el.closest('.cm-scroller, .fv-wysiwyg-editor, .fv-md-preview') ?? el).getBoundingClientRect().right)
   expect(vb.x + vb.width - textRight, 'nothing reserved beside the doc').toBeLessThan(24)
 }
 
@@ -237,7 +241,7 @@ async function clickWords(page: Page, root: Locator, needle: string): Promise<vo
   await page.mouse.click(r.left + Math.min(40, (r.right - r.left) / 2), r.top + r.height / 2)
 }
 
-test.describe('Doc comments: beside the doc, in its sidecar, to the AI with the next message', () => {
+test.describe('Doc comments: at their words, in their sidecar, to the AI with the next message', () => {
   test.describe.configure({ mode: 'serial' })
   test.setTimeout(300_000)
   let docPath = ''
@@ -470,6 +474,8 @@ test.describe('Doc comments: beside the doc, in its sidecar, to the AI with the 
     await expect(view.getByTestId('doc-comment-draft-input')).toBeFocused()
     await page.keyboard.press('Escape')
     await expect(view.getByTestId('doc-comment-draft')).toHaveCount(0)
+    // Its words are not left painted as if it were still open.
+    await expect.poll(() => painted(page, 'walnut-doc-comment-current')).toBe(0)
     await expect(chip(view)).toHaveText('1 comment')
     await expect.poll(async () => (await fs.readFile(sidecarPath, 'utf8')).match(/^## c-/gm)?.length).toBe(1)
 

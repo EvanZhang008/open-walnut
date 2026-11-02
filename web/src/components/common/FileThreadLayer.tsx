@@ -18,6 +18,7 @@ import {
   forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type RefObject,
 } from 'react';
 import { useSessionThreadsApi } from '@/contexts/SessionThreadsContext';
+import { keepWindowHighlightRepaints } from '@/utils/highlight-repaint';
 import {
   byUrgency, liveBarsFor, markFlagsOf, markHighlightName, markPriority, useAnsweringKeys, useThreadMarks,
 } from '@/hooks/useThreadMarks';
@@ -206,6 +207,7 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     const names = new Set<string>();
     const clear = () => {
       const w = doc?.defaultView as (Window & { CSS?: { highlights?: Map<string, unknown> } }) | null | undefined;
+      keepWindowHighlightRepaints(w);
       for (const n of names) w?.CSS?.highlights?.delete(n);
       names.clear();
       frameMarks.current = [];
@@ -229,6 +231,7 @@ export const FileThreadLayer = forwardRef<FileThreadLayerHandle, FileThreadLayer
     const paint = () => {
       if (!doc?.body) return;
       const w = doc.defaultView as (Window & { CSS?: { highlights?: Map<string, unknown> }; Highlight?: new (...r: Range[]) => { priority: number } }) | null;
+      keepWindowHighlightRepaints(w);
       const reg = w?.CSS?.highlights;
       const Ctor = w?.Highlight;
       const out: ThreadMark[] = [];

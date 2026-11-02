@@ -13,6 +13,7 @@
  * key, a page swap) never rewrites the sheet.
  */
 import highlightsCss from '@/styles/highlights.css?raw';
+import { keepHighlightRepaints } from './highlight-repaint';
 
 export interface HighlightRuleBlock {
   family: string;
@@ -212,6 +213,8 @@ export function installHighlightRules(doc: Document = document, css: string = hi
   const win = doc.defaultView as (Window & { CSS?: { highlights?: RegistryLike } }) | null;
   const registry = win?.CSS?.highlights;
   if (!registry || typeof registry.set !== 'function') return;
+  // WebKit leaves a removed highlight painted unless it is emptied first.
+  keepHighlightRepaints(registry);
   const style = doc.createElement('style');
   style.dataset.walnutHighlights = '';
   doc.head.appendChild(style);

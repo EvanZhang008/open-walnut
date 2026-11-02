@@ -1,5 +1,5 @@
 /**
- * One comment on a document, in the comment column beside it (DocCommentsLayer):
+ * One comment on a document, in place under its words (DocCommentsLayer):
  * its thread (the user's comment, the AI's replies, the user's replies), a Reply
  * box and Resolve / Reopen. Folded to its first post until it is the current one.
  * The draft of a new comment is the same card with only the box.

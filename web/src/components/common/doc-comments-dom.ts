@@ -6,6 +6,7 @@
  */
 import { docTextLocator, type DocTextLocator } from '@/utils/doc-comment-anchor';
 import type { TextQuote } from '@/utils/text-quote-anchor';
+import { keepWindowHighlightRepaints } from '@/utils/highlight-repaint';
 
 export const HL_DOC_COMMENT = 'walnut-doc-comment';
 export const HL_DOC_COMMENT_CURRENT = 'walnut-doc-comment-current';
@@ -34,6 +35,7 @@ export function paintFrame(doc: Document | null, open: Range[], current: Range[]
   const reg = w?.CSS?.highlights;
   const Ctor = w?.Highlight;
   if (!doc || !reg || !Ctor) return;
+  keepWindowHighlightRepaints(w);
   if (!doc.getElementById(FRAME_STYLE_ID) && doc.head) {
     const style = doc.createElement('style');
     style.id = FRAME_STYLE_ID;
