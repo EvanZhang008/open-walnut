@@ -12,7 +12,7 @@
  */
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
-import { REAL_PANEL } from './draft-helpers'
+import { REAL_PANEL, leaveFullscreen } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { call, kanbanApi, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
 import { openSessionBoard } from './board-view-helpers'
@@ -54,6 +54,9 @@ async function openHome(page: Page): Promise<Locator> {
   await isolateUiPrefs(page)
   await presetPanelView(page, { section: 'all', project: team.project })
   await page.route('https://tickets.example.test/**', (r) => r.fulfill({ status: 200, contentType: 'text/html', body: '<p>ticket</p>' }))
+  // A panel left in full screen with its Board open comes back so after a load (panel-view.ts):
+  // leave it first, as the user would, so the task list takes the next click.
+  await leaveFullscreen(page)
   await page.setContent(`<a href="${API}/">Open Walnut</a>`)
   await page.getByRole('link', { name: 'Open Walnut', exact: true }).click()
   const row = page.locator(`.todo-panel-item[data-task-id="${team.leader}"]`)
@@ -217,8 +220,7 @@ test('R3-03: the Board opened after a reload never flashes a Changed count or a 
   })
   for (let i = 0; i < 3; i++) {
     await page.reload()
-    // A reload opens the column on its chat, as every split view does: the user opens the Board again.
-    await page.locator(`${REAL_PANEL}[data-session-id="${team.leaderSid}"]`).getByTestId('session-board-chip').click({ timeout: 30_000 })
+    // The column comes back with its Board open, as it was left (panel-view.ts): no click opens it.
     await expect(page.getByTestId('task-board-pane').getByTestId('board-kanban')).toBeVisible({ timeout: 20_000 })
     await expect(page.getByTestId('task-board-pane').locator('[data-testid="kanban-card-summary"]').first()).toBeVisible({ timeout: 20_000 })
     await page.waitForTimeout(2500)

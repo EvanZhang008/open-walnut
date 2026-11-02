@@ -101,6 +101,39 @@ export const REAL_PANEL = `.main-page-session-column ${REAL_PANEL_IN_COLUMN}`
  */
 export const DRAFT_PANEL = '.main-page-session-column .draft-session-panel'
 
+/** Where the tab keeps the place that is full screen (web/src/hooks/fullscreen-owner.ts). */
+const FULLSCREEN_PLACE_KEY = 'open-walnut-view:tab.fullscreen'
+
+/**
+ * Leave full screen the way the user does: the full-screen panel's own "Exit full screen" control.
+ *
+ * Full screen and a panel's split view (Board, Files, Changed, Terminal, ...) come back after a
+ * reload or another visit as they were left (hooks/fullscreen-owner.ts,
+ * components/sessions/panel-view.ts; 2026-11-02, the user asked for it), and opening a split
+ * view on a wide window enters full screen. So a test that opened one and then loads Home again
+ * gets that panel back over the task list, and its next row click is refused ("main-page-right
+ * subtree intercepts pointer events"). Leaving full screen also closes the split view
+ * (SessionPanel), so the next visit starts as an untouched Home did before.
+ *
+ * Call it on the page before a reload or a second visit whose test is about something else, and
+ * on a second window of the same browser context once it loaded: it shares the first one's
+ * storage, so its panel comes back full screen too (tests/scripts/browser-spec-ratchets.test.ts
+ * checks). On a page just loaded it waits for the kept full screen to come back first. Nothing
+ * full screen: it does nothing.
+ */
+export async function leaveFullscreen(page: Page): Promise<void> {
+  const sheet = page.locator('.session-panel.open-walnut-fullscreen:not(.open-walnut-fullscreen-away)')
+  // about:blank (or a setContent page) has no storage of the app: nothing is kept there.
+  const kept = await page.evaluate((key) => {
+    try { return JSON.parse(localStorage.getItem(key) ?? 'null') as unknown } catch { return null }
+  }, FULLSCREEN_PLACE_KEY).catch(() => null)
+  // The panel binds its kept place when it mounts; a place on no panel of this page never comes.
+  if (kept) await sheet.first().waitFor({ state: 'visible', timeout: 15_000 }).catch(() => undefined)
+  if ((await sheet.count()) === 0) return
+  await sheet.first().locator('.session-panel-close[aria-label="Exit full screen"]').first().click()
+  await expect(sheet).toHaveCount(0, { timeout: 10_000 })
+}
+
 /**
  * Open the Ask Walnut slot's ≡ drawer and return it.
  *

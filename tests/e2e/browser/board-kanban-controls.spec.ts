@@ -20,7 +20,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
-import { REAL_PANEL } from './draft-helpers'
+import { REAL_PANEL, leaveFullscreen } from './draft-helpers'
 import { stateCountLabel } from '../../../src/core/user-status'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import {
@@ -74,6 +74,9 @@ async function handBackOnBoard(): Promise<void> {
 }
 
 async function openHome(page: Page): Promise<void> {
+  // A panel left in full screen with its Board open comes back so after a load (panel-view.ts):
+  // leave it first, as the user would, so the task list takes the next click.
+  await leaveFullscreen(page)
   await page.setContent(`<a href="${BASE}/">Open Walnut</a>`)
   await page.getByRole('link', { name: 'Open Walnut', exact: true }).click()
   await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 90_000 })

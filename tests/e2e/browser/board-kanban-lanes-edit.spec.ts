@@ -19,7 +19,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
-import { REAL_PANEL } from './draft-helpers'
+import { REAL_PANEL, leaveFullscreen } from './draft-helpers'
 import { PHONE_QUERY, openSessionBoard } from './board-view-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import {
@@ -56,6 +56,9 @@ test.afterAll(async () => {
 })
 
 async function openHome(page: Page): Promise<void> {
+  // A panel left in full screen with its Board open comes back so after a load (panel-view.ts):
+  // leave it first, as the user would, so the task list takes the next click.
+  await leaveFullscreen(page)
   await page.setContent(`<a href="${BASE}/">Open Walnut</a>`)
   await page.getByRole('link', { name: 'Open Walnut', exact: true }).click()
   await expect(page.locator('.todo-panel')).toBeVisible({ timeout: 90_000 })
@@ -186,8 +189,9 @@ test('C20: Delete lane says where its cards go and puts them there', async ({ pa
   await dialog.getByRole('button', { name: 'Delete lane' }).click()
   await expect.poll(() => laneIds(pane)).not.toContain('mitigating')
   for (const id of moved) await expect(card(pane, id)).toHaveAttribute('data-lane', 'investigating')
+  // The pane drops the lane before its write lands: wait for the stored board, not one read.
+  await expect.poll(async () => (await boardKanban()).lanes_effective.map((l) => l.id)).not.toContain('mitigating')
   const after = await boardKanban()
-  expect(after.lanes_effective.map((l) => l.id)).not.toContain('mitigating')
   for (const id of moved) expect(after.cards[id]?.lane).toBeUndefined()
 })
 

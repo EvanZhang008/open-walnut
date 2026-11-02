@@ -11,6 +11,7 @@ import { test, expect } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fixtureHome, readClaudeSettings } from './engine-settings-helpers'
+import { leaveFullscreen } from './draft-helpers'
 import {
   HOST_LABEL, LOCAL_SCOPE_NOTE, NEXT_TURN_SENTENCE, NEW_SOURCES, REPO, allItems, captureView, claimUserFile, clickComposerOutside,
   clickOutside, composerTextarea, dialogOf, engineSettingsRow, expectInViewport, expectSideBySide, filterBox, fixtureRoot, makeGitProject,
@@ -449,6 +450,9 @@ test.describe('composer "+" -> Engine settings popover', () => {
     // The dialog is not required to close here (the spec asks only for the Files view); note what it does.
     test.info().annotations.push({ type: 'observation', description: `dialog after Files open: ${await dialog.count()} on screen` })
     if (await dialog.count()) await page.keyboard.press('Escape')
+    // The Files view opened in full screen and would come back so after the reload (panel-view.ts);
+    // the shots below are of the popover on the column, so leave it first.
+    await leaveFullscreen(page)
     await page.reload()
     await expect(plusButton(panel)).toBeVisible({ timeout: 30_000 })
 

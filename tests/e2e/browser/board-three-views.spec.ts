@@ -14,7 +14,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Browser, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
-import { REAL_PANEL } from './draft-helpers'
+import { REAL_PANEL, leaveFullscreen } from './draft-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { call, kanbanApi, seedKanbanTeam, type KanbanApi, type KanbanTeam } from './board-kanban-fixture'
 
@@ -65,6 +65,9 @@ test.afterAll(async () => {
 async function openBoard(page: Page): Promise<Locator> {
   await isolateUiPrefs(page)
   await presetPanelView(page, { section: 'all', project: team.project })
+  // A panel left in full screen with its Board open comes back so after a load (panel-view.ts):
+  // leave it first, as the user would, so the task list takes the next click.
+  await leaveFullscreen(page)
   await page.setContent(`<a href="${API}/">Open Walnut</a>`)
   await page.getByRole('link', { name: 'Open Walnut', exact: true }).click()
   const row = page.locator(`.todo-panel-item[data-task-id="${team.leader}"]`)

@@ -1177,3 +1177,187 @@ describe('a baseline of the task list read beside the attention card', () => {
     expect(offendersOf(`x\n${shared}`)).toHaveLength(1)
   })
 })
+
+describe('a test that loads a page again after it opened full screen or a split view', () => {
+  // Full screen and a session panel's split view (Board, Files, Changed, Terminal, ...) come back
+  // after a reload or another visit as they were left (hooks/fullscreen-owner.ts,
+  // components/sessions/panel-view.ts; 2026-11-02, the user asked for it), and a split view opens
+  // in full screen on a wide window. Tests written before it loaded Home again expecting the old
+  // reset, and the panel back in full screen took the click meant for a task row (2026-11-02:
+  // board-kanban-controls C80, board-kanban-lanes-edit C18, board-kanban-prompt C34). Such a test
+  // leaves full screen first (`leaveFullscreen` in draft-helpers.ts, which closes the split too),
+  // unless what it checks after the load is the kept view itself (KEEPS below, with why).
+  // A click on a split view's chip or on Full screen; a line that sees a split view open.
+  const OPEN_CLICK = /session-board-chip|session-action-chip(?!-)|data-header-id="?(?:changed|files|terminal|board)\b|getByRole\('button', \{ name: ['"](?:Changed|Files|Terminal|Board)['"]|Expand session to full screen|host-row-expand/
+  const OPEN_SEEN = /task-board-pane|session-file-explorer(?!-)/
+  // The header's Full screen button is a toggle: in full screen it leaves.
+  const TOGGLE = /session-panel-expand/
+  const LEAVES = /\bleaveFullscreen\(|Exit full screen|Collapse session/
+  // A second window of the same context shares the first one's storage, so the kept view too.
+  const LOADS = /\.(?:reload|goto|setContent)\(|\bcontext\(\)\.newPage\(/
+  const CLICKS = /\.(?:click|tap|dblclick|press)\(/
+  const ABSENT = /toHaveCount\(0\)|toBeHidden\(|\.not\./
+  /** The tests whose load after a split or full screen checks what came back. */
+  const KEEPS: Record<string, string[]> = {
+    // The kept view is what they check.
+    'view-state-kept.spec.ts': ["a plugin page's session panel comes back", 'a home column comes back as it was left'],
+    'layout-record-restart.spec.ts': ['a full-screen session panel comes back after a reload'],
+    // They read the view that came back: the Board, the Files view, the full screen.
+    'board-kanban-round4.spec.ts': ['R3-03: the Board opened after a reload'],
+    'board-kanban-round3.spec.ts': ['N5: a reload lays the lanes out once', 'C12: completed after the user placed it'],
+    'file-stale-writeback.spec.ts': ['a reload with unsaved text'],
+    'session-thread-review-sidebar.spec.ts': ['a card shows its whole thread with its own scroll'],
+  }
+
+  type Step = 'open' | 'toggle' | 'leave' | 'load'
+  const isComment = (line: string): boolean => /^\s*(?:\/\/|\*|\/\*)/.test(line)
+  /** Every named function a file defines, with its body: `function f(`, `const f = async (`. */
+  const functionsOf = (text: string): Map<string, string> => {
+    const out = new Map<string, string>()
+    const head = /(?:function\s+|const\s+)(\w+)\s*(?:=\s*(?:async\s*)?)?(?:<[^>\n]*>)?\(/g
+    for (const m of text.matchAll(head)) {
+      // Past its parameters, only a return type and `=>` may come before the body's brace.
+      let close = m.index + m[0].length
+      for (let parens = 1; close < text.length && parens > 0; close++) {
+        if (text[close] === '(') parens++
+        else if (text[close] === ')') parens--
+      }
+      const lead = /^\s*(?::\s*[^{=;\n]+?)?\s*(?:=>\s*)?\{/.exec(text.slice(close, close + 200))
+      if (!lead) continue
+      const open = close + lead[0].length - 1
+      let depth = 0
+      let end = open
+      for (; end < text.length; end++) {
+        if (text[end] === '{') depth++
+        else if (text[end] === '}' && --depth === 0) break
+      }
+      if (!out.has(m[1]!)) out.set(m[1]!, text.slice(open, end))
+    }
+    return out
+  }
+  /** What one line does, by itself (a locator kept in `chips` and clicked later counts as its chip). */
+  const lineStep = (line: string, chips: Set<string>): Step | null => {
+    if (LEAVES.test(line)) return 'leave'
+    if (LOADS.test(line)) return 'load'
+    const clicks = CLICKS.test(line)
+    if (clicks && TOGGLE.test(line)) return 'toggle'
+    if (clicks && OPEN_CLICK.test(line) && !line.includes('draft-composer-bar')) return 'open'
+    if (clicks && [...chips].some((c) => new RegExp(`\\b${c}\\.(?:click|tap)\\(`).test(line))) return 'open'
+    if (OPEN_SEEN.test(line) && !ABSENT.test(line)) return 'open'
+    return null
+  }
+  /** The steps a piece of code takes in order, through the functions it calls (`fns`). */
+  const stepsOf = (code: string, fns: Map<string, string>, seen: Set<string> = new Set()): Step[] => {
+    const chips = new Set([...code.matchAll(/const (\w+) = [^\n]*/g)]
+      .filter((m) => OPEN_CLICK.test(m[0]) && !m[0].includes('draft-composer-bar')).map((m) => m[1]!))
+    const steps: Step[] = []
+    for (const line of code.split('\n')) {
+      if (isComment(line)) continue
+      const step = lineStep(line, chips)
+      // A window opened as a helper's argument (`openBoard(await page.context().newPage())`) comes first.
+      const first = step === 'load' && /\bcontext\(\)\.newPage\(/.test(line)
+      if (step && first) steps.push(step)
+      for (const m of line.matchAll(/\b(\w+)\(/g)) {
+        const body = fns.get(m[1]!)
+        if (body !== undefined && !seen.has(m[1]!)) steps.push(...stepsOf(body, fns, new Set([...seen, m[1]!])))
+      }
+      if (step && !first) steps.push(step)
+    }
+    return steps
+  }
+  /** Each test: its title and body, from its `test(` line to the `})` that closes it. */
+  const testsOf = (text: string): Array<{ title: string; body: string }> => {
+    const lines = text.split('\n')
+    const out: Array<{ title: string; body: string }> = []
+    lines.forEach((line, i) => {
+      const m = /^([ \t]*)test\((.*)$/.exec(line)
+      if (!m) return
+      let end = i + 1
+      while (end < lines.length && !new RegExp(`^${m[1]}\\}\\)`).test(lines[end]!)) end++
+      out.push({ title: line.trim().slice(0, 90), body: lines.slice(i, end + 1).join('\n') })
+    })
+    return out
+  }
+  /** The functions a file can call: the ones it imports from a sibling helper file, then its own. */
+  const callableIn = (text: string, files: Array<{ file: string; text: string }>): Map<string, string> => {
+    const fns = new Map<string, string>()
+    for (const m of text.matchAll(/import\s*\{([^}]*)\}\s*from\s*'\.\/([\w.-]+)'/g)) {
+      const from = files.find(({ file }) => file === `${m[2]}.ts`)
+      if (!from) continue
+      const theirs = functionsOf(from.text)
+      for (const name of m[1]!.split(',').map((n) => n.replace(/^\s*type\s+/, '').trim()).filter(Boolean)) {
+        const body = theirs.get(name)
+        // The helper's own calls resolve in its file.
+        if (body !== undefined) fns.set(name, `${body}\n${[...theirs].filter(([k]) => k !== name && body.includes(`${k}(`)).map(([, v]) => v).join('\n')}`)
+      }
+    }
+    for (const [k, v] of functionsOf(text)) fns.set(k, v)
+    return fns
+  }
+  /**
+   * Whether a load came while full screen or a split view was open, and the test went on with the
+   * view that came back: no leave between that load and its next split view or its end.
+   */
+  const reloadsOpen = (steps: Step[]): boolean => {
+    let open = false
+    let kept = false
+    for (const step of steps) {
+      if (step === 'load') { kept ||= open; open = false }
+      else if (step === 'leave') { open = false; kept = false }
+      else if (kept) return true
+      else if (step === 'open') open = true
+      else open = !open
+    }
+    return kept
+  }
+  const offenders = (files: Array<{ file: string; text: string }>): string[] => {
+    return files.filter(({ file }) => file.endsWith('.spec.ts')).flatMap(({ file, text }) => {
+      const fns = callableIn(text, files)
+      return testsOf(text).filter(({ title, body }) => {
+        if ((KEEPS[file] ?? []).some((t) => title.includes(t))) return false
+        return reloadsOpen(stepsOf(body, fns))
+      }).map(({ title }) => `${file}: ${title}`)
+    })
+  }
+
+  it('every one leaves full screen before it loads the page again', () => {
+    // The rule reads the real specs: without their leaveFullscreen the reported ones are found.
+    const bare = sources.map(({ file, text }) => ({ file, text: text.replaceAll('await leaveFullscreen(page)', '') }))
+    expect(offenders(bare).filter((t) => /C80:|C18:|C34:/.test(t))).toHaveLength(3)
+    expect(offenders(sources)).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const helper = [
+      'async function openBoard(page: Page): Promise<Locator> {',
+      '  await page.setContent(`<a href="${BASE}/">Open Walnut</a>`)',
+      "  await panel.getByTestId('session-board-chip').click()",
+      '  return pane',
+      '}',
+    ].join('\n')
+    const visits = "test('C80: a second visit', async ({ page }) => {\n  const pane = await openBoard(page)\n  await openBoard(page)\n})"
+    const spec = `${helper}\n${visits}`
+    expect(offenders([{ file: 'x.spec.ts', text: spec }])).toHaveLength(1)
+    // Leaving full screen in the helper, before its load, covers every visit.
+    const left = spec.replace('  await page.setContent', '  await leaveFullscreen(page)\n  await page.setContent')
+    expect(offenders([{ file: 'x.spec.ts', text: left }])).toEqual([])
+    // A test KEEPS lists checks the view that came back.
+    const kept = spec.replace('C80: a second visit', 'R3-03: the Board opened after a reload')
+    expect(offenders([{ file: 'board-kanban-round4.spec.ts', text: kept }])).toEqual([])
+    // A helper imported from a sibling file counts too.
+    const shared = { file: 'board-helpers.ts', text: `export ${helper}` }
+    expect(offenders([shared, { file: 'y.spec.ts', text: `import { openBoard } from './board-helpers'\n${visits}` }])).toHaveLength(1)
+    // Full screen, then a reload; the toggle clicked again leaves it.
+    const full = "test('a reload', async ({ page }) => {\n  await panel.locator('.session-panel-expand').click()\n  await page.reload()\n})"
+    expect(offenders([{ file: 'x.spec.ts', text: full }])).toHaveLength(1)
+    expect(offenders([{ file: 'x.spec.ts', text: full.replace('  await page.reload', "  await panel.locator('.session-panel-expand').click()\n  await page.reload") }])).toEqual([])
+    // A second window of the context gets the kept view too; leaving it once that window loaded counts.
+    const windowed = spec.replace('  await openBoard(page)\n})', '  await openBoard(await page.context().newPage())\n})')
+    expect(offenders([{ file: 'x.spec.ts', text: windowed }])).toHaveLength(1)
+    const leftAfter = windowed.replace("  await panel.getByTestId('session-board-chip')", "  await leaveFullscreen(page)\n  await panel.getByTestId('session-board-chip')")
+    expect(offenders([{ file: 'x.spec.ts', text: leftAfter }])).toEqual([])
+    // A draft's folder chip opens no split view; a pane seen closed is not open.
+    expect(offenders([{ file: 'x.spec.ts', text: "test('a draft', async ({ page }) => {\n  await panel.locator('.draft-composer-bar .session-action-chip').first().click()\n  await page.reload()\n})" }])).toEqual([])
+    expect(offenders([{ file: 'x.spec.ts', text: "test('closed', async ({ page }) => {\n  await expect(page.getByTestId('task-board-pane')).toHaveCount(0)\n  await page.reload()\n})" }])).toEqual([])
+  })
+})
