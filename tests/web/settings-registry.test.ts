@@ -19,7 +19,9 @@ const EXPECTED_IDS = [
   // Sessions = how Walnut runs an engine, its default engine included. No
   // Engines entry (removed 2026-10-27): an engine's OWN settings are in the
   // session's Engine settings popover.
-  'tasks', 'focus-tiers', 'tags', 'sessions',
+  // Task providers (2026-11-02): each plugin that syncs tasks, with the rules a task must
+  // pass before it syncs there.
+  'tasks', 'focus-tiers', 'tags', 'task-providers', 'sessions',
   // `stt` is labelled Voice and also carries Text-to-Speech now.
   // No `jev` row: Jev is one runner choice inside Tasks › Smart task creation.
   // No Integrations or Heartbeat entry (removed 2026-10-27). Mail rules follows

@@ -1234,19 +1234,34 @@ export interface SyncHold {
   outside?: { source: TaskSource; ext: Record<string, unknown>; state: 'kept' | 'archived' | 'neutralized' };
 }
 
-/** Private tasks (Settings › Tasks): what keeps a task out of an outside service. */
+/** Private tasks (Settings › Task providers): what keeps a task out of an outside service. */
 export interface PrivateTasksConfig {
-  /** Words or `/patterns/`, one per entry (src/core/private-tasks/private-words.ts). */
+  /** The rules of each task provider, by plugin id (src/core/private-tasks/provider-rules.ts). */
+  providers?: Record<string, ProviderSyncRules>;
+  /** Hard rules a provider without its own list uses: words or `/patterns/`, one per entry
+   *  (private-words.ts). Older Walnut versions read only this list. */
   words?: string[];
-  /** Judge a new task with the fast model before its first push (default true). */
+  /** The AI rule's default switch for a provider that sets none (default true). Older Walnut
+   *  versions read only this switch. */
   model_check?: boolean;
-  /** Who reads each sync service, by plugin id (src/core/private-tasks/audience.ts): `self`
-   *  (only the user: no privacy check, words or model) or `shared` (others read it: the check
-   *  runs). Unset = the plugin's manifest `syncAudience`, else `shared`. */
+  /** Earlier form of a provider's `check` (2026-11-01): `self` = off, `shared` = on. Read only. */
   audience?: Record<string, SyncAudience>;
 }
 
-/** Who reads a sync service: only the user, or others too (src/core/private-tasks/audience.ts). */
+/** What a task must pass before it syncs to one task provider. */
+export interface ProviderSyncRules {
+  /** Check tasks before they sync here. Unset = the plugin manifest's `syncAudience`: off for a
+   *  service only the user reads, on for one others read (and for a plugin that says nothing). */
+  check?: boolean;
+  /** Hard rules: words or `/patterns/`; a task that matches one fails. Unset = `words` above. */
+  words?: string[];
+  /** Run the AI rule (default: `model_check`, else true). */
+  ai?: boolean;
+  /** The AI rule in the user's words: what to keep out of this service. Unset = the default rule. */
+  ai_rule?: string;
+}
+
+/** Who reads a sync service, as a plugin manifest declares it (`syncAudience`). */
 export type SyncAudience = 'self' | 'shared';
 
 export interface Config {

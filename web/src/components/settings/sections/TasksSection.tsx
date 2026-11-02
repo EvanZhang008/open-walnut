@@ -9,7 +9,6 @@ import { useIntegrations } from '@/hooks/useIntegrations';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { SmartTaskCreation } from './SmartTaskCreation';
-import { PrivateTasksGroup } from './PrivateTasksGroup';
 import { useSerialSave, type OnSave } from './GeneralSection';
 
 interface Props {
@@ -174,7 +173,13 @@ export function TasksSection({ config, onSave, onReload }: Props) {
 
       <SmartTaskCreation config={config} onSave={onSave} onReload={onReload} />
 
-      <PrivateTasksGroup config={config} save={save} />
+      <SettingsGroup data-testid="tasks-private-pointer">
+        <SettingsRow
+          label="Private tasks"
+          help="What may sync to each service (hard rules and an AI rule) is set per service in Task providers."
+          control={<a className="settings-button settings-button-default" href="#task-providers" data-testid="tasks-open-task-providers">Open</a>}
+        />
+      </SettingsGroup>
 
       {/* A TASK concern (the task's note/phase and its notifications), merely
           triggered by a session turn; no summarizer agent runs. */}

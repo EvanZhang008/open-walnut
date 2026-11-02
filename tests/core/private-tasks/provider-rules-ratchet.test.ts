@@ -1,8 +1,9 @@
 /**
- * Every privacy check asks first who reads the service (src/core/private-tasks/audience.ts).
- * 2026-11-01: the check ran for every outside service and pulled the user's own tasks out of his
- * personal list. A new place that runs the words or the model on a task's way out must decide by
- * the audience too, or be listed below with why it need not.
+ * Every privacy check reads the rules of the provider the task goes to
+ * (src/core/private-tasks/provider-rules.ts). 2026-11-01: the check ran the same way for every
+ * outside service and pulled the user's own tasks out of his personal list. A new place that runs
+ * the hard rules or the AI rule on a task's way out must read that provider's rules too, or be
+ * listed below with why it need not.
  *
  * Also: the decision letter is sent from one place only (sync-gate.ts sendKeptLetter, behind the
  * batch), so no new path mails one letter per task again.
@@ -13,15 +14,15 @@ import path from 'node:path';
 
 const ROOT = path.resolve(__dirname, '../../..');
 const CHECK_CALL = /\b(judgeTaskPrivacy|checkPushText|privateWordIn|decideBirth|matchPrivateWords)\(/;
-const AUDIENCE = /\bprivacyChecksApply\(|\bshared:\s*await privacyChecksApply\(/;
+const RULES = /\bsyncRulesFor\(/;
 
 /** Files that call a check without deciding by the audience themselves, and why. */
 const EXEMPT: Record<string, string> = {
-  'src/core/private-tasks/birth.ts': 'decideBirth takes `shared` from its caller; privateWordIn is its helper',
-  'src/core/private-tasks/push-check.ts': 'checkPushText runs only after sync-guard.ts asked the audience',
+  'src/core/private-tasks/birth.ts': 'decideBirth takes the rules from its caller; privateWordIn is its helper',
+  'src/core/private-tasks/push-check.ts': 'checkPushText runs only after sync-guard.ts read the rules, and takes their AI rule',
   'src/core/private-tasks/private-words.ts': 'defines the word match',
   'src/core/private-tasks/privacy-judge.ts': 'defines the model call',
-  'src/web/routes/private-tasks-v1.ts': 'the Settings "Try a title" test: reads a typed text, sends nothing',
+  'src/web/routes/private-tasks-v1.ts': 'the Settings "Try a task title" test: reads a typed text, sends nothing',
 };
 
 function walk(dir: string, out: string[] = []): string[] {
@@ -35,19 +36,23 @@ function walk(dir: string, out: string[] = []): string[] {
 
 const files = walk(path.join(ROOT, 'src')).map((f) => ({ rel: path.relative(ROOT, f), text: fs.readFileSync(f, 'utf8') }));
 
-describe('privacy checks decide by who reads the service', () => {
-  it('every file that runs a check asks the audience, or is listed with why', () => {
+describe('privacy checks read the rules of the provider', () => {
+  it('every file that runs a check reads the provider rules, or is listed with why', () => {
     const callers = files.filter((f) => CHECK_CALL.test(f.text.replace(/export (async )?function \w+\(/g, '')));
     expect(callers.length).toBeGreaterThan(3);
-    const missing = callers.filter((f) => !EXEMPT[f.rel] && !AUDIENCE.test(f.text)).map((f) => f.rel);
+    const missing = callers.filter((f) => !EXEMPT[f.rel] && !RULES.test(f.text)).map((f) => f.rel);
     expect(missing).toEqual([]);
   });
 
-  it('every decideBirth call passes the audience', () => {
+  it('every decideBirth call gets the rules of its target provider', () => {
     for (const f of files) {
       if (f.rel === 'src/core/private-tasks/birth.ts') continue;
-      const calls = f.text.split(/\bdecideBirth\(/).slice(1);
-      for (const call of calls) expect(call.slice(0, 600), f.rel).toMatch(/shared:\s*await privacyChecksApply\(/);
+      const parts = f.text.split(/\bdecideBirth\(/);
+      for (let i = 1; i < parts.length; i++) {
+        // The rules are read right before the call, and passed as its third argument.
+        expect(parts[i - 1].slice(-300), f.rel).toMatch(/const rules = await syncRulesFor\(/);
+        expect(parts[i].slice(0, 300), f.rel).toMatch(/^[^,]+,[^)]*?\},\s*rules,/s);
+      }
     }
   });
 

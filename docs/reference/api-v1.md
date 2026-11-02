@@ -1153,14 +1153,19 @@ new task bound for a service is born local and held `checking` until both pass; 
 verdict, a matching word or a model with no answer keeps it local, and the user gets one decision
 letter (Keep local / Sync to the service, plus Archive there / Neutralize there for an outside
 copy) while Main hears one line. Several tasks kept out in one burst share ONE letter, and its
-answer is for each of them. The check runs only for a service others read: each service's
-audience is `config.private_tasks.audience[<plugin id>]` (`self` = only the user reads it, nothing
-is checked and no task is kept out of it but by the user's own Local choice; `shared` = the check
-runs), else the plugin manifest's `syncAudience`, else `shared`. Turning a service to `self` gives
-back every task Walnut kept out of it (linked to its old copy) and settles its letter.
+answer is for each of them. The rules are per task provider (`config.private_tasks.providers[<plugin
+id>]`, Settings > Task providers): `check` (default: the plugin manifest's `syncAudience`, off for
+`self`, a service only the user reads, on for `shared` or nothing said; off sends every task and
+only the user's own Local choice keeps one out), hard rules `words` (default: the shared
+`private_tasks.words`), and the AI rule `ai` / `ai_rule` (the fast model reads the task against the
+rule in the user's words and answers pass or fail with a reason; default on, with Walnut's default
+rule). Turning a provider's check off gives back every task Walnut kept out of it (linked to its
+old copy) and settles its letter.
 
-- `GET /api/v1/private-tasks/services` → `{ "services": [{ "id", "name", "audience":
-  "self"|"shared", "default", "set" }] }`: every loaded sync service and who reads it (Settings).
+- `GET /api/v1/private-tasks/providers` → `{ "providers": [{ "id", "name", "check", "check_set",
+  "check_default", "words", "ai", "ai_rule", "ai_rule_default" }] }`: every loaded task provider
+  and its rules, defaults filled in (Settings). `GET /api/v1/private-tasks/services` keeps the
+  earlier shape (`audience: "self"|"shared"`).
 - `POST /api/v1/tasks` takes `"local": true` (a boolean, else `400 bad_request`): the task is
   created local in its project. The `task_create` op has the same field.
 - ProjectedTask gains `source` (only when not local) and `sync_hold: { state:
@@ -1182,8 +1187,10 @@ back every task Walnut kept out of it (linked to its old copy) and settles its l
   `project_local`, `project_conflict`. Op `task_sync_to_project`.
 - `POST /api/v1/tasks/:id/outside-copy { "action": "archive"|"neutralize" }` changes the copy a
   task turned local left behind.
-- `POST /api/v1/private-tasks/test { "text", "words"? }` → `{ "match": string|null, "invalid":
-  string[] }`: which private word a text matches (Settings' Try a title).
+- `POST /api/v1/private-tasks/test { "text", "words"?, "provider"?, "ai"?, "ai_rule"? }` →
+  `{ "match": string|null, "invalid": string[], "ai"?: { "pass", "reason" } | { "error" } }`: which
+  hard rule a text fails (the given list, else the provider's), and with `ai: true` the AI rule's
+  verdict (one fast-model call; the given rule, else the provider's) (Settings' Try a task title).
 - Writes answer `501 not_supported_cloud` on the cloud companion.
 
 ### A task's own MEMORY.md (additive, 2026-10-27): `/tasks/:id/agent-memory`

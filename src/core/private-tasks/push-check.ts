@@ -47,6 +47,10 @@ interface Approval {
   at: string;
   /** Private words the user accepted for this task. */
   words?: string[];
+  /** The plugin the approval holds for. Text that may go to one service may not go to another
+   *  (the task moved to a project that syncs elsewhere): an approval for another one is none.
+   *  Unset on approvals an older Walnut wrote, which hold for whichever service. */
+  target?: string;
 }
 
 interface ApprovalFile {
@@ -122,8 +126,14 @@ const fieldHashes = (t: Partial<PushText>): Partial<Record<TextField, string>> =
   return out;
 };
 
+/** The task's approval when it holds for `target` (or `target` is not known). */
+function approvalFor(map: Map<string, Approval>, taskId: string, target?: string): Approval | undefined {
+  const a = map.get(taskId);
+  return a && target && a.target && a.target !== target ? undefined : a;
+}
+
 function record(map: Map<string, Approval>, taskId: string, patch: Partial<Approval> & Pick<Approval, 'by'>): void {
-  const prev = map.get(taskId);
+  const prev = approvalFor(map, taskId, patch.target);
   map.delete(taskId); // re-insert: the newest are kept when the file is trimmed
   map.set(taskId, {
     ...prev,
@@ -140,10 +150,10 @@ function record(map: Map<string, Approval>, taskId: string, patch: Partial<Appro
  * `user` when the user sent it (their letter answer, the task menu), which also accepts every
  * private word the text matches now. Never throws.
  */
-export async function approveTaskText(task: Pick<Task, 'id'> & Partial<PushText>, by: 'user' | 'model', words?: readonly string[]): Promise<void> {
+export async function approveTaskText(task: Pick<Task, 'id'> & Partial<PushText>, by: 'user' | 'model', words?: readonly string[], target?: string): Promise<void> {
   try {
     const accepted = by === 'user' ? acceptedEntries(words, [task.title, task.description, task.note, task.summary]) : [];
-    record(await store(), task.id, { by, fields: fieldHashes({ title: task.title ?? '', description: task.description ?? '', note: task.note ?? '', summary: task.summary ?? '' }), words: accepted });
+    record(await store(), task.id, { by, fields: fieldHashes({ title: task.title ?? '', description: task.description ?? '', note: task.note ?? '', summary: task.summary ?? '' }), words: accepted, ...(target ? { target } : {}) });
   } catch (err) {
     log.task.warn('private tasks: approval not recorded', { taskId: task.id, error: err instanceof Error ? err.message : String(err) });
   }
@@ -151,10 +161,10 @@ export async function approveTaskText(task: Pick<Task, 'id'> & Partial<PushText>
 
 /** Text that is outside already (a pull wrote it from the service): pushing it back sends
  *  nothing new, so it is not judged. Only the fields given. Never throws. */
-export async function approveOutsideText(taskId: string, fields: Partial<PushText>): Promise<void> {
+export async function approveOutsideText(taskId: string, fields: Partial<PushText>, target?: string): Promise<void> {
   try {
     const hashes = fieldHashes(fields);
-    if (Object.keys(hashes).length) record(await store(), taskId, { by: 'outside', fields: hashes });
+    if (Object.keys(hashes).length) record(await store(), taskId, { by: 'outside', fields: hashes, ...(target ? { target } : {}) });
   } catch (err) {
     log.task.warn('private tasks: approval not recorded', { taskId, error: err instanceof Error ? err.message : String(err) });
   }
@@ -193,7 +203,7 @@ function seedFrom(tasks: ReadonlyArray<Pick<Task, 'id' | 'source' | 'updated_at'
     if (!t.source || t.source === 'local' || map.has(t.id)) continue;
     const at = Date.parse(t.updated_at ?? '');
     if (Number.isFinite(at) && at >= PROCESS_STARTED_AT) continue;
-    record(map, t.id, { by: 'outside', fields: fieldHashes({ title: t.title ?? '', description: t.description ?? '', note: t.note ?? '', summary: t.summary ?? '' }) });
+    record(map, t.id, { by: 'outside', target: t.source, fields: fieldHashes({ title: t.title ?? '', description: t.description ?? '', note: t.note ?? '', summary: t.summary ?? '' }) });
     n++;
   }
   seededAt = new Date().toISOString();
@@ -209,9 +219,9 @@ function acceptedEntries(words: readonly string[] | undefined, texts: ReadonlyAr
   return out;
 }
 
-/** The private words the user accepted for this task. */
-export async function acceptedWords(taskId: string): Promise<readonly string[]> {
-  return (await store()).get(taskId)?.words ?? [];
+/** The private words the user accepted for this task (for `target`, when given). */
+export async function acceptedWords(taskId: string, target?: string): Promise<readonly string[]> {
+  return approvalFor(await store(), taskId, target)?.words ?? [];
 }
 
 /** A neutralized copy's text (task-manager neutralTitle, and the emptied fields): nothing of the
@@ -232,11 +242,11 @@ const MODEL_TRIES = 2;
  * own, by its last part). The same text pushed twice at once is judged once.
  */
 export async function checkPushText(
-  task: Pick<Task, 'id' | 'project'>, text: PushText, opts: { service?: string; log?: string } = {},
+  task: Pick<Task, 'id' | 'project'>, text: PushText, opts: { service?: string; target?: string; log?: string; rule?: string } = {},
 ): Promise<PushVerdict> {
   const map = await store();
   if (!seededAt) await seedOutsideBaseline();
-  const prev = map.get(task.id);
+  const prev = approvalFor(map, task.id, opts.target);
   const isLog = opts.log !== undefined;
   const hashes = fieldHashes(text);
   const changed = isLog
@@ -244,7 +254,7 @@ export async function checkPushText(
     : TEXT_FIELDS.some((f) => (text[f] ?? '').trim() && prev?.fields?.[f] !== hashes[f]);
   if (!changed) return { ok: true };
   const key = isLog ? `log:${hash(opts.log!)}` : JSON.stringify(hashes);
-  const flight = `${task.id}:${key}`;
+  const flight = `${task.id}:${opts.target ?? ''}:${hash(opts.rule ?? '')}:${key}`;
   const running = judging.get(flight);
   if (running) return running;
   const work = (async (): Promise<PushVerdict> => {
@@ -253,8 +263,8 @@ export async function checkPushText(
     for (let attempt = 1; attempt <= MODEL_TRIES && !verdict; attempt++) {
       try {
         verdict = await judgeTaskPrivacy(isLog
-          ? { title: text.title, description: opts.log!.slice(-3000), project: task.project, service: opts.service }
-          : { ...text, project: task.project, service: opts.service });
+          ? { title: text.title, description: opts.log!.slice(-3000), project: task.project, service: opts.service, rule: opts.rule }
+          : { ...text, project: task.project, service: opts.service, rule: opts.rule });
       } catch (err) {
         failure = err instanceof Error ? err.message : String(err);
       }
@@ -265,9 +275,10 @@ export async function checkPushText(
     }
     if (verdict.private) {
       log.task.info('private tasks: a push was judged private and stopped', { taskId: task.id, reason: verdict.reason });
-      return { ok: false, state: 'private', reason: `Walnut judged it private: ${verdict.reason}` };
+      return { ok: false, state: 'private', reason: `It did not pass the AI rule: ${verdict.reason}` };
     }
-    record(map, task.id, isLog ? { by: 'model', logKey: hash(opts.log!) } : { by: 'model', fields: hashes });
+    const target = opts.target ? { target: opts.target } : {};
+    record(map, task.id, isLog ? { by: 'model', logKey: hash(opts.log!), ...target } : { by: 'model', fields: hashes, ...target });
     return { ok: true };
   })().finally(() => judging.delete(flight));
   judging.set(flight, work);

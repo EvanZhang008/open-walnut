@@ -395,6 +395,30 @@ describe('private tasks against a sync plugin', () => {
       expect(judged).toHaveLength(1);
     });
 
+    it('text approved for one service is judged again before it goes to another; the same text twice is judged once', async () => {
+      const t = { id: 'moved-1', project: PROJECT };
+      const text = { title: 'Quarterly roadmap', description: 'milestones' };
+      expect(await checkPushText(t, text, { target: 'svc-a' })).toEqual({ ok: true });
+      expect(judged).toHaveLength(1);
+      expect(await checkPushText(t, text, { target: 'svc-a' })).toEqual({ ok: true });
+      expect(judged).toHaveLength(1);
+      // Moved to a project that syncs to another service: that service has not seen it.
+      expect(await checkPushText(t, text, { target: 'svc-b', rule: 'keep out roadmaps' })).toEqual({ ok: true });
+      expect(judged).toHaveLength(2);
+      expect(judged.at(-1)!.rule).toBe('keep out roadmaps');
+      // Two pushes of the same text at once, to two services: each is judged.
+      await Promise.all([
+        checkPushText({ id: 'moved-2', project: PROJECT }, text, { target: 'svc-a' }),
+        checkPushText({ id: 'moved-2', project: PROJECT }, text, { target: 'svc-b' }),
+      ]);
+      expect(judged).toHaveLength(4);
+      // An approval an older Walnut wrote (no service named) still holds.
+      const { approveOutsideText } = await import('../../../src/core/private-tasks/push-check.js');
+      await approveOutsideText('legacy-1', text);
+      expect(await checkPushText({ id: 'legacy-1', project: PROJECT }, text, { target: 'svc-b' })).toEqual({ ok: true });
+      expect(judged).toHaveLength(4);
+    });
+
     it('a text still changing at the last try is released on the text judged; the new text is judged at its push', async () => {
       const { updateDescription } = await import('../../../src/core/task-manager.js');
       const next = ['second', 'third', 'about my zephyr plan'];

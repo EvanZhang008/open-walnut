@@ -1,16 +1,19 @@
 /**
- * Who reads a sync service (src/core/private-tasks/audience.ts), against a real server and two
- * fake sync plugins: one only the user reads (manifest `syncAudience: 'self'`, a personal list)
- * and one that says nothing (shared, a team tracker). 2026-11-01: the privacy check took the
- * user's personal Microsoft To-Do for a shared service and pulled nine of his own tasks out of it,
- * one decision letter each.
+ * The rules of each task provider (src/core/private-tasks/provider-rules.ts), against a real
+ * server and two fake sync plugins: one only the user reads (manifest `syncAudience: 'self'`, a
+ * personal list, so its check is off by default) and one that says nothing (checked). 2026-11-01:
+ * the privacy check took the user's personal Microsoft To-Do for a shared service and pulled nine
+ * of his own tasks out of it, one decision letter each; then the user asked for the rules per
+ * provider, hard rules and an AI rule, each answering pass or fail with a reason.
  *
- *   - a service only the user reads checks nothing: a task with a private word or one the model
- *     calls private is born synced, and its edits go out;
- *   - a service that says nothing is shared: the check runs;
- *   - the user's setting wins over the manifest, both ways, and turning a service to Only me gives
- *     back every task Walnut kept out of it (linked to its old copy, no second item), settles its
- *     letter, and leaves the user's own Local choice alone;
+ *   - a provider whose check is off checks nothing: a task with a hard-rule word or one the AI
+ *     fails is born synced, and its edits go out;
+ *   - a provider that says nothing is checked;
+ *   - each provider's hard rules and AI rule are its own, and the AI rule reaches the judge;
+ *   - Settings lists each provider with its rules and tries a title against them;
+ *   - the user's setting wins over the manifest, both ways, and turning a check off gives back
+ *     every task Walnut kept out (linked to its old copy, no second item), settles its letter,
+ *     and leaves the user's own Local choice alone;
  *   - several tasks kept out in one burst are ONE letter, and its answer is for each of them.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
@@ -28,7 +31,7 @@ import { createSpySync, createMockPlugin } from '../core/plugin-test-utils.js';
 import { setPrivacyJudgeForTest } from '../../src/core/private-tasks/privacy-judge.js';
 import { settleSyncGates } from '../../src/core/private-tasks/sync-gate.js';
 import { settleEditStops } from '../../src/core/private-tasks/edit-stop.js';
-import { releaseHoldsOfUnsharedServices, resolveAudience } from '../../src/core/private-tasks/audience.js';
+import { DEFAULT_AI_RULE, releaseHoldsOfUnsharedServices, resolveSyncRules } from '../../src/core/private-tasks/provider-rules.js';
 
 const MINE = 'my-list';
 const TEAM = 'team-tracker';
@@ -48,18 +51,25 @@ async function api(path: string, init: { method?: string; body?: unknown } = {})
 }
 const settle = async () => { for (let i = 0; i < 2; i++) { await settleSyncGates(); await settleBackgroundPushes(); await settleEditStops(); } };
 const calls = (s: ReturnType<typeof createSpySync>) => Object.values(s).flatMap((fn) => ((fn as { mock?: { calls: unknown[][] } }).mock?.calls ?? []).map((c) => JSON.stringify(c))).join('\n');
-async function setAudience(audience: Record<string, 'self' | 'shared'>) {
+async function setProvider(id: string, rules: Record<string, unknown>) {
   const cfg = await getConfig();
-  await updateConfig({ private_tasks: { ...(cfg.private_tasks ?? {}), audience } } as never);
+  const providers = { ...(cfg.private_tasks?.providers ?? {}), [id]: { ...(cfg.private_tasks?.providers?.[id] ?? {}), ...rules } };
+  await updateConfig({ private_tasks: { ...(cfg.private_tasks ?? {}), providers } } as never);
 }
+/** What the judge was asked, newest last. */
+const judged: Array<{ title: string; rule?: string; service?: string }> = [];
 
 beforeAll(async () => {
   await updateConfig({ private_tasks: { words: ['marigold'] } } as never);
   server = await startServer({ port: 0, dev: true });
   root = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-  setPrivacyJudgeForTest(async (input) => /\bZephyr\b/.test(`${input.title} ${input.description ?? ''}`)
-    ? { private: true, reason: 'a private matter' }
-    : { private: false, reason: 'team work' });
+  setPrivacyJudgeForTest(async (input) => {
+    judged.push({ title: input.title, rule: input.rule, service: input.service });
+    // A rule that names Quokka keeps Quokka out; any rule keeps Zephyr out.
+    const out = /\bZephyr\b/.test(`${input.title} ${input.description ?? ''}`)
+      || (/Quokka/.test(input.rule ?? '') && /\bQuokka\b/.test(input.title));
+    return out ? { private: true, reason: 'a private matter' } : { private: false, reason: 'team work' };
+  });
   let n = 0;
   mine = createSpySync();
   mine.createTask.mockImplementation(async () => ({ [MINE]: { id: `m-${++n}` } }));
@@ -79,17 +89,22 @@ afterAll(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true });
 });
 
-describe('who reads a sync service', () => {
-  it('resolves the setting, then the manifest, then shared', () => {
-    expect(resolveAudience({}, 'x', undefined)).toBe('shared');
-    expect(resolveAudience({}, 'x', 'self')).toBe('self');
-    expect(resolveAudience({ private_tasks: { audience: { x: 'shared' } } }, 'x', 'self')).toBe('shared');
-    expect(resolveAudience({ private_tasks: { audience: { x: 'self' } } }, 'x', undefined)).toBe('self');
-    // Junk in the setting is ignored.
-    expect(resolveAudience({ private_tasks: { audience: { x: 'everyone' as never } } }, 'x', undefined)).toBe('shared');
+describe('the rules of each task provider', () => {
+  it('resolves the setting, then the manifest, then checked; words, AI and its rule default', () => {
+    expect(resolveSyncRules({}, 'x', undefined)).toMatchObject({ check: true, checkSet: false, checkDefault: true, words: [], ai: true, aiRule: DEFAULT_AI_RULE });
+    expect(resolveSyncRules({}, 'x', 'self')).toMatchObject({ check: false, checkDefault: false });
+    expect(resolveSyncRules({ private_tasks: { providers: { x: { check: true } } } }, 'x', 'self')).toMatchObject({ check: true, checkSet: true });
+    expect(resolveSyncRules({ private_tasks: { providers: { x: { check: false } } } }, 'x', undefined).check).toBe(false);
+    // The earlier per-service form still reads, and the shared list and switch are the defaults.
+    expect(resolveSyncRules({ private_tasks: { audience: { x: 'self' } } }, 'x', undefined).check).toBe(false);
+    expect(resolveSyncRules({ private_tasks: { words: ['a'], model_check: false } }, 'x', undefined)).toMatchObject({ words: ['a'], ai: false });
+    expect(resolveSyncRules({ private_tasks: { words: ['a'], providers: { x: { words: ['b'], ai: true, ai_rule: ' keep out B ' } } } }, 'x', undefined))
+      .toMatchObject({ words: ['b'], ai: true, aiRule: 'keep out B' });
+    // An empty rule is the default rule.
+    expect(resolveSyncRules({ private_tasks: { providers: { x: { ai_rule: '  ' } } } }, 'x', undefined).aiRule).toBe(DEFAULT_AI_RULE);
   });
 
-  it('a service only the user reads checks nothing: private words and private matters sync, and so do their edits', async () => {
+  it('a provider whose check is off checks nothing: hard-rule words and AI fails sync, and so do their edits', async () => {
     const t = await api('/api/v1/tasks', { body: { title: 'Zephyr marigold budget', project: 'Mine' } });
     expect(t.status).toBe(201);
     await settle();
@@ -104,20 +119,50 @@ describe('who reads a sync service', () => {
     expect(calls(mine)).toContain('Zephyr marigold budget for the clinic');
   });
 
-  it('a service that says nothing is shared: the same task stays local', async () => {
+  it('a provider that says nothing is checked: the same task stays local', async () => {
     const t = await api('/api/v1/tasks', { body: { title: 'Zephyr marigold budget', project: 'Team' } });
     await settle();
     expect(await getTask(t.json.task.id)).toMatchObject({ source: 'local', sync_hold: { target: TEAM } });
     expect(calls(team)).not.toContain('Zephyr');
   });
 
-  it('Settings lists each service with who reads it', async () => {
-    const r = await api('/api/v1/private-tasks/services');
+  it('Settings lists each provider with its rules, and tries a title against them', async () => {
+    const r = await api('/api/v1/private-tasks/providers');
     expect(r.status).toBe(200);
-    const rows = r.json.services as Array<Record<string, unknown>>;
-    expect(rows.find((s) => s.id === MINE)).toMatchObject({ name: 'My List', audience: 'self', default: 'self', set: false });
-    expect(rows.find((s) => s.id === TEAM)).toMatchObject({ name: 'Team Tracker', audience: 'shared', default: 'shared', set: false });
+    const rows = r.json.providers as Array<Record<string, unknown>>;
+    expect(rows.find((s) => s.id === MINE)).toMatchObject({ name: 'My List', check: false, check_set: false, check_default: false, ai: true, ai_rule: DEFAULT_AI_RULE });
+    expect(rows.find((s) => s.id === TEAM)).toMatchObject({ name: 'Team Tracker', check: true, check_default: true, words: ['marigold'] });
     expect(rows.some((s) => s.id === 'local')).toBe(false);
+    // The earlier list still answers for a window opened before.
+    expect((await api('/api/v1/private-tasks/services')).json.services.find((s: { id: string }) => s.id === MINE)).toMatchObject({ audience: 'self' });
+    // Try a title: the hard rules always; the AI rule only when asked, with the rule given.
+    const words = await api('/api/v1/private-tasks/test', { body: { text: 'my marigold plan', provider: TEAM } });
+    expect(words.json).toMatchObject({ match: 'marigold' });
+    expect(words.json.ai).toBeUndefined();
+    const ai = await api('/api/v1/private-tasks/test', { body: { text: 'Quokka budget', provider: TEAM, ai: true, ai_rule: 'Keep out anything about Quokka' } });
+    expect(ai.json.ai).toEqual({ pass: false, reason: 'a private matter' });
+    expect(judged.at(-1)).toMatchObject({ title: 'Quokka budget', rule: 'Keep out anything about Quokka', service: 'Team Tracker' });
+    const pass = await api('/api/v1/private-tasks/test', { body: { text: 'Fix the login page', provider: TEAM, ai: true } });
+    expect(pass.json.ai).toEqual({ pass: true, reason: 'team work' });
+    expect(judged.at(-1)?.rule).toBe(DEFAULT_AI_RULE);
+  });
+
+  it('each provider has its own hard rules and AI rule, and the AI rule reaches the judge', async () => {
+    await setProvider(TEAM, { words: ['pelican'], ai_rule: 'Keep out anything about Quokka' });
+    try {
+      // The shared list no longer applies here: this provider has its own.
+      const m = await api('/api/v1/tasks', { body: { title: 'Marigold release notes', project: 'Team' } });
+      const p = await api('/api/v1/tasks', { body: { title: 'Pelican offsite plan', project: 'Team' } });
+      const q = await api('/api/v1/tasks', { body: { title: 'Quokka budget review', project: 'Team' } });
+      await settle();
+      expect((await getTask(m.json.task.id)).source).toBe(TEAM);
+      expect(await getTask(p.json.task.id)).toMatchObject({ source: 'local', sync_hold: { state: 'private', by: 'words' } });
+      expect(await getTask(q.json.task.id)).toMatchObject({ source: 'local', sync_hold: { state: 'private', by: 'model' } });
+      expect((await getTask(q.json.task.id)).sync_hold?.reason).toBe('It did not pass the AI rule: a private matter');
+      expect(judged.find((j) => j.title === 'Quokka budget review')).toMatchObject({ rule: 'Keep out anything about Quokka', service: 'Team Tracker' });
+    } finally {
+      await setProvider(TEAM, { words: undefined, ai_rule: undefined });
+    }
   });
 
   it('several tasks kept out in one burst are one letter, and its answer is for each of them', async () => {
@@ -150,8 +195,8 @@ describe('who reads a sync service', () => {
     await vi.waitFor(async () => expect((await getTask(b.json.task.id)).sync_hold).toMatchObject({ state: 'chosen', by: 'user' }), { timeout: 5000 });
   });
 
-  it('the setting wins over the manifest, and Only me gives back what was kept out, linked to its old copy', async () => {
-    await setAudience({ [MINE]: 'shared' });
+  it('the setting wins over the manifest, and turning the check off gives back what was kept out, linked to its old copy', async () => {
+    await setProvider(MINE, { check: true });
     // Synced first, then an edit makes it private: it is stopped, its copy kept.
     const s = await api('/api/v1/tasks', { body: { title: 'Plan the move', project: 'Mine' } });
     await settle();
@@ -174,7 +219,7 @@ describe('who reads a sync service', () => {
     expect(letters.every(Boolean)).toBe(true);
     const creates = mine.createTask.mock.calls.length;
 
-    await setAudience({ [MINE]: 'self' });
+    await setProvider(MINE, { check: false });
     // The pass runs on the config write (debounced) and pushes as it goes: wait for its end, the
     // letters settled last.
     await vi.waitFor(async () => {

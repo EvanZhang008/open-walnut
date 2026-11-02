@@ -6284,7 +6284,7 @@ function startPluginSyncPolling(): void {
             for (const f of ['title', 'description', 'note', 'summary'] as const) {
               if (f in effectiveUpdates && typeof updatedTask[f] === 'string') pulledText[f] = updatedTask[f] as string
             }
-            if (Object.keys(pulledText).length) await approveOutsideText(id, pulledText)
+            if (Object.keys(pulledText).length) await approveOutsideText(id, pulledText, plugin.id)
             const index = localTasks.findIndex(t => t.id === id)
             if (index >= 0) localTasks[index] = updatedTask
             if (changed) {

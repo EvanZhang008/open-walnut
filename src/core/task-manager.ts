@@ -47,7 +47,7 @@ import { isDerivedTag, namesDerivedTag, normalizeTags } from './tag-model.js';
 import { linkTargetOfTag, newLinkTags, relabelLinkTags, mergeLinkNames, MAX_AUTO_LINKS } from './link-tags.js';
 import { recordRemoteLink, findLiveClaimants, isRemoteIdBlocked } from './task-remote-links.js';
 import { decideBirth } from './private-tasks/birth.js';
-import { privacyChecksApply } from './private-tasks/audience.js';
+import { syncRulesFor } from './private-tasks/provider-rules.js';
 import { isPrivateTaskBlocked } from './private-tasks/sync-guard.js';
 import { privacyJudgeAvailable, startSyncGate } from './private-tasks/sync-gate.js';
 import { MERGE_EVENT_SOURCE } from './task-deleted-id.js';
@@ -2934,9 +2934,10 @@ export async function addTask(input: AddTaskInput): Promise<{ task: Task; syncRe
       const target = source !== 'local' ? source
         : parentHold ? parentHold.target
         : explicitLocal ? (registrySource ?? (await registry.getForProject(project)).id) : 'local';
-      const decided = decideBirth(target, { title: input.title, description: input.description }, config.private_tasks, {
+      const rules = await syncRulesFor(config, target);
+      const decided = decideBirth(target, { title: input.title, description: input.description }, rules, {
         explicitLocal: explicitLocal || parentHold?.state === 'private' || parentHold?.state === 'chosen' || parentHold?.state === 'unjudged',
-        canJudge: privacyJudgeAvailable(config), shared: await privacyChecksApply(config, target), now,
+        canJudge: privacyJudgeAvailable(rules), now,
       });
       source = decided.source;
       syncHold = decided.hold && !explicitLocal && parentHold && decided.hold.state === 'chosen'
@@ -8211,7 +8212,7 @@ export async function addTaskFull(taskData: Omit<Task, 'id'>): Promise<Task> {
   // Its text came from the service: pushing it back sends nothing new (private-tasks/push-check.ts).
   if (task.source && task.source !== 'local') {
     const { approveOutsideText } = await import('./private-tasks/push-check.js');
-    await approveOutsideText(task.id, { title: task.title, description: task.description, note: task.note, summary: task.summary });
+    await approveOutsideText(task.id, { title: task.title, description: task.description, note: task.note, summary: task.summary }, task.source);
   }
   return task;
   });
@@ -9074,7 +9075,7 @@ export async function releaseSyncHold(
   log.task.info('private tasks: task released to its project\'s service', { taskId: out.task.id, source: out.task.source, approvedBy });
   if (approvedBy) {
     const { approveTaskText } = await import('./private-tasks/push-check.js');
-    await approveTaskText({ id: out.task.id, ...(approvedText ?? out.task) }, approvedBy, (await getConfig()).private_tasks?.words);
+    await approveTaskText({ id: out.task.id, ...(approvedText ?? out.task) }, approvedBy, (await syncRulesFor(await getConfig(), out.task.source)).words, out.task.source);
   }
   await applyPluginTaskDefaults(out.task, 'created');
   const syncResult = await autoPushIfConfigured(out.task);

@@ -421,15 +421,15 @@ export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
       const { getConfig } = await import('./config-manager.js');
       const { decideBirth } = await import('./private-tasks/birth.js');
       const { privacyJudgeAvailable } = await import('./private-tasks/sync-gate.js');
-      const { privacyChecksApply } = await import('./private-tasks/audience.js');
+      const { syncRulesFor } = await import('./private-tasks/provider-rules.js');
       const config = await getConfig();
       // A subtask of a parent kept local is kept local too, as addTask does.
       const parent = rest.parent_task_id ? await tm.getTask(rest.parent_task_id).catch(() => null) : null;
       const parentKept = parent?.source === 'local' && parent.org_role !== 'lead'
         && ['private', 'chosen', 'unjudged'].includes(parent.sync_hold?.state ?? '');
-      const decided = decideBirth(primarySource, { title: rest.title ?? '', description: rest.description, note: rest.note }, config.private_tasks, {
-        explicitLocal: replicaHold?.state === 'chosen' || parentKept, canJudge: privacyJudgeAvailable(config),
-        shared: await privacyChecksApply(config, primarySource),
+      const rules = await syncRulesFor(config, primarySource);
+      const decided = decideBirth(primarySource, { title: rest.title ?? '', description: rest.description, note: rest.note }, rules, {
+        explicitLocal: replicaHold?.state === 'chosen' || parentKept, canJudge: privacyJudgeAvailable(rules),
       });
       if (parentKept && decided.hold?.state === 'chosen' && replicaHold?.state !== 'chosen') decided.hold.reason = 'Its parent task is kept local';
       bornSource = decided.source;

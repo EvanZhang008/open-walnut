@@ -4,8 +4,8 @@
  * plugin a task Walnut keeps local.
  *
  *   - A task argument that is local, or held (`sync_hold`), is refused: nothing of it is sent.
- *   - Text about to go out to a service others read (audience.ts; a create or full push: title,
- *     description, note, summary; a field update: that field) that matches one of the user's private words, or that the fast model
+ *   - Text about to go out to a provider whose check is on (provider-rules.ts; a create or full
+ *     push: title, description, note, summary; a field update: that field) that matches one of the user's private words, or that the fast model
  *     judges private or cannot judge (push-check.ts), is refused, and the task is turned local
  *     (edit-stop.ts; sync-gate.ts tells the user and Main): the edit never leaves Walnut.
  *
@@ -74,8 +74,8 @@ export interface PushStop {
 }
 type OnStop = (task: Task, stop: PushStop) => void;
 
-const configWords: WordsReader = async () => (await (await import('../config-manager.js')).getConfig()).private_tasks?.words;
-let readWords: WordsReader = configWords;
+/** Tests replace the hard rules; null = the provider's own (provider-rules.ts). */
+let readWords: WordsReader | null = null;
 /** Stops started by a refused push, until they finish (edit-stop.ts settleEditStops waits on them). */
 export const startingStops = new Set<Promise<unknown>>();
 const defaultOnStop: OnStop = (task, stop) => {
@@ -91,7 +91,7 @@ let modelCheck = true;
  *  runs at all in the guard. */
 export function setSyncGuardHooksForTest(hooks: { readWords?: WordsReader; onStop?: OnStop; modelCheck?: boolean } | null): void {
   if (!hooks) {
-    readWords = configWords;
+    readWords = null;
     onStop = defaultOnStop;
     modelCheck = true;
     return;
@@ -121,19 +121,19 @@ async function check(pluginId: string, method: string, args: unknown[]): Promise
   // The text that goes out: the whole task, or the one field (an emptied or neutral field
   // carries nothing of the task).
   if (!full && isNeutralText(fieldText!)) return;
-  // A service only the user reads (audience.ts): his private matters belong there, nothing is
-  // checked. A task Walnut keeps local is still refused above, whatever the service.
+  // A provider whose check is off (provider-rules.ts): nothing is checked. A task Walnut keeps
+  // local is still refused above, whatever the provider.
   const { getConfig } = await import('../config-manager.js');
-  const config = await getConfig();
-  const { privacyChecksApply } = await import('./audience.js');
-  if (!(await privacyChecksApply(config, pluginId))) return;
+  const { syncRulesFor } = await import('./provider-rules.js');
+  const rules = await syncRulesFor(await getConfig(), pluginId);
+  if (!rules.check) return;
   const field = FIELD_OF[m];
   const outgoing: PushText = { title: task.title, description: task.description, note: task.note, summary: task.summary };
   if (field) (outgoing as unknown as Record<string, string>)[field] = fieldText!;
   const texts = full ? [outgoing.title, outgoing.description, outgoing.note, outgoing.summary] : [fieldText!];
 
-  const accepted = new Set(await acceptedWords(task.id).catch(() => [] as readonly string[]));
-  const words = (await readWords().catch(() => undefined))?.filter((w) => !accepted.has(w));
+  const accepted = new Set(await acceptedWords(task.id, pluginId).catch(() => [] as readonly string[]));
+  const words = ((readWords ? await readWords().catch(() => undefined) : undefined) ?? rules.words).filter((w) => !accepted.has(w));
   const entry = matchPrivateWords(words, texts);
   if (entry) {
     log.task.warn('private tasks: a push matching a private word was stopped', { pluginId, method, taskId: task.id, entry });
@@ -144,9 +144,9 @@ async function check(pluginId: string, method: string, args: unknown[]): Promise
 
   if (!modelCheck) return;
   const { privacyJudgeAvailable, serviceName } = await import('./sync-gate.js');
-  if (!privacyJudgeAvailable(config)) return;
+  if (!privacyJudgeAvailable(rules)) return;
   const verdict = await checkPushText(task, outgoing, {
-    service: await serviceName(pluginId),
+    service: await serviceName(pluginId), target: pluginId, rule: rules.aiRule,
     ...(m === 'updateConversationLog' ? { log: fieldText! } : {}),
   });
   if (verdict.ok) return;

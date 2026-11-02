@@ -9,8 +9,9 @@
  *   2. The draft column's Sync chip shows only in a project that syncs, starts Local, and the
  *      task saved for later is created local (or with the service when flipped).
  *   3. The calendar quick add has a Local / <service> field; Local creates the task local.
- *   4. Settings › Tasks › Private tasks: the words are saved to the config and Try a title says
- *      which word a title matches.
+ *   4. Settings › Task providers: each provider's hard rules and AI rule are saved for it, Try a
+ *      task title says which hard rule fails and Ask AI gives pass or fail with a reason, and
+ *      the check turns off.
  *
  * The project is the fixture's Atlas, owned by the fixture source `plugin-a` (no live plugin:
  * nothing is sent anywhere). Every task it makes is deleted after, and the words it
@@ -194,58 +195,93 @@ test('the calendar quick add creates a task Local when asked', async ({ page }) 
 })
 
 // Both write `private_tasks` in the one config the fixture shares: one at a time.
-test.describe.serial('Settings', () => {
-  test('Settings: private words are saved and Try a title says which one matches', async ({ page }) => {
+test.describe.serial('Settings › Task providers', () => {
+  type Rules = { check?: boolean; words?: string[]; ai?: boolean; ai_rule?: string }
+  type Cfg = { config: { private_tasks?: { words?: string[]; model_check?: boolean; providers?: Record<string, Rules> } } }
+  const DEFAULT_RULE = 'Keep out my own personal or confidential matters (the default rule).'
+  /** The fixture's source has no live plugin, so the provider list is answered here from the real
+   *  config, the way the server resolves it (provider-rules.ts: setting, else default). */
+  async function mockProviders(page: Page) {
+    await page.route('**/api/v1/private-tasks/providers', async (route) => {
+      const pt = (await api<Cfg>('GET', '/api/config')).config.private_tasks
+      const own = pt?.providers?.[SERVICE] ?? {}
+      await route.fulfill({ json: { providers: [{
+        id: SERVICE, name: 'Plugin A', check: own.check ?? true, check_set: typeof own.check === 'boolean', check_default: true,
+        words: own.words ?? pt?.words ?? [], ai: own.ai ?? pt?.model_check !== false,
+        ai_rule: own.ai_rule?.trim() || DEFAULT_RULE, ai_rule_default: DEFAULT_RULE,
+      }] } })
+    })
+  }
+  async function openProviders(page: Page) {
+    await openHome(page)
+    await page.locator('.sidebar-nav a[href^="/settings"]').click()
+    await page.getByTestId('settings-nav-tasks').click()
+    // Tasks points to the section; the section itself has its own nav entry too.
+    await page.getByTestId('tasks-open-task-providers').click()
+    const group = page.getByTestId(`task-provider-${SERVICE}`)
+    await expect(group).toBeVisible()
+    return group
+  }
+  const own = async () => (await api<Cfg>('GET', '/api/config')).config.private_tasks?.providers?.[SERVICE]
+
+  test('a provider\'s hard rules are saved for it, and Try a task title says which one fails', async ({ page }) => {
     const word = `zq${stamp().toLowerCase()}`
-    type Cfg = { config: { private_tasks?: { words?: string[] } } }
     const before = (await api<Cfg>('GET', '/api/config')).config.private_tasks
+    await mockProviders(page)
     try {
-      await openHome(page)
-      await page.locator('.sidebar-nav a[href^="/settings"]').click()
-      await page.getByTestId('settings-nav-tasks').click()
-      const group = page.getByTestId('tasks-private')
-      await expect(group).toBeVisible()
-      const box = page.getByTestId('settings-private-words')
+      const group = await openProviders(page)
+      await expect(group).toContainText('Check tasks before they sync')
+      const box = page.getByTestId(`settings-provider-${SERVICE}-words`)
       await box.fill(`${word}\n/(broken/`)
-      await page.getByTestId('settings-private-try').fill(`my ${word} packet`)
-      await expect(group).toContainText(`Stays local: it matches "${word}".`)
+      await page.getByTestId(`settings-provider-${SERVICE}-try`).fill(`my ${word} packet`)
+      await expect(group).toContainText(`Fails the hard rule "${word}".`)
       await expect(group).toContainText('These lines are not used (not a valid pattern, or one that could be slow): /(broken/')
       await box.blur()
-      await expect.poll(async () => (await api<Cfg>('GET', '/api/config')).config.private_tasks?.words)
-        .toEqual([word, '/(broken/'])
-      await group.screenshot({ path: `${SHOTS}/${engine()}-5-settings.png` })
-      await page.getByTestId('settings-private-try').fill('fix the login page')
-      await expect(group).toContainText('No private word matches it')
+      await expect.poll(async () => (await own())?.words).toEqual([word, '/(broken/'])
+      // The shared list is left as it was.
+      expect((await api<Cfg>('GET', '/api/config')).config.private_tasks?.words ?? []).toEqual(before?.words ?? [])
+      await page.getByTestId(`settings-provider-${SERVICE}-try`).fill('fix the login page')
+      await expect(group).toContainText('Passes the hard rules. Ask AI to check it against the AI rule.')
+      await group.screenshot({ path: `${SHOTS}/${engine()}-5-provider-rules.png` })
     } finally {
       await api('PUT', '/api/config', { private_tasks: before ?? { words: [] } }).catch(() => undefined)
     }
   })
 
-  test('Settings: who reads each sync service is chosen per service and saved', async ({ page }) => {
-    type Cfg = { config: { private_tasks?: { words?: string[]; audience?: Record<string, string> } } }
+  test('the AI rule is the user\'s words, Ask AI answers pass or fail with a reason, and the check turns off', async ({ page }) => {
     const before = (await api<Cfg>('GET', '/api/config')).config.private_tasks
-    // The fixture's source has no live plugin, so the list of loaded services is answered here,
-    // from the real config, the way the server answers it (audience.ts: setting, else default).
-    await page.route('**/api/v1/private-tasks/services', async (route) => {
-      const set = (await api<Cfg>('GET', '/api/config')).config.private_tasks?.audience?.[SERVICE]
-      await route.fulfill({ json: { services: [{ id: SERVICE, name: 'Plugin A', audience: set ?? 'shared', default: 'shared', set: !!set }] } })
+    await mockProviders(page)
+    // The fixture has no model: the AI's answer is given here, and the request it got is kept.
+    const asked: Array<Record<string, unknown>> = []
+    await page.route('**/api/v1/private-tasks/test', async (route) => {
+      const body = route.request().postDataJSON() as Record<string, unknown>
+      if (body.ai !== true) return route.continue()
+      asked.push(body)
+      await route.fulfill({ json: { match: null, invalid: [], ai: /quokka/i.test(String(body.text)) ? { pass: false, reason: 'about Quokka' } : { pass: true, reason: 'team work' } } })
     })
     try {
-      await openHome(page)
-      await page.locator('.sidebar-nav a[href^="/settings"]').click()
-      await page.getByTestId('settings-nav-tasks').click()
-      const row = page.getByTestId(`settings-private-audience-${SERVICE}`)
-      await expect(row).toContainText('Who reads Plugin A')
-      await expect(row).toContainText('Others read Plugin A, so Walnut keeps private tasks out of it')
-      await page.getByTestId(`settings-private-audience-${SERVICE}-self`).click()
-      await expect(row).toContainText('Only you read Plugin A, so private tasks may go there')
-      await expect.poll(async () => (await api<Cfg>('GET', '/api/config')).config.private_tasks?.audience?.[SERVICE]).toBe('self')
-      // The words and the AI switch are left as they were.
-      expect((await api<Cfg>('GET', '/api/config')).config.private_tasks?.words ?? []).toEqual(before?.words ?? [])
-      await row.screenshot({ path: `${SHOTS}/${engine()}-6-audience.png` })
-      await page.getByTestId(`settings-private-audience-${SERVICE}-shared`).click()
-      await expect.poll(async () => (await api<Cfg>('GET', '/api/config')).config.private_tasks?.audience?.[SERVICE]).toBe('shared')
-      await expect(row).toContainText('Others read Plugin A')
+      const group = await openProviders(page)
+      const rule = page.getByTestId(`settings-provider-${SERVICE}-ai-rule`)
+      await expect(rule).toHaveValue(DEFAULT_RULE)
+      await rule.fill('Keep out anything about Quokka')
+      await rule.blur()
+      await expect.poll(async () => (await own())?.ai_rule).toBe('Keep out anything about Quokka')
+      await page.getByTestId(`settings-provider-${SERVICE}-try`).fill('Quokka budget')
+      await page.getByTestId(`settings-provider-${SERVICE}-ask-ai`).click()
+      await expect(group).toContainText('Fails the AI rule: about Quokka.')
+      expect(asked.at(-1)).toMatchObject({ text: 'Quokka budget', provider: SERVICE, ai: true, ai_rule: 'Keep out anything about Quokka' })
+      await group.screenshot({ path: `${SHOTS}/${engine()}-6-provider-ai.png` })
+      // Back to the default rule: emptied, it stores '' and shows the default again.
+      await rule.fill('')
+      await rule.blur()
+      await expect.poll(async () => (await own())?.ai_rule).toBe('')
+      // Check off: every task syncs, and the rules are hidden.
+      await page.locator(`#settings-provider-${SERVICE}-check`).click()
+      await expect.poll(async () => (await own())?.check).toBe(false)
+      // The release before this one reads the choice from `audience`: going back keeps it.
+      await expect.poll(async () => ((await api<Cfg>('GET', '/api/config')).config.private_tasks as { audience?: Record<string, string> } | undefined)?.audience?.[SERVICE]).toBe('self')
+      await expect(group).toContainText('Every task syncs to Plugin A; only your own Local choice keeps one out.')
+      await expect(page.getByTestId(`settings-provider-${SERVICE}-words`)).toHaveCount(0)
     } finally {
       await api('PUT', '/api/config', { private_tasks: before ?? { words: [] } }).catch(() => undefined)
     }

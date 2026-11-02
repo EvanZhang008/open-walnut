@@ -20,6 +20,7 @@ import { SessionsSection } from './sections/SessionsSection'
 import { SttSection } from './sections/SttSection'
 import { SuggestAccuracySection } from './sections/SuggestAccuracySection'
 import { TagsSection } from './sections/TagsSection'
+import { TaskProvidersSection } from './sections/TaskProvidersSection'
 import { TasksSection } from './sections/TasksSection'
 import { TriageSection } from './sections/TriageSection'
 import { UsageSection } from './sections/UsageSection'
@@ -115,8 +116,6 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
       { word: 'notify', rowLabel: 'Tell Ask Walnut', anchor: 'triage-notify-mode' },
       'summary', 'debounce',
       { word: 'jev model', rowLabel: 'Jev model', anchor: 'jev-model' },
-      { word: 'private', rowLabel: 'Private words', anchor: 'settings-private-words' },
-      'sensitive', 'local only', 'keep local',
     ],
     render: ({ config, saveSection, reload }) => <TasksSection config={config} onSave={saveSection} onReload={reload} />,
   },
@@ -134,6 +133,18 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     description: 'How tags show on tasks, and what they open.',
     keywords: ['tags', 'tag', 'hide tag', 'show tag', 'tag value', 'key', 'namespace', 'pill', 'tag link', 'link', 'url'],
     render: () => <TagsSection />,
+  },
+  // Task providers: each plugin that syncs tasks, with the rules a task must pass before it
+  // syncs there (src/core/private-tasks/provider-rules.ts).
+  {
+    owner: 'walnut', id: 'task-providers', label: 'Task providers', title: 'Task providers', group: 'configure',
+    icon: 'plug', tint: '#007AFF',
+    description: 'Each service tasks sync to, and the rules a task must pass first.',
+    keywords: [
+      'private', 'sensitive', 'local only', 'keep local', 'hard rules', 'ai rule', 'words', 'sync',
+      'to do', 'tracker', 'provider',
+    ],
+    render: ({ config, saveSection }) => <TaskProvidersSection config={config} onSave={saveSection} />,
   },
   {
     owner: 'walnut', id: 'sessions', label: 'Sessions', title: 'Sessions', group: 'configure',

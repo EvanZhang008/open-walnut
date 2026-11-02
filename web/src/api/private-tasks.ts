@@ -29,19 +29,32 @@ export function testPrivateWords(text: string, words?: string[]): Promise<{ matc
   return apiPost('/api/v1/private-tasks/test', { text, ...(words ? { words } : {}) });
 }
 
-/** Who reads a sync service (src/core/private-tasks/audience.ts). */
-export type SyncAudience = 'self' | 'shared';
-
-export interface SyncServiceAudience {
+/** A task provider (a plugin that syncs tasks) and the rules a task must pass before it syncs
+ *  there (src/core/private-tasks/provider-rules.ts), defaults filled in. */
+export interface ProviderRules {
   id: string;
   name: string;
-  audience: SyncAudience;
-  /** The plugin's own default (its manifest), `shared` when it says nothing. */
-  default: SyncAudience;
-  /** The user chose it in Settings. */
-  set: boolean;
+  check: boolean;
+  check_set: boolean;
+  /** The plugin's own default: off for a service only the user reads. */
+  check_default: boolean;
+  words: string[];
+  ai: boolean;
+  ai_rule: string;
+  ai_rule_default: string;
 }
 
-export function listSyncServices(): Promise<{ services: SyncServiceAudience[] }> {
-  return apiGet('/api/v1/private-tasks/services');
+export function listTaskProviders(): Promise<{ providers: ProviderRules[] }> {
+  return apiGet('/api/v1/private-tasks/providers');
+}
+
+export interface RulesTest {
+  match: string | null;
+  invalid: string[];
+  ai?: { pass: boolean; reason: string } | { error: string };
+}
+
+/** Which hard rule a title fails, and with `ai` the AI rule's verdict (one model call). */
+export function testProviderRules(input: { text: string; provider: string; words?: string[]; ai?: boolean; ai_rule?: string }): Promise<RulesTest> {
+  return apiPost('/api/v1/private-tasks/test', input, { timeoutMs: input.ai ? 90_000 : 15_000 });
 }

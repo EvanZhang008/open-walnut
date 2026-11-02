@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import { compilePrivateWords, invalidPrivateWords, matchPrivateWords } from '../../../src/core/private-tasks/private-words.js';
 import { parseVerdict } from '../../../src/core/private-tasks/privacy-judge.js';
-import { decideBirth, modelCheckOn } from '../../../src/core/private-tasks/birth.js';
+import { decideBirth } from '../../../src/core/private-tasks/birth.js';
 
 describe('private words', () => {
   it('a plain entry matches a whole word, case-insensitively', () => {
@@ -44,6 +44,12 @@ describe('private words', () => {
 });
 
 describe('the model verdict', () => {
+  it('reads pass or fail, with a reason (and the earlier private form)', () => {
+    expect(parseVerdict('{"pass": false, "reason": "own promotion"}')).toEqual({ private: true, reason: 'own promotion' });
+    expect(parseVerdict('{"pass": true, "reason": "team work"}')).toEqual({ private: false, reason: 'team work' });
+    expect(parseVerdict('{"private": true, "reason": "health"}')).toEqual({ private: true, reason: 'health' });
+  });
+
   it('reads the JSON asked for, also inside prose', () => {
     expect(parseVerdict('{"private": true, "reason": "own marigold"}')).toEqual({ private: true, reason: 'own marigold' });
     expect(parseVerdict('Sure: {"private": false, "reason": "team bug fix"}')).toEqual({ private: false, reason: 'team bug fix' });
@@ -58,31 +64,32 @@ describe('the model verdict', () => {
 });
 
 describe('where a new task starts', () => {
+  const ON = { check: true, words: [] as string[] };
   const now = '2026-11-01T00:00:00.000Z';
   it('a task with no outside service is plain local', () => {
-    expect(decideBirth('local', { title: 'x' }, undefined, { canJudge: true, now })).toEqual({ source: 'local' });
+    expect(decideBirth('local', { title: 'x' }, ON, { canJudge: true, now })).toEqual({ source: 'local' });
   });
 
   it('a creator\'s Local choice holds it as chosen', () => {
-    expect(decideBirth('svc', { title: 'x' }, undefined, { explicitLocal: true, canJudge: true, now }))
+    expect(decideBirth('svc', { title: 'x' }, ON, { explicitLocal: true, canJudge: true, now }))
       .toEqual({ source: 'local', hold: { target: 'svc', state: 'chosen', by: 'user', reason: 'Kept local when it was created', at: now } });
   });
 
-  it('a private word keeps it local before any model is asked', () => {
-    const d = decideBirth('svc', { title: 'Q3', description: 'my marigold packet' }, { words: ['marigold'] }, { canJudge: true, now });
+  it('a hard rule keeps it local before any model is asked', () => {
+    const d = decideBirth('svc', { title: 'Q3', description: 'my marigold packet' }, { check: true, words: ['marigold'] }, { canJudge: true, now });
     expect(d.source).toBe('local');
     expect(d.hold).toMatchObject({ target: 'svc', state: 'private', by: 'words' });
   });
 
-  it('with the model check it is born local and checking; without it, the service at once', () => {
-    expect(decideBirth('svc', { title: 'Fix login' }, {}, { canJudge: true, now })).toMatchObject({ source: 'local', hold: { state: 'checking', target: 'svc' } });
-    expect(decideBirth('svc', { title: 'Fix login' }, {}, { canJudge: false, now })).toEqual({ source: 'svc' });
+  it('with the AI rule it is born local and checking; without it, the service at once', () => {
+    expect(decideBirth('svc', { title: 'Fix login' }, ON, { canJudge: true, now })).toMatchObject({ source: 'local', hold: { state: 'checking', target: 'svc' } });
+    expect(decideBirth('svc', { title: 'Fix login' }, ON, { canJudge: false, now })).toEqual({ source: 'svc' });
   });
 
-  it('the model check is on unless the user turned it off', () => {
-    expect(modelCheckOn(undefined)).toBe(true);
-    expect(modelCheckOn({})).toBe(true);
-    expect(modelCheckOn({ model_check: false })).toBe(false);
+  it('a provider whose check is off sends it at once, hard rules or not; the Local choice still holds', () => {
+    const off = { check: false, words: ['marigold'] };
+    expect(decideBirth('svc', { title: 'my marigold packet' }, off, { canJudge: true, now })).toEqual({ source: 'svc' });
+    expect(decideBirth('svc', { title: 'x' }, off, { explicitLocal: true, canJudge: true, now }).source).toBe('local');
   });
 });
 

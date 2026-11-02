@@ -11,11 +11,13 @@
  *        the user's decision: a session caller passes user_words quoting the user's ask.
  *   POST /api/v1/tasks/:id/outside-copy    { action: 'archive'|'neutralize' }
  *        Change the outside copy a task turned local left behind.
- *   POST /api/v1/private-tasks/test        { text, words? } -> { match, invalid }
- *        Which of the user's private words (or the given list) a text matches (Settings).
- *   GET  /api/v1/private-tasks/services    -> { services: [{ id, name, audience, default, set }] }
- *        Every loaded sync service and who reads it (audience.ts): `self` or `shared`, the
- *        manifest's default, and whether the user set it (Settings).
+ *   POST /api/v1/private-tasks/test        { text, words?, provider?, ai?, ai_rule? }
+ *        -> { match, invalid, ai?: { pass, reason } | { error } }
+ *        Which hard rule (the given list, else the provider's) a text matches, and with `ai`
+ *        whether it passes the AI rule (the given one, else the provider's) (Settings).
+ *   GET  /api/v1/private-tasks/providers   -> { providers: [{ id, name, check, check_set,
+ *        check_default, words, ai, ai_rule, ai_rule_default }] }
+ *        Every loaded task provider and its rules (provider-rules.ts), defaults filled in.
  *
  * Writes answer 501 on the cloud companion: the primary owns task sources.
  */
@@ -130,27 +132,62 @@ privateTasksV1Router.post('/private-tasks/test', route(async (req, res) => {
   if (b.words !== undefined && (!Array.isArray(b.words) || b.words.some((w) => typeof w !== 'string'))) {
     throw new RouteError(400, 'bad_request', 'words must be an array of strings')
   }
+  if (b.provider !== undefined && typeof b.provider !== 'string') throw new RouteError(400, 'bad_request', 'provider must be a string')
+  if (b.ai_rule !== undefined && typeof b.ai_rule !== 'string') throw new RouteError(400, 'bad_request', 'ai_rule must be a string')
+  const { MAX_AI_RULE } = await import('../../core/private-tasks/provider-rules.js')
+  if (typeof b.ai_rule === 'string' && b.ai_rule.length > MAX_AI_RULE) throw new RouteError(400, 'bad_request', `ai_rule is longer than ${MAX_AI_RULE} characters`)
+  if (b.text.length > 20_000) throw new RouteError(400, 'bad_request', 'text is longer than 20000 characters')
   const { matchPrivateWords, invalidPrivateWords } = await import('../../core/private-tasks/private-words.js')
-  const words = (b.words as string[] | undefined) ?? (await (await import('../../core/config-manager.js')).getConfig()).private_tasks?.words ?? []
-  res.json({ match: matchPrivateWords(words, [b.text]), invalid: invalidPrivateWords(words) })
+  const { syncRulesFor } = await import('../../core/private-tasks/provider-rules.js')
+  const config = await (await import('../../core/config-manager.js')).getConfig()
+  const rules = await syncRulesFor(config, (b.provider as string | undefined) ?? '')
+  const words = (b.words as string[] | undefined) ?? (b.provider ? rules.words : config.private_tasks?.words ?? [])
+  const out: Record<string, unknown> = { match: matchPrivateWords(words, [b.text]), invalid: invalidPrivateWords(words) }
+  // The AI rule only when asked (Settings' Ask AI): one fast-model call, pass or fail with a reason.
+  if (b.ai === true && b.text.trim()) {
+    const { judgeTaskPrivacy } = await import('../../core/private-tasks/privacy-judge.js')
+    const { serviceName } = await import('../../core/private-tasks/sync-gate.js')
+    try {
+      const verdict = await judgeTaskPrivacy({
+        title: b.text.slice(0, 500), rule: ((b.ai_rule as string | undefined) ?? '').trim() || rules.aiRule,
+        ...(b.provider ? { service: await serviceName(b.provider as string) } : {}),
+      })
+      out.ai = { pass: !verdict.private, reason: verdict.reason }
+    } catch (err) {
+      out.ai = { error: err instanceof Error ? err.message : String(err) }
+    }
+  }
+  res.json(out)
 }))
 
-privateTasksV1Router.get('/private-tasks/services', route(async (_req, res) => {
+/** Every loaded task provider (a plugin that syncs tasks), by name. */
+async function taskProviders() {
   const { registry } = await import('../../core/integration-registry.js')
+  return registry.getAll().filter((p) => p.id !== 'local' && p.hasSync !== false).sort((a, b) => a.name.localeCompare(b.name))
+}
+
+privateTasksV1Router.get('/private-tasks/providers', route(async (_req, res) => {
   const { getConfig } = await import('../../core/config-manager.js')
-  const { resolveAudience } = await import('../../core/private-tasks/audience.js')
+  const { DEFAULT_AI_RULE, resolveSyncRules } = await import('../../core/private-tasks/provider-rules.js')
   const config = await getConfig()
-  const services = registry.getAll()
-    .filter((p) => p.id !== 'local' && p.hasSync !== false)
-    .map((p) => {
-      const set = config.private_tasks?.audience?.[p.id]
-      return {
-        id: p.id, name: p.name,
-        audience: resolveAudience(config, p.id, p.syncAudience),
-        default: p.syncAudience ?? 'shared',
-        set: set === 'self' || set === 'shared',
-      }
-    })
-    .sort((a, b) => a.name.localeCompare(b.name))
+  const providers = (await taskProviders()).map((p) => {
+    const r = resolveSyncRules(config, p.id, p.syncAudience)
+    return {
+      id: p.id, name: p.name, check: r.check, check_set: r.checkSet, check_default: r.checkDefault,
+      words: r.words, ai: r.ai, ai_rule: r.aiRule, ai_rule_default: DEFAULT_AI_RULE,
+    }
+  })
+  res.json({ providers })
+}))
+
+/** The earlier shape of the list above (a window opened before 2026-11-02 still asks for it). */
+privateTasksV1Router.get('/private-tasks/services', route(async (_req, res) => {
+  const { getConfig } = await import('../../core/config-manager.js')
+  const { resolveSyncRules } = await import('../../core/private-tasks/provider-rules.js')
+  const config = await getConfig()
+  const services = (await taskProviders()).map((p) => {
+    const r = resolveSyncRules(config, p.id, p.syncAudience)
+    return { id: p.id, name: p.name, audience: r.check ? 'shared' : 'self', default: r.checkDefault ? 'shared' : 'self', set: r.checkSet }
+  })
   res.json({ services })
 }))

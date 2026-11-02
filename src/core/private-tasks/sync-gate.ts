@@ -14,18 +14,18 @@
 import { log } from '../../logging/index.js';
 import { backgroundAiDisabled } from '../cheap-model.js';
 import type { Config, SyncHold, Task } from '../types.js';
-import { modelCheckOn, privateWordIn, wordsReason } from './birth.js';
+import { privateWordIn, wordsReason } from './birth.js';
 import { hasTestPrivacyJudge, judgeTaskPrivacy, privacyModelReady } from './privacy-judge.js';
-import { privacyChecksApply } from './audience.js';
+import { syncRulesFor, type SyncRules } from './provider-rules.js';
 
 /** A text that changed while it was judged is judged again, at most this many times. */
 const MAX_TRIES = 3;
 
-/** The model check runs: the user left it on, and this server has a model to ask (a test
- *  server has none unless a test installed a judge; a server with no model provider set up has
- *  none either, and then only the user's words are checked). */
-export function privacyJudgeAvailable(config: Pick<Config, 'private_tasks'>): boolean {
-  if (!modelCheckOn(config.private_tasks)) return false;
+/** The AI rule runs: the provider's rules check and use it, and this server has a model to ask
+ *  (a test server has none unless a test installed a judge; a server with no model provider set
+ *  up has none either, and then only the hard rules are checked). */
+export function privacyJudgeAvailable(rules: Pick<SyncRules, 'check' | 'ai'>): boolean {
+  if (!rules.check || !rules.ai) return false;
   if (hasTestPrivacyJudge()) return true;
   return !backgroundAiDisabled() && privacyModelReady();
 }
@@ -92,19 +92,20 @@ async function judgeAndApply(taskId: string): Promise<void> {
     // A service only the user reads (audience.ts): nothing is checked, the task goes out. The
     // service is the one it would go to now (its project's), which is where a release sends it.
     const goesTo = (await tm.projectSyncSourceOf(task.project)) ?? hold.target;
-    if (!(await privacyChecksApply(config, goesTo))) {
+    const rules = await syncRulesFor(config, goesTo);
+    if (!rules.check) {
       await tm.releaseSyncHold(taskId, stillChecking);
       return;
     }
-    // The words first: they may have been added (to the task or the list) since its create.
-    const entry = privateWordIn(config.private_tasks, task);
+    // The hard rules first: they may have been added (to the task or the list) since its create.
+    const entry = privateWordIn(rules.words, task);
     if (entry) {
       const kept = await tm.setTaskSyncHold(taskId, { ...hold, state: 'private', by: 'words', reason: wordsReason(entry), at: now() }, stillChecking);
       if (kept) await tellKeptLocal(taskId, 'created');
       return;
     }
-    if (!privacyJudgeAvailable(config)) {
-      // The user turned the check off while it waited: the words passed it.
+    if (!privacyJudgeAvailable(rules)) {
+      // The user turned the AI rule off while it waited: the hard rules passed it.
       await tm.releaseSyncHold(taskId, stillChecking);
       return;
     }
@@ -114,7 +115,7 @@ async function judgeAndApply(taskId: string): Promise<void> {
     try {
       verdict = await judgeTaskPrivacy({
         title: task.title, description: task.description, note: task.note, summary: task.summary,
-        project: task.project, service: await serviceName(hold.target),
+        project: task.project, service: await serviceName(goesTo), rule: rules.aiRule,
       });
     } catch (err) {
       failure = err instanceof Error ? err.message : String(err);
@@ -133,7 +134,7 @@ async function judgeAndApply(taskId: string): Promise<void> {
     if (verdict.private) {
       log.task.info('private tasks: judged private, the task stays local', { taskId, reason: verdict.reason });
       const kept = await tm.setTaskSyncHold(taskId, {
-        ...after.sync_hold!, state: 'private', by: 'model', reason: `Walnut judged it private: ${verdict.reason}`, at: now(), tries: attempt,
+        ...after.sync_hold!, state: 'private', by: 'model', reason: `It did not pass the AI rule: ${verdict.reason}`, at: now(), tries: attempt,
       }, stillChecking);
       if (kept) await tellKeptLocal(taskId, 'created');
       return;
@@ -428,9 +429,9 @@ export async function wireSyncGate(): Promise<void> {
 
 async function releaseUnshared(why: string): Promise<void> {
   try {
-    const { releaseHoldsOfUnsharedServices } = await import('./audience.js');
+    const { releaseHoldsOfUnsharedServices } = await import('./provider-rules.js');
     await releaseHoldsOfUnsharedServices();
   } catch (err) {
-    log.task.warn('private tasks: releasing holds of unshared services failed', { why, error: err instanceof Error ? err.message : String(err) });
+    log.task.warn('private tasks: releasing holds of unchecked providers failed', { why, error: err instanceof Error ? err.message : String(err) });
   }
 }
