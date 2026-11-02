@@ -6,13 +6,15 @@
  * (archivedReason 'settled', one plain line) every open, unanswered letter whose kind says so.
  *
  * Runs at boot and on the letter re-check's clock (sessions/letter-recheck.ts). Older letters
- * without the kind mark are found by their English shape (`matchesUnmarked`).
+ * without the kind mark are found by their English shape (`matchesUnmarked`), and an open letter of a
+ * kind Walnut sends no more (retired.ts) is settled too.
  */
 import { log } from '../../../logging/index.js';
 import type { Task } from '../../types.js';
 import { walnutLetterLanguage } from './languages.js';
 import type { StillNeededContext } from './kind.js';
 import { kindOfLetter } from './registry.js';
+import { retiredKindOf } from './retired.js';
 
 export async function settleUnneededWalnutLetters(now = Date.now()): Promise<Array<{ id: string; reason: string }>> {
   const { listLetters, settleLettersWhere } = await import('../store.js');
@@ -32,6 +34,9 @@ export async function settleUnneededWalnutLetters(now = Date.now()): Promise<Arr
   };
   const reasons = new Map<string, string>();
   for (const letter of open) {
+    // A kind Walnut sends no more (retired.ts): what it asked about is not raised with the user now.
+    const retired = retiredKindOf(letter);
+    if (retired) { reasons.set(letter.id, retired.settleReason[ctx.lang]); continue; }
     const rule = kindOfLetter(letter)?.stillNeeded;
     if (!rule || !('check' in rule)) continue;
     try {

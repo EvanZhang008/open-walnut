@@ -131,3 +131,42 @@ describe('Walnut\'s own words on a letter\'s record follow the letter language t
     }
   })
 })
+
+describe('(d) a kind Walnut stops sending is retired, and its open letters settle', () => {
+  // Every kind id that was ever registered. Removing a kind from the registry without moving it to
+  // RETIRED_LETTER_KINDS (retired.ts) fails here: its open letters would ask the user forever.
+  const EVER_REGISTERED = [
+    'host-sign-in', 'host-exec-ask', 'budget-paused', 'git-sync-secret-hold', 'git-sync-secret-aside', 'org-report',
+    'mail-approval', 'mail-unsubscribe', 'mail-digest', 'offline-conflict', 'trigger-stopped',
+  ]
+  it('every kind ever registered is live or retired, and a new live kind is added to the list above', async () => {
+    const { RETIRED_LETTER_KINDS } = await import('../../src/core/human-inbox/walnut-letters/retired.js')
+    const live = WALNUT_LETTER_KINDS.map((k) => k.id)
+    const retired = RETIRED_LETTER_KINDS.map((k) => k.id)
+    expect(live.filter((id) => retired.includes(id))).toEqual([])
+    for (const id of EVER_REGISTERED) expect(live.includes(id) || retired.includes(id), `${id} left the registry without being retired`).toBe(true)
+    for (const id of [...live, ...retired]) expect(EVER_REGISTERED, `add ${id} to EVER_REGISTERED`).toContain(id)
+  })
+
+  it('each retired kind finds its old letters, never a live kind\'s or a session\'s, and says why in every language', async () => {
+    const { RETIRED_LETTER_KINDS } = await import('../../src/core/human-inbox/walnut-letters/retired.js')
+    const walnut = { sessionId: 'external', host: 'local' }
+    for (const k of RETIRED_LETTER_KINDS) {
+      expect(Object.keys(k.settleReason).sort(), k.id).toEqual([...LETTER_LANGUAGES].sort())
+      expect(languageDrift('Talk to the user in Chinese', k.settleReason.zh, 8), k.id).toBe(false)
+      expect(han(k.settleReason.en), k.id).toBe(0)
+      expect(k.samples.length, k.id).toBeGreaterThan(0)
+      for (const subject of k.samples) {
+        expect(k.matches({ subject, sender: walnut } as never), `${k.id}: ${subject}`).toBe(true)
+        expect(k.matches({ subject, sender: { sessionId: 's-1', host: 'local', taskId: 't-1' } } as never), `${k.id}: a session's letter`).toBe(false)
+      }
+      for (const live of WALNUT_LETTER_KINDS) {
+        for (const sample of live.samples) {
+          for (const lang of LETTER_LANGUAGES) {
+            expect(k.matches({ subject: live.render(lang, sample).subject, sender: walnut } as never), `${k.id} would settle a live ${live.id} letter`).toBe(false)
+          }
+        }
+      }
+    }
+  })
+})

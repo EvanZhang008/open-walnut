@@ -131,6 +131,19 @@ describe('settling Walnut letters nobody needs', () => {
     expect((await getLetter(freshLetter.id))!.archived).toBe(false)
   })
 
+  it('an open letter of a kind Walnut sends no more settles; a session\'s letter with the same subject is kept', async () => {
+    // Walnut wrote these until 2026-11-02; a failing trigger now tells its task or that task's lead.
+    const subject = 'Trigger "New replies arrived in the ask threads..." stopped after 5 failed checks'
+    const old = await sendLetter({ subject, type: 'review', markdown: 'Its check failed 5 times in a row.', sender: { sessionId: 'external', host: 'local' } }, { createdAt: OCT_31 })
+    const t = (await addTask({ title: 'Watcher' })).task
+    const mine = await sendLetter({ subject, type: 'review', markdown: 'mine', sender: { sessionId: 's-w', host: 'local', taskId: t.id } }, { createdAt: OCT_31 })
+    const settled = new Map((await settleUnneededWalnutLetters()).map((s) => [s.id, s.reason]))
+    expect(settled.get(old.id)).toMatch(/no longer writes letters about triggers/)
+    expect((await getLetter(old.id))!.archivedReason).toBe('settled')
+    expect(settled.has(mine.id)).toBe(false)
+    expect((await getLetter(mine.id))!.archived).toBe(false)
+  })
+
   it('settles in the user\'s letter language', async () => {
     await updateConfig({ session: { reply_language: 'Talk to the user in Chinese; code stays English' } } as never)
     try {
