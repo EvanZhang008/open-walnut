@@ -119,15 +119,26 @@ export function showKey(key: string, id: string | null, fn: () => void): () => v
  * last pick is the one kept. True when this tab's view changed.
  */
 export function writeView(key: string, id: string | null, v: unknown): boolean {
+  const want = JSON.stringify(v);
+  // Whether a text already holds `v` there. A write of the same value changes nothing, not even
+  // the order of the ids: two panels of one key re-writing their own unchanged views would
+  // otherwise move each other's text and re-render each other without end.
+  const holds = (text: string | null) => {
+    if (id === null) return text === want;
+    const entry = pairsOf(text).find(([k]) => k === id);
+    return entry !== undefined && JSON.stringify(entry[1]) === want;
+  };
   const cur = shownText(key);
-  const text = storedText(cur, id, v);
   const raw = rawOf(key);
-  const stored = id === null ? text : storedText(raw, id, v);
-  const changed = text !== cur;
-  if (!changed && stored === raw) return false;
-  if (changed && live.has(key)) live.set(key, text);
-  // Storage off or full: the choice still holds for this load, it is just not kept.
-  try { localStorage.setItem(key, stored); unstored.delete(key); } catch { unstored.set(key, stored); }
+  const changed = !holds(cur);
+  const kept = holds(raw);
+  if (!changed && kept) return false;
+  if (changed && live.has(key)) live.set(key, storedText(cur, id, v));
+  if (!kept) {
+    const stored = storedText(raw, id, v);
+    // Storage off or full: the choice still holds for this load, it is just not kept.
+    try { localStorage.setItem(key, stored); unstored.delete(key); } catch { unstored.set(key, stored); }
+  }
   if (changed) for (const fn of [...(listeners.get(key) ?? [])]) fn();
   return changed;
 }

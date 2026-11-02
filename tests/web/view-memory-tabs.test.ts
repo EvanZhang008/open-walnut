@@ -126,6 +126,28 @@ describe('view memory: one tab, one view', () => {
     expect(shownText(key)).toBe('"a.py"')
   })
 
+  it('two mounts re-writing their own unchanged views write nothing and tell no one (no ping-pong)', () => {
+    const key = fresh()
+    let told = 0
+    const leaveA = showKey(key, 'a', () => { told++ })
+    const leaveB = showKey(key, 'b', () => { told++ })
+    writeView(key, 'a', { view: 'files' })
+    writeView(key, 'b', { view: 'chat' })
+    const text = store.get(key)
+    told = 0
+    let writes = 0
+    const set = (globalThis as { localStorage: { setItem: (k: string, v: string) => void } }).localStorage.setItem
+    ;(globalThis as { localStorage: { setItem: (k: string, v: string) => void } }).localStorage.setItem = (k, v) => { writes++; set(k, v) }
+    for (let i = 0; i < 5; i++) {
+      expect(writeView(key, 'a', { view: 'files' })).toBe(false)
+      expect(writeView(key, 'b', { view: 'chat' })).toBe(false)
+    }
+    expect(told).toBe(0)
+    expect(writes).toBe(0)
+    expect(store.get(key)).toBe(text)
+    leaveB(); leaveA()
+  })
+
   it('the same text again writes nothing', () => {
     const key = fresh()
     const leave = showKey(key, null, () => {})
