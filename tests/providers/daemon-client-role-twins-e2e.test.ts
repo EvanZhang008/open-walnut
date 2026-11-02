@@ -22,6 +22,7 @@ import { getDaemonSource } from '../../src/providers/daemon-source.js'
 import { testBun } from '../helpers/bun-runtime.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 let scriptPath = ''
 let root = ''
@@ -47,7 +48,7 @@ async function boot(twin: Twin): Promise<number> {
   const env: Record<string, string | undefined> = {
     ...process.env,
     SHELL: '/bin/sh',
-    PATH: '/usr/bin:/bin',
+    PATH: guardedPath([], '/usr/bin:/bin'),
     HOME: home,
     WALNUT_DAEMON_DIR: daemonDir,
     WALNUT_STREAMS_DIR: path.join(root, 'streams'),
