@@ -225,7 +225,16 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
       }, timeoutMs)
       entry.pendingRpc.set(id, { resolve, timer })
       try {
-        entry.proc.stdin!.write(JSON.stringify({ id, op, params }) + '\n')
+        entry.proc.stdin!.write(JSON.stringify({ id, op, params }) + '\n', (err) => {
+          // The bytes never reached the worker (EPIPE: it stopped reading). Only this
+          // request fails now; the others may still be answered, or the reap fails them.
+          if (!err) return
+          const pending = entry.pendingRpc.get(id)
+          if (!pending) return
+          clearTimeout(pending.timer)
+          entry.pendingRpc.delete(id)
+          pending.resolve({ id, ok: false, error: { kind: 'internal', message: `worker stdin write failed: ${err.message}` } })
+        })
       } catch (e) {
         clearTimeout(timer)
         entry.pendingRpc.delete(id)
@@ -403,6 +412,20 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
         // inherit the group so an explicit abort can terminate all of them.
         detached: true,
       })
+      // A request still in the stdin pipe when the worker goes (an interrupt tears
+      // its group down) fails with EPIPE as an 'error' EVENT, which a try around
+      // write() never sees. Unheard, it is an uncaughtException that ends the whole
+      // daemon (2026-11-02: it ended the browser fixture's server, which embeds
+      // this module). The worker's exit reaps it and fails what waits on it.
+      let stdinClosedLogged = false
+      proc.stdin?.on('error', (err: NodeJS.ErrnoException) => {
+        if (stdinClosedLogged) return
+        stdinClosedLogged = true
+        log(err.code === 'EPIPE' ? 'info' : 'warn', 'acp: worker stdin closed', { sid, code: err.code, error: err.message })
+      })
+      for (const out of [proc.stdout, proc.stderr]) {
+        out?.on('error', (err: NodeJS.ErrnoException) => log('warn', 'acp: worker output stream failed', { sid, code: err.code }))
+      }
       await new Promise<void>((resolve, reject) => {
         proc.once('spawn', resolve)
         proc.once('error', reject)

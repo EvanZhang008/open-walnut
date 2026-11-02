@@ -277,6 +277,15 @@ function runReader(cmd: readonly string[], args: string[], opts: ProtectedReadOp
       stderr += ' (timed out)';
       child.kill('SIGKILL');
     }, READ_TIMEOUT_MS);
+    // A destination that cannot be written (its folder gone, a full disk) is an 'error'
+    // event on `out`, which pipe() does not forward: unheard it ended the server. The
+    // read fails like a capped one, and the partial file is removed.
+    out?.on('error', (err) => {
+      if (capped) return;
+      capped = true;
+      stderr += ` (could not write the copy: ${err.message})`;
+      child.kill('SIGKILL');
+    });
     child.stderr?.on('data', (d) => { stderr += String(d).slice(0, 500); });
     if (wantsBytes && child.stdout) {
       child.stdout.on('data', (chunk: Buffer) => {
@@ -300,7 +309,8 @@ function runReader(cmd: readonly string[], args: string[], opts: ProtectedReadOp
       finishing = true;
       clearTimeout(timer);
       // Wait for the file stream to flush, or a caller would open a short file.
-      if (out) out.once('close', () => done(code)).end();
+      // A stream that already failed is destroyed and may have closed already.
+      if (out && !out.destroyed) out.once('close', () => done(code)).end();
       else done(code);
     };
     child.on('error', (err) => {

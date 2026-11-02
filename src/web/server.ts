@@ -107,6 +107,7 @@ import { appsRouter, pluginAppStaticRouter } from './routes/apps.js'
 import { createPluginBodyParser, createPluginRouteDispatcher } from './plugin-route-dispatcher.js'
 import { setPluginApiBase } from '../core/plugins/server-api.js'
 import { setSelfApiRoot } from '../lib/self-api-root.js'
+import { guardProcessStdio } from '../lib/stdio-epipe-guard.js'
 import { systemRouter } from './routes/system.js'
 import { hostsRouter } from './routes/hosts.js'
 import { cloudSetupRouter } from './routes/cloud-setup.js'
@@ -810,6 +811,13 @@ function installExitDiagnostics(): void {
   process.on('SIGTERM', () => fatalSignal('SIGTERM', 'SIGTERM (killed by another process)', false))
   process.on('SIGHUP', () => fatalSignal('SIGHUP', 'SIGHUP (terminal closed or parent died)'))
   process.on('uncaughtException', (err) => { exitLog('uncaughtException', err); process.exit(1) })
+  // The terminal copy of the log (stderr) and any stdout print are best effort; the
+  // log file keeps every line. A reader that went away (a closed terminal, a piping
+  // parent that died) fails the next write with EPIPE as an 'error' EVENT, which the
+  // try in logging/subsystem.ts never sees: unheard, the handler above ended the server.
+  guardProcessStdio((name, err) => {
+    log.web.warn(`server ${name} is no longer readable; its copy of the log stops`, { code: err.code })
+  })
   process.on('unhandledRejection', (reason) => {
     // Fatal ONLY during boot: a rejection there means startServer itself broke
     // (e.g. listen EADDRINUSE escaping the async main) and the deploy smoke

@@ -71,7 +71,12 @@ function run(cmd: string, args: string[], opts: { cwd: string; env?: NodeJS.Proc
     const done = () => { clearTimeout(timer); if (hard) clearTimeout(hard) }
     child.once('error', (e) => { done(); reject(e) })
     child.once('close', (code) => { done(); resolve({ code, stdout: Buffer.concat(out), stderr: err }) })
-    if (opts.input) child.stdin!.end(opts.input)
+    if (opts.input) {
+      // A child that exits before reading its input fails the write with EPIPE as an
+      // 'error' event; unheard it would end the server. Its exit code reports the failure.
+      child.stdin!.on('error', () => {})
+      child.stdin!.end(opts.input)
+    }
   })
 }
 

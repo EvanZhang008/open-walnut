@@ -490,6 +490,10 @@ export async function* downloadSherpaModel(entry: SherpaModelCatalogEntry): Asyn
     }
 
     const writeStream = createWriteStream(tmpPath);
+    // Heard from the start, as in the download above: a full disk mid-download is an
+    // 'error' event, which with no listener yet was an uncaughtException ending the server.
+    let writeError: Error | null = null;
+    writeStream.on('error', (e) => { writeError = e; });
     let downloaded = 0;
     let lastPercent = 0;
 
@@ -497,6 +501,7 @@ export async function* downloadSherpaModel(entry: SherpaModelCatalogEntry): Asyn
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        if (writeError) throw writeError;
         writeStream.write(value);
         downloaded += value.length;
 
@@ -510,6 +515,7 @@ export async function* downloadSherpaModel(entry: SherpaModelCatalogEntry): Asyn
         }
       }
 
+      if (writeError) throw writeError;
       await new Promise<void>((resolve, reject) => {
         writeStream.end(() => resolve());
         writeStream.on('error', reject);

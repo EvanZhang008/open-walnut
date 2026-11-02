@@ -66,6 +66,9 @@ function copyToMacClipboard(value: string): void {
   const child = execFile('/usr/bin/pbcopy', { timeout: 5_000 }, (err) => {
     if (err) log.web.warn('clipboard copy failed', { error: String(err).slice(0, 200) });
   });
+  // A pbcopy that dies before reading fails the write with EPIPE as an 'error' event;
+  // unheard it would end the server. The exec callback above already logs the failure.
+  child.stdin?.on('error', () => {});
   child.stdin?.end(value);
 }
 
