@@ -397,6 +397,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // the primary while it answers its beats. Both twins. Optional: without it
   // streams ride the session link.
   'stream-lane-v1',
+  // 'client-role-v1': a test server (an ephemeral one attached read only to a host it
+  // shares with the real Walnut) may say `client.role {role: 'probe'}` on each of its
+  // sockets. A probe keeps its commands but is never taken for the Walnut's server:
+  // no gateway call, trigger event or phone request is sent to it. Both twins.
+  // Optional: on an older daemon the test server refuses those calls itself.
+  'client-role-v1',
   // 'host-replica-v1' (host-replica-core.ts, docs/plan/walnut-control-plane.md):
   // the primary keeps a read copy of its notes, memory and skills on this host
   // with `replica.sync` (a manifest of key + hash; the daemon answers which keys

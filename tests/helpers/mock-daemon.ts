@@ -91,6 +91,8 @@ export class MockDaemon {
   private _fault: string | null = null
   private _cliCommand = MOCK_CLI
   private _attachHistory: Array<{ sid: string; fromOffset: number }> = []
+  /** Roles clients announced with client.role ('client-role-v1'). */
+  readonly clientRoles: string[] = []
   /** Active WS client connections — for broadcasting session_state events. */
   private _wsClients = new Set<WebSocket>()
   /** Per-session injected faults for cmdSend (strict-ack envelope). */
@@ -316,6 +318,8 @@ export class MockDaemon {
       })
       // 'stream-lane-v1': any socket may be a lane here; a stream it opens finds nobody.
       case 'stream.lane': return this.sendOk(ws, id, {})
+      // 'client-role-v1': record who announced itself as a probe.
+      case 'client.role': this.clientRoles.push(String(cmd.role)); return this.sendOk(ws, id, {})
       case 'stream.open': {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ ev: 'stream-close', sid: cmd.sid, error: 'mock: nobody there' }))
         return

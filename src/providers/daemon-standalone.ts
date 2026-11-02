@@ -779,8 +779,16 @@ interface WsData {
    * stream's bytes never share the one the leader's sessions use, and the
    * session link outlives a connection a large stream broke. Streams only
    * (LANE_ALLOWED_COMMANDS); like a follower, never taken for the leader.
+   *
+   * 'probe' = a test server (an ephemeral one attached read only to a host it
+   * shares with the real Walnut) after `client.role` ('client-role-v1'). It keeps
+   * every command it had, but it is not a Walnut server of this host: it is never
+   * taken for the leader, and no relay, gateway call, trigger event, phone request
+   * or cron note is sent to it. Before this, whichever server's socket came first
+   * got an env-less `walnut` call, and a test server answered the real one's
+   * (2026-11-02: trigger_list said every trigger was off).
    */
-  origin?: 'bridge' | 'follower' | 'lane'
+  origin?: 'bridge' | 'follower' | 'lane' | 'probe'
   /** A follower's Walnut (the leader's data dir), set by follower.hello. */
   followerHome?: string
   /** A lane's Walnut, set by stream.lane. */
@@ -914,10 +922,10 @@ const LANE_ALLOWED_COMMANDS = new Set([
   'stream.open', 'stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close',
 ])
 
-/** A Walnut server socket that may be the leader: not the bridge, a follower or a lane. */
+/** A Walnut server socket that may be the leader: not the bridge, a follower, a lane or a test server's probe. */
 function isServerClient(ws: ServerWebSocket<WsData>): boolean {
   const origin = ws.data?.origin
-  return origin !== 'bridge' && origin !== 'follower' && origin !== 'lane'
+  return origin !== 'bridge' && origin !== 'follower' && origin !== 'lane' && origin !== 'probe'
 }
 
 // DUP-DEBUG: per-process counter and lookup map for stable ws ids.
@@ -2663,6 +2671,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     // stream-relay-core.ts): frames, never answered by id. Keep in sync with daemon-source.ts.
     case 'stream.open': return cmdStreamOpen(ws, cmd)
     case 'stream.lane': return cmdStreamLane(ws, id as number, cmd)
+    case 'client.role': return cmdClientRole(ws, id as number, cmd)
     case 'stream.accept': case 'stream.data': case 'stream.ack': case 'stream.end': case 'stream.close':
       return streamRelay.frame(ws, (cmd.cmd as string).slice('stream.'.length), cmd)
     case 'server.configure': return cmdServerConfigure(ws, id as number, cmd)
@@ -4108,6 +4117,22 @@ function cmdStreamLane(ws: ServerWebSocket<WsData>, id: number, cmd: Record<stri
   sendOk(ws, id, {})
   // The follower's streams that waited for it.
   releaseLaneOpens(home)
+}
+
+/**
+ * A test server says what it is ('client-role-v1'): `role: 'probe'`, an ephemeral
+ * server attached read only to this host's shared daemon. From then on this socket
+ * is no leader candidate (isServerClient), so the real Walnut's traffic never lands
+ * on it. Only a socket that has not spoken for a leader may take it, and only
+ * once: a probe cannot turn back into a server.
+ */
+function cmdClientRole(ws: ServerWebSocket<WsData>, id: number, cmd: Record<string, unknown>) {
+  if (cmd.role !== 'probe') return sendError(ws, id, 'client.role: unknown role')
+  const origin = ws.data?.origin
+  if (origin === 'bridge' || origin === 'follower' || origin === 'lane') return sendError(ws, id, 'client.role: this socket already has a role')
+  if (gatewayClientHomes.has(ws)) return sendError(ws, id, 'client.role: this socket already speaks for a leader')
+  if (ws.data) ws.data.origin = 'probe'
+  sendOk(ws, id, {})
 }
 
 /**

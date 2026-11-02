@@ -3641,9 +3641,10 @@ var LANE_ALLOWED_COMMANDS = new Set([
   'stream.open', 'stream.accept', 'stream.data', 'stream.ack', 'stream.end', 'stream.close',
 ]);
 
-// A Walnut server socket that may be the leader: not the bridge, a follower or a lane.
+// A Walnut server socket that may be the leader: not the bridge, a follower, a lane or a test server's probe.
+// Twin of daemon-standalone.ts isServerClient.
 function isServerClient(client) {
-  return client.origin !== 'bridge' && client.origin !== 'follower' && client.origin !== 'lane';
+  return client.origin !== 'bridge' && client.origin !== 'follower' && client.origin !== 'lane' && client.origin !== 'probe';
 }
 
 var featureRelay = (__CREATE_FEATURE_RELAY__)(crypto.randomUUID())
@@ -3988,6 +3989,7 @@ function dispatchCommand(ws, id, cmd) {
     // never answered by id. Twin of daemon-standalone.ts.
     case 'stream.open': return cmdStreamOpen(ws, cmd);
     case 'stream.lane': return cmdStreamLane(ws, id, cmd);
+    case 'client.role': return cmdClientRole(ws, id, cmd);
     case 'stream.accept': case 'stream.data': case 'stream.ack': case 'stream.end': case 'stream.close':
       return streamRelay.frame(ws, cmd.cmd.slice('stream.'.length), cmd);
     case 'server.configure': return cmdServerConfigure(ws, id, cmd);
@@ -5143,6 +5145,18 @@ function cmdStreamLane(ws, id, cmd) {
   sendOk(ws, id, {});
   // The follower's streams that waited for it.
   releaseLaneOpens(home);
+}
+
+// A test server says what it is (client-role-v1): role 'probe', an ephemeral server
+// attached read only to this host's shared daemon. From then on this socket is no
+// leader candidate (isServerClient), so the real Walnut's traffic never lands on it.
+// Twin of daemon-standalone.ts cmdClientRole.
+function cmdClientRole(ws, id, cmd) {
+  if (cmd.role !== 'probe') return sendError(ws, id, 'client.role: unknown role');
+  if (ws.origin === 'bridge' || ws.origin === 'follower' || ws.origin === 'lane') return sendError(ws, id, 'client.role: this socket already has a role');
+  if (gatewayClientHomes.has(ws)) return sendError(ws, id, 'client.role: this socket already speaks for a leader');
+  ws.origin = 'probe';
+  sendOk(ws, id, {});
 }
 
 // A Walnut whose lane closed a moment ago gets it back within seconds (the Mac

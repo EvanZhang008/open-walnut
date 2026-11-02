@@ -2085,6 +2085,12 @@ export class DaemonConnection {
     const sessionId = (event as unknown as { sessionId?: unknown }).sessionId
     const params = (event as unknown as { params?: unknown }).params
     if (typeof relayId !== 'number' || typeof action !== 'string') return
+    // A test server attached read only never runs the real Walnut's session controls.
+    if (this.isReadOnlyRemote) {
+      log.session.warn('DaemonConnection: control relay refused, this is a test server attached read only', { host: this.hostKey, relayId, action })
+      try { await this.send('control-result', { relayId, error: 'this relay reached a test server, not the Walnut that owns this host', errorKind: 'internal' }) } catch { /* the daemon times it out */ }
+      return
+    }
     let reply: Record<string, unknown>
     try {
       // Honoured only through the Mac's own daemon (the cloud replica's bridge):
@@ -2142,6 +2148,14 @@ export class DaemonConnection {
     const messageId = (event as unknown as { messageId?: unknown }).messageId
     const stopFence = (event as unknown as { stopFence?: unknown }).stopFence ?? null
     if (typeof relayId !== 'number') return
+    // Not stored here: a test server attached read only is not where the phone's message
+    // belongs, and 'not_stored' makes the companion keep it and ask again (a daemon
+    // with 'client-role-v1' never sends it here at all).
+    if (this.isReadOnlyRemote) {
+      log.session.warn('DaemonConnection: message relay refused, this is a test server attached read only', { host: this.hostKey, relayId })
+      try { await this.send('message-result', { relayId, error: 'this relay reached a test server, not the Walnut that owns this host', errorKind: 'not_stored' }) } catch { /* the daemon times it out */ }
+      return
+    }
     let reply: Record<string, unknown>
     try {
       if (typeof sessionId !== 'string' || typeof message !== 'string' || message === ''
@@ -2313,6 +2327,23 @@ export class DaemonConnection {
     const callerSid = (event as unknown as { callerSid?: unknown }).callerSid
     const payload = (event as unknown as { payload?: unknown }).payload
     if (typeof relayId !== 'number' || typeof capability !== 'string' || typeof callerSid !== 'string') return
+    // A test server attached read only to a host it shares with the real Walnut is not
+    // the Walnut that owns this host. A daemon without 'client-role-v1' still hands it
+    // the real one's `walnut` calls (first socket wins); answering them from a test
+    // server's copy told a caller every trigger was off (2026-11-02), so it says no.
+    if (this.isReadOnlyRemote) {
+      log.session.warn('DaemonConnection: gateway relay refused, this is a test server attached read only', {
+        host: this.hostKey, relayId, capability, callerSid,
+      })
+      try {
+        await this.send('gateway-result', {
+          relayId,
+          error: 'this relay reached a test server, not the Walnut that owns this host; run it again',
+          errorCode: 'hub_unreachable',
+        })
+      } catch { /* the daemon times the relay out */ }
+      return
+    }
     // The host delivers messages between its own sessions itself and journals
     // them; its nudge reaches us before this request (one socket, in order).
     // Take the journal first, so a request id it names is already ours.
@@ -3617,6 +3648,33 @@ export class DaemonConnection {
   }
 
   /**
+   * A test server (an ephemeral one attached read only to a host it shares with the
+   * real Walnut) tells the daemon on each socket that it is only a probe
+   * ('client-role-v1'), so the daemon never hands it the real Walnut's traffic
+   * (gateway calls, trigger events, phone requests). Best effort: an older daemon
+   * has no such command, and handleGatewayRequest refuses what it relays here.
+   */
+  private announceProbeRole(ws: WebSocket): void {
+    if (!this.isReadOnlyRemote || !this._capabilities?.includes('client-role-v1')) return
+    const id = ++this.cmdCounter
+    const timer = setTimeout(() => this.pendingCommands.delete(id), DaemonConnection.COMMAND_TIMEOUT_MS)
+    timer.unref?.()
+    this.pendingCommands.set(id, {
+      resolve: (res) => {
+        if (!res.ok) log.session.warn('DaemonConnection: the daemon refused the probe role', { host: this.hostKey, error: res.error })
+      },
+      reject: () => { /* the socket went first */ },
+      timer, cmd: 'client.role', socket: ws,
+    })
+    try {
+      ws.send(JSON.stringify({ id, cmd: 'client.role', role: 'probe' }))
+    } catch {
+      clearTimeout(timer)
+      this.pendingCommands.delete(id)
+    }
+  }
+
+  /**
    * Send `hello` to the daemon and verify it advertises every required
    * capability. Returns true on full match, false on any mismatch (including
    * "unknown command: hello" from pre-hello daemons).
@@ -3640,6 +3698,7 @@ export class DaemonConnection {
       }
       const caps = Array.isArray(res.capabilities) ? res.capabilities as string[] : []
       this._capabilities = caps
+      if (this.ws) this.announceProbeRole(this.ws)
       // What actually runs the daemon (bun, the prebuilt binary, node): the pid
       // files cannot tell a bun-run daemon from the binary, the daemon can.
       if (res.runtime === 'bun' || res.runtime === 'binary' || res.runtime === 'node') this._runtime = res.runtime
@@ -5017,6 +5076,15 @@ export class DaemonConnection {
       const { getTriggerEventSink } = await import('../core/routines/trigger-bridge.js')
       // Likewise: a '__local__' instance the pool let go of during the import delivers nothing.
       if (this.localDialAbandoned()) return
+      // A test server attached read only is not who a host's triggers report to: taking a
+      // fire here would ack it, and the real Walnut would never hear it. Unacked, it waits
+      // in the daemon for the one that is.
+      if (this.isReadOnlyRemote) {
+        log.session.warn('DaemonConnection: trigger event ignored, this is a test server attached read only', {
+          host: this.hostKey, ev: event.ev, id: (event as { id?: string }).id,
+        })
+        return
+      }
       const sink = getTriggerEventSink()
       if (!sink) {
         log.session.warn('DaemonConnection: trigger event with no sink registered', {
@@ -5242,6 +5310,7 @@ export class DaemonConnection {
         }
         established = true
         this.bulkWs = ws
+        this.announceProbeRole(ws)
         log.session.info('DaemonConnection: bulk channel connected', {
           host: this.hostKey, url, instanceId,
         })

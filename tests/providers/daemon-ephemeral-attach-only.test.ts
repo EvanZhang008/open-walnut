@@ -205,3 +205,71 @@ describe('ephemeral remote hosts: off unless WALNUT_EPHEMERAL_REMOTE_HOSTS=1', (
     expect(send.mock.calls.filter((c) => c[0] === 'bridge.configure')).toHaveLength(0)
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════
+//  2026-11-02: a daemon without 'client-role-v1' still hands the real Walnut's
+//  relayed work to the first server socket it sees. A test server attached read
+//  only must say no, never answer from its own copy of the data (it told a caller
+//  every trigger was off), never take a trigger event (taking it acks it).
+// ═══════════════════════════════════════════════════════════════════
+
+describe('ephemeral read-only remote: relayed work is refused, not answered', () => {
+  const priv = (conn: DaemonConnection) => conn as unknown as Record<string, (...args: unknown[]) => unknown>
+
+  function readOnlyConn() {
+    const conn = new DaemonConnection('clouddev', testSshTarget)
+    const send = vi.spyOn(conn, 'send').mockResolvedValue({ ok: true } as never)
+    return { conn, send }
+  }
+
+  it('gateway-request: answered with hub_unreachable, op never run', async () => {
+    const { conn, send } = readOnlyConn()
+    await priv(conn).handleGatewayRequest({ ev: 'gateway-request', relayId: 328, capability: 'tools.call', callerSid: 'external', payload: { name: 'trigger_list', args: {} } })
+    const calls = send.mock.calls.filter((c) => c[0] === 'gateway-result')
+    expect(calls).toHaveLength(1)
+    expect(calls[0][1]).toMatchObject({ relayId: 328, errorCode: 'hub_unreachable' })
+    expect(calls[0][1]).not.toHaveProperty('result')
+  })
+
+  it('control-request: refused, nothing run', async () => {
+    const { conn, send } = readOnlyConn()
+    await priv(conn).handleControlRequest({ ev: 'control-request', relayId: 5, action: 'stop', sessionId: 's1', params: {} })
+    const calls = send.mock.calls.filter((c) => c[0] === 'control-result')
+    expect(calls).toHaveLength(1)
+    expect(calls[0][1]).toMatchObject({ relayId: 5, errorKind: 'internal' })
+  })
+
+  it('message-request: not_stored, so the sender keeps it and asks again', async () => {
+    const { conn, send } = readOnlyConn()
+    await priv(conn).handleMessageRequest({ ev: 'message-request', relayId: 6, sessionId: 's1', message: 'hi', messageId: 'qm-1' })
+    const calls = send.mock.calls.filter((c) => c[0] === 'message-result')
+    expect(calls).toHaveLength(1)
+    expect(calls[0][1]).toMatchObject({ relayId: 6, errorKind: 'not_stored' })
+  })
+
+  it('trigger event: dropped, never handed to the sink (an ack would swallow the fire)', async () => {
+    const { conn } = readOnlyConn()
+    const { setTriggerEventSink } = await import('../../src/core/routines/trigger-bridge.js')
+    const sink = vi.fn()
+    setTriggerEventSink(sink)
+    try {
+      await priv(conn).dispatchTriggerEvent({ ev: 'trigger.fired', id: 'trg-1' })
+      expect(sink).not.toHaveBeenCalled()
+    } finally {
+      setTriggerEventSink(null as never)
+    }
+  })
+
+  it('contrast: the local daemon of an ephemeral server is not read only and still takes a trigger event', async () => {
+    const conn = new DaemonConnection('__local__', null)
+    const { setTriggerEventSink } = await import('../../src/core/routines/trigger-bridge.js')
+    const sink = vi.fn()
+    setTriggerEventSink(sink)
+    try {
+      await priv(conn).dispatchTriggerEvent({ ev: 'trigger.fired', id: 'trg-1' })
+      expect(sink).toHaveBeenCalledTimes(1)
+    } finally {
+      setTriggerEventSink(null as never)
+    }
+  })
+})
