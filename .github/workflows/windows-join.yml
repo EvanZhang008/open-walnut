@@ -71,6 +71,10 @@ jobs:
           WSLENV: GITHUB_RUN_NUMBER
         run: |
           set -eu
+          # Not /root: bun's own runtime strings hold "/root/" ($bunfs/root/...), which the
+          # build's check for paths of the build machine reads as this HOME.
+          export HOME=/home/wjoin
+          mkdir -p "$HOME"
           ws=$(wslpath -u '${{ github.workspace }}')
           tmp=$(wslpath -u '${{ runner.temp }}')
           curl -fsSL --retry 3 --retry-all-errors https://bun.sh/install | bash -s "bun-v1.4.4"
