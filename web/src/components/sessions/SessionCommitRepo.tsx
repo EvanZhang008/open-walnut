@@ -16,6 +16,7 @@ import {
 } from '@/components/sessions/sessionCommitModel';
 import { log } from '@/utils/log';
 import { BoxMic, MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 
 const HUNK_PREVIEW_LINES = 40;
 const POLL_MS = 2_000;
@@ -212,11 +213,17 @@ export function SessionCommitRepo(props: {
   };
 
   const commit = () => {
+    // The button's own rule, again here: a dictation that ends with no words reaches this too.
+    if (running || blocked || counts.files === 0 || !message.trim()) return;
     setLastCommit(null);
     setLastPush(null);
     setPrUrl(null);
     void start({ action: 'commit', branch: repo.branch, expectedHead: repo.headSha, message, selections: buildSelections(repo, sel) });
   };
+  const openPr = () => { prBodyMic.current?.clear(); onConfirm(null); void start({ action: 'pr', branch: repo.branch, title: prTitle, body: prBody }); };
+  // Commit and Open PR pressed while their box's mic records wait for its last words.
+  const commitGate = useSendAfterDictation([messageMic], commit);
+  const prGate = useSendAfterDictation([prBodyMic], openPr);
 
   const suggest = async () => {
     const { diff, files } = selectedDiffText(repo, sel);
@@ -298,9 +305,9 @@ export function SessionCommitRepo(props: {
           type="button"
           className="app-modal-btn primary"
           data-testid="scd-commit"
-          disabled={running || !!blocked || counts.files === 0 || !message.trim()}
-          title={counts.files === 0 ? 'Select something to commit' : !message.trim() ? 'Write a commit message' : undefined}
-          onClick={commit}
+          disabled={running || !!blocked || counts.files === 0 || (!message.trim() && !commitGate.micBusy && !commitGate.waiting)}
+          onClick={commitGate.send}
+          {...dictationWaitProps(commitGate, counts.files === 0 ? 'Select something to commit' : !message.trim() ? 'Write a commit message' : undefined)}
         >Commit</button>
       </div>
 
@@ -330,7 +337,7 @@ export function SessionCommitRepo(props: {
           </MicField>
           <div className="scd-confirm-actions">
             <button type="button" className="app-modal-btn" onClick={() => onConfirm(null)}>Cancel</button>
-            <button type="button" className="app-modal-btn primary" data-testid="scd-confirm-ok" disabled={!prTitle.trim()} onClick={() => { prBodyMic.current?.clear(); onConfirm(null); void start({ action: 'pr', branch: repo.branch, title: prTitle, body: prBody }); }}>Open PR</button>
+            <button type="button" className="app-modal-btn primary" data-testid="scd-confirm-ok" disabled={!prTitle.trim()} onClick={prGate.send} {...dictationWaitProps(prGate)}>Open PR</button>
           </div>
         </div>
       )}

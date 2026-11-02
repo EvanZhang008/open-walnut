@@ -40,6 +40,7 @@ import { senderLabelOf } from './LetterEnvelopeRow';
 import { useLetterEvents } from '@/hooks/useHumanInbox';
 import { type BoxMicHandle } from '@/components/common/BoxMic';
 import { AnswerBox } from '@/components/common/AnswerBox';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { useLetterEnvelope } from './letter-store';
 import { sessionInboxLetterHref } from './session-inbox-link';
 import { useThreadPane } from './useThreadPane';
@@ -262,6 +263,14 @@ export function LetterView({
     }
   }, [replyText, busy, letterId, applyResult, followThread, replyDraft]);
 
+  // A decision's note and the reply each wait for a live dictation's words, then go.
+  const pendingAction = useRef<string | null>(null);
+  const answerGate = useSendAfterDictation([noteMic], () => {
+    const actionId = pendingAction.current;
+    if (actionId) void onAnswer(actionId);
+  });
+  const replyGate = useSendAfterDictation([replyMic], () => { void onReply(); });
+
   const answered = shown?.answered;
   const actions = shown?.actions ?? [];
   // A task's answer for the user stays theirs to change.
@@ -351,7 +360,11 @@ export function LetterView({
                 key={action.id}
                 className="hib-action-btn"
                 disabled={busy}
-                onClick={() => void onAnswer(action.id)}
+                onClick={() => {
+                  if (!answerGate.waiting) pendingAction.current = action.id;
+                  answerGate.send();
+                }}
+                {...(pendingAction.current === action.id ? dictationWaitProps(answerGate) : {})}
               >
                 <span className="hib-action-label">{askAILabel(action.label || action.id)}</span>
                 {action.description && (
@@ -482,15 +495,16 @@ export function LetterView({
           value={replyText}
           onChange={setReplyText}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void onReply(); }
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); replyGate.send(); }
           }}
           sending={busy}
           minRows={2}
         >
           <button
             className="hib-send-btn"
-            disabled={busy || !replyText.trim()}
-            onClick={() => void onReply()}
+            disabled={busy || (!replyText.trim() && !replyGate.micBusy && !replyGate.waiting)}
+            onClick={replyGate.send}
+            {...dictationWaitProps(replyGate)}
           >
             Send
           </button>

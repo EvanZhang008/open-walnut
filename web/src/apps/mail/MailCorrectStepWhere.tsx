@@ -11,6 +11,7 @@
 import { useId, useRef, type RefObject } from 'react';
 import { type BoxMicHandle } from '@/components/common/BoxMic';
 import { AnswerBox } from '@/components/common/AnswerBox';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import {
   COPY,
   MAX_GROUP_NAME,
@@ -55,7 +56,9 @@ export function MailCorrectStepWhere(props: StepWhereProps) {
   const whyRef = useRef<HTMLTextAreaElement | null>(null);
   const mic = useRef<BoxMicHandle | null>(null);
   // Next moves the card to the rule step: a dictation still on its way stays out of it.
-  const goNext = () => { mic.current?.clear(); props.onNext(); };
+  const goNextNow = () => { mic.current?.clear(); props.onNext(); };
+  // Next (and the new name's Enter) waits for a live dictation's words, so the note carries them.
+  const gate = useSendAfterDictation([mic], goNextNow);
   return (
     <div className="mail-correct-step" data-step="where">
       <p className="mail-correct-title" id={titleId}>{whereSentence(props.currentLabel)}</p>
@@ -100,7 +103,7 @@ export function MailCorrectStepWhere(props: StepWhereProps) {
               value={newName}
               autoFocus
               onChange={(event) => props.onNewName(event.target.value)}
-              onKeyDown={(event) => { if (event.key === 'Enter' && next) { event.preventDefault(); goNext(); } }}
+              onKeyDown={(event) => { if (event.key === 'Enter' && next) { event.preventDefault(); gate.send(); } }}
             />
             {newNameProblem ? (
               <p className="mail-correct-field-error" role="alert" data-testid="mail-correct-new-group-error">{newNameProblem}</p>
@@ -130,7 +133,7 @@ export function MailCorrectStepWhere(props: StepWhereProps) {
       )}
       <div className="mail-correct-actions">
         <button type="button" className="btn btn-sm" onClick={props.onCancel} data-testid="mail-correct-cancel">Cancel</button>
-        <button type="button" className="btn btn-sm btn-primary" disabled={!next} onClick={goNext} data-testid="mail-correct-next">
+        <button type="button" className="btn btn-sm btn-primary" disabled={!next} onClick={gate.send} data-testid="mail-correct-next" {...dictationWaitProps(gate)}>
           Next
         </button>
       </div>

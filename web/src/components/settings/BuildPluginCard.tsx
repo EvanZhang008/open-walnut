@@ -19,6 +19,7 @@ import { SettingsGroup, SettingsRow } from './SettingsSection'
 import { SettingsButton } from './inputs/SettingsButton'
 import { BUILD_CWD, buildPrompt, PLUGIN_CREATE_COMMAND } from './build-plugin-prompt'
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic'
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation'
 import { useDraft } from '@/hooks/useDraft'
 import { draftKey } from '@/utils/drafts'
 import '@/styles/settings-sections-addons.css'
@@ -65,6 +66,8 @@ export function BuildPluginCard({ showGuideLink = true, showManual = true }: {
       setBusy(false)
     }
   }
+  // Build it (or Enter) while the mic records waits for the final words, then starts.
+  const gate = useSendAfterDictation([mic], () => void start())
 
   const manual = showManual ? (
     <span className="build-plugin-manual">
@@ -110,7 +113,7 @@ export function BuildPluginCard({ showGuideLink = true, showManual = true }: {
                 className="settings-input settings-input--long"
                 value={request}
                 onChange={(e) => setRequest(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void start() } }}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); gate.send() } }}
                 placeholder="What should it do? For example a Pomodoro timer"
                 data-testid="build-plugin-request"
               />
@@ -119,8 +122,9 @@ export function BuildPluginCard({ showGuideLink = true, showManual = true }: {
               variant="primary"
               busy={busy}
               busyLabel="Starting..."
-              onClick={() => void start()}
+              onClick={gate.send}
               data-testid="build-plugin-start"
+              {...dictationWaitProps(gate)}
             >
               Build it
             </SettingsButton>

@@ -1,0 +1,32 @@
+/* A send button waiting for a dictation's words (useSendAfterDictation): its
+   label (icon or text) gives way to a turning ring at the same size, and it
+   stays pressable (a press cancels). The ring takes the label's colour. */
+[data-dictation-wait="true"] {
+  position: relative;
+  cursor: progress;
+  -webkit-text-fill-color: transparent;
+}
+[data-dictation-wait="true"] > * {
+  opacity: 0;
+}
+[data-dictation-wait="true"]::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  animation: dictation-wait-spin 0.8s linear infinite;
+  pointer-events: none;
+}
+@keyframes dictation-wait-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-dictation-wait="true"]::after { animation-duration: 2.4s; }
+}

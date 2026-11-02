@@ -7,6 +7,7 @@ import { renderNoteMarkdown } from '@/utils/markdown';
 import { fetchTask, toggleCompleteTask, addNote, updateNote, updateDescription, deleteTask, addTag, removeTag, addDependency, removeDependency, updateTask, type TaskDetail } from '@/api/tasks';
 import { TaskFieldEditor } from '@/components/tasks/TaskFieldEditor';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { PluginFieldPills } from '@/components/tasks/PluginFieldPicker';
 import { PluginSlotFact, PluginSlots } from '@/plugins/PluginSlots';
 import { DatePicker } from '@/components/common/DatePicker';
@@ -372,6 +373,8 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
     newNoteDraft.clear(sentKey);
     newNoteMic.current?.clear();
   };
+  // Add (button or Enter) while the note's mic records waits for its last words.
+  const noteGate = useSendAfterDictation([newNoteMic], () => { void handleAddNote(); });
 
   // One session per task: its own session (inline chat), and the ones it held
   // before that rule as "Earlier sessions" (TaskSessionHistory.tsx).
@@ -697,12 +700,12 @@ function TaskDetailView({ id, isPopout = false, showOperationError }: TaskDetail
             data-draft-key={newNoteDraft.key ?? undefined}
             value={newNote}
             onChange={(e) => setNewNote(e.target.value)}
-            onKeyDown={(e) => { if (e.nativeEvent.isComposing || e.keyCode === 229) return; if (e.key === 'Enter') handleAddNote(); }}
+            onKeyDown={(e) => { if (e.nativeEvent.isComposing || e.keyCode === 229) return; if (e.key === 'Enter') noteGate.send(); }}
             placeholder="Add to note..."
             style={{ flex: 1 }}
           />
           <BoxMic boxRef={newNoteBox} text={newNote} setText={setNewNote} handleRef={newNoteMic} />
-          <button className="btn btn-sm" onClick={handleAddNote}>Add</button>
+          <button className="btn btn-sm" onClick={noteGate.send} {...dictationWaitProps(noteGate)}>Add</button>
         </div>
       </div>
       </div>{/* /tdv2-main */}

@@ -17,6 +17,7 @@ import { openSessionOnHome } from '@/utils/open-session'
 import { copyTextRobust } from '@/utils/clipboard'
 import { BUILD_CWD, buildPrompt } from '@/components/settings/build-plugin-prompt'
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic'
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation'
 import { useDraft } from '@/hooks/useDraft'
 import { draftKey } from '@/utils/drafts'
 import '@/styles/apps-make-mic.css'
@@ -72,6 +73,8 @@ export function MakeAppCard() {
       setBusy(false)
     }
   }
+  // Build it (or Enter) while the mic records waits for the final words, then starts.
+  const gate = useSendAfterDictation([mic], () => void start())
 
   const copy = () => {
     void copyTextRobust(MANUAL_PLUGIN_COMMANDS.join('\n')).then(() => {
@@ -96,7 +99,7 @@ export function MakeAppCard() {
         <>
           <form
             className="apps-make-ask"
-            onSubmit={(e) => { e.preventDefault(); void start() }}
+            onSubmit={(e) => { e.preventDefault(); gate.send() }}
           >
             <input
               ref={requestRef}
@@ -113,9 +116,9 @@ export function MakeAppCard() {
             <button
               type="submit"
               className="apps-make-go"
-              disabled={busy || !request.trim()}
-              title={!request.trim() ? 'Describe it first.' : undefined}
+              disabled={busy || (!request.trim() && !gate.micBusy && !gate.waiting)}
               data-testid="build-plugin-start"
+              {...dictationWaitProps(gate, !request.trim() ? 'Describe it first.' : undefined)}
             >
               {busy ? 'Starting...' : 'Build it'}
             </button>

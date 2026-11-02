@@ -41,6 +41,7 @@ import { log } from '@/utils/log';
 import { pointerOwnedElsewhere } from '@/utils/find-scope';
 import { SessionCommitButton } from '@/components/sessions/SessionCommitDialog';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 
 export type DiffViewType = 'split' | 'unified';
 /** The toolbar layout mode: 'auto' picks per file — split only when some line
@@ -330,6 +331,10 @@ function CommentBox({ loc, keepKey, onAdd, onSendNow, onCancel, onDirtyChange }:
   const add = () => { const t = text.trim(); if (t) { mic.current?.clear(); draft.clear(); onAdd(t); } };
   const sendNow = () => { const t = text.trim(); if (t) { mic.current?.clear(); draft.clear(); onSendNow(t); } };
   const cancel = () => { draft.clear(); onCancel(); };
+  // Add and Send now pressed while the mic records wait for its last words.
+  const addGate = useSendAfterDictation([mic], add);
+  const sendNowGate = useSendAfterDictation([mic], sendNow);
+  const wordsComing = addGate.micBusy || addGate.waiting || sendNowGate.waiting;
   return (
     <div className="session-diff-comment-box">
       <div className="session-diff-comment-loc">{loc}</div>
@@ -343,7 +348,7 @@ function CommentBox({ loc, keepKey, onAdd, onSendNow, onCancel, onDirtyChange }:
         onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
-            if (e.shiftKey) sendNow(); else add();
+            if (e.shiftKey) sendNowGate.send(); else addGate.send();
           // Esc closes the box and keeps its words (they come back on this line); Cancel drops them.
           } else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
           e.stopPropagation();
@@ -353,8 +358,8 @@ function CommentBox({ loc, keepKey, onAdd, onSendNow, onCancel, onDirtyChange }:
       <div className="session-diff-comment-actions">
         <BoxMic boxRef={ref} text={text} setText={update} handleRef={mic} />
         <button className="session-diff-comment-cancel" onMouseDown={(e) => e.preventDefault()} onClick={cancel}>Cancel</button>
-        <button className="session-diff-comment-sendnow" onMouseDown={(e) => e.preventDefault()} onClick={sendNow} disabled={!text.trim()} title="Send this one comment to the agent right now">Send now</button>
-        <button className="session-diff-comment-add" onMouseDown={(e) => e.preventDefault()} onClick={add} disabled={!text.trim()} title="Record this comment; submit the whole review at the end">Add comment</button>
+        <button className="session-diff-comment-sendnow" onMouseDown={(e) => e.preventDefault()} onClick={sendNowGate.send} disabled={!text.trim() && !wordsComing} {...dictationWaitProps(sendNowGate, 'Send this one comment to the agent right now')}>Send now</button>
+        <button className="session-diff-comment-add" onMouseDown={(e) => e.preventDefault()} onClick={addGate.send} disabled={!text.trim() && !wordsComing} {...dictationWaitProps(addGate, 'Record this comment; submit the whole review at the end')}>Add comment</button>
       </div>
     </div>
   );

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { dictationWaitProps, type SendAfterDictation } from '@/hooks/useSendAfterDictation';
 import { DatePicker, formatDateTimeDisplay } from '@/components/common/DatePicker';
 import { PinTierPicker } from '@/components/common/PinTierPicker';
 import { useShowPriority } from '@/hooks/useShowPriority';
@@ -43,6 +44,8 @@ interface Props {
   submitting: boolean;
   onChange: (patch: Partial<ConfirmDraft>) => void;
   onCreate: () => void;
+  /** The owner's send-after-dictation gate: Create stays pressable while dictated words are coming, and shows the wait. */
+  dictation?: Pick<SendAfterDictation, 'waiting' | 'micBusy'>;
   /** The draft the owner keeps this form in (its fields carry it). */
   draftKey?: string;
 }
@@ -63,6 +66,7 @@ export function QuickTaskConfirm({
   submitting,
   onChange,
   onCreate,
+  dictation,
   draftKey,
 }: Props) {
   const [datePickerOpen, setDatePickerOpen] = useState(false);
@@ -209,7 +213,8 @@ export function QuickTaskConfirm({
       />
 
       <div className="qtc-confirm-footer">
-        <button type="button" className="qtc-confirm-primary" disabled={submitting || !draft.title.trim()} onClick={onCreate}>
+        <button type="button" className="qtc-confirm-primary" disabled={submitting || (!draft.title.trim() && !dictation?.micBusy && !dictation?.waiting)} onClick={onCreate}
+          {...(dictation ? dictationWaitProps(dictation) : {})}>
           {submitting ? 'Creating…' : 'Create'}
         </button>
         <span className="qtc-confirm-key-hint">Enter to create · Esc to close</span>

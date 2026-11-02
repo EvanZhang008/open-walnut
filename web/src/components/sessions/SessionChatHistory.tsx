@@ -6,6 +6,7 @@ import { scrollDebugEnabled } from '@/utils/scroll-debug';
 import { startFlashProbe } from '@/utils/flash-probe';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { useSessionHistory } from '@/hooks/useSessionHistory';
 import { useSessionStream, type StreamingBlock } from '@/hooks/useSessionStream';
 import { useEvent } from '@/hooks/useWebSocket';
@@ -354,6 +355,8 @@ function EditableQueuedMessage({ queueId, message, onSave, onCancel }: {
   const mic = useRef<BoxMicHandle | null>(null);
   const save = () => { mic.current?.clear(); draft.clear(); onSave(value.trim() || message); };
   const cancel = () => { draft.clear(); onCancel(); };
+  // Save (button or Enter) while the mic records waits for its last words.
+  const gate = useSendAfterDictation([mic], save);
 
   useEffect(() => { textareaRef.current?.focus(); }, []);
 
@@ -365,7 +368,7 @@ function EditableQueuedMessage({ queueId, message, onSave, onCancel }: {
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => {
           if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); save(); }
+          if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); gate.send(); }
           if (e.key === 'Escape') cancel();
         }}
         className="session-msg-edit-textarea"
@@ -375,7 +378,7 @@ function EditableQueuedMessage({ queueId, message, onSave, onCancel }: {
       />
       <div className="session-msg-edit-actions">
         <BoxMic boxRef={textareaRef} text={value} setText={setValue} handleRef={mic} />
-        <button onClick={save} className="btn btn-sm btn-primary">Save</button>
+        <button onClick={gate.send} className="btn btn-sm btn-primary" {...dictationWaitProps(gate)}>Save</button>
         <button onClick={cancel} className="btn btn-sm">Cancel</button>
       </div>
     </div>

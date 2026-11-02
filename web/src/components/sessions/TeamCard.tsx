@@ -11,6 +11,7 @@ import { useState, useCallback, useEffect, useRef, memo, useMemo } from 'react';
 import { useTeamStream, type TeamMember, type TeamAgentEvent } from '@/hooks/useTeamStream';
 import { wsClient } from '@/api/ws';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 
 interface TeamCardProps {
   sessionId: string;
@@ -113,14 +114,17 @@ function TeamChatInput({ teamName, agentName, agentStatus, onSent }: {
       setSending(false);
     }
   }, [teamName, agentName, message, onSent, draft]);
+  // Send (button or Enter) while the mic records waits for its last words.
+  const gate = useSendAfterDictation([mic], () => { void handleSend(); });
+  const sendGated = gate.send;
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
+      sendGated();
     }
-  }, [handleSend]);
+  }, [sendGated]);
 
   const isBusy = agentStatus === 'calling';
 
@@ -141,7 +145,7 @@ function TeamChatInput({ teamName, agentName, agentStatus, onSent }: {
         className="team-chat-input-field"
       />
       <BoxMic boxRef={box} text={message} setText={setMessage} handleRef={mic} disabled={sending} />
-      <button onClick={handleSend} disabled={!message.trim() || sending} className="team-chat-send-btn">
+      <button onClick={gate.send} disabled={(!message.trim() && !gate.micBusy && !gate.waiting) || sending} className="team-chat-send-btn" {...dictationWaitProps(gate)}>
         Send
       </button>
     </div>

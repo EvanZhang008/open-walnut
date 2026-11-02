@@ -3,6 +3,7 @@ import { quickParseTask, type QuickTaskParse } from '@/api/tasks';
 import { useQuickParseEnabled, ensureQuickParseLoaded } from '@/hooks/useQuickParse';
 import { QuickTaskConfirm, type ConfirmDraft, type ConfirmField } from './QuickTaskConfirm';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation } from '@/hooks/useSendAfterDictation';
 import { useDraftClaim } from '@/hooks/useDraft';
 import { clearDraft, draftKey, readDraftJson, writeDraftJson } from '@/utils/drafts';
 import '@/styles/task-mic.css';
@@ -286,6 +287,8 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
         setTimeout(() => inputRef.current?.focus(), 0);
       });
   }, [onCreate, reset]);
+  // Enter or Create while the mic records waits for the final words, then creates.
+  const gate = useSendAfterDictation([mic], () => create(draftRef.current));
 
   const handleContainerKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (event.nativeEvent.isComposing || event.keyCode === 229) return;
@@ -311,14 +314,14 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
       // The mic's own menu (its chevron, its vocabulary box) takes its own Enter.
       if ((event.target as HTMLElement).closest('.box-mic')) return;
       event.preventDefault();
-      create(draftRef.current);
+      gate.send();
       return;
     }
     if (event.key !== 'Escape') return;
     event.preventDefault();
     event.stopPropagation();
     close();
-  }, [close, create]);
+  }, [close, gate.send]);
 
   if (!open) return null;
 
@@ -361,7 +364,8 @@ export function QuickTaskComposer({ open, onClose, onCreate, projectOptions, ini
         projectOptions={projectOptions}
         submitting={submitting}
         onChange={handleDraftChange}
-        onCreate={() => create(draftRef.current)}
+        onCreate={gate.send}
+        dictation={gate}
         draftKey={QUICK_TASK_DRAFT}
       />
     </div>

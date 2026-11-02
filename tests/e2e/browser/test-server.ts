@@ -866,6 +866,48 @@ await fs.writeFile(
         subtasks: [],
       },
       {
+        // Send-waits-for-dictation fixture (send-waits-for-dictation.spec.ts):
+        // its tests SEND, so each engine's spec gets its own session.
+        id: 'pw-task-sendwait1',
+        title: 'Send waits for dictation fixture task 1',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-sendwait1-session'],
+        active_session_ids: [],
+        session_id: 'pw-sendwait1-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
+        // Send-waits-for-dictation fixture (send-waits-for-dictation.webkit.spec.ts):
+        // its tests SEND, so each engine's spec gets its own session.
+        id: 'pw-task-sendwait2',
+        title: 'Send waits for dictation fixture task 2',
+        status: 'in_progress',
+        phase: 'IN_PROGRESS',
+        priority: 'none',
+        project: 'Walnut',
+        source: 'local',
+        session_ids: ['pw-sendwait2-session'],
+        active_session_ids: [],
+        session_id: 'pw-sendwait2-session',
+        session_status: { process_status: 'stopped', mode: 'bypass' },
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        description: '',
+        summary: '',
+        note: '',
+        subtasks: [],
+      },
+      {
         // Conversation-threads fixture (session-threads.spec.ts): the outline
         // transcript again under its own session, so thread anchors and pin resets
         // never touch the record the outline spec asserts on.
@@ -2601,7 +2643,9 @@ const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectme
   // `pw-streamsel3-session` (0199df…) for session-stream-selection.spec.ts, and
   // `pw-voicesel1-session` (0199e0…), `pw-voicesel2-session` (0199e1…),
   // `pw-voicesel3-session` (0199e2…), `pw-voicesel4-session` (0199e3…) and
-  // `pw-voicesel5-session` (0199e4…) for session-voice-selection.spec.ts. Pins and thread
+  // `pw-voicesel5-session` (0199e4…) for session-voice-selection.spec.ts, and
+  // `pw-sendwait1-session` (0199e5…), `pw-sendwait2-session` (0199e6…) for
+  // send-waits-for-dictation{,.webkit}.spec.ts. Pins and thread
   // anchors are SERVER state on the session record, so two spec files sharing one
   // session rewrite each other's state under parallel workers (seen 2026-09-04:
   // the outline spec counted the quote spec's pin as a third tick, and the threads
@@ -2755,6 +2799,8 @@ const codepathValidationGo = path.join(codepathFixtureRoot, 'k8s-src', 'objectme
   await fs.writeFile(path.join(jsonlDir, 'pw-voicesel3-session.jsonl'), pinsTranscript('pw-voicesel3-session', '0199e2'))
   await fs.writeFile(path.join(jsonlDir, 'pw-voicesel4-session.jsonl'), pinsTranscript('pw-voicesel4-session', '0199e3'))
   await fs.writeFile(path.join(jsonlDir, 'pw-voicesel5-session.jsonl'), pinsTranscript('pw-voicesel5-session', '0199e4'))
+  await fs.writeFile(path.join(jsonlDir, 'pw-sendwait1-session.jsonl'), pinsTranscript('pw-sendwait1-session', '0199e5'))
+  await fs.writeFile(path.join(jsonlDir, 'pw-sendwait2-session.jsonl'), pinsTranscript('pw-sendwait2-session', '0199e6'))
   // Stale-question transcript: exactly what the CLI has written by the time an
   // AskUserQuestion control_request reaches walnut: the user turn, the model's
   // text and its tool_use row, and NO tool_result (the answer is still owed).
@@ -3788,6 +3834,32 @@ await fs.writeFile(
         messageCount: 53,
         cwd: vscodeFixtureRoot,
         title: 'Voice selection fixture session 5',
+      },
+      {
+        claudeSessionId: 'pw-sendwait1-session',
+        taskId: 'pw-task-sendwait1',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 26_500).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 53,
+        cwd: vscodeFixtureRoot,
+        title: 'Send waits for dictation fixture session 1',
+      },
+      {
+        claudeSessionId: 'pw-sendwait2-session',
+        taskId: 'pw-task-sendwait2',
+        project: 'Walnut',
+        process_status: 'stopped',
+        mode: 'bypass',
+        last_status_change: new Date().toISOString(),
+        startedAt: new Date(Date.now() - 26_500).toISOString(),
+        lastActiveAt: new Date().toISOString(),
+        messageCount: 53,
+        cwd: vscodeFixtureRoot,
+        title: 'Send waits for dictation fixture session 2',
       },
       {
         claudeSessionId: 'pw-changed-session',

@@ -14,6 +14,7 @@ import { draftKey } from '@/utils/drafts';
 import { createPortal } from 'react-dom';
 import { useModalOverlay } from '@/hooks/useModalOverlay';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import type { TransferOptions } from '@/api/transfer';
 import {
   blockedReason, effectiveDir, hostKindLabel, hostLabel, sourceLine, submitBlocker, withEngine,
@@ -99,6 +100,8 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
   }, [error, busy]);
   const setMessage = (message: string) => { messageDraft.setText(message); onChange({ message }); };
   const setCustomPath = (customPath: string) => { pathDraft.setText(customPath); onChange({ customPath }); };
+  // Transfer while the mic records waits for the final words, then transfers.
+  const gate = useSendAfterDictation([messageMic], () => { messageMic.current?.clear(); messageDraft.clear(); pathDraft.clear(); onSubmit(); });
 
   const blocker = options && form ? submitBlocker(options, form) : null;
   const isNow = (engine: string, host: string) => !!source && source.engine === engine && source.host === host;
@@ -244,9 +247,9 @@ export function TransferDialog({ options, loadError, form, busy, error, onChange
             type="button"
             className="app-modal-btn primary"
             disabled={busy || !!blocker || !form}
-            title={blocker ?? undefined}
-            onClick={() => { messageMic.current?.clear(); messageDraft.clear(); pathDraft.clear(); onSubmit(); }}
+            onClick={gate.send}
             data-testid="xfer-submit"
+            {...dictationWaitProps(gate, blocker ?? undefined)}
           >
             {busy ? 'Transferring…' : 'Transfer'}
           </button>

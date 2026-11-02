@@ -10,10 +10,11 @@
  */
 import { useEffect, useImperativeHandle, useRef, type RefObject } from 'react';
 import type { Editor } from '@tiptap/core';
-import { MicButton } from '@/components/common/MicButton';
+import { MicButton, type MicControl } from '@/components/common/MicButton';
+import type { DictationControl } from '@/hooks/useSendAfterDictation';
 import { useEditorDictation } from '@/hooks/useEditorDictation';
 
-export interface EditorMicHandle {
+export interface EditorMicHandle extends DictationControl {
   /** Stop and throw away a live recording, and forget the dictation spans. */
   clear: () => void;
 }
@@ -28,9 +29,11 @@ export interface EditorMicProps {
 
 export function EditorMic({ editor, disabled, size = 'sm', className, handleRef }: EditorMicProps) {
   const dictation = useEditorDictation(editor);
-  const micControl = useRef<{ discard: () => void } | null>(null);
+  const micControl = useRef<MicControl | null>(null);
   useImperativeHandle(handleRef, () => ({
     clear: () => { micControl.current?.discard(); dictation.reset(); },
+    busy: () => micControl.current?.busy() ?? false,
+    finish: () => micControl.current?.finish() ?? Promise.resolve({ error: null }),
   }), [dictation]);
   // An editor that goes away takes its recording with it.
   useEffect(() => () => micControl.current?.discard(), []);

@@ -33,6 +33,13 @@ show inline after the open ones, other completed hits that show the query fold i
   one sanctioned exception to append-only: it swaps a system PLACEHOLDER for its own outcome at
   the same index, so no model output is touched and array indices (the render identities) do not
   shift. Never extend it to text/thinking/tool blocks.
+- **Send waits for the dictation** (`hooks/useSendAfterDictation.ts`). Every composer with a mic
+  (MicButton, BoxMic, MicField, EditorMic, AnswerBox) routes each press that submits its words
+  (button, Enter, Save) through `useSendAfterDictation([micRef], sendNow)`: a press while the mic
+  records or transcribes stops it, waits for the final words, then sends once; a second press or
+  Esc cancels, an error sends nothing. Spread `dictationWaitProps(gate)` on the button and keep it
+  pressable while `gate.micBusy || gate.waiting`. `tests/web/send-waits-for-dictation-ratchet.test.ts`
+  fails on a new mic whose send skips it.
 - Optimistic bubble dedup is two-tier (`optimistic-dedup.ts`): non-committed messages only dedup
   against history since the turn watermark; committed against all. Id-first
   (`walnutMessageId`), then count-based multiset text matching.

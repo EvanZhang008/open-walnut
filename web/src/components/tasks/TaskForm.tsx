@@ -2,6 +2,7 @@ import { useRef, type FormEvent } from 'react';
 import type { Task, TaskPriority } from '@open-walnut/core';
 import { BoxMic, type BoxMicHandle } from '../common/BoxMic';
 import { useShowPriority } from '@/hooks/useShowPriority';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { useDraftValue } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 
@@ -43,9 +44,9 @@ export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProp
   const noteBox = useRef<HTMLTextAreaElement | null>(null);
   const noteMic = useRef<BoxMicHandle | null>(null);
 
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    if (!title.trim()) return;
+  const submitNow = () => {
+    // The title's `required` is off while words are coming, so the browser's own prompt is asked here.
+    if (!title.trim()) { titleBox.current?.reportValidity(); return; }
     titleMic.current?.clear();
     noteMic.current?.clear();
     const sentKey = form.key;
@@ -56,6 +57,13 @@ export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProp
       due_date: dueDate,
       note: note.trim(),
     })).then(() => form.clear(sentKey), () => {});
+  };
+  // Save while a mic records waits for the final words, then submits.
+  const gate = useSendAfterDictation([titleMic, noteMic], submitNow);
+  const wordsComing = gate.micBusy || gate.waiting;
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    gate.send();
   };
 
   return (
@@ -74,7 +82,8 @@ export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProp
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Task title"
-              required
+              // Not required while dictated words are on their way, so Save can wait for them.
+              required={!wordsComing}
               autoFocus
               style={{ flex: 1 }}
             />
@@ -143,7 +152,7 @@ export function TaskForm({ initial, projects, onSubmit, onCancel }: TaskFormProp
 
         <div className="form-actions">
           <button type="button" className="btn" onClick={cancel}>Cancel</button>
-          <button type="submit" className="btn btn-primary">{initial ? 'Save' : 'Add Task'}</button>
+          <button type="submit" className="btn btn-primary" {...dictationWaitProps(gate)}>{initial ? 'Save' : 'Add Task'}</button>
         </div>
       </form>
     </div>

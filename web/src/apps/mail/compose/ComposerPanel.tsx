@@ -30,6 +30,7 @@ import {
   type RefObject,
 } from 'react';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
 import { ContextMenu } from '@/components/common/ContextMenu';
 import { providerIdOf, type MailDraftDto, type MailboxDto } from '@/api/mail';
@@ -326,6 +327,9 @@ function ComposerForm({ composer, canSend, cannotSendTitle, senderAddressedBy }:
       ? 'Fix the addresses in red first'
       : noRecipient ? 'Add the address this reply goes to first' : 'Send this message now (⌘↩)')
     : cannotSendTitle;
+  // Send (and ⌘↩) and Ask on phone each wait for a live dictation's words, then go.
+  const sendGate = useSendAfterDictation([mic], () => { void sendMailNow(); });
+  const askGate = useSendAfterDictation([mic], () => { void askMailOnPhone(); });
 
   // ⌘↩ from anywhere in the form, which is what the Send button's title promises. A shortcut
   // advertised in a tooltip and implemented nowhere is the confident wrong answer this repo bans.
@@ -333,7 +337,7 @@ function ComposerForm({ composer, canSend, cannotSendTitle, senderAddressedBy }:
     if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return;
     if (!sendable) return;
     event.preventDefault();
-    void sendMailNow();
+    sendGate.send();
   };
 
   return (
@@ -448,8 +452,8 @@ function ComposerForm({ composer, canSend, cannotSendTitle, senderAddressedBy }:
               className="mail-compose-btn"
               data-testid="mail-compose-ask"
               disabled={!sendable}
-              title={canSend ? 'Ask for approval on the phone before this goes out' : cannotSendTitle}
-              onClick={() => { void askMailOnPhone(); }}
+              onClick={askGate.send}
+              {...dictationWaitProps(askGate, canSend ? 'Ask for approval on the phone before this goes out' : cannotSendTitle)}
             >
               Ask on phone
             </button>
@@ -458,8 +462,8 @@ function ComposerForm({ composer, canSend, cannotSendTitle, senderAddressedBy }:
               className="mail-compose-btn primary"
               data-testid="mail-compose-send"
               disabled={!sendable}
-              title={sendTitle}
-              onClick={() => { void sendMailNow(); }}
+              onClick={sendGate.send}
+              {...dictationWaitProps(sendGate, sendTitle)}
             >
               <SentIcon size={14} />
               {composer.busy ? 'Sending…' : 'Send'}

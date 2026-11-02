@@ -9,6 +9,7 @@ import { PHASE_TEXT, mailDateText } from './item-receipt-model';
 import { itemDraftKey, useItemDraft } from './item-drafts';
 import { type BoxMicHandle } from '@/components/common/BoxMic';
 import { AnswerBox } from '@/components/common/AnswerBox';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import '@/styles/inbox-mic.css';
 
 export function ItemConfirmation({ draftKey, item, actionId, target, retry, again, submitting, prepare, execute, onClose, onFind, onNavigate }: {
@@ -24,6 +25,8 @@ export function ItemConfirmation({ draftKey, item, actionId, target, retry, agai
   const goalMic = useRef<BoxMicHandle | null>(null);
   const generation = useRef(0);
   const acknowledgedExisting = useRef(false);
+  // A confirm pressed during a dictation, held until the plan for its words is ready.
+  const confirmWhenReady = useRef(false);
   const field = `confirm:${JSON.stringify([actionId, !!retry, !!again])}:`;
   const [title, setTitle] = useItemDraft(draftKey, `${field}title`, retry?.input.title ?? item.subject.slice(0, 120));
   const [goal, setGoal] = useItemDraft(draftKey, `${field}goal`, retry?.input.goal ?? '');
@@ -59,12 +62,13 @@ export function ItemConfirmation({ draftKey, item, actionId, target, retry, agai
           goalMic.current?.clear();
           setGoal(next.existingWork.goal ?? '');
         }
-      }).catch(err => { if (!abort.signal.aborted && gen === generation.current) setError(itemError(err).message); })
+      }).catch(err => { if (!abort.signal.aborted && gen === generation.current) { confirmWhenReady.current = false; setError(itemError(err).message); } })
         .finally(() => { if (gen === generation.current) setLoading(false); });
     }, checked ? 200 : 0);
     return () => { clearTimeout(timer); abort.abort(); };
   }, [actionId, prepare, target?.id, retry, retryCreate, again, goal, title, project, checked, attempt]);
   function change(set: (value: string) => void, value: string) {
+    confirmWhenReady.current = false;
     generation.current++; setPreviousPlan(plan); setPlan(undefined); setResponse(old => old && ({ ...old, restrictions: [] })); set(value); setSubmitted(false);
   }
   async function confirm() {
@@ -78,6 +82,18 @@ export function ItemConfirmation({ draftKey, item, actionId, target, retry, agai
   const restriction = response?.restrictions.find(r => r.code !== 'goal_required');
   const work = response?.existingWork;
   const workLocked = !!work && ['confirmed', 'deleted', 'unavailable'].includes(work.status) && !retry;
+  const blocked = !presence.answers || !!restriction || submitted || submitting;
+  const ready = !!plan && !loading && (again || !!goal.trim());
+  // Confirm waits for a live dictation's words; they change the goal, so it confirms once the plan for them is ready.
+  const gate = useSendAfterDictation([goalMic], () => {
+    if (!plan || loading) { confirmWhenReady.current = true; return; }
+    if (ready && !blocked) void confirm();
+  });
+  useEffect(() => {
+    if (!confirmWhenReady.current || !plan || loading) return;
+    confirmWhenReady.current = false;
+    if (ready && !blocked) void confirm();
+  });
   return <div className="hii-confirm" ref={root} aria-label={`${heading} for ${item.subject}`}>
     <h3>{heading}</h3>
     <div className="hii-confirm-source"><strong>Source email</strong><p>{item.subject}</p>
@@ -117,8 +133,8 @@ export function ItemConfirmation({ draftKey, item, actionId, target, retry, agai
     {plan && <ItemOperationDetails plan={plan} previous={previousPlan} />}
     <div className="hii-confirm-footer">
       <button type="button" className="hib-row-btn" onClick={onClose} title={submitted ? 'Close this view. Submitted work continues.' : undefined}>{submitted ? 'Close' : 'Cancel'}</button>
-      <button type="button" className="hib-send-btn" disabled={!presence.answers || !plan || loading || !!restriction || !again && !goal.trim() || submitted || submitting}
-        onClick={() => void confirm()}>{submitting ? again ? 'Marking read…' : attach ? 'Attaching…' : 'Creating…'
+      <button type="button" className="hib-send-btn" disabled={blocked || !ready && !gate.micBusy && !gate.waiting}
+        onClick={gate.send} {...dictationWaitProps(gate)}>{submitting ? again ? 'Marking read…' : attach ? 'Attaching…' : 'Creating…'
           : submitted ? 'Submitted' : again ? 'Confirm mark read' : attach ? 'Confirm attachment' : 'Confirm and start'}</button>
     </div>
   </div>;

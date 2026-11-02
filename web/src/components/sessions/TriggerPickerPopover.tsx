@@ -24,6 +24,7 @@ import {
 } from './trigger-picker-model';
 import '@/styles/trigger-picker.css';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 
 export type TriggerPickerCloseReason = 'escape' | 'close' | 'outside' | 'prefill' | 'anchor-lost';
 
@@ -263,6 +264,8 @@ function TemplateForm({ template, taskId, sessionId, onHandoff, onDone }: {
       setSaving(false);
     }
   };
+  // Create trigger pressed while the prompt's mic records waits for its last words.
+  const gate = useSendAfterDictation([promptMic], () => { void submit(); });
 
   if (created) {
     return (
@@ -277,7 +280,7 @@ function TemplateForm({ template, taskId, sessionId, onHandoff, onDone }: {
   }
 
   return (
-    <form className="trigger-picker-form" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
+    <form className="trigger-picker-form" onSubmit={(e) => { e.preventDefault(); gate.send(); }}>
       <p className="trigger-picker-note">{template.description}</p>
       {template.params.map((param, index) => (
         <ParamField
@@ -328,7 +331,7 @@ function TemplateForm({ template, taskId, sessionId, onHandoff, onDone }: {
           type="submit"
           className="trigger-picker-primary"
           disabled={saving || missing.length > 0}
-          title={missing.length ? `Fill in ${missing.join(', ')}` : undefined}
+          {...dictationWaitProps(gate, missing.length ? `Fill in ${missing.join(', ')}` : undefined)}
         >
           {saving ? 'Creating…' : 'Create trigger'}
         </button>

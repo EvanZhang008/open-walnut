@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, type SetStateAction } from 'react';
+import { useState, useEffect, useMemo, useRef, type RefObject, type SetStateAction } from 'react';
 import type {
   Routine, CreateRoutineInput, RoutineSchedule, RoutineExecutorRef, RoutineCheck,
   RoutineCheckTestResult, ExecutorInfo, ExecutorOptions, ExecutorFieldSpec,
@@ -8,6 +8,7 @@ import { describeSchedule, describeWake } from '@/utils/routine-format';
 import '@/styles/routine-description.css';
 import '@/styles/routine-mic.css';
 import { BoxMic, MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps, useDictationGroup } from '@/hooks/useSendAfterDictation';
 import { useDraftValue } from '@/hooks/useDraft';
 import { draftHash, draftKey } from '@/utils/drafts';
 
@@ -175,7 +176,7 @@ function tzAbbrev(tz: string): string {
 }
 
 /** A multi-line executor field with the composer's mic. `resetKey` changes when the form is refilled. */
-function FieldMicTextarea({ id, value, onChange, placeholder, resetKey, draftKey: keptUnder }: {
+function FieldMicTextarea({ id, value, onChange, placeholder, resetKey, draftKey: keptUnder, fieldMic }: {
   id: string;
   value: string;
   onChange: (next: string) => void;
@@ -183,12 +184,13 @@ function FieldMicTextarea({ id, value, onChange, placeholder, resetKey, draftKey
   resetKey: unknown;
   /** The form's draft, which keeps this field's words. */
   draftKey: string | null;
+  /** This field's mic handle, owned by the form so its Save waits on it. */
+  fieldMic: RefObject<BoxMicHandle | null>;
 }) {
   const boxRef = useRef<HTMLTextAreaElement | null>(null);
-  const mic = useRef<BoxMicHandle | null>(null);
-  useEffect(() => { mic.current?.clear(); }, [resetKey]);
+  useEffect(() => { fieldMic.current?.clear(); }, [resetKey, fieldMic]);
   return (
-    <MicField boxRef={boxRef} text={value} setText={onChange} handleRef={mic}>
+    <MicField boxRef={boxRef} text={value} setText={onChange} handleRef={fieldMic}>
       <textarea
         ref={boxRef}
         id={id}
@@ -265,6 +267,8 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
   const descMic = useRef<BoxMicHandle | null>(null);
   const instrRef = useRef<HTMLTextAreaElement | null>(null);
   const instrMic = useRef<BoxMicHandle | null>(null);
+  // Each executor textarea field has its own mic; Save waits on all of them as one.
+  const { micOf: fieldMicOf, group: fieldMic } = useDictationGroup<BoxMicHandle>();
 
   // A new draft arrives (user drafted again): its own key brings its fields.
   useEffect(() => {
@@ -356,8 +360,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
   const modelField = executorInfo?.configSchema.find((f) => f.name === 'model');
   const restFields = (executorInfo?.configSchema ?? []).filter((f) => f.name !== 'instructions' && f.name !== 'model');
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function submitNow() {
     if (!name.trim()) { setError('Name is required'); return; }
     if (!schedule) { setError('A valid trigger is required'); return; }
     for (const f of executorInfo?.configSchema ?? []) {
@@ -394,6 +397,12 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
       setSaving(false);
     }
   }
+  // Save while a mic records waits for the final words, then saves.
+  const gate = useSendAfterDictation([descMic, instrMic, fieldMic], () => void submitNow());
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    gate.send();
+  };
 
   function renderField(f: ExecutorFieldSpec) {
     const value = config[f.name];
@@ -406,6 +415,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
           placeholder={f.placeholder}
           resetKey={draft}
           draftKey={kept.key}
+          fieldMic={fieldMicOf(f.name)}
         />
       );
     }
@@ -768,7 +778,7 @@ export function RoutineForm({ draft, routine, executors, options, onSave, onCanc
 
           <div className="form-actions">
             <button type="button" className="btn" onClick={() => { kept.clear(); onCancel(); }} disabled={saving}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={saving}>
+            <button type="submit" className="btn btn-primary" disabled={saving} {...dictationWaitProps(gate)}>
               {saving ? 'Saving…' : routine ? 'Save' : 'Create'}
             </button>
           </div>

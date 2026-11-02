@@ -20,7 +20,8 @@ import { detectMention } from './mention-trigger';
 import { arrowSwitchesTab } from './mention-sources-model';
 import type { Task } from '@open-walnut/core';
 import { StatusBadge } from '../common/StatusBadge';
-import { MicButton } from '../common/MicButton';
+import { MicButton, type MicControl } from '../common/MicButton';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { NO_AUTOFILL_PROPS } from '@/utils/no-autofill';
 import { pasteRichTextAsMarkdown, isOfficeClipboardHtml } from '@/utils/html-to-markdown';
 import { DRAFT_FLUSH_EVENT, noteDraftWrite, type DraftFlushDetail } from '@/utils/unsaved-work';
@@ -284,7 +285,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   // released so a late refinement can find it and verify it is still untouched.
   const lastDictationRef = useRef<{ start: number; text: string } | null>(null);
   // Set by MicButton: abandons a live recording without delivering text.
-  const micControlRef = useRef<{ discard: () => void } | null>(null);
+  const micControlRef = useRef<MicControl | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // "+" attach menu + send split-button dropdown (Claude-style). Both close on
@@ -831,7 +832,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     }
   };
 
-  const handleSend = () => {
+  const sendNow = () => {
     // The message = the prose with each `@[label]` token swapped for its tag. A
     // reference with no words is a complete message ("look at this task").
     const body = value.trim();
@@ -840,9 +841,8 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     const hasRefs = text !== body;
     if ((!text && images.length === 0 && !allowEmptySend) || disabled || sendBlocked || queueFull) return;
 
-    // Sending is the user saying they are done talking. Stop the mic and drop the
-    // audio: the words are already in the message, so a transcription arriving
-    // afterwards would paste the whole thing back into the empty box.
+    // The send waited for the dictation (useSendAfterDictation), so the mic is
+    // idle here and its words are in the message; the discard is a no-op belt.
     micControlRef.current?.discard();
     dictationSpanRef.current = null;
     lastDictationRef.current = null;
@@ -1445,12 +1445,18 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const handleInterruptSend = () => {
+  const interruptNow = () => {
     setSendMenuOpen(false);
     const text = composeRefs(value, tableRef.current);
     if ((!text && images.length === 0) || disabled || sendBlocked || !onInterruptSend) return;
     dispatchSend(onInterruptSend, text, images);
   };
+
+  // Send (the button, Enter, Interrupt & send) waits for a live dictation's words.
+  const sendGate = useSendAfterDictation([micControlRef], sendNow, draftKey);
+  const interruptGate = useSendAfterDictation([micControlRef], interruptNow, draftKey);
+  const handleSend = sendGate.send;
+  const handleInterruptSend = interruptGate.send;
 
   const handleStop = () => {
     setSendMenuOpen(false);
@@ -1458,12 +1464,13 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
   };
 
   const hasInput = !!(value.trim() || images.length > 0);
-  const canSend = !disabled && !sendBlocked && !queueFull && (hasInput || !!allowEmptySend);
+  // A live dictation counts as input: its words are on their way, and Send waits for them.
+  const canSend = !disabled && !sendBlocked && !queueFull && (hasInput || !!allowEmptySend || sendGate.micBusy || sendGate.waiting);
 
   // Claude-style primary action swap: while a turn is streaming and the composer is
   // EMPTY, the primary button is a square STOP (there is nothing to send anyway).
   // The moment the user types, it flips back to send (which queues mid-turn).
-  const showStopPrimary = !!isStreaming && !hasInput && !allowEmptySend && !!onStop;
+  const showStopPrimary = !!isStreaming && !hasInput && !allowEmptySend && !!onStop && !sendGate.micBusy && !sendGate.waiting;
 
   // The primary send action always sends the composed message. Its title reflects
   // whether a live turn is running (queue / interrupt) so the icon-only button
@@ -1501,6 +1508,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
       type="button"
       aria-label={sendTitle}
       title={sendTitle}
+      {...dictationWaitProps(sendGate)}
     >
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
         <line x1="12" y1="19" x2="12" y2="5" />
@@ -1862,6 +1870,7 @@ export function ChatInput({ onSend, onCommand, onStop, onInterruptSend, onClearQ
                       className="chat-send-menu-item"
                       onClick={handleInterruptSend}
                       disabled={!canSend}
+                      {...dictationWaitProps(interruptGate)}
                       type="button"
                       role="menuitem"
                       title="Stop the running turn and send this message now"

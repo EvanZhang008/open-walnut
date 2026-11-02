@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from 'react';
 import { wsClient } from '@/api/ws';
 import { log } from '@/utils/log';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { useDraft } from '@/hooks/useDraft';
 import { sessionDraftKey } from '@/utils/composer-insert';
 import { draftKey } from '@/utils/drafts';
@@ -52,7 +53,7 @@ export function KanbanCardComposer({ card, onSent, onClose }: KanbanCardComposer
   const mic = useRef<BoxMicHandle | null>(null);
   useEffect(() => { ref.current?.focus(); }, []);
 
-  const send = async () => {
+  const sendNow = async () => {
     const message = text.trim();
     if (!message || sending) return;
     const sessionId = card.sessionId;
@@ -74,6 +75,8 @@ export function KanbanCardComposer({ card, onSent, onClose }: KanbanCardComposer
       setError(reasonOf(err));
     }
   };
+  // Enter, Send and Retry wait for a live dictation's words, then send.
+  const gate = useSendAfterDictation([mic], () => { void sendNow(); });
 
   return (
     <div className="kanban-card-composer" data-testid="kanban-card-composer" data-sending={sending || undefined}
@@ -93,22 +96,22 @@ export function KanbanCardComposer({ card, onSent, onClose }: KanbanCardComposer
           onKeyDown={(e) => {
             e.stopPropagation();
             if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
-            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); }
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); gate.send(); }
           }}
         />
         <BoxMic boxRef={ref} text={text} setText={(v) => { setText(v); if (error) setError(''); }} handleRef={mic} disabled={sending} />
         {sending ? <span className="kanban-spinner" data-testid="kanban-card-composer-sending" aria-label="Sending" /> : (
           <button
             type="button" className="kanban-text-btn kanban-composer-send" data-testid="kanban-card-composer-send"
-            aria-disabled={!text.trim() || undefined} title={text.trim() ? 'Send (Enter)' : 'Type a message first'}
-            onClick={() => void send()}
+            aria-disabled={(!text.trim() && !gate.micBusy && !gate.waiting) || undefined}
+            onClick={gate.send} {...dictationWaitProps(gate, text.trim() || gate.micBusy ? 'Send (Enter)' : 'Type a message first')}
           >Send</button>
         )}
       </div>
       {error && (
         <div className="kanban-composer-error" data-testid="kanban-card-composer-error" role="alert">
           Couldn't send: {error}{' '}
-          <button type="button" className="kanban-text-btn" data-testid="kanban-card-composer-retry" onClick={() => void send()}>Retry</button>
+          <button type="button" className="kanban-text-btn" data-testid="kanban-card-composer-retry" onClick={gate.send}>Retry</button>
         </div>
       )}
     </div>

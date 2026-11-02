@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from 'react';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import type { CommandDef } from '@/api/commands';
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
@@ -28,8 +29,7 @@ export function CommandForm({ command, onSave, onCancel }: CommandFormProps) {
   const contentRef = useRef<HTMLTextAreaElement | null>(null);
   const mic = useRef<BoxMicHandle | null>(null);
 
-  const handleSubmit = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submitNow = useCallback(async () => {
     setError(null);
 
     if (!name.trim()) {
@@ -62,6 +62,12 @@ export function CommandForm({ command, onSave, onCancel }: CommandFormProps) {
       setSaving(false);
     }
   }, [name, description, content, onSave, nameDraft.key, descDraft.key, contentDraft.key, clearDrafts]);
+  // Save while the mic records waits for the final words, then saves.
+  const gate = useSendAfterDictation([mic], () => void submitNow());
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    gate.send();
+  };
 
   return (
     <form onSubmit={handleSubmit} className="cmd-form card">
@@ -120,7 +126,7 @@ export function CommandForm({ command, onSave, onCancel }: CommandFormProps) {
         <button type="button" className="btn" onClick={() => { clearDrafts(); onCancel(); }}>
           Cancel
         </button>
-        <button type="submit" className="btn btn-primary" disabled={saving}>
+        <button type="submit" className="btn btn-primary" disabled={saving} {...dictationWaitProps(gate)}>
           {saving ? 'Saving...' : isEditing ? 'Update' : 'Create'}
         </button>
       </div>

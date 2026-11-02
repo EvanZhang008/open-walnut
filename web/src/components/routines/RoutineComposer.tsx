@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { draftRoutine } from '@/api/routines';
 import type { CreateRoutineInput } from '@/api/routines';
 
@@ -58,6 +59,8 @@ export function RoutineComposer({ onDraft, onDraftFailed, onManual }: RoutineCom
       setDrafting(false);
     }
   }
+  // Draft routine (or Cmd/Ctrl+Enter) while the mic records waits for the final words, then drafts.
+  const gate = useSendAfterDictation([mic], () => void handleDraft());
 
   return (
     <div className="routine-composer">
@@ -69,7 +72,7 @@ export function RoutineComposer({ onDraft, onDraftFailed, onManual }: RoutineCom
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) handleDraft();
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) gate.send();
           }}
           placeholder="What do you want automated?"
           rows={2}
@@ -105,8 +108,9 @@ export function RoutineComposer({ onDraft, onDraftFailed, onManual }: RoutineCom
         <button
           type="button"
           className="btn btn-primary"
-          onClick={handleDraft}
-          disabled={!text.trim() || drafting}
+          onClick={gate.send}
+          disabled={(!text.trim() && !gate.micBusy && !gate.waiting) || drafting}
+          {...dictationWaitProps(gate)}
         >
           {drafting ? 'Drafting…' : 'Draft routine'}
         </button>

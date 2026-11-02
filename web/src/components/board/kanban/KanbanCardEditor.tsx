@@ -14,6 +14,7 @@ import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type 
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { log } from '@/utils/log';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation } from '@/hooks/useSendAfterDictation';
 import { MAX_SUMMARY, MAX_WAITING_ON } from '../../../../../src/core/boards/board-lanes';
 import type { KanbanCardEditorProps, SetCardResult } from './kanban-contract';
 import { cutTitle } from './kanban-changes-model';
@@ -70,7 +71,11 @@ export function KanbanCardEditor({ field, card, openedAt, api, onClose }: Kanban
     setError(res.error || 'the server did not answer');
   };
 
-  const save = () => { if (!saving && !conflict && !done.current) void write(true); };
+  const saveNow = () => { if (!saving && !conflict && !done.current) void write(true); };
+  // Enter and leaving the editor wait for a live dictation's words, then save.
+  const gate = useSendAfterDictation([mic], saveNow);
+  // A blur while a save already waits must not cancel it.
+  const save = () => { if (!gate.waiting) gate.send(); };
   const cancel = () => { done.current = true; onClose(); };
   const useTheirs = () => { done.current = true; onClose(); };
 

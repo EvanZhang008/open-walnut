@@ -8,6 +8,7 @@
  */
 import { useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import '@/styles/answer-box.css';
 
 export interface AnswerBoxProps {
@@ -64,12 +65,15 @@ export function AnswerBox({
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, maxRows * LINE_PX + 8)}px`;
   }, [value, maxRows, box]);
-  const submit = () => {
+  const submitNow = () => {
     const t = value.trim();
     if (!t || disabled || sending || !onSubmit) return;
     onSubmit(t);
     mic.current?.clear();
   };
+  // Enter and the send button wait for a live dictation's words, then send.
+  const gate = useSendAfterDictation([mic], submitNow);
+  const submit = gate.send;
   return (
     <div className={`answer-box${className ? ` ${className}` : ''}${disabled ? ' is-disabled' : ''}`} data-testid={testId ? `${testId}-box` : 'answer-box'}>
       <textarea
@@ -100,7 +104,7 @@ export function AnswerBox({
         <BoxMic boxRef={box} text={value} setText={onChange} handleRef={mic} disabled={disabled || sending || readOnly} />
         {children}
         {onSubmit && sendLabel && (
-          <button type="button" className="btn btn-sm btn-primary answer-box-send" data-testid={sendTestId} disabled={disabled || sending || !value.trim()} onClick={submit}>
+          <button type="button" className="btn btn-sm btn-primary answer-box-send" data-testid={sendTestId} disabled={disabled || sending || (!value.trim() && !gate.micBusy && !gate.waiting)} onClick={submit} {...dictationWaitProps(gate)}>
             {sendLabel}
           </button>
         )}

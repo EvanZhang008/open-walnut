@@ -22,6 +22,7 @@ import { useDraftValue } from '@/hooks/useDraft';
 import { draftHash, draftKey } from '@/utils/drafts';
 import { SettingsButton } from '../inputs/SettingsButton';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import '@/styles/settings-mic.css';
 import {
   FIELD_LABELS,
@@ -263,6 +264,8 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
       ...(then === NEW_GROUP ? { newGroup: target } : {}),
     });
   };
+  // Save while the note's mic records waits for the final words, then saves.
+  const saveGate = useSendAfterDictation([noteMic], save);
 
   return (
     <div className="mail-rule-editor" data-testid="mail-rule-editor">
@@ -316,8 +319,8 @@ export function MailRuleEditor(props: MailRuleEditorProps) {
       </p>
       <div className="mail-rule-editor-actions">
         <SettingsButton onClick={() => { form.clear(); props.onCancel(); }} data-testid="mail-rule-cancel" disabled={props.saving}>Cancel</SettingsButton>
-        <SettingsButton variant="primary" onClick={save} busy={props.saving} busyLabel="Saving…" data-testid="mail-rule-save"
-          disabled={props.saving || (attempted && !canSave)}>
+        <SettingsButton variant="primary" onClick={saveGate.send} busy={props.saving} busyLabel="Saving…" data-testid="mail-rule-save"
+          disabled={props.saving || (attempted && !canSave)} {...dictationWaitProps(saveGate)}>
           Save
         </SettingsButton>
       </div>

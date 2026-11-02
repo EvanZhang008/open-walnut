@@ -10,7 +10,7 @@
  * card and gives the buttons back. The command reads in full: over 6 lines it
  * shows the first 3, an ellipsis and the last 3, with `Show all (N lines)`.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { useRowDisclosure } from './row-disclosure';
 import { createPortal } from 'react-dom';
 import { usePhoneLayerWithBar } from './phone-session-layer';
@@ -19,6 +19,8 @@ import { useArmAfterAppear, useHoldSettled } from '@/hooks/useArmAfterAppear';
 import { foldLongCommand } from './tool-call-grouping';
 import { ChevronRightIcon, QuestionCircleIcon } from '@/components/common/PhoneIcons';
 import { AnswerBox } from '@/components/common/AnswerBox';
+import type { BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps, useDictationGroup } from '@/hooks/useSendAfterDictation';
 import { useDraftValue } from '@/hooks/useDraft';
 import { askAnswerDraftKey } from '@/utils/drafts';
 import {
@@ -27,10 +29,11 @@ import {
 } from '@/stores/permission-request-store';
 import { parseAskUserQuestionInput, buildAskUserAnswers, allAskUserQuestionsAnswered, toggleAskUserSelection, type AskQuestion } from './ask-user-question';
 
-/** One question's own-words answer, with the composer's mic. A submit settles the
- *  card and unmounts this, which discards a recording still on its way. */
-function AskOtherInput({ placeholder, value, disabled, onChange, draftKey }: {
+/** One question's own-words answer, with the composer's mic. The card's Submit
+ *  waits for this mic's words (`answerMic`), then settles the card. */
+function AskOtherInput({ placeholder, value, disabled, onChange, draftKey, answerMic }: {
   placeholder: string; value: string; disabled: boolean; onChange: (v: string) => void; draftKey: string | null;
+  answerMic: RefObject<BoxMicHandle | null>;
 }) {
   return (
     <AnswerBox
@@ -42,6 +45,7 @@ function AskOtherInput({ placeholder, value, disabled, onChange, draftKey }: {
       disabled={disabled}
       onChange={onChange}
       maxRows={4}
+      micRef={answerMic}
     />
   );
 }
@@ -78,6 +82,14 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, ans
 
   const complete = allAskUserQuestionsAnswered(questions, selections, otherText);
   const resolvedAnswers = answered ?? buildAskUserAnswers(questions, selections, otherText);
+
+  // Each question's own-words mic, and all of them as the one control Submit waits on.
+  const { micOf, group: answerMic } = useDictationGroup<BoxMicHandle>();
+  const submitNow = () => {
+    if (!complete || locked) return;
+    onSubmit(buildAskUserAnswers(questions, selections, otherText));
+  };
+  const gate = useSendAfterDictation([answerMic], submitNow);
 
   if (isSettledPermission(status)) {
     return (
@@ -151,6 +163,7 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, ans
               disabled={locked}
               onChange={(v) => setOtherText(prev => ({ ...prev, [q.question]: v }))}
               draftKey={otherDraft.key}
+              answerMic={micOf(q.question)}
             />
           </div>
         );
@@ -159,8 +172,9 @@ function AskUserQuestionCard({ questions, onSubmit, onDismiss, status, busy, ans
       <div className="permission-request-actions">
         <button
           className="permission-request-btn permission-request-btn--allow"
-          disabled={!complete || locked}
-          onClick={() => onSubmit(buildAskUserAnswers(questions, selections, otherText))}
+          disabled={(!complete && !gate.micBusy && !gate.waiting) || locked}
+          onClick={gate.send}
+          {...dictationWaitProps(gate)}
         >
           {busy ? 'Sending...' : 'Submit'}
         </button>

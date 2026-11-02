@@ -19,6 +19,7 @@ import { SettingsButton } from '../inputs/SettingsButton';
 import { SettingsRow } from '../SettingsSection';
 import { ChevronGlyph } from '../settings-glyphs';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation } from '@/hooks/useSendAfterDictation';
 import '@/styles/settings-mic.css';
 
 const AUTO = 'auto';
@@ -108,6 +109,8 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
     noteInFlight.current = note;
     void patch('note', { user_note: note }).finally(() => { noteInFlight.current = null; });
   };
+  // Enter while the mic records waits for the final words, then saves.
+  const noteGate = useSendAfterDictation([noteMic], () => { noteMic.current?.clear(); commitNote(); });
 
   return (
     <>
@@ -209,7 +212,7 @@ export function HostProfileDisclosure({ alias, name }: { alias: string; name: st
                       disabled={busy === 'note'}
                       onChange={(e) => setNote(e.target.value)}
                       onBlur={commitNote}
-                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); noteMic.current?.clear(); commitNote(); } }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); noteGate.send(); } }}
                     />
                   </MicField>
                 }

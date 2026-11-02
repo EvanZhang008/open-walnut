@@ -236,6 +236,30 @@ test('a send in the middle of a recording stops it, and no late words land', asy
   expect(note.errors).toEqual([])
 })
 
+test('a plugin send that waits on finish() sends the final words once', async ({ page }) => {
+  await useSyntheticMic(page)
+  await page.context().grantPermissions(['microphone']).catch(() => undefined)
+  const engine = await stubEngine(page)
+  const note = await openNote(page)
+  await note.box.fill('Typed first.')
+  await recordUntilDraft(note, `Typed first. ${DRAFTED}`)
+  let release = () => {}
+  engine.hold = new Promise<void>((resolve) => { release = resolve })
+  engine.stopped = true
+  const wait = page.getByTestId('mic-fixture-send-wait')
+  await wait.click()
+  await expect(wait).toHaveAttribute('data-waiting', 'true')
+  await expect(note.mic).not.toHaveClass(/mic-recording/, { timeout: 15_000 })
+  await expect(note.sent, 'nothing is sent while the words are coming').toHaveCount(0)
+  release()
+  await expect(note.sent).toHaveCount(1, { timeout: 30_000 })
+  await expect(note.sent.first()).toHaveText(`Typed first. ${FULL}`)
+  await expect(note.box).toHaveValue('')
+  await page.waitForTimeout(2_000)
+  await expect(note.sent).toHaveCount(1)
+  expect(note.errors).toEqual([])
+})
+
 test('switching drafts mid-recording leaves the other draft untouched', async ({ page }) => {
   await useSyntheticMic(page)
   await page.context().grantPermissions(['microphone']).catch(() => undefined)

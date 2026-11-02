@@ -16,8 +16,10 @@
  * `answers` construction, the completeness gate, pill toggling) — this component
  * owns only the selection state and the markup.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { AnswerBox } from '@/components/common/AnswerBox';
+import type { BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps, useDictationGroup } from '@/hooks/useSendAfterDictation';
 import { useDraftValue } from '@/hooks/useDraft';
 import { askAnswerDraftKey } from '@/utils/drafts';
 import '@/styles/prompt-mic.css';
@@ -27,9 +29,10 @@ import {
 } from '@/components/sessions/ask-user-question';
 
 /** One question's own-words answer, with the composer's mic inside its right edge.
- *  A submit settles the ask and unmounts the form, which discards a late recording. */
-function OtherAnswerInput({ placeholder, value, disabled, onChange, draftKey }: {
+ *  The form's Submit waits for this mic's words (`answerMic`), then settles the ask. */
+function OtherAnswerInput({ placeholder, value, disabled, onChange, draftKey, answerMic }: {
   placeholder: string; value: string; disabled: boolean; onChange: (v: string) => void; draftKey: string | null;
+  answerMic: RefObject<BoxMicHandle | null>;
 }) {
   return (
     <AnswerBox
@@ -41,6 +44,7 @@ function OtherAnswerInput({ placeholder, value, disabled, onChange, draftKey }: 
       disabled={disabled}
       onChange={onChange}
       maxRows={4}
+      micRef={answerMic}
     />
   );
 }
@@ -76,6 +80,14 @@ export function PermissionAnswerForm({
   const clearOther = otherDraft.clear;
   useEffect(() => { if (resolved) clearOther(); }, [resolved, clearOther]);
   const complete = allAskUserQuestionsAnswered(questions, selections, otherText);
+
+  // Each question's own-words mic, and all of them as the one control Submit waits on.
+  const { micOf, group: answerMic } = useDictationGroup<BoxMicHandle>();
+  const submitNow = () => {
+    if (disabled || !complete) return;
+    onSubmit(buildAskUserAnswers(questions, selections, otherText));
+  };
+  const gate = useSendAfterDictation([answerMic], submitNow);
 
   if (resolved) return null;
 
@@ -117,6 +129,7 @@ export function PermissionAnswerForm({
               disabled={disabled}
               onChange={(v) => setOtherText(prev => ({ ...prev, [q.question]: v }))}
               draftKey={otherDraft.key}
+              answerMic={micOf(q.question)}
             />
           </div>
         );
@@ -130,8 +143,9 @@ export function PermissionAnswerForm({
       <div className="notification-feed-item-actions">
         <button
           className="notification-perm-btn approve"
-          disabled={disabled || !complete}
-          onClick={() => onSubmit(buildAskUserAnswers(questions, selections, otherText))}
+          disabled={disabled || (!complete && !gate.micBusy && !gate.waiting)}
+          onClick={gate.send}
+          {...dictationWaitProps(gate)}
         >
           Submit
         </button>

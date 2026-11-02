@@ -29,6 +29,7 @@ import type { ThreadViewStatus } from '@/utils/thread-meta';
 import { ICON_COLLAPSE, ICON_EXPAND } from '@/components/common/Icons';
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic';
 import { useDraft } from '@/hooks/useDraft';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { ThreadStatusWord } from './ThreadStatusWord';
 import { ThreadCloseIcon } from './ThreadIcons';
 import { afterOwnTransitions } from '@/utils/after-transitions';
@@ -286,6 +287,8 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
       boxRef.current?.focus({ preventScroll: true });
     }
   }, [text, sending, p, draft]);
+  // Send (button or Enter) while the mic is recording waits for its last words.
+  const gate = useSendAfterDictation([mic], () => { void send(); });
 
   const g = p.style.grown;
   // Worth a button only when expanding gains real room.
@@ -334,7 +337,7 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
     // keyCode 229: WebKit's Enter that picks an IME candidate reports isComposing false.
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
       e.preventDefault();
-      void send();
+      gate.send();
     }
   };
   const onCardKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -451,9 +454,9 @@ export const ThreadCommentCard = memo(function ThreadCommentCard(p: ThreadCommen
           type="button"
           className="thread-card-send"
           aria-label="Send"
-          title="Send (Enter)"
-          disabled={!text.trim() || sending || !p.canAsk}
-          onClick={() => { void send(); }}
+          disabled={(!text.trim() && !gate.micBusy && !gate.waiting) || sending || !p.canAsk}
+          onClick={gate.send}
+          {...dictationWaitProps(gate, 'Send (Enter)')}
         >
           <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" /></svg>
         </button>

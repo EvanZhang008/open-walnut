@@ -21,6 +21,20 @@ export default {
         setSent((all) => [...all, value])
         setValue('')
       }
+      // The plugin API's way to wait for the words (MicButtonHandle.finish): stop, wait,
+      // then send from the render that holds them.
+      const [waiting, setWaiting] = React.useState(false)
+      const [due, setDue] = React.useState(0)
+      const sendRef = React.useRef(send)
+      sendRef.current = send
+      React.useEffect(() => { if (due > 0) sendRef.current() }, [due])
+      const sendAfterWords = async () => {
+        if (!mic.current?.busy?.()) { send(); return }
+        setWaiting(true)
+        const outcome = await mic.current.finish()
+        setWaiting(false)
+        if (!outcome.error) setDue((n) => n + 1)
+      }
       const switchTo = (next) => {
         mic.current?.clear()
         setCurrent(next)
@@ -35,6 +49,7 @@ export default {
         h('div', { 'data-testid': 'mic-fixture-row', style: { display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 } },
           MicButton ? h(MicButton, { boxRef: box, value, onChange: setValue, handleRef: mic }) : h('span', { 'data-testid': 'mic-fixture-no-mic' }, 'No mic'),
           h('button', { type: 'button', 'data-testid': 'mic-fixture-send', onClick: send }, 'Send'),
+          h('button', { type: 'button', 'data-testid': 'mic-fixture-send-wait', 'data-waiting': waiting ? 'true' : 'false', onClick: () => { void sendAfterWords() } }, 'Send after words'),
           h('button', { type: 'button', 'data-testid': 'mic-fixture-switch', onClick: () => switchTo(current === 'first' ? 'second' : 'first') }, 'Other draft')),
         h('ul', { 'data-testid': 'mic-fixture-sent' }, sent.map((text, index) => h('li', { key: index }, text))))
     }

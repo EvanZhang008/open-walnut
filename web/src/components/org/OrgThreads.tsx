@@ -38,6 +38,8 @@ import { cardView, exchangesOf, sharedAnswers, shownToHim, type ThreadExchange }
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { AnswerBox } from '@/components/common/AnswerBox';
+import type { BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { RichMarkdown } from '@/components/chat/RichBlocks';
 import { MessageAbout, rowAbout } from '@/components/sessions/message-about';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
@@ -124,7 +126,8 @@ function FollowUp({ onSend, onDone }: { onSend: (text: string) => Promise<boolea
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
-  const go = async () => {
+  const mic = useRef<BoxMicHandle | null>(null);
+  const goNow = async () => {
     const words = text.trim();
     if (!words || busy) return;
     setBusy(true);
@@ -133,6 +136,8 @@ function FollowUp({ onSend, onDone }: { onSend: (text: string) => Promise<boolea
     setBusy(false);
     if (ok) { setText(''); onDone(); } else setFailed(true);
   };
+  // Cmd+Enter and Send wait for a live dictation's words, then send.
+  const gate = useSendAfterDictation([mic], () => { void goNow(); });
   return (
     <div className="org-thread-follow" data-testid="org-thread-follow">
       {/* Walnut's answer box (common/AnswerBox.tsx): grows with the words, no grip, the mic inside. */}
@@ -142,16 +147,17 @@ function FollowUp({ onSend, onDone }: { onSend: (text: string) => Promise<boolea
         minRows={2}
         placeholder="Follow up on this request"
         testId="org-thread-follow-input"
+        micRef={mic}
         onChange={setText}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void go(); }
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); gate.send(); }
           if (e.key === 'Escape') onDone();
         }}
       />
       <div className="org-thread-follow-row">
         {failed && <span className="org-thread-error" data-testid="org-thread-follow-failed">Not sent. Your words are still here.</span>}
         <button type="button" className="btn btn-sm" onClick={onDone}>Cancel</button>
-        <button type="button" className="btn btn-sm btn-primary" data-testid="org-thread-follow-send" disabled={!text.trim() || busy} onClick={() => void go()}>
+        <button type="button" className="btn btn-sm btn-primary" data-testid="org-thread-follow-send" disabled={(!text.trim() && !gate.micBusy && !gate.waiting) || busy} onClick={gate.send} {...dictationWaitProps(gate)}>
           {busy ? 'Sending…' : 'Send'}
         </button>
       </div>

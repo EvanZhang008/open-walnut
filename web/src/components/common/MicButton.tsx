@@ -17,6 +17,11 @@ import { log } from '@/utils/log';
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import { KEEP_SELECTION_ATTR } from '@/utils/selection-guard';
+import { notifyDictationActivity, type DictationControl } from '@/hooks/useSendAfterDictation';
+
+export interface MicControl extends DictationControl {
+  discard: () => void;
+}
 
 interface MicButtonProps {
   /** Called with transcribed text */
@@ -36,11 +41,11 @@ interface MicButtonProps {
    */
   onRefine?: (finalText: string, provisional: string) => boolean | void;
   /**
-   * Receives a stop-and-throw-away handle for the live recording. Call it when the
-   * user acts on the dictated text themselves (sends it), so a transcription
-   * landing afterwards cannot duplicate what they just sent.
+   * Receives the composer's handle on this mic: `discard` stops and throws the
+   * audio away (the user switched the box to another target), and `busy` /
+   * `finish` let a Send wait for the words (useSendAfterDictation).
    */
-  controlRef?: React.MutableRefObject<{ discard: () => void } | null>;
+  controlRef?: React.MutableRefObject<MicControl | null>;
   /** ISO 639-1 language hint */
   language?: string;
   /** Disable the button */
@@ -107,7 +112,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
       : {}),
     ...(language ? { language } : {}),
   };
-  const { isSupported, isRecording, isTranscribing, error, toggleRecording, retryWithModel, retryLast, lastDebugPath, hasLastRecording, level, silenceWarning, discardRecording } = useSpeechToText(sttOptions);
+  const { isSupported, isRecording, isTranscribing, error, toggleRecording, retryWithModel, retryLast, lastDebugPath, hasLastRecording, level, silenceWarning, discardRecording, finishRecording, isBusy } = useSpeechToText(sttOptions);
   // The final words (if any) are delivered before transcribing turns false, so a
   // box that listens here knows no more text is coming for this recording.
   const busyNow = isRecording || isTranscribing;
@@ -115,6 +120,7 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
   const onSettledRef = useRef(onSettled);
   onSettledRef.current = onSettled;
   useEffect(() => {
+    notifyDictationActivity();
     if (busyNow) { wasBusy.current = true; return; }
     if (wasBusy.current) { wasBusy.current = false; onSettledRef.current?.(); }
   }, [busyNow]);
@@ -143,9 +149,9 @@ export function MicButton({ onTranscribe, onDraft, onRefine, controlRef, languag
   // Hand the parent a stable way to abandon a live recording.
   useEffect(() => {
     if (!controlRef) return;
-    controlRef.current = { discard: discardRecording };
+    controlRef.current = { discard: discardRecording, finish: finishRecording, busy: isBusy };
     return () => { controlRef.current = null; };
-  }, [controlRef, discardRecording]);
+  }, [controlRef, discardRecording, finishRecording, isBusy]);
   const sttStatus = useSttStatus();
   const navigate = useNavigate();
 

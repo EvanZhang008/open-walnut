@@ -246,6 +246,16 @@ export interface AskObjectViewProps {
 export interface MicButtonHandle {
   /** Stop and throw away a live recording, and forget what dictation wrote, so no late words land. */
   clear(): void
+  /**
+   * Recording, or its words still on their way. Optional: a host older than this API has none.
+   * A send while it is true should call `finish()` first, the way the host's own composers do.
+   */
+  busy?(): boolean
+  /**
+   * Stop the recording (if any) and resolve once its words are in the box (the box's next
+   * render holds them). `error` set: the dictation failed, so leave the text unsent.
+   */
+  finish?(): Promise<{ error: string | null }>
 }
 
 /**

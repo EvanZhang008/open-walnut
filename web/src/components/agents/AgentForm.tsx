@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, type SetStateAction } from 'react';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { useDraftValue } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import type { AgentDefinition, CreateAgentInput, UpdateAgentInput, ContextSourceId, ContextSourceConfig } from '@/api/agents';
@@ -109,9 +110,7 @@ export function AgentForm({ agent, cloneFrom, onSave, onCancel }: AgentFormProps
     promptMic.current?.clear();
   }, [source, cloneFrom]);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-
+  async function submitNow() {
     if (!id.trim()) { setError('ID is required'); return; }
     if (!name.trim()) { setError('Name is required'); return; }
     if (!/^[a-z0-9][a-z0-9_-]*$/.test(id.trim())) {
@@ -157,6 +156,13 @@ export function AgentForm({ agent, cloneFrom, onSave, onCancel }: AgentFormProps
       setSaving(false);
     }
   }
+
+  // Create/Update while a mic records waits for the final words, then saves.
+  const gate = useSendAfterDictation([descMic, promptMic], () => void submitNow());
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    gate.send();
+  };
 
   const isBuiltinEdit = isEdit && agent?.source === 'builtin';
 
@@ -293,7 +299,7 @@ export function AgentForm({ agent, cloneFrom, onSave, onCancel }: AgentFormProps
           <button type="button" className="btn" onClick={() => { kept.clear(); onCancel(); }} disabled={saving}>
             Cancel
           </button>
-          <button type="submit" className="btn btn-primary" disabled={saving}>
+          <button type="submit" className="btn btn-primary" disabled={saving} {...dictationWaitProps(gate)}>
             {saving ? 'Saving...' : isEdit ? 'Update' : 'Create'}
           </button>
         </div>

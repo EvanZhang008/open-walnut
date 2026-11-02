@@ -20,6 +20,7 @@ import { createPortal } from 'react-dom';
 import { getMailRules, putMailRules, renameMailGroup } from '@/api/mail-groups';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { AnswerBox } from '@/components/common/AnswerBox';
 import { log } from '@/utils/log';
 import { useDraft } from '@/hooks/useDraft';
@@ -130,7 +131,7 @@ export function MailGroupCard({ request }: { request: MailGroupCardRequest }) {
     : !name ? '' : name.length > MAX_RENAME ? `A group name is at most ${MAX_RENAME} characters.` : null;
   const unchanged = request.kind === 'rename' && name === request.label;
 
-  const save = async () => {
+  const saveNow = async () => {
     if (saving || renameProblem !== null || unchanged) return;
     setSaving(true);
     setError(null);
@@ -156,6 +157,8 @@ export function MailGroupCard({ request }: { request: MailGroupCardRequest }) {
       setSaving(false);
     }
   };
+  // Save (and the rename's Enter) waits for a live dictation's words, then saves.
+  const gate = useSendAfterDictation([mic], () => { void saveNow(); });
 
   return createPortal(
     <div
@@ -224,7 +227,7 @@ export function MailGroupCard({ request }: { request: MailGroupCardRequest }) {
             maxLength={MAX_RENAME + 10}
             value={text}
             onChange={(event) => setText(event.target.value)}
-            onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void save(); } }}
+            onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); gate.send(); } }}
           />
         )}
         {(error || renameProblem) && (
@@ -238,8 +241,9 @@ export function MailGroupCard({ request }: { request: MailGroupCardRequest }) {
             type="button"
             className="btn btn-sm btn-primary"
             disabled={saving || renameProblem !== null || unchanged}
-            onClick={() => { void save(); }}
+            onClick={gate.send}
             data-testid="mail-group-card-save"
+            {...dictationWaitProps(gate)}
           >
             {saving ? 'Saving…' : filter ? FILTER_SAVE : 'Save'}
           </button>

@@ -85,7 +85,27 @@ export interface UseSpeechToTextReturn {
    * transcription landing afterwards would duplicate what they just sent.
    */
   discardRecording: () => void;
+  /**
+   * Stop a live recording (if any) and resolve once its words are in the
+   * consumer's box: recording and transcribing are both over. Resolves at once
+   * when nothing is recording or transcribing. `error` is the failure the
+   * recording ended on (its words, if any, are still delivered), for a send that
+   * waited on it (useSendAfterDictation) to stay unsent.
+   */
+  finishRecording: () => Promise<DictationOutcome>;
+  /** Recording, or its words still on their way. */
+  isBusy: () => boolean;
 }
+
+/** How a dictation a send waited on ended. */
+export interface DictationOutcome {
+  error: string | null;
+}
+
+/** A waiter left when its mic goes away mid-dictation: its words will not come. */
+export const DICTATION_CLOSED_ERROR = 'The microphone closed before its words came back.';
+/** A waiter whose recording was thrown away (the box switched to another target). */
+export const DICTATION_DISCARDED_ERROR = 'The dictation was thrown away before its words came back.';
 
 // Mic-silence detection lives in mic-health.ts (the rules and why). We never
 // auto-stop the recording: the warning is non-destructive and clears itself the
@@ -230,6 +250,11 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
   const lastDraftRef = useRef<string | null>(null);
   const languageRef = useRef(language);
   languageRef.current = language;
+  // Sends waiting on this recording (finishRecording), told once it is over.
+  const finishWaitersRef = useRef<Array<(outcome: DictationOutcome) => void>>([]);
+  const [finishTick, setFinishTick] = useState(0);
+  const busyRenderedRef = useRef(false);
+  busyRenderedRef.current = isRecording || isTranscribing;
   const isMountedRef = useRef(true);
   // Reset on every mount, not just set-false on unmount: this component can be
   // unmounted+remounted while a recording's async onstop is still pending (parent
@@ -1005,7 +1030,51 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
 
   const retryLast = useCallback(() => retryWithModel(undefined), [retryWithModel]);
 
+  // The final words are handed to onTranscribe in the same batch that turns
+  // recording/transcribing off, so once this render shows both off, the box
+  // already holds them. The tick re-runs it for a waiter that arrived while the
+  // state was already settling.
+  useEffect(() => {
+    if (isRecording || isTranscribing) return;
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') return;
+    const waiters = finishWaitersRef.current;
+    if (waiters.length === 0) return;
+    finishWaitersRef.current = [];
+    for (const resolve of waiters) resolve({ error });
+  }, [isRecording, isTranscribing, error, finishTick]);
+  useEffect(() => () => {
+    const waiters = finishWaitersRef.current;
+    finishWaitersRef.current = [];
+    for (const resolve of waiters) resolve({ error: DICTATION_CLOSED_ERROR });
+  }, []);
+
+  const isBusy = useCallback(() => {
+    const recorder = mediaRecorderRef.current;
+    return (!!recorder && recorder.state !== 'inactive') || busyRenderedRef.current;
+  }, []);
+
+  const finishRecording = useCallback((): Promise<DictationOutcome> => {
+    const recorder = mediaRecorderRef.current;
+    const live = !!recorder && recorder.state !== 'inactive';
+    if (!live && !busyRenderedRef.current) return Promise.resolve({ error: null });
+    return new Promise<DictationOutcome>((resolve) => {
+      finishWaitersRef.current.push(resolve);
+      if (live) {
+        // The same stop as the mic button's: the words are delivered, not dropped.
+        setError(null);
+        draftAbortRef.current?.abort();
+        recorder.stop();
+      }
+      setFinishTick((t) => t + 1);
+    });
+  }, []);
+
   const discardRecording = useCallback(() => {
+    // A send waiting on these words must not go: the box moved on without them.
+    const waiters = finishWaitersRef.current;
+    finishWaitersRef.current = [];
+    for (const resolve of waiters) resolve({ error: DICTATION_DISCARDED_ERROR });
     const recorder = mediaRecorderRef.current;
     if (!recorder || recorder.state === 'inactive') return;
     // The flag is read in onstop, which stop() triggers asynchronously.
@@ -1029,5 +1098,7 @@ export function useSpeechToText({ onTranscribe, onDraft, onRefine, language }: U
     silenceWarning,
     isDrafting,
     discardRecording,
+    finishRecording,
+    isBusy,
   };
 }

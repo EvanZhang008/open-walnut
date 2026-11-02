@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { MicField, type BoxMicHandle } from '@/components/common/BoxMic';
+import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import { fetchRepository } from '@/api/repositories';
 import { useDraftValue } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
@@ -299,8 +300,7 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
     }));
   }, [setForm]);
 
-  const handleSubmit = useCallback(async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submitNow = useCallback(async () => {
     const trimmedSlug = slug.trim().toLowerCase().replace(/\s+/g, '-');
     if (!trimmedSlug) {
       setError('Repository name is required');
@@ -335,6 +335,12 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
       setSaving(false);
     }
   }, [slug, form, onSave, draft]);
+  // Save while a mic records waits for the final words, then saves.
+  const gate = useSendAfterDictation([descMic, archMic], () => void submitNow());
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    gate.send();
+  };
 
   if (loading) return <p className="text-muted">Loading...</p>;
 
@@ -488,7 +494,7 @@ export function RepoForm({ editSlug, onSave, onCancel }: RepoFormProps) {
 
       <div className="repo-form-actions">
         <button type="button" className="btn btn-ghost" onClick={() => { draft.clear(); onCancel(); }}>Cancel</button>
-        <button type="submit" className="btn btn-primary" disabled={saving}>
+        <button type="submit" className="btn btn-primary" disabled={saving} {...dictationWaitProps(gate)}>
           {saving ? 'Saving...' : (editSlug ? 'Update' : 'Create')}
         </button>
       </div>

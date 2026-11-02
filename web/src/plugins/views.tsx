@@ -7,7 +7,8 @@ import { TaskViewSurface } from '@/components/tasks/TaskViewSurface'
 import { PluginChatView } from '@/components/chat/PluginChatView'
 import { AskObjectDrawer } from '@/components/chat/AskObjectDrawer'
 import { PluginSettingsForm } from '@/components/settings/PluginSettingsForm'
-import { BoxMic } from '@/components/common/BoxMic'
+import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic'
+import type { RefObject } from 'react'
 import type {
   AskObjectViewProps,
   ChatViewProps,
@@ -76,7 +77,7 @@ function scopedStorageKey(pluginId: string, kind: 'task-view' | 'chat', localKey
  * engine, the live drafts, the retry menu and the Voice panel's Insert all come with it.
  */
 function MicButton({ boxRef, value, onChange, disabled, size, handleRef }: MicButtonProps) {
-  return <BoxMic boxRef={boxRef} text={value} setText={onChange} disabled={disabled} size={size} handleRef={handleRef} className="plugin-mic-button" />
+  return <BoxMic boxRef={boxRef} text={value} setText={onChange} disabled={disabled} size={size} handleRef={handleRef as RefObject<BoxMicHandle | null> | undefined} className="plugin-mic-button" />
 }
 
 export function createPluginViews(pluginId: string): PluginViews {

@@ -47,7 +47,7 @@ export function SettingsButton({
       {...rest}
       className={`settings-button settings-button-${variant}${className ? ` ${className}` : ''}`}
       disabled={disabled || busy}
-      aria-busy={busy ? true : undefined}
+      aria-busy={busy ? true : rest['aria-busy']}
     >
       <span className="settings-button-stack" data-r1={r1 || undefined} data-r2={r2 || undefined}>
         <span className="settings-button-label">{showing}</span>
