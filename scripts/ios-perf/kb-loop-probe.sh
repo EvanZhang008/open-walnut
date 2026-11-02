@@ -57,13 +57,15 @@
 # from a real phone — the field emitter is still unidentified, though it no longer
 # needs build 36's `ctxKbFlips10s` to be investigated.
 #
-# Usage: MODE=field scripts/ios-perf/kb-loop-probe.sh
+# Usage: WALNUT_SIM_UDID=<udid> MODE=field scripts/ios-perf/kb-loop-probe.sh
+# It installs a build on the simulator, so name one you may replace:
+# WALNUT_SIM_UDID=<udid>, or WALNUT_SIM_QUEUE_SCRIPT for this machine's simulator
+# queue with SIM_LANE=b or c (scripts/lib/sim-device.sh). With neither it refuses; it never picks one.
 # Never touches port 3456 (production). One simulator, serial.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 WORK="${FREEZE_WORK:-/tmp/ios-freeze}"
-SIM_NAME="iPhone 16 Pro"
 BUNDLE="dev.openwalnut.ios"
 PORT="${FREEZE_PORT:-3511}"
 APP="${FREEZE_APP:-/tmp/walnut-freeze-dd/Build/Products/Debug-iphonesimulator/Walnut.app}"
@@ -77,8 +79,10 @@ RUN="${MODE}-$(date +%H%M%S)"
 export PATH="$HOME/.maestro/bin:$PATH"
 
 mkdir -p "$WORK/flows" "$WORK/shots"
-UDID="$(xcrun simctl list devices available | grep -F "$SIM_NAME (" | head -1 | grep -oE '[0-9A-F-]{36}')"
-[ -z "$UDID" ] && { echo "no '$SIM_NAME' simulator"; exit 1; }
+# shellcheck source=../lib/sim-device.sh
+. "$REPO/scripts/lib/sim-device.sh"
+walnut_sim_resolve || exit 2
+UDID="$WALNUT_SIM_DEVICE"
 
 LOAD="$(sysctl -n vm.loadavg | awk '{print $2}')"
 echo "== sim $UDID | mode $MODE | port $PORT | host load $LOAD"
@@ -89,7 +93,7 @@ pkill -f "mock-server.mjs" 2>/dev/null; sleep 0.5
 IDLE=1 PORT=$PORT FIXTURE="$WORK/$MODE-fixture.json" \
   "${WALNUT_BUN:-bun}" "$REPO/scripts/ios-perf/mock-server.mjs" > "$WORK/mock-$RUN.log" 2>&1 &
 MOCK_PID=$!
-trap 'kill $MOCK_PID 2>/dev/null' EXIT
+trap 'kill $MOCK_PID 2>/dev/null; walnut_sim_release' EXIT
 sleep 1
 
 xcrun simctl terminate "$UDID" "$BUNDLE" 2>/dev/null

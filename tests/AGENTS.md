@@ -101,7 +101,8 @@ native XCTest target hosted by the app (`@testable import Walnut` — real code,
 `scripts/ios-perf-check.sh` is a thin wrapper around it plus the simulator smoke.
 
 - **L1 (default, ~3-4 min)** — `xcodebuild test -scheme Walnut -only-testing:WalnutTests` on the
-  iPhone 16 Pro sim (also runs from Xcode Cmd-U). Suites in `ios-native/WalnutTests/`:
+  simulator named by `WALNUT_SIM_UDID` (or lent by `WALNUT_SIM_QUEUE_SCRIPT` on `SIM_LANE` b or c; the script refuses
+  with neither, `scripts/lib/sim-device.sh`; also runs from Xcode Cmd-U). Suites in `ios-native/WalnutTests/`:
   - `LiveMarkdownWindowTests` — window invariants (head+tail is always a suffix of the text,
     even fence count in head, giant single fence never split, head stable within a tailQuantum).
   - `MessageRowHelperTests` — the REAL `MessageRow.imageSendParts` (both wire formats),

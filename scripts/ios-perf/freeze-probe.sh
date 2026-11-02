@@ -22,13 +22,15 @@
 # diagnostics. A sim main-thread stall of 1.5-2s ~= a 5-10s field watchdog kill
 # (M-series sim is 3-5x faster than the A-series phones that died).
 #
-# Usage: scripts/ios-perf/freeze-probe.sh [scenario|all]
+# Usage: WALNUT_SIM_UDID=<udid> scripts/ios-perf/freeze-probe.sh [scenario|all]
+# It installs a build on the simulator, so name one you may replace:
+# WALNUT_SIM_UDID=<udid>, or WALNUT_SIM_QUEUE_SCRIPT for this machine's simulator
+# queue with SIM_LANE=b or c (scripts/lib/sim-device.sh). With neither it refuses; it never picks one.
 # Never touches port 3456 (production). One simulator, serial.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 WORK="${FREEZE_WORK:-/tmp/ios-freeze}"
-SIM_NAME="iPhone 16 Pro"
 BUNDLE="dev.openwalnut.ios"
 PORT="${FREEZE_PORT:-3511}"
 APP="${FREEZE_APP:-/tmp/walnut-freeze-dd/Build/Products/Debug-iphonesimulator/Walnut.app}"
@@ -36,8 +38,10 @@ WANT="${1:-all}"
 export PATH="$HOME/.maestro/bin:$PATH"
 
 mkdir -p "$WORK/flows" "$WORK/shots"
-UDID="$(xcrun simctl list devices available | grep -F "$SIM_NAME (" | head -1 | grep -oE '[0-9A-F-]{36}')"
-[ -z "$UDID" ] && { echo "no '$SIM_NAME' simulator"; exit 1; }
+# shellcheck source=../lib/sim-device.sh
+. "$REPO/scripts/lib/sim-device.sh"
+walnut_sim_resolve || exit 2
+UDID="$WALNUT_SIM_DEVICE"
 echo "== sim $UDID  port $PORT  work $WORK"
 
 # ---------- fixture + mock server (IDLE session, real field scale) ----------
@@ -46,7 +50,7 @@ pkill -f "mock-server.mjs" 2>/dev/null; sleep 0.5
 IDLE=1 PORT=$PORT FIXTURE="$WORK/idle-fixture.json" \
   "${WALNUT_BUN:-bun}" "$REPO/scripts/ios-perf/mock-server.mjs" > "$WORK/mock.log" 2>&1 &
 MOCK_PID=$!
-trap 'kill $MOCK_PID 2>/dev/null' EXIT
+trap 'kill $MOCK_PID 2>/dev/null; walnut_sim_release' EXIT
 sleep 1
 grep -q mock-server "$WORK/mock.log" || { echo "mock server failed:"; cat "$WORK/mock.log"; exit 1; }
 

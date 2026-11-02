@@ -2,7 +2,11 @@
 # Human Inbox iOS E2E (LIVE layer) — real isolated server, real app on a
 # simulator, Maestro-driven taps. Todo item M7.
 #
-#   inbox-e2e.sh [simulator-udid]      (default: the booted iPhone 16 Pro)
+#   inbox-e2e.sh [simulator-udid]
+#
+# It installs a build on the simulator, so it drives only one it was told to use:
+# the udid argument, else WALNUT_SIM_UDID, else one lent by WALNUT_SIM_QUEUE_SCRIPT
+# (scripts/lib/sim-device.sh). With none it refuses; it never picks a device.
 #
 # What it proves end to end (things no unit test can):
 #   1. Letters an AGENT sent (POST /api/v1/human-inbox, exactly how `wn` does it,
@@ -35,8 +39,6 @@ HOME_DIR="$WORK/server-home"
 APP="$WORK/dd/Build/Products/Debug-iphonesimulator/Walnut.app"
 LOCK=/tmp/maestro-ios.lock
 MAESTRO="${MAESTRO_CLI:-$HOME/.maestro/bin/maestro}"
-DEVICE_NAME="${DEVICE_NAME:-iPhone 16 Pro}"
-UDID="${1:-}"
 
 # The letter body carries a script an agent could plausibly have written. If the
 # web view ever executes it, SCRIPT_OUTPUT appears on screen; the flow asserts it
@@ -46,6 +48,11 @@ SCRIPT_OUTPUT="PWNEDBYSCRIPT"
 
 [ "$PORT" = "3456" ] && { echo "refusing to act on port 3456 (production)" >&2; exit 1; }
 [ -x "$MAESTRO" ] || { echo "maestro CLI not found at $MAESTRO" >&2; exit 1; }
+
+# shellcheck source=../../../scripts/lib/sim-device.sh
+. "$REPO/scripts/lib/sim-device.sh"
+walnut_sim_resolve "${1:-}" || exit 2
+UDID="$WALNUT_SIM_DEVICE"
 
 mkdir -p "$WORK"
 FAIL=0
@@ -76,6 +83,7 @@ cleanup() {
   local listener; listener="$(lsof -ti:"$PORT" -sTCP:LISTEN 2>/dev/null)"
   [ -n "$listener" ] && kill -15 $listener 2>/dev/null
   release_lock
+  walnut_sim_release
   log "artifacts: $WORK"
 }
 trap cleanup EXIT
@@ -85,15 +93,6 @@ if lsof -nP -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1; then
 fi
 
 # ── simulator ────────────────────────────────────────────────────────────────
-if [ -z "$UDID" ]; then
-  UDID="$(xcrun simctl list devices booted -j | python3 -c "
-import json,sys
-for rt in json.load(sys.stdin)['devices'].values():
-    for d in rt:
-        if d['name'] == '$DEVICE_NAME': print(d['udid']); raise SystemExit
-")"
-fi
-[ -n "$UDID" ] || { log "no booted '$DEVICE_NAME' — boot one or pass a udid"; exit 1; }
 xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1 || true
 
 # ── isolated Walnut server ───────────────────────────────────────────────────
@@ -179,7 +178,7 @@ UNREAD="$(curl -sf "http://localhost:$PORT/api/v1/human-inbox" \
 [ "$UNREAD" = "3" ] || fail "expected 3 unread letters server-side, got '$UNREAD'"
 
 # ── install + point the app at the isolated server ───────────────────────────
-[ -d "$APP" ] || { log "app not built at $APP — run: xcodebuild -scheme Walnut -configuration Debug -destination 'platform=iOS Simulator,name=$DEVICE_NAME' -derivedDataPath $WORK/dd build"; exit 1; }
+[ -d "$APP" ] || { log "app not built at $APP — run: xcodebuild -scheme Walnut -configuration Debug -destination 'platform=iOS Simulator,id=$UDID' -derivedDataPath $WORK/dd build"; exit 1; }
 xcrun simctl terminate "$UDID" "$BUNDLE" 2>/dev/null || true
 xcrun simctl install "$UDID" "$APP"
 xcrun simctl spawn "$UDID" defaults write "$BUNDLE" walnut.serverUrl -string "http://localhost:$PORT"

@@ -10,7 +10,11 @@
 # Runs against a THROWAWAY server on port 3459 with an isolated data dir and an
 # isolated LOG_DIR. It never touches production (:3456) and refuses to.
 #
-#   scripts/ios-client-log-e2e.sh [--device "iPhone 16 Pro"] [--port 3459]
+#   scripts/ios-client-log-e2e.sh [--device <simulator-udid>] [--port 3459]
+#
+# It installs a build on the simulator, so it drives only one it was told to use:
+# --device <udid>, else WALNUT_SIM_UDID, else one lent by WALNUT_SIM_QUEUE_SCRIPT
+# (scripts/lib/sim-device.sh). With none it refuses; it never picks a device.
 #
 # The server builds and runs on bun (WALNUT_BUN, else `bun` on PATH, ~/.bun/bin/bun,
 # /opt/homebrew/bin/bun or /usr/local/bin/bun).
@@ -20,14 +24,14 @@ set -uo pipefail
 
 REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_ID="dev.openwalnut.ios"
-DEVICE_NAME="iPhone 16 Pro"
+DEVICE_ARG=""
 PORT="3459"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --device) DEVICE_NAME="$2"; shift 2 ;;
+    --device) DEVICE_ARG="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
 done
@@ -38,6 +42,12 @@ if [ "$PORT" = "3456" ]; then
   echo "refusing to act on port 3456 (production)" >&2
   exit 1
 fi
+
+# The simulator, before anything is built: refusing late wastes a whole build.
+# shellcheck source=lib/sim-device.sh
+. "$REPO/scripts/lib/sim-device.sh"
+walnut_sim_resolve "$DEVICE_ARG" || exit 2
+UDID="$WALNUT_SIM_DEVICE"
 
 # The bun that builds and runs the server: the pinned version or newer (scripts/lib/find-bun.sh).
 # shellcheck source=lib/find-bun.sh
@@ -76,6 +86,7 @@ cleanup() {
   [ -n "$listener" ] && kill -15 $listener 2>/dev/null
   # WORK is kept on purpose: the ingested file is the evidence. The build is not.
   rm -rf "$DD"
+  walnut_sim_release
   echo "artifacts: $WORK"
 }
 trap cleanup EXIT
@@ -131,22 +142,22 @@ TOKEN="$(cd "$REPO" && OPEN_WALNUT_HOME="$HOME_DIR" WALNUT_DAEMON_DIR="$LOG_DIR"
 step "building the app (Debug — the probe hook is DEBUG-only)"
 (cd "$REPO/ios-native" && xcodegen generate >/dev/null 2>&1)
 (cd "$REPO/ios-native" && xcodebuild -scheme Walnut -configuration Debug \
-  -destination "platform=iOS Simulator,name=$DEVICE_NAME" \
+  -destination "platform=iOS Simulator,id=$UDID" \
   -derivedDataPath "$DD" build >"$WORK/xcodebuild.log" 2>&1) \
   || fail "app build failed (see $WORK/xcodebuild.log)"
 
 APP="$(find "$DD/Build/Products" -maxdepth 2 -name 'Walnut.app' -type d | head -1)"
 [ -n "$APP" ] || fail "no Walnut.app in $DD"
 
-UDID="$(xcrun simctl list devices -j | python3 -c "
+DEVICE_NAME="$(xcrun simctl list devices -j | python3 -c "
 import json,sys
 d=json.load(sys.stdin)['devices']
 for runtime in d.values():
     for dev in runtime:
-        if dev['name']=='$DEVICE_NAME' and dev['isAvailable']:
-            print(dev['udid']); raise SystemExit
+        if dev['udid'].upper()=='$UDID'.upper() and dev['isAvailable']:
+            print(dev['name']); raise SystemExit
 ")"
-[ -n "$UDID" ] || fail "simulator '$DEVICE_NAME' not found"
+[ -n "$DEVICE_NAME" ] || fail "simulator $UDID not found (or not available)"
 
 xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1 || xcrun simctl boot "$UDID" >/dev/null 2>&1
 xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1

@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # Random-walk monkey tester for the Walnut iOS app on a simulator.
 #
-# Usage: ./monkey.sh <udid|booted> [rounds]
+# Usage: ./monkey.sh [udid] [rounds]
+#
+# It taps at random in whatever the app on that simulator is signed in to, so it
+# drives only a simulator it was told to use: the udid argument, else
+# WALNUT_SIM_UDID, else one lent by WALNUT_SIM_QUEUE_SCRIPT
+# (scripts/lib/sim-device.sh). With none it refuses (exit 64); it never takes
+# "booted" or picks a device itself. Pass "" as the udid to give only rounds.
 #
 # Per round: dump the accessibility tree via `maestro hierarchy`, pick a random
 # actionable element, act on it (tap / swipe / type / background-foreground),
@@ -11,7 +17,10 @@
 # Exit code 0 = survived all rounds; 1 = crash found; 2 = freeze suspected.
 set -uo pipefail
 
-UDID="${1:-booted}"
+# shellcheck source=../../../scripts/lib/sim-device.sh
+. "$(cd "$(dirname "$0")/../../.." && pwd)/scripts/lib/sim-device.sh"
+walnut_sim_resolve "${1:-}" || exit 64
+UDID="$WALNUT_SIM_DEVICE"
 ROUNDS="${2:-100}"
 BUNDLE="dev.openwalnut.ios"
 RUN_DIR="$(dirname "$0")/runs/$(date +%Y%m%d-%H%M%S)"

@@ -9,7 +9,7 @@
 #      plus the rendering perf regression gates (MarkdownPerfTests: in-code
 #      budget assertions + a load-immune windowed-vs-unwindowed ratio gate).
 #      This is `xcodebuild test`, so it also runs from Xcode (Cmd-U) and CI.
-#   L2 (--sim, ~5 min): end-to-end freeze smoke on the iPhone 16 Pro sim:
+#   L2 (--sim, ~5 min): end-to-end freeze smoke on a simulator:
 #      build the app, point it at a mock /api/v1 server (mock-server.mjs
 #      generates its own synthetic long transcript) with an aggressive live
 #      SSE stream, open the session via Maestro, and assert the app's own
@@ -21,14 +21,18 @@
 #   scripts/ios-perf-check.sh --sim      # L1 + L2 (run before iOS releases)
 #   scripts/ios-perf-check.sh --sim-only # L2 only (reuses last app build if present)
 #
+# Both layers install a build on the simulator, so name one you may replace:
+#   WALNUT_SIM_UDID=<udid> scripts/ios-perf-check.sh
+# or set WALNUT_SIM_QUEUE_SCRIPT to this machine's simulator queue and SIM_LANE to
+# a test lane (scripts/lib/sim-device.sh). With neither it refuses; it never picks a device.
+#
 # NO parallel simulators (machine stability rule) — everything targets one
-# booted sim, serially (-parallel-testing-enabled NO).
+# sim, serially (-parallel-testing-enabled NO).
 set -uo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 PERF="$REPO/scripts/ios-perf"
 WORK="${IOS_PERF_WORK:-/tmp/ios-perf-check}"
-SIM_NAME="iPhone 16 Pro"
 BUNDLE="dev.openwalnut.ios"
 MOCK_PORT=3510
 RUN_L1=1
@@ -40,17 +44,17 @@ case "${1:-}" in
   *) echo "usage: $0 [--sim|--sim-only]"; exit 2 ;;
 esac
 
+# shellcheck source=lib/sim-device.sh
+. "$REPO/scripts/lib/sim-device.sh"
+walnut_sim_resolve || exit 2
+UDID="$WALNUT_SIM_DEVICE"
+echo "simulator $UDID (from $WALNUT_SIM_FROM)"
+
 mkdir -p "$WORK"
 FAIL=0
 
-sim_udid() {
-  xcrun simctl list devices available | grep -F "$SIM_NAME (" | grep -v Stress | head -1 | grep -oE '[0-9A-F-]{36}'
-}
-
 # ---------- L1: XCTest (WalnutTests) ----------
 if [ "$RUN_L1" = 1 ]; then
-  UDID="$(sim_udid)"
-  if [ -z "$UDID" ]; then echo "[L1] no '$SIM_NAME' simulator available"; exit 1; fi
   xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1 || true
 
   echo "[L1] xcodegen generate + xcodebuild test (WalnutTests) on sim $UDID"
@@ -76,12 +80,11 @@ if [ "$RUN_L2" = 1 ]; then
   if [ ! -d "$APP" ] || [ "${IOS_PERF_REUSE_BUILD:-0}" != 1 ]; then
     (cd "$REPO/ios-native" && xcodegen generate >/dev/null \
       && xcodebuild -project Walnut.xcodeproj -scheme Walnut \
-        -destination "platform=iOS Simulator,name=$SIM_NAME" \
+        -destination "platform=iOS Simulator,id=$UDID" \
         -derivedDataPath "$WORK/dd" build > "$WORK/l2-build.log" 2>&1) \
       || { echo "[L2] BUILD FAILED — see $WORK/l2-build.log"; tail -20 "$WORK/l2-build.log"; exit 1; }
   fi
 
-  UDID="$(sim_udid)"
   xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1 || true
 
   echo "[L2] starting mock v1 server on :$MOCK_PORT (built-in 1000-msg mixed transcript + aggressive live stream)"
@@ -89,7 +92,7 @@ if [ "$RUN_L2" = 1 ]; then
   PORT=$MOCK_PORT MSG_COUNT=1000 LIVE_TEXT_KB=512 DELTA_MS=100 DELTA_BYTES=2000 DELTA_COUNT=300 \
     "${WALNUT_BUN:-bun}" "$PERF/mock-server.mjs" > "$WORK/l2-mock.log" 2>&1 &
   MOCK_PID=$!
-  trap 'kill $MOCK_PID 2>/dev/null' EXIT
+  trap 'kill $MOCK_PID 2>/dev/null; walnut_sim_release' EXIT
   sleep 1
 
   echo "[L2] installing + configuring app"

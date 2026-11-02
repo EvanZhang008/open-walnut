@@ -46,7 +46,14 @@
 #                         below). Default unset. Exporting it alone is NOT enough —
 #                         like the two above it only reaches the runner through the
 #                         .xctestrun, which is why this script injects it.
-#   WALNUT_UITEST_UDID    explicit gate simulator; must match WALNUT_UITEST_GATE_UDID.
+#   WALNUT_UITEST_UDID    the simulator to run on (inbox-items and private-tasks runs:
+#                         must match WALNUT_UITEST_GATE_UDID). Else WALNUT_SIM_UDID,
+#                         else one lent by WALNUT_SIM_QUEUE_SCRIPT on SIM_LANE (b or
+#                         c; lane a is the machine owner's own and is never lent)
+#                         (scripts/lib/sim-device.sh). With none it refuses: it
+#                         never takes whichever simulator happens to be booted.
+#   WALNUT_SIM_QUEUE_NAME  the name this run uses with the queue, for the lease and
+#                         for the may/taken admission alike. Default: inbox-items.
 #   WALNUT_UITEST_GATE_UDID  simulator reserved for isolated UI verification.
 #   WALNUT_HEAVY_SLOT_SCRIPT  machine-wide heavy-command admission script.
 #   WALNUT_UITEST_ISOLATED=1  confirms the loopback fixture, never a paired live server.
@@ -82,14 +89,30 @@ if [ "$#" -gt 0 ]; then ONLY=("$@"); else ONLY=(-only-testing:WalnutUITests); fi
 say() { printf '\n== %s\n' "$*"; }
 die() { printf '\n!! %s\n' "$*" >&2; exit 1; }
 
-UDID="${WALNUT_UITEST_UDID:-}"
-if [ -z "$UDID" ]; then
-  UDID=$(xcrun simctl list devices booted 2>/dev/null \
-         | sed -n 's/.*(\([0-9A-F-]\{36\}\)) (Booted).*/\1/p' | head -1)
+# The simulator (scripts/lib/sim-device.sh): WALNUT_UITEST_UDID, else WALNUT_SIM_UDID,
+# else a lease from WALNUT_SIM_QUEUE_SCRIPT on SIM_LANE, else a refusal. One queue name
+# for the lease and for the admission below.
+WALNUT_SIM_QUEUE_NAME="${WALNUT_SIM_QUEUE_NAME:-inbox-items}"
+# shellcheck source=../../../scripts/lib/sim-device.sh
+. "$IOS/../scripts/lib/sim-device.sh"
+GATE_RUN=no
+if [ "${WALNUT_UITEST_INBOX_ITEMS:-}" = 1 ] || [ "${WALNUT_UITEST_PRIVATE_TASKS:-}" = 1 ]; then GATE_RUN=yes; fi
+check_gate_device() {
+  [ "$(walnut_sim_upper "$1")" = "$(walnut_sim_upper "${WALNUT_UITEST_GATE_UDID:-}")" ] \
+    || die "simulator must match explicit WALNUT_UITEST_GATE_UDID"
+}
+
+# Everything that can refuse this run is checked BEFORE it queues for the machine's
+# heavy-command slot, so a misconfigured run is refused at once, not after the wait.
+walnut_sim_check "${WALNUT_UITEST_UDID:-}" || exit 2
+if [ "$WALNUT_SIM_FROM" = queue ]; then
+  case "$SIM_LANE" in b|c) ;; *) die "SIM_LANE must be b or c for a simulator lent by the queue" ;; esac
+else
+  case "${SIM_LANE:-a}" in a|b) ;; *) die "SIM_LANE must be a or b" ;; esac
 fi
-[ -n "$UDID" ] || die "no booted simulator; boot one or set WALNUT_UITEST_UDID"
-if [ "${WALNUT_UITEST_INBOX_ITEMS:-}" = 1 ] || [ "${WALNUT_UITEST_PRIVATE_TASKS:-}" = 1 ]; then
-  [ "$UDID" = "${WALNUT_UITEST_GATE_UDID:-}" ] || die "simulator must match explicit WALNUT_UITEST_GATE_UDID"
+if [ "$GATE_RUN" = yes ]; then
+  [[ "${WALNUT_UITEST_GATE_UDID:-}" =~ $WALNUT_SIM_UDID_RE ]] || die "WALNUT_UITEST_GATE_UDID must be a simulator UDID"
+  [ "$WALNUT_SIM_FROM" = queue ] || check_gate_device "$WALNUT_SIM_DEVICE"
   [ "${WALNUT_UITEST_ISOLATED:-}" = 1 ] || die "only an isolated fixture server is allowed"
   [ -z "$ALLOW_SPRINGBOARD" ] || die "SpringBoard launch is not allowed on the gate runner"
   python3 - "$SERVER" <<'PY' || die "server must be an isolated loopback port, never production"
@@ -99,6 +122,12 @@ assert u.scheme == 'http' and u.hostname in ('127.0.0.1', 'localhost')
 assert u.port and u.port not in (3456, 3457)
 PY
 fi
+command -v xcodegen >/dev/null || die "xcodegen not on PATH"
+
+# Then re-run inside the heavy-command slot, and only there take the simulator. No
+# lease crosses the exec: the exec would drop its release trap, and the re-run is a
+# new process. The lease's holder pid is the process that runs the tests, and its
+# own EXIT trap gives it back.
 SLOT="${WALNUT_HEAVY_SLOT_SCRIPT:-}"
 run_heavy() {
   if [ -n "$SLOT" ] && [ "${WALNUT_UITEST_HEAVY_HELD:-}" != 1 ]; then bash "$SLOT" "$@"; else "$@"; fi
@@ -106,14 +135,15 @@ run_heavy() {
 if [ -n "$SLOT" ] && [ "${WALNUT_UITEST_HEAVY_HELD:-}" != 1 ]; then
   exec bash "$SLOT" env WALNUT_UITEST_HEAVY_HELD=1 bash "${BASH_SOURCE[0]}" "$@"
 fi
-say "simulator $UDID"
+walnut_sim_resolve "${WALNUT_UITEST_UDID:-}" || exit 2
+UDID="$WALNUT_SIM_DEVICE"
+[ "$GATE_RUN" = yes ] && check_gate_device "$UDID"
+say "simulator $UDID (from $WALNUT_SIM_FROM)"
 if [ "$SERVER" = "http://127.0.0.1:59999" ]; then
   say "pairing at the OFFLINE DEFAULT ($SERVER): enough for the voice/warm-delivery tests; pass WALNUT_UITEST_SERVER for anything needing real board content"
 else
   say "pairing at $SERVER"
 fi
-
-command -v xcodegen >/dev/null || die "xcodegen not on PATH"
 
 # One simulator is an EXCLUSIVE resource, so hold a lease for the whole run. Two
 # concurrent runs are not slow, they are wrong: they install the same bundle id
@@ -123,13 +153,23 @@ command -v xcodegen >/dev/null || die "xcodegen not on PATH"
 # Walnut.xcodeproj, so even the build step races. Same reasoning as the
 # machine-wide Playwright gate (tests/e2e/browser/pw-gate.ts).
 #
+# A simulator the queue lent IS that lease (the queue's acquire took the lane's
+# lock under this pid), so the run takes no second one: it would find its own lease
+# busy and wait on itself. A simulator named explicitly takes the lane lock here.
+#
 # Queuing here is correct behaviour, not a hang. A lease whose holder is gone is
 # reclaimed. TERM is trapped alongside EXIT because a bare `trap … EXIT` does NOT
 # run when a supervisor kills this script on a timeout, which leaks the lease and
 # blocks the machine for everyone.
+if [ "$WALNUT_SIM_FROM" = queue ]; then
+  say "simulator lease held (lane $SIM_LANE, from the queue)"
+else
+# The lane locks live in /tmp, where the machine's queue keeps them; a queue under test
+# keeps them in SIM_QUEUE_DIR, and WALNUT_SIM_LOCK_DIR (test-only) points them anywhere.
+LOCK_DIR="${WALNUT_SIM_LOCK_DIR:-${SIM_QUEUE_DIR:-/tmp}}"
 case "${SIM_LANE:-a}" in
-  a) LOCK=/tmp/walnut-ios-sim.lock ;;
-  b) LOCK=/tmp/walnut-ios-sim-b.lock ;;
+  a) LOCK="$LOCK_DIR/walnut-ios-sim.lock" ;;
+  b) LOCK="$LOCK_DIR/walnut-ios-sim-b.lock" ;;
   *) die "SIM_LANE must be a or b" ;;
 esac
 # Release only a lease this process actually owns. A queuing run that gets killed
@@ -138,13 +178,13 @@ esac
 release_lease() { [ "$(cat "$LOCK/pid" 2>/dev/null || true)" = "$$" ] && rm -rf "$LOCK"; return 0; }
 took=no
 for attempt in $(seq 1 240); do
-  if [ -n "${WALNUT_SIM_QUEUE_SCRIPT:-}" ] && ! bash "$WALNUT_SIM_QUEUE_SCRIPT" may "${WALNUT_SIM_QUEUE_NAME:-inbox-items}"; then
+  if [ -n "${WALNUT_SIM_QUEUE_SCRIPT:-}" ] && ! bash "$WALNUT_SIM_QUEUE_SCRIPT" may "$WALNUT_SIM_QUEUE_NAME"; then
     sleep 15; continue
   fi
   if mkdir "$LOCK" 2>/dev/null; then
     echo "$$" > "$LOCK/pid"
     trap release_lease EXIT INT TERM HUP
-    if [ -n "${WALNUT_SIM_QUEUE_SCRIPT:-}" ]; then bash "$WALNUT_SIM_QUEUE_SCRIPT" taken "${WALNUT_SIM_QUEUE_NAME:-inbox-items}"; fi
+    if [ -n "${WALNUT_SIM_QUEUE_SCRIPT:-}" ]; then bash "$WALNUT_SIM_QUEUE_SCRIPT" taken "$WALNUT_SIM_QUEUE_NAME"; fi
     took=yes; break
   fi
   holder=$(cat "$LOCK/pid" 2>/dev/null || true)
@@ -156,6 +196,7 @@ for attempt in $(seq 1 240); do
 done
 [ "$took" = yes ] || die "could not take $LOCK after 60 min (holder pid $(cat "$LOCK/pid" 2>/dev/null || echo '?'))"
 say "simulator lease held"
+fi
 
 ( cd "$IOS" && xcodegen generate >/dev/null ) || die "xcodegen generate failed"
 

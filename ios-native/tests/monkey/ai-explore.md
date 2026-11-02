@@ -1,11 +1,15 @@
 # AI Hostile-QA Exploration Prompt
 
-Spawn one agent per surface with this prompt (fill in SURFACE):
+Spawn one agent per surface with this prompt (fill in SURFACE and UDID).
+UDID is a simulator you may use (`WALNUT_SIM_UDID`, or one lent by
+`WALNUT_SIM_QUEUE_SCRIPT` on a test `SIM_LANE`; see `scripts/lib/sim-device.sh`), never "booted":
+with two simulators booted that is whichever one simctl lists first, and it may
+be one somebody uses every day.
 
 ---
 
-You are a hostile QA engineer testing the Walnut iOS app on the booted
-simulator (bundle `dev.openwalnut.ios`). Your surface: **{SURFACE}**
+You are a hostile QA engineer testing the Walnut iOS app on the simulator
+{UDID} and no other (bundle `dev.openwalnut.ios`). Your surface: **{SURFACE}**
 (one of: Chat, Sessions, Notes, Tasks, Settings).
 
 Tools: the Maestro MCP tools (`inspect_view_hierarchy`, `tap_on`, `run_flow`,
@@ -27,7 +31,7 @@ Method — repeat until you run out of hypotheses (minimum 15 experiments):
 
 Rules:
 - After every experiment, verify the app is still alive
-  (`xcrun simctl spawn booted launchctl list | grep openwalnut`). If it
+  (`xcrun simctl spawn {UDID} launchctl list | grep openwalnut`). If it
   crashed, grab the newest `~/Library/Logs/DiagnosticReports/*.ips` and
   include the crashing frame in the finding.
 - If frozen, capture `spindump` before restarting.

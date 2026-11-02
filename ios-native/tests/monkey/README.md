@@ -12,7 +12,12 @@ scanning `~/Library/Logs/DiagnosticReports` for new `.ips` files after every
 action; hangs are caught when the same screenshot hash repeats across N
 actions that should have changed the screen.
 
-    ./monkey.sh <udid> <rounds>        # e.g. ./monkey.sh booted 200
+    ./monkey.sh <udid> <rounds>        # e.g. ./monkey.sh "$WALNUT_SIM_UDID" 200
+
+It needs a simulator UDID you may tap around in (the argument, or
+`WALNUT_SIM_UDID`, or a lease from `WALNUT_SIM_QUEUE_SCRIPT` on a test `SIM_LANE`; see
+`scripts/lib/sim-device.sh`) and refuses without one. It never takes "booted":
+with two simulators booted, that is whichever one simctl lists first.
 
 Artifacts land in `runs/<timestamp>/`: `actions.log` (replayable action
 sequence), screenshots per step, any crash reports, and a `verdict.txt`.
@@ -42,7 +47,7 @@ surface (Chat / Sessions / Notes / Tasks / Settings) in parallel.
 
 If the app freezes during ANY layer, capture a hang dump before killing it:
 
-    xcrun simctl spawn booted spindump <pid> 5 -file /tmp/walnut-hang.txt
+    xcrun simctl spawn <udid> spindump <pid> 5 -file /tmp/walnut-hang.txt
 
 On device, MetricKit hang diagnostics (CrashReporter.swift) upload the stack
 via AppLog on the next launch — check `/tmp/open-walnut/ios-client/`.

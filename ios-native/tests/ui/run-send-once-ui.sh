@@ -39,7 +39,7 @@ die() { printf '\n!! %s\n' "$*" >&2; exit 1; }
 [ "$PORT" != 3456 ] || die "3456 is the production port"
 [ -x "$TSX" ] || die "no $TSX (run npm install in $ROOT)"
 if [ "${1:-}" != "--serve" ] && [ -z "${WALNUT_UITEST_UDID:-}" ]; then
-  die "name the simulator: WALNUT_UITEST_UDID=<udid> (xcrun simctl list devices booted)"
+  die "name the simulator: WALNUT_UITEST_UDID=<udid> (xcrun simctl list devices)"
 fi
 mkdir -p "$OUT" || die "cannot create $OUT"
 rm -f "$OUT/ready.json" "$OUT/done"

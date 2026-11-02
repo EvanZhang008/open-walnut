@@ -17,7 +17,7 @@ Replaces the Expo app in `../ios/` (kept as reference until this one is fully ve
 cd ios-native
 xcodegen generate        # project.yml → Walnut.xcodeproj
 xcodebuild -project Walnut.xcodeproj -scheme Walnut \
-  -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
+  -destination 'generic/platform=iOS Simulator' \
   -derivedDataPath DerivedData build
 ```
 
@@ -34,11 +34,21 @@ Or open `Walnut.xcodeproj` in Xcode and run.
 
 ## Tests
 
+A test run installs its own build on the simulator it runs on, replacing the app
+there. So every test names its simulator by UDID: pick one you may replace
+(`xcrun simctl list devices`) and export it as `WALNUT_SIM_UDID`. Never select one
+by model name (`name=iPhone ...`): that is whichever simulator of that name simctl
+finds first, which may be the one you use every day. The repo's scripts resolve
+the simulator through `scripts/lib/sim-device.sh`: `WALNUT_SIM_UDID`, else a lease
+from the machine's simulator queue (`WALNUT_SIM_QUEUE_SCRIPT`, on a test lane named by
+`SIM_LANE`; lane a is the machine owner's own simulator and is never lent), else they
+refuse. The helper's header describes the queue's `acquire`/`release` protocol.
+
 ```bash
 cd ios-native
 # unit + rendering-perf gates (no pairing needed)
 xcodebuild test -project Walnut.xcodeproj -scheme Walnut \
-  -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
+  -destination "platform=iOS Simulator,id=$WALNUT_SIM_UDID" \
   -derivedDataPath DerivedData -only-testing:WalnutTests
 
 # the XCUITest layer — use the script, see the note below

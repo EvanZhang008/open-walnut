@@ -61,7 +61,7 @@ function parseArgs(argv) {
 
 const USAGE = `Usage: node episode.mjs --device <udid> [--minutes 30] [--seed 42]
                        [--driver hybrid|ai] [--server http://localhost:3456]
-                       [--device-name "iPhone 16 Pro"] [--also-device-name sim-stress2]
+                       [--device-name "<simctl display name>"] [--also-device-name sim-stress2]
                        [--steps N] [--no-judge]
        node episode.mjs --dry-run [--seed 1] [--steps 20]`;
 
@@ -540,14 +540,14 @@ async function dryRunSelfCheck(args) {
     const utcLogs = fs.mkdtempSync(path.join(os.tmpdir(), 'robot-utclogs-'));
     const started = Date.now();
     const o = createOracles({
-      deviceName: 'iPhone 16 Pro Stress2', extraDeviceNames: ['sim-stress2'],
+      deviceName: 'Test Phone Stress2', extraDeviceNames: ['sim-stress2'],
       startedAt: started, logDir: utcLogs, reportsDir: tmpReports, fetchImpl: async () => ({ status: 200 }),
     });
     o.primeLogOffsets();   // step 0: the dir is empty, nothing to prime
-    const stale = JSON.stringify({ device: 'iPhone 16 Pro Stress2', subsystem: 'freeze', level: 'error', message: 'main thread unresponsive', m_stalledSeconds: '6.0', ts: '2026-07-25T05:10:01Z' });
+    const stale = JSON.stringify({ device: 'Test Phone Stress2', subsystem: 'freeze', level: 'error', message: 'main thread unresponsive', m_stalledSeconds: '6.0', ts: '2026-07-25T05:10:01Z' });
     // A file with a DIFFERENT (UTC) date than the one a local-date predictor would build,
     // appearing mid-run, already containing the whole day of history.
-    const utcFile = path.join(utcLogs, 'iPhone-16-Pro-Stress2-2026-07-25.log');
+    const utcFile = path.join(utcLogs, 'Test-Phone-Stress2-2026-07-25.log');
     fs.writeFileSync(utcFile, stale + '\n');
     const midRun = o.freezeTelemetry();
     cases.push({ name: 'freezeTelemetry/late-appearing-file-not-replayed', flagged: !midRun.ok, expect: false, detail: midRun.detail });
@@ -556,7 +556,7 @@ async function dryRunSelfCheck(args) {
     fs.writeFileSync(aliasFile, JSON.stringify({ subsystem: 'sse', message: 'hello', ts: new Date().toISOString() }) + '\n');
     o.freezeTelemetry();   // discovers + primes the alias file
     const watched = o.candidateLogPaths();
-    const watchesBoth = watched.some((p) => p.includes('iPhone-16-Pro-Stress2-')) && watched.some((p) => p.includes('sim-stress2-'));
+    const watchesBoth = watched.some((p) => p.includes('Test-Phone-Stress2-')) && watched.some((p) => p.includes('sim-stress2-'));
     cases.push({ name: 'freezeTelemetry/watches-both-device-names', flagged: !watchesBoth, expect: false, detail: { watched: watched.map((p) => path.basename(p)) } });
     // A genuinely new freeze appended to that same alias file must still be caught.
     fs.appendFileSync(aliasFile, JSON.stringify({ subsystem: 'freeze', level: 'error', message: 'main thread unresponsive', m_stalledSeconds: '8.2', ts: new Date().toISOString() }) + '\n');
