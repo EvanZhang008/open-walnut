@@ -118,6 +118,14 @@ export interface StatusReport {
   ask_options?: AskOption[];
   /** needs: the detail behind the ask, shown under More. */
   ask_more?: string;
+  /** needs: which of the user's own kinds the ask is, and why (org/user-kind.ts). */
+  ask_own?: { kind: string; why: string };
+  /**
+   * The report named an ask but no kind of the user's own (2026-11-02, the user: "why ask me, just go"):
+   * the ask is no ask of the user, so it reads as a report to its lead (waiting_kind lead, its words in
+   * waiting_on), and a task with no lead above it reads as finished, to read and close.
+   */
+  kindless_ask?: true;
   /** Who wrote it when not the task's own session (sessions/report-set.ts): its lead, VP or Main
    *  (`task:<id>`), or a person. The task's next own report replaces it. */
   by?: StatusLineBy;
@@ -812,6 +820,8 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   if (machine) return machine;
   if (tasks.length) return strip({ state: 'waiting', kind: 'task', waitingOn: reported || `A reply from ${tasks.join(', ')}`, ...w });
   // Parked on the user (an older writer, a person's park): the user's ask, never a Waiting on them.
+  // An ask with no kind of the user's own is no ask of theirs: with no lead above it, the task is a result to read and close.
+  if (report?.kindless_ask && !hasAbove(input)) return strip({ state: 'needs', source: 'session', ask: DONE_ASK, ...w });
   if (reported && (reportedKind === 'you' || (reportedKind === 'lead' && !hasAbove(input)))) return strip({ state: 'needs', source: 'session', ask: reported, ...w });
   if (reported && reportedKind && reportedKind !== 'stuck') return strip({ state: 'waiting', kind: reportedKind, waitingOn: reported, ...(until ? { until } : {}), ...w });
   // A standing routine: between fires it waits on the next one.

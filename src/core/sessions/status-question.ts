@@ -45,7 +45,7 @@ export function statusQuestionOwns(sessionId: string): boolean {
 export function buildStatusPrompt(forUserPrompt: string, title: string, uiLanguageName?: string): string {
   const lines = forUserPrompt.replace(/^Then these lines/, 'Answer with only these lines');
   const lang = uiLanguageName
-    ? `\nFOR_USER_ASK, FOR_USER_ASK_OPTIONS, FOR_USER_ASK_MORE, FOR_USER_WAITING_ON, FOR_USER_NOW and FOR_USER_NEXT are shown to the user: write them in ${uiLanguageName}, keeping identifiers and technical terms in their original form; the kind word that starts FOR_USER_WAITING_ON (outside, task, lead, machine) stays in English, followed by ":".`
+    ? `\nFOR_USER_ASK, FOR_USER_ASK_OWN, FOR_USER_ASK_OPTIONS, FOR_USER_ASK_MORE, FOR_USER_WAITING_ON, FOR_USER_NOW and FOR_USER_NEXT are shown to the user: write them in ${uiLanguageName}, keeping identifiers and technical terms in their original form; the kind word that starts FOR_USER_WAITING_ON (outside, task, lead, machine) and the kind word that starts FOR_USER_ASK_OWN stay in English, followed by ":".`
     : '';
   return `Walnut asks where this task${title ? ` ("${title.replace(/\s+/g, ' ').slice(0, 120)}")` : ''} stands now, for the user's board. Do not use any tool and do not continue the work. ${lines}${lang}`;
 }

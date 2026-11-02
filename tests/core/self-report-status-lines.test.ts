@@ -6,7 +6,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { FOR_USER_PROMPT, readStatusReport } from '../../src/core/session-hooks/builtins.js'
-import { deriveUserStatus } from '../../src/core/user-status.js'
+import { DONE_ASK, deriveUserStatus } from '../../src/core/user-status.js'
 import { phaseForReport } from '../../src/core/sessions/report-phase.js'
 
 const AT = new Date('2026-10-26T05:35:00Z')
@@ -17,12 +17,13 @@ describe('readStatusReport', () => {
       'STATUS: blocked',
       'FOR_USER_STATE: needs-you',
       'FOR_USER_ASK: Approve testing on your real iPhone?',
+      'FOR_USER_ASK_OWN: permissions: it lets a test run on their own device',
       'FOR_USER_WAITING_ON: none',
       'FOR_USER_NOW: The build passes on the simulator.',
       'FOR_USER_NEXT: You decide, then I run the device test.',
     ].join('\n'), AT)
     expect(r).toEqual({
-      state: 'needs', ask: 'Approve testing on your real iPhone?',
+      state: 'needs', ask: 'Approve testing on your real iPhone?', ask_own: { kind: 'permissions', why: 'it lets a test run on their own device' },
       now: 'The build passes on the simulator.', next: 'You decide, then I run the device test.', at: AT.toISOString(),
     })
   })
@@ -68,7 +69,7 @@ describe('readStatusReport', () => {
     expect(readStatusReport('FOR_USER_STATE: needs-you\nFOR_USER_ASK: lead: land it\nFOR_USER_WAITING_ON: outside: the CI run', AT))
       .toMatchObject({ state: 'waiting', waiting_kind: 'lead', waiting_on: 'land it' })
     // An ask of the user stays one, also "you:".
-    expect(readStatusReport('FOR_USER_STATE: needs-you\nFOR_USER_ASK: you: approve the merge?', AT)).toMatchObject({ state: 'needs', ask: 'you: approve the merge?' })
+    expect(readStatusReport('FOR_USER_STATE: needs-you\nFOR_USER_ASK: you: approve the merge?\nFOR_USER_ASK_OWN: outward: it publishes the merge', AT)).toMatchObject({ state: 'needs', ask: 'you: approve the merge?' })
     expect(FOR_USER_PROMPT).toMatch(/Never a step for your lead or another task/)
     // A task with no lead: the one above it is the user, so the same words still ask them.
     const r = readStatusReport('FOR_USER_STATE: needs-you\nFOR_USER_ASK: lead: merge it', AT)!
@@ -110,5 +111,51 @@ describe('readStatusReport', () => {
   it('the prompt asks for plain words and names the four states', () => {
     expect(FOR_USER_PROMPT).toContain('needs-you | working | waiting | done')
     expect(FOR_USER_PROMPT).toMatch(/no codenames, abbreviations/)
+  })
+})
+
+describe('an ask with no kind of the user\'s own (org/user-kind.ts)', () => {
+  const ASK = 'FOR_USER_STATE: needs-you\nFOR_USER_ASK: Please look at the usage page'
+  const derive = (report: NonNullable<ReturnType<typeof readStatusReport>>, hasLeader: boolean) => deriveUserStatus({
+    hasSession: true, processStatus: 'stopped', hasLeader, phase: 'WAITING', phaseChangedAt: new Date(AT.getTime() - 120_000).toISOString(), report,
+  }, AT.getTime() + 60_000)
+
+  it('reads as a report to its lead, its words kept as what it waits on', () => {
+    const r = readStatusReport(`${ASK}\nFOR_USER_NOW: I checked prod myself.\nFOR_USER_NEXT: Nothing.`, AT)!
+    expect(r).toMatchObject({ state: 'waiting', waiting_kind: 'lead', waiting_on: 'Please look at the usage page', kindless_ask: true, now: 'I checked prod myself.' })
+    expect(r).not.toHaveProperty('ask')
+  })
+
+  it('a made-up kind, a kind with no reason and an empty line are all no kind', () => {
+    for (const own of ['convenience: it would be nice', 'spending', 'spending: short', 'none', '']) {
+      expect(readStatusReport(`${ASK}\nFOR_USER_ASK_OWN: ${own}`, AT), own).toMatchObject({ state: 'waiting', kindless_ask: true })
+    }
+  })
+
+  it('a kind of the user\'s own keeps the ask and records the kind, also with a dash or a full-width colon', () => {
+    for (const own of ['spending: it buys a paid plan', 'spending - it buys a paid plan', 'spending\uff1a it buys a paid plan', 'Spending: it buys a paid plan']) {
+      expect(readStatusReport(`${ASK}\nFOR_USER_ASK_OWN: ${own}`, AT), own)
+        .toMatchObject({ state: 'needs', ask: 'Please look at the usage page', ask_own: { kind: 'spending', why: 'it buys a paid plan' } })
+    }
+  })
+
+  it('no ask, or a state that is not needs-you, is never asked for a kind', () => {
+    expect(readStatusReport('FOR_USER_STATE: needs-you\nFOR_USER_NOW: Here is the walkthrough you asked for.', AT)).toMatchObject({ state: 'needs' })
+    expect(readStatusReport('FOR_USER_STATE: working\nFOR_USER_ASK: stray', AT)).toMatchObject({ state: 'working' })
+  })
+
+  it('with a lead above it, the user sees Waiting on the lead; with none, a finished result to read and close, never the ask', () => {
+    const r = readStatusReport(ASK, AT)!
+    expect(derive(r, true)).toMatchObject({ state: 'waiting', kind: 'lead' })
+    const alone = derive(r, false)
+    expect(alone).toMatchObject({ state: 'needs', ask: DONE_ASK })
+    expect(alone.ask).toBe(DONE_ASK)
+  })
+
+  it('the prompt asks for the line, with the never-his list, and drops a weak kind', () => {
+    expect(FOR_USER_PROMPT).toMatch(/FOR_USER_ASK_OWN: needs-you with an ask only/)
+    expect(FOR_USER_PROMPT).toContain('Never the user\'s: undoing something an agent broke or changed')
+    expect(FOR_USER_PROMPT).toMatch(/Never ask the user to look at, open or check something you can check yourself/)
+    expect(FOR_USER_PROMPT).toMatch(/write none rather than a weak kind/)
   })
 })

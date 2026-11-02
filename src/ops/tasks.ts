@@ -10,6 +10,7 @@ import { dispatchHint, withOutcome } from './outcome.js'
 import { startTask, TASK_START_INPUT, taskView } from './task-execution.js'
 import { PHASE_ORDER } from '../core/phase.js'
 import { fallbackUserState } from '../core/user-status.js'
+import { USER_KINDS, USER_KIND_PARAM, USER_KIND_WHY_PARAM } from '../core/org/user-kind.js'
 import { laneById, normalizeLanes, placeCard } from '../core/boards/board-lanes.js'
 import { agentMemoryWriterNote, type AgentMemory } from '../core/sessions/agent-memory.js'
 import type { OpCall } from './core.js'
@@ -723,11 +724,13 @@ const REPORT_CHANGE = z.object({
   ask_options: z.array(z.union([z.string().max(80), z.object({ id: z.string().max(40).optional(), label: z.string().max(80), recommended: z.boolean().optional() })]))
     .max(5).optional().describe('With single or multi: 2 to 5 options worth choosing, a few words each; mark the one you recommend. No filler such as "Other"'),
   ask_more: z.string().max(2000).optional().describe('With needs: the detail behind the ask, shown under More'),
+  user_kind: z.enum(USER_KINDS).optional().describe(`With needs, set by a task: required. ${USER_KIND_PARAM}`),
+  user_kind_why: z.string().max(300).optional().describe(USER_KIND_WHY_PARAM),
 })
 const REPORT_SET_TEXT = 'Set what a task waits on next, as its own turn-end report would: its line on the Org page, the Board and the phone, '
   + 'recorded as yours (by). For a task you lead, or as its VP or Main; the task\'s next own report replaces it. It moves the '
   + 'phase as that report would (needs = NEED_ACTION; waiting on something outside = WAITING). Needs always names the ask, '
-  + 'at a glance, and says how the user answers in one click when it can (ask_kind, ask_options, ask_more).'
+  + 'at a glance, and says how the user answers in one click when it can (ask_kind, ask_options, ask_more). A task or lead putting a Needs you on the user names which of their kinds it is (user_kind, user_kind_why; 409 user_kind without them); a person\'s own line is never asked.'
 
 defineOp({
   name: 'task_update',

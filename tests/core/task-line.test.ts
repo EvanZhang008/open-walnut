@@ -10,6 +10,8 @@ import { ReportChangeError, reportOfChange } from '../../src/core/sessions/repor
 const NOW = Date.parse('2026-10-31T12:00:00Z')
 const ago = (ms: number) => new Date(NOW - ms).toISOString()
 const base: UserStatusInput = { hasSession: true, processStatus: 'stopped', hasLeader: true, phaseChangedAt: ago(120_000) }
+/** A needs line set by a task names which of the user's kinds it is (org/user-kind.ts). */
+const OWN = { user_kind: 'outward', user_kind_why: 'It posts to a public channel as them' }
 const rep = (r: Partial<StatusReport>): StatusReport => ({ at: ago(60_000), ...r })
 
 describe('the line comes from the current report, for the state the facts give', () => {
@@ -46,8 +48,23 @@ describe('a change from outside its turn', () => {
     expect(reportOfChange({ state: 'waiting', waiting_kind: 'lead', waiting_on: ' Its lead,  to land it ' }, 'task:l1', 'Acme lead', NOW)).toEqual({
       state: 'waiting', waiting_on: 'Its lead, to land it', waiting_kind: 'lead', at: new Date(NOW).toISOString(), turn_ended_at: new Date(NOW).toISOString(), by: 'task:l1', by_name: 'Acme lead',
     })
-    expect(reportOfChange({ state: 'needs', ask: 'Sign it' }, 'self', undefined, NOW)).not.toHaveProperty('by')
+    expect(reportOfChange({ state: 'needs', ask: 'Sign it', ...OWN }, 'self', undefined, NOW)).not.toHaveProperty('by')
     expect(reportOfChange({ state: 'needs', ask: 'Sign it' }, 'human', undefined, NOW).by).toBe('human')
+  })
+
+  it('a needs a task or lead puts on the user names its kind; a person\'s own line is never asked', () => {
+    for (const by of ['self', 'task:l1'] as const) {
+      let err: unknown
+      try { reportOfChange({ state: 'needs', ask: 'Look at the page' }, by, undefined, NOW) } catch (e) { err = e }
+      expect(err, by).toBeInstanceOf(ReportChangeError)
+      expect(err).toMatchObject({ code: 'user_kind', status: 409 })
+      expect((err as Error).message).toContain('Never the user\'s')
+    }
+    expect(() => reportOfChange({ state: 'needs', ask: 'Pick', user_kind: 'convenience', user_kind_why: 'It would be nice to ask' }, 'task:l1', undefined, NOW)).toThrow(/user_kind/)
+    expect(reportOfChange({ state: 'needs', ask: 'Sign it', ...OWN }, 'task:l1', 'Acme lead', NOW).ask_own).toEqual({ kind: 'outward', why: 'It posts to a public channel as them' })
+    expect(reportOfChange({ state: 'needs', ask: 'Sign it' }, 'human', undefined, NOW)).not.toHaveProperty('ask_own')
+    // Waiting and working are never asked.
+    expect(reportOfChange({ state: 'waiting', waiting_on: 'CI' }, 'task:l1', undefined, NOW).state).toBe('waiting')
   })
 
   it('needs always names the ask, waiting names what it waits on; bad input is refused', () => {

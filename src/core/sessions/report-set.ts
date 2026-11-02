@@ -9,6 +9,7 @@
  * there is no bare Needs you.
  */
 import type { Task } from '../types.js';
+import { userKindVerdict } from '../org/user-kind.js';
 import { ASK_KINDS, ASK_MORE_MAX, ASK_OPTIONS_MAX, type AskKind, type AskOption, type StatusLineBy, type StatusReport, type WaitKind } from '../user-status.js';
 
 export interface ReportChange {
@@ -24,6 +25,9 @@ export interface ReportChange {
   ask_kind?: AskKind;
   ask_options?: Array<string | AskOption>;
   ask_more?: string;
+  /** needs, set by a task (not a person): which of the user's own kinds the ask is, and why (org/user-kind.ts). */
+  user_kind?: string;
+  user_kind_why?: string;
 }
 
 export class ReportChangeError extends Error {
@@ -60,10 +64,20 @@ export function reportOfChange(raw: unknown, by: StatusLineBy, byName: string | 
   if (c.state === 'needs' && (!ask || ask.length < 3)) throw new ReportChangeError('report.state needs takes the concrete ask: what the user must decide or do');
   if (c.state === 'waiting' && !waitingOn) throw new ReportChangeError('report.state waiting takes waiting_on: on whom or what it waits');
   const shape = c.state === 'needs' ? askShapeOf(c) : {};
+  // A Needs you a task or lead puts on the user names which of their kinds it is, as a letter does
+  // (org/user-kind.ts); a person's own line is never asked. The task's own turn-end report is judged
+  // in readStatusReport (an ask with no kind reads as a report to its lead).
+  let own: { kind: string; why: string } | undefined;
+  if (c.state === 'needs' && by !== 'human') {
+    const verdict = userKindVerdict(c);
+    if (!verdict.ok) throw new ReportChangeError(verdict.message.replace(/^Not sent to the user:/, 'Not put on the user:'), 'user_kind', 409);
+    own = { kind: verdict.kind, why: verdict.why };
+  }
   const at = new Date(nowMs).toISOString();
   return {
     state: c.state,
     ...(ask && c.state === 'needs' ? { ask } : {}),
+    ...(own ? { ask_own: own } : {}),
     ...(waitingOn && c.state === 'waiting' ? { waiting_on: waitingOn } : {}),
     ...(kind && c.state === 'waiting' ? { waiting_kind: kind as WaitKind } : {}),
     ...(next ? { next } : {}),

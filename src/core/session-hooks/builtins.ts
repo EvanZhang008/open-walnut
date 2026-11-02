@@ -13,6 +13,7 @@ import { log } from '../../logging/index.js';
 import { buildTitleQuestion, cleanTitleAnswer } from '../session-title-backend.js';
 import { configuredUiLanguage, nonEnglishUiLanguage, uiLanguageName } from '../ui-language.js';
 import { cutEnd } from '../text-cut.js';
+import { NOT_THE_USERS_DECISION, USER_KINDS, USER_KIND_WORDS, userKindFromLine } from '../org/user-kind.js';
 import type { SessionRecord, Task } from '../types.js';
 import type { StatusReport, TaskBrief, WaitKind } from '../user-status.js';
 import type { SubtaskNoticeKind } from '../sessions/subtask-notices.js';
@@ -351,7 +352,7 @@ export function buildSelfReportPrompt(
   // hand-off document for a fresh AI, and plugin content rules validate it.
   const uiLang = nonEnglishUiLanguage(opts?.uiLanguage);
   const tipLanguage = uiLang
-    ? `\n${withStatus ? 'OVERVIEW, RECAP, FOR_USER_ASK, FOR_USER_ASK_OPTIONS, FOR_USER_ASK_MORE, FOR_USER_WAITING_ON, FOR_USER_NOW and FOR_USER_NEXT are' : 'OVERVIEW and RECAP are'} shown to the user in the UI: write them in ${uiLanguageName(uiLang)} (the user's display language), keeping identifiers, file names, and technical terms in their original form${withStatus ? '; the kind word that starts FOR_USER_WAITING_ON (outside, task, lead, machine) stays in English, followed by ":"' : ''}. Every other field stays English.`
+    ? `\n${withStatus ? 'OVERVIEW, RECAP, FOR_USER_ASK, FOR_USER_ASK_OWN, FOR_USER_ASK_OPTIONS, FOR_USER_ASK_MORE, FOR_USER_WAITING_ON, FOR_USER_NOW and FOR_USER_NEXT are' : 'OVERVIEW and RECAP are'} shown to the user in the UI: write them in ${uiLanguageName(uiLang)} (the user's display language), keeping identifiers, file names, and technical terms in their original form${withStatus ? '; the kind word that starts FOR_USER_WAITING_ON (outside, task, lead, machine) and the kind word that starts FOR_USER_ASK_OWN stay in English, followed by ":"' : ''}. Every other field stays English.`
     : '';
 
   let noteBlock: string;
@@ -405,6 +406,7 @@ ${withStatus ? FOR_USER_PROMPT : ''}${opts?.memory ? agentMemoryPrompt(opts.memo
 export const FOR_USER_PROMPT = `Then these lines on how this task stands FOR THE USER, who reads them on their board without opening the session. Plain words a non-engineer understands: no codenames, abbreviations, ticket or test-run labels, commit hashes, file names or internal ids; one short sentence each.
 FOR_USER_STATE: one of needs-you | working | waiting | done. First: when this turn answered the user's message or showed them something to read (an answer, a walkthrough, a result they asked for) and the task is not finished, it is needs-you, whatever the task waits on next; say that wait in FOR_USER_NEXT. needs-you also when the next move is the user's: something only they can give (input, a file or text to paste, a review, a decision, an approval, a login, an action on their device), even with no rush; a wait on the user is ALWAYS needs-you, never waiting (waiting takes the task off their list). A question for your lead or another task is waiting, not needs-you; so is a failure of the machine (a full disk, a Walnut restart, a lost connection to a host): that is waiting on machine, which Walnut and your lead retry once it clears. working when you will carry on by yourself right now (a background job you started will wake you). waiting ONLY when nothing of this turn is for the user to read and the next move belongs to something outside Walnut and the user (a pipeline or CI run, a build, a deploy, a CR or PR review, a Slack or mail reply) or to another task or your lead; arm a trigger on an outside wait. done when what the task asked for is finished.
 FOR_USER_ASK: needs-you only: the one thing the user must decide or do, as a question or an instruction ("Approve testing on your real iPhone?"). Never a step for your lead or another task (merge, land, deploy, review it): that is waiting, with FOR_USER_WAITING_ON lead: or task:. Otherwise none. Check first that it is still needed: the user may have done it outside Walnut (a sign-in in a terminal, a tap on the phone), and a stale ask is read to them as fact. When a script can tell it is done (a login works, a file appears, a review lands), arm a trigger on it (trigger_create, wait:false) so the ask clears the moment it is; Walnut also asks you to check it again every few hours. Write it so the user gets the whole issue at a glance (at most 120 characters), and so they can answer with one click whenever that can work.
+FOR_USER_ASK_OWN: needs-you with an ask only: which of the user's own kinds the ask is, then why in a few words, as "kind: why" ("spending: it buys a paid plan for the team"). The kind is one of ${USER_KINDS.join(' | ')}: ${Object.entries(USER_KIND_WORDS).map(([k, w]) => `${k} is ${w}`).join('; ')}. ${NOT_THE_USERS_DECISION} Never ask the user to look at, open or check something you can check yourself: do that, then report the result. With no kind of the user's own, Walnut drops the ask and reads the turn as a report to your lead, so write none rather than a weak kind.
 FOR_USER_ASK_KIND: needs-you only: how the user answers: yes-no | single | multi | text. Prefer yes-no, then a choice (single: pick one; multi: pick several), over text; text only when no short list of answers fits. Otherwise none.
 FOR_USER_ASK_OPTIONS: single or multi only: 2 to 5 options worth choosing, separated by " | ", each a few words; put "(recommended)" after the one you recommend. No filler options (no "Other", no "Something else": the user can always write their own words). Otherwise none.
 FOR_USER_ASK_MORE: needs-you only, optional: the detail behind the ask that the summary leaves out (why it matters, what each option does), a few short sentences. Otherwise none.
@@ -417,7 +419,7 @@ const SELF_REPORT_LABELS = [
   'TITLE', 'OVERVIEW', 'LINKS', 'RECAP',
   'TASK_SUMMARY', 'WHAT_I_DID', 'STATUS', 'CHANGES_TRIED', 'PHASE_SIGNAL', 'NEXT_STEPS',
   'BLOCKERS', 'USER_INTENT', 'VERIFIED', 'ARTIFACTS',
-  'FOR_USER_STATE', 'FOR_USER_ASK', 'FOR_USER_ASK_KIND', 'FOR_USER_ASK_OPTIONS', 'FOR_USER_ASK_MORE', 'FOR_USER_WAITING_ON', 'FOR_USER_NOW', 'FOR_USER_NEXT', 'FOR_USER_BRIEF', 'AGENT_MEMORY',
+  'FOR_USER_STATE', 'FOR_USER_ASK', 'FOR_USER_ASK_OWN', 'FOR_USER_ASK_KIND', 'FOR_USER_ASK_OPTIONS', 'FOR_USER_ASK_MORE', 'FOR_USER_WAITING_ON', 'FOR_USER_NOW', 'FOR_USER_NEXT', 'FOR_USER_BRIEF', 'AGENT_MEMORY',
 ] as const;
 const NEXT_LABEL_LOOKAHEAD = `(?:${[
   ...SELF_REPORT_LABELS,
@@ -537,9 +539,21 @@ export function readStatusReport(report: string, now: Date = new Date()): Status
       ...(read('FOR_USER_NEXT') ? { next: read('FOR_USER_NEXT')! } : {}),
     };
   }
+  // An ask that names no kind of the user's own is no ask of theirs (org/user-kind.ts): it reads as a
+  // report to the task's lead, its words kept as what it waits on. A turn that answered the user's
+  // message still lands on them (report-phase.ts answered_person), so nothing they asked is lost.
+  const own = state === 'needs' && ask ? userKindFromLine(read('FOR_USER_ASK_OWN')) : null;
+  if (own && !own.ok) {
+    return {
+      state: 'waiting', at: now.toISOString(), waiting_kind: 'lead', waiting_on: ask!, kindless_ask: true,
+      ...(read('FOR_USER_NOW') ? { now: read('FOR_USER_NOW')! } : {}),
+      ...(read('FOR_USER_NEXT') ? { next: read('FOR_USER_NEXT')! } : {}),
+    };
+  }
   const out: StatusReport = { state, at: now.toISOString() };
   if (state === 'needs' && ask) {
     out.ask = ask;
+    if (own?.ok) out.ask_own = { kind: own.kind, why: own.why };
     Object.assign(out, readAskShape(report, read));
   }
   const waiting = read('FOR_USER_WAITING_ON');

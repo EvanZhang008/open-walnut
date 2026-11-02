@@ -79,6 +79,7 @@ describe('the self-report lines', () => {
     const r = readStatusReport([
       'FOR_USER_STATE: needs-you',
       'FOR_USER_ASK: Which plan do we run first?',
+      'FOR_USER_ASK_OWN: user_own: it is their own matter',
       'FOR_USER_ASK_KIND: single',
       'FOR_USER_ASK_OPTIONS: Fix the sync first (recommended) | **Ship the new view** | 3 days of tests',
       'FOR_USER_ASK_MORE: The sync bug loses edits.',
@@ -101,22 +102,22 @@ describe('the self-report lines', () => {
   })
 
   it('options written one per line read the same; a bolded option is not recommended', () => {
-    const r = readStatusReport('FOR_USER_STATE: needs-you\nFOR_USER_ASK: Pick a colour\nFOR_USER_ASK_KIND: multi\nFOR_USER_ASK_OPTIONS:\n- Red\n- **Blue**\nFOR_USER_NOW: Both drafted.', new Date(NOW))
+    const r = readStatusReport('FOR_USER_STATE: needs-you\nFOR_USER_ASK: Pick a colour\nFOR_USER_ASK_OWN: user_own: it is their own matter\nFOR_USER_ASK_KIND: multi\nFOR_USER_ASK_OPTIONS:\n- Red\n- **Blue**\nFOR_USER_NOW: Both drafted.', new Date(NOW))
     expect(r?.ask_options).toEqual([{ id: 'o1', label: 'Red' }, { id: 'o2', label: 'Blue' }])
     expect(r?.now).toBe('Both drafted.')
   })
 
   it('yes-no in any spelling, none fields, and an older report without the lines', () => {
-    expect(readStatusReport('FOR_USER_STATE: needs-you\nFOR_USER_ASK: Approve?\nFOR_USER_ASK_KIND: Yes / No\nFOR_USER_ASK_OPTIONS: none\nFOR_USER_ASK_MORE: none', new Date(NOW)))
-      .toEqual({ state: 'needs', ask: 'Approve?', ask_kind: 'yes_no', at: new Date(NOW).toISOString() })
-    expect(readStatusReport('FOR_USER_STATE: needs-you\nFOR_USER_ASK: Approve?', new Date(NOW)))
-      .toEqual({ state: 'needs', ask: 'Approve?', at: new Date(NOW).toISOString() })
+    expect(readStatusReport('FOR_USER_STATE: needs-you\nFOR_USER_ASK: Approve?\nFOR_USER_ASK_OWN: user_own: it is their own matter\nFOR_USER_ASK_KIND: Yes / No\nFOR_USER_ASK_OPTIONS: none\nFOR_USER_ASK_MORE: none', new Date(NOW)))
+      .toEqual({ state: 'needs', ask: 'Approve?', ask_own: { kind: 'user_own', why: 'it is their own matter' }, ask_kind: 'yes_no', at: new Date(NOW).toISOString() })
+    expect(readStatusReport('FOR_USER_STATE: needs-you\nFOR_USER_ASK: Approve?\nFOR_USER_ASK_OWN: user_own: it is their own matter', new Date(NOW)))
+      .toEqual({ state: 'needs', ask: 'Approve?', ask_own: { kind: 'user_own', why: 'it is their own matter' }, at: new Date(NOW).toISOString() })
   })
 
   it('the ask lines are kept only for needs-you, and FOR_USER_ASK does not swallow them', () => {
     const r = readStatusReport('FOR_USER_STATE: working\nFOR_USER_ASK: none\nFOR_USER_ASK_KIND: single\nFOR_USER_ASK_OPTIONS: a | b', new Date(NOW))
     expect(r).toEqual({ state: 'working', at: new Date(NOW).toISOString() })
-    const n = readStatusReport('FOR_USER_STATE: needs-you\nFOR_USER_ASK: Pick a colour\nFOR_USER_ASK_KIND: single\nFOR_USER_ASK_OPTIONS: Red | Blue', new Date(NOW))
+    const n = readStatusReport('FOR_USER_STATE: needs-you\nFOR_USER_ASK: Pick a colour\nFOR_USER_ASK_OWN: user_own: it is their own matter\nFOR_USER_ASK_KIND: single\nFOR_USER_ASK_OPTIONS: Red | Blue', new Date(NOW))
     expect(n?.ask).toBe('Pick a colour')
   })
 

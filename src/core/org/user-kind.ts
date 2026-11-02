@@ -14,6 +14,10 @@
  * the question once; a node that cannot name a kind decides, and tells its team. With them, the kind
  * and the reason lead the letter, so the user reads why it is theirs.
  *
+ * The turn-end self-report is judged the same way (session-hooks/builtins.ts readStatusReport): a
+ * FOR_USER_ASK with no FOR_USER_ASK_OWN kind reads as a report to the task's lead, and a line set from
+ * outside the turn (sessions/report-set.ts) by a task needs the kind or gets 409.
+ *
  * A fixed list rather than free text: a model that wants to ask can always write a reason, but it
  * has to pick a kind, and "undoing my own mess" or "choosing between two fine options" has none.
  * The kinds mirror the team charter (team-charter.ts) and the approval rules (answer-approval.ts).
@@ -70,6 +74,15 @@ export function userKindVerdict(input: { userKind?: unknown; user_kind?: unknown
       + `${known ? 'user_kind_why is missing or too short. ' : kind ? `"${kind}" is not a kind. ` : ''}`
       + `${NOT_THE_USERS_DECISION} If none of the kinds fits, it is yours to decide. Do not reword it as a report or another thread state to get around this.`,
   };
+}
+
+/**
+ * A turn-end self-report line "FOR_USER_ASK_OWN: <kind>: <why>" as the verdict. The kind word is
+ * English whatever language the why is written in; a dash or a full-width colon after it is read too.
+ */
+export function userKindFromLine(line: string | undefined): UserKindVerdict {
+  const m = /^\s*([a-z_]+)\s*(?:[:\uff1a]|\s-\s)\s*(.+)$/i.exec(line ?? '');
+  return userKindVerdict({ user_kind: m?.[1]?.toLowerCase(), user_kind_why: m?.[2] });
 }
 
 /** The line that leads a letter the user reads, so they see why it is theirs. */
