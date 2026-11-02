@@ -39,7 +39,12 @@ function subscribeKey(key: string, fn: () => void): () => void {
   return () => { set!.delete(fn); };
 }
 
+/** What a write storage refused (quota, storage off) holds instead, for this load. */
+const unstored = new Map<string, string>();
+
 function rawOf(key: string): string | null {
+  const held = unstored.get(key);
+  if (held !== undefined) return held;
   try { return localStorage.getItem(key); } catch { return null; }
 }
 
@@ -84,9 +89,12 @@ function useView<T>(key: string, id: string | null, initial: T | (() => T), acce
     const cur = rawOf(key);
     const prev = pick(cur);
     const v = typeof next === 'function' ? (next as (p: T) => T)(prev) : next;
+    // An updater that hands back what it read changes nothing (React's rule too): no write.
+    if (Object.is(v, prev)) return;
     const text = storedText(cur, id, v);
     if (text === cur) return;
-    try { localStorage.setItem(key, text); } catch { return; /* storage off: it just forgets */ }
+    // Storage off or full: the choice still holds for this load, it is just not kept.
+    try { localStorage.setItem(key, text); unstored.delete(key); } catch { unstored.set(key, text); }
     for (const fn of [...(listeners.get(key) ?? [])]) fn();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `initial` and `accept` are fixed per call site
   }, [key, id]);

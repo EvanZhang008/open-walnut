@@ -336,6 +336,20 @@ export interface WebUiService {
    */
   link?(contribution: LinkHandlerContribution): Disposable
   injectCss(css: string): Disposable
+  /**
+   * `useState` for a view choice of your App's own (a pane shown or hidden, the tab it is on,
+   * the item it shows), kept by Walnut: it comes back after your plugin reloads, the page
+   * reloads, the user visits another page and returns, or the app restarts, and it follows the
+   * user to their other devices. Call it in a component like `useState`:
+   * `const [showPane, setShowPane] = walnut.ui.useView('showPane', true)`; a name is letters,
+   * digits, `_` and `-`. `options.id` keeps one value per item (`{ id: problemId }`). A stored
+   * value of another type than `initial`, or one `options.accept` refuses, reads as `initial`
+   * (keep `accept` a check of the value's shape: it is asked when the stored value changes). A passing thing (a menu, a dialog, a
+   * busy flag, fetched data) stays in `useState`. The views Walnut gives you (SessionView and
+   * the rest) keep their own state with no help. Optional: a host older than it does not have
+   * it, so feature-detect (`walnut.ui.useView ?? useState`-style fallbacks are fine).
+   */
+  useView?<T>(name: string, initial: T | (() => T), options?: { id?: string; accept?: (value: unknown) => boolean }): [T, (next: T | ((prev: T) => T)) => void]
   readonly views: {
     CalendarView: PluginComponent
     FileView: PluginComponent<FileViewProps>

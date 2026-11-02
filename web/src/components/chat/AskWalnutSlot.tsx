@@ -762,6 +762,7 @@ export function AskWalnutSlot({
             <SessionPanel
               key={sessionId}
               sessionId={sessionId}
+              viewPlace="ask-slot"
               embedded
               headerLeading={inlineMenuButton}
               onClose={phoneChat.slot ? phoneChat.close : hideSlot}

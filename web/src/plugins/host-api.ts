@@ -10,6 +10,7 @@ import { pluginUiRegistry } from './registry'
 import { registerLinkHandler, type LinkHandlerContribution } from './link-handlers'
 import { createWebAi } from './plugin-ai'
 import { createPluginViews } from './views'
+import { createPluginUseView } from './use-view'
 import type {
   PluginEvent,
   PluginFetchInit,
@@ -346,6 +347,7 @@ export function createWebPluginApi(
         return own(disposable(() => { style.remove() }))
       },
       views: createPluginViews(pluginId),
+      useView: createPluginUseView(pluginId),
     },
     get unsafe() {
       if (!unsafeWarned) {

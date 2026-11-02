@@ -54,7 +54,11 @@ async function layout(panel: Locator) {
 /** Fullscreen, with the long reply rendered: a question whose passage is not
  *  in the DOM (behind "Load earlier turns") has no line to sit beside. */
 async function goFullscreen(panel: Locator): Promise<void> {
-  await panel.getByRole('button', { name: 'Expand session to full screen' }).click()
+  // After a reload the panel may already be full screen: Walnut keeps it as it was left
+  // (hooks/fullscreen-owner.ts).
+  if (!/open-walnut-fullscreen/.test((await panel.getAttribute('class')) ?? '')) {
+    await panel.getByRole('button', { name: 'Expand session to full screen' }).click()
+  }
   await expect(panel).toHaveClass(/open-walnut-fullscreen/)
   const history = panel.locator('.session-history')
   const first = reviewPassage(0).slice(0, 30)

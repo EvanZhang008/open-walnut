@@ -394,6 +394,7 @@ export function AskObjectDrawer(props: AskObjectDrawerProps) {
         <SessionPanel
           key={view.sessionId}
           sessionId={view.sessionId}
+          viewPlace="ask-object"
           embedded
           // Ask mode (no canned question) is the person about to type: the caret goes to the composer,
           // on a reopened session as much as on a new one.

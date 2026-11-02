@@ -12,7 +12,14 @@
  * synced file both going forward (syncableKey) and retroactively (the route's
  * migration strips whatever is already on disk).
  */
-export const MACHINE_LOCAL_PREFIXES: readonly string[] = ['open-walnut-file-explorer-selected:']
+export const MACHINE_LOCAL_PREFIXES: readonly string[] = [
+  'open-walnut-file-explorer-selected:',
+  // What a session panel shows (its file, a localhost service) and which one is full screen
+  // (web/src/components/sessions/panel-view.ts, hooks/fullscreen-owner.ts): this window's, kept
+  // across its reloads and restarts, never carried to another device's window.
+  'open-walnut-view:panel.',
+  'open-walnut-view:tab.',
+]
 
 export const MAX_KEY_LEN = 200
 

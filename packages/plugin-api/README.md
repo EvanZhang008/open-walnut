@@ -103,6 +103,7 @@ export function activate(walnut: WalnutWebApi) {
 | `walnut.ui.injectCss(css)` | add an owner-tagged stylesheet, removed on unload |
 | `walnut.ui.page(contribution)` | a standalone console route that is not an App |
 | `walnut.ui.views` | `CalendarView`, `FileView`, `NoteView`, `TerminalView`, `SessionView`, `TaskView`, `ChatView`, `MicButton` (dictation into your own text box; optional) |
+| `walnut.ui.useView(name, initial, options?)` | `useState` for a view choice of your own, kept across a reload, a visit elsewhere and a restart (optional) |
 | `walnut.ws.call(id, payload)` | call the plugin's own `registry.wsMethod` |
 | `walnut.http.fetch(url, init)` | same-origin requests carry this browser's credentials |
 | `walnut.events` | subscribe to host events, emit namespaced plugin events |

@@ -361,7 +361,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
       onOpenTask={openChip}
       quietEmpty
       renderSession={(cardSessionId, opts) => (
-        <SessionPanel key={cardSessionId} sessionId={cardSessionId} embedded inset onClose={opts.onClose} onTaskClick={openChip} onSessionClick={onOpenSession} />
+        <SessionPanel key={cardSessionId} sessionId={cardSessionId} viewPlace="org-node-card" embedded inset onClose={opts.onClose} onTaskClick={openChip} onSessionClick={onOpenSession} />
       )}
     />
   ) : null;
@@ -426,7 +426,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
         {shown === 'team' && renderTeam()}
         {shown === 'chat' && (sessionId ? (
           <div ref={chatHostRef} className="org-chat-host" data-testid="org-chat">
-            <SessionPanel key={sessionId} sessionId={sessionId} embedded headerSlot={chatTools} {...(hasBoard && row.contactId ? { onHostBoard: () => openTasks('board') } : {})} inboxRequest={chatInbox?.sid === sessionId ? chatInbox.n : 0} onTaskClick={openChip} onSessionClick={onOpenSession} />
+            <SessionPanel key={sessionId} sessionId={sessionId} viewPlace="org-node" embedded headerSlot={chatTools} {...(hasBoard && row.contactId ? { onHostBoard: () => openTasks('board') } : {})} inboxRequest={chatInbox?.sid === sessionId ? chatInbox.n : 0} onTaskClick={openChip} onSessionClick={onOpenSession} />
           </div>
         ) : (
           <div className="org-chat-start" data-testid="org-chat-start">

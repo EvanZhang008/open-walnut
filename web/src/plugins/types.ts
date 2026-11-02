@@ -350,6 +350,7 @@ export interface WalnutWebApiHost {
     link(contribution: LinkHandlerContribution): Disposable
     injectCss(css: string): Disposable
     readonly views: PluginViews
+    readonly useView: PluginUseView
   }
   /**
    * Share what this App shows with the AI working on a task (see the server
@@ -373,3 +374,6 @@ export interface WalnutWebApiHost {
     readonly dom: Document
   }
 }
+
+/** `useState` for a view choice of the plugin's own, kept by Walnut (plugins/use-view.ts). */
+export type PluginUseView = <T>(name: string, initial: T | (() => T), options?: { id?: string; accept?: (value: unknown) => boolean }) => [T, (next: T | ((prev: T) => T)) => void]

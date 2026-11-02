@@ -3408,6 +3408,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
               ) : (
                 <SessionPanel key={sid}
                   sessionId={sid}
+                  viewPlace="home-column"
                   locked={slot.locked}
                   onToggleLock={handleToggleLockSession}
                   onTaskCompleted={columnComplete.onTaskCompleted}

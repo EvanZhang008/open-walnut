@@ -1008,6 +1008,7 @@ export function NotesPage() {
                         <SessionPanel
                           key={activeCcTab.sessionId}
                           sessionId={activeCcTab.sessionId}
+                          viewPlace="notes"
                           onClose={() => handleCcClose(activeCcTab.key)}
                           onSessionReplaced={(_oldId, newId) => handleCcResolved(activeCcTab.key, newId)}
                         />

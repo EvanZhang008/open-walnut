@@ -42,6 +42,10 @@ async function fixtureCwd(page: Page): Promise<string> {
 }
 
 async function openFilesPanel(page: Page): Promise<Locator> {
+  // A reopened console shows the panel as it was left: full screen with Files open
+  // (components/sessions/panel-view.ts). Then there is nothing to open.
+  const kept = page.locator(`.session-panel.open-walnut-fullscreen[data-session-id="${SESSION_ID}"] .session-file-explorer`)
+  if (await kept.isVisible({ timeout: 3_000 }).catch(() => false)) return kept
   await page.locator('.todo-search-input').fill(SESSION_ID)
   const task = page.locator(`.todo-panel-item[data-task-id="${TASK_ID}"]`)
   await expect(task).toBeVisible()

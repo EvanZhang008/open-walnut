@@ -8,51 +8,34 @@
  * node's top view and Task tab were `useState('task')` and `useState('needs')`: every route but
  * Home unmounts on navigation, so they came back reset.
  *
+ * 2026-11-02, the user, on a plugin page that lost its session panel's full screen and Files tab:
+ * "can we make it default feature in walnut no matter where include plugin, remember the state,
+ * like full store, file tab, tab location ... a generic walnut thing not only to this plugin".
+ * The class grew to what is open or picked to see (`active*`, `selected*`, `open*`, `*Open`,
+ * `*Expanded`, `*Hidden`, `*Shown`, `*Target`): the session panel's split view and file lived
+ * there, listed as passing. They are kept per place now (components/sessions/panel-view.ts).
+ *
  * The class: a `useState` whose name says it holds a view choice, started from a literal (read
- * from no storage, no URL, no prop). This test finds every member in web/src (pages, components,
- * hooks, built-in apps). Each one is kept with usePageView (web/src/utils/view-memory.ts) or is
- * listed below with why it is a passing thing (a dialog, a menu, a picker, one search's
- * results). A typed search is passing by design and its names (query, search) are not in the
- * class. A new member fails here until someone decides which it is.
+ * from no storage, no URL, no prop). The matcher is packages/plugin-cli/src/view-state-scan.ts,
+ * the one `walnut-plugin validate` runs on a plugin's web code. This test finds every member in
+ * web/src (pages, components, hooks, built-in apps) and in the plugins this repository ships
+ * (examples/plugins, plugin-store, the browser-test fixtures). Each one is kept with usePageView
+ * (web/src/utils/view-memory.ts), `walnut.ui.useView` in a plugin, or is listed below with why it
+ * is a passing thing (a dialog, a menu, a picker, one search's results). A menu, picker, popover
+ * or dialog open now, a keyboard cursor and a drag are passing by kind (PASSING_KIND). A typed
+ * search is passing by design and its names (query, search) are not in the class. A new member
+ * fails here until someone decides which it is.
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { syncable } from '../../web/src/utils/ui-prefs-sync';
 import { VIEW_IDS_MAX, VIEW_PREFIX, storedText, storedView, viewKey } from '../../web/src/utils/view-memory';
+import { LITERAL, PASSING_KIND, VIEW_NAME, useStates, viewStatesInMemory } from '../../packages/plugin-cli/src/view-state-scan';
+import { isPanelView } from '../../web/src/components/sessions/panel-view';
 
-const WEB_SRC = join(__dirname, '../../web/src');
-
-/** Names that hold a view choice. */
-const VIEW_NAME = /^(?:\w*(?:Tab|Filter|View|Sort|Section|Scope|Mode|Group|Pick|Collapsed)|tab|filter|view|sort|section|scope|mode|group|collapsed|show[A-Z]\w*)$/;
-/** A start that comes from nowhere: a literal, a constant, an empty collection (or a function returning one). */
-const LITERAL = /^(?:\(\)\s*=>\s*)?(?:'[^']*'|"[^"]*"|-?\d+|true|false|null|undefined|\[\]|\{\}|new (?:Set|Map)(?:<[^>]*>)?\(\)|[A-Z][A-Z0-9_]+)?$/;
-const DECL = /const\s*\[\s*(\w+)\s*,\s*\w+\s*,?\s*\]\s*=\s*useState\b\s*/g;
-
-/** Every `const [name, setName] = useState<T>(start)` in a source: its name and start, generics and line breaks skipped. */
-function useStates(src: string): Array<{ name: string; start: string }> {
-  const out: Array<{ name: string; start: string }> = [];
-  for (const m of src.matchAll(DECL)) {
-    let i = m.index! + m[0].length;
-    if (src[i] === '<') {
-      // A generic, nested ones too (Record<string, Set<string>>); `=>` inside it is not a close.
-      for (let depth = 0; i < src.length; i++) {
-        if (src[i] === '<') depth++;
-        else if (src[i] === '>' && src[i - 1] !== '=' && --depth === 0) { i++; break; }
-      }
-    }
-    while (/\s/.test(src[i] ?? '')) i++;
-    if (src[i] !== '(') continue;
-    let j = i;
-    for (let depth = 0; j < src.length; j++) {
-      if (src[j] === '(') depth++;
-      else if (src[j] === ')' && --depth === 0) break;
-    }
-    const start = src.slice(i + 1, j).trim().replace(/,$/, '').trim().replace(/\s+as\s+[\w.<>[\]| '"]+$/, '').trim();
-    out.push({ name: m[1], start });
-  }
-  return out;
-}
+const ROOT = join(__dirname, '../..');
+const WEB_SRC = join(ROOT, 'web/src');
 
 /** View-named state that is a passing thing, by file#name, and why. */
 const PASSING: Record<string, string> = {
@@ -67,7 +50,6 @@ const PASSING: Record<string, string> = {
   'components/sessions/BackgroundTasksPanel.tsx#chosenTab': 'a session\'s background jobs panel, a popover; it opens on the kind asked for',
   'components/sessions/EngineSettingsPopover.tsx#filter': 'a typed filter in a popover',
   'components/sessions/SessionChatHistory.tsx#activeTeamTab': 'which team of one conversation is read; it follows the conversation',
-  'components/sessions/SessionPanel.tsx#activeView': 'the Changed / Files / Terminal split, a full-screen overlay that never comes back on its own',
   'components/sessions/SessionPanel.tsx#prefillMode': 'how one prefill lands in the composer',
   'components/sessions/SessionPathSelector.tsx#hostFilter': 'the folder picker, a dialog',
   'components/sessions/SessionPathSelector.tsx#editMode': 'typing a path in the folder picker, a dialog',
@@ -106,7 +88,108 @@ const PASSING: Record<string, string> = {
   'apps/mail/MailApp.tsx#showMailboxes': 'the mailbox drawer on a narrow window, an overlay',
   'components/board/kanban/useKanbanLayout.ts#mode': 'derived from the board\'s width',
   'components/sessions/UserMessagesSummary.tsx#collapsed': 'one summary folded',
-  'components/sessions/SessionPanel.tsx#chatCollapsed': 'the chat folded inside the Changed / Files split, an overlay',
+  'apps/mail/MailCorrectPopover.tsx#expanded': 'rows expanded in a popover',
+  'components/apps-page/PluginStoreGrid.tsx#addOpen': 'the add-a-plugin dialog',
+  'components/board/kanban/KanbanCard.tsx#expanded': 'one card expanded for one look',
+  'components/board/kanban/KanbanCard.tsx#promptOpen': 'a card\'s prompt, a popover',
+  'components/board/kanban/KanbanFilters.tsx#changesOpen': 'the changes list of the filter bar, a popover',
+  'components/board/kanban/KanbanToasts.tsx#expanded': 'a toast stack expanded',
+  'components/calendar/CalendarSidePanel.tsx#openItem': 'an event opened from the side panel, an overlay',
+  'components/calendar/CalendarsPopover.tsx#hiddenOpen': 'the hidden calendars list inside a popover',
+  'components/chat/AskWalnutDrawer.tsx#agentsOpen': 'the agent list inside the drawer, a popover',
+  'components/chat/AskWalnutSlot.tsx#drawerOpen': 'the asks drawer, an overlay',
+  'components/chat/ChatMessage.tsx#manualOpen': 'one message folded or unfolded by hand',
+  'components/chat/MentionPalette.tsx#selectedKey': 'the keyboard cursor in the mention palette',
+  'components/commands/CommandCard.tsx#expanded': 'one card expanded for one look',
+  'components/common/DocCommentsLayer.tsx#listOpen': 'the comments list, a popover',
+  'components/common/FileContentView.tsx#historyOpen': 'a file\'s history, a popover',
+  'components/common/FileContentView.tsx#searchOpen': 'the find bar, a passing search',
+  'components/common/NotificationPanel.tsx#detailOpen': 'one letter\'s raw detail unfolded',
+  'components/common/NotificationPanel.tsx#expanded': 'one letter unfolded',
+  'components/common/NotificationPanel.tsx#openLetterId': 'a letter read inside the notification panel, a popover',
+  'components/common/NotificationPanel.tsx#openSeen': 'bookkeeping of one opening of the panel',
+  'components/common/OfficePreview.tsx#activeSheet': 'the sheet of the file open now; the next file opens on its first',
+  'components/common/PermissionPromptControls.tsx#expanded': 'one prompt\'s detail unfolded',
+  'components/dock/FocusDock.tsx#activeTaskId': 'set by the dock\'s own events, not a choice',
+  'components/hosts/HostFailureText.tsx#expanded': 'one failure\'s detail unfolded',
+  'components/inbox/EmailItem.tsx#expanded': 'one mail unfolded',
+  'components/layout/AppShell.tsx#sidebarOpen': 'the sidebar over a phone screen, an overlay',
+  'components/layout/Sidebar.tsx#notifOpen': 'the notification panel, a popover',
+  'components/layout/Sidebar.tsx#statusOpen': 'the status panel, a popover',
+  'components/layout/SidebarStatusItems.tsx#openKey': 'one status item\'s popover',
+  'components/notes/BacklinksPanel.tsx#expanded': 'one backlink unfolded',
+  'components/notes/NotesTreePanel.tsx#activeHitPath': 'the cursor in one search\'s hits',
+  'components/sessions/ChatEarlierBlock.tsx#expanded': 'earlier rows unfolded in one look',
+  'components/sessions/CronJobsCard.tsx#promptOpen': 'a job\'s prompt, a popover',
+  'components/sessions/DraftSessionPanel.tsx#openMenuNonce': 'a request counter, not a choice',
+  'components/sessions/EngineSettingsPopover.tsx#aboutOpen': 'an about note inside a popover',
+  'components/sessions/EngineSettingsPopoverBody.tsx#expanded': 'a row unfolded inside a popover',
+  'components/sessions/ModelPicker.tsx#detailsOpen': 'details inside the model picker, a popover',
+  'components/sessions/QuotePinSelectionBar.tsx#commentOpen': 'one comment being written',
+  'components/sessions/SessionChatHistory.tsx#cardOpen': 'one card unfolded',
+  'components/sessions/SessionChatHistory.tsx#firstCheckShown': 'held stream rows, not a choice',
+  'components/sessions/SessionChatHistory.tsx#mapDoneOpen': 'finished map rows unfolded in one look',
+  'components/sessions/SessionCommitRepo.tsx#othersOpen': 'the other repositories in one commit form',
+  'components/sessions/SessionDiffView.tsx#expanded': 'hunks unfolded; the file shown is kept (loadDiffMemory)',
+  'components/sessions/SessionDiffView.tsx#searchOpen': 'the find bar, a passing search',
+  'components/sessions/SessionFileExplorer.tsx#expanded': 'restored from the explorer\'s own memory on load (file-view-state.ts)',
+  'components/sessions/SessionFileExplorer.tsx#openRoots': 'restored from the explorer\'s own memory on load (file-view-state.ts)',
+  'components/sessions/SessionFileExplorer.tsx#selectedFile': 'restored from the explorer\'s own memory on load (file-view-state.ts)',
+  'components/sessions/SessionPanel.tsx#cronDetailOpen': 'a job\'s detail, a dialog',
+  'components/sessions/SessionPanel.tsx#messagesOpen': 'the user\'s messages list, a popover',
+  'components/sessions/SessionPanel.tsx#notesOpen': 'the task notes, a dialog',
+  'components/sessions/SessionPanel.tsx#rewindTarget': 'one rewind being confirmed, a dialog',
+  'components/sessions/SessionPathSelector.tsx#historyExpanded': 'the folder picker, a dialog',
+  'components/sessions/SessionTurnsView.tsx#restoreTarget': 'one restore being confirmed, a dialog',
+  'components/sessions/SessionTurnsView.tsx#selected': 'one turn picked in a dialog',
+  'components/sessions/SideQuestionDrawer.tsx#archivedOpen': 'a section inside the question drawer, an overlay',
+  'components/sessions/SideQuestionDrawer.tsx#legacyOpen': 'a section inside the question drawer, an overlay',
+  'components/sessions/SideQuestionDrawer.tsx#notesOpen': 'notes inside the question drawer, an overlay',
+  'components/sessions/TaskQuickActions.tsx#memoryOpen': 'the task memory, a dialog',
+  'components/sessions/ThreadCommentCard.tsx#expanded': 'one comment unfolded',
+  'components/sessions/TriggerPickerPopover.tsx#listOpen': 'a list inside a popover',
+  'components/sessions/WorkflowProgress.tsx#transcriptTarget': 'one agent\'s transcript, an overlay',
+  'components/sessions/useThreadReviewPane.tsx#selected': 'one question picked in the review pane',
+  'components/settings/PluginJobsControls.tsx#openLog': 'one job\'s log, an overlay',
+  'components/settings/sections/CloudSection.tsx#selected': 'a provider picked in one setup',
+  'components/settings/sections/MailRulesFileRow.tsx#openFailed': 'one failed open, not a choice',
+  'components/settings/sections/RemoteHostsSection.tsx#expanded': 'one host\'s form unfolded while it is edited',
+  'components/settings/sections/ReposSection.tsx#selectedSlug': 'one repository being edited',
+  'components/settings/sections/SuggestAccuracyPanel.tsx#recentShown': 'the list expanded past its first rows for one look',
+  'components/settings/sections/cloud/RemoteAccessCard.tsx#openBusy': 'a request in flight, not a choice',
+  'components/tasks/FilterBar.tsx#overflowOpen': 'the filter overflow, a menu',
+  'components/tasks/LeaderPill.tsx#adoptOpen': 'the adopt flyout',
+  'components/tasks/PhonePhaseSheet.tsx#listOpen': 'a list inside a sheet, an overlay',
+  'components/tasks/TaskList.tsx#selectedIds': 'tasks picked for one bulk action',
+  'components/tasks/TaskSyncMenuRows.tsx#expanded': 'rows unfolded inside a menu',
+  'components/tasks/TeamMenuItems.tsx#expanded': 'rows unfolded inside a menu',
+  'components/tasks/TodoPanel.tsx#detailTarget': 'a task\'s full-screen detail, an overlay that never comes back on its own (layout-state-on-disk-guard)',
+  'components/tasks/TodoPanel.tsx#newProjectOpen': 'the new-project form, a dialog',
+  'components/tasks/TodoPanel.tsx#selectedIds': 'tasks picked for one bulk action',
+  'components/tasks/TodoSearchBar.tsx#layerOpen': 'the search layer, an overlay',
+  'hooks/useContextInspector.ts#isOpen': 'the context inspector, a dialog',
+  'hooks/useSessionHistory.ts#olderHidden': 'a count of loaded rows, not a choice',
+  'hooks/useTasks.ts#completedHidden': 'a count from the server, not a choice',
+  'hooks/useSessionThreads.ts#openCardKey': 'the comment card open now, a popover',
+  'hooks/useTeamStream.ts#activeAgent': 'the agent the stream is on, set by the stream',
+  'pages/CalendarPage.tsx#activeTask': 'a task being dragged onto the calendar',
+  'pages/CalendarPage.tsx#openItem': 'an event opened, an overlay',
+  'pages/CalendarPage.tsx#phoneRailOpen': 'the side rail over a phone screen, an overlay',
+  'pages/MainPage.tsx#selectedTask': 'the focused task is kept in the layout record (homeFocusedTask); this answers for a row the list does not carry yet',
+  'pages/MainPage.tsx#sessionSearchOpen': 'the session finder, a dialog',
+  'pages/SettingsPage.tsx#openSeq': 'a request counter, not a choice',
+  'apps/mail/MailCorrectPopover.tsx#step': 'the step of one correction in a popover',
+  'components/common/FileContentView.tsx#fullscreen': 'one preview blown up over its own pane, an overlay of the file open now; the panel around it keeps its full screen (fullscreen-owner.ts)',
+  'components/inbox/ItemTaskSelector.tsx#page': 'paging in a picker',
+  'components/notes/slash-commands/SlashCommandPortal.tsx#subPanel': 'a level of the slash menu',
+  'components/org/OrgChartSheet.tsx#panel': 'a panel inside the org chart sheet, itself passing',
+  'components/sessions/SessionRewindDialog.tsx#guardStep': 'a step of the rewind dialog',
+  'components/sessions/SessionUsageDialog.tsx#panel': 'a panel of the usage dialog',
+  'components/tasks/FilterMenu.tsx#page': 'a level of the filter menu',
+  'hooks/useReviewSidebar.ts#fullscreen': 'the question review blown up over the chat, an overlay',
+  'pages/OrgPage.tsx#chartOpen': 'the org chart, a sheet over the page with a close of its own, opened on one node',
+  'pages/MainPage.tsx#triagePanelOpen': 'one triage opened for one task (triageTaskId), a passing panel',
+  'pages/TaskDetailPage.tsx#activeSessionId': 'follows the task\'s current session',
   'hooks/useEngineSettings.ts#view': 'the settings the engine sent, not a choice',
   'hooks/useThreadStack.ts#drawerMode': 'the question drawer, an overlay (per tab by spec C69)',
   'hooks/useThreadStack.ts#drawerFilter': 'the question drawer, an overlay (per tab by spec C69)',
@@ -140,11 +223,35 @@ const src = (rel: string): string => files.find((f) => f.rel === rel)?.src ?? ''
 /** Every view choice held only in component state: file#name. */
 function heldOnlyInState(): string[] {
   const out: string[] = [];
-  for (const f of files) {
-    for (const d of useStates(f.src)) if (VIEW_NAME.test(d.name) && LITERAL.test(d.start)) out.push(`${f.rel}#${d.name}`);
-  }
+  for (const f of files) for (const d of viewStatesInMemory(f.src)) out.push(`${f.rel}#${d.name}`);
   return out.sort();
 }
+
+/** The plugins this repository ships: their web code is held to the same rule. */
+const PLUGIN_DIRS = ['examples/plugins', 'plugin-store', 'tests/e2e/browser/fixtures'];
+function pluginSources(): Array<{ rel: string; src: string }> {
+  const out: Array<{ rel: string; src: string }> = [];
+  const visit = (dir: string) => {
+    for (const name of readdirSync(dir)) {
+      if (name === 'node_modules' || name === 'dist' || name === 'tests') continue;
+      const p = join(dir, name);
+      if (statSync(p).isDirectory()) visit(p);
+      else if (/\.(?:tsx?|mjs|jsx?)$/.test(name) && !/\.(?:test|d)\.tsx?$/.test(name)) out.push({ rel: relative(ROOT, p), src: readFileSync(p, 'utf8') });
+    }
+  };
+  for (const d of PLUGIN_DIRS) visit(join(ROOT, d));
+  return out;
+}
+
+/** A shipped plugin's view state that is a passing thing, by file#name, and why. */
+const PLUGIN_PASSING: Record<string, string> = {
+  'examples/plugins/walnut-time/src/web/apps.tsx#expanded': 'one row unfolded for one look',
+  'examples/plugins/walnut-time/src/web/chapters.tsx#openKey': 'one chapter unfolded for one look',
+  'examples/plugins/walnut-time/src/web/lanes.tsx#appsOpen': 'the rest of the apps unfolded for one look',
+  'examples/plugins/walnut-time/src/web/lanes.tsx#tasksOpen': 'the rest of the tasks unfolded for one look',
+  'examples/plugins/walnut-time/src/web/screentime.tsx#expanded': 'one row unfolded for one look',
+  'examples/plugins/walnut-time/src/web/tape.tsx#expanded': 'one row unfolded for one look',
+};
 
 describe('every page keeps its view choices (utils/view-memory.ts)', () => {
   it('a view choice held only in component state is listed as a passing thing, with why', () => {
@@ -167,6 +274,37 @@ describe('every page keeps its view choices (utils/view-memory.ts)', () => {
     }
   });
 
+  it('a plugin this repository ships keeps its view choices with walnut.ui.useView, or lists them as passing', () => {
+    const plugins = pluginSources();
+    expect(plugins.some((f) => f.rel.endsWith('walnut-time/src/web/app.tsx')), 'the plugin scan sees nothing: its folders moved').toBe(true);
+    const held = plugins.flatMap((f) => viewStatesInMemory(f.src).map((d) => `${f.rel}#${d.name}`)).sort();
+    expect(held.filter((k) => !(k in PLUGIN_PASSING)), 'a plugin keeps a view choice only in useState: keep it with walnut.ui.useView, or list it in PLUGIN_PASSING with why').toEqual([]);
+    expect(Object.keys(PLUGIN_PASSING).filter((k) => !held.includes(k)), 'remove the line when it goes').toEqual([]);
+    // The example the plugin guide points at: the day or week picked is kept.
+    expect(plugins.find((f) => f.rel.endsWith('walnut-time/src/web/app.tsx'))!.src).toMatch(/const \[scopeMode, setScopeMode\] = useView<ScopeMode>\('scopeMode', 'day'\)/);
+  });
+
+  it('a session panel keeps what it shows per place, with no host doing anything (panel-view.ts)', () => {
+    const panel = src('components/sessions/SessionPanel.tsx');
+    // The split view, its file, the service and the letter come from the record, never useState.
+    expect(panel).toMatch(/const panelView = usePanelView\(sheetAt\);/);
+    for (const name of ['activeView', 'fileViewTarget', 'webRequest', 'inboxLetterId']) {
+      expect(panel, `${name} is kept with the panel's view`).not.toMatch(new RegExp(`const \\[${name}, set\\w+\\] = useState`));
+    }
+    expect(panel).toMatch(/const \[chatCollapsed, setChatCollapsed\] = useState\(\(\) => panelView\.chatHidden\)/);
+    // Full screen is kept as the same place.
+    expect(panel).toMatch(/useFullscreen\(\{ keepAcrossRoutes: true, place: sheetAt \}\)/);
+    // Every host names its place: the prop is required, and a plugin's SessionView passes its plugin.
+    expect(panel).toMatch(/\n  viewPlace: string;\n/);
+    expect(src('plugins/views.tsx')).toMatch(/viewPlace=\{`plugin:\$\{pluginId\}`\}/);
+    // A stored record of another build reads as nothing kept.
+    expect(isPanelView({ view: 'files', file: { path: '/r/a.ts', nonce: 2, line: 4 }, chatHidden: true })).toBe(true);
+    expect(isPanelView({ view: null })).toBe(true);
+    expect(isPanelView({ view: 'gone' })).toBe(false);
+    expect(isPanelView({ view: 'web', web: { url: 1, nonce: 1 } })).toBe(false);
+    expect(isPanelView('files')).toBe(false);
+  });
+
   it('the matcher catches the shape that caused the bug, and the ways it may be written', () => {
     const caught = (code: string) => useStates(code).filter((d) => VIEW_NAME.test(d.name) && LITERAL.test(d.start)).map((d) => d.name);
     expect(caught("const [topPick, setTopPick] = useState<OrgTopView>('task');\nconst [taskTab, setTaskTab] = useState<OrgRailTab>('needs');\nconst [showClosed, setShowClosed] = useState(false);"))
@@ -178,6 +316,14 @@ describe('every page keeps its view choices (utils/view-memory.ts)', () => {
     expect(caught("const [mode, setMode] = useState<(x: number) => void>(null);")).toEqual(['mode']);
     // Read from somewhere: not in the class. A typed search: not in the class.
     expect(caught("const [filter, setFilter] = useState(readFilter);\nconst [tab, setTab] = useState(() => readTab(id));\nconst [query, setQuery] = useState('');")).toEqual([]);
+    // What is open or picked to see (2026-11-02: the session panel's split view and its file).
+    const held = (code: string) => viewStatesInMemory(code).map((d) => d.name);
+    expect(held("const [activeView, setActiveView] = useState<SessionSplitView | null>(null);\nconst [fileViewTarget, setFileViewTarget] = useState<Target | null>(null);\nconst [showPartner, setShowPartner] = React.useState(true);\nconst [lastTab, setLastTab] = useState<Tab>('topics');\nconst [sideOpen, setSideOpen] = useState(true);\nconst [selectedFile, setSelectedFile] = useState(null);"))
+      .toEqual(['activeView', 'fileViewTarget', 'showPartner', 'lastTab', 'sideOpen', 'selectedFile']);
+    // A menu, picker or dialog open now, a keyboard cursor, a drag: passing by kind.
+    expect(held("const [menuOpen, setMenuOpen] = useState(false);\nconst [pickerOpen, setPickerOpen] = useState(false);\nconst [selectedIdx, setSelectedIdx] = useState(0);\nconst [activeDragId, setActiveDragId] = useState(null);\nconst [confirmOpen, setConfirmOpen] = useState(false);")).toEqual([]);
+    expect(PASSING_KIND.test('roundMenuOpen')).toBe(true);
+    expect(PASSING_KIND.test('partnerOpen')).toBe(false);
   });
 
   it('a view kept per node holds each node\'s own, the last written last, at most VIEW_IDS_MAX', () => {

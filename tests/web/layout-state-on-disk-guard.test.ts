@@ -162,8 +162,11 @@ const NEVER_RESTORED: ReadonlyArray<{ file: string; state: string; closed: strin
   // a load brings it back only through restoreFocus (checked below), which suppresses it.
   { file: 'pages/MainPage.tsx', state: 'selectedTask', closed: 'null', what: 'the full-screen task detail' },
   { file: 'pages/MainPage.tsx', state: 'sessionSearchOpen', closed: 'false', what: 'the session finder' },
-  // Full screen is one module-level owner for the tab (fullscreen-owner.ts), not a useState.
-  { file: 'hooks/fullscreen-owner.ts', state: 'owner', closed: 'null', what: 'a fullscreen panel', module: true },
+  // Full screen is one module-level state for the tab (fullscreen-owner.ts), not a useState. The
+  // PLACE that is full screen is kept on disk on purpose (2026-11-02, the user: "it keep lost my
+  // state like ... full screen ... remember the state"), so a session panel the user left full
+  // screen is full screen again after a restart; no sheet holds it at load until one shows that place.
+  { file: 'hooks/fullscreen-owner.ts', state: 'holder', closed: 'null', what: 'the sheet holding full screen', module: true },
   { file: 'components/chat/AskWalnutSlot.tsx', state: 'drawerOpen', closed: 'false', what: "the chat slot's drawer" },
 ];
 

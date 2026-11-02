@@ -77,6 +77,7 @@ export function OrgSidePanel({ target, tasks, onClose, onOpenTask, onOpenSession
         <SessionPanel
           key={sessionId}
           sessionId={sessionId}
+          viewPlace="org-side"
           embedded
           {...(inboxRequest ? { inboxRequest } : {})}
           {...(onToggleLock ? { locked: !!locked, onToggleLock: () => onToggleLock() } : {})}

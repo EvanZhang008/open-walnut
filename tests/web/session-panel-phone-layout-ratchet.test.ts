@@ -20,7 +20,7 @@ const READS: Record<string, string> = {
     'applyOpenCollapse: the phoneWidth effect calls it again for the open view',
   'if (next) { if (!isPhoneLayout()) enterFullscreen(); applyOpenCollapse(next); } else { collapseChat(false); }':
     'opening a view (toggleView): the phoneWidth effect enters full screen when the window widens',
-  'if (isFullscreen || !splitOpen || isPhoneLayout()) return;':
+  'if (isFullscreen || !splitOpen || isPhoneLayout() || fullscreenPlace() === sheetAt) return;':
     'a view closes outside full screen except on a phone: the phoneWidth effect keeps a widened view full screen',
 }
 
@@ -30,8 +30,8 @@ describe('ratchet: a phone-layout decision follows the window', () => {
     expect([...new Set(found)].sort()).toEqual(Object.keys(READS).sort())
   })
 
-  // Full screen is one state of the tab: a panel that is not the one holding it closes its view instead.
+  // Full screen is one state of the tab: a panel that is not the place full screen (shown or not) closes its view instead.
   it('a layout change re-runs what opening a view decided', () => {
-    expect(SRC).toMatch(/const phoneWidth = usePhoneLayout\(\);[\s\S]{0,1200}if \(wasPhoneWidth\.current === phoneWidth\) return;[\s\S]{0,300}if \(!phoneWidth && !isFullscreen\) \{[\s\S]{0,300}if \(fullscreenOwner\(\) !== null\) \{ setActiveView\(null\); setFileViewTarget\(null\); return; \}\s*enterFullscreen\(\);\s*\}\s*applyOpenCollapse\(activeView\);/)
+    expect(SRC).toMatch(/const phoneWidth = usePhoneLayout\(\);[\s\S]{0,1200}if \(wasPhoneWidth\.current === phoneWidth\) return;[\s\S]{0,300}if \(!phoneWidth && !isFullscreen\) \{[\s\S]{0,300}if \(fullscreenPlace\(\) !== null\) \{ setActiveView\(null\); setFileViewTarget\(null\); return; \}\s*enterFullscreen\(\);\s*\}\s*applyOpenCollapse\(activeView\);/)
   })
 })

@@ -37,8 +37,12 @@ const INCLUDE_PREFIXES = ['open-walnut-', 'walnut-todo-'];
  *    another device. Since ui-prefs.json now lives in the SYNCED
  *    config/share/ (git-tracked), such a key would export this box's paths to
  *    every other one.
+ *  - `open-walnut-view:panel.` / `open-walnut-view:tab.` — what a session panel
+ *    shows (a file path, a localhost service) and which panel is full screen:
+ *    this window's own, kept across its reloads and restarts on this device.
+ *    The server's twin is MACHINE_LOCAL_PREFIXES in src/core/ui-prefs-keys.ts.
  */
-const EXCLUDE_PREFIXES = ['open-walnut-diff-review:', 'open-walnut-file-explorer-selected:'];
+const EXCLUDE_PREFIXES = ['open-walnut-diff-review:', 'open-walnut-file-explorer-selected:', 'open-walnut-view:panel.', 'open-walnut-view:tab.'];
 /** Local write timestamps per key — lets boot-merge decide who's newer. */
 const META_KEY = 'open-walnut-ui-prefs-sync-meta';
 

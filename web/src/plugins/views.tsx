@@ -50,22 +50,6 @@ function TerminalView({ sessionId, label, host }: TerminalViewProps) {
   )
 }
 
-function SessionView({ sessionId, onClose, locked, onToggleLock }: SessionViewProps) {
-  return (
-    <div className="plugin-session-view">
-      {/* A plugin App hosts this panel inside its own screen, never as a home column. Without
-          `embedded`, the crash fallback's Close also wiped the user's saved column layout. */}
-      <SessionPanel
-        sessionId={sessionId}
-        embedded
-        onClose={() => onClose()}
-        locked={locked}
-        onToggleLock={onToggleLock ? () => onToggleLock() : undefined}
-      />
-    </div>
-  )
-}
-
 function scopedStorageKey(pluginId: string, kind: 'task-view' | 'chat', localKey: string): string {
   const trimmed = localKey.trim()
   if (!trimmed || trimmed.length > 128) throw new Error(`Plugin ${kind} key must be 1-128 characters`)
@@ -81,6 +65,25 @@ function MicButton({ boxRef, value, onChange, disabled, size, handleRef }: MicBu
 }
 
 export function createPluginViews(pluginId: string): PluginViews {
+  // Walnut keeps the panel's view and full screen for the plugin's page, by itself: the
+  // plugin passes nothing for it (panel-view.ts).
+  function SessionView({ sessionId, onClose, locked, onToggleLock }: SessionViewProps) {
+    return (
+      <div className="plugin-session-view">
+        {/* A plugin App hosts this panel inside its own screen, never as a home column. Without
+            `embedded`, the crash fallback's Close also wiped the user's saved column layout. */}
+        <SessionPanel
+          sessionId={sessionId}
+          viewPlace={`plugin:${pluginId}`}
+          embedded
+          onClose={() => onClose()}
+          locked={locked}
+          onToggleLock={onToggleLock ? () => onToggleLock() : undefined}
+        />
+      </div>
+    )
+  }
+
   function TaskView({ storageKey, ...props }: TaskViewProps) {
     return (
       <TaskViewSurface

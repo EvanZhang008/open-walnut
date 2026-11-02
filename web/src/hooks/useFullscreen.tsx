@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useContext, useSyncExternalStore } from 'react';
+import { useState, useCallback, useEffect, useLayoutEffect, useContext, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
@@ -10,8 +10,8 @@ import { keyTargetClaimsEscape } from './usePanelKeyRouter';
 import { escapeWasConsumedByOthers } from '@/utils/escape-beep-guard';
 import { log } from '@/utils/log';
 import {
-  claimFullscreen, fullscreenOwner, keepsAcrossRoutes, newFullscreenId,
-  releaseFullscreen, subscribeFullscreen,
+  bindFullscreen, claimFullscreen, clearFullscreen, detachFullscreen, fullscreenHeldBy,
+  keepsAcrossRoutes, newFullscreenId, releaseFullscreen, sheetPlace, subscribeFullscreen,
 } from './fullscreen-owner';
 
 /** Window event every live fullscreen sheet exits on. Fired by `yieldFullscreen`. */
@@ -28,6 +28,23 @@ export const FULLSCREEN_YIELD_EVENT = 'fullscreen:yield';
  */
 export function yieldFullscreen(reason: string): void {
   window.dispatchEvent(new CustomEvent(FULLSCREEN_YIELD_EVENT, { detail: { reason } }));
+  // A place full screen with no sheet on screen (a page not open now) would come
+  // back over the column this opens: the yield ends it too.
+  clearFullscreen();
+}
+
+/**
+ * The place a tab sheet shows (fullscreen-owner.ts `sheetPlace`): `host` names
+ * where it is hosted (a home column, the Ask slot, an Org node, a plugin), `item`
+ * what it shows (the session). Full screen and the panel's own view are kept per
+ * place, so the same session in two hosts keeps two views, and a host off the
+ * home page keeps one per page.
+ */
+export function useSheetPlace(host: string, item: string): string {
+  const inPluginBox = useContext(PluginBoxContext);
+  const routeShown = useContext(RouteShownContext);
+  const { pathname } = useLocation();
+  return sheetPlace(host, item, keepsAcrossRoutes(true, routeShown !== null, inPluginBox), pathname);
 }
 
 /**
@@ -87,6 +104,14 @@ export interface UseFullscreenOptions {
    * leaves it everywhere. A session panel passes it wherever it is hosted.
    */
   keepAcrossRoutes?: boolean;
+  /**
+   * The place the sheet shows (`useSheetPlace`). With it the tab's full screen
+   * is kept on disk as that place: the sheet showing it after a remount (a
+   * plugin reloaded, a page reload, a visit to another page, an app restart) is
+   * full screen again until the user leaves it, and a move to another page by a
+   * sheet that stays mounted is a move to another place.
+   */
+  place?: string;
 }
 
 export function useFullscreen(options: UseFullscreenOptions = {}) {
@@ -101,12 +126,13 @@ export function useFullscreen(options: UseFullscreenOptions = {}) {
   // The tab's sheets share the one owner (fullscreen-owner.ts); a nested or
   // page-wide sheet keeps its own flag.
   const [ownFlag, setOwnFlag] = useState(false);
-  const ownsTab = useSyncExternalStore(subscribeFullscreen, () => fullscreenOwner() === id, () => false);
+  const place = tab ? options.place ?? null : null;
+  const ownsTab = useSyncExternalStore(subscribeFullscreen, () => fullscreenHeldBy(id, place), () => false);
   const isFullscreen = tab ? ownsTab : ownFlag;
   const { pathname } = useLocation();
   const away = isFullscreen && keepAcrossRoutes && !shown;
   const active = isFullscreen && !away;
-  const leave = useCallback(() => { if (tab) releaseFullscreen(id); else setOwnFlag(false); }, [tab, id]);
+  const leave = useCallback(() => { if (tab) releaseFullscreen(id, place); else setOwnFlag(false); }, [tab, id, place]);
 
   // Timed: "I click outside to get out and it takes like 3 seconds" was reported
   // with no log to point at. Both directions now land in the server log as
@@ -114,26 +140,34 @@ export function useFullscreen(options: UseFullscreenOptions = {}) {
   // main-thread block during the collapse is attributed to the phase.
   const enterFullscreen = useCallback(() => {
     traceInteraction('fullscreen-enter');
-    if (tab) claimFullscreen(id); else setOwnFlag(true);
-  }, [tab, id]);
+    if (tab) claimFullscreen(id, place); else setOwnFlag(true);
+  }, [tab, id, place]);
   // Only the sheet that is full screen can leave it: a panel resetting itself
   // (a new session in it, a fresh mount) must never end another sheet's.
   const exitFullscreen = useCallback(() => {
-    if (tab ? fullscreenOwner() !== id : !ownFlag) return;
+    if (tab ? !fullscreenHeldBy(id, place) : !ownFlag) return;
     traceInteraction('fullscreen-exit');
     leave();
-  }, [tab, id, ownFlag, leave]);
+  }, [tab, id, place, ownFlag, leave]);
 
-  // A sheet that goes away while full screen ends it: a panel mounted later (the
-  // same plugin page opened again) never comes up full page.
-  useEffect(() => () => releaseFullscreen(id), [id]);
+  // The sheet showing a place that is full screen holds it; going away, or on to
+  // another place, it lets go and the place stays full screen for the next sheet
+  // that shows it. A sheet with no place ends it when it goes away, so a sheet
+  // mounted later never comes up full page.
+  useLayoutEffect(() => {
+    if (!tab) return;
+    if (place === null) return () => releaseFullscreen(id);
+    bindFullscreen(id, place);
+    return () => detachFullscreen(id);
+  }, [tab, id, place]);
 
   // Leaving the route drops fullscreen. Keyed on pathname only: a search-param
   // change (`/?s1=…`, the session columns' own deep-link state) is NOT a
-  // navigation away and must not collapse a panel the user just expanded.
+  // navigation away and must not collapse a panel the user just expanded. A
+  // sheet with a place has the page in it: there the move is a move to another place.
   useEffect(() => {
-    if (!keepAcrossRoutes) leave();
-  }, [pathname, keepAcrossRoutes, leave]);
+    if (!keepAcrossRoutes && place === null) leave();
+  }, [pathname, keepAcrossRoutes, place, leave]);
 
   // ESC key handler + ref-counted body scroll lock (shares count with
   // useModalOverlay), and the column-open yield below. All subscribed only WHILE

@@ -87,6 +87,7 @@ function PopoutSessionPanel() {
     <SessionPanel
       key={id}
       sessionId={id}
+      viewPlace="popout"
       embedded
       onClose={() => window.close()}
       onSessionClick={sessionId => openPopout('session', { id: sessionId })}

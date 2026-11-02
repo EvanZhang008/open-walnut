@@ -196,7 +196,11 @@ test('Home: a task detail open before a reload or relaunch does not come back ov
   await recycled.close()
 })
 
-test('Home: a full-screen session panel does not come back after a reload', async ({ page }) => {
+// 2026-11-02, the user: "it keep lost my state like the open state of the session, like full
+// screen, file ... remember the state". A session panel's full screen is kept as its place
+// (hooks/fullscreen-owner.ts) until the user leaves it; the task detail above still never comes
+// back on its own.
+test('Home: a full-screen session panel comes back after a reload, until the user leaves it', async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 900 })
   await optIn(page)
   await seedColumns(page, [SIDS[0]])
@@ -206,7 +210,13 @@ test('Home: a full-screen session panel does not come back after a reload', asyn
   // The user's click enters full screen.
   await panel.locator('.session-panel-expand').click()
   await expect(panel).toHaveClass(/open-walnut-fullscreen/)
-  // A reload (a deploy, a restart) brings the column back, never the sheet.
+  // A reload (a deploy, a restart) brings the column back full screen, as it was left.
+  await page.reload()
+  await expect(panel).toBeVisible({ timeout: 25_000 })
+  await expect(panel).toHaveClass(/open-walnut-fullscreen/, { timeout: 10_000 })
+  // Left, it stays left after the next reload.
+  await panel.locator('.session-panel-expand').click()
+  await expect(panel).not.toHaveClass(/open-walnut-fullscreen/)
   await page.reload()
   await expect(panel).toBeVisible({ timeout: 25_000 })
   await page.waitForTimeout(1500)

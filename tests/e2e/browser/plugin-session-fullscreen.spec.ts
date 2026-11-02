@@ -7,7 +7,8 @@
  * whose App has two pages with one session in walnut.ui.views.SessionView beside
  * them, and a second session the home page opens in a column.
  *   - The plugin's panel opens in its normal place, and a move to the plugin's
- *     other page (the App stays mounted) leaves full screen.
+ *     other page (the App stays mounted) leaves full screen there; a trip away and
+ *     back to the page it was full screen on finds it full screen until it is left.
  *   - Leaving full screen on the plugin page leaves the home column's too; a home
  *     column's full screen still waits for the way back while nobody left it.
  * Run both engines: PW_WEBKIT=1 ... for the Mac app.
@@ -132,8 +133,17 @@ test("a plugin's session panel opens in its normal place, and its other page lea
   await expect(page.locator('.open-walnut-fullscreen')).toHaveCount(0)
   await shot(page, '2-plugin-other-page-normal')
 
-  // Full screen, away to Home and back: the page opens with the panel in its place.
+  // Full screen, away to Home and back: nobody left it, so the page opens with the panel full
+  // screen again (2026-11-02, the user: "it keep lost my state like ... full screen"; the place
+  // is kept, hooks/fullscreen-owner.ts). Home's columns are in their place meanwhile.
   await expand(panel)
+  await goHome(page)
+  await expect(page.locator('.open-walnut-fullscreen:not(.open-walnut-fullscreen-away)')).toHaveCount(0)
+  panel = await openApp(page)
+  await expect(panel).toHaveClass(FS)
+  // Left with Esc, it stays left after another trip.
+  await page.keyboard.press('Escape')
+  await expect(panel).not.toHaveClass(FS)
   await goHome(page)
   panel = await openApp(page)
   await expect(panel).not.toHaveClass(FS)

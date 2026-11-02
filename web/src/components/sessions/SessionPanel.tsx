@@ -107,8 +107,9 @@ import { createPortal } from 'react-dom';
 import { phoneSessionLabel } from '@/utils/phone-session-label';
 import { usePendingCardTool } from '@/hooks/usePendingCardTool';
 import '@/styles/phone-session.css';
-import { useFullscreen } from '@/hooks/useFullscreen';
-import { fullscreenOwner } from '@/hooks/fullscreen-owner';
+import { useFullscreen, useSheetPlace } from '@/hooks/useFullscreen';
+import { fullscreenPlace } from '@/hooks/fullscreen-owner';
+import { usePanelView } from './panel-view';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { useHeightVar } from '@/hooks/useHeightVar';
 import { useSessionPlan } from '@/hooks/useSessionPlan';
@@ -275,6 +276,12 @@ function claimRecheckSlot(sessionId: string): boolean {
 
 interface SessionPanelProps {
   sessionId: string;
+  /**
+   * Where the panel is hosted (`home-column`, `ask-slot`, `org-node`, `plugin:<id>`, ...).
+   * With the session it names the panel's place (useSheetPlace): its view (panel-view.ts) and
+   * the tab's full screen are kept per place, so a panel that mounts again shows what it showed.
+   */
+  viewPlace: string;
   /** Stable close handler — receives the sessionId so the parent can identify
    *  which panel to close (a column removes itself; the embedded slot hides
    *  itself). Optional: without it the header renders no × and no recovery
@@ -352,7 +359,7 @@ interface SessionPanelProps {
   onHostBoard?: () => void;
 }
 
-export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard }: SessionPanelProps) {
+export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, onClose, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard }: SessionPanelProps) {
   // One place decides what "close this panel" means, so every exit (the header
   // button, the error boundary, the missing-session card) goes through the same
   // owner callback.
@@ -426,8 +433,21 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // mounts only once the record has loaded, and `/model` can come before that.
   const modelPickerServed = useRef(0);
   // CSS-promotion fullscreen (same instance, no remount)
-  // Full screen of the tab: it stays across a trip to another page (useFullscreen).
-  const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen({ keepAcrossRoutes: true });
+  // Full screen of the tab: it stays across a trip to another page (useFullscreen), and
+  // is kept as this panel's place, so the panel showing it after a remount is full screen again.
+  const sheetAt = useSheetPlace(viewPlace, sessionId);
+  const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen({ keepAcrossRoutes: true, place: sheetAt });
+  // What the panel shows beside its chat, kept for this place (panel-view.ts).
+  const panelView = usePanelView(sheetAt);
+  const { activeView, setActiveView, fileViewTarget: keptFileTarget, setFileViewTarget, webRequest, setWebRequest, inboxLetterId, setInboxLetterId } = panelView;
+  // A file a click opened before this panel mounted is not a click now: the explorer reopens
+  // what was read last (it keeps that itself, and the user may have browsed on), so the kept
+  // target only roots it on another host. A click in this mount gets a new nonce.
+  const mountedTarget = useRef({ at: sheetAt, nonce: keptFileTarget?.nonce ?? null });
+  if (mountedTarget.current.at !== sheetAt) mountedTarget.current = { at: sheetAt, nonce: keptFileTarget?.nonce ?? null };
+  const fileViewTarget = keptFileTarget && (keptFileTarget.onHost || keptFileTarget.nonce !== mountedTarget.current.nonce) ? keptFileTarget : null;
+  const chatHiddenRef = useRef(panelView.chatHidden);
+  chatHiddenRef.current = panelView.chatHidden;
   // A fullscreen panel is an overlay over its column: closing the column behind it would
   // show the person nothing, so the host hears about completions only from the normal view.
   const completedInColumn = useMemo(
@@ -946,8 +966,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   }), [sessionId, engineUi.rewind]);
   const [messagesOpen, setMessagesOpen] = useState(false);
   // Changed / Files / Terminal all share ONE full-screen split: [ left panel | chat ].
-  // null = none open. Opening any view promotes the panel to fullscreen.
-  const [activeView, setActiveView] = useState<SessionSplitView | null>(null);
+  // null = none open. Opening any view promotes the panel to fullscreen. It is kept
+  // for this place with the panel's view (usePanelView above).
   const splitOpen = activeView !== null;
   // A host that cannot open a terminal (the cloud box has no SSH) offers no
   // Terminal tab. The host's own capability says so (its status frame), never
@@ -956,9 +976,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   const {
     unreadCount: letterUnread, decisionCount: letterDecisions, attentionCount: letterAttention,
   } = useSessionLetters(sessionId);
-  // The letter open IN the tab. Owned here, not in the pane, so hopping to the
-  // Files tab and back returns to the letter instead of the list.
-  const [inboxLetterId, setInboxLetterId] = useState<string | null>(null);
+  // The letter open IN the tab (inboxLetterId, kept with the panel's view). Owned
+  // here, not in the pane, so hopping to the Files tab and back returns to the
+  // letter instead of the list.
   // ChatInput prefill driver — selecting code in the diff drops a prompt into the
   // existing input (no new chat, no fork; goes to the main agent via normal send).
   const [prefillText, setPrefillText] = useState<string | undefined>(undefined);
@@ -1126,7 +1146,8 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // Fresh storage key (v3): re-baseline everyone at the new default. The middle
   // content pane (file preview / diff) is the priority — chat is a side column.
   const chatPanel = useResizablePanel('open-walnut-split-chat-w3', 30, 'right');
-  const [chatCollapsed, setChatCollapsed] = useState(false);
+  // A chat the user hid comes back hidden (panelView.chatHidden); one the window hid does not.
+  const [chatCollapsed, setChatCollapsed] = useState(() => panelView.chatHidden);
   // Was the collapse the WINDOW's decision (too narrow for both columns) or the
   // user's? An automatic collapse belongs to the view that asked for it, so
   // switching tabs drops it; a hand-hidden chat sticks until the user says
@@ -1185,7 +1206,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // instead of the session cwd. Cleared when the split closes / view switches.
   // `onHost`: the file lives on another host than the session's (absent = the session's).
   // `missing`: no host has it; the tree shows the session's cwd with that one line.
-  const [fileViewTarget, setFileViewTarget] = useState<{ path: string; line?: number; endLine?: number; term?: string; nonce: number; onHost?: { host?: string }; missing?: string } | null>(null);
   // Toggle a split view: same view → close (exit fullscreen); other/none → open it.
   //
   // Exception kept: Files opened via a file-path click (fileViewTarget set) — the
@@ -1276,7 +1296,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
       : { path, line, endLine, term, nonce: (prev?.nonce ?? 0) + 1, ...(t.elsewhere ? { onHost: { host: t.host } } : {}) });
     setActiveView('files');
     enterFullscreen();
-  }, [enterFullscreen, inset, session?.cwd, sessionId]);
+  }, [enterFullscreen, inset, session?.cwd, sessionId, setActiveView, setFileViewTarget]);
   const handleFileOpen = useClickedPathOpener(openLocatedFile, { host: session?.host ?? undefined, cwd: session?.cwd ?? undefined, sessionId });
   openDocRef.current = (path) => handleFileOpen(path);
 
@@ -1284,7 +1304,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // in the Web split view instead of a browser tab: remote ports come through an
   // SSH forward the server sets up, so "localhost:8080 on the dev box" just works.
   // The request carries a nonce so clicking the same link again reloads it.
-  const [webRequest, setWebRequest] = useState<WebViewRequest | null>(null);
   const openWebView = useCallback((url: string) => {
     traceInteraction('view-open:web-from-link', { sessionId });
     setFileViewTarget(null);
@@ -1293,7 +1312,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     applyOpenCollapse('web');
     enterFullscreen();
     log.info('session-web', 'service link opened in panel', { sessionId, url });
-  }, [enterFullscreen, applyOpenCollapse, sessionId]);
+  }, [enterFullscreen, applyOpenCollapse, sessionId, setActiveView, setFileViewTarget, setWebRequest]);
   useEffect(() => { primeKnownServiceHosts(); }, []);
   // Click delegation for the whole chat column: any rendered anchor (markdown
   // autolink, model-written HTML, tool output) whose href is a service. A plain
@@ -1415,7 +1434,14 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     return () => window.removeEventListener('open-plan-modal', handler);
   }, []);
 
-  // Reset execute + fullscreen state when session changes
+  // Reset execute state when session changes. The split view, its file, service
+  // and letter, and full screen are kept per place, and the place names the
+  // session: the next session shows its own (a service URL belongs to the session
+  // that printed it, whose host decides where the tunnel goes).
+  // Full screen and the view are the place's: a panel that moves on to another
+  // session (or remounts on one, as the hosts keyed by session do) shows that
+  // session's, and the one it left is there again on the way back, until the user
+  // leaves full screen, enters it elsewhere or opens a column on Home.
   useEffect(() => {
     setExecuting(false);
     setExecuteError(null);
@@ -1423,14 +1449,29 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     setPlanPopoverOpen(false);
     setNotesOpen(false);
     setMessagesOpen(false);
-    setActiveView(null);
-    setFileViewTarget(null);
-    setInboxLetterId(null);
-    // A service URL belongs to the session that printed it (its host decides
-    // where the tunnel goes); an unkeyed panel must not carry it to the next.
-    setWebRequest(null);
-    exitFullscreen();
-  }, [sessionId, exitFullscreen]);
+  }, [sessionId]);
+  // The place this panel shows changed (another session, another page of a
+  // plugin): the chat comes back as the user left it there, and a view kept
+  // there decides the chat's fate the way opening it did. Also on mount.
+  const restoredFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (restoredFor.current === sheetAt) return;
+    const first = restoredFor.current === null;
+    restoredFor.current = sheetAt;
+    if (!first) { autoCollapsed.current = false; setChatCollapsed(chatHiddenRef.current); }
+    if (activeView && !chatHiddenRef.current) applyOpenCollapse(activeView);
+  }, [sheetAt, activeView, applyOpenCollapse]);
+  // The chat the user hid is kept with the view; one the window hid is not.
+  // Written only when it moved while the same place showed: a move to another
+  // place restores that place's, it never writes this one's onto it.
+  const { setChatHidden } = panelView;
+  const lastChat = useRef({ at: sheetAt, collapsed: chatCollapsed });
+  useEffect(() => {
+    const last = lastChat.current;
+    lastChat.current = { at: sheetAt, collapsed: chatCollapsed };
+    if (last.at !== sheetAt || last.collapsed === chatCollapsed) return;
+    setChatHidden(chatCollapsed && !autoCollapsed.current);
+  }, [chatCollapsed, sheetAt, setChatHidden]);
 
   // ── Inbox deep link (`/sessions?id=…&tab=inbox&letter=…`) ──
   // Two arrival paths, because the panel that must react usually does not exist
@@ -1493,11 +1534,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // so the router catching up with the URL is not an exit any more.
   useEffect(() => {
     // A phone never promotes a view to fullscreen: there the view is a layer,
-    // and its Back is what closes it.
-    if (isFullscreen || !splitOpen || isPhoneLayout()) return;
+    // and its Back is what closes it. A second panel of the same place (the one
+    // full screen holds is the other) leaves the view they share alone.
+    if (isFullscreen || !splitOpen || isPhoneLayout() || fullscreenPlace() === sheetAt) return;
     setActiveView(null);
     setFileViewTarget(null);
-  }, [isFullscreen, splitOpen]);
+  }, [isFullscreen, splitOpen, sheetAt, setActiveView, setFileViewTarget]);
 
   // planCompleted=true means the plan is definitively done — show Execute even if session is still running
   // (SSH FIFO sessions stay alive after plan completion; execution creates a new session anyway).
@@ -1854,7 +1896,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     if (!phoneWidth && !isFullscreen) {
       // Full screen is one state of the tab (fullscreen-owner.ts): a panel the
       // user is not on never takes it from the one that holds it; its view closes.
-      if (fullscreenOwner() !== null) { setActiveView(null); setFileViewTarget(null); return; }
+      if (fullscreenPlace() !== null) { setActiveView(null); setFileViewTarget(null); return; }
       enterFullscreen();
     }
     applyOpenCollapse(activeView);
@@ -2920,6 +2962,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                           <InsetSessionPanel
                             key={cardSessionId}
                             sessionId={cardSessionId}
+                            viewPlace={`${viewPlace}:board`}
                             embedded
                             inset
                             onClose={opts.onClose}
@@ -3142,6 +3185,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                   <InsetSessionPanel
                     key={peekSessionId}
                     sessionId={peekSessionId}
+                    viewPlace={`${viewPlace}:peek`}
                     embedded
                     inset
                     onClose={closeShownPeek}

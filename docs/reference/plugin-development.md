@@ -1199,6 +1199,12 @@ export function activate(walnut: WalnutWebApi) {
 
 `TaskView` accepts the shared task query model plus optional instance-scoped persistence. `ChatView` keeps append-only streaming and binds drafts to the plugin owner. Give every stateful View instance its own `storageKey` or `draftKey`, otherwise two instances fight over the same local state.
 
+### What stays as the user left it
+
+Walnut keeps what its own views show, with nothing from you: a `SessionView` comes back with the same split view beside its chat (Changed, Files, Terminal, Inbox, Web), the same file open in Files and its full screen, after your plugin reloads, the page reloads, the user visits another page and returns, or the app restarts. It keeps one per page of your App and per session, and full screen is still one state of the whole window: leaving it anywhere leaves it everywhere.
+
+Your own view choices (a pane shown or hidden, the tab your App is on, the item it shows) are yours to keep, and `walnut.ui.useView` keeps them the same way: call it in a component like `useState`, as `const [showPane, setShowPane] = walnut.ui.useView('showPane', true)`, or with `{ id: problemId }` for one value per item. The value follows the user to their other devices; one of another type than `initial`, or one `accept` refuses, reads as `initial`. A menu, a dialog, a busy flag and fetched data stay in `useState`. `walnut-plugin validate` (and `build`, `dev`, `publish-check`) warns on a view choice your web code keeps in `useState`, naming the file and line. `useView` is optional on an older host: feature-detect it.
+
 ### Voice input in your own text box
 
 `walnut.ui.views.MicButton` is the mic of Walnut's own composer, for a textarea or one-line input your plugin draws. It records and transcribes with the person's Voice settings and engine (Settings → Voice), so there is nothing to configure in your plugin and no second voice setup. Words appear in the box while the person speaks when the engine can draft live, then the final text replaces them and the box takes the focus with the caret after it. A right-click on the mic opens the same retry menu as everywhere else (another model, the vocabulary, recent recordings). While voice is not set up, or its engine is not working, a click opens Settings → Voice instead of recording. A browser that cannot record draws no mic at all.

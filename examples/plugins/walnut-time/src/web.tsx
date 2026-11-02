@@ -65,6 +65,7 @@ export async function activate(walnut: WalnutWebApi) {
       <TimeApp
         api={api}
         log={log}
+        useView={walnut.ui.useView}
         basePath={props.basePath}
         subpath={props.subpath}
         navigate={props.navigate}

@@ -8,8 +8,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  claimFullscreen, fullscreenOwner, keepsAcrossRoutes, newFullscreenId,
-  releaseFullscreen, resetFullscreenOwner, subscribeFullscreen,
+  FULLSCREEN_PLACE_KEY, bindFullscreen, claimFullscreen, clearFullscreen, detachFullscreen,
+  fullscreenHeldBy, fullscreenOwner, fullscreenPlace, keepsAcrossRoutes, newFullscreenId,
+  releaseFullscreen, resetFullscreenOwner, sheetPlace, subscribeFullscreen,
 } from '../../web/src/hooks/fullscreen-owner';
 
 const ROOT = path.resolve(__dirname, '../../web/src');
@@ -64,13 +65,68 @@ describe('one full screen for the tab', () => {
     releaseFullscreen(plugin);
     expect(fullscreenOwner()).toBeNull();
 
-    // A panel that unmounts while full screen ends it; one that does not hold it changes nothing.
+    // Leaving it by a sheet that does not hold it changes nothing.
     claimFullscreen(home);
     releaseFullscreen(plugin);
     expect(fullscreenOwner()).toBe(home);
     releaseFullscreen(home);
     expect(fullscreenOwner()).toBeNull();
     expect(heard).toBe(5);
+  });
+
+  it('the place full screen is kept: the sheet showing it after a remount, a reload or a restart is full screen until the user leaves it', () => {
+    // 2026-11-02, the user: "it keep lost my state like the open state of the session, like full screen".
+    const store = new Map<string, string>();
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => { store.set(k, String(v)); },
+      removeItem: (k: string) => { store.delete(k); },
+    };
+    try {
+      const plugin = sheetPlace('plugin:practice', 'sid-1', false, '/apps/practice~main');
+      const home = sheetPlace('home-column', 'sid-2', true, '/org');
+      expect(plugin).toBe('plugin:practice@/apps/practice~main|sid-1');
+      expect(home).toBe('home-column|sid-2');
+
+      const a = newFullscreenId();
+      claimFullscreen(a, plugin);
+      expect(JSON.parse(store.get(FULLSCREEN_PLACE_KEY)!)).toBe(plugin);
+      // The plugin reloads (or the user visits another page): the sheet goes, the place stays.
+      detachFullscreen(a);
+      expect(fullscreenOwner()).toBeNull();
+      expect(fullscreenPlace()).toBe(plugin);
+      // The page reloads (or the app restarts): a fresh load reads the place from disk.
+      resetFullscreenOwner();
+      const b = newFullscreenId();
+      expect(fullscreenHeldBy(b, plugin)).toBe(true);
+      // A sheet of another place is not full screen, and cannot bind it.
+      const other = newFullscreenId();
+      expect(fullscreenHeldBy(other, home)).toBe(false);
+      bindFullscreen(other, home);
+      expect(fullscreenOwner()).toBeNull();
+      // The one showing it binds; a second sheet of the same place then is not full screen.
+      bindFullscreen(b, plugin);
+      expect(fullscreenOwner()).toBe(b);
+      const twin = newFullscreenId();
+      bindFullscreen(twin, plugin);
+      expect(fullscreenHeldBy(twin, plugin)).toBe(false);
+      // Leaving it ends it for good: nothing comes back after a reload.
+      releaseFullscreen(b);
+      expect(JSON.parse(store.get(FULLSCREEN_PLACE_KEY)!)).toBeNull();
+      resetFullscreenOwner();
+      expect(fullscreenHeldBy(newFullscreenId(), plugin)).toBe(false);
+
+      // Entering on another place moves it; a column opened on Home clears a place nobody shows.
+      const c = newFullscreenId();
+      claimFullscreen(c, home);
+      detachFullscreen(c);
+      expect(fullscreenPlace()).toBe(home);
+      clearFullscreen();
+      expect(fullscreenPlace()).toBeNull();
+      expect(JSON.parse(store.get(FULLSCREEN_PLACE_KEY)!)).toBeNull();
+    } finally {
+      delete (globalThis as { localStorage?: unknown }).localStorage;
+    }
   });
 
   it('only a home page panel keeps full screen across pages; a plugin box or slot panel does not', () => {
@@ -83,12 +139,12 @@ describe('one full screen for the tab', () => {
   it('useFullscreen keeps no flag of its own: it reads and writes the one owner', () => {
     const hook = code(read('hooks/useFullscreen.tsx'));
     expect(hook).toContain('useSyncExternalStore(subscribeFullscreen');
-    expect(hook).toContain('claimFullscreen(id)');
+    expect(hook).toContain('claimFullscreen(id, place)');
     // The tab's sheets read the owner; only a nested or page-wide sheet has a flag of its own.
     expect(hook).toMatch(/const isFullscreen = tab \? ownsTab : ownFlag;/);
     expect(hook).not.toMatch(/setIsFullscreen/);
     // Every session panel is one of the tab's sheets.
-    expect(code(read('components/sessions/SessionPanel.tsx'))).toMatch(/useFullscreen\(\{ keepAcrossRoutes: true \}\)/);
+    expect(code(read('components/sessions/SessionPanel.tsx'))).toMatch(/useFullscreen\(\{ keepAcrossRoutes: true, place: sheetAt \}\)/);
     // Nothing else claims full screen around the hook.
     const claimers = files.filter(({ text }) => /\bclaimFullscreen\(/.test(code(text))).map(({ file }) => file).sort();
     expect(claimers).toEqual(['hooks/fullscreen-owner.ts', 'hooks/useFullscreen.tsx']);

@@ -41,26 +41,28 @@ const OWN_DAY_TABS: readonly TabId[] = ['apps', 'timeline']
 export interface TimeAppProps {
   api: TimeApi
   log: PluginLogger
+  /** `walnut.ui.useView`: the day or week picked comes back after a reload or a visit elsewhere. */
+  useView?: <T>(name: string, initial: T) => [T, (next: T | ((prev: T) => T)) => void]
   basePath: string
   subpath: string
   navigate(path: string, options?: { replace?: boolean }): void
 }
 
-export function TimeApp({ api, log, basePath, subpath, navigate }: TimeAppProps) {
+export function TimeApp({ api, log, useView = useStateView, basePath, subpath, navigate }: TimeAppProps) {
   const [tab, setTab] = useState<TabId>(() => tabFromSubpath(subpath))
   const [summary, setSummary] = useState<TimeSummary | null>(null)
   const [tasks, setTasks] = useState<TaskRef[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [scopeMode, setScopeMode] = useState<ScopeMode>('day')
+  const [scopeMode, setScopeMode] = useView<ScopeMode>('scopeMode', 'day')
   /**
    * '' means "whatever today is", not "unknown": today's date only arrives with the
    * summary, and storing it here would leave the scope pointing at yesterday for
    * anyone who leaves the tab open across midnight.
    */
   const [pickedDate, setPickedDate] = useState('')
-  const [kind, setKind] = useState<KindKey>('all')
-  const [project, setProject] = useState('')
+  const [kind, setKind] = useView<KindKey>('kind', 'all')
+  const [project, setProject] = useView('project', '')
 
   useEffect(() => { setTab(tabFromSubpath(subpath)) }, [subpath])
 
@@ -274,6 +276,11 @@ export function TimeApp({ api, log, basePath, subpath, navigate }: TimeAppProps)
       </main>
     </div>
   )
+}
+
+/** A host older than `walnut.ui.useView`: the pick lasts while the App is open. */
+function useStateView<T>(_name: string, initial: T): [T, (next: T | ((prev: T) => T)) => void] {
+  return useState<T>(initial)
 }
 
 /** The tab a deep link asks for. Anything unknown lands on the first tab. */
