@@ -46,11 +46,20 @@ echo "== sim $UDID  port $PORT  work $WORK"
 
 # ---------- fixture + mock server (IDLE session, real field scale) ----------
 "${WALNUT_BUN:-bun}" "$REPO/scripts/ios-perf/make-idle-fixture.mjs" "$WORK/idle-fixture.json" "${API_ROWS:-286}" || exit 1
-pkill -f "mock-server.mjs" 2>/dev/null; sleep 0.5
+# A mock server an earlier run left: stopped by the pid that run recorded, never by
+# name (scripts/lib/recorded-pid.sh). One this script did not record is left alone.
+# shellcheck source=/dev/null
+. "$REPO/scripts/lib/recorded-pid.sh"
+MOCK_PIDFILE="$WORK/mock-server.pid"
+walnut_pid_stop_recorded "$MOCK_PIDFILE" mock-server.mjs || exit 1
+if busy="$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null)" && [ -n "$busy" ]; then
+  echo "port $PORT is held by pid $busy, which this script did not start; stop it, or pick another port"; exit 1
+fi
 IDLE=1 PORT=$PORT FIXTURE="$WORK/idle-fixture.json" \
   "${WALNUT_BUN:-bun}" "$REPO/scripts/ios-perf/mock-server.mjs" > "$WORK/mock.log" 2>&1 &
 MOCK_PID=$!
-trap 'kill $MOCK_PID 2>/dev/null; walnut_sim_release' EXIT
+walnut_pid_record "$MOCK_PIDFILE" "$MOCK_PID"
+trap 'walnut_pid_stop_child "$MOCK_PID" && rm -f "$MOCK_PIDFILE"; walnut_sim_release' EXIT
 sleep 1
 grep -q mock-server "$WORK/mock.log" || { echo "mock server failed:"; cat "$WORK/mock.log"; exit 1; }
 

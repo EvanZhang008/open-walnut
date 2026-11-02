@@ -88,11 +88,20 @@ if [ "$RUN_L2" = 1 ]; then
   xcrun simctl bootstatus "$UDID" -b >/dev/null 2>&1 || true
 
   echo "[L2] starting mock v1 server on :$MOCK_PORT (built-in 1000-msg mixed transcript + aggressive live stream)"
-  pkill -f "ios-perf/mock-server.mjs" 2>/dev/null || true
+  # A mock server an earlier run left: stopped by the pid that run recorded, never by
+  # name (scripts/lib/recorded-pid.sh). One this script did not record is left alone.
+  # shellcheck source=/dev/null
+  . "$REPO/scripts/lib/recorded-pid.sh"
+  MOCK_PIDFILE="$WORK/mock-server.pid"
+  walnut_pid_stop_recorded "$MOCK_PIDFILE" mock-server.mjs || exit 1
+  if busy="$(lsof -tiTCP:"$MOCK_PORT" -sTCP:LISTEN 2>/dev/null)" && [ -n "$busy" ]; then
+    echo "port $MOCK_PORT is held by pid $busy, which this script did not start; stop it, or pick another port"; exit 1
+  fi
   PORT=$MOCK_PORT MSG_COUNT=1000 LIVE_TEXT_KB=512 DELTA_MS=100 DELTA_BYTES=2000 DELTA_COUNT=300 \
     "${WALNUT_BUN:-bun}" "$PERF/mock-server.mjs" > "$WORK/l2-mock.log" 2>&1 &
   MOCK_PID=$!
-  trap 'kill $MOCK_PID 2>/dev/null; walnut_sim_release' EXIT
+  walnut_pid_record "$MOCK_PIDFILE" "$MOCK_PID"
+  trap 'walnut_pid_stop_child "$MOCK_PID" && rm -f "$MOCK_PIDFILE"; walnut_sim_release' EXIT
   sleep 1
 
   echo "[L2] installing + configuring app"

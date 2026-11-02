@@ -15,7 +15,7 @@
  *
  * Usage: WALNUT_TEST_TOKEN=... WALNUT_TEST_REGION=... bun scripts/onboarding-verify-all.mjs
  */
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -71,7 +71,7 @@ async function waitHealth(timeoutMs = 45000) {
  * to SIGKILL.
  *
  * ⚠️ This used to be a bare `srv.kill('SIGTERM')` with no confirmation, and
- * killPort() below only reached servers that had already BOUND the port. A server
+ * the port sweep that followed only reached servers that had already BOUND the port. A server
  * still booting (the common case here — we stop several cases before they finish
  * starting) held no port, so lsof could not see it and nothing ever confirmed its
  * death. Combined with a server-side bug that swallowed SIGTERM during boot, each
@@ -96,14 +96,19 @@ async function stop(srv) {
   }
   if (alive()) console.log(`  ⚠️ server pid ${srv.pid} SURVIVED SIGKILL — investigate`);
 }
-async function killPort() {
-  // -TERM then -KILL: same "confirm the death" rule as stop(). Note this can only
-  // ever see servers that bound the port; stop() is what covers booting ones.
-  await new Promise((res) => spawn('bash', ['-c',
-    `lsof -ti:${PORT} -sTCP:LISTEN | xargs kill -15 2>/dev/null || true; sleep 1; ` +
-    `lsof -ti:${PORT} -sTCP:LISTEN | xargs kill -9 2>/dev/null || true`,
-  ]).on('close', res));
-  await sleep(500);
+/**
+ * Wait for PORT to be free. A listener still there is not a server this run started
+ * (stop() confirmed those gone): name it and stop the run, never signal it. A kill
+ * by port would reach whoever else serves on it.
+ */
+async function portFree() {
+  for (let i = 0; ; i++) {
+    let pids = '';
+    try { pids = execFileSync('lsof', [`-ti:${PORT}`, '-sTCP:LISTEN'], { encoding: 'utf8' }).trim(); } catch { return; }
+    if (!pids) return;
+    if (i >= 20) throw new Error(`port ${PORT} is held by pid ${pids.split('\n').join(', ')}, which this run did not start; stop it yourself, then run again`);
+    await sleep(250);
+  }
 }
 
 async function newPage() {
@@ -162,7 +167,7 @@ async function main() {
 
   const HOME = path.join(ROOT, 'home');
   const WH = path.join(ROOT, 'wh');
-  await killPort();
+  await portFree();
 
   // ── Case 1: clean room, no creds → onboarding shows ──
   log('\n── Case 1: clean room (no creds) ──');
@@ -178,7 +183,7 @@ async function main() {
     await page.screenshot({ path: path.join(SHOTS, 'case1-clean-onboarding.png') });
     await browser.close();
   }
-  await stop(srv); await killPort();
+  await stop(srv); await portFree();
 
   // ── Case 2: settings.json env auto-detect (+ LIVE reply) ──
   log('\n── Case 2: ~/.claude/settings.json env auto-detect ──');
@@ -202,7 +207,7 @@ async function main() {
     const r = await personalAiReplies('ONBOARDINGOK', 'case2-live-reply');
     record('C2 LIVE reply', r.replied, r.replied ? `replied: …${r.text.slice(-90)}` : r.text);
   } else record('C2 LIVE reply', false, 'SKIPPED — no WALNUT_TEST_TOKEN');
-  await stop(srv); await killPort();
+  await stop(srv); await portFree();
 
   // ── Case 3: env-var auto-detect (no settings.json) ──
   log('\n── Case 3: env-var auto-detect ──');
@@ -210,7 +215,7 @@ async function main() {
     srv = launch(HOME, WH, { extraEnv: { AWS_BEARER_TOKEN_BEDROCK: TOKEN, AWS_REGION: REGION } });
     h = await waitHealth();
     record('C3 env-detect', h.hasReadyProvider === true && h.credentialSource === 'env', `source=${h.credentialSource} detail=${h.credentialDetail}`);
-    await stop(srv); await killPort();
+    await stop(srv); await portFree();
   } else record('C3 env-detect', false, 'SKIPPED — no WALNUT_TEST_TOKEN');
 
   // ── Case 4: hero skill writes config.yaml (+ LIVE reply) ──
@@ -227,7 +232,7 @@ async function main() {
     const r = await personalAiReplies('HEROOK', 'case4-live-reply');
     record('C4 LIVE reply', r.replied, r.replied ? `replied: …${r.text.slice(-90)}` : r.text);
   } else record('C4 LIVE reply', false, 'SKIPPED — no WALNUT_TEST_TOKEN');
-  await stop(srv); await killPort();
+  await stop(srv); await portFree();
 
   // ── Case 5: manual via API (the path the banner's Settings link drives) ──
   log('\n── Case 5: manual via /api/config (Settings UI path) ──');
@@ -245,7 +250,7 @@ async function main() {
     const r = await personalAiReplies('MANUALOK', 'case5-live-reply');
     record('C5 LIVE reply', r.replied, r.replied ? `replied: …${r.text.slice(-90)}` : r.text);
   } else record('C5 after-save', false, 'SKIPPED — no WALNUT_TEST_TOKEN');
-  await stop(srv); await killPort();
+  await stop(srv); await portFree();
 
   // ── Summary ──
   log('\n══════════ SUMMARY ══════════');

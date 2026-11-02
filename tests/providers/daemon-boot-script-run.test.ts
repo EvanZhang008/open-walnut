@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { renderDaemonBootScript } from '../../src/providers/daemon-service-boot-script.js'
 import { guardedPath } from '../setup/exec-guard.js'
 
@@ -25,9 +25,11 @@ function fakeDaemon(name: string): string {
     '#!/bin/sh',
     `fd9=no; [ -e /proc/$$/fd/9 ] && fd9=yes`,
     `echo "${name} $* state=$WALNUT_DAEMON_STATE_DIR dir=$WALNUT_DAEMON_DIR sup=$WALNUT_DAEMON_SUPERVISOR home=$HOME fd9=$fd9" >> "${dir}/runs"`,
+    // The test's own record of every process it leaves running, so it stops exactly those.
+    `echo "${name} $$" >> "${dir}/pids"`,
     `code=$(head -n 1 "${dir}/codes" 2>/dev/null); sed -i '1d' "${dir}/codes" 2>/dev/null`,
     // No code queued: run until signalled (the real sleep: the supervisor's PATH shadows sleep with a short one).
-    `[ -n "$code" ] || { /bin/sleep 30 & S=$!; trap 'kill $S; exit 0' TERM; wait $S; code=0; }`,
+    `[ -n "$code" ] || { /bin/sleep 30 & S=$!; echo "${name}-sleep $S" >> "${dir}/pids"; trap 'kill $S; exit 0' TERM; wait $S; code=0; }`,
     'exit "$code"',
     '',
   ].join('\n'), { mode: 0o700 })
@@ -43,6 +45,26 @@ function writeScript(executable: string): string {
   fs.writeFileSync(`${file}.tmp`, text, { mode: 0o600 })
   fs.renameSync(`${file}.tmp`, file)
   return file
+}
+
+/** The processes the fake daemons recorded, latest last; `name` keeps only that one's. */
+function recorded(name?: string): Array<{ name: string; pid: number }> {
+  const file = path.join(dir, 'pids')
+  const lines = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean) : []
+  return lines.map((l) => l.split(' ')).map(([n, pid]) => ({ name: n!, pid: Number(pid) }))
+    .filter((r) => r.pid > 1 && (name === undefined || r.name === name))
+}
+
+/**
+ * Signal a process this test recorded, only while that pid still runs what was
+ * recorded (a pid is reused once its process is gone): the fake daemon's command
+ * names this test's dir, its sleep is exactly `/bin/sleep 30`.
+ */
+function signalRecorded(r: { name: string; pid: number }, signal: NodeJS.Signals): void {
+  let command = ''
+  try { command = execFileSync('ps', ['-o', 'command=', '-p', String(r.pid)], { encoding: 'utf8' }).trim() } catch { return }
+  const same = r.name.endsWith('-sleep') ? command === '/bin/sleep 30' : command.includes(dir)
+  if (same) { try { process.kill(r.pid, signal) } catch { /* gone */ } }
 }
 
 function runs(): string[] {
@@ -79,7 +101,7 @@ beforeEach(() => {
 afterEach(() => {
   fs.writeFileSync(path.join(state, 'daemon-boot.stop'), 'stop\n')
   for (const child of children.splice(0)) { try { child.kill('SIGKILL') } catch {} }
-  spawnSync('pkill', ['-f', dir])
+  for (const r of recorded()) signalRecorded(r, 'SIGKILL')
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
@@ -142,7 +164,8 @@ describe('the cron boot supervisor script', () => {
     const child = start(writeScript(exe))
     await until(() => runs().length === 1)
     fs.writeFileSync(path.join(state, 'daemon-boot.stop'), 'stop\n')
-    spawnSync('pkill', ['-TERM', '-f', `${exe} --service`])
+    await until(() => recorded('d1-sleep').length === 1)
+    signalRecorded(recorded('d1')[0]!, 'SIGTERM')
     expect(await exited(child)).toBe(0)
     expect(runs()).toHaveLength(1)
     expect(fs.existsSync(path.join(state, 'daemon-boot.pid'))).toBe(false)

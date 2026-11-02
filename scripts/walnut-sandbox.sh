@@ -61,7 +61,8 @@ refuse_prod() {
   if [ "$PORT" = "3456" ]; then echo "REFUSING to operate on production port 3456." >&2; exit 99; fi
 }
 # For every command, before anything runs: `stop` and the reset before each launch
-# signal whatever listens on PORT, so a 3456 here would reach production.
+# signal the server this sandbox recorded, and a launch refuses a port someone else
+# holds; a 3456 here would point all of it at production.
 refuse_prod
 # Sets BUN to a bun of the version package.json pins (packageManager) or newer
 # (scripts/lib/find-bun.sh, as scripts/dev-prod.sh does). Exits naming bun when
@@ -90,7 +91,7 @@ wait_health() {
   echo "(server did not become healthy; tail of log:)"; tail -20 "$LOG"; return 1
 }
 stop_server() {
-  # Confirm the death, then escalate. The lsof fallback only sees servers that
+  # Confirm the death, then escalate. A port lookup only sees servers that
   # BOUND the port — one SIGTERMed mid-boot holds none, so it would leak silently
   # with its background loops running (2026-08-09: 43 such leaks starved the Mac).
   if [ -f "$PID_FILE" ]; then
@@ -107,9 +108,12 @@ stop_server() {
       fi
     fi
   fi
-  lsof -ti:${PORT} -sTCP:LISTEN 2>/dev/null | xargs kill -15 2>/dev/null || true   # never 3456
-  sleep 1
-  lsof -ti:${PORT} -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null || true    # never 3456
+  # Anything still on the port is not the server this run recorded (that one is
+  # confirmed gone above): name it, never signal it. The port is shared with the
+  # Playwright fixture and anyone's hand-started server, so a kill by port could
+  # stop someone else's process.
+  left="$(lsof -ti:${PORT} -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' || true)"
+  [ -z "$left" ] || echo "==> :${PORT} is still held by pid ${left% }, which this run did not record; left running (stop it yourself if it is yours)" >&2
   rm -f "$PID_FILE"
   reap_session_groups
 }
@@ -158,10 +162,21 @@ reap_session_groups() {
 
 # Launch with a chosen HOME and an explicit, minimal env. Extra KEY=VAL pairs ($@) are
 # appended to the env (used to inject a token / keys for the token|keys modes).
+# Refuse to start on a taken port: whatever answers there is not the server this
+# run starts (a leftover server, another run's Playwright fixture), and every
+# command below would drive it. Named by pid only, never signalled.
+refuse_busy_port() {
+  local held
+  held="$(lsof -ti:"$PORT" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' || true)"
+  [ -z "$held" ] && return 0
+  echo "REFUSING to start: :$PORT is already held by pid ${held% }. If it is this script's earlier server, 'scripts/walnut-sandbox.sh stop' stops it by the pid it recorded; otherwise stop that pid yourself, then run again." >&2
+  exit 98
+}
 launch() {
   local home_dir="$1"; shift
   local path_val="$1"; shift
   refuse_prod
+  refuse_busy_port
   mkdir -p "$home_dir"
   echo "==> HOME=$home_dir  OPEN_WALNUT_HOME=$ROOT/.open-walnut  PORT=$PORT  bun=$BUN"
   # The server's bun leads its PATH too, so whatever it starts with `bun` is the same one.

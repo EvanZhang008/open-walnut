@@ -294,6 +294,31 @@ export function orphanRoot(pid: number, ppid = ppidOf, command = commandOf): num
 }
 
 /**
+ * The pids browser fixture servers recorded as their own, `<tmp>/walnut-*\/owner.pid`
+ * (tests/setup/stale-tmp.ts writeOwnerPid). The fixture port is shared with the
+ * onboarding sandbox and anyone's hand-started server, so a listener counts as a
+ * fixture's only when one recorded its pid.
+ */
+export function recordedFixturePids(tmp = os.tmpdir()): Set<number> {
+  const out = new Set<number>()
+  let names: string[] = []
+  try {
+    names = fs.readdirSync(tmp).filter((n) => n.startsWith('walnut-'))
+  } catch {
+    return out
+  }
+  for (const name of names) {
+    try {
+      const pid = Number(fs.readFileSync(path.join(tmp, name, 'owner.pid'), 'utf8').trim())
+      if (Number.isInteger(pid) && pid > 1) out.add(pid)
+    } catch {
+      /* not a fixture home */
+    }
+  }
+  return out
+}
+
+/**
  * Reap a fixture server orphaned by a SIGKILLed run.
  *
  * Must run BEFORE the webServer plugin, or `reuseExistingServer` silently
@@ -303,10 +328,22 @@ export function orphanRoot(pid: number, ppid = ppidOf, command = commandOf): num
  * Only reparented-to-launchd listeners are reaped (ppid == 1). That's the precise
  * signature of an orphan and it deliberately spares a fixture server a developer
  * started by hand in another terminal, which `reuseExistingServer` is there to
- * support: that one still has its shell as parent.
+ * support: that one still has its shell as parent. And only a listener a browser
+ * fixture recorded as its own (recordedFixturePids): an orphan the onboarding
+ * sandbox left on the same port is not this run's to stop.
  */
 export function reapOrphanFixtureServer(port: number): void {
-  for (const pid of listeners(port).map((pid) => orphanRoot(pid)).filter((p): p is number => p !== null)) {
+  const found = listeners(port)
+  if (found.length === 0) return
+  const recorded = recordedFixturePids()
+  const own = found.filter((pid) => {
+    if (recorded.has(pid)) return true
+    console.log(`[pw-concurrency] left pid ${pid} on :${port} alone: no browser fixture recorded it (walnut-*/owner.pid)`)
+    return false
+  })
+  const roots = own.map((pid) => orphanRoot(pid)).filter((p): p is number => p !== null)
+  if (roots.length === 0) return
+  for (const pid of roots) {
     console.log(`[pw-concurrency] reaping orphaned fixture server on :${port} (pid ${pid}) left by a killed run`)
     try {
       // SIGTERM only: test-server.ts's handler reaps its isolated daemon and

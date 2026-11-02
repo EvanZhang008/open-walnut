@@ -55,7 +55,10 @@ STUB_PORT=3461
 WORK=/tmp/t54-voice-qa
 HOME_DIR="$WORK/server-home"
 APP="$WORK/dd/Build/Products/Debug-iphonesimulator/Walnut.app"
-LOCK=/tmp/maestro-ios.lock
+# The machine-wide Maestro mutex (/tmp/maestro-ios.lock): taken with this pid, removed
+# only by its holder or as a stale lock (scripts/lib/maestro-lock.sh).
+# shellcheck source=../../../scripts/lib/maestro-lock.sh
+. "$REPO/scripts/lib/maestro-lock.sh"
 MAESTRO="${MAESTRO_CLI:-$HOME/.maestro/bin/maestro}"
 # What the stub STT returns — the exact string asserted in chat history.
 TRANSCRIPT="Remind me to water the plants tonight"
@@ -68,20 +71,9 @@ fail() { log "FAIL: $*"; FAIL=1; }
 
 # ── mutex: one Maestro run at a time on this machine ─────────────────────────
 acquire_lock() {
-  local waited=0
-  while ! mkdir "$LOCK" 2>/dev/null; do
-    if [ -f "$LOCK/pid" ]; then
-      local holder; holder="$(cat "$LOCK/pid" 2>/dev/null || true)"
-      if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
-        log "reaping stale maestro lock (dead pid $holder)"; rm -rf "$LOCK"; continue
-      fi
-    fi
-    [ "$waited" -ge 2700 ] && { log "gave up waiting for $LOCK"; exit 1; }
-    sleep 10; waited=$((waited + 10))
-  done
-  echo $$ > "$LOCK/pid"
+  walnut_maestro_lock_acquire 2700 || { log "gave up waiting for $WALNUT_MAESTRO_LOCK"; exit 1; }
 }
-release_lock() { rm -rf "$LOCK"; }
+release_lock() { walnut_maestro_lock_release; }
 acquire_lock
 
 SERVER_PID=""

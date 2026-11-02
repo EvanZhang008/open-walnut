@@ -46,6 +46,8 @@ fi
 # The simulator, before anything is built: refusing late wastes a whole build.
 # shellcheck source=lib/sim-device.sh
 . "$REPO/scripts/lib/sim-device.sh"
+# shellcheck source=lib/recorded-pid.sh
+. "$REPO/scripts/lib/recorded-pid.sh"
 walnut_sim_resolve "$DEVICE_ARG" || exit 2
 UDID="$WALNUT_SIM_DEVICE"
 
@@ -76,14 +78,13 @@ mkdir -p "$HOME_DIR" "$LOG_DIR"
 
 SERVER_PID=""
 cleanup() {
-  # Kill by LISTENER, not by the recorded pid: the server runs inside a `( … ) &`
-  # subshell, so $SERVER_PID is the subshell and killing it leaves the server holding
-  # the port. That orphan made the NEXT run fail with EADDRINUSE while its app
-  # happily uploaded into the PREVIOUS run's log dir — a confusing false negative.
-  [ -n "$SERVER_PID" ] && kill -15 "$SERVER_PID" 2>/dev/null
+  # The server is started with `exec` in its subshell, so $SERVER_PID is the server
+  # itself: stop exactly that pid. Never by port: whoever else holds it is not this
+  # run's, and is only named.
+  walnut_pid_stop_child "$SERVER_PID" || true
   local listener
-  listener="$(lsof -ti:"$PORT" -sTCP:LISTEN 2>/dev/null)"
-  [ -n "$listener" ] && kill -15 $listener 2>/dev/null
+  listener="$(lsof -ti:"$PORT" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' || true)"
+  [ -z "$listener" ] || echo "port $PORT is still held by pid ${listener% }, which this run did not start; left running" >&2
   # WORK is kept on purpose: the ingested file is the evidence. The build is not.
   rm -rf "$DD"
   walnut_sim_release
@@ -99,20 +100,17 @@ step "building server"
 # The bare name, so bun also puts its node stand-in on PATH for anything tsup starts.
 (cd "$REPO" && "$BUN" --bun tsup >/dev/null 2>&1) || fail "server build failed"
 
-# Reap a listener a previous run's SIGKILL left behind. Without this the server
-# below silently dies on EADDRINUSE and the app uploads into the OLD run's dir.
-STALE="$(lsof -ti:"$PORT" -sTCP:LISTEN 2>/dev/null)"
-if [ -n "$STALE" ]; then
-  step "reaping a stale listener on :$PORT ($STALE)"
-  kill -15 $STALE 2>/dev/null
-  sleep 2
-fi
+# A listener already on the port (a previous run's SIGKILL leaves its server there)
+# would make the server below die on EADDRINUSE while the app uploads into the OLD
+# run's dir. It is not this run's to stop: name it and refuse.
+STALE="$(lsof -ti:"$PORT" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' || true)"
+[ -z "$STALE" ] || fail "port $PORT is already held by pid ${STALE% }; stop it yourself (it may be an earlier run's server), then run again"
 
 step "starting throwaway server on :$PORT (data $HOME_DIR, logs $LOG_DIR)"
 (
   cd "$REPO"
   OPEN_WALNUT_HOME="$HOME_DIR" WALNUT_DAEMON_DIR="$LOG_DIR" \
-    "$BUN" dist/cli.js web --port "$PORT" >"$WORK/server.log" 2>&1
+    exec "$BUN" dist/cli.js web --port "$PORT" >"$WORK/server.log" 2>&1
 ) &
 SERVER_PID=$!
 
@@ -126,7 +124,7 @@ curl -sf "http://127.0.0.1:$PORT/api/v1/status" >/dev/null 2>&1 \
 # previous run answers identically while writing to a different log dir. Confirm
 # the listener is the pid we started.
 LISTENER_PID="$(lsof -ti:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1)"
-if [ -n "$LISTENER_PID" ] && ! ps -o ppid= -p "$LISTENER_PID" 2>/dev/null | grep -qw "$SERVER_PID"; then
+if [ -n "$LISTENER_PID" ] && [ "$LISTENER_PID" != "$SERVER_PID" ]; then
   grep -q "EADDRINUSE" "$WORK/server.log" 2>/dev/null \
     && fail "port $PORT is held by a foreign server (pid $LISTENER_PID) — ours died on EADDRINUSE"
 fi

@@ -230,7 +230,18 @@ export async function runUpdateE2E({ old, next, source, work: made, keep = false
     })
   } finally {
     const newPid = (() => {
-      try { return Number(execFileSync('/usr/bin/pgrep', ['-f', path.join(target, 'Contents', 'MacOS', 'Walnut')], { encoding: 'utf8' }).trim().split('\n')[0]) } catch { return 0 }
+      // The relaunched app is the process whose EXECUTABLE is this run's own copy, an exact
+      // path in its temp dir. Never `pgrep -f`: a pattern over command lines also matches
+      // any shell or agent whose command merely mentions the path.
+      const exe = path.join(target, 'Contents', 'MacOS', 'Walnut')
+      try {
+        const rows = execFileSync('/bin/ps', ['-axww', '-o', 'pid=,comm='], { encoding: 'utf8' }).split('\n')
+        for (const row of rows) {
+          const m = row.match(/^\s*(\d+)\s+(.*\S)\s*$/)
+          if (m && m[2] === exe && Number(m[1]) !== process.pid) return Number(m[1])
+        }
+      } catch { /* no process table: nothing to stop */ }
+      return 0
     })()
     if (!exited) app.kill('SIGTERM')
     if (newPid > 1) process.kill(newPid, 'SIGTERM')

@@ -20,7 +20,7 @@ import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import os from 'node:os'
-import { execSync, spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { WebSocket } from 'ws'
 import { LocalDaemon } from '../../src/providers/local-daemon.js'
 
@@ -34,8 +34,26 @@ function cleanDir(dir: string): void {
   try { fs.rmSync(dir, { recursive: true, force: true }) } catch {}
 }
 
-function killByName(substring: string): void {
-  try { execSync(`pkill -9 -f ${JSON.stringify(substring)} 2>/dev/null; true`) } catch {}
+/**
+ * Stop the mock daemons this test started, by the pids they recorded in
+ * <tmpDir>/bin/*.pids at startup (whatever their daemon.pid says, which some tests
+ * leave out on purpose). Never by name: a pattern also matches another run's mocks
+ * and any shell whose command line mentions one. A pid counts only while its process
+ * still runs that mock's own server file.
+ */
+function killRecordedMocks(tmpDir: string): void {
+  const bin = path.join(tmpDir, 'bin')
+  let names: string[] = []
+  try { names = fs.readdirSync(bin).filter((n) => n.endsWith('.pids')) } catch { return }
+  for (const name of names) {
+    const server = path.join(bin, name.replace(/\.pids$/, '-ws.js'))
+    for (const pid of fs.readFileSync(path.join(bin, name), 'utf8').split('\n').map(Number)) {
+      if (!Number.isInteger(pid) || pid <= 1) continue
+      let command = ''
+      try { command = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }) } catch { continue }
+      if (command.includes(server)) { try { process.kill(pid, 'SIGKILL') } catch {} }
+    }
+  }
 }
 
 interface MockOpts {
@@ -76,6 +94,8 @@ const NO_PID = ${opts.noPidFile ? 'true' : 'false'}
 const EVENTS_FIRST = ${opts.eventsFirst ? 'true' : 'false'}
 const event = (ws) => ws.send(JSON.stringify({ ev: 'session_state', sid: 's-1', state: 'dead', exitCode: 0, reason: 'proc-exit' }))
 fs.mkdirSync(DAEMON_DIR, { recursive: true })
+// The test's own record of this process, so its cleanup stops exactly this pid.
+fs.appendFileSync(${JSON.stringify(`${binaryPath}.pids`)}, process.pid + '\\n')
 setTimeout(() => {
 const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' })
 wss.on('listening', () => {
@@ -146,7 +166,7 @@ describe('LocalDaemon — mock daemon coverage', () => {
   })
 
   afterEach(() => {
-    killByName('mock-daemon')
+    killRecordedMocks(tmpDir)
     cleanDir(tmpDir)
   })
 

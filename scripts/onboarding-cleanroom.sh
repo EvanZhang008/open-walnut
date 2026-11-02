@@ -43,9 +43,23 @@ need_bun() {
 
 # Env that makes the room pristine. Note: we deliberately DO NOT pass the dev's
 # AWS_*/ANTHROPIC_* through (env -i style) for the clean path.
+# Refuse to start on a taken port: whatever answers there is not the server this
+# run starts (a leftover server, another run's Playwright fixture), and every
+# command below would drive it. Named by pid only, never signalled.
+refuse_busy_port() {
+  local held
+  held="$(lsof -ti:"$PORT" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' || true)"
+  [ -z "$held" ] && return 0
+  echo "REFUSING to start: :$PORT is already held by pid ${held% }. If it is this script's earlier server, 'scripts/onboarding-cleanroom.sh stop' stops it by the pid it recorded; otherwise stop that pid yourself, then run again." >&2
+  exit 98
+}
 launch_server() {
   # $@ = extra KEY=VAL creds to inject (happy path). None = clean room.
   need_bun
+  # Stop an interrupted run's server by its recorded pid BEFORE the wipe below
+  # deletes the record, then refuse a port someone else still holds.
+  stop_server
+  refuse_busy_port
   rm -rf "$ROOT"; mkdir -p "$FAKE_HOME"
   echo "==> clean HOME=$FAKE_HOME  OPEN_WALNUT_HOME=$ROOT/.open-walnut  port=$PORT  bun=$BUN"
   # Build once. It uses the real repo node_modules, which is fine: isolation is about data, not deps.
@@ -66,7 +80,7 @@ launch_server() {
 
 stop_server() {
   # A signal is not a death — confirm, then escalate. A server SIGTERMed while
-  # still booting holds no port, so the lsof fallback below cannot see it; only
+  # still booting holds no port, so a port lookup cannot see it; only
   # waiting on the recorded PID catches that case. Leaked boot-time servers keep
   # their health monitor / cron / git-autocommit loops running forever (2026-08-09:
   # 43 concurrent leaks starved the Mac until macOS killed the user's GUI apps).
@@ -84,10 +98,12 @@ stop_server() {
       fi
     fi
   fi
-  # Belt-and-suspenders: kill anything we left on :3457 (NEVER touch 3456).
-  lsof -ti:${PORT} -sTCP:LISTEN 2>/dev/null | xargs kill -15 2>/dev/null || true
-  sleep 1
-  lsof -ti:${PORT} -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null || true
+  # Anything still on the port is not the server this run recorded (that one is
+  # confirmed gone above): name it, never signal it. The port is shared with the
+  # Playwright fixture and anyone's hand-started server, so a kill by port could
+  # stop someone else's process.
+  left="$(lsof -ti:${PORT} -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' || true)"
+  [ -z "$left" ] || echo "==> :${PORT} is still held by pid ${left% }, which this run did not record; left running (stop it yourself if it is yours)" >&2
   rm -f "$PID_FILE"
 }
 

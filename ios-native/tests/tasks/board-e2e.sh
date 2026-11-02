@@ -31,7 +31,12 @@ PORT=3523
 WORK=/tmp/walnut-board
 HOME_DIR="$WORK/server-home"
 APP="${WALNUT_APP:-/tmp/walnut-tasksv4-dd/Build/Products/Debug-iphonesimulator/Walnut.app}"
-LOCK=/tmp/maestro-ios.lock
+# The machine-wide Maestro mutex (/tmp/maestro-ios.lock): taken with this pid, removed
+# only by its holder or as a stale lock (scripts/lib/maestro-lock.sh).
+# shellcheck source=../../../scripts/lib/maestro-lock.sh
+. "$REPO/scripts/lib/maestro-lock.sh"
+# shellcheck source=../../../scripts/lib/recorded-pid.sh
+. "$REPO/scripts/lib/recorded-pid.sh"
 MAESTRO="${MAESTRO_CLI:-$HOME/.maestro/bin/maestro}"
 UDID="${1:-}"
 
@@ -46,27 +51,18 @@ fail() { log "FAIL: $*"; FAIL=1; }
 
 # ── mutex: one Maestro run at a time on this machine ─────────────────────────
 acquire_lock() {
-  local waited=0
-  while ! mkdir "$LOCK" 2>/dev/null; do
-    if [ -f "$LOCK/pid" ]; then
-      local holder; holder="$(cat "$LOCK/pid" 2>/dev/null || true)"
-      if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
-        log "reaping stale maestro lock (dead pid $holder)"; rm -rf "$LOCK"; continue
-      fi
-    fi
-    [ "$waited" -ge 1800 ] && { log "gave up waiting for $LOCK"; exit 1; }
-    sleep 10; waited=$((waited + 10))
-  done
-  echo $$ > "$LOCK/pid"
+  walnut_maestro_lock_acquire 1800 || { log "gave up waiting for $WALNUT_MAESTRO_LOCK"; exit 1; }
 }
-release_lock() { rm -rf "$LOCK"; }
+release_lock() { walnut_maestro_lock_release; }
 acquire_lock
 
 SERVER_PID=""
 cleanup() {
-  [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
-  local listener; listener="$(lsof -ti:"$PORT" -sTCP:LISTEN 2>/dev/null)"
-  [ -n "$listener" ] && kill -15 $listener 2>/dev/null
+  # SERVER_PID is the server itself (env execs node). Anything else on the port is
+  # not this run's: it is named, never signalled.
+  walnut_pid_stop_child "$SERVER_PID" || true
+  local listener; listener="$(lsof -ti:"$PORT" -sTCP:LISTEN 2>/dev/null | tr '\n' ' ' || true)"
+  [ -z "$listener" ] || log "port $PORT is still held by pid ${listener% }, which this run did not start; left running"
   release_lock
   log "artifacts: $WORK"
 }

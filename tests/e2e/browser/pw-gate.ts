@@ -9,6 +9,9 @@
  * See pw-concurrency.ts for the incident this prevents.
  */
 
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import {
   acquireSync,
   describeHolder,
@@ -38,9 +41,31 @@ function isRealRun(): boolean {
 
 let engaged = false
 
+/**
+ * Mark this run's processes, so scripts/pw-cleanup.sh reaps only the browsers this
+ * repo's runs started (never another agent's Playwright MCP browser, which looks the
+ * same): the token goes into the runner's environment, which its workers and every
+ * browser they launch inherit, and the runner records its pid under that token. Left
+ * unmarked when the record cannot be written; pw-cleanup then only lists the browsers.
+ */
+function markRun(): void {
+  if (process.env.WALNUT_PW_RUN) return
+  const token = `${process.pid}-${Date.now()}`
+  try {
+    const dir = process.env.PW_RUNS_DIR ?? path.join(os.tmpdir(), 'walnut-pw-runs')
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+    fs.writeFileSync(path.join(dir, token), `${process.pid}\n`)
+    process.env.WALNUT_PW_RUN = token
+  } catch {
+    /* unmarked: listed, never reaped */
+  }
+}
+
 export function engageGate(port: number): void {
-  if (engaged || isWorkerProcess() || !isRealRun() || process.env.PW_NO_GATE === '1') return
+  if (engaged || isWorkerProcess() || !isRealRun()) return
   engaged = true
+  markRun()
+  if (process.env.PW_NO_GATE === '1') return
 
   const started = Date.now()
   const lease = acquireSync(port)
