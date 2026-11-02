@@ -52,6 +52,7 @@ const READERS: Record<string, string> = {
   'src/providers/daemon-cron-supervision.ts': 'lists flags to keep in a cron resume; the start rewrites them',
   'src/core/sessions/spawn-prefix.ts': 'reads the inline prompt back from the registry args',
   'src/providers/daemon-source.ts': 'the smoke check of the rewrite it inlines',
+  'src/providers/daemon-standalone.ts': 'reads the inline --settings env to pick the session PATH (walnutThroughGateway)',
 }
 
 describe('every content flag in an argv reaches the CLI as a file', () => {

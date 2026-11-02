@@ -5250,6 +5250,32 @@ function pluginJobBaseEnv() {
   env.HOME = process.env.HOME || HOME_DIR;
   return env;
 }
+
+// Whether a session's walnut is this daemon's gateway shim, first on its PATH: a session its
+// Walnut gave no OPEN_WALNUT_API_URL reaches that Walnut only through this daemon, and another
+// Walnut installed on this machine would otherwise answer it. Keep in sync with daemon-standalone.ts.
+function walnutThroughGateway(env) {
+  var url = env && env.OPEN_WALNUT_API_URL;
+  return !(typeof url === 'string' && url.trim());
+}
+// The env of a CLI's inline --settings (claude-code-session.ts sends it inline), if any.
+function settingsEnvOf(args) {
+  var raw;
+  (Array.isArray(args) ? args : []).forEach(function (a, i) {
+    if (a === '--settings') raw = args[i + 1];
+    else if (typeof a === 'string' && a.indexOf('--settings=') === 0) raw = a.slice(11);
+  });
+  if (typeof raw !== 'string' || raw.trimStart().charAt(0) !== '{') return undefined;
+  try {
+    var env = JSON.parse(raw).env;
+    return env && typeof env === 'object' ? env : undefined;
+  } catch (e) { return undefined; }
+}
+// A session PATH with the gateway shim dir first or, for a session that reaches its Walnut
+// over HTTP, last. Keep in sync with daemon-standalone.ts.
+function sessionPathWithShim(base, throughGateway) {
+  return throughGateway ? GATEWAY_SHIM_DIR + path.delimiter + base : base + path.delimiter + GATEWAY_SHIM_DIR;
+}
 var pluginJobs = (__CREATE_PLUGIN_JOBS__)({
   fs: fs, path: path,
   spawn: function (command, args, opts) { return spawn(command, args, opts); },
@@ -6351,7 +6377,7 @@ async function cmdAcpStart(ws, id, cmd) {
   const acpTaskDir = ensureTaskDirFor(cmd.taskId, cmd.home);
   params.env = Object.assign({}, secretsSessionEnv(), params.env, {
     WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
-    PATH: (process.env.PATH || '') + path.delimiter + GATEWAY_SHIM_DIR,
+    PATH: sessionPathWithShim(process.env.PATH || '', walnutThroughGateway(params.env)),
   }, { WALNUT_TASK_DIR: acpTaskDir || '', WALNUT_SECRETS_DIR: SECRETS_ROOT || '' });
   return sessionStartGate.run(params.sid, async function () {
     if (!params.providerSessionId && fs.existsSync(cancelledStartPath(params.sid))) throw new Error('Initial start was cancelled; retry task_start on the same task');
@@ -6790,7 +6816,7 @@ async function startSessionProcess(cmd, isCurrent, canStart) {
       // task's directory. Keep in sync with daemon-standalone.ts.
       WALNUT_TASK_DIR: taskDir || undefined,
       WALNUT_SECRETS_DIR: SECRETS_ROOT || undefined,
-      PATH: (launch.nodeDir ? launch.nodeDir + ':' : '') + (process.env.PATH || '') + ':' + GATEWAY_SHIM_DIR,
+      PATH: sessionPathWithShim((launch.nodeDir ? launch.nodeDir + ':' : '') + (process.env.PATH || ''), walnutThroughGateway(settingsEnvOf(launch.args))),
       // Never let OUR watchdog pid leak into the CLI's env — a CLI session that
       // runs a dev:prod deploy would hand this stale pid to the PRODUCTION
       // daemon, whose watchdog would trip and (with the isolated-dir reap) kill

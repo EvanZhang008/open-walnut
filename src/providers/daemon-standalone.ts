@@ -1214,7 +1214,7 @@ function shellQuote(s: string): string {
  * This ensures `node` is available for Claude CLI (#!/usr/bin/env node),
  * even on hosts where nvm binaries need newer GLIBC than the system provides.
  */
-function buildSpawnPreamble(nodeDir?: string): string {
+function buildSpawnPreamble(nodeDir?: string, gatewayFirst = false): string {
   return [
     // Source RC files FIRST, then add our paths — RC files may hard-reset PATH
     // (e.g. zsh `export PATH=; path=(...)`) which would clobber earlier prepends.
@@ -1245,7 +1245,41 @@ function buildSpawnPreamble(nodeDir?: string): string {
     // default may be compiled against a newer GLIBC than the host provides, so
     // it tries each installed version until one actually executes.
     NODE_DISCOVERY_SHELL,
+    // Last, so neither the node dir nor the node discovery above can put another `walnut` ahead.
+    ...(gatewayFirst ? ['export PATH=' + shellQuote(GATEWAY_SHIM_DIR) + ':"$PATH"'] : []),
   ].join('; ')
+}
+
+/**
+ * Whether a session's `walnut` is this daemon's gateway shim, first on its PATH. A session its
+ * Walnut gave no OPEN_WALNUT_API_URL (the env of its `--settings`, or of an ACP worker) reaches
+ * that Walnut only through this daemon: every session on a host other than its server's
+ * (self-api-root.ts). A machine that joined with a Walnut of its own has that Walnut's `walnut`
+ * on PATH ahead of the appended shim, and it would send the session's calls to the other
+ * Walnut's server. Keep in sync with daemon-source.ts.
+ */
+function walnutThroughGateway(env: Record<string, unknown> | undefined): boolean {
+  const url = env?.OPEN_WALNUT_API_URL
+  return !(typeof url === 'string' && url.trim())
+}
+
+/** A session PATH with the shim dir first or, for a session that reaches its Walnut over HTTP, last. */
+function sessionPathWithShim(base: string, throughGateway: boolean): string {
+  return throughGateway ? GATEWAY_SHIM_DIR + path.delimiter + base : base + path.delimiter + GATEWAY_SHIM_DIR
+}
+
+/** The env of a CLI's inline `--settings` (claude-code-session.ts sends it inline), if any. */
+function settingsEnvOf(args: string[]): Record<string, unknown> | undefined {
+  let raw: string | undefined
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--settings') raw = args[i + 1]
+    else if (args[i].startsWith('--settings=')) raw = args[i].slice(11)
+  }
+  if (!raw || !raw.trimStart().startsWith('{')) return undefined
+  try {
+    const env = (JSON.parse(raw) as { env?: unknown }).env
+    return env && typeof env === 'object' ? env as Record<string, unknown> : undefined
+  } catch { return undefined }
 }
 
 // ── Permission Policy FIFO Writer ──
@@ -5323,9 +5357,10 @@ function writeWalnutShim() {
       ? [process.execPath, devScript]
       : [ensureShimCoreCopy() ?? process.execPath]
     // One name: `walnut`, and the shim passes the canonical `walnut` dispatch
-    // keyword. GATEWAY_SHIM_DIR is APPENDED to session PATH, so on the hub the
-    // real npm walnut still wins; on remote hosts this shim IS the walnut
-    // command. The retired `wn` file is removed, not rewritten.
+    // keyword. GATEWAY_SHIM_DIR is APPENDED to the PATH of a session that reaches
+    // its Walnut over HTTP, so on the hub the real npm walnut still wins, and put
+    // FIRST for every other session (walnutThroughGateway), where this shim IS the
+    // walnut command. The retired `wn` file is removed, not rewritten.
     const shim = gatewayShimScript(argv)
     walnutCliArgv = argv
     const p = path.join(GATEWAY_SHIM_DIR, 'walnut')
@@ -5402,11 +5437,12 @@ async function cmdAcpStart(ws: ServerWebSocket<WsData>, id: number, cmd: Record<
   // appended in-shell like the native spawn) because ACP workers don't run
   // through the RC-sourcing shell wrapper.
   const taskDir = ensureTaskDir(TASK_DIR_ROOT, (cmd as { taskId?: unknown }).taskId, (cmd as { home?: unknown }).home)
+  const throughGateway = walnutThroughGateway(params.env)
   params.env = {
     ...secretsSessionEnv(),
     ...params.env,
     WALNUT_AGENT_SOCKET: GATEWAY_SOCK_PATH,
-    PATH: (process.env.PATH || '') + path.delimiter + GATEWAY_SHIM_DIR,
+    PATH: sessionPathWithShim(process.env.PATH || '', throughGateway),
     // The task's durable working directory, as for the native spawn (task-dir-core.ts);
     // '' unsets one this daemon inherited (mergeAcpSpawnEnv drops empty values).
     WALNUT_TASK_DIR: taskDir ?? '',
@@ -5808,7 +5844,7 @@ async function startSessionProcess(cmd: Record<string, unknown>, isCurrent?: () 
   // This matches the proven buildRemotePreamble() approach from session-io.ts —
   // sourcing RC files ensures the full dev environment (including node) is available,
   // even on hosts where nvm binaries need newer GLIBC than the system provides.
-  const preamble = buildSpawnPreamble(launch.nodeDir)
+  const preamble = buildSpawnPreamble(launch.nodeDir, walnutThroughGateway(settingsEnvOf(launch.args)))
   // Content arguments go to files: the shell's and the CLI's argv carry paths (cli-argv-files-core.ts).
   const escapedArgs = cliArgvFiles.toFiles(launch.args).map((a: string) => shellQuote(a)).join(' ')
   const shellCmd = `${preamble}; exec ${escapedArgs}`

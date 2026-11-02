@@ -449,6 +449,7 @@ describe.each([
     const budgetControl = { close: vi.fn(() => { order.push('budget-control-close') }) }
     const cleanup = compile<() => void>(`${extract(source, 'stopSessionWatcher')}\n${extract(source, 'cleanup')}\nreturn cleanup;`, {
       sessions, cronRuntime: null, usageBudget, budgetControl, stopBridge: vi.fn(), vscodeServerCore: null, triggerTickTimer: null,
+      runtimeKeepTimer: null,
       shouldReapOnExit: () => false, reapAllSessionGroupsSync, persistRegistry,
       clearInterval: (timer: unknown) => { cleared.add(timer); order.push(String(timer)) },
       fs: { readFileSync: () => '4242', unlinkSync: vi.fn() }, process: { pid: 4242, kill },
@@ -621,7 +622,9 @@ describe('standalone ACP command lifetime', () => {
 
   it.each(['cmdAcpStart', 'cmdAcpOp', 'cmdAcpStop'])('%s returns the operation promise to the dispatcher', async (name) => {
     const operation = deferred<Record<string, unknown>>()
-    const handle = compile<(ws: unknown, id: number, cmd: unknown, op?: string) => Promise<unknown>>(`${extract(standalone, name)}\nreturn ${name};`, {
+    // acpStart puts the walnut shim on the worker's PATH by the one rule (walnutThroughGateway).
+    const rule = ['walnutThroughGateway', 'sessionPathWithShim'].map((f) => extract(standalone, f)).join('\n')
+    const handle = compile<(ws: unknown, id: number, cmd: unknown, op?: string) => Promise<unknown>>(`${rule}\n${extract(standalone, name)}\nreturn ${name};`, {
       acp: { acpStart: () => operation.promise, acpOp: () => operation.promise, acpStop: () => operation.promise },
       sendOk: vi.fn(), sendError: vi.fn(), safeSend: vi.fn(), GATEWAY_SOCK_PATH: '/fixture/gateway',
       GATEWAY_SHIM_DIR: '/fixture/bin', process: { env: {} }, path,
