@@ -70,3 +70,31 @@ describe('walnut-plugin validate: view choices kept only in useState', () => {
     expect((await validatePlugin(root)).warnings.filter((w) => w.includes('walnut.ui.useView'))).toEqual([])
   })
 })
+
+describe('walnut-plugin validate: a typed draft goes to walnut.ui.useDraft', () => {
+  const EDITOR = [
+    "import { useState } from 'react'",
+    'export function Editor({ id }) {',
+    "  const [draft, setDraft] = useState('')",
+    "  const [codeDraft, setCodeDraft] = walnut.ui.useView<string>('codeDraft', '', { id })",
+    "  const [code, setCode, clearCode] = walnut.ui.useDraft('code', { id })",
+    '  const [draftOpen, setDraftOpen] = useState(false)',
+    '  const [savingDraft, setSavingDraft] = useState(false)',
+    '  const [drafts, setDrafts] = useState([])',
+    "  localStorage.setItem(`acme-draft:${id}`, draft)",
+    "  const kept = localStorage.getItem(`acme-draft:${id}`)",
+    "  // localStorage.setItem('old-draft', draft) was the old way",
+    "  const [file, setFile] = walnut.ui.useView('file', 'a.py')",
+    '  return null',
+    '}',
+  ].join('\n')
+
+  it('names a draft in useState, in useView and in its own localStorage key; leaves useDraft, flags, lists and comments alone', async () => {
+    const root = await plugin({ 'src/web.tsx': EDITOR })
+    const drafts = (await validatePlugin(root)).warnings.filter((w) => w.includes('walnut.ui.useDraft'))
+    expect(drafts.map((w) => w.split(' ')[0])).toEqual(['src/web.tsx:3', 'src/web.tsx:4', 'src/web.tsx:9'])
+    expect(drafts[0]).toMatch(/keeps the draft "draft" only in useState/)
+    expect(drafts[1]).toMatch(/keeps the draft "codeDraft" in useView, which writes it into the synced settings/)
+    expect(drafts[2]).toMatch(/keeps a draft in its own localStorage key "acme-draft:/)
+  })
+})

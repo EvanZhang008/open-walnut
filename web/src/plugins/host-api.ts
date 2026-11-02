@@ -11,6 +11,7 @@ import { registerLinkHandler, type LinkHandlerContribution } from './link-handle
 import { createWebAi } from './plugin-ai'
 import { createPluginViews } from './views'
 import { createPluginUseView } from './use-view'
+import { createPluginUseDraft } from './use-draft'
 import type {
   PluginEvent,
   PluginFetchInit,
@@ -348,6 +349,7 @@ export function createWebPluginApi(
       },
       views: createPluginViews(pluginId),
       useView: createPluginUseView(pluginId),
+      useDraft: createPluginUseDraft(pluginId),
     },
     get unsafe() {
       if (!unsafeWarned) {

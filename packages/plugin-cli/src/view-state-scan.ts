@@ -58,3 +58,61 @@ export function useStates(src: string): StateDecl[] {
 export function viewStatesInMemory(src: string): StateDecl[] {
   return useStates(src).filter((d) => VIEW_NAME.test(d.name) && LITERAL.test(d.start) && !PASSING_KIND.test(d.name))
 }
+
+/**
+ * Text the user is typing (a draft) has its own home: `walnut.ui.useDraft(name, { id })`, Walnut's
+ * draft store, one key per draft, never in the synced settings. Kept in `useState` it is lost on a
+ * reload; kept in `useView` it rides ui-prefs (a write into the synced config as the user types)
+ * under one key per name, so the last writer of any item wins on every device and the oldest of
+ * many items are dropped; kept in the plugin's own localStorage keys it is outside what Walnut
+ * keeps across cleared browser data. 2026-11-02, found by a practice plugin moving onto useView.
+ */
+export const DRAFT_NAME = /draft/i
+
+export type DraftHome = 'useState' | 'useView' | 'localStorage'
+export interface DraftDecl { name: string; line: number; home: DraftHome }
+
+/** A string start: what typed text begins as. */
+const STRING_START = /^(?:\(\)\s*=>\s*)?(?:'[^']*'|"[^"]*"|`[^`$]*`)$/
+const USE_VIEW_CALL = /\buseView\b/g
+const STORAGE_SET = /\blocalStorage\s*\.\s*setItem\s*\(\s*([`'"])([^`'"]*)/g
+
+/** The argument text of the first call after `from` (its `(` within a generic's reach), or null. */
+function argsAfter(src: string, from: number): string | null {
+  let open = from
+  for (let depth = 0; open < src.length && open - from < 200; open++) {
+    const c = src[open]
+    if (c === '<') depth++
+    else if (c === '>' && src[open - 1] !== '=') depth--
+    else if (c === '(' && depth === 0) break
+    else if (depth === 0 && !/[\s]/.test(c)) return null
+  }
+  if (src[open] !== '(') return null
+  let j = open
+  for (let depth = 0; j < src.length; j++) {
+    if (src[j] === '(') depth++
+    else if (src[j] === ')' && --depth === 0) break
+  }
+  return src.slice(open + 1, j)
+}
+
+const lineAt = (src: string, i: number) => src.slice(0, i).split('\n').length
+/** Whether `i` sits in a `//` comment on its line. */
+const inLineComment = (src: string, i: number) => /\/\//.test(src.slice(src.lastIndexOf('\n', i) + 1, i))
+
+/** Every draft a source keeps anywhere but `walnut.ui.useDraft`. */
+export function draftsOffDevice(src: string): DraftDecl[] {
+  const out: DraftDecl[] = []
+  for (const d of useStates(src)) {
+    if (DRAFT_NAME.test(d.name) && STRING_START.test(d.start)) out.push({ name: d.name, line: d.line, home: 'useState' })
+  }
+  for (const m of src.matchAll(USE_VIEW_CALL)) {
+    const args = argsAfter(src, m.index! + m[0].length)
+    const name = args === null ? undefined : /^\s*([`'"])([^`'"]*)\1/.exec(args)?.[2]
+    if (name && DRAFT_NAME.test(name) && !inLineComment(src, m.index!)) out.push({ name, line: lineAt(src, m.index!), home: 'useView' })
+  }
+  for (const m of src.matchAll(STORAGE_SET)) {
+    if (DRAFT_NAME.test(m[2]) && !inLineComment(src, m.index!)) out.push({ name: m[2], line: lineAt(src, m.index!), home: 'localStorage' })
+  }
+  return out.sort((a, b) => a.line - b.line)
+}

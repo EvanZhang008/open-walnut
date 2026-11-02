@@ -351,6 +351,7 @@ export interface WalnutWebApiHost {
     injectCss(css: string): Disposable
     readonly views: PluginViews
     readonly useView: PluginUseView
+    readonly useDraft: PluginUseDraft
   }
   /**
    * Share what this App shows with the AI working on a task (see the server
@@ -377,3 +378,6 @@ export interface WalnutWebApiHost {
 
 /** `useState` for a view choice of the plugin's own, kept by Walnut (plugins/use-view.ts). */
 export type PluginUseView = <T>(name: string, initial: T | (() => T), options?: { id?: string; accept?: (value: unknown) => boolean }) => [T, (next: T | ((prev: T) => T)) => void]
+
+/** The words a user is typing in a plugin's box, kept in Walnut's draft store (plugins/use-draft.ts). */
+export type PluginUseDraft = (name: string, options?: { id?: string }) => [string, (next: string | ((prev: string) => string)) => void, () => void]

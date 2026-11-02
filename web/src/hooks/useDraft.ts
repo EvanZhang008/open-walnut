@@ -44,7 +44,14 @@ function draftElements(key: string): Element[] {
   try { return Array.from(document.querySelectorAll(`[data-draft-key="${CSS.escape(key)}"]`)); } catch { return []; }
 }
 
-export function useDraft(key: string | null | undefined, opts: { baseline?: string } = {}): DraftHandle {
+/**
+ * `followElsewhere: false` takes a draft typed in another window or device only when the box
+ * mounts (or moves to another key), never while it is on screen: for a box the hook cannot see
+ * the focus of (a plugin's editor carries no `data-draft-key`), so a change elsewhere never
+ * replaces the words under the user's hands (2026-11-02, a practice plugin open in two tabs).
+ */
+export function useDraft(key: string | null | undefined, opts: { baseline?: string; followElsewhere?: boolean } = {}): DraftHandle {
+  const followElsewhere = opts.followElsewhere ?? true;
   const k = key || null;
   const baseline = opts.baseline ?? '';
   const baselineRef = useRef(baseline);
@@ -152,6 +159,7 @@ export function useDraft(key: string | null | undefined, opts: { baseline?: stri
         setTextState(stored);
       }
     }
+    if (!followElsewhere) return undefined;
     return subscribeDraft(k, (remote) => {
       if (pending.current) return;
       const active = document.activeElement;
@@ -160,6 +168,7 @@ export function useDraft(key: string | null | undefined, opts: { baseline?: stri
       textRef.current = next;
       setTextState(next);
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fixed per call site
   }, [k]);
 
   return { key: k, text, setText, clear, flush };

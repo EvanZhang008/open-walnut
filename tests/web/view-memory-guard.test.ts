@@ -31,7 +31,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { syncable } from '../../web/src/utils/ui-prefs-sync';
 import { VIEW_IDS_MAX, VIEW_PREFIX, storedText, storedView, viewKey } from '../../web/src/utils/view-memory';
-import { LITERAL, PASSING_KIND, VIEW_NAME, useStates, viewStatesInMemory } from '../../packages/plugin-cli/src/view-state-scan';
+import { LITERAL, PASSING_KIND, VIEW_NAME, draftsOffDevice, useStates, viewStatesInMemory } from '../../packages/plugin-cli/src/view-state-scan';
 import { isPanelView } from '../../web/src/components/sessions/panel-view';
 
 const ROOT = join(__dirname, '../..');
@@ -282,6 +282,25 @@ describe('every page keeps its view choices (utils/view-memory.ts)', () => {
     expect(Object.keys(PLUGIN_PASSING).filter((k) => !held.includes(k)), 'remove the line when it goes').toEqual([]);
     // The example the plugin guide points at: the day or week picked is kept.
     expect(plugins.find((f) => f.rel.endsWith('walnut-time/src/web/app.tsx'))!.src).toMatch(/const \[scopeMode, setScopeMode\] = useView<ScopeMode>\('scopeMode', 'day'\)/);
+  });
+
+  it('a plugin this repository ships keeps a typed draft with walnut.ui.useDraft', () => {
+    // A draft-named field that is no typed draft, by file#name, and why.
+    const notDrafts: Record<string, string> = {
+      'examples/plugins/walnut-demo/src/web/views-section.tsx#sessionDraft': 'a session id typed into a one-line field before Open: a form, not text being written',
+    };
+    const off = pluginSources().flatMap((f) => draftsOffDevice(f.src).map((d) => `${f.rel}#${d.name}`));
+    expect(off.filter((k) => !(k in notDrafts)), 'keep a draft with walnut.ui.useDraft(name, { id }), or list it in notDrafts with why').toEqual([]);
+    expect(Object.keys(notDrafts).filter((k) => !off.includes(k)), 'remove the line when it goes').toEqual([]);
+  });
+
+  it('each tab shows its own kept view: the snapshot is the tab\'s text, never storage read at render (view-state-tabs)', () => {
+    const memory = src('utils/view-memory.ts');
+    expect(memory).toMatch(/useSyncExternalStore\(useCallback\(\(fn\) => showKey\(key, id, fn\), \[key, id\]\), \(\) => snapshotOf\(key, id\)/);
+    expect(memory.match(/useSyncExternalStore\(/g)?.length).toBe(1);
+    // A plugin's draft lives in the draft store, which another window never changes under a box on screen.
+    expect(src('plugins/use-draft.ts')).toMatch(/useDraft\(key, \{ followElsewhere: false \}\)/);
+    expect(src('plugins/use-draft.ts')).toMatch(/draftKey\('plugin', pluginId, name/);
   });
 
   it('a session panel keeps what it shows per place, with no host doing anything (panel-view.ts)', () => {

@@ -350,6 +350,18 @@ export interface WebUiService {
    * it, so feature-detect (`walnut.ui.useView ?? useState`-style fallbacks are fine).
    */
   useView?<T>(name: string, initial: T | (() => T), options?: { id?: string; accept?: (value: unknown) => boolean }): [T, (next: T | ((prev: T) => T)) => void]
+  /**
+   * The words the user is typing in a box of yours (code, a note, an answer), kept by Walnut the
+   * way every Walnut input box keeps its draft: written as they are typed, there again after your
+   * plugin reloads, the page reloads, the user visits another page or the app restarts, one draft
+   * per name and `options.id` (`useDraft('code', { id: problemId })`), never evicted, and never in
+   * the synced settings. Call it like `useState` for a string: `const [code, setCode, clearCode]
+   * = walnut.ui.useDraft('code', { id })`; call `clearCode()` once the words are sent or saved. A
+   * change made in another window shows the next time the box mounts, never while it is on screen.
+   * Each tab of a browser keeps its own `useView` values too: another tab's pick shows at the next
+   * mount, never under the user's hands. Optional: feature-detect it on an older host.
+   */
+  useDraft?(name: string, options?: { id?: string }): [string, (next: string | ((prev: string) => string)) => void, () => void]
   readonly views: {
     CalendarView: PluginComponent
     FileView: PluginComponent<FileViewProps>

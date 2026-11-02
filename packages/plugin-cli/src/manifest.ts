@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { viewStatesInMemory } from './view-state-scan.js'
+import { draftsOffDevice, viewStatesInMemory, type DraftHome } from './view-state-scan.js'
 
 export interface PluginBuildConfig {
   server?: string
@@ -190,6 +190,12 @@ export async function validatePlugin(root = process.cwd()): Promise<ValidationRe
 
 const VIEW_WARNINGS_MAX = 20
 
+const DRAFT_WHY: Record<DraftHome, (name: string) => string> = {
+  useState: (name) => `keeps the draft "${name}" only in useState, so it is lost on a reload`,
+  useView: (name) => `keeps the draft "${name}" in useView, which writes it into the synced settings as the user types, one value per name for every device`,
+  localStorage: (name) => `keeps a draft in its own localStorage key "${name}", outside what Walnut keeps`,
+}
+
 /**
  * A view choice the web code keeps only in `useState` (view-state-scan.ts) comes back reset
  * whenever the App mounts again: the plugin reloads, the page reloads, the user visits another
@@ -208,8 +214,12 @@ async function viewStateWarnings(root: string, webEntry: string): Promise<string
         if (!['node_modules', 'dist', 'tests', 'test', '.git'].includes(entry.name)) await visit(full)
       } else if (/\.(?:tsx?|jsx?|mjs)$/.test(entry.name) && !/\.(?:test|spec|d)\.[jt]sx?$/.test(entry.name)) {
         const src = await fs.readFile(full, 'utf8').catch(() => '')
+        const rel = path.relative(root, full).split(path.sep).join('/')
         for (const d of viewStatesInMemory(src)) {
-          out.push(`${path.relative(root, full).split(path.sep).join('/')}:${d.line} keeps "${d.name}" only in useState, so it comes back reset after a reload or a visit to another page; keep it with walnut.ui.useView('${d.name}', ...) (a menu, dialog or busy flag can stay in useState)`)
+          out.push(`${rel}:${d.line} keeps "${d.name}" only in useState, so it comes back reset after a reload or a visit to another page; keep it with walnut.ui.useView('${d.name}', ...) (a menu, dialog or busy flag can stay in useState)`)
+        }
+        for (const d of draftsOffDevice(src)) {
+          out.push(`${rel}:${d.line} ${DRAFT_WHY[d.home](d.name)}; keep a draft with walnut.ui.useDraft(name, { id }), Walnut's draft store`)
         }
       }
     }
