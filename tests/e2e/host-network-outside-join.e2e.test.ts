@@ -1,7 +1,7 @@
 /**
  * A throwaway Walnut with no companion that waits for a machine OUTSIDE this test to join
  * it: the other half of a fresh-machine check (.github/workflows/fresh-mac-join.yml, a
- * macOS runner's own account). That machine runs
+ * macOS runner's own account; windows-join.yml, a Windows PC through WSL). That machine runs
  * the real command a user pastes, with the real install and the real login service; this
  * test only plays the Mac.
  *
@@ -11,7 +11,7 @@
  *
  * Skipped unless WALNUT_OUTSIDE_JOIN names a directory. It writes there:
  *   ticket.txt    the ticket, as soon as the invite exists (the outside side waits for it)
- *   command.txt   the command Settings shows for it
+ *   command.txt   the command Settings shows for it (windows-command.txt: its PowerShell line)
  *   result.json   { machine, platform, path, files } once the machine joined and connected
  * and waits WALNUT_OUTSIDE_JOIN_WAIT_S (default 900) for the join.
  *
@@ -58,7 +58,7 @@ async function waitFor<T>(fn: () => Promise<T | null | undefined | false>, ms: n
 suite('a machine outside this test joins a Walnut with no companion', () => {
   beforeAll(async () => {
     fs.mkdirSync(OUT, { recursive: true })
-    for (const f of ['ticket.txt', 'command.txt', 'result.json']) fs.rmSync(path.join(OUT, f), { force: true })
+    for (const f of ['ticket.txt', 'command.txt', 'windows-command.txt', 'result.json']) fs.rmSync(path.join(OUT, f), { force: true })
     base = await fsp.mkdtemp(path.join(os.tmpdir(), 'walnut-host-net-outside-'))
     if (process.env.WALNUT_NET_TEST_BIN) {
       process.env.WALNUT_NET_BIN = process.env.WALNUT_NET_TEST_BIN
@@ -88,9 +88,10 @@ suite('a machine outside this test joins a Walnut with no companion', () => {
     // The first invite turns the network on; walnut-net may still be starting (or downloading).
     const invite = await waitFor(async () => {
       const made = await api('/api/hosts/net/invites', { method: 'POST', body: '{}' })
-      return made.status === 201 ? await made.json() as { link: string; command: string } : null
+      return made.status === 201 ? await made.json() as { link: string; command: string; windowsCommand?: string } : null
     }, 300_000, 'the invite')
     fs.writeFileSync(path.join(OUT, 'command.txt'), `${invite.command}\n`)
+    if (invite.windowsCommand) fs.writeFileSync(path.join(OUT, 'windows-command.txt'), `${invite.windowsCommand}\n`)
     fs.writeFileSync(path.join(OUT, 'ticket.txt'), `${invite.link}\n`)
 
     const machine = await waitFor(async () => {

@@ -8,7 +8,7 @@
 import crypto from 'node:crypto'
 import { NetError } from './net-error.js'
 import { newInviteCode } from './net-store.js'
-import { encodeTicket, ticketCommand } from './join-ticket.js'
+import { encodeTicket, ticketCommand, ticketWindowsCommand } from './join-ticket.js'
 
 const TTL_MS = 10 * 60_000
 const HOME_RELAY_WAIT_MS = 8_000
@@ -57,7 +57,7 @@ function pushInvites(local: Daemon): Promise<void> {
   return run
 }
 
-export async function makeLocalInvite(local: Daemon, input: { macId: string; relayMode: 'public' | 'none'; name?: string }): Promise<{ id: string; link: string; command: string; expiresAt: number }> {
+export async function makeLocalInvite(local: Daemon, input: { macId: string; relayMode: 'public' | 'none'; name?: string }): Promise<{ id: string; link: string; command: string; windowsCommand?: string; expiresAt: number }> {
   if (!local.hasCapability('net-join-v1')) throw new NetError(409, 'daemon_too_old', "This Mac's Walnut daemon cannot take machines in without a companion yet; restart Walnut to update it.")
   // walnut-net holds at most MAX_OPEN; one more would show a link that can never work.
   if ([...pending.values()].filter((p) => Date.now() <= p.expiresAt + KEEP_AFTER_MS).length >= MAX_OPEN) {
@@ -84,7 +84,9 @@ export async function makeLocalInvite(local: Daemon, input: { macId: string; rel
     mac: input.macId, code, relayMode: input.relayMode, addrs: node.addrs ?? [],
     relay: input.relayMode === 'public' ? node.homeRelay ?? null : null,
   })
-  return { id, link: ticket, command: ticketCommand(ticket), expiresAt }
+  // The Windows line only once the newest release carries the script it fetches.
+  const windows = await (await import('./join-ps1-published.js')).joinPs1Published()
+  return { id, link: ticket, command: ticketCommand(ticket), ...(windows ? { windowsCommand: ticketWindowsCommand(ticket) } : {}), expiresAt }
 }
 
 /**

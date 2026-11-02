@@ -53,6 +53,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-host-net'))
 
 import { WALNUT_HOME, TASKS_FILE } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
+import { linkWindowsCommand } from '../../src/core/net/join-ticket.js'
 
 const REPO = path.resolve(__dirname, '../..')
 const NET_BIN = (() => {
@@ -222,6 +223,10 @@ suite('host network: one link joins a machine, the Mac reaches it, Remove takes 
     wrong.stderr!.on('data', (b: Buffer) => { said += b.toString() })
     expect(await new Promise<number>((r) => wrong.once('exit', (c) => r(c ?? -1)))).toBe(1)
     expect(said).toContain('This invite is not valid any more')
+    // The Windows twin says the same in PowerShell, and never `exit`s the user's window.
+    const win = await fetch(`http://${companion}/join/AAAA-BBBB-CCCC/windows`)
+    expect(win.status).toBe(200)
+    expect(await win.text()).toBe("Write-Host 'This invite is not valid any more (used, or older than 10 minutes). Make a new one on your Mac.' -ForegroundColor Red\n")
     expect((await relayAllows('a'.repeat(64), '')).status).toBe(403)
     expect((await relayAllows('a'.repeat(64), 'wrong')).status).toBe(403)
     // A phone (not the owner Mac) may not manage the machines.
@@ -235,6 +240,12 @@ suite('host network: one link joins a machine, the Mac reaches it, Remove takes 
     expect(made.status, JSON.stringify(invite)).toBe(201)
     expect(invite.state).toBe('waiting')
     expect(invite.command).toBe(`curl -fsSL ${invite.link} | sh`)
+    expect((invite as { windowsCommand?: string }).windowsCommand).toBe(linkWindowsCommand(invite.link))
+    const ps1 = await fetch(`${invite.link}/windows`)
+    expect(ps1.status).toBe(200)
+    const winScript = await ps1.text()
+    expect(winScript).toContain(`$inner = 'f=$(mktemp) && curl -fsSL ''${invite.link}'' -o "$f" && sh "$f"; c=$?; rm -f "$f"; exit $c'`)
+    expect(winScript).toContain('function Join-Walnut')
     expect(invite.link).toMatch(new RegExp(`^http://${companion.replace(/\./g, '\\.')}/join/[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$`))
 
     // The Mac told the companion its own id, and the relay lets it in.

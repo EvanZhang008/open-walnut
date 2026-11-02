@@ -1,0 +1,235 @@
+name: Windows join
+
+# A Windows PC joins a Walnut with the PowerShell line Settings > Remote Hosts > Add a
+# machine shows (docs/reference/host-network.md, "Windows"). Walnut runs on Windows inside
+# WSL, in a Linux of its own (net-join-ps1.ts): this job runs scripts/join.ps1 in Windows
+# PowerShell 5.1, the one every Windows ships, on a GitHub Windows runner, and it makes the
+# OpenWalnut Linux from Ubuntu's WSL image, sets it up with systemd, starts it with Windows
+# and hands over to the Linux join, which installs this commit's Walnut file and its login
+# service. The Mac it joins is a throwaway Walnut in another WSL Linux of this runner
+# (tests/e2e/host-network-outside-join.e2e.test.ts), so no ticket leaves the runner. The
+# line runs in a PowerShell window on the runner's desktop, as a person pastes it, and the
+# screen is recorded; the one-use ticket is taken out of the artifact before the upload.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/join.sh'
+      - 'scripts/join.ps1'
+      - 'scripts/install.sh'
+      - 'src/core/net/**'
+      - 'src/commands/net.ts'
+      - 'src/providers/net-*.ts'
+      - 'src/providers/daemon-service*.ts'
+      - 'src/lib/daemon-dir.ts'
+      - 'tests/e2e/host-network-outside-join.e2e.test.ts'
+      - '.github/workflows/windows-join.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-join-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  join:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      # runner.temp is not readable in a job's env.
+      - shell: pwsh
+        run: '"OUT=$env:RUNNER_TEMP\windows-join" >> $env:GITHUB_ENV'
+
+      # WSL on the runner, and the Linux the throwaway Walnut runs in (not the one the join makes).
+      - uses: Vampire/setup-wsl@v7
+        with:
+          distribution: Ubuntu-24.04
+          additional-packages: ca-certificates unzip
+
+      - name: The PC before the join
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:OUT | Out-Null
+          $env:WSL_UTF8 = '1'
+          & { [Environment]::OSVersion.VersionString; $PSVersionTable.PSVersion.ToString(); wsl.exe --version; wsl.exe -l -v } *>&1 | Tee-Object -FilePath "$env:OUT\before.txt"
+
+      - name: The throwaway Walnut's side, in Ubuntu-24.04 (bun, this commit, its Linux file as a release)
+        shell: wsl-bash {0}
+        env:
+          ONNXRUNTIME_NODE_INSTALL: skip
+          # setup-wsl's shell passes no variable into WSL by itself.
+          WSLENV: GITHUB_RUN_NUMBER
+        run: |
+          set -eu
+          ws=$(wslpath -u '${{ github.workspace }}')
+          tmp=$(wslpath -u '${{ runner.temp }}')
+          curl -fsSL --retry 3 --retry-all-errors https://bun.sh/install | bash -s "bun-v1.4.4"
+          export PATH="$HOME/.bun/bin:$PATH"
+          mkdir -p "$HOME/w"
+          tar -C "$ws" --exclude=./node_modules --exclude=./web/node_modules --exclude=./.git -cf - . | tar -C "$HOME/w" -xf -
+          cd "$HOME/w"
+          ONNXRUNTIME_NODE_INSTALL=skip bun install --frozen-lockfile
+          V=$(bun -e "const p=require('./package.json').version.split('-')[0].split('.').map(Number);p[2]++;console.log(p.join('.')+'-nightly.'+new Date().toISOString().slice(0,10).replace(/-/g,'')+'.9'+process.env.GITHUB_RUN_NUMBER)")
+          bun scripts/release-files.mjs stamp "$V"
+          WALNUT_VERSION_STAMPED=1 bun scripts/build-binary.mjs --target linux-x64
+          REL="$tmp/release/v$V"
+          mkdir -p "$REL"
+          gzip -9c dist-bin/walnut-linux-x64 > "$REL/walnut-$V-linux-x64.gz"
+          {
+            printf '%s  %s\n' "$(sha256sum "$REL/walnut-$V-linux-x64.gz" | cut -d' ' -f1)" "walnut-$V-linux-x64.gz"
+            printf '%s  %s\n' "$(sha256sum dist-bin/walnut-linux-x64 | cut -d' ' -f1)" "walnut-$V-linux-x64"
+          } > "$REL/SHA256SUMS"
+          printf '%s' "$V" > "$tmp/release/version"
+          cat "$REL/SHA256SUMS"
+          # The throwaway Walnut, started by the next step (WSL stops a Linux nobody holds open).
+          printf '%s\n' '#!/bin/bash' "cd $HOME/w" "export PATH=$HOME/.bun/bin:\$PATH WALNUT_OUTSIDE_JOIN=$tmp/windows-join WALNUT_OUTSIDE_JOIN_WAIT_S=1200 WALNUT_JOIN_PS1_PUBLISHED=1" \
+            "exec bun run test:focus tests/e2e/host-network-outside-join.e2e.test.ts > $tmp/windows-join/host.log 2>&1" > "$tmp/windows-join/host.sh"
+
+      # Records the runner's desktop: a GitHub Windows runner signs its user in, so it has one.
+      - name: ffmpeg, to record the screen
+        shell: pwsh
+        run: choco install ffmpeg --no-progress -y | Select-Object -Last 3
+
+      - name: Paste the PowerShell line in a PowerShell window, recorded
+        shell: pwsh
+        run: |
+          $hostSide = Start-Process wsl.exe -ArgumentList '-d', 'Ubuntu-24.04', '--exec', 'bash', (& wsl.exe -d Ubuntu-24.04 --exec wslpath -u "$env:OUT\host.sh") -PassThru -WindowStyle Hidden
+          for ($i = 0; $i -lt 120 -and -not (Test-Path "$env:OUT\ticket.txt"); $i++) { Start-Sleep 5 }
+          if (-not (Test-Path "$env:OUT\ticket.txt")) { Get-Content "$env:OUT\host.log" -Tail 80; throw 'the throwaway Walnut made no ticket' }
+          $t = (Get-Content "$env:OUT\ticket.txt" -Raw).Trim()
+          # One use, 10 minutes, but a public log is read live: never print it.
+          Write-Output "::add-mask::$t"
+          $ws = (& wsl.exe -d Ubuntu-24.04 --exec wslpath -u '${{ github.workspace }}')
+          $tmp = (& wsl.exe -d Ubuntu-24.04 --exec wslpath -u '${{ runner.temp }}')
+          $ver = (Get-Content "${{ runner.temp }}\release\version" -Raw).Trim()
+          $q = { param($v) "'" + ($v -replace "'", "''") + "'" }
+          # What Settings shows sets WALNUT_JOIN_TICKET and runs join.ps1; this commit's copy
+          # stands in for the release's, and its join.sh and Walnut file stand in for theirs.
+          # The window shows the line a person pastes, with the ticket cut short.
+          @(
+            '$env:WALNUT_JOIN_TICKET = ' + (& $q $t)
+            '$env:WALNUT_JOIN_SCRIPT_URL = ' + (& $q "file://$ws/scripts/join.sh")
+            '$env:WALNUT_JOIN_INSTALL_URL = ' + (& $q "file://$ws/scripts/install.sh")
+            '$env:OPEN_WALNUT_RELEASE_BASE_URL = ' + (& $q "file://$tmp/release")
+            '$env:OPEN_WALNUT_VERSION = ' + (& $q $ver)
+            'Clear-Host'
+            'Write-Host ("PS " + (Get-Location).Path + "> " + ' + (& $q (Get-Content "$env:OUT\windows-command.txt" -Raw).Trim().Replace($t, 'wn1-...')) + ')'
+            '& powershell.exe -NoProfile -Command ("Start-Transcript -Path ''' + "$env:OUT\join.log" + ''' | Out-Null; iex (Get-Content -Raw ''' + '${{ github.workspace }}\scripts\join.ps1' + '''); `$c = `$LASTEXITCODE; Stop-Transcript | Out-Null; exit `$c")'
+            '"JOIN_EXIT=$LASTEXITCODE" | Set-Content ' + (& $q "$env:OUT\join.done")
+            'Start-Sleep 8'
+          ) | Set-Content "$env:OUT\paste.ps1" -Encoding UTF8
+          $psi = New-Object Diagnostics.ProcessStartInfo 'ffmpeg.exe', ('-loglevel error -y -f gdigrab -framerate 8 -i desktop -vf scale=1280:-2 -c:v libx264 -preset veryfast -pix_fmt yuv420p -movflags +frag_keyframe+empty_moov "' + "$env:OUT\screen.mp4" + '"')
+          $psi.UseShellExecute = $false; $psi.RedirectStandardInput = $true; $psi.CreateNoWindow = $true
+          $ff = [Diagnostics.Process]::Start($psi)
+          try {
+            Start-Sleep 3
+            $win = Start-Process powershell.exe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "$env:OUT\paste.ps1" -WindowStyle Maximized -PassThru
+            if (-not $win.WaitForExit(40 * 60 * 1000)) { throw 'the join did not finish in 40 minutes' }
+          } finally {
+            $ff.StandardInput.Write('q'); $ff.StandardInput.Close()
+            if (-not $ff.WaitForExit(60000)) { $ff.Kill() }
+          }
+          Get-Content "$env:OUT\join.log" -ErrorAction SilentlyContinue
+          $done = Get-Content "$env:OUT\join.done" -Raw -ErrorAction SilentlyContinue
+          if ($done -notmatch 'JOIN_EXIT=0') { throw "the join did not finish: $done" }
+          for ($i = 0; $i -lt 120 -and -not $hostSide.HasExited; $i++) { Start-Sleep 5 }
+          Get-Content "$env:OUT\host.log" -Tail 40
+          Get-Content "$env:OUT\result.json"
+          if (-not ((Get-Content "$env:OUT\result.json" -Raw) -match '"connected": true')) { throw 'the throwaway Walnut did not reach the PC' }
+
+      # As after a restart: the Linux stopped, then what Windows runs at sign-in brings Walnut back.
+      - name: Open Walnut starts it with Windows, once
+        shell: pwsh
+        run: |
+          $env:WSL_UTF8 = '1'
+          $start = Join-Path $env:LOCALAPPDATA 'OpenWalnut\start.ps1'
+          $run = Get-ItemPropertyValue 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name OpenWalnut
+          "sign-in item: $run"
+          if ($run -notlike "*-File `"$start`"*") { throw 'the sign-in item does not run start.ps1' }
+          $lnk = Join-Path ([Environment]::GetFolderPath('Programs')) 'Open Walnut.lnk'
+          $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
+          "start menu: $($s.TargetPath) $($s.Arguments)"
+          if (-not (Test-Path $lnk) -or $s.Arguments -notlike "*-File `"$start`" -Show*") { throw 'no Open Walnut in the Start menu' }
+          # Written on this PC, so nothing marks it as from the internet (SmartScreen reads that mark).
+          if (Get-Item $start -Stream Zone.Identifier -ErrorAction SilentlyContinue) { throw 'start.ps1 carries a mark of the web' }
+          # One hold: the hidden PowerShell that holds the Linux open (start.ps1 -Hold, one at a time).
+          $holds = { @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe'" | Where-Object { $_.CommandLine -like '*start.ps1*-Hold*' }) }
+          $running = { ((wsl.exe -l --running --quiet) | ForEach-Object { ([string]$_ -replace [char]0, '').Trim() }) -contains 'OpenWalnut' }
+          "holds after the join: $((& $holds).Count)"
+          if ((& $holds).Count -ne 1) { throw 'the join should leave one hold of the OpenWalnut Linux' }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File $start
+          Start-Sleep 3
+          if ((& $holds).Count -ne 1) { throw 'a second start made a second hold' }
+          # WSL stopping the Linux (wsl --shutdown, an update): the hold opens it again.
+          wsl.exe --terminate OpenWalnut
+          Start-Sleep 45
+          if (-not (& $running)) { throw 'the hold did not open the Linux again after WSL stopped it' }
+          # After a restart: no hold, no Linux, then what Windows runs at sign-in.
+          (& $holds) | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+          Get-CimInstance Win32_Process -Filter "Name = 'wsl.exe'" | Where-Object { $_.CommandLine -like '*-d OpenWalnut*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+          wsl.exe --terminate OpenWalnut
+          Start-Sleep 5
+          if (& $running) { throw 'the Linux still runs with nothing holding it' }
+          cmd.exe /c $run
+          Start-Sleep 5
+          if ((& $holds).Count -ne 1) { throw 'the sign-in item started no hold' }
+          # Untouched for a minute (a probe would itself open the Linux): still running?
+          Start-Sleep 60
+          if (-not (& $running)) { throw 'the Linux stopped after the sign-in start' }
+          $up = $false
+          for ($i = 0; $i -lt 40 -and -not $up; $i++) {
+            $st = wsl.exe -d OpenWalnut --exec sh -c 'XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user is-active open-walnut-daemon.service'
+            $up = ($st -join '') -match '^active'
+            if (-not $up) { Start-Sleep 3 }
+          }
+          "daemon after the sign-in start: $st"
+          if (-not $up) { throw 'Walnut did not come back after the sign-in start' }
+
+      - name: What Windows and WSL made of it
+        if: always()
+        shell: pwsh
+        run: |
+          $env:WSL_UTF8 = '1'
+          & {
+            '== wsl -l -v'; wsl.exe -l -v
+            '== sign-in item'; Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name OpenWalnut -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OpenWalnut
+            '== start.ps1'; Get-Content (Join-Path $env:LOCALAPPDATA 'OpenWalnut\start.ps1') -ErrorAction SilentlyContinue
+            '== the hold'; Get-CimInstance Win32_Process -Filter "Name = 'wsl.exe'" | Select-Object -ExpandProperty CommandLine
+            '== OpenWalnut'; wsl.exe -d OpenWalnut --exec sh -c 'cat /etc/wsl.conf; id; systemctl is-system-running; XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user status open-walnut-daemon.service --no-pager | head -n 15; W=~/.local/share/open-walnut/bin/walnut; $W --version; $W net status'
+          } *>&1 | Tee-Object -FilePath "$env:OUT\after.txt"
+
+      # The artifact is public: the one-use ticket goes before the upload, wherever it is.
+      - name: Take the ticket out
+        id: scrub
+        if: always()
+        shell: pwsh
+        run: |
+          # The throwaway Walnut may still write its log there.
+          wsl.exe --terminate Ubuntu-24.04
+          # Not registered when WSL setup failed early: that run still needs its artifact.
+          $global:LASTEXITCODE = 0
+          $t = (Get-Content "$env:OUT\ticket.txt" -Raw -ErrorAction SilentlyContinue)
+          Remove-Item "$env:OUT\ticket.txt", "$env:OUT\command.txt", "$env:OUT\windows-command.txt", "$env:OUT\paste.ps1" -Force -ErrorAction SilentlyContinue
+          if ($t) {
+            $t = $t.Trim()
+            Get-ChildItem $env:OUT -Recurse -File | Where-Object { $_.Extension -ne '.mp4' } | ForEach-Object {
+              $c = [IO.File]::ReadAllText($_.FullName)
+              if ($c.Contains($t)) { [IO.File]::WriteAllText($_.FullName, $c.Replace($t, 'wn1-(ticket)')) }
+            }
+            $left = Get-ChildItem $env:OUT -Recurse -File | Where-Object { $_.Extension -ne '.mp4' -and [IO.File]::ReadAllText($_.FullName).Contains($t) }
+            if ($left) { throw "the ticket is still in $($left.FullName -join ', ')" }
+          }
+
+      # Only a folder the ticket is out of.
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.scrub.outcome == 'success'
+        with:
+          name: windows-join
+          path: ${{ runner.temp }}\windows-join
+          retention-days: 7

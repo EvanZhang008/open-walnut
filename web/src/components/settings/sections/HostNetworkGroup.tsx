@@ -167,17 +167,30 @@ export function HostNetworkGroup() {
             ? `${invite.member?.name ?? 'The machine'} joined.`
             : expired || invite.state === 'expired'
               ? 'This link expired.'
-              : 'Run this in a terminal on the new machine (macOS or Linux):'}
+              : invite.windowsCommand
+                ? 'Run this on the new machine, in Terminal on macOS or Linux, in PowerShell on Windows:'
+                : 'Run this in a terminal on the new machine (macOS or Linux):'}
           help={invite.state === 'waiting' && !expired
             ? <>
                 {`Works once, for 10 minutes (${left(invite.expiresAt - now)} left).  Waiting for the machine...`}
                 {net?.companion === false && <><br />Keep this Mac awake and online until the machine joins.</>}
+                {invite.windowsCommand && <><br />On Windows, Walnut runs in WSL (Linux inside Windows). A PC without WSL asks once for an administrator to turn it on, then a restart and a new link.</>}
               </>
             : undefined}
           control={invite.state === 'waiting' && !expired ? (
-            <span className="settings-addons-inline">
-              <code className="settings-addons-mono settings-addons-ellipsis" data-testid="host-network-command" title={invite.command}>{invite.command}</code>
-              <CopyButton text={invite.command} data-testid="host-network-copy" />
+            <span className="host-network-commands">
+              <span className="settings-addons-inline">
+                {invite.windowsCommand && <span className="settings-addons-muted host-network-os">macOS, Linux</span>}
+                <code className="settings-addons-mono settings-addons-ellipsis" data-testid="host-network-command" title={invite.command}>{invite.command}</code>
+                <CopyButton text={invite.command} data-testid="host-network-copy" />
+              </span>
+              {invite.windowsCommand && (
+                <span className="settings-addons-inline">
+                  <span className="settings-addons-muted host-network-os">Windows</span>
+                  <code className="settings-addons-mono settings-addons-ellipsis" data-testid="host-network-windows-command" title={invite.windowsCommand}>{invite.windowsCommand}</code>
+                  <CopyButton text={invite.windowsCommand} data-testid="host-network-windows-copy" />
+                </span>
+              )}
             </span>
           ) : undefined}
         />

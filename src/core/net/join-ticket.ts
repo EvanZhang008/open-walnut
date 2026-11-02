@@ -8,6 +8,8 @@
  */
 export const TICKET_PREFIX = 'wn1-'
 export const JOIN_SCRIPT_URL = 'https://github.com/EvanZhang008/open-walnut/releases/latest/download/join.sh'
+/** The Windows twin (net-join-ps1.ts), attached to every release beside join.sh. */
+export const JOIN_PS1_URL = 'https://github.com/EvanZhang008/open-walnut/releases/latest/download/join.ps1'
 
 export interface JoinTicket {
   mac: string
@@ -43,4 +45,23 @@ export function decodeTicket(s: unknown): JoinTicket | null {
 /** The command Settings shows for a ticket. */
 export function ticketCommand(ticket: string): string {
   return `curl -fsSL ${JOIN_SCRIPT_URL} | sh -s -- ${ticket}`
+}
+
+/**
+ * Windows PowerShell 5.1 offers only TLS 1.0 by default on a PC without the strong-crypto
+ * setting, which GitHub and the companion refuse: every Windows line turns TLS 1.2 on first.
+ */
+export const PS_TLS12 = '[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; '
+
+/**
+ * The same in PowerShell on Windows. WebClient, not `irm`: a release asset comes as
+ * application/octet-stream, which `irm` may hand back as bytes rather than text.
+ */
+export function ticketWindowsCommand(ticket: string): string {
+  return `${PS_TLS12}$env:WALNUT_JOIN_TICKET='${ticket}'; iex ((New-Object Net.WebClient).DownloadString('${JOIN_PS1_URL}'))`
+}
+
+/** The companion's Windows line for an invite link. */
+export function linkWindowsCommand(link: string): string {
+  return `${PS_TLS12}irm ${link}/windows | iex`
 }

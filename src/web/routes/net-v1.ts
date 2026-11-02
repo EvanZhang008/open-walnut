@@ -11,6 +11,7 @@
  *                                          the new machine, no token -> {name, relays, relayRoots, members}
  *   POST   /api/v1/net/relay-access        the relay on this box: is X-Iroh-Endpoint-Id a member? "true"
  *   GET    /join/:code                     the install script the invite link runs (net-join-script.ts)
+ *   GET    /join/:code/windows             the same for a Windows PC, in PowerShell (net-join-ps1.ts)
  *
  * The owner is the Mac this companion belongs to (the machine credential rules,
  * machine-credentials.ts). The join and the script are public: the invite code is
@@ -28,6 +29,8 @@ import {
   NetStoreError, inviteStatus, isMember, listMembers, makeInvite, peekInvite, redeemInvite, removeMember, restoreHostMember, setMacMember, validNetId,
 } from '../../core/net/net-store.js'
 import { joinScript } from '../../core/net/net-join-script.js'
+import { joinScriptWindows } from '../../core/net/net-join-ps1.js'
+import { linkWindowsCommand } from '../../core/net/join-ticket.js'
 import { requestOrigin } from '../middleware/request-origin.js'
 import { isLocalOrigin } from '../../lib/caller-origin.js'
 
@@ -124,7 +127,7 @@ netV1Router.post('/net/invites', guard(async (req, res) => {
   const origin = originOf(req)
   const link = `${origin}/join/${made.code}`
   log.web.info('net: invite made', { id: made.id })
-  res.status(201).json({ ...made, link, command: `curl -fsSL ${link} | sh` })
+  res.status(201).json({ ...made, link, command: `curl -fsSL ${link} | sh`, windowsCommand: linkWindowsCommand(link) })
 }, { ownerOnly: true }))
 
 netV1Router.get('/net/invites/:id', guard(async (req, res) => {
@@ -209,13 +212,21 @@ netV1Router.post('/net/relay-access', guard(async (req, res) => {
   res.type('text/plain').send(ok ? 'true' : 'false')
 }, { ownerOnly: false }))
 
-/** The invite link: a shell script for `curl ... | sh` (the code is checked, never used, here). */
-netJoinPageRouter.get('/join/:code', async (req: Request, res: Response, next: NextFunction) => {
+/**
+ * The invite link: a shell script for `curl ... | sh`, or with /windows a PowerShell one for
+ * `irm ... | iex` (the code is checked, never used, here).
+ */
+async function joinPage(req: Request, res: Response, next: NextFunction, windows: boolean): Promise<void> {
   try {
     if (!isCompanion()) return next()
     // A refusal is a script that says why, sent as 200: `curl -f` prints only its own
-    // error for any other status, and the user would never read the reason.
-    const refuse = (why: string) => { res.setHeader('Cache-Control', 'no-store'); res.type('text/x-shellscript').send(`echo "${why}" >&2; exit 1\n`) }
+    // error for any other status, and the user would never read the reason. In PowerShell
+    // it writes and stops without `exit`, which would close the user's window.
+    const type = windows ? 'text/plain' : 'text/x-shellscript'
+    const refuse = (why: string) => {
+      res.setHeader('Cache-Control', 'no-store')
+      res.type(type).send(windows ? `Write-Host '${why.replace(/'/g, "''")}' -ForegroundColor Red\n` : `echo "${why}" >&2; exit 1\n`)
+    }
     const rl = await rateLimited(req)
     if (rl.limited) return refuse('Too many wrong codes. Wait a minute, then try again.')
     const code = String(req.params.code ?? '')
@@ -224,8 +235,11 @@ netJoinPageRouter.get('/join/:code', async (req: Request, res: Response, next: N
       return refuse('This invite is not valid any more (used, or older than 10 minutes). Make a new one on your Mac.')
     }
     res.setHeader('Cache-Control', 'no-store')
-    res.type('text/x-shellscript').send(joinScript({ origin: originOf(req), code }))
+    const input = { origin: originOf(req), code }
+    res.type(type).send(windows ? joinScriptWindows(input) : joinScript(input))
   } catch (err) {
     next(err)
   }
-})
+}
+netJoinPageRouter.get('/join/:code', (req, res, next) => { void joinPage(req, res, next, false) })
+netJoinPageRouter.get('/join/:code/windows', (req, res, next) => { void joinPage(req, res, next, true) })

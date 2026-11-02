@@ -36,6 +36,8 @@ export interface NetInvite {
   id: string;
   link: string;
   command: string;
+  /** PowerShell on a Windows PC; absent from a companion older than the Windows join. */
+  windowsCommand?: string;
   expiresAt: number;
   state: 'waiting' | 'joined' | 'expired' | 'failed';
   member?: { id: string; name: string; platform?: string };

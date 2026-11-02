@@ -19,6 +19,17 @@
   gap: 8px;
   flex-wrap: wrap;
 }
+/* Add a machine: one command per kind of machine, stacked, their labels in one column. */
+.host-network-commands {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+.host-network-os {
+  min-width: 84px;
+}
 .settings-addons-live {
   color: var(--error);
   font-variant-numeric: tabular-nums;

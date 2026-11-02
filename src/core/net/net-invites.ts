@@ -17,6 +17,8 @@ export interface InviteState {
   id: string
   link: string
   command: string
+  /** PowerShell on Windows; absent from a companion older than the Windows join. */
+  windowsCommand?: string
   expiresAt: number
   state: 'waiting' | 'joined' | 'expired' | 'failed'
   member?: { id: string; name: string; platform?: string }
@@ -92,7 +94,11 @@ export async function makeInvite(input: { name?: unknown }): Promise<InviteState
   } else {
     const { status, body } = await companionCall('/net/invites', { method: 'POST', body: name ? { name } : {} })
     if (status !== 201) { const e = errorOf(body); throw new NetError(status, e.code, e.message) }
-    inv = { id: String(body.id), link: String(body.link), command: String(body.command), expiresAt: Number(body.expiresAt), state: 'waiting' }
+    inv = {
+      id: String(body.id), link: String(body.link), command: String(body.command),
+      ...(typeof body.windowsCommand === 'string' ? { windowsCommand: body.windowsCommand } : {}),
+      expiresAt: Number(body.expiresAt), state: 'waiting',
+    }
   }
   inv.timer = setInterval(() => { void pollInvite(inv.id) }, POLL_MS)
   inv.timer.unref?.()

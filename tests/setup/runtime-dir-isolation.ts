@@ -132,3 +132,10 @@ if (process.env.WALNUT_TURN_SNAPSHOTS === undefined) {
 if (process.env.WALNUT_DAEMON_BOOT_START === undefined) {
   process.env.WALNUT_DAEMON_BOOT_START = '0'
 }
+
+// A Mac with no companion asks GitHub whether the newest release carries join.ps1 before it
+// shows the Windows line (src/core/net/join-ps1-published.ts): no test waits on that network
+// call. A test of the line sets this itself.
+if (process.env.WALNUT_JOIN_PS1_PUBLISHED === undefined) {
+  process.env.WALNUT_JOIN_PS1_PUBLISHED = '0'
+}

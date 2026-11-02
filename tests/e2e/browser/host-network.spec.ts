@@ -179,10 +179,10 @@ test('the relay choice: what each one shares, a companion means its relay, and w
     return route.fulfill({ json: { relay } })
   })
   const TICKET_CMD = 'curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/join.sh | sh -s -- wn1-eyJ2IjoxfQ'
-  await page.route('**/api/hosts/net/invites', (route) => route.fulfill({
-    status: 201, json: { id: 'ni-3', link: 'wn1-eyJ2IjoxfQ', command: TICKET_CMD, expiresAt: Date.now() + 10 * 60_000, state: 'waiting' },
-  }))
-  await page.route('**/api/hosts/net/invites/ni-3', (route) => route.fulfill({ json: { id: 'ni-3', link: 'wn1-eyJ2IjoxfQ', command: TICKET_CMD, expiresAt: Date.now() + 9 * 60_000, state: 'waiting' } }))
+  const TICKET_WIN = "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; $env:WALNUT_JOIN_TICKET='wn1-eyJ2IjoxfQ'; iex ((New-Object Net.WebClient).DownloadString('https://github.com/EvanZhang008/open-walnut/releases/latest/download/join.ps1'))"
+  const ticketInvite = { id: 'ni-3', link: 'wn1-eyJ2IjoxfQ', command: TICKET_CMD, windowsCommand: TICKET_WIN, state: 'waiting' }
+  await page.route('**/api/hosts/net/invites', (route) => route.fulfill({ status: 201, json: { ...ticketInvite, expiresAt: Date.now() + 10 * 60_000 } }))
+  await page.route('**/api/hosts/net/invites/ni-3', (route) => route.fulfill({ json: { ...ticketInvite, expiresAt: Date.now() + 9 * 60_000 } }))
 
   await openRemoteHosts(page)
   const picker = page.getByTestId('host-network-relay')
@@ -237,7 +237,25 @@ test('the relay choice: what each one shares, a companion means its relay, and w
   // The invite is a ticket, and the Mac must stay on while the machine joins.
   await page.getByTestId('host-network-add').click()
   await expect(page.getByTestId('host-network-command')).toHaveText(TICKET_CMD)
-  await expect(page.getByTestId('host-network-invite')).toContainText('Keep this Mac awake and online until the machine joins.')
+  // A Windows PC gets its own line, in PowerShell, and the page says what it needs.
+  const ticketRow = page.getByTestId('host-network-invite')
+  await expect(ticketRow).toContainText('Run this on the new machine, in Terminal on macOS or Linux, in PowerShell on Windows:')
+  await expect(page.getByTestId('host-network-windows-command')).toHaveText(TICKET_WIN)
+  await expect(ticketRow).toContainText('On Windows, Walnut runs in WSL (Linux inside Windows). A PC without WSL asks once for an administrator to turn it on, then a restart and a new link.')
+  const chromiumTicket = page.context().browser()?.browserType().name() === 'chromium'
+  if (chromiumTicket) {
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+    await page.getByTestId('host-network-windows-copy').click()
+    await expect(page.getByTestId('host-network-windows-copy')).toHaveText('Copied')
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(TICKET_WIN)
+  }
+  // Both lines stay inside the row at this width (each command is one ellipsized line).
+  const rowBox = (await ticketRow.boundingBox())!
+  for (const id of ['host-network-command', 'host-network-windows-command']) {
+    const b = (await page.getByTestId(id).boundingBox())!
+    expect(b.x + b.width, id).toBeLessThanOrEqual(rowBox.x + rowBox.width + 1)
+  }
+  await expect(ticketRow).toContainText('Keep this Mac awake and online until the machine joins.')
   await page.getByTestId('host-network-group').scrollIntoViewIfNeeded()
   await shot(page, '7-no-companion')
   await picker.scrollIntoViewIfNeeded()

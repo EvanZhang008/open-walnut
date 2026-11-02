@@ -22,6 +22,7 @@ secrets and the host's MCP servers all work. Hosts reached over SSH keep working
 | The link | `src/core/hosts/net-link.ts`, `DaemonConnection.dialNetHost` | Asks the Mac's walnut-net for a loopback port that reaches the machine's daemon |
 | Relay | `scripts/cloud/net-relay.sh` | iroh-relay behind Caddy (`/relay`, `/ping`), and address discovery on UDP 7842 |
 | Join | `src/core/net/net-join-script.ts`, `scripts/join.sh`, `src/commands/net.ts` | The script an invite link serves (and the same script with a ticket, attached to every release), and `walnut net join` |
+| Join on Windows | `src/core/net/net-join-ps1.ts`, `scripts/join.ps1` | The PowerShell twin: readies WSL and its own Linux, then runs the join above inside it (below) |
 
 ## Joining a machine
 
@@ -45,10 +46,11 @@ install.sh puts down (`~/.local/share/open-walnut/bin/walnut`), never another Wa
 (an npm install, an older server's), which it neither runs nor updates: a `walnut` in
 ~/.local/bin that is not a link into the install stays as it is, and the install's own links
 then go inside it (`links/`). Step 2 installs the
-login service with that file as its daemon (`walnut --service`). The fresh-machine check runs
-the real command in Terminal on a macOS runner, on a new account and on one where an older
-Walnut already runs (`.github/workflows/fresh-mac-join.yml`), against a throwaway Walnut in
-the same job (`tests/e2e/host-network-outside-join.e2e.test.ts`).
+login service with that file as its daemon (`walnut --service`). The fresh-machine checks run
+the real command as a person pastes it: `.github/workflows/fresh-mac-join.yml` in Terminal on
+a macOS runner, on a new account and on one where an older Walnut already runs, and
+`windows-join.yml` in a PowerShell window on a Windows runner (below), each against a
+throwaway Walnut in the same job (`tests/e2e/host-network-outside-join.e2e.test.ts`).
 
 A machine whose older Walnut has run for days may have lost its session daemon's pid, port and
 registry files to the temp cleanup (macOS removes files in /tmp nobody touched for 3 days)
@@ -58,6 +60,45 @@ files back (`recoverLostDaemon` in `src/commands/net.ts`, never over a file that
 and hands it over to the login service like any running daemon; the CI job's
 `existing-swept` Mac rehearses it. Daemons from this version on keep their own files fresh
 (`keepRuntimeFiles` in `src/providers/daemon-core.ts`).
+
+### Windows
+
+Walnut runs on Windows inside WSL (Linux beside Windows), in a Linux of its own called
+`OpenWalnut`, so the user's own WSL Linuxes are never touched. Add a machine shows a second
+line for PowerShell: `irm https://<companion>/join/<code>/windows | iex`, or with no
+companion `$env:WALNUT_JOIN_TICKET='wn1-...'; iex ((New-Object Net.WebClient).DownloadString('<join.ps1>'))`.
+The script (Windows PowerShell 5.1 and newer):
+
+1. checks the ticket, then WSL is there and new enough for systemd (`wsl --version`); when
+   it is not, Windows asks for an administrator once (`wsl --update`, or `wsl --install
+   --no-distribution` and then a restart, after which the user runs a new link: one works
+   once, for 10 minutes). This is the only step that needs one;
+2. makes `OpenWalnut` from Ubuntu's WSL image (`wsl --import`, the image pinned with its
+   SHA-256 in `WSL_ROOTFS`), under `%LOCALAPPDATA%\OpenWalnut\wsl`, with a user named
+   after the Windows one (`walnut` when that names a system account) and a uid from 1500 up,
+   so its daemon's instance lock (a loopback port from uid and directory, which every WSL
+   Linux shares) never meets one of a Walnut in the user's own WSL Linux, with systemd on and
+   the Windows PATH off (`/etc/wsl.conf`), and lets that user's services run without a login
+   (`loginctl enable-linger`);
+3. writes `%LOCALAPPDATA%\OpenWalnut\start.ps1`, whose one hidden `-Hold` process (a named
+   mutex, `Local\OpenWalnutHold`) holds the Linux open, since WSL stops a Linux nobody holds,
+   systemd services or not, and opens it again after `wsl --shutdown` or a WSL update; it runs
+   from a sign-in item
+   (`HKCU\...\Run\OpenWalnut`) and from "Open Walnut" in the Start menu, which also shows
+   `walnut net status`. Both are per user and need no administrator; nothing is downloaded
+   as a program, so SmartScreen has nothing to check;
+4. runs the Linux join inside it (fetched to a file first, so a failed download fails), which
+   installs Walnut and its login service there.
+
+Both Windows lines turn TLS 1.2 on first (`PS_TLS12`): Windows PowerShell 5.1 may offer only
+TLS 1.0. A Mac with no companion shows its Windows line only once the newest release carries
+`join.ps1` (`join-ps1-published.ts`). `.github/workflows/windows-join.yml` runs the line in a
+PowerShell window on a Windows runner, records it, and checks the hold, a WSL stop, and a
+sign-in start.
+
+The machine then lists as a Linux machine with the PC's name. To take it off the PC:
+`wsl --unregister OpenWalnut`, remove the `OpenWalnut` sign-in item, and delete
+`%LOCALAPPDATA%\OpenWalnut` and the Start menu entry (the join prints the exact line).
 
 ## Choosing the relay
 
