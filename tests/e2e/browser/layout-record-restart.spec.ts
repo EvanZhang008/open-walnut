@@ -26,6 +26,7 @@ import path from 'node:path'
 import { expect, test, type APIRequestContext, type Browser, type BrowserContext, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { homeColumns, loadHome, lockLeftmostPanel, seedColumns, setPanelMode } from './draft-helpers'
+import { openTasksBy } from './org-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const SHOTS = process.env.LAYOUT_RECORD_SHOT_DIR ?? '/tmp/layout-record-restart'
@@ -236,7 +237,7 @@ test.describe('Org', () => {
     await page.getByTestId('sidebar-org').click()
     await page.locator(`[data-testid="org-channel"][data-key="${rowKey}"]`).click()
     await expect(page.getByTestId('org-detail-title')).toHaveText(`${PROJECT} VP`)
-    await page.getByTestId('org-tab-team').click()
+    await openTasksBy(page, 'team')
   }
   /** Click a Team row and wait for the URL to open it (the list re-sorts as statuses move under load). */
   async function openFromTeam(page: Page, id: string): Promise<void> {

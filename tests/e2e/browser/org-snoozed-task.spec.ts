@@ -9,6 +9,7 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { openTasksBy, expectChatShown } from './org-view-helpers'
 
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
 const PROJECT = `Snoozeflow ${STAMP}`
@@ -78,7 +79,7 @@ test('a snoozed task is not Needs you on the Org page; its date passing brings i
   await expect(detail.locator(`[data-testid="org-alert"][data-task-id="${ids.plain}"]`)).toBeVisible()
   await expect(detail.locator(`[data-testid="org-alert"][data-task-id="${ids.snoozed}"]`)).toHaveCount(0)
 
-  await detail.getByTestId('org-tab-team').click()
+  await openTasksBy(detail, 'team')
   const col = (key: string) => detail.locator(`[data-testid="org-team-col"][data-column="${key}"]`)
   await expect(col('needs').locator('.org-team-head')).toContainText('Needs you')
   await expect(col('needs').locator(`[data-task-id="${ids.plain}"]`)).toBeVisible()
@@ -91,7 +92,7 @@ test('a snoozed task is not Needs you on the Org page; its date passing brings i
   // The date comes: the start date moves into the past and the task needs the user again, live.
   await patch(request, ids.snoozed, { start_date: '2026-01-01' })
   await expect(col('needs').locator(`[data-task-id="${ids.snoozed}"]`)).toBeVisible({ timeout: 30_000 })
-  await detail.getByTestId('org-tab-chat').click()
+  await expectChatShown(detail)
   await expect(counts).toContainText('2 Needs you', { timeout: 30_000 })
   if (SHOTS) await detail.screenshot({ path: `${SHOTS}/org-snooze-ended.png` })
 })

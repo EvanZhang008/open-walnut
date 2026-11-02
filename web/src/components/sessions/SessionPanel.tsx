@@ -343,9 +343,16 @@ interface SessionPanelProps {
   /** Phone: the host surface is the layer (the Ask Walnut slot's 'chat'); the
    *  panel only hides its header and puts its kebab into that layer's bar. */
   phoneHostSlot?: string;
+  /** The host draws this panel's header (the Org page's node header, 2026-11-02, the user: "hide all of
+   *  them in the drop down button"): the panel's own two header rows take no room, and its status
+   *  badge, its wait and its kebab are drawn into this element instead, the kebab led by the header's
+   *  view rows (Changed, Files, Terminal, Board, Plan). Not on a phone layer, which has its own bar. */
+  headerSlot?: HTMLElement | null;
+  /** With headerSlot: the kebab's Board row opens the host's Board instead of this panel's own. */
+  onHostBoard?: () => void;
 }
 
-export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot }: SessionPanelProps) {
+export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, embedded, inset, headerLeading, focusComposer, inboxRequest, locked, onToggleLock, onTaskCompleted, onTaskClick, onLocateTask, onOpenTaskDetail, onSessionClick, onSessionReplaced, onOpenForkDraft, phoneLayer, phoneDeepLinkBaseUrl, phoneHostSlot, headerSlot, onHostBoard }: SessionPanelProps) {
   // One place decides what "close this panel" means, so every exit (the header
   // button, the error boundary, the missing-session card) goes through the same
   // owner callback.
@@ -1886,6 +1893,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   });
   // Where the kebab goes on a phone: this panel's own bar, or its host's.
   const kebabSlot = phoneLayer ? phoneBar.slot : (phoneHostSlot && phoneBar.phone ? hostSlot : null);
+  // A host that draws the header (headerSlot): the badge and the kebab go there, the full desktop menu.
+  // Not in fullscreen: the panel is an overlay then, over the host too, and needs its own header to come back.
+  const hostHeader = !kebabSlot && !(phoneLayer || phoneHostSlot) && !!headerSlot && !isFullscreen;
 
   // The id resolved to nothing after the full retry window. Say so explicitly:
   // the previous behaviour rendered an ordinary empty panel, indistinguishable
@@ -2040,7 +2050,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   const needsAction = !!sessionTask && taskNeedsAction(sessionTask);
   // The session's kebab. On a phone it lives in the top bar's right slot (a portal,
   // so it keeps this tree), led by the header's own row-1 actions (C64).
-  const renderSessionKebab = (phoneRows?: (close: () => void) => ReactNode) => (
+  const renderSessionKebab = (phoneRows?: (close: () => void) => ReactNode, hostRows?: (close: () => void) => ReactNode) => (
     <TaskQuickActions
       taskId={session?.taskId}
       task={session?.taskId ? sessionTask : null}
@@ -2063,6 +2073,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
       phoneMenu={!!phoneRows}
       leadingSection={(close) => phoneRows ? phoneRows(close) : (
         <>
+          {hostRows?.(close)}
           <HiddenPillRows metaRef={titleMetaRef} kinds={[...metaFit.hidden]} pin={metaFit.pin} onAfterAction={close} />
           <PanelCountRow onAfterAction={close} />
           <SessionMetaFacts sessionId={sessionId} taskId={session?.taskId} onAfterAction={close} />
@@ -2194,7 +2205,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
           view stays guttered at 1400px in this slide-out. */}
       <ThreadToastProvider panelRef={panelRef} composerRef={composerWrapRef}>
       <div
-        className={`session-panel${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}${unread ? ' session-panel-unread' : ''}${inset ? ' session-panel-inset' : ''}${(phoneLayer || phoneHostSlot) && phoneBar.phone ? ' is-phone-layer' : ''}`}
+        className={`session-panel${fullscreenClass}${splitOpen ? ' is-changed-open' : ''}${unread ? ' session-panel-unread' : ''}${inset ? ' session-panel-inset' : ''}${(phoneLayer || phoneHostSlot) && phoneBar.phone ? ' is-phone-layer' : ''}${hostHeader ? ' has-host-header' : ''}`}
         data-session-id={sessionId}
         ref={panelRef}
         // The panel the user last pointed into is "the current session" for
@@ -2630,7 +2641,48 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                 />
               )}
               {loading && <span className="session-panel-badge" style={{ color: 'var(--fg-muted)' }}>Loading...</span>}
-              {!loading && sessionId && !kebabSlot && renderSessionKebab()}
+              {!loading && sessionId && !kebabSlot && !hostHeader && renderSessionKebab()}
+              {/* The host's header (headerSlot): the status, the wait and the kebab, the kebab led by
+                  the view rows the hidden header held. */}
+              {!loading && hostHeader && headerSlot && createPortal(
+                <>
+                  {threads.hasQuestions && (
+                    <ThreadModePill
+                      viewMode={threadsApi.viewMode}
+                      narrow
+                      onToggle={() => threadsApi.setViewMode(threadsApi.viewMode === 'linear' ? 'stack' : 'linear')}
+                    />
+                  )}
+                  <WaitingChip task={sessionTask} compact />
+                  {ps && <ProcessStatusBadge processStatus={ps} size="sm" errorMessage={session?.errorMessage} pendingPermission={pendingPermission} />}
+                  {sessionId && renderSessionKebab(undefined, (close) => (
+                    <PhoneSessionHeaderRows
+                      sessionId={sessionId}
+                      close={close}
+                      activeView={activeView}
+                      onToggleView={(v) => { if (v === 'board' && onHostBoard) onHostBoard(); else toggleView(v); }}
+                      board={onHostBoard ? 'live' : boardChipLive ? (boardWaitReason ? 'waiting' : 'live') : 'none'}
+                      terminal={terminalOffered && !inset}
+                      plan={!!(hasPlanContent || showExecuteButtons)}
+                      onPlan={() => setPlanPopoverOpen(true)}
+                      background={false}
+                      extra={[
+                        ...(taskSlot === 'live' && session?.taskId && !locateWaitReason ? [{ label: 'Locate task', testId: 'host-row-locate', onClick: () => {
+                          const taskId = session.taskId!;
+                          const locate = onLocateTask ?? onTaskClick;
+                          if (locate) locate(taskId); else locateTaskOnHome(taskId, navigate, { sessionId });
+                        } }] : []),
+                        ...(!inset ? [
+                          { label: 'Open in new tab', testId: 'host-row-popout', onClick: () => openPopout('session', { id: sessionId, host: session?.host, cwd: session?.cwd }) },
+                          { label: 'Full screen', testId: 'host-row-expand', onClick: enterFullscreen },
+                        ] : []),
+                      ]}
+                    />
+                  ))}
+                </>,
+                headerSlot,
+                'host-header',
+              )}
               {/* A phone draws its own top bar (no title row): the wait rides in its
                   action slot, before the kebab, and a tap shows its details. */}
               {!loading && kebabSlot && createPortal(<WaitingChip task={sessionTask} compact />, kebabSlot, 'waiting-chip')}

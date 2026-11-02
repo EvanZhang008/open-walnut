@@ -31,6 +31,7 @@ import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { openSessionFromPlus, pinToTier } from './draft-surface-helpers'
 import { expectNotInTasksTable, revealInTasksTable } from './tasks-table-helpers'
 import { DEFAULT_ORG_INSTRUCTIONS } from '../../../src/core/org/core-instructions'
+import { expectChatShown } from './org-view-helpers'
 
 // Both browser projects load this file in their own worker at about the same moment: the pid
 // keeps their projects apart (a shared one let one worker's lead answer the other's chat).
@@ -79,7 +80,7 @@ async function startProjectChat(page: Page): Promise<void> {
   const channel = page.locator(`[data-testid="org-channel"][data-key="project:${PROJECT.toLowerCase()}"]`)
   await channel.click()
   await expect(channel).toHaveAttribute('aria-selected', 'true')
-  await page.getByTestId('org-tab-chat').click()
+  await expectChatShown(page)
   await page.getByTestId('org-start-chat').click()
 }
 
@@ -139,7 +140,7 @@ async function openRailProjectMenu(page: Page, project: string): Promise<Locator
  *  older answer never passes. */
 async function clickForReply(page: Page, click: () => Promise<void>, expected: string): Promise<Locator> {
   const chat = mainChat(page)
-  await page.getByTestId('org-tab-chat').click()
+  await expectChatShown(page)
   await chat.or(page.getByTestId('org-chat-start')).first().waitFor({ timeout: 30_000 })
   const newest = async () => ((await replies(chat).count()) ? (await replies(chat).last().textContent()) ?? '' : '')
   let before = ''
@@ -154,7 +155,7 @@ async function clickForReply(page: Page, click: () => Promise<void>, expected: s
     before = last ?? ''
   }
   await click()
-  await expect(page.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
+  await expectChatShown(page)
   await expect(chat).toBeVisible({ timeout: 60_000 })
   await expect.poll(async () => {
     const now = await newest()
@@ -313,7 +314,7 @@ test('Main\'s quick actions sit in its composer\'s "+", not in a bar of their ow
   await openOrgMain(page)
   await expect(page.getByTestId('main-quick-actions')).toHaveCount(0)
   await expect(page.getByTestId('org-detail').getByText('Ask the CEO to')).toHaveCount(0)
-  await page.getByTestId('org-tab-chat').click()
+  await expectChatShown(page)
   const menu = await openMainPlus(page)
   await expect(menu.locator('.chat-plus-menu-label').filter({ hasText: 'Quick actions' })).toBeVisible()
   await expect(quickRows(menu)).toHaveText(['Tidy projects', 'Put tasks in place', 'Triage'])
@@ -332,10 +333,10 @@ test('Main\'s ⋮ opens its memory and instructions: the words save for its next
   const note = `Remember the garden plan. ${STAMP}`
   if (writes) expect((await request.put(`/api/v1/tasks/${main!.id}/agent-memory`, { data: { content: note, mode: 'replace' } })).ok()).toBe(true)
   await openOrgMain(page)
-  await page.getByTestId('org-tab-chat').click()
+  await expectChatShown(page)
   const chat = mainChat(page)
   await expect(chat).toBeVisible({ timeout: 60_000 })
-  await chat.locator('.session-panel-header .task-kebab-btn').first().click()
+  await page.getByTestId('org-detail-chat-tools').locator('.task-kebab-btn').click()
   const menu = page.locator('.task-kebab-menu')
   await menu.getByTestId('kebab-memory-instructions').click()
   await expect(menu).toHaveCount(0)
@@ -388,7 +389,7 @@ test('Main\'s ⋮ opens its memory and instructions: the words save for its next
     await page.keyboard.press('Escape')
     await expect(panel).toHaveCount(0)
     // Opened again, it reads what was stored.
-    await chat.locator('.session-panel-header .task-kebab-btn').first().click()
+    await page.getByTestId('org-detail-chat-tools').locator('.task-kebab-btn').click()
     await page.locator('.task-kebab-menu').getByTestId('kebab-memory-instructions').click()
     await expect(panel.getByTestId('am-instructions')).toHaveValue(words)
     // Restore puts the default back in the box; saved, the user's words are cleared.
@@ -410,7 +411,7 @@ test('Main\'s ⋮ opens its memory and instructions: the words save for its next
     let failed = 0
     const url = new RegExp(`/api/tasks/${main!.id}$`)
     await page.route(url, (route) => { failed++; return route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"down for the test"}' }) })
-    await chat.locator('.session-panel-header .task-kebab-btn').first().click()
+    await page.getByTestId('org-detail-chat-tools').locator('.task-kebab-btn').click()
     await page.locator('.task-kebab-menu').getByTestId('kebab-memory-instructions').click()
     await expect(panel.getByTestId('am-read-error')).toContainText('Could not read the stored instructions.')
     expect(failed).toBeGreaterThan(0)
@@ -478,7 +479,7 @@ test('the org chart\'s CEO form opens on Walnut\'s default core instructions; Re
 test('a quick action from Main\'s "+" sends it, keeps the draft, and Main answers; a second one reaches it again', async ({ page, browserName }) => {
   test.skip(browserName !== 'webkit', SENDS)
   await openOrgMain(page)
-  await page.getByTestId('org-tab-chat').click()
+  await expectChatShown(page)
   const box = mainChat(page).locator('.session-panel-input .chat-input-textarea')
   const draft = `half typed ${STAMP}`
   await box.fill(draft)
@@ -526,7 +527,7 @@ test('the Tasks page asks Main about one project from that project\'s ⋮, and a
 
   menu = await openRailProjectMenu(page, QA_PROJECT)
   await menu.locator('[data-menu-item="main-qa-place"]').click()
-  await expect(page).toHaveURL(/\/org\?node=main&tab=chat/)
+  await expect(page).toHaveURL(/\/org\?node=main/)
   await expect(page.getByTestId('org-detail-title')).toHaveText('CEO')
   const chat = mainChat(page)
   await expect(chat).toBeVisible({ timeout: 60_000 })
@@ -546,7 +547,7 @@ test('a Main waiting on the user\'s answer is not sent to: its chat opens on the
   try {
     // In Main's chat the question is in view, and the "+" rows are off until it is answered.
     await openOrgMain(page)
-    await page.getByTestId('org-tab-chat').click()
+    await expectChatShown(page)
     await expect(mainChat(page).getByText('Which validation target?').first()).toBeVisible({ timeout: 30_000 })
     const menu = await openMainPlus(page)
     const triage = menu.locator('[data-action-id="main-qa-triage"]')
@@ -562,7 +563,7 @@ test('a Main waiting on the user\'s answer is not sent to: its chat opens on the
     await expect(page).toHaveURL(/\/tasks/)
     const rail = await openRailProjectMenu(page, QA_PROJECT)
     await rail.locator('[data-menu-item="main-qa-triage"]').click()
-    await expect(page).toHaveURL(/\/org\?node=main&tab=chat/)
+    await expect(page).toHaveURL(/\/org\?node=main/)
     await expect(mainChat(page).getByText('Which validation target?').first()).toBeVisible({ timeout: 30_000 })
     // The question still waits: neither click answered or refused it.
     expect(((await (await request.get(`/api/sessions/${sid}`)).json()).session?.pendingPermission?.toolName ?? '')).toBe('AskUserQuestion')

@@ -92,7 +92,8 @@
   font-size: 10.5px;
   line-height: 15px;
 }
-.org-detail-led { margin-top: 2px; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-detail-led { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.org-detail-led::before { content: '· '; }
 .org-channel-name {
   font-weight: 600;
   font-size: 13.5px;
@@ -219,26 +220,18 @@
 
 .org-muted { color: var(--fg-muted); }
 
-.org-tabs {
-  flex: none;
-  display: flex;
-  gap: 2px;
-  padding: 3px;
-  border-radius: 9px;
-  background: var(--bg-secondary);
+/* The right of the node's one header row: the chat's status and kebab (SessionPanel headerSlot) and
+   the side bar's switch. */
+.org-detail-tools { flex: none; display: flex; align-items: center; gap: 6px; }
+.org-detail-chat-tools { display: inline-flex; align-items: center; gap: 6px; }
+.org-detail-chat-tools:empty { display: none; }
+.org-rail-toggle {
+  position: relative; flex: none; width: 28px; height: 28px; display: inline-grid; place-items: center;
+  border: 0; border-radius: 7px; background: transparent; color: var(--fg-muted, #86868b); cursor: pointer;
 }
-.org-tab {
-  border: none;
-  border-radius: 7px;
-  padding: 4px 11px;
-  background: transparent;
-  color: var(--fg-secondary, var(--fg));
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-.org-tab.is-on { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
-.org-tab-count { color: var(--fg-muted); margin-left: 2px; }
+.org-rail-toggle:hover, .org-rail-toggle:focus-visible { background: var(--bg-secondary); color: var(--fg); }
+.org-rail-toggle.is-on { background: var(--bg-secondary); color: var(--fg); }
+.org-rail-toggle .org-top-new { top: 3px; right: 3px; }
 
 .org-detail-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .org-detail-body-team { overflow: auto; padding: 14px 18px; }
@@ -325,8 +318,6 @@
 
 /* Phone: the tabs take their own row under who it is. */
 .org-page.is-phone .org-detail-head { flex-wrap: wrap; gap: 10px; padding: 10px 12px; }
-.org-page.is-phone .org-tabs { order: 3; flex-basis: 100%; }
-.org-page.is-phone .org-tab { flex: 1; }
 .org-page.is-phone .org-composer { padding-left: 12px; padding-right: 12px; }
 .org-page.is-phone .org-detail-body-team { padding: 12px; }
 

@@ -271,7 +271,7 @@ test('a right-click on an Org row opens Walnut\'s menu, kept short: open it, mov
   await menu.getByText('Open team', { exact: true }).click()
   await expect(menu).toHaveCount(0)
   await expect(channel(B)).toHaveAttribute('aria-selected', 'true')
-  await expect(page.getByTestId('org-tab-team')).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'team')
 
   // Move it: the row opens the VPs at the cursor, a pick opens the chart on the same question as
   // a drag, and nothing moves before Confirm.

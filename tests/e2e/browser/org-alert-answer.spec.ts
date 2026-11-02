@@ -484,11 +484,9 @@ test('Quote puts the ask in this VP\'s chat, ahead of what was typed, not in its
   await openTeam(page, [ids.leadSid])
   const homeComposer = page.locator(`.main-page-session-column .session-panel[data-session-id="${ids.leadSid}"] .chat-input-textarea`)
   await expect(homeComposer).toHaveCount(1)
-  // From another tab: Quote opens the chat first.
-  await page.getByTestId('org-tab-team').click()
+  // Quote puts the ask into the chat beside the side bar.
   const composer = () => page.locator(`[data-testid="org-chat"] .session-panel[data-session-id="${ids.leadSid}"] .chat-input-textarea`)
   await alertRow(page, ids.words).getByTestId('org-alert-quote').click()
-  await expect(page.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
   await expect(composer()).toHaveValue(new RegExp(`^> Budget ${STAMP}: Quote me ${STAMP}`), { timeout: 30_000 })
   // This chat's panel took it: focus is in it and the page stays on the Org page. The Home column
   // of the same session shows the same words, since a session keeps one draft (utils/drafts.ts).

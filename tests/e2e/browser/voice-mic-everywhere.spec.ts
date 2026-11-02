@@ -483,19 +483,6 @@ test.describe('Org page', () => {
     await removeTasks(request, made)
   })
 
-  test('the composer to a lead has the mic in its row', async ({ page }) => {
-    test.setTimeout(120_000)
-    await home(page)
-    await page.getByTestId('sidebar-org').click()
-    await expect(page.getByTestId('org-page')).toBeVisible({ timeout: 30_000 })
-    await page.locator(`[data-testid="org-channel"][data-key="project:${project.toLowerCase()}"]`).click()
-    const detail = page.getByTestId('org-detail')
-    await detail.getByTestId('org-tab-board').click()
-    const composer = detail.getByTestId('org-composer')
-    await expect(composer).toBeVisible({ timeout: 30_000 })
-    await expectBoxMic(page, 'org-composer', composer.locator('textarea'), composer)
-  })
-
   test('an ask\'s answer box on the Task rail is the AnswerBox: it grows, has no grip, and dictation lands in it', async ({ page, request, browserName }) => {
     test.setTimeout(180_000)
     const { fixtureRoot } = await discoverBrowserFixture(TEST_PORT)

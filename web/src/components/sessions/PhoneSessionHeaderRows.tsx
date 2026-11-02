@@ -20,6 +20,10 @@ export interface PhoneSessionHeaderRowsProps {
   plan: boolean;
   onPlan: () => void;
   onCloseSession?: () => void;
+  /** Off where the menu has its own Background tasks row (the desktop menu's Views). */
+  background?: boolean;
+  /** Rows of the hidden header's window controls (a host that draws the header, SessionPanel headerSlot). */
+  extra?: ReadonlyArray<{ label: string; onClick: () => void; testId: string }>;
 }
 
 function Row({ label, active, disabled, why, onClick, testId }: {
@@ -58,11 +62,12 @@ export function PhoneSessionHeaderRows(p: PhoneSessionHeaderRowsProps) {
         <Row label="Board" active={p.activeView === 'board'} disabled={p.board === 'waiting'} onClick={view('board')} testId="phone-row-board"
           why={p.board === 'waiting' ? 'Not written yet' : undefined} />
       )}
-      {background.length > 0 && (
+      {p.background !== false && background.length > 0 && (
         <Row label={running > 0 ? `Background tasks (${running} running)` : 'Background tasks'}
           onClick={() => { p.close(); openBackgroundPanel(p.sessionId); }} testId="phone-row-background" />
       )}
       {p.plan && <Row label="Plan" onClick={() => { p.close(); p.onPlan(); }} testId="phone-row-plan" />}
+      {p.extra?.map((r) => <Row key={r.testId} label={r.label} onClick={() => { p.close(); r.onClick(); }} testId={r.testId} />)}
       {p.onCloseSession && <Row label="Close session" onClick={() => { p.close(); p.onCloseSession?.(); }} testId="phone-row-close" />}
       <div className="task-kebab-divider" />
     </div>

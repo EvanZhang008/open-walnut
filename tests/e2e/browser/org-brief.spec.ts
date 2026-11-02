@@ -334,15 +334,16 @@ test('the rail sits beside the chat at full height, or above it on a narrow wind
   await openNode(page, LED)
   const detail = page.getByTestId('org-detail')
   const rail = detail.getByTestId('org-rail')
-  const header = detail.locator('[data-testid="org-chat"] .session-panel > .session-panel-header')
+  // The chat draws no header of its own here (the node's one header holds its controls): its
+  // composer stands for it being drawn.
+  const header = detail.locator('[data-testid="org-chat"] .chat-input-textarea')
   await expect(header).toBeVisible({ timeout: 30_000 })
   const boxes = () => page.evaluate(() => {
     const rect = (s: string) => document.querySelector(s)?.getBoundingClientRect() ?? null
     const r = rect('[data-testid="org-rail"]')!
     const chat = rect('[data-testid="org-chat"]')!
-    const head = rect('[data-testid="org-chat"] .session-panel > .session-panel-header')!
     const history = rect('[data-testid="org-chat"] .session-history')!
-    return { railLeft: r.left, railRight: r.right, railTop: r.top, railBottom: r.bottom, chatLeft: chat.left, chatRight: chat.right, chatTop: chat.top, chatBottom: chat.bottom, headTop: head.top, headBottom: head.bottom, historyTop: history.top }
+    return { railLeft: r.left, railRight: r.right, railTop: r.top, railBottom: r.bottom, chatLeft: chat.left, chatRight: chat.right, chatTop: chat.top, chatBottom: chat.bottom, historyTop: history.top }
   })
   for (const [width, height, placement] of [[1280, 800, 'side'], [1280, 560, 'side'], [900, 800, 'top']] as const) {
     await page.setViewportSize({ width, height })
@@ -353,7 +354,7 @@ test('the rail sits beside the chat at full height, or above it on a narrow wind
       await expect.poll(async () => {
         const b = await boxes()
         const apart = placement === 'side' ? b.chatRight <= b.railLeft + 0.5 && b.chatTop <= b.railTop + 0.5 : b.railBottom <= b.chatTop + 0.5
-        return apart && b.headTop >= b.chatTop - 0.5 && b.historyTop >= b.headBottom - 0.5
+        return apart && b.historyTop >= b.chatTop - 0.5
       }, { message: `${view} at ${width}x${height}: ${JSON.stringify(await boxes())}` }).toBe(true)
       await detail.screenshot({ path: `test-results/org-rail-${placement}-${view}-${height}-${test.info().project.name}.png` })
     }

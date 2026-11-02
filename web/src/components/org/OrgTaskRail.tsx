@@ -4,7 +4,11 @@
  * click ... show the summay of the issue veyr clear, with potentially a more secino"). Beside the
  * chat on a wide page, so the chat keeps its full height; above it on a narrow one.
  *
- *   head     Task | Brief (a lead or Main keeps a Brief), Fold on the Brief
+ *   head     Tasks | Brief | Threads (a lead or Main keeps a Brief and Threads), each with its count or
+ *            news dot; Fold on the Brief; widen (beside the chat) and close (2026-11-02, the user picked
+ *            design 1 of the side-bar round: "1")
+ *   Tasks    Status | Team | Board: the same work by status (below), by team (the node's teams and
+ *            their live lines), or as the Board its lead keeps (when it keeps one)
  *   tabs     Pinned (the tasks the user pinned to this node, org-pins.ts), then the home panel's four
  *            names with counts: Needs you, Working, Waiting / snoozed, Completed
  *   Needs you  one row per ask: its summary first, its task and when it was checked, More for the
@@ -22,7 +26,7 @@
  * the row's own menus.
  */
 import '@/styles/org-rail.css';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { timeAgo } from '@/utils/time';
@@ -52,6 +56,34 @@ export interface OrgAnswers {
 }
 
 export { TAB_DOT };
+
+/** How the Tasks view draws the node's work: by status, by team, or as its lead's Board. */
+export const ORG_TASK_MODES = ['status', 'team', 'board'] as const;
+export type OrgTaskMode = typeof ORG_TASK_MODES[number];
+const MODE_LABELS: Record<OrgTaskMode, string> = { status: 'Status', team: 'Team', board: 'Board' };
+
+function ModeSwitch({ mode, modes, onPick }: { mode: OrgTaskMode; modes: readonly OrgTaskMode[]; onPick: (m: OrgTaskMode) => void }) {
+  return (
+    <div className="org-task-modes" role="group" aria-label="Show the tasks by" data-testid="org-task-modes">
+      {modes.map((m) => (
+        <button key={m} type="button" aria-pressed={mode === m} className={mode === m ? 'is-on' : ''} data-testid={`org-task-mode-${m}`} onClick={() => onPick(m)}>
+          {MODE_LABELS[m]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const ICON_WIDEN = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+  </svg>
+);
+const ICON_NARROW = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" />
+  </svg>
+);
 
 function TaskTabBar({ tabs, tab, onPick }: { tabs: OrgTaskTabs; tab: OrgRailTab; onPick: (tab: OrgRailTab) => void }) {
   return (
@@ -242,7 +274,7 @@ function AskList({ alerts, tasks, vpOf, ownId, ownName, onOpen, onQuote, canQuot
   );
 }
 
-export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, onView, keepsBrief, briefNew, threadsNew, onClose, briefFolded, onBriefFolded, briefFresh, briefUpdating, threads, onThreadFollowUp, contact, title, onOpenAlert, onQuote, canQuote, answers, onOpenTask, now, placement, onPin, width }: {
+export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, onView, keepsBrief, briefNew, threadsNew, threadsCount, onClose, wideOn, onWide, mode, onMode, renderTeam, renderBoard, briefFolded, onBriefFolded, briefFresh, briefUpdating, threads, onThreadFollowUp, contact, title, onOpenAlert, onQuote, canQuote, answers, onOpenTask, now, placement, onPin, width }: {
   row: ChannelRow;
   rows: readonly ChannelRow[];
   tasks: readonly Task[];
@@ -257,6 +289,16 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
   briefNew: boolean;
   /** A thread he would see has news since he last looked at Threads. */
   threadsNew: boolean;
+  /** The threads his view shows (OrgThreads), for the tab's count. */
+  threadsCount: number;
+  /** Widened beside the chat (null: no widen here, the rail is above the chat), and the switch. */
+  wideOn: boolean | null;
+  onWide: (wide: boolean) => void;
+  /** How Tasks draws the work, and the views it draws (renderBoard: null when the node keeps no Board). */
+  mode: OrgTaskMode;
+  onMode: (mode: OrgTaskMode) => void;
+  renderTeam: () => ReactNode;
+  renderBoard: (() => ReactNode) | null;
   /** Close this panel (the chat takes its room; the header brings it back). */
   onClose: () => void;
   briefFolded: boolean;
@@ -294,20 +336,25 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
     return m;
   }, [row.kind, rows]);
   const brief = keepsBrief ? contact?.brief : undefined;
+  // A Board picked on a node that keeps none (any more) shows the work by status.
+  const shownMode: OrgTaskMode = mode === 'board' && !renderBoard ? 'status' : mode;
   return (
-    <aside className={`org-rail is-${placement}`} data-testid="org-rail" data-placement={placement} {...(width ? { style: { width } } : {})}>
-      <div className={`org-top${keepsBrief ? ' has-switch' : ''}`} data-testid="org-top" data-view={view}>
-        {keepsBrief && (
-          <div className="org-top-switch" role="group" aria-label="Task, Brief or Threads">
-            <button type="button" aria-pressed={view === 'task'} className={view === 'task' ? 'is-on' : ''} data-testid="org-top-task" onClick={() => onView('task')}>Task</button>
-            <button type="button" aria-pressed={view === 'brief'} className={view === 'brief' ? 'is-on' : ''} data-testid="org-top-brief" onClick={() => onView('brief')}>
+    <aside className={`org-rail is-${placement}${wideOn ? ' is-wide' : ''}`} data-testid="org-rail" data-placement={placement} {...(wideOn ? { 'data-wide': '1' } : {})} {...(width ? { style: { width } } : {})}>
+      <div className="org-top has-switch" data-testid="org-top" data-view={view}>
+        <div className="org-top-tabs" role="group" aria-label={keepsBrief ? 'Tasks, Brief or Threads' : 'Tasks'}>
+          <button type="button" aria-pressed={view === 'task'} className={`org-top-tab${view === 'task' ? ' is-on' : ''}`} data-testid="org-top-task" onClick={() => onView('task')}>
+            Tasks<span className="org-top-count">{row.counts.open}</span>
+          </button>
+          {keepsBrief && (<>
+            <button type="button" aria-pressed={view === 'brief'} className={`org-top-tab${view === 'brief' ? ' is-on' : ''}`} data-testid="org-top-brief" onClick={() => onView('brief')}>
               Brief{briefNew && <i className="org-top-new" data-testid="org-top-brief-new"><span className="org-sr-only">, rewritten since you read it</span></i>}
             </button>
-            <button type="button" aria-pressed={view === 'threads'} className={view === 'threads' ? 'is-on' : ''} data-testid="org-top-threads" onClick={() => onView('threads')}>
-              Threads{threadsNew && <i className="org-top-new" data-testid="org-top-threads-new"><span className="org-sr-only">, news since you looked</span></i>}
+            <button type="button" aria-pressed={view === 'threads'} className={`org-top-tab${view === 'threads' ? ' is-on' : ''}`} data-testid="org-top-threads" onClick={() => onView('threads')}>
+              Threads{threadsCount > 0 && <span className="org-top-count">{threadsCount}</span>}
+              {threadsNew && <i className="org-top-new" data-testid="org-top-threads-new"><span className="org-sr-only">, news since you looked</span></i>}
             </button>
-          </div>
-        )}
+          </>)}
+        </div>
         {/* Its refresh turn is on its way (core/sessions/brief-refresh.ts): the chat and the Brief are being brought up to date. */}
         {view === 'task' && briefUpdating && <span className="org-top-updating" data-testid="org-top-updating">Updating…</span>}
         {view === 'brief' && brief?.text && (
@@ -315,9 +362,16 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
             {briefFolded ? 'Show all' : 'Fold'}
           </button>
         )}
-        <button type="button" className="org-rail-close" data-testid="org-rail-close" aria-label="Close this panel" title="Close this panel" onClick={onClose}>
-          <span aria-hidden="true">×</span>
-        </button>
+        <span className="org-top-acts">
+          {wideOn !== null && (
+            <button type="button" className="org-rail-icon" data-testid="org-rail-wide" aria-pressed={wideOn}
+              aria-label="Widen beside the chat" title={wideOn ? 'Back to its own width' : 'Widen beside the chat'}
+              onClick={() => onWide(!wideOn)}>{wideOn ? ICON_NARROW : ICON_WIDEN}</button>
+          )}
+          <button type="button" className="org-rail-close" data-testid="org-rail-close" aria-label="Close this panel" title="Close this panel" onClick={onClose}>
+            <span aria-hidden="true">×</span>
+          </button>
+        </span>
       </div>
       {view === 'brief' ? (
         <div className="org-rail-body">
@@ -328,7 +382,13 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
           <OrgThreads name={title} state={threads} tasks={tasks} onOpenTask={onOpenTask} onFollowUp={onThreadFollowUp} now={now} />
         </div>
       ) : (
-        <div className="org-task-view" data-testid="org-task-view" data-tab={tab}>
+        <div className="org-task-view" data-testid="org-task-view" data-tab={tab} data-mode={shownMode}>
+          <ModeSwitch mode={shownMode} modes={renderBoard ? ORG_TASK_MODES : ORG_TASK_MODES.filter((m) => m !== 'board')} onPick={onMode} />
+          {shownMode === 'team' ? (
+            <div className="org-rail-body org-rail-team">{renderTeam()}</div>
+          ) : shownMode === 'board' && renderBoard ? (
+            <div className="org-rail-board" data-testid="org-rail-board">{renderBoard()}</div>
+          ) : (<>
           <TaskTabBar tabs={tabs} tab={tab} onPick={onTab} />
           <div className="org-rail-body">
             {tab === 'needs' ? (<>
@@ -339,6 +399,7 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
               <TaskTabList tasks={tabs[tab]} tab={tab} onOpen={onOpenTask} now={now} pinning={pinning} />
             )}
           </div>
+          </>)}
         </div>
       )}
     </aside>

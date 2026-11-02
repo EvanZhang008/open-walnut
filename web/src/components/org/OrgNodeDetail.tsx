@@ -1,14 +1,16 @@
 /**
  * The Org page's right side: the selected node (Main, or a project's lead).
  *
- *   header   who it is, its counts (each pill opens its tab), when its work last moved; tabs
- *   rail     beside the chat on a wide page, above it on a narrow one (OrgTaskRail): Task, the node's
- *            work in the home panel's four tabs, its asks answered in place; or the Brief its lead
- *            or Main keeps
- *   Board    the Board its lead keeps (TaskBoardPane), when it keeps one
- *   Team     its work by the user's status (Needs you / Working / Waiting), each with its line
- *   Chat     its own session (SessionPanel), or a way to start one
- *   composer under Board and Team: a line to its session, then Chat shows it
+ *   header   one row (2026-11-02, the user picked design 1 of the side-bar round): who it is, its counts
+ *            (each pill opens its tab), who it leads, when its work last moved; on the right the chat's
+ *            status, the side bar's switch (dotted while it is closed and has news) and the chat's
+ *            kebab, which holds Changed, Files, Terminal and Board ("hide all of them in the drop
+ *            down button"). The chat draws no header of its own here (SessionPanel headerSlot).
+ *   chat     its own session (SessionPanel), always on screen; or a way to start one
+ *   side bar beside the chat on a wide page, above it on a narrow one (OrgTaskRail): Tasks (by status,
+ *            by team, or as the Board its lead keeps), Brief and Threads; it widens beside the chat
+ *            and closes, and never takes the chat's place
+ *   A node no one answers for (the Inbox) has no chat: its teams fill the page instead.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { readOrgPlace, writeOrgPlace } from './org-place';
@@ -24,8 +26,7 @@ import { useSessionSend } from '@/hooks/useSessionSend';
 import { useOrgThreads } from './useOrgThreads';
 import { resolveTaskSessionId } from '@/utils/session-status';
 import { timeAgo } from '@/utils/time';
-import { OrgComposerBar } from './OrgComposerBar';
-import { OrgTaskRail, TAB_DOT, type OrgAnswers } from './OrgTaskRail';
+import { ORG_TASK_MODES, OrgTaskRail, TAB_DOT, type OrgAnswers, type OrgTaskMode } from './OrgTaskRail';
 import { askWords } from './org-ask-form';
 import { COMPOSER_INSERT_EVENT, type ComposerInsertDetail } from '@/utils/composer-insert';
 import { recentMainStart } from './ask-main';
@@ -34,7 +35,7 @@ import { useHasBoard } from './useBoardOwner';
 import { flashProbeEnabled } from '@/utils/flash-probe';
 import { log } from '@/utils/log';
 import { ORG_TOP_VIEWS, briefUnread, markBriefSeen, markThreadsSeen, readBriefFolded, threadsUnread, type OrgTopView } from './org-brief-model';
-import { newsAt, sharedAnswers } from '@open-walnut/thread-view';
+import { newsAt, sharedAnswers, shownToHim } from '@open-walnut/thread-view';
 import { briefUpdating } from '@open-walnut/brief-fresh';
 import { useBriefRefresh } from './useBriefRefresh';
 import { ORG_RAIL_TABS, ORG_TASK_TAB_LABELS, orgTaskTabs, ownAskFirst, type OrgRailTab, type OrgTaskTab, type OrgTaskTabs } from './org-task-tabs';
@@ -52,6 +53,8 @@ export const RAIL_MIN_PX = 300;
 export const CHAT_MIN_PX = 420;
 /** Its width when the user never set one: about a third of a 1280px window's node. */
 export const RAIL_DEFAULT_VW = 27;
+/** Widened: this share of the node, the chat beside it still CHAT_MIN_PX at least. */
+export const RAIL_WIDE_PCT = 60;
 /** The rail's width the user set, per surface (the CEO's, a VP's), as % of the window: an
  *  `open-walnut-` key, so it follows them to every window and device (ui-prefs-sync.ts). */
 export const railWidthKey = (kind: ChannelRow['kind']) => `open-walnut-org-rail-w-${kind === 'main' ? 'main' : 'vp'}`;
@@ -62,10 +65,10 @@ interface Props {
   row: ChannelRow;
   rows: readonly ChannelRow[];
   tasks: readonly Task[];
-  /** The tab the URL asked for on arrival; the node's default otherwise. */
+  /** A view the URL asked for (a link, a row's menu): Team or Board opens the side bar's Tasks on it. */
   initialTab: OrgTab | null;
-  /** The tab the user picked for THIS node (`key`), for the URL. */
-  onTabChange: (key: string, tab: OrgTab) => void;
+  /** That view was opened: the URL lets go of it, so the node keeps the view it is left on. */
+  onTabUsed: (key: string) => void;
   onSelect: (key: string) => void;
   /** Open a task that is not this node: the page's side panel (`inbox`: on its session's Inbox tab). */
   onOpenTask: (taskId: string, opts?: { inbox?: boolean }) => void;
@@ -148,7 +151,7 @@ function TeamBoard({ columns, onPick, emptyText }: {
   );
 }
 
-export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSelect, onOpenTask, onOpenSession, answers, onStartChat, onBack, onPin, now }: Props) {
+export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelect, onOpenTask, onOpenSession, answers, onStartChat, onBack, onPin, now }: Props) {
   const contact = useMemo(() => (row.contactId ? tasks.find((t) => t.id === row.contactId) : undefined), [tasks, row.contactId]);
   // Temporary (utils/flash-probe.ts): a remount of the node's detail is one cause of a flash.
   useEffect(() => { if (flashProbeEnabled()) log.info('flash-probe', 'org detail mounted', { node: row.key }); }, [row.key]);
@@ -160,9 +163,6 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
     () => (row.kind === 'main' ? mainTeamColumns(rows) : teamColumns(row, tasks)),
     [row, rows, tasks],
   );
-  const teamCount = row.kind === 'main' ? rows.length : row.node?.teams.length ?? 0;
-  const [tab, setTab] = useState<OrgTab | null>(initialTab);
-  const [focusChat, setFocusChat] = useState(false);
   /** The chat's Inbox tab, asked for by Answer on a letter (SessionPanel inboxRequest), for the
    *  session it was asked of: a replaced session's new panel does not reopen it. */
   const [chatInbox, setChatInbox] = useState<{ sid: string; n: number } | null>(null);
@@ -180,8 +180,12 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   const topView: OrgTopView = keepsBrief ? topPick : 'task';
   /** The Task view's tab: Needs you until the user picks another, then the one he left it on. */
   const [taskTab, setTaskTab] = usePageViewOf<OrgRailTab>('org', 'node.taskTab', row.key, 'needs', oneOf(ORG_RAIL_TABS));
+  /** Tasks by status, by team, or as the Board (2026-11-02: Team and Board went under Tasks). */
+  const [taskMode, setTaskMode] = usePageViewOf<OrgTaskMode>('org', 'node.taskMode', row.key, 'status', oneOf(ORG_TASK_MODES));
+  /** The side bar widened beside the chat, per node. */
+  const [railWide, setRailWide] = usePageViewOf<boolean>('org', 'node.railWide', row.key, false, isBoolean);
   const tabs = useMemo(() => orgTaskTabs(row, rows, tasks, now), [row, rows, tasks, now]);
-  const openTab = (t: OrgTaskTab) => { setTopPick('task'); setTaskTab(t); };
+  const openTab = (t: OrgTaskTab) => { setRailHidden(false); setTopPick('task'); setTaskMode('status'); setTaskTab(t); };
   const brief = keepsBrief ? contact?.brief : undefined;
   const pickTop = (v: OrgTopView) => setTopPick(v);
   /** The panel above or beside the chat (Task, Brief, Threads) closed: the chat takes its room;
@@ -196,10 +200,10 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   const title = row.kind === 'main' ? 'CEO' : row.contactTitle;
   // Main is always someone to talk to: its task is made by the first chat.
   const canTalk = row.kind === 'main' || !!row.contactId || !!row.node?.needsLead;
-  // A node opens on its chat (the user, 2026-10-25: "chat first, not the board"); one no one
-  // answers for (the Inbox) on its team.
-  const shown: OrgTab | null = tab ?? (canTalk ? 'chat' : 'team');
-  // The Team view comes back scrolled where it was on this node (org-place.ts).
+  // The chat is always there (2026-11-02, the user: the side bar "can expand to more but not like a
+  // individual page"); a node no one answers for (the Inbox) shows its teams instead.
+  const shown: 'chat' | 'team' = canTalk ? 'chat' : 'team';
+  // The Inbox's teams (its page has no chat) come back scrolled where they were (org-place.ts).
   const bodyRef = useRef<HTMLDivElement>(null);
   const teamShown = shown === 'team';
   useLayoutEffect(() => {
@@ -215,10 +219,15 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
       if (bodyRef.current) writeOrgPlace({ team: { key: row.key, top: Math.round(bodyRef.current.scrollTop) } });
     }, 200);
   };
-  useEffect(() => { if (tab === 'board' && hasBoard === false) setTab('team'); }, [tab, hasBoard]);
-  // A pick of this same node that names a tab (a chat that names this node's session) shows it.
-  useEffect(() => { if (initialTab) setTab(initialTab); }, [initialTab]);
-  const pick = (t: OrgTab) => { setTab(t); setFocusChat(false); setChatInbox(null); onTabChange(row.key, t); };
+  /** The side bar on Tasks, drawn by `mode` (the Board: the one its lead keeps). */
+  const openTasks = (mode: OrgTaskMode) => { setRailHidden(false); setTopPick('task'); setTaskMode(mode === 'board' && hasBoard === false ? 'status' : mode); };
+  // A view the URL names (a row's "Open team", an old link to Board): the side bar opens on it, once.
+  useEffect(() => {
+    if (!initialTab) return;
+    if (initialTab === 'team' || initialTab === 'board') openTasks(initialTab);
+    onTabUsed(row.key);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per ask
+  }, [initialTab]);
   const { send } = useSessionSend(sessionId);
   // The user's own requests to this node (core/org/threads-model.ts), read while its view is shown.
   // Read whenever the node keeps them, so the Threads tab can say it has news (2026-11-02, the user:
@@ -229,10 +238,13 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   const threadsShown = !railHidden && topView === 'threads';
   useEffect(() => { if (threadsShown && threadsId && threadsNews) markThreadsSeen(threadsId, threadsNews); }, [threadsShown, threadsId, threadsNews]);
   const threadsNew = !threadsShown && !!threadsId && threadsUnread(threadsId, threadsNews);
+  const threadsCount = useMemo(() => {
+    const list = threads.threads;
+    if (!list) return 0;
+    const shared = sharedAnswers(list);
+    return list.filter((t) => shownToHim(t, shared)).length;
+  }, [threads.threads]);
   const followUp = sessionId ? (threadId: string, text: string) => send(sessionId, text, undefined, { threadId }) : null;
-  // A send that answers after the user moved to another node must not pull them back.
-  const mounted = useRef(true);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   /** A task chip on the Board: a node of this page is selected; any other task opens beside it. */
   const openChip = (id: string) => {
     const hit = rows.find((r) => r.contactId === id);
@@ -255,11 +267,10 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
    *  session's Inbox tab, anything else in its chat (this node's, or the task's beside the page). */
   const openAlert = (a: OrgAlertView) => {
     const own = a.taskId === row.contactId;
-    // The Board may still be loading (null): its tab falls back to Team if there is none.
-    if (a.kind === 'needs' && a.source === 'choice' && hasBoard !== false && onContactBoard(a.taskId)) { pick('board'); return; }
+    // The Board may still be loading (null): the side bar shows the work by status until it is known.
+    if (a.kind === 'needs' && a.source === 'choice' && hasBoard !== false && onContactBoard(a.taskId)) { openTasks('board'); return; }
     if (a.kind === 'needs' && a.source === 'letter' && !own) { onOpenTask(a.taskId, { inbox: true }); return; }
     if (own) {
-      pick('chat');
       if (a.kind === 'needs' && a.source === 'letter' && sessionId) setChatInbox({ sid: sessionId, n: Date.now() });
       return;
     }
@@ -271,7 +282,6 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
   const chatHostRef = useRef<HTMLDivElement>(null);
   const quoteAlert = (a: OrgAlertView) => {
     if (!sessionId) return;
-    if (shown !== 'chat') pick('chat');
     setQuote({ sid: sessionId, text: alertQuote(a) });
   };
   useEffect(() => {
@@ -324,17 +334,43 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
     return { min: px(b.min), max: px(b.max), now: px(Math.min(b.max, Math.max(b.min, railWidth.pct))), b };
   })();
   // The window's own clamp too, so a width set on a wider window still leaves both sides readable.
-  const railCss = `clamp(${RAIL_MIN_PX}px, ${railWidth.pct}vw, max(${RAIL_MIN_PX}px, calc(100% - ${CHAT_MIN_PX}px)))`;
+  const railCss = railSide && railWide
+    ? `clamp(${RAIL_MIN_PX}px, ${RAIL_WIDE_PCT}%, max(${RAIL_MIN_PX}px, calc(100% - ${CHAT_MIN_PX}px)))`
+    : `clamp(${RAIL_MIN_PX}px, ${railWidth.pct}vw, max(${RAIL_MIN_PX}px, calc(100% - ${CHAT_MIN_PX}px)))`;
+  /** The chat's header goes into the node's (SessionPanel headerSlot): its status and its kebab. */
+  const [chatTools, setChatTools] = useState<HTMLElement | null>(null);
   const lastMoved = row.lastAt ? timeAgo(new Date(row.lastAt).toISOString(), { now }) : '';
-  const tabId = (t: OrgTab) => `org-tab-${t}-${row.key}`;
   // Every ask the Needs you count holds is a row, the node's own first (2026-10-31: a count with
   // "Its ask is in the chat." under it left the user hunting for it).
   const alertsShown = useMemo(() => ownAskFirst(tabs.needs, row.contactId), [tabs.needs, row.contactId]);
 
+  /** The node's teams by the user's status, each with its line. */
+  const renderTeam = () => (
+    <TeamBoard
+      columns={columns}
+      emptyText={row.kind === 'main' ? 'No project has open work yet.' : 'Nothing open here.'}
+      onPick={(it) => { if (it.rowKey) onSelect(it.rowKey); else onOpenTask(it.id); }}
+    />
+  );
+  /** The Board its lead keeps, in the side bar. */
+  const renderBoard = () => row.contactId ? (
+    <TaskBoardPane
+      key={row.contactId}
+      taskId={row.contactId}
+      {...(sessionId ? { sessionId, onSendToSession: (text: string) => send(sessionId, text) } : {})}
+      onOpenTask={openChip}
+      quietEmpty
+      renderSession={(cardSessionId, opts) => (
+        <SessionPanel key={cardSessionId} sessionId={cardSessionId} embedded inset onClose={opts.onClose} onTaskClick={openChip} onSessionClick={onOpenSession} />
+      )}
+    />
+  ) : null;
+
   const rail = (
     <OrgTaskRail
       row={row} rows={rows} tasks={tasks} tabs={tabs} alerts={alertsShown} tab={taskTab} onTab={setTaskTab}
-      view={topView} onView={pickTop} keepsBrief={keepsBrief} briefNew={briefNew} threadsNew={threadsNew} onClose={() => setRailHidden(true)} briefFolded={briefFolded} onBriefFolded={setBriefFolded} briefFresh={briefFresh} briefUpdating={updating}
+      view={topView} onView={pickTop} keepsBrief={keepsBrief} briefNew={briefNew} threadsNew={threadsNew} threadsCount={threadsCount} onClose={() => setRailHidden(true)}
+      wideOn={railSide ? railWide : null} onWide={setRailWide} mode={taskMode} onMode={setTaskMode} renderTeam={renderTeam} renderBoard={hasBoard && row.contactId ? renderBoard : null} briefFolded={briefFolded} onBriefFolded={setBriefFolded} briefFresh={briefFresh} briefUpdating={updating}
       threads={threads} onThreadFollowUp={followUp}
       contact={contact} title={title} onOpenAlert={openAlert} onQuote={quoteAlert} canQuote={!!sessionId} answers={answers}
       onOpenTask={openChip} now={now} placement={railSide ? 'side' : 'top'} onPin={onPin}
@@ -351,33 +387,31 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
           <h2 className="org-detail-title" data-testid="org-detail-title">{title}</h2>
           <div className="org-detail-sub">
             <CountPills row={row} tabs={tabs} onOpen={openTab} />
+            {!!row.led?.length && (
+              <span className="org-detail-led org-muted" data-testid="org-detail-led">
+                {/* A VP made only to put projects under leads no work of its own while its home has none. */}
+                Leads {[...(row.vpOnly && !row.node?.counts.open ? [] : [row.name]), ...row.led.map((l) => l.name)].join(', ')}
+              </span>
+            )}
             {lastMoved && <span className="org-muted">· moved {lastMoved}</span>}
           </div>
-          {!!row.led?.length && (
-            <div className="org-detail-led org-muted" data-testid="org-detail-led">
-              {/* A VP made only to put projects under leads no work of its own while its home has none. */}
-              Leads {[...(row.vpOnly && !row.node?.counts.open ? [] : [row.name]), ...row.led.map((l) => l.name)].join(', ')}
-            </div>
-          )}
         </div>
-        <div className="org-tabs" role="tablist" aria-label={`${title} views`}>
-          {canTalk && (
-            <button type="button" role="tab" id={tabId('chat')} aria-controls="org-detail-panel" aria-selected={shown === 'chat'} className={`org-tab${shown === 'chat' ? ' is-on' : ''}`} data-testid="org-tab-chat" onClick={() => pick('chat')}>Chat</button>
-          )}
-          <button type="button" role="tab" id={tabId('team')} aria-controls="org-detail-panel" aria-selected={shown === 'team'} className={`org-tab${shown === 'team' ? ' is-on' : ''}`} data-testid="org-tab-team" onClick={() => pick('team')}>
-            {row.kind === 'main' ? 'VPs' : 'Team'} <span className="org-tab-count">{teamCount}</span>
+        <div className="org-detail-tools" data-testid="org-detail-tools">
+          {/* The chat's status and its kebab (Changed, Files, Terminal, Board, the session's menu). */}
+          <span ref={setChatTools} className="org-detail-chat-tools" data-testid="org-detail-chat-tools" />
+          <button
+            type="button"
+            className={`org-rail-toggle${railHidden ? '' : ' is-on'}`}
+            data-testid="org-rail-toggle"
+            aria-pressed={!railHidden}
+            aria-label={keepsBrief ? 'Side bar: Tasks, Brief and Threads' : 'Side bar: Tasks'}
+            title={railHidden ? (keepsBrief ? 'Show Tasks, Brief and Threads' : 'Show the tasks') : 'Hide the side bar'}
+            onClick={() => setRailHidden(!railHidden)}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" /></svg>
+            {railHidden && (briefNew || threadsNew) && <i className="org-top-new" data-testid="org-rail-toggle-new"><span className="org-sr-only">, something new</span></i>}
           </button>
-          {hasBoard && (
-            <button type="button" role="tab" id={tabId('board')} aria-controls="org-detail-panel" aria-selected={shown === 'board'} className={`org-tab${shown === 'board' ? ' is-on' : ''}`} data-testid="org-tab-board" onClick={() => pick('board')}>Board</button>
-          )}
         </div>
-        {railHidden && (
-          <button type="button" className="org-rail-open" data-testid="org-rail-open" onClick={() => setRailHidden(false)}
-            title={keepsBrief ? 'Show Task, Brief and Threads' : 'Show the task panel'}>
-            {keepsBrief ? 'Task · Brief · Threads' : 'Tasks'}
-            {(briefNew || threadsNew) && <i className="org-top-new" data-testid="org-rail-open-new"><span className="org-sr-only">, something new</span></i>}
-          </button>
-        )}
       </header>
       {/* One parent for both places, so moving the rail never remounts it (a picked choice, an
           open More and the held order stay when a side panel narrows the page). */}
@@ -387,33 +421,12 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
         ref={bodyRef}
         onScroll={onBodyScroll}
         id="org-detail-panel"
-        role="tabpanel"
-        {...(shown ? { 'aria-labelledby': tabId(shown) } : {})}
-        className={`org-detail-body org-detail-body-${shown ?? 'loading'}`}
+        className={`org-detail-body org-detail-body-${shown}`}
       >
-        {shown === null && <div className="org-detail-loading" aria-busy="true" data-testid="org-detail-loading">Loading…</div>}
-        {shown === 'board' && row.contactId && (
-          <TaskBoardPane
-            key={row.contactId}
-            taskId={row.contactId}
-            {...(sessionId ? { sessionId, onSendToSession: (text: string) => send(sessionId, text) } : {})}
-            onOpenTask={openChip}
-            quietEmpty
-            renderSession={(cardSessionId, opts) => (
-              <SessionPanel key={cardSessionId} sessionId={cardSessionId} embedded inset onClose={opts.onClose} onTaskClick={openChip} onSessionClick={onOpenSession} />
-            )}
-          />
-        )}
-        {shown === 'team' && (
-          <TeamBoard
-            columns={columns}
-            emptyText={row.kind === 'main' ? 'No project has open work yet.' : 'Nothing open here.'}
-            onPick={(it) => { if (it.rowKey) onSelect(it.rowKey); else onOpenTask(it.id); }}
-          />
-        )}
+        {shown === 'team' && renderTeam()}
         {shown === 'chat' && (sessionId ? (
           <div ref={chatHostRef} className="org-chat-host" data-testid="org-chat">
-            <SessionPanel key={sessionId} sessionId={sessionId} embedded focusComposer={focusChat} inboxRequest={chatInbox?.sid === sessionId ? chatInbox.n : 0} onTaskClick={openChip} onSessionClick={onOpenSession} />
+            <SessionPanel key={sessionId} sessionId={sessionId} embedded headerSlot={chatTools} {...(hasBoard && row.contactId ? { onHostBoard: () => openTasks('board') } : {})} inboxRequest={chatInbox?.sid === sessionId ? chatInbox.n : 0} onTaskClick={openChip} onSessionClick={onOpenSession} />
           </div>
         ) : (
           <div className="org-chat-start" data-testid="org-chat-start">
@@ -426,28 +439,9 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabChange, onSel
           </div>
         ))}
       </div>
-
-      {shown !== 'chat' && (
-        sessionId ? (
-          <OrgComposerBar
-            key={sessionId}
-            sessionId={sessionId}
-            to={title}
-            send={(text) => send(sessionId, text)}
-            onSent={() => { if (!mounted.current) return; setTab('chat'); setFocusChat(true); onTabChange(row.key, 'chat'); }}
-          />
-        ) : canTalk ? (
-          <div className="org-composer org-composer-start">
-            <button type="button" className="btn btn-sm" data-testid="org-start-chat-bar" onClick={() => onStartChat(row)}>
-              {row.contactId || row.kind === 'main' ? `Start a chat with ${title}` : 'Make a VP and chat'}
-            </button>
-          </div>
-        ) : (
-          <p className="org-composer org-composer-note" data-testid="org-no-contact">The Inbox has no VP: open a task to talk to it.</p>
-        )
-      )}
+      {!canTalk && <p className="org-composer org-composer-note" data-testid="org-no-contact">The Inbox has no VP: open a task to talk to it.</p>}
       </div>
-      {railSide && !railHidden && (
+      {railSide && !railHidden && !railWide && (
         <div
           className="org-rail-handle"
           role="separator"

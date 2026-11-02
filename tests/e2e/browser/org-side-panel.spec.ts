@@ -11,6 +11,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { openTasksBy } from './org-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 // Both browser projects load this file at about the same moment: the pid keeps them apart.
@@ -88,7 +89,7 @@ test.afterAll(async ({ request }) => {
 
 test('a Team task opens beside the page; the list and the detail stay; × closes it', async ({ page }) => {
   await openLead(page)
-  await page.getByTestId('org-tab-team').click()
+  await openTasksBy(page, 'team')
   const list = page.locator('.org-list')
   const detail = page.locator('.org-detail-pane')
   const listBox = (await list.boundingBox())!
@@ -118,7 +119,7 @@ test('a Team task opens beside the page; the list and the detail stay; × closes
 
 test('a Board chip opens its task beside the page', async ({ page }) => {
   await openLead(page)
-  await page.getByTestId('org-tab-board').click()
+  await openTasksBy(page, 'board')
   await page.getByTestId('board-view-custom').click()
   const chip = page.frameLocator('.task-board-frame').locator(`walnut-task[id="${ids.alpha}"] .wn-task`)
   await expect(chip).toBeVisible({ timeout: 30_000 })
@@ -139,7 +140,7 @@ test('the name of a task waiting on a question opens it beside the page, questio
 
 test('a reload keeps the opened task; Home opens it on home', async ({ page }) => {
   await openLead(page)
-  await page.getByTestId('org-tab-team').click()
+  await openTasksBy(page, 'team')
   await teamItem(page, ids.alpha).click()
   await expect(side(page)).toHaveAttribute('data-session-id', ids.alphaSid)
   await page.reload()
@@ -152,7 +153,7 @@ test('a reload keeps the opened task; Home opens it on home', async ({ page }) =
 test('a narrow window lays the panel over the detail, which keeps its width', async ({ page }) => {
   await page.setViewportSize({ width: 1000, height: 760 })
   await openLead(page)
-  await page.getByTestId('org-tab-team').click()
+  await openTasksBy(page, 'team')
   const detail = page.locator('.org-detail-pane')
   const before = await detail.boundingBox()
   await teamItem(page, ids.alpha).click()
@@ -173,7 +174,7 @@ test('a phone shows the opened task alone, and Back returns to the lead', async 
   await page.getByTestId('sidebar-org').click()
   await expect(page).toHaveURL(/\/org/)
   await page.locator(`[data-testid="org-channel"][data-key="${rowKey}"]`).click()
-  await page.getByTestId('org-tab-team').click()
+  await openTasksBy(page, 'team')
   await teamItem(page, ids.alpha).click()
   await expect(side(page)).toHaveAttribute('data-session-id', ids.alphaSid)
   await expect(page.locator('.org-detail-pane')).toHaveCount(0)

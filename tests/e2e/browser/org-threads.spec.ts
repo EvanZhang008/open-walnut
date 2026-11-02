@@ -33,6 +33,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { openTasksBy, expectChatShown } from './org-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const STAMP = `${Date.now().toString(36)}${process.pid.toString(36)}`
@@ -101,15 +102,14 @@ async function openThreads(page: Page): Promise<void> {
   await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
 }
 
-/** The user types a request to the lead: the composer under the Team view (a real send). */
+/** The user types a request to the lead: its chat's own composer, always beside the side bar (a real send). */
 async function sendToLead(page: Page, text: string): Promise<void> {
   const detail = page.getByTestId('org-detail')
-  await detail.getByTestId('org-tab-team').click()
-  const composer = detail.getByTestId('org-composer').locator('textarea')
+  const composer = detail.locator('[data-testid="org-chat"] .chat-input-textarea')
+  await expect(composer).toBeVisible({ timeout: 30_000 })
   await composer.fill(text)
   await composer.press('Enter')
-  // A send moves the node to its chat; the rail (and its Threads view) stays beside it.
-  await expect(detail.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
+  await expect(composer).toHaveValue('')
 }
 
 const card = (page: Page, id: string) => page.locator(`[data-testid="org-thread"][data-thread-id="${id}"]`)
@@ -542,31 +542,31 @@ test('the panel closes and comes back, per node; the Threads tab shows a dot for
   await expect(detail.getByTestId('org-rail-handle')).toHaveCount(0)
   expect(await width('.org-detail-col')).toBeGreaterThan(before + 200)
   expect(Math.abs(await width('.org-detail-col') - await width('.org-detail-split'))).toBeLessThanOrEqual(2)
-  await expect(detail.getByTestId('org-rail-open')).toBeVisible()
+  await expect(detail.getByTestId('org-rail-toggle')).toHaveAttribute('aria-pressed', 'false')
   // The way back says there is news.
-  await expect(detail.getByTestId('org-rail-open-new')).toBeVisible()
+  await expect(detail.getByTestId('org-rail-toggle-new')).toBeVisible()
 
   // Kept per node: a reload keeps it closed; another node keeps its own panel open.
   await page.reload()
   await expect(detail).toHaveAttribute('data-key', key)
-  await expect(detail.getByTestId('org-rail-open')).toBeVisible()
+  await expect(detail.getByTestId('org-rail-toggle')).toHaveAttribute('aria-pressed', 'false')
   await expect(detail.getByTestId('org-rail')).toHaveCount(0)
   await page.locator(`[data-testid="org-channel"][data-key="${rowKey(LED)}"]`).click()
   await expect(detail).toHaveAttribute('data-key', rowKey(LED))
   await expect(detail.getByTestId('org-rail')).toBeVisible()
-  await expect(detail.getByTestId('org-rail-open')).toHaveCount(0)
+  await expect(detail.getByTestId('org-rail-toggle')).toHaveAttribute('aria-pressed', 'true')
   await page.locator(`[data-testid="org-channel"][data-key="${key}"]`).click()
   await expect(detail).toHaveAttribute('data-key', key)
   await expect(detail.getByTestId('org-rail')).toHaveCount(0)
 
   // Back: the panel returns on the view it was left on; opening Threads clears both dots.
-  await detail.getByTestId('org-rail-open').click()
+  await detail.getByTestId('org-rail-toggle').click()
   await expect(detail.getByTestId('org-rail')).toBeVisible()
   await expect(top).toHaveAttribute('data-view', 'task')
   await detail.getByTestId('org-top-threads').click()
   await expect(detail.getByTestId('org-top-threads-new')).toHaveCount(0)
   await detail.getByTestId('org-rail-close').click()
-  await expect(detail.getByTestId('org-rail-open-new')).toHaveCount(0)
-  await detail.getByTestId('org-rail-open').click()
+  await expect(detail.getByTestId('org-rail-toggle-new')).toHaveCount(0)
+  await detail.getByTestId('org-rail-toggle').click()
   await expect(top).toHaveAttribute('data-view', 'threads')
 })

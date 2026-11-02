@@ -20,6 +20,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { loadHome } from './draft-helpers'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { endRunningTurn, startRunningTurn } from './status-section-helpers'
+import { openTasksBy, expectChatShown } from './org-view-helpers'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 // Both browser projects load this file at about the same moment: the pid keeps them apart.
@@ -126,16 +127,17 @@ test('the sidebar opens Main and the leads; a lead waiting on the user comes fir
   const askRow = detail.locator(`[data-testid="org-alert"][data-task-id="${ids.ask}"]`)
   await expect(askRow.getByTestId('org-alert-link')).toHaveText(`Alpha ask ${STAMP}`)
   await expect(askRow.getByTestId('org-ask-summary')).toHaveText('Asks you a question')
-  // A node opens on its chat, first of the tabs; its Board is one click away.
-  await expect(detail.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
-  // The Board tab joins once the lead's board is known.
-  await expect.poll(() => detail.locator('.org-tabs').getByRole('tab').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid'))), { timeout: 30_000 })
-    .toEqual(['org-tab-chat', 'org-tab-team', 'org-tab-board'])
-  await detail.getByTestId('org-tab-board').click()
+  // A node shows its chat, always; Team and Board are ways the side bar's Tasks draws its work, and
+  // Board joins once the lead's board is known.
+  await expectChatShown(detail)
+  await detail.getByTestId('org-top-task').click()
+  await expect.poll(() => detail.getByTestId('org-task-modes').getByRole('button').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid'))), { timeout: 30_000 })
+    .toEqual(['org-task-mode-status', 'org-task-mode-team', 'org-task-mode-board'])
+  await openTasksBy(detail, 'board')
   await detail.getByTestId('board-view-custom').click()
   await expect(detail.frameLocator('iframe').first().getByText(BOARD_TEXT)).toBeVisible({ timeout: 30_000 })
 
-  await detail.getByTestId('org-tab-team').click()
+  await openTasksBy(detail, 'team')
   await expect(detail.locator('[data-testid="org-team-col"][data-column="needs"]')).toContainText(`Alpha ask ${STAMP}`)
   const waiting = detail.locator('[data-testid="org-team-col"][data-column="waiting"]')
   await expect(waiting.locator('.org-team-head')).toContainText('Waiting')
@@ -145,28 +147,28 @@ test('the sidebar opens Main and the leads; a lead waiting on the user comes fir
   // Main's own page lists the leads by state.
   await page.getByTestId('org-channel-main').click()
   await expect(detail.getByTestId('org-detail-title')).toHaveText('CEO')
-  await detail.getByTestId('org-tab-team').click()
+  await openTasksBy(detail, 'team')
   await detail.locator(`[data-testid="org-team-item"]`, { hasText: ALPHA }).click()
   await expect(alpha).toHaveAttribute('aria-selected', 'true')
 })
 
-test('a lead\'s chat is in the page, and the composer under its Board sends to it', async ({ page }) => {
+test('a lead\'s chat is in the page beside its Board, and its composer sends to it', async ({ page }) => {
   await openOrg(page)
   await row(page, ALPHA).click()
   const detail = page.getByTestId('org-detail')
-  await detail.getByTestId('org-tab-chat').click()
+  await expectChatShown(detail)
   const chat = detail.locator(`[data-testid="org-chat"] .session-panel[data-session-id="${ids.leadSid}"]`)
   // The panel's code and its session load on first open: slower on a loaded machine.
   await expect(chat).toBeVisible({ timeout: 30_000 })
   await expect(chat.getByText(`I processed your message: Alpha lead ready ${STAMP}`).first()).toBeVisible({ timeout: 60_000 })
 
-  await detail.getByTestId('org-tab-board').click()
-  const composer = detail.getByTestId('org-composer').locator('textarea')
+  // The Board opens in the side bar; the chat stays beside it and takes the message.
+  await openTasksBy(detail, 'board')
+  const composer = chat.locator('.chat-input-textarea')
   await composer.fill(`status please ${STAMP}`)
   await composer.press('Enter')
-  await expect(detail.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
+  await expect(detail.getByTestId('org-rail-board')).toBeVisible()
   await expect(chat.getByText(`I processed your message: status please ${STAMP}`).first()).toBeVisible({ timeout: 60_000 })
-  await expect(page).toHaveURL(/tab=chat/)
 })
 
 test('the name of a task waiting on a question opens its session beside the page', async ({ page }) => {
@@ -288,14 +290,14 @@ test('a task whose Board asks the user to choose needs them: its row, its line, 
   await r.click()
   await expect(page.getByTestId('org-detail-counts')).toContainText('1 Needs you')
   // Listed on its own chat too: the chat does not show a Board's choice.
-  await expect(page.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
+  await expectChatShown(page)
   const alert = page.getByTestId('org-alert').filter({ hasText: `Renewal ${STAMP}` })
   await expect(alert).toHaveAttribute('data-kind', 'needs')
   await expect(alert.getByTestId('org-alert-link')).toHaveText(`Renewal ${STAMP}`)
   await expect(alert.getByTestId('org-ask-summary')).toHaveText(`Pick the renewal date ${STAMP}`)
   // The task's name leads to where the ask lives: the Board.
   await alert.getByTestId('org-alert-link').click()
-  await expect(page.getByTestId('org-tab-board')).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'board')
   await expect(page.getByTestId('board-status-answer')).toBeVisible({ timeout: 30_000 })
 })
 
@@ -327,7 +329,7 @@ test('a task waiting on a decision letter needs the user: its name opens the let
   await expect(r.getByTestId('org-channel-latest')).toHaveText(/^Needs you: \S/)
   await expect(r.getByTestId('org-channel-latest')).toHaveAttribute('title', new RegExp(`^Lease ${STAMP}: Needs you: `))
   await r.click()
-  await expect(page.getByTestId('org-tab-chat')).toHaveAttribute('aria-selected', 'true')
+  await expectChatShown(page)
   const alert = page.getByTestId('org-alert').filter({ hasText: `Lease ${STAMP}` })
   await expect(alert.getByTestId('org-ask-summary')).toHaveText(`Sign the lease ${STAMP}`)
   await alert.getByTestId('org-alert-link').click()
@@ -351,8 +353,8 @@ test('back on the Org page, it is where it was: the pick, its tab, the task besi
   await openOrg(page)
   await row(page, ALPHA).click()
   await expect(row(page, ALPHA)).toHaveAttribute('aria-selected', 'true')
-  await page.getByTestId('org-tab-team').click()
-  await expect(page.getByTestId('org-tab-team')).toHaveAttribute('aria-selected', 'true')
+  await openTasksBy(page, 'team')
+  await expect(page.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'team')
   // One of this team's own tasks, by id: the columns re-sort as the shared fixture's work moves.
   const taskId = ids.build
   const item = page.locator(`[data-testid="org-team-item"][data-task-id="${taskId}"]`)
@@ -365,7 +367,7 @@ test('back on the Org page, it is where it was: the pick, its tab, the task besi
 
   const expectSamePlace = async () => {
     await expect(row(page, ALPHA)).toHaveAttribute('aria-selected', 'true', { timeout: 30_000 })
-    await expect(page.getByTestId('org-tab-team')).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByTestId('org-task-view')).toHaveAttribute('data-mode', 'team')
     await expect(page.getByTestId('org-side')).toBeVisible()
     await expect(page).toHaveURL(new RegExp(`open=[^&]*${taskId}`))
     await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBe(top)

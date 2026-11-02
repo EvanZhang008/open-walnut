@@ -28738,6 +28738,22 @@ button.focus-tiers-label-editable:hover { background: var(--bg-hover); }
   z-index: 30;
   background: var(--bg); /* fallback; replaced by glass below */
 }
+/* A host draws the header (SessionPanel headerSlot, the Org node page): the panel's own rows take no
+   room and no taps. They stay in the tree, as on a phone layer, because the plan window is drawn
+   from inside them. */
+.session-panel.has-host-header > .session-panel-header {
+  visibility: hidden;
+  height: 0 !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  overflow: visible;
+  pointer-events: none;
+}
+.session-panel.has-host-header > .session-panel-header .plan-popup-overlay {
+  visibility: visible;
+  pointer-events: auto;
+}
 
 /* ── Session panel: composer ──
    The composer (.session-panel-input) is a normal flow sibling BELOW the

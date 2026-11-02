@@ -1,4 +1,4 @@
-/* The Task | Brief switch at the head of an Org node's rail (OrgTaskRail.tsx), and the Brief (OrgBrief.tsx). */
+/* The Tasks | Brief | Threads tabs at the head of an Org node's rail (OrgTaskRail.tsx), and the Brief (OrgBrief.tsx). */
 .org-top.has-switch {
   display: flex;
   align-items: center;
@@ -7,25 +7,26 @@
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-secondary) 55%, var(--bg));
 }
-.org-top-switch {
-  flex: none;
-  display: inline-flex;
-  padding: 2px;
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--fg) 6%, transparent);
-}
-.org-top-switch button {
+.org-top-tabs { flex: none; display: flex; align-items: stretch; gap: 14px; align-self: stretch; }
+.org-top-tab {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   border: 0;
-  border-radius: 5px;
-  padding: 2px 9px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 8px 2px 7px;
   background: transparent;
   color: var(--fg-secondary, var(--fg));
   font: inherit;
-  font-size: 12px;
+  font-size: 12.5px;
   cursor: pointer;
 }
-.org-top-switch button.is-on { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+.org-top-tab:hover { color: var(--fg); }
+.org-top-tab.is-on { color: var(--fg); font-weight: 600; border-bottom-color: var(--fg); }
+.org-top-count { color: var(--fg-muted); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.org-top-tab .org-top-new { position: static; flex: none; }
 .org-top-new {
   position: absolute;
   top: 2px;

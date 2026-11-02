@@ -301,12 +301,13 @@ export function OrgPage() {
   // Only for the node still shown, and keeping the entry's state (a phone's pick marker).
   const shownKey = useRef(selected.key);
   shownKey.current = selected.key;
-  const setTab = useCallback((key: string, tab: OrgTab) => {
+  // The node opened the view the URL named (OrgNodeDetail): the URL lets go of it, so a reload
+  // comes back to the view the node was left on, not to the one a link once named.
+  const tabUsed = useCallback((key: string) => {
     if (key !== shownKey.current) return;
     setParams(() => {
       const next = liveParams();
-      next.set('node', key);
-      next.set('tab', tab);
+      next.delete('tab');
       return next;
     }, { replace: true, state: (window.history.state as { usr?: unknown } | null)?.usr ?? null });
   }, [setParams]);
@@ -444,7 +445,7 @@ export function OrgPage() {
             rows={channels.rows}
             tasks={shownTasks}
             initialTab={nodeParam === selected.key ? urlTab : null}
-            onTabChange={setTab}
+            onTabUsed={tabUsed}
             onSelect={select}
             onOpenTask={openTask}
             onOpenSession={openSession}
