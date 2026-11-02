@@ -38,6 +38,7 @@ interface EngineEntry {
     modeControl: 'claude-modes' | 'config-options'
     idProvisioning: 'preassigned' | 'provider-issued'
     settings: boolean
+    claudeCodeImport: boolean
   }
   availability: { installed: boolean; version: string | null; reason: string | null }
 }
@@ -86,11 +87,13 @@ describe('GET /api/engines', () => {
       modeControl: 'claude-modes',
       idProvisioning: 'preassigned',
       settings: true,
+      claudeCodeImport: false,
     })
 
     // Every ACP engine shares codex's capability axes and runs on any host that has
     // its CLI, except the custom engine (its command is this machine's config);
-    // only codex declares a settings surface (its own config.toml).
+    // codex and pi declare a settings surface (config.toml, settings.json); only pi
+    // offers "Import from Claude Code".
     for (const engine of engines.filter((e) => e.runtimeKind === 'acp')) {
       expect(engine.isDefault, engine.id).toBe(false)
       expect(engine.localOnly, engine.id).toBe(engine.id === 'custom')
@@ -100,7 +103,8 @@ describe('GET /api/engines', () => {
         modelCatalog: 'provider-advertised',
         modeControl: 'config-options',
         idProvisioning: 'provider-issued',
-        settings: engine.id === 'codex',
+        settings: engine.id === 'codex' || engine.id === 'pi',
+        claudeCodeImport: engine.id === 'pi',
       })
     }
 

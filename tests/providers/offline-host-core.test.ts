@@ -245,6 +245,17 @@ describe('offline host: messages between sessions on this host', () => {
     expect(h.journalPings.length).toBeGreaterThan(0)
   })
 
+  it('an ACP session calling by its worker runtime id speaks as its session (acp-caller-sid.ts)', async () => {
+    const h = harness()
+    const runtimeId = 'acp-0123456789abcdef'
+    h.host.configure(slice({ sessions: slice().sessions.map((s) => (s.sid === A ? { ...s, runtimeId } : s)) }))
+    const r = await call(h, runtimeId, 'task_send', { to: 'mtaskbbb-0002', text: 'from pi', expect_reply: false })
+    expect(r.ok).toBe(true)
+    expect(h.delivered).toHaveLength(1)
+    expect(h.delivered[0].text).toContain(`from-session="${A}"`)
+    expect(h.delivered[0].text).toContain('from-task="mtaskaaa-0001"')
+  })
+
   it('keeps a caller-given messageId and sends no request when expect_reply is false', async () => {
     const h = harness()
     h.host.configure(slice())

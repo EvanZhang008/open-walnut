@@ -274,6 +274,8 @@ export async function buildHostSlice(hostKey: string, now = Date.now()): Promise
       })(),
       ...(s.taskId ? { taskId: s.taskId } : {}),
       ...(s.title ? { title: s.title } : {}),
+      // An ACP session's `walnut` names itself by its worker's runtime id (acp-caller-sid.ts).
+      ...(s.acpRuntimeId && s.acpRuntimeId !== s.claudeSessionId ? { runtimeId: s.acpRuntimeId } : {}),
       // An environment or lane session: never a message's address by name, nor a
       // reply's (session-send-core.ts, reply-routing.ts), so the host leaves those to us.
       ...(isListableSession(s) ? {} : { aside: true }),

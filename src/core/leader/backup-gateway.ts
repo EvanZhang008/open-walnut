@@ -159,7 +159,11 @@ export function createBackupGateway(deps: BackupGatewayDeps) {
     }
   }
 
-  async function answer(host: string, frame: GatewayRequestFrame): Promise<Outcome> {
+  async function answer(host: string, raw: GatewayRequestFrame): Promise<Outcome> {
+    // An ACP session's worker runtime id names its session record from here on.
+    const frame = typeof raw.callerSid === 'string' && raw.callerSid.startsWith('acp-')
+      ? { ...raw, callerSid: (await import('../sessions/acp-caller-sid.js')).canonicalCallerSid(raw.callerSid) }
+      : raw
     const lead = leadOf(host, frame)
     if ('ok' in lead) return lead
     const payload = asRecord(frame.payload)

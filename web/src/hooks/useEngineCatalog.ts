@@ -135,6 +135,8 @@ function parseEntry(value: unknown): EngineCatalogEntry | null {
       // An older server (and a catalog persisted by an older build) simply omits
       // this axis, which reads as "no settings surface", the honest answer.
       settings: caps.settings === true,
+      // Absent on an older server: no import offered.
+      claudeCodeImport: caps.claudeCodeImport === true,
     },
     availability: {
       installed: avail.installed === true,

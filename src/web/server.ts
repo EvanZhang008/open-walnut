@@ -1673,6 +1673,9 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
   })
   // Auth middleware: this machine passes, every other caller needs a Bearer credential
   app.use('/api', authMiddleware)
+  // An ACP session's `walnut` names itself by its worker's runtime id: the caller header
+  // reads as that session's record id from here on (core/sessions/acp-caller-sid.ts).
+  app.use('/api', (await import('../core/sessions/acp-caller-sid.js')).acpCallerSidMiddleware)
   // A host replica answering alone (the Mac away, no companion standing in): a
   // session that runs on the Mac (or another host) cannot be read here beyond
   // its row; its reads answer needs_leader. This host's sessions are WP6's

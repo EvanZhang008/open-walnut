@@ -77,6 +77,9 @@ must live under one of these top-level categories instead of directly under
   Claude Code's `/config` rows and Codex's `config.toml` from Walnut, where each
   key is stored, and the atomic conditional write that keeps the engine's file
   intact
+- [The pi engine](reference/pi-engine.md) - running tasks on pi, and "Import from Claude
+  Code": what carries over (credentials, model, MCP servers, skills, instructions), what
+  cannot and the nearest alternative
 - [macOS session identity](reference/macos-session-identity.md) - why sessions are
   attributed to Walnut instead of to `node`, what to grant, and what the separation
   does not cover

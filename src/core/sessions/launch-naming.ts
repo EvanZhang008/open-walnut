@@ -16,6 +16,7 @@
  * `namingMessage`, and its titles must stay byte-identical to before.
  */
 import { stripEntityRefs } from '../../utils/entity-refs.js';
+import { hasHintBlock, parseHinted } from '../hints/hint-format.js';
 
 /**
  * The human's words when the launcher supplied them, else the message itself.
@@ -27,7 +28,10 @@ import { stripEntityRefs } from '../../utils/entity-refs.js';
  * text they get is empty.
  */
 export function launchNamingText(message: string, namingMessage?: string): string {
-  return namingMessage?.trim() ? namingMessage : message;
+  if (namingMessage?.trim()) return namingMessage;
+  // A Walnut hint block (an engine switch's carried context, a reply-language line)
+  // rides the wire message for the model only: a name reads the words around it.
+  return hasHintBlock(message) ? parseHinted(message).text : message;
 }
 
 /**

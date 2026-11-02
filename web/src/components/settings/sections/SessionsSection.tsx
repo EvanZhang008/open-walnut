@@ -9,6 +9,7 @@ import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
 import { useCommitField } from '../inputs/useCommitField';
 import { useSerialSave, type OnSave } from './GeneralSection';
 import { DefaultEngineRow } from './DefaultEngineRow';
+import { ClaudeCodeImportGroups } from './ClaudeCodeImportGroup';
 import { MessageHintsGroup } from './MessageHintsGroup';
 
 interface Props {
@@ -111,6 +112,7 @@ export function SessionsSection({ config, onSave }: Props) {
       <SettingsGroup>
         <DefaultEngineRow config={config} save={save} />
       </SettingsGroup>
+      <ClaudeCodeImportGroups />
       <SettingsGroup>
         <SettingsRow
           anchor="idle-timeout-row"

@@ -48,6 +48,8 @@ export interface EngineCatalogCapabilities {
    * this axis is only ever trusted from the hydrated catalog.
    */
   settings: boolean;
+  /** "Import from Claude Code" answers for this engine (absent on an older server). */
+  claudeCodeImport?: boolean;
 }
 
 export interface EngineAvailability {

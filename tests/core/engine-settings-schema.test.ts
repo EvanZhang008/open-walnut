@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest'
 import { ENGINE_REGISTRY } from '../../src/core/agents/engine-registry.js'
 import { CLAUDE_SETTINGS } from '../../src/core/agents/engine-settings/claude.js'
 import { CODEX_SETTINGS } from '../../src/core/agents/engine-settings/codex.js'
+import { PI_SETTINGS } from '../../src/core/agents/engine-settings/pi.js'
 import {
   findSchemaItem,
   schemaItems,
@@ -23,10 +24,11 @@ describe('engine settings schema: registry data', () => {
     }
   })
 
-  it('claude and codex have a settings surface; the other ACP engines do not inherit codex\'s', () => {
+  it('claude, codex and pi have a settings surface; the other ACP engines do not inherit codex\'s', () => {
     expect(ENGINE_REGISTRY.get('claude')?.settings).toBe(CLAUDE_SETTINGS)
     expect(ENGINE_REGISTRY.get('codex')?.settings).toBe(CODEX_SETTINGS)
-    for (const id of ['gemini', 'opencode', 'goose', 'pi', 'dsh', 'custom'] as const) {
+    expect(ENGINE_REGISTRY.get('pi')?.settings).toBe(PI_SETTINGS)
+    for (const id of ['gemini', 'opencode', 'goose', 'dsh', 'custom'] as const) {
       expect(ENGINE_REGISTRY.get(id)?.settings, id).toBeUndefined()
     }
   })

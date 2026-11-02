@@ -45,6 +45,11 @@ import type { LetterCheck } from '../core/human-inbox/letter-check.js'
  */
 export interface OfflineSliceSession {
   sid: string; taskId?: string; title?: string; aside?: boolean; noResume?: boolean
+  /**
+   * An ACP session's worker runtime id (`acp-...`) when it differs from `sid`: that session's
+   * `walnut` names itself by it (core/sessions/acp-caller-sid.ts), and `callerSidOf` maps it back.
+   */
+  runtimeId?: string
   /** The instruction notice for a session spawned before its default instructions changed, sent only while it is due, and the key naming that (instruction-notice.ts). */
   taskRoutingPolicy?: string; taskRoutingDue?: string
   /**
@@ -888,6 +893,14 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
     return slices.get(home)?.sessions.find((s) => s.sid === sid) ?? startedOf(home).find((s) => s.sid === sid)
   }
 
+  /** The session a gateway caller sid names: an ACP session's runtime id becomes its record id. */
+  function callerSidOf(home: string, sid: string): string {
+    try {
+      if (!sid.startsWith('acp-') || sessionOf(home, sid)) return sid
+      return slices.get(home)?.sessions.find((s) => s.runtimeId === sid)?.sid ?? sid
+    } catch { return sid }
+  }
+
   /** sid -> the due key this host already led a delivery with (instruction-notice.ts). */
   const routingTold = new Map<string, string>()
   /** messageId -> due key, until that delivery's record is journaled (append). */
@@ -1599,8 +1612,9 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
    * to take; the caller relays the payload, which then carries the message id
    * this host picked, so a delivery the server makes again is written once.
    */
-  async function handleLocal(home: string, callerSid: string, capability: string, payload: Record<string, unknown>): Promise<GatewayResult | null> {
+  async function handleLocal(home: string, rawCallerSid: string, capability: string, payload: Record<string, unknown>): Promise<GatewayResult | null> {
     if (!deps.pendingPrompt || capability !== 'tools.call') return null
+    const callerSid = callerSidOf(home, rawCallerSid)
     const name = typeof payload.name === 'string' ? payload.name : ''
     if (LOCAL_SEND_OPS.indexOf(name) === -1 || typeof payload.argsFile === 'string') return null
     if (!slices.has(home) || !sessionOf(home, callerSid)) return null
@@ -2084,7 +2098,8 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
   }
 
   /** One gateway request for a Walnut that is away. Never throws. */
-  async function handle(home: string, callerSid: string, capability: string, payload: Record<string, unknown>): Promise<GatewayResult> {
+  async function handle(home: string, rawCallerSid: string, capability: string, payload: Record<string, unknown>): Promise<GatewayResult> {
+    const callerSid = callerSidOf(home, rawCallerSid)
     try {
       if (capability === 'tools.list') {
         const wanted = typeof payload.name === 'string' ? payload.name : ''

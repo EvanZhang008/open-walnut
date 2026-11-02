@@ -52,6 +52,8 @@ function toCatalogEntry(caps: EngineCapabilities, availability: EngineAvailabili
       idProvisioning: caps.idProvisioning,
       // Whether GET/PATCH /api/engines/:id/settings answers for this engine.
       settings: caps.settings !== undefined,
+      // Whether GET/POST /api/engines/:id/claude-code-import answers (Settings, Sessions).
+      claudeCodeImport: caps.claudeCodeImport === true,
     },
     availability,
   }
@@ -258,5 +260,95 @@ enginesRouter.patch('/:id/settings', async (req: Request, res: Response) => {
     res.json(view)
   } catch (err) {
     answerEngineSettingsError(res, err, { engine, host, cwd: ctx.cwd, scope: ctx.scope, op: 'write' })
+  }
+})
+
+// ── Import from Claude Code (claude-code-import.ts) ──
+//
+// GET  /api/engines/:id/claude-code-import?host=   → ImportPreview: what the import brings, what cannot carry over
+// POST /api/engines/:id/claude-code-import?host=   → { written, preview }
+//
+// The daemon on the host reads Claude Code's files and writes pi's; Claude Code's
+// files are only read. A host that cannot be reached answers 504, never hangs.
+
+/** A preview reads a few dozen small files in parallel rounds; the deadline covers a slow remote. */
+const CLAUDE_IMPORT_DEADLINE_MS = 30_000
+
+function importTransport(host: string): import('../../core/agents/claude-code-import.js').ImportTransport {
+  const reader = new DaemonFileReader(host)
+  return {
+    readBytes: (p, maxBytes) => reader.readFileBytes(p, maxBytes),
+    listDir: (p) => reader.listDirStrict(p),
+    writeAtomic: (p, text, expectSha256) => reader.writeFileAtomic(p, text, expectSha256),
+    ...(host === LOCAL_HOST ? { env: process.env } : {}),
+  }
+}
+
+async function claudeImportTarget(req: Request, res: Response): Promise<{ engine: string; host: string } | null> {
+  const engine = String(req.params.id)
+  const caps = ENGINE_REGISTRY.get(engine as SessionEngine)
+  if (!caps?.claudeCodeImport) {
+    res.status(404).json({ error: `engine '${engine}' has no Claude Code import` })
+    return null
+  }
+  const host = await resolveHostParam(req.query.host)
+  if (!host) {
+    res.status(400).json({ error: `unknown host '${String(req.query.host)}'` })
+    return null
+  }
+  return { engine, host }
+}
+
+async function piInstallOn(host: string) {
+  const { hostEngineAvailability } = await import('../../core/agents/host-engines.js')
+  const { piInstallFrom } = await import('../../core/agents/claude-code-import.js')
+  return piInstallFrom(await hostEngineAvailability(host, 'pi').catch(() => null))
+}
+
+function answerImportError(res: Response, err: unknown, ctx: { op: 'preview' | 'apply' } & Record<string, unknown>, ImportError: new (...args: never[]) => Error & { status: number }): void {
+  if (err instanceof ImportError) {
+    res.status(err.status).json({ error: err.message })
+    return
+  }
+  if (err instanceof DaemonNeedsUpgradeError) {
+    res.status(501).json({ error: err.message, code: 'daemon_needs_upgrade' })
+    return
+  }
+  if (err instanceof EngineSettingsTimeout) {
+    // A deadline does not cancel writes already sent: an import may still land after it.
+    res.status(504).json(ctx.op === 'apply'
+      ? { error: `${err.message} The import may still have been written: check again to see.`, code: 'host_unreachable', outcome: 'unknown' }
+      : { error: err.message, code: 'host_unreachable' })
+    return
+  }
+  const message = err instanceof Error ? err.message : String(err)
+  log.web.warn('claude code import failed', { ...ctx, error: message })
+  res.status(502).json({ error: message })
+}
+
+enginesRouter.get('/:id/claude-code-import', async (req: Request, res: Response) => {
+  const target = await claudeImportTarget(req, res)
+  if (!target) return
+  const mod = await import('../../core/agents/claude-code-import.js')
+  try {
+    const pi = await piInstallOn(target.host)
+    const preview = await withDeadline(mod.previewClaudeCodeImport(target.host, importTransport(target.host), pi), CLAUDE_IMPORT_DEADLINE_MS, `the daemon on ${target.host}`)
+    res.json(preview)
+  } catch (err) {
+    answerImportError(res, err, { ...target, op: 'preview' }, mod.ClaudeCodeImportError)
+  }
+})
+
+enginesRouter.post('/:id/claude-code-import', async (req: Request, res: Response) => {
+  const target = await claudeImportTarget(req, res)
+  if (!target) return
+  const mod = await import('../../core/agents/claude-code-import.js')
+  try {
+    const pi = await piInstallOn(target.host)
+    const result = await withDeadline(mod.applyClaudeCodeImport(target.host, importTransport(target.host), pi), CLAUDE_IMPORT_DEADLINE_MS, `the daemon on ${target.host}`)
+    log.web.info('claude code import applied', { ...target, written: result.written })
+    res.json(result)
+  } catch (err) {
+    answerImportError(res, err, { ...target, op: 'apply' }, mod.ClaudeCodeImportError)
   }
 })

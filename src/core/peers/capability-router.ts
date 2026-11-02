@@ -86,6 +86,8 @@ export async function handleGatewayCapability(
   if (d.cloudMode) {
     return err('unsupported_replica', 'agent gateway capabilities are not available on a cloud replica');
   }
+  // An ACP session's worker runtime id names its session record from here on.
+  callerSid = (await import('../sessions/acp-caller-sid.js')).canonicalCallerSid(callerSid);
   switch (capability) {
     case 'tools.list':
       return handleToolsList(payload ?? {}, host);

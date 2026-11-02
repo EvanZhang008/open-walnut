@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import { launchNamingPlainText, launchNamingText } from '../../src/core/sessions/launch-naming.js';
 import { buildAskProfilePrefix, ASK_PROFILE_BANNER_OPEN } from '../../src/core/sessions/ask-profile-prefix.js';
+import { composeHinted, renderHintBlock } from '../../src/core/hints/hint-format.js';
 
 describe('launchNamingText', () => {
   it('prefers the human words over the wire message', () => {
@@ -26,6 +27,16 @@ describe('launchNamingText', () => {
   it('treats a blank naming text as absent, not as the name', () => {
     expect(launchNamingText('the real message', '')).toBe('the real message');
     expect(launchNamingText('the real message', '   \n ')).toBe('the real message');
+  });
+
+  it('never names a launch after a Walnut hint block (2026-11-01: an engine switch titled a pi session with its carried context)', () => {
+    const words = 'What did you reply earlier?';
+    const wire = composeHinted(words, { before: [renderHintBlock('engine-switch', 'The user switched this task from Claude Code to pi.')], after: [renderHintBlock('reply-language', 'Talk to the user in Chinese.')] });
+    expect(wire).toContain('<system-reminder>');
+    expect(launchNamingText(wire)).toBe(words);
+    expect(launchNamingPlainText(wire)).toBe(words);
+    // A message with no Walnut block is the name as it is, byte for byte.
+    expect(launchNamingText('my <system-reminder> note')).toBe('my <system-reminder> note');
   });
 
   it('keeps the words verbatim, including leading space a title would trim later', () => {

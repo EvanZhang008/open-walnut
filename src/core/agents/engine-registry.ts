@@ -22,6 +22,7 @@ import { SESSION_ENGINE_IDS, type SessionEngine } from '../types.js';
 import type { EngineSettingsSchema } from './engine-settings-schema.js';
 import { CLAUDE_SETTINGS } from './engine-settings/claude.js';
 import { CODEX_SETTINGS } from './engine-settings/codex.js';
+import { PI_SETTINGS } from './engine-settings/pi.js';
 
 /** How the engine's runtime is reached (which provider class / daemon command family). */
 export type EngineRuntimeKind = 'native' | 'acp';
@@ -124,6 +125,11 @@ export interface EngineCapabilities {
    * has no settings surface in Walnut; the UI shows no tab for it.
    */
   readonly settings?: EngineSettingsSchema;
+  /**
+   * Whether Walnut can bring the user's Claude Code setup to this engine in one step
+   * (claude-code-import.ts: credentials, MCP servers, skills, commands, CLAUDE.md).
+   */
+  readonly claudeCodeImport?: boolean;
 }
 
 const CLAUDE: EngineCapabilities = {
@@ -214,6 +220,8 @@ const PI: EngineCapabilities = {
   acpAdapter: { source: 'bundled', binary: 'pi', args: null, versionArgs: ['--version'] },
   externalImport: false,
   skillSync: true,
+  settings: PI_SETTINGS,
+  claudeCodeImport: true,
 };
 
 const DSH: EngineCapabilities = {
