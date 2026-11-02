@@ -9,8 +9,8 @@
  *
  * Chromium and WebKit. The reload fixture session (its sends reach the transcript).
  */
-import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
-import { centreInHistory, openThreadsSession, readRecord, resetThreadsFixture, selectPassage } from './threads-helpers'
+import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
+import { centreInHistory, openThreadsSession, readRecord, resetThreadsFixture, selectPassage, test } from './threads-helpers'
 import { RELOAD_PASSAGE, RELOAD_SESSION } from './threads-fixture'
 
 const RELOAD_TASK = 'pw-task-threads-reload'

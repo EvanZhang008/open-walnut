@@ -5,7 +5,11 @@
  */
 import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { REAL_PANEL } from './draft-helpers'
+import { withFixtureLease } from './fixture-lease'
 import { seededThreadState } from './threads-fixture'
+
+/** Every spec that resets a threads fixture runs its tests with this `test` (fixture-lease.ts). */
+export { test } from './fixture-lease'
 
 export { DENSE_SESSION, AI_SESSION, FAILED_SESSION, REWRITTEN_SESSION, NO_THREAD_SESSION } from './threads-fixture'
 
@@ -241,6 +245,12 @@ export async function nextQuestionNumber(request: APIRequestContext, sessionId: 
  * entry a test added is neutralized (its anchor is gone, so it draws nothing).
  */
 export async function resetThreadsFixture(request: APIRequestContext, sessionId: string): Promise<void> {
+  // One test at a time per fixture session, across workers: a reset is a write over the record
+  // another test may be in the middle of using (fixture-lease.ts).
+  await withFixtureLease(`threads:${sessionId}`, () => resetThreadsFixtureNow(request, sessionId))
+}
+
+async function resetThreadsFixtureNow(request: APIRequestContext, sessionId: string): Promise<void> {
   const seed = seededThreadState(sessionId, Date.now())
   expect(seed, `no threads fixture named ${sessionId}`).not.toBeNull()
   const current = await readRecord(request, sessionId)

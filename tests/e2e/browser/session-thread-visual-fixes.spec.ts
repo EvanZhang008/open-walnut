@@ -9,9 +9,9 @@
  *    root transcript runs under the glass header and the toast took the scroll
  *    box's top edge as the top of the content.
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import {
-  askHereThenTree, centreInHistory, DENSE_SESSION, openThreadsSession, resetThreadsFixture, selectPassage, modePill, openQuestionList,
+  askHereThenTree, centreInHistory, DENSE_SESSION, openThreadsSession, resetThreadsFixture, selectPassage, modePill, openQuestionList, test,
 } from './threads-helpers'
 
 const TASK = 'pw-task-threads-dense'

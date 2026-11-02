@@ -24,10 +24,10 @@
  * the file API, the session record, a send that reaches the mock CLI. The AI's
  * edit of the sidecar is a plain file write, as its Edit tool would make.
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { openThreadsSession, readRecord, resetThreadsFixture } from './threads-helpers'
+import { openThreadsSession, readRecord, resetThreadsFixture, test } from './threads-helpers'
 import { DOC_COMMENTS_SESSION } from './threads-fixture'
 import { loadHome } from './draft-helpers'
 

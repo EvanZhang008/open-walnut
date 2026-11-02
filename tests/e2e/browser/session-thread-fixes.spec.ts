@@ -8,9 +8,9 @@
  *    opaque backing.
  * Dense fixture, reset per test, Chromium and WebKit.
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import {
-  centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, resetThreadsFixture, modePill, openQuestionList,
+  centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, resetThreadsFixture, modePill, openQuestionList, test,
 } from './threads-helpers'
 import { densePassage } from './threads-fixture'
 import { withCssColor } from './css-color'

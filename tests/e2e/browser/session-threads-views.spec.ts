@@ -15,11 +15,11 @@
  * Read-only tests use the dense fixture; the ones that write (Done, Remove) use
  * `pw-threads-session` with anchors this file PATCHes and resets.
  */
-import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
+import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
   centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture, modePill, openQuestionList, switchView,
-  unfoldQuestions,
+  unfoldQuestions, test,
 } from './threads-helpers'
 import { buildDenseSession, densePassage } from './threads-fixture'
 

@@ -23,10 +23,10 @@
  * sends its first words early (a neutral mark scans only once words came in;
  * before that it waits).
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, sessionPanel,
+  centreInHistory, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, sessionPanel, test,
 } from './threads-helpers'
 import { RELOAD_PASSAGE, RELOAD_SESSION, TAGGED_PASSAGE, TAGGED_READY, TAGGED_SESSION, TAGGED_TASK, TAGGED_TEXT } from './threads-fixture'
 

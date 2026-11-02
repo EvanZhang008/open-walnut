@@ -13,9 +13,9 @@
  *
  * Chromium and WebKit. The review fixture: one long reply with 22 asked passages.
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { centreInHistory, clickInPlace, openThreadsSession, settledScrollTop, passageRects, readRecord, resetThreadsFixture } from './threads-helpers'
+import { centreInHistory, clickInPlace, openThreadsSession, settledScrollTop, passageRects, readRecord, resetThreadsFixture, test } from './threads-helpers'
 import { REVIEW_COUNT, REVIEW_OLD_PASSAGES, REVIEW_OLD_READY, REVIEW_OLD_SESSION, REVIEW_OLD_TASK, REVIEW_READY, REVIEW_ROUNDS, REVIEW_ROUND_CODE, REVIEW_SESSION, REVIEW_TASK, REVIEW_TITLES, reviewPassage } from './threads-review-fixture'
 
 const SHOTS = () => `/tmp/ask-review/e2e/${test.info().project.name}`

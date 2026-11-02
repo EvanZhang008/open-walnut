@@ -19,9 +19,9 @@
  * Real pipeline: the threads fixture session (long invented answers) and a send that
  * reaches the mock CLI. Nothing is route-mocked.
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { centreInHistory, openThreadsSession, resetThreadsFixture, selectPassage } from './threads-helpers'
+import { centreInHistory, openThreadsSession, resetThreadsFixture, selectPassage, test } from './threads-helpers'
 import { COMMENTS_SESSION as AI_SESSION } from './threads-fixture'
 import { loadHome } from './draft-helpers'
 

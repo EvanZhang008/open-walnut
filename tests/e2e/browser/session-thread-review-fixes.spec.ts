@@ -12,10 +12,10 @@
  *  - R12: the root page of a session with questions has the geometry of a
  *    session without them (scroll box top, its padding, the first row).
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, DENSE_SESSION, NO_THREAD_SESSION, openThreadsSession, passageRects, resetThreadsFixture, selectPassage, openQuestionList,
+  centreInHistory, DENSE_SESSION, NO_THREAD_SESSION, openThreadsSession, passageRects, resetThreadsFixture, selectPassage, openQuestionList, test,
 } from './threads-helpers'
 import { densePassage } from './threads-fixture'
 

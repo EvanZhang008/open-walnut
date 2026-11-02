@@ -7,9 +7,9 @@
  *
  * Checklist: C13, C30, C33, C39, C66, C73, C81.
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import {
-  DENSE_SESSION, openThreadsSession, readRecord, resetThreadsFixture, modePill, openQuestionList,
+  DENSE_SESSION, openThreadsSession, readRecord, resetThreadsFixture, modePill, openQuestionList, test,
 } from './threads-helpers'
 import { buildDenseSession } from './threads-fixture'
 

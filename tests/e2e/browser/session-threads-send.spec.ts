@@ -18,10 +18,10 @@
  * transcript, so this file has its own session (`pw-threads-send-session`) and
  * finds rows by their text, never by count.
  */
-import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
+import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, DENSE_SESSION, FAILED_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, modePill, openQuestionList, switchView,
+  centreInHistory, DENSE_SESSION, FAILED_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, modePill, openQuestionList, switchView, test,
 } from './threads-helpers'
 import { FAILED_ERROR_TEXT, FAILED_PASSAGES, PARKED_FOLLOW_UP, densePassage } from './threads-fixture'
 import { discoverBrowserFixture } from './codex-test-audit'

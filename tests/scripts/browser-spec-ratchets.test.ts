@@ -896,4 +896,85 @@ describe('a long task budget', () => {
     expect(judges.map(({ file }) => file)).toEqual(expect.arrayContaining(['board-kanban-layout.spec.ts', 'session-thread-perf.spec.ts']))
     expect(judges.filter(({ text }) => !/\blongTaskBudget\(/.test(text)).map(({ file }) => file)).toEqual([])
   })
+
+  // The longtask entry is wall time, and on a runner with more runnable threads than cores it counts
+  // the wait for a core too: C96 read 80 tasks of 50 to 347 ms beside a 346 ms reference on CI
+  // (2026-11-02), and C38 failed the same way. The budget (a CPU measure) judges each task's own CPU
+  // from Chrome's trace (traceTaskTimes), and the wall time only behind machineQuiet().
+  const wallUngated = (text: string): boolean => text.split('\n').some((line) =>
+    /\.toBeLessThanOrEqual\([^)]*(?:longBudget|budget|longTaskBudget\()/i.test(line) && /\blong\b|\bworst\b/.test(line) && !/machineQuiet\(\)|\bspare\b/.test(line))
+
+  it('every one judges the CPU of its tasks, and their wall time only on a quiet machine', () => {
+    const judges = sources.filter(({ file, text }) => file.endsWith('.spec.ts') && JUDGES_LONG_TASKS.test(text))
+    expect(judges.filter(({ text }) => !/\btraceTaskTimes\(/.test(text)).map(({ file }) => file)).toEqual([])
+    expect(judges.filter(({ text }) => wallUngated(text)).map(({ file }) => file)).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    expect(wallUngated('  if (supported) expect(Math.max(0, ...(long ?? []))).toBeLessThanOrEqual(longBudget)')).toBe(true)
+    expect(wallUngated("    expect(worst, `long tasks per step`).toBeLessThanOrEqual(budget)")).toBe(true)
+    expect(wallUngated('  if (supported && spare) expect(Math.max(0, ...(long ?? []))).toBeLessThanOrEqual(longBudget)')).toBe(false)
+  })
+})
+
+describe('a tool of a mail group line', () => {
+  // The check and more (...) buttons are drawn only while the pointer is over their line. A spec
+  // that hovered and then clicked lost the race to a list redrawing under the still pointer: the
+  // pointer was over another line and the click waited out the test for a tool that was not drawn
+  // (2026-11-02: mail-grouping-bulk's Retry test, 240 s, on CI). Every press goes through
+  // pressGroupTool (mail-grouping-helpers.ts), which hovers and presses as one step until it lands.
+  const TOOL = /getByTestId\('mail-group-(?:mark|more)'\)/
+  const offendersOf = (file: string, text: string): string[] => {
+    const out: string[] = []
+    const held = new Set<string>()
+    text.split('\n').forEach((line, i) => {
+      const bound = /\bconst (\w+) = [^\n]*getByTestId\('mail-group-(?:mark|more)'\)/.exec(line)
+      if (bound) held.add(bound[1]!)
+      const direct = TOOL.test(line) && /\)\.click\(/.test(line)
+      const viaName = [...held].some((name) => new RegExp(`\\b${name}\\.click\\(`).test(line))
+      if (direct || viaName) out.push(`${file}:${i + 1}: ${line.trim()}`)
+    })
+    return out
+  }
+
+  it('every press goes through pressGroupTool', () => {
+    const pressers = sources.filter(({ text }) => text.includes('pressGroupTool(')).map(({ file }) => file)
+    expect(pressers).toEqual(expect.arrayContaining(['mail-grouping-bulk.spec.ts', 'mail-grouping.spec.ts']))
+    expect(sources.flatMap(({ file, text }) => offendersOf(file, text))).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const spec = [
+      '  await line.hover()',
+      "  const mark = line.getByTestId('mail-group-mark')",
+      '  await mark.click()',
+      "  await line.getByTestId('mail-group-more').click()",
+    ].join('\n')
+    expect(offendersOf('x.spec.ts', spec)).toHaveLength(2)
+  })
+})
+
+describe('a spec that resets a threads fixture', () => {
+  // Every test of a threads spec resets its fixture session first, and fullyParallel runs them on
+  // every worker at once: another worker's reset landed in the middle of a test (2026-11-02: N39's
+  // `Removed · Undo` was drawn, then gone 2.5 s later, on CI). resetThreadsFixture takes the
+  // session's lease (fixture-lease.ts) and holds it until the test ends, which only `test` from
+  // threads-helpers.ts lets go of.
+  const RESETS = /\bresetThreadsFixture\(/
+  const usesLeaseTest = (text: string): boolean =>
+    /^import \{[^}]*\btest\b[^}]*\} from '\.\/(?:threads-helpers|fixture-lease)'/m.test(text)
+    && !/^import \{[^}]*\btest\b[^}]*\} from '@playwright\/test'/m.test(text)
+
+  it('every one runs its tests with the test that lets the lease go', () => {
+    const resetters = sources.filter(({ file, text }) => file.endsWith('.spec.ts') && RESETS.test(text))
+    expect(resetters.map(({ file }) => file)).toContain('session-thread-fixes-r3.spec.ts')
+    expect(resetters.filter(({ text }) => !usesLeaseTest(text)).map(({ file }) => file)).toEqual([])
+    const helpers = sources.find(({ file }) => file === 'threads-helpers.ts')!.text
+    expect(helpers).toMatch(/withFixtureLease\(`threads:\$\{sessionId\}`/)
+  })
+
+  it('catches the shape it was written for', () => {
+    expect(usesLeaseTest("import { expect, test, type Page } from '@playwright/test'\nimport { resetThreadsFixture } from './threads-helpers'")).toBe(false)
+    expect(usesLeaseTest("import { expect, type Page } from '@playwright/test'\nimport { resetThreadsFixture, test } from './threads-helpers'")).toBe(true)
+  })
 })

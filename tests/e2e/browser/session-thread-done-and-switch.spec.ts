@@ -16,9 +16,9 @@
  * `slow:<ms> MOCK_TAG_SWITCH:<n>:<ms>` with its own question first and then
  * question n, in one turn.
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { centreInHistory, openThreadsSession, passageRects, resetThreadsFixture, selectPassage } from './threads-helpers'
+import { centreInHistory, openThreadsSession, passageRects, resetThreadsFixture, selectPassage, test } from './threads-helpers'
 import { TAGGED_PASSAGE, TAGGED_READY, TAGGED_SESSION, TAGGED_TASK, TAGGED_TEXT, TAGGED_TITLES } from './threads-fixture'
 import { cssColorToRgba } from './css-color'
 

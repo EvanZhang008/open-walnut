@@ -8,9 +8,9 @@
  *  - N14: the toast stays clear of the drawer header and its close button.
  * Dense fixture, reset per test, Chromium and WebKit.
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import {
-  centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, sessionPanel, modePill, openQuestionList, switchView,
+  centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, sessionPanel, modePill, openQuestionList, switchView, test,
 } from './threads-helpers'
 import { RELOAD_PASSAGE, RELOAD_SESSION, densePassage } from './threads-fixture'
 import { cssColorToRgba, withCssColor } from './css-color'

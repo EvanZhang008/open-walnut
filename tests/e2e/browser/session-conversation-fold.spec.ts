@@ -14,10 +14,10 @@
  * walks the user's own case: ask, read the answer in the card, go back to the
  * main conversation, and the question stays one line.
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, openThreadsSession, passageRects, resetThreadsFixture, selectPassage, switchView,
+  centreInHistory, openThreadsSession, passageRects, resetThreadsFixture, selectPassage, switchView, test,
 } from './threads-helpers'
 import { buildMapSession, MAP_SESSION, MAP_TITLES } from './threads-fixture'
 

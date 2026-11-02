@@ -9,9 +9,9 @@
  * Chromium and WebKit. The map fixture session (Conversation Mode), and the
  * send fixture for the sends.
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { centreInHistory, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, switchView } from './threads-helpers'
+import { centreInHistory, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, switchView, test } from './threads-helpers'
 import { MAP_PASSAGES, MAP_SESSION, MAP_TITLES } from './threads-fixture'
 
 const MAP_TASK = 'pw-task-threads-map'

@@ -16,11 +16,11 @@
  *
  * Chromium and WebKit. The tagged fixture session is this file's own.
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
   centreInHistory, modePill, nextQuestionNumber, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, switchView,
-  unfoldQuestions,
+  unfoldQuestions, test,
 } from './threads-helpers'
 import { buildTaggedSession, TAGGED_PASSAGE, TAGGED_READY, TAGGED_SESSION, TAGGED_TASK, TAGGED_TEXT, TAGGED_TITLES } from './threads-fixture'
 import { cssColorToRgba, withCssColor } from './css-color'

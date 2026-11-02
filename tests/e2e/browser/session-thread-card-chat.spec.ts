@@ -9,9 +9,9 @@
  * Chromium and WebKit. The review fixture session's first question has three
  * rounds; the second answer is a list with bold words, the third a code block.
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { openThreadsSession, resetThreadsFixture } from './threads-helpers'
+import { openThreadsSession, resetThreadsFixture, test } from './threads-helpers'
 import { cssColorToRgba } from './css-color'
 import { REVIEW_READY, REVIEW_ROUND_CODE, REVIEW_ROUNDS, REVIEW_SESSION, REVIEW_TASK, REVIEW_TITLES } from './threads-review-fixture'
 

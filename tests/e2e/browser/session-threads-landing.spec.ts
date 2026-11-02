@@ -10,10 +10,10 @@
  * page navigates and flashes), C44 (reduced motion: opacity only), and C19, C62,
  * C65 (three columns: one key, one panel; the toast stays in its column).
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, DENSE_SESSION, FAILED_SESSION, REWRITTEN_SESSION, openThreadsSession, passageRects, resetThreadsFixture, sessionPanel, openQuestionList, VIEW_MODE_DEFAULT_KEY,
+  centreInHistory, DENSE_SESSION, FAILED_SESSION, REWRITTEN_SESSION, openThreadsSession, passageRects, resetThreadsFixture, sessionPanel, openQuestionList, VIEW_MODE_DEFAULT_KEY, test,
 } from './threads-helpers'
 import { seedColumns, setPanelMode } from './draft-helpers'
 import { buildDenseSession, densePassage, seededThreadState } from './threads-fixture'

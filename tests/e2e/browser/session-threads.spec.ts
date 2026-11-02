@@ -14,10 +14,10 @@
  * The dense fixture (threads-fixture.ts) is read only here: pushes and pops live
  * in sessionStorage, never on the server, so no reset is needed between tests.
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, AI_SESSION, DENSE_SESSION, NO_THREAD_SESSION, findBannedGlyphs, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, openQuestionList,
+  centreInHistory, AI_SESSION, DENSE_SESSION, NO_THREAD_SESSION, findBannedGlyphs, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, openQuestionList, test,
 } from './threads-helpers'
 import { AI_PASSAGE } from './threads-fixture'
 

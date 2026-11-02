@@ -13,9 +13,9 @@
  *
  * Chromium and WebKit, on pw-threads-merged-session (threads-fixture.ts).
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { openThreadsSession, resetThreadsFixture, switchView } from './threads-helpers'
+import { openThreadsSession, resetThreadsFixture, switchView, test } from './threads-helpers'
 import { MERGED_ANSWERS, MERGED_READY, MERGED_SESSION, MERGED_TASK, MERGED_TITLES } from './threads-fixture'
 
 async function shot(page: Page, name: string, target?: Locator): Promise<void> {

@@ -22,9 +22,9 @@
  * decision note. Chromium and WebKit (`PW_WEBKIT=1 ... --project webkit`).
  */
 import fs from 'node:fs/promises'
-import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
+import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import { home } from './inbox-items-helpers'
-import { centreInHistory, openThreadsSession, resetThreadsFixture, selectPassage } from './threads-helpers'
+import { centreInHistory, openThreadsSession, resetThreadsFixture, selectPassage, test } from './threads-helpers'
 import { filler, TAGGED_READY, TAGGED_SESSION, TAGGED_TASK } from './threads-fixture'
 
 const ZOOMS = [0.8, 0.9, 1, 1.1, 1.25, 1.5]

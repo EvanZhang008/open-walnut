@@ -13,10 +13,10 @@
  * record is refetched only on result, error and reconnect), so these tests also
  * pin that a background write shows without a reload.
  */
-import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test'
+import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  centreInHistory, AI_SESSION, modePill, openThreadsSession, readRecord, resetThreadsFixture, selectPassage, switchView,
+  centreInHistory, AI_SESSION, modePill, openThreadsSession, readRecord, resetThreadsFixture, selectPassage, switchView, test,
 } from './threads-helpers'
 import { AI_PASSAGE } from './threads-fixture'
 

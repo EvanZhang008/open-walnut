@@ -7,10 +7,10 @@
  * next message (2026-11-01: a row above its composer, never text in the box, see
  * session-quote-comment-stack.spec.ts), and leaves a question's own draft where it was.
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  AI_SESSION, centreInHistory, openThreadsSession, readRecord, resetThreadsFixture, selectPassage, switchView,
+  AI_SESSION, centreInHistory, openThreadsSession, readRecord, resetThreadsFixture, selectPassage, switchView, test,
 } from './threads-helpers'
 import { AI_PASSAGE, buildMapSession, MAP_SESSION, MAP_TITLES } from './threads-fixture'
 

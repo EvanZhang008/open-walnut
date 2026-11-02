@@ -16,10 +16,10 @@
  * Chromium and WebKit. The fixture files live in the thread sessions' cwd
  * (test-server.ts: cache-design.md, cache-report.html).
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  modePill, nextQuestionNumber, openThreadsSession, readRecord, resetThreadsFixture, switchView, unfoldQuestions,
+  modePill, nextQuestionNumber, openThreadsSession, readRecord, resetThreadsFixture, switchView, unfoldQuestions, test,
 } from './threads-helpers'
 import { TAGGED_READY, TAGGED_SESSION, TAGGED_TASK } from './threads-fixture'
 

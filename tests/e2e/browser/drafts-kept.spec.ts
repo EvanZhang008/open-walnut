@@ -15,9 +15,9 @@
  *
  * Chromium and WebKit (PW_WEBKIT=1).
  */
-import { expect, test, type APIRequestContext, type Browser, type Locator, type Page } from '@playwright/test'
+import { expect, type APIRequestContext, type Browser, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { centreInHistory, openThreadsSession, resetThreadsFixture, selectPassage, unfoldQuestions } from './threads-helpers'
+import { centreInHistory, openThreadsSession, resetThreadsFixture, selectPassage, unfoldQuestions, test } from './threads-helpers'
 import { TAGGED_PASSAGE, TAGGED_READY, TAGGED_SESSION, TAGGED_TASK, TAGGED_TITLES } from './threads-fixture'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { draftPanel, openDraft } from './draft-helpers'

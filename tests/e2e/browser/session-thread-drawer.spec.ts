@@ -6,9 +6,9 @@
  *
  * Checklist: C7, C27, C28, C29, C31, C32, C37, C38, C45, C56, C63, C67, C75 (C48, the header count bump, left with the count pill).
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import {
-  DENSE_SESSION, REWRITTEN_SESSION, openThreadsSession, readRecord, resetThreadsFixture, noBannedGlyphs, modePill, openQuestionList,
+  DENSE_SESSION, REWRITTEN_SESSION, openThreadsSession, readRecord, resetThreadsFixture, noBannedGlyphs, modePill, openQuestionList, test,
 } from './threads-helpers'
 import { DENSE_EXPECTED_COUNTS } from './threads-fixture'
 import { withCssColor } from './css-color'
