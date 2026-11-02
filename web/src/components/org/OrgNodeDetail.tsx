@@ -20,6 +20,7 @@ import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { yieldFullscreen } from '@/hooks/useFullscreen';
 import type { Task } from '@open-walnut/core';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
+import { OrgPaneHandle } from './OrgPaneHandle';
 import { TaskBoardPane } from '@/components/board/TaskBoardPane';
 import { LiveActivityLine } from '@/components/board/LiveActivityLine';
 import { useFirstLiveTask } from '@/stores/live-activity-store';
@@ -329,13 +330,6 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
     return { min: (RAIL_MIN_PX / vw) * 100, max: (Math.max(RAIL_MIN_PX, room - CHAT_MIN_PX) / vw) * 100 };
   };
   const railWidth = useResizablePanel(railWidthKey(row.kind), RAIL_DEFAULT_VW, 'right', { bounds: railBounds });
-  // What the divider tells a screen reader: the width that shows, in pixels, within its room.
-  const railAria = (() => {
-    if (!splitRef.current) return null;
-    const b = railBounds();
-    const px = (v: number) => Math.round((v / 100) * window.innerWidth);
-    return { min: px(b.min), max: px(b.max), now: px(Math.min(b.max, Math.max(b.min, railWidth.pct))), b };
-  })();
   // The window's own clamp too, so a width set on a wider window still leaves both sides readable.
   const railCss = `clamp(${RAIL_MIN_PX}px, ${railWidth.pct}vw, max(${RAIL_MIN_PX}px, calc(100% - ${CHAT_MIN_PX}px)))`;
   /** The chat's header goes into the node's (SessionPanel headerSlot): its status and its kebab. */
@@ -443,26 +437,15 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
       {!canTalk && <p className="org-composer org-composer-note" data-testid="org-no-contact">The Inbox has no VP: open a task to talk to it.</p>}
       </div>
       {railSide && !railHidden && (
-        <div
+        <OrgPaneHandle
           className="org-rail-handle"
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Task panel width: drag, or use the arrow keys; double-click resets it"
-          {...(railAria ? { 'aria-valuemin': railAria.min, 'aria-valuemax': railAria.max, 'aria-valuenow': railAria.now, 'aria-valuetext': `${railAria.now} pixels wide` } : {})}
-          tabIndex={0}
-          data-testid="org-rail-handle"
-          {...railWidth.handleProps}
-          onDoubleClick={() => railWidth.setPct(RAIL_DEFAULT_VW)}
-          onKeyDown={(e) => {
-            // Left widens the rail (it is right of the divider); Home and End go to its edges.
-            const b = railBounds();
-            const shown = Math.min(b.max, Math.max(b.min, railWidth.pct));
-            const next = e.key === 'ArrowLeft' ? shown + 2 : e.key === 'ArrowRight' ? shown - 2
-              : e.key === 'End' ? b.max : e.key === 'Home' ? b.min : null;
-            if (next === null) return;
-            e.preventDefault();
-            railWidth.setPct(next);
-          }}
+          testId="org-rail-handle"
+          label="Task panel width"
+          panel={railWidth}
+          bounds={railBounds}
+          onReset={() => railWidth.setPct(RAIL_DEFAULT_VW)}
+          roomRef={splitRef}
+          panelSide="right"
         />
       )}
       {!railHidden && rail}

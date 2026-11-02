@@ -9,14 +9,14 @@
 
 .org-rail { display: flex; flex-direction: column; min-height: 0; background: var(--bg); font-size: 12.5px; }
 .org-rail.is-side { flex: none; width: clamp(300px, 27vw, max(300px, calc(100% - 420px))); border-left: 1px solid var(--border); }
-/* The divider between the chat and the side rail: drag to set the rail's width, double-click resets.
-   A wide grab area over the rail's own border, a line on hover or while dragging. */
-.org-rail-handle {
+/* Every divider between two Org panes (OrgPaneHandle): a 7px grab strip over the border line. */
+.org-pane-handle {
   flex: none; position: relative; width: 7px; margin: 0 -4px 0 -3px; z-index: 2; cursor: col-resize; touch-action: none;
   background: transparent; outline: none;
 }
-.org-rail-handle::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: transparent; transition: background 0.12s; }
-.org-rail-handle:hover::after, .org-rail-handle:focus-visible::after, .org-detail-split.resizing .org-rail-handle::after { width: 2px; left: 2.5px; background: var(--accent, #0a84ff); }
+.org-pane-handle::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: transparent; transition: background 0.12s; }
+.org-pane-handle:hover::after, .org-pane-handle:focus-visible::after, .org-pane-handle.resizing::after,
+.org-detail-split.resizing .org-rail-handle::after { width: 2px; left: 2.5px; background: var(--accent, #0a84ff); }
 /* While dragging nothing under the pointer selects or takes the pointer (an iframe in a Board). */
 .org-detail-split.resizing { user-select: none; }
 .org-detail-split.resizing iframe { pointer-events: none; }

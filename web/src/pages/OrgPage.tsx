@@ -17,7 +17,7 @@
  * layout record so the pins come back after a restart. On a phone the list, the detail and the
  * opened task take turns. The old org chart (drag to reparent) stays one click away.
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { Task } from '@open-walnut/core';
 import { rowPinNodes } from '@/components/org/org-task-tabs';
@@ -52,7 +52,18 @@ import {
 import {
   ANSWERED_HOLD_MS, phaseMark, promptAnswered, promptKey, settleHolds, withAnswered, without, type AnsweredHolds,
 } from '@/components/org/org-answered';
+import { OrgPaneHandle } from '@/components/org/OrgPaneHandle';
+import { useResizablePanel } from '@/hooks/useResizablePanel';
 import '@/styles/org-page.css';
+
+/** The page's own panes (the dividers below): the list, the node between, an opened task. */
+const ORG_LIST_DEFAULT_PX = 300;
+const ORG_LIST_MIN_PX = 200;
+const ORG_LIST_MAX_PX = 480;
+const ORG_DETAIL_MIN_PX = 480;
+const ORG_SIDE_MIN_PX = 340;
+/** Up to this window width an opened task is laid over the node (org-page.css), not a column. */
+const ORG_SIDE_OVERLAY_MAX_VW = 1180;
 
 const TABS: readonly OrgTab[] = ['board', 'team', 'chat'];
 
@@ -403,11 +414,44 @@ export function OrgPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- picker.open only sets its state
   [cards, select, openChart]);
 
+  // The two dividers of the page itself (2026-11-02, the user, pointing at the line before an opened
+  // task: "this line need ot move the bar"): the list's right edge and the opened tasks' left edge,
+  // each dragged, kept (an `open-walnut-` key, synced) and reset by a double-click. Until the user
+  // sets one the page keeps its own CSS width. The node between keeps ORG_DETAIL_MIN_PX; the list
+  // stays within 200 to 480px, an opened task at least 340px.
+  const pageRef = useRef<HTMLDivElement>(null);
+  const vw = () => window.innerWidth || 1;
+  const elOf = (sel: string) => pageRef.current?.querySelector(sel) as HTMLElement | null;
+  const shownOf = (sel: string) => { const el = elOf(sel); return el ? (el.offsetWidth / vw()) * 100 : null; };
+  const listBounds = () => {
+    // A window too narrow for a column lays the opened task over the node (org-page.css): no room taken.
+    const strip = window.innerWidth > ORG_SIDE_OVERLAY_MAX_VW ? elOf('.org-side-strip')?.offsetWidth ?? 0 : 0;
+    const room = (pageRef.current?.clientWidth ?? 0) - strip - ORG_DETAIL_MIN_PX;
+    return { min: (ORG_LIST_MIN_PX / vw()) * 100, max: (Math.max(ORG_LIST_MIN_PX, Math.min(ORG_LIST_MAX_PX, room)) / vw()) * 100 };
+  };
+  const listWidth = useResizablePanel('open-walnut-org-list-w', (ORG_LIST_DEFAULT_PX / vw()) * 100, 'left',
+    { bounds: listBounds, measure: () => shownOf('.org-list') });
+  const sideBounds = () => {
+    const page = pageRef.current?.clientWidth ?? 0;
+    const room = Math.min(page * 0.7, page - (elOf('.org-list')?.offsetWidth ?? 0) - ORG_DETAIL_MIN_PX);
+    return { min: (ORG_SIDE_MIN_PX / vw()) * 100, max: (Math.max(ORG_SIDE_MIN_PX, room) / vw()) * 100 };
+  };
+  // One opened task and two or more side by side keep their own width: closing one of two must not
+  // leave the last one twice as wide.
+  const sideOpts = { bounds: sideBounds, measure: () => shownOf('.org-side-strip') };
+  const sideOne = useResizablePanel('open-walnut-org-side-w', 34, 'right', sideOpts);
+  const sideMany = useResizablePanel('open-walnut-org-side-w-multi', 52, 'right', sideOpts);
+  const sideWidth = strip.length > 1 ? sideMany : sideOne;
+  const pageVars = phone ? undefined : {
+    ...(listWidth.custom ? { '--org-list-w': `clamp(${ORG_LIST_MIN_PX}px, ${listWidth.pct}vw, ${ORG_LIST_MAX_PX}px)` } : {}),
+    ...(sideWidth.custom ? { '--org-side-w': `${sideWidth.pct}vw` } : {}),
+  } as CSSProperties;
+
   // A phone shows one of the three at a time; the opened task covers the rest.
   const phoneView = !phone ? null : side ? 'side' : showDetail ? 'detail' : 'list';
 
   return (
-    <div className={`org-page${phone ? ' is-phone' : ''}${showDetail ? ' shows-detail' : ''}${(phone ? side : strip.length > 0) ? ' shows-side' : ''}`} data-testid="org-page">
+    <div ref={pageRef} className={`org-page${phone ? ' is-phone' : ''}${showDetail ? ' shows-detail' : ''}${(phone ? side : strip.length > 0) ? ' shows-side' : ''}`} style={pageVars} data-testid="org-page">
       {(!phone || phoneView === 'list') && (
         <OrgChannelList
           main={channels.main}
@@ -424,6 +468,20 @@ export function OrgPage() {
           onOpenTask={openTask}
           onUnpin={(taskId, nodes) => pin(taskId, nodes, false)}
           now={now}
+        />
+      )}
+      {!phone && (
+        <OrgPaneHandle
+          className="org-list-handle"
+          testId="org-list-handle"
+          label="List width"
+          panel={listWidth}
+          bounds={listBounds}
+          onReset={listWidth.reset}
+          roomRef={pageRef}
+          shownPct={() => shownOf('.org-list')}
+          panelSide="left"
+          elRef={(el) => { listWidth.panelRef.current = el; }}
         />
       )}
       {picker.state && (
@@ -466,6 +524,20 @@ export function OrgPage() {
           onOpenSession={openSession}
           onStartChat={chatOnHome}
           {...(side.kind === 'task' && sideInbox?.taskId === side.id ? { inboxRequest: sideInbox.n } : {})}
+        />
+      )}
+      {!phone && strip.length > 0 && (
+        <OrgPaneHandle
+          className="org-side-handle"
+          testId="org-side-handle"
+          label="Opened task width"
+          panel={sideWidth}
+          bounds={sideBounds}
+          onReset={sideWidth.reset}
+          roomRef={pageRef}
+          shownPct={() => shownOf('.org-side-strip')}
+          panelSide="right"
+          elRef={(el) => { sideOne.panelRef.current = el; sideMany.panelRef.current = el; }}
         />
       )}
       {!phone && strip.length > 0 && (

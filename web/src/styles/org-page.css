@@ -17,7 +17,8 @@
 /* ── The list ── */
 
 .org-list {
-  width: 300px;
+  /* The width the divider after it sets (OrgPage), else the page's own. */
+  width: var(--org-list-w, 300px);
   flex: none;
   display: flex;
   flex-direction: column;
@@ -339,6 +340,18 @@
    Two or more share the room; past what fits, the strip scrolls sideways. */
 .org-side-strip { flex: none; display: flex; min-width: 0; min-height: 0; max-width: 70%; overflow-x: auto; }
 .org-side-strip.is-multi .org-side { width: clamp(340px, 26vw, 520px); }
+/* A column beside the node: the divider before it sets the strip's width (OrgPage), and the node
+   keeps 480px. Its panels share the strip; two or more past what fits scroll sideways. */
+@media (min-width: 1181px) {
+  /* Until the user drags it, the widths the page always had: one task, or two side by side. */
+  .org-page:not(.is-phone) .org-side-strip {
+    --org-side-default: clamp(380px, 34vw, 560px);
+    width: clamp(340px, var(--org-side-w, var(--org-side-default)), max(340px, calc(100% - var(--org-list-w, 300px) - 480px)));
+  }
+  .org-page:not(.is-phone) .org-side-strip.is-multi { --org-side-default: calc(2 * clamp(340px, 26vw, 520px)); }
+  .org-page:not(.is-phone) .org-side-strip .org-side { width: auto; flex: 1 1 0; }
+  .org-page:not(.is-phone) .org-side-strip.is-multi .org-side { flex: 1 0 340px; }
+}
 @media (max-width: 1180px) {
   .org-page:not(.is-phone) .org-side-strip {
     position: absolute;
@@ -352,6 +365,8 @@
   }
   .org-page:not(.is-phone) .org-side { width: min(480px, 92vw); }
   .org-page:not(.is-phone) .org-side-strip.is-multi .org-side { width: min(420px, 46vw); }
+  /* Laid over the node there, so no divider to drag. */
+  .org-side-handle { display: none; }
 }
 .org-side-lock.is-locked { color: var(--accent, var(--fg)); }
 .org-page.is-phone .org-side { width: 100%; border-left: none; }
