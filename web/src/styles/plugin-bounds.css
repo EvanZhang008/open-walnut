@@ -36,15 +36,15 @@
   inset: var(--plugin-box-top, 50vh) var(--plugin-box-right, 50vw) var(--plugin-box-bottom, 50vh) var(--plugin-box-left, 50vw) !important;
 }
 
-/* Walnut's own sheets a plugin embeds (a session panel in full screen, a file preview) cover the
-   box, its gutter kept, instead of the window: the box's clip would cut them at its edges, the
-   composer at the bottom first. Their backdrop renders inside the box (hooks/useFullscreen.tsx). */
+/* Walnut's own sheets a plugin embeds (a session panel in full screen, a file preview) fill the
+   box, edge to edge as everywhere (fullscreen-tab.css), instead of the window: the box's clip
+   would cut them at its edges, the composer at the bottom first. */
 html .plugin-bounds .open-walnut-fullscreen,
 html .plugin-bounds .open-walnut-fullscreen.is-changed-open {
-  top: calc(var(--plugin-box-top, 0px) + var(--fullscreen-gutter, 12px));
-  right: calc(var(--plugin-box-right, 0px) + var(--fullscreen-gutter, 12px));
-  bottom: calc(var(--plugin-box-bottom, 0px) + var(--fullscreen-gutter, 12px));
-  left: calc(var(--plugin-box-left, 0px) + var(--fullscreen-gutter, 12px));
+  top: var(--plugin-box-top, 0px);
+  right: var(--plugin-box-right, 0px);
+  bottom: var(--plugin-box-bottom, 0px);
+  left: var(--plugin-box-left, 0px);
 }
 html .plugin-bounds .file-content-view.fv-fullscreen {
   inset: var(--plugin-box-top, 0px) var(--plugin-box-right, 0px) var(--plugin-box-bottom, 0px) var(--plugin-box-left, 0px);

@@ -3855,12 +3855,11 @@ select {
   .wf-script-label-short { display: inline; }
 }
 
-/* Full-screen panel: fill the promoted 95vw x 95vh container; the task list must
+/* Full-screen panel: fill the promoted full-area container; the task list must
    grow to fill instead of being capped at the inline 240px max-height. */
 .wf-card.open-walnut-fullscreen {
   display: flex;
   flex-direction: column;
-  margin: 0 auto; /* keeps the inset centering of .open-walnut-fullscreen */
 }
 .wf-card-content { display: flex; min-height: 0; flex-direction: column; }
 .wf-card.open-walnut-fullscreen .wf-card-content { flex: 1; }

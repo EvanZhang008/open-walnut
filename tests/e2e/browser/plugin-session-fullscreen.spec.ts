@@ -118,6 +118,13 @@ test("a plugin's session panel opens in its normal place, and its other page lea
   await page.getByTestId('session-fixture-next').click()
   await expect(page.getByTestId('session-fixture-page')).toHaveText('Problem two')
   await expand(panel)
+  // Full screen fills the plugin's box edge to edge: no margin, no rounded sheet.
+  await expect.poll(() => panel.evaluate((el) => {
+    const box = el.closest('.plugin-bounds')!.getBoundingClientRect()
+    const r = el.getBoundingClientRect()
+    const gaps = [r.left - box.left, box.right - r.right, r.top - box.top, box.bottom - r.bottom].map((g) => Math.round(g))
+    return `${gaps.join(',')} ${getComputedStyle(el).borderTopLeftRadius}`
+  })).toBe('0,0,0,0 0px')
   await shot(page, '1-plugin-fullscreen')
   await page.goBack()
   await expect(page.getByTestId('session-fixture-page')).toHaveText('Problem one')

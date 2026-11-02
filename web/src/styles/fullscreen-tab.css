@@ -1,33 +1,33 @@
 /* Full screen is the full screen of the TAB, not of the app (2026-10-27, the
    user: "during full screen I can still go from home to org"). A promoted panel
-   is the same sheet as before, laid over the page area beside the sidebar, which
-   stays usable; AppShell writes the page area's left edge to --fullscreen-left
-   (0 on a phone, where the sidebar is a drawer). The gutter keeps a strip of
-   backdrop around the sheet, so a click outside still leaves full screen. The
+   fills the page area beside the sidebar, which stays usable; AppShell writes the page area's left edge to --fullscreen-left
+   (0 on a phone, where the sidebar is a drawer). The
    dock and the workflow card take the same area but are not kept across routes:
    a sidebar click navigates, and that route change ends their full screen.
    Loaded after globals.css; `html` gives the weight over the centred-sheet
    rules there. */
-/* Height stays nearly full; each side keeps about a tenth of the page area
-   (2026-10-31, the user: "上下大概占满，但是左右各留个百分之十"), but never so
-   much that the sheet drops under 960px (the review sidebar's wide box), and a
-   narrow window or a phone keeps the plain gutter. */
+/* Full screen fills the page area edge to edge: no margin, no rounded sheet, no
+   shadow, no dimmed page around it (2026-11-02, the user: "full screen means full
+   screen, not a bigger pop-up"; it replaces the 2026-10-31 sheet that kept about a
+   tenth on each side). The panel's own header is its top. The backdrop stays in the
+   DOM (the rail's name pill and the tests read it) but paints nothing: nothing of
+   the page is left to dim, and a full-area surface is a layer of its own in WebKit. */
 html .open-walnut-fullscreen,
 html .open-walnut-fullscreen.is-changed-open {
-  --fullscreen-gutter: 12px;
-  --fullscreen-area: calc(100vw - var(--fullscreen-left, 0px));
-  --fullscreen-side: max(var(--fullscreen-gutter), min(calc(var(--fullscreen-area) * 0.1), calc((var(--fullscreen-area) - 960px) / 2)));
-  top: var(--fullscreen-gutter);
-  bottom: var(--fullscreen-gutter);
-  left: calc(var(--fullscreen-left, 0px) + var(--fullscreen-side));
-  right: var(--fullscreen-side);
+  top: 0;
+  bottom: 0;
+  left: var(--fullscreen-left, 0px);
+  right: 0;
   width: auto;
   height: auto;
   max-width: none;
   margin: 0 !important;
+  border-radius: 0;
+  box-shadow: none;
 }
 html .open-walnut-fullscreen-backdrop {
   left: var(--fullscreen-left, 0px);
+  display: none;
 }
 /* A sheet whose page is not on show (useFullscreen keepAcrossRoutes). */
 html .open-walnut-fullscreen-away,

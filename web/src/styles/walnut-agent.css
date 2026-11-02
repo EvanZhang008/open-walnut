@@ -600,7 +600,7 @@
 /* NO `contain: paint` on .ask-walnut-session, tempting as the WebKit raster win
    is: paint containment makes the wrapper the containing block for
    position:fixed descendants, and the panel's fullscreen mode
-   (.open-walnut-fullscreen, 95vw × 95vh fixed) then "expanded" inside the slot
+   (.open-walnut-fullscreen, fixed over the page area) then "expanded" inside the slot
    instead of over the page. The panel already clips itself. */
 /* The panel itself must FILL its wrapper: its glass header and composer are
    absolutely positioned against it, so a panel sized by content would put the
