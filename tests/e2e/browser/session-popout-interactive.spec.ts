@@ -38,7 +38,7 @@ test('a popped-out session sends through the real CLI and keeps Inbox beside the
   const { sessionId } = await started.json()
   const letter = await request.post('/api/v1/human-inbox', {
     headers: { 'x-walnut-caller-sid': sessionId },
-    data: { subject: 'Popout decision', type: 'action_required', markdown: 'Review the isolated update.', actions: [{ id: 'approve', label: 'Approve update' }] },
+    data: { subject: 'Popout decision', type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes', markdown: 'Review the isolated update.', actions: [{ id: 'approve', label: 'Approve update' }] },
   })
   expect(letter.status(), await letter.text()).toBe(201)
   const { child, parent } = await openPopout(page, sessionId)

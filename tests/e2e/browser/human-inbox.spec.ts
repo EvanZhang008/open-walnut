@@ -189,7 +189,7 @@ test('an action_required letter arrives, reads in the reader, and one click answ
   originSid = await startOriginSession(request)
   const letterId = await sendLetter(request, {
     subject: DECISION_SUBJECT,
-    type: 'action_required',
+    type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes',
     // The body is UNTRUSTED agent output, so it carries a script that must never
     // run: with it executing, the frame body would read SCRIPT_RAN_MARKER instead.
     html: `<h2>Cache rollout</h2><p>${HTML_BODY_MARKER}</p>`
@@ -342,7 +342,7 @@ test('a task\'s answer for the user reads as that task\'s, never as "You"', asyn
   if (!originSid) originSid = await startOriginSession(request)
   const answeringSid = await startOriginSession(request)
   const letterId = await sendLetter(request, {
-    subject: BY_TASK_SUBJECT, type: 'action_required', markdown: `Which layout ships? (${NONCE})`,
+    subject: BY_TASK_SUBJECT, type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes', markdown: `Which layout ships? (${NONCE})`,
     actions: [{ id: 'wide', label: 'Wide' }, { id: 'tall', label: 'Tall' }],
   }, originSid)
   // What human_inbox_answer sends: the answer route, with the answering session's caller id.
@@ -483,7 +483,7 @@ test('a decision letter stays in the Inbox, read or unread, and never counts or 
 
   await sendLetter(request, {
     subject: GRACE_SUBJECT,
-    type: 'action_required',
+    type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes',
     markdown: `## Deploy window\n\nThe rollout wants a go/no-go; decide in the channel (${NONCE}).`,
     text: `Deploy window needs your call in the channel (${NONCE}).`,
     actions: [

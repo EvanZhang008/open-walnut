@@ -178,7 +178,7 @@ test('a letter opens in the session Inbox tab beside the live chat, and answerin
   const sid = await startSession(request)
   const letterId = await sendLetter(request, {
     subject,
-    type: 'action_required',
+    type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes',
     // Untrusted agent output: the script must never run. With it executing the
     // frame would read scriptRanMarker instead of the document.
     html: `<h2>Index rebuild</h2><p>${bodyMarker}</p>`
@@ -336,7 +336,7 @@ test('the tab lists only this session letters and the menu badge counts them whi
   // Two for THIS session…
   await sendLetter(request, {
     subject: mine,
-    type: 'action_required',
+    type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes',
     markdown: `## Migration\n\nPick a lane (${NONCE}).`,
     text: `Migration needs a lane (${NONCE}).`,
     actions: [{ id: 'blue', label: 'Blue/green' }],

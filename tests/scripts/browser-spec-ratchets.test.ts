@@ -1017,3 +1017,27 @@ describe('a spec that judges main-thread CPU or long tasks', () => {
     expect(run).toBeGreaterThan(build)
   })
 })
+
+describe('a spec that sends a decision letter as a session', () => {
+  // Walnut refuses a session's action_required letter that does not name which of the user's own
+  // kinds it is (409 user_kind, src/core/human-inbox/user-kind-letter.ts). Seven specs still sent
+  // the old shape and failed on CI the day the check landed (2026-11-02). A spec that posts letters
+  // with a caller session names the kind on every decision letter it builds.
+  const SENDS_AS_SESSION = /CALLER_SID_HEADER|x-walnut-caller-sid/
+  const decisions = (text: string): number =>
+    text.split('\n').filter((line) => /type: 'action_required'/.test(line) && !/toMatchObject|expect\(/.test(line)).length
+  const named = (text: string): number => (text.match(/\buser_kind: '/g) ?? []).length
+  const offenders = (files: Array<{ file: string; text: string }>): string[] =>
+    files.filter(({ file, text }) => file.endsWith('.spec.ts') && SENDS_AS_SESSION.test(text) && decisions(text) > named(text)).map(({ file }) => file)
+
+  it('every decision letter names its user kind', () => {
+    expect(offenders(sources)).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const sent = "  await request.post('/api/v1/human-inbox', {\n    headers: { 'x-walnut-caller-sid': sid },\n    data: { subject, type: 'action_required', markdown: 'Pick one.' },\n  })"
+    expect(offenders([{ file: 'x.spec.ts', text: sent }])).toEqual(['x.spec.ts'])
+    expect(offenders([{ file: 'x.spec.ts', text: sent.replace("markdown:", "user_kind: 'user_own', user_kind_why: 'his call', markdown:") }])).toEqual([])
+    expect(offenders([{ file: 'x.spec.ts', text: "  expect(letter).toMatchObject({ type: 'action_required' })\n  headers: { 'x-walnut-caller-sid': sid }" }])).toEqual([])
+  })
+})

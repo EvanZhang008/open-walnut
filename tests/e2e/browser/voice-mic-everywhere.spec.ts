@@ -309,7 +309,7 @@ test.describe('Inbox letter', () => {
     test.setTimeout(120_000)
     const subject = `Voice mic choice ${STAMP}`
     await sendLetter(request, {
-      subject, type: 'action_required', markdown: 'Pick one.', text: 'Pick one.',
+      subject, type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes', markdown: 'Pick one.', text: 'Pick one.',
       actions: [
         { id: 'ship', label: 'Ship it now', description: 'Roll out tonight' },
         { id: 'hold', label: 'Hold for review', description: 'Wait for a second look' },

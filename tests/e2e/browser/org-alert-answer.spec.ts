@@ -133,7 +133,7 @@ test.beforeAll(async ({ request }) => {
   const letterSid = await startSession(request, ids.letter, `Lease ready ${STAMP}`)
   const sent = await request.post('/api/v1/human-inbox', {
     headers: { 'x-walnut-caller-sid': letterSid },
-    data: { subject: `Sign the lease ${STAMP}?`, type: 'action_required', markdown: 'Pick one.', actions: [{ id: 'sign', label: 'Sign it' }, { id: 'wait', label: 'Not yet' }] },
+    data: { subject: `Sign the lease ${STAMP}?`, type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes', markdown: 'Pick one.', actions: [{ id: 'sign', label: 'Sign it' }, { id: 'wait', label: 'Not yet' }] },
   })
   expect(sent.status(), await sent.text()).toBe(201)
   // A choice on the VP's Board about one of its project's tasks (not its subtask).
@@ -192,7 +192,7 @@ test('each row is its summary, its task, the answer and small Quote and Snooze; 
   const lateSid = await startSession(request, late, `Late ready ${STAMP}`)
   const sent = await request.post('/api/v1/human-inbox', {
     headers: { 'x-walnut-caller-sid': lateSid },
-    data: { subject: `Late question ${STAMP}?`, type: 'action_required', markdown: 'Pick one.', actions: [{ id: 'y', label: 'Yes' }, { id: 'n', label: 'No' }] },
+    data: { subject: `Late question ${STAMP}?`, type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes', markdown: 'Pick one.', actions: [{ id: 'y', label: 'Yes' }, { id: 'n', label: 'No' }] },
   })
   expect(sent.status(), await sent.text()).toBe(201)
   await needsUser(request, late)

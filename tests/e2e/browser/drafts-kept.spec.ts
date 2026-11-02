@@ -210,7 +210,7 @@ test.describe('Every input box keeps its unsent draft', () => {
     const subject = `PW draft letter ${NONCE}`
     const sent = await request.post('/api/v1/human-inbox', {
       data: {
-        subject, type: 'action_required', html: `<p>Pick one (${NONCE}).</p>`, text: `Pick one (${NONCE}).`,
+        subject, type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes', html: `<p>Pick one (${NONCE}).</p>`, text: `Pick one (${NONCE}).`,
         actions: [{ id: 'a', label: 'Option A' }, { id: 'b', label: 'Option B' }],
       },
       headers: { 'x-walnut-caller-sid': sessionId },

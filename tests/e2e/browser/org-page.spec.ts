@@ -303,7 +303,7 @@ async function letterFrom(request: APIRequestContext, taskId: string, subject: s
   const sid = await startSession(request, taskId, `${subject} ready`)
   const sent = await request.post('/api/v1/human-inbox', {
     headers: { 'x-walnut-caller-sid': sid },
-    data: { subject, type: 'action_required', markdown: 'Pick one.', actions: [{ id: 'yes', label: 'Yes' }] },
+    data: { subject, type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes', markdown: 'Pick one.', actions: [{ id: 'yes', label: 'Yes' }] },
   })
   expect(sent.status(), await sent.text()).toBe(201)
   await expect.poll(async () => ((await (await request.get(`/api/tasks/${taskId}`)).json()).task?.user_status?.source ?? ''), { timeout: 60_000 })
