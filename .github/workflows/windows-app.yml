@@ -67,6 +67,13 @@ jobs:
         if: steps.has.outputs.app == 'true'
         with:
           bun-version: 1.4.4
+      # The shared bun package store every CI install restores first (tests/scripts/ci-bun-store.test.ts).
+      - uses: actions/cache@v4
+        if: steps.has.outputs.app == 'true'
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Build Walnut-Setup-x64.exe
         if: steps.has.outputs.app == 'true'
@@ -74,6 +81,8 @@ jobs:
         working-directory: desktop-windows
         env:
           VERSION: ${{ inputs.version }}
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
+          ONNXRUNTIME_NODE_INSTALL: skip
         run: |
           bun install --frozen-lockfile
           # A build for a release carries its version (the updater compares it); a test build is

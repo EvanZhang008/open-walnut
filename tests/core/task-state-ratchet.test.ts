@@ -142,6 +142,8 @@ const PHASE_READERS: Record<string, number> = {
   'web/src/components/tasks/status-sections.ts': 2,
   'web/src/components/tasks/StatusSections.tsx': 3,
   'web/src/components/tasks/TaskDetailPane.tsx': 1,
+  // The Snooze row reads a watch only for a task parked on it: being parked is the WAITING phase itself.
+  'web/src/components/tasks/TaskKebabMenu.tsx': 1,
   'web/src/components/tasks/TaskStatusControl.tsx': 6,
   'web/src/components/tasks/TodoFilterFooter.tsx': 1,
   // The header chip labels the WAITING phase itself (its clock, and that a message ends it).
