@@ -396,8 +396,10 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
     // The pointer on commented words shows that comment's card there, to read; it
     // goes a beat after the pointer leaves the words and the card.
     let hideTimer = 0;
-    const onMove = (e: MouseEvent) => {
-      if (e.buttons) return;
+    // Pointer events, not mouse ones: drag-gesture-invariants keeps mousemove out of web/src,
+    // and a finger scrolling the doc is no hover.
+    const onMove = (e: PointerEvent) => {
+      if (e.buttons || e.pointerType === 'touch') return;
       if (layerRef.current?.contains(e.target as Node)) { window.clearTimeout(hideTimer); return; }
       for (const [id, r] of hits(e) ? ranges.current : []) {
         if (id !== DRAFT_KEY && pointInRangeRects(r, e.clientX, e.clientY)) {
@@ -412,16 +414,16 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
     // Off the doc altogether (the composer, the sidebar): it goes too.
     const onLeave = () => { window.clearTimeout(hideTimer); hideTimer = window.setTimeout(() => setPeekId(null), 300); };
     root.addEventListener('click', onClick);
-    root.addEventListener('mousemove', onMove);
+    root.addEventListener('pointermove', onMove);
     root.addEventListener('mouseleave', onLeave);
     const frame = inFrame ? frameRef.current : null;
     let fdoc: Document | null = null;
     const attach = () => {
       fdoc?.removeEventListener('click', onClick, true);
-      fdoc?.removeEventListener('mousemove', onMove, true);
+      fdoc?.removeEventListener('pointermove', onMove, true);
       fdoc = frameDocOf(frame);
       fdoc?.addEventListener('click', onClick, true);
-      fdoc?.addEventListener('mousemove', onMove, true);
+      fdoc?.addEventListener('pointermove', onMove, true);
     };
     if (frame) {
       frame.addEventListener('load', attach);
@@ -430,11 +432,11 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
     return () => {
       window.clearTimeout(hideTimer);
       root.removeEventListener('click', onClick);
-      root.removeEventListener('mousemove', onMove);
+      root.removeEventListener('pointermove', onMove);
       root.removeEventListener('mouseleave', onLeave);
       frame?.removeEventListener('load', attach);
       fdoc?.removeEventListener('click', onClick, true);
-      fdoc?.removeEventListener('mousemove', onMove, true);
+      fdoc?.removeEventListener('pointermove', onMove, true);
     };
   }, [rootRef, filePath, inFrame, frameRef, surface, surfaceNonce]);
   useEffect(() => {
