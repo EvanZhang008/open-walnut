@@ -10,7 +10,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
-import { NET_BIN_TAG, NET_BIN_VERSION, fetchNetBinary, netAssetName, netBinTarget, sumFor } from '../../src/providers/net-binary.js'
+import { NET_BIN_SHA256, NET_BIN_TAG, NET_BIN_VERSION, fetchNetBinary, netAssetName, netBinTarget, sumFor } from '../../src/providers/net-binary.js'
 
 let dir = ''
 beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wn-net-bin-')) })
@@ -55,7 +55,7 @@ describe('net-binary', () => {
     const asset = netAssetName('linux-x64')
     const seen: string[] = []
     const got = await fetchNetBinary({
-      dir, base: 'https://example.invalid/dl', platform: 'linux', arch: 'x64',
+      dir, base: 'https://example.invalid/dl', platform: 'linux', arch: 'x64', pins: {},
       fetchImpl: fakeFetch({ [`${NET_BIN_TAG}/${asset}`]: GZ, [`${NET_BIN_TAG}/SHA256SUMS`]: `${SHA}  ${asset}\n` }, seen),
     })
     expect(got).toBe(path.join(dir, `walnut-net-${NET_BIN_VERSION}`))
@@ -67,17 +67,31 @@ describe('net-binary', () => {
   it('refuses a file that does not match, and keeps nothing', async () => {
     const asset = netAssetName('linux-x64')
     await expect(fetchNetBinary({
-      dir, base: 'https://example.invalid/dl', platform: 'linux', arch: 'x64',
+      dir, base: 'https://example.invalid/dl', platform: 'linux', arch: 'x64', pins: {},
       fetchImpl: fakeFetch({ [`${NET_BIN_TAG}/${asset}`]: zlib.gzipSync(Buffer.from('evil')), [`${NET_BIN_TAG}/SHA256SUMS`]: `${SHA}  ${asset}\n` }),
     })).rejects.toThrow(/not the expected/)
     expect(fs.readdirSync(dir)).toEqual([])
   })
 
   it('refuses when the release does not list the file, or is not there', async () => {
-    await expect(fetchNetBinary({ dir, base: 'https://example.invalid/dl', platform: 'darwin', arch: 'arm64', fetchImpl: fakeFetch({ [`${NET_BIN_TAG}/SHA256SUMS`]: '' }) }))
+    await expect(fetchNetBinary({ dir, base: 'https://example.invalid/dl', platform: 'darwin', arch: 'arm64', pins: {}, fetchImpl: fakeFetch({ [`${NET_BIN_TAG}/SHA256SUMS`]: '' }) }))
       .rejects.toThrow(/does not list/)
-    await expect(fetchNetBinary({ dir, base: 'https://example.invalid/dl', platform: 'darwin', arch: 'arm64', fetchImpl: fakeFetch({}) }))
+    await expect(fetchNetBinary({ dir, base: 'https://example.invalid/dl', platform: 'darwin', arch: 'arm64', pins: {}, fetchImpl: fakeFetch({}) }))
       .rejects.toThrow(/HTTP 404/)
     await expect(fetchNetBinary({ dir, platform: 'win32', arch: 'x64', fetchImpl: fakeFetch({}) })).rejects.toThrow(/no build/)
+  })
+
+  it('pins every target of the published release, and a pin outranks the release\'s own SHA256SUMS', async () => {
+    expect(Object.keys(NET_BIN_SHA256).sort()).toEqual(['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64'])
+    for (const v of Object.values(NET_BIN_SHA256)) expect(v).toMatch(/^[0-9a-f]{64}$/)
+    // A release whose SHA256SUMS was swapped along with the file is still refused.
+    const asset = netAssetName('linux-x64')
+    const seen: string[] = []
+    await expect(fetchNetBinary({
+      dir, base: 'https://example.invalid/dl', platform: 'linux', arch: 'x64',
+      fetchImpl: fakeFetch({ [`${NET_BIN_TAG}/${asset}`]: GZ, [`${NET_BIN_TAG}/SHA256SUMS`]: `${SHA}  ${asset}\n` }, seen),
+    })).rejects.toThrow(/not the expected/)
+    expect(seen).toEqual([`https://example.invalid/dl/${NET_BIN_TAG}/${asset}`])
+    expect(fs.readdirSync(dir)).toEqual([])
   })
 })
