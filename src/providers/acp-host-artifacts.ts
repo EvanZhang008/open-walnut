@@ -63,6 +63,12 @@ export interface HostEngineAvailability {
 export interface AcpHostResolveDeps {
   /** The directory holding ACP_HOST_FILES; undefined = this daemon has none. */
   artifactDir?: string
+  /**
+   * What each ACP_HOST_FILES name is called in `artifactDir`, when not the same: a daemon
+   * running inside the compiled walnut file reads them from its own runtime tree, where
+   * they keep their dist names (ACP_HOST_FILES maps one to the other).
+   */
+  artifactNames?: Readonly<Record<string, string>>
   /** The runtime that runs the worker and bundled adapters (the daemon's own). */
   execPath?: string
   env?: NodeJS.ProcessEnv
@@ -131,14 +137,15 @@ export function resolveHostAcpArtifacts(spec: AcpHostAdapterSpec, deps: AcpHostR
   if (problem) return { ok: false, error: `${name} cannot run on this host: ${problem}`, errorKind: 'acp_unsupported' }
   const dir = deps.artifactDir
   const exec = deps.execPath ?? process.execPath
-  if (!dir || !fs.existsSync(path.join(dir, ACP_HOST_WORKER))) {
+  const fileIn = (hostName: string): string => path.join(dir ?? '', deps.artifactNames?.[hostName] ?? hostName)
+  if (!dir || !fs.existsSync(fileIn(ACP_HOST_WORKER))) {
     return { ok: false, error: `${name} cannot run on this host: its daemon has no ACP worker (it updates on the next connect)`, errorKind: 'acp_unsupported' }
   }
-  const workerCmd = [exec, path.join(dir, ACP_HOST_WORKER)]
+  const workerCmd = [exec, fileIn(ACP_HOST_WORKER)]
   const found = findHostBinary(spec, deps)
   if (!found.path) return { ok: false, error: `${name} cannot run on this host: ${found.reason}`, errorKind: 'provider_missing' }
   if (spec.source === 'bundled') {
-    const bundle = spec.bundle ? path.join(dir, spec.bundle) : ''
+    const bundle = spec.bundle ? fileIn(spec.bundle) : ''
     if (!bundle || !fs.existsSync(bundle)) {
       return { ok: false, error: `${name} cannot run on this host: its adapter was not deployed with the daemon`, errorKind: 'acp_unsupported' }
     }

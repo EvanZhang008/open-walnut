@@ -116,6 +116,8 @@ import { createFoldCheckpoint } from './fold-checkpoint-core.js'
 import { createStreamCompact } from './stream-compact-core.js'
 import { createStreamFold, type StreamFoldResult } from './stream-fold-core.js'
 import { createAcpDaemon, type AcpStartParams } from './acp-daemon.js'
+import { ACP_HOST_FILES, ACP_HOST_WORKER } from './acp-host-artifacts.js'
+import { singleFile } from '../lib/single-file.js'
 import { resolveAgentCommand } from './agent-command-map.js'
 import { computeGitDiff, GitDiffError, type GitDiffBase } from './git-diff-core.js'
 import { createGitAttribution } from './git-attribution-core.js'
@@ -2278,9 +2280,22 @@ const startOrphanPoll = core.startOrphanPoll
 const reconcileRegistry = core.reconcileRegistry
 
 // ── ACP worker supervision (in-process model; see acp-daemon.ts) ──
+// Inside the compiled walnut file (a compiled Mac's remote daemon slot, the host's boot
+// service) this daemon runs ACP engines for the primary itself, as the source twin does:
+// the worker and the bundled adapters are in the file's own runtime tree under their dist
+// names, and the file runs them (src/binary/main.ts runtimeScript). A plain daemon binary
+// carries none and stays without 'acp-host-v1' (2026-11-02: once hosts ran the boot
+// service, pi and Codex could not start on any remote Linux host).
+const ACP_ARTIFACT_DIR = (() => {
+  const root = singleFile()?.root
+  if (!root) return undefined
+  const dir = path.join(root, 'dist', 'daemon-binaries')
+  return fs.existsSync(path.join(dir, ACP_HOST_FILES[ACP_HOST_WORKER] ?? ACP_HOST_WORKER)) ? dir : undefined
+})()
 const acp = createAcpDaemon<ServerWebSocket<WsData>>({
   streamsDir: STREAMS_DIR,
   daemonDir: DAEMON_DIR,
+  ...(ACP_ARTIFACT_DIR ? { artifactDir: ACP_ARTIFACT_DIR, artifactNames: ACP_HOST_FILES } : {}),
   sendEvent,
   isWsOpen: (ws) => ws.readyState === 1,
   log: logMsg,
@@ -2647,6 +2662,12 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
       return acp.modelCatalog(cmd.binary, { cwd: cmd.cwd as string | undefined, env: cmd.env as Record<string, string> | undefined })
         .then((result) => sendOk(ws, id as number, result), (error) => sendError(ws, id as number, error.message))
     }
+    case 'acpHostEngines': {
+      if (!acp.hostEngines) return sendError(ws, id as number, 'acpHostEngines: this daemon has no ACP engine files')
+      if (!Array.isArray(cmd.specs)) return sendError(ws, id as number, 'acpHostEngines: missing specs')
+      return acp.hostEngines(cmd.specs)
+        .then((engines) => sendOk(ws, id as number, { engines }), (error) => sendError(ws, id as number, error.message))
+    }
     case 'acpStart': return cmdAcpStart(ws, id as number, cmd)
     case 'acpSend': return cmdAcpOp(ws, id as number, cmd, 'prompt')
     case 'acpSteer': return cmdAcpOp(ws, id as number, cmd, 'steer')
@@ -2684,7 +2705,7 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'service.handover': case 'service.update': return daemonCommands.run(() => cmdServiceHandover(ws, id, cmd))
     case 'hello': return sendOk(ws, id as number, {
       version: DAEMON_VERSION,
-      capabilities: [...ADVERTISED_DAEMON_CAPABILITIES, 'service-handover-v1', ...(cronRuntime ? ['cron-supervision-v1', 'service-update-v1'] : [])],
+      capabilities: [...ADVERTISED_DAEMON_CAPABILITIES, 'service-handover-v1', ...(cronRuntime ? ['cron-supervision-v1', 'service-update-v1'] : []), ...(acp.hostEngines ? ['acp-host-v1'] : [])],
       cronSupervision: { managed: !!cronRuntime, startup: SERVICE_MODE ? 'service' : 'on-demand' },
       instanceId: DAEMON_INSTANCE_ID,
       ...(SERVICE_MODE ? { serviceExecutable: process.execPath } : {}),

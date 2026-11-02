@@ -102,6 +102,8 @@ export interface AcpDaemonDeps<W> {
    * when the primary sends `hostAdapter` instead of paths of its own install.
    */
   artifactDir?: string
+  /** The names of those files in `artifactDir` when they are not the host names (acp-host-artifacts.ts). */
+  artifactNames?: Readonly<Record<string, string>>
 }
 
 function psField(pid: number, field: string): Promise<string | null | undefined> {
@@ -376,7 +378,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     }
 
     if ((!Array.isArray(workerCmd) || workerCmd.length === 0) && params.hostAdapter) {
-      const resolved = resolveHostAcpArtifacts(params.hostAdapter, { artifactDir: deps.artifactDir })
+      const resolved = resolveHostAcpArtifacts(params.hostAdapter, { artifactDir: deps.artifactDir, artifactNames: deps.artifactNames })
       if (!resolved.ok) return { ok: false, error: resolved.error, errorKind: resolved.errorKind }
       workerCmd = resolved.workerCmd
       adapterCmd = resolved.adapterCmd
@@ -904,7 +906,7 @@ export function createAcpDaemon<W>(deps: AcpDaemonDeps<W>) {
     }) + '\n')
   }
 
-  const hostProbe = createHostEngineProbe({ artifactDir: deps.artifactDir })
+  const hostProbe = createHostEngineProbe({ artifactDir: deps.artifactDir, artifactNames: deps.artifactNames })
   return {
     /** Which engines this host can run (acp-host-artifacts.ts); only a daemon with `artifactDir` answers. */
     hostEngines: deps.artifactDir ? (specs: AcpHostAdapterSpec[]) => hostProbe.probe(specs) : undefined,

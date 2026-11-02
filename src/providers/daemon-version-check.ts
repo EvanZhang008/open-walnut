@@ -76,6 +76,8 @@ const DAEMON_SOURCE_FILES = [
   'src/providers/acp-daemon.ts',
   'src/providers/acp-thread-restore.ts',
   'src/providers/acp-host-artifacts.ts',
+  // Where the compiled walnut file keeps the worker and adapters it runs as a host daemon.
+  'src/lib/single-file.ts',
   'node_modules/@agentclientprotocol/codex-acp/package.json',
   // The adapter itself, as installed: Walnut patches it (patches/), and a patch
   // edit leaves package.json as it was, so only its contents move the version.

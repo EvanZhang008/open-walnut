@@ -65,6 +65,7 @@ SOURCES=(
   src/providers/acp-daemon.ts
   src/providers/acp-thread-restore.ts
   src/providers/acp-host-artifacts.ts
+  src/lib/single-file.ts
   node_modules/@agentclientprotocol/codex-acp/package.json
   node_modules/@agentclientprotocol/codex-acp/dist/index.js
   src/providers/codex-model-probe.ts

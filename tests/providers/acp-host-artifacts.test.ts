@@ -53,6 +53,32 @@ describe('resolveHostAcpArtifacts', () => {
     })
   })
 
+  it('a daemon inside the compiled walnut file runs them from its runtime tree, under their dist names', () => {
+    // The tree keeps dist names (pi-acp.js), the primary's spec names host files (pi-acp.mjs).
+    const tree = path.join(root, 'runtime', 'dist', 'daemon-binaries')
+    fs.mkdirSync(tree, { recursive: true })
+    for (const f of Object.values(ACP_HOST_FILES)) fs.writeFileSync(path.join(tree, f), '// stub\n')
+    const pi = exe(binDir, 'pi')
+    const walnutFile = '/opt/walnut/walnut-linux-x64'
+    const r = resolveHostAcpArtifacts(hostAdapterSpec('pi')!, { ...deps(), artifactDir: tree, artifactNames: ACP_HOST_FILES, execPath: walnutFile })
+    expect(r).toEqual({
+      ok: true,
+      workerCmd: [walnutFile, path.join(tree, ACP_HOST_FILES[ACP_HOST_WORKER])],
+      adapterCmd: [walnutFile, path.join(tree, ACP_HOST_FILES['pi-acp.mjs'])],
+      env: { PI_ACP_PI_COMMAND: pi },
+    })
+    // Without the names, the same tree has no pi adapter by its host name.
+    const bare = resolveHostAcpArtifacts(hostAdapterSpec('pi')!, { ...deps(), artifactDir: tree, execPath: walnutFile })
+    expect(bare.ok).toBe(false)
+  })
+
+  it('the daemon twin inside the walnut file wires its runtime tree and says acp-host-v1 only with it', () => {
+    const src = fs.readFileSync(path.join(__dirname, '../../src/providers/daemon-standalone.ts'), 'utf8')
+    expect(src).toMatch(/singleFile\(\)\?\.root/)
+    expect(src).toContain("artifactDir: ACP_ARTIFACT_DIR, artifactNames: ACP_HOST_FILES")
+    expect(src).toContain("...(acp.hostEngines ? ['acp-host-v1'] : [])")
+  })
+
   it('runs a cli adapter as the host binary with its args', () => {
     const opencode = exe(binDir, 'opencode')
     const r = resolveHostAcpArtifacts(hostAdapterSpec('opencode')!, deps())
