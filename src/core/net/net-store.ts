@@ -259,7 +259,7 @@ export function redeemInvite(input: { code: unknown; endpointId: unknown; hostna
     const st = readStore(file)
     const members = st.members
     const existing = members.find((m) => m.id === input.endpointId)
-    if (existing?.role === 'mac') throw new NetStoreError(409, 'is_mac', 'That machine is this Mac; it is a member already.')
+    if (existing?.role === 'mac') throw new NetStoreError(409, 'is_mac', 'That machine is the one running this Walnut; it is a member already.')
     if (members.length >= MAX_MEMBERS && !existing) throw new NetStoreError(409, 'too_many_members', `At most ${MAX_MEMBERS} machines`)
     const name = freeName(inv.name ?? memberNameFrom(input.hostname), members, input.endpointId)
     const platform = typeof input.platform === 'string' ? input.platform.slice(0, 40) : undefined

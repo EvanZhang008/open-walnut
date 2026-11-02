@@ -83,6 +83,8 @@ jobs:
           tar -C "$ws" --exclude=./node_modules --exclude=./web/node_modules --exclude=./.git -cf - . | tar -C "$HOME/w" -xf -
           cd "$HOME/w"
           ONNXRUNTIME_NODE_INSTALL=skip bun install --frozen-lockfile
+          # The throwaway Walnut's own daemon and its sidecars (net-core among them).
+          bun run build:daemon
           V=$(bun -e "const p=require('./package.json').version.split('-')[0].split('.').map(Number);p[2]++;console.log(p.join('.')+'-nightly.'+new Date().toISOString().slice(0,10).replace(/-/g,'')+'.9'+process.env.GITHUB_RUN_NUMBER)")
           bun scripts/release-files.mjs stamp "$V"
           WALNUT_VERSION_STAMPED=1 bun scripts/build-binary.mjs --target linux-x64

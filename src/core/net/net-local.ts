@@ -51,14 +51,14 @@ function pushInvites(local: Daemon): Promise<void> {
     for (const [id, p] of pending) if (now > p.expiresAt + KEEP_AFTER_MS) pending.delete(id)
     const invites = [...pending.values()].map((p) => ({ id: p.id, codeHash: p.hash, expiresAt: p.expiresAt, name: p.name }))
     const r = await local.send('net.invites', { invites }, 15_000) as { ok?: boolean; error?: string }
-    if (!r.ok) throw new NetError(500, 'net_invite_failed', `This Mac's walnut-net did not take the invite: ${r.error ?? 'refused'}`)
+    if (!r.ok) throw new NetError(500, 'net_invite_failed', `This machine's walnut-net did not take the invite: ${r.error ?? 'refused'}`)
   })
   pushing = run.catch(() => {})
   return run
 }
 
 export async function makeLocalInvite(local: Daemon, input: { macId: string; relayMode: 'public' | 'none'; name?: string }): Promise<{ id: string; link: string; command: string; windowsCommand?: string; expiresAt: number }> {
-  if (!local.hasCapability('net-join-v1')) throw new NetError(409, 'daemon_too_old', "This Mac's Walnut daemon cannot take machines in without a companion yet; restart Walnut to update it.")
+  if (!local.hasCapability('net-join-v1')) throw new NetError(409, 'daemon_too_old', "This machine's Walnut daemon cannot take machines in without a companion yet; restart Walnut to update it.")
   // walnut-net holds at most MAX_OPEN; one more would show a link that can never work.
   if ([...pending.values()].filter((p) => Date.now() <= p.expiresAt + KEEP_AFTER_MS).length >= MAX_OPEN) {
     throw new NetError(429, 'too_many_invites', 'Too many links are open; wait until one is used or ends (10 minutes).')

@@ -103,7 +103,7 @@ export function errorOf(body: Record<string, unknown>): { code: string; message:
 export async function localDaemon() {
   const { link } = await import('../hosts/link.js')
   const local = await link('__local__')
-  if (!local.hasCapability('net-v1')) throw new NetError(409, 'daemon_too_old', "This Mac's Walnut daemon has no host network yet; restart Walnut to update it.")
+  if (!local.hasCapability('net-v1')) throw new NetError(409, 'daemon_too_old', "This machine's Walnut daemon has no host network yet; restart Walnut to update it.")
   return local
 }
 
@@ -238,9 +238,9 @@ function runSync(opts: { enable?: boolean }): Promise<NetState> {
       if (!await netActive()) throw new NetError(409, 'test_server', 'The host network runs only on your own Walnut, not on a test server.')
       const local = await localDaemon()
       // An older daemon drops the relay mode, so its walnut-net would run with no relay at all.
-      if (state.relay !== 'own' && !local.hasCapability('net-join-v1')) throw new NetError(409, 'daemon_too_old', "This Mac's Walnut daemon is too old for public relays or no relay; restart Walnut to update it.")
+      if (state.relay !== 'own' && !local.hasCapability('net-join-v1')) throw new NetError(409, 'daemon_too_old', "This machine's Walnut daemon is too old for public relays or no relay; restart Walnut to update it.")
       const ident = await local.send('net.identity', {}, 20_000) as { ok?: boolean; endpointId?: string; error?: string }
-      if (!ident.ok || !ident.endpointId) throw new NetError(500, 'no_identity', `This Mac's network key: ${ident.error ?? 'none'}`)
+      if (!ident.ok || !ident.endpointId) throw new NetError(500, 'no_identity', `This machine's network key: ${ident.error ?? 'none'}`)
       state.macId = ident.endpointId
       // After a restart: the choice this Mac's walnut-net still runs on (it outlives the server).
       if (appliedRelay === null) appliedRelay = await runningChoice(local)
@@ -264,12 +264,12 @@ function runSync(opts: { enable?: boolean }): Promise<NetState> {
       if (relayMoved && state.relay !== 'own') {
         // Starting, or restarting for a change a moment ago: wait for it to say (bounded).
         const modes = await waitForModes(local, MODES_WAIT_MS)
-        if (modes === null) throw new NetError(409, 'net_starting', "This Mac's walnut-net is still starting; try again in a minute.")
-        if (!modes) throw new NetError(409, 'net_too_old', "This Mac's walnut-net is older than this Walnut; the relay changes once the new version is downloaded.")
+        if (modes === null) throw new NetError(409, 'net_starting', "This machine's walnut-net is still starting; try again in a minute.")
+        if (!modes) throw new NetError(409, 'net_too_old', "This machine's walnut-net is older than this Walnut; the relay changes once the new version is downloaded.")
       }
       if (relayMoved) await pushToHosts({ ...state })
       const conf = await local.send('net.configure', macConfig(state), 30_000) as { ok?: boolean; error?: string }
-      if (!conf.ok) throw new NetError(500, 'net_start_failed', `This Mac's walnut-net: ${conf.error ?? 'did not start'}`)
+      if (!conf.ok) throw new NetError(500, 'net_start_failed', `This machine's walnut-net: ${conf.error ?? 'did not start'}`)
       appliedRelay = state.relay
       const changed = await reconcileHosts(state.members)
       if (changed.added.length || changed.removed.length) log.session.info('net: hosts updated from the member list', changed)
