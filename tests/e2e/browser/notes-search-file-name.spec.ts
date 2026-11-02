@@ -71,8 +71,9 @@ test('the tree search leads each row with its file name, under its folder', asyn
   expect(box && panel && box.x + box.width <= panel.x + panel.width + 1).toBe(true)
   await shot(page, 'tree', results)
 
-  // Opening a row opens that note (the click still works with the new lines).
-  await rows.nth(0).click()
+  // A double click opens the row's note and closes the search (a single click
+  // only previews it: tests/e2e/browser/notes-search-preview.spec.ts).
+  await rows.nth(0).dblclick()
   await expect(page.locator('.notes-search-results')).toHaveCount(0)
   expect(errors).toEqual([])
 })

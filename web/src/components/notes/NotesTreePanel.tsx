@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, useMemo, memo } from 'react';
+import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo, memo } from 'react';
 import { searchNotesHybrid, saveNoteContent, revealNote } from '@/api/notes-v2';
 import type { NoteTreeNode, SearchResult, SearchFolderGroup } from '@/api/notes-v2';
 import { noteHitLabel } from '../../../../src/core/note-hit-label';
@@ -342,6 +342,20 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   // server isn't doing embedding work for text the user already replaced.
   const searchSeqRef = useRef(0);
   const searchAbortRef = useRef<AbortController | null>(null);
+  // A new query's first answer shows the list from the top: the body keeps the
+  // tree's scroll position otherwise, so a search opened halfway down the list.
+  // The hybrid upgrade of the same query leaves the position alone.
+  const toppedSeqRef = useRef(0);
+  const topPendingRef = useRef(false);
+  const [activeHit, setActiveHit] = useState(-1);
+  const landResults = useCallback((seq: number, results: SearchResult[]) => {
+    if (toppedSeqRef.current !== seq) {
+      toppedSeqRef.current = seq;
+      topPendingRef.current = true;
+      setActiveHit(-1);
+    }
+    setSearchResults(results);
+  }, []);
   const handleSearchChange = useCallback((value: string) => {
     setSearchQuery(value);
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
@@ -367,25 +381,31 @@ export const NotesTreePanel = memo(function NotesTreePanel({
       searchNotesHybrid(q, { mode: 'string', signal: ac.signal })
         .then((p) => {
           if (!fresh()) return;
-          setSearchResults(p.results);
+          landResults(seq, p.results);
           setSearchFolders(p.folders ?? []);
           setSearchTokens(p.queryTokens ?? []);
           setSearchPartial(p.partial?.message ?? null);
         })
-        .catch(() => { if (fresh()) setSearchResults([]); });
+        .catch(() => { if (fresh()) landResults(seq, []); });
 
       // Stage 2 — semantic upgrade, merged in when it arrives.
       searchNotesHybrid(q, { mode: 'hybrid', signal: ac.signal })
         .then((p) => {
           if (!fresh()) return;
-          setSearchResults(p.results);
+          landResults(seq, p.results);
           setSearchFolders(p.folders ?? []);
           setSearchTokens(p.queryTokens ?? []);
           setSearchPartial(p.partial?.message ?? null);
         })
         .catch(() => { /* stage 1 already rendered — a semantic failure is not fatal */ });
     }, SEARCH_DEBOUNCE_MS);
-  }, []);
+  }, [landResults]);
+
+  useLayoutEffect(() => {
+    if (!topPendingRef.current || !searchResults) return;
+    topPendingRef.current = false;
+    if (bodyRef.current) bodyRef.current.scrollTop = 0;
+  }, [searchResults]);
 
   const toggleFolder = useCallback((path: string) => {
     setExpandedFolders(prev => {
@@ -445,6 +465,46 @@ export const NotesTreePanel = memo(function NotesTreePanel({
     }
     return order;
   }, [searchResults, searchFolders]);
+  const searchHits = useMemo(() => searchGroups.flatMap((g) => g.rows), [searchGroups]);
+
+  // A single click previews a hit and keeps the search (query, list, scroll), the
+  // way VS Code's search view does; a double click or Enter opens it and closes
+  // the search; Escape or the clear button closes it.
+  const openHit = useCallback((r: SearchResult, closeSearch: boolean) => {
+    // Attachment hits (OCR/PDF text) open in the preview pane —
+    // the note loader .md-suffixes the path and 404s on binaries.
+    if (r.matchType === 'attachment') onPreviewAttachment(r.path);
+    else {
+      // Jump to the MATCH, not the top of the note: candidates are ordered
+      // most-specific first (snippet context window → first mark → heading → raw query).
+      onSelect(r.path, {
+        scrollToText: jumpNeedles({ snippet: r.snippet, headingMatch: r.headingMatch, query: searchQuery.trim() }),
+      });
+    }
+    if (closeSearch) handleSearchChange('');
+  }, [onPreviewAttachment, onSelect, searchQuery, handleSearchChange]);
+
+  const handleSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Escape') {
+      if (!searchQuery) return;
+      // Consumed here: the page's own Escape handlers must not also fire.
+      e.preventDefault();
+      e.stopPropagation();
+      handleSearchChange('');
+      return;
+    }
+    if (!searchHits.length) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      const next = Math.max(0, Math.min(searchHits.length - 1, activeHit + step));
+      setActiveHit(next);
+      bodyRef.current?.querySelector(`[data-search-idx="${next}"]`)?.scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      openHit(searchHits[Math.max(0, activeHit)], true);
+    }
+  }, [searchQuery, searchHits, activeHit, openHit, handleSearchChange]);
 
   const handleNewItem = useCallback((parentPath: string | null, type: 'file' | 'folder') => {
     setCreatingIn(parentPath ?? '');
@@ -860,8 +920,21 @@ export const NotesTreePanel = memo(function NotesTreePanel({
           placeholder="Search notes..."
           value={searchQuery}
           onChange={e => handleSearchChange(e.target.value)}
+          onKeyDown={handleSearchKeyDown}
           className="notes-search-input"
+          aria-label="Search notes"
         />
+        {searchQuery && (
+          <button
+            type="button"
+            className="notes-search-clear"
+            aria-label="Clear search"
+            title="Clear search (Esc)"
+            onClick={() => handleSearchChange('')}
+          >
+            ×
+          </button>
+        )}
       </div>
 
       {/* Bookmarks group (§2.6) — collapsible, at the TOP of the tree. Hidden while
@@ -927,6 +1000,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
                     </div>
                   )}
                   {g.rows.map(r => {
+                    const hitIdx = searchHits.indexOf(r);
                     // The snippet earns its row only when it shows the MATCHED
                     // QUOTE or real body context. When it merely repeats the
                     // title (a body that opens with its own H1 — makeSnippet
@@ -940,27 +1014,11 @@ export const NotesTreePanel = memo(function NotesTreePanel({
                     return (
                     <div
                       key={r.path}
-                      className={`notes-tree-item notes-tree-file notes-search-result${g.folder ? ' notes-search-result-nested' : ''} ${selectedPath === r.path ? 'selected' : ''}`}
+                      data-search-idx={hitIdx}
+                      className={`notes-tree-item notes-tree-file notes-search-result${g.folder ? ' notes-search-result-nested' : ''} ${selectedPath === r.path ? 'selected' : ''}${hitIdx === activeHit ? ' notes-search-result-active' : ''}`}
                       onContextMenu={(e) => handlePathContextMenu(e, r.path)}
-                      onClick={() => {
-                        // Attachment hits (OCR/PDF text) open in the preview pane —
-                        // the note loader .md-suffixes the path and 404s on binaries.
-                        if (r.matchType === 'attachment') onPreviewAttachment(r.path);
-                        else {
-                          // Jump to the MATCH, not the top of the note: candidates
-                          // are ordered most-specific first (snippet context window
-                          // → first mark → heading → raw query).
-                          onSelect(r.path, {
-                            scrollToText: jumpNeedles({
-                              snippet: r.snippet,
-                              headingMatch: r.headingMatch,
-                              query: searchQuery.trim(),
-                            }),
-                          });
-                        }
-                        setSearchQuery('');
-                        setSearchResults(null);
-                      }}
+                      onClick={() => { setActiveHit(hitIdx); openHit(r, false); }}
+                      onDoubleClick={() => openHit(r, true)}
                     >
                       <FileIcon />
                       <div className="notes-search-result-content">

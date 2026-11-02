@@ -23718,7 +23718,28 @@ a.tag-chip:focus-visible,
 
 .notes-tree-search {
   padding: 10px 14px;
+  position: relative;
 }
+
+/* Clears the query and closes the search, as Escape does. */
+.notes-search-clear {
+  position: absolute;
+  right: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 15px;
+  line-height: 20px;
+  cursor: pointer;
+}
+.notes-search-clear:hover { background: var(--bg-hover, rgba(127,127,127,0.15)); color: var(--fg); }
+.notes-tree-search .notes-search-input { padding-right: 30px; }
 
 .notes-search-input {
   width: 100%;
@@ -23855,6 +23876,12 @@ a.tag-chip:focus-visible,
   height: 14px;
   margin-top: 3px;
   opacity: 0.55;
+}
+
+/* The hit the arrow keys are on: Enter opens it and closes the search. */
+.notes-search-result.notes-search-result-active {
+  box-shadow: inset 2px 0 0 var(--accent);
+  background: var(--bg-hover, rgba(127,127,127,0.12));
 }
 
 .notes-search-result-content {
