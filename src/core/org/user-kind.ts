@@ -94,4 +94,4 @@ export const USER_KIND_PARAM =
   + 'which of the user\'s own kinds it is. ' + Object.entries(USER_KIND_WORDS).map(([k, w]) => `${k}: ${w}`).join('; ') + '. '
   + 'Anything else is yours to decide.';
 export const USER_KIND_WHY_PARAM =
-  `With user_kind: one line (at least ${USER_KIND_WHY_MIN} characters) saying what in THIS question makes it that kind. The user reads it first. ${NOT_THE_USERS_DECISION}`;
+  `With user_kind: one line (at least ${USER_KIND_WHY_MIN} characters), in the language you write to the user, saying what in THIS question makes it that kind. The user reads it first. ${NOT_THE_USERS_DECISION}`;
