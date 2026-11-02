@@ -67,7 +67,11 @@ function Join-Walnut {
       $dl = Join-Path $env:TEMP ('openwalnut-rootfs-' + $arch + '.tar.gz')
       [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072
       try { Invoke-WebRequest -UseBasicParsing -Uri $img.url -OutFile $dl -ErrorAction Stop } catch { Say-Stop ('The Ubuntu download failed: ' + $_.Exception.Message + '. Paste this command again.'); return 1 }
-      if ((Get-FileHash $dl -Algorithm SHA256).Hash.ToLower() -ne $img.sha) { Remove-Item $dl -Force; Say-Stop 'The Ubuntu download did not match its checksum (a broken or tampered copy); nothing was changed. Paste this command again.'; return 1 }
+      # .NET, not Get-FileHash: that one is a script function of a module a Windows PowerShell
+      # started from PowerShell 7 cannot load, and then it is missing (2026-11-02, CI).
+      $sha = [Security.Cryptography.SHA256]::Create(); $fs = [IO.File]::OpenRead($dl)
+      try { $got = -join ($sha.ComputeHash($fs) | ForEach-Object { $_.ToString('x2') }) } finally { $fs.Dispose(); $sha.Dispose() }
+      if ($got -ne $img.sha) { Remove-Item $dl -Force; Say-Stop 'The Ubuntu download did not match its checksum (a broken or tampered copy); nothing was changed. Paste this command again.'; return 1 }
       $rootfs = $dl
     }
     $dir = Join-Path $env:LOCALAPPDATA ('OpenWalnut\wsl\' + $Distro)

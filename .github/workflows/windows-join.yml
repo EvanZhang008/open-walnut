@@ -139,7 +139,10 @@ jobs:
           $ff = [Diagnostics.Process]::Start($psi)
           try {
             Start-Sleep 3
-            $win = Start-Process powershell.exe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "$env:OUT\paste.ps1" -WindowStyle Maximized -PassThru
+            # A window as the user opens it: without this step's PowerShell 7 module path, which a
+            # Windows PowerShell started from it inherits and then misses its own modules.
+            $pm = $env:PSModulePath; Remove-Item Env:PSModulePath
+            try { $win = Start-Process powershell.exe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "$env:OUT\paste.ps1" -WindowStyle Maximized -PassThru } finally { $env:PSModulePath = $pm }
             if (-not $win.WaitForExit(40 * 60 * 1000)) { throw 'the join did not finish in 40 minutes' }
           } finally {
             $ff.StandardInput.Write('q'); $ff.StandardInput.Close()

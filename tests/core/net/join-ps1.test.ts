@@ -98,6 +98,15 @@ describe('scripts/join.ps1', () => {
     expect(s.split('\n').filter((l) => !l.includes('$inner =')).join('\n').match(/\bexit\b/g)).toEqual(['exit'])
     expect(s).toContain('if ($PSCommandPath) { exit $code }')
   })
+
+  it('calls no script function of Windows PowerShell 5.1 modules, which a 5.1 started from PowerShell 7 lacks', () => {
+    // 2026-11-02, CI: Get-FileHash was not recognized. These are defined in 5.1's Utility .psm1,
+    // not compiled in, so a 5.1 that inherited PowerShell 7's module path never gets them.
+    const SCRIPT_FUNCTIONS = /\b(Get-FileHash|New-TemporaryFile|New-Guid|Format-Hex|Import-PowerShellDataFile|ConvertFrom-SddlString)\b/i
+    for (const s of [joinScriptWindows({ ticket: true }), joinScriptWindows({ origin: 'https://wn.example.dev', code: 'ABCD-EFGH-JKLM' }), startScriptWindows()]) {
+      expect(s.split('\n').filter((l) => !l.trim().startsWith('#')).join('\n')).not.toMatch(SCRIPT_FUNCTIONS)
+    }
+  })
 })
 
 withPwsh('the Windows invite, run by PowerShell against a stand-in WSL', () => {
