@@ -136,14 +136,16 @@ function ProviderCard({ provider: p, tint, save }: {
       className="tp-card"
       data-testid={`task-provider-${p.id}`}
       footer={on
-        ? 'A task that fails stays in Walnut, and one letter lists the tasks kept out. Turning the check off syncs them, except the ones you made local yourself.'
+        ? 'A task that fails stays in Walnut with all of its content, and Sync in its menu sends it anyway. Turning the check off syncs them, except the ones you made local yourself.'
         : undefined}
     >
       <SettingsRow
         className="tp-head"
         label={<span className="tp-name"><PluginIcon name={p.name} iconUrl={p.icon_url} tint={tint} />{p.name}</span>}
         help={summaryOf(p, on, words.length, ai.value)}
-        htmlFor={id('check')}
+        // No htmlFor: the name is the card's title, not the switch's label. As a <label> a click
+        // on the name or icon flipped the check (2026-11-02: To Do's check went on unmeant and nine
+        // tasks were kept out of it). The switch carries its own aria-label.
         error={check.error}
         data-testid={id('head')}
         control={<ToggleSwitch id={id('check')} aria-label={`Check tasks before they sync to ${p.name}`} checked={on} busy={check.busy} onChange={check.set} />}

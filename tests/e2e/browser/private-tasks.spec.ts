@@ -338,6 +338,49 @@ test.describe.serial('Settings › Task providers', () => {
     }
   })
 
+  // 2026-11-02: a To Do check was turned on from this page with nobody meaning to (one 90-byte
+  // config write, the check and nothing else), and Walnut then kept nine tasks out of To Do. Only
+  // the switch writes the check: reading the page (scrolling, clicking the provider's name, icon
+  // or summary, a field focused and left unchanged, a test title, leaving the page) writes nothing.
+  test('only the switch writes the check: reading the page, its name and its fields writes nothing', async ({ page }) => {
+    const before = (await api<Cfg>('GET', '/api/config')).config.private_tasks
+    await mockProviders(page)
+    await page.route('**/api/v1/private-tasks/test', (route) => route.fulfill({ json: { match: null, invalid: [] } }))
+    const writes: string[] = []
+    page.on('request', (r) => {
+      if (r.method() !== 'GET' && new URL(r.url()).pathname === '/api/config') writes.push(r.postData() ?? '')
+    })
+    try {
+      const group = await openProviders(page)
+      const head = page.getByTestId(`settings-provider-${SERVICE}-head`)
+      await page.mouse.wheel(0, 400)
+      await page.mouse.wheel(0, -400)
+      await head.locator('.tp-name').click()
+      await head.locator('.tp-name .plugin-icon, .tp-name svg, .tp-name img').first().click().catch(() => undefined)
+      await head.locator('.settings-row-help').click()
+      const rule = page.getByTestId(`settings-provider-${SERVICE}-ai-rule`)
+      await rule.click()
+      await rule.press('End')
+      await rule.blur()
+      await page.getByTestId(`settings-provider-${SERVICE}-try`).fill('Plan the team offsite')
+      await page.getByTestId('settings-nav-general').click()
+      await page.getByTestId('settings-nav-tasks').click()
+      await group.scrollIntoViewIfNeeded()
+      await page.locator('.sidebar-nav a[href="/"]').first().click().catch(() => undefined)
+      await page.waitForTimeout(1500)
+      expect(writes).toEqual([])
+      expect((await own())?.check).toBe(before?.providers?.[SERVICE]?.check)
+      // The switch itself writes the check, once.
+      await openProviders(page)
+      await page.locator(`#settings-provider-${SERVICE}-check`).click()
+      await expect.poll(async () => (await own())?.check).toBe(false)
+      expect(writes).toHaveLength(1)
+      expect(JSON.parse(writes[0]).private_tasks.providers[SERVICE]).toMatchObject({ check: false })
+    } finally {
+      await api('PUT', '/api/config', { private_tasks: before ?? { words: [] } }).catch(() => undefined)
+    }
+  })
+
   test('a task plugin\'s own page names its sync rules and opens them in Settings', async ({ page }) => {
     // The fixture's installed plugin stands in for one that syncs tasks.
     await page.route('**/api/v1/private-tasks/providers', (route) => route.fulfill({ json: { providers: [{
