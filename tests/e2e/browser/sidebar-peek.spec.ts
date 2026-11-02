@@ -1,7 +1,7 @@
-import { test, expect, type Page } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
 import { openHome } from './home-navigation-helpers'
-import { openThreadsSession } from './threads-helpers'
+import { openThreadsSession, resetThreadsFixture, test } from './threads-helpers'
 import { TAGGED_READY, TAGGED_SESSION, TAGGED_TASK } from './threads-fixture'
 
 /**
@@ -304,6 +304,7 @@ test.describe('touch', () => {
 })
 
 test('with a session panel in full screen, the pill shows above the sheet and takes its click', async ({ page, baseURL }) => {
+  await resetThreadsFixture(page.request, TAGGED_SESSION)
   await boot(page, baseURL!)
   const panel = await openThreadsSession(page, TAGGED_SESSION, TAGGED_TASK, TAGGED_READY, { view: 'linear' })
   await panel.getByRole('button', { name: 'Expand session to full screen' }).click()

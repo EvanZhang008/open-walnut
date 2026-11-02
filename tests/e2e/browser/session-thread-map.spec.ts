@@ -14,15 +14,15 @@
  * fixture whose answers arrive live; C25 is session-thread-perf.spec.ts, whose
  * sessions now mount the map.
  */
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import {
-  AI_SESSION, centreInHistory, DENSE_SESSION, NO_THREAD_SESSION, noBannedGlyphs, openThreadsSession, passageRects, selectPassage, sessionPanel, modePill, openQuestionList, switchView,
-  unfoldQuestions,
+  AI_SESSION, centreInHistory, DENSE_SESSION, NO_THREAD_SESSION, noBannedGlyphs, openThreadsSession, passageRects, resetThreadsFixture, selectPassage, sessionPanel,
+  modePill, openQuestionList, switchView, test, unfoldQuestions,
 } from './threads-helpers'
 import {
   AI_PASSAGE, buildMapSession, MAP_PASSAGES, MAP_PIN_QUOTE_TEXT, MAP_SESSION, MAP_TITLES, PINS_ONLY_READY, PINS_ONLY_SESSION,
-  PINS_ONLY_TASK,
+  PINS_ONLY_TASK, seededThreadState,
 } from './threads-fixture'
 import { cssColorToRgba } from './css-color'
 
@@ -55,6 +55,10 @@ async function openAt(
   page: Page, width: number | 'full', sessionId = MAP_SESSION, taskId = MAP_TASK, ready: string | undefined = MAP_READY,
   height = 900, map: 'open' | 'default' = 'open',
 ): Promise<Locator> {
+  // The fixture sessions are shared with the specs that hide, archive and rename their
+  // questions on other workers: the session's lease keeps them off it for this test, and the
+  // reset puts its seeded questions back (2026-11-02, CI: C16 read the dense map short).
+  if (seededThreadState(sessionId, Date.now())) await resetThreadsFixture(page.request, sessionId)
   await page.setViewportSize({ width: 1600, height })
   await page.goto('/')
   await page.waitForLoadState('networkidle')

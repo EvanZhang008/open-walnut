@@ -973,6 +973,15 @@ describe('a spec that resets a threads fixture', () => {
     expect(helpers).toMatch(/withFixtureLease\(`threads:\$\{sessionId\}`/)
   })
 
+  // Reading one is using it too: session-thread-map opened the dense session with no reset while
+  // other workers' tests hid and archived its questions, and its long map came out short
+  // (2026-11-02, CI, C16). A spec that opens a threads fixture resets it, and so holds its lease.
+  it('every spec that opens a threads fixture session resets it first', () => {
+    const openers = sources.filter(({ file, text }) => file.endsWith('.spec.ts') && /\bopenThreadsSession\(/.test(text))
+    expect(openers.map(({ file }) => file)).toEqual(expect.arrayContaining(['session-thread-map.spec.ts', 'sidebar-peek.spec.ts']))
+    expect(openers.filter(({ text }) => !RESETS.test(text) || !usesLeaseTest(text)).map(({ file }) => file)).toEqual([])
+  })
+
   it('catches the shape it was written for', () => {
     expect(usesLeaseTest("import { expect, test, type Page } from '@playwright/test'\nimport { resetThreadsFixture } from './threads-helpers'")).toBe(false)
     expect(usesLeaseTest("import { expect, type Page } from '@playwright/test'\nimport { resetThreadsFixture, test } from './threads-helpers'")).toBe(true)
