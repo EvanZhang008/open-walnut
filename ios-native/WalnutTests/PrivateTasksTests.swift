@@ -149,9 +149,11 @@ final class PrivateTasksTests: XCTestCase {
         store.tasks = [task("t1", source: "plugin-a")]
         await store.makeLocal(taskId: "t1", outside: .archive)
         XCTAssertEqual(mock.lastCall("makeTaskLocal")?.args, ["t1", "archive"])
-        XCTAssertNil(store.tasks[0].source)
-        XCTAssertEqual(store.tasks[0].syncHold, hold)
-        XCTAssertEqual(store.syncStanding(store.tasks[0]), .kept(service: "plugin-a", hold: hold))
+        await store.loadTasks()
+        XCTAssertEqual(store.tasks.map(\.id), ["t1"])
+        XCTAssertNil(store.tasks.first?.source)
+        XCTAssertEqual(store.tasks.first?.syncHold, hold)
+        XCTAssertEqual(store.tasks.first.map { store.syncStanding($0) }, SyncStanding.kept(service: "plugin-a", hold: hold))
         XCTAssertEqual(store.transientNotice, "The task no longer syncs to Tracker. Its copy in Tracker was archived.")
         XCTAssertNil(store.transientError)
     }
@@ -185,8 +187,12 @@ final class PrivateTasksTests: XCTestCase {
         XCTAssertEqual(mock.lastCall("changeOutsideCopy")?.args, ["t1", "neutralize"])
         XCTAssertEqual(store.transientNotice, "Its copy in Tracker was neutralized and archived")
         await store.syncToProject(taskId: "t1")
-        XCTAssertEqual(store.tasks[0].source, "plugin-a")
+        XCTAssertEqual(store.tasks.first?.source, "plugin-a")
         XCTAssertEqual(store.transientNotice, "Sent to Tracker")
+        // The list reload every change ends with brings the same row back, whenever it lands.
+        await store.loadTasks()
+        XCTAssertEqual(store.tasks.map(\.id), ["t1"])
+        XCTAssertEqual(store.tasks.first?.source, "plugin-a")
     }
 
     func testTheLocalChoiceRidesTheCreate() async throws {

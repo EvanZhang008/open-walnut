@@ -217,13 +217,20 @@ final class MockTaskTransport: WalnutTaskTransport, @unchecked Sendable {
         return syncChange(id, "outside-copy")
     }
 
+    /// The answer's row is what the server holds now, so the list read after it serves that row
+    /// too, as the real server does: every change reloads the list in the background, and with
+    /// the mock's empty list that reload took the row away mid-test (2026-11-02, CI: the next
+    /// `store.tasks[0]` crashed the whole unit run).
     private func syncChange(_ id: String, _ action: String) -> SyncChangeAnswer {
-        if let syncChangeResult { return syncChangeResult(id, action) }
-        return SyncChangeAnswer(task: WalnutTask(
+        let answer = syncChangeResult?(id, action) ?? SyncChangeAnswer(task: WalnutTask(
             id: id, title: id, status: "todo", phase: "TODO", priority: "none", project: "",
             dueDate: nil, createdAt: nil, updatedAt: nil, completedAt: nil, starred: nil,
             pinned: nil, tags: nil, summary: nil
         ))
+        var rows = tasksResponse.tasks
+        if let idx = rows.firstIndex(where: { $0.id == answer.task.id }) { rows[idx] = answer.task } else { rows.append(answer.task) }
+        tasksResponse = TasksResponse(tasks: rows, syncedAt: tasksResponse.syncedAt)
+        return answer
     }
 }
 
