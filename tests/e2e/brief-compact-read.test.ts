@@ -68,6 +68,13 @@ beforeAll(async () => {
   for (let i = 0; i < 5; i++) await ask(workers[i]!, `Decide which of the three suppliers gets the order for bed ${i}, with the prices in the sheet`)
   for (let i = 5; i < 30; i++) await updateTaskRaw(workers[i]!, { phase: 'IN_PROGRESS' }, { emitEvent: true, source: 'status-report' })
   await until('the asks are derived', async () => (await getTask(workers[4]!)).user_status?.state === 'needs')
+  // The idle workers settle as Waiting, and the letter below names every live line: on a slow
+  // runner some still read Working at first, and then both lists hold their 15 lines and the
+  // letter runs over BRIEF_MAX_CHARS (CI, 2026-11-02: 413 brief_too_long).
+  await until('the idle workers are derived', async () => {
+    for (const id of workers.slice(5)) if ((await getTask(id)).user_status?.state !== 'waiting') return false
+    return true
+  })
   leadId = (await ensureProjectLead('Garden')).id
 })
 
