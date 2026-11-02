@@ -3,6 +3,8 @@ import type { NotificationFixResult } from '@/api/notifications';
 import { useNavigate } from 'react-router-dom';
 import { getHostFixSnapshot, hostFixTargetKey, runHostFix, subscribeHostFix, type FixTarget } from '@/utils/host-fix-store';
 import { openSessionOnHome } from '@/utils/open-session';
+import { taskPath } from '@/utils/task-path';
+import { openTaskOnHome } from '@/utils/open-session';
 
 export function HostFixButton({ target, name, onNavigate }: { target: FixTarget; name: string; onNavigate?: (to: string) => void }) {
   const navigate = useNavigate();
@@ -15,9 +17,9 @@ export function HostFixButton({ target, name, onNavigate }: { target: FixTarget;
   }, [targetKey]);
   const open = (result: NotificationFixResult) => {
     if (onNavigate) {
-      onNavigate(result.sessionId ? `/sessions?id=${encodeURIComponent(result.sessionId)}` : `/tasks/${encodeURIComponent(result.taskId)}`);
+      onNavigate(result.sessionId ? `/sessions?id=${encodeURIComponent(result.sessionId)}` : taskPath(result.taskId));
     } else if (result.sessionId) openSessionOnHome(result.sessionId, navigate);
-    else navigate(`/tasks/${encodeURIComponent(result.taskId)}`);
+    else openTaskOnHome(result.taskId, navigate);
   };
   const label = snapshot.pending ? 'Starting...' : 'Fix with agent';
   return (

@@ -238,6 +238,9 @@ export function MarkdownEditorPanel({
   const [live, setLive] = useState<{ editor: Editor | null; gen: number }>({ editor: null, gen: 0 });
   const handleEditorReady = useCallback((ed: Editor | null) => {
     setLive((prev) => ({ editor: ed, gen: prev.gen + 1 }));
+    // Captured on mount too, not only on the first edit: an editor that never emitted an update
+    // (opening one no longer does) would otherwise send the raw toggle down its cold path.
+    if (ed) { editorRef.current = ed; editorKeyRef.current = keyRef.current; }
   }, []);
   const rawDirtyRef = useRef(false);
   const rawSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);

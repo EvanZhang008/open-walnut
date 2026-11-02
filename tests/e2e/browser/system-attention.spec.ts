@@ -97,7 +97,8 @@ test('shared repair pending survives collapse and notification switches, then fa
   await count(page, 1);
   await row(page, 'alpha').getByRole('button', { name: 'Fix with agent for Alpha box', exact: true }).focus();
   await page.keyboard.press('Enter');
-  await expect(page).toHaveURL(/\/tasks\/attention-returned-task$/);
+  // The returned task opens on Home (there is no task page).
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/');
   expect(requests).toEqual([{ host: 'alpha' }, { host: 'alpha' }]);
 });
 
@@ -205,8 +206,11 @@ for (const section of ['All', 'System']) {
     await pickRail(page, section);
     await page.locator('.notification-panel').getByRole('button', { name: 'Fix with agent for Alpha box', exact: true }).click();
     await expect(page.locator('.notification-panel')).toHaveCount(0);
-    // The task opens on Home (navigateToTarget: `/?task=<id>`), or on its own page.
-    await expect(page).toHaveURL(new RegExp(`(/tasks/${taskId}|[?&]task=${taskId})$`));
+    // The task opens on Home, located and selected (navigateToTarget -> openTaskOnHome); there is
+    // no task page.
+    await expect.poll(() => new URL(page.url()).pathname).toBe('/');
+    await expect(page.locator(`.todo-panel [data-task-id="${taskId}"]`)
+      .and(page.locator('.task-focused, .todo-pinned-card-active'))).toHaveCount(1);
     await page.goBack();
     await expect(page).toHaveURL(/\/(\?.*)?$/);
     await expect(page.locator('.notification-panel')).toHaveCount(0);

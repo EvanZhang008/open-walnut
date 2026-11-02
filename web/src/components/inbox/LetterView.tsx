@@ -47,6 +47,7 @@ import { useThreadPane } from './useThreadPane';
 import { useDraft } from '@/hooks/useDraft';
 import { draftKey } from '@/utils/drafts';
 import '@/styles/human-inbox.css';
+import { taskPath } from '@/utils/task-path';
 
 /** Where a file reference in a letter body should open. */
 export interface LetterFileTarget {
@@ -92,7 +93,7 @@ function TaskRefChip({ taskId }: { taskId: string }) {
     <a
       className="task-link"
       data-task-id={taskId}
-      href={`/tasks/${taskId}`}
+      href={taskPath(taskId)}
       title={label?.project ? `${label.project} / ${label.title}` : taskId}
     >
       {label?.title ?? taskId}
@@ -137,7 +138,7 @@ export function LetterView({
     ? shown.sender.sessionId : undefined;
 
   const onBodyClick = useEntityClickHandler(
-    useCallback((taskId: string) => onNavigate(`/tasks/${taskId}`), [onNavigate]),
+    useCallback((taskId: string) => onNavigate(taskPath(taskId)), [onNavigate]),
     useCallback((sid: string) => onNavigate(`/sessions?id=${sid}`), [onNavigate]),
     useCallback(
       (path: string, line?: number) => onOpenFile({ path, ...(line ? { line } : {}), ...(host ? { host } : {}) }),

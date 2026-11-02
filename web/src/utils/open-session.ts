@@ -7,6 +7,7 @@
  * `dock:activate-task` / `sidebar:toggle-todo`.
  */
 import { armSessionInboxLink, parseSessionInboxTarget } from '@/components/inbox/session-inbox-link';
+import { taskIdOfPath } from './task-path';
 
 /** Extra state a session deep link can carry (currently: the Inbox tab). */
 export interface OpenSessionOptions {
@@ -73,12 +74,13 @@ export function locateTaskOnHome(
  * Open a task on the HOME page from anywhere: select it in the task panel and open its session,
  * the way a click on its row does, then go home.
  *
- * What a task link in the Inbox (a letter's task pill, "Open task") does, instead of the separate
- * task page (2026-10-26, the user: "Inbox directly jumping to the home page is better"). Same
- * window-event bridge as `locateTaskOnHome`, which it extends with the task's own session.
+ * What every task link and task click does, wherever it is (2026-10-26, the user: "Inbox directly
+ * jumping to the home page is better"; 2026-11-02, everywhere, and the separate task page is gone).
+ * Same window-event bridge as `locateTaskOnHome`, which it extends with the task's own session.
  */
-export function openTaskOnHome(taskId: string, navigate: (to: string) => void): void {
-  window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId, openSession: true } }));
+export function openTaskOnHome(taskId: string, navigate: (to: string) => void, opts?: { detail?: boolean }): void {
+  // `detail`: a "Details" item off Home also opens the task's details popup there.
+  window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId, openSession: true, ...(opts?.detail ? { openDetail: true } : {}) } }));
   navigate('/');
 }
 
@@ -110,11 +112,9 @@ export function openDraftSessionOnHome(project: string | undefined, navigate: (t
  * query is ignored, so a plain `/sessions?id=…` behaves exactly as before.
  */
 export function navigateToTarget(to: string, navigate: (to: string) => void): void {
-  const task = /^\/tasks\/([^/?#]+)\/?(?:[?#].*)?$/.exec(to);
-  if (task) {
-    let id = task[1];
-    try { id = decodeURIComponent(id); } catch { /* keep the raw segment */ }
-    openTaskOnHome(id, navigate);
+  const taskId = taskIdOfPath(to);
+  if (taskId) {
+    openTaskOnHome(taskId, navigate);
     return;
   }
   const m = /^\/sessions\?(.+)$/.exec(to);

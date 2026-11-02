@@ -15,6 +15,7 @@
 import { parseAskUserQuestionInput, type AskQuestion } from '@/components/sessions/ask-user-question';
 import type { Notification, NotificationAcpOption, NotificationKind } from './types';
 import { wireActionsOf } from './notification-actions';
+import { taskPath } from '@/utils/task-path';
 
 export type NotificationSection = 'action' | 'inbox' | 'errors' | 'automation' | 'all';
 
@@ -363,7 +364,7 @@ export function actionOf(
 
 export function linkTargetOf(n: Notification): string | null {
   if (n.sessionId) return `/sessions?id=${n.sessionId}`;
-  if (n.taskId) return `/tasks/${n.taskId}`;
+  if (n.taskId) return taskPath(n.taskId);
   if (n.action?.kind === 'navigate' && n.action.to) return n.action.to;
   return null;
 }

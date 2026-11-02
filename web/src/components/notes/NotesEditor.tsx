@@ -18,6 +18,7 @@ import { Markdown } from 'tiptap-markdown';
 import { entityRefsToMarkdownLinks } from '@/utils/markdown';
 import { isOfficeClipboardHtml } from '@/utils/html-to-markdown';
 import { log } from '@/utils/log';
+import { TASK_PATH_PREFIX, taskIdOfPath } from '@/utils/task-path';
 import { SlashCommandExtension } from './slash-commands/SlashCommandExtension';
 import { SlashCommandPortal } from './slash-commands/SlashCommandPortal';
 import type { SlashCommandState } from './slash-commands/types';
@@ -160,8 +161,15 @@ const TightTaskList = TaskList.extend({
  * "http://localhost:3456/tasks/ID" (browser resolves relative→absolute on paste).
  */
 function extractTaskPath(href: string): string | null {
-  const idx = href.indexOf('/tasks/');
-  return idx >= 0 ? href.slice(idx) : null;
+  if (href.startsWith(TASK_PATH_PREFIX)) return href;
+  // An absolute link counts only on this app's own origin: `https://github.com/x/tasks/12` is not one.
+  try {
+    const url = new URL(href);
+    if (typeof window !== 'undefined' && url.origin === window.location.origin && url.pathname.startsWith(TASK_PATH_PREFIX)) {
+      return url.pathname + url.search + url.hash;
+    }
+  } catch { /* not a URL */ }
+  return null;
 }
 
 /** Link extension: adds class="task-link" to /tasks/ hrefs, strips target for internal links */
@@ -174,7 +182,10 @@ const TaskAwareLink = Link.extend({
       return ['a', { ...HTMLAttributes, target: '_blank', rel: 'noopener noreferrer nofollow' }, 0];
     }
     // Normalize to relative path + strip target/rel — we handle navigation ourselves
-    const attrs: Record<string, unknown> = { ...HTMLAttributes, href: taskPath, class: 'task-link' };
+    // data-task-id lets the app's task-link click fallback open it on Home when no
+    // onTaskClick is wired (useTaskLinkClickFallback).
+    const taskId = taskIdOfPath(taskPath);
+    const attrs: Record<string, unknown> = { ...HTMLAttributes, href: taskPath, class: 'task-link', ...(taskId ? { 'data-task-id': taskId } : {}) };
     delete attrs.target;
     delete attrs.rel;
     return ['a', attrs, 0];
@@ -342,8 +353,16 @@ export function NotesEditor({ content, readOnly = false, onDirty, placeholder, c
     // after mount (MarkdownEditorPanel scroll memory), so top is only the
     // first-visit default.
     autofocus: autoFocus ? 'start' : false,
-    onUpdate: ({ editor }) => {
+    onUpdate: ({ editor, transaction }) => {
       if (isExternalUpdate.current) return;
+      // `setEditable` (a phone's Edit / Done) emits an update with no change to the document.
+      if (!transaction.docChanged) return;
+      // A change made while the editor is still being created (tiptap emits `create` a tick
+      // after the view mounts) is its own normalization of the loaded text, never the user's
+      // edit. Counting it saved the editor's re-serialization on mere open: a mail task's
+      // `<sender@host>` came back as a mailto link or `&lt;…&gt;`, and the old task page sat on
+      // "Saving..." (2026-11-02).
+      if (!editor.isInitialized) return;
       // Mark this editor as the source — prevents save-sync loop
       isSourceRef.current = true;
       onDirty(editor);
@@ -357,7 +376,7 @@ export function NotesEditor({ content, readOnly = false, onDirty, placeholder, c
         const taskPath = href ? extractTaskPath(href) : null;
         if (taskPath && onTaskClickRef.current) {
           event.preventDefault();
-          const taskId = taskPath.slice('/tasks/'.length);
+          const taskId = taskIdOfPath(taskPath);
           if (taskId) onTaskClickRef.current(taskId);
           return true; // tell ProseMirror we handled it
         }

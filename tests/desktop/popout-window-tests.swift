@@ -85,7 +85,7 @@ struct PopoutWindowTests {
         precondition(delegate.popoutWindows.count == 1)
         let parentBefore = parent.url
         _ = try await js(parent, "const t=document.createElement('textarea');t.id='test-draft';t.value='unsent parent draft';document.body.append(t);true")
-        let secondURL = "http://localhost:\(port)/popout?view=task&id=missing-test-task"
+        let secondURL = "http://localhost:\(port)/popout?view=note&id=missing-test-note"
         _ = try await js(parent, "window.open('\(secondURL)','second-target'); true")
         try await wait { delegate.popoutWindows.count == 2 }
         precondition(parent.url == parentBefore)
@@ -94,7 +94,7 @@ struct PopoutWindowTests {
         let secondWindow = delegate.popoutWindows.values.first { $0 !== firstWindow }!
         let second = secondWindow.contentView as! WKWebView
         try await wait { second.url?.absoluteString == secondURL && !second.isLoading }
-        let navigatedURL = "http://localhost:\(port)/popout?view=task&id=different-task"
+        let navigatedURL = "http://localhost:\(port)/popout?view=note&id=different-note"
         _ = try await js(second, "history.pushState({},'', '\(navigatedURL)'); true")
         _ = try await js(parent, "window.open('\(secondURL)','second-target'); true")
         try await wait { delegate.popoutWindows.count == 3 }

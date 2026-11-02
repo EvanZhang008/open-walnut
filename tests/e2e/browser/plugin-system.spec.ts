@@ -116,11 +116,11 @@ test.describe('3. Click into task shows context', () => {
     }
     await page.screenshot({ path: 'playwright-report/plugin-03-task-context.png' })
 
-    // Either task context pill appears or we navigate to task detail
+    // Either the task context pill appears or the click stays on Home (there is no task page).
     const contextBar = page.locator('.chat-input-task-pill')
     const isContextBar = await contextBar.isVisible().catch(() => false)
     if (!isContextBar) {
-      await expect(page).toHaveURL(/\/tasks\/|\//, { timeout: 3000 })
+      await expect.poll(() => new URL(page.url()).pathname, { timeout: 3000 }).toBe('/')
     }
   })
 })
@@ -241,30 +241,36 @@ test.describe('6. Sync indicator states on dashboard', () => {
   })
 })
 
-// ── 7. Task detail page — external link ──
+// ── 7. Task details popup — external link ──
 
-test.describe('7. Task detail page', () => {
+/** Home's task details popup for a task, opened from its row's menu. */
+async function openTaskDetails(page: import('@playwright/test').Page, taskTitle: string) {
+  await showAllTasksInTodoPanel(page)
+  const todoItem = page.locator('.todo-panel-item', { hasText: taskTitle })
+  await expect(todoItem).toBeVisible({ timeout: 5000 })
+  await todoItem.getByRole('button', { name: 'More actions' }).click()
+  await page.locator('.task-kebab-menu:visible').getByText('Details', { exact: true }).click()
+  const modal = page.locator('.task-detail-modal')
+  await expect(modal).toBeVisible()
+  return modal
+}
+
+test.describe('7. Task details popup', () => {
   test('PluginB synced task has external link', async ({ page }) => {
-    await page.goto('/tasks/pw-task-pluginb-synced')
-    await page.waitForLoadState('networkidle')
-    // Wait for integrations hook to resolve
-    await page.waitForTimeout(500)
-    await page.screenshot({ path: 'playwright-report/plugin-07-pluginb-detail.png' })
-
-    const externalLink = page.locator('a[href*="plugin-b.example.com"]')
+    const modal = await openTaskDetails(page, 'PluginB synced task')
+    // The Source fact on the rail links out, named by its integration ('Link' when unnamed).
+    const externalLink = modal.locator('.tdp-rail a[href*="plugin-b.example.com"]')
     await expect(externalLink).toBeVisible({ timeout: 5000 })
-    await expect(externalLink).toContainText(/PluginB|External/)
+    await expect(externalLink).toContainText(/PluginB|Link/)
+    await page.screenshot({ path: 'playwright-report/plugin-07-pluginb-detail.png' })
   })
 
   test('PluginA synced task has external link', async ({ page }) => {
-    await page.goto('/tasks/pw-task-plugina-synced')
-    await page.waitForLoadState('networkidle')
-    await page.waitForTimeout(500)
-    await page.screenshot({ path: 'playwright-report/plugin-07-plugina-detail.png' })
-
-    const externalLink = page.locator('a[href*="plugin-a.example.com"]')
+    const modal = await openTaskDetails(page, 'PluginA synced task')
+    const externalLink = modal.locator('.tdp-rail a[href*="plugin-a.example.com"]')
     await expect(externalLink).toBeVisible({ timeout: 5000 })
-    await expect(externalLink).toContainText(/PluginA|External/)
+    await expect(externalLink).toContainText(/PluginA|Link/)
+    await page.screenshot({ path: 'playwright-report/plugin-07-plugina-detail.png' })
   })
 })
 

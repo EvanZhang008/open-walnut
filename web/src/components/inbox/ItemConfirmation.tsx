@@ -11,6 +11,7 @@ import { type BoxMicHandle } from '@/components/common/BoxMic';
 import { AnswerBox } from '@/components/common/AnswerBox';
 import { useSendAfterDictation, dictationWaitProps } from '@/hooks/useSendAfterDictation';
 import '@/styles/inbox-mic.css';
+import { taskPath } from '@/utils/task-path';
 
 export function ItemConfirmation({ draftKey, item, actionId, target, retry, again, submitting, prepare, execute, onClose, onFind, onNavigate }: {
   draftKey: string; item: InboxLetterItem; actionId: string; target?: InboxTaskCandidate; retry?: InboxItemReceipt; again?: boolean; submitting: boolean;
@@ -104,7 +105,7 @@ export function ItemConfirmation({ draftKey, item, actionId, target, retry, agai
       {work.task && <p>{work.task.project || 'Inbox'} · {PHASE_TEXT[work.task.phase] ?? work.task.phase}</p>}
       {!retry && work.goal && <p>Confirmed work goal: {work.goal}</p>}
       {!retry && work.task?.description && <p>{work.task.description}</p>}
-      <button type="button" className="hib-row-btn" onClick={() => onNavigate(`/tasks/${encodeURIComponent(work.taskId)}`)}>Open existing task</button>
+      <button type="button" className="hib-row-btn" onClick={() => onNavigate(taskPath(work.taskId))}>Open existing task</button>
     </div>}
     {target && <div><strong>Selected task</strong><p>{target.title}</p>
       <p>{target.project || 'Inbox'} · {PHASE_TEXT[target.phase] ?? target.phase}</p>

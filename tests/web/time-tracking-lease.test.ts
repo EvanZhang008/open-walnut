@@ -74,8 +74,8 @@ describe('resolveAttribution', () => {
     expect(resolveAttribution(inner, '/')).toEqual({ kind: 'chat' });
   });
 
-  it('falls back to the /tasks/:id route for page chrome', () => {
-    const target = el('<div class="task-detail-v2"><h1 id="probe">t</h1></div>', 'probe');
+  it('falls back to the /tasks/:id route for chrome with no task of its own', () => {
+    const target = el('<div class="page-chrome"><h1 id="probe">t</h1></div>', 'probe');
     expect(resolveAttribution(target, '/tasks/t_gamma')).toEqual({ kind: 'triage', taskId: 't_gamma' });
     expect(resolveAttribution(null, '/tasks/t_gamma')).toEqual({ kind: 'triage', taskId: 't_gamma' });
   });

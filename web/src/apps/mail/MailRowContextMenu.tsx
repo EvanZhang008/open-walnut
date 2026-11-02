@@ -40,6 +40,7 @@ import { unsubscribeFromMessage } from './mail-unsubscribe-actions';
 import { unsubscribeHandsOverToAsk } from './mail-unsubscribe-state';
 import { bodyQuoteText } from './mail-quote-text';
 import { groupedRowOf } from './mail-groups-store';
+import { openTaskOnHome } from '@/utils/open-session';
 
 /** The row a right-click landed on. The PAIR, because that is a message's identity. */
 export interface MailRowMenuTarget {
@@ -195,7 +196,7 @@ export function useMailRowContextMenu(view: MailRowMenuView): MailRowMenuHandle 
           onForward: forward,
           onTalkToCeo: (row) => { void talkToCeo(mailContentItem(row)).catch(() => { /* toasted */ }); },
           onNewTask: (row) => { void newTaskFromContent(mailContentItem(row)); },
-          onOpenTask: (taskId) => { navigate(`/tasks/${taskId}`); },
+          onOpenTask: (taskId) => { openTaskOnHome(taskId, navigate); },
           onSearchSender: (address) => { void runMailSearch(address); },
           onCopyLink: copyLink,
           onSummarize: (row) => askWalnut(row, MAIL_ASK_PRESETS.summarize),

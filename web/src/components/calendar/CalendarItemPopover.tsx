@@ -15,6 +15,8 @@ import { draftKey } from '@/utils/drafts';
 import type { CalendarItem } from './calendar-items';
 import { calendarEventNeedsApproval, type CalendarEvent } from '@/api/calendar';
 import './visibility.css';
+import { openTaskOnHome } from '@/utils/open-session';
+import { useNavigate } from 'react-router-dom';
 
 interface Props {
   item: CalendarItem;
@@ -33,6 +35,7 @@ const datePart = (iso: string) => iso.slice(0, 10);
 const timePart = (iso: string, fallback = '09:00') => (iso.includes('T') ? iso.slice(11, 16) : fallback);
 
 export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDeleteEvent, onHideEvent, onSaveTaskWhen }: Props) {
+  const navigate = useNavigate();
   const anchorRef = useRef<HTMLElement | null>(anchorEl);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const placement = useMenuPlacement(true, anchorRef, menuRef);
@@ -341,8 +344,8 @@ export function CalendarItemPopover({ item, anchorEl, onClose, onSaveEvent, onDe
             </button>
           )}
           {!isEvent && (
-            <button className="cal-item-open" onClick={() => window.open(`/tasks/${item.task.id}`, '_self')}>
-              Open task ↗
+            <button className="cal-item-open" onClick={() => openTaskOnHome(item.task.id, navigate)}>
+              Open task
             </button>
           )}
         </div>

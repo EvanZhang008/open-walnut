@@ -11,6 +11,7 @@ import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { ICON_TRASH } from '../common/Icons';
+import { openTaskOnHome } from '@/utils/open-session';
 
 export type TaskListProjection = Task & {
   /** Precomputed by fields=list because that projection intentionally omits ext. */
@@ -123,7 +124,7 @@ export function TaskCard({ task, onComplete, onDelete, childStats, groupInfo, is
       onSelectToggle(task.id);
       return;
     }
-    navigate(`/tasks/${task.id}`);
+    openTaskOnHome(task.id, navigate);
   };
 
   return (
@@ -151,7 +152,7 @@ export function TaskCard({ task, onComplete, onDelete, childStats, groupInfo, is
       onClick={handleCardClick}
       role="button"
       tabIndex={0}
-      onKeyDown={(e) => { if (e.key === 'Enter') navigate(`/tasks/${task.id}`); }}
+      onKeyDown={(e) => { if (e.key === 'Enter') openTaskOnHome(task.id, navigate); }}
     >
       <button
         className="task-checkbox"

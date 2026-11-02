@@ -13,6 +13,7 @@ import type { SlashCommandState, NoteSlashCommand, SlashRange } from './types';
 import { SlashCommandMenu } from './SlashCommandMenu';
 import { TaskSearchPanel } from './TaskSearchPanel';
 import { NoteLinkPanel } from './NoteLinkPanel';
+import { taskPath } from '@/utils/task-path';
 
 interface SlashCommandPortalProps {
   editor: Editor;
@@ -116,7 +117,7 @@ export function SlashCommandPortal({ editor, state, tasks, focusedTaskId, wikiLi
       .insertContent([
         {
           type: 'text',
-          marks: [{ type: 'link', attrs: { href: `/tasks/${task.id}` } }],
+          marks: [{ type: 'link', attrs: { href: taskPath(task.id) } }],
           text: label,
         },
         { type: 'text', text: ' ' },

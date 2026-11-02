@@ -13,6 +13,8 @@ import type { CalendarItem } from './calendar-items';
 import { calendarEventNeedsApproval } from '@/api/calendar';
 import './visibility.css';
 import type { CreateSeed } from './QuickCreatePopover';
+import { openTaskOnHome } from '@/utils/open-session';
+import { useNavigate } from 'react-router-dom';
 
 export interface CalendarContextTarget {
   point: { x: number; y: number };
@@ -54,6 +56,7 @@ export function CalendarContextMenu({
   onCreate,
   canCreateEvent,
 }: Props) {
+  const navigate = useNavigate();
   const anchorRef = useRef<HTMLElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const placement = useMenuPlacement(true, anchorRef, menuRef, { anchorPoint: target.point });
@@ -92,7 +95,7 @@ export function CalendarContextMenu({
       >
         {isTask && (
           <>
-            <button role="menuitem" onClick={run(() => window.open(`/tasks/${item.task.id}`, '_self'))}>
+            <button role="menuitem" onClick={run(() => openTaskOnHome(item.task.id, navigate))}>
               Open task
             </button>
             {onCompleteTask && (

@@ -2,7 +2,7 @@
  * One session per task (2026-10-21): a task shows its ONE session, and the
  * sessions it held before that rule as a collapsed "Earlier sessions (N)" list
  * (`legacy_session_ids`, history only: those sessions no longer link to it).
- * Shared by the details popup (TaskDetailPane) and the /tasks/:id page.
+ * Used by the task details popup (TaskDetailPane).
  */
 import { useEffect, useState } from 'react';
 import type { SessionRecord, Task } from '@open-walnut/core';

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { previewItemTask, type InboxTaskCandidate, type InboxTaskPreview } from '@/api/human-inbox-items';
 import { PHASE_TEXT, timeText } from './item-receipt-model';
+import { taskPath } from '@/utils/task-path';
 
 export function ItemTaskPreview({ letterId, itemId, task, onBack, onNavigate }: {
   letterId: string; itemId: string; task: InboxTaskCandidate; onBack: () => void; onNavigate: (to: string) => void;
@@ -26,6 +27,6 @@ export function ItemTaskPreview({ letterId, itemId, task, onBack, onNavigate }: 
         <h4>Recent activity</h4>
         {detail.activity?.length ? detail.activity.map((a, index) => <p key={index}>{a.text}<small>{timeText(a.at)}</small></p>) : <p>Activity unavailable</p>}
       </>}
-    <button type="button" className="hib-row-btn" onClick={() => onNavigate(`/tasks/${encodeURIComponent(task.id)}`)}>Open task</button>
+    <button type="button" className="hib-row-btn" onClick={() => onNavigate(taskPath(task.id))}>Open task</button>
   </div>;
 }

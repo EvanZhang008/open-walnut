@@ -70,7 +70,7 @@ function queuedRowText(raw: string): { text: string; dedupText?: string } {
 
 /**
  * Shared hook for sending messages to Claude Code sessions with optimistic UI.
- * Used by SessionPanel and TaskDetailPage.
+ * Used by SessionPanel.
  *
  * ## State machine: optimisticMsgs[]
  *

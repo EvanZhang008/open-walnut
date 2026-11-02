@@ -15,7 +15,7 @@ import { yieldFullscreen } from '@/hooks/useFullscreen';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { fetchSession, forkSessionInWalnut } from '@/api/sessions';
 import type { ImageAttachment } from '@/api/chat';
-import { openPopout, popoutPath } from './openPopout';
+import { openPopout, openTaskInApp, popoutPath } from './openPopout';
 import './popout-session.css';
 
 export function PopoutSession() {
@@ -91,8 +91,8 @@ function PopoutSessionPanel() {
       embedded
       onClose={() => window.close()}
       onSessionClick={sessionId => openPopout('session', { id: sessionId })}
-      onTaskClick={taskId => openPopout('task', { id: taskId })}
-      onOpenTaskDetail={taskId => openPopout('task', { id: taskId })}
+      onTaskClick={taskId => openTaskInApp(taskId)}
+      onOpenTaskDetail={taskId => openTaskInApp(taskId)}
       onSessionReplaced={replaceSession}
       onOpenForkDraft={seed => {
         if (fork) return;

@@ -251,7 +251,7 @@ show inline after the open ones, other completed hits that show the query fold i
   not carry or a surface outside the provider (`useTasksContextSafe()` returns null in pop-outs).
   Ratchets: `tests/e2e/browser/task-store-same-browser-instant.spec.ts` holds the PATCH at the
   network layer and requires both directions to propagate before the server answers;
-  `task-store-detail-page-instant.spec.ts` (the `/tasks/:id` page) and
+  `task-store-detail-popup-instant.spec.ts` (Home's task details popup) and
   `task-store-toast-undo-instant.spec.ts` (toast Undo through `deleteTask`) do the same.
 - **The same rule holds for every shared entity, not just tasks.** The general shape: ONE
   module store per entity kind (a React context or `useSyncExternalStore` module), optimistic

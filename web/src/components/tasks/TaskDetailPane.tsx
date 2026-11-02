@@ -11,28 +11,30 @@
  *   │ Note                                 │ Created Updated ID│
  *   └──────────────────────────────────────┴───────────────────┘
  *
- * The same split as the /tasks/:id page (TaskDetailPage): what the task IS on the
- * left, every small fact about it in one rail on the right. A narrow popup stacks the
+ * What the task IS on the left, every small fact about it in one rail on the right.
+ * This popup is the one place a task's details are read and edited: the separate
+ * task page is gone (utils/task-path.ts), so its edits live here (TaskDetailEdits:
+ * Complete / Reopen, Delete, dependencies, a line added to the note) beside the
+ * description and note editors. A narrow popup stacks the
  * rail above the main column. Each part is plain rows under a small label, not a box
  * of its own (2026-10-06 redesign: the old pane stacked a box per part, repeated the
  * task's phase on every session and printed session ids).
  */
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
-import { stableHtml } from '@/hooks/useStableHtml';
 import { useNavigate } from 'react-router-dom';
 import type { Task as CoreTask, SessionRecord } from '@open-walnut/core';
 import { fetchSessionsForTask } from '@/api/sessions';
-import { fetchTask, updateTask as apiUpdateTask } from '@/api/tasks';
+import { fetchTask, updateDescription, updateNote, updateTask as apiUpdateTask, type TaskDetail } from '@/api/tasks';
 import { fetchTriageHistory } from '@/api/chat';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
 import { useSessionStatusEpoch } from '@/hooks/useSessionStatus';
+import { useEvent } from '@/hooks/useWebSocket';
 import { useShowPriority } from '@/hooks/useShowPriority';
 import { useIntegrations, getIntegrationMeta } from '@/hooks/useIntegrations';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { keptLine, syncStanding } from './private-task-model';
 import { PluginSlotFact, PluginSlots } from '@/plugins/PluginSlots';
 import { resolveSessionRecordStatus, sessionStatusStore } from '@/stores/session-status-store';
-import { renderNoteMarkdown } from '@/utils/markdown';
 import { timeAgo } from '@/utils/time';
 import { CopyableId } from '../common/CopyableId';
 import { DatePicker } from '../common/DatePicker';
@@ -44,6 +46,9 @@ import { Fact, Section, SessionRow, TaskRow } from './TaskDetailRows';
 import { EarlierSessions, taskSessionLayout } from './TaskSessionHistory';
 import { hasTransferLinks, TransferLinks } from '../transfer/TransferLinks';
 import { dateTags } from '../../../../src/core/tag-model';
+import { openTaskOnHome } from '@/utils/open-session';
+import { TaskFieldEditor } from './TaskFieldEditor';
+import { TaskDependencies, TaskDetailActions, TaskNoteAdd } from './TaskDetailEdits';
 import '@/styles/task-detail-pane.css';
 
 type Task = CoreTask & { has_description?: boolean; has_summary?: boolean; has_ext?: boolean; has_note?: boolean };
@@ -75,24 +80,39 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
   // The home list ships slim rows: has_* says a field exists when its text was stripped.
   const hasDescription = !!task.description || !!task.has_description;
   const hasNote = !!task.note || !!task.has_note;
-  const hasExt = !!(task.ext && Object.keys(task.ext).length > 0) || !!task.has_ext;
 
-  // One fetchTask rehydrates every stripped field together.
-  const [fullTask, setFullTask] = useState<Task | null>(null);
-  useEffect(() => { setFullTask(null); }, [task.id]);
-  const needsFullLoad = (hasNote && !task.note) || (hasDescription && !task.description) || (hasExt && !task.ext);
+  // One fetchTask per task rehydrates every stripped field together, and carries what only a
+  // detail read has (the resolved dependencies and the dependents). `detailFor` keys it to the
+  // task it was read for, so another task's detail is never shown or edited here.
+  const [fullTask, setFullTask] = useState<(TaskDetail & { detailFor: string }) | null>(null);
+  const [detailRev, setDetailRev] = useState(0);
   useEffect(() => {
-    if (!needsFullLoad || fullTask) return;
     let cancelled = false;
-    fetchTask(task.id).then((t) => { if (!cancelled) setFullTask(t); }).catch(() => {});
+    fetchTask(task.id).then((t) => { if (!cancelled) setFullTask({ ...t, detailFor: task.id }); }).catch(() => {});
     return () => { cancelled = true; };
-  }, [needsFullLoad, fullTask, task.id]);
-  const noteContent = task.note ?? fullTask?.note;
-  const descriptionContent = task.description ?? fullTask?.description;
+  }, [task.id, detailRev]);
+  const detail = fullTask?.detailFor === task.id ? fullTask : null;
+  const reloadDetail = () => setDetailRev((n) => n + 1);
+  // The note and description are editable here, so a change from elsewhere (the AI's note
+  // update, another window) is read again; an editor holding unsaved typing keeps it
+  // (useFieldContent re-seeds only a clean editor).
+  const onTaskEvent = (data: unknown) => {
+    const changed = (data as { task?: { id?: string } } | undefined)?.task?.id;
+    if (changed === task.id) reloadDetail();
+  };
+  useEvent('task:updated', onTaskEvent);
+  useEvent('task:completed', onTaskEvent);
+  const noteContent = task.note ?? detail?.note;
+  const descriptionContent = task.description ?? detail?.description;
+  // An editor starts only from the text the task really has: one seeded with '' while the
+  // text loads would save that '' over it on the first keystroke.
+  const descriptionReady = descriptionContent !== undefined || (!hasDescription && !!detail);
+  const noteReady = noteContent !== undefined || (!hasNote && !!detail);
+  const store = useTasksContextSafe();
+  const reportError = (message: string) => { store?.showOperationError(message); };
 
   // Edits write through the shared task store when it has this row, so the board row
-  // moves in the same frame; the REST call is the fallback (the pop-out has no store).
-  const store = useTasksContextSafe();
+  // moves in the same frame; the REST call is the fallback.
   const inStore = () => !!store?.tasks.some((t) => t.id === task.id);
   const handleDateChange = async (date: string | null) => {
     if (inStore()) { store!.update(task.id, { due_date: date ?? '' }); return; }
@@ -116,7 +136,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
     () => (allTasks && task.parent_task_id ? allTasks.find((t) => t.id.startsWith(task.parent_task_id!)) ?? null : null),
     [allTasks, task.parent_task_id],
   );
-  const openTask = (t: Task) => (onFocusChild ? onFocusChild(t) : navigate(`/tasks/${t.id}`));
+  const openTask = (t: Task) => (onFocusChild ? onFocusChild(t) : openTaskOnHome(t.id, navigate));
 
   // One session per task: the task's own session, then the ones it held before
   // that rule ("Earlier sessions", history only). The server's records for the
@@ -168,16 +188,16 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
   // A session the server no longer has is not a row (it would read "Loading…" forever).
   const showPrimary = !!primarySessionId && (loadingRows || !!primaryRecord);
   const hasSessions = showPrimary || earlierSessionIds.length > 0;
-  const hasMain = hasSessions || hasTransferLinks(task) || !!parentTask || childTasks.length > 0 || hasNote || hasDescription
-    || (triageTotal > 0 && !!onOpenTriageForTask);
 
   return (
-    <div className="todo-detail-pane tdp" style={style}>
+    // data-task-id: time spent in the popup counts for the task (utils/time-attribution.ts).
+    <div className="todo-detail-pane tdp" style={style} data-task-id={task.id}>
       <header className="tdp-head todo-detail-meta">
         <div className="tdp-head-top">
           <span className="todo-detail-project">{task.project || 'Inbox'}</span>
           {/* Watch: keep it at the top of the task panel whatever its state. */}
           <WatchButton task={task} className="tdp-watch" />
+          <TaskDetailActions task={task} onDeleted={onClose} onError={reportError} />
           {onClose && (
             <button className="todo-detail-close" onClick={onClose} aria-label="Close detail panel" title="Close">&times;</button>
           )}
@@ -201,7 +221,7 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
 
       <div className="tdp-body">
         <div className="tdp-main">
-          <TransferLinks task={task} onOpenTask={(id) => { const t = allTasks?.find((x) => x.id === id); if (t) openTask(t); else navigate(`/tasks/${id}`); }} className="tdp-transfer" />
+          <TransferLinks task={task} onOpenTask={(id) => { const t = allTasks?.find((x) => x.id === id); if (t) openTask(t); else openTaskOnHome(id, navigate); }} className="tdp-transfer" />
 
           {hasSessions && (
             <Section label="Session">
@@ -242,23 +262,32 @@ export function TaskDetailPane({ task, allTasks, onClose, onOpenSession, onOpenT
             </button>
           )}
 
-          {hasDescription && (
-            <Section label="Description" className="tdp-doc">
-              {descriptionContent
-                ? <div className="todo-detail-note markdown-body" dangerouslySetInnerHTML={stableHtml(renderNoteMarkdown(descriptionContent))} />
-                : <div className="tdp-muted">Loading…</div>}
-            </Section>
-          )}
+          <TaskDependencies
+            key={`deps:${task.id}`}
+            task={task}
+            detail={detail}
+            onChanged={reloadDetail}
+            onOpenTask={(id) => { const t = allTasks?.find((x) => x.id === id); if (t) openTask(t); else openTaskOnHome(id, navigate); }}
+            onError={reportError}
+          />
 
-          {hasNote && (
-            <Section label="Note" className="tdp-doc">
-              {noteContent
-                ? <div className="todo-detail-note markdown-body" dangerouslySetInnerHTML={stableHtml(renderNoteMarkdown(noteContent))} />
-                : <div className="tdp-muted">Loading…</div>}
-            </Section>
-          )}
+          <Section label="Description" className="tdp-doc" testId="task-detail-description">
+            {descriptionReady
+              ? <TaskFieldEditor taskId={task.id} field="description" value={descriptionContent ?? ''} save={updateDescription} placeholder="What is this task about? Why does it exist?" />
+              : <div className="tdp-muted">Loading…</div>}
+          </Section>
 
-          {!hasMain && <div className="todo-detail-empty tdp-muted">No sessions, note or description yet.</div>}
+          <Section label="Note" className="tdp-doc" testId="task-detail-note">
+            {/* Empty note + a session: the AI's first self-report has not fired yet. Say so; a
+                silent blank reads as "broken" (two incident reports, 2026-07-25). */}
+            {noteReady && !(noteContent ?? '').trim() && (task.session_ids?.length ?? 0) > 0 && (
+              <div className="tdp-row-sub">AI keeps this note updated after each working session.</div>
+            )}
+            {noteReady
+              ? <TaskFieldEditor taskId={task.id} field="note" value={noteContent ?? ''} save={updateNote} placeholder="Working notes, findings, context…" />
+              : <div className="tdp-muted">Loading…</div>}
+            <TaskNoteAdd key={`note-add:${task.id}`} taskId={task.id} onAdded={() => reloadDetail()} onError={reportError} />
+          </Section>
         </div>
 
         <aside className="tdp-rail" aria-label="Task facts">

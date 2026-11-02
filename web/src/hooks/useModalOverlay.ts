@@ -56,6 +56,8 @@ export function unlockScroll() {
  */
 export function useModalOverlay(onClose: () => void) {
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    // An Escape that cancels an input method's composition is the IME's, not a close.
+    if (e.isComposing || e.keyCode === 229) return;
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();

@@ -1,12 +1,12 @@
 import { memo, useEffect, useRef } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
-import { Routes, Route, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type { NavigateFunction } from 'react-router-dom';
 import { AppHostPage } from './apps/AppHostPage';
 import { syncAppCommands } from './apps/commands';
 import { ensureCoreAppsRegistered } from './apps/core-apps';
 import { useAppCatalog } from './apps/hooks';
-import { navigateToTarget, openSessionOnHome } from './utils/open-session';
+import { navigateToTarget, openSessionOnHome, openTaskOnHome } from './utils/open-session';
 import { rememberLocation } from './utils/last-location';
 import { pageKeyForPath, recordVisit } from './api/page-visits';
 import { parseSessionInboxTarget } from './components/inbox/session-inbox-link';
@@ -22,16 +22,17 @@ import { usePluginUi, useWebPluginRuntime } from './plugins/hooks';
 import { LinkCaptureHost } from './plugins/LinkCaptureHost';
 import { SessionRawViewHost } from './components/sessions/SessionRawView';
 import { MainPage } from './pages/MainPage';
-import { TaskDetailPage } from './pages/TaskDetailPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { OrgPage } from './pages/OrgPage';
 import { CommandsPage } from './pages/CommandsPage';
 import { MemoryPage } from './pages/MemoryPage';
 import { CreatePluginPage } from './pages/CreatePluginPage';
 import { PopoutRoot } from './popout/PopoutRoot';
-import { isPopoutPath } from './popout/openPopout';
+import { isPopoutPath, OPEN_TASK_CHANNEL } from './popout/openPopout';
 import { scheduleNotesPrefetch } from './utils/notes-prefetch';
 import { useTaskLinkClickFallback } from './hooks/useTaskLinkClickFallback';
+import { useAgentLinkClickFallback } from './utils/open-anywhere';
+import { AnywhereFileViewer } from './components/common/AnywhereFileViewer';
 import { PLUGIN_STORE_PATH, peekPendingInstall, subscribeOpenLinks, subscribeOpenTargets, takePendingTarget } from './utils/open-link';
 import { RouteShownContext } from './contexts/RouteShownContext';
 
@@ -56,6 +57,44 @@ function SessionsRedirect() {
   return null;
 }
 
+/**
+ * `/tasks/:id` has no page: the task opens on Home, selected and scrolled to in the task
+ * panel with its session open (utils/task-path.ts; 2026-11-02, the user: "don't have this
+ * stupid page, for ever"). Old links, notifications and outside deep links still work.
+ */
+function TaskRedirect() {
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  useEffect(() => {
+    const go = (to: string) => navigate(to, { replace: true });
+    if (id) openTaskOnHome(id, go);
+    else go('/');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+  return null;
+}
+
+/**
+ * The app's window answers a pop-out that asks it to open a task (popout/openPopout.ts
+ * `openTaskInApp`): the task opens on Home here, and the pop-out keeps what it shows.
+ */
+function useOpenTaskRequests(navigate: (to: string) => void, inPopout: boolean): void {
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
+  useEffect(() => {
+    if (inPopout || typeof BroadcastChannel === 'undefined') return;
+    const channel = new BroadcastChannel(OPEN_TASK_CHANNEL);
+    channel.onmessage = (e: MessageEvent) => {
+      const { ask, taskId } = (e.data ?? {}) as { ask?: string; taskId?: string };
+      if (!ask || !taskId) return;
+      openTaskOnHome(taskId, navigateRef.current);
+      channel.postMessage({ answer: ask });
+      try { window.focus(); } catch { /* the browser decides */ }
+    };
+    return () => channel.close();
+  }, [inPopout]);
+}
+
 export function App() {
   useWebSocket();
   const location = useLocation();
@@ -66,6 +105,9 @@ export function App() {
   // A task pill on a surface with no click handler of its own stays in the app,
   // or in the pop-out when this window is one.
   useTaskLinkClickFallback(navigate, isPopoutPath(location.pathname));
+  // A path or a letter in agent text opens from every surface (utils/open-anywhere.ts).
+  useAgentLinkClickFallback();
+  useOpenTaskRequests(navigate, isPopoutPath(location.pathname));
 
   useEffect(() => {
     syncAppCommands(apps.discoverable);
@@ -109,7 +151,7 @@ export function App() {
   const navigateRef = useRef<NavigateFunction>(navigate);
   navigateRef.current = navigate;
 
-  if (isPopoutPath(location.pathname)) return <><StaleBuildPill /><LinkCaptureHost /><SessionRawViewHost /><PopoutRoot /></>;
+  if (isPopoutPath(location.pathname)) return <><StaleBuildPill /><LinkCaptureHost /><SessionRawViewHost /><AnywhereFileViewer /><PopoutRoot /></>;
 
   const isHome = location.pathname === '/';
 
@@ -119,6 +161,7 @@ export function App() {
       <StaleBuildPill />
       <LinkCaptureHost />
       <SessionRawViewHost />
+      <AnywhereFileViewer />
       <PageFind />
       <UnpairedNotice />
       <div className={isHome ? 'main-page-wrapper' : 'main-page-wrapper main-page-wrapper-hidden'}>
@@ -145,7 +188,7 @@ export function App() {
             />
           );
         })}
-        <Route path="/tasks/:id" element={<TaskDetailPage />} />
+        <Route path="/tasks/:id" element={<TaskRedirect />} />
         <Route path="/search" element={<Navigate to="/" replace />} />
         <Route path="/sessions" element={<SessionsRedirect />} />
         <Route path="/cron" element={<Navigate to="/routines" replace />} />

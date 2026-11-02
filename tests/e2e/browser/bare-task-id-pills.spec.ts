@@ -157,7 +157,7 @@ test('an id in code in the user bubble stays readable', async ({ page }, info) =
   await bubble.screenshot({ path: `${SHOTS}/${info.project.name}-03-user-bubble.png` })
 })
 
-test('a task pill on a surface with no click handler navigates in-app', async ({ page }) => {
+test('a task pill on a surface with no click handler opens the task on Home in-app', async ({ page }) => {
   let loads = 0
   page.on('load', () => { loads++ })
   await page.goto('/')
@@ -171,7 +171,12 @@ test('a task pill on a surface with no click handler navigates in-app', async ({
     host.innerHTML = `<a href="/tasks/${id}" class="task-link" data-task-id="${id}">pill</a>`
     document.body.appendChild(host)
   }, OPEN_ID)
+  // There is no task page: the click locates and selects the task on Home (openTaskLink).
+  const located = page.locator(`#home-task-navigation [data-task-id="${OPEN_ID}"]`)
+    .and(page.locator('.task-focused, .todo-pinned-card-active'))
+  await expect(located).toHaveCount(0)
   await page.locator('#unwired-surface a.task-link').click()
-  await expect.poll(() => new URL(page.url()).pathname).toBe(`/tasks/${OPEN_ID}`)
+  await expect(located).toHaveCount(1, { timeout: 20_000 })
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/')
   expect(loads - before, 'the pill click reloaded the page').toBe(0)
 })

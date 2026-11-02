@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
-import { popoutPath } from '@/popout/openPopout';
+import { openTaskInApp } from '@/popout/openPopout';
+import { openTaskOnHome } from '@/utils/open-session';
 
 /**
  * Last-resort handler for task pills (`a.task-link`) on surfaces that render
@@ -12,11 +13,10 @@ import { popoutPath } from '@/popout/openPopout';
  *
  * Listens on `document` in the bubble phase, so it runs after React's own root
  * listener and acts only when no surface handler already called preventDefault.
- * The destination is the one the anchor names and useEntityClickHandler's own
- * fallback uses: the in-app task route, or in a pop-out window the pop-out's
- * task view, so a task link there stays in the pop-out as the task page's own
- * links do (web/src/pages/task-gone.ts taskHref). Modifier clicks keep the
- * browser's open-in-new-tab behavior.
+ * A plain click opens the task on Home (utils/task-path.ts: there is no task
+ * page); in a pop-out window it opens Home in a tab of its own, so the pop-out
+ * keeps what it shows. Modifier clicks keep the browser's open-in-new-tab
+ * behavior, and the href's `/tasks/<id>` lands on Home there too.
  */
 export function useTaskLinkClickFallback(navigate: (to: string) => void, inPopout = false): void {
   const navigateRef = useRef(navigate);
@@ -31,14 +31,15 @@ export function useTaskLinkClickFallback(navigate: (to: string) => void, inPopou
       const taskId = anchor?.dataset.taskId;
       if (!taskId) return;
       e.preventDefault();
-      navigateRef.current(taskLinkTarget(taskId, inPopoutRef.current));
+      openTaskLink(taskId, inPopoutRef.current, navigateRef.current);
     };
     document.addEventListener('click', onClick);
     return () => document.removeEventListener('click', onClick);
   }, []);
 }
 
-/** Where a task pill's plain click goes: the pop-out's task view in a pop-out, else the app's task page. */
-export function taskLinkTarget(taskId: string, inPopout: boolean): string {
-  return inPopout ? popoutPath('task', { id: taskId }) : `/tasks/${encodeURIComponent(taskId)}`;
+/** A task pill's plain click: Home, in a tab of its own from a pop-out. */
+export function openTaskLink(taskId: string, inPopout: boolean, navigate: (to: string) => void): void {
+  if (inPopout) openTaskInApp(taskId);
+  else openTaskOnHome(taskId, navigate);
 }

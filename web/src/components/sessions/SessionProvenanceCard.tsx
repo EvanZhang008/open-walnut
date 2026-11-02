@@ -59,6 +59,7 @@ import { MessageFoldSummary } from './MessageFoldSummary';
 import { disclosureIds, useDetailsDisclosure } from './row-disclosure';
 import '@/styles/provenance-quote.css';
 import '@/styles/provenance-fold.css';
+import { taskPath } from '@/utils/task-path';
 
 /** '__local__' is the wire value; the envelope prints 'local'. */
 function hostLabel(host: string | undefined): string | undefined {
@@ -172,7 +173,7 @@ function PeerChips({ resolved }: { resolved: ResolvedPeer }) {
     <a
       className="provenance-chip provenance-chip-task task-link"
       data-task-id={resolved.taskId}
-      href={`/tasks/${resolved.taskId}`}
+      href={taskPath(resolved.taskId)}
       title={taskLabel?.project ? `${taskLabel.project} / ${taskLabel.title}` : taskLabel?.title}
     >{taskLabel?.title ?? 'Open task'}</a>
   ) : resolved.fullId ? (

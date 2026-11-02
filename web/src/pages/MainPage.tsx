@@ -28,6 +28,7 @@ import { revealViewOption } from '@/components/tasks/view-dropdown-reveal';
 import { RoutinesView } from '@/components/routines/RoutinesView';
 import { HomeCompanionPanel } from '@/components/layout/HomeCompanionPanel';
 import { TaskDetailModal } from '@/components/tasks/TaskDetailModal';
+import { OutsideTaskDetail } from '@/components/tasks/OutsideTaskDetail';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { PendingSessionPanel } from '@/components/sessions/PendingSessionPanel';
 import { seedLaunchPrompt } from '@/components/sessions/launch-prompt-seed';
@@ -2304,11 +2305,18 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
   // the person was reading is not on Home, so its session opens here too: an ask in the chat slot,
   // where every ask lives, anything else in a session column.
   // `openSession` (a task link from the Inbox, `openTaskOnHome`): open the task's own session too, as a
-  // click on its row does.
-  const pendingLocateRef = useRef<{ taskId: string; sessionId?: string; openSession?: boolean; until: number } | null>(null);
+  // click on its row does. `openDetail` (a "Details" off Home, `openTaskOnHome(..., { detail: true })`)
+  // opens the task's details popup over it too.
+  type PendingLocate = { taskId: string; sessionId?: string; openSession?: boolean; openDetail?: boolean; until: number; reading?: true };
+  const pendingLocateRef = useRef<PendingLocate | null>(null);
+  // A task the list does not carry (finished over a week ago, a plugin's own, an id prefix) opens
+  // in its details popup over Home (OutsideTaskDetail): there is no task page to send it to.
+  const [outsideTask, setOutsideTask] = useState<Task | null>(null);
+  const loadingRef = useRef(loading);
+  loadingRef.current = loading;
   const sessionToOpen = (task: Task, sessionId?: string, openSession?: boolean) =>
     sessionId ?? (openSession ? resolveTaskSessionId(task) ?? undefined : undefined);
-  const revealOnHome = useCallback((task: Task, sessionId?: string) => {
+  const revealOnHome = useCallback((task: Task, sessionId?: string, openDetail?: boolean) => {
     if (sessionId) {
       // The slot's own rule (`agentOfTask` over the agents it lists): a task it would not show goes to a
       // column rather than to a slot that would drop the selection.
@@ -2320,31 +2328,71 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       }
     }
     handleLocateTaskById(task.id);
+    // A finished task has no row in the panel's views to show, so its details popup opens instead
+    // of a selection nobody can see.
+    if (openDetail || task.status === 'done') setSuppressDetail(false);
   }, [handleLocateTaskById, openSessionOrToast]);
+  // The list has loaded and does not carry the task: read it. The server resolves an id prefix, so
+  // the list may carry it after all; a task seconds old (an ask started from Mail) may still be on
+  // its way to the list, so it gets a short while to arrive before it opens on its own.
+  const revealFetched = useCallback(async (pending: PendingLocate) => {
+    const reading: PendingLocate = { ...pending, reading: true };
+    pendingLocateRef.current = reading;
+    const full = await fetchTask(pending.taskId).catch(() => null);
+    // A newer locate replaced this one, or the list caught up with it meanwhile.
+    if (pendingLocateRef.current !== reading) return;
+    if (!full) { pendingLocateRef.current = null; showOperationError('That task is gone.'); return; }
+    const listed = taskMapRef.current.get(full.id);
+    if (listed) {
+      pendingLocateRef.current = null;
+      revealOnHome(listed, sessionToOpen(listed, pending.sessionId, pending.openSession), pending.openDetail);
+      return;
+    }
+    const showOutside = () => {
+      pendingLocateRef.current = null;
+      setTodoVisible(true);
+      yieldFullscreen('locate-task');
+      setOutsideTask(full as Task);
+    };
+    // Only a task made in the last minute may still be on its way to the list; any other opens now.
+    const fresh = !!full.created_at && Date.now() - Date.parse(full.created_at) < 60_000 && full.status !== 'done';
+    if (!fresh) { showOutside(); return; }
+    const waiting: PendingLocate = { ...reading, taskId: full.id, until: Date.now() + 3_000 };
+    pendingLocateRef.current = waiting;
+    setTimeout(() => { if (pendingLocateRef.current === waiting) showOutside(); }, 3_000);
+  }, [revealOnHome, showOperationError]);
   useEffect(() => {
     const handleLocate = (e: Event) => {
-      const { taskId, sessionId, openSession } = (e as CustomEvent).detail as { taskId?: string; sessionId?: string; openSession?: boolean };
+      const { taskId, sessionId, openSession, openDetail } = (e as CustomEvent).detail as { taskId?: string; sessionId?: string; openSession?: boolean; openDetail?: boolean };
       if (!taskId) return;
       const task = taskMapRef.current.get(taskId);
       if (task) {
         pendingLocateRef.current = null;
-        revealOnHome(task, sessionToOpen(task, sessionId, openSession));
-      } else {
-        pendingLocateRef.current = { taskId, ...(sessionId ? { sessionId } : {}), ...(openSession ? { openSession } : {}), until: Date.now() + 15_000 };
+        revealOnHome(task, sessionToOpen(task, sessionId, openSession), openDetail);
+        return;
       }
+      // Held while the list loads (a cold deep link: the clock is generous, a phone over the tunnel
+      // can take long), then read by id.
+      const pending: PendingLocate = { taskId, ...(sessionId ? { sessionId } : {}), ...(openSession ? { openSession } : {}), ...(openDetail ? { openDetail } : {}), until: Date.now() + 60_000 };
+      pendingLocateRef.current = pending;
+      if (!loadingRef.current) void revealFetched(pending);
     };
     window.addEventListener('main:locate-task', handleLocate);
     return () => window.removeEventListener('main:locate-task', handleLocate);
-  }, [revealOnHome]);
+  }, [revealOnHome, revealFetched]);
   useEffect(() => {
     const pending = pendingLocateRef.current;
     if (!pending) return;
     if (Date.now() > pending.until) { pendingLocateRef.current = null; return; }
     const task = taskMap.get(pending.taskId);
-    if (!task) return;
-    pendingLocateRef.current = null;
-    revealOnHome(task, sessionToOpen(task, pending.sessionId, pending.openSession));
-  }, [taskMap, revealOnHome]);
+    if (task) {
+      pendingLocateRef.current = null;
+      revealOnHome(task, sessionToOpen(task, pending.sessionId, pending.openSession), pending.openDetail);
+      return;
+    }
+    // The list finished loading without it: read it, once.
+    if (!loading && !pending.reading) void revealFetched(pending);
+  }, [taskMap, loading, revealOnHome, revealFetched]);
 
   const handleClearFocus = useCallback(() => {
     setFocusedTask(null);
@@ -3449,6 +3497,15 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       {/* Full-screen task detail — shared by TodoPanel clicks AND the Session panel
           kebab "Task detail" item (both drive focusedTask). suppressDetail (set by
           openDetail:false focus calls, e.g. locating a task) keeps it closed. */}
+      {!focusedTask && outsideTask && (
+        <OutsideTaskDetail
+          key={outsideTask.id}
+          task={outsideTask}
+          onClose={() => setOutsideTask(null)}
+          onOpenSession={handleToggleSession}
+          onFocusChild={(t) => { setOutsideTask(null); window.dispatchEvent(new CustomEvent('main:locate-task', { detail: { taskId: t.id, openDetail: true } })); }}
+        />
+      )}
       {focusedTask && !suppressDetail && (
         <TaskDetailModal
           task={focusedTask}

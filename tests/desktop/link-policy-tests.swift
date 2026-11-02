@@ -55,7 +55,7 @@ struct LinkPolicyTests {
         let session = URL(string: "http://localhost:3456/popout?view=session&id=abc")!
         precondition(policy.isSameWindowTarget(session, URL(string: "http://localhost:3456/popout?view=session&id=abc&cwd=%2Fworkspace&host=local")!))
         precondition(!policy.isSameWindowTarget(session, URL(string: "http://localhost:3456/popout?view=session&id=other")!))
-        precondition(!policy.isSameWindowTarget(session, URL(string: "http://localhost:3456/popout?view=task&id=abc")!))
+        precondition(!policy.isSameWindowTarget(session, URL(string: "http://localhost:3456/popout?view=note&id=abc")!))
         precondition(!policy.isSameWindowTarget(session, URL(string: "http://example.com:3456/popout?view=session&id=abc")!))
         precondition(!policy.isSameWindowTarget(URL(string: "http://localhost:3456/popout?view=file&path=a&line=1")!, URL(string: "http://localhost:3456/popout?view=file&path=a&line=2")!))
         print("LinkPolicyTests: all passed")

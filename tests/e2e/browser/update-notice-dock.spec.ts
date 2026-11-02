@@ -186,12 +186,18 @@ test('the phone layout floats the notice above the bottom bar, centred', async (
   await page.screenshot({ path: `${SHOTS}/phone-${test.info().project.name}.png` })
 })
 
-test('a task popout scrolls its view above the bar; the bar stays on the window edge', async ({ page }) => {
+test('a document popout scrolls its view above the bar; the bar stays on the window edge', async ({ page }) => {
   await loadApp(page)
+  // A long Markdown file (test-server.ts: cache-runbook.md, in pw-vscode-session's folder), so the
+  // view is far taller than the window.
+  const record = await (await page.request.get('/api/sessions/pw-vscode-session')).json() as { cwd?: string; session?: { cwd?: string } }
+  const cwd = (record.session ?? record).cwd
+  expect(cwd, 'the fixture session names its folder').toBeTruthy()
   // The popout window's own entry URL, as "Open in new window" opens it.
   const child = await page.context().newPage()
   await child.setViewportSize({ width: 700, height: 360 })
-  await child.goto(new URL('/popout?view=task&id=pw-task-001', page.url()).toString())
+  await child.goto(new URL(`/popout?view=file&path=${encodeURIComponent(`${cwd}/cache-runbook.md`)}`, page.url()).toString())
+  await expect(child.locator('.popout-root')).toContainText('Cache runbook', { timeout: 30_000 })
   await expect(child.locator('.popout-update-dock > .stale-build-pill.is-docked')).toHaveCount(1, { timeout: 30_000 })
   await expect(child.locator('.popout-root')).toHaveClass(/has-update-notice/)
   const view = child.locator('.popout-root > :first-child')
@@ -201,5 +207,5 @@ test('a task popout scrolls its view above the bar; the bar stays on the window 
   const viewBox = (await view.boundingBox())!
   expect(Math.abs(360 - bar.y - bar.height)).toBeLessThanOrEqual(1)
   expect(viewBox.y + viewBox.height).toBeLessThanOrEqual(bar.y + 0.5)
-  await child.screenshot({ path: `${SHOTS}/popout-task-${test.info().project.name}.png` })
+  await child.screenshot({ path: `${SHOTS}/popout-file-${test.info().project.name}.png` })
 })

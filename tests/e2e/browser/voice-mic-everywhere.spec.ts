@@ -532,15 +532,23 @@ test.describe('Tasks', () => {
     await expect(page.getByTestId('tasks-table')).toBeVisible({ timeout: 30_000 })
   }
 
-  test('the task page "Add to note..." input has the mic in its row', async ({ page, request }) => {
+  test('the task details popup "Add to note..." input has the mic in its row', async ({ page, request }) => {
     test.setTimeout(120_000)
     const title = `Voice mic detail ${STAMP}`
     const id = await createTask(request, made, { title })
-    await openTasksPage(page)
-    await page.locator('.tp-search').fill(title)
-    await page.locator(`.tp-row[data-task-id="${id}"] .tp-row-title`).click()
-    await expect(page.locator('.tdv2-title')).toHaveText(title, { timeout: 30_000 })
-    const input = page.locator('.tdv2-main').getByPlaceholder('Add to note...')
+    await home(page)
+    // Home's search lists plain rows; typed again until the row shows, since a list that
+    // hydrates late can reset the box.
+    const row = page.locator(`.todo-panel-item[data-task-id="${id}"]:visible`).first()
+    await expect(async () => {
+      await page.locator('.todo-search-input').fill(title)
+      await expect(row).toBeVisible({ timeout: 5_000 })
+    }).toPass({ timeout: 40_000 })
+    await row.getByRole('button', { name: 'More actions' }).click()
+    await page.locator('.task-kebab-menu:visible').getByText('Details', { exact: true }).click()
+    const modal = page.locator('.task-detail-modal')
+    await expect(modal.locator('.todo-detail-title')).toHaveText(title, { timeout: 30_000 })
+    const input = modal.locator('.tdp-note-add').getByPlaceholder('Add to note...')
     await expectBoxMic(page, 'task-detail-add-note', input, input.locator('xpath=..'))
   })
 

@@ -32,6 +32,7 @@ import { useTaskCircle } from '@/hooks/useSessionStatus';
 import { visibleInterval } from '@/utils/page-visibility';
 import * as ICONS from '../common/Icons';
 import '@/styles/walnut-agent.css';
+import { openTaskOnHome } from '@/utils/open-session';
 
 interface TasksPageTableProps {
   tasks: Task[];
@@ -383,7 +384,12 @@ export function TasksPageTable({
   const { projectNames } = useProjectRegistry();
   const openTask = useCallback((taskId: string) => {
     if (onOpenTask) onOpenTask(taskId);
-    else navigate(`/tasks/${taskId}`);
+    else openTaskOnHome(taskId, navigate);
+  }, [navigate, onOpenTask]);
+  // The row menu's "Details": the task on Home with its details popup open.
+  const openTaskDetail = useCallback((taskId: string) => {
+    if (onOpenTask) onOpenTask(taskId);
+    else openTaskOnHome(taskId, navigate, { detail: true });
   }, [navigate, onOpenTask]);
   const isAll = activeProject === null;
   const showGroups = isAll && grouped;
@@ -542,7 +548,7 @@ export function TasksPageTable({
               isFocused={false}
               isPinned={false}
               isDone={t.status === 'done'}
-              onExpandDetail={(task) => openTask(task.id)}
+              onExpandDetail={(task) => openTaskDetail(task.id)}
               onSetPriority={(id, p) => onUpdate(id, { priority: p })}
               onOpenSession={openSession}
               onSetDate={(id, d) => onUpdate(id, { due_date: d ?? '' })}

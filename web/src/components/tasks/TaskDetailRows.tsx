@@ -105,9 +105,9 @@ export function Fact({ label, children, testId, title }: { label: string; childr
 }
 
 /** A section of the main column: a small label (with a count), then its rows. */
-export function Section({ label, count, children, className }: { label: string; count?: number; children: ReactNode; className?: string }) {
+export function Section({ label, count, children, className, testId }: { label: string; count?: number; children: ReactNode; className?: string; testId?: string }) {
   return (
-    <section className={`tdp-section${className ? ` ${className}` : ''}`}>
+    <section className={`tdp-section${className ? ` ${className}` : ''}`} data-testid={testId}>
       <h3 className="tdp-label">
         {label}
         {count !== undefined && <span className="tdp-label-count">{count}</span>}

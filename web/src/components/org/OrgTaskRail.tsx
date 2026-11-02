@@ -45,6 +45,7 @@ import { ThreadPinIcon } from '@/components/sessions/ThreadIcons';
 import { snoozeTakesOff } from '@open-walnut/user-status';
 import { askSummary, lineSetBy, readStatusLine } from './org-ask-form';
 import { cardChecked, type ChannelRow, type OrgAlertView } from './org-channels-model';
+import { taskPath } from '@/utils/task-path';
 
 /** What the rows need from the page to answer in place. */
 export interface OrgAnswers {
@@ -204,7 +205,7 @@ function AskRow({ a, task, vp, own, onOpen, onQuote, canQuote, answers, pinning 
           <a
             className="org-ask-via"
             data-testid="org-ask-via"
-            href={`/tasks/${encodeURIComponent(a.via.id)}`}
+            href={taskPath(a.via.id)}
             aria-label={`Part of ${a.via.title}`}
             onClick={(e) => { e.preventDefault(); onOpen({ ...a, taskId: a.via!.id, title: a.via!.title, source: undefined }); }}
           >{a.via.title} ›</a>
@@ -216,7 +217,7 @@ function AskRow({ a, task, vp, own, onOpen, onQuote, canQuote, answers, pinning 
         <a
           className="org-alert-link"
           data-testid="org-alert-link"
-          href={`/tasks/${encodeURIComponent(a.taskId)}`}
+          href={taskPath(a.taskId)}
           aria-label={`Open ${a.title}`}
           onClick={(e) => { e.preventDefault(); onOpen(a); }}
         >{a.title}</a>

@@ -9,6 +9,7 @@ import { createContext } from 'react';
 import { readAboutTag } from '@open-walnut/message-about';
 import { useTaskTitle } from '@/components/transfer/TransferLinks';
 import '@/styles/message-about.css';
+import { taskPath } from '@/utils/task-path';
 
 /** True inside the chat of Main or a lead: replies show the tasks they are about. */
 export const MessageAboutContext = createContext(false);
@@ -26,7 +27,7 @@ export function rowAbout(about: readonly string[] | undefined, rawText: string |
  */
 function AboutPill({ id }: { id: string }) {
   const title = useTaskTitle(id);
-  return <a href={`/tasks/${encodeURIComponent(id)}`} className="task-link" data-task-id={id}>{title ?? id}</a>;
+  return <a href={taskPath(id)} className="task-link" data-task-id={id}>{title ?? id}</a>;
 }
 
 export function MessageAbout({ ids }: { ids: readonly string[] }) {

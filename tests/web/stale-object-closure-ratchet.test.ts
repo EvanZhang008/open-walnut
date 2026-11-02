@@ -41,8 +41,6 @@ const ALLOWED: Record<string, string> = {
     'deliberate: every data field of useTasks() is listed, and its callbacks are stable',
   'web/src/components/tasks/TaskDetailPane.tsx|useMemo|task':
     'taskSessionLayout reads only the session fields the deps list, and the result keeps no copy of the task',
-  'web/src/pages/TaskDetailPage.tsx|sessionLayout|task':
-    'taskSessionLayout reads only the session fields the deps list, and the result keeps no copy of the task',
   'web/src/stores/recap-tip-store.ts|useMemo|fields':
     'fields is rebuilt every render from exactly the four parts the deps list',
 };

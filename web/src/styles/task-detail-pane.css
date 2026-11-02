@@ -228,3 +228,122 @@
   margin-top: 2px;
   white-space: normal;
 }
+
+/* ── Edits the old task page held (TaskDetailEdits.tsx) ── */
+
+.tdp-actions {
+  display: flex;
+  gap: 6px;
+}
+/* The project name takes the free space, so the eye (when there is one), the actions and the
+   close pack to the right whichever of them shows. */
+.tdp-head-top .todo-detail-project { flex: 1 1 auto; min-width: 0; }
+.tdp-head-top .tdp-actions + .todo-detail-close { margin-left: 4px; }
+.tdp-action {
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--fg);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.tdp-action:hover { background: var(--bg-tertiary, var(--bg-secondary)); }
+.tdp-action-primary {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.tdp-action-primary:hover { filter: brightness(1.08); background: var(--accent); }
+.tdp-action-danger { color: var(--error, #ff3b30); }
+
+.tdp-blocked {
+  align-self: flex-start;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 550;
+  color: #b45309;
+  background: #f59e0b22;
+  border-radius: 4px;
+}
+.tdp-dep-row .tdp-row-line { gap: 8px; }
+.tdp-dep-title {
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  color: var(--fg);
+  background: none;
+  border: none;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tdp-dep-title:hover { text-decoration: underline; }
+.tdp-dep-remove {
+  padding: 0 4px;
+  font-size: 14px;
+  color: var(--fg-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.tdp-dep-picker,
+.tdp-dependents {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tdp-dep-picker input,
+.tdp-note-add input {
+  min-width: 0;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.tdp-dep-result {
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  color: var(--fg);
+  background: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.tdp-dep-result:hover { background: var(--bg-secondary); }
+.tdp-note-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.tdp-note-add input { flex: 1; }
+
+/* The description and note editors (TaskFieldEditor, the shared notes editor) sit in the
+   popup's flow: as tall as their text, not the full-page sheet the editor is on /notes. */
+.tdp-doc .notes-editor-panel { height: auto; }
+.tdp-doc .notes-editor-header {
+  min-height: 0;
+  padding: 0 0 2px;
+  border-bottom: none;
+}
+.tdp-doc .notes-width-btn { display: none; }
+.tdp-doc .notes-editor-content { overflow: visible; }
+.tdp-doc .notes-editor .ProseMirror {
+  min-height: 64px;
+  padding: 6px 2px 10px;
+}
+.tdp-doc .notes-editor-panel.notes-width-normal .ProseMirror { max-width: none; }
+/* No scroll-past-end zone (notes-editor.css gives the page editor 40vh under the last line). */
+.tdp-doc .notes-editor .ProseMirror::after { display: none; }

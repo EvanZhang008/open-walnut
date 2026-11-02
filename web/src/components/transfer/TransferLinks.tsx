@@ -9,6 +9,8 @@ import type { Task } from '@open-walnut/core';
 import { fetchTask } from '@/api/tasks';
 import { useTaskLabel } from '@/hooks/useEntityLabels';
 import '@/styles/transfer.css';
+import { taskPath } from '@/utils/task-path';
+import { openTaskOnHome } from '@/utils/open-session';
 
 /** Titles of tasks the board list does not carry (a completed source), read once per page. */
 const fetched = new Map<string, Promise<string | null>>();
@@ -36,7 +38,7 @@ export function TaskRefLink({ taskId, onOpen }: { taskId: string; onOpen?: (task
   const title = useTaskTitle(taskId);
   return (
     <a
-      href={`/tasks/${taskId}`}
+      href={taskPath(taskId)}
       className="task-link"
       data-task-id={taskId}
       title={title ?? taskId}
@@ -44,7 +46,7 @@ export function TaskRefLink({ taskId, onOpen }: { taskId: string; onOpen?: (task
         e.preventDefault();
         e.stopPropagation();
         if (onOpen) onOpen(taskId);
-        else navigate(`/tasks/${taskId}`);
+        else openTaskOnHome(taskId, navigate);
       }}
     >
       {title ?? 'Loading…'}

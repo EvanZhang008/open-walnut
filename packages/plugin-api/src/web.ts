@@ -69,8 +69,7 @@ export interface SettingsContribution {
  * about an object (a task, a session): the host writes the slot's `title` as the label
  * and your component renders the value, short enough for one line ("2h 10m", a link).
  *
- * - `'task.meta'`: with a task's id, created and updated time, in the task details popup
- *   and on the `/tasks/:id` page.
+ * - `'task.meta'`: with a task's id, created and updated time, in the task details popup.
  * - `'session.meta'`: at the top of a session's ⋮ menu, under the Panels row. The
  *   menu closes when your value navigates. The user may pin the fact from that row to
  *   the session's header (off by default); there it renders with `placement: 'header'`.

@@ -14,8 +14,8 @@ describe('popout route matching', () => {
 
 describe('popoutPath', () => {
   it('builds the pop-out path a link inside a pop-out stays on', () => {
-    expect(popoutPath('task', { id: 'abc-123' })).toBe('/popout?view=task&id=abc-123')
+    expect(popoutPath('session', { id: 'abc-123' })).toBe('/popout?view=session&id=abc-123')
     expect(popoutPath('file', { path: '/a b/c.md', line: 4, host: '', cwd: null })).toBe('/popout?view=file&path=%2Fa+b%2Fc.md&line=4')
-    expect(isPopoutPath(popoutPath('task', { id: 'x' }).split('?')[0]!)).toBe(true)
+    expect(isPopoutPath(popoutPath('note', { path: 'x.md' }).split('?')[0]!)).toBe(true)
   })
 })

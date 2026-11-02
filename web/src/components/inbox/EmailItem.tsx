@@ -8,6 +8,7 @@ import { useItemExecution } from './useItemExecution';
 import { ItemConfirmation } from './ItemConfirmation';
 import { ItemTaskSelector } from './ItemTaskSelector';
 import { clearItemDraft, rememberInboxReturn, useItemDraft } from './item-drafts';
+import { taskPath } from '@/utils/task-path';
 
 export function EmailItem({ letterId, item, duplicateLabels, canOpenMail = false, onNavigate }: {
   letterId: string; item: InboxLetterItem; duplicateLabels: ReadonlySet<string>; canOpenMail?: boolean; onNavigate: (to: string) => void;
@@ -116,7 +117,7 @@ export function EmailItem({ letterId, item, duplicateLabels, canOpenMail = false
             state.error !== blocked?.message ? state.error : '', state.pollExpired ? 'Still working. Check status.' : '',
             Object.entries(state.submitting).some(([key, value]) => key.startsWith('ai:') && value) ? 'Submitting…' : receiptText(ai)].filter(Boolean).join(' · ')}
         </span>
-        {task?.taskId && task.taskCreated !== false && <button type="button" className="hib-row-btn hii-task-link" onClick={() => onNavigate(`/tasks/${encodeURIComponent(task.taskId!)}`)}>{task.intent === 'attach_task' && task.delivery && ['queued', 'deferred'].includes(task.delivery) ? 'Attached · Open task' : 'Open task'}</button>}
+        {task?.taskId && task.taskCreated !== false && <button type="button" className="hib-row-btn hii-task-link" onClick={() => onNavigate(taskPath(task.taskId!))}>{task.intent === 'attach_task' && task.delivery && ['queued', 'deferred'].includes(task.delivery) ? 'Attached · Open task' : 'Open task'}</button>}
       </div>
       <span className="hii-sr-only">{item.subject}</span>
     </div>

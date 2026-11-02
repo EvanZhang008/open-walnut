@@ -156,6 +156,7 @@ import { DEFAULT_HIDDEN_TABS, allViews } from './tab-bar-model';
 import { FLAT_BATCH_KEY, FRESH_BATCH, LIST_BATCH, cutListBatch, isPastBatch, type ListBatchState } from './list-batch';
 import { isBuiltinTier, type FocusTier, type CustomTierDef } from '@/api/focus';
 import { useTaskCircle } from '@/hooks/useSessionStatus';
+import { openTaskOnHome } from '@/utils/open-session';
 
 type Task = CoreTask & {
   has_description?: boolean;
@@ -6816,7 +6817,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   const handleExpandDetail = useCallback((task: Task) => {
     setDetailTarget(null);
-    onFocusTask ? onFocusTask(task) : navigate(`/tasks/${task.id}`);
+    onFocusTask ? onFocusTask(task) : openTaskOnHome(task.id, navigate);
   }, [onFocusTask, navigate]);
 
   const showProjectDetail = useCallback((project: string) => {

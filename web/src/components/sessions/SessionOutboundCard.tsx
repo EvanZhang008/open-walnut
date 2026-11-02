@@ -56,6 +56,7 @@ import { fallbackTitle, foldKey, useMessageFold } from './message-fold';
 import { MessageFoldSummary } from './MessageFoldSummary';
 import { disclosureIds, useDetailsDisclosure } from './row-disclosure';
 import '@/styles/provenance-fold.css';
+import { taskPath } from '@/utils/task-path';
 
 interface ResolvedTarget {
   /** Full session id — present only when it is unambiguous. */
@@ -201,13 +202,13 @@ function TargetChips({ resolved }: { resolved: ResolvedTarget }) {
   const taskLabel = useTaskLabel(resolved.taskId);
   const hostName = useHostDisplayLabels();
   const others = (resolved.others ?? []).map((t) => (
-    <a key={t.id} className="provenance-chip provenance-chip-task task-link" data-task-id={t.id} href={`/tasks/${t.id}`} title={t.title}>{t.title}</a>
+    <a key={t.id} className="provenance-chip provenance-chip-task task-link" data-task-id={t.id} href={taskPath(t.id)} title={t.title}>{t.title}</a>
   ));
   const chip = resolved.taskId ? (
     <a
       className="provenance-chip provenance-chip-task task-link"
       data-task-id={resolved.taskId}
-      href={`/tasks/${resolved.taskId}`}
+      href={taskPath(resolved.taskId)}
       title={taskLabel?.project ? `${taskLabel.project} / ${taskLabel.title}` : taskLabel?.title}
     >{taskLabel?.title ?? 'Open task'}</a>
   ) : resolved.fullId ? (
