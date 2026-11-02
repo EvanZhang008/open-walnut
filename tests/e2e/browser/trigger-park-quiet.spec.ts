@@ -56,13 +56,17 @@ async function taskOf(id: string): Promise<any> {
   return ((await res.json()) as { task: unknown }).task
 }
 
-/** A real session whose first turn has ended, and its task. */
+/** A real session whose first turn has ended asking the user something, and its task. A turn
+ *  that asks nothing reads Waiting (only a real ask reaches Needs you) and sits in the folded
+ *  Waiting / snoozed section, so the ask is what puts the task on the list to begin with. */
 async function startSession(request: APIRequestContext, message: string): Promise<{ sid: string; taskId: string }> {
   const res = await request.post('/api/sessions/quick-start', { data: { cwd: `${fixtureRoot}/projects/walnut`, message } })
   expect(res.ok(), await res.text()).toBeTruthy()
   const body = await res.json() as { sessionId: string; taskId: string }
   litterTasks.push(body.taskId)
   await expect.poll(async () => (await taskOf(body.taskId)).phase, { timeout: 60_000 }).toBe('NEED_ACTION')
+  const asked = await request.put(`/api/v1/tasks/${body.taskId}/report`, { data: { state: 'needs', ask: `Which branch should it merge into? ${NONCE}` } })
+  expect(asked.ok(), await asked.text()).toBe(true)
   return { sid: body.sessionId, taskId: body.taskId }
 }
 

@@ -96,6 +96,8 @@ const PHASE_READERS: Record<string, number> = {
   'src/core/org/org-store.ts': 1,
   'src/core/peers/envelope-kit.ts': 1,
   'src/core/phase.ts': 5,
+  // the mark a person's NEED_ACTION write leaves, which the derive reads as their ask
+  'src/core/sessions/person-needs.ts': 3,
   // a precondition beside user_status (which decides): only a run its turn handed back is closed
   'src/core/routines/run-close.ts': 1,
   'src/core/routines/trigger-api.ts': 2,
@@ -121,8 +123,9 @@ const PHASE_READERS: Record<string, number> = {
   'src/core/user-status.ts': 4,
   'src/ops/tasks.ts': 2,
   'src/providers/daemon-source.ts': 1,
-  'src/web/routes/api-v1.ts': 5,
-  'src/web/routes/tasks.ts': 1,
+  // + one: a person's NEED_ACTION write is marked as their ask (core/sessions/person-needs.ts)
+  'src/web/routes/api-v1.ts': 6,
+  'src/web/routes/tasks.ts': 2,
   'web/src/components/board/board-overview-model.ts': 3,
   'web/src/components/board/kanban/kanban-card-model.ts': 5,
   'web/src/components/common/Icons.tsx': 1,

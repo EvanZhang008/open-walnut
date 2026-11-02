@@ -1056,6 +1056,9 @@ tasksRouter.post('/batch/phase', async (req: Request, res: Response, next: NextF
     const bulk = gate.ids.length ? await setPhaseBulk(gate.ids, phase as Task['phase']) : { changed: [], failed: [], syncFailed: [] }
     const { changed, syncFailed } = bulk
     const failed = [...bulk.failed, ...gate.refused]
+    // A person's NEED_ACTION is their own ask (core/sessions/person-needs.ts).
+    const { markPersonNeeds } = await import('../../core/sessions/person-needs.js')
+    await markPersonNeeds(changed.map((t) => t.id), phase, callerSidOf(req.headers))
     log.web.info('tasks batch phase via REST', { count: taskIds.length, changed: changed.length, failed: failed.length, syncFailed: syncFailed.length, phase })
 
     // Per-task events so every surface (web-ui lists) reconciles the
@@ -1528,6 +1531,11 @@ tasksRouter.patch('/:id', async (req: Request, res: Response, next: NextFunction
     let result: { task: Task } | undefined
     if (!pinPatch || Object.keys(fields).length > 0) {
       result = await updateTask(id, fields, { source: 'api', asyncPush: true })
+      if (fields.phase === 'NEED_ACTION') {
+        // A person's NEED_ACTION is their own ask (core/sessions/person-needs.ts).
+        const { markPersonNeeds } = await import('../../core/sessions/person-needs.js')
+        await markPersonNeeds([result.task.id], fields.phase, callerSid || undefined)
+      }
     }
     if (pinPatch && pinTarget) {
       await applyPinPatch(result?.task ?? pinTarget, pinPatch)

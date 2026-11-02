@@ -51,6 +51,15 @@ async function needsUser(request: APIRequestContext, id: string): Promise<void> 
   expect(res.ok(), await res.text()).toBe(true)
 }
 
+/** The task's turn asked the user in its own words (no structure): its report says so, the way a
+ *  session's turn-end report or a person's line does (PUT /tasks/:id/report). A bare NEED_ACTION
+ *  after a turn asks nothing (2026-11-02: only a real ask reaches Needs you). */
+async function asksInWords(request: APIRequestContext, id: string, words: string): Promise<void> {
+  await needsUser(request, id)
+  const res = await request.put(`/api/v1/tasks/${id}/report`, { data: { state: 'needs', ask: words } })
+  expect(res.ok(), await res.text()).toBe(true)
+}
+
 async function source(request: APIRequestContext, id: string): Promise<string> {
   return ((await (await request.get(`/api/tasks/${id}`)).json()).task?.user_status?.source ?? '') as string
 }
@@ -150,7 +159,7 @@ test.beforeAll(async ({ request }) => {
   await expect.poll(() => historyText(request, ids.wordsSid), { timeout: 60_000 }).toContain(`I processed your message: Budget ready ${STAMP}`)
   // The letter's task and this one asked the user when their turn ended.
   await needsUser(request, ids.letter)
-  await needsUser(request, ids.words)
+  await asksInWords(request, ids.words, `How much can it spend ${STAMP}?`)
   for (const [id, want] of [[ids.letter, 'letter'], [ids.choice, 'choice'], [ids.open, 'choice']] as const) {
     await expect.poll(() => source(request, id), { timeout: 60_000 }).toBe(want)
   }
@@ -467,7 +476,7 @@ test('an ask its task shaped: a clear summary, More for the detail, Yes / No and
 
 test('Quote puts the ask in this VP\'s chat, ahead of what was typed, not in its Home column', async ({ page, request }) => {
   // Answered in the test before: it asks again.
-  await needsUser(request, ids.words)
+  await asksInWords(request, ids.words, `Quote me ${STAMP}`)
   await expect.poll(async () => ((await (await request.get(`/api/tasks/${ids.words}`)).json()).task?.user_status?.state ?? ''), { timeout: 30_000 }).toBe('needs')
   await page.route('**/api/tasks?*', async (route) => {
     if (route.request().method() !== 'GET') return route.fallback()

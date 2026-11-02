@@ -3420,6 +3420,11 @@ apiV1Router.patch('/tasks/:id', async (req: Request, res: Response, next: NextFu
         const actorSid = (Array.isArray(rawActor) ? rawActor[0] : rawActor)?.trim() || undefined
         const result = await tm.updateTask(id, patch, { source: 'api', asyncPush: true, ...(actorSid ? { actorSid } : {}) })
         updated = result.task
+        if (patch.phase === 'NEED_ACTION') {
+          // A person's NEED_ACTION is their own ask (core/sessions/person-needs.ts).
+          const { markPersonNeeds } = await import('../../core/sessions/person-needs.js')
+          await markPersonNeeds([result.task.id], patch.phase, actorSid)
+        }
       }
       if (pinPatch && pinTarget) {
         await applyPinPatch(updated ?? pinTarget, pinPatch)

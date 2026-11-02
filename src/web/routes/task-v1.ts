@@ -696,6 +696,9 @@ taskV1Router.post('/tasks/batch/phase', async (req: Request, res: Response, next
     const bulk = gate.ids.length ? await setPhaseBulk(gate.ids, phase as TaskPhase) : { changed: [], failed: [], syncFailed: [] }
     const { changed, syncFailed } = bulk
     const failed = [...bulk.failed, ...gate.refused]
+    // A person's NEED_ACTION is their own ask (core/sessions/person-needs.ts).
+    const { markPersonNeeds } = await import('../../core/sessions/person-needs.js')
+    await markPersonNeeds(changed.map((t) => t.id), phase, callerSidOf(req.headers))
     log.web.info('tasks batch phase via api-v1', { count: taskIds.length, changed: changed.length, failed: failed.length, phase })
     // Per-task events so every surface (and the cloud outbox) reconciles the
     // same way it does for a single-task change.

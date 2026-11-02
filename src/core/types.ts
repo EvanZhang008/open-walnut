@@ -988,6 +988,9 @@ export interface Task {
   /** Walnut's read of where its last turn stopped, for a hand-back with no report of its own
    *  (src/core/sessions/last-words.ts): the status shows these words as its ask. Local-only. */
   last_words?: import('./sessions/last-words.js').LastWords | null;
+  /** When a person (a request with no caller session) set this task to NEED_ACTION: their own
+   *  ask, which reads Needs you while that phase stands (src/core/sessions/person-needs.ts). */
+  needs_marked_at?: string | null;
   /** Task-level working directory override. Takes precedence over project default_cwd in session resolution. */
   cwd?: string;
   /** Set by the cwd rename detector / turn-end check when task.cwd no longer exists on disk.

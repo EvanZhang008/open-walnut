@@ -3311,6 +3311,7 @@ function rowToSlimTask(row: Record<string, any>, minimal = false): SlimTask {
     // The session's raw status report: every list reads the derived user_status instead.
     delete base.status_report;
     delete base.last_words;
+    delete base.needs_marked_at;
   }
   const slim: SlimTask = {
     ...(base as Omit<Task, 'note' | 'conversation_log'>),
@@ -3349,6 +3350,7 @@ function taskToSlimTask(task: Task, minimal: boolean): SlimTask {
     delete (slim as Partial<Task>).ext;
     delete (slim as Partial<Task>).status_report;
     delete (slim as Partial<Task>).last_words;
+    delete (slim as Partial<Task>).needs_marked_at;
     slim.has_summary = typeof summary === 'string' && summary !== '';
     slim.has_description = typeof description === 'string' && description !== '';
     slim.has_ext = ext != null && typeof ext === 'object'

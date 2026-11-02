@@ -222,6 +222,8 @@ export interface UserStatusInput {
   isMain?: boolean;
   /** Its last message since its latest hand-back (sessions/last-words.ts), for a turn that left no report. */
   lastWords?: string | null;
+  /** A person set its current NEED_ACTION themself (sessions/person-needs.ts): their own ask. */
+  markedByPerson?: boolean;
   /** A lead (org_role 'lead'): like Main, never closed. */
   isLead?: boolean;
   /** When the phase last moved (a turn's end, a park). A report older than this was written
@@ -766,6 +768,8 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     if (waitIsUsers(report, hasAbove(input)) && !none(report!.waiting_on)) {
       return strip({ state: 'needs', source: 'session', ask: clean(report!.waiting_on), ...w });
     }
+    // A person set it to need them: their own ask, whatever its turn said.
+    if (input.markedByPerson) return strip({ state: 'needs', ask: MARKED_ASK, ...w });
     // It answered the user's message (2026-10-31, the user: "I have not even read it and it is put
     // into wait"): the answer is the user's to read first, so its phase keeps it on their list until
     // they write again or a turn of its own (a trigger it armed) parks it; it asks nothing, so it is
