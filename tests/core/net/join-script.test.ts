@@ -11,6 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { joinScript } from '../../../src/core/net/net-join-script.js'
+import { guardedPath } from '../../setup/exec-guard.js'
 
 let dir = ''
 let home = ''
@@ -54,7 +55,7 @@ function run(script: string, args: string[] = [], env: Record<string, string> = 
   fs.writeFileSync(file, script)
   const r = spawnSync('sh', [file, ...args], {
     encoding: 'utf8',
-    env: { HOME: home, PATH: '/usr/bin:/bin', WALNUT_JOIN_INSTALL_URL: `file://${path.join(dir, 'install.sh')}`, ...env },
+    env: { HOME: home, PATH: guardedPath([], '/usr/bin:/bin'), WALNUT_JOIN_INSTALL_URL: `file://${path.join(dir, 'install.sh')}`, ...env },
   })
   const calls = fs.existsSync(path.join(dir, 'calls')) ? fs.readFileSync(path.join(dir, 'calls'), 'utf8') : ''
   return { ...r, calls }
@@ -118,7 +119,7 @@ describe('the invite script when the release cannot join yet', () => {
       fs.copyFileSync(path.join(dir, 'new'), path.join(npm, 'walnut'))
       fs.chmodSync(path.join(npm, 'walnut'), 0o755)
       const before = fs.readFileSync(path.join(npm, 'walnut'), 'utf8')
-      const r = run(script(), [...args], { PATH: `${npm}:/usr/bin:/bin` })
+      const r = run(script(), [...args], { PATH: guardedPath([npm], '/usr/bin:/bin') })
       expect(r.status, r.stderr).toBe(0)
       expect(r.stdout).toContain('the release cannot join yet')
       expect(r.stdout).toContain(joined)
@@ -150,7 +151,7 @@ describe('the invite script when the release cannot join yet', () => {
       const npm = path.join(dir, 'npm-bin')
       fs.mkdirSync(npm)
       fs.writeFileSync(path.join(npm, 'walnut'), '#!/bin/sh\necho npm walnut\n', { mode: 0o755 })
-      const kept = run(script(), [...args], { PATH: `${npm}:/usr/bin:/bin` })
+      const kept = run(script(), [...args], { PATH: guardedPath([npm], '/usr/bin:/bin') })
       expect(kept.status, kept.stderr).toBe(0)
       expect(fs.readFileSync(path.join(bin, 'walnut'), 'utf8')).toBe(shim)
       expect(fs.readlinkSync(path.join(home, '.local/share/open-walnut/links/walnut'))).toBe(path.join(home, INSTALLED))

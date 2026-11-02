@@ -17,6 +17,7 @@ import { testBun } from '../helpers/bun-runtime.js'
 import { SOURCE_TWIN } from '../helpers/source-twin.js'
 import { onDaemonEarlyExit } from '../helpers/daemon-early-exit.js'
 import { recoverLostDaemon } from '../../src/commands/net.js'
+import { guardedPath } from '../setup/exec-guard.js'
 
 let scriptPath = ''
 let root = ''
@@ -30,7 +31,7 @@ const TWINS: Twin[] = [
 let proc: ChildProcess | null = null
 
 async function boot(twin: Twin, env: Record<string, string>): Promise<number> {
-  const full: Record<string, string | undefined> = { ...process.env, SHELL: '/bin/sh', PATH: '/usr/bin:/bin', ...env }
+  const full: Record<string, string | undefined> = { ...process.env, SHELL: '/bin/sh', PATH: guardedPath([], '/usr/bin:/bin'), ...env }
   for (const k of ['NVM_DIR', 'FNM_DIR', 'VOLTA_HOME', 'ASDF_DATA_DIR', 'XDG_DATA_HOME', 'WALNUT_STREAMS_DIR']) if (!(k in env)) delete full[k]
   const [cmd, args] = twin.command()
   proc = spawn(cmd, args, { env: full, stdio: ['ignore', 'pipe', 'pipe'] })

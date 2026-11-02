@@ -15,6 +15,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { joinScriptWindows, startScriptWindows, WSL_DISTRO } from '../../../src/core/net/net-join-ps1.js'
 import { JOIN_PS1_URL, JOIN_SCRIPT_URL, PS_TLS12, ticketWindowsCommand } from '../../../src/core/net/join-ticket.js'
+import { guardedPath } from '../../setup/exec-guard.js'
 
 const ROOT = path.resolve(__dirname, '../../..')
 const PWSH = (() => {
@@ -60,7 +61,7 @@ function run(script: string, env: Record<string, string> = {}) {
   const r = spawnSync(PWSH!, ['-NoProfile', '-NonInteractive', '-File', file], {
     encoding: 'utf8',
     env: {
-      PATH: `${path.join(dir, 'bin')}:/usr/bin:/bin`, HOME: dir, USERNAME: 'PC',
+      PATH: guardedPath([path.join(dir, 'bin')], '/usr/bin:/bin'), HOME: dir, USERNAME: 'PC',
       LOCALAPPDATA: path.join(dir, 'local'), TEMP: path.join(dir, 'temp'),
       WALNUT_WSL_ROOTFS: path.join(dir, 'rootfs.tar.gz'), ...env,
     },
