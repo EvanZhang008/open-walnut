@@ -125,8 +125,12 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
   const snoozedUntil = snoozeDate ? formatStartDateDisplay(snoozeDate) : '';
   // Under Waiting / snoozed: why it waits (not started, stopped, a watch, ...).
   const reasonText = sectionKey === 'waiting' && !isDone ? waitingReason(task, formatWaitUntil) : '';
+  // Flat: the sentence of what it waits on is a third line under the title, so the top line
+  // keeps only the project, its tags and the wake time (2026-11-02, the user: the sentence cut
+  // the top line short). "Snoozed" is a label, not a sentence: it stays up top, no third line.
+  const reasonBelow = twoLine && reasonText !== '' && reasonText !== 'Snoozed';
   const reason = reasonText ? (
-    <span className="status-card-reason" data-testid="status-card-reason" title={reasonText}>{reasonText}</span>
+    <span className={`status-card-reason${reasonBelow ? ' status-card-wait-line' : ''}`} data-testid="status-card-reason" title={reasonText}>{reasonText}</span>
   ) : null;
   const projectName = task.project || 'Inbox';
   const title = <span className={`todo-pinned-title${task.walnut_agent ? ' walnut-task-title' : ''}`} title={task.title}>{task.title}</span>;
@@ -190,18 +194,20 @@ const SectionCard = memo(function SectionCard({ task, sectionKey, handlers, twoL
         {ICONS.binaryPhaseIcon(isDone, task.phase)}
       </button>
       {twoLine ? (
-        // Flat: a small line with the project, its tags and the time, then the title alone.
+        // Flat: a small line with the project, its tags and the time, then the title alone,
+        // then (a Waiting row) what it waits on.
         <span className="status-card-body">
           <span className="status-card-meta">
             <span className="status-card-project">{projectName}</span>
             {pills}
-            {reason}
+            {reasonBelow ? null : reason}
             {wake}
             <span className="status-card-meta-fill" />
             {/* A Waiting row's time is when it wakes, as in the one-line rows. */}
             {wake ? null : agoEl}
           </span>
           {title}
+          {reasonBelow ? reason : null}
         </span>
       ) : (
         <>

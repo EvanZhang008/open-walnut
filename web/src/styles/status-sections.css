@@ -4,7 +4,8 @@
    on T3 Code: "so clean so simple"). Every section has one, Needs you included, with the
    section's own mark before its name (2026-10-31: headless Needs you rows read as Watching's).
    Each row is two lines: a small line with the project, its tags and the time, then
-   the title alone (the user: the tags "on another line", never beside the title). */
+   the title alone (the user: the tags "on another line", never beside the title), and a
+   Waiting row's sentence of what it waits on a third line under it. */
 .status-section { display: block; }
 .status-section-heading-icon { display: inline-flex; flex: none; margin-right: -2px; }
 .status-section-heading-icon svg { width: 12px; height: 12px; display: block; }
@@ -44,6 +45,9 @@
 .status-card-meta:has(.status-card-reason) .status-card-project { min-width: min(7ch, 30%); }
 /* A floor, so a wake time beside it never squeezes the reason to nothing. */
 .status-card-reason { flex: 0 4 auto; min-width: min(8ch, 30%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); }
+/* Flat: the wait sentence is its own third line under the title, with the whole width
+   (2026-11-02, the user: on the top line it was cut, and it pushed the wake time off). */
+.status-card-body > .status-card-reason.status-card-wait-line { min-width: 0; font-size: 11.5px; line-height: 15px; }
 .status-section-card:not(.status-card-two-line) > .status-card-reason { flex: 0 2 auto; max-width: 45%; font-size: 11px; margin-left: 6px; }
 /* The tags on the meta line read as words, not pills: no fill, the line's own size.
    `html` + four classes: past subtask-pill.css's dark theme (:root[data-theme] + two). */

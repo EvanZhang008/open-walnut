@@ -85,6 +85,16 @@ test.describe('Flat layout', () => {
     const todoRow = await showSectionCard(panel, 'waiting', todo)
     await expect(todoRow.getByTestId('status-card-reason')).toHaveText('Not started yet')
     await expect((await showSectionCard(panel, 'waiting', snoozed)).getByTestId('status-card-reason')).toHaveText('Snoozed')
+    // What it waits on is a third line under the title (2026-11-02, the user: on the top line
+    // the sentence was cut); "Snoozed" is a label and stays on the top line, with no third line.
+    await expect(todoRow.locator('.status-card-body > .status-card-wait-line')).toHaveText('Not started yet')
+    await expect(todoRow.locator('.status-card-meta [data-testid="status-card-reason"]')).toHaveCount(0)
+    const titleBox = (await todoRow.locator('.status-card-body > .todo-pinned-title').boundingBox())!
+    const waitBox = (await todoRow.locator('.status-card-wait-line').boundingBox())!
+    expect(waitBox.y).toBeGreaterThanOrEqual(titleBox.y + titleBox.height - 1)
+    const snoozedRow = await showSectionCard(panel, 'waiting', snoozed)
+    await expect(snoozedRow.locator('.status-card-meta [data-testid="status-card-reason"]')).toHaveText('Snoozed')
+    await expect(snoozedRow.locator('.status-card-wait-line')).toHaveCount(0)
     await expect(statusSectionRows(panel, 'working').locator(`[data-task-id="${todo}"]`)).toHaveCount(0)
 
     // Display: Group is the layout, and Sort has nothing to act on in Flat.
