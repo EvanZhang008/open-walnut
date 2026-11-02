@@ -138,6 +138,16 @@ describe('assertNoBuildPaths', () => {
   it('ignores a root that is only a prefix of another directory name', () => {
     expect(() => assertNoBuildPaths(tmpFile(`${root}-other/file`), [root])).not.toThrow()
   })
+
+  // 2026-11-02: the Windows join builds in WSL as root, so HOME is /root, and every
+  // /$bunfs/root/ path Bun writes into a compiled file read as a build-machine path.
+  it('ignores a root that only ends a longer path, and still names one that starts a path', () => {
+    const body = 'x\0/$bunfs/root/assets-1.wna\0B:/~BUN/root/walnut\0/home/x/root/y\0'
+    expect(() => assertNoBuildPaths(tmpFile(body), ['/root'])).not.toThrow()
+    expect(() => assertNoBuildPaths(tmpFile(`${body}"/root/w/node_modules/pino"`), ['/root/w', '/root']))
+      .toThrow(/\/root\/w\/node_modules\/pino/)
+    expect(() => assertNoBuildPaths(tmpFile('/root/w/x'), ['/root'])).toThrow(/\/root\/w\/x/)
+  })
 })
 
 describe('copyInfraApp', () => {

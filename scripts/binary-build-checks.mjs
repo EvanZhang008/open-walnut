@@ -104,6 +104,8 @@ export function packageCopies(repo, name) {
  * Fail the build when the file carries a path of the machine that built it: such a
  * path exists nowhere else, so whatever reads it works only where it was built.
  */
+const PATH_CHAR = /[A-Za-z0-9_$.~-]/
+
 export function assertNoBuildPaths(outfile, roots) {
   const bytes = fs.readFileSync(outfile)
   const needles = [...new Set(roots.filter((p) => p.length > 1).map((p) => p + path.sep))]
@@ -111,6 +113,9 @@ export function assertNoBuildPaths(outfile, roots) {
   for (const needle of needles) {
     const n = Buffer.from(needle)
     for (let at = bytes.indexOf(n); at !== -1 && hits.size < 20; at = bytes.indexOf(n, at + n.length)) {
+      // Only a path that starts here counts: inside a longer one (Bun's own /$bunfs/root/
+      // when the build machine's HOME is /root, 2026-11-02 Windows join) it is another path.
+      if (at > 0 && PATH_CHAR.test(String.fromCharCode(bytes[at - 1]))) continue
       const tail = bytes.subarray(at, Math.min(bytes.length, at + 160)).toString('latin1').split(/["'`\s,;)]/)[0]
       hits.set(tail, (hits.get(tail) ?? 0) + 1)
     }
