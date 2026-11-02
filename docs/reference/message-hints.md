@@ -40,7 +40,7 @@ Files (all under `src/core/hints/`):
 | `hint-schedule.ts` | When a hint is due (`dueReasons`), pure |
 | `hint-send.ts` | The pipeline: plan, compose, record; post-compaction hook; host tail |
 | `hint-drift.ts` / `hint-drift-detect.ts` | The `on_drift` sensor (a turn-end session hook) |
-| `hint-drift-live.ts` | The same check inside a person's turn: one mid-turn correction at the first wrong-language progress line |
+| `hint-drift-live.ts` | The same check inside a person's turn: a mid-turn correction at the first wrong-language progress line, a second when two more stay off |
 | `hint-request.ts` | The `hints` a sender asks for on one message |
 
 ## Wire format
@@ -106,7 +106,7 @@ such a turn is judged for drift like Main's. Walnut adds one clause after the us
 line the user reads, the short progress lines between tool calls included.
 Drift is judged on every message of the turn the user saw (`replies` on the turn-end hook,
 the progress lines between tool calls too, not only the final reply), and the next message after
-a drifted turn leads the hint with a correction naming that turn (`replyLanguageCorrection`):
+a drifted turn leads the hint with a correction (`replyLanguageCorrection` names that turn; the lines below, in the user's language, do not):
 the same reminder on every message did not hold a lead whose context was mostly English agent
 traffic (2026-10-31, 12 of 45 replies). The server's next message tells it once; a host's own
 deliveries carry it until then or until a later turn is in the language again, which clears the
@@ -118,6 +118,18 @@ language is corrected at once (`src/core/hints/hint-drift-live.ts`): when the to
 one `outcome="reply-language"` notice goes mid-turn, so a native Claude Code session reads it with that
 tool's result; the turn end then judges only what came after it. ACP engines take one prompt per turn,
 so they keep the correction on the next message.
+The model follows the language of the message it answers, and an English rule about the language
+got an English "I will" back (2026-11-02, the user's org review: "chinse, I don't know what happened",
+and English lines after two English corrections). So, for a rule that names a language Walnut has
+words for (`src/core/hints/reply-language-lines.ts`: Chinese, Japanese, Korean, Russian), three lines
+are written in that language itself: the one under a message a person typed, of 8 or more letters in another
+script (Walnut's reference cards not counted) ("（请用中文回复，包括进度短句。）" before the rule), the mid-turn correction, and the drifted
+turn's correction on the next message. Any other rule keeps the English words. A message nobody typed
+(a notice, a peer, a trigger) never gets the first line. Inside a turn a progress
+line is judged from 12 letters (`LIVE_MIN_LETTERS`: "Chromium 34/34. Now WebKit."), and a second
+correction goes out when two more lines after the first are still off, never a third. A turn nobody
+watched (a worker's turn a notice started) still has its final message judged, so the next message
+carries the correction; such a turn may mark a drift, never clear one a turn he read left.
 `brief` (Main and the leads only) at session start, after a compaction, every 3 messages and
 when the node's team moved since its Brief was written (`src/core/sessions/brief-hint.ts`): how
 old the Brief is, what moved, and to update it with `brief_write`; a node with no Brief hears to
@@ -203,8 +215,8 @@ audience or place) or "Yours", and a built-in that sends a setting says what it
 sends, the setting apart from Walnut's sentence (`user_setting` on its
 `/api/v1/hints` row). Today that is Reply language: the user's
 `session.reply_language` sentence, then `REPLY_LANGUAGE_SCOPE`, after a
-correction line when a reply drifted (`hintTextParts` cuts a hint's text into
-Walnut's words and the user's). A new built-in that sends a setting of the user's
+correction line when a reply drifted, and after Walnut's lines in the user's own language
+(`hintTextParts` cuts a hint's text into Walnut's words and the user's). A new built-in that sends a setting of the user's
 adds it to `HINT_USER_SETTINGS`; `tests/core/hints/hint-origin.test.ts`
 renders every built-in from a config whose settings are all markers and fails
 when a marker lands in a part marked as Walnut's.

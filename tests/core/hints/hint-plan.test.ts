@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import type { Config, SessionHintState, SessionOutputMode } from '../../../src/core/types.js';
 import { effectiveHints, validateHintSettings, HintSettingsError } from '../../../src/core/hints/hint-registry.js';
 import { dueReasons } from '../../../src/core/hints/hint-schedule.js';
+import { REPLY_LANGUAGE_LINES } from '../../../src/core/hints/reply-language-lines.js';
 import {
   advanceHintState, hintStateAtBoundary, hintTargetOf, hostReplyTail, planHints, type RequestedHints,
 } from '../../../src/core/hints/hint-send.js';
@@ -211,8 +212,8 @@ describe('compaction hook and host tail', () => {
     expect(hostReplyTail(rec, config)).toBeNull();
     rec.hintState = { ...rec.hintState!, drift: { 'reply-language': '2026-12-01T00:00:00Z' } };
     // A reply that drifted is named first (reply-language-correction.test.ts).
-    expect(hostReplyTail(rec, config)).toContain('Walnut (reply-language): Correction: your last reply the user read');
-    expect(hostReplyTail(rec, config)).toContain('in English. Chinese.');
+    expect(hostReplyTail(rec, config)).toContain(`Walnut (reply-language): ${REPLY_LANGUAGE_LINES.zh.drifted}`);
+    expect(hostReplyTail(rec, config)).toContain(`${REPLY_LANGUAGE_LINES.zh.drifted} Chinese.`);
     expect(hostReplyTail(rec, cfg({ reply_language: 'Chinese.', hints: { tone: { text: 'Hi.', triggers: ['every_turn'] } } }))).toContain('Walnut (tone): Hi.');
   });
 });

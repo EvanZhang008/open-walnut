@@ -30,7 +30,8 @@ vi.mock('../../../src/core/sessions/session-send-core.js', () => ({
 }));
 
 import { bus, EventNames } from '../../../src/core/event-bus.js';
-import { LIVE_CORRECTION_TEXT, _settledForTest, startLiveDrift, stopLiveDrift, takeLiveCorrection } from '../../../src/core/hints/hint-drift-live.js';
+import { REPLY_LANGUAGE_LINES } from '../../../src/core/hints/reply-language-lines.js';
+import { LIVE_CORRECTION_TEXT, LIVE_LATE_LINE, _settledForTest, startLiveDrift, stopLiveDrift, takeLiveCorrection } from '../../../src/core/hints/hint-drift-live.js';
 import { hintDriftHook } from '../../../src/core/hints/hint-drift.js';
 
 // The real turn's lines, in order; '' = a message that was only a tool call.
@@ -47,12 +48,13 @@ const TURN = [
 const emit = (name: string, sid: string, data: Record<string, unknown>) => bus.emit(name as never, { sessionId: sid, ...data } as never, ['main-ai'], { source: 'session-runner' });
 const settle = () => _settledForTest();
 
+let msgSeq = 0;
 /** One turn: the send that starts it (none = the CLI's own turn), its lines, each followed by a Bash call. */
 async function replay(sid: string, lines: readonly string[], end = true, source: string | null = 'ui') {
   if (source) bus.emit(EventNames.SESSION_SEND as never, { sessionId: sid, message: 'what the hack?' } as never, ['session-runner'], { source });
-  let n = 0;
   for (const line of lines) {
-    const msgId = `msg_${++n}`;
+    const n = ++msgSeq;
+    const msgId = `msg_${n}`;
     if (line) for (const delta of [line.slice(0, 15), line.slice(15)]) emit(EventNames.SESSION_TEXT_DELTA, sid, { delta, msgId });
     emit(EventNames.SESSION_TOOL_USE, sid, { toolName: 'Bash', toolUseId: `tu_${n}` });
     await settle();
@@ -69,16 +71,48 @@ beforeEach(() => { records.clear(); delivered.length = 0; startLiveDrift(); });
 afterEach(() => stopLiveDrift());
 
 describe('a person\'s turn with an English progress line', () => {
-  it('gets one correction at the tool call right after the first English line, and none again', async () => {
+  it('gets one correction at the tool call right after the first English line; a second only when two more are off; never a third', async () => {
     session('w1');
     await replay('w1', TURN.slice(0, 3), false);
     expect(delivered).toHaveLength(1);
     expect(delivered[0]).toMatchObject({ sid: 'w1', source: 'walnut-notify' });
-    expect(delivered[0].text).toContain(LIVE_CORRECTION_TEXT);
+    // Written in his language (reply-language-lines.ts), the late-turn line in English.
+    expect(delivered[0].text).toContain(REPLY_LANGUAGE_LINES.zh.live);
+    expect(delivered[0].text).toContain(LIVE_LATE_LINE);
+    expect(delivered[0].text).not.toContain(LIVE_CORRECTION_TEXT);
     expect(delivered[0].text).toContain(RULE);
     expect(delivered[0].text).toMatch(/<walnut-message kind="notification" from="Walnut" outcome="reply-language"/);
-    await replay('w1', TURN.slice(3));
+    // One more English line: still one correction.
+    await replay('w1', TURN.slice(3, 5), false, null);
     expect(delivered).toHaveLength(1);
+    // A second line still off after it (2026-11-02: one correction did not hold): the second, the last.
+    await replay('w1', [TURN[5]], false, null);
+    expect(delivered).toHaveLength(2);
+    await replay('w1', [TURN[6], TURN[5], TURN[6]], true, null);
+    expect(delivered).toHaveLength(2);
+  });
+
+  it('a line back in his language after the correction needs no second one', async () => {
+    session('w7');
+    await replay('w7', TURN.slice(0, 3), false);
+    await replay('w7', ['好，同样的负载下旧版每次约 0.5 秒，新版约 1.15 秒。', '下面把新版的时间拆开看。', TURN[4]], true, null);
+    expect(delivered).toHaveLength(1);
+  });
+
+  it('a short progress line counts ("Chromium 34/34. Now WebKit.")', async () => {
+    session('w8');
+    await replay('w8', [TURN[0], 'Chromium 34/34. Now WebKit.'], false);
+    expect(delivered).toHaveLength(1);
+  });
+
+  it('a correction that cannot be delivered is tried at most twice in a turn', async () => {
+    session('w10');
+    let tries = 0;
+    const real = records.get('w10')!;
+    records.set('w10', new Proxy(real, { get: (o, k) => { if (k === 'process_status') { tries++; throw new Error('read failed'); } return (o as never)[k]; } }) as never);
+    await replay('w10', [TURN[0], ...TURN.slice(2), ...TURN.slice(2)]);
+    expect(delivered).toEqual([]);
+    expect(tries).toBe(2);
   });
 
   it('a Chinese turn gets nothing', async () => {
@@ -134,6 +168,13 @@ describe('the turn end after a live correction', () => {
     // Even though the correction itself, a Walnut notice, was the last send into the session.
     records.set('w5', { ...records.get('w5')!, hintState: { sends: 5, told: {}, lastSendBy: 'agent' } } as never);
     expect(await judge('w5', TURN.filter(Boolean))).toBeTruthy();
+  });
+
+  it('short English lines after the correction still name the turn on the next message', async () => {
+    session('w9');
+    // One line under the turn end's 40 letters (two would bring the second correction, judged after it).
+    await replay('w9', [...TURN.slice(0, 3), 'Chromium 34/34. Now WebKit.']);
+    expect(await judge('w9', [...TURN.slice(0, 3), 'Chromium 34/34. Now WebKit.'])).toBeTruthy();
   });
 
   it('the outcome is read once', async () => {

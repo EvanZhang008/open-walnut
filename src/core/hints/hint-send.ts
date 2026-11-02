@@ -16,6 +16,7 @@
  *     throw before that leaves the hint still owed.
  */
 
+import { REFERENCE_CARDS_OPEN } from '../sessions/reference-cards.js';
 import type { Config, MessageHintRole, SessionHintState, SessionRecord, Task } from '../types.js';
 import { log } from '../../logging/index.js';
 import { composeHinted, parseHinted, renderHintBlock, splitHinted, type CarriedHint } from './hint-format.js';
@@ -101,6 +102,8 @@ export function planHints(input: {
   afterCompaction?: boolean;
   /** Who wrote this message; absent = not a person (a host's peer note). */
   sentBy?: 'person' | 'agent';
+  /** The message's own words: a person's in another language get the ask in his own (reply-language). */
+  message?: string;
   /** Main's or a lead's chat: the user's presence there (org/user-away.ts). */
   away?: { away: boolean; lastSeenAt: number | null } | null;
   /** Main's or a lead's Brief (sessions/brief-hint.ts). */
@@ -123,6 +126,8 @@ export function planHints(input: {
     const away = input.inChat && input.away ? { away: false, lastSeenAt: Date.now() } : input.away;
     const content = {
       config: input.config, record: input.record ?? null, ...(request ? { request } : {}), ...(told ? { toldHash: told.hash } : {}),
+      // Only a person's own words decide the line in his language, never the cards Walnut adds to them.
+      ...(input.message && input.sentBy === 'person' ? { message: input.message.split(REFERENCE_CARDS_OPEN)[0] } : {}),
       ...(away ? { away } : {}), ...(input.brief ? { brief: input.brief } : {}),
       ...(input.thread ? { thread: input.thread } : {}),
       ...(input.threadsTidy ? { threadsTidy: input.threadsTidy } : {}),
@@ -344,7 +349,7 @@ export async function prepareHintedSend(
     // The user's words to an Org node become one of its Threads, whether or not its hint is on.
     const thread = opts.sentBy === 'person' && opts.threads !== false ? await captureThread(record, task, words, opts) : null;
     const plan = planHints({
-      hints, target, record, config, away, brief, threadsTidy, inChat: opts.inChat ?? opts.sentBy === 'person',
+      hints, target, record, config, away, brief, threadsTidy, inChat: opts.inChat ?? opts.sentBy === 'person', message: words,
       ...(opts.requested ? { requested: opts.requested } : {}),
       ...(upstream ? { skip: new Set(upstream.kinds) } : {}),
       ...(opts.sentBy ? { sentBy: opts.sentBy } : {}),

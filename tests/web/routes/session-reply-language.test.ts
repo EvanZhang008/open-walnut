@@ -56,7 +56,8 @@ import {
   replyLanguageText,
 } from '../../../src/core/sessions/output-mode.js'
 import { composeHinted, parseHinted, renderHintBlock } from '../../../src/core/hints/hint-format.js'
-import { REPLY_LANGUAGE_SCOPE, replyLanguageCorrection } from '../../../src/core/hints/hint-registry.js'
+import { REPLY_LANGUAGE_SCOPE } from '../../../src/core/hints/hint-registry.js'
+import { REPLY_LANGUAGE_LINES } from '../../../src/core/hints/reply-language-lines.js'
 import { parseSessionMessages } from '../../../src/core/session-history.js'
 import { notePlaceCompaction } from '../../../src/core/sessions/place-notice.js'
 import { getSessionByClaudeId } from '../../../src/core/session-tracker.js'
@@ -66,6 +67,9 @@ const TEXT = 'why did the deploy guard refuse?'
 const RULE = 'Talk to the user in Chinese; code, commits, UI strings and repo docs stay English.'
 // The hint is the user's sentence, then Walnut's own clause on what it covers.
 const LANG = renderHintBlock('reply-language', `${RULE} ${REPLY_LANGUAGE_SCOPE}`)
+// A message in English (8 letters or more) gets the line in Chinese first (reply-language-lines.ts).
+const ZH = REPLY_LANGUAGE_LINES.zh
+const LANG_EN = renderHintBlock('reply-language', `${ZH.reply} ${RULE} ${REPLY_LANGUAGE_SCOPE}`)
 const ON = renderHintBlock('rich-output', RICH_OUTPUT_MODE_ON_INSTRUCTION)
 const REMIND = renderHintBlock('rich-output', RICH_OUTPUT_MODE_REMINDER)
 /** The pre-registry line old transcripts still hold. */
@@ -140,7 +144,7 @@ describe('session:send', () => {
     await setSession({ output_mode: 'markdown', reply_language: RULE })
     const sid = await newSession()
     await callSend({ sessionId: sid, message: TEXT })
-    expect(await drain(sid)).toBe(after(TEXT, LANG))
+    expect(await drain(sid)).toBe(after(TEXT, LANG_EN))
     for (let n = 0; n < 6; n++) {
       await callSend({ sessionId: sid, message: `again ${n}` })
       expect(await drain(sid)).toBe(after(`again ${n}`, LANG))
@@ -190,7 +194,7 @@ describe('session:send', () => {
     })
     await callSend({ sessionId: sid, message: 'two' })
     // The next message names the drifted turn before the rule (reply-language-correction.test.ts).
-    expect(await drain(sid)).toBe(after('two', renderHintBlock('reply-language', `${replyLanguageCorrection(driftAt)} ${RULE} ${REPLY_LANGUAGE_SCOPE}`)))
+    expect(await drain(sid)).toBe(after('two', renderHintBlock('reply-language', `${ZH.drifted} ${RULE} ${REPLY_LANGUAGE_SCOPE}`)))
     expect((await getSessionByClaudeId(sid))?.hintState?.drift).toBeUndefined()
     await callSend({ sessionId: sid, message: 'three' })
     expect(await drain(sid)).toBe(after('three', LANG))

@@ -1,7 +1,8 @@
 /**
  * The drift sensor (src/core/hints/hint-drift.ts) judges a reply the user reads: Main's, a
  * lead's (its chat is on the Org page; 2026-10-29 leads answered Walnut notices in English
- * there) and an ask's whoever started the turn, a worker's only when a person did.
+ * there) and an ask's whoever started the turn; a worker's whole turn when a person started it, and
+ * its final message otherwise (2026-11-02).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SessionRecord } from '../../../src/core/types.js'
@@ -36,8 +37,9 @@ describe('which replies the drift sensor judges', () => {
     expect(await turn('lead', { org_role: 'lead' })).toBeTruthy()
     expect(await turn('main', { org_role: 'main' })).toBeTruthy()
   })
-  it('a worker answering its lead is not; answering a person is', async () => {
-    expect(await turn('w1', { parent_task_id: 'p' })).toBeUndefined()
+  // 2026-11-02, the user's org review: a task's final message is his to read later, whoever started the turn.
+  it('a worker\'s final message is judged whoever started the turn', async () => {
+    expect(await turn('w1', { parent_task_id: 'p' })).toBeTruthy()
     expect(await turn('w2', { parent_task_id: 'p' }, 'person')).toBeTruthy()
   })
 })

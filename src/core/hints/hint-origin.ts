@@ -11,6 +11,8 @@
  * user's words this file does not mark.
  */
 
+import { REPLY_LANGUAGE_LINES } from './reply-language-lines.js';
+
 /** Every hint kind the registry defines (hint-registry.ts BUILT_IN), in its order. */
 export const BUILT_IN_HINT_KINDS = ['question', 'rich-output', 'reply-language', 'voice-reply', 'user-away', 'brief', 'threads', 'threads-tidy'] as const;
 
@@ -71,6 +73,11 @@ export function hintTextParts(h: { kind: string; text: string }): HintTextPart[]
   if (!setting) return text ? [{ text, from: 'walnut' }] : [];
   const parts: HintTextPart[] = [];
   let rest = text;
+  // Walnut's lines in the user's language lead it (reply-language-lines.ts): the ask, then the correction.
+  for (const pick of [(l: typeof REPLY_LANGUAGE_LINES[string]) => l.reply, (l: typeof REPLY_LANGUAGE_LINES[string]) => l.drifted]) {
+    const line = Object.values(REPLY_LANGUAGE_LINES).map(pick).find((x) => rest.startsWith(`${x} `));
+    if (line) { parts.push({ text: line, from: 'walnut' }); rest = rest.slice(line.length).trimStart(); }
+  }
   if (rest.startsWith(CORRECTION_HEAD)) {
     const end = rest.indexOf(CORRECTION_TAIL);
     if (end >= 0) {

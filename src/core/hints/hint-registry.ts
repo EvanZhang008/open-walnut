@@ -29,7 +29,8 @@ import {
   replyLanguageText, resolveEffectiveOutputMode,
 } from '../sessions/output-mode.js';
 import { VOICE_REPLY_TEXT } from '../sessions/voice-reply.js';
-import { languageDrift } from './hint-drift-detect.js';
+import { MESSAGE_MIN_LETTERS, languageDrift, ruleLanguage } from './hint-drift-detect.js';
+import { replyLanguageLines } from './reply-language-lines.js';
 import { briefHintText, type BriefHintState } from '../sessions/brief-hint.js';
 import { threadHintText, threadsTidyText, type ThreadHintState, type ThreadsTidyState } from '../org/thread-capture.js';
 import { HINT_USER_SETTINGS, REPLY_LANGUAGE_SCOPE, WALNUT_ONLY_KINDS, replyLanguageCorrection } from './hint-origin.js';
@@ -52,6 +53,8 @@ export interface HintContentInput {
   request?: { arg?: string };
   /** The identity this session was last told, if any. */
   toldHash?: string;
+  /** The words of the message the hint rides (its language may differ from the asked one). */
+  message?: string;
   /** Main's or a lead's chat: is the user away from it (org/user-away.ts)? Absent elsewhere. */
   away?: { away: boolean; lastSeenAt: number | null } | null;
   /** Main's or a lead's Brief: how old, what moved since (sessions/brief-hint.ts). Absent elsewhere. */
@@ -144,11 +147,18 @@ const BUILT_IN: readonly HintSpec[] = [
     // stayed English; the rule covers every line the user reads, not only the final reply.
     // A reply that broke it is named first (hint-drift.ts): the same reminder on every message
     // did not hold a lead whose context was mostly English agent traffic (2026-10-31).
+    // 2026-11-02: a model follows the language of the message it answers, and an English rule
+    // about Chinese did not hold after his English message; the lines in the language itself
+    // (reply-language-lines.ts) lead the block: under a message of his in another language, one
+    // asking for his language, and a correction written in it.
     render: (i, reasons) => {
       const text = replyLanguageText(i.config);
       if (!text) return null;
+      const lines = replyLanguageLines(ruleLanguage(text));
       const driftAt = reasons.has('on_drift') ? i.record?.hintState?.drift?.['reply-language'] : undefined;
-      return { text: `${driftAt ? `${replyLanguageCorrection(driftAt)} ` : ''}${text} ${REPLY_LANGUAGE_SCOPE}` };
+      const correction = driftAt ? `${lines ? lines.drifted : replyLanguageCorrection(driftAt)} ` : '';
+      const other = !!lines && !!i.message && languageDrift(text, i.message, MESSAGE_MIN_LETTERS) === true;
+      return { text: `${other ? `${lines!.reply} ` : ''}${correction}${text} ${REPLY_LANGUAGE_SCOPE}` };
     },
     drifted: (config, reply) => {
       const rule = replyLanguageText(config);

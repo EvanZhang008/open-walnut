@@ -19,6 +19,8 @@ import { getQueue, markProcessing, removeProcessed, sendMessageToSession } from 
 import { updateConfig } from '../../src/core/config-manager.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
 import { prepareHintedSend } from '../../src/core/hints/hint-send.js';
+import { REPLY_LANGUAGE_LINES } from '../../src/core/hints/reply-language-lines.js';
+const ZH = REPLY_LANGUAGE_LINES.zh;
 
 const SID = 'correction-lead-session';
 let leadId = '';
@@ -65,14 +67,14 @@ describe('a lead\'s English progress line', () => {
     expect(Date.parse(driftAt)).toBeGreaterThan(0);
 
     const next = await prepareHintedSend(SID, await getSessionByClaudeId(SID), 'Team update: another worker is waiting on CI.', { sentBy: 'agent' });
-    expect(next.enqueueText).toMatch(/Walnut \(reply-language\): Correction: your last reply the user read \(the turn that ended \d{2}:\d{2} UTC\) was not in his language\./);
+    expect(next.enqueueText).toContain(`Walnut (reply-language): ${ZH.drifted} ${RULE}`);
     expect(next.enqueueText).toContain(RULE);
     await next.commit();
     expect((await getSessionByClaudeId(SID))?.hintState?.drift).toBeUndefined();
 
     const after = await prepareHintedSend(SID, await getSessionByClaudeId(SID), 'Team update: nothing new.', { sentBy: 'agent' });
     expect(after.enqueueText).toContain(`Walnut (reply-language): ${RULE}`);
-    expect(after.enqueueText).not.toContain('Correction:');
+    expect(after.enqueueText).not.toContain(ZH.drifted);
   });
 });
 
@@ -88,7 +90,7 @@ describe('a person\'s turn in a worker\'s session (2026-11-01, the user\'s "what
       await sendMessageToSession(WSID, text, { source: 'ui', enqueueMessage: hinted.enqueueText, hinted: true });
       await hinted.commit();
       const batch = await markProcessing(WSID);
-      expect(batch.map((q) => q.message).join('\n')).toContain(`Walnut (reply-language): ${RULE}`);
+      expect(batch.map((q) => q.message).join('\n')).toContain(RULE);
       await removeProcessed(WSID, batch.map((q) => q.id));
     }
     await updateSessionRecord(WSID, { process_status: 'running' } as never);
@@ -99,7 +101,8 @@ describe('a person\'s turn in a worker\'s session (2026-11-01, the user\'s "what
     w(EventNames.SESSION_TEXT_DELTA, { delta: "The machine load just dropped from about 90 to 26, so I'm re-measuring old vs new back to back:", msgId: 'w2' });
     w(EventNames.SESSION_TOOL_USE, { toolName: 'Bash', toolUseId: 'b2', input: {} });
     const row = await until(async () => (await getQueue(WSID)).find((q) => q.message.includes('outcome="reply-language"')));
-    expect(row.message).toContain('Correction: your progress line just now was not in the user\'s language');
+    // Written in his language (reply-language-lines.ts).
+    expect(row.message).toContain(ZH.live);
     w(EventNames.SESSION_TEXT_DELTA, { delta: 'Under the same load the old version takes about half a second per click, the new one more than one.', msgId: 'w3' });
     w(EventNames.SESSION_TOOL_USE, { toolName: 'Bash', toolUseId: 'b3', input: {} });
     await new Promise((r) => setTimeout(r, 500));
