@@ -294,7 +294,8 @@ describe('sessionInputPhase (reopens COMPLETE, 2026-09-23)', () => {
     // 'api-v1' / 'chat': a person's chat turn into a chat that is an ask
     // (sessions/lane-ask-link.ts); the background turns into the same lanes
     // ('cron', 'triage', 'heartbeat') must not reopen a finished ask.
-    for (const source of ['ui', 'mobile', 'cli', 'peer', 'web-api', 'human-inbox', 'api-v1', 'chat']) {
+    // 'api-agent': a task calling a person's route (send-sent-by.ts routeSource), the same as its peer send.
+    for (const source of ['ui', 'mobile', 'cli', 'peer', 'api-agent', 'web-api', 'human-inbox', 'api-v1', 'chat']) {
       expect(sendSourceReopensTerminal(source), source).toBe(true);
     }
     for (const source of ['auto-continue', 'auto-recover', 'routine-trigger', 'routine-watcher',
@@ -303,7 +304,7 @@ describe('sessionInputPhase (reopens COMPLETE, 2026-09-23)', () => {
       expect(sendSourceReopensTerminal(source), source).toBe(false);
     }
     expect(sendSourceReopensTerminal(undefined)).toBe(false);
-    expect([...REOPENING_SEND_SOURCES].sort()).toEqual(['api-v1', 'chat', 'cli', 'human-inbox', 'mobile', 'peer', 'ui', 'web-api']);
+    expect([...REOPENING_SEND_SOURCES].sort()).toEqual(['api-agent', 'api-v1', 'chat', 'cli', 'human-inbox', 'mobile', 'peer', 'ui', 'web-api']);
   });
 
   it('is the ONLY session trigger that leaves the terminal phase', () => {
