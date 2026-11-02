@@ -39,6 +39,10 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 75
     steps:
+      # The tree as it is on main (LF): the scripts run in sh, and the release stamp reads
+      # package.json in npm's layout.
+      - shell: pwsh
+        run: git config --global core.autocrlf false
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
