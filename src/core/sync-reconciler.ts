@@ -25,7 +25,7 @@ import {
 } from './task-manager.js';
 import { bus, EventNames } from './event-bus.js';
 import { isLegacyInboxGroup, isRetiredQuickStartGroup } from '../utils/format.js';
-import { isRemoteIdBlocked, isRemoteIdClaimedByLiveTask, liveTaskSource, recordRemoteLink } from './task-remote-links.js';
+import { blockedRemoteIds, isRemoteIdClaimedByLiveTask, liveTaskSource, recordRemoteLink } from './task-remote-links.js';
 import { preLedgerOwnerOf } from './pre-ledger-owners.js';
 import { getExtIndexSpec } from './ext-index-registry.js';
 import type { RegisteredPlugin, RemoteSyncItem, SyncPollContext } from './integration-types.js';
@@ -82,6 +82,13 @@ function retryBaseMs(): number {
   return Number.isFinite(override) && override > 0 ? override : FULL_RECONCILE_RETRY_BASE_MS;
 }
 const EMPTY_RESULT_MIN_RATIO = 0.1;    // Abort if result < 10% of last known count
+/**
+ * Most local tasks one full reconcile may remove as "gone from the remote". On
+ * 2026-10-11 a pull skipped 13 lists (the local store was busy) and the
+ * reconciler removed 1,087 tasks whose items were still there; the count-drop
+ * guard above let it through because the pull still held half the items.
+ */
+export const MASS_REMOVAL_LIMIT = 20;
 
 // ── Diff result types ──
 
@@ -201,6 +208,10 @@ interface ApplyOutcome {
   created: number;
   updated: number;
   removed: number;
+  /** Create candidates refused because a local task once owned the id (released or deleted). */
+  ledgered: number;
+  /** Removals held back by the mass-removal guard this cycle. */
+  removalsHeld: number;
   /** Lost completions pushed again this cycle, and how many of those the remote accepted. */
   repushed: number;
   repushFailed: number;
@@ -343,6 +354,8 @@ export class SyncReconciler {
   private isFirstTick = new Map<string, boolean>();
   /** `${pluginId}:${lower(project)}` → consecutive full reconciles refused. */
   private refusalStreaks = new Map<string, number>();
+  /** Consecutive full reconciles whose removals the mass-removal guard held, per plugin. */
+  private removalHoldStreaks = new Map<string, number>();
 
   /**
    * Re-arm the refusals an earlier process already reported, from the recovery
@@ -505,6 +518,8 @@ export class SyncReconciler {
           ? { repushed: outcome.repushed, repushFailed: outcome.repushFailed, repushPending: diff.toRepush.length - outcome.repushed - outcome.repushFailed }
           : {}),
         ...(diff.toCreate.length !== outcome.created ? { createsIntended: diff.toCreate.length } : {}),
+        ...(outcome.ledgered > 0 ? { createsLedgered: outcome.ledgered } : {}),
+        ...(outcome.removalsHeld > 0 ? { removalsHeld: outcome.removalsHeld } : {}),
         ...(diff.toUpdate.length !== outcome.updated ? { updatesIntended: diff.toUpdate.length } : {}),
         ...(sentinelsDropped > 0 ? { sentinelsDropped } : {}),
         ...(refusedItems > 0
@@ -599,10 +614,13 @@ export class SyncReconciler {
 
     // Build maps
     const remoteMap = new Map<string, RemoteSyncItem>();
+    // Present remotely but not this pull's to import or update (see seenOnly):
+    // only the removal check below reads it.
+    const seenOnlyIds = new Set<string>();
     for (const item of remoteItems) {
-      if (!item.deleted) {
-        remoteMap.set(item.remoteId, item);
-      }
+      if (item.deleted) continue;
+      if (item.seenOnly) seenOnlyIds.add(item.remoteId);
+      else remoteMap.set(item.remoteId, item);
     }
 
     const localByRemoteId = new Map<string, Task>();
@@ -710,7 +728,7 @@ export class SyncReconciler {
           continue;
         }
         const ownerCurrentId = extractId(aliasOwner);
-        if (ownerCurrentId && remoteMap.has(ownerCurrentId)) {
+        if (ownerCurrentId && (remoteMap.has(ownerCurrentId) || seenOnlyIds.has(ownerCurrentId))) {
           // BOTH ids are present remotely: the owner is already matched by its
           // CURRENT id; this item is a stale twin wearing a former id (the
           // re-key DELETE never landed). Adopting would steal the identity
@@ -763,6 +781,7 @@ export class SyncReconciler {
     // wears the just-deleted id — a full pull landing inside it would read
     // "remote gone" and delete a task that is mid-flight, not gone.
     for (const [remoteId, local] of localByRemoteId) {
+      if (seenOnlyIds.has(remoteId)) { if (!adoptedTaskIds.has(local.id)) unchanged++; continue; }
       if (!remoteMap.has(remoteId) && !adoptedTaskIds.has(local.id) && !isPushInflight(local.id)) {
         toRemove.push(local);
       }
@@ -783,7 +802,7 @@ export class SyncReconciler {
   ): Promise<ApplyOutcome> {
     const source = `${pluginId}-reconcile`;
     let changeCount = 0;
-    const outcome: ApplyOutcome = { adopted: 0, rejoined: 0, created: 0, updated: 0, removed: 0, repushed: 0, repushFailed: 0, refusals: new Map() };
+    const outcome: ApplyOutcome = { adopted: 0, rejoined: 0, created: 0, updated: 0, removed: 0, ledgered: 0, removalsHeld: 0, repushed: 0, repushFailed: 0, refusals: new Map() };
     /** Count this item against the project that refused it (for the caller's log). */
     const noteRefusal = (project: string, reason: RefusalReason, claimedBy?: string): void => {
       const entry = outcome.refusals.get(project);
@@ -947,15 +966,22 @@ export class SyncReconciler {
       }
     }
 
-    // ── Creates (batch limit: 50) ──
-    const createBatch = diff.toCreate.slice(0, 50);
-    if (createBatch.length > 0) {
+    // ── Creates (batch limit: 50 written) ──
+    // The limit counts creates offered to the store, not candidates looked at: a
+    // fixed slice of the first 50 candidates, all ledgered, used to end every
+    // cycle with nothing written and every later item never reached.
+    if (diff.toCreate.length > 0) {
       const creates: Array<Omit<Task, 'id'>> = [];
-      for (const remote of createBatch) {
+      // One ledger read for every candidate, not one per candidate: on an account
+      // with a thousand ledgered ids this loop now reaches all of them each cycle.
+      const blocked = blockedRemoteIds(pluginId, diff.toCreate.map((r) => r.remoteId));
+      for (const remote of diff.toCreate) {
+        if (creates.length >= 50) break;
         // Ledger gate: a remote id some local task once owned (released via a
         // source migration, or deleted) never mints a new local task — that
         // re-import is exactly how sync forked tasks into copies.
-        if (isRemoteIdBlocked(pluginId, remote.remoteId)) {
+        if (blocked.has(remote.remoteId)) {
+          outcome.ledgered++;
           log.web.debug('sync-reconciler: skipped ledgered remote id', {
             pluginId, remoteId: remote.remoteId, title: remote.title,
           });
@@ -1123,7 +1149,33 @@ export class SyncReconciler {
         idsToDelete.push(task.id);
       }
 
-      if (idsToDelete.length > 0) {
+      if (idsToDelete.length > MASS_REMOVAL_LIMIT) {
+        // A removal is an inference ("the pull did not show it"), and a pull
+        // that missed whole lists reads exactly like the user deleting them. Too
+        // many at once is held: the tasks stay, nothing is ledgered, and a hold
+        // that keeps coming back reaches the human once.
+        outcome.removalsHeld = idsToDelete.length;
+        const held = new Set(idsToDelete);
+        const streak = (this.removalHoldStreaks.get(pluginId) ?? 0) + 1;
+        this.removalHoldStreaks.set(pluginId, streak);
+        const meta = {
+          pluginId,
+          count: idsToDelete.length,
+          limit: MASS_REMOVAL_LIMIT,
+          consecutiveReconciles: streak,
+          titles: diff.toRemove.filter((t) => held.has(t.id)).slice(0, 10).map((t) => t.title),
+        };
+        if (streak === REFUSAL_ESCALATE_TICKS) {
+          // No count in the message: the notification bridge fingerprints it, and
+          // the same standing hold must stay one card.
+          log.web.error(`Task sync kept tasks that ${pluginId} no longer shows`, {
+            ...meta,
+            remedy: `More than ${MASS_REMOVAL_LIMIT} tasks went missing from ${pluginId} at once, so Walnut kept them. While they stay, every removal from ${pluginId} is held too. If you deleted them there, delete them here; if not, they are safe.`,
+          });
+        } else {
+          log.web.warn('sync-reconciler: too many removals at once — kept every task', meta);
+        }
+      } else if (idsToDelete.length > 0) {
         try {
           const { deleted } = await deleteTasksBulk(idsToDelete);
           for (const task of deleted) {
@@ -1145,6 +1197,8 @@ export class SyncReconciler {
         }
       }
     }
+
+    if (outcome.removalsHeld === 0) this.removalHoldStreaks.delete(pluginId);
 
     // ── Re-push completions the remote never received (batch limit: REPUSH_BATCH) ──
     // Through autoPushIfConfigured, the same path a fresh edit takes: success clears

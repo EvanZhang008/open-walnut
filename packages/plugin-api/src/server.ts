@@ -897,6 +897,8 @@ export interface PluginRemoteSyncItem {
   title: string
   remoteUpdatedAt: string
   deleted?: boolean
+  /** Exists remotely but this pull does not import it: its local twin is kept, never removed. */
+  seenOnly?: boolean
   fields: Partial<PluginSyncTask>
 }
 

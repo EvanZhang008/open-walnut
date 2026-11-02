@@ -2621,4 +2621,44 @@ describe('graphRequest retry policy', () => {
     ]);
     expect(sleeps).toEqual([1000]);
   });
+
+  // 2026-10-11: the store was busy for the first 13 lists of one pull, those lists
+  // were left out of the result, and the reconciler removed 1,087 tasks whose items
+  // were still in the account. A list that is not imported still reports its items.
+  it('fullPullAllTasks reports the items of a list it could not import as seenOnly', async () => {
+    mockEnsureProject.mockRejectedValueOnce(new Error('database is locked'));
+    setupGraphTransport([
+      { kind: 'response', body: { value: [
+        { id: 'list-a', displayName: 'Home / Garden' },
+        { id: 'list-b', displayName: 'Work' },
+      ] } },
+      { kind: 'response', body: { value: [makeMsTask({ id: 'a-1', title: 'Busy store one' }), makeMsTask({ id: 'a-2', title: 'Busy store two' })] } },
+      { kind: 'response', body: { value: [makeMsTask({ id: 'b-1', title: 'B one' })] } },
+    ]);
+
+    const pulled = await fullPullAllTasks();
+
+    const byId = new Map(pulled.map((p) => [p.remoteId, p]));
+    expect([...byId.keys()].sort()).toEqual(['a-1', 'a-2', 'b-1']);
+    expect(byId.get('a-1')).toMatchObject({ seenOnly: true, fields: {} });
+    expect(byId.get('a-2')).toMatchObject({ seenOnly: true });
+    expect(byId.get('b-1')?.seenOnly).toBeUndefined();
+    expect(byId.get('b-1')?.fields.project).toBe('Work');
+  });
+
+  it('fullPullAllTasks reports a list routed to no project, and one under a local project, as seenOnly', async () => {
+    fakeRegistry.set('mine', { name: 'Mine', source: 'local', metadata: {} });
+    setupGraphTransport([
+      { kind: 'response', body: { value: [
+        { id: 'list-qs', displayName: 'Passion / Quick Start' },
+        { id: 'list-local', displayName: 'Mine' },
+      ] } },
+      { kind: 'response', body: { value: [makeMsTask({ id: 'qs-1', title: 'Retired list item' })] } },
+      { kind: 'response', body: { value: [makeMsTask({ id: 'local-1', title: 'Same name as a local project' })] } },
+    ]);
+
+    const pulled = await fullPullAllTasks();
+
+    expect(pulled.map((p) => [p.remoteId, p.seenOnly])).toEqual([['qs-1', true], ['local-1', true]]);
+  });
 });

@@ -125,6 +125,25 @@ export function isRemoteIdBlocked(source: string, remoteId: string): boolean {
 }
 
 /**
+ * The ids among `remoteIds` that isRemoteIdBlocked refuses, read in batches of
+ * 500 instead of one statement per id (a full reconcile asks about every create
+ * candidate, a thousand or more on a large account).
+ */
+export function blockedRemoteIds(source: string, remoteIds: string[]): Set<string> {
+  const blocked = new Set<string>();
+  const db = getDb();
+  if (!db || remoteIds.length === 0) return blocked;
+  for (let i = 0; i < remoteIds.length; i += 500) {
+    const chunk = remoteIds.slice(i, i + 500);
+    const rows = db.prepare(
+      `SELECT remote_id FROM task_remote_links WHERE remote_source = ? AND state IN ('released', 'deleted') AND remote_id IN (${chunk.map(() => '?').join(', ')})`,
+    ).all(source, ...chunk) as Array<{ remote_id: string }>;
+    for (const row of rows) blocked.add(row.remote_id);
+  }
+  return blocked;
+}
+
+/**
  * Is this remote id CURRENTLY owned by a live local task?
  *
  * The hole isRemoteIdBlocked left open (2026-09-01 regression): it refuses a

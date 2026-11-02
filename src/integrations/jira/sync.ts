@@ -424,10 +424,12 @@ export async function fullPullAllIssues(): Promise<Array<{
   title: string;
   remoteUpdatedAt: string;
   fields: Partial<Task>;
-}>> {
+}> | null> {
   const config = await getConfig();
   const jiraConfig = getJiraConfig(config);
-  if (!jiraConfig?.base_url) return [];
+  // Nothing was read, which is not "every issue is gone": null makes the
+  // reconciler skip this cycle, where [] would remove every Jira task here.
+  if (!jiraConfig?.base_url) return null;
 
   const client = new JiraClient(jiraConfig);
 
@@ -445,7 +447,9 @@ export async function fullPullAllIssues(): Promise<Array<{
     jqlParts.push(`(${jiraConfig.jql_filter})`);
   }
 
-  const jql = jqlParts.join(' AND ') + ' ORDER BY updated DESC';
+  // A fixed order: offset pages over `updated DESC` shift when an issue is edited
+  // mid-pull, and the issue that slid past a page boundary would read as deleted.
+  const jql = jqlParts.join(' AND ') + ' ORDER BY key ASC';
   const jqlFields = [
     'summary', 'description', 'status', 'priority', 'project', 'issuetype',
     'created', 'updated', 'duedate', 'assignee', 'parent',

@@ -22,6 +22,14 @@ export interface RemoteSyncItem {
   remoteUpdatedAt: string;
   /** True if the remote item was deleted/archived. */
   deleted?: boolean;
+  /**
+   * The item exists remotely, but this pull does not import or update it (its
+   * list was skipped: not ours to import, or unreadable right now). It still
+   * counts as present, so a local task joined to it is never removed as gone.
+   * A pull that leaves an existing item out entirely tells the reconciler it was
+   * deleted (2026-10-11: 1,087 tasks removed when 13 lists were skipped).
+   */
+  seenOnly?: boolean;
   /** Mapped local fields (including ext) — ready to merge into a Task. */
   fields: Partial<Task>;
 }

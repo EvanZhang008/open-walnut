@@ -105,7 +105,7 @@ export default function register(api: PluginApi): void {
         async (taskData) => { const t = await ctx.addTask(taskData as any); return t as any; },
       );
     },
-    async fullPull(): Promise<RemoteSyncItem[]> {
+    async fullPull(): Promise<RemoteSyncItem[] | null> {
       const { fullPullAllIssues } = await import('./sync.js');
       return fullPullAllIssues();
     },

@@ -30,7 +30,7 @@ import {
 import { isRemoteIdBlocked, isRemoteIdClaimedByLiveTask, recordRemoteLink } from '../core/task-remote-links.js';
 import { findProjectTombstoneByRemoteListId, learnProjectTombstoneRemoteIds } from '../core/project-tombstones.js';
 import type { Config } from '../core/types.js';
-import { pluginAuthFailureOf, type PluginAuthFailure, type PluginAuthFailureKind, type PluginConnectionStatus, type PluginSignInPrompt } from '../core/integration-types.js';
+import { pluginAuthFailureOf, type PluginAuthFailure, type PluginAuthFailureKind, type PluginConnectionStatus, type PluginSignInPrompt, type RemoteSyncItem } from '../core/integration-types.js';
 
 // ── Plugin-system helpers ──
 
@@ -1929,15 +1929,19 @@ export async function pullTasks(
  * Full pull for reconciliation — fetch ALL tasks from ALL lists (no delta, no timestamp filter).
  * Returns a flat list of { remoteId, title, remoteUpdatedAt, fields } for three-way diff.
  */
-export async function fullPullAllTasks(): Promise<Array<{
-  remoteId: string;
-  title: string;
-  remoteUpdatedAt: string;
-  fields: Partial<Task>;
-}>> {
+export async function fullPullAllTasks(): Promise<RemoteSyncItem[]> {
   const token = await getAccessToken();
   const lists = await fetchTaskLists(token);
-  const result: Array<{ remoteId: string; title: string; remoteUpdatedAt: string; fields: Partial<Task> }> = [];
+  const result: RemoteSyncItem[] = [];
+  // Every item read is in the result, imported or seenOnly: the reconciler
+  // removes a local task whose item is absent, so leaving one out deletes it.
+  const seenOnly = (msTask: MSTodoTask): RemoteSyncItem => ({
+    remoteId: msTask.id,
+    title: msTask.title,
+    remoteUpdatedAt: msTask.lastModifiedDateTime,
+    seenOnly: true,
+    fields: {},
+  });
 
   // Load deleted MS IDs — skip tasks we intentionally deleted locally
   const deltaState = await readJsonFile<DeltaState>(DELTA_FILE, {
@@ -1967,14 +1971,21 @@ export async function fullPullAllTasks(): Promise<Array<{
     // can't split one project. null = this list is not ours to import.
     if (allTasks.length === 0) continue;
     const listProject = await ensureProjectForList(list.displayName, list.id);
-    if (listProject === null) continue;
+    if (listProject === null) {
+      // Not imported, but still there: every item rides as seenOnly, so a local
+      // task joined to one is kept. Dropping the list from the result told the
+      // reconciler its items were deleted (2026-10-11: the store was busy for 13
+      // lists in one pull, and 1,087 of their tasks were removed here).
+      for (const msTask of allTasks) result.push(seenOnly(msTask));
+      continue;
+    }
 
     for (const msTask of allTasks) {
-      if (deletedMsIds.has(msTask.id)) continue;
+      if (deletedMsIds.has(msTask.id)) { result.push(seenOnly(msTask)); continue; }
       // Same [Moved]-marker gate as the delta path: a marked item is a released
       // identity, not a task. Ledgered here so the reconciler's isRemoteIdBlocked
       // create-gate also refuses it forever after.
-      if (ledgerMovedMarker(msTask, list.id)) continue;
+      if (ledgerMovedMarker(msTask, list.id)) { result.push(seenOnly(msTask)); continue; }
       const fields = mapToLocal(msTask, list.displayName);
       fields.project = listProject;
       // Ensure ext includes list_id for completeness
