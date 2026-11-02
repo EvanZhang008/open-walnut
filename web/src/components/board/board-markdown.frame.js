@@ -39,6 +39,14 @@
   var CODE_RE = /(^|[^`])(`+)(?!`)([\s\S]*?[^`])\2(?!`)/g;
   // [text](url), the url allowing one level of balanced parentheses.
   var LINK_RE = /\[([^\[\]]+)\]\(((?:[^()\s\u0000]|\([^()\s\u0000]*\))+)\)/g;
+  // An absolute path with a file name (`/Users/me/x.mp4`, `~/notes/a.md`) and a letter id
+  // (`lt-…`, the inbox store's shape) open in the app: the core's click handler sends them up.
+  var PATH_SRC = '(?:~/|/)(?:[\\w.@+~-]+/)+[\\w.@+~-]*[\\w@+~-]\\.[A-Za-z0-9]{1,8}';
+  var PATH_RE = new RegExp('(^|[\\s(\\[\'"\u201c\uff08\uff1a:,\u3001])(' + PATH_SRC + ')(?![\\w/-])', 'g');
+  var WHOLE_PATH_RE = new RegExp('^' + PATH_SRC + '$');
+  var LETTER_SRC = 'lt-[0-9a-z]{1,12}-[0-9a-z]{4,12}';
+  var LETTER_RE = new RegExp('(^|[^\\w./-])(' + LETTER_SRC + ')(?![\\w-])', 'g');
+  var WHOLE_LETTER_RE = new RegExp('^' + LETTER_SRC + '$');
   // `_` emphasis only at word boundaries (snake_case stays literal); non-ASCII counts as a word character.
   var W = 'A-Za-z0-9_\\u00C0-\\uFFFF';
   var BOLD_STAR_RE = /\*\*(?=[^\s*])([\s\S]*?[^\s*])\*\*/g;
@@ -331,6 +339,13 @@
         .replace(EM_UND_RE, wrapAfter('em'));
     }
 
+    function fileLink(path, inner) {
+      return '<a class="wn-file" role="link" tabindex="0" data-wn-path="' + esc(path) + '" title="Open">' + inner + '</a>';
+    }
+    function letterLink(id, inner) {
+      return '<a class="wn-letter" role="link" tabindex="0" data-wn-letter="' + esc(id) + '" title="Open this letter">' + inner + '</a>';
+    }
+
     var s = absorbTaskTitles(raw).replace(CODE_RE, function (m, pre, ticks, body) {
       var code = body.replace(/\n/g, ' ');
       if (code.length > 2 && code.charAt(0) === ' ' && code.charAt(code.length - 1) === ' ' && /[^ ]/.test(code)) {
@@ -338,6 +353,9 @@
       }
       // A code span holding only a task's id is that task cited in backticks.
       if (taskRef(code.trim())) return pre + hold(taskChip(code.trim()));
+      // A code span holding only a path or a letter id opens it, still drawn as code.
+      if (WHOLE_PATH_RE.test(code.trim())) return pre + hold(fileLink(code.trim(), '<code>' + esc(code.trim()) + '</code>'));
+      if (WHOLE_LETTER_RE.test(code.trim())) return pre + hold(letterLink(code.trim(), '<code>' + esc(code.trim()) + '</code>'));
       return pre + hold('<code>' + esc(code) + '</code>');
     });
     // A <task-ref/> (what sessions are told to write) or a `[id|title]` outside code: the chip,
@@ -356,6 +374,12 @@
     s = s.replace(URL_RE, function (m) {
       var url = m.replace(URL_TRAIL_RE, '');
       return hold('<a class="wn-link" href="' + esc(url) + '">' + esc(url) + '</a>') + m.slice(url.length);
+    });
+    s = s.replace(PATH_RE, function (m, pre, path) {
+      return pre + hold(fileLink(path, esc(path)));
+    });
+    s = s.replace(LETTER_RE, function (m, pre, id) {
+      return pre + hold(letterLink(id, esc(id)));
     });
     s = s.replace(new RegExp(TASK_TOKEN_SRC, 'g'), function (m, pre, token) {
       return taskRef(token) ? pre + hold(taskChip(token)) : m;

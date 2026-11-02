@@ -578,6 +578,24 @@
     }
   });
 
+  // ── A path or a letter in a message (board-markdown.frame.js) opens in the app, a real click only. ──
+  function openInApp(e) {
+    var a = e.target && e.target.closest ? e.target.closest('a.wn-file[data-wn-path], a.wn-letter[data-wn-letter]') : null;
+    if (!a) return;
+    e.preventDefault();
+    if (a.classList.contains('wn-file')) send({ t: 'wn-board:open-file', path: a.getAttribute('data-wn-path') });
+    else send({ t: 'wn-board:open-letter', id: a.getAttribute('data-wn-letter') });
+  }
+  document.addEventListener('click', function (e) {
+    if (e.defaultPrevented || e.button !== 0 || !trusted(e)) return;
+    openInApp(e);
+  });
+  // The links have no href (a `#` would jump the frame), so Enter opens them too.
+  document.addEventListener('keydown', function (e) {
+    if (e.defaultPrevented || e.key !== 'Enter' || !trusted(e)) return;
+    openInApp(e);
+  });
+
   // ── Links: a sandboxed frame cannot open a tab, and a same-page `#` link in a
   // srcdoc document would navigate the frame to the app's own URL. ──
   document.addEventListener('click', function (e) {

@@ -99,6 +99,8 @@ walnut-thread, walnut-mark, walnut-strip, walnut-check, walnut-choice { display:
 .wn-del.wn-armed { opacity: 1; color: #fff; background: var(--wn-need, #d93025); font-weight: 600; }
 .wn-del.wn-deleting { cursor: default; }
 .wn-link { color: var(--wn-link, #2f6feb); }
+.wn-file, .wn-letter { color: var(--wn-link, #2f6feb); cursor: pointer; border-bottom: 1px dashed currentColor; text-decoration: none; }
+.wn-msg[data-author="user"] .wn-text .wn-file, .wn-msg[data-author="user"] .wn-text .wn-letter { color: inherit; }
 .wn-msg.wn-pending .wn-text { opacity: .6; }
 .wn-msg.wn-failed .wn-text { box-shadow: 0 0 0 1.5px var(--wn-need, #d93025); }
 .wn-msg.wn-failed .wn-msg-meta, .wn-saved.wn-failed, .wn-check-hint.wn-failed,

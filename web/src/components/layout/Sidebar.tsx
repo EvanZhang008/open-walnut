@@ -17,6 +17,7 @@ import type { RegisteredApp } from '@/apps/registry';
 import { useNotifications, attentionHeld, quietLabel, railBadge, railCount, railDot } from '@/contexts/notifications';
 import '@/styles/notification-quiet.css';
 import { NotificationPanel } from '@/components/common/NotificationPanel';
+import { OPEN_CENTER_EVENT } from '@/utils/open-anywhere';
 import { PluginBoundary } from '@/components/common/PluginBoundary';
 import { SidebarStatusItems } from './SidebarStatusItems';
 import { setUpdateNoticeDock } from '@/components/common/update-notice-dock';
@@ -157,13 +158,13 @@ export function Sidebar({
     window.addEventListener('main:todo-visible', handleTodoVisible);
     window.addEventListener('main:calendar-visible', handleCalendarVisible);
     window.addEventListener('main:scratchpad-visible', handleScratchpadVisible);
-    window.addEventListener('notification:open-center', handleOpenCenter);
+    window.addEventListener(OPEN_CENTER_EVENT, handleOpenCenter);
     return () => {
       window.removeEventListener('main:chat-visible', handleChatVisible);
       window.removeEventListener('main:todo-visible', handleTodoVisible);
       window.removeEventListener('main:calendar-visible', handleCalendarVisible);
       window.removeEventListener('main:scratchpad-visible', handleScratchpadVisible);
-      window.removeEventListener('notification:open-center', handleOpenCenter);
+      window.removeEventListener(OPEN_CENTER_EVENT, handleOpenCenter);
     };
   }, []);
 

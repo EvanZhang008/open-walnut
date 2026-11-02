@@ -331,3 +331,19 @@ describe('a title written beside a mention is dropped (the cases the web and the
     })
   }
 })
+
+describe('paths and letters in a message open in the app', () => {
+  // 2026-11-02: proof paths in board posts were plain text (web/src/utils/open-anywhere.ts).
+  const VIDEO = '/Users/me/.local/state/tasks/abc/evidence/demo.mp4'
+  it('an absolute path with a file name, bare or in backticks, is a wn-file link; a dir or a URL is not', () => {
+    expect(md(`Video: ${VIDEO}.`)).toContain(`<a class="wn-file" role="link" tabindex="0" data-wn-path="${VIDEO}" title="Open">${VIDEO}</a>.`)
+    expect(md(`\`${VIDEO}\``)).toContain(`data-wn-path="${VIDEO}" title="Open"><code>${VIDEO}</code></a>`)
+    expect(md('~/notes/plan.md')).toContain('data-wn-path="~/notes/plan.md"')
+    expect(md('see /usr/local/bin/')).not.toContain('wn-file')
+    expect(md('https://example.com/a/b.png')).not.toContain('wn-file')
+  })
+  it('a letter id is a wn-letter link', () => {
+    expect(md('in letter lt-mvx2abcd-9f3k')).toContain('<a class="wn-letter" role="link" tabindex="0" data-wn-letter="lt-mvx2abcd-9f3k" title="Open this letter">lt-mvx2abcd-9f3k</a>')
+    expect(md('salt-lt-abc-defg')).not.toContain('wn-letter')
+  })
+})

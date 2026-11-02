@@ -64,7 +64,7 @@ function hasCandidate(text: string): boolean {
 
 /** Elements whose text must not grow an anchor: interactive controls (an
  *  anchor inside is invalid), raw-text elements, and foreign content. */
-const NO_LINK_ELEMENTS = new Set([
+export const NO_LINK_ELEMENTS = new Set([
   'button', 'textarea', 'select', 'option', 'script', 'style', 'svg', 'math',
   'title', 'noscript', 'template', 'iframe', 'object', 'label',
 ]);
@@ -72,13 +72,13 @@ const NO_LINK_ELEMENTS = new Set([
 /** A tag, quote-aware: a `>` inside an attribute value (`title="a > b"`) does
  *  not end it, or the rest of the value would be read as text and linked. */
 const TAG_RE = /<(?:[^>"']|"[^"]*"|'[^']*')*>/g;
-const TAG_NAME_RE = /^<\/?([a-zA-Z][\w-]*)/;
+export const TAG_NAME_RE = /^<\/?([a-zA-Z][\w-]*)/;
 /** Open `<a …>` that is not self-closing. */
 const A_OPEN_RE = /<a(?:>|\s[^>]*[^/>]>)/gi;
 
-type Part = { tag: boolean; s: string; at: number };
+export type Part = { tag: boolean; s: string; at: number };
 
-function splitHtml(html: string): Part[] {
+export function splitHtml(html: string): Part[] {
   const parts: Part[] = [];
   let last = 0;
   TAG_RE.lastIndex = 0;
@@ -98,7 +98,7 @@ function splitHtml(html: string): Part[] {
  * Pairs, not a running open/close count, so a stray `</a>` or a self-closing
  * `<a/>` in model HTML cannot switch linking off for the rest of the message.
  */
-function anchorRanges(html: string): [number, number][] {
+export function anchorRanges(html: string): [number, number][] {
   const ranges: [number, number][] = [];
   const lower = html.toLowerCase();
   A_OPEN_RE.lastIndex = 0;

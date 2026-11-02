@@ -1,0 +1,12 @@
+/* A letter id in agent text opens its letter (utils/letter-links.ts): drawn like a file link. */
+a.letter-link {
+  color: var(--accent);
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+  border-bottom: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent);
+}
+a.letter-link:hover {
+  border-bottom-style: solid;
+  border-bottom-color: var(--accent);
+}

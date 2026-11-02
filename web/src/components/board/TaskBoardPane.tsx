@@ -61,6 +61,7 @@ import { useTeamOverview } from './useTeamOverview';
 import { keepIfSame, NO_PROJECTS, projectsOfTeam, type ProjectOf } from './board-view-projects';
 import { openExternalLink, openInDefaultBrowser } from '@/plugins/link-handlers';
 import { showLinkMenu } from '@/plugins/LinkCaptureHost';
+import { openFileAnywhere, openLetterAnywhere } from '@/utils/open-anywhere';
 import '@/styles/task-board.css';
 
 export interface TaskBoardPaneProps {
@@ -382,6 +383,12 @@ export function TaskBoardPane({ taskId, sessionId, barRightSlot, onOpenTask, onL
         if (next) { writeSeen(ownerId, next); setSeen(next); }
         return;
       }
+      case 'wn-board:open-file':
+        if (str('path').startsWith('/') || str('path').startsWith('~/')) openFileAnywhere({ path: str('path') });
+        return;
+      case 'wn-board:open-letter':
+        if (/^lt-[0-9a-z]{1,12}-[0-9a-z]{4,12}$/.test(str('id'))) openLetterAnywhere(str('id'));
+        return;
       case 'wn-board:open-link': {
         const href = safeExternalHref(d.href);
         if (!href) return;

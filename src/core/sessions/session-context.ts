@@ -93,7 +93,7 @@
  * in the manual, which sessions pull live with `walnut guide`.
  */
 
-import { THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../org/thread-rules.js'
+import { PROOF_IN_PLACE_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from '../org/thread-rules.js'
 import { TEAM_CHARTER } from '../team-charter.js'
 import { WORK_PLACE_RULE, taskDirLine } from '../work-place.js'
 import { PRIVATE_TASK_RULE } from '../private-tasks/rule.js'
@@ -211,7 +211,7 @@ export const THREADS_LINE =
   + 'thread_update: a short title, what he wants, its state (working: you are on it, needs: waiting on him, answered, pending: nothing new for him), the summary (reply) '
   + 'and the tasks you handed it to. Several asks about the same thing are one thread: put a new one under the open thread '
   + 'it belongs to (merge_into). Walnut puts your chat reply under each of his messages by itself. He closes a thread with Acknowledge; a new ask about a closed subject is a new thread. '
-  + THREADS_SUMMARY_RULE + ' ' + THREADS_PENDING_RULE + ' ' + THREADS_KNOWN_RULE + ' ' + THREADS_OPEN_RULE + '\n\n'
+  + THREADS_SUMMARY_RULE + ' ' + PROOF_IN_PLACE_RULE + ' ' + THREADS_PENDING_RULE + ' ' + THREADS_KNOWN_RULE + ' ' + THREADS_OPEN_RULE + '\n\n'
 /** The tasks a reply is about, as live pills under it (core/org/message-about.ts; 2026-10-31, the user). */
 export const MESSAGE_ABOUT_LINE =
   'End each reply the user reads with one line of its own naming the tasks it is about: '
@@ -283,7 +283,8 @@ export const AWAY_INBOX_LINE =
   + 'human_inbox_send instead of waiting here, a decision as action_required with its options so one tap answers it. '
   + 'Walnut adds your letters of that absence to one thread and his phone buzzes once; anything else stays in this '
   + 'chat and is never a letter. When he asks for a report at a time ("a report tomorrow morning"), schedule it with '
-  + 'org_report at:<time>; Walnut sends it then: what needs him with the one-tap answers, what finished, what moved.\n\n'
+  + 'org_report at:<time>; Walnut sends it then: what needs him with the one-tap answers, what finished, what moved. '
+  + 'A letter of that absence never takes the proof out of the chat: ' + PROOF_IN_PLACE_RULE + '\n\n'
 
 /**
  * 2d. The org above the work (src/core/org/): the main agent talks to one

@@ -588,6 +588,13 @@ settles the open ones for you. Answering a letter in the user's place
 (`human_inbox_answer`) needs their exact words in `user_words`, and words that
 name any step that is hard to undo or leaves Walnut.
 
+**The proof stays where the user reads the result.** A result's video, screenshot
+or link (each by absolute path or URL) goes in your chat reply, your reply to the
+task that asked, and a thread's summary, never only in a letter: a path there opens
+on click (a video plays, an image shows). A letter may carry the proof too, never
+instead. When you refer to a letter, write its id (`lt-...`) or
+`[words](letter:lt-...)`: it renders as a link that opens that letter.
+
 | `type` | Send when |
 |---|---|
 | `action_required` | you are blocked on a human decision; put the options in `actions` |

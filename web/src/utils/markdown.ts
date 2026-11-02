@@ -20,6 +20,7 @@ import { absorbWrittenTitles, pillNames, type WrittenMention } from './task-titl
 // contract (no fs, no async, no imports) and is bundled into the browser here.
 import { hasTraversalSegment, parsePathDestination, parsePathRef, type ParsedRef } from '../../../src/providers/path-ref-parse';
 import { linkBareTaskIds, type BareTaskIdMode, type BareTaskIdRenderer } from './bare-task-ids';
+import { linkLetterIds } from './letter-links';
 import { ensureReadableText, withReadableInk } from './html-contrast';
 import { taskPath } from './task-path';
 import '@/styles/rich-ink.css';
@@ -352,6 +353,9 @@ export function renderImageBlock(imgPath: string, captionText: string): string {
  */
 let fileLinkRenderCtx: { cwd?: string } | null = null;
 
+/** `letter:<letter id>` as a markdown link destination. */
+const LETTER_HREF_RE = /^letter:(lt-[0-9a-z]{1,12}-[0-9a-z]{4,12})$/;
+
 marked.use({
   renderer: {
     // Override codespan renderer: detect image paths inside backtick code spans.
@@ -382,6 +386,13 @@ marked.use({
           const text = this.parser.parseInline(tokens).replace(/<[^>]*>/g, '');
           const caption = (text && text !== href) ? text : href;
           return renderImageBlock(apiPath, caption);
+        }
+        // `[the letter](letter:lt-…)`: a link that opens that letter (utils/letter-links.ts).
+        const letter = fileLinkRenderCtx ? LETTER_HREF_RE.exec(href) : null;
+        if (letter) {
+          let label = this.parser.parseInline(tokens).replace(/<\/?a\b[^>]*>/gi, '');
+          if (!label.trim()) label = letter[1]!;
+          return `<a class="letter-link" data-letter-id="${letter[1]}" href="#" title="Open this letter">${label}</a>`;
         }
         // `href` here is the destination as the author wrote it (marked cleans
         // and percent-encodes only inside its DEFAULT renderer), so the path is
@@ -781,7 +792,7 @@ export function entityRefsToMarkdownLinks(text: string): string {
 }
 
 /** DOMPurify attributes preserved for entity ref, image, and file link rendering */
-const SANITIZE_ATTRS = ['data-task-id', 'data-session-id', 'data-project', 'data-source', 'data-source-name', 'data-lightbox-src', 'data-file-path', 'data-file-line', 'data-file-end-line', 'data-rel-path', 'data-cwd', 'loading', 'target', 'rel'];
+const SANITIZE_ATTRS = ['data-letter-id', 'data-task-id', 'data-session-id', 'data-project', 'data-source', 'data-source-name', 'data-lightbox-src', 'data-file-path', 'data-file-line', 'data-file-end-line', 'data-rel-path', 'data-cwd', 'loading', 'target', 'rel'];
 
 /**
  * True for an http(s) href that points OUTSIDE the console's own origin.
@@ -1709,6 +1720,8 @@ export function renderMarkdownWithRefs(
     let parsed = typeof raw === 'string' ? raw : '';
     parsed = linkifyPathsInCode(parsed, sessionCwd);
     if (taskIds !== 'off') parsed = linkBareTaskIds(parsed, bareTaskIdPills, taskIds);
+    // A letter id opens its letter (utils/letter-links.ts); a file's own bytes stay as written.
+    if (taskIds !== 'off') parsed = linkLetterIds(parsed);
     // Models write raw HTML in replies now and we render it natively, so this
     // sanitize call is the boundary for model-authored markup. A `<form>` is the
     // one interactive element that can leave the page: submitting navigates the

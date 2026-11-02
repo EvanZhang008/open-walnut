@@ -54,3 +54,16 @@ export const THREADS_SUMMARY_RULE =
   + 'background; never a log of the thread, never one bare line. Keep the title following the subject as it moves. When news '
   + 'about a thread reaches you (a team\'s notice, a mail, a trigger), update that thread\'s summary and title (thread_update); '
   + 'never open another thread or add messages for it.';
+
+/**
+ * The proof of a result lives where he reads the result (2026-11-02, the user, after a VP wrote
+ * thread summaries as "video in the letter": "bro why no viedo or picture howcan i verify ... the
+ * link shoudl be here, why it is in the letter ... the way to verify shoudl be here, or u cna give
+ * me a link to the letter"). A path in a card, a reply or a letter opens on click, and a letter id
+ * renders as a link that opens the letter (web/src/utils/open-anywhere.ts, letter-links.ts).
+ */
+export const PROOF_IN_PLACE_RULE =
+  'The proof of a result (its video, screenshot or link, each by absolute path or URL) goes where he reads the result: in '
+  + 'the thread\'s summary and in your chat reply itself, never only in a letter. A path there opens on click (a video plays, '
+  + 'an image shows). A letter may carry the proof too, never instead. When a thread, a reply or a post refers to a letter, '
+  + 'write the letter\'s id (lt-...) or [words](letter:lt-...): it renders as a link that opens that letter.';

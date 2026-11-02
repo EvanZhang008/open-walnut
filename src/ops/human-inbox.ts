@@ -31,6 +31,7 @@ import { inboxItemsSchema } from '../core/human-inbox/item-schema.js'
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js'
 import { USER_KINDS, USER_KIND_PARAM, USER_KIND_WHY_PARAM } from '../core/org/user-kind.js'
 import { withOutcome } from './outcome.js'
+import { PROOF_IN_PLACE_RULE } from '../core/org/thread-rules.js'
 
 /** The sender's open decision letter asking the same thing, from the send's answer (duplicate-letter.ts). */
 function openAskOf(body: unknown): { letterId: string; subject: string; sentAt: string; hint: string } | undefined {
@@ -69,6 +70,7 @@ defineOp({
     + 'user_kind_why (409 user_kind without them); undoing what an agent broke and choosing between reasonable options are never the user\'s. '
     + 'Writing standard: one phone screen, background in 1-2 sentences, then the point; '
     + 'self-contained (never "see the session"); link long artifacts by path instead of pasting them. '
+    + 'A letter never holds the only copy of a result\'s proof: ' + PROOF_IN_PLACE_RULE + ' '
     + 'Body is markdown (usual choice) or self-contained html with inline styles, exactly one of the two. '
     + 'type=action_required means you need a decision and REQUIRES `actions`, at least one: the human '
     + 'taps one option and that choice is delivered back into this session. Without them the letter is '
