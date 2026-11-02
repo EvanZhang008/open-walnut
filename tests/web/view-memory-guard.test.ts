@@ -66,7 +66,6 @@ const PASSING: Record<string, string> = {
   'components/common/NotificationPanel.tsx#showArchived': 'archived letters looked up in one opening of the panel',
   'components/common/PageFind.tsx#scope': 'the find bar, a passing search',
   'components/notes/MarkdownEditorPanel.tsx#rawMode': 'source editing of the note open now; its flush path assumes a note opens rendered',
-  'components/settings/PluginJobsControls.tsx#view': 'one job\'s log, an overlay',
   'components/settings/sections/ReposSection.tsx#showForm': 'the add-repository form, a dialog',
   'components/settings/sections/SttModelRows.tsx#showAll': 'the list expanded past its first rows for one look',
   'components/settings/sections/TagsSection.tsx#filter': 'a typed search',
@@ -99,7 +98,6 @@ const PASSING: Record<string, string> = {
   'components/chat/AskWalnutDrawer.tsx#agentsOpen': 'the agent list inside the drawer, a popover',
   'components/chat/AskWalnutSlot.tsx#drawerOpen': 'the asks drawer, an overlay',
   'components/chat/ChatMessage.tsx#manualOpen': 'one message folded or unfolded by hand',
-  'components/chat/MentionPalette.tsx#selectedKey': 'the keyboard cursor in the mention palette',
   'components/commands/CommandCard.tsx#expanded': 'one card expanded for one look',
   'components/common/DocCommentsLayer.tsx#listOpen': 'the comments list, a popover',
   'components/common/FileContentView.tsx#historyOpen': 'a file\'s history, a popover',
@@ -132,7 +130,6 @@ const PASSING: Record<string, string> = {
   'components/sessions/SessionCommitRepo.tsx#othersOpen': 'the other repositories in one commit form',
   'components/sessions/SessionDiffView.tsx#expanded': 'hunks unfolded; the file shown is kept (loadDiffMemory)',
   'components/sessions/SessionDiffView.tsx#searchOpen': 'the find bar, a passing search',
-  'components/sessions/SessionFileExplorer.tsx#expanded': 'restored from the explorer\'s own memory on load (file-view-state.ts)',
   'components/sessions/SessionFileExplorer.tsx#openRoots': 'restored from the explorer\'s own memory on load (file-view-state.ts)',
   'components/sessions/SessionFileExplorer.tsx#selectedFile': 'restored from the explorer\'s own memory on load (file-view-state.ts)',
   'components/sessions/SessionPanel.tsx#cronDetailOpen': 'a job\'s detail, a dialog',
@@ -180,7 +177,6 @@ const PASSING: Record<string, string> = {
   'pages/SettingsPage.tsx#openSeq': 'a request counter, not a choice',
   'apps/mail/MailCorrectPopover.tsx#step': 'the step of one correction in a popover',
   'components/common/FileContentView.tsx#fullscreen': 'one preview blown up over its own pane, an overlay of the file open now; the panel around it keeps its full screen (fullscreen-owner.ts)',
-  'components/inbox/ItemTaskSelector.tsx#page': 'paging in a picker',
   'components/notes/slash-commands/SlashCommandPortal.tsx#subPanel': 'a level of the slash menu',
   'components/org/OrgChartSheet.tsx#panel': 'a panel inside the org chart sheet, itself passing',
   'components/sessions/SessionRewindDialog.tsx#guardStep': 'a step of the rewind dialog',
@@ -190,7 +186,6 @@ const PASSING: Record<string, string> = {
   'pages/OrgPage.tsx#chartOpen': 'the org chart, a sheet over the page with a close of its own, opened on one node',
   'pages/MainPage.tsx#triagePanelOpen': 'one triage opened for one task (triageTaskId), a passing panel',
   'pages/TaskDetailPage.tsx#activeSessionId': 'follows the task\'s current session',
-  'hooks/useEngineSettings.ts#view': 'the settings the engine sent, not a choice',
   'hooks/useThreadStack.ts#drawerMode': 'the question drawer, an overlay (per tab by spec C69)',
   'hooks/useThreadStack.ts#drawerFilter': 'the question drawer, an overlay (per tab by spec C69)',
   'hooks/useThreadStack.ts#showHidden': 'hidden questions in the drawer, an overlay (per tab by spec C69)',
@@ -288,6 +283,8 @@ describe('every page keeps its view choices (utils/view-memory.ts)', () => {
     // A draft-named field that is no typed draft, by file#name, and why.
     const notDrafts: Record<string, string> = {
       'examples/plugins/walnut-demo/src/web/views-section.tsx#sessionDraft': 'a session id typed into a one-line field before Open: a form, not text being written',
+      'examples/plugins/walnut-demo/src/web/server-section.tsx#probeUrl': 'a URL to try one request with, prefilled: a form field, not text being written',
+      'plugin-store/walnut-rhythm/src/web/music-card.tsx#link': 'a playlist link pasted and added at once: a form field, not text being written',
     };
     const off = pluginSources().flatMap((f) => draftsOffDevice(f.src).map((d) => `${f.rel}#${d.name}`));
     expect(off.filter((k) => !(k in notDrafts)), 'keep a draft with walnut.ui.useDraft(name, { id }), or list it in notDrafts with why').toEqual([]);

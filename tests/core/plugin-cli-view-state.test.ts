@@ -95,6 +95,61 @@ describe('walnut-plugin validate: a typed draft goes to walnut.ui.useDraft', () 
     expect(drafts.map((w) => w.split(' ')[0])).toEqual(['src/web.tsx:3', 'src/web.tsx:4', 'src/web.tsx:9'])
     expect(drafts[0]).toMatch(/keeps the draft "draft" only in useState/)
     expect(drafts[1]).toMatch(/keeps the draft "codeDraft" in useView, which writes it into the synced settings/)
-    expect(drafts[2]).toMatch(/keeps a draft in its own localStorage key "acme-draft:/)
+    expect(drafts[2]).toMatch(/keeps a draft in its own localStorage key `acme-draft:/)
   })
 })
+
+describe('walnut-plugin validate: judged by what the state holds and how it is set', () => {
+  const PAGE = [
+    "import { useEffect, useState } from 'react'",
+    'export function Stats() {',
+    '  const [view, setView] = useState(null)',
+    "  useEffect(() => { walnut.api.get('/stats').then(setView) }, [])",
+    '  const [page, setPage] = useState(null)',
+    '  async function load() {',
+    "    const res = await fetch('/rounds')",
+    '    const data = await res.json()',
+    '    setPage(data)',
+    '  }',
+    '  const [openError, setOpenError] = useState(null)',
+    '  async function open() {',
+    '    try { await walnut.api.post(\'/open\') } catch (err) { setOpenError(String(err)) }',
+    '  }',
+    "  const [lesson, setLesson] = useState('')",
+    "  const [code, setCode] = useState('')",
+    "  const [query, setQuery] = useState('')",
+    "  const [tab, setTab] = useState('topics')",
+    '  const [showAll, setShowAll] = useState(false)',
+    "  const PREFIX = 'acme-draft:'",
+    '  const keyOf = (id) => PREFIX + id',
+    '  const save = (id, text) => localStorage.setItem(keyOf(id), text)',
+    "  localStorage.setItem('acme-last-' + tab, lesson)",
+    "  localStorage.setItem('acme-theme', 'dark')",
+    '  return (<div>',
+    '    <textarea value={lesson} onChange={(e) => setLesson(e.target.value)} />',
+    '    <Editor value={code} onChange={setCode} />',
+    '    <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} />',
+    '    <select value={tab} onChange={(e) => setTab(e.target.value)}><option>topics</option></select>',
+    '    <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} />',
+    '    <button onClick={() => setView(null)}>Reset</button>',
+    '  </div>)',
+    '}',
+  ].join('\n')
+
+  it('a state filled from loaded data or set in a catch is no view choice; a tab and a checkbox still are', async () => {
+    const root = await plugin({ 'src/web.tsx': PAGE })
+    const views = (await validatePlugin(root)).warnings.filter((w) => w.includes('walnut.ui.useView(\''))
+    expect(views.map((w) => /keeps "(\w+)"/.exec(w)?.[1])).toEqual(['tab', 'showAll'])
+  })
+
+  it('a draft is what the user types, whatever its name; a search is not; a localStorage key that says draft, or holds typed text, is named', async () => {
+    const root = await plugin({ 'src/web.tsx': PAGE })
+    const drafts = (await validatePlugin(root)).warnings.filter((w) => w.includes('walnut.ui.useDraft'))
+    expect(drafts.map((w) => w.split(' ')[0])).toEqual(['src/web.tsx:15', 'src/web.tsx:16', 'src/web.tsx:22', 'src/web.tsx:23'])
+    expect(drafts[0]).toMatch(/keeps the draft "lesson" only in useState/)
+    expect(drafts[1]).toMatch(/keeps the draft "code" only in useState/)
+    expect(drafts[2]).toMatch(/its own localStorage key keyOf\(id\),/)
+    expect(drafts[3]).toMatch(/its own localStorage key 'acme-last-' \+ tab,/)
+  })
+})
+

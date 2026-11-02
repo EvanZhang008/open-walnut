@@ -193,7 +193,7 @@ const VIEW_WARNINGS_MAX = 20
 const DRAFT_WHY: Record<DraftHome, (name: string) => string> = {
   useState: (name) => `keeps the draft "${name}" only in useState, so it is lost on a reload`,
   useView: (name) => `keeps the draft "${name}" in useView, which writes it into the synced settings as the user types, one value per name for every device`,
-  localStorage: (name) => `keeps a draft in its own localStorage key "${name}", outside what Walnut keeps`,
+  localStorage: (name) => `keeps a draft in its own localStorage key ${name}, outside what Walnut keeps`,
 }
 
 /**
