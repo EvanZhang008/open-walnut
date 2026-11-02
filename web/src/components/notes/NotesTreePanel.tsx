@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect, useLayoutEffect, useMemo, mem
 import { searchNotesHybrid, saveNoteContent, revealNote } from '@/api/notes-v2';
 import type { NoteTreeNode, SearchResult, SearchFolderGroup } from '@/api/notes-v2';
 import { noteHitLabel } from '../../../../src/core/note-hit-label';
+import { isImeKey } from '@/hooks/usePanelKeyRouter';
 import { NotesBookmarksGroup } from './NotesBookmarksGroup';
 import { NotesRecentGroup, RECENT_GROUP_KEY } from './NotesRecentGroup';
 import { HighlightedText, HighlightedTitle } from './HighlightedText';
@@ -347,17 +348,22 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   // The hybrid upgrade of the same query leaves the position alone.
   const toppedSeqRef = useRef(0);
   const topPendingRef = useRef(false);
-  const [activeHit, setActiveHit] = useState(-1);
+  // The hit the arrow keys are on, by path: the hybrid answer may reorder or
+  // shorten the list, and an index would then point at another note or past the end.
+  const [activeHitPath, setActiveHitPath] = useState<string | null>(null);
+  // Enter pressed before the typed query's first answer: opens its first hit when it lands.
+  const enterPendingRef = useRef(false);
   const landResults = useCallback((seq: number, results: SearchResult[]) => {
     if (toppedSeqRef.current !== seq) {
       toppedSeqRef.current = seq;
       topPendingRef.current = true;
-      setActiveHit(-1);
+      setActiveHitPath(null);
     }
     setSearchResults(results);
   }, []);
   const handleSearchChange = useCallback((value: string) => {
     setSearchQuery(value);
+    enterPendingRef.current = false;
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
     searchAbortRef.current?.abort();
     searchAbortRef.current = null;
@@ -420,9 +426,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   // to "where do these notes live?". Shared by every folder header in the
   // search results.
   const revealFolderInTree = useCallback((folderPath: string) => {
-    setSearchQuery('');
-    setSearchResults(null);
-    setSearchFolders([]);
+    handleSearchChange(''); // also drops an answer still on its way
     setExpandedFolders(prev => {
       const next = new Set(prev);
       for (const p of ancestorFolderPaths(folderPath)) next.add(p);
@@ -434,7 +438,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
         ?.querySelector(`[data-node-path="${CSS.escape(folderPath)}"]`)
         ?.scrollIntoView({ block: 'nearest' });
     }, 60);
-  }, []);
+  }, [handleSearchChange]);
 
   // ── Search results grouped by FOLDER, rank-preserving (2026-08-27) ──
   // The flat ranked list reduced the vault's structure to a gray per-row path
@@ -485,6 +489,9 @@ export const NotesTreePanel = memo(function NotesTreePanel({
   }, [onPreviewAttachment, onSelect, searchQuery, handleSearchChange]);
 
   const handleSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    // A key that ends an IME composition (Enter picking a pinyin candidate, Esc
+    // cancelling one) belongs to the composition, never to the search.
+    if (isImeKey(e.nativeEvent)) return;
     if (e.key === 'Escape') {
       if (!searchQuery) return;
       // Consumed here: the page's own Escape handlers must not also fire.
@@ -493,18 +500,33 @@ export const NotesTreePanel = memo(function NotesTreePanel({
       handleSearchChange('');
       return;
     }
-    if (!searchHits.length) return;
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    // The list on screen until the typed query's first answer lands is the
+    // previous query's: keys act on the list of the query in the box only.
+    const listIsCurrent = toppedSeqRef.current === searchSeqRef.current;
+    if (e.key === 'Enter') {
+      if (!searchQuery.trim()) return;
       e.preventDefault();
-      const step = e.key === 'ArrowDown' ? 1 : -1;
-      const next = Math.max(0, Math.min(searchHits.length - 1, activeHit + step));
-      setActiveHit(next);
-      bodyRef.current?.querySelector(`[data-search-idx="${next}"]`)?.scrollIntoView({ block: 'nearest' });
-    } else if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-      e.preventDefault();
-      openHit(searchHits[Math.max(0, activeHit)], true);
+      if (!listIsCurrent) { enterPendingRef.current = true; return; }
+      const hit = searchHits.find((h) => h.path === activeHitPath) ?? searchHits[0];
+      if (hit) openHit(hit, true);
+      return;
     }
-  }, [searchQuery, searchHits, activeHit, openHit, handleSearchChange]);
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && listIsCurrent && searchHits.length) {
+      e.preventDefault();
+      const cur = searchHits.findIndex((h) => h.path === activeHitPath);
+      const next = cur === -1
+        ? (e.key === 'ArrowDown' ? 0 : searchHits.length - 1)
+        : Math.max(0, Math.min(searchHits.length - 1, cur + (e.key === 'ArrowDown' ? 1 : -1)));
+      setActiveHitPath(searchHits[next].path);
+      bodyRef.current?.querySelector(`[data-search-idx="${next}"]`)?.scrollIntoView({ block: 'nearest' });
+    }
+  }, [searchQuery, searchHits, activeHitPath, openHit, handleSearchChange]);
+
+  useEffect(() => {
+    if (!enterPendingRef.current || toppedSeqRef.current !== searchSeqRef.current) return;
+    enterPendingRef.current = false;
+    if (searchHits[0]) openHit(searchHits[0], true);
+  }, [searchHits, openHit]);
 
   const handleNewItem = useCallback((parentPath: string | null, type: 'file' | 'folder') => {
     setCreatingIn(parentPath ?? '');
@@ -582,9 +604,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
     // (a dead menu item). Leave search first and reveal the row in the tree, so
     // the input the user is waiting for is actually on screen.
     if (searchResults) {
-      setSearchQuery('');
-      setSearchResults(null);
-      setSearchFolders([]);
+      handleSearchChange(''); // also drops an answer still on its way
       const folder = node.path.includes('/') ? node.path.slice(0, node.path.lastIndexOf('/')) : '';
       if (folder) {
         setExpandedFolders((prev) => {
@@ -597,7 +617,7 @@ export const NotesTreePanel = memo(function NotesTreePanel({
     setRenaming(node.path);
     setRenameValue(node.name.replace(/\.md$/, ''));
     setContextMenu(null);
-  }, [searchResults]);
+  }, [searchResults, handleSearchChange]);
 
   const handleConfirmRename = useCallback(async () => {
     if (!renaming || !renameValue.trim()) { setRenaming(null); return; }
@@ -1015,9 +1035,9 @@ export const NotesTreePanel = memo(function NotesTreePanel({
                     <div
                       key={r.path}
                       data-search-idx={hitIdx}
-                      className={`notes-tree-item notes-tree-file notes-search-result${g.folder ? ' notes-search-result-nested' : ''} ${selectedPath === r.path ? 'selected' : ''}${hitIdx === activeHit ? ' notes-search-result-active' : ''}`}
+                      className={`notes-tree-item notes-tree-file notes-search-result${g.folder ? ' notes-search-result-nested' : ''} ${selectedPath === r.path ? 'selected' : ''}${r.path === activeHitPath ? ' notes-search-result-active' : ''}`}
                       onContextMenu={(e) => handlePathContextMenu(e, r.path)}
-                      onClick={() => { setActiveHit(hitIdx); openHit(r, false); }}
+                      onClick={() => openHit(r, false)}
                       onDoubleClick={() => openHit(r, true)}
                     >
                       <FileIcon />

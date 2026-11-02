@@ -80,6 +80,30 @@ test('a new query shows its results from the top, even from a tree scrolled down
   expect(await scrollTop(page)).toBe(0)
 })
 
+test('the hybrid upgrade of the same query leaves the list where the user scrolled it', async ({ page }) => {
+  // Hold the hybrid answer back so the user can scroll between the two answers.
+  let release: () => void = () => {}
+  const held = new Promise<void>((r) => { release = r })
+  await page.route((url) => url.pathname === '/api/notes-v2/search' && url.searchParams.get('mode') === 'hybrid', async (route) => {
+    await held
+    await route.continue()
+  })
+  await openNotes(page)
+  const q = `${tag()} marker`
+  const stringAnswer = page.waitForResponse((r) => { const u = new URL(r.url()); return u.pathname === '/api/notes-v2/search' && u.searchParams.get('mode') === 'string' && u.searchParams.get('q') === q })
+  await page.locator('.notes-search-input').first().fill(q)
+  await stringAnswer
+  await expect(rows(page).first()).toBeVisible({ timeout: 15_000 })
+  await body(page).evaluate((el) => { el.scrollTop = 150 })
+  const kept = await scrollTop(page)
+  expect(kept).toBeGreaterThan(100)
+  const hybridAnswer = page.waitForResponse((r) => { const u = new URL(r.url()); return u.pathname === '/api/notes-v2/search' && u.searchParams.get('mode') === 'hybrid' && u.searchParams.get('q') === q })
+  release()
+  await hybridAnswer
+  await page.waitForTimeout(300) // the answer's render
+  expect(await scrollTop(page)).toBe(kept)
+})
+
 test('a click previews and keeps the search; a double click opens and closes it', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(String(e)))
@@ -92,12 +116,14 @@ test('a click previews and keeps the search; a double click opens and closes it'
   await body(page).evaluate((el) => { el.scrollTop = 120 })
   const kept = await scrollTop(page)
   const first = rows(page).nth(3)
+  const tabs = page.locator('.notes-tab')
   const firstName = (await first.locator('.notes-search-file-name').innerText()).trim()
   await first.click()
   await expect(page.locator('.notes-tab.active .notes-tab-label')).toHaveText(firstName, { timeout: 15_000 })
   await expect(input).toHaveValue(q)
   await expect(first).toHaveClass(/selected/)
   expect(await scrollTop(page)).toBe(kept)
+  const tabCount = await tabs.count()
 
   // A second hit, in turn: it opens in the same preview tab, the search still stays.
   const second = rows(page).nth(5)
@@ -106,6 +132,8 @@ test('a click previews and keeps the search; a double click opens and closes it'
   await expect(page.locator('.notes-tab.active .notes-tab-label')).toHaveText(secondName, { timeout: 15_000 })
   await expect(input).toHaveValue(q)
   await expect(rows(page)).not.toHaveCount(0)
+  // A preview replaces the previewed note in its tab: no tab per click.
+  await expect(tabs).toHaveCount(tabCount)
 
   // A double click opens the hit and closes the search.
   const third = rows(page).nth(1)
@@ -114,6 +142,7 @@ test('a click previews and keeps the search; a double click opens and closes it'
   await expect(page.locator('.notes-tab.active .notes-tab-label')).toHaveText(thirdName, { timeout: 15_000 })
   await expect(input).toHaveValue('')
   await expect(page.locator('.notes-search-results')).toHaveCount(0)
+  await expect(tabs).toHaveCount(tabCount)
   expect(errors).toEqual([])
 })
 
@@ -145,4 +174,14 @@ test('Escape and the clear button close the search; arrows and Enter open a hit'
   await expect(page.locator('.notes-tab.active .notes-tab-label')).toHaveText(name, { timeout: 15_000 })
   await expect(input).toHaveValue('')
   await expect(page.locator('.notes-search-results')).toHaveCount(0)
+
+  // Enter typed before the first answer opens that query's first hit once it lands.
+  const q2 = `${tag()} marker line`
+  const answered = page.waitForResponse((r) => { const u = new URL(r.url()); return u.pathname === '/api/notes-v2/search' && u.searchParams.get('mode') === 'string' && u.searchParams.get('q') === q2 })
+  await input.fill(q2)
+  await input.press('Enter')
+  const res = await answered
+  const firstPath = ((await res.json()) as { results: Array<{ path: string }> }).results[0].path
+  await expect(page.locator('.notes-tab.active .notes-tab-label')).toHaveText(firstPath.replace(/\.md$/, '').split('/').pop()!, { timeout: 15_000 })
+  await expect(input).toHaveValue('')
 })
