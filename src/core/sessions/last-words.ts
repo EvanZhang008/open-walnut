@@ -1,10 +1,10 @@
 /**
- * A Needs you never carries an empty sentence (2026-11-01, Main's reflection: a task handed back
+ * A hand-back never carries an empty sentence (2026-11-01, Main's reflection: a task handed back
  * with no report of its own read "Its turn ended and handed the task back to you: read it and
- * reply.", and its real ask was found only by opening the task). When a task stands on the user
- * with no current report, Walnut reads where its last turn stopped (its last message, from the
- * transcript, the same read a request's notice quotes) and keeps it on the task as `last_words`;
- * the status then carries those words as its ask.
+ * reply.", and what it said was found only by opening the task). When a task's turn ended with no
+ * current report, Walnut reads where its last turn stopped (its last message, from the transcript,
+ * the same read a request's notice quotes) and keeps it on the task as `last_words`; the status
+ * (nothing asked, ToRead `turn`, 2026-11-02) then carries those words.
  *
  * A live idle session is still asked for its report by the reconcile loop (status-reconcile.ts),
  * whose answer wins; this covers what that loop cannot ask (a stopped session, an ACP engine, a
@@ -14,7 +14,7 @@
 import { log } from '../../logging/index.js';
 import type { SessionRecord, Task } from '../types.js';
 import type { NoticeLastMessage } from '../session-requests.js';
-import { HANDED_BACK_ASK } from '../user-status.js';
+import { TURN_TO_READ } from '../user-status.js';
 
 export interface LastWords {
   /** Its last message, as plain text and cut to the part a status line can show. */
@@ -63,7 +63,7 @@ export function currentLastWords(task: Pick<Task, 'phase_changed_at'> & { last_w
 /** Whether the task's status is the bare hand-back and Walnut has no words of it yet. Pure. */
 export function wantsLastWords(task: Task, nowMs: number): boolean {
   if (task.phase !== 'NEED_ACTION' || task.plugin_only || task.org_role) return false;
-  if (task.user_status?.state !== 'needs' || task.user_status.ask !== HANDED_BACK_ASK) return false;
+  if (task.user_status?.toRead !== 'turn' || task.user_status.waitingOn !== TURN_TO_READ) return false;
   if (currentLastWords(task)) return false;
   const last = lastRead.get(task.id);
   return last === undefined || nowMs - last >= RETRY_GAP_MS;

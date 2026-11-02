@@ -15,7 +15,7 @@ import { addTask, getTask, updateTask } from '../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { sendLetter } from '../../src/core/human-inbox/store.js'
 import { syncUserStatuses, handBackSettlesAt, HANDBACK_SETTLE_MS, stopUserStatusSync } from '../../src/core/user-status-sync.js'
-import { HANDED_BACK_ASK } from '../../src/core/user-status.js'
+import { MARKED_ASK, TURN_TO_READ } from '../../src/core/user-status.js'
 
 beforeEach(async () => {
   await fs.rm(WALNUT_HOME, { recursive: true, force: true })
@@ -43,7 +43,7 @@ async function handBack(id: string, sid: string) {
 }
 
 describe('hand-back settle hold', () => {
-  it('keeps the last status during the hold, then reads Needs you', async () => {
+  it('keeps the last status during the hold, then reads its turn to read', async () => {
     const t = await workingTask('Turn ended, nothing asked', 'sess-settle-1')
     await handBack(t.id, 'sess-settle-1')
     const moved = Date.parse((await getTask(t.id)).phase_changed_at!)
@@ -52,7 +52,7 @@ describe('hand-back settle hold', () => {
     expect((await getTask(t.id)).user_status?.state).toBe('working')
 
     await syncUserStatuses(new Set([t.id]), moved + HANDBACK_SETTLE_MS + 1)
-    expect((await getTask(t.id)).user_status).toMatchObject({ state: 'needs', source: 'session', ask: HANDED_BACK_ASK })
+    expect((await getTask(t.id)).user_status).toMatchObject({ state: 'waiting', toRead: 'turn', waitingOn: TURN_TO_READ })
   })
 
   it('never writes Needs you for a hand-back a new turn undoes inside the hold', async () => {
@@ -92,13 +92,14 @@ describe('hand-back settle hold', () => {
 
   it('handBackSettlesAt: only a turn end of a task with a session, only inside the hold', () => {
     const now = Date.parse('2026-10-28T10:00:00Z')
-    const bare = { state: 'needs' as const, source: 'session' as const, ask: HANDED_BACK_ASK }
+    const bare = { state: 'waiting' as const, kind: 'other' as const, toRead: 'turn' as const, waitingOn: TURN_TO_READ }
     const fresh = { phase_changed_at: new Date(now - 5_000).toISOString(), user_status: { state: 'working' as const } }
     expect(handBackSettlesAt(fresh, bare, now, true)).toBe(now - 5_000 + HANDBACK_SETTLE_MS)
     expect(handBackSettlesAt({ ...fresh, user_status: { state: 'waiting', kind: 'other' } }, bare, now, true)).toBe(now - 5_000 + HANDBACK_SETTLE_MS)
     expect(handBackSettlesAt({ ...fresh, phase_changed_at: new Date(now - HANDBACK_SETTLE_MS - 1).toISOString() }, bare, now, true)).toBeNull()
     expect(handBackSettlesAt({ ...fresh, user_status: { state: 'needs', source: 'letter', ask: 'x' } }, bare, now, true)).toBeNull()
-    expect(handBackSettlesAt(fresh, { ...bare, ask: 'Pick a design' }, now, true)).toBeNull()
+    expect(handBackSettlesAt(fresh, { state: 'needs', source: 'session', ask: 'Pick a design' }, now, true)).toBeNull()
+    expect(handBackSettlesAt(fresh, { ...bare, toRead: 'result' }, now, true)).toBeNull()
     expect(handBackSettlesAt({ user_status: fresh.user_status }, bare, now, true)).toBeNull()
     // A person or a lead moving a task by hand: no session, or not started yet, or never derived.
     expect(handBackSettlesAt(fresh, bare, now, false)).toBeNull()
@@ -113,6 +114,6 @@ describe('hand-back settle hold', () => {
     await updateTask(t.id, { phase: 'NEED_ACTION' })
     const moved = Date.parse((await getTask(t.id)).phase_changed_at!)
     await syncUserStatuses(new Set([t.id]), moved + 500)
-    expect((await getTask(t.id)).user_status?.state).toBe('needs')
+    expect((await getTask(t.id)).user_status).toMatchObject({ state: 'needs', ask: MARKED_ASK })
   })
 })

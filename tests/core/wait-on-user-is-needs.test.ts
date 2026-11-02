@@ -14,7 +14,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { DONE_ASK, deriveUserStatus, type StatusReport, type UserStatusInput, type WaitKind } from '../../src/core/user-status.js'
+import { RESULT_TO_READ, deriveUserStatus, type StatusReport, type UserStatusInput, type WaitKind } from '../../src/core/user-status.js'
 import { phaseForReport } from '../../src/core/sessions/report-phase.js'
 
 const NOW = Date.parse('2026-11-01T03:00:00Z')
@@ -56,11 +56,11 @@ describe('a task never waits on the user', () => {
     expect(n).toBeGreaterThan(500)
   })
 
-  it('a finished top-level task is the user\'s to read and close, parked or not; a worker\'s is its lead\'s', () => {
+  it('a finished top-level task is a result to read, parked or not, never Needs you; a worker\'s is its lead\'s', () => {
     const done: StatusReport = { state: 'done', at: iso(NOW - 60_000) }
     for (const phase of ['NEED_ACTION', 'WAITING']) {
       expect(deriveUserStatus({ phase, report: done, hasSession: true, processStatus: 'stopped', phaseChangedAt: iso(NOW - 120_000) }, NOW))
-        .toMatchObject({ state: 'needs', ask: DONE_ASK })
+        .toMatchObject({ state: 'waiting', kind: 'other', toRead: 'result', waitingOn: RESULT_TO_READ })
       expect(deriveUserStatus({ phase, report: done, hasLeader: true, hasSession: true, processStatus: 'stopped', phaseChangedAt: iso(NOW - 120_000) }, NOW))
         .toMatchObject({ state: 'waiting', kind: 'lead' })
     }

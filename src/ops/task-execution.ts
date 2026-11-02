@@ -3,6 +3,7 @@ import { SESSION_EFFORT_IDS, SESSION_ENGINE_IDS, SESSION_MODE_IDS } from '../cor
 import { engineCaps } from '../core/agents/engine-registry.js'
 import type { WalnutOp } from './registry.js'
 import { REPLY_ARRIVES_HINT, SUBTASK_WATCH_HINT, withOutcome } from './outcome.js'
+import { summaryAt } from '../core/user-status.js'
 
 type Call = Parameters<NonNullable<WalnutOp['handler']>>[1]
 
@@ -66,7 +67,9 @@ export function taskView(task: Record<string, unknown>): Record<string, unknown>
     delete fields.status_report
     fields.user_status = { state: 'done' }
   }
-  return { ...fields, ...(memoryChars ? { agent_memory_chars: memoryChars } : {}), execution: taskExecution(task) }
+  // A summary is the note's history: say when it was written, beside the live status (agentStatusView).
+  const writtenAt = typeof fields.summary === 'string' && fields.summary ? summaryAt(fields) : undefined
+  return { ...fields, ...(writtenAt ? { summary_at: writtenAt } : {}), ...(memoryChars ? { agent_memory_chars: memoryChars } : {}), execution: taskExecution(task) }
 }
 
 /** Launch fields newer than the oldest server this op may reach; the server names each one it honoured in `applied`. */

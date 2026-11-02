@@ -30,7 +30,7 @@ const ASKING: Record<string, Partial<UserStatusInput>> = {
   letter: { phase: 'NEED_ACTION', processStatus: 'idle', openLetter: 'Approve the send' },
   choice: { phase: 'NEED_ACTION', processStatus: 'idle', openChoice: 'Which design?', openChoiceAt: at },
   session: { phase: 'NEED_ACTION', processStatus: 'idle', report: { at, state: 'needs', ask: 'Pick one' } },
-  phase: { phase: 'NEED_ACTION', processStatus: 'stopped' },
+  // A bare NEED_ACTION asks nothing (2026-11-02: only a real ask reaches Needs you), so it is no case here.
 }
 
 describe('no org node is ever Needs you', () => {

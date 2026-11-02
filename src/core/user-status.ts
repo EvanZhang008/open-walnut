@@ -58,6 +58,8 @@ function hasAbove(input: Pick<UserStatusInput, 'hasLeader' | 'isMain' | 'isLead'
  *  wait on its lead by a task with none is the user's too (they are the one above it). */
 function waitIsUsers(report: StatusReport | null | undefined, hasLeader: boolean): boolean {
   if (report?.state !== 'waiting') return false;
+  // An ask that named no kind of the user's own is no ask of theirs (readStatusReport).
+  if (report.kindless_ask) return false;
   const kind = report.waiting_kind;
   if (kind === 'lead' && !hasLeader) return true;
   if (kind && OUTSIDE_WAIT_KINDS.has(kind)) return waitWordsNameUser(report.waiting_on, true);
@@ -242,13 +244,24 @@ export interface UserStatusInput {
  *  this is generic rules". Every agent-facing text that lists or reports tasks says it. */
 /** The ask of a task handed back only because its turn ended, with nothing asked of its own
  *  (user-status-sync.ts holds it a moment: the next turn often starts within seconds). */
-/** A turn that answered the user's message: read the answer (report.answered_person). */
-export const ANSWERED_ASK = 'It answered your message: read it and reply.';
-/** A finished task no lead checks: the user reads the result and closes it. */
-export const DONE_ASK = 'It finished: read the result and close it.';
+/** The ask an older build stored for a bare hand-back: read only to recognise a stored status. */
 export const HANDED_BACK_ASK = 'Its turn ended and handed the task back to you: read it and reply.';
-/** The same hand-back, with the words its turn ended with (sessions/last-words.ts) after it. */
-export const LAST_WORDS_ASK = 'Its turn ended with no report; its last words:';
+
+/**
+ * Nothing is asked of the user, only something to read (2026-11-02, the user through Main: "only a
+ * real ask reaches Needs you"; two finished triage runs, a finished Interview task and a Q&A answer
+ * sat in Needs you on Walnut's own sentences). `result`: its own report says it finished and no lead
+ * checks it. `answer`: its turn answered the user's message. `turn`: its turn ended with no report
+ * asking anything (its last words, sessions/last-words.ts, once read). Each reads Waiting on nothing
+ * with these words, while its phase keeps it on the user's list (only WAITING leaves it); a routine
+ * run's `result` (and a triage run's `turn`) closes itself (routines/run-close.ts).
+ */
+export type ToRead = 'result' | 'answer' | 'turn';
+export const RESULT_TO_READ = 'Nothing: it finished, and its result is there to read';
+export const ANSWER_TO_READ = 'Nothing: it answered your message, and its answer is there to read';
+export const TURN_TO_READ = 'Nothing: its turn ended without asking you anything';
+/** A task with no session that a person or a lead set to NEED_ACTION by hand. */
+export const MARKED_ASK = 'It was set to need you by hand: open it.';
 export const COMPLETE_IS_VERIFIED = 'A COMPLETE task counts as verified by the user: write it as done, never as waiting on their check or test, and never remind them of it.';
 
 export interface UserStatus {
@@ -301,6 +314,8 @@ export interface UserStatus {
   line?: StatusLine;
   /** needs from its own report: the ask in a one-click shape (AskForm). */
   askForm?: AskForm;
+  /** waiting: nothing is asked of the user, only this to read (ToRead). */
+  toRead?: ToRead;
   /** The questions its subtasks ask the user, rolled up through each leader (rollUpAsks): origin
    *  named, its options kept, never a snoozed or a finished subtask's. Its own ask is `ask`. Read
    *  by agents (task_get, task_list rows), so a VP or Main sees every ask below a direct report
@@ -467,6 +482,11 @@ function words(report: StatusReport | null | undefined, nowMs: number, running: 
     at,
     stale: !running && Number.isFinite(age) && age >= STALE_REPORT_MS ? true : undefined,
   };
+}
+
+/** A status with nothing asked of the user, only something to read (ToRead). */
+function toRead(what: ToRead, waitingOn: string, w: Partial<UserStatus>): UserStatus {
+  return strip<UserStatus>({ state: 'waiting', kind: 'other', waitingOn, toRead: what, ...w });
 }
 
 function strip<T extends object>(o: T): T {
@@ -746,14 +766,16 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     if (waitIsUsers(report, hasAbove(input)) && !none(report!.waiting_on)) {
       return strip({ state: 'needs', source: 'session', ask: clean(report!.waiting_on), ...w });
     }
-    // It answered the user's message and then waits on something outside (2026-10-31, the user: "I
-    // have not even read it and it is put into wait"): the answer is the user's to read and reply to
-    // first. It stays on their list until they write again, or the 4-hour re-check of this ask
-    // (needs-recheck.ts) wakes the task with a turn of its own, whose report may park it.
-    if (report?.state === 'waiting' && report.answered_person && !input.isMain && !input.isLead) {
-      const on = clean(report.waiting_on);
-      return strip({ state: 'needs', source: 'session', ask: on ? `${ANSWERED_ASK} Then it waits on: ${on.slice(0, 160)}` : ANSWERED_ASK, ...w });
+    // It answered the user's message (2026-10-31, the user: "I have not even read it and it is put
+    // into wait"): the answer is the user's to read first, so its phase keeps it on their list until
+    // they write again or a turn of its own (a trigger it armed) parks it; it asks nothing, so it is
+    // no Needs you (2026-11-02) and no 4-hour re-check (needs-recheck.ts reads only Needs you).
+    if (report && report.answered_person && report.state !== 'done' && !input.isMain && !input.isLead) {
+      const on = report.state === 'waiting' && !report.kindless_ask ? clean(report.waiting_on) : '';
+      return toRead('answer', on ? `${ANSWER_TO_READ}; then it waits on: ${on.slice(0, 160)}` : ANSWER_TO_READ, w);
     }
+    // An ask with no kind of the user's own and no lead above it: its result is there to read.
+    if (report?.kindless_ask && !hasAbove(input)) return toRead('result', RESULT_TO_READ, w);
     // Its own report says done. A task with a leader moves to WAITING on that report
     // (report-phase.ts) for its lead to check. One with none is the user's to read and close, and a
     // wait on the user is Needs you, never Waiting (2026-11-01 org review, by the user's rule of
@@ -762,7 +784,7 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
       // Main and a lead are never closed: they wait on the user's next message.
       if (input.isMain || input.isLead) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
       if (input.hasLeader) return strip({ state: 'waiting', kind: 'lead', waitingOn: 'Its lead, to check the result and close it', ...w });
-      return strip({ state: 'needs', source: 'session', ask: DONE_ASK, ...w });
+      return toRead('result', RESULT_TO_READ, w);
     }
     // Its own armed trigger wakes it (a fire resumes a stopped session): with no ask of its own and no
     // turn running (a NEED_ACTION set inside a turn waits for that turn's report), it waits on the watch.
@@ -785,8 +807,11 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
     // next message (or their teams' news), and their node lists its tasks' asks, not itself.
     if (input.isMain || input.isLead) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
     if (input.hasLeader) return strip({ state: 'waiting', kind: 'lead', waitingOn: 'Its lead, to look at it: its turn ended without asking you anything', ...w });
-    // Never an empty sentence: the words its turn ended with, once Walnut has read them.
-    return strip({ state: 'needs', source: 'session', ask: input.lastWords ? `${LAST_WORDS_ASK} "${input.lastWords}"` : HANDED_BACK_ASK, ...w });
+    // No session ever ran a turn here: a person or a lead set it to need the user by hand, which is
+    // their word, not a turn's end.
+    if (!input.hasSession) return strip({ state: 'needs', ask: MARKED_ASK, ...w });
+    // Nothing asked: the words its turn ended with, once Walnut has read them, are there to read.
+    return toRead('turn', input.lastWords ? `${TURN_TO_READ}; its last words: "${input.lastWords}"` : TURN_TO_READ, w);
   }
 
   if (input.phase === 'IN_PROGRESS') {
@@ -821,7 +846,7 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   if (tasks.length) return strip({ state: 'waiting', kind: 'task', waitingOn: reported || `A reply from ${tasks.join(', ')}`, ...w });
   // Parked on the user (an older writer, a person's park): the user's ask, never a Waiting on them.
   // An ask with no kind of the user's own is no ask of theirs: with no lead above it, the task is a result to read and close.
-  if (report?.kindless_ask && !hasAbove(input)) return strip({ state: 'needs', source: 'session', ask: DONE_ASK, ...w });
+  if (report?.kindless_ask && !hasAbove(input)) return toRead('result', RESULT_TO_READ, w);
   if (reported && (reportedKind === 'you' || (reportedKind === 'lead' && !hasAbove(input)))) return strip({ state: 'needs', source: 'session', ask: reported, ...w });
   if (reported && reportedKind && reportedKind !== 'stuck') return strip({ state: 'waiting', kind: reportedKind, waitingOn: reported, ...(until ? { until } : {}), ...w });
   // A standing routine: between fires it waits on the next one.
@@ -830,7 +855,7 @@ function derive(input: UserStatusInput, nowMs: number): UserStatus {
   if (report?.state === 'done') {
     if (input.isMain || input.isLead) return strip({ state: 'waiting', kind: 'you', waitingOn: 'Your next message, or news from its teams', ...w });
     if (input.hasLeader) return strip({ state: 'waiting', kind: 'lead', waitingOn: 'Its lead, to check the result and close it', ...w });
-    return strip({ state: 'needs', source: 'session', ask: DONE_ASK, ...w });
+    return toRead('result', RESULT_TO_READ, w);
   }
   if (until) return strip({ state: 'waiting', kind: 'time', waitingOn: 'Its next check', until, ...w });
   if (input.phase === 'WAITING') return strip({ state: 'waiting', kind: 'other', waitingOn: 'A message (parked with no clock or watch)', ...w });
@@ -846,6 +871,36 @@ export function fallbackUserState(phase: string | undefined, status?: string): U
   if (phase === 'COMPLETE' || status === 'done') return 'done';
   if (phase === 'NEED_ACTION') return 'needs';
   return phase === 'IN_PROGRESS' ? 'working' : 'waiting';
+}
+
+/** The keys of the status every agent task read carries (agentStatusView). */
+export const AGENT_STATUS_KEYS = ['state', 'ask', 'source', 'kind', 'waitingOn', 'toRead', 'now', 'at', 'checkedAt', 'unverified', 'until', 'snoozed'] as const;
+
+/**
+ * The live status an agent reads beside a task in every list, bulk and single read (2026-11-02,
+ * the user through Main: Main told the user two things waited on him that he had answered in the
+ * task chats, because it read the task's `summary`, days old and about an earlier ask). The stored
+ * user_status cut to what says whether it asks the user anything now, and since when: a completed
+ * task is Done; one not derived yet reads its phase as an older Walnut meant it. Pure.
+ */
+export function agentStatusView(task: { phase?: unknown; status?: unknown; user_status?: unknown }): Partial<UserStatus> & { state: UserState } {
+  const phase = typeof task.phase === 'string' ? task.phase : undefined;
+  const status = typeof task.status === 'string' ? task.status : undefined;
+  if (phase === 'COMPLETE' || status === 'done') return { state: 'done' };
+  const us = task.user_status as Partial<UserStatus> | null | undefined;
+  if (!us?.state) return { state: fallbackUserState(phase, status) };
+  const out: Record<string, unknown> = {};
+  for (const k of AGENT_STATUS_KEYS) if (us[k] !== undefined && us[k] !== null && us[k] !== '') out[k] = us[k];
+  return out as Partial<UserStatus> & { state: UserState };
+}
+
+/** The words that say a task's summary is history, not its ask (every read that gives a summary). */
+export const SUMMARY_IS_HISTORY = 'summary is the note\'s Executive Summary as of summary_at (absent: written before Walnut kept the time, so older still), often about an earlier turn: what the task asks the user now is user_status (state, ask, at, checkedAt), never the summary.';
+
+/** When the task's summary was last written (its per-field change time), when known. Pure. */
+export function summaryAt(task: { field_at?: unknown }): string | undefined {
+  const at = (task.field_at as Record<string, unknown> | undefined)?.summary;
+  return typeof at === 'string' && at ? at : undefined;
 }
 
 export interface UserStatusCounts { needs: number; working: number; waiting: number; done: number }

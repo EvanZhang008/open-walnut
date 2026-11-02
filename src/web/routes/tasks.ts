@@ -54,6 +54,7 @@ import {
   type BulkGetResult,
 } from '../../core/task-bulk-get.js'
 import { listSessionsForTasks } from '../../core/session-tracker.js'
+import { SUMMARY_IS_HISTORY } from '../../core/user-status.js'
 import { bus, EventNames } from '../../core/event-bus.js'
 import {
   computeBlockedIds,
@@ -802,7 +803,10 @@ tasksRouter.get('/bulk', async (req: Request, res: Response, next: NextFunction)
       if (err instanceof BulkGetError) { res.status(400).json({ error: err.message }); return }
       throw err
     }
-    res.json({ count: result.items.length, errors: result.errors, fields: result.fields, tasks: result.items })
+    res.json({
+      count: result.items.length, errors: result.errors, fields: result.fields, tasks: result.items,
+      ...(result.fields.includes('summary') ? { hint: SUMMARY_IS_HISTORY } : {}),
+    })
   } catch (err) {
     next(err)
   }

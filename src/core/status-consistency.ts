@@ -121,7 +121,7 @@ export function parkNoteBody(m: StatusMismatch): string {
   return [
     `This task is parked as WAITING, but Walnut holds nothing outside Walnut and the user that it waits on (${m.detail}).`,
     'A task parks only for an outside wait (a pipeline, a build, a deploy, a review, a reply from someone else, another task). Check what it waits on now:',
-    '- The next move is the user\'s (their input, review or decision): set phase NEED_ACTION (task_update) so it is on their list.',
+    '- The next move is the user\'s (their input, review or decision): set phase NEED_ACTION (task_update) so it is on their list, and name the ask in your turn\'s report so it reads Needs you.',
     '- It waits on an outside thing: arm a trigger on it (trigger_create), with a short wait_until.',
     '- Nothing is left: finish the work, or complete the task if it is done.',
   ].join('\n');

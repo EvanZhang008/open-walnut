@@ -14,6 +14,7 @@
 
 import type { Task } from './types.js';
 import { extractProgressLines, summarizeProgress } from './task-progress.js';
+import { agentStatusView, summaryAt } from './user-status.js';
 
 /** Max ids per call. Above this the reply stops being a triage payload. */
 export const MAX_BULK_GET_IDS = 50;
@@ -43,7 +44,8 @@ export const BULK_GET_FIELD_GROUPS: Readonly<Record<string, readonly BulkGetFiel
 };
 
 /**
- * Fields returned when the caller names none: the slim triage set plus `summary`.
+ * Fields returned when the caller names none: the slim triage set plus `summary` (with its
+ * `summary_at`); the live status rides every row anyway (projectTaskFields).
  * Deliberately NOT the whole catalog — `note` in a default would put the payload
  * this op exists to avoid right back into every reply.
  */
@@ -110,9 +112,17 @@ export function resolveBulkGetFields(requested: readonly string[] | undefined): 
   return resolved;
 }
 
-/** Project ONE task onto the requested fields. Absent values are omitted, not null. */
+/**
+ * Project ONE task onto the requested fields. Absent values are omitted, not null.
+ *
+ * Every row carries the task's live status (agentStatusView), named or not, and a summary carries
+ * when it was written (`summary_at`): a summary is the note's history and may describe an ask the
+ * user answered days ago (2026-11-02: Main read two answered asks to the user from summaries).
+ * Naming `user_status` gives the whole stored status instead.
+ */
 export function projectTaskFields(task: Task, fields: readonly BulkGetField[]): BulkGetItem {
   const item: BulkGetItem = { id: task.id };
+  if (!fields.includes('user_status')) item.user_status = agentStatusView(task);
   for (const field of fields) {
     if (field === 'progress') {
       const lines = extractProgressLines(task.note);
@@ -133,6 +143,10 @@ export function projectTaskFields(task: Task, fields: readonly BulkGetField[]): 
     const value = (task as unknown as Record<string, unknown>)[field];
     if (value !== undefined && value !== '' && !(Array.isArray(value) && value.length === 0)) {
       item[field] = value;
+      if (field === 'summary') {
+        const at = summaryAt(task);
+        if (at) item.summary_at = at;
+      }
     }
   }
   return item;

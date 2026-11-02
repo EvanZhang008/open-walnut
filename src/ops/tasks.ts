@@ -9,7 +9,7 @@ import { taskRefTag } from '../utils/entity-refs.js'
 import { dispatchHint, withOutcome } from './outcome.js'
 import { startTask, TASK_START_INPUT, taskView } from './task-execution.js'
 import { PHASE_ORDER } from '../core/phase.js'
-import { fallbackUserState } from '../core/user-status.js'
+import { agentStatusView, summaryAt, SUMMARY_IS_HISTORY } from '../core/user-status.js'
 import { USER_KINDS, USER_KIND_PARAM, USER_KIND_WHY_PARAM } from '../core/org/user-kind.js'
 import { laneById, normalizeLanes, placeCard } from '../core/boards/board-lanes.js'
 import { agentMemoryWriterNote, type AgentMemory } from '../core/sessions/agent-memory.js'
@@ -145,11 +145,14 @@ export function leanTaskRow(row: unknown): unknown {
   // What the user reads (src/core/user-status.ts), the one answer to "does it need them": a
   // snoozed NEED_ACTION task reads waiting, so a list of asks never names it.
   const us = src.user_status as { state?: string; snoozed?: { until?: string }; asks?: Array<{ id: string; title: string; ask: string }> } | undefined
-  out.user_state = us?.state ?? fallbackUserState(typeof src.phase === 'string' ? src.phase : undefined, typeof src.status === 'string' ? src.status : undefined)
+  // Its live status, cut to what it asks now and since when (agentStatusView), never its summary.
+  const live = agentStatusView(src)
+  out.user_state = live.state
   if (us?.snoozed?.until) out.snoozed_until = us.snoozed.until
   // The asks of the subtasks below it (user_status.asks, rolled up through each leader): a VP or
   // Main reads its teams' questions from its direct reports' rows.
   if (us?.asks?.length) out.asks_below = us.asks.map((a) => ({ id: a.id, title: a.title, ask: a.ask }))
+  out.user_status = live
   // pinned is a flag, not a value: always answer it, as a real boolean.
   out.execution = taskView(src).execution
   out.pinned = Boolean(src.pinned)
@@ -212,6 +215,8 @@ defineOp({
     'the work back and is waiting on the human (turn finished, permission prompt, or an error) — it is ' +
     'NOT done. There is no `status` field. What the user reads is `user_state` (needs | working | waiting | ' +
     'done, the one status every surface shows): say a task needs the user only when user_state is needs. ' +
+    'Every row carries `user_status` too: its ask, what it waits on, its words (now) and when they were ' +
+    'written (at) and checked (checkedAt); that is the live answer, never a summary. ' +
     'A snoozed task (snoozed_until: its start date is still to come) is never needs before that date: do ' +
     'not raise it to the user unless you state why it cannot wait. ' +
     '`asks_below` lists the questions its subtasks ask the user ({id, title, ask}, rolled up through each ' +
@@ -395,6 +400,7 @@ defineOp({
   description:
     'Full detail for one task, including description, note, summary, execution, and ' +
     'dependency/child/parent decorations that the list view omits. The id accepts a unique prefix. ' +
+    `What it asks the user now is task.user_status; ${SUMMARY_IS_HISTORY} ` +
     'The task is under `task`; its id, title and phase are repeated at the top level.',
   input: {
     id: z.string().min(1).describe('Task id or a unique id prefix'),
@@ -435,7 +441,9 @@ defineOp({
     + 'DONE | WIP | WAIT | TODO | BLOCKED) plus progress_counts — the state of the work WITHOUT the '
     + 'multi-KB Work Log, so ask for progress rather than note. Rows come back in the order the ids '
     + 'were given, and an id that matches nothing (or several tasks) becomes an { id, error } entry '
-    + 'instead of failing the whole call — check `errors` in the result.',
+    + 'instead of failing the whole call — check `errors` in the result. '
+    + 'Every row carries `user_status` (state, ask, waitingOn, now, at, checkedAt), whatever fields you name: '
+    + `that is what the task asks the user now. A summary comes with its summary_at; ${SUMMARY_IS_HISTORY}`,
   input: {
     ids: z.array(z.string().min(1)).min(1).max(MAX_BULK_GET_IDS)
       .describe(`Task ids (exact, or a unique id prefix) — 1 to ${MAX_BULK_GET_IDS} per call`),

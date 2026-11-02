@@ -58,7 +58,7 @@ describe('resolveBulkGetFields', () => {
     expect(resolveBulkGetFields(['id', 'title', 'project', 'created_at'])).toEqual(['title', 'project', 'created_at']);
     expect(resolveBulkGetFields(['ID', ' title '])).toEqual(['title']);
     const { items } = bulkGetFromTasks(['a1'], [task({ id: 'a1' })], ['id', 'title']);
-    expect(items[0]).toEqual({ id: 'a1', title: 'Task a1' });
+    expect(items[0]).toEqual({ id: 'a1', title: 'Task a1', user_status: { state: 'waiting' } });
   });
 
   it('rejects the retired `status` field and names its replacement', () => {
@@ -88,7 +88,7 @@ describe('bulkGetFromTasks', () => {
     const result = bulkGetFromTasks(['d4e5f6', 'a1b2c3'], TASKS, ['title', 'phase']);
     expect(result.fields).toEqual(['title', 'phase']);
     expect(result.items.map((i) => i.id)).toEqual(['d4e5f6', 'a1b2c3']);
-    expect(result.items[0]).toEqual({ id: 'd4e5f6', title: 'Beta', phase: 'TODO' });
+    expect(result.items[0]).toEqual({ id: 'd4e5f6', title: 'Beta', phase: 'TODO', user_status: { state: 'waiting' } });
     // `note` and `summary` were not asked for, so they are absent — that is the
     // whole point of the projection.
     expect(result.items[1]).not.toHaveProperty('note');
@@ -132,9 +132,9 @@ describe('bulkGetFromTasks', () => {
   it('projects board and session fields a triage pass reads', () => {
     const [alpha] = bulkGetFromTasks(['a1b2c3'], TASKS,
       ['pinned', 'focus_tier', 'due_date', 'last_session_update']).items;
-    expect(alpha).toEqual({ id: 'a1b2c3', pinned: true, focus_tier: 'focus', due_date: '2026-09-01' });
+    expect(alpha).toEqual({ id: 'a1b2c3', pinned: true, focus_tier: 'focus', due_date: '2026-09-01', user_status: { state: 'working' } });
     const [beta] = bulkGetFromTasks(['d4e5f6'], TASKS, ['pinned', 'last_session_update']).items;
-    expect(beta).toEqual({ id: 'd4e5f6', pinned: false, last_session_update: '2026-08-29T12:00:00.000Z' });
+    expect(beta).toEqual({ id: 'd4e5f6', pinned: false, last_session_update: '2026-08-29T12:00:00.000Z', user_status: { state: 'waiting' } });
   });
 
   it('rejects an empty or oversized id list', () => {

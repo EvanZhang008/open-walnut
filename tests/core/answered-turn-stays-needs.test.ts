@@ -2,8 +2,10 @@
  * A turn that answered a message the user sent never parks its task (2026-10-31, the user: "wait
  * should be wait external ... the human replied, I have not even read it, and it is put into
  * wait"; incident: a walkthrough he had asked for went to WAITING 10 s after it ended, because the
- * task also waited on a CR approval). The answer is his to read first: the task stays Needs you
- * until he writes again or a later turn of its own (a trigger's fire, a peer) parks it.
+ * task also waited on a CR approval). The answer is his to read first: the task stays on his list
+ * (NEED_ACTION) until he writes again or a later turn of its own (a trigger's fire, a peer) parks it.
+ * Its status reads the answer as something to read, never as Needs you (2026-11-02, the user through
+ * Main: "only a real ask reaches Needs you"; a Q&A session whose answer was complete sat there).
  *
  * Guard for the class: every path that lands WAITING after a turn is listed in
  * tests/core/park-gate-ratchet.test.ts with how it keeps this rule; here, each gate's behaviour on
@@ -17,7 +19,7 @@ vi.mock('../../src/constants.js', () => createMockConstants('walnut-answered-tur
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import { phaseForReport, turnAnsweredPerson } from '../../src/core/sessions/report-phase.js'
-import { ANSWERED_ASK, deriveUserStatus, type StatusReport, type WaitKind } from '../../src/core/user-status.js'
+import { ANSWER_TO_READ, deriveUserStatus, type StatusReport, type WaitKind } from '../../src/core/user-status.js'
 import { applyStatusAnswer } from '../../src/core/sessions/status-question.js'
 import { addTask, getTask, updateTaskRaw } from '../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
@@ -59,12 +61,15 @@ describe('its report never parks it', () => {
     }
   })
 
-  it('reads Needs you with its answer to read first, even with a trigger armed', () => {
+  it('reads its answer to read first, even with a trigger armed, never Needs you', () => {
     const report: StatusReport = { state: 'waiting', waiting_kind: 'outside', waiting_on: 'A colleague\'s CR approval', at: iso(T + 10_000), answered_person: true }
     const input = { phase: 'NEED_ACTION' as const, phaseChangedAt: iso(T), hasSession: true, processStatus: 'idle' as const, report, triggers: ['CR approval watch'] }
-    expect(deriveUserStatus(input, T + 20_000)).toMatchObject({ state: 'needs', source: 'session', ask: `${ANSWERED_ASK} Then it waits on: A colleague's CR approval` })
+    expect(deriveUserStatus(input, T + 20_000)).toMatchObject({ state: 'waiting', toRead: 'answer', waitingOn: `${ANSWER_TO_READ}; then it waits on: A colleague's CR approval` })
     // No trigger, no lead: the same, never the bare "its turn ended" line.
-    expect(deriveUserStatus({ ...input, triggers: [] }, T + 20_000)).toMatchObject({ state: 'needs', ask: expect.stringContaining(ANSWERED_ASK) })
+    expect(deriveUserStatus({ ...input, triggers: [] }, T + 20_000)).toMatchObject({ state: 'waiting', toRead: 'answer' })
+    // An answer whose report said needs-you with no ask (a Q&A answer, 2026-11-02) reads the same.
+    expect(deriveUserStatus({ ...input, report: { state: 'needs', at: iso(T + 10_000), answered_person: true } }, T + 20_000))
+      .toMatchObject({ state: 'waiting', toRead: 'answer', waitingOn: ANSWER_TO_READ })
     // A turn nobody wrote into: the watch.
     expect(deriveUserStatus({ ...input, report: { ...report, answered_person: undefined } }, T + 20_000)).toMatchObject({ state: 'waiting' })
     // Main and a lead are never Needs you.

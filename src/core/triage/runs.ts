@@ -237,6 +237,9 @@ function createdAtMs(task: Task): number {
 
 export type TriageRunsHandle = {
   stop(): void;
+  /** A run whose turn ended with nothing asked, seen by its status (routines/run-close.ts), when
+   *  no session:result reached this subscriber (a turn that ended out of band). */
+  settleIdle(task: Task): Promise<void>;
   /** Diagnostics + tests. */
   stats(): { handled: number; acked: number; settled: number; known: number };
 };
@@ -437,6 +440,10 @@ export function startTriageRuns(deps: TriageRunsDeps = {}): TriageRunsHandle {
   });
 
   const handle: TriageRunsHandle = {
+    async settleIdle(task: Task) {
+      if (stopped || !isTriageRunTask(task)) return;
+      await onRunSettled(task, { status: 'ok' });
+    },
     stop() {
       stopped = true;
       settledTasks.clear();
@@ -488,6 +495,11 @@ async function defaultRecordOutcome(outcome: JournalOutcome): Promise<void> {
     // in the dispatch summary, and two runs a minute apart make "the newest row"
     // the wrong answer.
   }, outcome.taskId);
+}
+
+/** The live handle, when the subscriber runs (it runs on the primary only). */
+export function activeTriageRuns(): TriageRunsHandle | null {
+  return active;
 }
 
 /** Tests only: the live handle. */

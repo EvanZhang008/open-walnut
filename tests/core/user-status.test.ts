@@ -5,7 +5,7 @@
  * their own ("it is a mess"); "task has status, we already have good task system".
  */
 import { describe, it, expect } from 'vitest'
-import { deriveUserStatus, countUserStates, userStatusLine, STALE_REPORT_MS, type StatusReport, type UserStatusInput } from '../../src/core/user-status.js'
+import { deriveUserStatus, countUserStates, userStatusLine, STALE_REPORT_MS, RESULT_TO_READ, TURN_TO_READ, type StatusReport, type UserStatusInput } from '../../src/core/user-status.js'
 import { phaseForReport, reportMayMovePhase } from '../../src/core/sessions/report-phase.js'
 
 const NOW = Date.parse('2026-10-26T05:35:00Z')
@@ -64,7 +64,8 @@ describe('the words say why', () => {
       .toMatchObject({ source: 'session', ask: 'Approve a real iPhone test?', now: 'Fix is live.' })
     expect(deriveUserStatus({ ...base, report: report({ state: 'waiting', waiting_kind: 'you', waiting_on: 'A real-device test when you have time' }) }, NOW))
       .toMatchObject({ source: 'session', ask: 'A real-device test when you have time' })
-    expect(deriveUserStatus(base, NOW)).toMatchObject({ state: 'needs', ask: expect.stringContaining('read it and reply') })
+    // Its turn only ended: nothing is asked, only its turn to read (2026-11-02, only a real ask reaches Needs you).
+    expect(deriveUserStatus(base, NOW)).toMatchObject({ state: 'waiting', kind: 'other', toRead: 'turn', waitingOn: TURN_TO_READ })
   })
 
   // 2026-10-27, the lead on the user's demo: the user answered a question, the turn only confirmed
@@ -72,19 +73,19 @@ describe('the words say why', () => {
   // good once it said done.
   it('a turn that only ended is not Needs you: its report still to come; a finished task is the user\'s to close', () => {
     const base = { phase: 'NEED_ACTION', hasSession: true, processStatus: 'idle', phaseChangedAt: ago(5 * 60_000) }
-    // Done with no lead to check it: the user reads it and closes it, and a wait on the user is
-    // Needs you, never Waiting (2026-11-01 org review; tests/core/wait-on-user-is-needs.test.ts).
+    // Done with no lead to check it: its result is there to read, never a Needs you and never a wait
+    // on the user (2026-11-02; tests/core/only-real-asks-need-you.test.ts).
     expect(deriveUserStatus({ ...base, report: report({ state: 'done', now: 'Plan: ship in 2.4.' }) }, NOW))
-      .toMatchObject({ state: 'needs', ask: expect.stringContaining('close it'), now: 'Plan: ship in 2.4.' })
+      .toMatchObject({ state: 'waiting', toRead: 'result', waitingOn: RESULT_TO_READ, now: 'Plan: ship in 2.4.' })
     expect(deriveUserStatus({ ...base, hasLeader: true, report: report({ state: 'done' }) }, NOW)).toMatchObject({ state: 'waiting', kind: 'lead' })
     // Main and a lead are never closed: they wait on the user's next message.
     for (const who of [{ isMain: true }, { isLead: true }]) {
       expect(deriveUserStatus({ ...base, ...who, report: report({ state: 'done' }) }, NOW)).toMatchObject({ state: 'waiting', kind: 'you', waitingOn: expect.stringContaining('next message') })
     }
     expect(deriveUserStatus({ ...base, reportPending: true }, NOW)).toMatchObject({ state: 'waiting', kind: 'other', waitingOn: expect.stringContaining('report') })
-    // A done report from before the latest hand-back is an older turn's: with none coming, the turn needs reading.
+    // A done report from before the latest hand-back is an older turn's: with none coming, the turn is there to read.
     expect(deriveUserStatus({ ...base, phaseChangedAt: ago(10_000), report: report({ state: 'done', at: ago(20 * 60_000) }) }, NOW))
-      .toMatchObject({ state: 'needs', ask: expect.stringContaining('read it and reply') })
+      .toMatchObject({ state: 'waiting', toRead: 'turn' })
     // What does need the user still does, report pending or not.
     expect(deriveUserStatus({ ...base, reportPending: true, openLetter: 'Approve the quota raise' }, NOW)).toMatchObject({ state: 'needs', source: 'letter' })
     expect(deriveUserStatus({ ...base, reportPending: true, openChoice: 'Raise the quota?' }, NOW)).toMatchObject({ state: 'needs', source: 'choice' })
@@ -104,8 +105,8 @@ describe('the words say why', () => {
     expect(deriveUserStatus({ ...base, report: report({ state: 'needs', ask: 'Pick A or B?' }) }, NOW)).toMatchObject({ state: 'needs', ask: 'Pick A or B?' })
     expect(deriveUserStatus({ ...base, openLetter: 'Approve the quota raise' }, NOW)).toMatchObject({ state: 'needs', source: 'letter' })
     expect(deriveUserStatus({ ...base, processStatus: 'error' }, NOW)).toMatchObject({ state: 'needs', source: 'error' })
-    // No lead: the user, as before.
-    expect(deriveUserStatus({ ...base, hasLeader: false }, NOW)).toMatchObject({ state: 'needs' })
+    // No lead: its turn is there for the user to read, with nothing asked.
+    expect(deriveUserStatus({ ...base, hasLeader: false }, NOW)).toMatchObject({ state: 'waiting', toRead: 'turn' })
     // A lead (or Main) with no ask of its own is never a bare Needs you (2026-10-31, the user: "u can
     // show VP sure, but u need to show what are actually waiting"): it waits on the user's next message.
     expect(deriveUserStatus({ ...base, isLead: true }, NOW)).toMatchObject({ state: 'waiting', kind: 'you' })
@@ -255,7 +256,7 @@ describe('stopped by the machine, not the work', () => {
     expect(deriveUserStatus({ ...dead, restartLoss: { state: 'pending' } }, NOW).kind).toBe('stuck')
     // Back and alive, or decided as settled: the loss says nothing more.
     expect(deriveUserStatus({ ...dead, processStatus: 'idle', restartLoss: { state: 'queued' } }, NOW).kind).not.toBe('machine')
-    expect(deriveUserStatus({ ...dead, phase: 'NEED_ACTION', restartLoss: { state: 'skipped' } }, NOW).state).toBe('needs')
+    expect(deriveUserStatus({ ...dead, phase: 'NEED_ACTION', restartLoss: { state: 'skipped' } }, NOW)).toMatchObject({ state: 'waiting', toRead: 'turn' })
   })
 
   it('a turn that reported waiting on the machine (a full disk) reads so', () => {

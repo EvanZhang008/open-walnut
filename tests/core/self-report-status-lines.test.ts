@@ -6,7 +6,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { FOR_USER_PROMPT, readStatusReport } from '../../src/core/session-hooks/builtins.js'
-import { DONE_ASK, deriveUserStatus } from '../../src/core/user-status.js'
+import { RESULT_TO_READ, deriveUserStatus } from '../../src/core/user-status.js'
 import { phaseForReport } from '../../src/core/sessions/report-phase.js'
 
 const AT = new Date('2026-10-26T05:35:00Z')
@@ -144,12 +144,12 @@ describe('an ask with no kind of the user\'s own (org/user-kind.ts)', () => {
     expect(readStatusReport('FOR_USER_STATE: working\nFOR_USER_ASK: stray', AT)).toMatchObject({ state: 'working' })
   })
 
-  it('with a lead above it, the user sees Waiting on the lead; with none, a finished result to read and close, never the ask', () => {
+  it('with a lead above it, the user sees Waiting on the lead; with none, a finished result to read, never the ask', () => {
     const r = readStatusReport(ASK, AT)!
     expect(derive(r, true)).toMatchObject({ state: 'waiting', kind: 'lead' })
     const alone = derive(r, false)
-    expect(alone).toMatchObject({ state: 'needs', ask: DONE_ASK })
-    expect(alone.ask).toBe(DONE_ASK)
+    expect(alone).toMatchObject({ state: 'waiting', toRead: 'result', waitingOn: RESULT_TO_READ })
+    expect(alone.ask).toBeUndefined()
   })
 
   it('the prompt asks for the line, with the never-his list, and drops a weak kind', () => {

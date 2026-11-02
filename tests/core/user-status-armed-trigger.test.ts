@@ -73,7 +73,7 @@ describe('an armed trigger of its own wakes the task', () => {
     expect(deriveUserStatus({ ...base, phase: 'IN_PROGRESS', processStatus: 'stopped', triggers: [] }, NOW))
       .toMatchObject({ state: 'waiting', kind: 'stuck', waitingOn: 'It stopped, and nothing will wake it' })
     expect(deriveUserStatus({ ...base, phase: 'NEED_ACTION', hasLeader: false, triggers: [] }, NOW))
-      .toMatchObject({ state: 'needs', ask: expect.stringContaining('Its turn ended') })
+      .toMatchObject({ state: 'waiting', toRead: 'turn', waitingOn: expect.stringContaining('its turn ended') })
     expect(deriveUserStatus({ ...base, phase: 'NEED_ACTION', processStatus: 'stopped', triggers: [] }, NOW))
       .toMatchObject({ state: 'waiting', kind: 'lead' })
   })
@@ -104,7 +104,8 @@ describe('an armed trigger of its own wakes the task', () => {
     } as unknown as import('../../src/core/types.js').Task
     const input = statusInputOf(task, facts)
     expect(input.triggers).toEqual([])
-    expect(deriveUserStatus(input, NOW).state).toBe('needs')
+    // Not the watch: its turn handed back with nothing asked, there to read (2026-11-02).
+    expect(deriveUserStatus(input, NOW)).toMatchObject({ toRead: 'turn' })
     // The same trigger with no `watches` record is an outside watch.
     const outside = statusInputOf({ ...task, recheck_watch: [] } as never, facts)
     expect(deriveUserStatus(outside, NOW)).toMatchObject({ state: 'waiting', waitingOn: 'A watch: Sign-in watch' })

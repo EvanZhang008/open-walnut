@@ -96,6 +96,8 @@ const PHASE_READERS: Record<string, number> = {
   'src/core/org/org-store.ts': 1,
   'src/core/peers/envelope-kit.ts': 1,
   'src/core/phase.ts': 5,
+  // a precondition beside user_status (which decides): only a run its turn handed back is closed
+  'src/core/routines/run-close.ts': 1,
   'src/core/routines/trigger-api.ts': 2,
   'src/core/session-health-monitor.ts': 1,
   'src/core/session-hooks/builtins.ts': 2,

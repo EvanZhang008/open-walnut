@@ -22,7 +22,8 @@ import { currentLastWords } from './sessions/last-words.js';
 import { bus, EventNames } from './event-bus.js';
 import { log } from '../logging/index.js';
 import { bootPolicy } from './boot-policy.js';
-import { deriveUserStatus, HANDED_BACK_ASK, rollUpAsks, type UserStatus, type UserStatusInput } from './user-status.js';
+import { routineRunToClose } from './routines/run-close.js';
+import { deriveUserStatus, rollUpAsks, TURN_TO_READ, type UserStatus, type UserStatusInput } from './user-status.js';
 import { isReportPending, onReportPendingChange } from './sessions/report-pending.js';
 import type { Task } from './types.js';
 import { snoozedUntil } from './snooze.js';
@@ -384,7 +385,7 @@ export function statusInputOf(task: Task, facts: StatusFacts, nowMs = Date.now()
 const sameStatus = (a: UserStatus | undefined, b: UserStatus): boolean => JSON.stringify(a ?? null) === JSON.stringify(b);
 
 /**
- * How long a hand-back with nothing asked waits before it reads Needs you. The phase moves at
+ * How long a hand-back with nothing asked waits before it is stored (ToRead `turn`). The phase moves at
  * once; the stored status the surfaces read keeps its last value meanwhile. On 2026-10-28, 134
  * of 519 moves into NEED_ACTION were undone by a new turn within 30 s (112 within 20 s): a turn
  * end right before the CLI's follow-up turn, or a message that woke the task at once. Each one
@@ -401,7 +402,7 @@ export const HANDBACK_SETTLE_MS = 20_000;
 export function handBackSettlesAt(
   task: Pick<Task, 'phase_changed_at' | 'user_status'>, next: UserStatus, nowMs: number, hasSession: boolean,
 ): number | null {
-  if (next.state !== 'needs' || next.source !== 'session' || next.ask !== HANDED_BACK_ASK) return null;
+  if (next.toRead !== 'turn' || next.waitingOn !== TURN_TO_READ) return null;
   const was = task.user_status;
   if (!hasSession || !was || (was.state !== 'working' && was.state !== 'waiting') || was.kind === 'not-started') return null;
   const movedAt = Date.parse(task.phase_changed_at ?? '');
@@ -458,6 +459,7 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
   const facts = await readStatusFacts(targets, everything.map((t) => t.id));
   completeStatusFacts(facts, everything);
   let changed = 0;
+  const toClose: { task: Task; status: UserStatus }[] = [];
   const childrenOf = new Map<string, Task[]>();
   for (const t of everything) if (t.parent_task_id) (childrenOf.get(t.parent_task_id) ?? childrenOf.set(t.parent_task_id, []).get(t.parent_task_id)!).push(t);
   for (const task of targets) {
@@ -467,8 +469,11 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
     // top-level tasks, never as their own (Needs you is only ever an individual task).
     const asks = task.org_role ? [] : rollUpAsks(childrenOf.get(task.id) ?? [], task.id);
     const next = asks.length ? { ...derived, asks } : derived;
-    if (sameStatus(task.user_status, next)) continue;
     const settlesAt = handBackSettlesAt(task, next, nowMs, !!input.hasSession);
+    // A routine run that ended with nothing for the user closes itself (routines/run-close.ts).
+    // A candidate here (a triage run's `turn` too); closeRoutineRun decides with the triage check.
+    if (settlesAt === null && routineRunToClose(task, next, true)) toClose.push({ task, status: next });
+    if (sameStatus(task.user_status, next)) continue;
     if (settlesAt !== null) {
       if (!settleTimers.has(task.id)) log.task.info('user-status: hand-back held', { taskId: task.id, untilMs: settlesAt });
       recheckAt(task.id, settlesAt);
@@ -491,6 +496,11 @@ export async function syncUserStatuses(ids: ReadonlySet<string> | null, nowMs = 
         log.task.info('user-status: now needs you', { taskId: task.id, source: next.source });
       }
     }
+  }
+  // After the pass, never inside it: a close is a phase write that marks the task again.
+  if (toClose.length) {
+    const { closeRoutineRun } = await import('./routines/run-close.js');
+    for (const c of toClose) await closeRoutineRun(c.task, c.status);
   }
   return changed;
 }
