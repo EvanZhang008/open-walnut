@@ -5,6 +5,7 @@
  * whitespace, so the shortcut looked broken (user report, 2026-09-08).
  */
 import { test, expect, type Page } from '@playwright/test'
+import { clickCaretInto } from './prosemirror-caret'
 
 const API = 'http://localhost:3457'
 
@@ -32,10 +33,9 @@ async function openNote(page: Page) {
   await file.click()
   const editor = page.locator('.notes-editor .tiptap').first()
   await expect(editor).toBeVisible({ timeout: 5000 })
-  // TipTap applies `autofocus: 'start'` on a 0ms timer after mount. On a loaded
-  // machine that timer can fire AFTER our first click and yank the caret to the
-  // top of the doc (typed text then lands in the H1) — wait for it.
-  await expect(editor).toBeFocused({ timeout: 10_000 })
+  // No wait for TipTap's `autofocus: 'start'` here: a note already open in a tab
+  // (a retry reopens the same one) does not remount, so nothing focuses it, and a
+  // late autofocus that moves the caret back to the top is caught by clickCaretInto.
   await expect(editor.locator('p', { hasText: 'intro line' })).toBeVisible()
   return editor
 }
@@ -43,13 +43,14 @@ async function openNote(page: Page) {
 /**
  * Caret on a fresh empty paragraph after the intro line. The caret is placed by
  * clicking the block's right edge, not the End key: on macOS WebKit (the Mac
- * app) End scrolls instead of moving the caret.
+ * app) End scrolls instead of moving the caret. Enter is the editor's own key, so
+ * it waits for the editor to hold the clicked caret (prosemirror-caret.ts).
  */
 async function newLine(page: Page, editor: ReturnType<Page['locator']>) {
   const block = editor.locator('p', { hasText: 'intro line' })
   const box = await block.boundingBox()
   if (!box) throw new Error('block not laid out')
-  await block.click({ position: { x: box.width - 3, y: box.height / 2 } })
+  await clickCaretInto(block, { position: { x: box.width - 3, y: box.height / 2 } })
   await page.keyboard.press('Enter')
 }
 

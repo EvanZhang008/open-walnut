@@ -12,6 +12,7 @@
  */
 import { test, expect, type Page } from '@playwright/test'
 import { openScratchpad } from './todo-panel-helpers'
+import { clickCaretInto } from './prosemirror-caret'
 
 const API = 'http://localhost:3457'
 
@@ -194,7 +195,8 @@ test.describe('Notes Editor Stress Tests', () => {
     // Click on "Should indent" and press Tab
     const target = editor.locator('li', { hasText: 'Should indent' })
     if (await target.isVisible()) {
-      await target.click()
+      // Tab is the editor's own key: wait for it to hold the clicked caret.
+      await clickCaretInto(target)
       await page.keyboard.press('Tab')
       await page.waitForTimeout(500)
     }

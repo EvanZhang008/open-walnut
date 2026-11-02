@@ -644,6 +644,42 @@ describe('the selection pill of the Files tab', () => {
   })
 })
 
+describe('a key the editor handles itself, right after a click', () => {
+  // ProseMirror hears of a click's caret from `selectionchange`, which Chromium runs after the
+  // click's input; a key sent at once can come first. Typed text lands at the page's caret either
+  // way, but Enter, Backspace, Tab and Delete are ProseMirror's own keys and act on the selection
+  // it still holds: notes-code-fence-input's Enter split the note's heading instead of the line it
+  // had clicked (2026-11-02, most CI runs). clickCaretInto (prosemirror-caret.ts) clicks until the
+  // editor holds the caret.
+  const KEY = /keyboard\.press\(['"](?:Enter|Backspace|Tab|Shift\+Tab|Delete)['"]\)/
+  const editorSpec = (text: string) => /\.tiptap\b|ProseMirror|notes-editor/.test(text)
+  const offendersOf = (file: string, text: string): string[] => {
+    const out: string[] = []
+    let prev = ''
+    text.split('\n').forEach((line, i) => {
+      const code = line.trim()
+      if (!code || code.startsWith('//') || code.startsWith('*')) return
+      if (KEY.test(code) && /\.click\(/.test(prev) && !prev.includes('clickCaretInto(')) out.push(`${file}:${i + 1}: ${code}`)
+      prev = code
+    })
+    return out
+  }
+
+  it('waits for the editor to hold the caret before pressing it', () => {
+    expect(sources.filter(({ text }) => editorSpec(text)).flatMap(({ file, text }) => offendersOf(file, text))).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const spec = [
+      '  await block.click({ position: { x: box.width - 3, y: box.height / 2 } })',
+      "  await page.keyboard.press('Enter')",
+      '  await clickCaretInto(block)',
+      "  await page.keyboard.press('Backspace')",
+    ].join('\n')
+    expect(offendersOf('x.spec.ts', spec)).toHaveLength(1)
+  })
+})
+
 describe('a document of megabytes', () => {
   // A web-first text matcher prints the whole received text, once per poll in its call log and
   // again in each copy of the error. When the 31MB letter in human-inbox.spec.ts missed its tail,
