@@ -7,7 +7,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import {
   ALL_INBOXES, FERRY, MARINA, ROW, allGroupMessages, api, deliver, failMarkRead, flags, getGroups, groupLine,
-  markReadLog, openGroupLine, openGroupMenu, openGrouped, setLabelModel, startGroupsFixture, waitLabeled,
+  markReadLog, openGroupLine, openGroupMenu, openGrouped, pressGroupTool, setLabelModel, startGroupsFixture, waitLabeled,
   writeRulesFile,
 } from './mail-grouping-helpers'
 import { folderRow, openMail, shoot, smartRow, type MailFixture, type MailFixtureServer } from './mail-review-helpers'
@@ -138,8 +138,7 @@ test.describe('the model answering', () => {
     await expect(line).toHaveAttribute('aria-expanded', 'false')
     await expect(group.locator('[data-testid="mail-row"]')).toHaveCount(0)
     // A press on check or more (...) never also toggles the line.
-    await line.hover()
-    await line.getByTestId('mail-group-more').click()
+    await pressGroupTool(line, 'mail-group-more')
     await expect(page.getByTestId('mail-group-menu')).toBeVisible()
     await expect(line).toHaveAttribute('aria-expanded', 'false')
     await page.keyboard.press('Escape')
@@ -206,7 +205,7 @@ test.describe('the model answering', () => {
     await line.hover()
     await expect(line.getByTestId('mail-group-mark')).toHaveCount(0)
     await expect(lone.getByTestId('mail-group-foot-mark')).toHaveCount(0)
-    await line.getByTestId('mail-group-more').click()
+    await pressGroupTool(line, 'mail-group-more')
     expect((await page.getByTestId('mail-group-menu').getByRole('menuitem').allTextContents()).some((one) => /^Mark /.test(one.trim()))).toBe(false)
     await page.keyboard.press('Escape')
     // The pointer leaving the list is enough: a group with nothing unread is not kept on screen.
@@ -433,10 +432,8 @@ test.describe('the model answering', () => {
       if ((await lines.count()) === 0) break
       const line = lines.first()
       const id = (await line.getAttribute('data-group-id'))!
-      await line.hover()
-      const mark = line.getByTestId('mail-group-mark')
-      await expect(mark).toBeEnabled({ timeout: 20_000 })
-      await mark.click()
+      await expect(line.getByTestId('mail-group-mark')).toBeEnabled({ timeout: 20_000 })
+      await pressGroupTool(line, 'mail-group-mark')
       await expect(groupLine(page, id)).toHaveCount(0, { timeout: 60_000 })
     }
     // Important's unread too (they are the person's to read; here the fixture clears them).

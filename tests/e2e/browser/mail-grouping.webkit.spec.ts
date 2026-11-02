@@ -7,7 +7,7 @@
 import { devices, expect, test, type Page } from '@playwright/test'
 import {
   ALL_INBOXES, MARINA, ROW, fileHash, getGroups, groupLine, mailRow, markReadLog, openGroupLine, openGroupMenu,
-  openGrouped, resetLogs, startGroupsFixture, unsubLog, waitLabeled,
+  openGrouped, pressGroupTool, resetLogs, startGroupsFixture, unsubLog, waitLabeled,
 } from './mail-grouping-helpers'
 import { shoot, type MailFixture, type MailFixtureServer } from './mail-review-helpers'
 
@@ -125,8 +125,7 @@ test('the press marks a group read in WebKit and Undo brings it back', async ({ 
   const groups = await getGroups(fixture, { accountId: MARINA, mailboxId: 'INBOX' })
   const target = groups.groups.find((one: { unread: number; markableUnread: number }) => one.unread >= 2 && one.markableUnread === one.unread)
   const line = groupLine(page, target.id)
-  await line.hover()
-  await line.getByTestId('mail-group-mark').click()
+  await pressGroupTool(line, 'mail-group-mark')
   const done = page.getByTestId('mail-list-status').locator('.mail-list-status-line').filter({ hasText: /^Marked \d+ read in / })
   await expect(done).toBeVisible({ timeout: 60_000 })
   await expect(line).toHaveCount(0, { timeout: 20_000 })

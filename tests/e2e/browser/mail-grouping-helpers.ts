@@ -279,11 +279,25 @@ export async function openGroupLine(page: Page, id: string): Promise<Locator> {
   return group
 }
 
+/**
+ * Press a tool of a group line (check, more), the way a pointer does: onto the line, then the tool.
+ * The tools are drawn only while the pointer is over their line (`display: none` otherwise), and a
+ * list that redraws under a still pointer (a group's numbers settling, a line sliding in) leaves the
+ * pointer over another line, where a click waits out the test for a tool that is not drawn
+ * (2026-11-02: mail-grouping-bulk's Retry test, 240 s, on CI). So the hover and the press are one
+ * step, tried again until the press lands.
+ */
+export async function pressGroupTool(line: Locator, testId: 'mail-group-mark' | 'mail-group-more'): Promise<void> {
+  const tool = line.getByTestId(testId)
+  await expect(async () => {
+    await line.hover()
+    await tool.click({ timeout: 2_000 })
+  }).toPass({ timeout: 60_000 })
+}
+
 /** The group's more (...) menu (the tools show on hover; the pointer goes there first, as a person's would). */
 export async function openGroupMenu(page: Page, id: string): Promise<Locator> {
-  const line = groupLine(page, id)
-  await line.hover()
-  await line.getByTestId('mail-group-more').click()
+  await pressGroupTool(groupLine(page, id), 'mail-group-more')
   const menu = page.getByTestId('mail-group-menu')
   await expect(menu).toBeVisible()
   return menu

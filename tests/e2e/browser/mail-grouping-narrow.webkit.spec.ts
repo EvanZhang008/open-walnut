@@ -6,7 +6,7 @@
  */
 import { devices, expect, test, type Page } from '@playwright/test'
 import {
-  ALL_INBOXES, getGroups, groupLine, openGroupLine, openMailAnyWidth, startGroupsFixture, statusLine, waitLabeled,
+  ALL_INBOXES, getGroups, groupLine, openGroupLine, openMailAnyWidth, pressGroupTool, startGroupsFixture, statusLine, waitLabeled,
 } from './mail-grouping-helpers'
 import { shoot, smartRow, type MailFixture, type MailFixtureServer } from './mail-review-helpers'
 
@@ -84,8 +84,7 @@ test('at 900px the header, the lines, the menus and the status strip fit the col
   const groups = await getGroups(fixture, ALL_INBOXES)
   const target = groups.groups.find((one: { unread: number; markableUnread: number }) => one.markableUnread === one.unread)
   const line = groupLine(page, target.id)
-  await line.hover()
-  await line.getByTestId('mail-group-more').click()
+  await pressGroupTool(line, 'mail-group-more')
   const menu = page.getByTestId('mail-group-menu')
   expect(inViewport(await menu.boundingBox(), 900, 800)).toBe(true)
   await menu.getByRole('menuitem', { name: /^Mark \d+ read$/ }).click()

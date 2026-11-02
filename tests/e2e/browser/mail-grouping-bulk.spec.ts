@@ -8,7 +8,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import {
   ALL_INBOXES, FERRY, FERRY_INBOX, MARINA, MARINA_INBOX, api, deliver, failMarkRead, fileHash, flags, getGroups,
-  groupLine, markReadLog, openGroupLine, openGroupMenu, openGrouped, resetLogs, setFerryReadDelay,
+  groupLine, markReadLog, openGroupLine, openGroupMenu, openGrouped, pressGroupTool, resetLogs, setFerryReadDelay,
   startGroupsFixture, statusLine, waitLabeled, waitSorted, type GroupsScope,
 } from './mail-grouping-helpers'
 import { folderRow, shoot, type MailFixture, type MailFixtureServer } from './mail-review-helpers'
@@ -38,10 +38,8 @@ async function biggestMarkable(scope: GroupsScope, minimum = 2): Promise<{ id: s
 
 async function press(page: Page, id: string): Promise<void> {
   const line = groupLine(page, id)
-  await line.hover()
-  const mark = line.getByTestId('mail-group-mark')
-  await expect(mark).toBeEnabled({ timeout: 20_000 })
-  await mark.click()
+  await expect(line.getByTestId('mail-group-mark')).toBeEnabled({ timeout: 20_000 })
+  await pressGroupTool(line, 'mail-group-mark')
 }
 
 test.describe('the ordinary fixture', () => {
@@ -181,7 +179,9 @@ test.describe('the ordinary fixture', () => {
     await expect(mark).toBeDisabled()
     await expect(mark).toHaveAttribute('title', 'Groups are updating')
     await expect(page.getByTestId('mail-sort-progress')).toContainText(/(Updating groups|Sorting your mail)\u2026 400 of 3,615/)
-    await page.unroute('**/api/plugins/mail/groups?**')
+    // The page polls /groups: a read still inside route.fetch when the test ends failed it on CI
+    // ("Target page, context or browser has been closed", 2026-11-02).
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
   })
 
   test('a job keeps its result in the view that started it', async ({ page }) => {

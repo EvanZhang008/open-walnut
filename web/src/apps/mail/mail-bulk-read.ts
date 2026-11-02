@@ -129,8 +129,10 @@ function showResult(slot: BulkSlot, result: BulkResult, ms = RESULT_MS): void {
   const next: BulkSlot = { ...slot, phase: 'result', result, stripId };
   put(next);
   // The slot outlives the strip line a while, so an Undo pressed at the last moment still works.
+  // A sticky line (a result with failures) stays until it is pressed or pushed out, so its slot
+  // stays with it: retired after a minute, its Retry and Undo did nothing at all (2026-11-02).
   clearTimer(slot.key);
-  timers.set(slot.key, setTimeout(() => retire(slot.key), Math.max(ms, SLOT_KEEP_MS)));
+  if (!result.sticky) timers.set(slot.key, setTimeout(() => retire(slot.key), Math.max(ms, SLOT_KEEP_MS)));
   pushMailListStatus({
     id: stripId,
     viewKey: slot.viewKey,
