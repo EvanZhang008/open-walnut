@@ -674,6 +674,16 @@ Full details: [Testing pipeline](./docs/reference/testing-pipeline.md).
 
 **主 agent 必须亲自完成关键操作与证据检查。** 子 agent 可以协助，但其报告、简单文本样例、类型检查、测试进程已启动或部署成功，都不能代替用户流程验收。修复后重跑原始复现与相关回归，并确认验收的是最终构建；还有失败、未测关键场景或后台测试未结束时，只报告进度或阻塞，不能宣布完成。工具无法显示截图时明确说明，不把 DOM 检查说成肉眼审图。
 
+**Testing and review scale with the change, not with the process** (2026-11-02, the user: "the review should be scale based on the actually scale of the code"; a one-minute `git revert` of a full-screen change then ran Chromium and Linux WebKit specs and a review agent for 30 minutes). Pick the tier before testing and name it in one line; any escalation trigger moves a change up, whatever its size:
+
+| Tier | What counts | Run | Skip |
+|---|---|---|---|
+| Small | a revert to a state production already ran; CSS, copy, docs or config text only; a few dozen lines with no new branch or state | the one or two tests or specs that touch it, on the engine the user runs (WebKit for the Mac app); the owner reads its own diff; deploy; a short video when it is visible | the full quick tier, `test:pre-commit`, other browser engines, a review agent, an HTML explainer |
+| Medium | new logic in one area, a few files, no trigger | the affected test groups (`test:focus`, or `test:pre-commit` for its tiers) and the touched flow in Playwright on the user's engine; one review agent on a mid-size model | the whole suite, a second engine unless the change is engine-specific |
+| Large | any trigger, or a change across subsystems | the full flow below: scenario matrix, `test:pre-commit`, the engines the change reaches, an independent review on the strongest model | nothing |
+
+Triggers: user data or storage formats, a migration, concurrency (locks, queues, ordering), security, permissions or credentials, an outward send, the session daemon or process lifecycle, the deploy or release scripts, the frozen `/api/v1` contract or older clients. A failing test in a lower tier is fixed and rerun alone; it moves the change up only when the failure shows the change reaches further than its tier said. A bug fix still adds its guard test in every tier.
+
 - Bug fix: Playwright repro → fix → verify same flow → commit
 - **A bug fix covers the whole class, with a guard test** (2026-10-29: three bugs reported fixed came back the same day; each first fix covered only the known case, a fixed list of note types, one of 29 components with the same render mistake). Name the class the bug belongs to, fix every member, and add a test that fails when a NEW member of the class appears (enumerate the members from the source, as the ratchets here do), not only one for the case that was reported.
 - **A bug is fixed when it works in the user's own build, on the data that showed it.** The Mac app's WKWebView or the phone build, against the real data of the report; a green test on another build or a fixture is not that proof.

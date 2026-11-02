@@ -52,7 +52,11 @@ import { TASK_ROUTING_CONTRACT } from './task-routing-contract.js';
 //
 // Raised to 9,550 on 2026-11-02 for that bullet's mixed rows: a row that carries a notice or
 // another session's mail beside the user's words counts only through its personText. It renders 9,487.
-export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 9_550;
+//
+// Raised to 9,950 on 2026-11-02 for the charter's work line: testing and review now scale
+// with the change (a one-minute revert had run two browser engines and a review agent for
+// 30 minutes). It renders 9,915.
+export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 9_950;
 
 // The phase LIST comes from PHASE_ORDER, so adding or removing a phase updates
 // this prompt with no second edit. The phases the prompt names are typed
