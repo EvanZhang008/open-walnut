@@ -7,7 +7,8 @@
  * "start a pomodoro on this task". They only move Rhythm's own timers. A routine gets
  * `status` alone: a run starts only when the person asks, never from a schedule.
  * `macos_shortcuts_install` stays in-process: it writes files and opens a dialog on the
- * Mac's screen, which should always follow a human's click in the App.
+ * Mac's screen, which should always follow a human's click in the App. A test run's
+ * request may only read (testRunRefusal).
  */
 import type { PluginOpDefinition, WalnutServerApi } from '@open-walnut/plugin-api/server'
 import * as actions from './actions'
@@ -143,6 +144,17 @@ function replicaHandlers(): Record<string, Handler> {
   return out
 }
 
+/**
+ * A test run (a browser under automation on the person's own Walnut, `x-walnut-test-run`)
+ * changes nothing here: a block it started was the person's block, quieted their Walnut and
+ * phone and turned their Mac's Do Not Disturb on (2026-11-02). Rhythm's state is one run on
+ * one Mac, so there is no copy to keep apart; every op that is not read-only refuses, and
+ * reads still answer. A test of Rhythm itself runs on an ephemeral server.
+ */
+export function testRunRefusal(label: string): string {
+  return `This is a test run (${label}): Rhythm leaves your focus block, quiet mode, Do Not Disturb and music as they are. Test Rhythm on an ephemeral server.`
+}
+
 export function registerOps(walnut: WalnutServerApi, runtime: RhythmRuntime | null): void {
   const table = runtime ? handlers(runtime) : replicaHandlers()
   for (const spec of OP_SPECS) {
@@ -154,7 +166,12 @@ export function registerOps(walnut: WalnutServerApi, runtime: RhythmRuntime | nu
       readonly: spec.readonly,
       remote: spec.remote,
       inputSchema: { type: 'object', properties: spec.properties ?? {} },
-      handler: (args) => handler(args ?? {}),
+      handler: (args) => {
+        // Read inside the request: an op is the only way in, so this covers every change.
+        const run = spec.readonly ? undefined : walnut.testRun?.()
+        if (run) return Promise.reject(new Error(testRunRefusal(run)))
+        return handler(args ?? {})
+      },
     }
     walnut.registry.op(definition)
   }

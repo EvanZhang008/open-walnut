@@ -10,6 +10,7 @@ import type {
   PluginToolSpec,
   ProjectClaimFn,
 } from '../integration-types.js'
+import { ambientTestRun } from '../test-run.js'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import type { IntegrationRegistry } from '../integration-registry.js'
@@ -603,6 +604,9 @@ export function createServerPluginApi(options: CreateServerPluginApiOptions) {
     // A plugin that owns an outside account has to know which box it is on: two Walnuts
     // polling one mailbox double every fetch and every write.
     replica: CLOUD_MODE,
+    // A test run's request (x-walnut-test-run, an automated browser): an op that changes the
+    // person's Mac or a timer of the plugin's refuses it (2026-11-02: a test run's focus block).
+    testRun: () => ambientTestRun(),
     signal: context.signal,
     log: context.logger,
 

@@ -3,6 +3,7 @@ import type { Dirent } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { WALNUT_HOME } from '../../constants.js'
+import { ambientTestRun } from '../../core/test-run.js'
 import type { PluginTombstone } from '../../core/integration-registry.js'
 import { validatePluginId } from '../../core/plugins/ids.js'
 import type { MissingDependency, PluginLifecycleRecord } from '../../core/plugins/plugin-manager.js'
@@ -490,10 +491,13 @@ export async function callPrimaryPluginOp(
   if (Buffer.byteLength(serialized) > MAX_PLUGIN_OP_ARGS_BYTES) {
     throw new PluginRuntimeRelayError('Plugin operation arguments are too large', 413)
   }
+  // A test run's request stays one on the Mac (src/core/test-run.ts): an op there reads it
+  // through walnut.testRun() and refuses what would change the person's Mac or timers.
+  const testRun = ambientTestRun()
   const outcome = await callPrimaryControl(
     'server.plugin-op',
     SERVER_RELAY_SID,
-    { pluginId, opName, args },
+    { pluginId, opName, args, ...(testRun ? { testRun } : {}) },
     15_000,
   )
   if (!outcome.ok) throw relayError(outcome.failure)

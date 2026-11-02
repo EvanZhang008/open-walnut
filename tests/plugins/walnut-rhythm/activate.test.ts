@@ -103,6 +103,46 @@ describe('activate', () => {
     }
   })
 
+  it('a test run changes nothing: every write op refuses, the person\'s own block and quiet stay, reads answer', async () => {
+    // 2026-11-02: a test browser on the person's Walnut started a block, which held quiet (the
+    // phone too) and turned the Mac's Do Not Disturb on. The ops are read from what Rhythm
+    // registers, so a new write op is covered without naming it here.
+    let run: string | undefined
+    const fake = createFakeWalnut({ pluginId: 'walnut-rhythm', config: SAFE_CONFIG, overrides: { testRun: () => run } })
+    await activate(fake.api)
+    try {
+      await op(fake, 'focus_start')({ minutes: 25 })
+      const before = JSON.stringify((await op(fake, 'status')()) as object)
+      const quietBefore = await fake.api.notifications.quiet.get()
+      expect(quietBefore.active).toBe(true)
+      const emitted = fake.emitted.length
+      const notices = fake.notices.length
+
+      run = 'webdriver-spec'
+      const writes = fake.registeredOps.filter((definition) => !definition.readonly)
+      expect(writes.length).toBeGreaterThan(10)
+      for (const definition of writes) {
+        await expect(op(fake, definition.name)({ minutes: 5, on: true }), definition.name).rejects.toThrow(/test run \(webdriver-spec\)/)
+      }
+      // A refused write announces nothing (a read below may publish the state it reads).
+      expect(fake.emitted.length).toBe(emitted)
+      expect(fake.notices.length).toBe(notices)
+      for (const definition of fake.registeredOps.filter((one) => one.readonly)) {
+        await expect(op(fake, definition.name)({ refresh: true }), definition.name).resolves.toBeDefined()
+      }
+
+      run = undefined
+      // What moves with the clock (now, the time left, when a check last ran) is left out;
+      // everything else is as the person left it.
+      const settled = (value: unknown) => JSON.parse(JSON.stringify(value), (key, v) => (['now', 'remainingMs', 'checkedAt'].includes(key) ? undefined : v))
+      expect(settled(await op(fake, 'status')())).toEqual(settled(JSON.parse(before)))
+      expect((await fake.api.notifications.quiet.get()).holds).toEqual(quietBefore.holds)
+      expect(((await op(fake, 'focus_stop')()) as { message: string }).message).toMatch(/stopped/)
+    } finally {
+      await deactivate()
+    }
+  })
+
   it('on a cloud replica it answers status and refuses every action', async () => {
     const fake = createFakeWalnut({ pluginId: 'walnut-rhythm', config: SAFE_CONFIG, overrides: { replica: true } })
     await activate(fake.api)

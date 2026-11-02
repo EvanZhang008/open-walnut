@@ -1696,6 +1696,22 @@ export interface WalnutServerApi {
    * ever one Walnut.
    */
   readonly replica: boolean
+  /**
+   * The label of the test run the request you are serving belongs to, or `undefined` for real
+   * work (and outside any request: a timer, a poll, activation).
+   *
+   * A browser under automation on the person's own Walnut, or a client that sends
+   * `x-walnut-test-run` (the `walnut` CLI with `WALNUT_TEST_RUN` over HTTP, the cloud
+   * companion relaying such a request), is a test run. The host keeps its tasks and
+   * preferences apart, but whatever your op does outside Walnut it does for real: a test run that started a focus
+   * block silenced the person's notifications and turned their Mac's Do Not Disturb on. An op
+   * that changes something of the person's that the host cannot keep apart (their Mac, an
+   * outside account, a running timer of yours) should refuse when this is set.
+   *
+   * Unlike `services.caller()` it survives an `await` inside the request. Older hosts lack it:
+   * call it as `walnut.testRun?.()`.
+   */
+  testRun?(): string | undefined
   readonly signal: AbortSignal
   readonly log: PluginLogger
   readonly tasks: TaskService

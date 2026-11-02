@@ -174,6 +174,32 @@ describe('test-run prefs gate', () => {
     expect(ungated, 'a browser-storage mirror writes a route that keeps no test run apart').toEqual([])
   })
 
+  // A plugin whose server takes the person's quiet hold or runs a command that changes their
+  // Mac (Shortcuts, AppleScript, `open`) acts for real whatever request asked: a test browser's
+  // focus block held quiet for its hour, the phone too, and turned Do Not Disturb on
+  // (2026-11-02). Each such plugin reads `walnut.testRun?.()` (the request's test run) in its
+  // code, not a comment, and refuses what it would change.
+  it('every plugin that quiets the person or changes their Mac reads the test run', () => {
+    const code = (f: string) => fs.readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+    const MAC = /\b\w*(?:run|Process|exec|spawn)\w*\(\s*['"`](?:\/usr\/bin\/)?(?:osascript|shortcuts|open)\b|\bquiet\.set\(/
+    const roots = [path.join(SRC, 'integrations'), path.join(ROOT, 'plugin-store'), path.join(ROOT, 'examples/plugins')]
+    const plugins = new Map<string, string[]>()
+    for (const root of roots.filter((r) => fs.existsSync(r))) {
+      for (const abs of sourceFiles(root)) {
+        const parts = path.relative(root, abs).split(path.sep)
+        if (parts.length < 2 || parts.includes('web')) continue
+        const dir = path.join(root, parts[0])
+        plugins.set(dir, [...(plugins.get(dir) ?? []), abs])
+      }
+    }
+    const acting = [...plugins].filter(([, files]) => files.some((f) => MAC.test(code(f))))
+    expect(acting.map(([dir]) => path.relative(ROOT, dir))).toContain('plugin-store/walnut-rhythm')
+    const open = acting
+      .filter(([, files]) => !files.some((f) => /\.testRun\?\.\(\)/.test(code(f))))
+      .map(([dir]) => path.relative(ROOT, dir))
+    expect(open, 'this plugin changes the person\'s Mac or quiet: refuse when walnut.testRun?.() names a test run').toEqual([])
+  })
+
   it('every gate keeps a test run\'s write in the run\'s copy', () => {
     for (const [gate, file] of Object.entries(GATE_HOMES)) {
       expect(functionBody(file, gate), `${gate} calls testRunPrefsWrite`).toContain('testRunPrefsWrite')

@@ -3,6 +3,7 @@ import { getPluginLifecycleRecords } from '../integration-loader.js'
 import { validatePluginId } from './ids.js'
 import { callPluginOp, getPluginApiBase, listPluginOps } from './server-api.js'
 import { ORIGIN_HEADER, REMOTE_HTTP_ORIGIN, lowerOrigin } from '../../lib/caller-origin.js'
+import { parseTestRunLabel, testRunMarkingEnabled, withTestRun } from '../test-run.js'
 
 const OP_NAME_PATTERN = /^[a-z0-9_]{1,128}$/
 const HTTP_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'])
@@ -331,9 +332,14 @@ export async function handlePluginControlRelay(
         // The relay exists for the cloud bridge: whoever sent it is not on this Mac,
         // and a remote host's daemon relaying it is lower still.
         const origin = lowerOrigin(REMOTE_HTTP_ORIGIN, relayOrigin)
-        return {
-          ok: true,
-          result: await callPluginOp(pluginId, opName, args, origin) as unknown as Record<string, unknown>,
+        // The companion's request was a test run: so is the op here, while it runs.
+        const testRun = (await testRunMarkingEnabled()) ? parseTestRunLabel(params.testRun) : undefined
+        let open = true
+        try {
+          const result = await withTestRun(testRun, () => callPluginOp(pluginId, opName, args, origin), () => open)
+          return { ok: true, result: result as unknown as Record<string, unknown> }
+        } finally {
+          open = false
         }
       }
       case 'server.plugin-manage':

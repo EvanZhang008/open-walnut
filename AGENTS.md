@@ -150,7 +150,13 @@ left every fresh browser on an empty Home): only its own changes, in memory unde
 over the user's live values in its reads, gone 30 minutes after its last write; an automated
 browser's label names its browser context (`webdriver-<id>`), so a fresh browser opens on the
 user's layout. `tests/core/test-run-prefs-gate.test.ts` lists every preference write route and
-fails on one that does not go through it. Throwaway servers (ephemeral, the test
+fails on one that does not go through it. What a plugin does outside Walnut (the person's Mac,
+an outside account, its own timers) no copy holds, so a plugin op reads `walnut.testRun?.()`, the
+request's label, carried through the companion's op relay too, and refuses such a change (2026-11-02:
+a test browser's Rhythm focus block quieted the user's Walnut and phone and turned the Mac's Do Not
+Disturb on; Rhythm now refuses every write op in a test run); the same gate test fails on a plugin
+that takes the person's quiet hold or runs Shortcuts, AppleScript or `open` without reading it.
+Throwaway servers (ephemeral, the test
 runner, a data home in a temp or task dir) ignore the header; `WALNUT_TEST_RUN_MARK=1` turns it on
 there, as `tests/e2e/test-run-objects.test.ts` does.
 
