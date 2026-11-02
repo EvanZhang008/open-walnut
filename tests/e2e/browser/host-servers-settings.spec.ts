@@ -79,6 +79,11 @@ test.describe('Walnut on a host', () => {
     await expect(toggle).toHaveAttribute('aria-checked', 'false')
     await group.scrollIntoViewIfNeeded()
     await shot(page, '1-off', group)
+    // The host's name is the row's title: a click on it starts nothing (2026-11-02).
+    await row.locator('.settings-row-label').click()
+    await page.waitForTimeout(500)
+    await expect(toggle).toHaveAttribute('aria-checked', 'false')
+    expect(((await hostsNow(page))[KEY]?.server as { enabled?: boolean } | undefined)?.enabled).not.toBe(true)
 
     await toggle.click()
     await expect(toggle).toHaveAttribute('aria-checked', 'true')

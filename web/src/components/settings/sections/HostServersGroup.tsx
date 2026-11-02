@@ -141,7 +141,9 @@ export function HostServersGroup({ hosts }: { hosts: Config['hosts'] }) {
               data-testid={`host-server-${host.hostKey}`}
               data-phase={on ? host.view?.phase ?? 'unknown' : 'off'}
               label={host.label}
-              htmlFor={`host-server-enabled-${host.hostKey}`}
+              // No htmlFor: the host's name is the row's title, and a click on it must not start or
+              // stop its server (2026-11-02, the same trap turned a sync check on). The switch has
+              // its own aria-label.
               help={
                 <span className="browser-access-state" data-testid={`host-server-state-${host.hostKey}`}>
                   <span className="browser-access-dot" data-dot={line.dot} aria-hidden="true" />
