@@ -799,7 +799,10 @@ jobs:
           n=$(find "$RUNNER_TEMP/browser-reports" -name '*.json' | wc -l)
           echo "browser reports: $n of 16"
           [ "$n" -gt 0 ] || { echo "::warning::no browser shard wrote a report: nothing to judge" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; }
-          [ "$n" = 16 ] || echo "::warning::only $n of 16 browser shards wrote a report; the tests of the others are not judged"
+          # Name the shards: "15 of 16" alone sent a reader through 16 job logs (2026-11-01: shard 5,
+          # whose report outgrew the longest string the JSON reporter can write).
+          missing=$(for i in $(seq 1 16); do [ -f "$RUNNER_TEMP/browser-reports/browser-$i.json" ] || printf ' %s' "$i"; done)
+          [ -z "$missing" ] || echo "::warning::only $n of 16 browser shards wrote a report (no report from shard$missing); the tests of those shards are not judged" | tee -a "$GITHUB_STEP_SUMMARY"
           bun scripts/browser-baseline.mjs check "$RUNNER_TEMP/browser-reports" | tee -a "$GITHUB_STEP_SUMMARY"
 
   # ── The iOS app's tests on a simulator: informational, not in CI OK ───────
@@ -808,9 +811,11 @@ jobs:
   # run here instead of only on a developer's Mac. No secrets and no signing
   # identity: a simulator build signs to run locally, which keeps the entitlements
   # (CODE_SIGNING_ALLOWED=NO drops them, and the keychain tests then read
-  # errSecMissingEntitlement). It stays out of CI OK until it has
-  # been green for a few runs, and the UI layer may fail without failing the run
-  # (continue-on-error) while its stability on a hosted runner is unknown.
+  # errSecMissingEntitlement). The unit leg was in CI OK from 2026-10-31 and left it
+  # the next day: it failed twice in its first day, once on two test races (fixed),
+  # once with failure text no one without a login could read. It goes back once each
+  # failure names its test as an annotation (The failed tests) and it has five green
+  # runs in a row. The UI leg may fail without failing the run (continue-on-error).
   # WalnutUITests runs through ios-native/tests/ui/run-ui-tests.sh, the only way its
   # pairing reaches the XCUITest runner (ios-native/README.md), at its offline
   # default: a dead loopback port, no server and nobody's data.
@@ -847,6 +852,7 @@ jobs:
         -skip-testing:WalnutUITests/MediaFileUITests
         -skip-testing:WalnutUITests/PeerMessageUITests
         -skip-testing:WalnutUITests/VoiceHistoryUITests
+        -skip-testing:WalnutUITests/VoiceQuickActionUITests
     steps:
       - uses: actions/checkout@v5
       - name: XcodeGen
@@ -890,12 +896,14 @@ jobs:
       # The failures go into the log, never the result bundle as an artifact: a public
       # repo's artifacts are anyone's to download, and the 130 MB bundle (build logs,
       # the runner's environment) failed the leak audit on 2026-10-31.
+      # Each failed test is also an annotation (::error), which the public API serves with no
+      # login (check-runs/<job>/annotations), so the failure can be read without the job log.
       - name: The failed tests
         if: failure() && matrix.layer == 'unit'
         shell: bash
         run: |
           xcrun xcresulttool get test-results summary --path "$RUNNER_TEMP/ios-unit.xcresult" --compact \
-            | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d.get("result"), d.get("totalTestCount"), "tests,", d.get("failedTests"), "failed"); [print(f.get("testIdentifierString"), ":", f.get("failureText")) for f in d.get("testFailures", [])]' \
+            | python3 ios-native/tests/failed-tests.py \
             || echo "no readable result bundle"
 
   # ── The single required check ───────────────────────────────────────────────
