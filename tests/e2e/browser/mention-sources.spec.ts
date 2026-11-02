@@ -6,7 +6,7 @@
  *                                                 way a plugin's would)
  *
  * All searches every source: Tasks, Notes and Files at once, then the plugin sources below,
- * a few rows each, as they answer (Late after 1.5 s, Stuck never), without moving the
+ * a few rows each, as they answer (Late after 3 s, Stuck never), without moving the
  * highlight or holding the list. A picked row lands as a token naming its source, and the
  * model receives a card naming the source, the row's kind, its title and its ref: checked
  * in the session's Raw input view, which shows the input as the model got it.
@@ -49,6 +49,37 @@ async function groupOrder(page: Page): Promise<string[]> {
       if (out[out.length - 1] !== g) out.push(g)
     }
     return out
+  })
+}
+
+/** Records, in the page, when Notes' and Late's rows first draw and the highlight before Late's. */
+async function recordArrivals(page: Page, notesTitle: string, lateTitle: string): Promise<void> {
+  await page.evaluate(({ palette, notesTitle, lateTitle }) => {
+    type Seen = { notesAt?: number; lateAt?: number; selBeforeLate?: string }
+    const w = window as unknown as { __mentionArrivals?: Seen; __mentionObserver?: MutationObserver }
+    w.__mentionObserver?.disconnect()
+    const seen: Seen = {}
+    w.__mentionArrivals = seen
+    const has = (group: string, title: string) => [...document.querySelectorAll(`${palette} [data-group="${group}"] .mention-title`)]
+      .some((el) => el.textContent?.trim() === title)
+    const mark = () => {
+      const now = performance.now()
+      if (seen.notesAt === undefined && has('src:notes', notesTitle)) seen.notesAt = now
+      if (seen.lateAt !== undefined) return
+      if (has('src:late', lateTitle)) { seen.lateAt = now; return }
+      const sel = document.querySelector(`${palette} .mention-row.selected .mention-title`)?.textContent?.trim()
+      if (sel) seen.selBeforeLate = sel
+    }
+    w.__mentionObserver = new MutationObserver(mark)
+    w.__mentionObserver.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class'] })
+  }, { palette: PALETTE, notesTitle, lateTitle })
+}
+
+async function readArrivals(page: Page): Promise<{ notesAt?: number; lateAt?: number; selBeforeLate?: string }> {
+  return page.evaluate(() => {
+    const w = window as unknown as { __mentionArrivals?: object; __mentionObserver?: MutationObserver }
+    w.__mentionObserver?.disconnect()
+    return { ...(w.__mentionArrivals ?? {}) }
   })
 }
 
@@ -118,22 +149,24 @@ test('tabs: All, Tasks, Notes, then the plugin sources; All searches every sourc
   await expect(activeTab(page)).toHaveText('All')
 
   // All searches the plugin sources too, on a loose match ("ali" finds Alice Chen), and
-  // draws them under Tasks, Notes and Files. Late answers 1.5 s later and joins at the
+  // draws them under Tasks, Notes and Files. Late answers 3 s later and joins at the
   // foot; the highlight stays where it was; Stuck never answers and never shows.
+  // The page records when each group first drew and what was highlighted right before
+  // Late joined, so a slow runner cannot make Late's rows look early (a check read by
+  // Playwright after Notes showed can run after Late arrived too).
+  await recordArrivals(page, 'Vault note', 'Late answer for vault')
   await retype(page, input, '@vault')
-  const typedAt = Date.now()
   await expect(groupOf(page, 'src:notes').locator('.mention-title')).toHaveText(['Vault note'], { timeout: 10_000 })
-  const notesAfter = Date.now() - typedAt
-  await expect(groupOf(page, 'src:late')).toHaveCount(0)
-  const highlighted = (await selectedTitle(page).textContent())!.trim()
   await expect(groupOf(page, 'src:late').locator('.mention-title')).toHaveText(['Late answer for vault'], { timeout: 10_000 })
-  await expect(selectedTitle(page)).toHaveText(highlighted)
+  const arrivals = await readArrivals(page)
+  expect(arrivals.selBeforeLate, 'something was highlighted before Late joined').toBeTruthy()
+  await expect(selectedTitle(page)).toHaveText(arrivals.selBeforeLate!)
   const order = await groupOrder(page)
   expect(order.indexOf('src:notes')).toBeGreaterThan(order.indexOf('task'))
   expect(order.indexOf('files')).toBeGreaterThan(order.indexOf('src:notes'))
   expect(order.indexOf('src:late')).toBeGreaterThan(order.indexOf('files'))
   expect(order).not.toContain('src:stuck')
-  expect(notesAfter, 'Notes is not held behind the slow sources').toBeLessThan(1500)
+  expect(arrivals.notesAt, 'Notes is not held behind the slow sources').toBeLessThan(arrivals.lateAt!)
   await page.locator('.draft-session-panel').screenshot({ path: `${shots}/02-all-everything.png` })
 
   // A two-word query nothing local matches keeps the picker open until the slow

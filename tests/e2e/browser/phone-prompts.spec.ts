@@ -118,15 +118,60 @@ async function watchClickFrame(page: Page): Promise<void> {
   })
 }
 
+/**
+ * Watches the next prompt card holding `text` from the moment it mounts, in the page: when it
+ * mounted, a click on its first answer button in that same moment (which must do nothing), and
+ * when its buttons armed. A check from Playwright after the card showed can run after it armed
+ * on a busy runner (2026-11-02, C83: the "first moments" tap approved the plan), so the unarmed
+ * window is judged where it happens.
+ */
+async function watchArming(page: Page, text: string): Promise<void> {
+  await page.evaluate((text) => {
+    type Arming = { mountedAt?: number; clickedDisabled?: boolean; armedAt?: number }
+    const w = window as unknown as { __arming?: Arming; __armingObs?: MutationObserver }
+    w.__armingObs?.disconnect()
+    const seen: Arming = {}
+    w.__arming = seen
+    const check = () => {
+      const card = [...document.querySelectorAll<HTMLElement>('.permission-request-card')].find((c) => c.textContent?.includes(text))
+      if (!card) return
+      const btn = card.querySelector<HTMLButtonElement>('button.permission-request-btn')
+      if (!btn) return
+      if (seen.mountedAt === undefined) {
+        seen.mountedAt = performance.now()
+        seen.clickedDisabled = btn.disabled
+        btn.click()
+      }
+      if (seen.armedAt === undefined && !card.classList.contains('is-arming') && !btn.disabled) {
+        seen.armedAt = performance.now()
+        w.__armingObs?.disconnect()
+      }
+    }
+    w.__armingObs = new MutationObserver(check)
+    w.__armingObs.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'disabled'] })
+  }, text)
+}
+
+/** Waits for the watched card to arm, then checks it was unarmed for its first moments. */
+async function expectArmedLate(page: Page, answers: Answers): Promise<void> {
+  const read = () => page.evaluate(() => ({ ...(window as unknown as { __arming?: { mountedAt?: number; clickedDisabled?: boolean; armedAt?: number } }).__arming }))
+  await expect.poll(async () => (await read()).armedAt !== undefined, { timeout: 5000 }).toBe(true)
+  const a = await read()
+  expect(a.clickedDisabled, 'its buttons are disabled when it appears').toBe(true)
+  expect(a.armedAt! - a.mountedAt!, 'armed only after its first moments').toBeGreaterThanOrEqual(400)
+  expect(answers.bodies, 'a tap in its first moments sent nothing').toHaveLength(0)
+}
+
 test('Allow / Deny: side by side, armed after 500 ms, busy in the same frame, held, then settled (C31)', async ({ page }) => {
   const answers = await setup(page)
+  await watchArming(page, 'ask req-phone-1')
   await inject(page, 'session:permission-request', ask('req-phone-1', 'Bash', { command: 'ls -la ./garden', description: 'List the garden folder' }))
   const card = cards(page).filter({ hasText: 'ask req-phone-1' })
   await expect(card).toBeVisible({ timeout: 15_000 })
   const allow = card.getByRole('button', { name: 'Allow' })
   const deny = card.getByRole('button', { name: 'Deny' })
   // Unarmed for the first moments: disabled, 0.6.
-  await expect(allow).toBeDisabled()
+  await expectArmedLate(page, answers)
   await expect(allow).toBeEnabled({ timeout: 2000 })
   const a = await box(allow); const d = await box(deny)
   expect(a.height).toBeGreaterThanOrEqual(44)
@@ -289,6 +334,7 @@ test('AskUserQuestion: full-width rows, check rows, a 16 px Other, Submit waits 
 test('plan approval: 12 lines and Show all, Approve / Keep planning side by side, armed after 500 ms (C83)', async ({ page }) => {
   const answers = await setup(page)
   const plan = Array.from({ length: 30 }, (_, i) => `${i + 1}. Plant row ${i + 1}`).join('\n')
+  await watchArming(page, 'ask req-plan')
   await inject(page, 'session:permission-request', ask('req-plan', 'ExitPlanMode', { plan }))
   const card = cards(page).filter({ hasText: 'ask req-plan' })
   await expect(card).toBeVisible({ timeout: 15_000 })
@@ -298,9 +344,7 @@ test('plan approval: 12 lines and Show all, Approve / Keep planning side by side
   const approve = card.getByRole('button', { name: 'Approve' })
   const keep = card.getByRole('button', { name: 'Keep planning' })
   // Unarmed: a tap in the first moments does nothing.
-  const a0 = await box(approve)
-  await page.touchscreen.tap(a0.x + a0.width / 2, a0.y + a0.height / 2)
-  expect(answers.bodies).toHaveLength(0)
+  await expectArmedLate(page, answers)
   await expect(approve).toBeEnabled({ timeout: 2000 })
   const a = await box(approve); const k = await box(keep)
   expect(a.height).toBeGreaterThanOrEqual(44)

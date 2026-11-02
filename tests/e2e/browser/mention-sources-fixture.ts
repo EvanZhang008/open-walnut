@@ -3,7 +3,7 @@
  * fixture server's own process the way a plugin's would be:
  *
  *   team-chat  people and channels (keyword "chat", alias "tc"); deterministic rows
- *   late       answers every search after 1.5 s, so All shows its rows only later, under
+ *   late       answers every search after 3 s, so All shows its rows only later, under
  *              everything else, without ever holding the list
  *   stuck      never answers, so its tab shows the timeout state
  *
@@ -41,10 +41,12 @@ export function installMentionSourcesFixture(): void {
     keyword: 'late',
     kinds: ['message'],
     order: 80,
-    timeoutMs: 4000,
+    // Well past what Notes takes on a loaded CI runner (2026-11-02: 2.4 s at load 16 against a
+    // 1.5 s Late), so the order the spec checks is the product's, not the machine's.
+    timeoutMs: 8000,
     async search(q) {
-      await new Promise((r) => setTimeout(r, 1500))
-      return [{ ref: 'm:1', title: `Late answer for ${q || 'nothing'}`, subtitle: 'arrives after 1.5 s' }]
+      await new Promise((r) => setTimeout(r, 3000))
+      return [{ ref: 'm:1', title: `Late answer for ${q || 'nothing'}`, subtitle: 'arrives after 3 s' }]
     },
     async resolve(ref) {
       return ref === 'm:1' ? 'Late message m:1. FIXTURE_LATE_CARD' : null
