@@ -5,14 +5,16 @@
  *   GET    /api/hosts/net                 on or off, this Mac's id, each machine and its path now
  *   POST   /api/hosts/net/invites {name?} a link a new machine runs to join (10 minutes, one use)
  *   GET    /api/hosts/net/invites/:id     waiting | joined | expired
- *   POST   /api/hosts/net/sync            read the companion's list again
+ *   POST   /api/hosts/net/sync            read the list again (the companion's, or this Mac's)
+ *   PUT    /api/hosts/net/relay {relay}   own | public | none: how machines reach each other
  *   DELETE /api/hosts/net/machines/:host  take a machine out
  *
  * Every route answers within its deadline: the companion and the daemon are both
  * a network hop away, and a pinned response starves the browser's connection pool.
  */
 import { Router, type Response } from 'express'
-import { NetError, inviteStatus, makeInvite, netState, removeMachine, syncNet } from '../../core/net/net-mac.js'
+import { NetError, netState, relayNow, removeMachine, setRelay, syncNet } from '../../core/net/net-mac.js'
+import { inviteStatus, makeInvite } from '../../core/net/net-invites.js'
 
 export const hostsNetRouter = Router()
 
@@ -50,7 +52,10 @@ async function peerLinks(): Promise<Map<string, PeerLink & { connected: boolean 
 hostsNetRouter.get('/', async (_req, res) => {
   try {
     const state = netState()
-    const [{ getConfig }, links] = await Promise.all([import('../../core/config-manager.js'), within(STATUS_DEADLINE_MS, peerLinks()).catch(() => new Map())])
+    const [{ getConfig }, links, now] = await Promise.all([
+      import('../../core/config-manager.js'), within(STATUS_DEADLINE_MS, peerLinks()).catch(() => new Map()),
+      within(STATUS_DEADLINE_MS, relayNow()).catch(() => ({ companion: state.companion, relay: state.relay })),
+    ])
     const hosts = (await getConfig()).hosts ?? {}
     const machines = Object.entries(hosts)
       .filter(([, h]) => h.transport === 'net' && typeof h.endpoint === 'string')
@@ -66,7 +71,8 @@ hostsNetRouter.get('/', async (_req, res) => {
         }
       })
     res.json({
-      enabled: state.enabled, macId: state.macId, relays: state.relays, syncedAt: state.syncedAt, error: state.error, machines,
+      enabled: state.enabled, macId: state.macId, companion: now.companion, relay: now.relay, relays: state.relays,
+      syncedAt: state.syncedAt, error: state.error, machines,
     })
   } catch (err) {
     sendError(res, err)
@@ -90,6 +96,14 @@ hostsNetRouter.get('/invites/:id', (req, res) => {
 hostsNetRouter.post('/sync', async (_req, res) => {
   try {
     res.json(await within(WRITE_DEADLINE_MS, syncNet()))
+  } catch (err) {
+    sendError(res, err)
+  }
+})
+
+hostsNetRouter.put('/relay', async (req, res) => {
+  try {
+    res.json(await within(WRITE_DEADLINE_MS, setRelay((req.body ?? {}).relay)))
   } catch (err) {
     sendError(res, err)
   }

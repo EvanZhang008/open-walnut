@@ -3,19 +3,26 @@
 //!
 //! It holds this machine's network identity (an Ed25519 key; the endpoint id is its public key) and
 //! carries Walnut daemon links between the user's own machines over iroh: direct when the two can
-//! reach each other, else through the user's own relay. No third-party server is ever contacted: no
-//! n0 relay, no DNS/pkarr address lookup or publishing, no router port mapping.
+//! reach each other, else through a relay. `relayMode` in the config picks which: `custom` (the
+//! user's own relays, no third-party server is contacted), `public` (iroh's public relays and its
+//! pkarr/DNS address lookup, which publishes only the relay, never an IP address) or `none`
+//! (direct only). Router port mapping is off in every mode.
 //!
 //!   walnut-net id --key FILE                       print {"id"} (makes the key, 0600, on first use)
 //!   walnut-net run --config FILE [--exit-on-stdin-eof]
 //!   walnut-net --version
 //!
-//! An incoming connection is closed before any stream unless its id (proven by the TLS handshake)
-//! is a member allowed to reach this daemon (`accept: true` in the config). Each accepted stream is
-//! piped to this machine's daemon on 127.0.0.1. See control.rs for the control socket.
+//! An incoming daemon connection is closed before any stream unless its id (proven by the TLS
+//! handshake) is a member allowed to reach this daemon (`accept: true` in the config). Each accepted
+//! stream is piped to this machine's daemon on 127.0.0.1. A join connection (join.rs) is answered
+//! from any peer, only while an invite is pending. See control.rs for the control socket.
 
 mod config;
 mod control;
+mod invites;
+mod join;
+#[cfg(test)]
+mod join_tests;
 mod log;
 mod node;
 
@@ -29,8 +36,8 @@ use config::{Config, load_or_make_key};
 use control::Event;
 use node::Node;
 
-/// Bumped when the control socket or the config changes shape.
-const PROTOCOL: u32 = 1;
+/// Bumped when the control socket or the config changes shape (2: relayMode, invites, join).
+const PROTOCOL: u32 = 2;
 /// Exit code asking the supervisor to start this again (the config changed what the endpoint is).
 const EXIT_RESTART: i32 = 75;
 /// Exit code saying the config cannot be read (EX_CONFIG): the supervisor puts back the last one that worked.
@@ -93,7 +100,7 @@ async fn run(cfg_path: PathBuf, stdin_eof: bool) -> Result<i32> {
         let _ = writeln!(out, "{}", json!({"event": "ready", "id": node.ep.id().to_string(), "control": cfg.control, "protocol": PROTOCOL}));
         let _ = out.flush();
     }
-    log::info("walnut-net ready", json!({"id": node.ep.id().to_string(), "members": cfg.members.len(), "relays": cfg.relays}));
+    log::info("walnut-net ready", json!({"id": node.ep.id().to_string(), "members": cfg.members.len(), "relayMode": cfg.relay_choice().as_str(), "relays": cfg.relays}));
 
     let (stop_tx, mut stop_rx) = mpsc::channel::<&'static str>(4);
     if stdin_eof {
@@ -144,7 +151,7 @@ async fn run(cfg_path: PathBuf, stdin_eof: bool) -> Result<i32> {
                     match next {
                         Err(e) => { let _ = reply.send(Err(e)); }
                         Ok(next) if !next.same_endpoint(&cfg) => {
-                            // Key, relays or roots changed: the supervisor starts a new one.
+                            // Key, relay mode, relays or roots changed: the supervisor starts a new one.
                             let _ = reply.send(Ok(true));
                             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                             break EXIT_RESTART;

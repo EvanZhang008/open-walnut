@@ -39,6 +39,11 @@ const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000]
 /** A run this long counts as healthy: the next failure starts the backoff over. */
 const HEALTHY_MS = 60_000
 const CONTROL_TIMEOUT_MS = 30_000
+/** The control protocol that has `invites` and `join` (and reads `relayMode`). */
+const JOIN_PROTOCOL = 2
+const OLD_NET = "This host's walnut-net is older than this Walnut and cannot take a machine in yet; it moves to the new version once that is downloaded."
+const OLD_NET_RELAY = "This host's walnut-net is older than this Walnut and cannot use public relays or no relay yet; it moves to the new version once that is downloaded."
+const OLD_NET_RELAY_RETRY = "This host's walnut-net is older than this Walnut and cannot use public relays or no relay; the new version is downloading, so try again in a minute."
 const LOG_MAX_BYTES = 1024 * 1024
 /** A unix socket path must fit sockaddr_un (104 bytes on macOS, 108 on Linux). */
 const SOCKET_PATH_MAX = 100
@@ -136,6 +141,8 @@ export function createNetSupervisor(deps: NetDeps) {
   let childStartedAt = 0
   let ready = false
   let id: string | null = null
+  // The running walnut-net's control protocol (its ready line): 2 takes invites and joins.
+  let protocol = 0
   let restarts = 0
   let failures = 0
   let lastExit: NetStatus['lastExit'] = null
@@ -163,19 +170,24 @@ export function createNetSupervisor(deps: NetDeps) {
   const previousBin = deps.previousBin ?? (() => previousNetBinary(binDir))
 
   /** The executable, downloaded the first time this host needs one. */
+  // One download at a time: two would write the same `.part` file.
+  let downloading: Promise<string> | null = null
   async function haveBin(): Promise<string> {
     const found = deps.bin()
     if (found) return found
     if (process.env.WALNUT_NET_NO_DOWNLOAD === '1') throw new Error('walnut-net is not installed on this host')
-    try {
-      await fetchBin()
-    } catch (err) {
-      lastError = `walnut-net is not installed on this host, and its download failed: ${(err as Error).message}`
-      throw new Error(lastError)
-    }
-    const got = deps.bin()
-    if (!got) throw new Error('walnut-net downloaded, but it is not where this daemon looks')
-    return got
+    downloading ??= (async () => {
+      try {
+        await fetchBin()
+      } catch (err) {
+        lastError = `walnut-net is not installed on this host, and its download failed: ${(err as Error).message}`
+        throw new Error(lastError)
+      }
+      const got = deps.bin()
+      if (!got) throw new Error('walnut-net downloaded, but it is not where this daemon looks')
+      return got
+    })().finally(() => { downloading = null })
+    return downloading
   }
 
   function ensureState(): void {
@@ -310,8 +322,9 @@ export function createNetSupervisor(deps: NetDeps) {
         const line = out.slice(0, nl)
         out = out.slice(nl + 1)
         try {
-          const ev = JSON.parse(line) as { event?: string; id?: string }
+          const ev = JSON.parse(line) as { event?: string; id?: string; protocol?: number }
           if (ev.event === 'ready' && typeof ev.id === 'string') {
+            protocol = typeof ev.protocol === 'number' ? ev.protocol : 1
             ready = true
             cameUp = true
             id = ev.id
@@ -420,6 +433,20 @@ export function createNetSupervisor(deps: NetDeps) {
       return { endpointId: await identity(), running: false }
     }
     const parsed = parseNetConfig(req)
+    // An older walnut-net reads no relay mode and would run with no relay at all. A host with
+    // none at all fetches this version before it starts (a new machine joining waits for it);
+    // one running, or starting, an older one is checked by the protocol it reports.
+    if (parsed.relayMode && child) {
+      if (!ready) await waitReady(15_000)
+      // The protocol its ready line gave: an older download run while this one downloads may
+      // well have relay modes (0.2.0 and on); only one without them is refused, and one that
+      // has not said yet is not taken on trust. One that exited meanwhile starts below.
+      if (child && !ready) throw new Error(`walnut-net is still starting on this host; try again in a minute${lastError ? ` (${lastError})` : ''}`)
+      if (child && protocol < JOIN_PROTOCOL) throw new Error(OLD_NET_RELAY)
+    }
+    if (parsed.relayMode && !child && !deps.bin() && !previousBin()) await haveBin()
+    const firstStart = !child
+    const before = readText(configFile)
     ensureState()
     const me = await identity()
     const cfg = {
@@ -448,6 +475,14 @@ export function createNetSupervisor(deps: NetDeps) {
     }
     const ok = await waitReady(15_000)
     if (!ok && rolledBack) throw new Error(lastError ?? 'walnut-net did not start on this config')
+    if (ok && firstStart && parsed.relayMode && protocol < JOIN_PROTOCOL) {
+      // It started an older one (an older download while this version downloads, or a build
+      // with no version in its name), which ignored the mode: what ran before goes back.
+      const downloading = !deps.bin()
+      await stopChild()
+      if (before !== null) { writeFileAtomic(configFile, before); spawnChild() } else fs.rmSync(configFile, { force: true })
+      throw new Error(downloading ? OLD_NET_RELAY_RETRY : OLD_NET_RELAY)
+    }
     return { endpointId: me, running: ok }
   }
 
@@ -493,6 +528,74 @@ export function createNetSupervisor(deps: NetDeps) {
       if (!ID_RE.test(to)) throw new Error('`to` must be an endpoint id')
       const res = await call({ op: 'probe', to })
       return (res.link ?? {}) as Record<string, unknown>
+    },
+
+    /**
+     * The invites walnut-net checks joins against (a Mac with no companion): replaces the
+     * pending set. Only a hash of each code ever reaches walnut-net.
+     */
+    async invites(req: { invites?: unknown }): Promise<{ ok: true }> {
+      const raw = Array.isArray(req.invites) ? req.invites.slice(0, 16) : []
+      const invites = raw.map((i) => {
+        const o = (i && typeof i === 'object' ? i : {}) as Record<string, unknown>
+        if (typeof o.id !== 'string' || !/^[\w-]{1,64}$/.test(o.id)) throw new Error('invite id')
+        if (typeof o.codeHash !== 'string' || !ID_RE.test(o.codeHash)) throw new Error('invite codeHash must be 64 hex')
+        if (typeof o.expiresAt !== 'number' || !Number.isFinite(o.expiresAt)) throw new Error('invite expiresAt')
+        return { id: o.id, codeHash: o.codeHash, expiresAt: o.expiresAt, name: typeof o.name === 'string' && o.name ? o.name.slice(0, 80) : null }
+      })
+      if (!ready && !(await waitReady(10_000))) throw new Error(lastError ?? 'walnut-net is not running on this host')
+      if (protocol < JOIN_PROTOCOL) throw new Error(OLD_NET)
+      await call({ op: 'invites', invites })
+      return { ok: true }
+    },
+
+    /**
+     * On a new machine: let the Mac at `to` in on the ticket's relay (`relayMode`), ask it
+     * to take this machine in with the code from its invite, and on a refusal put back the
+     * network this machine had (none: off), so a second paste of the same command never
+     * cuts off a machine that joined. Without `relayMode` it asks over the network as it
+     * runs. `joined`, not `ok`: the daemon's reply already has an `ok` of its own.
+     */
+    async join(req: { to?: unknown; code?: unknown; hostname?: unknown; platform?: unknown; addrs?: unknown; relay?: unknown; relayMode?: unknown }): Promise<{ joined: boolean; name?: string; error?: string }> {
+      const to = typeof req.to === 'string' ? req.to.toLowerCase() : ''
+      if (!ID_RE.test(to)) throw new Error('`to` must be an endpoint id')
+      if (typeof req.code !== 'string' || req.code.length > 32) throw new Error('`code` is required')
+      const addrs = (Array.isArray(req.addrs) ? req.addrs.slice(0, 16) : []).filter((a): a is string => typeof a === 'string' && a.length <= 64)
+      const relay = typeof req.relay === 'string' && /^https?:\/\/\S{1,500}$/.test(req.relay) ? req.relay : null
+      if (req.relayMode !== undefined && req.relayMode !== 'public' && req.relayMode !== 'none') throw new Error('`relayMode` is public or none')
+      const ask = async (): Promise<{ joined: boolean; name?: string; error?: string }> => {
+        if (!ready && !(await waitReady(10_000))) throw new Error(lastError ?? 'walnut-net is not running on this host')
+        if (protocol < JOIN_PROTOCOL) throw new Error(OLD_NET)
+        const res = await netControlCall(control, {
+          op: 'join', to, code: req.code, addrs, relay,
+          hostname: typeof req.hostname === 'string' ? req.hostname.slice(0, 255) : '',
+          platform: typeof req.platform === 'string' ? req.platform.slice(0, 40) : '',
+        }, 40_000)
+        if (res.ok === true) return { joined: true, name: typeof res.name === 'string' ? res.name : '' }
+        return { joined: false, error: typeof res.error === 'string' ? res.error : 'refused' }
+      }
+      if (req.relayMode === undefined) return ask()
+      const mode = req.relayMode
+      // One at a time with every configure: nothing changes the network halfway through.
+      const run = configChain.then(async () => {
+        const before = readText(configFile)
+        let res: { joined: boolean; name?: string; error?: string } | null = null
+        try {
+          await applyConfig({ relayMode: mode, members: [{ id: to, name: 'Mac', accept: true }] })
+          res = await ask()
+          return res
+        } finally {
+          // No answer on a machine that had no network: kept, so a Mac that took it in but whose
+          // answer was lost still reaches it, and the same command can be run again.
+          if (!res?.joined && !(res?.error === 'no_answer' && before === null)) {
+            let previous: NetConfigureRequest | null = null
+            try { previous = before ? JSON.parse(before) as NetConfigureRequest : null } catch { /* unreadable: off */ }
+            await applyConfig(previous ?? { enabled: false }).catch((err: Error) => { lastError = `could not put back the network after a refused join: ${err.message}` })
+          }
+        }
+      })
+      configChain = run.catch(() => {})
+      return run
     },
 
     stopChild,

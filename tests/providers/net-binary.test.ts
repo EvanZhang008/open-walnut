@@ -81,14 +81,16 @@ describe('net-binary', () => {
     await expect(fetchNetBinary({ dir, platform: 'win32', arch: 'x64', fetchImpl: fakeFetch({}) })).rejects.toThrow(/no build/)
   })
 
-  it('pins every target of the published release, and a pin outranks the release\'s own SHA256SUMS', async () => {
-    expect(Object.keys(NET_BIN_SHA256).sort()).toEqual(['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64'])
+  it('pins every target of the published release or none yet, and a pin outranks the release\'s own SHA256SUMS', async () => {
+    // None between a version bump and its release; then all four, never some.
+    expect([0, 4]).toContain(Object.keys(NET_BIN_SHA256).length)
+    if (Object.keys(NET_BIN_SHA256).length) expect(Object.keys(NET_BIN_SHA256).sort()).toEqual(['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64'])
     for (const v of Object.values(NET_BIN_SHA256)) expect(v).toMatch(/^[0-9a-f]{64}$/)
     // A release whose SHA256SUMS was swapped along with the file is still refused.
     const asset = netAssetName('linux-x64')
     const seen: string[] = []
     await expect(fetchNetBinary({
-      dir, base: 'https://example.invalid/dl', platform: 'linux', arch: 'x64',
+      dir, base: 'https://example.invalid/dl', platform: 'linux', arch: 'x64', pins: { 'linux-x64': '0'.repeat(64) },
       fetchImpl: fakeFetch({ [`${NET_BIN_TAG}/${asset}`]: GZ, [`${NET_BIN_TAG}/SHA256SUMS`]: `${SHA}  ${asset}\n` }, seen),
     })).rejects.toThrow(/not the expected/)
     expect(seen).toEqual([`https://example.invalid/dl/${NET_BIN_TAG}/${asset}`])

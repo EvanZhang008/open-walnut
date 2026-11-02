@@ -19,21 +19,27 @@ export interface NetMember {
   name: string
   accept: boolean
   addrs?: string[]
+  /** Relays it was last seen on: it is reached there until it moves to this host's choice. */
+  relays?: string[]
 }
 
 export interface NetConfigureRequest {
   enabled?: unknown
+  /** `custom` (the relays listed: the user's own), `public` (iroh's public relays and lookup), `none`. */
+  relayMode?: unknown
   relays?: unknown
   relayRoots?: unknown
   members?: unknown
 }
+
+export type NetRelayMode = 'custom' | 'public' | 'none'
 
 function str(v: unknown, max: number): string | null {
   return typeof v === 'string' && v.length > 0 && v.length <= max ? v : null
 }
 
 /** `1.2.3.4:5` or `[::1]:5`, as Rust's SocketAddr reads it. */
-function socketAddr(a: unknown): boolean {
+export function socketAddr(a: unknown): boolean {
   if (typeof a !== 'string' || a.length > 64) return false
   const m = /^(?:\[([0-9a-fA-F:.]+)\]|(\d{1,3}(?:\.\d{1,3}){3})):(\d{1,5})$/.exec(a)
   if (!m) return false
@@ -43,15 +49,21 @@ function socketAddr(a: unknown): boolean {
 }
 
 /** Validate a configure request into walnut-net's config fields. Throws on anything off. */
-export function parseNetConfig(req: NetConfigureRequest): { relays: string[]; relayRoots: string[]; members: NetMember[] } {
+export function parseNetConfig(req: NetConfigureRequest): { relayMode?: 'public' | 'none'; relays: string[]; relayRoots: string[]; members: NetMember[] } {
   // The same rules walnut-net applies when it reads the file (config.rs): a config it would
   // refuse is refused here, before it replaces one that works.
   const httpOk = process.env.WALNUT_NET_ALLOW_HTTP_RELAY === '1'
+  const mode = req.relayMode === undefined || req.relayMode === null ? null : req.relayMode
+  if (mode !== null && mode !== 'custom' && mode !== 'public' && mode !== 'none') throw new Error(`relayMode ${String(mode).slice(0, 20)} is not custom, public or none`)
   const relays = Array.isArray(req.relays) ? req.relays : []
-  for (const r of relays) {
+  if ((mode === 'public' || mode === 'none') && (relays.length || (Array.isArray(req.relayRoots) && req.relayRoots.length))) {
+    throw new Error(`relayMode ${mode} takes no relays or relayRoots`)
+  }
+  const checkRelay = (r: unknown): void => {
     if (typeof r !== 'string' || !/^https?:\/\/[^\s]+$/.test(r) || r.length > 512) throw new Error(`bad relay URL ${String(r).slice(0, 80)}`)
     if (!r.startsWith('https://') && !httpOk) throw new Error(`relay ${r.slice(0, 80)} is not https`)
   }
+  for (const r of relays) checkRelay(r)
   const roots = Array.isArray(req.relayRoots) ? req.relayRoots : []
   for (const c of roots) {
     if (typeof c !== 'string' || !c.includes('-----BEGIN CERTIFICATE-----') || c.length > 16_384) throw new Error('relayRoots: PEM certificates only')
@@ -67,9 +79,13 @@ export function parseNetConfig(req: NetConfigureRequest): { relays: string[]; re
     seen.add(id)
     const addrs = Array.isArray(o.addrs) ? o.addrs.slice(0, 16) : []
     for (const a of addrs) if (!socketAddr(a)) throw new Error(`member ${id}: bad address ${String(a).slice(0, 64)}`)
-    return { id, name: str(o.name, NAME_MAX) ?? '', accept: o.accept === true, ...(addrs.length ? { addrs } : {}) }
+    const seenOn = Array.isArray(o.relays) ? o.relays.slice(0, 4) : []
+    for (const r of seenOn) checkRelay(r)
+    return { id, name: str(o.name, NAME_MAX) ?? '', accept: o.accept === true, ...(addrs.length ? { addrs } : {}), ...(seenOn.length ? { relays: seenOn as string[] } : {}) }
   })
-  return { relays: relays as string[], relayRoots: roots as string[], members }
+  // `custom` is written as no field at all: the config of the user's own relay reads the same
+  // as it did before relay modes, so walnut-net is not restarted for it.
+  return { ...(mode === 'public' || mode === 'none' ? { relayMode: mode } : {}), relays: relays as string[], relayRoots: roots as string[], members }
 }
 
 /**

@@ -490,6 +490,12 @@ export const ADVERTISED_DAEMON_CAPABILITIES = [
   // `net.probe {to}`. Not bridge- or follower-reachable. Sidecar-gated in the source
   // twin (net-core.cjs).
   'net-v1',
+  // 'net-join-v1' — joining without a companion: `net.invites {invites: [{id, codeHash,
+  // expiresAt, name}]}` hands this host's walnut-net the invites it may take a new machine
+  // in for (a hash of each code only), and on the new machine `net.join {to, code, hostname,
+  // platform, addrs, relay}` asks that host to take it in. `net.configure` also takes
+  // `relayMode` (custom | public | none). Not bridge- or follower-reachable.
+  'net-join-v1',
   // 'host-mcp-v1' — a task on another host calling an MCP server configured here
   // (host-mcp-core.ts): `mcp.list {cwd}` names the servers Claude Code would see,
   // `mcp.tools {callId, taskId, server, cwd, wait}` and `mcp.call {..., tool,

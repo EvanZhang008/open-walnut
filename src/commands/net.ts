@@ -6,6 +6,10 @@
  * cloud companion (routes/net-v1.ts), and hands the daemon its config. The Mac sees
  * the new member and lists it under Settings > Remote Hosts.
  *
+ * `walnut net join <ticket>`: the same with no companion (join.sh runs it): the daemon
+ * is told to let the Mac in, then asks the Mac itself, over the host network, to take
+ * this machine in with the ticket's code (core/net/join-ticket.ts, net-local.ts).
+ *
  * `walnut net status`: this machine's host network, as its daemon says.
  *
  * Its lines match the script's first step (net-join-script.ts): one column of dots.
@@ -14,6 +18,7 @@ import os from 'node:os'
 import fs from 'node:fs'
 import path from 'node:path'
 import { WebSocket } from '#ws'
+import { decodeTicket, TICKET_PREFIX, type JoinTicket } from '../core/net/join-ticket.js'
 
 const STEP_W = 19
 function step(n: number, label: string, text: string): void {
@@ -75,24 +80,53 @@ function errText(r: Record<string, unknown>): string {
   return typeof e?.message === 'string' ? e.message : 'refused'
 }
 
-export async function runNetJoin(origin: string, code: string, opts: { steps?: boolean } = {}): Promise<number> {
+const JOIN_FAILS: Record<string, string> = {
+  invalid_code: 'This link is not valid any more (used, or older than 10 minutes). Make a new one on your Mac.',
+  no_answer: 'Your Mac did not answer. It must be awake and online while the machine joins; try again, or make a new link.',
+  rate_limited: 'Too many tries with wrong links. Wait 10 minutes, then make a new link on your Mac.',
+}
+
+function done(name: string): number {
+  step(3, 'Join', `done: this machine is "${name}"`)
+  process.stdout.write(`\nYour Mac lists "${name}" under Settings > Remote Hosts.\n`)
+  process.stdout.write(`To take it out later: Settings > Remote Hosts > ${name} > Remove.\n`)
+  return 0
+}
+
+export async function runNetJoin(target: string, code: string | undefined, opts: { steps?: boolean } = {}): Promise<number> {
   if (!opts.steps) {
     process.stdout.write('Walnut: adding this machine to your Walnut machines\n')
     step(1, 'Walnut', `installed (${process.env.WALNUT_VERSION_LABEL ?? 'this one'})`)
   }
-  let base: URL
-  try { base = new URL(origin) } catch { step(3, 'Join', `${origin} is not an address`); return 1 }
-  if (base.protocol !== 'https:' && process.env.WALNUT_NET_ALLOW_HTTP_JOIN !== '1') { step(3, 'Join', `${origin} is not https; refusing to join over plain HTTP`); return 1 }
+  let ticket: JoinTicket | null = null
+  let base: URL | null = null
+  if (code === undefined) {
+    ticket = decodeTicket(target)
+    if (!ticket) {
+      step(3, 'Join', target.startsWith(TICKET_PREFIX) ? 'this link is not one this Walnut reads. Run `walnut update`, then this again.' : 'run the command your Mac shows under Settings > Remote Hosts > Add a machine')
+      return 1
+    }
+  } else {
+    try { base = new URL(target) } catch { step(3, 'Join', `${target} is not an address`); return 1 }
+    if (base.protocol !== 'https:' && process.env.WALNUT_NET_ALLOW_HTTP_JOIN !== '1') { step(3, 'Join', `${target} is not https; refusing to join over plain HTTP`); return 1 }
+  }
+  if (!(await keepRunning())) return 1
+  return ticket ? joinWithTicket(ticket) : joinWithCompanion(base!, code!)
+}
 
-  // 2/3: the daemon, as a service that starts at login. One already running that is not
-  // the service (a server or an SSH connect started it) would be gone after a reboot: the
-  // install hands it over to the service.
+/**
+ * 2/3: the daemon, as a service that starts at login. One already running that is not
+ * the service (a server or an SSH connect started it) would be gone after a reboot: the
+ * install hands it over to the service.
+ */
+async function keepRunning(): Promise<boolean> {
   const up = await daemonUp()
   if (up === 'service' || (up && process.env.WALNUT_JOIN_DAEMON_DIR)) {
     step(2, 'Keep it running', 'on (already running)')
+    return true
   } else if (process.env.WALNUT_JOIN_DAEMON_DIR) {
     step(2, 'Keep it running', `no daemon answers in ${process.env.WALNUT_JOIN_DAEMON_DIR}`)
-    return 1
+    return false
   } else {
     try {
       const { runDaemonServiceCli } = await import('../providers/daemon-service-cli.js')
@@ -101,15 +135,40 @@ export async function runNetJoin(origin: string, code: string, opts: { steps?: b
       let code = 1
       ;(process.stdout as unknown as { write: (s: string) => boolean }).write = () => true
       try { code = await runDaemonServiceCli('install', { yes: true }) } finally { (process.stdout as unknown as { write: typeof write }).write = write }
-      if (code !== 0 || !(await waitDaemon(30_000))) { step(2, 'Keep it running', 'did not start. Run `walnut daemon status` to see why, then this again.'); return 1 }
+      if (code !== 0 || !(await waitDaemon(30_000))) { step(2, 'Keep it running', 'did not start. Run `walnut daemon status` to see why, then this again.'); return false }
       step(2, 'Keep it running', 'on (starts when you log in)')
+      return true
     } catch (err) {
       step(2, 'Keep it running', `${(err as Error).message}`)
-      return 1
+      return false
     }
   }
+}
 
-  // 3/3: this machine's key (made here, it never leaves), then the invite.
+/** 3/3 with no companion: let the Mac in, then ask it to take this machine in. */
+async function joinWithTicket(t: JoinTicket): Promise<number> {
+  try {
+    const hello = await daemonRpc('hello')
+    if (!(hello.capabilities as string[] | undefined)?.includes('net-join-v1')) { step(3, 'Join', 'this Walnut daemon is too old to join. Run `walnut update`, then this again.'); return 1 }
+    const ident = await daemonRpc('net.identity')
+    if (ident.ok !== true || typeof ident.endpointId !== 'string') { step(3, 'Join', `no network key: ${errText(ident)}`); return 1 }
+    if (ident.endpointId === t.mac) { step(3, 'Join', 'this is the Mac that made the link; run it on the new machine'); return 1 }
+    // The daemon lets the Mac in, asks, and on a refusal puts back what this machine had.
+    const res = await daemonRpc('net.join', {
+      to: t.mac, code: t.code, hostname: os.hostname(), platform: `${process.platform}-${process.arch}`, addrs: t.addrs, relay: t.relay, relayMode: t.relayMode,
+    }, 90_000)
+    if (res.ok === true && res.joined === true) return done(String(res.name || os.hostname().split('.')[0]))
+    const why = res.ok === true ? String(res.error ?? 'refused') : errText(res)
+    step(3, 'Join', JOIN_FAILS[why] ?? why)
+    return 1
+  } catch (err) {
+    step(3, 'Join', `${(err as Error).message}`)
+    return 1
+  }
+}
+
+/** 3/3 with the companion: this machine's key (made here, it never leaves), then the invite. */
+async function joinWithCompanion(base: URL, code: string): Promise<number> {
   try {
     const hello = await daemonRpc('hello')
     if (!(hello.capabilities as string[] | undefined)?.includes('net-v1')) { step(3, 'Join', 'this Walnut daemon is too old to join. Run `walnut update`, then this again.'); return 1 }
@@ -124,11 +183,7 @@ export async function runNetJoin(origin: string, code: string, opts: { steps?: b
     if (!res.ok) { step(3, 'Join', errText(body)); return 1 }
     const conf = await daemonRpc('net.configure', { relays: body.relays, relayRoots: body.relayRoots, members: body.members }, 30_000)
     if (conf.ok !== true) { step(3, 'Join', `joined, but the network did not start here: ${errText(conf)}`); return 1 }
-    const name = String(body.name)
-    step(3, 'Join', `done: this machine is "${name}"`)
-    process.stdout.write(`\nYour Mac lists "${name}" under Settings > Remote Hosts.\n`)
-    process.stdout.write(`To take it out later: Settings > Remote Hosts > ${name} > Remove.\n`)
-    return 0
+    return done(String(body.name))
   } catch (err) {
     step(3, 'Join', `${(err as Error).message}`)
     return 1

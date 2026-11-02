@@ -12,12 +12,37 @@ use serde::Deserialize;
 /// The config version this build reads.
 pub const CONFIG_VERSION: u32 = 1;
 
+/// Which relays the endpoint uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RelayChoice {
+    /// The user's own relays (`relays`), no address lookup.
+    Custom,
+    /// iroh's public relays and address lookup.
+    Public,
+    /// No relay and no lookup: direct paths only.
+    None,
+}
+
+impl RelayChoice {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RelayChoice::Custom => "custom",
+            RelayChoice::Public => "public",
+            RelayChoice::None => "none",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Config {
     pub version: u32,
     /// This host's secret key: 32 raw bytes, mode 0600 (made by `walnut-net id`).
     pub key: PathBuf,
+    /// Absent: `custom` when `relays` is set, else `none` (how a v1 config always read).
+    #[serde(default)]
+    pub relay_mode: Option<RelayChoice>,
     /// The user's own relays (https URLs). Empty: direct paths only.
     #[serde(default)]
     pub relays: Vec<String>,
@@ -53,6 +78,10 @@ pub struct Member {
     /// Known direct addresses (ip:port), optional: the relay finds the rest.
     #[serde(default)]
     pub addrs: Vec<String>,
+    /// Relays it was last seen on (https URLs), optional: a machine that has not moved to
+    /// this host's relay choice yet is still reached there.
+    #[serde(default)]
+    pub relays: Vec<String>,
 }
 
 impl Config {
@@ -62,6 +91,7 @@ impl Config {
         if cfg.version != CONFIG_VERSION {
             bail!("config version {} is not {CONFIG_VERSION}: this walnut-net is older or newer than the daemon that wrote it", cfg.version);
         }
+        cfg.check_relay_mode()?;
         cfg.relay_urls()?;
         // Checked here, not first in Node::bind: a reload that would rebuild the endpoint on
         // roots it cannot read is refused while the running one keeps going.
@@ -69,17 +99,24 @@ impl Config {
         Ok(cfg)
     }
 
+    pub fn relay_choice(&self) -> RelayChoice {
+        self.relay_mode.unwrap_or(if self.relays.is_empty() { RelayChoice::None } else { RelayChoice::Custom })
+    }
+
+    fn check_relay_mode(&self) -> Result<()> {
+        match self.relay_choice() {
+            RelayChoice::Custom => {}
+            RelayChoice::Public if !self.relays.is_empty() || !self.relay_roots.is_empty() => {
+                bail!("relayMode public takes no relays or relayRoots")
+            }
+            RelayChoice::None if !self.relays.is_empty() => bail!("relayMode none takes no relays"),
+            RelayChoice::Public | RelayChoice::None => {}
+        }
+        Ok(())
+    }
+
     pub fn relay_urls(&self) -> Result<Vec<RelayUrl>> {
-        self.relays
-            .iter()
-            .map(|u| {
-                let url: RelayUrl = u.parse().with_context(|| format!("relay URL {u}"))?;
-                if url.scheme() != "https" && !cfg!(debug_assertions) && std::env::var_os("WALNUT_NET_ALLOW_HTTP_RELAY").is_none() {
-                    bail!("relay {u} is not https");
-                }
-                Ok(url)
-            })
-            .collect()
+        self.relays.iter().map(|u| parse_relay_url(u)).collect()
     }
 
     /// The members this build can use. One it cannot (an id that is not a key, an address
@@ -97,6 +134,10 @@ impl Config {
             };
             if let Some(a) = m.addrs.iter().find(|a| a.parse::<std::net::SocketAddr>().is_err()) {
                 crate::log::warn("member left out: an address is not ip:port", serde_json::json!({"name": m.name, "address": a}));
+                continue;
+            }
+            if let Some(r) = m.relays.iter().find(|r| parse_relay_url(r).is_err()) {
+                crate::log::warn("member left out: a relay is not a relay URL", serde_json::json!({"name": m.name, "relay": r}));
                 continue;
             }
             out.insert(id, m.clone());
@@ -118,11 +159,21 @@ impl Config {
     /// What can change without a restart: the members. Anything else needs a new endpoint.
     pub fn same_endpoint(&self, other: &Config) -> bool {
         self.key == other.key
+            && self.relay_choice() == other.relay_choice()
             && self.relays == other.relays
             && self.relay_roots == other.relay_roots
             && self.bind_port == other.bind_port
             && self.control == other.control
     }
+}
+
+/// A relay URL this build will use: https only, unless a test allows plain http.
+pub fn parse_relay_url(u: &str) -> Result<RelayUrl> {
+    let url: RelayUrl = u.parse().with_context(|| format!("relay URL {u}"))?;
+    if url.scheme() != "https" && !cfg!(debug_assertions) && std::env::var_os("WALNUT_NET_ALLOW_HTTP_RELAY").is_none() {
+        bail!("relay {u} is not https");
+    }
+    Ok(url)
 }
 
 /// This host's key: made on first use (0600, never replaced), read after.
@@ -207,7 +258,7 @@ mod tests {
             .find(|h| h.parse::<EndpointId>().is_err())
             .expect("some 32-byte pattern is not a key");
         let members = format!(
-            r#"[{{"id":"nothex","accept":true}},{{"id":"{not_a_key}","name":"bad"}},{{"id":"{id}","name":"mac","accept":true}},{{"id":"{id}","name":"addr","addrs":["nope"]}}]"#
+            r#"[{{"id":"nothex","accept":true}},{{"id":"{not_a_key}","name":"bad"}},{{"id":"{id}","name":"mac","accept":true}},{{"id":"{id}","name":"addr","addrs":["nope"]}},{{"id":"{id}","name":"relay","relays":["not a url"]}}]"#
         );
         std::fs::write(&p, base(&members, 1)).unwrap();
         let c = Config::read(&p).unwrap();
@@ -226,6 +277,60 @@ mod tests {
         std::fs::write(&p, format!(r#"{{"version":1,"key":"k","daemonPortFile":"p","control":"c","relayRoots":["{bad}"]}}"#)).unwrap();
         assert!(Config::read(&p).is_err());
         std::fs::remove_dir_all(d).unwrap();
+    }
+
+    /// A config with these extra fields, as Config::read takes it.
+    fn read_with(extra: &str) -> Result<Config> {
+        let d = dir();
+        let p = d.join("c.json");
+        std::fs::write(&p, format!(r#"{{"version":1,"key":"k","daemonPortFile":"p","control":"c"{extra}}}"#)).unwrap();
+        let r = Config::read(&p);
+        std::fs::remove_dir_all(d).unwrap();
+        r
+    }
+
+    const RELAY: &str = r#","relays":["https://relay.example.test"]"#;
+
+    #[test]
+    fn relay_mode_defaults_from_relays_and_parses_each_choice() {
+        assert_eq!(read_with("").unwrap().relay_choice(), RelayChoice::None);
+        assert_eq!(read_with(RELAY).unwrap().relay_choice(), RelayChoice::Custom);
+        assert_eq!(read_with(&format!(r#"{RELAY},"relayMode":"custom""#)).unwrap().relay_choice(), RelayChoice::Custom);
+        assert_eq!(read_with(r#","relayMode":"public""#).unwrap().relay_choice(), RelayChoice::Public);
+        assert_eq!(read_with(r#","relayMode":"none""#).unwrap().relay_choice(), RelayChoice::None);
+        // Custom with no relays is today's no-relay endpoint, not an error.
+        assert_eq!(read_with(r#","relayMode":"custom""#).unwrap().relay_choice(), RelayChoice::Custom);
+        assert_eq!(RelayChoice::Public.as_str(), "public");
+    }
+
+    #[test]
+    fn relay_mode_refuses_unknown_values_and_relays_it_cannot_use() {
+        for bad in [r#","relayMode":"n0""#, r#","relayMode":"PUBLIC""#, r#","relayMode":"""#, r#","relayMode":1"#] {
+            assert!(read_with(bad).is_err(), "{bad} should be refused");
+        }
+        assert!(read_with(&format!(r#"{RELAY},"relayMode":"public""#)).is_err());
+        assert!(read_with(r#","relayMode":"public","relayRoots":["x"]"#).is_err());
+        assert!(read_with(&format!(r#"{RELAY},"relayMode":"none""#)).is_err());
+        // Null reads as absent.
+        assert_eq!(read_with(r#","relayMode":null"#).unwrap().relay_choice(), RelayChoice::None);
+    }
+
+    #[test]
+    fn same_endpoint_counts_the_relay_mode() {
+        let none = read_with("").unwrap();
+        let none_explicit = read_with(r#","relayMode":"none""#).unwrap();
+        let public = read_with(r#","relayMode":"public""#).unwrap();
+        let custom = read_with(RELAY).unwrap();
+        let custom_explicit = read_with(&format!(r#"{RELAY},"relayMode":"custom""#)).unwrap();
+        let custom_empty = read_with(r#","relayMode":"custom""#).unwrap();
+        assert!(none.same_endpoint(&none_explicit));
+        assert!(custom.same_endpoint(&custom_explicit));
+        assert!(!none.same_endpoint(&public));
+        assert!(!public.same_endpoint(&custom));
+        // Same (empty) relays, other mode: still a new endpoint.
+        assert!(!none.same_endpoint(&custom_empty));
+        let members = read_with(r#","relayMode":"public","members":[{"id":"x"}]"#).unwrap();
+        assert!(public.same_endpoint(&members));
     }
 
     fn hex_of(b: &[u8]) -> String {

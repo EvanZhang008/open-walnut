@@ -4,8 +4,10 @@
  * the command to run on the new machine with Copy and the minutes left, watches the
  * invite, and the machine that joins becomes a row saying how this Mac reaches it;
  * an expired link offers a new one; a refused invite says why; Remove asks once more,
- * sends the DELETE and drops the row. The server is faked at the route (no companion
- * here; tests/e2e/host-network-e2e.test.ts runs the real one). Navigation is by clicks.
+ * sends the DELETE and drops the row; the relay choice says what each one shares, a
+ * companion means its relay, without one a pick is sent once and the rows follow it, a
+ * refused pick says why, and the invite is a ticket. The server is faked at the route (no companion here;
+ * tests/e2e/host-network-e2e.test.ts runs the real one). Navigation is by clicks.
  * WebKit: `PW_WEBKIT=1 ... --project=webkit`.
  */
 import { mkdirSync } from 'node:fs'
@@ -34,6 +36,11 @@ const shot = async (page: Page, name: string) => {
   mkdirSync(SHOTS, { recursive: true })
   const engine = page.context().browser()?.browserType().name() ?? 'browser'
   await page.getByTestId('host-network-group').screenshot({ path: `${SHOTS}/${engine}-${name}.png`, scale: 'css' })
+}
+const pickerShot = async (page: Page, name: string) => {
+  mkdirSync(SHOTS, { recursive: true })
+  const engine = page.context().browser()?.browserType().name() ?? 'browser'
+  await page.getByTestId('host-network-relay').screenshot({ path: `${SHOTS}/${engine}-${name}.png`, scale: 'css' })
 }
 
 test('Add a machine: the command, the countdown, the join, the path, Remove', async ({ page }) => {
@@ -147,5 +154,93 @@ test('a refused invite says why, an expired link offers a new one, a narrow wind
   await expect(invite).toContainText('This link expired.')
   await expect(page.getByTestId('host-network-add')).toHaveText('New link')
   await shot(page, '5-expired')
+  expect(errors).toEqual([])
+})
+
+test('the relay choice: what each one shares, a companion means its relay, and without one a pick moves every machine', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  const errors: string[] = []
+  page.on('pageerror', (e) => errors.push(e.message))
+  let relay = 'own'
+  let companion = true
+  let failNext = false
+  const puts: unknown[] = []
+  const machine = { host: 'gpu-box', endpoint: ID, enabled: true, platform: 'linux-x64', path: 'relay', rttMs: 40 }
+  await page.route('**/api/hosts/net', (route) => route.fulfill({ json: overview([machine], { companion, relay }) }))
+  await page.route('**/api/hosts/net/relay', async (route) => {
+    const body = route.request().postDataJSON() as { relay: string }
+    puts.push(body)
+    if (failNext) {
+      failNext = false
+      return route.fulfill({ status: 409, json: { error: 'No relay would cut off gpu-box: it reaches this Mac only through a relay or a router. Keep Public relays, or put it on the same network as this Mac first.', code: 'needs_relay' } })
+    }
+    relay = body.relay
+    if (relay === 'none') machine.path = 'direct'
+    return route.fulfill({ json: { relay } })
+  })
+  const TICKET_CMD = 'curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/join.sh | sh -s -- wn1-eyJ2IjoxfQ'
+  await page.route('**/api/hosts/net/invites', (route) => route.fulfill({
+    status: 201, json: { id: 'ni-3', link: 'wn1-eyJ2IjoxfQ', command: TICKET_CMD, expiresAt: Date.now() + 10 * 60_000, state: 'waiting' },
+  }))
+  await page.route('**/api/hosts/net/invites/ni-3', (route) => route.fulfill({ json: { id: 'ni-3', link: 'wn1-eyJ2IjoxfQ', command: TICKET_CMD, expiresAt: Date.now() + 9 * 60_000, state: 'waiting' } }))
+
+  await openRemoteHosts(page)
+  const picker = page.getByTestId('host-network-relay')
+  await expect(picker).toBeVisible({ timeout: 30_000 })
+  await expect(picker).toContainText('When two machines cannot connect directly, they go through')
+  const own = picker.locator('[data-relay="own"]')
+  const pub = picker.locator('[data-relay="public"]')
+  const none = picker.locator('[data-relay="none"]')
+  // A companion: its relay, and the other two say what they share but cannot be picked.
+  await expect(own).toHaveAttribute('aria-checked', 'true')
+  await expect(own).toContainText('on your cloud companion (wn.example.com). Only your machines use it.')
+  await expect(pub).toContainText("They see your machines' internet addresses and which of them talk to each other")
+  await expect(none).toContainText('Machines behind two home routers may not connect.')
+  await expect(pub).toBeDisabled()
+  await expect(none).toBeDisabled()
+  await expect(picker).toContainText('While a cloud companion is paired, your machines use its relay.')
+  await picker.scrollIntoViewIfNeeded()
+  await pickerShot(page, '6-relay-own')
+  const row = page.getByTestId('host-network-group').locator('[data-host-alias="gpu-box"]')
+  await expect(row.getByTestId('host-network-path')).toHaveText('Linux x86_64 · Through your relay · 40 ms')
+
+  // No companion: public relays, and Your relay cannot be picked. Another section and back:
+  // the page reads the network again.
+  companion = false
+  relay = 'public'
+  await page.getByTestId('settings-nav-general').click()
+  await expect(picker).toHaveCount(0)
+  await page.getByTestId('settings-nav-remote-hosts').click()
+  await expect(pub).toHaveAttribute('aria-checked', 'true')
+  await expect(own).toHaveAttribute('aria-disabled', 'true')
+  await expect(own).toBeDisabled()
+  await expect(own).toContainText('Pair a cloud companion first (Settings > Cloud Companion).')
+  await expect(picker).not.toContainText('While a cloud companion is paired')
+  await expect(row.getByTestId('host-network-path')).toHaveText('Linux x86_64 · Through a public relay · 40 ms')
+  await expect(page.getByTestId('host-network-group')).toContainText('through a public relay that cannot read the traffic')
+
+  // A refused change says why and keeps the choice it had.
+  failNext = true
+  await none.click()
+  await expect(page.getByTestId('host-network-relay-error')).toContainText('Could not change the relay')
+  await expect(picker.getByRole('alert')).toContainText('No relay would cut off gpu-box')
+  await expect(pub).toHaveAttribute('aria-checked', 'true')
+
+  // No relay: the server is asked once, the choice, the row and the footer follow it.
+  await none.click()
+  await expect.poll(() => puts.at(-1)).toEqual({ relay: 'none' })
+  await expect(none).toHaveAttribute('aria-checked', 'true')
+  await expect(page.getByTestId('host-network-relay-error')).toHaveCount(0)
+  await expect(row.getByTestId('host-network-path')).toHaveText('Linux x86_64 · Direct · 40 ms')
+  await expect(page.getByTestId('host-network-group')).toContainText('They reach this Mac directly. Only Walnut can use this connection.')
+
+  // The invite is a ticket, and the Mac must stay on while the machine joins.
+  await page.getByTestId('host-network-add').click()
+  await expect(page.getByTestId('host-network-command')).toHaveText(TICKET_CMD)
+  await expect(page.getByTestId('host-network-invite')).toContainText('Keep this Mac awake and online until the machine joins.')
+  await page.getByTestId('host-network-group').scrollIntoViewIfNeeded()
+  await shot(page, '7-no-companion')
+  await picker.scrollIntoViewIfNeeded()
+  await pickerShot(page, '8-relay-no-companion')
   expect(errors).toEqual([])
 })

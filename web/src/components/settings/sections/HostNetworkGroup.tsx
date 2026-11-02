@@ -1,19 +1,21 @@
 /**
  * Settings > Remote Hosts > Machines that joined with a link (api/hosts-net.ts,
- * server: core/net/net-mac.ts). Add a machine makes a one-use invite on the cloud
- * companion; the new machine runs the link, and the row it becomes says how this Mac
- * reaches it now: direct, through the user's relay, or not at all.
+ * server: core/net/net-mac.ts). Add a machine makes a one-use invite (on the cloud
+ * companion, or on this Mac when none is paired); the new machine runs the link, and the
+ * row it becomes says how this Mac reaches it now: direct, through a relay, or not at all.
+ * The relay choice sits under it (HostNetworkRelay.tsx).
  *
  * The machines are not rows of the SSH editor above: their host rows are written by
  * the host network (the server keeps them through an editor save), and Remove is the
  * only way out, because it also takes the machine off the companion's list.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { fetchNet, fetchNetInvite, makeNetInvite, removeNetMachine, type NetInvite, type NetMachine, type NetOverview } from '@/api/hosts-net';
+import { fetchNet, fetchNetInvite, makeNetInvite, removeNetMachine, type NetInvite, type NetMachine, type NetOverview, type NetRelay } from '@/api/hosts-net';
 import { ApiError } from '@/api/client';
 import { log } from '@/utils/log';
 import { SettingsGroup, SettingsRow } from '../SettingsSection';
 import { SettingsButton } from '../inputs/SettingsButton';
+import { HostNetworkRelay } from './HostNetworkRelay';
 import { CopyButton } from '../inputs/CopyButton';
 import { InlineConfirmButton } from '../inputs/InlineConfirmButton';
 import { RemoteHostDetail, RemoteHostStatus } from './RemoteHostStatus';
@@ -36,10 +38,10 @@ export function platformLabel(p?: string): string {
   return `${osName} ${archName}`.trim();
 }
 
-export function pathLabel(m: Pick<NetMachine, 'path' | 'rttMs'>): string {
+export function pathLabel(m: Pick<NetMachine, 'path' | 'rttMs'>, relay: NetRelay = 'own'): string {
   const rtt = typeof m.rttMs === 'number' ? ` · ${Math.round(m.rttMs)} ms` : '';
   if (m.path === 'direct') return `Direct${rtt}`;
-  if (m.path === 'relay') return `Through your relay${rtt}`;
+  if (m.path === 'relay') return `${relay === 'public' ? 'Through a public relay' : 'Through your relay'}${rtt}`;
   // No link right now: the status line under the name says why.
   return '';
 }
@@ -130,6 +132,12 @@ export function HostNetworkGroup() {
   };
 
   const machines = net?.machines ?? [];
+  const relay = net?.relay ?? 'own';
+  const footer = relay === 'none'
+    ? 'These machines need no SSH. They reach this Mac directly. Only Walnut can use this connection.'
+    : relay === 'public'
+      ? 'These machines need no SSH. They reach this Mac directly, or through a public relay that cannot read the traffic. Only Walnut can use this connection.'
+      : 'These machines need no SSH. They reach this Mac directly, or through the relay on your cloud companion. Only Walnut can use this connection.';
   const expired = invite?.state === 'waiting' && now > invite.expiresAt;
   const addButton = (
     <SettingsButton onClick={() => void add()} disabled={making} data-testid="host-network-add">
@@ -138,11 +146,12 @@ export function HostNetworkGroup() {
   );
 
   return (
+    <>
     <SettingsGroup
       heading="Machines that joined with a link"
       headingTrailing={addButton}
       data-testid="host-network-group"
-      footer="These machines need no SSH. They reach this Mac directly, or through the relay on your cloud companion. Only Walnut can use this connection."
+      footer={footer}
     >
       {invite && (
         <SettingsRow
@@ -156,7 +165,10 @@ export function HostNetworkGroup() {
               ? 'This link expired.'
               : 'Run this in a terminal on the new machine (macOS or Linux):'}
           help={invite.state === 'waiting' && !expired
-            ? `Works once, for 10 minutes (${left(invite.expiresAt - now)} left).  Waiting for the machine...`
+            ? <>
+                {`Works once, for 10 minutes (${left(invite.expiresAt - now)} left).  Waiting for the machine...`}
+                {net?.companion === false && <><br />Keep this Mac awake and online until the machine joins.</>}
+              </>
             : undefined}
           control={invite.state === 'waiting' && !expired ? (
             <span className="settings-addons-inline">
@@ -173,7 +185,7 @@ export function HostNetworkGroup() {
         <SettingsRow label="No machines yet." help="Add a machine makes a link you run on it." />
       )}
       {machines.map((m) => {
-        const sub = [platformLabel(m.platform), pathLabel(m)].filter(Boolean).join(' · ');
+        const sub = [platformLabel(m.platform), pathLabel(m, relay)].filter(Boolean).join(' · ');
         return (
           <SettingsRow
             key={m.host}
@@ -195,5 +207,7 @@ export function HostNetworkGroup() {
         );
       })}
     </SettingsGroup>
+    {net && <HostNetworkRelay net={net} onChanged={() => void load()} />}
+    </>
   );
 }

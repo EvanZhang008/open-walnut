@@ -222,7 +222,7 @@ export function getDaemonSource(): string {
   // external-scan-core.cjs, path-resolve-core.cjs) and daemonCapabilities() in
   // the template adds the capability back at runtime only when that sidecar
   // actually loads.
-  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'task-dir-prune-v1', 'host-exec-v1', 'net-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'budget-v2', 'walnut-mcp-v1'])
+  const SIDECAR_GATED_CAPABILITIES = new Set(['changes-v1', 'external-scan-v1', 'external-scan-filter-v1', 'external-describe-v1', 'external-human-v1', 'path-resolve-v1', 'task-dir-v1', 'task-dir-prune-v1', 'host-exec-v1', 'net-v1', 'net-join-v1', 'host-mcp-v1', 'host-http-v1', 'secrets-v1', 'vscode-v1', 'rewind-probe-v1', 'triggers-v1', 'trigger-claim-v1', 'trigger-host-resume-v1', 'offline-triggers-v1', 'clock-routine-v1', 'clock-host-start-v1', 'acp-model-catalog-v1', 'acp-host-v1', 'usage-scan-v1', 'session-cost-v1', 'session-cost-day-v1', 'budget-v2', 'walnut-mcp-v1'])
   const capsLiteral = JSON.stringify(
     [...ADVERTISED_DAEMON_CAPABILITIES].filter((c) => !SIDECAR_GATED_CAPABILITIES.has(c)),
   )
@@ -3821,7 +3821,7 @@ function dispatchCommand(ws, id, cmd) {
     }
     // The host network (net-v1); not bridge- or follower-reachable: it decides who may
     // reach this daemon. Mirrors daemon-standalone.ts.
-    case 'net.status': case 'net.identity': case 'net.configure': case 'net.forward': case 'net.probe': {
+    case 'net.status': case 'net.identity': case 'net.configure': case 'net.forward': case 'net.probe': case 'net.invites': case 'net.join': {
       if (!netSupervisor) return sendError(ws, id, cmd.cmd + ' unsupported: net-core sidecar not loaded');
       const nop = cmd.cmd.slice(4);
       if (nop === 'status') return replyTransfer(ws, id, cmd.cmd, function () { return netSupervisor.status(); }, false);
@@ -12305,6 +12305,7 @@ function daemonCapabilities() {
   if (taskDirCore && typeof taskDirCore.pruneTaskDirs === 'function') caps.push('task-dir-prune-v1');
   if (hostExec) caps.push('host-exec-v1');
   if (netSupervisor) caps.push('net-v1');
+  if (netSupervisor && typeof netSupervisor.join === 'function') caps.push('net-join-v1');
   if (hostMcp) caps.push('host-mcp-v1');
   if (hostHttp) caps.push('host-http-v1');
   if (secretStore) caps.push('secrets-v1');

@@ -1,10 +1,15 @@
 //! The control socket: a unix socket in a 0700 directory, mode 0600, one JSON request line per
 //! connection and one JSON answer line. Only this account (the daemon, the Walnut server) reaches it.
 //!
-//!   {"op":"status"}                    -> {"ok":true, "id", "relays", "addrs", "peers"}
+//!   {"op":"status"}                    -> {"ok":true, "id", "relayMode", "homeRelay", "relays", "addrs", "peers", "invites"}
 //!   {"op":"forward","to":"<id>"}       -> {"ok":true, "port"}   (127.0.0.1; each connection = a stream to that member's daemon)
 //!   {"op":"probe","to":"<id>"}         -> {"ok":true, "link": {"path": "direct"|"relay", "rttMs", ...}}
 //!   {"op":"reload"}                    -> {"ok":true, "restart": bool}  (re-read the config; restart: the endpoint must be rebuilt)
+//!   {"op":"invites","invites":[{"id","codeHash","expiresAt","name"}]} -> {"ok":true}  (replaces the pending invites)
+//!   {"op":"join","to","code","hostname","platform","addrs","relay"}   -> {"ok":true,"name"} | {"ok":false,"error"}
+//!
+//! `status.invites` is [{"id","expiresAt","used": null | {"memberId","hostname","platform","name","at"}}].
+//! A join's error is "invalid_code", "rate_limited", "no_answer" (no dial, no stream, or refused) or a text.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -78,7 +83,7 @@ fn peer_of(req: &Value) -> Result<EndpointId> {
     to.parse().map_err(|e| anyhow!("bad endpoint id {to}: {e}"))
 }
 
-async fn handle(line: &str, node: &Arc<Node>, events: &mpsc::Sender<Event>) -> Result<Value> {
+pub async fn handle(line: &str, node: &Arc<Node>, events: &mpsc::Sender<Event>) -> Result<Value> {
     let req: Value = serde_json::from_str(line.trim()).map_err(|e| anyhow!("not a JSON request: {e}"))?;
     match req.get("op").and_then(Value::as_str).unwrap_or("") {
         "status" => {
@@ -101,6 +106,12 @@ async fn handle(line: &str, node: &Arc<Node>, events: &mpsc::Sender<Event>) -> R
             log::info("config reloaded", json!({"restart": restart}));
             Ok(json!({"ok": true, "restart": restart}))
         }
+        "invites" => {
+            node.joins.set(req.get("invites").unwrap_or(&Value::Null))?;
+            log::info("invites set", json!({"invites": node.joins.status()}));
+            Ok(json!({"ok": true}))
+        }
+        "join" => crate::join::dial(&node.ep, node.choice, peer_of(&req)?, &req).await,
         other => bail!("unknown op {other:?}"),
     }
 }

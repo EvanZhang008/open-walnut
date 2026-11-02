@@ -2435,6 +2435,8 @@ function dispatchCommand(ws: ServerWebSocket<WsData>, id: number, cmd: Record<st
     case 'net.configure': return replyTransfer(ws, id as number, 'net.configure', () => netSupervisor.configure(cmd), false)
     case 'net.forward': return replyTransfer(ws, id as number, 'net.forward', () => netSupervisor.forward(cmd), false)
     case 'net.probe': return replyTransfer(ws, id as number, 'net.probe', () => netSupervisor.probe(cmd), false)
+    case 'net.invites': return replyTransfer(ws, id as number, 'net.invites', () => netSupervisor.invites(cmd), false)
+    case 'net.join': return replyTransfer(ws, id as number, 'net.join', () => netSupervisor.join(cmd), false)
     case 'mcp.tools': return replyTransfer(ws, id as number, 'mcp.tools', () => hostMcp.tools(cmd), false)
     case 'mcp.call': return replyTransfer(ws, id as number, 'mcp.call', () => hostMcp.call(cmd), false)
     case 'mcp.result': return replyTransfer(ws, id as number, 'mcp.result', () => hostMcp.result(cmd), false)

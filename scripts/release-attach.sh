@@ -1,8 +1,8 @@
 #!/bin/sh
 # Attach a release's compiled files (scripts/release-build.mjs) to its GitHub
-# Release, a draft or a published one: every walnut-<version>-<target>.gz and
-# install.sh, then SHA256SUMS last, so the release never lists a checksum for a
-# file that is not up yet.
+# Release, a draft or a published one: every walnut-<version>-<target>.gz,
+# install.sh and join.sh (a tree older than join.sh has none), then SHA256SUMS
+# last, so the release never lists a checksum for a file that is not up yet.
 #
 #   sh scripts/release-attach.sh v0.7.0 <dir>/assets
 #
@@ -25,6 +25,10 @@ if printf '%s\n' "$assets" | grep -qx SHA256SUMS; then
 fi
 set -- "$dir"/walnut-*.gz
 [ -f "$1" ] || { echo "release-attach: no walnut-*.gz in $dir" >&2; exit 1; }
-gh release upload "$tag" "$@" "$here/install.sh" --clobber
+n=$#
+scripts="install.sh"
+set -- "$@" "$here/install.sh"
+if [ -f "$here/join.sh" ]; then set -- "$@" "$here/join.sh"; scripts="install.sh, join.sh"; fi
+gh release upload "$tag" "$@" --clobber
 gh release upload "$tag" "$dir/SHA256SUMS" --clobber
-echo "attached $# files, install.sh and SHA256SUMS to $tag"
+echo "attached $n files, $scripts and SHA256SUMS to $tag"

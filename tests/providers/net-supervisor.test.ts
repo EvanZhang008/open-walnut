@@ -17,6 +17,9 @@
  *     in it is kept (two reloads at once used to undo it).
  *  8. A reload it took is the one a rollback goes back to; a start that fails for any
  *     other reason than the config (an unreadable key) keeps the new config.
+ *  9. A relay mode waits for a walnut-net that is starting to say what it runs, and is
+ *     refused when it never does (an older one would run it with no relay at all); one
+ *     that exits meanwhile is started on it.
  *
  * Needs walnut-net (WALNUT_NET_TEST_BIN, else dist/daemon-binaries/walnut-net-<platform>-<arch>);
  * skipped without it. Every file is under one temp dir; the children it starts are its own.
@@ -38,6 +41,9 @@ const NET_BIN = (() => {
   return fs.existsSync(built) ? built : null
 })()
 
+// A released walnut-net without relay modes (0.1.0, control protocol 1), for the version gate.
+const OLD_BIN = process.env.WALNUT_NET_TEST_OLD_BIN && fs.existsSync(process.env.WALNUT_NET_TEST_OLD_BIN) ? process.env.WALNUT_NET_TEST_OLD_BIN : null
+
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'wn-net-sup-')))
 afterAll(() => { if (root.includes('wn-net-sup-')) fs.rmSync(root, { recursive: true, force: true }) })
 
@@ -49,13 +55,13 @@ afterEach(async () => {
 
 const BAD_ROOT = '-----BEGIN CERTIFICATE-----\nnot base64 !!\n-----END CERTIFICATE-----\n'
 
-function supervisor(name: string, opts: { bin?: () => string | null; fetchBin?: () => Promise<string>; previousBin?: () => string | null } = {}) {
+function supervisor(name: string, opts: { bin?: () => string | null; fetchBin?: () => Promise<string>; previousBin?: () => string | null; spawn?: typeof spawn } = {}) {
   const dir = path.join(root, name)
   fs.mkdirSync(dir, { recursive: true })
   const portFile = path.join(dir, 'daemon.port')
   fs.writeFileSync(portFile, '1\n')
   const s = createNetSupervisor({
-    spawn: (cmd, args, o) => spawn(cmd, args, o),
+    spawn: opts.spawn ?? ((cmd, args, o) => spawn(cmd, args, o)),
     stateDir: path.join(dir, 'net'),
     portFile,
     bin: opts.bin ?? (() => NET_BIN),
@@ -209,5 +215,65 @@ describe.skipIf(!NET_BIN)('the walnut-net supervisor', () => {
     // The next start comes up on it.
     const st = await until(async () => { const x = await s.status(); return x.running ? x : null }, 30_000, 'walnut-net once the key reads again')
     expect(peerNames(st)).toEqual(['other'])
+  }, 60_000)
+
+  it('a relay mode is not taken on trust by one that has not said what it is yet', async () => {
+    // A walnut-net that never comes up (no ready line, so no protocol): `run` sleeps.
+    const hang = ((cmd: string, args: readonly string[], o: object) => args[0] === 'run'
+      ? spawn('sleep', ['600'], o)
+      : spawn(cmd, args, o)) as unknown as typeof spawn
+    const { s, configFile } = supervisor('never-ready', { spawn: hang })
+    fs.mkdirSync(path.dirname(configFile), { recursive: true })
+    fs.writeFileSync(configFile, '{}\n')
+    s.start()
+    await expect(s.configure({ relayMode: 'public', members: [mac] })).rejects.toThrow(/still starting/)
+    expect(fs.readFileSync(configFile, 'utf8')).toBe('{}\n')
+  }, 60_000)
+
+  it('one that exits while the relay mode waits is started on it, and checked', async () => {
+    // The first `run` exits after 2 s without a ready line (a crash); the next is walnut-net.
+    let runs = 0
+    const crashOnce = ((cmd: string, args: readonly string[], o: object) => args[0] === 'run' && runs++ === 0
+      ? spawn('sleep', ['2'], o)
+      : spawn(cmd, args, o)) as unknown as typeof spawn
+    const { s, configFile } = supervisor('exits-waiting', { spawn: crashOnce })
+    fs.mkdirSync(path.dirname(configFile), { recursive: true })
+    fs.writeFileSync(configFile, '{}\n')
+    s.start()
+    expect((await s.configure({ relayMode: 'none', members: [mac] })).running).toBe(true)
+    expect((await s.status()).node?.relayMode).toBe('none')
+    expect(runs).toBe(2)
+  }, 60_000)
+})
+
+describe.skipIf(!NET_BIN || !OLD_BIN)('relay modes and a walnut-net without them', () => {
+  it('a first start on one is undone, and nothing runs on it', async () => {
+    const { s, configFile } = supervisor('old-first', { bin: () => OLD_BIN })
+    await expect(s.configure({ relayMode: 'public', members: [mac] })).rejects.toThrow(/older than this Walnut/)
+    expect(fs.existsSync(configFile)).toBe(false)
+    expect((await s.status()).running).toBe(false)
+  }, 60_000)
+
+  it('one that runs keeps the config it runs when a relay mode comes', async () => {
+    const { s, configFile } = supervisor('old-running', { bin: () => OLD_BIN })
+    await s.configure({ members: [mac] })
+    const text = fs.readFileSync(configFile, 'utf8')
+    await expect(s.configure({ relayMode: 'none', members: [mac] })).rejects.toThrow(/older than this Walnut/)
+    expect(fs.readFileSync(configFile, 'utf8')).toBe(text)
+    expect((await s.status()).running).toBe(true)
+  }, 60_000)
+
+  it('an older download that has relay modes runs them while this version downloads', async () => {
+    const { s } = supervisor('prev-modes', { bin: () => null, previousBin: () => NET_BIN, fetchBin: () => new Promise<string>(() => {}) })
+    expect((await s.configure({ relayMode: 'none', members: [mac] })).running).toBe(true)
+    expect((await s.status()).node?.relayMode).toBe('none')
+  }, 60_000)
+
+  it('an older download without them is undone, and this version is fetched meanwhile', async () => {
+    let fetched = 0
+    const { s, configFile } = supervisor('prev-old', { bin: () => null, previousBin: () => OLD_BIN, fetchBin: () => { fetched++; return new Promise<string>(() => {}) } })
+    await expect(s.configure({ relayMode: 'none', members: [mac] })).rejects.toThrow(/downloading, so try again in a minute/)
+    expect(fs.existsSync(configFile)).toBe(false)
+    expect(fetched).toBe(1)
   }, 60_000)
 })

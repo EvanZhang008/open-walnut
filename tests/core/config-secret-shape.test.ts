@@ -677,6 +677,8 @@ describe('every free-form map in the Config type is accounted for', () => {
     prices: 'usage.prices: per-model rates in USD per million tokens',
     hints: 'session.hints: keyed by hint kind; each value is typed MessageHintSettings (switch, triggers, placement, audience, text a person writes to the model)',
     stt_corrections: 'a term the user says to the forms speech mishears it as (src/core/stt/corrections.ts)',
+    joined: 'net.joined: keyed by network id (a public key); each value is a machine name, platform and time',
+    where: 'net.where: keyed by network id (a public key); each value is ip:port addresses and a relay URL',
   }
 
   it('each map the types declare is masked or explained', () => {

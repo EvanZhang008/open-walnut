@@ -383,12 +383,12 @@ export function registerCommands(program: Command): void {
     .command('net')
     .description('This machine on your Walnut host network (join | status)')
   netCmd
-    .command('join <companion> <code>')
-    .description('Join this machine to your Walnut machines with an invite (the invite link runs this)')
+    .command('join <companion-or-ticket> [code]')
+    .description('Join this machine to your Walnut machines with an invite (the invite link runs this): a companion and its code, or the ticket of a Mac with no companion')
     .option('--steps', 'Continue the numbered steps of the invite script')
-    .action(async (companion: string, code: string, options: { steps?: boolean }) => {
+    .action(async (target: string, code: string | undefined, options: { steps?: boolean }) => {
       const { runNetJoin } = await import('./net.js');
-      process.exitCode = await runNetJoin(companion, code, { steps: !!options.steps });
+      process.exitCode = await runNetJoin(target, code, { steps: !!options.steps });
     });
   netCmd
     .command('status')

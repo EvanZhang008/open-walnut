@@ -1406,7 +1406,16 @@ export interface Config {
   local_capabilities?: string[];
   /** The host network (core/net/net-mac.ts): on once the user made the first invite;
    *  `removing` lists machines whose Remove has started (finished by the next sync). */
-  net?: { enabled?: boolean; removing?: string[] };
+  net?: {
+    enabled?: boolean;
+    removing?: string[];
+    /** How machines reach each other when not directly (Settings): own (the companion's relay), public (n0), none. */
+    relay?: 'own' | 'public' | 'none';
+    /** With no companion: the machines that joined this Mac, by network id. */
+    joined?: Record<string, { name: string; platform?: string; addedAt: number }>;
+    /** Where this Mac last reached each machine, by network id (src/core/net/net-where.ts). */
+    where?: Record<string, { addrs?: string[]; relay?: string }>;
+  };
   hosts?: Record<string, {
     hostname: string;
     user?: string;

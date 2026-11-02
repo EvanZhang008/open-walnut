@@ -1,5 +1,6 @@
 //! The running connector: one iroh endpoint for this host, the member check on every incoming
-//! connection, and local forwards (127.0.0.1 listeners) to other members' daemons.
+//! daemon connection, the join protocol (join.rs), and local forwards (127.0.0.1 listeners) to
+//! other members' daemons.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -8,16 +9,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use iroh::endpoint::{Connection, presets};
+use iroh::endpoint::{BindOpts, Connection, presets};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, Watcher};
 use serde_json::{Value, json};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, RwLock};
 
-use crate::config::{Config, Member, load_or_make_key};
+use crate::config::{Config, Member, RelayChoice, load_or_make_key};
+use crate::join::{ALPN_JOIN, Joins};
 use crate::log;
 
-/// The one protocol this endpoint speaks: a stream to the peer's Walnut daemon.
+/// A stream to the peer's Walnut daemon (members only). The other protocol is ALPN_JOIN.
 pub const ALPN_DAEMON: &[u8] = b"walnut/daemon/1";
 /// Close code for a peer that is not a member allowed here (before any stream).
 pub const CLOSE_NOT_MEMBER: u32 = 403;
@@ -27,7 +29,10 @@ const DIAL_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub struct Node {
     pub ep: Endpoint,
+    pub choice: RelayChoice,
     relays: Vec<RelayUrl>,
+    /// Pending invites and the join rate limits.
+    pub joins: Joins,
     daemon_port_file: PathBuf,
     members: RwLock<HashMap<EndpointId, Member>>,
     /// Connections members opened to this host, so a removed member is cut at once.
@@ -40,30 +45,91 @@ pub struct Node {
     forwards: Mutex<HashMap<EndpointId, (u16, tokio::task::JoinHandle<()>)>>,
 }
 
+/// Which iroh preset the endpoint starts from, and the relay mode set over it.
+#[derive(Debug, PartialEq)]
+pub struct Plan {
+    /// presets::N0 (public relays, pkarr publishing and pkarr + DNS lookup), else presets::Minimal.
+    pub n0: bool,
+    /// None: the preset's own relays.
+    pub relay: Option<RelayMode>,
+}
+
+pub fn plan(cfg: &Config) -> Result<Plan> {
+    Ok(match cfg.relay_choice() {
+        RelayChoice::Public => Plan { n0: true, relay: None },
+        RelayChoice::Custom => {
+            let relays = cfg.relay_urls()?;
+            Plan { n0: false, relay: Some(if relays.is_empty() { RelayMode::Disabled } else { RelayMode::custom(relays) }) }
+        }
+        RelayChoice::None => Plan { n0: false, relay: Some(RelayMode::Disabled) },
+    })
+}
+
+/// The file keeping the UDP port this host listened on last (next to its key).
+pub fn port_file(cfg: &Config) -> PathBuf {
+    PathBuf::from(format!("{}.port", cfg.key.display()))
+}
+
+fn remembered_port(file: &PathBuf) -> Option<u16> {
+    std::fs::read_to_string(file).ok()?.trim().parse::<u16>().ok().filter(|p| *p >= 1024)
+}
+
+/// The endpoint on `port` (None: any free one).
+async fn endpoint(cfg: &Config, port: Option<u16>) -> Result<Endpoint> {
+    let key = load_or_make_key(&cfg.key)?;
+    let plan = plan(cfg)?;
+    // custom and none: Minimal is the crypto provider only, so no n0 address lookup or
+    // publishing is added and only the user's relays (or none) are contacted. public: N0, whose
+    // pkarr publisher keeps its default relay-only filter (no IP address is published).
+    // Router port mapping (UPnP/PCP/NAT-PMP) is off in every mode.
+    let mut b = if plan.n0 { Endpoint::builder(presets::N0) } else { Endpoint::builder(presets::Minimal) };
+    if let Some(mode) = plan.relay {
+        b = b.relay_mode(mode);
+    }
+    let mut b = b
+        .portmapper_config(iroh::endpoint::PortmapperConfig::Disabled)
+        .secret_key(key)
+        .alpns(vec![ALPN_DAEMON.to_vec(), ALPN_JOIN.to_vec()]);
+    let roots = cfg.root_certs()?;
+    if !roots.is_empty() {
+        b = b.ca_tls_config(iroh::tls::CaTlsConfig::embedded().with_extra_roots(roots));
+    }
+    if let Some(port) = port {
+        b = b.bind_addr(SocketAddr::from(([0, 0, 0, 0], port)))?;
+        // IPv6 on the same port when it is free; without it the endpoint still binds.
+        b = b.bind_addr_with_opts(SocketAddr::from((std::net::Ipv6Addr::UNSPECIFIED, port)), BindOpts::default().set_is_required(false))?;
+    }
+    b.bind().await.context("bind the endpoint")
+}
+
 impl Node {
     pub async fn bind(cfg: &Config) -> Result<Arc<Self>> {
-        let key = load_or_make_key(&cfg.key)?;
         let relays = cfg.relay_urls()?;
-        let mode = if relays.is_empty() { RelayMode::Disabled } else { RelayMode::custom(relays.clone()) };
-        // Minimal = the crypto provider only: no n0 DNS/pkarr address lookup or publishing is added.
-        // Router port mapping (UPnP/PCP/NAT-PMP) is off too: nothing outside the user's machines and
-        // relays is ever contacted.
-        let mut b = Endpoint::builder(presets::Minimal)
-            .relay_mode(mode)
-            .portmapper_config(iroh::endpoint::PortmapperConfig::Disabled)
-            .secret_key(key)
-            .alpns(vec![ALPN_DAEMON.to_vec()]);
-        let roots = cfg.root_certs()?;
-        if !roots.is_empty() {
-            b = b.ca_tls_config(iroh::tls::CaTlsConfig::embedded().with_extra_roots(roots));
+        // The port from last time, when the config names none: a machine that knows this host's
+        // address finds it again after a restart (with no relay, nothing else would).
+        let fixed = cfg.bind_port.filter(|p| *p != 0);
+        let file = port_file(cfg);
+        let last = if fixed.is_none() { remembered_port(&file) } else { None };
+        let ep = match endpoint(cfg, fixed.or(last)).await {
+            Err(e) if last.is_some() => {
+                log::warn("the port from last time is taken; using another", json!({"port": last, "error": format!("{e:#}")}));
+                endpoint(cfg, None).await?
+            }
+            r => r?,
+        };
+        let bound = ep.bound_sockets().iter().find(|a| a.is_ipv4()).map(|a| a.port());
+        if fixed.is_none()
+            && let Some(port) = bound
+            && Some(port) != last
+            && let Err(e) = std::fs::write(&file, format!("{port}\n"))
+        {
+            log::warn("could not keep the port", json!({"file": file.display().to_string(), "error": e.to_string()}));
         }
-        if let Some(port) = cfg.bind_port.filter(|p| *p != 0) {
-            b = b.bind_addr(SocketAddr::from(([0, 0, 0, 0], port)))?;
-        }
-        let ep = b.bind().await.context("bind the endpoint")?;
         Ok(Arc::new(Self {
             ep,
+            choice: cfg.relay_choice(),
             relays,
+            joins: Joins::default(),
             daemon_port_file: cfg.daemon_port_file.clone(),
             members: RwLock::new(cfg.member_map()),
             incoming: Mutex::new(HashMap::new()),
@@ -119,6 +185,11 @@ impl Node {
                         return;
                     }
                 };
+                // Any peer may try a join, but only while an invite is pending (join.rs).
+                if conn.alpn() == ALPN_JOIN {
+                    crate::join::accept(&node.joins, conn).await;
+                    return;
+                }
                 let peer = conn.remote_id();
                 // The check and the record happen under the incoming lock, which set_members takes
                 // after it swaps the list: a removal either is seen here, or finds this connection
@@ -169,9 +240,21 @@ impl Node {
             }
         }
         let member = self.members.read().await.get(&peer).cloned().ok_or_else(|| anyhow!("{peer} is not a member"))?;
+        // custom: through the user's relays; public: the lookup finds the relay by id; none: addrs only.
         let mut addr = EndpointAddr::new(peer);
-        for r in &self.relays {
-            addr = addr.with_relay_url(r.clone());
+        if self.choice == RelayChoice::Custom {
+            for r in &self.relays {
+                addr = addr.with_relay_url(r.clone());
+            }
+        }
+        // Where it was last seen, in any mode with a relay: a machine that has not moved to
+        // this host's relay choice yet (it was away) is still on the relay it had.
+        if self.choice != RelayChoice::None {
+            for r in &member.relays {
+                if let Ok(u) = crate::config::parse_relay_url(r) {
+                    addr = addr.with_relay_url(u);
+                }
+            }
         }
         for a in &member.addrs {
             if let Ok(sa) = a.parse::<SocketAddr>() {
@@ -268,9 +351,12 @@ impl Node {
         let addr = self.ep.addr();
         json!({
             "id": self.ep.id().to_string(),
+            "relayMode": self.choice.as_str(),
+            "homeRelay": addr.relay_urls().next().map(|u| u.to_string()),
             "relays": relays,
             "addrs": addr.ip_addrs().map(|a| a.to_string()).collect::<Vec<_>>(),
             "peers": peers,
+            "invites": self.joins.status(),
         })
     }
 }
@@ -319,4 +405,29 @@ pub async fn pipe(tcp: TcpStream, mut send: iroh::endpoint::SendStream, mut recv
         let _ = tokio::io::AsyncWriteExt::shutdown(&mut tw).await;
     };
     tokio::join!(up, down);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cfg(extra: Value) -> Config {
+        let mut v = json!({"version": 1, "key": "k", "daemonPortFile": "p", "control": "c"});
+        v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn each_relay_mode_picks_its_preset_and_relays() {
+        let url: RelayUrl = "https://relay.example.test".parse().unwrap();
+        let custom = Plan { n0: false, relay: Some(RelayMode::custom([url.clone()])) };
+        assert_eq!(plan(&cfg(json!({"relays": [url.to_string()]}))).unwrap(), custom);
+        assert_eq!(plan(&cfg(json!({"relayMode": "custom", "relays": [url.to_string()]}))).unwrap(), custom);
+        let off = Plan { n0: false, relay: Some(RelayMode::Disabled) };
+        assert_eq!(plan(&cfg(json!({}))).unwrap(), off);
+        assert_eq!(plan(&cfg(json!({"relayMode": "none"}))).unwrap(), off);
+        assert_eq!(plan(&cfg(json!({"relayMode": "custom"}))).unwrap(), off);
+        // public keeps the N0 preset's own relays: nothing is set over them.
+        assert_eq!(plan(&cfg(json!({"relayMode": "public"}))).unwrap(), Plan { n0: true, relay: None });
+    }
 }

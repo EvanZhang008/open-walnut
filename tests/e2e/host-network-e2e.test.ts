@@ -22,7 +22,8 @@
  *     Walnut saved without its transport and endpoint (a label renamed too) is taken back;
  *  5. a Remove the companion cannot answer changes nothing;
  *  6. Remove takes it out everywhere, also with a sync running: its walnut-net stops (and
- *     stays stopped), the companion and the relay refuse it, the Mac's row is gone.
+ *     stays stopped), the companion and the relay refuse it, the Mac's row is gone;
+ *  7. with a companion the relay is always its own (public relays and no relay are refused).
  *
  * Needs walnut-net (WALNUT_NET_TEST_BIN, else dist/daemon-binaries/walnut-net-<platform>-<arch>),
  * the iroh-relay 1.4.1 binary (WALNUT_NET_TEST_RELAY) and bun; skipped without them.
@@ -301,6 +302,19 @@ suite('host network: one link joins a machine, the Mac reaches it, Remove takes 
     }, 30_000, 'Settings to show the path')
     expect(typeof listed.rttMs).toBe('number')
   }, 180_000)
+
+  it('with a companion the relay is its own: public relays and no relay are refused, nothing moves', async () => {
+    const before = await (await api('/api/hosts/net')).json() as { companion: boolean; relay: string }
+    expect(before).toMatchObject({ companion: true, relay: 'own' })
+    for (const pick of ['public', 'none']) {
+      const r = await api('/api/hosts/net/relay', { method: 'PUT', body: JSON.stringify({ relay: pick }) })
+      expect(r.status).toBe(400)
+      expect(((await r.json()) as { code: string }).code).toBe('companion_relay')
+    }
+    expect(fs.readFileSync(path.join(WALNUT_HOME, 'config.yaml'), 'utf8')).not.toMatch(/\n {2}relay:/)
+    const st = await hostRpc('net.status') as { node?: { relayMode?: string } }
+    expect(st.node?.relayMode).toBe('custom')
+  })
 
   it('a Settings save of the SSH hosts keeps the machine', async () => {
     const r = await api('/api/config', { method: 'PUT', body: JSON.stringify({ hosts: { devbox: { hostname: 'devbox.example', enabled: false } } }) })

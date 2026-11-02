@@ -2,7 +2,7 @@
  * The host network from Settings > Remote Hosts (server: src/web/routes/hosts-net.ts):
  * machines that joined with an invite link, and the invites themselves.
  */
-import { apiDelete, apiGet, apiPost } from './client';
+import { apiDelete, apiGet, apiPost, apiPut } from './client';
 
 export type NetPath = 'direct' | 'relay' | 'none' | 'unknown';
 
@@ -16,9 +16,16 @@ export interface NetMachine {
   rttMs?: number;
 }
 
+/** How machines reach each other when they cannot connect directly. */
+export type NetRelay = 'own' | 'public' | 'none';
+
 export interface NetOverview {
   enabled: boolean;
   macId: string | null;
+  /** A cloud companion is paired (it keeps the list; with none, this Mac does). Absent from an older server. */
+  companion?: boolean;
+  /** The relay in use. Absent from an older server, which only had the companion's. */
+  relay?: NetRelay;
   relays: string[];
   syncedAt: number | null;
   error: string | null;
@@ -49,4 +56,8 @@ export function fetchNetInvite(id: string): Promise<NetInvite> {
 
 export function removeNetMachine(host: string): Promise<{ removed: string }> {
   return apiDelete<{ removed: string }>(`/api/hosts/net/machines/${encodeURIComponent(host)}`, { timeoutMs: 70_000 });
+}
+
+export function setNetRelay(relay: NetRelay): Promise<unknown> {
+  return apiPut<unknown>('/api/hosts/net/relay', { relay }, { timeoutMs: 70_000 });
 }

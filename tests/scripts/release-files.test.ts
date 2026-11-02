@@ -408,12 +408,22 @@ exit 1
     expect(fs.existsSync(gh.log)).toBe(false)
   })
 
-  it('uploads every .gz and install.sh, then SHA256SUMS last', () => {
+  it('uploads every .gz, install.sh and join.sh, then SHA256SUMS last', () => {
     const gh = fakeGh(['open-walnut.rb'])
-    expect(attach(gh)).toContain(`attached ${TARGETS.length} files, install.sh and SHA256SUMS to v${VERSION}`)
+    expect(attach(gh)).toContain(`attached ${TARGETS.length} files, install.sh, join.sh and SHA256SUMS to v${VERSION}`)
     const uploaded = fs.readFileSync(gh.log, 'utf8').trim().split('\n')
     expect(uploaded.at(-1)).toBe('SHA256SUMS')
-    expect(uploaded.slice(0, -1).sort()).toEqual([...TARGETS.map((t) => assetName(VERSION, t.target)), 'install.sh'].sort())
+    expect(uploaded.slice(0, -1).sort()).toEqual([...TARGETS.map((t) => assetName(VERSION, t.target)), 'install.sh', 'join.sh'].sort())
+  })
+
+  it('a tree older than join.sh attaches the rest as before', () => {
+    const old = fs.mkdtempSync(path.join(tmp, 'old-tree-'))
+    fs.copyFileSync(path.join(ROOT, 'scripts/release-attach.sh'), path.join(old, 'release-attach.sh'))
+    fs.copyFileSync(path.join(ROOT, 'scripts/install.sh'), path.join(old, 'install.sh'))
+    const gh = fakeGh(['open-walnut.rb'])
+    const out = execFileSync('/bin/sh', [path.join(old, 'release-attach.sh'), `v${VERSION}`, assets], { encoding: 'utf8', env: { PATH: guardedPath([gh.bin], '/usr/bin:/bin') } })
+    expect(out).toContain(`attached ${TARGETS.length} files, install.sh and SHA256SUMS to v${VERSION}`)
+    expect(fs.readFileSync(gh.log, 'utf8').trim().split('\n')).not.toContain('join.sh')
   })
 
   it('a release that has SHA256SUMS already has its files: nothing is uploaded again', () => {

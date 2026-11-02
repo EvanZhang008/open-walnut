@@ -194,6 +194,21 @@ function sweep(now: number): void {
 }
 
 /** The code as a person types it: any case, dashes and spaces optional. */
+/**
+ * A new invite code as people read it (`XXXX-XXXX-XXXX`), and the hash that is kept of it:
+ * 12 characters of 32 are 60 bits; one use, 10 minutes, rate limited where it is checked.
+ */
+export function newInviteCode(): { code: string; hash: string } {
+  const raw = Array.from(crypto.randomBytes(12), (b) => ALPHABET[b & 31]).join('')
+  return { code: `${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8)}`, hash: sha(raw) }
+}
+
+/** The hash kept of a code, from what a person typed (null when it is not a code at all). */
+export function inviteCodeHash(s: unknown): string | null {
+  const n = normalInviteCode(s)
+  return n ? sha(n) : null
+}
+
 export function normalInviteCode(s: unknown): string | null {
   if (typeof s !== 'string') return null
   const t = s.toUpperCase().replace(/[\s-]/g, '')
@@ -209,12 +224,11 @@ export function makeInvite(input: { name?: unknown }, now = Date.now()): { id: s
   }
   const open = [...invites.values()].filter((i) => !i.used && now <= i.expiresAt)
   if (open.length >= MAX_OPEN_INVITES) throw new NetStoreError(429, 'too_many_invites', 'Too many open invites; let one expire or use one first.')
-  // 12 characters of 32: 60 bits, one use, 10 minutes, rate limited.
-  const raw = Array.from(crypto.randomBytes(12), (b) => ALPHABET[b & 31]).join('')
+  const { code, hash } = newInviteCode()
   const id = `ni-${crypto.randomBytes(9).toString('base64url')}`
   const expiresAt = now + INVITE_TTL_MS
-  invites.set(id, { id, hash: sha(raw), ...(name ? { name } : {}), expiresAt })
-  return { id, code: `${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8)}`, expiresAt, ...(name ? { name } : {}) }
+  invites.set(id, { id, hash, ...(name ? { name } : {}), expiresAt })
+  return { id, code, expiresAt, ...(name ? { name } : {}) }
 }
 
 /** An open invite for this code (does not use it), or null. */

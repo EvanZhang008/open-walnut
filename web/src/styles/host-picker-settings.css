@@ -163,3 +163,20 @@
 .rh-action-failed { color: var(--error); font-size: 11px; }
 .rh-status-short { color: var(--fg-muted); }
 .rh-host-detail:empty { display: none; }
+
+/* The relay choice (HostNetworkRelay.tsx): a radio dot before each row's words. */
+.settings-group .settings-row.rh-relay-choice { align-items: flex-start; gap: 10px; }
+.rh-relay-dot {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--bg);
+}
+.rh-relay-choice[aria-checked='true'] .rh-relay-dot { border: 4.5px solid var(--accent); }
+.settings-group .settings-row.rh-relay-choice:disabled { cursor: default; }
+.settings-group .settings-row.rh-relay-choice[aria-disabled='true'] { opacity: 0.55; }
+.settings-group .settings-row.rh-relay-choice[aria-disabled='true']:hover { background: transparent; }
