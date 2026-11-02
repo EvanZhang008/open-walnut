@@ -1,0 +1,4 @@
+# The app installs on its own with Bun (bun.lock), like web/. electron-builder packs a flat
+# node_modules, so the layout is written down rather than left to the lockfile.
+[install]
+linker = "hoisted"

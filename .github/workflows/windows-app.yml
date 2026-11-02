@@ -63,6 +63,10 @@ jobs:
         if: steps.has.outputs.app == 'true'
         with:
           node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        if: steps.has.outputs.app == 'true'
+        with:
+          bun-version: 1.4.4
 
       - name: Build Walnut-Setup-x64.exe
         if: steps.has.outputs.app == 'true'
@@ -71,11 +75,11 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          npm ci --no-audit --no-fund
+          bun install --frozen-lockfile
           # A build for a release carries its version (the updater compares it); a test build is
           # 0.0.0, which never updates itself.
           if ($env:VERSION) { npm version $env:VERSION --no-git-tag-version --allow-same-version }
-          npm run dist
+          bun run dist
           Get-ChildItem dist -File | Format-Table Name, Length
 
       # WSL on, with a Linux of the PC's own (not the one Walnut makes).

@@ -39,9 +39,9 @@ Artifact Signing or a code signing certificate.
 
 ```bash
 cd desktop-windows
-npm ci
-npm run dist        # Windows only (NSIS needs Windows, or wine): dist/Walnut-Setup-x64.exe
-npm run typecheck
+bun install --frozen-lockfile
+bun run dist        # Windows only (NSIS needs Windows, or wine): dist/Walnut-Setup-x64.exe
+bun run typecheck
 ```
 
 `.github/workflows/windows-app.yml` builds it on a Windows runner and runs

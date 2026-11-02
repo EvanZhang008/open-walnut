@@ -22,7 +22,7 @@ const pkg = JSON.parse(fs.readFileSync(path.join(REPO, 'package.json'), 'utf8'))
 const BUN_VERSION = /^bun@(\d+\.\d+\.\d+)$/.exec(pkg.packageManager ?? '')?.[1]
 
 /** Every package dir with its own lockfile; each one installs with Bun. */
-const LOCK_DIRS = ['.', 'web', 'infra', 'ios']
+const LOCK_DIRS = ['.', 'web', 'infra', 'ios', 'desktop-windows']
 
 interface Step { uses?: string; run?: string; with?: Record<string, unknown> }
 function workflowSteps(): Array<{ file: string; job: string; step: Step }> {
@@ -49,6 +49,9 @@ describe('one pinned Bun', () => {
   it('CI installs dependencies with Bun, never from an npm lockfile', () => {
     for (const { file, job, step } of workflowSteps()) {
       expect(step.run ?? '', `${file} ${job}`).not.toMatch(/(^|\n|&&\s*)npm (ci|install)\s*($|\n)/)
+      // `npm ci` reads a package-lock.json whatever flags follow it (2026-11-02: `npm ci
+      // --no-audit` in windows-app.yml passed the line above with a tracked lockfile).
+      expect(step.run ?? '', `${file} ${job}`).not.toMatch(/(^|[\n;&|]\s*)npm ci\b/)
       // setup-node's npm cache keys on package-lock.json, which no longer exists.
       if (step.uses?.startsWith('actions/setup-node')) expect(step.with?.cache, `${file} ${job}`).toBeUndefined()
     }
