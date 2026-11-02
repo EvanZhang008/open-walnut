@@ -11,17 +11,17 @@
  * "On" turns Do Not Disturb on UNTIL A TIME, the block's end, read from the shortcut's
  * input. macOS keeps that end time itself, so Do Not Disturb ends on time even when
  * Walnut is not running then, and a restart of Walnut or the Mac never leaves it on.
- * An older Rhythm shipped "Walnut Focus On", which stayed on until turned off; it is
- * no longer run.
+ * An older Rhythm shipped "Walnut Focus On", which stayed on until turned off, and an
+ * early "Walnut Do Not Disturb Until" that set no end time; neither is run now.
  *
  * Every process runs through the injected Runner (async, deadline, no shell).
  */
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import type { Runner } from './exec'
-import { LEGACY_SHORTCUT_ON, SHORTCUT_OFF, SHORTCUT_ON } from './dnd-words'
+import { LEGACY_SHORTCUT_NAMES, LEGACY_SHORTCUT_ON, SHORTCUT_OFF, SHORTCUT_ON } from './dnd-words'
 
-export { LEGACY_SHORTCUT_ON, SHORTCUT_OFF, SHORTCUT_ON }
+export { LEGACY_SHORTCUT_NAMES, LEGACY_SHORTCUT_ON, SHORTCUT_OFF, SHORTCUT_ON }
 
 export const SHORTCUT_NAMES = [SHORTCUT_ON, SHORTCUT_OFF] as const
 
@@ -46,7 +46,9 @@ const DND_MODE = `<key>FocusModes</key>
  * Do Not Disturb that ends at it ("date-interval"). A plain variable attachment there
  * (the shape Shortcuts uses for most parameters) is dropped on import, and the action
  * then falls back to a fixed 7 PM that macOS treats as until-turned-off (verified on
- * macOS 26, 2026-11-01).
+ * macOS 26, 2026-11-01). It ends with Nothing: an action's output goes back to the
+ * `shortcuts run` that started it, and handing out output makes macOS ask the person
+ * first ("Allow ... to output 1 text item?"), which held the first run until it timed out.
  */
 const ON_UNTIL_ACTIONS = `<dict>
       <key>WFWorkflowActionIdentifier</key>
@@ -74,6 +76,12 @@ const ON_UNTIL_ACTIONS = `<dict>
         </dict>
         ${DND_MODE}
       </dict>
+    </dict>
+    <dict>
+      <key>WFWorkflowActionIdentifier</key>
+      <string>is.workflow.actions.nothing</string>
+      <key>WFWorkflowActionParameters</key>
+      <dict/>
     </dict>`
 
 const OFF_ACTIONS = `<dict>
@@ -140,8 +148,10 @@ export interface ShortcutsStatus {
   checked: boolean
   installed: { on: boolean; off: boolean } | null
   missing: string[]
-  /** The older "Walnut Focus On" is still in Shortcuts (unused now). */
+  /** An older Rhythm's "on" shortcut is still in Shortcuts (unused now). */
   legacy?: boolean
+  /** Which of them, by name. */
+  legacyNames?: string[]
   error?: string
 }
 
@@ -153,8 +163,13 @@ export async function ensureShortcuts(run: Runner): Promise<ShortcutsStatus> {
   const installed = { on: names.has(SHORTCUT_ON), off: names.has(SHORTCUT_OFF) }
   return {
     checked: true, installed, missing: SHORTCUT_NAMES.filter((name) => !names.has(name)),
-    ...(names.has(LEGACY_SHORTCUT_ON) ? { legacy: true } : {}),
+    ...legacyOf(names),
   }
+}
+
+function legacyOf(names: Set<string>): { legacy?: true; legacyNames?: string[] } {
+  const present = LEGACY_SHORTCUT_NAMES.filter((name) => names.has(name))
+  return present.length ? { legacy: true, legacyNames: present } : {}
 }
 
 export interface InstallStep {

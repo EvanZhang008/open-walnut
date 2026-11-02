@@ -66,6 +66,8 @@ function scriptError(error: string | undefined): string {
 
 export interface SpotifyDeps {
   enabled: boolean
+  /** Why it is off, when that is not "not a Mac" (a test copy of Walnut). */
+  offReason?: string
   run: Runner
   storage: Pick<StorageService, 'readJson' | 'writeJson'>
   /** Where Spotify.app may be installed; checked in order. */
@@ -101,7 +103,7 @@ export class SpotifyControl {
 
   async view(): Promise<SpotifyView> {
     const playlists = await this.playlists()
-    if (!this.deps.enabled) return { available: false, reason: 'Spotify plays on a Mac only.', playlists }
+    if (!this.deps.enabled) return { available: false, reason: this.deps.offReason ?? 'Spotify plays on a Mac only.', playlists }
     for (const app of this.appPaths) if (await this.exists(app)) return { available: true, playlists }
     return { available: false, reason: 'Spotify is not installed on this Mac. Install it and sign in to play a playlist with a block.', playlists }
   }

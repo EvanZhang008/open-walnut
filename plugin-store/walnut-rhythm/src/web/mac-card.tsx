@@ -8,6 +8,7 @@
  * person has clicked Add. Check again stays as the manual path.
  */
 import { dndSetupText } from './dnd-model'
+import { LEGACY_SHORTCUT_ON, legacyText } from '../server/dnd-words'
 import type { RhythmPublicState } from './store'
 
 export interface MacCardProps {
@@ -78,7 +79,7 @@ export function MacCard({ state, onInstall, onOpenPrivacy, onDndSetting, refresh
               {setup.text}
             </span>
             {shortcuts.legacy && (
-              <span className="rhythm-row-help" data-testid="rhythm-mac-legacy">The older "Walnut Focus On" shortcut is no longer used; you can delete it in Shortcuts.</span>
+              <span className="rhythm-row-help" data-testid="rhythm-mac-legacy">{legacyText(shortcuts.legacyNames ?? [LEGACY_SHORTCUT_ON])}</span>
             )}
           </div>
           <div className="rhythm-row-actions">

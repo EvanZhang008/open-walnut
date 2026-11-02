@@ -21,6 +21,7 @@ import { buildPublicState, stateFingerprint } from './server/public-state'
 import { RhythmRuntime } from './server/runtime'
 import { rhythmStatusItem, STATUS_ITEM_ID } from './server/status-item'
 import { SpotifyControl } from './server/spotify'
+import { testCopyReason } from './server/test-copy'
 
 const TICK_MS = 30_000
 /** Land the phase change just after the boundary, never a hair before it. */
@@ -55,6 +56,10 @@ export async function activate(walnut: WalnutServerApi): Promise<void> {
       })
     : undefined
   const shortcutsDir = path.join(walnut.storage.dataDir, 'shortcuts')
+  // A test copy reads the Mac (the Focus mirror) but never changes it: see test-copy.ts.
+  const testCopy = testCopyReason({ dataDir: walnut.storage.dataDir })
+  const changesMac = process.platform === 'darwin' && testCopy === null
+  if (process.platform === 'darwin' && testCopy) walnut.log.info(`Rhythm leaves Do Not Disturb and Spotify alone on ${testCopy}`)
   const macos = new MacosBridge({
     enabled: process.platform === 'darwin',
     log: walnut.log.child('macos'),
@@ -74,11 +79,14 @@ export async function activate(walnut: WalnutServerApi): Promise<void> {
     // Host-owned, so the install watch's sleep ends with the plugin (see deactivate).
     wait: (ms) => new Promise<void>((resolve) => { walnut.timers.timeout(resolve, ms) }),
   })
-  const spotify = new SpotifyControl({ enabled: process.platform === 'darwin', run: runProcess, storage: walnut.storage })
+  const spotify = new SpotifyControl({
+    enabled: changesMac,
+    ...(testCopy && process.platform === 'darwin' ? { offReason: `Spotify is left to your real Walnut: this is ${testCopy}.` } : {}),
+    run: runProcess, storage: walnut.storage })
   const runtime = new RhythmRuntime({
     walnut, macos, spotify,
     dnd: (rt) => new DndController({
-      enabled: process.platform === 'darwin',
+      enabled: changesMac,
       log: walnut.log.child('dnd'),
       run: runProcess,
       readDetail: () => readFocusDetail(focusDir, readText),

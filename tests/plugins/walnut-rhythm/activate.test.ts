@@ -45,6 +45,36 @@ describe('activate', () => {
     }
   })
 
+  it('a test copy never changes the Mac: Do Not Disturb stays off even with the setting on, unless the test asks', async () => {
+    const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+    const config = { mirror_macos_focus: false, macos_focus_shortcuts: true }
+    try {
+      const fake = createFakeWalnut({ pluginId: 'walnut-rhythm', config })
+      await activate(fake.api)
+      try {
+        const state = (await op(fake, 'status')({})) as { dnd: { available: boolean } }
+        expect(state.dnd.available).toBe(false)
+        await expect(op(fake, 'focus_dnd')({ on: false })).rejects.toThrow()
+      } finally {
+        await deactivate()
+      }
+      // On purpose: the same activate drives the Mac.
+      process.env.WALNUT_RHYTHM_REAL_MAC = '1'
+      const real = createFakeWalnut({ pluginId: 'walnut-rhythm', config })
+      await activate(real.api)
+      try {
+        const state = (await op(real, 'status')({})) as { dnd: { available: boolean } }
+        expect(state.dnd.available).toBe(true)
+      } finally {
+        await deactivate()
+      }
+    } finally {
+      delete process.env.WALNUT_RHYTHM_REAL_MAC
+      Object.defineProperty(process, 'platform', realPlatform)
+    }
+  })
+
   it('runs a focus block end to end through the fake host: quiet hold, state event, stop', async () => {
     const fake = createFakeWalnut({ pluginId: 'walnut-rhythm', config: SAFE_CONFIG })
     await activate(fake.api)

@@ -9,7 +9,15 @@ import { describe, expect, it } from 'vitest'
 import * as actions from '../../../plugin-store/walnut-rhythm/src/server/actions'
 import { DND_MODE_ID, findStarted, untilInput } from '../../../plugin-store/walnut-rhythm/src/server/macos-dnd'
 import { parseLiveAssertions } from '../../../plugin-store/walnut-rhythm/src/server/macos-focus'
-import { buildShortcutPlistXml, ensureShortcuts, LEGACY_SHORTCUT_ON, SHORTCUT_OFF, SHORTCUT_ON } from '../../../plugin-store/walnut-rhythm/src/server/macos-shortcuts'
+import { buildShortcutPlistXml, ensureShortcuts, LEGACY_SHORTCUT_NAMES, LEGACY_SHORTCUT_ON, SHORTCUT_OFF, SHORTCUT_ON } from '../../../plugin-store/walnut-rhythm/src/server/macos-shortcuts'
+import { legacyText } from '../../../plugin-store/walnut-rhythm/src/server/dnd-words'
+import { createHash } from 'node:crypto'
+
+/** Every "on" shortcut Rhythm has shipped: name -> digest of its plist. Append only. */
+const ON_SHORTCUT_VERSIONS: Record<string, string> = {
+  'Walnut Do Not Disturb Until End': '89251f55e3038863',
+  'Walnut Do Not Disturb Until Block Ends': '1c33bf6c63f936ae',
+}
 import { buildPublicState } from '../../../plugin-store/walnut-rhythm/src/server/public-state'
 import { dndRowView, dndSetupText } from '../../../plugin-store/walnut-rhythm/src/web/dnd-model'
 import { makeHarness, MIN } from './harness'
@@ -271,6 +279,27 @@ describe('parsing macOS and the shortcut', () => {
 
   it('an older "Walnut Focus On" does not count as installed, and is named for removal', async () => {
     const run = async () => ({ ok: true, code: 0, stdout: `${LEGACY_SHORTCUT_ON}\n${SHORTCUT_OFF}\n`, stderr: '' })
-    expect(await ensureShortcuts(run)).toEqual({ checked: true, installed: { on: false, off: true }, missing: [SHORTCUT_ON], legacy: true })
+    expect(await ensureShortcuts(run)).toEqual({ checked: true, installed: { on: false, off: true }, missing: [SHORTCUT_ON], legacy: true, legacyNames: [LEGACY_SHORTCUT_ON] })
+  })
+
+  it('the early "Walnut Do Not Disturb Until" (no end time) is never the one run: Add shortcuts adds the new name', async () => {
+    const run = async () => ({ ok: true, code: 0, stdout: `Walnut Do Not Disturb Until\n${SHORTCUT_OFF}\n`, stderr: '' })
+    expect(await ensureShortcuts(run)).toEqual({ checked: true, installed: { on: false, off: true }, missing: [SHORTCUT_ON], legacy: true, legacyNames: ['Walnut Do Not Disturb Until'] })
+    expect(LEGACY_SHORTCUT_NAMES).not.toContain(SHORTCUT_ON)
+    expect(legacyText(['Walnut Focus On', 'Walnut Do Not Disturb Until'])).toBe('The older "Walnut Focus On" and "Walnut Do Not Disturb Until" shortcuts are no longer used; you can delete them in Shortcuts.')
+  })
+
+  /**
+   * The installer only adds a name that is missing, so a person who has a shortcut of this
+   * name keeps it whatever it does. Every version of the "on" shortcut's actions is listed
+   * here once, under its own name (append only): changed actions need a new entry, the
+   * current one must be SHORTCUT_ON, and every older name must be in LEGACY_SHORTCUT_NAMES.
+   */
+  it('each version of the "on" shortcut\'s actions has its own name', () => {
+    const digest = createHash('sha256').update(buildShortcutPlistXml(SHORTCUT_ON)).digest('hex').slice(0, 16)
+    const current = Object.entries(ON_SHORTCUT_VERSIONS).filter(([, one]) => one === digest).map(([name]) => name)
+    expect(current).toEqual([SHORTCUT_ON])
+    expect(new Set(Object.values(ON_SHORTCUT_VERSIONS)).size).toBe(Object.keys(ON_SHORTCUT_VERSIONS).length)
+    for (const name of Object.keys(ON_SHORTCUT_VERSIONS)) if (name !== SHORTCUT_ON) expect(LEGACY_SHORTCUT_NAMES).toContain(name)
   })
 })

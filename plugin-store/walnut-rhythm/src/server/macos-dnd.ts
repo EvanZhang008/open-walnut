@@ -5,7 +5,7 @@
  *   Start ──▶ a Focus already on?  yes ──▶ left-alone (the person's own Focus stays)
  *               │ no
  *               ▼
- *   run "Walnut Do Not Disturb Until" with the block's end ──▶ read macOS again
+ *   run "Walnut Do Not Disturb Until Block Ends" with the block's end ──▶ read macOS again
  *               │ a new Do Not Disturb is live                 │ none
  *               ▼                                              ▼
  *              on (its assertion id kept)                    failed (said plainly)

@@ -104,7 +104,7 @@ export const OP_SPECS: OpSpec[] = [
   },
   {
     name: 'macos_shortcuts_install', title: 'Install the Rhythm shortcuts', readonly: false, remote: 'deny',
-    description: 'Prepare the "Walnut Do Not Disturb Until" and "Walnut Focus Off" shortcuts and open each missing one in Shortcuts, which asks the person to add it with one click. Mac only.',
+    description: 'Prepare the "Walnut Do Not Disturb Until Block Ends" and "Walnut Focus Off" shortcuts and open each missing one in Shortcuts, which asks the person to add it with one click. Mac only.',
   },
   {
     name: 'macos_privacy_open', title: 'Open Full Disk Access settings', readonly: false, remote: 'deny',
