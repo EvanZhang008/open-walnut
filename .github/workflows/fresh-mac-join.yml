@@ -228,6 +228,12 @@ jobs:
           {
             echo "== walnut"; "$W" --version 2>&1 || true
             echo "== walnut net status"; "$W" net status 2>&1 || true
+            # Step 2 ("Keep it running ... did not start") names this command and nothing else
+            # (2026-11-02: the existing-Mac join stopped there twice with no reason in the log).
+            echo "== walnut daemon status"; "$W" daemon status 2>&1 || true
+            for d in /tmp/open-walnut "$HOME/.cache/open-walnut"; do
+              for f in "$d"/daemon-stderr.log "$d"/daemon-d-*.log; do [ -f "$f" ] && { echo "-- $f (tail)"; tail -n 30 "$f"; }; done
+            done
             echo "== launch agents"; ls -la "$HOME/Library/LaunchAgents" 2>&1 || true
             for f in "$HOME/Library/LaunchAgents"/dev.openwalnut.*; do [ -f "$f" ] && { echo "-- $f"; cat "$f"; }; done
             echo "== launchctl"; launchctl print "gui/$(id -u)/dev.openwalnut.session-daemon" 2>&1 | head -n 40 || true

@@ -5,7 +5,7 @@
  * every test missed it because each joined with a daemon already running.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { keepRunning, serviceInstall, type KeepRunningIo } from '../../../src/commands/net.js'
+import { installFailure, keepRunning, serviceInstall, type KeepRunningIo } from '../../../src/commands/net.js'
 
 const FILE = '/Users/a/.local/share/open-walnut/versions/0.7.0/walnut'
 let out = ''
@@ -65,6 +65,17 @@ describe('step 2 on a joining machine', () => {
       // By the file's path: a new shell has no ~/.local/bin on PATH, and another walnut may be there.
       expect(out).toBe(`  2/3  Keep it running ... did not start. Run \`${FILE} daemon status\` to see why, then this again.\n`)
     }
+  })
+
+  // 2026-11-02: the existing-Mac join stopped here twice and the log named no reason: the
+  // install's own report was swallowed. Its reason now leads the line.
+  it('an install that fails says why, from its own report', async () => {
+    const x = io({ install: async () => ({ code: 1, why: 'another daemon holds this machine\'s daemon dir' }) })
+    expect(await keepRunning(x)).toBe(false)
+    expect(out).toBe(`  2/3  Keep it running ... did not start: another daemon holds this machine's daemon dir. Run \`${FILE} daemon status\` to see why, then this again.\n`)
+    expect(installFailure(JSON.stringify({ ok: false, failure: { code: 'x', message: 'this account cannot start\n the daemon' } }, null, 2))).toBe('this account cannot start the daemon')
+    expect(installFailure('{"ok":true}')).toBeUndefined()
+    expect(installFailure('not json')).toBeUndefined()
   })
 
   // 2026-11-02: a Mac whose Walnut had run 26 days. The temp cleanup had removed its daemon's

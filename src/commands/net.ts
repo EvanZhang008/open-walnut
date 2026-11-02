@@ -152,8 +152,9 @@ export interface KeepRunningIo {
   /** True when this process is the compiled Walnut file. */
   compiled(): Promise<boolean>
   execPath: string
-  /** `walnut daemon install --yes --executable <file>`; its exit code. */
-  install(options: { yes: true; executable: string }): Promise<number>
+  /** `walnut daemon install --yes --executable <file>`: its exit code, and on a failure the reason
+   *  its JSON report gave (`failure.message`), which this screen shows in step 2's line. */
+  install(options: { yes: true; executable: string }): Promise<number | { code: number; why?: string }>
   /** WALNUT_JOIN_DAEMON_DIR: a test's daemon, which never installs a service. */
   testDaemonDir?: string
   /** Writes back the files of a daemon here that lost them (recoverLostDaemon); its pid, or null. */
@@ -165,10 +166,14 @@ const realKeepRunningIo = (): KeepRunningIo => ({
   compiled: async () => (await import('../lib/single-file.js')).singleFile() !== null,
   install: async (options) => {
     const { runDaemonServiceCli } = await import('../providers/daemon-service-cli.js')
-    // Its JSON report is for `walnut daemon`; this screen says it in one line.
+    // Its JSON report is for `walnut daemon`; this screen says it in one line, the failure's
+    // reason included (2026-11-02: the existing-Mac join stopped at step 2 with none).
     const write = process.stdout.write.bind(process.stdout)
-    ;(process.stdout as unknown as { write: (s: string) => boolean }).write = () => true
-    try { return await runDaemonServiceCli('install', options) } finally { (process.stdout as unknown as { write: typeof write }).write = write }
+    let report = ''
+    ;(process.stdout as unknown as { write: (s: string) => boolean }).write = (s: string) => { report += String(s); return true }
+    let code: number
+    try { code = await runDaemonServiceCli('install', options) } finally { (process.stdout as unknown as { write: typeof write }).write = write }
+    return { code, why: code === 0 ? undefined : installFailure(report) }
   },
 })
 
@@ -191,15 +196,30 @@ export async function keepRunning(io: KeepRunningIo = realKeepRunningIo()): Prom
   try {
     const install = serviceInstall(await io.compiled(), io.execPath)
     if ('error' in install) { step(2, 'Keep it running', install.error); return false }
-    const code = await io.install(install)
+    const result = await io.install(install)
+    const { code, why } = typeof result === 'number' ? { code: result, why: undefined } : result
     // By its path: a new machine's shell has no ~/.local/bin on PATH yet, and another
     // Walnut on PATH (an npm install) would show another daemon.
-    if (code !== 0 || !(await io.waitDaemon(30_000))) { step(2, 'Keep it running', `did not start. Run \`${install.executable} daemon status\` to see why, then this again.`); return false }
+    if (code !== 0 || !(await io.waitDaemon(30_000))) {
+      step(2, 'Keep it running', `did not start${why ? `: ${why}` : ''}. Run \`${install.executable} daemon status\` to see why, then this again.`)
+      return false
+    }
     step(2, 'Keep it running', 'on (starts when you log in)')
     return true
   } catch (err) {
     step(2, 'Keep it running', `${(err as Error).message}`)
     return false
+  }
+}
+
+/** The reason in `walnut daemon install`'s JSON report (`{ ok: false, failure: { message } }`), one line. */
+export function installFailure(report: string): string | undefined {
+  try {
+    const parsed = JSON.parse(report.trim()) as { failure?: { message?: unknown } }
+    const message = parsed.failure?.message
+    return typeof message === 'string' && message.trim() ? message.replace(/\s+/g, ' ').trim().slice(0, 300) : undefined
+  } catch {
+    return undefined
   }
 }
 
