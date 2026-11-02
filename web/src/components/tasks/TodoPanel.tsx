@@ -134,6 +134,7 @@ import { staleDonePinIds } from './pin-search-fold';
 import { orderPinnedTier } from '@/utils/pinned-tier-order';
 import { foldedId, isFoldedAt, pruneFolds, readFolds, saveFolds, toggleFold, unfold } from './place-folds';
 import { ancestorHeadings, buildFolderParents, folderAncestors, folderDepth, nestFolderUnits } from './folder-tree';
+import { ancestorChain, foldersHolding, fromPanelGesture, locatePlaceSig, type LocateHold } from './locate-hold';
 import { formatDateDisplay, isOverdue, parseDateLocal } from '../common/DatePicker';
 import { useVerticalSplitter } from '@/hooks/useVerticalSplitter';
 import { useFoldAnchor } from '@/hooks/useFoldAnchor';
@@ -2834,6 +2835,22 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   // True while a user-initiated locate (nonce bump) is waiting to be handled —
   // survives the task-not-loaded-yet retry. Page-load restores never set it.
   const pendingLocateRef = useRef(false);
+  // A locate from outside the panel holds its task on screen while it moves (locate-hold.ts):
+  // the held task and its last place, when the person last touched the panel, and the tick the
+  // place watcher below bumps when the held task's place changed.
+  const locateHoldRef = useRef<LocateHold | null>(null);
+  const pendingHoldRef = useRef(false);
+  const panelGestureAtRef = useRef(0);
+  const [holdMoveTick, setHoldMoveTick] = useState(0);
+  const prevHoldMoveTickRef = useRef(0);
+  /** Where the panel draws a task, as a string (locatePlaceSig); published below the memos. */
+  const placeSigRef = useRef<(t: Task) => string>(() => '');
+  /** Opens every collapsed parent and folded folder above a task; published below the memos. */
+  const revealAncestorsRef = useRef<(t: Task) => void>(() => {});
+  const endLocateHold = useCallback(() => {
+    locateHoldRef.current = null;
+    panelGestureAtRef.current = performance.now();
+  }, []);
   // RAF handle for cancellation on unmount / new focus
   const scrollRafRef = useRef<number>(0);
 
@@ -2969,13 +2986,19 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (!focusedTaskId) {
       prevFocusedRef.current = focusedTaskId;
       focusHandledRef.current = false;
+      locateHoldRef.current = null;
       clearFocusOverride();
       return;
     }
     const isNewFocus = focusedTaskId !== prevFocusedRef.current;
     const nonceChanged = (focusNonce ?? 0) !== prevNonceRef.current;
     prevNonceRef.current = focusNonce ?? 0;
-    if (!isNewFocus && !nonceChanged && focusHandledRef.current) return; // already handled
+    // The held task moved (the place watcher below): show it again where it is drawn now.
+    const holdMoved = holdMoveTick !== prevHoldMoveTickRef.current;
+    prevHoldMoveTickRef.current = holdMoveTick;
+    if (locateHoldRef.current && locateHoldRef.current.id !== focusedTaskId) locateHoldRef.current = null;
+    const followMove = holdMoved && locateHoldRef.current?.id === focusedTaskId;
+    if (!isNewFocus && !nonceChanged && !followMove && focusHandledRef.current) return; // already handled
     prevFocusedRef.current = focusedTaskId;
 
     // Only an explicit user locate action (task click, dock activate, session
@@ -2984,7 +3007,14 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // switch tabs or un-collapse sections the user collapsed, or every refresh
     // would re-expand (and re-persist) them. The ref survives the task-not-in-
     // list-yet retry, where the effect re-runs with the nonce already consumed.
-    if (nonceChanged) pendingLocateRef.current = true;
+    if (nonceChanged || followMove) {
+      pendingLocateRef.current = true;
+      // Decided now, not when the task arrives: a locate asked from outside the panel holds its
+      // task even when the task reaches this list seconds later.
+      pendingHoldRef.current = followMove || !fromPanelGesture(performance.now(), panelGestureAtRef.current);
+    }
+    // A page-load restore (a new focus with no nonce) never holds: the person's folds stay.
+    if (isNewFocus && !nonceChanged) locateHoldRef.current = null;
 
     const task = tasks.find((t) => t.id === focusedTaskId);
     if (!task) {
@@ -2996,7 +3026,13 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     pendingLocateRef.current = false;
     focusLocateRef.current = { id: focusedTaskId, locate: isUserLocate };
     // A phone opens the row as a layer: the list keeps the place the thumb left (N2-01).
-    if (phoneOpenKeepsList(focusScope)) return;
+    if (phoneOpenKeepsList(focusScope)) { locateHoldRef.current = null; return; }
+    // A locate asked from outside the panel holds its task on screen while it moves; one asked
+    // by a click in the panel does not (the row was in view, and the person steers from there).
+    if (isUserLocate) {
+      locateHoldRef.current = pendingHoldRef.current ? { id: focusedTaskId, sig: placeSigRef.current(task) } : null;
+      pendingHoldRef.current = false;
+    }
     // 'pinned' scope (tier quick-adds): the new card is already visible in its tier —
     // scroll the Pinned region only. Switching the TASKS tab to the capture project
     // filtered the list below down to ~1 task and read as data loss.
@@ -3009,21 +3045,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     const proj = task.project || '';
     if (isUserLocate && !pinnedOnly) {
       setRevealedProjects(prev => prev.has(proj) ? prev : new Set(prev).add(proj));
-
-      // Expand collapsed parent if focused task is a child (temporary — not persisted,
-      // so parents collapse back on page reload unless user manually expanded them)
-      if (task.parent_task_id) {
-        const parentTask = tasks.find((t) => t.id.startsWith(task.parent_task_id!));
-        if (parentTask && !expandedParents.has(parentTask.id)) {
-          setExpandedParents((prev) => {
-            const next = new Set(prev);
-            next.add(parentTask.id);
-            // Don't persist — only manual chevron clicks save to localStorage
-            return next;
-          });
-        }
-      }
     }
+    // Every collapsed parent above it (a grandchild hides under any collapsed ancestor, not
+    // only its parent; temporary, not persisted) and every folder fold holding it or them.
+    if (isUserLocate) revealAncestorsRef.current(task);
 
     // Focus override: instead of clearing filters, temporarily inject the task
     // into the filtered list. It fades out when focus moves away. The SAME board
@@ -3032,6 +3057,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // A task a status section (or a project fold) draws is on screen there: it opens for a locate.
     const drawnInSection = revealInSectionRef.current(task, isUserLocate);
     const wouldBeHidden = !drawnInSection && !passesBoardRef.current(task);
+    // A row the list draws (not pinned, no section holds it) hides when the whole list is folded
+    // under its Tasks heading in the stacked view: open it, as the tier block below opens a tier.
+    if (isUserLocate && !pinnedOnly && !drawnInSection && !pinnedTaskIds?.has(focusedTaskId) && collapsedSections.has('tasks')) {
+      setCollapsedSections((prev) => {
+        if (!prev.has('tasks')) return prev;
+        const next = new Set(prev);
+        next.delete('tasks');
+        persistSet(LS_COLLAPSED_SECTIONS_KEY, next);
+        return next;
+      });
+    }
     // 5.11: a task just created (a tier quick-add, Save as todo) that the chips
     // hide keeps the override too, so it stays on screen with its pill.
     // 'created' = the draft's Save as todo (F07): its task gets the pill too.
@@ -3115,7 +3151,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // query simply finds nothing). Keeps the PIN row in sync with the list below.
     scrollToPinnedTask(focusedTaskId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusedTaskId, focusNonce, tasks, favorites]);
+  }, [focusedTaskId, focusNonce, tasks, favorites, holdMoveTick]);
 
   // Auto-expand parent when a child task is created (via WS event)
   // Persist to localStorage so expansion survives page refresh (fork subtask bug fix)
@@ -5829,6 +5865,51 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       : !listOpen.has(project) && !revealedProjects.has(project),
     [queryActive, queryFoldedProjects, listOpen, revealedProjects],
   );
+  // A locate opens what hides its row from above (the focus effect calls it): its project's fold
+  // for the active query, every collapsed parent up the chain (isChildHidden walks the whole
+  // chain, so one open parent is not enough), and every folded folder holding the row or one of
+  // those parents, where the row is drawn: its tier when pinned, the list when the list draws it.
+  // Parents open for this visit only (a chevron click is what saves them); a folder opens the way
+  // its own chevron would. Every fold a row can hide in is listed in
+  // tests/web/locate-reveal-ratchet.test.ts with the call here that opens it.
+  revealAncestorsRef.current = (task: Task) => {
+    const proj = task.project || '';
+    if (queryFoldedProjects.has(proj)) setQueryFoldedProjects((prev) => {
+      const next = new Set(prev);
+      next.delete(proj);
+      return next;
+    });
+    const all = tasksRef.current;
+    const byId = (id: string) => (id === task.id ? task : all.find((t) => t.id === id));
+    const parentOf = (id: string) => {
+      const t = byId(id);
+      if (!t?.parent_task_id) return undefined;
+      const p = resolveParentRef(all, t.parent_task_id);
+      // The list nests a subtask only under a parent in its own project (computeSortOrder).
+      return p && sameProjectKey(p.project, t.project) ? p.id : undefined;
+    };
+    const ancestors = ancestorChain(task.id, parentOf);
+    const closed = ancestors.filter((id) => !expandedParents.has(id));
+    if (closed.length > 0) setExpandedParents((prev) => {
+      const next = new Set(prev);
+      for (const id of closed) next.add(id);
+      return next;
+    });
+    const folders = foldersHolding([task.id, ...ancestors], (id) => byId(id)?.group_id ?? undefined, (gid) => folderAncestors(gid, folderParents));
+    if (folders.length === 0) return;
+    const pinned = !!pinnedTaskIds?.has(task.id);
+    const places = [
+      ...(pinned ? [getTier(task.id) ?? 'satellite'] : []),
+      ...(!pinned || activeSectionRef.current === 'tasks' ? [LIST_PLACE] : []),
+    ];
+    setFolderFolds((prev) => {
+      let next: ReadonlySet<string> = prev;
+      for (const place of places) for (const gid of folders) next = unfold(next, gid, place, [...allTierKeysRef.current, LIST_PLACE]);
+      if (next !== prev) saveFolds(LS_FOLDER_FOLDS_KEY, next);
+      return next;
+    });
+  };
+
   const toggleListProject = useCallback((project: string) => {
     if (queryActive) {
       setQueryFoldedProjects(prev => {
@@ -7609,7 +7690,9 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     }
     lastPlaceRef.current = graceAt;
     revealInSectionRef.current = (t, locate) => {
-      const key = place.get(t.id);
+      // A row only the focus override put in a section is not drawn there by the board: saying
+      // so would clear the override that draws it (a held locate runs this again, see locate-hold.ts).
+      const key = t.id === overrideId ? undefined : place.get(t.id);
       if (key) {
         if (locate && !sectionOpenRef.current[key]) setSectionOpenTo(key, true);
         return true;
@@ -7626,7 +7709,28 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
       }
       return false;
     };
-  }, [sectionModel, sectionsTop.join(), sectionsBottom.join(), projectFoldsOn, regionRules, pinnedTaskIds, effectiveSection, getTier, foldRegions, openProjectFolds, toggleProjectFold, setSectionOpenTo]);
+  }, [sectionModel, overrideId, sectionsTop.join(), sectionsBottom.join(), projectFoldsOn, regionRules, pinnedTaskIds, effectiveSection, getTier, foldRegions, openProjectFolds, toggleProjectFold, setSectionOpenTo]);
+  // Where a held locate's task is drawn, as a string (locate-hold.ts): from the task and the
+  // board's own predicate, never from the drawn rows, which the locate itself changes.
+  placeSigRef.current = (t: Task) => locatePlaceSig(t, {
+    tier: getTier(t.id) ?? null,
+    passes: passesBoardRef.current(t),
+    held: heldInGrace(t),
+  });
+  // The held task moved (its status, tier, project, folder, parent, or a chip now hides it): run
+  // the locate again, so its new place opens and the panel scrolls there. Every commit, cheap:
+  // nothing to do unless a hold is on. Declared after the publishers above, so it reads this
+  // commit's predicate and places.
+  useEffect(() => {
+    const hold = locateHoldRef.current;
+    if (!hold || hold.id !== focusedTaskId) return;
+    const t = tasksRef.current.find((x) => x.id === hold.id);
+    if (!t) return;
+    const sig = placeSigRef.current(t);
+    if (sig === hold.sig) return;
+    hold.sig = sig;
+    setHoldMoveTick((n) => n + 1);
+  });
   /** Some section draws rows of this view, so an empty list under Working is no "No tasks found". */
   const sectionRowsDrawn = sectionModel.watching.length + sectionModel.needs.length + sectionModel.waiting.length
     + sectionModel.done.length + sectionModel.doneUnloaded > 0;
@@ -7791,7 +7895,11 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   ) : null;
 
   return (
-    <div className={`todo-panel${splitterResizing ? ' splitter-resizing' : ''}${activeDragPinnedId ? ' is-task-dragging' : ''}`} ref={splitterContainerRef}>
+    <div className={`todo-panel${splitterResizing ? ' splitter-resizing' : ''}${activeDragPinnedId ? ' is-task-dragging' : ''}`} ref={splitterContainerRef}
+      // The person steers the panel from here on: a held locate lets go (locate-hold.ts). React
+      // events bubble through portals, so a row menu or a fold menu counts as the panel too.
+      onPointerDownCapture={endLocateHold} onKeyDownCapture={endLocateHold}
+      onWheelCapture={endLocateHold} onTouchStartCapture={endLocateHold}>
       <div className="fb-toolbar-scope">
       <div className="todo-panel-toolbar">
         <TodoSearchBar
