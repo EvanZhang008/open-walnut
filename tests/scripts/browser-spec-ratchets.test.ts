@@ -610,6 +610,40 @@ describe('specs that write the global notes', () => {
   })
 })
 
+describe('the selection pill of the Files tab', () => {
+  // It holds several actions (Comment, Ask here, Quote in chat). A spec that clicked the pill
+  // itself pressed whatever sat in its middle: Quote in chat until Comment led the pill, Ask here
+  // after it (2026-11-01), which opens a card beside the passage and leaves the composer alone, so
+  // all four ask-about-this-focus tests failed together. A spec presses the action it means.
+  const PILL = /(?:session-diff-ask-pill|file-ask-pill)['"\]]*\)/
+  const offendersOf = (file: string, text: string): string[] => {
+    const out: string[] = []
+    const held = new Set<string>()
+    text.split('\n').forEach((line, i) => {
+      const bound = /\bconst (\w+) = [^\n]*(?:session-diff-ask-pill|file-ask-pill)['"\]]*\)\s*$/.exec(line)
+      if (bound) held.add(bound[1]!)
+      const direct = new RegExp(`${PILL.source}\\.click\\(`).test(line)
+      const viaName = [...held].some((name) => new RegExp(`\\b${name}\\.click\\(`).test(line))
+      if (direct || viaName) out.push(`${file}:${i + 1}: ${line.trim()}`)
+    })
+    return out
+  }
+
+  it('no spec clicks the pill instead of one of its actions', () => {
+    expect(sources.flatMap(({ file, text }) => offendersOf(file, text))).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const spec = [
+      "  const pill = page.locator('.session-diff-ask-pill')",
+      '  await pill.click()',
+      "  await page.getByTestId('file-ask-pill').click()",
+      "  await pill.locator('[data-testid=\"file-ask-here\"]').click()",
+    ].join('\n')
+    expect(offendersOf('x.spec.ts', spec)).toHaveLength(2)
+  })
+})
+
 describe('a document of megabytes', () => {
   // A web-first text matcher prints the whole received text, once per poll in its call log and
   // again in each copy of the error. When the 31MB letter in human-inbox.spec.ts missed its tail,

@@ -1,5 +1,6 @@
 /**
- * Playwright browser tests: clicking "Ask about this" must land the caret in the
+ * Playwright browser tests: clicking "Ask about this" (the selection pill's
+ * "Quote in chat" since the pill grew more actions) must land the caret in the
  * session composer, so the user can start typing immediately.
  *
  * The 2026-08-13 report ("when I click this ask this, this doesn't auto put the
@@ -60,9 +61,15 @@ async function openReportSource(explorer: Locator) {
 }
 
 /**
- * Drag-select a few lines inside `within` and click the pill.
+ * Drag-select a few lines inside `within` and click the pill's "Quote in chat".
  * A real mouse drag is required: the pill only appears on a genuine selection,
  * and its placement is derived from the pointer position at mouseup.
+ *
+ * In the Files tab the pill holds several actions (Comment, Ask here, Quote in
+ * chat), so the button is named, never the pill's middle: "Ask about this" became
+ * "Quote in chat" when Ask here joined it, and the middle of the pill became
+ * "Ask here" once Comment led it (2026-11-01), which opens a card beside the
+ * passage and leaves the composer alone.
  */
 async function selectAndAsk(page: Page, within: Locator) {
   const lines = within.locator('.cm-line')
@@ -73,9 +80,9 @@ async function selectAndAsk(page: Page, within: Locator) {
   await page.mouse.down()
   await page.mouse.move(last.x + 180, last.y + 6, { steps: 14 })
   await page.mouse.up()
-  const pill = page.locator('.session-diff-ask-pill')
-  await expect(pill).toBeVisible({ timeout: 5_000 })
-  await pill.click()
+  const quote = page.getByTestId('file-ask-pill').getByTestId('file-ask-quote')
+  await expect(quote).toBeVisible({ timeout: 5_000 })
+  await quote.click()
 }
 
 /** The composer textarea of the given session panel. */
@@ -167,7 +174,11 @@ test('fullscreen file view steps aside so the composer is visible', async ({ pag
 test('the timeline jumps to the bottom, so the prefilled composer is in context', async ({ page }) => {
   const panel = await openSessionPanel(page)
   const scroller = timeline(panel)
-  const scrollable = await scroller.evaluate((el) => el.scrollHeight - el.clientHeight)
+  // The history arrives after the panel opens: read the slack once it has, or the skip
+  // below fires on an empty timeline (it skipped every local run this way, 2026-11-02).
+  const slack = () => scroller.evaluate((el) => el.scrollHeight - el.clientHeight)
+  await expect.poll(slack, { timeout: 15_000 }).toBeGreaterThan(500).catch(() => undefined)
+  const scrollable = await slack()
   test.skip(scrollable < 500, `fixture timeline is not scrollable enough (${scrollable}px of slack)`)
 
   const explorer = await openFiles(panel)
