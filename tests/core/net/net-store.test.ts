@@ -82,7 +82,7 @@ describe('invites', () => {
     setMacMember({ id: id('a') }, 0, file)
     const inv = makeInvite({}, 0)
     // The Mac's own id cannot join as a host.
-    expect(() => redeemInvite({ code: inv.code, endpointId: id('a') }, 1, file)).toThrow(/this Mac/)
+    expect(() => redeemInvite({ code: inv.code, endpointId: id('a') }, 1, file)).toThrow(/the one running this Walnut/)
     expect(peekInvite(inv.code, 2)).not.toBeNull()
     expect(redeemInvite({ code: inv.code, endpointId: id('b') }, 3, file).role).toBe('host')
   })

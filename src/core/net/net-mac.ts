@@ -463,7 +463,7 @@ export async function setRelay(pick: unknown): Promise<NetState> {
     const cut = cutOffByNoRelay(await machineLinks(await localDaemon()))
     if (cut.length) {
       const names = cut.length === 1 ? cut[0] : `${cut.slice(0, -1).join(', ')} and ${cut.at(-1)}`
-      throw new NetError(409, 'needs_relay', `No relay would cut off ${names}: ${cut.length === 1 ? 'it reaches' : 'they reach'} this Mac only through a relay or a router. Keep Public relays, or put ${cut.length === 1 ? 'it' : 'them'} on the same network as this Mac first.`)
+      throw new NetError(409, 'needs_relay', `No relay would cut off ${names}: ${cut.length === 1 ? 'it reaches' : 'they reach'} this machine only through a relay or a router. Keep Public relays, or put ${cut.length === 1 ? 'it' : 'them'} on the same network as this machine first.`)
     }
   }
   const { modifyConfigDoc } = await import('../config-store.js')
