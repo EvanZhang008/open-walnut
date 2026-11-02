@@ -10,6 +10,7 @@ import type { Task } from '@open-walnut/core';
 import { templateLanes, type BoardCard } from '../../src/core/boards/board-lanes';
 import { buildCardVM, type KanbanCardInput, type KanbanLive } from '../../web/src/components/board/kanban/kanban-card-model';
 import { buildBoardVM, orderLane, teamAttention } from '../../web/src/components/board/kanban/kanban-model';
+import { deriveUserStatus, type UserStatusInput } from '../../src/core/user-status';
 import { KANBAN_TIME_RE, absoluteText, agoText, clockText, durationText, waitText } from '../../web/src/components/board/kanban/kanban-time';
 
 const NOW = Date.parse('2026-10-03T15:30:00Z');
@@ -390,5 +391,80 @@ describe('round 4 fixes', () => {
     expect(c.snapshot.summaryHash).toBe('811c9dc5');
     const read = vm({ ...t, summary: 'Rollback done.' }, null, { hasBaseline: true, baseline: { ...base, summaryHash: 'abcdef01' }, baselineAt: ago(HOUR) });
     expect(read.change?.items.find((x) => x.kind === 'summary')?.short).toBe('Summary by the worker');
+  });
+});
+
+/**
+ * C39 in CI (run 41483544703): the spec expected the leader to keep counting in Needs you after its
+ * prompt was answered and its turn ended asking nothing, a rule gone since 2026-11-02 (only a real
+ * ask reaches Needs you, src/core/user-status.ts). It passed locally only by reading the answered
+ * prompt's stored status in the status sync's debounce. Guard for the class: every status the
+ * server derives for the leader (the real deriveUserStatus) counts on the board exactly when it is
+ * a Needs you, so the board and the core cannot disagree on what the user must do.
+ */
+describe('the leader counts on the board only for a real ask (C39)', () => {
+  const OWNER = 'own00000-0000-4000-8000-000000000001';
+  const SID = 'lead-session-full-id';
+  const asked = (phaseChangedAt: string): UserStatusInput => ({
+    phase: 'NEED_ACTION', hasSession: true, processStatus: 'idle', openWorkers: 2, phaseChangedAt,
+  });
+  function board(owner: Task, live: KanbanLive | null) {
+    const prompt = withSession({ parent_task_id: OWNER, phase: 'NEED_ACTION' });
+    const quiet = withSession({ parent_task_id: OWNER, phase: 'IN_PROGRESS' });
+    const all = [owner, prompt, quiet];
+    const byId = new Map(all.map((t) => [t.id, t]));
+    const lives = new Map<string, KanbanLive | null>([
+      [OWNER, live], [prompt.id, { process_status: 'idle', pendingPermissionTool: 'Bash' }], [quiet.id, { process_status: 'idle' }],
+    ]);
+    return buildBoardVM({
+      ownerId: OWNER, owner, taskOf: (id) => byId.get(id), team: all, liveOf: (t) => lives.get(t.id) ?? null,
+      payload: { lanes_effective: templateLanes('triage'), cards: {}, kanban_seen: null, team: [prompt, quiet].map((t) => ({ id: t.id, phase: t.phase })) },
+      now: NOW, titleOf: (id) => byId.get(id)?.title ?? '', formatWaitUntil: () => 'Fri 9:00',
+    });
+  }
+  const leader = (input: UserStatusInput) => withSession({
+    id: OWNER, session_id: SID, session_ids: [SID], phase: input.phase as Task['phase'], phase_changed_at: input.phaseChangedAt ?? ago(MIN),
+    user_status: deriveUserStatus(input, NOW) as Task['user_status'],
+  });
+
+  it('the prompt counts once; the turn its answer ended, asking nothing, does not', () => {
+    // The prompt is live: the leader needs the user, one more than the cards.
+    const prompting = board(leader({ ...asked(ago(MIN)), pendingPermissionTool: 'Bash' }), { process_status: 'idle', pendingPermissionTool: 'Bash', sessionId: SID });
+    expect(prompting.leader?.needsYou).toBe(true);
+    expect([prompting.chips.needs, prompting.attention]).toEqual([2, 2]);
+    // Answered; the turn ended: its report on the way, then a turn to read. Neither is an ask.
+    const idle: KanbanLive = { process_status: 'idle', sessionId: SID };
+    for (const input of [
+      { ...asked(ago(10_000)), reportPending: true },
+      asked(ago(MIN)),
+      { ...asked(ago(MIN)), lastWords: 'Bash decision received: allow' },
+    ] as UserStatusInput[]) {
+      const status = deriveUserStatus(input, NOW);
+      expect(status.state, JSON.stringify(status)).not.toBe('needs');
+      const after = board(leader(input), idle);
+      expect(after.leader?.needsYou, JSON.stringify(status)).toBe(false);
+      expect([after.chips.needs, after.attention], JSON.stringify(status)).toEqual([1, 1]);
+    }
+  });
+
+  it('a no-ask status never counts, a real ask always does', () => {
+    const at = ago(30_000);
+    const noAsk: UserStatusInput[] = [
+      { ...asked(ago(MIN)), report: { state: 'done', at } },
+      { ...asked(ago(MIN)), report: { state: 'needs', at, answered_person: true } },
+      { ...asked(ago(MIN)), report: { state: 'waiting', at, waiting_kind: 'lead', waiting_on: 'Pick one?', kindless_ask: true } },
+      { ...asked(ago(MIN)), triggers: ['Pipeline watch'] },
+    ];
+    const realAsk: UserStatusInput[] = [
+      { ...asked(ago(MIN)), report: { state: 'needs', at, ask: 'Approve the rollout to the second region?' } },
+      { ...asked(ago(MIN)), openLetter: 'Approve the vendor contract' },
+      { ...asked(ago(MIN)), processStatus: 'error', errorMessage: 'The CLI exited' },
+    ];
+    const idle: KanbanLive = { process_status: 'idle', sessionId: SID };
+    for (const input of noAsk) expect(board(leader(input), idle).leader?.needsYou, JSON.stringify(input)).toBe(false);
+    for (const input of realAsk) {
+      const live: KanbanLive = input.processStatus === 'error' ? { process_status: 'error', errorMessage: 'The CLI exited', sessionId: SID } : idle;
+      expect(board(leader(input), live).leader?.needsYou, JSON.stringify(input)).toBe(true);
+    }
   });
 });

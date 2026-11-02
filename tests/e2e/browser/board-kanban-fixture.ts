@@ -361,8 +361,9 @@ const leaderCarriesOn = (api: KanbanApi, team: Pick<KanbanTeam, 'leader'>) => ca
 
 /**
  * Run `act` (a worker errs) and keep the leader carrying on: the error wakes the idle leader, whose
- * turn end hands it back, and 20 s later (HANDBACK_SETTLE_MS) it reads Needs you, one more than the
- * cards (2026-11-01: C33 read 1 on 4 of 11 CI runs). The mock CLI ends its process after that turn,
+ * turn end hands it back, and 20 s later (HANDBACK_SETTLE_MS) its status moved under the chips
+ * (2026-11-01: C33 read 1 on 4 of 11 CI runs, when a hand back still read Needs you; since
+ * 2026-11-02 it reads Waiting with its turn to read). The mock CLI ends its process after that turn,
  * and carrying on needs a live one (report-set.ts): wait for the end, run one clean turn, set the line.
  */
 export async function withLeaderCarryingOn<T>(api: KanbanApi, team: Pick<KanbanTeam, 'leader'>, act: () => Promise<T>): Promise<T> {
