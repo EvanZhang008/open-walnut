@@ -118,6 +118,10 @@ export async function expectComposerWaitsForTheAnswer(page: Page, query: string)
 export async function askInCard(page: Page, text: string): Promise<void> {
   const box = followUpInput(page);
   await expect(box).toBeVisible({ timeout: 20_000 });
+  // Click it first, as a person does. The search box takes its focus back from anything that
+  // takes it without a pointer press within 2 s of a keystroke there (TodoSearchBar's typing
+  // guard), and a bare fill focuses from code: the question then went into the search box.
+  await box.click();
   await box.fill(text);
   await box.press('Enter');
 }
