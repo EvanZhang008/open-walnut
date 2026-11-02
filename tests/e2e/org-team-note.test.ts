@@ -156,7 +156,11 @@ describe('a lead\'s team note', () => {
       const quietLead = (await ensureProjectLead('Pond')).id
       const sid = '88888888-9999-4aaa-8bbb-cccccccccccc'
       await createSessionRecord(sid, quietLead, 'Pond', WALNUT_HOME)
-      const pump = (await addTask({ title: 'Clean the pump', project: 'Pond' })).task.id
+      // A worker, as 'Order seeds' is: a top-level task's completion rides the lead's next
+      // message as its own notice and leaves the note (the test above), and on a loaded runner
+      // that notice was recorded before this read, so the note said nothing (2026-11-02, CI).
+      const pond = (await addTask({ title: 'Keep the pond clear', project: 'Pond' })).task.id
+      const pump = (await addTask({ title: 'Clean the pump', project: 'Pond', parent_task_id: pond })).task.id
       const t0 = Date.now()
       _resetTeamNoteClaimsForTesting()
       expect(await pendingOrgDigest(sid, t0)).toBeNull()
