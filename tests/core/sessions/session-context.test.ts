@@ -343,7 +343,9 @@ describe('buildSessionContext (identity note)', () => {
     // 7800 → 8900 (2026-11-01) for the charter's escalation bullet: a lead handed the user a
     // question a task could have decided, so the bullet lists the user's kinds, names what is
     // never theirs and says the user's word counts wherever Walnut's record shows it.
-    expect(systemPrompt.length).toBeLessThan(8900)
+    // 8900 → 9050 (2026-11-02) for the charter's line on agent mail: a message another session
+    // sent is never the user's word, whatever tag the CLI wraps it in; only typed words count.
+    expect(systemPrompt.length).toBeLessThan(9050)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {

@@ -2379,6 +2379,20 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     else if (record?.pendingPermission) outcome = 'awaiting_human';
     else if (record?.process_status === 'error') outcome = 'error';
 
+    // A turn that only made progress leaves the requests it owes open (sessions/request-progress.ts):
+    // its own work runs on, it parked itself, or it waits on another task. A plain stop on the phase
+    // edge is judged by the turn-end report a few seconds later, which is what moves the phase.
+    const targetSid = sessionId ?? record?.claudeSessionId;
+    const targetTaskId = task?.id ?? taskId;
+    const progress = outcome === 'completed' && phase !== 'COMPLETE' && pending.length > 0
+      ? await (await import('../sessions/request-progress.js')).progressReason({ sessionId: targetSid, taskId: targetTaskId, phase })
+      : null;
+    const deferStop = !progress && outcome === 'completed' && isPhaseEdge && phase === 'NEED_ACTION'
+      && pending.length > 0 && !!targetSid && !!targetTaskId;
+    // The askers whose fallback speaks, now or after the report; the others hear of this edge as any
+    // follower does (the subtask notice, the org node's line).
+    const speakers = progress ? [] : pending;
+
     if (pending.length < allPending.length) {
       const { settleNotified } = await import('../session-requests.js');
       for (const own of allPending) {
@@ -2437,7 +2451,7 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
       const notices = await import('../sessions/subtask-notices.js');
       const answeredLately = await repliedRecently(parentSids, task.id, notices.RECENT_REPLY_MS).catch(() => false);
       const { stoppedByTeam } = await import('../sessions/team-stop.js');
-      const parentHears = !pending.some((r) => parentSids.has(r.fromSessionId))
+      const parentHears = !speakers.some((r) => parentSids.has(r.fromSessionId))
         && !(actorSid && parentSids.has(actorSid))
         // A team stop just stopped it: whoever stopped the team knows.
         && !(kind !== 'completed' && kind !== 'error' && stoppedByTeam(task.id))
@@ -2465,14 +2479,29 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
     // and at its deadline (session-requests.ts linkHandoffs).
     const { holdHandedOn } = await import('../sessions/request-handoff.js');
     const speak = await holdHandedOn(pending, { outcome, phase });
-    if (speak.length === 0 && !subtask && !orgHears) return;
+    const speakNow = progress || deferStop ? [] : speak;
+    if (progress && speak.length > 0) {
+      log.session.info('requests kept open: the turn only made progress, the answer comes later', {
+        taskId: targetTaskId, reason: progress, phase, requestIds: speak.map((r) => r.id),
+      });
+    }
+    // The plain stop is judged after its report; it reuses this edge's transcript read when there is one.
+    const judgeAfterReport = async (lastWords?: Awaited<ReturnType<typeof import('../sessions/session-request-notify.js').readLastWords>>): Promise<void> => {
+      if (!deferStop || speak.length === 0 || !targetSid || !targetTaskId) return;
+      const { settleAfterReport } = await import('../sessions/request-progress.js');
+      void settleAfterReport({ sessionId: targetSid, taskId: targetTaskId, requestIds: speak.map((r) => r.id), lastWords });
+    };
+    if (speakNow.length === 0 && !subtask && !orgHears) {
+      await judgeAfterReport();
+      return;
+    }
 
     // One transcript read serves every notice of this edge.
     const notify = await import('../sessions/session-request-notify.js');
-    const lastTurn = lastMessage || (undelivered && speak.length === 0) ? undefined : await notify.readLastTurn(sessionId ?? record?.claudeSessionId);
-    for (const request of speak) {
-      await notify.notifyRequesterFallback(request, outcome, { phase, lastMessage, lastWords: lastTurn?.words });
-    }
+    const lastTurn = lastMessage || (undelivered && speakNow.length === 0) ? undefined : await notify.readLastTurn(sessionId ?? record?.claudeSessionId);
+    await judgeAfterReport(lastTurn?.words);
+    // One message per asker, however many requests it has open to this task.
+    await notify.notifyRequesterGroup(speakNow, outcome, { phase, lastMessage, lastWords: lastTurn?.words });
     const { clipNoticeMessage: clipWords } = await import('../session-requests.js');
     if (orgHears && orgTask) {
       const { noteOrgEdge } = await import('../sessions/org-follow.js');
@@ -2487,7 +2516,7 @@ export const sessionRequestWatchHook: SessionHookDefinition = {
         waitUntil: edgeKind === 'waiting' ? task?.wait_until ?? undefined : undefined,
         actorSid,
         // The node's own open request to it is answered by the request fallback above.
-        askerSids: pending.map((r) => r.fromSessionId),
+        askerSids: speakers.map((r) => r.fromSessionId),
       });
     }
     if (!subtask || !parentTaskId || !task) return;

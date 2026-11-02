@@ -68,6 +68,11 @@ vi.mock('../../src/core/sessions/session-request-notify.js', async (importOrigin
       notifySpy(...args);
       return orig.notifyRequesterFallback(...args);
     },
+    // The hook speaks through the group call; the spy still sees each request it settles.
+    notifyRequesterGroup: (...args: Parameters<typeof orig.notifyRequesterGroup>) => {
+      for (const request of args[0]) notifySpy(request, args[1], args[2]);
+      return orig.notifyRequesterGroup(...args);
+    },
   };
 });
 
@@ -87,6 +92,9 @@ import {
   type SessionRequest,
 } from '../../src/core/session-requests.js';
 import { sessionRequestWatchHook } from '../../src/core/session-hooks/builtins.js';
+import { __resetRequestProgress, __setReportGraceForTest, flushSettleAfterReport } from '../../src/core/sessions/request-progress.js';
+import { __resetReportPending, setReportPending } from '../../src/core/sessions/report-pending.js';
+import { sessionRunner } from '../../src/providers/claude-code-session.js';
 import { DELIVERING_MAX_MS, noteRequestDelivering, requestDelivering } from '../../src/core/sessions/undelivered-requests.js';
 import type { HookContext, SessionHookContext } from '../../src/core/session-hooks/types.js';
 import { parseWalnutMessage } from '../../src/core/peers/walnut-message-tag.js';
@@ -187,6 +195,9 @@ beforeEach(() => {
   listTasksByIds.mockReset();
   getTask.mockReset();
   notifySpy.mockReset();
+  // A plain stop is judged after the turn-end report (request-progress.ts); the tests do not wait for it.
+  __resetRequestProgress();
+  __setReportGraceForTest(0);
 
   getSessionByClaudeId.mockImplementation(async (sid: string) =>
     sessions.find((s) => s.claudeSessionId === sid) ?? null);
@@ -195,7 +206,7 @@ beforeEach(() => {
   listSessions.mockImplementation(async () => sessions);
   sendMessageToSession.mockResolvedValue({ id: 'qm-notify' });
   enqueueMessage.mockResolvedValue({ id: 'qm-parked' });
-  listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Run the migration' }]);
+  listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Run the migration', phase: 'NEED_ACTION' }]);
   // The asker parked on its reply (WAITING), so a deadline notice wakes it; any other asker gets
   // it with its next message (held-notices.ts).
   getTask.mockImplementation(async (id: string) => {
@@ -476,6 +487,7 @@ describe('sweepSessionRequests', () => {
 describe('sessionRequestWatchHook — outcome selection at the turn-end edge', () => {
   async function fire(payload = phasePayload()): Promise<void> {
     await sessionRequestWatchHook.handler!(payload);
+    await flushSettleAfterReport();
   }
 
   it('reports awaiting_human when the target sits on a permission prompt', async () => {
@@ -545,7 +557,12 @@ describe('sessionRequestWatchHook — outcome selection at the turn-end edge', (
     await fire();
 
     expect(notifySpy.mock.calls.map((c) => (c[0] as SessionRequest).id).sort()).toEqual([a.id, b.id].sort());
-    expect(sendMessageToSession).toHaveBeenCalledTimes(2);
+    // One asker, one message: the second request is named in the first one's notice.
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+    expect(deliveredText()).toContain(a.id);
+    expect(deliveredText()).toContain(b.id);
+    expect((await getSessionRequest(a.id))?.status).toBe('notified');
+    expect((await getSessionRequest(b.id))?.status).toBe('notified');
 
     notifySpy.mockClear();
     sendMessageToSession.mockClear();
@@ -583,11 +600,12 @@ describe('sessionRequestWatchHook — outcome selection at the turn-end edge', (
 
 describe('sessionRequestWatchHook — the parent hears about its subtask by state', () => {
   const PARENT = 'sess-parent-1';
-  const child = { id: 'task-77', title: 'Run the migration', parent_task_id: 'task-parent', phase: 'IN_PROGRESS' };
+  const child = { id: 'task-77', title: 'Run the migration', parent_task_id: 'task-parent', phase: 'NEED_ACTION' };
   const parentTask = { id: 'task-parent', title: 'Ship the release', phase: 'IN_PROGRESS' };
 
   async function fire(payload = phasePayload()): Promise<void> {
     await sessionRequestWatchHook.handler!(payload);
+    await flushSettleAfterReport();
     await flushSubtaskNotices();
   }
 
@@ -1280,5 +1298,138 @@ describe('notifyRequesterFallback — a message that has not reached its target'
     buildSessionTranscript.mockResolvedValue(transcriptOf('done, 42 rows'));
     expect(await notifyRequesterFallback(request, 'completed', { phase: 'NEED_ACTION' })).toBe(true);
     expect(deliveredText()).toContain('done, 42 rows');
+  });
+});
+
+
+describe('sessionRequestWatchHook — a turn that only made progress leaves its requests open', () => {
+  const ASKER2 = 'sess-asker-2';
+  const fire = async (payload = phasePayload()): Promise<void> => {
+    await sessionRequestWatchHook.handler!(payload);
+    await flushSettleAfterReport();
+  };
+  const status = async (...rows: SessionRequest[]) => Promise.all(rows.map(async (r) => (await getSessionRequest(r.id))?.status));
+  const taskPhase = (phase: string) => listTasksByIds.mockResolvedValue([{ id: 'task-77', title: 'Run the migration', phase }]);
+
+  beforeEach(() => {
+    __resetReportPending();
+    sessions = [...sessions, rec(ASKER2, { title: 'Asker two', taskId: 'task-asker-2' })];
+  });
+
+  it('six requests of one lead: a worker\'s plain stop ends them with ONE notice naming all six', async () => {
+    const rows: SessionRequest[] = [];
+    for (let i = 1; i <= 6; i++) rows.push(await arm({ text: `question ${i}` }));
+
+    await fire();
+
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+    for (const r of rows) expect(deliveredText()).toContain(r.id);
+    expect(await status(...rows)).toEqual(Array(6).fill('notified'));
+  });
+
+  it('two askers each get their own single message', async () => {
+    const a1 = await arm({ text: 'one' });
+    const a2 = await arm({ text: 'two' });
+    const b1 = await arm({ fromSessionId: ASKER2, text: 'three' });
+
+    await fire();
+
+    expect(sendMessageToSession).toHaveBeenCalledTimes(2);
+    expect(await status(a1, a2, b1)).toEqual(['notified', 'notified', 'notified']);
+  });
+
+  it('the task parked itself (a WAITING edge): the requests stay open and nobody is told', async () => {
+    const rows = [await arm({ text: 'one' }), await arm({ text: 'two' })];
+    taskPhase('WAITING');
+
+    await fire(phasePayload({ newPhase: 'WAITING' }));
+
+    expect(await status(...rows)).toEqual(['pending', 'pending']);
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+  });
+
+  it('its own work runs on after the turn: the requests stay open', async () => {
+    const rows = [await arm({ text: 'one' }), await arm({ text: 'two' })];
+    const outlives = vi.spyOn(sessionRunner, 'hasWorkOutlivingTurn').mockReturnValue(true);
+
+    await fire();
+    outlives.mockRestore();
+
+    expect(await status(...rows)).toEqual(['pending', 'pending']);
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+  });
+
+  it('it waits on another task\'s answer: the requests stay open', async () => {
+    const rows = [await arm({ text: 'one' })];
+    // The target has a request of its own open to somebody else.
+    await createSessionRequest({ fromSessionId: TARGET, toSessionId: 'sess-someone', toTaskId: 'task-other', text: 'need your numbers' });
+
+    await fire();
+
+    expect(await status(...rows)).toEqual(['pending']);
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+  });
+
+  it('a stop whose report is still on its way is judged by the report: it parks, so the requests stay open', async () => {
+    const rows = [await arm({ text: 'one' }), await arm({ text: 'two' })];
+    setReportPending(TARGET, true);
+
+    await sessionRequestWatchHook.handler!(phasePayload());
+    await new Promise((r) => setTimeout(r, 20));
+    // Nothing is decided while the report is out.
+    expect(await status(...rows)).toEqual(['pending', 'pending']);
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+
+    // The report lands and moves the task to WAITING on an outside wait.
+    taskPhase('WAITING');
+    setReportPending(TARGET, false);
+    await flushSettleAfterReport();
+
+    expect(await status(...rows)).toEqual(['pending', 'pending']);
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+  });
+
+  it('a stop whose report leaves the task handed back is told once the report is in', async () => {
+    const rows = [await arm({ text: 'one' }), await arm({ text: 'two' })];
+    setReportPending(TARGET, true);
+
+    await sessionRequestWatchHook.handler!(phasePayload());
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    setReportPending(TARGET, false);
+    await flushSettleAfterReport();
+
+    expect(sendMessageToSession).toHaveBeenCalledTimes(1);
+    expect(await status(...rows)).toEqual(['notified', 'notified']);
+  });
+
+  it('a reply that comes while the report is out wins: nothing is sent', async () => {
+    const rq = await arm({ text: 'one' });
+    setReportPending(TARGET, true);
+    await sessionRequestWatchHook.handler!(phasePayload());
+    await settleReplied(rq.id);
+    setReportPending(TARGET, false);
+    await flushSettleAfterReport();
+
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+    expect((await getSessionRequest(rq.id))?.status).toBe('replied');
+  });
+
+  it('a new turn running when the report lands leaves them to that turn\'s own end', async () => {
+    const rows = [await arm({ text: 'one' })];
+    setReportPending(TARGET, true);
+    await sessionRequestWatchHook.handler!(phasePayload());
+    sessions = sessions.map((s) => s.claudeSessionId === TARGET ? rec(TARGET, { title: 'Target', process_status: 'running' }) : s);
+    setReportPending(TARGET, false);
+    await flushSettleAfterReport();
+
+    expect(await status(...rows)).toEqual(['pending']);
+    expect(sendMessageToSession).not.toHaveBeenCalled();
+  });
+
+  it('a closed task or an error still speaks at once (only plain stops and progress turns are judged)', async () => {
+    const done = await arm({ text: 'one' });
+    taskPhase('COMPLETE');
+    await fire(phasePayload({ newPhase: 'COMPLETE' }));
+    expect(await status(done)).toEqual(['notified']);
   });
 });

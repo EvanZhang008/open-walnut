@@ -9,7 +9,8 @@
 import { toolDetail, toolResultPreview, toolResultText } from '../tool-summary.js'
 import { clipTranscriptText } from './transcript-clip.js'
 import { projectUserText } from './reference-cards.js'
-import { transcriptSentBy, type TranscriptSentBy } from './transcript-sent-by.js'
+import { transcriptSentBy, personTextOf, type TranscriptSentBy } from './transcript-sent-by.js'
+import { nonHumanOrigin } from '../../lib/history-session-envelope.js'
 import { InjectedLines, type InjectedCarrier } from './transcript-injected.js'
 import { hookContextText, walnutAddedOf, type WalnutAddedItem } from '../../lib/walnut-added.js'
 
@@ -21,7 +22,7 @@ export const TRANSCRIPT_TAIL_BYTES = 512 * 1024
 
 type TranscriptRow = InjectedCarrier & {
   role: string; text: string; timestamp: string; kind?: 'tool' | 'thinking'; detail?: string; resultPreview?: string
-  agent?: string; isError?: true; sentBy?: TranscriptSentBy; added?: WalnutAddedItem[]; textWithoutContext?: string
+  agent?: string; isError?: true; sentBy?: TranscriptSentBy; personText?: string; added?: WalnutAddedItem[]; textWithoutContext?: string
 }
 
 export function transcriptFromJsonl(sessionId: string, main: string): Record<string, unknown> {
@@ -87,7 +88,7 @@ export function transcriptFromJsonl(sessionId: string, main: string): Record<str
           return block.type === 'text' && typeof block.text === 'string' ? [block.text] : []
         }) : []
       for (const text of texts) {
-        if (injected.take(text, messages) === 'message') messages.push(userRow(text.trim(), ts))
+        if (injected.take(text, messages) === 'message') messages.push(userRow(text.trim(), ts, nonHumanOrigin(parsed.origin)))
       }
       continue
     }
@@ -106,12 +107,12 @@ export function transcriptFromJsonl(sessionId: string, main: string): Record<str
       // everything the human's turn carries survives.
       if (typeof content === 'string') {
         const text = content.trim()
-        if (text && !isInterruptMarker(text)) messages.push(userRow(text, timestamp))
+        if (text && !isInterruptMarker(text)) messages.push(userRow(text, timestamp, nonHumanOrigin(parsed.origin)))
       } else if (Array.isArray(content)) {
         for (const block of content) {
           const b = block as { type?: string; text?: string }
           const text = b.type === 'text' ? b.text?.trim() : undefined
-          if (text && !isInterruptMarker(text)) messages.push(userRow(text, timestamp))
+          if (text && !isInterruptMarker(text)) messages.push(userRow(text, timestamp, nonHumanOrigin(parsed.origin)))
         }
       }
     } else if (type === 'assistant' && Array.isArray(content)) {
@@ -171,12 +172,15 @@ function clip(text: string): string {
  *  every send while rich holds. Strip BEFORE clipping so the budget is spent on
  *  the human's words, and name the sender from the whole text (an envelope cut
  *  short reads as prose), by the primary's rule (transcript-sent-by.ts). */
-function userRow(text: string, timestamp: string): TranscriptRow {
+function userRow(text: string, timestamp: string, agentOrigin = false): TranscriptRow {
   const { text: shown } = projectUserText(text, timestamp)
   // What Walnut added besides its notes in front, as the primary's projection says it.
   const { items, textWithoutContext } = walnutAddedOf(shown)
+  const sentBy = transcriptSentBy({ role: 'user', text: shown, agentOrigin })
+  const personText = sentBy === 'person' ? personTextOf(shown) : undefined
   return {
-    role: 'user', text: clipTranscriptText(shown, 'live'), timestamp, sentBy: transcriptSentBy({ role: 'user', text: shown }),
+    role: 'user', text: clipTranscriptText(shown, 'live'), timestamp, sentBy,
+    ...(personText !== undefined ? { personText: clipTranscriptText(personText, 'live') } : {}),
     ...(items.length ? { added: items.map((i) => ({ ...i, text: clipTranscriptText(i.text, 'live') })) } : {}),
     ...(textWithoutContext !== undefined ? { textWithoutContext: clipTranscriptText(textWithoutContext.trim(), 'live') } : {}),
   }

@@ -49,7 +49,10 @@ import { TASK_ROUTING_CONTRACT } from './task-routing-contract.js';
 // lead handed the user a question a task could have decided, though the old one-line rule
 // said to decide it, so the bullet now lists the user's kinds, names what is never theirs
 // and says the user's word counts wherever Walnut's record shows it. It renders 9,329 with it.
-export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 9_400;
+//
+// Raised to 9,550 on 2026-11-02 for that bullet's mixed rows: a row that carries a notice or
+// another session's mail beside the user's words counts only through its personText. It renders 9,487.
+export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 9_550;
 
 // The phase LIST comes from PHASE_ORDER, so adding or removing a phase updates
 // this prompt with no second edit. The phases the prompt names are typed

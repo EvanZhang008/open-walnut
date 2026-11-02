@@ -50,16 +50,6 @@ export function unansweredStopReason(
   ].join('\n');
 }
 
-/** Whether the session's own work outlives this turn (its answer comes later). */
-async function workOutlives(sid: string): Promise<boolean> {
-  try {
-    const { sessionRunner } = await import('../../providers/claude-code-session.js');
-    return sessionRunner.hasWorkOutlivingTurn(sid);
-  } catch {
-    return false;
-  }
-}
-
 /** The Stop hook's reason for `callerSid`, or null when nothing should hold the turn. */
 export async function unansweredAtStop(callerSid: string | undefined, now = Date.now()): Promise<{ reason: string; requests: string[] } | null> {
   const sid = (callerSid ?? '').trim();
@@ -78,12 +68,13 @@ export async function unansweredAtStop(callerSid: string | undefined, now = Date
       && (r.toSessionId ? r.toSessionId === sid : r.toTaskId === taskId)
       && !r.carriedBy?.length && (nudged.get(r.id) ?? 0) < MAX_NUDGES);
     if (!candidates.length) return null;
-    // It waits on another task's answer itself: the result comes after that one.
-    if (rows.some((r) => r.status === 'pending' && r.fromSessionId === sid)) return null;
-    if (await workOutlives(sid)) return null;
     const { listTasksByIds } = await import('../task-manager.js');
     const own = (await listTasksByIds([taskId]).catch(() => []))[0];
-    if (!own || own.phase === 'WAITING' || own.phase === 'COMPLETE') return null;
+    if (!own || own.phase === 'COMPLETE') return null;
+    // Its answer comes later (its work runs on, it parked, it waits on another task): the same
+    // facts the turn-end edge leaves a request open for (request-progress.ts).
+    const { progressReason } = await import('./request-progress.js');
+    if (await progressReason({ sessionId: sid, taskId, phase: own.phase, rows })) return null;
 
     const { undeliveredRowFor } = await import('./undelivered-requests.js');
     const { getSessionByClaudeId } = await import('../session-tracker.js');

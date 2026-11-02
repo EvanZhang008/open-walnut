@@ -9,6 +9,8 @@ export interface HistoryTurnRow {
   role: string;
   text: string;
   injected?: boolean;
+  /** The CLI's `origin` says a person did not type this row (sessions/transcript-sent-by.ts). */
+  agentOrigin?: boolean;
 }
 
 /**

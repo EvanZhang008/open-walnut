@@ -2172,8 +2172,11 @@ directory on that host.
   (the calling task, or Walnut and the source) when no envelope frames it yet, and a request a session
   makes to a person's route is sent as `api-agent`; the daemon's two corrective lines open with
   `[Walnut … automated message, not from the user]`. Older rows predate the framing, so an agent's
-  unframed text from before then still reads `"person"`. The guard is
-  `tests/core/sessions/send-sender-guard.test.ts`. `sentTo`
+  unframed text from before then still reads `"person"`. Another session's mail is `"agent"` too, in any
+  tag Claude Code uses for it (`cross-session-message`, `agent-message`, `teammate-message`) and by the
+  line's own `origin` (anything but `human`). A `"person"` row that also carries envelopes (a notice, another
+  session's mail) adds `personText`, the typed words alone (additive, 2026-11-02). The guards are
+  `tests/core/sessions/send-sender-guard.test.ts` and `tests/core/sessions/sent-by-peer-origin.test.ts`. `sentTo`
   (additive, 2026-10-30) rides a send's tool row (`task_send` by MCP or the CLI):
   `[ { ref, taskId?, title? } ]`, its targets in order, `ref` as the call or its answer
   printed it (an id or id prefix) and `taskId`/`title` when it resolved to one task; a

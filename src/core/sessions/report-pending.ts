@@ -25,6 +25,32 @@ export function setReportPending(sessionId: string, on: boolean, nowMs = Date.no
   if (on) pending.set(sessionId, nowMs); else pending.delete(sessionId);
   if (pending.size > 2000) pending.clear();
   if (had !== on) listener?.(sessionId);
+  if (!on) for (const wake of waiters.get(sessionId) ?? []) wake();
+}
+
+/** Callers waiting for a session's report to come (whenReportSettled). */
+const waiters = new Map<string, Set<() => void>>();
+
+/**
+ * Resolves once the session's turn-end report is no longer on its way: it was applied, a new turn
+ * cancelled it, or `maxMs` passed. Right away when none is pending. Used by what must judge a turn
+ * end by the report (the task's phase moves with it) instead of by the bare end.
+ */
+export function whenReportSettled(sessionId: string, maxMs = REPORT_PENDING_MAX_MS): Promise<void> {
+  if (!isReportPending(sessionId)) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const set = waiters.get(sessionId) ?? new Set<() => void>();
+    waiters.set(sessionId, set);
+    const done = (): void => {
+      clearTimeout(timer);
+      set.delete(done);
+      if (set.size === 0) waiters.delete(sessionId);
+      resolve();
+    };
+    const timer = setTimeout(done, maxMs);
+    timer.unref?.();
+    set.add(done);
+  });
 }
 
 export function isReportPending(sessionId: string | null | undefined, nowMs = Date.now()): boolean {
@@ -40,4 +66,6 @@ export function onReportPendingChange(fn: ((sessionId: string) => void) | null):
 /** Test-only. */
 export function __resetReportPending(): void {
   pending.clear();
+  for (const set of [...waiters.values()]) for (const wake of [...set]) wake();
+  waiters.clear();
 }

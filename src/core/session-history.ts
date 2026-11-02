@@ -11,6 +11,7 @@
  */
 
 import { hookContextText } from '../lib/walnut-added.js';
+import { NATIVE_PEER_TAGS, nonHumanOrigin } from '../lib/history-session-envelope.js';
 import { log } from '../logging/index.js';
 import {
   encodeProjectPath,
@@ -684,6 +685,10 @@ export interface SessionHistoryMessage {
    *  stdout maps all of those to isSynthetic (QueryEngine emit path). The UI
    *  renders these as a collapsed context row, never a "You" bubble. */
   injected?: boolean;
+  /** User rows: the CLI's own `origin` says a person did not type it (`peer`, `task-notification`,
+   *  any kind but `human`), or its tag is another session's mail. `sentBy` reads `agent` for it
+   *  whatever its text looks like (sessions/transcript-sent-by.ts). */
+  agentOrigin?: boolean;
   /** User rows: the message hints Walnut sent with it (hints/hint-format.ts). */
   hints?: CarriedHint[];
   /** User rows whose display differs from what the model received: the text as
@@ -709,6 +714,8 @@ export interface PaginationMeta {
 interface RawJsonlLine {
   type: string;
   subtype?: string;
+  /** Where the CLI says a user line came from (`{kind: "human" | "peer" | "task-notification" | …}`). */
+  origin?: { kind?: string } | null;
   /** Claude Code version that wrote the line (canonical transcript lines). */
   version?: string;
   uuid?: string;
@@ -1056,6 +1063,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     unsettled?: boolean;
     queued?: boolean;
     injected?: boolean;
+    agentOrigin?: boolean;
     systemVariant?: 'compact' | 'error' | 'info';
     systemDetail?: string;
     contentBlocks: Array<{
@@ -1223,12 +1231,12 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
     // text matches. Found → Pattern A (skip enqueue). None → Pattern B (emit synthetic msg).
     const wanted = raw.content.trim();
     // A peer message from another Claude Code session is enqueued as the bare
-    // <cross-session-message> tag, but the CLI logs the user turn with its own
+    // native tag (NATIVE_PEER_TAGS), but the CLI logs the user turn with its own
     // framing around that tag ("Another Claude session sent a message: … "), so
     // the twin CONTAINS the enqueue rather than equalling it. That framed line is
     // always CLI-injected (isMeta), which keeps a human merely quoting the tag
     // from being claimed as the twin.
-    const wrapped = wanted.startsWith('<cross-session-message');
+    const wrapped = NATIVE_PEER_TAGS.some((t) => wanted.startsWith(`<${t}`));
     const twin = userTwinTexts.find(
       u => !u.claimed && u.index > i && u.index - i <= PATTERN_A_LOOKAHEAD
         && (u.content.trim() === wanted || (wrapped && u.injected && u.content.includes(wanted))),
@@ -1594,6 +1602,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
         existing.parentToolUseId = raw.parent_tool_use_id;
       }
       if (isInjectedLine(raw)) existing.injected = true;
+      if (nonHumanOrigin(raw.origin)) existing.agentOrigin = true;
     } else {
       messageMap.set(msgId, {
         role: raw.message.role,
@@ -1603,6 +1612,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
         parentToolUseId: raw.parent_tool_use_id ?? undefined,
         walnutMessageId: raw.walnutMessageId ?? undefined,
         injected: isInjectedLine(raw) || undefined,
+        agentOrigin: nonHumanOrigin(raw.origin) || undefined,
         contentBlocks: raw.message.content
           ? (typeof raw.message.content === 'string'
             ? [{ type: 'text' as const, text: raw.message.content }]
@@ -1804,11 +1814,14 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
       if (!remainder) continue;
       text = remainder;
     }
+    // Another session's mail rewritten for display ("[Teammate x] …") keeps its origin: the
+    // rewritten text no longer shows it is not a person's.
+    let peerMail = false;
     if (msg.role === 'user' && text.startsWith('<')) {
       if (isCacheWarmupText(text)) { dropWarmupReply = true; continue; }
       const transformed = transformInjectedUserText(text);
       if (transformed === null) continue;
-      if (transformed !== undefined) text = transformed;
+      if (transformed !== undefined) { text = transformed; peerMail = /^<teammate-message/.test(receivedText); }
     }
     if (msg.role === 'assistant' && dropWarmupReply) {
       dropWarmupReply = false;
@@ -1849,6 +1862,7 @@ export function parseSessionMessages(content: string, opts?: ParseSessionMessage
       ...(msg.unsettled ? { unsettled: true } : {}),
       ...(msg.queued ? { queued: true } : {}),
       ...(msg.injected && msg.role === 'user' ? { injected: true } : {}),
+      ...((msg.agentOrigin || peerMail) && msg.role === 'user' ? { agentOrigin: true } : {}),
       ...(msg.systemVariant ? { systemVariant: msg.systemVariant } : {}),
       ...(msg.systemDetail ? { systemDetail: msg.systemDetail } : {}),
       ...(hints.length ? { hints } : {}),

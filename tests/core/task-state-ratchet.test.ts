@@ -102,7 +102,9 @@ const PHASE_READERS: Record<string, number> = {
   'src/core/routines/run-close.ts': 1,
   'src/core/routines/trigger-api.ts': 2,
   'src/core/session-health-monitor.ts': 1,
-  'src/core/session-hooks/builtins.ts': 2,
+  // a parked task's requests stay open on a host the server is away from (the server's twin: request-progress.ts)
+  'src/providers/offline-host-core.ts': 1,
+  'src/core/session-hooks/builtins.ts': 3,
   // a precondition beside user_status (which decides) and a write guard that the phase did not move
   'src/core/sessions/last-words.ts': 2,
   'src/core/sessions/letter-recheck.ts': 1,
@@ -113,7 +115,8 @@ const PHASE_READERS: Record<string, number> = {
   'src/core/sessions/restart-loss.ts': 2,
   'src/core/sessions/session-request-notify.ts': 1,
   'src/core/sessions/team-stop.ts': 3,
-  'src/core/sessions/unanswered-at-stop.ts': 1,
+  // whether a turn end settled a request: a parked task (WAITING) or a handed-back one (NEED_ACTION) after the report
+  'src/core/sessions/request-progress.ts': 2,
   'src/core/status-consistency.ts': 2,
   'src/core/task-manager.ts': 7,
   'src/core/task-outbox.ts': 1,

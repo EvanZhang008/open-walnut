@@ -430,7 +430,7 @@ const TAG_CLOSE = '\n</walnut-message>';
 const TAG_OPENER = /<walnut-message\s/g;
 const TAG_HEAD = /^<walnut-message\s/;
 /** `name="value"`. A value cannot hold a `"` — the serializer escapes it. */
-const ATTR = /([a-z][a-z0-9-]*)="([^"]*)"/g;
+const ATTR = /([a-z][a-z0-9_-]*)="([^"]*)"/g;
 /** The kinds the tag carries. Anything else degrades to raw text on purpose. */
 const TAG_KINDS = new Set(['peer-note', 'reply', 'notification', 'trigger', 'app-state']);
 /** `Title [8hex]` as `sessionHandle()` prints it (4+ so a short id still reads). */
@@ -587,10 +587,17 @@ function parseWalnutTag(text: string, at: number): ParseAt | 'broken' {
 
 // ── Claude Code's own cross-session message ──────────────────────────────────
 
-const NATIVE_TAG = '<cross-session-message';
-const NATIVE_CLOSE = '\n</cross-session-message>';
-const NATIVE_OPENER = /<cross-session-message[\s>]/g;
-const NATIVE_HEAD = /^<cross-session-message[\s>]/;
+/**
+ * The tags Claude Code wraps a peer's message in. It renamed its tag between releases and
+ * Agent-team mail has a third, so the family is listed here and every parser and guard reads it
+ * (2026-11-02: a message in `<agent-message from=…>` read as the user's own words because only
+ * the first tag was known). The CLI's JSONL also marks such a line `origin.kind: "peer"`;
+ * `nonHumanOrigin` below is the second net for a tag nobody listed yet.
+ */
+export const NATIVE_PEER_TAGS = ['cross-session-message', 'agent-message', 'teammate-message'] as const;
+const NATIVE_TAG_ALT = NATIVE_PEER_TAGS.join('|');
+const NATIVE_OPENER = new RegExp(`<(?:${NATIVE_TAG_ALT})[\\s>]`, 'g');
+const NATIVE_HEAD = new RegExp(`^<(${NATIVE_TAG_ALT})[\\s>]`);
 /**
  * The CLI wraps its own tag in two fixed pieces of prose: one line above and one
  * paragraph below. Matched as PREFIXES so a wording change costs the absorption
@@ -657,13 +664,16 @@ function parseNativeTag(text: string, at: number): ParseAt | 'broken' {
   if (headEnd >= text.length) return 'broken';
   const head = text.slice(at, headEnd).replace(/\r$/, '');
   if (!head.endsWith('>')) return 'broken';
-  const closeAt = text.lastIndexOf(NATIVE_CLOSE);
+  const name = NATIVE_HEAD.exec(head)?.[1];
+  if (!name) return 'broken';
+  const close = `\n</${name}>`;
+  const closeAt = text.lastIndexOf(close);
   if (closeAt < headEnd) return 'broken';
 
-  const attrs = parseAttrs(head.slice(NATIVE_TAG.length, head.length - 1));
-  const title = attrs['from-name'] || attrs.from;
+  const attrs = parseAttrs(head.slice(name.length + 1, head.length - 1));
+  const title = attrs['from-name'] || attrs.from || attrs.teammate_id;
   const start = absorbFramingBefore(text, at);
-  const end = absorbFramingAfter(text, closeAt + NATIVE_CLOSE.length);
+  const end = absorbFramingAfter(text, closeAt + close.length);
   return {
     start,
     end,
@@ -710,7 +720,7 @@ function pushText(segments: EnvelopeSegment[], raw: string): void {
  */
 export function parseSessionEnvelopes(text: string): EnvelopeSegment[] | null {
   if (!text) return null;
-  if (!text.includes('[') && !text.includes(TAG) && !text.includes(NATIVE_TAG)) return null;
+  if (!text.includes('[') && !text.includes(TAG) && !NATIVE_PEER_TAGS.some((t) => text.includes(`<${t}`))) return null;
   const segments: EnvelopeSegment[] = [];
   let pos = 0;
   let found = 0;
@@ -783,4 +793,17 @@ export function envelopeDirectionGlyph(kind: SessionEnvelopeKind): string {
     // ▣ a square with a smaller one inside: the App's screen, shared.
     case 'app-state': return '\u25A3';
   }
+}
+
+/**
+ * Whether a JSONL line's `origin` says a person did not type it. Claude Code stamps every user
+ * line with where it came from: `{kind: "human"}` for typed input, `peer` for another session's
+ * message, `task-notification` for a background run's result, and kinds this code has never
+ * seen. Only `human` (and no origin at all, an older CLI) is a person: an unknown kind is read as
+ * not one, the safe side, because `sentBy: "person"` is the word agents take for the user's own.
+ */
+export function nonHumanOrigin(origin: unknown): boolean {
+  if (!origin || typeof origin !== 'object') return false;
+  const kind = (origin as { kind?: unknown }).kind;
+  return typeof kind !== 'string' || kind !== 'human';
 }

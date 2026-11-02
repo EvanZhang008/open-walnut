@@ -59,6 +59,8 @@ export interface EnvelopeTarget {
   lastMessage?: EnvelopeLastMessage;
   /** The tasks the target handed this request on to (session-requests.ts linkHandoffs). */
   handedOn?: EnvelopeHandedOn[];
+  /** Other requests of the same asker that this same stop ended: one notice speaks for all of them. */
+  alsoUnanswered?: Array<{ id: string; preview: string }>;
 }
 
 /** A task a request was handed on to, and where its answer stands. */
@@ -119,6 +121,7 @@ export interface EnvelopeKit {
   ): string;
   clipNoticeMessage(text: string): EnvelopeLastMessage | undefined;
   buildRequestNotification(request: EnvelopeRequest, outcome: EnvelopeOutcome, target: EnvelopeTarget): string;
+  alsoLine(also: ReadonlyArray<{ id: string; preview: string }> | undefined, what?: string): string | undefined;
   buildSubtaskNotification(input: SubtaskNoticeInput): string;
   checkCompleteTarget(
     target: { id: string; title: string },
@@ -341,6 +344,15 @@ export function createEnvelopeKit(): EnvelopeKit {
     return blocks.join('\n\n');
   }
 
+  /** The other requests of the same asker that one stop ended, named in the one notice that speaks for all. */
+  function alsoLine(also: ReadonlyArray<{ id: string; preview: string }> | undefined, what = 'which got no reply either'): string | undefined {
+    if (!also?.length) return undefined;
+    return [
+      `The same stop ended ${also.length === 1 ? 'another request' : `${also.length} other requests`} of yours to this task, ${what}:`,
+      ...also.map((a) => `- ${a.id}: "${a.preview}"`),
+    ].join('\n');
+  }
+
   /** "It handed your request on to …": who has the work, and whether each answered. */
   function handedOnLine(handed: readonly EnvelopeHandedOn[] | undefined): string | undefined {
     if (!handed?.length) return undefined;
@@ -429,6 +441,7 @@ export function createEnvelopeKit(): EnvelopeKit {
         .map((h) => `  walnut tools call task_get '{"id":"${h.taskId}"}'          # the task it handed your request on to`),
     ];
     const handed = handedOnLine(target.handedOn);
+    const also = alsoLine(target.alsoUnanswered);
     return buildWalnutMessage({
       kind: 'notification',
       attrs: {
@@ -450,6 +463,7 @@ export function createEnvelopeKit(): EnvelopeKit {
           : last && outcome === 'completed'
             ? `Its turn ended WITHOUT an explicit reply to your request.${pointer}`
             : OUTCOME_LINES[outcome],
+        ...(also ? [also] : []),
         ...(last ? [quoteLastMessage(last, outcome)] : []),
         ...(next.length > 0 ? [`Next:\n${next.join('\n')}`] : []),
       ].join('\n\n'),
@@ -594,6 +608,7 @@ export function createEnvelopeKit(): EnvelopeKit {
     buildReplyDeliveryText,
     clipNoticeMessage,
     buildRequestNotification,
+    alsoLine,
     buildSubtaskNotification,
     checkCompleteTarget,
     handedOverPointer,

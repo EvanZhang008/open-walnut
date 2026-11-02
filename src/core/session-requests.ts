@@ -791,6 +791,8 @@ export function buildUndeliveredNotification(
   target: { title?: string; sessionId?: string; taskId?: string },
   why: string,
   stillQueued = false,
+  /** Other requests of the same asker whose messages did not reach it either: one notice names them. */
+  also?: ReadonlyArray<{ id: string; preview: string }>,
 ): string {
   const next = target.taskId ? [`  walnut tools call task_get '{"id":"${target.taskId}"}'          # its task state`] : [];
   // Another process has the session open (the user's terminal, most often): the
@@ -815,6 +817,7 @@ export function buildUndeliveredNotification(
           ? 'Your message has NOT BEEN DELIVERED yet: it still waits in that session\'s queue, and no turn has run on it.'
           : 'Your message was NOT DELIVERED: no turn ran on it in that session, so it has not read your request.',
       `Why: ${why.replace(/\s+/g, ' ').trim()}`,
+      ...(kit.alsoLine(also, 'whose messages did not reach it either') ? [kit.alsoLine(also, 'whose messages did not reach it either') as string] : []),
       held
         ? 'If you send it again yourself instead, it may run twice.'
         : stillQueued

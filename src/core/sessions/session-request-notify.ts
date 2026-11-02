@@ -202,11 +202,15 @@ export async function notifyRequesterFallback(
   outcome: SessionRequestOutcome,
   context: FallbackContext = {},
 ): Promise<boolean> {
-  // A host that answered while this server was away may be handing over a reply
-  // to this very request right now (offline-handover.ts): let it land first, or
-  // the asker hears "no reply" after it already got one.
-  const { waitForOfflineHandovers } = await import('../offline-handover.js');
-  await waitForOfflineHandovers();
+  return notifyRequesterGroup([request], outcome, context);
+}
+
+/** What stands between a request and its notice at this edge: nothing, or the reason its message never ran. */
+async function gateRequest(
+  request: SessionRequest,
+  outcome: SessionRequestOutcome,
+  context: FallbackContext,
+): Promise<'skip' | { undelivered?: { why: string; stillQueued: boolean } }> {
   // The asker's message itself may not have reached the target yet. A turn end or
   // error then belongs to an earlier turn and says nothing of this request: the
   // message is still on its way, and its own turn (or a park, or the deadline)
@@ -222,7 +226,7 @@ export async function notifyRequesterFallback(
         log.session.info('request fallback: the message is still being queued, edge ignored', {
           requestId: request.id, toSessionId: request.toSessionId, outcome,
         });
-        return false;
+        return 'skip';
       }
     } else if (row?.status === 'parked') {
       // A park that cannot say whether the line ran (the CLI never acknowledged it) is no proof.
@@ -238,7 +242,7 @@ export async function notifyRequesterFallback(
         log.session.info('request fallback: the message has not reached its target yet, edge ignored', {
           requestId: request.id, toSessionId: request.toSessionId, outcome, rowStatus: row.status, messageId: row.id,
         });
-        return false;
+        return 'skip';
       }
       if (!undelivered && outcome === 'timeout' && row.status === 'pending') {
         undelivered = { why: `it was queued at ${row.enqueuedAt} and has not been delivered since`, stillQueued: true };
@@ -254,12 +258,66 @@ export async function notifyRequesterFallback(
         requestId: request.id, fromSessionId: request.fromSessionId, outcome,
       });
     }
-    return false;
+    return 'skip';
   }
-  // A message that never arrived is an error for the asker, whatever edge noticed it.
-  const settled = await settleNotified(request.id, undelivered && !undelivered.stillQueued ? 'error' : outcome);
-  if (!settled) return false; // replied / already notified — someone else spoke
+  return { ...(undelivered ? { undelivered } : {}) };
+}
 
+/**
+ * Settle the requests that one edge ends and tell each ASKER once (2026-11-02, the org reflection:
+ * a worker's turn end settled the six requests its lead had open and the lead read six notices, one
+ * per request). Requests of one asker share one message: the first is the notice, the others are
+ * named in it, each settled with the same outcome; a request whose message never ran is told apart
+ * from the ones that did (the two cannot share one sentence). The atomic settle still decides who
+ * speaks: a request someone else settled first is left out.
+ */
+export async function notifyRequesterGroup(
+  requests: readonly SessionRequest[],
+  outcome: SessionRequestOutcome,
+  context: FallbackContext = {},
+): Promise<boolean> {
+  if (requests.length === 0) return false;
+  // A host that answered while this server was away may be handing over a reply
+  // to this very request right now (offline-handover.ts): let it land first, or
+  // the asker hears "no reply" after it already got one.
+  const { waitForOfflineHandovers } = await import('../offline-handover.js');
+  await waitForOfflineHandovers();
+
+  const byAsker = new Map<string, SessionRequest[]>();
+  for (const r of requests) byAsker.set(r.fromSessionId, [...(byAsker.get(r.fromSessionId) ?? []), r]);
+  let delivered = false;
+  for (const [, rows] of byAsker) {
+    const heard: { request: SessionRequest; undelivered?: { why: string; stillQueued: boolean } }[] = [];
+    for (const request of rows) {
+      const gate = await gateRequest(request, outcome, context);
+      if (gate === 'skip') continue;
+      // A message that never arrived is an error for the asker, whatever edge noticed it.
+      const settled = await settleNotified(request.id, gate.undelivered && !gate.undelivered.stillQueued ? 'error' : outcome);
+      if (!settled) continue; // replied / already notified — someone else spoke
+      heard.push({ request: settled, ...(gate.undelivered ? { undelivered: gate.undelivered } : {}) });
+    }
+    if (heard.length === 0) continue;
+    const ran = heard.filter((h) => !h.undelivered);
+    const notRan = heard.filter((h) => h.undelivered);
+    for (const part of [ran, notRan]) {
+      if (part.length === 0) continue;
+      const [first, ...rest] = part;
+      if (await deliverSettled(first.request, rest.map((h) => h.request), first.undelivered, outcome, context)) delivered = true;
+    }
+  }
+  return delivered;
+}
+
+/** The notice of requests already settled: `request` is its subject, `also` the others of the same asker and edge. */
+async function deliverSettled(
+  request: SessionRequest,
+  also: readonly SessionRequest[],
+  undelivered: { why: string; stillQueued: boolean } | undefined,
+  outcome: SessionRequestOutcome,
+  context: FallbackContext,
+): Promise<boolean> {
+  const settled = request;
+  const alsoUnanswered = also.map((r) => ({ id: r.id, preview: r.preview }));
   try {
     // Same address resolution the real reply uses (reply-routing.ts): a notice
     // filed in a session the human stopped reading is as lost as a reply. An
@@ -291,13 +349,13 @@ export async function notifyRequesterFallback(
     if (undelivered) {
       const text = buildUndeliveredNotification(settled, {
         title: targetTitle, sessionId: request.toSessionId, taskId: request.toTaskId,
-      }, undelivered.why, undelivered.stillQueued);
+      }, undelivered.why, undelivered.stillQueued, alsoUnanswered);
       const { deliverToSession } = await import('./session-send-core.js');
       const { delivery } = await deliverToSession(origin, {
         busText: text, enqueueText: text, source: 'walnut-notify', taskId: origin.taskId, endsWait: true,
       });
       log.session.info('request fallback notification delivered (message not delivered)', {
-        requestId: request.id, fromSessionId: request.fromSessionId, toSessionId: origin.claudeSessionId,
+        requestId: request.id, alsoRequestIds: also.map((r) => r.id), fromSessionId: request.fromSessionId, toSessionId: origin.claudeSessionId,
         outcome, delivery, stillQueued: undelivered.stillQueued, why: undelivered.why.slice(0, 200),
       });
       return true;
@@ -319,6 +377,7 @@ export async function notifyRequesterFallback(
       phase: targetPhase,
       lastMessage,
       ...(handedOn?.length ? { handedOn } : {}),
+      ...(alsoUnanswered.length ? { alsoUnanswered } : {}),
     });
 
     // Past its deadline the request stays open and nothing came back: background, riding the
@@ -340,7 +399,7 @@ export async function notifyRequesterFallback(
       busText: text, enqueueText: text, source: 'walnut-notify', taskId: origin.taskId, endsWait: true,
     });
     log.session.info('request fallback notification delivered', {
-      requestId: request.id, fromSessionId: request.fromSessionId,
+      requestId: request.id, alsoRequestIds: also.map((r) => r.id), fromSessionId: request.fromSessionId,
       toSessionId: origin.claudeSessionId, outcome, delivery,
       phase: targetPhase, quoted: lastMessage ? lastMessage.text.length : 0, clipped: lastMessage?.clipped ?? false,
       handedOn: handedOn?.map((h) => `${h.taskId ?? '?'}:${h.state}`),
@@ -348,10 +407,10 @@ export async function notifyRequesterFallback(
     });
     return true;
   } catch (err) {
-    // The row is already settled — a delivery failure must not un-settle it
+    // The rows are already settled — a delivery failure must not un-settle them
     // (that would re-arm every edge); log loudly instead.
     log.session.error('request fallback notification failed after settle', {
-      requestId: request.id, outcome, error: err instanceof Error ? err.message : String(err),
+      requestId: request.id, alsoRequestIds: also.map((r) => r.id), outcome, error: err instanceof Error ? err.message : String(err),
     });
     return false;
   }

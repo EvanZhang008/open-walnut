@@ -85,7 +85,7 @@ import { engineCaps, normalizeEngine } from './agents/engine-registry.js'
 // web/routes/session-stream-v1.ts: an HTML-bearing reply gets a larger budget and
 // the cut is made where it cannot leave half a tag behind.
 import { clipTranscriptText } from './sessions/transcript-clip.js'
-import { transcriptSentBy, type TranscriptSentBy } from './sessions/transcript-sent-by.js'
+import { transcriptSentBy, personTextOf, type TranscriptSentBy } from './sessions/transcript-sent-by.js'
 import { walnutAddedOf, type CliAddedItem, type WalnutAddedItem } from '../lib/walnut-added.js'
 import { InjectedLines } from './sessions/transcript-injected.js'
 import { sendTargetRefs } from '../lib/send-targets.js'
@@ -516,6 +516,8 @@ export interface ProjectedTranscriptMessage {
    *  with (lib/history-turn-window.ts), so a client never guesses it from a
    *  clipped preview. Absent on an older server. */
   sentBy?: TranscriptSentBy
+  /** A `person` row that also carries envelopes (a notice, another session's mail): only the words outside them. */
+  personText?: string
   /** User text rows only (additive, 2026-10-29): what Walnut added to the row besides
    *  its notes in front (which a client splits from `text` itself): the context blocks
    *  Walnut put first. A client shows them on every message (`ui.show_walnut_additions`,
@@ -813,7 +815,7 @@ export async function buildSessionTranscript(
         timestamp: m.timestamp,
         // From the whole text, before the clip: an envelope cut short reads as prose.
         // An injected line that got here is a Walnut message the CLI delivered: read as one.
-        ...(m.role === 'user' ? { sentBy: transcriptSentBy(m.injected ? { ...m, injected: false } : m) } : {}),
+        ...(m.role === 'user' ? sentByOf(m.injected ? { ...m, injected: false } : m) : {}),
         ...(m.role === 'user' ? projectWalnutAdded(text, opts?.full ? null : (opts?.live || wantRich ? 'live' : 'tail')) : {}),
         // The tasks the reply is about (history parse, core/org/message-about.ts), for the phone's pills.
         ...(m.role === 'assistant' && m.about?.length ? { about: m.about, ...(m.aboutTagged ? { aboutTagged: true as const } : {}) } : {}),
@@ -1188,4 +1190,11 @@ export function startSessionProjectionExport(): { stop: () => void } {
       if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null }
     },
   }
+}
+
+/** A user row's `sentBy`, and for a `person` row that also carries envelopes, the typed words alone. */
+function sentByOf(row: { role: string; text: string; injected?: boolean; agentOrigin?: boolean }): { sentBy: TranscriptSentBy; personText?: string } {
+  const sentBy = transcriptSentBy(row)
+  const personText = sentBy === 'person' ? personTextOf(row.text) : undefined
+  return { sentBy, ...(personText !== undefined ? { personText } : {}) }
 }

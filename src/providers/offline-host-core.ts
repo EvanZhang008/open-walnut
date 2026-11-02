@@ -2215,6 +2215,10 @@ export function createOfflineHostCore(deps: OfflineHostDeps) {
         }
         // One voice: the server that answers says it, from its own copy of the row.
         if (row.online && deps.serverAnswers?.(home)) continue
+        // A task that parked itself (WAITING: a build, a review) is not abandoning the request; its
+        // answer comes later and the deadline still counts (the server holds the same, request-progress.ts).
+        const owner = row.toTaskId ? tasksWithOverlay(home).find((t) => t.id === row.toTaskId) : undefined
+        if (owner?.phase === 'WAITING') continue
         let parsed: { result?: unknown; is_error?: unknown } = {}
         try { parsed = JSON.parse(line) } catch { /* the outcome still stands */ }
         await notify(home, row, parsed.is_error === true ? 'error' : 'completed', typeof parsed.result === 'string' ? parsed.result : undefined)
