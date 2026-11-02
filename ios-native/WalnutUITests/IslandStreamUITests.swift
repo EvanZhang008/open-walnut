@@ -77,10 +77,12 @@ final class IslandStreamUITests: XCTestCase {
     }
 
     /// When the turn ends the saved reply's rows replace the live ones (other ids,
-    /// the same documents) and the timeline reloads its cells. Two islands share
-    /// a reuse pool, so UIKit hands each the other's cell: each must keep the page
-    /// it was running, never load again (2026-11-01, the user: streaming and
-    /// finished must look exactly the same, "no flash").
+    /// the same documents, one row higher) and the timeline reloads its cells.
+    /// Each island must keep the page it was running, never load again
+    /// (2026-11-01, the user: streaming and finished must look exactly the same,
+    /// "no flash"). On the simulator UIKit hands each island its own cell back,
+    /// so this walk passes without the document takeover too; the takeover for
+    /// a cell handed another row's document is pinned by RichHTMLHandoverTests.
     @MainActor
     func testTwoIslandsKeepTheirRunningPagesWhenTheTurnEnds() throws {
         let app = UITestLaunch.launch(["--timeline-harness-island-stream"])

@@ -465,8 +465,7 @@ final class TimelineHarnessStore {
         guard !streamOn else { return }
         IslandStateStore.shared.removeAll(scope: "harness")
         // A step above the reply that is gone once the turn ends, the way a
-        // finished turn folds its steps: every row of the reply moves up one, so
-        // UIKit hands the saved rows cells other than the ones that drew them.
+        // finished turn folds its steps: every row of the reply moves up one.
         messages = [ChatMessage(id: "h-pair-ask", role: "user", text: "Two blocks, please.",
                                 createdAt: "2026-08-08T07:00:00Z", kind: nil),
                     ChatMessage(id: Self.pairStepID, role: "assistant", text: "Checking the two blocks first.",
