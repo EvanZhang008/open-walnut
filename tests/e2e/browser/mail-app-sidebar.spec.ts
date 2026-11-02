@@ -907,7 +907,9 @@ test.describe('an account that stopped syncing', () => {
     })
     expect(dot).toEqual({ width: 6, height: 6 })
     // The dot sits before the badge, and the row still opens a list holding that account's cached mail:
-    // "not syncing" is not "not readable".
+    // "not syncing" is not "not readable". The Inbox badge draws nothing while its grouped count is
+    // still on its way (MailInboxBadge 'pending'), so the order is read once the badge is there.
+    await expect(smartRow(page, 'inbox').getByTestId('mail-smart-unread')).toBeVisible({ timeout: 60_000 })
     const orderInRow = await smartRow(page, 'inbox').evaluate((el) => (
       Array.from(el.children).map((child) => child.className)
     ))
