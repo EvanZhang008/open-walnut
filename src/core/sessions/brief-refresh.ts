@@ -16,7 +16,9 @@
  *  - no turn of it runs now (that turn hears the moves as they happen), it is not complete, its
  *    team is not stopped and it is not snoozed;
  *  - the request is not a test run on the real Walnut (the route answers those itself).
- * Its turn answers in the chat with what changed and updates the Brief itself (brief_write). The
+ * Its turn updates the Brief itself (brief_write) and tells the user in the chat only the Needs you
+ * items that changed since the last refresh told it (new, reworded, gone; `told` on the record);
+ * with none, it ends with the agent-ack line, so his chat does not repeat an unchanged list. The
  * page says "Updating" until the new letter lands (briefUpdating), never after a failed send. A
  * parked node comes back to its wait at that turn's end, clock included (task-wait-resume.ts).
  */
@@ -24,6 +26,7 @@ import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import { agoWords } from '../user-status.js';
 import { briefFreshness, type BriefFreshness, type BriefRefreshRecord } from './brief-fresh.js';
+import { briefNeedsAsks } from './brief.js';
 
 /** At most one refresh turn per node in this long. */
 export const BRIEF_REFRESH_GAP_MS = 15 * 60_000;
@@ -59,7 +62,8 @@ export function briefRefreshDue(owner: Task, tasks: readonly Task[], opts: { now
 }
 
 /** The note the refresh brings into the node's session. */
-export function refreshBody(owner: Task, fresh: BriefFreshness, tasks: readonly Task[], now: number): string {
+export function refreshBody(owner: Task, fresh: BriefFreshness, tasks: readonly Task[], now: number,
+  changes: readonly NeedsChange[] = needsChanges(briefNeedsAsks(owner, tasks), owner.brief_refresh?.told)): string {
   const byId = new Map(tasks.map((t) => [t.id, t] as const));
   const name = (id: string) => `"${(byId.get(id)?.title ?? id).replace(/\s+/g, ' ').replace(/"/g, "'").slice(0, 80)}" (${id})`;
   const at = Date.parse(fresh.writtenAt);
@@ -71,9 +75,39 @@ export function refreshBody(owner: Task, fresh: BriefFreshness, tasks: readonly 
     ...(fresh.finished.length > 8 ? [`- and ${fresh.finished.length - 8} more completed`] : []),
     ...fresh.newAsks.slice(0, 8).map((id) => `- ${name(id)} now asks the user: "${(byId.get(id)?.user_status?.ask ?? '').replace(/\s+/g, ' ').slice(0, 200)}" (not in your Brief)`),
     ...(fresh.newAsks.length > 8 ? [`- and ${fresh.newAsks.length - 8} more new asks`] : []),
-    'Bring what the user reads up to date: check what you must (task_get on a task above), then update your Brief with brief_write, answer in your chat in a few short lines what changed since your last turn and what needs him now, and end the turn. This is a refresh: act on something only when it is yours to act on now.',
+    ...needsLines(changes, name),
+    changes.length
+      ? 'Bring what the user reads up to date: check what you must (task_get on a task above), then update your Brief with brief_write, tell him in your chat in a few short lines only the Needs you changes above (new, reworded, no longer needed), never again an ask he was already told and that did not change, and end the turn. This is a refresh: act on something only when it is yours to act on now.'
+      : 'Nothing that needs the user changed since you last told him: do not repeat his Needs you list. Check what you must (task_get on a task above), update your Brief with brief_write, and end the turn with only the agent-ack line, <walnut-turn status="agent-ack"/>, so nothing new shows in his chat. This is a refresh: act on something only when it is yours to act on now.',
   ];
   return lines.join('\n');
+}
+
+export interface NeedsChange { id: string; kind: 'new' | 'reworded' | 'gone'; ask: string }
+
+/**
+ * What needs the user changed since the last refresh told the node (2026-11-02 org review: a lead
+ * repeated the same three asks at three refreshes with nothing changed). With no earlier note,
+ * every ask is new. Pure.
+ */
+export function needsChanges(now: Record<string, string>, told: Record<string, string> | undefined): NeedsChange[] {
+  const out: NeedsChange[] = [];
+  for (const [id, ask] of Object.entries(now)) {
+    if (!told || !(id in told)) out.push({ id, kind: 'new', ask });
+    else if (told[id] !== ask) out.push({ id, kind: 'reworded', ask });
+  }
+  for (const [id, ask] of Object.entries(told ?? {})) if (!(id in now)) out.push({ id, kind: 'gone', ask });
+  return out;
+}
+
+function needsLines(changes: readonly NeedsChange[], name: (id: string) => string): string[] {
+  if (!changes.length) return [];
+  const word = { new: 'new', reworded: 'reworded', gone: 'no longer needs him' } as const;
+  return [
+    'Needs you, changed since you last told him:',
+    ...changes.slice(0, 12).map((c) => `- ${name(c.id)}: ${word[c.kind]}${c.kind === 'gone' ? '' : `: "${c.ask}"`}`),
+    ...(changes.length > 12 ? [`- and ${changes.length - 12} more`] : []),
+  ];
 }
 
 const inFlight = new Set<string>();
@@ -99,7 +133,11 @@ export async function requestBriefRefresh(taskId: string, by: BriefRefreshRecord
     const target = pickDeliverySession(sessions);
     if (!target) return { sent: false, why: 'no_session' };
     const moved = decision.fresh.moved.length + decision.fresh.finished.length + decision.fresh.newAsks.length;
-    const record: BriefRefreshRecord = { at: new Date(now).toISOString(), by, moved };
+    const needs = briefNeedsAsks(owner, tasks);
+    const changes = needsChanges(needs, owner.brief_refresh?.told);
+    // What this note hands the node is what it has told him once the turn ends; a failed send keeps
+    // the earlier list, so the next note still names these changes.
+    const record: BriefRefreshRecord = { at: new Date(now).toISOString(), by, moved, told: needs };
     // Recorded first, under the row lock: two windows asking at once send one note, and a failed
     // send never repeats sooner than the gap.
     let claimed = false;
@@ -118,12 +156,13 @@ export async function requestBriefRefresh(taskId: string, by: BriefRefreshRecord
       await sendMessageToSession(target.claudeSessionId, buildWalnutMessage({
         kind: 'trigger',
         attrs: { from: 'Walnut: Brief refresh', note: 'the user is looking at you now' },
-        body: refreshBody(owner, decision.fresh, tasks, now),
+        body: refreshBody(owner, decision.fresh, tasks, now, changes),
       }), { source: BRIEF_REFRESH_SOURCE, taskId });
     } catch (err) {
       log.task.warn('brief refresh not delivered', { taskId, sessionId: target.claudeSessionId, error: err instanceof Error ? err.message : String(err) });
       // Kept, so the gap still holds; marked, so the page does not say it is updating.
-      await updateTaskRaw(taskId, (current) => (current.brief_refresh?.at === record.at ? { brief_refresh: { ...record, failed: true } } : null), { source: 'brief-refresh' }).catch(() => null);
+      await updateTaskRaw(taskId, (current) => (current.brief_refresh?.at === record.at
+        ? { brief_refresh: { ...record, failed: true, ...(owner.brief_refresh?.told ? { told: owner.brief_refresh.told } : { told: undefined }) } } : null), { source: 'brief-refresh' }).catch(() => null);
       return { sent: false, why: 'not_delivered', sessionId: target.claudeSessionId, moved };
     }
     log.task.info('brief refresh sent', { taskId, sessionId: target.claudeSessionId, by, moved });

@@ -32,6 +32,17 @@ const SECTION_LIST_MAX = 15;
  * as fact), what it is doing, what it waits on. Main's Needs you covers the whole org, each with
  * its VP; its Working and Waiting are its VPs and the work below Main.
  */
+/** Every task in the node's Needs you section now, with its ask (the same scope as the list below). */
+export function briefNeedsAsks(owner: Task, tasks: readonly Task[]): Record<string, string> {
+  const main = owner.org_role === 'main';
+  const org = main ? tasks.filter((t) => !t.plugin_only && t.id !== owner.id) : briefTeam(owner, tasks);
+  const out: Record<string, string> = {};
+  for (const t of org) {
+    if (briefSectionOf(t) === 'needs') out[t.id] = (t.user_status?.ask ?? 'needs the user').replace(/\s+/g, ' ').trim().slice(0, 200);
+  }
+  return out;
+}
+
 export function briefSectionLines(owner: Task, tasks: readonly Task[], now = Date.now()): Record<BriefSectionKey, string[]> {
   const flat = (v: string) => v.replace(/\s+/g, ' ').trim().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const ref = (t: { id: string; title: string }) => `<task-ref id="${t.id}" label="${flat(t.title).replace(/"/g, '&quot;')}"/>`;

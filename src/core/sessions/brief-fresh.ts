@@ -196,6 +196,9 @@ export interface BriefRefreshRecord {
   moved: number;
   /** The note could not be delivered: nothing is on its way. */
   failed?: boolean;
+  /** The asks of the user this note handed the node (task id -> the ask's words): the next
+   *  refresh restates only what changed since (brief-refresh.ts needsChanges). */
+  told?: Record<string, string>;
 }
 
 /** Whether the page shows the Brief as updating: a refresh asked after the letter, not long ago. */

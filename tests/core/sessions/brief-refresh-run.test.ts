@@ -61,7 +61,7 @@ describe('requestBriefRefresh', () => {
       seed(role, true)
       const r = await requestBriefRefresh('L', 'web', NOW)
       expect(r).toEqual({ sent: true, sessionId: 's-L', moved: 1 })
-      expect(tasks.get('L')!.brief_refresh).toEqual({ at: new Date(NOW).toISOString(), by: 'web', moved: 1 })
+      expect(tasks.get('L')!.brief_refresh).toEqual({ at: new Date(NOW).toISOString(), by: 'web', moved: 1, told: {} })
       expect(sends).toHaveLength(1)
       expect(sends[0]!.source).toBe(BRIEF_REFRESH_SOURCE)
       expect(sends[0]!.text).toContain('kind="trigger"')
@@ -93,6 +93,63 @@ describe('requestBriefRefresh', () => {
     const [a, b] = await Promise.all([requestBriefRefresh('L', 'web', NOW), requestBriefRefresh('L', 'phone', NOW)])
     expect([a.sent, b.sent].filter(Boolean)).toHaveLength(1)
     expect(sends).toHaveLength(1)
+  })
+})
+
+// 2026-11-02 org review: a lead repeated the same three asks at 01:36, 01:54 and 02:19 with
+// nothing changed, because every refresh told it to say "what needs him now".
+describe('a refresh restates only the Needs you items that changed', () => {
+  const other = (state: 'working' | 'waiting'): Task => ({
+    id: 'w2', title: 'Build the page', phase: state === 'working' ? 'IN_PROGRESS' : 'WAITING', status: 'in_progress', project: 'Marina', parent_task_id: 'L',
+    user_status: state === 'working' ? { state: 'working', now: 'Building' } : { state: 'waiting', kind: 'outside', waitingOn: 'The CI run' },
+  }) as Task
+  const look = (n: number) => requestBriefRefresh('L', 'web', NOW + n * (BRIEF_REFRESH_GAP_MS + 1))
+
+  it('new, then unchanged (agent-ack, no list), then reworded, then gone', async () => {
+    seed('lead', false)
+    const letter = LETTER.replace('### Working\n- None', '### Working\n- <task-ref id="w2" label="Build"/>: building.')
+    // Each look finds the Brief stale through w2 alone: written with w2 open, then w2 finished.
+    const stale = () => {
+      const owner = tasks.get('L')!
+      tasks.set('w2', other('working'))
+      tasks.set('L', { ...owner, brief: { text: letter, at: new Date(NOW).toISOString(), ...briefSnapshot(letter, owner, [...tasks.values()]) } } as Task)
+      tasks.set('w2', { ...other('working'), phase: 'COMPLETE', status: 'done', user_status: { state: 'done' } } as Task)
+    }
+    stale()
+    expect((await look(0)).sent).toBe(true)
+    expect(sends[0]!.text).toContain('Needs you, changed since you last told him:')
+    expect(sends[0]!.text).toContain('"Review the doc" (w1): new: "Review section 3"')
+    expect(tasks.get('L')!.brief_refresh?.told).toEqual({ w1: 'Review section 3' })
+
+    stale()
+    expect((await look(1)).sent).toBe(true)
+    expect(sends[1]!.text).not.toContain('Needs you, changed')
+    expect(sends[1]!.text).not.toContain('Review section 3')
+    expect(sends[1]!.text).toContain('do not repeat his Needs you list')
+    expect(sends[1]!.text).toContain('<walnut-turn status="agent-ack"/>')
+
+    stale()
+    tasks.set('w1', worker('Review sections 3 and 4'))
+    expect((await look(2)).sent).toBe(true)
+    expect(sends[2]!.text).toContain('(w1): reworded: "Review sections 3 and 4"')
+    expect(sends[2]!.text).toContain('only the Needs you changes above')
+
+    stale()
+    tasks.set('w1', worker())
+    expect((await look(3)).sent).toBe(true)
+    expect(sends[3]!.text).toContain('(w1): no longer needs him')
+    expect(tasks.get('L')!.brief_refresh?.told).toEqual({})
+  })
+
+  it('a note that never arrived keeps the earlier list, so the next one still names the change', async () => {
+    seed('lead', false)
+    const letterOwner = tasks.get('L')!
+    tasks.set('L', { ...letterOwner, brief_refresh: { at: new Date(NOW - 2 * BRIEF_REFRESH_GAP_MS).toISOString(), by: 'web', moved: 0, told: { w1: 'Review section 3' } } } as Task)
+    tasks.set('w1', worker('Review sections 3 and 4'))
+    const { needsChanges } = await import('../../../src/core/sessions/brief-refresh.js')
+    expect(needsChanges({ w1: 'Review sections 3 and 4' }, tasks.get('L')!.brief_refresh!.told)).toEqual([{ id: 'w1', kind: 'reworded', ask: 'Review sections 3 and 4' }])
+    expect(needsChanges({ w1: 'a' }, { w1: 'a' })).toEqual([])
+    expect(needsChanges({ w1: 'a' }, undefined)).toEqual([{ id: 'w1', kind: 'new', ask: 'a' }])
   })
 })
 
