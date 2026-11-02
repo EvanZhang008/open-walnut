@@ -21,10 +21,12 @@ const KEBAB = read('components/tasks/TaskKebabMenu.tsx');
 const QUICK = read('components/sessions/TaskQuickActions.tsx');
 const CSS = read('styles/globals.css');
 const DRAFT_MENU = read('components/sessions/DraftTaskMenu.tsx');
+const ROWS = read('components/tasks/TaskMenuRows.tsx');
 
 describe('task kebab menus stay lean and shared', () => {
   it('the session-panel kebab renders the shared action block, not its own copy', () => {
-    expect(QUICK).toContain('<TaskActionMenuItems');
+    expect(QUICK).toContain('<TaskMenuRows');
+    expect(ROWS).toContain('<TaskActionMenuItems');
     expect(QUICK).not.toContain('task-kebab-tier-options');
     expect(QUICK).not.toContain('task-kebab-priority');
     expect(QUICK).not.toContain('<DatePicker');
@@ -60,10 +62,9 @@ describe('task kebab menus stay lean and shared', () => {
     expect(block).not.toMatch(/>\s*Don't pin\s*</);
     expect(block).toMatch(/if \(isCurrent\) onUnpinTask\?\.\(\)/);
     expect(block).toMatch(/p\.value !== task\.priority \|\| litClickAccepts/);
-    const boardCall = KEBAB.slice(KEBAB.lastIndexOf('<TaskActionMenuItems'));
-    const boardProps = boardCall.slice(0, boardCall.indexOf('/>'));
+    // Both task menus render TaskMenuRows, which passes none of the draft props.
     for (const prop of ['litClickAccepts', 'showPriorityLabels', 'formatDate', 'tierHeading', 'walnutPick']) {
-      expect(boardProps).not.toContain(prop);
+      expect(ROWS).not.toContain(prop);
       expect(QUICK).not.toContain(prop);
     }
     // The draft menu is a popover now: no header trigger, no "edited" light.

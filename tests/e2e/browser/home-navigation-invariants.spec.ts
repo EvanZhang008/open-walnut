@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { isolateUiPrefs, selectProject } from './todo-panel-helpers';
 import { arrange, chooseViewOption, openHome, setShowCompleted } from './home-navigation-helpers';
 import { displayButton, setStatus } from './filter-bar-helpers';
+import { openKebabGroup } from './kebab-group-helpers';
 
 test.use({ viewport: { width: 1280, height: 840 }, deviceScaleFactor: 1 });
 test.setTimeout(90_000);
@@ -113,6 +114,7 @@ test('menu sorting keeps completed pins in their original slots', async ({ page,
   await expect(page.locator(`[data-drop-zone="${tierId}-drop-zone"] [data-task-id="${ids[1]}"]`)).toHaveCount(0, { timeout: 10_000 });
   await row.hover();
   await row.getByRole('button', { name: 'More actions', exact: true }).click();
+  await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'kebab-group-move');
   await page.locator('.task-kebab-item').filter({ hasText: 'Move up' }).click();
   // Compare only this test's own pins: parallel workers pin tasks on the same
   // fixture board, so the global list is not ours to pin exactly. Move up swaps

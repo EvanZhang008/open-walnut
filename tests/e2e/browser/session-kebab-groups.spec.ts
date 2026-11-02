@@ -2,12 +2,13 @@
  * The session ⋮ menu, grouped by object (2026-10-27, the user's pick of three
  * designs; it had grown to 27 rows). First level: the task's frequent rows (Task
  * detail, Status, Pin to, with the strip's Panels row on top), two task groups (Dates,
- * Move & team), three session groups (Views, with the Inbox tab first; Copy & open;
+ * Move & transfer), three session groups (Views, with the Inbox tab first; Copy & open;
  * Debug: Raw input & output and the debug snapshot), Restart and Terminate, then
- * Details (Created, Updated, Host). Each group opens its rows in place, like Status.
+ * Session info (Created, Updated, Host). 2026-11-02: the task half is TaskMenuRows, the
+ * same rows as the task list's menu (Snooze until and Watch first, Move & transfer, Team). Each group opens its rows in place, like Status.
  * 2026-10-30, the user: "why it is missing so many things": the Panels row, the task's
- * source row (now in Move & team) and the Created / Updated / Host rows (the Details
- * group) came back.
+ * source row (now in Move & transfer) and the Created / Updated / Host rows (the Session
+ * info group) came back.
  */
 import fs from 'node:fs/promises'
 import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
@@ -92,7 +93,7 @@ test('the first level holds the frequent rows and six groups; nothing else', asy
   const menu = await openMenu(page, panel)
   const rows = await firstLevel(menu)
   const at = (re: RegExp) => rows.findIndex((r) => re.test(r))
-  const order = [/^Panels/, /^Snooze until/, /^Watch$/, /^Task detail$/, /^Status: /, /^(Pin to|Pinned)/, /^Dates/, /^Move & team/, /^Session$/i, /^Views/, /^Copy & open/, /^Debug/, /^Restart/, /^Terminate/, /^Details/]
+  const order = [/^Panels/, /^Snooze until/, /^Watch$/, /^Details$/, /^Status: /, /^(Pin to|Pinned)/, /^Dates/, /^Move & transfer/, /^Team/, /^Session$/i, /^Views/, /^Copy & open/, /^Debug/, /^Restart/, /^Terminate/, /^Session info/]
   const seen = order.map(at)
   expect(seen.every((i) => i >= 0), `first level: ${rows.join(' | ')}`).toBe(true)
   expect([...seen].sort((a, b) => a - b), `order: ${rows.join(' | ')}`).toEqual(seen)

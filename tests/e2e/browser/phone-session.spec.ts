@@ -179,7 +179,7 @@ test('one bar: the session title, its status and its kebab are the top bar (C64)
   }
   // N12: the short phone list. No desktop-only rows, and it fits the screen.
   for (const id of ['locate', 'popout']) await expect(menu.getByTestId(`phone-row-${id}`)).toHaveCount(0)
-  await expect(menu.getByText('Task detail', { exact: true })).toBeVisible()
+  await expect(menu.getByText('Details', { exact: true })).toBeVisible()
   const menuText = await menu.innerText()
   for (const desktopOnly of ['Open in new tab', 'Open in VS Code', 'Copy dir', 'Panels', 'Web preview', 'Fork']) {
     expect(menuText, desktopOnly).not.toContain(desktopOnly)
@@ -512,7 +512,7 @@ test('nested: session, then its task detail; back twice peels them in order (C24
   await stubSession(page, { history: longTurnHistory(2) })
   await openByDeepLink(page)
   await topbar(page).getByRole('button', { name: 'More actions' }).click()
-  await page.locator('.task-kebab-menu').getByText('Task detail', { exact: true }).click()
+  await page.locator('.task-kebab-menu').getByText('Details', { exact: true }).click()
   await expect(page.locator('.task-detail-modal')).toBeVisible({ timeout: 10_000 })
   await page.goBack()
   await expect(page.locator('.task-detail-modal')).toHaveCount(0)

@@ -15,6 +15,7 @@
  */
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { openKebabGroup } from './kebab-group-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
@@ -102,9 +103,10 @@ test('no unread row, no unpin row, no priority, dates collapsed until clicked', 
 
   await expect(menu.getByText('Unread', { exact: false })).toHaveCount(0)
   await expect(menu.getByText('Session idle', { exact: true })).toHaveCount(0)
-  // The top row is an action (Start Session for a task without one, else Details),
-  // never a status readout.
-  await expect(menu.locator('.task-kebab-item').first()).toHaveText(/Start Session|Details/)
+  // The top row is an action, never a status readout: Snooze until (TaskMenuRows, the
+  // user 2026-11-02: "snooze until should be top"), then Watch.
+  await expect(menu.locator('.task-kebab-item').first()).toHaveText(/^Snooze until/)
+  await expect(menu.locator('.task-kebab-item').nth(1)).toHaveText(/^Watch$/)
   await expect(menu.getByText('Unpin', { exact: true })).toHaveCount(0)
   await expect(menu.locator('.task-kebab-priority')).toHaveCount(0)
 
@@ -116,7 +118,8 @@ test('no unread row, no unpin row, no priority, dates collapsed until clicked', 
   await expect(tiers.nth(1)).toHaveText('Satellite')
   await expect(tiers.nth(2)).toHaveText('Parked')
 
-  const toggles = menu.locator('.task-kebab-date-toggle')
+  // Start and Due live in the Dates group (TaskMenuRows), closed until clicked.
+  const toggles = (await openKebabGroup(menu, 'kebab-group-dates')).locator('.task-kebab-date-toggle')
   await expect(toggles).toHaveCount(2)
   await expect(toggles.nth(0)).toContainText('Start')
   await expect(toggles.nth(1)).toContainText('Due')
@@ -135,7 +138,7 @@ test('no unread row, no unpin row, no priority, dates collapsed until clicked', 
 
   // The collapsed row now carries the date, so the value is visible without expanding.
   const again = await openRowKebab(page, task)
-  await expect(again.locator('.task-kebab-date-toggle').nth(1)).toContainText('Due:')
+  await expect((await openKebabGroup(again, 'kebab-group-dates')).locator('.task-kebab-date-toggle').nth(1)).toContainText('Due:')
   await expect(again.locator('.dp-content')).toHaveCount(0)
 })
 

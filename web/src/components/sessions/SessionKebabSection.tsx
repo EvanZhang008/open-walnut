@@ -378,7 +378,7 @@ export function SessionKebabSection({
       {/* Details: the session's created / updated time and its host, read-only, at the
           foot of the menu where they always were; closed, the row says what it holds. */}
       <div className="task-kebab-divider" />
-      <KebabGroup label="Details" hint="created · updated · host" icon={DETAILS_ICON} testId="session-kebab-details">
+      <KebabGroup label="Session info" hint="created · updated · host" icon={DETAILS_ICON} testId="session-kebab-details">
         <div className="task-kebab-meta" data-testid="session-kebab-meta">
           {metaRows.map((row) => (
             <div key={row.key} className="task-kebab-meta-row" data-meta={row.key} title={row.title}>

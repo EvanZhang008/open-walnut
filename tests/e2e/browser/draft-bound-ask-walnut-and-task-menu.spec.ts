@@ -210,7 +210,7 @@ test('a bound draft\'s header ⋮ pins the REAL task without launching anything'
   // was seeded once at ▶; it must follow the task, not keep promising Walnut.
   await expect(draftProjectPill(panel)).toHaveText('Project: Walnut')
   await kebab.click()
-  // The project picker is a row of the menu's Move & team group.
+  // The project picker is a row of the menu's Move & transfer group.
   await openKebabGroup(page.locator('.task-kebab-menu'), 'kebab-group-move')
   await page.locator('.task-kebab-menu .task-kebab-project-current').click()
   await page.locator('.task-kebab-project-flyout .task-kebab-project-opt').filter({ hasText: /^\s*Ideas\s*$/ }).click()

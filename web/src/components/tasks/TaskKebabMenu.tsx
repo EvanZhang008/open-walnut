@@ -13,19 +13,11 @@ import * as ICONS from '../common/Icons';
 import { useFocusBarContextSafe } from '@/contexts/FocusBarContext';
 import { useProjectRegistry } from '@/hooks/useProjectRegistry';
 import { useShowPriority } from '@/hooks/useShowPriority';
-import { getIntegrationMeta, useIntegrations } from '@/hooks/useIntegrations';
-import { resolveTaskSessionId } from '@/utils/session-status';
 import { DatePicker, formatDateDisplay, formatStartDateDisplay } from '../common/DatePicker';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
-import { PluginFieldsSection } from './PluginFieldPicker';
-import { WorkspaceMenuSection } from '@/components/workspaces/WorkspaceMenuSection';
-import { QuoteInSessionItem } from './QuoteInSessionItem';
-import { TeamMenuItems } from './TeamMenuItems';
-import { TaskSyncMenuRows } from './TaskSyncMenuRows';
-import { WatchMenuItem } from './WatchToggle';
-import { TransferMenuItem } from '@/components/transfer/TransferMenuItem';
-import { MoveHostMenuItems } from '@/components/transfer/MoveHostMenuItems';
-import { SnoozeUntilEvent, TaskStatusMenuSection, WAIT_UNTIL_ICON } from './TaskStatusControl';
+import { SnoozeUntilEvent, WAIT_UNTIL_ICON } from './TaskStatusControl';
+import { TaskMenuRows } from './TaskMenuRows';
+import { AgentMemoryPanel } from '@/components/org/AgentMemoryPanel';
 import type { DraftTaskField } from '@/components/sessions/draft-column';
 
 type TaskListProjection = Task & {
@@ -529,9 +521,9 @@ export function MoveToProjectSection({ current, onMove, afterAction }: {
 }
 
 export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedTier, isDone, onExpandDetail, onClearFocus, onSetPriority, onPinTask, onUnpinTask, onSetTier, onStartSession, onSetDate, onSetStartDate, onUnparent, onMoveUp, onMoveDown, onUngroup, isGroupHidden, onUnhideGroup, onStartSelect, onMoveToProject, onDelete, onSetPhase }: TaskKebabMenuProps) {
-  const integrations = useIntegrations();
-  const sessionId = resolveTaskSessionId(task);
   const [open, setOpen] = useState(false);
+  // Main's, a lead's or a VP's Memory & instructions, opened from the menu.
+  const [memoryOpen, setMemoryOpen] = useState(false);
   /** Set only by the right-click path, which anchors the menu at the cursor. */
   const [cursorAnchor, setCursorAnchor] = useState<{ x: number; y: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -618,18 +610,6 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
     setOpen(!open);
   };
 
-  // Source badge info
-  const sourceMeta = task.source ? getIntegrationMeta(integrations, task.source) : null;
-  const badge = task.source === 'local' ? 'L' : (sourceMeta?.badge ?? task.source?.charAt(0).toUpperCase());
-  const integrationName = task.source === 'local' ? 'Local' : (sourceMeta?.name ?? task.source);
-  const badgeColor = sourceMeta?.badgeColor;
-  // has_synced is the server-precomputed `!!task.ext?.[task.source]` for the
-  // minimal list payload (ext is dropped there); fall back to it when ext isn't inlined.
-  const legacySynced = task.source === 'ms-todo' && Boolean(task.ms_todo_id);
-  const synced = task.source
-    && task.source !== 'local'
-    && (Boolean(task.ext?.[task.source]) || Boolean(task.has_synced) || legacySynced);
-
   // data-menu-open replaces a `:has(.task-kebab-menu)` CSS check that kept the ⋮
   // visible while its menu was open — the menu is portalled to <body> now, so it
   // is no longer a descendant for :has() to find.
@@ -660,263 +640,31 @@ export function TaskKebabMenu({ task, isFocused, isDetailOpen, isPinned, pinnedT
           // the task"). Kill pointerdown here so no menu interaction can arm dnd.
           onPointerDown={(e) => e.stopPropagation()}
         >
-          {/* Snooze until: the first row, a time or something happening (TaskSnoozeRow). */}
-          {onSetStartDate && (
-            <TaskSnoozeRow task={task} onSetStartDate={(d) => onSetStartDate(task.id, d)} afterAction={closeMenu} />
-          )}
-          {/* Watch — keep it on top of the task panel whatever its state (WatchToggle.tsx). */}
-          <WatchMenuItem task={task} afterAction={closeMenu} />
-
-          {/* Start Session — the kebab twin of the row's ▶. Same gate: a task that
-              already owns a session is opened by clicking its row, so a second
-              launch on the same task is never one click away. */}
-          {onStartSession && !isDone && !sessionId && (
-            <button
-              className="task-kebab-item"
-              onClick={(e) => {
-                e.stopPropagation();
-                onStartSession(task);
-                closeMenu();
-              }}
-            >
-              <span className="task-kebab-icon">▶︎</span>
-              <span>Start Session</span>
-            </button>
-          )}
-
-          {/* Details */}
-          <button
-            className={`task-kebab-item${isDetailOpen ? ' task-kebab-item-active' : ''}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              if (isDetailOpen) onClearFocus?.();
-              else onExpandDetail?.(task);
-              closeMenu();
-            }}
-          >
-            <span className="task-kebab-icon">{ICONS.ICON_INFO}</span>
-            <span>{isDetailOpen ? 'Close details' : 'Details'}</span>
-          </button>
-
-          {/* Quote in session — hand this task to the current session's composer as a
-              reference pill (never sends). Sits next to Details: both are "look at
-              this task", one for the human, one for the session. */}
-          <QuoteInSessionItem task={task} onDone={closeMenu} />
-
-          {/* Select — enter multi-select mode with this task picked, to group several together */}
-          {onStartSelect && (
-            <button
-              className="task-kebab-item"
-              onClick={(e) => {
-                e.stopPropagation();
-                onStartSelect(task.id);
-                closeMenu();
-              }}
-            >
-              <span className="task-kebab-icon">☑</span>
-              <span>Select…</span>
-            </button>
-          )}
-
-          {/* Move: the same task, its conversation and its own work, on another host */}
-          <MoveHostMenuItems task={task} afterAction={closeMenu} />
-
-          {/* Transfer: move the work to another engine or host (a new task takes it over) */}
-          <TransferMenuItem task={task} afterAction={closeMenu} />
-
-          {/* Team: adopt a worker (any task can lead), or leave this task's leader */}
-          <TeamMenuItems task={task} afterAction={closeMenu} />
-
-          {/* Sync: make a synced task local, or send a local one to its project's service */}
-          <TaskSyncMenuRows task={task} afterAction={closeMenu} />
-
-          {/* Move actions — hierarchy + order shortcuts (precise alternative to drag) */}
-          {((onUnparent && task.parent_task_id) || onMoveUp || onMoveDown) && (
-            <>
-              <div className="task-kebab-divider" />
-              {onUnparent && task.parent_task_id && (
-                <button
-                  className="task-kebab-item"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onUnparent(task.id);
-                    closeMenu();
-                  }}
-                >
-                  <span className="task-kebab-icon">←</span>
-                  <span>Move left</span>
-                </button>
-              )}
-              {onMoveUp && (
-                <button
-                  className="task-kebab-item"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onMoveUp(task.id);
-                    closeMenu();
-                  }}
-                >
-                  <span className="task-kebab-icon">↑</span>
-                  <span>Move up</span>
-                </button>
-              )}
-              {onMoveDown && (
-                <button className="task-kebab-item" onClick={event => { event.stopPropagation(); onMoveDown(task.id); closeMenu(); }}>
-                  <span className="task-kebab-icon">↓</span><span>Move down</span>
-                </button>
-              )}
-            </>
-          )}
-
-          {/* Remove from folder — the task falls back to the project in place */}
-          {onUngroup && task.group_id && (
-            <>
-              <div className="task-kebab-divider" />
-              <button
-                className="task-kebab-item"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onUngroup(task.id);
-                  closeMenu();
-                }}
-              >
-                <span className="task-kebab-icon">⑂</span>
-                <span>Remove from folder</span>
-              </button>
-            </>
-          )}
-
-          {/* Unhide group — restore a Focus-hidden group back into the pinned area.
-              Only shown when this task belongs to a currently-hidden group. */}
-          {onUnhideGroup && task.group_id && isGroupHidden && (
-            <button
-              className="task-kebab-item"
-              onClick={(e) => {
-                e.stopPropagation();
-                onUnhideGroup(task.group_id!);
-                closeMenu();
-              }}
-            >
-              <span className="task-kebab-icon">⊙</span>
-              <span>Unhide folder in Focus</span>
-            </button>
-          )}
-
-          {/* Status: one collapsed row, the four phases on click */}
-          <TaskStatusMenuSection task={task} onSetPhase={onSetPhase} afterAction={closeMenu} />
-
-          {/* Pin / Tier · Priority · Date — shared with the multi-select batch dropdown */}
-          <TaskActionMenuItems
+          {/* The task's rows: one definition for every task menu (TaskMenuRows). */}
+          <TaskMenuRows
             task={task}
             isPinned={isPinned}
             pinnedTier={pinnedTier}
             isDone={isDone}
-            onSetPriority={onSetPriority ? (p) => onSetPriority(task.id, p) : undefined}
+            close={closeMenu}
+            onSetStartDate={onSetStartDate ? (d) => onSetStartDate(task.id, d) : undefined}
+            onSetDate={onSetDate ? (d) => onSetDate(task.id, d) : undefined}
+            onSetPhase={onSetPhase}
+            onSetPriority={onSetPriority ? (pr) => onSetPriority(task.id, pr) : undefined}
             onPinTask={onPinTask ? () => onPinTask(task.id) : undefined}
             onUnpinTask={onUnpinTask ? () => onUnpinTask(task.id) : undefined}
             onSetTier={onSetTier ? (t) => onSetTier(task.id, t) : undefined}
-            onSetDate={onSetDate ? (d) => onSetDate(task.id, d) : undefined}
-            onSetStartDate={onSetStartDate ? (d) => onSetStartDate(task.id, d) : undefined}
-            afterAction={closeMenu}
-            startLabel="Start"
+            onMoveToProject={onMoveToProject ? (pr) => onMoveToProject(task.id, pr) : undefined}
+            detail={{ open: isDetailOpen, onToggle: () => (isDetailOpen ? onClearFocus?.() : onExpandDetail?.(task)) }}
+            onOpenMemory={() => setMemoryOpen(true)}
+            onStartSession={onStartSession && !isDone ? () => onStartSession(task) : undefined}
+            list={{ onStartSelect, onUnparent, onMoveUp, onMoveDown, onUngroup, isGroupHidden, onUnhideGroup }}
+            onDelete={onDelete ? () => onDelete(task.id) : undefined}
           />
-
-          {/* Move to project — precise alternative to dragging across group headers */}
-          {onMoveToProject && (
-            <MoveToProjectSection
-              current={task.project || ''}
-              onMove={(p) => onMoveToProject(task.id, p)}
-              afterAction={closeMenu}
-            />
-          )}
-
-          {/* Plugin-declared task fields (manifest taskFields) — e.g. a
-              tracker's Sprint. Generic: one picker row per declared field,
-              options fetched from the plugin when the flyout opens. */}
-          <PluginFieldsSection task={task} afterAction={closeMenu} />
-
-          {/* The task's isolated workspace: details, Retry, Remove workspace… */}
-          <WorkspaceMenuSection task={task} afterAction={closeMenu} />
-
-          {/* Source badge — combined with external link if available */}
-          {task.source && (() => {
-            const statusText = task.sync_error ? ' (sync error)' : synced ? '' : task.source !== 'local' ? ' (unsynced)' : '';
-            const badgeEl = (
-              <span
-                className="task-source-badge"
-                style={!task.sync_error && badgeColor ? { background: badgeColor, color: 'white' } : task.source === 'local' ? { background: '#8E8E93', color: 'white' } : undefined}
-              >
-                {task.sync_error ? '!' : badge}
-              </span>
-            );
-            if (task.external_url) {
-              return (
-                <>
-                  <div className="task-kebab-divider" />
-                  <a
-                    className="task-kebab-item task-kebab-info"
-                    href={task.external_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={(e) => { e.stopPropagation(); closeMenu(); }}
-                  >
-                    {badgeEl}
-                    <span>{integrationName}{statusText}</span>
-                    <span className="task-kebab-external-arrow">↗</span>
-                  </a>
-                </>
-              );
-            }
-            return (
-              <>
-                <div className="task-kebab-divider" />
-                <div className="task-kebab-item task-kebab-info">
-                  {badgeEl}
-                  <span>{integrationName}{statusText}</span>
-                </div>
-              </>
-            );
-          })()}
-          {/* External link without source */}
-          {!task.source && task.external_url && (() => {
-            const label = 'external';
-            return (
-              <>
-                <div className="task-kebab-divider" />
-                <a
-                  className="task-kebab-item"
-                  href={task.external_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={(e) => { e.stopPropagation(); closeMenu(); }}
-                >
-                  <span className="task-kebab-icon">↗</span>
-                  <span>Open in {label}</span>
-                </a>
-              </>
-            );
-          })()}
-
-          {/* Delete */}
-          {onDelete && (
-            <>
-              <div className="task-kebab-divider" />
-              <button
-                className="task-kebab-item task-kebab-item-danger"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDelete(task.id);
-                  closeMenu();
-                }}
-              >
-                <span className="task-kebab-icon">{ICONS.ICON_TRASH}</span>
-                <span>Delete</span>
-              </button>
-            </>
-          )}
         </div>,
         document.body,
       )}
+      {memoryOpen && <AgentMemoryPanel task={task} onClose={() => setMemoryOpen(false)} />}
     </div>
   );
 }

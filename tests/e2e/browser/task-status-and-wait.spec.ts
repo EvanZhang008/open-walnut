@@ -34,6 +34,7 @@ import { endRunningTurn, interruptTurn, presetPanelDesign, setStatusSectionOpen,
 import { composerTextarea, openPanels, openPlusMenu } from './engine-settings-popover-helpers'
 import { DEFAULT_WAIT_HOURS } from '../../../src/core/types'
 import { TRIGGER_ACTION_LABEL } from '../../../web/src/components/sessions/trigger-picker-model'
+import { openKebabGroup } from './kebab-group-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const SHOTS = '/tmp/waiting-status/shots'
@@ -141,14 +142,15 @@ test('the task menu shows and sets the status; Snooze until is its first row', a
 
   let menu = await openRowKebab(page, task)
   // Collapsed by default: one row that says the status, no options until clicked.
-  // It is not a date row: the menu has exactly three (Snooze until, Start, Due).
-  await expect(menu.locator('.task-kebab-date-toggle')).toHaveCount(3)
+  // It is not a date row: the menu's first level has one (Snooze until); Start and Due wait in Dates.
+  await expect(menu.locator('.task-kebab-date-toggle')).toHaveCount(1)
   await expect(toggleOf(menu, 'task-status-row')).toHaveText(/^Status: To Do/)
   await expect(menu.getByTestId('task-status-row').getByRole('radio')).toHaveCount(0)
   // Snooze until is the menu's first row (2026-11-02, the user: "snooze until should be top").
   await expect(toggleOf(menu, 'task-snooze-row')).toHaveText(/^Snooze until$/)
   await expect(menu.locator('> *').first()).toHaveAttribute('data-testid', 'task-snooze-row')
-  await expect(menu.getByTestId('task-start-row').locator('.task-kebab-date-label')).toHaveText(/^Start$/)
+  await expect((await openKebabGroup(menu, 'kebab-group-dates')).getByTestId('task-start-row').locator('.task-kebab-date-label')).toHaveText(/^Start$/)
+  await menu.getByTestId('kebab-group-dates').locator('.task-kebab-group-toggle').click()
   await expect(menu.getByTestId('task-wait-until')).toHaveCount(0)
   await expect(menu.getByTestId('task-status-until')).toHaveCount(0)
   await shot(menu, 'menu-collapsed', browserName)

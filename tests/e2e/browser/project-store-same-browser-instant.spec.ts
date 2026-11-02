@@ -24,6 +24,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs, openListProject, openListProjectMenu, openProjectDetails, presetPanelView } from './todo-panel-helpers'
 import { navigateToTasksPage } from './draft-surface-helpers'
+import { openKebabGroup } from './kebab-group-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
@@ -134,6 +135,7 @@ async function openProjectPicker(page: Page, taskId: string): Promise<Locator> {
   await row.getByRole('button', { name: 'More actions' }).click()
   const menu = page.locator('.task-kebab-menu:visible').last()
   await expect(menu).toBeVisible({ timeout: 5_000 })
+  await openKebabGroup(menu, 'kebab-group-move')
   await menu.locator('.task-kebab-project-current').click()
   const flyout = page.locator('.task-kebab-project-flyout')
   await expect(flyout).toBeVisible({ timeout: 5_000 })

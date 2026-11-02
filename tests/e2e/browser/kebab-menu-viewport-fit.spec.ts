@@ -140,14 +140,15 @@ test('the session kebab fits the viewport and scrolls when the window is short',
 
   // 1. It IS the tall two-section menu (guards against the test passing because
   //    a short single-section menu rendered instead).
-  await expect(menu.getByText('Task detail', { exact: true })).toHaveCount(1)
+  await expect(menu.getByText('Details', { exact: true })).toHaveCount(1)
   // Priority is hidden by default (Settings → Tasks → Show task priority), so the
   // marker for the task half of the menu is its Dates group.
   await expect(menu.getByTestId('kebab-group-dates')).toBeVisible()
 
   // 2. Every group open: the tallest this menu gets. It must still fit and scroll.
   await openAllGroups(menu)
-  await expect(menu.locator('.task-kebab-date-toggle')).toHaveCount(2)
+  // Snooze until, then Start and Due in the open Dates group.
+  await expect(menu.locator('.task-kebab-date-toggle')).toHaveCount(3)
   const m = await assertFitsViewport(page, menu, 'short window, every group open')
   await assertMenuOnTop(page, menu, 'short window, every group open')
 
@@ -255,7 +256,7 @@ test('the kebab containing an inline calendar still fits the viewport', async ({
   // of the menu's height); open BOTH so the menu is as tall as it can get, then
   // prove it still fits. The menu re-measures when a calendar appears.
   await expect(kebab.locator('.dp-content')).toHaveCount(0)
-  const toggles = kebab.locator('.task-kebab-date-toggle')
+  const toggles = (await openKebabGroup(kebab, 'kebab-group-dates')).locator('.task-kebab-date-toggle')
   await expect(toggles).toHaveCount(2)
   await toggles.nth(0).click()
   await toggles.nth(1).click()

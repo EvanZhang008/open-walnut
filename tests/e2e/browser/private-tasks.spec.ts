@@ -26,6 +26,7 @@ import { createTaskForLater } from './draft-outcome-helpers'
 import { calendarEmptySlotPoint } from './calendar-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { openPluginDetail } from './apps-store-helpers'
+import { openKebabGroup } from './kebab-group-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const SERVICE = 'plugin-a'
@@ -92,6 +93,8 @@ async function openRowMenu(page: Page, id: string): Promise<Locator> {
   await row.getByRole('button', { name: 'More actions' }).click()
   const menu = page.locator('.task-kebab-menu:visible')
   await expect(menu).toBeVisible()
+  // The Sync row sits under Move & transfer (TaskMenuRows).
+  await openKebabGroup(menu, 'kebab-group-move')
   return menu
 }
 

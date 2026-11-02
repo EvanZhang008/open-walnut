@@ -6,30 +6,20 @@
  * Settings shows it) are consolidated into the kebab dropdown.
  */
 
-import { useState, useEffect, useRef, useCallback, type ReactNode, type CSSProperties } from 'react';
+import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { Task, TaskPhase, TaskPriority } from '@open-walnut/core';
-import { fetchTask, updateTask } from '@/api/tasks';
+import { deleteTask, fetchTask, updateTask } from '@/api/tasks';
 import { createPhaseWriter } from './task-phase-write';
 import { useEvent } from '@/hooks/useWebSocket';
 import * as ICONS from '@/components/common/Icons';
 import { taskCircleClass } from '@/utils/session-status';
 import type { FocusTier } from '@/api/focus';
-import { getIntegrationMeta, useIntegrations } from '@/hooks/useIntegrations';
 import { useMenuPlacement, menuPlacementStyle } from '@/hooks/useMenuPlacement';
 import { keepNativeContextMenu } from '@/utils/context-menu';
 import { useTasksContextSafe } from '@/contexts/TasksContext';
-import { MoveToProjectSection, TaskActionMenuItems, TaskSnoozeRow } from '@/components/tasks/TaskKebabMenu';
-import { TeamMenuItems } from '@/components/tasks/TeamMenuItems';
-import { TaskSyncMenuRows } from '@/components/tasks/TaskSyncMenuRows';
-import { TransferMenuItem } from '@/components/transfer/TransferMenuItem';
-import { MoveHostMenuItems } from '@/components/transfer/MoveHostMenuItems';
-import { WorkspaceMenuSection } from '@/components/workspaces/WorkspaceMenuSection';
-import { TaskStatusMenuSection } from '@/components/tasks/TaskStatusControl';
-import { WatchMenuItem } from '@/components/tasks/WatchToggle';
-import { AgentMemoryPanel, hasMemoryAndInstructions } from '@/components/org/AgentMemoryPanel';
-import { datesHint } from './kebab-dates-hint';
-import { KebabGroup } from './KebabGroup';
+import { AgentMemoryPanel } from '@/components/org/AgentMemoryPanel';
+import { TaskMenuRows } from '@/components/tasks/TaskMenuRows';
 
 /* ── Phase constants ─────────────────────────────────────────────── */
 
@@ -102,7 +92,6 @@ interface TaskQuickActionsProps {
 }
 
 export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedTier, onPinTask, onUnpinTask, onSetTier, compact, slot = 'all', phoneMenu = false, extraSection, leadingSection, onOpenTaskDetail, contextMenuScope, onCompleted }: TaskQuickActionsProps) {
-  const integrations = useIntegrations();
   const [task, setTask] = useState<Task | null>(externalTask ?? null);
   // Writes go through the shared task store when it carries this row: the
   // optimistic change then reaches the board, the detail pane and the parent
@@ -321,6 +310,14 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
     closeKebab();
   }, [task, closeKebab, storeFor]);
 
+  // Delete: the store's path when it carries the row (it shows a refusal, a live session's
+  // 409 included), else a plain DELETE, so a menu off the board deletes as the board's does.
+  const handleDelete = useCallback((id: string) => {
+    const shared = storeFor(id);
+    if (shared) { void shared.deleteTask(id); return; }
+    deleteTask(id).catch((err) => store?.showOperationError(`Could not delete the task: ${String(err)}`));
+  }, [storeFor, store]);
+
   const handleKebabToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
     setCursorAnchor(null);   // button path anchors to the button, not a cursor
@@ -386,93 +383,30 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
               {(task || extraSection) && <div className="task-kebab-divider" />}
             </>
           )}
-          {task && (<>
-          {/* Snooze until: the task's first row, a time or something happening. */}
-          <TaskSnoozeRow task={task} onSetStartDate={handleSetStartDate} afterAction={closeKebab} />
-          {/* Watch: keep it at the top of the task panel, as the board's row menu does. */}
-          <WatchMenuItem task={task} afterAction={closeKebab} />
-
-          {/* Task detail — opens the same full-screen modal as the home task panel */}
-          {onOpenTaskDetail && (
-            <>
-              <button
-                className="task-kebab-item"
-                onClick={(e) => { e.stopPropagation(); onOpenTaskDetail(task.id); closeKebab(); }}
-              >
-                <span className="task-kebab-icon">{ICONS.ICON_INFO}</span>
-                <span>Task detail</span>
-              </button>
-            </>
-          )}
-          {hasMemoryAndInstructions(task) && (
-            <button
-              className="task-kebab-item"
-              data-testid="kebab-memory-instructions"
-              onClick={(e) => { e.stopPropagation(); closeKebab(); setMemoryOpen(true); }}
-            >
-              <span className="task-kebab-icon">{ICONS.ICON_NOTE}</span>
-              <span>Memory &amp; instructions</span>
-            </button>
-          )}
-
-          {/* Status: the same collapsed row as the board's task kebab. */}
-          <TaskStatusMenuSection
-            task={task}
-            onSetPhase={(_id, phase) => handlePhaseChange(phase)}
-            onSetWaitUntil={handleSetWaitUntil}
-            afterAction={closeKebab}
-          />
-
-          {!phoneMenu && (<>
-          {/* Pin / Tier · Priority: the SAME rows as the board's task kebab (one
-              definition, TaskKebabMenu.TaskActionMenuItems). The dates, the task's
-              place and its team are grouped below (the menu's groups, KebabGroup). */}
-          <TaskActionMenuItems
-            task={task}
-            part="pin"
-            isPinned={Boolean(isPinned)}
-            pinnedTier={pinnedTier}
-            isDone={isDone}
-            onSetPriority={(p) => handleSetPriority(p as TaskPriority)}
-            onPinTask={onPinTask ? () => onPinTask(task.id) : undefined}
-            onUnpinTask={onUnpinTask ? () => onUnpinTask(task.id) : undefined}
-            onSetTier={onSetTier ? (t) => onSetTier(task.id, t) : undefined}
-            afterAction={closeKebab}
-          />
-
-          <div className="task-kebab-divider" />
-          <KebabGroup label="Dates" hint={datesHint(task)} icon={ICONS.ICON_CALENDAR} testId="kebab-group-dates">
-            <TaskActionMenuItems
+          {/* The task's rows: one definition for every task menu (TaskMenuRows). Only the
+              surface's own controls (above) and the Session group (below) are this menu's. */}
+          {task && (
+            <TaskMenuRows
               task={task}
-              part="dates"
               isPinned={Boolean(isPinned)}
               pinnedTier={pinnedTier}
               isDone={isDone}
-              onSetDate={handleSetDate}
+              close={closeKebab}
+              phoneMenu={phoneMenu}
               onSetStartDate={handleSetStartDate}
-              afterAction={closeKebab}
-              startLabel="Start"
+              onSetDate={handleSetDate}
+              onSetPhase={(_id, phase) => handlePhaseChange(phase)}
+              onSetWaitUntil={handleSetWaitUntil}
+              onSetPriority={(pr) => handleSetPriority(pr as TaskPriority)}
+              onPinTask={onPinTask ? () => onPinTask(task.id) : undefined}
+              onUnpinTask={onUnpinTask ? () => onUnpinTask(task.id) : undefined}
+              onSetTier={onSetTier ? (t) => onSetTier(task.id, t) : undefined}
+              onMoveToProject={handleMoveToProject}
+              detail={onOpenTaskDetail ? { onToggle: () => onOpenTaskDetail(task.id) } : undefined}
+              onOpenMemory={() => setMemoryOpen(true)}
+              onDelete={() => handleDelete(task.id)}
             />
-          </KebabGroup>
-
-          {/* Where the task lives: project, engine and host, team, workspace, and the
-              synced item it mirrors. */}
-          <KebabGroup label="Move & team" hint="project · host · team" icon={ICONS.ICON_FOLDER_OUTLINE} testId="kebab-group-move">
-            <MoveToProjectSection current={task.project || ''} onMove={handleMoveToProject} afterAction={closeKebab} />
-            <MoveHostMenuItems task={task} afterAction={closeKebab} />
-            <TransferMenuItem task={task} afterAction={closeKebab} />
-            <TeamMenuItems task={task} afterAction={closeKebab} />
-            <WorkspaceMenuSection task={task} afterAction={closeKebab} />
-            <TaskSourceRow task={task} integrations={integrations} afterAction={closeKebab} />
-          </KebabGroup>
-
-          {/* A sync that failed or has not happened yet needs to be seen, so it stays out
-              of the group. A local task, or one in sync, says nothing here. */}
-          <TaskSyncWarning task={task} integrations={integrations} />
-          {/* Sync: make a synced task local, or send a local one to its project's service. */}
-          <TaskSyncMenuRows task={task} afterAction={closeKebab} />
-          </>)}
-          </>)}
+          )}
 
           {/* Session section — appended below the task actions, or shown alone
               for a task-less session. */}
@@ -486,71 +420,6 @@ export function TaskQuickActions({ taskId, task: externalTask, isPinned, pinnedT
         document.body,
       )}
       {memoryOpen && task && <AgentMemoryPanel task={task} onClose={() => setMemoryOpen(false)} />}
-    </div>
-  );
-}
-
-type IntegrationList = ReturnType<typeof useIntegrations>;
-
-function sourceFacts(task: Task, integrations: IntegrationList) {
-  const sourceMeta = task.source ? getIntegrationMeta(integrations, task.source) : undefined;
-  const local = task.source === 'local';
-  const synced = !!task.source && !local && (!!task.ext?.[task.source] || !!((task as unknown as Record<string, unknown>)[({ 'ms-todo': 'ms_todo_id' } as Record<string, string>)[task.source] ?? '']));
-  return {
-    local,
-    badge: local ? 'L' : (sourceMeta?.badge ?? task.source?.charAt(0).toUpperCase()),
-    name: local ? 'Local' : (sourceMeta?.name ?? task.source ?? 'external'),
-    badgeColor: sourceMeta?.badgeColor,
-    status: task.sync_error ? 'sync error' : synced || local || !task.source ? '' : 'unsynced',
-  };
-}
-
-/** The source badge's colours: the integration's own, grey for a local task, none on a sync error. */
-function badgeStyle(task: Task, badgeColor: string | undefined): CSSProperties | undefined {
-  if (task.sync_error) return undefined;
-  if (badgeColor) return { background: badgeColor, color: 'white' };
-  return task.source === 'local' ? { background: '#8E8E93', color: 'white' } : undefined;
-}
-
-/** Where the task comes from, inside Move & team: "Open in <service> ↗" when it mirrors
- *  a synced item with a link, else the source's name ("Local", the integration's). */
-function TaskSourceRow({ task, integrations, afterAction }: { task: Task; integrations: IntegrationList; afterAction: () => void }) {
-  if (!task.source && !task.external_url) return null;
-  const f = sourceFacts(task, integrations);
-  if (!task.external_url) {
-    return (
-      <div className="task-kebab-item task-kebab-info" data-testid="kebab-source-row">
-        <span className="task-source-badge" style={badgeStyle(task, f.badgeColor)}>{task.sync_error ? '!' : f.badge}</span>
-        <span>{f.name}{f.status ? ` (${f.status})` : ''}</span>
-      </div>
-    );
-  }
-  return (
-    <a
-      className="task-kebab-item task-kebab-info"
-      href={task.external_url}
-      target="_blank"
-      rel="noopener noreferrer"
-      data-testid="kebab-source-link"
-      onClick={(e) => { e.stopPropagation(); afterAction(); }}
-    >
-      {task.source && (
-        <span className="task-source-badge" style={badgeStyle(task, f.badgeColor)}>{f.badge}</span>
-      )}
-      <span>Open in {f.name}</span>
-      <span className="task-kebab-external-arrow">↗</span>
-    </a>
-  );
-}
-
-/** The one source fact that earns a first-level row: the sync is broken or pending. */
-function TaskSyncWarning({ task, integrations }: { task: Task; integrations: IntegrationList }) {
-  const f = sourceFacts(task, integrations);
-  if (!f.status) return null;
-  return (
-    <div className="task-kebab-item task-kebab-info" data-testid="kebab-sync-warning">
-      <span className="task-source-badge" style={badgeStyle(task, f.badgeColor)}>{task.sync_error ? '!' : f.badge}</span>
-      <span>{f.name} ({f.status})</span>
     </div>
   );
 }

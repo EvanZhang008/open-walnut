@@ -20,8 +20,9 @@
  */
 import { test, expect, type Page } from '@playwright/test'
 import { showEverything } from './todo-panel-helpers'
+import { openKebabGroup } from './kebab-group-helpers'
 
-const API = 'http://localhost:3457'
+const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 
 // Serial for the same reason as task-multi-select-batch.spec.ts: these tests
 // mutate the one shared fixture task list.
@@ -54,6 +55,7 @@ function row(page: Page, title: string) {
  *  The option list is a PORTALLED flyout on <body>, not a child of the menu. */
 async function pickProject(page: Page, optionName: string) {
   const menu = page.locator('.task-kebab-menu:visible')
+  await openKebabGroup(menu, 'kebab-group-move')
   await menu.locator('.task-kebab-project-current').click()
   const list = page.locator('.task-kebab-project-flyout')
   await expect(list).toBeVisible()
@@ -81,7 +83,8 @@ test('the row kebab moves a task to another project', async ({ page }) => {
   const menu = page.locator('.task-kebab-menu:visible')
   await expect(menu).toBeVisible()
 
-  // The Project row exists and reflects the CURRENT project.
+  // The Project row exists, under Move & transfer, and reflects the CURRENT project.
+  await openKebabGroup(menu, 'kebab-group-move')
   const currentBtn = menu.locator('.task-kebab-project-current')
   await expect(currentBtn).toBeVisible()
   await expect(currentBtn).toContainText('Marina')

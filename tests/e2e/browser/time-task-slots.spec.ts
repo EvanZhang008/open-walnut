@@ -222,7 +222,7 @@ test('a session\'s time is a fact in its menu, and no chip on the header row by 
   await expect(fact).toHaveAttribute('title', /Agent: 3h 02m total, 1h 02m today, 3h 02m in 7 days/)
   const [rowBox, menuBox, detailBox] = await Promise.all([
     row.boundingBox(), menu.boundingBox(),
-    menu.locator('.task-kebab-item').filter({ hasText: /^Task detail$/ }).boundingBox(),
+    menu.locator('.task-kebab-item').filter({ hasText: /^Details$/ }).boundingBox(),
   ])
   expect(rowBox!.y).toBeLessThan(detailBox!.y)
   expect(rowBox!.y - menuBox!.y).toBeLessThan(120)

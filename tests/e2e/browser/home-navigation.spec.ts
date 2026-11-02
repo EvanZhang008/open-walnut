@@ -4,6 +4,7 @@ import { presetPanelDesign } from './status-section-helpers';
 import { openChatOnLoad } from './draft-helpers';
 import { activeView, chooseViewOption, closeViewMenu, homeToolbar, openHome, openViewMenu } from './home-navigation-helpers';
 import { addFilter, chooseDisplayOption, closeFilterMenu, displayButton, filterChip, openViewsPage, removeFilterChip } from './filter-bar-helpers';
+import { openKebabGroup } from './kebab-group-helpers';
 
 const SHOTS = '/tmp/walnut-home-navigation';
 test.use({ viewport: { width: 1280, height: 840 }, deviceScaleFactor: 1 });
@@ -700,6 +701,7 @@ test('each project sorts its own tasks from its right-click menu, newest update 
   const rowB1 = bucket(projectB).locator(`.todo-panel-item[data-task-id="${b1}"]`);
   await rowB1.hover();
   await rowB1.getByRole('button', { name: 'More actions', exact: true }).click();
+  await openKebabGroup(page.locator('.task-kebab-menu:visible'), 'kebab-group-move');
   await page.locator('.task-kebab-item').filter({ hasText: 'Move up' }).click();
   await expect.poll(orderB).toEqual([b1, b2]);
   await expectSort(projectB, 'Manual order');
