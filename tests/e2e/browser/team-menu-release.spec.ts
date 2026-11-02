@@ -24,6 +24,7 @@
 import { test, expect, type Locator, type Page, type Response } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { homeColumns, loadHome, seedColumns, setPanelMode } from './draft-helpers'
+import { expectHeaderLabel, openHeaderLabels } from './session-header-labels-helpers'
 
 const KEYS = ['a', 'b', 'c'] as const
 type Key = (typeof KEYS)[number]
@@ -120,8 +121,8 @@ test('the Team row is collapsed, expands on click, and releases a worker', async
   const finished = await t.mk(`Finished worker ${t.stamp}`)
   await api('POST', `/api/tasks/${finished}/complete`)
   await openHomeWithColumns(page, t.k)
-  const pill = col(page, t.k).locator('[data-testid="leader-pill"]').first()
-  await expect(pill).toHaveText('Leader · 2', { timeout: 20_000 })
+  // The header's Leader pill is one of its folded labels (SessionHeaderLabels.tsx).
+  await expectHeaderLabel(col(page, t.k), 'Leader · 2')
 
   // 1. Collapsed: one row that says where the task stands; nothing else shows.
   let m = await openKebab(page, t.k)
@@ -167,7 +168,7 @@ test('the Team row is collapsed, expands on click, and releases a worker', async
   await expect(flyout(page)).toHaveCount(0)
   await expect(menu(page)).toHaveCount(0)
   await expect.poll(() => parentOf(waiting)).toBe('')
-  await expect(pill).toHaveText('Leader · 1')
+  await expectHeaderLabel(col(page, t.k), 'Leader · 1')
   // The others stay in the team.
   expect(await parentOf(cjk)).toBe(t.leader)
   expect(await parentOf(finished)).toBe(t.leader)
@@ -221,7 +222,7 @@ test('the Team row is collapsed, expands on click, and releases a worker', async
 test('a big team gets a filter, and Enter releases the highlighted worker', async ({ page, browserName }, info) => {
   const t = await setup(page, browserName, 12)
   await openHomeWithColumns(page, t.k)
-  await expect(col(page, t.k).locator('[data-testid="leader-pill"]').first()).toHaveText('Leader · 12', { timeout: 20_000 })
+  await expectHeaderLabel(col(page, t.k), 'Leader · 12')
 
   const m = await openKebab(page, t.k)
   await expect(m.getByTestId('kebab-team-toggle')).toContainText('Team: Leader · 12')
@@ -239,7 +240,7 @@ test('a big team gets a filter, and Enter releases the highlighted worker', asyn
   await filter.press('Enter')
   await expect(flyout(page)).toHaveCount(0)
   await expect.poll(() => parentOf(t.ids[6])).toBe('')
-  await expect(col(page, t.k).locator('[data-testid="leader-pill"]').first()).toHaveText('Leader · 11')
+  await expectHeaderLabel(col(page, t.k), 'Leader · 11')
   for (const id of t.ids.filter((_, i) => i !== 6)) expect(await parentOf(id)).toBe(t.leader)
 
   expect(t.failed, 'no API request failed').toEqual([])
@@ -254,8 +255,9 @@ test('the Leader pill lists the open workers, and a row unlink icon releases one
   const finished = await t.mk(`Unlink finished worker ${t.stamp}`)
   await api('POST', `/api/tasks/${finished}/complete`)
   await openHomeWithColumns(page, t.k)
-  const pill = col(page, t.k).locator('[data-testid="leader-pill"]').first()
-  await expect(pill).toHaveText('Leader · 2', { timeout: 20_000 })
+  await expectHeaderLabel(col(page, t.k), 'Leader · 2')
+  const pill = (await openHeaderLabels(col(page, t.k))).locator('[data-testid="leader-pill"]')
+  await expect(pill).toHaveText('Leader · 2')
 
   await pill.click()
   const pillFlyout = page.getByTestId('leader-subtasks-flyout')

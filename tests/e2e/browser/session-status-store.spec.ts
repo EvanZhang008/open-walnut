@@ -3,6 +3,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture, installBrowserAudit } from './codex-test-audit'
 import { openChatOnLoad, openDraftOnCwd } from './draft-helpers'
 import { revealInTasksTable } from './tasks-table-helpers'
+import { expectPanelRunning } from './session-header-labels-helpers'
 
 const SCREENSHOT_DIR = '/tmp/session-status-store'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -282,7 +283,8 @@ test('rejects delayed REST N after WS N+1 across every desktop status surface', 
   ).toBe('running')
   const running = await statusFor(page, sessionId)
   expect(running.statusRevision).toBeGreaterThan(baseline.statusRevision)
-  await expect(panel.locator('.session-panel-badge', { hasText: 'Running' })).toHaveCount(1)
+  // The header has no status badge (2026-11-02): a running panel offers Stop.
+  await expectPanelRunning(panel, true)
   await expectRunningTool(panel)
 
   releaseStale()
@@ -292,7 +294,8 @@ test('rejects delayed REST N after WS N+1 across every desktop status surface', 
     processStatus: 'running',
     revision: running.statusRevision,
   })
-  await expect(panel.locator('.session-panel-badge', { hasText: 'Running' })).toHaveCount(1)
+  // The header has no status badge (2026-11-02): a running panel offers Stop.
+  await expectPanelRunning(panel, true)
   await expect(dock.locator('.dock-task-phase-badge'))
     .toHaveClass(/dock-task-phase-streaming/)
   await expectRunningTool(panel)
@@ -325,13 +328,11 @@ test('rejects delayed REST N after WS N+1 across every desktop status surface', 
   await page.getByRole('link', { name: 'Home', exact: true }).click()
   await expect(page).toHaveURL(/\/$/)
   const restoredPanel = page.locator(`.session-panel[data-session-id="${sessionId}"]`)
-  await expect(restoredPanel.locator('.session-panel-badge', { hasText: 'Running' }))
-    .toHaveCount(1)
+  await expectPanelRunning(restoredPanel, true)
   await page.reload()
   const reloadedPanel = page.locator(`.session-panel[data-session-id="${sessionId}"]`)
   await expect(reloadedPanel).toBeVisible({ timeout: 15_000 })
-  await expect(reloadedPanel.locator('.session-panel-badge', { hasText: 'Running' }))
-    .toHaveCount(1)
+  await expectPanelRunning(reloadedPanel, true)
   expect(await storeStatus(page, sessionId)).toEqual({
     sessionId,
     processStatus: 'running',
@@ -354,7 +355,7 @@ test('rejects delayed REST N after WS N+1 across every desktop status surface', 
   const completed = await statusFor(page, sessionId)
   expect(completed.statusRevision).toBeGreaterThan(running.statusRevision)
   const idlePanel = page.locator(`.session-panel[data-session-id="${sessionId}"]`)
-  await expect(idlePanel.locator('.session-panel-badge', { hasText: 'Idle' })).toHaveCount(1)
+  await expectPanelRunning(idlePanel, false)
 
   const idleTask = await findHomeTask(page, taskId)
   await expectNoTaskPill(idleTask)
@@ -421,15 +422,15 @@ test('keeps the same provider identity and running state on mobile surfaces', as
   ).toBe('running')
   const running = await statusFor(page, sessionId)
   expect(running.statusRevision).toBeGreaterThan(before.statusRevision)
-  await expect(panel.locator('.session-panel-badge', { hasText: 'Running' })).toHaveCount(1)
+  // The header has no status badge (2026-11-02): a running panel offers Stop.
+  await expectPanelRunning(panel, true)
   await expectRunningTool(panel)
 
   await page.reload()
   const reloadedPanel = page.locator(
     `.main-page-session-column.is-mobile-active .session-panel[data-session-id="${sessionId}"]`,
   )
-  await expect(reloadedPanel.locator('.session-panel-badge', { hasText: 'Running' }))
-    .toHaveCount(1, { timeout: 15_000 })
+  await expectPanelRunning(reloadedPanel, true, 15_000)
   expect(await storeStatus(page, sessionId)).toMatchObject({
     sessionId,
     processStatus: 'running',

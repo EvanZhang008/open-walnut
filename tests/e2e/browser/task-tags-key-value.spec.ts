@@ -19,6 +19,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { closeHeaderLabels, headerLabelsButton, openHeaderLabels } from './session-header-labels-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const SHOT_DIR = '/tmp/task-tags-key-value'
@@ -119,32 +120,39 @@ test('a value key reads as its id on every row, and the session header shows the
   await fs.mkdir(SHOT_DIR, { recursive: true })
   await row(page, ids.v).locator('xpath=..').screenshot({ path: `${SHOT_DIR}/${browserName}-rows.png` })
 
-  // The seeded run's session: its header shows the tags beside the title, by the same rules
-  // (the hidden id stays off; the plain word an older build stored bare reads as its word).
+  // The seeded run's session: its header's labels control holds the tags, by the same rules
+  // (the hidden id stays off; the plain word an older build stored bare reads as its word),
+  // every one of them whole in its flyout (2026-11-02, SessionHeaderLabels.tsx).
   await page.locator('.todo-search-input').fill(SEEDED_SESSION)
   const seeded = row(page, SEEDED_TASK)
   await expect(seeded).toBeVisible({ timeout: 15_000 })
   await seeded.locator('.todo-item-title').click()
   const panel = page.locator(`.session-panel[data-session-id="${SEEDED_SESSION}"]`)
   await expect(panel).toBeVisible()
-  const headerPills = panel.locator('.session-panel-title-meta > .session-panel-tag-pills .tag-chip')
-  await expect(headerPills).toHaveCount(2)
-  expect(await chipTexts(headerPills)).toEqual(['V2391099522', '+2'])
-  await expect(headerPills.nth(1)).toHaveAttribute('title', 'sev:2, oncall')
-  // The row agrees with its header.
+  const button = headerLabelsButton(panel)
+  // The ticket id seeded above (a V and ten digits), read by its shape.
+  await expect(button).toHaveAttribute('title', /\bV\d{10}\b/, { timeout: 15_000 })
+  await expect(button.locator('.session-header-labels-count')).toHaveText('3')
+  // The row (one pill and "+N") agrees with its header's labels.
   expect(await chipTexts(seeded.locator('[data-testid="task-tag-pills"] .tag-chip'))).toEqual(['V2391099522', '+2'])
-  // The tags sit on the right with the status pills (2026-10-26), the title keeps the larger
-  // share of the row, and nothing leaves the header.
+  // The labels control sits on the right after the title (2026-10-26), the title keeps the
+  // larger share of the row, and nothing leaves the header.
   const layout = await panel.locator('.session-panel-header-top').evaluate((row) => {
     const box = row.getBoundingClientRect()
     const title = row.querySelector('.session-panel-title')!.getBoundingClientRect()
-    const pills = row.querySelector('.session-panel-title-meta > .session-panel-tag-pills')!.getBoundingClientRect()
+    const pills = row.querySelector('[data-testid="session-header-labels"]')!.getBoundingClientRect()
     return { title: title.width, pills: pills.width, pillsAfterTitle: pills.left >= title.right - 1, inside: pills.right <= box.right + 1 }
   })
   expect(layout.pillsAfterTitle).toBe(true)
   expect(layout.inside).toBe(true)
   expect(layout.title).toBeGreaterThan(layout.pills)
   await panel.locator('.session-panel-header').screenshot({ path: `${SHOT_DIR}/${browserName}-session-header.png` })
+  const labels = await openHeaderLabels(panel)
+  const headerPills = labels.locator('[data-testid="task-tag-pills"] .tag-chip')
+  expect(await chipTexts(headerPills)).toEqual([expect.stringMatching(/^V\d{10}$/), 'sev:2', 'oncall'])
+  await expect(headerPills.first()).toHaveAttribute('title', /^tkt:V\d{10} \(opens tickets\.example\.test\)$/)
+  await labels.screenshot({ path: `${SHOT_DIR}/${browserName}-session-labels.png` })
+  await closeHeaderLabels(panel)
   expect(await storedTags(SEEDED_TASK)).toContain('label:oncall')
   expect(errors).toEqual([])
 })

@@ -1,15 +1,14 @@
 /**
- * Where a narrow session header's hidden items go. Each row keeps its own: the
- * tool row's overflow stays on the tool row, the title row's on the title row
- * (2026-10-03: window buttons in the task kebab read as task actions and confused).
+ * Where a narrow session header's hidden tool-row items go: the tool row's own
+ * menu, never the title row's kebab (2026-10-03: window buttons in the task kebab
+ * read as task actions and confused).
  *
  * `SessionHeaderMoreMenu` is the "..." chip on the tool row and its menu: one row
  * per hidden view chip (Changed, Files, Board, Terminal, Fork, a plugin fact
  * the user pinned to the header), then, after a divider, one per hidden window button (Open in new tab,
- * Locate task). `HiddenPillRows` is the kebab's leading section: one row per
- * title-row pill that did not fit even as a letter.
+ * Locate task).
  *
- * Both proxy to the REAL element, which stays mounted under `data-hidden="true"`
+ * Its rows proxy to the REAL element, which stays mounted under `data-hidden="true"`
  * (see useSessionHeaderFit.ts): a click on a row is `.click()` on it, and a
  * row's state (the open view, pinned or not) is read from its live attributes.
  * There is no second copy of any handler or label to drift.
@@ -19,7 +18,6 @@ import { createPortal } from 'react-dom';
 import { menuPlacementStyle, useMenuPlacement } from '@/hooks/useMenuPlacement';
 import { ICON_LOCATE, ICON_NEW_TAB } from '../common/Icons';
 import { SLOT_ID_PREFIX, TOOL_ITEMS, toolItemSpec } from './useSessionHeaderFit';
-import { TITLE_PILL_SELECTOR } from './session-header-fit';
 import { TASK_SLOT_SPACER } from './header-record-gate';
 
 const itemOf = (row: HTMLElement | null, id: string) => row?.querySelector<HTMLElement>(`[data-header-id="${id}"]`) ?? null;
@@ -224,72 +222,3 @@ function WindowRow({ id, rowRef, onChoose }: { id: string; rowRef: RefObject<HTM
 }
 
 const WINDOW_ICONS: Record<string, ReactNode> = { locate: ICON_LOCATE, popout: ICON_NEW_TAB };
-
-interface HiddenPillRowsProps {
-  /** `.session-panel-title-meta`, where the pills live. */
-  metaRef: RefObject<HTMLElement | null>;
-  /** Pill kinds hidden because even their letters did not fit, in row order. */
-  kinds: string[];
-  /** Keeps a kind's pill on the row so its flyout has an anchor. */
-  pin: (kind: string) => void;
-  onAfterAction?: () => void;
-}
-
-/** Kebab rows for the pills the title row had no room for, even as letters. */
-export function HiddenPillRows({ metaRef, kinds, pin, onAfterAction }: HiddenPillRowsProps) {
-  if (kinds.length === 0) return null;
-  return (
-    <>
-      {kinds.map((kind) => <PillRow key={kind} kind={kind} metaRef={metaRef} pin={pin} onAfterAction={onAfterAction} />)}
-      <div className="task-kebab-divider" />
-    </>
-  );
-}
-
-const PILL_ROW_NAMES: Record<string, string> = { embedded: 'Embedded', cron: 'Cron', trigger: 'Trigger', tag: 'Links', worker: 'Worker', leader: 'Leader' };
-/** What a row clicks when it is not the pill itself: the tags' "+N" list, else their one pill. */
-const PILL_ROW_CLICK: Record<string, string[]> = { tag: ['.session-panel-tag-pills .tag-chip-overflow-btn', '.session-panel-tag-pills .tag-chip-linked'] };
-
-function PillRow({ kind, metaRef, pin, onAfterAction }: { kind: string; metaRef: RefObject<HTMLElement | null>; pin: (kind: string) => void; onAfterAction?: () => void }) {
-  const [text, setText] = useState('');
-  useEffect(() => {
-    const el = metaRef.current?.querySelector<HTMLElement>(TITLE_PILL_SELECTOR[kind] ?? `[data-header-pill="${kind}"]`);
-    if (!el) return;
-    const read = () => setText((el.textContent ?? '').replace(/\s+/g, ' ').trim());
-    read();
-    if (typeof MutationObserver === 'undefined') return;
-    const mo = new MutationObserver(read);
-    mo.observe(el, { subtree: true, characterData: true, childList: true });
-    return () => mo.disconnect();
-  }, [metaRef, kind]);
-  const name = PILL_ROW_NAMES[kind] ?? kind;
-  const norm = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, '');
-  const value = text && norm(text) !== norm(name) ? text : '';
-  // The Embedded badge is not clickable; its row is a fact, not an action.
-  const info = kind === 'embedded';
-  return (
-    <button
-      type="button"
-      className={`task-kebab-item${info ? ' task-kebab-info' : ''}`}
-      onClick={(e) => {
-        e.stopPropagation();
-        if (info) return;
-        onAfterAction?.();
-        // The pill comes back onto the row first (its flyout anchors to it), then
-        // takes the click on the next frame, once it has a box.
-        pin(kind);
-        const sels = PILL_ROW_CLICK[kind] ?? [TITLE_PILL_SELECTOR[kind] ?? `[data-header-pill="${kind}"]`];
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          for (const sel of sels) {
-            const el = metaRef.current?.querySelector<HTMLElement>(sel);
-            if (el) { el.click(); return; }
-          }
-        }));
-      }}
-      data-testid={`session-header-kebab-pill-${kind}`}
-    >
-      <span className="session-header-more-name">{name}</span>
-      {value && <span className="session-header-more-value">{value}</span>}
-    </button>
-  );
-}

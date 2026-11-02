@@ -24,6 +24,7 @@ import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, draftPanel, draftTaskMenu, openDraft, openDraftOnCwd, openDraftSettings, pickDraftFolder } from './draft-helpers'
 import { selectSection } from './todo-panel-helpers'
 import { openKebabGroup } from './kebab-group-helpers'
+import { expectPanelRunning } from './session-header-labels-helpers'
 
 const PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const SHOTS = process.env.PW_SCREENSHOT_DIR ?? '/tmp/task-workspaces'
@@ -351,8 +352,8 @@ test('a plugin provider: a multi-repo workspace shows its progress, fails with R
     await expect(waiting).toHaveCount(0)
     // Its first turn is over (a session mid-turn holds a manual removal back).
     await expect(panel.getByText('Hello! I processed your message: Wire the two packages together').first()).toBeVisible({ timeout: 30_000 })
-    // (The mock CLI may exit after its turn, so the badge reads Idle or Stopped.)
-    await expect(panel.locator('.session-panel-badge').filter({ hasText: /^(Idle|Stopped)$/ })).toHaveCount(1, { timeout: 30_000 })
+    // (The mock CLI may exit after its turn, Idle or Stopped: either way the panel offers no Stop.)
+    await expectPanelRunning(panel, false, 30_000)
 
     // An ignored build folder in one package: the confirm says it goes too.
     const alphaRepo = inHome(path.join(ws.root!, 'src', alpha))

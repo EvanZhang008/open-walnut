@@ -12,6 +12,7 @@ import path from 'node:path'
 import { test, expect, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { composerTextarea, openPanels } from './engine-settings-popover-helpers'
+import { closeHeaderLabels, headerLabelsButton, openHeaderLabels } from './session-header-labels-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const SHOTS = process.env.PW_SHOTS_DIR ?? '/tmp/wait-resume/shots'
@@ -81,9 +82,19 @@ test('a leader\'s message into a Waiting worker: In Progress for the turn, then 
   await expect(row).toHaveCount(0)
 
   const [panel] = await openPanels(page, [worker.sid])
-  const line = panel.getByTestId('session-waiting-chip')
-  await expect(line).toBeVisible({ timeout: 15_000 })
-  const before = (await line.textContent()) ?? ''
+  // The wait is one of the header's labels (SessionHeaderLabels.tsx): the labels control
+  // names it, and its flyout shows the chip.
+  const labelsBtn = headerLabelsButton(panel)
+  const waitText = async () => {
+    const labels = await openHeaderLabels(panel)
+    const chip = labels.getByTestId('session-waiting-chip')
+    await expect(chip).toBeVisible({ timeout: 15_000 })
+    const text = (await chip.textContent()) ?? ''
+    await closeHeaderLabels(panel)
+    return text
+  }
+  await expect(labelsBtn).toHaveAttribute('title', /Wait until /, { timeout: 15_000 })
+  const before = await waitText()
   expect(before).toContain('Wait until ')
 
   // The leader writes (task_send, a peer's message): the turn runs, then the wait is back.
@@ -93,8 +104,8 @@ test('a leader\'s message into a Waiting worker: In Progress for the turn, then 
   const after = await taskOf(worker.taskId)
   expect(after.wait_until).toBe(until)
   expect(after.unread).toBeFalsy()
-  await expect(line).toBeVisible({ timeout: 15_000 })
-  await expect(line).toHaveText(before)
+  await expect(labelsBtn).toHaveAttribute('title', /Wait until /, { timeout: 15_000 })
+  expect(await waitText()).toBe(before)
   await expect(row).toHaveCount(0)
   await shot(panel, 'waiting-again-after-leader-message', browserName)
 
@@ -105,7 +116,7 @@ test('a leader\'s message into a Waiting worker: In Progress for the turn, then 
   await expect(panel.getByText(/I processed your message: how is it going\?/).first()).toBeVisible({ timeout: 60_000 })
   await expect.poll(async () => (await taskOf(worker.taskId)).phase, { timeout: 30_000 }).toBe('NEED_ACTION')
   expect((await taskOf(worker.taskId)).unread).toBe(true)
-  await expect(line).toHaveCount(0, { timeout: 15_000 })
+  await expect.poll(async () => (await labelsBtn.count()) === 0 ? '' : (await labelsBtn.getAttribute('title')) ?? '', { timeout: 15_000 }).not.toMatch(/Wait until /)
   await expect(row.first()).toBeVisible({ timeout: 15_000 })
   await shot(page.locator('.todo-panel'), 'need-action-after-person-message', browserName)
 })

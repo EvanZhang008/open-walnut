@@ -83,7 +83,6 @@ import { useFocusBarContext } from '@/contexts/FocusBarContext';
 import { useStoreTask, useTasksContextSafe } from '@/contexts/TasksContext';
 import type { FocusTier } from '@/api/focus';
 import { timeAgo } from '@/utils/time';
-import { ProcessStatusBadge } from './WorkStatusPicker';
 import { SessionForkButton } from './SessionForkButton';
 import { headerPlanFacts, headerTaskPresence, recordGateReason, TASK_SLOT_IDS, TASK_SLOT_SPACER } from './header-record-gate';
 import { useTaskControlSlot } from './useTaskControlSlot';
@@ -145,8 +144,9 @@ import { MacAwayComposer } from '@/components/layout/AwayLine';
 import { useMacSessionAway } from '@/hooks/useLeaderPresence';
 import type { PlusMenuAction } from '@/components/chat/plus-menu-actions';
 import { useMainQuickPlusActions } from '@/components/org/useMainQuickPlusActions';
-import { useTitleMetaFit, useToolRowFit } from './useSessionHeaderFit';
-import { HiddenPillRows, SessionHeaderMoreMenu } from './SessionHeaderMore';
+import { useToolRowFit } from './useSessionHeaderFit';
+import { SessionHeaderMoreMenu } from './SessionHeaderMore';
+import { SessionHeaderLabels } from './SessionHeaderLabels';
 import '@/styles/session-header-fit.css';
 import { IslandHostContext, type IslandHost } from '@/components/chat/island-host';
 import { MessageAboutContext } from './message-about';
@@ -466,14 +466,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
   // panel: composer").
   const panelRef = useRef<HTMLDivElement>(null);
   const glassHeaderRef = useHeightVar(panelRef, '--sp-header-h');
-  // A narrow column keeps both header rows on one line: the tool row's items
+  // A narrow column keeps the tool row on one line: its items
   // leave by priority (window buttons into the kebab, view chips into a "..."
-  // menu), the title row's pills fold to a dot and to letters. Hidden items stay
-  // mounted under data-hidden="true"; the menus proxy to them.
+  // menu). Hidden items stay mounted under data-hidden="true"; the menu proxies to
+  // them. The title row has nothing to fold: its labels are one control already.
   const toolRowRef = useRef<HTMLDivElement>(null);
-  const titleMetaRef = useRef<HTMLDivElement>(null);
   const toolFit = useToolRowFit(toolRowRef);
-  const metaFit = useTitleMetaFit(titleMetaRef);
   const hid = (id: string) => (toolFit.hidden.has(id) ? 'true' : 'false');
   // Fork, Board and Locate need the session's task. Whether they exist is decided
   // on the first frame from what this page already knows (the status store, which
@@ -1792,7 +1790,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
   }, [sendAnchored, send, sessionId, engineSwitch.sendOptions, engineSwitch.clear, engineSwitch.markSent]);
 
   // Main's quick actions ride its own composer's "+" (the user, 2026-10-26: not a bar of their own).
-  // Waiting = the badge's rule (deriveDisplayStatus: a live process holds the prompt); a stopped
+  // Waiting = deriveDisplayStatus's rule (a live process holds the prompt); a stopped
   // Main with a stale prompt on its record takes a typed message, so it takes these too.
   const mainQuickActions = useMainQuickPlusActions(
     onQuestionPage ? null : sessionTask,
@@ -1938,6 +1936,27 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
   // A host that draws the header (headerSlot): the badge and the kebab go there, the full desktop menu.
   // Not in fullscreen: the panel is an overlay then, over the host too, and needs its own header to come back.
   const hostHeader = !kebabSlot && !(phoneLayer || phoneHostSlot) && !!headerSlot && !isFullscreen;
+  // Every label of the session's task, in one order, for the folded labels control
+  // (SessionHeaderLabels.tsx): its links and tags, the wait, Embedded, Cron, Trigger,
+  // then the team pills.
+  const headerLabels = (
+    <>
+      {sessionTask && <TaskTagPills task={sessionTask} className="session-panel-tag-pills" linksFirst max={Number.MAX_SAFE_INTEGER} onOpenPath={handleFileOpen} pathHost={session?.host ?? undefined} />}
+      <WaitingChip task={sessionTask} />
+      {session?.provider === 'embedded' && (
+        <span className="session-panel-badge session-panel-embedded-badge" data-header-pill="embedded">
+          {ICON_ROBOT}<span className="task-pill-long"> Embedded</span>
+        </span>
+      )}
+      <CronPill sessionId={sessionId} expanded={cronDetailOpen} onClick={() => setCronDetailOpen((open) => !open)} />
+      <TriggerPill taskId={session?.taskId} />
+      {/* The team links, as on the task rows: Sub leads to this task's parent, Leader
+          lists its subtasks. A Personal AI ask is never a board row, so its session
+          header is the one place an ask that split work off shows it. */}
+      {sessionTask && <SubtaskPill task={sessionTask} />}
+      {sessionTask && <LeaderPill task={sessionTask} />}
+    </>
+  );
 
   // The id resolved to nothing after the full retry window. Say so explicitly:
   // the previous behaviour rendered an ordinary empty panel, indistinguishable
@@ -2116,7 +2135,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
       leadingSection={(close) => phoneRows ? phoneRows(close) : (
         <>
           {hostRows?.(close)}
-          <HiddenPillRows metaRef={titleMetaRef} kinds={[...metaFit.hidden]} pin={metaFit.pin} onAfterAction={close} />
           <PanelCountRow onAfterAction={close} />
           <SessionMetaFacts sessionId={sessionId} taskId={session?.taskId} onAfterAction={close} />
         </>
@@ -2280,7 +2298,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
                       Changed onto Files' spot, and a click aimed at Files opened Changed
                       (tests/e2e/browser/session-header-chips-hold-place.spec.ts).
               ROW 2 = the TITLE on its own full-width line. Only two things may
-                      share it: the status badge and the ⋮ kebab.
+                      share it: the folded labels control and the ⋮ kebab.
               Before this the title shared one row with 5 icon buttons and the
               status pill, so in a normal 3-column layout it collapsed to ~105px
               ("Fork of ek…"). Anything new belongs in row 1 or the kebab — never
@@ -2582,7 +2600,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
             </div>
           </div>{/* .session-meta-row-2 */}
 
-          {/* ROW 2 — the title gets the whole line; only the status badge and the
+          {/* ROW 2 — the title gets the whole line; only the folded labels and the
               kebab sit beside it (plus the host's one leading control, when
               embedded). Every window/tool icon button lives on row 1. */}
           <div className="session-panel-header-top">
@@ -2620,9 +2638,6 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
                   />
                 : <span className="session-panel-title text-muted">Untitled session</span>
               }
-              {/* The wait, on the left beside the title (the status pills are on the
-                  right); its card says what it waits on and that a message here ends it. */}
-              {!loading && !kebabSlot && <WaitingChip task={sessionTask} />}
             </div>
             {/* The one question control up here: the mode pill (Tree Mode /
                 Conversation Mode). Counts and the list live in the sidebar. */}
@@ -2635,57 +2650,17 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
                 />
               </div>
             )}
-            <div
-              className="session-panel-title-meta"
-              ref={titleMetaRef}
-              data-fit={metaFit.level}
-              data-hidden-pills={metaFit.hidden.size ? [...metaFit.hidden].join(' ') : undefined}
-            >
-              {/* The task's tags, its links first (the same rules as its board row: a ticket
-                  reads as its id, a hidden key stays off). On the right with the status pills
-                  (2026-10-26, the user: "should be on the right"), folding with them, so the
-                  title keeps its room. */}
-              {!loading && sessionTask && <TaskTagPills task={sessionTask} className="session-panel-tag-pills" linksFirst menu max={1} onOpenPath={handleFileOpen} pathHost={session?.host ?? undefined} />}
-              {!loading && session?.provider === 'embedded' && (
-                <span
-                  className="session-panel-badge"
-                  data-header-pill="embedded"
-                  style={{
-                    color: 'var(--accent)',
-                    background: 'color-mix(in srgb, var(--accent) 10%, transparent)',
-                    fontSize: '10px',
-                    fontWeight: 600,
-                  }}
-                >
-                  {ICON_ROBOT}<span className="task-pill-long"> Embedded</span>
-                </span>
-              )}
-              {!loading && (
-                <CronPill
-                  sessionId={sessionId}
-                  expanded={cronDetailOpen}
-                  onClick={() => setCronDetailOpen((open) => !open)}
-                />
-              )}
-              {!loading && <TriggerPill taskId={session?.taskId} />}
-              {/* The team links, as on the task rows: Sub leads to this task's
-                  parent, Leader lists its subtasks. A Personal AI ask is never a
-                  board row, so its session header is the one place an ask that
-                  split work off shows it. */}
-              {!loading && sessionTask && <SubtaskPill task={sessionTask} />}
-              {!loading && sessionTask && <LeaderPill task={sessionTask} />}
-              {!loading && ps && (
-                <ProcessStatusBadge
-                  processStatus={ps}
-                  size="sm"
-                  errorMessage={session?.errorMessage}
-                  pendingPermission={pendingPermission}
-                />
-              )}
+            <div className="session-panel-title-meta">
+              {/* Beside the title only the folded labels and the kebab (2026-11-02, the user:
+                  "all collapse, user can click ... so have more room to have good name"). Every
+                  label (links and tags, the wait, Cron, Trigger, Worker, Leader) is in that one
+                  control; the run status (Running, Idle) is in the task detail, never here.
+                  Nothing else joins this row: tests/web/session-header-labels-guard.test.ts. */}
+              {!loading && !hostHeader && <SessionHeaderLabels>{headerLabels}</SessionHeaderLabels>}
               {loading && <span className="session-panel-badge" style={{ color: 'var(--fg-muted)' }}>Loading...</span>}
               {!loading && sessionId && !kebabSlot && !hostHeader && renderSessionKebab()}
-              {/* The host's header (headerSlot): the status, the wait and the kebab, the kebab led by
-                  the view rows the hidden header held. */}
+              {/* The host's header (headerSlot): the folded labels (the wait among them) and the
+                  kebab, the kebab led by the view rows the hidden header held. */}
               {!loading && hostHeader && headerSlot && createPortal(
                 <>
                   {threads.hasQuestions && (
@@ -2695,8 +2670,7 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, viewPlace, o
                       onToggle={() => threadsApi.setViewMode(threadsApi.viewMode === 'linear' ? 'stack' : 'linear')}
                     />
                   )}
-                  <WaitingChip task={sessionTask} compact />
-                  {ps && <ProcessStatusBadge processStatus={ps} size="sm" errorMessage={session?.errorMessage} pendingPermission={pendingPermission} />}
+                  <SessionHeaderLabels>{headerLabels}</SessionHeaderLabels>
                   {sessionId && renderSessionKebab(undefined, (close) => (
                     <PhoneSessionHeaderRows
                       sessionId={sessionId}

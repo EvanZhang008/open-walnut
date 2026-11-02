@@ -27,6 +27,7 @@ import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
 import { selectSection } from './todo-panel-helpers'
 import { isolateUiPrefsContext, presetPanelDesign } from './status-section-helpers'
 import { sessionResultPhase } from '../../../src/core/phase'
+import { expectPanelRunning } from './session-header-labels-helpers'
 
 const SCREENSHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/session-hold-turn-subagents'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -179,7 +180,8 @@ test('a spawned reservation joins snapshot tracking before its first turn ends',
   await expect(card).not.toHaveClass(/needs-action/)
   await card.scrollIntoViewIfNeeded()
   await expect(card).toBeInViewport()
-  await expect(panel.locator('.session-panel-badge')).toContainText('Running')
+  // The header has no status badge (2026-11-02): a running panel offers Stop.
+  await expectPanelRunning(panel, true)
   await page.screenshot({ path: `${SCREENSHOT_DIR}/reservation-${testInfo.project.name}-started.png` })
 
   await expect.poll(async () => (await read()).process_status, { timeout: 20000 }).toBe('idle')
@@ -192,7 +194,7 @@ test('a spawned reservation joins snapshot tracking before its first turn ends',
     return (await response.json()).task.phase
   }).toBe(sessionResultPhase('IN_PROGRESS'))
   await expect(card).toHaveClass(/needs-action/)
-  await expect(panel.locator('.session-panel-badge')).toContainText('Idle')
+  await expectPanelRunning(panel, false)
   await expect(panel.getByText('Reservation tracking verified', { exact: true }).first()).toBeVisible()
   await page.screenshot({ path: `${SCREENSHOT_DIR}/reservation-${testInfo.project.name}-settled.png` })
 
@@ -318,7 +320,9 @@ test('an error does not hand back a task with a live background command, and the
   const { task } = await taskResponse.json()
   expect(task.phase).toBe('IN_PROGRESS')
   expect(task.session_id).toBe(sessionId)
-  await expect(panel.locator('.session-panel-badge[title="Running"]')).toBeVisible()
+  // The header has no status badge any more (2026-11-02), and no turn streams here (only the
+  // background command runs), so the panel shows no Stop: the card's live circle below is the
+  // surface that says the process still runs.
   await selectSection(page, task.focus_tier === 'focus' ? 'Focus' : 'Satellite')
   const card = page.locator(`.todo-pinned-section:not(.todo-pinned-section-recent) [data-task-id="${taskId}"]`)
   await expect(card.locator('.task-circle-running')).toBeVisible()
@@ -564,7 +568,8 @@ test('permission, question, and plan decisions stay red while waiting and settle
       await expect(page.locator(`${REAL_PANEL}[data-session-id="${settledId}"] .permission-request-actions button`)).toHaveCount(0)
     }
     await expect.poll(() => processStatus(page, sessionId)).toBe('running')
-    await expect(panel.locator('.session-panel-badge[title^="Waiting"]')).toBeVisible()
+    // Waiting reads as the open permission card itself (the header has no status badge).
+    await expect(permission).toBeVisible()
     await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
     await page.screenshot({ path: `${SCREENSHOT_DIR}/waiting-${toolName}-${decision}.png` })
     if (toolName === 'AskUserQuestion') {
@@ -631,8 +636,9 @@ test('waiting follows the versioned status when session details arrive after per
       release()
       await observer.unrouteAll({ behavior: 'wait' })
       await expect(observerPanel.getByText('Loading...', { exact: true })).toHaveCount(0)
-      await expect(observerPanel.locator('.session-panel-badge'))
-        .toContainText(stage === 'request' ? 'Waiting' : 'Idle')
+      // The header has no status badge: Waiting is the open permission card, Idle a panel with no Stop.
+      if (stage === 'request') await expect(observerPanel.locator('.permission-request-card').getByRole('button', { name: 'Allow', exact: true })).toBeVisible()
+      else await expectPanelRunning(observerPanel, false)
       if (stage === 'resolved') {
         await expect(observerPanel.locator('.permission-request-card').getByRole('button', { name: 'Allow', exact: true })).toHaveCount(0)
       }

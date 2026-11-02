@@ -1,5 +1,5 @@
 /**
- * Measures the two rows of a session panel's header and decides what each shows
+ * Measures the tool row of a session panel's header and decides what it shows
  * (session-header-fit.ts has the rules). Hidden items stay mounted with
  * `data-hidden="true"` (CSS hides them), so the menus that stand in for them
  * can proxy a click to the real element and read its live text.
@@ -8,20 +8,13 @@
  * whenever that form is on screen, so the decision never reads the current
  * state: the composer controls row's rule against flicker.
  */
-import { useCallback, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import {
-  classifyTitleMetaChild, fitTitleMeta, fitToolRow,
-  TITLE_FLOOR_WIDTH, TITLE_MIN_WIDTH, type TitleMetaItem, type TitleMetaKind, type TitleMetaLevel, type ToolItemKind, type ToolRowItem,
-} from './session-header-fit';
+import { useCallback, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { fitToolRow, type ToolItemKind, type ToolRowItem } from './session-header-fit';
 
 /** Mirrors `.session-meta-row-2-chips { gap }`, `.session-panel-window-controls { gap }`, `.session-meta-row-2 { gap }`. */
 const CHIP_GAP = 6;
 const WINDOW_GAP = 3;
 const GROUP_GAP = 6;
-/** Mirrors `.session-panel-header-top { gap }` and `.session-panel-title-area / -title-meta { gap }`. */
-const TITLE_ROW_GAP = 8;
-const TITLE_AREA_GAP = 6;
-const META_GAP = 3;
 /** The "..." chip before it has rendered once. */
 const ASSUMED_MORE_WIDTH = 22;
 /** Kept free of every decision: a row that fits to the last fraction of a pixel
@@ -131,107 +124,6 @@ export function useToolRowFit(rowRef: RefObject<HTMLElement | null>): ToolRowSta
   useObserved(rowRef, measure, '[data-header-id]');
   return state;
 }
-
-export interface TitleMetaState {
-  level: TitleMetaLevel;
-  /** Pills hidden because even their letters did not fit, by kind (`trigger`, `worker`, ...). */
-  hidden: Set<TitleMetaKind | string>;
-}
-
-const FULL_META: TitleMetaState = { level: 'full', hidden: new Set() };
-
-export interface TitleMetaFitHandle extends TitleMetaState {
-  /** Keep this kind's pill on the row (a kebab row is about to open it, and its
-   *  flyout anchors to the pill). Released when the row fits everything again. */
-  pin: (kind: TitleMetaKind | string) => void;
-}
-
-/**
- * The title row (`.session-panel-header-top`): how the cluster beside the title
- * reads. `metaRef` is `.session-panel-title-meta`; the row is its parent.
- */
-export function useTitleMetaFit(metaRef: RefObject<HTMLElement | null>): TitleMetaFitHandle {
-  const fullWidths = useRef(new Map<string, number>());
-  const shortWidths = useRef(new Map<string, number>());
-  const [state, setState] = useState<TitleMetaState>(FULL_META);
-  const [pinned, setPinned] = useState<string | null>(null);
-
-  const measure = useCallback(() => {
-    const meta = metaRef.current;
-    const row = meta?.parentElement;
-    if (!meta || !row) return;
-    // What the DOM shows right now decides which form a width belongs to. Read
-    // from the attributes the render wrote, not from React state: a measurement
-    // between a decision and its paint would otherwise file a full-text width
-    // under the short form.
-    const level = (meta.dataset.fit as TitleMetaLevel | undefined) ?? 'full';
-    const hidden = new Set((meta.dataset.hiddenPills ?? '').split(' ').filter(Boolean));
-    const items: TitleMetaItem[] = [];
-    const kinds = new Map<string, TitleMetaKind>();
-    const seen = new Map<TitleMetaKind, number>();
-    for (const el of Array.from(meta.children) as HTMLElement[]) {
-      const kind = classifyTitleMetaChild(el.classList, el.dataset as { headerPill?: string });
-      // One id per child, by KIND (numbered only when a kind repeats), so a pill
-      // appearing in front of the others does not hand its neighbours' remembered
-      // widths to the wrong element.
-      const nth = seen.get(kind) ?? 0;
-      seen.set(kind, nth + 1);
-      const id = nth === 0 ? kind : `${kind}-${nth}`;
-      kinds.set(id, kind);
-      if (!hidden.has(kind)) {
-        const w = el.getBoundingClientRect().width;
-        if (w > 0) {
-          const shortForm = (kind === 'status' && level !== 'full')
-            || (level === 'letters' && kind !== 'status' && kind !== 'kebab' && kind !== 'other');
-          (shortForm ? shortWidths : fullWidths).current.set(id, w);
-        }
-      }
-      items.push({ id, kind, fullWidth: fullWidths.current.get(id), shortWidth: shortWidths.current.get(id) });
-    }
-    // The room the cluster may take: the row, minus everything before the title
-    // (the slot's menu button, the marker, the phase circle, their gaps; read as
-    // the title's left edge, so an absolutely placed marker costs nothing), minus
-    // the title's reserve, minus any sibling between the title area and the
-    // cluster (the thread mode pill).
-    const rowBox = row.getBoundingClientRect();
-    if (rowBox.width <= 0) return;
-    const titleArea = row.querySelector<HTMLElement>(':scope > .session-panel-title-area');
-    const title = titleArea?.querySelector<HTMLElement>(':scope > .session-panel-title, :scope > .session-panel-title-input') ?? null;
-    let fixed = title ? title.getBoundingClientRect().left - rowBox.left : 0;
-    let titleReserve = TITLE_MIN_WIDTH;
-    if (title) {
-      // A short title does not reserve room it would not use; a title being edited keeps the full reserve.
-      const natural = title.classList.contains('session-panel-title') ? title.scrollWidth : TITLE_MIN_WIDTH;
-      if (natural > 0) titleReserve = Math.min(TITLE_MIN_WIDTH, natural);
-    }
-    fixed += titleReserve + TITLE_ROW_GAP;
-    for (const sibling of Array.from(row.children) as HTMLElement[]) {
-      if (sibling === meta || sibling === titleArea) continue;
-      if (sibling.compareDocumentPosition(titleArea ?? meta) & Node.DOCUMENT_POSITION_FOLLOWING) continue; // before the title: in its left edge already
-      fixed += sibling.getBoundingClientRect().width + TITLE_ROW_GAP;
-    }
-    const available = rowBox.width - fixed - FIT_SLACK;
-    const fit = fitTitleMeta(items, available, META_GAP, { pinned, dropSlack: Math.max(0, titleReserve - TITLE_FLOOR_WIDTH) });
-    const hiddenKinds = fit.hidden.map((id) => kinds.get(id) ?? id);
-    const next: TitleMetaState = { level: fit.level, hidden: new Set(hiddenKinds) };
-    setState((prev) => (prev.level === next.level && sameList([...prev.hidden], hiddenKinds) ? prev : next));
-    // Everything fits again: the pin has nothing to hold open.
-    if (hiddenKinds.length === 0 && pinned !== null) setPinned(null);
-  }, [metaRef, pinned]);
-
-  useObserved(metaRef, measure, ':scope > *', titleRowOf);
-  const pin = useCallback((kind: string) => setPinned((p) => (p === kind ? p : kind)), []);
-  return useMemo(() => ({ ...state, pin }), [state, pin]);
-}
-
-/** The whole title row, and its title: the row's width, a title that grows (an
- *  auto-title replacing a short one) or turns into an input, a thread mode pill
- *  appearing, all change the cluster's room without touching the cluster. */
-const titleRowOf = (meta: HTMLElement): HTMLElement[] => {
-  const row = meta.parentElement;
-  if (!row) return [];
-  return [row, ...Array.from(row.querySelectorAll<HTMLElement>(':scope > *, :scope > .session-panel-title-area > *'))].filter((el) => el !== meta);
-};
 
 /**
  * Re-measures when the container, the elements `alsoWatch` names, or any item

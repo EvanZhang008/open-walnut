@@ -24,6 +24,7 @@
 import fs from 'node:fs/promises'
 import { expect, type Locator, type Page } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { HEADER_LABELS_FLYOUT, closeHeaderLabels, headerLabelsButton, openHeaderLabels } from './session-header-labels-helpers'
 import type { SessionCronJob, SessionCronMetadata } from '../../../src/core/types'
 
 export const SID = 'pw-vscode-session'
@@ -350,10 +351,12 @@ export interface CardView {
 /** One round trip reads the whole surface, so a comparison is atomic against a
  *  single paint instead of a dozen racing locator assertions. */
 async function readView(page: Page): Promise<CardView> {
-  return page.evaluate(({ sid, task, dot }) => {
+  return page.evaluate(({ sid, task, dot, flyout }) => {
     const panel = document.querySelector(`.main-page-session-column .session-panel[data-session-id="${sid}"]`)
     const text = (node: Element | null): string | null => (node ? node.textContent ?? '' : null)
-    const pill = panel?.querySelector('.session-cron-pill') ?? null
+    // The header's Cron pill lives in the panel's labels flyout (SessionHeaderLabels.tsx),
+    // portalled to <body> and mounted while closed. Only this panel shows this session's cron.
+    const pill = document.querySelector(`${flyout} .session-cron-pill`)
     const card = panel?.querySelector('.session-cron-detail') ?? null
     const rows = card
       ? [...card.querySelectorAll('.session-cron-job')].map((li) => {
@@ -393,7 +396,7 @@ async function readView(page: Page): Promise<CardView> {
       note: text(card?.querySelector(':scope > .session-cron-detail-body > .session-cron-prompt-note') ?? null),
       rows,
     }
-  }, { sid: SID, task: TASK, dot: DOT })
+  }, { sid: SID, task: TASK, dot: DOT, flyout: HEADER_LABELS_FLYOUT })
 }
 
 /**
@@ -481,16 +484,17 @@ export async function startFixture(page: Page, baseURL: string): Promise<CronFix
   await row.locator('.todo-item-title').click()
   const panel = page.locator(`.main-page-session-column .session-panel[data-session-id="${SID}"]`)
   await expect(panel).toBeVisible({ timeout: 30_000 })
-  // The header renders its pills only after the panel's own session fetch
-  // resolves (`{!loading && <CronPill/>}`), while the task row's pill is live
-  // from the store the moment an observation lands. The process badge is gated on
-  // the same `!loading`, so waiting for it is what stops a push from landing in
-  // one surface before the other exists at all.
-  await expect(panel.locator('.session-panel-badge').last())
-    .toHaveText(/^(Idle|Running|Waiting|Stopped|Error)$/, { timeout: 60_000 })
+  // The header renders its labels only after the panel's own session fetch
+  // resolves (`{!loading && <SessionHeaderLabels/>}`), while the task row's pill is
+  // live from the store the moment an observation lands. The kebab is gated on the
+  // same `!loading`, so waiting for it is what stops a push from landing in one
+  // surface before the other exists at all.
+  await expect(panel.locator('.session-panel-title-meta .task-kebab-btn')).toBeVisible({ timeout: 60_000 })
   await waitForWs(page)
 
-  const pill = panel.locator('.session-cron-pill')
+  // The header's pill sits in the labels flyout (mounted while closed): attribute and
+  // count checks read it there, a click opens the flyout first.
+  const pill = page.locator(`${HEADER_LABELS_FLYOUT} .session-cron-pill`)
   const card = panel.locator('.session-cron-detail')
   return {
     page,
@@ -523,9 +527,12 @@ export async function startFixture(page: Page, baseURL: string): Promise<CronFix
     },
     read: () => readView(page),
     async openCard() {
+      await expect(pill).toHaveCount(1)
+      await openHeaderLabels(panel)
       await expect(pill).toBeVisible()
       await pill.click()
       await expect(card).toBeVisible()
+      await closeHeaderLabels(panel)
     },
   }
 }
@@ -679,7 +686,7 @@ async function seedDenseCard(fixture: CronFixture): Promise<void> {
 
 /**
  * 3a. Density must not break the page around the card: nothing scrolls sideways,
- * the header keeps the pill and the status badge on one line, and the composer is
+ * the header keeps its labels control and kebab on one line, and the composer is
  * still on screen to type into.
  */
 export async function runDensityLayout(page: Page, baseURL: string, shot: string): Promise<void> {
@@ -695,12 +702,11 @@ export async function runDensityLayout(page: Page, baseURL: string, shot: string
   expect(horizontal.card, 'the card must not scroll sideways').toBeLessThanOrEqual(1)
   expect(horizontal.worstPre, 'no prompt block may scroll sideways').toBeLessThanOrEqual(1)
 
-  // The pill is an ADDITION to the header row, not something that wraps it.
-  const badge = fixture.panel.locator('.session-panel-badge').last()
-  const pillBox = (await fixture.pill.boundingBox())!
-  const badgeBox = (await badge.boundingBox())!
+  // The pill folds into the labels control, which shares one row with the kebab and wraps nothing.
+  const labelsBox = (await headerLabelsButton(fixture.panel).boundingBox())!
+  const kebabBox = (await fixture.panel.locator('.session-panel-title-meta .task-kebab-btn').boundingBox())!
   const centre = (box: { y: number; height: number }) => box.y + box.height / 2
-  expect(Math.abs(centre(pillBox) - centre(badgeBox)), 'pill and status badge share one row').toBeLessThanOrEqual(4)
+  expect(Math.abs(centre(labelsBox) - centre(kebabBox)), 'the labels control and the kebab share one row').toBeLessThanOrEqual(4)
   const headerTop = fixture.panel.locator('.session-panel-header-top')
   expect(await headerTop.evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1)
 
@@ -783,40 +789,62 @@ export async function runDensityReach(page: Page, baseURL: string): Promise<void
 }
 
 /**
- * 4. The pill is a real button: it sits in the tab order, Enter opens the card,
- * and the card's close control can be tabbed to and pressed. A pill that only
- * answered a mouse would be invisible to keyboard and screen-reader users.
+ * 4. The pill is a real button, reached from the keyboard: the header's labels
+ * control (which holds it, SessionHeaderLabels.tsx) sits in the tab order, Enter
+ * opens it, a Tab or two lands on the pill, Enter opens the card, and the card's
+ * close control can be tabbed to and pressed. A pill that only answered a mouse
+ * would be invisible to keyboard and screen-reader users.
  */
 export async function runKeyboardPath(page: Page, baseURL: string): Promise<void> {
   const fixture = await startFixture(page, baseURL)
   await fixture.push(metadataFor(rngFor(11), 1, 'active', 2, Date.now()), true)
-  await expect(fixture.pill).toBeVisible()
+  await expect(fixture.pill).toHaveCount(1)
   await expect(fixture.pill).toHaveAttribute('aria-label', 'Cron job armed. Show job details')
   await expect(fixture.pill).toHaveAttribute('aria-expanded', 'false')
+  const labels = headerLabelsButton(fixture.panel)
+  await expect(labels).toBeVisible()
 
-  // Focus whatever precedes the pill in document order, then ONE Tab must land on
-  // it: that proves the pill is in the natural tab order without walking the
+  // Focus whatever precedes the labels control in document order, then ONE Tab must
+  // land on it: that proves it is in the natural tab order without walking the
   // whole page, and Shift+Tab proves the order holds both ways.
   const focusable = 'a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])'
-  const seated = await page.evaluate((selector) => {
+  const seated = await page.evaluate(({ selector, sid }) => {
     const all = [...document.querySelectorAll<HTMLElement>(selector)].filter((node) => node.getClientRects().length > 0)
-    const index = all.findIndex((node) => node.tagName === 'BUTTON' && node.classList.contains('session-cron-pill'))
+    const panel = document.querySelector(`.main-page-session-column .session-panel[data-session-id="${sid}"]`)
+    const index = all.findIndex((node) => node.matches('[data-testid="session-header-labels"]') && !!panel?.contains(node))
     if (index < 1) return { index, previous: null as string | null }
     all[index - 1].focus()
     return { index, previous: all[index - 1].className }
-  }, focusable)
-  expect(seated.index, 'the pill button is in the document focus order').toBeGreaterThan(0)
+  }, { selector: focusable, sid: SID })
+  expect(seated.index, 'the labels control is in the document focus order').toBeGreaterThan(0)
   // WebKit follows Safari's default: plain Tab visits text fields only, and
   // Option+Tab is the "every control" walk a keyboard user turns on. Chromium
   // reaches buttons with Tab itself.
   const webkit = page.context().browser()?.browserType().name() === 'webkit'
   const tab = webkit ? 'Alt+Tab' : 'Tab'
   const backTab = webkit ? 'Alt+Shift+Tab' : 'Shift+Tab'
+  const active = () => page.evaluate(() => {
+    const el = document.activeElement
+    return el?.getAttribute('data-testid') === 'session-header-labels' ? 'labels' : el?.className ?? ''
+  })
   await page.keyboard.press(tab)
-  expect(await page.evaluate(() => document.activeElement?.className ?? '')).toContain('session-cron-pill')
+  expect(await active()).toBe('labels')
   await page.keyboard.press(backTab)
-  expect(await page.evaluate(() => document.activeElement?.className ?? '')).toBe(seated.previous)
+  expect(await active()).toBe(seated.previous)
   await page.keyboard.press(tab)
+  await page.keyboard.press('Enter')
+  await expect(labels).toHaveAttribute('aria-expanded', 'true')
+  await expect(fixture.pill).toBeVisible()
+
+  // The pill is the open flyout's only control: a keyboard user reaches it in a step or two.
+  let pillSteps = 0
+  let onPill = (await active()).includes('session-cron-pill')
+  while (pillSteps < 3 && !onPill) {
+    await page.keyboard.press(tab)
+    pillSteps += 1
+    onPill = (await active()).includes('session-cron-pill')
+  }
+  expect(onPill, `the Cron pill was not reachable by Tab from the open labels within ${pillSteps} stops (focus on "${await active()}")`).toBe(true)
 
   await page.keyboard.press('Enter')
   await expect(fixture.card).toBeVisible()

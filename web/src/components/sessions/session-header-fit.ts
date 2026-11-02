@@ -25,11 +25,8 @@
  * width. Nothing from this row goes into the title row's kebab, which is the
  * task's menu.
  *
- * Title row: the title keeps TITLE_MIN_WIDTH for its text. The pills beside it
- * step down together: full words → the status badge shrinks to its dot → every
- * pill shows one letter (TRIGGER → T, WORKER → W, LEADER → L, CRON → C; the
- * counts go, the hover text keeps them; the link tag keeps its icon and "+N"). Only when even the letters do not fit
- * are pills hidden, lowest priority first.
+ * The title row has no fit of its own: its labels are one folded control
+ * (SessionHeaderLabels.tsx), so the title takes the rest of the line.
  */
 
 export type ToolItemKind = 'chip' | 'window' | 'info' | 'fixed';
@@ -137,121 +134,4 @@ export function fitToolRow(items: ToolRowItem[], availableWidth: number, opts: T
     inMore: byOrder(new Set(hidden.filter((i) => i.kind === 'chip' || i.kind === 'window').map((i) => i.id))),
     dropped: byOrder(new Set(hidden.filter((i) => i.kind === 'info').map((i) => i.id))),
   };
-}
-
-/** How the title row's right cluster reads. */
-export type TitleMetaLevel = 'full' | 'dot' | 'letters';
-
-export type TitleMetaKind = 'embedded' | 'cron' | 'trigger' | 'tag' | 'worker' | 'leader' | 'status' | 'kebab' | 'other';
-
-export interface TitleMetaItem {
-  id: string;
-  kind: TitleMetaKind;
-  /** Natural width with its full text; undefined before the first measurement. */
-  fullWidth?: number;
-  /** The status badge as a dot; a pill as one letter. Undefined until measured at that level. */
-  shortWidth?: number;
-}
-
-export interface TitleMetaFit {
-  level: TitleMetaLevel;
-  /** Pills hidden because even their letters did not fit, in the caller's order. */
-  hidden: string[];
-}
-
-/** The room the title text keeps while the pills still have a shorter form to
- *  fall back to ("Pulse orph…" at 13px). */
-export const TITLE_MIN_WIDTH = 80;
-/** The floor below which a pill is removed outright rather than squeeze the title
- *  further: between the two, letters stay and the title gives up the difference
- *  (2026-10-02: at 240px the letters missed TITLE_MIN_WIDTH by a few pixels and
- *  two pills vanished for it; "Pulse o…" beside T W L reads better than
- *  "Pulse orph…" beside W L). */
-export const TITLE_FLOOR_WIDTH = 48;
-/** A one-letter pill before it has been measured (15px tall, 5px padding, one capital). */
-export const ASSUMED_LETTER_WIDTH = 18;
-/** The status badge as a dot before it has been measured. */
-export const ASSUMED_DOT_WIDTH = 16;
-
-/** Which pills give way, and in what order, when even their letters overflow. */
-const PILL_DROP_ORDER: TitleMetaKind[] = ['embedded', 'cron', 'trigger', 'tag', 'worker', 'leader'];
-
-const isPill = (item: TitleMetaItem) => PILL_DROP_ORDER.includes(item.kind);
-const fullOf = (item: TitleMetaItem) => (item.fullWidth == null || item.fullWidth <= 0 ? ASSUMED_TOOL_WIDTH : item.fullWidth);
-const shortOf = (item: TitleMetaItem) => {
-  if (item.shortWidth != null && item.shortWidth > 0) return item.shortWidth;
-  return item.kind === 'status' ? ASSUMED_DOT_WIDTH : isPill(item) ? ASSUMED_LETTER_WIDTH : fullOf(item);
-};
-
-function metaWidth(items: TitleMetaItem[], level: TitleMetaLevel, gap: number): number {
-  const each = (item: TitleMetaItem) => {
-    if (level === 'full') return fullOf(item);
-    if (item.kind === 'status') return shortOf(item);
-    if (level === 'letters' && isPill(item)) return shortOf(item);
-    return fullOf(item);
-  };
-  return items.reduce((sum, i) => sum + each(i), 0) + Math.max(0, items.length - 1) * gap;
-}
-
-export interface TitleMetaFitOptions {
-  /** A kind kept on the row whatever the room (a kebab row is about to open its flyout). */
-  pinned?: TitleMetaKind | string | null;
-  /** Extra room the letters may take from the title before a pill is removed
-   *  (TITLE_MIN_WIDTH - TITLE_FLOOR_WIDTH in the header). */
-  dropSlack?: number;
-}
-
-/**
- * `availableWidth` is the room the cluster may take once the title has
- * TITLE_MIN_WIDTH: row width minus the title's fixed companions (dot, phase
- * circle, the Ask slot's menu button, the thread mode pill) and minus the title's
- * reserve.
- */
-export function fitTitleMeta(items: TitleMetaItem[], availableWidth: number, gap: number, options: TitleMetaFitOptions = {}): TitleMetaFit {
-  if (items.length === 0) return { level: 'full', hidden: [] };
-  // The title's companions alone can exceed a very narrow row; that is "no
-  // room", never "unknown" (the hooks skip rows that have no width yet).
-  const room = Math.max(1, availableWidth);
-  if (metaWidth(items, 'full', gap) <= room) return { level: 'full', hidden: [] };
-  if (items.some((i) => i.kind === 'status') && metaWidth(items, 'dot', gap) <= room) return { level: 'dot', hidden: [] };
-  // Letters may squeeze the title down to its floor before anything is removed.
-  const roomForLetters = room + Math.max(0, options.dropSlack ?? 0);
-  if (metaWidth(items, 'letters', gap) <= roomForLetters) return { level: 'letters', hidden: [] };
-  // Letters still overflow: pills go, lowest priority first, until the rest fit.
-  // A pinned kind (the one a kebab row is about to open, so its flyout has an
-  // anchor) stays whatever the room.
-  const kept = [...items];
-  const hidden: string[] = [];
-  for (const kind of PILL_DROP_ORDER) {
-    if (kind === options.pinned) continue;
-    for (const item of items.filter((i) => i.kind === kind)) {
-      if (metaWidth(kept, 'letters', gap) <= roomForLetters) break;
-      kept.splice(kept.indexOf(item), 1);
-      hidden.push(item.id);
-    }
-  }
-  return { level: 'letters', hidden: items.filter((i) => hidden.includes(i.id)).map((i) => i.id) };
-}
-
-/** The element a pill kind renders in the title row (for the kebab's proxy rows). */
-export const TITLE_PILL_SELECTOR: Record<string, string> = {
-  embedded: '.session-panel-badge[data-header-pill="embedded"]',
-  cron: '.session-cron-pill',
-  trigger: '.task-trigger-pill',
-  tag: '.session-panel-tag-pills',
-  worker: '.todo-item-subtask-pill',
-  leader: '.todo-item-leader-pill',
-};
-
-/** The title row's cluster, classified by what each child IS (its component's class). */
-export function classifyTitleMetaChild(classList: { contains: (name: string) => boolean }, dataset: { headerPill?: string }): TitleMetaKind {
-  if (dataset.headerPill === 'embedded') return 'embedded';
-  if (classList.contains('session-cron-pill')) return 'cron';
-  if (classList.contains('task-trigger-pill')) return 'trigger';
-  if (classList.contains('session-panel-tag-pills')) return 'tag';
-  if (classList.contains('todo-item-subtask-pill')) return 'worker';
-  if (classList.contains('todo-item-leader-pill')) return 'leader';
-  if (classList.contains('session-panel-badge')) return 'status';
-  if (classList.contains('task-quick-actions')) return 'kebab';
-  return 'other';
 }

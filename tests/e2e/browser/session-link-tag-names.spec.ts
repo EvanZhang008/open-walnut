@@ -5,11 +5,12 @@
  *     (made from the file names), a pull request its id, each after its kind's icon;
  *   - the hover card names the link, its kind and its whole path, and where a click goes;
  *   - a click on a file opens it in Files; a file that is gone (cleaned from a temp dir) draws
- *     no pill and counts in no "+N", a task whose links are all gone draws no tag, and a file
- *     that comes back brings its pill back (2026-10-26, the user: "if a file is removed please
- *     don't show the tag");
- *   - the header pill is never cut by the title row (2026-10-25, "it somehow get cropped out":
- *     the tag row's 16px overflow box clipped the 20px header pill), in a wide and a narrow column.
+ *     no pill and counts as no label, a task whose links are all gone draws no labels control,
+ *     and a file that comes back brings its pill back (2026-10-26, the user: "if a file is
+ *     removed please don't show the tag");
+ *   - the header folds every label into ONE control beside the title (2026-11-02,
+ *     SessionHeaderLabels.tsx): its flyout lists every link whole, 20px, uncut (2026-10-25, "it
+ *     somehow get cropped out"), and the title keeps its room, in a wide and a narrow column.
  *
  * The fixture task `pw-task-links` (test-server.ts) holds the tags; its two existing files are
  * written by the fixture, the third never is. `pw-task-links-gone-<browser>` links only files
@@ -18,6 +19,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { closeHeaderLabels, expectHeaderLabel, headerLabelsButton, openHeaderLabels } from './session-header-labels-helpers'
 
 const SHOT_DIR = '/tmp/session-link-tag-names'
 const TASK = 'pw-task-links'
@@ -37,14 +39,16 @@ async function openSession(page: Page, task = TASK, session = SESSION, title = '
   return panel
 }
 
-/** The pill's box is inside every ancestor that clips, up to the header. */
+/** The pill's box is inside every ancestor that clips, up to the panel (or the body, for the labels flyout). */
 async function clippedBy(pill: Locator): Promise<string[]> {
   return pill.evaluate((el) => {
     const box = el.getBoundingClientRect()
     const out: string[] = []
-    for (let a = el.parentElement; a && !a.classList.contains('session-panel'); a = a.parentElement) {
+    for (let a = el.parentElement; a && a !== document.body && !a.classList.contains('session-panel'); a = a.parentElement) {
       const cs = getComputedStyle(a)
-      if (cs.overflowX === 'visible' && cs.overflowY === 'visible') continue
+      // A `display: contents` box draws nothing, so its overflow clips nothing (the labels
+      // flyout lays the tag group's pills straight into its own row this way).
+      if (cs.display === 'contents' || (cs.overflowX === 'visible' && cs.overflowY === 'visible')) continue
       const r = a.getBoundingClientRect()
       if (box.top < r.top - 0.5 || box.bottom > r.bottom + 0.5 || box.left < r.left - 0.5 || box.right > r.right + 0.5) {
         out.push(`${a.className} (${Math.round(r.top)}..${Math.round(r.bottom)} vs pill ${Math.round(box.top)}..${Math.round(box.bottom)})`)
@@ -58,27 +62,41 @@ test.beforeEach(async ({ page }) => {
   await isolateUiPrefs(page)
 })
 
-test('each link pill reads a name after its icon, and the header pill is never cut', async ({ page, browserName }) => {
+test('each link pill reads a name after its icon, and the labels flyout shows each one whole', async ({ page, browserName }) => {
+  // A full app boot plus the labels flyout: 30 s ran out on a loaded machine.
+  test.setTimeout(60_000)
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   await page.setViewportSize({ width: 1280, height: 800 })
   const panel = await openSession(page)
-  const group = panel.locator('.session-panel-title-meta > .session-panel-tag-pills .tag-pill-group')
-  const head = group.locator('.tag-chip-link-tag')
-  await expect(head.locator('.tag-chip-value')).toHaveText('Test matrix r5')
-  await expect(head.locator('svg.tag-chip-icon')).toHaveAttribute('data-kind-group', 'doc')
-  // On the right with the status pills, not beside the title (2026-10-26, "should be on the right").
+  // The labels control sits on the right, after the title (2026-10-26, "should be on the
+  // right"), and names the links; the gone plan is no label.
+  await expectHeaderLabel(panel, 'Test matrix r5')
+  const button = headerLabelsButton(panel)
+  await expect(button.locator('.session-header-labels-count')).toHaveText('3')
+  await expect(button).not.toHaveAttribute('title', /Fix plan r5c/)
   const row = await panel.locator('.session-panel-header-top').boundingBox()
-  const tagBox = await group.boundingBox()
-  expect(tagBox!.x).toBeGreaterThan(row!.x + row!.width / 2)
-  // The gone plan counts in no "+N".
-  await expect(group.locator('[data-testid="tag-pills-more"]')).toHaveText('+2')
-  // 20px, whole: no ancestor up to the panel cuts it.
-  const box = await head.boundingBox()
-  expect(Math.round(box!.height)).toBe(20)
-  expect(await clippedBy(group)).toEqual([])
+  const btnBox = await button.boundingBox()
+  expect(btnBox!.x).toBeGreaterThan(row!.x + row!.width / 2)
   await fs.mkdir(SHOT_DIR, { recursive: true })
   await panel.locator('.session-panel-header').screenshot({ path: `${SHOT_DIR}/${browserName}-header.png` })
+
+  // The flyout: every link, its name after its kind's icon; no "+N" (it holds them all).
+  const labels = await openHeaderLabels(panel)
+  const links = labels.locator('.tag-chip-link-tag')
+  await expect(links.locator('.tag-chip-value')).toHaveText(['Test matrix r5', 'Fix plan r5b', 'app#12'])
+  const head = links.first()
+  await expect(head.locator('svg.tag-chip-icon')).toHaveAttribute('data-kind-group', 'doc')
+  await expect(labels.locator('svg.tag-chip-icon[data-kind-group="review"]')).toHaveCount(1)
+  await expect(labels.locator('[data-testid="tag-pills-more"]')).toHaveCount(0)
+  await expect(page.getByText('Fix plan r5c')).toHaveCount(0)
+  // 20px, whole: no ancestor up to the flyout cuts any pill.
+  for (const pill of await links.all()) {
+    const box = await pill.boundingBox()
+    expect(Math.round(box!.height)).toBe(20)
+    expect(await clippedBy(pill)).toEqual([])
+  }
+  await labels.screenshot({ path: `${SHOT_DIR}/${browserName}-labels.png` })
 
   // Hover: name, kind, the whole path, where a click goes.
   await head.hover()
@@ -90,47 +108,46 @@ test('each link pill reads a name after its icon, and the header pill is never c
   await expect(card.locator('.link-hover-card-opens')).toHaveText('Opens in Files')
   await page.mouse.move(0, 0)
 
-  // The rest: distinct names; the gone file is not there at all.
-  await group.locator('[data-testid="tag-pills-more"]').click()
-  const menu = page.getByTestId('tag-pills-menu')
-  await expect(menu.locator('.tag-chip-value')).toHaveText(['Fix plan r5b', 'app#12'])
-  await expect(menu.locator('svg.tag-chip-icon[data-kind-group="review"]')).toHaveCount(1)
-  await expect(page.getByText('Fix plan r5c')).toHaveCount(0)
-  await menu.screenshot({ path: `${SHOT_DIR}/${browserName}-menu.png` })
-  await page.keyboard.press('Escape')
-
-  // A live one opens in Files.
+  // A live one opens in Files (read outside the labels flyout, which holds the pill's own name).
   await head.click()
-  await expect(page.getByText('Test matrix r5', { exact: false }).last()).toBeVisible({ timeout: 15_000 })
+  const app = page.locator('body > :not([data-testid="session-header-labels-flyout"])')
+  await expect(app.getByText('Test matrix r5', { exact: false }).last()).toBeVisible({ timeout: 15_000 })
   expect(errors).toEqual([])
 })
 
-test('a narrow column keeps the header pill whole', async ({ page, browserName }) => {
+test('a narrow column keeps the labels control in the header and every pill whole in its flyout', async ({ page, browserName }) => {
+  // A full app boot plus the labels flyout: 30 s ran out on a loaded machine.
+  test.setTimeout(60_000)
   // Just above the phone layout (769px): the narrowest desktop session column.
   await page.setViewportSize({ width: 900, height: 700 })
   const panel = await openSession(page)
-  const group = panel.locator('.session-panel-title-meta > .session-panel-tag-pills .tag-pill-group')
-  await expect(group).toBeVisible()
-  expect(await clippedBy(group)).toEqual([])
-  const head = await group.boundingBox()
+  const button = headerLabelsButton(panel)
+  await expectHeaderLabel(panel, 'Test matrix r5')
+  const head = await button.boundingBox()
   const header = await panel.locator('.session-panel-header').boundingBox()
   expect(head!.x + head!.width).toBeLessThanOrEqual(header!.x + header!.width + 1)
-  // On the right, after the title, and the title keeps room for its text (TITLE_FLOOR_WIDTH).
+  // On the right, after the title, and the title keeps room for its text.
   const title = await panel.locator('.session-panel-header-top .session-panel-title').boundingBox()
   expect(head!.x).toBeGreaterThanOrEqual(title!.x + title!.width - 1)
   expect(title!.width).toBeGreaterThanOrEqual(48)
   await fs.mkdir(SHOT_DIR, { recursive: true })
   await panel.locator('.session-panel-header').screenshot({ path: `${SHOT_DIR}/${browserName}-narrow-header.png` })
+  const labels = await openHeaderLabels(panel)
+  const flyout = (await labels.boundingBox())!
+  expect(flyout.x).toBeGreaterThanOrEqual(0)
+  expect(flyout.x + flyout.width).toBeLessThanOrEqual(900)
+  for (const pill of await labels.locator('.tag-chip-link-tag').all()) expect(await clippedBy(pill)).toEqual([])
+  await closeHeaderLabels(panel)
 })
 
-test('a narrower column folds the tag with the status pills and never squeezes the title out', async ({ page, browserName }) => {
+test('a narrower column never squeezes the title out, and the links stay one click away', async ({ page, browserName }) => {
+  // A full app boot plus the labels flyout: 30 s ran out on a loaded machine.
+  test.setTimeout(60_000)
   await page.setViewportSize({ width: 1280, height: 800 })
   const panel = await openSession(page)
-  const meta = panel.locator('.session-panel-header-top > .session-panel-title-meta')
-  const tags = meta.locator('> .session-panel-tag-pills')
-  await expect(tags.locator('.tag-chip-link-tag .tag-chip-value')).toHaveText('Test matrix r5')
+  const button = headerLabelsButton(panel)
+  await expectHeaderLabel(panel, 'Test matrix r5')
   await fs.mkdir(SHOT_DIR, { recursive: true })
-  const forms: string[] = []
   for (const width of [560, 420, 340, 260, 200]) {
     await panel.evaluate((el, w) => { (el as HTMLElement).style.flex = `0 0 ${w}px`; (el as HTMLElement).style.width = `${w}px` }, width)
     await page.waitForTimeout(400)
@@ -138,39 +155,29 @@ test('a narrower column folds the tag with the status pills and never squeezes t
       const row = el.querySelector('.session-panel-header-top')!.getBoundingClientRect()
       const title = el.querySelector('.session-panel-header-top .session-panel-title')!
       const m = el.querySelector('.session-panel-title-meta') as HTMLElement
-      const tag = m.querySelector(':scope > .session-panel-tag-pills') as HTMLElement | null
-      const value = tag?.querySelector('.tag-chip-link-tag .tag-chip-value') as HTMLElement | null
-      const shown = !!tag && getComputedStyle(tag).display !== 'none'
+      const btn = m.querySelector('[data-testid="session-header-labels"]') as HTMLElement | null
       const t = title.getBoundingClientRect()
       return {
         titleWidth: t.width, titleNatural: (title as HTMLElement).scrollWidth,
-        form: !shown ? 'menu' : value && getComputedStyle(value).display === 'none' ? 'icon' : 'name',
-        tagLeft: shown ? tag!.getBoundingClientRect().left : null, titleRight: t.right,
+        btnLeft: btn ? btn.getBoundingClientRect().left : null, titleRight: t.right,
         metaRight: m.getBoundingClientRect().right, rowRight: row.right,
       }
     })
-    forms.push(state.form)
     expect(state.titleWidth, `${width}px: the title keeps its room`).toBeGreaterThanOrEqual(Math.min(48, state.titleNatural) - 1)
     expect(state.metaRight, `${width}px: nothing leaves the row`).toBeLessThanOrEqual(state.rowRight + 1)
-    if (state.tagLeft !== null) expect(state.tagLeft, `${width}px: the tag stays right of the title`).toBeGreaterThanOrEqual(state.titleRight - 1)
+    expect(state.btnLeft, `${width}px: the labels control stays on the row`).not.toBeNull()
+    expect(state.btnLeft!, `${width}px: the labels control stays right of the title`).toBeGreaterThanOrEqual(state.titleRight - 1)
     await panel.locator('.session-panel-header').screenshot({ path: `${SHOT_DIR}/${browserName}-column-${width}.png` })
   }
-  // It folds in order (name, then icon and "+N", then the menu) and never comes back wider.
-  const rank = { name: 0, icon: 1, menu: 2 } as Record<string, number>
-  for (let i = 1; i < forms.length; i++) expect(rank[forms[i]]).toBeGreaterThanOrEqual(rank[forms[i - 1]])
-  expect(forms[0]).toBe('name')
-  expect(forms.at(-1)).not.toBe('name')
-  if (forms.at(-1) === 'menu') {
-    await panel.locator('.session-panel-title-meta .task-kebab-btn').click()
-    const row = page.getByTestId('session-header-kebab-pill-tag')
-    await expect(row).toContainText('Links')
-    await row.click()
-    await expect(page.getByTestId('tag-pills-menu')).toBeVisible()
-    await page.keyboard.press('Escape')
-  }
+  // The labels never fold away: at the narrowest the flyout still names the link whole.
+  await expect(button).toHaveAttribute('title', /Test matrix r5/)
+  const labels = await openHeaderLabels(panel)
+  await expect(labels.locator('.tag-chip-link-tag .tag-chip-value').first()).toHaveText('Test matrix r5')
+  await expect(labels.locator('.tag-chip-link-tag .tag-chip-value').first()).toBeVisible()
+  await closeHeaderLabels(panel)
 })
 
-test('a task whose links are all gone draws no tag, and a file that comes back brings its pill back', async ({ page, request, browserName }) => {
+test('a task whose links are all gone draws no labels, and a file that comes back brings its pill back', async ({ page, request, browserName }) => {
   // Two 5.5s waits for the window-back recheck on top of opening the session.
   test.setTimeout(75_000)
   // One task per browser (test-server.ts): this test writes one of its files and removes it again.
@@ -186,9 +193,9 @@ test('a task whose links are all gone draws no tag, and a file that comes back b
   const { exists } = await (await checked).json() as { exists: Record<string, boolean> }
   expect(Object.values(exists)).toEqual([false, false])
   await page.waitForTimeout(500)
-  const pills = panel.locator('.session-panel-title-meta > .session-panel-tag-pills .tag-chip-link-tag')
-  await expect(pills).toHaveCount(0)
-  await expect(panel.locator('[data-testid="task-tag-pills"]')).toHaveCount(0)
+  // No label at all: the header draws no labels control.
+  const button = headerLabelsButton(panel)
+  await expect(button).toHaveCount(0)
 
   // The header asks again when the window comes back (and every minute while it is visible).
   const comeBack = async () => {
@@ -198,16 +205,21 @@ test('a task whose links are all gone draws no tag, and a file that comes back b
   try {
     await fs.writeFile(plan, '# Gone a\n')
     await comeBack()
+    await expect(button).toBeVisible()
+    // The other link is still gone: one label.
+    await expect(button.locator('.session-header-labels-count')).toHaveText('1')
+    const labels = await openHeaderLabels(panel)
+    const pills = labels.locator('.tag-chip-link-tag')
     await expect(pills).toHaveCount(1)
     await expect(pills.locator('svg.tag-chip-icon')).toHaveAttribute('data-kind-group', 'doc')
-    // The other link is still gone: no "+N".
-    await expect(panel.locator('[data-testid="tag-pills-more"]')).toHaveCount(0)
+    await expect(labels.locator('[data-testid="tag-pills-more"]')).toHaveCount(0)
     await panel.locator('.session-panel-header').screenshot({ path: `${SHOT_DIR}/${browserName}-file-back.png` })
+    await closeHeaderLabels(panel)
   } finally {
     await fs.rm(plan, { force: true })
   }
   await comeBack()
-  await expect(pills).toHaveCount(0)
+  await expect(button).toHaveCount(0)
 })
 
 test('the task detail serves the names for the phone', async ({ request }) => {

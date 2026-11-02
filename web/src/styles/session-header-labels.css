@@ -1,0 +1,98 @@
+/* The session header's folded labels (web/src/components/sessions/SessionHeaderLabels.tsx):
+   one small control beside the title, and the flyout that lists every label. */
+
+.session-header-labels-btn {
+  /* As quiet as the ⋮ beside it (.task-kebab-btn): no fill, no border, the same 22px
+     height and muted ink, the accent only on hover or while open (2026-11-02, the user
+     on a coloured hourglass pill and an orange Idle there: "it is so ugly"). */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  flex: none;
+  box-sizing: border-box;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+.session-header-labels-btn:hover,
+.session-header-labels-btn.is-open {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+.session-header-labels-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.session-header-labels-count { font-variant-numeric: tabular-nums; }
+
+.session-header-labels-flyout[hidden] { display: none !important; }
+.session-header-labels-flyout {
+  box-sizing: border-box;
+  /* Wide enough for a ticket id beside the wait, never wider than a narrow window. */
+  width: max-content;
+  max-width: min(360px, calc(100vw - 16px));
+  overflow-y: auto;
+  padding: 8px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+  font-size: 12px;
+}
+.session-header-labels-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Every pill one size, the header's (20px, 11px text), as they were beside the title. */
+.session-header-labels-list :is(.tag-chip, .session-panel-badge) {
+  box-sizing: border-box;
+  height: 20px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  line-height: 16px;
+  max-width: none;
+}
+.session-header-labels-list :is(.task-trigger-pill, .task-team-pill, .session-cron-pill, .task-waiting-chip) {
+  box-sizing: border-box;
+  height: 20px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 11px;
+  line-height: 16px;
+  max-width: none;
+}
+/* The tag group is a one-line box elsewhere; here every tag shows, wrapping. Its pills join
+   the list's own flex row so they wrap with the others. */
+.session-header-labels-list > .task-tag-pills { display: contents; }
+.session-header-labels-list > .task-tag-pills .tag-chip-inline {
+  flex: none;
+  height: 20px;
+  min-width: 0;
+  max-width: 100%;
+}
+.session-header-labels-list > .task-tag-pills .tag-chip-link-tag .tag-chip-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Embedded (a session run in-process): a fact, in the accent colour. */
+.session-header-labels-list .session-panel-embedded-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-weight: 600;
+}

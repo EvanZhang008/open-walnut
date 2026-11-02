@@ -10,15 +10,18 @@
  * row background in its own column band) is read from a 2x screenshot, so the
  * resolution is half a CSS pixel.
  *
- * Real density: the header carries the pills a busy task has (Trigger, Worker,
- * Leader · 1), the status badge and the kebab, in both marker states (solid
- * unread dot, hollow read ring), in a session column and in the Ask Walnut slot.
+ * Real density: the task carries the labels a busy task has (Trigger, Worker,
+ * Leader · 1), which the title row folds into one labels control (2026-11-02:
+ * no pill and no status badge beside the title), and the kebab, in both marker
+ * states (solid unread dot, hollow read ring), in a session column and in the
+ * Ask Walnut slot.
  */
 import fs from 'node:fs/promises'
 import sharp from 'sharp'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openAskWalnutDrawer, openChatOnLoad, openDraftOnCwd } from './draft-helpers'
+import { expectBareTitleRow, expectHeaderLabel } from './session-header-labels-helpers'
 
 const SCREENSHOT_DIR = process.env.PW_SCREENSHOT_DIR ?? '/tmp/session-header-alignment'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -141,7 +144,7 @@ async function inkOf(page: Page, row: Locator, selectors: Record<string, string>
 }
 
 /** Evidence shots of a title row: its start (widened left so the gutter dot is
- *  in frame) and its end (pills, badge, kebab), each at most 640px wide. */
+ *  in frame) and its end (labels control, kebab), each at most 640px wide. */
 async function rowShot(page: Page, row: Locator, name: string): Promise<void> {
   const b = (await row.boundingBox())!
   const base = `${SCREENSHOT_DIR}/${test.info().project.name}-${name}`
@@ -153,9 +156,7 @@ async function rowShot(page: Page, row: Locator, name: string): Promise<void> {
 const HEADER_ITEMS = {
   marker: '.session-panel-unread-dot',
   circle: '.task-quick-phase-btn svg',
-  trigger: '.session-panel-title-meta .task-trigger-pill',
-  sub: '.session-panel-title-meta .task-team-pill',
-  badge: '.session-panel-title-meta .session-panel-badge',
+  labels: '.session-panel-title-meta [data-testid="session-header-labels"]',
   kebab: '.session-panel-title-meta .task-kebab-btn',
 }
 
@@ -187,7 +188,7 @@ async function listGap(page: Page, taskId: string): Promise<number> {
   return ink.circle.left - ink.dot.right
 }
 
-test('a session column header: dot or ring, circle, pills, badge and kebab share one center line', async ({ page }) => {
+test('a session column header: dot or ring, circle, labels control and kebab share one center line', async ({ page }) => {
   test.setTimeout(180_000)
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
@@ -198,9 +199,8 @@ test('a session column header: dot or ring, circle, pills, badge and kebab share
   await expect(panel.getByText('Alignment turn finished', { exact: true }).first()).toBeVisible({ timeout: 30_000 })
   await dressAsBusyTask(taskId)
   const header = panel.locator('.session-panel-header-top')
-  for (const pill of ['Trigger', 'Worker', 'Leader']) {
-    await expect(header.locator('.session-panel-title-meta').getByText(new RegExp(pill, 'i')).first()).toBeVisible({ timeout: 20_000 })
-  }
+  for (const pill of ['Trigger', 'Worker', 'Leader']) await expectHeaderLabel(panel, pill)
+  await expectBareTitleRow(panel)
   await expect(header.locator('.session-panel-unread-dot:not(.session-panel-attention-dot)')).toBeVisible({ timeout: 20_000 })
 
   const gap = await listGap(page, taskId)
@@ -208,7 +208,10 @@ test('a session column header: dot or ring, circle, pills, badge and kebab share
   expect(Math.abs((unread.circle.left - unread.marker.right) - gap), 'dot-to-circle gap matches the task list').toBeLessThanOrEqual(1)
   await rowShot(page, header, 'column-unread')
 
-  // Read: the hollow ring takes the dot's place, on the same line and spacing.
+  // Read: the hollow ring takes the dot's place, on the same line and spacing. The ring
+  // marks a task that needs the user, and a clean turn end asks nothing (only a real ask
+  // reaches Needs you), so the user sets Needs you themself (src/core/sessions/person-needs.ts).
+  await api('PATCH', `/api/tasks/${taskId}`, { phase: 'NEED_ACTION' })
   await panel.getByText('Alignment turn finished', { exact: true }).first().click()
   await expect(header.locator('.session-panel-attention-dot')).toBeVisible({ timeout: 20_000 })
   const read = await expectRowAligned(page, panel, 'column-read')

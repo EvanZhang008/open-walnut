@@ -304,7 +304,7 @@ test('N6: the session bar status matches the process: no stale Needs you, no too
   const text = (await sub.innerText()).trim()
   expect(text).not.toContain('AskUserQuestion')
   expect(text).toMatch(/^(Running|Idle|Stopped|Not available|Needs you|Needs your answer|Needs you: .+)$/)
-  // One status source: the same record the desktop badge reads (WorkStatusPicker
+  // One status source: the same record the task detail reads (session-status.ts
   // deriveDisplayStatus): a prompt counts only on a live process.
   const rec = await page.request.get(`/api/sessions/${sid}`).then((r) => r.ok() ? r.json() : null).catch(() => null) as
     { session?: { process_status?: string; pendingPermission?: { toolName?: string } } } | null

@@ -19,6 +19,7 @@ import { expect, test, type Locator } from '@playwright/test'
 import fs from 'node:fs/promises'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { REAL_PANEL } from './draft-helpers'
+import { expectHeaderLabel, openHeaderLabels } from './session-header-labels-helpers'
 import { seedShortcutBars } from './shortcut-test-fixture'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
@@ -279,7 +280,7 @@ test('the Leader pill counts and lists only open subtasks, and leaves when the l
 })
 
 
-test('a parent\'s session header carries the Leader pill, and its list leads to each subtask', async ({ page, browserName }) => {
+test('a parent\'s session header carries the Leader pill in its labels, and its list leads to each subtask', async ({ page, browserName }) => {
   // A Personal AI ask is never a board row: the session header is where a parent
   // that lives in the chat slot shows its team. The seeded "Model switch test
   // task" has a live session record, so a row click opens its column.
@@ -299,15 +300,18 @@ test('a parent\'s session header carries the Leader pill, and its list leads to 
   const panel = page.locator(`${REAL_PANEL}[data-session-id="pw-model-switch-session"]`)
   await expect(panel).toBeVisible({ timeout: 15_000 })
   const header = panel.locator('.session-panel-title-meta')
-  const leader = header.locator('[data-testid="leader-pill"]')
+  // Every label sits in the header's one labels control (SessionHeaderLabels.tsx): open it.
+  await expectHeaderLabel(panel, /Leader · \d+/, 30_000)
+  const labels = await openHeaderLabels(panel)
+  const leader = labels.locator('[data-testid="leader-pill"]')
   // The chromium and webkit projects share one fixture board, and the Focus test
   // below files its own subtask under this same fixture parent, so the count is
   // at least this test's two; the flyout below names both of them.
   await expect(leader).toHaveText(/^Leader · \d+$/)
   expect(Number(await leader.getAttribute('data-subtask-count'))).toBeGreaterThanOrEqual(2)
   await expectTriggerShape(leader)
-  // It has no parent of its own, so no Worker pill in its header.
-  await expect(header.locator('[data-testid="subtask-pill"]')).toHaveCount(0)
+  // It has no parent of its own, so no Worker pill in its header's labels.
+  await expect(labels.locator('[data-testid="subtask-pill"]')).toHaveCount(0)
 
   await leader.click()
   const flyout = page.locator('[data-testid="leader-subtasks-flyout"]')

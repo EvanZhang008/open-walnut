@@ -5,7 +5,9 @@
  *   row 1 (.session-meta-row-2)       = tool chips + time + EVERY icon button
  *                                       (locate / lock / popout / expand / close)
  *   row 2 (.session-panel-header-top)  = the TITLE on its own full-width line,
- *                                       with only the status badge and ⋮ kebab
+ *                                       with only the folded labels control and
+ *                                       the ⋮ kebab (2026-11-02: no status badge,
+ *                                       no pill beside the title)
  *
  * Regression guarded: the title used to share one row with five icon buttons and
  * the status pill, so a long title collapsed to ~105px ("Fork of ek…") in a
@@ -15,6 +17,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import { openAskWalnutDrawer, openChatOnLoad } from './draft-helpers'
 import { presetPanelView } from './todo-panel-helpers'
+import { expectBareTitleRow } from './session-header-labels-helpers'
 
 const SESSION_ID = 'pw-vscode-session'
 const TASK_ID = 'pw-task-vscode'
@@ -178,8 +181,14 @@ test('the session title owns the second header row and reveals its full text on 
   }
   await expect(toolsRow.getByRole('button', { name: 'Changed' })).toHaveCount(1)
 
-  // 2. ONLY the status badge and the kebab share the title row.
+  // 2. ONLY the folded labels control and the kebab share the title row: no status
+  //    badge and no pill (SessionHeaderLabels.tsx holds every label).
   await expect(titleRow.locator('.session-panel-title-meta .task-kebab-btn')).toHaveCount(1)
+  await expectBareTitleRow(panel)
+  const metaKids = await titleRow.locator('.session-panel-title-meta').evaluate((el) =>
+    [...el.children].filter((c) => getComputedStyle(c).display !== 'none').map((c) =>
+      c.matches('[data-testid="session-header-labels"]') ? 'labels' : c.querySelector('.task-kebab-btn') || c.matches('.task-kebab-btn') ? 'kebab' : c.className))
+  expect(metaKids.filter((k) => k !== 'labels' && k !== 'kebab'), `title row extras: ${metaKids}`).toEqual([])
   for (const cls of ['locate', 'lock', 'popout', 'expand', 'close', 'vscode']) {
     await expect(titleRow.locator(`.session-panel-${cls}`)).toHaveCount(0)
   }

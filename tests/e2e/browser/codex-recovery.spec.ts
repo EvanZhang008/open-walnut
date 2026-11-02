@@ -3,6 +3,7 @@ import path from 'node:path'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture, installBrowserAudit } from './codex-test-audit'
 import { REAL_PANEL, openDraftOnCwd } from './draft-helpers'
+import { expectPanelRunning } from './session-header-labels-helpers'
 
 const SCREENSHOT_DIR = '/tmp/codex-customer-matrix-gap-final'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -172,7 +173,8 @@ test('ACP worker death cold-resumes without replay and converges across a mid-st
     .toHaveCount(1, { timeout: 15_000 })
   await expect.poll(() => statusKey(page, session.claudeSessionId), { timeout: 15_000 })
     .toBe('2:idle')
-  await expect(panel.locator('.session-panel-badge', { hasText: 'Idle' })).toHaveCount(1)
+  // The header has no status badge (2026-11-02): an idle panel offers no Stop.
+  await expectPanelRunning(panel, false)
   expect(transcript(await historyFor(page, session.claudeSessionId))).toEqual([
     `user:${BASE_PROMPT}`,
     `assistant:${BASE_REPLY}`,
@@ -218,8 +220,7 @@ test('ACP worker death cold-resumes without replay and converges across a mid-st
 
   const reloadedPanel = page.locator(REAL_PANEL)
   await expect(reloadedPanel).toBeVisible({ timeout: 15_000 })
-  await expect(reloadedPanel.locator('.session-panel-badge', { hasText: 'Running' }))
-    .toHaveCount(1)
+  await expectPanelRunning(reloadedPanel, true)
   await expect(reloadedPanel.getByText(BASE_PROMPT, { exact: true })).toHaveCount(1)
   await expect(reloadedPanel.getByText(BASE_REPLY, { exact: true })).toHaveCount(1)
   await expect(reloadedPanel.getByText(CRASH_PROMPT, { exact: true })).toHaveCount(1)
@@ -240,7 +241,7 @@ test('ACP worker death cold-resumes without replay and converges across a mid-st
   await page.reload()
   const finalPanel = page.locator(REAL_PANEL)
   await expect(finalPanel).toBeVisible({ timeout: 15_000 })
-  await expect(finalPanel.locator('.session-panel-badge', { hasText: 'Idle' })).toHaveCount(1)
+  await expectPanelRunning(finalPanel, false)
 
   const exactTranscript = [
     `user:${BASE_PROMPT}`,

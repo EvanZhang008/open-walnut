@@ -3,6 +3,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture, installBrowserAudit } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
 import { revealInTasksTable } from './tasks-table-helpers'
+import { expectPanelRunning } from './session-header-labels-helpers'
 
 const SCREENSHOT_DIR = '/tmp/codex-status-regression'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
@@ -79,8 +80,8 @@ test('broadcasts active Codex status across Home, task pill, and reload', async 
   await expect(homePanel).toBeVisible({ timeout: 15_000 })
   await expect(homePanel.getByText(BASE_REPLY, { exact: true }))
     .toHaveCount(1, { timeout: 20_000 })
-  await expect(homePanel.locator('.session-panel-badge', { hasText: 'Idle' }))
-    .toHaveCount(1)
+  // The header has no status badge (2026-11-02): an idle panel offers no Stop.
+  await expectPanelRunning(homePanel, false)
 
   let sessionId = ''
   await expect.poll(async () => {
@@ -97,8 +98,7 @@ test('broadcasts active Codex status across Home, task pill, and reload', async 
   await panelInput.press('Enter')
   await expect.poll(() => processStatus(page, sessionId), { timeout: 10_000 })
     .toBe('running')
-  await expect(homePanel.locator('.session-panel-badge', { hasText: 'Running' }))
-    .toHaveCount(1, { timeout: 2_000 })
+  await expectPanelRunning(homePanel, true, 2_000)
   // The running call sits inside the closed run, which breathes while it runs
   // (2026-10-04); opened, the call is there and not done yet.
   const liveRun = homePanel.locator('.session-live-row .tool-run-row')
@@ -115,8 +115,7 @@ test('broadcasts active Codex status across Home, task pill, and reload', async 
   await panelInput.press('Enter')
   await expectQueued(homePanel, FIRST_QUEUED)
   await expectQueued(homePanel, SECOND_QUEUED)
-  await expect(homePanel.locator('.session-panel-badge', { hasText: 'Running' }))
-    .toHaveCount(1)
+  await expectPanelRunning(homePanel, true)
   await page.screenshot({
     path: `${SCREENSHOT_DIR}/home-running-tool-queued.png`,
     fullPage: true,
@@ -148,14 +147,12 @@ test('broadcasts active Codex status across Home, task pill, and reload', async 
     .toHaveCount(1, { timeout: 25_000 })
   await expect.poll(() => processStatus(page, sessionId), { timeout: 15_000 })
     .toBe('idle')
-  await expect(finalHomePanel.locator('.session-panel-badge', { hasText: 'Idle' }))
-    .toHaveCount(1)
+  await expectPanelRunning(finalHomePanel, false)
 
   await page.reload()
   const reloadedPanel = page.locator(REAL_PANEL)
   await expect(reloadedPanel).toBeVisible({ timeout: 15_000 })
-  await expect(reloadedPanel.locator('.session-panel-badge', { hasText: 'Idle' }))
-    .toHaveCount(1)
+  await expectPanelRunning(reloadedPanel, false)
   await expect(reloadedPanel.getByText(SLOW_PROMPT, { exact: true })).toHaveCount(1)
   await expect(reloadedPanel.getByText(FIRST_QUEUED, { exact: true })).toHaveCount(1)
   await expect(reloadedPanel.getByText(SECOND_QUEUED, { exact: true })).toHaveCount(1)

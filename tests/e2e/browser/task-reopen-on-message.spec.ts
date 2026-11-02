@@ -19,6 +19,7 @@ import fs from 'node:fs/promises'
 import { expect, test, type Locator, type Page } from '@playwright/test'
 import { discoverBrowserFixture } from './codex-test-audit'
 import { REAL_PANEL, draftComposer, openDraftOnCwd } from './draft-helpers'
+import { expectPanelRunning } from './session-header-labels-helpers'
 import { selectSection } from './todo-panel-helpers'
 import { isolateUiPrefsContext, presetPanelDesign } from './status-section-helpers'
 import { sessionResultPhase } from '../../../src/core/phase'
@@ -125,10 +126,10 @@ async function completeThenMessage(
   await page.screenshot({ path: `${SCREENSHOT_DIR}/${shot}-round${round}-reopened.png` })
 
   // The reopened turn ends → handed back the normal way: red row + unread dot,
-  // and the session badge settles to Idle.
+  // and the panel's turn is over (no Stop; the header has no status badge any more).
   await expect.poll(async () => (await readTask(page, taskId)).phase, { timeout: 20_000 }).toBe(HANDBACK_PHASE)
   await expect(card).toHaveClass(/todo-pinned-card-needs-action/)
-  await expect(panel.locator('.session-panel-badge')).toContainText('Idle')
+  await expectPanelRunning(panel, false)
   const handedBack = await readTask(page, taskId)
   expect(handedBack.unread).toBe(true)
   expect(handedBack.completed_at).toBeUndefined()

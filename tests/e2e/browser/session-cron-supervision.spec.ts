@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import { expect, test, type Page, type Locator } from '@playwright/test'
 import { openAskWalnutDrawer, openChatOnLoad } from './draft-helpers'
+import { HEADER_LABELS_FLYOUT, closeHeaderLabels, headerLabelsButton, openHeaderLabels } from './session-header-labels-helpers'
 import type { SessionCronJob, SessionCronMetadata } from '../../../src/core/types'
 import type { SessionSupervision } from '../../../web/src/api/sessions'
 
@@ -122,15 +123,44 @@ async function pushCron(page: Page, metadata: SessionCronMetadata): Promise<void
 }
 
 /**
+ * The header's CRON pill sits in the header's labels flyout (SessionHeaderLabels.tsx),
+ * portalled to <body> and mounted while closed, so `HEADER_CRON` finds the header pill
+ * of every panel on the page and never the task row's.
+ */
+const HEADER_CRON = `${HEADER_LABELS_FLYOUT} .session-cron-pill`
+const CRON_LABEL = /(^| · )Cron( · |$)/
+
+/** Whether this panel's header shows the Cron pill: its labels control names it. */
+async function expectHeaderCron(panel: Locator, shown: boolean): Promise<void> {
+  const button = headerLabelsButton(panel)
+  if (shown) {
+    await expect(button).toHaveAttribute('title', CRON_LABEL)
+    return
+  }
+  await expect.poll(async () => (await button.count()) === 0 ? '' : (await button.getAttribute('title')) ?? '').not.toMatch(CRON_LABEL)
+}
+
+/** Run `check` on this panel's header Cron pill, with its labels flyout open. */
+async function withHeaderCron(panel: Locator, check: (pill: Locator) => Promise<void>): Promise<void> {
+  const flyout = await openHeaderLabels(panel)
+  try {
+    await check(flyout.locator('.session-cron-pill'))
+  } finally {
+    await closeHeaderLabels(panel)
+  }
+}
+
+/**
  * The header's CRON pill opens the job card; the recovery bar only ever opens
  * itself, when something needs a decision.
  */
 async function openCronCard(panel: Locator): Promise<Locator> {
-  const pill = panel.locator('.session-cron-pill')
-  await expect(pill).toBeVisible()
-  await pill.click()
   const card = panel.locator('.session-cron-detail')
-  await expect(card).toBeVisible()
+  await withHeaderCron(panel, async (pill) => {
+    await expect(pill).toBeVisible()
+    await pill.click()
+    await expect(card).toBeVisible()
+  })
   return card
 }
 
@@ -255,14 +285,15 @@ test('shared recovery toggle keeps both home surfaces and a dense transcript usa
     await expect(slot.locator('.session-supervision')).toHaveCount(0)
     await expect(column.locator('.session-cron-detail')).toHaveCount(0)
     const bars = [await openCronCard(column), await openCronCard(slot)]
-    const headerPill = column.locator('.session-cron-pill')
-    await headerPill.focus()
-    await page.keyboard.press('Enter')
-    await expect(bars[0]).toHaveCount(0)
-    await expect(headerPill).toHaveAttribute('aria-expanded', 'false')
-    await page.keyboard.press('Space')
-    await expect(bars[0]).toBeVisible()
-    await expect(headerPill).toHaveAttribute('aria-expanded', 'true')
+    await withHeaderCron(column, async (headerPill) => {
+      await headerPill.focus()
+      await page.keyboard.press('Enter')
+      await expect(bars[0]).toHaveCount(0)
+      await expect(headerPill).toHaveAttribute('aria-expanded', 'false')
+      await page.keyboard.press('Space')
+      await expect(bars[0]).toBeVisible()
+      await expect(headerPill).toHaveAttribute('aria-expanded', 'true')
+    })
     for (const bar of bars) {
       // The card is about the JOB; recovery is one compact row with its facts in the tooltip.
       await expect(bar.locator('.session-cron-job-heading strong')).toHaveText('Every day at 9:23 AM')
@@ -315,7 +346,7 @@ test('shared recovery toggle keeps both home surfaces and a dense transcript usa
     await page.reload()
     // Reload starts collapsed again: the pill is the memory, not the card.
     const restored = page.locator(`.main-page-session-column .session-panel[data-session-id="${SID}"]`)
-    await expect(restored.locator('.session-cron-pill')).toBeVisible()
+    await expectHeaderCron(restored, true)
     await expect(restored.locator('.session-supervision')).toHaveCount(0)
     await expect(restored.locator('.session-cron-detail')).toHaveCount(0)
     await expect(await openCronCard(restored)).toContainText('Every day at 9:23 AM')
@@ -378,7 +409,7 @@ test('offline stop remains pending through reload and retries without sending a 
     await restored.getByRole('button', { name: 'Retry stop' }).click()
     // Confirmed: nothing is pending, so the bar collapses back on its own.
     await expect(restored).toHaveCount(0)
-    await expect(panel.locator('.session-cron-pill')).toHaveCount(0)
+    await expectHeaderCron(panel, false)
     expect(stops).toBe(2)
     expect(sends).toBe(0)
   } finally { hold.release() }
@@ -436,7 +467,7 @@ test('active recovery stays controllable without a cron badge', async ({ page, b
   })
   await openHome(page, baseURL!)
   const column = await openColumn(page)
-  await expect(column.locator('.session-cron-pill')).toHaveCount(0)
+  await expectHeaderCron(column, false)
   const bar = column.locator('.session-supervision')
   await expect(bar).toContainText('Waiting before the next restart attempt.')
   await expect(bar.getByRole('switch')).toBeChecked()
@@ -460,11 +491,13 @@ test('historical wakeups and unknown evidence never label a stopped session as c
   await page.locator(`[data-testid="ask-walnut-drawer-item"][data-task-id="${TASK}"]`).click()
   const slot = page.locator(`[data-testid="ask-walnut-slot"] .session-panel[data-session-id="${SID}"]`)
   await expect(slot).toBeVisible()
-  for (const surface of [taskRow(page), column, slot]) await expect(surface.locator('.session-cron-pill')).toHaveCount(0)
+  await expect(taskRow(page).locator('.session-cron-pill')).toHaveCount(0)
+  for (const surface of [column, slot]) await expectHeaderCron(surface, false)
   await waitForWs(page)
   observation = cron({ revision: 2, source: 'wakeup', validUntil: Date.now() + 60_000 })
   await pushCron(page, observation)
-  for (const surface of [taskRow(page), column, slot]) await expect(surface.locator('.session-cron-pill')).toHaveCount(0)
+  await expect(taskRow(page).locator('.session-cron-pill')).toHaveCount(0)
+  for (const surface of [column, slot]) await expectHeaderCron(surface, false)
   await expect(column.locator('.session-supervision')).toHaveCount(0)
   await expect(slot.locator('.session-supervision')).toHaveCount(0)
   await expect(column.locator('.session-cron-detail')).toHaveCount(0)
@@ -508,16 +541,16 @@ test('the cron pill rides the task row and the session header, and only a newer 
   await expect(row).toHaveClass(/task-focused/)
   const column = page.locator(`.main-page-session-column .session-panel[data-session-id="${SID}"]`)
   await expect(column).toBeVisible()
-  const headerPill = column.locator('.session-cron-pill')
+  // Only the column shows this session, so the one header Cron pill is its own.
+  const headerPill = page.locator(HEADER_CRON)
+  await expectHeaderCron(column, true)
   await expect(headerPill).toHaveText('Cron')
   await expect(headerPill).toHaveAttribute('data-cron-presence', 'active')
   await expect(headerPill).toHaveAttribute('data-cron-source', 'cron')
-  // The pill is an addition, not a replacement: the process badge keeps its own
-  // element and text, and the pill is not nested inside it.
-  const badges = column.locator('.session-panel-badge')
-  const badgeTexts = await badges.allTextContents()
-  expect(badgeTexts.length).toBeGreaterThan(0)
-  expect(await column.locator('.session-panel-badge .session-cron-pill').count()).toBe(0)
+  // The pill folds into the header's labels control: nothing on the title row
+  // beside the title, and no status badge there at all (2026-11-02).
+  await expect(column.locator('.session-panel-header-top .session-cron-pill')).toHaveCount(0)
+  await expect(column.locator('.session-panel-header .session-panel-badge')).toHaveCount(0)
   await expect(column.locator('.session-supervision')).toHaveCount(0)
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-pill-active-css.png`, scale: 'css' })
 
@@ -538,9 +571,9 @@ test('the cron pill rides the task row and the session header, and only a newer 
   const headerTop = column.locator('.session-panel-header-top')
   expect(await headerTop.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
   const headerBox = (await headerTop.boundingBox())!
-  const headerPillBox = (await headerPill.boundingBox())!
-  expect(headerPillBox.width).toBeGreaterThan(28)
-  expect(headerPillBox.x + headerPillBox.width).toBeLessThanOrEqual(headerBox.x + headerBox.width + 1)
+  const labelsBox = (await headerLabelsButton(column).boundingBox())!
+  expect(labelsBox.width).toBeGreaterThan(20)
+  expect(labelsBox.x + labelsBox.width).toBeLessThanOrEqual(headerBox.x + headerBox.width + 1)
 
   const statusResponse = await page.request.get(`/api/sessions/status?ids=${SID}`)
   expect(statusResponse.ok()).toBe(true)
@@ -556,11 +589,11 @@ test('the cron pill rides the task row and the session header, and only a newer 
       }))
     }, { status: currentStatus })
   }
-  for (const [processStatus, pendingPermissionTool, label] of [
-    ['idle', null, 'Idle'], ['running', null, 'Running'], ['running', 'Bash', 'Waiting'],
+  // A status change moves neither pill (the header shows no status of its own any more).
+  for (const [processStatus, pendingPermissionTool] of [
+    ['idle', null], ['running', null], ['running', 'Bash'],
   ] as const) {
     await updateStatus({ process_status: processStatus, pendingPermissionTool })
-    await expect(badges.last()).toHaveText(label)
     for (const pill of [rowPill, headerPill]) await expect(pill).toHaveAttribute('data-cron-presence', 'active')
   }
   await updateStatus({ archived: true })
@@ -580,7 +613,6 @@ test('the cron pill rides the task row and the session header, and only a newer 
     whiteSpace: getComputedStyle(node).whiteSpace, overflow: getComputedStyle(node).textOverflow,
   }))).toEqual(titleStyle)
   await expect(column.locator('.chat-input-textarea')).toHaveValue(DRAFT)
-  await expect(badges.last()).toHaveText('Waiting')
   await page.screenshot({ path: `${SHOTS}/${info.project.name}-unconfirmed-hidden.png`, scale: 'css' })
 
   await push(cron({ revision: 1 }), false)
@@ -603,7 +635,7 @@ test('the cron pill rides the task row and the session header, and only a newer 
 
   for (let revision = 8; revision <= 12; revision += 2) {
     await push(cron({ revision }))
-    for (const pill of [rowPill, headerPill]) await expect(pill).toBeVisible()
+    for (const pill of [rowPill, headerPill]) await expect(pill).toHaveCount(1)
     // The card was open when its job vanished; a returning job does not reopen it.
     await expect(details).toHaveCount(0)
     await expect(headerPill).toHaveAttribute('aria-expanded', 'false')
@@ -616,17 +648,17 @@ test('the cron pill rides the task row and the session header, and only a newer 
   await updateStatus({ process_status: 'stopped', pendingPermissionTool: null })
   for (const pill of [rowPill, headerPill]) await expect(pill).toHaveCount(0)
   await updateStatus({ process_status: 'error', pendingPermissionTool: null })
-  for (const pill of [rowPill, headerPill]) await expect(pill).toBeVisible()
+  for (const pill of [rowPill, headerPill]) await expect(pill).toHaveCount(1)
   await push(cron({ revision: 15, presence: 'unknown', stale: true }))
   for (const pill of [rowPill, headerPill]) await expect(pill).toHaveCount(0)
   await updateStatus({ process_status: 'idle', pendingPermissionTool: null })
   await push(cron({ revision: 16 }))
-  for (const pill of [rowPill, headerPill]) await expect(pill).toBeVisible()
+  for (const pill of [rowPill, headerPill]) await expect(pill).toHaveCount(1)
   await push(cron({ revision: 17, presence: 'inactive' }))
   for (const pill of [rowPill, headerPill]) await expect(pill).toHaveCount(0)
   await expect(column.locator('.chat-input-textarea')).toHaveValue(DRAFT)
   expect(await row.locator('.task-phase-icon-btn').getAttribute('title')).toBe(phaseTitle)
-  await expect(badges.last()).toHaveText(/^(Idle|Stopped|Running|Error|Waiting)$/)
+  await expect(column.locator('.session-panel-header .session-panel-badge')).toHaveCount(0)
 })
 
 test('the cron card shows each job as the CLI reported it and follows every change', async ({ page, baseURL }, info) => {
@@ -726,14 +758,14 @@ test('the cron card shows each job as the CLI reported it and follows every chan
   await pushCron(page, observation)
   await expect(card.locator('.session-cron-detail-heading strong')).toHaveText('Cron jobs · 0')
   await expect(card).toContainText('sent no job details')
-  await expect(column.locator('.session-cron-pill')).toHaveAttribute('title', 'Confirmed cron job.')
+  await withHeaderCron(column, (pill) => expect(pill).toHaveAttribute('title', 'Confirmed cron job.'))
   // A daemon that predates job details still backs the pill; the card says so instead of guessing.
   observation = cron({ revision: 5, jobs: undefined })
   await pushCron(page, observation)
   await expect(card.locator('.session-cron-detail-heading strong')).toHaveText('Cron job')
   await expect(card).toContainText('predates job details')
   await expect(card.locator('.session-cron-job')).toHaveCount(0)
-  await expect(column.locator('.session-cron-pill')).toHaveAttribute('title', /host's daemon/)
+  await withHeaderCron(column, (pill) => expect(pill).toHaveAttribute('title', /host's daemon/))
   observation = cron({ revision: 6 })
   await pushCron(page, observation)
   await expect(card.locator('.session-cron-job')).toHaveCount(1)
@@ -753,7 +785,7 @@ test('the cron card shows each job as the CLI reported it and follows every chan
   // The card's own close control collapses it and resets the pill.
   await card.getByRole('button', { name: 'Hide cron job details' }).click()
   await expect(card).toHaveCount(0)
-  await expect(column.locator('.session-cron-pill')).toHaveAttribute('aria-expanded', 'false')
+  await withHeaderCron(column, (pill) => expect(pill).toHaveAttribute('aria-expanded', 'false'))
   await expect(slotCard).toBeVisible()
   expect(errors).toEqual([])
 })
@@ -795,7 +827,8 @@ test('a response issued before disconnect cannot clear reconnect uncertainty', a
     await expect(pill).toHaveAttribute('data-cron-presence', 'active')
     held.release()
     const column = page.locator(`.main-page-session-column .session-panel[data-session-id="${SID}"]`)
-    await expect(column.locator('.session-cron-pill')).toHaveAttribute('data-cron-presence', 'active')
+    await expectHeaderCron(column, true)
+    await expect(page.locator(HEADER_CRON)).toHaveAttribute('data-cron-presence', 'active')
     await expect(pill).toHaveAttribute('data-cron-presence', 'active')
   } finally { held.release(); requested.release() }
 })
