@@ -33,12 +33,23 @@ export function useQuietState(): QuietState {
     return () => ac.abort();
   }, []);
   useEvent('quiet:changed', (data) => { sawEvent.current = true; setQuiet(normalizeQuiet(data)); });
+  // This window's own toggle answers with the state it made. Usually a quiet:changed follows, but
+  // a test run's toggle stays in its own copy on the server and publishes nothing.
+  useEffect(() => {
+    const onLocal = (e: Event) => { sawEvent.current = true; setQuiet((e as CustomEvent<QuietState>).detail); };
+    window.addEventListener(LOCAL_QUIET_EVENT, onLocal);
+    return () => window.removeEventListener(LOCAL_QUIET_EVENT, onLocal);
+  }, []);
   lastQuiet = quiet;
   return quiet;
 }
 
+const LOCAL_QUIET_EVENT = 'walnut:quiet-set';
+
 /** The human's own toggle (source `user`). Other holds are untouched. */
 export async function setUserQuiet(on: boolean, minutes?: number): Promise<QuietState> {
   const body = on ? { on: true, ...(minutes ? { minutes } : {}) } : { on: false };
-  return normalizeQuiet(await apiPut<unknown>('/api/quiet', body));
+  const state = normalizeQuiet(await apiPut<unknown>('/api/quiet', body));
+  window.dispatchEvent(new CustomEvent<QuietState>(LOCAL_QUIET_EVENT, { detail: state }));
+  return state;
 }

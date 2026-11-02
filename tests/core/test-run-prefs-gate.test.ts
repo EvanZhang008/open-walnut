@@ -20,7 +20,7 @@ import path from 'node:path'
 
 const ROOT = path.resolve(__dirname, '../..')
 const SRC = path.join(ROOT, 'src')
-const PREF_PATH = /pref|favorit|ordering|layout|separator|^\/api\/drafts\b/i
+const PREF_PATH = /pref|favorit|ordering|layout|separator|^\/api\/drafts\b|^\/api\/quiet\b/i
 const WEB = path.join(ROOT, 'web/src')
 
 /** "METHOD /full/path" -> the call in its handler that keeps a test run's write apart. */
@@ -42,6 +42,8 @@ const GATED: Record<string, { file: string; gate: string }> = {
   'PUT /api/v1/ordering/projects': { file: 'src/web/routes/projects-v1.ts', gate: 'writeOrdering' },
   'PUT /api/plugins/mail/groups/pref': { file: 'src/integrations/mail/routes-sort-rules.ts', gate: 'testRunPrefsWrite' },
   'POST /api/push/preferences': { file: 'src/web/routes/push.ts', gate: 'setDevicePushPreferences' },
+  // The user's Quiet silences their notifications, the phone's too (2026-11-02: a spec's Quiet 1h).
+  'PUT /api/quiet/': { file: 'src/web/routes/quiet.ts', gate: 'testRunPrefsWrite' },
 }
 
 /** Each gate, where it is defined: its body must call testRunPrefsWrite. */

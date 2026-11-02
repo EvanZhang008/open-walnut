@@ -188,4 +188,25 @@ describe('a test run writes its own prefs copy', () => {
     expect(await file()).toBe(before)
     expect((await draftsOf(OTHER))['draft:session:s1']?.v).toBe('the user\'s words')
   })
+
+  it('quiet: the run reads its own Quiet; the user stays not quiet, and their own toggle still lands', async () => {
+    const quietOf = async (headers: Record<string, string> = {}) =>
+      (await api('GET', '/api/quiet', undefined, headers)).data as { active: boolean; holds: Array<{ source: string; until?: number }> }
+    expect((await quietOf()).active).toBe(false)
+
+    const put = await api('PUT', '/api/quiet', { on: true, minutes: 60 }, RUN)
+    expect(put.status).toBe(200)
+    expect(put.data.active).toBe(true)
+    expect(put.data.holds.map((h: { source: string }) => h.source)).toEqual(['user'])
+    expect((await quietOf(RUN)).active).toBe(true)
+    // The user (and another run) are not quiet: nothing was stored or published for the run.
+    expect((await quietOf()).active).toBe(false)
+    expect((await quietOf(OTHER)).active).toBe(false)
+
+    // The user's own toggle is real, and the run, which turns its Quiet off, reads the user's hold gone too.
+    expect((await api('PUT', '/api/quiet', { on: true })).data.active).toBe(true)
+    expect((await api('PUT', '/api/quiet', { on: false }, RUN)).data.active).toBe(false)
+    expect((await quietOf()).active).toBe(true)
+    expect((await api('PUT', '/api/quiet', { on: false })).data.active).toBe(false)
+  })
 })

@@ -87,8 +87,8 @@ function isLive(h: StoredHold, now: number): boolean {
   return h.until === undefined || h.until > now
 }
 
-function snapshot(now = Date.now()): QuietState {
-  const live = [...holds.values()].filter(h => isLive(h, now)).sort((a, b) => a.since - b.since)
+function snapshot(now = Date.now(), from: Iterable<StoredHold> = holds.values()): QuietState {
+  const live = [...from].filter(h => isLive(h, now)).sort((a, b) => a.since - b.since)
   if (live.length === 0) return { ...INACTIVE, holds: [] }
   return {
     active: true,
@@ -220,6 +220,19 @@ export async function setQuiet(input: SetQuietInput): Promise<QuietState> {
   armTimer()
   publishIfChanged()
   return snapshot()
+}
+
+/** A hold as a test run keeps it in its own copy (routes/quiet.ts): never stored or published. */
+export interface PreviewHold { since: number; until?: number; allowPermissions: boolean }
+
+/**
+ * The state as it reads with `source`'s hold replaced by `hold` (null: without it), changing
+ * nothing: what a test run reads after its own toggle, laid over the user's live holds.
+ */
+export async function previewQuiet(source: string, hold: PreviewHold | null): Promise<QuietState> {
+  await ensureLoaded()
+  const others = [...holds.values()].filter(h => h.source !== source)
+  return snapshot(Date.now(), hold ? [...others, { source, ...hold }] : others)
 }
 
 /**
