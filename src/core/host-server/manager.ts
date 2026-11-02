@@ -629,7 +629,7 @@ export function createHostServerManager(deps: ManagerDeps) {
       return
     }
     if (!host?.connected) {
-      set(hostKey, { enabled: true, phase: 'waiting-for-host', message: 'Walnut connects to this host when a session or a check needs it; the server starts then.' })
+      set(hostKey, { enabled: true, phase: 'waiting-for-host', message: 'It starts once Walnut connects to this host.' })
       return
     }
     if (!host.hasCapability('host-server-v1') || !host.hasCapability('follower-v1') || !host.hasCapability('stream-relay-v1')) {

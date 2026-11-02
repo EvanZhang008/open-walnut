@@ -4277,20 +4277,31 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     const warmupGate = hostWarmupGateReason({
       cloudMode: isCompanion(), ephemeral: isEphemeral, env: process.env, config: await getConfig(),
     })
-    if (warmupGate) {
+    // The replica check on a real dev box warms its one isolated host as a real server would,
+    // and no other (providers/ephemeral-replica-host.ts).
+    const { liftedReplicaAlias } = await import('../providers/ephemeral-replica-host.js')
+    const onlyHost = warmupGate === 'ephemeral server' ? liftedReplicaAlias(process.env) : null
+    if (warmupGate && !onlyHost) {
       log.web.info('host warmup disabled', { reason: warmupGate })
     } else {
+      const { hostRunsServer } = await import('../core/host-server/index.js')
+      const { onExposeProvidersChanged } = await import('../core/expose/registry.js')
+      const warmable = (key: string) => !onlyHost || key === onlyHost
       hostWarmup = new HostWarmup({
         // Every configured host, flags included: the warmup itself decides what
         // to skip (and records WHY), which is what the status surface reports.
         listHosts: async () => {
-          const hosts = (await getConfig()).hosts ?? {}
-          return Object.entries(hosts).map(([key, def]) => ({
+          const config = await getConfig()
+          const hosts = config.hosts ?? {}
+          return Object.entries(hosts).filter(([key]) => warmable(key)).map(([key, def]) => ({
             key,
             // No hostname: the warmup skips it (host-warmup.ts), as before the link layer.
             sshTarget: def.hostname ? linkTarget(key, { hosts }) : { hostname: '' },
             enabled: def.enabled,
             discovered: def.discovered,
+            // A server runs there (its switch, or this computer's tunnel placed on it): dialled
+            // even when the host is known only from ~/.ssh/config.
+            standing: hostRunsServer(key, config),
           }))
         },
         connect: (key) => link(key),
@@ -4301,6 +4312,17 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
       })
       setHostWarmup(hostWarmup)
       hostWarmup.start()
+      // A tunnel provider (a plugin) registers after the startup sweep: the host it places this
+      // computer's tunnel on is dialled then, not at the next resweep.
+      const offProviders = onExposeProvidersChanged(() => {
+        void getConfig().then((config) => {
+          for (const key of Object.keys(config.hosts ?? {})) {
+            if (warmable(key) && !isDaemonConnected(key) && hostRunsServer(key, config)) void hostWarmup?.kick(key)
+          }
+        }).catch(() => { /* the next resweep looks again */ })
+      })
+      const offBefore = unsubscribeHostPhase
+      unsubscribeHostPhase = () => { offBefore?.(); offProviders() }
     }
     // The machines that run plugin jobs, this computer included, are dialled now, so the
     // jobs start without waiting for a session to open a link (core/plugin-jobs/).

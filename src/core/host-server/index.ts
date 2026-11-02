@@ -133,6 +133,21 @@ export function withThisWalnutTunnel(
 }
 
 /**
+ * Whether Walnut runs a server on this host now: its own switch, or this computer's tunnel
+ * placed there. The server starts only on a connect to the host, so such a host is dialled
+ * at startup even when it is known only from ~/.ssh/config (hosts/host-warmup.ts `standing`).
+ */
+export function hostRunsServer(
+  hostKey: string,
+  config: TunnelConfig,
+  lookup: (id: string, command?: CommandProviderConfig) => ExposeProviderDefinition | null = getExposeProvider,
+): boolean {
+  const host = config.hosts && Object.hasOwn(config.hosts, hostKey) ? config.hosts[hostKey] : undefined
+  if (!host || host.enabled === false) return false
+  return withThisWalnutTunnel(hostKey, hostServerSettingsFrom(host.server), config, lookup).enabled === true
+}
+
+/**
  * The one source of this server's walnut file for a host's target (host-file.ts):
  * the host servers, the session daemon a compiled Mac deploys to a host
  * (providers/daemon-connection.ts), and the companion share its cache and batching.

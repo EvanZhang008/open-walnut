@@ -11,7 +11,7 @@ import {
 } from '../../src/core/expose/placement.js'
 import { validateExposeDefinition } from '../../src/core/expose/registry.js'
 import type { ExposeProviderDefinition } from '../../src/core/expose/types.js'
-import { hostServerSettingsFrom, withThisWalnutTunnel } from '../../src/core/host-server/index.js'
+import { hostRunsServer, hostServerSettingsFrom, withThisWalnutTunnel } from '../../src/core/host-server/index.js'
 
 const def: ExposeProviderDefinition = {
   id: 'acme-tunnel',
@@ -261,5 +261,31 @@ describe('hostHolds: when the host holds this Walnut\'s tunnel, so the one here 
     expect(hostHolds(hostView({ url: other }, null), def, key, local({ url }), { now, firstSeenAt: now - HOLD_GRACE_MS })).toEqual({ held: true })
     // Seen for the first time now: the whole wait.
     expect(hostHolds(hostView({ url: other }, null), def, key, local({ url }), at)).toEqual({ held: false, recheckInMs: HOLD_GRACE_MS })
+  })
+})
+
+describe('hostRunsServer', () => {
+  const lookup = (id: string) => (id === def.id ? def : null)
+  // A dev box known only from ~/.ssh/config, as discovery adds it: no server block of its own.
+  const discovered = { hostname: 'always-on-devbox.example.test', discovered: true }
+
+  it('is true on the host Auto places this computer\'s tunnel on, with no switch of its own', () => {
+    const config = { expose: { enabled: true, provider: def.id }, hosts: { devbox: discovered, laptop: { hostname: '10.0.0.7' } } }
+    expect(hostRunsServer('devbox', config, lookup)).toBe(true)
+    expect(hostRunsServer('laptop', config, lookup)).toBe(false)
+  })
+
+  it('follows the host\'s own switch when the tunnel is off, runs here, or its provider is not registered', () => {
+    const hosts = { devbox: discovered, own: { hostname: '10.0.0.8', server: on } }
+    for (const expose of [{ enabled: false, provider: def.id }, { enabled: true, provider: def.id, run_on: 'here' }, { enabled: true, provider: 'gone' }]) {
+      expect(hostRunsServer('devbox', { expose, hosts }, lookup)).toBe(false)
+      expect(hostRunsServer('own', { expose, hosts }, lookup)).toBe(true)
+    }
+  })
+
+  it('is false for a host turned off or unknown', () => {
+    const config = { expose: { enabled: true, provider: def.id, run_on: 'devbox' }, hosts: { devbox: { ...discovered, enabled: false } } }
+    expect(hostRunsServer('devbox', config, lookup)).toBe(false)
+    expect(hostRunsServer('nope', config, lookup)).toBe(false)
   })
 })

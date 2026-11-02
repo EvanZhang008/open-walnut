@@ -82,3 +82,13 @@ export function ephemeralReplicaHost(hostKey: string, env: NodeJS.ProcessEnv, ep
 export function ephemeralReplicaDirEnv(dir: string): Record<string, string> {
   return { WALNUT_DAEMON_DIR: dir, WALNUT_STREAMS_DIR: path.posix.join(dir, 'streams') }
 }
+
+/**
+ * The alias of the one host an ephemeral server leads, when its lift holds (null otherwise).
+ * The server warms that host the way a real one would, and only it (web/server.ts).
+ */
+export function liftedReplicaAlias(env: NodeJS.ProcessEnv): string | null {
+  const alias = (env.WALNUT_EPHEMERAL_REPLICA_HOST ?? '').trim()
+  if (!alias) return null
+  return ephemeralReplicaHost(alias, env, true).lifted ? alias : null
+}

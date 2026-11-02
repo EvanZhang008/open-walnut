@@ -99,6 +99,26 @@ describe('HostWarmup', () => {
     expect(snap['devbox'].state).toBe('done');
   });
 
+  it('dials a host known only from ~/.ssh/config when Walnut runs a server there', async () => {
+    // 2026-11-02: Auto placed the tunnel on a discovered dev box, nothing dialled it, and the
+    // address went dark as soon as the Mac slept.
+    const connect = trackingConnect(10);
+    warmup = new HostWarmup({
+      startupDelayMs: 1, paceMs: 1, resweepIntervalMs: 0, log: silent,
+      listHosts: async () => [
+        host('from-ssh-config', { discovered: true }),
+        host('carries-tunnel', { discovered: true, standing: true }),
+        host('off-standing', { discovered: true, standing: true, enabled: false }),
+      ],
+      connect: connect.fn, isConnected: () => false,
+    });
+    warmup.start();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(connect.order).toEqual(['carries-tunnel']);
+    expect(warmup.snapshot()['from-ssh-config'].state).toBe('skipped');
+    expect(warmup.snapshot()['off-standing'].state).toBe('skipped');
+  });
+
   it('records a failed connect with its message and keeps going', async () => {
     const seen: string[] = [];
     const connect = vi.fn(async (key: string) => {
@@ -494,6 +514,21 @@ describe('HostWarmup credential waits', () => {
     await vi.advanceTimersByTimeAsync(30 * 60 * MIN);
     expect(configured.calls.at(-1)).toBeGreaterThan(29 * 60 * MIN);
     expect(warmup!.credentialRetryAt('devbox')).toBeDefined();
+  });
+
+  it('a host known only from ~/.ssh/config that runs a server keeps re-dialling past a day', async () => {
+    const calls: number[] = [];
+    warmup = new HostWarmup({
+      startupDelayMs: 0, paceMs: 0, resweepIntervalMs: 0, log: silent,
+      listHosts: async () => [host('devbox', { discovered: true, standing: true })],
+      connect: async () => { calls.push(Date.now() - NOW); throw new Error(CERT_EXPIRED); },
+      isConnected: () => false, now: () => Date.now(),
+    });
+    warmup.start();
+    await vi.advanceTimersByTimeAsync(30 * 60 * MIN);
+    expect(calls[0]).toBe(0);                      // dialled at boot, no click
+    expect(calls.at(-1)).toBeGreaterThan(29 * 60 * MIN);
+    expect(warmup.credentialRetryAt('devbox')).toBeDefined();
   });
 
   it('re-dials a cert_expired host at 1, 2, 5 minutes, then every 5, with no click', async () => {

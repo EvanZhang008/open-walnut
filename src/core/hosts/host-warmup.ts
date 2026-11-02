@@ -18,6 +18,8 @@
  *     would be a port scan of the user's infrastructure. Skipped, deliberately.
  *     A human asking for ONE host by name (kick(host)) is a different matter:
  *     that is the same deliberate act as clicking the host's tab, and it dials.
+ *     So is a host Walnut runs a server on (`standing`: its switch, or this
+ *     computer's tunnel placed there): that server starts only once it is dialled.
  *   - BACKS OFF. A host that keeps failing (a laptop asleep for the weekend)
  *     would otherwise burn a full ssh timeout every resweep, forever. Each
  *     consecutive failure doubles its wait, capped at an hour; a success, a
@@ -45,6 +47,14 @@ export interface HostWarmupCandidate {
   sshTarget: SshTarget
   discovered?: boolean
   enabled?: boolean
+  /**
+   * Walnut keeps something running there with no click: its Walnut server (the person's
+   * switch, or this computer's tunnel placed on it). A host known only from ~/.ssh/config
+   * is dialled like a configured one then, or the server there never starts (2026-11-02:
+   * a dev desktop picked to carry the tunnel waited for a session to dial it, so the
+   * address went dark as soon as the Mac slept).
+   */
+  standing?: boolean
 }
 
 export interface HostWarmupEntry {
@@ -304,8 +314,8 @@ export class HostWarmup {
     if (host.key === '__local__') return 'skipped'
     if (host.enabled === false) return 'skipped'
     // ~/.ssh/config entries the user never asked Walnut to manage — unless the
-    // user is asking right now, for this one.
-    if (host.discovered === true && !explicit) return 'skipped'
+    // user is asking right now, for this one, or Walnut runs a server there.
+    if (host.discovered === true && !explicit && host.standing !== true) return 'skipped'
     if (!host.sshTarget?.hostname) return 'skipped'
     return ''
   }
@@ -429,7 +439,7 @@ export class HostWarmup {
     if (prior) { clearTimeout(prior.timer); this.timers.delete(prior.timer) }
     const since = prior?.since ?? this.now()
     // A ~/.ssh/config host dialled by one Retry gets a day, not ssh every 5 minutes forever.
-    if (host.discovered === true && this.now() - since >= HostWarmup.DISCOVERED_CREDENTIAL_WAIT_MS) {
+    if (host.discovered === true && host.standing !== true && this.now() - since >= HostWarmup.DISCOVERED_CREDENTIAL_WAIT_MS) {
       this.credentialWaits.delete(host.key)
       this.logger.info('host warmup: giving up the credential wait for a host not in config', { host: host.key })
       return undefined

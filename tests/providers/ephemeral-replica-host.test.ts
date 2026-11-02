@@ -19,7 +19,7 @@ import { createMockConstants } from '../helpers/mock-constants.js'
 vi.mock('../../src/constants.js', () => createMockConstants('walnut-eph-replica-test', { IS_EPHEMERAL: true }))
 
 import { DaemonConnection } from '../../src/providers/daemon-connection.js'
-import { ephemeralReplicaHost, isProdDaemonDir, isProdHostRoot } from '../../src/providers/ephemeral-replica-host.js'
+import { ephemeralReplicaHost, isProdDaemonDir, isProdHostRoot, liftedReplicaAlias } from '../../src/providers/ephemeral-replica-host.js'
 import { log } from '../../src/logging/index.js'
 import type { SshTarget } from '../../src/providers/session-io.js'
 
@@ -109,5 +109,16 @@ describe('DaemonConnection on an ephemeral server', () => {
     const warn = vi.spyOn(log.session, 'warn')
     expect(readOnly(new DaemonConnection('devbox', TARGET))).toBe(true)
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('refused'), expect.objectContaining({ host: 'devbox', reason: 'no-dir' }))
+  })
+})
+
+describe('liftedReplicaAlias (the one host such a server warms)', () => {
+  const env = (extra: Record<string, string>) => ({ WALNUT_EPHEMERAL_REMOTE_HOSTS: '1', WALNUT_EPHEMERAL_REPLICA_DIR: ISOLATED, WALNUT_HOST_SERVER_ROOT: EPH_ROOT, ...extra })
+  it('names the alias when its lift holds, and nothing when it is refused or not asked', () => {
+    expect(liftedReplicaAlias(env({ WALNUT_EPHEMERAL_REPLICA_HOST: 'devbox' }))).toBe('devbox')
+    expect(liftedReplicaAlias(env({}))).toBeNull()
+    expect(liftedReplicaAlias(env({ WALNUT_EPHEMERAL_REPLICA_HOST: 'devbox', WALNUT_EPHEMERAL_REPLICA_DIR: '/tmp/open-walnut' }))).toBeNull()
+    expect(liftedReplicaAlias(env({ WALNUT_EPHEMERAL_REPLICA_HOST: 'devbox', WALNUT_EPHEMERAL_REMOTE_HOSTS: '0' }))).toBeNull()
+    expect(liftedReplicaAlias(env({ WALNUT_EPHEMERAL_REPLICA_HOST: '__local__' }))).toBeNull()
   })
 })

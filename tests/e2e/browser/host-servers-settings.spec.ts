@@ -88,7 +88,7 @@ test.describe('Walnut on a host', () => {
     await toggle.click()
     await expect(toggle).toHaveAttribute('aria-checked', 'true')
     await expect(row).toHaveAttribute('data-phase', 'waiting-for-host', { timeout: 15_000 })
-    await expect(state).toContainText('Walnut connects to this host when a session or a check needs it')
+    await expect(state).toContainText('It starts once Walnut connects to this host')
     await expect(page.getByTestId(`host-server-no-provider-${KEY}`)).toContainText('add a tunnel plugin')
     expect((await hostsNow(page))[KEY]?.server).toMatchObject({ enabled: true })
     await shot(page, '2-on-waiting', group)
