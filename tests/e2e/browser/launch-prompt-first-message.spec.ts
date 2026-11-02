@@ -24,6 +24,7 @@
  *      conversation, above the answer, and is never duplicated.
  */
 import { test, expect, type Page, type Locator } from '@playwright/test'
+import { serveProductionBundle } from './production-bundle'
 import { discoverFixtureRoot, draftComposer, draftPanel, loadHome, openDraft, openDraftOnCwd, draftSend } from './draft-helpers'
 
 const SHOTS = process.env.LAUNCH_PROMPT_SHOT_DIR ?? '/tmp/launch-prompt-first-message'
@@ -145,6 +146,8 @@ async function expectSettledOnce(page: Page, panel: Locator, stamp: string): Pro
 }
 
 test('Start Task: the first message shows from the click, survives a reload mid-turn, and settles to one copy', async ({ page }) => {
+  // The 1.5 s pending column budget judges the bundle users run (production-bundle.ts).
+  await serveProductionBundle(page)
   const stamp = `launch-probe-${Date.now()}`
   // slow: keeps the mock turn running long enough to reload inside it.
   const text = `slow:20000 ${stamp} who owns the build?`

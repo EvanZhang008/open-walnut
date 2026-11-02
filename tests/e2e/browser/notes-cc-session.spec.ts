@@ -14,6 +14,7 @@
  * single-timeline-real-pipeline.spec.ts).
  */
 import { test, expect, type Page } from '@playwright/test'
+import { serveProductionBundle } from './production-bundle'
 
 // Serial: the Walnut Agent chat test mutates SERVER state (note-agent
 // conversations) that would make the CC test's "switcher disappears when the
@@ -52,6 +53,8 @@ async function gotoNotes(page: Page) {
 }
 
 test('right-click note → Start Claude Code session → full SessionPanel, dropdown switcher, survives reload', async ({ page }) => {
+  // The 500 ms shell budget judges the bundle users run (production-bundle.ts).
+  await serveProductionBundle(page)
   await seedNote()
   await clearNoteAgentSideChats()
   await gotoNotes(page)

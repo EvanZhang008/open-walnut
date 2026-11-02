@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import net from 'node:net'
 import { expect, test } from './shortcut-test-fixture'
 import { devices, type Page } from '@playwright/test'
+import { serveProductionBundle } from './production-bundle'
 
 /**
  * The mail sidebar in WEBKIT, which is the engine the Mac app is.
@@ -196,6 +197,8 @@ test('nothing scrolls sideways and nothing wraps, at 1280 and at 1000', async ({
 })
 
 test('the chevron rotates, the rows do not animate, and 58 of them open at once', async ({ page }) => {
+  // The 200 ms expand budget judges the bundle users run (production-bundle.ts).
+  await serveProductionBundle(page)
   await page.setViewportSize({ width: 1280, height: 800 })
   await openMail(page)
   const twist = page.locator(`${PANE} .mail-twist[data-smart="inbox"]`)

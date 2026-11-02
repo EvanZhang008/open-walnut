@@ -13,6 +13,7 @@
 import fs from 'node:fs/promises'
 import { devices, expect, test, type Locator, type Page, type Route } from '@playwright/test'
 import { withCssColor } from './css-color'
+import { serveProductionBundle } from './production-bundle'
 
 const SHOTS = '/tmp/mobile-web'
 const PHONE = devices['iPhone 15']
@@ -214,6 +215,8 @@ test.describe('on an iPhone', () => {
   })
 
   test('C5 C9 C15: busy in the same frame, then each refusal says why and keeps the code', async ({ page }) => {
+    // The same-frame budget judges the bundle users run (production-bundle.ts).
+    await serveProductionBundle(page)
     await refuseProbe(page)
     let mode: 'hold' | 'abort' | 'rate' | 'wrong' = 'hold'
     await page.route((url) => url.pathname === '/api/v1/browser-pair', async (route) => {

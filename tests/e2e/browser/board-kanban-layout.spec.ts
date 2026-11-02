@@ -17,6 +17,7 @@ import { openSessionBoard } from './board-view-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { call, getTask, kanbanApi, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
 import { cpuBudget, longTaskBudget, machineQuiet, referenceDrawMs, traceTaskTimes } from './cpu-reference'
+import { serveProductionBundle } from './production-bundle'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -332,19 +333,35 @@ async function cpuClock(page: Page, engine: string): Promise<(() => Promise<numb
   await cdp.send('Performance.enable', { timeDomain: 'threadTicks' })
   return async () => ((await cdp.send('Performance.getMetrics')).metrics.find((m) => m.name === 'TaskDuration')?.value ?? 0) * 1000
 }
-// Main-thread CPU budgets (React dev build, 37 cards), measured 290-360ms to open and 240-440ms for the
-// drag below on the Mac; an inline callback ref that re-measured the pane on every render made them
-// 560-650 and 820-960. Elsewhere they count in reference draws on the same clock (cpu-reference.ts):
-// in an 8 CPU container the open costs 2.3 to 2.6 references (565-650 ms beside 241-263) and the
-// drag 3.2 to 3.4 (790-830), where the build of 2026-10-23 cost 3.6 to 3.9 and 4.2 to 4.4; a loaded
-// 4 core CI runner read 697 to 1,058 for the open (2026-11-01).
-const OPEN_CPU_MS = 500
-const DRAG_CPU_MS = 600
-const OPEN_CPU_REFS = 3.5
-const DRAG_CPU_REFS = 4.5
+// Main-thread CPU budgets (37 cards, the production bundle), counted in reference draws on the same
+// clock (cpu-reference.ts). Measured 2026-11-02 over 20 runs: in an 8 CPU container (reference 122 to
+// 137 ms) the open cost 169 to 235 ms (1.3 to 1.9 references, median 1.45) and the drag 256 to 357
+// (2.1 to 2.8, median 2.6); with 4 CPUs and 4 workers (load 6 to 7) the open 181 to 296 (1.4 to 2.2)
+// and the drag 318 to 433 (2.6 to 3.2). Three copies of this spec at once on 4 CPUs read 551 and 794
+// for the drag: another copy's status pushes landed inside it. React's development build, which the
+// old 500 ms / 3.5 references and 600 ms / 4.5 were set on, read 529 to 538 for the same open (3.7
+// references; 2026-11-01: 2.3 to 2.6 at load, 3.6 to 3.9 for the build of 2026-10-23, whose inline
+// callback ref re-measured the pane on every render). So the open 2.7 references and the drag 4,
+// about 1.25 times the worst read: work grown by half fails wherever it reads like the loaded runs,
+// and on a quiet machine at 1.9 (open) and 1.5 (drag) times its median. A lower line would also fail
+// the loaded runs (the open spreads 1.7 times). As written: the same at the fastest reference (125 ms).
+const OPEN_CPU_REFS = 2.7
+const DRAG_CPU_REFS = 4
+const OPEN_CPU_MS = 340
+const DRAG_CPU_MS = 500
+// One task of the drag, and of C96's pushes (the CPU of the longest one, scaled by the reference as
+// a long task budget is: cpu-reference.ts longTaskBudget). Measured 2026-11-02 on the production
+// bundle: the drag's longest 16 to 20 ms of CPU in the runs above (38 with another copy's pushes
+// inside it), C96's 7 to 22 (the development build's read 60 ms, 2026-11-01). Tasks from 16 ms of wall time are traced, so one under the long
+// task line of 50 ms is still judged.
+const DRAG_TASK_MS = 30
+const PUSH_TASK_MS = 32
+const TRACE_FROM_MS = 16
 
-test('C50: 37 cards are on screen and live within 1s of the Board click; a drag makes no long task over 100ms', async ({ page }, info) => {
+test('C50: 37 cards are on screen and live within 1s of the Board click; no task of a drag takes over 30ms', async ({ page }, info) => {
   test.setTimeout(240_000)
+  // Judged on the bundle users run (production-bundle.ts): React's development build doubles the work.
+  await serveProductionBundle(page)
   const clock: { read: (() => Promise<number>) | null; at: number } = { read: null, at: 0 }
   const pane = await openBoard(page, async () => {
     clock.read = await cpuClock(page, info.project.name)
@@ -369,9 +386,9 @@ test('C50: 37 cards are on screen and live within 1s of the Board click; a drag 
   console.log(`[kanban-layout] ${info.project.name} reference draw ${JSON.stringify({ reference, openCpu, openBudget, dragBudget })}`)
   if (openCpu !== null) expect(openCpu).toBeLessThan(openBudget)
   if (machineQuiet()) expect(r!.ms).toBeLessThan(1000)
-  // A drag across two lanes and back, cancelled: no long task over 100ms.
+  // A drag across two lanes and back, cancelled: no task over 30ms.
   const supported = await watchLongTasks(page)
-  const dragTimes = info.project.name === 'chromium' ? await traceTaskTimes(page) : null
+  const dragTimes = info.project.name === 'chromium' ? await traceTaskTimes(page, TRACE_FROM_MS) : null
   const dragAt = clock.read ? await clock.read() : 0
   const src = pane.locator('[data-testid="kanban-lane-body"][data-lane-id="investigating"] [data-testid="kanban-card"]').nth(1)
   await src.scrollIntoViewIfNeeded()
@@ -390,17 +407,18 @@ test('C50: 37 cards are on screen and live within 1s of the Board click; a drag 
   const long = await longTasks(page)
   const dragCpu = clock.read ? Math.round((await clock.read()) - dragAt) : null
   info.annotations.push({ type: 'drag long tasks ms', description: supported ? JSON.stringify({ long, dragTasks, dragCpu, load: Math.round(loadavg()[0]) }) : 'longtask not supported in this engine' })
-  console.log(`[kanban-layout] ${info.project.name} drag ${JSON.stringify({ long, dragCpu, load: Math.round(loadavg()[0]) })}`)
+  console.log(`[kanban-layout] ${info.project.name} drag ${JSON.stringify({ long, dragTasks, dragCpu, load: Math.round(loadavg()[0]) })}`)
   if (dragCpu !== null) expect(dragCpu).toBeLessThan(dragBudget)
-  const dragLongBudget = reference === null ? 100 : longTaskBudget(100, reference)
+  const dragLongBudget = reference === null ? DRAG_TASK_MS : longTaskBudget(DRAG_TASK_MS, reference)
   if (dragTasks) expect(Math.max(0, ...dragTasks.map((t) => t.cpu)), JSON.stringify(dragTasks)).toBeLessThanOrEqual(dragLongBudget)
   if (supported && machineQuiet()) expect(Math.max(0, ...(long ?? []))).toBeLessThanOrEqual(dragLongBudget)
 })
 
 const renders = (page: Page) => page.evaluate(() => ({ ...((window as unknown as { __kanbanCardRenders?: Record<string, number> }).__kanbanCardRenders ?? {}) }))
 
-test('C96: 30s of status pushes: no long task over 50ms, the hovered card holds still, activity text at most every 2s, one card per update, card reloads keep the Page frame', async ({ page }, info) => {
+test('C96: 30s of status pushes: no task over 32ms, the hovered card holds still, activity text at most every 2s, one card per update, card reloads keep the Page frame', async ({ page }, info) => {
   test.setTimeout(300_000)
+  await serveProductionBundle(page)
   const filler = Array.from({ length: 12 }, (_, i) => `<p>Shift note ${i + 1}: queue depth back to normal.</p>`).join('\n')
   await call(api, 'PUT', `/api/v1/tasks/${team.leader}/board`, { html: `<section><h2>Shift notes</h2>\n${filler}</section>` })
   const pane = await openBoard(page)
@@ -430,7 +448,7 @@ test('C96: 30s of status pushes: no long task over 50ms, the hovered card holds 
   if (sec0 > 25) await page.waitForTimeout((62 - sec0) * 1000)
   expect(await box(hovered)).toEqual(b0)
   const supported = await watchLongTasks(page)
-  const taskTimes = info.project.name === 'chromium' ? await traceTaskTimes(page) : null
+  const taskTimes = info.project.name === 'chromium' ? await traceTaskTimes(page, TRACE_FROM_MS) : null
   // Every 2s each running session moves; the busy one pushes every 700ms on top (the throttle's job).
   let n = 0
   const slow = setInterval(() => {
@@ -461,7 +479,7 @@ test('C96: 30s of status pushes: no long task over 50ms, the hovered card holds 
   // Measured after the window it judges; a slower machine's tasks are longer in proportion.
   const read = await cpuClock(page, info.project.name)
   const reference = read ? await referenceDrawMs(page, read) : null
-  const longBudget = reference === null ? 50 : longTaskBudget(50, reference)
+  const longBudget = reference === null ? PUSH_TASK_MS : longTaskBudget(PUSH_TASK_MS, reference)
   const spare = machineQuiet()
   info.annotations.push({ type: 'C96 long task budget', description: JSON.stringify({ reference, longBudget, spare, load: Math.round(loadavg()[0]), tasks }) })
   console.log('[kanban-layout] C96 long task cpu', info.project.name, JSON.stringify({ reference, longBudget, spare, tasks }))

@@ -11,6 +11,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { expect, test, type Page, type Route } from '@playwright/test'
 import { isolateUiPrefs } from './todo-panel-helpers'
+import { serveProductionBundle } from './production-bundle'
 import {
   PHONE, backButton, injectSafeArea, menuButton, setKeyboardInset, findSmallTargets, findSmallText,
   expectNoHorizontalOverflow, openDrawer,
@@ -111,6 +112,12 @@ async function openByDeepLink(page: Page): Promise<string[]> {
   const errors = await boot(page, `/?s1=${SID}`)
   await expect(overlay(page)).toBeVisible({ timeout: 30_000 })
   await expect(backButton(page)).toBeVisible({ timeout: 15_000 })
+  // The layer slides in. On the production bundle the page is ready inside the slide, so a
+  // measure taken now reads the layer moving (C20 read the composer 9 px short): wait for every
+  // animation that ends (a breathing dot never does).
+  await expect.poll(() => page.evaluate(() => document.getAnimations()
+    .filter((a) => a.playState === 'running' && Number.isFinite(Number(a.effect?.getComputedTiming().endTime))).length),
+  { timeout: 10_000, message: 'the session layer never stopped moving' }).toBe(0)
   return errors
 }
 
@@ -343,6 +350,8 @@ const sendButton = (page: Page) => overlay(page).locator('.session-panel-input .
 const delivery = (page: Page) => overlay(page).locator('.session-delivery-meta')
 
 test('send: Return is a newline, the 44 px send button sends, the line says how it went (C32, C33, C71, C20)', async ({ page }) => {
+  // The 300 ms tap-to-row budget judges the bundle users run (production-bundle.ts).
+  await serveProductionBundle(page)
   await stubSession(page, { history: longTurnHistory(2) })
   const tap = await tapSocket(page, (n) => (n === 1 ? { ok: true, messageId: 'qm-phone-1' } : { ok: false, error: 'connection lost' }))
   const errors = await openByDeepLink(page)

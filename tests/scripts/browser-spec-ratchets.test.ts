@@ -978,3 +978,42 @@ describe('a spec that resets a threads fixture', () => {
     expect(usesLeaseTest("import { expect, type Page } from '@playwright/test'\nimport { resetThreadsFixture, test } from './threads-helpers'")).toBe(true)
   })
 })
+
+describe('a spec that judges main-thread CPU or long tasks', () => {
+  // The fixture serves the SPA through Vite in development mode, where React renders every
+  // component twice (StrictMode) and captures a debug stack per element: a Question stack pop read
+  // 154 to 206 ms there and 57 to 68 ms in the production build of the same code (2026-11-01, C38).
+  // A CPU or long task budget judged there measures React's debugging, so a spec that reads one
+  // loads the bundle users run (production-bundle.ts serveProductionBundle).
+  const JUDGES_CPU = /\bTaskDuration\b|['"]longtask['"]|\bwatchLongTasks\(|\btraceTaskTimes\(|\breferenceDrawMs\(|\blongTaskBudget\(|\bcpuBudget\(/
+  const SERVES = /\bawait serveProductionBundle\(\w+\)/
+  const offenders = (files: Array<{ file: string; text: string }>): string[] =>
+    files.filter(({ file, text }) => file.endsWith('.spec.ts') && JUDGES_CPU.test(text) && !SERVES.test(text)).map(({ file }) => file)
+
+  it('every one loads the production bundle', () => {
+    const judges = sources.filter(({ file, text }) => file.endsWith('.spec.ts') && JUDGES_CPU.test(text)).map(({ file }) => file)
+    expect(judges).toEqual(expect.arrayContaining(['board-kanban-layout.spec.ts', 'mail-grouping-live.spec.ts', 'session-thread-perf.spec.ts']))
+    expect(offenders(sources)).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const judged = "  const reference = await referenceDrawMs(page, read)\n  expect(cpu).toBeLessThan(cpuBudget(500, 3, reference))"
+    expect(offenders([{ file: 'x.spec.ts', text: judged }])).toEqual(['x.spec.ts'])
+    expect(offenders([{ file: 'x.spec.ts', text: `  await serveProductionBundle(page)\n${judged}` }])).toEqual([])
+    expect(offenders([{ file: 'x.spec.ts', text: "  new PerformanceObserver(() => {}).observe({ type: 'longtask' })" }])).toEqual(['x.spec.ts'])
+  })
+
+  it('CI builds the bundle before the browser shards run', () => {
+    // serveProductionBundle refuses a missing or stale build under CI, so the browser job builds it first.
+    const ci = fs.readFileSync(path.resolve(__dirname, '../../.github/workflows/ci.yml'), 'utf8')
+    const start = ci.indexOf('\n  browser:\n')
+    expect(start).toBeGreaterThan(0)
+    const job = ci.slice(start + 1)
+    const next = job.search(/\n {2}[\w-]+:\n/)
+    const body = next > 0 ? job.slice(0, next) : job
+    const build = body.indexOf('cd web && bun x vite build')
+    const run = body.indexOf('bun x playwright test')
+    expect(build).toBeGreaterThan(0)
+    expect(run).toBeGreaterThan(build)
+  })
+})

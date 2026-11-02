@@ -5,6 +5,7 @@ import net from 'node:net'
 import { expect, test } from './shortcut-test-fixture'
 import { type Locator, type Page } from '@playwright/test'
 import { showAllMail } from './mail-review-helpers'
+import { serveProductionBundle } from './production-bundle'
 
 /**
  * The mail sidebar at production density: the smart mailbox group, the collapsed long tail, and the
@@ -472,6 +473,8 @@ test.describe('the dense pane', () => {
   })
 
   test('the 58 row tail opens as one list, filters by name, and forgets the filter', async ({ page }) => {
+    // The 200 ms expand budget judges the bundle users run (production-bundle.ts).
+    await serveProductionBundle(page)
     await openMail(page, port)
     const tail = tailToggle(page, HARBOUR)
     await expect(tail).toBeVisible({ timeout: 90_000 })

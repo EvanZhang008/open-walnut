@@ -11,7 +11,8 @@ import {
   startGroupsFixture, waitLabeled,
 } from './mail-grouping-helpers'
 import { openMail, smartRow, type MailFixture, type MailFixtureServer } from './mail-review-helpers'
-import { referenceDrawMs } from './cpu-reference'
+import { cpuBudget, FAST_CORE_REFERENCE_MS, machineQuiet, referenceDrawMs } from './cpu-reference'
+import { serveProductionBundle } from './production-bundle'
 
 test.describe.configure({ mode: 'serial' })
 test.setTimeout(300_000)
@@ -31,13 +32,16 @@ async function pointerOnList(page: Page): Promise<void> {
 }
 
 /**
- * What the reference draw below may cost before the 1.5 s budget grows with it. Measured
- * 2026-11-01 on an 8-CPU dev container at load 10 to 30: reference 250 to 330 ms, the grouped
- * draw 3 to 6.4 times that (the ratio spreads as the load rises: 1,926 ms beside 300). So the
- * scaled budget is about 8 references: a draw at two and a half times its usual cost fails on
- * any machine, and a machine faster than this keeps the plain 1.5 s.
+ * The grouped draw's main-thread CPU, in reference draws (cpu-reference.ts cpuBudget). Measured
+ * 2026-11-02 on the production bundle over 17 runs: in an 8 CPU container (reference 125 to 142 ms)
+ * 267 to 362 ms, 2.0 to 2.9 references; with 4 CPUs and 4 workers (reference 132 to 160) 182 to 426,
+ * 1.4 to 2.7; median 2.4. React's development build read 673 to 756 beside 161 to 176 (3.8 to 4.7;
+ * 2026-11-01: 3 to 6.4 at load 10 to 30), and the old budget, 1.5 s grown past a 180 ms reference
+ * (8.3 references), carried that. 3.6 references is 1.25 times the worst read: a draw grown by half
+ * fails from its median up. As written: the same at the fastest reference read (125 ms).
  */
-const REFERENCE_DRAW_MS = 180
+const DRAW_CPU_REFS = 3.6
+const DRAW_CPU_MS = 450
 
 test.describe('the ordinary fixture', () => {
   let server: MailFixtureServer
@@ -104,16 +108,19 @@ test.describe('the dense fixture', () => {
     // machine it is mostly the CPU queue (measured: 0.2 to 0.8s of CPU took 2.5 to 4.8s of wall at
     // load 240 to 340), so it is judged only below one runnable process per core.
     // The CPU clock is a Chromium protocol call; another engine is judged by the wall clock alone.
+    // Judged on the bundle users run (production-bundle.ts), not React's development build.
+    await serveProductionBundle(page)
     const cdp = browserName === 'chromium' ? await page.context().newCDPSession(page) : null
     await cdp?.send('Performance.enable', { timeDomain: 'threadTicks' })
     const taskSeconds = async () => cdp ? (await cdp.send('Performance.getMetrics')).metrics.find((one) => one.name === 'TaskDuration')?.value ?? 0 : 0
     await openMail(page, fixture.port)
-    // The budget is for a fast desktop core. A slower or busier one (a CI runner's: 1,502 and
-    // 1,909 ms of CPU on 2026-11-01 for a draw that takes 700 to 870 here) gets it scaled by how
-    // long a fixed reference draw takes there, read with the same clock (REFERENCE_DRAW_MS).
-    const reference = await referenceDrawMs(page, async () => (await taskSeconds()) * 1000)
-    const scale = cdp ? Math.max(1, reference / REFERENCE_DRAW_MS) : 1
-    const budget = Math.round(1_500 * scale)
+    // A slower or busier machine (a CI runner's: 1,502 and 1,909 ms of CPU on 2026-11-01, on the
+    // development build, for a draw that took 700 to 870 here) gets the CPU budget in proportion to
+    // a fixed reference draw read with the same clock. The wall clock is the title's second and a
+    // half (it holds the server's answer too), grown the same way past a fast desktop core's reference.
+    const reference = cdp ? await referenceDrawMs(page, async () => (await taskSeconds()) * 1000) : 0
+    const cpuLimit = cpuBudget(DRAW_CPU_MS, DRAW_CPU_REFS, reference)
+    const budget = Math.round(1_500 * Math.max(1, reference / FAST_CORE_REFERENCE_MS))
     const cpuBefore = await taskSeconds()
     const started = Date.now()
     await smartRow(page, 'inbox').click()
@@ -122,10 +129,12 @@ test.describe('the dense fixture', () => {
     const took = Date.now() - started
     const cpu = Math.round((await taskSeconds() - cpuBefore) * 1000)
     const load = os.loadavg()[0]
-    const saturated = load >= os.cpus().length
-    test.info().annotations.push({ type: 'groups-first-paint-ms', description: `wall ${took}, main-thread cpu ${cdp ? cpu : 'n/a'}, reference draw ${cdp ? reference : 'n/a'}, budget ${budget}, load ${load.toFixed(0)}${saturated ? ' (wall not judged)' : ''}` })
-    if (cdp) expect(cpu).toBeLessThan(budget)
-    if (!saturated) expect(took).toBeLessThan(budget)
+    const saturated = !machineQuiet()
+    const measured = `wall ${took}, main-thread cpu ${cdp ? cpu : 'n/a'}, reference draw ${cdp ? reference : 'n/a'}, cpu budget ${cpuLimit}, wall budget ${budget}, load ${load.toFixed(0)}${saturated ? ' (wall not judged)' : ''}`
+    test.info().annotations.push({ type: 'groups-first-paint-ms', description: measured })
+    console.log(`[mail-grouping-live] 3,000 mails ${measured}`)
+    if (cdp) expect(cpu, measured).toBeLessThan(cpuLimit)
+    if (!saturated) expect(took, measured).toBeLessThan(budget)
     const groups = await getGroups(fixture, ALL_INBOXES)
     expect(groups.cachedTotal).toBeGreaterThanOrEqual(3_000)
     expect(await page.getByTestId('mail-group-row').count()).toBe(groups.groups.length)
