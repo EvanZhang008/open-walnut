@@ -159,5 +159,6 @@ export function GrowingTextarea({ value, ...rest }: TextareaHTMLAttributes<HTMLT
     ro?.observe(el)
     return () => ro?.disconnect()
   }, [value])
-  return <textarea ref={ref} value={value} rows={1} {...rest} />
+  // The value is its caller's: the caller's own data-draft-key or data-no-draft (in rest) wins.
+  return <textarea ref={ref} value={value} rows={1} data-no-draft="mirror" {...rest} />
 }
