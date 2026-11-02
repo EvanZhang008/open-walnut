@@ -564,6 +564,8 @@ export interface SessionTranscript {
 
 let lastTranscriptSweep = 0
 let transcriptSweepRunning = false
+/** The sweep owed to a change the throttle turned away (see exportSessionTranscripts). */
+let owedTranscriptSweep: NodeJS.Timeout | null = null
 
 /**
  * Options for {@link buildSessionTranscript}. Additive: absent = the slim tail
@@ -981,6 +983,7 @@ const REFROZEN_MAX = 5_000
 /** Tests: lift the sweep's throttle (past re-freezes are remembered). */
 export function _resetTranscriptSweepForTesting(): void {
   lastTranscriptSweep = 0
+  if (owedTranscriptSweep) { clearTimeout(owedTranscriptSweep); owedTranscriptSweep = null }
 }
 
 /**
@@ -989,11 +992,19 @@ export function _resetTranscriptSweepForTesting(): void {
  * now). Each written tail is also pushed to the cloud (`transcript-upsert`);
  * legacy git files ride along while the `sync.legacy_projection_files` knob is on. Throttled: remote
  * session reads ride SSH, so sweeps are at most one per
- * TRANSCRIPT_THROTTLE_MS and never concurrent.
+ * TRANSCRIPT_THROTTLE_MS and never concurrent; an ask the throttle turns
+ * away runs once when the window ends.
  */
 export async function exportSessionTranscripts(): Promise<number> {
-  if (transcriptSweepRunning) return 0
-  if (Date.now() - lastTranscriptSweep < TRANSCRIPT_THROTTLE_MS) return 0
+  // A sweep asked for inside the window (or while one runs) is owed, not dropped:
+  // the change that asked may be the last for a long while (an idle session's
+  // final turn), and with no later sweep its tail stayed stale for good
+  // (2026-11-02: task_history never showed a reply that landed 0.3 s after a sweep).
+  const left = lastTranscriptSweep + TRANSCRIPT_THROTTLE_MS - Date.now()
+  if (transcriptSweepRunning || left > 0) {
+    oweTranscriptSweep(Math.max(left, 1_000))
+    return 0
+  }
   transcriptSweepRunning = true
   lastTranscriptSweep = Date.now()
   try {
@@ -1074,6 +1085,16 @@ export async function exportSessionTranscripts(): Promise<number> {
   } finally {
     transcriptSweepRunning = false
   }
+}
+
+/** One sweep when the window ends, however many asks it absorbs. */
+function oweTranscriptSweep(ms: number): void {
+  if (owedTranscriptSweep) return
+  owedTranscriptSweep = setTimeout(() => {
+    owedTranscriptSweep = null
+    exportSessionTranscripts().catch((err) => log.session.debug('owed transcript sweep failed', { error: String(err) }))
+  }, ms)
+  owedTranscriptSweep.unref?.()
 }
 
 /** Envelope gate shared by the cache and legacy transcript sources. */
@@ -1188,6 +1209,7 @@ export function startSessionProjectionExport(): { stop: () => void } {
     stop: () => {
       bus.unsubscribe('session-projection')
       if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null }
+      if (owedTranscriptSweep) { clearTimeout(owedTranscriptSweep); owedTranscriptSweep = null }
     },
   }
 }
