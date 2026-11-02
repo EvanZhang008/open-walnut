@@ -26,6 +26,9 @@
  *              card (2026-11-01, the user, after a Follow up showed "Not answered yet: <his words>":
  *              "you definitely haven't answered ... you don't need to put it in this thread");
  *              they read in the conversation.
+ *   Snoozed    the ones he put aside (Snooze on a card, OrgThreadSnooze), each saying when it comes
+ *              back; collapsed by default. A thread leaves the list and the tab's dot while snoozed
+ *              and comes back on its date, or earlier on news (core/org/thread-view.ts snoozedNow)
  *   In progress  open but nothing for him (new, working, pending): one quiet line at the bottom opens them
  *   Closed     the ones closed this week (kept a week, then deleted) open from one quiet line at
  *              the bottom, Reopen on each
@@ -34,7 +37,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { userStateOf } from '@open-walnut/org-tree';
 import { USER_STATE_LABELS } from '@open-walnut/user-status';
-import { cardView, exchangesOf, sharedAnswers, shownToHim, type ThreadExchange } from '@open-walnut/thread-view';
+import { cardView, exchangesOf, sharedAnswers, shownToHim, snoozedNow, type ThreadExchange } from '@open-walnut/thread-view';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { AnswerBox } from '@/components/common/AnswerBox';
@@ -49,6 +52,7 @@ import { timeAgo } from '@/utils/time';
 import { isBoolean, usePageView } from '@/utils/view-memory';
 import type { OrgThread, OrgThreadMessage, OrgThreadState } from '@/api/org-threads';
 import type { OrgThreadsState } from './useOrgThreads';
+import { OrgThreadSnooze } from './OrgThreadSnooze';
 import '@/styles/org-threads.css';
 
 /** A task's live status dot, the colours of the Task view's tabs (OrgTaskRail TAB_DOT). */
@@ -97,6 +101,17 @@ function clock(at: string, now: number): string {
   const d = new Date(at);
   const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   return new Date(now).toDateString() === d.toDateString() ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })}, ${time}`;
+}
+
+/** When a snoozed thread comes back, as a person says it: "Tomorrow, 9:00 AM", "Nov 9, 12:00 AM". */
+function backAt(until: string, now: number): string {
+  const d = new Date(until);
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const day = new Date(now);
+  if (day.toDateString() === d.toDateString()) return `today, ${time}`;
+  day.setDate(day.getDate() + 1);
+  if (day.toDateString() === d.toDateString()) return `tomorrow, ${time}`;
+  return `${d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}, ${time}`;
 }
 
 function oneLine(text: string, max: number): string {
@@ -271,9 +286,11 @@ function Exchange({ x, t, name, state, now, shared }: { x: ThreadExchange<OrgThr
   );
 }
 
-function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name, now }: {
+function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name, now, snoozed }: {
   t: OrgThread; all: readonly OrgThread[]; shared: ReadonlySet<string>; tasks: readonly Task[]; onOpenTask: (id: string) => void;
   state: OrgThreadsState; onFollowUp: Props['onFollowUp']; name: string; now: number;
+  /** It is put aside now (the Snoozed section): it says when it comes back. */
+  snoozed: boolean;
 }) {
   /** The whole conversation shown, in place of what the card keeps. */
   const [open, setOpen] = useState(false);
@@ -296,7 +313,7 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
   const quote = (x: ThreadExchange<OrgThreadMessage>) => `\u201c${oneLine(x.messages.map((m) => m.text || 'A picture').join(' / '), QUOTE_WORDS)}\u201d`;
   const from = (o: { from: string; ref?: string }) => `${FROM_LABEL[o.from] ?? FROM_LABEL.node}${o.ref ? `: ${o.ref}` : ''}`;
   return (
-    <li className={`org-thread${closed ? ' is-closed' : ''}${open ? ' is-open' : ''}`} data-testid="org-thread" data-thread-id={t.id} data-state={closed ? 'closed' : t.state}>
+    <li className={`org-thread${closed ? ' is-closed' : ''}${open ? ' is-open' : ''}${snoozed ? ' is-snoozed' : ''}`} data-testid="org-thread" data-thread-id={t.id} data-state={closed ? 'closed' : t.state} data-snoozed={snoozed ? 'true' : undefined}>
       <button type="button" className="org-thread-head" aria-expanded={open} aria-controls={`${t.id}-conversation`} data-testid="org-thread-head" onClick={() => setOpen(!open)}>
         <span className="org-thread-state" data-testid="org-thread-state">
           <i style={{ background: closed ? 'var(--fg-muted, #86868B)' : STATE_DOT[t.state] }} />
@@ -308,6 +325,7 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
         </span>
         <span className="org-thread-title" data-testid="org-thread-title">{t.title}</span>
       </button>
+      {snoozed && t.snoozed && <p className="org-thread-snoozed" data-testid="org-thread-snoozed-until">Snoozed until {backAt(t.snoozed.until, now)}</p>}
       {follows && <p className="org-thread-follows">Asks again about “{follows.title}”</p>}
       {t.reply && <Markdown text={t.reply} className="org-thread-summary" testId="org-thread-reply" />}
       {chips.length > 0 && <TaskChips ids={chips} tasks={tasks} onOpenTask={onOpenTask} />}
@@ -343,6 +361,13 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
           </>) : (<>
             <button type="button" className="btn btn-sm btn-primary" data-testid="org-thread-ack" onClick={() => void state.update(t.id, { close: 'acked' })}>Acknowledge</button>
             {onFollowUp && <button type="button" className="btn btn-sm" data-testid="org-thread-follow-open" onClick={() => setFollowing(true)}>Follow up</button>}
+            <OrgThreadSnooze
+              title={t.title}
+              label={snoozed ? 'Snoozed' : 'Snooze'}
+              current={snoozed ? t.snoozed?.until : undefined}
+              onSnooze={(until) => void state.update(t.id, { snooze: until })}
+            />
+            {snoozed && <button type="button" className="btn btn-sm" data-testid="org-thread-unsnooze" onClick={() => void state.update(t.id, { snooze: '' })}>Unsnooze</button>}
           </>)}
         </div>
       )}
@@ -354,26 +379,43 @@ export function OrgThreads({ name, state, tasks, onOpenTask, onFollowUp, now }: 
   // Whether the week's closed threads are open stays as it was left (utils/view-memory.ts).
   const [showClosed, setShowClosed] = usePageView('org', 'threads.showClosed', false, isBoolean);
   const [showHidden, setShowHidden] = usePageView('org', 'threads.showInProgress', false, isBoolean);
+  const [showSnoozed, setShowSnoozed] = usePageView('org', 'threads.showSnoozed', false, isBoolean);
   const all = state.threads;
   const shared = useMemo(() => sharedAnswers(all ?? []), [all]);
-  const open = useMemo(() => (all ?? []).filter((t) => shownToHim(t, shared)), [all, shared]);
-  const hidden = useMemo(() => (all ?? []).filter((t) => !t.closed && !shownToHim(t, shared)), [all, shared]);
+  const { open, hidden, snoozed, clock } = useMemo(() => {
+    // The page's clock ticks once a minute; the re-read at a snooze's end (useOrgThreads) must not wait for it.
+    const at = Math.max(now, Date.now());
+    const list = all ?? [];
+    return {
+      clock: at,
+      open: list.filter((t) => shownToHim(t, shared, at)),
+      hidden: list.filter((t) => !t.closed && !snoozedNow(t, at) && !shownToHim(t, shared, at)),
+      snoozed: list.filter((t) => snoozedNow(t, at)).sort((a, b) => a.snoozed!.until.localeCompare(b.snoozed!.until)),
+    };
+  }, [all, shared, now]);
   const closed = useMemo(() => (all ?? []).filter((t) => !!t.closed), [all]);
   // Task pills in an answer open the task, as they do in the chat.
   const onEntityClick = useEntityClickHandler(onOpenTask);
-  const card = (t: OrgThread) => <ThreadCard key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} onOpenTask={onOpenTask} state={state} onFollowUp={onFollowUp} name={name} now={now} />;
+  const snoozedIds = useMemo(() => new Set(snoozed.map((t) => t.id)), [snoozed]);
+  const card = (t: OrgThread) => <ThreadCard key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} onOpenTask={onOpenTask} state={state} onFollowUp={onFollowUp} name={name} now={clock} snoozed={snoozedIds.has(t.id)} />;
   return (
     <div className="org-threads" data-testid="org-threads" onClick={onEntityClick}>
       {state.error && <p className="org-thread-error" data-testid="org-threads-error">{state.error}</p>}
       {all === null && !state.error && <p className="org-threads-empty" aria-busy="true">Loading…</p>}
       {all !== null && !open.length && (
         <p className="org-threads-empty" data-testid="org-threads-empty">
-          {hidden.length
-            ? `Nothing for you now. ${name} is on the ones below; each comes back here when there is news.`
+          {hidden.length || snoozed.length
+            ? `Nothing for you now. ${hidden.length ? `${name} is on the ones below; each` : 'Each snoozed one below'} comes back here when there is news.`
             : `Nothing open. Each request you send ${name} becomes a thread here; asks about the same thing stay in one thread.`}
         </p>
       )}
       {!!open.length && <ul className="org-thread-list" data-testid="org-thread-list" data-show="open">{open.map(card)}</ul>}
+      {snoozed.length > 0 && (
+        <button type="button" className="org-threads-closed-toggle" data-testid="org-threads-snoozed" aria-expanded={showSnoozed} onClick={() => setShowSnoozed(!showSnoozed)}>
+          {snoozed.length} snoozed{showSnoozed ? ' ▾' : ' ▸'}
+        </button>
+      )}
+      {showSnoozed && snoozed.length > 0 && <ul className="org-thread-list" data-testid="org-thread-list-snoozed" data-show="snoozed">{snoozed.map(card)}</ul>}
       {hidden.length > 0 && (
         <button type="button" className="org-threads-closed-toggle" data-testid="org-threads-hidden" aria-expanded={showHidden} onClick={() => setShowHidden(!showHidden)}>
           {hidden.length} in progress, nothing for you{showHidden ? ' ▾' : ' ▸'}

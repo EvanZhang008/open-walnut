@@ -92,6 +92,7 @@
 
 .org-thread-link { border: 0; padding: 0; background: transparent; color: var(--accent, #0a84ff); font: inherit; font-size: 11px; cursor: pointer; }
 .org-thread-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.org-thread-snoozed { margin: 0; font-size: 12px; color: var(--fg-muted, #86868b); }
 .org-thread-closed { font-size: 12px; color: var(--fg-muted, #86868b); margin-right: auto; }
 .org-thread-follow { display: flex; flex-direction: column; gap: 4px; }
 .org-thread-follow-row { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }

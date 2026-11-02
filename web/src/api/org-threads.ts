@@ -32,6 +32,8 @@ export interface OrgThread {
   known?: { through: string; by: string; at: string };
   /** The node opened the thread itself: its first post and where it came from. */
   opener?: { text: string; at: string; from: string; ref?: string; by: string };
+  /** Put aside until `until` (core/org/thread-view.ts snoozedNow says whether it still is). */
+  snoozed?: { until: string; at: string; by: string };
 }
 
 const base = (taskId: string) => `/api/v1/tasks/${encodeURIComponent(taskId)}/threads`;
@@ -46,6 +48,8 @@ export interface OrgThreadPatch {
   state?: OrgThreadState;
   close?: 'acked' | 'dropped';
   reopen?: boolean;
+  /** An ISO time it comes back at, or '' to take the snooze off. */
+  snooze?: string;
   merge_into?: string;
 }
 

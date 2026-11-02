@@ -28,7 +28,7 @@ async function ownTask(args: { task?: unknown }, call: OpCall): Promise<string> 
 
 const TASK_ARG = z.string().min(1).optional().describe('Task id or unique prefix of Main or a lead; default: your own task')
 
-interface ThreadView { id: string; title: string; state: string; closed?: { how: string } | null; messages?: unknown[] }
+interface ThreadView { id: string; title: string; state: string; closed?: { how: string } | null; messages?: unknown[]; snoozed?: { until: string } }
 
 defineOp({
   name: 'thread_list',
@@ -52,6 +52,7 @@ defineOp({
   title: 'Update a Thread',
   description: `${THREADS_SCOPE} Change one thread: title, ask, state, reply, tasks (replace the list) or add_tasks, known (he reacted to your answers through `
     + 'this message: they fold to context), close ("acked" when he reacted to it as finished, "dropped" when he said it is no longer wanted), reopen, '
+    + 'snooze (put it aside until a time when he asked to come back to it later: it leaves his view for its Snoozed section and comes back on its date, or earlier when he writes in it, you answer it, or it moves to needs or answered; "" takes it off), '
     + 'or merge_into another open thread (alone in its call: its messages move there and it is gone). '
     + 'A wrong merge is undone with thread_split. task defaults to your own task.',
   input: {
@@ -67,6 +68,7 @@ defineOp({
     known: z.string().regex(/^(tm-[a-f0-9]{6,32}|all)$/).optional().describe('He reacted to your answers through this message (tm-...), or "all": they leave the card. Refused before he reacted'),
     close: z.enum(['acked', 'dropped']).optional().describe('Close it: acked (he reacted to it as finished), dropped (he said it is no longer wanted). Refused before he reacted'),
     reopen: z.boolean().optional().describe('Open a closed thread again'),
+    snooze: z.string().max(40).optional().describe('Put it aside until this time: an ISO datetime, a date (that day\'s local midnight) or a duration from now ("4h", "3d"); at most a year; "" takes the snooze off'),
     merge_into: z.string().regex(/^th-[a-f0-9]{6,32}$/).optional().describe('Put this thread under that open thread (same subject)'),
     task: TASK_ARG,
   },
@@ -77,7 +79,7 @@ defineOp({
     return withOutcome(
       body,
       body.merged ? `Thread ${body.merged} is now under ${body.thread.id} "${body.thread.title}" (${body.thread.messages?.length ?? 0} messages).`
-        : `Thread ${body.thread.id} "${body.thread.title}": ${body.thread.closed ? `closed (${body.thread.closed.how})` : body.thread.state}.`,
+        : `Thread ${body.thread.id} "${body.thread.title}": ${body.thread.closed ? `closed (${body.thread.closed.how})` : body.thread.state}${body.thread.snoozed && !body.thread.closed && Date.parse(body.thread.snoozed.until) > Date.now() ? `, snoozed until ${body.thread.snoozed.until}` : ''}.`,
       'No further action is required.',
     )
   },

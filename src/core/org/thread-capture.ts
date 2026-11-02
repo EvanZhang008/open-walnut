@@ -18,7 +18,7 @@ import {
   type FileMessageInput, type ThreadCloseHow, type ThreadsFile, type ThreadState, type ThreadVia, type ThreadWriter,
 } from './threads-model.js';
 import { THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from './thread-rules.js';
-import { exchangesOf } from './thread-view.js';
+import { exchangesOf, snoozedNow } from './thread-view.js';
 
 /** Open threads named to the node with each message (the newest). */
 export const HINT_OPEN_MAX = 12;
@@ -84,7 +84,7 @@ export interface ThreadHintState {
   follows?: { id: string; title: string };
   /** This send was filed already (a retry with its id): nothing new. */
   duplicate: boolean;
-  open: Array<{ id: string; title: string; state: ThreadState }>;
+  open: Array<{ id: string; title: string; state: ThreadState; snoozedUntil?: string }>;
   /** Threads closed since the node was last told, and by whom. */
   closed: Array<{ id: string; title: string; how: ThreadCloseHow; by: ThreadWriter }>;
 }
@@ -140,7 +140,7 @@ export async function prepareThreadCapture(input: {
     threadId: planned.thread.id, title: planned.thread.title, created: planned.created, duplicate: planned.duplicate,
     followUp: !!input.threadId && !planned.created,
     ...(follows ? { follows: { id: follows.id, title: follows.title } } : {}),
-    open: open.map((t) => ({ id: t.id, title: t.title, state: t.state })),
+    open: open.map((t) => ({ id: t.id, title: t.title, state: t.state, ...(snoozedNow(t, nowMs) ? { snoozedUntil: t.snoozed!.until } : {}) })),
     closed: closed.map((t) => ({ id: t.id, title: t.title, how: t.closed!.how, by: t.closed!.by })),
   };
   return {
@@ -179,7 +179,7 @@ export function threadHintText(s: ThreadHintState): string {
     parts.push(`Walnut filed this message under the user's thread ${s.threadId} ${q(s.title)}.`);
   }
   if (s.open.length) {
-    parts.push(`His other open threads: ${s.open.map((t) => `${t.id} ${q(t.title)} (${t.state})`).join('; ')}.`);
+    parts.push(`His other open threads: ${s.open.map((t) => `${t.id} ${q(t.title)} (${t.state}${t.snoozedUntil ? `, he snoozed it until ${t.snoozedUntil}` : ''})`).join('; ')}.`);
     if (s.created && !s.duplicate) {
       parts.push(`If this message is about the same thing as one of them, or only answers one (a yes, thanks, go on), put it under that thread now: thread_update {"id":"${s.threadId}","merge_into":"<that id>"}. Several asks about one subject are one thread.`);
     }
@@ -217,7 +217,8 @@ export function threadsTidyOf(file: ThreadsFile, nowMs = Date.now()): ThreadsTid
   const items: TidyItem[] = [];
   const lastHis = lastUserAt(file) ?? '';
   for (const t of sortedThreads(file.threads)) {
-    if (!isOpen(t)) continue;
+    // A thread he put aside is not asked about until it is back (its date, or news).
+    if (!isOpen(t) || snoozedNow(t, nowMs)) continue;
     const xs = exchangesOf(t);
     const waiting = xs.filter((x) => (x.answer || x.opener) && !x.known);
     // The node looked at this thread since his last message (any update of its own): its call stands.

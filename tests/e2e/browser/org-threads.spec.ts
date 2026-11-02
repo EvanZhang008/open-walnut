@@ -570,3 +570,85 @@ test('the panel closes and comes back, per node; the Threads tab shows a dot for
   await detail.getByTestId('org-rail-toggle').click()
   await expect(top).toHaveAttribute('data-view', 'threads')
 })
+
+test('Snooze puts a thread aside in its Snoozed section until its time; it comes back then, on Unsnooze, or on news', async ({ page, request }) => {
+  // 2026-11-02, the user: "low priority, will follow up later, actually in thread has a snoozed
+  // section, also a snoozed button".
+  const project = `Threads snooze ${STAMP} ${test.info().project.name}`
+  await createTask(request, `Snooze work ${STAMP}`, project)
+  await createTask(request, `Snooze review ${STAMP}`, project)
+  const node = (await post<{ task: { id: string } }>(request, '/api/v1/org/contact', { to: project })).task.id
+  made.push(node)
+  const { walnutHome } = await discoverBrowserFixture(TEST_PORT)
+  const t0 = Date.now() - 20 * 60_000
+  const at = (min: number) => new Date(t0 + min * 60_000).toISOString()
+  const thread = (n: string, title: string) => ({
+    id: `th-00000000c00${n}`, title, titled: true, state: 'answered', reply: `${title}: the answer`, createdAt: at(0), updatedAt: at(2),
+    messages: [{ id: `tm-00000000c00${n}`, at: at(1), text: `${title}?`, via: 'chat', answer: { at: at(2), text: `${title}: the answer.` } }],
+  })
+  fs.mkdirSync(`${walnutHome}/org/threads`, { recursive: true })
+  fs.writeFileSync(`${walnutHome}/org/threads/${node}.json`, JSON.stringify({ version: 1, taskId: node, threads: [thread('1', 'Routing design'), thread('2', 'Phone view')] }))
+  const stored = async (id: string) => {
+    const res = await request.get(`/api/v1/tasks/${node}/threads`)
+    return ((await res.json()) as { threads: Array<{ id: string; snoozed?: { until: string; by: string } }> }).threads.find((t) => t.id === id)
+  }
+
+  await isolateUiPrefs(page)
+  await loadHome(page)
+  await page.getByTestId('sidebar-org').click()
+  await page.locator(`[data-testid="org-channel"][data-key="${rowKey(project)}"]`).click()
+  const detail = page.getByTestId('org-detail')
+  await expect(detail).toHaveAttribute('data-key', rowKey(project))
+  await detail.getByTestId('org-top-threads').click()
+  const open = page.getByTestId('org-thread-list')
+  const c1 = open.locator('[data-thread-id="th-00000000c001"]')
+  await expect(c1).toBeVisible()
+  await expect(page.getByTestId('org-threads-snoozed')).toHaveCount(0)
+
+  // Snooze, from the card: the task menu's picker; 2h puts it aside for two hours.
+  await c1.getByTestId('org-thread-snooze').click()
+  const menu = page.getByTestId('org-thread-snooze-menu')
+  await expect(menu).toBeVisible()
+  const picked = Date.now()
+  await menu.getByRole('button', { name: '2h', exact: true }).click()
+  await expect(menu).toHaveCount(0)
+  await expect(c1).toHaveCount(0)
+  const toggle = page.getByTestId('org-threads-snoozed')
+  await expect(toggle).toHaveText(/^1 snoozed/)
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  await expect.poll(async () => (await stored('th-00000000c001'))?.snoozed?.by, { timeout: 15_000 }).toBe('human')
+  const until = Date.parse((await stored('th-00000000c001'))!.snoozed!.until)
+  expect(until - picked).toBeGreaterThan(2 * 3_600_000 - 60_000)
+  expect(until - picked).toBeLessThan(2 * 3_600_000 + 60_000)
+
+  // The section opens, collapsed by default, and says when it comes back.
+  await toggle.click()
+  const section = page.getByTestId('org-thread-list-snoozed')
+  const s1 = section.locator('[data-thread-id="th-00000000c001"]')
+  await expect(s1.getByTestId('org-thread-snoozed-until')).toHaveText(/^Snoozed until (today|tomorrow), /)
+  await shot(page, 'snoozed')
+  // Unsnooze brings it back at once.
+  await s1.getByTestId('org-thread-unsnooze').click()
+  await expect(c1).toBeVisible()
+  await expect(page.getByTestId('org-threads-snoozed')).toHaveCount(0)
+  await expect.poll(async () => (await stored('th-00000000c001'))?.snoozed, { timeout: 15_000 }).toBeUndefined()
+
+  // The node snoozes one too (an agent action) for a few seconds: it comes back on its time with no reload.
+  const res = await request.patch(`/api/v1/tasks/${node}/threads/th-00000000c002`, { data: { snooze: new Date(Date.now() + 6_000).toISOString() } })
+  expect(res.ok(), await res.text()).toBe(true)
+  const c2 = open.locator('[data-thread-id="th-00000000c002"]')
+  await expect(c2).toHaveCount(0)
+  await expect(page.getByTestId('org-threads-snoozed')).toHaveText(/^1 snoozed/)
+  await expect(c2).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByTestId('org-threads-snoozed')).toHaveCount(0)
+
+  // News brings one back early: snoozed for a day, then it moves to needs.
+  const day = await request.patch(`/api/v1/tasks/${node}/threads/th-00000000c002`, { data: { snooze: '1d' } })
+  expect(day.ok(), await day.text()).toBe(true)
+  await expect(c2).toHaveCount(0)
+  const needs = await request.patch(`/api/v1/tasks/${node}/threads/th-00000000c002`, { data: { state: 'needs', reply: 'Pick: cards or a list?' } })
+  expect(needs.ok(), await needs.text()).toBe(true)
+  await expect(c2).toBeVisible()
+  await expect(c2.getByTestId('org-thread-state')).toHaveText('Needs you')
+  expect((await stored('th-00000000c002'))?.snoozed).toBeUndefined()
+})

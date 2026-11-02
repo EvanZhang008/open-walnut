@@ -34,6 +34,8 @@ export interface ViewThread<M extends ViewMessage = ViewMessage> {
   closed?: { by: string };
   /** The node opened the thread itself: its first post. */
   opener?: { text: string; at: string; from: string; ref?: string };
+  /** He put it aside until `until` (threads-model.ts ThreadSnoozed). */
+  snoozed?: { until: string; at: string };
 }
 
 /** One exchange: his message (or a few in a row the node answered at once) and the answer. */
@@ -132,27 +134,47 @@ export function sharedAnswers(threads: ReadonlyArray<{ id: string; messages: rea
 }
 
 /**
+ * Is this thread put aside now? Until its date, unless real news came since he snoozed it: a
+ * message of his, or an answer of the node's (2026-11-02, the user: "in thread has a snoozed
+ * section, also a snoozed button"). A move to needs or answered takes the snooze off in the model.
+ */
+export function snoozedNow(t: ViewThread, now: number = Date.now()): boolean {
+  const s = t.snoozed;
+  if (!s || t.closed || !(Date.parse(s.until) > now)) return false;
+  return !newsSince(t, s.at);
+}
+
+/** A message of his or an answer of the node's came after `at`. */
+function newsSince(t: ViewThread, at: string): boolean {
+  return t.messages.some((m) => m.at > at || (!!m.answer && m.answer.at > at));
+}
+
+/**
  * Does his Threads view show this thread? Only when it has something for him: he must decide
  * (needs), the result is in (answered), or an answer of the node's he has not reacted to is on it.
  * A new thread, one he just wrote in (working) and one in progress are the node's move, out of his
  * sight (2026-11-01, the user: "if i reply to a thread, it shoud go out of the thread immediately
  * instead of just show working"); pending stays out even with an answer (the node judged it no news).
  */
-export function shownToHim<M extends ViewMessage>(t: ViewThread<M> & { state: string }, shared: ReadonlySet<string> = NONE): boolean {
-  if (t.closed || t.state === 'pending') return false;
+export function shownToHim<M extends ViewMessage>(t: ViewThread<M> & { state: string }, shared: ReadonlySet<string> = NONE, now: number = Date.now()): boolean {
+  if (t.closed || t.state === 'pending' || snoozedNow(t, now)) return false;
   if (t.state === 'needs' || t.state === 'answered') return true;
   return cardView(t, shared).unread.length > 0;
 }
 
 /**
  * When the threads his view shows last had news: the newest change, answer or first post among
- * them (the Threads tab's dot is for news after he last looked). Null when none is shown.
+ * them (the Threads tab's dot is for news after he last looked); a thread back from a snooze has
+ * news at its date. Null when none is shown.
  */
-export function newsAt<M extends ViewMessage>(threads: ReadonlyArray<ViewThread<M> & { state: string; updatedAt: string }>, shared: ReadonlySet<string> = NONE): string | null {
+export function newsAt<M extends ViewMessage>(threads: ReadonlyArray<ViewThread<M> & { state: string; updatedAt: string }>, shared: ReadonlySet<string> = NONE, now: number = Date.now()): string | null {
   let last: string | null = null;
   for (const t of threads) {
-    if (!shownToHim(t, shared)) continue;
+    if (!shownToHim(t, shared, now)) continue;
     let at = t.updatedAt;
+    // Only a snooze that ran its course: one news ended early was news then, not again at its date.
+    const s = t.snoozed;
+    if (s && !t.closed && Date.parse(s.until) <= now && s.until > at && !newsSince(t, s.at)) at = s.until;
     if (t.opener && t.opener.at > at) at = t.opener.at;
     for (const m of t.messages) if (m.answer && m.answer.at > at) at = m.answer.at;
     if (!last || at > last) last = at;

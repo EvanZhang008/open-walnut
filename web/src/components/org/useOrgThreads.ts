@@ -14,12 +14,26 @@ export interface OrgThreadsState {
   split: (threadId: string, messageId: string) => Promise<boolean>;
 }
 
-/** What a close or reopen looks like before the server answers. */
+/** What a close, reopen or snooze looks like before the server answers. */
 function optimistic(t: OrgThread, patch: OrgThreadPatch): OrgThread {
   const at = new Date().toISOString();
   if (patch.close) return { ...t, closed: { how: patch.close, at, by: 'human' }, updatedAt: at };
   if (patch.reopen) { const { closed: _c, ...rest } = t; return { ...rest, updatedAt: at }; }
+  if (patch.snooze !== undefined) {
+    const { snoozed: _s, ...rest } = t;
+    return patch.snooze ? { ...rest, snoozed: { until: patch.snooze, at, by: 'human' }, updatedAt: at } : { ...rest, updatedAt: at };
+  }
   return t;
+}
+
+/** The soonest snooze still to end (ms), so the view reads again when that thread comes back. */
+function nextSnoozeEnd(list: readonly OrgThread[] | null, now: number): number | null {
+  let soonest: number | null = null;
+  for (const t of list ?? []) {
+    const end = t.snoozed && !t.closed ? Date.parse(t.snoozed.until) : NaN;
+    if (end > now && (soonest === null || end < soonest)) soonest = end;
+  }
+  return soonest;
 }
 
 export function useOrgThreads(taskId: string | undefined, enabled: boolean): OrgThreadsState {
@@ -32,17 +46,20 @@ export function useOrgThreads(taskId: string | undefined, enabled: boolean): Org
   const pending = useRef(new Map<string, OrgThreadPatch>());
   const withPending = (list: OrgThread[]): OrgThread[] =>
     pending.current.size ? list.map((t) => { const p = pending.current.get(t.id); return p ? optimistic(t, p) : t; }) : list;
-  const load = useCallback(async (why: string) => {
-    if (!taskId) return;
+  /** Read the threads; false when the read failed (a later read that wins counts as done). */
+  const load = useCallback(async (why: string): Promise<boolean> => {
+    if (!taskId) return true;
     const mine = ++seq.current;
     try {
       const next = await fetchOrgThreads(taskId);
       // A later read (or a node change) wins: an answer that comes back late is dropped.
       if (mine === seq.current) { setThreads(withPending(next)); setError(null); }
+      return true;
     } catch (err) {
-      if (mine !== seq.current) return;
+      if (mine !== seq.current) return true;
       log.warn('org-threads', 'threads read failed', { taskId, why, error: err instanceof Error ? err.message : String(err) });
       setError('Threads could not be read. They come back when the server answers.');
+      return false;
     }
   }, [taskId]);
   useEffect(() => {
@@ -57,6 +74,21 @@ export function useOrgThreads(taskId: string | undefined, enabled: boolean): Org
     void load('changed');
   });
   useEvent('_ws:reconnected', () => { if (enabled) void load('reconnect'); });
+  // A snoozed thread comes back on its date: read again then, so the list, the count and the
+  // Threads tab's dot follow at once (not at the page's next minute tick).
+  useEffect(() => {
+    if (!enabled) return;
+    const end = nextSnoozeEnd(threads, Date.now());
+    if (end === null) return;
+    let id = 0;
+    let gone = false;
+    // A read that fails is tried again, so the count and the dot never stay on the old answer.
+    const readAt = (delay: number) => {
+      id = window.setTimeout(() => { void load('snooze-ended').then((ok) => { if (!ok && !gone) readAt(30_000); }); }, delay);
+    };
+    readAt(Math.min(end - Date.now() + 250, 2 ** 31 - 1));
+    return () => { gone = true; window.clearTimeout(id); };
+  }, [threads, enabled, load]);
 
   const update = useCallback(async (threadId: string, patch: OrgThreadPatch): Promise<boolean> => {
     if (!taskId) return false;

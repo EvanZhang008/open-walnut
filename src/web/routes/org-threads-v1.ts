@@ -7,7 +7,7 @@
  *   GET   /api/v1/tasks/:id/threads[?open=1]               { task_id, threads, closed_count }  (open first; each message with
  *                                                          the node's answer, read from its chat in the background)
  *   POST  /api/v1/tasks/:id/threads                        { text, images?, thread? } -> file one of his messages
- *   PATCH /api/v1/tasks/:id/threads/:thread                { title?, ask?, state?, user_kind?, user_kind_why?, reply?, tasks?, add_tasks?, known?, close?, reopen?, merge_into? }
+ *   PATCH /api/v1/tasks/:id/threads/:thread                { title?, ask?, state?, user_kind?, user_kind_why?, reply?, tasks?, add_tasks?, known?, close?, reopen?, snooze?, merge_into? }
  *   POST  /api/v1/tasks/:id/threads/open                   { title, text, from, ref?, state?, user_kind?, user_kind_why?, tasks? } -> the node opens one itself
  *   POST  /api/v1/tasks/:id/threads/:thread/split          { message } -> that message becomes its own thread
  *
@@ -117,7 +117,7 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
   const by = await writerOf(req)
   const mergeInto = str(b, 'merge_into')
   const patch: ThreadPatch = {}
-  for (const k of ['title', 'ask', 'reply', 'state', 'close', 'known', 'user_kind', 'user_kind_why'] as const) {
+  for (const k of ['title', 'ask', 'reply', 'state', 'close', 'known', 'snooze', 'user_kind', 'user_kind_why'] as const) {
     const v = str(b, k)
     if (v !== undefined) (patch as Record<string, unknown>)[k] = v
   }
@@ -136,7 +136,7 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
     if (!THREAD_ID_RE.test(mergeInto)) throw new RouteError(400, 'bad_request', `Not a thread id: ${mergeInto}`)
     thread = await mergeThread(task.id, id, mergeInto, by)
   }
-  if (!thread) throw new RouteError(400, 'bad_request', 'Nothing to change: pass title, ask, state, reply, tasks, add_tasks, known, close, reopen or merge_into.')
+  if (!thread) throw new RouteError(400, 'bad_request', 'Nothing to change: pass title, ask, state, reply, tasks, add_tasks, known, close, reopen, snooze or merge_into.')
   log.task.info('org thread updated', { taskId: task.id, threadId: id, by, fields: Object.keys(patch), mergeInto })
   res.json({ task_id: task.id, thread, ...(mergeInto ? { merged: id } : {}) })
 }))

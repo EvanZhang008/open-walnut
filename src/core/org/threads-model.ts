@@ -30,6 +30,11 @@
  * some new message, from somewhere like mail"): its first post is the node's (`opener`), his reply
  * is filed under it like any follow-up.
  *
+ * He may put a thread aside until a time (`snoozed`, 2026-11-02, the user: "low priority, will follow
+ * up later, actually in thread has a snoozed section, also a snoozed button"): it leaves his view for
+ * a Snoozed section and comes back on its date, or earlier on real news (thread-view.ts snoozedNow).
+ * His message in it, a move to needs or to answered takes the snooze off here; the node is not woken.
+ *
  * Pure: every function takes the file and returns the next one, or throws ThreadError. The
  * store (threads-store.ts) runs them under the file lock.
  */
@@ -123,6 +128,13 @@ export interface ThreadClosed {
   told?: boolean;
 }
 
+/** He put the thread aside until `until` (the node may too); it comes back then, or on news. */
+export interface ThreadSnoozed {
+  until: string;
+  at: string;
+  by: ThreadWriter;
+}
+
 export interface OrgThread {
   id: string;
   /** A few words. Walnut's first line of the first message until the node writes one. */
@@ -148,6 +160,8 @@ export interface OrgThread {
   known?: ThreadKnown;
   /** The node opened this thread itself (not one of his requests): its first post. */
   opener?: ThreadOpener;
+  /** Put aside until a time (thread-view.ts snoozedNow says whether it still is). */
+  snoozed?: ThreadSnoozed;
 }
 
 export interface ThreadsFile {
@@ -216,6 +230,7 @@ function normalizeThread(t: unknown): OrgThread | null {
     } else delete next.closed;
   }
   if (opener) next.opener = opener; else delete next.opener;
+  if (next.snoozed && !(typeof next.snoozed === 'object' && isStr(next.snoozed.until) && isStr(next.snoozed.at) && Number.isFinite(Date.parse(next.snoozed.until)))) delete next.snoozed;
   if (next.known && !(typeof next.known === 'object' && isStr(next.known.through) && messages.some((m) => m.id === next.known!.through))) delete next.known;
   return next;
 }
@@ -308,8 +323,10 @@ export function fileMessage(file: ThreadsFile, input: FileMessageInput): FileMes
   };
   const target = input.threadId ? file.threads.find((t) => t.id === input.threadId) : undefined;
   if (target && isOpen(target)) {
+    // His own message in a snoozed thread brings it back.
+    const { snoozed: _s, ...rest } = target;
     const next: OrgThread = {
-      ...target, messages: [...target.messages, message], updatedAt: input.at, by: 'human',
+      ...rest, messages: [...target.messages, message], updatedAt: input.at, by: 'human',
       // He spoke again: a thread answered, waiting on him or pending is the node's turn again.
       ...(target.state === 'answered' || target.state === 'needs' || target.state === 'pending' ? { state: 'working' as ThreadState } : {}),
     };
@@ -337,6 +354,8 @@ export interface ThreadPatch {
   reopen?: boolean;
   /** He already knows every exchange through this message (tm-...), or "all": they fold to context. */
   known?: string;
+  /** Put it aside until this time: an ISO datetime or a duration from now ("4h", "3d"); "" takes the snooze off. */
+  snooze?: string;
   /** With state needs from an agent: which of the user's kinds this is, and why (user-kind.ts). Never stored. */
   user_kind?: string;
   user_kind_why?: string;
@@ -355,11 +374,35 @@ function checkHandedToUser(by: ThreadWriter, input: { user_kind?: unknown; user_
   if (!v.ok) throw new ThreadError('user_kind', 409, v.message.replace(/^Not sent to the user:/, 'Not handed to the user:'));
 }
 
+const SNOOZE_UNIT_MS: Record<string, number> = { m: 60_000, h: 3_600_000, d: 86_400_000 };
+/** The longest snooze: a year. */
+const SNOOZE_MAX_MS = 366 * 86_400_000;
+
+/**
+ * When a snooze ends: an ISO datetime, a date alone (that day's local midnight, as a task's start
+ * date reads), or a duration from `at` ("90m", "4h", "3d"); never a time already begun, at most a year.
+ */
+export function parseSnoozeUntil(raw: string, at: string): string {
+  const text = raw.trim();
+  const now = Date.parse(at);
+  const d = /^(\d+(?:\.\d+)?)\s*(m|h|d)$/i.exec(text);
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  const ms = d ? now + Math.floor(Number(d[1]) * SNOOZE_UNIT_MS[d[2].toLowerCase()])
+    : day ? new Date(Number(day[1]), Number(day[2]) - 1, Number(day[3])).getTime()
+    : Date.parse(text);
+  if (Number.isFinite(ms) && ms - now > SNOOZE_MAX_MS) throw new ThreadError('bad_input', 400, `snooze "${text}" is more than a year away.`);
+  if (!Number.isFinite(ms)) throw new ThreadError('bad_input', 400, `snooze "${text}" is neither an ISO datetime nor a duration like "4h" / "3d".`);
+  if (ms <= now) throw new ThreadError('bad_input', 400, `snooze "${text}" is not in the future.`);
+  return new Date(ms).toISOString();
+}
+
 function checkPatch(p: ThreadPatch): void {
   if (p.title !== undefined && (typeof p.title !== 'string' || !p.title.trim())) throw new ThreadError('bad_input', 400, 'title must be a few words.');
   if (p.state !== undefined && !THREAD_STATES.includes(p.state)) throw new ThreadError('bad_input', 400, `state must be one of ${THREAD_STATES.join(', ')}.`);
   if (p.close !== undefined && !THREAD_CLOSE_HOWS.includes(p.close)) throw new ThreadError('bad_input', 400, `close must be one of ${THREAD_CLOSE_HOWS.join(', ')}.`);
   if (p.close && p.reopen) throw new ThreadError('bad_input', 400, 'close and reopen cannot go together.');
+  if (p.snooze !== undefined && typeof p.snooze !== 'string') throw new ThreadError('bad_input', 400, 'snooze must be an ISO datetime, a duration like "4h", or "".');
+  if (p.close && p.snooze) throw new ThreadError('bad_input', 400, 'close and snooze cannot go together.');
   if (p.known !== undefined && p.known !== 'all' && !(typeof p.known === 'string' && THREAD_MESSAGE_ID_RE.test(p.known))) {
     throw new ThreadError('bad_input', 400, 'known must be a message id of this thread (tm-...) or "all".');
   }
@@ -452,6 +495,15 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   if (patch.state !== undefined) next.state = patch.state;
   // A new summary on a thread out of his sight is news: it shows (answered), unless the same write names a state.
   else if (HIDDEN_STATES.has(cur.state) && next.reply !== undefined && next.reply !== cur.reply) next.state = 'answered';
+  // Real news takes a snooze off: the thread now waits on him (needs) or its result is in (answered).
+  if (next.snoozed && next.state !== cur.state && (next.state === 'needs' || next.state === 'answered')) delete next.snoozed;
+  if (patch.snooze !== undefined) {
+    if (!patch.snooze.trim()) delete next.snoozed;
+    else {
+      if (cur.closed && !patch.reopen) throw new ThreadError('thread_closed', 409, `Thread ${id} is closed: there is nothing to snooze.`);
+      next.snoozed = { until: parseSnoozeUntil(patch.snooze, at), at, by };
+    }
+  }
   if (patch.tasks !== undefined) { const l = taskList(patch.tasks); if (l.length) next.tasks = l; else delete next.tasks; }
   if (patch.add_tasks?.length) next.tasks = taskList([...(next.tasks ?? []), ...patch.add_tasks]);
   // Closing a closed thread again changes nothing (the node is not told twice).
@@ -466,6 +518,7 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
     const ownUnseen = patch.close === 'dropped' && !!cur.opener && !cur.messages.length && by === cur.opener.by;
     if (!ownUnseen) checkClose(file, cur, by);
     next.closed = { how: patch.close, at, by };
+    delete next.snoozed;
   }
   // Reopened by him: in his sight again until he writes in it.
   if (patch.reopen) { delete next.closed; if (HIDDEN_STATES.has(next.state) && patch.state === undefined) next.state = 'answered'; }
