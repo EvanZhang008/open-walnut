@@ -135,6 +135,12 @@ taken back and built on in place, and root runs nothing in it, `git pull` includ
 it aside and clone fresh, or run the deploy, which does that for you. `setup.sh` refuses
 such a tree. Steps: [the code tree is root's](../docs/reference/cloud-sync.md#the-companion-as-an-exec-host).
 
+Security updates install themselves every day at 10:30 UTC (`UPDATE_AT=HH:MM` when you run
+`setup.sh` picks another time), from the latest Amazon Linux release, and the box reboots only
+when an update needs it; Walnut and Caddy come back by themselves. Check the last run with
+`journalctl -u walnut-security-update`. A box set up before this got `dnf-automatic`, which on
+Amazon Linux 2023 never sees a newer release: re-run `setup.sh` to switch it over.
+
 Without `--engine`, a re-run keeps the box's own `defaults.engine`. To converge only
 the agent harness (Claude Code, engine CLI, Bedrock settings, cloud exec keys), run
 `bash scripts/cloud/ensure-harness.sh`, then `systemctl restart walnut`.

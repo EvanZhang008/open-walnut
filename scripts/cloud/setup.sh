@@ -678,26 +678,15 @@ if ! bash "$HARNESS_SCRIPT" ${HARNESS_ARGS[@]+"${HARNESS_ARGS[@]}"}; then
   echo "WARNING: the agent harness is incomplete (see above); the companion starts as a relay only"
 fi
 
-echo "==> [10/10] Enable services + unattended security updates"
-if [ "$PKG" = dnf ]; then
-  pkg_install dnf-automatic
-  sed -i 's/^upgrade_type.*/upgrade_type = security/' /etc/dnf/automatic.conf
-  sed -i 's/^apply_updates.*/apply_updates = yes/' /etc/dnf/automatic.conf
-  AUTO_UPDATE_TIMER=dnf-automatic.timer
-else
-  pkg_install unattended-upgrades
-  # Ubuntu's cloud images ship unattended-upgrades but not always the periodic
-  # config that actually fires it, so write it rather than assuming. The
-  # security-only origin list is the package's own default (50unattended-upgrades).
-  cat > /etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
-APT::Periodic::Update-Package-Lists "1";
-APT::Periodic::Unattended-Upgrade "1";
-EOF
-  AUTO_UPDATE_TIMER=apt-daily-upgrade.timer
+echo "==> [10/10] Enable services + daily security updates"
+# Applied for real and rebooted into when an update needs it (security-updates.sh says
+# why dnf-automatic alone never patched an Amazon Linux 2023 box). Never fatal: a box
+# without it still serves, and the next run of this script retries.
+if ! bash "$REPO_DIR/scripts/cloud/security-updates.sh" "$PKG"; then
+  echo "WARNING: daily security updates are not set up (see above)"
 fi
 
 systemctl daemon-reload
-systemctl enable --now "$AUTO_UPDATE_TIMER"
 systemctl enable caddy.service walnut.service
 systemctl restart caddy.service walnut.service
 
