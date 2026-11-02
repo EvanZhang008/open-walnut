@@ -142,12 +142,12 @@ jobs:
       - name: Start the screen recording
         run: |
           screencapture -x "$OUT/screen-before.png" || echo "no screenshot: $?"
-          # Long enough for the whole job; stopped before the upload. A background job of a
-          # non-interactive shell ignores SIGINT, which is what ends the recording, so perl
-          # puts it back; and stdin is a pipe that stays open, since a key on it stops it too.
-          sleep 3000 | perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV' screencapture -v -x -V 1800 "$OUT/screen.mov" > "$OUT/screencapture.log" 2>&1 &
+          # A picture of the screen twice a second, made into a video at the end: a
+          # `screencapture -v` started from a job left no video (2026-11-02).
+          mkdir -p "$OUT/frames"
+          nohup sh -c 'i=0; while :; do i=$((i+1)); screencapture -x -t jpg "$1/frames/$(printf %05d $i).jpg" 2>/dev/null; sleep 0.5; done' frames "$OUT" > /dev/null 2>&1 &
           echo $! > "$OUT/screencapture.pid"
-          sleep 3
+          sleep 2
 
       - name: The throwaway Walnut waits for the join
         env:
@@ -249,10 +249,15 @@ jobs:
         run: |
           sleep 5
           screencapture -x "$OUT/screen-after.png" || true
-          kill -INT "$(cat "$OUT/screencapture.pid")" 2>/dev/null || true
-          for i in $(seq 1 20); do kill -0 "$(cat "$OUT/screencapture.pid")" 2>/dev/null || break; sleep 1; done
+          kill "$(cat "$OUT/screencapture.pid")" 2>/dev/null || true
+          n=$(ls "$OUT/frames" 2>/dev/null | wc -l | tr -d ' ')
+          echo "$n frames"
+          if [ "$n" -gt 0 ]; then
+            command -v ffmpeg >/dev/null 2>&1 || HOMEBREW_NO_AUTO_UPDATE=1 brew install --quiet ffmpeg > "$OUT/ffmpeg-install.log" 2>&1 || tail -n 20 "$OUT/ffmpeg-install.log"
+            ffmpeg -loglevel error -y -framerate 2 -pattern_type glob -i "$OUT/frames/*.jpg" -vf 'scale=1280:-2' -c:v libx264 -preset veryfast -pix_fmt yuv420p "$OUT/screen.mp4" && rm -rf "$OUT/frames"
+          fi
           ls -la "$OUT"
-          [ -s "$OUT/screen.mov" ] || echo "::warning::no screen recording (see screencapture.log)"
+          [ -s "$OUT/screen.mp4" ] || echo "::warning::no screen recording"
 
       # The artifact is public: the one-use ticket goes before the upload, wherever it is.
       - name: Take the ticket out

@@ -69,7 +69,31 @@ walnut_join_main() {
         rm -f "$walnut_join_inst"
         walnut_join_fail "Could not download Walnut's installer (above). Check this machine is online, then run this again."
       fi
-      if ! sh "$walnut_join_inst" >"$walnut_join_inst.log" 2>&1; then
+      # Another Walnut's walnut in ~/.local/bin (an npm install's, a wrapper its owner wrote,
+      # or the session daemon's script that hands over to another walnut on this machine)
+      # stays as it is: an installer older than the one that knows to leave it would point it
+      # at this install, so this one's links then go inside the install instead.
+      walnut_join_dir="\${OPEN_WALNUT_INSTALL_DIR:-$HOME/.local/share/open-walnut}"
+      walnut_join_bin="\${OPEN_WALNUT_BIN_DIR:-$HOME/.local/bin}"
+      walnut_join_links=""
+      for walnut_join_n in walnut open-walnut; do
+        walnut_join_f="$walnut_join_bin/$walnut_join_n"
+        [ -e "$walnut_join_f" ] || continue
+        [ "$walnut_join_f" -ef "$walnut_join_dir/bin/walnut" ] && continue
+        case "$(readlink "$walnut_join_f" 2>/dev/null || true)" in "$walnut_join_dir"/*) continue ;; esac
+        if [ ! -L "$walnut_join_f" ] && [ "$(wc -c < "$walnut_join_f" | tr -d ' ')" -le 16384 ] && grep -q 'walnut-user''-shim v1' "$walnut_join_f" 2>/dev/null; then
+          # That script runs the first other walnut it finds: one there means another Walnut.
+          for walnut_join_d in $(printf '%s' "$PATH" | tr ':' ' ') /opt/homebrew/bin /usr/local/bin "$HOME/.npm-global/bin" "$HOME/bin"; do
+            [ "$walnut_join_d" != "$walnut_join_bin" ] && [ -x "$walnut_join_d/walnut" ] && ! grep -q 'walnut-user''-shim' "$walnut_join_d/walnut" 2>/dev/null && { walnut_join_links=1; break; }
+          done
+        else
+          walnut_join_links=1
+        fi
+        [ -n "$walnut_join_links" ] && break
+      done
+      [ -z "$walnut_join_links" ] || walnut_join_bin="$walnut_join_dir/links"
+      # Off: no rc file is told to put links/ first on PATH.
+      if ! OPEN_WALNUT_BIN_DIR="$walnut_join_bin" OPEN_WALNUT_MODIFY_PATH=0 sh "$walnut_join_inst" >"$walnut_join_inst.log" 2>&1; then
         cat "$walnut_join_inst.log" >&2
         rm -f "$walnut_join_inst" "$walnut_join_inst.log"
         walnut_join_fail "Walnut did not install (above). Run this again, or install it by hand: curl -fsSL ${INSTALL_URL} | sh"

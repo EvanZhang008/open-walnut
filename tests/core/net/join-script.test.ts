@@ -40,8 +40,9 @@ esac
 function setup(installed: 'none' | 'old' | 'new', nightly: 'ok' | 'fails' = 'ok'): void {
   fs.writeFileSync(path.join(dir, 'new'), fake('new'), { mode: 0o755 })
   fs.writeFileSync(path.join(dir, 'old'), fake('old', nightly), { mode: 0o755 })
-  // install.sh puts the release (old) where the real one does, and links ~/.local/bin to it.
-  fs.writeFileSync(path.join(dir, 'install.sh'), `d="$HOME/.local/share/open-walnut/bin"; mkdir -p "$d" "$HOME/.local/bin" && cp "${dir}/old" "$d/walnut" && ln -sfn "$d/walnut" "$HOME/.local/bin/walnut"\n`)
+  // install.sh puts the release (old) where the real one does, and links walnut to it in
+  // OPEN_WALNUT_BIN_DIR (~/.local/bin), over whatever is there, as the 0.6.23 one does.
+  fs.writeFileSync(path.join(dir, 'install.sh'), `d="$HOME/.local/share/open-walnut/bin"; b="\${OPEN_WALNUT_BIN_DIR:-$HOME/.local/bin}"; mkdir -p "$d" "$b" && cp "${dir}/old" "$d/walnut" && ln -sfn "$d/walnut" "$b/walnut"\n`)
   if (installed !== 'none') {
     fs.mkdirSync(path.join(home, INSTALLED, '..'), { recursive: true })
     fs.copyFileSync(path.join(dir, installed), path.join(home, INSTALLED))
@@ -124,6 +125,48 @@ describe('the invite script when the release cannot join yet', () => {
       expect(fs.readFileSync(path.join(npm, 'walnut'), 'utf8')).toBe(before)
       // Every call went to the file install.sh put down.
       expect(fs.readFileSync(path.join(home, INSTALLED), 'utf8')).toBe(fs.readFileSync(path.join(dir, 'new'), 'utf8'))
+    })
+
+    it(`${name}: another Walnut's walnut in ~/.local/bin (a wrapper, an npm link) stays as it is`, () => {
+      setup('none')
+      const bin = path.join(home, '.local/bin')
+      fs.mkdirSync(bin, { recursive: true })
+      const wrapper = '#!/bin/sh\nexec /opt/elsewhere/walnut "$@"\n'
+      fs.writeFileSync(path.join(bin, 'walnut'), wrapper, { mode: 0o755 })
+      const r = run(script(), [...args])
+      expect(r.status, r.stderr).toBe(0)
+      expect(r.stdout).toContain(joined)
+      expect(fs.readFileSync(path.join(bin, 'walnut'), 'utf8')).toBe(wrapper)
+      // This install's own link went inside the install.
+      expect(fs.readlinkSync(path.join(home, '.local/share/open-walnut/links/walnut'))).toBe(path.join(home, INSTALLED))
+    })
+
+    it(`${name}: the session daemon's walnut script stays when it hands over to another Walnut, and is replaced when it does not`, () => {
+      setup('none')
+      const bin = path.join(home, '.local/bin')
+      fs.mkdirSync(bin, { recursive: true })
+      const shim = '#!/bin/sh\n# walnut-user-shim v1 \u2014 installed by the Walnut session daemon. Safe to delete.\n'
+      fs.writeFileSync(path.join(bin, 'walnut'), shim, { mode: 0o755 })
+      const npm = path.join(dir, 'npm-bin')
+      fs.mkdirSync(npm)
+      fs.writeFileSync(path.join(npm, 'walnut'), '#!/bin/sh\necho npm walnut\n', { mode: 0o755 })
+      const kept = run(script(), [...args], { PATH: `${npm}:/usr/bin:/bin` })
+      expect(kept.status, kept.stderr).toBe(0)
+      expect(fs.readFileSync(path.join(bin, 'walnut'), 'utf8')).toBe(shim)
+      expect(fs.readlinkSync(path.join(home, '.local/share/open-walnut/links/walnut'))).toBe(path.join(home, INSTALLED))
+      // No other walnut: the script would run only the daemon's own, so the install takes its place.
+      fs.rmSync(path.join(home, '.local/share/open-walnut'), { recursive: true })
+      const taken = run(script(), [...args])
+      expect(taken.status, taken.stderr).toBe(0)
+      expect(fs.readlinkSync(path.join(bin, 'walnut'))).toBe(path.join(home, INSTALLED))
+    })
+
+    it(`${name}: with nothing else there, walnut is linked into ~/.local/bin as usual`, () => {
+      setup('none')
+      const r = run(script(), [...args])
+      expect(r.status, r.stderr).toBe(0)
+      expect(fs.readlinkSync(path.join(home, '.local/bin/walnut'))).toBe(path.join(home, INSTALLED))
+      expect(fs.existsSync(path.join(home, '.local/share/open-walnut/links'))).toBe(false)
     })
 
     it(`${name}: an installer that does not download says so, and is never run empty`, () => {

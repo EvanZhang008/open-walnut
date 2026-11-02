@@ -639,6 +639,64 @@ describe.each(SHELLS)('install.sh under %s', (sh) => {
     expect(entries(home)).toEqual(['app', 'bin', 'open-walnut-install.json', 'versions'])
   })
 
+  // 2026-11-02: a machine joining from an invite already had a walnut in ~/.local/bin (an npm
+  // install's link, or a wrapper its owner wrote), and the install pointed it at itself.
+  it("leaves another Walnut's walnut in ~/.local/bin alone, and says how to start this one", async () => {
+    const home = freshHome()
+    fs.mkdirSync(path.join(home, '.local/bin'), { recursive: true })
+    const wrapper = '#!/bin/sh\nexec /opt/elsewhere/walnut "$@"\n'
+    fs.writeFileSync(walnut(home), wrapper, { mode: 0o755 })
+    fs.mkdirSync(path.join(home, '.local/lib/node_modules/open-walnut/dist'), { recursive: true })
+    fs.writeFileSync(path.join(home, '.local/lib/node_modules/open-walnut/dist/cli.js'), '#!/usr/bin/env node\n', { mode: 0o755 })
+    fs.symlinkSync('../lib/node_modules/open-walnut/dist/cli.js', path.join(home, '.local/bin/open-walnut'))
+    releaseFile('0.7.0')
+    const r = await install(home)
+    expect(r.code, r.out).toBe(0)
+    expect(fs.readFileSync(walnut(home), 'utf8')).toBe(wrapper)
+    expect(fs.readlinkSync(path.join(home, '.local/bin/open-walnut'))).toBe('../lib/node_modules/open-walnut/dist/cli.js')
+    expect(r.out).toContain(`${walnut(home)} and ${path.join(home, '.local/bin/open-walnut')} belong to another Walnut on this machine, left as it is.`)
+    expect(r.out).toContain(`Start this one with:  ${share(home)}/bin/walnut web`)
+    expect(await printed(home, path.join(share(home), 'bin/walnut'))).toMatch(/^0\.7\.0 /)
+    // Its own links, and a link to nothing, are replaced as before.
+    fs.rmSync(path.join(home, '.local/bin/open-walnut'))
+    fs.symlinkSync(path.join(home, 'gone/walnut'), path.join(home, '.local/bin/open-walnut'))
+    releaseFile('0.7.1')
+    const again = await install(home)
+    expect(again.code, again.out).toBe(0)
+    expect(fs.readlinkSync(path.join(home, '.local/bin/open-walnut'))).toBe(path.join(share(home), 'bin/walnut'))
+    expect(fs.readFileSync(walnut(home), 'utf8')).toBe(wrapper)
+  })
+
+  it('takes the walnut script a session daemon wrote in ~/.local/bin as its own, and a link reached another way', async () => {
+    const home = freshHome()
+    fs.mkdirSync(path.join(home, '.local/bin'), { recursive: true })
+    fs.writeFileSync(walnut(home), '#!/bin/sh\n# walnut-user-shim v1 \u2014 installed by the Walnut session daemon. Safe to delete.\nexec /tmp/open-walnut/bin/walnut "$@"\n', { mode: 0o755 })
+    releaseFile('0.7.0')
+    const r = await install(home)
+    expect(r.code, r.out).toBe(0)
+    expect(fs.readlinkSync(walnut(home))).toBe(path.join(share(home), 'bin/walnut'))
+    expect(r.out).not.toContain('another Walnut')
+    // The same install through a link to HOME is still this one's.
+    const via = path.join(scratch, `via-${path.basename(home)}`)
+    fs.symlinkSync(home, via)
+    releaseFile('0.7.1')
+    const again = await install(via)
+    expect(again.code, again.out).toBe(0)
+    expect(again.out).not.toContain('another Walnut')
+  })
+
+  it('only open-walnut belonging to another Walnut: walnut is linked and the PATH hint stays', async () => {
+    const home = freshHome()
+    fs.mkdirSync(path.join(home, '.local/bin'), { recursive: true })
+    fs.writeFileSync(path.join(home, '.local/bin/open-walnut'), '#!/bin/sh\nexec node /opt/elsewhere/cli.js "$@"\n', { mode: 0o755 })
+    releaseFile('0.7.0')
+    const r = await install(home)
+    expect(r.code, r.out).toBe(0)
+    expect(fs.readlinkSync(walnut(home))).toBe(path.join(share(home), 'bin/walnut'))
+    expect(r.out).toContain(`${path.join(home, '.local/bin/open-walnut')} belongs to another Walnut on this machine, left as it is.`)
+    expect(r.out).toContain(`Add ${path.join(home, '.local/bin')} to your PATH`)
+  })
+
   // The release Walnut.app carries (desktop/BundledRuntime.swift): a directory laid
   // out like the releases, under a path with a space, as an app folder may be.
   it('installs a release from this disk with no network: the plain file it carries, or its .gz', async () => {

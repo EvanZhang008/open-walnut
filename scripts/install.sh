@@ -272,15 +272,42 @@ path_hint() {
   printf '  Start it now with:  %s/walnut web\n' "$bin_dir" >&2
 }
 
-# The PATH links, and the marker the updater recognizes this install by.
+# The PATH links, and the marker the updater recognizes this install by. A walnut there that
+# is not this install's (an npm install, a wrapper someone wrote, another Walnut's) is left as
+# it is, and this install is started by its own path. Ours: absent, a link to nothing, a link
+# into this install, or the short `walnut` script a Walnut session daemon writes there.
+ours_on_path() {
+  [ -e "$1" ] || return 0
+  [ "$1" -ef "$install_dir/bin/walnut" ] && return 0
+  case "$(readlink "$1" 2>/dev/null || true)" in "$install_dir"/*) return 0 ;; esac
+  # Its marker, split so no file carrying this script reads as that script.
+  [ ! -L "$1" ] && [ "$(wc -c < "$1" | tr -d ' ')" -le 16384 ] && grep -q 'walnut-user''-shim v1' "$1" 2>/dev/null
+}
+
 finish() {
   mkdir -p "$bin_dir"
-  ln -sfn "$install_dir/bin/walnut" "$bin_dir/walnut"
-  ln -sfn "$install_dir/bin/walnut" "$bin_dir/open-walnut"
+  kept=""
+  kept_walnut=""
+  for name in walnut open-walnut; do
+    if ! ours_on_path "$bin_dir/$name"; then
+      kept="${kept:+$kept and }$bin_dir/$name"
+      [ "$name" = walnut ] && kept_walnut=1
+      continue
+    fi
+    ln -sfn "$install_dir/bin/walnut" "$bin_dir/$name"
+  done
   printf '{"layout":"versions","target":"%s"}\n' "$target" > "$staging/marker"
   mv -f "$staging/marker" "$install_dir/open-walnut-install.json"
   printf '\n  Installed Open Walnut %s\n\n' "$version" >&2
-  path_hint
+  if [ -n "$kept" ]; then
+    case "$kept" in *" and "*) belongs=belong ;; *) belongs=belongs ;; esac
+    printf '  %s %s to another Walnut on this machine, left as it is.\n' "$kept" "$belongs" >&2
+  fi
+  if [ -n "$kept_walnut" ]; then
+    printf '  Start this one with:  %s/bin/walnut web\n' "$install_dir" >&2
+  else
+    path_hint
+  fi
   if ! command -v claude >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/claude" ] && ! runs_without_claude; then
     printf '  Sessions run on Claude Code by default: https://claude.com/product/claude-code\n' >&2
     printf '  To run them on your own models instead (Ollama with OpenCode), see\n' >&2
