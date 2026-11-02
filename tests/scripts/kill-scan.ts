@@ -241,7 +241,9 @@ function scanShell(lines: string[], rawCode: string[], depth = 0): ShellScan {
       }
     }
     if (tainted.size === 0) {
-      if (!consumedHere(c) && !/(?:\$\(|\x60|<\()[^)]*$/.test(before) && !/\b(?:if|while|until)\b/.test(before)) outputs.push(i)
+      // Printed: the line's own output, or a substitution echo/printf prints (`echo "PID:$(pgrep -f x)"`).
+      const printed = /\b(?:echo|printf)\b[^;|&]*(?:\$\(|\x60)[^)]*$/.test(before)
+      if (!consumedHere(c) && (printed || !/(?:\$\(|\x60|<\()[^)]*$/.test(before)) && !/\b(?:if|while|until)\b/.test(before)) outputs.push(i)
       return
     }
     const end = Math.min(code.length - 1, Math.max(i, from) + CAPTURE_WINDOW)
@@ -372,6 +374,8 @@ const EXEC_CALL = /(?:\b(?:exec|execSync|execFile|execFileSync|spawn|spawnSync|e
 const SHELL_C = /\b(?:spawn|spawnSync|execFile|execFileSync|execa|execaSync|Bun\.spawn|Bun\.spawnSync)\s*\(\s*\[?\s*«(\d+)»\s*,\s*\[?\s*(?:«\d+»\s*,\s*)*«(\d+)»\s*,\s*$/
 const SSH_CALL = /\bssh\w*\s*\([^()«]*(?:«\d+»[^()«]*)*,\s*$/i
 const JS_SIGNAL = /\b(?:process|os)\.kill\s*\((?![^)]*,\s*0\s*\))/
+/** A command string that signals an interpolated pid: `kill -TERM ${pid}` (a template's ${...} reads as $X). */
+const KILL_OF_VALUE = /(?:^|[\s;&|(])kill\s+(?:(?:-s\s+(?!0\b)\w+|-n\s+(?!0\b)\d+|--|-(?!0\b)[A-Za-z0-9]+)\s+)*["']?\$X/
 /** An exact comparison on a pid: pid === x, x == pid, set.has(pid). */
 const JS_NARROWED = /\b\w*[pP]id\w*\s*(?<![!=])===?\s*\w|\w\s*(?<![!=])===?\s*\w*[pP]id\b|(?<!!)\b\w+\.has\(\s*\w*[pP]id\b/
 
@@ -391,10 +395,14 @@ function scanJs(content: string, test: boolean): KillViolation[] {
     const isShellScript = shellC && /^(?:\/bin\/|\/usr\/bin\/)?(?:ba|z|da)?sh$/.test(strings[Number(shellC[1])]!.text) && /^-[a-z]*c$/.test(strings[Number(shellC[2])]!.text)
     const isCommand = EXEC_CALL.test(before) || SSH_CALL.test(before) || isShellScript
     if (!isCommand) {
-      // In a tool, a string that is itself a pkill or killall command line is one too
-      // (a bare word is a name: a type, a deny-list entry).
-      const cmd = /^\s*(?:sudo\s+)?(?:\/usr\/bin\/)?(pkill|killall)\s+\S/.exec(s.text)
-      if (!test && cmd) push(cmd[1] as KillRule, s.line)
+      // In a tool, a string that is a shell command line counts too: a script is often
+      // built into a variable and run later (`const script = \`pkill -f ${x}; rm ...\``).
+      // A bare word is a name (a type, a deny-list entry), and a message names a command
+      // without running it, so only a command in command position counts, as in a script.
+      if (test || !/\s/.test(s.text)) return
+      const scan = scanShell(s.text.split('\n'), shellLines(s.text))
+      for (const v of scan.violations) push(v.rule, s.line)
+      if (scan.outputs.length) sources.push(s.line)
       return
     }
     const text = s.text.trim()
@@ -428,9 +436,12 @@ function scanJs(content: string, test: boolean): KillViolation[] {
     for (const v of scan.violations) push(v.rule, s.line)
     if (scan.outputs.length) sources.push(s.line)
   })
+  // Lines holding a command string that signals an interpolated pid.
+  const killLines = new Set<number>()
+  for (const s of strings) if (KILL_OF_VALUE.test(s.text)) killLines.add(s.line)
   for (const line of sources) {
     for (let k = line - 1; k < Math.min(codeLines.length, line + JS_WINDOW); k++) {
-      if (!JS_SIGNAL.test(codeLines[k]!)) continue
+      if (!JS_SIGNAL.test(codeLines[k]!) && !(k !== line - 1 && killLines.has(k + 1))) continue
       if (codeLines.slice(line - 1, k + 1).some((l) => JS_NARROWED.test(l))) break
       push('search-kill', line)
       break

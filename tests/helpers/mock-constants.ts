@@ -110,7 +110,7 @@ export function createMockConstants(prefix = 'walnut-test', overrides: Record<st
     LOG_DIR: logDir,
     // Per-test dtach socket dir. MUST stay isolated: the terminal orphan reaper
     // kills every socket here whose sessionId is missing from the (empty) test
-    // registry, so a shared dir means a test server pkill's the developer's live
+    // registry, so a shared dir means a test server ends the developer's live
     // production terminals. See DTACH_SOCKET_DIR in src/constants.ts.
     DTACH_SOCKET_DIR: path.join(logDir, 'term'),
     LOG_PREFIX: 'open-walnut-test-',

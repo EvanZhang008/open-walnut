@@ -29,11 +29,18 @@ vi.mock('node:child_process', () => ({
   ) => {
     const script = args[args.length - 1] ?? '';
     shellCalls.push(script);
-    if (script.includes('OWNER:')) {
+    if (script.includes('RECSTART:')) {
+      // The master probe: each socket has a verified master (pid record, same start
+      // time, `<dtach> -A <socket>` argv), with an idle login shell under it.
+      const sock = /'([^']*\/walnut-[A-Za-z0-9_-]+\.dsock)'/.exec(script)?.[1] ?? '';
+      const table = script.includes('TABLE:') ? 'TABLE:\n4242 1 walnut-dtach\n4243 4242 -zsh\n' : '';
+      cb(null, `REC:4242\nRECSTART:ps:Mon Nov  2 10:00:00 2026\nLSOF:yes\nOWNERS:4242\nPROC:4242\nSTART:ps:Mon Nov  2 10:00:00 2026\n`
+        + `ARG:/x/bin/walnut-dtach\nARG:-A\nARG:${sock}\nARG:-z\nENDPROC\nSOCKET:yes\nPROBE:END\n${table}`, '');
+    } else if (script.includes('OWNER:')) {
       const sockets = socketList.map((sid) => `/x/term/walnut-${sid}.dsock`).join('\n');
       cb(null, `OWNER:${ownerResponse}\n${sockets}\n`, '');
-    } else if (script.includes('MASTERPID:')) {
-      cb(null, 'MASTERPID:\n', ''); // no dtach master → hasForegroundProcess=false
+    } else if (script.includes('kill -TERM')) {
+      cb(null, 'SIGNALLED:4242\nDONE\n', '');
     } else {
       cb(null, 'DONE\n', '');
     }
@@ -56,7 +63,8 @@ vi.mock('../../../src/web/terminal/terminal-manager.js', () => ({
 
 import { reapOrphanDtach, conditionalReap } from '../../../src/web/terminal/dtach-lifecycle.js';
 
-const killsExecuted = () => shellCalls.filter((s) => s.includes('pkill')).length;
+// A signal goes only to the verified master pid, in the stop script.
+const killsExecuted = () => shellCalls.filter((s) => s.includes('kill -TERM 4242')).length;
 
 beforeEach(() => {
   shellCalls.length = 0;
@@ -78,12 +86,12 @@ describe('reapOrphanDtach ownership gate', () => {
     await reapOrphanDtach();
     expect(killsExecuted()).toBe(1);
     expect(shellCalls.some((s) => s.includes('orphan-sid-2'))).toBe(true);
-    expect(shellCalls.filter((s) => s.includes('pkill')).some((s) => s.includes('orphan-sid-1'))).toBe(false);
+    expect(shellCalls.filter((s) => s.includes('kill -TERM')).some((s) => s.includes('orphan-sid-1'))).toBe(false);
   });
 
   it('REFUSES to sweep a dir owned by another instance (the 2026-08-18 incident)', async () => {
     // The sweeping instance has an empty registry (liveSessionIds=[]) — under
-    // the old code every socket below would be "an orphan" and get pkill'd.
+    // the old code every socket below would be "an orphan" and get signalled.
     ownerResponse = '/some/other/instances/data-dir';
     await reapOrphanDtach();
     expect(killsExecuted()).toBe(0);

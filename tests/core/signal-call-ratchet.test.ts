@@ -118,10 +118,9 @@ const SESSION_STORE_BUDGET: Record<string, number> = {
 const INDIRECT_SIGNAL_BUDGET: Record<string, number> = {
   // `kill -TERM "$PID"` on the daemon in its own dir, after `ps` proved the pid's command and start time
   'src/providers/daemon-start-cmd.ts': 1,
-  // `pkill -f <socket>` on this Walnut's own dtach terminal master (the socket dir's owner marker gates the sweep)
-  'src/web/terminal/dtach-lifecycle.ts': 1,
-  // `pkill -f " -A <runtimeDir>/term/walnut-"`: the dtach masters of an ephemeral server whose runtime dir is being deleted
-  'src/commands/ephemeral-registry.ts': 1,
+  // `kill -TERM <pid>` on one dtach terminal master: the pid its own child recorded (else the socket's lsof owner),
+  // proved by start time and argv (`<dtach> -A <this socket>`), the start time re-checked in the same script
+  'src/web/terminal/dtach-master.ts': 1,
   // the pattern-kill guard's own text: the awk that recognises pkill/killall and the refusal it prints; it signals nothing
   'src/providers/pattern-kill-guard-hook.ts': 4,
 };

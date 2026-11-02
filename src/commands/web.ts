@@ -23,6 +23,7 @@ import {
   countLiveEphemeralServers,
   ephemeralRuntimeDir,
   removeEphemeralRuntimeDirs,
+  removeEphemeralRuntimeDirsNow,
   EPHEMERAL_SERVER_PID_FILE,
 } from './ephemeral-registry.js'
 import { takeExitOnOrphanRequest, watchForOrphan } from '../lib/exit-on-orphan.js'
@@ -378,7 +379,7 @@ async function runEphemeralLauncher(): Promise<void> {
   } catch (err) {
     process.stderr.write(`ephemeral: ${err instanceof Error ? err.message : String(err)}\n`)
     try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
-    removeEphemeralRuntimeDirs(runtimeDir)
+    removeEphemeralRuntimeDirsNow(runtimeDir) // no server ran: no terminal to end
     unregisterEphemeralDir(registryFile, tmpDir)
     process.exit(1)
     return
@@ -398,7 +399,7 @@ async function runEphemeralLauncher(): Promise<void> {
   child.on('error', (err) => {
     process.stderr.write(`ephemeral: spawn failed — ${err.message}\n`)
     try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
-    removeEphemeralRuntimeDirs(runtimeDir)
+    removeEphemeralRuntimeDirsNow(runtimeDir) // no server ran: no terminal to end
     unregisterEphemeralDir(registryFile, tmpDir)
     process.exit(1)
   })
@@ -409,7 +410,7 @@ async function runEphemeralLauncher(): Promise<void> {
   if (childPid == null) {
     process.stderr.write('ephemeral: child.pid is undefined — spawn may have failed\n')
     try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
-    removeEphemeralRuntimeDirs(runtimeDir)
+    removeEphemeralRuntimeDirsNow(runtimeDir) // no server ran: no terminal to end
     unregisterEphemeralDir(registryFile, tmpDir)
     process.exit(1)
     return
@@ -444,7 +445,7 @@ async function runEphemeralLauncher(): Promise<void> {
     // Kill child and clean up
     try { process.kill(childPid, 'SIGTERM') } catch { /* may already be dead */ }
     try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* best-effort */ }
-    removeEphemeralRuntimeDirs(runtimeDir)
+    removeEphemeralRuntimeDirsNow(runtimeDir) // no server ran: no terminal to end
     unregisterEphemeralDir(registryFile, tmpDir)
     process.exit(1)
   }
@@ -552,16 +553,20 @@ async function runEphemeralChild(): Promise<void> {
 
     // This server's own daemon dir (set by the launcher; see ephemeralRuntimeDir).
     const runtimeDir = process.env.WALNUT_DAEMON_DIR
-    const removeAll = () => {
+    // Its terminals' dtach masters are ended first (they need their sockets and
+    // pid records, which live in the runtime dir), each step bounded; `waitMs`
+    // caps the wait, after which the dirs are removed regardless.
+    const removeAll = async (waitMs: number) => {
       try { fs.rmSync(tmpDir!, { recursive: true, force: true }) } catch { /* best-effort */ }
-      if (runtimeDir) removeEphemeralRuntimeDirs(runtimeDir)
+      if (!runtimeDir) return
+      await Promise.race([removeEphemeralRuntimeDirs(runtimeDir), new Promise((r) => setTimeout(r, waitMs))])
+      removeEphemeralRuntimeDirsNow(runtimeDir)
     }
 
     // Force exit if stopServer() hangs for more than 10 seconds
     const forceExit = setTimeout(() => {
       process.stderr.write('ephemeral child: forced exit after 10s timeout\n')
-      removeAll()
-      process.exit(1)
+      void removeAll(3_000).finally(() => process.exit(1))
     }, 10_000)
     forceExit.unref()
 
@@ -572,7 +577,9 @@ async function runEphemeralChild(): Promise<void> {
       const { localDaemon } = await import('../providers/local-daemon.js')
       await Promise.race([localDaemon.stopIfIsolated(), new Promise((r) => setTimeout(r, 5_000))])
     } catch { /* best-effort */ }
-    removeAll()
+    // From here removeAll bounds itself: the forced exit would cut its wait short.
+    clearTimeout(forceExit)
+    await removeAll(20_000)
 
     process.exit(0)
   }

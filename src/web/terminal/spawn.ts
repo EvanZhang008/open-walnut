@@ -51,6 +51,7 @@ import { SHARED_DAEMON_DIR, localDaemonDirChoice } from '../../lib/daemon-dir.js
 import { log } from '../../logging/index.js'
 import { remoteDtachPath, localDtachPath } from './dtach-provision.js'
 import { linkTarget } from '../../core/hosts/link.js'
+import { dtachPidFileFor, dtachRecordScript } from './dtach-master.js'
 
 /**
  * SSH ControlMaster args shared by the dtach probe/provision AND the terminal
@@ -129,6 +130,15 @@ export function dtachSocketPath(sessionId: string, remote = false): string {
     throw new Error(`Unsafe session id for dtach socket: ${JSON.stringify(sessionId)}`)
   }
   return `${socketDir(remote)}/walnut-${sessionId}.dsock`
+}
+
+/**
+ * The master's pid record beside its socket (`walnut-<sessionId>.dpid`): its pid
+ * and start time, written by the master's own child at create time (see
+ * dtach-master.ts). Ending a terminal signals that pid only after proving it.
+ */
+export function dtachPidPath(sessionId: string, remote = false): string {
+  return dtachPidFileFor(dtachSocketPath(sessionId, remote))
 }
 
 /**
@@ -215,14 +225,25 @@ function sshKeepaliveArgs(t: SshTarget): string[] {
  *       just continue. The browser-side scrollback lives in xterm.js.
  *
  * `dtachBin` is the resolved dtach path (provisioned per host). `shell` is the
- * user's default shell; we pass `-l` so dtach execs it as a LOGIN shell (loads
+ * user's default shell, started (after the pid record, see dtachShellCommand)
+ * with `-l` as a LOGIN shell (loads
  * the full ~/.zprofile→~/.zshrc / ~/.bash_profile→~/.bashrc chain → PATH +
  * aliases present, matching tmux). On REATTACH dtach ignores the command, so
  * `-l` (like cwd) only takes effect on first create — exactly what we want.
  */
 export function buildDtachArgs(dtachBin: string, sessionId: string, shell: string): string[] {
   const sock = dtachSocketPath(sessionId)
-  return [dtachBin, '-A', sock, '-z', '-E', '-r', 'winch', shell, '-l']
+  return [dtachBin, '-A', sock, '-z', '-E', '-r', 'winch', ...dtachShellCommand(dtachPidPath(sessionId), shell)]
+}
+
+/**
+ * What dtach runs in its pty: `/bin/sh -c <record> <shell>`. The record script
+ * is the master's child, so it writes the master's pid and start time
+ * (`$PPID`) to the pid file and then execs `<shell> -l`, the login shell the
+ * terminal always ran. On a reattach dtach ignores the command.
+ */
+function dtachShellCommand(pidFile: string, shell: string): string[] {
+  return ['/bin/sh', '-c', dtachRecordScript(pidFile), shell]
 }
 
 /**
@@ -267,7 +288,10 @@ export function buildRemoteDtachCommand(dtachBin: string, sessionId: string, she
   const mkdir = dtachOwnerClaimScript(true)
   // `-l` → login shell. `shell` is either our unquoted REMOTE_DEFAULT_SHELL
   // (must expand remotely) or an explicit safe token, so it is NOT re-quoted.
-  const dtach = `exec ${shellQuote(dtachBin)} -A ${shellQuote(sock)} -z -E -r winch ${shell} -l`
+  // The record script goes as one quoted word; `shell` stays unquoted (above) and
+  // becomes the script's $0, which it execs with `-l`.
+  const [sh, c, record] = dtachShellCommand(dtachPidPath(sessionId, true), '')
+  const dtach = `exec ${shellQuote(dtachBin)} -A ${shellQuote(sock)} -z -E -r winch ${sh} ${c} ${shellQuote(record!)} ${shell}`
   const body = cwd ? `cd ${remoteCdTarget(cwd)} && ${dtach}` : dtach
   return `${mkdir}; ${body}`
 }

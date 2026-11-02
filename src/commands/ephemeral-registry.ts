@@ -18,7 +18,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
-import { spawn } from 'node:child_process'
 
 /**
  * Registry path relative to WALNUT_HOME. Sits under tmp/ because the snapshot
@@ -120,36 +119,72 @@ export function ephemeralRuntimeDirs(snapshotDir: string, root: string = EPHEMER
 }
 
 /**
+ * The dtach socket paths (`term/walnut-<sid>.dsock`) of a runtime dir, read now:
+ * every socket, plus the socket path of every pid record (`walnut-<sid>.dpid`),
+ * so a master whose socket file was removed is still found by its record.
+ */
+function dtachSocketsUnder(runtimeDir: string): string[] {
+  const term = path.join(runtimeDir, 'term')
+  let entries: string[] = []
+  try { entries = fs.readdirSync(term) } catch { return [] }
+  const ids = new Set<string>()
+  for (const e of entries) {
+    const m = /^walnut-([A-Za-z0-9_-]+)\.(?:dsock|dpid)$/.exec(e)
+    if (m) ids.add(m[1]!)
+  }
+  return [...ids].map((id) => path.join(term, `walnut-${id}.dsock`))
+}
+
+/**
  * End the dtach terminal masters whose sockets live in `runtimeDir/term/`.
  *
  * A dtach master is built to outlive its server and never exits on its own
  * (terminal-reaper.ts). An ephemeral server's own reaper is off, and deleting
  * its runtime dir deletes the sockets, so every terminal a test opened there
  * stayed up for good with a login shell under it, unreachable (three found on
- * 2026-09-29, five days old). pkill matches the master's command line
- * (`dtach -A <socket> ...`); the shell under it gets SIGHUP when the master's
- * pty closes. Fire-and-forget: this runs on the production server's reaper
- * timer and right before an ephemeral server exits. Resolves when pkill is done.
+ * 2026-09-29, five days old). Each socket's master is the pid its `.dpid`
+ * record names, else the socket's owner, and is signalled only once its start
+ * time and argv prove it is that socket's dtach master (dtach-master.ts), never
+ * by a command-line pattern, which also matched any process that only named the
+ * dir. The shell under it gets SIGHUP when the master's pty closes. Runs on the
+ * production server's reaper timer and right before an ephemeral server exits;
+ * resolves once every socket is handled (each step is bounded).
  */
-export function endDtachMastersUnder(runtimeDir: string): Promise<void> {
-  if (!EPHEMERAL_RUNTIME_DIR_RE.test(path.basename(runtimeDir))) return Promise.resolve()
-  const pattern = ` -A ${path.join(runtimeDir, 'term')}/walnut-`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  return new Promise((resolve) => {
-    try {
-      const child = spawn('pkill', ['-f', pattern], { stdio: 'ignore' })
-      child.once('error', () => resolve())
-      child.once('close', () => resolve())
-      child.unref()
-    } catch {
-      resolve()
-    }
-  })
+export async function endDtachMastersUnder(runtimeDir: string): Promise<void> {
+  if (!EPHEMERAL_RUNTIME_DIR_RE.test(path.basename(runtimeDir))) return
+  await endDtachMasters(runtimeDir, dtachSocketsUnder(runtimeDir))
 }
 
-/** Remove a runtime dir and its streams sibling. Only ever touches the exact shape. */
-export function removeEphemeralRuntimeDirs(runtimeDir: string): void {
+async function endDtachMasters(runtimeDir: string, sockets: string[]): Promise<void> {
+  if (sockets.length === 0) return
+  try {
+    const { stopDtachMaster, localShellRunner } = await import('../web/terminal/dtach-master.js')
+    for (const sock of sockets) {
+      try { await stopDtachMaster(localShellRunner, sock, { runtimeDir }) } catch { /* best-effort */ }
+    }
+  } catch { /* best-effort: never throw into the launcher's path */ }
+}
+
+/**
+ * Remove a runtime dir and its streams sibling. Only ever touches the exact shape.
+ * With no terminal socket inside, the dirs are gone when this returns. With
+ * one, its master is ended first (it needs the socket and its pid record), and
+ * the dirs go when the returned promise resolves.
+ */
+export function removeEphemeralRuntimeDirs(runtimeDir: string): Promise<void> {
+  if (!EPHEMERAL_RUNTIME_DIR_RE.test(path.basename(runtimeDir))) return Promise.resolve()
+  const removeAll = () => removeEphemeralRuntimeDirsNow(runtimeDir)
+  const sockets = dtachSocketsUnder(runtimeDir)
+  if (sockets.length === 0) {
+    removeAll()
+    return Promise.resolve()
+  }
+  return endDtachMasters(runtimeDir, sockets).then(removeAll, removeAll)
+}
+
+/** Remove a runtime dir now, its terminal masters not ended (an exit that cannot wait). */
+export function removeEphemeralRuntimeDirsNow(runtimeDir: string): void {
   if (!EPHEMERAL_RUNTIME_DIR_RE.test(path.basename(runtimeDir))) return
-  void endDtachMastersUnder(runtimeDir)
   for (const dir of [runtimeDir, `${runtimeDir}-streams`]) {
     try { fs.rmSync(dir, { recursive: true, force: true }) } catch { /* best-effort */ }
   }
@@ -188,7 +223,7 @@ function reapOrphanRuntimeDirs(runtimeRoot: string, liveSnapshotSuffixes: Set<st
     } catch {
       continue
     }
-    removeEphemeralRuntimeDirs(dir)
+    void removeEphemeralRuntimeDirs(dir)
   }
 }
 
@@ -314,7 +349,7 @@ export function reapStaleEphemeralDirs(walnutHome: string, opts: ReapOptions = {
     if (removed) {
       gone.add(dir)
       const runtimeDir = ephemeralRuntimeDir(dir, runtimeRoot)
-      if (runtimeDir) removeEphemeralRuntimeDirs(runtimeDir)
+      if (runtimeDir) void removeEphemeralRuntimeDirs(runtimeDir)
     }
   }
   reapOrphanRuntimeDirs(runtimeRoot, liveSuffixes)

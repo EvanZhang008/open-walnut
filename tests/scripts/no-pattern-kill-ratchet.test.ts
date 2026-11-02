@@ -11,12 +11,18 @@
  * scripts/lib/maestro-lock.sh, which removes a lock only for its own holder or as a
  * stale one.
  *
- * Reads every shell, JS/TS and Python file under scripts/, ios-native/ and tests/
- * (test files included), enumerated from the tree. Comments are skipped. In JS/TS a
- * string counts as code only where it runs: the command of an exec or spawn call, or
- * the script of a `sh -c`; any other string is data (a test sample, a deny list),
- * except that in a tool (not a test) a string that is itself a pkill or killall
- * command counts too.
+ * Reads every shell, JS/TS and Python file under scripts/, ios-native/, tests/ (test
+ * files included) and src/ (the product: its terminal and ephemeral cleanup once
+ * found their dtach masters with pgrep -f / pkill -f on the socket path, which also
+ * matched any agent shell that named it), enumerated from the tree. Comments are
+ * skipped. In JS/TS a string counts as code where it runs: the command of an exec
+ * or spawn call, or the script of a `sh -c`. In a test any other string is data (a
+ * test sample, a deny list); in a tool or the product, a string that is a shell
+ * command line counts too (a script built into a variable and run later), with
+ * only commands in command position, so a message that names one is not one, and
+ * a printed search (`echo "PID:$(pgrep -f x)"`) followed within a few lines by a
+ * command string that signals an interpolated pid (`kill -TERM ${pid}`) is a
+ * search-kill.
  *   pkill / killall   either command;
  *   search-kill       a pid list from a search (pgrep, pidof, lsof -t, ps | grep or
  *                     awk, or a shell function whose output is one) that reaches a
@@ -123,6 +129,7 @@ function guardedFiles(): Array<{ file: string; kind: Kind; test: boolean }> {
   walk('scripts')
   walk('ios-native')
   walk('tests')
+  walk('src')
   return found.sort((a, b) => a.file.localeCompare(b.file))
 }
 
@@ -196,6 +203,15 @@ describe('findKillViolations', () => {
     ['a JS shell command with lsof into xargs kill', "spawn('bash', ['-c', `lsof -ti:${PORT} -sTCP:LISTEN | xargs kill -15`])", 'search-kill', 'js'],
     ['a pkill command line kept in a tool string', "const STOP = 'pkill -f mock-server'\nrunLater(STOP)", 'pkill', 'js'],
     ['pkill from python', "subprocess.run(['pkill', '-f', 'server.py'])", 'pkill', 'py'],
+    // The product's shapes (src/): commands built as strings and run through a helper.
+    ['pkill through execFile with a callback', "execFile('pkill', ['-f', sock], { timeout: 8000 }, cb)", 'pkill', 'js'],
+    ['pkill through spawn', "const child = spawn('pkill', ['-f', pattern], { stdio: 'ignore' })", 'pkill', 'js'],
+    ['a pkill script kept in a variable, run later', "const script = `pkill -f ${shellQuote(sock)} 2>/dev/null; rm -f ${shellQuote(sock)}; echo DONE`\nawait runShell(host, script)", 'pkill', 'js'],
+    ['pgrep piped into kill in a script variable', "const script = `pgrep -f ${q(sock)} | xargs kill -TERM`\nawait runShell(host, script)", 'search-kill', 'js'],
+    ['kill of a pgrep substitution in a script variable', "await runShell(host, `kill $(pgrep -f ${q(sock)})`)", 'search-kill', 'js'],
+    ['a printed pgrep pid, then a kill script for it', "const probe = `echo \"MASTERPID:$(pgrep -f ${q(sock)} | head -1)\"`\nconst pid = parse(await runShell(host, probe))\nawait runShell(host, `kill -TERM ${pid}`)", 'search-kill', 'js'],
+    ['a printed pgrep pid, then kill -s TERM of it', "const probe = `echo \"PID:$(pgrep -f ${q(sock)})\"`\nconst pid = parse(await runShell(host, probe))\nawait runShell(host, `kill -s TERM ${pid}`)", 'search-kill', 'js'],
+    ['pgrep -f through bash -c into process.kill', "const out = await run('bash', ['-c', `pgrep -f ${sock} | head -1`])\nprocess.kill(Number(out.stdout), 'SIGTERM')", 'search-kill', 'js'],
     ['pgrep then os.kill in python', "out = subprocess.check_output(['pgrep', '-f', 'x'])\nfor p in out.split():\n    os.kill(int(p), signal.SIGTERM)", 'search-kill', 'py'],
   ])('flags %s', (_label, body, rule, kind = 'shell', test = false) => {
     expect(findKillViolations(`#!/usr/bin/env bash\n${body}\n`, kind, test).map((v) => v.rule)).toContain(rule)
@@ -234,6 +250,9 @@ describe('findKillViolations', () => {
     ['a path that contains the word', "echo ${HOME}/pkill-notes"],
     ['a hash inside quotes is not a comment, and no kill', 'echo "step #2 done"'],
     ['kill and pkill named in a message', 'pid="$(pgrep -f x)"\necho "Refusing to kill server PID $pid; use pkill yourself"'],
+    ['a kill script for a pid proved by its record, no search', "const stop = `if [ \"$(walnut_st ${t.pid})\" = ${q(t.start)} ]; then kill -TERM ${t.pid}; fi`\nawait run(stop)", 'js'],
+    ['an lsof owner probe that is never signalled from its output', "const probe = `owners=$(lsof -t -- ${q(sock)} | tr \"\\\\n\" \" \"); echo \"OWNERS:$owners\"`\nawait run(probe)", 'js'],
+    ['a message in the product that names pkill', "throw new Error('Refusing: pkill -f by pattern matches every command line')", 'js'],
     ['a regex literal holding a quote', "const re = /[\"'`]pgrep\\b/\nconst ok = re.test(x)", 'js'],
   ])('passes %s', (_label, body, kind = 'shell', test = false) => {
     expect(findKillViolations(`#!/usr/bin/env bash\n${body}\n`, kind, test)).toEqual([])
@@ -245,12 +264,16 @@ describe('no tool or test kills by name or pattern', () => {
 
   it('finds the files it guards, test files included', () => {
     const names = files.map((f) => f.file)
-    expect(files.length).toBeGreaterThan(500)
+    expect(files.length).toBeGreaterThan(2000)
     expect(names).toContain('scripts/ios-perf/freeze-probe.sh')
     expect(names).toContain('ios-native/tests/inbox/inbox-e2e.sh')
     expect(names).toContain('scripts/lib/recorded-pid.sh')
     expect(names).toContain('tests/providers/local-daemon.test.ts')
     expect(names).toContain('tests/live/provider-matrix/matrix.live.test.ts')
+    expect(names).toContain('src/web/terminal/dtach-lifecycle.ts')
+    expect(names).toContain('src/web/terminal/dtach-master.ts')
+    expect(names).toContain('src/commands/ephemeral-registry.ts')
+    expect(files.find((f) => f.file === 'src/web/terminal/dtach-master.ts')?.test).toBe(false)
     expect(files.find((f) => f.file === 'tests/providers/local-daemon.test.ts')?.test).toBe(true)
   })
 

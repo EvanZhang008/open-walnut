@@ -9,8 +9,11 @@ import {
   buildRemoteSshArgs,
   buildRemotePlainShellCommand,
   remoteCdTarget,
+  dtachPidPath,
   DTACH_SOCKET_DIR,
 } from '../../../src/web/terminal/spawn.js';
+import { dtachRecordScript } from '../../../src/web/terminal/dtach-master.js';
+import { shellQuote } from '../../../src/providers/session-io.js';
 import { WALNUT_HOME } from '../../../src/constants.js';
 import type { SshTarget } from '../../../src/providers/session-io.js';
 
@@ -43,10 +46,18 @@ describe('buildDtachArgs (local)', () => {
     // Trailing `-l`: launch the shell as a LOGIN shell so the full startup chain
     // (PATH + aliases) loads — the embedded terminal matches tmux, not a bare
     // aliasless shell.
+    // The shell starts through the master's pid record: `/bin/sh -c <record> <shell>`,
+    // whose script records `$PPID` (the master) and then execs `<shell> -l`.
     const args = buildDtachArgs('/path/dtach', 'sid1', '/bin/zsh');
     expect(args).toEqual([
-      '/path/dtach', '-A', `${DTACH_SOCKET_DIR}/walnut-sid1.dsock`, '-z', '-E', '-r', 'winch', '/bin/zsh', '-l',
+      '/path/dtach', '-A', `${DTACH_SOCKET_DIR}/walnut-sid1.dsock`, '-z', '-E', '-r', 'winch',
+      '/bin/sh', '-c', dtachRecordScript(`${DTACH_SOCKET_DIR}/walnut-sid1.dpid`), '/bin/zsh',
     ]);
+    expect(args[9]).toMatch(/exec "\$0" -l$/);
+  });
+
+  it('keeps the pid record beside the socket', () => {
+    expect(dtachPidPath('sid1')).toBe(`${DTACH_SOCKET_DIR}/walnut-sid1.dpid`);
   });
 });
 
@@ -55,10 +66,11 @@ describe('buildRemoteDtachCommand', () => {
   // purpose) so the login user's actual $SHELL (zsh on our dev hosts) is used,
   // launched as a login shell (`-l`) — matching tmux.
   const DEFAULT_SHELL = '"${SHELL:-/bin/bash}"';
+  const record = (sid: string) => `/bin/sh -c ${shellQuote(dtachRecordScript(`${DTACH_SOCKET_DIR}/walnut-${sid}.dpid`))}`;
 
   it('defaults to the remote $SHELL as a LOGIN shell, cds to cwd', () => {
     expect(buildRemoteDtachCommand('/home/u/.local/bin/walnut-dtach', 'sid2', undefined, '/var/data')).toBe(
-      `${dtachOwnerClaimScript()}; cd '/var/data' && exec '/home/u/.local/bin/walnut-dtach' -A '${DTACH_SOCKET_DIR}/walnut-sid2.dsock' -z -E -r winch ${DEFAULT_SHELL} -l`,
+      `${dtachOwnerClaimScript()}; cd '/var/data' && exec '/home/u/.local/bin/walnut-dtach' -A '${DTACH_SOCKET_DIR}/walnut-sid2.dsock' -z -E -r winch ${record('sid2')} ${DEFAULT_SHELL}`,
     );
   });
 
@@ -66,7 +78,8 @@ describe('buildRemoteDtachCommand', () => {
     // If we shell-quoted it, the remote would try to exec a file literally named
     // `${SHELL:-/bin/bash}` instead of expanding it — the bug we are avoiding.
     const cmd = buildRemoteDtachCommand('dtach', 'sid2', undefined, '/x');
-    expect(cmd).toContain('-r winch "${SHELL:-/bin/bash}" -l');
+    // It is the record script's $0, which that script execs with -l.
+    expect(cmd.endsWith(' "${SHELL:-/bin/bash}"')).toBe(true);
     expect(cmd).not.toContain(`'"\${SHELL`); // not single-quoted
   });
 
@@ -77,7 +90,7 @@ describe('buildRemoteDtachCommand', () => {
 
   it('omits the cd prefix when no cwd (still makes the socket dir + execs login shell)', () => {
     expect(buildRemoteDtachCommand('dtach', 'sid2')).toBe(
-      `${dtachOwnerClaimScript()}; exec 'dtach' -A '${DTACH_SOCKET_DIR}/walnut-sid2.dsock' -z -E -r winch ${DEFAULT_SHELL} -l`,
+      `${dtachOwnerClaimScript()}; exec 'dtach' -A '${DTACH_SOCKET_DIR}/walnut-sid2.dsock' -z -E -r winch ${record('sid2')} ${DEFAULT_SHELL}`,
     );
   });
 });
@@ -120,7 +133,8 @@ describe('buildRemoteSshArgs', () => {
     expect(last).toContain("cd '/home/alice/x' && exec 'dtach' -A");
     expect(last).toContain('walnut-sid3.dsock');
     // default → remote $SHELL launched as a login shell
-    expect(last).toContain('"${SHELL:-/bin/bash}" -l');
+    expect(last.endsWith(' "${SHELL:-/bin/bash}"')).toBe(true);
+    expect(last).toContain("exec \"$0\" -l");
   });
 
   it('adds -p when a port is configured', () => {

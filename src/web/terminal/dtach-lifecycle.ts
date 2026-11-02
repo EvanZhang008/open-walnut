@@ -8,18 +8,21 @@
  * a real foreground process (build/test) is kept; an idle shell is reaped.
  *
  * A dtach "session" is a unix socket (see dtachSocketPath) plus the detached
- * `dtach -A` master process holding the pty. Killing it = remove the socket and
- * kill the master process group; the shell under it dies with it.
+ * `dtach -A` master process holding the pty, whose pid and start time sit in
+ * the `.dpid` record beside the socket. Killing it = SIGTERM that one master
+ * once its identity is proved (dtach-master.ts: never a name or a pattern),
+ * then remove the socket and the record; the shell under it gets SIGHUP when
+ * the master's pty closes.
  *
  * A PLAIN terminal (dtach unavailable, see dtach-check.ts) has no socket and no
- * master: the socket helpers below simply find nothing (pgrep/pkill/rm are
- * no-ops), and conditionalReap ends such a shell through the TerminalManager,
- * which holds its only process.
+ * master: the socket helpers below simply find nothing, and conditionalReap
+ * ends such a shell through the TerminalManager, which holds its only process.
  */
 
 import { execFile } from 'node:child_process'
 import type { SessionRecord } from '../../core/types.js'
-import { resolveSshTarget, dtachSocketPath, dtachOwnerMarkerPath, DTACH_SOCKET_DIR, REMOTE_DTACH_SOCKET_DIR, sshControlMasterArgs } from './spawn.js'
+import { resolveSshTarget, dtachSocketPath, dtachPidPath, dtachOwnerMarkerPath, DTACH_SOCKET_DIR, REMOTE_DTACH_SOCKET_DIR, sshControlMasterArgs } from './spawn.js'
+import { chooseDtachMaster, dtachProbeScript, parseDtachProbe, stopDtachMaster } from './dtach-master.js'
 import { WALNUT_HOME } from '../../constants.js'
 import { listSessions } from '../../core/session-tracker.js'
 import { getConfig } from '../../core/config-manager.js'
@@ -70,38 +73,42 @@ async function runShell(host: string | undefined, script: string): Promise<{ cod
 }
 
 /**
+ * Run a dtach-master.ts script on the terminal's host under /bin/sh. Over ssh a
+ * script runs in the login shell, and zsh (a common one) does not split an
+ * unquoted `$owners` into words, so a pid list would read as one bad word.
+ */
+function runPosix(host: string | undefined, script: string): Promise<{ code: number; stdout: string; stderr: string }> {
+  return runShell(host, host ? `/bin/sh -c ${shellQuote(script)}` : script)
+}
+
+/**
  * Does the dtach session have a real foreground process (not just a shell)?
  * dtach has no `display-message`; instead we inspect the process tree under the
- * `dtach -A <socket>` master. If the deepest descendant is a plain shell →
- * idle; anything else (node/vim/npm/...) → a real task is running.
+ * session's master. If the deepest descendant is a plain shell → idle;
+ * anything else (node/vim/npm/...) → a real task is running.
  *
  * Returns false when the session is absent or only an idle shell.
  *
- * We fetch the master pid (pgrep -f matches the full command line, which
- * includes the socket path) plus the WHOLE process table, then walk the tree in
- * JS. WHY `ps -ax -o pid=,ppid=,comm=` (and NOT `ps --ppid`): `--ppid` is
- * GNU-only and errors with "ps: illegal option" on macOS BSD ps; the BSD `-g`
- * fallback means process-GROUP-id (not pid) and pulls in the ps/head pipeline
- * procs. `ps -ax -o pid=,ppid=,comm=` is portable across macOS BSD ps and Linux
- * GNU ps, so we get the same table on both and resolve the leaf ourselves.
+ * The master is the verified one (dtach-master.ts: its pid record, else the
+ * socket's owner, each proved by start time and argv), never a command-line
+ * match, which also picked up any process that only named the socket. The
+ * probe carries the WHOLE process table in the same round trip, and the tree is
+ * walked in JS. WHY `ps -ax -o pid=,ppid=,comm=` (and NOT `ps --ppid`):
+ * `--ppid` is GNU-only and errors with "ps: illegal option" on macOS BSD ps;
+ * the BSD `-g` fallback means process-GROUP-id (not pid). `ps -ax -o
+ * pid=,ppid=,comm=` is portable across macOS BSD ps and Linux GNU ps, so we
+ * get the same table on both and resolve the leaf ourselves.
  */
 export async function hasForegroundProcess(record: Pick<SessionRecord, 'claudeSessionId' | 'host'>): Promise<boolean> {
   const sock = dtachSocketPath(record.claudeSessionId, !!record.host)
-  // One round-trip: print the master pid line, then the full process table.
-  const script =
-    `echo "MASTERPID:$(pgrep -f ${shellQuote(sock)} | head -1)"; ` +
-    `ps -ax -o pid=,ppid=,comm=`
-  const res = await runShell(record.host, script)
-  const lines = res.stdout.split('\n')
+  const res = await runPosix(record.host, dtachProbeScript(sock, true))
+  const probe = parseDtachProbe(res.stdout)
+  const masters = chooseDtachMaster(probe, sock).targets.map((t) => String(t.pid))
+  if (masters.length === 0) return false // no verified dtach master → no session
 
-  const masterLine = lines.find((l) => l.startsWith('MASTERPID:'))
-  const masterPid = masterLine?.slice('MASTERPID:'.length).trim() ?? ''
-  if (!masterPid) return false // no dtach master → no session
-
-  // Build ppid → children[] adjacency from the ps table (skip the MASTERPID line).
+  // Build ppid → children[] adjacency from the ps table.
   const children = new Map<string, { pid: string; comm: string }[]>()
-  for (const line of lines) {
-    if (line.startsWith('MASTERPID:')) continue
+  for (const line of probe.table) {
     const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)
     if (!m) continue
     const [, pid, ppid, commRaw] = m
@@ -112,33 +119,38 @@ export async function hasForegroundProcess(record: Pick<SessionRecord, 'claudeSe
   }
 
   // Walk down from the master to the deepest descendant (the foreground cmd).
-  let leaf = ''
-  let cur = masterPid
-  const seen = new Set<string>()
-  while (!seen.has(cur)) {
-    seen.add(cur)
-    const kids = children.get(cur)
-    if (!kids || kids.length === 0) break
-    // Follow the first child; on a single interactive terminal the tree is linear.
-    const next = kids[0]
-    leaf = next.comm
-    cur = next.pid
-  }
-  if (!leaf) return false
-  return !SHELL_COMMANDS.has(leaf)
+  return masters.some((masterPid) => {
+    let leaf = ''
+    let cur = masterPid
+    const seen = new Set<string>()
+    while (!seen.has(cur)) {
+      seen.add(cur)
+      const kids = children.get(cur)
+      if (!kids || kids.length === 0) break
+      // Follow the first child; on a single interactive terminal the tree is linear.
+      const next = kids[0]
+      leaf = next.comm
+      cur = next.pid
+    }
+    return !!leaf && !SHELL_COMMANDS.has(leaf)
+  })
 }
 
-/** Explicitly destroy a session's dtach session (kill master + remove socket). */
-export async function killDtachSession(record: Pick<SessionRecord, 'claudeSessionId' | 'host'>): Promise<void> {
+/**
+ * Explicitly destroy a session's dtach session (signal its verified master,
+ * remove socket + record). 'left' when a process may hold the socket but could
+ * not be proved its master: nothing was signalled and the socket is kept.
+ */
+export async function killDtachSession(record: Pick<SessionRecord, 'claudeSessionId' | 'host'>): Promise<'stopped' | 'nothing' | 'left'> {
   const sock = dtachSocketPath(record.claudeSessionId, !!record.host)
-  // Kill the dtach master process(es) bound to this socket, then unlink it.
-  const script = `pkill -f ${shellQuote(sock)} 2>/dev/null; rm -f ${shellQuote(sock)} 2>/dev/null; echo DONE`
-  const res = await runShell(record.host, script)
-  if (/DONE/.test(res.stdout)) {
-    log.web.info('dtach session killed', { sessionId: record.claudeSessionId, host: record.host })
-  } else {
-    log.web.debug('dtach kill noop (likely already gone)', { sessionId: record.claudeSessionId, host: record.host })
+  const ctx = { sessionId: record.claudeSessionId, host: record.host }
+  const res = await stopDtachMaster((script) => runPosix(record.host, script), sock, ctx)
+  if (res.outcome === 'stopped') {
+    log.web.info('dtach session killed', { ...ctx, source: res.source, pids: res.signalled })
+  } else if (res.outcome === 'nothing') {
+    log.web.debug('dtach kill noop (likely already gone)', { ...ctx, reason: res.reason })
   }
+  return res.outcome
 }
 
 /**
@@ -171,32 +183,33 @@ export async function conditionalReap(record: Pick<SessionRecord, 'claudeSession
     log.web.info('dtach kept (foreground process running)', { sessionId: record.claudeSessionId })
     return 'kept'
   }
-  await killDtachSession(record)
-  return 'killed'
+  // A master that could not be proved is left running, so the terminal is kept.
+  return (await killDtachSession(record)) === 'left' ? 'kept' : 'killed'
 }
 
 /**
  * List walnut dtach socket session-ids present on a host (local or remote),
- * plus the dir's ownership marker (see dtachOwnerMarkerPath in spawn.ts).
- * One round-trip: `OWNER:<data-dir>` line first, then the socket paths.
+ * the ids that have a master pid record (`.dpid`), and the dir's ownership
+ * marker (see dtachOwnerMarkerPath in spawn.ts). One round-trip: `OWNER:<data-dir>`
+ * line first, then the socket paths, then the record paths (two `ls` calls, so a
+ * zsh login shell's "no matches" for one never hides the other).
  */
-async function listWalnutDtach(host: string | undefined): Promise<{ owner: string | null; ids: string[] }> {
+async function listWalnutDtach(host: string | undefined): Promise<{ owner: string | null; ids: string[]; records: string[] }> {
+  const dir = shellQuote(host ? REMOTE_DTACH_SOCKET_DIR : DTACH_SOCKET_DIR)
   const script =
     `echo "OWNER:$(cat ${shellQuote(dtachOwnerMarkerPath(!!host))} 2>/dev/null)"; ` +
-    `ls -1 ${shellQuote(host ? REMOTE_DTACH_SOCKET_DIR : DTACH_SOCKET_DIR)}/walnut-*.dsock 2>/dev/null || true`
+    `ls -1 ${dir}/walnut-*.dsock 2>/dev/null || true; ` +
+    `ls -1 ${dir}/walnut-*.dpid 2>/dev/null || true`
   const res = await runShell(host, script)
   const lines = res.stdout.split('\n')
   const ownerLine = lines.find((l) => l.startsWith('OWNER:'))
   const owner = ownerLine?.slice('OWNER:'.length).trim() || null
-  const ids = lines
+  const idsWith = (ext: string) => lines
     .map((l) => l.trim())
-    .filter((l) => l.endsWith('.dsock'))
-    .map((p) => {
-      const base = p.split('/').pop() ?? ''
-      return base.replace(/^walnut-/, '').replace(/\.dsock$/, '')
-    })
-    .filter(Boolean)
-  return { owner, ids }
+    .filter((l) => l.endsWith(ext))
+    .map((p) => (p.split('/').pop() ?? '').replace(/^walnut-/, '').slice(0, -ext.length))
+    .filter((id) => /^[A-Za-z0-9_-]+$/.test(id))
+  return { owner, ids: idsWith('.dsock'), records: idsWith('.dpid') }
 }
 
 /**
@@ -304,6 +317,7 @@ export async function reapOrphanDtach(opts: { remoteHosts?: boolean } = {}): Pro
       // may apply the "absent from my registry → kill" rule. See maySweepDtachDir.
       if (!(await maySweepDtachDir(host, listed.owner, listed.ids.length))) continue
       ids = listed.ids
+      await dropStaleRecords(host, listed.records.filter((sid) => !ids.includes(sid)))
     } catch (err) {
       log.web.warn('reapOrphanDtach: list failed', { host, error: String(err) })
       continue
@@ -319,4 +333,19 @@ export async function reapOrphanDtach(opts: { remoteHosts?: boolean } = {}): Pro
       }
     }
   }
+}
+
+/**
+ * A master that ended on its own (its shell exited) removes its socket but not
+ * its pid record. Remove each record whose socket is still absent when the
+ * removal runs (a new master for that id writes its record after its socket).
+ * Files only: nothing is signalled.
+ */
+async function dropStaleRecords(host: string | undefined, sids: string[]): Promise<void> {
+  if (sids.length === 0) return
+  const lines = sids.map((sid) => {
+    const sock = dtachSocketPath(sid, !!host)
+    return `[ -S ${shellQuote(sock)} ] || rm -f ${shellQuote(dtachPidPath(sid, !!host))}`
+  })
+  await runShell(host, `${lines.join('; ')}; echo DONE`)
 }
