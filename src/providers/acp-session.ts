@@ -639,6 +639,8 @@ const ACP_COLD_RESUME_TIMEOUT_MS = 5 * 60_000
 const FOLLOW_DEFAULT_MODEL_WAIT_MS = 5_000
 /** A cached engine default model older than this may predate the user's change. */
 const FOLLOW_DEFAULT_MODEL_CACHE_MS = 60_000
+/** How long a user's prompt lets a turn-end status question finish before aborting it. */
+export const STATUS_QUESTION_FINISH_MS = 8_000
 
 /**
  * Split an ACP catalog model id into its base id and reasoning effort.
@@ -1635,6 +1637,18 @@ export class AcpSession {
     // A user prompt always wins over a hidden report. Hard-abort the control
     // turn, lazily reload the same provider thread, then accept this queue item.
     this._controlEpoch++
+    // Except the short status question an engine takes at every turn end (statusQuestion):
+    // it is let finish, for a few seconds at most, because the abort kills the worker and
+    // the user's own message would pay a cold start (2026-11-02, pi).
+    const asking = this._selfReport
+    if (asking && engineCaps(this.engineId).statusQuestion) {
+      let wait: ReturnType<typeof setTimeout> | undefined
+      await Promise.race([
+        asking.promise.then(() => {}, () => {}),
+        new Promise<void>((resolve) => { wait = setTimeout(resolve, STATUS_QUESTION_FINISH_MS) }),
+      ])
+      clearTimeout(wait)
+    }
     await this.cancelSelfReport('self-report superseded by user prompt')
     // A status question that ran out of time may still be stopping the worker: a prompt sent
     // into it now would be accepted and then lost with the process group.

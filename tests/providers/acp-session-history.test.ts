@@ -945,6 +945,37 @@ describe('ACP session record primitives', () => {
       await sending
     })
 
+    // 2026-11-02: the status question a pi task gets at every turn end ran while the user wrote
+    // back, and the user's prompt killed the worker to abort it, so that prompt paid a cold start.
+    it('a user prompt lets a pi status question finish instead of killing the worker', async () => {
+      const session = new AcpSession({ taskId: 't-pi-wait', project: 'Project', cwd: tmpDir, mode: 'default', engine: 'pi', providerSessionId: 'p-pi-wait', runtimeId: 'rt-pi-wait' })
+      const sent: Array<{ command: string; params: Record<string, unknown> }> = []
+      const internals = session as unknown as {
+        establish(): Promise<string>
+        ensureConn(): Promise<{ send(command: string, params: Record<string, unknown>): Promise<{ ok: boolean }> }>
+        handleDaemonEvent(event: Record<string, unknown>): void
+        _active: boolean
+      }
+      internals.establish = async () => 'p-pi-wait'
+      internals.ensureConn = async () => ({ send: async (command, params) => { sent.push({ command, params }); return { ok: true } } })
+      internals._active = true
+      const meta = (v: number, event: Record<string, unknown>) => internals.handleDaemonEvent({ ev: 'jsonl', sid: 'rt-pi-wait', v, line: JSON.stringify({ kind: 'meta', ts: v, event }) })
+      const answer = session.requestTurnCompleteSelfReport('STATUS question', 5_000)
+      await vi.waitFor(() => expect(sent).toHaveLength(1))
+      const commandId = sent[0].params.commandId
+      meta(10, { type: 'control-prompt-accepted', commandId, purpose: 'self-report' })
+      const sending = session.sendAccepted('hello', 'qm-pi-wait').catch(() => {})
+      await new Promise((r) => setTimeout(r, 150))
+      // Still answering: no cancel, no prompt yet.
+      expect(sent.map((s) => s.command)).toEqual(['acpSend'])
+      meta(20, { type: 'control-ended', commandId, stopReason: 'end_turn' })
+      await answer
+      await vi.waitFor(() => expect(sent.length).toBeGreaterThan(1))
+      await sending
+      expect(sent.map((s) => s.command)).not.toContain('acpCancel')
+      expect(sent.at(-1)!.params.commandId).toBe('acp-prompt:qm-pi-wait')
+    })
+
     it('a stop drops the questions still queued; they are never sent', async () => {
       const { session, sent } = rig('rt-stop')
       void session.requestTurnCompleteSelfReport('NOTE question', 5_000).catch(() => {})
