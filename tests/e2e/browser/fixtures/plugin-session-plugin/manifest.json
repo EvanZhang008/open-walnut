@@ -1,0 +1,11 @@
+{
+  "id": "plugin-session-fixture",
+  "name": "Session View Fixture",
+  "description": "Browser-test plugin: an App with two pages that hosts one session in walnut.ui.views.SessionView.",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "engines": {
+    "walnut": ">=0.3.2"
+  },
+  "web": "web.mjs"
+}

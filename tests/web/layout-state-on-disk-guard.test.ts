@@ -157,12 +157,13 @@ describe('Home and Org state is kept on disk, not only in sessionStorage', () =>
 });
 
 /** Overlays that must start closed on every load: file, and the state that opens it. */
-const NEVER_RESTORED: ReadonlyArray<{ file: string; state: string; closed: string; what: string }> = [
+const NEVER_RESTORED: ReadonlyArray<{ file: string; state: string; closed: string; what: string; module?: true }> = [
   // The detail shows while a task is focused and not suppressed: the focus starts empty, and
   // a load brings it back only through restoreFocus (checked below), which suppresses it.
   { file: 'pages/MainPage.tsx', state: 'selectedTask', closed: 'null', what: 'the full-screen task detail' },
   { file: 'pages/MainPage.tsx', state: 'sessionSearchOpen', closed: 'false', what: 'the session finder' },
-  { file: 'hooks/useFullscreen.tsx', state: 'isFullscreen', closed: 'false', what: 'a fullscreen panel' },
+  // Full screen is one module-level owner for the tab (fullscreen-owner.ts), not a useState.
+  { file: 'hooks/fullscreen-owner.ts', state: 'owner', closed: 'null', what: 'a fullscreen panel', module: true },
   { file: 'components/chat/AskWalnutSlot.tsx', state: 'drawerOpen', closed: 'false', what: "the chat slot's drawer" },
 ];
 
@@ -171,7 +172,9 @@ describe('a passing overlay never comes back on its own after a load', () => {
 
   it('each starts from a literal, never from storage or the URL', () => {
     for (const o of NEVER_RESTORED) {
-      const decl = new RegExp(`const \\[${o.state}, set\\w+\\] = useState(?:<[^>]+>)?\\(([^)]*)\\)`).exec(src(o.file));
+      const decl = o.module
+        ? new RegExp(`^let ${o.state}(?:: [^=]+)? = ([^;]+);`, 'm').exec(src(o.file))
+        : new RegExp(`const \\[${o.state}, set\\w+\\] = useState(?:<[^>]+>)?\\(([^)]*)\\)`).exec(src(o.file));
       expect(decl, `${o.file}: ${o.state} (${o.what}) not found`).not.toBeNull();
       expect(decl![1].trim(), `${o.what} must start closed`).toBe(o.closed);
     }

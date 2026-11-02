@@ -11,6 +11,9 @@
  * dirs all point inside one temp directory that is removed on shutdown.
  *
  * Reads PW_PLUGIN_MIC_PORT; prints `PLUGIN_MIC_READY <json>` when it is serving.
+ * PW_PLUGIN_FIXTURE=session links fixtures/plugin-session-plugin instead (an App
+ * hosting a SessionView, plugin-session-fullscreen.spec.ts) and seeds the sessions
+ * it and the home page show.
  */
 
 import fs from 'node:fs/promises'
@@ -49,13 +52,38 @@ await fs.writeFile(path.join(tmpBase, 'config.yaml'), JSON.stringify({
   },
   providers: { 'plugin-mic-cli': { api: 'claude-cli', claude_cli_command: mockMainAgent } },
 }, null, 2))
-await fs.writeFile(path.join(tmpBase, 'tasks', 'tasks.json'), JSON.stringify({ version: 1, tasks: [] }, null, 2))
+const sessionFixture = process.env.PW_PLUGIN_FIXTURE === 'session'
+const now = new Date().toISOString()
+// Two stopped sessions with their tasks: one for the plugin's SessionView, one for a home column.
+const seeded = sessionFixture ? [
+  { task: 'pw-task-plugin-session', session: 'pw-plugin-session', title: 'Plugin practice round' },
+  { task: 'pw-task-home-session', session: 'pw-home-session', title: 'Home column round' },
+] : []
+await fs.writeFile(path.join(tmpBase, 'tasks', 'tasks.json'), JSON.stringify({
+  version: 1,
+  tasks: seeded.map((s) => ({
+    id: s.task, title: s.title, status: 'in_progress', phase: 'IN_PROGRESS', priority: 'none',
+    project: 'Walnut', source: 'local', session_ids: [s.session], active_session_ids: [],
+    session_id: s.session, session_status: { process_status: 'stopped', mode: 'bypass' },
+    created_at: now, updated_at: now, description: '', summary: '', note: '', subtasks: [],
+  })),
+}, null, 2))
+if (sessionFixture) {
+  await fs.writeFile(path.join(tmpBase, 'sessions.json'), JSON.stringify({
+    version: 2,
+    sessions: seeded.map((s) => ({
+      claudeSessionId: s.session, taskId: s.task, project: 'Walnut', process_status: 'stopped',
+      mode: 'bypass', last_status_change: now, startedAt: now, lastActiveAt: now, messageCount: 1,
+      cwd: repoRoot, title: s.title,
+    })),
+  }, null, 2))
+}
 
 // Installed the documented author way: a symlink in the data home's plugins/ directory,
 // which is exactly what `walnut-plugin link` writes.
 await fs.symlink(
-  path.join(repoRoot, 'tests/e2e/browser/fixtures/plugin-mic-plugin'),
-  path.join(tmpBase, 'plugins', 'plugin-mic-fixture'),
+  path.join(repoRoot, `tests/e2e/browser/fixtures/${sessionFixture ? 'plugin-session-plugin' : 'plugin-mic-plugin'}`),
+  path.join(tmpBase, 'plugins', sessionFixture ? 'plugin-session-fixture' : 'plugin-mic-fixture'),
   'dir',
 )
 

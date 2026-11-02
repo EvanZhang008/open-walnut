@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useContext } from 'react';
+import { useState, useCallback, useEffect, useContext, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
@@ -9,6 +9,10 @@ import { traceInteraction } from '@/utils/interaction-timer';
 import { keyTargetClaimsEscape } from './usePanelKeyRouter';
 import { escapeWasConsumedByOthers } from '@/utils/escape-beep-guard';
 import { log } from '@/utils/log';
+import {
+  claimFullscreen, fullscreenOwner, keepsAcrossRoutes, newFullscreenId,
+  releaseFullscreen, subscribeFullscreen,
+} from './fullscreen-owner';
 
 /** Window event every live fullscreen sheet exits on. Fired by `yieldFullscreen`. */
 export const FULLSCREEN_YIELD_EVENT = 'fullscreen:yield';
@@ -75,20 +79,34 @@ export interface UseFullscreenOptions {
    * is not locked, so the other page works as usual. A sheet entered while the
    * router is still catching up with a deep link from another page is simply
    * away for that beat, then on show. Everything else (the dock, which shows on
-   * every page) keeps the ROUTE-CHANGE EXIT below.
+   * every page) keeps the ROUTE-CHANGE EXIT below, and so does a panel in a
+   * plugin's box, which a move to another of the plugin's pages leaves.
+   *
+   * It also makes the sheet one of the tab's (fullscreen-owner.ts): full screen
+   * is ONE state for every such sheet, one at a time, and leaving it anywhere
+   * leaves it everywhere. A session panel passes it wherever it is hosted.
    */
   keepAcrossRoutes?: boolean;
 }
 
 export function useFullscreen(options: UseFullscreenOptions = {}) {
-  const keepAcrossRoutes = options.keepAcrossRoutes === true;
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const { pathname } = useLocation();
-  // Off its page (the hidden home page, RouteShownContext) the sheet is away.
-  const shown = useContext(RouteShownContext);
+  const tab = options.keepAcrossRoutes === true;
   const inPluginBox = useContext(PluginBoxContext);
+  // Off its page (the hidden home page, RouteShownContext) the sheet is away;
+  // outside the home page the context is null and the sheet is always on show.
+  const routeShown = useContext(RouteShownContext);
+  const shown = routeShown ?? true;
+  const keepAcrossRoutes = keepsAcrossRoutes(tab, routeShown !== null, inPluginBox);
+  const [id] = useState(newFullscreenId);
+  // The tab's sheets share the one owner (fullscreen-owner.ts); a nested or
+  // page-wide sheet keeps its own flag.
+  const [ownFlag, setOwnFlag] = useState(false);
+  const ownsTab = useSyncExternalStore(subscribeFullscreen, () => fullscreenOwner() === id, () => false);
+  const isFullscreen = tab ? ownsTab : ownFlag;
+  const { pathname } = useLocation();
   const away = isFullscreen && keepAcrossRoutes && !shown;
   const active = isFullscreen && !away;
+  const leave = useCallback(() => { if (tab) releaseFullscreen(id); else setOwnFlag(false); }, [tab, id]);
 
   // Timed: "I click outside to get out and it takes like 3 seconds" was reported
   // with no log to point at. Both directions now land in the server log as
@@ -96,19 +114,26 @@ export function useFullscreen(options: UseFullscreenOptions = {}) {
   // main-thread block during the collapse is attributed to the phase.
   const enterFullscreen = useCallback(() => {
     traceInteraction('fullscreen-enter');
-    setIsFullscreen(true);
-  }, []);
+    if (tab) claimFullscreen(id); else setOwnFlag(true);
+  }, [tab, id]);
+  // Only the sheet that is full screen can leave it: a panel resetting itself
+  // (a new session in it, a fresh mount) must never end another sheet's.
   const exitFullscreen = useCallback(() => {
+    if (tab ? fullscreenOwner() !== id : !ownFlag) return;
     traceInteraction('fullscreen-exit');
-    setIsFullscreen(false);
-  }, []);
+    leave();
+  }, [tab, id, ownFlag, leave]);
+
+  // A sheet that goes away while full screen ends it: a panel mounted later (the
+  // same plugin page opened again) never comes up full page.
+  useEffect(() => () => releaseFullscreen(id), [id]);
 
   // Leaving the route drops fullscreen. Keyed on pathname only: a search-param
   // change (`/?s1=…`, the session columns' own deep-link state) is NOT a
   // navigation away and must not collapse a panel the user just expanded.
   useEffect(() => {
-    if (!keepAcrossRoutes) setIsFullscreen(false);
-  }, [pathname, keepAcrossRoutes]);
+    if (!keepAcrossRoutes) leave();
+  }, [pathname, keepAcrossRoutes, leave]);
 
   // ESC key handler + ref-counted body scroll lock (shares count with
   // useModalOverlay), and the column-open yield below. All subscribed only WHILE
@@ -132,14 +157,14 @@ export function useFullscreen(options: UseFullscreenOptions = {}) {
         return;
       }
       e.stopPropagation();
-      setIsFullscreen(false);
+      leave();
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
       unlockScroll();
     };
-  }, [active]);
+  }, [active, leave]);
 
   // The column-open yield also holds while the sheet is away: a session opened
   // from another page lands in a home column, which a sheet coming back full
@@ -151,11 +176,11 @@ export function useFullscreen(options: UseFullscreenOptions = {}) {
     const handleYield = (e: Event) => {
       const reason = (e as CustomEvent<{ reason?: string }>).detail?.reason ?? 'unknown';
       traceInteraction('fullscreen-yield', { reason });
-      setIsFullscreen(false);
+      leave();
     };
     window.addEventListener(FULLSCREEN_YIELD_EVENT, handleYield);
     return () => window.removeEventListener(FULLSCREEN_YIELD_EVENT, handleYield);
-  }, [isFullscreen]);
+  }, [isFullscreen, leave]);
 
   // Backdrop portal — rendered by the consumer in their JSX. Inside a plugin App's box the sheet
   // stacks inside the box (plugin-bounds.css isolates and clips it), so a backdrop on the body would

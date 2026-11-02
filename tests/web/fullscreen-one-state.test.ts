@@ -1,0 +1,129 @@
+/**
+ * Full screen is ONE state of the tab (2026-11-02, the user, on a plugin's session
+ * panel still full page: "isn't this global setting?"). Every sheet asks one owner
+ * (web/src/hooks/fullscreen-owner.ts) whether it is full screen; none keeps a flag
+ * of its own. The source half fails on a host or a sheet that would keep its own.
+ */
+import { afterEach, describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import {
+  claimFullscreen, fullscreenOwner, keepsAcrossRoutes, newFullscreenId,
+  releaseFullscreen, resetFullscreenOwner, subscribeFullscreen,
+} from '../../web/src/hooks/fullscreen-owner';
+
+const ROOT = path.resolve(__dirname, '../../web/src');
+const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
+function sources(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...sources(full));
+    else if (/\.(ts|tsx)$/.test(entry.name)) out.push(full);
+  }
+  return out;
+}
+const files = sources(ROOT).map((f) => ({ file: path.relative(ROOT, f).split(path.sep).join('/'), text: fs.readFileSync(f, 'utf8') }));
+const code = (text: string) => text.replace(/\/\*[\s\S]*?\*\/|(^|[^:'"`])\/\/[^\n]*/g, '$1');
+
+afterEach(() => resetFullscreenOwner());
+
+/** Each `<SessionPanel ...>` tag whole: braces balanced, so `() => x` in a prop does not end it. */
+function sessionPanelTags(text: string): string[] {
+  const tags: string[] = [];
+  for (const m of text.matchAll(/<SessionPanel\b/g)) {
+    let depth = 0;
+    let i = m.index! + m[0].length;
+    for (; i < text.length; i++) {
+      const ch = text[i];
+      if (ch === '{') depth++;
+      else if (ch === '}') depth--;
+      else if (ch === '>' && depth === 0) break;
+    }
+    tags.push(text.slice(m.index!, i + 1));
+  }
+  return tags;
+}
+
+describe('one full screen for the tab', () => {
+  it('entering moves it, leaving it ends it everywhere, and a sheet that does not hold it changes nothing', () => {
+    const home = newFullscreenId();
+    const plugin = newFullscreenId();
+    let heard = 0;
+    subscribeFullscreen(() => { heard += 1; });
+
+    claimFullscreen(home);
+    expect(fullscreenOwner()).toBe(home);
+    // The plugin's panel goes full screen: the home column is no longer.
+    claimFullscreen(plugin);
+    expect(fullscreenOwner()).toBe(plugin);
+    // A panel resetting itself (it does not hold full screen) leaves it alone.
+    releaseFullscreen(home);
+    expect(fullscreenOwner()).toBe(plugin);
+    // Leaving it leaves no sheet full screen: the home column does not come back.
+    releaseFullscreen(plugin);
+    expect(fullscreenOwner()).toBeNull();
+
+    // A panel that unmounts while full screen ends it; one that does not hold it changes nothing.
+    claimFullscreen(home);
+    releaseFullscreen(plugin);
+    expect(fullscreenOwner()).toBe(home);
+    releaseFullscreen(home);
+    expect(fullscreenOwner()).toBeNull();
+    expect(heard).toBe(5);
+  });
+
+  it('only a home page panel keeps full screen across pages; a plugin box or slot panel does not', () => {
+    expect(keepsAcrossRoutes(true, true, false)).toBe(true);
+    expect(keepsAcrossRoutes(true, true, true)).toBe(false);
+    expect(keepsAcrossRoutes(true, false, false)).toBe(false);
+    expect(keepsAcrossRoutes(false, true, false)).toBe(false);
+  });
+
+  it('useFullscreen keeps no flag of its own: it reads and writes the one owner', () => {
+    const hook = code(read('hooks/useFullscreen.tsx'));
+    expect(hook).toContain('useSyncExternalStore(subscribeFullscreen');
+    expect(hook).toContain('claimFullscreen(id)');
+    // The tab's sheets read the owner; only a nested or page-wide sheet has a flag of its own.
+    expect(hook).toMatch(/const isFullscreen = tab \? ownsTab : ownFlag;/);
+    expect(hook).not.toMatch(/setIsFullscreen/);
+    // Every session panel is one of the tab's sheets.
+    expect(code(read('components/sessions/SessionPanel.tsx'))).toMatch(/useFullscreen\(\{ keepAcrossRoutes: true \}\)/);
+    // Nothing else claims full screen around the hook.
+    const claimers = files.filter(({ text }) => /\bclaimFullscreen\(/.test(code(text))).map(({ file }) => file).sort();
+    expect(claimers).toEqual(['hooks/fullscreen-owner.ts', 'hooks/useFullscreen.tsx']);
+  });
+
+  it('reads a whole tag, arrow functions in props included', () => {
+    expect(sessionPanelTags('<SessionPanel onClose={() => x()} fullscreen />')).toEqual(['<SessionPanel onClose={() => x()} fullscreen />']);
+  });
+
+  it('every SessionPanel host gets full screen only from the panel itself', () => {
+    // Each host, and where it puts the panel. A new host is added here once it
+    // passes no full screen of its own (the checks below).
+    const HOSTS = [
+      'components/chat/AskObjectDrawer.tsx', // an object's ask drawer
+      'components/chat/AskWalnutSlot.tsx', // the Ask slot
+      'components/sessions/SessionPanel.tsx', // its own wrapper export
+      'components/org/OrgNodeDetail.tsx', // an Org node
+      'components/org/OrgSidePanel.tsx', // the Org side panel
+      'pages/MainPage.tsx', // the home columns
+      'pages/NotesPage.tsx', // the Notes page
+      'plugins/views.tsx', // a plugin's SessionView
+      'popout/PopoutSession.tsx', // a popped-out window
+    ];
+    const hosts = files.filter(({ text }) => /<SessionPanel\b/.test(code(text))).map(({ file }) => file).sort();
+    expect(hosts, 'a new SessionPanel host: list it in HOSTS once it passes no full screen of its own').toEqual([...HOSTS].sort());
+    for (const { file, text } of files.filter(({ file }) => HOSTS.includes(file))) {
+      const body = code(text);
+      // A prop that would start a panel full page, or a sheet class set by the host.
+      for (const tag of sessionPanelTags(body)) expect(tag, file).not.toMatch(/full[sS]creen|expanded/);
+      expect(body, file).not.toMatch(/['"`]\s*open-walnut-fullscreen/);
+    }
+    // The panel takes no such prop and has one source of full screen.
+    const panel = code(read('components/sessions/SessionPanel.tsx'));
+    expect(panel.match(/\buseFullscreen\(/g)).toHaveLength(1);
+    const props = panel.slice(panel.indexOf('export interface SessionPanelProps'), panel.indexOf('}\n', panel.indexOf('export interface SessionPanelProps')));
+    expect(props).not.toMatch(/full[sS]creen/);
+  });
+});

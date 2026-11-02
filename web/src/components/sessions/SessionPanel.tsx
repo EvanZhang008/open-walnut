@@ -108,6 +108,7 @@ import { phoneSessionLabel } from '@/utils/phone-session-label';
 import { usePendingCardTool } from '@/hooks/usePendingCardTool';
 import '@/styles/phone-session.css';
 import { useFullscreen } from '@/hooks/useFullscreen';
+import { fullscreenOwner } from '@/hooks/fullscreen-owner';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
 import { useHeightVar } from '@/hooks/useHeightVar';
 import { useSessionPlan } from '@/hooks/useSessionPlan';
@@ -1843,7 +1844,12 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
     if (wasPhoneWidth.current === phoneWidth) return;
     wasPhoneWidth.current = phoneWidth;
     if (!activeView) return;
-    if (!phoneWidth && !isFullscreen) enterFullscreen();
+    if (!phoneWidth && !isFullscreen) {
+      // Full screen is one state of the tab (fullscreen-owner.ts): a panel the
+      // user is not on never takes it from the one that holds it; its view closes.
+      if (fullscreenOwner() !== null) { setActiveView(null); setFileViewTarget(null); return; }
+      enterFullscreen();
+    }
     applyOpenCollapse(activeView);
   }, [phoneWidth, activeView, applyOpenCollapse, isFullscreen, enterFullscreen]);
   // Phone: the open column is a layer whose bar is the top bar (one bar, C64).
