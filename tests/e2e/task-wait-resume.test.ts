@@ -42,6 +42,12 @@ import { createEnvelopeKit } from '../../src/core/peers/envelope-kit.js'
 
 const MOCK_CLI = path.resolve(import.meta.dirname, '../providers/mock-claude.mjs')
 const HOUR = 3_600_000
+/**
+ * How long a peer turn a test acts inside runs: the act lands while it runs. 2.5 s ran out before
+ * the act on a loaded CI runner (2026-11-02, run 41368117908: the person's message came after the
+ * turn ended, so the wait came back first). Each such test checks the turn still ran after its act.
+ */
+const MID_TURN_MS = 8_000
 
 let server: HttpServer
 let port: number
@@ -231,9 +237,10 @@ describe('a turn that only interrupts the wait ends back in Waiting', () => {
   it('a leader parks the worker WHILE the leader\'s message runs: the turn end leaves it parked (held this turn)', async () => {
     const until1h = new Date(Date.now() + HOUR).toISOString()
     await getOp('task_update')!.handler!({ id: a.taskId, phase: 'IN_PROGRESS' }, opCall(a.sid))
-    await peer(a, 'slow:2500 run the next step')
+    await peer(a, `slow:${MID_TURN_MS} run the next step`)
     await until('turn running', () => sessionStatus(a.sid), (s) => s === 'running')
     await park(a, until1h)
+    expect(await sessionStatus(a.sid), 'the park landed inside the turn').toBe('running')
     await until('turn over', () => sessionStatus(a.sid), (s) => s !== 'running')
     await new Promise((r) => setTimeout(r, 500))
     expect(await task(a.taskId)).toMatchObject({ phase: 'WAITING', wait_until: until1h })
@@ -243,11 +250,12 @@ describe('a turn that only interrupts the wait ends back in Waiting', () => {
     const until1h = new Date(Date.now() + HOUR).toISOString()
     await getOp('task_update')!.handler!({ id: a.taskId, phase: 'IN_PROGRESS' }, opCall(a.sid))
     const seen = await phasesDuring(a.taskId, async () => {
-      await peer(a, 'slow:2500 arm the watch and park')
+      await peer(a, `slow:${MID_TURN_MS} arm the watch and park`)
       await until('turn running', () => sessionStatus(a.sid), (s) => s === 'running')
       await park(a, until1h)
       // A notice injected into the still-running turn leaves WAITING at send time.
       await peer(a, 'a notice lands mid-turn', 'walnut-notify')
+      expect(await sessionStatus(a.sid), 'the notice landed inside the turn').toBe('running')
     }, (s) => s.length >= 3 && s[s.length - 1] === 'WAITING' && s.lastIndexOf('IN_PROGRESS') > s.indexOf('WAITING'), 30_000)
     expect(seen[seen.length - 1]).toBe('WAITING')
     await until('session idle', () => sessionStatus(a.sid), (s) => s !== 'running')
@@ -270,10 +278,11 @@ describe('what still ends the wait for good', () => {
   it('a person writing during the interrupting turn: Need Action at its end', async () => {
     await park(a, new Date(Date.now() + HOUR).toISOString())
     const seen = await phasesDuring(a.taskId, async () => {
-      await peer(a, 'slow:2500 a long answer to the leader')
+      await peer(a, `slow:${MID_TURN_MS} a long answer to the leader`)
       await until('turn running', () => sessionStatus(a.sid), (s) => s === 'running')
       const r = await req('POST', `/api/v1/sessions/${a.sid}/messages`, { text: 'also, one question for you' })
       expect(r.status, JSON.stringify(r.json)).toBeLessThan(300)
+      expect(await sessionStatus(a.sid), 'the message landed inside the turn').toBe('running')
     }, (s) => s[s.length - 1] === 'NEED_ACTION', 30_000)
     expect(seen).not.toContain('WAITING')
     await until('session idle', () => sessionStatus(a.sid), (s) => s !== 'running')
@@ -326,9 +335,10 @@ describe('what still ends the wait for good', () => {
       await deleteTrigger(trig)
       await park(a, new Date(Date.now() + HOUR).toISOString())
       const seen = await phasesDuring(a.taskId, async () => {
-        await peer(a, 'slow:2500 a long answer to the leader')
+        await peer(a, `slow:${MID_TURN_MS} a long answer to the leader`)
         await until('turn running', () => sessionStatus(a.sid), (s) => s === 'running')
         await act(id)
+        expect(await sessionStatus(a.sid), 'the act landed inside the turn').toBe('running')
       }, (s) => s[s.length - 1] === 'NEED_ACTION', 30_000)
       expect(seen).not.toContain('WAITING')
       await until('session idle', () => sessionStatus(a.sid), (s) => s !== 'running')
@@ -350,9 +360,10 @@ describe('what still ends the wait for good', () => {
   it('the session parks again in the interrupting turn with a new clock: that one stands', async () => {
     await park(a, new Date(Date.now() + HOUR).toISOString())
     const until5h = new Date(Date.now() + 5 * HOUR).toISOString()
-    await peer(a, 'slow:2500 re-plan the wait')
+    await peer(a, `slow:${MID_TURN_MS} re-plan the wait`)
     await until('turn running', () => sessionStatus(a.sid), (s) => s === 'running')
     await park(a, until5h)
+    expect(await sessionStatus(a.sid), 'the park landed inside the turn').toBe('running')
     await until('session idle', () => sessionStatus(a.sid), (s) => s !== 'running')
     await new Promise((r) => setTimeout(r, 1500))
     expect(await task(a.taskId)).toMatchObject({ phase: 'WAITING', wait_until: until5h })
@@ -360,10 +371,11 @@ describe('what still ends the wait for good', () => {
 
   it('someone sets another status during the interrupting turn: the turn end hands it back, never Waiting', async () => {
     await park(a, new Date(Date.now() + HOUR).toISOString())
-    await peer(a, 'slow:2500 a long answer')
+    await peer(a, `slow:${MID_TURN_MS} a long answer`)
     await until('turn running', () => sessionStatus(a.sid), (s) => s === 'running')
     const r = await req('PATCH', `/api/tasks/${a.taskId}`, { phase: 'TODO' })
     expect(r.status).toBe(200)
+    expect(await sessionStatus(a.sid), 'the status was set inside the turn').toBe('running')
     await until('session idle', () => sessionStatus(a.sid), (s) => s !== 'running')
     await new Promise((r2) => setTimeout(r2, 1500))
     expect((await task(a.taskId)).phase).toBe('NEED_ACTION')
@@ -476,12 +488,13 @@ describe('what the task waited for, arriving inside an interrupting turn or as t
   it('its trigger fires while a peer\'s turn runs: Need Action at the end', async () => {
     await park(a, new Date(Date.now() + HOUR).toISOString())
     const seen = await phasesDuring(a.taskId, async () => {
-      await peer(a, 'slow:2500 a long answer to the leader')
+      await peer(a, `slow:${MID_TURN_MS} a long answer to the leader`)
       await until('turn running', () => sessionStatus(a.sid), (s) => s === 'running')
       await handleTriggerFired('__local__', {
         type: 'trigger.fired', id: trig, epoch: 'epoch-mid', seq: 1, atMs: Date.now(),
         items: [{ id: 'run-19#done', title: 'run 19 finished' }], durationMs: 3, nextRunAtMs: Date.now() + 300_000,
       })
+      expect(await sessionStatus(a.sid), 'the fire landed inside the turn').toBe('running')
     }, (s) => s[s.length - 1] === 'NEED_ACTION', 40_000)
     expect(seen).not.toContain('WAITING')
     await until('session idle', () => sessionStatus(a.sid), (s) => s !== 'running', 30_000)
@@ -491,7 +504,7 @@ describe('what the task waited for, arriving inside an interrupting turn or as t
 
   it('a fire its host delivered straight into the CLI during a peer\'s turn: Need Action at the end', async () => {
     await park(a, new Date(Date.now() + HOUR).toISOString())
-    await peer(a, 'slow:2500 a long answer to the leader')
+    await peer(a, `slow:${MID_TURN_MS} a long answer to the leader`)
     await until('turn running', () => sessionStatus(a.sid), (s) => s === 'running')
     expect(interruptedWaits().has(a.taskId)).toBe(true)
     // The server only hears of it afterwards, as a recorded host delivery (no send of its own).
@@ -501,6 +514,7 @@ describe('what the task waited for, arriving inside an interrupting turn or as t
       host: { atMs: Date.now(), sessionId: a.sid, messageId: 'qm-host-test-1', seqs: [1] },
     } as never)
     expect(interruptedWaits().has(a.taskId)).toBe(false)
+    expect(await sessionStatus(a.sid), 'the fire landed inside the turn').toBe('running')
     await until('session idle', () => sessionStatus(a.sid), (s) => s !== 'running', 30_000)
     await new Promise((r) => setTimeout(r, 1500))
     expect((await task(a.taskId)).phase).toBe('NEED_ACTION')
@@ -509,7 +523,7 @@ describe('what the task waited for, arriving inside an interrupting turn or as t
   it('a host-delivered fire heard only after the wait came back still wakes the task', async () => {
     await park(a, new Date(Date.now() + HOUR).toISOString())
     const restored = await phasesDuring(a.taskId, async () => {
-      await peer(a, 'slow:1500 a short answer')
+      await peer(a, 'slow:1500 a short answer') // ends on its own: nothing acts inside it
       await until('turn running', () => sessionStatus(a.sid), (s) => s === 'running')
     }, ended)
     expect(restored).toEqual(['IN_PROGRESS', 'WAITING'])
