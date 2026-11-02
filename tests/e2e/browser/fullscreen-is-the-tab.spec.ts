@@ -19,23 +19,21 @@ test('the sidebar stays usable in full screen, and the tab is still full screen 
   const panel = await openSessionPanel(page)
   await enterFilesFullscreen(page, panel)
 
-  // Full screen fills the page area beside the sidebar, edge to edge: no margin,
-  // no rounded sheet, no dimmed page (2026-11-02, the user: "full screen means
-  // full screen, not a bigger pop-up").
+  // The sheet sits in the page area, not over the sidebar, centred, each side
+  // keeping about a tenth of the area (never past a 960px sheet, never under the
+  // 12px gutter; 2026-10-31, the user: leave about 10% on the left and right).
   const org = page.getByTestId('sidebar-org')
   // Polled: the strip's 320ms slide-in (a transform on the column) holds the
   // sheet inside the column until it settles.
   await expect.poll(() => page.evaluate(() => {
     const side = document.querySelector('.sidebar')!.getBoundingClientRect().right
-    const el = document.querySelector('.open-walnut-fullscreen')!
-    const sheet = el.getBoundingClientRect()
-    const style = getComputedStyle(el)
-    const gaps = [sheet.left - side, window.innerWidth - sheet.right, sheet.top, window.innerHeight - sheet.bottom].map((g) => Math.round(g))
-    const backdrop = document.querySelector('.open-walnut-fullscreen-backdrop')
-    const dim = backdrop ? getComputedStyle(backdrop).display !== 'none' : false
-    return gaps.every((g) => Math.abs(g) <= 1) && style.borderTopLeftRadius === '0px' && style.boxShadow === 'none' && !dim
-      ? 'fills' : `gaps ${gaps.join(',')} radius ${style.borderTopLeftRadius} shadow ${style.boxShadow} dim ${dim}`
-  })).toBe('fills')
+    const sheet = document.querySelector('.open-walnut-fullscreen')!.getBoundingClientRect()
+    const area = window.innerWidth - side
+    const want = Math.max(12, Math.min(area * 0.1, (area - 960) / 2))
+    const left = sheet.left - side
+    const right = window.innerWidth - sheet.right
+    return Math.abs(left - want) <= 1 && Math.abs(right - want) <= 1 ? 'centred' : `left ${left} right ${right} want ${want}`
+  })).toBe('centred')
   await expectOnTop(org)
 
   // Home -> Org by a real sidebar click: Org is on top and scrolls.
@@ -64,8 +62,9 @@ test('the sidebar stays usable in full screen, and the tab is still full screen 
   await expect(page.locator('.open-walnut-fullscreen-backdrop')).toHaveCount(1)
   await expectOnTop(panel)
 
-  // Esc leaves full screen (there is no strip around it to click any more).
-  await page.keyboard.press('Escape')
+  // A click on the backdrop strip beside the sheet still leaves full screen.
+  const box = (await panel.boundingBox())!
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height + 6)
   await expect(panel).not.toHaveClass(/open-walnut-fullscreen/)
 })
 
