@@ -201,7 +201,7 @@ function ProviderCard({ provider: p, tint, save }: {
                     data-testid={id('ai-rule')}
                     data-no-draft="autosave"
                     className="tp-ai-rule-text"
-                    rows={5}
+                    rows={7}
                     maxLength={4000}
                   {...rule.inputProps}
                 />

@@ -179,7 +179,8 @@
 .tp-ai-rule-text {
   box-sizing: border-box;
   width: 100%;
-  min-height: 112px;
+  /* Seven lines: the default rule shows whole at the settings width. */
+  min-height: 156px;
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
