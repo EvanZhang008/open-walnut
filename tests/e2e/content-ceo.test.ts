@@ -29,7 +29,8 @@ vi.mock('../../src/core/sessions/task-start.js', async (importOriginal) => {
 
 import { WALNUT_HOME } from '../../src/constants.js'
 import { startServer, stopServer } from '../../src/web/server.js'
-import { getTask, updateTaskRaw } from '../../src/core/task-manager.js'
+import { getTask, listTasks, updateTaskRaw } from '../../src/core/task-manager.js'
+import { newTaskDraftText, normalizeContentItem } from '../../src/core/content-actions/content-item.js'
 import { createSessionRecord, updateSessionRecord } from '../../src/core/session-tracker.js'
 import { getQueue } from '../../src/core/session-message-queue.js'
 import { TEST_RUN_CEO_TITLE } from '../../src/web/routes/content-v1.js'
@@ -144,5 +145,31 @@ describe('POST /api/v1/content/ceo', () => {
       const both = await Promise.all([post({ item: ITEM }, headers), post({ item: ITEM }, headers)])
       for (const one of both) expect((await one.json() as { taskId: string }).taskId).toBe(body.taskId)
     }
+  })
+})
+
+describe('POST /api/v1/content/draft', () => {
+  const draft = (body: unknown) => fetch(`http://localhost:${port}/api/v1/content/draft`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  })
+
+  it("answers the web's own draft words, with the client's time label, and writes nothing", async () => {
+    const before = (await listTasks()).length
+    const r = await draft({ item: ITEM, sent: 'Nov 2, 9:14\u0007 AM' })
+    expect(r.status).toBe(200)
+    const { text } = await r.json() as { text: string }
+    // A control character in the label is a space, never a line the draft did not have.
+    expect(text).toBe(newTaskDraftText(normalizeContentItem(ITEM)!, () => 'Nov 2, 9:14  AM'))
+    expect(text.split('\n')[0]).toBe(ITEM.title)
+    expect(text.endsWith('\n\n')).toBe(true)
+    expect((await listTasks()).length).toBe(before)
+  })
+
+  it('keeps the ISO time without a label, caps a long label, and refuses an empty item', async () => {
+    const plain = await (await draft({ item: ITEM })).json() as { text: string }
+    expect(plain.text).toBe(newTaskDraftText(normalizeContentItem(ITEM)!))
+    const long = await (await draft({ item: { ...ITEM, at: '2026-11-02T17:14:00Z' }, sent: 'x'.repeat(500) })).json() as { text: string }
+    expect(long.text).toContain(`Sent: ${'x'.repeat(60)}\n`)
+    expect((await draft({ item: { source: 'Mail' } })).status).toBe(400)
   })
 })

@@ -2,6 +2,7 @@
  * Content actions on the server: "Talk to CEO" for one piece of content a plugin shows.
  *
  *   POST /api/v1/content/ceo { item } → { taskId, sessionId, started, held?, testRun? }
+ *   POST /api/v1/content/draft { item, sent? } → { text }
  *
  * The person pressed the button, so the message goes into the main agent's chat as their own
  * message (the same send the Org page's Ask Main and Quick Input make), and its text is built
@@ -17,7 +18,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { role } from '../../core/server-role.js'
 import { log } from '../../logging/index.js'
 import { routeSource } from '../../core/sessions/send-sent-by.js'
-import { ceoContentText, ceoRequestText, normalizeContentItem } from '../../core/content-actions/content-item.js'
+import { ceoContentText, ceoRequestText, newTaskDraftText, normalizeContentItem } from '../../core/content-actions/content-item.js'
 import { createEnvelopeKit } from '../../core/peers/envelope-kit.js'
 import type { Task } from '../../core/types.js'
 
@@ -73,6 +74,26 @@ contentV1Router.post('/content/ceo', async (req: Request, res: Response, next: N
   } catch (err) {
     next(err)
   }
+})
+
+/** The longest `sent` label a client may hand over: a date and a time, never prose. */
+const SENT_LABEL_MAX = 60
+
+/**
+ * The words "New task" fills a draft with, for a client that does not run the web bundle (the
+ * phone): the same text the web makes (`newTaskDraftText`), so there is one wording. `sent` is the
+ * client's own rendering of `item.at` in the person's time zone; without it the time stays ISO.
+ * Nothing is written: the client opens its own draft with the text.
+ */
+contentV1Router.post('/content/draft', (req: Request, res: Response) => {
+  const item = normalizeContentItem(req.body?.item)
+  if (!item) {
+    res.status(400).json({ error: 'item needs a source and a title or text', code: 'bad_request' })
+    return
+  }
+  const raw = typeof req.body?.sent === 'string' ? req.body.sent.replace(/[\u0000-\u001F\u007F]/g, ' ').trim() : ''
+  const sent = Array.from(raw).slice(0, SENT_LABEL_MAX).join('')
+  res.json({ text: newTaskDraftText(item, (iso) => sent || iso) })
 })
 
 /** One find-or-make at a time per test run, so two quick clicks never make two stand-ins. */
