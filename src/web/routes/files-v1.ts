@@ -36,6 +36,7 @@ import { CLOUD_MODE } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { relayControlAction, sendV1Error as sendError } from './v1-control-relay.js'
 import { isNeedsLeaderError } from '../../core/replication/needs-leader.js'
+import { isCompanion } from '../../core/server-role.js'
 
 export const filesV1Router = Router()
 
@@ -91,7 +92,7 @@ filesV1Router.get('/files/locate', async (req: Request, res: Response, next: Nex
   try {
     const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
     const params = { ref: req.query.ref, cwd: str(req.query.cwd), host: str(req.query.host), sessionId: str(req.query.sessionId) }
-    if (CLOUD_MODE) {
+    if (isCompanion()) {
       const body: Record<string, unknown> = { ref: params.ref }
       for (const k of ['cwd', 'host', 'sessionId'] as const) if (params[k]) body[k] = params[k]
       await relayControlAction(res, 'server.files.locate', SERVER_RELAY_SID, body, 200)
