@@ -67,6 +67,20 @@ describe('step 2 on a joining machine', () => {
     }
   })
 
+  // 2026-11-02: a Mac whose Walnut had run 26 days. The temp cleanup had removed its daemon's
+  // pid and port files while it ran: its files come back from its lock, and it is handed over.
+  it('a daemon that lost its files to the temp cleanup: found again, and handed over like any', async () => {
+    let files = false
+    const x = io({ daemonUp: async () => (files ? 'running' : null), recoverLostDaemon: async () => { files = true; return 54307 } })
+    expect(await keepRunning(x)).toBe(true)
+    expect(x.installs).toEqual([{ yes: true, executable: FILE }])
+    // A daemon that answers is never looked for; nor is one in a test's dir.
+    const asked: string[] = []
+    expect(await keepRunning(io({ daemonUp: async () => 'running', recoverLostDaemon: async () => { asked.push('x'); return 1 } }))).toBe(true)
+    expect(await keepRunning(io({ testDaemonDir: '/t', recoverLostDaemon: async () => { asked.push('x'); return 1 } }))).toBe(false)
+    expect(asked).toEqual([])
+  })
+
   it('serviceInstall: the compiled file, or the way to get it', () => {
     expect(serviceInstall(true, FILE)).toEqual({ yes: true, executable: FILE })
     expect('error' in serviceInstall(false, '/usr/local/bin/node')).toBe(true)

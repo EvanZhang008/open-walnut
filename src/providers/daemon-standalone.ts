@@ -71,6 +71,8 @@ import {
   type UserMarkerInput,
   lockLiveFifo,
   LIVE_FIFO_MODE,
+  keepRuntimeFiles,
+  RUNTIME_KEEP_MS,
   MODE_CLI,
   BUDGET_CHECKING_TEXT,
   type BudgetGate,
@@ -6247,6 +6249,8 @@ let armedTriggersHash: string | null = null
  */
 let configuredTriggerDefs: TriggerDef[] = []
 let triggerTickTimer: ReturnType<typeof setInterval> | null = null
+// keepRuntimeFiles clock; cleanup() stops it, so a dying daemon never writes its files back.
+let runtimeKeepTimer: ReturnType<typeof setInterval> | null = null
 let triggerTestsRunning = 0
 const triggersConfigureGate = new DaemonSessionGate()
 
@@ -11241,6 +11245,7 @@ function cleanup() {
     try { clearInterval(triggerTickTimer) } catch {}
     triggerTickTimer = null
   }
+  if (runtimeKeepTimer) { try { clearInterval(runtimeKeepTimer) } catch {} runtimeKeepTimer = null }
   // Close the cloud bridge first — a half-dead daemon must not keep looking
   // reachable from the phone. bridge.json survives for the successor.
   try { stopBridge() } catch {}
@@ -12258,6 +12263,18 @@ if (action === '--start' || SERVICE_MODE) {
   setTimeout(() => { void compactIdleStreams() }, Math.min(STREAM_COMPACT_SWEEP_MS, 120_000))
   setInterval(() => { void compactIdleStreams() }, STREAM_COMPACT_SWEEP_MS)
   setInterval(() => releaseIdleChangesState(), Math.min(10 * 60_000, Math.max(500, CHANGES_RELEASE_AFTER_MS / 2)))
+  // The temp cleanup removes this daemon's own files from its dir while it runs
+  // (keepRuntimeFiles, daemon-core.ts). Keep in sync with daemon-source.ts.
+  runtimeKeepTimer = setInterval(() => {
+    const files = [
+      { file: PORT_FILE, text: String(port) }, { file: PID_FILE, text: String(process.pid) },
+      { file: VERSION_FILE, text: DAEMON_VERSION }, { file: INSTANCE_ID_FILE, text: DAEMON_INSTANCE_ID },
+      ...(SERVICE_MODE ? [{ file: SERVICE_FILE, text: DAEMON_INSTANCE_ID }] : []),
+    ]
+    const restored = keepRuntimeFiles({ fs, pid: process.pid, pidFile: PID_FILE, files, touch: [path.join(DAEMON_DIR, 'daemon.owner'), BRIDGE_FILE], touchDirs: [{ dir: GATEWAY_SHIM_DIR, match: /^walnut/ }, { dir: DAEMON_DIR, match: /\.(cjs|mjs|js)$|^daemon-(darwin|linux)-[a-z0-9-]+$|^dtach-/ }], registryFile: REGISTRY_FILE, persistRegistry: () => persistRegistry(), now: new Date() })
+    if (restored.length > 0) logMsg('warn', 'runtime files written back', { restored })
+  }, Number(process.env.WALNUT_RUNTIME_KEEP_MS) > 0 ? Number(process.env.WALNUT_RUNTIME_KEEP_MS) : RUNTIME_KEEP_MS)
+  runtimeKeepTimer.unref?.()
 
   // Cloud bridge self-heal: a persisted bridge.json re-dials without waiting
   // for the Mac to push bridge.configure again.

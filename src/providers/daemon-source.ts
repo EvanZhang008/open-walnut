@@ -65,7 +65,7 @@ import { createStreamRelay } from './stream-relay-core.js'
 import { createHostResume } from './host-resume-core.js'
 import { createCliOwner } from './cli-owner-core.js'
 import { createCliArgvFiles } from './cli-argv-files-core.js'
-import { argvNamesSession, boundedExecFile, createNoticeOnce } from './daemon-core.js'
+import { argvNamesSession, boundedExecFile, createNoticeOnce, keepRuntimeFiles } from './daemon-core.js'
 import { userLineContent } from './user-line-images-core.js'
 import { createStreamCompact } from './stream-compact-core.js'
 import { createStreamFold } from './stream-fold-core.js'
@@ -320,6 +320,7 @@ export function getDaemonSource(): string {
     ['__BOUNDED_EXEC_FILE__', boundedExecFile.toString()],
     ['__ARGV_NAMES_SESSION__', argvNamesSession.toString()],
     ['__CREATE_NOTICE_ONCE__', createNoticeOnce.toString()],
+    ['__KEEP_RUNTIME_FILES__', keepRuntimeFiles.toString()],
     ['__USER_LINE_CONTENT__', userLineContent.toString()],
   ]
   // The tracker is constructed before the cron sidecar loads, so its prompt
@@ -7639,6 +7640,8 @@ var armedTriggersHash = null;
 // (offlineHost.triggerHolds). Mirror daemon-standalone.ts.
 var configuredTriggerDefs = [];
 var triggerTickTimer = null;
+// keepRuntimeFiles clock; cleanup() stops it, so a dying daemon never writes its files back.
+var runtimeKeepTimer = null;
 var triggerTestsRunning = 0;
 
 // Replay cadence for unacked fires; the env override exists for tests.
@@ -9539,6 +9542,8 @@ async function sendSessionMessage(ws, id, cmd) {
 
 // One instruction notice into one CLI process once (daemon-core.ts createNoticeOnce, injected as text).
 const noticeOnce = (__CREATE_NOTICE_ONCE__)();
+// This daemon's own runtime files kept in its dir (daemon-core.ts keepRuntimeFiles, injected as text).
+const keepRuntimeFiles = (__KEEP_RUNTIME_FILES__);
 // A user line's pictures as image blocks (user-line-images-core.ts, injected as text),
 // read only from Walnut's picture folders on this host (PICTURE_ROOTS, set beside DAEMON_DIR).
 const userLineContent = (__USER_LINE_CONTENT__);
@@ -14012,6 +14017,7 @@ function cleanup() {
     try { clearInterval(triggerTickTimer); } catch {}
     triggerTickTimer = null;
   }
+  if (runtimeKeepTimer) { try { clearInterval(runtimeKeepTimer); } catch {} runtimeKeepTimer = null; }
   // Close the cloud bridge first — a half-dead daemon must not keep looking
   // reachable from the phone. bridge.json survives for the successor.
   try { stopBridge(); } catch {}
@@ -14532,6 +14538,18 @@ async function startDaemon() {
     setTimeout(function () { void compactIdleStreams(); }, Math.min(STREAM_COMPACT_SWEEP_MS, 120000));
     setInterval(function () { void compactIdleStreams(); }, STREAM_COMPACT_SWEEP_MS);
     setInterval(function () { releaseIdleChangesState(); }, Math.min(600000, Math.max(500, CHANGES_RELEASE_AFTER_MS / 2)));
+    // The temp cleanup removes this daemon's own files from its dir while it runs
+    // (keepRuntimeFiles, daemon-core.ts). Keep in sync with daemon-standalone.ts.
+    runtimeKeepTimer = setInterval(function () {
+      var files = [
+        { file: PORT_FILE, text: String(port) }, { file: PID_FILE, text: String(process.pid) },
+        { file: VERSION_FILE, text: DAEMON_VERSION }, { file: INSTANCE_ID_FILE, text: DAEMON_INSTANCE_ID },
+      ];
+      if (SERVICE_MODE) files.push({ file: SERVICE_FILE, text: DAEMON_INSTANCE_ID });
+      var restored = keepRuntimeFiles({ fs: fs, pid: process.pid, pidFile: PID_FILE, files: files, touch: [path.join(DAEMON_DIR, 'daemon.owner'), BRIDGE_FILE], touchDirs: [{ dir: GATEWAY_SHIM_DIR, match: /^walnut/ }, { dir: DAEMON_DIR, match: /\.(cjs|mjs|js)$|^daemon-(darwin|linux)-[a-z0-9-]+$|^dtach-/ }], registryFile: REGISTRY_FILE, persistRegistry: function () { persistRegistry(); }, now: new Date() });
+      if (restored.length > 0) logMsg('warn', 'runtime files written back', { restored: restored });
+    }, Number(process.env.WALNUT_RUNTIME_KEEP_MS) > 0 ? Number(process.env.WALNUT_RUNTIME_KEEP_MS) : 3600000 /* RUNTIME_KEEP_MS */);
+    runtimeKeepTimer.unref();
 
     // Cloud bridge self-heal: a persisted bridge.json re-dials without the Mac.
     loadBridgeConfig();

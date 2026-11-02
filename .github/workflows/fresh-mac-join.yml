@@ -5,7 +5,10 @@ name: Fresh Mac join
 # Gatekeeper and SIP on and the firewall as macOS ships it, in two states:
 #   fresh     nothing of Walnut on it, and no Node;
 #   existing  an older Walnut already runs there (its server and the daemon that server
-#             started), as on a Mac that has used Walnut for a while.
+#             started), as on a Mac that has used Walnut for a while;
+#   existing-swept  the same after macOS removed the daemon's pid, port, instance and
+#             registry files from /tmp while it ran (files untouched for 3 days), as on a
+#             Mac whose Walnut ran for weeks.
 # The command runs in Terminal as a person pastes it, with the real install and the real
 # login service, and the screen is recorded, so a macOS dialog or notice the join raises is
 # on the video. What macOS made of the files (quarantine, signatures, Gatekeeper) and the
@@ -59,7 +62,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mac: [fresh, existing]
+        mac: [fresh, existing, existing-swept]
     env:
       WALNUT_FROM: ${{ inputs.walnut || 'this-commit' }}
       # An older Walnut close to what long-running Macs have (October 6).
@@ -108,7 +111,7 @@ jobs:
         run: bash scripts/ci-remove-node.sh
 
       - name: An older Walnut already runs here (its server, and the daemon it started)
-        if: matrix.mac == 'existing'
+        if: startsWith(matrix.mac, 'existing')
         run: |
           mkdir -p "$OUT"
           npm i -g "open-walnut@$OLD_WALNUT" > "$OUT/old-install.log" 2>&1 || { tail -n 40 "$OUT/old-install.log"; exit 1; }
@@ -120,6 +123,10 @@ jobs:
           shasum -a 256 "$(cat "$OUT/old-walnut.path")" | tee "$OUT/old-walnut-before.sha"
           echo "old daemon: $(cat /tmp/open-walnut/daemon.version 2>/dev/null) pid $(cat /tmp/open-walnut/daemon.pid 2>/dev/null)"
           [ -s /tmp/open-walnut/daemon.port ] || { tail -n 60 "$OUT/old-server.log"; echo "::error::the older Walnut started no daemon"; exit 1; }
+          if [ "${{ matrix.mac }}" = existing-swept ]; then
+            rm -f /tmp/open-walnut/daemon.pid /tmp/open-walnut/daemon.port /tmp/open-walnut/daemon.instance /tmp/open-walnut/sessions.json
+            ls -la /tmp/open-walnut
+          fi
 
       - name: The Mac before the join
         run: |
@@ -197,7 +204,7 @@ jobs:
           grep -q '"connected": true' "$OUT/result.json"
 
       - name: The older Walnut still works
-        if: matrix.mac == 'existing'
+        if: startsWith(matrix.mac, 'existing')
         run: |
           curl -fsS -m 10 http://127.0.0.1:39456/api/config | head -c 300; echo
           kill -0 "$(cat "$OUT/old-server.pid")"

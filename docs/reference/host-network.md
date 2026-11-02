@@ -48,6 +48,15 @@ the real command in Terminal on a macOS runner, on a new account and on one wher
 Walnut already runs (`.github/workflows/fresh-mac-join.yml`), against a throwaway Walnut in
 the same job (`tests/e2e/host-network-outside-join.e2e.test.ts`).
 
+A machine whose older Walnut has run for days may have lost its session daemon's pid, port and
+registry files to the temp cleanup (macOS removes files in /tmp nobody touched for 3 days)
+while that daemon still runs and holds its instance lock, which a login service daemon beside
+it would fail on. Step 2 then finds it through that lock, writes its pid, port and instance
+files back (`recoverLostDaemon` in `src/commands/net.ts`, never over a file that is there),
+and hands it over to the login service like any running daemon; the CI job's
+`existing-swept` Mac rehearses it. Daemons from this version on keep their own files fresh
+(`keepRuntimeFiles` in `src/providers/daemon-core.ts`).
+
 ## Choosing the relay
 
 Settings > Remote Hosts, under the machines: "When two machines cannot connect directly,

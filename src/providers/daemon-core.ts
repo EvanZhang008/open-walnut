@@ -388,6 +388,63 @@ export interface DaemonCore<S extends CoreSessionData = CoreSessionData> {
 }
 
 /**
+ * Keeps this daemon's own runtime files in its dir (2026-11-02). The temp cleanup removes
+ * files nobody touched for days from /tmp (macOS after 3, systemd-tmpfiles after 10 on many
+ * Linuxes) while the daemon runs, and a server or a join that comes later sees no daemon
+ * there and starts a second one beside it: a Mac whose Walnut had run 26 days had lost
+ * daemon.pid, daemon.port and sessions.json while its daemon still served its sessions.
+ * Freshens the times of the files a later process or this daemon only reads (`touch`: the
+ * gateway shim and its copy of the daemon, sidecars, daemon.owner, bridge.json; never the logs,
+ * whose age the server's log pruning reads), and writes back an identity file that is gone, only
+ * while the pid file is this daemon's or gone (never over another daemon's). Returns the paths
+ * written back.
+ * Self-contained: the source twin inlines it by toString() (daemon-source.ts).
+ */
+export function keepRuntimeFiles(io: {
+  fs: {
+    readFileSync(p: string, enc: 'utf-8'): string; writeFileSync(p: string, data: string): void; utimesSync(p: string, a: Date, m: Date): void
+    readdirSync(p: string): string[]
+  }
+  pid: number
+  pidFile: string
+  files: Array<{ file: string; text: string }>
+  /** Files to freshen: exact paths, and every name in `dir` that `match` takes. */
+  touch: string[]
+  touchDirs: Array<{ dir: string; match: RegExp }>
+  registryFile: string
+  persistRegistry: () => void
+  now: Date
+}): string[] {
+  const gone = (err: unknown): boolean => (err as { code?: string } | null)?.code === 'ENOENT'
+  let owner = ''
+  try { owner = String(io.fs.readFileSync(io.pidFile, 'utf-8')).trim() } catch (err) { if (!gone(err)) return [] }
+  if (owner && owner !== String(io.pid)) return []
+  const touch = io.touch.slice()
+  for (const { dir, match } of io.touchDirs) {
+    let names: string[] = []
+    try { names = io.fs.readdirSync(dir) } catch { continue }
+    for (const name of names) if (match.test(name)) touch.push(dir + '/' + name)
+  }
+  for (const file of touch) {
+    try { io.fs.utimesSync(file, io.now, io.now) } catch { /* not there: nothing to keep */ }
+  }
+  const restored: string[] = []
+  for (const { file, text } of io.files) {
+    try { io.fs.utimesSync(file, io.now, io.now) } catch (err) {
+      if (!gone(err)) continue
+      try { io.fs.writeFileSync(file, text); restored.push(file) } catch { /* the dir is gone or not writable */ }
+    }
+  }
+  try { io.fs.utimesSync(io.registryFile, io.now, io.now) } catch (err) {
+    if (gone(err)) { try { io.persistRegistry(); restored.push(io.registryFile) } catch { /* logged by persistRegistry */ } }
+  }
+  return restored
+}
+
+/** How often keepRuntimeFiles runs: well inside the shortest cleanup age (3 days). */
+export const RUNTIME_KEEP_MS = 60 * 60_000
+
+/**
  * The Walnut instruction notice (core/sessions/instruction-notice.ts) reaches a session by two
  * paths: the server's queue and this host's own same-host delivery (offline-host-core.ts
  * withTaskRouting). Each learns of the other's delivery only later (the host slice is pushed

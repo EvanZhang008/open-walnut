@@ -36,9 +36,9 @@ async function daemonDir(): Promise<string> {
   return localProductionDaemonDir()
 }
 
-/** One command to this account's own daemon. */
-async function daemonRpc(cmd: string, params: Record<string, unknown> = {}, timeoutMs = 30_000): Promise<Record<string, unknown>> {
-  const port = Number(fs.readFileSync(path.join(await daemonDir(), 'daemon.port'), 'utf8').trim())
+/** One command to this account's own daemon (at `atPort`, else the port its port file names). */
+async function daemonRpc(cmd: string, params: Record<string, unknown> = {}, timeoutMs = 30_000, atPort?: number): Promise<Record<string, unknown>> {
+  const port = atPort ?? Number(fs.readFileSync(path.join(await daemonDir(), 'daemon.port'), 'utf8').trim())
   if (!Number.isInteger(port) || port <= 0) throw new Error('the Walnut daemon is not running here')
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`, { maxPayload: 4 * 1024 * 1024 })
@@ -63,6 +63,37 @@ async function daemonUp(): Promise<'service' | 'running' | null> {
     if (hello.ok !== true) return null
     return typeof hello.serviceExecutable === 'string' ? 'service' : 'running'
   } catch { return null }
+}
+
+/**
+ * A daemon of this account that still runs from its dir after the temp cleanup removed its
+ * pid and port files (macOS removes /tmp files nobody touched for 3 days; 2026-11-02: a Mac
+ * whose Walnut had run 26 days). Nothing could hand it over, and a service daemon beside it
+ * fails on its instance lock. The lock still names it, with its port once it answers (null
+ * while it starts), so its files are written back from there, never over one that exists, and
+ * the install then hands it over to the login service like any running daemon. Its pid, or null.
+ */
+export async function recoverLostDaemon(): Promise<number | null> {
+  const dir = await daemonDir()
+  if (fs.existsSync(path.join(dir, 'daemon.pid'))) return null
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null
+  if (uid === null) return null
+  const { readDaemonInstanceOwner } = await import('../providers/daemon-instance-lock.js')
+  const owner = await readDaemonInstanceOwner({ runtimeDir: dir, uid })
+  if (!owner || !(owner.pid > 1) || owner.wsPort === null || !owner.instanceId) return null
+  try {
+    const hello = await daemonRpc('hello', {}, 5_000, owner.wsPort)
+    if (hello.ok !== true || hello.instanceId !== owner.instanceId) return null
+  } catch { return null }
+  // The pid file last: it is what says a daemon runs here.
+  for (const [name, text] of [['daemon.port', String(owner.wsPort)], ['daemon.instance', owner.instanceId], ['daemon.pid', String(owner.pid)]]) {
+    try { fs.writeFileSync(path.join(dir, name), text, { flag: 'wx', mode: 0o600 }) } catch (err) {
+      // One that survived must already say the same, never a mix of two daemons.
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return null
+      try { if (fs.readFileSync(path.join(dir, name), 'utf8').trim() !== text) return null } catch { return null }
+    }
+  }
+  return owner.pid
 }
 
 async function waitDaemon(ms: number): Promise<boolean> {
@@ -125,10 +156,12 @@ export interface KeepRunningIo {
   install(options: { yes: true; executable: string }): Promise<number>
   /** WALNUT_JOIN_DAEMON_DIR: a test's daemon, which never installs a service. */
   testDaemonDir?: string
+  /** Writes back the files of a daemon here that lost them (recoverLostDaemon); its pid, or null. */
+  recoverLostDaemon?(): Promise<number | null>
 }
 
 const realKeepRunningIo = (): KeepRunningIo => ({
-  daemonUp, waitDaemon, execPath: process.execPath, testDaemonDir: process.env.WALNUT_JOIN_DAEMON_DIR,
+  daemonUp, waitDaemon, recoverLostDaemon, execPath: process.execPath, testDaemonDir: process.env.WALNUT_JOIN_DAEMON_DIR,
   compiled: async () => (await import('../lib/single-file.js')).singleFile() !== null,
   install: async (options) => {
     const { runDaemonServiceCli } = await import('../providers/daemon-service-cli.js')
@@ -145,7 +178,8 @@ const realKeepRunningIo = (): KeepRunningIo => ({
  * install hands it over to the service.
  */
 export async function keepRunning(io: KeepRunningIo = realKeepRunningIo()): Promise<boolean> {
-  const up = await io.daemonUp()
+  let up = await io.daemonUp()
+  if (!up && !io.testDaemonDir && await io.recoverLostDaemon?.()) up = await io.daemonUp()
   if (up === 'service' || (up && io.testDaemonDir)) {
     step(2, 'Keep it running', 'on (already running)')
     return true
