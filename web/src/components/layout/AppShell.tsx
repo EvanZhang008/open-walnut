@@ -126,9 +126,15 @@ function AppShellInner({ children }: AppShellProps) {
   const closeDrawerLayer = drawerLayer.close;
 
   // A route owns the next screen. Never carry the mobile navigation modal or
-  // its backdrop across that transition.
+  // its backdrop across that transition. Only a drawer opened BEFORE the route
+  // changed goes: the router commits its location in a transition, so on a slow
+  // phone a page (Settings) lands after its URL did, and a drawer opened in that
+  // gap closed itself under the finger, or its Back undid the next tap's route
+  // (2026-11-02, phone-back-gesture on CI). The drawer records the URL it opened on.
+  const drawerOpenedOn = useRef<string | null>(null);
+  useEffect(() => { drawerOpenedOn.current = sidebarOpen ? window.location.pathname : null; }, [sidebarOpen]);
   useEffect(() => {
-    setSidebarOpen(false);
+    if (drawerOpenedOn.current !== location.pathname) setSidebarOpen(false);
     if (!isMainPage && contentRef.current) {
       contentRef.current.scrollTop = 0;
     }

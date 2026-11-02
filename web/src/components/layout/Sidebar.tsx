@@ -169,8 +169,12 @@ export function Sidebar({
 
   // These four control panels OF the home page: from another route they bring
   // the user home first, and only ever open a panel there, never hide it.
+  // Where the tap happens is the URL now, not the route last drawn: the router commits a
+  // location in a transition, so right after a drawer link to a slow page (Settings on a
+  // phone) it still reads the old one. Read as home, the tap opened the chat over Settings
+  // and never went home (2026-11-02, phone-back-gesture on CI).
   const homeToggle = (event: string, visible: boolean) => () => {
-    if (location.pathname === '/') { window.dispatchEvent(new CustomEvent(event)); return; }
+    if (window.location.pathname === '/') { window.dispatchEvent(new CustomEvent(event)); return; }
     // On a phone the drawer's own history entry becomes home (like a drawer
     // link), so back from the panel never lands on a stale drawer entry.
     navigate('/', isPhoneLayout() ? { replace: true } : undefined);
@@ -183,7 +187,7 @@ export function Sidebar({
   // The org is a page of its own (pages/OrgPage.tsx): Main and the project leads.
   const orgActive = location.pathname === '/org';
   const handleOpenOrg = () => {
-    if (!orgActive) navigate('/org', isPhoneLayout() ? { replace: true } : undefined);
+    if (window.location.pathname !== '/org') navigate('/org', isPhoneLayout() ? { replace: true } : undefined);
   };
   // A phone mounts neither the agenda nor the scratchpad panel (spec 5.1), so
   // their toggles would be controls that do nothing there (N3).

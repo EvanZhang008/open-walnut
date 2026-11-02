@@ -152,6 +152,35 @@ test('a home panel from the drawer on another page leaves no stale drawer entry 
   expect((await historyInfo(page)).marker).toBeNull()
 })
 
+// The router commits a location in a transition, so on a slow phone Settings is drawn well after
+// its URL changed. A drawer opened in that gap closed itself when the page landed, and its Ask Walnut
+// read the old route as home: the chat opened over Settings and history went back to it
+// (2026-11-02: the test above on 5 of 10 CI runs; at a 10x CPU throttle it failed every time).
+test('on a slow phone, the drawer opened before Settings is drawn stays open and its Ask Walnut goes home', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', 'CPU throttling is a Chromium DevTools call')
+  test.setTimeout(150_000)
+  await bootHome(page)
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 10 })
+  try {
+    await openDrawer(page)
+    await drawer(page).getByRole('link', { name: 'Settings' }).click()
+    await expect(page).toHaveURL(/\/settings/)
+    await openDrawer(page)
+    await drawer(page).getByRole('button', { name: 'Ask Walnut', exact: true }).click()
+    await expect(backButton(page)).toBeVisible({ timeout: 30_000 })
+    await expect(page).toHaveURL(/\/$/)
+    expect((await historyInfo(page)).marker?.id).toBe('chat')
+  } finally {
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 }).catch(() => undefined)
+  }
+  await page.goBack()
+  await expect.poll(async () => (await historyInfo(page)).marker).toBeNull()
+  await page.goBack()
+  await expect(page).toHaveURL(/\/settings/)
+  await expectDrawerClosed(page)
+})
+
 async function openFixtureSession(page: Page): Promise<void> {
   await openHomeRow(page, 'Walnut', SESSION_TASK_TITLE)
 }
