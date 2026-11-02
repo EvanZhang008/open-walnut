@@ -31,8 +31,6 @@ import { PopoutRoot } from './popout/PopoutRoot';
 import { isPopoutPath, OPEN_TASK_CHANNEL } from './popout/openPopout';
 import { scheduleNotesPrefetch } from './utils/notes-prefetch';
 import { useTaskLinkClickFallback } from './hooks/useTaskLinkClickFallback';
-import { useAgentLinkClickFallback } from './utils/open-anywhere';
-import { AnywhereFileViewer } from './components/common/AnywhereFileViewer';
 import { PLUGIN_STORE_PATH, peekPendingInstall, subscribeOpenLinks, subscribeOpenTargets, takePendingTarget } from './utils/open-link';
 import { RouteShownContext } from './contexts/RouteShownContext';
 
@@ -105,8 +103,6 @@ export function App() {
   // A task pill on a surface with no click handler of its own stays in the app,
   // or in the pop-out when this window is one.
   useTaskLinkClickFallback(navigate, isPopoutPath(location.pathname));
-  // A path or a letter in agent text opens from every surface (utils/open-anywhere.ts).
-  useAgentLinkClickFallback();
   useOpenTaskRequests(navigate, isPopoutPath(location.pathname));
 
   useEffect(() => {
@@ -151,7 +147,7 @@ export function App() {
   const navigateRef = useRef<NavigateFunction>(navigate);
   navigateRef.current = navigate;
 
-  if (isPopoutPath(location.pathname)) return <><StaleBuildPill /><LinkCaptureHost /><SessionRawViewHost /><AnywhereFileViewer /><PopoutRoot /></>;
+  if (isPopoutPath(location.pathname)) return <><StaleBuildPill /><LinkCaptureHost /><SessionRawViewHost /><PopoutRoot /></>;
 
   const isHome = location.pathname === '/';
 
@@ -161,7 +157,6 @@ export function App() {
       <StaleBuildPill />
       <LinkCaptureHost />
       <SessionRawViewHost />
-      <AnywhereFileViewer />
       <PageFind />
       <UnpairedNotice />
       <div className={isHome ? 'main-page-wrapper' : 'main-page-wrapper main-page-wrapper-hidden'}>

@@ -58,7 +58,6 @@ import { useHumanInbox } from '@/hooks/useHumanInbox';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { InboxPane } from '@/components/inbox/InboxPane';
 import { LetterReader } from '@/components/inbox/LetterReader';
-import { OPEN_CENTER_EVENT } from '@/utils/open-anywhere';
 import {
   filterInboxLetters, readUnreadOnlyPref, writeUnreadOnlyPref,
 } from '@/components/inbox/inbox-filter';
@@ -254,16 +253,6 @@ export function NotificationPanel({ open, onClose: ownerClose, sidebarCollapsed 
   // panel's portal): without this, the next panel open would silently pop the
   // letter the user had already walked away from.
   useEffect(() => { if (!open) setOpenLetterId(null); }, [open]);
-  // A letter link in agent text (a Thread card, a chat reply: utils/open-anywhere.ts)
-  // opens the center (Sidebar hears the same event) with that letter in the reader.
-  useEffect(() => {
-    const onOpenCenter = (e: Event) => {
-      const letterId = (e as CustomEvent<{ letterId?: string } | undefined>).detail?.letterId;
-      if (letterId) openLetter(letterId);
-    };
-    window.addEventListener(OPEN_CENTER_EVENT, onOpenCenter);
-    return () => window.removeEventListener(OPEN_CENTER_EVENT, onOpenCenter);
-  }, [openLetter]);
 
   // The System zone's own health signal. `hasIssues` is useSystemHealth's own
   // derivation (git-sync unprotected or failing) — the same one the Sidebar's

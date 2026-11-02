@@ -11,15 +11,12 @@
  *  - project-link click → navigate('/tasks') (no per-project route exists yet)
  *  - file-link click → onFileOpen(path, line?, undefined, endLine?) → open FileViewer overlay
  *    (a range reference such as `x.go:31-34` carries data-file-end-line)
- *  - Fallback: the task on Home (openTaskOnHome) or /sessions?id=:id when callbacks are absent;
- *    a file with no onFileOpen opens in the app's own FileViewer (utils/open-anywhere.ts)
- *  - letter-link anchors are the app's (useAgentLinkClickFallback opens them)
+ *  - Fallback: the task on Home (openTaskOnHome) or /sessions?id=:id when callbacks are absent
  */
 import { useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { locatePath } from '@/api/files';
 import { openTaskOnHome } from '@/utils/open-session';
-import { claimAgentLinkClick, openFileAnywhere } from '@/utils/open-anywhere';
 
 export function useEntityClickHandler(
   onTaskClick?: (taskId: string) => void,
@@ -77,11 +74,7 @@ export function useEntityClickHandler(
     const fileAnchor = target.closest('a.file-link') as HTMLAnchorElement | null;
     if (fileAnchor) {
       e.preventDefault();
-      // This surface opens it; the app-level fallback must not open it twice.
-      claimAgentLinkClick(e.nativeEvent);
-      // No opener of its own: the app's viewer, still resolved from this surface's host.
-      const open = onFileOpen ?? ((path: string, line?: number, _term?: undefined, endLine?: number) =>
-        openFileAnywhere({ path, ...(line ? { line } : {}), ...(endLine ? { endLine } : {}), ...(fileHost ? { host: fileHost } : {}) }));
+      if (!onFileOpen) return;
       const fileLine = fileAnchor.dataset.fileLine;
       const line = fileLine ? parseInt(fileLine, 10) : undefined;
       const fileEndLine = fileAnchor.dataset.fileEndLine;
@@ -89,7 +82,7 @@ export function useEntityClickHandler(
       const filePath = fileAnchor.dataset.filePath;
       if (filePath) {
         // Absolute path: the sink looks it up on every host (useClickedPathOpener).
-        open(filePath, line, undefined, endLine);
+        onFileOpen(filePath, line, undefined, endLine);
         return;
       }
       // Relative path — the host resolves it (transcript, ancestor walk, git
@@ -105,7 +98,7 @@ export function useEntityClickHandler(
           // parsed it); otherwise take whatever position the reference carried,
           // which the resolver reports even for shapes markdown doesn't linkify
           // (`#L42`, `(42,7)`, `, line 42`).
-          .then((r) => open(r.found || r.missing ? r.path : `${cwd.replace(/\/$/, '')}/${rel.replace(/^\.\//, '')}`, line ?? r.line, undefined, line ? endLine : r.endLine));
+          .then((r) => onFileOpen(r.found || r.missing ? r.path : `${cwd.replace(/\/$/, '')}/${rel.replace(/^\.\//, '')}`, line ?? r.line, undefined, line ? endLine : r.endLine));
       }
     }
   }, [onTaskClick, onSessionClick, onFileOpen, fileHost, fileSessionId, navigate]);
