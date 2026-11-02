@@ -39,6 +39,7 @@ import { bus, EventNames, type BusEvent } from '../event-bus.js';
 import { eventData } from '../event-types.js';
 import { log } from '../../logging/index.js';
 import { getOrCreateLaneSession, type LaneSession } from './personal-ai-lane.js';
+import { frameForSource } from './send-frame.js';
 import { createStallClock, type StallClock } from './lane-turn-liveness.js';
 import { lastSessionProgressAt } from './session-progress.js';
 import { withCatchUpContext } from './lane-turn-catch-up.js';
@@ -448,9 +449,12 @@ export async function runLaneTurn(
       ],
     });
 
+    // A turn nobody typed (cron, heartbeat, triage) starts the lane framed as Walnut's, so the lane's
+    // first line never reads as the user's (sessions/send-frame.ts); a reused lane is framed at its send.
+    const startMessage = frameForSource(message, opts.source);
     const lane = opts.target
-      ? await opts.target.resolve(message)
-      : await getOrCreateLaneSession(agentId, conversationId, { firstMessage: message });
+      ? await opts.target.resolve(startMessage)
+      : await getOrCreateLaneSession(agentId, conversationId, { firstMessage: startMessage });
     sessionId = lane.sessionId;
     laneCreated = lane.created;
 

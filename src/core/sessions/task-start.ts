@@ -240,7 +240,7 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
       refuseDifferentPlace(task, conversation, params);
       const sent = await continueTaskConversation(conversation, {
         text: params.message?.trim() || task.description || `Working on task: ${task.title}`,
-        callerSid: params.callerSid, expectReply: params.expectReply, replyTimeoutSecs: params.replyTimeoutSecs,
+        callerSid: params.callerSid, source: params.source, expectReply: params.expectReply, replyTimeoutSecs: params.replyTimeoutSecs,
         ...(params.handsOn ? { handsOn: params.handsOn } : {}),
       });
       return {
@@ -308,6 +308,9 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
           await updateSessionRecord(previous.claudeSessionId, { process_status: 'error', status_reason: 'api_error', status_changed_by: 'session-runner' });
           await detachTaskSession(task.id, previous.claudeSessionId, 'confirmed recovery cancelled the previous pending start');
         }
+        // The words as the starter wrote them: the session's first line frames them (send-frame.ts).
+        const startBody = launch.message;
+        let replyTrailer = '';
         if (callerSessionId) {
           const { createSessionRequest, buildReplyTrailer } = await import('../session-requests.js');
           const request = await createSessionRequest({
@@ -322,7 +325,8 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
           if (request.handOnRefused?.length) result.handOnRefused = request.handOnRefused;
           requestId = request.id;
           result.requestId = request.id;
-          launch.message += `\n${buildReplyTrailer(request)}`;
+          replyTrailer = buildReplyTrailer(request);
+          launch.message += `\n${replyTrailer}`;
         }
         if (sid) {
           await createSessionRecord(sid, task.id, task.project ?? '', launch.cwd, {
@@ -344,7 +348,16 @@ export async function startSessionForTask(params: SessionStartParams): Promise<S
           }
         }
         const { sessionRunner } = await import('../../providers/claude-code-session.js');
-        const starting = sessionRunner.startSession({ ...launch, preassignedSessionId: sid, runtimeId: sid ? undefined : runtimeId, waitForSpawn: true }).then(async (ready) => {
+        // The first line says who started the task: a session's peer note, or Walnut's, never a person's typing.
+        const { frameStartText } = await import('./send-frame.js');
+        const { frameAsWalnut, readsAsPerson } = await import('./send-frame.js');
+        let firstMessage = frameStartText(startBody, {
+          source: params.source, ...(params.callerSid ? { callerSid: params.callerSid } : {}),
+          ...(caller?.kind === 'session' ? { caller: caller.record } : {}), ...(requestId ? { requestId } : {}),
+        }) + (replyTrailer ? `\n${replyTrailer}` : '');
+        // The reply trailer after an envelope that is not the request's own reads as typed words: frame the whole.
+        if (replyTrailer && readsAsPerson(firstMessage)) firstMessage = frameAsWalnut(firstMessage, params.source);
+        const starting = sessionRunner.startSession({ ...launch, message: firstMessage, namingMessage: startBody, attributed: true, preassignedSessionId: sid, runtimeId: sid ? undefined : runtimeId, waitForSpawn: true }).then(async (ready) => {
           await settle({ state: 'started', session_id: ready.claudeSessionId });
           return { ...result, sessionId: ready.claudeSessionId, started: true };
         }, async (error) => {

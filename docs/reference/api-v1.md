@@ -2159,7 +2159,14 @@ directory on that host.
   that opens to the text; `injectedBefore` carries such lines from before every row of
   the read, on the first row only. They are never rows of their own, so an older client
   that ignores the fields never draws them as the person's bubble. A Walnut message the
-  CLI delivered as an injected line is a user row with `sentBy: "agent"`. `sentTo`
+  CLI delivered as an injected line is a user row with `sentBy: "agent"`. `"person"` holds only for text a person
+  typed (the console, the phone, the terminal, a letter answer, a side-thread question): since
+  2026-11-02 Walnut frames every other line at the send, in a `peer-note` envelope naming the sender
+  (the calling task, or Walnut and the source) when no envelope frames it yet, and a request a session
+  makes to a person's route is sent as `api-agent`; the daemon's two corrective lines open with
+  `[Walnut … automated message, not from the user]`. Older rows predate the framing, so an agent's
+  unframed text from before then still reads `"person"`. The guard is
+  `tests/core/sessions/send-sender-guard.test.ts`. `sentTo`
   (additive, 2026-10-30) rides a send's tool row (`task_send` by MCP or the CLI):
   `[ { ref, taskId?, title? } ]`, its targets in order, `ref` as the call or its answer
   printed it (an id or id prefix) and `taskId`/`title` when it resolved to one task; a

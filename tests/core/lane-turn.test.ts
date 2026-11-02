@@ -35,6 +35,7 @@ vi.mock('../../src/core/session-message-queue.js', () => ({
 
 import { bus, EventNames } from '../../src/core/event-bus.js'
 import { runLaneTurn } from '../../src/core/sessions/lane-turn.js'
+import { frameAsWalnut } from '../../src/core/sessions/send-frame.js'
 
 const SID = '11111111-2222-3333-4444-555555555555'
 
@@ -96,7 +97,7 @@ describe('delivery', () => {
     emitResult({ sessionId: SID, result: 'done' })
 
     await expect(turn).resolves.toEqual({ sessionId: SID, resultText: 'done' })
-    expect(getOrCreateLaneSession).toHaveBeenCalledWith('general', 'conv-a', { firstMessage: 'cron work' })
+    expect(getOrCreateLaneSession).toHaveBeenCalledWith('general', 'conv-a', { firstMessage: frameAsWalnut('cron work', 'cron') })
     expect(sendMessageToSession).not.toHaveBeenCalled()
   })
 

@@ -105,7 +105,8 @@ describe('passive app state rides the next message', () => {
     await sendMessageToSession(sid, '/compact', { source: 'ui' })
     expect((await rows(sid))[0]).toBe('/compact')
     await sendMessageToSession(sid, 'peer says hi', { source: 'peer' })
-    expect((await rows(sid))[1]).toMatch(/^<walnut-message kind="app-state"[\s\S]*\n\npeer says hi$/)
+    // A bare text from a non-person source is framed as Walnut's (sessions/send-frame.ts); the state note stays in front.
+    expect((await rows(sid))[1]).toMatch(/^<walnut-message kind="app-state"[\s\S]*\n\n<walnut-message kind="peer-note" from="Walnut \(peer\)"[^>]*>\npeer says hi\n<\/walnut-message>$/)
   })
 
   it('what a session was told is its own: another session, or a compaction, starts from the whole state', async () => {

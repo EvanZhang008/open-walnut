@@ -59,7 +59,7 @@ describe('retrySession conversation pre-flight', () => {
     const sid = 'retry-pf-missing'
     await createSessionRecord(sid, 'task-pf1', 'proj', '/tmp', { initialProcessStatus: 'error' })
     // The message the user tried to send (what Retry should carry over).
-    await sendMessageToSession(sid, 'original user prompt', { taskId: 'task-pf1' })
+    await sendMessageToSession(sid, 'original user prompt', { taskId: 'task-pf1', source: 'ui' })
 
     const started: unknown[] = []
     bus.subscribe('session-runner', (event) => {

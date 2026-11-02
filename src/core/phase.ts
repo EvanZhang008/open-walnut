@@ -339,6 +339,7 @@ export const REOPENING_SEND_SOURCES: ReadonlySet<string> = new Set([
   'mobile',      // iOS app (web/routes/session-stream-v1.ts)
   'cli',         // a human at the `walnut` CLI (session-send-core.ts)
   'peer',        // another task's send / task_start resume (session-send-core.ts)
+  'api-agent',   // a task calling a person's route (send-sent-by.ts routeSource): the same as its peer send
   'web-api',     // Execute-continue button (session-lifecycle.ts)
   'human-inbox', // a letter delivered to the session (human-inbox/letter-ops.ts)
   // A person's chat turn into a chat that is an ask (sessions/lane-ask-link.ts):

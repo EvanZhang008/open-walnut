@@ -28,6 +28,7 @@ vi.mock('../../../src/web/ws/handler.js', () => ({
 import { WALNUT_HOME } from '../../../src/constants.js'
 import { bus } from '../../../src/core/event-bus.js'
 import { registerSessionChatRpc } from '../../../src/web/routes/session-chat.js'
+import { frameAsWalnut } from '../../../src/core/sessions/send-frame.js'
 import { editMessage, getQueue, markProcessing, resetCache, sendMessageToSession } from '../../../src/core/session-message-queue.js'
 import { createSessionRecord, getSessionByClaudeId, _resetSessionTrackerForTesting } from '../../../src/core/session-tracker.js'
 import { updateConfig } from '../../../src/core/config-manager.js'
@@ -146,7 +147,8 @@ describe('session:send through the hint pipeline', () => {
     await sendMessageToSession(sid, quoted, { source: 'walnut-notify' })
     const text = await drain(sid)
     expect(parseHinted(text).hints.map((h) => h.text)).not.toContain('Answer in French.')
-    expect(parseHinted(text).text).toBe(quoted)
+    // Walnut frames the automated line as its own (send-frame.ts); the quoted block stays words inside the frame.
+    expect(parseHinted(text).text).toBe(frameAsWalnut(quoted, 'walnut-notify'))
   })
 
   it('every automated message counts, so a session only peers talk to still gets its reminder', async () => {

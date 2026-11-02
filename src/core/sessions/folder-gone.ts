@@ -42,6 +42,7 @@ const isLocal = (host?: string | null) => !host || host === '__local__'
 const PROBE_MS = 5_000
 
 import { isFolderGoneReason } from './folder-gone-words.js'
+import { frameAsWalnut } from './send-frame.js'
 export { FOLDER_GONE_RE, isFolderGoneReason } from './folder-gone-words.js'
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
@@ -357,7 +358,7 @@ async function startFresh(record: SessionRecord, from: string, to: string, by: s
   const rows = (await getQueue(sid)).filter(waitsOnTheFolder)
   const waiting = rows.map((m) => stripInstructionNotice(m.message)).filter(Boolean).join('\n\n')
   const recorded = [task.summary, record.title && !task.summary ? `Earlier session: ${record.title}` : ''].filter(Boolean).join('\n').slice(0, 4000)
-  const message = `${folderMovedNotice({ from, to }, 'fresh', { recorded })}\n\n${waiting || 'Continue this task.'}`
+  const message = `${folderMovedNotice({ from, to }, 'fresh', { recorded })}\n\n${waiting || frameAsWalnut('Continue this task.', 'folder moved')}`
   const { updateSessionRecord } = await import('../session-tracker.js')
   // One session per task: the old one is detached (kept as the task's history) first.
   await updateSessionRecord(sid, { archived: true, archive_reason: 'folder_and_history_gone' } as Partial<SessionRecord>)
@@ -373,6 +374,8 @@ async function startFresh(record: SessionRecord, from: string, to: string, by: s
     await sessionRunner.startSession({
       taskId: task.id,
       message,
+      // A notice, then the rows that waited as they were stored (a task's rows kept their frame).
+      attributed: true,
       cwd: to,
       project: task.project ?? '',
       ...(record.mode && record.mode !== 'default' ? { mode: record.mode } : {}),

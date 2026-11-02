@@ -24,6 +24,8 @@ vi.mock('../../src/providers/daemon-connection.js', () => ({
 vi.mock('../../src/core/sessions/session-request-notify.js', () => ({ notifyRequesterFallback: mocks.notifyRequesterFallback }));
 
 import { startSessionForTask, SessionExistsError, isTaskStarting } from '../../src/core/sessions/task-start.js';
+import { frameAsWalnut } from '../../src/core/sessions/send-frame.js';
+import { buildPeerWrapper } from '../../src/core/peers/peer-wrapper.js';
 import { REQUESTS_FILE, getSessionRequest } from '../../src/core/session-requests.js';
 
 const params = { taskIdPrefix: 'task-1', message: 'Fix the flake.', source: 'test' };
@@ -71,7 +73,10 @@ describe('task start confirmation and reply contract', () => {
     await expect(getSessionRequest(result.requestId!)).resolves.toMatchObject({
       status: 'pending', fromSessionId: 'asker-1', toTaskId: 'task-1', toSessionId: result.sessionId,
     });
-    expect(mocks.startSession.mock.calls[0][0].message).toBe('Fix the flake.\n'
+    // The session's first line is the asker's peer note naming the request, then the reply trailer.
+    expect(mocks.startSession.mock.calls[0][0].message).toBe(buildPeerWrapper('Fix the flake.', {
+      title: '', shortId: 'asker-1', sessionId: 'asker-1', host: 'local', requestId: result.requestId!,
+    }) + '\n'
       + `Reply when done: walnut tools call task_send '{"in_reply_to":"${result.requestId}","title":"<one-line TL;DR>","text":"<your result summary>"}'`
       + ` (handing it to another task instead: add "hands_on":"${result.requestId}" to your ask to that task)`);
   });
@@ -80,7 +85,8 @@ describe('task start confirmation and reply contract', () => {
     mocks.resolveCaller.mockResolvedValue({ kind });
     const result = await startSessionForTask(params);
     expect(result.requestId).toBeUndefined();
-    expect(mocks.startSession.mock.calls[0][0].message).toBe(params.message);
+    // No tracked session behind the start, and the test's source is no person's: Walnut frames the line.
+    expect(mocks.startSession.mock.calls[0][0].message).toBe(frameAsWalnut(params.message, params.source));
   });
 
   it('rejects explicit reply to an untracked caller before any launch write', async () => {

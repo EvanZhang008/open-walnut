@@ -202,6 +202,13 @@ export interface SessionStartEvent {
    */
   namingMessage?: string;
   /**
+   * The first message is already attributed: a person typed it, or its sender framed it (the stored
+   * text of a retry or a rewind, a lane turn framed by its source). Absent means the session runner
+   * frames it as Walnut's when it would read as a person's (sessions/send-frame.ts `frameStartData`),
+   * so a new emitter that forgets to say who wrote the text is framed, never trusted.
+   */
+  attributed?: true;
+  /**
    * This session runs a Walnut console agent ("Ask Walnut"), rather than a plain
    * coding session.
    *

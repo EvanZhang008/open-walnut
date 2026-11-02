@@ -29,6 +29,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { bus, EventNames, eventData } from '../core/event-bus.js'
 import { registerSessionServerProbe } from '../core/sessions/session-server-state.js'
+import { frameStartData } from '../core/sessions/send-frame.js'
 import { CostWatermark } from '../core/usage/cost-watermark.js'
 import { readUserSettingsEnv, slimChildSettingsArg } from './inline-subagent.js'
 import { COMPACTED_MESSAGE, COMPACTING_MESSAGE, compactedDetail, firstSightingOfLine } from '../core/stream/compaction-notice.js'
@@ -9961,7 +9962,8 @@ export class SessionRunner {
     bus.subscribe('session-runner', async (event) => {
       switch (event.name) {
         case EventNames.SESSION_START: {
-          const startData = eventData<'session:start'>(event)
+          // Text no emitter attributed is framed as Walnut's before any engine reads it (sessions/send-frame.ts).
+          const startData = frameStartData(eventData<'session:start'>(event), event.source)
           log.session.info('session start requested', { taskId: startData.taskId, host: startData.host, cwd: startData.cwd, mode: startData.mode, engine: startData.engine })
           try {
             await this.assertStartRouting(startData)
@@ -10713,7 +10715,13 @@ export class SessionRunner {
     preassignedSessionId?: string
     runtimeId?: string
     waitForSpawn?: boolean
-  }): Promise<{ claudeSessionId: string; title: string }> {
+    /** The words the session is named from, when `message` carries more than the words. */
+    namingMessage?: string
+    /** `message` is already attributed (see SessionStartEvent.attributed). */
+    attributed?: true
+  }, framedBy?: string): Promise<{ claudeSessionId: string; title: string }> {
+    // Text no caller attributed is framed as Walnut's before any engine reads it (sessions/send-frame.ts).
+    data = frameStartData(data, framedBy)
     await this.assertStartRouting(data)
     if (isAcpEngine(data.engine)) {
       return this.handleAcpStart(data)

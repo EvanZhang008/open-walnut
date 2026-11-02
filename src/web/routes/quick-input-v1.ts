@@ -43,6 +43,7 @@ import { log } from '../../logging/index.js'
 import type { SessionRecord, Task } from '../../core/types.js'
 import { withImagePaths, type SessionImage } from '../../core/sessions/cloud-images.js'
 import { extractValidImages } from './session-send-v1.js'
+import { routeSource } from '../../core/sessions/send-sent-by.js'
 
 export const quickInputV1Router = Router()
 
@@ -202,10 +203,10 @@ quickInputV1Router.post('/quick/main', async (req: Request, res: Response, next:
       return
     }
     if (req.body?.follow === true) {
-      await sendAndFollow(() => sendToMain(text, images), res)
+      await sendAndFollow(() => sendToMain(text, images, quickSource(req)), res)
       return
     }
-    const answer = await sendToMain(text, images)
+    const answer = await sendToMain(text, images, quickSource(req))
     delete answer.midTurn
     res.json(answer)
   } catch (err) {
@@ -264,20 +265,20 @@ quickInputV1Router.post('/quick/session', async (req: Request, res: Response, ne
         return
       }
       const cliText = await withSavedImages(text, images)
-      await sendAndFollow(async () => sendToTaskSession(task, await taskSessionRecord(task), text, cliText), res)
+      await sendAndFollow(async () => sendToTaskSession(task, await taskSessionRecord(task), text, cliText, false, quickSource(req)), res)
       return
     }
-    await sendAndFollow(() => startAsk(text, images), res)
+    await sendAndFollow(() => startAsk(text, images, quickSource(req) === 'ui' ? 'quick-input' : 'api-agent'), res)
   } catch (err) {
     next(err)
   }
 })
 
 /** A new ask started with the text: the same task and session the phone's New chat makes. */
-async function startAsk(text: string, images: SessionImage[]): Promise<QuickMainResult> {
+async function startAsk(text: string, images: SessionImage[], source: string): Promise<QuickMainResult> {
   const { validateMobileLaunchBody, performMobileLaunch } = await import('../../core/sessions/mobile-launch.js')
   const message = await withSavedImages(text, images)
-  const launched = await performMobileLaunch(validateMobileLaunchBody({ walnutAgent: true, message }), 'quick-input')
+  const launched = await performMobileLaunch(validateMobileLaunchBody({ walnutAgent: true, message }), source)
   return { taskId: launched.taskId, sessionId: launched.sessionId ?? null, started: true }
 }
 
@@ -298,7 +299,7 @@ quickInputV1Router.post('/quick/task-message', async (req: Request, res: Respons
       res.status(404).json({ error: `No task ${taskId}`, code: 'task_not_found' })
       return
     }
-    const answer = await sendToTaskSession(task, await taskSessionRecord(task), text, await withSavedImages(text, images))
+    const answer = await sendToTaskSession(task, await taskSessionRecord(task), text, await withSavedImages(text, images), false, quickSource(req))
     delete answer.midTurn
     res.json(answer)
   } catch (err) {
@@ -324,10 +325,10 @@ export interface QuickMainResult {
  * (web/src/components/org/ask-main.ts): Main's live session gets it as a person's chat message,
  * with the same message hints a composer send carries; a Main with none is started with it.
  */
-export async function sendToMain(text: string, images: SessionImage[] = []): Promise<QuickMainResult> {
+export async function sendToMain(text: string, images: SessionImage[] = [], source: string = 'ui'): Promise<QuickMainResult> {
   const { ensureMainTask } = await import('../../core/org/org-store.js')
   const main: Task = await ensureMainTask()
-  return sendToTaskSession(main, await taskSessionRecord(main), text, await withSavedImages(text, images))
+  return sendToTaskSession(main, await taskSessionRecord(main), text, await withSavedImages(text, images), false, source)
 }
 
 /**
@@ -349,7 +350,12 @@ async function withSavedImages(text: string, images: SessionImage[]): Promise<st
   return paths.length > 0 ? withImagePaths(text, paths) : text
 }
 
-async function sendToTaskSession(task: Task, record: SessionRecord | null, text: string, cliText: string, startedOnce = false): Promise<QuickMainResult> {
+/** A person's send source, unless a session made the request (an agent calling this route is not a person). */
+function quickSource(req: Request): string {
+  return routeSource('ui', req.headers)
+}
+
+async function sendToTaskSession(task: Task, record: SessionRecord | null, text: string, cliText: string, startedOnce = false, source: string = 'ui'): Promise<QuickMainResult> {
   if (record) {
     const sessionId = record.claudeSessionId
     if (record.pendingPermission && (record.process_status === 'running' || record.process_status === 'idle')) {
@@ -359,9 +365,9 @@ async function sendToTaskSession(task: Task, record: SessionRecord | null, text:
       import('../../core/hints/hint-send.js'),
       import('../../core/session-message-queue.js'),
     ])
-    const hinted = await prepareHintedSend(sessionId, record, cliText, { sentBy: 'person' })
+    const hinted = await prepareHintedSend(sessionId, record, cliText, { sentBy: source === 'ui' ? 'person' : 'agent' })
     const msg = await sendMessageToSession(sessionId, text, {
-      source: 'ui',
+      source,
       taskId: task.id,
       ...(hinted.enqueueText !== text ? { enqueueMessage: hinted.enqueueText } : {}),
       hinted: true,
@@ -373,13 +379,13 @@ async function sendToTaskSession(task: Task, record: SessionRecord | null, text:
   const { startSessionForTask, SessionExistsError } = await import('../../core/sessions/task-start.js')
   let started
   try {
-    started = await startSessionForTask({ taskIdPrefix: task.id, message: cliText, source: 'api-v1' })
+    started = await startSessionForTask({ taskIdPrefix: task.id, message: cliText, source: source === 'ui' ? 'api-v1' : source })
   } catch (err) {
     // A session the task row did not name (a start that won the race): the message goes to it.
     if (err instanceof SessionExistsError && err.existingSessionId && !startedOnce) {
       const { getSessionByClaudeId } = await import('../../core/session-tracker.js')
       const existing = await getSessionByClaudeId(err.existingSessionId)
-      if (existing) return sendToTaskSession(task, existing, text, cliText, true)
+      if (existing) return sendToTaskSession(task, existing, text, cliText, true, source)
     }
     throw err
   }

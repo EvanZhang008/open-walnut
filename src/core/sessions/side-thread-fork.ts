@@ -230,6 +230,8 @@ export async function forkSideThreadSession(
     preassignedSessionId: sessionId,
     taskId: '',
     message: opts?.message ?? '',
+    // The person's side question.
+    attributed: true,
     cwd: parent.cwd,
     project: parent.project ?? '',
     title,

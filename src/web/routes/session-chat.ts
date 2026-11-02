@@ -73,6 +73,8 @@ export function registerSessionChatRpc(): void {
     bus.emit(EventNames.SESSION_START, {
       taskId: typeof data.taskId === 'string' ? data.taskId : '',
       message: data.message,
+      // The console's composer: a person typed it.
+      attributed: true,
       cwd: typeof data.cwd === 'string' ? data.cwd : undefined,
       project: typeof data.project === 'string' ? data.project : undefined,
       mode: typeof data.mode === 'string' ? data.mode : undefined,

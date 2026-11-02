@@ -145,7 +145,8 @@ export function installDirect(): void {
         const result = await startSessionForTask({
           taskIdPrefix,
           ...(options.message !== undefined ? { message: options.message } : {}),
-          source: 'cli',
+          // Run inside a session (its id in the env), the start is that session's, not a person's.
+          source: (process.env.WALNUT_SESSION_ID ?? '').trim() ? 'api-agent' : 'cli',
         });
         printStart(result, globals);
       } catch (err) {

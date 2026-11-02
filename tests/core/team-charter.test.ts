@@ -43,7 +43,7 @@ describe('the charter itself', () => {
       /Information you cannot see, or a collision with another team's work, goes to the task that owns it or to your lead, not to the user/,
       /A lead or Main who is brought a question that is not the user's decides it and tells the team; it never passes it up/,
       /Whenever a task hands the user a decision \(a letter, a thread waiting on them\), Walnut asks which of these kinds it is/,
-      /The user's word counts wherever Walnut's record shows they said it: a message of theirs in any node's chat \(task_history, rows with sentBy "person"\) or a thread message they wrote \(thread_list\)/,
+      /The user's word counts wherever Walnut's record shows they said it: a message of theirs in any node's chat \(task_history, rows with sentBy "person", from 2026-11-02 on: older ones may be an agent's unframed text\) or a thread message they wrote \(thread_list\)/,
       /never ask them to say it again in your own session\. Permission prompts, and approval rules that name a step/,
       /A new coding task starts in its normal mode, never plan mode except when the user asks for plan: its owner writes the plan itself and carries on/,
       /A project lead assigns work, coordinates across teams and unblocks; it reads a team's work only when an outcome looks wrong\. Main sets direction with the user; it does not review implementation details\./,

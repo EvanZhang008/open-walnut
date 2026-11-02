@@ -36,6 +36,7 @@ import { engineCaps } from '../agents/engine-registry.js';
 import { rememberAskWalnutSessionPick } from './ask-walnut-launch.js';
 import { parseCompanionFields } from '../offline-merge/companion-op.js';
 import { RemoteReadError } from '../hosts/remote-read-error.js';
+import { isPersonSource } from './send-sent-by.js';
 
 export class SessionControlError extends Error {
   constructor(
@@ -872,6 +873,8 @@ export async function forkSessionToTask(
     preassignedSessionId: forkSessionId,
     taskId: task.id,
     message: forkMessage,
+    // A person's fork carries their words; a transfer or another task's fork is framed by the runner.
+    ...(isPersonSource(source) ? { attributed: true as const } : {}),
     cwd: forkCwd,
     project: task.project ?? '',
     mode: forkMode,

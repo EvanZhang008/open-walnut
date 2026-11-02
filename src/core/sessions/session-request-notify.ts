@@ -72,6 +72,8 @@ export function turnStarterOf(userRow: TranscriptRow | undefined, parentTaskId?:
   if (!envelope) return 'the user';
   if (envelope.kind === 'trigger') return 'a trigger';
   if (envelope.kind === 'notification') return 'a Walnut notice';
+  // Walnut's own frame around a line no task wrote (send-frame.ts): hooks, nudges, wake clocks.
+  if (envelope.kind === 'peer-note' && /^Walnut \(/.test(envelope.attrs.from ?? '')) return 'a Walnut notice';
   if (envelope.kind === 'peer-note' || envelope.kind === 'reply') {
     return parentTaskId && envelope.attrs['from-task'] === parentTaskId ? 'your message' : 'another task';
   }

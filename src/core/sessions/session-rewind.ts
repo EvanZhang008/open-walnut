@@ -588,6 +588,8 @@ export async function rewindSessionToMessage(
     preassignedSessionId: rewoundId,
     taskId: rewoundTaskId,
     message: input.message?.trim() ?? '',
+    // The earlier message resubmitted as stored: its own frame, if any, rides with it.
+    attributed: true,
     cwd: record.cwd,
     project: record.project ?? '',
     ...(record.mode && record.mode !== 'default' ? { mode: record.mode } : {}),

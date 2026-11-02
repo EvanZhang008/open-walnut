@@ -163,7 +163,7 @@ export async function deliverBoardText(
   taskId: string,
   text: string,
   ctx: Record<string, unknown>,
-  opts: { callerSid?: string } = {},
+  opts: { callerSid?: string; source?: string } = {},
 ): Promise<BoardDelivery> {
   if (opts.callerSid !== undefined) {
     const { getTask } = await import('../task-manager.js');
@@ -174,7 +174,7 @@ export async function deliverBoardText(
   }
   const { performSessionSend, SendError } = await import('../sessions/session-send-core.js');
   try {
-    const result = await performSessionSend({ to: taskId, text, callerSid: opts.callerSid, expectReply: false });
+    const result = await performSessionSend({ to: taskId, text, callerSid: opts.callerSid, expectReply: false, ...(opts.source ? { source: opts.source } : {}) });
     return { state: result.delivery, sessionId: result.targetSessionId };
   } catch (err) {
     // A SendError is a known state (e.g. the task was never started); anything else is a fault.

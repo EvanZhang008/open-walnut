@@ -1112,6 +1112,8 @@ export async function retrySession(sessionId: string): Promise<RetryResult> {
   bus.emit(EventNames.SESSION_START, {
     taskId: task.id,
     message: retryMessage,
+    // The first message again, as stored: an agent's start kept its frame, a person's is theirs.
+    attributed: true,
     cwd: record.cwd,
     project: task.project ?? '',
     mode: record.mode !== 'default' ? record.mode : undefined,

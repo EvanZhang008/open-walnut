@@ -149,7 +149,7 @@ async function fire(taskId: string, target: string, nowMs: number): Promise<bool
       ? { state: 'stored', reason: 'task_complete' }
       : await deliverBoardText(taskId, await buildReminderPrompt(board.html, target, current), {
         reminder: target, attempt: (current.attempts ?? 0) + 1,
-      });
+      }, { source: 'board-reminder' });
     if (delivery.state !== 'stored') {
       await patchBoardReminder(taskId, target, current.set_at, { delivered_at: new Date(nowMs).toISOString() });
       log.task.info('board reminder delivered', { taskId, target, sessionId: delivery.sessionId });

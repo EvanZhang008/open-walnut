@@ -39,6 +39,8 @@ import {
   type SessionRequest,
 } from '../session-requests.js';
 import { queueSentBy } from './send-sent-by.js';
+import { frameForSource } from './send-frame.js';
+import { isPersonSource } from './send-sent-by.js';
 import { noteRequestDelivering } from './undelivered-requests.js';
 import { isSupersededSession } from './engine-switch-marker.js';
 
@@ -97,6 +99,10 @@ export interface SessionSendInput {
   reply?: { result?: unknown; evidence?: unknown; not_done?: unknown };
   /** Transport-stamped caller session id; undefined = the human's own CLI. */
   callerSid?: string;
+  /** Walnut itself sends this (a start that continues a task's conversation, on behalf of a routine, a
+   *  script or another task's start): with a source no person types into, a caller-less send is framed
+   *  as Walnut's instead of read as the human's own CLI (sessions/send-frame.ts). */
+  source?: string;
   /** Transport-stamped host the calling CLI runs on — labels an ANONYMOUS
    *  sender's envelope honestly (a session caller's host comes from its record). */
   callerHost?: string;
@@ -315,7 +321,7 @@ export async function deliverToSession(
     const sentBy = queueSentBy(opts.source);
     const parked = await withTimeout(
       // Escaped like every queued send (hints/hint-format.ts); no hint rides a parked row.
-      enqueueMessage(sid, escapeHintTags(opts.enqueueText), { ...(opts.messageId ? { id: opts.messageId } : {}), ...(sentBy ? { sentBy } : {}) }),
+      enqueueMessage(sid, frameForSource(escapeHintTags(opts.enqueueText), opts.source), { ...(opts.messageId ? { id: opts.messageId } : {}), ...(sentBy ? { sentBy } : {}) }),
       DELIVERY_TIMEOUT_MS,
     );
     if (!parked) throw new SendError('delivery_failed', 'enqueue timed out — retry', 503);
@@ -520,8 +526,9 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
 
   // Envelope + throttle apply exactly when the SPEAKER is not the human:
   // another session (named peer-note) or an unidentified process (anonymous).
-  const fenced = caller.kind !== 'human';
-  if (fenced) {
+  const walnutSends = caller.kind === 'human' && !!input.source && !isPersonSource(input.source);
+  const fenced = caller.kind !== 'human' || walnutSends;
+  if (fenced && !walnutSends) {
     // An anonymous (env-less) caller is bucketed per HOST, not under one global
     // `external` key: otherwise a runaway agent on a dev box would throttle the
     // user's own terminal on the Mac. A tracked session is its own bucket.
@@ -599,15 +606,15 @@ export async function performSessionSend(input: SessionSendInput): Promise<Sessi
         // anonymous sender the way displayHost() does for tracked sessions.
         host: input.callerHost?.trim()
           ? displayHost(input.callerHost.trim().slice(0, 64))
-          : 'unknown',
+          : walnutSends ? 'local' : 'unknown',
         anonymous: true,
-        ...(input.callerLabel ? { automation: input.callerLabel } : {}),
+        ...(input.callerLabel ? { automation: input.callerLabel } : walnutSends ? { automation: `Walnut (${input.source})` } : {}),
       }, { title: input.title });
   }
   // One `\n`, one line, and only when a request exists to answer.
   if (request) enqueueText = `${enqueueText}\n${buildReplyTrailer(request)}`;
 
-  const source = caller.kind === 'human' ? 'cli' : 'peer';
+  const source = caller.kind === 'human' && !walnutSends ? 'cli' : 'peer';
   const taskId = target.taskId ?? target.session.taskId;
   let delivery: 'queued' | 'deferred';
   let messageId: string | undefined;

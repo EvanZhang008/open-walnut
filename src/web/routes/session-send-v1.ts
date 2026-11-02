@@ -14,6 +14,7 @@
 import type { Request, Response, NextFunction } from 'express'
 import { CLOUD_MODE } from '../../constants.js'
 import { prepareHintedSend } from '../../core/hints/hint-send.js'
+import { routeSource } from '../../core/sessions/send-sent-by.js'
 import { applyVoiceReply } from '../../core/sessions/voice-reply.js'
 import { withImagePaths, type SessionImage } from '../../core/sessions/cloud-images.js'
 import { cloudSend } from './cloud-session-send.js'
@@ -137,14 +138,14 @@ export async function postSessionMessage(req: Request, res: Response, next: Next
     // style, and a voice send asks for the voice-reply hint, which goes last
     // (it overrides the output style for this one reply).
     const outputMode = await prepareHintedSend(sessionId, record, enqueueText ?? text, {
-      sentBy: 'person', ...(voice ? { requested: { 'voice-reply': {} } } : {}),
+      sentBy: routeSource('mobile', req.headers) === 'mobile' ? 'person' : 'agent', ...(voice ? { requested: { 'voice-reply': {} } } : {}),
       // A retry reuses its qm- id: an Org node's Threads file it once (core/org/thread-capture.ts).
       ...(clientMessageId ? { threadKey: clientMessageId } : {}),
     })
     const cliText = outputMode.enqueueText
     const { sendMessageToSession } = await import('../../core/session-message-queue.js')
     const msg = await sendMessageToSession(sessionId, text, {
-      source: 'mobile',
+      source: routeSource('mobile', req.headers),
       taskId: record.taskId,
       ...(cliText !== text ? { enqueueMessage: cliText } : {}),
       ...(clientMessageId ? { messageId: clientMessageId } : {}),

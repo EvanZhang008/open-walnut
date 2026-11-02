@@ -32,6 +32,7 @@ import {
   sendMessageToSession,
 } from '../../src/core/session-message-queue.js';
 import { bus } from '../../src/core/event-bus.js';
+import { buildWalnutMessage } from '../../src/core/peers/walnut-message-tag.js';
 import { WALNUT_HOME, SESSION_QUEUE_FILE } from '../../src/constants.js';
 
 beforeEach(async () => {
@@ -131,7 +132,7 @@ describe('sendMessageToSession sentBy', () => {
   afterEach(() => bus.unsubscribe('test-queued-sent-by'));
 
   it('a peer\'s note: agent, with the enveloped row as queuedText', async () => {
-    const envelope = '<walnut-message kind="peer-note" from="Sample lead [abcd1234]">Please check.</walnut-message>';
+    const envelope = buildWalnutMessage({ kind: 'peer-note', attrs: { from: 'Sample lead [abcd1234]' }, body: 'Please check.' });
     const row = await sendMessageToSession('sess-peer', 'Please check.', { source: 'peer', enqueueMessage: envelope });
     expect(row.sentBy).toBe('agent');
     expect(captured).toHaveLength(1);

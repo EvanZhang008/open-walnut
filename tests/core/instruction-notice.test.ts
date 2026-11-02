@@ -54,7 +54,7 @@ async function deliver(sid: string, text: string, pick = markProcessing) {
 describe('changed default instructions for a session spawned before them', () => {
   it('a replacement session drops a notice frozen into an old row', async () => {
     const { sid } = await seed('main');
-    await sendMessageToSession(sid, 'Keep this request');
+    await sendMessageToSession(sid, 'Keep this request', { source: 'ui' });
     const [row] = await markProcessing(sid);
     expect(stripInstructionNotice(row.message)).toBe('Keep this request');
     expect(stripInstructionNotice('Plain text')).toBe('Plain text');
@@ -75,7 +75,7 @@ describe('changed default instructions for a session spawned before them', () =>
   });
   it('is told once on its first frozen line, again after a compaction or on another prompt', async () => {
     const { sid } = await seed('main');
-    const queued = await sendMessageToSession(sid, 'Independent sorting goal', { source: 'web-ui' });
+    const queued = await sendMessageToSession(sid, 'Independent sorting goal', { source: 'ui' });
     expect(queued.message).not.toContain(RELAY);
     const [first] = await markProcessing(sid);
     expect(first.message.startsWith('<walnut-message kind="notification"')).toBe(true);
@@ -92,7 +92,7 @@ describe('changed default instructions for a session spawned before them', () =>
   });
   it('a frozen line that never reaches the CLI is not told; the next live line carries the notice', async () => {
     const { sid } = await seed('main');
-    await sendMessageToSession(sid, 'Stopped before it was read');
+    await sendMessageToSession(sid, 'Stopped before it was read', { source: 'ui' });
     const frozen = await markProcessing(sid);
     expect(copies(frozen[0].message)).toBe(1);
     // A second freeze while that line is in flight does not carry it again.
@@ -108,12 +108,12 @@ describe('changed default instructions for a session spawned before them', () =>
     // Main's 07:36Z double: its first line carried the notice, waited nine minutes for a resume, and the
     // batch frozen meanwhile got the notice again because "already attached" was a 60 s claim.
     const { sid } = await seed('main');
-    await sendMessageToSession(sid, 'First, waits for a resume');
+    await sendMessageToSession(sid, 'First, waits for a resume', { source: 'ui' });
     const [first] = await markProcessing(sid);
     expect(copies(first.message)).toBe(1);
     const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 9 * 60_000);
     try {
-      for (const t of ['Two', 'Three', 'Four', 'Five']) await sendMessageToSession(sid, t);
+      for (const t of ['Two', 'Three', 'Four', 'Five']) await sendMessageToSession(sid, t, { source: 'ui' });
       const batch = await markProcessing(sid);
       expect(batch).toHaveLength(4);
       expect(batch.map((r) => r.message).join('\n')).not.toContain(RELAY);
@@ -125,17 +125,17 @@ describe('changed default instructions for a session spawned before them', () =>
   });
   it('a line frozen while a delivered notice is still being recorded gets none', async () => {
     const { sid } = await seed('lead');
-    await sendMessageToSession(sid, 'Carries it');
+    await sendMessageToSession(sid, 'Carries it', { source: 'ui' });
     const [row] = await markProcessing(sid);
     expect(copies(row.message)).toBe(1);
-    await sendMessageToSession(sid, 'Frozen in between');
+    await sendMessageToSession(sid, 'Frozen in between', { source: 'ui' });
     // Delivery and the next freeze race: the told record is written after the next freeze looks.
     const [, next] = await Promise.all([removeProcessed(sid, [row.id]), markProcessing(sid)]);
     expect(copies(next[0].message)).toBe(0);
   });
   it('a line still waiting through a compaction is not told again after the hook restated it', async () => {
     const { sid } = await seed('main');
-    await sendMessageToSession(sid, 'Waits through a compaction');
+    await sendMessageToSession(sid, 'Waits through a compaction', { source: 'ui' });
     const [row] = await markProcessing(sid);
     expect(copies(row.message)).toBe(1);
     // The session compacts before the line is taken: the hook restates, the server reads the boundary.
@@ -148,7 +148,7 @@ describe('changed default instructions for a session spawned before them', () =>
   });
   it('a delivery on another prompt records nothing', async () => {
     const { sid, task } = await seed('main');
-    await sendMessageToSession(sid, 'Attached on the old prompt');
+    await sendMessageToSession(sid, 'Attached on the old prompt', { source: 'ui' });
     const [row] = await markProcessing(sid);
     expect(copies(row.message)).toBe(1);
     // A fresh spawn on the current prompt before the old line was recorded.
@@ -161,8 +161,8 @@ describe('changed default instructions for a session spawned before them', () =>
     // kept for the last session only, and the rest were checked against the instructions again.
     const a = await seed('lead');
     const b = await seed('lead');
-    await sendMessageToSession(a.sid, 'A');
-    await sendMessageToSession(b.sid, 'B');
+    await sendMessageToSession(a.sid, 'A', { source: 'ui' });
+    await sendMessageToSession(b.sid, 'B', { source: 'ui' });
     const [ra] = await markProcessing(a.sid);
     const [rb] = await markProcessing(b.sid);
     expect(stripInstructionNotice(ra.message)).toBe('A');
@@ -180,19 +180,19 @@ describe('changed default instructions for a session spawned before them', () =>
   it('a line the CLI reports taking counts as told; a cancelled one does not', async () => {
     // The live path: rows leave through removeTaken when Claude Code names the line.
     const { sid } = await seed('main');
-    await sendMessageToSession(sid, 'Cancelled by a Stop');
+    await sendMessageToSession(sid, 'Cancelled by a Stop', { source: 'ui' });
     const [cancelled] = await markProcessing(sid);
     expect(copies(cancelled.message)).toBe(1);
     await removeTaken(sid, [cancelled.id], { ran: false });
     expect((await getSessionByClaudeId(sid))?.taskRoutingNoted).toBeUndefined();
     const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 61_000);
     try {
-      await sendMessageToSession(sid, 'Taken by the CLI');
+      await sendMessageToSession(sid, 'Taken by the CLI', { source: 'ui' });
       const [taken] = await markProcessing(sid);
       expect(copies(taken.message)).toBe(1);
       await removeTaken(sid, [taken.id]);
       expect((await getSessionByClaudeId(sid))?.taskRoutingNoted?.version).toBeTruthy();
-      await sendMessageToSession(sid, 'Next notice');
+      await sendMessageToSession(sid, 'Next notice', { source: 'ui' });
       const [next] = await markProcessing(sid);
       expect(copies(next.message)).toBe(0);
     } finally { clock.mockRestore(); }
@@ -217,7 +217,7 @@ describe('changed default instructions for a session spawned before them', () =>
   });
   it.each([markProcessing, markNextProcessing])('edit A then deliver it immediately retains current rules (%#)', async (pick) => {
     const { sid } = await seed('main');
-    const row = await sendMessageToSession(sid, 'Original input');
+    const row = await sendMessageToSession(sid, 'Original input', { source: 'ui' });
     expect(await editMessage(sid, row.id, 'Edited input')).toBe(true);
     const batch = await pick(sid);
     expect(batch).toHaveLength(1);
@@ -227,7 +227,7 @@ describe('changed default instructions for a session spawned before them', () =>
   });
   it('delete A then deliver already-queued B with no new send', async () => {
     const { sid } = await seed('lead');
-    const a = await sendMessageToSession(sid, 'Input A');
+    const a = await sendMessageToSession(sid, 'Input A', { source: 'ui' });
     const b = await enqueueMessage(sid, 'Input B');
     expect(await deleteMessage(sid, a.id)).toBe(true);
     const batch = await markProcessing(sid);
@@ -299,13 +299,13 @@ describe('changed default instructions for a session spawned before them', () =>
   it('place and routing notes coexist without breaking place acknowledgment', async () => {
     const { sid, task } = await seed('lead');
     await updateTask(task.id, { project: 'other' });
-    await sendMessageToSession(sid, 'Input');
+    await sendMessageToSession(sid, 'Input', { source: 'ui' });
     const [row] = await markProcessing(sid);
     expect(row.message).toContain('outcome="moved"');
     expect(row.message).toContain('outcome="task-routing-policy"');
     expect((await getSessionByClaudeId(sid))?.placeNoted?.project).toBe('other');
     await removeProcessed(sid, [row.id]);
-    const next = await sendMessageToSession(sid, 'Next input');
+    const next = await sendMessageToSession(sid, 'Next input', { source: 'ui' });
     expect(next.message).not.toContain('outcome="moved"');
   });
   it('stays silent for current prompts, ACP engines, an unknown or non-Walnut prompt and a deleted task', async () => {

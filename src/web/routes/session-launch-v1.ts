@@ -58,6 +58,7 @@ import {
 } from '../../core/sessions/mobile-launch.js'
 import { QuickStartError } from '../../core/sessions/quick-start.js'
 import { log } from '../../logging/index.js'
+import { routeSource } from '../../core/sessions/send-sent-by.js'
 import { isNeedsLeaderError } from '../../core/replication/needs-leader.js'
 
 export const sessionLaunchV1Router = Router()
@@ -433,7 +434,7 @@ sessionLaunchV1Router.post('/sessions', async (req: Request, res: Response, next
     }
 
     try {
-      const result = await performMobileLaunch(input, 'mobile-launch')
+      const result = await performMobileLaunch(input, routeSource('mobile-launch', req.headers))
       res.status(201).json(result)
     } catch (err) {
       if (err instanceof QuickStartError) {

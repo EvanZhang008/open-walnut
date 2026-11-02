@@ -47,6 +47,7 @@ import { sessionRunner } from '../../providers/claude-code-session.js'
 import { readAcpSessionHistoryState } from '../../providers/acp-session-history.js'
 import type { ImagePayload } from './images.js'
 import { quickStartSession, QuickStartError } from '../../core/sessions/quick-start.js'
+import { routeSource } from '../../core/sessions/send-sent-by.js'
 import { workspaceLaunchPlan } from '../../core/workspaces/launch.js'
 import {
   ASK_HOST_REFUSAL,
@@ -695,7 +696,8 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
       const updatedTask = await quickStartSession({
         message: sessionMessage, messagePrefix, cwd, host, model, mode,
         existingTaskId, taskMeta: isWalnutAgent ? walnutTaskMeta : fixWalnutTaskMeta,
-        source: 'quick-start', requestTs,
+        // A session that makes this request is not a person: its first line is framed (sessions/send-frame.ts).
+        source: routeSource('quick-start', req.headers), requestTs,
         engine: effectiveEngine,
         preassignedSessionId,
         ...(wsPlan?.defer ? { deferStart: true, preassignedSessionId: undefined } : {}),
@@ -746,7 +748,7 @@ sessionsRouter.post('/quick-start', async (req: Request, res: Response, next: Ne
         res.json(await wsPlan.begin(updatedTask, {
           message: sessionMessage, ...(messagePrefix ? { messagePrefix } : {}), ...(model ? { model } : {}), ...(mode ? { mode } : {}),
           ...(effectiveEngine ? { engine: effectiveEngine } : {}), ...(preassignedSessionId ? { session_id: preassignedSessionId } : {}),
-          source: 'quick-start',
+          source: routeSource('quick-start', req.headers),
         }))
         return
       }
@@ -2816,6 +2818,8 @@ sessionsRouter.post('/:sessionId/execute', async (req: Request, res: Response, n
     bus.emit(EventNames.SESSION_START, {
       taskId: taskId ?? '',
       message: planMessage,
+      // The "execute plan" button a person pressed.
+      attributed: true,
       cwd,
       project: sourceRecord?.project ?? '',
       mode: execMode,

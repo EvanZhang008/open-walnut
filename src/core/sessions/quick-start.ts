@@ -17,6 +17,7 @@ import { spillLargePromptToFile } from './quick-start-spill.js';
 import { engineCaps, isAcpEngine, normalizeEngine } from '../agents/engine-registry.js';
 import { resolveDefaultEngine } from '../agents/default-engine.js';
 import { buildAskProfilePrefix } from './ask-profile-prefix.js';
+import { isPersonSource } from './send-sent-by.js';
 import { ASK_WALNUT_PROJECT, GENERAL_AGENT_ID, askProjectFor, resolveAskAgent, stampedAgentId, type AskAgentRef } from './ask-agent.js';
 
 export interface QuickStartTaskMeta {
@@ -403,7 +404,7 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
     if (conversation) {
       const { refuseDifferentPlace } = await import('./task-start.js');
       refuseDifferentPlace(updatedTask, conversation, { ...(host !== undefined ? { host } : {}), ...(params.engine ? { engine: params.engine } : {}) });
-      await continueTaskConversation(conversation, { text: sessionMessage });
+      await continueTaskConversation(conversation, { text: sessionMessage, source });
       const continuedTask = await getTask(updatedTask.id);
       continuedSessions.set(continuedTask, conversation.claudeSessionId);
       return continuedTask;
@@ -591,6 +592,8 @@ export async function quickStartSession(params: QuickStartParams): Promise<Task>
   bus.emit(EventNames.SESSION_START, {
     taskId: updatedTask.id,
     message: sessionMessage,
+    // A person's own words are attributed; the runner frames anything else as Walnut's (send-frame.ts).
+    ...(isPersonSource(source) ? { attributed: true as const } : {}),
     // Only when a prefix was actually applied, so the payload every other
     // launcher emits stays byte-identical.
     ...(namingMessage !== sessionMessage ? { namingMessage } : {}),

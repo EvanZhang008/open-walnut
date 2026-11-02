@@ -44,6 +44,7 @@ import { staleTriggerText } from './routines/trigger-stale.js';
 import type { PendingInstructionNotice } from './sessions/instruction-notice.js';
 import { leadsWithNotice, markNoticeDelivering } from './sessions/instruction-notice-flight.js';
 import { PERSON_SEND_SOURCES, queueSentBy } from './sessions/send-sent-by.js';
+import { frameForSource } from './sessions/send-frame.js';
 import { replaceHintedText } from './hints/hint-format.js';
 
 // ── Types and store (session-queue-store.ts) ──
@@ -250,8 +251,10 @@ export async function sendMessageToSession(
   // A background notice that waited for this message rides in front of it (sessions/held-notices.ts).
   const { pendingHeldNotices } = await import('./sessions/held-notices.js');
   const heldNotes = await pendingHeldNotices(sessionId);
-  const outputMode = opts?.hinted ? null : await prepareQueuedHintedSend(sessionId, opts?.source, rawBody);
-  const body = outputMode?.enqueueText ?? rawBody;
+  // Whatever a person did not type is framed here, so the transcript says who sent it (sessions/send-frame.ts).
+  const framedBody = frameForSource(rawBody, opts?.source);
+  const outputMode = opts?.hinted ? null : await prepareQueuedHintedSend(sessionId, opts?.source, framedBody);
+  const body = outputMode?.enqueueText ?? framedBody;
   const notes = [place?.text, folderMoved?.text, restart?.text, digest?.text, statusNote?.text, heldNotes?.text, appState?.text, waitNote, retiredNote].filter(Boolean).join('\n\n');
   const enqueueText = notes ? `${notes}\n\n${body}` : body;
   let msg: QueuedMessage;

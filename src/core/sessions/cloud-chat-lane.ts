@@ -341,6 +341,8 @@ async function resolveCloudChatLane(
   bus.emit(EventNames.SESSION_START, {
     taskId: '',
     message,
+    // The companion's chat: a person typed it.
+    attributed: true,
     cwd,
     title,
     profile,

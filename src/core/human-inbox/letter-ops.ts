@@ -16,6 +16,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { frameForSource } from '../sessions/send-frame.js';
 import { log } from '../../logging/index.js';
 import { bus } from '../event-bus.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
@@ -341,7 +342,7 @@ export async function deliverLetterToOrigin(
     const text = buildLetterDeliveryText(letter, human);
     if (record.pendingPermission) {
       const { enqueueMessage } = await import('../session-message-queue.js');
-      const parked = await withTimeout(enqueueMessage(sid, text, { ...(options.messageId ? { id: options.messageId } : {}), sentBy: human.by ? 'agent' : 'person' }), DELIVERY_TIMEOUT_MS, () => null);
+      const parked = await withTimeout(enqueueMessage(sid, frameForSource(text, human.by ? 'peer' : 'human-inbox'), { ...(options.messageId ? { id: options.messageId } : {}), sentBy: human.by ? 'agent' : 'person' }), DELIVERY_TIMEOUT_MS, () => null);
       if (!parked) {
         log.notif.warn('human-inbox: deferred enqueue timed out', { letterId: letter.id, sessionId: sid });
         return { status: 'failed', reason: 'timeout', sessionId: sid };

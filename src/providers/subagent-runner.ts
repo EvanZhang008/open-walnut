@@ -223,6 +223,8 @@ export class SubagentRunner {
         text: data.message,
         // Nowhere to route a reply to — this dispatcher is not a session.
         expectReply: false,
+        // Walnut's dispatcher, not a person at a terminal: the line is framed as such (send-frame.ts).
+        source: 'subagent',
       });
       log.subagent.info('run message delivered', {
         runId: data.runId, sessionId: result.targetSessionId, delivery: result.delivery,

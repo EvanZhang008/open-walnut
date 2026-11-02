@@ -149,7 +149,7 @@ describe('retrySession — dead process with a NON-empty pending queue', () => {
   it("re-sends the user's ORIGINAL message and injects nothing", async () => {
     const sid = 'retry-rc-queued'
     await createSessionRecord(sid, 'task-rc3', 'proj', CWD, { initialProcessStatus: 'error' })
-    await sendMessageToSession(sid, 'original user prompt', { taskId: 'task-rc3' })
+    await sendMessageToSession(sid, 'original user prompt', { taskId: 'task-rc3', source: 'ui' })
     stub.sendCalls.length = 0 // the seed above is the user's own send, not the retry's
 
     const cap = captureLaunchEvents()

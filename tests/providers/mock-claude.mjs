@@ -520,6 +520,10 @@ function stripBanners(text) {
     if (!n || !body.slice(n[0].length).trim()) break;
     body = body.slice(n[0].length);
   }
+  // Walnut's own frame around a send that no person typed (send-frame.ts: a peer-note
+  // from "Walnut (<source>)"): the words inside are the message, so the test prefixes still lead.
+  const framed = body.match(/^\s*<walnut-message kind="peer-note" from="Walnut \([^"]*\)"[^>]*>\n?([\s\S]*?)\n?<\/walnut-message>\s*$/);
+  if (framed) body = framed[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
   return body;
 }
 // The rest of what Walnut wraps around the user's words, which a real model reads
