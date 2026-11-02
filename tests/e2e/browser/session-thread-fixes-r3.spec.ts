@@ -35,7 +35,7 @@ async function openDense(page: Page, width: number): Promise<Locator> {
 async function openDrawer(panel: Locator): Promise<Locator> {
   const drawer = await openQuestionList(panel.page(), panel)
   await expect(drawer).toHaveAttribute('data-mode', 'open')
-  await drawer.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)))
+  await drawer.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished.catch(() => undefined))))
   return drawer
 }
 

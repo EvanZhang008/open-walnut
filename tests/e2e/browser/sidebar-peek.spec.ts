@@ -40,7 +40,7 @@ async function centerOf(page: Page, testId: string) {
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 }
 }
 /** The pill's grow clips its hit area too: aim at the name only once it is out. */
-const grown = (page: Page) => pill(page).evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)).then(() => true))
+const grown = (page: Page) => pill(page).evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished.catch(() => undefined))).then(() => true))
 /** The row's icon box and the pill's copy of it: the copy must sit exactly on the original. */
 async function iconsOf(page: Page, testId: string) {
   const row = await page.getByTestId(testId).evaluate((el) => {

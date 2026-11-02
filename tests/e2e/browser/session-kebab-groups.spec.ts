@@ -41,7 +41,7 @@ async function openMenu(page: Page, panel: Locator): Promise<Locator> {
   await expect(menu).toBeVisible()
   // The task half arrives with the task fetch.
   await expect(menu.getByTestId('kebab-group-dates')).toBeVisible({ timeout: 60_000 })
-  await menu.evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)))
+  await menu.evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished.catch(() => undefined))))
   return menu
 }
 

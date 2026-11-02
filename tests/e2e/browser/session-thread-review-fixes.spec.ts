@@ -166,7 +166,7 @@ test.describe('Question stack review fixes', () => {
     await expect(card).toBeVisible()
     // Let the card finish sliding in: a click mid-slide misses its target in WebKit,
     // and Playwright then scrolls the timeline to retry, a move the reader never made.
-    await card.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)))
+    await card.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished.catch(() => undefined))))
     await card.locator('.thread-card-expand').click()
     await expect(card).toHaveAttribute('data-expanded', 'true')
     await page.keyboard.press('Escape')

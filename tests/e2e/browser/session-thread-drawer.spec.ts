@@ -53,7 +53,7 @@ async function openDrawer(panel: Locator): Promise<Locator> {
   const drawer = await openQuestionList(panel.page(), panel)
   await expect(drawer).toHaveAttribute('data-mode', 'open')
   // Geometry is measured after the 160ms slide-in, never mid-animation.
-  await drawer.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)))
+  await drawer.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished.catch(() => undefined))))
   return drawer
 }
 

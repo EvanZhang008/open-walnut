@@ -239,7 +239,7 @@ test.describe('Session background work placement', () => {
     await expect(menuRow).toHaveText('Background tasks');
     await expect(menuRow.locator('.session-action-chip-count')).toHaveCount(0);
     // Let the menu finish fading in before the picture is taken.
-    await menu.evaluate(el => Promise.all(el.getAnimations({ subtree: true }).map(a => a.finished)));
+    await menu.evaluate(el => Promise.all(el.getAnimations({ subtree: true }).map(a => a.finished.catch(() => undefined))));
     await shoot(page, menu, '3-menu-row-all-finished', 8);
     await menuRow.click();
     await expect(menu).toHaveCount(0);

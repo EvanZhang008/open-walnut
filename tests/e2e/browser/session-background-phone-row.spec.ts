@@ -65,7 +65,7 @@ test('after every task finished, the phone menu opens the Background tasks list'
   const row = page.getByTestId('phone-row-background')
   await expect(row).toHaveText('Background tasks', { timeout: 15_000 })
   const menu = page.locator('.task-kebab-menu:visible')
-  await menu.evaluate(el => Promise.all(el.getAnimations({ subtree: true }).map(a => a.finished)))
+  await menu.evaluate(el => Promise.all(el.getAnimations({ subtree: true }).map(a => a.finished.catch(() => undefined))))
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-phone-menu-row.png`, scale: 'css' })
   await row.click()
   const tasksPanel = page.locator('.wf-modal--tasks')

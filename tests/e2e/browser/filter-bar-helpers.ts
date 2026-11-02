@@ -72,7 +72,7 @@ export async function openFilterMenu(page: Page): Promise<void> {
 
 /** Wait out a popover's 120ms entry animation (a translateY), so positions read are final. */
 export async function settled(popover: Locator): Promise<void> {
-  await popover.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)).then(() => undefined))
+  await popover.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished.catch(() => undefined))).then(() => undefined))
 }
 
 /** Close the Filter menu: a chip menu first, then the search text, then the menu. */

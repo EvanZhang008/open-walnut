@@ -1452,3 +1452,28 @@ describe('a click on the timeline\'s Load earlier turns button', () => {
     expect(offendersOf('x.ts', bare.replace('    await loadEarlier.click();', '    await readerScrollToTop(page);\n    await loadEarlier.click();'))).toEqual([])
   })
 })
+
+describe('a spec that waits for animations to finish', () => {
+  // An animation's `finished` rejects with AbortError when the animation is cancelled (a menu
+  // that re-renders replaces its entrance), and Promise.all over it then fails the spec on a
+  // cancel that means the animation is over (2026-11-02, CI: session-background-placement,
+  // "AbortError: The user aborted a request", reproduced locally). Every wait catches it.
+  const UNCAUGHT = /\.finished(?!\s*\.catch\()(?!\s*\(\))/
+
+  const offendersOf = (file: string, text: string): string[] => text.split('\n')
+    .map((line, i) => ({ line, i }))
+    .filter(({ line }) => /getAnimations\(|\ba\.finished\b|\banim\.finished\b/.test(line) && UNCAUGHT.test(line))
+    .map(({ line, i }) => `${file}:${i + 1}: ${line.trim()}`)
+
+  it('every one catches a cancelled animation', () => {
+    expect(sources.filter(({ text }) => /getAnimations\(/.test(text)).length).toBeGreaterThan(10)
+    expect(sources.flatMap(({ file, text }) => offendersOf(file, text))).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    expect(offendersOf('x.ts', '    await menu.evaluate(el => Promise.all(el.getAnimations({ subtree: true }).map(a => a.finished)));')).toHaveLength(1)
+    expect(offendersOf('x.ts', '    await menu.evaluate(el => Promise.all(el.getAnimations({ subtree: true }).map(a => a.finished.catch(() => undefined))));')).toEqual([])
+    // A Playwright Response's finished() is another thing.
+    expect(offendersOf('x.ts', '    await (await response).finished()')).toEqual([])
+  })
+})

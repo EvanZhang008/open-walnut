@@ -362,7 +362,7 @@ test('the header pill grows the exact numbers out of itself on hover and focus, 
   const items = () => header.locator('[data-header-id]').evaluateAll((els) => els
     .filter((el) => (el as HTMLElement).dataset.hidden !== 'true' && el.getBoundingClientRect().width > 0)
     .map((el) => { const r = el.getBoundingClientRect(); return `${(el as HTMLElement).dataset.headerId}:${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.width)}` }))
-  const settled = () => full.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)).then(() => undefined))
+  const settled = () => full.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished.catch(() => undefined))).then(() => undefined))
   const grown = async () => {
     await expect(full).toBeVisible()
     await settled()

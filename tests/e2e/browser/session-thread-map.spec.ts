@@ -173,7 +173,7 @@ async function rowTop(panel: Locator, id: string): Promise<number> {
 /** The rail's list once its fade-in is over: opaque, so the text under it never
  *  shows through (a shot taken inside the 100ms fade reads as a see-through list). */
 async function expectSettledOverlay(overlay: Locator): Promise<void> {
-  await overlay.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)))
+  await overlay.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished.catch(() => undefined))))
   expect(await overlay.evaluate((el) => getComputedStyle(el).opacity)).toBe('1')
   expect(await overlay.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toMatch(/rgba\(.*,\s*0\)$|transparent/)
 }

@@ -107,7 +107,7 @@ async function shootRail(page: Page, name: string): Promise<void> {
   // test timeout whenever no popover was open.
   const pop = (await popover(page).count()) > 0 ? await popover(page).boundingBox() : null
   // The popover fades in over 0.16s; a shot taken inside it shows a ghost, not the design.
-  if (pop) await popover(page).evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)))
+  if (pop) await popover(page).evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished.catch(() => undefined))))
   const right = Math.max(rail!.x + rail!.width, pop ? pop.x + pop.width : 0) + 16
   const top = Math.max(0, Math.min(rail!.y + rail!.height - 330, pop ? pop.y - 16 : Infinity))
   await page.screenshot({ timeout: 60_000, path: `${SHOTS}/${name}.png`, clip: { x: 0, y: top, width: Math.min(1280, right), height: rail!.y + rail!.height - top } })
@@ -216,7 +216,7 @@ test('the popover opens beside the rail, and a button runs the op again and agai
 
   // Beside the rail, bottom level with the item, fully on screen. Measured at rest: the
   // popover slides in 4px, and a fast run otherwise reads it mid-animation.
-  await popover(page).evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)))
+  await popover(page).evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished.catch(() => undefined))))
   const rail = (await page.locator('.sidebar').boundingBox())!
   const trigger = (await item(page).boundingBox())!
   const box = (await popover(page).boundingBox())!
@@ -458,7 +458,7 @@ test('a notice button closes its toast at once and runs the op after; a failure 
   await expect(failed).toBeVisible()
   await expect(failed.locator('.notification-toast-body')).toContainText('Probe refused on purpose')
   await expect(failed.locator('.notification-toast-body')).toContainText('still in the notifications panel')
-  await failed.evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)))
+  await failed.evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished.catch(() => undefined))))
   const box = (await failed.boundingBox())!
   await page.screenshot({ path: `${SHOTS}/08-toast-error.png`, clip: { x: Math.max(0, box.x - 16), y: Math.max(0, box.y - 16), width: Math.min(1280 - Math.max(0, box.x - 16), box.width + 32), height: box.height + 32 } })
 })
