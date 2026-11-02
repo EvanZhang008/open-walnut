@@ -125,6 +125,9 @@ export interface PackOptions {
   exclude?: string[]
   /** Pack as a plain folder even inside a repository ('task-move-v1'). */
   asDir?: boolean
+  /** A probe: skip the bundle of a repository no other host can clone, which would carry its
+   *  whole history (older daemons ignore it and bundle as before). */
+  noFullBundle?: boolean
 }
 
 /** Pack the workspace at `cwd` on `host` into `outDir` there (meta.json and friends). */

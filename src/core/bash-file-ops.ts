@@ -1,5 +1,5 @@
 /**
- * Bash file-op parser — extract file CREATE / DELETE / RENAME operations from the
+ * Bash file-op parser — extract file CREATE / DELETE / RENAME / MODIFY operations from the
  * shell commands a session ran, so the Changed view covers moves/renames/deletes
  * (done via `mv`/`git mv`/`rm`/`git rm`/`cp`/`touch`/redirection) and not just the
  * Edit/Write/MultiEdit tool ops.
@@ -16,7 +16,9 @@
  * Shell is untyped and unbounded; a wrong guess would fabricate a diff. So we ONLY
  * emit an op when the command is unambiguous:
  *   - the statement's first word is a known file command (`mv`/`cp`/`rm`/`touch`,
- *     or `git mv`/`git rm`), optionally behind `sudo`;
+ *     or `git mv`/`git rm`), optionally behind `sudo`, or a command that rewrites
+ *     the files it names in place (IN_PLACE_WRITERS: `sed -i`, `perl -i`, `tee`, a
+ *     formatter's write mode), which gives a `modify` op (so does a `>>` append);
  *   - every operand is a plain literal path — NO globs (`* ? [ ] { }`), NO variable
  *     or command substitution (`$`, backticks), NO tilde (unexpanded `~`);
  *   - operand arity matches (mv/cp take exactly 2; rm/touch take ≥1).
@@ -36,7 +38,8 @@
 import path from 'node:path';
 
 export interface BashFileOp {
-  kind: 'create' | 'delete' | 'rename';
+  /** `modify`: the command rewrote a file in place (`sed -i`, `>>`, a formatter); what it wrote is unknown. */
+  kind: 'create' | 'delete' | 'rename' | 'modify';
   /** Absolute target path (for rename: the destination). */
   path: string;
   /** Absolute source path (rename only). */
@@ -201,7 +204,8 @@ export function parseBashFileOps(command: string, cwd: string | undefined): Bash
         // (observed phantom: a Changed row literally named `&2`).
         else if (target && !target.startsWith('&') && isSafeOperand(target)) {
           const abs = resolveOperand(target, runningCwd);
-          if (abs) ops.push({ kind: 'create', path: abs });
+          // `>>` appends to what the file held: a change in place, not new content.
+          if (abs) ops.push({ kind: t === '>>' ? 'modify' : 'create', path: abs });
         }
         k++; // skip the redirect target
         continue;
@@ -224,6 +228,18 @@ export function parseBashFileOps(command: string, cwd: string | undefined): Bash
       if (dir && isSafeOperand(dir)) {
         const abs = resolveOperand(dir, runningCwd);
         if (abs) runningCwd = abs;
+      }
+      continue;
+    }
+
+    // A command that rewrites the files it names, in place (2026-11-01: a `sed -i` in a
+    // shared checkout was not the session's change, so a task move left it behind).
+    const writer = inPlaceWriter(toks, idx);
+    if (writer) {
+      for (const o of writer) {
+        if (!isSafeOperand(o)) continue;
+        const abs = resolveOperand(o, runningCwd);
+        if (abs) ops.push({ kind: 'modify', path: abs });
       }
       continue;
     }
@@ -278,4 +294,191 @@ export function parseBashFileOps(command: string, cwd: string | undefined): Bash
   }
 
   return ops;
+}
+
+// ── Commands that rewrite the files they name, in place ──
+
+/** Walk a short-flag cluster (`-Ei`, `-pi.bak`): `stop` ends it, `next` also takes the next word as the flag's value. */
+function cluster(flag: string, onLetter: (c: string, rest: string) => 'stop' | 'next' | void): 'next' | void {
+  for (let i = 1; i < flag.length; i++) {
+    const r = onLetter(flag[i]!, flag.slice(i + 1));
+    if (r === 'stop') return;
+    if (r === 'next') return 'next';
+  }
+}
+
+/** `sed -i` (GNU `-i[SUF]`/`--in-place[=SUF]`, BSD `-i ''`): the operands after the script. */
+function sedFiles(args: string[]): string[] | null {
+  let inPlace = false;
+  let script = false;
+  const ops: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const t = args[i]!;
+    if (t === '--') { ops.push(...args.slice(i + 1)); break; }
+    if (t === '--in-place' || t.startsWith('--in-place=')) { inPlace = true; continue; }
+    if (t === '--expression' || t === '--file') { script = true; i++; continue; }
+    if (t.startsWith('--expression=') || t.startsWith('--file=')) { script = true; continue; }
+    if (t.startsWith('--')) continue;
+    if (t.startsWith('-') && t.length > 1) {
+      const r = cluster(t, (c, rest) => {
+        if (c === 'i') {
+          inPlace = true;
+          // BSD's `-i ''`: the empty suffix is its own word.
+          if (!rest && args[i + 1] === '') i++;
+          return 'stop';
+        }
+        if (c === 'e' || c === 'f') { script = true; return rest ? 'stop' : 'next'; }
+        if (c === 'l') return rest ? 'stop' : 'next';
+      });
+      if (r === 'next') i++;
+      continue;
+    }
+    ops.push(t);
+  }
+  if (!inPlace) return null;
+  return script ? ops : ops.slice(1);
+}
+
+/** `perl -i` / `-pi -e CODE` (and `ruby -i`, the same flags): the operands after the code. */
+function perlFiles(args: string[]): string[] | null {
+  let inPlace = false;
+  let code = false;
+  const ops: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const t = args[i]!;
+    if (t === '--') { ops.push(...args.slice(i + 1)); break; }
+    if (t.startsWith('-') && t.length > 1 && !t.startsWith('--')) {
+      const r = cluster(t, (c, rest) => {
+        if (c === 'i') { inPlace = true; return 'stop'; }
+        if (c === 'e' || c === 'E') { code = true; return rest ? 'stop' : 'next'; }
+        if (c === 'M' || c === 'm' || c === 'I' || c === 'x' || c === 'C' || c === 'r') return 'stop';
+      });
+      if (r === 'next') i++;
+      continue;
+    }
+    ops.push(t);
+  }
+  if (!inPlace) return null;
+  return code ? ops : ops.slice(1);
+}
+
+/** Every operand that is not a flag (a flag's value, when it has one, is listed in `valued`). */
+function operandsOf(args: string[], valued: string[] = []): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const t = args[i]!;
+    if (t === '--') { out.push(...args.slice(i + 1)); break; }
+    if (t.startsWith('-')) { if (valued.includes(t)) i++; continue; }
+    out.push(t);
+  }
+  return out;
+}
+
+/** Any of these words is among the arguments. */
+function has(args: string[], words: string[]): boolean {
+  return args.some((a) => words.includes(a));
+}
+
+/** dos2unix: files in place, or with `-n IN OUT` pairs, only each OUT. */
+function newfilePairs(args: string[]): string[] {
+  const at = args.findIndex((a) => a === '-n' || a === '--newfile');
+  if (at < 0) return operandsOf(args);
+  return operandsOf(args.slice(0, at)).concat(operandsOf(args.slice(at + 1)).filter((_, i) => i % 2 === 1));
+}
+
+const BIOME_VALUED = ['--config-path', '--reporter', '--max-diagnostics', '--log-level', '--log-kind', '--vcs-root', '--stdin-file-path', '--diagnostic-level'];
+const RUFF_VALUED = [
+  '--config', '--select', '--ignore', '--extend-select', '--extend-ignore', '--line-length', '--target-version', '--exclude',
+  '--extend-exclude', '--output-format', '--cache-dir', '--per-file-ignores', '--stdin-filename', '--fixable', '--unfixable', '--range',
+];
+
+/** A formatter that rewrites its files only with one of `flags`. */
+function withFlag(flags: string[], valued: string[] = []): (args: string[]) => string[] | null {
+  return (args) => (args.some((a) => flags.includes(a) || flags.some((f) => f.startsWith('--') && a.startsWith(f + '='))) ? operandsOf(args, valued) : null);
+}
+
+/** A formatter whose subcommand writes (`ruff format`, `biome format --write`). */
+function sub(table: Record<string, (args: string[]) => string[] | null>): (args: string[]) => string[] | null {
+  return (args) => {
+    const name = args.find((a) => !a.startsWith('-'));
+    const f = name ? table[name] : undefined;
+    return f ? f(args.slice(args.indexOf(name!) + 1)) : null;
+  };
+}
+
+/**
+ * Every command known to rewrite the files it names, by its name, each returning the
+ * files it writes (null: this use writes nothing in place). A command that writes files
+ * it does not name (a script, a code generator, `git apply`) cannot be read from its
+ * words and is not here. tests/core/bash-file-ops.test.ts holds a case for each entry
+ * and fails on one without.
+ */
+export const IN_PLACE_WRITERS: Record<string, (args: string[]) => string[] | null> = {
+  sed: sedFiles,
+  gsed: sedFiles,
+  perl: perlFiles,
+  ruby: perlFiles,
+  tee: (args) => operandsOf(args),
+  truncate: (args) => operandsOf(args, ['-s', '-r', '--size', '--reference']),
+  dos2unix: newfilePairs,
+  unix2dos: newfilePairs,
+  prettier: withFlag(['--write', '-w'], [
+    '--config', '--parser', '--plugin', '--ignore-path', '--log-level', '--cache-location', '--cache-strategy', '--stdin-filepath',
+    '--config-precedence', '--end-of-line', '--trailing-comma', '--print-width', '--tab-width', '--quote-props', '--arrow-parens',
+    '--prose-wrap', '--html-whitespace-sensitivity', '--embedded-language-formatting', '--object-wrap',
+  ]),
+  eslint: withFlag(['--fix'], [
+    '-c', '--config', '--ext', '--rule', '--parser', '--parser-options', '--format', '-f', '-o', '--output-file', '--ignore-path',
+    '--ignore-pattern', '--rulesdir', '--resolve-plugins-relative-to', '--cache-location', '--cache-strategy', '--stdin-filename',
+    '--max-warnings', '--env', '--global', '--plugin', '--fix-type', '--report-unused-disable-directives-severity',
+  ]),
+  biome: sub({
+    format: withFlag(['--write', '--apply'], BIOME_VALUED),
+    check: withFlag(['--write', '--apply', '--fix'], BIOME_VALUED),
+    lint: withFlag(['--write', '--apply', '--fix'], BIOME_VALUED),
+  }),
+  gofmt: withFlag(['-w']),
+  goimports: withFlag(['-w'], ['-local']),
+  black: (args) => (has(args, ['--check', '--diff']) ? null : operandsOf(args, [
+    '-l', '--line-length', '-t', '--target-version', '--config', '--include', '--exclude', '--extend-exclude', '--force-exclude', '--stdin-filename', '-W', '--workers',
+  ])),
+  isort: (args) => (has(args, ['-c', '--check', '--check-only', '--diff', '--df']) ? null : operandsOf(args, [
+    '--settings-path', '--sp', '--settings-file', '--profile', '-l', '--line-length', '-s', '--skip', '--src', '--virtual-env', '-j', '--jobs',
+  ])),
+  ruff: sub({
+    format: (args) => (has(args, ['--check', '--diff']) ? null : operandsOf(args, RUFF_VALUED)),
+    check: (args) => (has(args, ['--diff']) ? null : withFlag(['--fix'], RUFF_VALUED)(args)),
+  }),
+  rustfmt: (args) => {
+    if (has(args, ['--check'])) return null;
+    const emit = args.indexOf('--emit');
+    if ((emit >= 0 && args[emit + 1] !== 'files') || args.some((a) => a.startsWith('--emit=') && a !== '--emit=files')) return null;
+    return operandsOf(args, ['--edition', '--config-path', '--config', '--emit', '--color', '--style-edition']);
+  },
+  'clang-format': withFlag(['-i'], ['--style', '-style', '--assume-filename', '--fallback-style', '--lines', '--offset', '--length']),
+  autopep8: withFlag(['-i', '--in-place'], ['--select', '--ignore', '--max-line-length', '--global-config', '--exclude']),
+  yapf: withFlag(['-i', '--in-place'], ['--style', '-e', '--exclude', '-l', '--lines']),
+};
+
+/** Wrappers that run another command: `npx prettier`, `bun x eslint`, `env A=1 sed`. */
+function unwrap(toks: string[], idx: number): number {
+  for (let guard = 0; guard < 4 && idx < toks.length; guard++) {
+    const t = toks[idx]!;
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) { idx++; continue; }
+    if (t === 'npx' || t === 'bunx' || t === 'env' || t === 'command' || t === 'nice') { idx++; while (toks[idx]?.startsWith('-')) idx++; continue; }
+    if ((t === 'bun' || t === 'pnpm' || t === 'yarn' || t === 'uv') && ['x', 'exec', 'dlx', 'run'].includes(toks[idx + 1] ?? '')) { idx += 2; continue; }
+    break;
+  }
+  return idx;
+}
+
+/** The files a command rewrites in place, when it is a known writer; null otherwise. */
+function inPlaceWriter(toks: string[], idx: number): string[] | null {
+  const at = unwrap(toks, idx);
+  const name = toks[at];
+  if (!name) return null;
+  const base = path.basename(name);
+  // Own keys only: `toString` is no writer.
+  if (!Object.prototype.hasOwnProperty.call(IN_PLACE_WRITERS, base)) return null;
+  return IN_PLACE_WRITERS[base]!(toks.slice(at + 1));
 }

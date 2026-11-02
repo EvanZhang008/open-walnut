@@ -75,7 +75,7 @@ export async function placeStartByLoad(
     try {
       const client = await import('../transfer/daemon-transfer-client.js');
       const { transfersDir } = await import('../transfer/workspace.js');
-      probe = await within(client.packWorkspace(sourceHost, { cwd: launch.cwd, outDir: `${transfersDir(sourceHost)}/${moveId}/0/pack`, paths: [] }), deadline, 'reading the folder');
+      probe = await within(client.packWorkspace(sourceHost, { cwd: launch.cwd, outDir: `${transfersDir(sourceHost)}/${moveId}/0/pack`, paths: [], noFullBundle: true }), deadline, 'reading the folder');
     } catch (err) {
       log.session.info('placement: the folder could not be read for a move', { taskId: task.id, cwd: launch.cwd, error: err instanceof Error ? err.message : String(err) });
       probe = null;

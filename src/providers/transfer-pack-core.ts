@@ -11,7 +11,8 @@
  *                   they are listed in meta.untracked.skipped instead (at most 200)
  *   repo.bundle     git: only when HEAD is on no remote-tracking ref: the commits since
  *                   the merge base with the best remote ref (upstream, origin/HEAD, any),
- *                   or a full bundle of HEAD when there is no remote ref at all
+ *                   or a full bundle of HEAD when there is no remote ref at all or no
+ *                   remote another host can reach (none, or only folders on this host)
  *   workspace.tgz   not git: the folder without node_modules, .git, .venv, dist, build,
  *                   target, __pycache__; cut and deleted past maxTarBytes (meta.tooLarge)
  *
@@ -375,7 +376,7 @@ export function createTransferPack(deps: TransferPackDeps) {
     return text(await git(root, ['merge-base', 'HEAD', best])) || null
   }
 
-  async function packGit(cwd: string, root: string, outDir: string, maxUntracked: number, written: string[], only: string[] | null, ownBefore: Record<string, unknown> | null): Promise<PackMeta> {
+  async function packGit(cwd: string, root: string, outDir: string, maxUntracked: number, written: string[], only: string[] | null, ownBefore: Record<string, unknown> | null, noFullBundle: boolean): Promise<PackMeta> {
     var realCwd = await deps.fs.promises.realpath(cwd).then(function (p) { return p }, function () { return cwd })
     var relCwd = deps.path.relative(root, realCwd)
     if (relCwd.indexOf('..') === 0 || deps.path.isAbsolute(relCwd)) relCwd = ''
@@ -393,6 +394,11 @@ export function createTransferPack(deps: TransferPackDeps) {
         headOnRemote = (await git(root, ['merge-base', '--is-ancestor', 'HEAD', deep.tips[t]])).code === 0
       }
     }
+    // Another host reaches a remote only by its URL. With none (no remote, or only
+    // folders on this host) nothing can be fetched there: every commit rides in the bundle.
+    var portable = !!(deep && deep.url)
+    for (var pr = 0; pr < remoteList.length && !portable; pr++) portable = !localRemotePath(remoteList[pr].url)
+    if (!portable) headOnRemote = false
     var tracked = text(await git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=no']))
     var meta: PackMeta = {
       kind: 'git', root: root, relCwd: relCwd, branch: branch, head: head,
@@ -469,12 +475,14 @@ export function createTransferPack(deps: TransferPackDeps) {
     }
     meta.dirty = onlySet ? written.indexOf('changes.patch') >= 0 || u.files.length > 0 : !!tracked || u.files.length > 0
 
-    if (head && !headOnRemote) {
+    // A probe that would never use a whole history (`noFullBundle`) skips it.
+    if (head && !headOnRemote && !(noFullBundle && !portable)) {
       var base: string | null = null
-      if (deep) {
+      // A remote no other host can reach is no base: the bundle then carries every commit.
+      if (portable && deep) {
         for (var b2 = 0; b2 < deep.tips.length && !base; b2++) base = text(await git(root, ['merge-base', 'HEAD', deep.tips[b2]])) || null
       }
-      if (!base) base = await bundleBase(root, upstreamFull && upstreamFull.indexOf('refs/remotes/') === 0 ? upstreamFull : null)
+      if (portable && !base) base = await bundleBase(root, upstreamFull && upstreamFull.indexOf('refs/remotes/') === 0 ? upstreamFull : null)
       var args = ['bundle', 'create', deps.path.join(outDir, 'repo.bundle')]
       if (base) args.push('^' + base)
       args.push('HEAD')
@@ -643,11 +651,26 @@ export function createTransferPack(deps: TransferPackDeps) {
         if (cloned.code === 0) { clonedFrom = url; steps.push('cloned ' + url) }
       }
       if (!clonedFrom) {
-        if (cloned) throw stepFail('clone', cloned, steps, dest)
-        throw fail('apply_failed', 'clone: no checkout of this repository on this host and no URL to clone it from')
+        // A full bundle holds every commit: a repository nothing here can clone (no
+        // remote, a remote that is a folder on the old host, a URL this host cannot
+        // reach) starts empty and fetches its history from the bundle itself.
+        var fullBundle = !!meta.bundle && !meta.bundle.base && (await has('repo.bundle'))
+        if (!fullBundle) {
+          if (cloned) throw stepFail('clone', cloned, steps, dest)
+          throw fail('apply_failed', 'clone: no checkout of this repository on this host and no URL to clone it from')
+        }
+        await deps.fs.promises.rm(dest, { recursive: true, force: true }).catch(function () { /* none */ })
+        await deps.fs.promises.mkdir(dest, { recursive: true })
+        var gi = await git(dest, ['init', '-q'])
+        if (gi.code !== 0) throw stepFail('init', gi, steps, dest)
+        steps.push('git init: every commit comes from the bundle')
+        if (url) {
+          var ra = await git(dest, ['remote', 'add', 'origin', url])
+          if (ra.code === 0) steps.push('origin set to ' + url)
+        }
       }
       // A clone of a checkout here fetches later commits from the real remote.
-      if (url && clonedFrom !== url) {
+      if (url && clonedFrom && clonedFrom !== url) {
         var su = await git(dest, ['remote', 'set-url', 'origin', url])
         if (su.code === 0) steps.push('origin set to ' + url)
       }
@@ -733,7 +756,7 @@ export function createTransferPack(deps: TransferPackDeps) {
     var written: string[] = []
     // `paths: []` of a plain folder asks only what it is (a probe): nothing is archived.
     var ownBefore = cmd.ownBefore && typeof cmd.ownBefore === 'object' ? cmd.ownBefore as Record<string, unknown> : null
-    var meta = top ? await packGit(cwd, root, outDir, maxUntracked, written, only, ownBefore)
+    var meta = top ? await packGit(cwd, root, outDir, maxUntracked, written, only, ownBefore, cmd.noFullBundle === true)
       : only && only.length === 0 ? { kind: 'dir' as const, root: root, relCwd: '', createdAt: '' }
       : await packDir(cwd, outDir, maxTar, written, exclude)
     meta.createdAt = new Date(now()).toISOString()

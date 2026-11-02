@@ -179,12 +179,14 @@ export function workspaceInstructions(moved: MovedWorkspace, target: { repoRoot:
   const has = (name: string) => moved.files.includes(name);
   lines.push(`The workspace was packed on the old host and copied here (${moved.route === 'direct' ? 'host to host' : 'through Walnut'}) into ${moved.bundleDir}: ${moved.files.join(', ')}. meta.json there describes it.`);
   if (m.kind === 'git') {
-    const remote = m.remotes?.[0];
-    lines.push(`It is a git repository${remote ? ` (remote ${remote.name}: ${remote.url})` : ' with no remote'}, branch ${m.branch ?? '(detached)'} at ${m.head ?? 'no commit yet'}.`);
+    // Only a URL another host can clone from: a remote that is a folder on the old host is not one.
+    const url = m.upstreamUrl ?? m.remotes?.find((r) => !/^(\/|~\/|file:\/\/)/.test(r.url))?.url;
+    const remote = m.remotes?.find((r) => r.url === url) ?? (url ? { name: 'origin', url } : undefined);
+    lines.push(`It is a git repository${remote ? ` (remote ${remote.name}: ${remote.url})` : ' with no remote another host can clone from'}, branch ${m.branch ?? '(detached)'} at ${m.head ?? 'no commit yet'}.`);
     if (target.known) {
       lines.push(`This host already has it at ${target.repoRoot}. Keep any local changes there: fetch, then check out the branch above (create it at the commit if needed).`);
     } else {
-      lines.push(`Set it up at ${target.repoRoot}${remote ? `: clone ${remote.url} into it (it exists and is empty: \`git clone ${remote.url} .\`), then check out ${m.branch ?? m.head}` : ' (`git init` there first)'}.`);
+      lines.push(`Set it up at ${target.repoRoot}${remote ? `: clone ${remote.url} into it (\`mkdir -p ${target.repoRoot} && git -C ${target.repoRoot} clone ${remote.url} .\`), then check out ${m.branch ?? m.head}` : ` (\`mkdir -p ${target.repoRoot} && git -C ${target.repoRoot} init\` first)`}.`);
     }
     const id = identityCommand(m.identity);
     if (id) {

@@ -46,7 +46,7 @@ export type FileOwner = 'mine' | 'mixed' | 'other' | 'unknown'
 
 /** The session ops, as session-changes-core.ts records them (structurally). */
 export interface AttrOp {
-  kind: 'edit' | 'write' | 'create' | 'delete' | 'rename'
+  kind: 'edit' | 'write' | 'create' | 'modify' | 'delete' | 'rename'
   oldString?: string
   newString?: string
   replaceAll?: boolean
@@ -352,8 +352,8 @@ export function createGitAttribution(opts?: { maxD?: number; maxLines?: number }
         steps.push({ kind: 'write', op: op })
         sawWrite = true
         t = typeof op.original === 'string' ? op.original : ''
-      } else if (op.kind === 'create') {
-        // A shell command wrote the file: what it wrote is not claimed.
+      } else if (op.kind === 'create' || op.kind === 'modify') {
+        // A shell command wrote the file (or rewrote it in place): what it wrote is not claimed.
         shell = true
         break
       } else if (op.kind === 'delete') {

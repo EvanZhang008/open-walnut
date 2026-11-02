@@ -36,6 +36,7 @@
  */
 
 import fsp from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -50,6 +51,7 @@ import {
   collectOpsFromJsonl,
   mergeFileMapInto,
   reconstructFile,
+  headPathForModify,
   isExcludedPath,
   groupMeta,
   type FileAccum,
@@ -66,6 +68,12 @@ import { log } from '../logging/index.js';
 // identical results. This module owns the SERVER-side concerns: reader-based
 // remote I/O (the fallback for daemons without changes-v1), the mtime +
 // incremental cache, SWR, and disk snapshots.
+
+/** A path under a temp folder, which no repository holds. */
+function isTempPath(p: string): boolean {
+  return [os.tmpdir(), '/tmp', '/private/tmp', '/var/folders'].some((d) => p === d || p.startsWith(d.replace(/\/+$/, '') + '/'));
+}
+
 export { isExcludedPath } from '../providers/session-changes-core.js';
 export type { SessionFileChange, SessionRepoGroup, SessionChangesResult } from '../providers/session-changes-core.js';
 
@@ -1108,8 +1116,11 @@ async function computeSessionChangesInner(
         failedPaths.add(accum.filePath);
       }
       const isDeleted = accum.ops[accum.ops.length - 1]?.kind === 'delete';
-      const deletedBefore = isDeleted && !isRemote
-        ? await readDeletedBeforeLocal(accum.filePath)
+      // A rewrite in place starts from the file at HEAD (at its first name), as a delete
+      // does; never for a temp file, which no repository holds (`>> /tmp/x.log`).
+      const headPath = isDeleted ? accum.filePath : headPathForModify(accum);
+      const deletedBefore = headPath && !isRemote && (isDeleted || !isTempPath(headPath))
+        ? await readDeletedBeforeLocal(headPath)
         : null;
       const { renamedFrom, ...recon } = reconstructFile(current, accum, deletedBefore);
       const change: SessionFileChange = { filePath: accum.filePath, relPath: accum.filePath, ...recon };

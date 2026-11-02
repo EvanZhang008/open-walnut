@@ -63,6 +63,8 @@ function pushedRepo(name: string): { root: string; remote: string; work: string 
   git(work, ['add', '-A'])
   git(work, ['commit', '-q', '-m', 'first'])
   git(work, ['push', '-q', '-u', 'origin', 'main'])
+  // Another host reaches a remote by its URL: a folder here would make the pack carry every commit.
+  git(work, ['remote', 'set-url', 'origin', 'https://example.invalid/' + name + '.git'])
   return { root, remote, work }
 }
 
@@ -88,14 +90,14 @@ function tarList(file: string): string[] {
 
 describe('transfer.pack: git repos', () => {
   it('a clean repo whose HEAD is pushed: meta only, no bundle', async () => {
-    const { root, work, remote } = pushedRepo('clean')
+    const { root, work } = pushedRepo('clean')
     const out = path.join(root, 'out')
     const r = await packer.pack({ cwd: path.join(work, 'src'), outDir: out })
     expect(r.files.map((f) => f.name)).toEqual(['meta.json'])
     expect(r.meta).toMatchObject({
       kind: 'git', root: work, relCwd: 'src', branch: 'main', head: git(work, ['rev-parse', 'HEAD']),
       upstream: 'origin/main', headOnRemote: true, dirty: false, bundle: null,
-      remotes: [{ name: 'origin', url: remote }], untracked: { count: 0, bytes: 0, skipped: [] },
+      remotes: [{ name: 'origin', url: 'https://example.invalid/clean.git' }], untracked: { count: 0, bytes: 0, skipped: [] },
     })
     expect(JSON.parse(fs.readFileSync(path.join(out, 'meta.json'), 'utf8'))).toEqual(r.meta)
     expect(r.files[0].sha256).toBe(sha(path.join(out, 'meta.json')))
@@ -192,6 +194,30 @@ describe('transfer.pack: git repos', () => {
     const clone = path.join(root, 'clone')
     git(root, ['clone', '-q', path.join(root, 'out', 'repo.bundle'), clone])
     expect(git(clone, ['rev-parse', 'HEAD'])).toBe(git(work, ['rev-parse', 'HEAD']))
+  })
+
+  it('a remote that is a folder on this host is no base: every commit rides, even those it has', async () => {
+    const root = dir('folder-remote')
+    const remote = path.join(root, 'remote.git')
+    git(root, ['init', '-q', '--bare', remote])
+    const work = path.join(root, 'work')
+    git(root, ['clone', '-q', remote, work])
+    write(path.join(work, 'x.txt'), 'x\n')
+    git(work, ['add', '-A'])
+    git(work, ['commit', '-q', '-m', 'pushed'])
+    git(work, ['push', '-q', '-u', 'origin', 'main'])
+    write(path.join(work, 'x.txt'), 'y\n')
+    git(work, ['commit', '-q', '-am', 'local'])
+    const r = await packer.pack({ cwd: work, outDir: path.join(root, 'out') })
+    expect(r.meta).toMatchObject({ headOnRemote: false, bundle: {}, ahead: 2 })
+    // The bundle alone rebuilds it: no prerequisite commit.
+    const clone = path.join(root, 'clone')
+    git(root, ['clone', '-q', path.join(root, 'out', 'repo.bundle'), clone])
+    expect(git(clone, ['rev-parse', 'HEAD'])).toBe(git(work, ['rev-parse', 'HEAD']))
+    // HEAD pushed to the folder remote is no exception: another host cannot fetch it from there.
+    git(work, ['push', '-q', 'origin', 'main'])
+    const r2 = await packer.pack({ cwd: work, outDir: path.join(root, 'out2') })
+    expect(r2.meta).toMatchObject({ headOnRemote: false, bundle: {} })
   })
 
   it('a detached HEAD has no branch', async () => {

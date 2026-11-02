@@ -79,6 +79,8 @@ export type FileOp =
   // (its tool result is `type: 'update'` with `originalFile`). Absent = a create.
   | { kind: 'write'; content: string; toolUseId?: string; original?: string; failed?: boolean }
   | { kind: 'create' }
+  // A shell command rewrote the file in place (`sed -i`, `>>`, a formatter): what it wrote is unknown.
+  | { kind: 'modify' }
   | { kind: 'delete' }
   | { kind: 'rename'; from: string };
 
@@ -215,7 +217,7 @@ export function collectOpsFromJsonl(content: string, fileMap: Map<string, FileAc
           }
           const accum = fileMap.get(op.path) ?? { filePath: op.path, cwd: lineCwd, ops: [] };
           if (!accum.cwd && lineCwd) accum.cwd = lineCwd;
-          accum.ops.push(op.kind === 'delete' ? { kind: 'delete' } : { kind: 'create' });
+          accum.ops.push(op.kind === 'delete' ? { kind: 'delete' } : op.kind === 'modify' ? { kind: 'modify' } : { kind: 'create' });
           fileMap.set(op.path, accum);
         }
         continue;
@@ -331,6 +333,16 @@ export function reconstructFile(
   deletedBefore?: string | null,
 ): Omit<SessionFileChange, 'filePath' | 'relPath' | 'oldRelPath'> & { renamedFrom?: string } {
   const ops = accum.ops;
+  // Only in-place shell writes: the file at HEAD (`deletedBefore`, read the same way;
+  // for a renamed file, at its first name) is the best start there is.
+  if (ops.length > 0 && ops.every((op) => op.kind === 'modify')) {
+    const head = deletedBefore ?? null;
+    // Nothing on disk and nothing at HEAD (a phantom), or a file that still equals HEAD: no change.
+    if (current === head || (current === null && head === null)) return { before: current ?? '', after: current ?? '', status: 'modified', ops: ops.length, partial: false };
+    // Gone, or unreadable: listed, never a clean no-op (the next read decides).
+    if (current === null) return { before: head ?? '', after: '', status: 'deleted', ops: ops.length, partial: true };
+    return { before: head ?? '', after: current, status: head === null ? 'added' : 'modified', ops: ops.length, partial: true };
+  }
   const lastOp = ops[ops.length - 1];
   let partial = false;
 
@@ -363,20 +375,29 @@ export function reconstructFile(
   // content-boundary markers, not text edits. A Write over an existing file
   // restores the file it replaced; older ops then reverse onto that.
   let before = after;
+  // Past an in-place shell rewrite the text is unknown: edits older than it cannot be
+  // reversed, until an older Write or create pins the content again.
+  let opaque = false;
   for (let i = ops.length - 1; i >= 0; i--) {
     const op = ops[i]!;
     if (op.kind === 'write') {
       before = op.original ?? '';
+      opaque = false;
     } else if (op.kind === 'create') {
       before = '';
+      opaque = false;
+    } else if (op.kind === 'modify') {
+      opaque = true;
     } else if (op.kind === 'rename' || op.kind === 'delete') {
-      if (op.kind === 'delete') before = '';
-    } else {
+      if (op.kind === 'delete') { before = ''; opaque = false; }
+    } else if (!opaque) {
       const r = reverseEdit(before, op);
       before = r.text;
       if (!r.ok) partial = true;
     }
   }
+  // Nothing older pinned it: start from HEAD.
+  if (opaque) { before = deletedBefore ?? ''; partial = true; }
 
   let status: SessionFileChange['status'];
   if (renamedFrom !== undefined) status = 'renamed';
@@ -385,6 +406,16 @@ export function reconstructFile(
   else status = 'modified';
 
   return { before, after, status, ops: ops.length, partial, renamedFrom };
+}
+
+/**
+ * Where to read HEAD for a file a shell command rewrote in place: its first name (the
+ * oldest rename's source), else its own path. null when no op rewrote it in place.
+ */
+export function headPathForModify(accum: FileAccum): string | null {
+  if (!accum.ops.some((op) => op.kind === 'modify')) return null;
+  const first = accum.ops.find((op): op is Extract<FileOp, { kind: 'rename' }> => op.kind === 'rename');
+  return first ? first.from : accum.filePath;
 }
 
 // ── path filtering + repo grouping ──
@@ -776,6 +807,8 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
       // blocks a fs-pool thread FOREVER (2026-08-15: wedged all daemon fs RPCs).
       try {
         const cst = await fsp.stat(accum.filePath);
+        // A formatter run on a folder (`prettier --write src`) names no file.
+        if (cst.isDirectory() && accum.ops.every((op) => op.kind === 'modify')) continue;
         if (cst.isFile() && cst.size > MAX_CONTENT_BYTES) {
           contentless = true;
         } else if (cst.isFile()) {
@@ -789,10 +822,12 @@ export async function computeHostLocalChanges(opts: HostLocalComputeOptions): Pr
         continue;
       }
       const isDeleted = accum.ops[accum.ops.length - 1]?.kind === 'delete';
+      // A rewrite in place starts from the file at HEAD (at its first name), as a delete does.
+      const headPath = isDeleted ? accum.filePath : headPathForModify(accum);
       // No .git above the file means git can't have it: skip the two git
       // spawns (a long session deletes hundreds of scratch files in /tmp).
-      const deletedBefore = isDeleted && await gitRootOf(path.dirname(accum.filePath))
-        ? await readDeletedBeforeHostLocal(accum.filePath) : null;
+      const deletedBefore = headPath && await gitRootOf(path.dirname(headPath))
+        ? await readDeletedBeforeHostLocal(headPath) : null;
       const { renamedFrom, ...recon } = reconstructFile(current, accum, deletedBefore);
       const change: SessionFileChange = { filePath: accum.filePath, relPath: accum.filePath, ...recon };
       if (renamedFrom !== undefined) change.oldRelPath = renamedFrom;

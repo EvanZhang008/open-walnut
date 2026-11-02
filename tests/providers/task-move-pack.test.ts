@@ -80,6 +80,7 @@ function world(name: string) {
   write(path.join(taskDir, 'drafts', 'reply.md'), 'draft\n')
   // A reference clone with nothing of the task's own.
   git(taskDir, ['clone', '-q', bare, ref])
+  git(ref, ['remote', 'set-url', 'origin', URL])
   // Other agents' uncommitted files in the shared checkout.
   write(path.join(shared, 'a.txt'), 'FOREIGN edit\n')
   write(path.join(shared, 'foreign.txt'), 'FOREIGN untracked\n')
@@ -287,6 +288,45 @@ describe('a task moves with exactly its own work', () => {
     await packer.pack({ cwd: w.clone, outDir: path.join(w.root, 'p') })
     await expect(packer.apply({ dest: path.join(w.targetTaskDir, 'marina'), bundleDir: path.join(w.root, 'p') }))
       .rejects.toMatchObject({ code: 'apply_failed', message: expect.stringContaining('no checkout of this repository') })
+  }, 60_000)
+
+  it('a repository no host can clone (no remote, or one this host cannot reach) is rebuilt from its bundle', async () => {
+    const root = path.join(tmp, 'noremote')
+    const work = path.join(root, 'mac', 'notes-repo')
+    fs.mkdirSync(work, { recursive: true })
+    git(work, ['init', '-q'])
+    write(path.join(work, 'a.txt'), 'a1\n')
+    git(work, ['add', '-A'])
+    git(work, ['commit', '-q', '-m', 'one'])
+    git(work, ['checkout', '-q', '-b', 'drafts'])
+    write(path.join(work, 'a.txt'), 'a2\n')
+    git(work, ['commit', '-q', '-am', 'two'])
+    write(path.join(work, 'a.txt'), 'a3 uncommitted\n')
+    write(path.join(work, 'new.txt'), 'untracked\n')
+    const head = git(work, ['rev-parse', 'HEAD'])
+    const packer = createTransferPack({ fs, path, crypto, spawn: guardedSpawn as unknown as TransferPackDeps['spawn'], env, home: tmp })
+    const p = await packer.pack({ cwd: work, outDir: path.join(root, 'p') })
+    expect(p.meta).toMatchObject({ remotes: [], bundle: {}, ahead: 2 })
+    const dest = path.join(root, 'cloud', 'tasks', 'T1', 'notes-repo')
+    const done = await packer.apply({ dest, bundleDir: path.join(root, 'p') })
+    expect(done).toMatchObject({ kind: 'git', head, branch: 'drafts', patched: true, untracked: 1 })
+    expect(done.steps[0]).toMatch(/^git init/)
+    expect(git(dest, ['log', '--format=%s']).split('\n')).toEqual(['two', 'one'])
+    expect(fs.readFileSync(path.join(dest, 'a.txt'), 'utf8')).toBe('a3 uncommitted\n')
+    expect(fs.readFileSync(path.join(dest, 'new.txt'), 'utf8')).toBe('untracked\n')
+    expect(git(dest, ['remote'])).toBe('')
+
+    // A URL the target cannot clone from, with a full bundle: the same, and origin keeps the URL.
+    const dest2 = path.join(root, 'cloud', 'tasks', 'T1', 'notes-repo-2')
+    const bad = 'file://' + path.join(root, 'nowhere.git')
+    const done2 = await packer.apply({ dest: dest2, bundleDir: path.join(root, 'p'), url: bad })
+    expect(done2).toMatchObject({ head, branch: 'drafts' })
+    expect(git(dest2, ['remote', 'get-url', 'origin'])).toBe(bad)
+
+    // A checkout named on the target that cannot be cloned from: the bundle still rebuilds it.
+    const dest3 = path.join(root, 'cloud', 'tasks', 'T1', 'notes-repo-3')
+    const done3 = await packer.apply({ dest: dest3, bundleDir: path.join(root, 'p'), cloneFrom: path.join(root, 'cloud', 'no-such-checkout') })
+    expect(done3).toMatchObject({ head, branch: 'drafts', clonedFrom: undefined })
   }, 60_000)
 
   it('paths and exclude refuse anything but relative paths', async () => {

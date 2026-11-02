@@ -38,6 +38,8 @@ const W = vi.hoisted(() => {
     gate: null as Promise<void> | null,
     /** fs.ls of the target fails (the listing is no answer). */
     failList: false,
+    /** transfer.apply on the target fails (a clone it cannot make). */
+    failApply: false,
     nextSid: 0,
     history: {} as Record<string, Array<Record<string, unknown>>>,
     /** The Changed tab's groups for the old session. */
@@ -158,7 +160,7 @@ function daemonFor(host: string): TransferConn {
       switch (cmd) {
         case 'transfer.pack': return answer(() => pack.pack(p));
         case 'transfer.scan': return answer(() => pack.scan(p));
-        case 'transfer.apply': return answer(() => pack.apply(p));
+        case 'transfer.apply': return W.failApply ? { ok: false, error: 'clone: the network is down', code: 'apply_failed' } : answer(() => pack.apply(p));
         case 'transfer.clear': return answer(() => pack.clear(p));
         case 'fs.writePart': return answer(() => core.writePart(p, { boundHome: null, origin: null }));
         case 'fs.find': return { ok: true, files: [] };
@@ -225,7 +227,7 @@ beforeEach(async () => {
   await fsp.rm(WALNUT_HOME, { recursive: true, force: true });
   await fsp.mkdir(WALNUT_HOME, { recursive: true });
   for (const h of Object.values(W.homes)) { fs.rmSync(h, { recursive: true, force: true }); fs.mkdirSync(h, { recursive: true }); }
-  W.starts.length = 0; W.stops.length = 0; W.failStart = false; W.history = {}; W.changes = []; W.gate = null; W.failList = false;
+  W.starts.length = 0; W.stops.length = 0; W.failStart = false; W.history = {}; W.changes = []; W.gate = null; W.failList = false; W.failApply = false;
   await mutateStore((st) => { st.queues = {}; }, false, true);
   __setTransferConnectionResolverForTesting(async (host) => (W.homes[host] ? [daemonFor(host)] : []));
 });
@@ -378,6 +380,45 @@ describe('task_move', () => {
     } finally {
       __setHostLoadProberForTesting(null);
     }
+  }, 120_000);
+
+  it('a repository with no remote moves whole, its shell edit included (2026-11-01: both were left behind)', async () => {
+    const { taskId, sid } = await taskInSharedCheckout();
+    const notes = path.join(W.root, 'mac-workplace', 'notes');
+    fs.mkdirSync(notes, { recursive: true });
+    git(notes, ['init', '-q']);
+    write(path.join(notes, 'n.txt'), 'n1\n');
+    write(path.join(notes, 'other.txt'), 'o1\n');
+    git(notes, ['add', '-A']);
+    git(notes, ['commit', '-q', '-m', 'notes']);
+    const head = git(notes, ['rev-parse', 'HEAD']);
+    // The session ran `sed -i` on n.txt; someone else edited other.txt.
+    write(path.join(notes, 'n.txt'), 'n2 by sed\n');
+    write(path.join(notes, 'other.txt'), 'FOREIGN\n');
+    await updateSessionRecord(sid, { cwd: notes } as never);
+    W.changes = [{ repoRoot: notes, label: 'notes', kind: 'cwd', files: [{ relPath: 'n.txt', filePath: path.join(notes, 'n.txt'), status: 'modified', before: 'n1\n', after: 'n2 by sed\n', ops: 1, partial: true }] }];
+
+    const res = await requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' });
+
+    const dest = `${W.homes.cloud}/tasks/${taskId}/notes`;
+    expect(res).toMatchObject({ state: 'done', host: 'cloud' });
+    expect(W.starts[0]).toMatchObject({ cwd: dest });
+    expect(git(dest, ['rev-parse', 'HEAD'])).toBe(head);
+    expect(fs.readFileSync(`${dest}/n.txt`, 'utf8')).toBe('n2 by sed\n');
+    expect(fs.readFileSync(`${dest}/other.txt`, 'utf8')).toBe('o1\n');
+    // A shell rewrite has no recorded start, so the old copy keeps it.
+    expect(fs.readFileSync(path.join(notes, 'n.txt'), 'utf8')).toBe('n2 by sed\n');
+  }, 120_000);
+
+  it('a piece the target could not set up starts the session in the task directory, with the steps to do it', async () => {
+    const { taskId } = await taskInSharedCheckout();
+    W.failApply = true;
+    const res = await requestEngineSwitch({ taskId, engine: 'claude', host: 'cloud', message: 'Carry on.', source: 'test' });
+    const destTaskDir = `${W.homes.cloud}/tasks/${taskId}`;
+    expect(res).toMatchObject({ state: 'done', host: 'cloud' });
+    expect(W.starts[0]).toMatchObject({ cwd: destTaskDir });
+    expect(fs.existsSync(destTaskDir)).toBe(true);
+    expect(String(W.starts[0].message)).toContain(`mkdir -p ${destTaskDir}/marina`);
   }, 120_000);
 
   it('a failed start puts the task back on its host; the copy stays for a retry', async () => {

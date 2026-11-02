@@ -315,9 +315,10 @@ export async function moveTaskWork(opts: {
   const cwdOnTarget = (() => {
     if (!cwdPiece) return targetTaskDir;
     const piece = pieces[packed.indexOf(cwdPiece)];
-    if (!piece) return targetTaskDir;
-    // An unset-up clone starts in its (empty) root, so the session can clone into it.
-    return piece.applied && relCwd && !relCwd.startsWith('..') ? `${piece.dest}/${relCwd}` : piece.dest;
+    // A piece the target could not set up has no folder there (a failed apply removes
+    // what it made): the session starts in the task directory and its steps name the dest.
+    if (!piece || !piece.applied) return targetTaskDir;
+    return relCwd && !relCwd.startsWith('..') ? `${piece.dest}/${relCwd}` : piece.dest;
   })();
   return {
     cwd: cwdOnTarget, targetTaskDir, pieces, cleanRepos, summary: [...describeMovedWork(pieces, cleanRepos), ...notes],
