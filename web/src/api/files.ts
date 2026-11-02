@@ -541,6 +541,46 @@ export async function resolvePath(
   return res.json();
 }
 
+/** Where a clicked path lives (GET /api/files/locate, src/web/routes/files-locate.ts). */
+export interface LocateResponse {
+  /** The path to open on `host`; the ref as asked when `missing`. */
+  path: string;
+  /** Where it lives; absent = the server's own machine. */
+  host?: string;
+  found: boolean;
+  /** On a host other than the session's. */
+  elsewhere?: boolean;
+  /** No host has it. */
+  missing?: boolean;
+  /** The hosts asked, by the names a person knows them (session's first). */
+  checked?: string[];
+  via?: string;
+  line?: number;
+  column?: number;
+  endLine?: number;
+}
+
+/**
+ * Find a clicked path on the session's host, then on the user's other hosts.
+ * Never throws: a failed lookup answers the path as given, on the session's host,
+ * so the click still opens what it would have opened before.
+ */
+export async function locatePath(
+  ref: string,
+  ctx: { host?: string; cwd?: string; sessionId?: string } = {},
+): Promise<LocateResponse> {
+  const host = ctx.host && ctx.host !== '__local__' ? ctx.host : undefined;
+  const params = new URLSearchParams({ ref });
+  if (host) params.set('host', host);
+  if (ctx.cwd) params.set('cwd', ctx.cwd);
+  if (ctx.sessionId) params.set('sessionId', ctx.sessionId);
+  try {
+    const res = await fetch(`/api/files/locate?${params}`);
+    if (res.ok) return await res.json();
+  } catch { /* the server is not answering: the path as given */ }
+  return { path: ref, ...(host ? { host } : {}), found: false };
+}
+
 /** List one level of a directory (lazy-loaded tree). Supports local + remote (host).
  *
  *  `cwd`/`sessionId` are optional and only enable SELF-HEALING: when the path

@@ -338,4 +338,17 @@ describe('GET /api/files/list — decorated + awkward paths', () => {
     expect(res.status).toBe(200);
     expect(res.body.requestedPath).toBe(path.join(tmp, 'repo/My Notes'));
   });
+
+  it('never offers the filesystem root as the nearest folder', async () => {
+    // A path from another machine (a Mac path on a Linux host) shares nothing with
+    // this one but `/`; listing the whole root was the 2026-11-01 report.
+    await writeFile('repo/src/a.ts');
+    initRepo(path.join(tmp, 'repo'));
+    const res = await request(createApp()).get('/api/files/list').query({
+      path: '/zz-walnut-no-such-root/someone/tasks/t1/video/fix.mp4',
+      cwd: path.join(tmp, 'repo'),
+    });
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/^Couldn't find \/zz-walnut-no-such-root\/.* on this machine$/);
+  });
 });

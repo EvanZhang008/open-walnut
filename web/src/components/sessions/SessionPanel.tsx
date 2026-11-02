@@ -33,6 +33,7 @@ import { SessionRewindDialog } from './SessionRewindDialog';
 import { SessionBudgetStatus, SessionUsageDialog } from './SessionUsageDialog';
 import { SessionUsageOpenContext, useSessionBudgetUsage } from '@/hooks/useSessionBudgetUsage';
 import { SessionFileExplorer } from './SessionFileExplorer';
+import { useClickedPathOpener, missingPathLine, type ClickedPathTarget } from '@/hooks/useClickedPathOpener';
 import { sessionScope } from '@/utils/file-view-state';
 import { SessionTerminal } from './SessionTerminal';
 import { SessionCodeView } from './SessionCodeView';
@@ -1174,7 +1175,9 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // File-path click target for the Files split view. When set, the explorer roots
   // at the clicked file (backend lists its parent + preselects it, VS Code style)
   // instead of the session cwd. Cleared when the split closes / view switches.
-  const [fileViewTarget, setFileViewTarget] = useState<{ path: string; line?: number; endLine?: number; term?: string; nonce: number } | null>(null);
+  // `onHost`: the file lives on another host than the session's (absent = the session's).
+  // `missing`: no host has it; the tree shows the session's cwd with that one line.
+  const [fileViewTarget, setFileViewTarget] = useState<{ path: string; line?: number; endLine?: number; term?: string; nonce: number; onHost?: { host?: string }; missing?: string } | null>(null);
   // Toggle a split view: same view → close (exit fullscreen); other/none → open it.
   //
   // Exception kept: Files opened via a file-path click (fileViewTarget set) — the
@@ -1250,17 +1253,23 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
   // the app away from the session (that jump was reverted 2026-08-09). Notes get
   // an explicit "Open in Notes" button in the preview toolbar / right-click menu.
   // `endLine`: the last line of a range reference (`x.go:31-34`), flashed with `line`.
-  const handleFileOpen = useCallback((path: string, line?: number, term?: string, endLine?: number) => {
+  // The path is looked up first (useClickedPathOpener): a session on one host often
+  // names a file on another, which then opens from the host that has it.
+  const openLocatedFile = useCallback((t: ClickedPathTarget) => {
     traceInteraction('view-open:files-from-path', { sessionId });
+    const { path, line, endLine, term } = t;
     // A nested column has no Files split: the file opens in a tab of its own (the
     // preview's own "Open in new tab"), so the Board and this chat stay put.
-    if (inset) { openPopout('file', { path, host: session?.host, line, endLine }); return; }
+    if (inset) { openPopout('file', { path, host: t.host, line, endLine }); return; }
     // A new nonce every time: the same path again still lands on it (the explorer
     // resets on it) after the reader browsed to another file in the tree.
-    setFileViewTarget((prev) => ({ path, line, endLine, term, nonce: (prev?.nonce ?? 0) + 1 }));
+    setFileViewTarget((prev) => t.missing
+      ? { path: session?.cwd ?? '~', nonce: (prev?.nonce ?? 0) + 1, missing: missingPathLine(path, t.missing.checked) }
+      : { path, line, endLine, term, nonce: (prev?.nonce ?? 0) + 1, ...(t.elsewhere ? { onHost: { host: t.host } } : {}) });
     setActiveView('files');
     enterFullscreen();
-  }, [enterFullscreen, inset, session?.host]);
+  }, [enterFullscreen, inset, session?.cwd, sessionId]);
+  const handleFileOpen = useClickedPathOpener(openLocatedFile, { host: session?.host ?? undefined, cwd: session?.cwd ?? undefined, sessionId });
   openDocRef.current = (path) => handleFileOpen(path);
 
   // A host:port service the session started (a dev server, a report page) opens
@@ -2784,8 +2793,11 @@ export const SessionPanel = memo(function SessionPanel({ sessionId, onClose, emb
                     {activeView === 'files' && (
                       <SessionFileExplorer
                         cwd={fileViewTarget?.path ?? session?.cwd}
-                        host={session?.host}
-                        sessionId={sessionId}
+                        host={fileViewTarget?.onHost ? fileViewTarget.onHost.host : session?.host}
+                        // The session's transcript and its changed repos are on its own host.
+                        sessionId={fileViewTarget?.onHost ? undefined : sessionId}
+                        onHostNote={fileViewTarget?.onHost ? { host: fileViewTarget.onHost.host, sessionHost: session?.host ?? undefined } : undefined}
+                        missingNote={fileViewTarget?.missing}
                         initialLine={fileViewTarget?.line}
                         initialEndLine={fileViewTarget?.endLine}
                         initialTerm={fileViewTarget?.term}

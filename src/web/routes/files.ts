@@ -27,7 +27,7 @@ import { CLOUD_MODE, WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { parsePathRef, isUnsafePathRef } from '../../providers/path-ref-parse.js'
 import { HOST_RECONNECTING, HostReconnectingError, boundHostRead } from '../../core/hosts/remote-read-bound.js'
-import { hostDisplayName } from '../../core/hosts/host-display-name.js'
+import { hostDisplayName, hostDisplayNameFor } from '../../core/hosts/host-display-name.js'
 import { markHandledFailure } from '../middleware/handled-failure.js'
 import { hostTermsAtExit } from '../middleware/host-terms-at-exit.js'
 import type { DaemonConnection } from '../../providers/daemon-connection.js'
@@ -119,12 +119,13 @@ async function resolveViaHost(
   cwd: string | undefined,
   host: string | undefined,
   sessionId: string | undefined,
+  budgetMs?: number,
 ): Promise<HostResolveResult | null> {
   // Local host: call the resolver in-process. It yields the event loop between
   // transcript windows and shells out for git/find, so it never blocks a route.
   if (!host) {
     const { resolvePathHostLocal } = await import('../../providers/path-resolve-core.js')
-    return await resolvePathHostLocal({ ref, cwd, sessionId })
+    return await resolvePathHostLocal({ ref, cwd, sessionId, ...(budgetMs ? { budgetMs } : {}) })
   }
 
   const config = await getConfig()
@@ -139,7 +140,7 @@ async function resolveViaHost(
       // is ONE RPC either way, so give the search a wider budget than the in-process
       // default. Still bounded: expiring degrades to the nearest existing folder.
       return conn.send('fs.resolvePath', {
-        ref, budgetMs: REMOTE_RESOLVE_BUDGET_MS,
+        ref, budgetMs: budgetMs ?? REMOTE_RESOLVE_BUDGET_MS,
         ...(cwd ? { cwd } : {}), ...(sessionId ? { sessionId } : {}),
       })
     })
@@ -248,6 +249,8 @@ export async function resolveSessionPath(
   cwd: unknown,
   host: string | undefined,
   sessionId?: string,
+  /** The resolver's search budget (a click that waits on it passes a short one). */
+  budgetMs?: number,
 ): Promise<{
   path: string; resolved: boolean; via?: string; degraded?: boolean; ref?: string
   alternatives?: string[]; line?: number; column?: number; endLine?: number
@@ -275,7 +278,7 @@ export async function resolveSessionPath(
   // checks above already cover — so any throw is treated as "this host can't
   // answer" and falls through to the legacy walk.
   try {
-    const hostResult = await resolveViaHost(rel, cwd, host, sessionId)
+    const hostResult = await resolveViaHost(rel, cwd, host, sessionId, budgetMs)
     if (hostResult) return hostResult
   } catch (err) {
     // The host is not answering: the naive path now (a click still does
@@ -394,6 +397,27 @@ filesRouter.get('/resolve-path', async (req: Request, res: Response, next: NextF
     const host = typeof req.query.host === 'string' && req.query.host ? req.query.host : undefined
     const sessionId = typeof req.query.sessionId === 'string' && req.query.sessionId ? req.query.sessionId : undefined
     res.json(await resolveSessionPath(req.query.rel, req.query.cwd, host, sessionId))
+  } catch (err) {
+    if (err instanceof FilesOpError) {
+      res.status(err.statusCode).json({ error: err.message })
+      return
+    }
+    next(err)
+  }
+})
+
+/**
+ * GET /api/files/locate?ref=&cwd=&host=&sessionId= -> LocateResult
+ *
+ * Where a clicked path lives, on the session's host or any other (files-locate.ts).
+ */
+filesRouter.get('/locate', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { locateClickedPath } = await import('./files-locate.js')
+    const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
+    res.json(await locateClickedPath({
+      ref: req.query.ref, cwd: str(req.query.cwd), host: str(req.query.host), sessionId: str(req.query.sessionId),
+    }))
   } catch (err) {
     if (err instanceof FilesOpError) {
       res.status(err.statusCode).json({ error: err.message })
@@ -644,6 +668,11 @@ export async function listSessionFiles(
       healed = await resolveViaHost(reqPath, ctx.cwd, host, ctx.sessionId)
     } catch { /* resolver refused the input — surface the original error */ }
     if (!healed || healed.path === reqPath) throw err
+    // A stand-in as shallow as `/` or `/home` is no answer: it is what a path from
+    // another machine heals to (a Mac path on a Linux host listed the whole root).
+    if (!healed.resolved && healed.path.split('/').filter(Boolean).length < 2) {
+      throw new FilesOpError(`Couldn't find ${reqPath} on ${host ? await hostDisplayNameFor(host) : 'this machine'}`, 404)
+    }
     log.web.info('files/list: healed an unlistable path', {
       host: host ?? 'local', requested: reqPath, healed: healed.path, via: healed.via,
     })

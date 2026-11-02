@@ -24,6 +24,7 @@ import { isBoolean, usePageView } from '@/utils/view-memory';
 import { useNavigate } from 'react-router-dom';
 import { useDragGesture } from '@/hooks/useDragGesture';
 import { fetchDirList, fetchDirListMany, downloadFileUrl, fetchReferences, isHostReconnectingListing, HOST_RECONNECTING_CODE, type DirEntry, type DirListResponse, type ReferencesResponse } from '@/api/files';
+import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { visibleInterval } from '@/utils/page-visibility';
 import { fetchSessionChangedPaths } from '@/api/session-changes';
 import { useFileContentPrefetch } from '@/hooks/useFileContentPrefetch';
@@ -92,6 +93,12 @@ interface SessionFileExplorerProps {
    * — both layout controls live on the same bar, at its two corners.
    */
   barRightSlot?: ReactNode;
+  /** The clicked file lives on `host`, not on the session's own host: the toolbar
+   *  names where it is opened from (useClickedPathOpener). */
+  onHostNote?: { host?: string; sessionHost?: string };
+  /** No host has the clicked path: this line shows above the tree instead of a
+   *  stand-in folder (useClickedPathOpener's missingPathLine). */
+  missingNote?: string;
 }
 
 interface TreeNode {
@@ -171,7 +178,12 @@ function lastSegment(p: string): string {
   return trimmed.slice(trimmed.lastIndexOf('/') + 1) || trimmed;
 }
 
-export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initialEndLine, initialTerm, openNonce, memoryScope, onSelectCode, barRightSlot }: SessionFileExplorerProps) {
+export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initialEndLine, initialTerm, openNonce, memoryScope, onSelectCode, barRightSlot, onHostNote, missingNote }: SessionFileExplorerProps) {
+  const fileHostName = useHostDisplayLabel(onHostNote?.host ?? null);
+  const sessionHostName = useHostDisplayLabel(onHostNote?.sessionHost ?? null);
+  // Shown per open (the nonce), dismissible like the not-found note below.
+  const [missingShown, setMissingShown] = useState<string | null>(missingNote ?? null);
+  useEffect(() => { setMissingShown(missingNote ?? null); }, [missingNote, openNonce]);
   const [root, setRoot] = useState<string>(cwd || '~');
   // Hidden files shown or not stays as it was left, in every session's explorer (utils/view-memory.ts).
   const [showHidden, setShowHidden] = usePageView('files', 'showHidden', false, isBoolean);
@@ -1348,6 +1360,15 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
             {focusedDir ?? root}
           </span>
         )}
+        {onHostNote && (
+          <span
+            className="sfe-host-chip"
+            data-testid="sfe-host-chip"
+            title={`This file is on ${fileHostName}; the session runs on ${sessionHostName}.`}
+          >
+            on {fileHostName}
+          </span>
+        )}
         <div className="sfe-toolbar-actions">
           <button
             type="button"
@@ -1400,6 +1421,20 @@ export function SessionFileExplorer({ cwd, host, sessionId, initialLine, initial
               A successful heal ("found it nearby") explains itself — the tree
               is already showing the right folder, so a banner is just noise
               (2026-08-18 feedback). Dismissible either way. */}
+          {missingShown && (
+            <div className="sfe-notice" data-testid="sfe-missing-note">
+              {missingShown}
+              <button
+                type="button"
+                className="sfe-notice-dismiss"
+                onClick={() => setMissingShown(null)}
+                title="Dismiss"
+                aria-label="Dismiss path notice"
+              >
+                ✕
+              </button>
+            </div>
+          )}
           {notFound && (
             <div className="sfe-notice" title={notFound}>
               Couldn't find <code>{notFound}</code> — showing the nearest folder.

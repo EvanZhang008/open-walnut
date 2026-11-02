@@ -4,12 +4,16 @@
  * Opens via portal. Embeds the SessionFileExplorer (VS Code-style tree + preview)
  * rooted at the clicked file's parent directory, with that file pre-selected — so
  * the user can read it AND navigate sibling files without leaving the popup.
+ *
+ * The path is looked up first (useClickedPathOpener): one the given host lacks
+ * opens from the host that has it, and one no host has says so in one line.
  */
 import { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { SessionFileExplorer } from '../sessions/SessionFileExplorer';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { remoteHostTag } from '@/utils/host-display-label';
+import { locateClickedPath, missingPathLine, type ClickedPathTarget } from '@/hooks/useClickedPathOpener';
 
 interface FileViewerProps {
   path: string;
@@ -18,8 +22,16 @@ interface FileViewerProps {
   onClose: () => void;
 }
 
-export function FileViewer({ path: filePath, line, host, onClose }: FileViewerProps) {
+export function FileViewer({ path: filePath, line, host: askedHost, onClose }: FileViewerProps) {
   const [copied, setCopied] = useState(false);
+  const [target, setTarget] = useState<ClickedPathTarget | null>(null);
+  useEffect(() => {
+    let live = true;
+    setTarget(null);
+    void locateClickedPath(filePath, { host: askedHost }, { line }).then((t) => { if (live) setTarget(t); });
+    return () => { live = false; };
+  }, [filePath, askedHost, line]);
+  const host = target ? target.host : askedHost;
   const remote = host && host !== '__local__' ? host : null;
   const hostName = useHostDisplayLabel(remote);
 
@@ -66,7 +78,18 @@ export function FileViewer({ path: filePath, line, host, onClose }: FileViewerPr
         <div className="file-viewer-body file-viewer-body-explorer">
           {/* cwd = the clicked path: backend lists its parent dir and flags the file
               for preview (VS Code style), so the tree opens to its folder + selects it. */}
-          <SessionFileExplorer cwd={filePath} host={host} initialLine={line} />
+          {!target ? (
+            <div className="sfe-notice" role="status">Looking for {filename}…</div>
+          ) : target.missing ? (
+            <div className="sfe-notice" data-testid="file-viewer-missing">{missingPathLine(filePath, target.missing.checked)}</div>
+          ) : (
+            <SessionFileExplorer
+              cwd={target.path}
+              host={target.host}
+              initialLine={target.line}
+              onHostNote={target.elsewhere ? { host: target.host, sessionHost: askedHost } : undefined}
+            />
+          )}
         </div>
         <div className="file-viewer-footer">
           <span className="file-viewer-full-path" title={filePath}>{filePath}</span>

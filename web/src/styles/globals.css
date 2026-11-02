@@ -20354,6 +20354,17 @@ td.usage-share-col {
   cursor: text;
 }
 .session-file-explorer-toolbar .sfe-root-path:hover { color: var(--fg); }
+/* The clicked file is opened from another host than the session's: name it. */
+.session-file-explorer-toolbar .sfe-host-chip {
+  flex: none;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--fg);
+  font-size: 11px;
+  white-space: nowrap;
+}
 
 .session-file-explorer-toolbar .sfe-root-path-input {
   flex: 1;

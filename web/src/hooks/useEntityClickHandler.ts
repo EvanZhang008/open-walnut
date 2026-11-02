@@ -15,7 +15,7 @@
  */
 import { useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { resolvePath } from '@/api/files';
+import { locatePath } from '@/api/files';
 
 export function useEntityClickHandler(
   onTaskClick?: (taskId: string) => void,
@@ -80,8 +80,7 @@ export function useEntityClickHandler(
       const endLine = line && fileEndLine ? parseInt(fileEndLine, 10) : undefined;
       const filePath = fileAnchor.dataset.filePath;
       if (filePath) {
-        // Absolute path — open directly. The Files panel self-heals if it turns
-        // out not to exist (a stale or wrong-prefix path), so no round trip here.
+        // Absolute path: the sink looks it up on every host (useClickedPathOpener).
         onFileOpen(filePath, line, undefined, endLine);
         return;
       }
@@ -91,13 +90,14 @@ export function useEntityClickHandler(
       const rel = fileAnchor.dataset.relPath;
       const cwd = fileAnchor.dataset.cwd;
       if (rel && cwd) {
-        resolvePath(rel, cwd, fileHost, fileSessionId)
+        // A miss answers the path joined to cwd (never a stand-in folder), which
+        // the sink then reports as not found.
+        locatePath(rel, { host: fileHost, cwd, sessionId: fileSessionId })
           // The anchor's own line wins when present (the markdown layer already
           // parsed it); otherwise take whatever position the reference carried,
           // which the resolver reports even for shapes markdown doesn't linkify
           // (`#L42`, `(42,7)`, `, line 42`).
-          .then((r) => onFileOpen(r.path, line ?? r.line, undefined, line ? endLine : r.endLine))
-          .catch(() => onFileOpen(`${cwd.replace(/\/$/, '')}/${rel.replace(/^\.\//, '')}`, line, undefined, endLine));
+          .then((r) => onFileOpen(r.found || r.missing ? r.path : `${cwd.replace(/\/$/, '')}/${rel.replace(/^\.\//, '')}`, line ?? r.line, undefined, line ? endLine : r.endLine));
       }
     }
   }, [onTaskClick, onSessionClick, onFileOpen, fileHost, fileSessionId, navigate]);
