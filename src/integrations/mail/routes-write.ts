@@ -291,7 +291,7 @@ export function registerMailWriteRoutes(
       // as "I tapped Send and nothing happened".
       await approvals.withdrawFor(
         patched.previousLetterId,
-        'This draft was edited; a fresh letter follows.',
+        (w) => w.edited,
       )
       const again = await bounded(
         walnut,
@@ -313,7 +313,7 @@ export function registerMailWriteRoutes(
       const discarded = await drafts.discard(draftId)
       await approvals.withdrawFor(
         discarded.previousLetterId,
-        'This draft was discarded in the Mail console; nothing was sent.',
+        (w) => w.discarded,
       )
       return { json: { ok: true, draft: discarded.draft } }
     } catch (error) {

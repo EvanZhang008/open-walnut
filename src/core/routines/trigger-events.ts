@@ -50,26 +50,6 @@ export { promptOf };
 export const TRIGGER_CLAIM_CAPABILITY = 'trigger-claim-v1';
 const CLAIM_TIMEOUT_MS = 15_000;
 
-async function notifyTrigger(input: {
-  title: string;
-  body?: string;
-  dedupKey: string;
-  severity?: 'warning' | 'error';
-}): Promise<void> {
-  try {
-    const { addNotification } = await import('../notifications/store.js');
-    await addNotification({
-      kind: 'cron',
-      severity: input.severity ?? 'error',
-      title: input.title,
-      ...(input.body ? { body: input.body } : {}),
-      dedupKey: input.dedupKey,
-    });
-  } catch (err) {
-    log.cron.warn('trigger notification failed', { error: err instanceof Error ? err.message : String(err) });
-  }
-}
-
 /**
  * Tell the daemon a fire is processed. Best effort: a lost ack costs one replay.
  *
@@ -96,17 +76,18 @@ export function describeRefill(cap: number): string {
 }
 
 /**
- * What the user is told the first time in a day the fire budget holds a trigger
- * back. With the cadence known it names the number that lets every check fire.
+ * What the owning task's session is told the first time in a day the fire budget holds its
+ * trigger back. With the cadence known it names the number that lets every check fire.
  */
-export function fireBudgetNoticeBody(cap: number, everyMs?: number): string {
+export function fireBudgetNoticeBody(cap: number, everyMs?: number, id = '<id>'): string {
   const perDay = everyMs && everyMs > 0 ? Math.ceil(FIRE_BUDGET_WINDOW_MS / everyMs) : 0;
   const suggest = perDay > cap
-    ? ` (it checks ${perDay} times a day, so ${perDay} lets every check fire; 0 = no limit).`
-    : ' (0 = no limit).';
-  return `It used its fire budget (${cap} fire${cap === 1 ? '' : 's'} a day), so it now fires at most once ${describeRefill(cap)}. `
+    ? ` (it checks ${perDay} times a day, so ${perDay} lets every check fire; 0 = no limit)`
+    : ' (0 = no limit)';
+  return `it used its fire budget (${cap} fire${cap === 1 ? '' : 's'} a day), so it now fires at most once ${describeRefill(cap)}. `
     + 'Nothing is dropped: each fire carries everything new since the last one, it just arrives later. '
-    + `If this source is this busy, raise "Fires per day" on the trigger in Routines${suggest}`;
+    + `If this source is this busy, raise the trigger's maxFiresPerDay${suggest}: PATCH /routines/${id} `
+    + 'with its whole check (trigger_list shows it) and the new maxFiresPerDay, through the api op.';
 }
 
 async function resolveService() {
@@ -134,13 +115,16 @@ export async function handleTriggerChecked(host: string, event: TriggerCheckedEv
   });
   const heldCap = applied.budgetHeld ? applied.budgetHeld.maxFiresPerDay ?? MAX_FIRES_PER_DAY_DEFAULT : 0;
   // A stored 0 is "no limit" (sent as a cap nothing reaches), so it has no budget to report.
+  // Told to the trigger's own task while its session is live; never the user (trigger-health.ts).
   if (applied.budgetHeld && heldCap > 0) {
-    const cap = heldCap;
-    await notifyTrigger({
-      title: `Trigger "${applied.jobName ?? event.id}" is holding fires back`,
-      body: fireBudgetNoticeBody(cap, applied.budgetHeld.everyMs),
-      dedupKey: `trigger-budget-held:${event.id}:${event.atMs}`,
-      severity: 'warning',
+    const everyMs = applied.budgetHeld.everyMs;
+    const { buildTriggerTroubleNotice, tellTriggerTeam } = await import('./trigger-health.js');
+    await tellTriggerTeam({
+      taskId: applied.targetTaskId, jobId: event.id, host: applied.host ?? host, reach: 'live-owner',
+      text: (a) => buildTriggerTroubleNotice({
+        jobId: event.id, jobName: applied.jobName ?? event.id, title: 'Trigger holding fires back', outcome: 'fire_budget_held',
+        body: fireBudgetNoticeBody(heldCap, everyMs, event.id),
+      }, a),
     });
   }
   if (applied.disabled) {
@@ -375,11 +359,18 @@ async function deliverFires(host: string, batch: TriggerFiredEvent[]): Promise<v
     const { dismissFailingNotice } = await import('./trigger-health.js');
     await dismissFailingNotice(head.id);
   }
+  // The delivery into the trigger's own task is what failed: its lead hears it, never the user.
   if (applied.gaveUp) {
-    await notifyTrigger({
-      title: `Trigger "${applied.jobName ?? head.id}" could not deliver`,
-      body: applied.error ?? 'delivery kept failing',
-      dedupKey: `trigger-delivery:${head.id}:${head.epoch ?? ''}:${applied.seq ?? Math.min(...seqs)}`,
+    const job = await service.list({ includeDisabled: true }).then((jobs) => jobs.find((j) => j.id === head.id)).catch(() => undefined);
+    const { routineTargetTask } = await import('../cron/trigger-apply.js');
+    const { buildTriggerTroubleNotice, tellTriggerTeam } = await import('./trigger-health.js');
+    await tellTriggerTeam({
+      taskId: job ? routineTargetTask(job) : undefined, jobId: head.id, reach: 'above',
+      text: (a) => buildTriggerTroubleNotice({
+        jobId: head.id, jobName: applied.jobName ?? head.id, title: 'Trigger could not deliver', outcome: 'trigger_undelivered',
+        body: `Walnut could not deliver a fire into its task: ${(applied.error ?? 'delivery kept failing').replace(/[.\s]+$/, '')}. `
+          + 'The fire is recorded as failed and the next one tries again. Check that the task\'s session can take a message.',
+      }, a),
     });
   }
   await ackFires(host, head.id, seqs.filter((seq) => !held.has(seq)));

@@ -16,6 +16,8 @@
  * by the session that wrote it (his answers in it go to that session). Pinned, mail items and a letter
  * the user asked for stand alone, as before.
  */
+import type { LetterLang } from './walnut-letters/languages.js';
+import { DECISION_NOTE_WORDS } from './walnut-letters/thread-words.js';
 import type { AwayThreadMark, LetterRecord, LetterSender, NewLetter } from './types.js';
 
 export const AWAY_THREAD_MAX_MS = 24 * 60 * 60_000;
@@ -59,8 +61,8 @@ export function foldedTurnText(input: Pick<SendInput, 'subject' | 'text'>): stri
   return text && text !== subject ? `${subject}: ${text}` : subject;
 }
 
-export function decisionNoteText(subject: string): string {
-  return `Needs your answer: "${subject.trim()}", in its own letter, where one tap answers it.`;
+export function decisionNoteText(subject: string, lang: LetterLang = 'en'): string {
+  return DECISION_NOTE_WORDS[lang](subject.trim());
 }
 
 export interface AwaySendResult {
@@ -83,12 +85,15 @@ function serial<T>(key: string, fn: () => Promise<T>): Promise<T> {
 /**
  * Send `input` the away way when its sender is Main or a lead the user is away from; null = send it
  * as usual. `sendNew` sends a new letter with the given options (the store's sendLetterOnce).
+ * `guard.refuseDuplicate` (a session's send, duplicate-letter.ts) runs again inside the node's
+ * queue, and a folded update repeating the thread's latest turn is refused, never sent as a letter.
  */
 export async function sendAway(
   input: SendInput,
   sender: LetterSender,
   sendNew: (opts: { awayThread: AwayThreadMark; quiet: boolean }) => Promise<LetterRecord>,
   now = Date.now(),
+  guard: { refuseDuplicate?: () => Promise<void> } = {},
 ): Promise<AwaySendResult | null> {
   const taskId = sender.taskId;
   if (!taskId) return null;
@@ -104,6 +109,9 @@ export async function sendAway(
     if (!state?.away) return null;
     const plan = planAwaySend(input, { taskId, since: state.lastSeenAt }, sender.sessionId, await store.awayLettersOf(taskId), now);
     if (!plan) return null;
+    // A new letter repeating one just sent is refused; an update folds into the thread (a turn
+    // repeating the thread's latest is refused below).
+    if (plan.kind !== 'fold') await guard.refuseDuplicate?.();
     const { log } = await import('../../logging/index.js');
     if (plan.kind === 'fold') {
       const ref = input.htmlRef ?? input.html_ref;
@@ -112,10 +120,12 @@ export async function sendAway(
           text: foldedTurnText(input),
           ...(typeof input.markdown === 'string' && input.markdown ? { markdown: input.markdown }
             : typeof input.html === 'string' && input.html ? { html: input.html } : ref ? { htmlRef: ref } : {}),
-        }, { quiet: !plan.into.read, taskRefs: input.taskRefs ?? input.task_refs });
+        }, { quiet: !plan.into.read, taskRefs: input.taskRefs ?? input.task_refs, refuseDuplicate: !!guard.refuseDuplicate });
         log.notif.info('human-inbox: an away update joined its thread', { letterId: letter.id, taskId, quiet: !plan.into.read });
         return { letter, addedToThread: true };
       } catch (err) {
+        // The same update twice: refused as the letter it was sent as, never a second letter.
+        if (err instanceof store.LetterError && err.code === 'duplicate_reply') throw new store.LetterError(err.message, 'duplicate_letter', 409);
         // The thread went away under it (deleted, a size cap): a letter of its own instead.
         log.notif.warn('human-inbox: away update not folded, sent as a letter', { letterId: plan.into.id, error: err instanceof Error ? err.message : String(err) });
         return { letter: await sendNew({ awayThread: { taskId, since: state.lastSeenAt }, quiet: false }), addedToThread: false };
@@ -123,7 +133,8 @@ export async function sendAway(
     }
     const letter = await sendNew({ awayThread: plan.mark, quiet: plan.quiet });
     if (plan.noteInto) {
-      await store.agentReply(plan.noteInto.id, { text: decisionNoteText(input.subject) }, { quiet: true })
+      const { walnutLetterLanguage } = await import('./walnut-letters/languages.js');
+      await store.agentReply(plan.noteInto.id, { text: decisionNoteText(input.subject, await walnutLetterLanguage()) }, { quiet: true })
         .catch((err) => log.notif.warn('human-inbox: away thread note not written', { letterId: plan.noteInto!.id, error: err instanceof Error ? err.message : String(err) }));
     }
     return { letter, addedToThread: false };

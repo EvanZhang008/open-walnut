@@ -478,7 +478,7 @@ async function patchDraft(
   if (!patched.wasPendingApproval) return `${draftJson(patched.draft)}\n${DRAFT_REMINDER}`
   await deps.approvals.withdrawFor(
     patched.previousLetterId,
-    'This draft was edited; a fresh letter follows.',
+    (w) => w.edited,
   )
   const again = await deps.approvals.requestSend(draftId, patched.draft.revision)
   return `${draftJson(again.draft)}\n`

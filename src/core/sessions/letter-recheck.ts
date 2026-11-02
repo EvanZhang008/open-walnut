@@ -12,7 +12,9 @@
  *     do not, keep the rest. Not a parked (WAITING) task, whose note would end its wait, and not
  *     one whose own "needs you" the needs re-check covers (its note asks it to settle the letter), and
  *     not a letter a trigger the session armed for it watches while it polls (recheck-watch.ts). At most MAX_RECHECKS in a row while letters stay open, recorded on the
- *     task first (`letter_recheck`), so a failed wake never repeats every scan.
+ *     task first (`letter_recheck`), so a failed wake never repeats every scan;
+ *   - a letter Walnut wrote itself that its kind says nobody needs any more is settled
+ *     (human-inbox/walnut-letters/sweep.ts; also once at boot, needs-recheck.ts).
  *
  * Primary only; an ephemeral server never wakes a task for a letter it copied from the real Walnut.
  */
@@ -68,12 +70,22 @@ export async function runLetterRecheck(
     const tasks = new Map((ids.length ? await listTasksByIds(ids) : []).map((t) => [t.id, t]));
 
     // Completions the edge missed.
+    const { walnutLetterLanguage } = await import('../human-inbox/walnut-letters/languages.js');
+    const lang = await walnutLetterLanguage();
     const settled = await settleLettersWhere((l) => {
       const task = l.sender?.taskId ? tasks.get(l.sender.taskId) : undefined;
-      return task?.phase === 'COMPLETE' ? completionSettleReason(l, task) : null;
+      return task?.phase === 'COMPLETE' ? completionSettleReason(l, task, lang) : null;
     });
     out.settled = settled.map((s) => s.id);
     if (settled.length) log.notif.info('human-inbox: settled decision letters of completed tasks', { letters: settled });
+    // Walnut's own letters whose kind says nobody needs them any more (walnut-letters/sweep.ts). Not on
+    // an ephemeral copy (`notBefore`): a host grant it settles would tell the copied sessions.
+    const { settleUnneededWalnutLetters } = await import('../human-inbox/walnut-letters/sweep.js');
+    const own = opts.notBefore !== undefined ? [] : await settleUnneededWalnutLetters(nowMs).catch((err) => {
+      log.notif.warn('human-inbox: Walnut letter sweep failed', { error: err instanceof Error ? err.message : String(err) });
+      return [];
+    });
+    out.settled.push(...own.map((s) => s.id));
     const gone = new Set(out.settled);
 
     // A count left from letters that are all answered or settled now starts over.

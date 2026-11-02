@@ -28,18 +28,22 @@ import {
 import { REQUESTABLE_DRAFT_STATES } from './drafts.js'
 import type { MailDrafts } from './drafts.js'
 import type { MailEvents } from './events.js'
-import { renderApprovalLetter } from './render.js'
+import { walnutLetterLanguage } from '../../core/human-inbox/walnut-letters/languages.js'
+import {
+  MAIL_APPROVAL,
+  MAIL_APPROVAL_WORDS,
+  type MailApprovalNote,
+} from '../../core/human-inbox/walnut-letters/mail-approval.js'
 import type { MailService } from './service.js'
 import { toSendDto } from './sends.js'
 import type { MailSends } from './sends.js'
 import type { AccountRow, DraftRow, MailStore, SendRow } from './store.js'
 
-/** The letter actions an approval letter offers. Fixed ids: the handler switches on them. */
-export const LETTER_ACTIONS = [
-  { id: 'send', label: 'Send', description: 'Send this message now, exactly as shown' },
-  { id: 'edit', label: 'Edit', description: 'Put it back in the Mail console without sending' },
-  { id: 'discard', label: 'Discard', description: 'Throw the draft away without sending' },
-] as const
+/**
+ * The letter actions an approval letter offers, in English. Fixed ids: the handler switches on them.
+ * The letter itself carries them in the user's letter language (the template's `actions`).
+ */
+export const LETTER_ACTIONS = MAIL_APPROVAL_WORDS.en.actions
 
 /**
  * How long a draft may sit frozen with no ledger row before the reconciler calls it stuck.
@@ -89,24 +93,17 @@ export interface LetterAnswer {
 }
 
 /**
- * The three things a superseded answer can honestly say. They are different on purpose.
+ * The three things a superseded answer can honestly say (`changed`, `alreadySent`, `superseded` in
+ * the template). They are different on purpose.
  *
  * The old single message said "already changed or was already sent", which is a guess presented as
  * a fact: a human who reads "already sent" about a message that was never sent stops looking for
  * it. Which one applies is decided by the LEDGER, because a `sends` row is the only proof that a
  * send for this draft ever existed.
  */
-const CHANGED_REPLY =
-  'This draft changed after the letter went out, so nothing was sent now. Open the Mail console to'
-  + ' see where it stands, and ask again from there if you still want it sent.'
-
-const ALREADY_SENT_REPLY =
-  'A send for this draft was already under way, so nothing was sent by this answer. Open the Mail'
-  + ' console to see how it ended.'
-
-const SUPERSEDED_REPLY =
-  'This letter is no longer the one Walnut is waiting on: the draft was edited, discarded, or sent'
-  + ' from the console. Nothing was sent by this answer.'
+const CHANGED_REPLY: MailApprovalNote = (w) => w.changed
+const ALREADY_SENT_REPLY: MailApprovalNote = (w) => w.alreadySent
+const SUPERSEDED_REPLY: MailApprovalNote = (w) => w.superseded
 
 function stale(message: string): MailServiceError {
   return new MailServiceError('stale', message, 409)
@@ -153,7 +150,7 @@ export class MailApprovals {
     const dto = this.deps.drafts.toDto(row)
     // Rendered from the ROW. A request body that says something else is not what the human is
     // being asked about, and not what `sends.ts` will put on the wire.
-    const letter = renderApprovalLetter({
+    const letter = MAIL_APPROVAL.render(await walnutLetterLanguage(), {
       accountAddress: account.address,
       accountLabel: account.display_name || account.address,
       to: dto.to,
@@ -166,7 +163,7 @@ export class MailApprovals {
     const sent = await this.deps.letters.send({
       subject: letter.subject,
       markdown: letter.markdown,
-      actions: LETTER_ACTIONS.map((one) => ({ ...one })),
+      actions: letter.actions,
     })
 
     const frozen = await this.deps.store.write.freezeDraft(
@@ -176,7 +173,7 @@ export class MailApprovals {
       // Somebody edited, discarded or sent this draft between the read and the freeze. The letter
       // is already in the human's inbox, so it is withdrawn rather than left as a live button
       // pointing at a revision that no longer exists.
-      await this.withdraw(sent.letterId, 'This draft changed before the letter went out; nothing was sent.')
+      await this.withdraw(sent.letterId, (w) => w.changedBeforeOut)
       throw stale(`Draft ${draftId} changed while the approval letter was being prepared.`)
     }
     const fresh = await this.deps.drafts.require(draftId)
@@ -233,7 +230,7 @@ export class MailApprovals {
 
     const send = await this.mintAndSend(row, row.revision, 'console', approvalRef, onMinted)
     if (!send) throw stale(`Draft ${draftId} changed before the console send reached it.`)
-    if (outstanding) await this.withdraw(outstanding, 'Sent from the console; this letter is no longer needed.')
+    if (outstanding) await this.withdraw(outstanding, (w) => w.consoleSent)
     return { send: toSendDto(send), draft: this.deps.drafts.toDto(await this.deps.drafts.require(draftId)) }
   }
 
@@ -292,17 +289,14 @@ export class MailApprovals {
         await this.deps.store.write.unfreezeDraft(row.draft_id, this.now)
         const fresh = await this.deps.drafts.require(row.draft_id)
         this.deps.events.draftChanged(row.draft_id, fresh.state, fresh.revision)
-        await this.reply(
-          answer.letterId,
-          'Nothing was sent. Edit it in the Mail console; asking again will send a fresh letter.',
-        )
+        await this.reply(answer.letterId, (w) => w.editReply)
         return
       }
       if (answer.actionId === 'discard') {
         await this.deps.store.write.discardDraft(row.draft_id, this.now)
         const fresh = await this.deps.drafts.require(row.draft_id)
         this.deps.events.draftChanged(row.draft_id, fresh.state, fresh.revision)
-        await this.reply(answer.letterId, 'Discarded, nothing was sent.')
+        await this.reply(answer.letterId, (w) => w.discardReply)
         return
       }
       this.deps.log.warn('mail letter answered with an action the base does not know', {
@@ -312,10 +306,7 @@ export class MailApprovals {
       this.deps.log.warn('mail letter answer could not be carried out', {
         letterId: answer.letterId, actionId: answer.actionId, error: reasonOf(error).slice(0, 300),
       })
-      await this.reply(
-        answer.letterId,
-        `Walnut could not carry that out: ${reasonOf(error).slice(0, 300)} Nothing was sent.`,
-      )
+      await this.reply(answer.letterId, (w) => w.couldNot(reasonOf(error).slice(0, 300)))
     }
   }
 
@@ -379,8 +370,7 @@ export class MailApprovals {
       try {
         if (await this.deps.store.write.getSendByKey(`${row.draft_id}:${row.revision}`)) continue
         if (row.state === 'approved') {
-          await this.unfreezeStuck(row, 'Nothing was sent: Walnut stopped before the message went'
-            + ' out. The draft is editable again, so ask for it to be sent when you are ready.')
+          await this.unfreezeStuck(row, (w) => w.stoppedBeforeOut)
           outcome.unfrozen += 1
           continue
         }
@@ -388,7 +378,7 @@ export class MailApprovals {
         // taking their time, which is the normal case and must never be disturbed.
         const letter = row.letter_id ? await this.deps.letters.get(row.letter_id) : null
         if (row.letter_id && !letter) {
-          await this.unfreezeStuck(row, '')
+          await this.unfreezeStuck(row, null)
           outcome.unfrozen += 1
           continue
         }
@@ -404,8 +394,7 @@ export class MailApprovals {
           }
           continue
         }
-        await this.unfreezeStuck(row, 'Nothing was sent. The draft is editable again in the Mail'
-          + ' console.')
+        await this.unfreezeStuck(row, (w) => w.unfrozenEditable)
         outcome.unfrozen += 1
       } catch (error) {
         // One bad row must not stop the sweep, and a reconcile failure is never fatal: the row
@@ -421,7 +410,7 @@ export class MailApprovals {
     return outcome
   }
 
-  private async unfreezeStuck(row: DraftRow, note: string): Promise<void> {
+  private async unfreezeStuck(row: DraftRow, note: MailApprovalNote | null): Promise<void> {
     const changed = await this.deps.store.write.unfreezeToState(row.draft_id, 'composing', this.now)
     if (changed === 0) return
     const fresh = await this.deps.drafts.require(row.draft_id)
@@ -430,16 +419,12 @@ export class MailApprovals {
       draftId: row.draft_id, from: row.state, revision: row.revision,
     })
     if (row.letter_id) {
-      await this.withdraw(
-        row.letter_id,
-        note || 'Walnut stopped before this could be sent; nothing was sent, and the draft is'
-          + ' editable again.',
-      )
+      await this.withdraw(row.letter_id, note ?? ((w) => w.stoppedEditable))
     }
   }
 
   /** Withdraw the outstanding letter of a draft that was just edited or discarded. */
-  async withdrawFor(letterId: string | undefined, note: string): Promise<void> {
+  async withdrawFor(letterId: string | undefined, note: MailApprovalNote): Promise<void> {
     if (!letterId) return
     await this.withdraw(letterId, note)
   }
@@ -558,7 +543,7 @@ export class MailApprovals {
       draftId: draft.draft_id, revision: draft.revision, sendState,
     })
     if (draft.letter_id) {
-      await this.withdraw(draft.letter_id, 'This revision was already sent once; nothing was sent now.')
+      await this.withdraw(draft.letter_id, (w) => w.spentRevision)
     }
     if (approvalKind === 'letter' && approvalRef && approvalRef !== draft.letter_id) {
       await this.reply(approvalRef, ALREADY_SENT_REPLY)
@@ -566,7 +551,7 @@ export class MailApprovals {
   }
 
   /** Which "nothing was sent" is true here, decided by the ledger rather than guessed. */
-  private async staleReply(draftId: string): Promise<string> {
+  private async staleReply(draftId: string): Promise<MailApprovalNote> {
     const ledger = await this.deps.store.write
       .listSends({ draftId, limit: 1 })
       .catch(() => [] as SendRow[])
@@ -605,8 +590,9 @@ export class MailApprovals {
     return account
   }
 
-  private async withdraw(letterId: string, note: string): Promise<void> {
-    try { await this.deps.letters.withdraw(letterId, { note }) }
+  /** Notes and thread turns are picked from the template's words in the user's letter language. */
+  private async withdraw(letterId: string, note: MailApprovalNote): Promise<void> {
+    try { await this.deps.letters.withdraw(letterId, { note: note(MAIL_APPROVAL_WORDS[await walnutLetterLanguage()]) }) }
     catch (error) {
       this.deps.log.warn('mail approval letter could not be withdrawn', {
         letterId, error: reasonOf(error).slice(0, 200),
@@ -614,8 +600,11 @@ export class MailApprovals {
     }
   }
 
-  private async reply(letterId: string, markdown: string): Promise<void> {
-    try { await this.deps.letters.reply(letterId, { markdown, text: markdown }) }
+  private async reply(letterId: string, note: MailApprovalNote): Promise<void> {
+    try {
+      const markdown = note(MAIL_APPROVAL_WORDS[await walnutLetterLanguage()])
+      await this.deps.letters.reply(letterId, { markdown, text: markdown })
+    }
     catch (error) {
       this.deps.log.warn('mail approval letter could not be replied to', {
         letterId, error: reasonOf(error).slice(0, 200),

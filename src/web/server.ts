@@ -2004,6 +2004,8 @@ export async function startServer(options: ServerOptions = {}): Promise<HttpServ
     // A completed task's own "please check this" letters leave the inbox (src/core/human-inbox/complete-archive.ts).
     const { startCompleteArchive } = await import('../core/human-inbox/complete-archive.js')
     startCompleteArchive()
+    // A completed task's triggers pause, and a reopen resumes them (src/core/routines/trigger-completion-pause.ts).
+    void import('../core/routines/trigger-completion-pause.js').then((m) => m.startTriggerCompletionPause()).catch(() => {})
     // Subtask completions held for an idle leader until its team settles (src/core/sessions/subtask-batch.ts).
     void import('../core/sessions/subtask-notices.js').then((m) => m.resumeHeldSubtaskNotices()).catch(() => {})
   }
@@ -6687,6 +6689,7 @@ export async function stopServer(): Promise<void> {
   void import('../core/sessions/status-reconcile.js').then((m) => m.stopStatusReconcile()).catch(() => { /* never started */ })
   void import('../core/status-consistency.js').then((m) => m.stopStatusCheck()).catch(() => { /* never started */ })
   void import('../core/human-inbox/complete-archive.js').then((m) => m.stopCompleteArchive()).catch(() => { /* never started */ })
+  void import('../core/routines/trigger-completion-pause.js').then((m) => m.stopTriggerCompletionPause()).catch(() => { /* never started */ })
   void import('../core/org/lead-waits.js').then((m) => m.stopLeadWaits()).catch(() => { /* never started */ })
   bus.unsubscribe('board-store') // BOARD_SUBSCRIBER, core/boards/board-store.ts
   bus.unsubscribe('task-workspaces') // core/workspaces/watch.ts

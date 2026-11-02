@@ -26,6 +26,8 @@ import { snoozeEndedMs } from '../snooze.js';
 export { NEEDS_RECHECK_MS };
 export const MAX_RECHECKS = 6;
 const SCAN_MS = Math.min(10 * 60_000, NEEDS_RECHECK_MS / 4);
+/** After boot, once the hosts had a moment to connect (the host checks read where tasks run). */
+const BOOT_SWEEP_DELAY_MS = 30_000;
 
 export interface NeedsRecheck {
   /** When the last re-check note went in (ISO). */
@@ -178,10 +180,20 @@ export async function runNeedsRecheck(nowMs = Date.now()): Promise<string[]> {
   return woken;
 }
 
+let bootTimer: ReturnType<typeof setTimeout> | null = null;
+
 export function startNeedsRecheck(opts: { ephemeral?: boolean } = {}): void {
   ephemeral = !!opts.ephemeral;
   startedAt = Date.now();
   if (timer) return;
+  // Walnut's own letters nobody needs any more go at boot too, not 10 minutes later (walnut-letters/sweep.ts).
+  bootTimer = setTimeout(() => {
+    bootTimer = null;
+    if (ephemeral || !timer) return;
+    void import('../human-inbox/walnut-letters/sweep.js').then((m) => m.settleUnneededWalnutLetters())
+      .catch((err) => log.task.warn('Walnut letter sweep at boot failed', { error: err instanceof Error ? err.message : String(err) }));
+  }, BOOT_SWEEP_DELAY_MS);
+  bootTimer.unref?.();
   timer = setInterval(() => {
     void runNeedsRecheck();
     // The task's decision letters to the user, on the same clock (letter-recheck.ts).
@@ -195,4 +207,6 @@ export function startNeedsRecheck(opts: { ephemeral?: boolean } = {}): void {
 export function stopNeedsRecheck(): void {
   if (timer) clearInterval(timer);
   timer = null;
+  if (bootTimer) clearTimeout(bootTimer);
+  bootTimer = null;
 }

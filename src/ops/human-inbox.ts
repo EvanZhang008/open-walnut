@@ -32,6 +32,14 @@ import { MESSAGE_TEXT_HINT } from '../core/team-charter.js'
 import { USER_KINDS, USER_KIND_PARAM, USER_KIND_WHY_PARAM } from '../core/org/user-kind.js'
 import { withOutcome } from './outcome.js'
 
+/** The sender's open decision letter asking the same thing, from the send's answer (duplicate-letter.ts). */
+function openAskOf(body: unknown): { letterId: string; subject: string; sentAt: string; hint: string } | undefined {
+  const o = (body as { openAsk?: unknown } | undefined)?.openAsk as Record<string, unknown> | undefined
+  return o && typeof o.letterId === 'string' && typeof o.hint === 'string'
+    ? { letterId: o.letterId, subject: String(o.subject ?? ''), sentAt: String(o.sentAt ?? ''), hint: o.hint }
+    : undefined
+}
+
 const LETTER_TYPE = z.enum(['completion', 'action_required', 'review', 'info'])
 
 const ACTION = z.object({
@@ -54,6 +62,9 @@ defineOp({
     + 'the request named) unless the user themself asked this task for a letter or report (user_asked:true). '
     + 'A letter from or about a snoozed task (start date still to come) is refused (409 task_snoozed) unless '
     + 'snooze_reason says why it cannot wait for that date. '
+    + 'One letter per question: the same subject again within 10 minutes is refused (409 duplicate_letter, '
+    + 'the first letter named; reply in its thread instead, or pass resend_reason), and a letter asking what '
+    + 'your open decision letter already asks comes back with openAsk naming it: reply to or settle that one. '
     + 'An action_required letter is for a decision that is the user\'s own, and says which kind with user_kind and '
     + 'user_kind_why (409 user_kind without them); undoing what an agent broke and choosing between reasonable options are never the user\'s. '
     + 'Writing standard: one phone screen, background in 1-2 sentences, then the point; '
@@ -94,18 +105,27 @@ defineOp({
       + 'the user reads saying why this cannot wait for that date. It leads the letter'),
     user_kind: z.enum(USER_KINDS).optional().describe(USER_KIND_PARAM),
     user_kind_why: z.string().max(300).optional().describe(USER_KIND_WHY_PARAM),
+    resend_reason: z.string().optional().describe(
+      'Only to send again a letter with the same subject as one you sent in the last 10 minutes: one line '
+      + '(10+ characters) saying why it must be a new letter. Never stored'),
   },
   bind: { method: 'POST', path: '/human-inbox' },
-  mapResult: ({ body }) => ({
-    letterId: (body as { id?: unknown } | undefined)?.id,
-    ...((body as { addedToThread?: unknown } | undefined)?.addedToThread === true ? { addedToThread: true } : {}),
-    instruction:
-      ((body as { addedToThread?: unknown } | undefined)?.addedToThread === true
-        ? 'The user is away from your chat, so this update joined your letter of this absence (one thread, one buzz). '
-        : 'The letter is in the human\'s inbox. ')
-      + 'If they answer, their reply arrives as a message in '
-      + 'this session; continue the thread with human_inbox_reply and that letterId.',
-  }),
+  mapResult: ({ body }) => {
+    const added = (body as { addedToThread?: unknown } | undefined)?.addedToThread === true
+    const openAsk = openAskOf(body)
+    return {
+      letterId: (body as { id?: unknown } | undefined)?.id,
+      ...(added ? { addedToThread: true } : {}),
+      ...(openAsk ? { openAsk } : {}),
+      instruction:
+        (openAsk ? `${openAsk.hint} ` : '')
+        + (added
+          ? 'The user is away from your chat, so this update joined your letter of this absence (one thread, one buzz). '
+          : 'The letter is in the human\'s inbox. ')
+        + 'If they answer, their reply arrives as a message in '
+        + 'this session; continue the thread with human_inbox_reply and that letterId.',
+    }
+  },
   tags: { readonly: false, remote: 'allow' },
 })
 
@@ -116,7 +136,8 @@ defineOp({
     'Append your answer to a letter you already sent, once the human has replied or clicked an '
     + 'option. Same standard as the letter itself: answer the question first, keep it to a few '
     + 'sentences, link anything long. This flips the letter back to unread and notifies them, so '
-    + 'reply here rather than only in the session, otherwise your answer never leaves this host.',
+    + 'reply here rather than only in the session, otherwise your answer never leaves this host. '
+    + 'Post each reply once: the same text as your latest reply there, within 10 minutes, is refused (409 duplicate_reply).',
   input: {
     letter: z.string().min(1).describe('Letter id from human_inbox_send (lt-...)'),
     text: z.string().min(1).describe('Your reply as plain text (always required: it is the thread line)'),

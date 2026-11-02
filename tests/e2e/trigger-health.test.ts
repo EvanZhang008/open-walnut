@@ -5,7 +5,9 @@
  *
  * The daemon's reports are handed to the real sink (what the socket handler does);
  * the session notices are asserted where they land, the mock daemon's writes and
- * spawns for the target task's session; the bells and the letter in their stores.
+ * spawns for the target task's session (or its lead's). The user hears none of it
+ * (2026-11-02, the user: a completed task's stopped trigger wrote him a letter):
+ * no bell and no letter is asserted in their stores.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import fs from 'node:fs/promises'
@@ -81,12 +83,14 @@ async function waitFor<T>(read: () => T | Promise<T>, ok: (v: T) => boolean, tim
 
 const settle = (ms = 600) => new Promise((r) => setTimeout(r, ms))
 
-async function bells(prefix: string) {
-  return (await listNotifications()).feed.filter((n) => n.dedupKey.startsWith(prefix))
+async function lettersAbout(name: string) {
+  return (await listLetters()).letters.filter((l) => l.subject.includes(`"${name}"`) || (l.textPreview ?? '').includes(`"${name}"`))
 }
 
-async function lettersAbout(name: string) {
-  return (await listLetters()).letters.filter((l) => l.subject.includes(`"${name}"`))
+/** Nothing about this trigger reached the user: no bell, no letter. */
+async function userHeardNothing(id: string, name: string) {
+  expect((await listNotifications()).feed.filter((n) => n.dedupKey.includes(id) || n.title.includes(`"${name}"`))).toEqual([])
+  expect(await lettersAbout(name)).toEqual([])
 }
 
 function checked(id: string, atMs: number, outcome: TriggerCheckedEvent['outcome'], extra: Partial<TriggerCheckedEvent> = {}) {
@@ -101,6 +105,14 @@ async function newTask(title: string): Promise<string> {
   const r = await req('POST', '/api/tasks', { title, project: 'Trigger health e2e' })
   expect(r.status).toBe(201)
   return r.json.id ?? r.json.task?.id
+}
+
+/** A task led by `leadId` (its subtask). */
+async function newSubtask(title: string, leadId: string): Promise<string> {
+  const id = await newTask(title)
+  const { updateTaskRaw } = await import('../../src/core/task-manager.js')
+  await updateTaskRaw(id, { parent_task_id: leadId }, { source: 'test' })
+  return id
 }
 
 async function newSession(taskId: string, sid: string, status: 'stopped' | 'idle'): Promise<void> {
@@ -162,33 +174,30 @@ describe('a check that keeps failing', () => {
     expect(notice).toContain(`walnut tools call trigger_test '{"run":"bash ~/.open-walnut/triggers/pipeline-watch/check.sh","id":"${id}"}'`)
     // It went to THAT task's session (resumed cold: it was stopped).
     expect(textsToSessions().find((c) => c.text === notice)?.sid).toBe('th-session-main')
-    // The user is not bothered by one failure.
-    expect(await bells(`trigger-failing:${id}`)).toHaveLength(0)
+    await userHeardNothing(id, 'pipeline watch')
   })
 
-  it('the second failure tells no one; the third puts one bell in front of the user', async () => {
+  it('the second failure tells no one; the third tells the task again, once per run', async () => {
     await checked(id, t0 + 5 * MIN, 'error')
     await settle()
     expect(notices(id, 'check_failed')).toHaveLength(1)
-    expect(await bells(`trigger-failing:${id}`)).toHaveLength(0)
+    expect(notices(id, 'check_failing')).toHaveLength(0)
 
     await checked(id, t0 + 10 * MIN, 'error')
-    const [bell] = await bells(`trigger-failing:${id}`)
-    expect(bell.title).toBe('Trigger "pipeline watch" keeps failing')
-    expect(bell.severity).toBe('warning')
-    expect(bell.taskId).toBe(taskId)
-    expect(bell.body).toContain(`3 checks in a row failed on this machine since ${new Date(t0).toISOString()}`)
-    expect(bell.body).toContain('items[3].id is too long')
+    const [failing] = await waitFor(() => notices(id, 'check_failing'), (n) => n.length > 0)
+    expect(failing).toContain(`Your trigger "pipeline watch" (${id}) keeps failing: 3 checks in a row failed on this machine since ${new Date(t0).toISOString()}.`)
+    expect(failing).toContain('items[3].id is too long')
+    expect(textsToSessions().find((c) => c.text === failing)?.sid).toBe('th-session-main')
 
-    // The fourth refreshes nothing: one bell per run of failures.
+    // The fourth tells nothing more: one notice per run of failures.
     await checked(id, t0 + 15 * MIN, 'error')
-    const again = await bells(`trigger-failing:${id}`)
-    expect(again).toHaveLength(1)
-    expect(again[0].count ?? 1).toBe(1)
+    await settle()
+    expect(notices(id, 'check_failing')).toHaveLength(1)
     expect(notices(id, 'check_failed')).toHaveLength(1)
+    await userHeardNothing(id, 'pipeline watch')
   })
 
-  it('the fifth stops it: the session is told, the user gets a letter, the failing bell goes', async () => {
+  it('the fifth stops it: the task is told, the user hears nothing', async () => {
     await checked(id, t0 + 20 * MIN, 'error')
     const job = await jobState(id)
     expect(job.enabled).toBe(false)
@@ -197,19 +206,12 @@ describe('a check that keeps failing', () => {
     expect(stop).toContain(`Walnut stopped your trigger "pipeline watch" (${id})`)
     expect(stop).toContain(`failed ${MAX_CONSECUTIVE_CHECK_ERRORS} times in a row, from ${new Date(t0).toISOString()} to ${new Date(t0 + 20 * MIN).toISOString()}`)
     expect(stop).toContain(`walnut tools call trigger_resume '{"id":"${id}"}'`)
-
-    const [letter] = await lettersAbout('pipeline watch')
-    expect(letter.subject).toBe(`Trigger "pipeline watch" stopped after ${MAX_CONSECUTIVE_CHECK_ERRORS} failed checks`)
-    expect(letter.type).toBe('review')
-    expect(letter.taskRefs).toEqual([taskId])
-    expect(letter.read).toBe(false)
-    // The letter makes its own bell; the failing one is out of date and gone.
-    expect(await bells(`letter:${letter.id}`)).toHaveLength(1)
-    expect(await bells(`trigger-failing:${id}`)).toHaveLength(0)
-    expect(await bells(`trigger-disabled:${id}`)).toHaveLength(0)
+    expect(stop).not.toContain('letter')
+    expect(textsToSessions().find((c) => c.text === stop)?.sid).toBe('th-session-main')
+    await userHeardNothing(id, 'pipeline watch')
   })
 
-  it('a second stop after a resume is news again: a second letter', async () => {
+  it('a second stop after a resume is news again: the task is told again', async () => {
     const r = await req('PATCH', `/api/routines/${id}`, { enabled: true })
     expect(r.status).toBe(200)
     const t1 = t0 + 2 * 60 * MIN
@@ -222,41 +224,47 @@ describe('a check that keeps failing', () => {
     expect(notices(id, 'check_failed')).toHaveLength(2)
     for (let i = 1; i < MAX_CONSECUTIVE_CHECK_ERRORS; i++) await checked(id, t1 + i * 5 * MIN, 'error')
     expect((await jobState(id)).enabled).toBe(false)
-    expect(await lettersAbout('pipeline watch')).toHaveLength(2)
     await waitFor(() => notices(id, 'trigger_disabled'), (n) => n.length >= 2)
     expect(notices(id, 'trigger_disabled')).toHaveLength(2)
+    await userHeardNothing(id, 'pipeline watch')
   })
 })
 
-describe('when the user hears, and when the bell goes', () => {
-  it('two failures 30 minutes apart are enough; a passing check takes the bell back', async () => {
-    const taskId = await newTask('slow watch target')
+describe('who hears when the owner cannot', () => {
+  it('two failures 30 minutes apart are enough; a task with no session is told through its lead', async () => {
+    const leadId = await newTask('slow watch lead')
+    await newSession(leadId, 'th-session-slow-lead', 'idle')
+    const taskId = await newSubtask('slow watch target', leadId)
     const id = await newTrigger('slow watch', taskId)
     const t0 = Date.now()
     await checked(id, t0, 'error')
     await checked(id, t0 + 29 * MIN, 'error')
-    expect(await bells(`trigger-failing:${id}`)).toHaveLength(0)
+    await settle()
+    expect(notices(id, 'check_failing')).toHaveLength(0)
     await checked(id, t0 + 31 * MIN, 'error')
-    expect(await bells(`trigger-failing:${id}`)).toHaveLength(1)
+    const [failing] = await waitFor(() => notices(id, 'check_failing'), (n) => n.length > 0)
+    expect(failing).toContain(`The trigger "slow watch" (${id}) of your team's task "slow watch target" (${taskId}), which has no session that could be told, keeps failing: 3 checks in a row failed`)
+    expect(failing).toContain(`walnut tools call trigger_pause '{"id":"${id}"}'`)
+    expect(textsToSessions().find((c) => c.text === failing)?.sid).toBe('th-session-slow-lead')
 
     await checked(id, t0 + 36 * MIN, 'quiet', { reason: 'all-seen' })
-    expect(await bells(`trigger-failing:${id}`)).toHaveLength(0)
     expect((await jobState(id)).state.consecutiveErrors).toBe(0)
+    await userHeardNothing(id, 'slow watch')
   })
 
-  it('a fire after failures also takes the bell back: it was a check that worked', async () => {
+  it('a fire after failures starts the count over: it was a check that worked', async () => {
     const taskId = await newTask('busy watch target')
     await newSession(taskId, 'th-session-busy', 'stopped')
     const id = await newTrigger('busy watch', taskId)
     const t0 = Date.now()
     for (let i = 0; i < 3; i++) await checked(id, t0 + i * 5 * MIN, 'error')
-    expect(await bells(`trigger-failing:${id}`)).toHaveLength(1)
+    await waitFor(() => notices(id, 'check_failing'), (n) => n.length > 0)
     await handleTriggerFired('__local__', {
       type: 'trigger.fired', id, epoch: 'busy-epoch', seq: 1, atMs: Date.now(),
       items: [{ id: 'msg-1' }], durationMs: 3, nextRunAtMs: Date.now() + 5 * MIN,
     })
-    expect(await bells(`trigger-failing:${id}`)).toHaveLength(0)
     expect((await jobState(id)).state.consecutiveErrors).toBe(0)
+    await userHeardNothing(id, 'busy watch')
   })
 
   it('a source that fails now and then wakes its session at most once in 6 hours', async () => {
@@ -277,22 +285,43 @@ describe('when the user hears, and when the bell goes', () => {
     expect(after.some((t) => t.includes('network down again'))).toBe(true)
   })
 
-  it('a completed task hears nothing, and the stop letter says no session could be told', async () => {
-    const taskId = await newTask('closed watch target')
+  it('a completed task\'s trigger is paused; resumed by hand, its stop goes to the lead, never to the user (the 2026-11-02 report)', async () => {
+    const leadId = await newTask('closed watch lead')
+    await newSession(leadId, 'th-session-closed-lead', 'idle')
+    const taskId = await newSubtask('closed watch target', leadId)
     await newSession(taskId, 'th-session-closed', 'stopped')
     const id = await newTrigger('closed watch', taskId)
     const done = await req('POST', `/api/tasks/${taskId}/complete`, {})
     expect(done.status).toBeLessThan(300)
+    // The completion paused it (trigger-completion-pause.ts).
+    expect((await waitFor(() => jobState(id), (j) => j.enabled === false)).enabled).toBe(false)
+    // The person resumes it on the done task anyway; its check script is then deleted.
+    expect((await req('PATCH', `/api/routines/${id}`, { enabled: true })).status).toBe(200)
+    await settle()
+    expect((await jobState(id)).enabled).toBe(true)
+    const t0 = Date.now()
+    for (let i = 0; i < MAX_CONSECUTIVE_CHECK_ERRORS; i++) {
+      await checked(id, t0 + i * 5 * MIN, 'error', { error: 'exit 127: bash: check.sh: No such file or directory' })
+    }
+    expect((await jobState(id)).enabled).toBe(false)
+    const [stop] = await waitFor(() => notices(id, 'trigger_disabled'), (n) => n.length > 0)
+    expect(stop).toContain(`Walnut stopped the trigger "closed watch" (${id}) of your team's task "closed watch target" (${taskId}), which is complete:`)
+    expect(stop).toContain(`walnut tools call trigger_delete '{"id":"${id}"}'`)
+    expect(textsToSessions().find((c) => c.text === stop)?.sid).toBe('th-session-closed-lead')
+    // The completed task's own session hears nothing, and the user nothing at all.
+    expect(textsToSessions().filter((c) => c.sid === 'th-session-closed' && c.text.includes(`(${id})`))).toEqual([])
+    await userHeardNothing(id, 'closed watch')
+  })
+
+  it('nobody to tell is only logged: no bell, no letter', async () => {
+    const taskId = await newTask('lonely watch target')
+    const id = await newTrigger('lonely watch', taskId)
     const t0 = Date.now()
     for (let i = 0; i < MAX_CONSECUTIVE_CHECK_ERRORS; i++) await checked(id, t0 + i * 5 * MIN, 'error')
+    expect((await jobState(id)).enabled).toBe(false)
     await settle()
-    expect(notices(id, 'check_failed')).toHaveLength(0)
     expect(notices(id, 'trigger_disabled')).toHaveLength(0)
-    const [letter] = await lettersAbout('closed watch')
-    expect(letter).toBeTruthy()
-    const { getLetter } = await import('../../src/core/human-inbox/store.js')
-    const full = await getLetter(letter.id, { inlineMaxBytes: Infinity })
-    expect(JSON.stringify(full)).toContain('no session that could be told')
+    await userHeardNothing(id, 'lonely watch')
   })
 })
 
@@ -356,5 +385,26 @@ describe('output the daemon repaired', () => {
     const job = await jobState(id)
     expect(job.state.fireLog[0]).toMatchObject({ outcome: 'fired', warnings })
     expect(job.state.warningNoticeAtMs).toBeGreaterThan(0)
+  })
+})
+
+// Last in the file: it makes a Main, which every task with no lead of its own then follows.
+describe('who above the task hears it (2026-11-02 review)', () => {
+  it('a stopped lead is not woken, and Main is never told as a task\'s lead', async () => {
+    const { updateTaskRaw } = await import('../../src/core/task-manager.js')
+    const mainId = await newTask('org main')
+    await updateTaskRaw(mainId, { org_role: 'main' }, { source: 'test' })
+    await newSession(mainId, 'th-session-org-main', 'idle')
+    const leadId = await newTask('stopped lead')
+    await newSession(leadId, 'th-session-stopped-lead', 'stopped')
+    const taskId = await newSubtask('under a stopped lead', leadId)
+    const id = await newTrigger('stopped lead watch', taskId)
+    const t0 = Date.now()
+    for (let i = 0; i < MAX_CONSECUTIVE_CHECK_ERRORS; i++) await checked(id, t0 + i * 5 * MIN, 'error')
+    expect((await jobState(id)).enabled).toBe(false)
+    await settle()
+    expect(notices(id, 'trigger_disabled')).toHaveLength(0)
+    expect(textsToSessions().filter((c) => c.text.includes(`(${id})`)).map((c) => c.sid)).toEqual([])
+    await userHeardNothing(id, 'stopped lead watch')
   })
 })

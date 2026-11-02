@@ -26,7 +26,7 @@ import { startServer, stopServer } from '../../src/web/server.js'
 import { createMockDaemon, type MockDaemon } from '../helpers/mock-daemon.js'
 import { setTriggerDaemonLookupForTest, type TriggerDaemon } from '../../src/core/routines/trigger-daemon.js'
 import { handleTriggerChecked, handleTriggerEvent, handleTriggerFired } from '../../src/core/routines/trigger-events.js'
-import { dismissNotifications, listNotifications } from '../../src/core/notifications/store.js'
+import { listNotifications } from '../../src/core/notifications/store.js'
 import { MAX_CONSECUTIVE_CHECK_ERRORS } from '../../src/providers/trigger-check-core.js'
 import { FIRE_DELIVERY_MAX_ATTEMPTS } from '../../src/core/cron/trigger-apply.js'
 import { registerExecutor } from '../../src/core/routines/registry.js'
@@ -435,7 +435,7 @@ describe('trigger.checked from the daemon', () => {
     })).resolves.toBeUndefined()
   })
 
-  it(`${MAX_CONSECUTIVE_CHECK_ERRORS} check errors in a row disable the trigger and notify`, async () => {
+  it(`${MAX_CONSECUTIVE_CHECK_ERRORS} check errors in a row disable the trigger, and the user hears nothing`, async () => {
     const created = await post('/api/routines', {
       name: 'broken watcher',
       schedule: { kind: 'every', everyMs: 600_000 },
@@ -460,14 +460,14 @@ describe('trigger.checked from the daemon', () => {
     // A disabled trigger has no next check at all.
     expect(job.state.nextRunAtMs).toBeUndefined()
 
-    // The user hears it as a letter (its own bell); trigger-health.test.ts covers the rest.
+    // Its task hears it (trigger-health.test.ts covers who); the user gets no letter and no bell.
+    await settle()
     const { listLetters } = await import('../../src/core/human-inbox/store.js')
-    const letter = (await listLetters()).letters.find((l) => l.subject.includes('"broken watcher"'))
-    expect(letter?.subject).toBe(`Trigger "broken watcher" stopped after ${MAX_CONSECUTIVE_CHECK_ERRORS} failed checks`)
-    expect(letter?.textPreview ?? '').toContain('stopped polling')
+    expect((await listLetters()).letters.filter((l) => l.subject.includes('"broken watcher"'))).toEqual([])
+    expect((await listNotifications()).feed.filter((n) => n.dedupKey.includes(id) || n.title.includes('"broken watcher"'))).toEqual([])
   })
 
-  it('a check the fire budget holds tells the user once a day, even after they dismiss it', async () => {
+  it('a check the fire budget holds tells the trigger\'s live session once a day, never the user', async () => {
     const created = await post('/api/routines', {
       name: 'busy chat watcher',
       schedule: { kind: 'every', everyMs: 300_000 },
@@ -479,45 +479,58 @@ describe('trigger.checked from the daemon', () => {
       type: 'trigger.checked', id, atMs, outcome: 'quiet', reason: 'rate-limited',
       durationMs: 9, nextRunAtMs: atMs + 300_000, consecutiveErrors: 0,
     })
-    const notes = async () => (await listNotifications()).feed.filter((n) => n.dedupKey.startsWith(`trigger-budget-held:${id}:`))
+    const bells = async () => (await listNotifications()).feed.filter((n) => n.dedupKey.includes(id))
+    const told = () => [...new Set([
+      ...daemon.getFifoWrites().map((w) => w.message),
+      ...daemon.getCommandHistoryFor('start').map((c) => String(c.payload.message ?? '')),
+    ].filter((t) => t.includes('outcome="fire_budget_held"') && t.includes(`(${id})`)))]
+    // Live, so the notice lands without waking anything.
+    const { updateSessionRecord } = await import('../../src/core/session-tracker.js')
+    const live = () => updateSessionRecord(sessionId, { process_status: 'idle' })
     try {
       const t0 = Date.now()
+      await live()
       await held(t0)
-      const [note] = await notes()
-      expect(note.title).toBe('Trigger "busy chat watcher" is holding fires back')
-      expect(note.severity).toBe('warning')
-      expect(note.body).toBe(
-        'It used its fire budget (6 fires a day), so it now fires at most once every 4 hours. '
+      const [notice] = await (async () => {
+        const deadline = Date.now() + 8_000
+        while (told().length === 0 && Date.now() < deadline) await settle(50)
+        return told()
+      })()
+      expect(notice).toContain(
+        'it used its fire budget (6 fires a day), so it now fires at most once every 4 hours. '
         + 'Nothing is dropped: each fire carries everything new since the last one, it just arrives later. '
-        + 'If this source is this busy, raise "Fires per day" on the trigger in Routines '
-        + '(it checks 288 times a day, so 288 lets every check fire; 0 = no limit).',
+        + 'If this source is this busy, raise the trigger\'s maxFiresPerDay '
+        + `(it checks 288 times a day, so 288 lets every check fire; 0 = no limit): PATCH /routines/${id}`,
       )
+      expect(notice).toContain(`Your trigger "busy chat watcher" (${id}):`)
       const job = await jobState(id)
       expect(job.state.lastCheck).toMatchObject({ outcome: 'quiet', reason: 'rate-limited' })
       expect(job.state.fireBudgetNoticeAtMs).toBe(t0)
 
-      // The next held checks that day add nothing, dismissed or not.
+      // The next held checks that day add nothing.
+      await live()
       await held(t0 + 300_000)
-      expect(await notes()).toHaveLength(1)
-      await dismissNotifications({ dedupKeys: [note.dedupKey] })
       await held(t0 + 600_000)
-      expect(await notes()).toHaveLength(0)
-      // A quiet check of another kind never notifies.
+      // A quiet check of another kind never tells anyone.
       await handleTriggerChecked('__local__', {
         type: 'trigger.checked', id, atMs: t0 + 700_000, outcome: 'quiet', reason: 'all-seen',
         durationMs: 9, nextRunAtMs: t0 + 1_000_000, consecutiveErrors: 0,
       })
-      expect(await notes()).toHaveLength(0)
-      // A day later it tells them again.
+      await settle()
+      expect(told()).toHaveLength(1)
+      // A day later it is told again.
+      await live()
       await held(t0 + 24 * 60 * 60 * 1000)
-      expect(await notes()).toHaveLength(1)
+      expect((await jobState(id)).state.fireBudgetNoticeAtMs).toBe(t0 + 24 * 60 * 60 * 1000)
 
       // A paused trigger's late held check is not news.
       await fetch(apiUrl(`/api/routines/${id}`), {
         method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: false }),
       })
       await held(t0 + 3 * 24 * 60 * 60 * 1000)
-      expect(await notes()).toHaveLength(1)
+      expect((await jobState(id)).state.fireBudgetNoticeAtMs).toBe(t0 + 24 * 60 * 60 * 1000)
+      // And the user saw none of it.
+      expect(await bells()).toEqual([])
     } finally {
       await fetch(apiUrl(`/api/routines/${id}`), { method: 'DELETE' })
     }
@@ -995,7 +1008,7 @@ describe('a fire whose delivery fails', () => {
     expect(job.state.fireCount).toBe(1)
   })
 
-  it(`gives up after ${FIRE_DELIVERY_MAX_ATTEMPTS} transient failures: recorded, acked, and the user is told`, async () => {
+  it(`gives up after ${FIRE_DELIVERY_MAX_ATTEMPTS} transient failures: recorded and acked, and the user is not the one told`, async () => {
     mode = 'throw'; attempts = 0; sends.length = 0
     for (let i = 0; i < FIRE_DELIVERY_MAX_ATTEMPTS; i++) await fire(2)
     expect(attempts).toBe(FIRE_DELIVERY_MAX_ATTEMPTS)
@@ -1005,8 +1018,9 @@ describe('a fire whose delivery fails', () => {
     expect(job.state.lastError).toContain(`failed ${FIRE_DELIVERY_MAX_ATTEMPTS} times`)
     expect(job.state.fireRetry).toBeUndefined()
     expect(sends.filter((s) => s.cmd === 'triggers.ack')).toHaveLength(1)
+    // A delivery failure is its task's lead's to hear (this routine has no task): never a bell.
     const { feed } = await listNotifications()
-    expect(feed.find((n) => n.dedupKey === `trigger-delivery:${flakyJobId}:flaky-epoch:2`)?.title).toContain('could not deliver')
+    expect(feed.filter((n) => n.dedupKey.includes(flakyJobId))).toEqual([])
     // The audit shows ONE fire that failed, with the attempt count, and the
     // total counts it once even though three attempts were made.
     const afterGiveUp = job.state.fireLog as Array<Record<string, any>>

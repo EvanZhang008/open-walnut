@@ -63,7 +63,11 @@ export interface SessionDelivery {
    * issues its own ids reports nothing, and the executor waits for the record.
    */
   startSession(params: { message: string; taskId: string; cwd: string; host?: string; title?: string }): Promise<{ sessionId?: string } | void>;
-  notify(input: { title: string; body?: string; dedupKey: string; taskId?: string }): Promise<void>;
+  /**
+   * A problem the run met. A trigger's (a routine with a check) goes to its task, or that task's
+   * lead, never to the user; a routine the user made himself (no check) is his to hear about.
+   */
+  notify(input: { title: string; body?: string; dedupKey: string; taskId?: string; userRoutine?: boolean }): Promise<void>;
 }
 
 export interface SessionExecutorDeps {
@@ -143,15 +147,23 @@ function defaultDelivery(): SessionDelivery {
       const delivered = continuedSessionOf(task) ?? sessionId;
       return delivered ? { sessionId: delivered } : {};
     },
+    // A trigger's trouble goes to its own task, else that task's lead, never the user
+    // (trigger-health.ts): a target that completed, a host that refused its session.
+    // The same problem is told once a day; a routine with no task is only logged.
     async notify(input) {
-      const { addNotification } = await import('../../notifications/store.js');
-      await addNotification({
-        kind: 'cron',
-        severity: 'warning',
-        title: input.title,
-        ...(input.body ? { body: input.body } : {}),
-        dedupKey: input.dedupKey,
-        ...(input.taskId ? { taskId: input.taskId } : {}),
+      if (input.userRoutine) {
+        const { addNotification } = await import('../../notifications/store.js');
+        await addNotification({
+          kind: 'cron', severity: 'warning', title: input.title,
+          ...(input.body ? { body: input.body } : {}), dedupKey: input.dedupKey, ...(input.taskId ? { taskId: input.taskId } : {}),
+        });
+        return;
+      }
+      const { buildRoutineTroubleNotice, tellTriggerTeam, toldRecently } = await import('../trigger-health.js');
+      if (toldRecently(input.dedupKey)) return;
+      await tellTriggerTeam({
+        taskId: input.taskId, jobId: input.dedupKey, reach: 'team',
+        text: (a) => buildRoutineTroubleNotice({ title: input.title, body: input.body ?? '' }, a),
       });
     },
   };
@@ -279,6 +291,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
           title: `Routine "${job.name}" has nowhere to deliver`,
           body: `${error}. Edit the routine to name the task it is for.`,
           dedupKey: `trigger-target:${job.id}:taskless`,
+          userRoutine: !job.check,
         }).catch(() => { /* the run result already carries the error */ });
         log.cron.warn('routine target is a taskless session', { jobId: job.id, sessionId: taskId });
         return { status: 'error', error };
@@ -321,6 +334,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
         body: error,
         dedupKey: `trigger-target:${job.id}:${state}`,
         ...(task ? { taskId } : {}),
+        userRoutine: !job.check,
       }).catch(() => { /* the run result already carries the error */ });
       log.cron.warn('trigger session target unusable', { jobId: job.id, taskId, state });
       return { status: 'error', error };
@@ -347,7 +361,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps = {}): ExecutorD
       // every replay meets the same refusal), told to the human once per problem.
       const refused = await noteHostGateRefusal({
         jobId: job.id, host, err, title: `Trigger "${job.name}" could not start a session`,
-        notify: (n) => delivery.notify({ ...n, taskId }),
+        notify: (n) => delivery.notify({ ...n, taskId, userRoutine: !job.check }),
       });
       if (refused === null) throw err;
       log.cron.warn('trigger session refused by the host gate', { jobId: job.id, taskId, host });

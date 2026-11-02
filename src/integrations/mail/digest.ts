@@ -33,15 +33,23 @@
  * before it is placed: this letter is a document Walnut authors, and a subject that could forge a
  * heading in it could forge one of the account headings the human reads the letter by.
  */
-import { clipChars, NAME_CHARS, SUBJECT_CHARS } from './agent-format.js'
-import { escapeMarkdown } from './render.js'
 import type { InboxLetterItem } from '../../../packages/plugin-api/src/inbox-items.js'
-import { digestItemFromRow, digestLetterItem, type DigestItem } from './digest-items.js'
+import { walnutLetterLanguage, type LetterLang } from '../../core/human-inbox/walnut-letters/languages.js'
+import { MAIL_DIGEST_WORDS } from '../../core/human-inbox/walnut-letters/mail-digest.js'
+import { digestItemFromRow } from './digest-items.js'
 export type { DigestItem } from './digest-items.js'
-import { oneLine } from './untrusted.js'
+import {
+  relativeTimeIn,
+  renderDigestIn,
+  renderGroupedDigestIn,
+  type DigestAccountBlock,
+  type DigestGroupLine,
+  type RenderedDigest,
+} from './digest-render.js'
+export { DIGEST_MAX_BYTES } from './digest-render.js'
+export type { DigestAccountBlock, DigestGroupLine, RenderedDigest } from './digest-render.js'
 import type { MailAccountDto } from './contract.js'
 import type { MailEvents } from './events.js'
-import { mailAccountLink } from './message-tasks.js'
 import type { MailStore } from './store.js'
 import type { MailSortEngine } from './sort-engine.js'
 
@@ -53,21 +61,6 @@ export const DIGEST_DEFAULT_MAX_ITEMS = 10
 
 /** Items one account may list, whatever the config asks for. */
 export const DIGEST_MAX_ITEMS_CEILING = 50
-
-/**
- * The whole body, in bytes.
- *
- * Well under the 200 KB a letter allows, on purpose: this document is pushed to a phone and read
- * on a phone, and a digest nobody scrolls to the end of is not a better digest.
- */
-export const DIGEST_MAX_BYTES = 16 * 1024
-
-export interface DigestAccountBlock {
-  accountId: string
-  label: string
-  unread: number
-  items: DigestItem[]
-}
 
 export interface DigestConfig {
   enabled: boolean
@@ -119,198 +112,29 @@ export function readDigestConfig(config: Record<string, unknown>): DigestConfig 
   }
 }
 
-const MINUTE_MS = 60_000
-const HOUR_MS = 60 * MINUTE_MS
-const DAY_MS = 24 * HOUR_MS
-
-/** How long ago, in the words a human uses. Never a date: the digest is about today. */
-export function relativeTime(at: number, now: number): string {
-  const gap = now - at
-  if (!Number.isFinite(at) || at <= 0) return 'date unknown'
-  if (gap < MINUTE_MS) return 'just now'
-  if (gap < HOUR_MS) return `${Math.floor(gap / MINUTE_MS)}m ago`
-  if (gap < DAY_MS) return `${Math.floor(gap / HOUR_MS)}h ago`
-  return `${Math.floor(gap / DAY_MS)}d ago`
-}
-
-function plural(count: number, word: string): string {
-  return `${count} ${word}${count === 1 ? '' : 's'}`
-}
-
-export interface RenderedDigest {
-  subject: string
-  markdown: string
-  text: string
-  unread: number
-  accounts: number
-  items: InboxLetterItem[]
+/** How long ago, in the words a human uses (template: walnut-letters/mail-digest.ts). */
+export function relativeTime(at: number, now: number, lang: LetterLang = 'en'): string {
+  return relativeTimeIn(MAIL_DIGEST_WORDS[lang], at, now)
 }
 
 /**
- * Room kept for the "and N more" line before a single item is admitted.
+ * The letter, from already-collected blocks, in the user's letter language.
  *
- * A block that runs out of budget has to be able to say how much it left out, so the line that says
- * so is reserved rather than appended and hoped for.
+ * Pure, so every rule is checkable without a database: the escaping, the byte cap, the
+ * "and N more" arithmetic and the plurals are all reachable from a unit test (digest-render.ts).
  */
-const MORE_LINE_BYTES = 32
-
-function bytes(text: string): number {
-  return Buffer.byteLength(text, 'utf8')
+export function renderDigest(blocks: DigestAccountBlock[], now: number, lang: LetterLang = 'en'): RenderedDigest {
+  return renderDigestIn(MAIL_DIGEST_WORDS[lang], blocks, now)
 }
 
-function itemLine(item: DigestItem, now: number): string {
-  // Clipped BEFORE escaping, on the same per-field caps the agent surface uses, so the bound is a
-  // bound on what the sender wrote rather than on backslashes Walnut added. Per field and not out of
-  // one shared allowance: a single 200 KB subject would otherwise spend the whole letter's budget
-  // and hide every other message, which is a mailbox anyone can empty by being verbose in a header.
-  const sender = escapeMarkdown(clipChars(item.sender, NAME_CHARS)) || '(no sender)'
-  const subject = escapeMarkdown(clipChars(item.subject, SUBJECT_CHARS)) || '(no subject)'
-  const sourceNote = digestLetterItem(item) ? '' : ' [Email actions unavailable: source identity missing]'
-  return `- **${sender}**: ${subject} (${relativeTime(item.sentAt, now)})${sourceNote}`
-}
-
-/**
- * One account's section, inside a byte budget.
- *
- * `cutItems` is the difference between the first block and the rest. A later block either fits whole
- * or is dropped whole, because a body cut mid-list ends in a dangling bullet and on a phone that
- * reads as a rendering bug rather than as a truncation. The FIRST block cannot be dropped (it may be
- * the only one), so it cuts items instead and says how many it left out.
- *
- * Answers `null` when the block cannot be rendered inside the budget under those rules.
- */
-function renderBlock(
-  block: DigestAccountBlock,
+/** The grouped-mode letter (spec 9.3). Pure, like `renderDigest`. */
+export function renderGroupedDigest(
+  blocks: DigestAccountBlock[],
+  groups: DigestGroupLine[],
   now: number,
-  budget: number,
-  cutItems: boolean,
-  itemBudget: number,
-): { markdown: string; items: InboxLetterItem[] } | null {
-  const heading = `### ${escapeMarkdown(clipChars(block.label, NAME_CHARS)) || escapeMarkdown(oneLine(block.accountId))}`
-    + ` (${block.unread} unread)`
-  const footer = `[Open Mail](${mailAccountLink(block.accountId)})`
-  // The heading, the link and the "and N more" line are what make a truncated block readable, so
-  // they are reserved up front; `+ 4` covers the blank lines that separate them.
-  let used = bytes(heading) + bytes(footer) + MORE_LINE_BYTES + 4
-  if (used > budget) return null
-  const kept: string[] = []
-  const items: InboxLetterItem[] = []
-  const seen = new Set<string>()
-  for (const item of block.items) {
-    const structured = digestLetterItem(item)
-    if (structured && seen.has(structured.id)) continue
-    const line = itemLine(item, now)
-    if (used + bytes(line) + 1 > budget || (structured && items.length >= itemBudget)) {
-      if (cutItems) break
-      return null
-    }
-    kept.push(line)
-    if (structured) { items.push(structured); seen.add(structured.id) }
-    used += bytes(line) + 1
-  }
-  const body = [...kept]
-  // Never negative, and never smaller than what is listed: the count comes from the mailbox and the
-  // items from the cache, so a mailbox that under-reports must not produce "and -2 more".
-  const rest = Math.max(0, block.unread - kept.length)
-  if (rest > 0) {
-    if (body.length > 0) body.push('')
-    body.push(`and ${rest} more`)
-  }
-  // A LINK, not a bare path: this letter's one call to action is "go look at your mail", and a path
-  // printed as text makes that a copy-and-paste job on the phone where the letter is read. Nothing
-  // untrusted is in it (Walnut's own words, and an id this file percent-encoded), so it cannot be
-  // the hole the escaping above exists to close.
-  return { markdown: [heading, '', ...body, '', footer].join('\n'), items }
-}
-
-function snapshotLine(now: number): string {
-  const date = new Date(now)
-  return Number.isFinite(date.getTime())
-    ? `Mailbox snapshot at ${date.toISOString()}`
-    : 'Mailbox counts in this summary are a snapshot, not live status.'
-}
-
-/**
- * The letter, from already-collected blocks.
- *
- * Pure, so every rule above is checkable without a database: the escaping, the byte cap, the
- * "and N more" arithmetic and the plurals are all reachable from a unit test.
- */
-export function renderDigest(blocks: DigestAccountBlock[], now: number): RenderedDigest {
-  const unread = blocks.reduce((sum, block) => sum + block.unread, 0)
-  const subject = `Mail digest: ${unread} unread across ${plural(blocks.length, 'account')}`
-  const sections: string[] = []
-  const items: InboxLetterItem[] = []
-  const snapshot = snapshotLine(now)
-  let used = bytes(snapshot) + 2 + 64 // Reserve the whole-account truncation notice.
-  for (const block of blocks) {
-    const section = renderBlock(block, now, DIGEST_MAX_BYTES - used, sections.length === 0, 100 - items.length)
-    if (!section) break
-    sections.push(section.markdown)
-    items.push(...section.items)
-    used += bytes(section.markdown) + 2
-  }
-  const dropped = blocks.length - sections.length
-  if (dropped > 0) sections.push(`and ${plural(dropped, 'more account')}`)
-  return {
-    subject,
-    markdown: [snapshot, ...sections].join('\n\n'),
-    text: `${unread} unread across ${plural(blocks.length, 'account')}. ${snapshot}`,
-    unread,
-    accounts: blocks.length,
-    items,
-  }
-}
-
-/** One group's line in a grouped digest: `Ticket updates: 11 unread`. */
-export interface DigestGroupLine {
-  label: string
-  unread: number
-}
-
-/**
- * The grouped-mode letter (spec 9.3): `3 need you, a middle dot, 19 sorted into groups`, the Important unread
- * listed per account exactly as the plain digest lists mail, then one line per group with unread.
- * Pure, like `renderDigest`.
- */
-export function renderGroupedDigest(blocks: DigestAccountBlock[], groups: DigestGroupLine[], now: number): RenderedDigest {
-  const need = blocks.reduce((sum, block) => sum + block.unread, 0)
-  const sorted = groups.reduce((sum, group) => sum + group.unread, 0)
-  const headline = `${need} need you \u00b7 ${sorted} sorted into groups`
-  const groupLines: string[] = []
-  let groupBytes = 64
-  for (const group of groups) {
-    const line = `- ${escapeMarkdown(clipChars(group.label, NAME_CHARS))}: ${group.unread} unread`
-    if (groupBytes + bytes(line) + 1 > 4096) break
-    groupLines.push(line)
-    groupBytes += bytes(line) + 1
-  }
-  const droppedGroups = groups.length - groupLines.length
-  if (droppedGroups) groupLines.push(`and ${plural(droppedGroups, 'more group')}`)
-  const tail = groupLines.length > 0 ? ['### Sorted into groups', '', ...groupLines].join('\n') : ''
-  const sections: string[] = []
-  const items: InboxLetterItem[] = []
-  const snapshot = snapshotLine(now)
-  let used = bytes(tail) + bytes(snapshot) + 4 + 64
-  for (const block of blocks) {
-    const section = renderBlock(block, now, DIGEST_MAX_BYTES - used, sections.length === 0, 100 - items.length)
-    if (!section) break
-    sections.push(section.markdown)
-    items.push(...section.items)
-    used += bytes(section.markdown) + 2
-  }
-  const dropped = blocks.length - sections.length
-  if (dropped > 0) sections.push(`and ${plural(dropped, 'more account')}`)
-  if (blocks.length === 0) sections.push('Nothing needs you.')
-  if (tail) sections.push(tail)
-  return {
-    subject: `Mail digest: ${headline}`,
-    markdown: [snapshot, ...sections].join('\n\n'),
-    text: `${headline}. ${snapshot}`,
-    unread: need + sorted,
-    accounts: blocks.length,
-    items,
-  }
+  lang: LetterLang = 'en',
+): RenderedDigest {
+  return renderGroupedDigestIn(MAIL_DIGEST_WORDS[lang], blocks, groups, now)
 }
 
 /** Just the letter seam this needs, so a test can hand it one function. */
@@ -385,7 +209,8 @@ export class MailDigest {
     if ((await this.deps.store.tasks.getMeta(DIGEST_DAY_KEY)) === today) return null
 
     const { blocks, complete, groups } = await this.collect(config.maxItems, deadlineAt)
-    const rendered = groups ? renderGroupedDigest(blocks, groups, at) : renderDigest(blocks, at)
+    const lang = await walnutLetterLanguage()
+    const rendered = groups ? renderGroupedDigest(blocks, groups, at, lang) : renderDigest(blocks, at, lang)
     if (rendered.unread === 0) {
       if (!complete) {
         this.deps.log.debug('mail digest deferred, the cache read ran out of budget', { day: today })
@@ -419,7 +244,8 @@ export class MailDigest {
   async sendNow(deadlineAt?: number): Promise<DigestResult> {
     const config = readDigestConfig(await this.deps.config.get())
     const { blocks, complete, groups } = await this.collect(config.maxItems, deadlineAt)
-    const rendered = groups ? renderGroupedDigest(blocks, groups, this.now) : renderDigest(blocks, this.now)
+    const lang = await walnutLetterLanguage()
+    const rendered = groups ? renderGroupedDigest(blocks, groups, this.now, lang) : renderDigest(blocks, this.now, lang)
     if (rendered.unread === 0) {
       if (!complete) {
         return { letterId: null, unread: 0, accounts: 0, incomplete: true, message: DIGEST_INCOMPLETE_MESSAGE }

@@ -259,7 +259,7 @@ describe('what brings a waiting task back', () => {
     expect((await task(taskId)).phase).toBe('TODO')
   })
 
-  it(`${MAX_CONSECUTIVE_CHECK_ERRORS} failing checks on its trigger hand the task back, and the stop letter says so`, async () => {
+  it(`${MAX_CONSECUTIVE_CHECK_ERRORS} failing checks on its trigger hand the task back, with no letter or bell for the user`, async () => {
     const routineId = await createTrigger('flaky-check')
     await park()
     // A clock-only failure run: no session notice (the cooldown is stamped), so
@@ -281,15 +281,11 @@ describe('what brings a waiting task back', () => {
     }
     expect(t.phase).toBe('NEED_ACTION')
     expect(t.unread).toBe(true)
-    // One message for the user, not a bell per layer: the letter names the hand-back.
+    // The task's session is told (trigger-health.ts); the user gets no bell and no letter.
     const { feed } = await listNotifications()
-    expect(feed.find((n) => n.dedupKey === `wait-trigger-failed:${taskId}:${routineId}`)).toBeUndefined()
-    const { listLetters, getLetter } = await import('../../src/core/human-inbox/store.js')
-    const letter = (await listLetters()).letters.find((l) => l.subject.startsWith('Trigger "') && l.taskRefs?.includes(taskId))
-    expect(letter).toBeTruthy()
-    const full = JSON.stringify(await getLetter(letter!.id, { inlineMaxBytes: Infinity }))
-    expect(full).toContain('gh: not logged in')
-    expect(full).toContain('back in Needs Action')
+    expect(feed.filter((n) => n.dedupKey.includes(routineId) || n.dedupKey === `wait-trigger-failed:${taskId}:${routineId}`)).toEqual([])
+    const { listLetters } = await import('../../src/core/human-inbox/store.js')
+    expect((await listLetters()).letters.filter((l) => l.subject.startsWith('Trigger "') && l.taskRefs?.includes(taskId))).toEqual([])
     await req('DELETE', `/api/routines/${routineId}`)
   })
 })

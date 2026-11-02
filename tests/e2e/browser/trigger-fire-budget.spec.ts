@@ -2,7 +2,8 @@
  * The fire budget, end to end against the fixture's REAL local daemon:
  *
  *   - a trigger whose budget is spent HOLDS its next fire: the card says so, the
- *     user gets one notice, and the script's cursor is kept;
+ *     trigger's own task is told (never the user: no bell), and the script's
+ *     cursor is kept;
  *   - raising "Fires per day" in the Routines form delivers the held item on the
  *     next check, so nothing was lost (2026-10-01: a chat monitor lost every
  *     message behind its spent cap, because the held run saved the moved cursor);
@@ -34,9 +35,10 @@ async function getRoutine(id: string): Promise<any | null> {
   return res.ok ? ((await res.json()) as { job: any }).job : null
 }
 
-async function notices(id: string): Promise<Array<{ title: string; body?: string; dedupKey: string }>> {
+/** Bells about this trigger: a task's trigger tells its task, never the user (trigger-health.ts). */
+async function bells(id: string): Promise<Array<{ title: string; body?: string; dedupKey: string }>> {
   const { feed } = (await (await fetch(`${API}/api/v1/notifications`)).json()) as { feed: any[] }
-  return feed.filter((n) => typeof n.dedupKey === 'string' && n.dedupKey.startsWith(`trigger-budget-held:${id}:`))
+  return feed.filter((n) => typeof n.dedupKey === 'string' && n.dedupKey.includes(id))
 }
 
 /** A cursor script: reports the feed lines after its cursor and moves the cursor to the newest. */
@@ -108,32 +110,21 @@ test('a spent budget holds the fire with the cursor kept, and raising Fires per 
     expect(held.state.fireCount).toBe(1)
     expect(held.state.lastCheck.outcome).toBe('quiet')
 
-    // One notice, however many checks it holds.
-    await expect.poll(async () => (await notices(id)).length, { timeout: 15_000 }).toBe(1)
-    const [note] = await notices(id)
-    expect(note.title).toBe(`Trigger "${name}" is holding fires back`)
-    expect(note.body).toContain('fires at most once every 24 hours')
-    expect(note.body).toContain('Nothing is dropped')
+    // Its task was told once (the stamp), however many checks it holds; the user got no bell.
+    await expect.poll(async () => (await getRoutine(id))?.state?.fireBudgetNoticeAtMs ?? 0, { timeout: 15_000 }).toBeGreaterThan(0)
+    const toldAt = (await getRoutine(id)).state.fireBudgetNoticeAtMs
     const markAt = held.state.lastCheck.atMs
     await expect.poll(async () => (await getRoutine(id))?.state?.lastCheck?.atMs ?? 0, { timeout: 30_000 })
       .toBeGreaterThan(markAt)
     expect((await getRoutine(id)).state.lastCheck.reason).toBe('rate-limited')
-    expect(await notices(id)).toHaveLength(1)
+    expect((await getRoutine(id)).state.fireBudgetNoticeAtMs).toBe(toldAt)
+    expect(await bells(id)).toEqual([])
 
     // The card says it is held, and the audit row says it fires later.
     await openRoutines(page)
     const card = page.locator('.routine-list .routine-card', { hasText: name }).first()
     await expect(card).toContainText(/last check: held by the fire budget, (just now|\ds ago|\d+s ago|\dm ago)/, { timeout: 15_000 })
     await shot(card, 'held-card')
-
-    // The bell shows the notice.
-    await page.getByRole('button', { name: 'Notifications' }).click()
-    const panel = page.locator('.notification-panel')
-    await expect(panel).toBeVisible()
-    await expect(panel.getByText(`Trigger "${name}" is holding fires back`).first()).toBeVisible({ timeout: 15_000 })
-    await shot(panel, 'held-notice')
-    await page.keyboard.press('Escape')
-    await expect(panel).toBeHidden()
 
     // Raise the budget in the form: the field shows the stored cap.
     const form = await openEdit(page, card)

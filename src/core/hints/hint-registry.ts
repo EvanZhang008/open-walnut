@@ -136,11 +136,13 @@ const BUILT_IN: readonly HintSpec[] = [
   {
     kind: 'reply-language',
     label: 'Reply language',
-    description: 'The language to answer the user in (Settings, Reply language). Main and the leads get it on every message (the user\'s own in whatever language he types, a notice, a worker\'s reply, a trigger), because the user reads their chat whoever started the turn.',
+    description: 'The language to answer the user in (Settings, Reply language). Every session gets it on every message (the user\'s own in whatever language he types, a notice, another task\'s message or reply, a trigger), because the user reads every chat whoever started the turn.',
     allowed: SCHEDULED,
     defaults: { enabled: true, triggers: ['session_start', 'after_compaction', 'on_change', 'on_drift'], placement: 'after' },
     // 2026-10-29: leads answered Walnut notices in English in the chats the user reads on the Org page.
-    everyTurnRoles: ['main', 'lead'],
+    // 2026-11-02, the org review: workers did the same after another task's English message, so
+    // every session carries it on every message.
+    everyTurnRoles: ['main', 'lead', 'worker', 'ask', 'other'],
     everyPersonTurn: true,
     identity: (i) => replyLanguageText(i.config),
     // 2026-10-29: after the user wrote Chinese, a worker's progress lines between its tool calls
@@ -149,15 +151,17 @@ const BUILT_IN: readonly HintSpec[] = [
     // did not hold a lead whose context was mostly English agent traffic (2026-10-31).
     // 2026-11-02: a model follows the language of the message it answers, and an English rule
     // about Chinese did not hold after his English message; the lines in the language itself
-    // (reply-language-lines.ts) lead the block: under a message of his in another language, one
-    // asking for his language, and a correction written in it.
+    // (reply-language-lines.ts) lead the block: under a message in another language (his, or
+    // another task's: an English peer note started a worker's English lines), one asking for his
+    // language, and a correction written in it. A host's own delivery has no message to read
+    // here (hostReplyTail): the line rides it too, those are other tasks' messages.
     render: (i, reasons) => {
       const text = replyLanguageText(i.config);
       if (!text) return null;
       const lines = replyLanguageLines(ruleLanguage(text));
       const driftAt = reasons.has('on_drift') ? i.record?.hintState?.drift?.['reply-language'] : undefined;
       const correction = driftAt ? `${lines ? lines.drifted : replyLanguageCorrection(driftAt)} ` : '';
-      const other = !!lines && !!i.message && languageDrift(text, i.message, MESSAGE_MIN_LETTERS) === true;
+      const other = !!lines && (i.message === undefined || languageDrift(text, i.message, MESSAGE_MIN_LETTERS) === true);
       return { text: `${other ? `${lines!.reply} ` : ''}${correction}${text} ${REPLY_LANGUAGE_SCOPE}` };
     },
     drifted: (config, reply) => {

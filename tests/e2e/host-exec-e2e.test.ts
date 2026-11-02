@@ -167,6 +167,8 @@ describe('host_exec', () => {
     const asks = (await letters()).filter((l) => l.subject.includes('" use '))
     expect(asks.map((l) => l.id)).toEqual([letterId])
     expect(asks[0]).toMatchObject({ type: 'action_required', subject: 'Let "Run the iOS tests" use Mac box?' })
+    // Marked with its kind, host and task, so the letter sweep finds it without the ask record.
+    expect((await getLetter(letterId))?.createdByOp).toMatch(new RegExp(`^host-exec-ask:macbox:${taskId}:`))
     expect(sent).toEqual([])
 
     // A session may not grant itself, nor may another task answer Allow in the user's place.

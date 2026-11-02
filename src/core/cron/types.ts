@@ -231,7 +231,8 @@ export type CronJobState = {
   /**
    * Check jobs only, for telling people a check keeps failing (trigger-health.ts):
    * when the current run of failed checks began, when the target task's session was
-   * last told a check failed, and the run (named by its start) the user was told about.
+   * last told a check failed, and the run (named by its start) the owning task or its
+   * lead was told keeps failing (the name is older: the user once heard it as a bell).
    */
   checkErrorSinceMs?: number;
   checkErrorNoticeAtMs?: number;

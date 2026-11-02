@@ -15,7 +15,9 @@ import { readJsonFile, updateJsonFile } from '../../utils/fs.js';
 import { log } from '../../logging/index.js';
 import type { Task } from '../types.js';
 import type { LetterRecord } from '../human-inbox/types.js';
-import { briefTeam, stateCountLabel } from '../user-status.js';
+import { briefTeam } from '../user-status.js';
+import { ORG_REPORT } from '../human-inbox/walnut-letters/org-report.js';
+import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
 import { briefSectionOf } from '../sessions/brief-structure.js';
 
 const SCHEDULE_FILE = path.join(WALNUT_HOME, 'org', 'report-schedule.json');
@@ -44,59 +46,52 @@ export function reportTime(ms: number): string {
 const hhmm = reportTime;
 
 /** Pure: the report for `owner` (Main: the whole org; a lead: its team), since `since`. */
-export function buildMorningReport(owner: Task, tasks: readonly Task[], letters: readonly LetterRecord[], since: number, now = Date.now()): MorningReport {
+export function buildMorningReport(owner: Task, tasks: readonly Task[], letters: readonly LetterRecord[], since: number, now = Date.now(), lang: LetterLang = 'en'): MorningReport {
   const scope = owner.org_role === 'main' ? tasks.filter((t) => !t.plugin_only && t.id !== owner.id) : briefTeam(owner, tasks);
   const decisions = letters.filter((l) => l.type === 'action_required' && !l.answered && !l.archived && !l.settled);
   const refs = new Set<string>();
   const needs = scope.filter((t) => briefSectionOf(t) === 'needs').sort((a, b) => atOf(b) - atOf(a));
   const done = scope.filter((t) => t.phase === 'COMPLETE' && atOf(t) >= since).sort((a, b) => atOf(b) - atOf(a));
   const moved = scope.filter((t) => t.phase !== 'COMPLETE' && atOf(t) >= since && briefSectionOf(t) !== 'needs').sort((a, b) => atOf(b) - atOf(a));
-  const lines: string[] = [];
-  const list = <T>(rows: readonly T[], line: (r: T) => string): void => {
-    for (const r of rows.slice(0, LIST_MAX)) lines.push(line(r));
-    if (rows.length > LIST_MAX) lines.push(`- and ${rows.length - LIST_MAX} more`);
-    if (!rows.length) lines.push('- Nothing.');
-  };
-
-  lines.push(`## Needs you (${needs.length})`);
-  list(needs, (t) => {
-    refs.add(t.id);
-    const s = t.user_status;
-    const letter = decisions.find((l) => l.sender.taskId === t.id || l.taskRefs?.includes(t.id));
-    const form = s?.askForm;
-    const options = form?.kind === 'yes_no' ? ' Yes or no.'
-      : form?.options?.length ? ` Options: ${form.options.map((o) => o.label).join(' / ')}.` : '';
-    const checked = s?.checkedAt ? ` (checked ${hhmm(Date.parse(s.checkedAt))}${s.unverified ? ', not verified since' : ''})` : '';
-    const tap = letter ? ` One tap: the letter "${flat(letter.subject, 120)}" in your inbox.` : ' Answer in its chat.';
-    return `- **${flat(t.title, 120)}**: ${s?.ask ? flat(form?.summary ?? s.ask) : 'its ask has no words yet'}${checked}.${options}${tap}`;
-  });
+  const shown = <T>(rows: readonly T[]): readonly T[] => rows.slice(0, LIST_MAX);
+  for (const t of [...shown(needs), ...shown(done), ...shown(moved)]) refs.add(t.id);
   const orphan = decisions.filter((l) => !needs.some((t) => l.sender.taskId === t.id || l.taskRefs?.includes(t.id))
     && (owner.org_role === 'main' || (!!l.sender.taskId && scope.some((t) => t.id === l.sender.taskId)) || l.sender.taskId === owner.id));
-  if (orphan.length) {
-    lines.push('', `## Other decisions waiting in your inbox (${orphan.length})`);
-    list(orphan, (l) => `- "${flat(l.subject, 160)}"${l.sender.taskTitle ? ` from ${flat(l.sender.taskTitle, 80)}` : ''}: one tap answers it.`);
-  }
-  lines.push('', `## Done since ${hhmm(since)} (${done.length})`);
-  list(done, (t) => { refs.add(t.id); return `- **${flat(t.title, 120)}**${t.result_report?.result ? `: ${flat(t.result_report.result)}` : ''}`; });
-  lines.push('', `## Moved since ${hhmm(since)} (${moved.length})`);
-  list(moved, (t) => {
-    refs.add(t.id);
-    const s = t.user_status;
-    // A snoozed task (snooze.ts) is listed as such: the report never asks about it before its date.
-    const now = s?.snoozed ? `snoozed until ${hhmm(Date.parse(s.snoozed.until))}`
-      : s?.state === 'waiting' ? (s.waitingOn ? `waits on ${flat(s.waitingOn, 160)}` : 'waiting') : s?.now ? flat(s.now, 160) : 'working';
-    return `- **${flat(t.title, 120)}**: ${now}`;
+  // The words are the letter registry's (human-inbox/walnut-letters/org-report.ts); the rows are the tasks' own.
+  const report = ORG_REPORT.render(lang, {
+    owner: owner.org_role === 'main' ? null : flat(owner.title, 60),
+    since: hhmm(since),
+    listMax: LIST_MAX,
+    needsPreview: needs.map((t) => flat(t.title, 60)),
+    needs: needs.map((t) => {
+      const s = t.user_status;
+      const letter = decisions.find((l) => l.sender.taskId === t.id || l.taskRefs?.includes(t.id));
+      const form = s?.askForm;
+      return {
+        title: flat(t.title, 120),
+        ...(s?.ask ? { ask: flat(form?.summary ?? s.ask) } : {}),
+        ...(s?.checkedAt ? { checked: hhmm(Date.parse(s.checkedAt)), unverified: !!s.unverified } : {}),
+        ...(form?.kind === 'yes_no' ? { yesNo: true } : form?.options?.length ? { options: form.options.map((o) => o.label) } : {}),
+        ...(letter ? { letter: flat(letter.subject, 120) } : {}),
+      };
+    }),
+    decisions: orphan.map((l) => ({ subject: flat(l.subject, 160), ...(l.sender.taskTitle ? { from: flat(l.sender.taskTitle, 80) } : {}) })),
+    done: done.map((t) => ({ title: flat(t.title, 120), ...(t.result_report?.result ? { result: flat(t.result_report.result) } : {}) })),
+    moved: moved.map((t) => {
+      const s = t.user_status;
+      // A snoozed task (snooze.ts) is listed as such: the report never asks about it before its date.
+      return {
+        title: flat(t.title, 120),
+        ...(s?.snoozed ? { snoozedUntil: hhmm(Date.parse(s.snoozed.until)) }
+          : s?.state === 'waiting' ? (s.waitingOn ? { waitingOn: flat(s.waitingOn, 160) } : { waiting: true })
+            : s?.now ? { now: flat(s.now, 160) } : {}),
+      };
+    }),
+    ...(owner.brief?.text?.trim() ? { brief: { text: owner.brief.text.trim(), ...(owner.brief.at ? { at: hhmm(Date.parse(owner.brief.at)) } : {}) } } : {}),
   });
-  if (owner.brief?.text?.trim()) {
-    lines.push('', `## ${owner.org_role === 'main' ? 'Main' : flat(owner.title, 60)}'s Brief (written ${owner.brief.at ? hhmm(Date.parse(owner.brief.at)) : 'earlier'})`, '', owner.brief.text.trim());
-  }
   const counts = { needs: needs.length, done: done.length, moved: moved.length };
-  const subject = `Report: ${stateCountLabel('needs', counts.needs)}, ${stateCountLabel('done', counts.done)}, ${counts.moved} moved since ${hhmm(since).slice(11, 16)}`;
-  const text = counts.needs
-    ? `Needs you: ${needs.slice(0, 3).map((t) => flat(t.title, 60)).join('; ')}${needs.length > 3 ? '; …' : ''}`
-    : `Nothing needs you. ${counts.done} done, ${counts.moved} moved.`;
   void now;
-  return { subject, markdown: lines.join('\n'), text, taskRefs: [...refs].slice(0, 30), counts };
+  return { subject: report.subject, markdown: report.markdown, text: report.text ?? '', taskRefs: [...refs].slice(0, 30), counts };
 }
 
 /** "08:00" (the next time the server's clock reads it), an ISO time, or a duration ("8h"). */
@@ -141,7 +136,8 @@ async function dropSchedule(taskId: string, at: number): Promise<void> {
 export async function sendReport(task: Task, since: number, now = Date.now()): Promise<LetterRecord> {
   const { listTasks } = await import('../task-manager.js');
   const { listLetters, sendLetterOnce } = await import('../human-inbox/store.js');
-  const report = buildMorningReport(task, await listTasks(), (await listLetters()).letters, since, now);
+  const { walnutLetterLanguage } = await import('../human-inbox/walnut-letters/languages.js');
+  const report = buildMorningReport(task, await listTasks(), (await listLetters()).letters, since, now, await walnutLetterLanguage());
   const { getSessionsForTask } = await import('../session-tracker.js');
   const sid = (await getSessionsForTask(task.id).catch(() => []))
     .sort((a, b) => Date.parse(b.lastActiveAt ?? '') - Date.parse(a.lastActiveAt ?? ''))[0]?.claudeSessionId;

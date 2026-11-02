@@ -103,6 +103,9 @@ const ERROR_CODES: Record<string, string> = {
   task_snoozed: 'task_snoozed',
   // A decision letter from Main or a lead without the user's kind named (org/user-kind.ts).
   user_kind: 'user_kind',
+  // A session's letter or thread reply repeating its own minutes-old one (duplicate-letter.ts).
+  duplicate_letter: 'duplicate_letter',
+  duplicate_reply: 'duplicate_reply',
 }
 
 interface LetterErrorLike { code: string; status: number; message: string }
@@ -244,9 +247,10 @@ humanInboxV1Router.post('/human-inbox', async (req: Request, res: Response, next
     const { sendLetterAsCallerOnce } = await import('../../core/human-inbox/letter-ops.js')
     // The store is the validator (one implementation for every surface), so the
     // body rides through as-is rather than being re-checked field by field here.
-    const { letter, addedToThread } = await sendLetterAsCallerOnce(b as unknown as Omit<NewLetter, 'sender'>, callerSid(req))
+    const { letter, addedToThread, openAsk } = await sendLetterAsCallerOnce(b as unknown as Omit<NewLetter, 'sender'>, callerSid(req))
     // addedToThread: the user is away from the sender's chat, and the update joined that absence's letter.
-    res.status(201).json({ id: letter.id, ...(addedToThread ? { addedToThread: true } : {}) })
+    // openAsk: the sender's open decision letter asking the same thing (duplicate-letter.ts).
+    res.status(201).json({ id: letter.id, ...(addedToThread ? { addedToThread: true } : {}), ...(openAsk ? { openAsk } : {}) })
   })
 })
 
@@ -364,7 +368,8 @@ humanInboxV1Router.post('/human-inbox/:id/reply', async (req: Request, res: Resp
       return
     }
     const { agentReply } = await import('../../core/human-inbox/store.js')
-    const letter = await agentReply(id, b as unknown as AgentReplyInput)
+    // The sender's own thread reply (the human's is /human-reply): a repeat of its latest turn is refused (duplicate-letter.ts).
+    const letter = await agentReply(id, b as unknown as AgentReplyInput, { refuseDuplicate: true })
     log.notif.info('human-inbox: agent reply accepted', { letterId: id, callerSid: callerSid(req) })
     res.json({ letter })
   })

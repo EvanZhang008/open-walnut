@@ -391,7 +391,9 @@ orgV1Router.post('/org/report', async (req: Request, res: Response, next: NextFu
     }
     const { listTasks } = await import('../../core/task-manager.js')
     const { listLetters } = await import('../../core/human-inbox/store.js')
-    res.json({ report: buildMorningReport(of, await listTasks(), (await listLetters()).letters, since, now), of: brief(of) })
+    // The same words the letter would carry (the user's letter language).
+    const { walnutLetterLanguage } = await import('../../core/human-inbox/walnut-letters/languages.js')
+    res.json({ report: buildMorningReport(of, await listTasks(), (await listLetters()).letters, since, now, await walnutLetterLanguage()), of: brief(of) })
   } catch (err) {
     sendError(res, next, err)
   }

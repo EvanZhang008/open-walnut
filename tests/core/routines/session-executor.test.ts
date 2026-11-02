@@ -399,6 +399,8 @@ describe('session executor: a Start the host gate refuses', () => {
     expect(calls.notified[0]).toEqual({
       title: 'Trigger "PR comments" could not start a session', body: gateRefusal().message,
       dedupKey: `${j.id}|buildbox|host_not_ready|claude_outdated`, taskId: 'task-1',
+      // A trigger (a job with a check), not a routine the user made: no bell for the user.
+      userRoutine: false,
     });
     // The problem clears and a later one comes back: told again.
     refuse = false;

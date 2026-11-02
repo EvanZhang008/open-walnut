@@ -46,6 +46,13 @@ import type {
 
 type UnsubscribeDeps = ConstructorParameters<typeof MailUnsubscribe>[0];
 
+// The user's letter language, as config would give it; English unless a test says otherwise.
+const letterLang = vi.hoisted(() => ({ value: 'en' as 'en' | 'zh' }));
+vi.mock('../../src/core/human-inbox/walnut-letters/languages.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/core/human-inbox/walnut-letters/languages.js')>()),
+  walnutLetterLanguage: async () => letterLang.value,
+}));
+
 const CAPABILITIES: MailCapabilities = {
   search: false, watch: false, drafts: true, markRead: false, flags: false,
   threads: false, send: true, sendAsReply: false, bodies: 'both', attachments: 'none',
@@ -61,6 +68,7 @@ interface SentLetter {
   letterId: string;
   subject: string;
   markdown: string;
+  actions: Array<{ id: string; label: string }>;
   answered?: { actionId: string; label: string; at: number };
 }
 
@@ -139,7 +147,7 @@ async function openHarness(): Promise<Harness> {
     send: async (input) => {
       nextLetter += 1;
       const letterId = `lt-fixture-${nextLetter}`;
-      letters.push({ letterId, subject: input.subject, markdown: input.markdown ?? '' });
+      letters.push({ letterId, subject: input.subject, markdown: input.markdown ?? '', actions: input.actions ?? [] });
       return { letterId };
     },
     reply: async (letterId, input) => {
@@ -192,6 +200,7 @@ async function openHarness(): Promise<Harness> {
 }
 
 afterEach(async () => {
+  letterLang.value = 'en';
   vi.restoreAllMocks();
   for (const db of open.splice(0)) await db.dispose().catch(() => undefined);
   for (const root of roots.splice(0)) await fsp.rm(root, { recursive: true, force: true }).catch(() => undefined);
@@ -419,5 +428,51 @@ describe('the wiring itself', () => {
     // ONE subscription. Two would each get every answer, and the approval path would reply
     // SUPERSEDED to every unsubscribe letter alongside the outcome.
     expect(source.match(/walnut\.letters\.onAnswered\(/g)).toHaveLength(1);
+  });
+});
+
+/*
+ * The same letters and thread turns in the user's letter language: Walnut's words change, the mail's
+ * own (list name, subject, account label) and the action ids the router switches on do not.
+ */
+describe('in the user\'s letter language', () => {
+  it('asks to unsubscribe in Chinese and answers Not now in Chinese', async () => {
+    letterLang.value = 'zh';
+    const one = await openHarness();
+    const letterId = await askedLetter(one);
+    const letter = one.letters.find((l) => l.letterId === letterId)!;
+    expect(letter.subject).toBe('\u9000\u8ba2 weekly.lists.example.invalid\uff1f');
+    expect(letter.markdown).toContain('Marina Weekly, issue 42');
+    expect(letter.markdown).toContain('Personal mail');
+    expect(letter.markdown).not.toContain('Walnut has done nothing');
+    expect(letter.actions.map((a) => a.id)).toEqual(['unsubscribe', 'not-now']);
+    expect(letter.actions.map((a) => a.label)).toEqual(['\u9000\u8ba2', '\u6682\u4e0d']);
+
+    await one.answer({ letterId, actionId: 'not-now' });
+    expect(one.replies[0]!.markdown).toMatch(/^\u4ec0\u4e48\u90fd\u6ca1\u505a/);
+    expect(one.replies[0]!.markdown).not.toContain('Nothing was done');
+  });
+
+  it('asks to approve a send in Chinese, and the send outcome and SUPERSEDED are Chinese too', async () => {
+    letterLang.value = 'zh';
+    const one = await openHarness();
+    const draft = await one.drafts.create({
+      accountId: ACCOUNT, to: ['bo@example.invalid'], subject: 'Thursday works',
+      bodyMarkdown: 'See you then.', origin: 'console',
+    });
+    const { letterId } = await one.approvals.requestSend(draft.draftId, draft.revision);
+    const letter = one.letters.find((l) => l.letterId === letterId)!;
+    expect(letter.subject).toBe('\u8bf7\u6279\u51c6\u8fd9\u5c01\u90ae\u4ef6\uff1aThursday works');
+    expect(letter.markdown).toContain('bo@example.invalid');
+    expect(letter.markdown).toContain('> See you then.');
+    expect(letter.actions.map((a) => a.id)).toEqual(['send', 'edit', 'discard']);
+
+    await one.answer({ letterId, actionId: 'send' });
+    // "Sent at <clock> to 1 recipient."
+    expect(one.replies[0]!.markdown).toMatch(/^\u5df2\u4e8e \d{1,2}:\d{2} \u53d1\u7ed9 1 \u4f4d\u6536\u4ef6\u4eba\u3002$/);
+
+    await one.answer({ letterId: 'lt-from-nowhere', actionId: 'send' });
+    expect(one.replies[1]!.markdown).not.toContain('no longer the one Walnut is waiting on');
+    expect(one.replies[1]!.markdown).toContain('Walnut');
   });
 });

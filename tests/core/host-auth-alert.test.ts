@@ -68,6 +68,16 @@ describe('signInLetter', () => {
     expect(three.markdown).toContain('**A**, **B** and **C**')
   })
 
+  it("writes in the user's letter language, keeping his own hint and the host names as given", () => {
+    // Simplified Chinese test data, written as escapes.
+    const l = signInLetter([{ label: 'Big dev box', error: CERT }], 'run mylogin', { retries: true, lang: 'zh' })
+    expect(l.subject).toBe('SSH \u767b\u5f55 Big dev box \u5931\u8d25\uff1arun mylogin')
+    expect(l.markdown).toContain('Walnut \u65e0\u6cd5\u901a\u8fc7 SSH \u767b\u5f55 **Big dev box**')
+    expect(l.markdown).toContain('\u89e3\u51b3\u529e\u6cd5\uff1arun mylogin\u3002')
+    expect(l.markdown).toContain('Big dev box: Permission denied (publickey). walnut-ssh-evidence: cert-expired')
+    expect(signInLetter([{ label: 'A' }], undefined, { lang: 'zh' }).subject).toBe('SSH \u767b\u5f55 A \u5931\u8d25\uff1a\u8bf7\u91cd\u65b0\u767b\u5f55\u4ee5\u5237\u65b0\u51ed\u636e')
+  })
+
   it('keeps the subject within the store limit and fences a hostile error', () => {
     const l = signInLetter([{ label: 'x'.repeat(300), error: '~~~\ninjected' }])
     expect(l.subject.length).toBeLessThanOrEqual(200)
@@ -142,6 +152,15 @@ describe('createHostAuthAlert', () => {
     await alert.check()
     expect(sent).toHaveLength(1)
     expect(await alert.openLetterIds()).toEqual(['lt-1'])
+  })
+
+  it("sends the letter in the user's letter language", async () => {
+    const alert = make({ language: async () => 'zh' })
+    await alert.observe(failed('dev', 'cert_expired'))
+    await advance(alert, GRACE)
+    expect(sent).toHaveLength(1)
+    expect(sent[0].subject).toBe('SSH \u767b\u5f55 DEV \u5931\u8d25\uff1a\u8bf7\u91cd\u65b0\u767b\u5f55\u4ee5\u5237\u65b0\u51ed\u636e')
+    expect(sent[0].opKey).toMatch(/^host-sign-in:login:/)
   })
 
   it('a failure fixed within the grace sends nothing', async () => {

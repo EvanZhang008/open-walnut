@@ -261,6 +261,12 @@ export interface NewLetter {
   user_kind?: string;
   userKindWhy?: string;
   user_kind_why?: string;
+  /**
+   * Why this letter goes again though the sender sent one with the same subject minutes ago
+   * (human-inbox/duplicate-letter.ts). Either spelling; never stored.
+   */
+  resendReason?: string;
+  resend_reason?: string;
   /** Stamped by the route from the caller's sid, not by the agent. */
   sender: LetterSender;
 }

@@ -41,7 +41,7 @@ export interface TriggerCheckedApplied {
   consecutiveErrors?: number;
   error?: string;
   /**
-   * The fire budget held this check back and the user has not been told today.
+   * The fire budget held this check back and its owning task has not been told today.
    * `maxFiresPerDay` is the stored cap (absent = the default), for the notice.
    */
   budgetHeld?: { maxFiresPerDay?: number; everyMs?: number };
@@ -53,11 +53,11 @@ export interface TriggerCheckedApplied {
   warningsToTell?: string[];
   /** This error starts a run of failures and the session has not been told of one lately. */
   tellSessionError?: boolean;
-  /** The failures went on past the user's threshold; the user has not been told about this run. */
-  tellUserFailing?: boolean;
+  /** The failures went on past the team's threshold; the owning task (or its lead) has not been told about this run. */
+  tellFailing?: boolean;
   /** When the current run of failed checks began. */
   errorSinceMs?: number;
-  /** A check passed after a run the user was told about: their notice is out of date. */
+  /** A check passed after a run the team was told about (an older Walnut's bell for it is out of date). */
   recovered?: boolean;
 }
 
@@ -67,7 +67,10 @@ export const FIRE_BUDGET_NOTICE_EVERY_MS = 24 * 60 * 60 * 1000;
 export const WARNING_NOTICE_EVERY_MS = 24 * 60 * 60 * 1000;
 /** A source that fails now and then must not wake its session every time it does. */
 export const CHECK_ERROR_SESSION_NOTICE_EVERY_MS = 6 * 60 * 60 * 1000;
-/** The user hears about failures that go on this many checks, or this long, whichever comes first. */
+/**
+ * The owning task (or its lead) hears again about failures that go on this many checks, or this
+ * long, whichever comes first. (The names are older than that: the user once heard it as a bell.)
+ */
 export const CHECK_ERROR_USER_AFTER_ERRORS = 3;
 export const CHECK_ERROR_USER_AFTER_MS = 30 * 60 * 1000;
 
@@ -103,7 +106,7 @@ export interface TriggerFiredApplied {
   duplicateSeqs?: number[];
   /** The delivered batch's identity: its lowest new seq (what the audit row and retries key on). */
   seq?: number;
-  /** The check worked after a run of failures the user was told about. */
+  /** The check worked after a run of failures the team was told about. */
   recovered?: boolean;
   /**
    * Clock runs nobody took that are not the server's to run (clock-fire.ts):
@@ -240,7 +243,7 @@ export async function applyTriggerChecked(
     // reports; the daemon has disarmed it, so there is no next run to show.
     job.state.nextRunAtMs = job.enabled && Number.isFinite(event.nextRunAtMs) ? event.nextRunAtMs : undefined;
 
-    // The first held check in a day tells the user; the rest only show on the card.
+    // The first held check in a day tells the owning task; the rest only show on the card.
     let budgetHeld: TriggerCheckedApplied['budgetHeld'];
     if (job.enabled && event.outcome === 'quiet' && event.reason === 'rate-limited'
       && atMs - (job.state.fireBudgetNoticeAtMs ?? 0) >= FIRE_BUDGET_NOTICE_EVERY_MS) {
@@ -298,7 +301,7 @@ function checkHealth(
   job: CronJob,
   outcome: TriggerCheckedEvent['outcome'],
   atMs: number,
-): Pick<TriggerCheckedApplied, 'tellSessionError' | 'tellUserFailing' | 'errorSinceMs' | 'recovered'> {
+): Pick<TriggerCheckedApplied, 'tellSessionError' | 'tellFailing' | 'errorSinceMs' | 'recovered'> {
   const s = job.state;
   if (outcome !== 'error') {
     if (typeof s.checkErrorUserNoticeSinceMs !== 'number') return {};
@@ -311,13 +314,13 @@ function checkHealth(
   if (!job.enabled) return { errorSinceMs: since };
   const tellSessionError = errors === 1 && atMs - (s.checkErrorNoticeAtMs ?? 0) >= CHECK_ERROR_SESSION_NOTICE_EVERY_MS;
   if (tellSessionError) s.checkErrorNoticeAtMs = atMs;
-  const tellUserFailing = errors >= 2 && s.checkErrorUserNoticeSinceMs !== since
+  const tellFailing = errors >= 2 && s.checkErrorUserNoticeSinceMs !== since
     && (errors >= CHECK_ERROR_USER_AFTER_ERRORS || atMs - since >= CHECK_ERROR_USER_AFTER_MS);
-  if (tellUserFailing) s.checkErrorUserNoticeSinceMs = since;
+  if (tellFailing) s.checkErrorUserNoticeSinceMs = since;
   return {
     errorSinceMs: since,
     ...(tellSessionError ? { tellSessionError } : {}),
-    ...(tellUserFailing ? { tellUserFailing } : {}),
+    ...(tellFailing ? { tellFailing } : {}),
   };
 }
 
@@ -507,7 +510,7 @@ export async function applyTriggerFired(
     });
     // A fire's envelope carries its warnings, so a delivered one has told the session.
     if (result.status === 'ok' && auditEntry.warnings) target.state.warningNoticeAtMs = endedAt;
-    // A fire is a check that worked: the user's "keeps failing" bell is out of date.
+    // A fire is a check that worked: a "keeps failing" bell an older Walnut left is out of date.
     const recovered = !clockRun && typeof target.state.checkErrorUserNoticeSinceMs === 'number';
     if (recovered) target.state.checkErrorUserNoticeSinceMs = undefined;
     const stamped = { ...auditEntry, ...(identity.epoch ? { epoch: identity.epoch } : {}) };

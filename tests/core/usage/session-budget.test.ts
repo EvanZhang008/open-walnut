@@ -12,7 +12,7 @@ vi.mock('../../../src/providers/daemon-connection.js', () => {
   return { getDaemonConnection: async () => conn, getConnectedDaemonConnection: (host: string) => mocks.connected(host) ? conn : null };
 });
 import { resetPriceBookForTests } from '../../../src/core/usage/price-book.js';
-import { configureSessionBudget, getSessionBudget, pauseLetterMarkdown, sweepSessionBudgets } from '../../../src/core/usage/session-budget.js';
+import { budgetLetterSettleReason, configureSessionBudget, getSessionBudget, pauseLetterMarkdown, sweepSessionBudgets } from '../../../src/core/usage/session-budget.js';
 
 const budget = { limitUsd: 10, spentUsd: 4, state: 'active', reason: null, revision: 1, updatedAt: null, responses: 3,
   unpricedResponses: 0, unpricedModel: null, pausedAt: null, pauseId: null, stopError: null, engine: 'claude' };
@@ -96,6 +96,30 @@ describe('pause letters', () => {
     mocks.capability.mockImplementation((c: string) => c === 'budget-v2');
     mocks.send.mockRejectedValue(new Error('timeout'));
     expect(await sweepSessionBudgets()).toMatchObject({ hosts: 1, sent: 0 });
+  });
+
+  it("writes the letter in the user's letter language", async () => {
+    mocks.config.mockResolvedValue({ hosts: {}, session: { reply_language: 'Talk to the user in Chinese' } });
+    mocks.send.mockResolvedValue({ ok: true, result: { budgets: [paused], pricesHash: 'x' } });
+    await sweepSessionBudgets();
+    const sent = mocks.letter.mock.calls[0][0] as { subject: string; markdown: string };
+    // Simplified Chinese test data ("budget used up"), written as escapes; the title and amounts as given.
+    expect(sent.subject).toContain('\u9884\u7b97\u7528\u5b8c');
+    expect(sent.subject).toContain('"Example task"');
+    expect(sent.markdown).toContain('$10.40');
+  });
+
+  it('a pause letter settles once its host no longer lists the pause, or its task completed', async () => {
+    const letter = (pauseId: string, host = 'local') => ({ id: 'lt-1', createdByOp: `budget-paused:${pauseId}`, sender: { sessionId: 'external', host }, taskRefs: ['task-1'] }) as never;
+    const ctx = (phase = 'IN_PROGRESS') => ({ lang: 'en' as const, now: Date.now(), task: async () => ({ phase }) as never });
+    mocks.config.mockResolvedValue({ hosts: {} });
+    mocks.send.mockResolvedValue({ ok: true, result: { budgets: [paused], pricesHash: 'x' } });
+    await sweepSessionBudgets();
+    expect(await budgetLetterSettleReason(letter('p-1'), ctx())).toBeNull();
+    expect(await budgetLetterSettleReason(letter('p-old'), ctx())).toMatch(/no longer paused/);
+    // A host that never answered says nothing.
+    expect(await budgetLetterSettleReason(letter('p-old', 'elsewhere'), ctx())).toBeNull();
+    expect(await budgetLetterSettleReason(letter('p-1'), ctx('COMPLETE'))).toMatch(/task is complete/);
   });
 
   it('says why in the letter: the limit, or the model with no price', () => {

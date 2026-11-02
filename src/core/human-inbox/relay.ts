@@ -132,16 +132,17 @@ export async function handleHumanInboxRelayAction(
     }
     case 'send': {
       const { callerSid, ...input } = p;
-      const { letter, addedToThread } = await sendLetterAsCallerOnce(
+      const { letter, addedToThread, openAsk } = await sendLetterAsCallerOnce(
         input as unknown as Omit<NewLetter, 'sender'>,
         typeof callerSid === 'string' ? callerSid : undefined,
       );
       // The away thread (away-thread.ts) answers the same through a replica as on the primary.
-      return { id: letter.id, ...(addedToThread ? { addedToThread: true } : {}) };
+      return { id: letter.id, ...(addedToThread ? { addedToThread: true } : {}), ...(openAsk ? { openAsk } : {}) };
     }
     case 'reply': {
       const { id, ...input } = p;
-      return { letter: await agentReply(requireId({ id }), input as unknown as AgentReplyInput) };
+      // A session's reply through a replica meets the same repeat check as on the primary (duplicate-letter.ts).
+      return { letter: await agentReply(requireId({ id }), input as unknown as AgentReplyInput, { refuseDuplicate: true }) };
     }
     // The reader's flags answer with the index clock the write stamped: that is
     // how the replica knows when its git-synced copy has caught up with it (see

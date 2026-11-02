@@ -18,6 +18,10 @@ import type { PriceSnapshot } from './price-data.js';
 import type { BudgetPrices, BudgetState } from '../../providers/usage-budget-runtime.js';
 import type { SessionRecord } from '../types.js';
 import { BUDGET_ENGINES } from './budget-engines.js';
+import { BUDGET_PAUSED, budgetMoney, budgetSettleReason, type BudgetPausedParams } from '../human-inbox/walnut-letters/budget-paused.js';
+import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
+import type { StillNeededContext } from '../human-inbox/walnut-letters/kind.js';
+import type { LetterRecord } from '../human-inbox/types.js';
 
 /** Engines whose per-request usage the host can price (session-cost-core.ts). */
 export { BUDGET_ENGINES };
@@ -131,29 +135,41 @@ async function writeSessionBudget(sid: string, request: { limitUsd: number | nul
 export type ListedBudget = BudgetState & { sid: string };
 
 export function money(n: number | null | undefined): string {
-  if (n === null || n === undefined || !Number.isFinite(n)) return 'unknown';
-  return n >= 100 ? `$${n.toFixed(0)}` : `$${n.toFixed(2)}`;
+  return budgetMoney(n, 'en');
 }
 
-/** The inbox letter for one pause. */
-export function pauseLetterMarkdown(budget: ListedBudget, title: string): string {
-  const why = budget.reason === 'unpriced'
-    ? `It made a request on **${budget.unpricedModel ?? 'a model'}**, which has no price in Walnut's price list, so its spend could not be counted. Spent so far on priced requests: ${money(budget.spentUsd)} of ${money(budget.limitUsd)}.`
-    : budget.reason === 'unreadable'
-      ? `Its usage could not be read for a minute, so its spend is unknown${budget.checkError ? ` (${budget.checkError})` : ''}. Last known: ${money(budget.spentUsd)} of ${money(budget.limitUsd)}.`
-      : `It spent ${money(budget.spentUsd)}, at or over its ${money(budget.limitUsd)} budget.`;
-  const stop = budget.stopError
-    ? `The stop could not be confirmed (${budget.stopError}); it is retried on every check, and no new message is sent to it.`
-    : 'Its process was stopped and no new message is sent to it.';
-  return [
-    `**${title}** was paused. ${why}`,
-    stop,
-    budget.reason === 'unpriced'
-      ? 'To continue, add a price for that model under usage prices in Settings, or raise or remove the budget in the session\'s Usage & Budget.'
-      : budget.reason === 'unreadable'
-        ? 'Once its usage can be read again and it is under the budget, your next message goes through. You can also remove the budget in the session\'s Usage & Budget.'
-        : 'To continue, raise or remove the budget in the session\'s Usage & Budget, then send a message.',
-  ].join('\n\n');
+function letterParams(budget: ListedBudget, title: string): BudgetPausedParams {
+  return {
+    title, ...(budget.reason ? { reason: budget.reason } : {}), spentUsd: budget.spentUsd, limitUsd: budget.limitUsd,
+    ...(budget.unpricedModel ? { unpricedModel: budget.unpricedModel } : {}),
+    ...(budget.checkError ? { checkError: budget.checkError } : {}),
+    ...(budget.stopError ? { stopError: budget.stopError } : {}),
+  };
+}
+
+/** The inbox letter for one pause (words: human-inbox/walnut-letters/budget-paused.ts). */
+export function pauseLetterMarkdown(budget: ListedBudget, title: string, lang: LetterLang = 'en'): string {
+  return BUDGET_PAUSED.render(lang, letterParams(budget, title)).markdown;
+}
+
+/**
+ * The pauses each host listed in its last answer to the sweep, so the letter sweep can tell an
+ * open pause letter whose pause is over (walnut-letters/budget-paused.ts). In memory: after a
+ * restart nothing is settled until a host answers again.
+ */
+const pausesSeen = new Map<string, { at: number; pauseIds: Set<string> }>();
+/** A host's answer older than this says nothing about its pauses now. */
+const PAUSES_SEEN_FRESH_MS = 10 * 60_000;
+
+/** The letter sweep's rule for a pause letter: the reason to settle it, or null to keep it. */
+export async function budgetLetterSettleReason(letter: LetterRecord, ctx: StillNeededContext): Promise<string | null> {
+  const taskId = letter.taskRefs?.[0];
+  if (taskId && (await ctx.task(taskId))?.phase === 'COMPLETE') return budgetSettleReason(ctx.lang, 'taskDone');
+  const pauseId = (letter.createdByOp ?? '').slice('budget-paused:'.length);
+  const host = !letter.sender?.host || letter.sender.host === 'local' ? '__local__' : letter.sender.host;
+  const seen = pausesSeen.get(host);
+  if (!pauseId || !seen || ctx.now - seen.at > PAUSES_SEEN_FRESH_MS) return null;
+  return seen.pauseIds.has(pauseId) ? null : budgetSettleReason(ctx.lang, 'over');
 }
 
 const SWEEP_HOST_MS = 8_000;
@@ -189,6 +205,9 @@ export async function sweepSessionBudgets(opts: { shouldStop?: () => boolean } =
         const again = await conn.send('usage.budget.list', { runtimeIds, home: WALNUT_HOME, prices }, SWEEP_HOST_MS);
         if (again.ok) listed = again.result as typeof listed;
       }
+      if (listed?.budgets) {
+        pausesSeen.set(host, { at: Date.now(), pauseIds: new Set(listed.budgets.filter((x) => x.state === 'paused' && x.pauseId).map((x) => x.pauseId!)) });
+      }
       return listed?.budgets ?? [];
     } catch { return []; }
   }));
@@ -202,19 +221,16 @@ export async function sweepSessionBudgets(opts: { shouldStop?: () => boolean } =
 
 async function sendPauseLetter(budget: ListedBudget): Promise<boolean> {
   const { sendLetterOnce } = await import('../human-inbox/store.js');
+  const { walnutLetterLanguage } = await import('../human-inbox/walnut-letters/languages.js');
   const session = await getSessionByClaudeId(budget.sid);
-  const title = session?.title || 'A session';
+  const letter = BUDGET_PAUSED.render(await walnutLetterLanguage(), letterParams(budget, session?.title ?? ''));
   const { duplicate } = await sendLetterOnce({
-    subject: budget.reason === 'unpriced'
-      ? `Budget paused "${title.slice(0, 80)}": a request had no price`
-      : budget.reason === 'unreadable'
-        ? `Budget paused "${title.slice(0, 80)}": its usage could not be read`
-      : `Budget reached: "${title.slice(0, 80)}" paused at ${money(budget.spentUsd)}`,
-    type: 'review',
-    markdown: pauseLetterMarkdown(budget, title),
+    subject: letter.subject,
+    type: BUDGET_PAUSED.type,
+    markdown: letter.markdown,
     ...(session?.taskId ? { taskRefs: [session.taskId] } : {}),
     sender: { sessionId: 'external', host: session?.host ?? 'local' },
   // By the pause alone: a budget that follows its session to a new thread id keeps its pause.
-  }, { opKey: `budget-paused:${budget.pauseId}` });
+  }, { opKey: `${BUDGET_PAUSED.id}:${budget.pauseId}` });
   return !duplicate;
 }

@@ -8,16 +8,15 @@
  * lead that had the reply-language hint on every message still answered the user in
  * English in 12 of 45 replies, two of them mid-turn lines the final-reply check never saw.
  *
- * Every reply the user reads is judged: Main's, a lead's (its chat is on the Org
- * page) and an ask's always, anyone else's when a person sent the message. A turn of
- * another task nobody of his started still has its final message judged, since that is
- * what he reads when he opens the task later (2026-11-02, the user's org review); such a
- * turn may mark a drift, never clear one a turn he read left.
+ * Every turn the chat shows is judged whole, in every session, whoever started it: the user
+ * reads a worker's chat too, and asks every agent's every line in his language (2026-11-02, the
+ * org review: a worker's turn a notice started was English from start to end). Only a turn the
+ * chat hides is not (something else started it and it ended on the no-action line).
  */
 
 import type { OnTurnCompletePayload, SessionHookDefinition } from '../session-hooks/types.js';
 import { effectiveHints } from './hint-registry.js';
-import { hintTargetOf, writeHintState } from './hint-send.js';
+import { writeHintState } from './hint-send.js';
 import { stripAboutTag } from '../org/message-about.js';
 
 /** The no-action line a turn ends on (web/src/utils/turn-end-marker.ts). */
@@ -63,25 +62,15 @@ export const hintDriftHook: SessionHookDefinition = {
     const verdicts = judge(replies);
     // After a live correction only what came after it counts, judged as the live check judged it.
     if (live && checks.some((h) => h.kind === 'reply-language')) verdicts.set('reply-language', live.driftAfter);
-    // A turn nobody of his started is still his to read later: its final message is judged
-    // (2026-11-02, the user's org review: "also judge a task's final message when he is not watching").
-    const finalOnly = judge(replies.slice(-1));
-    if (!verdicts.size && !finalOnly.size) return;
+    if (!verdicts.size) return;
     const at = new Date().toISOString();
-    // Main, a lead and an ask talk to the user whoever started the turn; anyone else's whole turn is read only when a person started it.
-    const role = hintTargetOf(p.sessionId, p.task).role;
-    const userFacing = role === 'main' || role === 'lead' || role === 'ask';
     await writeHintState(p.sessionId, (cur) => {
       const state = cur.hintState;
-      const byPerson = state?.lastSendBy === 'person';
-      // A live correction proves a person started the turn (his message may be followed by notices).
-      const personTurn = byPerson || !!live;
-      if (!state || (hiddenUnlessPerson && !personTurn)) return null;
+      if (!state || (hiddenUnlessPerson && state.lastSendBy !== 'person')) return null;
       const drift = { ...(state.drift ?? {}) };
-      const read = userFacing || personTurn;
-      for (const [kind, broke] of read ? verdicts : finalOnly) {
+      for (const [kind, broke] of verdicts) {
         if (broke) drift[kind] = at;
-        else if (read) delete drift[kind];
+        else delete drift[kind];
       }
       if (JSON.stringify(drift) === JSON.stringify(state.drift ?? {})) return null;
       const { drift: _old, ...rest } = state;

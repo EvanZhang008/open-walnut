@@ -180,7 +180,7 @@ const OWN_MAP = /\bneeds:\s*['"]Needs you['"]/
 
 /** Strings that use one of the words for something other than a task's state. */
 const OLD_WORD_OK: Record<string, string> = {
-  'src/integrations/mail/digest.ts': 'counts mail messages that need the user, not tasks',
+  'src/core/human-inbox/walnut-letters/mail-digest.ts': 'counts mail messages that need the user, not tasks (the digest letter\'s text, moved from mail/digest.ts)',
   'web/src/components/sessions/TriggerPickerPopover.tsx': 'an example prompt the user may type, not a state',
   'src/core/user-status.ts': 'its doc names the retired words',
 }

@@ -28,6 +28,9 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
+import type { LetterRecord } from '../human-inbox/types.js'
+import type { StillNeededContext } from '../human-inbox/walnut-letters/kind.js'
+import type { HostExecSettleWhy } from '../human-inbox/walnut-letters/host-exec-ask.js'
 
 export interface ExecGrant {
   id: string
@@ -158,14 +161,32 @@ export function listGrants(opts: { all?: boolean } = {}): ExecGrant[] {
 }
 
 export async function grant(taskId: string, host: string, via: ExecGrant['via']): Promise<ExecGrant> {
-  return mutate((s) => {
+  const { g, replaced } = await mutate((s) => {
     const live = s.grants.find((g) => g.taskId === taskId && g.host === host && !g.revokedAt)
+    const replaced = s.asks.filter((a) => a.taskId === taskId && a.host === host && a.state === 'pending')
     s.asks = s.asks.filter((a) => !(a.taskId === taskId && a.host === host))
-    if (live) return live
+    if (live) return { g: live, replaced }
     const g: ExecGrant = { id: `xg-${randomUUID().slice(0, 12)}`, taskId, host, grantedAt: Date.now(), via, runs: 0 }
     s.grants.push(g)
-    return g
+    return { g, replaced }
   })
+  // A grant made in Settings answers the letter still asking for it (it used to stay open, asking).
+  for (const a of replaced) await settleAskLetter(a.letterId, 'granted')
+  return g
+}
+
+/** Settle an ask's letter for the user, unless someone already answered or closed it. Never throws. */
+async function settleAskLetter(letterId: string, why: HostExecSettleWhy): Promise<void> {
+  try {
+    const letter = await letterOf(letterId)
+    if (!letter || letter.settled || letter.answered || letter.archived) return
+    const [{ settleLetter }, { walnutLetterLanguage }, { hostExecSettleReason }] = await Promise.all([
+      import('../human-inbox/store.js'), import('../human-inbox/walnut-letters/languages.js'), import('../human-inbox/walnut-letters/host-exec-ask.js'),
+    ])
+    await settleLetter(letterId, { reason: hostExecSettleReason(await walnutLetterLanguage(), why) })
+  } catch (err) {
+    log.session.warn('host exec: a grant letter was not settled', { letterId, why, error: String(err) })
+  }
 }
 
 /** Revoke a grant; a later call from the task asks the user again. */
@@ -296,15 +317,30 @@ async function tellGranted(ask: ExecAsk, why: string): Promise<void> {
   }
 }
 
-/** The host an ask came from: recorded on it, else its session's. */
+const hostKey = (h: string | null | undefined): string => (!h || h === 'local' ? '__local__' : h)
+
+/**
+ * The host an ask came from: recorded on it, else its session's, else where its task's latest
+ * session runs (an ask written before 2026-11-01 whose session record is gone: it stayed pending,
+ * and its letter open, because nothing could say where it came from).
+ */
 async function askFromHost(ask: ExecAsk): Promise<string | null> {
   if (ask.fromHost) return ask.fromHost
   try {
     const { getSessionByClaudeId } = await import('../session-tracker.js')
-    const record = await getSessionByClaudeId(ask.sid)
-    if (!record) return null
-    const h = (record as { host?: string | null }).host
-    return !h || h === 'local' ? '__local__' : h
+    const record = ask.sid ? await getSessionByClaudeId(ask.sid) : null
+    if (record) return hostKey((record as { host?: string | null }).host)
+  } catch { /* the task's sessions below */ }
+  return taskHost(ask.taskId)
+}
+
+/** Where a task's latest session runs, or null when it has none. */
+async function taskHost(taskId: string): Promise<string | null> {
+  try {
+    const { getSessionsForTask } = await import('../session-tracker.js')
+    const latest = (await getSessionsForTask(taskId))
+      .sort((a, b) => Date.parse(b.lastActiveAt ?? '') - Date.parse(a.lastActiveAt ?? ''))[0]
+    return latest ? hostKey((latest as { host?: string | null }).host) : null
   } catch { return null }
 }
 
@@ -340,38 +376,76 @@ async function grantFromAsk(letterId: string): Promise<ExecGrant | null> {
   })
 }
 
-const OWN_HOST_REASON = 'Walnut allowed it: tasks on your own hosts use your other hosts without asking you (Settings › Remote Hosts revokes one).'
-
 /**
  * A pending letter that asks about a task on one of the user's own hosts needs no answer:
  * the grant is made, the letter settled, the asking session told. `isOwnHost` says which
  * hosts the user registered. Runs at boot (the asks written before 2026-11-01) and when
- * such a task calls again (`only`, with the caller's host). The user's own answer on the
- * letter, already given, wins over all of it.
+ * such a task calls again (`only`, with the caller's host), and from the letter sweep for one
+ * letter (`only.letterId`, walnut-letters/sweep.ts). The user's own answer on the letter, already
+ * given, wins over all of it.
  */
-export async function settleOwnHostAsks(isOwnHost: (host: string) => Promise<boolean>, only?: { taskId: string; host: string; fromHost: string }): Promise<number> {
-  const pending = read().asks.filter((a) => a.state === 'pending' && (!only || (a.taskId === only.taskId && a.host === only.host)))
+export async function settleOwnHostAsks(
+  isOwnHost: (host: string) => Promise<boolean>,
+  only?: { taskId: string; host: string; fromHost: string } | { letterId: string },
+): Promise<number> {
+  const pending = read().asks.filter((a) => a.state === 'pending' && (!only
+    || ('letterId' in only ? a.letterId === only.letterId : a.taskId === only.taskId && a.host === only.host)))
+  const caller = only && 'fromHost' in only ? only : undefined
   let n = 0
   for (const ask of pending) {
-    const from = only?.fromHost ?? await askFromHost(ask)
+    const from = caller?.fromHost ?? await askFromHost(ask)
     if (!from || !(await isOwnHost(from)) || isHostClosed(ask.host) || wasRevoked(ask.taskId, ask.host)) continue
     const letter = await letterOf(ask.letterId)
     const answer = usersAnswer(letter)
     if (answer) { await onLetterAnswered({ letterId: ask.letterId, actionId: answer }); continue }
     if (!(await grantFromAsk(ask.letterId))) continue
-    try {
-      // One someone already closed keeps its own record.
-      const { settleLetter } = await import('../human-inbox/store.js')
-      if (letter && !letter.settled && !letter.answered) await settleLetter(ask.letterId, { reason: OWN_HOST_REASON })
-    } catch (err) {
-      log.session.warn('host exec: an own-host grant letter was not settled', { letterId: ask.letterId, error: String(err) })
-    }
+    // One someone already closed keeps its own record.
+    await settleAskLetter(ask.letterId, 'own-host')
     log.session.info('host exec: an own-host ask granted without the user', { taskId: ask.taskId, host: ask.host, fromHost: from, letterId: ask.letterId })
     // A task settling its own ask is mid-call and gets its answer there; only a waiting one is told.
-    if (!only) await tellGranted(ask, `Walnut allowed this task to use host "${ask.host}" (host_exec, host_mcp_*, host_http): it runs on one of the user's own hosts, so it needs no letter.`)
+    if (!caller) await tellGranted(ask, `Walnut allowed this task to use host "${ask.host}" (host_exec, host_mcp_*, host_http): it runs on one of the user's own hosts, so it needs no letter.`)
     n++
   }
   return n
+}
+
+/** A letter this young may not have its ask recorded yet (grantOrAsk sends, then records). */
+const ASK_RECORD_GRACE_MS = 2 * 60_000
+
+/**
+ * The letter sweep's rule for a grant letter (walnut-letters/host-exec-ask.ts): the reason to settle
+ * it, in the user's words, or null while it still asks for something. Covers the letters the ask
+ * path never reaches: an ask whose task never calls again, an ask written before its host was
+ * recorded, a letter whose ask is gone (granted in Settings, replaced, or rewritten away by an older
+ * Walnut, after which its Allow would do nothing).
+ */
+export async function execAskSettleReason(letter: LetterRecord, ctx: StillNeededContext): Promise<string | null> {
+  if (letter.answered || letter.archived || ctx.now - letter.createdAt < ASK_RECORD_GRACE_MS) return null
+  const { hostExecSettleReason } = await import('../human-inbox/walnut-letters/host-exec-ask.js')
+  const say = (why: HostExecSettleWhy) => hostExecSettleReason(ctx.lang, why)
+  const marked = (letter.createdByOp ?? '').split(':')
+  const host = marked[0] === 'host-exec-ask' && marked[1] ? decodeURIComponent(marked[1]) : undefined
+  const taskId = (marked[0] === 'host-exec-ask' && marked[2] ? decodeURIComponent(marked[2]) : undefined) ?? letter.taskRefs?.[0]
+  if (!taskId) return null
+  const task = await ctx.task(taskId)
+  if (!task) return say('task-gone')
+  if (task.phase === 'COMPLETE') return say('task-done')
+  const pending = read().asks.find((a) => a.letterId === letter.id && a.state === 'pending')
+  if (pending) {
+    // The ask path's own rule, for a task that has not called again: grant, settle, tell it.
+    const { isOwnHost } = await import('./host-exec.js')
+    await settleOwnHostAsks(isOwnHost, { letterId: letter.id })
+    return null
+  }
+  const grants = read().grants.filter((g) => !g.revokedAt && g.taskId === taskId)
+  if (grants.some((g) => g.letterId === letter.id || (host !== undefined && g.host === host))) return say('granted')
+  const from = await taskHost(taskId)
+  if (from) {
+    const { isOwnHost } = await import('./host-exec.js')
+    if (await isOwnHost(from) && (host === undefined || (!isHostClosed(host) && !wasRevoked(taskId, host)))) return say('own-host-now')
+  }
+  // No ask holds this letter: an Allow on it would grant nothing (onLetterAnswered finds no ask).
+  return say('no-ask')
 }
 
 /** Every ask the user declined, newest first (Settings lists them with an Allow). */

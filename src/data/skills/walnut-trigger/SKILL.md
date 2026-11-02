@@ -125,9 +125,10 @@ stdout:  {"fire": true, "items": [{"id": "PR-123#c9", "title": "..."}], "input":
   of stdout is a check error. The first error of a run is reported into the
   trigger's session (the error, the trigger id, the run time, and the
   `trigger_test` call to try a fix); errors that go on for 3 checks or 30
-  minutes put a bell in front of the user; five in a row stop the trigger,
-  tell the session again, and send the user a letter. Fix the script, then
-  `trigger_resume`.
+  minutes tell the session again; five in a row stop the trigger and tell it
+  once more. When its task is complete or has no session, its lead hears
+  instead. The user is never told: a trigger is its task's work. Fix the
+  script, then `trigger_resume`.
 - **One bad item never fails a run.** An `id` over 200 characters is
   shortened to a stable id (its head plus a hash, the same every run, the
   original kept as `fullId`), and an item that is not an object with a string
@@ -392,6 +393,9 @@ task with them.
   more failures stop it again.
 - `trigger_delete '{"id":"..."}'`: remove it for good. The script file stays on
   disk.
+- When its task completes, Walnut pauses the task's triggers, and a reopen
+  resumes the ones it paused (one you paused yourself stays paused). A
+  trigger resumed by hand on a completed task stays on.
 - The task's TRIGGER pill and the Routines page show the same thing, with Pause
   and Resume.
 - While the Walnut server is away (an answer says `offline: true`), your host

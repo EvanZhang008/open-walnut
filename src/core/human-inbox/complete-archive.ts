@@ -92,7 +92,9 @@ export async function settleOnCompletion(task: Pick<Task, 'id' | 'title' | 'comp
   const { completionSettleReason } = await import('./decision-settle.js');
   const { letters } = await listLetters({ archived: false });
   if (!letters.some((l) => completionSettleReason(l, task))) return [];
-  const done = await settleLettersWhere((l) => completionSettleReason(l, task));
+  const { walnutLetterLanguage } = await import('./walnut-letters/languages.js');
+  const lang = await walnutLetterLanguage();
+  const done = await settleLettersWhere((l) => completionSettleReason(l, task, lang));
   if (done.length) log.notif.info('human-inbox: settled decision letters of a completed task', { taskId: task.id, letters: done });
   return done.map((d) => d.id);
 }

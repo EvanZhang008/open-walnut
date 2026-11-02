@@ -30,6 +30,8 @@ import {
 } from './contract.js'
 import type { MailDrafts } from './drafts.js'
 import type { MailEvents } from './events.js'
+import { walnutLetterLanguage } from '../../core/human-inbox/walnut-letters/languages.js'
+import { MAIL_APPROVAL_WORDS, type MailApprovalNote } from '../../core/human-inbox/walnut-letters/mail-approval.js'
 import { renderOutgoingHtml } from './render.js'
 import type { MailService } from './service.js'
 import type { DraftRow, MailStore, SendRow } from './store.js'
@@ -147,11 +149,7 @@ export class MailSends {
       await this.settle(send, 'sent', {
         ...(result?.providerMessageId ? { providerMessageId: result.providerMessageId } : {}),
       })
-      await this.reply(
-        send,
-        `Sent at ${clockTime(result?.acceptedAt || this.now)} to ${recipientCount(mail)} `
-        + `recipient${recipientCount(mail) === 1 ? '' : 's'}.`,
-      )
+      await this.reply(send, (w) => w.sentAt(clockTime(result?.acceptedAt || this.now), recipientCount(mail)))
       return (await this.deps.store.write.getSend(send.send_id)) ?? send
     } catch (error) {
       const detail = reasonOf(error).slice(0, 300)
@@ -161,10 +159,7 @@ export class MailSends {
       // delivered the message. Only an error the provider explicitly staged before DATA is safe.
       const state: SendState = safe ? 'failed' : 'unknown'
       await this.settle(send, state, { error: detail })
-      await this.reply(send, state === 'failed'
-        ? `Nothing was sent: ${detail} You can retry from the Mail console.`
-        : `The server may or may not have sent this: ${detail} Check the Sent folder before `
-          + 'trying again, because a second attempt could deliver it twice.')
+      await this.reply(send, (w) => (state === 'failed' ? w.failed(detail) : w.unknown(detail)))
       this.deps.log.warn('mail send did not succeed', {
         sendId: send.send_id, state, code: providerErrorCode(error) ?? 'unknown', error: detail,
       })
@@ -191,11 +186,7 @@ export class MailSends {
       })
       if (!settled) continue
       reaped += 1
-      await this.reply(
-        send,
-        'Walnut stopped while this message was being sent, so the outcome is unknown. Check the '
-        + 'Sent folder before trying again, because a second attempt could deliver it twice.',
-      )
+      await this.reply(send, (w) => w.reaped)
       this.deps.log.warn('mail send reaped as unknown', {
         sendId: send.send_id, attemptedAt: send.attempted_at,
       })
@@ -251,9 +242,13 @@ export class MailSends {
    * A console send has no letter, and inventing one to report an outcome the console is already
    * watching would badge the bell for something the human is looking at.
    */
-  private async reply(send: SendRow, markdown: string): Promise<void> {
+  private async reply(send: SendRow, note: MailApprovalNote): Promise<void> {
     if (send.approval_kind !== 'letter' || !send.approval_ref) return
-    try { await this.deps.letters.reply(send.approval_ref, { markdown, text: markdown }) }
+    try {
+      // In the user's letter language, from the approval letter's template.
+      const markdown = note(MAIL_APPROVAL_WORDS[await walnutLetterLanguage()])
+      await this.deps.letters.reply(send.approval_ref, { markdown, text: markdown })
+    }
     catch (error) {
       // A thread reply is a courtesy; the send already happened or already failed, and the row is
       // the record. Failing here must not turn a settled send into an exception.

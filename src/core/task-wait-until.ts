@@ -204,7 +204,7 @@ async function wake(taskId: string, nowMs: number): Promise<boolean> {
 export async function handBackWaitingTaskOfDisabledTrigger(
   jobId: string,
   error: string | undefined,
-  opts: { notify?: boolean } = {},
+  opts: { notify?: boolean; quiet?: boolean } = {},
 ): Promise<boolean> {
   const { getRoutine } = await import('./routines/routines-core.js');
   const job = await getRoutine(jobId).then((r) => r.job as { name?: string; executor?: { type?: string; config?: { target?: unknown } } }).catch(() => null);
@@ -215,8 +215,9 @@ export async function handBackWaitingTaskOfDisabledTrigger(
   if (!task || task.phase !== 'WAITING') return false;
   const { readSnoozedUntil } = await import('./snooze-read.js');
   const snoozed = await readSnoozedUntil(task);
-  const res = await updateTaskRaw(task.id, { phase: 'NEED_ACTION', ...(snoozed ? {} : { unread: true }) }, {
-    emitEvent: true, push: true, source: 'trigger-check-failed', leaveHeld: true,
+  // `quiet`: no push and no unread dot (a trigger's trouble is its team's, trigger-health.ts).
+  const res = await updateTaskRaw(task.id, { phase: 'NEED_ACTION', ...(snoozed || opts.quiet ? {} : { unread: true }) }, {
+    emitEvent: true, push: !opts.quiet, source: 'trigger-check-failed', leaveHeld: true,
     shouldUpdate: (current) => current.phase === 'WAITING',
   });
   if (!res.task) return false;

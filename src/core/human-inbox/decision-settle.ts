@@ -19,6 +19,8 @@
  */
 import type { LetterRecord } from './types.js';
 import { TRIAGE_AGENT_ID } from '../triage/types.js';
+import type { LetterLang } from './walnut-letters/languages.js';
+import { COMPLETION_SETTLE_WORDS } from './walnut-letters/thread-words.js';
 
 /** A decision the user can still answer: the kind both rules look at. */
 export function isOpenDecision(letter: LetterRecord): boolean {
@@ -39,6 +41,7 @@ const clipTitle = (t: string) => (t.length > 60 ? `${t.slice(0, 60)}…` : t);
 export function completionSettleReason(
   letter: LetterRecord,
   task: { id: string; title?: string; completed_at?: string; agent_id?: string },
+  lang: LetterLang = 'en',
 ): string | null {
   if (!isOpenDecision(letter) || letter.pinned || letter.sender.taskId !== task.id) return null;
   // An Inbox Triage run completes when its run ends and leaves its decisions for the user: an
@@ -49,6 +52,6 @@ export function completionSettleReason(
   if (last?.from === 'human') return null;
   const done = Date.parse(task.completed_at ?? '');
   if (Number.isFinite(done) && letter.createdAt > done) return null;
-  const when = Number.isFinite(done) ? ` on ${new Date(done).toISOString().slice(0, 16).replace('T', ' ')} UTC` : '';
-  return `Its task "${clipTitle(task.title ?? task.id)}" was completed${when} with this unanswered, so nothing waits on the answer.`;
+  const when = Number.isFinite(done) ? new Date(done).toISOString().slice(0, 16).replace('T', ' ') : undefined;
+  return COMPLETION_SETTLE_WORDS[lang](clipTitle(task.title ?? task.id), when);
 }

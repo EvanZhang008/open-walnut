@@ -44,7 +44,12 @@ import {
   type SendDto,
 } from './contract.js'
 import type { MailEvents } from './events.js'
-import { renderUnsubscribeLetter } from './render.js'
+import { walnutLetterLanguage } from '../../core/human-inbox/walnut-letters/languages.js'
+import {
+  MAIL_UNSUBSCRIBE,
+  MAIL_UNSUBSCRIBE_WORDS,
+  type MailUnsubscribeWords,
+} from '../../core/human-inbox/walnut-letters/mail-unsubscribe.js'
 import type { MailService, UnsubscribeSubject } from './service.js'
 import type { MailStore } from './store.js'
 import { UNSUBSCRIBE_RECLAIM_MS, type UnsubscribeRow } from './store-write.js'
@@ -168,12 +173,10 @@ const CONSOLE_AUTHORITY: UnsubscribeAuthority = { approvalKind: 'console' }
  * The buttons on the agent's letter. Fixed ids: `onLetterAnswered` switches on them.
  *
  * Two, not three. There is no Edit here, because there is nothing to edit: the question is whether to
- * leave a list, and the only two honest answers are yes and not now.
+ * leave a list, and the only two honest answers are yes and not now. English here; the letter carries
+ * them in the user's letter language (the template's `actions`).
  */
-export const UNSUBSCRIBE_LETTER_ACTIONS = [
-  { id: 'unsubscribe', label: 'Unsubscribe', description: 'Leave this list now, the best way Walnut can' },
-  { id: 'not-now', label: 'Not now', description: 'Change nothing and keep the mail where it is' },
-] as const
+export const UNSUBSCRIBE_LETTER_ACTIONS = MAIL_UNSUBSCRIBE_WORDS.en.actions
 
 /** What the op hands back, so its answer can name the letter and what it asked about. */
 export interface UnsubscribeAskResult {
@@ -861,7 +864,7 @@ export class MailUnsubscribe {
     const account = await this.deps.store.getAccount(subject.accountId).catch(() => undefined)
     let letterId = ''
     try {
-      const letter = renderUnsubscribeLetter({
+      const letter = MAIL_UNSUBSCRIBE.render(await walnutLetterLanguage(), {
         accountLabel: account?.display_name || account?.address || subject.accountId,
         sender: { address: subject.fromAddr },
         subject: subject.subject,
@@ -877,7 +880,7 @@ export class MailUnsubscribe {
       const sent = await this.deps.letters.send({
         subject: letter.subject,
         markdown: letter.markdown,
-        actions: UNSUBSCRIBE_LETTER_ACTIONS.map((one) => ({ ...one })),
+        actions: letter.actions,
       })
       letterId = sent.letterId
     } catch (error) {
@@ -942,8 +945,7 @@ export class MailUnsubscribe {
           letterId: answer.letterId, actionId: answer.actionId,
         })
       }
-      await this.reply(answer.letterId, 'Nothing was done: you are still on this list, and the mail is'
-        + ' where it was. Ask again from the Mail console whenever you want to leave it.')
+      await this.reply(answer.letterId, (w) => w.notNow)
       return true
     }
     try {
@@ -953,18 +955,18 @@ export class MailUnsubscribe {
       })
       await this.reply(
         answer.letterId,
-        outcome.url && outcome.status !== 'done'
-          ? `${outcome.message}\n\nThe page is:\n\n\`\`\`\n${outcome.url.replace(/[`\r\n]/g, '')}\n\`\`\``
+        (w) => outcome.url && outcome.status !== 'done'
+          ? `${outcome.message}\n\n${w.pageIs}\n\n\`\`\`\n${outcome.url.replace(/[`\r\n]/g, '')}\n\`\`\``
           : outcome.message,
       )
     } catch (error) {
-      const said = error instanceof MailServiceError
+      const said = (w: MailUnsubscribeWords) => error instanceof MailServiceError
         ? error.message
-        : `Walnut could not carry that out: ${String(error).slice(0, 300)}`
+        : w.couldNot(String(error).slice(0, 300))
       this.deps.log.warn('mail could not act on an answered unsubscribe letter', {
         letterId: answer.letterId, messageId: row.message_id, error: String(error).slice(0, 200),
       })
-      await this.reply(answer.letterId, `${said} Nothing was changed.`)
+      await this.reply(answer.letterId, (w) => w.nothingChanged(said(w)))
     }
     return true
   }
@@ -975,8 +977,12 @@ export class MailUnsubscribe {
     return !!letter && !letter.answered
   }
 
-  private async reply(letterId: string, markdown: string): Promise<void> {
-    try { await this.deps.letters.reply(letterId, { markdown, text: markdown }) }
+  /** A fixed thread turn, in the user's letter language (template: walnut-letters/mail-unsubscribe.ts). */
+  private async reply(letterId: string, note: (w: MailUnsubscribeWords) => string): Promise<void> {
+    try {
+      const markdown = note(MAIL_UNSUBSCRIBE_WORDS[await walnutLetterLanguage()])
+      await this.deps.letters.reply(letterId, { markdown, text: markdown })
+    }
     catch (error) {
       this.deps.log.warn('mail unsubscribe letter could not be replied to', {
         letterId, error: String(error).slice(0, 200),

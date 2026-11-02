@@ -20,6 +20,7 @@ import { updateConfig } from '../../src/core/config-manager.js';
 import { bus, EventNames } from '../../src/core/event-bus.js';
 import { prepareHintedSend } from '../../src/core/hints/hint-send.js';
 import { REPLY_LANGUAGE_LINES } from '../../src/core/hints/reply-language-lines.js';
+import { quoteLine } from '../../src/core/hints/hint-drift-live.js';
 const ZH = REPLY_LANGUAGE_LINES.zh;
 
 const SID = 'correction-lead-session';
@@ -52,7 +53,8 @@ describe('a lead\'s English progress line', () => {
   it('is caught at the turn end, and the next notice opens with the correction, once', async () => {
     // First message: the rule alone.
     const first = await prepareHintedSend(SID, await getSessionByClaudeId(SID), 'Team update: a worker finished.', { sentBy: 'agent' });
-    expect(first.enqueueText).toContain(`Walnut (reply-language): ${RULE}`);
+    // An English message, whoever wrote it, gets the line in his language first (2026-11-02).
+    expect(first.enqueueText).toContain(`Walnut (reply-language): ${ZH.reply} ${RULE}`);
     await first.commit();
 
     emit(EventNames.SESSION_SEND, { message: 'Team update: a worker finished.' });
@@ -67,13 +69,13 @@ describe('a lead\'s English progress line', () => {
     expect(Date.parse(driftAt)).toBeGreaterThan(0);
 
     const next = await prepareHintedSend(SID, await getSessionByClaudeId(SID), 'Team update: another worker is waiting on CI.', { sentBy: 'agent' });
-    expect(next.enqueueText).toContain(`Walnut (reply-language): ${ZH.drifted} ${RULE}`);
+    expect(next.enqueueText).toContain(`Walnut (reply-language): ${ZH.reply} ${ZH.drifted} ${RULE}`);
     expect(next.enqueueText).toContain(RULE);
     await next.commit();
     expect((await getSessionByClaudeId(SID))?.hintState?.drift).toBeUndefined();
 
     const after = await prepareHintedSend(SID, await getSessionByClaudeId(SID), 'Team update: nothing new.', { sentBy: 'agent' });
-    expect(after.enqueueText).toContain(`Walnut (reply-language): ${RULE}`);
+    expect(after.enqueueText).toContain(`Walnut (reply-language): ${ZH.reply} ${RULE}`);
     expect(after.enqueueText).not.toContain(ZH.drifted);
   });
 });
@@ -101,8 +103,8 @@ describe('a person\'s turn in a worker\'s session (2026-11-01, the user\'s "what
     w(EventNames.SESSION_TEXT_DELTA, { delta: "The machine load just dropped from about 90 to 26, so I'm re-measuring old vs new back to back:", msgId: 'w2' });
     w(EventNames.SESSION_TOOL_USE, { toolName: 'Bash', toolUseId: 'b2', input: {} });
     const row = await until(async () => (await getQueue(WSID)).find((q) => q.message.includes('outcome="reply-language"')));
-    // Written in his language (reply-language-lines.ts).
-    expect(row.message).toContain(ZH.live);
+    // Written in his language (reply-language-lines.ts), quoting the line (no fast model in tests: no rewrite).
+    expect(row.message).toContain(ZH.live(quoteLine("The machine load just dropped from about 90 to 26, so I'm re-measuring old vs new back to back:")));
     w(EventNames.SESSION_TEXT_DELTA, { delta: 'Under the same load the old version takes about half a second per click, the new one more than one.', msgId: 'w3' });
     w(EventNames.SESSION_TOOL_USE, { toolName: 'Bash', toolUseId: 'b3', input: {} });
     await new Promise((r) => setTimeout(r, 500));

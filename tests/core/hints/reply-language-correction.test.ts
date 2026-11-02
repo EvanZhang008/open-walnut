@@ -99,18 +99,18 @@ describe('the drift sensor', () => {
     // A person started it: the chat shows it, so it is judged.
     expect(await judge(hidden, { ...told, lastSendBy: 'person' })).toBeTruthy();
   });
-  it('a worker turn nobody of his started: its final message may mark a drift, never clear one', async () => {
+  it('a worker turn nobody of his started is judged whole (2026-11-02: a notice turn was English throughout)', async () => {
     const worker = async (replies: string[], state: Record<string, unknown>) => {
       records.set('wk', { claudeSessionId: 'wk', hintState: state } as unknown as SessionRecord);
       await hintDriftHook.handler({ sessionId: 'wk', task: { parent_task_id: 'p' }, result: replies.at(-1), replies } as never, {} as never);
       return records.get('wk')!.hintState?.drift?.['reply-language'];
     };
-    // English lines before a Chinese final message: only the final one is his to read later.
-    expect(await worker([EN_PROGRESS, ZH_FINAL], told)).toBeUndefined();
+    expect(await worker([EN_PROGRESS, ZH_FINAL], told)).toBeTruthy();
     expect(await worker([ZH_LINE, EN_FINAL], told)).toBeTruthy();
-    // A mark a turn he read left stays until a turn he reads is in his language again.
+    expect(await worker([ZH_LINE, ZH_FINAL], told)).toBeUndefined();
+    // A turn in his language clears an old mark.
     const marked = { ...told, drift: { 'reply-language': '2026-11-02T03:55:00Z' } };
-    expect(await worker([ZH_FINAL], marked)).toBe('2026-11-02T03:55:00Z');
+    expect(await worker([ZH_FINAL], marked)).toBeUndefined();
   });
   it('a later turn in his language clears an old mark; one that cannot tell keeps it', async () => {
     const marked = { ...told, drift: { 'reply-language': '2026-10-31T15:12:00Z' } };
@@ -132,13 +132,14 @@ describe('the next message leads with a correction, once', () => {
   it('a worker notice after a drifted turn says so; the one after carries the rule alone', () => {
     const rec: Rec = { claudeSessionId: 'lead-c', output_mode: 'markdown' };
     const [plain] = send(rec);
-    expect(plain.startsWith('Talk to the user in Chinese')).toBe(true);
+    // No message to read here (a host's tail is the same): the line in his language leads it.
+    expect(plain.startsWith(`${REPLY_LANGUAGE_LINES.zh.reply} Talk to the user in Chinese`)).toBe(true);
     // The sensor marks the turn that just ended.
     const at = new Date(Date.now() + 1000).toISOString();
     rec.hintState = { ...(rec.hintState as object), drift: { 'reply-language': at } } as never;
     const [corrected] = send(rec);
     // Written in his language (reply-language-lines.ts).
-    expect(corrected).toBe(`${REPLY_LANGUAGE_LINES.zh.drifted} ${plain}`);
+    expect(corrected).toBe(plain.replace(`${REPLY_LANGUAGE_LINES.zh.reply} `, `${REPLY_LANGUAGE_LINES.zh.reply} ${REPLY_LANGUAGE_LINES.zh.drifted} `));
     expect(send(rec)).toEqual([plain]);
   });
 
@@ -158,7 +159,7 @@ describe('the next message leads with a correction, once', () => {
     const rec: Rec = { claudeSessionId: 'lead-p', output_mode: 'markdown' };
     send(rec);
     rec.hintState = { ...(rec.hintState as object), drift: { 'reply-language': new Date(Date.now() + 1000).toISOString() } } as never;
-    expect(send(rec, 'person')[0].startsWith(REPLY_LANGUAGE_LINES.zh.drifted)).toBe(true);
+    expect(send(rec, 'person')[0].startsWith(`${REPLY_LANGUAGE_LINES.zh.reply} ${REPLY_LANGUAGE_LINES.zh.drifted}`)).toBe(true);
   });
 });
 
@@ -172,13 +173,9 @@ describe('a person\'s own message carries the rule in any session', () => {
     rec.hintState = advanceHintState(rec.hintState, rec as never, p.told, { now: Date.now(), sentBy }) as never;
     return p.carried.some((h) => h.kind === 'reply-language');
   };
-  it('a worker: every message he types, whatever its language; never a peer\'s once told', () => {
+  it('a worker: every message, his and another task\'s alike (2026-11-02)', () => {
     const rec: Rec = { claudeSessionId: 'worker-p', output_mode: 'markdown' };
-    expect(send(rec, 'agent')).toBe(true);
-    expect(send(rec, 'agent')).toBe(false);
-    expect(send(rec, 'person')).toBe(true);
-    expect(send(rec, 'person')).toBe(true);
-    expect(send(rec, 'agent')).toBe(false);
+    for (const by of ['agent', 'agent', 'person', 'person', 'agent'] as const) expect(send(rec, by)).toBe(true);
   });
   it('triggers set by hand decide alone', () => {
     const own = { session: { reply_language: RULE, hints: { 'reply-language': { triggers: ['session_start'] } } } } as never;
@@ -200,10 +197,12 @@ describe('a message of his in another language gets the ask in his own', () => {
   it('his English line gets the line in Chinese first, under his words', () => {
     expect(text("chinse, I don't know what happened").startsWith(`${REPLY_LANGUAGE_LINES.zh.reply} ${RULE}`)).toBe(true);
   });
-  it('a message nobody typed never does, and Walnut\'s reference cards are not his words', () => {
+  it('another task\'s English message gets it too, and Walnut\'s reference cards are not words of the message', () => {
+    // 2026-11-02, the org review: an English peer note started a worker's English progress lines.
     const of = (message: string, sentBy: 'agent' | 'person') => planHints({ hints: effectiveHints(config), target: { sessionId: 'w-msg', role: 'lead' }, record: { claudeSessionId: 'w-msg', output_mode: 'markdown' } as never, config, sentBy, message })
       .carried.find((h) => h.kind === 'reply-language')!.text;
-    expect(of('Team update: a worker finished its review and is waiting on CI.', 'agent').startsWith(RULE)).toBe(true);
+    expect(of('Team update: a worker finished its review and is waiting on CI.', 'agent').startsWith(REPLY_LANGUAGE_LINES.zh.reply)).toBe(true);
+    expect(of('团队更新：一个任务做完了评审，正在等 CI。', 'agent').startsWith(RULE)).toBe(true);
     const cards = '\n\n---walnut-refs---\n[task] Fix the reply language lines for every engine and send path\n---/walnut-refs---';
     expect(of(`看看这个${cards}`, 'person').startsWith(RULE)).toBe(true);
     expect(of(`look at this one please${cards}`, 'person').startsWith(REPLY_LANGUAGE_LINES.zh.reply)).toBe(true);

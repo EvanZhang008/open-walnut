@@ -17,6 +17,14 @@ function cfg(session: NonNullable<Config['session']> = {}): Pick<Config, 'sessio
   return { session } as Pick<Config, 'session'>;
 }
 
+/**
+ * The reply language rides every message by default (2026-11-02); these schedule tests set its
+ * other triggers by hand, which leaves the every-message rule out, to pin the schedule itself.
+ */
+function scheduled(session: NonNullable<Config['session']>): Pick<Config, 'session'> {
+  return cfg({ ...session, hints: { 'reply-language': { triggers: ['session_start', 'after_compaction', 'on_change', 'on_drift'] } } } as never);
+}
+
 /** Send `n` messages through the plan and the state advance, the way prepareHintedSend + commit do. */
 function run(rec: Rec, config: Pick<Config, 'session'>, n: number, opts: { requested?: (i: number) => RequestedHints | undefined; target?: ReturnType<typeof hintTargetOf> } = {}) {
   const out: string[][] = [];
@@ -35,12 +43,17 @@ function run(rec: Rec, config: Pick<Config, 'session'>, n: number, opts: { reque
 describe('default schedule', () => {
   it('rich: full at start, reminder every 5 messages; language once at start', () => {
     const rec: Rec = { claudeSessionId: 's1' };
-    const sent = run(rec, cfg({ output_mode: 'rich', reply_language: 'Talk to the user in Chinese.' }), 11);
+    const sent = run(rec, scheduled({ output_mode: 'rich', reply_language: 'Talk to the user in Chinese.' }), 11);
     expect(sent[0]).toEqual(['rich-full', 'reply-language']);
     expect(sent.slice(1, 5)).toEqual([[], [], [], []]);
     expect(sent[5]).toEqual(['rich-reminder']);
     expect(sent.slice(6, 10)).toEqual([[], [], [], []]);
     expect(sent[10]).toEqual(['rich-reminder']);
+  });
+
+  it('by default the language rides every message, in a session with no task too', () => {
+    const rec: Rec = { claudeSessionId: 's0', output_mode: 'markdown' };
+    expect(run(rec, cfg({ reply_language: 'Answer in Chinese.' }), 3)).toEqual([['reply-language'], ['reply-language'], ['reply-language']]);
   });
 
   it('markdown session pays nothing; switching to rich sends the full text once, back sends OFF once', () => {
@@ -55,7 +68,7 @@ describe('default schedule', () => {
 
   it('a compaction brings the full rich text and the language back once', () => {
     const rec: Rec = { claudeSessionId: 's3' };
-    const config = cfg({ reply_language: 'Answer in Chinese.' });
+    const config = scheduled({ reply_language: 'Answer in Chinese.' });
     run(rec, config, 2);
     rec.lastCompactUuid = 'c1';
     expect(run(rec, config, 2)).toEqual([['rich-full', 'reply-language'], []]);
@@ -63,14 +76,14 @@ describe('default schedule', () => {
 
   it('editing the language sends it again (on_change), clearing it sends nothing', () => {
     const rec: Rec = { claudeSessionId: 's4', output_mode: 'markdown' };
-    run(rec, cfg({ reply_language: 'Answer in Chinese.' }), 1);
-    expect(run(rec, cfg({ reply_language: 'Answer in Japanese.' }), 2)).toEqual([['reply-language'], []]);
+    run(rec, scheduled({ reply_language: 'Answer in Chinese.' }), 1);
+    expect(run(rec, scheduled({ reply_language: 'Answer in Japanese.' }), 2)).toEqual([['reply-language'], []]);
     expect(run(rec, cfg({}), 1)).toEqual([[]]);
   });
 
   it('a drift mark sends the language on the next message only', () => {
     const rec: Rec = { claudeSessionId: 's5', output_mode: 'markdown' };
-    const config = cfg({ reply_language: 'Answer in Chinese.' });
+    const config = scheduled({ reply_language: 'Answer in Chinese.' });
     run(rec, config, 2);
     rec.hintState = { ...rec.hintState!, drift: { 'reply-language': '2026-11-06T00:00:00Z' } };
     expect(run(rec, config, 2)).toEqual([['reply-language'], []]);
@@ -140,9 +153,10 @@ describe('user and agent settings', () => {
       // A host's peer note says nobody wrote it: not a person.
       expect(plan(role, rec)).toEqual(['reply-language']);
     }
+    // A worker too, every message (2026-11-02: an English peer note started its English lines).
     const worker: Rec = { claudeSessionId: 'w-1', output_mode: 'markdown' };
     plan('worker', worker, 'agent');
-    expect(plan('worker', worker, 'agent')).toEqual([]);
+    expect(plan('worker', worker, 'agent')).toEqual(['reply-language']);
     // Set triggers decide alone; the host tail carries it for a lead.
     const set = cfg({ reply_language: 'Talk to the user in Chinese.', hints: { 'reply-language': { triggers: ['session_start'] } } });
     const lead: Rec = { claudeSessionId: 'l-2', output_mode: 'markdown' };
@@ -150,7 +164,8 @@ describe('user and agent settings', () => {
     lead.hintState = { sends: 1, told: { 'reply-language': { send: 1, hash: 'Talk to the user in Chinese.', at: '2026-11-01T00:00:00Z' } } };
     expect(planHints({ hints: effectiveHints(set), target: { sessionId: 'l-2', role: 'lead' }, record: lead, config: set, sentBy: 'agent' }).carried).toEqual([]);
     expect(hostReplyTail({ ...lead }, config, { org_role: 'lead' } as never)).toContain('Walnut (reply-language)');
-    expect(hostReplyTail({ ...lead }, config, { parent_task_id: 'p' } as never)).toBeNull();
+    // A worker's host tail carries it too (2026-11-02).
+    expect(hostReplyTail({ ...lead }, config, { parent_task_id: 'p' } as never)).toContain('Walnut (reply-language)');
   });
 
   it('roles come from the task', () => {
@@ -188,7 +203,7 @@ describe('schedule details', () => {
 describe('compaction hook and host tail', () => {
   it('the hook states every after-compaction hint and the boundary read later counts it told', () => {
     const rec: Rec = { claudeSessionId: 's11', lastCompactUuid: 'c0' };
-    const config = cfg({ reply_language: 'Chinese.' });
+    const config = scheduled({ reply_language: 'Chinese.' });
     run(rec, config, 1);
     const plan = planHints({ hints: effectiveHints(config), target: { sessionId: 's11' }, record: rec, config, afterCompaction: true });
     expect(plan.carried.map((h) => h.kind)).toEqual(['rich-output', 'reply-language']);
@@ -205,14 +220,16 @@ describe('compaction hook and host tail', () => {
     expect(run(rec, config, 1)).toEqual([[]]);
   });
 
-  it('the host tail is empty by default and carries an owed hint', () => {
+  it('the host tail is empty by default and carries an owed hint; the language on every message', () => {
     const rec: Rec = { claudeSessionId: 's12', output_mode: 'markdown' };
     const config = cfg({ reply_language: 'Chinese.' });
     run(rec, config, 1);
-    expect(hostReplyTail(rec, config)).toBeNull();
+    expect(hostReplyTail(rec, cfg({}))).toBeNull();
+    // Another task's message, delivered by the host: led by the line in his language (2026-11-02).
+    expect(hostReplyTail(rec, config)).toContain(`Walnut (reply-language): ${REPLY_LANGUAGE_LINES.zh.reply} Chinese.`);
     rec.hintState = { ...rec.hintState!, drift: { 'reply-language': '2026-12-01T00:00:00Z' } };
     // A reply that drifted is named first (reply-language-correction.test.ts).
-    expect(hostReplyTail(rec, config)).toContain(`Walnut (reply-language): ${REPLY_LANGUAGE_LINES.zh.drifted}`);
+    expect(hostReplyTail(rec, config)).toContain(`Walnut (reply-language): ${REPLY_LANGUAGE_LINES.zh.reply} ${REPLY_LANGUAGE_LINES.zh.drifted}`);
     expect(hostReplyTail(rec, config)).toContain(`${REPLY_LANGUAGE_LINES.zh.drifted} Chinese.`);
     expect(hostReplyTail(rec, cfg({ reply_language: 'Chinese.', hints: { tone: { text: 'Hi.', triggers: ['every_turn'] } } }))).toContain('Walnut (tone): Hi.');
   });

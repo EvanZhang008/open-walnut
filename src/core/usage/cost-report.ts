@@ -81,6 +81,7 @@ const FEATURE: Record<string, string> = {
   summary: 'Summaries', organize: 'Organizing sessions', 'commit-message': 'Commit messages', memory: 'Memory upkeep',
   transfer: 'Session transfer', 'routine-draft': 'Routine drafts', 'host-learning': 'Host learning',
   'privacy-check': 'Private task checks',
+  'reply-language': 'Reply language rewrites',
 };
 const ENGINE: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', goose: 'Goose' };
 /** An engine name as a query may carry it (the rollup's own values are lowercase words). */

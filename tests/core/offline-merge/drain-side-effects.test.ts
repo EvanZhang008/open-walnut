@@ -234,7 +234,9 @@ describe('ledger rows and a conflict log that cannot be written', () => {
         await settle(10)
       }
       expect(j.pending).toHaveLength(0)
-      expect(inbox.letters).toHaveLength(1)
+      // The acking try can be the drain's own backoff retry, still sending its letter
+      // (it reads the letter language from config first) when the loop's settle ends.
+      await vi.waitFor(() => expect(inbox.letters).toHaveLength(1))
       expect(inbox.letters[0].markdown).toContain('Old phone')
     } finally {
       full.mockRestore()

@@ -277,35 +277,19 @@ async function defaultNotifier(notice: SecretHoldNotice): Promise<void> {
     return;
   }
   const sender = { sessionId: 'external', host: 'local' };
+  const { walnutLetterLanguage } = await import('../core/human-inbox/walnut-letters/languages.js');
+  const { GIT_SYNC_SECRET_ASIDE, GIT_SYNC_SECRET_HOLD } = await import('../core/human-inbox/walnut-letters/git-sync-secret.js');
+  const lang = await walnutLetterLanguage();
   if (notice.event === 'set-aside') {
     const { file, hold } = notice.files[0];
-    await sendLetterOnce({
-      subject: 'A file kept out of sync was set aside',
-      type: 'review',
-      sender,
-      markdown: [
-        `The other machine changed \`${file}\` in the Walnut data folder while this machine kept its copy out of sync for a secret (${describe(hold)}).`,
-        '',
-        `So the sync could take that change, this machine's copy was moved to \`${notice.aside}\`, which never syncs, and \`${file}\` now has the synced version. Copy over anything you still need from it, without the secret, then delete it.`,
-      ].join('\n'),
-    }, { opKey: notice.op });
+    const letter = GIT_SYNC_SECRET_ASIDE.render(lang, { file, described: describe(hold), aside: notice.aside ?? '' });
+    await sendLetterOnce({ subject: letter.subject, type: GIT_SYNC_SECRET_ASIDE.type, sender, markdown: letter.markdown }, { opKey: notice.op });
     return;
   }
-  const rows = notice.files.map(({ file, hold }) => `- \`${file}\`: ${describe(hold)}${walnutWritten(file) ? ' (a record Walnut writes; it stays on this machine)' : ''}`);
-  await sendLetterOnce({
-    subject: notice.files.length === 1 ? 'A file was kept out of sync: it holds a secret' : `${notice.files.length} files were kept out of sync: they hold secrets`,
-    type: 'review',
-    sender,
-    markdown: [
-      `Walnut did not sync ${notice.files.length === 1 ? 'this file' : 'these files'} from its data folder, because each looks like it holds a credential:`,
-      '',
-      ...rows,
-      '',
-      'Nothing was changed on this machine, and nothing was sent anywhere. A file stays out of the synced history while it holds the credential and syncs again by itself once it does not; a file the sync already had keeps its last version without it on your other machines.',
-      '',
-      'If it is a real credential, take it out of the file (keep credentials in Settings or in the `secrets/` folder, which never syncs) and consider replacing it. If it is not a secret, rewording those lines lets the file sync.',
-    ].join('\n'),
-  }, { opKey: notice.op });
+  const letter = GIT_SYNC_SECRET_HOLD.render(lang, {
+    files: notice.files.map(({ file, hold }) => ({ file, described: describe(hold), walnutWritten: walnutWritten(file) })),
+  });
+  await sendLetterOnce({ subject: letter.subject, type: GIT_SYNC_SECRET_HOLD.type, sender, markdown: letter.markdown }, { opKey: notice.op });
 }
 
 async function notify(notice: SecretHoldNotice): Promise<void> {

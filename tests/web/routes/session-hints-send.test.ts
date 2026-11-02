@@ -158,7 +158,8 @@ describe('session:send through the hint pipeline', () => {
       await sendMessageToSession(sid, `peer ${i}`, { source: 'peer' })
       got.push(kinds(await drain(sid)))
     }
-    expect(got).toEqual([['rich-output', 'reply-language'], [], [], [], [], ['rich-output']])
+    // The reply language rides every message (2026-11-02: an English peer note started a worker's English lines).
+    expect(got).toEqual([['rich-output', 'reply-language'], ['reply-language'], ['reply-language'], ['reply-language'], ['reply-language'], ['rich-output', 'reply-language']])
   })
 
   it('a source the queue does not compose for is still escaped, and gets no hint', async () => {

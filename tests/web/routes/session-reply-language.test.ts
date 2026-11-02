@@ -233,14 +233,14 @@ describe('session:send', () => {
 })
 
 describe('turns nobody typed', () => {
-  it('a trigger carries it in markdown mode too, the first time', async () => {
+  // 2026-11-02, the org review: an English peer note started a worker's English lines, so every
+  // message carries it, with the line in his language under an English one.
+  it('a trigger, another task, a notice and the clock each carry it, every time', async () => {
     await setSession({ output_mode: 'markdown', reply_language: RULE })
     const sid = await newSession()
-    await sendMessageToSession(sid, 'from routine-trigger', { source: 'routine-trigger' })
-    expect(await drain(sid)).toBe(after(sent('from routine-trigger', 'routine-trigger'), LANG))
-    for (const source of ['peer', 'walnut-notify', 'wait-until']) {
+    for (const source of ['routine-trigger', 'peer', 'walnut-notify', 'wait-until', 'peer']) {
       await sendMessageToSession(sid, `from ${source}`, { source })
-      expect(await drain(sid)).toBe(sent(`from ${source}`, source))
+      expect(await drain(sid)).toBe(after(sent(`from ${source}`, source), LANG_EN))
     }
   })
 
@@ -248,7 +248,7 @@ describe('turns nobody typed', () => {
     await setSession({ output_mode: 'rich', reply_language: RULE })
     const sid = await newSession()
     await sendMessageToSession(sid, 'peer says hi', { source: 'peer' })
-    expect(await drain(sid)).toBe(after(sent('peer says hi', 'peer'), ON, LANG))
+    expect(await drain(sid)).toBe(after(sent('peer says hi', 'peer'), ON, LANG_EN))
     // Human paths compose before they enqueue; the queue leaves their text alone.
     const fresh = await newSession()
     await sendMessageToSession(fresh, 'plan step', { source: 'web-api' })

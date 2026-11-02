@@ -30,7 +30,8 @@ export type UsageSource =
   | 'transfer'     // handoff brief when a session moves engine or host
   | 'routine-draft' // routine drafted from a plain-text request
   | 'host-learning' // what a host is used for, learned from its sessions
-  | 'privacy-check'; // whether a new task is private before its first push to an outside service
+  | 'privacy-check' // whether a new task is private before its first push to an outside service
+  | 'reply-language'; // a progress line rewritten in the user's language for a live correction
 
 export interface UsageRecord {
   id: string;

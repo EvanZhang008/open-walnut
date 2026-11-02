@@ -97,11 +97,12 @@ rest. Every message counts toward `every_n_turns`, hint or not.
 
 Defaults: `question` and `voice-reply` on request; `rich-output` at session
 start, after a compaction, on a change, and its short reminder every 5 messages;
-`reply-language` at session start, after a compaction, on a change, and on drift,
-and for Main and the leads on every message (the user's own, in whatever language
-he types, a notice, a worker's reply, a trigger), because the user reads their chat
-whoever started the turn and his reply language is a setting, not a guess from the
-message (2026-10-29, 2026-10-30; dropped once the triggers are set by hand). A lead's reply to
+`reply-language` on every message of every session (the user's own, in whatever language
+he types, a notice, another task's message or reply, a trigger, a host's own delivery), because the
+user reads every chat whoever started the turn and his reply language is a setting, not a guess from
+the message (Main and the leads 2026-10-29 and 2026-10-30, every session 2026-11-02 after an English
+peer note started a worker's English lines; dropped once the triggers are set by hand, which leaves
+session start, compaction, change and drift). A lead's reply to
 such a turn is judged for drift like Main's. Walnut adds one clause after the user's sentence: it covers every
 line the user reads, the short progress lines between tool calls included.
 Drift is judged on every message of the turn the user saw (`replies` on the turn-end hook,
@@ -113,23 +114,25 @@ deliveries carry it until then or until a later turn is in the language again, w
 mark. A turn the chat hides (something else started it and it ended on the no-action line) is
 not judged. Every message a person sends carries the reply language, in any session (`everyPersonTurn`,
 2026-11-01: the user's English "what the hack?" in a worker's chat carried no reminder, and the long turn
-after it was English throughout). Inside a turn a person started, the first progress line in the wrong
-language is corrected at once (`src/core/hints/hint-drift-live.ts`): when the tool call after it starts,
-one `outcome="reply-language"` notice goes mid-turn, so a native Claude Code session reads it with that
-tool's result; the turn end then judges only what came after it. ACP engines take one prompt per turn,
+after it was English throughout). Inside any turn, whoever started it, the first progress line in the
+wrong language is corrected at once (`src/core/hints/hint-drift-live.ts`): when the tool call after it
+starts, an `outcome="reply-language"` notice goes mid-turn, so a native Claude Code session reads it with
+that tool's result; the turn end then judges only what came after the last one. The notice quotes the
+line and shows it rewritten in the user's language by the fast model (12 seconds at most; without an
+answer it quotes alone), since two corrections that only named the rule left a worker writing 15 more
+English lines (2026-11-02). ACP engines take one prompt per turn,
 so they keep the correction on the next message.
 The model follows the language of the message it answers, and an English rule about the language
 got an English "I will" back (2026-11-02, the user's org review: "chinse, I don't know what happened",
 and English lines after two English corrections). So, for a rule that names a language Walnut has
 words for (`src/core/hints/reply-language-lines.ts`: Chinese, Japanese, Korean, Russian), three lines
-are written in that language itself: the one under a message a person typed, of 8 or more letters in another
-script (Walnut's reference cards not counted) ("（请用中文回复，包括进度短句。）" before the rule), the mid-turn correction, and the drifted
-turn's correction on the next message. Any other rule keeps the English words. A message nobody typed
-(a notice, a peer, a trigger) never gets the first line. Inside a turn a progress
-line is judged from 12 letters (`LIVE_MIN_LETTERS`: "Chromium 34/34. Now WebKit."), and a second
-correction goes out when two more lines after the first are still off, never a third. A turn nobody
-watched (a worker's turn a notice started) still has its final message judged, so the next message
-carries the correction; such a turn may mark a drift, never clear one a turn he read left.
+are written in that language itself: the one under a message of 8 or more letters in another script,
+whoever wrote it, and on a host's own delivery (Walnut's reference cards not counted)
+(for Chinese, a parenthesised line asking for Chinese replies, short progress lines included, before the rule), the mid-turn correction, and the drifted turn's
+correction on the next message. Any other rule keeps the English words. Inside a turn a progress line
+is judged from 12 letters (`LIVE_MIN_LETTERS`: "Chromium 34/34. Now WebKit."), and the next correction
+goes out when two more lines after the last are still off, at most three a turn. Every turn the chat
+shows is judged whole at its end, in every session.
 `brief` (Main and the leads only) at session start, after a compaction, every 3 messages and
 when the node's team moved since its Brief was written (`src/core/sessions/brief-hint.ts`): how
 old the Brief is, what moved, and to update it with `brief_write`; a node with no Brief hears to

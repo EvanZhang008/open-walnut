@@ -232,8 +232,8 @@ describe('the inbox, read by an agent', () => {
     await expect(send({ type: 'completion' })).rejects.toThrow(/already went to it/);
     // A decision still goes: the task is blocked on the user.
     expect((await send({ type: 'action_required', actions: [{ id: 'a', label: 'A' }], user_kind: 'permissions', user_kind_why: 'It widens what an agent may do' })).letterId).toBeTruthy();
-    // The user asked this task for the report.
-    expect((await send({ user_asked: true })).letterId).toBeTruthy();
+    // The user asked this task for the report (its own subject: the same one again within minutes is a duplicate).
+    expect((await send({ user_asked: true, subject: 'Timeout fix: the report you asked for' })).letterId).toBeTruthy();
     // A task nobody asked sends as before.
     const solo = await addTask({ title: 'Daily digest' });
     await createSessionRecord('s-solo', solo.task.id, '', WALNUT_HOME);
@@ -242,7 +242,7 @@ describe('the inbox, read by an agent', () => {
     await createSessionRequest({ fromSessionId: 's-worker', toTaskId: lead.task.id, toSessionId: 's-lead', text: 'Which port?' });
     expect((await run('human_inbox_send', { subject: 'Team report', type: 'review', markdown: 'x' }, 's-lead')).letterId).toBeTruthy();
     await createSessionRequest({ fromSessionId: 's-lead', toTaskId: worker.task.id, toSessionId: 's-worker', text: 'Status? Reply when done' });
-    expect((await send({ pin: true })).letterId).toBeTruthy();
+    expect((await send({ pin: true, subject: 'Timeout fix: standing report' })).letterId).toBeTruthy();
     // Another project's lead asking does not speak for this task's work; its own project's lead does.
     const sender = (await addTask({ title: 'Inbox polish', project: 'Walnut' })).task;
     const otherLead = (await addTask({ title: 'Marina lead', project: 'Marina' })).task;

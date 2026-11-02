@@ -1,20 +1,25 @@
 /**
- * The reply language, corrected inside the turn: in a turn a person started, the first progress
- * line the user reads in the wrong language gets one correction, delivered mid-turn so it lands
- * with the next tool result, instead of after the turn (hint-drift.ts, the next message).
+ * The reply language, corrected inside the turn: the first progress line the user reads in the
+ * wrong language gets a correction, delivered mid-turn so it lands with the next tool result,
+ * instead of after the turn (hint-drift.ts, the next message).
  *
  * 2026-11-01: a worker answered the user's own messages in English in 17 of 27 replies while he
  * was talking to it; the turn-end check named it only on his next message, so each long turn
  * stayed English to its end ("The machine load just dropped from about 90 to 26, so I'm
  * re-measuring...", the line after his "what the hack?").
  *
+ * 2026-11-02, the org review: a worker's turn a Walnut notice started was English from start to
+ * end with no correction (only a turn a person started was corrected then), and one corrected
+ * twice wrote 15 more English lines. Every turn is corrected now, whoever started it (the user
+ * reads a worker's chat too, and USER.md asks every line of every agent in his language), and the
+ * correction quotes the line with a rewrite in his language (the fast model's, when it answers
+ * in time).
+ *
  * How: the main lane's text deltas are kept per message id; a message is complete when a tool
- * call follows it, and only then judged (languageDrift, the turn-end sensor's own test). Who
- * started the turn is read when it starts: the last Walnut send since the previous turn ended
- * (SESSION_SEND's source, send-sent-by.ts); a turn with none is the CLI's own (a background
- * command back, a wakeup), never a person's. The correction goes once per turn (a second time
- * when two more lines after it are still off: 2026-11-02, one did not hold), written in his
- * language when Walnut has its words (reply-language-lines.ts), through the mid-turn path (deliverToSession, source walnut-notify): a native Claude Code session reads it
+ * call follows it, and only then judged (languageDrift, the turn-end sensor's own test). The
+ * correction goes at the first line off, again after every two more lines off, at most
+ * LIVE_MAX times a turn, written in his language when Walnut has its words
+ * (reply-language-lines.ts), through the mid-turn path (deliverToSession, source walnut-notify): a native Claude Code session reads it
  * with the tool result. ACP engines take one prompt per turn, so a correction there would start
  * a turn of its own; they keep the turn-end correction only. If the turn ends before the line is
  * read (its last tool was quick), the CLI runs it as a turn of its own: the line asks for the
@@ -29,7 +34,6 @@ import { replyLanguageLines } from './reply-language-lines.js';
 import { findHint } from './hint-registry.js';
 import { replyLanguageText } from '../sessions/output-mode.js';
 import { buildWalnutMessage } from '../peers/walnut-message-tag.js';
-import { queueSentBy } from '../sessions/send-sent-by.js';
 
 const SUBSCRIBER = 'hint-drift-live';
 const TEXT_MAX = 4000;
@@ -38,8 +42,6 @@ const MESSAGES_MAX = 24;
 const SESSIONS_MAX = 300;
 
 interface LiveTurn {
-  /** A person's send started it. */
-  personTurn: boolean;
   /** Main-lane text per message id, in arrival order. */
   texts: Map<string, string>;
   /** Message ids already judged (a tool call followed them). */
@@ -55,34 +57,82 @@ interface LiveTurn {
   offAfter: number;
 }
 
-/** Corrections in one turn: a second one when two more lines after the first are still off. */
-const LIVE_MAX = 2;
-const OFF_BEFORE_SECOND = 2;
+/** Corrections in one turn: the next one when two more lines after the last are still off. */
+const LIVE_MAX = 3;
+const OFF_BEFORE_NEXT = 2;
+/** The quoted line, cut; and how long the fast model may take over its rewrite. */
+const QUOTE_MAX = 240;
+const REWRITE_BUDGET_MS = 8_000;
 
 const turns = new Map<string, LiveTurn>();
-/** The last send per session (its source, when), and when its last turn ended (`seq`). */
-const lastSend = new Map<string, { source: string; at: number }>();
-const turnEnded = new Map<string, number>();
-/** Event order (sends and turn ends in one millisecond still compare). */
-let seq = 0;
 /** A finished turn's outcome (a promise: its last lines may still be judged), until the sensor reads it. */
 const finished = new Map<string, Promise<{ driftAfter: boolean }>>();
 
 /** The correction's words when the rule's language has none of its own (reply-language-lines.ts). */
-export const LIVE_CORRECTION_TEXT = 'Correction: your progress line just now was not in the user\'s language, and he reads '
-  + 'this chat now. Write every line from here on in it, the short ones between tool calls included, also when a tool '
-  + 'result or your own notes are in English.';
+export function liveCorrectionText(said: string, example?: string): string {
+  return `Correction: your progress line just now was not in the user's language: "${said}". `
+    + (example ? `In it: "${example}". ` : '')
+    + 'Write every line from here on in it, the short ones between tool calls included, also when a tool result, '
+    + 'a message you received or your own notes are in English.';
+}
 /** Said in English in every language: the tag is the same in all. */
 export const LIVE_LATE_LINE = 'If your turn had already ended when this arrived, reply with only <walnut-turn status="agent-ack"/>.';
 
-/** Written in the user's language when Walnut has its words (2026-11-02: an English correction got an English "I will"). */
-export function liveCorrectionMessage(rule: string): string {
+/** The line as quoted: one line, cut at QUOTE_MAX. */
+export function quoteLine(line: string): string {
+  const one = line.replace(/\s+/g, ' ').trim();
+  return one.length > QUOTE_MAX ? `${one.slice(0, QUOTE_MAX - 1)}…` : one;
+}
+
+/**
+ * Written in the user's language when Walnut has its words (2026-11-02: an English correction got
+ * an English "I will"), quoting the line and, when there is one, its rewrite in his language.
+ */
+export function liveCorrectionMessage(rule: string, said: string, example?: string): string {
   const lines = replyLanguageLines(ruleLanguage(rule));
+  const quote = quoteLine(said);
   return buildWalnutMessage({
     kind: 'notification',
     attrs: { from: 'Walnut', outcome: 'reply-language', note: 'a correction of this turn, not a work request' },
-    body: `${lines ? lines.live : LIVE_CORRECTION_TEXT} ${rule}\n${LIVE_LATE_LINE}`,
+    body: `${lines ? lines.live(quote, example) : liveCorrectionText(quote, example)} ${rule}\n${LIVE_LATE_LINE}`,
   });
+}
+
+/** Test seam: the rewrite the fast model would give (null = none in time). */
+let rewriteForTest: ((rule: string, line: string) => Promise<string | null>) | null = null;
+export function _setRewriteForTest(fn: typeof rewriteForTest): void { rewriteForTest = fn; }
+
+/** The line rewritten in the rule's language by the fast model; null when it does not answer in time or in it. */
+async function rewriteLine(rule: string, line: string): Promise<string | null> {
+  if (rewriteForTest) return rewriteForTest(rule, line);
+  const { backgroundAiDisabled, fastModelFor, fastCallText } = await import('../cheap-model.js');
+  if (backgroundAiDisabled()) return null;
+  const { getConfig } = await import('../config-manager.js');
+  const config = await getConfig().catch(() => null);
+  if (!config) return null;
+  const { sendMessage } = await import('../../model/model.js');
+  const model = fastModelFor(config);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REWRITE_BUDGET_MS);
+  try {
+    const result = await sendMessage({
+      system: `Rewrite the progress line the user gives as one short line that follows this rule: "${rule}". `
+        + 'Keep code, paths, commands, ids and product names as they are. Answer with the line alone.',
+      messages: [{ role: 'user', content: quoteLine(line) }],
+      config: { maxTokens: 200, ...(model ? { model } : {}) },
+      signal: controller.signal,
+      // A helper nobody waits on: it never holds a slot a person's turn needs, and past its
+      // budget the correction quotes the line alone.
+      purpose: 'background',
+      usage: { source: 'reply-language', agentId: 'reply-language-rewrite' },
+    });
+    const text = quoteLine(fastCallText(result).replace(/^["'「“]+|["'」”]+$/g, ''));
+    return text && languageDrift(rule, text, LIVE_MIN_LETTERS) !== true ? text : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function bounded<V>(map: Map<string, V>, key: string, value: V): void {
@@ -92,9 +142,7 @@ function bounded<V>(map: Map<string, V>, key: string, value: V): void {
 }
 
 function startTurn(sid: string): LiveTurn {
-  const send = lastSend.get(sid);
-  const personTurn = !!send && send.at > (turnEnded.get(sid) ?? 0) && queueSentBy(send.source) === 'person';
-  const t: LiveTurn = { personTurn, texts: new Map(), judged: new Set(), sending: false, corrections: 0, attempts: 0, driftAfter: false, offAfter: 0 };
+  const t: LiveTurn = { texts: new Map(), judged: new Set(), sending: false, corrections: 0, attempts: 0, driftAfter: false, offAfter: 0 };
   bounded(turns, sid, t);
   finished.delete(sid);
   return t;
@@ -103,7 +151,6 @@ function startTurn(sid: string): LiveTurn {
 function endTurn(sid: string): LiveTurn | undefined {
   const t = turns.get(sid);
   turns.delete(sid);
-  bounded(turnEnded, sid, ++seq);
   return t;
 }
 
@@ -152,14 +199,16 @@ async function judgeAtToolUse(sid: string, t: LiveTurn): Promise<void> {
   const { rule, enabled } = await currentRule();
   if (!rule || !enabled) return;
   // A progress line is judged from fewer letters than a final reply ("Chromium 34/34. Now WebKit.").
-  const off = texts.filter((x) => languageDrift(rule, x, LIVE_MIN_LETTERS) === true).length;
+  const offLines = texts.filter((x) => languageDrift(rule, x, LIVE_MIN_LETTERS) === true);
+  const off = offLines.length;
   if (t.corrections > 0 && off) { t.driftAfter = true; t.offAfter += off; }
-  const due = off > 0 && t.personTurn && !t.sending && t.attempts < LIVE_MAX
-    && (t.corrections === 0 || (t.corrections < LIVE_MAX && t.offAfter >= OFF_BEFORE_SECOND));
+  const due = off > 0 && !t.sending && t.attempts < LIVE_MAX
+    && (t.corrections === 0 || (t.corrections < LIVE_MAX && t.offAfter >= OFF_BEFORE_NEXT));
   if (!due) return;
   t.sending = true;
   t.attempts += 1;
-  const sent = await sendCorrection(sid, rule).catch((err) => {
+  const said = offLines[offLines.length - 1];
+  const sent = await sendCorrection(sid, rule, said, () => turns.get(sid) === t).catch((err) => {
     log.session.warn('reply-language: live correction not delivered', { sessionId: sid, error: err instanceof Error ? err.message : String(err) });
     return false;
   });
@@ -170,16 +219,20 @@ async function judgeAtToolUse(sid: string, t: LiveTurn): Promise<void> {
 }
 
 /** Deliver the correction to a running native session. */
-async function sendCorrection(sid: string, rule: string): Promise<boolean> {
+async function sendCorrection(sid: string, rule: string, said: string, stillRunning: () => boolean): Promise<boolean> {
   const { getSessionByClaudeId } = await import('../session-tracker.js');
   const rec = await getSessionByClaudeId(sid).catch(() => null);
   if (!rec || rec.process_status !== 'running') return false;
   const { engineCaps } = await import('../agents/engine-registry.js');
   if (engineCaps(rec.engine).runtimeKind !== 'native') return false;
+  const example = await rewriteLine(rule, said);
+  // The turn ended while the rewrite was made: the turn end judges it, and a correction now
+  // would start a turn of its own (and end a wait it is in).
+  if (!stillRunning()) return false;
   const { deliverToSession } = await import('../sessions/session-send-core.js');
-  const text = liveCorrectionMessage(rule);
+  const text = liveCorrectionMessage(rule, said, example ?? undefined);
   await deliverToSession(rec, { busText: text, enqueueText: text, source: 'walnut-notify', ...(rec.taskId ? { taskId: rec.taskId } : {}) });
-  log.session.info('reply-language: live correction sent', { sessionId: sid, taskId: rec.taskId });
+  log.session.info('reply-language: live correction sent', { sessionId: sid, taskId: rec.taskId, rewrite: !!example });
   return true;
 }
 
@@ -208,10 +261,6 @@ function onEvent(event: BusEvent): void {
   const sid = typeof data.sessionId === 'string' ? data.sessionId : '';
   if (!sid) return;
   switch (event.name) {
-    case EventNames.SESSION_SEND:
-      // A redelivery trigger carries no message of its own.
-      if (typeof data.message === 'string' && data.message && event.source) bounded(lastSend, sid, { source: event.source, at: ++seq });
-      return;
     case EventNames.SESSION_TEXT_DELTA:
       noteText(sid, data);
       return;
@@ -247,7 +296,7 @@ export async function takeLiveCorrection(sid: string): Promise<{ driftAfter: boo
 export function startLiveDrift(): void {
   bus.subscribe(SUBSCRIBER, onEvent, {
     global: true,
-    interest: [EventNames.SESSION_SEND, EventNames.SESSION_TEXT_DELTA, EventNames.SESSION_TOOL_USE, EventNames.SESSION_RESULT,
+    interest: [EventNames.SESSION_TEXT_DELTA, EventNames.SESSION_TOOL_USE, EventNames.SESSION_RESULT,
       EventNames.SESSION_STATUS_CHANGED],
   });
 }
@@ -256,9 +305,8 @@ export function stopLiveDrift(): void {
   bus.unsubscribe(SUBSCRIBER);
   turns.clear();
   finished.clear();
-  lastSend.clear();
-  turnEnded.clear();
   ruleCache = null;
+  rewriteForTest = null;
 }
 
 /** Test seam: every judgement and delivery started so far has finished. */

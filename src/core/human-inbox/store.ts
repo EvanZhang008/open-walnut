@@ -37,6 +37,7 @@ import {
 } from './normalize.js';
 import { statStagedBody, takeStagedBody } from './staged-body.js';
 import { validateNewItems, allLetterItems, assertItemIds } from './item-schema.js';
+import { duplicateLetterMessage, duplicateReplyMessage, findDuplicateLetter, findDuplicateReply, senderKey } from './duplicate-letter.js';
 import type { AwayThreadMark, InboxItemReceipt } from './types.js';
 import {
   LETTER_INLINE_BODY_MAX_BYTES,
@@ -61,7 +62,8 @@ const BODIES_DIR = path.join(INBOX_DIR, 'bodies');
 export class LetterError extends Error {
   constructor(
     message: string,
-    readonly code: 'invalid' | 'not_found' | 'already_answered' | 'human_approval' | 'reply_instead' | 'user_words' | 'task_snoozed' | 'user_kind',
+    readonly code: 'invalid' | 'not_found' | 'already_answered' | 'human_approval' | 'reply_instead' | 'user_words' | 'task_snoozed' | 'user_kind'
+      | 'duplicate_letter' | 'duplicate_reply',
     readonly status: number,
   ) {
     super(message);
@@ -468,6 +470,12 @@ export interface SendLetterOptions {
   awayThread?: AwayThreadMark;
   /** No phone push for it (away-thread.ts: the absence already buzzed, still unread). */
   quiet?: boolean;
+  /**
+   * A session's send (letter-ops.ts): the sender's letter with the same subject inside the window
+   * is refused, checked under the write lock so two sends at once cannot both pass
+   * (duplicate-letter.ts). Never with `opKey`: a journal replay is never refused.
+   */
+  refuseDuplicate?: boolean;
 }
 
 /** The store's own check of a new letter (subject, type, one body, buttons only on a decision). */
@@ -480,6 +488,13 @@ export function checkLetterShape(input: Record<string, unknown>): { ok: true } |
 export async function awayLettersOf(taskId: string): Promise<LetterRecord[]> {
   if (!taskId) return [];
   return (await readStore()).letters.filter(l => l.awayThread?.taskId === taskId && !l.archived);
+}
+
+/** Every letter this sender sent, archived ones too (duplicate-letter.ts `senderKey`). */
+export async function lettersOfSender(sender: LetterRecord['sender']): Promise<LetterRecord[]> {
+  const key = senderKey(sender);
+  if (!key) return [];
+  return (await readStore()).letters.filter(l => senderKey(l.sender) === key);
 }
 
 /** The letter a journal op already sent (`createdByOp`), or null. */
@@ -593,6 +608,11 @@ export async function sendLetterOnce(
       // The same op sent meanwhile (checked again under the lock): keep that one.
       const sent = opKey ? store.letters.find(l => l.createdByOp === opKey) : undefined;
       if (sent) { first = { ...sent }; return; }
+      if (opts.refuseDuplicate && !opKey) {
+        const now = Date.now();
+        const dup = findDuplicateLetter(record, store.letters, now);
+        if (dup) throw new LetterError(duplicateLetterMessage(dup, now), 'duplicate_letter', 409);
+      }
       store.letters.push(record);
     }));
   } catch (err) {
@@ -769,7 +789,11 @@ function setArchivedFlag(letter: LetterRecord, archived: boolean, reason?: Lette
  * Flips the letter unread (the agent answered — that is news) and pulls it back
  * out of the archive, the way a new mail in a thread returns it to an inbox.
  */
-export async function agentReply(id: string, input: AgentReplyInput, opts: { quiet?: boolean; taskRefs?: unknown } = {}): Promise<LetterRecord> {
+/**
+ * `refuseDuplicate`: a session's reply through the route or the relay; the same words as its
+ * latest turn there, inside the window, are refused under the lock (duplicate-letter.ts).
+ */
+export async function agentReply(id: string, input: AgentReplyInput, opts: { quiet?: boolean; taskRefs?: unknown; refuseDuplicate?: boolean } = {}): Promise<LetterRecord> {
   requireValidId(id);
   const text = str(input?.text).trim();
   if (!text) throw invalid('text is required');
@@ -810,6 +834,11 @@ export async function agentReply(id: string, input: AgentReplyInput, opts: { qui
     const letter = find(store, id);
     try { if (newItems) assertItemIds(newItems, letter); }
     catch (error) { throw invalid(errMsg(error)); }
+    if (opts.refuseDuplicate) {
+      const now = Date.now();
+      const dup = findDuplicateReply(letter, boundThreadText(text), now);
+      if (dup) throw new LetterError(duplicateReplyMessage(letter.id, dup.at, now), 'duplicate_reply', 409);
+    }
     const entry: ThreadEntry = { from: 'agent', text: boundThreadText(text), at: Date.now(), ...(newItems ? { items: newItems } : {}) };
     if (richSource !== null) {
       bodyFileToWrite = `${letter.id}.r${letter.thread.length}.${bodyExt(richFormat)}`;

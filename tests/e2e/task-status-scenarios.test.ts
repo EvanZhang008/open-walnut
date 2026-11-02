@@ -181,8 +181,9 @@ describe('every surface shows the same state after every step', () => {
     const { id } = await raised.json() as { id: string }
     const stored = await fetch(`http://localhost:${port}/api/v1/human-inbox/${id}`).then((r) => r.text())
     expect(stored).toContain('raised now because: The vendor deadline moved')
-    // The user asked for this one ("tell me when"): no reason needed.
-    expect((await send({ user_asked: true })).status).toBe(201)
+    // The user asked for this one ("tell me when"): no reason needed. Its own subject, since the
+    // same subject again within minutes is a duplicate (human-inbox/duplicate-letter.ts).
+    expect((await send({ user_asked: true, subject: 'Review the revised plan' })).status).toBe(201)
   }, 120_000)
 
   it('a subtask of a snoozed task sleeps with it', async () => {

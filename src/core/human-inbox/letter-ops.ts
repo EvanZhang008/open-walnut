@@ -22,10 +22,15 @@ import { bus } from '../event-bus.js';
 import { createEnvelopeKit } from '../peers/envelope-kit.js';
 import { admitSnoozedLetter } from './snooze-letter.js';
 import {
+  duplicateLetterMessage, findDuplicateLetter, findOpenSameAsk, openAskHint, resendReasonOf, senderKey, type OpenAskHint,
+} from './duplicate-letter.js';
+import { truncatePreview } from './preview.js';
+import {
   answerLetter,
   findLetterByOp,
   getLetter,
   humanReplyTurn,
+  lettersOfSender,
   recordTurnDelivery,
   sendLetterOnce,
   withdrawLetter,
@@ -162,12 +167,15 @@ export async function sendLetterAsCallerOnce(
   input: Omit<NewLetter, 'sender'>,
   callerSid: string | undefined,
   opts: SendLetterOptions = {},
-): Promise<{ letter: LetterRecord; duplicate: boolean; addedToThread?: boolean }> {
+): Promise<{ letter: LetterRecord; duplicate: boolean; addedToThread?: boolean; openAsk?: OpenAskHint }> {
   if (opts.opKey) {
     const first = await findLetterByOp(opts.opKey);
     if (first) return { letter: first, duplicate: true };
   }
   const sender = await resolveLetterSender(callerSid);
+  // A deliberate resend says why (duplicate-letter.ts); the reason is never stored.
+  const resendReason = resendReasonOf(input);
+  { const { resendReason: _a, resend_reason: _b, ...rest } = input; input = rest; }
   // A report the asking task gives the user already (reply-instead.ts). A host's journal op was
   // written while the server was away and is never refused on the way in.
   if (!opts.opKey && input.userAsked !== true && input.user_asked !== true) {
@@ -183,6 +191,30 @@ export async function sendLetterAsCallerOnce(
   // report above: it was written while the server was away and the host holds no snooze check.
   if (!opts.opKey && input.userAsked !== true && input.user_asked !== true) input = await admitSnoozedLetter(input, sender);
   else { const { snoozeReason: _a, snooze_reason: _b, ...rest } = input; input = rest; }
+  // One sender, one letter per question (duplicate-letter.ts): the same subject again inside the
+  // window is refused, here and again under the store's lock; an open decision letter asking the
+  // same thing is named in the answer. A host's journal op is never refused on the way in.
+  const guarded = !opts.opKey && !resendReason && senderKey(sender) !== null;
+  const subject = truncatePreview(String(input.subject ?? '').trim(), 200);
+  const refuseIfDuplicate = async (): Promise<void> => {
+    const now = Date.now();
+    const dup = findDuplicateLetter({ subject, sender }, await lettersOfSender(sender), now);
+    if (!dup) return;
+    log.notif.info('human-inbox: duplicate letter refused', { taskId: sender.taskId, senderSessionId: sender.sessionId, firstLetterId: dup.id });
+    throw new LetterError(duplicateLetterMessage(dup, now), 'duplicate_letter', 409);
+  };
+  let openAsk: OpenAskHint | undefined;
+  if (guarded) {
+    // The duplicate itself is refused where the letter would be written: in the away thread a
+    // same-subject update folds into the thread instead (away-thread.ts), and the store checks
+    // again under its lock (refuseDuplicate) so concurrent sends make one letter.
+    const open = findOpenSameAsk({ subject, sender }, await lettersOfSender(sender));
+    if (open) openAsk = openAskHint(open.letter);
+  } else if (resendReason && !opts.opKey) {
+    log.notif.info('human-inbox: letter resent on purpose', { taskId: sender.taskId, senderSessionId: sender.sessionId, reason: resendReason });
+  }
+  if (guarded) opts = { ...opts, refuseDuplicate: true };
+  const hinted = <T extends object>(out: T): T & { openAsk?: OpenAskHint } => (openAsk ? { ...out, openAsk } : out);
   // A decision letter from Main or a lead names which of the user's kinds it is (user-kind-letter.ts).
   // A host's journal op is never refused on the way in, as above; its kind fields are dropped.
   {
@@ -193,8 +225,9 @@ export async function sendLetterAsCallerOnce(
   // host's journal op is sent as written.
   if (!opts.opKey) {
     const { sendAway } = await import('./away-thread.js');
-    const sent = await sendAway(input, sender, async (away) => (await sendLetterOnce({ ...input, sender }, { ...opts, ...away })).letter);
-    if (sent) return { letter: sent.letter, duplicate: false, ...(sent.addedToThread ? { addedToThread: true } : {}) };
+    const sent = await sendAway(input, sender, async (away) => (await sendLetterOnce({ ...input, sender }, { ...opts, ...away })).letter,
+      Date.now(), guarded ? { refuseDuplicate: refuseIfDuplicate } : {});
+    if (sent) return hinted({ letter: sent.letter, duplicate: false, ...(sent.addedToThread ? { addedToThread: true } : {}) });
   }
   const { guardTriageLetter } = await import('./triage-quota.js');
   const charge = await guardTriageLetter(input, sender);
@@ -207,7 +240,7 @@ export async function sendLetterAsCallerOnce(
   }
   if (out.duplicate) charge?.release();
   else charge?.commit(out.letter.id);
-  return out;
+  return hinted(out);
 }
 
 /** Agent-authored spans in the wrapper (subject, button label): one short line. */

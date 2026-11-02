@@ -102,7 +102,7 @@ export function planHints(input: {
   afterCompaction?: boolean;
   /** Who wrote this message; absent = not a person (a host's peer note). */
   sentBy?: 'person' | 'agent';
-  /** The message's own words: a person's in another language get the ask in his own (reply-language). */
+  /** The message's own words: in another language they get the ask in his own (reply-language); absent on a host's tail. */
   message?: string;
   /** Main's or a lead's chat: the user's presence there (org/user-away.ts). */
   away?: { away: boolean; lastSeenAt: number | null } | null;
@@ -126,8 +126,8 @@ export function planHints(input: {
     const away = input.inChat && input.away ? { away: false, lastSeenAt: Date.now() } : input.away;
     const content = {
       config: input.config, record: input.record ?? null, ...(request ? { request } : {}), ...(told ? { toldHash: told.hash } : {}),
-      // Only a person's own words decide the line in his language, never the cards Walnut adds to them.
-      ...(input.message && input.sentBy === 'person' ? { message: input.message.split(REFERENCE_CARDS_OPEN)[0] } : {}),
+      // The message's own words decide the line in his language, never the cards Walnut adds to them.
+      ...(input.message !== undefined ? { message: input.message.split(REFERENCE_CARDS_OPEN)[0] } : {}),
       ...(away ? { away } : {}), ...(input.brief ? { brief: input.brief } : {}),
       ...(input.thread ? { thread: input.thread } : {}),
       ...(input.threadsTidy ? { threadsTidy: input.threadsTidy } : {}),
@@ -141,7 +141,8 @@ export function planHints(input: {
         compactUuid: input.record?.lastCompactUuid, driftAt: state.drift?.[hint.kind], requested: !!request,
       });
     // A role whose chat the user reads gets it on every turn, the user's own included (hint-registry.ts everyTurnRoles).
-    if (!input.afterCompaction && input.target.role && hint.everyTurnRoles.includes(input.target.role)
+    // A session with no task reads as 'other'.
+    if (!input.afterCompaction && hint.everyTurnRoles.includes(input.target.role ?? 'other')
       && !reasons.includes('every_turn')) reasons = [...reasons, 'every_turn'];
     // A person's own message carries it in any session (hint-registry.ts everyPersonTurn).
     if (!input.afterCompaction && input.sentBy === 'person' && hint.everyPersonTurn

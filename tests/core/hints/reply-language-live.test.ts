@@ -2,9 +2,11 @@
  * The reply language corrected inside the turn (src/core/hints/hint-drift-live.ts), replayed on
  * the shape of a real turn (2026-11-01, a worker's chat, the turn after the user typed "what the
  * hack?"): a Chinese first line, then English progress lines between Bash calls to the end. The
- * turn-end check named it only on his next message. Now the first English line gets one
- * correction, sent mid-turn right at the tool call that follows it, once per turn, and only in a
- * turn a person started on a native Claude Code session.
+ * turn-end check named it only on his next message. Now the first English line gets a
+ * correction, sent mid-turn right at the tool call that follows it, quoting the line with its
+ * rewrite in his language; again after every two more lines off, at most three times a turn, in
+ * any turn of a native Claude Code session whoever started it (2026-11-02: a worker's turn a
+ * notice started was English throughout and never corrected).
  *
  * Would fail if reverted: without the live module no correction goes out in the turn.
  */
@@ -31,7 +33,7 @@ vi.mock('../../../src/core/sessions/session-send-core.js', () => ({
 
 import { bus, EventNames } from '../../../src/core/event-bus.js';
 import { REPLY_LANGUAGE_LINES } from '../../../src/core/hints/reply-language-lines.js';
-import { LIVE_CORRECTION_TEXT, LIVE_LATE_LINE, _settledForTest, startLiveDrift, stopLiveDrift, takeLiveCorrection } from '../../../src/core/hints/hint-drift-live.js';
+import { LIVE_LATE_LINE, _setRewriteForTest, _settledForTest, liveCorrectionText, quoteLine, startLiveDrift, stopLiveDrift, takeLiveCorrection } from '../../../src/core/hints/hint-drift-live.js';
 import { hintDriftHook } from '../../../src/core/hints/hint-drift.js';
 
 // The real turn's lines, in order; '' = a message that was only a tool call.
@@ -67,29 +69,66 @@ const session = (sid: string, o: Partial<SessionRecord> = {}) => records.set(sid
   hintState: { sends: 4, told: {}, lastSendBy: 'person' }, ...o,
 } as unknown as SessionRecord);
 
-beforeEach(() => { records.clear(); delivered.length = 0; startLiveDrift(); });
+const REWRITE = '负载刚从约 90 降到 26，所以我在同样条件下把旧版和新版轮流重测一遍：';
+let rewrites = 0;
+beforeEach(() => {
+  records.clear(); delivered.length = 0; rewrites = 0; startLiveDrift();
+  _setRewriteForTest(async () => { rewrites++; return REWRITE; });
+});
 afterEach(() => stopLiveDrift());
 
 describe('a person\'s turn with an English progress line', () => {
-  it('gets one correction at the tool call right after the first English line; a second only when two more are off; never a third', async () => {
+  it('gets a correction at the tool call right after the first English line, quoting it with a rewrite; the next after two more off; never a fourth', async () => {
     session('w1');
     await replay('w1', TURN.slice(0, 3), false);
     expect(delivered).toHaveLength(1);
     expect(delivered[0]).toMatchObject({ sid: 'w1', source: 'walnut-notify' });
-    // Written in his language (reply-language-lines.ts), the late-turn line in English.
-    expect(delivered[0].text).toContain(REPLY_LANGUAGE_LINES.zh.live);
+    // Written in his language (reply-language-lines.ts), quoting the line and its rewrite; the late-turn line in English.
+    expect(delivered[0].text).toContain(REPLY_LANGUAGE_LINES.zh.live(quoteLine(TURN[2]), REWRITE));
+    expect(delivered[0].text).toContain(`「${quoteLine(TURN[2])}」`);
+    expect(delivered[0].text).toContain(`「${REWRITE}」`);
     expect(delivered[0].text).toContain(LIVE_LATE_LINE);
-    expect(delivered[0].text).not.toContain(LIVE_CORRECTION_TEXT);
+    expect(delivered[0].text).not.toContain(liveCorrectionText(quoteLine(TURN[2])));
     expect(delivered[0].text).toContain(RULE);
     expect(delivered[0].text).toMatch(/<walnut-message kind="notification" from="Walnut" outcome="reply-language"/);
     // One more English line: still one correction.
     await replay('w1', TURN.slice(3, 5), false, null);
     expect(delivered).toHaveLength(1);
-    // A second line still off after it (2026-11-02: one correction did not hold): the second, the last.
+    // A second line still off after it (2026-11-02: one correction did not hold): the second, quoting that line.
     await replay('w1', [TURN[5]], false, null);
     expect(delivered).toHaveLength(2);
-    await replay('w1', [TURN[6], TURN[5], TURN[6]], true, null);
+    expect(delivered[1].text).toContain(`「${quoteLine(TURN[5])}」`);
+    await replay('w1', [TURN[6]], false, null);
     expect(delivered).toHaveLength(2);
+    await replay('w1', [TURN[5]], false, null);
+    expect(delivered).toHaveLength(3);
+    await replay('w1', [TURN[6], TURN[5], TURN[6], TURN[5]], true, null);
+    expect(delivered).toHaveLength(3);
+  });
+
+  it('a turn that ends while the rewrite is made gets no correction (it would start a turn of its own)', async () => {
+    let release!: () => void;
+    _setRewriteForTest(() => new Promise((r) => { release = () => r(REWRITE); }));
+    session('w12');
+    const run = replay('w12', TURN.slice(0, 3), false);
+    await new Promise((r) => setTimeout(r, 20));
+    emit(EventNames.SESSION_RESULT, 'w12', { result: '', isError: false });
+    release();
+    await run;
+    await settle();
+    expect(delivered).toEqual([]);
+  });
+
+    it('without a rewrite in time it quotes the line alone', async () => {
+    _setRewriteForTest(async () => null);
+    session('w11');
+    await replay('w11', TURN.slice(0, 3), false);
+    expect(delivered[0].text).toContain(REPLY_LANGUAGE_LINES.zh.live(quoteLine(TURN[2])));
+    expect(delivered[0].text).not.toContain('用中文应该这样写');
+  });
+
+  it('a rule in a language Walnut has no words for gets the English correction, quoting too', () => {
+    expect(liveCorrectionText('Ich teste jetzt.', 'Je teste maintenant.')).toContain('"Ich teste jetzt."');
   });
 
   it('a line back in his language after the correction needs no second one', async () => {
@@ -105,14 +144,14 @@ describe('a person\'s turn with an English progress line', () => {
     expect(delivered).toHaveLength(1);
   });
 
-  it('a correction that cannot be delivered is tried at most twice in a turn', async () => {
+  it('a correction that cannot be delivered is tried at most three times in a turn', async () => {
     session('w10');
     let tries = 0;
     const real = records.get('w10')!;
     records.set('w10', new Proxy(real, { get: (o, k) => { if (k === 'process_status') { tries++; throw new Error('read failed'); } return (o as never)[k]; } }) as never);
-    await replay('w10', [TURN[0], ...TURN.slice(2), ...TURN.slice(2)]);
+    await replay('w10', [TURN[0], ...TURN.slice(2), ...TURN.slice(2), ...TURN.slice(2)]);
     expect(delivered).toEqual([]);
-    expect(tries).toBe(2);
+    expect(tries).toBe(3);
   });
 
   it('a Chinese turn gets nothing', async () => {
@@ -121,25 +160,24 @@ describe('a person\'s turn with an English progress line', () => {
     expect(delivered).toEqual([]);
   });
 
-  it('a turn a notice started, the CLI\'s own turn, an ACP engine, or a turn that is over gets none (the turn end decides)', async () => {
-    for (const sid of ['a', 'd']) session(sid);
-    session('b', { engine: 'codex' } as never);
-    session('c', { process_status: 'idle' } as never);
-    await replay('a', TURN.slice(0, 3), true, 'walnut-notify');
-    // The CLI's own turn after a person's turn (a background command came back): no send since.
+  it('a turn a notice, another task or a trigger started, and the CLI\'s own turn, are corrected too', async () => {
+    // 2026-11-02: a worker's turn a Walnut notice started was English throughout, uncorrected.
+    for (const [sid, source] of [['a', 'walnut-notify'], ['e', 'peer'], ['f', 'routine-trigger']] as const) {
+      session(sid);
+      await replay(sid, TURN.slice(0, 3), true, source);
+    }
+    // The CLI's own turn (a background command came back): no send since.
+    session('d');
     await replay('d', [TURN[0]]);
     await replay('d', TURN.slice(2, 4), true, null);
-    for (const sid of ['b', 'c']) await replay(sid, TURN.slice(0, 3));
-    expect(delivered).toEqual([]);
+    expect(delivered.map((d) => d.sid)).toEqual(['a', 'e', 'f', 'd']);
   });
 
-  it('a notice that comes in during his turn does not make it someone else\'s', async () => {
-    session('m');
-    bus.emit(EventNames.SESSION_SEND as never, { sessionId: 'm', message: 'what the hack?' } as never, ['session-runner'], { source: 'mobile' });
-    emit(EventNames.SESSION_TEXT_DELTA, 'm', { delta: TURN[0], msgId: 'a' });
-    bus.emit(EventNames.SESSION_SEND as never, { sessionId: 'm', message: 'status note' } as never, ['session-runner'], { source: 'walnut-notify' });
-    await replay('m', TURN.slice(2, 4), true, null);
-    expect(delivered).toHaveLength(1);
+  it('an ACP engine, or a session not running, gets none (the turn end decides)', async () => {
+    session('b', { engine: 'codex' } as never);
+    session('c', { process_status: 'idle' } as never);
+    for (const sid of ['b', 'c']) await replay(sid, TURN.slice(0, 3));
+    expect(delivered).toEqual([]);
   });
 
   it('the next turn may be corrected again', async () => {

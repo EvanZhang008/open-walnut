@@ -40,6 +40,8 @@ import { WALNUT_HOME } from '../../constants.js'
 import { log } from '../../logging/index.js'
 import { readJsonFile, writeJsonFile } from '../../utils/fs.js'
 import { CLOUD_BOX_HOST_ALIAS } from './cloud-box-host.js'
+import { HOST_SIGN_IN, genericSignInStep } from '../human-inbox/walnut-letters/host-sign-in.js'
+import type { LetterLang } from '../human-inbox/walnut-letters/languages.js'
 
 /** Failure kinds (host-connect-hint.ts) that mean this machine's own login is not usable. */
 export const LOGIN_FAILURE_KINDS: ReadonlySet<string> = new Set(['cert_expired', 'agent_missing', 'proxy_login'])
@@ -47,8 +49,8 @@ export const LOGIN_FAILURE_KINDS: ReadonlySet<string> = new Set(['cert_expired',
 /** How long a sign-in failure stands before the letter goes out. */
 export const DEFAULT_GRACE_MS = 60_000
 
-/** The next step when config names none. */
-export const GENERIC_LOGIN_HINT = 'refresh your login credentials'
+/** The next step when config names none (English; each letter language has its own). */
+export const GENERIC_LOGIN_HINT = genericSignInStep('en')
 
 /** The fields of a host:status frame this module reads (removed = the host left Settings). */
 export interface AlertFrame {
@@ -93,41 +95,18 @@ interface Episode {
 
 interface EpisodeFile { version: 1; episodes: Episode[] }
 
-function namesOf(labels: string[]): string {
-  if (labels.length <= 1) return labels[0] ?? 'a remote host'
-  if (labels.length === 2) return `${labels[0]} and ${labels[1]}`
-  return `${labels[0]} and ${labels.length - 1} more hosts`
-}
-
-/** The hint as a clause: trimmed, no trailing period. */
-function hintClause(hint: string | undefined): string {
-  const h = (hint ?? '').trim().replace(/[.\s]+$/, '')
-  return h || GENERIC_LOGIN_HINT
-}
-
 /**
  * The letter for the hosts failing now. `retries`: Walnut re-dials these on its
- * own (a login failure); a key refusal waits for the next use or a Retry. Pure.
+ * own (a login failure); a key refusal waits for the next use or a Retry. Pure;
+ * the words live in the letter registry (human-inbox/walnut-letters/host-sign-in.ts).
  */
 export function signInLetter(
   hosts: Array<{ label: string; error?: string }>,
   hint?: string,
-  opts: { retries?: boolean } = {},
+  opts: { retries?: boolean; lang?: LetterLang } = {},
 ): { subject: string; markdown: string } {
-  const labels = hosts.map((h) => h.label)
-  const step = hintClause(hint)
-  const subject = `SSH sign-in to ${namesOf(labels)} failed: ${step}`
-  const bold = labels.map((l) => `**${l}**`)
-  const named = bold.length > 1 ? `${bold.slice(0, -1).join(', ')} and ${bold[bold.length - 1]}` : bold[0]
-  const lines = [
-    `Walnut cannot sign in to ${named} over SSH, so sessions and tests there are stuck. To fix it, ${step}.`,
-    opts.retries
-      ? 'Walnut keeps retrying and archives this letter by itself once the host connects again.'
-      : 'Then use Retry on the host (or start work there); this letter archives itself once the host connects.',
-  ]
-  const said = hosts.filter((h) => h.error).map((h) => `${h.label}: ${h.error!.replace(/\s+/g, ' ').slice(0, 300)}`)
-  if (said.length) lines.push(`What SSH said:\n\n~~~\n${said.join('\n').replace(/~~~/g, '~ ~ ~')}\n~~~`)
-  return { subject: subject.length > 200 ? `${subject.slice(0, 199)}…` : subject, markdown: lines.join('\n\n') }
+  const { subject, markdown } = HOST_SIGN_IN.render(opts.lang ?? 'en', { hosts, ...(hint !== undefined ? { hint } : {}), ...(opts.retries ? { retries: true } : {}) })
+  return { subject, markdown }
 }
 
 export interface HostAuthAlertDeps {
@@ -137,6 +116,8 @@ export interface HostAuthAlertDeps {
   archive: (ref: { letterId?: string; opKey: string }) => Promise<void>
   /** The user's own next step (config ssh_login_hint). */
   loginHint: () => Promise<string | undefined>
+  /** The language the letter is written in (the user's letter language); English when absent. */
+  language?: () => Promise<LetterLang>
   /** Enabled hosts in Settings right now (a host gone from it cannot keep an episode open). */
   knownHosts: () => Set<string>
   /** Connected right now (read once at start, for a login fixed while the server was down). */
@@ -242,7 +223,7 @@ export function createHostAuthAlert(deps: HostAuthAlertDeps): HostAuthAlert {
     const letter = signInLetter(
       hosts.map(([, f]) => ({ label: f.label, ...(f.error ? { error: f.error } : {}) })),
       await deps.loginHint().catch(() => undefined),
-      { retries: key === 'login' },
+      { retries: key === 'login', lang: await deps.language?.().catch(() => 'en' as const) ?? 'en' },
     )
     try {
       ep.letterId = await deps.send({ ...letter, opKey: ep.opKey })
@@ -355,6 +336,7 @@ export async function startHostAuthAlert(opts: { knownHosts: () => Set<string>; 
   const { bus, EventNames } = await import('../event-bus.js')
   const { findLetterByOp, sendLetterOnce, setArchived } = await import('../human-inbox/store.js')
   const { getConfig } = await import('../config-manager.js')
+  const { walnutLetterLanguage } = await import('../human-inbox/walnut-letters/languages.js')
   const { isDaemonConnected } = await import('../../providers/daemon-connection.js')
   const graceEnv = Number(process.env.WALNUT_HOST_SIGN_IN_LETTER_GRACE_MS)
   const alert = createHostAuthAlert({
@@ -369,6 +351,7 @@ export async function startHostAuthAlert(opts: { knownHosts: () => Set<string>; 
       const hint = (await getConfig()).ssh_login_hint
       return typeof hint === 'string' ? hint : undefined
     },
+    language: walnutLetterLanguage,
     knownHosts: opts.knownHosts,
     isConnected: (host) => isDaemonConnected(host),
     ...(process.env.WALNUT_HOST_SIGN_IN_LETTER_GRACE_MS && Number.isFinite(graceEnv) && graceEnv >= 0 ? { graceMs: graceEnv } : {}),

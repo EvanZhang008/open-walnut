@@ -108,18 +108,6 @@ export async function hostName(host: string): Promise<string> {
   return hostDisplayNameFor(host)
 }
 
-/** Markdown text that renders as written (a task title is the agent's words). */
-function mdText(s: string): string {
-  return s.replace(/[\\`*_[\]<>#|~]/g, (c) => `\\${c}`).replace(/\s+/g, ' ')
-}
-
-/** A fenced block no backtick run in the text can close early. */
-function fenced(text: string): string {
-  const longest = Math.max(0, ...[...text.matchAll(/`+/g)].map((m) => m[0].length))
-  const fence = '`'.repeat(Math.max(3, longest + 1))
-  return `${fence}\n${text}\n${fence}`
-}
-
 /** One ask at a time per task and host, so two first calls at once send one letter. */
 const asking = new Map<string, Promise<unknown>>()
 
@@ -183,29 +171,21 @@ async function grantOrAsk(caller: Caller, host: string, preview: string | null):
   if (ask?.state === 'pending') {
     throw new HostExecError(`Waiting for the user to allow this task to use ${name} (letter ${ask.letterId}). You will get a notice when they allow it; do other work meanwhile.`, 403, 'exec_grant_required', { letterId: ask.letterId })
   }
-  const from = caller.host === LOCAL ? 'this Mac' : await hostName(caller.host)
-  const title = caller.taskTitle.replace(/\s+/g, ' ').slice(0, 120)
+  const from = caller.host === LOCAL ? null : await hostName(caller.host)
+  const { HOST_EXEC_ASK } = await import('../human-inbox/walnut-letters/host-exec-ask.js')
+  const { walnutLetterLanguage } = await import('../human-inbox/walnut-letters/languages.js')
+  const { letterOpKey } = await import('../human-inbox/walnut-letters/kind.js')
+  const rendered = HOST_EXEC_ASK.render(await walnutLetterLanguage(), { title: caller.taskTitle, from, target: host === LOCAL ? null : name, preview })
   const { sendLetter } = await import('../human-inbox/store.js')
   const letter = await sendLetter({
-    subject: `Let "${title}" use ${name}?`,
-    type: 'action_required',
-    markdown: [
-      `The task **${mdText(title)}**, running on ${mdText(from)}, wants to use **${mdText(name)}**: run commands there, call its MCP servers and reach its web services.`,
-      '',
-      'Its first request:',
-      '',
-      fenced(preview.slice(0, 1500)),
-      '',
-      `**Allow** lets this task run commands, call MCP servers and reach web services on ${mdText(name)} as you, in any folder, until you revoke it in Settings › Remote Hosts. `
-        + 'A command there can read anything your account can read on that machine. Every request is logged and counted on the grant.',
-    ].join('\n'),
-    actions: [
-      { id: 'allow', label: 'Allow', description: `Grant this task permission to use ${name} until you revoke it` },
-      { id: 'deny', label: 'Deny', description: 'The task is told no and asks nothing more' },
-    ],
+    subject: rendered.subject,
+    type: HOST_EXEC_ASK.type,
+    markdown: rendered.markdown,
+    actions: rendered.actions,
     taskRefs: [caller.taskId],
     sender: { sessionId: 'external', host: 'local' },
-  })
+  // The mark names the task and the host, so the sweep (walnut-letters/sweep.ts) knows them without the ask record.
+  }, { opKey: letterOpKey(HOST_EXEC_ASK.id, host, caller.taskId, Date.now().toString(36)) })
   await grants.recordAsk({ taskId: caller.taskId, host, letterId: letter.id, askedAt: Date.now(), sid: caller.sid, fromHost: caller.host, state: 'pending' })
   log.session.info('host exec: asked the user for a grant', { taskId: caller.taskId, host, letterId: letter.id })
   throw new HostExecError(`This task may not use ${name} yet: a letter asks the user (${letter.id}). You will get a notice when they allow it; do other work meanwhile.`, 403, 'exec_grant_required', { letterId: letter.id })
