@@ -60,7 +60,7 @@ async function seedOptionlessLetter(): Promise<string> {
   store.letters.push({
     id,
     subject: SUBJECT,
-    type: 'action_required',
+    type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes',
     bodyFormat: 'markdown',
     textPreview: 'A decision letter whose options never made it to disk.',
     sender: { sessionId: 'external', host: 'local' },

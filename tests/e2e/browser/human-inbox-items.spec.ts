@@ -69,7 +69,7 @@ test('task search and preview are read-only, have no preselection, and use the e
 });
 
 test('old AI decisions keep their original payload and the session entry uses the same reader', async ({ page, request }) => {
-  const sent = await sendItems(request, [mailItem('legacy-item')], { type: 'action_required',
+  const sent = await sendItems(request, [mailItem('legacy-item')], { type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes',
     actions: [{ id: 'legacy-create', label: 'Create task' }, { id: 'legacy-read', label: 'Mark read' }] }, 'pw-mode-test-session');
   await home(page); const view = await openLetter(page, sent.subject);
   await expect(view.locator('.hib-actions-head')).toHaveText('Ask AI decision');

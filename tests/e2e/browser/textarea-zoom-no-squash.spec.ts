@@ -96,7 +96,7 @@ async function sendLetter(request: APIRequestContext): Promise<string> {
   const subject = `Zoom squash ${Date.now().toString(36)}-${test.info().project.name}`
   const res = await request.post('/api/v1/human-inbox', {
     data: {
-      subject, type: 'action_required',
+      subject, type: 'action_required', user_kind: 'user_own', user_kind_why: 'The spec plays a decision only the user makes',
       markdown: 'Which cache should we keep? Option A halves cold reads. Option B keeps memory flat.',
       actions: [{ id: 'a', label: 'Keep A' }, { id: 'b', label: 'Keep B' }],
     },

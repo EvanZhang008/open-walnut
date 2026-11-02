@@ -1027,10 +1027,20 @@ describe('a spec that sends a decision letter as a session', () => {
   const decisions = (text: string): number =>
     text.split('\n').filter((line) => /type: 'action_required'/.test(line) && !/toMatchObject|expect\(/.test(line)).length
   const named = (text: string): number => (text.match(/\buser_kind: '/g) ?? []).length
-  const offenders = (files: Array<{ file: string; text: string }>): string[] =>
-    files.filter(({ file, text }) => file.endsWith('.spec.ts') && SENDS_AS_SESSION.test(text) && decisions(text) > named(text)).map(({ file }) => file)
+  // A helper of this folder that posts letters with a caller session (inbox-items-helpers.ts
+  // sendItems) makes every spec importing it a session sender too.
+  const senderHelpers = (files: Array<{ file: string; text: string }>): string[] => files
+    .filter(({ file, text }) => !file.endsWith('.spec.ts') && SENDS_AS_SESSION.test(text) && text.includes('/api/v1/human-inbox'))
+    .map(({ file }) => file.replace(/\.ts$/, ''))
+  const offenders = (files: Array<{ file: string; text: string }>): string[] => {
+    const helpers = senderHelpers(files)
+    const sendsAsSession = (text: string) => SENDS_AS_SESSION.test(text)
+      || helpers.some((helper) => text.includes(`from './${helper}'`))
+    return files.filter(({ file, text }) => file.endsWith('.spec.ts') && sendsAsSession(text) && decisions(text) > named(text)).map(({ file }) => file)
+  }
 
   it('every decision letter names its user kind', () => {
+    expect(senderHelpers(sources)).toContain('inbox-items-helpers')
     expect(offenders(sources)).toEqual([])
   })
 
@@ -1039,5 +1049,8 @@ describe('a spec that sends a decision letter as a session', () => {
     expect(offenders([{ file: 'x.spec.ts', text: sent }])).toEqual(['x.spec.ts'])
     expect(offenders([{ file: 'x.spec.ts', text: sent.replace("markdown:", "user_kind: 'user_own', user_kind_why: 'his call', markdown:") }])).toEqual([])
     expect(offenders([{ file: 'x.spec.ts', text: "  expect(letter).toMatchObject({ type: 'action_required' })\n  headers: { 'x-walnut-caller-sid': sid }" }])).toEqual([])
+    const helper = { file: 'letters-helpers.ts', text: "  await request.post('/api/v1/human-inbox', { data, headers: { 'x-walnut-caller-sid': sid } })" }
+    const viaHelper = "import { send } from './letters-helpers'\n  await send(request, { type: 'action_required', actions })"
+    expect(offenders([helper, { file: 'y.spec.ts', text: viaHelper }])).toEqual(['y.spec.ts'])
   })
 })
