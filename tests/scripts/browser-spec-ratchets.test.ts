@@ -1207,6 +1207,8 @@ describe('a test that loads a page again after it opened full screen or a split 
     'board-kanban-round3.spec.ts': ['N5: a reload lays the lanes out once', 'C12: completed after the user placed it'],
     'file-stale-writeback.spec.ts': ['a reload with unsaved text'],
     'session-thread-review-sidebar.spec.ts': ['a card shows its whole thread with its own scroll'],
+    // Each tab keeps its own view (dc8132c6b): the second tab's load is the check.
+    'view-state-tabs.spec.ts': ["another tab's session panel view never moves this tab's"],
   }
 
   type Step = 'open' | 'toggle' | 'leave' | 'load'
@@ -1359,5 +1361,34 @@ describe('a test that loads a page again after it opened full screen or a split 
     // A draft's folder chip opens no split view; a pane seen closed is not open.
     expect(offenders([{ file: 'x.spec.ts', text: "test('a draft', async ({ page }) => {\n  await panel.locator('.draft-composer-bar .session-action-chip').first().click()\n  await page.reload()\n})" }])).toEqual([])
     expect(offenders([{ file: 'x.spec.ts', text: "test('closed', async ({ page }) => {\n  await expect(page.getByTestId('task-board-pane')).toHaveCount(0)\n  await page.reload()\n})" }])).toEqual([])
+  })
+})
+
+describe('a selection a spec makes by script', () => {
+  // addRange() moves no focus. A panel that just opened may have put focus in its composer, and
+  // the selected-word echo stays off while the user is in a field (web/src/utils/selection-echo.ts),
+  // so a test that selected by script and read the echo failed whenever the composer had focus
+  // first (page-find, CI 2026-11-02: -41 painted, four runs). A user's selection starts with a
+  // press into the text: the test presses (a click) or blurs the field before it selects.
+  const MOVES_FOCUS = /\.click\(|clickVisibleAnswer\(|\.blur\(\)|mouse\.down\(/
+  const offendersOf = (file: string, text: string): string[] => text.split(/\n(?=\s*test\()/)
+    .filter((body) => body.includes('addRange(') && !MOVES_FOCUS.test(body.slice(0, body.indexOf('addRange('))))
+    .map((body) => `${file}: ${body.trim().split('\n')[0]!.slice(0, 90)}`)
+
+  it('every test that selects by script moves focus into the page first', () => {
+    const selecting = sources.filter(({ text }) => text.includes('addRange('))
+    expect(selecting.map(({ file }) => file)).toContain('page-find-cases.ts')
+    expect(selecting.flatMap(({ file, text }) => offendersOf(file, text))).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const spec = [
+      "  test('selecting a word', async ({ page }) => {",
+      '    await openSession(page);',
+      '    await target.evaluate(() => { getSelection()!.addRange(r) });',
+      '  });',
+    ].join('\n')
+    expect(offendersOf('x.ts', spec)).toHaveLength(1)
+    expect(offendersOf('x.ts', spec.replace('await openSession(page);', 'await openSession(page);\n    await clickVisibleAnswer(page);'))).toEqual([])
   })
 })

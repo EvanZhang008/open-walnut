@@ -152,6 +152,11 @@ export function definePageFindCases(engine: string): void {
 
   test(`${engine}: selecting a word tints every identical copy, clearing it removes the tint`, async ({ page }) => {
     await openSession(page);
+    // A selection made by script leaves focus where it was, and the panel may have put it in the
+    // composer by now; the echo then rightly stays off (selection-echo.ts: the user is in a
+    // field). A user's drag presses into the chat first, so press there before selecting
+    // (CI, 2026-11-02: every copy unpainted, -41, on four runs).
+    await clickVisibleAnswer(page);
     const before = await scrollTop(page);
     const target = page.locator(historySelector).locator('.markdown-body p', { hasText: 'Answer 237.' }).first();
     await target.evaluate((p, w) => {
