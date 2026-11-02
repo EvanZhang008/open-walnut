@@ -121,7 +121,7 @@ test.describe('Selecting inside a reply that is still streaming', () => {
     await expect(panel.locator('.session-working-indicator')).toHaveCount(1)
     await wheel(page, panel, 600) // park exactly at the bottom, as follow-bottom does
 
-    await dragPhrase(page, '.session-streaming-panel', STREAM_PHRASE)
+    await dragPhrase(page, '[data-stream-reply]', STREAM_PHRASE)
     expect(await selectedText(page)).toBe(STREAM_PHRASE)
     // Non-vacuity: anchored in a TEXT node, the thing an innerHTML rewrite kills.
     expect(await selectionAnchorNodeType(page)).toBe(3)
@@ -225,7 +225,7 @@ test.describe('Selecting inside a reply that is still streaming', () => {
     await expect(history).toContainText(STREAM_PHRASE, { timeout: 40_000 })
     await wheel(page, panel, 600)
 
-    await dragPhrase(page, '.session-streaming-panel', STREAM_PHRASE)
+    await dragPhrase(page, '[data-stream-reply]', STREAM_PHRASE)
     const pill = page.locator('[data-testid="quote-pin-pill"]')
     await expect(pill).toBeVisible()
 
@@ -252,7 +252,7 @@ test.describe('Selecting inside a reply that is still streaming', () => {
     // press's own side effects move the timeline the most.
     await wheel(page, panel, 600)
 
-    await dragPhrase(page, '.session-streaming-panel', STREAM_PHRASE)
+    await dragPhrase(page, '[data-stream-reply]', STREAM_PHRASE)
     const pill = page.locator('[data-testid="quote-pin-pill"]')
     await expect(pill).toBeVisible()
     await expect(panel.locator('.session-working-indicator')).toHaveCount(1)

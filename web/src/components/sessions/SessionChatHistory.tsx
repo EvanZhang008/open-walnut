@@ -21,7 +21,7 @@ import { isPhoneLayout } from '@/hooks/usePhoneLayout';
 import { JumpPillLabel, PromptWaitingPill } from './PhoneTimelinePills';
 import { SessionMessage, SessionThinking, StableMarkdownBody, ToolRunShell, StreamRunMembers, streamRunSummary, streamRunHasCallingTool, runRowKey, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, mergeThinkingOnly, trailingThinkingOnlyStart, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember, type StreamRunMember } from './SessionMessage';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
-import { StreamingBlockView, StreamingReplyMeta, WorkingIndicator, countStreamChars, streamReplyText } from './StreamingBlockView';
+import { StreamingBlockView, StreamingReplyMeta, WorkingIndicator, countStreamChars, streamReplyText, useStreamReplyRows } from './StreamingBlockView';
 import { SessionWorkingIndicator } from './SessionWorkingIndicator';
 import { useForegroundActive } from '@/stores/background-agents-store';
 import { StreamingLane, streamAgentSettled, knownAgentFromStream } from './LaneTimeline';
@@ -385,10 +385,13 @@ function EditableQueuedMessage({ queueId, message, onSave, onCancel }: {
 
 type TimelineItem =
   | { kind: 'block'; block: StreamingBlock; index: number }
-  | { kind: 'user'; msg: OptimisticMessage }
+  | { kind: 'user'; msg: OptimisticMessage; /** The block index it renders before. */ at: number }
   | { kind: 'indicator'; type: 'resuming' | 'working' };
 
-type HistoryPart = { kind: 'msg'; m: SessionHistoryMessage; globalIndex: number; suppressTools?: boolean }
+type HistoryPart = { kind: 'msg'; m: SessionHistoryMessage; globalIndex: number; suppressTools?: boolean;
+      /** A reply still arriving, drawn as the row its persisted twin will be
+       *  (streamReplyMessage): `showCopy` stands in for lastAssistantTextIndex. */
+      stream?: { showCopy: boolean } }
   | { kind: 'run'; members: { m: SessionHistoryMessage; globalIndex: number }[];
       /** Pre-mapped member messages — a STABLE array ref so the memoized
        *  MergedHistoryToolRun can skip re-render on streaming frames (mapping
@@ -450,7 +453,7 @@ function buildTimeline(
     const usersHere = usersByIndex.get(i);
     if (usersHere) {
       for (const msg of usersHere) {
-        items.push({ kind: 'user', msg });
+        items.push({ kind: 'user', msg, at: i });
       }
     }
     if (hidden?.has(i)) continue; // absorbed by history — its twin renders above
@@ -463,7 +466,7 @@ function buildTimeline(
   const trailingIndices = [...usersByIndex.keys()].filter(k => k >= blocks.length).sort((a, b) => a - b);
   for (const idx of trailingIndices) {
     for (const msg of usersByIndex.get(idx)!) {
-      items.push({ kind: 'user', msg });
+      items.push({ kind: 'user', msg, at: idx });
     }
   }
 
@@ -704,6 +707,29 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Only while this view sees the turn live: the server keeps a finished turn's
   // blocks for a while, and a reload adopts them, but nobody watched those.
   if (isStreaming) for (const b of blocks) if (b.type === 'text' && b.msgId && !b.parentToolUseId) watchedReplies.current.ids.add(b.msgId);
+  // A streaming reply as the history message its persisted twin will be.
+  const streamReplyMessage = useStreamReplyRows();
+  // A history read in the middle of a reply can bring its reasoning before its
+  // words: the transcript holds one row with that msgId and no text yet. That
+  // row is the element the finished reply will be, so it draws the words still
+  // streaming (the row renderer reads `replyTextOverlay`) and the stream block
+  // draws nothing; otherwise the words were built once as a stream bubble and
+  // again inside the row at the turn end (a script block loaded twice).
+  const textlessReplyIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const m of messages) if (m.role === 'assistant' && m.msgId && !(m.text ?? '').trim() && !m.tools?.length) ids.add(m.msgId);
+    return ids;
+  }, [messages]);
+  const replyTextOverlay = useMemo(() => {
+    const words = new Map<string, string>();
+    if (textlessReplyIds.size === 0) return words;
+    for (const b of blocks) {
+      if (b.type !== 'text' || !b.msgId || b.parentToolUseId || !textlessReplyIds.has(b.msgId)) continue;
+      const text = streamReplyText(b.content);
+      if (text.trim()) words.set(b.msgId, text);
+    }
+    return words;
+  }, [textlessReplyIds, blocks]);
   const foregroundActive = useForegroundActive(sessionId);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -4088,6 +4114,8 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   // Answers whose reasoning the turn's fold holds (pushTurnFold): they show the words alone.
   const thinkingFolded = new Set<number>();
   const ridersFolded = new Set<number>();
+  // The textless rows that drew their streaming words in this render.
+  const overlaidReplies = new Set<string>();
   const renderHistoryPart = (part: HistoryPart) => {
     if (part.kind === 'run') {
       const first = part.members[0];
@@ -4129,14 +4157,18 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         </div>
       );
     }
-    const { m, globalIndex } = part;
+    const { globalIndex, stream } = part;
+    const overlay = !stream && part.m.msgId ? replyTextOverlay.get(part.m.msgId) : undefined;
+    if (overlay !== undefined) overlaidReplies.add(part.m.msgId!);
+    const m = overlay !== undefined ? { ...part.m, text: overlay } : part.m;
     // Question rows wear their decoration through the wrapper (the gutter bar in
     // Conversation Mode); top-level rows stay exactly as they were.
     const rowId = m.msgId ?? m.walnutMessageId;
     return (
       <div
         key={m.msgId ?? m.walnutMessageId ?? `${m.role}:${m.timestamp}:${globalIndex}`}
-        data-msg-index={globalIndex}
+        data-msg-index={stream ? undefined : globalIndex}
+        {...(stream ? { 'data-stream-reply': '' } : {})}
         data-message-id={m.msgId ?? m.walnutMessageId}
         data-row-keys={rowKeysAttr((m.tools ?? []).map((t) => t.toolUseId))}
         // Read by the quote-pin selection pill, which only has the DOM row it
@@ -4165,7 +4197,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             {noActionSet.has(globalIndex) ? <NoActionMark /> : null}
           </>
         ) : (
-          <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} {...(thinkingFolded.has(globalIndex) ? { answerOnly: true } : {})} {...(ridersFolded.has(globalIndex) ? { ridersFolded: true } : {})} showCopyActions={globalIndex === lastAssistantTextIndex} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+          <SessionMessage message={m} assistantLabel={assistantLabel} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} suppressTools={part.suppressTools} {...(thinkingFolded.has(globalIndex) ? { answerOnly: true } : {})} {...(ridersFolded.has(globalIndex) ? { ridersFolded: true } : {})} showCopyActions={stream ? stream.showCopy : globalIndex === lastAssistantTextIndex} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
         )}
       </div>
     );
@@ -4959,6 +4991,333 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
     );
   };
   if (liveTailRow) pageRows.push(liveTailRow());
+  // Merged into the history run above it (the run continuing across the turn).
+  const boundaryEl = boundaryRunVisible && mergeBoundary && boundaryHistoryRun ? (
+    <div
+      key={`boundary-run-${boundaryHistoryRun.members[0].m.msgId ?? boundaryHistoryRun.members[0].globalIndex}`}
+      data-msg-index={boundaryHistoryRun.members[0].globalIndex}
+      {...threadWrapperProps(
+        boundaryHistoryRun.members[0].m.msgId ?? boundaryHistoryRun.members[0].m.walnutMessageId,
+        'session-msg-bare',
+      )}
+    >
+      {!boundaryHistoryRun.seeded && forkBoundaryIndex != null && boundaryHistoryRun.members[0].globalIndex === forkBoundaryIndex && (
+        <div className="session-fork-divider">
+          <span className="session-fork-divider-label">Forked session starts here</span>
+        </div>
+      )}
+      {!boundaryHistoryRun.seeded && gapDivider(boundaryHistoryRun.members[0].globalIndex)}
+      <MergedHistoryToolRun
+        messages={boundaryHistoryRun.memberMsgs}
+        trailingBlocks={runMembersOf(leadingStreamRunIndices)}
+        trailingLive={isThinkingTail(leadingStreamRunIndices[leadingStreamRunIndices.length - 1])
+          || streamRunHasCallingTool(runMembersOf(leadingStreamRunIndices))}
+        assistantLabel={assistantLabel}
+        sessionId={sessionId}
+        sessionCwd={sessionCwd}
+        sessionHost={sessionHost}
+        onTaskClick={onTaskClick}
+        onSessionClick={onSessionClick}
+        onFileOpen={onFileOpen}
+      />
+    </div>
+  ) : null;
+  // Ids the history rows already draw (their keys), and the replies drawn as
+  // rows in this render: a reply keyed by its msgId must be the only element
+  // with that key in bodyRows. One whose twin is already there (the live tail
+  // is never absorbed) stays a stream block.
+  const historyMsgIds = useMemo(() => new Set(messages.flatMap((m) => (m.msgId ? [m.msgId] : []))), [messages]);
+  const streamReplyIds = new Set<string>();
+  // Timeline positions drawn as their own row in bodyRows (replies, the
+  // person's messages, the working indicator); the rest goes in panels.
+  const streamTopLevel = new Set<number>();
+  /** One live-turn item (interleaved blocks + ALL optimistic messages by
+   *  blockIndex, in their visual positions until persisted history dedupes them). */
+  const renderStreamItem = (item: TimelineItem, i: number): React.ReactNode => {
+    // Stack page: a queued bubble shows on ITS question's page; the live
+    // blocks show on the page of the question they answer (the turn's, or
+    // the newest `[Qn]` before them when one turn answered two), and the
+    // working indicator on the page the turn is answering now.
+    if (stackMode) {
+      if (item.kind === 'user') {
+        if (optimisticThreadKey(item.msg) !== currentKey) return null;
+      } else if (item.kind === 'block') {
+        if (pageKeyOfBlock(item.index) !== currentKey) return null;
+      } else if (!streamVisible) {
+        return null;
+      }
+    }
+    // Conversation Mode: a folded question's bubbles and blocks not
+    // persisted yet fold into its line too (utils/thread-fold.ts).
+    if (convMode && (item.kind === 'user' || item.kind === 'block')) {
+      const key = item.kind === 'user' ? optimisticThreadKey(item.msg) : pageKeyOfBlock(item.index);
+      const group = foldGroupOf(threadTree, key);
+      if (group !== ROOT_THREAD_KEY && groupFolded(group)) {
+        if (tailFoldGroup === group) return null;
+        tailFoldGroup = group;
+        return foldLine(group, item.kind === 'user' ? item.msg.userUuid : undefined, `tail-${i}`);
+      }
+      if (!isTransparentStreamItem(item)) tailFoldGroup = null;
+    }
+    if (boundaryStreamIndices.has(i) || isTransparentStreamItem(item)) return null;
+    if (mixedMember.has(i)) return null;
+    const stepGroup = mixedStart.get(i);
+    if (stepGroup) return renderStepGroup(stepGroup);
+    if (systemRunMember.has(i)) return null;
+    const systemRunIdx = systemRunStart.get(i);
+    if (systemRunIdx && item.kind === 'block') {
+      const members = systemRunIdx.flatMap((index): SystemGroupMember[] => {
+        const member = timeline[index];
+        if (member.kind !== 'block' || member.block.type !== 'system') return [];
+        return [{
+          variant: member.block.variant,
+          message: member.block.message,
+          detail: member.block.detail,
+          key: `stream-system-${member.index}`,
+        }];
+      });
+      return (
+        <div key={`system-run-${item.index}`} className="session-msg-bare">
+          <SystemGroupRun members={members} />
+        </div>
+      );
+    }
+    if (thinkingRunMember.has(i)) return null;
+    const thinkingIdx = thinkingRunStart.get(i);
+    if (thinkingIdx && item.kind === 'block') {
+      const content = thinkingIdx
+        .map(k => {
+          const t = timeline[k];
+          return t.kind === 'block' && t.block.type === 'thinking' ? t.block.content : '';
+        })
+        .filter(s => s.trim())
+        .join('\n\n');
+      // The same shell and key the stretch will have once a tool joins
+      // it, so a reader who opened the reasoning keeps it open through
+      // the fold.
+      const thinkingIds = thinkingIdx.map((k) => { const t = timeline[k]; return t.kind === 'block' && t.block.type === 'thinking' ? t.block.msgId : undefined; });
+      return (
+        <div key={`run-${item.index}`} className="session-msg-bare" data-row-keys={rowKeysAttr([], thinkingIds)}>
+          <ToolRunShell phrase="Thinking" failCount={0} running={isThinkingTail(thinkingIdx[thinkingIdx.length - 1])}>
+            <div className="chat-thinking-content">{content}</div>
+          </ToolRunShell>
+        </div>
+      );
+    }
+    if (runMember.has(i)) return null;
+    const runIdx = runStart.get(i);
+    if (runIdx && item.kind === 'block') {
+      // Tools and the reasoning between them, in arrival order — the
+      // body a persisted run shows, so absorption changes nothing.
+      const members = runMembersOf(runIdx);
+      const { phrase, failCount } = streamRunSummary(members);
+      const thinkingLive = isThinkingTail(runIdx[runIdx.length - 1]);
+      // A running call is inside the closed run, so the row breathes for it.
+      const running = thinkingLive || streamRunHasCallingTool(members);
+      const rowKeys = rowKeysAttr(members.map((m) => (m.type === 'tool_call' ? m.toolUseId : undefined)));
+      return (
+        <div key={`run-${item.index}`} className="session-msg-bare" data-row-keys={rowKeys}>
+          <ToolRunShell phrase={phrase} failCount={failCount} running={running} count={members.filter((m) => m.type === 'tool_call').length}>
+            <StreamRunMembers
+              members={members}
+              live={thinkingLive}
+              sessionId={sessionId}
+              sessionCwd={sessionCwd}
+              sessionHost={sessionHost}
+              onTaskClick={onTaskClick}
+              onSessionClick={onSessionClick}
+              onFileOpen={onFileOpen}
+            />
+          </ToolRunShell>
+        </div>
+      );
+    }
+    if (item.kind === 'indicator') {
+      if (item.type === 'resuming') {
+        return (
+          <div key="ind-resuming" className="session-streaming-indicator">
+            <span className="session-streaming-dot" />
+            Waiting for response...
+          </div>
+        );
+      }
+      return (
+        <SessionWorkingIndicator key="ind-working" sessionId={sessionId}>
+          <WorkingIndicator
+            label={assistantLabel}
+            tokens={Math.round(countStreamChars(blocks, shownHiddenBlocks) / 4)}
+          />
+        </SessionWorkingIndicator>
+      );
+    }
+
+    if (item.kind === 'block') {
+      // An Agent spawn burst renders as one chip at the first anchor.
+      if (agentChipMember.has(i)) return null;
+      const burst = agentChipStart.get(i);
+      if (burst) {
+        const agents: KnownAgent[] = [];
+        for (const k of burst) {
+          const t = timeline[k];
+          const g = t.kind === 'block' ? groupedByIndex.get(t.index) : undefined;
+          if (g && g.kind === 'task-group') agents.push(knownAgentFromStream(g.taskBlock));
+        }
+        // The wrapper its persisted row wears (an assistant row's body), so
+        // the chip sits in the same place before and after the handover.
+        return (
+          <div key={`tg-${item.index}`} className="session-msg session-msg-assistant">
+            <div className="session-msg-content">
+              <BackgroundTasksChip sessionId={sessionId} agents={agents} />
+            </div>
+          </div>
+        );
+      }
+
+      // Skip subagent-lane blocks (rendered inside their Agent box or not at all)
+      if (consumedBlockIndices.has(item.index)) return null;
+
+      // Regular block rendering.
+      // Only text/system blocks get the assistant row (the classes a
+      // persisted assistant row wears). Tool-call and thinking blocks
+      // render flush to the panel: the bubble padding on the first
+      // tool_call produced a visible indent-jump against the following
+      // tool_calls. EVERY text block wears the row classes, not only the
+      // first of a run: message styles hang off them (the dark code block
+      // is `.session-msg-assistant .markdown-body pre`, the font and list
+      // indents `.session-msg …`), and a reply after a tool run that
+      // lacked them streamed with a grey code block, then turned dark
+      // when its persisted row replaced it (2026-11-01).
+      const blockWantsBubble = item.block.type === 'text' || item.block.type === 'system';
+      // `live` marks the block still receiving tokens: streaming AND
+      // it is the last visible timeline item (crude but the only
+      // per-block signal available — deltas always append at the tail).
+      const isLiveTail = isStreaming && i === lastVisibleTimelineIdx;
+      // A text block that is only a reply tag or the turn-end marker
+      // draws nothing, as its persisted row does: no row, no gap.
+      if (item.block.type === 'text' && !streamReplyText(item.block.content).trim()) return null;
+      // A reply is drawn as the row its persisted twin will be: the same row
+      // renderer, the same key (its msgId), in the same list as the history
+      // rows (bodyRows). When the twin lands React keeps the element and only
+      // passes it the stored message, so nothing is built again: a script
+      // block's iframe keeps running (WebKit has no way to move an iframe
+      // without reloading it), an image stays decoded, a selection holds
+      // (2026-11-01, the user: "no flash, no change of format").
+      const replyId = item.block.type === 'text' && !item.block.parentToolUseId ? item.block.msgId : undefined;
+      if (replyId && overlaidReplies.has(replyId)) return null;
+      if (item.block.type === 'text' && replyId && !historyMsgIds.has(replyId) && !streamReplyIds.has(replyId)) {
+        streamReplyIds.add(replyId);
+        streamTopLevel.add(i);
+        return renderHistoryPart({
+          kind: 'msg',
+          m: streamReplyMessage(item.block, replyId),
+          globalIndex: -1,
+          stream: { showCopy: !isStreaming && i === lastStreamTextIdx },
+        });
+      }
+      if (blockWantsBubble) {
+        // A reply that is still arriving is selectable prose like any
+        // other, so the streaming bubble wears the SAME identity a
+        // persisted row wears (`data-message-id` + `data-msg-role`) —
+        // that pair is the whole contract the quote pill reads off the
+        // DOM, and without it selecting inside a live answer offered
+        // no Copy, no Pin and no Ask at all (`selectionBody` requires
+        // a `[data-message-id]` ancestor).
+        //
+        // The id is the one the model's own `message_start` carried,
+        // which is exactly the id the persisted twin will have: the
+        // absorption filter pairs stream block to history row id-first
+        // (`computeAbsorbedIndices`). So a pin or a thread anchor made
+        // mid-answer still resolves after the turn lands, against the
+        // twin. A block with no id yet (a system notice, a snapshot
+        // without one) still gets a body so Copy works — Pin and Ask
+        // gate themselves on the id inside the pill.
+        //
+        // No `data-msg-ts`: a block that is still arriving has no
+        // settled message timestamp, and the pill's `timestamp` is
+        // optional everywhere it lands, so a pin made mid-answer simply
+        // shows no time in the outline until the row is reloaded.
+        const streamMsgId = item.block.type === 'text' ? item.block.msgId : undefined;
+        return (
+          <div
+            key={`b-${item.index}`}
+            className="session-msg session-msg-assistant"
+            {...(streamMsgId ? { 'data-message-id': streamMsgId, 'data-msg-role': 'assistant' } : {})}
+          >
+            {/* The body class, as on a persisted row: quote pins and
+                passage selection find the message body by it. */}
+            <div className="session-msg-content">
+              <StreamingBlockView block={item.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={isLiveTail} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+              {item.block.type === 'text' && (
+                <StreamingReplyMeta block={item.block} alwaysVisible={!isStreaming && i === lastStreamTextIdx} />
+              )}
+            </div>
+          </div>
+        );
+      }
+      return (
+        <div key={`b-${item.index}`} className="session-msg-bare">
+          <StreamingBlockView block={item.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={isLiveTail} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
+        </div>
+      );
+    }
+
+    // kind === 'user'
+    const m = item.msg;
+    // An agent's card folds the moment it arrives (queuedFolds).
+    if (queuedFolds.members.has(i)) return null;
+    const run = queuedFolds.starts.get(i);
+    if (run) {
+      const rows = run.map((k) => (timeline[k] as Extract<TimelineItem, { kind: 'user' }>).msg);
+      return (
+        <div key={`qf-${m.queueId}`} className="session-msg-bare" data-testid="session-received-fold-row">
+          <ProcessFoldRow foldId={m.queueId} foldKey={`queued:${m.queueId}`} testId="received-fold"
+            phrase={foldStepsPhrase(rows.flatMap((r) => receivedSteps(r.text ?? '')))}>
+            {rows.map(renderQueuedRow)}
+          </ProcessFoldRow>
+        </div>
+      );
+    }
+    return renderQueuedRow(m);
+  };
+  const streamNodes = timeline.map(renderStreamItem);
+  // The history rows and the live turn are ONE keyed list, so a reply row
+  // stays the same element when its persisted twin takes its place. The live
+  // items between rows go in `.session-streaming-panel` stretches, each keyed
+  // by the block index its span starts at (after a reply, absorbed ones too,
+  // or a person's message), so a stretch keeps its key while the rows around
+  // it land. The person's messages and the working indicator are rows of
+  // their own: a reply starting before them must not move them into another
+  // stretch.
+  const streamRows: React.ReactNode[] = [];
+  let stretch: React.ReactNode[] = [];
+  let stretchFrom = 0;
+  let nextBlock = 0;
+  const flushStretch = (from: number) => {
+    if (stretch.some((n) => n != null && n !== false)) {
+      streamRows.push(<div key={`sp-${stretchFrom}`} className="session-streaming-panel">{stretch}</div>);
+    }
+    stretch = [];
+    stretchFrom = from;
+  };
+  const passBlocksBefore = (end: number) => {
+    for (; nextBlock < end; nextBlock++) {
+      const b = blocks[nextBlock];
+      if (b.type === 'text' && b.msgId && !b.parentToolUseId) flushStretch(nextBlock + 1);
+    }
+  };
+  timeline.forEach((item, i) => {
+    if (item.kind === 'block') passBlocksBefore(item.index);
+    else if (item.kind === 'user') passBlocksBefore(Math.min(item.at, blocks.length));
+    if (streamTopLevel.has(i) || item.kind === 'user' || item.kind === 'indicator') {
+      flushStretch(item.kind === 'user' ? item.at : stretchFrom);
+      streamRows.push(streamNodes[i]);
+    } else {
+      stretch.push(streamNodes[i]);
+    }
+    if (item.kind === 'block') passBlocksBefore(item.index + 1);
+  });
+  flushStretch(0);
+  const bodyRows = [...pageRows, boundaryEl, ...streamRows];
 
   return (
     <ReaderOpenedFolds.Provider value={readerOpened}>
@@ -5313,271 +5672,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
             <OptimisticImagePreviews images={m.images} />
           </div>
         ))}
-        {pageRows}
-        {boundaryRunVisible && mergeBoundary && boundaryHistoryRun && (
-          <div
-            key={`boundary-run-${boundaryHistoryRun.members[0].m.msgId ?? boundaryHistoryRun.members[0].globalIndex}`}
-            data-msg-index={boundaryHistoryRun.members[0].globalIndex}
-            {...threadWrapperProps(
-              boundaryHistoryRun.members[0].m.msgId ?? boundaryHistoryRun.members[0].m.walnutMessageId,
-              'session-msg-bare',
-            )}
-          >
-            {!boundaryHistoryRun.seeded && forkBoundaryIndex != null && boundaryHistoryRun.members[0].globalIndex === forkBoundaryIndex && (
-              <div className="session-fork-divider">
-                <span className="session-fork-divider-label">Forked session starts here</span>
-              </div>
-            )}
-            {!boundaryHistoryRun.seeded && gapDivider(boundaryHistoryRun.members[0].globalIndex)}
-            <MergedHistoryToolRun
-              messages={boundaryHistoryRun.memberMsgs}
-              trailingBlocks={runMembersOf(leadingStreamRunIndices)}
-              trailingLive={isThinkingTail(leadingStreamRunIndices[leadingStreamRunIndices.length - 1])
-                || streamRunHasCallingTool(runMembersOf(leadingStreamRunIndices))}
-              assistantLabel={assistantLabel}
-              sessionId={sessionId}
-              sessionCwd={sessionCwd}
-              sessionHost={sessionHost}
-              onTaskClick={onTaskClick}
-              onSessionClick={onSessionClick}
-              onFileOpen={onFileOpen}
-            />
-          </div>
-        )}
-
-        {/* Turn timeline — interleaved blocks + ALL optimistic messages by blockIndex,
-            preserving their correct visual positions until deduped by persisted history. */}
-        {timeline.length > 0 && (
-          <div className="session-streaming-panel">
-            {timeline.map((item, i) => {
-              // Stack page: a queued bubble shows on ITS question's page; the live
-              // blocks show on the page of the question they answer (the turn's, or
-              // the newest `[Qn]` before them when one turn answered two), and the
-              // working indicator on the page the turn is answering now.
-              if (stackMode) {
-                if (item.kind === 'user') {
-                  if (optimisticThreadKey(item.msg) !== currentKey) return null;
-                } else if (item.kind === 'block') {
-                  if (pageKeyOfBlock(item.index) !== currentKey) return null;
-                } else if (!streamVisible) {
-                  return null;
-                }
-              }
-              // Conversation Mode: a folded question's bubbles and blocks not
-              // persisted yet fold into its line too (utils/thread-fold.ts).
-              if (convMode && (item.kind === 'user' || item.kind === 'block')) {
-                const key = item.kind === 'user' ? optimisticThreadKey(item.msg) : pageKeyOfBlock(item.index);
-                const group = foldGroupOf(threadTree, key);
-                if (group !== ROOT_THREAD_KEY && groupFolded(group)) {
-                  if (tailFoldGroup === group) return null;
-                  tailFoldGroup = group;
-                  return foldLine(group, item.kind === 'user' ? item.msg.userUuid : undefined, `tail-${i}`);
-                }
-                if (!isTransparentStreamItem(item)) tailFoldGroup = null;
-              }
-              if (boundaryStreamIndices.has(i) || isTransparentStreamItem(item)) return null;
-              if (mixedMember.has(i)) return null;
-              const stepGroup = mixedStart.get(i);
-              if (stepGroup) return renderStepGroup(stepGroup);
-              if (systemRunMember.has(i)) return null;
-              const systemRunIdx = systemRunStart.get(i);
-              if (systemRunIdx && item.kind === 'block') {
-                const members = systemRunIdx.flatMap((index): SystemGroupMember[] => {
-                  const member = timeline[index];
-                  if (member.kind !== 'block' || member.block.type !== 'system') return [];
-                  return [{
-                    variant: member.block.variant,
-                    message: member.block.message,
-                    detail: member.block.detail,
-                    key: `stream-system-${member.index}`,
-                  }];
-                });
-                return (
-                  <div key={`system-run-${item.index}`} className="session-msg-bare">
-                    <SystemGroupRun members={members} />
-                  </div>
-                );
-              }
-              if (thinkingRunMember.has(i)) return null;
-              const thinkingIdx = thinkingRunStart.get(i);
-              if (thinkingIdx && item.kind === 'block') {
-                const content = thinkingIdx
-                  .map(k => {
-                    const t = timeline[k];
-                    return t.kind === 'block' && t.block.type === 'thinking' ? t.block.content : '';
-                  })
-                  .filter(s => s.trim())
-                  .join('\n\n');
-                // The same shell and key the stretch will have once a tool joins
-                // it, so a reader who opened the reasoning keeps it open through
-                // the fold.
-                const thinkingIds = thinkingIdx.map((k) => { const t = timeline[k]; return t.kind === 'block' && t.block.type === 'thinking' ? t.block.msgId : undefined; });
-                return (
-                  <div key={`run-${item.index}`} className="session-msg-bare" data-row-keys={rowKeysAttr([], thinkingIds)}>
-                    <ToolRunShell phrase="Thinking" failCount={0} running={isThinkingTail(thinkingIdx[thinkingIdx.length - 1])}>
-                      <div className="chat-thinking-content">{content}</div>
-                    </ToolRunShell>
-                  </div>
-                );
-              }
-              if (runMember.has(i)) return null;
-              const runIdx = runStart.get(i);
-              if (runIdx && item.kind === 'block') {
-                // Tools and the reasoning between them, in arrival order — the
-                // body a persisted run shows, so absorption changes nothing.
-                const members = runMembersOf(runIdx);
-                const { phrase, failCount } = streamRunSummary(members);
-                const thinkingLive = isThinkingTail(runIdx[runIdx.length - 1]);
-                // A running call is inside the closed run, so the row breathes for it.
-                const running = thinkingLive || streamRunHasCallingTool(members);
-                const rowKeys = rowKeysAttr(members.map((m) => (m.type === 'tool_call' ? m.toolUseId : undefined)));
-                return (
-                  <div key={`run-${item.index}`} className="session-msg-bare" data-row-keys={rowKeys}>
-                    <ToolRunShell phrase={phrase} failCount={failCount} running={running} count={members.filter((m) => m.type === 'tool_call').length}>
-                      <StreamRunMembers
-                        members={members}
-                        live={thinkingLive}
-                        sessionId={sessionId}
-                        sessionCwd={sessionCwd}
-                        sessionHost={sessionHost}
-                        onTaskClick={onTaskClick}
-                        onSessionClick={onSessionClick}
-                        onFileOpen={onFileOpen}
-                      />
-                    </ToolRunShell>
-                  </div>
-                );
-              }
-              if (item.kind === 'indicator') {
-                if (item.type === 'resuming') {
-                  return (
-                    <div key="ind-resuming" className="session-streaming-indicator">
-                      <span className="session-streaming-dot" />
-                      Waiting for response...
-                    </div>
-                  );
-                }
-                return (
-                  <SessionWorkingIndicator key="ind-working" sessionId={sessionId}>
-                    <WorkingIndicator
-                      label={assistantLabel}
-                      tokens={Math.round(countStreamChars(blocks, shownHiddenBlocks) / 4)}
-                    />
-                  </SessionWorkingIndicator>
-                );
-              }
-
-              if (item.kind === 'block') {
-                // An Agent spawn burst renders as one chip at the first anchor.
-                if (agentChipMember.has(i)) return null;
-                const burst = agentChipStart.get(i);
-                if (burst) {
-                  const agents: KnownAgent[] = [];
-                  for (const k of burst) {
-                    const t = timeline[k];
-                    const g = t.kind === 'block' ? groupedByIndex.get(t.index) : undefined;
-                    if (g && g.kind === 'task-group') agents.push(knownAgentFromStream(g.taskBlock));
-                  }
-                  // The wrapper its persisted row wears (an assistant row's body), so
-                  // the chip sits in the same place before and after the handover.
-                  return (
-                    <div key={`tg-${item.index}`} className="session-msg session-msg-assistant">
-                      <div className="session-msg-content">
-                        <BackgroundTasksChip sessionId={sessionId} agents={agents} />
-                      </div>
-                    </div>
-                  );
-                }
-
-                // Skip subagent-lane blocks (rendered inside their Agent box or not at all)
-                if (consumedBlockIndices.has(item.index)) return null;
-
-                // Regular block rendering.
-                // Only text/system blocks get the assistant row (the classes a
-                // persisted assistant row wears). Tool-call and thinking blocks
-                // render flush to the panel: the bubble padding on the first
-                // tool_call produced a visible indent-jump against the following
-                // tool_calls. EVERY text block wears the row classes, not only the
-                // first of a run: message styles hang off them (the dark code block
-                // is `.session-msg-assistant .markdown-body pre`, the font and list
-                // indents `.session-msg …`), and a reply after a tool run that
-                // lacked them streamed with a grey code block, then turned dark
-                // when its persisted row replaced it (2026-11-01).
-                const blockWantsBubble = item.block.type === 'text' || item.block.type === 'system';
-                // `live` marks the block still receiving tokens: streaming AND
-                // it is the last visible timeline item (crude but the only
-                // per-block signal available — deltas always append at the tail).
-                const isLiveTail = isStreaming && i === lastVisibleTimelineIdx;
-                // A text block that is only a reply tag or the turn-end marker
-                // draws nothing, as its persisted row does: no row, no gap.
-                if (item.block.type === 'text' && !streamReplyText(item.block.content).trim()) return null;
-                if (blockWantsBubble) {
-                  // A reply that is still arriving is selectable prose like any
-                  // other, so the streaming bubble wears the SAME identity a
-                  // persisted row wears (`data-message-id` + `data-msg-role`) —
-                  // that pair is the whole contract the quote pill reads off the
-                  // DOM, and without it selecting inside a live answer offered
-                  // no Copy, no Pin and no Ask at all (`selectionBody` requires
-                  // a `[data-message-id]` ancestor).
-                  //
-                  // The id is the one the model's own `message_start` carried,
-                  // which is exactly the id the persisted twin will have: the
-                  // absorption filter pairs stream block to history row id-first
-                  // (`computeAbsorbedIndices`). So a pin or a thread anchor made
-                  // mid-answer still resolves after the turn lands, against the
-                  // twin. A block with no id yet (a system notice, a snapshot
-                  // without one) still gets a body so Copy works — Pin and Ask
-                  // gate themselves on the id inside the pill.
-                  //
-                  // No `data-msg-ts`: a block that is still arriving has no
-                  // settled message timestamp, and the pill's `timestamp` is
-                  // optional everywhere it lands, so a pin made mid-answer simply
-                  // shows no time in the outline until the row is reloaded.
-                  const streamMsgId = item.block.type === 'text' ? item.block.msgId : undefined;
-                  return (
-                    <div
-                      key={`b-${item.index}`}
-                      className="session-msg session-msg-assistant"
-                      {...(streamMsgId ? { 'data-message-id': streamMsgId, 'data-msg-role': 'assistant' } : {})}
-                    >
-                      {/* The body class, as on a persisted row: quote pins and
-                          passage selection find the message body by it. */}
-                      <div className="session-msg-content">
-                        <StreamingBlockView block={item.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={isLiveTail} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
-                        {item.block.type === 'text' && (
-                          <StreamingReplyMeta block={item.block} alwaysVisible={!isStreaming && i === lastStreamTextIdx} />
-                        )}
-                      </div>
-                    </div>
-                  );
-                }
-                return (
-                  <div key={`b-${item.index}`} className="session-msg-bare">
-                    <StreamingBlockView block={item.block} sessionId={sessionId} sessionCwd={sessionCwd} sessionHost={sessionHost} live={isLiveTail} onTaskClick={onTaskClick} onSessionClick={onSessionClick} onFileOpen={onFileOpen} />
-                  </div>
-                );
-              }
-
-              // kind === 'user'
-              const m = item.msg;
-              // An agent's card folds the moment it arrives (queuedFolds).
-              if (queuedFolds.members.has(i)) return null;
-              const run = queuedFolds.starts.get(i);
-              if (run) {
-                const rows = run.map((k) => (timeline[k] as Extract<TimelineItem, { kind: 'user' }>).msg);
-                return (
-                  <div key={`qf-${m.queueId}`} className="session-msg-bare" data-testid="session-received-fold-row">
-                    <ProcessFoldRow foldId={m.queueId} foldKey={`queued:${m.queueId}`} testId="received-fold"
-                      phrase={foldStepsPhrase(rows.flatMap((r) => receivedSteps(r.text ?? '')))}>
-                      {rows.map(renderQueuedRow)}
-                    </ProcessFoldRow>
-                  </div>
-                );
-              }
-              return renderQueuedRow(m);
-            })}
-          </div>
-        )}
+        {bodyRows}
         {/* The resolved / failed strip after the page's turns (spec 4, item 5),
             when the last answer has no Asked-from list to go before. */}
         {!stripPlaced && pageStrip}

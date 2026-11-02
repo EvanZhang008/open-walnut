@@ -292,7 +292,7 @@ test.describe('Mid-stream user message persistence', () => {
     // ── Step 3: Verify the user message is visible mid-stream ──
     // The user message should be in the streaming panel timeline
     const userMsgText = midStreamText;
-    const userMsgLocator = page.locator('.session-streaming-panel').getByText(userMsgText);
+    const userMsgLocator = page.locator('.session-history').getByText(userMsgText);
     await expect(userMsgLocator).toBeVisible({ timeout: 2000 });
 
     // Take screenshots for debugging
@@ -403,8 +403,9 @@ test.describe('Mid-stream user message persistence', () => {
     land(2);
     await page.waitForTimeout(100);
 
-    // Verify both messages visible during streaming
-    const panel = page.locator('.session-streaming-panel');
+    // Verify both messages visible during streaming (a person's message in
+    // the live turn is a row of its own, beside the turn's panels)
+    const panel = page.locator('.session-history');
     await expect(panel.getByText('First mid-stream message')).toBeVisible();
     await expect(panel.getByText('Second mid-stream message')).toBeVisible();
 

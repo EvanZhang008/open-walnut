@@ -74,6 +74,7 @@ export function IslandPreview({ html, minHeight, maxHeight, onHeight, overlay }:
     return () => {
       window.removeEventListener('message', onMessage);
       if (timer.current) clearTimeout(timer.current);
+      timer.current = null;
     };
   }, [key, minHeight, maxHeight]);
 

@@ -627,7 +627,7 @@ test.describe('Voice input keeps the selected passage', () => {
       await expect(panel.locator('.session-working-indicator')).toHaveCount(1)
       await wheel(page, panel, 600) // park at the bottom, as follow-bottom does
 
-      await dragPhrase(page, `.session-panel[data-session-id="${STREAM_SESSION_ID}"] .session-streaming-panel`, STREAM_PHRASE)
+      await dragPhrase(page, `.session-panel[data-session-id="${STREAM_SESSION_ID}"] [data-stream-reply]`, STREAM_PHRASE)
       expect(await selectedText(page)).toBe(STREAM_PHRASE)
       const pill = page.locator('[data-testid="quote-pin-pill"]')
       await expect(pill).toBeVisible()

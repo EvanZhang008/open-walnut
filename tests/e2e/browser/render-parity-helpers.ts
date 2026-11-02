@@ -200,3 +200,56 @@ export async function dumpRows(page: Page, label: string) {
   console.log(`--- ${label}\n${rows.join('\n')}`);
 }
 
+
+/** The reply's script block, as both specs write it: it says when it loads. */
+export function islandFence(marker: string): string[] {
+  return [
+    '```html-app',
+    `<div style="padding:8px;border:1px solid #888">Island ${marker}</div>`,
+    `<script>parent.postMessage({ t: 'parity-island-load', m: ${JSON.stringify(marker)} }, '*')</script>`,
+    '```',
+    '',
+  ];
+}
+
+/** Counts every load of a reply's script block, by marker (window.__islandLoads). */
+export async function countIslandLoads(page: Page) {
+  await page.addInitScript(() => {
+    const loads: Record<string, number> = {};
+    (window as any).__islandLoads = loads;
+    window.addEventListener('message', (e) => {
+      const d = e.data as { t?: string; m?: string } | null;
+      if (d && d.t === 'parity-island-load' && typeof d.m === 'string') loads[d.m] = (loads[d.m] ?? 0) + 1;
+    });
+  });
+}
+
+export async function islandLoads(page: Page, marker: string): Promise<number> {
+  return page.evaluate((m) => ((window as any).__islandLoads?.[m] ?? 0) as number, marker);
+}
+
+/** Marks the reply's body, its script block's iframe and its images, so
+ *  replyNodesReplaced can tell they are still the same DOM nodes. */
+export async function tagReplyNodes(page: Page, marker: string): Promise<number> {
+  return page.evaluate((marker) => {
+    const scroller = document.querySelector('.main-page-session-column .session-history') ?? document.querySelector('.session-history');
+    const root = Array.from(scroller?.querySelectorAll('.session-msg-content') ?? [])
+      .filter((el) => !el.parentElement?.closest('.session-msg-content'))
+      .find((el) => (el.textContent ?? '').includes(`Findings ${marker}`));
+    const nodes = root ? [root, ...Array.from(root.querySelectorAll('iframe, img'))] : [];
+    nodes.forEach((n, i) => { (n as any).__parityTag = `${marker}:${i}`; });
+    return nodes.length;
+  }, marker);
+}
+
+/** The reply's nodes that are not the ones tagReplyNodes marked (tag#position). */
+export async function replyNodesReplaced(page: Page, marker: string): Promise<string[]> {
+  return page.evaluate((marker) => {
+    const scroller = document.querySelector('.main-page-session-column .session-history') ?? document.querySelector('.session-history');
+    const root = Array.from(scroller?.querySelectorAll('.session-msg-content') ?? [])
+      .filter((el) => !el.parentElement?.closest('.session-msg-content'))
+      .find((el) => (el.textContent ?? '').includes(`Findings ${marker}`));
+    const nodes = root ? [root, ...Array.from(root.querySelectorAll('iframe, img'))] : [];
+    return nodes.flatMap((n, i) => ((n as any).__parityTag === `${marker}:${i}` ? [] : [`${n.tagName.toLowerCase()}#${i}`]));
+  }, marker);
+}

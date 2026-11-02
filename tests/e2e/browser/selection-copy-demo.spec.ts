@@ -158,6 +158,6 @@ test('demo: selection survives streaming, auto-scroll pauses, copy works', async
   // Click away — clears; stream content catches up.
   await page.locator('.session-history').getByText('Here is the summary', { exact: false }).first().click();
   await page.waitForTimeout(600);
-  await expect(page.locator('.session-streaming-panel')).toContainText('Post-release chunk 14');
+  await expect(page.locator('[data-stream-reply]', { hasText: 'Post-release chunk 14' })).toHaveCount(1);
   await page.waitForTimeout(1000);
 });

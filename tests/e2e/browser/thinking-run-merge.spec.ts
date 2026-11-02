@@ -256,7 +256,7 @@ test.describe('Reasoning folds into the tool run around it', () => {
     // The answer arrives: that reasoning led to PROSE, and it stays in the run
     // rather than splitting off as a "Thinking ›" row of its own; nothing pulses.
     await injectEvent(page, 'session:text-delta', { sessionId: SESSION_ID, delta: 'Both sources agree.', msgId: 'answer' })
-    await expect(panel.locator('.session-streaming-panel')).toContainText('Both sources agree.')
+    await expect(panel.locator('[data-stream-reply]', { hasText: 'Both sources agree.' })).toHaveCount(1)
     await expect(streamRows).toHaveCount(1)
     await expect(streamRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText('Fetched a page')
     await expect(panel.locator('.session-streaming-panel .tool-run-label', { hasText: /^Thinking$/ })).toHaveCount(0)
@@ -298,8 +298,11 @@ test.describe('Reasoning folds into the tool run around it', () => {
       { name: 'session:text-delta', data: { sessionId: SESSION_ID, delta: 'The file has it.', msgId: 'msg_b' } },
     ])
     const streamRows = panel.locator('.session-streaming-panel > .session-msg-bare > .tool-run-row')
-    await expect(panel.locator('.session-streaming-panel')).toContainText('The file has it.')
+    await expect(panel.locator('[data-stream-reply]', { hasText: 'The file has it.' })).toHaveCount(1)
     await expect(streamRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText(['Read a file'])
+    await streamRows.locator(':scope > .tool-run-toggle').click()
+    const liveOrder = await bodyOrder(streamRows)
+    expect(liveOrder).toContain('thinking')
 
     // The parser attaches each step's reasoning to the message of its block.
     messages.push(
@@ -313,16 +316,19 @@ test.describe('Reasoning folds into the tool run around it', () => {
     await injectEvent(page, 'session:result', { sessionId: SESSION_ID, result: 'done', isError: false })
 
     await expect(panel.locator('.session-streaming-panel .tool-run-row')).toHaveCount(0)
-    // The answer's own reasoning (msg_b) rides the run before it, as it did live.
-    // In history the steps before the answer are its turn fold, whose line counts them.
-    const historyRows = panel.locator('.session-history .tool-run-row')
-    await expect(historyRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText(['Ran 1 tool'])
+    // The answer's own reasoning (msg_b) rides the run before it, as it did
+    // live, and the turn the reader watched keeps the shape it streamed in
+    // (2026-11-01: "no flash, no change"): one run, the same line, the same body.
+    const historyRows = panel.locator('.session-history .tool-run-row').filter({ has: page.locator(':scope > .tool-run-toggle') })
+    await expect(historyRows.locator(':scope > .tool-run-toggle > .tool-run-label')).toHaveText(['Read a file'])
     await expect(panel.locator('.session-history')).toContainText('The file has it.')
-    await historyRows.locator(':scope > .tool-run-toggle').click()
+    if (!(await historyRows.locator(':scope > .tool-run-body').count())) await historyRows.locator(':scope > .tool-run-toggle').click()
+    // Its body: both pieces of reasoning around the call, as live.
     const innerThinking = historyRows.locator('.tool-run-body .tool-run-row')
-    await expect(innerThinking).toHaveCount(2)
-    await innerThinking.nth(1).locator('.tool-run-toggle').click()
-    await expect(innerThinking.nth(1).locator('.chat-thinking-content')).toHaveText('Now I can answer.')
+    await expect(innerThinking).toHaveCount(liveOrder.filter((k) => k === 'thinking').length)
+    await expect(historyRows.locator('.chat-tool-block')).toHaveCount(1)
+    await innerThinking.last().locator('.tool-run-toggle').click()
+    await expect(innerThinking.last().locator('.chat-thinking-content')).toHaveText('Now I can answer.')
     await page.screenshot({ path: test.info().outputPath('absorbed-same-shape.png'), clip: { x: 0, y: 0, width: 1200, height: 800 } })
   })
 

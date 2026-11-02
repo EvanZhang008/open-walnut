@@ -9,7 +9,8 @@
  * request id, see web/src/stores/permission-request-store.ts.
  */
 
-import { useState, useEffect, useRef, useMemo, memo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
+import type { SessionHistoryMessage } from '@/types/session';
 import { stripQuestionTag } from '@/utils/question-tag';
 import { stripTurnMarker } from '@/utils/turn-end-marker';
 import type { StreamingBlock } from '@/hooks/useSessionStream';
@@ -69,6 +70,33 @@ function StreamingTextBlock({ content, msgId, sessionCwd, sessionHost, sessionId
  *  half-written or whole (turn-end-marker.ts). */
 export function streamReplyText(content: string): string {
   return stripTurnMarker(stripQuestionTag(content), true);
+}
+
+/**
+ * A streaming reply as the history message its persisted twin will be, so a
+ * surface can draw it with SessionMessage under the twin's key (its msgId) and
+ * the twin takes over the very same element: nothing is built again at the
+ * handover (a script block's iframe keeps running, an image stays decoded).
+ * One message per block object (the reducer replaces a block whenever it
+ * grows); its time is when the reply first showed, until the twin's own.
+ */
+export function useStreamReplyRows(): (block: Extract<StreamingBlock, { type: 'text' }>, msgId: string) => SessionHistoryMessage {
+  const rows = useRef(new WeakMap<StreamingBlock, SessionHistoryMessage>());
+  const seenAt = useRef(new Map<string, string>());
+  return useCallback((block, msgId) => {
+    let row = rows.current.get(block);
+    if (!row) {
+      let seen = seenAt.current.get(msgId);
+      if (!seen) {
+        seen = new Date().toISOString();
+        seenAt.current.set(msgId, seen);
+        if (seenAt.current.size > 200) seenAt.current.delete(seenAt.current.keys().next().value!);
+      }
+      row = { role: 'assistant', text: streamReplyText(block.content), msgId, timestamp: seen };
+      rows.current.set(block, row);
+    }
+    return row;
+  }, []);
 }
 
 /**

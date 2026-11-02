@@ -11,7 +11,10 @@
  * has been measured, then released while every frame and DOM commit is sampled.
  */
 import { test, expect, type Page, type APIRequestContext, type Locator } from '@playwright/test';
-import { diffSnaps, disableTransitions, dumpRows, snapReply, startFrameSampler, stopFrameSampler } from './render-parity-helpers';
+import {
+  countIslandLoads, diffSnaps, disableTransitions, dumpRows, islandLoads, replyNodesReplaced, snapReply,
+  startFrameSampler, stopFrameSampler, tagReplyNodes,
+} from './render-parity-helpers';
 
 const MARKER = 'PARITYREAL';
 let rpcSeq = 0;
@@ -76,6 +79,7 @@ async function openFromTaskRow(page: Page, taskId: string, sid: string): Promise
 test('a real streamed reply looks exactly like its persisted row, in every frame', async ({ page, request }) => {
   test.setTimeout(120_000);
   await disableTransitions(page);
+  await countIslandLoads(page);
   const taskId = await newTask(request, 'Stream parity real');
   await page.goto('/');
   await page.waitForLoadState('networkidle');
@@ -100,11 +104,14 @@ test('a real streamed reply looks exactly like its persisted row, in every frame
   // The turn's last text and its end often land in one commit: the column must
   // still follow it to the bottom here, not at the handover.
   await page.waitForTimeout(500);
-  const persistedRow = history.locator('[data-msg-ts]', { hasText: 'Findings PARITYREAL' });
+  // The streaming reply is a row too (`data-stream-reply`); the persisted one is not.
+  const persistedRow = history.locator('[data-msg-ts]:not([data-stream-reply])', { hasText: 'Findings PARITYREAL' });
   expect(await persistedRow.count(), 'the history read is held: no persisted row yet').toBe(0);
 
+  await expect.poll(() => islandLoads(page, MARKER), { timeout: 8000 }).toBe(1);
   const streamed = await snapReply(page, MARKER);
   if (process.env.PARITY_DUMP) await dumpRows(page, 'streamed');
+  expect(await tagReplyNodes(page, MARKER)).toBeGreaterThanOrEqual(2);
   await startFrameSampler(page, MARKER);
   holding = false;
   release();
@@ -117,6 +124,11 @@ test('a real streamed reply looks exactly like its persisted row, in every frame
   if (process.env.PARITY_DUMP) await dumpRows(page, 'finished');
 
   expect(streamed.elems.some((e) => e.tag === 'PRE')).toBe(true);
+  expect(streamed.elems.some((e) => e.tag === 'IFRAME')).toBe(true);
+  // The persisted row took over the stream's own elements: the script block
+  // never reloaded.
+  expect(await islandLoads(page, MARKER), 'loads of the script block').toBe(1);
+  expect(await replyNodesReplaced(page, MARKER), 'reply nodes the handover replaced').toEqual([]);
   const diffs = diffSnaps(streamed, finished);
   expect(diffs, `streamed vs finished render differ:\n${diffs.slice(0, 40).join('\n')}`).toEqual([]);
   expect(finished.html).toBe(streamed.html);

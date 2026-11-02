@@ -236,10 +236,12 @@ test.describe('Rich island live preview', () => {
     await expect(card.locator('.island-result-text')).toHaveText('Picked Tuesday 1 times');
     await panel.locator('.rich-app-stream').screenshot({ path: `${SHOT_DIR}/running-${testInfo.project.name}.png` });
 
-    // The turn ends and the saved reply takes the streamed copy's place: the island
-    // is mounted again, opens at its own height (never back at the 40px floor) and
-    // where the user left it.
+    // The turn ends and the saved reply takes the streamed copy's place: it takes
+    // over the streamed row's own elements, so the island is never mounted again
+    // and stays at its height and where the user left it (2026-11-01, the user:
+    // "no flash, no change").
     const islandH = (await island.boundingBox())!.height;
+    await island.evaluate((el) => { (el as any).__kept = true; });
     await page.evaluate(() => {
       const hs: number[] = [];
       (window as any).__swap = hs;
@@ -254,9 +256,11 @@ test.describe('Rich island live preview', () => {
     saved.msgId = `msg-live-${sid}`;
     saved.reply = `${DOC_HEAD}\n${DOC_SCRIPT}\n\`\`\``;
     await injectEvent(page, 'session:result', { sessionId: sid, taskId: TASK_ID, isError: false });
-    await expect(panel.locator('.rich-app-stream')).toHaveCount(0, { timeout: 15000 });
+    await expect(panel.locator('[data-msg-ts]:not([data-stream-reply]) iframe.rich-island')).toHaveCount(1, { timeout: 15000 });
     await expect(panel.frameLocator('iframe.rich-island').locator('#out')).toHaveText('Picks 1', { timeout: 15000 });
     await page.waitForTimeout(3200);
+    expect(await island.evaluate((el) => (el as any).__kept === true), 'the island was mounted again').toBe(true);
+    expect((await ranProbes(page)).filter((p) => p === 'script'), 'the island ran again').toEqual(['script']);
     const swap = await page.evaluate(() => (window as any).__swap as number[]);
     const swapSeen = `island ${islandH}, heights ${[...new Set(swap.map(Math.round))].join(',')}`;
     expect(Math.min(...swap), swapSeen).toBeGreaterThanOrEqual(islandH - 2);

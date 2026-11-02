@@ -179,7 +179,7 @@ test.describe('Selection & copy in session chat', () => {
     }
     // Positive sentinel: the streamed tail really rendered (so the
     // not.toContain below can't pass vacuously on a broken stream).
-    await expect(page.locator('.session-streaming-panel')).toContainText('More streamed content chunk 7');
+    await expect(page.locator('[data-stream-reply]', { hasText: 'More streamed content chunk 7' })).toHaveCount(1);
 
     // Selection must still be bounded — not extended into the streamed tail.
     const midSelection = await selectedText(page);
@@ -222,7 +222,7 @@ test.describe('Selection & copy in session chat', () => {
 
     // Stream a distinctive paragraph.
     await injectEvent(page, 'session:text-delta', { sessionId: SESSION_ID, delta: 'UNIQUE-STREAM-PREFIX alpha bravo charlie.', msgId: 'msg-live-1' });
-    const streamed = page.locator('.session-streaming-panel').getByText('UNIQUE-STREAM-PREFIX', { exact: false }).first();
+    const streamed = page.locator('[data-stream-reply]').getByText('UNIQUE-STREAM-PREFIX', { exact: false }).first();
     await expect(streamed).toBeVisible();
 
     // Select inside the LIVE block (triple-click selects the paragraph).
@@ -239,7 +239,7 @@ test.describe('Selection & copy in session chat', () => {
     // Clear the selection (click a history line outside it) → frozen block
     // must catch up to the full streamed content.
     await page.locator('.session-history').getByText('Line one of the explanation', { exact: false }).first().click();
-    await expect(page.locator('.session-streaming-panel')).toContainText('delta-echo-5');
+    await expect(page.locator('[data-stream-reply]', { hasText: 'delta-echo-5' })).toHaveCount(1);
   });
 
   test('right-click does NOT clear the selection (context-menu Copy path)', async ({ page }) => {
@@ -330,7 +330,7 @@ test.describe('Selection & copy in session chat', () => {
 
     // Stream the block, then select inside it.
     await injectEvent(page, 'session:text-delta', { sessionId: SESSION_ID, delta: streamedText, msgId: 'msg-absorb-1' });
-    const streamed = page.locator('.session-streaming-panel').getByText('ABSORB-TARGET', { exact: false }).first();
+    const streamed = page.locator('[data-stream-reply]').getByText('ABSORB-TARGET', { exact: false }).first();
     await expect(streamed).toBeVisible();
     await streamed.click({ clickCount: 3 });
     expect(await selectedText(page)).toContain('delta echo foxtrot');
@@ -370,9 +370,9 @@ test.describe('Selection & copy in session chat', () => {
     const sentence = 'The scheduler drains one queue at a time and never blocks on a slow writer.';
     const phrase = 'never blocks on a slow writer';
     await injectEvent(page, 'session:text-delta', { sessionId: SESSION_ID, delta: sentence, msgId: 'msg-drag-1' });
-    await expect(page.locator('.session-streaming-panel')).toContainText(phrase);
+    await expect(page.locator('[data-stream-reply]', { hasText: phrase })).toHaveCount(1);
 
-    await dragPhrase(page, '.session-streaming-panel', phrase);
+    await dragPhrase(page, '[data-stream-reply]', phrase);
     expect(await selectedText(page)).toBe(phrase);
     // Non-vacuity: the range must be anchored in a TEXT node, the thing an
     // innerHTML rewrite destroys.
@@ -391,7 +391,7 @@ test.describe('Selection & copy in session chat', () => {
       await injectEvent(page, 'session:text-delta', { sessionId: SESSION_ID, delta: ` chunk-${i} more streamed prose.`, msgId: 'msg-drag-1' });
       await page.waitForTimeout(50);
     }
-    await expect(page.locator('.session-streaming-panel')).toContainText(phrase);
+    await expect(page.locator('[data-stream-reply]', { hasText: phrase })).toHaveCount(1);
     expect(await selectedText(page)).toBe(phrase);
     await expect(pill).toBeVisible();
 
@@ -406,7 +406,7 @@ test.describe('Selection & copy in session chat', () => {
     // Clearing the selection releases the freeze: the block catches up to every
     // delta it held back, and the pill goes.
     await page.locator('.session-history').getByText('Line one of the explanation', { exact: false }).first().click();
-    await expect(page.locator('.session-streaming-panel')).toContainText('chunk-5 more streamed prose');
+    await expect(page.locator('[data-stream-reply]', { hasText: 'chunk-5 more streamed prose' })).toHaveCount(1);
     await expect(pill).toHaveCount(0);
   });
 });

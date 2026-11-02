@@ -21,6 +21,7 @@ import { copyRichText, copyTextRobust } from '@/utils/clipboard';
 import { markdownToRichHtml } from '@/utils/markdown';
 import { SuggestSegments, useSuggestSegments } from '@/components/chat/SuggestSegments';
 import { RichMarkdown } from '@/components/chat/RichBlocks';
+import { useSelectionFrozenWith } from '@/utils/selection-guard';
 import { BashToolCall } from './BashToolCall';
 import { parseSessionEnvelopes, type EnvelopeSegment } from '@open-walnut/history-session-envelope';
 import { injectedContextKind } from './injected-context';
@@ -1113,7 +1114,13 @@ export const SessionMessage = memo(function SessionMessage(props: SessionMessage
 });
 
 function SessionMessageBubble({ message, assistantLabel = 'Claude Code', sessionId, sessionCwd, sessionHost, suppressTools, answerOnly, ridersFolded, showCopyActions = false, onTaskClick, onSessionClick, onFileOpen }: SessionMessageProps) {
-  const { role, text: rawText, timestamp, tools: rawTools, thinking } = message;
+  const { role, text: arrivingText, timestamp, tools: rawTools, thinking } = message;
+  // A reply still arriving is this same row (SessionChatHistory draws a stream
+  // block as the row its persisted twin will be): its words hold while the
+  // person selects inside it, or each delta would rebuild the DOM their
+  // selection lives in. A stored row's words never change, so nothing holds.
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const rawText = useSelectionFrozenWith(contentRef, arrivingText);
   // A reply's `[Q<n>]` tag names its question (question-tag.ts); the label above
   // the turn shows the number, so the line itself never renders. Nor does the
   // "no action needed" marker line (turn-end-marker.ts): it is for the timeline.
@@ -1288,7 +1295,7 @@ function SessionMessageBubble({ message, assistantLabel = 'Claude Code', session
         : isUser ? 'session-msg-user' : 'session-msg-assistant'}`}
       onContextMenu={(e) => rowMenu.open(e, undefined)}
     >
-      <div className="session-msg-content" onClick={handleContentClick}>
+      <div className="session-msg-content" ref={contentRef} onClick={handleContentClick}>
         {thinking && !answerOnly && <SessionThinking text={thinking} />}
         {/* Folded machine blocks first, then the human's words — the typed text
             stays the dominant part of the bubble. A turn that was ONLY banners

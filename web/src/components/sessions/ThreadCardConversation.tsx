@@ -17,7 +17,7 @@ import type { StreamingBlock } from '@/hooks/useSessionStream';
 import type { CardTurn } from '@/utils/thread-card';
 import { questionBodyOf } from '@/utils/thread-card';
 import { SessionMessage, StableMarkdownBody } from './SessionMessage';
-import { StreamingBlockView, StreamingReplyMeta } from './StreamingBlockView';
+import { StreamingBlockView, StreamingReplyMeta, useStreamReplyRows } from './StreamingBlockView';
 
 interface RowHandlers {
   sessionId: string;
@@ -82,23 +82,39 @@ export const ThreadCardConversation = memo(function ThreadCardConversation(p: Th
     sessionId: p.sessionId, sessionCwd: p.sessionCwd, sessionHost: p.sessionHost,
     onTaskClick: p.onTaskClick, onSessionClick: p.onSessionClick, onFileOpen: p.onFileOpen,
   }), [p.sessionId, p.sessionCwd, p.sessionHost, p.onTaskClick, p.onSessionClick, p.onFileOpen]);
+  const replyRow = useStreamReplyRows();
+  // The live answer to the newest turn is drawn as the reply its persisted
+  // twin will be, under the twin's key, in its turn: the twin takes over that
+  // element and nothing is built again (a script block keeps running).
+  const liveReplyId = p.live?.block.type === 'text' && p.turns.length > 0 ? p.live.block.msgId : undefined;
+  const liveReply = p.live && liveReplyId && p.live.block.type === 'text'
+    && !p.turns[p.turns.length - 1].replies.some((r) => r !== p.supersededReply && r.msgId === liveReplyId)
+    ? replyRow(p.live.block, liveReplyId) : undefined;
+  const reply = (r: SessionHistoryMessage) => (
+    <SessionMessage
+      key={r.msgId ?? r.walnutMessageId} message={r} sessionId={h.sessionId} sessionCwd={h.sessionCwd}
+      sessionHost={h.sessionHost} answerOnly onTaskClick={h.onTaskClick} onSessionClick={h.onSessionClick} onFileOpen={h.onFileOpen}
+    />
+  );
   return (
     <>
-      {p.turns.map((t, i) => (
-        <div key={t.user.msgId ?? t.user.walnutMessageId} className="thread-card-turn">
-          <QuestionBubble message={t.user} cwd={h.sessionCwd} />
-          {t.replies.map((r) => (r === p.supersededReply ? null : (
-            <SessionMessage
-              key={r.msgId ?? r.walnutMessageId} message={r} sessionId={h.sessionId} sessionCwd={h.sessionCwd}
-              sessionHost={h.sessionHost} answerOnly onTaskClick={h.onTaskClick} onSessionClick={h.onSessionClick} onFileOpen={h.onFileOpen}
-            />
-          )))}
-          {t.replies.length === 0 && !(i === p.turns.length - 1 && p.lastLive) && (
-            <div className="thread-card-noanswer">No answer</div>
-          )}
-        </div>
-      ))}
-      {p.live && <LiveAnswer key={`live-${p.live.index}`} live={p.live} streaming={p.streaming} h={h} />}
+      {p.turns.map((t, i) => {
+        const last = i === p.turns.length - 1;
+        // One children array for the stored replies and the live one, so the
+        // stored twin is the same keyed element the live reply was.
+        const replies = t.replies.filter((r) => r !== p.supersededReply);
+        if (liveReply && last) replies.push(liveReply);
+        return (
+          <div key={t.user.msgId ?? t.user.walnutMessageId} className="thread-card-turn">
+            <QuestionBubble message={t.user} cwd={h.sessionCwd} />
+            {replies.map(reply)}
+            {t.replies.length === 0 && !(last && (liveReply || p.lastLive)) && (
+              <div className="thread-card-noanswer">No answer</div>
+            )}
+          </div>
+        );
+      })}
+      {p.live && !liveReply && <LiveAnswer key={`live-${p.live.index}`} live={p.live} streaming={p.streaming} h={h} />}
       {p.rounds.map(({ bubble: m, live }) => (
         <div key={`opt-${m.queueId}`} className="thread-card-turn" data-status={m.status}>
           <QuestionBubble message={m} cwd={h.sessionCwd} />

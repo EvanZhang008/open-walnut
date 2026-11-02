@@ -6,6 +6,8 @@ import { REAL_PANEL, openDraftOnCwd } from './draft-helpers'
 
 const SCREENSHOT_DIR = '/tmp/codex-customer-matrix-gap-final'
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
+/** The live turn: its panels, and a reply still arriving, which is a row of its own. */
+const LIVE_TURN = ':is(.session-streaming-panel, [data-stream-reply])'
 const BASE_PROMPT = 'recovery baseline persisted turn'
 const BASE_REPLY = `hello from mock-acp (you said: ${BASE_PROMPT})`
 const CRASH_PROMPT = 'lifecycle-slow-mobile crash the active worker'
@@ -159,7 +161,7 @@ test('ACP worker death cold-resumes without replay and converges across a mid-st
   const input = panel.locator('.chat-input-textarea')
   await input.fill(CRASH_PROMPT)
   await input.press('Enter')
-  await expect(panel.locator('.session-streaming-panel').getByText(CRASH_PARTIAL, { exact: true }))
+  await expect(panel.locator(LIVE_TURN).getByText(CRASH_PARTIAL, { exact: true }))
     .toHaveCount(1, { timeout: 15_000 })
 
   const killedPid = await workerPid(session.acpRuntimeId, session.acpJournalPath)
@@ -188,7 +190,7 @@ test('ACP worker death cold-resumes without replay and converges across a mid-st
 
   await input.fill(RECOVERY_PROMPT)
   await input.press('Enter')
-  await expect(panel.locator('.session-streaming-panel')).toContainText(CRASH_PARTIAL, {
+  await expect(panel.locator(LIVE_TURN, { hasText: CRASH_PARTIAL })).toHaveCount(1, {
     timeout: 15_000,
   })
   await expect.poll(() => statusKey(page, session.claudeSessionId), { timeout: 15_000 })
@@ -223,7 +225,7 @@ test('ACP worker death cold-resumes without replay and converges across a mid-st
   await expect(reloadedPanel.getByText(CRASH_PROMPT, { exact: true })).toHaveCount(1)
   await expect(reloadedPanel.getByText(CRASH_BOUNDARY, { exact: true })).toHaveCount(1)
   await expect(reloadedPanel.getByText(RECOVERY_PROMPT, { exact: true })).toHaveCount(1)
-  await expect(reloadedPanel.locator('.session-streaming-panel')).toContainText(CRASH_PARTIAL)
+  await expect(reloadedPanel.locator(LIVE_TURN, { hasText: CRASH_PARTIAL })).toHaveCount(1)
   await expect(reloadedPanel).not.toContainText('replayed: earlier reply')
   await page.screenshot({
     path: `${SCREENSHOT_DIR}/recovery-mid-stream-after-reload.png`,
@@ -259,7 +261,7 @@ test('ACP worker death cold-resumes without replay and converges across a mid-st
   for (const [index, entry] of exactTranscript.entries()) {
     expect(renderedText[index]).toContain(entry.slice(entry.indexOf(':') + 1))
   }
-  await expect(finalPanel.locator('.session-streaming-panel')).toHaveCount(0)
+  await expect(finalPanel.locator(LIVE_TURN)).toHaveCount(0)
   await expect(finalPanel.getByText(BASE_PROMPT, { exact: true })).toHaveCount(1)
   await expect(finalPanel.getByText(BASE_REPLY, { exact: true })).toHaveCount(1)
   await expect(finalPanel.getByText(CRASH_PROMPT, { exact: true })).toHaveCount(1)

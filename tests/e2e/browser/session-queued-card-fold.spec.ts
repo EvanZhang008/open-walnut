@@ -36,7 +36,7 @@ async function watchForOpenCards(page: Page) {
   await page.evaluate(() => {
     (window as any).__openCardSeen = false;
     const check = () => {
-      for (const n of document.querySelectorAll('.session-streaming-panel .provenance-card')) {
+      for (const n of document.querySelectorAll('.session-history .provenance-card')) {
         if (!n.closest('.process-fold[data-open="true"]')) (window as any).__openCardSeen = true;
       }
     };

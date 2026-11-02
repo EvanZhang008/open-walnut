@@ -1776,6 +1776,8 @@ if (outputFormat === 'stream-json') {
             '| Name | Count |', '| --- | ---: |', '| alpha | 1 |', '| beta | 22 |', '',
             '> A quoted line.', '', '---', '',
             '<div style="border:1px solid #888;padding:8px;border-radius:6px"><b>Card</b> body text</div>', '',
+            '```html-app', '<div style="padding:8px;border:1px solid #888">Island PARITYREAL</div>',
+            "<script>parent.postMessage({ t: 'parity-island-load', m: \"PARITYREAL\" }, '*')</script>", '```', '',
             'Closing sentence PARITYREAL.',
           ].join('\n');
           emitStream(wrap({ type: 'message_start', message: { id: reply, role: 'assistant', content: [], model, usage: { input_tokens: 10, output_tokens: 1 } } }));

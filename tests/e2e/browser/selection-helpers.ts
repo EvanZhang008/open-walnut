@@ -14,19 +14,21 @@ import { expect, type Page } from '@playwright/test'
  */
 export async function dragPhrase(page: Page, scope: string, phrase: string): Promise<void> {
   const rects = await page.evaluate(({ scope, needle }) => {
-    const root = document.querySelector(scope)
-    if (!root) return null
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
-    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-      const text = n as Text
-      const at = text.data.indexOf(needle)
-      if (at === -1) continue
-      const range = document.createRange()
-      range.setStart(text, at)
-      range.setEnd(text, at + needle.length)
-      return Array.from(range.getClientRects()).map((r) => ({
-        left: r.left, right: r.right, top: r.top, height: r.height,
-      }))
+    // Every element the scope names: a live reply is a row of its own
+    // (`[data-stream-reply]`), and the turn's other rows may come first.
+    for (const root of Array.from(document.querySelectorAll(scope))) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        const text = n as Text
+        const at = text.data.indexOf(needle)
+        if (at === -1) continue
+        const range = document.createRange()
+        range.setStart(text, at)
+        range.setEnd(text, at + needle.length)
+        return Array.from(range.getClientRects()).map((r) => ({
+          left: r.left, right: r.right, top: r.top, height: r.height,
+        }))
+      }
     }
     return null
   }, { scope, needle: phrase })
