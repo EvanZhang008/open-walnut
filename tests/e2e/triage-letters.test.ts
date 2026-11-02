@@ -211,7 +211,7 @@ describe('one run: one summary and three decisions', () => {
     expect(r.status).toBe(400);
     const message = String(r.json?.error?.message ?? '');
     expect(message).toContain('needs at least one button in `actions`');
-    expect(message).toContain('Make a task');
+    expect(message).not.toContain('Make a task');
     // And it did not consume run two's decision budget.
     for (const subject of ['a', 'b', 'c']) {
       expect((await sendLetterAs(RUN_TWO_SID, decisionBody(`Run two: ${subject}`))).status).toBe(201);

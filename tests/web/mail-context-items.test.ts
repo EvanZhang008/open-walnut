@@ -7,7 +7,8 @@
  *   menu as "nothing works here", which is the same bad outcome as the 409 it would earn.
  * - send false -> the three send rows are DISABLED with the reason, because SMTP settings are
  *   something the human can go and fix, and hiding them turns that into a puzzle.
- * - taskId -> `Open task` instead of `Make a task`, so a triage pass never makes a second task.
+ * - taskId -> `Open task` beside `Talk to CEO` and `New task`, so a task an older Walnut made from
+ *   this mail still opens from its row.
  * - merged -> the title's third field names the account; a single-account window has nothing to say.
  * - outbound -> mail this person WROTE is a different menu: a draft has no read toggle and nothing to
  *   reply to, and a sent message can be forwarded but not replied to.
@@ -95,7 +96,8 @@ function actions() {
     onReply: (message: MailMessageDto, all: boolean) =>
       acted.push(`reply ${message.accountId} ${message.messageId} ${all}`),
     onForward: (message: MailMessageDto) => acted.push(`forward ${message.accountId} ${message.messageId}`),
-    onMakeTask: (message: MailMessageDto) => acted.push(`task ${message.accountId} ${message.messageId}`),
+    onTalkToCeo: (message: MailMessageDto) => acted.push(`ceo ${message.accountId} ${message.messageId}`),
+    onNewTask: (message: MailMessageDto) => acted.push(`new-task ${message.accountId} ${message.messageId}`),
     onOpenTask: (taskId: string) => acted.push(`open-task ${taskId}`),
     onSearchSender: (address: string) => acted.push(`search ${address}`),
     onCopyLink: (message: MailMessageDto) => acted.push(`copy ${message.accountId} ${message.messageId}`),
@@ -174,7 +176,8 @@ describe('the ordinary inbox row', () => {
       'Reply all',
       'Forward',
       '-',
-      'Make a task',
+      'Talk to CEO',
+      'New task',
       '-',
       'Find mail from this sender',
       'Copy Walnut link',
@@ -207,7 +210,8 @@ describe('the ordinary inbox row', () => {
     for (const one of pressable(items)) one.onSelect?.();
     expect(acted).toEqual([
       `open ${READER} INBOX:2:11`,
-      `task ${READER} INBOX:2:11`,
+      `ceo ${READER} INBOX:2:11`,
+      `new-task ${READER} INBOX:2:11`,
       'search office@example.invalid',
       `copy ${READER} INBOX:2:11`,
       // The Walnut rows take the pair off the ROW as well. `Draft a reply` is missing because this
@@ -261,7 +265,7 @@ describe('the send gate', () => {
     // the two Walnut rows that ask a question: reading a mail to a model needs no SMTP.
     expect(pressable(items).map((one) => one.label))
       .toEqual([
-        'Mark as read', 'Open message', 'Make a task', 'Find mail from this sender', 'Copy Walnut link',
+        'Mark as read', 'Open message', 'Talk to CEO', 'New task', 'Find mail from this sender', 'Copy Walnut link',
         'Summarize with Walnut', 'Ask Walnut about this…',
       ]);
   });
@@ -307,10 +311,22 @@ describe('a title is only said when it is true', () => {
   });
 });
 
-describe('the task row', () => {
-  it('offers Make a task with no taskId and Open task with one', () => {
-    expect(build().find((one) => one.key === 'task')!.label).toBe('Make a task');
+describe('the content action rows', () => {
+  it('offers Talk to CEO and New task on the row they were opened on, and never makes a task itself', () => {
+    const items = build();
+    expect(items.find((one) => one.key === 'talk-to-ceo')!.label).toBe('Talk to CEO');
+    expect(items.find((one) => one.key === 'new-task')!.label).toBe('New task');
+    // No task id, so there is nothing to open.
+    expect(items.find((one) => one.key === 'task')).toBeUndefined();
+    items.find((one) => one.key === 'talk-to-ceo')!.onSelect!();
+    items.find((one) => one.key === 'new-task')!.onSelect!();
+    expect(acted).toEqual([`ceo ${WRITER} INBOX:1:31`, `new-task ${WRITER} INBOX:1:31`]);
+  });
+
+  it('adds Open task after them when an older Walnut already made a task from this mail', () => {
     const held = build({ message: { taskId: 'task-9' } });
+    const keys = held.filter((one) => !one.divider).map((one) => one.key);
+    expect(keys.slice(keys.indexOf('talk-to-ceo'), keys.indexOf('talk-to-ceo') + 3)).toEqual(['talk-to-ceo', 'new-task', 'task']);
     expect(held.find((one) => one.key === 'task')!.label).toBe('Open task');
     held.find((one) => one.key === 'task')!.onSelect!();
     expect(acted).toEqual(['open-task task-9']);
@@ -375,13 +391,14 @@ describe('mail this person wrote is a different menu', () => {
   const draft = { outbound: true, draftsView: true, message: { mailboxId: 'Drafts', flags: [] } };
   const sent = { outbound: true, message: { mailboxId: 'Sent', flags: ['\\Seen'] } };
 
-  it('a provider drafts row: continue editing, the task row and the link, nothing else', () => {
+  it('a provider drafts row: continue editing, the content actions and the link, nothing else', () => {
     const items = build(draft);
     expect(labels(items)).toEqual([
       'To Writer · Pontoon works next week',
       'Continue editing',
       '-',
-      'Make a task',
+      'Talk to CEO',
+      'New task',
       '-',
       'Copy Walnut link',
       // Two of the three Walnut rows. `Draft a reply with Walnut` goes with `Reply`: there is nobody
@@ -401,7 +418,7 @@ describe('mail this person wrote is a different menu', () => {
     expect(items.find((one) => one.key === 'sender')).toBeUndefined();
   });
 
-  it('a sent row keeps the read toggle, Open, Forward, the task row and the link', () => {
+  it('a sent row keeps the read toggle, Open, Forward, the content actions and the link', () => {
     const items = build(sent);
     expect(labels(items)).toEqual([
       'To Writer · Pontoon works next week',
@@ -411,7 +428,8 @@ describe('mail this person wrote is a different menu', () => {
       '-',
       'Forward',
       '-',
-      'Make a task',
+      'Talk to CEO',
+      'New task',
       '-',
       'Copy Walnut link',
       '-',

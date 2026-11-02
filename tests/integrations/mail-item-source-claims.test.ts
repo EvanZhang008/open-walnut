@@ -1,60 +1,66 @@
-import { describe, it, expect, vi } from 'vitest';
+/**
+ * The mail plugin's half of the legacy Inbox `create_task` path (`item-source.ts`), which stays on
+ * the server for older phone apps: the trusted source a letter's mail item resolves to, keyed and
+ * ledgered the way the plugin's own read paths find it. A mail no longer becomes a task through the
+ * plugin itself (the Mail reader offers Talk to CEO / New task), so this is the one ledger writer.
+ */
+import { afterAll, describe, it, expect, vi } from 'vitest';
 import { createMockConstants } from '../helpers/mock-constants.js';
 vi.mock('../../src/constants.js', () => createMockConstants('mail-source-claims'));
-import { MailMessageTasks } from '../../src/integrations/mail/message-tasks.js';
-import { addTaskIdempotently } from '../../src/core/task-create-idempotency.js';
-import { addTask, deleteTask, getTask, listTasksSlim } from '../../src/core/task-manager.js';
+import { registerMailItemSource } from '../../src/integrations/mail/item-source.js';
+import { resolveInboxSource } from '../../src/core/human-inbox/item-source-registry.js';
 import { claimSourceTask, sourcePairKey } from '../../src/core/source-task-claims.js';
-import type { MailMessageDto } from '../../src/integrations/mail/contract.js';
+import { taskIdForKey } from '../../src/core/task-create-idempotency.js';
 
-const rows = new Map<string, { task_id: string }>();
-const store = { tasks: { getMessageTask: async (key: string) => rows.get(key), claimMessageTask: async (row: { key: string; taskId: string }) => {
-  if (!rows.has(row.key)) rows.set(row.key, { task_id: row.taskId });
-  return rows.get(row.key)!.task_id;
-} } };
-const message = { accountId: 'account-a', messageId: 'message-a', rfcMessageId: 'shared-reference', subject: 'A saved message', snippet: 'Reference data', from: { name: 'Fixture sender', address: 'sender@example.invalid' }, sentAt: 1 } as MailMessageDto;
-const tasks = {
-  get: async (id: string) => { try { return await getTask(id); } catch (error) { if (error instanceof Error && /No task found matching/.test(error.message)) return null; throw error; } },
-  create: async (input: { title: string; description?: string; project?: string; tags?: string[]; idempotency_key?: string }) => (await addTaskIdempotently(input, input.idempotency_key, input)).task,
-  appendNote: async () => {},
+const ACCOUNT = 'account-a';
+const ledger = new Map<string, string>();
+const messages: Record<string, Record<string, unknown>> = {
+  'message-a': { account_id: ACCOUNT, message_id: 'message-a', rfc_message_id: 'shared-reference', flags_json: '["\\\\Seen"]', updated_at: 5_000 },
+  // No Message-ID header, so its key is the cache form.
+  'message-b': { account_id: ACCOUNT, message_id: 'message-b', rfc_message_id: '', flags_json: '[]', updated_at: 0 },
 };
-function service() {
-  return new MailMessageTasks({ store: store as never, events: { messageTasked() {} } as never, tasks,
-    read: { message: async () => message, accountLabel: async () => 'Fixture account', bodyText: async () => '' }, log: { warn() {} } });
-}
-describe('Legacy mail entry uses canonical pre-create claim', () => {
-  it('two independent entry instances create one task and retain a deleted tombstone', async () => {
-    const [one, two] = await Promise.all([service().link({ accountId: 'account-a', messageId: 'message-a' }), service().link({ accountId: 'account-a', messageId: 'message-a' })]);
-    expect(one.taskId).toBe(two.taskId);
-    expect(await listTasksSlim({ minimal: true })).toHaveLength(1);
-    const original = one.taskId;
-    await deleteTask(original);
-    await expect(service().link({ accountId: 'account-a', messageId: 'message-a' })).rejects.toThrow('Target deleted');
-    expect(rows.get('rfc:shared-reference')!.task_id).toBe(original);
-    expect(await listTasksSlim({ minimal: true })).toHaveLength(0);
+const store = {
+  getAccount: async (id: string) => (id === ACCOUNT ? { account_id: ACCOUNT } : undefined),
+  getMessage: async (account: string, id: string) => (account === ACCOUNT ? messages[id] : undefined),
+  tasks: {
+    getMessageTask: async (key: string) => (ledger.has(key) ? { task_id: ledger.get(key)! } : undefined),
+    claimMessageTask: async (row: { key: string; taskId: string }) => {
+      if (!ledger.has(row.key)) ledger.set(row.key, row.taskId);
+      return ledger.get(row.key)!;
+    },
+  },
+};
+const unregister = registerMailItemSource(store as never);
+afterAll(() => unregister());
+
+const source = (message: string) => ({ kind: 'mail' as const, account: ACCOUNT, message });
+
+describe('the legacy Inbox mail source', () => {
+  it('resolves a cached message to the ledger key the read paths use, with its read flag', async () => {
+    const trusted = await resolveInboxSource(source('message-a'));
+    expect(trusted.key).toBe('rfc:shared-reference');
+    expect(trusted.readObservation).toEqual({ read: true, observedAt: new Date(5_000).toISOString() });
+    expect((await resolveInboxSource(source('message-b'))).key).toBe(`cache:${JSON.stringify([ACCOUNT, 'message-b'])}`);
   });
-  it('reuses an attached task through the legacy entry without creating an orphan', async () => {
-    const target = (await addTask({ title: 'An existing task' })).task;
-    const attachedMessage = { ...message, rfcMessageId: 'attached-reference', messageId: 'attached-message' };
-    const attachedKey = 'rfc:attached-reference';
-    await claimSourceTask({ key: attachedKey, pair: sourcePairKey('account-a', attachedMessage.messageId), targetTaskId: target.id,
-      confirmation: { intent: 'attach_task', goal: 'Review the release', targetTaskId: target.id },
-      adapter: { legacyTaskId: async k => rows.get(k)?.task_id, writeLegacy: async (k, taskId) => { rows.set(k, { task_id: taskId }); } } });
-    const create = vi.fn(tasks.create);
-    const linked = new MailMessageTasks({ store: store as never, events: { messageTasked() {} } as never, tasks: { ...tasks, create },
-      read: { message: async () => attachedMessage, accountLabel: async () => 'Fixture account', bodyText: async () => '' }, log: { warn() {} } });
-    expect(await linked.link({ accountId: 'account-a', messageId: attachedMessage.messageId })).toEqual({ taskId: target.id, created: false });
-    expect(create).not.toHaveBeenCalled();
-    expect(await listTasksSlim({ minimal: true })).toHaveLength(1);
-    await deleteTask(target.id);
-    await expect(linked.link({ accountId: 'account-a', messageId: attachedMessage.messageId })).rejects.toThrow('Target deleted');
-    expect(create).not.toHaveBeenCalled();
+
+  it('refuses a message the cache does not hold', async () => {
+    await expect(resolveInboxSource(source('message-gone'))).rejects.toThrow('Email unavailable');
   });
-  it('does not treat a task read exception as deletion or authorization to recreate', async () => {
-    const broken = new MailMessageTasks({ store: store as never, events: { messageTasked() {} } as never, tasks: { ...tasks, get: async () => { throw new Error('Transport unavailable'); } },
-      read: { message: async () => ({ ...message, messageId: 'transport-message', rfcMessageId: 'transport-reference' }), accountLabel: async () => 'Fixture account', bodyText: async () => '' }, log: { warn() {} } });
-    rows.set('rfc:transport-reference', { task_id: 'saved-task-id' });
-    await expect(broken.link({ accountId: 'account-a', messageId: 'transport-message' })).rejects.toThrow('Transport unavailable');
-    expect(rows.get('rfc:transport-reference')!.task_id).toBe('saved-task-id');
+
+  it('two overlapping claims through it reserve one task id and write one ledger row', async () => {
+    const { key, adapter } = await resolveInboxSource(source('message-a'));
+    const pair = sourcePairKey(ACCOUNT, 'message-a');
+    const [one, two] = await Promise.all([claimSourceTask({ key, pair, adapter }), claimSourceTask({ key, pair, adapter })]);
+    expect(one.taskId).toBe(taskIdForKey(`mail-source:${key}`));
+    expect(two.taskId).toBe(one.taskId);
+    expect(ledger.get(key)).toBe(one.taskId);
+  });
+
+  it('reuses the task an older Walnut linked, never a replacement', async () => {
+    const { key, adapter } = await resolveInboxSource(source('message-b'));
+    ledger.set(key, 'older-walnut-task');
+    const claim = await claimSourceTask({ key, pair: sourcePairKey(ACCOUNT, 'message-b'), adapter });
+    expect(claim).toMatchObject({ taskId: 'older-walnut-task', legacy: true, created: true });
+    expect(ledger.get(key)).toBe('older-walnut-task');
   });
 });

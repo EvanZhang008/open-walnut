@@ -22,6 +22,9 @@ export default defineConfig({
       // and a rule only one of them applies reappears as an artifact on reload.
       '@open-walnut/pending-markup': path.resolve(__dirname, '../src/core/stream/pending-markup.ts'),
       '@open-walnut/service-url': path.resolve(__dirname, '../src/core/service-url.ts'),
+      // Same reason: what "Talk to CEO" sends and what "New task" fills a draft with have ONE
+      // definition, read by the server's route and this browser alike.
+      '@open-walnut/content-item': path.resolve(__dirname, '../src/core/content-actions/content-item.ts'),
       // Same reason, third time: "one compaction is one row" must hold in the
       // browser reducer AND in the server stream buffer, or the row count changes
       // when a reload swaps which twin produced the timeline.

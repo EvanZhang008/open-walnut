@@ -195,7 +195,7 @@ export function createWatcherExecutor(deps: WatcherExecutorDeps = {}): ExecutorD
         label: 'What to watch',
         kind: 'textarea',
         required: true,
-        placeholder: 'Check my unread mail. If something needs a reply from me, make a task for it. Ignore newsletters.',
+        placeholder: 'Check my unread mail. If something needs a reply from me, tell me with its link. Ignore newsletters.',
       },
       {
         name: 'tools',

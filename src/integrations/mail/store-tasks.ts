@@ -70,9 +70,9 @@ export class MailTaskStore {
    *
    * The return value is the point of the method. `DO NOTHING` means a second caller's INSERT is a
    * no-op instead of an overwrite, and the re-read is what turns "I lost the race" into "here is
-   * the id you should report" without either caller having to parse a constraint error. The plugin
-   * runs in one process, so `MailMessageTasks` also serializes callers in memory; this is the half
-   * that stays correct if that ever stops being true.
+   * the id you should report" without either caller having to parse a constraint error. Its one
+   * writer today is the legacy Inbox `create_task` path (`item-source.ts`), which also holds a
+   * shared source claim; this is the half that stays correct without it.
    *
    * `replacing` is the repoint path: the caller saw a ledger row whose task no longer exists, and
    * naming that dead id in the WHERE clause is what makes the swap safe against a concurrent claim

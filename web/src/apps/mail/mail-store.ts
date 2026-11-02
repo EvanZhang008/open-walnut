@@ -106,16 +106,6 @@ export interface MailOpenMessage {
   error: string | null;
   /** Per MESSAGE, never remembered: the human opted this one body into remote images. */
   allowRemoteImages: boolean;
-  /** A "make a task" request is in flight for this message. */
-  taskBusy: boolean;
-  /**
-   * Why the last "make a task" did not work, in words, next to the button that failed.
-   *
-   * Kept on the OPEN MESSAGE rather than in a global notice, because that is where the human is
-   * looking, and because it has to disappear when they move to another message: a failure about a
-   * mail they have left is noise on the one they are reading now.
-   */
-  taskError: string | null;
 }
 
 /**

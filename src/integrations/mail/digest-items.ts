@@ -68,6 +68,7 @@ export function digestLetterItem(item: DigestItem): InboxLetterItem | undefined 
     summary: text(item.summary, 4000) || EMAIL_SUMMARY_UNAVAILABLE,
     ...(item.display ? { display: item.display } : {}),
     ...(item.readObservation ? { readObservation: item.readObservation } : {}),
-    actions: (['mark_read', 'find_task', 'create_task'] as const).map(intent => ({ id: `${id}:${intent}`, kind: 'op', intent })),
+    // Talk to CEO and New task are Walnut's own, on every item (item-schema.ts LEGACY_TASK_INTENTS).
+    actions: [{ id: `${id}:mark_read`, kind: 'op', intent: 'mark_read' }],
   }
 }

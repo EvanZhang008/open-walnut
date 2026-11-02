@@ -20,7 +20,7 @@ import { canAnswerInvites, mayOfferMarkRead } from './mail-providers';
 import { bodyQuoteText } from './mail-quote-text';
 import { attachmentKind, senderMark, type AttachmentKind } from './mail-reader-format';
 import { setOpenMessageRead } from './mail-read-flag';
-import { MailTaskButton } from './MailTaskButton';
+import { MailContentActions } from './MailContentActions';
 import { MailInviteCard } from './MailInviteCard';
 import { MailSortLine } from './MailSortLine';
 import type { MailOpenMessage } from './mail-store';
@@ -202,15 +202,15 @@ function rawDate(message: Message): string {
 }
 
 /**
- * Reply, Reply all, Forward, Make a task, and the read flag.
+ * Reply, Reply all, Forward, Talk to CEO / New task, and the read flag.
  *
  * The three send actions are disabled rather than hidden when the account cannot send: a missing
  * button is a mystery, and the fix (add SMTP settings) belongs next to the thing it unlocks.
  * Reply all is offered even when the arithmetic will add nobody, because "there is nobody else" is
  * not a claim this header is able to make.
  *
- * Make a task is NOT gated on anything: it writes a Walnut task and touches no mail server. The
- * read flag follows the provider's declared capability, which is data, never a guess: a provider
+ * Talk to CEO and New task are NOT gated on anything: they hand the mail to Walnut and touch no
+ * mail server (web/src/utils/content-actions.ts). The read flag follows the provider's declared capability, which is data, never a guess: a provider
  * that cannot move the flag would answer 409 and the mailbox would drift from what every other mail
  * client shows. An answer nobody has YET is not a no (see mayOfferMarkRead).
  */
@@ -279,7 +279,7 @@ function ReaderActions({ open, message, accounts, providers }: Props) {
       >
         <ForwardIcon size={15} />
       </button>
-      <MailTaskButton open={open} />
+      <MailContentActions open={open} />
       <button
         type="button"
         className="mail-round-btn"

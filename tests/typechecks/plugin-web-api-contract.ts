@@ -1,5 +1,7 @@
 import type { WalnutWebApi as PublicWebApi } from '../../packages/plugin-api/src/web.js'
 import type { WalnutWebApiHost as HostWebApi } from '../../web/src/plugins/types.js'
+import type { ContentItem as SdkContentItem } from '../../packages/plugin-api/src/content-actions.js'
+import type { ContentItem as CoreContentItem } from '../../src/core/content-actions/content-item.js'
 
 type IsAny<T> = 0 extends (1 & T) ? true : false
 type ExpectFalse<T extends false> = T
@@ -16,6 +18,19 @@ void (null as unknown as HostApiMustNotBeAny)
 void (null as unknown as HostOnlyKeys)
 void (null as unknown as PublicOnlyKeys)
 void hostImplementsPublicContract
+
+// The content item a plugin hands to walnut.content is the one the server reads, field for field.
+type ContentSdkOnly = ExpectNever<Exclude<keyof SdkContentItem, keyof CoreContentItem>>
+type ContentCoreOnly = ExpectNever<Exclude<keyof CoreContentItem, keyof SdkContentItem>>
+const sdkItemIsCore: CoreContentItem = null as unknown as SdkContentItem
+const coreItemIsSdk: SdkContentItem = null as unknown as CoreContentItem
+void (null as unknown as ContentSdkOnly)
+void (null as unknown as ContentCoreOnly)
+void sdkItemIsCore
+void coreItemIsSdk
+const contentActions = hostApi.content.actions({ source: 'Chat', title: 'Review the plan' })
+const firstActionLabel: string = contentActions[0].label
+void firstActionLabel
 
 const app = hostApi.ui.app({
   id: 'main',

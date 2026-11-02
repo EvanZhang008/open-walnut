@@ -62,9 +62,6 @@ const mailItem = (id: string): InboxLetterItem => ({
   },
   actions: [
     { id: `${id}-read`, kind: 'op', intent: 'mark_read' },
-    { id: `${id}-find`, kind: 'op', intent: 'find_task' },
-    { id: `${id}-create`, kind: 'op', intent: 'create_task' },
-    { id: `${id}-attach`, kind: 'op', intent: 'attach_task' },
     { id: `${id}-ask`, kind: 'reply_ai', label: 'Ask about this mail', question: `Explain mail ${id}` },
   ],
 })

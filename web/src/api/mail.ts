@@ -180,11 +180,10 @@ export interface MailMessageDto {
   hasBody: boolean;
   threadId?: string;
   /**
-   * The task this message was turned into, when it was.
+   * The task an older Walnut turned this message into, when it did.
    *
    * Derived by the server on every read from its own ledger, so it is never stale: a task the human
-   * deletes stops appearing here. The reader shows the task pill instead of the button when it is
-   * set, and `plugin:mail:message-tasked` is what fills it in without a refetch.
+   * deletes stops appearing here. The reader shows its pill beside Talk to CEO and New task.
    */
   taskId?: string;
   /**
@@ -469,21 +468,6 @@ export interface MailMessageTask {
   /** True on a 202: the write is still running, and asking again returns the task. */
   pending?: boolean;
   message?: string;
-}
-
-/**
- * Make a task out of one message, or learn which task it already is.
- *
- * Idempotent on the SERVER, which is what makes a double click harmless: the second call answers
- * 200 with the same `taskId` and `created: false`. The console still guards the button, but it does
- * not have to be right for the data to stay right.
- */
-export function createMailMessageTask(
-  accountId: string,
-  messageId: string,
-  input?: { title?: string; project?: string; note?: boolean },
-): Promise<MailMessageTask> {
-  return apiPost(`${messagePath(accountId, messageId)}/task`, input ?? {}, QUIET);
 }
 
 /**

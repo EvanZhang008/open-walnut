@@ -110,7 +110,7 @@ test('N1, N12: Tab steers the highlight here as well, and closes nothing', async
   console.log(`shot: ${await shoot(page, SHOT_DIR, 'n1-keyboard')}`)
 })
 
-test('N2, N10: the answer floats and the rows stay where they were', async ({ page }) => {
+test('N2: the answer floats and the rows stay where they were', async ({ page }) => {
   await intoWriterInbox(page, port)
   const before = await rowTops(page)
   await openRowMenu(page, WRITER, KEEPER)
@@ -123,11 +123,6 @@ test('N2, N10: the answer floats and the rows stay where they were', async ({ pa
   expect(said.insidePane).toBe(true)
   expect(await rowTops(page)).toEqual(before)
 
-  await openRowMenu(page, WRITER, LUNCH)
-  await item(page, 'Make a task').click()
-  await expect(row(page, WRITER, LUNCH).getByTestId('mail-row-task')).toHaveCount(1, { timeout: 30_000 })
-  await expect(page.getByTestId('mail-row-note')).toContainText('Task made from', { timeout: 30_000 })
-  expect(await rowTops(page)).toEqual(before)
   console.log(`shot: ${await shoot(page, SHOT_DIR, 'n2-floating-answer')}`)
 })
 

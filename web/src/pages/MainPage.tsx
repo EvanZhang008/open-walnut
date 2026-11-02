@@ -7,6 +7,7 @@ import { stripEntityRefsToText } from '@/utils/markdown';
 import type { ImageAttachment } from '@/api/chat';
 import { useEvent } from '@/hooks/useWebSocket';
 import { seedDraftComposer, waitUntilPrefix, WAIT_UNTIL_EVENT } from '@/utils/wait-until';
+import { CONTENT_NEW_TASK_EVENT, type ContentNewTaskDetail } from '@/utils/content-actions';
 import { useStoreTask, useTasksContext } from '@/contexts/TasksContext';
 import { useNotifications } from '@/contexts/notifications';
 import { useFavorites } from '@/hooks/useFavorites';
@@ -1046,6 +1047,14 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       });
       if (draftId) seedDraftComposer(draftId, waitUntilPrefix(), draftComposerKey(draftId));
     };
+    // "New task" on a piece of content (utils/content-actions.ts): a fresh draft, its composer
+    // started with the content's title and context. Nothing exists until the user sends it.
+    const handleContentNewTask = (e: Event) => {
+      const text = (e as CustomEvent<ContentNewTaskDetail>).detail?.text;
+      if (!text) return;
+      const draftId = openDraftColumnRef.current();
+      if (draftId) seedDraftComposer(draftId, text, draftComposerKey(draftId));
+    };
     const handleToggleTodo = () => {
       if (document.activeElement?.closest('#home-task-navigation')) document.querySelector<HTMLButtonElement>('.app-task-panel-toggle')?.focus();
       setTodoVisible(prev => { if (prev) todoHideAskedRef.current = true; return !prev; });
@@ -1064,6 +1073,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
     window.addEventListener('session-launcher:open', handleSessionLauncher);
     window.addEventListener('task-composer:open', handleTaskComposer);
     window.addEventListener(WAIT_UNTIL_EVENT, handleWaitUntil);
+    window.addEventListener(CONTENT_NEW_TASK_EVENT, handleContentNewTask);
     window.addEventListener('sidebar:toggle-todo', handleToggleTodo);
     window.addEventListener('sidebar:toggle-routines', handleToggleRoutines);
     window.addEventListener('sidebar:toggle-calendar', handleToggleCalendar);
@@ -1075,6 +1085,7 @@ export function MainPage({ visible = true, navigateRef }: MainPageProps) {
       window.removeEventListener('session-launcher:open', handleSessionLauncher);
       window.removeEventListener('task-composer:open', handleTaskComposer);
       window.removeEventListener(WAIT_UNTIL_EVENT, handleWaitUntil);
+      window.removeEventListener(CONTENT_NEW_TASK_EVENT, handleContentNewTask);
       window.removeEventListener('sidebar:toggle-todo', handleToggleTodo);
       window.removeEventListener('sidebar:toggle-routines', handleToggleRoutines);
       window.removeEventListener('sidebar:toggle-calendar', handleToggleCalendar);

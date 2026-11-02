@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { draftsOffDevice, viewStatesInMemory, type DraftHome } from './view-state-scan.js'
+import { contentTaskCalls, contentTaskWarning } from './content-task-scan.js'
 
 export interface PluginBuildConfig {
   server?: string
@@ -184,6 +185,7 @@ export async function validatePlugin(root = process.cwd()): Promise<ValidationRe
   }
 
   if (manifest.web) warnings.push(...await viewStateWarnings(root, manifest.build?.web ?? 'src/web.tsx'))
+  warnings.push(...await contentTaskWarnings(root))
 
   return { manifest, errors, warnings }
 }
@@ -226,6 +228,30 @@ async function viewStateWarnings(root: string, webEntry: string): Promise<string
   }
   await visit(path.dirname(path.join(root, webEntry)))
   return out.slice(0, VIEW_WARNINGS_MAX)
+}
+
+const CONTENT_TASK_WARNINGS_MAX = 20
+
+/** Every place the plugin makes a task itself (content-task-scan.ts), server and web code alike. */
+async function contentTaskWarnings(root: string): Promise<string[]> {
+  const out: string[] = []
+  const visit = async (dir: string): Promise<void> => {
+    let entries: Array<import('node:fs').Dirent>
+    try { entries = await fs.readdir(dir, { withFileTypes: true }) } catch { return }
+    for (const entry of entries) {
+      if (out.length >= CONTENT_TASK_WARNINGS_MAX) return
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        if (!['node_modules', 'dist', 'tests', 'test', '.git'].includes(entry.name)) await visit(full)
+      } else if (/\.(?:tsx?|jsx?|mjs)$/.test(entry.name) && !/\.(?:test|spec|d)\.[jt]sx?$/.test(entry.name)) {
+        const src = await fs.readFile(full, 'utf8').catch(() => '')
+        const rel = path.relative(root, full).split(path.sep).join('/')
+        for (const call of contentTaskCalls(src)) out.push(contentTaskWarning(rel, call))
+      }
+    }
+  }
+  await visit(root)
+  return out.slice(0, CONTENT_TASK_WARNINGS_MAX)
 }
 
 export function assertValid(result: ValidationResult): PluginManifest {

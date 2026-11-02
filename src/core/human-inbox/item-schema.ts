@@ -57,9 +57,31 @@ export function assertItemIds(items: InboxLetterItem[], existing?: Pick<LetterRe
     }
   }
 }
+/**
+ * The task intents a letter made before 2026-11-02 may carry. A NEW item never keeps one: Walnut
+ * offers every email item the two content actions itself (Talk to CEO, New task; web
+ * utils/content-actions.ts), so neither a plugin nor an agent turns an email into a task from a
+ * letter (2026-11-02, the user: a mail became a task titled with its subject, the raw mail pasted
+ * in). Dropped rather than refused, so a sender written for the old intents still delivers its
+ * letter. Stored letters keep theirs: their receipts stay readable, and an older phone runs them.
+ */
+export const LEGACY_TASK_INTENTS: readonly string[] = ['find_task', 'create_task', 'attach_task'];
+
+/**
+ * The tests of the execution path stored letters still take (prepare, execute, recovery) write
+ * their letter as an older Walnut did. Read only inside a vitest process, so no server, host or
+ * CLI ever keeps a task intent on a new item.
+ */
+function keepsLegacyTaskIntents(): boolean {
+  return !!process.env.VITEST && process.env.WALNUT_TEST_LEGACY_TASK_INTENTS === '1';
+}
+
 export function validateNewItems(raw: unknown, existing?: Pick<LetterRecord, 'items' | 'thread' | 'actions'>): InboxLetterItem[] | undefined {
   if (raw === undefined) return undefined;
-  const items = inboxItemsSchema.parse(raw);
+  const parsed = inboxItemsSchema.parse(raw);
+  const items = keepsLegacyTaskIntents() ? parsed : parsed.map(item => ({
+    ...item, actions: item.actions.filter(action => !(action.kind === 'op' && LEGACY_TASK_INTENTS.includes(action.intent))),
+  }));
   assertItemIds(items, existing);
   return items;
 }

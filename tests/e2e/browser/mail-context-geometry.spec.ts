@@ -550,7 +550,7 @@ test.describe('replica: every write refused', () => {
   /**
    * The replica family, not one sentence. Each path is allowed its own words (C72 asks for exactly
    * that), and the measured wordings differ by path: the read flip says the copy only reads mail, the
-   * task path says mail runs on the primary box. What every one of them must do is say the COPY is the
+   * others say mail runs on the primary box. What every one of them must do is say the COPY is the
    * reason and never blame Walnut, so the family is matched and the exact sentence is recorded.
    */
   const REPLICA = /only reads mail|runs on your primary/i
@@ -595,7 +595,6 @@ test.describe('replica: every write refused', () => {
     // Written in a finally: the run that FAILS is the one whose per-path sentences are worth reading.
     const items: { name: RegExp, on: 'row' | 'folder' }[] = [
       { name: /^Mark as (read|unread)$/, on: 'row' },
-      { name: /^Make a task$/, on: 'row' },
       { name: /^Reply$/, on: 'row' },
       { name: /^Reply all$/, on: 'row' },
       { name: /^Forward$/, on: 'row' },

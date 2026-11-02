@@ -55,9 +55,10 @@ const item = (id = 'mail-1', over: Partial<Item> = {}): Item => ({
   source: { kind: 'mail', account: 'account-1', message: `message-${id}` },
   actions: [{ id: `${id}:read`, kind: 'op', intent: 'mark_read' }], ...over,
 });
+// mark_read is the one op intent a new item keeps: the task intents are dropped (item-schema.ts LEGACY_TASK_INTENTS).
 const eightActions = (id: string): Item['actions'] => [
-  ...(['mark_read', 'find_task', 'create_task', 'attach_task'] as const).map(intent => ({ id: `${id}:${intent}`, kind: 'op' as const, intent })),
-  ...Array.from({ length: 4 }, (_, i) => ({ id: `${id}:reply-${i}`, kind: 'reply_ai' as const, label: 'Ask AI', question: 'What should I do?' })),
+  { id: `${id}:mark_read`, kind: 'op' as const, intent: 'mark_read' as const },
+  ...Array.from({ length: 7 }, (_, i) => ({ id: `${id}:reply-${i}`, kind: 'reply_ai' as const, label: 'Ask AI', question: 'What should I do?' })),
 ];
 const withItems = (items: unknown, extra: Record<string, unknown> = {}) => ({ subject: 'Digest', type: 'info', markdown: 'Independent messages.', items, ...extra });
 // Schema acceptance is separate from the store's cross-item and legacy-button ID checks.
@@ -90,7 +91,7 @@ const ITEM_MATRIX: ItemCase[] = [
   ['duplicate item ids', withItems([item('same', { actions: [] }), item('same', { actions: [] })]), true, false],
   ['action id equals its item', withItems([item('same', { actions: [{ id: 'same', kind: 'op', intent: 'mark_read' }] })]), true, false],
   ['op and reply share an id', withItems([item('mail-1', { actions: [{ id: 'a1', kind: 'op', intent: 'mark_read' }, { id: 'a1', kind: 'reply_ai', label: 'Ask', question: 'Why?' }] })]), true, false],
-  ['action ids repeat across items', withItems([item(), item('mail-2', { actions: [{ id: 'mail-1:read', kind: 'op', intent: 'find_task' }] })]), true, false],
+  ['action ids repeat across items', withItems([item(), item('mail-2', { actions: [{ id: 'mail-1:read', kind: 'op', intent: 'mark_read' }] })]), true, false],
   ['later item id equals earlier action', withItems([item(), item('mail-1:read', { actions: [] })]), true, false],
   ['later action id equals earlier item', withItems([item('mail-1', { actions: [] }), item('mail-2', { actions: [{ id: 'mail-1', kind: 'op', intent: 'mark_read' }] })]), true, false],
   ['legacy button collides with item', withItems([item()], { type: 'action_required', actions: [{ id: 'mail-1', label: 'Continue' }] }), true, false],

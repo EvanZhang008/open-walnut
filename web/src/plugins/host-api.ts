@@ -1,3 +1,4 @@
+import { contentActions, newTaskFromContent, talkToCeo } from '@/utils/content-actions'
 import { apiDelete, apiGet, apiPost } from '@/api/client'
 import { getDeviceToken } from '@/api/device-token'
 import { wsClient } from '@/api/ws'
@@ -263,6 +264,12 @@ export function createWebPluginApi(
     },
     appState,
     ai: createWebAi(pluginId, context.signal),
+    // The same two choices Walnut's own surfaces offer; the item is checked there (normalizeContentItem).
+    content: {
+      actions: (item) => contentActions(item),
+      talkToCeo: (item) => talkToCeo(item),
+      newTask: (item) => newTaskFromContent(item),
+    },
     ws: {
       call<T = unknown>(id: string, payload: unknown = {}) {
         validateLocalId(id)

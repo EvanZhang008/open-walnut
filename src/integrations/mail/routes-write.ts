@@ -119,8 +119,8 @@ export function registerMailWriteRoutes(
    *
    * Here rather than in routes.ts because it makes NETWORK EGRESS and (from S8) can send mail, which
    * is what this file is for. Registered after the read routes, which is safe and is also why it can
-   * live here at all: the `/messages/:a/:m` mount only matches its own root, and `/read` and `/task`
-   * are literal fourth segments that `unsubscribe` is not.
+   * live here at all: the `/messages/:a/:m` mount only matches its own root, and `/read` is a
+   * literal fourth segment that `unsubscribe` is not.
    *
    * Answers:
    *   200 { ok: true,  status: 'done',        method, at, message }

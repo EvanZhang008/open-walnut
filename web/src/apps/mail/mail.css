@@ -235,7 +235,7 @@
   transform: translateY(-2px);
 }
 
-/* ── make a task, and the pill it becomes ── */
+/* ── Talk to CEO / New task, and the pill of a task made earlier ── */
 
 .mail-task-slot {
   display: inline-flex;

@@ -38,7 +38,8 @@ function sendlessMenu(): ContextMenuItem[] {
     { key: 'reply-all', label: 'Reply all', disabled: true, title: WHY, onSelect: () => {} },
     { key: 'forward', label: 'Forward', disabled: true, title: WHY, onSelect: () => {} },
     { divider: true },
-    { key: 'task', label: 'Make a task', onSelect: () => {} },
+    { key: 'talk-to-ceo', label: 'Talk to CEO', onSelect: () => {} },
+    { key: 'new-task', label: 'New task', onSelect: () => {} },
   ]);
 }
 
@@ -172,7 +173,7 @@ describe('R3-06 no row that does nothing, and one warning that is true', () => {
       readerHasRow: over.readerHasRow === true,
       actions: {
         onSetRead: () => {}, onOpen: () => {}, onReply: () => {}, onForward: () => {},
-        onMakeTask: () => {}, onOpenTask: () => {}, onSearchSender: () => {}, onCopyLink: () => {},
+        onTalkToCeo: () => {}, onNewTask: () => {}, onOpenTask: () => {}, onSearchSender: () => {}, onCopyLink: () => {},
       },
     });
   }

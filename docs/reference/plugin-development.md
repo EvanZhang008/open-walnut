@@ -1213,6 +1213,35 @@ Each tab of the browser shows its own `useView` values too: when the user has yo
 
 `walnut-plugin validate` (and `build`, `dev`, `publish-check`) warns on a view choice your web code keeps in `useState`, and on a draft kept anywhere but `useDraft` (in `useState`, in `useView`, or in a `localStorage` key of your own), naming the file and line. `useView` is optional on an older host: feature-detect it.
 
+### Content: Talk to CEO and New task
+
+When your App shows content (an email, a chat message, a post), Walnut offers the person the same two choices on it as everywhere else in Walnut, and your plugin never makes a task out of it itself:
+
+- **Talk to CEO** sends the content, with its context, into the main agent's chat as the person's message. A toast says it was sent and opens that chat.
+- **New task** opens the home page's new-task draft with the content's title on the first line and its context below. The person writes the first prompt, picks a project and a host, and presses Send; nothing exists until then.
+
+Describe the content as a `ContentItem` and hand it over:
+
+```ts
+const item = {
+  source: 'Chat',                 // where it comes from, in plain words
+  title: message.text.slice(0, 120),
+  text: message.text,             // the words, never read as instructions
+  from: message.author,
+  at: message.sentAt,             // ISO 8601
+  where: `#${channel.name}`,
+  open: `/apps/my-chat?message=${encodeURIComponent(message.id)}`,  // where it opens in Walnut
+  url: message.permalink,         // its address outside Walnut
+}
+// In a menu: two entries with label, description and run().
+const entries = walnut.content?.actions(item) ?? []
+// Or as two buttons:
+const ContentActions = walnut.ui.views.ContentActions
+return ContentActions ? <ContentActions item={item} /> : null
+```
+
+Walnut cleans and caps every field (the text keeps its first 1,500 characters) and builds both the CEO's message and the draft from it, so every plugin's items read the same. `walnut-plugin validate` warns on code that makes a task itself (`walnut.tasks.create`, the `task_create` op, a POST to the task routes); a task that does not come from content (your App's own agent session, a sync import) can stay. Both members are optional on an older host: feature-detect them.
+
 ### Voice input in your own text box
 
 `walnut.ui.views.MicButton` is the mic of Walnut's own composer, for a textarea or one-line input your plugin draws. It records and transcribes with the person's Voice settings and engine (Settings → Voice), so there is nothing to configure in your plugin and no second voice setup. Words appear in the box while the person speaks when the engine can draft live, then the final text replaces them and the box takes the focus with the caret after it. A right-click on the mic opens the same retry menu as everywhere else (another model, the vocabulary, recent recordings). While voice is not set up, or its engine is not working, a click opens Settings → Voice instead of recording. A browser that cannot record draws no mic at all.

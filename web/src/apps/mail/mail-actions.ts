@@ -39,7 +39,7 @@ import { asShownByConsole, mailFlipsInFlight, markReadIfAllowed } from './mail-r
 import { flipCountedBy, forgetFlipCounted, mailCountsClock } from './mail-seen-clock';
 import { noteRecentFolder, readSelectedPref, writeSelectedPref } from './mail-sidebar-prefs';
 import { arrivalsAfterOpen, folderLabel, smartPairs, smartRowVisible, type SmartRole } from './mail-smart';
-import { applyMessageTask, invalidateLetterList } from './mail-task-actions';
+import { invalidateLetterList } from './mail-task-actions';
 import { onMailUnsubscribed } from './mail-unsubscribe-actions';
 import { readGroupedPref } from './mail-grouped-pref';
 import { arrivalCount, onGroupsEvent, reloadListOnScreen } from './mail-groups-live';
@@ -1004,8 +1004,6 @@ export function openMailMessage(
       loading: true,
       error: null,
       allowRemoteImages: false,
-      taskBusy: false,
-      taskError: null,
     },
   });
   return run(`message:${pairKey(accountId, messageId)}${retry ? ':retry' : ''}`, async () => {
@@ -1024,8 +1022,6 @@ export function openMailMessage(
           loading: false,
           error: null,
           allowRemoteImages: store.state.open?.allowRemoteImages ?? false,
-          taskBusy: false,
-          taskError: null,
         },
       });
       await markReadIfAllowed(answer.message);
@@ -1088,8 +1084,6 @@ export function openMailDeepLink(accountId: string, messageId: string, options: 
           loading: false,
           error: null,
           allowRemoteImages: false,
-          taskBusy: false,
-          taskError: null,
         },
       });
       // Inbox source navigation is a read-only preview, not a mail flag action.
@@ -1334,15 +1328,6 @@ export function onMailEvent(name: string, data: unknown): void {
   };
   if (name === 'providers-changed') { void loadProviders(true); return; }
 
-  // A task made anywhere (this tab, another tab, an agent). Ahead of the loaded gate and it makes no
-  // request at all: it stamps the rows this console is already holding, and a console holding none
-  // has nothing to do, since the backlink is derived on every read anyway.
-  if (name === 'message-tasked') {
-    if (payload.accountId && payload.messageId && payload.taskId) {
-      applyMessageTask(payload.accountId, payload.messageId, payload.taskId);
-    }
-    return;
-  }
   // The digest is a LETTER, so nothing in this console changes. What DOES need saying is that the
   // letter list is now out of date: this subscription is session-scoped and runs with the bell shut,
   // and the letter store serves a cached list for 15s to whoever opens next. That is exactly how long

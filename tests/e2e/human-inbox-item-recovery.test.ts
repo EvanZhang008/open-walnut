@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterAll, afterEach } from 'vitest';
 import * as processUtils from '../../src/utils/process.js';
 const worker = vi.hoisted(() => ({ alive: true }));
 const host = vi.hoisted(() => ({ send: vi.fn(), hasCapability: vi.fn() }));
@@ -28,6 +28,11 @@ import * as conversation from '../../src/core/sessions/task-session-claim.js';
 import type { SessionRecord } from '../../src/core/types.js';
 import { z } from 'zod';
 import { definePluginOp } from '../../src/ops/registry.js';
+
+// These run the task intents of letters an older Walnut stored (new items no longer keep them:
+// item-schema.ts LEGACY_TASK_INTENTS), so their letters are written the way it wrote them.
+process.env.WALNUT_TEST_LEGACY_TASK_INTENTS = '1';
+afterAll(() => { delete process.env.WALNUT_TEST_LEGACY_TASK_INTENTS; });
 
 const legacy = new Map<string, string>();
 const adapter = { legacyTaskId: async (key: string) => legacy.get(key), writeLegacy: async (key: string, id: string) => { legacy.set(key, legacy.get(key) ?? id); } };

@@ -12,7 +12,6 @@
  *  · N5  A search started from the menu left the box empty, so the filter was invisible.
  *  · N6  The heading clipped from the right, so the account (the one thing a merged list is asked
  *        about) was the first field lost.
- *  · N10 `Make a task` answered with a glyph only, so it was silent once the row scrolled away.
  *  · N11 A capped menu gave no sign that it scrolls.
  *  · N12 The highlight was a CSS class with no `aria-activedescendant`.
  *
@@ -23,7 +22,7 @@ import fs from 'node:fs/promises'
 import { expect, test } from '@playwright/test'
 import { MailFixtureServer, folderRow, shoot, showAllMail } from './mail-review-helpers'
 import {
-  KEEPER, LUNCH, READER, WRITER,
+  KEEPER, READER, WRITER,
   folderTops, headingLines, intoWriterInbox, item, itemLabels, menu, menuOverflow, openRowMenu,
   probeKeyboard, row, rowTops, rowToast,
 } from './mail-context-fixes-core'
@@ -86,7 +85,7 @@ test('N1, N12: Tab moves the SAME highlight Enter runs, and never a hidden write
   console.log(`shot: ${await shoot(page, SHOT_DIR, 'n1-keyboard')}`)
 })
 
-test('N2, N10: an answer floats over the pane and never moves the rows it is about', async ({ page }) => {
+test('N2: an answer floats over the pane and never moves the rows it is about', async ({ page }) => {
   await intoWriterInbox(page, port)
   const before = await rowTops(page)
   expect(before.length, 'no rows to measure').toBeGreaterThan(2)
@@ -103,13 +102,6 @@ test('N2, N10: an answer floats over the pane and never moves the rows it is abo
   expect(said.insidePane, 'and it is inside the pane the row is in (C44)').toBe(true)
   expect(await rowTops(page), 'the rows did not move').toEqual(before)
 
-  // N10: a task answers in the same slot, so a row the list has scrolled past can still be seen to
-  // have been dealt with. The glyph is the durable mark; this is the sentence.
-  await openRowMenu(page, WRITER, LUNCH)
-  await item(page, 'Make a task').click()
-  await expect(row(page, WRITER, LUNCH).getByTestId('mail-row-task')).toHaveCount(1, { timeout: 30_000 })
-  await expect(page.getByTestId('mail-row-note')).toContainText('Task made from', { timeout: 30_000 })
-  expect(await rowTops(page), 'and the task answer did not move them either').toEqual(before)
   console.log(`shot: ${await shoot(page, SHOT_DIR, 'n2-floating-answer')}`)
 })
 

@@ -26,6 +26,7 @@ import { mayOfferMarkRead } from './mail-providers';
 import { unsubscribeIsDirect, unsubscribeRowState } from './mail-unsubscribe-state';
 import { CANNOT_SEND_TITLE, canSendFrom } from './compose/send-status';
 import { groupsViewKey, requestMailCorrect } from './mail-groups-bus';
+import { CONTENT_ACTION_WORDS } from '@/utils/content-actions';
 
 /** What the menu's items call. The row is passed back so a handler never has to find it again. */
 export interface MessageMenuActions {
@@ -34,7 +35,9 @@ export interface MessageMenuActions {
   /** `all` is reply-all. Forward is its own handler: it is not a reply and carries no `replyTo`. */
   onReply: (message: MailMessageDto, all: boolean) => void;
   onForward: (message: MailMessageDto) => void;
-  onMakeTask: (message: MailMessageDto) => void;
+  /** The two content actions every surface offers (utils/content-actions.ts). */
+  onTalkToCeo: (message: MailMessageDto) => void;
+  onNewTask: (message: MailMessageDto) => void;
   onOpenTask: (taskId: string) => void;
   onSearchSender: (address: string) => void;
   onCopyLink: (message: MailMessageDto) => void;
@@ -364,11 +367,11 @@ export function messageMenuItems(input: MessageMenuInput): ContextMenuItem[] {
       onSelect: () => actions.onForward(message),
     },
     { divider: true },
-    {
-      key: 'task',
-      label: taskId ? 'Open task' : 'Make a task',
-      onSelect: () => { if (taskId) actions.onOpenTask(taskId); else actions.onMakeTask(message); },
-    },
+    // Talk to CEO and New task, the two content actions every surface in Walnut offers; a mail never
+    // becomes a task on its own. A task an older Walnut made from this mail still opens from here.
+    { key: 'talk-to-ceo', label: CONTENT_ACTION_WORDS.talk_to_ceo.label, title: CONTENT_ACTION_WORDS.talk_to_ceo.description, onSelect: () => actions.onTalkToCeo(message) },
+    { key: 'new-task', label: CONTENT_ACTION_WORDS.new_task.label, title: CONTENT_ACTION_WORDS.new_task.description, onSelect: () => actions.onNewTask(message) },
+    { key: 'task', when: !!taskId, label: 'Open task', onSelect: () => { if (taskId) actions.onOpenTask(taskId); } },
     {
       // `Unsubscribe` when the click just does it (one-click, the list's mail, its page): beside `Make a
       // task`, as another thing to do with this mail, with no ✦ because no model is involved.

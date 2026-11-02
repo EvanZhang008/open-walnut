@@ -859,7 +859,7 @@ export class MailUnsubscribe {
     }
 
     const url = method === 'mailto' ? undefined : this.urlFor(subject)
-    // From the MIRROR ROW, the same rule `message-tasks.ts` follows: a letter's account label has no
+    // From the MIRROR ROW, not from the decorated accounts list: a letter's account label has no
     // business reaching a mail server for a name that is in a column.
     const account = await this.deps.store.getAccount(subject.accountId).catch(() => undefined)
     let letterId = ''

@@ -2,7 +2,8 @@ import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { getLeaderPresence, subscribeLeaderPresence } from '@/api/leader-presence';
 import { copyTextRobust } from '@/utils/clipboard';
 import type { InboxItemAction, InboxItemReceipt, InboxLetterItem, InboxTaskCandidate } from '@/api/human-inbox-items';
-import { actionText, accountText, currentTaskText, itemActions, latestReceipt, mailDateText, readHistoryText, receiptText, retryTaskAction, timeText } from './item-receipt-model';
+import { actionText, accountText, currentTaskText, itemActions, itemContent, latestReceipt, mailDateText, readHistoryText, receiptText, retryTaskAction, shownItemActions, timeText } from './item-receipt-model';
+import { ContentActionButtons } from '@/components/content/ContentActionButtons';
 import { useItemExecution } from './useItemExecution';
 import { ItemConfirmation } from './ItemConfirmation';
 import { ItemTaskSelector } from './ItemTaskSelector';
@@ -84,7 +85,7 @@ export function EmailItem({ letterId, item, duplicateLabels, canOpenMail = false
       {copied && <p>{copied}</p>}
     </details>
     <div className="hii-actions">
-      {actions.map(action => {
+      {shownItemActions(item).map(action => {
         const mail = action.kind === 'op' && action.intent === 'mark_read';
         const work = action.kind === 'op' && !mail;
         const aiReceipt = [...state.receipts].reverse().find(r => r.intent === 'reply_ai' && r.actionId === action.id);
@@ -99,6 +100,7 @@ export function EmailItem({ letterId, item, duplicateLabels, canOpenMail = false
             : action.kind === 'reply_ai' ? "Send this question to the letter's AI. No email or task operation runs." : undefined}
           onClick={e => click(action, e.currentTarget)}>{label}</button>;
       })}
+      {!item.unavailableReason && <ContentActionButtons item={itemContent(item)} className="hii-content-actions" />}
     </div>
     {/* Two compact lanes keep asynchronous outcomes from moving the next item. */}
     <div className="hii-receipts" aria-live="polite" aria-atomic="true">

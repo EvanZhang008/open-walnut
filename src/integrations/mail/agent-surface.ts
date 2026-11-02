@@ -1,8 +1,8 @@
 /**
- * The nine mail operations an agent can perform, as ONE implementation.
+ * The eight mail operations an agent can perform, as ONE implementation.
  *
  * `tools.ts` registers these for the Personal AI's tool list and `ops.ts` registers the same
- * nine for the op catalogue. Neither of them holds any logic: two registrations, one behaviour,
+ * eight for the op catalogue. Neither of them holds any logic: two registrations, one behaviour,
  * so a rule fixed for a tool is fixed for the op in the same edit.
  *
  * Three contracts this file keeps, and each one is the reason a line here looks the way it does:
@@ -18,10 +18,9 @@
  *   side of the wall for a body's text to reach.
  * - The one change an agent makes to the mailbox itself is the read flag (`mail_mark_read`), which
  *   is undone by the same call. Nothing here deletes, archives or moves a message.
- * - The one thing here that WRITES outside mail is `mail_to_task`, and everything it writes into
- *   the task is escaped first (see `message-tasks.ts`). A task is read later by an agent that can
- *   act, so a subject able to plant an instruction in a task description would be the same
- *   injection as one in a tool result, just with a longer fuse.
+ * - Nothing here writes outside mail. There is no tool that turns a message into a task: the user
+ *   does that with Talk to CEO or New task on the message, and an agent asked to track a mail
+ *   writes its own task with `task_create`, in its own words, linking the mail.
  *
  * What an answer LOOKS like lives next door in `agent-format.ts`: the shape checks for fields
  * printed outside the block, the per-field caps, and the table. Kept apart because they answer a
@@ -57,7 +56,6 @@ import {
 import { replyHeaders } from './drafts.js'
 import type { MailApprovals } from './approvals.js'
 import type { MailDrafts } from './drafts.js'
-import type { MailMessageTasks } from './message-tasks.js'
 import type { MailService } from './service.js'
 import type { MailUnsubscribe } from './unsubscribe.js'
 import {
@@ -80,8 +78,6 @@ export interface MailAgentDeps {
   service: MailService
   drafts: MailDrafts
   approvals: MailApprovals
-  /** The message-to-task ledger, so the tool and the console cannot disagree about a duplicate. */
-  tasks: MailMessageTasks
   /**
    * The unsubscribe ledger, reached for exactly ONE thing: `requestFromAgent`, which sends a letter.
    *
@@ -484,43 +480,6 @@ async function patchDraft(
   return `${draftJson(again.draft)}\n`
     + `The user was already looking at a letter for the old text, so that one was withdrawn and a `
     + `fresh letter (${again.letterId}) went out for this revision. Do not ask again for it.`
-}
-
-/**
- * Turn a message into a task, or say which task it already is.
- *
- * A WRITE, but not a destructive one, and idempotent by construction: the ledger answers a second
- * call with the same id and `created: false`, so an agent that loses track of what it has already
- * done cannot produce two tasks for one mail.
- *
- * The answer deliberately carries NO text from the message: the ids and one sentence of Walnut's
- * own. A subject in this result would have to be wrapped, and there is nothing here the agent
- * needs it for, since it either just read the message or can read it now.
- */
-export async function mailToTask(deps: MailAgentDeps, input: Record<string, unknown>): Promise<string> {
-  assertPrimary(deps)
-  const account = await resolveAccount(deps, str(input, 'account'))
-  const messageId = str(input, 'message')
-  if (!messageId) {
-    refuse('mail_to_task needs a message id in "message", as listed by mail_list or mail_search.')
-  }
-  const title = str(input, 'title')
-  const project = str(input, 'project')
-  const result = await deps.tasks.link({
-    accountId: account.accountId,
-    messageId,
-    ...(title ? { title } : {}),
-    ...(project ? { project } : {}),
-    ...(input.note === true ? { note: true } : {}),
-  })
-  const sentence = result.created
-    ? 'The task holds where the mail came from, a link back to it, and the preview. '
-      + 'It is in TODO for the user to pick up.'
-    : 'This message already had a task, so nothing new was made and nothing was changed.'
-  const noteNote = result.noteSkipped
-    ? ' The body could not be added as a note (Walnut has no readable body for this message yet).'
-    : ''
-  return `${JSON.stringify({ taskId: result.taskId, created: result.created })}\n${sentence}${noteNote}`
 }
 
 /** How many messages one `mail_mark_read` may flag. A provider without a bulk call is asked once per id. */

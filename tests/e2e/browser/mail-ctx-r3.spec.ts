@@ -202,7 +202,7 @@ test.describe('mail right-click, round 3 fixes', () => {
     await expect(draft, 'the fixture now has a provider draft to right-click').toBeVisible({ timeout: 60_000 })
     await draft.click({ button: 'right' })
     await expect(menu(page)).toHaveCount(1)
-    expect(await itemLabels(page)).toEqual(['Continue editing', 'Make a task', 'Copy Walnut link', 'Summarize with Walnut', 'Ask Walnut about this…'])
+    expect(await itemLabels(page)).toEqual(['Continue editing', 'Talk to CEO', 'New task', 'Copy Walnut link', 'Summarize with Walnut', 'Ask Walnut about this…'])
     console.log(`shot: ${await shoot(page, SHOTS, 'r3-10-drafts-row-menu')}`)
   })
 })

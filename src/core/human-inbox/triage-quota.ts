@@ -92,7 +92,7 @@ export function triageQuotaVerdict(
         message:
           'An action_required letter from Inbox Triage needs at least one button in `actions` — '
           + 'the button is what the human taps and what comes back into this run. Give it the '
-          + 'options you can actually carry out (for example "Make a task", "Reply for me", '
+          + 'options you can actually carry out (for example "Reply for me", '
           + '"Unsubscribe", "Ignore"), or send it as `review` if the user only needs to read it.',
       };
     }

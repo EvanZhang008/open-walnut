@@ -11,6 +11,11 @@ import { registerInboxMailSource } from '../../src/core/human-inbox/item-source-
 import { definePluginOp } from '../../src/ops/registry.js';
 import { setSelfApiRoot } from '../../src/lib/self-api-root.js';
 import { addTask, updateTask } from '../../src/core/task-manager.js';
+
+// These run the find_task intent of a letter an older Walnut stored (new items no longer keep it:
+// item-schema.ts LEGACY_TASK_INTENTS), so the letter is written the way it wrote them.
+process.env.WALNUT_TEST_LEGACY_TASK_INTENTS = '1';
+afterAll(() => { delete process.env.WALNUT_TEST_LEGACY_TASK_INTENTS; });
 let server: Server;
 let root: string;
 let calls: Record<string, unknown>[] = [];

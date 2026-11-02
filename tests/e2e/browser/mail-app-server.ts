@@ -195,6 +195,9 @@ if (withDense) {
 // The mock writes no CLI transcript, so a spec sees the mock's echo of what a launch sent, not the user
 // turn itself: assert on the echo (and on the quick-start body), never on a user bubble.
 const mockCli = path.join(repoRoot, 'tests/providers/mock-claude.mjs')
+// `PW_MAIL_TRANSCRIPTS=1`: the mock files each turn as a CLI transcript under this home, so a chat
+// panel can read back what a session was sent (the content-actions spec reads Main's chat).
+if (process.env.PW_MAIL_TRANSCRIPTS === '1') process.env.MOCK_CLAUDE_TRANSCRIPT_DIR = path.join(tmpBase, '.claude', 'projects')
 const { sessionRunner } = await import('../../../src/providers/claude-code-session.js')
 sessionRunner.setCliCommand(mockCli)
 const { DaemonConnection } = await import('../../../src/providers/daemon-connection.js')
@@ -362,11 +365,12 @@ const viteServer = await createViteServer({
 await viteServer.listen()
 
 /**
- * One row that already carries a task, made through the REAL route before the browser opens.
+ * One row that already carries a task, as an older Walnut left it, before the browser opens.
  *
- * `taskId` on a message is the plugin's own bookkeeping, so a fixture provider cannot seed it: the
- * honest way is to ask the route that writes it. Straight at the API rather than through the proxy,
- * so a `PW_MAIL_WRITES_503` run still gets its seeded row (the seam lives on the Vite server).
+ * A message no longer becomes a task through the mail plugin (the reader offers Talk to CEO / New
+ * task), but the `message_tasks` ledger an older Walnut wrote is still read, so its row keeps its
+ * task. The fixture writes exactly that: a real task, and the ledger row under the key the read
+ * paths look it up by (`messageTaskKey`), straight into the plugin's open database.
  *
  * Bounded and non-fatal: the first sweep has to land first, and a fixture that could not seed it
  * reports `taskId: null` rather than hanging the run.
@@ -377,20 +381,28 @@ async function seedRowWithTask(): Promise<{ accountId: string; messageId: string
   const query = `account=${encodeURIComponent(accountId)}&mailbox=INBOX&limit=10`
   while (Date.now() < deadline) {
     const page = await fetch(`${apiTarget}/api/plugins/mail/messages?${query}`)
-      .then((one) => (one.ok ? one.json() as Promise<{ messages?: { messageId: string }[] }> : null))
+      .then((one) => (one.ok ? one.json() as Promise<{ messages?: { messageId: string; rfcMessageId?: string; subject?: string }[] }> : null))
       .catch(() => null)
     const rows = page?.messages ?? []
     // The one canned message that starts READ, so the seeded task does not also change a read flag.
     const target = rows.find((one) => one.messageId === 'INBOX:1:29')
     if (target) {
-      const made = await fetch(
-        `${apiTarget}/api/plugins/mail/messages/${encodeURIComponent(accountId)}/${encodeURIComponent(target.messageId)}/task`,
-        { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' },
-      )
-        .then((one) => one.json() as Promise<{ taskId?: string }>)
-        .catch(() => ({} as { taskId?: string }))
-      if (made.taskId) return { accountId, messageId: target.messageId, taskId: made.taskId }
-      return null
+      try {
+        const { addTask } = await import('../../../src/core/task-manager.js')
+        const { mailDatabaseForTesting } = await import('../../../src/integrations/mail/db.js')
+        const { messageTaskKey } = await import('../../../src/integrations/mail/message-tasks.js')
+        const db = mailDatabaseForTesting()
+        if (!db) return null
+        const { task } = await addTask({ title: target.subject || 'A task from a mail' })
+        await db.run(
+          'INSERT INTO message_tasks (rfc_message_id, account_id, message_id, task_id, created_at)'
+          + ' VALUES (?, ?, ?, ?, ?) ON CONFLICT(rfc_message_id) DO NOTHING',
+          [messageTaskKey(accountId, target.rfcMessageId ?? '', target.messageId), accountId, target.messageId, task.id, Date.now()],
+        )
+        return { accountId, messageId: target.messageId, taskId: task.id }
+      } catch {
+        return null
+      }
     }
     await new Promise((r) => setTimeout(r, 500))
   }

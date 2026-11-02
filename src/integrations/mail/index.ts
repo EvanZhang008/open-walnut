@@ -16,7 +16,6 @@ import { MailDigest } from './digest.js'
 import { MailDrafts } from './drafts.js'
 import { MailEvents } from './events.js'
 import { MailFilterMover } from './mail-filter-moves.js'
-import { MailMessageTasks } from './message-tasks.js'
 import { registerMailItemSource } from './item-source.js'
 import { createMailOps } from './ops.js'
 import { createMailMentionSource } from './mention-source.js'
@@ -206,26 +205,9 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   })
   // Everything that deletes, in one place, so a read path cannot reach a delete by accident.
   const retention = new MailRetention({ store, bodies, events })
-  // Mail leaving the plugin, in the two directions it can: one message becomes one task, and the
-  // day's unread becomes one letter. Both go through the host's own services (`walnut.tasks`,
-  // `walnut.letters`), so the kernel never learns the word "mail" for either of them.
-  const messageTasks = new MailMessageTasks({
-    store,
-    events,
-    tasks: walnut.tasks,
-    read: {
-      message: (accountId, messageId) => service.readEnvelope(accountId, messageId),
-      // From the MIRROR ROW, not from `listAccounts()`. The decorated list asks every provider what
-      // each of its accounts can do, and one mail becoming one task has no business reaching a mail
-      // server for a display name it can read from a column.
-      accountLabel: async (accountId: string) => {
-        const row = await store.getAccount(accountId)
-        return row?.display_name || row?.address || accountId
-      },
-      bodyText: (accountId, messageId) => service.bodyTextFor(accountId, messageId),
-    },
-    log: walnut.log,
-  })
+  // Mail leaving the plugin as a letter: the day's unread becomes one, through the host's own
+  // `walnut.letters`, so the kernel never learns the word "mail" for it. A message no longer becomes
+  // a task here: the Mail reader and the Inbox letter offer Talk to CEO / New task on it instead.
   const digest = new MailDigest({
     store,
     events,
@@ -339,7 +321,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
     defer: (run) => { walnut.timers.timeout(run, 0) },
   }))
   registerMailRoutes(walnut, {
-    store, service, accounts, providers, sync, drafts, approvals, sends, messageTasks, digest,
+    store, service, accounts, providers, sync, drafts, approvals, sends, digest,
     unsubscribe, sort, events, filters,
   })
 
@@ -365,7 +347,7 @@ export function activate(walnut: WalnutServerPluginApi): { dispose(): Promise<vo
   // nobody can reach. Every handle here is also owned by the loader, so a plugin teardown that
   // never reaches `dispose` below still releases them.
   const agentDeps: MailAgentDeps = {
-    service, drafts, approvals, tasks: messageTasks, unsubscribe, replica: () => walnut.replica,
+    service, drafts, approvals, unsubscribe, replica: () => walnut.replica,
   }
   let registered: Array<{ dispose(): void | Promise<void> }> = []
   let currentLine = ''

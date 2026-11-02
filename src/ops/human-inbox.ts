@@ -94,7 +94,7 @@ defineOp({
     actions: z.array(ACTION).min(1).optional().describe(
       'The options rendered as buttons. REQUIRED (at least one) when type=action_required, and '
       + 'rejected on any other type: a decision letter with no options is one the human cannot answer'),
-    items: inboxItemsSchema.optional().describe('Independent email items. Supply exact account/message, safe display data and typed actions for every email in a summary. Fixed intents only; no tool, args, label or target on op actions. These do not answer the whole letter.'),
+    items: inboxItemsSchema.optional().describe('Independent email items. Supply exact account/message and safe display data for every email in a summary, with a mark_read action where it applies. Walnut adds Talk to CEO and New task to every item itself; task intents are dropped, and no tool, args, label or target on op actions. These do not answer the whole letter.'),
     task_refs: z.array(z.string()).optional().describe('Task ids this letter is about; rendered as clickable pills'),
     pin: z.boolean().optional().describe('Pin it to the top of the inbox (digests, standing reports)'),
     user_asked: z.boolean().optional().describe(

@@ -22,10 +22,11 @@ export type TriageSource = (typeof TRIAGE_SOURCES)[number];
 /**
  * How much a run may do on its own.
  *  - 'ask'    — only safe writes (notes, handing an item to the task that owns
- *               it); creating a task, unsubscribing and every send / post go to
- *               the user as a letter.
- *  - 'assist' — may also create and update tasks, update the tracking notes and
- *               one-click unsubscribe. Sending mail, posting to Slack and
+ *               it); unsubscribing and every send / post go to the user as a
+ *               letter.
+ *  - 'assist' — may also update existing tasks and one-click unsubscribe.
+ *               Neither mode makes a task from an email: its letter item
+ *               offers the user New task and Talk to CEO. Sending mail, posting to Slack and
  *               marking Slack read STILL need approval.
  * Marking mail read is `auto_mark_read`, a separate switch honoured in both.
  */

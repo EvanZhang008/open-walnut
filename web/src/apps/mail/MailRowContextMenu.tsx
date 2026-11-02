@@ -10,7 +10,7 @@
  * - THE ROW IS RE-READ FROM THE SNAPSHOT ON EVERY RENDER, by its pair. `useContextMenu` stores the
  *   payload the right-click carried, and a menu is open across syncs and across live events: built from
  *   that frozen copy, the read toggle keeps offering `Mark as read` for a row another device has already
- *   read, and the task row keeps saying `Make a task` for a message that now has one.
+ *   read, and the task row keeps missing `Open task` for a message that now has one.
  * - A REPLY READS THE BODY FIRST, and no body means NO DRAFT. A reply draft is written to the server the
  *   moment the composer opens, so opening one without the original saves a letter whose quote is the
  *   attribution line and nothing else. `loadMessageBodyForQuote` fetches it without marking anything
@@ -29,7 +29,8 @@ import { copyTextRobust } from '@/utils/clipboard';
 import type { MailMessageDto } from '@/api/mail';
 import { loadMessageBodyForQuote, openMailMessage, runMailSearch } from './mail-actions';
 import { setMailMessageRead } from './mail-read-flag';
-import { makeTaskFromMessage } from './mail-task-actions';
+import { newTaskFromContent, talkToCeo } from '@/utils/content-actions';
+import { mailContentItem } from './mail-content-item';
 import { closeMailComposer, openMailForwardComposer, openMailReplyComposer } from './compose/compose-actions';
 import { isSaveSettled } from './compose/compose-autosave';
 import { getMailSnapshot, openMailAsk, pairKey, setMailRowNote, type MailSnapshot } from './mail-store';
@@ -192,7 +193,8 @@ export function useMailRowContextMenu(view: MailRowMenuView): MailRowMenuHandle 
           onOpen: (row) => { void openMailMessage(row.accountId, row.messageId); },
           onReply: reply,
           onForward: forward,
-          onMakeTask: (row) => { void makeTaskFromMessage(row.accountId, row.messageId); },
+          onTalkToCeo: (row) => { void talkToCeo(mailContentItem(row)).catch(() => { /* toasted */ }); },
+          onNewTask: (row) => { void newTaskFromContent(mailContentItem(row)); },
           onOpenTask: (taskId) => { navigate(`/tasks/${taskId}`); },
           onSearchSender: (address) => { void runMailSearch(address); },
           onCopyLink: copyLink,

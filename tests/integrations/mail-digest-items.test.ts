@@ -28,7 +28,7 @@ describe('digest source-bound items', () => {
     expect(item.display).toEqual({ sender: { name: 'Fixture sender', address: 'source@example.invalid' },
       sentAt: new Date(NOW - 1000).toISOString(), accountLabel: 'Fixture mailbox', accountHint: 'reader@example.invalid' })
     expect(item.readObservation).toEqual({ read: false, observedAt: new Date(NOW - 500).toISOString() })
-    expect(item.actions.map(action => action.kind === 'op' && action.intent)).toEqual(['mark_read', 'find_task', 'create_task'])
+    expect(item.actions.map(action => action.kind === 'op' && action.intent)).toEqual(['mark_read'])
     for (const action of item.actions) expect(Object.keys(action).sort()).toEqual(['id', 'intent', 'kind'])
     expect(validateNewItems([item])).toEqual([item])
   })

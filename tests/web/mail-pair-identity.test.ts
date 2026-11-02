@@ -188,8 +188,6 @@ describe('two accounts holding the same message id', () => {
         loading: false,
         error: null,
         allowRemoteImages: false,
-        taskBusy: false,
-        taskError: null,
       },
     });
 
@@ -219,8 +217,6 @@ describe('the reader control re-reads the open message after its await', () => {
         loading: false,
         error: null,
         allowRemoteImages: false,
-        taskBusy: false,
-        taskError: null,
       },
     });
     // The provider read is the await, so the swap happens exactly inside it.

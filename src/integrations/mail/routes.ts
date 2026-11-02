@@ -13,7 +13,6 @@ import {
 } from './contract.js'
 import type { MailDigest } from './digest.js'
 import type { MailDrafts } from './drafts.js'
-import type { MailMessageTasks } from './message-tasks.js'
 import type { MailProviderRegistry } from './provider-registry.js'
 import type { MailEvents } from './events.js'
 import type { MailFilterMover } from './mail-filter-moves.js'
@@ -71,8 +70,6 @@ import type { MailUnsubscribe } from './unsubscribe.js'
  *                                                          and 400s on any other scope value)
  * GET    /messages/:accountId/:messageId               -> { message, body, bodyError? }
  * POST   /messages/:accountId/:messageId/read { read } -> { ok: true, message } | 409 unsupported
- * POST   /messages/:accountId/:messageId/task {...}    -> 201 { taskId, created: true }
- *        { title?, project?, note? }                      | 200 { taskId, created: false }
  * POST   /messages/:a/:m/unsubscribe { method?, confirm? } (in routes-write.ts: it makes network
  *                                                          egress, and one rung sends mail)
  * GET    /search?account=&q=&limit=                    -> { messages, source: 'provider'|'cache' }
@@ -119,14 +116,7 @@ const CONSOLE_SEND_DEADLINE_MS = 10_000
 
 const DRAFT_LIST_LIMIT = 200
 
-/**
- * Making a task, and building a digest, get their own budgets.
- *
- * The task route is a WRITE and is idempotent by construction (the ledger answers the second ask
- * with the same id), so when it runs out of budget the honest answer is 202: the task may well
- * exist, and asking again is safe and returns it. The digest is a read plus one letter write.
- */
-const TASK_DEADLINE_MS = 10_000
+/** Building a digest gets its own budget: it is a read plus one letter write. */
 const DIGEST_DEADLINE_MS = 8_000
 
 /**
@@ -148,7 +138,6 @@ export function registerMailRoutes(
     drafts: MailDrafts
     approvals: MailApprovals
     sends: MailSends
-    messageTasks: MailMessageTasks
     digest: MailDigest
     unsubscribe: MailUnsubscribe
     sort: MailSortEngine
@@ -157,7 +146,7 @@ export function registerMailRoutes(
   },
 ): void {
   const {
-    store, service, accounts, providers, sync, drafts, approvals, sends, messageTasks, digest,
+    store, service, accounts, providers, sync, drafts, approvals, sends, digest,
     unsubscribe,
   } = deps
   const primaryOnly = (): boolean => walnut.replica
@@ -251,61 +240,6 @@ export function registerMailRoutes(
     try {
       return { json: { ok: true, message: await service.markRead(accountId, messageId, read) } }
     } catch (error) {
-      return errorReply(walnut, error)
-    }
-  })
-
-  // Also before the collection route, and before `/read` cannot matter: the two suffixes differ.
-  walnut.http.route('post', '/messages/:accountId/:messageId/task', async (request) => {
-    if (primaryOnly()) return PRIMARY_ONLY
-    const [accountId, messageId] = segmentsAfter(request, '/messages/')
-    if (!accountId || !messageId) {
-      return { status: 400, json: { error: 'invalid', message: 'an account id and a message id are required' } }
-    }
-    const body = await readBody(request)
-    if (body === null) return { status: 400, json: { error: 'invalid', message: 'body must be JSON' } }
-    const title = typeof body.title === 'string' ? body.title : undefined
-    const project = typeof body.project === 'string' ? body.project : undefined
-    try {
-      const answered = await withBudget(
-        messageTasks.link({
-          accountId,
-          messageId,
-          ...(title ? { title } : {}),
-          ...(project !== undefined ? { project } : {}),
-          ...(body.note === true ? { note: true } : {}),
-        }),
-        TASK_DEADLINE_MS,
-        // The work keeps running and still writes its ledger row, so this is reported and not lost.
-        ({ error }) => {
-          if (error) walnut.log.warn('mail task creation failed after the route answered', {
-            accountId, error: String(error).slice(0, 200),
-          })
-        },
-      )
-      if (!answered) {
-        return {
-          status: 202,
-          json: {
-            ok: true,
-            pending: true,
-            message: 'The task is still being created. Asking again returns it rather than making a second one.',
-          },
-        }
-      }
-      // 201 only when something was created. A second press is a 200 with the same id, which is
-      // what lets a double click, a retry and an agent re-reading its transcript all be safe.
-      return { status: answered.created ? 201 : 200, json: answered }
-    } catch (error) {
-      if (error instanceof Error && /^Target deleted:/.test(error.message)) {
-        return { status: 409, json: { error: 'target_deleted', message: error.message } };
-      }
-      if (error instanceof Error && /^Target unavailable:/.test(error.message)) {
-        return { status: 503, json: { error: 'target_unavailable', message: error.message } };
-      }
-      if (error instanceof Error && 'code' in error && error.code === 'source_conflict') {
-        return { status: 409, json: { error: 'source_conflict', message: error.message } };
-      }
       return errorReply(walnut, error)
     }
   })

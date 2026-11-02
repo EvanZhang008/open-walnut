@@ -1,3 +1,4 @@
+import type { ContentAction, ContentItem } from '../../../packages/plugin-api/src/content-actions'
 import type { ComponentType, RefObject } from 'react'
 
 export interface Disposable {
@@ -318,6 +319,8 @@ export interface PluginViews {
   MicButton: ComponentType<MicButtonProps>
   /** The plugin's own generated Settings form (manifest configSchema + uiHints), as rows. */
   PluginSettingsView: ComponentType<Record<string, never>>
+  /** The two content actions (Talk to CEO, New task) as buttons, for one piece of content. */
+  ContentActions: ComponentType<{ item: ContentItem; size?: 'buttons' | 'compact' }>
 }
 
 export interface WalnutWebApiHost {
@@ -341,6 +344,12 @@ export interface WalnutWebApiHost {
   }
   readonly http: {
     fetch(url: string, init?: PluginFetchInit): Promise<PluginFetchResponse>
+  }
+  /** Talk to CEO and New task for one piece of content (utils/content-actions.ts). */
+  readonly content: {
+    actions(item: ContentItem): ContentAction[]
+    talkToCeo(item: ContentItem): Promise<void>
+    newTask(item: ContentItem): Promise<void>
   }
   readonly ui: {
     app(contribution: PluginAppContribution): PluginAppHandle

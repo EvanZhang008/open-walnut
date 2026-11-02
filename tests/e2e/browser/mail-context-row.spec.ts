@@ -1,6 +1,6 @@
 /**
  * The MESSAGE row's right-click menu, driven as a person drives it (C6-C12, C13-C20, C22-C25, C26,
- * C27, C33, C49, C54, C57, C67-C70, C74, C75, C79).
+ * C27, C49, C54, C67-C70, C74, C75, C79).
  *
  * The complaint this menu answers is that the only way to change a row's read flag was to OPEN the
  * row, which marks it read. So the promise being graded is mostly about what does NOT happen:
@@ -41,7 +41,6 @@ const LEASE = 'INBOX:1:29'
 const NOTICE = 'INBOX:2:11'
 
 const READ_URL = '**/api/plugins/mail/messages/*/*/read'
-const TASK_URL = '**/api/plugins/mail/messages/*/*/task'
 const MENU = 'mail-row-ctx-menu'
 
 // One worker, in declaration order, and NOT `serial`: these cases share one install (the read flags
@@ -192,7 +191,8 @@ test('C6, C7, C8, C9, C10, C12, C23: a right-click opens the menu and does nothi
     'Reply',
     'Reply all',
     'Forward',
-    'Make a task',
+    'Talk to CEO',
+    'New task',
     'Find mail from this sender',
     'Copy Walnut link',
     // The Walnut group (28df4326c) and Unsubscribe (432deed2f), added after this spec.
@@ -417,7 +417,7 @@ test('C22, C24: a merged list acts on the row it opened over, account by account
   page.on('request', (request) => {
     if (request.method() !== 'POST') return
     const url = request.url()
-    if (url.endsWith('/read') || url.endsWith('/task')) posts.push(url)
+    if (url.endsWith('/read')) posts.push(url)
   })
 
   // The account whose provider cannot move the flag has NO toggle, in the same list as one that can.
@@ -427,8 +427,7 @@ test('C22, C24: a merged list acts on the row it opened over, account by account
   await expect(menu(page).locator('.wn-context-menu-info:not(.wn-context-menu-item ~ *)').last()).toHaveText('Fixture Mail (inbound only)')
   expect(await itemLabels(page)).not.toContain('Mark as read')
   expect(await itemLabels(page)).not.toContain('Mark as unread')
-  await clickItem(page, 'Make a task')
-  await expect(row(page, READER, NOTICE)).toHaveAttribute('data-task-id', /.+/, { timeout: 60_000 })
+  await page.keyboard.press('Escape')
 
   // And the writer's row in the same list carries the toggle, whose write goes to the WRITER.
   await openRowMenu(page, WRITER, KEEPER)
@@ -436,10 +435,9 @@ test('C22, C24: a merged list acts on the row it opened over, account by account
   await clickItem(page, 'Mark as read')
   await expect(row(page, WRITER, KEEPER)).toHaveAttribute('data-unread', 'false', { timeout: 30_000 })
 
-  expect(posts.length).toBe(2)
-  expect(posts[0], 'the task was made on the row it opened over').toContain(encodeURIComponent(READER))
-  expect(posts[1], 'and the flag was moved on the other account').toContain(encodeURIComponent(WRITER))
-  expect(posts[1]).toContain(encodeURIComponent(KEEPER))
+  expect(posts.length).toBe(1)
+  expect(posts[0], 'the flag was moved on the writer account').toContain(encodeURIComponent(WRITER))
+  expect(posts[0]).toContain(encodeURIComponent(KEEPER))
 })
 
 test('C25, C54: a reply from a never-opened row quotes it and sends as that row', async ({ page }) => {
@@ -517,38 +515,6 @@ test('C79: replying from one row keeps the row being read on an unread page', as
   await expect(row(page, WRITER, LUNCH)).toBeVisible()
   await page.getByTestId('mail-composer-close').click()
   await page.getByTestId('mail-unread-filter').click()
-})
-
-test('C33, C57: the task lands on the row with no reload, and a double click is one POST', async ({ page }) => {
-  await openWriterInbox(page)
-  await expect(row(page, WRITER, LUNCH)).not.toHaveAttribute('data-task-id', /.+/)
-  // Held long enough for a second click to land while the first is still out.
-  const posts: string[] = []
-  await page.route(TASK_URL, async (route) => {
-    posts.push(route.request().url())
-    await new Promise((wake) => { setTimeout(wake, 2_000) })
-    await route.continue()
-  })
-
-  await openRowMenu(page, WRITER, LUNCH)
-  await clickItem(page, 'Make a task')
-  // The impatient second press, while the first request is still in flight.
-  await openRowMenu(page, WRITER, LUNCH)
-  await clickItem(page, 'Make a task')
-  await expect(row(page, WRITER, LUNCH)).toHaveAttribute('data-task-id', /.+/, { timeout: 60_000 })
-  expect(posts.length, 'the two clicks were coalesced into one write').toBe(1)
-
-  // The mark is on the row itself, with no reload, and it is a SPAN: a link would hand the row's
-  // right-click back to the browser.
-  await expect(row(page, WRITER, LUNCH).getByTestId('mail-row-task')).toHaveCount(1)
-  expect(await row(page, WRITER, LUNCH).locator('a[href]').count(), 'no anchor inside the row').toBe(0)
-  // And the item now offers the task instead of making a second one.
-  await openRowMenu(page, WRITER, LUNCH)
-  expect(await itemLabels(page)).toContain('Open task')
-  expect(await itemLabels(page)).not.toContain('Make a task')
-  await page.keyboard.press('Escape')
-  console.log(`shot: ${await shoot(page, SHOT_DIR, 'row-tasked')}`)
-  await page.unroute(TASK_URL)
 })
 
 test('C49: Copy Walnut link writes the deep link and says so', async ({ page, browserName }) => {

@@ -1,4 +1,5 @@
 import type { InboxItemAction, InboxItemReceipt, InboxLetterItem, InboxCurrentTaskStatus } from '@/api/human-inbox-items';
+import type { ContentItem } from '@/utils/content-actions';
 
 export const PHASE_TEXT: Record<string, string> = {
   TODO: 'To do', IN_PROGRESS: 'In progress', NEED_ACTION: 'Needs action', WAITING: 'Waiting', COMPLETE: 'Completed',
@@ -18,6 +19,35 @@ export function itemActions(item: InboxLetterItem): InboxItemAction[] {
   const attach = supported.find(a => a.kind === 'op' && a.intent === 'attach_task');
   return supported.filter(a => !(a.kind === 'op' && a.intent === 'find_task' && attach));
 }
+/**
+ * The task intents an older letter may still carry. Walnut no longer shows them: every email item
+ * offers the two content actions instead (Talk to CEO, New task; utils/content-actions.ts). Their
+ * receipts and the retry of a failed one stay readable, and a phone on an older build still runs them.
+ */
+export const LEGACY_TASK_INTENTS: readonly string[] = ['create_task', 'find_task', 'attach_task'];
+
+/** The stored actions an item's button row shows: everything but the legacy task intents. */
+export function shownItemActions(item: InboxLetterItem): InboxItemAction[] {
+  return itemActions(item).filter(a => !(a.kind === 'op' && LEGACY_TASK_INTENTS.includes(a.intent)));
+}
+
+/** The email as a content item, for Talk to CEO and New task. */
+export function itemContent(item: InboxLetterItem): ContentItem {
+  const sender = item.display?.sender;
+  const from = sender?.name && sender?.address ? `${sender.name} <${sender.address}>` : sender?.name || sender?.address || '';
+  const summary = item.summary && item.summary !== 'Email summary unavailable' ? item.summary : '';
+  return {
+    source: 'Mail',
+    title: item.subject || '(no subject)',
+    ...(summary ? { summary } : {}),
+    ...(from ? { from } : {}),
+    ...(item.display?.sentAt ? { at: item.display.sentAt } : {}),
+    ...(item.display?.accountLabel || item.display?.accountHint ? { where: item.display.accountLabel || item.display.accountHint } : {}),
+    ...(item.source?.account && item.source?.message
+      ? { open: `/mail?${new URLSearchParams({ account: item.source.account, message: item.source.message })}` } : {}),
+  };
+}
+
 export function actionText(action: InboxItemAction): string {
   return action.kind === 'reply_ai' ? askAILabel(action.label) : action.intent === 'mark_read' ? 'Mark read'
     : action.intent === 'create_task' ? 'Create and start task' : 'Find task';

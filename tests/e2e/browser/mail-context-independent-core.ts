@@ -507,7 +507,7 @@ export function registerIndependentWrites(engine: 'chromium' | 'webkit'): void {
       await page.waitForTimeout(1200)
       const url = page.url()
       console.log(`[${tag}] V-C32 taskId=${id} items=${JSON.stringify(items)} url=${url.replace(/^https?:\/\/[^/]+/, '')}`)
-      expect(items, 'never a second task for a row that has one').not.toContain('Make a task')
+      expect(items, 'Open task beside the two content actions').toEqual(expect.arrayContaining(['Talk to CEO', 'New task', 'Open task']))
       expect(url).toContain(`/tasks/${id}`)
     })
 

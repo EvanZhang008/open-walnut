@@ -102,7 +102,8 @@ export function activate(walnut: WalnutWebApi) {
 | `walnut.ui.settings(contribution)` | add a section to the Settings page |
 | `walnut.ui.injectCss(css)` | add an owner-tagged stylesheet, removed on unload |
 | `walnut.ui.page(contribution)` | a standalone console route that is not an App |
-| `walnut.ui.views` | `CalendarView`, `FileView`, `NoteView`, `TerminalView`, `SessionView`, `TaskView`, `ChatView`, `MicButton` (dictation into your own text box; optional) |
+| `walnut.ui.views` | `CalendarView`, `FileView`, `NoteView`, `TerminalView`, `SessionView`, `TaskView`, `ChatView`, `MicButton` (dictation into your own text box; optional), `ContentActions` (Talk to CEO and New task as buttons; optional) |
+| `walnut.content` | the two choices Walnut offers on one piece of content (an email, a message): `actions(item)` for a menu, `talkToCeo(item)`, `newTask(item)` (optional) |
 | `walnut.ui.useView(name, initial, options?)` | `useState` for a view choice of your own, kept across a reload, a visit elsewhere and a restart (optional) |
 | `walnut.ui.useDraft(name, options?)` | `[text, setText, clear]` for words the user is typing, kept in Walnut's draft store per name and `id` (optional) |
 | `walnut.ws.call(id, payload)` | call the plugin's own `registry.wsMethod` |

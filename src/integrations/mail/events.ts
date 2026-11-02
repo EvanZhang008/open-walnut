@@ -25,7 +25,6 @@ export const MAIL_EVENT = {
   accountChanged: 'account-changed',
   draftChanged: 'draft-changed',
   sendSettled: 'send-settled',
-  messageTasked: 'message-tasked',
   digestSent: 'digest-sent',
   unsubscribed: 'unsubscribed',
   unreadReconciled: 'unread-reconciled',
@@ -143,19 +142,6 @@ export interface MailSendSettledEvent {
   sendId: string
   draftId: string
   state: string
-}
-
-/**
- * A message became a task.
- *
- * Carries the ids and nothing else. The console turns the button into the task pill from this,
- * without a refetch, and a second console window showing the same mailbox does the same: the
- * backlink is derived on every read, so the event only has to say which row moved.
- */
-export interface MailMessageTaskedEvent {
-  accountId: string
-  messageId: string
-  taskId: string
 }
 
 /**
@@ -335,11 +321,6 @@ export class MailEvents {
    */
   draftChanged(draftId: string, state: string, revision: number): void {
     this.emit(MAIL_EVENT.draftChanged, { draftId, state, revision } satisfies MailDraftChangedEvent)
-  }
-
-  /** Bounded by the human's own clicks (or an agent's), so it is never coalesced. */
-  messageTasked(accountId: string, messageId: string, taskId: string): void {
-    this.emit(MAIL_EVENT.messageTasked, { accountId, messageId, taskId } satisfies MailMessageTaskedEvent)
   }
 
   /** One per settled attempt. Bounded by human clicks, so never coalesced. */

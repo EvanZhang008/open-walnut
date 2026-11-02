@@ -1,5 +1,5 @@
 /**
- * The nine mail tools, as data.
+ * The eight mail tools, as data.
  *
  * A factory rather than a module-level array, following the calendar plugin: the dependencies
  * arrive per activation, and a zero-account install never builds this list at all (see the
@@ -22,7 +22,6 @@ import {
   mailRequestSend,
   mailSearch,
   mailThread,
-  mailToTask,
   mailUnsubscribeRequest,
   type MailAgentDeps,
 } from './agent-surface.js'
@@ -49,12 +48,6 @@ const MESSAGE_FIELD = {
   type: 'string',
   description: 'The message id from a mail_list or mail_search row (the third column).',
 } as const
-
-const TO_TASK_DESCRIPTION =
-  'Turn one message into a Walnut task. Safe to call twice: a message that already has a task hands '
-  + 'back that task id and makes nothing new, and the answer says which happened. The task records '
-  + 'the sender, when it was sent, which account, a link that opens the message in Mail, and the '
-  + 'preview. It does not reply to anything and does not mark the mail read.'
 
 export function createMailTools(deps: MailAgentDeps): MailToolSpec[] {
   return [
@@ -123,31 +116,6 @@ export function createMailTools(deps: MailAgentDeps): MailToolSpec[] {
         required: ['message'],
       },
       execute: (input) => asText(() => mailThread(deps, input)),
-    },
-    {
-      name: 'mail_to_task',
-      description: TO_TASK_DESCRIPTION,
-      inputSchema: {
-        type: 'object',
-        properties: {
-          account: ACCOUNT_FIELD,
-          message: MESSAGE_FIELD,
-          title: {
-            type: 'string',
-            description: 'The task title. Omit to use the message subject.',
-          },
-          project: {
-            type: 'string',
-            description: 'Put the task in this project. Omit to leave it in the Inbox.',
-          },
-          note: {
-            type: 'boolean',
-            description: 'Also append the start of the message body to the task as a note.',
-          },
-        },
-        required: ['message'],
-      },
-      execute: (input) => asText(() => mailToTask(deps, input)),
     },
     {
       name: 'mail_draft',

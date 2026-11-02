@@ -199,7 +199,7 @@ describe('a decision letter with no buttons', () => {
     const sender = triageSender('sess-run-no-buttons');
     const message = await refusal(sender, { type: 'action_required' });
     expect(message).toContain('needs at least one button in `actions`');
-    expect(message).toContain('Make a task');
+    expect(message).not.toContain('Make a task');
     expect(message).toContain('Reply for me');
     expect(message).toContain('review');
     // And it did not consume a decision slot.
@@ -407,7 +407,9 @@ describe('assist differs from ask only in what a run may do on its own', () => {
     expect(budget).toContain('refuses a fourth decision letter');
     expect(budget).toContain('Withdraw a decision letter an earlier');
     expect(budget).toContain('items entry bound to its exact account/message');
-    expect(budget).toContain('mark_read, find_task and create_task');
+    expect(budget).toContain('Use the fixed op action mark_read');
+    expect(budget).toContain('never make a task from an email');
+    expect(budget).not.toContain('create_task');
     expect(budget).toContain('Whole-letter actions only ask the AI');
     expect(budget).toContain('human_inbox_reply');
   });
@@ -424,15 +426,17 @@ describe('assist differs from ask only in what a run may do on its own', () => {
     ]);
   });
 
-  it('ask creates nothing on its own but hands items to their tasks; assist may create and update tasks and notes', () => {
+  it('ask creates nothing on its own but hands items to their tasks; assist may update tasks and notes, and neither makes a task from an email', () => {
     const ask = triageModeText('ask', false);
     expect(ask).toContain('only read, update the triage and tracking notes, and hand an');
     expect(ask).toContain('item to the task that already owns it (task_send)');
-    expect(ask).toContain('use create_task or find_task for task work');
+    expect(ask).toContain('offers New task and Talk to CEO by itself');
+    expect(ask).not.toContain('create_task');
     expect(ask).toContain('Other requests go to the user as a decision letter: editing a task or unsubscribing');
 
     const assist = triageModeText('assist', false);
-    expect(assist).toContain('create and update tasks');
+    expect(assist).toContain('update existing tasks');
+    expect(assist).toContain('You never make a task from an email or a message');
     expect(assist).toContain('update the tracking notes');
     expect(assist).toContain('one-click unsubscribe');
     expect(assist).toContain('never what may leave this machine');
@@ -444,7 +448,7 @@ describe('assist differs from ask only in what a run may do on its own', () => {
     expect(triageModeText('ask', true)).toContain(TRIAGE_MARK_READ_RULE);
     expect(triageModeText('ask', true)).not.toContain('marking mail read, ');
     expect(triageModeText('ask', false)).not.toContain(TRIAGE_MARK_READ_RULE);
-    expect(triageModeText('ask', false)).toContain('mark_read for a single email');
+    expect(triageModeText('ask', false)).toContain('mark_read where you add it for a single email');
     expect(triageModeText('ask', false)).toContain('independent typed items');
     // The rule names the tool and keeps the doubtful case unread.
     expect(TRIAGE_MARK_READ_RULE).toContain('mail_mark_read');

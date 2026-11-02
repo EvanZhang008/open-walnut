@@ -8,10 +8,15 @@
  * -> same data, new primary process -> mirror reads while away -> reconnect/query.
  * The parent retains every child handle. No pid-file signals, process scans, git or prod data.
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { InboxItemProcessHarness, eventually, type Json } from './helpers/inbox-item-process-harness.js';
+
+// These run the task intents of letters an older Walnut stored (new items no longer keep them:
+// item-schema.ts LEGACY_TASK_INTENTS), so their letters are written the way it wrote them.
+process.env.WALNUT_TEST_LEGACY_TASK_INTENTS = '1';
+afterAll(() => { delete process.env.WALNUT_TEST_LEGACY_TASK_INTENTS; });
 
 let fixture: InboxItemProcessHarness | undefined;
 afterEach(async () => { await fixture?.stop(); fixture = undefined; }, 60_000);

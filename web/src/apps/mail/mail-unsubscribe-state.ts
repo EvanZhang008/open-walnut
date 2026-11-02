@@ -277,7 +277,7 @@ export function unsubscribeStatusLine(
  * the job to Walnut (`needs-human`, `asked`) and for a message with no way out at all.
  *
  * This is what decides where the row menu draws it: a click that just does the thing is an ordinary
- * row next to `Make a task`, and only the ones that start a conversation belong in the Walnut group
+ * row next to `Talk to CEO` and `New task`, and only the ones that start a conversation belong in the Walnut group
  * (2026-09-25: "if it can unsubscribe through one click, show it, not under AI").
  */
 export function unsubscribeIsDirect(state: UnsubscribeRowState): boolean {

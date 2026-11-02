@@ -119,7 +119,7 @@ export function TriageSection({ config, onSave }: Props) {
               onChange={mode.set}
               options={[
                 { value: 'ask', label: 'Ask', testId: 'inbox-triage-mode-ask', title: 'Hands items to their tasks, asks you about the rest' },
-                { value: 'assist', label: 'Assist', testId: 'inbox-triage-mode-assist', title: 'May also file tasks and unsubscribe' },
+                { value: 'assist', label: 'Assist', testId: 'inbox-triage-mode-assist', title: 'May also update tasks and unsubscribe' },
               ]}
             />
           } />

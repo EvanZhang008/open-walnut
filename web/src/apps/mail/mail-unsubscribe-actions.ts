@@ -57,8 +57,7 @@ export interface MailUnsubscribedEventData {
  * Write one message's unsubscribe state onto every copy the console is holding.
  *
  * The list, the search results and the open reader are three copies of one row, and all three draw this
- * (the row menu's label, the reader's status line). Shaped exactly like `applyMessageTask`, and for the
- * same reason: a live event must land without a refetch.
+ * (the row menu's label, the reader's status line). A live event must land without a refetch.
  *
  * MERGED onto whatever is there, never replacing it: `available` is derived from what the poll stored
  * and this function has no idea what it is, so a wholesale replace would blank the field that decides

@@ -16,7 +16,7 @@
  *   than a mailbox-sized download.
  */
 import type { MailBodyStore } from './bodies.js'
-import { MailBodyTooLargeError, MAX_BODY_BYTES, plainTextOf, snippetOf } from './bodies.js'
+import { MailBodyTooLargeError, MAX_BODY_BYTES, snippetOf } from './bodies.js'
 import { keyOfMessage } from './message-tasks.js'
 import {
   bodyBelongsTo,
@@ -649,20 +649,6 @@ export class MailService {
   /** The cached envelope alone, with no provider call. What a timed-out read degrades to. */
   async readEnvelope(accountId: string, messageId: string): Promise<MailMessageDto> {
     return this.oneWithTaskId(await this.requireMessage(accountId, messageId))
-  }
-
-  /**
-   * The body as plain text, fetching it when the cache has none.
-   *
-   * One caller: the note a mail-made task can carry. It goes through `readMessage`, so an
-   * unfetchable body is reported the same way it is everywhere else (a `bodyError` and no bytes)
-   * rather than as a throw, and the html half is folded to text with the base's OWN extractor, the
-   * one that feeds the FTS index, so a note reads like the search hit that found it.
-   */
-  async bodyTextFor(accountId: string, messageId: string): Promise<string> {
-    const read = await this.readMessage(accountId, messageId)
-    if (!read.body) return ''
-    return plainTextOf({ text: read.body.text ?? '', html: read.body.html ?? '' })
   }
 
   /**

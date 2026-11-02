@@ -1,5 +1,7 @@
 export type * from './shared.js'
+export type * from './content-actions.js'
 
+import type { ContentActionsService, ContentActionsViewProps } from './content-actions.js'
 import type { ComponentType, RefObject } from 'react'
 import type { AiService, Disposable, PluginLogger, TaskPhase, TaskPriority } from './shared.js'
 import type { AppStatePublishOptions, EventApi, OpsService, PluginFetchInit, PluginFetchResponse } from './server.js'
@@ -381,6 +383,11 @@ export interface WebUiService {
      * object: feature-detect.
      */
     PluginSettingsView?: PluginComponent<Record<string, never>>
+    /**
+     * The two choices Walnut offers on one piece of content (Talk to CEO, New task) as buttons;
+     * see `walnut.content`. Optional on the views object: feature-detect.
+     */
+    ContentActions?: PluginComponent<ContentActionsViewProps>
   }
 }
 
@@ -415,6 +422,13 @@ export interface WalnutWebApi {
    * your App's unmount signal) cancels the run. Spend counts against your plugin's budget.
    */
   readonly ai: AiService
+  /**
+   * What to offer on one piece of content your App shows (an email, a message): Talk to CEO and
+   * New task, the same two everywhere in Walnut. Never make a task from content yourself
+   * (`walnut-plugin validate` warns on it); hand the content here. Optional: a host older than it
+   * does not have it, so feature-detect.
+   */
+  readonly content?: ContentActionsService
   readonly unsafe: {
     readonly react: unknown
     readonly host: unknown

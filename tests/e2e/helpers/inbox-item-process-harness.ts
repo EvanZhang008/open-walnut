@@ -145,7 +145,9 @@ if(m.uuid)out({type:'command_lifecycle',command_uuid:m.uuid,state:'completed'});
       WALNUT_TASK_DIR_ROOT: path.join(lane.data, 'task-dirs'),
       WALNUT_GIT_HUB_DIR: path.join(lane.dir, 'hub'), WALNUT_DISABLE_BACKGROUND_AI: '1', WALNUT_DISABLE_SEARCH: '1',
       WALNUT_STALL_RECORDER: '0', WALNUT_LOCAL_CLAUDE_PROBE: '0', WALNUT_BRIDGE_BLIP_GRACE_MS: '0',
-      FIXTURE_DAEMON_URL: `ws://127.0.0.1:${this.daemonPort}`, FIXTURE_ROOT: lane.dir };
+      FIXTURE_DAEMON_URL: `ws://127.0.0.1:${this.daemonPort}`, FIXTURE_ROOT: lane.dir,
+      // A test writing its letters as an older Walnut did (item-schema.ts) gets the same in each lane.
+      ...(process.env.WALNUT_TEST_LEGACY_TASK_INTENTS ? { WALNUT_TEST_LEGACY_TASK_INTENTS: process.env.WALNUT_TEST_LEGACY_TASK_INTENTS } : {}) };
   }
   private async boot(lane: Lane, cloud: boolean): Promise<void> {
     // bun runs the TypeScript boot script as it is.

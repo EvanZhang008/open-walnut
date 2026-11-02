@@ -20,6 +20,7 @@
       "@open-walnut/letter-frame": ["../src/core/human-inbox/letter-frame"],
       "@open-walnut/pending-markup": ["../src/core/stream/pending-markup"],
       "@open-walnut/service-url": ["../src/core/service-url"],
+      "@open-walnut/content-item": ["../src/core/content-actions/content-item"],
       "@open-walnut/compaction-notice": ["../src/core/stream/compaction-notice"],
       "@open-walnut/hint-format": ["../src/core/hints/hint-format"],
       "@open-walnut/budget-engines": ["../src/core/usage/budget-engines"],

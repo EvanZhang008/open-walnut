@@ -12,6 +12,11 @@ import { registerInboxMailSource } from '../../src/core/human-inbox/item-source-
 import { definePluginOp } from '../../src/ops/registry.js';
 import { getTask, listTasks } from '../../src/core/task-manager.js';
 import { executeOp } from '../../src/ops/index.js';
+
+// These run the task intents of letters an older Walnut stored (new items no longer keep them:
+// item-schema.ts LEGACY_TASK_INTENTS), so their letters are written the way it wrote them.
+process.env.WALNUT_TEST_LEGACY_TASK_INTENTS = '1';
+afterAll(() => { delete process.env.WALNUT_TEST_LEGACY_TASK_INTENTS; });
 let server: Server;
 let root: string;
 let daemon: MockDaemon;

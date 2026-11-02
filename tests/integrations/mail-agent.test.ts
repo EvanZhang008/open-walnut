@@ -59,7 +59,7 @@ const MESSAGE_COUNT = 7;
 /** Every mail tool and op this slice registers, sorted. The catalogue, as a ratchet. */
 const TOOL_NAMES = [
   'mail_draft', 'mail_list', 'mail_mark_read', 'mail_read', 'mail_request_send', 'mail_search',
-  'mail_thread', 'mail_to_task', 'mail_unsubscribe_request',
+  'mail_thread', 'mail_unsubscribe_request',
 ];
 
 interface SendCall {
@@ -454,7 +454,7 @@ describe('a zero-account install has no agent surface at all', () => {
 });
 
 describe('adding the first account arms the surface', () => {
-  it('registers nine tools, nine ops and one context line naming the account', async () => {
+  it('registers eight tools, eight ops and one context line naming the account', async () => {
     let release!: () => void;
     const blocked = new Promise<void>((resolve) => { release = resolve; });
     let entered = false;
@@ -880,19 +880,19 @@ describe('the write surface ends at a letter', () => {
   });
 });
 
-describe('the ops are the same nine, with the same answers', () => {
+describe('the ops are the same eight, with the same answers', () => {
   it('answers a read through the op catalogue with the identical wrapped text', async () => {
     const viaTool = await tool('mail_read', { message: 'INBOX:900:1' });
     const viaOp = await op('mail_read', { message: 'INBOX:900:1' });
     expect(viaOp).toBe(viaTool);
   });
 
-  it('flags the reads readonly and the five writes as writes that are not destructive', async () => {
+  it('flags the reads readonly and the four writes as writes that are not destructive', async () => {
     const ops = (await listPluginOps()).filter((one) => one.owner === 'mail');
     expect(ops.filter((one) => one.readonly).map((one) => one.name).sort())
       .toEqual(['mail_list', 'mail_read', 'mail_search', 'mail_thread']);
     expect(ops.filter((one) => !one.readonly).map((one) => one.name).sort())
-      .toEqual(['mail_draft', 'mail_mark_read', 'mail_request_send', 'mail_to_task', 'mail_unsubscribe_request']);
+      .toEqual(['mail_draft', 'mail_mark_read', 'mail_request_send', 'mail_unsubscribe_request']);
     expect(ops.filter((one) => one.destructive).map((one) => one.name)).toEqual([]);
   });
 

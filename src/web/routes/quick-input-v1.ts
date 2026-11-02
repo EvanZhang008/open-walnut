@@ -355,6 +355,11 @@ function quickSource(req: Request): string {
   return routeSource('ui', req.headers)
 }
 
+/** The person's message into one task's chat: its live session, or a session started with it. */
+export async function sendToTaskChat(task: Task, text: string, source: string = 'ui'): Promise<QuickMainResult> {
+  return sendToTaskSession(task, await taskSessionRecord(task), text, text, false, source)
+}
+
 async function sendToTaskSession(task: Task, record: SessionRecord | null, text: string, cliText: string, startedOnce = false, source: string = 'ui'): Promise<QuickMainResult> {
   if (record) {
     const sessionId = record.claudeSessionId

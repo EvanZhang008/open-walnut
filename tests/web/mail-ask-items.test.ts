@@ -114,7 +114,8 @@ function build(over: BuildOver = {}): ContextMenuItem[] {
       onOpen: () => acted.push('open'),
       onReply: () => acted.push('reply'),
       onForward: () => acted.push('forward'),
-      onMakeTask: () => acted.push('task'),
+      onTalkToCeo: () => acted.push('ceo'),
+      onNewTask: () => acted.push('new-task'),
       onOpenTask: () => acted.push('open-task'),
       onSearchSender: () => acted.push('search'),
       onCopyLink: () => acted.push('copy'),
@@ -335,9 +336,9 @@ describe('an unsubscribe the click just does is not a Walnut row', () => {
   // itself is an ordinary thing to do with this mail; only the states that open a conversation are Walnut's.
   const keys = (items: ContextMenuItem[]) => items.map((one) => (one.divider ? '-' : one.key));
 
-  it('puts a one-click Unsubscribe beside Make a task, with no mark, and nothing in the group', () => {
+  it('puts a one-click Unsubscribe beside New task, with no mark, and nothing in the group', () => {
     const items = build({ message: { unsubscribe: { available: 'one-click' } } });
-    const at = keys(items).indexOf('task');
+    const at = keys(items).indexOf('new-task');
     expect(keys(items)[at + 1]).toBe('unsubscribe');
     const unsub = items.find((one) => one.key === 'unsubscribe')!;
     expect(unsub.ai).toBeUndefined();

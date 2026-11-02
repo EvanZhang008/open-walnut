@@ -155,7 +155,7 @@ export function SearchIcon({ size = 14 }: IconProps) {
   </>);
 }
 
-/** Make a task: a box with a tick, which is what a Walnut todo row looks like. */
+/** A task: a box with a tick, which is what a Walnut todo row looks like. */
 export function TaskIcon({ size = 15 }: IconProps) {
   return frame(size, <>
     <rect x="3.5" y="3.5" width="17" height="17" rx="4" />

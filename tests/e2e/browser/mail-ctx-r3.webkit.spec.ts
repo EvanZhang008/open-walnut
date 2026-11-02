@@ -148,6 +148,6 @@ test('R3-10 the provider draft row has its own menu in WebKit', async ({ page })
   await expect(menu(page)).toHaveCount(1)
   // With the Walnut group's two questions, which need no SMTP and no read flag; the same list as the
   // Chromium twin (mail-ctx-r3.spec.ts R3-10).
-  expect(await itemLabels(page)).toEqual(['Continue editing', 'Make a task', 'Copy Walnut link', 'Summarize with Walnut', 'Ask Walnut about this…'])
+  expect(await itemLabels(page)).toEqual(['Continue editing', 'Talk to CEO', 'New task', 'Copy Walnut link', 'Summarize with Walnut', 'Ask Walnut about this…'])
   console.log(`shot: ${await shoot(page, SHOTS, 'r3-10-drafts-row-menu-webkit')}`)
 })

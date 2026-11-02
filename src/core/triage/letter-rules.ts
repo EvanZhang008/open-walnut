@@ -42,8 +42,9 @@ export function triageLetterBudgetText(): string {
     '(type=review or info, with task_refs for every task you touched)',
     'For every email listed, include an independent items entry bound to its exact account/message.',
     'Keep safe cached display metadata and summary; never guess a source or a task target.',
-    'Use fixed op actions mark_read, find_task and create_task only where the human should act.',
-    'The human reviews task work in that item. Whole-letter actions only ask the AI a question.',
+    'Use the fixed op action mark_read only where the human should act. Walnut adds Talk to CEO and',
+    'New task to every item itself: never make a task from an email, and add no task actions.',
+    'Whole-letter actions only ask the AI a question.',
     'An agent reply may append new items with human_inbox_reply, using new unique item/action IDs.',
     'Label mailbox counts as a dated snapshot; groups and omitted-email counts have no actions.',
     'Send the summary only when this run has something for the user: a decision, or an item',
@@ -75,10 +76,12 @@ export const TRIAGE_NO_REMOVAL =
 export function triageModeText(mode: TriageMode, autoMarkRead: boolean): string {
   if (mode === 'assist') {
     return [
-      'Mode: assist. On your own you may create and update tasks, update the tracking notes,',
+      'Mode: assist. On your own you may update existing tasks, hand an item to the task that owns it',
+      '(task_send), update the tracking notes,',
       `and run a one-click unsubscribe${autoMarkRead
         ? `, and ${TRIAGE_MARK_READ_RULE}.`
         : '. You may NOT mark mail as read (auto_mark_read is off).'}`,
+      'You never make a task from an email or a message: its item offers the user New task and Talk to CEO.',
       'Still ask, every time: sending mail, posting to Slack, and marking Slack read',
       `(${TRIAGE_APPROVAL_OPS.join(', ')}). assist changes what you may do without asking,`,
       'never what may leave this machine. The letter budget is the same as in ask mode.',
@@ -88,8 +91,8 @@ export function triageModeText(mode: TriageMode, autoMarkRead: boolean): string 
   return [
     'Mode: ask. On your own you may only read, update the triage and tracking notes, and hand an',
     `item to the task that already owns it (task_send)${autoMarkRead ? `. You may also ${TRIAGE_MARK_READ_RULE}` : ''}.`,
-    'Email work that needs confirmation goes in the summary as independent typed items:',
-    'use create_task or find_task for task work, and mark_read for a single email.',
+    'Email work that needs the user goes in the summary as independent typed items: each one',
+    'offers New task and Talk to CEO by itself, and mark_read where you add it for a single email.',
     'Other requests go to the user as a decision letter: editing a task or unsubscribing.',
     'Sending mail, posting to Slack and marking Slack read',
     `always go through their approval ops (${TRIAGE_APPROVAL_OPS.join(', ')}).`,

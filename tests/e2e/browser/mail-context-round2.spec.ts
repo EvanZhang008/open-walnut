@@ -349,17 +349,8 @@ test('R2-09, R2-10: the heading clears AA and the right-clicked mark is not a se
   await page.keyboard.press('Escape')
 })
 
-test('R2-07, R2-16: a draft row answers with a Walnut menu, and the task copy reads once', async ({ page }) => {
+test('R2-07: a draft row answers with a Walnut menu', async ({ page }) => {
   await intoWriterInbox(page, port)
-  // R2-16 first, on a row: "Task made from X from Y" spent two `from` clauses on nine words.
-  await openRowMenu(page, WRITER, KEEPER)
-  await item(page, 'Make a task').click()
-  const note = page.getByTestId('mail-row-note')
-  await expect(note).toContainText('Task made from', { timeout: 30_000 })
-  const said = (await note.textContent())!.trim()
-  expect(said.match(/\bfrom\b/g), 'one preposition').toHaveLength(1)
-  expect(said, 'the sender rides in parentheses').toMatch(/\(.+\)\.$/)
-
   // A draft of our own, so the Drafts view has a row drawn as a message row.
   await page.getByTestId('mail-compose-new').click()
   await expect(page.getByTestId('mail-composer')).toBeVisible({ timeout: 30_000 })

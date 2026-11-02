@@ -27,9 +27,9 @@ One batch, then stop.
    - **FYI**: one line in the summary.
 5. `human_inbox_send`: at most **one** `review` summary, only when needed.
    No handover FYIs. `task_refs`: touched tasks. Each email gets `items`:
-   exact `source.account/message`, cached summary/display, fixed `mark_read`,
-   `find_task`, `create_task` actions. No op target/goal/label/args. Ask-mode
-   email work belongs there, not whole-letter buttons. Counts are snapshots;
+   exact `source.account/message`, cached summary/display, `mark_read` where
+   it applies; Walnut adds Talk to CEO / New task. No op
+   target/goal/label/args. Email work belongs there, not whole-letter buttons. Counts are snapshots;
    groups/omissions are not items. At most **three** `action_required` AI
    decisions; fold a 4th into the summary. Their taps ask THIS run, not ops.
    `human_inbox_reply` may add items with letter-wide unique IDs.
@@ -47,4 +47,4 @@ One batch, then stop.
   `mail_request_send`, `slack_request_post`, `mail_unsubscribe_request`.
 - Mark mail read beyond your run rules, or Slack read at all.
 - Delete, archive or move mail: no tool does it; do not ask.
-- Invent a project or a task; re-handle an item under `## Recently handled`.
+- Invent a project or task (none from an email); redo `## Recently handled`.

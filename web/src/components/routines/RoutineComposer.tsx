@@ -21,7 +21,7 @@ const TEMPLATES: Array<{ label: string; text: string }> = [
   },
   {
     label: 'Watch my mail',
-    text: 'Every 10 minutes, check my unread mail. If something needs a reply or an action from me, make a task for it and tell me. Ignore newsletters, notifications and anything automated. If there is nothing new, do nothing.',
+    text: 'Every 10 minutes, check my unread mail. If something needs a reply or an action from me, tell me in one short line with its link. Ignore newsletters, notifications and anything automated. If there is nothing new, do nothing.',
   },
 ];
 

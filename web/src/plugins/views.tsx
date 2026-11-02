@@ -8,6 +8,8 @@ import { PluginChatView } from '@/components/chat/PluginChatView'
 import { AskObjectDrawer } from '@/components/chat/AskObjectDrawer'
 import { PluginSettingsForm } from '@/components/settings/PluginSettingsForm'
 import { BoxMic, type BoxMicHandle } from '@/components/common/BoxMic'
+import { ContentActionButtons } from '@/components/content/ContentActionButtons'
+import type { ContentItem } from '@/utils/content-actions'
 import type { RefObject } from 'react'
 import type {
   AskObjectViewProps,
@@ -124,6 +126,10 @@ export function createPluginViews(pluginId: string): PluginViews {
     return <PluginSettingsForm pluginId={pluginId} />
   }
 
+  function ContentActions({ item, size }: { item: ContentItem; size?: 'buttons' | 'compact' }) {
+    return <ContentActionButtons item={item} size={size} />
+  }
+
   return {
     CalendarView,
     FileView,
@@ -135,6 +141,7 @@ export function createPluginViews(pluginId: string): PluginViews {
     AskObjectView,
     MicButton,
     PluginSettingsView,
+    ContentActions,
   }
 }
 
