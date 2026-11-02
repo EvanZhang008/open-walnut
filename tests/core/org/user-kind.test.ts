@@ -39,6 +39,8 @@ describe('userKindVerdict', () => {
     const v = userKindVerdict({ user_kind: 'cloud_delete', user_kind_why: WHY })
     if (!v.ok) throw new Error('expected ok')
     expect(userKindLead(v)).toBe(`Yours to decide (deleting cloud resources or data): ${WHY}`)
+    // In the user's letter language: Simplified Chinese test data ("yours to decide").
+    expect(userKindLead(v, 'zh')).toContain('\u7531\u4f60\u51b3\u5b9a')
   })
 
   it('is plain ASCII English with no dash punctuation', () => {

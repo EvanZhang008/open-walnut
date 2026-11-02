@@ -71,9 +71,6 @@ export async function syncRulesFor(config: Pick<Config, 'private_tasks'>, provid
   return resolveSyncRules(config, provider, registry.get(provider)?.syncAudience);
 }
 
-/** The line a released task's open letter is settled with. */
-const SETTLED_REASON = (service: string) =>
-  `Walnut no longer checks tasks before they sync to ${service}: the task syncs to it again`;
 
 /**
  * Give back to its service every task Walnut kept out of one whose check is off: a hold the
@@ -110,7 +107,7 @@ export async function releaseHoldsOfUnsharedServices(): Promise<string[]> {
     });
     if (!r?.released) continue;
     released.push(task.id);
-    await settleHoldLetter(hold, SETTLED_REASON(await serviceName(hold.target)), task.id);
+    await settleHoldLetter(hold, { released: await serviceName(hold.target) }, task.id);
   }
   if (released.length) log.task.info('private tasks: tasks given back to a service whose check is off', { count: released.length, taskIds: released });
   return released;

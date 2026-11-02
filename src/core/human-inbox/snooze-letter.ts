@@ -61,7 +61,9 @@ export async function admitSnoozedLetter(input: LetterInput, sender: LetterSende
     throw new LetterError(snoozedLetterMessage(hit), 'task_snoozed', 409);
   }
   log.notif.info('human-inbox: letter about a snoozed task sent with a reason', { taskId: hit.id, until: hit.until, reason });
-  const lead = `Snoozed until ${hit.until}; raised now because: ${reason}`;
+  const { walnutLetterLanguage } = await import('./walnut-letters/languages.js');
+  const { SNOOZE_LEAD_WORDS } = await import('./walnut-letters/thread-words.js');
+  const lead = SNOOZE_LEAD_WORDS[await walnutLetterLanguage()](hit.until, reason);
   const { snoozeReason: _a, snooze_reason: _b, ...rest } = input;
   if (typeof rest.markdown === 'string') return { ...rest, markdown: `_${lead.replace(/([_*\\])/g, '\\$1')}_\n\n${rest.markdown}` };
   if (typeof rest.html === 'string') return { ...rest, html: `<p><em>${escapeHtml(lead)}</em></p>\n${rest.html}` };

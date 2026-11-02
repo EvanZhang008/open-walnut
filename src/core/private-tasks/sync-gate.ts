@@ -190,7 +190,12 @@ export async function flushKeptLocalLetters(): Promise<void> {
 
 /** Settle the open letter of a hold a person resolved elsewhere (the task menu, an op). A letter
  *  that still asks about other tasks (a batch) stays open for them: only this task leaves it. */
-export async function settleHoldLetter(hold: SyncHold | undefined, reason: string, taskId?: string): Promise<void> {
+export async function settleHoldLetter(
+  hold: SyncHold | undefined,
+  /** Why, as Walnut words in the letter language (walnut-letters/thread-words.ts): decided in the task menu, or released by its service. */
+  why: { how: 'made_local' | 'agent_sent' | 'user_sent' } | { released: string },
+  taskId?: string,
+): Promise<void> {
   if (!hold?.letter_id) return;
   const letterId = hold.letter_id;
   try {
@@ -205,6 +210,10 @@ export async function settleHoldLetter(hold: SyncHold | undefined, reason: strin
     const { getLetter, settleLetter } = await import('../human-inbox/store.js');
     const letter = await getLetter(hold.letter_id).catch(() => null);
     if (!letter || letter.answered || letter.archived) return;
+    const { walnutLetterLanguage } = await import('../human-inbox/walnut-letters/languages.js');
+    const { HOLD_RELEASED_WORDS, HOLD_SETTLE_WORDS } = await import('../human-inbox/walnut-letters/thread-words.js');
+    const lang = await walnutLetterLanguage();
+    const reason = 'released' in why ? HOLD_RELEASED_WORDS[lang](why.released) : HOLD_SETTLE_WORDS[lang](why.how);
     await settleLetter(hold.letter_id, { reason });
   } catch (err) {
     log.task.warn('private tasks: letter not settled', { letterId: hold.letter_id, error: err instanceof Error ? err.message : String(err) });

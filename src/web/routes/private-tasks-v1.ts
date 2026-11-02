@@ -65,7 +65,7 @@ privateTasksV1Router.post('/tasks/:id/make-local', route(async (req, res) => {
   const { makeTaskLocal } = await import('../../core/task-manager.js')
   const { serviceName, settleHoldLetter } = await import('../../core/private-tasks/sync-gate.js')
   const sid = header(req, 'x-walnut-caller-sid')
-  await settleHoldLetter(task.sync_hold, 'It was made local from the task menu', task.id)
+  await settleHoldLetter(task.sync_hold, { how: 'made_local' }, task.id)
   const made = await makeTaskLocal(task.id, {
     state: 'chosen', by: 'user', at: new Date().toISOString(),
     reason: sid ? 'An agent made it local' : 'You made it local',
@@ -110,7 +110,7 @@ privateTasksV1Router.post('/tasks/:id/sync-to-project', route(async (req, res) =
     throw new RouteError(409, out.reason ?? 'not_released', msg)
   }
   // Its letter is settled only once it went out: a refused release leaves the user's decision open.
-  await settleHoldLetter(task.sync_hold, sid ? 'An agent sent it, at the user\'s words' : 'You sent it from the task menu', task.id)
+  await settleHoldLetter(task.sync_hold, { how: sid ? 'agent_sent' : 'user_sent' }, task.id)
   log.web.info('private tasks: sent to its project\'s service', { taskId: task.id, source: out.task?.source, bySession: !!sid })
   res.json({
     task: await viewOf(task.id),

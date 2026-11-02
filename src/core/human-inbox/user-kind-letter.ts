@@ -44,7 +44,8 @@ export async function admitUserKindLetter(input: LetterInput, sender: LetterSend
     throw new LetterError(verdict.message, 'user_kind', 409);
   }
   log.notif.info('human-inbox: decision letter from a node', { senderTaskId: sender.taskId, kind: verdict.kind, why: verdict.why });
-  const lead = userKindLead(verdict);
+  const { walnutLetterLanguage } = await import('./walnut-letters/languages.js');
+  const lead = userKindLead(verdict, await walnutLetterLanguage());
   if (typeof rest.markdown === 'string') return { ...rest, markdown: `_${lead.replace(/([_*\\])/g, '\\$1')}_\n\n${rest.markdown}` };
   if (typeof rest.html === 'string') return { ...rest, html: `<p><em>${escapeHtml(lead)}</em></p>\n${rest.html}` };
   const preview = typeof rest.text === 'string' && rest.text.trim() ? `${lead}. ${rest.text}` : lead;

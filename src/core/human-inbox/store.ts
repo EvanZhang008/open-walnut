@@ -1167,14 +1167,18 @@ export async function withdrawLetter(
   const note = str(input?.note).trim();
   if (!note) throw invalid('note is required: a withdrawn letter has to say why');
   assertBodySize(note, 'note');
+  // Walnut's words on the record follow the letter language (walnut-letters/thread-words.ts).
+  const { walnutLetterLanguage } = await import('./walnut-letters/languages.js');
+  const { WITHDRAWN_LABEL_WORDS, WITHDRAWN_WORDS } = await import('./walnut-letters/thread-words.js');
+  const lang = await walnutLetterLanguage();
 
   const record = await withWriteLock(() => withStore((store) => {
     const letter = find(store, id);
     if (letter.answered) return { ...letter, alreadyAnswered: true };
     const at = Date.now();
     const bounded = boundThreadText(note);
-    letter.answered = { actionId: WITHDRAWN_ACTION_ID, label: 'Withdrawn', at, freeText: bounded };
-    letter.thread.push({ from: 'agent', text: `Withdrawn: ${bounded}`, at });
+    letter.answered = { actionId: WITHDRAWN_ACTION_ID, label: WITHDRAWN_LABEL_WORDS[lang](), at, freeText: bounded };
+    letter.thread.push({ from: 'agent', text: WITHDRAWN_WORDS[lang](bounded), at });
     return { ...letter, alreadyAnswered: false };
   }));
   const { alreadyAnswered, ...letter } = record as LetterRecord & { alreadyAnswered: boolean };

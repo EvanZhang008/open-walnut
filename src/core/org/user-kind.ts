@@ -22,6 +22,9 @@
  * has to pick a kind, and "undoing my own mess" or "choosing between two fine options" has none.
  * The kinds mirror the team charter (team-charter.ts) and the approval rules (answer-approval.ts).
  */
+import type { LetterLang } from '../human-inbox/walnut-letters/languages.js';
+import { USER_KIND_LEAD_WORDS } from '../human-inbox/walnut-letters/thread-words.js';
+
 export const USER_KINDS = [
   'outward', 'spending', 'credentials', 'permissions', 'cloud_delete', 'irreversible', 'user_info', 'user_own',
 ] as const;
@@ -39,11 +42,6 @@ export const USER_KIND_WORDS: Readonly<Record<UserKind, string>> = {
   user_own: 'the user\'s own matter: their mail, calendar or people, or something they asked to decide or follow',
 };
 
-/** The kind as the user reads it on a letter. */
-export const USER_KIND_LABEL: Readonly<Record<UserKind, string>> = {
-  outward: 'an outward message or post', spending: 'spending', credentials: 'a credential', permissions: 'a permission',
-  cloud_delete: 'deleting cloud resources or data', irreversible: 'a hard-to-reverse choice', user_info: 'only you know this', user_own: 'your own matter',
-};
 
 /** Shortest `user_kind_why` (the `snooze_reason` floor). */
 export const USER_KIND_WHY_MIN = 10;
@@ -85,9 +83,9 @@ export function userKindFromLine(line: string | undefined): UserKindVerdict {
   return userKindVerdict({ user_kind: m?.[1]?.toLowerCase(), user_kind_why: m?.[2] });
 }
 
-/** The line that leads a letter the user reads, so they see why it is theirs. */
-export function userKindLead(v: Extract<UserKindVerdict, { ok: true }>): string {
-  return `Yours to decide (${USER_KIND_LABEL[v.kind]}): ${v.why}`;
+/** The line that leads a letter the user reads, so they see why it is theirs, in the letter language. */
+export function userKindLead(v: Extract<UserKindVerdict, { ok: true }>, lang: LetterLang = 'en'): string {
+  return USER_KIND_LEAD_WORDS[lang](v.kind, v.why);
 }
 
 /** The op parameters' help (human_inbox_send, thread_update, thread_create). */

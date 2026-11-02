@@ -120,14 +120,30 @@ describe('(c) every kind says how Walnut knows it is no longer needed', () => {
 describe('Walnut\'s own words on a letter\'s record follow the letter language too', () => {
   // 2026-11-02 review: the reason a completion settles a decision letter, and the away thread's
   // "needs your answer" turn, were English for a user whose letters are Chinese.
+  it('every user kind has its label in every letter language', async () => {
+    const { USER_KINDS } = await import('../../src/core/org/user-kind.js')
+    const { USER_KIND_LABELS } = await import('../../src/core/human-inbox/walnut-letters/thread-words.js')
+    for (const lang of LETTER_LANGUAGES) expect(Object.keys(USER_KIND_LABELS[lang]).sort(), lang).toEqual([...USER_KINDS].sort())
+    for (const kind of USER_KINDS) {
+      expect(han(USER_KIND_LABELS.zh[kind]), kind).toBeGreaterThan(1)
+      expect(han(USER_KIND_LABELS.en[kind]), kind).toBe(0)
+    }
+  })
+
   it('every phrase table has every letter language, and its Chinese is Chinese', async () => {
     const words = await import('../../src/core/human-inbox/walnut-letters/thread-words.js')
-    const tables = Object.entries(words) as Array<[string, Record<string, (...a: string[]) => string>]>
+    // The phrase functions (a label table such as USER_KIND_LABELS has its own test above).
+    const tables = (Object.entries(words) as Array<[string, Record<string, unknown>]>)
+      .filter(([, t]) => typeof t.en === 'function') as Array<[string, Record<string, (...a: string[]) => string>]>
     expect(tables.length).toBeGreaterThan(1)
     for (const [name, table] of tables) {
       expect(Object.keys(table).sort(), name).toEqual([...LETTER_LANGUAGES].sort())
-      expect(languageDrift('Talk to the user in Chinese', table.zh!('Fix the build', '2026-11-02 05:00'), 8), name).toBe(false)
-      expect(scriptCounts(table.en!('Fix the build', '2026-11-02 05:00')).han, name).toBe(0)
+      // Neutral arguments (a kind id, a time): only Walnut's own words decide the language.
+      const args = ['cloud_delete', '2026-11-02 05:00']
+      const zh = table.zh!(...args)
+      expect(han(zh), `${name}: ${zh}`).toBeGreaterThan(0)
+      expect(languageDrift('Talk to the user in Chinese', zh, 8), `${name}: ${zh}`).not.toBe(true)
+      expect(scriptCounts(table.en!(...args)).han, name).toBe(0)
     }
   })
 })
@@ -168,5 +184,60 @@ describe('(d) a kind Walnut stops sending is retired, and its open letters settl
         }
       }
     }
+  })
+})
+
+describe('(e) Walnut words written onto a letter come from the phrase tables', () => {
+  // 2026-11-02 review: a Chinese decision letter opened with Walnut's English "Yours to decide
+  // (...)" line. Words Walnut adds to a letter's body, thread or settled reason live in
+  // walnut-letters/thread-words.ts (rendered per language above); these scans find a new place
+  // that writes English of its own onto a letter instead.
+  const outside = files.filter(({ f }) => !f.startsWith('src/core/human-inbox/walnut-letters/'))
+  it('scans the source at all', () => expect(outside.length).toBeGreaterThan(500))
+  /** An English word in a literal around a letter's text (a `Withdrawn: ` prefix is one). */
+  const ENGLISH = /[A-Za-z]{4,}/
+  /** English prose in an argument (two words; an id such as 'made_local' or 'string' is not). */
+  const PROSE = /[A-Za-z][a-z]+[\s,:;]+[a-z]{2,}/
+  const own = (lit: string) => lit.replace(/\$\{[^}]*\}/g, ' ')
+
+  it('no settle or withdraw call passes a reason in its own words', () => {
+    const CALL = /\b(settleLetter|settleLettersWhere|settleHoldLetter|withdrawLetter)\s*\(([^\n]*)/g // the rest of the call's line
+    const hits: string[] = []
+    for (const { f, text } of outside) {
+      for (const m of text.matchAll(CALL)) {
+        for (const lit of m[2]!.matchAll(/(['"`])((?:\\.|(?!\1).)*)\1/g)) {
+          if (PROSE.test(own(lit[2]!))) hits.push(`${f}: ${m[0].slice(0, 140)}`)
+        }
+      }
+    }
+    expect(hits, 'put the words in walnut-letters/thread-words.ts and pass them in the letter language').toEqual([])
+  })
+
+  it('no code wraps words of its own around a letter body', () => {
+    // A new body built from an existing one: `..${rest.markdown}`, `${input.text}` and the like.
+    const WRAP = /`([^`]*)\$\{\s*(rest|input|letter|body)\.(markdown|html|text)\s*\}([^`]*)`/g
+    const hits: string[] = []
+    for (const { f, text } of outside) {
+      for (const m of text.matchAll(WRAP)) if (ENGLISH.test(own(`${m[1]} ${m[4]}`))) hits.push(`${f}: ${m[0].slice(0, 140)}`)
+    }
+    expect(hits, 'put the words in walnut-letters/thread-words.ts').toEqual([])
+  })
+
+  it('a file that leads a letter body with Walnut words takes them from the tables', () => {
+    const leaders = outside.filter(({ text }) => /`[^`]*\$\{\s*rest\.(markdown|html|text)\s*\}/.test(text)).map(({ f }) => f).sort()
+    expect(leaders.length).toBeGreaterThan(0)
+    for (const f of leaders) {
+      const text = files.find((x) => x.f === f)!.text
+      expect(text, `${f} wraps a letter body: its words must come from walnut-letters`).toMatch(/walnut-letters\/(thread-words|languages)\.js/)
+    }
+  })
+
+  it('a thread turn Walnut writes onto a letter is not English of its own', () => {
+    const PUSH = /thread\.push\(\s*\{[^}]*text:\s*(['"`])((?:\\.|(?!\1).)*)\1/g
+    const hits: string[] = []
+    for (const { f, text } of outside) {
+      for (const m of text.matchAll(PUSH)) if (ENGLISH.test(own(m[2]!))) hits.push(`${f}: ${m[0].slice(0, 140)}`)
+    }
+    expect(hits).toEqual([])
   })
 })
