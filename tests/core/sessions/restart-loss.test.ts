@@ -24,6 +24,7 @@ import type { SessionSnapshot } from '../../../src/providers/daemon-fold.js'
 import { addTask } from '../../../src/core/task-manager.js'
 import { createSessionRecord, updateSessionRecord, getSessionByClaudeId } from '../../../src/core/session-tracker.js'
 import { sendMessageToSession, getQueue, resetCache } from '../../../src/core/session-message-queue.js'
+import { frameForSource } from '../../../src/core/sessions/send-frame.js'
 
 const LAST_ACTIVE = Date.parse('2026-10-26T01:00:00.000Z')
 
@@ -184,7 +185,8 @@ describe('the notice rides on the first message into the session (real store and
     expect(first.endsWith('\n\nare you there?')).toBe(true)
     expect((await getSessionByClaudeId(sid))?.restartLoss).toMatchObject({ told: true, state: 'queued' })
     await sendMessageToSession(sid, 'second', { source: 'peer' })
-    expect((await rows(sid))[1]).toBe('second')
+    // Nothing rides in front of it: the line is only the peer's own (framed as no person's, send-frame.ts).
+    expect((await rows(sid))[1]).toBe(frameForSource('second', 'peer'))
   })
 
   it('a loss still being classified says nothing yet; a told one says nothing again', async () => {

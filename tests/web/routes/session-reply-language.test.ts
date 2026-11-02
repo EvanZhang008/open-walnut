@@ -61,6 +61,7 @@ import { REPLY_LANGUAGE_LINES } from '../../../src/core/hints/reply-language-lin
 import { parseSessionMessages } from '../../../src/core/session-history.js'
 import { notePlaceCompaction } from '../../../src/core/sessions/place-notice.js'
 import { getSessionByClaudeId } from '../../../src/core/session-tracker.js'
+import { frameForSource } from '../../../src/core/sessions/send-frame.js'
 import { stripOutputModeWrappers as stripOutputModeWrappersClient } from '../../../web/src/hooks/useSessionSend'
 
 const TEXT = 'why did the deploy guard refuse?'
@@ -75,6 +76,9 @@ const REMIND = renderHintBlock('rich-output', RICH_OUTPUT_MODE_REMINDER)
 /** The pre-registry line old transcripts still hold. */
 const LEGACY_LINE = `${REPLY_LANGUAGE_MARKER}${RULE}]`
 const after = (text: string, ...blocks: string[]) => composeHinted(text, { before: [], after: blocks })
+// What a send of `source` puts into the session before any hint: a line no person typed is framed
+// as Walnut's (sessions/send-frame.ts), and the hints ride after that frame, never inside it.
+const sent = (text: string, source: string) => frameForSource(text, source)
 const shown = (text: string) => parseHinted(text).text
 const fakeClient = {} as never
 
@@ -233,10 +237,10 @@ describe('turns nobody typed', () => {
     await setSession({ output_mode: 'markdown', reply_language: RULE })
     const sid = await newSession()
     await sendMessageToSession(sid, 'from routine-trigger', { source: 'routine-trigger' })
-    expect(await drain(sid)).toBe(after('from routine-trigger', LANG))
+    expect(await drain(sid)).toBe(after(sent('from routine-trigger', 'routine-trigger'), LANG))
     for (const source of ['peer', 'walnut-notify', 'wait-until']) {
       await sendMessageToSession(sid, `from ${source}`, { source })
-      expect(await drain(sid)).toBe(`from ${source}`)
+      expect(await drain(sid)).toBe(sent(`from ${source}`, source))
     }
   })
 
@@ -244,7 +248,7 @@ describe('turns nobody typed', () => {
     await setSession({ output_mode: 'rich', reply_language: RULE })
     const sid = await newSession()
     await sendMessageToSession(sid, 'peer says hi', { source: 'peer' })
-    expect(await drain(sid)).toBe(after('peer says hi', ON, LANG))
+    expect(await drain(sid)).toBe(after(sent('peer says hi', 'peer'), ON, LANG))
     // Human paths compose before they enqueue; the queue leaves their text alone.
     const fresh = await newSession()
     await sendMessageToSession(fresh, 'plan step', { source: 'web-api' })
@@ -255,7 +259,7 @@ describe('turns nobody typed', () => {
     await setSession({ output_mode: 'markdown' })
     const sid = await newSession()
     await sendMessageToSession(sid, 'trigger fired', { source: 'routine-trigger' })
-    expect(await drain(sid)).toBe('trigger fired')
+    expect(await drain(sid)).toBe(sent('trigger fired', 'routine-trigger'))
   })
 })
 

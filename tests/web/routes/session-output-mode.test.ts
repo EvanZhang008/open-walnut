@@ -72,6 +72,8 @@ import { planHints } from '../../../src/core/hints/hint-send.js'
 import type { SessionHintState } from '../../../src/core/types.js'
 import { parseSessionMessages } from '../../../src/core/session-history.js'
 import { notePlaceCompaction } from '../../../src/core/sessions/place-notice.js'
+import { frameForSource } from '../../../src/core/sessions/send-frame.js'
+import { buildPeerWrapper } from '../../../src/core/peers/peer-wrapper.js'
 import {
   registerEchoClaims, bindEchoClaims, _resetEchoClaimsForTest,
 } from '../../../src/core/echo-claims.js'
@@ -93,6 +95,9 @@ const LEGACY_OFF = '[Rich output mode: OFF] Reply in plain markdown again.'
 const LEGACY_REMIND = '[Rich output mode is still on: markdown first; a real diagram is inline <svg>.]'
 /** A message with one hint block after it, as composed. */
 const hinted = (text: string, block: string) => `${text}\n\n${block}`
+// What a send of `source` puts into the session before any hint: a line no person typed is framed
+// as Walnut's (sessions/send-frame.ts), and the hints ride after that frame, never inside it.
+const sent = (text: string, source: string) => frameForSource(text, source)
 /** What every display shows of a delivered message. */
 const shown = (text: string) => parseHinted(text).text
 /** Hint state whose next send is due the short reminder (told 5 sends back). */
@@ -388,13 +393,13 @@ describe('session:send — rich', () => {
     const sid = await newSession()
     // Never told: the first automated turn carries the full instruction and records it.
     await sendMessageToSession(sid, 'trigger fired: PR has a new comment', { source: 'routine-trigger' })
-    expect(await drain(sid)).toBe(hinted('trigger fired: PR has a new comment', ON))
+    expect(await drain(sid)).toBe(hinted(sent('trigger fired: PR has a new comment', 'routine-trigger'), ON))
     expect((await getSessionByClaudeId(sid))?.output_mode_injected).toBe('rich')
     // They count as sends: the sixth turn (human-inbox here) carries the reminder.
     const sources = ['routine-watcher', 'wait-until', 'peer', 'walnut-notify', 'human-inbox', 'auto-continue', 'auto-recover', 'app-state']
     for (const [i, source] of sources.entries()) {
       await sendMessageToSession(sid, `from ${source}`, { source })
-      expect(await drain(sid), source).toBe(i + 2 === 6 ? hinted(`from ${source}`, REMIND) : `from ${source}`)
+      expect(await drain(sid), source).toBe(i + 2 === 6 ? hinted(sent(`from ${source}`, source), REMIND) : sent(`from ${source}`, source))
     }
     expect((await getSessionByClaudeId(sid))?.hintState?.lastSendBy).toBe('agent')
   })
@@ -407,8 +412,10 @@ describe('session:send — rich', () => {
     bus.subscribe('test-send-watch', (e) => {
       if (e.name === 'session:send') seen.push((e.data as { message: string }).message)
     }, { global: true })
-    await sendMessageToSession(sid, 'bus text', { source: 'peer', enqueueMessage: '<walnut-message>hi</walnut-message>' })
-    expect(await drain(sid)).toBe(hinted('<walnut-message>hi</walnut-message>', REMIND))
+    // A real peer line arrives already framed (session-send-core.ts), so the send adds no frame of its own.
+    const envelope = buildPeerWrapper('hi', { title: 'Alpha', shortId: 'aaaaaaaa', sessionId: 'aaaaaaaa-0000-4000-8000-000000000000', host: 'local' })
+    await sendMessageToSession(sid, 'bus text', { source: 'peer', enqueueMessage: envelope })
+    expect(await drain(sid)).toBe(hinted(envelope, REMIND))
     expect(seen).toEqual(['bus text'])
   })
 
@@ -418,22 +425,33 @@ describe('session:send — rich', () => {
     await updateSessionRecord(sid, { hintState: reminderDue() })
     await sendMessageToSession(sid, 'plan step', { source: 'web-api' })
     expect(await drain(sid)).toBe('plan step')
-    await sendMessageToSession(sid, '/compact', { source: 'auto-continue' })
-    expect(await drain(sid)).toBe('/compact')
+    // A slash command from the user's own routine or hook reaches the CLI byte-exact: no hint, no frame.
+    for (const source of ['routine-trigger', 'hook:nightly']) {
+      await sendMessageToSession(sid, '/compact', { source })
+      expect(await drain(sid), source).toBe('/compact')
+    }
     // A sender that composed its own text says so (`hinted`) and it is left alone...
     const composed = hinted('already composed', REMIND)
     await sendMessageToSession(sid, composed, { source: 'ui', hinted: true })
     expect(await drain(sid)).toBe(composed)
     // ...while a block inside a peer's words is those words: escaped, never trusted.
     await sendMessageToSession(sid, composed, { source: 'peer' })
+    // The peer's line is framed as no person's (send-frame.ts) and its block escaped inside the frame;
+    // the one live block is Walnut's own, after the frame.
     const peer = await drain(sid)
-    expect(peer.startsWith('already composed\n\n&lt;system-reminder>')).toBe(true)
-    expect(parseHinted(peer).text).toBe(composed)
+    expect(peer.startsWith('<walnut-message kind="peer-note"')).toBe(true)
+    expect(peer).toContain('already composed\n\n&lt;system-reminder>')
+    expect(peer.split('<system-reminder>').length).toBe(2)
 
     await setConfigOutputMode('markdown')
     const md = await newSession()
     await sendMessageToSession(md, 'trigger fired', { source: 'routine-trigger' })
-    expect(await drain(md)).toBe('trigger fired')
+    expect(await drain(md)).toBe(sent('trigger fired', 'routine-trigger'))
+    // A slash command from any other sender is framed, so it is no command: the CLI would record its
+    // arguments as typed words (send-frame.ts).
+    await sendMessageToSession(md, '/compact', { source: 'auto-continue' })
+    expect(await drain(md)).toBe(sent('/compact', 'auto-continue'))
+    expect(sent('/compact', 'auto-continue').startsWith('<walnut-message kind="peer-note"')).toBe(true)
   })
 
   it('a compaction in a markdown session still appends nothing', async () => {
