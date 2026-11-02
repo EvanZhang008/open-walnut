@@ -111,7 +111,7 @@ jobs:
           $o = "$env:RUNNER_TEMP\windows-app"
           & {
             wsl.exe -l -v
-            'sign-in item: ' + (Get-ItemPropertyValue 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name OpenWalnut -ErrorAction SilentlyContinue)
+            'sign-in item: ' + (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue).OpenWalnut
             'Start menu: ' + (Test-Path (Join-Path ([Environment]::GetFolderPath('Programs')) 'Walnut.lnk'))
             'old Open Walnut entry: ' + (Test-Path (Join-Path ([Environment]::GetFolderPath('Programs')) 'Open Walnut.lnk'))
             wsl.exe -d OpenWalnut --cd '~' --exec sh -c 'systemctl --user is-active open-walnut-web.service; "$HOME/.local/share/open-walnut/bin/walnut" --version'

@@ -113,16 +113,23 @@ try {
   }
 
   # 3. What Windows asks before it runs a downloaded app that is not signed.
-  # SmartScreen's window is named for it ("Microsoft Defender SmartScreen") or for what it says.
-  $smart = { param($n) $n -like '*protected your PC*' -or $n -like '*SmartScreen*' }
-  $warned = Find-Window { param($w) (& $smart $w.Current.Name) -or $w.Current.Name -eq 'Open File - Security Warning' } 25
+  # SmartScreen's "Windows protected your PC" is a window of smartscreen.exe, whose own name may
+  # be empty (2026-11-02: it showed 6 s after the double-click and a match on the name never saw it).
+  $smartPid = { param($w) try { (Get-Process -Id $w.Current.ProcessId -ErrorAction Stop).ProcessName -eq 'smartscreen' } catch { $false } }
+  $smart = { param($w) $w.Current.Name -like '*protected your PC*' -or $w.Current.Name -like '*SmartScreen*' -or (& $smartPid $w) }
+  $warned = Find-Window { param($w) (& $smart $w) -or $w.Current.Name -eq 'Open File - Security Warning' } 60
   if ($warned) {
-    Say ('Windows asked first: ' + $warned.Current.Name)
+    Say ('Windows asked first: ' + $warned.Current.Name + ' (' + $warned.Current.ClassName + ')')
     Shot 'windows-asks.png'
-    Done 'windowsAsked' $warned.Current.Name
-    if (& $smart $warned.Current.Name) {
+    $asked = $warned.Current.Name
+    if (-not $asked) { $asked = 'Windows protected your PC' }
+    Done 'windowsAsked' $asked
+    if (& $smart $warned) {
       $more = Find-In $warned { param($e) $e.Current.Name -eq 'More info' } 15
-      if (-not $more) { throw 'SmartScreen shows no More info' }
+      if (-not $more) {
+        try { foreach ($e in $warned.FindAll($Tree::Descendants, [Windows.Automation.Condition]::TrueCondition)) { Say ('  in it: "' + $e.Current.Name + '" ' + $e.Current.ControlType.ProgrammaticName) } } catch { }
+        throw 'SmartScreen shows no More info'
+      }
       Start-Sleep 2; Click-Element $more; Say 'clicked More info'
       $run = Find-In $warned { param($e) $e.Current.Name -eq 'Run anyway' -and $e.Current.ControlType -eq [Windows.Automation.ControlType]::Button } 15
       if (-not $run) { throw 'SmartScreen shows no Run anyway' }
@@ -133,6 +140,10 @@ try {
       Start-Sleep 2; Click-Element $run; Say 'clicked Run'
     }
   } else {
+    # Every top-level window, so a prompt this does not know is named in the log.
+    foreach ($w in $A::RootElement.FindAll($Tree::Children, [Windows.Automation.Condition]::TrueCondition)) {
+      try { Say ('  window: "' + $w.Current.Name + '" class ' + $w.Current.ClassName + ' process ' + (Get-Process -Id $w.Current.ProcessId).ProcessName) } catch { }
+    }
     Say 'Windows asked nothing before running it'
     Done 'windowsAsked' ''
   }
