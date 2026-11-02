@@ -253,6 +253,14 @@ export interface NewLetter {
    */
   snoozeReason?: string;
   snooze_reason?: string;
+  /**
+   * Which of the user's own kinds an action_required letter from Main or a lead is, and why
+   * (org/user-kind.ts): required then, and it leads the body. Either spelling; never stored apart.
+   */
+  userKind?: string;
+  user_kind?: string;
+  userKindWhy?: string;
+  user_kind_why?: string;
   /** Stamped by the route from the caller's sid, not by the agent. */
   sender: LetterSender;
 }

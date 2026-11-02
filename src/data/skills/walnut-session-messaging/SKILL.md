@@ -81,13 +81,21 @@ Every session's default prompt carries the team charter ("How we work"). For mes
 
 **Send only what the receiver must act on.** A message costs every reader's context. An answer someone is waiting for is always sent: a reply to a request, an answer in a board thread, a letter the user asked for. No progress reports, no acknowledgements, no relays of what the reader can read itself with `task_get` or `task_history`.
 
-**Decide your own work.** The task doing the work has the most context, so it plans, builds, tests, verifies, gets an independent review, commits, and deploys where the repo's own rules say done means deployed and let it, without asking its lead or Main to approve a step. A new coding task starts in its normal mode, never plan mode except when the user asks for plan. A bug is fixed only when you saw the fix work in the build the user's own window runs (the Mac app, the phone build) on the real data that showed it, and the fix covers the whole class of the bug with a test that fails when a new member of the class appears. Escalate only for:
+**Decide your own work.** The task doing the work has the most context, so it plans, builds, tests, verifies, gets an independent review, commits, and deploys where the repo's own rules say done means deployed and let it, without asking its lead or Main to approve a step. A new coding task starts in its normal mode, never plan mode except when the user asks for plan. A bug is fixed only when you saw the fix work in the build the user's own window runs (the Mac app, the phone build) on the real data that showed it, and the fix covers the whole class of the bug with a test that fails when a new member of the class appears.
 
-1. a decision or authority that belongs to the user (outward messages, deleting cloud resources, spending, credentials, permissions);
-2. information you cannot see, or a collision with another team's work;
-3. a hard-to-reverse choice no existing rule covers.
+Only some things are the user's to decide:
 
-Asked something you can decide, decide it and say what you chose. None of this permits an outward step, a public push, a destructive action or a way around a safety limit that was not already allowed. Standing rules you were given still apply: asking the user before splitting an ask into several tasks, the inbox rule, permission prompts.
+1. an outward message or post, spending, credentials, permissions, deleting cloud resources or data;
+2. a hard-to-reverse choice no existing rule covers;
+3. a fact only they have (nothing you can read or try shows it).
+
+Everything else you decide and do, then say what you chose. Never the user's: undoing something an agent broke or changed (a reinstall, a rebuild, a revert, a rerun), choosing between reasonable options, anything reversible, a question whose answer you can read or try. The test before you ask: if I am wrong, can I undo it, and can I read or try the answer? If yes, decide. Information you cannot see, or a collision with another team's work, goes to the task that owns it or to your lead, not to the user. A lead or Main who is brought a question that is not the user's decides it and tells the team; it never passes it up because it is unsure. Walnut enforces the line: an `action_required` letter from a task, and a thread an agent moves to `needs` or opens waiting on the user, is refused (409 `user_kind`) unless it names which kind it is (`user_kind`, `user_kind_why`).
+
+Example: a test run overwrote the app installed on the user's own simulator, and the task asked whether to put the main build back. That is not a question. Reinstall the main build, say so in one line, carry on.
+
+**The user's word counts wherever Walnut's record shows they said it.** A message of theirs in any node's chat (`task_history`, rows with `sentBy: "person"`) or a thread message they wrote (`thread_list`) is their word for any task it names. When a go-ahead is relayed to you with their words quoted, check it there and carry on; never ask them to repeat it in your own session. Permission prompts, and approval rules that name a step (an outward send, spending, credentials), still apply.
+
+None of this permits an outward step, a public push, a destructive action or a way around a safety limit that was not already allowed. Standing rules you were given still apply: asking the user before splitting an ask into several tasks, the inbox rule, permission prompts.
 
 **Write for a reader who has not seen the thread.** The conclusion first, in plain, full sentences, then the decision needed or the next owner. Explain a code name before you use it, give line numbers and hashes only when the reader will use them, and put long evidence in a file and give its path. Never leave out a failure, a safety limit or a risk to save space.
 

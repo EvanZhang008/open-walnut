@@ -270,7 +270,7 @@ test('a long Unicode request reads in full; an Acknowledge the server refuses pu
 
 test('a thread the lead opens itself shows its post as the lead\'s, and his Follow up lands under it', async ({ page, request }) => {
   const res = await request.post(`/api/v1/tasks/${ids.lead}/threads/open`, {
-    data: { title: `Mail: the meetup asks about the talk ${STAMP}`, text: 'The organizer wrote: **confirm the slot by Friday?**', from: 'mail', ref: 'Talk slot' },
+    data: { title: `Mail: the meetup asks about the talk ${STAMP}`, text: 'The organizer wrote: **confirm the slot by Friday?**', from: 'mail', ref: 'Talk slot', user_kind: 'user_own', user_kind_why: 'It is his mail and his calendar' },
     headers: { 'x-walnut-caller-sid': ids.leadSid },
   })
   expect(res.status(), await res.text()).toBe(201)

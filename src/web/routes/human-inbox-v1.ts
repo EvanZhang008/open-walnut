@@ -101,6 +101,8 @@ const ERROR_CODES: Record<string, string> = {
   user_words: 'bad_request',
   // A letter from or about a snoozed task without a stated `snooze_reason` (snooze-letter.ts).
   task_snoozed: 'task_snoozed',
+  // A decision letter from Main or a lead without the user's kind named (org/user-kind.ts).
+  user_kind: 'user_kind',
 }
 
 interface LetterErrorLike { code: string; status: number; message: string }

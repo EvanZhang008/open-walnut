@@ -7,8 +7,8 @@
  *   GET   /api/v1/tasks/:id/threads[?open=1]               { task_id, threads, closed_count }  (open first; each message with
  *                                                          the node's answer, read from its chat in the background)
  *   POST  /api/v1/tasks/:id/threads                        { text, images?, thread? } -> file one of his messages
- *   PATCH /api/v1/tasks/:id/threads/:thread                { title?, ask?, state?, reply?, tasks?, add_tasks?, known?, close?, reopen?, merge_into? }
- *   POST  /api/v1/tasks/:id/threads/open                   { title, text, from, ref?, state?, tasks? } -> the node opens one itself
+ *   PATCH /api/v1/tasks/:id/threads/:thread                { title?, ask?, state?, user_kind?, user_kind_why?, reply?, tasks?, add_tasks?, known?, close?, reopen?, merge_into? }
+ *   POST  /api/v1/tasks/:id/threads/open                   { title, text, from, ref?, state?, user_kind?, user_kind_why?, tasks? } -> the node opens one itself
  *   POST  /api/v1/tasks/:id/threads/:thread/split          { message } -> that message becomes its own thread
  *
  * The caller comes from `x-walnut-caller-sid`: none = the user. Writes answer 501 on the companion.
@@ -103,6 +103,8 @@ orgThreadsV1Router.post('/tasks/:id/threads/open', route(async (req, res) => {
     ...(str(b, 'ref') ? { ref: str(b, 'ref') } : {}),
     ...(str(b, 'state') ? { state: str(b, 'state') as ThreadState } : {}),
     ...(ids(b, 'tasks') ? { tasks: ids(b, 'tasks') } : {}),
+    ...(str(b, 'user_kind') ? { user_kind: str(b, 'user_kind') } : {}),
+    ...(str(b, 'user_kind_why') ? { user_kind_why: str(b, 'user_kind_why') } : {}),
   }, by)
   log.task.info('org thread opened by the node', { taskId: task.id, threadId: thread.id, by, from: thread.opener?.from })
   res.status(201).json({ task_id: task.id, thread })
@@ -115,7 +117,7 @@ orgThreadsV1Router.patch('/tasks/:id/threads/:thread', route(async (req, res) =>
   const by = await writerOf(req)
   const mergeInto = str(b, 'merge_into')
   const patch: ThreadPatch = {}
-  for (const k of ['title', 'ask', 'reply', 'state', 'close', 'known'] as const) {
+  for (const k of ['title', 'ask', 'reply', 'state', 'close', 'known', 'user_kind', 'user_kind_why'] as const) {
     const v = str(b, k)
     if (v !== undefined) (patch as Record<string, unknown>)[k] = v
   }

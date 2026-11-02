@@ -246,7 +246,7 @@ const NO_ANSWER = Symbol('triage-stamp-no-answer');
  * too is answered permissively and remembered nowhere (there is no task id to
  * remember it under).
  */
-async function isTriageSender(sender: LetterSender, deps: TriageLetterDeps): Promise<boolean> {
+export async function isTriageSender(sender: LetterSender, deps: TriageLetterDeps): Promise<boolean> {
   const taskId = sender.taskId?.trim();
   const sid = sender.sessionId?.trim();
   if (!taskId || !sid || sid === 'external') return false;

@@ -29,6 +29,7 @@ import { z } from 'zod'
 import { defineOp } from './registry.js'
 import { inboxItemsSchema } from '../core/human-inbox/item-schema.js'
 import { MESSAGE_TEXT_HINT } from '../core/team-charter.js'
+import { USER_KINDS, USER_KIND_PARAM, USER_KIND_WHY_PARAM } from '../core/org/user-kind.js'
 import { withOutcome } from './outcome.js'
 
 const LETTER_TYPE = z.enum(['completion', 'action_required', 'review', 'info'])
@@ -53,6 +54,8 @@ defineOp({
     + 'the request named) unless the user themself asked this task for a letter or report (user_asked:true). '
     + 'A letter from or about a snoozed task (start date still to come) is refused (409 task_snoozed) unless '
     + 'snooze_reason says why it cannot wait for that date. '
+    + 'An action_required letter is for a decision that is the user\'s own, and says which kind with user_kind and '
+    + 'user_kind_why (409 user_kind without them); undoing what an agent broke and choosing between reasonable options are never the user\'s. '
     + 'Writing standard: one phone screen, background in 1-2 sentences, then the point; '
     + 'self-contained (never "see the session"); link long artifacts by path instead of pasting them. '
     + 'Body is markdown (usual choice) or self-contained html with inline styles, exactly one of the two. '
@@ -89,6 +92,8 @@ defineOp({
     snooze_reason: z.string().optional().describe(
       'Required when this task, or one in task_refs, is snoozed (its start date is still to come): one line '
       + 'the user reads saying why this cannot wait for that date. It leads the letter'),
+    user_kind: z.enum(USER_KINDS).optional().describe(USER_KIND_PARAM),
+    user_kind_why: z.string().max(300).optional().describe(USER_KIND_WHY_PARAM),
   },
   bind: { method: 'POST', path: '/human-inbox' },
   mapResult: ({ body }) => ({

@@ -36,10 +36,15 @@ describe('the charter itself', () => {
       /The user and Main run the organization together as co-CEOs/,
       /Every agent runs the same model\. A higher layer holds different context, not better judgment\./,
       /The task doing the work has the most context, so it decides and finishes the work itself: plan, build, test, verify, an independent review, commit, and deploy where the repo's own rules say done means deployed and let you do it\. It does not ask its lead or Main for approval and does not wait for review rounds\./,
-      /\(1\) a decision or authority that belongs to the user \(outward messages, deleting cloud resources, spending, credentials, permissions\)/,
-      /\(2\) information you cannot see, or a collision with another team's work/,
-      /\(3\) a hard-to-reverse choice no existing rule covers/,
-      /Asked something you can decide, decide it and say what you chose/,
+      /Only some things are the user's to decide: an outward message or post, spending, credentials, permissions, deleting cloud resources or data, a hard-to-reverse choice no existing rule covers, and a fact only they have\./,
+      /Everything else you decide and do, then say what you chose\./,
+      /Undoing something an agent broke or changed \(a reinstall, a rebuild, a revert, a rerun\), choosing between reasonable options, and anything reversible are never theirs/,
+      /if I am wrong, can I undo it, and can I read or try the answer\? If yes, decide/,
+      /Information you cannot see, or a collision with another team's work, goes to the task that owns it or to your lead, not to the user/,
+      /A lead or Main who is brought a question that is not the user's decides it and tells the team; it never passes it up/,
+      /Whenever a task hands the user a decision \(a letter, a thread waiting on them\), Walnut asks which of these kinds it is/,
+      /The user's word counts wherever Walnut's record shows they said it: a message of theirs in any node's chat \(task_history, rows with sentBy "person"\) or a thread message they wrote \(thread_list\)/,
+      /never ask them to say it again in your own session\. Permission prompts, and approval rules that name a step/,
       /A new coding task starts in its normal mode, never plan mode except when the user asks for plan: its owner writes the plan itself and carries on/,
       /A project lead assigns work, coordinates across teams and unblocks; it reads a team's work only when an outcome looks wrong\. Main sets direction with the user; it does not review implementation details\./,
       /send one only when the receiver must act on it\./,
@@ -56,7 +61,8 @@ describe('the charter itself', () => {
     expect(TEAM_CHARTER).toMatch(/An answer someone is waiting for is always sent: a reply to a request, an answer in a board thread, a letter the user asked for/)
     expect(TEAM_CHARTER).toMatch(/Standing rules you were given still apply: asking the user before splitting an ask into several tasks, the inbox rule, permission prompts/)
     expect(MESSAGE_TEXT_HINT).toMatch(/always send an answer someone is waiting for/)
-    expect(MESSAGE_TEXT_HINT).toMatch(/outward steps, deletes, spending, credentials and permissions stay theirs/)
+    expect(MESSAGE_TEXT_HINT).toMatch(/Only the user's own decisions go to them \(outward steps, spending, credentials, permissions, cloud deletes, a hard-to-reverse choice no rule covers, a fact only they have\)/)
+    expect(MESSAGE_TEXT_HINT).toMatch(/undoing what an agent broke, choosing between reasonable options and anything reversible are never theirs: decide it and say what you chose/)
     expect(MESSAGE_TEXT_HINT).toMatch(/Passing on the user's request: their exact words and screenshots first, your summary after\./)
     expect(TEAM_CHARTER).toMatch(/None of this permits an outward step, a public push, a destructive action or a way around a safety limit/)
   })
@@ -133,6 +139,9 @@ describe('skills', () => {
     expect(skill).toContain('**Send only what the receiver must act on.**')
     expect(skill).toContain('without asking its lead or Main to approve a step')
     expect(skill).toContain('a hard-to-reverse choice no existing rule covers')
+    expect(skill).toContain('Never the user\'s: undoing something an agent broke or changed')
+    expect(skill).toContain('**The user\'s word counts wherever Walnut\'s record shows they said it.**')
+    expect(skill).toContain('409 `user_kind`')
     expect(skill).toMatch(/Hard to act on:[\s\S]*Clear:/)
     expect(skill).not.toContain('Keep messages short and factual')
     expect(skill).toContain("**Pass on the user's words, not your reading of them.**")
@@ -141,7 +150,8 @@ describe('skills', () => {
   it('the walnut skill points at it', () => {
     const skill = read('src/data/skills/walnut/SKILL.md')
     expect(skill).toMatch(/Send one only when the receiver must act on it/)
-    expect(skill).toMatch(/escalate only for the user's own decisions/)
+    expect(skill).toMatch(/only the user's own decisions go to them/)
+    expect(skill).toMatch(/undoing what an agent broke or choosing between reasonable options never is/)
   })
 })
 

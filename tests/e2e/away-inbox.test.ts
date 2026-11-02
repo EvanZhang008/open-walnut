@@ -48,10 +48,13 @@ beforeAll(async () => {
 });
 afterAll(async () => { bus.unsubscribe('away-inbox-test'); await stopServer(); await fs.rm(WALNUT_HOME, { recursive: true, force: true }); });
 
+/** A decision letter names which of the user's kinds it is (org/user-kind.ts). */
+const KIND = { user_kind: 'spending', user_kind_why: 'It buys a paid plan for the team' };
+
 describe('a lead the user is away from', () => {
   it('present: a letter is a letter; away: one thread, one buzz until he reads it', async () => {
     await typedAgo(60_000);
-    const present = await run('human_inbox_send', { subject: 'Pick a name', type: 'action_required', markdown: 'A or B', actions: [{ id: 'a', label: 'A' }] }, LEAD_SID);
+    const present = await run('human_inbox_send', { subject: 'Pick a name', type: 'action_required', markdown: 'A or B', actions: [{ id: 'a', label: 'A' }], ...KIND }, LEAD_SID);
     expect((await getLetter(present.letterId)).awayThread).toBeUndefined();
     expect(lastEvent()).toMatchObject({ letterId: present.letterId, kind: 'new' });
     expect(lastEvent().quiet).toBeUndefined();
@@ -80,7 +83,7 @@ describe('a lead the user is away from', () => {
     expect(lastEvent().quiet).toBeUndefined();
 
     // A decision is its own letter (its buttons are the one tap), quiet while the thread is unread, named in it.
-    const decision = await run('human_inbox_send', { subject: 'Start step one?', type: 'action_required', markdown: 'Two ways', actions: [{ id: 'go', label: 'Go' }, { id: 'later', label: 'Later' }] }, LEAD_SID);
+    const decision = await run('human_inbox_send', { subject: 'Start step one?', type: 'action_required', markdown: 'Two ways', actions: [{ id: 'go', label: 'Go' }, { id: 'later', label: 'Later' }], ...KIND }, LEAD_SID);
     expect(decision.letterId).not.toBe(first.letterId);
     expect((await getLetter(decision.letterId)).actions?.map((a) => a.id)).toEqual(['go', 'later']);
     const newEvent = events.find((e) => e.letterId === decision.letterId);
@@ -92,7 +95,7 @@ describe('a lead the user is away from', () => {
     expect(pinned.letterId).not.toBe(first.letterId);
 
     // A worker's letter is never threaded: only Main and the leads have an away thread.
-    const fromWorker = await run('human_inbox_send', { subject: 'Worker blocked', type: 'action_required', markdown: 'Need a key', actions: [{ id: 'ok', label: 'OK' }] }, WORKER_SID);
+    const fromWorker = await run('human_inbox_send', { subject: 'Worker blocked', type: 'action_required', markdown: 'Need a key', actions: [{ id: 'ok', label: 'OK' }], ...KIND }, WORKER_SID);
     expect((await getLetter(fromWorker.letterId)).awayThread).toBeUndefined();
 
     // He answered a letter on the phone (a person, not the chat): still away, still one thread.

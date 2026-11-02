@@ -340,7 +340,10 @@ describe('buildSessionContext (identity note)', () => {
     // now has: prefer them to the CLI, so a quote or a `$( )` in a text arrives exact.
     // 7550 → 7800 (2026-11-01) for private tasks: a task about the user's private matters is
     // created local, so a project's outside service never receives it.
-    expect(systemPrompt.length).toBeLessThan(7800)
+    // 7800 → 8900 (2026-11-01) for the charter's escalation bullet: a lead handed the user a
+    // question a task could have decided, so the bullet lists the user's kinds, names what is
+    // never theirs and says the user's word counts wherever Walnut's record shows it.
+    expect(systemPrompt.length).toBeLessThan(8900)
   })
 
   it('asks for the agent acknowledgement line alone, only for agent messages, never after words', async () => {

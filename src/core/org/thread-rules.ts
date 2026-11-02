@@ -25,7 +25,8 @@ export const THREADS_KNOWN_RULE =
 export const THREADS_OPEN_RULE =
   'You may open a thread yourself (thread_create) for something that reached you he must act on or asked to follow: a mail he '
   + 'must answer, a team\'s question only he can settle, news he asked to hear about. Never as a progress feed. While he is away a '
-  + 'decision still goes to his inbox as a letter: the thread names the letter (ref), never repeats it.';
+  + 'decision still goes to his inbox as a letter: the thread names the letter (ref), never repeats it. A thread that waits on him '
+  + '(the default) names its user_kind and user_kind_why, or Walnut refuses it.';
 
 /**
  * His Threads view shows only what has something for him (2026-11-01, the user: "if a task is just
@@ -39,7 +40,8 @@ export const THREADS_PENDING_RULE =
   + 'and one in working or pending are out of his sight until then. A new summary written without a state is news and shows it '
   + '(Walnut sets answered); to update it quietly, name working or pending in the same write. Never write a summary that only '
   + 'says who took it or that it is being done (its task chip says that). When your answer to him only says that, set pending '
-  + 'in the same turn: pending stays hidden even with that answer on it.';
+  + 'in the same turn: pending stays hidden even with that answer on it. Setting needs (he must decide) names user_kind and '
+  + 'user_kind_why: Walnut refuses it unless it says which of his kinds it is.';
 
 /**
  * What a card says (2026-11-01, the user: "the purpose is to keep the thread extremely concise";

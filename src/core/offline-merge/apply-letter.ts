@@ -41,7 +41,9 @@ export async function applyLetter(ctx: V2Context, record: V2Record): Promise<voi
   const { getOp, parseOpArgs } = await import('../../ops/index.js');
   const op = getOp('human_inbox_send');
   if (!op) throw new Error('human_inbox_send is not an op on this server');
-  const parsed = parseOpArgs(op, { ...args, [format]: body });
+  // A journal op is never judged for the user's kind (letter-ops.ts), so its fields are dropped here.
+  const { user_kind: _kind, user_kind_why: _why, ...journaled } = args;
+  const parsed = parseOpArgs(op, { ...journaled, [format]: body });
   if (!parsed.ok) throw new RefusedWrite(`${what}: ${parsed.message}`);
   const { createLetterCheck } = await import('../human-inbox/letter-check.js');
   const over = createLetterCheck().oversize({ [format]: body, text: parsed.args.text });

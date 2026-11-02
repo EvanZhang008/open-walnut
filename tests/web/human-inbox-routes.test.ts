@@ -119,6 +119,9 @@ async function listLetters(archived = false): Promise<{ letters: LetterEnvelope[
   return res.json() as Promise<{ letters: LetterEnvelope[]; unreadCount: number }>
 }
 
+/** A session's decision letter names which of the user's kinds it is (core/org/user-kind.ts). */
+const KIND = { user_kind: 'spending', user_kind_why: 'It buys a paid plan for the team' }
+
 const ACTION_LETTER = {
   subject: 'Cache strategy: A or B?',
   type: 'action_required',
@@ -128,6 +131,7 @@ const ACTION_LETTER = {
     { id: 'a', label: 'Cache in memory', description: 'Recommended' },
     { id: 'b', label: 'Recompute each time' },
   ],
+  ...KIND,
 }
 
 beforeAll(async () => {
@@ -267,6 +271,7 @@ describe('POST /api/v1/human-inbox — send + sender stamping', () => {
       type: 'action_required',
       markdown: 'A or B?',
       actions: [{ id: 'a', label: 'Keep A' }, { id: 'b', label: 'Keep B' }],
+      ...KIND,
     }, SENDER_SID)
     const { letter } = await getLetter(id)
     expect(letter.type).toBe('action_required')

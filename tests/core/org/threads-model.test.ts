@@ -169,7 +169,7 @@ describe('a pending thread: only handed off or being worked on, out of his sight
     expect(same({ reply: 'Done; live on prod, check the card', state: 'pending' })).toBe('pending')
     expect(same({ reply: 'Built; it needs your call on the default view' })).toBe('answered')
     expect(same({ reply: 'Still building', state: 'working' })).toBe('working')
-    expect(same({ reply: 'Built; which default?', state: 'needs' })).toBe('needs')
+    expect(same({ reply: 'Built; which default?', state: 'needs', user_kind: 'user_own', user_kind_why: 'It is his mail and his calendar' })).toBe('needs')
   })
 
   it('a new summary without a state on a working or new thread is news too (answered); an answered one stays answered', () => {
@@ -178,7 +178,7 @@ describe('a pending thread: only handed off or being worked on, out of his sight
     expect(updateThread(f0, id, { reply: 'Found the cause' }, 'task:lead-1', at(1)).thread.state).toBe('answered')
     const working = updateThread(f0, id, { state: 'working', reply: 'On it' }, 'task:lead-1', at(1)).file
     expect(updateThread(working, id, { reply: 'Fixed and live' }, 'task:lead-1', at(2)).thread.state).toBe('answered')
-    const needs = updateThread(f0, id, { state: 'needs', reply: 'Which one?' }, 'task:lead-1', at(1)).file
+    const needs = updateThread(f0, id, { state: 'needs', reply: 'Which one?', user_kind: 'user_own', user_kind_why: 'It is his mail and his calendar' }, 'task:lead-1', at(1)).file
     expect(updateThread(needs, id, { reply: 'Which one: A or B?' }, 'task:lead-1', at(2)).thread.state).toBe('needs')
   })
 
@@ -353,7 +353,7 @@ describe('the node\'s answers, and what he already knows', () => {
 
 describe('a thread the node opens itself', () => {
   it('opens with the node\'s first post and where it came from; his Follow up is filed under it', () => {
-    const o = openThread(emptyThreads('lead-1'), { title: 'Mail: the meetup asks about the talk', text: 'The organizer wrote: confirm the slot by Friday?', from: 'mail', ref: 'Talk slot' }, 'task:lead-1', at(0))
+    const o = openThread(emptyThreads('lead-1'), { title: 'Mail: the meetup asks about the talk', text: 'The organizer wrote: confirm the slot by Friday?', from: 'mail', ref: 'Talk slot', user_kind: 'user_own', user_kind_why: 'It is his mail and his calendar' }, 'task:lead-1', at(0))
     expect(o.thread).toMatchObject({ titled: true, state: 'needs', messages: [], opener: { from: 'mail', ref: 'Talk slot', by: 'task:lead-1', at: at(0) } })
     const r = fileMessage(o.file, { text: 'yes, confirm it', via: 'follow-up', threadId: o.thread.id, at: at(5) })
     expect(r.created).toBe(false)
@@ -366,7 +366,7 @@ describe('a thread the node opens itself', () => {
   })
 
   it('his chat message about it merges into it, never the other way; the react rule holds for its first post too', () => {
-    let f = openThread(emptyThreads('lead-1'), { title: 'A team needs your call', text: 'Ship on Monday or wait?', from: 'task' }, 'task:lead-1', at(0)).file
+    let f = openThread(emptyThreads('lead-1'), { title: 'A team needs your call', text: 'Ship on Monday or wait?', from: 'task', user_kind: 'user_own', user_kind_why: 'It is his mail and his calendar' }, 'task:lead-1', at(0)).file
     const opened = f.threads[0]
     expect(() => updateThread(f, opened.id, { close: 'acked' }, 'task:lead-1', at(1))).toThrow(/not written/)
     // Dropping its own post he never saw is the node's call.

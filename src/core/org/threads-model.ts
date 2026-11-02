@@ -33,6 +33,7 @@
  * Pure: every function takes the file and returns the next one, or throws ThreadError. The
  * store (threads-store.ts) runs them under the file lock.
  */
+import { userKindVerdict } from './user-kind.js';
 import crypto from 'node:crypto';
 
 export const THREAD_STATES = ['new', 'working', 'needs', 'answered', 'pending'] as const;
@@ -155,7 +156,7 @@ export interface ThreadsFile {
   threads: OrgThread[];
 }
 
-export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread' | 'not_reacted';
+export type ThreadErrorCode = 'no_thread' | 'no_message' | 'bad_input' | 'thread_closed' | 'last_message' | 'same_thread' | 'not_reacted' | 'user_kind';
 
 export class ThreadError extends Error {
   constructor(public code: ThreadErrorCode, public status: number, message: string) {
@@ -336,6 +337,22 @@ export interface ThreadPatch {
   reopen?: boolean;
   /** He already knows every exchange through this message (tm-...), or "all": they fold to context. */
   known?: string;
+  /** With state needs from an agent: which of the user's kinds this is, and why (user-kind.ts). Never stored. */
+  user_kind?: string;
+  user_kind_why?: string;
+}
+
+/**
+ * An agent hands the user a question by moving a thread to needs, or opening one that waits on
+ * them: Walnut asks which of the user's kinds it is (user-kind.ts). The user's own writes and a
+ * thread already waiting on them are never asked.
+ */
+const waitsOnUser = (state: ThreadState): boolean => state === 'needs';
+
+function checkHandedToUser(by: ThreadWriter, input: { user_kind?: unknown; user_kind_why?: unknown }): void {
+  if (by === 'human') return;
+  const v = userKindVerdict(input);
+  if (!v.ok) throw new ThreadError('user_kind', 409, v.message.replace(/^Not sent to the user:/, 'Not handed to the user:'));
 }
 
 function checkPatch(p: ThreadPatch): void {
@@ -425,6 +442,9 @@ function taskList(ids: readonly unknown[]): string[] {
 export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, by: ThreadWriter, at: string): { file: ThreadsFile; thread: OrgThread } {
   checkPatch(patch);
   const cur = find(file, id);
+  // Handed to the user: needs, from a state it was not in, or a closed thread reopened into it.
+  const target = patch.state ?? cur.state;
+  if (waitsOnUser(target) && (cur.state !== target || (patch.reopen === true && !!cur.closed && target === 'needs'))) checkHandedToUser(by, patch);
   const next: OrgThread = { ...cur, updatedAt: at, by };
   if (patch.title !== undefined) { next.title = clip(patch.title, THREAD_TITLE_MAX); next.titled = true; }
   if (patch.ask !== undefined) { if (patch.ask.trim()) next.ask = clip(patch.ask, THREAD_ASK_MAX); else delete next.ask; }
@@ -505,6 +525,9 @@ export interface OpenThreadInput {
   state?: ThreadState;
   tasks?: string[];
   id?: string;
+  /** With state needs (the default): which of the user's kinds this is, and why (user-kind.ts). Never stored. */
+  user_kind?: string;
+  user_kind_why?: string;
 }
 
 /** The node opens a thread itself: its first post is what reached it (thread_create). */
@@ -515,6 +538,7 @@ export function openThread(file: ThreadsFile, input: OpenThreadInput, by: Thread
   if (input.state !== undefined && !THREAD_STATES.includes(input.state)) throw new ThreadError('bad_input', 400, `state must be one of ${THREAD_STATES.join(', ')}.`);
   // A thread the node opens is for him to act on or follow: never hidden from the start.
   if (input.state !== undefined && HIDDEN_STATES.has(input.state)) throw new ThreadError('bad_input', 400, 'A thread you open is for him to see: open it as needs or answered.');
+  if (waitsOnUser(input.state ?? 'needs')) checkHandedToUser(by, input);
   const tasks = taskList(input.tasks ?? []);
   const thread: OrgThread = {
     id: input.id && THREAD_ID_RE.test(input.id) ? input.id : newThreadId(),

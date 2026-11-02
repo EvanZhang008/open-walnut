@@ -162,7 +162,7 @@ describe('Walnut enforces it', () => {
   })
 
   it('a thread the node opened files his reply under it', () => {
-    const o = openThread(emptyThreads('lead-1'), { title: 'Mail needs your answer', text: 'The meetup asks to confirm the talk slot.', from: 'mail' }, 'task:lead-1', at(0))
+    const o = openThread(emptyThreads('lead-1'), { title: 'Mail needs your answer', text: 'The meetup asks to confirm the talk slot.', from: 'mail', user_kind: 'user_own', user_kind_why: 'It is his mail and his calendar' }, 'task:lead-1', at(0))
     const r = fileMessage(o.file, { text: 'confirm it', via: 'follow-up', threadId: o.thread.id, at: at(1) })
     expect(r.created).toBe(false)
     expect(r.file.threads).toHaveLength(1)

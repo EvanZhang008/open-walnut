@@ -226,8 +226,12 @@ describe('one run: one summary and three decisions', () => {
   });
 
   it('no other agent is budgeted: an ordinary session sends as many as it likes', async () => {
+    // An ordinary session names which of the user's kinds each decision is (org/user-kind.ts); a triage run does not.
+    const kind = { user_kind: 'outward', user_kind_why: 'It unsubscribes the user from a mailing list' };
+    const refused = await sendLetterAs(DEV_SID, decisionBody('Dev decision without a kind'));
+    expect(refused.status).toBe(409);
     for (let i = 0; i < 6; i++) {
-      const r = await sendLetterAs(DEV_SID, decisionBody(`Dev decision ${i}`));
+      const r = await sendLetterAs(DEV_SID, { ...decisionBody(`Dev decision ${i}`), ...kind });
       expect(r.status, `dev letter ${i}`).toBe(201);
     }
     // A caller with no session at all (curl, a hand-started agent) is unaffected.

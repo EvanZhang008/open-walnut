@@ -253,7 +253,7 @@ describe('Org Threads', () => {
   it('a thread the lead opens itself takes his reply through its Follow up; closed ones leave the open list', async () => {
     const res = await fetch(`${base}/api/v1/tasks/${leadId}/threads/open`, {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-walnut-caller-sid': LEAD_SID },
-      body: JSON.stringify({ title: 'Mail: the meetup asks about the talk', text: 'Confirm the slot by Friday?', from: 'mail', ref: 'Talk slot' }),
+      body: JSON.stringify({ title: 'Mail: the meetup asks about the talk', text: 'Confirm the slot by Friday?', from: 'mail', ref: 'Talk slot', user_kind: 'user_own', user_kind_why: 'It is his mail and his calendar' }),
     })
     expect(res.status).toBe(201)
     const opened = ((await res.json()) as { thread: OrgThread }).thread
@@ -271,5 +271,71 @@ describe('Org Threads', () => {
     const body = (await open.json()) as { threads: OrgThread[]; closed_count: number }
     expect(body.threads.every((x) => !x.closed)).toBe(true)
     expect(body.closed_count).toBeGreaterThan(0)
+  })
+})
+
+describe('a question for the user names which of their kinds it is', () => {
+  const post = (path: string, sid: string | undefined, body: unknown, method = 'POST') => fetch(`${base}/api/v1${path}`, {
+    method, headers: { 'content-type': 'application/json', ...(sid ? { 'x-walnut-caller-sid': sid } : {}) }, body: JSON.stringify(body),
+  })
+  const letter = (sid: string | undefined, extra: Record<string, unknown> = {}) => post('/human-inbox', sid, {
+    type: 'action_required', subject: 'Reinstall the main build on the simulator?', markdown: 'A test overwrote it.',
+    actions: [{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }], ...extra,
+  })
+
+  it('a lead\'s decision letter without a kind is refused, with the kinds and the never-his list', async () => {
+    const res = await letter(LEAD_SID)
+    expect(res.status).toBe(409)
+    const text = JSON.stringify(await res.json())
+    expect(text).toContain('user_kind')
+    for (const kind of ['outward', 'spending', 'credentials', 'permissions', 'cloud_delete', 'irreversible', 'user_info', 'user_own']) expect(text).toContain(kind)
+    expect(text).toContain('undoing something an agent broke or changed')
+    expect(text).toContain('choosing between reasonable options')
+  })
+
+  it('a kind with no reason, or a kind that is not one, is refused too', async () => {
+    expect((await letter(LEAD_SID, { user_kind: 'outward' })).status).toBe(409)
+    expect((await letter(LEAD_SID, { user_kind: 'outward', user_kind_why: 'short' })).status).toBe(409)
+    expect((await letter(LEAD_SID, { user_kind: 'convenience', user_kind_why: 'It would be nice to ask them' })).status).toBe(409)
+  })
+
+  it('with a kind and a reason it goes out, the reason leads the body, and the kind fields are not stored', async () => {
+    const res = await letter(LEAD_SID, { user_kind: 'outward', user_kind_why: 'It posts to a public channel as them' })
+    expect(res.status).toBe(201)
+    const sent = await res.json() as { id: string }
+    const got = (await (await fetch(`${base}/api/v1/human-inbox/${sent.id}`)).json() as { letter: Record<string, unknown> }).letter
+    expect(JSON.stringify(got)).toContain('Yours to decide (an outward message or post): It posts to a public channel as them')
+    expect(JSON.stringify(got)).toContain('A test overwrote it.')
+    expect(JSON.stringify(got)).not.toContain('user_kind_why')
+  })
+
+  it('a worker\'s letter is judged too; a report letter, a plugin\'s letter and no caller are not; user_asked does not skip it', async () => {
+    expect((await letter(WORKER_SID)).status).toBe(409)
+    expect((await letter(LEAD_SID, { user_asked: true })).status).toBe(409)
+    expect((await letter(WORKER_SID, { user_kind: 'credentials', user_kind_why: 'It needs a key only he holds' })).status).toBe(201)
+    expect((await letter(LEAD_SID, { type: 'info', actions: undefined, subject: 'FYI', markdown: 'Done.' })).status).toBe(201)
+    expect((await letter(undefined)).status).toBe(201)
+  })
+
+  it('a thread an agent opens waiting on the user, or moves to needs, names a kind; the user\'s own writes and a thread already waiting are not asked', async () => {
+    const open = (extra: Record<string, unknown> = {}) => post(`/tasks/${leadId}/threads/open`, LEAD_SID, { title: 'Reinstall the build?', text: 'A test overwrote it', from: 'node', ...extra })
+    const refused = await open()
+    expect(refused.status).toBe(409)
+    expect(JSON.stringify(await refused.json())).toContain('user_kind')
+    // Opened as answered: nothing is handed to him.
+    const answered = await open({ state: 'answered' })
+    expect(answered.status).toBe(201)
+    const id = ((await answered.json()) as { thread: OrgThread }).thread.id
+    // Moved to needs by the lead: asked; with a kind: allowed; again while waiting: not asked.
+    const move = (extra: Record<string, unknown> = {}, sid: string | null = LEAD_SID) => post(`/tasks/${leadId}/threads/${id}`, sid ?? undefined, { state: 'needs', ...extra }, 'PATCH')
+    expect((await move()).status).toBe(409)
+    expect((await move({ user_kind: 'spending', user_kind_why: 'It buys a paid plan for the team' })).status).toBe(200)
+    expect((await move({ reply: 'Still waiting on the plan choice' })).status).toBe(200)
+    const after = (await threads()).find((t) => t.id === id)!
+    expect(after.state).toBe('needs')
+    expect(JSON.stringify(after)).not.toContain('user_kind')
+    // The user's own change (no caller) is never asked.
+    expect((await post(`/tasks/${leadId}/threads/${id}`, undefined, { state: 'answered' }, 'PATCH')).status).toBe(200)
+    expect((await move({}, null)).status).toBe(200)
   })
 })

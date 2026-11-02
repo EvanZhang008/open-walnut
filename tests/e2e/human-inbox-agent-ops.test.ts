@@ -231,7 +231,7 @@ describe('the inbox, read by an agent', () => {
     await settleReplied(rq.id);
     await expect(send({ type: 'completion' })).rejects.toThrow(/already went to it/);
     // A decision still goes: the task is blocked on the user.
-    expect((await send({ type: 'action_required', actions: [{ id: 'a', label: 'A' }] })).letterId).toBeTruthy();
+    expect((await send({ type: 'action_required', actions: [{ id: 'a', label: 'A' }], user_kind: 'permissions', user_kind_why: 'It widens what an agent may do' })).letterId).toBeTruthy();
     // The user asked this task for the report.
     expect((await send({ user_asked: true })).letterId).toBeTruthy();
     // A task nobody asked sends as before.

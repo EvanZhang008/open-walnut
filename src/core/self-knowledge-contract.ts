@@ -44,7 +44,12 @@ import { TASK_ROUTING_CONTRACT } from './task-routing-contract.js';
 // Raised to 8,300 on 2026-10-29 for the charter's bug line: three bugs reported fixed
 // came back the same day, each checked on another build and fixed for the one case
 // seen. It renders 8,246 characters with it.
-export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 8_300;
+//
+// Raised to 9,400 on 2026-11-01 for the charter's escalation bullet (team-charter.ts): a
+// lead handed the user a question a task could have decided, though the old one-line rule
+// said to decide it, so the bullet now lists the user's kinds, names what is never theirs
+// and says the user's word counts wherever Walnut's record shows it. It renders 9,329 with it.
+export const SELF_KNOWLEDGE_PROMPT_MAX_CHARS = 9_400;
 
 // The phase LIST comes from PHASE_ORDER, so adding or removing a phase updates
 // this prompt with no second edit. The phases the prompt names are typed

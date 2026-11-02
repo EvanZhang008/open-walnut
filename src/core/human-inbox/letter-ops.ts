@@ -182,6 +182,12 @@ export async function sendLetterAsCallerOnce(
   // report above: it was written while the server was away and the host holds no snooze check.
   if (!opts.opKey && input.userAsked !== true && input.user_asked !== true) input = await admitSnoozedLetter(input, sender);
   else { const { snoozeReason: _a, snooze_reason: _b, ...rest } = input; input = rest; }
+  // A decision letter from Main or a lead names which of the user's kinds it is (user-kind-letter.ts).
+  // A host's journal op is never refused on the way in, as above; its kind fields are dropped.
+  {
+    const { admitUserKindLetter, withoutUserKind } = await import('./user-kind-letter.js');
+    input = opts.opKey ? withoutUserKind(input) : await admitUserKindLetter(input, sender);
+  }
   // Main or a lead the user is away from: one thread per absence, one buzz (away-thread.ts). A
   // host's journal op is sent as written.
   if (!opts.opKey) {
