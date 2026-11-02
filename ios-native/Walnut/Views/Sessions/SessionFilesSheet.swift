@@ -300,6 +300,11 @@ struct SessionFileViewer: View {
     /// path is already a listing hit, so it cannot be stale).
     var cwd: String? = nil
     var sessionID: String? = nil
+    /// The tapped path was found on another host than the session's
+    /// (`ClickedPath.locate`): named above the file.
+    var hostNote: String? = nil
+    /// No host has the tapped path: this line instead of a read.
+    var missingNote: String? = nil
 
     @Environment(\.dismiss) private var dismiss
     private let api = WalnutAPI()
@@ -324,20 +329,42 @@ struct SessionFileViewer: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if SessionMediaKind.forPath(shownPath) != nil {
-                    SessionMediaView(path: shownPath, host: hostParam,
-                                     reference: ref?.decorated ?? path, cwd: cwd, sessionID: sessionID)
-                } else if isHTMLPreviewable && !showSource {
-                    HTMLFilePreview(path: shownPath, host: hostParam)
-                } else {
-                    sourceBody
+            VStack(spacing: 0) {
+                if let hostNote, missingNote == nil {
+                    Label(hostNote, systemImage: "desktopcomputer")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier("session.files.viewer.hostNote")
                 }
+                Group {
+                    if let missingNote {
+                        ContentUnavailableView {
+                            Label("Not Found", systemImage: "questionmark.folder")
+                        } description: {
+                            Text(missingNote)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .accessibilityIdentifier("session.files.viewer.missing")
+                    } else if SessionMediaKind.forPath(shownPath) != nil {
+                        SessionMediaView(path: shownPath, host: hostParam,
+                                         reference: ref?.decorated ?? path, cwd: cwd, sessionID: sessionID)
+                    } else if isHTMLPreviewable && !showSource {
+                        HTMLFilePreview(path: shownPath, host: hostParam)
+                    } else {
+                        sourceBody
+                    }
+                }
+                // On the body only: on the stack it would rename the host note too.
+                .accessibilityIdentifier("session.files.viewer")
             }
             .navigationTitle(name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                if isHTMLPreviewable {
+                if isHTMLPreviewable && missingNote == nil {
                     ToolbarItem(placement: .topBarLeading) {
                         Button(showSource ? "Preview" : "Source") { showSource.toggle() }
                             .accessibilityIdentifier("session.files.viewer.sourceToggle")
@@ -345,7 +372,6 @@ struct SessionFileViewer: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
             }
-            .accessibilityIdentifier("session.files.viewer")
         }
     }
 

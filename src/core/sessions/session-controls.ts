@@ -994,7 +994,7 @@ export type SessionControlAction =
   | 'server.devices.adopt' | 'server.devices.revoke-by-hash'
   // Wave 2 box-level family: file-explorer metadata (names/types only — file
   // CONTENT never rides the bridge; see files-v1.ts for the threat model).
-  | 'server.files.list' | 'server.files.resolve'
+  | 'server.files.list' | 'server.files.resolve' | 'server.files.locate'
   // Phase 4 box-level family: apply ONE cloud task op (create/update/delete/
   // reorder snapshot) on the primary's task store — the synchronous
   // replacement for the git outbox round trip. See core/task-outbox.ts
@@ -1528,6 +1528,22 @@ export async function handleSessionControlRelay(
             p.rel, p.cwd, typeof p.host === 'string' && p.host ? p.host : undefined,
             typeof p.sessionId === 'string' && p.sessionId ? p.sessionId : undefined,
           ) as unknown as Record<string, unknown>;
+        } catch (err) {
+          if (err instanceof FilesOpError) throw new SessionControlError(err.message, err.statusCode);
+          throw err;
+        }
+        break;
+      }
+      case 'server.files.locate': {
+        // Where a clicked path lives, on any of the primary's hosts (files-locate.ts).
+        const [{ locateClickedPath }, { FilesOpError }] = await Promise.all([
+          import('../../web/routes/files-locate.js'), import('../../web/routes/files.js'),
+        ]);
+        const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
+        try {
+          result = await locateClickedPath({
+            ref: p.ref, cwd: str(p.cwd), host: str(p.host), sessionId: str(p.sessionId),
+          }) as unknown as Record<string, unknown>;
         } catch (err) {
           if (err instanceof FilesOpError) throw new SessionControlError(err.message, err.statusCode);
           throw err;

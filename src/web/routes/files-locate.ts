@@ -42,6 +42,8 @@ export interface LocateResult {
   path: string
   /** Where it lives; absent = this machine. */
   host?: string
+  /** `host` as a person knows it (the phone names it in the viewer). */
+  hostName?: string
   found: boolean
   /** It is on a host other than the session's. */
   elsewhere?: boolean
@@ -157,7 +159,7 @@ export async function locateClickedPath(req: LocateRequest): Promise<LocateResul
     if (hit === 0) return { path: p, ...(host ? { host } : {}), found: true, via: 'exact', ...pos }
     if (hit > 0) {
       const o = others[hit - 1]!
-      return { path: p, ...(o.key ? { host: o.key } : {}), found: true, elsewhere: true, via: 'other-host', ...pos }
+      return { path: p, ...(o.key ? { host: o.key } : {}), hostName: o.name, found: true, elsewhere: true, via: 'other-host', ...pos }
     }
     const [here, ...there] = answers
     // The session's host cannot say now (reconnecting): open it there as before,
@@ -178,7 +180,9 @@ export async function locateClickedPath(req: LocateRequest): Promise<LocateResul
 
   // A relative ref only means something against the session's cwd.
   if (!req.cwd) throw new FilesOpError('A relative path needs cwd', 400)
-  const r = await resolveSessionPath(req.ref, req.cwd, host, req.sessionId)
+  const r = await resolveSessionPath(req.ref, req.cwd, host, req.sessionId, RESOLVE_BUDGET_MS)
+  // The host could not search (reconnecting, an old daemon's walk): open it there as before.
+  if (!r.resolved && !r.via) return { path: path.posix.join(req.cwd, p), ...(host ? { host } : {}), found: false, ...pos }
   // Not found: say so, never hand back the resolver's nearest-folder stand-in
   // as if it were the file (it can be as shallow as `/`).
   if (!r.resolved) {

@@ -787,6 +787,12 @@ extension DemoServer {
                 path: trimmed, selectedFile: nil, entries: DemoFixtures.files(in: trimmed) ?? []
             ))
         }
+        if s == ["files", "locate"] {
+            let ref = r.query["ref"] ?? ""
+            return .encoded(PathLocation(path: ref, host: r.query["host"], hostName: nil, found: true,
+                                         elsewhere: nil, missing: nil, checked: nil, via: "exact",
+                                         line: nil, column: nil, endLine: nil))
+        }
         if s == ["files", "resolve-path"] {
             let rel = r.query["rel"] ?? ""
             let cwd = r.query["cwd"] ?? DemoFixtures.macCodeRoot

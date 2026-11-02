@@ -221,6 +221,18 @@ extension WalnutAPI {
         return try await get("/file-content?\(query)")
     }
 
+    /// Which host a TAPPED path lives on: the session's (`host`), else whichever
+    /// of the user's other hosts has it (a Mac path in a Linux session). An older
+    /// primary answers 404; the caller then opens the path on the session's host.
+    func locatePath(ref: String, cwd: String? = nil, host: String? = nil,
+                    sessionID: String? = nil) async throws -> PathLocation {
+        var query = "ref=\(escapeQuery(ref))"
+        if let cwd, !cwd.isEmpty { query += "&cwd=\(escapeQuery(cwd))" }
+        if let host, !host.isEmpty { query += "&host=\(escapeQuery(host))" }
+        if let sessionID, !sessionID.isEmpty { query += "&sessionId=\(escapeQuery(sessionID))" }
+        return try await get("/files/locate?\(query)")
+    }
+
     /// Where a path a transcript MENTIONED really lives.
     ///
     /// `rel` may be decorated exactly as written (`src/a.ts:42`,

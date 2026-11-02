@@ -245,6 +245,7 @@ path on the companion".
 | DELETE | `/api/v1/sessions/:id/queue/:messageId` | Delete a queued message (cloud relays) |
 | GET | `/api/v1/files/list?path=&host=` | One directory level of a session file tree (cloud relays) |
 | GET | `/api/v1/files/resolve-path?rel=&cwd=&host=` | Resolve a transcript-mentioned path (cloud relays) |
+| GET | `/api/v1/files/locate?ref=&cwd=&host=&sessionId=` | Which host a tapped path lives on, the session's or another (cloud relays) |
 | GET | `/api/v1/file-content?path=&host=` | FileViewer text payload + `contentHash` (REPLICA: bounded bridge relay — 2MB cap 413, bridge down 503, old daemon 501) |
 | PUT | `/api/v1/file-content` | Save a file edit; optimistic lock via `expectedHash` → 409 (REPLICA: 403/501) |
 | GET | `/api/v1/config` | Read-only allowlist config projection + box diagnostics |
@@ -3549,6 +3550,21 @@ rejected, 4096-char cap.
   sentence period or comma, or spelled with Windows separators. The position comes
   back as `line`/`column`/`endLine` — present even on a failed resolve, since the
   reference asked for it either way.
+- `GET /api/v1/files/locate?ref=&cwd=&host=[&sessionId=]` (additive, 2026-11) →
+  `{ "path", "host"?, "hostName"?, "found", "elsewhere"?, "missing"?, "checked"?, "via"?,
+    "line"?, "column"?, "endLine"? }` — where a tapped path lives. A session on one
+  host often names a file on another (a Mac path in a Linux session). An absolute
+  `ref` is checked on every enabled host at once: the session's `host` wins, then a
+  `/Users/` path prefers the Mac and a `/home/` path the Linux hosts. Next the
+  session host's resolver (as resolve-path, with a 4 s budget). `host` is where to
+  open it (absent = the primary itself), `elsewhere: true` when that is not the
+  session's host, with `hostName` the name a person knows it by. `missing: true` when
+  no host has it, with `checked` the names of the hosts that answered (session's
+  first); a client says so instead of opening a stand-in. `found: false` without
+  `missing` means the session's host could not answer now: open on it as before. A
+  relative `ref` needs `cwd` and is resolved on the session's host only.
+  REPLICA: relays as `server.files.locate`. An older primary answers 404: fall back
+  to opening the path on the session's host.
 - `GET /api/v1/file-content?path=&host=` → `{ "content", "size",
   "truncated", "binary", "extension", "error"?, "contentHash"? }` — the
   FileViewer JSON payload (text, truncated at 512 KB, binary-detected). A

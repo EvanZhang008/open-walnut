@@ -85,6 +85,29 @@ describe('GET /api/v1/files/list', () => {
   })
 })
 
+describe('GET /api/v1/files/locate', () => {
+  it('finds an absolute path on this machine', async () => {
+    const p = path.join(base, 'readme.md')
+    const res = await request(createApp()).get(`/api/v1/files/locate?ref=${encodeURIComponent(p + ':3')}`)
+    expect(res.status).toBe(200)
+    expect(res.body).toMatchObject({ path: p, found: true, via: 'exact', line: 3 })
+    expect(res.body.host).toBeUndefined()
+  })
+
+  it('a path no host has is missing, never a stand-in folder', async () => {
+    const p = path.join(base, 'nowhere/ghost.mp4')
+    const res = await request(createApp()).get(`/api/v1/files/locate?ref=${encodeURIComponent(p)}`)
+    expect(res.status).toBe(200)
+    expect(res.body).toMatchObject({ path: p, found: false, missing: true })
+    expect(res.body.checked[0]).toBe('Local')
+  })
+
+  it('SANDBOX: rejects traversal', async () => {
+    const res = await request(createApp()).get(`/api/v1/files/locate?ref=${encodeURIComponent('/a/../etc/passwd')}`)
+    expect(res.status).toBe(400)
+  })
+})
+
 describe('GET /api/v1/files/resolve-path', () => {
   it('resolves a cwd-relative path that exists', async () => {
     const res = await request(createApp())

@@ -182,6 +182,13 @@ describe('locateClickedPath', () => {
     expect(r).toMatchObject({ path: '/home/someone/work/src/gone.ts', host: 'devbox', found: false, missing: true, checked: ['Dev box'], line: 9 })
   })
 
+  it('a relative ref on a host that could not search opens there as before, not as missing', async () => {
+    state.resolve = () => ({ path: '/home/someone/work/src/a.ts', resolved: false })
+    const r = await locateClickedPath({ ref: 'src/a.ts', host: 'devbox', cwd: '/home/someone/work' })
+    expect(r).toMatchObject({ path: '/home/someone/work/src/a.ts', host: 'devbox', found: false })
+    expect(r.missing).toBeUndefined()
+  })
+
   it('refuses traversal and a relative ref with no cwd', async () => {
     await expect(locateClickedPath({ ref: '/Users/someone/../etc/passwd' })).rejects.toThrow(/Invalid path/)
     await expect(locateClickedPath({ ref: 'src/a.ts' })).rejects.toThrow(/needs cwd/)

@@ -14,12 +14,19 @@ struct TextFileTarget: Identifiable, Equatable {
     let cwd: String?
     /// The mentioning session's id — unlocks the resolver's transcript layer.
     let sessionID: String?
+    /// The file was found on another host than the session's: the viewer names it.
+    var hostNote: String? = nil
+    /// No host has it: the viewer shows this line instead of reading anything.
+    var missing: String? = nil
 
-    init(ref: FilePathRef, host: String? = nil, cwd: String? = nil, sessionID: String? = nil) {
+    init(ref: FilePathRef, host: String? = nil, cwd: String? = nil, sessionID: String? = nil,
+         hostNote: String? = nil, missing: String? = nil) {
         self.ref = ref
         self.host = host
         self.cwd = cwd
         self.sessionID = sessionID
+        self.hostNote = hostNote
+        self.missing = missing
     }
 
     /// Identity includes the LINE: tapping `foo.ts:10` and then `foo.ts:900`
@@ -58,12 +65,12 @@ struct FilePathLinkHandling: ViewModifier {
                 // Anything that is not one of ours keeps the system behaviour —
                 // an https:// link in a note must still open Safari.
                 guard let ref = FilePreviewLink.reference(from: url) else { return .systemAction }
-                if ref.looksLikeDirectory {
-                    dirTarget = DirectoryTarget(path: ref.path, host: host)
-                } else if FilePreviewLink.isPreviewablePath(ref.path) {
-                    htmlTarget = FilePreviewTarget(path: ref.path, host: host)
-                } else {
-                    textTarget = TextFileTarget(ref: ref, host: host, cwd: cwd, sessionID: sessionID)
+                Task { @MainActor in
+                    switch await ClickedPath.locate(ref, host: host, cwd: cwd, sessionID: sessionID) {
+                    case .directory(let target): dirTarget = target
+                    case .html(let target): htmlTarget = target
+                    case .text(let target): textTarget = target
+                    }
                 }
                 return .handled
             })
@@ -71,7 +78,8 @@ struct FilePathLinkHandling: ViewModifier {
             .sessionFileSheet(item: $textTarget) { target in
                 SessionFileViewer(name: target.ref.displayName, path: target.ref.path,
                                   host: target.host ?? "", ref: target.ref,
-                                  cwd: target.cwd, sessionID: target.sessionID)
+                                  cwd: target.cwd, sessionID: target.sessionID,
+                                  hostNote: target.hostNote, missingNote: target.missing)
             }
             .sheet(item: $dirTarget) { DirectoryPreviewSheet(target: $0) }
             .sheet(item: $taskTarget) { destination in

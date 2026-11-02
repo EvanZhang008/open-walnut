@@ -8,6 +8,10 @@
  * (web/src/hooks/useClickedPathOpener.ts); this enumerates every file under
  * web/src that opens a path viewer (renders the Files explorer or opens a file
  * popout) and fails on one that neither looks up nor is listed below with why.
+ *
+ * The phone has the same rule: ClickedPath.locate (ios-native/Walnut/Views/
+ * ClickedPath.swift) is the one place a tapped path becomes a sheet target, so
+ * a Swift file that builds one itself is caught below.
  */
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
@@ -48,5 +52,46 @@ describe('clicked paths are looked up before a viewer opens', () => {
 
   it('every exemption still opens a viewer (no stale entries)', () => {
     for (const f of Object.keys(EXEMPT)) expect(openers, f).toContain(f)
+  })
+})
+
+/** Builds a sheet target from a path it did NOT get from a tap. */
+const IOS_EXEMPT: Record<string, string> = {
+  'ios-native/Walnut/Views/ClickedPath.swift': 'the lookup itself',
+  'ios-native/Walnut/Views/HTMLFilePreview.swift': 'the HTML preview names the file it already shows (its dock seat)',
+  'ios-native/Walnut/Timeline/TimelineCollectionController.swift': 'only parses the tap and hands it to its body as .previewFile, which looks it up',
+}
+const IOS_BUILDS_TARGET = /\b(DirectoryTarget|FilePreviewTarget|TextFileTarget)\(/
+const IOS_TAP_ROUTER = /case \.previewFile\(|FilePreviewLink\.reference\(from:/
+
+function iosSources(): string[] {
+  const out = execFileSync('git', ['ls-files', '-co', '--exclude-standard', '-z', '--', 'ios-native/Walnut/*.swift'], {
+    cwd: REPO, encoding: 'utf-8', maxBuffer: 32 << 20,
+  })
+  return out.split('\0').filter((f) => f && fs.existsSync(path.join(REPO, f)))
+}
+
+describe('iOS: tapped paths are looked up before a sheet opens', () => {
+  const files = iosSources().map((f) => ({ f, src: fs.readFileSync(path.join(REPO, f), 'utf-8') }))
+
+  it('finds the tap routers (the scan itself works)', () => {
+    const routers = files.filter(({ src }) => IOS_TAP_ROUTER.test(src)).map(({ f }) => f)
+    expect(routers).toEqual(expect.arrayContaining([
+      'ios-native/Walnut/Timeline/SessionTimelineBody.swift',
+      'ios-native/Walnut/Timeline/ChatTimelineBody.swift',
+      'ios-native/Walnut/Views/Sessions/FileSourceLinesView.swift',
+    ]))
+  })
+
+  it('no file but the lookup builds a sheet target', () => {
+    const offenders = files
+      .filter(({ f, src }) => !IOS_EXEMPT[f] && src.split('\n').some((l) => IOS_BUILDS_TARGET.test(l) && !/^\s*(\/\/|struct |init\()/.test(l)))
+      .map(({ f }) => f)
+    expect(offenders, 'route a tapped path through ClickedPath.locate, or list the file in IOS_EXEMPT with why').toEqual([])
+  })
+
+  it('every tap router goes through ClickedPath.locate', () => {
+    const offenders = files.filter(({ f, src }) => IOS_TAP_ROUTER.test(src) && !IOS_EXEMPT[f] && !/ClickedPath\.locate\(/.test(src)).map(({ f }) => f)
+    expect(offenders).toEqual([])
   })
 })

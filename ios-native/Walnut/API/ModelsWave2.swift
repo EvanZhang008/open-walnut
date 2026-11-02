@@ -499,6 +499,25 @@ struct SessionFileContent: Codable {
     let error: String?
 }
 
+/// GET /v1/files/locate → which host a tapped path lives on.
+/// `host` nil = the primary itself. `elsewhere` = not the session's host, with
+/// `hostName` its name. `missing` = no host has it (`checked` names the hosts
+/// that answered, the session's first). `found: false` without `missing` = the
+/// session's host could not answer now.
+struct PathLocation: Codable, Equatable {
+    let path: String
+    let host: String?
+    let hostName: String?
+    let found: Bool
+    let elsewhere: Bool?
+    let missing: Bool?
+    let checked: [String]?
+    let via: String?
+    let line: Int?
+    let column: Int?
+    let endLine: Int?
+}
+
 /// GET /v1/files/resolve-path → where a mentioned path really lives.
 /// `resolved: false` means the server is handing back a cwd-joined GUESS, so a
 /// caller must not present it as the file it asked for. `line`/`column`/

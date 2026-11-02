@@ -93,13 +93,14 @@ struct SessionTimelineBody: View {
                         // HTML keeps the rendered WKWebView preview (and its dock
                         // seat); every other extension is text, where a line
                         // number means something; extensionless is a folder.
-                        if ref.looksLikeDirectory {
-                            dirTarget = DirectoryTarget(path: ref.path, host: previewHost)
-                        } else if FilePreviewLink.isPreviewablePath(ref.path) {
-                            previewTarget = FilePreviewTarget(path: ref.path, host: previewHost)
-                        } else {
-                            textTarget = TextFileTarget(ref: ref, host: previewHost,
-                                                        cwd: previewCwd, sessionID: previewSessionID)
+                        // Looked up first: a path on another host opens from there.
+                        Task { @MainActor in
+                            switch await ClickedPath.locate(ref, host: previewHost, cwd: previewCwd,
+                                                            sessionID: previewSessionID) {
+                            case .directory(let target): dirTarget = target
+                            case .html(let target): previewTarget = target
+                            case .text(let target): textTarget = target
+                            }
                         }
                     case .sendIslandResult(let text, let reply):
                         // The user pressed Send on an island's result: the exact text,
@@ -132,7 +133,8 @@ struct SessionTimelineBody: View {
         .sessionFileSheet(item: $textTarget) { target in
             SessionFileViewer(name: target.ref.displayName, path: target.ref.path,
                               host: target.host ?? "", ref: target.ref,
-                              cwd: target.cwd, sessionID: target.sessionID)
+                              cwd: target.cwd, sessionID: target.sessionID,
+                              hostNote: target.hostNote, missingNote: target.missing)
         }
         .sheet(item: $dirTarget) { target in
             DirectoryPreviewSheet(target: target)

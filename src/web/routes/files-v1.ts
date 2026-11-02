@@ -9,14 +9,15 @@
  *
  *   GET /files/list?path=&host=&showHidden=1  → { path, selectedFile?, entries }
  *   GET /files/resolve-path?rel=&cwd=&host=   → { path, resolved }
+ *   GET /files/locate?ref=&cwd=&host=&sessionId= → { path, host?, hostName?, found, elsewhere?, missing?, checked? }
  *   GET /file-content?path=&host=             → { content, size, truncated, binary, extension, error?, contentHash? }
  *   PUT /file-content { path, host?, content, expectedHash? } → { ok, size, contentHash }
  *   POST /files/record-dir { path, host? }    → { status } (Wave 3, A)
  *   GET /files/recent-dirs                    → { dirs }   (Wave 3, A)
  *
  * Cloud companion (REPLICA):
- * - list / resolve-path relay to the PRIMARY via the box-level
- *   `server.files.list` / `server.files.resolve` control actions (names-only
+ * - list / resolve-path / locate relay to the PRIMARY via the box-level
+ *   `server.files.list` / `server.files.resolve` / `server.files.locate` control actions (names-only
  *   metadata; no threat-model expansion beyond the existing session.launch
  *   relay). The primary serves them exactly like a local request — including
  *   `host=` targets over its SSH daemon channel.
@@ -74,6 +75,34 @@ filesV1Router.get('/files/list', async (req: Request, res: Response, next: NextF
         const { markHandledFailure } = await import('../middleware/handled-failure.js')
         markHandledFailure(res)
         sendError(res, 503, HOST_RECONNECTING, err.message)
+        return
+      }
+      throw err
+    }
+  } catch (err) {
+    next(err)
+  }
+})
+
+// GET /api/v1/files/locate?ref=&cwd=&host=&sessionId= — where a tapped path
+// lives: the session's host, else whichever of the user's other hosts has it
+// (files-locate.ts). The phone opens it from `host`; `missing` names the hosts asked.
+filesV1Router.get('/files/locate', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined)
+    const params = { ref: req.query.ref, cwd: str(req.query.cwd), host: str(req.query.host), sessionId: str(req.query.sessionId) }
+    if (CLOUD_MODE) {
+      const body: Record<string, unknown> = { ref: params.ref }
+      for (const k of ['cwd', 'host', 'sessionId'] as const) if (params[k]) body[k] = params[k]
+      await relayControlAction(res, 'server.files.locate', SERVER_RELAY_SID, body, 200)
+      return
+    }
+    const [{ locateClickedPath }, { FilesOpError }] = await Promise.all([import('./files-locate.js'), import('./files.js')])
+    try {
+      res.json(await locateClickedPath(params))
+    } catch (err) {
+      if (err instanceof FilesOpError) {
+        sendError(res, err.statusCode, 'bad_request', err.message)
         return
       }
       throw err

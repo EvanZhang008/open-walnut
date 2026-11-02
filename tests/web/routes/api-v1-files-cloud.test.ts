@@ -92,6 +92,18 @@ describe('files list/resolve relay on a REPLICA', () => {
     )
   })
 
+  it('locate relays server.files.locate', async () => {
+    bridgeRequestMock.mockResolvedValue({ ok: true, result: { path: '/Users/me/v.mp4', found: true, elsewhere: true } })
+    const res = await request(createApp()).get('/api/v1/files/locate?ref=/Users/me/v.mp4&host=devbox&sessionId=s1')
+    expect(res.status).toBe(200)
+    expect(res.body).toMatchObject({ path: '/Users/me/v.mp4', found: true, elsewhere: true })
+    expect(bridgeRequestMock).toHaveBeenCalledWith(
+      '__local__', 'session.control',
+      { action: 'server.files.locate', sessionId: '__server__', params: { ref: '/Users/me/v.mp4', host: 'devbox', sessionId: 's1' } },
+      30_000,
+    )
+  })
+
   it('bridge offline → 503 bridge_offline', async () => {
     bridgeRequestMock.mockRejectedValue(new BridgeOfflineError('__local__'))
     const res = await request(createApp()).get('/api/v1/files/list?path=/w')
