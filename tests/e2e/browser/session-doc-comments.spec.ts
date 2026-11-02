@@ -1,18 +1,20 @@
 /**
  * Comments on a document, Google Docs style (2026-11-01, the user: "I comment in
  * the doc, the AI replies in it and resolves it, shown beside it; resolved shows
- * as resolved; it goes into the input like the chat comments").
+ * as resolved; it goes into the input like the chat comments"), in place
+ * (2026-11-02, the user: "comment, need in place not in side bar, waste space").
  *
  *   Comment          the bubble menu's (WYSIWYG) or the pill's (source) Comment
- *                    opens a draft card beside the passage; saved, the words are
- *                    marked, the card sits in a column on the right level with
- *                    them, and a row for it waits above the composer
+ *                    opens a draft card right under the passage; saved, the words
+ *                    are marked, the card stays under them while it is open, the
+ *                    pointer on the words shows it to read, nothing takes room
+ *                    beside the doc, and a row for it waits above the composer
  *   the sidecar      `<doc>.comments.md` beside the doc holds every comment, its
  *                    anchor and its thread, readable as it is
  *   a send           carries each doc comment with its doc, its id, its sidecar and
  *                    how to answer there; the row goes, the card stays
  *   the AI           writes its reply and "resolved" into the sidecar; the card
- *                    shows the reply, a resolved one leaves the column and is
+ *                    shows the reply, a resolved one is no longer marked and is
  *                    listed as resolved by the AI
  *   edits            text added above a passage moves its card with it; words
  *                    taken out make the comment "changed"
@@ -182,33 +184,50 @@ async function commentInEditor(page: Page, view: Locator, needle: string, words:
   const input = view.getByTestId('doc-comment-draft-input')
   await expect(input).toBeFocused()
   await input.fill(words)
+  // The box grows with what is typed and stays at its words, inside the view.
+  await expect.poll(() => input.evaluate((el) => el.scrollHeight <= el.clientHeight + 1)).toBe(true)
+  await expectInPlace(view, view.getByTestId('doc-comment-draft'), editor, needle)
   await input.press('Enter')
   await expect(view.getByTestId('doc-comment-draft')).toHaveCount(0)
 }
 
-/** The card's top is level with its passage (within a few pixels), inside the view on the right. */
-async function expectBeside(view: Locator, card: Locator, root: Locator, needle: string): Promise<void> {
-  const passage = (await textRects(root, needle))[0]
-  const cb = (await card.boundingBox())!
+/**
+ * In place (utils/in-place-card.ts): the card right under the passage's last line
+ * (or right over its first, with no room under it), inside the view, over the text
+ * column; and the doc keeps its whole width (nothing reserved beside it).
+ * `offset` places rects measured inside the HTML preview's frame.
+ */
+async function expectInPlace(view: Locator, card: Locator, root: Locator, needle: string, offset = { x: 0, y: 0 }): Promise<void> {
+  const rects = (await textRects(root, needle)).map((r) => ({ ...r, left: r.left + offset.x, right: r.right + offset.x, top: r.top + offset.y }))
+  const first = rects[0]
+  const last = rects[rects.length - 1]
+  // The box it shows in: its slot, which scrolls a card taller than its room.
+  const cb = await card.evaluate((el) => {
+    const slot = (el.closest('.doc-comment-slot') ?? el) as HTMLElement
+    const r = slot.getBoundingClientRect()
+    return { x: r.left, y: r.top, width: r.width, height: r.height, dbg: `${slot.style.maxHeight}|${slot.scrollHeight}|${slot.offsetHeight}|${slot.dataset.placement}` }
+  })
   const vb = (await view.boundingBox())!
-  expect(Math.abs(cb.y - passage.top), `card at ${cb.y}, passage at ${passage.top}`).toBeLessThan(14)
-  expect(cb.x).toBeGreaterThan(passage.left)
+  const under = cb.y - (last.top + last.height)
+  const over = first.top - (cb.y + cb.height)
+  expect(under >= -1 && under < 16 || over >= -1 && over < 16, `card at ${cb.y}..${cb.y + cb.height} (${cb.dbg}), passage ${first.top}..${last.top + last.height}`).toBe(true)
+  expect(cb.x).toBeGreaterThanOrEqual(vb.x - 1)
   expect(cb.x + cb.width).toBeLessThanOrEqual(vb.x + vb.width + 1)
-  // The text keeps clear of the column (the wide view reserves its room).
-  // (A source editor's lines run on to the side inside its scroller: the scroller's edge.)
-  const textRight = await root.evaluate((el) => (el.closest('.cm-scroller') ?? el).getBoundingClientRect().right)
-  expect(textRight).toBeLessThanOrEqual(cb.x + 1)
+  expect(cb.y + cb.height, 'the whole card is in the view').toBeLessThanOrEqual(vb.y + vb.height + 1)
+  // Over the text column, where the last line's words start (kept inside the view).
+  const lineLeft = Math.min(...rects.filter((r) => r.top < last.top + last.height - 1 && r.top + r.height > last.top + 1).map((r) => r.left))
+  expect(cb.x).toBeLessThanOrEqual(Math.max(lineLeft, vb.x + 8) + 1)
+  await expect(view).not.toHaveClass(/fv-doc-comments-wide/)
+  // The doc keeps its width: its scroller runs to the view's right edge.
+  const textRight = offset.x + await root.evaluate((el) => (el.closest('.cm-scroller, .fv-wysiwyg-editor, .fv-md-preview') ?? el).getBoundingClientRect().right)
+  expect(vb.x + vb.width - textRight, 'nothing reserved beside the doc').toBeLessThan(24)
 }
 
-/** A narrow view has no column: the card opens over the text, under the passage's last line. */
-async function expectUnder(view: Locator, card: Locator, root: Locator, needle: string): Promise<void> {
-  const rects = await textRects(root, needle)
-  const last = rects[rects.length - 1]
-  const cb = (await card.boundingBox())!
-  const vb = (await view.boundingBox())!
-  expect(cb.y, `card at ${cb.y}, passage ends at ${last.top + last.height}`).toBeGreaterThanOrEqual(last.top + last.height - 1)
-  expect(cb.y - (last.top + last.height)).toBeLessThan(16)
-  expect(cb.x + cb.width).toBeLessThanOrEqual(vb.x + vb.width + 1)
+/** The pointer on `needle`'s words (no click): the card shows there to read. */
+async function hoverWords(page: Page, root: Locator, needle: string): Promise<void> {
+  await centre(root, needle)
+  const r = (await textRects(root, needle))[0]
+  await page.mouse.move(r.left + Math.min(40, (r.right - r.left) / 2), r.top + r.height / 2)
 }
 
 /** Click the middle of `needle`'s first line (no drag: a plain click). */
@@ -244,30 +263,28 @@ test.describe('Doc comments: beside the doc, in its sidecar, to the AI with the 
   })
 
   test('comment twice on a long doc, keep over a reload, send, the AI replies and resolves, the user replies', async ({ page }) => {
-    // Wide enough for the doc to keep the column's room beside its text.
+    // A wide view: still nothing beside the doc; the card opens under its words.
     await page.setViewportSize({ width: 1720, height: 960 })
     const sent = captureSends(page)
     let { panel, view } = await openDoc(page)
     let editor = view.locator('.fv-wysiwyg-editor .ProseMirror')
     await expect(editor).toContainText(END)
-    // No comment yet: no chip, no column, no room taken.
+    // No comment yet: no chip.
     await expect(chip(view)).toHaveCount(0)
-    await expect(view).not.toHaveClass(/fv-doc-comments-wide/)
 
     await commentInEditor(page, view, TOP, 'Does it wait for the whole snapshot?')
     await expect(cards(view)).toHaveCount(1)
-    await expect(view).toHaveClass(/fv-doc-comments-wide/)
     const first = cards(view).first()
     await expect(first).toHaveClass(/is-current/)
     await expect(first.getByTestId('doc-comment-post')).toHaveText(/You.*Does it wait for the whole snapshot\?/s)
-    await expectBeside(view, first, editor, TOP)
+    await expectInPlace(view, first, editor, TOP)
     expect(await painted(page, 'walnut-doc-comment-current')).toBe(1)
     // It waits above the composer, which holds no text of it.
     await expect(trayRows(panel)).toHaveCount(1)
     await expect(trayRows(panel).first().locator('.pending-comments-doc')).toHaveText(DOC)
     await expect(panel.locator('.session-panel-input .chat-input-textarea')).toHaveValue('')
     await shot(view, '01-first-comment')
-    // A wheel over the card scrolls the doc (the column sits over its scroller).
+    // A wheel over the card scrolls the doc (the card sits over its scroller).
     const scroller = view.locator('.fv-wysiwyg-editor')
     const before = await scroller.evaluate((el) => el.scrollTop)
     const cardBox = (await first.boundingBox())!
@@ -276,10 +293,11 @@ test.describe('Doc comments: beside the doc, in its sidecar, to the AI with the 
     await expect.poll(() => scroller.evaluate((el) => el.scrollTop)).toBeGreaterThan(before + 100)
     await centre(editor, TOP)
 
-    await commentInEditor(page, view, MIDDLE, 'Who checks this?\nThe runbook does not say.')
-    await expect(cards(view)).toHaveCount(2)
+    await commentInEditor(page, view, MIDDLE, 'Who checks this?\nThe runbook does not say.\nIs it the person on call?\nSay where that is written.')
+    // Only the open comment shows its card; the first is marked on its words.
+    await expect(cards(view)).toHaveCount(1)
     const second = view.locator('[data-testid="doc-comment-card"].is-current')
-    await expectBeside(view, second, editor, MIDDLE)
+    await expectInPlace(view, second, editor, MIDDLE)
     expect(await painted(page, 'walnut-doc-comment')).toBe(1)
     await expect(chip(view)).toHaveText('2 comments')
     await expect(trayRows(panel)).toHaveCount(2)
@@ -298,6 +316,19 @@ test.describe('Doc comments: beside the doc, in its sidecar, to the AI with the 
     const endRect = (await textRects(editor, END))[0]
     await page.mouse.click(endRect.left + 20, endRect.top + endRect.height / 2)
     await expect(view.locator('[data-testid="doc-comment-card"].is-current')).toHaveCount(0)
+    await expect(cards(view)).toHaveCount(0)
+    // The pointer on its words shows it there to read, not open; off them it goes.
+    await hoverWords(page, editor, MIDDLE)
+    const peek = view.locator(`[data-comment-id="${ids[1]}"].doc-comment-card`)
+    await expect(peek).toBeVisible()
+    await expect(peek).not.toHaveClass(/is-current/)
+    await expectInPlace(view, peek, editor, MIDDLE)
+    await shot(view, '01b-hover-reads-in-place')
+    // Off them, onto words with no comment, then off the doc: it goes.
+    await centre(editor, END)
+    const endNow = (await textRects(editor, END))[0]
+    await page.mouse.move(endNow.left + 20, endNow.top + endNow.height / 2)
+    await expect(cards(view)).toHaveCount(0)
     await centre(editor, TOP)
     const topRect = (await textRects(editor, TOP))[0]
     await page.mouse.click(topRect.left + 30, topRect.top + topRect.height / 2)
@@ -310,11 +341,12 @@ test.describe('Doc comments: beside the doc, in its sidecar, to the AI with the 
     editor = view.locator('.fv-wysiwyg-editor .ProseMirror')
     await expect(chip(view)).toHaveText('2 comments')
     await expect(trayRows(panel)).toHaveCount(2)
-    await centre(editor, MIDDLE)
-    await expectBeside(view, view.locator(`[data-comment-id="${ids[1]}"].doc-comment-card`), editor, MIDDLE)
+    await hoverWords(page, editor, MIDDLE)
+    await expectInPlace(view, view.locator(`[data-comment-id="${ids[1]}"].doc-comment-card`), editor, MIDDLE)
 
     // One send carries both, each with its doc, its id and its sidecar, then how to answer.
     const composer = panel.locator('.session-panel-input .chat-input-textarea')
+    await composer.click()
     await composer.fill('Please answer the comments.')
     await composer.press('Enter')
     await expect.poll(() => sent.filter((s) => s.sessionId === DOC_COMMENTS_SESSION).length, { timeout: 15_000 }).toBe(1)
@@ -324,17 +356,19 @@ test.describe('Doc comments: beside the doc, in its sidecar, to the AI with the 
     expect(message).toContain('as a list item `- **AI** · <ISO time> · <your words>`')
     expect(message.trimEnd().endsWith('Please answer the comments.')).toBe(true)
     await expect(trayRows(panel)).toHaveCount(0)
-    await expect(cards(view)).toHaveCount(2)
+    // The pointer went to the composer: no card shows; both are still marked.
+    await expect(cards(view)).toHaveCount(0)
 
     // The AI answers in the sidecar: a reply on both, and the first resolved.
     const aiAt = new Date().toISOString()
     let disk = await fs.readFile(sidecarPath, 'utf8')
     disk = disk.replace(`## ${ids[0]} · open`, `## ${ids[0]} · resolved · AI · ${aiAt}`)
       .replace(/(- \*\*You\*\* · [^\n]+ · Does it wait for the whole snapshot\?)/, `$1\n- **AI** · ${aiAt} · Yes. I said so in step 3.`)
-      .replace(/(  The runbook does not say\.)/, `$1\n- **AI** · ${aiAt} · The on-call engineer. Should I add it?`)
+      .replace(/(  Say where that is written\.)/, `$1\n- **AI** · ${aiAt} · The on-call engineer. Should I add it?`)
     await fs.writeFile(sidecarPath, disk)
     await page.evaluate(() => window.dispatchEvent(new Event('focus')))
     await expect(chip(view)).toHaveText('1 comment · 1 resolved', { timeout: 15_000 })
+    await hoverWords(page, editor, MIDDLE)
     await expect(cards(view)).toHaveCount(1)
     const open = cards(view).first()
     await expect(open).toHaveAttribute('data-comment-id', ids[1])
@@ -374,13 +408,17 @@ test.describe('Doc comments: beside the doc, in its sidecar, to the AI with the 
 
     // The row above the composer, with the doc scrolled away and no card current: a
     // click opens the doc on that comment, its words in view and its card beside them.
-    await page.mouse.click((await textRects(editor, MIDDLE))[0].left + 30, (await textRects(editor, MIDDLE))[0].top - 30)
+    // (A click on the doc's text beside the passage, on the side its card is not on.)
+    const words = await textRects(editor, MIDDLE)
+    const openBox = (await open.boundingBox())!
+    const awayY = openBox.y > words[0].top ? words[0].top - 30 : words[words.length - 1].top + words[words.length - 1].height + 30
+    await page.mouse.click(words[0].left + 30, awayY)
     await expect(view.locator('[data-testid="doc-comment-card"].is-current')).toHaveCount(0)
     await view.locator('.fv-wysiwyg-editor').evaluate((el) => { el.scrollTop = 0 })
     await trayRows(panel).first().locator('.pending-comments-jump').click()
     const jumped = view.locator(`[data-comment-id="${ids[1]}"].doc-comment-card`)
     await expect(jumped).toHaveClass(/is-current/)
-    await expectBeside(view, jumped, editor, MIDDLE)
+    await expectInPlace(view, jumped, editor, MIDDLE)
     const mid = (await textRects(editor, MIDDLE))[0]
     const vbox = (await view.boundingBox())!
     expect(mid.top).toBeGreaterThan(vbox.y + 40)
@@ -400,9 +438,8 @@ test.describe('Doc comments: beside the doc, in its sidecar, to the AI with the 
     await expect(editor).toContainText(END)
     await commentInEditor(page, view, END, 'Is the header always written?')
     await expect(cards(view)).toHaveCount(1)
-    // Too narrow for a column: no room taken, the card under the passage, over the text.
-    await expect(view).not.toHaveClass(/fv-doc-comments-wide/)
-    await expectUnder(view, cards(view).first(), editor, END)
+    // The card under the passage, over the text.
+    await expectInPlace(view, cards(view).first(), editor, END)
     await shot(view, '04-narrow')
     const sidecarPath = path.join(path.dirname(docPath), SIDECAR)
     await expect.poll(async () => fs.readFile(sidecarPath, 'utf8').catch(() => '')).toContain(`> ${END}`)
@@ -444,7 +481,7 @@ test.describe('Doc comments: beside the doc, in its sidecar, to the AI with the 
     await expect.poll(() => painted(page, 'walnut-doc-comment')).toBe(1)
     await clickWords(page, editor, END)
     await expect(cards(view)).toHaveCount(1)
-    await expectUnder(view, cards(view).first(), editor, END)
+    await expectInPlace(view, cards(view).first(), editor, END)
 
     // The words are taken out: the comment is "changed", listed with its passage.
     await fs.writeFile(docPath, original.replace(END, 'The final check is described elsewhere.'))
@@ -507,7 +544,7 @@ test.describe('Doc comments: beside the doc, in its sidecar, to the AI with the 
     const card = cards(view).first()
     await expect(card).toHaveClass(/is-current/)
     await expect(card.getByTestId('doc-comment-post')).toHaveText(/Who removes the lock\?/)
-    await expectBeside(view, card, source, 'until done')
+    await expectInPlace(view, card, source, 'until done')
     await shot(view, '07-preview-comment-in-source')
 
     // A comment made in the source, on markup: seen in the preview on the rendered words.
@@ -529,7 +566,7 @@ test.describe('Doc comments: beside the doc, in its sidecar, to the AI with the 
     await clickWords(page, editor, 'warning.')
     const fromSource = view.locator('[data-testid="doc-comment-card"].is-current')
     await expect(fromSource.getByTestId('doc-comment-post')).toHaveText(/Does verify stop on a warning\?/)
-    await expectBeside(view, fromSource, editor, 'rb verify')
+    await expectInPlace(view, fromSource, editor, 'rb verify')
     await shot(view, '08-source-comment-in-preview')
     // Neither is listed as changed or as kept in one view.
     await chip(view).click()
@@ -556,16 +593,13 @@ test.describe('Doc comments: beside the doc, in its sidecar, to the AI with the 
     await expect(cards(view)).toHaveCount(1)
     const sidecarPath = path.join(path.dirname(docPath), HTML_SIDECAR)
     await expect.poll(async () => fs.readFile(sidecarPath, 'utf8').catch(() => '')).toContain('Is that a weekly record?')
-    // Painted in the frame's own document; the card beside, the frame giving up the room.
+    // Painted in the frame's own document; the card in place under the words, the
+    // frame keeping its whole width.
     await expect.poll(() => paintedText(body, 'walnut-doc-comment-current')).toEqual(['412 million reads this week'])
-    await expect(view).toHaveClass(/fv-doc-comments-wide/)
     const card = cards(view).first()
     const passage = (await textRects(body, '412 million'))[0]
     const fb = await at()
-    const cb = (await card.boundingBox())!
-    expect(Math.abs(cb.y - (passage.top + fb.y)), `card at ${cb.y}, passage at ${passage.top + fb.y}`).toBeLessThan(14)
-    const frameRight = (await frameEl.boundingBox())!
-    expect(frameRight.x + frameRight.width).toBeLessThanOrEqual(cb.x + 1)
+    await expectInPlace(view, card, body, 'reads this week', fb)
     await shot(view, '09-html-preview')
 
     // A click elsewhere in the page lets the card go; a click on its words brings it back.

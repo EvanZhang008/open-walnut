@@ -7,12 +7,13 @@
  * `doc`) and goes to the AI with the next message.
  *
  * The layer is a box over the file view. It paints the open comments' words
- * (walnut-doc-comment, the current one walnut-doc-comment-current), and draws
- * their cards in a column on the right, each level with its passage and pushed
- * down past the one above (the current one sits exactly at its passage). A wide
- * view reserves the column's room beside the text; a narrow one shows only the
- * current card, over the text. A "N comments" chip lists them all: resolved ones
- * (Reopen) and outdated ones, whose words are gone from the doc.
+ * (walnut-doc-comment, the current one walnut-doc-comment-current) and opens a
+ * comment's card in place, right under its words (2026-11-02, the user: "comment,
+ * need in place not in side bar, waste space"; utils/in-place-card.ts): the new
+ * comment's box under the selection, a saved one's card under its words when they
+ * are clicked. Nothing takes room beside the text, so the doc keeps its width. A
+ * "N comments" chip lists them all: resolved ones (Reopen) and outdated ones,
+ * whose words are gone from the doc.
  *
  * Anchors are text quotes (prefix, exact, suffix) located again on every change
  * of the doc, so a comment follows its words through edits, and in every view of
@@ -42,15 +43,13 @@ import type { FileThreadSurface } from './FileThreadLayer';
 import {
   bodyOf, frameDocFor, frameDocOf, HL_DOC_COMMENT, HL_DOC_COMMENT_CURRENT, LocateMemo, paintFrame, reveal, scrollerOf,
 } from './doc-comments-dom';
+import { inPlaceCardPosition } from '@/utils/in-place-card';
 import { log } from '@/utils/log';
 import '@/styles/doc-comments.css';
 
 export { HL_DOC_COMMENT, HL_DOC_COMMENT_CURRENT };
 const OPEN_LAYER = panelLayer(HL_DOC_COMMENT);
 const CURRENT_LAYER = panelLayer(HL_DOC_COMMENT_CURRENT);
-/** From this view width the column gets room of its own beside the text. */
-const WIDE_FROM = 700;
-const GAP = 8;
 /** A tray row's jump still lands after its doc opens, for this long. */
 const JUMP_FRESH_MS = 15_000;
 
@@ -74,8 +73,6 @@ interface Props {
   /** The doc's text as it stands: tells words this view does not show (a link's
    *  target) from words that are gone. */
   getDocText: () => string | null;
-  /** The column wants (true) or gives back (false) its room beside the text. */
-  onRoom: (wanted: boolean) => void;
 }
 
 const DRAFT_KEY = '__draft__';
@@ -94,7 +91,7 @@ const NO_MARKS: Marks = { drawn: new Set(), elsewhere: new Set(), gone: new Set(
 const sameSet = (a: ReadonlySet<string>, b: ReadonlySet<string>) => a.size === b.size && [...a].every((x) => b.has(x));
 
 export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function DocCommentsLayer(
-  { filePath, host, sessionId, rootRef, surfaceNonce, surface, frameRef, editor, getDocText, onRoom }, ref,
+  { filePath, host, sessionId, rootRef, surfaceNonce, surface, frameRef, editor, getDocText }, ref,
 ) {
   const store = useDocComments({ path: filePath, host, sessionId });
   const inSource = surface === 'source';
@@ -104,7 +101,8 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
   const [currentId, setCurrentId] = useState<string | null>(null);
   const [draft, setDraft] = useState<{ quote: SessionPinnedQuote; text: string } | null>(null);
   const [listOpen, setListOpen] = useState(false);
-  const [wide, setWide] = useState(true);
+  /** The saved comment whose words the pointer is on: its card shows there to read. */
+  const [peekId, setPeekId] = useState<string | null>(null);
   const [marks, setMarks] = useState<Marks>(NO_MARKS);
   const anchored = marks.drawn;
   const layerRef = useRef<HTMLDivElement | null>(null);
@@ -236,45 +234,38 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
     return () => paintFrame(frameDocOf(frame), [], []);
   }, [inFrame, frameRef, surfaceNonce]);
 
-  // ── Place the cards: level with their passage, none over another ──
+  // ── Place the open card in place: under its words (utils/in-place-card.ts) ──
   const place = useCallback(() => {
     const root = rootRef.current;
     const layer = layerRef.current;
     if (!root || !layer) return;
     const box = root.getBoundingClientRect();
-    const isWide = box.width >= WIDE_FROM;
-    setWide((w) => (w === isWide ? w : isWide));
     const bar = root.querySelector<HTMLElement>(':scope > .fv-html-toolbar');
     const minTop = Math.max(0, (bar ? bar.getBoundingClientRect().bottom : box.top) - box.top) + 4;
-    // The column starts under the toolbar and clips there; card tops are the column's.
+    // The cards' area starts under the toolbar and clips there; card tops are its.
     layer.style.setProperty('--dc-top', `${Math.round(minTop)}px`);
     // The HTML preview's ranges measure in the frame's viewport.
-    const dy = inFrame ? frameRef.current?.getBoundingClientRect().top ?? 0 : 0;
-    const items: Array<{ id: string; el: HTMLDivElement; want: number; h: number }> = [];
+    const fb = inFrame ? frameRef.current?.getBoundingClientRect() : null;
+    const dx = fb?.left ?? 0;
+    const dy = fb?.top ?? 0;
+    const view = { width: box.width, height: box.height - minTop };
     for (const [id, el] of cardEls.current) {
-      const r = ranges.current.get(id);
-      const rects = r?.getClientRects();
-      const rect = rects?.[0];
-      if (!rect) { el.style.visibility = 'hidden'; continue; }
-      // Wide: level with the passage's first line, in the column. Narrow: the card is
-      // over the text, so it goes under the passage's last line, never over its words.
-      const want = isWide ? rect.top + dy - box.top - minTop - 6 : rects![rects!.length - 1]!.bottom + dy - box.top - minTop + 4;
-      items.push({ id, el, want, h: el.offsetHeight });
+      const rects = Array.from(ranges.current.get(id)?.getClientRects() ?? []).map((r) => ({
+        left: r.left + dx - box.left, right: r.right + dx - box.left,
+        top: r.top + dy - box.top - minTop, bottom: r.bottom + dy - box.top - minTop,
+      }));
+      // Its whole height (scrollHeight is not capped by a max-height set before).
+      const at = inPlaceCardPosition(rects, view, { width: el.offsetWidth, height: el.scrollHeight });
+      if (!at) { el.style.visibility = 'hidden'; continue; }
+      el.style.left = `${Math.round(at.left)}px`;
+      el.style.top = `${Math.round(at.top)}px`;
+      el.style.maxHeight = at.maxHeight ? `${Math.floor(at.maxHeight)}px` : '';
+      el.dataset.placement = at.placement;
+      // Wholly off the view (scrolled under the toolbar, past the bottom): not drawn.
+      const off = at.top + el.offsetHeight < 0 || at.top > view.height;
+      el.style.visibility = off ? 'hidden' : 'visible';
     }
-    items.sort((a, b) => a.want - b.want);
-    const focus = items.findIndex((i) => i.id === (draft ? DRAFT_KEY : currentId));
-    const tops = items.map((i) => i.want);
-    for (let k = (focus < 0 ? 0 : focus) + 1; k < items.length; k++) tops[k] = Math.max(tops[k]!, tops[k - 1]! + items[k - 1]!.h + GAP);
-    if (focus < 0 && items.length) tops[0] = Math.max(tops[0]!, items[0]!.want);
-    for (let k = focus - 1; k >= 0; k--) tops[k] = Math.min(tops[k]!, tops[k + 1]! - items[k]!.h - GAP);
-    items.forEach((i, k) => {
-      const top = tops[k]!;
-      i.el.style.top = `${Math.round(top)}px`;
-      // Wholly off the column (scrolled under the toolbar, past the bottom): not drawn.
-      const off = top + i.h < 0 || top > box.height - minTop;
-      i.el.style.visibility = off ? 'hidden' : 'visible';
-    });
-  }, [rootRef, draft, currentId, inFrame, frameRef]);
+  }, [rootRef, inFrame, frameRef]);
   const placeRef = useRef(place);
   placeRef.current = place;
 
@@ -301,7 +292,7 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
     mo.observe(root, { childList: true, subtree: true, characterData: true });
     const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => later(true));
     ro?.observe(root);
-    // The text reflows inside an unchanged box when the column takes its room.
+    // The text reflows inside an unchanged box (a wrap, an image that loads).
     const b = bodyOf(root);
     if (b) ro?.observe(b);
     const onScroll = () => later(false);
@@ -363,15 +354,13 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
   // The list or the current one changed: locate (paint) and place before the paint.
   useLayoutEffect(() => { locate(); place(); }, [locate, place, anchored]);
 
-  // The column takes its room beside the text while there is something in it.
-  const showColumn = open.length > 0 || !!draft;
-  const room = showColumn && wide;
+  // A card that opens keeps its passage on screen.
+  const opened = draft ? DRAFT_KEY : currentId;
   useEffect(() => {
-    onRoom(room);
-    // Taking or giving back the room reflows the text: keep the current passage on screen.
+    if (!opened) return;
     const raf = requestAnimationFrame(() => {
       const root = rootRef.current;
-      const r = ranges.current.get(draftRef.current ? DRAFT_KEY : currentRef.current ?? '');
+      const r = ranges.current.get(opened);
       if (!root || !r) return;
       const rect = r.getBoundingClientRect();
       const box = root.getBoundingClientRect();
@@ -379,8 +368,7 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
       placeRef.current();
     });
     return () => cancelAnimationFrame(raf);
-  }, [onRoom, room, rootRef]);
-  useEffect(() => () => onRoom(false), [onRoom]);
+  }, [opened, rootRef]);
 
   // ── A click on commented words makes its card current; elsewhere in the doc, none ──
   // (In the HTML preview the click lands in the frame's document, at its own coordinates,
@@ -388,11 +376,14 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
+    // In the HTML preview the ranges measure in the frame's viewport, so only the
+    // frame's own events (not the toolbar's, at the outer page's coordinates) hit them.
+    const hits = (e: MouseEvent) => !inFrame || (e.target as Node | null)?.ownerDocument !== document;
     const onClick = (e: MouseEvent) => {
       if (e.button !== 0 || layerRef.current?.contains(e.target as Node)) return;
       const sel = ((e.target as Node | null)?.ownerDocument ?? document).getSelection();
       if (sel && !sel.isCollapsed) return;
-      for (const [id, r] of ranges.current) {
+      for (const [id, r] of hits(e) ? ranges.current : []) {
         if (id !== DRAFT_KEY && pointInRangeRects(r, e.clientX, e.clientY)) {
           setCurrentId(id);
           log.info('doc-comments', 'comment opened from its words', { path: filePath, id, surface });
@@ -402,22 +393,48 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
       setCurrentId(null);
       setListOpen(false);
     };
+    // The pointer on commented words shows that comment's card there, to read; it
+    // goes a beat after the pointer leaves the words and the card.
+    let hideTimer = 0;
+    const onMove = (e: MouseEvent) => {
+      if (e.buttons) return;
+      if (layerRef.current?.contains(e.target as Node)) { window.clearTimeout(hideTimer); return; }
+      for (const [id, r] of hits(e) ? ranges.current : []) {
+        if (id !== DRAFT_KEY && pointInRangeRects(r, e.clientX, e.clientY)) {
+          window.clearTimeout(hideTimer);
+          setPeekId(id);
+          return;
+        }
+      }
+      window.clearTimeout(hideTimer);
+      hideTimer = window.setTimeout(() => setPeekId(null), 300);
+    };
+    // Off the doc altogether (the composer, the sidebar): it goes too.
+    const onLeave = () => { window.clearTimeout(hideTimer); hideTimer = window.setTimeout(() => setPeekId(null), 300); };
     root.addEventListener('click', onClick);
+    root.addEventListener('mousemove', onMove);
+    root.addEventListener('mouseleave', onLeave);
     const frame = inFrame ? frameRef.current : null;
     let fdoc: Document | null = null;
     const attach = () => {
       fdoc?.removeEventListener('click', onClick, true);
+      fdoc?.removeEventListener('mousemove', onMove, true);
       fdoc = frameDocOf(frame);
       fdoc?.addEventListener('click', onClick, true);
+      fdoc?.addEventListener('mousemove', onMove, true);
     };
     if (frame) {
       frame.addEventListener('load', attach);
       if (frameDocOf(frame)?.readyState === 'complete') attach();
     }
     return () => {
+      window.clearTimeout(hideTimer);
       root.removeEventListener('click', onClick);
+      root.removeEventListener('mousemove', onMove);
+      root.removeEventListener('mouseleave', onLeave);
       frame?.removeEventListener('load', attach);
       fdoc?.removeEventListener('click', onClick, true);
+      fdoc?.removeEventListener('mousemove', onMove, true);
     };
   }, [rootRef, filePath, inFrame, frameRef, surface, surfaceNonce]);
   useEffect(() => {
@@ -426,7 +443,7 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [currentId, draft]);
-  useEffect(() => { setCurrentId(null); setDraft(null); setListOpen(false); revealRef.current = null; scrolledFor.current = null; }, [filePath]);
+  useEffect(() => { setCurrentId(null); setDraft(null); setListOpen(false); setPeekId(null); revealRef.current = null; scrolledFor.current = null; }, [filePath]);
   // A new file or a reload: the doc's text is read afresh.
   useEffect(() => { docText.current.at = 0; docText.current.text = null; }, [filePath, surfaceNonce]);
 
@@ -523,11 +540,34 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
   const outdatedIds = new Set(outdated.map((c) => c.id));
   /** In the doc, but only the source shows these words: no card in this view. */
   const sourceOnly = (c: DocComment) => !inSource && marks.elsewhere.has(c.id);
-  const inColumn = open.filter((c) => anchored.has(c.id) && (wide || c.id === currentId));
+  // In place: only the comment that is open shows its card, under its words; with
+  // none open, the one the pointer is on shows to read.
+  const shownId = currentId ?? (draft ? null : peekId);
+  const inPlace = open.filter((c) => anchored.has(c.id) && c.id === shownId);
   const currentResolved = currentId ? store.comments.find((c) => c.id === currentId && c.status === 'resolved' && anchored.has(c.id)) : undefined;
-  const setCardEl = (id: string) => (el: HTMLDivElement | null) => {
-    if (el) cardEls.current.set(id, el); else cardEls.current.delete(id);
+  // A card that changes size (the draft growing as it is typed, a reply opening)
+  // is placed again, so it never grows over its words or past the view.
+  const cardRO = useRef<ResizeObserver | null>(null);
+  if (!cardRO.current && typeof ResizeObserver !== 'undefined') {
+    cardRO.current = new ResizeObserver(() => requestAnimationFrame(() => placeRef.current()));
+  }
+  useEffect(() => () => cardRO.current?.disconnect(), []);
+  // One ref callback per card, kept, so a render does not detach and re-observe it.
+  const cardRefs = useRef(new Map<string, (el: HTMLDivElement | null) => void>());
+  const setCardEl = (id: string) => {
+    let fn = cardRefs.current.get(id);
+    if (!fn) {
+      fn = (el: HTMLDivElement | null) => {
+        const was = cardEls.current.get(id);
+        if (was && was !== el) cardRO.current?.unobserve(was);
+        if (el) { cardEls.current.set(id, el); cardRO.current?.observe(el); } else cardEls.current.delete(id);
+      };
+      cardRefs.current.set(id, fn);
+    }
+    return fn;
   };
+  // The card shown changed (opened, the pointer on other words): placed before the paint.
+  useLayoutEffect(() => { place(); }, [place, shownId, draft]);
   const card = (c: DocComment) => (
     <div key={c.id} ref={setCardEl(c.id)} className="doc-comment-slot">
       <DocCommentCard
@@ -554,7 +594,7 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
   if (!store.loaded && !draft) return null;
   if (!store.comments.length && !draft) return null;
   return (
-    <div ref={layerRef} className={`fv-doc-comments${wide ? ' is-wide' : ''}`} data-testid="doc-comments" data-file-path={filePath}>
+    <div ref={layerRef} className="fv-doc-comments" data-testid="doc-comments" data-file-path={filePath}>
       <DocCommentsHead
         comments={store.comments}
         openCount={open.length}
@@ -567,15 +607,15 @@ export const DocCommentsLayer = forwardRef<DocCommentsHandle, Props>(function Do
         onResolve={(c) => store.edit(setDocResolved(c.id, c.status !== 'resolved', USER_AUTHOR, now()), c.status === 'resolved' ? 'reopen' : 'resolve')}
       />
       <div
-        className="doc-comments-column"
-        // The column sits over the doc's scroller: a wheel over a card scrolls the doc.
+        className="doc-comments-inplace"
+        // The cards sit over the doc's scroller: a wheel over one scrolls the doc.
         onWheel={(e) => {
           if ((e.target as HTMLElement).closest('textarea')) return;
           const scroller = scrollerOf(bodyNow());
           if (scroller) scroller.scrollTop += e.deltaY;
         }}
       >
-        {inColumn.map(card)}
+        {inPlace.map(card)}
         {currentResolved && card(currentResolved)}
         {draft && (
           <div ref={setCardEl(DRAFT_KEY)} className="doc-comment-slot">

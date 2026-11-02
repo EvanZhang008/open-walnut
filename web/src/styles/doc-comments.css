@@ -1,20 +1,9 @@
 /* Comments on a document (DocCommentsLayer): the paint on the commented words,
-   the column of cards on the right, the chip that lists them all. */
+   the open card in place under its words (never a column beside the text: the
+   doc keeps its width), the chip that lists them all. */
 
 /* Its ::highlight paint lives in highlights.css (utils/highlight-rules.ts). */
 
-/* A wide view keeps the column's room beside the text: padding, so the doc's
-   scroller (and its scrollbar) still spans the whole view. */
-.file-content-view.fv-doc-comments-wide > .fv-wysiwyg-editor,
-.file-content-view.fv-doc-comments-wide > .fv-md-preview,
-.file-content-view.fv-doc-comments-wide > .file-viewer-code,
-.file-content-view.fv-doc-comments-wide > .fv-source-editor {
-  padding-right: 296px;
-}
-/* The HTML preview's page lays itself out in the frame: the frame gives up the room. */
-.file-content-view.fv-doc-comments-wide > .fv-html-preview {
-  width: calc(100% - 296px);
-}
 .file-content-view:has(> .fv-doc-comments) {
   position: relative;
 }
@@ -111,20 +100,24 @@
 .doc-comments-list-row.is-resolved .doc-comments-list-text { color: var(--fg-muted); }
 .doc-comments-list-row.is-outdated .doc-comments-list-state { color: hsl(28 80% 42%); }
 
-.doc-comments-column {
+.doc-comments-inplace {
   position: absolute;
   top: var(--dc-top);
-  right: 8px;
+  left: 0;
+  right: 0;
   bottom: 0;
-  width: 268px;
   overflow: hidden;
   pointer-events: none;
 }
+/* Placed by utils/in-place-card.ts: under the words, inside the view. */
 .doc-comment-slot {
   position: absolute;
   left: 0;
-  right: 0;
   top: 0;
+  width: min(380px, calc(100% - 16px));
+  /* Never taller than the view: a long thread scrolls in its card. */
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
   visibility: hidden;
   pointer-events: auto;
 }

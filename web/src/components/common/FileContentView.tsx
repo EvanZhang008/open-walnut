@@ -1358,14 +1358,12 @@ export function FileContentView({
   }, []);
 
   // "Comment": a Google Docs style comment kept in the doc's sidecar file, its card
-  // in a column beside the doc (DocCommentsLayer); it also waits above the
+  // in place under its words (DocCommentsLayer); it also waits above the
   // composer for the next message. Every view of a doc shows its comments, the HTML
   // preview's same-origin frame included; never on a sidecar itself.
   const commentsApi = useSessionCommentsApi();
   const canDocComment = commentsApi.canComment && !!sessionId && !isSidecarPath(filePath) && threadSurface !== 'none';
   const docCommentsRef = useRef<DocCommentsHandle>(null);
-  // The comment column wants its room beside the text (a wide view with comments in it).
-  const [docCommentsRoom, setDocCommentsRoom] = useState(false);
   const commentFromBubble = useCallback((range: Range, text: string) => {
     docCommentsRef.current?.commentOn({ range, text });
   }, []);
@@ -2139,7 +2137,7 @@ export function FileContentView({
 
   return (
     <div
-      className={`file-content-view${fullscreen ? ' fv-fullscreen' : ''}${docCommentsRoom && canDocComment ? ' fv-doc-comments-wide' : ''}`}
+      className={`file-content-view${fullscreen ? ' fv-fullscreen' : ''}`}
       ref={contentRef}
       // Quote-to-ask for the READ-ONLY views (md preview of MDX, truncated
       // <pre>): DOM selection → pill. The editors report selections through
@@ -2544,7 +2542,6 @@ export function FileContentView({
           frameRef={htmlFrameRef}
           editor={editorRef}
           getDocText={docTextNow}
-          onRoom={setDocCommentsRoom}
         />
       )}
       {selection && (
