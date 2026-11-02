@@ -111,6 +111,8 @@ function guardedFiles(): Array<{ file: string; kind: Kind; test: boolean }> {
       const child = path.posix.join(rel, ent.name)
       if (ent.isDirectory()) {
         if (SKIP_DIRS.has(ent.name) || SKIP_DIR_SUFFIXES.some((s) => ent.name.endsWith(s))) continue
+        // scripts/local/ is a person's own gitignored folder, not repo content (CI never sees it)
+        if (child === 'scripts/local') continue
         walk(child)
       } else if (ent.isFile()) {
         const kind = kindOf(ent.name, path.join(REPO, child))
