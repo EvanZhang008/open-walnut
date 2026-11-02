@@ -154,6 +154,19 @@ export function computeRenderFilter(input: RenderFilterInput): RenderFilterResul
 const squash = (t: string) => t.replace(/\s+/g, ' ').trim();
 
 function tailHasPersistedTwin(block: StreamingBlock, messages: readonly SessionHistoryMessage[], ev: DeltaEvidence): boolean {
+  // A call that has returned no longer changes: once its saved twin has its
+  // result too, the saved row shows all the live one does. Without this a call
+  // last in the stream when a mid-turn message was saved showed twice (its
+  // saved run above the message, its live copy below) until the next block
+  // (2026-11-02, the user: streaming and finished must look exactly the same).
+  if (block.type === 'tool_call') {
+    if (block.parentToolUseId || block.status === 'calling' || block.result === undefined || !ev.toolUseIds.has(block.toolUseId)) return false;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const twin = messages[i].tools?.find((t) => t.toolUseId === block.toolUseId);
+      if (twin) return twin.result !== undefined;
+    }
+    return false;
+  }
   if ((block.type !== 'text' && block.type !== 'thinking') || block.parentToolUseId || !block.msgId) return false;
   // Cheap exit on every streaming flush: the usual tail has no persisted row yet.
   if (!(block.type === 'text' ? ev.textMsgIds : ev.thinkingMsgIds).has(block.msgId)) return false;

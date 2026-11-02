@@ -6,8 +6,9 @@
  * pin the matching rules; these pin the FILTER policy on top):
  *  · absorbed = hidden, never deleted — late history means brief double-render
  *  · live tail (last main-lane block while streaming) is never hidden — except
- *    an Agent/Task call, whose exact-id twin is the card we want, and words
- *    history already holds in full under the same msgId
+ *    an Agent/Task call, whose exact-id twin is the card we want, words
+ *    history already holds in full under the same msgId, and a call that has
+ *    returned whose saved twin holds its result
  *  · watermark bounds content matching; ids match at any scope
  *  · reset only when EVERYTHING is absorbed and no turn is live
  */
@@ -84,6 +85,20 @@ describe('computeHiddenBlocks — absorption proof', () => {
     const hidden = computeHiddenBlocks({ blocks, messages, watermark: 0, isStreaming: true, completedLen: 1 });
     expect(hidden.has(0)).toBe(true);  // finished block absorbs
     expect(hidden.has(1)).toBe(false); // live tail stays protected
+  });
+
+  it('LIVE TAIL: a returned call whose saved twin has its result is absorbed; a running one or a result-less twin is not', () => {
+    // 2026-11-02: the last call of a stretch showed twice (saved run above a
+    // message sent mid-turn, its live copy below) until the next block.
+    const done: StreamingBlock = { type: 'tool_call', toolUseId: 'tu-e', name: 'Edit', status: 'done', result: 'ok', input: { file_path: '/a' } };
+    const saved = [msg({ msgId: 'm1', tools: [{ name: 'Edit', toolUseId: 'tu-e', input: { file_path: '/a' }, result: 'ok' }] })];
+    expect(computeHiddenBlocks({ blocks: [done], messages: saved, watermark: 0, isStreaming: true, completedLen: 0 }).has(0)).toBe(true);
+    // Still running: it may still change, so it stays.
+    const running: StreamingBlock = { ...done, status: 'calling', result: undefined } as StreamingBlock;
+    expect(computeHiddenBlocks({ blocks: [running], messages: saved, watermark: 0, isStreaming: true, completedLen: 0 }).has(0)).toBe(false);
+    // Saved before it returned: the saved row would read as finished with no output.
+    const noResult = [msg({ msgId: 'm1', tools: [{ name: 'Edit', toolUseId: 'tu-e', input: { file_path: '/a' } }] })];
+    expect(computeHiddenBlocks({ blocks: [done], messages: noResult, watermark: 0, isStreaming: true, completedLen: 0 }).has(0)).toBe(false);
   });
 
   it('keeps everything when history has not caught up (empty) — never vanishes', () => {

@@ -108,6 +108,8 @@ async function startSampler(page: Page) {
         runOpen: runs.length === 1 && !!runs[0].querySelector(':scope > .tool-run-body'),
         diffBodies: h?.querySelectorAll('.edit-diff-body').length ?? 0,
         editCards: Array.from(h?.querySelectorAll('.chat-tool-block-name') ?? []).filter((e) => e.textContent === 'Edit').length,
+        // Every row that names the Edit, folded or not: a second copy shows here.
+        editRuns: Array.from(h?.querySelectorAll('.tool-run-label') ?? []).filter((e) => /edited a file/i.test(e.textContent ?? '')).length,
       });
       requestAnimationFrame(tick);
     };
@@ -115,7 +117,7 @@ async function startSampler(page: Page) {
   });
 }
 
-async function stopSampler(page: Page): Promise<Array<{ outputs: number; runs: number; runOpen: boolean; diffBodies: number; editCards: number }>> {
+async function stopSampler(page: Page): Promise<Array<{ outputs: number; runs: number; runOpen: boolean; diffBodies: number; editCards: number; editRuns: number }>> {
   return page.evaluate(() => { (window as any).__disclosureSampling = false; return (window as any).__disclosureFrames; });
 }
 
@@ -196,7 +198,7 @@ test('an opened run, an opened card and a folded diff stay as the reader left th
 
   expect(frames.length).toBeGreaterThan(5);
   const bad = frames.map((f, i) => ({ i, ...f }))
-    .filter((f) => f.runs !== 1 || !f.runOpen || f.outputs !== 1 || f.diffBodies !== 0 || f.editCards !== 1);
+    .filter((f) => f.runs !== 1 || !f.runOpen || f.outputs !== 1 || f.diffBodies !== 0 || f.editCards !== 1 || f.editRuns !== 1);
   expect(bad.slice(0, 5), `frames where the run, the card or the diff changed (of ${frames.length})`).toEqual([]);
 
   // The finished turn reads as the reader left it.
