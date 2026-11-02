@@ -54,3 +54,28 @@ defineOp({
   routes: [{ method: 'POST', path: '/tasks/:id/sync-to-project' }],
   tags: { readonly: false, remote: 'allow' },
 });
+
+defineOp({
+  name: 'project_make_local',
+  title: 'Stop a project syncing to its outside service',
+  description:
+    'Turn a whole project local, one batch per call: each task in it that syncs to the project\'s outside service is made '
+    + 'local the way task_make_local does it (all content kept, its remote identity released so no pull imports it again, '
+    + 'its copy there archived by default or kept), and once none syncs the project itself becomes a Local project. Call '
+    + 'again while `remaining` is above 0; check the result between batches. `failed` lists tasks whose copy there could '
+    + 'not be closed (they are local all the same).',
+  input: {
+    name: z.string().min(1).describe('The project name'),
+    outside: z.enum(['archive', 'keep']).optional().describe('What happens to each task\'s copy there (default archive: completed there)'),
+    limit: z.number().int().min(1).max(200).optional().describe('Tasks per call (default 25)'),
+  },
+  handler: async (args, call) => {
+    const body = await call('POST', `/projects/${encodeURIComponent(String(args.name))}/make-local`, {
+      ...(args.outside ? { outside: args.outside } : {}),
+      ...(args.limit ? { limit: args.limit } : {}),
+    }) as { outcome?: string; done?: boolean };
+    return withOutcome(body, body.outcome ?? 'Done.', body.done ? 'No further action is required.' : 'Call project_make_local again to continue.');
+  },
+  routes: [{ method: 'POST', path: '/projects/:name/make-local' }],
+  tags: { readonly: false, remote: 'allow' },
+});

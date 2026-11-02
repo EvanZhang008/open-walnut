@@ -2329,6 +2329,45 @@ export async function setProjectMetadata(
   return merged;
 }
 
+/**
+ * A project stops syncing: its registry row turns Local (2026-11-02, the user: "move all from
+ * Microsoft to local ... using walnut existing tool or process"). Its tasks must already be local
+ * (makeTaskLocal, one by one, so each releases its remote identity and its outside copy is
+ * handled); a task still synced refuses the switch, because a local row over a synced task is
+ * the mismatch the pull reports forever. A pull of the service's list of the same name then
+ * skips it (the existing row wins). Returns null for an unknown project.
+ */
+export async function setProjectLocal(project: string): Promise<{ name: string; from: TaskSource; holdsCleared: number } | null> {
+  await ensureInit();
+  const out = await withWriteLock(async () => {
+    const store = await readStore();
+    const projects = store.projects ?? {};
+    const key = Object.keys(projects).find((k) => k.trim().toLowerCase() === (project ?? '').trim().toLowerCase());
+    if (!key) return null;
+    const from = projects[key].source;
+    if (from === 'local') return { name: key, from, cleared: [] as Task[] };
+    const inProject = store.tasks.filter((t) => (t.project ?? '').trim().toLowerCase() === key.toLowerCase());
+    const synced = inProject.filter((t) => t.source !== 'local').length;
+    if (synced > 0) throw new Error(`${synced} task(s) in "${key}" still sync to ${from}; make them local first`);
+    // A hold aimed at the service the project no longer syncs to means nothing now.
+    const cleared = inProject.filter((t) => t.sync_hold && t.sync_hold.state !== 'checking' && t.sync_hold.target === from);
+    for (const t of cleared) t.sync_hold = undefined;
+    store.projects = { ...projects, [key]: { ...projects[key], source: 'local' } };
+    await writeStore(store);
+    return { name: key, from, cleared };
+  });
+  if (!out) return null;
+  if (out.from !== 'local') {
+    log.task.info('project made local', { project: out.name, from: out.from, holdsCleared: out.cleared.length });
+    bus.emit(EventNames.PROJECT_UPDATED, { name: out.name, source: 'local' }, ['web-ui'], { source: 'task-manager' });
+    // Open tasks only: a finished one is not on any open surface, and a big project holds thousands.
+    for (const t of out.cleared) {
+      if (t.phase !== 'COMPLETE') bus.emit(EventNames.TASK_UPDATED, { task: t, fields: ['sync_hold'] }, ['web-ui'], { source: 'private-tasks' });
+    }
+  }
+  return { name: out.name, from: out.from, holdsCleared: out.cleared.length };
+}
+
 export interface SyncResult {
   success: boolean;
   error?: string;

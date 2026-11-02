@@ -300,6 +300,7 @@ Prefer the named operations below. Their schemas are the current source of truth
 | `task_watch` | Watch a task (write) | id (string): The task to watch (id or unique prefix); every? (string): How often at least: "30m", "3h", "1d"; for? (string): The task that hears it; default: your own task; off? (boolean): true ends the watch |
 | `task_make_local` | Turn a synced task local (write) | id (string): The task (id or unique prefix); outside? (keep\|archive\|neutralize): What happens to its copy in the outside service (default keep) |
 | `task_sync_to_project` | Send a local task to its project's service (write) | id (string): The task (id or unique prefix); user_words (string): What the user said asking to send it (quoted, in their language) |
+| `project_make_local` | Stop a project syncing to its outside service (write) | name (string): The project name; outside? (archive\|keep): What happens to each task's copy there (default archive: completed there); limit? (integer): Tasks per call (default 25) |
 
 Use `walnut tools help <op>` for the full live description. Use the generic `api` operation only when no named operation exists.
 

@@ -11,6 +11,10 @@
  *        the user's decision: a session caller passes user_words quoting the user's ask.
  *   POST /api/v1/tasks/:id/outside-copy    { action: 'archive'|'neutralize' }
  *        Change the outside copy a task turned local left behind.
+ *   POST /api/v1/projects/:name/make-local { outside?: 'archive'|'keep', limit? }
+ *        A project stops syncing, a batch at a time: each synced task is made local as above (its
+ *        outside copy archived by default), and once none syncs the project itself turns Local.
+ *        -> { done, processed, failed, remaining }
  *   POST /api/v1/private-tasks/test        { text, words?, provider?, ai?, ai_rule? }
  *        -> { match, invalid, ai?: { pass, reason } | { error } }
  *        Which hard rule (the given list, else the provider's) a text matches, and with `ai`
@@ -125,6 +129,69 @@ privateTasksV1Router.post('/tasks/:id/outside-copy', route(async (req, res) => {
   const r = await actOnOutsideCopy(task.id, action)
   if (!r.done) throw new RouteError(409, 'outside_copy_unchanged', r.error ?? 'The outside copy was not changed')
   res.json({ task: await viewOf(task.id), done: true, action })
+}))
+
+/** Tasks one call turns local at most: each is a store write, so a big project goes in batches. */
+const PROJECT_BATCH_DEFAULT = 25
+const PROJECT_BATCH_MAX = 200
+
+privateTasksV1Router.post('/projects/:name/make-local', route(async (req, res) => {
+  refuseOnReplica()
+  const b = body(req)
+  const outside = b.outside === undefined ? 'archive' : b.outside
+  if (outside !== 'archive' && outside !== 'keep') throw new RouteError(400, 'bad_request', 'outside must be archive or keep')
+  const limit = b.limit === undefined ? PROJECT_BATCH_DEFAULT : b.limit
+  if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1 || limit > PROJECT_BATCH_MAX) {
+    throw new RouteError(400, 'bad_request', `limit must be an integer from 1 to ${PROJECT_BATCH_MAX}`)
+  }
+  const tm = await import('../../core/task-manager.js')
+  const { serviceName } = await import('../../core/private-tasks/sync-gate.js')
+  const record = await tm.getProjectRecord(param(req.params.name))
+  if (!record) throw new RouteError(404, 'not_found', `No project "${param(req.params.name)}"`)
+  if (record.source === 'local') {
+    res.json({ project: record.name, done: true, processed: [], failed: [], remaining: 0, outcome: `"${record.name}" is a local project already.` })
+    return
+  }
+  const from = record.source
+  const service = await serviceName(from)
+  const synced = () => tm.listTasks({ project: record.name }).then((ts) => ts.filter((t) => t.source === from))
+  // Parents first: a parent takes its same-service subtasks with it.
+  const batch = (await synced()).sort((a, c) => Number(!!a.parent_task_id) - Number(!!c.parent_task_id)).slice(0, limit)
+  const processed: Array<{ id: string; outside: string; children: number }> = []
+  const failed: Array<{ id: string; error: string }> = []
+  const at = new Date().toISOString()
+  for (const t of batch) {
+    const now = await tm.getTask(t.id).catch(() => null)
+    if (!now || now.source !== from) continue // went local with its parent
+    // A finished task's copy too: an edit after it finished may never have reached the service,
+    // and completing a completed item changes nothing.
+    const action = outside
+    try {
+      const made = await tm.makeTaskLocal(t.id, { state: 'chosen', by: 'user', at, reason: `Its project stopped syncing to ${service}` }, action)
+      if (!made.outside.done) failed.push({ id: t.id, error: `local now, but its copy in ${service} was not closed: ${made.outside.error}` })
+      processed.push({ id: t.id, outside: made.outside.done ? action : 'unchanged', children: made.children.length })
+    } catch (err) {
+      failed.push({ id: t.id, error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+  const remaining = (await synced()).length
+  let done = false
+  let holdsCleared = 0
+  if (remaining === 0) {
+    const flipped = await tm.setProjectLocal(record.name)
+    done = !!flipped
+    holdsCleared = flipped?.holdsCleared ?? 0
+  }
+  log.web.info('private tasks: project batch made local', {
+    project: record.name, from, processed: processed.length, failed: failed.length, remaining, done,
+    bySession: !!header(req, 'x-walnut-caller-sid'),
+  })
+  res.json({
+    project: record.name, from, service, done, processed, failed, remaining, holds_cleared: holdsCleared,
+    outcome: done
+      ? `"${record.name}" no longer syncs to ${service}: every task in it is local.${failed.length ? ` ${failed.length} copy(ies) in ${service} were not closed; see failed.` : ''}`
+      : `${processed.length} task(s) turned local in this call, ${remaining} still sync to ${service}. Call again to continue.`,
+  })
 }))
 
 privateTasksV1Router.post('/private-tasks/test', route(async (req, res) => {
