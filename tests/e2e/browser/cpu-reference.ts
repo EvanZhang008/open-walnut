@@ -119,17 +119,85 @@ export async function traceTaskTimes(page: Page, minWallMs = 50): Promise<() => 
   }
 }
 
+const readText = (file: string): string => { try { return readFileSync(file, 'utf8').trim() } catch { return '' } }
+
 /** The cores this process may use: a container's CPU quota (cgroup v2 `cpu.max`, v1 `cfs_quota_us`) when it has one. */
-function usableCores(): number {
-  const read = (file: string) => { try { return readFileSync(file, 'utf8').trim() } catch { return '' } }
+export function quotaCores(read: (file: string) => string = readText, hostCores = cpus().length): number | null {
   const [v2quota, v2period] = read('/sys/fs/cgroup/cpu.max').split(/\s+/)
   const quota = v2quota && v2quota !== 'max' ? Number(v2quota) : Number(read('/sys/fs/cgroup/cpu/cpu.cfs_quota_us') || -1)
   const period = v2quota && v2quota !== 'max' ? Number(v2period) : Number(read('/sys/fs/cgroup/cpu/cpu.cfs_period_us') || 0)
-  if (quota > 0 && period > 0) return Math.max(1, Math.min(cpus().length, Math.floor(quota / period)))
-  return cpus().length
+  if (quota > 0 && period > 0) return Math.max(1, Math.min(hostCores, Math.floor(quota / period)))
+  return null
 }
 
-/** One runnable process per usable core or fewer: a wall clock budget measures the work, not the CPU queue. */
+export interface CgroupCpu { usageNs: number; throttledNs: number }
+
+/** The container's own CPU time and throttled time so far (cgroup v2 `cpu.stat`, v1 `cpuacct.usage` + `cpu.stat`). */
+export function readCgroupCpu(read: (file: string) => string = readText): CgroupCpu | null {
+  const field = (text: string, name: string): number | null => {
+    const m = new RegExp(`^${name} (\\d+)$`, 'm').exec(text)
+    return m ? Number(m[1]) : null
+  }
+  const v2 = read('/sys/fs/cgroup/cpu.stat')
+  const v2usage = field(v2, 'usage_usec')
+  if (v2usage !== null) return { usageNs: v2usage * 1000, throttledNs: (field(v2, 'throttled_usec') ?? 0) * 1000 }
+  const v1usage = read('/sys/fs/cgroup/cpuacct/cpuacct.usage') || read('/sys/fs/cgroup/cpu,cpuacct/cpuacct.usage')
+  if (!/^\d+$/.test(v1usage)) return null
+  const v1stat = read('/sys/fs/cgroup/cpu/cpu.stat') || read('/sys/fs/cgroup/cpu,cpuacct/cpu.stat')
+  return { usageNs: Number(v1usage), throttledNs: field(v1stat, 'throttled_time') ?? 0 }
+}
+
+export interface QuietFacts {
+  hostLoad: number
+  hostCores: number
+  /** The container's CPU quota in cores, or null outside one. */
+  quota: number | null
+  /** The container's CPU use over the window: CPU time and throttled time it gained, and the window's length. */
+  window?: { usageNs: number; throttledNs: number; wallNs: number } | null
+}
+
+/**
+ * A core to spare. Outside a container: one runnable process per core or fewer. Inside one with a
+ * CPU quota, the host's load average counts every container on the host (2026-11-02: a 48 core
+ * host at load 16 read "busy" against an 8 core quota while the container itself idled, and an
+ * idle host hid a container pinned at its quota), so the container's own use decides: under 90% of
+ * its quota over the window and throttled for under 5% of it, on a host that is not saturated.
+ */
+export function quietVerdict(f: QuietFacts): boolean {
+  if (f.hostLoad >= f.hostCores) return false
+  if (f.quota === null) return true
+  if (!f.window || f.window.wallNs <= 0) return f.hostLoad < f.quota
+  const busyCores = f.window.usageNs / f.window.wallNs
+  return busyCores < f.quota * 0.9 && f.window.throttledNs < f.window.wallNs * 0.05
+}
+
+const MIN_WINDOW_NS = 250e6
+let lastCpu: { at: number; cpu: CgroupCpu } | null = null
+const nowNs = (): number => Number(process.hrtime.bigint())
+const sample = (): void => { const cpu = readCgroupCpu(); lastCpu = cpu ? { at: nowNs(), cpu } : null }
+sample()
+
+/**
+ * Whether a wall clock budget measures the work and not the CPU queue (see quietVerdict). In a
+ * container it judges the container's use since the previous call, or since this module loaded,
+ * so a call right after a measurement judges that measurement; a window under 250 ms is first
+ * widened to 250 ms.
+ */
 export function machineQuiet(): boolean {
-  return loadavg()[0] < usableCores()
+  const hostCores = cpus().length
+  const quota = quotaCores(readText, hostCores)
+  let window: QuietFacts['window'] = null
+  if (quota !== null) {
+    if (!lastCpu) sample()
+    const before = lastCpu
+    if (before) {
+      const short = MIN_WINDOW_NS - (nowNs() - before.at)
+      if (short > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.ceil(short / 1e6))
+      sample()
+      if (lastCpu) {
+        window = { usageNs: lastCpu.cpu.usageNs - before.cpu.usageNs, throttledNs: lastCpu.cpu.throttledNs - before.cpu.throttledNs, wallNs: lastCpu.at - before.at }
+      }
+    }
+  }
+  return quietVerdict({ hostLoad: loadavg()[0], hostCores, quota, window })
 }
