@@ -13,10 +13,11 @@
  * already knew (src/core/org/thread-view.ts) is gone from the card; the whole conversation opens
  * from a toggle in the card body, numbered, with Split out on each message.
  *
- * A thread with nothing new for him is out of sight (2026-11-01, the user: "if it is just assigned
- * no need to tell me, or doing, unless there are some update ... thread pending, which is auto
- * hide like closed"): the node sets it pending, and it comes back when he writes in it or the node
- * writes a new summary (src/core/org/threads-model.ts). A summary already naming a task keeps no
+ * A thread with nothing for him is out of sight (2026-11-01, the user: "if it is just assigned no
+ * need to tell me, or doing, unless there are some update ... thread pending, which is auto hide
+ * like closed"; then "if i reply to a thread, it shoud go out of the thread immediately instead of
+ * just show working"): only needs, answered, or an answer he has not reacted to shows
+ * (src/core/org/thread-view.ts shownToHim); his reply makes a thread working, so it leaves at once. A summary already naming a task keeps no
  * second chip for it, and one reply that covered several threads stays off every card.
  *
  *   a card     state, title, time; the summary; its tasks the summary does not name; the answers
@@ -25,7 +26,7 @@
  *              card (2026-11-01, the user, after a Follow up showed "Not answered yet: <his words>":
  *              "you definitely haven't answered ... you don't need to put it in this thread");
  *              they read in the conversation.
- *   Pending    open but nothing new for him: one quiet line at the bottom opens them
+ *   In progress  open but nothing for him (new, working, pending): one quiet line at the bottom opens them
  *   Closed     the ones closed this week (kept a week, then deleted) open from one quiet line at
  *              the bottom, Reopen on each
  */
@@ -33,7 +34,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@open-walnut/core';
 import { userStateOf } from '@open-walnut/org-tree';
 import { USER_STATE_LABELS } from '@open-walnut/user-status';
-import { cardView, exchangesOf, sharedAnswers, type ThreadExchange } from '@open-walnut/thread-view';
+import { cardView, exchangesOf, sharedAnswers, shownToHim, type ThreadExchange } from '@open-walnut/thread-view';
 import { renderMarkdownWithRefs } from '@/utils/markdown';
 import { useEntityLabelsVersion } from '@/hooks/useEntityLabels';
 import { AnswerBox } from '@/components/common/AnswerBox';
@@ -345,12 +346,12 @@ function ThreadCard({ t, all, shared, tasks, onOpenTask, state, onFollowUp, name
 export function OrgThreads({ name, state, tasks, onOpenTask, onFollowUp, now }: Props) {
   // Whether the week's closed threads are open stays as it was left (utils/view-memory.ts).
   const [showClosed, setShowClosed] = usePageView('org', 'threads.showClosed', false, isBoolean);
-  const [showPending, setShowPending] = usePageView('org', 'threads.showPending', false, isBoolean);
+  const [showHidden, setShowHidden] = usePageView('org', 'threads.showInProgress', false, isBoolean);
   const all = state.threads;
-  const open = useMemo(() => (all ?? []).filter((t) => !t.closed && t.state !== 'pending'), [all]);
-  const pending = useMemo(() => (all ?? []).filter((t) => !t.closed && t.state === 'pending'), [all]);
-  const closed = useMemo(() => (all ?? []).filter((t) => !!t.closed), [all]);
   const shared = useMemo(() => sharedAnswers(all ?? []), [all]);
+  const open = useMemo(() => (all ?? []).filter((t) => shownToHim(t, shared)), [all, shared]);
+  const hidden = useMemo(() => (all ?? []).filter((t) => !t.closed && !shownToHim(t, shared)), [all, shared]);
+  const closed = useMemo(() => (all ?? []).filter((t) => !!t.closed), [all]);
   // Task pills in an answer open the task, as they do in the chat.
   const onEntityClick = useEntityClickHandler(onOpenTask);
   const card = (t: OrgThread) => <ThreadCard key={t.id} t={t} all={all ?? []} shared={shared} tasks={tasks} onOpenTask={onOpenTask} state={state} onFollowUp={onFollowUp} name={name} now={now} />;
@@ -360,18 +361,18 @@ export function OrgThreads({ name, state, tasks, onOpenTask, onFollowUp, now }: 
       {all === null && !state.error && <p className="org-threads-empty" aria-busy="true">Loading…</p>}
       {all !== null && !open.length && (
         <p className="org-threads-empty" data-testid="org-threads-empty">
-          {pending.length
-            ? `Nothing new. ${name} is working on the pending ones below; each comes back here when there is news.`
+          {hidden.length
+            ? `Nothing for you now. ${name} is on the ones below; each comes back here when there is news.`
             : `Nothing open. Each request you send ${name} becomes a thread here; asks about the same thing stay in one thread.`}
         </p>
       )}
       {!!open.length && <ul className="org-thread-list" data-testid="org-thread-list" data-show="open">{open.map(card)}</ul>}
-      {pending.length > 0 && (
-        <button type="button" className="org-threads-closed-toggle" data-testid="org-threads-pending" aria-expanded={showPending} onClick={() => setShowPending(!showPending)}>
-          {pending.length} pending, nothing new{showPending ? ' ▾' : ' ▸'}
+      {hidden.length > 0 && (
+        <button type="button" className="org-threads-closed-toggle" data-testid="org-threads-hidden" aria-expanded={showHidden} onClick={() => setShowHidden(!showHidden)}>
+          {hidden.length} in progress, nothing for you{showHidden ? ' ▾' : ' ▸'}
         </button>
       )}
-      {showPending && pending.length > 0 && <ul className="org-thread-list" data-testid="org-thread-list-pending" data-show="pending">{pending.map(card)}</ul>}
+      {showHidden && hidden.length > 0 && <ul className="org-thread-list" data-testid="org-thread-list-hidden" data-show="hidden">{hidden.map(card)}</ul>}
       {closed.length > 0 && (
         <button type="button" className="org-threads-closed-toggle" data-testid="org-threads-closed" aria-expanded={showClosed} onClick={() => setShowClosed(!showClosed)}>
           {closed.length} closed this week{showClosed ? ' ▾' : ' ▸'}

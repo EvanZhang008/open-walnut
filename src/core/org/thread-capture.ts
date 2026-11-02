@@ -18,7 +18,7 @@ import {
   type FileMessageInput, type ThreadCloseHow, type ThreadsFile, type ThreadState, type ThreadVia, type ThreadWriter,
 } from './threads-model.js';
 import { THREADS_KNOWN_RULE, THREADS_OPEN_RULE, THREADS_PENDING_RULE, THREADS_SUMMARY_RULE } from './thread-rules.js';
-import { cardView, exchangesOf, sharedAnswers } from './thread-view.js';
+import { exchangesOf } from './thread-view.js';
 
 /** Open threads named to the node with each message (the newest). */
 export const HINT_OPEN_MAX = 12;
@@ -187,7 +187,7 @@ export function threadHintText(s: ThreadHintState): string {
   if (s.created && !s.duplicate) {
     parts.push('Then give the thread a short title of a few words, in the language you write to him, with thread_update (title, and ask: one line of what he wants).');
   }
-  parts.push('As the work moves, keep it current with thread_update: state (working, needs: waiting on him, answered: you answered and he may close it, pending: nothing new for him, hidden from his view), reply (the summary the card shows), title as the subject moves, add_tasks (the tasks you hand it to). Walnut puts your chat reply under his message by itself.');
+  parts.push('As the work moves, keep it current with thread_update: state (working: you are on it, needs: waiting on him, answered: you answered and he may close it, pending: nothing new for him), reply (the summary the card shows), title as the subject moves, add_tasks (the tasks you hand it to). Walnut puts your chat reply under his message by itself.');
   parts.push(THREADS_SUMMARY_RULE, THREADS_PENDING_RULE, THREADS_KNOWN_RULE, THREADS_OPEN_RULE);
   if (s.closed.length) {
     parts.push(`Closed since you were last told: ${s.closed.map((t) => `${t.id} ${q(t.title)} (${t.by === 'human' ? 'he acknowledged it' : t.how === 'dropped' ? 'dropped' : 'closed'})`).join('; ')}.`);
@@ -196,7 +196,7 @@ export function threadHintText(s: ThreadHintState): string {
 }
 
 /** A thread the node should look at again: why, in a few words. */
-export interface TidyItem { id: string; title: string; state: ThreadState; why: 'reacted' | 'untitled' | 'state' | 'quiet' }
+export interface TidyItem { id: string; title: string; state: ThreadState; why: 'reacted' | 'untitled' | 'state' }
 
 export interface ThreadsTidyState {
   items: TidyItem[];
@@ -211,16 +211,11 @@ export const TIDY_MAX = 8;
 /**
  * Pure: the open threads that need the node's decision now. He wrote to the node after an answer
  * it gave in another thread (did he react to it? then mark it known, or close it if finished); a
- * thread still under Walnut's stand-in title; a thread still "new" though the node answered it; a
- * thread in working whose card holds nothing new for him (no answer he has not seen, no message of
- * his waiting): only handed off or in progress, so pending (THREADS_PENDING_RULE).
+ * thread still under Walnut's stand-in title; a thread still "new" though the node answered it.
  */
 export function threadsTidyOf(file: ThreadsFile, nowMs = Date.now()): ThreadsTidyState | null {
   const items: TidyItem[] = [];
-  // Nothing new on a card is the least of it: those come after every other item.
-  const quiet: TidyItem[] = [];
   const lastHis = lastUserAt(file) ?? '';
-  const shared = sharedAnswers(file.threads);
   for (const t of sortedThreads(file.threads)) {
     if (!isOpen(t)) continue;
     const xs = exchangesOf(t);
@@ -228,35 +223,23 @@ export function threadsTidyOf(file: ThreadsFile, nowMs = Date.now()): ThreadsTid
     // The node looked at this thread since his last message (any update of its own): its call stands.
     const reviewed = !!t.by?.startsWith('task:') && t.updatedAt > lastHis;
     let why: TidyItem['why'] | null = null;
+    const untitled = !t.titled && nowMs - Date.parse(t.createdAt) > UNTITLED_MS;
     // A pending thread is the node's call that nothing on it is news: only a stand-in title is asked about.
-    if (t.state === 'pending') {
-      if (!t.titled && nowMs - Date.parse(t.createdAt) > UNTITLED_MS) items.push({ id: t.id, title: t.title, state: t.state, why: 'untitled' });
-      if (items.length >= TIDY_MAX) break;
-      continue;
-    }
-    if (!reviewed && waiting.some((x) => reactedSince(file, (x.answer ?? x.opener)!.at))) why = 'reacted';
-    else if (!t.titled && nowMs - Date.parse(t.createdAt) > UNTITLED_MS) why = 'untitled';
+    if (t.state === 'pending') why = untitled ? 'untitled' : null;
+    else if (!reviewed && waiting.some((x) => reactedSince(file, (x.answer ?? x.opener)!.at))) why = 'reacted';
+    else if (untitled) why = 'untitled';
     else if (t.state === 'new' && xs.some((x) => x.answer)) why = 'state';
-    // Nothing new is left once the node marked what he knows: asked until it writes to the thread
-    // again after that mark (pending, or kept working as its call).
-    else if (t.state === 'working' && !!t.known && t.updatedAt <= t.known.at && nothingNew(cardView(t, shared))) {
-      quiet.push({ id: t.id, title: t.title, state: t.state, why: 'quiet' });
-    }
     if (why) items.push({ id: t.id, title: t.title, state: t.state, why });
     if (items.length >= TIDY_MAX) break;
   }
-  items.push(...quiet.slice(0, Math.max(0, TIDY_MAX - items.length)));
   if (!items.length) return null;
   return { items, key: items.map((i) => `${i.id}:${i.why}`).join(',') };
 }
-
-function nothingNew(card: ReturnType<typeof cardView>): boolean { return !card.unread.length && !card.waiting.length; }
 
 const TIDY_WHY: Record<TidyItem['why'], string> = {
   reacted: 'he wrote to you after your answer there: did he react to it? If not, say so with any thread_update (state answered) and it stays open',
   untitled: 'still under Walnut\'s stand-in title',
   state: 'you answered it, its state is still new',
-  quiet: 'working with nothing new for him on its card: if it is only handed off or in progress, set state pending; a summary that is news for him stays (say so with any thread_update and you are not asked again)',
 };
 
 /** What the `threads-tidy` reminder says. */

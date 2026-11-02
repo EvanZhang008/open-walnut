@@ -28,15 +28,18 @@ export const THREADS_OPEN_RULE =
   + 'decision still goes to his inbox as a letter: the thread names the letter (ref), never repeats it.';
 
 /**
- * A thread with nothing new for him is out of his sight until there is (2026-11-01, the user: "if a
- * task is just hand over, let's not show it in the thread, unless there are some update"; "u can
- * manage the thread yourself, there can be thread pending, which is auto hide like closed").
+ * His Threads view shows only what has something for him (2026-11-01, the user: "if a task is just
+ * hand over, let's not show it in the thread, unless there are some update"; "there can be thread
+ * pending, which is auto hide like closed"; then "if i reply to a thread, it shoud go out of the
+ * thread immediately instead of just show working"). thread-view.ts shownToHim holds it.
  */
 export const THREADS_PENDING_RULE =
-  'A thread you only handed to a task, or that is being worked on with nothing new for him, is pending: set state pending '
-  + '(thread_update) and his Threads view hides it like a closed one. Never write a summary that only says who took it or that '
-  + 'it is being done (its task chip says that); set it pending in the same turn as such an answer. It comes back by itself when '
-  + 'he writes in it or you write a new summary; set needs when he must decide, answered when the result he asked for is in.';
+  'His Threads view shows a thread only when it has something for him: needs (he must decide), answered (the result he asked '
+  + 'for is in), or an answer of yours he has not reacted to. A new thread, one he just wrote in (his message makes it working), '
+  + 'and one in working or pending are out of his sight until then. A new summary written without a state is news and shows it '
+  + '(Walnut sets answered); to update it quietly, name working or pending in the same write. Never write a summary that only '
+  + 'says who took it or that it is being done (its task chip says that). When your answer to him only says that, set pending '
+  + 'in the same turn: pending stays hidden even with that answer on it.';
 
 /**
  * What a card says (2026-11-01, the user: "the purpose is to keep the thread extremely concise";

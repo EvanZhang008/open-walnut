@@ -18,11 +18,12 @@
  * reacted after it (2026-11-01, the user: "I had not replied ... so clearly I had not acknowledged
  * it"): a node may mark exchanges known (`known`) or close a thread only then (`reactedSince`).
  *
- * A thread only handed to a task or being worked on, with nothing new for him, is `pending`: the node
- * sets it, and the Threads view hides it like a closed one (2026-11-01, the user: "if it is just
- * assigned no need to tell me, or doing, unless there are some update ... there can be thread
- * pending, which is auto hide like closed"). It comes back by itself: he writes in it (filed or
- * merged), or the node writes a new summary without naming a state.
+ * His view shows a thread only when it has something for him (thread-view.ts shownToHim): needs,
+ * answered, or a node answer he has not reacted to. His message in a thread makes it working, so it
+ * leaves his view at once (2026-11-01, the user: "if i reply to a thread, it shoud go out of the
+ * thread immediately instead of just show working"); `pending` stays hidden even with an answer on
+ * it (a handoff the node judged no news: "if it is just assigned no need to tell me ... thread
+ * pending, which is auto hide like closed"). A new summary written without a state is news: answered.
  *
  * A node may also open a thread itself for something that reached it the user must act on or asked
  * to follow (2026-11-01, the user: "you can also create a new thread even if it is not from me ...
@@ -36,6 +37,8 @@ import crypto from 'node:crypto';
 
 export const THREAD_STATES = ['new', 'working', 'needs', 'answered', 'pending'] as const;
 export type ThreadState = typeof THREAD_STATES[number];
+/** The states his view keeps out of sight unless an answer he has not reacted to is on it (pending: even then). */
+export const HIDDEN_STATES: ReadonlySet<ThreadState> = new Set(['new', 'working', 'pending']);
 export const THREAD_CLOSE_HOWS = ['acked', 'dropped'] as const;
 export type ThreadCloseHow = typeof THREAD_CLOSE_HOWS[number];
 /** Where a thread message came from. */
@@ -427,8 +430,8 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
   if (patch.ask !== undefined) { if (patch.ask.trim()) next.ask = clip(patch.ask, THREAD_ASK_MAX); else delete next.ask; }
   if (patch.reply !== undefined) { if (patch.reply.trim()) next.reply = clip(patch.reply, THREAD_REPLY_MAX); else delete next.reply; }
   if (patch.state !== undefined) next.state = patch.state;
-  // A new summary on a pending thread is news: it shows again, unless the same write keeps it pending.
-  else if (cur.state === 'pending' && next.reply !== undefined && next.reply !== cur.reply) next.state = 'working';
+  // A new summary on a thread out of his sight is news: it shows (answered), unless the same write names a state.
+  else if (HIDDEN_STATES.has(cur.state) && next.reply !== undefined && next.reply !== cur.reply) next.state = 'answered';
   if (patch.tasks !== undefined) { const l = taskList(patch.tasks); if (l.length) next.tasks = l; else delete next.tasks; }
   if (patch.add_tasks?.length) next.tasks = taskList([...(next.tasks ?? []), ...patch.add_tasks]);
   // Closing a closed thread again changes nothing (the node is not told twice).
@@ -444,8 +447,8 @@ export function updateThread(file: ThreadsFile, id: string, patch: ThreadPatch, 
     if (!ownUnseen) checkClose(file, cur, by);
     next.closed = { how: patch.close, at, by };
   }
-  // Reopened: in his sight again, so not pending.
-  if (patch.reopen) { delete next.closed; if (next.state === 'pending' && patch.state === undefined) next.state = 'working'; }
+  // Reopened by him: in his sight again until he writes in it.
+  if (patch.reopen) { delete next.closed; if (HIDDEN_STATES.has(next.state) && patch.state === undefined) next.state = 'answered'; }
   return { file: replace(file, next, at), thread: next };
 }
 
@@ -511,7 +514,7 @@ export function openThread(file: ThreadsFile, input: OpenThreadInput, by: Thread
   if (!THREAD_SOURCES.includes(input.from)) throw new ThreadError('bad_input', 400, `from must be one of ${THREAD_SOURCES.join(', ')}.`);
   if (input.state !== undefined && !THREAD_STATES.includes(input.state)) throw new ThreadError('bad_input', 400, `state must be one of ${THREAD_STATES.join(', ')}.`);
   // A thread the node opens is for him to act on or follow: never hidden from the start.
-  if (input.state === 'pending') throw new ThreadError('bad_input', 400, 'A thread you open is for him to see: open it as needs, working or answered, never pending.');
+  if (input.state !== undefined && HIDDEN_STATES.has(input.state)) throw new ThreadError('bad_input', 400, 'A thread you open is for him to see: open it as needs or answered.');
   const tasks = taskList(input.tasks ?? []);
   const thread: OrgThread = {
     id: input.id && THREAD_ID_RE.test(input.id) ? input.id : newThreadId(),

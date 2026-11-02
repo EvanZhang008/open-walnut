@@ -12,7 +12,7 @@ import { THREAD_STATES } from '../core/org/threads-model.js'
 const THREADS_SCOPE = 'Your Threads are the user\'s own requests to you, one thread per subject, on the Org page beside your Brief '
   + '(Main and every lead keep them; a VP is a lead). Walnut files every message he sends you, and tells you in that message which '
   + 'thread it went to. You keep each thread current: a short title in the language you write to him, one line of what he wants (ask), '
-  + 'its state (working; needs: waiting on him; answered: you answered and he may close it; pending: nothing new for him, hidden from his view), the summary (reply) and '
+  + 'its state (working: you are on it; needs: waiting on him; answered: you answered and he may close it; pending: nothing new for him), the summary (reply) and '
   + 'the tasks you handed it to. Several asks about one subject are ONE thread: put a new one under the open thread it belongs to '
   + '(merge_into). Walnut puts your chat reply under each of his messages by itself (answer). He closes a thread with Acknowledge; a '
   + 'closed one is kept a week, then deleted; a new ask about a closed subject is a new thread. ' + THREADS_SUMMARY_RULE + ' ' + THREADS_PENDING_RULE + ' ' + THREADS_KNOWN_RULE + ' ' + THREADS_OPEN_RULE
@@ -57,7 +57,7 @@ defineOp({
     id: z.string().regex(/^th-[a-f0-9]{6,32}$/).describe('The thread (th-...)'),
     title: z.string().min(1).max(120).optional().describe('A few words, in the language you write to the user'),
     ask: z.string().max(400).optional().describe('One line: what he wants ("" clears it)'),
-    state: z.enum(THREAD_STATES).optional().describe('working, needs (waiting on him), answered (you answered; he may close it), pending (only handed off or in progress with nothing new for him: hidden from his view until he writes in it or you write a new summary)'),
+    state: z.enum(THREAD_STATES).optional().describe('working (you are on it; out of his sight until your answer), needs (waiting on him), answered (you answered; he may close it), pending (only handed off: hidden even with your answer on it). A new reply without a state sets answered'),
     reply: z.string().max(2000).optional().describe('The summary the card shows: the latest first (the open question or what he must decide), then one or two sentences of background; Markdown ("" clears it)'),
     tasks: z.array(z.string().min(1)).max(12).optional().describe('Every task it went to (replaces the list)'),
     add_tasks: z.array(z.string().min(1)).max(12).optional().describe('Tasks to add to it'),
@@ -93,7 +93,7 @@ defineOp({
     text: z.string().min(1).max(16000).describe('The first post: what reached you and what he needs to know or decide, Markdown'),
     from: z.enum(['mail', 'task', 'letter', 'trigger', 'node']).describe('Where it came from: mail, task (a team\'s work), letter (your letter to him), trigger, node (your own finding)'),
     ref: z.string().max(120).optional().describe('What it points at: a task id, a letter id (lt-...), a mail subject'),
-    state: z.enum(THREAD_STATES).exclude(['pending']).optional().describe('Default needs (it waits on him); never pending'),
+    state: z.enum(['needs', 'answered']).optional().describe('Default needs (it waits on him)'),
     tasks: z.array(z.string().min(1)).max(12).optional().describe('Tasks it is about'),
     task: TASK_ARG,
   },

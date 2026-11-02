@@ -167,8 +167,19 @@ describe('a pending thread: only handed off or being worked on, out of his sight
     expect(same({ title: 'Threads: build it' })).toBe('pending')
     expect(same({ add_tasks: ['t-2'] })).toBe('pending')
     expect(same({ reply: 'Done; live on prod, check the card', state: 'pending' })).toBe('pending')
-    expect(same({ reply: 'Built; it needs your call on the default view' })).toBe('working')
+    expect(same({ reply: 'Built; it needs your call on the default view' })).toBe('answered')
+    expect(same({ reply: 'Still building', state: 'working' })).toBe('working')
     expect(same({ reply: 'Built; which default?', state: 'needs' })).toBe('needs')
+  })
+
+  it('a new summary without a state on a working or new thread is news too (answered); an answered one stays answered', () => {
+    const f0 = file('build it')
+    const id = f0.threads[0].id
+    expect(updateThread(f0, id, { reply: 'Found the cause' }, 'task:lead-1', at(1)).thread.state).toBe('answered')
+    const working = updateThread(f0, id, { state: 'working', reply: 'On it' }, 'task:lead-1', at(1)).file
+    expect(updateThread(working, id, { reply: 'Fixed and live' }, 'task:lead-1', at(2)).thread.state).toBe('answered')
+    const needs = updateThread(f0, id, { state: 'needs', reply: 'Which one?' }, 'task:lead-1', at(1)).file
+    expect(updateThread(needs, id, { reply: 'Which one: A or B?' }, 'task:lead-1', at(2)).thread.state).toBe('needs')
   })
 
   it('he writes in it (a follow-up, or the node merges his new ask under it): it is the node\'s turn again', () => {

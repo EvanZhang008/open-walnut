@@ -94,69 +94,36 @@ describe('every place a node reads it carries it', () => {
   })
 })
 
-describe('a thread with nothing new for him goes pending', () => {
-  it('says what pending is for and what brings it back', () => {
-    expect(THREADS_PENDING_RULE).toMatch(/only handed to a task, or that is being worked on with nothing new for him, is pending/)
-    expect(THREADS_PENDING_RULE).toContain('hides it like a closed one')
+describe('his view shows only what has something for him', () => {
+  it('says what shows, what hides, and what brings a thread back', () => {
+    expect(THREADS_PENDING_RULE).toMatch(/shows a thread only when it has something for him: needs .*answered .*an answer of yours he has not reacted to/)
+    expect(THREADS_PENDING_RULE).toMatch(/one he just wrote in \(his message makes it working\)/)
+    expect(THREADS_PENDING_RULE).toContain('A new summary written without a state is news and shows it')
     expect(THREADS_PENDING_RULE).toContain('Never write a summary that only says who took it')
-    expect(THREADS_PENDING_RULE).toContain('comes back by itself when he writes in it or you write a new summary')
+    expect(THREADS_PENDING_RULE).toContain('pending stays hidden even with that answer on it')
+    expect(THREADS_PENDING_RULE).not.toMatch(/comes back by itself when he writes in it/)
   })
 
-  it('the cleanup reminder names a working thread with nothing new on its card, once; not one with news or one already pending', () => {
-    let f = fileMessage(emptyThreads('lead-1'), { text: 'build the Threads view', via: 'chat', at: at(0) }).file
-    const id = f.threads[0].id
-    f = setAnswers(f, new Map([[f.threads[0].messages[0].id, { text: 'Handed to the Threads task.', at: at(1) }]])).file
-    f = updateThread(f, id, { state: 'working', reply: 'Handed to the Threads task', add_tasks: ['t-1'] }, 'task:lead-1', at(2)).file
-    // His answer is still news on the card: not quiet yet.
-    expect(threadsTidyOf(f, Date.parse(at(3)))?.items.find((i) => i.id === id)?.why).not.toBe('quiet')
-    // He wrote after it (in another thread): nothing new is left on this card.
-    f = fileMessage(f, { text: 'ok. Another thing: the phone', via: 'chat', at: at(4) }).file
-    f = updateThread(f, id, { known: 'all' }, 'task:lead-1', at(5)).file
-    const tidy = threadsTidyOf(f, Date.parse(at(6)))
-    expect(tidy?.items.find((i) => i.id === id)?.why).toBe('quiet')
-    expect(threadsTidyText(tidy!)).toMatch(/set state pending/)
-    // The node writes to it again after that mark: its call (kept working, or pending) stands.
-    const kept = updateThread(f, id, { reply: 'Handed to the Threads task; the phone part is next' }, 'task:lead-1', at(7)).file
-    expect(threadsTidyOf(kept, Date.parse(at(8)))?.items.find((i) => i.id === id)).toBeUndefined()
-    f = updateThread(f, id, { state: 'pending' }, 'task:lead-1', at(7)).file
-    expect(threadsTidyOf(f, Date.parse(at(8)))?.items.find((i) => i.id === id)).toBeUndefined()
-    // Pending: he writes in another thread after its answer, and it is not called back as "reacted".
-    f = fileMessage(f, { text: 'one more thing, the mail page', via: 'chat', at: at(9) }).file
-    expect(threadsTidyOf(f, Date.parse(at(10)))?.items.find((i) => i.id === id)).toBeUndefined()
-  })
-
-  it('a pending thread whose answer he never reacted to is not called back by the reminder', () => {
+  it('the cleanup reminder never calls a pending thread back, and asks nothing of a quiet working one', () => {
     let f = fileMessage(emptyThreads('lead-1'), { text: 'build the Threads view', via: 'chat', at: at(0) }).file
     const id = f.threads[0].id
     f = updateThread(f, id, { title: 'Threads view', state: 'pending', reply: 'Handed to the Threads task' }, 'task:lead-1', at(1)).file
     f = setAnswers(f, new Map([[f.threads[0].messages[0].id, { text: 'Handed it to the Threads task.', at: at(2) }]])).file
     f = fileMessage(f, { text: 'and the phone?', via: 'chat', at: at(3) }).file
     expect(threadsTidyOf(f, Date.parse(at(4)))?.items.find((i) => i.id === id)).toBeUndefined()
+    const working = updateThread(f, id, { state: 'working', known: 'all' }, 'task:lead-1', at(5)).file
+    expect(threadsTidyOf(working, Date.parse(at(6)))?.items.find((i) => i.id === id)).toBeUndefined()
   })
 
-  it('quiet threads come after every other item, so they never crowd one out', () => {
-    let f = emptyThreads('lead-1')
-    for (let i = 0; i < 9; i++) {
-      f = fileMessage(f, { text: `ask ${i}`, via: 'chat', at: at(i) }).file
-      const t = f.threads[f.threads.length - 1]
-      f = setAnswers(f, new Map([[t.messages[0].id, { text: `answer ${i}`, at: at(i + 0.5) }]])).file
-    }
-    f = fileMessage(f, { text: 'ok', via: 'chat', at: at(20) }).file
-    for (const t of f.threads.slice(0, 9)) f = updateThread(f, t.id, { title: `T ${t.id}`, state: 'working', known: 'all' }, 'task:lead-1', at(21)).file
-    // One untitled thread, older than every quiet one by its last change.
-    const untitled = f.threads[9].id
-    const tidy = threadsTidyOf(f, Date.parse(at(40)))!
-    expect(tidy.items[0]).toMatchObject({ id: untitled, why: 'untitled' })
-    expect(tidy.items.slice(1).every((i) => i.why === 'quiet')).toBe(true)
-  })
-
-  it('Reopen brings a pending thread back into his sight; a thread the node opens is never pending', () => {
+  it('Reopen puts it back in his sight; a thread the node opens is never out of it', () => {
     let f = fileMessage(emptyThreads('lead-1'), { text: 'build it', via: 'chat', at: at(0) }).file
     const id = f.threads[0].id
     f = updateThread(f, id, { state: 'pending' }, 'task:lead-1', at(1)).file
     f = updateThread(f, id, { close: 'acked' }, 'human', at(2)).file
-    expect(updateThread(f, id, { reopen: true }, 'human', at(3)).thread.state).toBe('working')
-    expect(() => openThread(f, { title: 'Mail', text: 'answer the organizer', from: 'mail', state: 'pending' }, 'task:lead-1', at(4))).toThrow(/never pending/)
+    expect(updateThread(f, id, { reopen: true }, 'human', at(3)).thread.state).toBe('answered')
+    for (const state of ['pending', 'working', 'new'] as const) {
+      expect(() => openThread(f, { title: 'Mail', text: 'answer the organizer', from: 'mail', state }, 'task:lead-1', at(4)), state).toThrow(/for him to see/)
+    }
   })
 })
 

@@ -144,9 +144,8 @@ the answers he has not seen, with news about a thread going into its summary, ne
 `threads-tidy` (Main and the leads only; every 3 messages, at session start and after a compaction,
 only when there is one): the open threads that need the node's decision now (he wrote after an
 answer in another thread: did he react to it? a stand-in title; a state still `new` though it was
-answered; a thread in `working` whose card holds nothing new for him), with the same rules, so the node takes
-what he knows off the card (`thread_update` `known`), keeps the summary latest first, sets `pending` what is only
-handed off or in progress, and closes what he reacted to as finished (2026-11-01, the user: "you should proactively clean the thread ...
+answered), with the same rules, so the node takes what he knows off the card (`thread_update` `known`), keeps the
+summary latest first, and closes what he reacted to as finished (2026-11-01, the user: "you should proactively clean the thread ...
 make sure this is a Walnut feature, not just your memory").
 
 After a compaction the CLI's SessionStart hook (`open_items`) states every hint

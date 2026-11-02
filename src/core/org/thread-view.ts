@@ -130,3 +130,16 @@ export function sharedAnswers(threads: ReadonlyArray<{ id: string; messages: rea
   for (const g of byReply.values()) if (g.threads.size > 1) for (const id of g.messages) out.add(id);
   return out;
 }
+
+/**
+ * Does his Threads view show this thread? Only when it has something for him: he must decide
+ * (needs), the result is in (answered), or an answer of the node's he has not reacted to is on it.
+ * A new thread, one he just wrote in (working) and one in progress are the node's move, out of his
+ * sight (2026-11-01, the user: "if i reply to a thread, it shoud go out of the thread immediately
+ * instead of just show working"); pending stays out even with an answer (the node judged it no news).
+ */
+export function shownToHim<M extends ViewMessage>(t: ViewThread<M> & { state: string }, shared: ReadonlySet<string> = NONE): boolean {
+  if (t.closed || t.state === 'pending') return false;
+  if (t.state === 'needs' || t.state === 'answered') return true;
+  return cardView(t, shared).unread.length > 0;
+}

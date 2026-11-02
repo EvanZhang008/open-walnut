@@ -4,7 +4,7 @@
  * first one to the ninth, so why still show the first to the eighth?").
  */
 import { describe, it, expect } from 'vitest'
-import { sharedAnswers, cardView, exchangesOf, unreactedAnswers, type ViewMessage, type ViewThread } from '../../../src/core/org/thread-view.js'
+import { sharedAnswers, shownToHim, cardView, exchangesOf, unreactedAnswers, type ViewMessage, type ViewThread } from '../../../src/core/org/thread-view.js'
 
 const at = (min: number, sec = 0) => new Date(Date.UTC(2026, 10, 1, 4, min, sec)).toISOString()
 const msg = (id: string, min: number, text: string, answer?: { min: number; text: string }): ViewMessage => ({
@@ -140,5 +140,35 @@ describe('a message whose reply was not found, between two the same reply covere
     expect(cardView(later).waiting.map((x) => x.messages[0].id)).toEqual(['tm-5'])
     const apart: ViewThread = { messages: [msg('tm-1', 20, 'a', { min: 21, text: 'A' }), msg('tm-2', 22, 'b'), msg('tm-3', 23, 'c', { min: 30, text: 'C' })] }
     expect(exchangesOf(apart).map((x) => x.messages.map((m) => m.id))).toEqual([['tm-1'], ['tm-2'], ['tm-3']])
+  })
+})
+
+describe('what his view shows', () => {
+  // 2026-11-01, the user: "if i reply to a thread, it shoud go out of the thread immediately
+  // instead of just show working".
+  const asked = msg('tm-1', 10, 'build it', { min: 11, text: 'Handed to the build task.' })
+  const th = (state: string, messages: ViewMessage[], extra: Partial<ViewThread> = {}) => ({ state, messages, ...extra })
+
+  it('needs and answered show; new, working and pending with nothing for him do not', () => {
+    expect(shownToHim(th('needs', [msg('tm-1', 10, 'x')]))).toBe(true)
+    expect(shownToHim(th('answered', [asked, msg('tm-2', 12, 'ok')]))).toBe(true)
+    expect(shownToHim(th('new', [msg('tm-1', 10, 'build it')]))).toBe(false)
+    expect(shownToHim(th('working', [asked, msg('tm-2', 12, 'and the phone?')]))).toBe(false)
+    expect(shownToHim(th('pending', [msg('tm-1', 10, 'x')]))).toBe(false)
+  })
+
+  it('an answer he has not reacted to shows a working thread, never a pending one; a closed one never shows', () => {
+    expect(shownToHim(th('working', [asked]))).toBe(true)
+    expect(shownToHim(th('pending', [asked]))).toBe(false)
+    expect(shownToHim(th('answered', [asked], { closed: { by: 'human' } }))).toBe(false)
+  })
+
+  it('he replies under the answer: the thread is working and leaves his view at once', () => {
+    expect(shownToHim(th('working', [asked, msg('tm-2', 12, 'also the phone')]))).toBe(false)
+  })
+
+  it('a reply shared with another thread does not show it', () => {
+    const t = th('working', [asked])
+    expect(shownToHim(t, new Set(['tm-1']))).toBe(false)
   })
 })
