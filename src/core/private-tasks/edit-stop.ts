@@ -1,9 +1,9 @@
 /**
  * A push of a synced task that carries one of the user's private words, or text the fast model
  * judges private or cannot judge, is stopped (sync-guard.ts refused that push): the task turns local in the same project, with all of its
- * content, its outside copy keeps the text it had before the edit, and the user decides in one
- * letter (sync-gate.ts tellKeptLocal) whether to keep it local, archive or neutralize the copy,
- * or send it anyway.
+ * content, and its outside copy keeps the text it had before the edit. Nothing asks the user: the
+ * safe choice is made, Main hears it in the day's line (kept-digest.ts), and the task's Sync row
+ * archives or neutralizes the copy, or sends the task anyway.
  */
 import { log } from '../../logging/index.js';
 import { flushKeptLocalLetters, tellKeptLocal } from './sync-gate.js';

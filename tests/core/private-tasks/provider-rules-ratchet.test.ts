@@ -5,8 +5,8 @@
  * the hard rules or the AI rule on a task's way out must read that provider's rules too, or be
  * listed below with why it need not.
  *
- * Also: the decision letter is sent from one place only (sync-gate.ts sendKeptLetter, behind the
- * batch), so no new path mails one letter per task again.
+ * Also: no private-tasks path writes a letter to the user (2026-11-02: decision letters about tasks
+ * already kept local, so nothing waited on him; kept-digest.ts tells Main one line a day instead).
  */
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
@@ -60,12 +60,11 @@ describe('privacy checks read the rules of the provider', () => {
     for (const rel of Object.keys(EXEMPT)) expect(fs.existsSync(path.join(ROOT, rel)), rel).toBe(true);
   });
 
-  it('the kept-local letter is sent from one place only', () => {
-    const senders = files.filter((f) => f.rel.startsWith('src/core/private-tasks/') && /\bsendLetter\(/.test(f.text)).map((f) => f.rel);
-    expect(senders).toEqual(['src/core/private-tasks/sync-gate.ts']);
-    const gate = files.find((f) => f.rel === 'src/core/private-tasks/sync-gate.ts')!.text;
-    expect(gate.match(/\bsendLetter\(/g)?.length).toBe(1);
-    expect(gate).toMatch(/async function sendKeptLetter\([\s\S]*?\bsendLetter\(/);
+  it('no private-tasks path sends the user a letter: a kept task is already safe', () => {
+    const senders = files.filter((f) => f.rel.startsWith('src/core/private-tasks/') && /\b(sendLetter|human_inbox_send)\b/.test(f.text)).map((f) => f.rel);
+    expect(senders).toEqual([]);
+    const digest = files.find((f) => f.rel === 'src/core/private-tasks/kept-digest.ts')!.text;
+    expect(digest).toMatch(/DAY_MS = 24 \* 3600_000/);
   });
 });
 

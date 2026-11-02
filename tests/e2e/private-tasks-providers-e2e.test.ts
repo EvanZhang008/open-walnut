@@ -12,9 +12,11 @@
  *   - each provider's hard rules and AI rule are its own, and the AI rule reaches the judge;
  *   - Settings lists each provider with its rules and tries a title against them;
  *   - the user's setting wins over the manifest, both ways, and turning a check off gives back
- *     every task Walnut kept out (linked to its old copy, no second item), settles its letter,
- *     and leaves the user's own Local choice alone;
- *   - several tasks kept out in one burst are ONE letter, and its answer is for each of them.
+ *     every task Walnut kept out (linked to its old copy, no second item), settles a letter an
+ *     earlier version sent for it, and leaves the user's own Local choice alone;
+ *   - a task kept out asks the user nothing (2026-11-02: three decision letters in four hours,
+ *     all unread, though the safe choice was applied): Main hears the day's kept tasks in one line;
+ *   - a batch letter an earlier version sent still answers for each of its tasks.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'node:fs/promises';
@@ -24,9 +26,21 @@ vi.mock('../../src/constants.js', () => createMockConstants('private-tasks-audie
 import { WALNUT_HOME } from '../../src/constants.js';
 import { startServer, stopServer } from '../../src/web/server.js';
 import { registry } from '../../src/core/integration-registry.js';
-import { addTask, ensureProject, getTask, settleBackgroundPushes } from '../../src/core/task-manager.js';
+import { addTask, ensureProject, getTask, setTaskSyncHold, settleBackgroundPushes } from '../../src/core/task-manager.js';
 import { getConfig, updateConfig } from '../../src/core/config-manager.js';
-import { getLetter, listLetters } from '../../src/core/human-inbox/store.js';
+import { getLetter, listLetters, sendLetter } from '../../src/core/human-inbox/store.js';
+import { pendingKeptForTest, resetKeptDigestForTest, tellKeptDigestNow } from '../../src/core/private-tasks/kept-digest.js';
+
+/** A decision letter as the version before 2026-11-02 sent one, for these kept tasks. */
+async function oldLetter(taskIds: string[]): Promise<string> {
+  const letter = await sendLetter({
+    subject: `${taskIds.length} tasks kept out of Team Tracker`, type: 'action_required', markdown: 'kept out',
+    actions: [{ id: 'keep-local', label: 'Keep all local' }, { id: 'sync', label: 'Sync all' }],
+    taskRefs: taskIds, sender: { sessionId: 'external', host: 'local' },
+  });
+  for (const id of taskIds) await setTaskSyncHold(id, (t) => t.sync_hold ? { ...t.sync_hold, letter_id: letter.id } : null);
+  return letter.id;
+}
 import { createSpySync, createMockPlugin } from '../core/plugin-test-utils.js';
 import { setPrivacyJudgeForTest } from '../../src/core/private-tasks/privacy-judge.js';
 import { settleSyncGates } from '../../src/core/private-tasks/sync-gate.js';
@@ -93,7 +107,10 @@ describe('the rules of each task provider', () => {
   it('resolves the setting, then the manifest, then checked; words, AI and its rule default', () => {
     expect(resolveSyncRules({}, 'x', undefined)).toMatchObject({ check: true, checkSet: false, checkDefault: true, words: [], ai: true, aiRule: DEFAULT_AI_RULE });
     expect(resolveSyncRules({}, 'x', 'self')).toMatchObject({ check: false, checkDefault: false });
-    expect(resolveSyncRules({ private_tasks: { providers: { x: { check: true } } } }, 'x', 'self')).toMatchObject({ check: true, checkSet: true });
+    // A service only the user reads, checked at their word: the hard rules apply, the default AI
+    // rule (written for a shared service) stays off until they turn it on.
+    expect(resolveSyncRules({ private_tasks: { providers: { x: { check: true } } } }, 'x', 'self')).toMatchObject({ check: true, checkSet: true, ai: false });
+    expect(resolveSyncRules({ private_tasks: { providers: { x: { check: true, ai: true } } } }, 'x', 'self').ai).toBe(true);
     expect(resolveSyncRules({ private_tasks: { providers: { x: { check: false } } } }, 'x', undefined).check).toBe(false);
     // The earlier per-service form still reads, and the shared list and switch are the defaults.
     expect(resolveSyncRules({ private_tasks: { audience: { x: 'self' } } }, 'x', undefined).check).toBe(false);
@@ -112,11 +129,11 @@ describe('the rules of each task provider', () => {
     expect(task.source).toBe(MINE);
     expect(task.sync_hold).toBeUndefined();
     expect(calls(mine)).toContain('Zephyr marigold budget');
-    const edit = await api(`/api/v1/tasks/${task.id}`, { method: 'PATCH', body: { title: 'Zephyr marigold budget for the clinic' } });
+    const edit = await api(`/api/v1/tasks/${task.id}`, { method: 'PATCH', body: { title: 'Zephyr marigold budget for the kites' } });
     expect(edit.status).toBeLessThan(300);
     await settle();
     expect((await getTask(task.id)).source).toBe(MINE);
-    expect(calls(mine)).toContain('Zephyr marigold budget for the clinic');
+    expect(calls(mine)).toContain('Zephyr marigold budget for the kites');
   });
 
   it('a provider that says nothing is checked: the same task stays local', async () => {
@@ -130,7 +147,7 @@ describe('the rules of each task provider', () => {
     const r = await api('/api/v1/private-tasks/providers');
     expect(r.status).toBe(200);
     const rows = r.json.providers as Array<Record<string, unknown>>;
-    expect(rows.find((s) => s.id === MINE)).toMatchObject({ name: 'My List', check: false, check_set: false, check_default: false, ai: true, ai_rule: DEFAULT_AI_RULE });
+    expect(rows.find((s) => s.id === MINE)).toMatchObject({ name: 'My List', check: false, check_set: false, check_default: false, ai: false, ai_rule: DEFAULT_AI_RULE });
     expect(rows.find((s) => s.id === TEAM)).toMatchObject({ name: 'Team Tracker', check: true, check_default: true, words: ['marigold'] });
     expect(rows.some((s) => s.id === 'local')).toBe(false);
     // The earlier list still answers for a window opened before.
@@ -165,28 +182,44 @@ describe('the rules of each task provider', () => {
     }
   });
 
-  it('several tasks kept out in one burst are one letter, and its answer is for each of them', async () => {
-    const a = await api('/api/v1/tasks', { body: { title: 'Zephyr clinic notes', project: 'Team' } });
-    const b = await api('/api/v1/tasks', { body: { title: 'Marigold savings plan', project: 'Team' } });
+  it('tasks kept out ask the user nothing: no letter, and Main hears the day\'s kept tasks in one line', async () => {
+    const before = (await listLetters()).letters.length
+    const a = await api('/api/v1/tasks', { body: { title: 'Zephyr kite notes', project: 'Team' } });
+    const b = await api('/api/v1/tasks', { body: { title: 'Marigold puzzle plan', project: 'Team' } });
     await settle();
-    const la = (await getTask(a.json.task.id)).sync_hold?.letter_id;
-    const lb = (await getTask(b.json.task.id)).sync_hold?.letter_id;
-    expect(la).toBeTruthy();
-    expect(lb).toBe(la);
-    const letter = await getLetter(la!);
-    expect(letter.subject).toBe('2 tasks kept out of Team Tracker');
-    expect(letter.taskRefs).toEqual(expect.arrayContaining([a.json.task.id, b.json.task.id]));
+    for (const id of [a.json.task.id, b.json.task.id]) {
+      expect(await getTask(id)).toMatchObject({ source: 'local', sync_hold: { state: 'private' } });
+      expect((await getTask(id)).sync_hold?.letter_id).toBeUndefined();
+    }
+    expect((await listLetters()).letters.length).toBe(before);
+    expect(await pendingKeptForTest()).toEqual(expect.arrayContaining([a.json.task.id, b.json.task.id]));
+    // Main takes the line here (the fixture has no Main session).
+    const told: string[] = [];
+    resetKeptDigestForTest(async (l) => { told.push(l); return true; });
+    const line = await tellKeptDigestNow();
+    expect(told).toEqual([line]);
+    expect(line).toMatch(/Walnut kept \d+ out of Team Tracker/);
+    expect(line).toContain(`"Zephyr kite notes" (${a.json.task.id})`);
+    expect(line).toContain('Nothing waits on the user');
+    expect(await pendingKeptForTest()).toEqual([]);
+  });
+
+  it('a batch letter an earlier version sent answers for each of its tasks', async () => {
+    const a = await api('/api/v1/tasks', { body: { title: 'Zephyr kite notes', project: 'Team' } });
+    const b = await api('/api/v1/tasks', { body: { title: 'Marigold puzzle plan', project: 'Team' } });
+    await settle();
+    const la = await oldLetter([a.json.task.id, b.json.task.id]);
     expect((await api(`/api/v1/human-inbox/${la}/answer`, { body: { actionId: 'keep-local' } })).status).toBeLessThan(300);
     for (const id of [a.json.task.id, b.json.task.id]) {
       await vi.waitFor(async () => expect((await getTask(id)).sync_hold).toMatchObject({ state: 'chosen', by: 'user' }), { timeout: 5000 });
     }
   });
 
-  it('deciding one task of a batch letter from its menu leaves the letter open for the others', async () => {
-    const a = await api('/api/v1/tasks', { body: { title: 'Zephyr dentist visit', project: 'Team' } });
-    const b = await api('/api/v1/tasks', { body: { title: 'Zephyr school forms', project: 'Team' } });
+  it('deciding one task of an earlier batch letter from its menu leaves the letter open for the others', async () => {
+    const a = await api('/api/v1/tasks', { body: { title: 'Zephyr kite repair', project: 'Team' } });
+    const b = await api('/api/v1/tasks', { body: { title: 'Zephyr glider forms', project: 'Team' } });
     await settle();
-    const letter = (await getTask(a.json.task.id)).sync_hold!.letter_id!;
+    const letter = await oldLetter([a.json.task.id, b.json.task.id]);
     expect((await getTask(b.json.task.id)).sync_hold!.letter_id).toBe(letter);
     expect((await api(`/api/v1/tasks/${a.json.task.id}/make-local`, { body: { outside: 'keep' } })).status).toBe(200);
     expect((await getLetter(letter)).archived).toBe(false);
@@ -196,7 +229,7 @@ describe('the rules of each task provider', () => {
   });
 
   it('the setting wins over the manifest, and turning the check off gives back what was kept out, linked to its old copy', async () => {
-    await setProvider(MINE, { check: true });
+    await setProvider(MINE, { check: true, ai: true });
     // Synced first, then an edit makes it private: it is stopped, its copy kept.
     const s = await api('/api/v1/tasks', { body: { title: 'Plan the move', project: 'Mine' } });
     await settle();
@@ -215,8 +248,8 @@ describe('the rules of each task provider', () => {
     await settle();
     expect((await getTask(child.json.task.id)).source).toBe('local');
     expect(await getTask(born.json.task.id)).toMatchObject({ source: 'local', sync_hold: { state: 'private' } });
-    const letters = [(await getTask(synced.id)).sync_hold!.letter_id!, (await getTask(born.json.task.id)).sync_hold!.letter_id!];
-    expect(letters.every(Boolean)).toBe(true);
+    // Walnut sends no letter now; one an earlier version sent is settled by the release.
+    const letters = [await oldLetter([born.json.task.id])];
     const creates = mine.createTask.mock.calls.length;
 
     await setProvider(MINE, { check: false });

@@ -1,7 +1,7 @@
 /**
  * Private tasks against a real server and a fake sync plugin (src/core/private-tasks/): the HTTP
  * create paths (v1, the web route, the task_create op) are born local and judged; a task the
- * check keeps local sends nothing and its letter's "Sync" answer sends it; the task menu routes
+ * check keeps local sends nothing and asks the user nothing, and its menu's Sync sends it; the task menu routes
  * make a synced task local (its copy kept, archived or neutralized) and send it back; a session
  * cannot send a kept task out without the user's words; and the Settings test route.
  */
@@ -84,20 +84,15 @@ describe('private tasks over HTTP', () => {
     expect(read.json.task.sync_hold.reason).toContain('a private matter');
   });
 
-  it('the letter\'s Sync answer by the user sends it; Keep local keeps it', async () => {
-    // One at a time: tasks kept in one burst share one letter (private-tasks-audience-e2e).
+  it('a kept task asks the user nothing: no letter, and the user\'s Sync in its menu sends it', async () => {
     const a = await api('/api/v1/tasks', { body: { title: 'Zephyr onboarding plan', project: 'Work' } });
     await settle();
-    const b = await api('/api/v1/tasks', { body: { title: 'Zephyr marigold notes', project: 'Work' } });
-    await settle();
-    const la = (await getTask(a.json.task.id)).sync_hold!.letter_id!;
-    const lb = (await getTask(b.json.task.id)).sync_hold!.letter_id!;
-    expect(la).toBeTruthy();
-    expect((await api(`/api/v1/human-inbox/${la}/answer`, { body: { actionId: 'sync' } })).status).toBeLessThan(300);
-    expect((await api(`/api/v1/human-inbox/${lb}/answer`, { body: { actionId: 'keep-local' } })).status).toBeLessThan(300);
+    expect(await getTask(a.json.task.id)).toMatchObject({ source: 'local', sync_hold: { state: 'private' } });
+    expect((await getTask(a.json.task.id)).sync_hold?.letter_id).toBeUndefined();
+    const inbox = await api('/api/v1/human-inbox?limit=100');
+    expect(JSON.stringify(inbox.json)).not.toContain('Zephyr onboarding plan');
+    expect((await api(`/api/v1/tasks/${a.json.task.id}/sync-to-project`, { body: {} })).status).toBe(200);
     await vi.waitFor(async () => expect((await getTask(a.json.task.id)).source).toBe(PLUGIN), { timeout: 5000 });
-    await vi.waitFor(async () => expect((await getTask(b.json.task.id)).sync_hold).toMatchObject({ state: 'chosen', by: 'user' }), { timeout: 5000 });
-    expect((await getTask(b.json.task.id)).source).toBe('local');
   });
 
   it('make local (archive) unlinks and closes the copy; a session needs the user\'s words to send it back', async () => {

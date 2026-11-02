@@ -24,7 +24,8 @@ import { resumeSyncGates, settleSyncGates, onKeptLocalAnswer, LETTER_ACTIONS } f
 import { settleEditStops } from '../../../src/core/private-tasks/edit-stop.js';
 import { isPrivateTaskBlocked } from '../../../src/core/private-tasks/sync-guard.js';
 import { checkPushText, flushApprovals, resetApprovalsForTest, seedOutsideBaseline, settlePushChecks } from '../../../src/core/private-tasks/push-check.js';
-import { listLetters, answerLetter } from '../../../src/core/human-inbox/store.js';
+import { listLetters, answerLetter, sendLetter } from '../../../src/core/human-inbox/store.js';
+import { pendingKeptForTest, resetKeptDigestForTest, tellKeptDigestNow } from '../../../src/core/private-tasks/kept-digest.js';
 import { getRemoteLink, recordRemoteLink } from '../../../src/core/task-remote-links.js';
 import type { Task } from '../../../src/core/types.js';
 
@@ -41,6 +42,17 @@ function sentTexts(sync: ReturnType<typeof createSpySync>): string {
   return out.join('\n');
 }
 
+/** A decision letter as the version before 2026-11-02 sent one for a kept task: its answer still works. */
+async function oldLetter(taskId: string): Promise<string> {
+  const letter = await sendLetter({
+    subject: 'kept out', type: 'action_required', markdown: 'kept out',
+    actions: [{ id: LETTER_ACTIONS.keep, label: 'Keep local' }, { id: LETTER_ACTIONS.sync, label: 'Sync' }],
+    taskRefs: [taskId], sender: { sessionId: 'external', host: 'local' },
+  });
+  await setTaskSyncHold(taskId, (t) => t.sync_hold ? { ...t.sync_hold, letter_id: letter.id } : null);
+  return letter.id;
+}
+
 describe('private tasks against a sync plugin', () => {
   let sync: ReturnType<typeof createSpySync>;
   let judged: PrivacyInput[];
@@ -50,6 +62,7 @@ describe('private tasks against a sync plugin', () => {
     await fs.rm(WALNUT_HOME, { recursive: true, force: true });
     _resetForTesting();
     resetApprovalsForTest();
+    resetKeptDigestForTest(async () => true);
     judged = [];
     verdict = async () => ({ private: false, reason: 'team work' });
     setPrivacyJudgeForTest(async (input) => { judged.push(input); return verdict(input); });
@@ -92,7 +105,7 @@ describe('private tasks against a sync plugin', () => {
     expect(judged.map((j) => j.title)).toEqual(['Fix the login retry']);
   });
 
-  it('a task the model judges private stays local, the user gets a letter, nothing is sent', async () => {
+  it('a task the model judges private stays local, nothing is sent, and no letter asks the user: Main hears it in the day\'s line', async () => {
     verdict = async () => ({ private: true, reason: 'a private matter' });
     const { task } = await addTask({ title: 'Notes on Zephyr for the review', project: PROJECT, description: 'Zephyr details' });
     await settleSyncGates();
@@ -101,11 +114,14 @@ describe('private tasks against a sync plugin', () => {
     expect(after.sync_hold).toMatchObject({ state: 'private', by: 'model', target: PLUGIN });
     expect(after.sync_hold?.reason).toContain('a private matter');
     expect(sentTexts(sync)).not.toContain('Zephyr');
-    const { letters } = await listLetters();
-    expect(letters).toHaveLength(1);
-    expect(letters[0].type).toBe('action_required');
-    expect(letters[0].actions?.map((a) => a.id)).toEqual([LETTER_ACTIONS.keep, LETTER_ACTIONS.sync]);
-    expect(after.sync_hold?.letter_id).toBe(letters[0].id);
+    expect((await listLetters()).letters).toHaveLength(0);
+    expect(after.sync_hold?.letter_id).toBeUndefined();
+    expect(await pendingKeptForTest()).toEqual([task.id]);
+    const line = await tellKeptDigestNow();
+    expect(line).toContain(`"Notes on Zephyr for the review" (${task.id})`);
+    expect(line).toContain('Nothing waits on the user');
+    // Told once: the next call has nothing to say.
+    expect(await tellKeptDigestNow()).toBeNull();
   });
 
   it('when the model cannot answer the task stays local and the user is told: no push goes out unjudged', async () => {
@@ -117,7 +133,8 @@ describe('private tasks against a sync plugin', () => {
     expect(after.sync_hold).toMatchObject({ state: 'unjudged' });
     expect(after.sync_hold?.reason).toContain('did not answer');
     expect(sync.createTask).not.toHaveBeenCalled();
-    expect((await listLetters()).letters).toHaveLength(1);
+    expect((await listLetters()).letters).toHaveLength(0);
+    expect(await pendingKeptForTest()).toEqual([task.id]);
   });
 
   it('a private word keeps it local without asking the model', async () => {
@@ -187,8 +204,8 @@ describe('private tasks against a sync plugin', () => {
     expect(sentTexts(sync)).not.toContain('my marigold');
     // Its remote id is released: no pull imports the outside copy again.
     expect(getRemoteLink(PLUGIN, 'r-1')?.state).toBe('released');
-    const { letters } = await listLetters();
-    expect(letters[0].actions?.map((a) => a.id)).toEqual([LETTER_ACTIONS.keep, LETTER_ACTIONS.sync, LETTER_ACTIONS.archive, LETTER_ACTIONS.neutralize]);
+    expect((await listLetters()).letters).toHaveLength(0);
+    expect(await pendingKeptForTest()).toEqual([task.id]);
   });
 
   it('the guard refuses any plugin call carrying a local or held task', async () => {
@@ -257,11 +274,11 @@ describe('private tasks against a sync plugin', () => {
     expect((await getTask(task.id)).source).toBe(PLUGIN);
   });
 
-  it('the user\'s "Sync to" on the letter sends it; a task answering in their place does not', async () => {
+  it('the user\'s "Sync to" on a letter an earlier version sent sends it; a task answering in their place does not', async () => {
     verdict = async () => ({ private: true, reason: 'a private matter' });
     const { task } = await addTask({ title: 'Zephyr draft', project: PROJECT });
     await settleSyncGates();
-    const letterId = (await getTask(task.id)).sync_hold!.letter_id!;
+    const letterId = await oldLetter(task.id);
     await answerLetter(letterId, { actionId: LETTER_ACTIONS.sync, by: { sessionId: 's-1', taskId: 't-1' } });
     await onKeptLocalAnswer({ letterId, actionId: LETTER_ACTIONS.sync });
     expect((await getTask(task.id)).source).toBe('local');
@@ -306,8 +323,8 @@ describe('private tasks against a sync plugin', () => {
       expect(after).toMatchObject({ source: 'local', sync_hold: { state: 'private', by: 'model', outside: { state: 'kept' } } });
       expect(after.description).toContain('zephyr');
       expect(sentTexts(sync)).not.toContain('zephyr');
-      const { letters } = await listLetters();
-      expect(letters.at(-1)!.subject).toMatch(/stopped syncing/);
+      expect((await listLetters()).letters).toHaveLength(0);
+      expect(await pendingKeptForTest()).toContain(t.id);
     });
 
     it('a work edit is judged once and goes out', async () => {
@@ -328,15 +345,14 @@ describe('private tasks against a sync plugin', () => {
       await settleEditStops();
       expect(await getTask(t.id)).toMatchObject({ source: 'local', sync_hold: { state: 'unjudged', by: 'model' } });
       expect(sentTexts(sync)).not.toContain('part two');
-      const letterId = (await getTask(t.id)).sync_hold!.letter_id!;
-      const { getLetter } = await import('../../../src/core/human-inbox/store.js');
-      expect(JSON.stringify(await getLetter(letterId))).toMatch(/could not check a change/);
+      expect((await listLetters()).letters).toHaveLength(0);
+      expect(await pendingKeptForTest()).toContain(t.id);
     });
 
     it('the user\'s Sync on a task kept by a word accepts that word for it; a later push is not stopped by it', async () => {
       const { task } = await addTask({ title: 'Marigold tracker dashboard', project: PROJECT });
       await settleSyncGates();
-      const letterId = (await getTask(task.id)).sync_hold!.letter_id!;
+      const letterId = await oldLetter(task.id);
       await answerLetter(letterId, { actionId: LETTER_ACTIONS.sync });
       await onKeptLocalAnswer({ letterId, actionId: LETTER_ACTIONS.sync });
       await settleEditStops();

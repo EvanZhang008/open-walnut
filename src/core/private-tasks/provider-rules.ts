@@ -23,7 +23,8 @@ export const DEFAULT_AI_RULE = [
   'health or medical matters; immigration or visa; personal money, taxes or banking; family or personal',
   'relationships; looking for another job, interviews elsewhere or resigning; a personal side project',
   'or hobby unrelated to the team\'s work. Ordinary team work passes: code, bugs, reviews, designs,',
-  'operations, meetings about the product, helping teammates with their work.',
+  'operations, meetings about the product, helping teammates with their work, and building or describing',
+  'a privacy feature or a filter like this one, even when it names these topics.',
 ].join(' ');
 
 /** The longest AI rule the judge reads (the rest is cut). */
@@ -52,7 +53,11 @@ export function resolveSyncRules(
   const legacy = cfg?.audience?.[provider];
   const set = typeof own.check === 'boolean' ? own.check : legacy === 'self' ? false : legacy === 'shared' ? true : undefined;
   const words = Array.isArray(own.words) ? own.words : cfg?.words ?? [];
-  const ai = typeof own.ai === 'boolean' ? own.ai : cfg?.model_check !== false;
+  // Walnut's default AI rule is written for a service others read (it keeps out the user's own
+  // matters, a side project included): for one only the user reads it would fail their own work
+  // (2026-11-02: every Walnut task was pulled out of the user's personal list once its check was
+  // on), so there it starts off; the user can still turn it on.
+  const ai = typeof own.ai === 'boolean' ? own.ai : cfg?.model_check !== false && checkDefault;
   const aiRule = typeof own.ai_rule === 'string' && own.ai_rule.trim() ? own.ai_rule.trim() : DEFAULT_AI_RULE;
   return { provider, check: set ?? checkDefault, checkSet: set !== undefined, checkDefault, words: words.filter((w) => typeof w === 'string'), ai, aiRule };
 }

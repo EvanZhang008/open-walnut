@@ -1151,17 +1151,19 @@ edit of the title, description, note or summary, the conversation log) is checke
 the user's private words (`config.private_tasks.words`) and the fast model
 (`config.private_tasks.model_check`, on by default; only the words when no model is set up). A
 new task bound for a service is born local and held `checking` until both pass; a private
-verdict, a matching word or a model with no answer keeps it local, and the user gets one decision
-letter (Keep local / Sync to the service, plus Archive there / Neutralize there for an outside
-copy) while Main hears one line. Several tasks kept out in one burst share ONE letter, and its
-answer is for each of them. The rules are per task provider (`config.private_tasks.providers[<plugin
+verdict, a matching word or a model with no answer keeps it local. That is the safe choice
+already made, so nothing asks the user: the task's Sync row (`POST /api/v1/tasks/:id/sync-to-project`)
+sends it whenever they want, and Main hears the day's kept tasks in one line riding its next message
+(at most once a day). A decision letter an earlier version sent still takes its answer (Keep local /
+Sync to the service, plus Archive there / Neutralize there), for each task it names. The rules are per task provider (`config.private_tasks.providers[<plugin
 id>]`, Settings > Task providers): `check` (default: the plugin manifest's `syncAudience`, off for
 `self`, a service only the user reads, on for `shared` or nothing said; off sends every task and
 only the user's own Local choice keeps one out), hard rules `words` (default: the shared
 `private_tasks.words`), and the AI rule `ai` / `ai_rule` (the fast model reads the task against the
 rule in the user's words and answers pass or fail with a reason; default on, with Walnut's default
 rule). Turning a provider's check off gives back every task Walnut kept out of it (linked to its
-old copy) and settles its letter.
+old copy) and settles any letter an earlier version sent for it. The judge reads what a task is
+about, not the words it mentions: work on a privacy feature or a filter passes.
 
 - `GET /api/v1/private-tasks/providers` → `{ "providers": [{ "id", "name", "check", "check_set",
   "check_default", "words", "ai", "ai_rule", "ai_rule_default", "icon_url"? }] }`: every loaded
