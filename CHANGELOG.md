@@ -6,6 +6,96 @@ breaking changes).
 
 ## [Unreleased]
 
+## [0.6.23] - 2026-11-02
+
+### Added
+
+- One cost chart with a Break down by switch, every breakdown per day
+- The @ picker searches every source in All, and each reference tells the model what it is
+- One link to every host; features ask link(host) instead of building an SSH target
+- Every host says what it can do, and a task asks for a host by it
+- A task named beside its written title reads its name once
+- A task named beside its written title reads its name once
+- While the user is away from Main's or a lead's chat, what needs him goes to his inbox in one thread; a report on request
+- The Task rail beside the chat, every ask answered in its row
+- Every hint reads in plain words, visible by default, never raw on any screen
+- Ask here cards show the whole thread with their own scroll, and a vertical bar folds the pane
+- A fleet overview of every host, for the user and for agents
+- Every task a chat names reads as its name and opens the task
+- Every task a chat names reads as its name, with its live status
+- A named host never takes another machine's folder; a move clears what it carried from a shared checkout; placement weights
+- Plugin jobs run under the daemon of the machine the user picks
+- Keep Home and Org layout on disk, lock Org side panels, never reopen an overlay on load
+- A Needs you ask comes in a one-click shape: yes or no, a choice, or text
+- Each task writes what it waits on next; its lead, VP, Main or a person may change it
+- @ sources: plugin-declared picker sources with tabs, Notes and Mail built in, source refs as reference cards
+- One place decides a task's user state; snooze is first class; one set of names
+- The home task panel opens Flat, its status sections in two-line rows
+- Move a task to another host in one step, and place first starts by load
+- The Brief is the AI's letter alone, in three sections; the Task view holds the asks
+- A session whose working folder is gone continues in its task's directory
+
+### Fixed
+
+- Every take marker names the rows its line carries, and the fold spec reports its takes
+- A fold line counts its messages and names no one
+- The replica config copy names the capability tags, and an unknown capability reads by name
+- A binary matrix row whose artifact download fails downloads once more
+- Three regressions the browser and unit suites caught
+- The continue-in-new-folder session action is mapped in the launch parity table
+- A reply to the user in the wrong language is named on the next message, and every line he saw is judged
+- A lead's team note comes at most hourly and carries no worker progress
+- Fleet host cards sit in their Settings group as rows do, not as a card inside a card
+- A newer push cancels only a pull request's run, so main gets a finished CI verdict again
+- The fleet view asks server-role who it is, and its twin test keeps the exec guard on PATH
+- The iOS job skips only the timed methods of TasksDerivedPerfTests
+- History cache sees a transcript that grew under the same mtime
+- The iOS job leaves wall-clock perf gates and fixture-server UI classes to the Mac
+- The @ picker draws its row icons with the app's icons, not emoji
+- The iOS job logs its failed tests instead of uploading its result bundle
+- Opening a question's card moves the timeline once, and a grown card reveals itself after its glide
+- The PDF page count shows the page a link jumped to
+- A task row click hands on the task as it is now
+- A turn that folds never moves a reader scrolled up into it
+- Buffered reply text lands before the next event, in its own turn
+- A page of older turns re-renders only its new rows
+- A test run's preference writes stay in its own copy, never the user's files
+- The tail window keeps raw bytes, a budget, and only for the sweep; a missing transcript is looked for once a minute
+- The tail window of a big transcript is kept and grown by what was appended
+- An opened send lists every task it reached, each a link to the task
+- A transcript is stat-ed where it is, so a symlinked cwd no longer re-reads the whole file each minute
+- A step made while the link is down shows on its return, and only an install keeps going without it
+- The host's read copy goes gzipped, a tenth of the bytes on the shared SSH link
+- A host server upgrade reads as the upload it is, and sends its build a few chunks at a time
+- Home never draws nothing: with nothing else open, the task panel shows
+- Tools call refuses a word after its arguments instead of dropping it
+- GET /hosts/load is answered again: the move router mounts before the fleet view's /hosts/:host
+- Fleet cards say phases in words, count short spans in minutes, and give reboot advice that works
+- A send the server named never hides in "Ran a command" on the phone, and each name on a fold line keeps its own word
+- The home panel's status sections read the shared user status, snooze included
+- The jobs status read answers 200 where a plugin has no jobs
+- A connected phone previews an HTML file whole, frames included
+- A call still running folds with the steps before it, and the phone reads a send's tasks from the transcript
+- Published installs patch codex-acp too; a restore load that does not answer fails the start
+- A Codex session survives a Stop and a failed reload, and a fast send is never sent twice
+- A sent message sits where Claude Code took it, on every chat surface
+- The chat under the Task or Brief panel starts below its own header
+- A move never removes what the target held, holds messages instead of waiting, and shows a refusal
+- A snoozed ask reads its task's own start date; a sub-item that changes section is its own item
+- A send delivered on its target's own host names its task, and a title never reads as the line's separator
+- Refuse a walnut call the shell would cut a "$" amount from
+- One fold rule: a failed call and the runtime's lines fold with the steps around them
+- A read whose link dropped under it goes to the Mac once more
+- A handed-on answer goes straight to the original asker; the reply language rides every org turn
+- An instruction change is never longer than its block, and lines past USER.md's budget are never told as removed
+- A trigger on the user's own ask never reads as an outside watch
+- A task parks as Waiting only for a wait outside Walnut and the user
+- The session menu gets back the rows its regroup dropped
+- The real-CLI startup failure check runs in the live tier
+- A host's SSH master says why it ended
+- The quick tier is green on a busy Mac again, each cause fixed as a class
+- The Mac app's DMG is sized with room and its create is retried
+
 ## [0.6.22] - 2026-11-01
 
 ### Added
