@@ -33,6 +33,7 @@ export const UNCOMPARED_TASK_FIELDS: Readonly<Record<string, string>> = {
   needs_recheck: 'not drawn', letter_recheck: 'not drawn', recheck_watch: 'not drawn', agent_memory: 'read on its own panel',
   cwd_missing: 'not drawn', watch: 'not drawn (the server keeps who hears a task)',
   last_words: 'drawn through user_status (its ask words)',
+  needs_marked_at: 'drawn through user_status (a person\'s own Needs you)',
 };
 
 export function tasksShallowEqual(a: Task, b: Task): boolean {

@@ -61,7 +61,9 @@ describe('fullscreen split compositor cost', () => {
     expect(body).not.toMatch(/transform/);
   });
 
-  it('consumers that override margin keep the auto centering', () => {
-    expect(ruleBody('.wf-card.open-walnut-fullscreen {')).toContain('margin: 0 auto');
+  // Full screen fills the page area edge to edge (fullscreen-tab.css, 2026-11-02): the panel's
+  // margin is 0 there, so a consumer that sets its own margin pulls it off the edges.
+  it('consumers set no margin of their own', () => {
+    expect(ruleBody('.wf-card.open-walnut-fullscreen {')).not.toMatch(/margin/);
   });
 });
