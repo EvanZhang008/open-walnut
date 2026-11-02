@@ -155,9 +155,12 @@ async function listScroller(page: Page): Promise<string> {
 test.describe('the task panel mount', () => {
   test('C26: Enter on the last row x focuses Undo, then the selected section tab once the undo row folds; Enter there changes nothing', async ({ page }) => {
     await page.addInitScript((k) => localStorage.setItem(k, 'true'), TAB_BAR_KEY)
-    await bpSetup(page, { hosts: [connected('devbox', 'Dev box'), failed('netbox', 'Net box', 'unreachable')] })
+    // allTasks: the fixture's own task rows are on the list, so the count below is not of nothing.
+    await bpSetup(page, { hosts: [connected('devbox', 'Dev box'), failed('netbox', 'Net box', 'unreachable')], allTasks: true })
     await expectTasksCard(page, ['netbox'])
     await expect(page.locator('.todo-section-tabs-list [role="tab"][aria-selected="true"]')).toHaveCount(1)
+    // The card can land before the task list does (2026-11-02 CI: 0 rows read, 7 after): count them once they are there.
+    await expect(page.locator('.todo-panel [data-task-id]').first()).toBeAttached({ timeout: 20_000 })
     const tasksBefore = await page.locator('.todo-panel [data-task-id]').count()
     await banner(page).getByRole('button', { name: 'Dismiss Net box' }).focus()
     await page.keyboard.press('Enter')
@@ -232,7 +235,8 @@ test.describe('the task panel mount holds the list still', () => {
   })
 
   test('C38: a press and a 40px move on the card never starts a task drag and moves no task', async ({ page }) => {
-    await bpSetup(page)
+    // allTasks: the fixture's own task rows are on the list, so the order below is not of nothing.
+    await bpSetup(page, { allTasks: true })
     await expectTasksCard(page)
     await page.evaluate(() => {
       const w = window as unknown as { __bpDrag: boolean }
@@ -242,6 +246,8 @@ test.describe('the task panel mount holds the list still', () => {
         .observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] })
     })
     const order = () => page.locator('.todo-panel [data-task-id]').evaluateAll((els) => els.map((e) => e.getAttribute('data-task-id')))
+    // The card can land before the task list does: read the order once the rows are there.
+    await expect(page.locator('.todo-panel [data-task-id]').first()).toBeAttached({ timeout: 20_000 })
     const before = await order()
     const text = banner(page).locator('li.hpb-row[data-host] .hpb-headline, li.hpb-row[data-host]').first()
     const box = (await text.boundingBox())!

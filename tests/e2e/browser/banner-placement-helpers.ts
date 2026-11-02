@@ -20,7 +20,7 @@
  * its configured ones.
  * No tests in this file (Playwright refuses a test() call from an imported module).
  */
-import { expect, type Locator, type Page } from '@playwright/test'
+import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test'
 import {
   CHAT_VISIBLE_KEY, anyBanner, banner, connected, expandSystemAttention, failed, outdated, setup, signedOut, type HS, type Hosts, type LocalState,
 } from './host-problems-helpers'
@@ -176,6 +176,16 @@ export async function seedFeed(page: Page, feed: Array<Record<string, unknown>>)
     ? route.fulfill({ json: { feed, unreadCount: feed.filter((f) => !f.read).length } })
     : route.fallback())
   await page.route('**/api/notifications/mark-read', (route) => route.fulfill({ json: { unreadCount: 0 } }))
+}
+
+/**
+ * End the user's Quiet on the fixture server. Quiet is server state, so every later spec on
+ * that server reads it (no dot, a "Quiet" bell name). Call it from test.afterEach: a hook runs
+ * after a failure or a timeout too, where a finally inside the test may wait on a closed page.
+ */
+export async function endServerQuiet(request: APIRequestContext): Promise<void> {
+  const res = await request.put('/api/quiet', { data: { on: false } })
+  expect(res.ok(), `end quiet: ${res.status()}`).toBe(true)
 }
 
 export interface BpOptions {

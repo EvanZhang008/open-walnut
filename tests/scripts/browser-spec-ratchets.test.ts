@@ -1054,3 +1054,126 @@ describe('a spec that sends a decision letter as a session', () => {
     expect(offenders([helper, { file: 'y.spec.ts', text: viaHelper }])).toEqual(['y.spec.ts'])
   })
 })
+
+/** A file's test bodies, each from its `test(` to the next (nested in a describe or not). */
+const testBodies = (text: string): string[] => text.split(/\n(?=[ \t]*test\()/).slice(1)
+const titleOf = (body: string): string => body.trim().split('\n')[0]!.slice(0, 90)
+
+describe('a spec that turns Quiet on', () => {
+  // Quiet is server state: on the shared fixture server every later spec reads it (no bell dot,
+  // a "Quiet" bell name). 2026-11-02 CI: banner-placement-bell's Quiet test failed, its finally
+  // waited on a closed panel until the timeout, and four specs after it failed on the Quiet it
+  // left. A hook runs after a timeout too: such a spec ends Quiet in test.afterEach.
+  const quietOn = (text: string): boolean => {
+    if (/getByTestId\('nfc-quiet-toggle'\)\.(?:click|tap)\(|\/api\/quiet['"`][^\n]*\bon: ?true/.test(text)) return true
+    const names = [...text.matchAll(/const (\w+) = \w+\.getByTestId\('nfc-quiet-toggle'\)/g)].map((m) => m[1]!)
+    return names.some((n) => new RegExp(`\\b${n}\\.(?:click|tap)\\(`).test(text))
+  }
+  const ENDS = /test\.afterEach\([^\n]*endServerQuiet\(/
+  const offenders = (files: Array<{ file: string; text: string }>): string[] =>
+    files.filter(({ file, text }) => file.endsWith('.spec.ts') && quietOn(text) && !ENDS.test(text)).map(({ file }) => file)
+
+  it('every one ends Quiet in an afterEach hook', () => {
+    expect(sources.filter(({ file, text }) => file.endsWith('.spec.ts') && quietOn(text)).map(({ file }) => file)).toContain('banner-placement-bell.spec.ts')
+    expect(offenders(sources)).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const spec = "  const toggle = page.getByTestId('nfc-quiet-toggle')\n  await toggle.click()\n  try {} finally { await toggle.click() }"
+    expect(offenders([{ file: 'x.spec.ts', text: spec }])).toEqual(['x.spec.ts'])
+    expect(offenders([{ file: 'x.spec.ts', text: `  test.afterEach(async ({ request }) => { await endServerQuiet(request) })\n${spec}` }])).toEqual([])
+    expect(offenders([{ file: 'x.spec.ts', text: "  await request.put('/api/quiet', { data: { on: true, minutes: 5 } })" }])).toEqual(['x.spec.ts'])
+    // Measuring the toggle turns nothing on.
+    expect(offenders([{ file: 'x.spec.ts', text: "  const quiet = page.getByTestId('nfc-quiet-toggle')\n  await quiet.boundingBox()" }])).toEqual([])
+  })
+})
+
+describe('a test that reads the Errors rail count', () => {
+  // The Errors badge counts the feed's error cards with the problem hosts, and the fixture
+  // server's feed holds every error an earlier spec on it left (2026-11-02 CI: BP-C58 read 6
+  // for its one host). A test that reads the count on a page serves that page its feed
+  // (bpSetup, or seedFeed for a page it loads itself).
+  const serves = (text: string, p: string): boolean => new RegExp(`\\b(?:bpSetup|seedFeed)\\(${p}\\b`).test(text)
+  const offendersOf = (text: string): string[] => {
+    // A beforeEach that serves `page` its feed covers every test's `page`.
+    const hooked = (text.match(/test\.beforeEach\([^\n]*/g) ?? []).some((line) => serves(line, 'page'))
+    return testBodies(text).flatMap((body) => {
+      const pages = new Set([...body.matchAll(/\berrorsBadge\((\w+)\)/g)].map((m) => m[1]!))
+      return [...pages].filter((p) => !(hooked && p === 'page') && !serves(body, p)).map((p) => `${titleOf(body)} (${p})`)
+    })
+  }
+
+  it('every one serves the page its feed', () => {
+    const readers = sources.filter(({ file, text }) => file.endsWith('.spec.ts') && /\berrorsBadge\(\w+\)/.test(text))
+    expect(readers.map(({ file }) => file)).toContain('banner-placement-bell.spec.ts')
+    expect(readers.flatMap(({ file, text }) => offendersOf(text).map((t) => `${file}: ${t}`))).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const spec = [
+      "  test('BP-C58: a host counts 1', async ({ page, browser }) => {",
+      '    await isolatePrefs(page)',
+      '    await loadApp(page)',
+      "    await expect(errorsBadge(page)).toHaveText('1')",
+      '  })',
+    ].join('\n')
+    expect(offendersOf(`x\n${spec}`)).toHaveLength(1)
+    expect(offendersOf(`x\n${spec.replace('isolatePrefs(page)', 'seedFeed(page, [])')}`)).toEqual([])
+    expect(offendersOf(`x\n${spec.replace('isolatePrefs(page)', 'bpSetup(page)')}`)).toEqual([])
+    expect(offendersOf(`test.beforeEach(async ({ page }) => { await seedFeed(page, []) })\n${spec}`)).toEqual([])
+    // A second page reads its own count: it needs its own feed.
+    expect(offendersOf(`x\n${spec.replace("expect(errorsBadge(page))", 'seedFeed(page, [])\n    await expect(errorsBadge(page2))')}`)).toHaveLength(1)
+  })
+})
+
+describe('a baseline of the task list read beside the attention card', () => {
+  // The card comes from routed client frames, the task list from the server, so the card can
+  // land first: a test that waited for the card and then read the rows as its "before" read
+  // none (2026-11-02 CI: banner-mount-behaviour C26 read 0 rows then 7, C38 an empty order).
+  // A test that keeps the rows (a count or an order) to compare later waits for a row first,
+  // which also fails a test whose list holds none (locally both read 0 rows: they compared nothing).
+  const ROWS = String.raw`\.todo-panel[^'"\n]*(?:\[data-task-id\]|\.todo-panel-item)[^'"\n]*`
+  const WAITS = new RegExp(String.raw`locator\(['"]${ROWS}['"]\)\.first\(\)\)\.(?:toBeVisible|toBeAttached)\(`)
+  const READ = new RegExp(String.raw`locator\(['"]${ROWS}['"]\)\.(?:count|evaluateAll)\(`)
+  /** The tests that keep the rows to compare later. */
+  const baselinesOf = (text: string): string[] => {
+    // A reader named in the file (`const order = () => page.locator(rows).evaluateAll(...)`).
+    const readers = text.split('\n').flatMap((line) => {
+      const m = /const (\w+) = (?:async )?\([^)]*\) =>/.exec(line)
+      return m && READ.test(line) ? [m[1]!] : []
+    })
+    const baseline = new RegExp(String.raw`const \w+ = await (?:(?:${readers.join('|') || '$^'})\(|[^\n]*${READ.source})`)
+    return testBodies(text).filter((body) => baseline.test(body))
+  }
+  const offendersOf = (text: string): string[] => baselinesOf(text).filter((body) => !WAITS.test(body)).map(titleOf)
+
+  it('every one waits for a row before it reads them', () => {
+    const specs = sources.filter(({ file }) => file.endsWith('.spec.ts'))
+    const members = specs.flatMap(({ file, text }) => baselinesOf(text).map(() => file))
+    expect(members).toContain('banner-mount-behaviour.spec.ts')
+    expect(members).toContain('banner-placement-keyboard.spec.ts')
+    expect(specs.flatMap(({ file, text }) => offendersOf(text).map((t) => `${file}: ${t}`))).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const count = [
+      "  test('C26: Enter changes nothing', async ({ page }) => {",
+      '    await expectTasksCard(page)',
+      "    const tasksBefore = await page.locator('.todo-panel [data-task-id]').count()",
+      '  })',
+    ].join('\n')
+    expect(offendersOf(`x\n${count}`)).toHaveLength(1)
+    const waited = count.replace('    const tasksBefore', "    await expect(page.locator('.todo-panel [data-task-id]').first()).toBeAttached({ timeout: 20_000 })\n    const tasksBefore")
+    expect(offendersOf(`x\n${waited}`)).toEqual([])
+    const order = [
+      "  test('C38: a drag moves no task', async ({ page }) => {",
+      "    const order = () => page.locator('.todo-panel [data-task-id]').evaluateAll((els) => els.map((e) => e.id))",
+      '    const before = await order()',
+      '  })',
+    ].join('\n')
+    expect(offendersOf(`x\n${order}`)).toHaveLength(1)
+    // A reader defined outside the test (a describe-level helper) still counts.
+    const shared = "  const tasksState = (page: Page) => page.locator('.todo-panel .todo-panel-item').evaluateAll((els) => els)\n  test('BP-C26', async ({ page }) => {\n    const before = await tasksState(page)\n  })"
+    expect(offendersOf(`x\n${shared}`)).toHaveLength(1)
+  })
+})

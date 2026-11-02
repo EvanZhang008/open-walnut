@@ -20,8 +20,8 @@ import {
 } from './host-problems-helpers'
 import { bell, fixtureFile, HEALTHY, loadApp, loadFixture, openBell, panelBanner } from './host-problems-fixture-helpers'
 import {
-  BP_SHOTS, askRecord, bellCount, bellDot, bpSetup, closePanel, errorsBadge, expectTasksCard, goRail, healthyGitSync, openRow,
-  openSystemHosts, panelLocalCard, panelProblems, pickRail, problemHosts, problemRow, railButton, settingsDot, settingsEntry,
+  BP_SHOTS, askRecord, bellCount, bellDot, bpSetup, closePanel, endServerQuiet, errorsBadge, expectTasksCard, goRail, healthyGitSync, openRow,
+  openSystemHosts, panelLocalCard, panelProblems, pickRail, problemHosts, problemRow, railButton, seedFeed, settingsDot, settingsEntry,
   systemBadge, systemHostRow,
 } from './banner-placement-helpers'
 
@@ -158,6 +158,9 @@ test.describe('the rail counts (server fixture)', () => {
     }))
     await isolatePrefs(page)
     await healthyGitSync(page)
+    // The Errors badge counts the feed's error cards too: the fixture server's feed holds what
+    // every earlier spec on it left (2026-11-02 CI: 6 for 1), so the page reads an empty one.
+    await seedFeed(page, [])
     // This machine ready: the count is the host alone.
     await routeHealth(page)
     await loadApp(page)
@@ -185,6 +188,7 @@ test.describe('the rail counts (server fixture)', () => {
     try {
       await isolatePrefs(page2)
       await healthyGitSync(page2)
+      await seedFeed(page2, [])
       await routeHealth(page2)
       await loadApp(page2)
       await openBell(page2)
@@ -233,29 +237,39 @@ test.describe('the bell names its reason word for word', () => {
     await sampleReasons(page, 1)
   })
 
-  test('BP-C59: Quiet: the title starts with the quiet label, then "; " and the reason; the name stays the reason', async ({ page }) => {
+  // Quiet is server state on the shared fixture server, read by every later spec there. A hook
+  // ends it even when the test timed out (2026-11-02: a finally inside the test waited on a
+  // closed panel until the timeout, left Quiet on, and four specs after it read "Quiet").
+  test.afterEach(async ({ request }) => { await endServerQuiet(request) })
+
+  test('BP-C59: Quiet: the bell wears the moon, no dot, and names only the quiet (not the reason); ending it brings the reason and the dot back', async ({ page }) => {
     await bpSetup(page, { hosts: [failed('netbox', 'Net box', 'unreachable')] })
     await expandSystemAttention(page)
     await expect(banner(page)).toHaveCount(1, { timeout: 20_000 })
     await goRail(page, 'notes')
     await expect(bell(page)).toHaveAttribute('aria-label', HOSTS_REASON)
+    await expect(bellDot(page)).toHaveCount(1)
     await openBell(page)
     const toggle = page.getByTestId('nfc-quiet-toggle')
     await toggle.click()
-    try {
-      await expect(toggle).toHaveText('End quiet', { timeout: 10_000 })
-      await closePanel(page, 'escape')
-      await expect(bell(page)).toHaveAttribute('data-quiet', 'true')
-      await expect(bell(page)).toHaveAttribute('aria-label', HOSTS_REASON)
-      const title = (await bell(page).getAttribute('title')) ?? ''
-      expect(title.endsWith(`; ${HOSTS_REASON}`)).toBe(true)
-      expect(title.length).toBeGreaterThan(`; ${HOSTS_REASON}`.length)
-      await openBell(page)
-    } finally {
-      // Quiet is server state on the shared fixture server: always end it.
-      if (await toggle.innerText().catch(() => '') === 'End quiet') await toggle.click()
-      await expect(toggle).toHaveText('Quiet 1h', { timeout: 10_000 })
-    }
+    await expect(toggle).toHaveText('End quiet', { timeout: 10_000 })
+    await closePanel(page, 'escape')
+    // Quiet is Do Not Disturb for the rail (b55ee8d97): no count or dot, in the marks or the name.
+    await expect(bell(page)).toHaveAttribute('data-quiet', 'true')
+    await expect(bell(page).locator('.quiet-moon')).toHaveCount(1)
+    await expect(bellDot(page)).toHaveCount(0)
+    await expect(bell(page)).toHaveAttribute('aria-label', /^Notifications\. Quiet\b/)
+    const name = (await bell(page).getAttribute('aria-label')) ?? ''
+    await expect(bell(page)).toHaveAttribute('title', name.replace('Notifications. ', ''))
+    expect(name).not.toContain('remote hosts')
+    await openBell(page)
+    await toggle.click()
+    await expect(toggle).toHaveText('Quiet 1h', { timeout: 10_000 })
+    await closePanel(page, 'escape')
+    await expect(bell(page)).not.toHaveAttribute('data-quiet', 'true')
+    await expect(bell(page)).toHaveAttribute('aria-label', HOSTS_REASON)
+    await expect(bell(page)).toHaveAttribute('title', HOSTS_REASON)
+    await expect(bellDot(page)).toHaveCount(1)
   })
 })
 
