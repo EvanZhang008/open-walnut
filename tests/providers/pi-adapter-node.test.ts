@@ -10,6 +10,10 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { buildPiAcp } from '../../scripts/build-pi-acp.mjs'
 import { nodeFromShebang, piNodeFor } from '../../src/providers/pi-adapter-node.js'
+import { guardedPath } from '../setup/exec-guard-core'
+
+// No node on PATH: the exec guard's dir only (it holds no node), never a bare literal.
+const NO_NODE = { PATH: guardedPath([], '') }
 
 let root: string
 beforeAll(async () => { root = await fs.mkdtemp(path.join(os.tmpdir(), 'pi-node-')) })
@@ -45,15 +49,15 @@ describe('piNodeFor', () => {
 
   it('takes an absolute Node as named, and only when it is there', async () => {
     const node = await file('abs/node', '#!/bin/sh\n')
-    expect(await piNodeFor(await file('abs/pi', `#!${node}\n`), { PATH: '' })).toBe(node)
-    expect(await piNodeFor(await file('abs/pi-gone', `#!${path.join(root, 'abs/missing/node')}\n`), { PATH: '' })).toBeUndefined()
+    expect(await piNodeFor(await file('abs/pi', `#!${node}\n`), NO_NODE)).toBe(node)
+    expect(await piNodeFor(await file('abs/pi-gone', `#!${path.join(root, 'abs/missing/node')}\n`), NO_NODE)).toBeUndefined()
   })
 
   it('keeps the walnut file for a wrapper, a native pi, no node on PATH, or an unreadable file', async () => {
-    expect(await piNodeFor(await file('w/pi', '#!/bin/sh\nexec node cli.js\n'), { PATH: '' })).toBeUndefined()
-    expect(await piNodeFor(await file('n/pi', '\x7fELF\x02\x01'), { PATH: '' })).toBeUndefined()
+    expect(await piNodeFor(await file('w/pi', '#!/bin/sh\nexec node cli.js\n'), NO_NODE)).toBeUndefined()
+    expect(await piNodeFor(await file('n/pi', '\x7fELF\x02\x01'), NO_NODE)).toBeUndefined()
     expect(await piNodeFor(await file('e/pi', '#!/usr/bin/env node\n'), { PATH: path.join(root, 'empty') })).toBeUndefined()
-    expect(await piNodeFor(path.join(root, 'nope'), { PATH: '' })).toBeUndefined()
+    expect(await piNodeFor(path.join(root, 'nope'), NO_NODE)).toBeUndefined()
   })
 
   it('never takes a node named by a relative path: the adapter starts in the session cwd', async () => {
@@ -62,8 +66,8 @@ describe('piNodeFor', () => {
     const cwd = process.cwd()
     process.chdir(path.join(root, 'rel'))
     try {
-      expect(await piNodeFor(pi, { PATH: 'bin' })).toBeUndefined()
-      expect(await piNodeFor(await file('rel/pi-abs', '#!bin/node\n'), { PATH: '' })).toBeUndefined()
+      expect(await piNodeFor(pi, { PATH: guardedPath(['bin'], '') })).toBeUndefined()
+      expect(await piNodeFor(await file('rel/pi-abs', '#!bin/node\n'), NO_NODE)).toBeUndefined()
     } finally { process.chdir(cwd) }
   })
 })
