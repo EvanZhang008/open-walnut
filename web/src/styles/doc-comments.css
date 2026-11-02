@@ -1,16 +1,7 @@
 /* Comments on a document (DocCommentsLayer): the paint on the commented words,
    the column of cards on the right, the chip that lists them all. */
 
-::highlight(walnut-doc-comment) {
-  background-color: hsl(38 95% 55% / 0.22);
-  text-decoration: underline 2px hsl(28 90% 48% / 0.85);
-  text-underline-offset: 3px;
-}
-::highlight(walnut-doc-comment-current) {
-  background-color: hsl(38 95% 52% / 0.42);
-  text-decoration: underline 2px hsl(24 92% 44%);
-  text-underline-offset: 3px;
-}
+/* Its ::highlight paint lives in highlights.css (utils/highlight-rules.ts). */
 
 /* A wide view keeps the column's room beside the text: padding, so the doc's
    scroller (and its scrollbar) still spans the whole view. */

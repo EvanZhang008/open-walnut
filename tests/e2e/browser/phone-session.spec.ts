@@ -884,10 +884,11 @@ async function boardCardsCheck(page: Page): Promise<void> {
   await page.getByTestId('phone-row-board').click()
   const pane = page.getByTestId('task-board-pane')
   await expect(pane).toBeVisible({ timeout: 15_000 })
+  // The view toggle comes with the board's store, after the pane itself: wait for
+  // it rather than look once (a fast pane skipped the click and stayed on Status).
   const cards = pane.getByTestId('board-view-cards')
-  if (await cards.count()) {
-    if ((await cards.getAttribute('aria-pressed')) !== 'true') await cards.click()
-  }
+  await expect(cards).toBeVisible({ timeout: 15_000 })
+  if ((await cards.getAttribute('aria-pressed')) !== 'true') await cards.click()
   await expect(pane.locator('.kanban-root')).toBeVisible({ timeout: 15_000 })
   await page.waitForTimeout(800)
   // No form opened on its own: the iOS keyboard would cover the board.

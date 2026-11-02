@@ -21,7 +21,7 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 import fs from 'node:fs/promises'
-import { centreInHistory, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, sessionPanel, test } from './threads-helpers'
+import { centreInHistory, installHighlightRules, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, sessionPanel, test } from './threads-helpers'
 import { RELOAD_PASSAGE, RELOAD_SESSION } from './threads-fixture'
 
 const RELOAD_TASK = 'pw-task-threads-reload'
@@ -239,6 +239,7 @@ test.describe('the mark of an asked passage follows its question', () => {
   test('every state has its own wash and line, in both themes', async ({ page }) => {
     await page.goto('/')
     await page.waitForLoadState('networkidle')
+    await installHighlightRules(page, STATE_NAMES)
     const paints = await page.evaluate(() => {
       const out: Record<string, { bg: string; deco: string }> = {}
       const walk = (rules: CSSRuleList) => {

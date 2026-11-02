@@ -8,7 +8,7 @@
  * The confirm is held by the map, not by its list: in the rail shape the list
  * closes when the pointer leaves it, and the confirm sits outside it (a portal).
  */
-import { useCallback, useState, type MutableRefObject, type ReactNode } from 'react';
+import { memo, useCallback, useState, type MutableRefObject, type ReactNode } from 'react';
 import { ThreadCloseIcon } from '@/components/sessions/ThreadIcons';
 import { ThreadConfirm } from '@/components/sessions/ThreadConfirm';
 import { alsoDoneTitle } from '@/components/sessions/ThreadStackHeader';
@@ -21,9 +21,11 @@ export interface MapArchiveApi {
 }
 
 /** The × itself. Out of the Tab order (the map is one tab stop); ArrowRight on
- *  its row reaches it. A mouse press does not take focus from where it was. */
-export function MapArchiveButton({ stop, title, onPress }: {
-  stop: string; title: string; onPress: (el: HTMLElement, byKey: boolean) => void;
+ *  its row reaches it. A mouse press does not take focus from where it was.
+ *  Memoized with one stable `onPress` for every row: a push or pop must not
+ *  rebuild the × of every question (C38). */
+export const MapArchiveButton = memo(function MapArchiveButton({ id, stop, title, onPress }: {
+  id: string; stop: string; title: string; onPress: (id: string, el: HTMLElement, byKey: boolean) => void;
 }) {
   return (
     <button
@@ -34,12 +36,12 @@ export function MapArchiveButton({ stop, title, onPress }: {
       title="Archive"
       aria-label={`Archive “${title}”`}
       onMouseDown={(e) => e.preventDefault()}
-      onClick={(e) => { e.stopPropagation(); onPress(e.currentTarget, e.detail === 0); }}
+      onClick={(e) => { e.stopPropagation(); onPress(id, e.currentTarget, e.detail === 0); }}
     >
       <ThreadCloseIcon size={10} />
     </button>
   );
-}
+});
 
 interface Pending { key: string; anchor: HTMLElement; count: number }
 

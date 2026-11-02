@@ -24749,26 +24749,7 @@ a.file-link:hover {
    API (::highlight), which paints WITHOUT touching the DOM. */
 .cm-searchMatch { background-color: rgba(255, 200, 0, 0.35); }
 .cm-searchMatch.cm-searchMatch-selected { background-color: rgba(255, 145, 0, 0.85); color: #1a1a1a; }
-::highlight(walnut-search) { background-color: rgba(255, 200, 0, 0.35); }
-::highlight(walnut-search-active) { background-color: rgba(255, 145, 0, 0.85); color: #1a1a1a; }
-/* Select text → every exact match tints (VS Code). CM twin: .cm-selectionMatch. */
-::highlight(walnut-selmatch) { background-color: rgba(80, 160, 255, 0.30); }
-/* Quote pins (utils/pin-highlights.ts): a highlighter pen over the pinned
-   passage, and a brighter flash when an outline row jumps to it. Only
-   color / background-color / text-decoration / text-shadow are honoured inside
-   ::highlight — anything else (padding, border-radius) is silently dropped. */
-::highlight(walnut-pin) { background-color: rgba(250, 204, 21, 0.38); }
-::highlight(walnut-pin-flash) { background-color: rgba(250, 204, 21, 0.9); color: #1a1a1a; }
-/* Dark theme: the same yellow at full alpha over a dark bubble reads as a block
-   of colour and swallows the text, so it goes lighter. */
-[data-theme="dark"] ::highlight(walnut-pin) { background-color: rgba(250, 204, 21, 0.26); }
-[data-theme="dark"] ::highlight(walnut-pin-flash) { background-color: rgba(250, 204, 21, 0.7); }
-/* The quote pill's HELD passage (QuotePinSelectionBar): the document selection
-   collapsed because the composer took focus for dictated text, and the pill keeps
-   pointing at these words. Selection-blue on purpose: the reader sees the passage
-   they selected, unchanged. */
-::highlight(walnut-held-quote) { background-color: rgba(80, 160, 255, 0.30); }
-[data-theme="dark"] ::highlight(walnut-held-quote) { background-color: rgba(80, 160, 255, 0.38); }
+/* Its ::highlight paint lives in highlights.css (utils/highlight-rules.ts). */
 .cm-selectionMatch { background-color: rgba(80, 160, 255, 0.30); }
 /* "You landed HERE" flash on the jumped-to keyword (reference jumps). */
 .cm-jump-flash {

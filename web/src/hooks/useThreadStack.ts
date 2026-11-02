@@ -302,6 +302,15 @@ export function useThreadStack(args: UseThreadStackArgs): ThreadStackHandle {
       });
     }
     capture.current?.(plan.from, plan.pushed[0] ?? plan.to, toPending ?? s.pending);
+    // The page being left takes its rows with it. The click that asked for this
+    // push left a caret (a collapsed selection) in one of them, and removing the
+    // node a selection sits in made Chromium update style and layout inside
+    // React's commit: 17 to 20 ms of the push's long task (C38). A caret in a
+    // row carries nothing; a real selection (a dragged range) is left alone.
+    const sel = document.getSelection();
+    const anchor = sel?.anchorNode;
+    const anchorEl = anchor instanceof Element ? anchor : anchor?.parentElement;
+    if (sel && sel.isCollapsed && anchorEl?.closest('[data-message-id]') && a.panelRef.current?.contains(anchorEl)) sel.removeAllRanges();
     markViewed(plan.from);
     markViewed(plan.to);
     seq.current += 1;

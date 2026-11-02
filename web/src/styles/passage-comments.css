@@ -1,18 +1,7 @@
 /* Quotes and comments on passages (PassageCommentMarks, PendingCommentsTray).
    Orange, so a comment never reads as a pin's yellow. */
 
-::highlight(walnut-comment) {
-  background-color: rgba(255, 149, 0, 0.16);
-  text-decoration: underline 2px rgba(240, 90, 20, 0.9);
-  text-underline-offset: 3px;
-}
-::highlight(walnut-comment-sent) {
-  background-color: rgba(255, 149, 0, 0.08);
-  text-decoration: underline 1px rgba(240, 90, 20, 0.55);
-  text-underline-offset: 3px;
-}
-[data-theme="dark"] ::highlight(walnut-comment) { background-color: rgba(255, 159, 10, 0.2); }
-[data-theme="dark"] ::highlight(walnut-comment-sent) { background-color: rgba(255, 159, 10, 0.1); }
+/* Its ::highlight paint lives in highlights.css (utils/highlight-rules.ts). */
 
 /* The chip at a passage's end. Fixed in a <body> portal, re-placed from the live
    Range; under every menu and dialog. */

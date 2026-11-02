@@ -73,7 +73,7 @@ const NEUTRAL_STATE_NAME: Record<ThreadMarkState, string> = {
 };
 
 /** Highlight name per hue and state (neutral: one name per question state);
- *  globals for every name live in thread-stack-page.css. A live mark (its answer
+ *  the paint rules for every name live in highlights.css (utils/highlight-rules.ts). A live mark (its answer
  *  coming in) is the open mark's fill with no underline: the scanning line draws
  *  that. */
 export function markHighlightName(hue: number, resolved: boolean, neutral = false, live = false, state?: ThreadMarkState): string {

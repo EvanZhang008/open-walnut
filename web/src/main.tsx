@@ -24,6 +24,7 @@ import { initTurnSpeedStore } from './stores/turn-speed-store';
 import { installGlobalAutofillSuppression } from './utils/no-autofill';
 import { installEscapeBeepGuard } from './utils/escape-beep-guard';
 import { installImageSizeHold } from './utils/image-size-hold';
+import { installHighlightRules } from './utils/highlight-rules';
 import { initStaleAssetRecovery, initStaleBuildUpgrade } from './utils/stale-assets';
 import { installDesktopBridge } from './utils/desktop-bridge';
 import { initWebPlugins } from './plugins/loader';
@@ -136,6 +137,10 @@ function bootApp(): void {
   // A chat image drawn again (a reply's persisted row replacing its stream blocks)
   // keeps its box while it decodes, so nothing around it moves for a frame.
   installImageSizeHold();
+  // ::highlight paint rules only for the highlight names registered now (every
+  // linked one costs a style per element per recalc). Before mount: the first
+  // highlight set already finds its rules.
+  installHighlightRules();
 
   // Clear text selection instantly on mousedown to avoid macOS inactive-selection pink flash.
   // Scoped (was unconditional, which broke copy entirely): never on right/middle click —

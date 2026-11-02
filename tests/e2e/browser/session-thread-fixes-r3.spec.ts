@@ -10,7 +10,7 @@
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 import {
-  centreInHistory, DENSE_SESSION, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, sessionPanel, modePill, openQuestionList, switchView, test,
+  centreInHistory, DENSE_SESSION, installHighlightRules, openThreadsSession, passageRects, readRecord, resetThreadsFixture, selectPassage, sessionPanel, modePill, openQuestionList, switchView, test,
 } from './threads-helpers'
 import { RELOAD_PASSAGE, RELOAD_SESSION, densePassage } from './threads-fixture'
 import { cssColorToRgba, withCssColor } from './css-color'
@@ -350,6 +350,7 @@ test.describe('Slice 1 fixes, round 3', () => {
 
   test('resolved marks are grey and dotted, open marks keep their hue (N48)', async ({ page }) => {
     await openDense(page, 720)
+    await installHighlightRules(page, ['thread-mark-280'])
     const rules = await page.evaluate(() => {
       const out: Record<string, { bg: string; deco: string }> = {}
       for (const sheet of Array.from(document.styleSheets)) {

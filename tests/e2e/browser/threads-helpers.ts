@@ -412,3 +412,18 @@ export async function clickInPlace(page: Page, target: Locator): Promise<void> {
   if (hit) throw new Error(`clickInPlace: the target is covered at its centre by ${hit}`)
   await page.mouse.click(x, y)
 }
+
+/**
+ * Put the ::highlight rules of `names` in the document's sheets, for a spec that
+ * reads the paint rules themselves. Only the families of registered highlight
+ * names are installed (web/src/utils/highlight-rules.ts), so one empty highlight
+ * goes under each name not registered yet; it paints nothing.
+ */
+export async function installHighlightRules(page: Page, names: readonly string[]): Promise<void> {
+  await page.evaluate((list) => {
+    const api = window as unknown as { CSS?: { highlights?: Map<string, unknown> }; Highlight?: new () => unknown }
+    const reg = api.CSS?.highlights
+    if (!reg || !api.Highlight) return
+    for (const name of list) if (!reg.has(name)) reg.set(name, new api.Highlight())
+  }, [...names])
+}

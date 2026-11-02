@@ -200,11 +200,7 @@
   padding: 0 1px;
 }
 
-/* The in-place mark for a help-only filter hit (CSS Custom Highlight API). */
-::highlight(engine-settings-help-match) {
-  background-color: var(--accent-soft, rgba(99, 102, 241, 0.25));
-  color: var(--fg);
-}
+/* Its ::highlight paint lives in highlights.css (utils/highlight-rules.ts). */
 
 /* A global-only file has no per-project layer; the row is shown locked
    and its "Saves to" line, which would be wrong, is hidden. */

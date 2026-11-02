@@ -12,6 +12,7 @@ import {
 } from './threads-helpers'
 import { DENSE_EXPECTED_COUNTS } from './threads-fixture'
 import { withCssColor } from './css-color'
+import { serveProductionBundle } from './production-bundle'
 
 const TASK = 'pw-task-threads-dense'
 
@@ -305,6 +306,8 @@ test.describe('tree drawer', () => {
   }
 
   test('opens under 100ms and each search key is handled within a frame (C38)', async ({ page }) => {
+    // Timing is judged on the bundle users run (production-bundle.ts).
+    await serveProductionBundle(page)
     const panel = await openDense(page, { width: 900 })
     // Warm the drawer once (module code, first layout), then time a real open.
     await openDrawer(panel)

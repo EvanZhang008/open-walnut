@@ -4,11 +4,14 @@
  * (WebKit has no longtask entry type). Each step's long tasks are collected from
  * the click / Esc until two frames after the new page painted, each with the CPU
  * its main thread spent in it (Chrome's trace): the budget is judged on that CPU,
- * and on the wall time only when the machine has a core to spare.
+ * and on the wall time only when the machine has a core to spare. Judged on the
+ * production bundle (production-bundle.ts: React's development build spends most
+ * of such a task on its own debugging).
  */
 import { expect, type Locator, type Page } from '@playwright/test'
 import { centreInHistory, DENSE_SESSION, openThreadsSession, resetThreadsFixture, test } from './threads-helpers'
 import { chromiumCpuClock, longTaskBudget, machineQuiet, referenceDrawMs, traceTaskTimes, type TaskTime } from './cpu-reference'
+import { serveProductionBundle } from './production-bundle'
 
 const TASK = 'pw-task-threads-dense'
 const READY = 'Walk me through part 6 of the storage notes.'
@@ -47,6 +50,7 @@ test.describe('Question stack push / pop cost', () => {
 
   test('no long task over 50ms on push or pop along the dense four-level branch (C38)', async ({ page, browserName }) => {
     test.skip(browserName !== 'chromium', 'longtask entries are Chromium only')
+    await serveProductionBundle(page)
     await page.goto('/')
     await page.waitForLoadState('networkidle')
     const panel = await openThreadsSession(page, DENSE_SESSION, TASK, READY)

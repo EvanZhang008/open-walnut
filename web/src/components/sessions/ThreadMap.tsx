@@ -245,6 +245,76 @@ interface ListProps extends ThreadMapProps {
   onArchiveRow?: (key: string, anchor: HTMLElement) => void;
 }
 
+/** The same array while its strings are the same: a render of the list that
+ *  changes no row's unread line leaves the memoized rows alone. */
+function useSameStrings(next: Array<string | undefined>): Array<string | undefined> {
+  const kept = useRef(next);
+  const prev = kept.current;
+  if (prev.length !== next.length || prev.some((v, i) => v !== next[i])) kept.current = next;
+  return kept.current;
+}
+
+interface MapRowsProps {
+  rows: TreeRow[];
+  onPath: ReadonlySet<string>;
+  tabStop: string;
+  overlay: boolean;
+  wide: boolean;
+  /** Per row, in order: its unread tooltip, when it has an unread answer. */
+  unread: ReadonlyArray<string | undefined>;
+  archivable: boolean;
+  onFocusStop: (stop: string) => void;
+  onClickRow: (id: string, byKey: boolean) => void;
+  onArchive: (id: string, el: HTMLElement, byKey: boolean) => void;
+}
+
+/**
+ * The rows, memoized apart from the list's head: the list renders again for
+ * the box's height, its cursor and its head's counts, none of which changes a
+ * row. A push or pop renders it once for the new current row (C38: every render
+ * of 48 rows built some 150 elements, three times a push).
+ */
+const MapRows = memo(function MapRows(r: MapRowsProps) {
+  return (
+    <>
+      {r.rows.map((row, i) => {
+        const stop = rowDomId(row.id);
+        const mapRow = (
+          <MapRow
+            key={row.id}
+            id={row.id}
+            stop={stop}
+            kind={row.kind}
+            status={row.status}
+            current={row.current}
+            onPath={r.onPath.has(row.id)}
+            expanded={row.expanded}
+            disabled={row.kind === 'done-group' && row.disclosureDisabled}
+            name={rowName(row)}
+            label={row.title}
+            naming={!!row.naming}
+            depth={row.depth}
+            number={row.number}
+            tabIndex={stop === r.tabStop && !r.overlay ? 0 : -1}
+            entry={stop === r.tabStop}
+            unread={r.unread[i]}
+            wide={r.wide}
+            onFocusStop={r.onFocusStop}
+            onClickRow={r.onClickRow}
+          />
+        );
+        if (!r.archivable || row.kind !== 'thread' || row.status === 'resolved') return mapRow;
+        return (
+          <div key={row.id} className="thread-map-item">
+            {mapRow}
+            <MapArchiveButton id={row.id} stop={stop} title={row.title} onPress={r.onArchive} />
+          </div>
+        );
+      })}
+    </>
+  );
+});
+
 /** The labelled tree: head (title, count, list, hide/keep open), rows, Back. */
 function MapList(p: ListProps) {
   const { rows } = p;
@@ -349,6 +419,7 @@ function MapList(p: ListProps) {
       ? answeredAgo(p.answeredAt.get(row.key), Date.now()) ?? 'New answer'
       : undefined
   );
+  const unread = useSameStrings(rows.map(unreadTitle));
   // The header pill's narrow form (the map is always narrow); the full text,
   // counts the narrow form drops included, is the tooltip.
   const count = toggleLabel(p.counts, { narrow: true });
@@ -382,40 +453,18 @@ function MapList(p: ListProps) {
         </span>
       </div>
       <div className="thread-map-rows" ref={listRef}>
-        {rows.map((row) => {
-          const stop = rowDomId(row.id);
-          const mapRow = (
-            <MapRow
-              key={row.id}
-              id={row.id}
-              stop={stop}
-              kind={row.kind}
-              status={row.status}
-              current={row.current}
-              onPath={onPath.has(row.id)}
-              expanded={row.expanded}
-              disabled={row.kind === 'done-group' && row.disclosureDisabled}
-              name={rowName(row)}
-              label={row.title}
-              naming={!!row.naming}
-              depth={row.depth}
-              number={row.number}
-              tabIndex={tabIndexOf(stop)}
-              entry={stop === tabStop}
-              unread={unreadTitle(row)}
-              wide={wide}
-              onFocusStop={onFocusStop}
-              onClickRow={onClickRow}
-            />
-          );
-          if (!p.onArchiveRow || row.kind !== 'thread' || row.status === 'resolved') return mapRow;
-          return (
-            <div key={row.id} className="thread-map-item">
-              {mapRow}
-              <MapArchiveButton stop={stop} title={row.title} onPress={(el, byKey) => onArchive(row.id, el, byKey)} />
-            </div>
-          );
-        })}
+        <MapRows
+          rows={rows}
+          onPath={onPath}
+          tabStop={tabStop}
+          overlay={p.overlay}
+          wide={wide}
+          unread={unread}
+          archivable={!!p.onArchiveRow}
+          onFocusStop={onFocusStop}
+          onClickRow={onClickRow}
+          onArchive={onArchive}
+        />
       </div>
       {p.canGoBack && (
         <button type="button" className="thread-map-back" data-map-stop={STOP_BACK} {...entryOf(STOP_BACK)} tabIndex={tabIndexOf(STOP_BACK)}

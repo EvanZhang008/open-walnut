@@ -18,7 +18,7 @@ import { TaskEarlierSessions } from './TaskEarlierSessions';
 import { DeliveryMetaLine } from './DeliveryMetaLine';
 import { latestTurnStartTop, READER_SCROLL_EVENT } from './phone-session-layer';
 import { isPhoneLayout } from '@/hooks/usePhoneLayout';
-import { JumpPillLabel, PromptWaitingPill } from './PhoneTimelinePills';
+import { TimelineBottomPills, useFlagStore } from './PhoneTimelinePills';
 import { SessionMessage, SessionThinking, StableMarkdownBody, ToolRunShell, StreamRunMembers, streamRunSummary, streamRunHasCallingTool, runRowKey, isToolOnlyMessage, isThinkingOnlyMessage, isTextPlusMergeableTools, mergeThinkingOnly, trailingThinkingOnlyStart, MergedHistoryToolRun, SystemGroupRun, systemGroupMemberFromHistory, type SystemGroupMember, type StreamRunMember } from './SessionMessage';
 import { useEntityClickHandler } from '@/hooks/useEntityClickHandler';
 import { StreamingBlockView, StreamingReplyMeta, WorkingIndicator, countStreamChars, streamReplyText, useStreamReplyRows } from './StreamingBlockView';
@@ -1232,7 +1232,9 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
   const firstScrollDone = useRef(false);
   const initialLoadDone = useRef(false);  // true after Phase 2 completes for the first time
   const prevOptimisticLen = useRef(0);
-  const [showScrollArrow, setShowScrollArrow] = useState(false);
+  // Read only by the pills at the bottom (TimelineBottomPills), never by this render.
+  const scrollArrow = useFlagStore();
+  const setShowScrollArrow = scrollArrow.set;
   // Timestamp: ignore scroll events within the debounce window (350ms) of a resize.
   // Why? When sibling components grow (UserMessagesSummary, PlanPreviewSection, SessionNotes),
   // the flex container shrinks our scroll area. This can trigger a scroll event (browser adjusts
@@ -5679,12 +5681,7 @@ export const SessionChatHistory = memo(function SessionChatHistory({ sessionId, 
         {!isStreaming && <SessionWorkingIndicator sessionId={sessionId} />}
         {/* Floating scroll-to-bottom arrow — sticky to bottom of scroll viewport */}
         {/* Phone: a prompt pill stacked over the jump pill (PhoneTimelinePills). */}
-        <PromptWaitingPill containerRef={containerRef} stacked={showScrollArrow} />
-        <button
-          className={`scroll-to-bottom-btn${showScrollArrow ? ' visible' : ''}`}
-          onClick={handleScrollToBottom}
-          aria-label="Scroll to bottom"
-        ><JumpPillLabel containerRef={containerRef} visible={showScrollArrow} /></button>
+        <TimelineBottomPills containerRef={containerRef} arrow={scrollArrow} onJump={handleScrollToBottom} />
       </div>
       </ThreadStackFrame>
       {lightboxSrc && <Lightbox src={lightboxSrc} onClose={closeLightbox} />}

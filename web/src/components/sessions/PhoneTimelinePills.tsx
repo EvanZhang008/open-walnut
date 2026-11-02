@@ -12,7 +12,7 @@
  * Both read the DOM of the scroller they live in, so they count exactly what
  * the timeline draws.
  */
-import { useCallback, useEffect, useRef, useState, type MouseEvent, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent, type RefObject } from 'react';
 import { usePhoneLayout } from '@/hooks/usePhoneLayout';
 
 const ROW_SELECTOR = '[data-msg-role]';
@@ -162,5 +162,56 @@ export function PromptWaitingPill({ containerRef, stacked }: { containerRef: Ref
     >
       {promptsWaitingLabel(state.n)}
     </button>
+  );
+}
+
+/** One boolean the timeline writes and only the pills below read. */
+export interface FlagStore {
+  get: () => boolean;
+  set: (next: boolean) => void;
+  subscribe: (listener: () => void) => () => void;
+}
+
+/**
+ * The jump pill's "is the newest row off screen" flag, held outside the
+ * timeline's state: it flips on a scroll (every push and pop of a Question stack
+ * lands the page somewhere new), and as timeline state each flip re-rendered the
+ * whole transcript for one class name (C38: 13 to 18 ms of main thread a step).
+ */
+export function useFlagStore(): FlagStore {
+  return useMemo(() => {
+    let value = false;
+    const listeners = new Set<() => void>();
+    return {
+      get: () => value,
+      set: (next: boolean) => {
+        if (next === value) return;
+        value = next;
+        for (const l of listeners) l();
+      },
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+    };
+  }, []);
+}
+
+/** The prompt pill and the jump pill, at the timeline's bottom. */
+export function TimelineBottomPills({ containerRef, arrow, onJump }: {
+  containerRef: RefObject<HTMLElement | null>;
+  arrow: FlagStore;
+  onJump: () => void;
+}) {
+  const visible = useSyncExternalStore(arrow.subscribe, arrow.get, arrow.get);
+  return (
+    <>
+      <PromptWaitingPill containerRef={containerRef} stacked={visible} />
+      <button
+        className={`scroll-to-bottom-btn${visible ? ' visible' : ''}`}
+        onClick={onJump}
+        aria-label="Scroll to bottom"
+      ><JumpPillLabel containerRef={containerRef} visible={visible} /></button>
+    </>
   );
 }

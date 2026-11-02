@@ -85,25 +85,33 @@ export function useUrlSync(opts: UseUrlSyncOpts): {
   // Debounce timer ref
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // A panel moving to another question page changes `t<n>`: re-run the write.
-  const [leafTick, setLeafTick] = useState(0);
-  useEffect(() => subscribeThreadLeaves(() => setLeafTick((n) => n + 1)), []);
-
-  // State → URL (debounced replaceState)
-  useEffect(() => {
-    if (!visible) return;
+  // State → URL (debounced replaceState). The write reads its inputs from a ref,
+  // so a panel moving to another question page (`t<n>` changes) schedules it
+  // without a state change: a re-render of MainPage, and with it every column
+  // and the task panel, cost each push and pop of a Question stack 10 to 35 ms
+  // of main thread for an address bar nobody looks at (C38).
+  const live = useRef({ focusedTaskId, sessionColumns, activeProject, visible, pending });
+  live.current = { focusedTaskId, sessionColumns, activeProject, visible, pending };
+  const schedule = useCallback(() => {
+    const now = live.current;
+    if (!now.visible) return;
     if (window.location.pathname !== '/') return;
     // The URL is the source of truth until MainPage either restores the pending
     // state or conclusively determines that the target no longer exists.
-    if (pending) return;
+    if (now.pending) return;
 
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => {
+      timerRef.current = null;
       // The console may have left Home inside the debounce (a link opened in a
       // plugin's App right after closing the details): writing `/` then would put
       // Home's address on another page's entry.
       if (window.location.pathname !== '/') return;
-      const search = buildSearch({ focusedTaskId, sessionColumns, activeProject });
+      const at = live.current;
+      // Hidden or pending again inside the debounce: the effect's cleanup used to
+      // drop the write then, and still does.
+      if (!at.visible || at.pending) return;
+      const search = buildSearch(at);
       // Compare against live URL to avoid redundant replaceState calls.
       // This also prevents echo: when we apply URL params → state changes → effect fires,
       // the computed search matches the existing URL, so no write occurs.
@@ -112,11 +120,17 @@ export function useUrlSync(opts: UseUrlSyncOpts): {
       // and react-router's own keys live there, and null would wipe both.
       window.history.replaceState(window.history.state, '', `/${search}`);
     }, 300);
+  }, []);
 
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, [focusedTaskId, sessionColumns, activeProject, visible, pending, leafTick]);
+  useEffect(() => {
+    schedule();
+  }, [focusedTaskId, sessionColumns, activeProject, visible, pending, schedule]);
+
+  useEffect(() => subscribeThreadLeaves(schedule), [schedule]);
+
+  useEffect(() => () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+  }, []);
 
   // Popstate listener — browser back/forward (rare on SPA, but handle gracefully)
   useEffect(() => {

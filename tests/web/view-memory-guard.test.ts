@@ -67,7 +67,6 @@ const PASSING: Record<string, string> = {
   'components/sessions/BackgroundTasksPanel.tsx#chosenTab': 'a session\'s background jobs panel, a popover; it opens on the kind asked for',
   'components/sessions/EngineSettingsPopover.tsx#filter': 'a typed filter in a popover',
   'components/sessions/SessionChatHistory.tsx#activeTeamTab': 'which team of one conversation is read; it follows the conversation',
-  'components/sessions/SessionChatHistory.tsx#showScrollArrow': 'derived from the scroll position',
   'components/sessions/SessionPanel.tsx#activeView': 'the Changed / Files / Terminal split, a full-screen overlay that never comes back on its own',
   'components/sessions/SessionPanel.tsx#prefillMode': 'how one prefill lands in the composer',
   'components/sessions/SessionPathSelector.tsx#hostFilter': 'the folder picker, a dialog',
