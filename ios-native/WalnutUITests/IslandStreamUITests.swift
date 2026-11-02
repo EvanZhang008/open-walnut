@@ -67,10 +67,11 @@ final class IslandStreamUITests: XCTestCase {
                        "the saved reply's island row has another height")
         XCTAssertEqual(after.frame.minY - row(app).frame.minY, liveAfterY - liveRow.minY, accuracy: 3,
                        "the text under the island moved when the turn ended")
-        let done = app.webViews.buttons["Mark Tuesday done"]
-        XCTAssertTrue(done.waitForExistence(timeout: 15))
-        done.tap()
-        try expectText(app, "Script ran, ticks 1")
+        // A tap the page did not take is tapped again (`IslandTap`); one it took twice
+        // reads "ticks 2" and fails here.
+        if IslandTap.press("Mark Tuesday done", in: app, until: "Script ran, ticks 1", test: self) != .shown {
+            try expectText(app, "Script ran, ticks 1")
+        }
         let review = app.buttons["chat.islandResult.review"]
         XCTAssertTrue(review.waitForExistence(timeout: 10), "the result strip never appeared")
         attach(app, "4-saved-reply-reports")

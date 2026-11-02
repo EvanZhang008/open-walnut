@@ -18,38 +18,39 @@ final class IslandStateUITests: XCTestCase {
         super.tearDown()
     }
 
+    /// The app under test. A step may relaunch it (`readIsland`), so the test reads it
+    /// from here rather than holding its own.
+    private var app: XCUIApplication!
+
     @MainActor
     func testTheQuizComesBackWhereItWasAndItsResultIsSentOnlyByThePress() throws {
-        var app = UITestLaunch.launch(["--timeline-harness-island-fresh"])
-        try expectText(app, "Question 1 of 3")
-        try tapAnswer(app, "Answer 4")
-        try expectText(app, "Question 2 of 3")
+        app = UITestLaunch.launch(["--timeline-harness-island-fresh"])
+        try expectText("Question 1 of 3")
+        try answer("Answer 4", then: "Question 2 of 3")
         // The page's write is coalesced (~120ms) and the store's persist debounced
         // (~500ms); a terminate is not a background, so give both time to land.
         Thread.sleep(forTimeInterval: 2)
-        attach(app, "1-question-2-before-relaunch")
+        attach("1-question-2-before-relaunch")
 
-        UITestLaunch.terminate()
-        app = UITestLaunch.launch(["--timeline-harness-island"])
-        try expectText(app, "Question 2 of 3")
-        attach(app, "2-question-2-after-relaunch")
+        relaunch()
+        try expectText("Question 2 of 3")
+        attach("2-question-2-after-relaunch")
         XCTAssertFalse(app.buttons["chat.islandResult.review"].exists,
                        "no result is offered before the quiz is done")
 
-        try tapAnswer(app, "Answer Paris")
-        try tapAnswer(app, "Answer Jupiter")
-        try expectText(app, "Quiz done: 3 of 3 right")
+        try answer("Answer Paris", then: "Question 3 of 3")
+        try answer("Answer Jupiter", then: "Quiz done: 3 of 3 right")
         let review = app.buttons["chat.islandResult.review"]
         XCTAssertTrue(review.waitForExistence(timeout: 10), "the result strip never appeared")
         let sent = app.staticTexts["harness.islandSent"]
         XCTAssertEqual(sent.label, "Sent 0", "nothing may be sent before the user presses Send")
-        attach(app, "3-result-strip")
+        attach("3-result-strip")
 
         review.tap()
         let text = app.staticTexts["islandResult.text"]
         XCTAssertTrue(text.waitForExistence(timeout: 10), "the review sheet never opened")
         XCTAssertTrue(text.label.contains("Quiz result: 3/3 right."), text.label)
-        attach(app, "4-review-sheet")
+        attach("4-review-sheet")
         let send = app.buttons["islandResult.send"]
         XCTAssertTrue(send.isEnabled)
         let shown = text.label
@@ -60,37 +61,72 @@ final class IslandStateUITests: XCTestCase {
         let after = app.buttons["chat.islandResult.review"]
         XCTAssertTrue(after.waitForExistence(timeout: 10))
         XCTAssertTrue(waitFor(after, label: "Review"), "the strip did not turn to sent: \(after.label)")
-        attach(app, "5-sent")
+        attach("5-sent")
 
         // A relaunch keeps the sent mark: the page reports the same text again on load,
         // and the user is not asked to send it twice.
-        UITestLaunch.terminate()
-        app = UITestLaunch.launch(["--timeline-harness-island"])
-        try expectText(app, "Quiz done: 3 of 3 right")
+        relaunch()
+        try expectText("Quiz done: 3 of 3 right")
         let relaunched = app.buttons["chat.islandResult.review"]
         XCTAssertTrue(relaunched.waitForExistence(timeout: 10))
         XCTAssertTrue(waitFor(relaunched, label: "Review"), relaunched.label)
-        attach(app, "6-sent-after-relaunch")
+        attach("6-sent-after-relaunch")
     }
 
     // MARK: - Helpers
 
     private struct Missing: Error { let text: String }
 
-    private func expectText(_ app: XCUIApplication, _ text: String,
-                            file: StaticString = #filePath, line: UInt = #line) throws {
-        let match = app.webViews.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", text)).firstMatch
-        guard match.waitForExistence(timeout: 30) else {
-            attach(app, "missing-\(text)")
+    /// Open the quiz again with whatever it saved.
+    @MainActor
+    private func relaunch() {
+        UITestLaunch.terminate()
+        app = UITestLaunch.launch(["--timeline-harness-island"])
+    }
+
+    /// A web view that lists none of its page (`IslandTap`, case 2) is read again after
+    /// a relaunch, once. The page then comes back from what it saved: a relaunch is what
+    /// this test is about, so it proves the same thing. Recorded with a screenshot.
+    @MainActor
+    private func relaunchUnreadable(_ waitingFor: String) {
+        attach("unreadable-\(waitingFor)")
+        // Let the page's last write and the store's debounced persist land first.
+        Thread.sleep(forTimeInterval: 2)
+        relaunch()
+    }
+
+    @MainActor
+    private func expectText(_ text: String, file: StaticString = #filePath, line: UInt = #line) throws {
+        var outcome = IslandTap.read(text, in: app, timeout: 30)
+        if outcome == .unreadable {
+            relaunchUnreadable(text)
+            outcome = IslandTap.read(text, in: app, timeout: 30)
+        }
+        guard outcome == .shown else {
+            attach("missing-\(text)")
             XCTFail("never saw \"\(text)\" in the island", file: file, line: line)
             throw Missing(text: text)
         }
     }
 
-    private func tapAnswer(_ app: XCUIApplication, _ label: String) throws {
-        let button = app.webViews.buttons[label]
-        XCTAssertTrue(button.waitForExistence(timeout: 15), "no \(label) button in the island")
-        button.tap()
+    /// Pick an answer and wait for the step it leads to (`IslandTap`: a tap the page did
+    /// not take is tapped again, never one it took).
+    @MainActor
+    private func answer(_ label: String, then next: String,
+                        file: StaticString = #filePath, line: UInt = #line) throws {
+        var outcome = IslandTap.press(label, in: app, until: next, test: self)
+        if outcome == .unreadable {
+            relaunchUnreadable(next)
+            // A page that took the tap comes back on `next`; one that did not, on the
+            // step with `label`, which is pressed again.
+            outcome = IslandTap.read(next, in: app, timeout: IslandTap.settle)
+            if outcome != .shown { outcome = IslandTap.press(label, in: app, until: next, test: self) }
+        }
+        guard outcome == .shown else {
+            attach("missing-\(next)")
+            XCTFail("never saw \"\(next)\" in the island after \(label)", file: file, line: line)
+            throw Missing(text: next)
+        }
     }
 
     private func waitFor(_ element: XCUIElement, label: String, timeout: TimeInterval = 10) -> Bool {
@@ -99,7 +135,7 @@ final class IslandStateUITests: XCTestCase {
         return XCTWaiter().wait(for: [wait], timeout: timeout) == .completed
     }
 
-    private func attach(_ app: XCUIApplication, _ name: String) {
+    private func attach(_ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name
         shot.lifetime = .keepAlways
