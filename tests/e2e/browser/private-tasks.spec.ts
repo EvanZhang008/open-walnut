@@ -25,6 +25,7 @@ import {
 import { createTaskForLater } from './draft-outcome-helpers'
 import { calendarEmptySlotPoint } from './calendar-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
+import { openPluginDetail } from './apps-store-helpers'
 
 const API = `http://localhost:${process.env.PW_TEST_PORT ?? 3457}`
 const SERVICE = 'plugin-a'
@@ -216,9 +217,10 @@ test.describe.serial('Settings › Task providers', () => {
     await openHome(page)
     await page.locator('.sidebar-nav a[href^="/settings"]').click()
     await page.getByTestId('settings-nav-tasks').click()
-    // Tasks points to the section; the section itself has its own nav entry too.
-    await page.getByTestId('tasks-open-task-providers').click()
+    // The section is part of the Tasks page, under its own heading; it has no nav entry.
+    await expect(page.getByTestId('settings-nav-task-providers')).toHaveCount(0)
     const group = page.getByTestId(`task-provider-${SERVICE}`)
+    await group.scrollIntoViewIfNeeded()
     await expect(group).toBeVisible()
     return group
   }
@@ -284,8 +286,22 @@ test.describe.serial('Settings › Task providers', () => {
       await expect(rule).toHaveValue(DEFAULT_RULE)
       await expect(group).toContainText('Walnut\'s default rule. Write your own in its place')
       await expect(page.getByTestId(`settings-provider-${SERVICE}-ai-rule-reset`)).toHaveCount(0)
+      // The field is as tall as its text: no resize corner, no empty band, no scrolling.
+      const fits = () => rule.evaluate((el: HTMLTextAreaElement) => ({
+        resize: getComputedStyle(el).resize, gap: el.clientHeight - el.scrollHeight, scrolls: el.scrollHeight > el.clientHeight,
+      }))
+      expect(await fits()).toMatchObject({ resize: 'none', scrolls: false })
+      const oneLine = await rule.evaluate((el) => el.getBoundingClientRect().height)
+      await rule.fill(Array.from({ length: 8 }, (_, i) => `Line ${i + 1} of a long rule about what to keep out`).join('\n'))
+      await expect.poll(async () => rule.evaluate((el) => el.getBoundingClientRect().height)).toBeGreaterThan(oneLine + 100)
+      expect(await fits()).toMatchObject({ resize: 'none', scrolls: false })
+      expect((await fits()).gap).toBeLessThanOrEqual(2)
+      // Words that are not the default rule offer the way back to it.
+      await expect(page.getByTestId(`settings-provider-${SERVICE}-ai-rule-reset`)).toHaveCount(1)
       await rule.fill('Keep out anything about Quokka')
       await rule.blur()
+      // Back to one line of text, the field shrinks with it.
+      await expect.poll(async () => rule.evaluate((el) => el.getBoundingClientRect().height)).toBeLessThanOrEqual(oneLine + 1)
       await expect.poll(async () => (await own())?.ai_rule).toBe('Keep out anything about Quokka')
       await page.getByTestId(`settings-provider-${SERVICE}-try`).fill('Quokka budget')
       await page.getByTestId(`settings-provider-${SERVICE}-ask-ai`).click()
@@ -320,5 +336,23 @@ test.describe.serial('Settings › Task providers', () => {
     } finally {
       await api('PUT', '/api/config', { private_tasks: before ?? { words: [] } }).catch(() => undefined)
     }
+  })
+
+  test('a task plugin\'s own page names its sync rules and opens them in Settings', async ({ page }) => {
+    // The fixture's installed plugin stands in for one that syncs tasks.
+    await page.route('**/api/v1/private-tasks/providers', (route) => route.fulfill({ json: { providers: [{
+      id: 'walnut-time', name: 'Time', check: true, check_set: false, check_default: true,
+      words: ['salary'], ai: true, ai_rule: DEFAULT_RULE, ai_rule_default: DEFAULT_RULE,
+    }] } }))
+    await openHome(page)
+    await page.getByTestId('sidebar-core-app-apps').click()
+    await openPluginDetail(page, 'walnut-time')
+    const rules = page.getByTestId('plugin-sync-rules-walnut-time')
+    await expect(rules).toContainText('What may sync to Time')
+    await expect(rules).toContainText('Checks every task against 1 hard rule and the AI rule')
+    await rules.screenshot({ path: `${SHOTS}/${engine()}-7-plugin-sync-rules.png` })
+    await page.getByTestId('plugin-open-sync-rules-walnut-time').click()
+    await expect(page).toHaveURL(/\/settings#task-providers$/)
+    await expect(page.getByTestId('task-provider-walnut-time')).toBeVisible()
   })
 })

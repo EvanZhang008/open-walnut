@@ -26,7 +26,7 @@ import { useOptimisticSetting } from '../inputs/useOptimisticSetting'
 import { useCommitField } from '../inputs/useCommitField'
 import { PluginIcon, pluginTileTints } from '../PluginIcon'
 import { useSerialSave, type BuildPatch, type OnSave } from './GeneralSection'
-import { HardRulesEditor, TryVerdict, verdictOf, wordsFromText, type AiAnswer } from './task-provider-parts'
+import { GrowingTextarea, HardRulesEditor, TryVerdict, summaryOf, verdictOf, wordsFromText, type AiAnswer } from './task-provider-parts'
 import { listTaskProviders, testProviderRules, type ProviderRules } from '@/api/private-tasks'
 import { log } from '@/utils/log'
 import '@/styles/settings-controls.css'
@@ -76,13 +76,6 @@ export function TaskProvidersSection({ config, onSave }: { config: Config; onSav
       ))}
     </SettingsSection>
   )
-}
-
-/** The head's one line: what is checked now. */
-function summaryOf(p: ProviderRules, on: boolean, words: number, ai: boolean): string {
-  if (!on) return p.check_default ? 'Not checked: every task syncs' : 'Not checked: only you read it, so every task syncs'
-  const rules = [words ? `${words} hard ${words === 1 ? 'rule' : 'rules'}` : '', ai ? 'the AI rule' : ''].filter(Boolean)
-  return rules.length ? `Checks every task against ${rules.join(' and ')}` : 'Checks every task, no rules yet'
 }
 
 function ProviderCard({ provider: p, tint, save }: {
@@ -196,13 +189,12 @@ function ProviderCard({ provider: p, tint, save }: {
               htmlFor={id('ai-rule')}
               error={rule.error}
               control={(
-                <textarea
-                    id={id('ai-rule')}
-                    data-testid={id('ai-rule')}
-                    data-no-draft="autosave"
-                    className="tp-ai-rule-text"
-                    rows={7}
-                    maxLength={4000}
+                <GrowingTextarea
+                  id={id('ai-rule')}
+                  data-testid={id('ai-rule')}
+                  data-no-draft="autosave"
+                  className="tp-ai-rule-text"
+                  maxLength={4000}
                   {...rule.inputProps}
                 />
               )}

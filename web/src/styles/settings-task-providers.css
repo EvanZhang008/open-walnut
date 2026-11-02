@@ -179,9 +179,10 @@
 .tp-ai-rule-text {
   box-sizing: border-box;
   width: 100%;
-  /* Seven lines: the default rule shows whole at the settings width. */
-  min-height: 156px;
+  /* As tall as its text (GrowingTextarea): one line at least. */
+  min-height: 38px;
   padding: 8px 10px;
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--settings-input-bg);
@@ -189,7 +190,7 @@
   font: inherit;
   font-size: 13px;
   line-height: 20px;
-  resize: vertical;
+  resize: none;
   transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 

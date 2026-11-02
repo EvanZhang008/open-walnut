@@ -35,6 +35,7 @@ import { appsOfPlugin, StoreNotices } from './PluginStoreGrid'
 import { PartsSection, SourceSection, VersionSection } from './plugin-detail-sections'
 import { isRunning, originKind, partParents, type RegistryRow } from './plugin-store-model'
 import type { PluginStore } from './usePluginStore'
+import { TaskProviderRulesGroup } from '@/components/settings/sections/TaskProviderRulesGroup'
 
 export function PluginDetail({ store, pluginId, config, onSave, onBack, onOpen }: {
   store: PluginStore
@@ -369,6 +370,8 @@ function PluginDetailBody({ store, row, config, onSave, onBack, onOpen, back }: 
       {about}
       {appsSection}
       {!needsSetup && settings}
+      {/* Only a loaded plugin that syncs tasks shows it (the group asks the provider list). */}
+      <TaskProviderRulesGroup pluginId={row.id} className="apps-detail-group" />
       {running && <div className="settings-group apps-detail-group apps-detail-box" data-testid={`plugin-running-${row.id}`}>{running}</div>}
       <PartsSection store={store} row={row} parts={parts} tints={tints} onOpen={onOpen} />
       <SourceSection store={store} row={row} />

@@ -135,9 +135,10 @@ export const CORE_SETTINGS_CONTRIBUTIONS: readonly CoreSettingsContribution[] = 
     render: () => <TagsSection />,
   },
   // Task providers: each plugin that syncs tasks, with the rules a task must pass before it
-  // syncs there (src/core/private-tasks/provider-rules.ts).
+  // syncs there (src/core/private-tasks/provider-rules.ts). Folded under Tasks (`#task-providers`
+  // still works, and each task plugin's own settings link here).
   {
-    owner: 'walnut', id: 'task-providers', label: 'Task providers', title: 'Task providers', group: 'configure',
+    owner: 'walnut', id: 'task-providers', label: 'Task providers', title: 'Task providers', group: 'configure', navHidden: true,
     icon: 'plug', tint: '#007AFF',
     description: 'Each service tasks sync to, and the rules a task must pass first.',
     keywords: [

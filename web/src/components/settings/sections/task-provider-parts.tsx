@@ -4,12 +4,14 @@
  *   - HardRulesEditor: the provider's hard rules as chips. Enter (or leaving the field) adds what is
  *     typed, a pasted list adds one chip per line, the cross removes one. A line the server cannot
  *     use (not a valid pattern, or one that could be slow) is marked on its chip.
+ *   - GrowingTextarea: a field exactly as tall as its text (no resize corner, no empty band),
+ *     measured again when the text or the field's width changes.
  *   - TryVerdict: one line under the test field that says whether the title passes, why, and what
  *     is still to ask, led by a dot in the verdict's colour.
  */
-import { useState, type ClipboardEvent, type KeyboardEvent } from 'react'
+import { useLayoutEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent, type TextareaHTMLAttributes } from 'react'
 import { CloseGlyph } from '../settings-glyphs'
-import type { RulesTest } from '@/api/private-tasks'
+import type { ProviderRules, RulesTest } from '@/api/private-tasks'
 
 /** Lines as the stored list: trimmed, no empty lines, no repeats. */
 export function wordsFromText(text: string): string[] {
@@ -103,6 +105,13 @@ export function HardRulesEditor({ id, words, invalid, busy, onChange }: {
   )
 }
 
+/** A provider's rules in one line: what is checked now. */
+export function summaryOf(p: Pick<ProviderRules, 'check_default'>, on: boolean, words: number, ai: boolean): string {
+  if (!on) return p.check_default ? 'Not checked: every task syncs' : 'Not checked: only you read it, so every task syncs'
+  const rules = [words ? `${words} hard ${words === 1 ? 'rule' : 'rules'}` : '', ai ? 'the AI rule' : ''].filter(Boolean)
+  return rules.length ? `Checks every task against ${rules.join(' and ')}` : 'Checks every task, no rules yet'
+}
+
 export type AiAnswer = RulesTest['ai'] | 'asking' | null
 
 /** What the verdict line says, and its tone. */
@@ -133,4 +142,22 @@ export function TryVerdict({ id, tone, text }: { id: string; tone: string; text:
       <span>{text}</span>
     </p>
   )
+}
+
+/** A textarea as tall as its text: the height follows every change and every width change. */
+export function GrowingTextarea({ value, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement> & { value: string }) {
+  const ref = useRef<HTMLTextAreaElement>(null)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const fit = () => {
+      el.style.height = 'auto'
+      el.style.height = `${el.scrollHeight + (el.offsetHeight - el.clientHeight)}px`
+    }
+    fit()
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(fit)
+    ro?.observe(el)
+    return () => ro?.disconnect()
+  }, [value])
+  return <textarea ref={ref} value={value} rows={1} {...rest} />
 }

@@ -150,6 +150,9 @@ async function check(pluginId: string, method: string, args: unknown[]): Promise
     ...(m === 'updateConversationLog' ? { log: fieldText! } : {}),
   });
   if (verdict.ok) return;
+  // Which plugin and call it was, and the task's own service: a push to a plugin that is not
+  // the task's service, or to one whose check is off, is a bug this line names.
+  log.task.warn('private tasks: a push was stopped by the AI rule', { pluginId, method, taskId: task.id, taskSource: task.source, state: verdict.state });
   onStop(task, { state: verdict.state, by: 'model', reason: verdict.reason });
   throw new PrivateTaskBlockedError(task.id, 'model');
 }

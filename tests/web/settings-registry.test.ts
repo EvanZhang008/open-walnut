@@ -73,7 +73,7 @@ describe('core settings registry', () => {
     // in the pane of the nearest visible entry above it (NAV_OWNER), so Tags sits
     // in the Tasks pane after Focus Tiers.
     const hidden = CORE_SETTINGS_CONTRIBUTIONS.filter((entry) => entry.navHidden).map((entry) => entry.id)
-    expect(hidden).toEqual(['focus-tiers', 'tags', 'cloud', 'providers'])
+    expect(hidden).toEqual(['focus-tiers', 'tags', 'task-providers', 'cloud', 'providers'])
     for (const id of hidden) {
       const idx = CORE_SETTINGS_CONTRIBUTIONS.findIndex((entry) => entry.id === id)
       const owner = CORE_SETTINGS_CONTRIBUTIONS.slice(0, idx).reverse().find((entry) => !entry.navHidden)
