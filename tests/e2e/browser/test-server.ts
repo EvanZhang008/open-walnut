@@ -1150,6 +1150,7 @@ await fs.writeFile(
       ...['chromium', 'webkit'].flatMap(browser => [
         { id: `pw-switch-workflow-task-${browser}`, session: `pw-workflow-switch-${browser}`, title: `Workflow switch fixture ${browser}` },
         { id: `pw-bgbar-task-${browser}`, session: `pw-background-bar-${browser}`, title: `Background bar fixture ${browser}` },
+        { id: `pw-term-end-task-${browser}`, session: `pw-term-end-${browser}`, title: `Terminal end fixture ${browser}` },
       ]).map(({ id, session, title }) => ({
         id,
         title,
@@ -3921,7 +3922,9 @@ await fs.writeFile(
       ...['chromium', 'webkit'].flatMap(browser => [
         { sid: `pw-workflow-switch-${browser}`, taskId: `pw-switch-workflow-task-${browser}`, title: `Workflow switch fixture ${browser}` },
         { sid: `pw-background-bar-${browser}`, taskId: `pw-bgbar-task-${browser}`, title: `Background bar fixture ${browser}` },
-      ]).map(({ sid, taskId, title }) => ({
+        // terminal-end-unconfirmed.spec.ts: a real local terminal, in a dir that exists.
+        { sid: `pw-term-end-${browser}`, taskId: `pw-term-end-task-${browser}`, title: `Terminal end fixture ${browser}`, cwd: tmpBase },
+      ]).map(({ sid, taskId, title, cwd }) => ({
         claudeSessionId: sid,
         taskId,
         project: 'Walnut',
@@ -3931,7 +3934,7 @@ await fs.writeFile(
         startedAt: new Date(sessionFixtureNow - 180_000).toISOString(),
         lastActiveAt: new Date(sessionFixtureNow - 60_000).toISOString(),
         messageCount: 2,
-        cwd: workflowFixtureRoot,
+        cwd: cwd ?? workflowFixtureRoot,
         title,
       })),
       {
@@ -4985,6 +4988,9 @@ if (process.env.PW_INBOX_ITEMS_FIXTURE !== '0') {
   const { installInboxItemsFixture } = await import('./inbox-items-fixture')
   await installInboxItemsFixture(tmpBase)
 }
+
+// An "End terminal" the server cannot confirm (terminal-end-unconfirmed.spec.ts).
+;(await import('./terminal-end-fixture')).installTerminalEndFixture()
 
 // "@" picker sources beyond the built-in Notes (mention-sources-fixture.ts).
 ;(await import('./mention-sources-fixture')).installMentionSourcesFixture()

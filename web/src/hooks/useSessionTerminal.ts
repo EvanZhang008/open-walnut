@@ -11,6 +11,12 @@
  * dtach unavailable, the shell dies with its connection, the UI must say so),
  * or `ssh_failed` (blocking, no terminal). `retry` re-probes on the server and
  * upgrades a plain shell to a persistent one when dtach became available.
+ *
+ * `kill` resolves true only when the server confirmed the end. Otherwise the
+ * status is `end_unconfirmed` with `endUnconfirmed` set to the reason, and the
+ * terminal id is kept so a second End reaches the same dtach session. An End
+ * answer that lands after the view unmounted or reopened resolves false and
+ * changes nothing.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -26,8 +32,9 @@ import {
   type TerminalSshFailed,
 } from '@/api/terminal';
 import { log } from '@/utils/log';
+import { awaitEndAnswer } from './terminal-end-model';
 
-export type TerminalStatus = 'idle' | 'connecting' | 'ready' | 'ssh_failed' | 'error' | 'exited';
+export type TerminalStatus = 'idle' | 'connecting' | 'ready' | 'ssh_failed' | 'error' | 'exited' | 'ending' | 'end_unconfirmed';
 
 interface UseSessionTerminalOpts {
   sessionId: string;
@@ -47,10 +54,12 @@ interface UseSessionTerminalReturn {
   /** Set when ssh failed and there is no terminal (blocking card). */
   sshFailed: TerminalSshFailed | null;
   errorMessage: string | null;
+  /** Why the last End could not be confirmed (status `end_unconfirmed`), else null. */
+  endUnconfirmed: string | null;
   sendInput: (data: string) => void;
   sendResize: (cols: number, rows: number) => void;
-  /** Explicitly destroy (kills dtach). */
-  kill: () => void;
+  /** Explicitly destroy (kills dtach). True only when the server confirmed the end. */
+  kill: () => Promise<boolean>;
   /** Re-probe dtach and re-open (upgrades a plain shell when dtach is available). */
   retry: () => void;
 }
@@ -63,6 +72,14 @@ export function useSessionTerminal(opts: UseSessionTerminalOpts): UseSessionTerm
   // Read inside open() without making it depend on render state.
   const wasPlainRef = useRef(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [endUnconfirmed, setEndUnconfirmed] = useState<string | null>(null);
+  // An End in flight (one at a time), and an End left unconfirmed: a reconnect
+  // must not reopen then, since a reopen starts a new shell when the old one is gone.
+  const endingRef = useRef(false);
+  const unconfirmedRef = useRef(false);
+  // Bumped by every (re)open and by unmount: an End answer that lands after
+  // either belongs to a view that is gone, and is dropped (no state, no close).
+  const genRef = useRef(0);
 
   const terminalIdRef = useRef<string | null>(null);
   // Keep latest callbacks in refs so the open/attach logic stays stable.
@@ -80,10 +97,13 @@ export function useSessionTerminal(opts: UseSessionTerminalOpts): UseSessionTerm
   const open = useCallback(async (opts: { reprobe?: boolean } = {}) => {
     if (openingRef.current) return;
     openingRef.current = true;
+    genRef.current++;
     const { cols, rows } = getSizeRef.current();
     setStatus('connecting');
     setSshFailed(null);
     setErrorMessage(null);
+    setEndUnconfirmed(null);
+    unconfirmedRef.current = false;
     try {
       const res = await terminalOpen(sessionId, cols, rows, opts);
       if (!res.ok) {
@@ -123,6 +143,7 @@ export function useSessionTerminal(opts: UseSessionTerminalOpts): UseSessionTerm
     if (!enabled) return;
     void open();
     return () => {
+      genRef.current++;
       const id = terminalIdRef.current;
       if (id) {
         terminalClose(id).catch(() => { /* best-effort */ });
@@ -152,7 +173,7 @@ export function useSessionTerminal(opts: UseSessionTerminalOpts): UseSessionTerm
   // On WS reconnect: try cheap attach (pty still alive in grace window);
   // on failure, reopen — server re-attaches the persistent dtach session.
   useEvent('_ws:reconnected', () => {
-    if (!enabled) return;
+    if (!enabled || unconfirmedRef.current || endingRef.current) return;
     const id = terminalIdRef.current;
     const { cols, rows } = getSizeRef.current();
     if (id) {
@@ -181,16 +202,38 @@ export function useSessionTerminal(opts: UseSessionTerminalOpts): UseSessionTerm
     if (id) terminalResize(id, cols, rows).catch(() => { /* dropped on disconnect */ });
   }, []);
 
-  const kill = useCallback(() => {
+  const kill = useCallback(async (): Promise<boolean> => {
     const id = terminalIdRef.current;
-    if (id) {
-      terminalKill(id).catch(() => { /* best-effort */ });
-      terminalIdRef.current = null;
-      setStatus('exited');
+    if (!id) return true; // no terminal was open: nothing to end
+    if (endingRef.current) return false;
+    endingRef.current = true;
+    const gen = genRef.current;
+    setStatus('ending');
+    try {
+      const outcome = await awaitEndAnswer(terminalKill(id));
+      if (genRef.current !== gen) {
+        log.info('terminal', 'end answer dropped: the view closed or reopened', { sessionId, terminalId: id, ended: outcome.ended });
+        return false;
+      }
+      if (outcome.ended) {
+        if (terminalIdRef.current === id) terminalIdRef.current = null;
+        unconfirmedRef.current = false;
+        setEndUnconfirmed(null);
+        setStatus('exited');
+        return true;
+      }
+      unconfirmedRef.current = true;
+      setEndUnconfirmed(outcome.reason);
+      setStatus('end_unconfirmed');
+      log.warn('terminal', 'end unconfirmed', { sessionId, terminalId: id, reason: outcome.reason, detail: outcome.detail });
+      return false;
+    } finally {
+      endingRef.current = false;
     }
-  }, []);
+  }, [sessionId]);
 
-  const retry = useCallback(() => { void open({ reprobe: true }); }, [open]);
+  // Never while an End runs: a reopen then would take that End's answer.
+  const retry = useCallback(() => { if (!endingRef.current) void open({ reprobe: true }); }, [open]);
 
-  return { status, plain, sshFailed, errorMessage, sendInput, sendResize, kill, retry };
+  return { status, plain, sshFailed, errorMessage, endUnconfirmed, sendInput, sendResize, kill, retry };
 }

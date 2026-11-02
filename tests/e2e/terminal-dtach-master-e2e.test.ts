@@ -14,7 +14,10 @@
  *  - the ephemeral server's exit path (removeEphemeralRuntimeDirs on its runtime
  *    dir) ends the masters of its terminals;
  *  - in every case a shell whose command line only names the socket (which the
- *    old `pkill -f <socket>` signalled) is left running.
+ *    old `pkill -f <socket>` signalled) is left running;
+ *  - a socket held by a process that is not its dtach master (a decoy this file
+ *    starts) is never signalled, and End terminal answers unconfirmed instead
+ *    of killed; once nothing holds the socket, a second End is confirmed.
  *
  * The socket dir is a short path under /tmp shaped like an ephemeral runtime dir
  * (`open-walnut-eph-<n>-<six>/term`), so dtach can bind it (104-byte limit on
@@ -50,6 +53,7 @@ const RUNTIME_DIR = path.dirname(DTACH_SOCKET_DIR)
 const NEW_SID = 'dtach-e2e-new'
 const OLD_SID = 'dtach-e2e-old'
 const EXIT_SID = 'dtach-e2e-exit'
+const LEFT_SID = 'dtach-e2e-left'
 
 let server: HttpServer
 let serverUp = false
@@ -149,7 +153,7 @@ beforeAll(async () => {
   savedShell = process.env.SHELL
   process.env.SHELL = '/bin/sh' // a login zsh in an empty HOME stops at its first-run menu
   await fs.promises.mkdir(WALNUT_HOME, { recursive: true })
-  for (const sid of [NEW_SID, OLD_SID, EXIT_SID]) {
+  for (const sid of [NEW_SID, OLD_SID, EXIT_SID, LEFT_SID]) {
     const cwd = path.join(WALNUT_HOME, 'work', sid)
     await fs.promises.mkdir(cwd, { recursive: true })
     await createSessionRecord(sid, `task-${sid}`, '', cwd)
@@ -209,6 +213,7 @@ describe('a terminal\'s dtach master is ended by its recorded pid', () => {
     // End terminal.
     const killed = await again.rpc('terminal:kill', { terminalId: NEW_SID })
     expect(killed.ok, killed.error).toBe(true)
+    expect(killed.payload).toEqual({ killed: true })
     await until('the master to exit', async () => !(await running(master)))
     expect(fs.existsSync(sock)).toBe(false)
     expect(fs.existsSync(dtachPidPath(NEW_SID))).toBe(false)
@@ -243,10 +248,39 @@ describe('a terminal\'s dtach master is ended by its recorded pid', () => {
 
     const killed = await client.rpc('terminal:kill', { terminalId: OLD_SID })
     expect(killed.ok, killed.error).toBe(true)
+    expect(killed.payload).toEqual({ killed: true })
     await until('the old master to exit', async () => !(await running(old.pids[0]!)))
     expect(fs.existsSync(sock)).toBe(false)
     await sleep(300)
     expect(alive(naming)).toBe(true)
+    client.ws.close()
+  }, 120_000)
+
+  it('a socket held by a non-dtach process: End answers unconfirmed and signals nothing; a second End, once it is free, is confirmed', async () => {
+    const sock = dtachSocketPath(LEFT_SID)
+    fs.mkdirSync(DTACH_SOCKET_DIR, { recursive: true })
+    // The decoy binds the terminal's socket path; its argv is not a dtach master's.
+    const decoy = spawn(process.execPath, ['-e', "require('node:net').createServer().listen(process.env.DECOY_SOCK); setInterval(() => {}, 60_000)"],
+      { stdio: 'ignore', env: { ...process.env, DECOY_SOCK: sock } })
+    bystanders.push(decoy)
+    await until('the decoy\'s socket', () => fs.existsSync(sock))
+    expect((await mastersOf(sock)).pids).toEqual([])
+
+    const client = await Client.connect()
+    const first = await client.rpc('terminal:kill', { terminalId: LEFT_SID })
+    expect(first.ok, first.error).toBe(true)
+    expect(first.payload).toMatchObject({ killed: false, unconfirmed: true })
+    expect(first.payload?.reason).toBe("the terminal's owner could not be verified")
+    await sleep(300)
+    expect(alive(decoy)).toBe(true) // nothing was signalled
+    expect(fs.existsSync(sock)).toBe(true) // and the socket is kept
+
+    // This file ends its own decoy; the socket file it leaves is held by nobody.
+    decoy.kill('SIGKILL')
+    await until('the decoy to exit', () => !alive(decoy))
+    const second = await client.rpc('terminal:kill', { terminalId: LEFT_SID })
+    expect(second.payload).toEqual({ killed: true })
+    expect(fs.existsSync(sock)).toBe(false)
     client.ws.close()
   }, 120_000)
 

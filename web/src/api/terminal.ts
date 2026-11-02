@@ -66,9 +66,19 @@ export function terminalClose(terminalId: string): Promise<void> {
   return wsClient.sendRpc<void>('terminal:close', { terminalId });
 }
 
+/**
+ * `killed: false, unconfirmed: true`: the dtach master could not be proved or
+ * stopped, so the shell may still run. `reason` says why (short, English).
+ */
+export interface TerminalKillResult {
+  killed: boolean;
+  unconfirmed?: boolean;
+  reason?: string;
+}
+
 /** Explicitly destroy the terminal — kills the persistent dtach session. */
-export function terminalKill(terminalId: string): Promise<{ killed: boolean }> {
-  return wsClient.sendRpc<{ killed: boolean }>('terminal:kill', { terminalId });
+export function terminalKill(terminalId: string): Promise<TerminalKillResult> {
+  return wsClient.sendRpc<TerminalKillResult>('terminal:kill', { terminalId });
 }
 
 /**

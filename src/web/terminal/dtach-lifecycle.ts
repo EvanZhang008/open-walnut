@@ -22,7 +22,7 @@
 import { execFile } from 'node:child_process'
 import type { SessionRecord } from '../../core/types.js'
 import { resolveSshTarget, dtachSocketPath, dtachPidPath, dtachOwnerMarkerPath, DTACH_SOCKET_DIR, REMOTE_DTACH_SOCKET_DIR, sshControlMasterArgs } from './spawn.js'
-import { chooseDtachMaster, dtachProbeScript, parseDtachProbe, stopDtachMaster } from './dtach-master.js'
+import { chooseDtachMaster, dtachProbeScript, parseDtachProbe, stopDtachMaster, type StopOutcome } from './dtach-master.js'
 import { WALNUT_HOME } from '../../constants.js'
 import { listSessions } from '../../core/session-tracker.js'
 import { getConfig } from '../../core/config-manager.js'
@@ -139,9 +139,10 @@ export async function hasForegroundProcess(record: Pick<SessionRecord, 'claudeSe
 /**
  * Explicitly destroy a session's dtach session (signal its verified master,
  * remove socket + record). 'left' when a process may hold the socket but could
- * not be proved its master: nothing was signalled and the socket is kept.
+ * not be proved its master: nothing was signalled and the socket is kept, and
+ * `reason` says why (what "End terminal" reports instead of claiming it ended).
  */
-export async function killDtachSession(record: Pick<SessionRecord, 'claudeSessionId' | 'host'>): Promise<'stopped' | 'nothing' | 'left'> {
+export async function stopDtachSession(record: Pick<SessionRecord, 'claudeSessionId' | 'host'>): Promise<StopOutcome> {
   const sock = dtachSocketPath(record.claudeSessionId, !!record.host)
   const ctx = { sessionId: record.claudeSessionId, host: record.host }
   const res = await stopDtachMaster((script) => runPosix(record.host, script), sock, ctx)
@@ -150,7 +151,12 @@ export async function killDtachSession(record: Pick<SessionRecord, 'claudeSessio
   } else if (res.outcome === 'nothing') {
     log.web.debug('dtach kill noop (likely already gone)', { ...ctx, reason: res.reason })
   }
-  return res.outcome
+  return res
+}
+
+/** stopDtachSession, outcome only. */
+export async function killDtachSession(record: Pick<SessionRecord, 'claudeSessionId' | 'host'>): Promise<StopOutcome['outcome']> {
+  return (await stopDtachSession(record)).outcome
 }
 
 /**

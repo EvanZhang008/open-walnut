@@ -30,7 +30,7 @@ import { useSessionTerminal } from '@/hooks/useSessionTerminal';
 import { useConfirm } from '@/hooks/useConfirm';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
 import { remoteHostTag } from '@/utils/host-display-label';
-import { TerminalPlainBadge, TerminalPlainNotice, TerminalSshFailedCard } from './TerminalModeNotices';
+import { TerminalEndUnconfirmedNotice, TerminalPlainBadge, TerminalPlainNotice, TerminalSshFailedCard } from './TerminalModeNotices';
 
 interface SessionTerminalProps {
   sessionId: string;
@@ -57,13 +57,21 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  // onClose toggles the panel's view from what it was when this rendered, so a
+  // late End answer after the user moved to another view (Files, Changed, ...)
+  // must not call it: that would close the view they opened.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const getSize = useCallback(() => {
     const t = termRef.current;
     return t ? { cols: t.cols, rows: t.rows } : { cols: 80, rows: 24 };
   }, []);
 
-  const { status, plain, sshFailed, errorMessage, sendInput, sendResize, kill, retry } = useSessionTerminal({
+  const { status, plain, sshFailed, errorMessage, endUnconfirmed, sendInput, sendResize, kill, retry } = useSessionTerminal({
     sessionId,
     enabled: true,
     onData: (data) => termRef.current?.write(data),
@@ -169,11 +177,17 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
     const message = plain
       ? 'Ending the terminal will terminate the shell and any running processes.'
       : 'Ending the terminal will close the dtach session and terminate any running processes.';
+    // Close only on a confirmed end; otherwise the notice below says it may still run.
     if (await confirm({ title: 'End terminal?', message, confirmLabel: 'End', cancelLabel: 'Cancel', danger: true })) {
-      kill();
-      onClose();
+      if (await kill() && mountedRef.current) onClose();
     }
   }, [kill, onClose, confirm, plain]);
+
+  // The user already confirmed the End once: trying again asks no second time.
+  const retryEnd = useCallback(async () => {
+    if (await kill() && mountedRef.current) onClose();
+  }, [kill, onClose]);
+  const ending = status === 'ending';
 
   const panel = (
     <div className={`session-terminal-panel${embedded ? ' session-terminal-panel-embedded' : ''}`}>
@@ -187,8 +201,8 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
           </div>
           <div className="session-terminal-actions">
             {!blocked && (
-              <button className="session-terminal-btn session-terminal-btn-kill" onClick={handleKill} title={plain ? 'End terminal (kill the shell)' : 'End terminal (kill dtach)'}>
-                End terminal
+              <button className="session-terminal-btn session-terminal-btn-kill" onClick={handleKill} disabled={ending} title={plain ? 'End terminal (kill the shell)' : 'End terminal (kill dtach)'}>
+                {ending ? 'Ending…' : 'End terminal'}
               </button>
             )}
             {/* In embedded mode the split's header owns closing (Changed/Files/Terminal toggle). */}
@@ -202,7 +216,11 @@ export function SessionTerminal({ sessionId, label, host, onClose, embedded = fa
         </div>
 
         {!blocked && plain && (
-          <TerminalPlainNotice plain={plain} retrying={status === 'connecting'} onRetry={retry} />
+          <TerminalPlainNotice plain={plain} retrying={status === 'connecting'} disabled={ending} onRetry={retry} />
+        )}
+
+        {!blocked && endUnconfirmed && (
+          <TerminalEndUnconfirmedNotice reason={endUnconfirmed} ending={ending} onRetry={() => { void retryEnd(); }} />
         )}
 
         {sshFailed ? (

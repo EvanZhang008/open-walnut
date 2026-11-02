@@ -277,12 +277,15 @@ describe('Retry (reprobe) and reattach', () => {
     expect(sent.find((e) => e.name === 'terminal:exit:sess-r3')).toBeUndefined();
   });
 
-  it('terminal:kill ends a plain shell immediately', async () => {
+  it('terminal:kill releases a plain shell at once, and says unconfirmed when the host answers no dtach probe', async () => {
     hostState.scenario = 'no_compiler';
     await open('sess-k');
-    await handlers.get('terminal:kill')!({ terminalId: 'sess-k' }, ws);
+    const answer = await handlers.get('terminal:kill')!({ terminalId: 'sess-k' }, ws);
     expect(spawned[0].kill).toHaveBeenCalled();
     expect(terminalManager.liveMode('sess-k')).toBeNull();
+    // This simulated host answers no dtach probe, so the dtach side is not
+    // confirmed gone: the answer says so instead of claiming the end.
+    expect(answer).toEqual({ killed: false, unconfirmed: true, reason: 'the host did not answer in time' });
   });
 
   it('conditionalReap ends a detached plain shell (it has no dtach socket to inspect)', async () => {

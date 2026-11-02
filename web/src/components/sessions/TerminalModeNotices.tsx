@@ -1,7 +1,8 @@
 /**
  * Terminal mode notices: the "Not persistent" badge and inline notice for a
  * plain shell (dtach unavailable on the target), and the blocking card for an
- * ssh failure. Kept free of xterm so they render in unit tests.
+ * ssh failure, and the notice of an End the server could not confirm. Kept
+ * free of xterm so they render in unit tests.
  *
  * WHY a plain shell gets a badge AND a notice: it dies with its connection,
  * which the user must know before starting a long build in it. The badge stays
@@ -12,6 +13,7 @@
 import { useCallback, useState } from 'react';
 import type { TerminalOpenPlain, TerminalSshFailed } from '@/api/terminal';
 import { useHostDisplayLabel } from '@/hooks/useHostDisplayLabel';
+import { END_REATTACH_HINT, END_UNCONFIRMED_TEXT } from '@/hooks/terminal-end-model';
 
 /** Copies exactly `command` (never the surrounding prose). */
 export function CopyCommandButton({ command }: { command: string }) {
@@ -40,10 +42,12 @@ export function TerminalPlainBadge({ plain }: { plain: TerminalOpenPlain }) {
 interface PlainNoticeProps {
   plain: TerminalOpenPlain;
   retrying: boolean;
+  /** Retry is off while something else runs (an End). */
+  disabled?: boolean;
   onRetry: () => void;
 }
 
-export function TerminalPlainNotice({ plain, retrying, onRetry }: PlainNoticeProps) {
+export function TerminalPlainNotice({ plain, retrying, disabled = false, onRetry }: PlainNoticeProps) {
   const where = plain.host ?? 'this machine';
   const cmd = <code>{plain.installCommand}</code>;
   return (
@@ -57,7 +61,7 @@ export function TerminalPlainNotice({ plain, retrying, onRetry }: PlainNoticePro
           )}
         </span>
         <CopyCommandButton command={plain.installCommand} />
-        <button className="session-terminal-btn" onClick={onRetry} disabled={retrying} title="Check for dtach again; if it can be built, this shell is replaced by a persistent one">
+        <button className="session-terminal-btn" onClick={onRetry} disabled={retrying || disabled} title="Check for dtach again; if it can be built, this shell is replaced by a persistent one">
           {retrying ? 'Retrying…' : 'Retry'}
         </button>
       </div>
@@ -82,6 +86,28 @@ export function TerminalSshFailedCard({ failed, onRetry }: { failed: TerminalSsh
       <button className="session-terminal-btn session-terminal-retry" onClick={onRetry}>
         Retry
       </button>
+    </div>
+  );
+}
+
+interface EndUnconfirmedProps {
+  reason: string;
+  ending: boolean;
+  onRetry: () => void;
+}
+
+/** "End terminal" could not be confirmed: the shell may still run. Never claim it ended. */
+export function TerminalEndUnconfirmedNotice({ reason, ending, onRetry }: EndUnconfirmedProps) {
+  return (
+    <div className="session-terminal-plain-notice" role="alert" data-testid="terminal-end-unconfirmed">
+      <div className="session-terminal-plain-row">
+        <span className="session-terminal-plain-text" title={reason}>
+          {END_UNCONFIRMED_TEXT} <span className="session-terminal-end-reason">Reason: {reason}. {END_REATTACH_HINT}</span>
+        </span>
+        <button className="session-terminal-btn" onClick={onRetry} disabled={ending} title="Try to end the terminal again">
+          {ending ? 'Ending…' : 'Try again'}
+        </button>
+      </div>
     </div>
   );
 }

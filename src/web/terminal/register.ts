@@ -21,7 +21,7 @@ import type { WebSocket } from '#ws'
 import { registerMethod } from '../ws/handler.js'
 import { terminalManager } from './terminal-manager.js'
 import { probeTerminalMode, type TerminalMode } from './dtach-check.js'
-import { killDtachSession } from './dtach-lifecycle.js'
+import { endDtachForTerminal } from './terminal-end.js'
 import { prewarmRemoteHost } from './spawn.js'
 import { getSessionByClaudeId } from '../../core/session-tracker.js'
 import { log } from '../../logging/index.js'
@@ -140,10 +140,11 @@ export async function registerTerminalRpc(): Promise<boolean> {
     const terminalId = str(o, 'terminalId', 'terminal:kill')
     // Explicit "End terminal": release the pty now (for a plain shell that IS
     // the kill) AND kill the persistent dtach session (a no-op without one).
+    // A master left running answers { killed: false, unconfirmed, reason }.
     terminalManager.end(terminalId)
     const record = await getSessionByClaudeId(terminalId)
-    if (record) await killDtachSession(record)
-    return { killed: true }
+    if (!record) return { killed: true }
+    return endDtachForTerminal(terminalId, record)
   })
 
   log.web.info('terminal RPC registered')

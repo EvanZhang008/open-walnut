@@ -25472,12 +25472,17 @@ a.file-link:hover {
   color: var(--fg-muted);
 }
 .session-terminal-status-ready { background: color-mix(in srgb, var(--success, #34c759) 22%, transparent); color: var(--success, #34c759); }
-.session-terminal-status-connecting { background: color-mix(in srgb, var(--warning, #ff9500) 22%, transparent); color: var(--warning, #ff9500); }
+.session-terminal-status-connecting,
+.session-terminal-status-ending,
+.session-terminal-status-end_unconfirmed { background: color-mix(in srgb, var(--warning, #ff9500) 22%, transparent); color: var(--warning, #ff9500); }
 .session-terminal-status-error,
 .session-terminal-status-exited,
 .session-terminal-status-ssh_failed { background: color-mix(in srgb, var(--danger, #ff3b30) 22%, transparent); color: var(--danger, #ff3b30); }
 /* "Not persistent": same pill as the status, in the warning tone. */
 .session-terminal-plain-badge { background: color-mix(in srgb, var(--warning, #ff9500) 22%, transparent); color: var(--warning, #ff9500); cursor: help; }
+
+/* An End the server could not confirm: its reason, quieter than the sentence. */
+.session-terminal-end-reason { color: var(--fg-secondary); }
 
 /* One-line notice above a plain (non-persistent) terminal. */
 .session-terminal-plain-notice {
