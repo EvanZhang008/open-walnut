@@ -90,9 +90,8 @@ describe('every plugin App and page renders in a bounded box', () => {
     for (const selector of ['.plugin-bounds dialog::backdrop', '.plugin-bounds [popover]::backdrop']) {
       expect(rule(selector)).toMatch(/inset: var\(--plugin-box-top, 50vh\) var\(--plugin-box-right, 50vw\) var\(--plugin-box-bottom, 50vh\) var\(--plugin-box-left, 50vw\) !important/)
     }
-    // Walnut's own full-screen sheets inside a box fill the box, edge to edge as everywhere
-    // (2026-11-02, the user: "full screen means full screen, not a bigger pop-up").
-    expect(rule('html .plugin-bounds .open-walnut-fullscreen.is-changed-open')).toMatch(/left: var\(--plugin-box-left, 0px\);/)
+    // Walnut's own full-screen sheets inside a box cover the box.
+    expect(rule('html .plugin-bounds .open-walnut-fullscreen.is-changed-open')).toMatch(/left: calc\(var\(--plugin-box-left, 0px\)/)
     expect(rule('html .plugin-bounds .file-content-view.fv-fullscreen')).toMatch(/inset: var\(--plugin-box-top, 0px\)/)
   })
 

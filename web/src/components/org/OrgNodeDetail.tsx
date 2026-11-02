@@ -17,6 +17,7 @@ import { readOrgPlace, writeOrgPlace } from './org-place';
 import { isBoolean, usePageViewOf } from '@/utils/view-memory';
 import { oneOf } from '@/hooks/usePersistentState';
 import { useResizablePanel } from '@/hooks/useResizablePanel';
+import { yieldFullscreen } from '@/hooks/useFullscreen';
 import type { Task } from '@open-walnut/core';
 import { SessionPanel } from '@/components/sessions/SessionPanel';
 import { TaskBoardPane } from '@/components/board/TaskBoardPane';
@@ -53,8 +54,6 @@ export const RAIL_MIN_PX = 300;
 export const CHAT_MIN_PX = 420;
 /** Its width when the user never set one: about a third of a 1280px window's node. */
 export const RAIL_DEFAULT_VW = 27;
-/** Widened: this share of the node, the chat beside it still CHAT_MIN_PX at least. */
-export const RAIL_WIDE_PCT = 60;
 /** The rail's width the user set, per surface (the CEO's, a VP's), as % of the window: an
  *  `open-walnut-` key, so it follows them to every window and device (ui-prefs-sync.ts). */
 export const railWidthKey = (kind: ChannelRow['kind']) => `open-walnut-org-rail-w-${kind === 'main' ? 'main' : 'vp'}`;
@@ -151,7 +150,12 @@ function TeamBoard({ columns, onPick, emptyText }: {
   );
 }
 
-export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelect, onOpenTask, onOpenSession, answers, onStartChat, onBack, onPin, now }: Props) {
+export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelect: selectRow, onOpenTask: openTaskOut, onOpenSession, answers, onStartChat, onBack, onPin, now }: Props) {
+  // What opens instead of this node or beside it (another node, a task's panel, the chat this
+  // fills) lies under a full-screen sheet, its side bar's or its chat's: leave it first, as a home
+  // column does (useFullscreen's COLUMN-OPEN EXIT), or the click reads as nothing happened.
+  const onSelect = (key: string) => { yieldFullscreen('org-select-node'); selectRow(key); };
+  const onOpenTask = (taskId: string, opts?: { inbox?: boolean }) => { yieldFullscreen('org-open-task'); openTaskOut(taskId, opts); };
   const contact = useMemo(() => (row.contactId ? tasks.find((t) => t.id === row.contactId) : undefined), [tasks, row.contactId]);
   // Temporary (utils/flash-probe.ts): a remount of the node's detail is one cause of a flash.
   useEffect(() => { if (flashProbeEnabled()) log.info('flash-probe', 'org detail mounted', { node: row.key }); }, [row.key]);
@@ -182,8 +186,6 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   const [taskTab, setTaskTab] = usePageViewOf<OrgRailTab>('org', 'node.taskTab', row.key, 'needs', oneOf(ORG_RAIL_TABS));
   /** Tasks by status, by team, or as the Board (2026-11-02: Team and Board went under Tasks). */
   const [taskMode, setTaskMode] = usePageViewOf<OrgTaskMode>('org', 'node.taskMode', row.key, 'status', oneOf(ORG_TASK_MODES));
-  /** The side bar widened beside the chat, per node. */
-  const [railWide, setRailWide] = usePageViewOf<boolean>('org', 'node.railWide', row.key, false, isBoolean);
   const tabs = useMemo(() => orgTaskTabs(row, rows, tasks, now), [row, rows, tasks, now]);
   const openTab = (t: OrgTaskTab) => { setRailHidden(false); setTopPick('task'); setTaskMode('status'); setTaskTab(t); };
   const brief = keepsBrief ? contact?.brief : undefined;
@@ -271,7 +273,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
     if (a.kind === 'needs' && a.source === 'choice' && hasBoard !== false && onContactBoard(a.taskId)) { openTasks('board'); return; }
     if (a.kind === 'needs' && a.source === 'letter' && !own) { onOpenTask(a.taskId, { inbox: true }); return; }
     if (own) {
-      if (a.kind === 'needs' && a.source === 'letter' && sessionId) setChatInbox({ sid: sessionId, n: Date.now() });
+      if (a.kind === 'needs' && a.source === 'letter' && sessionId) { yieldFullscreen('org-own-letter'); setChatInbox({ sid: sessionId, n: Date.now() }); }
       return;
     }
     onOpenTask(a.taskId);
@@ -282,6 +284,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
   const chatHostRef = useRef<HTMLDivElement>(null);
   const quoteAlert = (a: OrgAlertView) => {
     if (!sessionId) return;
+    yieldFullscreen('org-quote');
     setQuote({ sid: sessionId, text: alertQuote(a) });
   };
   useEffect(() => {
@@ -334,9 +337,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
     return { min: px(b.min), max: px(b.max), now: px(Math.min(b.max, Math.max(b.min, railWidth.pct))), b };
   })();
   // The window's own clamp too, so a width set on a wider window still leaves both sides readable.
-  const railCss = railSide && railWide
-    ? `clamp(${RAIL_MIN_PX}px, ${RAIL_WIDE_PCT}%, max(${RAIL_MIN_PX}px, calc(100% - ${CHAT_MIN_PX}px)))`
-    : `clamp(${RAIL_MIN_PX}px, ${railWidth.pct}vw, max(${RAIL_MIN_PX}px, calc(100% - ${CHAT_MIN_PX}px)))`;
+  const railCss = `clamp(${RAIL_MIN_PX}px, ${railWidth.pct}vw, max(${RAIL_MIN_PX}px, calc(100% - ${CHAT_MIN_PX}px)))`;
   /** The chat's header goes into the node's (SessionPanel headerSlot): its status and its kebab. */
   const [chatTools, setChatTools] = useState<HTMLElement | null>(null);
   const lastMoved = row.lastAt ? timeAgo(new Date(row.lastAt).toISOString(), { now }) : '';
@@ -370,7 +371,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
     <OrgTaskRail
       row={row} rows={rows} tasks={tasks} tabs={tabs} alerts={alertsShown} tab={taskTab} onTab={setTaskTab}
       view={topView} onView={pickTop} keepsBrief={keepsBrief} briefNew={briefNew} threadsNew={threadsNew} threadsCount={threadsCount} onClose={() => setRailHidden(true)}
-      wideOn={railSide ? railWide : null} onWide={setRailWide} mode={taskMode} onMode={setTaskMode} renderTeam={renderTeam} renderBoard={hasBoard && row.contactId ? renderBoard : null} briefFolded={briefFolded} onBriefFolded={setBriefFolded} briefFresh={briefFresh} briefUpdating={updating}
+      mode={taskMode} onMode={setTaskMode} renderTeam={renderTeam} renderBoard={hasBoard && row.contactId ? renderBoard : null} briefFolded={briefFolded} onBriefFolded={setBriefFolded} briefFresh={briefFresh} briefUpdating={updating}
       threads={threads} onThreadFollowUp={followUp}
       contact={contact} title={title} onOpenAlert={openAlert} onQuote={quoteAlert} canQuote={!!sessionId} answers={answers}
       onOpenTask={openChip} now={now} placement={railSide ? 'side' : 'top'} onPin={onPin}
@@ -441,7 +442,7 @@ export function OrgNodeDetail({ row, rows, tasks, initialTab, onTabUsed, onSelec
       </div>
       {!canTalk && <p className="org-composer org-composer-note" data-testid="org-no-contact">The Inbox has no VP: open a task to talk to it.</p>}
       </div>
-      {railSide && !railHidden && !railWide && (
+      {railSide && !railHidden && (
         <div
           className="org-rail-handle"
           role="separator"

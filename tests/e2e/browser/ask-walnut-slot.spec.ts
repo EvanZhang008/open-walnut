@@ -690,18 +690,21 @@ test('expand-to-fullscreen takes the whole page, not the slot', async ({ page })
   // THE ASSERTION THIS TEST EXISTS FOR: `contain: paint` on the slot's wrapper
   // once made it the containing block for the panel's position:fixed overlay,
   // so "expand" grew to the slot's own box (user: "it only expands in there").
-  // The panel fills the page area beside the sidebar edge to edge (fullscreen-tab.css;
-  // 2026-11-02, 715987269: "full screen means full screen, not a bigger pop-up").
-  // Trapped in the slot, it would be the slot's width at the slot's place instead.
+  // The sheet takes the page area beside the sidebar, centred, each side keeping
+  // about a tenth of it, never past a 960px sheet, never under the 12px gutter
+  // (fullscreen-tab.css; 2026-10-31). Trapped in the slot, it would be the
+  // slot's width at the slot's place instead.
   await expect
     .poll(() => page.evaluate(() => {
       const side = document.querySelector('.sidebar')?.getBoundingClientRect().right ?? 0
       const sheet = document.querySelector('.open-walnut-fullscreen')!.getBoundingClientRect()
+      const area = window.innerWidth - side
+      const want = Math.max(12, Math.min(area * 0.1, (area - 960) / 2))
       const left = sheet.left - side
       const right = window.innerWidth - sheet.right
-      return Math.abs(left) <= 1 && Math.abs(right) <= 1 && sheet.top <= 1 && Math.abs(window.innerHeight - sheet.bottom) <= 1
+      return Math.abs(left - want) <= 1 && Math.abs(right - want) <= 1
         ? 'takes the page area'
-        : `left ${left} right ${right} top ${sheet.top} bottom ${window.innerHeight - sheet.bottom}`
+        : `left ${left} right ${right} want ${want}`
     }), { message: 'the fullscreen panel never left the slot' })
     .toBe('takes the page area')
   // And it is wider than the slot it came from (the slot keeps the task column

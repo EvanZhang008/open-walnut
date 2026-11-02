@@ -30,6 +30,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { Task } from '@open-walnut/core';
 import { orgDisplayTitle } from '@open-walnut/org-tree';
 import { timeAgo } from '@/utils/time';
+import { useFullscreen, useSheetPlace } from '@/hooks/useFullscreen';
 import { OrgBrief } from './OrgBrief';
 import { OrgThreads } from './OrgThreads';
 import type { OrgThreadsState } from './useOrgThreads';
@@ -74,12 +75,12 @@ function ModeSwitch({ mode, modes, onPick }: { mode: OrgTaskMode; modes: readonl
   );
 }
 
-const ICON_WIDEN = (
+const ICON_EXPAND = (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
   </svg>
 );
-const ICON_NARROW = (
+const ICON_COLLAPSE = (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7" />
   </svg>
@@ -274,7 +275,7 @@ function AskList({ alerts, tasks, vpOf, ownId, ownName, onOpen, onQuote, canQuot
   );
 }
 
-export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, onView, keepsBrief, briefNew, threadsNew, threadsCount, onClose, wideOn, onWide, mode, onMode, renderTeam, renderBoard, briefFolded, onBriefFolded, briefFresh, briefUpdating, threads, onThreadFollowUp, contact, title, onOpenAlert, onQuote, canQuote, answers, onOpenTask, now, placement, onPin, width }: {
+export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, onView, keepsBrief, briefNew, threadsNew, threadsCount, onClose, mode, onMode, renderTeam, renderBoard, briefFolded, onBriefFolded, briefFresh, briefUpdating, threads, onThreadFollowUp, contact, title, onOpenAlert, onQuote, canQuote, answers, onOpenTask, now, placement, onPin, width }: {
   row: ChannelRow;
   rows: readonly ChannelRow[];
   tasks: readonly Task[];
@@ -291,9 +292,6 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
   threadsNew: boolean;
   /** The threads his view shows (OrgThreads), for the tab's count. */
   threadsCount: number;
-  /** Widened beside the chat (null: no widen here, the rail is above the chat), and the switch. */
-  wideOn: boolean | null;
-  onWide: (wide: boolean) => void;
   /** How Tasks draws the work, and the views it draws (renderBoard: null when the node keeps no Board). */
   mode: OrgTaskMode;
   onMode: (mode: OrgTaskMode) => void;
@@ -338,8 +336,14 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
   const brief = keepsBrief ? contact?.brief : undefined;
   // A Board picked on a node that keeps none (any more) shows the work by status.
   const shownMode: OrgTaskMode = mode === 'board' && !renderBoard ? 'status' : mode;
-  return (
-    <aside className={`org-rail is-${placement}${wideOn ? ' is-wide' : ''}`} data-testid="org-rail" data-placement={placement} {...(wideOn ? { 'data-wide': '1' } : {})} {...(width ? { style: { width } } : {})}>
+  // Full screen is the same pop-up sheet a session panel opens into, and the same one state of the
+  // tab (2026-11-02, the user: "that thread ... all full screens are that pop-up window"; it was a
+  // widen beside the chat before): entering it here leaves a session's, a reload keeps it.
+  const sheetAt = useSheetPlace('org-rail', row.key);
+  const { isFullscreen, enterFullscreen, exitFullscreen, fullscreenClass, FullscreenBackdrop } = useFullscreen({ keepAcrossRoutes: true, place: sheetAt });
+  return (<>
+    {FullscreenBackdrop}
+    <aside className={`org-rail is-${placement}${isFullscreen ? ' is-wide' : ''}${fullscreenClass}`} data-testid="org-rail" data-placement={placement} {...(isFullscreen ? { 'data-fullscreen': '1' } : {})} {...(width && !isFullscreen ? { style: { width } } : {})}>
       <div className="org-top has-switch" data-testid="org-top" data-view={view}>
         <div className="org-top-tabs" role="group" aria-label={keepsBrief ? 'Tasks, Brief or Threads' : 'Tasks'}>
           <button type="button" aria-pressed={view === 'task'} className={`org-top-tab${view === 'task' ? ' is-on' : ''}`} data-testid="org-top-task" onClick={() => onView('task')}>
@@ -363,12 +367,10 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
           </button>
         )}
         <span className="org-top-acts">
-          {wideOn !== null && (
-            <button type="button" className="org-rail-icon" data-testid="org-rail-wide" aria-pressed={wideOn}
-              aria-label="Widen beside the chat" title={wideOn ? 'Back to its own width' : 'Widen beside the chat'}
-              onClick={() => onWide(!wideOn)}>{wideOn ? ICON_NARROW : ICON_WIDEN}</button>
-          )}
-          <button type="button" className="org-rail-close" data-testid="org-rail-close" aria-label="Close this panel" title="Close this panel" onClick={onClose}>
+          <button type="button" className="org-rail-icon" data-testid="org-rail-fullscreen" aria-pressed={isFullscreen}
+            aria-label={isFullscreen ? 'Exit full screen' : 'Full screen'} title={isFullscreen ? 'Exit full screen (Esc)' : 'Full screen'}
+            onClick={isFullscreen ? exitFullscreen : enterFullscreen}>{isFullscreen ? ICON_COLLAPSE : ICON_EXPAND}</button>
+          <button type="button" className="org-rail-close" data-testid="org-rail-close" aria-label="Close this panel" title="Close this panel" onClick={() => { exitFullscreen(); onClose(); }}>
             <span aria-hidden="true">×</span>
           </button>
         </span>
@@ -403,5 +405,5 @@ export function OrgTaskRail({ row, rows, tasks, tabs, alerts, tab, onTab, view, 
         </div>
       )}
     </aside>
-  );
+  </>);
 }

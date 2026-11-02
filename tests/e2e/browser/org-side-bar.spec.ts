@@ -207,28 +207,70 @@ test('Tasks by Status, Team or Board, kept per node; a node with no Board offers
   await page.keyboard.press('Escape')
 })
 
-test('widen beside the chat and back, kept per node; close and back from the header', async ({ page }) => {
+test('full screen is the pop-up sheet with margins, kept across a reload; close and back from the header', async ({ page }) => {
   await isolateUiPrefs(page)
   await page.setViewportSize({ width: 1440, height: 900 })
   await loadHome(page)
   await openNode(page, LED)
   const detail = page.getByTestId('org-detail')
-  const width = async (sel: string) => (await detail.locator(sel).first().boundingBox())?.width ?? 0
-  await expect(detail.getByTestId('org-rail')).toBeVisible()
-  const railBefore = await width('[data-testid="org-rail"]')
+  const rail = detail.getByTestId('org-rail')
+  const box = async () => (await rail.boundingBox())!
+  await expect(rail).toBeVisible()
+  const railBefore = await box()
   await expect(detail.getByTestId('org-rail-handle')).toHaveCount(1)
-  await detail.getByTestId('org-rail-wide').click()
-  await expect(detail.getByTestId('org-rail')).toHaveAttribute('data-wide', '1')
-  await expect.poll(() => width('[data-testid="org-rail"]')).toBeGreaterThan(railBefore + 150)
-  // The chat keeps its room beside it.
-  expect(await width('.org-detail-col')).toBeGreaterThanOrEqual(419)
-  await expect(detail.getByTestId('org-rail-handle')).toHaveCount(0)
-  await shot(page, 'wide')
+  await detail.getByTestId('org-rail-fullscreen').click()
+  await expect(rail).toHaveAttribute('data-fullscreen', '1')
+  await expect(rail).toHaveClass(/open-walnut-fullscreen/)
+  // The session panel's sheet: over the page area beside the sidebar, a margin on every side
+  // (about a tenth of the area left and right), the backdrop around it. Never the whole window.
+  const area = await page.evaluate(() => {
+    const left = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--fullscreen-left')) || 0
+    return { left, width: window.innerWidth - left, height: window.innerHeight }
+  })
+  await expect.poll(async () => (await box()).width).toBeGreaterThan(railBefore.width + 300)
+  const sheet = await box()
+  const leftGap = sheet.x - area.left
+  const rightGap = area.left + area.width - (sheet.x + sheet.width)
+  expect(leftGap).toBeGreaterThan(area.width * 0.05)
+  expect(Math.abs(leftGap - rightGap)).toBeLessThan(4)
+  expect(sheet.y).toBeGreaterThanOrEqual(8)
+  expect(area.height - (sheet.y + sheet.height)).toBeGreaterThanOrEqual(8)
+  expect(sheet.height).toBeGreaterThan(area.height * 0.9)
+  await expect(page.locator('.open-walnut-fullscreen-backdrop')).toBeVisible()
+  // Every view of the side bar works in the sheet, Threads included.
+  await detail.getByTestId('org-top-threads').click()
+  await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
+  await expect(rail).toHaveAttribute('data-fullscreen', '1')
+  await shot(page, 'fullscreen')
+  // Back to Tasks, so the Threads dot below is not read away by a Threads view on show.
+  await detail.getByTestId('org-top-task').click()
+  // One state of the tab: a reload keeps it.
   await page.reload()
-  await expect(detail.getByTestId('org-rail')).toHaveAttribute('data-wide', '1')
-  await detail.getByTestId('org-rail-wide').click()
-  await expect(detail.getByTestId('org-rail')).not.toHaveAttribute('data-wide', '1')
-  await expect.poll(() => width('[data-testid="org-rail"]')).toBeLessThan(railBefore + 20)
+  await expect(rail).toHaveAttribute('data-fullscreen', '1')
+  await expect(page.locator('.open-walnut-fullscreen-backdrop')).toBeVisible()
+  // Esc leaves it, and the rail is back beside the chat at its own width.
+  await page.keyboard.press('Escape')
+  await expect(rail).not.toHaveAttribute('data-fullscreen', '1')
+  await expect(page.locator('.open-walnut-fullscreen-backdrop')).toHaveCount(0)
+  await expect.poll(async () => Math.abs((await box()).width - railBefore.width)).toBeLessThan(20)
+  await expect(detail.getByTestId('org-rail-handle')).toHaveCount(1)
+  // A click on the backdrop leaves it too, and a reload then stays out of it.
+  await detail.getByTestId('org-rail-fullscreen').click()
+  await expect(rail).toHaveAttribute('data-fullscreen', '1')
+  const s2 = await box()
+  await page.mouse.click(area.left + (s2.x - area.left) / 2, area.height / 2)
+  await expect(rail).not.toHaveAttribute('data-fullscreen', '1')
+  await page.reload()
+  await expect(rail).toBeVisible()
+  await expect(rail).not.toHaveAttribute('data-fullscreen', '1')
+  // The × of a full-screen side bar closes it and its sheet: back from the header, it is beside the chat.
+  await detail.getByTestId('org-rail-fullscreen').click()
+  await detail.getByTestId('org-rail-close').click()
+  await expect(rail).toHaveCount(0)
+  await expect(page.locator('.open-walnut-fullscreen-backdrop')).toHaveCount(0)
+  await detail.getByTestId('org-rail-toggle').click()
+  await expect(rail).toBeVisible()
+  await expect(rail).not.toHaveAttribute('data-fullscreen', '1')
 
   // Close: the chat takes the node; the header's switch brings it back.
   await detail.getByTestId('org-rail-close').click()
@@ -257,6 +299,32 @@ test('widen beside the chat and back, kept per node; close and back from the hea
   await expect(detail.getByTestId('org-rail-toggle-new')).toHaveCount(0)
   await detail.getByTestId('org-rail-toggle').click()
   await expect(detail.getByTestId('org-top')).toHaveAttribute('data-view', 'threads')
+
+  // In the sheet, Esc in a thread's Follow up closes the Follow up, not the sheet; the next Esc does.
+  await detail.getByTestId('org-rail-fullscreen').click()
+  await expect(rail).toHaveAttribute('data-fullscreen', '1')
+  await detail.getByTestId('org-thread-follow-open').first().click()
+  await expect(detail.getByTestId('org-thread-follow-input')).toBeVisible()
+  await detail.getByTestId('org-thread-follow-input').press('Escape')
+  await expect(detail.getByTestId('org-thread-follow-input')).toHaveCount(0)
+  await expect(rail).toHaveAttribute('data-fullscreen', '1')
+  await page.keyboard.press('Escape')
+  await expect(rail).not.toHaveAttribute('data-fullscreen', '1')
+
+  // A task opened from the sheet opens beside the page with the sheet gone, never under it.
+  await detail.getByTestId('org-top-task').click()
+  await detail.getByTestId('org-task-mode-status').click()
+  await detail.getByTestId('org-rail-fullscreen').click()
+  await expect(rail).toHaveAttribute('data-fullscreen', '1')
+  const tabs = detail.locator('[data-testid="org-task-tab"]')
+  for (let i = 0; i < await tabs.count(); i++) {
+    await tabs.nth(i).click()
+    if (await detail.getByTestId('org-task-row').count()) break
+  }
+  await detail.getByTestId('org-task-row').first().click()
+  await expect(rail).not.toHaveAttribute('data-fullscreen', '1')
+  await expect(page.locator('.open-walnut-fullscreen-backdrop')).toHaveCount(0)
+  await expect(page.getByTestId('org-side')).toBeVisible()
 })
 
 test('a narrow window stacks the side bar above the chat, with no widen; a link naming Team opens it once', async ({ page }) => {
@@ -279,7 +347,11 @@ test('a narrow window stacks the side bar above the chat, with no widen; a link 
 
   await page.setViewportSize({ width: 900, height: 900 })
   await expect(detail.getByTestId('org-rail')).toHaveAttribute('data-placement', 'top')
-  await expect(detail.getByTestId('org-rail-wide')).toHaveCount(0)
+  // Above the chat the side bar opens into the same sheet.
+  await detail.getByTestId('org-rail-fullscreen').click()
+  await expect(detail.getByTestId('org-rail')).toHaveAttribute('data-fullscreen', '1')
+  await page.keyboard.press('Escape')
+  await expect(detail.getByTestId('org-rail')).not.toHaveAttribute('data-fullscreen', '1')
   await expect(detail.locator('[data-testid="org-chat"] .session-panel')).toBeVisible()
   await shot(page, 'narrow')
 })

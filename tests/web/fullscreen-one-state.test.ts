@@ -150,6 +150,35 @@ describe('one full screen for the tab', () => {
     expect(claimers).toEqual(['hooks/fullscreen-owner.ts', 'hooks/useFullscreen.tsx']);
   });
 
+  it('every full screen is the pop-up sheet, and each sheet says whose state it is', () => {
+    // 2026-11-02, the user: "all full screens are that pop-up window, a little margin on both
+    // sides, not really the whole screen". Each sheet: the tab's one state, or a flag of its own.
+    const SHEETS: Record<string, 'tab' | 'own'> = {
+      'components/sessions/SessionPanel.tsx': 'tab', // a session panel, wherever it is hosted
+      'components/org/OrgTaskRail.tsx': 'tab', // an Org node's side bar (Tasks, Brief, Threads)
+      'components/dock/FocusDock.tsx': 'own', // the dock, beside every page
+      'components/sessions/WorkflowProgress.tsx': 'own', // a workflow card inside a panel's chat
+    };
+    const users = files.filter(({ file, text }) => file !== 'hooks/useFullscreen.tsx' && /\buseFullscreen\(/.test(code(text))).map(({ file }) => file).sort();
+    expect(users, 'a new full-screen sheet: list it in SHEETS').toEqual(Object.keys(SHEETS).sort());
+    for (const [file, kind] of Object.entries(SHEETS)) {
+      const call = code(read(file)).match(/\buseFullscreen\(([^)]*)\)/)![1];
+      if (kind === 'tab') expect(call, file).toMatch(/keepAcrossRoutes: true, place: /);
+      else expect(call, file).toBe('');
+    }
+    // No stylesheet turns a sheet into the whole window: the sheet keeps a gutter on every side.
+    const styles = fs.readdirSync(path.join(ROOT, 'styles')).filter((f) => f.endsWith('.css')).map((f) => `styles/${f}`);
+    for (const file of styles) {
+      for (const m of read(file).replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]*open-walnut-fullscreen(?!-backdrop)[^{}]*)\{([^}]*)\}/g)) {
+        const rule = `${file}: ${m[1].trim()}`;
+        expect(m[2], rule).not.toMatch(/\binset:\s*0\b|\b(width|max-width):\s*100(vw|%)|\b(height|max-height):\s*100(vh|%)|\bborder-radius:\s*0\b/);
+        // Edge to edge (715987269 set top, right and bottom to 0): at most one side flush.
+        const flush = [...m[2].matchAll(/\b(top|right|bottom):\s*0(px)?\s*(!important)?\s*;/g)].length;
+        expect(flush, rule).toBeLessThan(2);
+      }
+    }
+  });
+
   it('reads a whole tag, arrow functions in props included', () => {
     expect(sessionPanelTags('<SessionPanel onClose={() => x()} fullscreen />')).toEqual(['<SessionPanel onClose={() => x()} fullscreen />']);
   });

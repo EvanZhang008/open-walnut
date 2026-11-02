@@ -151,7 +151,8 @@ function FollowUp({ onSend, onDone }: { onSend: (text: string) => Promise<boolea
         onChange={setText}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); gate.send(); }
-          if (e.key === 'Escape') onDone();
+          // One Esc closes one layer: the follow-up, not a full-screen side bar around it.
+          if (e.key === 'Escape') { e.preventDefault(); onDone(); }
         }}
       />
       <div className="org-thread-follow-row">
