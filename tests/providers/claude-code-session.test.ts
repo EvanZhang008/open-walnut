@@ -3275,6 +3275,10 @@ describe('ClaudeCodeSession.getModelCatalog', () => {
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (session as any)._active = true;
+    // Settings already read and naming no model: the catalog comes back as the
+    // CLI sent it (the Default-row rewrite is model-default-spawn.test.ts).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (session as any)._configuredModel = null;
     return { session, writes };
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

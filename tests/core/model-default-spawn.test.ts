@@ -148,6 +148,32 @@ describe('ClaudeCodeSession.applyModel(default) sets the settings model live', (
   })
 })
 
+describe('a catalog fetched before the settings read still names the settings model', () => {
+  it('reads get_settings once, then rewrites the Default row', async () => {
+    const session = new ClaudeCodeSession('task-default-catalog', 'proj', 'claude')
+    const writes: string[] = []
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const s = session as any
+    const reply = (subtype: string, response: unknown) => {
+      const env = writes.map((w) => JSON.parse(w)).find((e) => e.request?.subtype === subtype)
+      s.handleStreamLine(JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: env.request_id, response } }))
+    }
+    s._transport = { writeRaw: (json: string) => { writes.push(json); return Promise.resolve(true) } }
+    s._active = true
+    const pending = session.getModelCatalog()
+    await new Promise((r) => setTimeout(r, 5))
+    reply('list_models', { models: CATALOG })
+    await new Promise((r) => setTimeout(r, 5))
+    reply('get_settings', {
+      applied: { model: OPUS },
+      effective: { model: 'haiku' },
+      sources: [{ source: 'userSettings', settings: { model: OPUS } }, { source: 'flagSettings', settings: { model: 'haiku' } }],
+    })
+    const catalog = await pending
+    expect(catalog!.models[0]).toMatchObject({ value: 'default', resolvedModel: 'global.anthropic.claude-opus-5-5' })
+  })
+})
+
 // ── Ratchet: every `--model` a claude argv gets ─────────────────────────────
 // Each file that writes '--model' into an argv, and how `default` stays off it.
 const MODEL_FLAG_SITES: Record<string, string> = {

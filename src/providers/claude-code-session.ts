@@ -8844,8 +8844,13 @@ export class ClaudeCodeSession {
     // Empty-after-sanitize = old/odd CLI — treat as "can't answer" so callers fall back.
     if (models.length === 0) return null
     // The `default` row names the CLI's own pick; say what Walnut's Default
-    // runs. From the last get_settings only (session start reads it): a read
-    // that lands later refetches the catalog (getSettingsSnapshot).
+    // runs. A session attached after a server restart has not read its
+    // settings yet: read them once here, within the budget.
+    if (this._configuredModel === undefined && models.some((m) => isCliDefaultModel(m.value))) {
+      const remaining = budgetMs - (Date.now() - t0)
+      if (remaining > 1_000) await this.getSettingsSnapshot(Math.min(3_000, remaining)).catch(() => null)
+      if (generation !== this._transportGeneration) return null
+    }
     return withConfiguredDefaultRow(models, this._configuredModel)
   }
 
