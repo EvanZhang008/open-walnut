@@ -513,10 +513,10 @@ describe('C. ledger corners', () => {
     // shape). Merging victims 2 and 3 into 1 must leave the id unblocked —
     // the survivor still owns it.
     const { mergeTaskInto, addTask } = await import('../../src/core/task-manager.js');
-    const { updateTaskRaw } = await import('../../src/core/task-manager.js');
+    const { _setSourceForTesting } = await import('../../src/core/task-manager.js');
     const mk = async (title: string) => {
       const { task } = await addTask({ title, project: 'P' });
-      await updateTaskRaw(task.id, { source: 'test-plugin' as any, ext: { 'test-plugin': { id: 'r-tri' } } });
+      await _setSourceForTesting(task.id, 'test-plugin' as any, { 'test-plugin': { id: 'r-tri' } });
       return task;
     };
     const a = await mk('copy A');
@@ -531,11 +531,11 @@ describe('C. ledger corners', () => {
   });
 
   it('C5: merge DOES tombstone the victim-only remote id, and the pull respects it', async () => {
-    const { mergeTaskInto, addTask, updateTaskRaw } = await import('../../src/core/task-manager.js');
+    const { mergeTaskInto, addTask, _setSourceForTesting } = await import('../../src/core/task-manager.js');
     const { task: survivor } = await addTask({ title: 'keeper', project: 'P' });
     const { task: victim } = await addTask({ title: 'dupe', project: 'P' });
-    await updateTaskRaw(survivor.id, { source: 'test-plugin' as any, ext: { 'test-plugin': { id: 'r-keep' } } });
-    await updateTaskRaw(victim.id, { source: 'test-plugin' as any, ext: { 'test-plugin': { id: 'r-dupe' } } });
+    await _setSourceForTesting(survivor.id, 'test-plugin' as any, { 'test-plugin': { id: 'r-keep' } });
+    await _setSourceForTesting(victim.id, 'test-plugin' as any, { 'test-plugin': { id: 'r-dupe' } });
 
     await mergeTaskInto(survivor.id, victim.id);
 
@@ -554,13 +554,10 @@ describe('C. ledger corners', () => {
   it('C6: merge tombstones the victim previous_ids too, not just the current id', async () => {
     // The victim carried alias memory; those former ids are just as
     // re-importable as the current one.
-    const { mergeTaskInto, addTask, updateTaskRaw } = await import('../../src/core/task-manager.js');
+    const { mergeTaskInto, addTask, _setSourceForTesting } = await import('../../src/core/task-manager.js');
     const { task: survivor } = await addTask({ title: 'keeper', project: 'P' });
     const { task: victim } = await addTask({ title: 'dupe', project: 'P' });
-    await updateTaskRaw(victim.id, {
-      source: 'test-plugin' as any,
-      ext: { 'test-plugin': { id: 'r-v-cur', previous_ids: ['r-v-old'] } },
-    });
+    await _setSourceForTesting(victim.id, 'test-plugin' as any, { 'test-plugin': { id: 'r-v-cur', previous_ids: ['r-v-old'] } });
 
     await mergeTaskInto(survivor.id, victim.id);
 
@@ -569,12 +566,9 @@ describe('C. ledger corners', () => {
   });
 
   it('C7: deleting a task ledgers its ALIASES as deleted too', async () => {
-    const { addTask, updateTaskRaw, deleteTask } = await import('../../src/core/task-manager.js');
+    const { addTask, _setSourceForTesting, deleteTask } = await import('../../src/core/task-manager.js');
     const { task } = await addTask({ title: 'doomed', project: 'P' });
-    await updateTaskRaw(task.id, {
-      source: 'test-plugin' as any,
-      ext: { 'test-plugin': { id: 'r-cur', previous_ids: ['r-past1', 'r-past2'] } },
-    });
+    await _setSourceForTesting(task.id, 'test-plugin' as any, { 'test-plugin': { id: 'r-cur', previous_ids: ['r-past1', 'r-past2'] } });
 
     await deleteTask(task.id);
 

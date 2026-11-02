@@ -278,7 +278,8 @@ describe('createServerPluginApi', () => {
     const bystander = await api.tasks.create({ title: 'Bystander', project: 'Filing Import' })
     const tm = await import('../../src/core/task-manager.js')
     await tm.linkSession(first.id, 'sess-first')
-    await tm.updateTasksBulk([{ id: synced.id, patch: { source: 'ms-todo' } }])
+    // A raw write never gives a task an outside service, so the synced task is a fixture.
+    await tm._setSourceForTesting(synced.id, 'ms-todo')
     const bystanderBefore = await tm.getTask(bystander.id)
 
     // A folder in a project the board does not have yet brings the project with it.

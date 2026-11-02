@@ -42,6 +42,7 @@ import {
   updateTasksBulk,
   _dropTaskStoreCacheForTesting,
   _resetForTesting,
+  _setSourceForTesting,
   _storeStatsForTesting,
 } from '../../src/core/task-manager.js';
 import { TASK_DB_PATH } from '../../src/core/task-db.js';
@@ -170,7 +171,9 @@ describe('task store write-through', () => {
     await updateNote(withNote.id, 'note body');
     await updateTaskRaw(withNote.id, { conversation_log: 'log line', summary: 'sum', ext: { local: { id: 'x' } } as never });
     const { task: synced } = await addTask({ title: `eq synced ${stamp}`, project: 'Equal', source: 'local' });
-    await updateTaskRaw(synced.id, { source: 'remote' as never, ext: { remote: { id: 'r1' } } as never, due_date: '2026-10-01' });
+    await updateTaskRaw(synced.id, { due_date: '2026-10-01' });
+    // A raw write never gives a task an outside service, so the synced row is a fixture.
+    await _setSourceForTesting(synced.id, 'remote' as never, { remote: { id: 'r1' } });
     const { task: bare } = await addTask({ title: `eq bare ${stamp}`, project: 'Equal', source: 'local' });
     await updateTaskRaw(bare.id, { ext: {} as never, conversation_log: '' });
     const { task: done } = await addTask({ title: `eq done ${stamp}`, project: 'Equal', source: 'local' });

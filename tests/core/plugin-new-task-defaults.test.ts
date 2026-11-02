@@ -30,6 +30,7 @@ import {
   addTaskFull,
   ensureProject,
   getTask,
+  releaseSyncHold,
   updateTask,
 } from '../../src/core/task-manager.js';
 import { closeDb } from '../../src/core/task-db.js';
@@ -343,10 +344,10 @@ describe('a task the plugin imported from the remote is not a new task', () => {
   });
 });
 
-describe("a task moved into another plugin's project is defaulted once, with reason 'moved'", () => {
-  it('a provider-to-provider move defaults through the new plugin before its first push', async () => {
+describe("a task moved into another plugin's project is defaulted once, when it is synced there", () => {
+  it('a provider-to-provider move stays local and held; the Sync choice defaults through the new plugin before its first push', async () => {
     installPlugin(PLUGIN_ID); // origin plugin, no defaults of its own
-    installPlugin(OTHER_ID, (_task, ctx) => (ctx.reason === 'moved' ? { sprint: 'Sprint 42' } : undefined));
+    installPlugin(OTHER_ID, () => ({ sprint: 'Sprint 42' }));
     await ensureProject(PROJECT, PLUGIN_ID);
     await ensureProject(OTHER_PROJECT, OTHER_ID);
 
@@ -355,12 +356,20 @@ describe("a task moved into another plugin's project is defaulted once, with rea
     pushed = [];
     hookCalls = [];
 
+    // A move never sends a task to a new service: it stays local, held for the new one.
     const { task: moved } = await updateTask(task.id, { project: OTHER_PROJECT }, { source: 'api' });
+    expect(moved.source).toBe('local');
+    expect(moved.sync_hold?.target).toBe(OTHER_ID);
+    expect(hookCalls).toEqual([]);
+    expect(pushed.filter((t) => t.source === OTHER_ID)).toEqual([]);
 
-    expect(moved.source).toBe(OTHER_ID);
-    expect(hookCalls).toEqual([{ taskId: task.id, reason: 'moved' }]);
+    // The person's Sync: the new plugin's defaults ride the first push to it, once.
+    const released = await releaseSyncHold(task.id, undefined, 'user');
+    expect(released.released).toBe(true);
+    expect(released.task?.source).toBe(OTHER_ID);
+    expect(hookCalls).toEqual([{ taskId: task.id, reason: 'created' }]);
     expect((await getTask(task.id))?.sprint).toBe('Sprint 42');
-    // The first push to the NEW backend carried it.
+    expect(pushed.at(-1)?.source).toBe(OTHER_ID);
     expect(pushed.at(-1)?.sprint).toBe('Sprint 42');
   });
 

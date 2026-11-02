@@ -24,6 +24,7 @@ import {
   updateTaskRaw,
   updateTasksBulk,
   _resetForTesting,
+  _setSourceForTesting,
 } from '../../src/core/task-manager.js';
 import { closeDb } from '../../src/core/task-db.js';
 import { WALNUT_HOME } from '../../src/constants.js';
@@ -94,11 +95,9 @@ describe('updateTasksBulk (reconciler path)', () => {
 describe('addTaskFull dedup merge (pull-create path)', () => {
   it('preserves the time-level due date when the pulled snapshot has the truncated day', async () => {
     const { task } = await addTask({ title: 'Synced', project: 'Marina' });
-    await updateTaskRaw(task.id, {
-      due_date: TIME_LEVEL,
-      ext: { acme: { id: 'r-1' } },
-      source: 'acme',
-    } as any);
+    await updateTaskRaw(task.id, { due_date: TIME_LEVEL });
+    // A raw write never gives a task an outside service, so the synced twin is a fixture.
+    await _setSourceForTesting(task.id, 'acme' as never, { acme: { id: 'r-1' } });
 
     const merged = await addTaskFull({
       title: 'Synced',

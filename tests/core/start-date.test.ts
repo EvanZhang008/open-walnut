@@ -20,6 +20,7 @@ import {
   updateTasksBulk,
   listTasksSlim,
   _resetForTesting,
+  _setSourceForTesting,
 } from '../../src/core/task-manager.js';
 import { closeDb } from '../../src/core/task-db.js';
 import { WALNUT_HOME } from '../../src/constants.js';
@@ -97,11 +98,9 @@ describe('start_date precision echo guard (sync pull)', () => {
 
   it('addTaskFull dedup-merge preserves the local time-level start', async () => {
     const { task } = await addTask({ title: 'Sync twin', project: 'Marina' });
-    await updateTaskRaw(task.id, {
-      start_date: TIME_LEVEL,
-      ext: { acme: { id: 'r-9' } },
-      source: 'acme',
-    } as any);
+    await updateTaskRaw(task.id, { start_date: TIME_LEVEL });
+    // A raw write never gives a task an outside service, so the synced twin is a fixture.
+    await _setSourceForTesting(task.id, 'acme' as never, { acme: { id: 'r-9' } });
 
     const merged = await addTaskFull({
       title: 'Sync twin', status: 'todo', phase: 'TODO', priority: 'none',

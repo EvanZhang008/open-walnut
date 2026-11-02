@@ -9,7 +9,7 @@ let configFile: string;
 vi.mock('../../src/constants.js', () => createMockConstants());
 
 // Import after mocking
-import { addTask, addTaskFull, addTasksBulk, listTasks, completeTask, getDashboardData, reorderTasks, deleteTask, linkSession, linkSessionSlot, clearSessionSlot, clearSession, ActiveSessionError, updateTask, autoPushIfConfigured, updateTaskRaw, getTask, _resetForTesting } from '../../src/core/task-manager.js';
+import { addTask, addTaskFull, addTasksBulk, listTasks, completeTask, getDashboardData, reorderTasks, deleteTask, linkSession, linkSessionSlot, clearSessionSlot, clearSession, ActiveSessionError, updateTask, autoPushIfConfigured, updateTaskRaw, getTask, _resetForTesting, _setSourceForTesting } from '../../src/core/task-manager.js';
 import { closeDb } from '../../src/core/task-db.js';
 import { closeDb as closeSessionDb } from '../../src/core/session-db.js';
 import * as sessionTracker from '../../src/core/session-tracker.js';
@@ -905,11 +905,9 @@ describe('autoPushIfConfigured sync_error lifecycle', () => {
     await registerTestPlugin('test-plugin');
 
     const { task } = await addTask({ title: 'Sync error task', project: 'test' });
-    await updateTaskRaw(task.id, {
-      source: 'test-plugin',
-      ext: { 'test-plugin': { id: 'remote-123' } },
-      sync_error: 'Sync auth expired (HTTP 302 redirect)',
-    } as any);
+    // A raw write never gives a task an outside service, so the synced task is a fixture.
+    await _setSourceForTesting(task.id, 'test-plugin' as any, { 'test-plugin': { id: 'remote-123' } });
+    await updateTaskRaw(task.id, { sync_error: 'Sync auth expired (HTTP 302 redirect)' });
 
     const before = (await listTasks()).find(t => t.id === task.id)!;
     expect(before.sync_error).toBe('Sync auth expired (HTTP 302 redirect)');
@@ -927,10 +925,7 @@ describe('autoPushIfConfigured sync_error lifecycle', () => {
     });
 
     const { task } = await addTask({ title: 'Fail sync task', project: 'test' });
-    await updateTaskRaw(task.id, {
-      source: 'test-fail-plugin',
-      ext: { 'test-fail-plugin': { id: 'remote-456' } },
-    } as any);
+    await _setSourceForTesting(task.id, 'test-fail-plugin' as any, { 'test-fail-plugin': { id: 'remote-456' } });
 
     const before = (await listTasks()).find(t => t.id === task.id)!;
     expect(before.sync_error).toBeUndefined();
