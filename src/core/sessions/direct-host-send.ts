@@ -35,6 +35,7 @@
  */
 
 import { log } from '../../logging/index.js';
+import { spawnModelArg } from '../types.js';
 
 export type DirectSendOutcome =
   | { ok: true; path: 'live' | 'resumed'; pid?: number }
@@ -182,7 +183,7 @@ async function deliverOnce(input: DirectSendInput): Promise<DirectSendOutcome> {
     // line, same as the Mac's --resume spawn path in session-runner.
     await startDelivering();
     const resumed = await bridgeRequest(host, 'bridgeResume', {
-      sid: sessionId, message: text, cwd: input.cwd, model: input.model, stopFence,
+      sid: sessionId, message: text, cwd: input.cwd, model: spawnModelArg(input.model), stopFence,
     }, 30_000);
     if (resumed.reason === 'session_stopped') {
       return notStarted({ ok: false, kind: 'refused', status: 409, code: 'session_stopped', message: 'Message predates the latest stop; send a new message to continue' });

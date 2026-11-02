@@ -91,7 +91,8 @@ import { walnutApiEnvForSession } from '../lib/self-api-root.js'
 import { sessionSettingsHooks } from './session-settings-hooks.js'
 import type { SessionRecord, SessionMode, ProcessStatus, TaskPhase, SessionModelCatalogEntry, SessionEffort, StatusReason, StatusChangedBy, SessionErrorKind, SessionTurnSpeed } from '../core/types.js'
 import {
-  SESSION_MODEL_CLI_MAP, modelSupportsEffort, VALID_SESSION_EFFORT_IDS,
+  modelSupportsEffort, VALID_SESSION_EFFORT_IDS,
+  isCliDefaultModel, spawnModelArg, withConfiguredDefaultRow,
   SESSION_MODE_CLI_MAP, VALID_SESSION_MODE_IDS, sessionModeFromCli, DEFAULT_SESSION_MODE,
 } from '../core/types.js'
 import { classifyStreamEvent, classifyDelta } from './claude-stream-event-map.js'
@@ -341,10 +342,38 @@ export interface CliAppliedSettings {
 
 export interface CliEffectiveSettings {
   effortLevel?: string | null
+  /** settings.json `model` as the CLI merged it (user, project, local): what
+   *  Walnut's Default runs (isCliDefaultModel). */
+  model?: string | null
   /** The CLI's resolved environment. Read for CLAUDE_CODE_AUTO_COMPACT_WINDOW —
    *  the clamp that decides the real context window (and therefore when the
    *  session compacts), which no other read exposes cheaply. */
   env?: Record<string, string>
+}
+
+/**
+ * The model a spawn with no `--model` runs, from a get_settings answer: the
+ * settings env's ANTHROPIC_MODEL, else the last settings layer that names a
+ * `model`, never the flag layer (Walnut's own live switches land there, so
+ * `effective.model` reads "haiku" after a switch to Haiku: measured on CLI
+ * 2.1.284). null = settings name none, or name the CLI's `default`.
+ */
+export function configuredModelFromSettings(payload: { effective?: CliEffectiveSettings; sources?: unknown }): string | null {
+  const pick = (m: unknown): string | null =>
+    typeof m === 'string' && m.trim() && !isCliDefaultModel(m) ? m.trim() : null
+  const envModel = pick(payload.effective?.env?.ANTHROPIC_MODEL)
+  if (envModel) return envModel
+  if (Array.isArray(payload.sources)) {
+    for (let i = payload.sources.length - 1; i >= 0; i--) {
+      const layer = payload.sources[i] as { source?: unknown; settings?: { model?: unknown } } | null
+      if (!layer || layer.source === 'flagSettings') continue
+      const m = pick(layer.settings?.model)
+      if (m) return m
+    }
+    return null
+  }
+  // An older CLI without the layers: the merge, flag layer included.
+  return pick(payload.effective?.model)
 }
 
 export interface CliSettingsSnapshot {
@@ -1315,6 +1344,9 @@ export class ClaudeCodeSession {
    *  so it is at most one in-flight turn stale. null model/effort = the CLI
    *  answered "unset", distinct from undefined (never read). */
   private _appliedSnapshot: { model: string | null; effort: import('../core/types.js').SessionEffort | null; atMs: number } | undefined
+  /** settings.json `model` as the CLI merged it (get_settings effective.model):
+   *  null = settings name none, undefined = not read yet. See configuredModel(). */
+  private _configuredModel: string | null | undefined
   /** Launch-config bundle expanded into spawn args. Persisted so a cold --resume
    *  re-applies it (spawn-time flags have no live control_request). */
   private _profile: import('../core/types.js').SessionProfile | undefined
@@ -2577,9 +2609,11 @@ export class ClaudeCodeSession {
     // (env ANTHROPIC_MODEL, ~/.claude/settings.json, {cwd}/.claude/settings.json).
     // Walnut deliberately has NO implicit default here: a session's model is a
     // RUNTIME choice (the picker), never a Walnut config-time default. Only an
-    // explicit picker selection is forwarded as --model.
-    const cliModel = model ? (SESSION_MODEL_CLI_MAP[model] ?? model) : undefined
-    this._cliModel = cliModel
+    // explicit picker selection is forwarded as --model. The CLI's own
+    // `default` row is Auto too: `--model default` skips settings.model and runs
+    // the CLI's recommendation (2026-11-02: Sonnet 5.5), see isCliDefaultModel.
+    const cliModel = spawnModelArg(model)
+    this._cliModel = cliModel ?? (isCliDefaultModel(model) ? model : undefined)
     if (cliModel) {
       args.push('--model', cliModel)
     }
@@ -2835,6 +2869,7 @@ export class ClaudeCodeSession {
     this._transportGeneration++
     this._modelCatalog = null
     this._modelCatalogInflight = null
+    this._configuredModel = undefined
     this._cwd = cwd ?? null
     // A new process holds no cut copy (its first line may say otherwise: settleSpawnLine).
     this._cutPid = null
@@ -5066,6 +5101,7 @@ export class ClaudeCodeSession {
     this._transportGeneration++
     this._modelCatalog = null
     this._modelCatalogInflight = null
+    this._configuredModel = undefined
   }
 
   // ── Private ──
@@ -8591,8 +8627,21 @@ export class ClaudeCodeSession {
   async applyModel(cliModel: string, timeoutMs = 15_000): Promise<boolean> {
     if (!this._transport) throw new Error('session not started')
     this._cliModel = cliModel  // reflect immediately for persistSessionRecord / resume
+    // Default = the user's settings.json model, never the CLI's own `default`,
+    // which skips it (isCliDefaultModel). With no settings model the CLI's
+    // default is the user's default, so `default` itself is right.
+    const live = isCliDefaultModel(cliModel)
+      ? (await this.configuredModel().catch(() => null)) ?? cliModel
+      : cliModel
     return this.sendFlagSettings(`mdl-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`,
-      { model: cliModel }, timeoutMs)
+      { model: live }, timeoutMs)
+  }
+
+  /** settings.json `model` as this CLI merged it, null when settings name none
+   *  (from the last get_settings, else one read now). */
+  async configuredModel(): Promise<string | null> {
+    if (this._configuredModel === undefined) await this.getSettingsSnapshot().catch(() => null)
+    return this._configuredModel ?? null
   }
 
   /**
@@ -8712,8 +8761,16 @@ export class ClaudeCodeSession {
     const payload = await this.readControlPayload('gs', 'get_settings', timeoutMs) as {
       applied?: CliAppliedSettings
       effective?: CliEffectiveSettings
+      sources?: unknown
     } | null
     if (!payload?.applied) return null
+    if (payload.effective) {
+      const configured = configuredModelFromSettings(payload)
+      const changed = configured !== this._configuredModel
+      this._configuredModel = configured
+      // A catalog fetched before this read describes the CLI's own default.
+      if (changed && this._modelCatalog) this.invalidateModelCatalog()
+    }
     return {
       applied: payload.applied,
       ...(payload.effective ? { effective: payload.effective } : {}),
@@ -8785,7 +8842,11 @@ export class ClaudeCodeSession {
       })
     }
     // Empty-after-sanitize = old/odd CLI — treat as "can't answer" so callers fall back.
-    return models.length > 0 ? models : null
+    if (models.length === 0) return null
+    // The `default` row names the CLI's own pick; say what Walnut's Default
+    // runs. From the last get_settings only (session start reads it): a read
+    // that lands later refetches the catalog (getSettingsSnapshot).
+    return withConfiguredDefaultRow(models, this._configuredModel)
   }
 
   /**

@@ -179,6 +179,13 @@ export function createHostResume(deps: HostResumeDeps): HostResume {
     // a plan/accept/default session in full-trust bypass.
     drop(args, '--dangerously-skip-permissions', false)
     if (!args.includes('--allow-dangerously-skip-permissions')) args.splice(1, 0, '--allow-dangerously-skip-permissions')
+    // `--model default` is the CLI's own recommended model, not the user's
+    // settings.json model (2026-11-02: it moved to Sonnet 5.5 and every session
+    // spawned with it followed). Walnut's Default is no --model at all, so an
+    // older spawn's argv resumes on the user's own default.
+    for (let i = args.indexOf('--model'); i >= 0; i = args.indexOf('--model', i + 1)) {
+      if (String(args[i + 1] || '').trim().toLowerCase() === 'default') { args.splice(i, 2); i -= 1 }
+    }
     const cli = typeof mode === 'string' ? deps.modeCli[mode] : undefined
     if (cli) setValue(args, '--permission-mode', cli)
     setValue(args, '--resume', sid)

@@ -3495,9 +3495,8 @@ describe('ClaudeCodeSession.getModelCatalog', () => {
     bus.subscribe('main-ai', (e) => { if (e.name === EventNames.SESSION_MODEL_CATALOG) events.push(e); });
 
     await fetchWithReply(session, writes, CLI_MODELS);
-    await new Promise((r) => setTimeout(r, 50)); // dynamic import + write chain
-
-    expect(events).toHaveLength(1);
+    // Dynamic import + write chain: polled, a fixed 50 ms lost the race on a loaded machine.
+    await vi.waitFor(() => expect(events).toHaveLength(1), { timeout: 5000 });
     const data = events[0]!.data as { sessionId: string; host?: string; models: unknown[]; fetchedAt: string };
     expect(data.sessionId).toBe('sid-cat-push');
     expect(data.host).toBeUndefined(); // local session → no host field
@@ -3506,6 +3505,8 @@ describe('ClaudeCodeSession.getModelCatalog', () => {
 
     // Host store written under the local key, cwd recorded.
     const { getHostModelCatalog, _resetHostModelCatalogCache } = await import('../../src/core/host-model-catalog.js');
+    const { _flushHostModelCatalogWrites } = await import('../../src/core/host-model-catalog.js');
+    await _flushHostModelCatalogWrites();
     _resetHostModelCatalogCache(); // force a disk read — proves persistence, not just memory
     const stored = await getHostModelCatalog(null);
     expect(stored?.models).toHaveLength(3);

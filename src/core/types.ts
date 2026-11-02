@@ -675,6 +675,56 @@ export function resolveModelSwitchValue(raw: string): string | null {
   return trimmed;
 }
 
+/**
+ * The CLI's "Default" catalog row (`default`) names the model Claude Code itself
+ * recommends, NOT the `model` in the user's settings.json: `--model default` and
+ * `set_model default` both skip settings.model. On 2026-11-02 that recommendation
+ * moved to Sonnet 5.5 (the Sonnet alias was pinned in settings env), and every
+ * session a user had once put on "Default (Opus 5.5)" ran Sonnet from its next
+ * spawn on. In Walnut, Default means the user's own default: a spawn passes no
+ * --model (spawnModelArg), a live switch sets the model settings name
+ * (ClaudeCodeSession.applyModel), and the row describes that model
+ * (withConfiguredDefaultRow).
+ */
+export function isCliDefaultModel(model?: string | null): boolean {
+  return typeof model === 'string' && model.trim().toLowerCase() === 'default';
+}
+
+/** The `--model` value a spawn passes for a stored model choice, undefined for
+ *  Auto (no flag: the CLI reads settings.model). Every `--model` Walnut builds
+ *  from a model choice goes through here (ratchet: model-default-spawn.test.ts). */
+export function spawnModelArg(model?: string | null): string | undefined {
+  if (typeof model !== 'string' || !model.trim() || isCliDefaultModel(model)) return undefined;
+  return SESSION_MODEL_CLI_MAP[model] ?? model;
+}
+
+/** The catalog with its `default` row describing what Walnut's Default runs:
+ *  the model the CLI merged from settings (`configured`, get_settings
+ *  effective.model). Unchanged when settings name none: then the CLI's own
+ *  default is the user's default, and its row already says which it is. */
+export function withConfiguredDefaultRow(
+  models: SessionModelCatalogEntry[],
+  configured?: string | null,
+): SessionModelCatalogEntry[] {
+  if (!configured || !configured.trim() || isCliDefaultModel(configured)) return models;
+  const concrete = matchSessionModelCatalogEntry(models.filter((m) => !isCliDefaultModel(m.value)), configured);
+  return models.map((row) => {
+    if (!isCliDefaultModel(row.value)) return row;
+    const next: SessionModelCatalogEntry = {
+      ...row,
+      resolvedModel: concrete?.resolvedModel ?? configured,
+      description: 'Your Claude Code default: the model in settings.json',
+    };
+    // Effort is the settings model's, never the CLI default row's.
+    const cap = modelEffortCapability(configured);
+    next.supportsEffort = concrete?.supportsEffort ?? cap.effort;
+    next.supportedEffortLevels = concrete?.supportedEffortLevels ?? (cap.effort
+      ? SESSION_EFFORT_IDS.filter((e) => (e !== 'xhigh' || cap.xhigh) && (e !== 'max' || cap.max))
+      : []);
+    return next;
+  });
+}
+
 export interface Task {
   id: string;
   title: string;

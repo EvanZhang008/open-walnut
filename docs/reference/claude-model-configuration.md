@@ -58,13 +58,38 @@ an error.
 
 - With an allowlist, use a full provider ID in `settings.model`.
 - Without an allowlist, an alias works.
-- The Default catalog row's `resolvedModel` is the CLI fallback. It does not
-  describe what a session will spawn with when `settings.model` is valid.
+- The CLI's Default catalog row's `resolvedModel` is the CLI fallback. It does
+  not describe what a session will spawn with when `settings.model` is valid;
+  Walnut rewrites the row (next section).
 
 A canonical short ID used as model input can pass the allowlist, acknowledge
 `set_model`, and appear in `get_settings`, then fail at the provider wire and
 silently fall back. The ground truth is the `model` field on assistant messages
 or a provider wire capture, never the control acknowledgement alone.
+
+## The `default` Alias Is Not the User's Default
+
+`--model default` and `set_model default` run the model the CLI itself
+recommends and skip `settings.model`. Only a spawn with no `--model` runs
+`settings.model`. Measured on CLI 2.1.284 with Bedrock: no flag ran Opus 5.5
+[1m] (the settings model), `--model default` ran Sonnet 5.5 [1m]. The CLI's
+recommendation moved from Opus to Sonnet when `ANTHROPIC_DEFAULT_SONNET_MODEL`
+was added to the settings env, and every session a user had put on the picker's
+"Default (Opus 5.5)" row ran Sonnet from its next resume.
+
+Walnut's Default is the user's default (`isCliDefaultModel` in
+`src/core/types.ts`):
+
+- a spawn passes no `--model` for it (`spawnModelArg`), and the daemon's own
+  resume drops `--model default` from an older argv (`host-resume-core.ts`);
+- a live switch to it sends `set_model` with `get_settings` `effective.model`
+  (the merged settings model), or `default` when settings name none;
+- the catalog's `default` row is rewritten to describe that model
+  (`withConfiguredDefaultRow`), so pickers and the draft "Auto" label say what
+  runs.
+
+`tests/core/model-default-spawn.test.ts` lists every file that writes `--model`
+and fails on a new one.
 
 ## One-Million-Token Context Flags
 
