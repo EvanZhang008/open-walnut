@@ -12,7 +12,7 @@
  * search answers, real clicks and keys. Runs in both engines: Chromium by
  * default, WebKit with `PW_WEBKIT=1 ... --project=webkit`.
  */
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Page, type Response } from '@playwright/test'
 
 test.setTimeout(120_000)
 
@@ -175,13 +175,27 @@ test('Escape and the clear button close the search; arrows and Enter open a hit'
   await expect(input).toHaveValue('')
   await expect(page.locator('.notes-search-results')).toHaveCount(0)
 
-  // Enter typed before the first answer opens that query's first hit once it lands.
+  // Enter typed before the first answer opens that query's first hit once it lands. The query
+  // asks twice at once (the instant `string` answer and the `hybrid` one), and the first of them
+  // to land is the one opened: on a loaded runner that was the hybrid answer, whose open closed
+  // the search and dropped the string request (2026-11-02, CI). So the tab is the first hit of
+  // an answer to this query, whichever came first.
   const q2 = `${tag()} marker line`
-  const answered = page.waitForResponse((r) => { const u = new URL(r.url()); return u.pathname === '/api/notes-v2/search' && u.searchParams.get('mode') === 'string' && u.searchParams.get('q') === q2 })
+  const firstHits: string[] = []
+  const onAnswer = async (r: Response) => {
+    const u = new URL(r.url())
+    if (u.pathname !== '/api/notes-v2/search' || u.searchParams.get('q') !== q2) return
+    const first = ((await r.json().catch(() => null)) as { results?: Array<{ path: string }> } | null)?.results?.[0]?.path
+    if (first) firstHits.push(first.replace(/\.md$/, '').split('/').pop()!)
+  }
+  page.on('response', onAnswer)
   await input.fill(q2)
   await input.press('Enter')
-  const res = await answered
-  const firstPath = ((await res.json()) as { results: Array<{ path: string }> }).results[0].path
-  await expect(page.locator('.notes-tab.active .notes-tab-label')).toHaveText(firstPath.replace(/\.md$/, '').split('/').pop()!, { timeout: 15_000 })
-  await expect(input).toHaveValue('')
+  await expect(input).toHaveValue('', { timeout: 15_000 })
+  const tabLabel = page.locator('.notes-tab.active .notes-tab-label')
+  await expect.poll(async () => {
+    const label = (await tabLabel.textContent())?.trim() ?? ''
+    return firstHits.includes(label) ? 'a first hit' : `${label} (first hits: ${firstHits.join(', ') || 'none yet'})`
+  }, { timeout: 15_000 }).toBe('a first hit')
+  page.off('response', onAnswer)
 })
