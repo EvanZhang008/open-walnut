@@ -547,6 +547,16 @@ export async function applyTaskOp(op: TaskOp): Promise<ApplyTaskOpResult> {
     }
   }
 
+  // A real move goes through updateTask's project branch, as phase and depends_on do: it alone
+  // decides what a move does to where the task syncs (a synced task leaves its service, and one
+  // moved into another service's project is held local there, never pushed to it). The raw
+  // column write below would keep the old service inside the new project and push it.
+  if (typeof patch.project === 'string'
+      && patch.project.trim().toLowerCase() !== (existing.project || '').trim().toLowerCase()) {
+    await tm.updateTask(existing.id, { project: patch.project }, { source: 'api', asyncPush: true });
+    delete patch.project;
+  }
+
   // depends_on: never write the raw column — route through updateTask's
   // set_depends_on so existence + cycle validation run. Only a VALIDATION
   // failure may be swallowed (a cycle or a target that doesn't exist would be

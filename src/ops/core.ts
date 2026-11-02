@@ -12,6 +12,7 @@
  * surface NEVER has less capability than the server.
  */
 
+import { withOutcome } from './outcome.js'
 import { z } from 'zod'
 import { sessionHandle } from '../core/peers/walnut-message-tag.js'
 import { defineOp } from './registry.js'
@@ -51,9 +52,59 @@ defineOp({
     name: z.string().min(1).optional().describe('One project in full, by name (case-insensitive); "Inbox" for the Inbox counts'),
     detail: z.boolean().optional().describe('Every project in full: source, order, favorite, settings and summary (large)'),
   },
-  bind: { method: 'GET', path: '/projects' },
-  mapResult: ({ body, args }) => projectListResult(body, args),
+  handler: async (args, call) => {
+    const body = await call('GET', '/projects')
+    // The services projects sync to, with who reads each: one small list, never fatal.
+    const services = await call('GET', '/integrations').catch(() => undefined)
+    return projectListResult(body, args, services)
+  },
   tags: { readonly: true, remote: 'allow' },
+})
+
+/** One sync service as agents read it: what it is and who can see what Walnut sends there. */
+export interface ServiceLine { id: string; name: string; description?: string; audience?: 'self' | 'shared' }
+
+/** The sync services in an /integrations answer (older servers send no `syncsTasks`). */
+export function syncServices(integrations: unknown): ServiceLine[] {
+  if (!Array.isArray(integrations)) return []
+  return (integrations as Array<Record<string, unknown>>)
+    .filter((i) => typeof i.id === 'string' && i.syncsTasks !== false)
+    .map((i) => ({
+      id: String(i.id), name: String(i.name ?? i.id),
+      ...(typeof i.description === 'string' ? { description: i.description } : {}),
+      audience: i.audience === 'self' ? 'self' : 'shared',
+    }))
+}
+
+defineOp({
+  name: 'project_create',
+  title: 'Create a Walnut project',
+  description:
+    'Create a project and choose where its tasks sync: "local" (default: never sent anywhere) or one ' +
+    'sync service by id. project_list lists the services, each with its description and audience ' +
+    '("self" = only the user can see it, "shared" = other people can). A shared service is the user\'s ' +
+    'decision: pass user_words quoting their ask; a project for anything private stays local. Creating an existing ' +
+    'name changes nothing and answers with its service; a project\'s service cannot be changed later.',
+  input: {
+    name: z.string().min(1).describe('Project name'),
+    source: z.string().min(1).optional().describe('"local" (default) or a sync service id from project_list'),
+    user_words: z.string().optional().describe('For a service other people can see (audience "shared"): what the user said asking for this project there, quoted'),
+  },
+  handler: async (args, call) => {
+    const source = typeof args.source === 'string' ? args.source : 'local'
+    const created = await call('POST', '/projects', {
+      name: args.name, source, ...(typeof args.user_words === 'string' ? { user_words: args.user_words } : {}),
+    }) as Record<string, unknown>
+    const services = syncServices(await call('GET', '/integrations').catch(() => undefined))
+    const kept = typeof created?.source === 'string' ? created.source : source
+    const svc = services.find((s) => s.id === kept)
+    const where = kept === 'local' || !svc
+      ? 'Its tasks stay in Walnut and are never sent to another service.'
+      : `Its tasks sync to ${svc.name} (${svc.audience === 'self' ? 'only the user can see it' : 'other people can see it'}).`
+    return withOutcome(created ?? {}, `${created?.created === false ? 'Project already exists' : 'Project created'}: ${String(args.name)}. ${where}`,
+      'File tasks into it with task_create {"project":"<name>"}; a task about a private matter takes local:true wherever it goes.')
+  },
+  tags: { readonly: false, remote: 'allow', primaryOnly: true },
 })
 
 /**
@@ -61,8 +112,9 @@ defineOp({
  * way); a full list ran to ~40,000 characters on a real board, over an agent's tool-result
  * limit, so the op answers compact unless asked (2026-10-27).
  */
-export function projectListResult(body: unknown, args: Record<string, unknown>): unknown {
+export function projectListResult(body: unknown, args: Record<string, unknown>, integrations?: unknown): unknown {
   const b = (body ?? {}) as { projects?: unknown; inbox?: unknown }
+  const services = syncServices(integrations)
   const rows = (Array.isArray(b.projects) ? b.projects : []) as Array<Record<string, unknown>>
   if (args.detail === true && typeof args.name !== 'string') return body
   if (typeof args.name === 'string') {
@@ -81,9 +133,12 @@ export function projectListResult(body: unknown, args: Record<string, unknown>):
       counts: r.counts,
       ...(r.lead ? { lead: r.lead } : {}),
       ...(r.favorite === true ? { favorite: true } : {}),
+      // Where its tasks go, so an agent filing work sees a project that syncs to a service.
+      ...(typeof r.source === 'string' && r.source !== 'local' ? { syncs_to: r.source } : {}),
     })),
     inbox: b.inbox,
-    detail: 'Compact rows. {"name":"<project>"} returns one project in full (source, settings, summary); {"detail":true} returns every project in full.',
+    ...(services.length ? { services } : {}),
+    detail: 'Compact rows. syncs_to names the service a project\'s tasks sync to (none = local); services says what each is and who can see it. {"name":"<project>"} returns one project in full (source, settings, summary); {"detail":true} returns every project in full.',
   }
 }
 

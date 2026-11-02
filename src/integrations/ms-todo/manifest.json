@@ -9,7 +9,7 @@
     "walnut": ">=0.3.2"
   },
   "server": "index.js",
-  "description": "Two-way sync with Microsoft To-Do",
+  "description": "Your Microsoft To Do lists. Only you can see them.",
   "version": "1.0.0",
   "icon": "icon.svg",
   "configSchema": {

@@ -23,11 +23,17 @@ export interface IntegrationMeta {
   badge: string;
   badgeColor: string;
   externalLinkLabel: string;
+  /** The plugin's one sentence: what the service is and who reads it. */
+  description?: string;
+  /** A project can sync to it (absent from an older server: read as true). */
+  syncsTasks?: boolean;
+  /** Who reads what Walnut sends there: `self` only the user, `shared` others too. */
+  audience?: 'self' | 'shared';
 }
 
 /** Only the in-repo integration; external plugins are server-driven. */
 const FALLBACK: IntegrationMeta[] = [
-  { id: 'ms-todo', name: 'Microsoft To-Do', badge: 'M', badgeColor: '#0078D4', externalLinkLabel: 'Microsoft To-Do' },
+  { id: 'ms-todo', name: 'Microsoft To-Do', badge: 'M', badgeColor: '#0078D4', externalLinkLabel: 'Microsoft To-Do', description: 'Your Microsoft To Do lists. Only you can see them.', syncsTasks: true, audience: 'self' },
 ];
 
 let cachedIntegrations: IntegrationMeta[] | null = null;

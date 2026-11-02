@@ -166,6 +166,14 @@ projectsRouter.post('/', async (req: Request, res: Response, next: NextFunction)
       }
     }
 
+    const { projectSourceRefusal } = await import('../../core/plugins/integration-list.js')
+    const refusal = await projectSourceRefusal(typeof source === 'string' ? source : 'local',
+      req.get('x-walnut-caller-sid') || undefined, (req.body as { user_words?: unknown }).user_words)
+    if (refusal) {
+      res.status(403).json({ error: refusal, code: 'user_decision' })
+      return
+    }
+
     // `human: true` — this route IS the explicit human create, so it is the one
     // door back from a project tombstone (see project-tombstones.ts). Every other
     // writer that names a deleted project gets Inbox instead.

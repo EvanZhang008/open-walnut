@@ -230,8 +230,9 @@ describe('mergeTaskInto — structure and identity corners', () => {
     // under the VICTIM's source, and never write rows for the survivor's source.
     const { task: survivor } = await addTask({ title: 'A', project: 'P' });
     const { task: victim } = await addTask({ title: 'B', project: 'P' });
-    await updateTaskRaw(survivor.id, { source: 'provider-a' as any, ext: { 'provider-a': { id: 'ra-1' } } });
-    await updateTaskRaw(victim.id, { source: 'provider-b' as any, ext: { 'provider-b': { id: 'rb-1' } } });
+    const { _setSourceForTesting } = await import('../../src/core/task-manager.js');
+    await _setSourceForTesting(survivor.id, 'provider-a' as never, { 'provider-a': { id: 'ra-1' } });
+    await _setSourceForTesting(victim.id, 'provider-b' as never, { 'provider-b': { id: 'rb-1' } });
 
     await mergeTaskInto(survivor.id, victim.id);
 

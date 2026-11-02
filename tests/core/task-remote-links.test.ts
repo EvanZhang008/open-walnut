@@ -113,10 +113,8 @@ describe('framework ledger writers', () => {
     // Simulate a synced task: hand it provider identity directly in the store.
     await updateTask(task.id, {}, { source: 'test' });
     const { updateTaskRaw } = await import('../../src/core/task-manager.js');
-    await updateTaskRaw(task.id, {
-      source: 'some-provider' as any,
-      ext: { 'some-provider': { id: 'remote-123', list_id: 'L1' } },
-    });
+    const { _setSourceForTesting } = await import('../../src/core/task-manager.js');
+    await _setSourceForTesting(task.id, 'some-provider' as never, { 'some-provider': { id: 'remote-123', list_id: 'L1' } });
 
     // Move to a local-claimed project → migrateTaskSource clears ext.
     await updateTask(task.id, { project: 'Local Home' });
@@ -133,10 +131,8 @@ describe('framework ledger writers', () => {
   it('deleting a task ledgers its remote id as deleted (unconfirmed)', async () => {
     const { task } = await addTask({ title: 'Doomed', project: 'P' });
     const { updateTaskRaw } = await import('../../src/core/task-manager.js');
-    await updateTaskRaw(task.id, {
-      source: 'some-provider' as any,
-      ext: { 'some-provider': { id: 'remote-dead', list_id: 'L1' } },
-    });
+    const { _setSourceForTesting } = await import('../../src/core/task-manager.js');
+    await _setSourceForTesting(task.id, 'some-provider' as never, { 'some-provider': { id: 'remote-dead', list_id: 'L1' } });
 
     await deleteTask(task.id);
 
@@ -159,9 +155,9 @@ describe('mergeTaskInto', () => {
       // 's2' is an older id still listed on the victim (no row of its own).
       session_ids: ['s2', 'slot-a'],
       session_id: 'slot-a',
-      ext: { 'some-provider': { id: 'remote-victim' } },
-      source: 'some-provider' as any,
     });
+    const { _setSourceForTesting } = await import('../../src/core/task-manager.js');
+    await _setSourceForTesting(victim.id, 'some-provider' as never, { 'some-provider': { id: 'remote-victim' } });
 
     const { survivor: merged } = await mergeTaskInto(survivor.id, victim.id);
 
@@ -182,8 +178,9 @@ describe('mergeTaskInto', () => {
     const { updateTaskRaw } = await import('../../src/core/task-manager.js');
     // Both local rows point at the SAME remote item (observed in prod: 3 rows
     // sharing one remote id). Tombstoning it would delete the survivor's twin.
-    await updateTaskRaw(survivor.id, { source: 'some-provider' as any, ext: { 'some-provider': { id: 'shared-rid' } } });
-    await updateTaskRaw(victim.id, { source: 'some-provider' as any, ext: { 'some-provider': { id: 'shared-rid' } } });
+    const { _setSourceForTesting } = await import('../../src/core/task-manager.js');
+    await _setSourceForTesting(survivor.id, 'some-provider' as never, { 'some-provider': { id: 'shared-rid' } });
+    await _setSourceForTesting(victim.id, 'some-provider' as never, { 'some-provider': { id: 'shared-rid' } });
 
     await mergeTaskInto(survivor.id, victim.id);
 

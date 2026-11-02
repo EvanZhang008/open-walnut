@@ -279,7 +279,9 @@ describe('updateTask project move', () => {
     expect(moved.ext).toBeUndefined();
   });
 
-  it('still migrates provider → provider on a project move', async () => {
+  it('never pushes a task to another provider on a project move: it is held local there', async () => {
+    // 2026-11-01: this move used to migrate the task to the destination's provider and push
+    // it, which sent personal tasks to a work tracker (tests/core/move-never-changes-service.test.ts).
     await ensureProject('A-land', 'plugin-a');
     await ensureProject('B-land', 'plugin-b');
     const { task } = await addTask({ title: 'Cross', project: 'A-land' });
@@ -288,13 +290,23 @@ describe('updateTask project move', () => {
     await updateTask(task.id, { project: 'B-land' });
     const moved = await getTask(task.id);
     expect(moved.project).toBe('B-land');
-    expect(moved.source).toBe('plugin-b');
+    expect(moved.source).toBe('local');
+    expect(moved.sync_hold).toMatchObject({ target: 'plugin-b', state: 'chosen', by: 'user' });
+    expect(await getProjectRecord('b-land')).toMatchObject({ source: 'plugin-b' });
   });
 
   it('auto-creates the registry row for a brand-new destination', async () => {
     const { task } = await addTask({ title: 'Wandering' });
     await updateTask(task.id, { project: 'Brand New' });
     expect(await getProjectRecord('brand new')).toMatchObject({ name: 'Brand New', source: 'local' });
+  });
+
+  it('a brand-new destination of a provider task is a LOCAL project, never the task\'s provider', async () => {
+    await ensureProject('A-land', 'plugin-a');
+    const { task } = await addTask({ title: 'Provider work', project: 'A-land' });
+    await updateTask(task.id, { project: 'Fresh' });
+    expect(await getProjectRecord('fresh')).toMatchObject({ name: 'Fresh', source: 'local' });
+    expect((await getTask(task.id)).source).toBe('local');
   });
 });
 

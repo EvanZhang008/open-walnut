@@ -16,11 +16,17 @@ export interface MoveMigration {
   migrates: boolean;
   from: string;
   to: string;
+  /** Moved into a project of another service: it stays local there until someone
+   *  chooses Sync, so nothing is sent to `to` by the move. */
+  held?: boolean;
 }
 
 /** Human name for a provider source id, for dialog copy ("Microsoft To Do", not
- *  "ms-todo"). Unknown ids pass through verbatim — better a raw id than a lie. */
-export function sourceDisplayName(source: string): string {
+ *  "ms-todo"): the plugin's own name when the integrations list is known, else a
+ *  built-in one. Unknown ids pass through verbatim — better a raw id than a lie. */
+export function sourceDisplayName(source: string, plugins?: ReadonlyArray<{ id: string; name: string }>): string {
+  const named = plugins?.find((p) => p.id === source)?.name;
+  if (named) return named;
   const KNOWN: Record<string, string> = {
     'local': 'Local',
     'ms-todo': 'Microsoft To Do',
@@ -30,17 +36,19 @@ export function sourceDisplayName(source: string): string {
 }
 
 /**
- * Would moving `taskSource` into `targetProject` make the backend migrate the
- * task across sources (old remote twin renamed "[Moved] …" + marked complete)?
+ * Would moving `taskSource` into `targetProject` take the task off its service (the
+ * old remote twin renamed "[Moved] …" + marked complete)?
  *
  * Mirrors the project-move branch of updateTask in src/core/task-manager.ts:
  *  - Inbox ('') is structurally local-only and never claimed → target 'local'.
- *  - A project the registry doesn't know yet is auto-created CLAIMED BY THE
- *    TASK'S OWN SOURCE, so nothing migrates.
+ *  - A project the registry doesn't know yet is created LOCAL (never the task's
+ *    own service), so a synced task moved there leaves its service.
  *  - A LOCAL task filed under a provider-claimed project stays local (the
  *    project is just a folder here, nothing is pushed).
- *  - Everything else that changes source migrates: provider → other provider
- *    and provider → local/Inbox both tombstone the remote twin.
+ *  - A synced task moved into a project of ANOTHER service leaves its own and
+ *    stays local there (`held`): nothing is sent to the destination's service
+ *    until someone chooses Sync. A move never pushes a task to a new service.
+ *  - A synced task moved to a local project or the Inbox leaves its service.
  *
  * KNOWN BLIND SPOT: the mirror covers REGISTRY claims only. A claim that lives
  * solely in `plugins.<id>.project` config (registry row lost in a restore) is
@@ -62,15 +70,14 @@ export function resolveMoveMigration(
   // name that misses the lookup here would silently read as "unknown → no confirm".
   const requested = targetProject.trim();
   // Inbox has no registry row; every other name must be looked up case-insensitively
-  // (project identity is NOCASE server-side).
+  // (project identity is NOCASE server-side). An unknown name is created local.
   const to = requested === ''
     ? 'local'
-    : sourceByName.get(requested.toLowerCase());
-  // Unknown project → backend mints the row under `from`, so the source is unchanged.
-  if (to === undefined) return { migrates: false, from, to: from };
+    : sourceByName.get(requested.toLowerCase()) ?? 'local';
   // Local stays local: folder-only move, no remote twin is ever created.
   if (from === 'local') return { migrates: false, from, to };
-  return { migrates: to !== from, from, to };
+  if (to === from) return { migrates: false, from, to };
+  return { migrates: true, from, to, ...(to !== 'local' ? { held: true } : {}) };
 }
 
 /**

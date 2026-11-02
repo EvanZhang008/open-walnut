@@ -35,6 +35,7 @@ import {
   updateTask,
   updateTasksBulk,
   _resetForTesting,
+  _setSourceForTesting,
 } from '../../src/core/task-manager.js'
 import { closeDb, getDb } from '../../src/core/task-db.js'
 import { WALNUT_HOME } from '../../src/constants.js'
@@ -85,7 +86,7 @@ describe('fileTasksIntoFolder', () => {
     const inPlace = await localTask('Synced here', 'Team')
     const elsewhere = await localTask('Synced elsewhere', 'Import')
     const retag = await localTask('Synced, asked to retag', 'Team')
-    await updateTasksBulk([inPlace, elsewhere, retag].map((one) => ({ id: one.id, patch: { source: 'ms-todo' } })))
+    for (const one of [inPlace, elsewhere, retag]) await _setSourceForTesting(one.id, 'ms-todo')
 
     const result = await fileTasksIntoFolder(folder.group_id, [
       { id: inPlace.id },
@@ -221,7 +222,7 @@ describe('fileTasksIntoProject', () => {
 
   it('applies the same skips as folder filing', async () => {
     const synced = await localTask('Synced elsewhere', 'Import')
-    await updateTasksBulk([{ id: synced.id, patch: { source: 'ms-todo' } }])
+    await _setSourceForTesting(synced.id, 'ms-todo')
     const moved = await localTask('Planned in Import', 'Import')
     await updateTask(moved.id, { project: 'Mine' })
 

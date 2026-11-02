@@ -209,7 +209,7 @@ path on the companion".
 | POST | `/api/v1/routines/:id/toggle` | Enable/disable (cloud relays) |
 | POST | `/api/v1/routines/:id/run` | Run now, forced (cloud relays) |
 | GET | `/api/v1/projects` | Project registry + counts + favorite flags + Inbox; each row's `lead` `{ id, title }` (added 2026-10-28) is its open org lead, when it has one |
-| POST | `/api/v1/projects` | Idempotent create (201 new / 200 existing) |
+| POST | `/api/v1/projects` | Idempotent create (201 new / 200 existing); `{ name, source?, user_words? }`: a session naming a service whose audience is `shared` passes `user_words` (the user's quoted ask), else `403 user_decision` |
 | PATCH | `/api/v1/projects/:name` | Rename, merge-on-collision (501 on REPLICA) |
 | DELETE | `/api/v1/projects/:name?remote=1` | Delete; ?remote=1 = provider cascade (501 on REPLICA) |
 | GET | `/api/v1/ordering` | Project display order |
@@ -302,7 +302,7 @@ path on the companion".
 | GET | `/api/v1/usage/summary\|daily\|by-source\|by-model\|by-agent\|recent\|pricing` | Usage detail breakdowns (501 on REPLICA; pricing works everywhere) |
 | GET | `/api/v1/config/providers` | Provider readiness, key hints stripped |
 | GET | `/api/v1/qmd/status` | Search index health, frozen path name (501 on REPLICA) |
-| GET | `/api/v1/integrations` | Registered plugin display metadata |
+| GET | `/api/v1/integrations` | Registered plugin display metadata; each row also carries `syncsTasks` (a project can sync to it) and, when it does, `audience` (`self` or `shared`, added 2026-11-01) |
 | GET | `/api/v1/integrations/settings` | Plugin settings metadata, secrets masked |
 | GET | `/api/v1/projects/:name/metadata` | Project detail-pane payload |
 | PUT | `/api/v1/projects/:name/metadata` | Merge project settings (501 on REPLICA) |

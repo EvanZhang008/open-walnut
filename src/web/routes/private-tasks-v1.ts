@@ -101,6 +101,7 @@ privateTasksV1Router.post('/tasks/:id/sync-to-project', route(async (req, res) =
     const msg = out.reason === 'already_synced' ? 'The task already syncs to its project\'s service.'
       : out.reason === 'project_local' ? 'Its project does not sync to an outside service.'
       : out.reason === 'project_conflict' ? 'Its project is reserved for another service.'
+      : out.reason === 'target_changed' ? `Its project now syncs to ${await serviceName(out.task?.sync_hold?.target ?? '')}, so nothing was sent. Choose Sync again to send it there.`
       : `The task was not sent (${out.reason}).`
     throw new RouteError(409, out.reason ?? 'not_released', msg)
   }

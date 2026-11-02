@@ -321,7 +321,8 @@ describe('filing into another project’s folder (`move`)', () => {
     expect(await getTask(c)).toMatchObject({ project: 'Claimed', group_id: f.group_id, source: 'local' });
   });
 
-  it('a provider task migrates to the destination provider and joins the folder', async () => {
+  it('a provider task filed into another provider’s folder joins it local, held for that provider', async () => {
+    // A move never pushes a task to a service it was not on (tests/core/move-never-changes-service.test.ts).
     registry.replace('prov-from', createMockPlugin({ id: 'prov-from' }));
     registry.replace('prov-to', createMockPlugin({ id: 'prov-to' }));
     await addTask({ title: 'From claimer', project: 'FromProj', source: 'prov-from' });
@@ -331,30 +332,26 @@ describe('filing into another project’s folder (`move`)', () => {
 
     await addToGroup(f.group_id, [task.id], { move: true });
     const moved = await getTask(task.id);
-    expect(moved).toMatchObject({ project: 'ToProj', group_id: f.group_id, source: 'prov-to' });
+    expect(moved).toMatchObject({ project: 'ToProj', group_id: f.group_id, source: 'local' });
+    expect(moved.sync_hold).toMatchObject({ target: 'prov-to', state: 'chosen', by: 'user' });
   });
 
-  it('a failed push still leaves the local move and join whole, and reports the failure', async () => {
-    let rejectPush = false;
+  it('the destination provider receives nothing of a task filed into its folder', async () => {
+    const created: string[] = [];
     registry.replace('prov-src', createMockPlugin({ id: 'prov-src' }));
-    registry.replace('prov-refuses', createMockPlugin({
-      id: 'prov-refuses',
-      sync: {
-        ...createNoopSync(),
-        createTask: async () => {
-          if (rejectPush) throw new Error('remote rejected the task');
-          return null;
-        },
-      },
+    registry.replace('prov-dst', createMockPlugin({
+      id: 'prov-dst',
+      sync: { ...createNoopSync(), createTask: async (t: { id: string }) => { created.push(t.id); return null; } },
     }));
     await addTask({ title: 'Src claimer', project: 'SrcProj', source: 'prov-src' });
-    await addTask({ title: 'Dst claimer', project: 'DstProj', source: 'prov-refuses' });
+    await addTask({ title: 'Dst claimer', project: 'DstProj', source: 'prov-dst' });
     const f = await createFolder('Dst folder', 'DstProj');
-    const { task } = await addTask({ title: 'Will fail to push', project: 'SrcProj', source: 'prov-src' });
-    rejectPush = true;
+    const { task } = await addTask({ title: 'Stays out', project: 'SrcProj', source: 'prov-src' });
+    created.length = 0;
 
-    await expect(addToGroup(f.group_id, [task.id], { move: true })).rejects.toThrow(/prov-refuses/);
-    expect(await getTask(task.id)).toMatchObject({ project: 'DstProj', group_id: f.group_id });
+    await addToGroup(f.group_id, [task.id], { move: true });
+    expect(await getTask(task.id)).toMatchObject({ project: 'DstProj', group_id: f.group_id, source: 'local' });
+    expect(created).toEqual([]);
   });
 
   it('groupTasks puts the folder in the FIRST task’s project and moves the other in', async () => {
@@ -872,18 +869,14 @@ describe('moveFolderToProject', () => {
    * already-moved tasks in the destination and the folder record in the old
    * project — a split the user could only fix by dragging again.
    */
-  it('keeps going when a PROVIDER member fails, still moves the folder + local members', async () => {
-    let rejectPush = false;
+  it('moves a PROVIDER member across services without pushing it, with the folder + local members', async () => {
+    // A move never pushes a task to a service it was not on (tests/core/move-never-changes-service.test.ts):
+    // the member lands local in the destination, held for its service.
+    const created: string[] = [];
     registry.replace('prov-a', createMockPlugin({ id: 'prov-a' }));
     registry.replace('prov-b', createMockPlugin({
       id: 'prov-b',
-      sync: {
-        ...createNoopSync(),
-        createTask: async () => {
-          if (rejectPush) throw new Error('remote rejected the task');
-          return null;
-        },
-      },
+      sync: { ...createNoopSync(), createTask: async (t: { id: string }) => { created.push(t.id); return null; } },
     }));
 
     // Two provider-claimed projects: the folder starts in prov-a's, moves to prov-b's.
@@ -899,19 +892,15 @@ describe('moveFolderToProject', () => {
     const localMember = local.id;
     expect(local.source).toBe('local');
     await addToGroup(f.group_id, [providerMember.id, localMember]);
+    created.length = 0;
 
-    rejectPush = true;   // the destination provider now refuses the migrated task
     const moved = await moveFolderToProject(f.group_id, 'Beta');
 
-    // The failure is REPORTED, not thrown...
-    expect(moved.failed).toHaveLength(1);
-    expect(moved.failed![0].id).toBe(providerMember.id);
-    expect(moved.failed![0].error).toMatch(/prov-b/);
-    // ...the local member still moved...
-    expect(moved.moved_task_ids).toContain(localMember);
-    // ...and the folder record went with it.
+    expect(moved.failed).toBeUndefined();
+    expect(moved.moved_task_ids).toEqual(expect.arrayContaining([localMember, providerMember.id]));
     expect(moved.moved_folder_ids).toEqual([f.group_id]);
     expect(moved.project).toBe('Beta');
+    expect(created).toEqual([]);
 
     // Durable, not just in-memory.
     closeDb();
@@ -920,6 +909,9 @@ describe('moveFolderToProject', () => {
     expect(reloaded.project).toBe('Beta');
     expect(reloaded.source).toBe('local');       // local stays local under a claim
     expect(reloaded.group_id).toBe(f.group_id);  // membership survives the move
+    const member = await getTask(providerMember.id);
+    expect(member).toMatchObject({ project: 'Beta', source: 'local', group_id: f.group_id });
+    expect(member.sync_hold).toMatchObject({ target: 'prov-b', state: 'chosen', by: 'user' });
     expect((await folder(f.group_id))?.project).toBe('Beta');
   });
 
@@ -930,25 +922,25 @@ describe('moveFolderToProject', () => {
    * already matched, so the call was a no-op). The final lock now re-walks the
    * subtree from a fresh read and sweeps whatever it finds.
    *
-   * The join is injected from inside the destination plugin's push, which
-   * updateTask AWAITS for a migrating task — i.e. genuinely after the planning
-   * read and before the final lock.
+   * The join is injected from inside the OLD plugin's mark-moved step, which
+   * updateTask AWAITS for a task leaving its service — i.e. genuinely after the
+   * planning read and before the final lock.
    */
   it('sweeps a task that joined the folder DURING the move', async () => {
     let lateJoin: (() => Promise<void>) | null = null;
-    registry.replace('prov-a', createMockPlugin({ id: 'prov-a' }));
-    registry.replace('prov-joiner', createMockPlugin({
-      id: 'prov-joiner',
+    registry.replace('prov-a', createMockPlugin({
+      id: 'prov-a',
       sync: {
         ...createNoopSync(),
-        createTask: async () => {
+        createTask: async () => ({ 'prov-a': { id: `pa-${Math.random().toString(36).slice(2)}` } }),
+        updateTitle: async () => {
           const join = lateJoin;
           lateJoin = null;              // once only
           if (join) await join();
-          return null;
         },
       },
     }));
+    registry.replace('prov-joiner', createMockPlugin({ id: 'prov-joiner' }));
 
     await addTask({ title: 'Alpha claimer', project: 'Alpha', source: 'prov-a' });
     await addTask({ title: 'Beta claimer', project: 'Beta', source: 'prov-joiner' });

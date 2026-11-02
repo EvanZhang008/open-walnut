@@ -34,9 +34,10 @@ describe('resolveMoveMigration', () => {
       .toEqual({ migrates: false, from: 'local', to: 'ms-todo' });
   });
 
-  it('migrates provider → a different provider', () => {
+  it('takes a provider task off its provider into another provider\'s project, held local there', () => {
+    // A move never pushes a task to a new service (src/core/task-manager.ts moveOffService).
     expect(resolveMoveMigration('ms-todo', 'TrackerProj', registry))
-      .toEqual({ migrates: true, from: 'ms-todo', to: 'tracker' });
+      .toEqual({ migrates: true, from: 'ms-todo', to: 'tracker', held: true });
   });
 
   it('migrates provider → a local-claimed project', () => {
@@ -49,10 +50,12 @@ describe('resolveMoveMigration', () => {
       .toEqual({ migrates: true, from: 'ms-todo', to: 'local' });
   });
 
-  it('does not migrate into a project the registry has never seen', () => {
-    // The backend auto-creates the row claimed by the task's own source.
+  it('takes a provider task off its provider into a project the registry has never seen', () => {
+    // The backend creates a new name LOCAL, never claimed by the moved task's service.
     expect(resolveMoveMigration('ms-todo', 'BrandNew', registry))
-      .toEqual({ migrates: false, from: 'ms-todo', to: 'ms-todo' });
+      .toEqual({ migrates: true, from: 'ms-todo', to: 'local' });
+    expect(resolveMoveMigration('local', 'BrandNew', registry))
+      .toEqual({ migrates: false, from: 'local', to: 'local' });
   });
 
   it('treats an undefined source as local', () => {
@@ -63,14 +66,14 @@ describe('resolveMoveMigration', () => {
   it('trims the target name before the lookup, like the backend does', () => {
     // An untrimmed miss would silently read as "unknown project → no confirm".
     expect(resolveMoveMigration('ms-todo', '  TrackerProj  ', registry))
-      .toEqual({ migrates: true, from: 'ms-todo', to: 'tracker' });
+      .toEqual({ migrates: true, from: 'ms-todo', to: 'tracker', held: true });
     expect(resolveMoveMigration('ms-todo', '   ', registry))
       .toEqual({ migrates: true, from: 'ms-todo', to: 'local' }); // whitespace-only = Inbox
   });
 
   it('looks the target project up case-insensitively', () => {
     expect(resolveMoveMigration('tracker', 'MyProj', registry))
-      .toEqual({ migrates: true, from: 'tracker', to: 'ms-todo' });
+      .toEqual({ migrates: true, from: 'tracker', to: 'ms-todo', held: true });
   });
 });
 
@@ -130,6 +133,11 @@ describe('sourceDisplayName', () => {
     expect(sourceDisplayName('ms-todo')).toBe('Microsoft To Do');
     expect(sourceDisplayName('local')).toBe('Local');
     expect(sourceDisplayName('some-plugin')).toBe('some-plugin');
+  });
+
+  it('prefers the plugin\'s own name when the integrations list is known', () => {
+    expect(sourceDisplayName('some-plugin', [{ id: 'some-plugin', name: 'Team Tracker' }])).toBe('Team Tracker');
+    expect(sourceDisplayName('ms-todo', [{ id: 'other', name: 'Other' }])).toBe('Microsoft To Do');
   });
 });
 

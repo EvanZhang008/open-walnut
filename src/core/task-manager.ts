@@ -411,6 +411,23 @@ function patchStoreCacheRows(ids: readonly string[]): void {
   taskStoreCacheSeeded += 1;
 }
 
+/**
+ * TEST ONLY: give a task an outside service and identity directly, as a synced fixture. No
+ * write path does this (prepareRawUpdate drops a raw `source` naming a new service); a real task
+ * is synced at its birth or by releaseSyncHold. Listed in tests/core/task-source-write-ratchet.test.ts.
+ */
+export async function _setSourceForTesting(id: string, source: TaskSource, ext?: Record<string, unknown>): Promise<Task> {
+  return withWriteLock(async () => {
+    const store = await readStore();
+    const task = store.tasks.find((t) => t.id === id);
+    if (!task) throw new Error(`No task ${id}`);
+    task.source = source;
+    if (ext !== undefined) task.ext = ext;
+    await writeStore(store);
+    return task;
+  });
+}
+
 /** Reset internal flags for test isolation (call in beforeEach). */
 export function _resetForTesting(): void {
   initialized = false;
@@ -4270,28 +4287,36 @@ function recordDeletedRemoteIds(tasks: Task[], skipRemoteIds?: Set<string>): voi
 }
 
 /**
- * Migrate a task (and same-source children) to a new project + source.
- * Called inside withWriteLock — mutates store in place (no writeStore call).
- * Returns the list of migrated tasks with their old state snapshots.
+ * Take a task off its outside service as part of a project move: it becomes LOCAL in
+ * `newProject`, its remote identity released in the ledger (the post-lock cleanup marks the
+ * old copy moved). A move never gives a task another outside service (2026-11-01: a move into
+ * a project that synced to the work tracker pushed the user's personal tasks there): when the
+ * destination syncs elsewhere, `hold` says where it would go, and only releaseSyncHold (the
+ * user's "Sync to ...", or the privacy gate) sends it there.
+ *
+ * `claim` is the destination project's service, kept on its registry row (Inbox has none).
+ * `children`: same-source subtasks go local with it (a move to a local place); a held move
+ * leaves them where they are, on their own project's service.
+ * Called inside withWriteLock; mutates the store in place.
  */
-function migrateTaskSource(
+function migrateTaskToLocal(
   store: TaskStore,
   task: Task,
   newProject: string,
-  newSource: TaskSource,
+  opts: { claim: TaskSource; hold?: SyncHold; children: boolean },
 ): MigratedTask[] {
   const now = new Date().toISOString();
   const oldSource = task.source;
   const results: MigratedTask[] = [];
 
-  // Migrate the parent task
   const oldExt = task.ext ? structuredClone(task.ext) : undefined;
   const oldTitle = task.title;
-  task.source = newSource;
+  task.source = 'local';
   task.project = newProject;
   task.ext = undefined;
   task.external_url = undefined;
   task.sync_error = undefined;
+  if (opts.hold) task.sync_hold = opts.hold;
   task.updated_at = now;
   results.push({ task, oldSource, oldExt, oldTitle });
   // Ledger the released remote id BEFORE any network I/O — recorded here,
@@ -4301,36 +4326,80 @@ function migrateTaskSource(
   // bug this ledger exists to kill).
   recordReleasedRemoteId(task.id, oldSource, oldExt);
 
-  // Migrate same-source children (they inherit parent's source)
-  const children = store.tasks.filter(
-    t => t.parent_task_id === task.id && t.source === oldSource,
-  );
-  for (const child of children) {
-    const childOldExt = child.ext ? structuredClone(child.ext) : undefined;
-    const childOldTitle = child.title;
-    child.source = newSource;
-    // Children keep their own project — only change source + ext
-    child.ext = undefined;
-    child.external_url = undefined;
-    child.sync_error = undefined;
-    child.updated_at = now;
-    results.push({ task: child, oldSource, oldExt: childOldExt, oldTitle: childOldTitle });
-    recordReleasedRemoteId(child.id, oldSource, childOldExt);
+  if (opts.children) {
+    const children = store.tasks.filter(
+      t => t.parent_task_id === task.id && t.source === oldSource,
+    );
+    for (const child of children) {
+      const childOldExt = child.ext ? structuredClone(child.ext) : undefined;
+      const childOldTitle = child.title;
+      child.source = 'local';
+      // Children keep their own project — only change source + ext
+      child.ext = undefined;
+      child.external_url = undefined;
+      child.sync_error = undefined;
+      child.updated_at = now;
+      results.push({ task: child, oldSource, oldExt: childOldExt, oldTitle: childOldTitle });
+      recordReleasedRemoteId(child.id, oldSource, childOldExt);
+    }
   }
 
-  // Register the destination project (Inbox never gets a row).
+  // Register the destination project (Inbox never gets a row) under its own claim.
   if (newProject) {
     const projects = store.projects ?? {};
     const key = Object.keys(projects).find((k) => k.toLowerCase() === newProject.toLowerCase());
-    // Preserve the existing row's order_index/metadata; only the claim changes.
+    // Preserve the existing row's order_index/metadata.
     const existing = key ? projects[key] : undefined;
     store.projects = {
       ...projects,
-      ...(key ? { [key]: { ...existing!, source: newSource } } : { [newProject]: { source: newSource } }),
+      ...(key ? { [key]: { ...existing!, source: opts.claim } } : { [newProject]: { source: opts.claim } }),
     };
   }
 
   return results;
+}
+
+/** A synced task moved into a project of another claim (local, Inbox, or another service):
+ *  it becomes local there, held for the destination's service when that is an outside one. */
+function moveOffService(store: TaskStore, task: Task, newProject: string, claim: TaskSource): MigratedTask[] {
+  const toService = claim !== 'local';
+  const result = migrateTaskToLocal(store, task, newProject, {
+    claim,
+    children: !toService,
+    hold: toService ? movedInHold(task.source, claim, new Date().toISOString()) : undefined,
+  });
+  log.task.info(toService ? 'moved into another service\'s project: kept local, held for a Sync choice' : 'moved off its service: now local', {
+    taskId: task.id, oldSource: result[0].oldSource, projectClaim: claim, newProject,
+    childrenMigrated: result.length - 1,
+  });
+  return result;
+}
+
+/** The hold a task moved into a project of another outside service carries: it stays local
+ *  there until someone chooses to sync it (by 'user': no automatic release takes it out). */
+export function movedInHold(from: TaskSource, target: TaskSource, at: string): SyncHold {
+  return { target, state: 'chosen', by: 'user', at, reason: movedHoldReason(target, from) };
+}
+
+const MOVED_HOLD_PREFIX = 'Moved here';
+
+/**
+ * The hold of a local task whose project is now `target` (the project's outside service, or
+ * null): null when the project syncs nowhere (nothing to hold), else the hold naming that
+ * service, so "Sync to …" always says, and sends to, the service the project syncs to. Every
+ * path that changes a held task's project goes through it (updateTask, a folder move, filing).
+ */
+export function holdForProject(hold: SyncHold, target: TaskSource | null): SyncHold | null {
+  if (!target) return null;
+  if (hold.target === target) return hold;
+  return hold.reason?.startsWith(MOVED_HOLD_PREFIX)
+    ? { ...hold, target, reason: movedHoldReason(target) }
+    : { ...hold, target };
+}
+
+function movedHoldReason(target: TaskSource, from?: TaskSource): string {
+  const name = (id: string) => registry.get(id)?.name ?? id;
+  return `${MOVED_HOLD_PREFIX}${from ? ` from ${name(from)}` : ''}: it syncs to ${name(target)} only when you choose Sync`;
 }
 
 /**
@@ -4415,17 +4484,12 @@ export async function updateTask(
         });
         // plain assignment below (assigned stays false)
       } else if (targetSource !== undefined && targetSource !== task.source) {
-        // Auto-migrate (provider → provider, or provider → local/Inbox): the
-        // task adopts the destination project's claim. Ext/external_url are
-        // dropped — the remote twin is tombstoned + marked moved by the
-        // post-lock cleanup.
-        migrationResult = migrateTaskSource(store, task, newProject, targetSource);
+        // Provider → local/Inbox: the task leaves its service. Provider → another provider:
+        // it leaves its service too and stays LOCAL here, held for the destination's service
+        // until someone chooses Sync (movedInHold). A move never pushes a task to a service it
+        // was not on. The old remote twin is marked moved by the post-lock cleanup.
+        migrationResult = moveOffService(store, task, newProject, targetSource);
         assigned = true;
-        log.task.info('cross-source migration triggered', {
-          taskId: task.id, oldSource: migrationResult[0].oldSource,
-          newSource: targetSource, newProject,
-          childrenMigrated: migrationResult.length - 1,
-        });
       } else {
         const validation = validateProjectSource(newProject, task.source, config, projects);
         if (!validation.ok && task.source === 'local') {
@@ -4435,17 +4499,21 @@ export async function updateTask(
             taskId: task.id, newProject, projectClaim: validation.existingSource,
           });
         } else if (!validation.ok) {
-          migrationResult = migrateTaskSource(store, task, newProject, validation.existingSource);
+          migrationResult = moveOffService(store, task, newProject, validation.existingSource);
           assigned = true;
-          log.task.info('cross-source migration triggered', {
-            taskId: task.id, oldSource: migrationResult[0].oldSource,
-            newSource: validation.existingSource, newProject,
-            childrenMigrated: migrationResult.length - 1,
-          });
         } else if (newProject && !registryKey) {
-          // Brand-new project name — auto-create its registry row.
-          store.projects = { ...projects, [newProject]: { source: task.source } };
-          createdProject = { name: newProject, source: task.source };
+          // Brand-new project name: its row is LOCAL, whatever the moved task syncs to. Only
+          // a person's (or an agent's) explicit choice at the create says a project syncs to a
+          // service (POST /api/projects, project_create); inheriting the moved task's service
+          // made "Walnut-Idea" a work-tracker project nobody chose (2026-06-24), and personal
+          // tasks moved into it later were pushed there. A synced task moved here leaves its
+          // service, as into any local project.
+          store.projects = { ...projects, [newProject]: { source: 'local' } };
+          createdProject = { name: newProject, source: 'local' };
+          if (task.source !== 'local') {
+            migrationResult = moveOffService(store, task, newProject, 'local');
+            assigned = true;
+          }
         }
       }
     }
@@ -4454,8 +4522,8 @@ export async function updateTask(
     // A held local task (private-tasks/) follows its project: it would now sync to the new
     // project's service, or, in a project that does not sync, there is nothing to hold.
     if (projectChanged && task.source === 'local' && task.sync_hold) {
-      const target = projectSyncSource(store, task.project);
-      if (target) task.sync_hold = { ...task.sync_hold, target };
+      const followed = holdForProject(task.sync_hold, projectSyncSource(store, task.project));
+      if (followed) task.sync_hold = followed;
       else delete task.sync_hold;
     }
     // A folder is the project's private structure — it never follows a task
@@ -4738,15 +4806,24 @@ export async function updateTask(
         const oldPlugin = registry.get(m.oldSource);
         if (oldPlugin) {
           const movedTitle = `[Moved] ${m.oldTitle} [open-walnut:${m.task.id}]`;
-          const snapshot = { ...m.task, source: m.oldSource, ext: m.oldExt } as Task;
-          try {
-            await oldPlugin.sync.updateTitle(snapshot, movedTitle);
-            await oldPlugin.sync.updatePhase(snapshot, 'COMPLETE');
-          } catch (err) {
-            log.task.warn('cross-source migration: old backend mark-moved failed (non-fatal)', {
-              taskId: m.task.id, oldSource: m.oldSource,
-              error: err instanceof Error ? err.message : String(err),
-            });
+          // The copy as the old service knew it: its source and identity, and no hold (a task
+          // moved into another service's project is held for THAT one; the guard would refuse
+          // a held snapshot and leave the old copy open).
+          const snapshot = { ...m.task, source: m.oldSource, ext: m.oldExt, sync_hold: undefined } as Task;
+          // Two steps, each on its own: a title the push check refuses (it matches a private
+          // word) must not leave the old copy open.
+          for (const [step, run] of [
+            ['title', () => oldPlugin.sync.updateTitle(snapshot, movedTitle)],
+            ['complete', () => oldPlugin.sync.updatePhase(snapshot, 'COMPLETE')],
+          ] as const) {
+            try {
+              await run();
+            } catch (err) {
+              log.task.warn('cross-source migration: old backend mark-moved failed (non-fatal)', {
+                taskId: m.task.id, oldSource: m.oldSource, step,
+                error: err instanceof Error ? err.message : String(err),
+              });
+            }
           }
         }
       }
@@ -6337,6 +6414,12 @@ function fileTasksLocked(
     if (title && validatePluginContent(task, 'title', title)) { skipped.push({ id: task.id, reason: 'rejected' }); continue; }
     const patch: Partial<Task> = {};
     if (moving) patch.project = place.project;
+    if (moving && task.sync_hold) {
+      const row = handle.prepare('SELECT source FROM task_projects WHERE name = ? COLLATE NOCASE').get(place.project) as { source?: string } | undefined;
+      const target = row?.source && row.source !== 'local' ? row.source as TaskSource : null;
+      const followed = holdForProject(task.sync_hold, target);
+      if (followed !== task.sync_hold) patch.sync_hold = followed ?? (null as unknown as undefined);
+    }
     if (place.groupId && task.group_id !== place.groupId) patch.group_id = place.groupId;
     // null is the raw path's explicit-clear marker for a payload field.
     if (unfiling) patch.group_id = null as unknown as undefined;
@@ -6577,7 +6660,7 @@ export interface FolderMoveResult {
  *   provider-claimed destination) plus an updated_at bump.
  * - PROVIDER-SOURCED members keep the full per-task updateTask, because the
  *   whole project-move contract lives there: destination claim rules,
- *   migrateTaskSource, the released-remote-id ledger, remote mark-moved. They
+ *   moveOffService, the released-remote-id ledger, remote mark-moved. They
  *   run with `asyncPush` so a slow or failing remote can't stall the local move,
  *   and a push failure stamps sync_error instead of throwing.
  *
@@ -6704,6 +6787,11 @@ export async function moveFolderToProject(
       if (failedIds.has(t.id)) continue;           // already reported — don't churn
       if (t.source !== 'local') { deferred.push(t.id); continue; }
       t.project = target;
+      if (t.sync_hold) {
+        const followed = holdForProject(t.sync_hold, projectSyncSource(fresh, target));
+        if (followed) t.sync_hold = followed;
+        else delete t.sync_hold;
+      }
       t.updated_at = now;
       swept.push(t.id);
     }
@@ -8289,6 +8377,15 @@ function prepareRawUpdate(
   opts?: { reopenTerminal?: boolean; leaveHeld?: boolean; pulledTags?: boolean },
 ): Partial<Task> | null {
   const { id: _ignoreId, ...safeUpdates } = updates as Record<string, unknown>;
+  // A raw write never gives a task an outside service it was not on (2026-11-01: a move pushed
+  // the user's personal tasks to a work tracker). Taking it off one (`'local'`) is allowed; only
+  // releaseSyncHold, a person's Sync or the privacy gate's verdict, sends a task to a service.
+  if (safeUpdates.source !== undefined && safeUpdates.source !== task.source && safeUpdates.source !== 'local') {
+    log.task.warn('raw write tried to give a task another outside service: source dropped', {
+      taskId: task.id, from: task.source, to: String(safeUpdates.source),
+    });
+    delete safeUpdates.source;
+  }
   if (safeUpdates.priority !== undefined) {
     safeUpdates.priority = sanitizePriority(safeUpdates.priority as string);
   }
@@ -9045,6 +9142,14 @@ export async function releaseSyncHold(
       delete task.sync_hold;
       await writeStore(store);
       return { task, released: false, reason: 'project_local', wrote: true };
+    }
+    // A person's Sync (or a hold a person made) goes to the service its hold names, which the
+    // UI showed: when the project now syncs elsewhere, the hold is set to that service and
+    // nothing is sent, so the next Sync is a choice of the service it really goes to.
+    if (task.sync_hold && task.sync_hold.target !== target && (approvedBy === 'user' || task.sync_hold.state === 'chosen')) {
+      task.sync_hold = holdForProject(task.sync_hold, target) ?? task.sync_hold;
+      await writeStore(store);
+      return { task, released: false, reason: 'target_changed', wrote: true };
     }
     const validation = validateProjectSource(task.project ?? '', target, await getConfig(), store.projects);
     if (!validation.ok) return { task, released: false, reason: 'project_conflict' };

@@ -11,6 +11,7 @@ import { Router } from 'express';
 import { registry } from '../../core/integration-registry.js';
 import { getUnconfiguredPlugins } from '../../core/integration-loader.js';
 import { getConfig } from '../../core/config-manager.js';
+import { integrationList } from '../../core/plugins/integration-list.js';
 import { maskPluginFormValues } from '../../core/config-secret-shape.js';
 import { getSyncHealth } from '../../core/plugin-sync-health.js';
 import type { RegisteredPlugin } from '../../core/integration-types.js';
@@ -18,19 +19,14 @@ import { log } from '../../logging/index.js';
 
 export const integrationsRouter = Router();
 
-integrationsRouter.get('/', (_req, res) => {
-  const plugins = registry.getAll()
-    .filter(p => p.id !== 'local' && p.display)
-    .map(p => ({
-      id: p.id,
-      name: p.name,
-      description: p.description,
-      badge: p.display!.badge,
-      badgeColor: p.display!.badgeColor,
-      externalLinkLabel: p.display!.externalLinkLabel,
-    }));
-
-  res.json(plugins);
+// The plugin list with each plugin's sentence, whether a project can sync to it and who reads
+// it (src/core/plugins/integration-list.ts, shared with GET /api/v1/integrations).
+integrationsRouter.get('/', async (_req, res, next) => {
+  try {
+    res.json(await integrationList());
+  } catch (err) {
+    next(err)
+  }
 });
 
 // GET /api/integrations/task-fields — every enabled plugin's declared per-task

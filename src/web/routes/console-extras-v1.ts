@@ -168,21 +168,12 @@ consoleExtrasV1Router.get('/qmd/status', async (_req: Request, res: Response, ne
 
 // ── Plugin metadata (read-only) ──────────────────────────────────────────────
 
-// GET /api/v1/integrations — registered plugin display metadata.
+// GET /api/v1/integrations — registered plugin display metadata, with whether a project can
+// sync to each and who reads it (src/core/plugins/integration-list.ts, the console's list too).
 consoleExtrasV1Router.get('/integrations', async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const { registry } = await import('../../core/integration-registry.js')
-    const plugins = registry.getAll()
-      .filter((p) => p.id !== 'local' && p.display)
-      .map((p) => ({
-        id: p.id,
-        name: p.name,
-        description: p.description,
-        badge: p.display!.badge,
-        badgeColor: p.display!.badgeColor,
-        externalLinkLabel: p.display!.externalLinkLabel,
-      }))
-    res.json(plugins)
+    const { integrationList } = await import('../../core/plugins/integration-list.js')
+    res.json(await integrationList())
   } catch (err) {
     next(err)
   }

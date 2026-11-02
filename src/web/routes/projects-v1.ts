@@ -102,6 +102,13 @@ projectsV1Router.post('/projects', async (req: Request, res: Response, next: Nex
         return
       }
     }
+    const { projectSourceRefusal } = await import('../../core/plugins/integration-list.js')
+    const refusal = await projectSourceRefusal(typeof source === 'string' ? source : 'local',
+      req.get('x-walnut-caller-sid') || undefined, (req.body as { user_words?: unknown }).user_words)
+    if (refusal) {
+      sendError(res, 403, 'user_decision', refusal)
+      return
+    }
     const tm = await import('../../core/task-manager.js')
     try {
       // `human: true` — an explicit create is the ONE way back from a project

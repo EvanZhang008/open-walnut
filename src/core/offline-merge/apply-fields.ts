@@ -126,23 +126,31 @@ export function entryBase(record: V2Record): { seq: number; opId?: string; recor
  * The project a write moves the task to, settled the way updateTask settles it, before
  * the lock (the registry write is its own): a new name gets its registry row, a renamed
  * one follows the rename, and a move the Mac would not make here (a deleted project; a
- * synced task into a project of another source, which online migrates the task) drops
+ * synced task into a project of another source, which online takes off its service) drops
  * the pair from the write and lists it. Returns the fields to merge and the entries.
  */
 async function settleProject(
   task: Task, fields: Record<string, FieldWrite>, project: string, record: V2Record,
 ): Promise<{ fields: Record<string, FieldWrite>; entries: ConflictEntry[]; name?: string }> {
   const tm = await import('../task-manager.js');
-  let ensured: Awaited<ReturnType<typeof tm.ensureProject>>;
-  try {
-    ensured = await tm.ensureProject(project, task.source, { writer: 'offline-handover' });
-  } catch (err) {
-    throw new RefusedWrite(`project ${project}: ${err instanceof Error ? err.message : String(err)}`);
-  }
   const drop = (reason: string): { fields: Record<string, FieldWrite>; entries: ConflictEntry[] } => {
     const { project: _p, group_id: _g, ...rest } = fields;
     return { fields: rest, entries: [{ ...entryBase(record), kind: 'refused', taskId: task.id, field: 'project', mac: task.project ?? '', replica: project, reason }] };
   };
+  // A synced task moved into a name the Mac does not know: online that move takes it off its
+  // service, which needs the Mac to answer. Dropped before any row is made, so no empty project
+  // is left behind.
+  if (task.source !== 'local' && !(await tm.getProjectRecord(project))) {
+    return drop(`moving this task into ${project}, a project the Mac does not have, changes where it syncs, which needs the Mac to answer; the task stays in ${task.project || 'Inbox'}`);
+  }
+  let ensured: Awaited<ReturnType<typeof tm.ensureProject>>;
+  try {
+    // A new name is a LOCAL project, never the moved task's service (as online, updateTask):
+    // only an explicit create says a project syncs somewhere.
+    ensured = await tm.ensureProject(project, 'local', { writer: 'offline-handover' });
+  } catch (err) {
+    throw new RefusedWrite(`project ${project}: ${err instanceof Error ? err.message : String(err)}`);
+  }
   if (ensured.blocked) return drop(`the project ${project} was deleted on the Mac; the task stays in ${task.project || 'Inbox'}`);
   // A session moving a worker out of its lead's project, as online (caller-placement.ts);
   // a queued write never carries the user's words, so only the lead's own projects pass.

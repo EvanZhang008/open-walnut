@@ -9,7 +9,7 @@
     "walnut": ">=0.3.2"
   },
   "server": "index.js",
-  "description": "Two-way sync with Jira Cloud/Server",
+  "description": "Jira issues. Everyone with access to the Jira project can see them.",
   "version": "1.0.0",
   "icon": "icon.svg",
   "configSchema": {

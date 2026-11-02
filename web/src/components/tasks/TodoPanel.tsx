@@ -1,5 +1,6 @@
 import { Fragment, useState, useMemo, useCallback, useEffect, useLayoutEffect, useRef, useDeferredValue, memo, startTransition, type CSSProperties, type DragEvent as ReactDragEvent, type ReactNode } from 'react';
 import { useDraft } from '@/hooks/useDraft';
+import { useIntegrations } from '@/hooks/useIntegrations';
 import { draftKey } from '@/utils/drafts';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
@@ -2511,6 +2512,8 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
 
   // Registry projects (incl. zero-task ones) + provider source for the badges.
   const projectRegistry = useProjectRegistry();
+  // Plugin names for the move dialogs ("Microsoft To-Do", not "ms-todo").
+  const integrations = useIntegrations();
   // Project header "+ → Add task": open that group's ghost add row (the group's
   // own inline editor — creation stays physically IN the group, so "where does
   // it land" needs no explanation). Nonce so re-clicks re-open after an Escape.
@@ -5544,7 +5547,7 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     if (migrating > 0) {
       const ok = await confirm({
         title: 'Move across providers?',
-        message: `${migrating} of the ${moving.length} tasks in “${taskGroups?.[groupId] ?? 'this folder'}” cross a provider boundary. Their original tasks will be archived (renamed “[Moved]” and marked complete).`,
+        message: `${migrating} of the ${moving.length} tasks in “${taskGroups?.[groupId] ?? 'this folder'}” leave the service they sync to and become local tasks in “${project || 'Inbox'}”: nothing is sent to another service until you choose Sync on a task. Their original tasks will be archived (renamed “[Moved]” and marked complete).`,
         confirmLabel: 'Move',
       });
       if (!ok) return false;
@@ -6047,8 +6050,10 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
   }, [groupBy, sortBy, sortForProject, setProjectSort, sortOrder, onBakeOrder, showSortToast]);
 
   // Cross-project move with a cross-provider gate: when the destination project is
-  // claimed by a DIFFERENT provider, the backend migrates the task (old remote twin
-  // archived as "[Moved]" + completed) — that is destructive enough to confirm first.
+  // claimed by a DIFFERENT provider (or a new one, which is created local), the backend
+  // takes the task off its service (old remote twin archived as "[Moved]" + completed;
+  // into another service's project it stays local until someone chooses Sync), which
+  // is destructive enough to confirm first.
   // Same-provider (and local→provider folder-only) moves go straight through, and
   // are answered at once rather than as a promise: a drop that moves a card into
   // another project's folder then lands in the drop's own render, instead of drawing
@@ -6063,15 +6068,17 @@ export const TodoPanel = memo(function TodoPanel({ tasks: rawTasks, loading, onC
     // provider-sourced ones need the conservative ask.
     const claimUnknown = !projectRegistry.loaded && mig.from !== 'local';
     if (!mig.migrates && !claimUnknown) return { ok: true, migrates: false };
-    const fromName = sourceDisplayName(mig.from);
+    const fromName = sourceDisplayName(mig.from, integrations);
     return confirm({
       title: 'Move across providers?',
       message: mig.migrates
-        ? `“${task?.title ?? taskId}” moves from ${fromName} to ${sourceDisplayName(mig.to)}. The original ${fromName} task will be archived (renamed “[Moved]” and marked complete). Same-provider subtasks move along with it.`
+        ? mig.held
+          ? `“${task?.title ?? taskId}” leaves ${fromName} and stays a local task in “${project}”: nothing is sent to ${sourceDisplayName(mig.to, integrations)} until you choose Sync to ${sourceDisplayName(mig.to, integrations)} on it. The original ${fromName} task will be archived (renamed “[Moved]” and marked complete).`
+          : `“${task?.title ?? taskId}” leaves ${fromName} and becomes a local task in “${project || 'Inbox'}”. The original ${fromName} task will be archived (renamed “[Moved]” and marked complete). Its ${fromName} subtasks become local too.`
         : `“${task?.title ?? taskId}” is a ${fromName} task and “${project || 'Inbox'}” may belong to a different provider (the project list hasn't loaded). If it does, the original ${fromName} task will be archived (renamed “[Moved]” and marked complete).`,
       confirmLabel: 'Move',
     }).then((ok) => ({ ok, migrates: mig.migrates }));
-  }, [tasks, projectRegistry.sourceByName, projectRegistry.loaded, confirm]);
+  }, [tasks, projectRegistry.sourceByName, projectRegistry.loaded, confirm, integrations]);
 
   const requestMoveTask = useCallback(async (
     taskId: string,

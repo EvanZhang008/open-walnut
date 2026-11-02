@@ -4,7 +4,7 @@
  * by default and gives the details on request. The HTTP route keeps the full rows (web, iOS).
  */
 import { describe, it, expect } from 'vitest'
-import { projectListResult } from '../../src/ops/core.js'
+import { projectListResult, syncServices } from '../../src/ops/core.js'
 
 const summary = 'x'.repeat(2000)
 const body = {
@@ -44,5 +44,31 @@ describe('project_list result', () => {
     expect(projectListResult(body, { detail: true })).toBe(body)
     // A name wins over detail.
     expect(projectListResult(body, { detail: true, name: 'Project 2' })).toEqual({ project: body.projects[2] })
+  })
+
+  it('says which service a project syncs to and who can see each service', () => {
+    // 2026-11-01: an agent filing a task could not tell a personal list from a work tracker.
+    const synced = { projects: [
+      { name: 'Home', source: 'local', counts: {} },
+      { name: 'Team', source: 'team-tracker', counts: {} },
+      { name: 'Mine', source: 'ms-todo', counts: {} },
+    ], inbox: {} }
+    const integrations = [
+      { id: 'team-tracker', name: 'Team Tracker', description: 'The team tracker. Your team can see it.', syncsTasks: true, audience: 'shared' },
+      { id: 'ms-todo', name: 'Microsoft To-Do', description: 'Your lists. Only you can see them.', syncsTasks: true, audience: 'self' },
+      { id: 'calendar', name: 'Calendar', syncsTasks: false },
+    ]
+    const out = projectListResult(synced, {}, integrations) as { projects: Array<Record<string, unknown>>; services: unknown[]; detail: string }
+    expect(out.projects[0]).not.toHaveProperty('syncs_to')
+    expect(out.projects[1]).toMatchObject({ syncs_to: 'team-tracker' })
+    expect(out.projects[2]).toMatchObject({ syncs_to: 'ms-todo' })
+    expect(out.services).toEqual([
+      { id: 'team-tracker', name: 'Team Tracker', description: 'The team tracker. Your team can see it.', audience: 'shared' },
+      { id: 'ms-todo', name: 'Microsoft To-Do', description: 'Your lists. Only you can see them.', audience: 'self' },
+    ])
+    expect(out.detail).toContain('syncs_to')
+    // An older server sends no flags: every plugin is listed, and an unknown audience is shared.
+    expect(syncServices([{ id: 'x', name: 'X' }])).toEqual([{ id: 'x', name: 'X', audience: 'shared' }])
+    expect(syncServices(undefined)).toEqual([])
   })
 })
