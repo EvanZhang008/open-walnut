@@ -163,6 +163,17 @@ export async function readerScrollUp(page: Page, px: number) {
   await page.waitForTimeout(500);
 }
 
+/** Wheel the chat to its top, the way a reader does, until it is there. */
+export async function readerScrollToTop(page: Page) {
+  const box = await page.locator(HISTORY).boundingBox();
+  if (!box) throw new Error('no history box');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(async () => {
+    await page.mouse.wheel(0, -100_000);
+    expect(await page.locator(HISTORY).evaluate((el) => el.scrollTop)).toBeLessThanOrEqual(1);
+  }).toPass({ timeout: 30_000 });
+}
+
 /** Is the active match inside the chat's visible box? */
 export function activeInView(page: Page) {
   return page.locator(HISTORY).evaluate((el) => {

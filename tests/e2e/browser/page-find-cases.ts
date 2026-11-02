@@ -5,7 +5,7 @@
 import { test, expect } from '@playwright/test';
 import {
   HIDDEN_WORD, OLD_MARKER, WORD, activeInView, bar, expectedCount, findChord, historySelector,
-  label, maxScrollDrift, openSession, paint, readerScrollUp, scrollTop, settledLabel, shot,
+  label, maxScrollDrift, openSession, paint, readerScrollToTop, readerScrollUp, scrollTop, settledLabel, shot,
 } from './page-find-helpers';
 import type { Page } from '@playwright/test';
 import { expectEchoEndsOffSelection } from './selection-echo-helpers';
@@ -106,6 +106,10 @@ export function definePageFindCases(engine: string): void {
     expect(await settledLabel(page)).toBe('No results');
     const loadEarlier = page.locator(historySelector).getByText('Load earlier turns').first();
     await expect(loadEarlier).toBeVisible({ timeout: 10_000 });
+    // Up to it with the wheel, as a reader does: the chat holds its bottom against a scroll
+    // with no input, which is what Playwright's own scroll before a click is, so under load
+    // every retry of the click was scrolled back (2026-11-02, CI and a 3-CPU WebKit run).
+    await readerScrollToTop(page);
     await loadEarlier.click();
     await expect(label(page)).toHaveText(/^\?\/[1-9]\d*$/, { timeout: 10_000 });
   });

@@ -1401,3 +1401,54 @@ describe('a selection a spec makes by script', () => {
     expect(offendersOf('x.ts', spec.replace('await openSession(page);', 'await openSession(page);\n    await clickVisibleAnswer(page);'))).toEqual([])
   })
 })
+
+describe('a click on the timeline\'s Load earlier turns button', () => {
+  // The button sits above the first rendered row and the timeline opens parked at its bottom,
+  // which it holds against a scroll with no input: Playwright's own scroll before a click is
+  // undone, so a bare click() waits out the test while the button stays outside the scrollport
+  // (2026-11-02, CI: page-find's WebKit case, 12 runs; reproduced on 3 CPUs, 8 of 8). A spec
+  // wheels up to it first, as a reader does, or clicks it through the DOM.
+  const BUTTON = /Load earlier turns|session-show-earlier-btn/
+  const SCROLLS = /\.wheel\(|\bwheel\(|ToTop\(|wheelUntilInView\(|scrollToTop\(/
+  const DOM_CLICK = /evaluate\(\(el\) => \(el as HTMLElement\)\.click\(\)\)/
+
+  const offendersOf = (file: string, text: string): string[] => {
+    const lines = text.split('\n')
+    // Whether the name holds a locator of the button, by its latest assignment above the click
+    // (a helper that scrolls before it returns the locator, like whale-history's
+    // loadEarlierBtn, names no button in that line and is left alone).
+    const isButton = (name: string, at: number): boolean => {
+      for (let j = at - 1; j >= 0; j--) {
+        const m = new RegExp(`\\b(?:const|let)\\s+${name}\\s*=\\s*(.*)$`).exec(lines[j]!)
+        if (m) return BUTTON.test(m[1]!)
+      }
+      return false
+    }
+    const out: string[] = []
+    lines.forEach((line, i) => {
+      const t = line.trim()
+      if (t.startsWith('//') || t.startsWith('*') || !/\.click\(/.test(line) || DOM_CLICK.test(line)) return
+      const receiver = /(\w+)(?:\.first\(\)|\.last\(\))?\.click\(/.exec(line)?.[1]
+      if (!BUTTON.test(line) && !(receiver && isButton(receiver, i))) return
+      if (lines.slice(Math.max(0, i - 12), i).some((l) => SCROLLS.test(l))) return
+      out.push(`${file}:${i + 1}: ${t}`)
+    })
+    return out
+  }
+
+  it('every one wheels up to it first', () => {
+    const clickers = sources.filter(({ text }) => BUTTON.test(text) && /\.click\(/.test(text)).map(({ file }) => file)
+    expect(clickers).toEqual(expect.arrayContaining(['page-find-cases.ts', 'show-earlier-scroll-anchor.spec.ts']))
+    expect(sources.flatMap(({ file, text }) => offendersOf(file, text))).toEqual([])
+  })
+
+  it('catches the shape it was written for', () => {
+    const bare = [
+      "    const loadEarlier = page.locator(historySelector).getByText('Load earlier turns').first();",
+      '    await expect(loadEarlier).toBeVisible({ timeout: 10_000 });',
+      '    await loadEarlier.click();',
+    ].join('\n')
+    expect(offendersOf('x.ts', bare)).toHaveLength(1)
+    expect(offendersOf('x.ts', bare.replace('    await loadEarlier.click();', '    await readerScrollToTop(page);\n    await loadEarlier.click();'))).toEqual([])
+  })
+})
