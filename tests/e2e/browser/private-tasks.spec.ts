@@ -224,25 +224,43 @@ test.describe.serial('Settings › Task providers', () => {
   }
   const own = async () => (await api<Cfg>('GET', '/api/config')).config.private_tasks?.providers?.[SERVICE]
 
-  test('a provider\'s hard rules are saved for it, and Try a task title says which one fails', async ({ page }) => {
+  test('a provider\'s hard rules are chips saved for it, and the test line says which one fails', async ({ page }) => {
     const word = `zq${stamp().toLowerCase()}`
     const before = (await api<Cfg>('GET', '/api/config')).config.private_tasks
     await mockProviders(page)
     try {
       const group = await openProviders(page)
-      await expect(group).toContainText('Check tasks before they sync')
+      const head = page.getByTestId(`settings-provider-${SERVICE}-head`)
+      await expect(head).toContainText('Plugin A')
       const box = page.getByTestId(`settings-provider-${SERVICE}-words`)
-      await box.fill(`${word}\n/(broken/`)
-      await page.getByTestId(`settings-provider-${SERVICE}-try`).fill(`my ${word} packet`)
-      await expect(group).toContainText(`Fails the hard rule "${word}".`)
-      await expect(group).toContainText('These lines are not used (not a valid pattern, or one that could be slow): /(broken/')
-      await box.blur()
+      const verdict = page.getByTestId(`settings-provider-${SERVICE}-verdict`)
+      const chips = group.getByTestId(`settings-provider-${SERVICE}-words-rule`)
+      await expect(verdict).toHaveText('Type a task title to see whether it may sync')
+      await box.fill(word)
+      await box.press('Enter')
+      await box.fill('/(broken/')
+      await box.press('Enter')
+      await expect(chips).toHaveText([word, '/(broken/'])
       await expect.poll(async () => (await own())?.words).toEqual([word, '/(broken/'])
+      // A line the server cannot use is marked on its chip.
+      await expect(chips.filter({ hasText: '/(broken/' })).toHaveAttribute('data-invalid', 'true')
+      await expect(chips.filter({ hasText: word })).not.toHaveAttribute('data-invalid', 'true')
+      await expect(group.getByTestId(`settings-provider-${SERVICE}-words-unused`)).toHaveText('Not used: /(broken/. It is not a valid pattern, or one that could be slow')
+      await expect(head).toContainText('Checks every task against 2 hard rules and the AI rule')
       // The shared list is left as it was.
       expect((await api<Cfg>('GET', '/api/config')).config.private_tasks?.words ?? []).toEqual(before?.words ?? [])
-      await page.getByTestId(`settings-provider-${SERVICE}-try`).fill('fix the login page')
-      await expect(group).toContainText('Passes the hard rules. Ask AI to check it against the AI rule.')
+      await page.getByTestId(`settings-provider-${SERVICE}-try`).fill(`my ${word} packet`)
+      await expect(verdict).toHaveText(`Fails the hard rule "${word}"`)
+      await expect(verdict).toHaveAttribute('data-tone', 'fail')
       await group.screenshot({ path: `${SHOTS}/${engine()}-5-provider-rules.png` })
+      await page.getByTestId(`settings-provider-${SERVICE}-try`).fill('fix the login page')
+      await expect(verdict).toHaveText('Passes the hard rules. Ask AI to check the AI rule')
+      // The cross removes one chip, and only that one.
+      await group.getByRole('button', { name: 'Remove /(broken/' }).click()
+      await expect(chips).toHaveText([word])
+      await expect(group.getByTestId(`settings-provider-${SERVICE}-words-unused`)).toHaveCount(0)
+      await expect.poll(async () => (await own())?.words).toEqual([word])
+      await expect(head).toContainText('Checks every task against 1 hard rule and the AI rule')
     } finally {
       await api('PUT', '/api/config', { private_tasks: before ?? { words: [] } }).catch(() => undefined)
     }
@@ -262,16 +280,33 @@ test.describe.serial('Settings › Task providers', () => {
     try {
       const group = await openProviders(page)
       const rule = page.getByTestId(`settings-provider-${SERVICE}-ai-rule`)
+      const verdict = page.getByTestId(`settings-provider-${SERVICE}-verdict`)
       await expect(rule).toHaveValue(DEFAULT_RULE)
+      await expect(group).toContainText('Walnut\'s default rule. Write your own in its place')
+      await expect(page.getByTestId(`settings-provider-${SERVICE}-ai-rule-reset`)).toHaveCount(0)
       await rule.fill('Keep out anything about Quokka')
       await rule.blur()
       await expect.poll(async () => (await own())?.ai_rule).toBe('Keep out anything about Quokka')
       await page.getByTestId(`settings-provider-${SERVICE}-try`).fill('Quokka budget')
       await page.getByTestId(`settings-provider-${SERVICE}-ask-ai`).click()
-      await expect(group).toContainText('Fails the AI rule: about Quokka.')
+      await expect(verdict).toHaveText('Fails the AI rule: about Quokka')
+      await expect(verdict).toHaveAttribute('data-tone', 'fail')
       expect(asked.at(-1)).toMatchObject({ text: 'Quokka budget', provider: SERVICE, ai: true, ai_rule: 'Keep out anything about Quokka' })
       await group.screenshot({ path: `${SHOTS}/${engine()}-6-provider-ai.png` })
-      // Back to the default rule: emptied, it stores '' and shows the default again.
+      // Enter asks too, and a title that passes says so with the AI's reason.
+      await page.getByTestId(`settings-provider-${SERVICE}-try`).fill('Fix the login retry')
+      await page.getByTestId(`settings-provider-${SERVICE}-try`).press('Enter')
+      await expect(verdict).toHaveText('Passes both rules. AI: team work')
+      await expect(verdict).toHaveAttribute('data-tone', 'pass')
+      // Back to the default rule in one click: it stores '' and shows the default again.
+      await page.getByTestId(`settings-provider-${SERVICE}-ai-rule-reset`).click()
+      await expect.poll(async () => (await own())?.ai_rule).toBe('')
+      await expect(rule).toHaveValue(DEFAULT_RULE)
+      await expect(page.getByTestId(`settings-provider-${SERVICE}-ai-rule-reset`)).toHaveCount(0)
+      // Emptied, it stores '' as well.
+      await rule.fill('something')
+      await rule.blur()
+      await expect.poll(async () => (await own())?.ai_rule).toBe('something')
       await rule.fill('')
       await rule.blur()
       await expect.poll(async () => (await own())?.ai_rule).toBe('')
@@ -280,7 +315,7 @@ test.describe.serial('Settings › Task providers', () => {
       await expect.poll(async () => (await own())?.check).toBe(false)
       // The release before this one reads the choice from `audience`: going back keeps it.
       await expect.poll(async () => ((await api<Cfg>('GET', '/api/config')).config.private_tasks as { audience?: Record<string, string> } | undefined)?.audience?.[SERVICE]).toBe('self')
-      await expect(group).toContainText('Every task syncs to Plugin A; only your own Local choice keeps one out.')
+      await expect(page.getByTestId(`settings-provider-${SERVICE}-head`)).toContainText('Not checked: every task syncs')
       await expect(page.getByTestId(`settings-provider-${SERVICE}-words`)).toHaveCount(0)
     } finally {
       await api('PUT', '/api/config', { private_tasks: before ?? { words: [] } }).catch(() => undefined)

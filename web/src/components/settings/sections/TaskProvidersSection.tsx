@@ -1,58 +1,53 @@
 /**
  * Settings › Task providers (src/core/private-tasks/provider-rules.ts): every plugin that syncs
- * tasks, listed by itself, with the rules a task must pass before it syncs there.
+ * tasks, as one card, with the rules a task must pass before it syncs there.
  *
- *   - Check tasks before they sync: off sends every task (the plugin's default for a service only
- *     the user reads, a personal list); on applies the two kinds of rules below.
- *   - Hard rules: words, phrases or /patterns/; a task whose title, description or notes match one
- *     fails and stays in Walnut.
- *   - AI rule: what to keep out, in the user's words; the fast model reads each task against it
- *     and answers pass or fail with a reason.
- *   - Try a task title: which hard rule it fails, and (one click, one model call) the AI's verdict.
+ *   - The card's head: the plugin's icon and name, what is checked now in one line, and the switch
+ *     that turns the check on or off (off sends every task: the plugin's default for a service only
+ *     the user reads, a personal list).
+ *   - Hard rules: words, phrases or /patterns/ as chips; a task whose title, description or notes
+ *     contain one fails and stays in Walnut.
+ *   - AI rule: what to keep out, in the user's words; the fast model reads each task against it and
+ *     answers pass or fail with a reason. Walnut's default rule is shown until the user writes one.
+ *   - Test a task: a title typed here is checked against the hard rules at once, and against the AI
+ *     rule on one click (one model call).
  *
  * Stored per plugin in `private_tasks.providers[<id>]`; a value never set shows its default. The
  * check is also written to `private_tasks.audience[<id>]` (self = off, shared = on), the field the
  * release before this one reads, so going back keeps the user's choice; that release reads only
  * the global word list and model switch.
  */
-import { useEffect, useRef, useState } from 'react';
-import type { Config } from '@open-walnut/core';
-import { SettingsGroup, SettingsRow, SettingsSection } from '../SettingsSection';
-import { ToggleSwitch } from '../inputs/ToggleSwitch';
-import { SettingsButton } from '../inputs/SettingsButton';
-import { useOptimisticSetting } from '../inputs/useOptimisticSetting';
-import { useCommitField } from '../inputs/useCommitField';
-import { useSerialSave, type BuildPatch, type OnSave } from './GeneralSection';
-import { listTaskProviders, testProviderRules, type ProviderRules, type RulesTest } from '@/api/private-tasks';
-import { log } from '@/utils/log';
-import '@/styles/settings-controls.css';
+import { useEffect, useRef, useState } from 'react'
+import type { Config } from '@open-walnut/core'
+import { SettingsGroup, SettingsRow, SettingsSection } from '../SettingsSection'
+import { ToggleSwitch } from '../inputs/ToggleSwitch'
+import { SettingsButton } from '../inputs/SettingsButton'
+import { useOptimisticSetting } from '../inputs/useOptimisticSetting'
+import { useCommitField } from '../inputs/useCommitField'
+import { PluginIcon, pluginTileTints } from '../PluginIcon'
+import { useSerialSave, type BuildPatch, type OnSave } from './GeneralSection'
+import { HardRulesEditor, TryVerdict, verdictOf, wordsFromText, type AiAnswer } from './task-provider-parts'
+import { listTaskProviders, testProviderRules, type ProviderRules } from '@/api/private-tasks'
+import { log } from '@/utils/log'
+import '@/styles/settings-controls.css'
+import '@/styles/settings-task-providers.css'
 
-/** The textarea's lines as the stored list: trimmed, no empty lines, no repeats. */
-export function wordsFromText(text: string): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const line of text.split('\n')) {
-    const w = line.trim();
-    if (!w || seen.has(w)) continue;
-    seen.add(w);
-    out.push(w);
-  }
-  return out;
-}
+export { wordsFromText }
 
-type ProviderPatch = NonNullable<NonNullable<Config['private_tasks']>['providers']>[string];
+type ProviderPatch = NonNullable<NonNullable<Config['private_tasks']>['providers']>[string]
 
 export function TaskProvidersSection({ config, onSave }: { config: Config; onSave: OnSave }) {
-  const save = useSerialSave(config, onSave);
-  const [providers, setProviders] = useState<ProviderRules[] | null>(null);
-  const rulesKey = JSON.stringify(config.private_tasks ?? {});
+  const save = useSerialSave(config, onSave)
+  const [providers, setProviders] = useState<ProviderRules[] | null>(null)
+  const rulesKey = JSON.stringify(config.private_tasks ?? {})
   useEffect(() => {
-    let alive = true;
+    let alive = true
     listTaskProviders()
-      .then((r) => { if (alive) setProviders(r.providers); })
-      .catch((err) => { log.warn('settings', 'task providers not read', { error: String(err) }); if (alive) setProviders([]); });
-    return () => { alive = false; };
-  }, [rulesKey]);
+      .then((r) => { if (alive) setProviders(r.providers) })
+      .catch((err) => { log.warn('settings', 'task providers not read', { error: String(err) }); if (alive) setProviders([]) })
+    return () => { alive = false }
+  }, [rulesKey])
+  const tints = pluginTileTints(providers ?? [])
 
   return (
     <SettingsSection id="task-providers" title="Task providers">
@@ -60,13 +55,14 @@ export function TaskProvidersSection({ config, onSave }: { config: Config; onSav
         <SettingsGroup data-testid="task-providers-empty">
           <SettingsRow
             label="No task provider is connected"
-            help="A plugin that syncs tasks (a to-do list, a team tracker) shows here once it is set up in Plugins, with the rules a task must pass before it syncs there."
+            help="A plugin that syncs tasks, a to-do list or a team tracker, shows here once it is set up in Plugins"
           />
         </SettingsGroup>
       ) : providers.map((p) => (
-        <ProviderRulesGroup
+        <ProviderCard
           key={p.id}
           provider={p}
+          tint={tints.get(p.id) ?? 'var(--fg-muted)'}
           save={(patch, rowKey) => save(((c) => ({
             private_tasks: {
               ...(c.private_tasks ?? {}),
@@ -79,154 +75,176 @@ export function TaskProvidersSection({ config, onSave }: { config: Config; onSav
         />
       ))}
     </SettingsSection>
-  );
+  )
 }
 
-function ProviderRulesGroup({ provider: p, save }: {
-  provider: ProviderRules;
-  save: (patch: ProviderPatch, rowKey: string) => Promise<void>;
+/** The head's one line: what is checked now. */
+function summaryOf(p: ProviderRules, on: boolean, words: number, ai: boolean): string {
+  if (!on) return p.check_default ? 'Not checked: every task syncs' : 'Not checked: only you read it, so every task syncs'
+  const rules = [words ? `${words} hard ${words === 1 ? 'rule' : 'rules'}` : '', ai ? 'the AI rule' : ''].filter(Boolean)
+  return rules.length ? `Checks every task against ${rules.join(' and ')}` : 'Checks every task, no rules yet'
+}
+
+function ProviderCard({ provider: p, tint, save }: {
+  provider: ProviderRules
+  tint: string
+  save: (patch: ProviderPatch, rowKey: string) => Promise<void>
 }) {
-  const key = (k: string) => `task-providers.${p.id}.${k}`;
-  const id = (k: string) => `settings-provider-${p.id}-${k}`;
-  const check = useOptimisticSetting<boolean>(p.check, (v) => save({ check: v }, key('check')), { rowKey: key('check') });
-  const words = useCommitField<string>(
-    p.words.join('\n'), (text) => save({ words: wordsFromText(text) }, key('words')),
-    { rowKey: key('words'), kind: 'text', multiline: true },
-  );
-  const ai = useOptimisticSetting<boolean>(p.ai, (v) => save({ ai: v }, key('ai')), { rowKey: key('ai') });
+  const key = (k: string) => `task-providers.${p.id}.${k}`
+  const id = (k: string) => `settings-provider-${p.id}-${k}`
+  const check = useOptimisticSetting<boolean>(p.check, (v) => save({ check: v }, key('check')), { rowKey: key('check') })
+  // One string, so the hook can tell a saved list from the server's by value.
+  const wordsText = useOptimisticSetting<string>(
+    p.words.join('\n'), (text) => save({ words: wordsFromText(text) }, key('words')), { rowKey: key('words') },
+  )
+  const words = wordsFromText(wordsText.value)
+  const ai = useOptimisticSetting<boolean>(p.ai, (v) => save({ ai: v }, key('ai')), { rowKey: key('ai') })
   // The default rule is shown as it is; saving it unchanged (or empty) stores '' (the default).
   const rule = useCommitField<string>(
     p.ai_rule, (text) => save({ ai_rule: text.trim() && text.trim() !== p.ai_rule_default ? text.trim() : '' }, key('ai-rule')),
     { rowKey: key('ai-rule'), kind: 'text', multiline: true },
-  );
-  const [sample, setSample] = useState('');
-  const [wordsResult, setWordsResult] = useState<RulesTest | null>(null);
-  const [aiResult, setAiResult] = useState<RulesTest['ai'] | 'asking' | null>(null);
-  const typedWords = words.inputProps.value;
-  useEffect(() => {
-    let alive = true;
-    const t = setTimeout(() => {
-      if (!sample.trim()) { setWordsResult(null); return; }
-      testProviderRules({ text: sample, words: wordsFromText(typedWords), provider: p.id })
-        .then((r) => { if (alive) setWordsResult(r); })
-        .catch(() => { if (alive) setWordsResult(null); });
-    }, 250);
-    return () => { alive = false; clearTimeout(t); };
-  }, [sample, typedWords, p.id]);
-  // Every ask has a number: an answer for an older title or rule (or a group no longer shown) is
-  // dropped, so the verdict on screen is always for what is typed now.
-  const asked = useRef(0);
-  useEffect(() => () => { asked.current++; }, []);
-  useEffect(() => { asked.current++; setAiResult(null); }, [sample, rule.inputProps.value]);
-  const askAi = () => {
-    const n = ++asked.current;
-    const settle = (v: RulesTest['ai'] | null) => { if (asked.current === n) setAiResult(v); };
-    setAiResult('asking');
-    testProviderRules({ text: sample, provider: p.id, ai: true, ai_rule: rule.inputProps.value })
-      .then((r) => settle(r.ai ?? { error: 'No answer' }))
-      .catch((err) => settle({ error: err instanceof Error ? err.message : String(err) }));
-  };
+  )
+  const ruleText = rule.inputProps.value
+  const isDefaultRule = !ruleText.trim() || ruleText.trim() === p.ai_rule_default
 
-  const on = check.value;
+  // Which saved lines the server cannot use, and which one a typed title matches.
+  const [invalid, setInvalid] = useState<string[]>([])
+  const [match, setMatch] = useState<string | null>(null)
+  const [sample, setSample] = useState('')
+  useEffect(() => {
+    let alive = true
+    const t = setTimeout(() => {
+      testProviderRules({ text: sample, words, provider: p.id })
+        .then((r) => { if (alive) { setInvalid(r.invalid); setMatch(sample.trim() ? r.match : null) } })
+        .catch(() => { if (alive) setMatch(null) })
+    }, 250)
+    return () => { alive = false; clearTimeout(t) }
+  }, [sample, wordsText.value, p.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Every ask has a number: an answer for an older title or rule (or a card no longer shown) is
+  // dropped, so the verdict on screen is always for what is typed now.
+  const [answer, setAnswer] = useState<AiAnswer>(null)
+  const asked = useRef(0)
+  useEffect(() => () => { asked.current++ }, [])
+  useEffect(() => { asked.current++; setAnswer(null) }, [sample, ruleText])
+  const askAi = () => {
+    const n = ++asked.current
+    const settle = (v: AiAnswer) => { if (asked.current === n) setAnswer(v) }
+    setAnswer('asking')
+    testProviderRules({ text: sample, provider: p.id, ai: true, ai_rule: ruleText })
+      .then((r) => settle(r.ai ?? { error: 'No answer' }))
+      .catch((err) => settle({ error: err instanceof Error ? err.message : String(err) }))
+  }
+
+  const on = check.value
+  const verdict = verdictOf({ sample, hardMatch: match, ai: ai.value, answer })
   return (
-    <SettingsGroup heading={p.name} data-testid={`task-provider-${p.id}`}>
+    <SettingsGroup
+      className="tp-card"
+      data-testid={`task-provider-${p.id}`}
+      footer={on
+        ? 'A task that fails stays in Walnut, and one letter lists the tasks kept out. Turning the check off syncs them, except the ones you made local yourself.'
+        : undefined}
+    >
       <SettingsRow
-        label="Check tasks before they sync"
-        help={on
-          ? `A task must pass the rules below before it syncs to ${p.name}; one that fails stays in Walnut, and you get one letter for the tasks kept out. Turning this off syncs the tasks it kept out, except the ones you made local yourself.`
-          : `Every task syncs to ${p.name}; only your own Local choice keeps one out.${p.check_default ? '' : ' Off by default: only you read it.'}`}
+        className="tp-head"
+        label={<span className="tp-name"><PluginIcon name={p.name} iconUrl={p.icon_url} tint={tint} />{p.name}</span>}
+        help={summaryOf(p, on, words.length, ai.value)}
         htmlFor={id('check')}
         error={check.error}
-        control={<ToggleSwitch id={id('check')} checked={on} busy={check.busy} onChange={check.set} />}
+        data-testid={id('head')}
+        control={<ToggleSwitch id={id('check')} aria-label={`Check tasks before they sync to ${p.name}`} checked={on} busy={check.busy} onChange={check.set} />}
       />
       {on && (
         <>
           <SettingsRow
             className="settings-row-stacked"
             label="Hard rules"
-            help="One word, phrase or /pattern/ per line. A task whose title, description or notes match one fails."
+            help="A task whose title, description or notes contain one of these fails"
             htmlFor={id('words')}
-            error={words.error}
-            control={(
-              <textarea
-                id={id('words')}
-                data-testid={id('words')}
-                data-no-draft="autosave"
-                className="settings-input settings-input--long"
-                rows={4}
-                placeholder={'salary\nside project\n/\\bcodename-\\w+/'}
-                {...words.inputProps}
-              />
-            )}
+            error={wordsText.error}
+            control={<HardRulesEditor id={id('words')} words={words} invalid={invalid} busy={wordsText.busy} onChange={(w) => wordsText.set(w.join('\n'))} />}
           />
-          {!!wordsResult?.invalid.length && (
-            <SettingsRow indent state="warning" label="Not used" help={`These lines are not used (not a valid pattern, or one that could be slow): ${wordsResult.invalid.join(', ')}`} />
-          )}
           <SettingsRow
             label="AI rule"
-            help="The fast model reads each task against this rule and answers pass or fail, with a reason. With no model set up, only the hard rules are checked."
+            help="The fast model reads each task against your words and answers pass or fail, with a reason"
             htmlFor={id('ai')}
             error={ai.error}
             control={<ToggleSwitch id={id('ai')} checked={ai.value} busy={ai.busy} onChange={ai.set} />}
           />
           {ai.value && (
             <SettingsRow
-              className="settings-row-stacked"
+              className="settings-row-stacked tp-rule-row"
               indent
               label="What to keep out"
-              help="In your own words. A task the rule keeps out fails."
+              help={isDefaultRule ? 'Walnut\'s default rule. Write your own in its place' : (
+                <>
+                  Your own rule.{' '}
+                  <button
+                    type="button"
+                    className="tp-link"
+                    data-testid={id('ai-rule-reset')}
+                    onClick={() => {
+                      rule.inputProps.onChange({ target: { value: p.ai_rule_default } } as Parameters<typeof rule.inputProps.onChange>[0])
+                      void rule.flush()
+                    }}
+                  >
+                    Use the default rule
+                  </button>
+                </>
+              )}
               htmlFor={id('ai-rule')}
               error={rule.error}
               control={(
                 <textarea
-                  id={id('ai-rule')}
-                  data-testid={id('ai-rule')}
-                  data-no-draft="autosave"
-                  className="settings-input settings-input--long"
-                  rows={5}
-                  maxLength={4000}
+                    id={id('ai-rule')}
+                    data-testid={id('ai-rule')}
+                    data-no-draft="autosave"
+                    className="tp-ai-rule-text"
+                    rows={5}
+                    maxLength={4000}
                   {...rule.inputProps}
                 />
               )}
             />
           )}
           <SettingsRow
-            label="Try a task title"
-            help={!sample.trim() ? 'Type a title to see whether it passes.'
-              : wordsResult?.match ? `Fails the hard rule "${wordsResult.match}".`
-              : aiResult === 'asking' ? 'Passes the hard rules. Asking the AI…'
-              : aiResult && 'error' in aiResult ? `Passes the hard rules. The AI did not answer: ${aiResult.error}`
-              : aiResult && 'pass' in aiResult ? `${aiResult.pass ? 'Passes' : 'Fails'} the AI rule: ${aiResult.reason}.`
-              : ai.value ? 'Passes the hard rules. Ask AI to check it against the AI rule.' : 'Passes the hard rules.'}
+            className="settings-row-stacked tp-try-row"
+            label="Test a task"
             htmlFor={id('try')}
-            state={sample.trim() && (wordsResult?.match || (aiResult && aiResult !== 'asking' && 'pass' in aiResult && !aiResult.pass)) ? 'warning' : undefined}
             data-testid={id('try-row')}
             control={(
-              <span className="settings-try-controls">
-                <input
-                  id={id('try')}
-                  data-testid={id('try')}
-                  data-no-draft="autosave"
-                  type="text"
-                  className="settings-input"
-                  placeholder="A task title"
-                  value={sample}
-                  onChange={(e) => setSample(e.target.value)}
-                />
-                {ai.value && (
-                  <SettingsButton
-                    data-testid={id('ask-ai')}
-                    disabled={!sample.trim() || !!wordsResult?.match || aiResult === 'asking'}
-                    onClick={askAi}
-                  >
-                    Ask AI
-                  </SettingsButton>
-                )}
-              </span>
+              <div className="tp-try">
+                <div className="tp-try-field">
+                  <input
+                    id={id('try')}
+                    data-testid={id('try')}
+                    data-no-draft="autosave"
+                    type="text"
+                    className="settings-input tp-try-input"
+                    placeholder="A task title"
+                    value={sample}
+                    onChange={(e) => setSample(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && ai.value && sample.trim() && !match && answer !== 'asking') askAi() }}
+                  />
+                  {ai.value && (
+                    <SettingsButton
+                      data-testid={id('ask-ai')}
+                      disabled={!sample.trim() || !!match || answer === 'asking'}
+                      busy={answer === 'asking'}
+                      busyLabel="Asking"
+                      onClick={askAi}
+                    >
+                      Ask AI
+                    </SettingsButton>
+                  )}
+                </div>
+                <TryVerdict id={id('verdict')} tone={verdict.tone} text={verdict.text} />
+              </div>
             )}
           />
         </>
       )}
     </SettingsGroup>
-  );
+  )
 }

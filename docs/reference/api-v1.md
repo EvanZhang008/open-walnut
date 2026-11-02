@@ -1164,8 +1164,9 @@ rule). Turning a provider's check off gives back every task Walnut kept out of i
 old copy) and settles its letter.
 
 - `GET /api/v1/private-tasks/providers` → `{ "providers": [{ "id", "name", "check", "check_set",
-  "check_default", "words", "ai", "ai_rule", "ai_rule_default" }] }`: every loaded task provider
-  and its rules, defaults filled in (Settings). `GET /api/v1/private-tasks/services` keeps the
+  "check_default", "words", "ai", "ai_rule", "ai_rule_default", "icon_url"? }] }`: every loaded
+  task provider and its rules, defaults filled in (Settings); `icon_url` is the plugin's own icon,
+  when it has one. `GET /api/v1/private-tasks/services` keeps the
   earlier shape (`audience: "self"|"shared"`).
 - `POST /api/v1/tasks` takes `"local": true` (a boolean, else `400 bad_request`): the task is
   created local in its project. The `task_create` op has the same field.

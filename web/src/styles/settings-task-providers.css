@@ -1,0 +1,255 @@
+/*
+ * Settings › Task providers (TaskProvidersSection.tsx): one card per task provider. Built on the
+ * settings rows; only the card's head, the hard-rule chips, the AI rule field and the test line
+ * are drawn here. Colour stays in the verdict dot: pass, fail, or still to ask.
+ */
+
+/* ── Head: the plugin's tile and name, the summary under the name ── */
+.tp-card .settings-row.tp-head {
+  min-height: 56px;
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+.tp-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 500;
+}
+
+/* The summary starts under the name, past the 28px tile and its 10px gap. */
+.tp-head .settings-row-help {
+  padding-left: 38px;
+}
+
+/* ── Hard rules: chips in a field ── */
+.tp-rules {
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 32px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--settings-input-bg);
+  cursor: text;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.tp-rules:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--settings-focus-ring);
+}
+
+.tp-rule-list {
+  display: contents;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tp-rule {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  height: 24px;
+  padding: 0 2px 0 8px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: var(--bg-tertiary);
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 18px;
+  cursor: default;
+}
+
+.tp-rule-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tp-rule-text--pattern {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* A line the server cannot use: kept, shown, and plainly not in force. */
+.tp-rule[data-invalid='true'] {
+  border-style: dashed;
+  border-color: var(--priority-important-text);
+  background: transparent;
+  color: var(--priority-important-text);
+}
+
+.tp-rule[data-invalid='true'] .tp-rule-text {
+  text-decoration: line-through;
+}
+
+.tp-rule-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.tp-rule-remove:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+
+.tp-rule-remove:focus-visible {
+  outline: none;
+  box-shadow: var(--settings-focus-ring);
+}
+
+.tp-rule-input {
+  flex: 1 1 160px;
+  min-width: 120px;
+  height: 24px;
+  padding: 0 6px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+}
+
+.tp-rule-input::placeholder,
+.tp-try-input::placeholder {
+  color: var(--fg-muted);
+}
+
+.tp-rules[data-busy='true'] .tp-rule {
+  opacity: 0.7;
+}
+
+.tp-rules-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.tp-rules-unused {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 17px;
+  color: var(--priority-important-text);
+  overflow-wrap: anywhere;
+}
+
+/* ── AI rule: the user's words, in the reading face ── */
+.tp-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.tp-link:hover {
+  text-decoration: underline;
+}
+
+.tp-link:focus-visible {
+  outline: none;
+  border-radius: 3px;
+  box-shadow: var(--settings-focus-ring);
+}
+
+.tp-ai-rule-text {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 112px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--settings-input-bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  resize: vertical;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.tp-ai-rule-text:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--settings-focus-ring);
+}
+
+/* ── Test a task: the field, then one verdict line ── */
+.tp-try {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.tp-try-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-input.tp-try-input {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+.tp-verdict {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--fg-secondary);
+}
+
+.tp-verdict-dot {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--fg-muted);
+  border-radius: 50%;
+  transform: translateY(-1px);
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+.tp-verdict[data-tone='idle'] { color: var(--fg-muted); }
+.tp-verdict[data-tone='pass'] { color: var(--fg); }
+.tp-verdict[data-tone='pass'] .tp-verdict-dot { border-color: var(--success); background: var(--success); }
+.tp-verdict[data-tone='fail'] { color: var(--settings-error-text, var(--error)); }
+.tp-verdict[data-tone='fail'] .tp-verdict-dot { border-color: var(--error); background: var(--error); }
+.tp-verdict[data-tone='pending'] .tp-verdict-dot { border-color: var(--success); }
+
+@media (prefers-reduced-motion: reduce) {
+  .tp-rules,
+  .tp-rule-remove,
+  .tp-ai-rule-text,
+  .tp-verdict-dot {
+    transition: none;
+  }
+}

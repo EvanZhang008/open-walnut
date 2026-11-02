@@ -617,8 +617,3 @@ textarea.settings-input {
 }
 
 /* Task providers' "Try a task title": the title field and its Ask AI button on one line. */
-.settings-try-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}

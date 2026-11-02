@@ -42,6 +42,8 @@ export interface ProviderRules {
   ai: boolean;
   ai_rule: string;
   ai_rule_default: string;
+  /** The plugin's own icon, when it has one (a monogram otherwise). */
+  icon_url?: string;
 }
 
 export function listTaskProviders(): Promise<{ providers: ProviderRules[] }> {

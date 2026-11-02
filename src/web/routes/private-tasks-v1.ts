@@ -16,7 +16,7 @@
  *        Which hard rule (the given list, else the provider's) a text matches, and with `ai`
  *        whether it passes the AI rule (the given one, else the provider's) (Settings).
  *   GET  /api/v1/private-tasks/providers   -> { providers: [{ id, name, check, check_set,
- *        check_default, words, ai, ai_rule, ai_rule_default }] }
+ *        check_default, words, ai, ai_rule, ai_rule_default, icon_url? }] }
  *        Every loaded task provider and its rules (provider-rules.ts), defaults filled in.
  *
  * Writes answer 501 on the cloud companion: the primary owns task sources.
@@ -170,14 +170,18 @@ async function taskProviders() {
 privateTasksV1Router.get('/private-tasks/providers', route(async (_req, res) => {
   const { getConfig } = await import('../../core/config-manager.js')
   const { DEFAULT_AI_RULE, resolveSyncRules } = await import('../../core/private-tasks/provider-rules.js')
+  const { findPluginIcon, pluginIconUrl } = await import('../../core/plugins/plugin-icon.js')
   const config = await getConfig()
-  const providers = (await taskProviders()).map((p) => {
+  const providers = await Promise.all((await taskProviders()).map(async (p) => {
     const r = resolveSyncRules(config, p.id, p.syncAudience)
+    // The plugin's own icon, as Settings › Plugins draws it; none is fine (a monogram).
+    const icon = p.pluginDir ? await findPluginIcon(p.pluginDir).catch(() => null) : null
     return {
       id: p.id, name: p.name, check: r.check, check_set: r.checkSet, check_default: r.checkDefault,
       words: r.words, ai: r.ai, ai_rule: r.aiRule, ai_rule_default: DEFAULT_AI_RULE,
+      ...(icon?.ok ? { icon_url: pluginIconUrl(p.id, icon) } : {}),
     }
-  })
+  }))
   res.json({ providers })
 }))
 
