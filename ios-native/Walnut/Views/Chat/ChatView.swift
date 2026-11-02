@@ -17,10 +17,23 @@ struct ChatView: View {
     @Environment(ChatStore.self) private var chat
     @Environment(TasksStore.self) private var tasks: TasksStore?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Another tab is in front (`MainTabView`): this tab is kept alive off screen.
+    @Environment(\.composerCovered) private var tabHidden
 
     /// An ask started on the Mac, opened from the drawer: it has no chat here, so
     /// it opens as its session, pushed over the chat.
+    ///
+    /// The ONE binding that pushes a session over the chat, whatever opened it (an
+    /// ask, an org node such as Main, a first message): every change of it is
+    /// remembered (`ChatPlace`), so a launch after the system ended the app puts
+    /// the user back in it. `ChatPlaceGuardTests` fails on a session pushed here
+    /// any other way.
     @State private var openedAskSession: WalnutSession?
+    /// The launch restore of the pushed session has run (it decides once; after
+    /// that the page is the user's).
+    @State private var placeRestored = false
+    /// The voice Quick Action talks to the chat's own composer (`ComposerView`).
+    @State private var quickAction = VoiceQuickAction.shared
     /// An ask with no session yet: its first message here starts one.
     @State private var sessionlessAsk: AskSummary?
     /// An org node (the CEO or a VP) with no session yet: its first message here starts one.
@@ -141,7 +154,23 @@ struct ChatView: View {
             }
             .navigationDestination(item: $openedAskSession) { session in
                 SessionConversationView(session: session)
+                    // Another session is another page: a launch restore that finds
+                    // the task moved on swaps it in place (`restorePlace`).
+                    .id(session.id)
             }
+            // Every push and every pop, from any entry: Back is the user leaving
+            // it, so a launch then opens the chat underneath.
+            .onChange(of: openedAskSession) { _, session in
+                ChatPlace.saveOpenSession(session)
+            }
+            // The voice Quick Action speaks to the main agent through the chat's own
+            // composer, which a pushed session covers: the session steps aside.
+            .onChange(of: quickAction.pending != nil) { _, pending in
+                if pending { openedAskSession = nil }
+            }
+            // After the first activation, like every other launch job: a
+            // background prewarm must not open a session (LaunchGate).
+            .task { LaunchGate.shared.whenActive { restorePlace() } }
             // Pin the stack to the height the page offered. `safeAreaInset` places
             // the composer relative to THIS content, so any sibling that reports a
             // taller ideal size than the keyboard-shrunk proposal pushes the
@@ -156,6 +185,9 @@ struct ChatView: View {
             // treatment when the scroll view is bottom-anchored.
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 ComposerView()
+                    // Under a pushed session, or on a tab out of sight, it is off
+                    // screen (`composerCovered`).
+                    .environment(\.composerCovered, tabHidden || openedAskSession != nil)
             }
             // Hand the tab bar's room back to the chat, BELOW the composer, so the
             // composer's content stays exactly where it was while the bar is away
@@ -232,6 +264,47 @@ struct ChatView: View {
             .disabled(orgFirstMessageDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         } message: {
             Text("No chat with \(sessionlessOrgNode?.name ?? "it") yet. Its first message starts one.")
+        }
+    }
+
+    /// Put back the session the user had open over the chat when the app last ran.
+    /// The chat under it (agent, conversation) is the store's (`ChatStore.initialize`).
+    private func restorePlace() {
+        guard !placeRestored else { return }
+        placeRestored = true
+        guard openedAskSession == nil, let session = ChatPlace.sessionToRestore(
+            saved: ChatPlace.savedOpenSession(),
+            liveSessions: tasks?.sessions ?? [],
+            voiceActionPending: VoiceQuickAction.shared.pending != nil
+                || VoiceQuickAction.shared.armedInThisProcess,
+            inDemo: DemoMode.isActive
+        ) else {
+            // Not put back (a voice Quick Action took the chat): the user is on
+            // the chat itself now, so that is what a later launch opens.
+            if openedAskSession == nil { ChatPlace.saveOpenSession(nil) }
+            return
+        }
+        openedAskSession = session
+        // The task may have moved on to another session since (Main restarts, an
+        // ask resumed elsewhere): its current one is where the user's chat is now.
+        guard let taskId = session.taskId, !taskId.isEmpty else { return }
+        Task {
+            let detail: TaskDetail
+            do {
+                detail = try await WalnutAPI().taskDetail(id: taskId)
+            } catch APIError.server(let status, _, _, _, _) where status == 404 {
+                // The task was deleted: nothing to return to, the chat is the place.
+                if openedAskSession?.id == session.id { openedAskSession = nil }
+                return
+            } catch {
+                return
+            }
+            guard let current = detail.currentSessionId, current != session.id,
+                  openedAskSession?.id == session.id else { return }
+            tasks?.noteSessionIds(taskId: taskId, ids: detail.sessionIds ?? [])
+            let resolved = await tasks?.resolveSession(id: current, task: tasks?.tasks.first { $0.id == taskId })
+            guard let resolved, openedAskSession?.id == session.id else { return }
+            openedAskSession = resolved
         }
     }
 

@@ -16,6 +16,8 @@ struct LetterReaderView: View {
 
     @Environment(InboxStore.self) private var inbox
     @Environment(TasksStore.self) private var tasks
+    /// Another tab is in front (`MainTabView`): the reply box is off screen.
+    @Environment(\.composerCovered) private var tabHidden
 
     @State private var letter: Letter?
     @State private var loadError: String?
@@ -134,6 +136,9 @@ struct LetterReaderView: View {
         .safeAreaInset(edge: .bottom) {
             composer
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
+                // Under a session it opened, or on a tab out of sight, the reply
+                // box is off screen and leaves the send gate (`composerCovered`).
+                .environment(\.composerCovered, tabHidden || openedSession != nil)
         }
         .navigationDestination(item: $openedSession) { session in
             SessionConversationView(session: session)

@@ -170,6 +170,8 @@ struct ComposerBar: View {
     /// only honest while the app is active, and returning from the background
     /// re-asserts the measurement (see the three publishers on the body).
     @Environment(\.scenePhase) private var scenePhase
+    /// A page is pushed over this composer's page (`composerCovered`).
+    @Environment(\.composerCovered) private var covered
 
     /// Only the notice rows read this: their `lineLimit(2)` is a truncation machine at
     /// accessibility text sizes (see `noticeRow`).
@@ -196,6 +198,8 @@ struct ComposerBar: View {
     /// invisible recording — the exact "hot mic with no way to stop it" failure
     /// the onDisappear guard below exists to prevent.
     @State private var onScreen = false
+    /// A disappear SwiftUI takes straight back is no disappear (`AppearanceSettle`).
+    @State private var settle = AppearanceSettle()
     @FocusState private var focused: Bool
     /// Focus for the long-draft editor. A `UIViewRepresentable` cannot ride
     /// `@FocusState` dependably, so its focus is a plain two-way `@State` the
@@ -310,6 +314,122 @@ struct ComposerBar: View {
             .decide(busy: busy, hasContent: sendable, pendingQuestion: pendingQuestion,
                     busyAcceptsSend: busyAcceptsSend)
             .availableWithStop(onStop != nil)
+    }
+
+    /// The composer came on screen: what `onAppear` does, also run when a page
+    /// pushed over it pops (`composerCovered`).
+    private func composerAppeared() {
+        onScreen = true
+        controls.setSceneActive(scenePhase == .active)
+        // The pill follows the surface in front on its own: a retained tab's
+        // composer gets no disappear when the user switches tabs.
+        controls.follow(surface: surface, dock: dock)
+        if let modelSource {
+            controls.attach(modelSource, fallbackModel: fallbackModel)
+        }
+        // After attach, so a first appear is answered by the load attach
+        // started, and a return to a retained tab re-asks only a stale answer.
+        controls.setVisible(true)
+        // A return to a retained tab re-reads the mode (it may have changed on
+        // the web meanwhile); a new session is a fresh attach.
+        if mode.sessionID == modeSessionID { mode.refresh() } else { mode.attach(modeSessionID) }
+        // An interruption (call / Siri) auto-transcribes the partial take.
+        // For a quick-action take that text is still owed to the agent —
+        // route it the same way a normal stop would.
+        voice.onAutoStopText = { text in deliver(text) }
+        // Automatic drain results go STRAIGHT to the draft, never through
+        // `deliver` — a take recovered in the background must not be able to
+        // reach the auto-send path (see `VoiceRecorder.onDrainedText`).
+        voice.onDrainedText = { text in appendToDraft(text) }
+        // WHO this recorder speaks for. The store is process-global while every
+        // composer owns its own `@State` recorder, so without an identity the
+        // automatic drain had no way to tell "my backlog" from "someone else's":
+        // a take dictated into the Chat tab was silently transcribed by a session
+        // composer and appended to THAT session's draft, with no tap in between
+        // (verifier finding F5). The surface FAMILY is the right grain — the chat
+        // tab keeps one identity across conversations (`draftKey` changes per
+        // conversation, the surface does not), and a session composer answers only
+        // for its own session.
+        voice.surface = surface.raw.isEmpty ? draftKey : surface.raw
+        // Takes with no recorded origin (preserved by a build that predates the
+        // stamp) need exactly one adopter, or they are either drained by everybody
+        // or by nobody. The quick-action composer is that adopter: it is the
+        // surface the Home-screen shortcut talks to, so it is where an
+        // unattributable recording most likely came from.
+        voice.ownsOrphanTakes = acceptsVoiceQuickAction
+        // Crash/relaunch recovery: takes preserved by an earlier run (or
+        // by another composer instance) surface here as the retry row.
+        voice.refreshPending()
+        // …and are actually retried, not just counted. A fresh launch never
+        // crosses a scene-phase edge, so `resumeForForeground` does not fire
+        // and this is the only drain trigger a relaunch gets.
+        if !disabled { voice.drainPending(trigger: "composer-appear") }
+        consumeVoiceQuickActionIfPending()
+    }
+
+    /// The composer left the screen: what `onDisappear` does, also run when a page
+    /// is pushed over it.
+    private func composerDisappeared() {
+        disappearWork()()
+    }
+
+    /// The disappear's work, with all it reads taken NOW, while the view is still
+    /// installed: a settled disappear runs up to `AppearanceSettle.settle` later, by
+    /// which time SwiftUI may have removed the view and its state.
+    private func disappearWork() -> @MainActor () -> Void {
+        let screen = $onScreen
+        let wasActive = scenePhase == .active
+        let dock = dock
+        let key = draftKey
+        let controls = controls
+        let voice = voice
+        let quickAction = quickAction
+        return {
+            screen.wrappedValue = false
+            // Retract the published height, KEYED, so leaving a session page cannot
+            // erase the height of the composer that is now on screen (SwiftUI runs
+            // the incoming view's appear before the outgoing view's disappear).
+            //
+            // Only while the app is ACTIVE. A backgrounding fires this for composers
+            // that are still on screen and never fires the matching `onAppear` on the
+            // way back, and a retraction believed then is indistinguishable from "he
+            // switched to Settings": the bar dropped to tab-bar-only clearance and
+            // painted over the composer (the P1 in `ComposerClearance`). The store
+            // holds the same line from the other side (`retractComposer` ignores a
+            // retraction once `.background` has been seen) because the two triggers
+            // fire at different moments: this guard covers the `.inactive` window
+            // before the store is told anything.
+            //
+            // Neither guard was sufficient, and the reason is worth keeping: the
+            // retraction that actually broke the bar arrived while the app really WAS
+            // active, from a composer that really HAD disappeared — the retained Chat
+            // tab's. A guard on the app's phase cannot see that, so the fix lives in
+            // the store's shape (`ComposerPresence`), and this retraction is now
+            // scoped to this composer's own entry.
+            if wasActive {
+                dock?.reportComposer(key: key, height: nil)
+            }
+            // NOT behind the phase guard: a composer that disappears while the app
+            // is inactive would keep believing it is on screen, and re-arm its 60s
+            // timer the moment the app is active again. A backgrounding disappear
+            // (no matching appear on the way back) is answered by the scene-phase
+            // handler above.
+            controls.setVisible(false)
+            // The recorder is registered app-wide with LifecycleHub but its UI
+            // lives in THIS view. Navigating away mid-recording (tab switch,
+            // pop, sheet dismiss) hid the recording row while the mic stayed
+            // hot — an invisible live recording burning battery and privacy
+            // indicator with no way to stop it. View gone = mic off, but the
+            // audio is PRESERVED (never silently deleted — the field incident)
+            // and resurfaces as the retry row when the composer returns.
+            if voice.state == .recording {
+                voice.preserveAndStop(reason: "view-dismissed")
+                // The take was preserved, NOT transcribed — a later Retry must
+                // land in the draft for review, not auto-send text the user
+                // never saw. (The audio itself is untouched, as always.)
+                quickAction.clear(reason: "view-dismissed")
+            }
+        }
     }
 
     var body: some View {
@@ -454,6 +574,7 @@ struct ComposerBar: View {
             // out at zero height for the snapshot, and keeping that would leave the
             // foreground re-assert below with nothing to re-assert.
             if height > 0 { measuredHeight = height }
+            guard !covered else { return }
             dock?.reportComposer(key: draftKey, surface: surface, height: height)
         }
         // Width, in its OWN observer rather than folded into a `CGSize` above. The height
@@ -469,7 +590,7 @@ struct ComposerBar: View {
         // last measured. The store drops an unchanged value, so this is free when
         // the composer never left.
         .onAppear {
-            if measuredHeight > 0 {
+            if !covered, measuredHeight > 0 {
                 dock?.reportComposer(key: draftKey, surface: surface, height: measuredHeight)
             }
         }
@@ -478,7 +599,7 @@ struct ComposerBar: View {
         // composer-less (which would hide the seat for a frame).
         .onChange(of: draftKey) { previous, current in
             dock?.reportComposer(key: previous, surface: surface, height: nil)
-            if measuredHeight > 0 {
+            if !covered, measuredHeight > 0 {
                 dock?.reportComposer(key: current, surface: surface, height: measuredHeight)
             }
         }
@@ -500,6 +621,14 @@ struct ComposerBar: View {
         // that lands on a surface nobody is looking at can no longer move the seat at
         // all (see `ComposerSurfaceID`).
         .onChange(of: scenePhase) { _, phase in
+            // A disappear on its way runs first, as it did before it was settled: a
+            // backgrounding disappear has no matching appear (`AppearanceSettle`).
+            settle.flush()
+            // Under a pushed page this composer is not on screen: nothing to re-assert.
+            guard !covered else {
+                controls.setSceneActive(phase == .active)
+                return
+            }
             // The model pill's timers stop in the background and it re-asks on the
             // way back (see `ComposerModelRefreshPolicy`). Before the dock guards,
             // which return early. A backgrounding disappear has no matching appear,
@@ -558,52 +687,15 @@ struct ComposerBar: View {
             appendToDraft(text, focus: false)
         }
         .onAppear {
-            onScreen = true
-            controls.setSceneActive(scenePhase == .active)
-            // The pill follows the surface in front on its own: a retained tab's
-            // composer gets no disappear when the user switches tabs.
-            controls.follow(surface: surface, dock: dock)
-            if let modelSource {
-                controls.attach(modelSource, fallbackModel: fallbackModel)
-            }
-            // After attach, so a first appear is answered by the load attach
-            // started, and a return to a retained tab re-asks only a stale answer.
-            controls.setVisible(true)
-            // A return to a retained tab re-reads the mode (it may have changed on
-            // the web meanwhile); a new session is a fresh attach.
-            if mode.sessionID == modeSessionID { mode.refresh() } else { mode.attach(modeSessionID) }
-            // An interruption (call / Siri) auto-transcribes the partial take.
-            // For a quick-action take that text is still owed to the agent —
-            // route it the same way a normal stop would.
-            voice.onAutoStopText = { text in deliver(text) }
-            // Automatic drain results go STRAIGHT to the draft, never through
-            // `deliver` — a take recovered in the background must not be able to
-            // reach the auto-send path (see `VoiceRecorder.onDrainedText`).
-            voice.onDrainedText = { text in appendToDraft(text) }
-            // WHO this recorder speaks for. The store is process-global while every
-            // composer owns its own `@State` recorder, so without an identity the
-            // automatic drain had no way to tell "my backlog" from "someone else's":
-            // a take dictated into the Chat tab was silently transcribed by a session
-            // composer and appended to THAT session's draft, with no tap in between
-            // (verifier finding F5). The surface FAMILY is the right grain — the chat
-            // tab keeps one identity across conversations (`draftKey` changes per
-            // conversation, the surface does not), and a session composer answers only
-            // for its own session.
-            voice.surface = surface.raw.isEmpty ? draftKey : surface.raw
-            // Takes with no recorded origin (preserved by a build that predates the
-            // stamp) need exactly one adopter, or they are either drained by everybody
-            // or by nobody. The quick-action composer is that adopter: it is the
-            // surface the Home-screen shortcut talks to, so it is where an
-            // unattributable recording most likely came from.
-            voice.ownsOrphanTakes = acceptsVoiceQuickAction
-            // Crash/relaunch recovery: takes preserved by an earlier run (or
-            // by another composer instance) surface here as the retry row.
-            voice.refreshPending()
-            // …and are actually retried, not just counted. A fresh launch never
-            // crosses a scene-phase edge, so `resumeForForeground` does not fire
-            // and this is the only drain trigger a relaunch gets.
-            if !disabled { voice.drainPending(trigger: "composer-appear") }
-            consumeVoiceQuickActionIfPending()
+            // Under a pushed page SwiftUI keeps re-running this view's appear and
+            // disappear, and each round's writes (the dock, the pills, the mode read)
+            // started the next: the Chat tab's composer under Main flipped about 100
+            // times a second, a /controls request each time (2026-11-02). Covered, it
+            // does nothing; `onChange(of: covered)` brings it back when the page pops.
+            // An appear right after a disappear: the composer never left.
+            settle.appeared()
+            // Not on screen yet: an uncover may already have brought it back.
+            if !covered, !onScreen { composerAppeared() }
         }
         .modelPillFollows(
             controls, source: modelSource, fallbackModel: fallbackModel,
@@ -635,49 +727,22 @@ struct ComposerBar: View {
             consumeVoiceQuickActionIfPending()
         }
         .onDisappear {
-            onScreen = false
-            // Retract the published height, KEYED, so leaving a session page cannot
-            // erase the height of the composer that is now on screen (SwiftUI runs
-            // the incoming view's appear before the outgoing view's disappear).
-            //
-            // Only while the app is ACTIVE. A backgrounding fires this for composers
-            // that are still on screen and never fires the matching `onAppear` on the
-            // way back, and a retraction believed then is indistinguishable from "he
-            // switched to Settings": the bar dropped to tab-bar-only clearance and
-            // painted over the composer (the P1 in `ComposerClearance`). The store
-            // holds the same line from the other side (`retractComposer` ignores a
-            // retraction once `.background` has been seen) because the two triggers
-            // fire at different moments: this guard covers the `.inactive` window
-            // before the store is told anything.
-            //
-            // Neither guard was sufficient, and the reason is worth keeping: the
-            // retraction that actually broke the bar arrived while the app really WAS
-            // active, from a composer that really HAD disappeared — the retained Chat
-            // tab's. A guard on the app's phase cannot see that, so the fix lives in
-            // the store's shape (`ComposerPresence`), and this retraction is now
-            // scoped to this composer's own entry.
-            if scenePhase == .active {
-                dock?.reportComposer(key: draftKey, height: nil)
-            }
-            // NOT behind the phase guard: a composer that disappears while the app
-            // is inactive would keep believing it is on screen, and re-arm its 60s
-            // timer the moment the app is active again. A backgrounding disappear
-            // (no matching appear on the way back) is answered by the scene-phase
-            // handler above.
-            controls.setVisible(false)
-            // The recorder is registered app-wide with LifecycleHub but its UI
-            // lives in THIS view. Navigating away mid-recording (tab switch,
-            // pop, sheet dismiss) hid the recording row while the mic stayed
-            // hot — an invisible live recording burning battery and privacy
-            // indicator with no way to stop it. View gone = mic off, but the
-            // audio is PRESERVED (never silently deleted — the field incident)
-            // and resurfaces as the retry row when the composer returns.
-            if voice.state == .recording {
-                voice.preserveAndStop(reason: "view-dismissed")
-                // The take was preserved, NOT transcribed — a later Retry must
-                // land in the draft for review, not auto-send text the user
-                // never saw. (The audio itself is untouched, as always.)
-                quickAction.clear(reason: "view-dismissed")
+            // A covered composer that is already off screen has nothing to retract.
+            if covered, !onScreen { return }
+            // Only once it has stood: SwiftUI also runs a disappear it takes straight
+            // back, and the work of each edge fed that churn on the visible Chat tab
+            // after a trip to another tab (2026-11-02, about 100 rounds a second).
+            settle.disappeared(disappearWork())
+        }
+        .onChange(of: covered) { _, isCovered in
+            settle.cancel()
+            if isCovered {
+                if onScreen { composerDisappeared() }
+            } else if !onScreen {
+                composerAppeared()
+                if measuredHeight > 0 {
+                    dock?.reportComposer(key: draftKey, surface: surface, height: measuredHeight)
+                }
             }
         }
         .onChange(of: pickerItems) { _, items in
@@ -2409,4 +2474,65 @@ struct ComposerSecondaryAction {
     /// Said when `perform` answers false and the words are back in the field.
     var refusedNotice: String = ComposerBar.refusedNotice
     let perform: (String) async -> Bool
+}
+
+/// SwiftUI runs appear and disappear in bursts it takes back at once: around a
+/// composer under a pushed page, on a tab out of sight, and on the visible Chat tab
+/// after a trip to another tab, about 100 rounds a second (2026-11-02). Each edge's
+/// work is a write (the dock, the pills, the mode read, the send gate), and the
+/// writes kept the bursts going. A disappear here runs only after it has stood for
+/// `settle`; an appear before then cancels it, and the view never left.
+///
+/// The box is a reference SwiftUI does not observe, held in `@State`, so using it
+/// writes nothing a body reads. The pending work holds the box strongly: a view
+/// that really went away still runs its disappear.
+@MainActor
+final class AppearanceSettle {
+    static let settle: Duration = .milliseconds(150)
+    private var pending: Task<Void, Never>?
+
+    private var pendingWork: (@MainActor () -> Void)?
+
+    /// `work` must read nothing of the view (take what it needs first): it may run
+    /// after SwiftUI removed the view.
+    func disappeared(_ work: @escaping @MainActor () -> Void) {
+        pending?.cancel()
+        pendingWork = work
+        pending = Task { @MainActor in
+            try? await Task.sleep(for: Self.settle)
+            guard !Task.isCancelled else { return }
+            self.pending = nil
+            self.pendingWork = nil
+            work()
+        }
+    }
+
+    /// True when this appear took back a disappear that had not run yet.
+    @discardableResult
+    func appeared() -> Bool {
+        guard pending != nil else { return false }
+        cancel()
+        return true
+    }
+
+    func cancel() {
+        pending?.cancel()
+        pending = nil
+        pendingWork = nil
+    }
+
+    /// Run a disappear on its way now (the app is leaving the foreground, where
+    /// the phase the work judges by is the one at the disappear).
+    func flush() {
+        guard let work = pendingWork else { return }
+        cancel()
+        work()
+    }
+}
+
+extension EnvironmentValues {
+    /// A page is pushed over the page this composer is on, so it is not on screen.
+    /// Set by every host that pushes over a composer (ChatView, the Tasks tab's page,
+    /// a session page's fork); `ComposerCoveredGuardTests` finds a new one that does not.
+    @Entry var composerCovered = false
 }

@@ -278,7 +278,12 @@ struct MainTabView: View {
             // one level of history. Tabs are the coarse level;
             // SessionConversationView pushes a finer "session:<id-prefix>" on
             // top of whichever tab it came from.
+            // composerCovered: TabView keeps every tab alive, and SwiftUI re-runs a
+            // hidden tab's composer appear and disappear without end (2026-11-02: the
+            // Chat tab's composer looped at 30% CPU while the Inbox was in front). A
+            // tab out of sight tells its composers so (ComposerCoveredGuardTests).
             ChatView()
+                .environment(\.composerCovered, selection != .chat)
                 .freezeScreen("chat")
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right.fill") }
                 .tag(Tab.chat)
@@ -286,19 +291,23 @@ struct MainTabView: View {
             // unread LETTER count only — a letter is never cleared by opening a
             // panel, so this number means "documents you haven't read".
             InboxView()
+                .environment(\.composerCovered, selection != .inbox)
                 .freezeScreen("inbox")
                 .tabItem { Label("Inbox", systemImage: "envelope") }
                 .badge(inbox.unreadCount)
                 .tag(Tab.inbox)
             NotesView()
+                .environment(\.composerCovered, selection != .notes)
                 .freezeScreen("notes")
                 .tabItem { Label("Notes", systemImage: "doc.text") }
                 .tag(Tab.notes)
             TasksTabView()
+                .environment(\.composerCovered, selection != .tasks)
                 .freezeScreen("tasks")
                 .tabItem { Label("Tasks", systemImage: "checklist") }
                 .tag(Tab.tasks)
             SettingsView()
+                .environment(\.composerCovered, selection != .settings)
                 .freezeScreen("settings")
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(Tab.settings)

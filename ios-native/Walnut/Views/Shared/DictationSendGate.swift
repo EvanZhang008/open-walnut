@@ -189,20 +189,54 @@ private struct SendGateMembership: ViewModifier {
     let voice: VoiceRecorder
     let key: String
     let insert: (String) -> Void
-    @State private var token: UUID?
+    /// The membership, in a box SwiftUI does not observe: a join or a leave
+    /// written to view state re-rendered the box, and SwiftUI's appear and
+    /// disappear churn around a hidden or covered composer fed on exactly that.
+    @State private var membership = Membership()
+
+    private final class Membership {
+        var token: UUID?
+    }
+
+    /// The box's own appear and disappear churn like the composer's: a leave only
+    /// once the disappear stood (`AppearanceSettle`).
+    @State private var settle = AppearanceSettle()
+    /// Under a pushed page SwiftUI keeps re-running this view's appear and
+    /// disappear, and a join and a leave each wrote the gate's boxes, which the
+    /// composer's Send reads, which started the next round (`composerCovered`).
+    /// Covered, the box is not a member.
+    @Environment(\.composerCovered) private var covered
 
     func body(content: Content) -> some View {
         content
-            .onAppear { join() }
-            .onChange(of: key) { _, _ in join() }
+            .onAppear {
+                settle.appeared()
+                if !covered, membership.token == nil { join() }
+            }
+            .onChange(of: key) { _, _ in if !covered { join() } }
+            .onChange(of: covered) { _, isCovered in
+                settle.cancel()
+                if isCovered { leave() } else { join() }
+            }
             .onDisappear {
-                gate?.unregister(voice, token: token)
-                token = nil
+                // Taken now, while the view is installed: the leave may run later.
+                let gate = gate, voice = voice, membership = membership
+                settle.disappeared { Self.leave(gate, voice, membership) }
             }
     }
 
     private func join() {
-        token = gate?.register(voice, insert: insert)
+        membership.token = gate?.register(voice, insert: insert)
+    }
+
+    private func leave() {
+        Self.leave(gate, voice, membership)
+    }
+
+    private static func leave(_ gate: DictationSendGate?, _ voice: VoiceRecorder, _ membership: Membership) {
+        guard let token = membership.token else { return }
+        gate?.unregister(voice, token: token)
+        membership.token = nil
     }
 }
 

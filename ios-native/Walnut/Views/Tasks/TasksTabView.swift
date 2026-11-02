@@ -13,6 +13,8 @@ import SwiftUI
 /// and search survive a round trip to a session.
 struct TasksTabView: View {
     @Environment(TasksStore.self) private var tasks
+    /// Another tab is in front (`MainTabView`): this tab is kept alive off screen.
+    @Environment(\.composerCovered) private var tabHidden
 
     /// How far the drawer is out. A reference model: nothing in this body reads its
     /// fraction, so a drag re-renders the drawer shell, never the page.
@@ -124,6 +126,9 @@ struct TasksTabView: View {
             SessionConversationView(session: current)
                 // A different session is a different page: no state carries across.
                 .id(current.id)
+                // The calendar or a session pushed over it, or another tab in
+                // front, covers its composer.
+                .environment(\.composerCovered, tabHidden || !path.isEmpty)
                 // `show` records the opens. The page appearing is no open: the launch
                 // restore and every return to this tab put it on screen, and recorded it
                 // moved the restored session above what was opened after it.

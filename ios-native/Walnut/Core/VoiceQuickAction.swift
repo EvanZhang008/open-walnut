@@ -74,6 +74,12 @@ final class VoiceQuickAction {
     /// mid-recording can't quietly downgrade an auto-send take to a draft one.
     var autoSendArmed = false
 
+    /// A voice shortcut reached this process, whether or not it is still waiting.
+    /// The Chat tab's launch restore reads it: the composer can take the request
+    /// before the restore runs, and a session pushed back over the chat then would
+    /// cover the composer and cut the take off (`ChatPlace.sessionToRestore`).
+    private(set) var armedInThisProcess = false
+
     private init() {}
 
     // MARK: - Pure routing (the unit-testable core)
@@ -117,6 +123,7 @@ final class VoiceQuickAction {
             return false
         }
         pending = Request(id: UUID(), requestedAt: now, source: source)
+        armedInThisProcess = true
         AppLog.info("voice", "quick action armed", ["source": source])
         return true
     }

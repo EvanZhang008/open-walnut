@@ -20,6 +20,7 @@ final class ChatAgentSwitchTests: XCTestCase {
             DiskCache.remove(key: "conversations-\(agent)")
             DiskCache.remove(key: "asks-\(agent)")
             AppPrefs.defaults.removeObject(forKey: "walnut.activeConversation.\(agent)")
+            AppPrefs.defaults.removeObject(forKey: ChatPlace.newChatKey(agentID: agent))
         }
     }
 

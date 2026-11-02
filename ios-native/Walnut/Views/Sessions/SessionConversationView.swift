@@ -22,6 +22,8 @@ struct SessionConversationView: View {
     /// Showing this page counts as opening the session (`RecentOpens`). Off where the
     /// host records the opens itself (`TasksTabView`).
     @Environment(\.recordsSessionOpen) private var recordsOpen
+    /// The host pushed a page over this one (`composerCovered`).
+    @Environment(\.composerCovered) private var coveredByHost
     @Environment(\.scenePhase) private var scenePhase
 
     /// Optional on purpose: WalnutTests host this page without the app
@@ -158,6 +160,8 @@ struct SessionConversationView: View {
                 )
             } else {
                 composer
+                    // Covered by the host's page, or by this page's own fork.
+                    .environment(\.composerCovered, coveredByHost || forkedSession != nil)
             }
         }
         // Voice mode hears each turn end and each new row. A cheap key, not the

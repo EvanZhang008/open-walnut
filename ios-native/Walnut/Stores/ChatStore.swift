@@ -352,19 +352,21 @@ final class ChatStore {
         isActive && conversationID == activeID
     }
 
-    /// Cold launch lands on the MAIN agent with a fresh chat (user call,
-    /// 2026-08-16): restoring the saved agent used to strand the app on a
-    /// subagent (Mentor) whenever the main agent was unavailable, and opening
-    /// into an old thread buried the composer under history. History stays one
-    /// tap away (clock button); the conversation is created lazily on first
-    /// send, so an untouched new chat never litters the server.
+    /// A launch opens the chat the user left (`ChatPlace`; the user, 2026-11-02,
+    /// replacing the 2026-08-16 call that always opened a new chat on the main
+    /// agent): that agent and that conversation, or a new chat when that is what
+    /// they left. An agent that is gone falls back to the main one
+    /// (`refreshAgents`), a deleted conversation to a new chat. A new chat is
+    /// created lazily on first send, so it never litters the server.
     func initialize() async {
         // Reactivate explicitly: Settings disconnect calls closeStream()
         // (isActive=false) and re-pairing runs initialize() in the SAME
         // foreground session — without this the chat tab is dead until the
         // next background/foreground cycle.
         isActive = true
-        activeAgentID = Self.mainAgentID
+        activeAgentID = ChatPlace.launchAgent(
+            saved: AppPrefs.defaults.string(forKey: ChatPlace.agentKey), mainAgentID: Self.mainAgentID
+        )
         // Cache hydration is ASYNC (P0-1): decoding these on the MainActor was
         // part of the cold-start work that got a background/prewarm launch
         // killed for blowing the scene-update allowance.
@@ -386,11 +388,21 @@ final class ChatStore {
         // would have no bubbles until the next switch.
         await restoreQueuedSendsFromDisk()
         guard isActive else { return }
-        // New chat is the resting state — no saved-conversation restore, no
-        // fall-through to the most recent thread.
-        select(nil)
+        // The conversation the user left on this agent (nil: they left a new chat,
+        // or were never here).
+        let remembered = ChatPlace.remembered(agentID: activeAgentID).conversationID
+        let launchAgent = activeAgentID
+        select(remembered)
         await refreshAgents()
-        await refreshConversations()
+        let listed = await refreshConversations()
+        // Only on a list the server just answered (a cached list may predate a
+        // chat the last run created), and only while the launch's own pick still
+        // stands: a tap or an agent switch since then is the user's.
+        guard listed, isActive, activeAgentID == launchAgent, activeID == remembered else { return }
+        let kept = ChatPlace.conversationAfterList(
+            remembered: remembered, listed: conversations.map(\.id), pageLimit: Self.conversationListLimit
+        )
+        if kept != activeID { select(kept) }
     }
 
     /// The server marks the main agent with `isMain` (id "general"); this is
@@ -398,7 +410,6 @@ final class ChatStore {
     static let mainAgentID = "general"
 
     /// Per-agent persistence keys — each agent remembers its own thread.
-    private var activeConversationKey: String { "walnut.activeConversation.\(activeAgentID)" }
     private var conversationsCacheKey: String { "conversations-\(activeAgentID)" }
     private var asksCacheKey: String { "asks-\(activeAgentID)" }
 
@@ -444,7 +455,7 @@ final class ChatStore {
         agentSwitchGeneration &+= 1
         let thisSwitch = agentSwitchGeneration
         activeAgentID = agentID
-        AppPrefs.defaults.set(agentID, forKey: "walnut.activeAgent")
+        AppPrefs.defaults.set(agentID, forKey: ChatPlace.agentKey)
         activeID = nil
         conversations = []
         asks = []
@@ -470,13 +481,14 @@ final class ChatStore {
                 asks = keptAsks
                 asksListed = true
             }
-            // Back where the user left this agent, a new chat included: picking
-            // its newest chat put the next message into an old conversation.
-            if let open = kept.open { select(open) }
-        } else if let saved = AppPrefs.defaults.string(forKey: activeConversationKey) {
-            select(saved)
         }
-        let returning = kept != nil
+        // Back where the user left this agent, a new chat included (picking its
+        // newest chat put the next message into an old conversation): where this
+        // process left it, else where the last one did.
+        let place = kept.map { $0.open.map(ChatPlace.Remembered.conversation) ?? .newChat }
+            ?? ChatPlace.remembered(agentID: agentID)
+        if let open = place.conversationID { select(open) }
+        let returning = place != .nothing
         trackTask { [weak self] in
             guard let self else { return }
             // Cached lists first (off-main), then the network truth. Both caches
@@ -498,20 +510,29 @@ final class ChatStore {
                 self.conversations = cachedChats
                 if self.activeID == nil, !returning { self.select(cachedChats.first?.id) }
             }
-            await self.refreshConversations()
+            let listed = await self.refreshConversations()
             guard thisSwitch == self.agentSwitchGeneration else { return }
-            // An empty list here may be a read that failed: keep the saved chat
-            // rather than forget it. A saved chat the list no longer holds gives
-            // way to the newest one; a return to a new chat stays a new chat.
-            if !self.conversations.isEmpty,
-               self.activeID.map({ id in !self.conversations.contains(where: { $0.id == id }) }) ?? !returning {
+            if let open = self.activeID {
+                // Judged only on a list the server just answered: a saved chat a
+                // complete list no longer holds was deleted and gives way to a new
+                // chat, as at launch (`ChatPlace.conversationAfterList`).
+                guard listed else { return }
+                let after = ChatPlace.conversationAfterList(
+                    remembered: open, listed: self.conversations.map(\.id), pageLimit: Self.conversationListLimit
+                )
+                if after != open { self.select(after) }
+            } else if !returning, !self.conversations.isEmpty {
+                // A first visit to this agent: its newest chat. A return to a new
+                // chat stays a new chat.
                 self.select(self.conversations.first?.id)
             }
         }
     }
 
-    func refreshConversations() async {
-        guard isActive else { return }
+    /// True when the server answered with the list (false: kept as it was).
+    @discardableResult
+    func refreshConversations() async -> Bool {
+        guard isActive else { return false }
         listReadGeneration &+= 1
         let generation = listReadGeneration
         loadingList = true
@@ -522,23 +543,26 @@ final class ChatStore {
             let fetched = try await api.conversations(
                 agentID: agentID, limit: Self.conversationListLimit
             )
-            guard isActive, !Task.isCancelled else { return }
+            guard isActive, !Task.isCancelled else { return false }
             connection?.reportReachability(true, source: "chat-rest")
-            guard agentID == activeAgentID else { return }
+            guard agentID == activeAgentID else { return false }
             // An agent's first lists land together: its chats alone would list as
             // Recents for the frame before its asks (gate, a first visit to Mentor).
             if !asksListed {
                 await refreshAsks()
                 asksRead = true
-                guard isActive, !Task.isCancelled, agentID == activeAgentID else { return }
+                guard isActive, !Task.isCancelled, agentID == activeAgentID else { return false }
             }
             conversations = fetched
             DiskCache.save(conversations, key: conversationsCacheKey)
             pruneQueue(against: fetched)
         } catch {
             reportIfNetwork(error)
+            if !asksRead { await refreshAsks() }
+            return false
         }
         if !asksRead { await refreshAsks() }
+        return true
     }
 
     /// Re-read the agent's asks. Kept as they were when the server cannot answer:
@@ -587,7 +611,8 @@ final class ChatStore {
     func select(_ id: String?) {
         guard id != activeID || sse == nil else { return }
         activeID = id
-        AppPrefs.defaults.set(id, forKey: activeConversationKey)
+        // A new chat is remembered as such: a return to it stays a new chat.
+        ChatPlace.save(conversation: id, agentID: activeAgentID)
         turnWatchdog?.cancel()
         turnWatchdog = nil
         deltaFlushTask?.cancel()
@@ -1241,7 +1266,7 @@ final class ChatStore {
                 // appears in the drawer on the next list refresh.
                 if stillViewing(target) {
                     activeID = created
-                    AppPrefs.defaults.set(created, forKey: activeConversationKey)
+                    ChatPlace.save(conversation: created, agentID: activeAgentID)
                     localRowConversation[optimistic.id] = created
                     connectStream()
                 }
