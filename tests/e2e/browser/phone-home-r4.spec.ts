@@ -191,7 +191,13 @@ test('R3-04: a card with Needs you, a Leader pill and tags keeps most of the row
     const open = (body.tasks ?? []).filter((t) => t.phase !== 'COMPLETE' && t.status !== 'done' && !t.parent_task_id)
     const seed = open[0]
     if (seed) {
-      Object.assign(seed, { title: TITLE, phase: 'NEED_ACTION', tags: ['greenhouse', 'frost'], updated_at: new Date().toISOString() })
+      // Its user status too: every surface reads that one value when the server has derived
+      // it, and the shared fixture's first open task often carries one that is not Needs you
+      // (2026-11-02, CI: the card drew only its Leader pill).
+      Object.assign(seed, {
+        title: TITLE, phase: 'NEED_ACTION', user_status: { state: 'needs', ask: 'Pick the shelf order', source: 'session' },
+        tags: ['greenhouse', 'frost'], updated_at: new Date().toISOString(),
+      })
       for (const w of open.slice(1, 3)) w.parent_task_id = seed.id
     }
     await route.fulfill({ response: res, json: body })
@@ -210,10 +216,18 @@ test('R3-04: a card with Needs you, a Leader pill and tags keeps most of the row
     const pills = [...el.querySelectorAll<HTMLElement>(':scope > .task-row-pill, :scope > .phone-row-needs-you, :scope > .task-tag-pills, :scope > * .task-row-pill')]
       .filter((p) => p.getBoundingClientRect().width > 0)
       .map((p) => ({ text: (p.textContent || '').trim(), top: p.getBoundingClientRect().top, events: getComputedStyle(p).pointerEvents }))
-    return { cardW: c.width, titleW: t.width, titleTop: t.top, pills }
+    // The row's own controls on the title's line (its time, a start button, the menu): which
+    // of them a card shows depends on the task the route picked, so the title is measured
+    // against the room they leave it.
+    const right = [...el.querySelectorAll<HTMLElement>('*')]
+      .map((x) => x.getBoundingClientRect())
+      .filter((r) => r.width > 0 && r.left >= t.right - 1 && r.top < t.bottom && r.bottom > t.top)
+      .reduce((min, r) => Math.min(min, r.left), c.right)
+    return { cardW: c.width, titleW: t.width, titleRoom: right - t.left, titleTop: t.top, pills }
   })
   expect(geo.pills.length).toBeGreaterThanOrEqual(2)
-  expect(geo.titleW / geo.cardW, 'the title keeps most of the row').toBeGreaterThanOrEqual(0.6)
+  expect(geo.titleW / geo.titleRoom, 'the title takes the row up to its own controls').toBeGreaterThanOrEqual(0.9)
+  expect(geo.titleW / geo.cardW, 'the title keeps most of the row').toBeGreaterThanOrEqual(0.45)
   for (const p of geo.pills) expect(p.top, `${p.text} sits under the title`).toBeGreaterThan(geo.titleTop + 10)
   const id = await card.evaluate((el) => { el.setAttribute('data-r4-card', '1'); return true })
   expect(id).toBe(true)
