@@ -72,10 +72,20 @@ export interface KanbanCardProps {
   drawnIn?: string;
 }
 
-/** Text that changes at most once per `ms` (the last value wins). */
+/**
+ * Text that changes at most once per `ms` (the last value wins), counted from when a change was
+ * DRAWN: counted from when it was set, a change drawn late behind a long render and the next one
+ * drawn on time came 1.8 s apart on a loaded machine (2026-11-02, C96 on CI).
+ */
 export function useThrottled(text: string, ms: number, on: boolean): string {
   const [shown, setShown] = useState(text);
   const last = useRef(0);
+  const drawn = useRef(shown);
+  useLayoutEffect(() => {
+    if (drawn.current === shown) return;
+    drawn.current = shown;
+    last.current = Date.now();
+  }, [shown]);
   useEffect(() => {
     if (!on) { setShown(text); last.current = Date.now(); return; }
     const wait = last.current + ms - Date.now();

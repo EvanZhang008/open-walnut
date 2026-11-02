@@ -16,7 +16,7 @@ import { REAL_PANEL } from './draft-helpers'
 import { openSessionBoard } from './board-view-helpers'
 import { isolateUiPrefs, presetPanelView } from './todo-panel-helpers'
 import { call, getTask, kanbanApi, seedKanbanTeam, type KanbanApi, type KanbanTeam, pickCardsView } from './board-kanban-fixture'
-import { cpuBudget, longTaskBudget, referenceDrawMs } from './cpu-reference'
+import { cpuBudget, longTaskBudget, machineQuiet, referenceDrawMs, traceTaskTimes } from './cpu-reference'
 
 const TEST_PORT = Number(process.env.PW_TEST_PORT ?? 3457)
 const API = `http://localhost:${TEST_PORT}`
@@ -332,8 +332,6 @@ async function cpuClock(page: Page, engine: string): Promise<(() => Promise<numb
   await cdp.send('Performance.enable', { timeDomain: 'threadTicks' })
   return async () => ((await cdp.send('Performance.getMetrics')).metrics.find((m) => m.name === 'TaskDuration')?.value ?? 0) * 1000
 }
-// A wall clock budget holds only below one runnable process per core: above, it measures the CPU queue.
-const quiet = () => loadavg()[0] < cpus().length
 // Main-thread CPU budgets (React dev build, 37 cards), measured 290-360ms to open and 240-440ms for the
 // drag below on the Mac; an inline callback ref that re-measured the pane on every render made them
 // 560-650 and 820-960. Elsewhere they count in reference draws on the same clock (cpu-reference.ts):
@@ -370,9 +368,10 @@ test('C50: 37 cards are on screen and live within 1s of the Board click; a drag 
   info.annotations.push({ type: 'cpu budgets', description: JSON.stringify({ reference, openBudget, dragBudget }) })
   console.log(`[kanban-layout] ${info.project.name} reference draw ${JSON.stringify({ reference, openCpu, openBudget, dragBudget })}`)
   if (openCpu !== null) expect(openCpu).toBeLessThan(openBudget)
-  if (quiet()) expect(r!.ms).toBeLessThan(1000)
+  if (machineQuiet()) expect(r!.ms).toBeLessThan(1000)
   // A drag across two lanes and back, cancelled: no long task over 100ms.
   const supported = await watchLongTasks(page)
+  const dragTimes = info.project.name === 'chromium' ? await traceTaskTimes(page) : null
   const dragAt = clock.read ? await clock.read() : 0
   const src = pane.locator('[data-testid="kanban-lane-body"][data-lane-id="investigating"] [data-testid="kanban-card"]').nth(1)
   await src.scrollIntoViewIfNeeded()
@@ -387,12 +386,15 @@ test('C50: 37 cards are on screen and live within 1s of the Board click; a drag 
   await page.keyboard.press('Escape')
   await page.mouse.up()
   await expect(pane.getByTestId('kanban-live')).toHaveText(/cancel/i)
+  const dragTasks = dragTimes ? await dragTimes() : null
   const long = await longTasks(page)
   const dragCpu = clock.read ? Math.round((await clock.read()) - dragAt) : null
-  info.annotations.push({ type: 'drag long tasks ms', description: supported ? JSON.stringify({ long, dragCpu, load: Math.round(loadavg()[0]) }) : 'longtask not supported in this engine' })
+  info.annotations.push({ type: 'drag long tasks ms', description: supported ? JSON.stringify({ long, dragTasks, dragCpu, load: Math.round(loadavg()[0]) }) : 'longtask not supported in this engine' })
   console.log(`[kanban-layout] ${info.project.name} drag ${JSON.stringify({ long, dragCpu, load: Math.round(loadavg()[0]) })}`)
   if (dragCpu !== null) expect(dragCpu).toBeLessThan(dragBudget)
-  if (supported && quiet()) expect(Math.max(0, ...(long ?? []))).toBeLessThanOrEqual(reference === null ? 100 : longTaskBudget(100, reference))
+  const dragLongBudget = reference === null ? 100 : longTaskBudget(100, reference)
+  if (dragTasks) expect(Math.max(0, ...dragTasks.map((t) => t.cpu)), JSON.stringify(dragTasks)).toBeLessThanOrEqual(dragLongBudget)
+  if (supported && machineQuiet()) expect(Math.max(0, ...(long ?? []))).toBeLessThanOrEqual(dragLongBudget)
 })
 
 const renders = (page: Page) => page.evaluate(() => ({ ...((window as unknown as { __kanbanCardRenders?: Record<string, number> }).__kanbanCardRenders ?? {}) }))
@@ -428,6 +430,7 @@ test('C96: 30s of status pushes: no long task over 50ms, the hovered card holds 
   if (sec0 > 25) await page.waitForTimeout((62 - sec0) * 1000)
   expect(await box(hovered)).toEqual(b0)
   const supported = await watchLongTasks(page)
+  const taskTimes = info.project.name === 'chromium' ? await traceTaskTimes(page) : null
   // Every 2s each running session moves; the busy one pushes every 700ms on top (the throttle's job).
   let n = 0
   const slow = setInterval(() => {
@@ -445,6 +448,7 @@ test('C96: 30s of status pushes: no long task over 50ms, the hovered card holds 
     clearInterval(slow)
     clearInterval(fast)
   }
+  const tasks = taskTimes ? await taskTimes() : null
   const long = await longTasks(page)
   const act = await page.evaluate(() => (window as unknown as { __act: Array<{ t: number; text: string }> }).__act)
   const changes = act.filter((a, i) => i === 0 || a.text !== act[i - 1].text)
@@ -458,8 +462,13 @@ test('C96: 30s of status pushes: no long task over 50ms, the hovered card holds 
   const read = await cpuClock(page, info.project.name)
   const reference = read ? await referenceDrawMs(page, read) : null
   const longBudget = reference === null ? 50 : longTaskBudget(50, reference)
-  info.annotations.push({ type: 'C96 long task budget', description: JSON.stringify({ reference, longBudget }) })
-  if (supported) expect(Math.max(0, ...(long ?? []))).toBeLessThanOrEqual(longBudget)
+  const spare = machineQuiet()
+  info.annotations.push({ type: 'C96 long task budget', description: JSON.stringify({ reference, longBudget, spare, load: Math.round(loadavg()[0]), tasks }) })
+  console.log('[kanban-layout] C96 long task cpu', info.project.name, JSON.stringify({ reference, longBudget, spare, tasks }))
+  // The budget is CPU (reference draws): it judges each task's CPU, and its wall time only when the
+  // machine had a core to spare (cpu-reference.ts traceTaskTimes).
+  if (tasks) expect(Math.max(0, ...tasks.map((t) => t.cpu)), JSON.stringify(tasks)).toBeLessThanOrEqual(longBudget)
+  if (supported && spare) expect(Math.max(0, ...(long ?? []))).toBeLessThanOrEqual(longBudget)
 
   // One status update re-renders one card (clear of a minute tick, which may touch every foot).
   await page.mouse.move(2, 2)
