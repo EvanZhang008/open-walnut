@@ -44,6 +44,13 @@ async function cardShown(page: Page, hist: Locator, id: string, n: number, total
   await expect.poll(() => hist.locator('.tool-run-label').allTextContents(), { timeout: 10000 })
     .toContainEqual(expect.stringMatching(new RegExp(`^Received ${total} messages?\\b`)));
 }
+/** Opens every closed run inside a fold body: a fold holds its steps as the
+ *  saved turn does, one collapsed run per stretch of calls. */
+async function openRuns(body: Locator) {
+  await body.evaluate((el) => {
+    for (const t of el.querySelectorAll(':scope > .session-msg-bare > .tool-run-row:not(:has(> .tool-run-body)) > .tool-run-toggle')) (t as HTMLElement).click();
+  });
+}
 async function think(page: Page, msgId: string, text: string) {
   await injectEvent(page, 'session:thinking-delta', { sessionId: SESSION_ID, delta: text, msgId });
 }
@@ -89,6 +96,7 @@ test('cards, reasoning and commands in one stretch are one row while the turn ru
   const body = fold.locator('.process-fold-body');
   await expect(body.locator('.provenance-card')).toHaveCount(3);
   await expect(body).toContainText('Thinking');
+  await openRuns(body);
   await expect(body).toContainText('make test');
   await expect(body).toContainText('git push');
   const order = await body.evaluate((el) => {
@@ -107,15 +115,15 @@ test('cards, reasoning and commands in one stretch are one row while the turn ru
   await expect(fold).toHaveAttribute('data-open', 'true');
   // Not taken yet, it waits below what streams meanwhile; taken, it stays where
   // Claude Code took it, above what came after.
-  const before = (a: string, b: string) => body.evaluate((el, [a, b]) => {
+  const before = async (a: string, b: string) => { await openRuns(body); return body.evaluate((el, [a, b]) => {
     const text = el.textContent ?? '';
     return text.indexOf(a) >= 0 && text.indexOf(b) > text.indexOf(a);
-  }, [a, b] as const);
+  }, [a, b] as const); };
   await streamTools(page, [['sg-5', 'make deploy']]);
   await expect.poll(() => before('make deploy', 'SG_NOTICE_4')).toBe(true);
   await takeLine(page, 'qm-sg-4');
   await streamTools(page, [['sg-6', 'git tag']]);
-  await expect(body).toContainText('git tag');
+  await expect.poll(async () => { await openRuns(body); return body.textContent(); }).toContain('git tag');
   expect(await before('make deploy', 'SG_NOTICE_4')).toBe(true);
   expect(await before('SG_NOTICE_4', 'git tag')).toBe(true);
   await page.waitForTimeout(600);
@@ -176,6 +184,7 @@ test('a turn a notice started: the notice in history and the live steps are one 
   const fold = hist.locator('[data-testid="turn-fold"]').last();
   await fold.locator(':scope > .tool-run-toggle').click();
   await expect(fold.locator('.provenance-card')).toHaveCount(2);
+  await openRuns(fold.locator('.process-fold-body'));
   await expect(fold).toContainText('make check');
   await expect(fold).toContainText('Thinking');
 });

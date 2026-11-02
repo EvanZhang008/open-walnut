@@ -108,6 +108,10 @@ test('a skill loaded in a live turn joins the turn fold with its stream tools, a
   await page.screenshot({ path: `${SHOTS}/${test.info().project.name}-live.png`, clip: (await hist.boundingBox())! }).catch(() => {});
   await last.locator(':scope > .tool-run-toggle').click();
   await expect(last).toContainText('Loaded skill sample-plan');
+  // The calls are one run in it, the row the saved turn's fold holds.
+  const innerRun = last.locator('.process-fold-body > .session-msg-bare > .tool-run-row');
+  await expect(innerRun.locator(':scope > .tool-run-toggle')).toHaveText(/^Ran 2 commands/);
+  await innerRun.locator(':scope > .tool-run-toggle').click();
   await expect(last).toContainText('make check');
   await expect(last).toContainText('make test');
   await page.waitForTimeout(600);
@@ -124,6 +128,8 @@ test('a skill loaded in a live turn joins the turn fold with its stream tools, a
   await expect(after.locator(':scope > .tool-run-toggle')).toHaveText(/^Ran 2 tools/);
   await expect(after).toHaveAttribute('data-open', 'true');
   await expect(after).toContainText('Loaded skill sample-plan');
+  // Its run still open, as the reader left it.
+  await expect(after).toContainText('make check');
   await expect(hist.locator('.session-live-row .tool-run-row')).toHaveCount(0);
   await page.waitForTimeout(600);
 });
