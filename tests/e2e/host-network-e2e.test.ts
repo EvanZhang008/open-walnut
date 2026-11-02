@@ -192,7 +192,7 @@ suite('host network: one link joins a machine, the Mac reaches it, Remove takes 
     host.bin = path.join(base, 'host', 'bin')
     await fsp.mkdir(host.bin, { recursive: true })
     await fsp.writeFile(path.join(host.bin, 'walnut'), `#!/bin/sh\nexec ${JSON.stringify(BUN)} ${JSON.stringify(path.join(REPO, 'src/cli.ts'))} "$@"\n`, { mode: 0o755 })
-    Object.assign(hostEnv, { PATH: `${host.bin}:${process.env.PATH}`, WALNUT_JOIN_DAEMON_DIR: host.daemonDir, WALNUT_NET_ALLOW_HTTP_JOIN: '1' })
+    Object.assign(hostEnv, { PATH: `${host.bin}:${process.env.PATH}`, WALNUT_JOIN_WALNUT: path.join(host.bin, 'walnut'), WALNUT_JOIN_DAEMON_DIR: host.daemonDir, WALNUT_NET_ALLOW_HTTP_JOIN: '1' })
     ;(globalThis as { __hostEnv?: NodeJS.ProcessEnv }).__hostEnv = hostEnv
   }, 600_000)
 

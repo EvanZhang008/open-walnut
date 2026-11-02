@@ -114,35 +114,69 @@ export async function runNetJoin(target: string, code: string | undefined, opts:
   return ticket ? joinWithTicket(ticket) : joinWithCompanion(base!, code!)
 }
 
+/** What step 2 needs from the machine; tests replace it. */
+export interface KeepRunningIo {
+  daemonUp(): Promise<'service' | 'running' | null>
+  waitDaemon(ms: number): Promise<boolean>
+  /** True when this process is the compiled Walnut file. */
+  compiled(): Promise<boolean>
+  execPath: string
+  /** `walnut daemon install --yes --executable <file>`; its exit code. */
+  install(options: { yes: true; executable: string }): Promise<number>
+  /** WALNUT_JOIN_DAEMON_DIR: a test's daemon, which never installs a service. */
+  testDaemonDir?: string
+}
+
+const realKeepRunningIo = (): KeepRunningIo => ({
+  daemonUp, waitDaemon, execPath: process.execPath, testDaemonDir: process.env.WALNUT_JOIN_DAEMON_DIR,
+  compiled: async () => (await import('../lib/single-file.js')).singleFile() !== null,
+  install: async (options) => {
+    const { runDaemonServiceCli } = await import('../providers/daemon-service-cli.js')
+    // Its JSON report is for `walnut daemon`; this screen says it in one line.
+    const write = process.stdout.write.bind(process.stdout)
+    ;(process.stdout as unknown as { write: (s: string) => boolean }).write = () => true
+    try { return await runDaemonServiceCli('install', options) } finally { (process.stdout as unknown as { write: typeof write }).write = write }
+  },
+})
+
 /**
  * 2/3: the daemon, as a service that starts at login. One already running that is not
  * the service (a server or an SSH connect started it) would be gone after a reboot: the
  * install hands it over to the service.
  */
-async function keepRunning(): Promise<boolean> {
-  const up = await daemonUp()
-  if (up === 'service' || (up && process.env.WALNUT_JOIN_DAEMON_DIR)) {
+export async function keepRunning(io: KeepRunningIo = realKeepRunningIo()): Promise<boolean> {
+  const up = await io.daemonUp()
+  if (up === 'service' || (up && io.testDaemonDir)) {
     step(2, 'Keep it running', 'on (already running)')
     return true
-  } else if (process.env.WALNUT_JOIN_DAEMON_DIR) {
-    step(2, 'Keep it running', `no daemon answers in ${process.env.WALNUT_JOIN_DAEMON_DIR}`)
-    return false
-  } else {
-    try {
-      const { runDaemonServiceCli } = await import('../providers/daemon-service-cli.js')
-      // Its JSON report is for `walnut daemon`; this screen says it in one line.
-      const write = process.stdout.write.bind(process.stdout)
-      let code = 1
-      ;(process.stdout as unknown as { write: (s: string) => boolean }).write = () => true
-      try { code = await runDaemonServiceCli('install', { yes: true }) } finally { (process.stdout as unknown as { write: typeof write }).write = write }
-      if (code !== 0 || !(await waitDaemon(30_000))) { step(2, 'Keep it running', 'did not start. Run `walnut daemon status` to see why, then this again.'); return false }
-      step(2, 'Keep it running', 'on (starts when you log in)')
-      return true
-    } catch (err) {
-      step(2, 'Keep it running', `${(err as Error).message}`)
-      return false
-    }
   }
+  if (io.testDaemonDir) {
+    step(2, 'Keep it running', `no daemon answers in ${io.testDaemonDir}`)
+    return false
+  }
+  try {
+    const install = serviceInstall(await io.compiled(), io.execPath)
+    if ('error' in install) { step(2, 'Keep it running', install.error); return false }
+    const code = await io.install(install)
+    // By its path: a new machine's shell has no ~/.local/bin on PATH yet, and another
+    // Walnut on PATH (an npm install) would show another daemon.
+    if (code !== 0 || !(await io.waitDaemon(30_000))) { step(2, 'Keep it running', `did not start. Run \`${install.executable} daemon status\` to see why, then this again.`); return false }
+    step(2, 'Keep it running', 'on (starts when you log in)')
+    return true
+  } catch (err) {
+    step(2, 'Keep it running', `${(err as Error).message}`)
+    return false
+  }
+}
+
+/**
+ * What the login service runs: the compiled Walnut file is the daemon too (`walnut
+ * --service`, binary/main.ts). Without it the install had no daemon to stage and every
+ * new machine stopped at step 2 (2026-11-02; the tests joined with a daemon already up).
+ */
+export function serviceInstall(compiled: boolean, execPath: string): { yes: true; executable: string } | { error: string } {
+  if (compiled) return { yes: true, executable: execPath }
+  return { error: 'needs the installed Walnut file (this Walnut runs under Node). Install it with curl -fsSL https://github.com/EvanZhang008/open-walnut/releases/latest/download/install.sh | sh, then run this again.' }
 }
 
 /** 3/3 with no companion: let the Mac in, then ask it to take this machine in. */

@@ -1,0 +1,268 @@
+name: Fresh Mac join
+
+# A Mac joins a Walnut with the command Settings > Remote Hosts > Add a machine shows
+# (docs/reference/host-network.md). The Mac is a GitHub macOS runner's own account, with
+# Gatekeeper and SIP on and the firewall as macOS ships it, in two states:
+#   fresh     nothing of Walnut on it, and no Node;
+#   existing  an older Walnut already runs there (its server and the daemon that server
+#             started), as on a Mac that has used Walnut for a while.
+# The command runs in Terminal as a person pastes it, with the real install and the real
+# login service, and the screen is recorded, so a macOS dialog or notice the join raises is
+# on the video. What macOS made of the files (quarantine, signatures, Gatekeeper) and the
+# privacy decisions it logged go in the artifact beside it.
+#
+# The Mac it joins is a throwaway Walnut in this job (tests/e2e/host-network-outside-join
+# .e2e.test.ts: temp data, its own daemon, public relays). Its ticket is masked in the
+# logs, and it works once. Two installs:
+#   this-commit (pushes)  the file built from this commit, laid out as a release that
+#                         install.sh reads, so a change is checked before it ships;
+#   published             exactly the command Settings shows, with what is published today.
+# 2026-11-02: every join test ran with a daemon already up, so none saw that the login
+# service install had no daemon to run and stopped every new machine at step 2.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/join.sh'
+      - 'scripts/install.sh'
+      - 'src/core/net/**'
+      - 'src/commands/net.ts'
+      - 'src/providers/net-*.ts'
+      - 'src/providers/daemon-service*.ts'
+      - 'src/lib/daemon-dir.ts'
+      - 'tests/e2e/host-network-outside-join.e2e.test.ts'
+      - '.github/workflows/fresh-mac-join.yml'
+  workflow_dispatch:
+    inputs:
+      walnut:
+        description: 'The Walnut the Mac installs'
+        type: choice
+        options: [this-commit, published]
+        default: this-commit
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fresh-mac-join-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ONNXRUNTIME_NODE_INSTALL: skip
+
+jobs:
+  join:
+    name: ${{ matrix.mac }} Mac
+    runs-on: macos-26
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        mac: [fresh, existing]
+    env:
+      WALNUT_FROM: ${{ inputs.walnut || 'this-commit' }}
+      # An older Walnut close to what long-running Macs have (October 6).
+      OLD_WALNUT: 0.6.5-nightly.20261006.73
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      # runner.temp is not readable in a job's env.
+      - run: echo "OUT=$RUNNER_TEMP/fresh-mac" >> "$GITHUB_ENV"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/bun-store
+          key: bun-store-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'web/bun.lock') }}
+          restore-keys: bun-store-${{ runner.os }}-${{ runner.arch }}-
+      - run: bun install --frozen-lockfile
+        env:
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-store
+      # The throwaway Walnut's own daemon and its sidecars (net-core among them).
+      - run: bun run build:daemon
+
+      - name: This commit's Walnut file, laid out as a release install.sh reads
+        if: env.WALNUT_FROM == 'this-commit'
+        run: |
+          # A nightly-shaped version above every published one, so the file never updates
+          # itself to an older build while the check runs.
+          V=$(bun -e "const p=require('./package.json').version.split('-')[0].split('.').map(Number);p[2]++;console.log(p.join('.')+'-nightly.'+new Date().toISOString().slice(0,10).replace(/-/g,'')+'.'+(9000000+Number(process.env.GITHUB_RUN_NUMBER)))")
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+          bun scripts/release-files.mjs stamp "$V"
+          WALNUT_VERSION_STAMPED=1 bun scripts/build-binary.mjs --target darwin-arm64
+          git checkout -- package.json
+          REL="$RUNNER_TEMP/release/v$V"
+          mkdir -p "$REL"
+          gzip -9c dist-bin/walnut-darwin-arm64 > "$REL/walnut-$V-darwin-arm64.gz"
+          {
+            printf '%s  %s\n' "$(shasum -a 256 "$REL/walnut-$V-darwin-arm64.gz" | cut -d' ' -f1)" "walnut-$V-darwin-arm64.gz"
+            printf '%s  %s\n' "$(shasum -a 256 dist-bin/walnut-darwin-arm64 | cut -d' ' -f1)" "walnut-$V-darwin-arm64"
+          } > "$REL/SHA256SUMS"
+          cat "$REL/SHA256SUMS"
+
+      # A new Mac has no Node: nothing the join installs may lean on the runner's.
+      - if: matrix.mac == 'fresh'
+        run: bash scripts/ci-remove-node.sh
+
+      - name: An older Walnut already runs here (its server, and the daemon it started)
+        if: matrix.mac == 'existing'
+        run: |
+          mkdir -p "$OUT"
+          npm i -g "open-walnut@$OLD_WALNUT" > "$OUT/old-install.log" 2>&1 || { tail -n 40 "$OUT/old-install.log"; exit 1; }
+          nohup walnut web --port 39456 > "$OUT/old-server.log" 2>&1 &
+          echo $! > "$OUT/old-server.pid"
+          for i in $(seq 1 90); do [ -s /tmp/open-walnut/daemon.port ] && curl -fsS -m 5 http://127.0.0.1:39456/api/config >/dev/null 2>&1 && break; sleep 2; done
+          curl -fsS -m 5 http://127.0.0.1:39456/api/config | head -c 300; echo
+          command -v walnut > "$OUT/old-walnut.path"
+          shasum -a 256 "$(cat "$OUT/old-walnut.path")" | tee "$OUT/old-walnut-before.sha"
+          echo "old daemon: $(cat /tmp/open-walnut/daemon.version 2>/dev/null) pid $(cat /tmp/open-walnut/daemon.pid 2>/dev/null)"
+          [ -s /tmp/open-walnut/daemon.port ] || { tail -n 60 "$OUT/old-server.log"; echo "::error::the older Walnut started no daemon"; exit 1; }
+
+      - name: The Mac before the join
+        run: |
+          mkdir -p "$OUT"
+          {
+            echo "== sw_vers"; sw_vers; uname -m
+            echo "== gatekeeper"; spctl --status || true
+            echo "== firewall"; /usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate || true
+            echo "== walnut"; command -v walnut || echo "none on PATH"; walnut --version 2>&1 || true
+            echo "== launch agents"; ls -la "$HOME/Library/LaunchAgents" 2>&1 || true
+          } | tee "$OUT/before.txt"
+
+      - name: Start the screen recording
+        run: |
+          screencapture -x "$OUT/screen-before.png" || echo "no screenshot: $?"
+          # Long enough for the whole job; stopped before the upload. A background job of a
+          # non-interactive shell ignores SIGINT, which is what ends the recording, so perl
+          # puts it back; and stdin is a pipe that stays open, since a key on it stops it too.
+          sleep 3000 | perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV' screencapture -v -x -V 1800 "$OUT/screen.mov" > "$OUT/screencapture.log" 2>&1 &
+          echo $! > "$OUT/screencapture.pid"
+          sleep 3
+
+      - name: The throwaway Walnut waits for the join
+        env:
+          WALNUT_OUTSIDE_JOIN: ${{ runner.temp }}/fresh-mac
+          WALNUT_OUTSIDE_JOIN_WAIT_S: '900'
+        run: |
+          nohup bun run test:focus tests/e2e/host-network-outside-join.e2e.test.ts > "$OUT/host.log" 2>&1 &
+          echo $! > "$OUT/host.pid"
+          for i in $(seq 1 180); do [ -s "$OUT/ticket.txt" ] && break; sleep 5; done
+          [ -s "$OUT/ticket.txt" ] || { tail -n 80 "$OUT/host.log"; echo "::error::the throwaway Walnut made no ticket"; exit 1; }
+          # One use, 10 minutes, but a public log is read live: never print it.
+          echo "::add-mask::$(cat "$OUT/ticket.txt")"
+
+      - name: Paste the command in Terminal, as a person does
+        run: |
+          T=$(cat "$OUT/ticket.txt")
+          {
+            echo '#!/bin/sh'
+            echo 'clear'
+            # Terminal starts a login shell with its own PATH; the job's is the one the checks
+            # mean (no Node on a fresh Mac; the older Walnut's walnut on PATH on an existing one).
+            echo "export PATH='$PATH'"
+            if [ "$WALNUT_FROM" = this-commit ]; then
+              # This commit's join.sh stands in for the release's copy, and installs this commit's file.
+              echo "export WALNUT_JOIN_INSTALL_URL='file://$GITHUB_WORKSPACE/scripts/install.sh'"
+              echo "export OPEN_WALNUT_RELEASE_BASE_URL='file://$RUNNER_TEMP/release' OPEN_WALNUT_VERSION='$VERSION'"
+              echo "sh -s -- $T < '$GITHUB_WORKSPACE/scripts/join.sh'"
+            else
+              # Exactly what Settings shows.
+              cat "$OUT/command.txt"
+            fi
+          } > "$OUT/paste.sh"
+          # script(1): the command runs on a terminal, as it does for a person (a pipe would
+          # change what install.sh prints and does).
+          {
+            echo '#!/bin/sh'
+            echo "script -q '$OUT/terminal.log' sh '$OUT/paste.sh'"
+            echo "echo \"JOIN_EXIT=\$?\" > '$OUT/join.done'"
+          } > "$OUT/paste.command"
+          chmod +x "$OUT/paste.command"
+          # `open` asks Launch Services, not Apple Events, so no automation prompt stands in the way.
+          open -a Terminal "$OUT/paste.command"
+          for i in $(seq 1 120); do [ -f "$OUT/join.done" ] && break; sleep 5; done
+          cat "$OUT/terminal.log" || true
+          cat "$OUT/join.done" || { echo "::error::the join did not finish in 10 minutes"; exit 1; }
+          grep -q 'JOIN_EXIT=0' "$OUT/join.done"
+
+      - name: The throwaway Walnut reaches the Mac
+        run: |
+          pid=$(cat "$OUT/host.pid")
+          for i in $(seq 1 120); do kill -0 "$pid" 2>/dev/null || break; sleep 5; done
+          tail -n 40 "$OUT/host.log"
+          cat "$OUT/result.json"
+          grep -q '"connected": true' "$OUT/result.json"
+
+      - name: The older Walnut still works
+        if: matrix.mac == 'existing'
+        run: |
+          curl -fsS -m 10 http://127.0.0.1:39456/api/config | head -c 300; echo
+          kill -0 "$(cat "$OUT/old-server.pid")"
+          # The join never ran nor updated its walnut (scripts/join.sh uses install.sh's file only).
+          OLD=$(cat "$OUT/old-walnut.path")
+          shasum -a 256 "$OLD" | tee "$OUT/old-walnut-after.sha"
+          cmp <(cut -d' ' -f1 "$OUT/old-walnut-before.sha") <(cut -d' ' -f1 "$OUT/old-walnut-after.sha")
+          "$OLD" --version
+          # How its server and daemon took the handover (an older server has no API that
+          # says whether it reaches its daemon): read, and flagged when it complains.
+          "$OLD" daemon status 2>&1 | head -n 30 || true
+          tail -n 60 "$OUT/old-server.log"
+          if grep -iE 'version differs|daemon.*(unreachable|refused|failed)' "$OUT/old-server.log" | tail -n 10 | grep .; then
+            echo "::warning::the older Walnut's server logged daemon trouble after the join (above)"
+          fi
+
+      - name: What macOS made of it
+        if: always()
+        run: |
+          W="$HOME/.local/share/open-walnut/bin/walnut"
+          {
+            echo "== walnut"; "$W" --version 2>&1 || true
+            echo "== walnut net status"; "$W" net status 2>&1 || true
+            echo "== launch agents"; ls -la "$HOME/Library/LaunchAgents" 2>&1 || true
+            for f in "$HOME/Library/LaunchAgents"/dev.openwalnut.*; do [ -f "$f" ] && { echo "-- $f"; cat "$f"; }; done
+            echo "== launchctl"; launchctl print "gui/$(id -u)/dev.openwalnut.session-daemon" 2>&1 | head -n 40 || true
+            echo "== files: quarantine, signature, Gatekeeper"
+            find "$HOME/.local/share/open-walnut" "$HOME/Library/Application Support/Open Walnut" "$HOME/.local/state/open-walnut" -type f -perm -u+x -print0 2>/dev/null |
+              while IFS= read -r -d '' f; do
+                echo "-- $f"
+                xattr -l "$f" 2>&1 || true
+                codesign -dv "$f" 2>&1 | grep -E 'Signature|Identifier|Format|TeamIdentifier|flags' || true
+                spctl -a -vv -t exec "$f" 2>&1 || true
+              done
+          } > "$OUT/macos.txt" 2>&1
+          log show --last 30m --style compact --predicate 'process == "tccd" OR process == "nehelper" OR subsystem == "com.apple.TCC" OR subsystem == "com.apple.networkextension" OR process == "syspolicyd" OR process == "backgroundtaskmanagementd" OR process CONTAINS "walnut"' > "$OUT/privacy.log" 2>&1 || true
+          grep -iE 'walnut|local ?network|quarantine|deny|prompt' "$OUT/privacy.log" | tail -n 80 || true
+          cat "$OUT/macos.txt"
+
+      - name: Stop the recording
+        if: always()
+        run: |
+          sleep 5
+          screencapture -x "$OUT/screen-after.png" || true
+          kill -INT "$(cat "$OUT/screencapture.pid")" 2>/dev/null || true
+          for i in $(seq 1 20); do kill -0 "$(cat "$OUT/screencapture.pid")" 2>/dev/null || break; sleep 1; done
+          ls -la "$OUT"
+          [ -s "$OUT/screen.mov" ] || echo "::warning::no screen recording (see screencapture.log)"
+
+      # The artifact is public: the one-use ticket goes before the upload, wherever it is.
+      - name: Take the ticket out
+        if: always()
+        run: |
+          T=$(cat "$OUT/ticket.txt" 2>/dev/null || true)
+          rm -f "$OUT/ticket.txt" "$OUT/command.txt" "$OUT/paste.sh" "$OUT/paste.command"
+          if [ -n "$T" ]; then
+            grep -rlF -- "$T" "$OUT" 2>/dev/null | while IFS= read -r f; do
+              perl -pi -e 'BEGIN { $t = shift @ARGV } s/\Q$t\E/wn1-(ticket)/g' "$T" "$f"
+            done
+            ! grep -rqF -- "$T" "$OUT"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fresh-mac-join-${{ matrix.mac }}
+          path: ${{ runner.temp }}/fresh-mac
+          retention-days: 7

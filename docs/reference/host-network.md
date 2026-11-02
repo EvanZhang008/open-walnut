@@ -38,6 +38,16 @@ secrets and the host's MCP servers all work. Hosts reached over SSH keep working
    the machine becomes a host row in `config.yaml` (`transport: net`, `endpoint: <id>`),
    and the Mac's own walnut-net may now dial it.
 
+When the newest release cannot join yet (a feature reaches the release a day or two after
+the preview build), the script installs the preview build (`walnut update --channel
+nightly`), so a new machine never stops at step 1. It only ever uses the Walnut file
+install.sh puts down (`~/.local/share/open-walnut/bin/walnut`), never another Walnut on PATH
+(an npm install, an older server's), which it neither runs nor updates. Step 2 installs the
+login service with that file as its daemon (`walnut --service`). The fresh-machine check runs
+the real command in Terminal on a macOS runner, on a new account and on one where an older
+Walnut already runs (`.github/workflows/fresh-mac-join.yml`), against a throwaway Walnut in
+the same job (`tests/e2e/host-network-outside-join.e2e.test.ts`).
+
 ## Choosing the relay
 
 Settings > Remote Hosts, under the machines: "When two machines cannot connect directly,

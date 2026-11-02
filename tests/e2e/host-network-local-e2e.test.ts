@@ -172,7 +172,7 @@ suite(`host network with no companion: a ticket joins a machine (relay: ${RELAY}
       WALNUT_DAEMON_DIR: host.daemonDir, WALNUT_STREAMS_DIR: path.join(base, 'host', 'streams'),
       WALNUT_LEGACY_STREAMS_DIR: path.join(base, 'host', 'no-legacy'), WALNUT_SPAWN_JOURNAL: path.join(base, 'host', 'spawn-journal.jsonl'),
       WALNUT_TASK_DIR_ROOT: path.join(base, 'host', 'tasks'), OPEN_WALNUT_HOME: path.join(host.home, '.open-walnut'),
-      PATH: `${bin}:${process.env.PATH}`, WALNUT_JOIN_DAEMON_DIR: host.daemonDir,
+      PATH: `${bin}:${process.env.PATH}`, WALNUT_JOIN_WALNUT: path.join(bin, 'walnut'), WALNUT_JOIN_DAEMON_DIR: host.daemonDir,
     }
     for (const k of ['XDG_STATE_HOME', 'GIT_DIR', 'GIT_WORK_TREE', 'VITEST', 'VITEST_WORKER_ID', 'VITEST_POOL_ID']) delete hostEnv[k]
     await startHostDaemon()
